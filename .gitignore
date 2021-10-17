@@ -52,4 +52,8 @@ Mkfile.old
 dkms.conf
 
 FreeRTOS-Kernel/
-
+*.dis
+rvsim/rvsim
+tools/gentrace
+dump.bin
+trace.btf

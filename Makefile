@@ -5,6 +5,9 @@ all: check
 	make -C tools
 	make -C rvsim
 
+run: all
+	make -C Demo run
+
 check:
 	[ -d FreeRTOS-Kernel ] || git clone -b ${FREERTOS_VER} https://github.com/FreeRTOS/FreeRTOS-Kernel.git FreeRTOS-Kernel
 

@@ -12,6 +12,10 @@ This can be easily ported to another platform.
 
 Requirement: Install the toolchains. See details in srv32 <A Href="https://github.com/kuopinghsu/srv32#building-toolchains">Building toolchains</A> section.
 
+$ make run
+
+The file "trace.btf" will be generated under Demo/examples folder. Open it by the Trace Compass.
+
 ## Result
 <img src="images/trace-compass.png" alt="trace-compass" width=640>
 
