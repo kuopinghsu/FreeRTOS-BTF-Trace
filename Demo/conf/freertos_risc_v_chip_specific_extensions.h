@@ -15,5 +15,9 @@
     /* No additional registers to restore, so this macro does nothing. */
     .endm
 
+#ifndef portGET_RUN_TIME_COUNTER_VALUE
+#define portGET_RUN_TIME_COUNTER_VALUE() ({int cycles; asm volatile ("rdcycle %0" : "=r"(cycles)); cycles; })
+#endif
+
 #endif // __SET_EXTENSIONS_H__
 

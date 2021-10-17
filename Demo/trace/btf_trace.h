@@ -1,12 +1,17 @@
 #ifndef __BTF_TRACE_H__
 #define __BTF_TRACE_H__
 
+#include <stdint.h>
+#include <string.h>
+
 #define configMAX_TASKS     1024
 #define configMAX_EVENTS    4096
 
-#include "FreeRTOS.h"
-#include <stdint.h>
-#include <string.h>
+#ifndef configMAX_TASK_NAME_LEN
+#define configMAX_TASK_NAME_LEN 8
+#endif
+
+#define ALIGN4(n) (((n)+3)&0xfffffffc)
 
 typedef enum {
     TRACE_EVENT_TASK_SWITCHED_IN     = 1,
@@ -27,13 +32,23 @@ typedef struct {
 typedef struct {
     char        header[4];
     uint32_t    tag;
+    uint32_t    core_clock;
     uint32_t    max_tasks;
     uint32_t    max_task_name_len;
     uint32_t    max_events;
-    uint8_t     task_lists[configMAX_TASKS][configMAX_TASK_NAME_LEN+6];
+    uint32_t    current_index;
     uint32_t    event_count;
+} TRACE_HEADER;
+
+typedef struct {
+    uint8_t     task_lists[configMAX_TASKS][ALIGN4(configMAX_TASK_NAME_LEN+6)];
     EVENT       event_lists[configMAX_EVENTS];
 } TRACE_DATA;
+
+typedef struct {
+    TRACE_HEADER h;
+    TRACE_DATA   d;
+} TRACE;
 
 void btf_traceSTART(void);
 
