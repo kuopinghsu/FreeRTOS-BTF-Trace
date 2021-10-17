@@ -22,7 +22,9 @@ The file "trace.btf" will be generated under Demo/examples folder. Open it by th
 
 ## Porting guide
 
-TBD
+1. Include Demo/trace/FreeRTOS-Trace.h in your FreeRTOSConfig.h.
+2. Provide xGetTime() macro in Demo/trace/port.h to report the system time in nano seconds.
+3. Compile the code Demo/trace/btf_trace.c in your project.
 
 ## License
 GPL-v3 license
