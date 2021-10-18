@@ -1,4 +1,7 @@
 # FreeRTOS-BTF-Trace
+
+[![Codacy Badge](https://app.codacy.com/project/badge/Grade/f952ae549fe94c2b88401a2cf935359b)](https://www.codacy.com/gh/kuopinghsu/FreeRTOS-BTF-Trace/dashboard?utm_source=github.com&amp;utm_medium=referral&amp;utm_content=kuopinghsu/FreeRTOS-BTF-Trace&amp;utm_campaign=Badge_Grade)
+
 Generate BTF trace file for FreeRTOS.
 
 BTF (Best Trace Format) is a CSV-based format used to record and trace at the system
