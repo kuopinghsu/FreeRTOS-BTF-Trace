@@ -30,7 +30,7 @@ by reading the BTF trace file
 
 1. Include Demo/trace/FreeRTOS-Trace.h in your FreeRTOSConfig.h.
 2. Provide xGetTime() macro in Demo/trace/port.h to report the system time in nano seconds.
-3. Compile the code Demo/trace/btf_trace.c in your project.
+3. Compile the code Demo/trace/btf_trace.c with your project.
 
 ## License
-GPL-v3 license
+MIT license
