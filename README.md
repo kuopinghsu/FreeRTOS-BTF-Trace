@@ -16,9 +16,7 @@ Requirement: Install the toolchains. See details in srv32 <A Href="https://githu
 
 Calling traceSTART() to enable trace, and calling traceEND() to stop trace and dump data to memory.
 
-```
-$ make run
-```
+    $ make run
 
 The file "trace.btf" will be generated under Demo/examples folder. Open it by the Trace Compass.
 
@@ -31,11 +29,10 @@ by reading the BTF trace file
 
 ## Porting guide
 
-1. Include Demo/trace/FreeRTOS-Trace.h in your FreeRTOSConfig.h.
-2. Provide xGetTime() macro in Demo/trace/port.h to report the system time in nano seconds.
-3. Compile the code Demo/trace/btf_trace.c with your project.
+1.  Include Demo/trace/FreeRTOS-Trace.h in your FreeRTOSConfig.h.
+2.  Provide xGetTime() macro in Demo/trace/port.h to report the system time in nano seconds.
+3.  Compile the code Demo/trace/btf_trace.c with your project.
 
 ## License
 
 MIT license
-
