@@ -11,7 +11,7 @@ This is an example to test <A Href="https://github.com/kuopinghsu/srv32">srv32</
 
 Requirement: Install the toolchains. See details in srv32 <A Href="https://github.com/kuopinghsu/srv32#building-toolchains">Building toolchains</A> section.
 
-Calling traceSTART() to enable trace, and calling traceEND() to stop trace and dump the memory.
+Calling traceSTART() to enable trace, and calling traceEND() to stop trace and dump data to memory.
 
 ```
 $ make run
@@ -33,4 +33,6 @@ by reading the BTF trace file
 3. Compile the code Demo/trace/btf_trace.c with your project.
 
 ## License
+
 MIT license
+
