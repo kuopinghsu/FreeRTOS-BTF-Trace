@@ -6,7 +6,9 @@ Generate BTF trace file for FreeRTOS.
 
 BTF (Best Trace Format) is a CSV-based format used to record and trace at the system
 level to analyze the timing, performance, and reliability of embedded real-time systems.
-The spec can be found <a href="https://assets.vector.com/cms/content/products/TA_Tool_Suite/Docs/BTF_Specification.pdf"> here </a>
+The spec can be found [here](https://assets.vector.com/cms/content/products/TA_Tool_Suite/Docs/BTF_Specification.pdf).
+
+Tracelyzer from [Percepio](https://percepio.com/tracealyzer/) is the best analysis tools to visualize the real-time execution of tasks and ISRs. Sometimes we only need a simple solution to see the execution of the task and find the performance bottleneck. The project provides a simple and extensible framework for this, and most importantly, it is open source and free. There's another solution is using [BareCTF](https://barectf.org/) and [Trace Compass](https://www.eclipse.org/tracecompass/) to trace FreeRTOS system in [freerots-barectf](https://github.com/gpollo/freertos-barectf).
 
 ## Build
 
@@ -22,7 +24,7 @@ The file "trace.btf" will be generated under Demo/examples folder. Open it by th
 
 ## Trace Compass
 
-This is a screenshot of <a href="https://www.eclipse.org/tracecompass/"> Trace Compass </a>
+This is a screen shot of <a href="https://www.eclipse.org/tracecompass/"> Trace Compass </a>
 by reading the BTF trace file
 
 <img src="images/trace-compass.png" alt="trace-compass" width=640>
@@ -30,9 +32,10 @@ by reading the BTF trace file
 ## Porting guide
 
 1.  Include Demo/trace/FreeRTOS-Trace.h in your FreeRTOSConfig.h.
-2.  Provide xGetTime() macro in Demo/trace/port.h to report the system time in nano seconds.
+2.  Provide xGetTime() macro in Demo/trace/port.h to report the system time in nanoseconds.
 3.  Compile the code Demo/trace/btf_trace.c with your project.
 
 ## License
 
 MIT license
+
