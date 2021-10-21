@@ -33,7 +33,33 @@ by reading the BTF trace file
 
 1.  Include Demo/trace/FreeRTOS-Trace.h in your FreeRTOSConfig.h.
 2.  Provide xGetTime() macro in Demo/trace/port.h to report the system time in nanoseconds.
-3.  Compile the code Demo/trace/btf_trace.c with your project.
+3.  Keep HAVE_SYS_DUMP undefined in Demo/trace/port.h.
+4.  Compile the code Demo/trace/btf_trace.c with your project.
+5.  Call traceSTART() in your application to enable trace log.
+```c
+#if configUSE_TRACE_FACILITY
+    traceSTART();
+#endif
+```
+6.  Call traceEND() in your application to disable trace log.
+```c
+#if configUSE_TRACE_FACILITY
+    traceEND();
+#endif
+```
+7.  After the application is built, use readelf to find the location of trace_data. Run the application and dump the memory to a binary file. In this example, you should dump 65572 bytes of data from address 0x21d44.
+```c
+$ readelf -a task.elf
+...
+21: 00021d44 65572 OBJECT  LOCAL  DEFAULT    4 trace_data
+...
+```
+8.  Using gentrace tools to convert trace data to BTF file.
+```
+$ ../../tools/gentrace dump.bin trace.btf
+814 events generated
+```
+9.  Open the BTF file with Trace Compass to view the trace file.
 
 ## License
 
