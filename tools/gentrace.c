@@ -22,10 +22,40 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+#include <getopt.h>
+
 #include "btf_trace.h"
 
+#define VCD_SIG_RANGE (int)('~' - '!' + 1)
+#define MAX_SIG_RANGE (VCD_SIG_RANGE)*(VCD_SIG_RANGE+1)
+
+static char *get_vcdsig(
+    int sig
+) {
+    int  a, b;
+    static char str[4];
+
+    a = sig / VCD_SIG_RANGE;
+    b = sig % VCD_SIG_RANGE;
+
+    if (a == 0) str[1] = 0;
+    else        str[1] = '!' + a - 1;
+    str[0] = '!' + b;
+    str[2] = 0;
+
+    return (char*)&str;
+}
+
 void usage(void) {
-    printf("Usage: gentrace dump.bin trace.btf\n");
+    printf(
+        "Conver trace data to VCD or BTF format\n"
+        "\n"
+        "Usage: [-h] [-v|-b] gentrace inputfile outfile\n\n"
+        "       -h|--help       help\n"
+        "       -b|--btf        generate btf file (default)\n"
+        "       -v|--vcd        generate vcd file\n"
+        "\n"
+    );
 }
 
 static char *get_taskname(
@@ -47,7 +77,7 @@ static EVENT *get_event(
     return (EVENT*)&ptr[n];
 }
 
-int gentrace(
+int genbtf(
     char *infile,
     char *outfile
 ) {
@@ -223,19 +253,183 @@ int gentrace(
     return 0;
 }
 
-int main(int argc, char **argv) {
-    char *infile;
-    char *outfile;
+int genvcd(
+    char *infile,
+    char *outfile
+) {
+    TRACE *trace_data;
+    FILE *fin, *fout;
+    int i;
+    int current_index;
+    int result;
+    int tick_id;
 
-    if (argc != 3) {
-        usage();
-        exit(-1);
+    if ((fin = fopen(infile, "rb")) == NULL) {
+        printf("file %s not found\n", infile);
+        return 1;
+    }
+    if ((fout = fopen(outfile, "w")) == NULL) {
+        printf("file %s can not be created\n", outfile);
+        return 1;
     }
 
-    infile = (char*)argv[1];
-    outfile = (char*)argv[2];
+    // get file size
+    fseek(fin, 0, SEEK_END);
+    int size = ftell(fin);
+    fseek(fin, 0, SEEK_SET);
 
-    gentrace(infile, outfile);
+    if ((trace_data = malloc(size)) == NULL) {
+        printf("malloc error\n");
+        return 1;
+    }
+
+    result = fread((void*)trace_data, sizeof(char), size, fin);
+    if (result != size) {
+        printf("data read error\n");
+        return 1;
+    }
+
+    // Check header
+    if (trace_data->h.header[0] != 'B' ||
+        trace_data->h.header[1] != 'T' ||
+        trace_data->h.header[2] != 'F' ||
+        trace_data->h.header[3] != '2') {
+        printf("The header of trace data is not correct.\n");
+        return 1;
+    }
+
+    // TODO: check endian. If this value is not 1, the rest values
+    // should be converted to another endian. (big endian <-> little endian)
+    if (trace_data->h.tag != 1) {
+        printf("Uncompatible endian\n");
+        return 1;
+    }
+
+    if (trace_data->h.version != TRACE_VERSION) {
+        printf("Uncomatible version\n");
+        return 1;
+    }
+
+    // headers
+    fprintf(fout,"$version\n");
+    fprintf(fout,"    FreeRTOS trace logger\n");
+    fprintf(fout,"$end\n");
+    fprintf(fout,"$timeScale 1ns $end\n");
+    fprintf(fout,"$scope module task $end\n");
+
+    // tick event
+    tick_id = 0;
+    fprintf(fout,"$var wire 1 %s %s $end\n", get_vcdsig(tick_id),
+            "tick_event");
+
+    // task lists
+    for (i = 1; i <= trace_data->h.task_count; i++ ) {
+        fprintf(fout,"$var wire 1 %s %s $end\n", get_vcdsig(i),
+                trace_data->d.task_lists[i]);
+    }
+
+    fprintf(fout, "$upscope $end\n");
+    fprintf(fout, "$enddefinitions $end\n");
+    fprintf(fout, "$dumpvars\n");
+
+    if (trace_data->h.event_count != trace_data->h.max_events) {
+        current_index = 0;
+    } else {
+        current_index = trace_data->h.current_index == 0 ?
+                        trace_data->h.max_events - 1 :
+                        trace_data->h.current_index - 1;
+    }
+
+    for(i = 0; i < trace_data->h.event_count; i++) {
+        EVENT *event = get_event(trace_data, i);
+        fprintf(fout, "#%u\n", event->time);
+
+        switch(event->types) {
+            case TRACE_EVENT_TASK_SWITCHED_IN:
+                fprintf(fout, "1%s\n", get_vcdsig(event->value));
+                break;
+            case TRACE_EVENT_TASK_SWITCHED_OUT:
+                fprintf(fout, "0%s\n", get_vcdsig(event->value));
+                break;
+            case TRACE_EVENT_TASK_CREATE:
+                fprintf(fout, "0%s\n", get_vcdsig(event->value));
+                break;
+            case TRACE_EVENT_TASK_DELETE:
+                fprintf(fout, "x%s\n", get_vcdsig(event->value));
+                break;
+            case TRACE_EVENT_TASK_SUSPEND:
+                fprintf(fout, "0%s\n", get_vcdsig(event->value));
+                break;
+            case TRACE_EVENT_TASK_RESUME:
+                fprintf(fout, "1%s\n", get_vcdsig(event->value));
+                break;
+            case TRACE_EVENT_TASK_RESUME_FROM_ISR:
+                fprintf(fout, "1%s\n", get_vcdsig(event->value));
+                break;
+            case TRACE_EVENT_TASK_INCREMENT_TICK:
+                fprintf(fout, "1%s\n", get_vcdsig(tick_id));
+                fprintf(fout, "#%u\n", event->time+1);
+                fprintf(fout, "0%s\n", get_vcdsig(tick_id));
+                break;
+            default:
+                break;
+        }
+        current_index = ((current_index + 1) % trace_data->h.max_events);
+    }
+
+    fclose(fin);
+    fclose(fout);
+    free(trace_data);
+
+    printf("%d events generated\n", trace_data->h.event_count);
+
+    return 0;
+}
+
+int main(int argc, char **argv) {
+    char *infile = NULL;
+    char *outfile = NULL;
+    int btf = 1;
+
+    int c;
+    const char *optstring = "hvb";
+    struct option opts[] = {
+        {"help", 0, NULL, 'h'},
+        {"vcd", 0, NULL, 'v'},
+        {"btf", 0, NULL, 'b'}
+    };
+
+    while((c = getopt_long(argc, argv, optstring, opts, NULL)) != -1) {
+        switch(c) {
+            case 'h':
+                usage();
+                return 1;
+            case 'b':
+                btf = 1;
+                break;
+            case 'v':
+                btf = 0;
+                break;
+            default:
+                usage();
+                return 1;
+        }
+    }
+
+    if (optind < argc) {
+        infile = (char*)argv[optind];
+        outfile = (char*)argv[optind+1];
+    }
+
+    if (!infile || !outfile) {
+        usage();
+        return 1;
+    }
+
+    if (btf)
+        genbtf(infile, outfile);
+    else
+        genvcd(infile, outfile);
 
     return 0;
 }

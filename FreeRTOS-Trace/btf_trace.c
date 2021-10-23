@@ -43,8 +43,9 @@ void btf_traceSTART(void) {
     trace_data.h.max_tasks = configMAX_TASKS;
     trace_data.h.max_task_name_len = ALIGN4(configMAX_TASK_NAME_LEN+6);
     trace_data.h.max_events = configMAX_EVENTS;
-    trace_data.h.current_index = 0;
+    trace_data.h.task_count = 0;
     trace_data.h.event_count = 0;
+    trace_data.h.current_index = 0;
 }
 
 void btf_traceEND(void) {
@@ -78,9 +79,11 @@ void btf_trace_add_task (
 
     sprintf(id, "_%04d", (unsigned)task_id);
 
+    // task_id is a unique ID, which will increase by 1 each time a TCB is created.
     strncpy((char*)trace_data.d.task_lists[task_id], (char*)task_name, configMAX_TASK_NAME_LEN);
     strncat((char*)trace_data.d.task_lists[task_id], id, configMAX_TASK_NAME_LEN+5);
     trace_data.d.task_lists[task_id][configMAX_TASK_NAME_LEN+6] = 0;
+    trace_data.h.task_count++;
 
     trace_data.d.event_lists[trace_data.h.current_index].time = xGetTime();
     trace_data.d.event_lists[trace_data.h.current_index].value = task_id;

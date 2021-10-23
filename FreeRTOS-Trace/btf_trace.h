@@ -24,7 +24,9 @@
 #include <stdint.h>
 #include <string.h>
 
-#define TRACE_VERSION       0x10000001
+#define TRACE_VER_MAJOR     1
+#define TRACE_VER_MINOR     2
+#define TRACE_VERSION       ((TRACE_VER_MAJOR<<16)|TRACE_VER_MINOR)
 
 #define configMAX_TASKS     1024
 #define configMAX_EVENTS    4096
@@ -60,8 +62,9 @@ typedef struct {
     uint32_t    max_tasks;
     uint32_t    max_task_name_len;
     uint32_t    max_events;
-    uint32_t    current_index;
+    uint32_t    task_count;
     uint32_t    event_count;
+    uint32_t    current_index;
 } TRACE_HEADER;
 
 typedef struct {

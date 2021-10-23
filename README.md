@@ -25,9 +25,18 @@ The file "trace.btf" will be generated under Demo/examples folder. Open it by th
 ## Trace Compass
 
 This is a screen shot of <a href="https://www.eclipse.org/tracecompass/"> Trace Compass </a>
-by reading the BTF trace file
+by reading the BTF trace file. Use the gentrace tool to convert the trace data into BTF format.
+
+    $ gentrace dump.bin trace.btf
 
 <img src="images/trace-compass.png" alt="trace-compass" width=640>
+
+This is the VCD waveform showing task switching. Use gentrace tool to generate trace data into
+VCD format.
+
+    $ gentrace -v dump.bin trace.vcd
+
+<img src="images/vcd.png" alt="vcd" width=640>
 
 ## Porting guide
 
