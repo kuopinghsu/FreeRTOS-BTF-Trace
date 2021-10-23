@@ -31,10 +31,10 @@ by reading the BTF trace file
 
 ## Porting guide
 
-1.  Include Demo/trace/FreeRTOS-Trace.h in your FreeRTOSConfig.h.
-2.  Provide xGetTime() macro in Demo/trace/port.h to report the system time in nanoseconds.
-3.  Keep HAVE_SYS_DUMP undefined in Demo/trace/port.h.
-4.  Compile the code Demo/trace/btf_trace.c with your project.
+1.  Include FreeRTOS-Trace/FreeRTOS-Trace.h in your FreeRTOSConfig.h.
+2.  Provide xGetTime() macro in FreeRTOS-Trace/btf_port.h to report the system time in nanoseconds.
+3.  Keep HAVE_SYS_DUMP undefined in FreeRTOS-Trace/btf_port.h.
+4.  Compile the code FreeRTOS-Trace/btf_trace.c with your project.
 5.  Call traceSTART() in your application to enable trace log.
 ```c
 #if configUSE_TRACE_FACILITY

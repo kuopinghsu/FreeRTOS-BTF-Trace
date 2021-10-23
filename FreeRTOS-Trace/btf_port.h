@@ -31,6 +31,7 @@
 #define xGetTime() (uint32_t)((uint64_t)portGET_RUN_TIME_COUNTER_VALUE()*1000000/configCPU_CLOCK_HZ)
 
 #define HAVE_SYS_DUMP
+//#define PRINT_BTF_DUMP
 
 // syscall for memory dumping
 static void sys_dump(int start_addr, int size) {
@@ -48,6 +49,7 @@ static void sys_dump(int start_addr, int size) {
 
 #define xGetTime() 0
 #undef HAVE_SYS_DUMP
+#undef PRINT_BTF_DUMP
 
 #endif
 

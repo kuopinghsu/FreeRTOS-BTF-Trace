@@ -1,4 +1,4 @@
-CFLAGS  = -O3 -g -Wall -I../Demo/trace
+CFLAGS  = -O3 -g -Wall -I../FreeRTOS-Trace
 LDFLAGS =
 
 SRC     = gentrace.c

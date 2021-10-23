@@ -24,13 +24,33 @@
 #include <string.h>
 #include "btf_trace.h"
 
-TRACE trace_data;
-
 void usage(void) {
     printf("Usage: gentrace dump.bin trace.btf\n");
 }
 
-int gentrace(char *infile, char *outfile) {
+static char *get_taskname(
+    TRACE *trace_data,
+    int index
+) {
+    char *ptr = (char*)&trace_data->d.task_lists;
+    return (char*)(ptr+trace_data->h.max_task_name_len*index);
+}
+
+static EVENT *get_event(
+    TRACE *trace_data,
+    int index
+) {
+    char *ptr = (char*)&trace_data->d.task_lists;
+    int n = trace_data->h.max_tasks * trace_data->h.max_task_name_len +
+            sizeof(EVENT) * index;
+    return (EVENT*)&ptr[n];
+}
+
+int gentrace(
+    char *infile,
+    char *outfile
+) {
+    TRACE *trace_data;
     FILE *fin, *fout;
     int i;
     int current_task;
@@ -46,17 +66,27 @@ int gentrace(char *infile, char *outfile) {
         return 1;
     }
 
-    result = fread((void*)&trace_data, sizeof(char), sizeof(TRACE), fin);
-    if (result != sizeof(TRACE)) {
-        printf("data read error, expected size is %ld bytes, but %d bytes read back.\n", sizeof(TRACE), result);
+    // get file size
+    fseek(fin, 0, SEEK_END);
+    int size = ftell(fin);
+    fseek(fin, 0, SEEK_SET);
+
+    if ((trace_data = malloc(size)) == NULL) {
+        printf("malloc error\n");
+        return 1;
+    }
+
+    result = fread((void*)trace_data, sizeof(char), size, fin);
+    if (result != size) {
+        printf("data read error\n");
         return 1;
     }
 
     // Check header
-    if (trace_data.h.header[0] != 'B' ||
-        trace_data.h.header[1] != 'T' ||
-        trace_data.h.header[2] != 'F' ||
-        trace_data.h.header[3] != '2') {
+    if (trace_data->h.header[0] != 'B' ||
+        trace_data->h.header[1] != 'T' ||
+        trace_data->h.header[2] != 'F' ||
+        trace_data->h.header[3] != '2') {
         printf("The header of trace data is not correct.\n");
         return 1;
     }
@@ -66,111 +96,116 @@ int gentrace(char *infile, char *outfile) {
     fprintf(fout,"#createDate " __DATE__ " " __TIME__ "\n");
     fprintf(fout,"#timeScale ns\n");
 
-    fprintf(fout,"0,Core_1,0,C,Core_1,0,set_frequence,%d\n", trace_data.h.core_clock);
+    fprintf(fout,"0,Core_1,0,C,Core_1,0,set_frequence,%d\n",
+            trace_data->h.core_clock);
 
     current_task = 0;
-    if (trace_data.h.event_count != trace_data.h.max_events) {
+    if (trace_data->h.event_count != trace_data->h.max_events) {
         current_index = 0;
     } else {
-        current_index = trace_data.h.current_index == 0 ?
-                        trace_data.h.max_events - 1 : trace_data.h.current_index - 1;
+        current_index = trace_data->h.current_index == 0 ?
+                        trace_data->h.max_events - 1 :
+                        trace_data->h.current_index - 1;
     }
 
-    for(i = 0; i < trace_data.h.event_count; i++) {
-        switch(trace_data.d.event_lists[i].types) {
+    for(i = 0; i < trace_data->h.event_count; i++) {
+        EVENT *event = get_event(trace_data, i);
+
+        switch(event->types) {
             case TRACE_EVENT_TASK_SWITCHED_IN:
                 fprintf(fout, "%d,%s,0,T,%s,0,%s,%s\n",
-                        trace_data.d.event_lists[i].time,
-                        trace_data.d.task_lists[current_task],
-                        trace_data.d.task_lists[trace_data.d.event_lists[i].param],
+                        event->time,
+                        get_taskname(trace_data, current_task),
+                        get_taskname(trace_data, event->param),
                         "resume",
                         "switched_in");
-                current_task = trace_data.d.event_lists[i].param;
+                current_task = event->param;
                 break;
             case TRACE_EVENT_TASK_SWITCHED_OUT:
                 fprintf(fout, "%d,%s,0,T,%s,0,%s,%s\n",
-                        trace_data.d.event_lists[i].time,
+                        event->time,
                         "Core_1",
-                        trace_data.d.task_lists[trace_data.d.event_lists[i].param],
+                        get_taskname(trace_data, event->param),
                         "preempt",
                         "switched_out");
-                current_task = trace_data.d.event_lists[i].param;
+                current_task = event->param;
                 break;
             case TRACE_EVENT_TASK_CREATE:
                 fprintf(fout, "%d,%s,0,T,%s,0,%s,%s\n",
-                        trace_data.d.event_lists[i].time,
+                        event->time,
                         "Core_1",
-                        trace_data.d.task_lists[trace_data.d.event_lists[i].param],
+                        get_taskname(trace_data, event->param),
                         "start",
                         "task_create");
                 fprintf(fout, "%d,%s,0,T,%s,0,%s,%s\n",
-                        trace_data.d.event_lists[i].time,
+                        event->time,
                         "Core_1",
-                        trace_data.d.task_lists[trace_data.d.event_lists[i].param],
+                        get_taskname(trace_data, event->param),
                         "preempt",
                         "task_create");
-                current_task = trace_data.d.event_lists[i].param;
+                current_task = event->param;
                 break;
             case TRACE_EVENT_TASK_DELETE:
                 // TODO
                 /*
                 fprintf(fout, "%d,%s,0,R,%s,0,%s,%s\n",
-                        trace_data.d.event_lists[i].time,
+                        event->time,
                         "Core_1",
-                        trace_data.d.task_lists[trace_data.d.event_lists[i].param],
+                        get_taskname(trace_data, event->param),
                         "terminate",
                         "task_delete");
-                current_task = trace_data.d.event_lists[i].param;
+                current_task = event->param;
                 */
                 break;
             case TRACE_EVENT_TASK_SUSPEND:
                 fprintf(fout, "%d,%s,0,T,%s,0,%s,%s\n",
-                        trace_data.d.event_lists[i].time,
-                        trace_data.d.task_lists[current_task],
-                        trace_data.d.task_lists[trace_data.d.event_lists[i].param],
+                        event->time,
+                        get_taskname(trace_data, current_task),
+                        get_taskname(trace_data, event->param),
                         "wait",
                         "task_suspend");
-                current_task = trace_data.d.event_lists[i].param;
+                current_task = event->param;
                 break;
             case TRACE_EVENT_TASK_RESUME:
                 fprintf(fout, "%d,%s,0,T,%s,0,%s,%s\n",
-                        trace_data.d.event_lists[i].time,
-                        trace_data.d.task_lists[current_task],
-                        trace_data.d.task_lists[trace_data.d.event_lists[i].param],
+                        event->time,
+                        get_taskname(trace_data, current_task),
+                        get_taskname(trace_data, event->param),
                         "release",
                         "task_resume");
-                current_task = trace_data.d.event_lists[i].param;
+                current_task = event->param;
                 break;
             case TRACE_EVENT_TASK_RESUME_FROM_ISR:
                 fprintf(fout, "%d,%s,0,T,%s,0,%s,%s\n",
-                        trace_data.d.event_lists[i].time,
+                        event->time,
                         "Core_1",
-                        trace_data.d.task_lists[trace_data.d.event_lists[i].param],
+                        get_taskname(trace_data, event->param),
                         "release",
                         "resume_from_isr");
-                current_task = trace_data.d.event_lists[i].param;
+                current_task = event->param;
                 break;
             case TRACE_EVENT_TASK_INCREMENT_TICK:
                 // TODO
                 /*
                 fprintf(fout, "%d,%s,0,STI,%s,0,%s,tick_%d\n",
-                        trace_data.d.event_lists[i].time,
+                        event->time,
                         "Core_1",
                         "tick_event",
                         "trigger",
-                        trace_data.d.event_lists[i].param);
+                        event->param);
                 */
                 break;
             default:
                 break;
         }
-        current_index = ((current_index + 1) % trace_data.h.max_events);
+        current_index = ((current_index + 1) % trace_data->h.max_events);
     }
 
     fclose(fin);
     fclose(fout);
+    free(trace_data);
 
-    printf("%d events generated\n", trace_data.h.event_count);
+    printf("%d events generated\n", trace_data->h.event_count);
 
     return 0;
 }

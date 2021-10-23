@@ -11,7 +11,7 @@ FREERTOS_SRC = \
     $(FREERTOS_SOURCE_DIR)/portable/MemMang/heap_3.c
 
 PORT_SRC = $(FREERTOS_SOURCE_DIR)/portable/GCC/RISC-V/port.c \
-	   trace/btf_trace.c \
+           $(ROOTDIR)/FreeRTOS-Trace/btf_trace.c \
            Common/port.c \
            Common/syscall.c \
            Common/printf.c \
@@ -31,8 +31,8 @@ FREERTOS_LIBRARY = libfreertos.a
 INCLUDES = \
     -I$(FREERTOS_SOURCE_DIR)/include \
     -I$(FREERTOS_SOURCE_DIR)/portable/GCC/RISC-V \
+    -I$(ROOTDIR)/FreeRTOS-Trace \
     -I./Common \
-    -I./trace \
     -I./conf \
     -I./examples
 
