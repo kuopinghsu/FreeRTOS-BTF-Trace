@@ -33,7 +33,8 @@ static char *get_taskname(
     int index
 ) {
     char *ptr = (char*)&trace_data->d.task_lists;
-    return (char*)(ptr+trace_data->h.max_task_name_len*index);
+    int n = trace_data->h.max_task_name_len * index;
+    return (char*)&ptr[n];
 }
 
 static EVENT *get_event(
@@ -91,6 +92,18 @@ int gentrace(
         return 1;
     }
 
+    // TODO: check endian. If this value is not 1, the rest values
+    // should be converted to another endian. (big endian <-> little endian)
+    if (trace_data->h.tag != 1) {
+        printf("Uncompatible endian\n");
+        return 1;
+    }
+
+    if (trace_data->h.version != TRACE_VERSION) {
+        printf("Uncomatible version\n");
+        return 1;
+    }
+
     fprintf(fout,"#version 2.2.0\n");
     fprintf(fout,"#creator FreeRTOS trace logger\n");
     fprintf(fout,"#createDate " __DATE__ " " __TIME__ "\n");
@@ -116,34 +129,34 @@ int gentrace(
                 fprintf(fout, "%d,%s,0,T,%s,0,%s,%s\n",
                         event->time,
                         get_taskname(trace_data, current_task),
-                        get_taskname(trace_data, event->param),
+                        get_taskname(trace_data, event->value),
                         "resume",
                         "switched_in");
-                current_task = event->param;
+                current_task = event->value;
                 break;
             case TRACE_EVENT_TASK_SWITCHED_OUT:
                 fprintf(fout, "%d,%s,0,T,%s,0,%s,%s\n",
                         event->time,
                         "Core_1",
-                        get_taskname(trace_data, event->param),
+                        get_taskname(trace_data, event->value),
                         "preempt",
                         "switched_out");
-                current_task = event->param;
+                current_task = event->value;
                 break;
             case TRACE_EVENT_TASK_CREATE:
                 fprintf(fout, "%d,%s,0,T,%s,0,%s,%s\n",
                         event->time,
                         "Core_1",
-                        get_taskname(trace_data, event->param),
+                        get_taskname(trace_data, event->value),
                         "start",
                         "task_create");
                 fprintf(fout, "%d,%s,0,T,%s,0,%s,%s\n",
                         event->time,
                         "Core_1",
-                        get_taskname(trace_data, event->param),
+                        get_taskname(trace_data, event->value),
                         "preempt",
                         "task_create");
-                current_task = event->param;
+                current_task = event->value;
                 break;
             case TRACE_EVENT_TASK_DELETE:
                 // TODO
@@ -151,38 +164,38 @@ int gentrace(
                 fprintf(fout, "%d,%s,0,R,%s,0,%s,%s\n",
                         event->time,
                         "Core_1",
-                        get_taskname(trace_data, event->param),
+                        get_taskname(trace_data, event->value),
                         "terminate",
                         "task_delete");
-                current_task = event->param;
+                current_task = event->value;
                 */
                 break;
             case TRACE_EVENT_TASK_SUSPEND:
                 fprintf(fout, "%d,%s,0,T,%s,0,%s,%s\n",
                         event->time,
                         get_taskname(trace_data, current_task),
-                        get_taskname(trace_data, event->param),
+                        get_taskname(trace_data, event->value),
                         "wait",
                         "task_suspend");
-                current_task = event->param;
+                current_task = event->value;
                 break;
             case TRACE_EVENT_TASK_RESUME:
                 fprintf(fout, "%d,%s,0,T,%s,0,%s,%s\n",
                         event->time,
                         get_taskname(trace_data, current_task),
-                        get_taskname(trace_data, event->param),
+                        get_taskname(trace_data, event->value),
                         "release",
                         "task_resume");
-                current_task = event->param;
+                current_task = event->value;
                 break;
             case TRACE_EVENT_TASK_RESUME_FROM_ISR:
                 fprintf(fout, "%d,%s,0,T,%s,0,%s,%s\n",
                         event->time,
                         "Core_1",
-                        get_taskname(trace_data, event->param),
+                        get_taskname(trace_data, event->value),
                         "release",
                         "resume_from_isr");
-                current_task = event->param;
+                current_task = event->value;
                 break;
             case TRACE_EVENT_TASK_INCREMENT_TICK:
                 // TODO
@@ -192,7 +205,7 @@ int gentrace(
                         "Core_1",
                         "tick_event",
                         "trigger",
-                        event->param);
+                        event->value);
                 */
                 break;
             default:

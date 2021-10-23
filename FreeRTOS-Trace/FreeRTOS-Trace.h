@@ -42,8 +42,9 @@
 #ifndef traceTASK_SWITCHED_IN
 # define traceTASK_SWITCHED_IN() {              \
     int mask = taskENTER_CRITICAL_FROM_ISR();   \
-    btf_traceTASK_SWITCHED_IN (                 \
-        (uint32_t)pxCurrentTCB->uxTCBNumber     \
+    btf_trace_add_event (                       \
+        (uint32_t)pxCurrentTCB->uxTCBNumber,    \
+        TRACE_EVENT_TASK_SWITCHED_IN            \
     );                                          \
     taskEXIT_CRITICAL_FROM_ISR(mask);           \
 }
@@ -52,8 +53,9 @@
 #ifndef traceTASK_SWITCHED_OUT
 # define traceTASK_SWITCHED_OUT() {             \
     int mask = taskENTER_CRITICAL_FROM_ISR();   \
-    btf_traceTASK_SWITCHED_OUT (                \
-        (uint32_t)pxCurrentTCB->uxTCBNumber     \
+    btf_trace_add_event (                       \
+        (uint32_t)pxCurrentTCB->uxTCBNumber,    \
+        TRACE_EVENT_TASK_SWITCHED_OUT           \
     );                                          \
     taskEXIT_CRITICAL_FROM_ISR(mask);           \
 }
@@ -62,9 +64,10 @@
 #ifndef traceTASK_CREATE
 # define traceTASK_CREATE( pxNewTCB ) {         \
     taskENTER_CRITICAL();                       \
-    btf_traceTASK_CREATE (                      \
+    btf_trace_add_task (                        \
         (uint8_t*)pxNewTCB->pcTaskName,         \
-        (uint32_t)pxNewTCB->uxTCBNumber         \
+        (uint32_t)pxNewTCB->uxTCBNumber,        \
+        TRACE_EVENT_TASK_CREATE                 \
     );                                          \
     taskEXIT_CRITICAL();                        \
 }
@@ -73,8 +76,9 @@
 #ifndef traceTASK_DELETE
 # define traceTASK_DELETE( pxTCB ) {            \
     taskENTER_CRITICAL();                       \
-    btf_traceTASK_DELETE (                      \
-        (uint32_t)pxTCB->uxTCBNumber            \
+    btf_trace_add_event (                       \
+        (uint32_t)pxTCB->uxTCBNumber,           \
+        TRACE_EVENT_TASK_DELETE                 \
     );                                          \
     taskEXIT_CRITICAL();                        \
 }
@@ -83,8 +87,9 @@
 #ifndef traceTASK_SUSPEND
 # define traceTASK_SUSPEND( pxTCB ) {           \
     taskENTER_CRITICAL();                       \
-    btf_traceTASK_SUSPEND (                     \
-        (uint32_t)pxTCB->uxTCBNumber            \
+    btf_trace_add_event (                       \
+        (uint32_t)pxTCB->uxTCBNumber,           \
+        TRACE_EVENT_TASK_SUSPEND                \
     );                                          \
     taskEXIT_CRITICAL();                        \
 }
@@ -93,8 +98,9 @@
 #ifndef traceTASK_RESUME
 # define traceTASK_RESUME( pxTCB ) {            \
     taskENTER_CRITICAL();                       \
-    btf_traceTASK_RESUME (                      \
-        (uint32_t)pxTCB->uxTCBNumber            \
+    btf_trace_add_event (                       \
+        (uint32_t)pxTCB->uxTCBNumber,           \
+        TRACE_EVENT_TASK_RESUME                 \
     );                                          \
     taskEXIT_CRITICAL();                        \
 }
@@ -103,8 +109,9 @@
 #ifndef traceTASK_RESUME_FROM_ISR
 # define traceTASK_RESUME_FROM_ISR( pxTCB ) {   \
     int mask = taskENTER_CRITICAL_FROM_ISR();   \
-    btf_traceTASK_RESUME_FROM_ISR (             \
-        (uint32_t)pxTCB->uxTCBNumber            \
+    btf_trace_add_event (                       \
+        (uint32_t)pxTCB->uxTCBNumber,           \
+        TRACE_EVENT_TASK_RESUME_FROM_ISR        \
     );                                          \
     taskEXIT_CRITICAL_FROM_ISR(mask);           \
 }
@@ -113,8 +120,9 @@
 #ifndef traceTASK_INCREMENT_TICK
 # define traceTASK_INCREMENT_TICK( xTickCount ) {   \
     int mask = taskENTER_CRITICAL_FROM_ISR();   \
-    btf_traceTASK_INCREMENT_TICK (              \
-        (uint32_t)xTickCount                    \
+    btf_trace_add_event (                       \
+        (uint32_t)xTickCount,                   \
+        TRACE_EVENT_TASK_INCREMENT_TICK         \
     );                                          \
     taskEXIT_CRITICAL_FROM_ISR(mask);           \
 }

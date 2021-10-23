@@ -48,7 +48,7 @@ typedef enum {
 
 typedef struct {
     uint32_t    time;
-    uint32_t    param;
+    uint32_t    value;
     event_t     types;
 } EVENT;
 
@@ -75,36 +75,10 @@ typedef struct {
 } TRACE;
 
 void btf_traceSTART(void);
-
 void btf_traceEND(void);
-
-void btf_traceTASK_SWITCHED_IN (
-    uint32_t task_id);
-
-void btf_traceTASK_SWITCHED_OUT (
-    uint32_t task_id);
-
-void btf_traceTASK_CREATE (
-    uint8_t *task_name,
-    uint32_t task_id);
-
-void btf_traceTASK_DELETE (
-    uint32_t task_id);
-
-void btf_traceTASK_SUSPEND (
-    uint32_t task_id);
-
-void btf_traceTASK_RESUME (
-    uint32_t task_id);
-
-void btf_traceTASK_RESUME_FROM_ISR (
-    uint32_t task_id);
-
-void btf_traceTASK_INCREMENT_TICK (
-    uint32_t tick_count);
-
-void btf_dump(
-    void);
+void btf_trace_add_task(uint8_t *task_name, uint32_t task_id, event_t event);
+void btf_trace_add_event(uint32_t value, event_t event);
+void btf_dump(void);
 
 #endif // __BTF_TRACE_H__
 

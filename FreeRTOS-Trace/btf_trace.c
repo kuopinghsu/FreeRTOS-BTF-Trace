@@ -60,44 +60,11 @@ void btf_traceEND(void) {
     printf("%ld events generated.\n", trace_data.h.event_count);
 }
 
-void btf_traceTASK_SWITCHED_IN (
-    uint32_t task_id) {
-    if (!trace_en) return;
-    assert (trace_data.h.event_count <= configMAX_EVENTS);
-    assert (trace_data.h.current_index < configMAX_EVENTS);
-
-    trace_data.d.event_lists[trace_data.h.current_index].time = xGetTime();
-    trace_data.d.event_lists[trace_data.h.current_index].param = task_id;
-    trace_data.d.event_lists[trace_data.h.current_index].types = TRACE_EVENT_TASK_SWITCHED_IN;
-
-    trace_data.h.current_index++;
-    if (trace_data.h.current_index == configMAX_EVENTS)
-        trace_data.h.current_index = 0;
-    if (trace_data.h.event_count < configMAX_EVENTS)
-        trace_data.h.event_count++;
-}
-
-void btf_traceTASK_SWITCHED_OUT (
-    uint32_t task_id) {
-    if (!trace_en) return;
-    assert (trace_data.h.event_count <= configMAX_EVENTS);
-    assert (trace_data.h.current_index < configMAX_EVENTS);
-
-    trace_data.d.event_lists[trace_data.h.current_index].time = xGetTime();
-    trace_data.d.event_lists[trace_data.h.current_index].param = task_id;
-    trace_data.d.event_lists[trace_data.h.current_index].types = TRACE_EVENT_TASK_SWITCHED_OUT;
-
-    trace_data.h.current_index++;
-    if (trace_data.h.current_index == configMAX_EVENTS)
-        trace_data.h.current_index = 0;
-    if (trace_data.h.event_count < configMAX_EVENTS)
-        trace_data.h.event_count++;
-}
-
-void btf_traceTASK_CREATE (
+void btf_trace_add_task (
     uint8_t *task_name,
-    uint32_t task_id) {
-
+    uint32_t task_id,
+    event_t  event)
+{
     char id[6];
 
     if (!trace_en) return;
@@ -113,9 +80,11 @@ void btf_traceTASK_CREATE (
 
     strncpy((char*)trace_data.d.task_lists[task_id], (char*)task_name, configMAX_TASK_NAME_LEN);
     strncat((char*)trace_data.d.task_lists[task_id], id, configMAX_TASK_NAME_LEN+5);
+    trace_data.d.task_lists[task_id][configMAX_TASK_NAME_LEN+6] = 0;
+
     trace_data.d.event_lists[trace_data.h.current_index].time = xGetTime();
-    trace_data.d.event_lists[trace_data.h.current_index].param = task_id;
-    trace_data.d.event_lists[trace_data.h.current_index].types = TRACE_EVENT_TASK_CREATE;
+    trace_data.d.event_lists[trace_data.h.current_index].value = task_id;
+    trace_data.d.event_lists[trace_data.h.current_index].types = event;
 
     trace_data.h.current_index++;
     if (trace_data.h.current_index == configMAX_EVENTS)
@@ -124,83 +93,17 @@ void btf_traceTASK_CREATE (
         trace_data.h.event_count++;
 }
 
-void btf_traceTASK_DELETE (
-    uint32_t task_id) {
+void btf_trace_add_event (
+    uint32_t value,
+    event_t  event)
+{
     if (!trace_en) return;
     assert (trace_data.h.event_count <= configMAX_EVENTS);
     assert (trace_data.h.current_index < configMAX_EVENTS);
 
     trace_data.d.event_lists[trace_data.h.current_index].time = xGetTime();
-    trace_data.d.event_lists[trace_data.h.current_index].param = task_id;
-    trace_data.d.event_lists[trace_data.h.current_index].types = TRACE_EVENT_TASK_DELETE;
-
-    trace_data.h.current_index++;
-    if (trace_data.h.current_index == configMAX_EVENTS)
-        trace_data.h.current_index = 0;
-    if (trace_data.h.event_count < configMAX_EVENTS)
-        trace_data.h.event_count++;
-}
-
-void btf_traceTASK_SUSPEND (
-    uint32_t task_id) {
-    if (!trace_en) return;
-    assert (trace_data.h.event_count <= configMAX_EVENTS);
-    assert (trace_data.h.current_index < configMAX_EVENTS);
-
-    trace_data.d.event_lists[trace_data.h.current_index].time = xGetTime();
-    trace_data.d.event_lists[trace_data.h.current_index].param = task_id;
-    trace_data.d.event_lists[trace_data.h.current_index].types = TRACE_EVENT_TASK_SUSPEND;
-
-    trace_data.h.current_index++;
-    if (trace_data.h.current_index == configMAX_EVENTS)
-        trace_data.h.current_index = 0;
-    if (trace_data.h.event_count < configMAX_EVENTS)
-        trace_data.h.event_count++;
-}
-
-void btf_traceTASK_RESUME (
-    uint32_t task_id) {
-    if (!trace_en) return;
-    assert (trace_data.h.event_count <= configMAX_EVENTS);
-    assert (trace_data.h.current_index < configMAX_EVENTS);
-
-    trace_data.d.event_lists[trace_data.h.current_index].time = xGetTime();
-    trace_data.d.event_lists[trace_data.h.current_index].param = task_id;
-    trace_data.d.event_lists[trace_data.h.current_index].types = TRACE_EVENT_TASK_RESUME;
-
-    trace_data.h.current_index++;
-    if (trace_data.h.current_index == configMAX_EVENTS)
-        trace_data.h.current_index = 0;
-    if (trace_data.h.event_count < configMAX_EVENTS)
-        trace_data.h.event_count++;
-}
-
-void btf_traceTASK_RESUME_FROM_ISR (
-    uint32_t task_id) {
-    if (!trace_en) return;
-    assert (trace_data.h.event_count <= configMAX_EVENTS);
-    assert (trace_data.h.current_index < configMAX_EVENTS);
-
-    trace_data.d.event_lists[trace_data.h.current_index].time = xGetTime();
-    trace_data.d.event_lists[trace_data.h.current_index].param = task_id;
-    trace_data.d.event_lists[trace_data.h.current_index].types = TRACE_EVENT_TASK_RESUME_FROM_ISR;
-
-    trace_data.h.current_index++;
-    if (trace_data.h.current_index == configMAX_EVENTS)
-        trace_data.h.current_index = 0;
-    if (trace_data.h.event_count < configMAX_EVENTS)
-        trace_data.h.event_count++;
-}
-
-void btf_traceTASK_INCREMENT_TICK (
-    uint32_t tick_count) {
-    if (!trace_en) return;
-    assert (trace_data.h.event_count <= configMAX_EVENTS);
-    assert (trace_data.h.current_index < configMAX_EVENTS);
-
-    trace_data.d.event_lists[trace_data.h.current_index].time = xGetTime();
-    trace_data.d.event_lists[trace_data.h.current_index].param = tick_count;
-    trace_data.d.event_lists[trace_data.h.current_index].types = TRACE_EVENT_TASK_INCREMENT_TICK;
+    trace_data.d.event_lists[trace_data.h.current_index].value = value;
+    trace_data.d.event_lists[trace_data.h.current_index].types = event;
 
     trace_data.h.current_index++;
     if (trace_data.h.current_index == configMAX_EVENTS)
@@ -212,7 +115,6 @@ void btf_traceTASK_INCREMENT_TICK (
 #ifdef PRINT_BTF_DUMP
 #define get_taskname(n,i) n.d.task_lists[i]
 #define get_event(n,i) (&n.d.event_lists[i])
-
 void btf_dump(
     void) {
     int i;
@@ -254,34 +156,34 @@ void btf_dump(
                 printf( "%ld,%s,0,T,%s,0,%s,%s\n",
                         event->time,
                         get_taskname(trace_data, current_task),
-                        get_taskname(trace_data, event->param),
+                        get_taskname(trace_data, event->value),
                         "resume",
                         "switched_in");
-                current_task = event->param;
+                current_task = event->value;
                 break;
             case TRACE_EVENT_TASK_SWITCHED_OUT:
                 printf( "%ld,%s,0,T,%s,0,%s,%s\n",
                         event->time,
                         "Core_1",
-                        get_taskname(trace_data, event->param),
+                        get_taskname(trace_data, event->value),
                         "preempt",
                         "switched_out");
-                current_task = event->param;
+                current_task = event->value;
                 break;
             case TRACE_EVENT_TASK_CREATE:
                 printf( "%ld,%s,0,T,%s,0,%s,%s\n",
                         event->time,
                         "Core_1",
-                        get_taskname(trace_data, event->param),
+                        get_taskname(trace_data, event->value),
                         "start",
                         "task_create");
                 printf( "%ld,%s,0,T,%s,0,%s,%s\n",
                         event->time,
                         "Core_1",
-                        get_taskname(trace_data, event->param),
+                        get_taskname(trace_data, event->value),
                         "preempt",
                         "task_create");
-                current_task = event->param;
+                current_task = event->value;
                 break;
             case TRACE_EVENT_TASK_DELETE:
                 // TODO
@@ -289,38 +191,38 @@ void btf_dump(
                 printf( "%ld,%s,0,T,%s,0,%s,%s\n",
                         event->time,
                         "Core_1",
-                        get_taskname(trace_data, event->param),
+                        get_taskname(trace_data, event->value),
                         "terminate",
                         "task_delete");
-                current_task = event->param;
+                current_task = event->value;
                 */
                 break;
             case TRACE_EVENT_TASK_SUSPEND:
                 printf( "%ld,%s,0,T,%s,0,%s,%s\n",
                         event->time,
                         get_taskname(trace_data, current_task),
-                        get_taskname(trace_data, event->param),
+                        get_taskname(trace_data, event->value),
                         "wait",
                         "task_suspend");
-                current_task = event->param;
+                current_task = event->value;
                 break;
             case TRACE_EVENT_TASK_RESUME:
                 printf( "%ld,%s,0,T,%s,0,%s,%s\n",
                         event->time,
                         get_taskname(trace_data, current_task),
-                        get_taskname(trace_data, event->param),
+                        get_taskname(trace_data, event->value),
                         "release",
                         "task_resume");
-                current_task = event->param;
+                current_task = event->value;
                 break;
             case TRACE_EVENT_TASK_RESUME_FROM_ISR:
                 printf( "%ld,%s,0,T,%s,0,%s,%s\n",
                         event->time,
                         "Core_1",
-                        get_taskname(trace_data, event->param),
+                        get_taskname(trace_data, event->value),
                         "release",
                         "resume_from_isr");
-                current_task = event->param;
+                current_task = event->value;
                 break;
             case TRACE_EVENT_TASK_INCREMENT_TICK:
                 // TODO
@@ -330,7 +232,7 @@ void btf_dump(
                         "Core_1",
                         "tick_event",
                         "trigger",
-                        event->param);
+                        event->value);
                 */
                 break;
             default:

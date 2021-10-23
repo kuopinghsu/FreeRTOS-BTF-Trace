@@ -21,7 +21,6 @@
 #ifndef __PORT_H__
 #define __PORT_H__
 
-// This is only for srv32 simulator
 #ifdef __riscv
 #ifndef portGET_RUN_TIME_COUNTER_VALUE
 #define portGET_RUN_TIME_COUNTER_VALUE() ({int cycles; asm volatile ("rdcycle %0" : "=r"(cycles)); cycles; })
@@ -33,6 +32,7 @@
 #define HAVE_SYS_DUMP
 //#define PRINT_BTF_DUMP
 
+// This is only for srv32 simulator
 // syscall for memory dumping
 static void sys_dump(int start_addr, int size) {
     int end_addr = start_addr + size;
