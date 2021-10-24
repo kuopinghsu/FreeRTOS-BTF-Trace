@@ -60,7 +60,7 @@ typedef struct {
     uint32_t    version;
     uint32_t    core_clock;
     uint32_t    max_tasks;
-    uint32_t    max_task_name_len;
+    uint32_t    max_taskname_len;
     uint32_t    max_events;
     uint32_t    task_count;
     uint32_t    event_count;
@@ -68,7 +68,7 @@ typedef struct {
 } TRACE_HEADER;
 
 typedef struct {
-    uint8_t     task_lists[configMAX_TASKS][ALIGN4(configMAX_TASK_NAME_LEN+6)];
+    uint8_t     task_lists[configMAX_TASKS][ALIGN4(configMAX_TASK_NAME_LEN+1)];
     EVENT       event_lists[configMAX_EVENTS];
 } TRACE_DATA;
 

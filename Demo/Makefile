@@ -46,7 +46,9 @@ PROG	 = $(DEMO_SRC:.c=.elf)
 all: $(FREERTOS_LIBRARY) $(PROG) 
 
 run:
-	cd examples && $(RVSIM) task.elf && $(GENTRACE) dump.bin trace.btf
+	cd examples && $(RVSIM) task.elf
+	$(GENTRACE) dump.bin trace.btf
+	$(GENTRACE) -vcd dump.bin trace.vcd
 
 %.o: %.c
 	$(CC) -c $(CFLAGS) -o $@ $<
@@ -62,5 +64,5 @@ $(FREERTOS_LIBRARY): $(PORT_ASM_OBJ) $(PORT_OBJ) $(RTOS_OBJ)
 	$(OBJDUMP) -d $@ > $@.dis
 
 clean:
-	$(RM) -f $(OBJS) $(FREERTOS_LIBRARY) examples/*.elf examples/*.elf.dis examples/dump.bin examples/trace.btf
+	$(RM) -f $(OBJS) $(FREERTOS_LIBRARY) examples/*.elf examples/*.elf.dis examples/dump.bin examples/trace.*
 

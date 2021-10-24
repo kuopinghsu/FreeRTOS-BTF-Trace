@@ -63,7 +63,8 @@ static char *get_taskname(
     int index
 ) {
     char *ptr = (char*)&trace_data->d.task_lists;
-    int n = trace_data->h.max_task_name_len * index;
+    int n = trace_data->h.max_taskname_len * index;
+
     return (char*)&ptr[n];
 }
 
@@ -72,8 +73,9 @@ static EVENT *get_event(
     int index
 ) {
     char *ptr = (char*)&trace_data->d.task_lists;
-    int n = trace_data->h.max_tasks * trace_data->h.max_task_name_len +
+    int n = trace_data->h.max_tasks * trace_data->h.max_taskname_len +
             sizeof(EVENT) * index;
+
     return (EVENT*)&ptr[n];
 }
 
@@ -156,91 +158,75 @@ int genbtf(
 
         switch(event->types) {
             case TRACE_EVENT_TASK_SWITCHED_IN:
-                fprintf(fout, "%d,%s,0,T,%s,0,%s,%s\n",
+                fprintf(fout, "%d,(%04d)%s,0,T,(%04d)%s,0,%s,%s\n",
                         event->time,
-                        get_taskname(trace_data, current_task),
-                        get_taskname(trace_data, event->value),
+                        current_task, get_taskname(trace_data, current_task),
+                        event->value, get_taskname(trace_data, event->value),
                         "resume",
                         "switched_in");
-                current_task = event->value;
                 break;
             case TRACE_EVENT_TASK_SWITCHED_OUT:
-                fprintf(fout, "%d,%s,0,T,%s,0,%s,%s\n",
+                fprintf(fout, "%d,(%04d)%s,0,T,(%04d)%s,0,%s,%s\n",
                         event->time,
-                        "Core_1",
-                        get_taskname(trace_data, event->value),
+                        current_task, get_taskname(trace_data, current_task),
+                        event->value, get_taskname(trace_data, event->value),
                         "preempt",
                         "switched_out");
-                current_task = event->value;
                 break;
             case TRACE_EVENT_TASK_CREATE:
-                fprintf(fout, "%d,%s,0,T,%s,0,%s,%s\n",
+                fprintf(fout, "%d,%s,0,T,(%04d)%s,0,%s,%s\n",
                         event->time,
                         "Core_1",
-                        get_taskname(trace_data, event->value),
-                        "start",
-                        "task_create");
-                fprintf(fout, "%d,%s,0,T,%s,0,%s,%s\n",
-                        event->time,
-                        "Core_1",
-                        get_taskname(trace_data, event->value),
+                        event->value, get_taskname(trace_data, event->value),
                         "preempt",
                         "task_create");
-                current_task = event->value;
                 break;
             case TRACE_EVENT_TASK_DELETE:
-                // TODO
-                /*
-                fprintf(fout, "%d,%s,0,R,%s,0,%s,%s\n",
+                // FIXME
+                fprintf(fout, "%d,%s,0,R,(%04d)%s,0,%s,%s\n",
                         event->time,
                         "Core_1",
-                        get_taskname(trace_data, event->value),
-                        "terminate",
+                        event->value, get_taskname(trace_data, event->value),
+                        "preempt",
                         "task_delete");
-                current_task = event->value;
-                */
                 break;
             case TRACE_EVENT_TASK_SUSPEND:
-                fprintf(fout, "%d,%s,0,T,%s,0,%s,%s\n",
+                fprintf(fout, "%d,(%04d)%s,0,T,(%04d)%s,0,%s,%s\n",
                         event->time,
-                        get_taskname(trace_data, current_task),
-                        get_taskname(trace_data, event->value),
+                        current_task, get_taskname(trace_data, current_task),
+                        event->value, get_taskname(trace_data, event->value),
                         "wait",
                         "task_suspend");
-                current_task = event->value;
                 break;
             case TRACE_EVENT_TASK_RESUME:
-                fprintf(fout, "%d,%s,0,T,%s,0,%s,%s\n",
+                fprintf(fout, "%d,(%04d)%s,0,T,(%04d)%s,0,%s,%s\n",
                         event->time,
-                        get_taskname(trace_data, current_task),
-                        get_taskname(trace_data, event->value),
+                        current_task, get_taskname(trace_data, current_task),
+                        event->value, get_taskname(trace_data, event->value),
                         "release",
                         "task_resume");
-                current_task = event->value;
                 break;
             case TRACE_EVENT_TASK_RESUME_FROM_ISR:
-                fprintf(fout, "%d,%s,0,T,%s,0,%s,%s\n",
+                fprintf(fout, "%d,%s,0,T,(%04d)%s,0,%s,%s\n",
                         event->time,
                         "Core_1",
-                        get_taskname(trace_data, event->value),
+                        event->value, get_taskname(trace_data, event->value),
                         "release",
                         "resume_from_isr");
-                current_task = event->value;
                 break;
             case TRACE_EVENT_TASK_INCREMENT_TICK:
-                // TODO
-                /*
+                // FIXME
                 fprintf(fout, "%d,%s,0,STI,%s,0,%s,tick_%d\n",
                         event->time,
                         "Core_1",
                         "tick_event",
                         "trigger",
                         event->value);
-                */
                 break;
             default:
                 break;
         }
+        current_task = event->value;
         current_index = ((current_index + 1) % trace_data->h.max_events);
     }
 
@@ -320,12 +306,12 @@ int genvcd(
     // tick event
     tick_id = 0;
     fprintf(fout,"$var wire 1 %s %s $end\n", get_vcdsig(tick_id),
-            "tick_event");
+            "(0000)tick_event");
 
-    // task lists
+    // task lists, task number starts from 1
     for (i = 1; i <= trace_data->h.task_count; i++ ) {
-        fprintf(fout,"$var wire 1 %s %s $end\n", get_vcdsig(i),
-                trace_data->d.task_lists[i]);
+        fprintf(fout,"$var wire 1 %s (%04d)%s $end\n", get_vcdsig(i), i,
+                get_taskname(trace_data, i));
     }
 
     fprintf(fout, "$upscope $end\n");
