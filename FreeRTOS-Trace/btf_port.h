@@ -34,13 +34,13 @@
 
 // This is only for srv32 simulator
 // syscall for memory dumping
-static void sys_dump(int start_addr, int size) {
-    int end_addr = start_addr + size;
+static inline void sys_dump(int start_addr, int size) {
     asm volatile("addi a0, %[start], 0\n"
                  "addi a1, %[end], 0\n"
                  "li a7, 0x99\n"
                  "ecall\n"
-                 : : [start] "r"(start_addr), [end] "r"(end_addr));
+                 : : [start] "r"(start_addr), [end] "r"(start_addr+size)
+                 : "a0", "a1", "a7");
 }
 
 #else
