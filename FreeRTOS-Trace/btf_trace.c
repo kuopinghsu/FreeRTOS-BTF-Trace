@@ -118,6 +118,7 @@ void btf_dump(
     int i;
     int current_task;
     int current_index;
+    EVENT *event;
 
     // Check header
     if (trace_data.h.header[0] != 'B' ||
@@ -134,9 +135,6 @@ void btf_dump(
     printf("#createDate " __DATE__ " " __TIME__ "\n");
     printf("#timeScale ns\n");
 
-    printf("0,Core_1,0,C,Core_1,0,set_frequence,%ld\n",
-           trace_data.h.core_clock);
-
     current_task = 0;
     if (trace_data.h.event_count != trace_data.h.max_events) {
         current_index = 0;
@@ -146,70 +144,75 @@ void btf_dump(
                         trace_data.h.current_index - 1;
     }
 
+    event = get_event(trace_data, current_index);
+    printf("%u,Core_1,0,C,Core_1,0,set_frequence,%ld\n",
+           event->list, trace_data.h.core_clock);
+
+
     for(i = 0; i < trace_data.h.event_count; i++) {
-        EVENT *event = get_event(trace_data, i);
+        event = get_event(trace_data, current_index);
 
         switch(event->types) {
             case TRACE_EVENT_TASK_SWITCHED_IN:
-                printf( "%ld,(%04d)%s,0,T,(%04d)%s,0,%s,%s\n",
+                printf( "%u,(%04d)%s,0,T,(%04d)%s,0,%s,%s\n",
                         event->time,
                         current_task, get_taskname(trace_data, current_task),
                         event->value, get_taskname(trace_data, event->value),
                         "resume",
-                        "switched_in");
+                        "");
                 break;
             case TRACE_EVENT_TASK_SWITCHED_OUT:
-                printf( "%ld,(%04d)%s,0,T,(%04d)%s,0,%s,%s\n",
+                printf( "%u,(%04d)%s,0,T,(%04d)%s,0,%s,%s\n",
                         event->time,
                         current_task, get_taskname(trace_data, current_task),
                         event->value, get_taskname(trace_data, event->value),
                         "preempt",
-                        "switched_out");
+                        "");
                 break;
             case TRACE_EVENT_TASK_CREATE:
-                printf( "%ld,%s,0,T,(%04d)%s,0,%s,%s\n",
+                printf( "%u,%s,0,T,(%04d)%s,0,%s,%s\n",
                         event->time,
                         "Core_1",
                         event->value, get_taskname(trace_data, event->value),
                         "preempt",
-                        "task_create");
+                        "create");
                 break;
             case TRACE_EVENT_TASK_DELETE:
                 // FIXME
-                printf( "%ld,%s,0,R,(%04d)%s,0,%s,%s\n",
+                printf( "%u,%s,0,R,(%04d)%s,0,%s,%s\n",
                         event->time,
                         "Core_1",
                         event->value, get_taskname(trace_data, event->value),
                         "preempt",
-                        "task_delete");
+                        "delete");
                 break;
             case TRACE_EVENT_TASK_SUSPEND:
-                printf( "%ld,(%04d)%s,0,T,(%04d)%s,0,%s,%s\n",
+                printf( "%u,(%04d)%s,0,T,(%04d)%s,0,%s,%s\n",
                         event->time,
                         current_task, get_taskname(trace_data, current_task),
                         event->value, get_taskname(trace_data, event->value),
                         "wait",
-                        "task_suspend");
+                        "suspend");
                 break;
             case TRACE_EVENT_TASK_RESUME:
-                printf( "%ld,(%04d)%s,0,T,(%04d)%s,0,%s,%s\n",
+                printf( "%u,(%04d)%s,0,T,(%04d)%s,0,%s,%s\n",
                         event->time,
                         current_task, get_taskname(trace_data, current_task),
                         event->value, get_taskname(trace_data, event->value),
                         "release",
-                        "task_resume");
+                        "resume");
                 break;
             case TRACE_EVENT_TASK_RESUME_FROM_ISR:
-                printf( "%ld,%s,0,T,(%04d)%s,0,%s,%s\n",
+                printf( "%u,%s,0,T,(%04d)%s,0,%s,%s\n",
                         event->time,
                         "Core_1",
                         event->value, get_taskname(trace_data, event->value),
                         "release",
-                        "resume_from_isr");
+                        "resume/isr");
                 break;
             case TRACE_EVENT_TASK_INCREMENT_TICK:
                 // FIXME
-                printf( "%ld,%s,0,STI,%s,0,%s,tick_%ld\n",
+                printf( "%u,%s,0,STI,%s,0,%s,tick_%ld\n",
                         event->time,
                         "Core_1",
                         "tick_event",
