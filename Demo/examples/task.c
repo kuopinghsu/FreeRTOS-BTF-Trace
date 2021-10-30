@@ -7,7 +7,7 @@
 
 #define NTASKS     8
 #define STACK_SIZE 512
-#define ITERATIONS 50
+#define ITERATIONS 20
 
 volatile int count = 0;
 

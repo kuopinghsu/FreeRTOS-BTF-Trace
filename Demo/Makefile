@@ -47,8 +47,8 @@ all: $(FREERTOS_LIBRARY) $(PROG)
 
 run: all
 	cd examples && $(RVSIM) task.elf
-	cd examples && $(GENTRACE) dump.bin trace.btf
-	cd examples && $(GENTRACE) --vcd dump.bin trace.vcd
+	cd examples && $(GENTRACE) dump.bin $(ROOTDIR)/tracedata/trace.btf
+	cd examples && $(GENTRACE) --vcd dump.bin $(ROOTDIR)/tracedata/trace.vcd
 
 %.o: %.c
 	$(CC) -c $(CFLAGS) -o $@ $<

@@ -148,7 +148,7 @@ int genbtf(
     } else {
         current_index = trace_data->h.current_index == 0 ?
                         trace_data->h.max_events - 1 :
-                        trace_data->h.current_index - 1;
+                        trace_data->h.current_index;
     }
 
     event = get_event(trace_data, current_index);

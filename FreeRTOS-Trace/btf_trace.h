@@ -28,11 +28,16 @@
 #define TRACE_VER_MINOR     2
 #define TRACE_VERSION       ((TRACE_VER_MAJOR<<16)|TRACE_VER_MINOR)
 
-#define configMAX_TASKS     1024
-#define configMAX_EVENTS    4096
+#ifndef configMAX_TRACE_TASKS
+#define configMAX_TRACE_TASKS           1024
+#endif
 
-#ifndef configMAX_TASK_NAME_LEN
-#define configMAX_TASK_NAME_LEN 8
+#ifndef configMAX_TRACE_EVENTS
+#define configMAX_TRACE_EVENTS          4096
+#endif
+
+#ifndef configMAX_TRACE_TASK_NAME_LEN
+#define configMAX_TRACE_TASK_NAME_LEN   8
 #endif
 
 #define ALIGN4(n) (((n)+3)&0xfffffffc)
@@ -68,8 +73,8 @@ typedef struct {
 } TRACE_HEADER;
 
 typedef struct {
-    uint8_t     task_lists[configMAX_TASKS][ALIGN4(configMAX_TASK_NAME_LEN+1)];
-    EVENT       event_lists[configMAX_EVENTS];
+    uint8_t     task_lists[configMAX_TRACE_TASKS][ALIGN4(configMAX_TRACE_TASK_NAME_LEN+1)];
+    EVENT       event_lists[configMAX_TRACE_EVENTS];
 } TRACE_DATA;
 
 typedef struct {

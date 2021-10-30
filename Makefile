@@ -15,7 +15,8 @@ clean:
 	make -C Demo clean
 	make -C tools clean
 	make -C rvsim clean
+	-rm tracedata/trace.*
 
 distclean:
-	rm -rf FreeRTOS-Kernel
+	-rm -rf FreeRTOS-Kernel
 

@@ -82,8 +82,13 @@ to exclude the API function. */
 #define INCLUDE_vTaskDelay              1
 #define INCLUDE_uxTaskGetStackHighWaterMark 1
 
+/* RISC-V mtime address */
 #define configMTIME_BASE_ADDRESS        0x90000000
 #define configMTIMECMP_BASE_ADDRESS     0x90000008
+
+/* Trace definitions */
+#define configMAX_TRACE_TASKS           1024
+#define configMAX_TRACE_EVENTS          4096
 
 #if configUSE_TRACE_FACILITY
 #include "FreeRTOS-Trace.h"

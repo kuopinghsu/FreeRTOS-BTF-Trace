@@ -18,7 +18,7 @@ This is an example to test [srv32](https://github.com/kuopinghsu/srv32) on FreeR
 
 Requirement: Install the toolchains. See details in srv32 [Building toolchains](https://github.com/kuopinghsu/srv32#building-toolchains) section.
 
-The file "trace.btf" and "trace.vcd" will be generated under Demo/examples folder. Open it by the Trace Compass (for trace.btf) or VCD viewer (for trace.vcd).
+The file "trace.btf" and "trace.vcd" will be generated under tracedata folder. Open it by the Trace Compass (for trace.btf) or VCD viewer (for trace.vcd).
 
     $ make run
 

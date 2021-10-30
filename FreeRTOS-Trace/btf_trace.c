@@ -40,9 +40,9 @@ void btf_traceSTART(void) {
     trace_data.h.tag = 1;
     trace_data.h.version = TRACE_VERSION;
     trace_data.h.core_clock = configCPU_CLOCK_HZ;
-    trace_data.h.max_tasks = configMAX_TASKS;
-    trace_data.h.max_taskname_len = ALIGN4(configMAX_TASK_NAME_LEN+1);
-    trace_data.h.max_events = configMAX_EVENTS;
+    trace_data.h.max_tasks = configMAX_TRACE_TASKS;
+    trace_data.h.max_taskname_len = ALIGN4(configMAX_TRACE_TASK_NAME_LEN+1);
+    trace_data.h.max_events = configMAX_TRACE_EVENTS;
     trace_data.h.task_count = 0;
     trace_data.h.event_count = 0;
     trace_data.h.current_index = 0;
@@ -67,17 +67,17 @@ void btf_trace_add_task (
     event_t  event)
 {
     if (!trace_en) return;
-    assert (trace_data.h.event_count <= configMAX_EVENTS);
+    assert (trace_data.h.event_count <= configMAX_TRACE_EVENTS);
 
-    if (task_id > configMAX_TASKS) {
+    if (task_id > configMAX_TRACE_TASKS) {
         printf("Warnning: the maximum number of tasks allowed is exceeded and cannot be tracked.\n");
         trace_en = 0;
         return;
     }
 
     // task_id is a unique ID, which will increase by 1 each time a TCB is created.
-    strncpy((char*)trace_data.d.task_lists[task_id], (char*)task_name, configMAX_TASK_NAME_LEN);
-    trace_data.d.task_lists[task_id][configMAX_TASK_NAME_LEN] = 0;
+    strncpy((char*)trace_data.d.task_lists[task_id], (char*)task_name, configMAX_TRACE_TASK_NAME_LEN);
+    trace_data.d.task_lists[task_id][configMAX_TRACE_TASK_NAME_LEN] = 0;
     trace_data.h.task_count++;
 
     trace_data.d.event_lists[trace_data.h.current_index].time = xGetTime();
@@ -85,9 +85,11 @@ void btf_trace_add_task (
     trace_data.d.event_lists[trace_data.h.current_index].types = event;
 
     trace_data.h.current_index++;
-    if (trace_data.h.current_index == configMAX_EVENTS)
+    if (trace_data.h.current_index == configMAX_TRACE_EVENTS) {
         trace_data.h.current_index = 0;
-    if (trace_data.h.event_count < configMAX_EVENTS)
+        printf("\nWarnning: trace data wrap, only last events will be recorded.\n");
+    }
+    if (trace_data.h.event_count < configMAX_TRACE_EVENTS)
         trace_data.h.event_count++;
 }
 
@@ -96,17 +98,19 @@ void btf_trace_add_event (
     event_t  event)
 {
     if (!trace_en) return;
-    assert (trace_data.h.event_count <= configMAX_EVENTS);
-    assert (trace_data.h.current_index < configMAX_EVENTS);
+    assert (trace_data.h.event_count <= configMAX_TRACE_EVENTS);
+    assert (trace_data.h.current_index < configMAX_TRACE_EVENTS);
 
     trace_data.d.event_lists[trace_data.h.current_index].time = xGetTime();
     trace_data.d.event_lists[trace_data.h.current_index].value = value;
     trace_data.d.event_lists[trace_data.h.current_index].types = event;
 
     trace_data.h.current_index++;
-    if (trace_data.h.current_index == configMAX_EVENTS)
+    if (trace_data.h.current_index == configMAX_TRACE_EVENTS) {
         trace_data.h.current_index = 0;
-    if (trace_data.h.event_count < configMAX_EVENTS)
+        printf("\nWarnning: trace data wrap, only last events will be recorded.\n");
+    }
+    if (trace_data.h.event_count < configMAX_TRACE_EVENTS)
         trace_data.h.event_count++;
 }
 
@@ -141,10 +145,11 @@ void btf_dump(
     } else {
         current_index = trace_data.h.current_index == 0 ?
                         trace_data.h.max_events - 1 :
-                        trace_data.h.current_index - 1;
+                        trace_data.h.current_index;
     }
 
     event = get_event(trace_data, current_index);
+
     printf("%u,Core_1,0,C,Core_1,0,set_frequence,%ld\n",
            event->list, trace_data.h.core_clock);
 
