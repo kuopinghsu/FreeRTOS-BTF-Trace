@@ -70,7 +70,7 @@ void btf_trace_add_task (
     assert (trace_data.h.event_count <= configMAX_TRACE_EVENTS);
 
     if (task_id > configMAX_TRACE_TASKS) {
-        printf("Warnning: the maximum number of tasks allowed is exceeded and cannot be tracked.\n");
+        printf("Warning: the maximum number of tasks allowed is exceeded and cannot be tracked.\n");
         trace_en = 0;
         return;
     }
@@ -87,7 +87,7 @@ void btf_trace_add_task (
     trace_data.h.current_index++;
     if (trace_data.h.current_index == configMAX_TRACE_EVENTS) {
         trace_data.h.current_index = 0;
-        printf("\nWarnning: trace data wrap, only last events will be recorded.\n");
+        printf("\nWarning: trace data wrap, only last events will be recorded.\n");
     }
     if (trace_data.h.event_count < configMAX_TRACE_EVENTS)
         trace_data.h.event_count++;
@@ -108,7 +108,7 @@ void btf_trace_add_event (
     trace_data.h.current_index++;
     if (trace_data.h.current_index == configMAX_TRACE_EVENTS) {
         trace_data.h.current_index = 0;
-        printf("\nWarnning: trace data wrap, only last events will be recorded.\n");
+        printf("\nWarning: trace data wrap, only last events will be recorded.\n");
     }
     if (trace_data.h.event_count < configMAX_TRACE_EVENTS)
         trace_data.h.event_count++;
@@ -146,7 +146,7 @@ void btf_dump(
 
     event = get_event(trace_data, current_index);
 
-    printf("%u,Core_1,0,C,Core_1,0,set_frequence,%ld\n",
+    printf("%u,Core_1,0,C,Core_1,0,set_frequency,%ld\n",
            event->list, trace_data.h.core_clock);
 
     current_task = 0;
