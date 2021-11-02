@@ -142,19 +142,17 @@ int genbtf(
     fprintf(fout,"#createDate " __DATE__ " " __TIME__ "\n");
     fprintf(fout,"#timeScale ns\n");
 
-    current_task = 0;
-    if (trace_data->h.event_count != trace_data->h.max_events) {
+    if (trace_data->h.event_count != trace_data->h.max_events)
         current_index = 0;
-    } else {
-        current_index = trace_data->h.current_index == 0 ?
-                        trace_data->h.max_events - 1 :
-                        trace_data->h.current_index;
-    }
+    else
+        current_index = trace_data->h.current_index;
 
     event = get_event(trace_data, current_index);
 
     fprintf(fout,"%u,Core_1,0,C,Core_1,0,set_frequence,%d\n",
             event->time, trace_data->h.core_clock);
+
+    current_task = 0;
 
     for(i = 0; i < trace_data->h.event_count; i++) {
         event = get_event(trace_data, current_index);
