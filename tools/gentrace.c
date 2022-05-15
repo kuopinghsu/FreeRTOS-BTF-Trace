@@ -48,7 +48,7 @@ static char *get_vcdsig(
 
 void usage(void) {
     printf(
-        "Conver trace data to VCD or BTF format\n"
+        "Convert trace data to VCD or BTF format\n"
         "\n"
         "Usage: gentrace [-h] [-v|-b] inputfile outfile\n\n"
         "       -h|--help       help\n"
@@ -128,12 +128,12 @@ int genbtf(
     // TODO: check endian. If this value is not 1, the rest values
     // should be converted to another endian. (big endian <-> little endian)
     if (trace_data->h.tag != 1) {
-        printf("Uncompatible endian\n");
+        printf("Incompatible endian\n");
         return 1;
     }
 
     if (trace_data->h.version != TRACE_VERSION) {
-        printf("Uncomatible version\n");
+        printf("Incompatible version\n");
         return 1;
     }
 
@@ -142,19 +142,17 @@ int genbtf(
     fprintf(fout,"#createDate " __DATE__ " " __TIME__ "\n");
     fprintf(fout,"#timeScale ns\n");
 
-    current_task = 0;
-    if (trace_data->h.event_count != trace_data->h.max_events) {
+    if (trace_data->h.event_count != trace_data->h.max_events)
         current_index = 0;
-    } else {
-        current_index = trace_data->h.current_index == 0 ?
-                        trace_data->h.max_events - 1 :
-                        trace_data->h.current_index;
-    }
+    else
+        current_index = trace_data->h.current_index;
 
     event = get_event(trace_data, current_index);
 
-    fprintf(fout,"%u,Core_1,0,C,Core_1,0,set_frequence,%d\n",
+    fprintf(fout,"%u,Core_1,0,C,Core_1,0,set_frequency,%d\n",
             event->time, trace_data->h.core_clock);
+
+    current_task = 0;
 
     for(i = 0; i < trace_data->h.event_count; i++) {
         event = get_event(trace_data, current_index);
@@ -290,7 +288,7 @@ int genvcd(
     // TODO: check endian. If this value is not 1, the rest values
     // should be converted to another endian. (big endian <-> little endian)
     if (trace_data->h.tag != 1) {
-        printf("Uncompatible endian\n");
+        printf("Incompatible endian\n");
         return 1;
     }
 

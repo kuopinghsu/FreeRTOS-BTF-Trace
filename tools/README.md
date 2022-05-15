@@ -1,6 +1,6 @@
 # gentrace
 
-This is a utility to conver the trace data file to BTF (Best Trace Format) or VCD (Value Change Dump) file.
+This is a utility to convert the trace data file to BTF (Best Trace Format) or VCD (Value Change Dump) file.
 
 Use below command to convert the file to BTF format.
 
