@@ -50,7 +50,7 @@ void usage(void) {
     printf(
         "Conver trace data to VCD or BTF format\n"
         "\n"
-        "Usage: [-h] [-v|-b] gentrace inputfile outfile\n\n"
+        "Usage: gentrace [-h] [-v|-b] inputfile outfile\n\n"
         "       -h|--help       help\n"
         "       -b|--btf        generate btf file (default)\n"
         "       -v|--vcd        generate vcd file\n"
@@ -233,11 +233,11 @@ int genbtf(
         current_index = ((current_index + 1) % trace_data->h.max_events);
     }
 
+    printf("%d events generated\n", trace_data->h.event_count);
+
     fclose(fin);
     fclose(fout);
     free(trace_data);
-
-    printf("%d events generated\n", trace_data->h.event_count);
 
     return 0;
 }
@@ -366,11 +366,11 @@ int genvcd(
         current_index = ((current_index + 1) % trace_data->h.max_events);
     }
 
+    printf("%d events generated\n", trace_data->h.event_count);
+
     fclose(fin);
     fclose(fout);
     free(trace_data);
-
-    printf("%d events generated\n", trace_data->h.event_count);
 
     return 0;
 }
