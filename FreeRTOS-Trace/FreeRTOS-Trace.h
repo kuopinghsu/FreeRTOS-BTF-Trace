@@ -23,6 +23,18 @@
 
 #include "btf_trace.h"
 
+#define addEVENT( tag, event ) {                \
+    taskENTER_CRITICAL();                       \
+    btf_trace_add_event ( tag, event );         \
+    taskEXIT_CRITICAL();                        \
+}
+
+#define addEVENT_ISR( tag, event ) {            \
+    int mask = taskENTER_CRITICAL_FROM_ISR();   \
+    btf_trace_add_event ( tag, event );         \
+    taskEXIT_CRITICAL_FROM_ISR(mask);           \
+}
+
 #ifndef traceSTART
 # define traceSTART() {                         \
     taskENTER_CRITICAL();                       \
@@ -40,25 +52,11 @@
 #endif // traceSTART
 
 #ifndef traceTASK_SWITCHED_IN
-# define traceTASK_SWITCHED_IN() {              \
-    int mask = taskENTER_CRITICAL_FROM_ISR();   \
-    btf_trace_add_event (                       \
-        (uint32_t)pxCurrentTCB->uxTCBNumber,    \
-        TRACE_EVENT_TASK_SWITCHED_IN            \
-    );                                          \
-    taskEXIT_CRITICAL_FROM_ISR(mask);           \
-}
+# define traceTASK_SWITCHED_IN() addEVENT_ISR( (uint32_t)pxCurrentTCB->uxTCBNumber, TRACE_EVENT_TASK_SWITCHED_IN )
 #endif // traceTASK_SWITCHED_IN
 
 #ifndef traceTASK_SWITCHED_OUT
-# define traceTASK_SWITCHED_OUT() {             \
-    int mask = taskENTER_CRITICAL_FROM_ISR();   \
-    btf_trace_add_event (                       \
-        (uint32_t)pxCurrentTCB->uxTCBNumber,    \
-        TRACE_EVENT_TASK_SWITCHED_OUT           \
-    );                                          \
-    taskEXIT_CRITICAL_FROM_ISR(mask);           \
-}
+# define traceTASK_SWITCHED_OUT() addEVENT_ISR( (uint32_t)pxCurrentTCB->uxTCBNumber, TRACE_EVENT_TASK_SWITCHED_OUT )
 #endif // traceTASK_SWITCHED_OUT
 
 #ifndef traceTASK_CREATE
@@ -74,48 +72,53 @@
 #endif // traceTASK_CREATE
 
 #ifndef traceTASK_DELETE
-# define traceTASK_DELETE( pxTCB ) {            \
-    taskENTER_CRITICAL();                       \
-    btf_trace_add_event (                       \
-        (uint32_t)pxTCB->uxTCBNumber,           \
-        TRACE_EVENT_TASK_DELETE                 \
-    );                                          \
-    taskEXIT_CRITICAL();                        \
-}
+# define traceTASK_DELETE( pxTCB ) addEVENT( (uint32_t)pxTCB->uxTCBNumber, TRACE_EVENT_TASK_DELETE )
 #endif // traceTASK_DELETE
 
 #ifndef traceTASK_SUSPEND
-# define traceTASK_SUSPEND( pxTCB ) {           \
-    taskENTER_CRITICAL();                       \
-    btf_trace_add_event (                       \
-        (uint32_t)pxTCB->uxTCBNumber,           \
-        TRACE_EVENT_TASK_SUSPEND                \
-    );                                          \
-    taskEXIT_CRITICAL();                        \
-}
+# define traceTASK_SUSPEND( pxTCB ) addEVENT( (uint32_t)pxTCB->uxTCBNumber, TRACE_EVENT_TASK_SUSPEND )
 #endif // traceTASK_SUSPEND
 
 #ifndef traceTASK_RESUME
-# define traceTASK_RESUME( pxTCB ) {            \
-    taskENTER_CRITICAL();                       \
-    btf_trace_add_event (                       \
-        (uint32_t)pxTCB->uxTCBNumber,           \
-        TRACE_EVENT_TASK_RESUME                 \
-    );                                          \
-    taskEXIT_CRITICAL();                        \
-}
+# define traceTASK_RESUME( pxTCB ) addEVENT( (uint32_t)pxTCB->uxTCBNumber, TRACE_EVENT_TASK_RESUME )
 #endif // traceTASK_RESUME
 
 #ifndef traceTASK_RESUME_FROM_ISR
-# define traceTASK_RESUME_FROM_ISR( pxTCB ) {   \
-    int mask = taskENTER_CRITICAL_FROM_ISR();   \
-    btf_trace_add_event (                       \
-        (uint32_t)pxTCB->uxTCBNumber,           \
-        TRACE_EVENT_TASK_RESUME_FROM_ISR        \
-    );                                          \
-    taskEXIT_CRITICAL_FROM_ISR(mask);           \
-}
+# define traceTASK_RESUME_FROM_ISR( pxTCB ) addEVENT_ISR( (uint32_t)pxTCB->uxTCBNumber, TRACE_EVENT_TASK_RESUME_FROM_ISR )
 #endif // traceTASK_RESUME_FROM_ISR
+
+//--
+#ifndef traceCREATE_MUTEX
+# define traceCREATE_MUTEX( pxNewQueue ) addEVENT( 0, TRACE_EVENT_CREATE_MUTEX )
+#endif // traceCREATE_MUTEX
+
+#ifndef traceGIVE_MUTEX_RECURSIVE
+# define traceGIVE_MUTEX_RECURSIVE( pxMutex ) addEVENT( 0, TRACE_EVENT_GIVE_MUTEX_RECURSIVE )
+#endif // traceGIVE_MUTEX_RECURSIVE
+
+#ifndef traceTAKE_MUTEX_RECURSIVE
+# define traceTAKE_MUTEX_RECURSIVE( pxMutex ) addEVENT( 0, TRACE_EVENT_TAKE_MUTEX_RECURSIVE )
+#endif // traceTAKE_MUTEX_RECURSIVE
+
+#ifndef traceQUEUE_CREATE
+# define traceQUEUE_CREATE( pxNewQueue ) addEVENT( 0, TRACE_EVENT_QUEUE_CREATE )
+#endif // traceQUEUE_CREATE
+
+#ifndef traceQUEUE_SEND
+# define traceQUEUE_SEND( pxQueue ) addEVENT( 0, TRACE_EVENT_QUEUE_SEND )
+#endif // traceQUEUE_SEND
+
+#ifndef traceQUEUE_RECEIVE
+# define traceQUEUE_RECEIVE( pxQueue ) addEVENT( 0, TRACE_EVENT_QUEUE_RECEIVE )
+#endif // traceQUEUE_RECEIVE
+
+#ifndef traceQUEUE_PEEK
+# define traceQUEUE_PEEK( pxQueue ) addEVENT( 0, TRACE_EVENT_QUEUE_PEEK )
+#endif // traceQUEUE_PEEK
+
+#ifndef traceQUEUE_DELETE
+# define traceQUEUE_DELETE( pxQueue ) addEVENT( 0, TRACE_EVENT_QUEUE_DELETE )
+#endif // traceQUEUE_DELETE
 
 #ifndef traceTASK_INCREMENT_TICK
 # define traceTASK_INCREMENT_TICK( xTickCount ) {   \

@@ -181,8 +181,8 @@ void btf_dump(
 
     event = get_event(trace_data, current_index);
 
-    printf("%u,Core_1,0,C,Core_1,0,set_frequency,%ld\n",
-           event->list, trace_data.h.core_clock);
+    printf("%lu,Core_1,0,C,Core_1,0,set_frequency,%ld\n",
+           event->time, trace_data.h.core_clock);
 
     current_task = 0;
 
@@ -191,7 +191,7 @@ void btf_dump(
 
         switch(event->types) {
             case TRACE_EVENT_TASK_SWITCHED_IN:
-                printf( "%u,(%04d)%s,0,T,(%04d)%s,0,%s,%s\n",
+                printf( "%lu,(%04d)%s,0,T,(%04ld)%s,0,%s,%s\n",
                         event->time,
                         current_task, get_taskname(trace_data, current_task),
                         event->value, get_taskname(trace_data, event->value),
@@ -199,7 +199,7 @@ void btf_dump(
                         "");
                 break;
             case TRACE_EVENT_TASK_SWITCHED_OUT:
-                printf( "%u,(%04d)%s,0,T,(%04d)%s,0,%s,%s\n",
+                printf( "%lu,(%04d)%s,0,T,(%04ld)%s,0,%s,%s\n",
                         event->time,
                         current_task, get_taskname(trace_data, current_task),
                         event->value, get_taskname(trace_data, event->value),
@@ -207,7 +207,7 @@ void btf_dump(
                         "");
                 break;
             case TRACE_EVENT_TASK_CREATE:
-                printf( "%u,%s,0,T,(%04d)%s,0,%s,%s\n",
+                printf( "%lu,%s,0,T,(%04ld)%s,0,%s,%s\n",
                         event->time,
                         "Core_1",
                         event->value, get_taskname(trace_data, event->value),
@@ -216,7 +216,7 @@ void btf_dump(
                 break;
             case TRACE_EVENT_TASK_DELETE:
                 // FIXME
-                printf( "%u,%s,0,R,(%04d)%s,0,%s,%s\n",
+                printf( "%lu,%s,0,R,(%04ld)%s,0,%s,%s\n",
                         event->time,
                         "Core_1",
                         event->value, get_taskname(trace_data, event->value),
@@ -224,7 +224,7 @@ void btf_dump(
                         "delete");
                 break;
             case TRACE_EVENT_TASK_SUSPEND:
-                printf( "%u,(%04d)%s,0,T,(%04d)%s,0,%s,%s\n",
+                printf( "%lu,(%04d)%s,0,T,(%04ld)%s,0,%s,%s\n",
                         event->time,
                         current_task, get_taskname(trace_data, current_task),
                         event->value, get_taskname(trace_data, event->value),
@@ -232,7 +232,7 @@ void btf_dump(
                         "suspend");
                 break;
             case TRACE_EVENT_TASK_RESUME:
-                printf( "%u,(%04d)%s,0,T,(%04d)%s,0,%s,%s\n",
+                printf( "%lu,(%04d)%s,0,T,(%04ld)%s,0,%s,%s\n",
                         event->time,
                         current_task, get_taskname(trace_data, current_task),
                         event->value, get_taskname(trace_data, event->value),
@@ -240,16 +240,79 @@ void btf_dump(
                         "resume");
                 break;
             case TRACE_EVENT_TASK_RESUME_FROM_ISR:
-                printf( "%u,%s,0,T,(%04d)%s,0,%s,%s\n",
+                printf( "%lu,%s,0,T,(%04ld)%s,0,%s,%s\n",
                         event->time,
                         "Core_1",
                         event->value, get_taskname(trace_data, event->value),
                         "release",
                         "resume/isr");
                 break;
+            case TRACE_EVENT_CREATE_MUTEX:
+                printf( "%lu,%s,0,STI,%s,0,%s,%s\n",
+                        event->time,
+                        "Core_1",
+                        "mutex",
+                        "trigger",
+                        "create_mutex");
+                break;
+            case TRACE_EVENT_GIVE_MUTEX_RECURSIVE:
+                printf( "%lu,%s,0,STI,%s,0,%s,%s\n",
+                        event->time,
+                        "Core_1",
+                        "mutex",
+                        "trigger",
+                        "give_mutex_recursive");
+                break;
+            case TRACE_EVENT_TAKE_MUTEX_RECURSIVE:
+                printf( "%lu,%s,0,STI,%s,0,%s,%s\n",
+                        event->time,
+                        "Core_1",
+                        "mutex",
+                        "trigger",
+                        "take_mutex_recursive");
+                break;
+            case TRACE_EVENT_QUEUE_CREATE:
+                printf( "%lu,%s,0,STI,%s,0,%s,%s\n",
+                        event->time,
+                        "Core_1",
+                        "queue",
+                        "trigger",
+                        "queue_create");
+                break;
+            case TRACE_EVENT_QUEUE_SEND:
+                printf( "%lu,%s,0,STI,%s,0,%s,%s\n",
+                        event->time,
+                        "Core_1",
+                        "queue",
+                        "trigger",
+                        "queue_send");
+                break;
+            case TRACE_EVENT_QUEUE_RECEIVE:
+                printf( "%lu,%s,0,STI,%s,0,%s,%s\n",
+                        event->time,
+                        "Core_1",
+                        "queue",
+                        "trigger",
+                        "queue_receive");
+                break;
+            case TRACE_EVENT_QUEUE_PEEK:
+                printf( "%lu,%s,0,STI,%s,0,%s,%s\n",
+                        event->time,
+                        "Core_1",
+                        "queue",
+                        "trigger",
+                        "queue_peek");
+                break;
+            case TRACE_EVENT_QUEUE_DELETE:
+                printf( "%lu,%s,0,STI,%s,0,%s,%s\n",
+                        event->time,
+                        "Core_1",
+                        "queue",
+                        "trigger",
+                        "queue_delete");
+                break;
             case TRACE_EVENT_TASK_INCREMENT_TICK:
-                // FIXME
-                printf( "%u,%s,0,STI,%s,0,%s,tick_%ld\n",
+                printf( "%lu,%s,0,STI,%s,0,%s,tick_%ld\n",
                         event->time,
                         "Core_1",
                         "tick_event",

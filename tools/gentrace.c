@@ -227,8 +227,71 @@ int genbtf(
                         "release",
                         "resume/isr");
                 break;
+            case TRACE_EVENT_CREATE_MUTEX:
+                fprintf(fout, "%u,%s,0,STI,%s,0,%s,%s\n",
+                        event->time,
+                        "Core_1",
+                        "mutex",
+                        "trigger",
+                        "create_mutex");
+                break;
+            case TRACE_EVENT_GIVE_MUTEX_RECURSIVE:
+                fprintf(fout, "%u,%s,0,STI,%s,0,%s,%s\n",
+                        event->time,
+                        "Core_1",
+                        "mutex",
+                        "trigger",
+                        "give_mutex_recursive");
+                break;
+            case TRACE_EVENT_TAKE_MUTEX_RECURSIVE:
+                fprintf(fout, "%u,%s,0,STI,%s,0,%s,%s\n",
+                        event->time,
+                        "Core_1",
+                        "mutex",
+                        "trigger",
+                        "take_mutex_recursive");
+                break;
+            case TRACE_EVENT_QUEUE_CREATE:
+                fprintf(fout, "%u,%s,0,STI,%s,0,%s,%s\n",
+                        event->time,
+                        "Core_1",
+                        "queue",
+                        "trigger",
+                        "queue_create");
+                break;
+            case TRACE_EVENT_QUEUE_SEND:
+                fprintf(fout, "%u,%s,0,STI,%s,0,%s,%s\n",
+                        event->time,
+                        "Core_1",
+                        "queue",
+                        "trigger",
+                        "queue_send");
+                break;
+            case TRACE_EVENT_QUEUE_RECEIVE:
+                fprintf(fout, "%u,%s,0,STI,%s,0,%s,%s\n",
+                        event->time,
+                        "Core_1",
+                        "queue",
+                        "trigger",
+                        "queue_receive");
+                break;
+            case TRACE_EVENT_QUEUE_PEEK:
+                fprintf(fout, "%u,%s,0,STI,%s,0,%s,%s\n",
+                        event->time,
+                        "Core_1",
+                        "queue",
+                        "trigger",
+                        "queue_peek");
+                break;
+            case TRACE_EVENT_QUEUE_DELETE:
+                fprintf(fout, "%u,%s,0,STI,%s,0,%s,%s\n",
+                        event->time,
+                        "Core_1",
+                        "queue",
+                        "trigger",
+                        "queue_delete");
+                break;
             case TRACE_EVENT_TASK_INCREMENT_TICK:
-                // FIXME
                 fprintf(fout, "%u,%s,0,STI,%s,0,%s,tick_%d\n",
                         event->time,
                         "Core_1",
