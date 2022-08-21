@@ -24,6 +24,34 @@
 #include "btf_trace.h"
 #include "task.h"
 
+// Example of __DATE__ string: "Jul 27 2012"
+//                              01234567890
+#define BUILD_YEAR  ((__DATE__[ 7]-'0') * 1000 + (__DATE__[ 8]-'0') * 100+\
+                     (__DATE__[ 9]-'0') * 10   + (__DATE__[10]-'0'))
+
+#define BUILD_MONTH ( \
+                     (__DATE__[0] == 'J' && __DATE__[1] == 'a' && __DATE__[2] == 'n') ? 1 : \
+                     (__DATE__[0] == 'F')                                             ? 2 : \
+                     (__DATE__[0] == 'M' && __DATE__[1] == 'a' && __DATE__[2] == 'r') ? 3 : \
+                     (__DATE__[0] == 'A' && __DATE__[1] == 'p')                       ? 4 : \
+                     (__DATE__[0] == 'M' && __DATE__[1] == 'a' && __DATE__[2] == 'y') ? 5 : \
+                     (__DATE__[0] == 'J' && __DATE__[1] == 'u' && __DATE__[2] == 'n') ? 6 : \
+                     (__DATE__[0] == 'J' && __DATE__[1] == 'u' && __DATE__[2] == 'l') ? 7 : \
+                     (__DATE__[0] == 'A' && __DATE__[1] == 'u')                       ? 8 : \
+                     (__DATE__[0] == 'S')                                             ? 9 : \
+                     (__DATE__[0] == 'O')                                             ? 10 : \
+                     (__DATE__[0] == 'N')                                             ? 11 : \
+                     (__DATE__[0] == 'D')                                             ? 12 : \
+                                                                                        99)
+
+#define BUILD_DAY   ((((__DATE__[4] >= '0') ? (__DATE__[4]) : '0') - '0') * 10 + (__DATE__[ 5]) - '0')
+
+// Example of __TIME__ string: "21:06:19"
+//                              01234567
+#define BUILD_HOUR ((__TIME__[0] - '0') * 10 + (__TIME__[1] - '0'))
+#define BUILD_MIN  ((__TIME__[3] - '0') * 10 + (__TIME__[4] - '0'))
+#define BUILD_SEC  ((__TIME__[6] - '0') * 10 + (__TIME__[7] - '0'))
+
 #if configUSE_TRACE_FACILITY
 
 #include "btf_port.h"
@@ -136,7 +164,14 @@ void btf_dump(
     printf("\n");
     printf("#version 2.2.0\n");
     printf("#creator FreeRTOS trace logger\n");
-    printf("#createDate " __DATE__ " " __TIME__ "\n");
+
+    // Timestamp of the start of simulation or measurement. The format has to comply
+    // with "ISO 8601 extended specification for representations of dates and times"
+    // YYYY-MMDDTHH:MM:SS. The time should be in UTC time (indicated by a “Z” at the
+    // end)
+    printf("#creationDate %04d-%02d-%02dT%02d:%02d:%02dZ\n", BUILD_YEAR, BUILD_MONTH,
+           BUILD_DAY, BUILD_HOUR, BUILD_MIN, BUILD_SEC);
+
     printf("#timeScale ns\n");
 
     if (trace_data.h.event_count != trace_data.h.max_events)

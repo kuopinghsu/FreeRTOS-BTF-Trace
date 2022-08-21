@@ -23,6 +23,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <getopt.h>
+#include <time.h>
 
 #include "btf_trace.h"
 
@@ -90,6 +91,8 @@ int genbtf(
     int current_index;
     int result;
     EVENT *event;
+    time_t curr_time;
+    struct tm* info;
 
     if ((fin = fopen(infile, "rb")) == NULL) {
         printf("file %s not found\n", infile);
@@ -139,7 +142,16 @@ int genbtf(
 
     fprintf(fout,"#version 2.2.0\n");
     fprintf(fout,"#creator FreeRTOS trace logger\n");
-    fprintf(fout,"#createDate " __DATE__ " " __TIME__ "\n");
+
+    // Timestamp of the start of simulation or measurement. The format has to comply
+    // with "ISO 8601 extended specification for representations of dates and times"
+    // YYYY-MMDDTHH:MM:SS. The time should be in UTC time (indicated by a “Z” at the
+    // end)
+    time(&curr_time);
+    info=gmtime(&curr_time);
+    fprintf(fout,"#creationDate %04d-%02d-%02dT%02d:%02d:%2dZ\n", info->tm_year+1900,
+            info->tm_mon+1, info->tm_mday, info->tm_hour, info->tm_min, info->tm_sec);
+
     fprintf(fout,"#timeScale ns\n");
 
     if (trace_data->h.event_count != trace_data->h.max_events)
