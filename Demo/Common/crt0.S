@@ -1,7 +1,8 @@
     .section .reset, "ax"
     .global _start
+    .extern freertos_risc_v_trap_handler
 _start:
-    la      t0, trap_handler
+    la      t0, freertos_risc_v_trap_handler
     csrw    mtvec, t0
 
     la      t0, _bss_start
@@ -15,12 +16,4 @@ _bss_clear:
     la      sp, _stack
     call    main
     tail    exit
-
-    .section .text.trap, "ax"
-    .align 4
-trap_handler:
-    csrr    t5, mepc
-    addi    t5, t5, 4
-    csrw    mepc, t5
-    mret
 

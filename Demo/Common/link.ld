@@ -1,26 +1,33 @@
 OUTPUT_ARCH( "riscv" )
 ENTRY(_start)
 _start = 0;
+_MEMSIZE = 256K;
+_START_ADDR = 0x00000000;
 
 MEMORY
 {
-  imem : ORIGIN = 0x00000000, LENGTH = 128K
-  dmem : ORIGIN = 0x00000000+128K, LENGTH = 128K
+  imem : ORIGIN = _START_ADDR, LENGTH = _MEMSIZE
+  dmem : ORIGIN = _START_ADDR + _MEMSIZE, LENGTH = _MEMSIZE
 }
 
 SECTIONS
 {
   /* text: test code section */
-  .text :
+  .reset :
   {
     _text_start = .;
     _start = .;
     *(.reset)
+  } > imem
+
+  .text :
+  {
     *(.text .stub .text.* .gnu.linkonce.t.*)
     KEEP (*(.text.*personality*))
     *(.gnu.warning)
-    _text_end = .;
   } > imem
+
+  _text_end = .;
 
   /* data segment */
   .data :
@@ -43,6 +50,8 @@ SECTIONS
     LONG(0)
     __DTOR_END__ = .;
 
+    *(.eh_frame_hdr) *(.eh_frame_entry .eh_frame_entry.*)
+    KEEP (*(.eh_frame)) *(.eh_frame.*)
     KEEP (*(.gcc_except_table)) *(.gcc_except_table.*)
 
     *(.srodata .srodata.* .gnu.linkonce.r.*)
@@ -73,8 +82,8 @@ SECTIONS
     _end        = .;
   } > dmem
 
-  PROVIDE(__freertos_irq_stack_top = (128K * 2 - 8K));
-  PROVIDE(_stack = (128K * 2));
+  PROVIDE(__freertos_irq_stack_top = (_MEMSIZE * 2 - 8K));
+  PROVIDE(_stack = (_MEMSIZE * 2));
 
   /DISCARD/ : { *(.note.GNU-stack) }
 

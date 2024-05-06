@@ -1,4 +1,4 @@
-FREERTOS_VER ?= V10.4.5
+FREERTOS_VER ?= V11.1.0
 
 all: check
 	make -C Demo

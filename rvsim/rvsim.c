@@ -3,7 +3,7 @@
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the “Software”), to deal
-// in the Software without restriction, including without limitation the rights 
+// in the Software without restriction, including without limitation the rights
 // to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
 // copies of the Software, and to permit persons to whom the Software is
 // furnished to do so, subject to the following conditions:
@@ -21,131 +21,54 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include <getopt.h>
 #include <sys/time.h>
+
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+
 #include "opcode.h"
-
-#ifndef RV32C_ENABLED
-#define RV32C_ENABLED 0
-#endif
-
-int mem_size = 128*1024; // default memory size
+#include "rvsim.h"
 
 #define PRINT_TIMELOG 1
 #define MAXLEN      1024
 
-#define IMEM_BASE   (0+mem_base)
-#define DMEM_BASE   (mem_size+mem_base)
-#define IMEM_SIZE   mem_size
-#define DMEM_SIZE   mem_size
-
-#define TIME_LOG    if (ft && PRINT_TIMELOG) fprintf(ft, "%10d ", csr.cycle.d.lo)
-#define TRACE_LOG   if (ft) fprintf(ft,
+#define TIME_LOG    if (rv->ft && PRINT_TIMELOG) fprintf(rv->ft, "%10d ", rv->csr.cycle.d.lo)
+#define TRACE_LOG   if (rv->ft) fprintf(rv->ft,
 #define TRACE_END   )
 
-#define TRAP(cause,val) { \
-    CYCLE_ADD(branch_penalty); \
-    csr.mcause = cause; \
-    csr.mstatus = (csr.mstatus &  (1<<MIE)) ? (csr.mstatus | (1<<MPIE)) : (csr.mstatus & ~(1<<MPIE)); \
-    csr.mstatus = (csr.mstatus & ~(1<<MIE)); \
-    csr.mepc = prev_pc; \
-    csr.mtval = (val); \
-    pc = (csr.mtvec & 1) ? (csr.mtvec & 0xfffffffe) + cause * 4 : csr.mtvec; \
-}
-
-#define INT(cause,src) { \
-    /* When the branch instruction is interrupted, do not accumulate cycles, */ \
-    /* which has been added when the branch instruction is executed. */ \
-    if (pc == (compressed ? prev_pc+2 : prev_pc+4)) CYCLE_ADD(branch_penalty); \
-    csr.mcause = cause; \
-    csr.mstatus = (csr.mstatus &  (1<<MIE)) ? (csr.mstatus | (1<<MPIE)) : (csr.mstatus & ~(1<<MPIE)); \
-    csr.mstatus = (csr.mstatus & ~(1<<MIE)); \
-    csr.mip = csr.mip | (1 << src); \
-    csr.mepc = pc; \
-    pc = (csr.mtvec & 1) ? (csr.mtvec & 0xfffffffe) + (cause & (~(1<<31))) * 4 : csr.mtvec; \
-}
-
-#define CYCLE_ADD(count) { \
-    csr.cycle.c = csr.cycle.c + count; \
-    if (!mtime_update) csr.mtime.c = csr.mtime.c + count; \
-}
-
-typedef struct _CSR {
-    COUNTER time;
-    COUNTER cycle;
-    COUNTER instret;
-    COUNTER mtime;
-    COUNTER mtimecmp;
-    int mvendorid;
-    int marchid;
-    int mimpid;
-    int mhartid;
-    int mscratch;
-    int mstatus;
-    int misa;
-    int mie;
-    int mtvec;
-    int mepc;
-    int mcause;
-    int mip;
-    int mtval;
-    int msip;
-#ifdef XV6_SUPPORT
-    int medeleg;
-    int mideleg;
-    int mcounteren;
-    int sstatus;
-    int sie;
-    int stvec;
-    int sscratch;
-    int sepc;
-    int scause;
-    int stval;
-    int sip;
-    int satp;
-#endif
-} CSR;
-
-CSR csr;
-int pc = 0;
-int mode = MMODE;
-int prev_pc = 0;
-int mem_base = 0;
-int singleram = 0;
-int branch_penalty = BRANCH_PENALTY;
-int mtime_update = 0;
 struct timeval time_start;
 struct timeval time_end;
 
-#if RV32C_ENABLED
+#ifdef RV32C_ENABLED
 int overhead = 0;
-#endif
+#endif // RV32C_ENABLED
 
 int quiet = 0;
 
-char *regname[32] = {
+const char *regname[32] = {
     "zero", "ra", "sp", "gp", "tp", "t0", "t1", "t2",
     "s0(fp)", "s1", "a0", "a1", "a2", "a3", "a4", "a5",
     "a6", "a7", "s2", "s3", "s4", "s5", "s6", "s7",
     "s8", "s9", "s10", "s11", "t3", "t4", "t5", "t6"
 };
 
-#define IVA2PA(addr) ((addr)-IMEM_BASE)
-#define IPA2VA(addr) ((addr)+IMEM_BASE)
-#define DVA2PA(addr) ((addr)-DMEM_BASE)
-#define DPA2VA(addr) ((addr)+DMEM_BASE)
-
-int elfread(char *file, char *imem, char *dmem, int *isize, int *dsize);
+int elfloader(char *file, struct rv *rv);
 int getch(void);
 
 void usage(void) {
+// LCOV_EXCL_START
     printf(
 "Instruction Set Simulator for RV32IM, (c) 2020 Kuoping Hsu\n"
-"Usage: rvsim [-h] [-b n] [-m n] [-n n] [-p] [-l logfile] file\n\n"
+"Usage: rvsim [-h] [-m n] [-n n] [-b n] [-p] [-l logfile] file\n\n"
 "       --help, -h              help\n"
-"       --membase n, -m n       memory base (in hex)\n"
-"       --memsize n, -n n       memory size (in Kb)\n"
+"       --quiet, -q             quite\n"
+"       --membase n, -m n       memory base\n"
+"       --memsize n, -n n       memory size for iram and dram each (in Kb)\n"
 "       --branch n, -b n        branch penalty (default 2)\n"
 "       --single, -s            single RAM\n"
 "       --predict, -p           static branch prediction\n"
@@ -154,6 +77,7 @@ void usage(void) {
 "       file                    the elf executable file\n"
 "\n"
     );
+// LCOV_EXCL_STOP
 }
 
 #ifdef MACOX
@@ -176,9 +100,9 @@ void aligned_free( void *mem )
 #include <malloc.h>
 #define aligned_malloc memalign
 #define aligned_free free
-#endif
+#endif // MACOX
 
-#ifndef __STDC_WANT_LIB_EXT1__ 
+#ifndef __STDC_WANT_LIB_EXT1__
 char *strncpy_s(char *dest, size_t n, const char *src, size_t count) {
     int len = (int)strnlen(src, count);
     if (len > n) len = n;
@@ -188,31 +112,31 @@ char *strncpy_s(char *dest, size_t n, const char *src, size_t count) {
 }
 #endif // __STDC_WANT_LIB_EXT1__
 
-static inline int to_imm_i(unsigned int n) {
+static inline int to_imm_i(uint32_t n) {
     return (int)((n & (1<<11)) ? (n | 0xfffff000) : n);
 }
 
 /*
-static inline int to_imm_iu(unsigned int n) {
+static inline int to_imm_iu(uint32_t n) {
     return (int)(n);
 }
 */
 
-static inline int to_imm_s(unsigned int n1, unsigned int n2) {
-    unsigned int n = (n1 << 5) + n2;
+static inline int to_imm_s(uint32_t n1, uint32_t n2) {
+    uint32_t n = (n1 << 5) + n2;
     return (int)((n & (1<<11)) ? (n | 0xfffff000) : n);
 }
 
-static inline int to_imm_b(unsigned int n1, unsigned int n2) {
-    unsigned int m;
+static inline int to_imm_b(uint32_t n1, uint32_t n2) {
+    uint32_t m;
     union {
-        unsigned int n;
+        uint32_t n;
         struct {
-            unsigned int a0 : 1;
-            unsigned int a1 : 4;
-            unsigned int a2 : 6;
-            unsigned int a3 : 1;
-            //unsigned int a4 : 20; // no used
+            uint32_t a0 : 1;
+            uint32_t a1 : 4;
+            uint32_t a2 : 6;
+            uint32_t a3 : 1;
+            //uint32_t a4 : 20; // no used
         } m;
     } r;
     r.n = (n1 << 5) + n2;
@@ -220,16 +144,16 @@ static inline int to_imm_b(unsigned int n1, unsigned int n2) {
     return (int)((m & (1<<12)) ? (m | 0xffffe000) : m);
 }
 
-static inline int to_imm_j(unsigned int n) {
-    unsigned int m;
+static inline int to_imm_j(uint32_t n) {
+    uint32_t m;
     union {
-        unsigned int n;
+        uint32_t n;
         struct {
-            unsigned int a0 : 8;
-            unsigned int a1 : 1;
-            unsigned int a2 : 10;
-            unsigned int a3 : 1;
-            // unsigned int a4 : 12; // no used
+            uint32_t a0 : 8;
+            uint32_t a1 : 1;
+            uint32_t a2 : 10;
+            uint32_t a3 : 1;
+            // uint32_t a4 : 12; // no used
         } m;
     } r;
     r.n = n;
@@ -237,84 +161,39 @@ static inline int to_imm_j(unsigned int n) {
     return (int)((m & (1<<20)) ? (m | 0xffe00000) : m);
 }
 
-static inline int to_imm_u(unsigned int n) {
+static inline int to_imm_u(uint32_t n) {
     return (int)(n << 12);
 }
 
-static void prog_exit(int exitcode) {
+void prog_exit(struct rv *rv, int exitcode) {
     double diff;
     gettimeofday(&time_end, NULL);
 
-    diff = (double)(time_end.tv_sec-time_start.tv_sec) + (time_end.tv_usec-time_start.tv_usec)/1000000.0;
+    diff = (double)(time_end.tv_sec-time_start.tv_sec) +
+                   (time_end.tv_usec-time_start.tv_usec)/1000000.0;
 
-    if (!quiet) {
-#if RV32C_ENABLED
-        printf("\nExcuting %lld instructions, %lld cycles, %1.3f CPI, %1.3f%% overhead\n", csr.instret.c,
-               csr.cycle.c, ((float)csr.cycle.c)/csr.instret.c, (overhead*100.0)/csr.instret.c);
+    if (!quiet && rv) {
+#ifdef RV32C_ENABLED
+        printf("\nExcuting %lld instructions, %lld cycles, %1.3f CPI, %1.3f%% overhead\n",
+               rv->csr.instret.c, rv->csr.cycle.c,
+               ((float)rv->csr.cycle.c)/rv->csr.instret.c, (overhead*100.0)/rv->csr.instret.c);
 #else
-        printf("\nExcuting %lld instructions, %lld cycles, %1.3f CPI\n", csr.instret.c,
-               csr.cycle.c, ((float)csr.cycle.c)/csr.instret.c);
-#endif
+        printf("\nExcuting %lld instructions, %lld cycles, %1.3f CPI\n", rv->csr.instret.c,
+               rv->csr.cycle.c, ((float)rv->csr.cycle.c)/rv->csr.instret.c);
+#endif // RV32C_ENABLED
 
         printf("Program terminate\n");
 
         printf("\n");
         printf("Simulation statistics\n");
         printf("=====================\n");
-	printf("Simulation time  : %0.3f s\n", (float)diff);
-	printf("Simulation cycles: %lld\n", csr.cycle.c);
-	printf("Simulation speed : %0.3f MHz\n", (float)(csr.cycle.c / diff / 1000000.0));
+        printf("Simulation time  : %0.3f s\n", (float)diff);
+        printf("Simulation cycles: %lld\n", rv->csr.cycle.c);
+        printf("Simulation speed : %0.3f MHz\n", (float)(rv->csr.cycle.c / diff / 1000000.0));
         printf("\n");
     }
     exit(exitcode);
 }
-
-// Use libbfd to read the elf file.
-#ifdef USE_LIBBFD
-#define PACKAGE "riscv32-rvsim"
-#define PACKAGE_VERSION "1.0"
-#include <bfd.h>
-static int elfread(char *file, char *imem, char *dmem, int *isize, int *dsize) {
-    bfd *abfd = NULL;
-
-    // init bfd
-    bfd_init();
-
-    // load binary file
-    if ((abfd = bfd_openr(file, NULL)) == NULL) {
-		printf("Failed to open file %s!\n", file);
-		return 0;
-    }
-
-	// no section info is loaded unless we call bfd_check_format!:
-	if (!bfd_check_format (abfd, bfd_object)) {
-		printf("Failed to check file %s!\n", file);
-		return 0;
-    }
-
-	asection *text = bfd_get_section_by_name (abfd, ".text");
-	asection *data = bfd_get_section_by_name (abfd, ".data");
-
-	// copy the contents of the data and executable sections into the allocated memory
-	bfd_get_section_contents(abfd, text, imem, 0, text->size);
-	bfd_get_section_contents(abfd, data, dmem, 0, data->size);
-
-    *isize = text->size;
-    *dsize = data->size;
-
-    if (!quiet) printf("Load .text section %ld, .data section %ld bytes\n",
-                       text->size, data->size);
-
-    bfd_close(abfd);
-
-    if (!text->size && !data->size) {
-        printf("can not read the content of elf file\n");
-        exit(-1);
-    }
-
-    return 1;
-}
-#endif
 
 #define UPDATE_CSR(update,mode,reg,val) { \
     if (update) { \
@@ -324,111 +203,406 @@ static int elfread(char *file, char *imem, char *dmem, int *isize, int *dsize) {
     } \
 }
 
-int csr_rw(int regs, int mode, int val, int update, int *result) {
+int csr_rw(struct rv *rv, int regs, int mode, int val, int update, int *legal) {
     COUNTER counter;
+    int result = 0;
+    *legal = 1;
     switch(regs) {
-        case CSR_RDCYCLE    : counter.c = csr.cycle.c - 1;
-                              *result = counter.d.lo; // UPDATE_CSR(update, mode, csr.cycle.d.lo, val);
+        case CSR_RDCYCLE    : counter.c = rv->csr.cycle.c - 1;
+                              result = counter.d.lo;
+                              // UPDATE_CSR(update, mode, rv->csr.cycle.d.lo, val);
                               break;
-        case CSR_RDCYCLEH   : counter.c = csr.cycle.c - 1;
-                              *result = counter.d.hi; // UPDATE_CSR(update, mode, csr.cycle.d.hi, val);
+        case CSR_RDCYCLEH   : counter.c = rv->csr.cycle.c - 1;
+                              result = counter.d.hi;
+                              // UPDATE_CSR(update, mode, rv->csr.cycle.d.hi, val);
                               break;
         /*
-        case CSR_RDTIME     : counter.c = csr.time.c - 1;
-                              *result = counter.d.lo; // UPDATE_CSR(update, mode, csr.time.d.lo, val);
+        case CSR_RDTIME     : counter.c = rv->csr.time.c - 1;
+                              result = counter.d.lo;
+                              // UPDATE_CSR(update, mode, rv->csr.time.d.lo, val);
                               break;
-        case CSR_RDTIMEH    : counter.c = csr.time.c - 1;
-                              *result = counter.d.hi; // UPDATE_CSR(update, mode, csr.time.d.hi, val);
+        case CSR_RDTIMEH    : counter.c = rv->csr.time.c - 1;
+                              result = counter.d.hi;
+                              // UPDATE_CSR(update, mode, rv->csr.time.d.hi, val);
                               break;
         */
-        case CSR_RDINSTRET  : counter.c = csr.instret.c - 1;
-                              *result = counter.d.lo; // UPDATE_CSR(update, mode, csr.instret.d.lo, val);
+        case CSR_RDINSTRET  : counter.c = rv->csr.instret.c - 1;
+                              result = counter.d.lo;
+                              // UPDATE_CSR(update, mode, rv->csr.instret.d.lo, val);
                               break;
-        case CSR_RDINSTRETH : counter.c = csr.instret.c - 1;
-                              *result = counter.d.hi; // UPDATE_CSR(update, mode, csr.instret.d.hi, val);
+        case CSR_RDINSTRETH : counter.c = rv->csr.instret.c - 1;
+                              result = counter.d.hi;
+                              // UPDATE_CSR(update, mode, rv->csr.instret.d.hi, val);
                               break;
-        case CSR_MVENDORID  : *result = csr.mvendorid; // UPDATE_CSR(update, mode, csr.mvendorid, val);
+        case CSR_MVENDORID  : result = rv->csr.mvendorid;
+                              // UPDATE_CSR(update, mode, rv->csr.mvendorid, val);
                               break;
-        case CSR_MARCHID    : *result = csr.marchid; // UPDATE_CSR(update, mode, csr.marchid, val);
+        case CSR_MARCHID    : result = rv->csr.marchid;
+                              // UPDATE_CSR(update, mode, rv->csr.marchid, val);
                               break;
-        case CSR_MIMPID     : *result = csr.mimpid; // UPDATE_CSR(update, mode, csr.mimpid, val);
+        case CSR_MIMPID     : result = rv->csr.mimpid;
+                              // UPDATE_CSR(update, mode, rv->csr.mimpid, val);
                               break;
-        case CSR_MHARTID    : *result = csr.mhartid; // UPDATE_CSR(update, mode, csr.mhartid, val);
+        case CSR_MHARTID    : result = rv->csr.mhartid;
+                              // UPDATE_CSR(update, mode, rv->csr.mhartid, val);
                               break;
-        case CSR_MSCRATCH   : *result = csr.mscratch; UPDATE_CSR(update, mode, csr.mscratch, val);
+        case CSR_MSCRATCH   : result = rv->csr.mscratch;
+                              UPDATE_CSR(update, mode, rv->csr.mscratch, val);
                               break;
-        case CSR_MSTATUS    : *result = csr.mstatus; UPDATE_CSR(update, mode, csr.mstatus, val);
+        case CSR_MSTATUS    : result = rv->csr.mstatus;
+                              UPDATE_CSR(update, mode, rv->csr.mstatus, val);
                               break;
-        case CSR_MISA       : *result = csr.misa; UPDATE_CSR(update, mode, csr.misa, val);
+        case CSR_MSTATUSH   : result = rv->csr.mstatush;
+                              UPDATE_CSR(update, mode, rv->csr.mstatush, val);
                               break;
-        case CSR_MIE        : *result = csr.mie; UPDATE_CSR(update, mode, csr.mie, val);
+        case CSR_MISA       : result = rv->csr.misa;
+                              UPDATE_CSR(update, mode, rv->csr.misa, val);
                               break;
-        case CSR_MIP        : *result = csr.mip; UPDATE_CSR(update, mode, csr.mip, val);
+        case CSR_MIE        : result = rv->csr.mie;
+                              UPDATE_CSR(update, mode, rv->csr.mie, val);
                               break;
-        case CSR_MTVEC      : *result = csr.mtvec; UPDATE_CSR(update, mode, csr.mtvec, val);
+        case CSR_MIP        : result = rv->csr.mip;
+                              UPDATE_CSR(update, mode, rv->csr.mip, val);
                               break;
-        case CSR_MEPC       : *result = csr.mepc; UPDATE_CSR(update, mode, csr.mepc, val);
+        case CSR_MTVEC      : result = rv->csr.mtvec;
+                              UPDATE_CSR(update, mode, rv->csr.mtvec, val);
                               break;
-        case CSR_MCAUSE     : *result = csr.mcause; UPDATE_CSR(update, mode, csr.mcause, val);
+        case CSR_MEPC       : result = rv->csr.mepc;
+                              UPDATE_CSR(update, mode, rv->csr.mepc, val);
                               break;
-        case CSR_MTVAL      : *result = csr.mtval; UPDATE_CSR(update, mode, csr.mtval, val);
+        case CSR_MCAUSE     : result = rv->csr.mcause;
+                              UPDATE_CSR(update, mode, rv->csr.mcause, val);
+                              break;
+        case CSR_MTVAL      : result = rv->csr.mtval;
+                              UPDATE_CSR(update, mode, rv->csr.mtval, val);
                               break;
 #ifdef XV6_SUPPORT
-        case CSR_MEDELEG    : *result = csr.medeleg; UPDATE_CSR(update, mode, csr.medeleg, val);
+        case CSR_MEDELEG    : result = rv->csr.medeleg;
+                              UPDATE_CSR(update, mode, rv->csr.medeleg, val);
                               break;
-        case CSR_MIDELEG    : *result = csr.mideleg; UPDATE_CSR(update, mode, csr.mideleg, val);
+        case CSR_MIDELEG    : result = rv->csr.mideleg;
+                              UPDATE_CSR(update, mode, rv->csr.mideleg, val);
                               break;
-        case CSR_MCOUNTEREN : *result = csr.mcounteren; UPDATE_CSR(update, mode, csr.mcounteren, val);
+        case CSR_MCOUNTEREN : result = rv->csr.mcounteren;
+                              UPDATE_CSR(update, mode, rv->csr.mcounteren, val);
                               break;
-        case CSR_SSTATUS    : *result = csr.sstatus; UPDATE_CSR(update, mode, csr.sstatus, val);
+        case CSR_SSTATUS    : result = rv->csr.sstatus;
+                              UPDATE_CSR(update, mode, rv->csr.sstatus, val);
                               break;
-        case CSR_SIE        : *result = csr.sie; UPDATE_CSR(update, mode, csr.sie, val);
+        case CSR_SIE        : result = rv->csr.sie;
+                              UPDATE_CSR(update, mode, rv->csr.sie, val);
                               break;
-        case CSR_STVEC      : *result = csr.stvec; UPDATE_CSR(update, mode, csr.stvec, val);
+        case CSR_STVEC      : result = rv->csr.stvec;
+                              UPDATE_CSR(update, mode, rv->csr.stvec, val);
                               break;
-        case CSR_SSCRATCH   : *result = csr.sscratch; UPDATE_CSR(update, mode, csr.sscratch, val);
+        case CSR_SSCRATCH   : result = rv->csr.sscratch;
+                              UPDATE_CSR(update, mode, rv->csr.sscratch, val);
                               break;
-        case CSR_SEPC       : *result = csr.sepc; UPDATE_CSR(update, mode, csr.sepc, val);
+        case CSR_SEPC       : result = rv->csr.sepc;
+                              UPDATE_CSR(update, mode, rv->csr.sepc, val);
                               break;
-        case CSR_SCAUSE     : *result = csr.scause; UPDATE_CSR(update, mode, csr.scause, val);
+        case CSR_SCAUSE     : result = rv->csr.scause;
+                              UPDATE_CSR(update, mode, rv->csr.scause, val);
                               break;
-        case CSR_STVAL      : *result = csr.stval; UPDATE_CSR(update, mode, csr.stval, val);
+        case CSR_STVAL      : result = rv->csr.stval;
+                              UPDATE_CSR(update, mode, rv->csr.stval, val);
                               break;
-        case CSR_SIP        : *result = csr.sip; UPDATE_CSR(update, mode, csr.sip, val);
+        case CSR_SIP        : result = rv->csr.sip;
+                              UPDATE_CSR(update, mode, rv->csr.sip, val);
                               break;
-        case CSR_SATP       : *result = csr.satp; UPDATE_CSR(update, mode, csr.satp, val);
+        case CSR_SATP       : result = rv->csr.satp;
+                              UPDATE_CSR(update, mode, rv->csr.satp, val);
                               break;
-#endif
-        default: *result = 0; // FIXME
-                 printf("Unsupport CSR register 0x%03x at PC 0x%08x\n", regs, pc);
-                 return 0;
+#endif // XV6_SUPPORT
+        default: result = 0;
+                 printf("Unsupport CSR register 0x%03x at PC 0x%08x\n", regs, rv->pc);
+                 *legal = 0;
     }
-    return 1;
+    return result;
+}
+
+static inline void srv32_cycle_add(struct rv *rv, int count) {
+    rv->csr.cycle.c = rv->csr.cycle.c + count;
+    if (!rv->mtime_update) rv->csr.mtime.c = rv->csr.mtime.c + count;
+}
+
+static inline void srv32_trap(struct rv *rv, int cause, int val) {
+    srv32_cycle_add(rv, rv->branch_penalty);
+    rv->csr.mcause = cause;
+    rv->csr.mstatus = (rv->csr.mstatus &  (1<<MIE)) ?
+            (rv->csr.mstatus | (1<<MPIE)) : (rv->csr.mstatus & ~(1<<MPIE));
+    rv->csr.mstatus = (rv->csr.mstatus & ~(1<<MIE));
+    rv->csr.mepc = rv->prev_pc;
+    rv->csr.mtval = (val);
+    rv->pc = (rv->csr.mtvec & 1) ?
+            (rv->csr.mtvec & 0xfffffffe) + cause * 4 : rv->csr.mtvec;
+}
+
+static inline void srv32_int(struct rv *rv, int cause, int src, int compressed) {
+    /* When the branch instruction is interrupted, do not accumulate cycles, */
+    /* which has been added when the branch instruction is executed. */
+    if (rv->pc == (compressed ? rv->prev_pc+2 : rv->prev_pc+4))
+        srv32_cycle_add(rv, rv->branch_penalty);
+
+    rv->csr.mcause = cause;
+    rv->csr.mstatus = (rv->csr.mstatus &  (1<<MIE)) ?
+            (rv->csr.mstatus | (1<<MPIE)) : (rv->csr.mstatus & ~(1<<MPIE));
+    rv->csr.mstatus = (rv->csr.mstatus & ~(1<<MIE));
+    rv->csr.mip = rv->csr.mip | (1 << src);
+    rv->csr.mepc = rv->pc;
+    rv->pc = (rv->csr.mtvec & 1) ?
+            (rv->csr.mtvec & 0xfffffffe) + (cause & (~(1<<31))) * 4 : rv->csr.mtvec;
+}
+
+
+int32_t srv32_read_regs(struct rv *rv, int n) {
+    if (n >= REGNUM) {
+        printf("RV32E: can not access registers %d\n", n);
+        return 0;
+    } else {
+        return rv->regs[n];
+    }
+}
+
+void srv32_write_regs(struct rv *rv, int n, int32_t v) {
+    if (n >= REGNUM) {
+        printf("RV32E: can not access registers %d\n", n);
+    } else {
+        rv->regs[n] = v;
+    }
+}
+
+void *srv32_get_memptr(struct rv *rv, int32_t addr) {
+    if (addr < rv->mem_base || addr > (rv->mem_base + rv->mem_size))
+        return NULL;
+
+    return (void*)&((char*)rv->mem)[addr - rv->mem_base];
+}
+
+bool srv32_write_mem(struct rv *rv, int32_t addr, int32_t len, void *ptr)
+{
+    int i;
+    char *src = (char*)ptr;
+    char *dst = (char*)&((char*)rv->mem)[addr - rv->mem_base];
+
+    if (addr < rv->mem_base || (addr + len) > (rv->mem_base + rv->mem_size))
+        return false;
+
+    for(i = 0; i < len; i++)
+        dst[i] = src[i];
+
+    return true;
+}
+
+bool srv32_read_mem(struct rv *rv, int32_t addr, int32_t len, void *ptr)
+{
+    int i;
+    char *src = (char*)&((char*)rv->mem)[addr - rv->mem_base];
+    char *dst = (char*)ptr;
+
+    if (addr < rv->mem_base || (addr + len) > (rv->mem_base + rv->mem_size))
+        return false;
+
+    for(i = 0; i < len; i++)
+        dst[i] = src[i];
+
+    return true;
+}
+
+static int memrw(struct rv *rv, int type, int op, int32_t address, int32_t *val) {
+    COUNTER counter;
+
+    if (type == OP_LOAD) {
+        int32_t data = 0;
+        int32_t len = 0;
+        *val = 0;
+
+        switch(op) {
+            case OP_LB:
+                len = 1;
+                break;
+            case OP_LBU:
+                len = 1;
+                break;
+            case OP_LH:
+                if (address & 1) {
+                    printf("Unalignment address 0x%08x to read at PC 0x%08x\n",
+                            address, rv->pc);
+                    return TRAP_LD_ALIGN;
+                }
+                len = 2;
+                break;
+            case OP_LHU:
+                if (address & 1) {
+                    printf("Unalignment address 0x%08x to read at PC 0x%08x\n",
+                            address, rv->pc);
+                    return TRAP_LD_ALIGN;
+                }
+                len = 2;
+                break;
+            case OP_LW:
+                if (address & 3) {
+                    printf("Unalignment address 0x%08x to read at PC 0x%08x\n",
+                            address, rv->pc);
+                    return TRAP_LD_ALIGN;
+                }
+                len = 4;
+                break;
+            default:
+                printf("Illegal load instruction at PC 0x%08x\n", rv->pc);
+                return TRAP_INST_ILL;
+        }
+
+        if (!srv32_read_mem(rv, address, len, (void*)&data)) {
+            switch(address) {
+                case MMIO_PUTC:
+                    data = 0;
+                    break;
+                case MMIO_GETC:
+                    data = getch();
+                    break;
+                case MMIO_EXIT:
+                    data = 0;
+                    break;
+                case MMIO_FROMHOST:
+                    data = srv32_fromhost(rv);
+                    break;
+                case MMIO_MTIME:
+                    counter.c = rv->csr.mtime.c - 1;
+                    data = counter.d.lo;
+                    break;
+                case MMIO_MTIME+4:
+                    counter.c = rv->csr.mtime.c - 1;
+                    data = counter.d.hi;
+                    break;
+                case MMIO_MTIMECMP:
+                    //rv->csr.mip = rv->csr.mip & ~(1 << MTIP);
+                    data = rv->csr.mtimecmp.d.lo;
+                    break;
+                case MMIO_MTIMECMP+4:
+                    //rv->csr.mip = rv->csr.mip & ~(1 << MTIP);
+                    data = rv->csr.mtimecmp.d.hi;
+                    break;
+                case MMIO_MSIP:
+                    data = rv->csr.msip;
+                    break;
+                default:
+                    printf("Unknown address 0x%08x to read at PC 0x%08x\n",
+                           address, rv->pc);
+                    return TRAP_LD_FAIL;
+            }
+        }
+
+        switch(op) {
+            case OP_LB:
+                if (data & 0x80) data |= 0xffffff00;
+                break;
+            case OP_LH:
+                if (data & 0x8000) data |= 0xffff0000;
+                break;
+            case OP_LBU:
+            case OP_LHU:
+            case OP_LW:
+            default: // Illegal instruction. This has been checked in the beginning.
+                break;
+        }
+        *val = data;
+    }
+
+    if (type == OP_STORE) {
+        int data = *val;
+        int len  = 0;
+        int mask = (op == OP_SB) ? 0xff :
+                   (op == OP_SH) ? 0xffff :
+                   (op == OP_SW) ? 0xffffffff :
+                   0xffffffff;
+
+        switch(op) {
+            case OP_SB:
+                len = 1;
+                break;
+            case OP_SH:
+                if (address&1) {
+                   printf("Unalignment address 0x%08x to write at PC 0x%08x\n",
+                           address, rv->pc);
+                   return TRAP_ST_ALIGN;
+                }
+                len = 2;
+                break;
+            case OP_SW:
+                if (address&3) {
+                   printf("Unalignment address 0x%08x to write at PC 0x%08x\n",
+                           address, rv->pc);
+                   return TRAP_ST_ALIGN;
+                }
+                len = 4;
+                break;
+            default:
+                printf("Illegal store instruction at PC 0x%08x\n", rv->pc);
+                return TRAP_INST_ILL;
+        }
+
+        if (!srv32_write_mem(rv, address, len, (void*)&data)) {
+            switch(address) {
+                case MMIO_PUTC:
+                    putchar((char)data);
+                    fflush(stdout);
+                    break;
+                case MMIO_GETC:
+                    break;
+                case MMIO_EXIT:
+                    TRACE_LOG " write 0x%08x <= 0x%08x\n",
+                              address, (data & mask)
+                    TRACE_END;
+                    prog_exit(rv, data);
+                    break;
+                case MMIO_TOHOST:
+                    {
+                        int htif_mem = 0;
+                        srv32_read_mem(rv, data, sizeof(int), (void*)&htif_mem);
+                        if (htif_mem == SYS_EXIT) {
+                            TRACE_LOG " write 0x%08x <= 0x%08x\n",
+                                      address, (data & mask)
+                            TRACE_END;
+                        }
+                    }
+                    srv32_tohost(rv, (int32_t)data);
+                    break;
+                case MMIO_MTIME:
+                    rv->csr.mtime.d.lo = (rv->csr.mtime.d.lo & ~mask) | data;
+                    rv->csr.mtime.c--;
+                    rv->mtime_update = 1;
+                    break;
+                case MMIO_MTIME+4:
+                    rv->csr.mtime.d.hi = (rv->csr.mtime.d.hi & ~mask) | data;
+                    rv->csr.mtime.c--;
+                    rv->mtime_update = 1;
+                    break;
+                case MMIO_MTIMECMP:
+                    rv->csr.mtimecmp.d.lo = (rv->csr.mtimecmp.d.lo & ~mask) | data;
+                    break;
+                case MMIO_MTIMECMP+4:
+                    rv->csr.mtimecmp.d.hi = (rv->csr.mtimecmp.d.hi & ~mask) | data;
+                    break;
+                case MMIO_MSIP:
+                    rv->csr.msip = (rv->csr.msip & ~mask) | data;
+                    break;
+                default:
+                    printf("Unknown address 0x%08x to write at PC 0x%08x\n",
+                           address, rv->pc);
+                    return TRAP_ST_FAIL;
+            }
+        }
+    }
+
+    return 0;
 }
 
 int main(int argc, char **argv) {
-    FILE *ft = NULL;
-    static int regs[32];
-
     int i;
-    int result;
-    int *imem;
-    int *dmem;
+    struct rv *rv = NULL;
     char *file = NULL;
     char *tfile = NULL;
-    int isize;
-    int dsize;
-    int branch_predict = 0;
-    int prev_pc;
-    int timer_irq;
-    int sw_irq;
-    int sw_irq_next;
-    int ext_irq;
-    int ext_irq_next;
-    int compressed = 0;
-#if RV32C_ENABLED
-    int compressed_prev = 0;
-#endif
 
     const char *optstring = "hb:pl:qm:n:s";
     int c;
@@ -443,21 +617,38 @@ int main(int argc, char **argv) {
         {"single", 0, NULL, 's'}
     };
 
+    if ((rv = (struct rv*)aligned_malloc(sizeof(int), sizeof(struct rv))) == NULL) {
+        // LCOV_EXCL_START
+        printf("malloc fail\n");
+        exit(1);
+        // LCOV_EXCL_STOP
+    }
+
+    // clear rv data structure
+    memset(rv, 0, sizeof(struct rv));
+
+    // set default value
+    rv->branch_penalty = BRANCH_PENALTY;
+    rv->mem_size = (MEMSIZE)*2*1024; // default memory size
+    rv->mem_base = MEMBASE;
+
     while((c = getopt_long(argc, argv, optstring, opts, NULL)) != -1) {
         switch(c) {
             case 'h':
                 usage();
                 return 1;
             case 'b':
-                branch_penalty = atoi(optarg);
+                rv->branch_penalty = atoi(optarg);
                 break;
             case 'p':
-                branch_predict = 1;
+                rv->branch_predict = 1;
                 break;
             case 'l':
                 if ((tfile = malloc(MAXLEN)) == NULL) {
+                    // LCOV_EXCL_START
                     printf("malloc fail\n");
                     exit(1);
+                    // LCOV_EXCL_STOP
                 }
                 strncpy_s(tfile, MAXLEN-1, optarg, MAXLEN-1);
                 break;
@@ -465,20 +656,16 @@ int main(int argc, char **argv) {
                 quiet = 1;
                 break;
             case 'm':
-                if (optarg[0] == '0' && optarg[1] == 'x')
-                    sscanf(optarg, "%x", (unsigned int*)&mem_base);
-                else
-                    mem_base = atoi(optarg);
+                sscanf(optarg, "%i", (int32_t*)&rv->mem_base);
                 break;
             case 'n':
-                if (optarg[0] == '0' && optarg[1] == 'x')
-                    sscanf(optarg, "%x", (unsigned int*)&mem_size);
-                else
-                    mem_size = atoi(optarg);
-                mem_size *= 1024;
+                sscanf(optarg, "%i", (int32_t*)&rv->mem_size);
+                // assume instruction and data RAM are the same size
+                // the total size is mem_size * 2 * 1024
+                rv->mem_size *= (2*1024);
                 break;
             case 's':
-                singleram = 1;
+                rv->singleram = true;
                 break;
             default:
                 usage();
@@ -488,8 +675,10 @@ int main(int argc, char **argv) {
 
     if (optind < argc) {
         if ((file = malloc(MAXLEN)) == NULL) {
+            // LCOV_EXCL_START
             printf("malloc fail\n");
             exit(1);
+            // LCOV_EXCL_STOP
         }
         strncpy_s(file, MAXLEN-1, argv[optind], MAXLEN-1);
     } else {
@@ -504,765 +693,1075 @@ int main(int argc, char **argv) {
     }
 
     if (tfile) {
-        if ((ft=fopen(tfile, "w")) == NULL) {
+        if ((rv->ft=fopen(tfile, "w")) == NULL) {
+            // LCOV_EXCL_START
             printf("can not open file %s\n", tfile);
             exit(1);
+            // LCOV_EXCL_STOP
         }
     }
-    if ((imem = (int*)aligned_malloc(sizeof(int), IMEM_SIZE)) == NULL) {
+
+    if ((rv->mem = (int*)aligned_malloc(sizeof(int), rv->mem_size)) == NULL) {
+        // LCOV_EXCL_START
         printf("malloc fail\n");
         exit(1);
-    }
-    if ((dmem = (int*)aligned_malloc(sizeof(int), DMEM_SIZE)) == NULL) {
-        printf("malloc fail\n");
-        exit(1);
+        // LCOV_EXCL_STOP
     }
 
     // clear the data memory
-    memset(dmem, 0, DMEM_SIZE);
+    memset(rv->mem, 0, rv->mem_size);
 
-    // load the .text and .data section
-    if ((result = elfread(file, (char*)imem, (char*)dmem, &isize, &dsize)) == 0) {
+    // load elf file
+    if (!elfloader(file, rv)) {
+        // LCOV_EXCL_START
         printf("Can not read elf file %s\n", file);
         exit(1);
+        // LCOV_EXCL_STOP
     }
 
     // Registers initialize
-    for(i=0; i<sizeof(regs)/sizeof(int); i++) {
-        regs[i] = 0;
+    for(i=0; i<REGNUM; i++) {
+        srv32_write_regs(rv, i, 0);
     }
 
-    csr.mvendorid  = MVENDORID;
-    csr.marchid    = MARCHID;
-    csr.mimpid     = MIMPID;
-    csr.mhartid    = MHARTID;
-    csr.time.c     = 0;
-    csr.cycle.c    = 0;
-    csr.instret.c  = 0;
-    csr.mtime.c    = 0;
-    csr.mtimecmp.c = 0;
-    pc             = mem_base;
-    prev_pc        = pc;
-    timer_irq      = 0;
-    sw_irq         = 0;
-    sw_irq_next    = 0;
-    ext_irq        = 0;
-    ext_irq_next   = 0;
-    mode           = MMODE;
+    rv->csr.mvendorid  = MVENDORID;
+    rv->csr.marchid    = MARCHID;
+    rv->csr.mimpid     = MIMPID;
+    rv->csr.mhartid    = MHARTID;
+    rv->csr.misa       = MISA;
+    rv->csr.time.c     = 0;
+    rv->csr.cycle.c    = 0;
+    rv->csr.instret.c  = 0;
+    rv->csr.mtime.c    = 0;
+    rv->csr.mtimecmp.c = 0;
+    rv->pc             = rv->mem_base;
+    rv->prev_pc        = rv->pc;
 
     gettimeofday(&time_start, NULL);
 
     // Execution loop
     while(1) {
-        INST inst;
-
-#if RV32C_ENABLED
-        INSTC instc;
-        int illegal;
-
-        illegal = 0;
-#endif // RV32C_ENABLED
-
-        mtime_update = 0;
-
-        //FIXME: to pass the compliance test, the destination PC should
-        //       be aligned at short word.
-        pc &= 0xfffffffe;
-
-        // keep x0 always zero
-        regs[0] = 0;
-
-        if (timer_irq && (csr.mstatus & (1 << MIE))) {
-            INT(INT_MTIME, MTIP);
-        }
-
-        // software interrupt
-        if (sw_irq_next && (csr.mstatus & (1 << MIE))) {
-            INT(INT_MSI, MSIP);
-        }
-
-        // external interrupt
-        if (ext_irq_next && (csr.mstatus & (1 << MIE))) {
-            INT(INT_MEI, MEIP);
-        }
-
-        if (IVA2PA(pc) >= isize || IVA2PA(pc) < 0) {
-            printf("PC 0x%08x out of range 0x%08x\n", pc, IPA2VA(isize));
-            TRAP(TRAP_INST_FAIL, pc);
-        }
-
-#if RV32C_ENABLED
-        if ((pc&1) != 0) {
-            printf("PC 0x%08x alignment error\n", pc);
-            TRAP(TRAP_INST_ALIGN, pc);
-        }
-#else
-        if ((pc&2) != 0) {
-            printf("PC 0x%08x alignment error\n", pc);
-            TRAP(TRAP_INST_ALIGN, pc);
-        }
-#endif // RV32C_ENABLED
-
-        inst.inst = (IVA2PA(pc) & 2) ?
-                     (imem[IVA2PA(pc)/4+1] << 16) | ((imem[IVA2PA(pc)/4] >> 16) & 0xffff) :
-                     imem[IVA2PA(pc)/4];
-
-#if RV32C_ENABLED
-        instc.inst = (IVA2PA(pc) & 2) ?
-                     (short)(imem[IVA2PA(pc)/4] >> 16) :
-                     (short)imem[IVA2PA(pc)/4];
-#endif // RV32C_ENABLED
-
-        if ((csr.mtime.c >= csr.mtimecmp.c) &&
-            (csr.mstatus & (1 << MIE)) && (csr.mie & (1 << MTIE)) &&
-            (inst.r.op != OP_SYSTEM)) { // do not interrupt when system call and CSR R/W
-            timer_irq = 1;
-        } else {
-            timer_irq = 0;
-        }
-
-        if (sw_irq &&
-            (csr.mstatus & (1 << MIE)) && (csr.mie & (1 << MSIE)) &&
-            (inst.r.op != OP_SYSTEM)) { // do not interrupt when system call and CSR R/W
-            sw_irq_next = 1;
-        } else {
-            sw_irq_next = 0;
-        }
-        sw_irq = (csr.msip & (1<<0)) ? 1 : 0;
-
-        if (ext_irq &&
-            (csr.mstatus & (1 << MIE)) && (csr.mie & (1 << MEIE)) &&
-            (inst.r.op != OP_SYSTEM)) { // do not interrupt when system call and CSR R/W
-            ext_irq_next = 1;
-        } else {
-            ext_irq_next = 0;
-        }
-        ext_irq = (csr.msip & (1<<16)) ? 1 : 0;
-
-        csr.time.c++;
-        csr.instret.c++;
-        CYCLE_ADD(1);
-
-        prev_pc = pc;
-
-#if RV32C_ENABLED
-        compressed = compressed_decoder(instc, &inst, &illegal);
-
-        // one more cycle when the instruction type changes
-        if (compressed_prev != compressed) {
-            CYCLE_ADD(1);
-            overhead++;
-        }
-
-        compressed_prev = compressed;
-
-        if (compressed && 0)
-            TRACE_LOG "           Translate 0x%04x => 0x%08x\n", (unsigned short)instc.inst, inst.inst TRACE_END;
-
-        if (illegal) {
-            TRAP(TRAP_INST_ILL, (int)instc.inst);
-        }
-#endif // RV32C_ENABLED
-
-        switch(inst.r.op) {
-            case OP_AUIPC : { // U-Type
-                regs[inst.u.rd] = pc + to_imm_u(inst.u.imm);
-                TIME_LOG; TRACE_LOG "%08x %08x x%02u (%s) <= 0x%08x\n", pc, inst.inst,
-                           inst.u.rd, regname[inst.u.rd], regs[inst.u.rd] TRACE_END;
-                break;
-            }
-            case OP_LUI   : { // U-Type
-                regs[inst.u.rd] = to_imm_u(inst.u.imm);
-                TIME_LOG; TRACE_LOG "%08x %08x x%02u (%s) <= 0x%08x\n", pc, inst.inst,
-                          inst.u.rd, regname[inst.u.rd], regs[inst.u.rd] TRACE_END;
-                break;
-            }
-            case OP_JAL   : { // J-Type
-                regs[inst.j.rd] = compressed ? pc + 2 : pc + 4;
-                TIME_LOG; TRACE_LOG "%08x %08x x%02u (%s) <= 0x%08x\n", pc, inst.inst,
-                          inst.j.rd, regname[inst.j.rd], regs[inst.j.rd] TRACE_END;
-                pc += to_imm_j(inst.j.imm);
-                if (to_imm_j(inst.j.imm) == 0) {
-                    printf("Warning: forever loop detected at PC 0x%08x\n", pc);
-                    prog_exit(1);
-                }
-                if ((pc&2) == 0)
-                    CYCLE_ADD(branch_penalty);
-                continue;
-            }
-            case OP_JALR  : { // I-Type
-                int new_pc = compressed ? pc + 2 : pc + 4;
-                TIME_LOG; TRACE_LOG "%08x ", pc TRACE_END;
-                pc = regs[inst.i.rs1] + to_imm_i(inst.i.imm);
-                regs[inst.i.rd] = new_pc;
-                TRACE_LOG "%08x x%02u (%s) <= 0x%08x\n", inst.inst, inst.i.rd,
-                          regname[inst.i.rd], regs[inst.i.rd] TRACE_END;
-                if ((pc&2) == 0)
-                    CYCLE_ADD(branch_penalty);
-                continue;
-            }
-            case OP_BRANCH: { // B-Type
-                TIME_LOG; TRACE_LOG "%08x %08x\n", pc, inst.inst TRACE_END;
-                int offset = to_imm_b(inst.b.imm2, inst.b.imm1);
-                switch(inst.b.func3) {
-                    case OP_BEQ  :
-                        if (regs[inst.b.rs1] == regs[inst.b.rs2]) {
-                            pc += offset;
-                            if ((!branch_predict || offset > 0) && (pc&2) == 0)
-                                CYCLE_ADD(branch_penalty);
-                            continue;
-                        }
-                        break;
-                    case OP_BNE  :
-                        if (regs[inst.b.rs1] != regs[inst.b.rs2]) {
-                            pc += offset;
-                            if ((!branch_predict || offset > 0) && (pc&2) == 0)
-                                CYCLE_ADD(branch_penalty);
-                            continue;
-                        }
-                        break;
-                    case OP_BLT  :
-                        if (regs[inst.b.rs1] < regs[inst.b.rs2]) {
-                            pc += offset;
-                            if ((!branch_predict || offset > 0) && (pc&2) == 0)
-                                CYCLE_ADD(branch_penalty);
-                            continue;
-                        }
-                        break;
-                    case OP_BGE  :
-                        if (regs[inst.b.rs1] >= regs[inst.b.rs2]) {
-                            pc += offset;
-                            if ((!branch_predict || offset > 0) && (pc&2) == 0)
-                                CYCLE_ADD(branch_penalty);
-                            continue;
-                        }
-                        break;
-                    case OP_BLTU :
-                        if (((unsigned int)regs[inst.b.rs1]) < ((unsigned int)regs[inst.b.rs2])) {
-                            pc += offset;
-                            if ((!branch_predict || offset > 0) && (pc&2) == 0)
-                                CYCLE_ADD(branch_penalty);
-                            continue;
-                        }
-                        break;
-                    case OP_BGEU :
-                        if (((unsigned int)regs[inst.b.rs1]) >= ((unsigned int)regs[inst.b.rs2])) {
-                            pc += offset;
-                            if ((!branch_predict || offset > 0) && (pc&2) == 0)
-                                CYCLE_ADD(branch_penalty);
-                            continue;
-                        }
-                        break;
-                    default:
-                        printf("Illegal branch instruction at PC 0x%08x\n", pc);
-                        TRAP(TRAP_INST_ILL, inst.inst);
-                        continue;
-                }
-                break;
-            }
-            case OP_LOAD  : { // I-Type
-                COUNTER counter;
-                int memdata;
-                int memaddr;
-                int data;
-                int address = regs[inst.i.rs1] + to_imm_i(inst.i.imm);
-                memaddr = address;
-                if (singleram) CYCLE_ADD(1);
-                TIME_LOG; TRACE_LOG "%08x %08x", pc, inst.inst TRACE_END;
-                if (address < DMEM_BASE || address > DMEM_BASE+DMEM_SIZE) {
-                    switch(address) {
-                        case MMIO_PUTC:
-                            data = 0;
-                            break;
-                        case MMIO_GETC:
-                            data = getch();
-                            break;
-                        case MMIO_EXIT:
-                            data = 0;
-                            break;
-                        case MMIO_MTIME:
-                            counter.c = csr.mtime.c - 1;
-                            data = counter.d.lo;
-                            break;
-                        case MMIO_MTIME+4:
-                            counter.c = csr.mtime.c - 1;
-                            data = counter.d.hi;
-                            break;
-                        case MMIO_MTIMECMP:
-                            //csr.mip = csr.mip & ~(1 << MTIP);
-                            data = csr.mtimecmp.d.lo;
-                            break;
-                        case MMIO_MTIMECMP+4:
-                            //csr.mip = csr.mip & ~(1 << MTIP);
-                            data = csr.mtimecmp.d.hi;
-                            break;
-                        case MMIO_MSIP:
-                            data = csr.msip;
-                            break;
-                        default:
-                            // Check whether it is legal, if not,
-                            // leave it to the later judgment.
-                            if (inst.i.func3 == OP_LB ||
-                                inst.i.func3 == OP_LH ||
-                                inst.i.func3 == OP_LW ||
-                                inst.i.func3 == OP_LBU ||
-                                inst.i.func3 == OP_LHU) {
-                                TRACE_LOG "\n" TRACE_END;
-                                printf("Unknown address 0x%08x to read at PC 0x%08x\n",
-                                       address, pc);
-                                TRAP(TRAP_LD_FAIL, address);
-                                continue;
-                            } else {
-                                address = DVA2PA(address);
-                                data = 0;
-                            }
-                    }
-                } else {
-                    address = DVA2PA(address);
-                    data = dmem[address/4];
-                }
-                memdata = data;
-                switch(inst.i.func3) {
-                    case OP_LB  : // fall through
-                    case OP_LBU : data = (data >> ((address&3)*8))&0xff;
-                                  if (inst.i.func3 == OP_LB && (data&0x80))
-                                    data |= 0xffffff00;
-                                  break;
-                    case OP_LH  : // fall through
-                    case OP_LHU : if (address&1) {
-                                    TRACE_LOG "\n" TRACE_END;
-                                    printf("Unalignment address 0x%08x to read at PC 0x%08x\n",
-                                            DPA2VA(address), pc);
-                                    TRAP(TRAP_LD_ALIGN, DPA2VA(address));
-                                    continue;
-                                  }
-                                  data = (address&2) ? ((data>>16)&0xffff) : (data &0xffff);
-                                  if (inst.i.func3 == OP_LH && (data&0x8000))
-                                    data |= 0xffff0000;
-                                  break;
-                    case OP_LW  : if (address&3) {
-                                    TRACE_LOG "\n" TRACE_END;
-                                    printf("Unalignment address 0x%08x to read at PC 0x%08x\n",
-                                            DPA2VA(address), pc);
-                                    TRAP(TRAP_LD_ALIGN, DPA2VA(address));
-                                    continue;
-                                  }
-                                  break;
-                    default: TRACE_LOG " read 0x%08x => 0x%08x, x%02u (%s) <= 0x%08x\n",
-                                       memaddr, memdata, inst.i.rd,
-                                       regname[inst.i.rd], 0 TRACE_END;
-                             printf("Illegal load instruction at PC 0x%08x\n", pc);
-                             TRAP(TRAP_INST_ILL, inst.inst);
-                             continue;
-                }
-                regs[inst.i.rd] = data;
-                TRACE_LOG " read 0x%08x => 0x%08x, x%02u (%s) <= 0x%08x\n",
-                          memaddr, memdata, inst.i.rd,
-                          regname[inst.i.rd], regs[inst.i.rd] TRACE_END;
-                break;
-            }
-            case OP_STORE : { // S-Type
-                int address = regs[inst.s.rs1] +
-                              to_imm_s(inst.s.imm2, inst.s.imm1);
-                int data = regs[inst.s.rs2];
-                int mask = (inst.s.func3 == OP_SB) ? 0xff :
-                           (inst.s.func3 == OP_SH) ? 0xffff :
-                           (inst.s.func3 == OP_SW) ? 0xffffffff :
-                           0xffffffff;
-                if (singleram) CYCLE_ADD(1);
-                if (address < DMEM_BASE || address > DMEM_BASE+DMEM_SIZE) {
-                    if (inst.i.func3 == OP_SB ||
-                        inst.i.func3 == OP_SH ||
-                        inst.i.func3 == OP_SW) {
-                        TIME_LOG; TRACE_LOG "%08x %08x", pc, inst.inst TRACE_END;
-                    }
-                    switch(address) {
-                        case MMIO_PUTC:
-                            putchar((char)data);
-                            fflush(stdout);
-                            break;
-                        case MMIO_GETC:
-                            break;
-                        case MMIO_EXIT:
-                            TRACE_LOG " write 0x%08x <= 0x%08x\n",
-                                      address, (data & mask) TRACE_END;
-                            prog_exit(data);
-                            break;
-                        case MMIO_MTIME:
-                            csr.mtime.d.lo = (csr.mtime.d.lo & ~mask) | data;
-                            csr.mtime.c--;
-                            mtime_update = 1;
-                            break;
-                        case MMIO_MTIME+4:
-                            csr.mtime.d.hi = (csr.mtime.d.hi & ~mask) | data;
-                            mtime_update = 1;
-                            break;
-                        case MMIO_MTIMECMP:
-                            csr.mtimecmp.d.lo = (csr.mtimecmp.d.lo & ~mask) | data;
-                            break;
-                        case MMIO_MTIMECMP+4:
-                            csr.mtimecmp.d.hi = (csr.mtimecmp.d.hi & ~mask) | data;
-                            break;
-                        case MMIO_MSIP:
-                            csr.msip = (csr.msip & ~mask) | data;
-                            break;
-                        default:
-                            // Check whether it is legal, if not,
-                            // leave it to the later judgment.
-                            if (inst.i.func3 == OP_SB ||
-                                inst.i.func3 == OP_SH ||
-                                inst.i.func3 == OP_SW) {
-                                printf("Unknown address 0x%08x to write at PC 0x%08x\n",
-                                       address, pc);
-                                TRACE_LOG "\n" TRACE_END;
-                                TRAP(TRAP_ST_FAIL, address);
-                                continue;
-                            }
-                    }
-                    if (inst.i.func3 == OP_SB ||
-                        inst.i.func3 == OP_SH ||
-                        inst.i.func3 == OP_SW) {
-                        TRACE_LOG " write 0x%08x <= 0x%08x\n",
-                              address, (data & mask) TRACE_END;
-                        pc = compressed ? pc + 2 : pc + 4;
-                        continue;
-                    }
-                }
-                TIME_LOG; TRACE_LOG "%08x %08x", pc, inst.inst TRACE_END;
-                address = DVA2PA(address);
-                switch(inst.s.func3) {
-                    case OP_SB : dmem[address/4] =
-                                    (dmem[address/4]&~(0xff<<((address&3)*8))) |
-                                    ((data & 0xff)<<((address&3)*8));
-                                 break;
-                    case OP_SH : if (address&1) {
-                                    TRACE_LOG "\n" TRACE_END;
-                                    printf("Unalignment address 0x%08x to write at PC 0x%08x\n",
-                                            DPA2VA(address), pc);
-                                    TRAP(TRAP_ST_ALIGN, DPA2VA(address));
-                                    continue;
-                                 }
-                                 dmem[address/4] = (address&2) ?
-                                    ((dmem[address/4]&0xffff)|(data << 16)) :
-                                    ((dmem[address/4]&0xffff0000)|(data&0xffff));
-                                 break;
-                    case OP_SW : if (address&3) {
-                                    TRACE_LOG "\n" TRACE_END;
-                                    printf("Unalignment address 0x%08x to write at PC 0x%08x\n",
-                                            DPA2VA(address), pc);
-                                    TRAP(TRAP_ST_ALIGN, DPA2VA(address));
-                                    continue;
-                                 }
-                                 dmem[address/4] = data;
-                                 break;
-                    default: printf("Illegal store instruction at PC 0x%08x\n", pc);
-                             TRACE_LOG "\n" TRACE_END;
-                             TRAP(TRAP_INST_ILL, inst.inst);
-                             continue;
-                }
-                TRACE_LOG " write 0x%08x <= 0x%08x\n", DPA2VA(address), (data & mask) TRACE_END;
-                break;
-            }
-            case OP_ARITHI: { // I-Type
-                switch(inst.i.func3) {
-                    case OP_ADD  : regs[inst.i.rd] = regs[inst.i.rs1] + to_imm_i(inst.i.imm);
-                                   break;
-                    case OP_SLT  : regs[inst.i.rd] = regs[inst.i.rs1] < to_imm_i(inst.i.imm) ? 1 : 0;
-                                   break;
-                    case OP_SLTU : //FIXME: to pass compliance test, the IMM should be singed
-                                   //extension, and compare with unsigned.
-                                   //regs[inst.i.rd] = ((unsigned int)regs[inst.i.rs1]) <
-                                   //                ((unsigned int)to_imm_iu(inst.i.imm)) ? 1 : 0;
-                                   regs[inst.i.rd] = ((unsigned int)regs[inst.i.rs1]) <
-                                                     ((unsigned int)to_imm_i(inst.i.imm)) ? 1 : 0;
-                                   break;
-                    case OP_XOR  : regs[inst.i.rd] = regs[inst.i.rs1] ^ to_imm_i(inst.i.imm);
-                                   break;
-                    case OP_OR   : regs[inst.i.rd] = regs[inst.i.rs1] | to_imm_i(inst.i.imm);
-                                   break;
-                    case OP_AND  : regs[inst.i.rd] = regs[inst.i.rs1] & to_imm_i(inst.i.imm);
-                                   break;
-                    case OP_SLL  : regs[inst.i.rd] = regs[inst.i.rs1] << (inst.i.imm&0x1f);
-                                   break;
-                    case OP_SR   : if (inst.r.func7 == 0)
-                                       regs[inst.i.rd] = ((unsigned int)regs[inst.i.rs1]) >>
-                                                         (inst.i.imm&0x1f);
-                                   else
-                                       regs[inst.i.rd] = regs[inst.i.rs1] >> (inst.i.imm&0x1f);
-                                   break;
-                    default: printf("Unknown instruction at PC 0x%08x\n", pc);
-                             TRAP(TRAP_INST_ILL, inst.inst);
-                             continue;
-                }
-                TIME_LOG; TRACE_LOG "%08x %08x x%02u (%s) <= 0x%08x\n",
-                          pc, inst.inst, inst.i.rd, regname[inst.i.rd],
-                          regs[inst.i.rd] TRACE_END;
-                break;
-            }
-            case OP_ARITHR: { // R-Type
-                if (inst.r.func7 == 1) { // RV32M Multiply Extension
-                    switch(inst.r.func3) {
-                        case OP_MUL   : regs[inst.r.rd] = regs[inst.r.rs1] *
-                                                          regs[inst.r.rs2];
-                                        break;
-                        case OP_MULH  : {
-                                        union {
-                                            long long l;
-                                            struct { int l, h; } n;
-                                        } a, b, r;
-                                        a.l = (long long)regs[inst.r.rs1];
-                                        b.l = (long long)regs[inst.r.rs2];
-                                        r.l = a.l * b.l;
-                                        regs[inst.r.rd] = r.n.h;
-                                        }
-                                        break;
-                        case OP_MULSU : {
-                                        union {
-                                            long long l;
-                                            struct { int l, h; } n;
-                                        } a, b, r;
-                                        a.l = (long long)regs[inst.r.rs1];
-                                        b.n.l = regs[inst.r.rs2];
-                                        b.n.h = 0;
-                                        r.l = a.l * b.l;
-                                        regs[inst.r.rd] = r.n.h;
-                                        }
-                                        break;
-                        case OP_MULU  : {
-                                        union {
-                                            long long l;
-                                            struct { int l, h; } n;
-                                        } a, b, r;
-                                        a.n.l = regs[inst.r.rs1]; a.n.h = 0;
-                                        b.n.l = regs[inst.r.rs2]; b.n.h = 0;
-                                        r.l = ((unsigned long long)a.l) *
-                                              ((unsigned long long)b.l);
-                                        regs[inst.r.rd] = r.n.h;
-                                        }
-                                        break;
-                        case OP_DIV   : if (regs[inst.r.rs2])
-                                            regs[inst.r.rd] = (int)(((long long)regs[inst.r.rs1]) /
-                                                                   regs[inst.r.rs2]);
-                                        else
-                                            regs[inst.r.rd] = 0xffffffff;
-                                        break;
-                        case OP_DIVU  : if (regs[inst.r.rs2])
-                                            regs[inst.r.rd] = (int)(((unsigned)regs[inst.r.rs1]) /
-                                                                    ((unsigned)regs[inst.r.rs2]));
-                                        else
-                                            regs[inst.r.rd] = 0xffffffff;
-                                        break;
-                        case OP_REM   : if (regs[inst.r.rs2])
-                                            regs[inst.r.rd] = (int)(((long long)regs[inst.r.rs1]) %
-                                                                    regs[inst.r.rs2]);
-                                        else
-                                            regs[inst.r.rd] = regs[inst.r.rs1];
-                                        break;
-                        case OP_REMU  : if (regs[inst.r.rs2])
-                                            regs[inst.r.rd] = (int)(((unsigned)regs[inst.r.rs1]) %
-                                                                    ((unsigned)regs[inst.r.rs2]));
-                                        else
-                                            regs[inst.r.rd] = regs[inst.r.rs1];
-                                        break;
-                        default: printf("Unknown instruction at PC 0x%08x\n", pc);
-                                 TRAP(TRAP_INST_ILL, inst.inst);
-                                 continue;
-                    }
-                } else {
-                    switch(inst.r.func3) {
-                        case OP_ADD  : if (inst.r.func7 == 0)
-                                           regs[inst.r.rd] = regs[inst.r.rs1] + regs[inst.r.rs2];
-                                       else
-                                           regs[inst.r.rd] = regs[inst.r.rs1] - regs[inst.r.rs2];
-                                       break;
-                        case OP_SLL  : regs[inst.r.rd] = regs[inst.r.rs1] << regs[inst.r.rs2];
-                                       break;
-                        case OP_SLT  : regs[inst.r.rd] = regs[inst.r.rs1] < regs[inst.r.rs2] ?
-                                                         1 : 0;
-                                       break;
-                        case OP_SLTU : regs[inst.r.rd] = ((unsigned int)regs[inst.r.rs1]) <
-                                            ((unsigned int)regs[inst.r.rs2]) ? 1 : 0;
-                                       break;
-                        case OP_XOR  : regs[inst.r.rd] = regs[inst.r.rs1] ^ regs[inst.r.rs2];
-                                       break;
-                        case OP_SR   : if (inst.r.func7 == 0)
-                                           regs[inst.r.rd] = ((unsigned int)regs[inst.r.rs1]) >>
-                                                             regs[inst.r.rs2];
-                                       else
-                                           regs[inst.r.rd] = regs[inst.r.rs1] >> regs[inst.r.rs2];
-                                       break;
-                        case OP_OR   : regs[inst.r.rd] = regs[inst.r.rs1] | regs[inst.r.rs2];
-                                       break;
-                        case OP_AND  : regs[inst.r.rd] = regs[inst.r.rs1] & regs[inst.r.rs2];
-                                       break;
-                        default: printf("Unknown instruction at PC 0x%08x\n", pc);
-                                 TRAP(TRAP_INST_ILL, inst.inst);
-                                 continue;
-                    }
-                }
-                TIME_LOG; TRACE_LOG "%08x %08x x%02u (%s) <= 0x%08x\n",
-                          pc, inst.inst, inst.r.rd, regname[inst.r.rd],
-                          regs[inst.r.rd] TRACE_END;
-                break;
-            }
-            case OP_FENCE : {
-                TIME_LOG; TRACE_LOG "%08x %08x\n", pc, inst.inst TRACE_END;
-                break;
-            }
-            case OP_SYSTEM: { // I-Type
-                int val;
-                int update;
-                int csr_op = 0;
-                int csr_type;
-                // RDCYCLE, RDTIME and RDINSTRET are read only
-                switch(inst.i.func3) {
-                    case OP_ECALL  : TIME_LOG; TRACE_LOG "%08x %08x\n", pc, inst.inst TRACE_END;
-                                     switch (inst.i.imm & 3) {
-                                        case 0: // ecall
-                                            switch(regs[A7]) { // function argument A7/X17
-                                               case SYS_EXIT:
-                                                   prog_exit(0);
-                                                   break;
-                                               case SYS_READ:
-                                                   if (regs[A0] == STDIN) {
-                                                       char *ptr = (char*)dmem;
-                                                       int i = 0;
-                                                       char c = 0;
-                                                       do {
-                                                           c = getch();
-                                                           ptr[DVA2PA(regs[A1])+i] = c;
-                                                       } while(++i<regs[A2] && c != '\n');
-                                                   }
-                                                   break;
-                                               case SYS_WRITE:
-                                                   if (regs[A0] == STDOUT) {
-                                                       char *ptr = (char*)dmem;
-                                                       int i;
-                                                       for(i=0; i<regs[A2]; i++) {
-                                                           char c = ptr[DVA2PA(regs[A1])+i];
-                                                           putchar(c);
-                                                       }
-                                                       fflush(stdout);
-                                                   }
-                                                   break;
-                                               case SYS_DUMP: {
-                                                       FILE *fp;
-                                                       int i;
-                                                       if ((fp = fopen("dump.txt", "w")) == NULL) {
-                                                           printf("Create dump.txt fail\n");
-                                                           exit(1);
-                                                       }
-                                                       if ((regs[A0] & 3) != 0 || (regs[A1] & 3) != 0) {
-                                                           printf("Alignment error on memory dumping.\n");
-                                                           exit(1);
-                                                       }
-                                                       for(i = DVA2PA(regs[A0])/4;
-                                                           i < DVA2PA(regs[A1])/4; i++) {
-                                                           fprintf(fp, "%08x\n", dmem[i]);
-                                                       }
-                                                       fclose(fp);
-                                                   }
-                                                   break;
-                                               case SYS_DUMP_BIN: {
-                                                       FILE *fp;
-                                                       int i;
-                                                       if ((fp = fopen("dump.bin", "wb")) == NULL) {
-                                                           printf("Create dump.bin fail\n");
-                                                           exit(1);
-                                                       }
-                                                       for(i = DVA2PA(regs[A0]);
-                                                           i < DVA2PA(regs[A1]); i++) {
-                                                           fprintf(fp, "%c", (dmem[i/4]>>((i%4)*8))&0xff);
-                                                       }
-                                                       fclose(fp);
-                                                   }
-                                                   break;
-                                               default:
-                                                   break;
-                                            }
-                                            TRAP(TRAP_ECALL, 0);
-                                            continue;
-                                        case 1: // ebreak
-                                            TRAP(TRAP_BREAK, 0);
-                                            continue;
-                                        case 2: // mret
-                                            pc = csr.mepc;
-                                            // mstatus.mie = mstatus.mpie
-                                            csr.mstatus = (csr.mstatus & (1 << MPIE)) ?
-                                                          (csr.mstatus | (1 << MIE)) :
-                                                          (csr.mstatus & ~(1 << MIE));
-                                            // mstatus.mpie = 1
-                                            if ((pc&2) == 0)
-                                                CYCLE_ADD(branch_penalty);
-                                            continue;
-                                        default:
-                                            printf("Illegal system call at PC 0x%08x\n", pc);
-                                            TRAP(TRAP_INST_ILL, 0);
-                                            continue;
-                                     }
-                    case OP_CSRRWI : csr_op = 1;
-                                     val = inst.i.rs1;
-                                     update = 1;
-                                     csr_type = OP_CSRRW;
-                                     break;
-                    // If the zimm[4:0] field is zero, then these instructions will not write
-                    // to the CSR
-                    case OP_CSRRW  : csr_op = 1;
-                                     val = regs[inst.i.rs1];
-                                     update = 1;
-                                     csr_type = OP_CSRRW;
-                                     break;
-                    // For both CSRRS and CSRRC, if rs1=x0, then the instruction will not
-                    // write to the CSR at all
-                    case OP_CSRRSI : csr_op = 1;
-                                     val = inst.i.rs1;
-                                     update = (inst.i.rs1 == 0) ? 0 : 1;
-                                     csr_type = OP_CSRRS;
-                                     break;
-                    case OP_CSRRS  : csr_op = 1;
-                                     val = regs[inst.i.rs1];
-                                     update = (inst.i.rs1 == 0) ? 0 : 1;
-                                     csr_type = OP_CSRRS;
-                                     break;
-                    case OP_CSRRCI : csr_op = 1;
-                                     val = inst.i.rs1;
-                                     update = (inst.i.rs1 == 0) ? 0 : 1;
-                                     csr_type = OP_CSRRC;
-                                     break;
-                    case OP_CSRRC  : csr_op = 1;
-                                     val = regs[inst.i.rs1];
-                                     update = (inst.i.rs1 == 0) ? 0 : 1;
-                                     csr_type = OP_CSRRC;
-                                     break;
-                    default: printf("Unknown system instruction at PC 0x%08x\n", pc);
-                             TIME_LOG; TRACE_LOG "%08x %08x\n", pc, inst.inst TRACE_END;
-                             TRAP(TRAP_INST_ILL, inst.inst);
-                             continue;
-                }
-                if (csr_op) {
-                    int result = csr_rw(inst.i.imm, csr_type, val, update, &regs[inst.i.rd]);
-                    TIME_LOG; TRACE_LOG "%08x %08x x%02u (%s) <= 0x%08x\n",
-                              pc, inst.inst, inst.i.rd,
-                              regname[inst.i.rd], regs[inst.i.rd] TRACE_END;
-                    if (!result) {
-                       TRAP(TRAP_INST_ILL, 0);
-                       continue;
-                    }
-                }
-                break;
-            }
-            default: {
-                printf("Illegal instruction at PC 0x%08x\n", pc);
-                TIME_LOG; TRACE_LOG "%08x %08x\n", pc, inst.inst TRACE_END;
-                TRAP(TRAP_INST_ILL, inst.inst);
-                continue;
-            }
-        }
-        pc = compressed ? pc + 2 : pc + 4;
+        srv32_step(rv);
     }
 
-    aligned_free(imem);
-    aligned_free(dmem);
-    if (ft) fclose(ft);
+    aligned_free(rv->mem);
+    if (rv->ft) fclose(rv->ft);
+    aligned_free(rv);
+}
+
+void srv32_step(struct rv *rv) {
+    int compressed = 0;
+#ifdef RV32C_ENABLED
+    static int compressed_prev = 0;
+#endif // RV32C_ENABLED
+    static int timer_irq = 0;
+    static int sw_irq = 0;
+    static int sw_irq_next = 0;
+    static int ext_irq = 0;
+    static int ext_irq_next = 0;
+
+    INST inst;
+
+#ifdef RV32C_ENABLED
+    INSTC instc;
+    int illegal;
+
+    illegal = 0;
+#endif // RV32C_ENABLED
+
+    rv->mtime_update = 0;
+
+    // keep x0 always zero
+    srv32_write_regs(rv, 0, 0);
+
+    if (timer_irq && (rv->csr.mstatus & (1 << MIE))) {
+        srv32_int(rv, INT_MTIME, MTIP, compressed);
+    }
+
+    // software interrupt
+    if (sw_irq_next && (rv->csr.mstatus & (1 << MIE))) {
+        srv32_int(rv, INT_MSI, MSIP, compressed);
+    }
+
+    // external interrupt
+    if (ext_irq_next && (rv->csr.mstatus & (1 << MIE))) {
+        srv32_int(rv, INT_MEI, MEIP, compressed);
+    }
+
+    if (rv->pc >= rv->mem_base + rv->mem_size || rv->pc < rv->mem_base) {
+        printf("PC 0x%08x out of range\n", rv->pc);
+        srv32_trap(rv, TRAP_INST_FAIL, rv->pc);
+    }
+
+#ifdef RV32C_ENABLED
+    if ((rv->pc & 1) != 0) {
+        printf("PC 0x%08x alignment error\n", rv->pc);
+        srv32_trap(rv, TRAP_INST_ALIGN, rv->pc);
+    }
+#else
+    if ((rv->pc & 3) != 0) {
+        printf("PC 0x%08x alignment error\n", rv->pc);
+        srv32_trap(rv, TRAP_INST_ALIGN, rv->pc);
+    }
+#endif // RV32C_ENABLED
+
+    srv32_read_mem(rv, rv->pc, sizeof(int32_t), (void*)&inst.inst);
+
+#ifdef RV32C_ENABLED
+    srv32_read_mem(rv, rv->pc, sizeof(int16_t), (void*)&instc.inst);
+#endif // RV32C_ENABLED
+
+    if ((rv->csr.mtime.c >= rv->csr.mtimecmp.c) &&
+        (rv->csr.mstatus & (1 << MIE)) && (rv->csr.mie & (1 << MTIE)) &&
+        (inst.r.op != OP_SYSTEM)) { // do not interrupt when system call and CSR R/W
+        timer_irq = 1;
+    } else {
+        timer_irq = 0;
+    }
+
+    if (sw_irq &&
+        (rv->csr.mstatus & (1 << MIE)) && (rv->csr.mie & (1 << MSIE)) &&
+        (inst.r.op != OP_SYSTEM)) { // do not interrupt when system call and CSR R/W
+        sw_irq_next = 1;
+    } else {
+        sw_irq_next = 0;
+    }
+    sw_irq = (rv->csr.msip & (1<<0)) ? 1 : 0;
+
+    if (ext_irq &&
+        (rv->csr.mstatus & (1 << MIE)) && (rv->csr.mie & (1 << MEIE)) &&
+        (inst.r.op != OP_SYSTEM)) { // do not interrupt when system call and CSR R/W
+        ext_irq_next = 1;
+    } else {
+        ext_irq_next = 0;
+    }
+    ext_irq = (rv->csr.msip & (1<<16)) ? 1 : 0;
+
+    rv->csr.time.c++;
+    rv->csr.instret.c++;
+    srv32_cycle_add(rv, 1);
+
+    rv->prev_pc = rv->pc;
+
+#ifdef RV32C_ENABLED
+    compressed = compressed_decoder(instc, &inst, &illegal);
+
+    // one more cycle when the instruction type changes
+    if (compressed_prev != compressed) {
+        srv32_cycle_add(rv, 1);
+        overhead++;
+    }
+
+    compressed_prev = compressed;
+
+    if (compressed && 0)
+        TRACE_LOG "           Translate 0x%04x => 0x%08x\n", (uint16_t)instc.inst, inst.inst
+        TRACE_END;
+
+    if (illegal) {
+        srv32_trap(rv, TRAP_INST_ILL, (int)instc.inst);
+        return;
+    }
+#endif // RV32C_ENABLED
+
+    switch(inst.r.op) {
+        case OP_AUIPC: { // U-Type
+            srv32_write_regs(rv, inst.u.rd, rv->pc + to_imm_u(inst.u.imm));
+            TIME_LOG; TRACE_LOG "%08x %08x x%02u (%s) <= 0x%08x\n", rv->pc, inst.inst,
+                       inst.u.rd, regname[inst.u.rd], srv32_read_regs(rv, inst.u.rd)
+            TRACE_END;
+            break;
+        }
+        case OP_LUI: { // U-Type
+            srv32_write_regs(rv, inst.u.rd, to_imm_u(inst.u.imm));
+            TIME_LOG; TRACE_LOG "%08x %08x x%02u (%s) <= 0x%08x\n", rv->pc, inst.inst,
+                      inst.u.rd, regname[inst.u.rd], srv32_read_regs(rv, inst.u.rd)
+            TRACE_END;
+            break;
+        }
+        case OP_JAL: { // J-Type
+            int pc_old = rv->pc;
+            int pc_off = to_imm_j(inst.j.imm);
+
+            TIME_LOG; TRACE_LOG "%08x %08x", rv->pc, inst.inst
+            TRACE_END;
+
+            rv->pc += pc_off;
+
+            // LCOV_EXCL_START
+            if (pc_off == 0) {
+                printf("Warning: forever loop detected at PC 0x%08x\n", rv->pc);
+                prog_exit(rv, 1);
+            }
+            // LCOV_EXCL_STOP
+
+            rv->pc = rv->pc & ~1; // setting the least-signicant bit of the result to zero
+
+            #ifndef RV32C_ENABLED
+            if ((rv->pc & 3) != 0) {
+                // Instruction address misaligned
+                TRACE_LOG "\n" TRACE_END;
+                return;
+            }
+            #endif // RV32C_ENABLED
+
+            srv32_write_regs(rv, inst.j.rd, compressed ? pc_old + 2 : pc_old + 4);
+            TRACE_LOG " x%02u (%s) <= 0x%08x\n",
+                      inst.j.rd, regname[inst.j.rd], srv32_read_regs(rv, inst.j.rd)
+            TRACE_END;
+
+            srv32_cycle_add(rv, rv->branch_penalty);
+            return;
+        }
+        case OP_JALR: { // I-Type
+            int pc_old = rv->pc;
+            int pc_new = srv32_read_regs(rv, inst.i.rs1) + to_imm_i(inst.i.imm);
+
+            TIME_LOG; TRACE_LOG "%08x %08x", rv->pc, inst.inst
+            TRACE_END;
+
+            rv->pc = pc_new;
+
+            // LCOV_EXCL_START
+            if (pc_new == pc_old) {
+                TRACE_LOG "\n" TRACE_END;
+                printf("Warning: forever loop detected at PC 0x%08x\n", rv->pc);
+                prog_exit(rv, 1);
+            }
+            // LCOV_EXCL_STOP
+
+            rv->pc = rv->pc & ~1; // setting the least-signicant bit of the result to zero
+
+            #ifndef RV32C_ENABLED
+            if ((rv->pc & 3) != 0) {
+                // Instruction address misaligned
+                TRACE_LOG "\n" TRACE_END;
+                return;
+            }
+            #endif // RV32C_ENABLED
+
+            srv32_write_regs(rv, inst.i.rd, compressed ? pc_old + 2 : pc_old + 4);
+            TRACE_LOG " x%02u (%s) <= 0x%08x\n",
+                      inst.i.rd, regname[inst.i.rd], srv32_read_regs(rv, inst.i.rd)
+            TRACE_END;
+
+            srv32_cycle_add(rv, rv->branch_penalty);
+            return;
+        }
+        case OP_BRANCH: { // B-Type
+            TIME_LOG; TRACE_LOG "%08x %08x\n", rv->pc, inst.inst
+            TRACE_END;
+            int offset = to_imm_b(inst.b.imm2, inst.b.imm1);
+            switch(inst.b.func3) {
+                case OP_BEQ:
+                    if (srv32_read_regs(rv, inst.b.rs1) == srv32_read_regs(rv, inst.b.rs2)) {
+                        rv->pc += offset;
+                        if ((!rv->branch_predict || offset > 0) && (rv->pc & 3) == 0)
+                            srv32_cycle_add(rv, rv->branch_penalty);
+                        return;
+                    }
+                    break;
+                case OP_BNE:
+                    if (srv32_read_regs(rv, inst.b.rs1) != srv32_read_regs(rv, inst.b.rs2)) {
+                        rv->pc += offset;
+                        if ((!rv->branch_predict || offset > 0) && (rv->pc & 3) == 0)
+                            srv32_cycle_add(rv, rv->branch_penalty);
+                        return;
+                    }
+                    break;
+                case OP_BLT:
+                    if (srv32_read_regs(rv, inst.b.rs1) < srv32_read_regs(rv, inst.b.rs2)) {
+                        rv->pc += offset;
+                        if ((!rv->branch_predict || offset > 0) && (rv->pc & 3) == 0)
+                            srv32_cycle_add(rv, rv->branch_penalty);
+                        return;
+                    }
+                    break;
+                case OP_BGE:
+                    if (srv32_read_regs(rv, inst.b.rs1) >= srv32_read_regs(rv, inst.b.rs2)) {
+                        rv->pc += offset;
+                        if ((!rv->branch_predict || offset > 0) && (rv->pc & 3) == 0)
+                            srv32_cycle_add(rv, rv->branch_penalty);
+                        return;
+                    }
+                    break;
+                case OP_BLTU:
+                    if (((uint32_t)srv32_read_regs(rv, inst.b.rs1)) <
+                        ((uint32_t)srv32_read_regs(rv, inst.b.rs2))) {
+                        rv->pc += offset;
+                        if ((!rv->branch_predict || offset > 0) && (rv->pc & 3) == 0)
+                            srv32_cycle_add(rv, rv->branch_penalty);
+                        return;
+                    }
+                    break;
+                case OP_BGEU:
+                    if (((uint32_t)srv32_read_regs(rv, inst.b.rs1)) >=
+                        ((uint32_t)srv32_read_regs(rv, inst.b.rs2))) {
+                        rv->pc += offset;
+                        if ((!rv->branch_predict || offset > 0) && (rv->pc & 3) == 0)
+                            srv32_cycle_add(rv, rv->branch_penalty);
+                        return;
+                    }
+                    break;
+                default:
+                    printf("Illegal branch instruction at PC 0x%08x\n", rv->pc);
+                    srv32_trap(rv, TRAP_INST_ILL, inst.inst);
+                    return;
+            }
+            break;
+        }
+        case OP_LOAD: { // I-Type
+            int32_t data;
+            int32_t address = srv32_read_regs(rv, inst.i.rs1) + to_imm_i(inst.i.imm);
+
+            TIME_LOG; TRACE_LOG "%08x %08x", rv->pc, inst.inst
+            TRACE_END;
+
+            int result = memrw(rv, OP_LOAD, inst.i.func3, address, &data);
+
+            if (rv->singleram) srv32_cycle_add(rv, 1);
+
+            switch(result) {
+                case TRAP_LD_FAIL:
+                     TRACE_LOG "\n" TRACE_END;
+                     srv32_trap(rv, TRAP_LD_FAIL, address);
+                     return;
+                case TRAP_LD_ALIGN:
+                     TRACE_LOG "\n" TRACE_END;
+                     srv32_trap(rv, TRAP_LD_ALIGN, address);
+                     return;
+                case TRAP_INST_ILL:
+                     TRACE_LOG " read 0x%08x, x%02u (%s) <= 0x%08x\n",
+                                 address, inst.i.rd,
+                                 regname[inst.i.rd], 0
+                     TRACE_END;
+                     srv32_trap(rv, TRAP_INST_ILL, inst.inst);
+                     return;
+            }
+
+            srv32_write_regs(rv, inst.i.rd, data);
+            TRACE_LOG " read 0x%08x, x%02u (%s) <= 0x%08x\n",
+                      address, inst.i.rd,
+                      regname[inst.i.rd], srv32_read_regs(rv, inst.i.rd)
+            TRACE_END;
+            break;
+        }
+        case OP_STORE: { // S-Type
+            int address = srv32_read_regs(rv, inst.s.rs1) +
+                          to_imm_s(inst.s.imm2, inst.s.imm1);
+            int data = srv32_read_regs(rv, inst.s.rs2);
+
+            int mask = (inst.i.func3 == OP_SB) ? 0xff :
+                       (inst.i.func3 == OP_SH) ? 0xffff :
+                       (inst.i.func3 == OP_SW) ? 0xffffffff :
+                       0xffffffff;
+
+            TIME_LOG; TRACE_LOG "%08x %08x", rv->pc, inst.inst
+            TRACE_END;
+
+            int result = memrw(rv, OP_STORE, inst.i.func3, address, &data);
+
+            if (rv->singleram) srv32_cycle_add(rv, 1);
+
+            switch(result) {
+                case TRAP_ST_FAIL:
+                     TRACE_LOG "\n" TRACE_END;
+                     srv32_trap(rv, TRAP_ST_FAIL, address);
+                     return;
+                case TRAP_ST_ALIGN:
+                     TRACE_LOG "\n" TRACE_END;
+                     srv32_trap(rv, TRAP_ST_ALIGN, address);
+                     return;
+                case TRAP_INST_ILL:
+                     TRACE_LOG "\n" TRACE_END;
+                     srv32_trap(rv, TRAP_INST_ILL, inst.inst);
+                     return;
+            }
+
+            TRACE_LOG " write 0x%08x <= 0x%08x\n", address, (data & mask)
+            TRACE_END;
+
+            break;
+        }
+        case OP_ARITHI: { // I-Type
+            switch(inst.i.func3) {
+                case OP_ADD:
+                    srv32_write_regs(rv, inst.i.rd,
+                            srv32_read_regs(rv, inst.i.rs1) + to_imm_i(inst.i.imm));
+                    break;
+                case OP_SLT:
+                    srv32_write_regs(rv, inst.i.rd,
+                            srv32_read_regs(rv, inst.i.rs1) < to_imm_i(inst.i.imm) ? 1 : 0);
+                    break;
+                case OP_SLTU:
+                    //FIXME: to pass compliance test, the IMM should be singed
+                    //extension, and compare with unsigned.
+                    //srv32_write_regs(rv, inst.i.rd,
+                    //      ((uint32_t)srv32_read_regs(rv, inst.i.rs1)) <
+                    //      ((uint32_t)to_imm_iu(inst.i.imm)) ? 1 : 0);
+                    srv32_write_regs(rv, inst.i.rd,
+                            ((uint32_t)srv32_read_regs(rv, inst.i.rs1)) <
+                            ((uint32_t)to_imm_i(inst.i.imm)) ? 1 : 0);
+                    break;
+                case OP_XOR:
+                    srv32_write_regs(rv, inst.i.rd,
+                            srv32_read_regs(rv, inst.i.rs1) ^ to_imm_i(inst.i.imm));
+                    break;
+                case OP_OR:
+                    srv32_write_regs(rv, inst.i.rd,
+                            srv32_read_regs(rv, inst.i.rs1) | to_imm_i(inst.i.imm));
+                    break;
+                case OP_AND:
+                    srv32_write_regs(rv, inst.i.rd,
+                            srv32_read_regs(rv, inst.i.rs1) & to_imm_i(inst.i.imm));
+                    break;
+                case OP_SLL:
+                    switch (inst.r.func7) {
+                        case FN_RV32I:
+                            srv32_write_regs(rv, inst.i.rd,
+                                srv32_read_regs(rv, inst.i.rs1) << (inst.i.imm&0x1f));
+                            break;
+                        #ifdef RV32B_ENABLED
+                        case FN_BSET:
+                            srv32_write_regs(rv, inst.i.rd,
+                                srv32_read_regs(rv, inst.i.rs1) | (1 << (inst.i.imm&0x1f)));
+                            break;
+                        case FN_BCLR:
+                            srv32_write_regs(rv, inst.i.rd,
+                                srv32_read_regs(rv, inst.i.rs1) & ~(1 << (inst.i.imm&0x1f)));
+                            break;
+                        case FN_CLZ:
+                            switch (inst.r.rs2) {
+                                case 0: // CLZ
+                                    {
+                                        int32_t r = 0;
+                                        int32_t x = srv32_read_regs(rv, inst.i.rs1);
+                                        if (!x) {
+                                            r = 32;
+                                        } else {
+                                            if (!(x & 0xffff0000)) { x <<= 16; r += 16; }
+                                            if (!(x & 0xff000000)) { x <<=  8; r +=  8; }
+                                            if (!(x & 0xf0000000)) { x <<=  4; r +=  4; }
+                                            if (!(x & 0xc0000000)) { x <<=  2; r +=  2; }
+                                            if (!(x & 0x80000000)) {           r +=  1; }
+                                        }
+                                        srv32_write_regs(rv, inst.i.rd, r);
+                                    }
+                                    break;
+                                case 2: // CPOP
+                                    {
+                                        uint32_t c = 0;
+                                        int32_t n = srv32_read_regs(rv, inst.i.rs1);
+                                        while (n) {
+                                            n &= (n - 1);
+                                            c++;
+                                        }
+                                        srv32_write_regs(rv, inst.i.rd, c);
+                                    }
+                                    break;
+                                case 1: // CTZ
+                                    {
+                                        int32_t x = srv32_read_regs(rv, inst.i.rs1);
+                                        static const uint8_t table[32] = {
+                                          0, 1, 28, 2, 29, 14, 24, 3, 30, 22, 20, 15, 25, 17, 4, 8,
+                                          31, 27, 13, 23, 21, 19, 16, 7, 26, 12, 18, 6, 11, 5, 10, 9
+                                        };
+                                        int32_t n = (!x) ? 32 :
+                                            (int32_t)table[((uint32_t)((x & -x) * 0x077CB531U)) >> 27];
+                                        srv32_write_regs(rv, inst.i.rd, n);
+                                    }
+                                    break;
+                                case 4: // SEXT.B
+                                    {
+                                        uint32_t n = srv32_read_regs(rv, inst.i.rs1) & 0xff;
+                                        if (n&0x80)
+                                            n |= 0xffffff00;
+                                        srv32_write_regs(rv, inst.i.rd, n);
+                                    }
+                                    break;
+                                case 5: // SEXT.H
+                                    {
+                                        uint32_t n = srv32_read_regs(rv, inst.i.rs1) & 0xffff;
+                                        if (n&0x8000)
+                                            n |= 0xffff0000;
+                                        srv32_write_regs(rv, inst.i.rd, n);
+                                    }
+                                    break;
+                                default:
+                                    printf("Unknown instruction at PC 0x%08x\n", rv->pc);
+                                    srv32_trap(rv, TRAP_INST_ILL, inst.inst);
+                                    return;
+                            }
+                            break;
+                        case FN_BINV:
+                            srv32_write_regs(rv, inst.i.rd,
+                                srv32_read_regs(rv, inst.i.rs1) ^ (1 << (inst.i.imm&0x1f)));
+                            break;
+                        #endif // RV32B_ENABLED
+                        default:
+                            printf("Unknown instruction at PC 0x%08x\n", rv->pc);
+                            srv32_trap(rv, TRAP_INST_ILL, inst.inst);
+                            return;
+                    }
+                    break;
+                case OP_SR:
+                    switch (inst.r.func7) {
+                        case FN_SRL: // SRLI
+                            srv32_write_regs(rv, inst.i.rd,
+                                ((uint32_t)srv32_read_regs(rv, inst.i.rs1)) >> (inst.i.imm&0x1f));
+                            break;
+                        case FN_SRA: // SRAI
+                            srv32_write_regs(rv, inst.i.rd,
+                                srv32_read_regs(rv, inst.i.rs1) >> (inst.i.imm&0x1f));
+                            break;
+                        #ifdef RV32B_ENABLED
+                        case FN_BSET:
+                            if (inst.r.rs2 == 7) { // ORC.B
+                                int32_t n = 0;
+                                int32_t v = srv32_read_regs(rv, inst.i.rs1);
+                                if (v & 0x000000ff) n |= 0x000000ff;
+                                if (v & 0x0000ff00) n |= 0x0000ff00;
+                                if (v & 0x00ff0000) n |= 0x00ff0000;
+                                if (v & 0xff000000) n |= 0xff000000;
+                                srv32_write_regs(rv, inst.i.rd, n);
+                            } else {
+                                printf("Unknown instruction at PC 0x%08x\n", rv->pc);
+                                srv32_trap(rv, TRAP_INST_ILL, inst.inst);
+                                return;
+                            }
+                            break;
+                        case FN_BCLR: // BCLRI
+                            srv32_write_regs(rv, inst.i.rd,
+                                (srv32_read_regs(rv, inst.i.rs1) >> (inst.i.imm&0x1f)) & 1);
+                            break;
+                        case FN_CLZ: // RORI
+                            {
+                                uint32_t n = srv32_read_regs(rv, inst.i.rs1);
+                                srv32_write_regs(rv, inst.i.rd, (n >> (inst.i.imm&0x1f)) |
+                                                  (n << (32 - (inst.i.imm&0x1f))));
+                            }
+                            break;
+                        case FN_REV:
+                            switch(inst.i.imm&0x1f) {
+                                case 0x18: // REV.8
+                                    {
+                                        uint32_t n = srv32_read_regs(rv, inst.i.rs1);
+                                        srv32_write_regs(rv, inst.i.rd,
+                                               ((n >> 24) & 0x000000ff) |
+                                               ((n >>  8) & 0x0000ff00) |
+                                               ((n <<  8) & 0x00ff0000) |
+                                               ((n << 24) & 0xff000000));
+                                    }
+                                    break;
+                                default:
+                                    printf("Unknown instruction at PC 0x%08x\n", rv->pc);
+                                    srv32_trap(rv, TRAP_INST_ILL, inst.inst);
+                                    return;
+                            }
+                            break;
+                        #endif // RV32B_ENABLED
+                        default:
+                            printf("Unknown instruction at PC 0x%08x\n", rv->pc);
+                            srv32_trap(rv, TRAP_INST_ILL, inst.inst);
+                            return;
+                    }
+                    break;
+                default:
+                    printf("Unknown instruction at PC 0x%08x\n", rv->pc);
+                    srv32_trap(rv, TRAP_INST_ILL, inst.inst);
+                    return;
+            }
+            TIME_LOG; TRACE_LOG "%08x %08x x%02u (%s) <= 0x%08x\n",
+                      rv->pc, inst.inst, inst.i.rd, regname[inst.i.rd],
+                      srv32_read_regs(rv, inst.i.rd)
+            TRACE_END;
+            break;
+        }
+        case OP_ARITHR: { // R-Type
+            switch (inst.r.func7) {
+                #ifdef RV32M_ENABLED
+                case FN_RV32M: // RV32M Multiply Extension
+                    switch(inst.r.func3) {
+                        case OP_MUL:
+                            srv32_write_regs(rv, inst.r.rd, srv32_read_regs(rv, inst.r.rs1) *
+                                              srv32_read_regs(rv, inst.r.rs2));
+                            break;
+                        case OP_MULH:
+                            {
+                            union {
+                                int64_t l;
+                                struct { int32_t l, h; } n;
+                            } a, b, r;
+                            a.l = (int64_t)srv32_read_regs(rv, inst.r.rs1);
+                            b.l = (int64_t)srv32_read_regs(rv, inst.r.rs2);
+                            r.l = a.l * b.l;
+                            srv32_write_regs(rv, inst.r.rd, r.n.h);
+                            }
+                            break;
+                        case OP_MULSU:
+                            {
+                            union {
+                                int64_t l;
+                                struct { int32_t l, h; } n;
+                            } a, b, r;
+                            a.l = (int64_t)srv32_read_regs(rv, inst.r.rs1);
+                            b.n.l = srv32_read_regs(rv, inst.r.rs2);
+                            b.n.h = 0;
+                            r.l = a.l * b.l;
+                            srv32_write_regs(rv, inst.r.rd, r.n.h);
+                            }
+                            break;
+                        case OP_MULU:
+                            {
+                            union {
+                                int64_t l;
+                                struct { int32_t l, h; } n;
+                            } a, b, r;
+                            a.n.l = srv32_read_regs(rv, inst.r.rs1); a.n.h = 0;
+                            b.n.l = srv32_read_regs(rv, inst.r.rs2); b.n.h = 0;
+                            r.l = ((uint64_t)a.l) *
+                                  ((uint64_t)b.l);
+                            srv32_write_regs(rv, inst.r.rd, r.n.h);
+                            }
+                            break;
+                        case OP_DIV:
+                            if (srv32_read_regs(rv, inst.r.rs2))
+                                srv32_write_regs(rv, inst.r.rd,
+                                    (int32_t)(((int64_t)srv32_read_regs(rv, inst.r.rs1)) /
+                                    srv32_read_regs(rv, inst.r.rs2)));
+                            else
+                                srv32_write_regs(rv, inst.r.rd, 0xffffffff);
+                            break;
+                        case OP_DIVU:
+                            if (srv32_read_regs(rv, inst.r.rs2))
+                                srv32_write_regs(rv, inst.r.rd,
+                                    (int32_t)(((uint32_t)srv32_read_regs(rv, inst.r.rs1)) /
+                                    ((uint32_t)srv32_read_regs(rv, inst.r.rs2))));
+                            else
+                                srv32_write_regs(rv, inst.r.rd, 0xffffffff);
+                            break;
+                        case OP_REM:
+                            if (srv32_read_regs(rv, inst.r.rs2))
+                                srv32_write_regs(rv, inst.r.rd,
+                                    (int32_t)(((int64_t)srv32_read_regs(rv, inst.r.rs1)) %
+                                    srv32_read_regs(rv, inst.r.rs2)));
+                            else
+                                srv32_write_regs(rv, inst.r.rd, srv32_read_regs(rv, inst.r.rs1));
+                            break;
+                        case OP_REMU:
+                            if (srv32_read_regs(rv, inst.r.rs2))
+                                srv32_write_regs(rv, inst.r.rd,
+                                    (int32_t)(((uint32_t)srv32_read_regs(rv, inst.r.rs1)) %
+                                    ((uint32_t)srv32_read_regs(rv, inst.r.rs2))));
+                            else
+                                srv32_write_regs(rv, inst.r.rd, srv32_read_regs(rv, inst.r.rs1));
+                            break;
+                        default:
+                            printf("Unknown instruction at PC 0x%08x\n", rv->pc);
+                            srv32_trap(rv, TRAP_INST_ILL, inst.inst);
+                            return;
+                    }
+                break;
+                #endif // RV32M_ENABLED
+
+                case FN_RV32I:
+                    switch(inst.r.func3) {
+                        case OP_ADD:
+                            srv32_write_regs(rv, inst.r.rd,
+                                srv32_read_regs(rv, inst.r.rs1) + srv32_read_regs(rv, inst.r.rs2));
+                            break;
+                        case OP_SLL:
+                            srv32_write_regs(rv, inst.r.rd,
+                                srv32_read_regs(rv, inst.r.rs1) << srv32_read_regs(rv, inst.r.rs2));
+                            break;
+                        case OP_SLT:
+                            srv32_write_regs(rv, inst.r.rd,
+                                srv32_read_regs(rv, inst.r.rs1) < srv32_read_regs(rv, inst.r.rs2) ?
+                                1 : 0);
+                            break;
+                        case OP_SLTU:
+                            srv32_write_regs(rv, inst.r.rd,
+                                ((uint32_t)srv32_read_regs(rv, inst.r.rs1)) <
+                                ((uint32_t)srv32_read_regs(rv, inst.r.rs2)) ? 1 : 0);
+                            break;
+                        case OP_XOR:
+                            srv32_write_regs(rv, inst.r.rd,
+                                srv32_read_regs(rv, inst.r.rs1) ^ srv32_read_regs(rv, inst.r.rs2));
+                            break;
+                        case OP_SR:
+                            srv32_write_regs(rv, inst.r.rd,
+                                ((uint32_t)srv32_read_regs(rv, inst.r.rs1)) >>
+                                srv32_read_regs(rv, inst.r.rs2));
+                            break;
+                        case OP_OR:
+                            srv32_write_regs(rv, inst.r.rd,
+                                srv32_read_regs(rv, inst.r.rs1) | srv32_read_regs(rv, inst.r.rs2));
+                            break;
+                        case OP_AND:
+                            srv32_write_regs(rv, inst.r.rd,
+                                srv32_read_regs(rv, inst.r.rs1) & srv32_read_regs(rv, inst.r.rs2));
+                            break;
+                        default:
+                            printf("Unknown instruction at PC 0x%08x\n", rv->pc);
+                            srv32_trap(rv, TRAP_INST_ILL, inst.inst);
+                            return;
+                    }
+                break;
+
+                case FN_ANDN:
+                    switch(inst.r.func3) {
+                        case OP_ADD: // SUB
+                            srv32_write_regs(rv, inst.r.rd,
+                                srv32_read_regs(rv, inst.r.rs1) - srv32_read_regs(rv, inst.r.rs2));
+                            break;
+                        case OP_SR: // SRA
+                            srv32_write_regs(rv, inst.r.rd,
+                                srv32_read_regs(rv, inst.r.rs1) >> srv32_read_regs(rv, inst.r.rs2));
+                            break;
+                        #ifdef RV32B_ENABLED
+                        case OP_AND: // ANDN
+                            srv32_write_regs(rv, inst.r.rd,
+                                srv32_read_regs(rv, inst.r.rs1) & ~(srv32_read_regs(rv, inst.r.rs2)));
+                            break;
+                        case OP_OR: // ORN
+                            srv32_write_regs(rv, inst.r.rd,
+                                srv32_read_regs(rv, inst.r.rs1) | ~(srv32_read_regs(rv, inst.r.rs2)));
+                            break;
+                        case OP_XOR: // XNOR
+                            srv32_write_regs(rv, inst.r.rd,
+                                ~(srv32_read_regs(rv, inst.r.rs1) ^ srv32_read_regs(rv, inst.r.rs2)));
+                            break;
+                        #endif // RV32B_ENABLED
+                        default:
+                            printf("Unknown instruction at PC 0x%08x\n", rv->pc);
+                            srv32_trap(rv, TRAP_INST_ILL, inst.inst);
+                            return;
+                    }
+                    break;
+
+                #ifdef RV32B_ENABLED
+                case FN_ZEXT:
+                    srv32_write_regs(rv, inst.r.rd, srv32_read_regs(rv, inst.r.rs1) & 0xffff);
+                    break;
+
+                case FN_MINMAX:
+                    switch(inst.r.func3) {
+                        case OP_CLMUL:
+                            {
+                                int32_t a = srv32_read_regs(rv, inst.r.rs1);
+                                int32_t b = srv32_read_regs(rv, inst.r.rs2);
+                                int32_t n = 0;
+
+                                for(int i = 0; i <= 31; i++)
+                                    if ((b >> i) & 1) n ^= (a << i);
+
+                                srv32_write_regs(rv, inst.r.rd, n);
+                            }
+                            break;
+                        case OP_CLMULH:
+                            {
+                                uint32_t a = srv32_read_regs(rv, inst.r.rs1);
+                                uint32_t b = srv32_read_regs(rv, inst.r.rs2);
+                                int32_t n = 0;
+
+                                for(int i = 1; i < 32; i++)
+                                    if ((b >> i) & 1) n ^= (a >> (32 - i));
+
+                                srv32_write_regs(rv, inst.r.rd, n);
+                            }
+                            break;
+                        case OP_CLMULR:
+                            {
+                                uint32_t a = srv32_read_regs(rv, inst.r.rs1);
+                                uint32_t b = srv32_read_regs(rv, inst.r.rs2);
+                                int32_t n = 0;
+
+                                for(int i = 0; i < 32; i++)
+                                    if ((b >> i) & 1) n ^= (a >> (32 - i - 1));
+
+                                srv32_write_regs(rv, inst.r.rd, n);
+                            }
+                            break;
+                        case OP_MAX:
+                            {
+                                int32_t a = srv32_read_regs(rv, inst.r.rs1);
+                                int32_t b = srv32_read_regs(rv, inst.r.rs2);
+                                srv32_write_regs(rv, inst.r.rd, a > b ? a : b);
+                            }
+                            break;
+                        case OP_MAXU:
+                            {
+                                uint32_t a = srv32_read_regs(rv, inst.r.rs1);
+                                uint32_t b = srv32_read_regs(rv, inst.r.rs2);
+                                srv32_write_regs(rv, inst.r.rd, a > b ? a : b);
+                            }
+                            break;
+                        case OP_MIN:
+                            {
+                                int32_t a = srv32_read_regs(rv, inst.r.rs1);
+                                int32_t b = srv32_read_regs(rv, inst.r.rs2);
+                                srv32_write_regs(rv, inst.r.rd, a < b ? a : b);
+                            }
+                            break;
+                        case OP_MINU:
+                            {
+                                uint32_t a = srv32_read_regs(rv, inst.r.rs1);
+                                uint32_t b = srv32_read_regs(rv, inst.r.rs2);
+                                srv32_write_regs(rv, inst.r.rd, a < b ? a : b);
+                            }
+                            break;
+                        default:
+                            printf("Unknown instruction at PC 0x%08x\n", rv->pc);
+                            srv32_trap(rv, TRAP_INST_ILL, inst.inst);
+                            return;
+                    }
+                    break;
+
+                case FN_SHADD:
+                    switch(inst.r.func3) {
+                        case OP_SH1ADD:
+                            srv32_write_regs(rv, inst.r.rd,
+                                srv32_read_regs(rv, inst.r.rs2) +
+                                (srv32_read_regs(rv, inst.r.rs1) << 1));
+                            break;
+                        case OP_SH2ADD:
+                            srv32_write_regs(rv, inst.r.rd,
+                                srv32_read_regs(rv, inst.r.rs2) +
+                                (srv32_read_regs(rv, inst.r.rs1) << 2));
+                            break;
+                        case OP_SH3ADD:
+                            srv32_write_regs(rv, inst.r.rd,
+                                srv32_read_regs(rv, inst.r.rs2) +
+                                (srv32_read_regs(rv, inst.r.rs1) << 3));
+                            break;
+                        default:
+                            printf("Unknown instruction at PC 0x%08x\n", rv->pc);
+                            srv32_trap(rv, TRAP_INST_ILL, inst.inst);
+                            return;
+                    }
+                    break;
+
+                case FN_BSET:
+                    srv32_write_regs(rv, inst.r.rd,
+                        srv32_read_regs(rv, inst.r.rs1) |
+                        (1 << (srv32_read_regs(rv, inst.r.rs2) & 0x1f)));
+                    break;
+
+                case FN_BCLR:
+                    switch(inst.r.func3) {
+                        case OP_BCLR:
+                            srv32_write_regs(rv, inst.r.rd,
+                                srv32_read_regs(rv, inst.r.rs1) &
+                                ~(1 << (srv32_read_regs(rv, inst.r.rs2) & 0x1f)));
+                            break;
+                        case OP_BEXT:
+                            srv32_write_regs(rv, inst.r.rd,
+                                (srv32_read_regs(rv, inst.r.rs1) >>
+                                (srv32_read_regs(rv, inst.r.rs2) & 0x1f)) & 1);
+                            break;
+                        default:
+                            printf("Unknown instruction at PC 0x%08x\n", rv->pc);
+                            srv32_trap(rv, TRAP_INST_ILL, inst.inst);
+                            return;
+                    }
+                    break;
+
+                case FN_CLZ:
+                    switch(inst.r.func3) {
+                        case OP_ROL:
+                            {
+                                uint32_t n = srv32_read_regs(rv, inst.r.rs2) & 0x1f;
+                                srv32_write_regs(rv, inst.r.rd,
+                                    (srv32_read_regs(rv, inst.r.rs1) << n) |
+                                    ((uint32_t)srv32_read_regs(rv, inst.r.rs1) >> (32 - n)));
+                            }
+                            break;
+                        case OP_ROR:
+                            {
+                                uint32_t n = srv32_read_regs(rv, inst.r.rs2) & 0x1f;
+                                srv32_write_regs(rv, inst.r.rd,
+                                    ((uint32_t)srv32_read_regs(rv, inst.r.rs1) >> n) |
+                                    (srv32_read_regs(rv, inst.r.rs1) << (32 - n)));
+                            }
+                            break;
+                        default:
+                            printf("Unknown instruction at PC 0x%08x\n", rv->pc);
+                            srv32_trap(rv, TRAP_INST_ILL, inst.inst);
+                            return;
+                    }
+                    break;
+
+                case FN_BINV:
+                    srv32_write_regs(rv, inst.r.rd,
+                        srv32_read_regs(rv, inst.r.rs1) ^
+                        (1 << (srv32_read_regs(rv, inst.r.rs2) & 0x1f)));
+                    break;
+                #endif // RV32B_ENABLED
+
+                default:
+                    printf("Unknown instruction at PC 0x%08x\n", rv->pc);
+                    srv32_trap(rv, TRAP_INST_ILL, inst.inst);
+                    return;
+            }
+            TIME_LOG; TRACE_LOG "%08x %08x x%02u (%s) <= 0x%08x\n",
+                      rv->pc, inst.inst, inst.r.rd, regname[inst.r.rd],
+                      srv32_read_regs(rv, inst.r.rd)
+            TRACE_END;
+            break;
+        }
+        case OP_FENCE: {
+            TIME_LOG; TRACE_LOG "%08x %08x\n", rv->pc, inst.inst
+            TRACE_END;
+            break;
+        }
+        case OP_SYSTEM: { // I-Type
+            int val;
+            int update;
+            int csr_op = 0;
+            int csr_type;
+            // RDCYCLE, RDTIME and RDINSTRET are read only
+            switch(inst.i.func3) {
+                case OP_ECALL:
+                    TIME_LOG; TRACE_LOG "%08x %08x\n", rv->pc, inst.inst
+                    TRACE_END;
+                    switch (inst.i.imm & 3) {
+                       case 0: // ecall
+                           if (1) { // syscall, to compatible FreeRTOS usage, don't use it.
+                               int res;
+                               res = srv32_syscall(rv,
+                                                   srv32_read_regs(rv, SYS),
+                                                   srv32_read_regs(rv, A0),
+                                                   srv32_read_regs(rv, A1),
+                                                   srv32_read_regs(rv, A2),
+                                                   srv32_read_regs(rv, A3),
+                                                   srv32_read_regs(rv, A4),
+                                                   srv32_read_regs(rv, A5));
+                               // Notes: FreeRTOS will use ecall to perform context switching.
+                               // The syscall of newlib will confict with the syscall of
+                               // FreeRTOS.
+                               #if 0
+                               // FIXME: if it is prefined syscall, excute it.
+                               // otherwise raising a trap
+                               if (res != -1) {
+                                    srv32_write_regs(rv, A0, res);
+                               } else {
+                                    srv32_trap(rv, TRAP_ECALL, 0);
+                                    return;
+                               }
+                               break;
+                               #else
+                               if (res != -1)
+                                    srv32_write_regs(rv, A0, res);
+                               srv32_trap(rv, TRAP_ECALL, 0);
+                               return;
+                               #endif
+                           } else {
+                               srv32_trap(rv, TRAP_ECALL, 0);
+                               return;
+                           }
+                       case 1: // ebreak
+                           srv32_trap(rv, TRAP_BREAK, rv->pc);
+                           return;
+                       case 2: // mret
+                           rv->pc = rv->csr.mepc;
+                           // rv->csr.mstatus.mie = rv->csr.mstatus.mpie
+                           rv->csr.mstatus = (rv->csr.mstatus & (1 << MPIE)) ?
+                                              (rv->csr.mstatus | (1 << MIE)) :
+                                              (rv->csr.mstatus & ~(1 << MIE));
+                           // rv->csr.mstatus.mpie = 1
+
+                           #ifndef RV32C_ENABLED
+                           if ((rv->pc & 3) != 0) {
+                               // Instruction address misaligned
+                               return;
+                           }
+                           #endif // RV32C_ENABLED
+                           srv32_cycle_add(rv, rv->branch_penalty);
+                           return;
+                       default:
+                           printf("Illegal system call at PC 0x%08x\n", rv->pc);
+                           srv32_trap(rv, TRAP_INST_ILL, 0);
+                           return;
+                    }
+                    break;
+                case OP_CSRRWI:
+                    csr_op   = 1;
+                    val      = inst.i.rs1;
+                    update   = 1;
+                    csr_type = OP_CSRRW;
+                    break;
+                // If the zimm[4:0] field is zero, then these instructions will not write
+                // to the CSR
+                case OP_CSRRW:
+                    csr_op   = 1;
+                    val      = srv32_read_regs(rv, inst.i.rs1);
+                    update   = 1;
+                    csr_type = OP_CSRRW;
+                    break;
+                // For both CSRRS and CSRRC, if rs1=x0, then the instruction will not
+                // write to the CSR at all
+                case OP_CSRRSI:
+                    csr_op   = 1;
+                    val      = inst.i.rs1;
+                    update   = (inst.i.rs1 == 0) ? 0 : 1;
+                    csr_type = OP_CSRRS;
+                    break;
+                case OP_CSRRS:
+                    csr_op   = 1;
+                    val      = srv32_read_regs(rv, inst.i.rs1);
+                    update   = (inst.i.rs1 == 0) ? 0 : 1;
+                    csr_type = OP_CSRRS;
+                    break;
+                case OP_CSRRCI:
+                    csr_op   = 1;
+                    val      = inst.i.rs1;
+                    update   = (inst.i.rs1 == 0) ? 0 : 1;
+                    csr_type = OP_CSRRC;
+                    break;
+                case OP_CSRRC:
+                    csr_op   = 1;
+                    val      = srv32_read_regs(rv, inst.i.rs1);
+                    update   = (inst.i.rs1 == 0) ? 0 : 1;
+                    csr_type = OP_CSRRC;
+                    break;
+                default:
+                    printf("Unknown system instruction at PC 0x%08x\n", rv->pc);
+                    TIME_LOG; TRACE_LOG "%08x %08x\n", rv->pc, inst.inst
+                    TRACE_END;
+                    srv32_trap(rv, TRAP_INST_ILL, inst.inst);
+                    return;
+            }
+            if (csr_op) {
+                int legal = 0;
+                int result = csr_rw(rv, inst.i.imm, csr_type, val, update, &legal);
+                if (legal) {
+                    srv32_write_regs(rv, inst.i.rd, result);
+                }
+                TIME_LOG; TRACE_LOG "%08x %08x",
+                          rv->pc, inst.inst
+                TRACE_END;
+                if (!legal) {
+                   TRACE_LOG "\n" TRACE_END;
+                   srv32_trap(rv, TRAP_INST_ILL, 0);
+                   return;
+                }
+                TRACE_LOG " x%02u (%s) <= 0x%08x\n",
+                          inst.i.rd,
+                          regname[inst.i.rd], srv32_read_regs(rv, inst.i.rd)
+                TRACE_END;
+            }
+            break;
+        }
+        default: {
+            printf("Illegal instruction at PC 0x%08x\n", rv->pc);
+            TIME_LOG; TRACE_LOG "%08x %08x\n", rv->pc, inst.inst
+            TRACE_END;
+            srv32_trap(rv, TRAP_INST_ILL, inst.inst);
+            return;
+        }
+    } // end of switch(inst.r.op)
+
+    rv->pc = compressed ? rv->pc + 2 : rv->pc + 4;
+
 }
 

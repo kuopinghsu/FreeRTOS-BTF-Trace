@@ -10,5 +10,5 @@ OBJDUMP             = $(RISCV_PREFIX)objdump
 OBJCOPY             = $(RISCV_PREFIX)objcopy
 READELF             = $(RISCV_PREFIX)readelf
 
-RISCV_GCC_OPTS      = -march=rv32im -mabi=ilp32 -mcmodel=medany -nostartfiles -nostdlib
+RISCV_GCC_OPTS      = -march=rv32im_zicsr -mabi=ilp32 -mcmodel=medany -nostartfiles -nostdlib
 

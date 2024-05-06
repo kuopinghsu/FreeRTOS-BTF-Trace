@@ -3,7 +3,7 @@
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the “Software”), to deal
-// in the Software without restriction, including without limitation the rights 
+// in the Software without restriction, including without limitation the rights
 // to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
 // copies of the Software, and to permit persons to whom the Software is
 // furnished to do so, subject to the following conditions:
@@ -19,7 +19,28 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
+#ifndef __OPCODE_H__
+#define __OPCODE_H__
+
 #define _CRT_SECURE_NO_WARNINGS 1
+
+#ifdef RV32M_ENABLED
+#  define RV32M       1
+#else
+#  define RV32M       0
+#endif
+
+#ifdef RV32E_ENABLED
+#  define RV32E       1
+#else
+#  define RV32E       0
+#endif
+
+#ifdef RV32B_ENABLED
+#  define RV32B       1
+#else
+#  define RV32B       0
+#endif
 
 #if defined(__MINGW__) || defined(_MSC_VER)
 #define __STDC_WANT_LIB_EXT1__ 1
@@ -213,6 +234,7 @@ enum {
     OP_SW      = 2
 };
 
+// bit 14...12
 enum {
     OP_ADD     = 0,
     OP_SLL     = 1,
@@ -222,6 +244,23 @@ enum {
     OP_SR      = 5,
     OP_OR      = 6,
     OP_AND     = 7
+};
+
+// bit 31...25
+enum {
+    FN_RV32I   = 0x00,
+    FN_RV32M   = 0x01,
+    FN_SRL     = 0x00,
+    FN_SRA     = 0x20,
+    FN_ZEXT    = 0x04,
+    FN_MINMAX  = 0x05,
+    FN_SHADD   = 0x10,
+    FN_BSET    = 0x14,
+    FN_ANDN    = 0x20,
+    FN_BCLR    = 0x24,
+    FN_CLZ     = 0x30,
+    FN_BINV    = 0x34,
+    FN_REV     = 0x34
 };
 
 enum {
@@ -275,6 +314,24 @@ enum {
     OP_CEBREAK      = 4
 };
 
+// constant on inst[14:12] for B extension
+enum {
+    OP_CLMUL        = 1,
+    OP_CLMULH       = 3,
+    OP_CLMULR       = 2,
+    OP_MAX          = 6,
+    OP_MAXU         = 7,
+    OP_MIN          = 4,
+    OP_MINU         = 5,
+    OP_SH1ADD       = 2,
+    OP_SH2ADD       = 4,
+    OP_SH3ADD       = 6,
+    OP_BCLR         = 1,
+    OP_BEXT         = 5,
+    OP_ROL          = 1,
+    OP_ROR          = 5,
+};
+
 enum {
     CSR_MVENDORID   = 0xF11,    // Vender ID
     CSR_MARCHID     = 0xF12,    // Architecture ID
@@ -288,6 +345,7 @@ enum {
     CSR_MIE         = 0x304,    // Machine interrupt-enable register
     CSR_MTVEC       = 0x305,    // Machine trap-handler base address
     CSR_MCOUNTEREN  = 0x306,    // Machine counter enable
+    CSR_MSTATUSH    = 0x310,    // Machine status hi register
 
     CSR_MSCRATCH    = 0x340,    // Scratch register for machine trap handlers
     CSR_MEPC        = 0x341,    // Machine exception program counter
@@ -315,14 +373,16 @@ enum {
 
 // system call defined in the file /usr/include/asm-generic/unistd.h
 enum {
-    SYS_CLOSE       = 0x39,
-    SYS_READ        = 0x3f,
-    SYS_WRITE       = 0x40,
-    SYS_FSTAT       = 0x50,
-    SYS_EXIT        = 0x5d,
-    SYS_SBRK        = 0xd6,
-    SYS_DUMP        = 0x88,
-    SYS_DUMP_BIN    = 0x99
+    SYS_OPEN        = 0x0031,
+    SYS_LSEEK       = 0x0032,
+    SYS_CLOSE       = 0x0039,
+    SYS_READ        = 0x003f,
+    SYS_WRITE       = 0x0040,
+    SYS_FSTAT       = 0x0050,
+    SYS_EXIT        = 0x005d,
+    SYS_SBRK        = 0x00d6,
+    SYS_DUMP        = 0x0088,
+    SYS_DUMP_BIN    = 0x0099
 };
 
 // Exception code
@@ -429,16 +489,58 @@ enum {
     MMODE   = 2         // Machine mode
 };
 
+typedef struct _CSR {
+    COUNTER time;
+    COUNTER cycle;
+    COUNTER instret;
+    COUNTER mtime;
+    COUNTER mtimecmp;
+    int32_t mvendorid;
+    int32_t marchid;
+    int32_t mimpid;
+    int32_t mhartid;
+    int32_t mscratch;
+    int32_t mstatus;
+    int32_t mstatush;
+    int32_t misa;
+    int32_t mie;
+    int32_t mtvec;
+    int32_t mepc;
+    int32_t mcause;
+    int32_t mip;
+    int32_t mtval;
+    int32_t msip;
+#ifdef XV6_SUPPORT
+    int32_t medeleg;
+    int32_t mideleg;
+    int32_t mcounteren;
+    int32_t sstatus;
+    int32_t sie;
+    int32_t stvec;
+    int32_t sscratch;
+    int32_t sepc;
+    int32_t scause;
+    int32_t stval;
+    int32_t sip;
+    int32_t satp;
+#endif // XV6_SUPPORT
+} CSR;
+
 #define MVENDORID     0
 #define MARCHID       0
 #define MIMPID        0
 #define MHARTID       0
-#define MMIO_PUTC     0x9000001c
-#define MMIO_GETC     0x90000020
-#define MMIO_EXIT     0x9000002c
-#define MMIO_MTIME    0x90000000
-#define MMIO_MTIMECMP 0x90000008
-#define MMIO_MSIP     0x90000010
+#define MISA          ((1<<30)|(RV32M<<12)|(1<<8)|(RV32E<<4)|(RV32B<<1))
+
+#define MMIO_PUTC     0xa000001c /* 32-bits */
+#define MMIO_GETC     0xa0000020 /* 32-bits */
+#define MMIO_EXIT     0xa000002c /* 32-bits */
+#define MMIO_TOHOST   0xa0000030 /* 32-bits */
+#define MMIO_FROMHOST 0xa0000034 /* 32-bits */
+#define MMIO_MTIME    0x90000000 /* 64-bits */
+#define MMIO_MTIMECMP 0x90000008 /* 64-bits */
+#define MMIO_MSIP     0x90000010 /* 32-bits */
+
 #define STDIN  0
 #define STDOUT 1
 #define STDERR 2
@@ -460,4 +562,6 @@ int compressed_decoder (
     INST  *inst,
     int   *illegal
 );
+
+#endif // __OPCODE_H__
 
