@@ -152,7 +152,7 @@ int genbtf(
     fprintf(fout,"#creationDate %04d-%02d-%02dT%02d:%02d:%2dZ\n", info->tm_year+1900,
             info->tm_mon+1, info->tm_mday, info->tm_hour, info->tm_min, info->tm_sec);
 
-    fprintf(fout,"#timeScale ns\n");
+    fprintf(fout,"#timeScale us\n");
 
     if (trace_data->h.event_count != trace_data->h.max_events)
         current_index = 0;
@@ -376,7 +376,7 @@ int genvcd(
     fprintf(fout,"$version\n");
     fprintf(fout,"    FreeRTOS trace logger\n");
     fprintf(fout,"$end\n");
-    fprintf(fout,"$timeScale 1ns $end\n");
+    fprintf(fout,"$timeScale 1us $end\n");
     fprintf(fout,"$scope module task $end\n");
 
     // tick event

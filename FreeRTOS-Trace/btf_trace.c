@@ -172,7 +172,7 @@ void btf_dump(
     printf("#creationDate %04d-%02d-%02dT%02d:%02d:%02dZ\n", BUILD_YEAR, BUILD_MONTH,
            BUILD_DAY, BUILD_HOUR, BUILD_MIN, BUILD_SEC);
 
-    printf("#timeScale ns\n");
+    printf("#timeScale us\n");
 
     if (trace_data.h.event_count != trace_data.h.max_events)
         current_index = 0;

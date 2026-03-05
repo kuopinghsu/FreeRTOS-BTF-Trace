@@ -547,9 +547,17 @@ class TimelineScene(QGraphicsScene):
                 lbl.setBrush(QBrush(color))
                 lbl.setZValue(32)
                 tw = fm_big.horizontalAdvance(lbl.text())
+                th = fm_big.height()
                 lbl_x = min(x + 3, scene_r.width() - tw - 4)
-                lbl.setPos(lbl_x, 2 + orig_idx * (fm_big.height() + 2))
-                self._cursor_items.append(lbl)
+                lbl_y = 2 + (orig_idx + 1) * (th + 2)
+                bg = self.addRect(
+                    QRectF(lbl_x - 2, lbl_y - 1, tw + 4, th + 2),
+                    QPen(Qt.NoPen),
+                    QBrush(QColor(0, 0, 0, 180)),
+                )
+                bg.setZValue(31)
+                lbl.setPos(lbl_x, lbl_y)
+                self._cursor_items.extend([bg, lbl])
 
                 if order > 0:
                     prev_ns = sorted_cursors[order - 1][1]
@@ -583,8 +591,18 @@ class TimelineScene(QGraphicsScene):
                 lbl = self.addSimpleText(f"C{orig_idx+1}: {t_str}", font_big)
                 lbl.setBrush(QBrush(color))
                 lbl.setZValue(32)
-                lbl.setPos(2, y + 2 + orig_idx * (fm_big.height() + 2))
-                self._cursor_items.append(lbl)
+                tw = fm_big.horizontalAdvance(lbl.text())
+                th = fm_big.height()
+                lbl_x = 2
+                lbl_y = y + 2 + (orig_idx + 1) * (th + 2)
+                bg = self.addRect(
+                    QRectF(lbl_x - 2, lbl_y - 1, tw + 4, th + 2),
+                    QPen(Qt.NoPen),
+                    QBrush(QColor(0, 0, 0, 180)),
+                )
+                bg.setZValue(31)
+                lbl.setPos(lbl_x, lbl_y)
+                self._cursor_items.extend([bg, lbl])
 
                 if order > 0:
                     prev_ns = sorted_cursors[order - 1][1]
@@ -1358,15 +1376,26 @@ class TimelineView(QGraphicsView):
         self.resetTransform()
 
     def save_image(self, filepath: str) -> None:
-        """Capture the current viewport as a PNG image.
+        """Capture the current visible scene content as a PNG image.
 
-        QWidget.grab() runs the full Qt compositing pipeline on the viewport,
-        which applies the view's scroll position and all transforms before
-        rasterising.  This guarantees the output exactly matches what is
-        visible on screen – background rects are clipped at the viewport
-        boundary and off-screen content is never drawn.
+        QWidget.grab() renders exactly what is on screen.  When the scene is
+        smaller than the viewport, QGraphicsView centres it and leaves blank
+        margins; we crop those away by computing the scene rect in viewport
+        coordinates so the output contains only real content.
         """
-        pixmap = self.viewport().grab()
+        vp = self.viewport()
+        vp_rect = vp.rect()
+
+        # Map the scene bounding rect into viewport pixel coordinates.
+        scene_in_vp = self.mapFromScene(self._scene.sceneRect()).boundingRect()
+
+        # Intersect with the viewport rect to get the visible content area.
+        content_rect = vp_rect.intersected(scene_in_vp)
+
+        # Fall back to the full viewport if the intersection is empty.
+        capture_rect = content_rect if not content_rect.isEmpty() else vp_rect
+
+        pixmap = vp.grab(capture_rect)
         if not pixmap.save(filepath, "PNG"):
             raise OSError(f"QPixmap.save() failed for path: {filepath}")
 

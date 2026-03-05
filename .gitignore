@@ -58,3 +58,5 @@ tools/gentrace
 dump.bin
 trace.btf
 trace.vcd
+
+.DS_Store

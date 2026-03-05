@@ -1,7 +1,7 @@
 $version
     FreeRTOS trace logger
 $end
-$timeScale 1ns $end
+$timeScale 1us $end
 $scope module task $end
 $var wire 1 ! (0000)tick_event $end
 $var wire 1 " (0001)Main $end
