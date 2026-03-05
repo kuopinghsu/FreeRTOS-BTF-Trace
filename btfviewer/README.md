@@ -4,17 +4,7 @@ A PyQt5-based interactive visualiser for FreeRTOS context-switch traces in **Bes
 
 ## Screenshot
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│ [label col]  │ 0 µs     100 µs    200 µs    300 µs          │
-│──────────────┼──────────────────────────────────────────────│
-│ matrix task  │ ████████           ████████                  │
-│ Tmr Svc      │          ██                    ███           │
-│ IDLE0        │ ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   │
-│──────────────┼──────────────────────────────────────────────│
-│ Core_0 STI   │ ▼   ▼▼  ▼                                    │
-└─────────────────────────────────────────────────────────────┘
-```
+<img src="../images/btfviewer.png" alt="BTF Viewer screenshot" width=640>
 
 ## Requirements
 
