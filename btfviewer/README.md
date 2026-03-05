@@ -71,7 +71,7 @@ In **Core View**, click a core's label to **expand** (▼) or **collapse** (▶)
 Delta times (Δ) between consecutive cursors are shown both on the timeline and in the status bar.
 
 ### Export
-**File → Save as SVG** saves the current scene (at the current zoom level) as a vector SVG file.
+**File → Save as Image (PNG)** saves exactly what is visible in the current viewport as a PNG file.
 
 ### Other
 - Hover over any bar or STI marker for a detailed tooltip
@@ -96,8 +96,8 @@ timestamp, source, src_inst, event_type, target, tgt_inst, event[, note]
 ## File Structure
 
 ```
-btf_viewer/
-├── btf_viewer.py   # Single-file application (parser + widget + window)
+btfviewer/
+├── btfviewer.py    # Single-file application (parser + widget + window)
 └── trace.btf       # Example FreeRTOS trace
 ```
 
