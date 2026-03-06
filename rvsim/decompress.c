@@ -105,7 +105,7 @@ int compressed_decoder (
     if (instc.cr.op == 0x1) {
         switch(instc.ci.func3) {
             // OP_CNOP, OP_CADDI
-            case OP_CADDI     : 
+            case OP_CADDI     :
                 if (instc.ci.rd == 0) { // c.nop -> addi x0, x0, 0
                     r.i.op    = OP_ARITHI;
                     r.i.rd    = 0;

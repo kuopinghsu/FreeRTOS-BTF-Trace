@@ -176,9 +176,9 @@ char *heap_ptr;
 
 char *
 _sbrk (int nbytes)
-{ 
+{
     char *base;
-  
+
     if (!heap_ptr)
         heap_ptr = (char *)&_end;
 
@@ -188,7 +188,7 @@ _sbrk (int nbytes)
         base = heap_ptr;
         heap_ptr += nbytes;
     }
-  
+
     return base;
 }
 

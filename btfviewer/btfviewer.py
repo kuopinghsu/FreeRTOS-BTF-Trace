@@ -1330,7 +1330,6 @@ class _TaskLabelItem(QGraphicsRectItem):
         scene = self._tl_scene
         QTimer.singleShot(0, scene.clear_hover)
 
-
 class _CoreHeaderItem(QGraphicsRectItem):
     """Clickable label area for a core row — toggles expand/collapse."""
 
@@ -1819,7 +1818,6 @@ class _CursorButton(QPushButton):
             return not own_parent.rect().contains(own_parent.mapFromGlobal(global_pos))
         return True
 
-
 class CursorBarWidget(QWidget):
     """A row of per-cursor _CursorButtons in the status bar."""
     jump_requested          = pyqtSignal(int)   # ns – scroll timeline
@@ -1943,7 +1941,6 @@ class _LegendTaskRow(QWidget):
         if event.button() == Qt.LeftButton:
             self.clicked.emit(self._task_name)
         event.accept()   # prevent bubbling up to LegendWidget.mousePressEvent
-
 
 class LegendWidget(QWidget):
     """Compact scrollable colour legend with hover/click → timeline highlight."""

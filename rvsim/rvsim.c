@@ -354,7 +354,6 @@ static inline void srv32_int(struct rv *rv, int cause, int src, int compressed) 
             (rv->csr.mtvec & 0xfffffffe) + (cause & (~(1<<31))) * 4 : rv->csr.mtvec;
 }
 
-
 int32_t srv32_read_regs(struct rv *rv, int n) {
     if (n >= REGNUM) {
         printf("RV32E: can not access registers %d\n", n);
