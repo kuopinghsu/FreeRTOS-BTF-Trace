@@ -1,0 +1,3952 @@
+"""
+btf_viewer.py – Single-file BTF Trace Viewer (PyQt5).
+
+Usage:
+    python btf_viewer.py [trace.btf]
+
+Parses RTOS .btf context-switch traces and renders an interactive
+Gantt-style timeline with multi-cursor, drag-to-move, zoom/pan, and
+expandable core-view rows.
+
+Architecture overview
+---------------------
+  1. BTF Parser  (parse_btf)
+     Reads the .btf text file line-by-line and reconstructs task
+     execution segments from the sparse event stream (resume / preempt
+     pairs).  All derived lookup tables (seg_map_by_merge_key, core_segs,
+     core_task_segs, …) are pre-built here once so that scene rebuilds
+     never iterate over raw segments again.
+
+  2. Data model  (dataclasses: RawEvent, TaskSegment, StiEvent, BtfTrace)
+     Plain dataclasses; no Qt dependency.  BtfTrace is the single source
+     of truth passed from the parser to the scene.
+
+  3. Timeline scene  (TimelineScene : QGraphicsScene)
+     Converts BtfTrace data into QGraphicsItems at a given zoom level
+     (ns_per_px).  Four builder methods cover the two view modes
+     (task / core) × two orientations (horizontal / vertical).  The scene
+     is fully torn down and rebuilt on every zoom/scroll action.
+
+  4. Graphics items  (_RulerItem, _BatchRowItem, _BatchStiItem, …)
+     Custom QGraphicsItem subclasses.  _BatchRowItem and _BatchStiItem
+     each represent an entire row with a single Qt item and use a
+     3-tier Level-of-Detail (LOD) paint strategy to keep frame times
+     low across the full zoom range (see _BatchRowItem docstring).
+
+  5. Timeline view  (TimelineView : QGraphicsView)
+     Wraps the scene; handles mouse events (click → cursor, drag → pan,
+     Ctrl+wheel / pinch → zoom, middle-drag → range-zoom), label-column
+     resize, and frozen-label repositioning on scroll.
+
+  6. Main window  (MainWindow : QMainWindow)
+     Top-level application window.  Owns the toolbar, menus, status bar,
+     legend dock, and drag-and-drop file opening.
+
+Section index
+-------------
+  USER CONFIGURATION  – fonts, layout, colours, cursors, LOD thresholds
+                        (edit here to customise the viewer appearance)
+  BTF Parser          – dataclasses + task-name helpers + parse_btf()
+  Timeline Widget     – internal colour helpers, _format_time, _monospace_font,
+                        _lod_reduce, _nice_grid_step
+  Scene               – TimelineScene and its four builder methods
+  Graphics Items      – _RulerItem, _BatchRowItem, _BatchStiItem,
+                        _TaskLabelItem, _CoreHeaderItem,
+                        _SegmentItem (legacy), _StiMarkerItem (legacy)
+  View                – TimelineView (pan / zoom / cursor mouse handling)
+  Main Window         – _CursorButton, CursorBarWidget, LegendWidget,
+                        _WheelSpinBox, MainWindow
+  Entry point         – main()
+"""
+
+from __future__ import annotations
+
+import functools
+import math
+import os
+import re
+import sys
+from collections import defaultdict
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Tuple
+
+from PyQt5.QtCore import (
+    QBuffer, QByteArray, QEvent, QIODevice, QLineF, QMimeData,
+    QPoint, QPointF, QRectF, QSettings, Qt, QThread, QTimer,
+    pyqtSignal,
+)
+from PyQt5.QtGui import (
+    QBrush, QColor, QFont, QFontDatabase, QFontMetrics, QKeySequence, QPainter,
+    QPainterPath, QPalette, QPen, QPixmap, QPolygonF, QTransform, QWheelEvent,
+)
+from PyQt5.QtWidgets import (
+    QAction, QApplication, QCheckBox, QDockWidget, QFileDialog,
+    QFrame, QGraphicsEllipseItem, QGraphicsItem, QGraphicsLineItem,
+    QGraphicsPolygonItem,
+    QGraphicsRectItem, QGraphicsScene, QGraphicsView,
+    QHBoxLayout, QLabel, QMainWindow, QMenu, QMessageBox, QPushButton,
+    QScrollArea, QSizePolicy, QSlider, QSpacerItem, QSpinBox, QSplitter,
+    QStatusBar, QStyleOptionGraphicsItem, QToolBar, QVBoxLayout, QWidget,
+)
+from PyQt5.QtSvg import QSvgGenerator  # noqa: F401 – kept for optional future SVG use
+
+# ===========================================================================
+# USER CONFIGURATION
+# Edit the values in this section to customise the viewer.
+# Everything else in the file is internal implementation detail.
+# ===========================================================================
+
+# ---- Fonts ----------------------------------------------------------------
+_FONT_SIZE    = 10   # Timeline label font size (pt).  Adjustable at runtime
+                     # via the Font spinbox in the toolbar.
+_UI_FONT_SIZE = 10   # Application UI font: menus, toolbar, status bar (pt).
+
+# ---- Layout ---------------------------------------------------------------
+LABEL_WIDTH   = 160  # Width of the frozen task-label column (px).
+RULER_HEIGHT  =  40  # Height of the time ruler (px).
+ROW_HEIGHT    =  22  # Height of each task / core row (px).
+ROW_GAP       =   4  # Vertical gap between rows (px).
+STI_ROW_H     =  18  # Height of an STI (software-trace) row (px).
+STI_MARKER_H  =   6  # Height of an STI marker triangle (px).
+MIN_SEG_WIDTH = 1.0  # Minimum painted width of a task segment (px).
+
+# ---- Cursors --------------------------------------------------------------
+MAX_CURSORS    = 4
+_CURSOR_COLORS = ["#FF4444", "#44FF88", "#4499FF", "#FFAA22"]
+
+# ---- Task colour palette --------------------------------------------------
+# 16-colour cycle used to distinguish tasks (hex RGB strings).
+_PALETTE = [
+    "#4E9AF1", "#F1884E", "#4EF188", "#F14E9A",
+    "#9A4EF1", "#F1D94E", "#4EF1D9", "#F14E4E",
+    "#88C057", "#C057C0", "#57C0C0", "#C09057",
+    "#7B68EE", "#EE687B", "#68EE7B", "#EEB468",
+]
+
+# Alpha-tint overlaid on task colours to indicate which core a segment ran on.
+_CORE_TINTS = {
+    "Core_0": QColor(255, 255, 255, 0),   # no tint
+    "Core_1": QColor(0,   0,   40,  40),  # subtle blue
+    "Core_2": QColor(0,   40,  0,   40),  # subtle green
+    "Core_3": QColor(40,  0,   0,   40),  # subtle red
+    "Core_?": QColor(60,  60,  60,  60),  # grey for unknown cores
+}
+
+# Colour overrides for specific well-known task names.
+_SPECIAL_COLORS: Dict[str, QColor] = {
+    "TICK": QColor("#E8C84A"),
+}
+
+# ---- STI event colours ----------------------------------------------------
+# Fixed colours for well-known STI notes; unknown notes get auto-assigned
+# colours from the internal _STI_PALETTE (defined in Timeline Widget below).
+_STI_COLOURS: Dict[str, QColor] = {
+    "take_mutex":   QColor("#E05050"),
+    "give_mutex":   QColor("#50C050"),
+    "create_mutex": QColor("#5080E0"),
+    "trigger":      QColor("#C08030"),
+    # Unknown notes are assigned dynamically by _sti_colour().
+}
+
+# ---- Performance / Level-of-Detail ----------------------------------------
+NS_PER_PX_DEFAULT = 1.0    # Initial zoom level (nanoseconds per screen pixel).
+# _BatchRowItem.paint() LOD thresholds (Qt levelOfDetail: 1.0 = 100% zoom).
+_PAINT_LOD_COARSE = 0.45   # Below: merge nearby segments, skip pen outlines.
+_PAINT_LOD_MICRO  = 0.12   # Below: draw one tinted activity bar per row.
+
+# ===========================================================================
+# BTF Parser
+# ===========================================================================
+
+@dataclass
+class RawEvent:
+    """One raw parsed line from the BTF file before segment reconstruction."""
+    time:       int   # absolute timestamp in the file's time_scale units
+    source:     str   # emitting entity: 'Core_N' for task T-events
+    src_inst:   int   # source instance id (column 2 in the BTF CSV)
+    event_type: str   # 'T' for task events, 'STI' for trace items
+    target:     str   # receiving entity: task name or STI channel
+    tgt_inst:   int   # target instance id (column 5 in the BTF CSV)
+    event:      str   # event verb: 'resume', 'preempt', 'trigger', …
+    note:       str   # optional annotation (e.g. 'task_create', mutex name)
+
+@dataclass
+class TaskSegment:
+    """One contiguous execution slice of a task on a core."""
+    task: str
+    start: int          # ns
+    end: int            # ns
+    core: str           # e.g. "Core_0"
+
+@dataclass
+class StiEvent:
+    """An RTOS software trace item (mutex/semaphore/queue event, etc.)."""
+    time: int
+    core: str           # source core (e.g. "Core_0")
+    target: str         # STI target name (e.g. "mutex_event")
+    event: str          # event name (e.g. "trigger")
+    note: str           # detail (e.g. "take_mutex")
+
+@dataclass
+class BtfTrace:
+    """Parsed result of a .btf file."""
+    time_scale: str                     # "ns", "us", "ms" …
+    tasks: List[str]                    # ordered task name list
+    segments: List[TaskSegment]
+    sti_events: List[StiEvent]
+    sti_channels: List[str]             # ordered list of distinct STI channel names
+    sti_events_by_target: Dict[str, List[StiEvent]]   # fast lookup for builders
+    time_min: int
+    time_max: int
+    meta: Dict[str, str] = field(default_factory=dict)
+    # Pre-built, start-time-sorted segment map keyed by task_merge_key.
+    # Avoids O(n_segments) iteration on every scene rebuild.
+    seg_map_by_merge_key: Dict[str, List[TaskSegment]] = field(default_factory=dict)
+    # Pre-built core-view data – cached once at parse time so core-view
+    # rebuild() never iterates trace.segments again (O(1) access).
+    core_names:      List[str]                                        = field(default_factory=list)
+    core_segs:       Dict[str, List[TaskSegment]]                     = field(default_factory=dict)
+    core_task_order: Dict[str, List[str]]                             = field(default_factory=dict)
+    core_task_segs:  Dict[str, Dict[str, List[TaskSegment]]]          = field(default_factory=dict)
+
+# ---------------------------------------------------------------------------
+# Task-name helpers
+# ---------------------------------------------------------------------------
+
+_TASK_RE = re.compile(r"^\[(\d+)/(\d+)\](.+)$")
+
+def parse_task_name(raw: str) -> Tuple[Optional[int], Optional[int], str]:
+    """Return (core_id, task_id, display_name) from a raw BTF task name."""
+    m = _TASK_RE.match(raw)
+    if m:
+        return int(m.group(1)), int(m.group(2)), m.group(3).strip()
+    return None, None, raw
+
+def task_display_name(raw: str) -> str:
+    """Short display name: 'Name[id]' for regular tasks; bare name for IDLE/TICK."""
+    _, task_id, name = parse_task_name(raw)
+    if task_id is not None and not re.match(r"^IDLE\d*$|^TICK$", name):
+        return f"{name}[{task_id}]"
+    return name
+
+def task_sort_key(raw: str) -> Tuple[int, int, str]:
+    """Sorting key: user tasks first, then IDLE, then TICK."""
+    core_id, task_id, name = parse_task_name(raw)
+    if name.startswith("IDLE"):
+        group = 2
+    elif name == "TICK":
+        group = 3
+    else:
+        group = 1
+    return (group, task_id if task_id is not None else 0, name)
+
+def task_merge_key(raw: str) -> str:
+    """Stable key that ignores core_id, used to merge cross-core task rows in task view.
+
+    Two raw names like '[0/1]MyTask' and '[1/1]MyTask' share the same merge key
+    so they collapse into a single row in the task view, while the core view still
+    shows them separately.
+    """
+    _, task_id, name = parse_task_name(raw)
+    if task_id is not None:
+        return f"\x00{task_id}\x00{name}"
+    return raw  # no [core/id] prefix → use as-is
+
+# ---------------------------------------------------------------------------
+# Parser
+# ---------------------------------------------------------------------------
+
+def _is_core_entity(name: str) -> bool:
+    return name.startswith("Core_")
+
+def parse_btf(filepath: str) -> BtfTrace:
+    """Parse a .btf file and return a BtfTrace."""
+
+    meta: Dict[str, str] = {}
+    time_scale = "ns"
+
+    # T-events grouped by timestamp for O(1) same-tick access
+    t_events_by_time: Dict[int, List[Tuple]] = defaultdict(list)
+    sti_events: List[StiEvent] = []
+    time_min = 0
+    time_max = 0
+    first_event = True
+
+    # ------------------------------------------------------------------
+    # Phase 1 : file reading
+    # Scan every line in one pass; collect T-events into a dict keyed by
+    # timestamp so that all same-tick events can be processed together in
+    # Phase 2.  STI events are stored as-is.  Comment/meta lines (#) fill
+    # the meta dict and set time_scale.
+    # ------------------------------------------------------------------
+    with open(filepath, encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith("#"):
+                stripped = line[1:].strip()
+                if " " in stripped:
+                    key, _, value = stripped.partition(" ")
+                    meta[key] = value.strip()
+                    if key == "timeScale":
+                        time_scale = value.strip()
+                continue
+
+            parts = line.split(",")
+            if len(parts) < 7:
+                continue
+
+            try:
+                t = int(parts[0])
+            except ValueError:
+                continue
+
+            if first_event:
+                time_min = time_max = t
+                first_event = False
+            else:
+                if t < time_min:
+                    time_min = t
+                if t > time_max:
+                    time_max = t
+
+            ev_type = parts[3].strip()
+            if ev_type == "T":
+                t_events_by_time[t].append((
+                    t,
+                    parts[1].strip(),   # source
+                    parts[6].strip(),   # event
+                    parts[4].strip(),   # target
+                    parts[7].strip() if len(parts) > 7 else "",  # note
+                ))
+            elif ev_type == "STI":
+                sti_events.append(StiEvent(
+                    time=t,
+                    core=parts[1].strip(),
+                    target=parts[4].strip(),
+                    event=parts[6].strip(),
+                    note=parts[7].strip() if len(parts) > 7 else "",
+                ))
+
+    open_seg: Dict[str, Tuple[int, str]] = {}
+    last_core: Dict[str, str] = {}
+    segments: List[TaskSegment] = []
+    all_task_names: set = set()
+
+    # ------------------------------------------------------------------
+    # Phase 2 : state-machine segment reconstruction
+    # Replay events in chronological order.  The state machine tracks one
+    # open (start, core) interval per task in *open_seg*.
+    # _open_seg  → record the start of a new execution interval.
+    # _close_seg → seal the current open interval into a TaskSegment.
+    #
+    # At each timestamp we process events in two passes:
+    #   Pass A  – resume events: close the pre-empted task, open the
+    #             newly resumed task on the correct core.
+    #   Pass B  – preempt events that have NO matching resume at the same
+    #             tick: these are naked pre-emptions (e.g. task termination
+    #             or OS reclaim) so we just close the segment.
+    # ------------------------------------------------------------------
+    def _close_seg(task: str, end_time: int) -> None:
+        if task in open_seg:
+            start, core = open_seg.pop(task)
+            if end_time > start:
+                segments.append(TaskSegment(task=task, start=start,
+                                            end=end_time, core=core))
+
+    def _open_seg(task: str, start_time: int, core: str) -> None:
+        _close_seg(task, start_time)
+        open_seg[task] = (start_time, core)
+        last_core[task] = core
+
+    for ts in sorted(t_events_by_time):
+        events = t_events_by_time[ts]
+        # (time, source, event, target, note)
+
+        core_preempts: Dict[str, str] = {}
+        for (_, src, ev, tgt, _note) in events:
+            if ev == "preempt" and _is_core_entity(src):
+                core_preempts[tgt] = src
+                all_task_names.add(tgt)
+
+        # Build resume-source set once (avoids O(n²) generator inside loop)
+        resume_sources = {src for (_, src, ev, tgt, _n) in events if ev == "resume"}
+
+        for (_, src, ev, tgt, _note) in events:
+            if ev != "resume":
+                continue
+            all_task_names.add(tgt)
+            all_task_names.add(src)
+
+            if src in core_preempts:
+                core = core_preempts[src]
+            elif _is_core_entity(src):
+                core = src
+            elif src in last_core:
+                core = last_core[src]
+            else:
+                core = "Core_?"
+
+            _close_seg(src, ts)
+            _open_seg(tgt, ts, core)
+
+        for (_, src, ev, tgt, _note) in events:
+            if ev == "preempt":
+                all_task_names.add(tgt)
+                if tgt not in resume_sources:
+                    core = core_preempts.get(tgt, last_core.get(tgt, "Core_?"))
+                    _close_seg(tgt, ts)
+                    if _is_core_entity(src):
+                        last_core[tgt] = src
+
+        for (_, _src, ev, tgt, note) in events:
+            if ev == "preempt" and note == "task_create":
+                all_task_names.add(tgt)
+
+    for task in list(open_seg.keys()):
+        _close_seg(task, time_max)
+
+    # ------------------------------------------------------------------
+    # Phase 3 : post-processing – build sorted task list + lookup tables
+    # All collections created here are stored in BtfTrace so that scene
+    # rebuild() calls never have to iterate raw segments again.
+    # ------------------------------------------------------------------
+    task_set = {t for t in all_task_names if not _is_core_entity(t) and t}
+    for seg in segments:
+        task_set.add(seg.task)
+    tasks = sorted(task_set, key=task_sort_key)
+
+    sti_channels = sorted({e.target for e in sti_events})
+
+    # Build target → events lookup used by scene builders (O(1) per channel)
+    sti_by_target: Dict[str, List[StiEvent]] = defaultdict(list)
+    for ev in sti_events:
+        sti_by_target[ev.target].append(ev)
+
+    # Pre-build merge-key → sorted-segments map so task-view rebuilds skip O(n) work
+    _smk: Dict[str, list] = defaultdict(list)
+    for seg in segments:
+        _smk[task_merge_key(seg.task)].append(seg)
+    for _lst in _smk.values():
+        _lst.sort(key=lambda s: s.start)
+
+    # Pre-build core-view maps: core → sorted segs, core → task → sorted segs
+    _cn_set: set = set()
+    for seg in segments:
+        _cn_set.add(seg.core)
+    _core_names = sorted(_cn_set, key=lambda c: (0 if c.startswith("Core_") else 1, c))
+    _core_segs: Dict[str, list] = {c: [] for c in _core_names}
+    for seg in segments:
+        _core_segs[seg.core].append(seg)
+    _core_task_order: Dict[str, list] = {}
+    _core_task_segs:  Dict[str, dict] = {}
+    for c in _core_names:
+        _tsm: Dict[str, list] = {}
+        for seg in _core_segs[c]:
+            if seg.task in _tsm:
+                _tsm[seg.task].append(seg)
+            else:
+                _tsm[seg.task] = [seg]
+        for _lst in _tsm.values():
+            _lst.sort(key=lambda s: s.start)
+        _core_segs[c].sort(key=lambda s: s.start)
+        _core_task_order[c] = sorted(_tsm.keys(), key=task_sort_key)
+        _core_task_segs[c]  = _tsm
+
+    return BtfTrace(
+        time_scale=time_scale,
+        tasks=tasks,
+        segments=segments,
+        sti_events=sti_events,
+        sti_channels=sti_channels,
+        sti_events_by_target=dict(sti_by_target),
+        time_min=time_min,
+        time_max=time_max,
+        meta=meta,
+        seg_map_by_merge_key=dict(_smk),
+        core_names=_core_names,
+        core_segs=dict(_core_segs),
+        core_task_order=_core_task_order,
+        core_task_segs=_core_task_segs,
+    )
+
+# ===========================================================================
+# Timeline Widget
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# Internal widget constants
+# All user-configurable values (fonts, layout, colours, cursors, LOD) are
+# in the USER CONFIGURATION block at the top of this file.
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Persistent hover-info popup  (replaces QToolTip which auto-hides on scroll)
+# ---------------------------------------------------------------------------
+
+class _InfoPopup(QLabel):
+    """Frameless persistent info popup – shown on hover-enter, hidden on hover-leave."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setWindowFlags(
+            Qt.ToolTip | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
+        )
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.setTextFormat(Qt.RichText)
+        self.setMargin(7)
+        self.setStyleSheet(
+            "QLabel { background:#252526; color:#E0E0E0; "
+            "border:1px solid #666; border-radius:4px; "
+            "font-size:9pt; font-family:'DejaVu Sans Mono','Consolas',monospace; }"
+        )
+
+    def show_at(self, screen_pos: QPoint, html: str) -> None:
+        self.setText(html)
+        self.adjustSize()
+        # offset so the cursor does not cover the box
+        self.move(screen_pos.x() + 16, screen_pos.y() + 8)
+        self.show()
+        self.raise_()
+
+_info_popup: Optional[_InfoPopup] = None
+
+def _get_popup() -> _InfoPopup:
+    global _info_popup
+    if _info_popup is None:
+        _info_popup = _InfoPopup()
+    return _info_popup
+
+_GRID_STEPS = [
+    1, 2, 5, 10, 20, 50, 100, 200, 500,
+    1_000, 2_000, 5_000, 10_000, 20_000, 50_000,
+    100_000, 200_000, 500_000,
+    1_000_000, 5_000_000, 10_000_000,
+]
+
+# ---------------------------------------------------------------------------
+# Colour helpers
+# (_PALETTE, _CORE_TINTS, _SPECIAL_COLORS and _STI_COLOURS are defined in
+#  the USER CONFIGURATION block near the top of this file.)
+# ---------------------------------------------------------------------------
+
+@functools.lru_cache(maxsize=None)
+def _task_colour(task_raw: str) -> QColor:
+    """Return a stable QColor for a task name.
+
+    Colour is keyed on the full raw name (including [core/id] prefix) so that
+    two tasks with the same display name but different IDs get different colours.
+    IDLE tasks always use grey shades, differentiated by their task_id.
+    """
+    core_id, tid, name = parse_task_name(task_raw)
+    if re.match(r"^IDLE\d*$", name):
+        # Use task_id to differentiate IDLE tasks across cores; fall back to
+        # the number suffix in the name, then 0.
+        if tid is not None:
+            idx = tid
+        else:
+            try:
+                idx = int(name[4:]) if name[4:] else 0
+            except ValueError:
+                idx = 0
+        greys = [180, 160, 140, 120, 100, 80]
+        v = greys[idx % len(greys)]
+        return QColor(v, v, v)
+    if name in _SPECIAL_COLORS:
+        return _SPECIAL_COLORS[name]
+    # Hash on merge key (task_id + name, ignoring core_id) so the same logical
+    # task always gets the same colour regardless of which core it ran on.
+    idx = hash(task_merge_key(task_raw)) % len(_PALETTE)
+    return QColor(_PALETTE[idx])
+
+def _blend_core_tint(base: QColor, core: str) -> QColor:
+    tint = _CORE_TINTS.get(core, _CORE_TINTS["Core_?"])
+    r = int(base.red()   * (1 - tint.alphaF()) + tint.red()   * tint.alphaF())
+    g = int(base.green() * (1 - tint.alphaF()) + tint.green() * tint.alphaF())
+    b = int(base.blue()  * (1 - tint.alphaF()) + tint.blue()  * tint.alphaF())
+    return QColor(r, g, b)
+
+@functools.lru_cache(maxsize=None)
+def _blended_colour(task_raw: str, core: str) -> QColor:
+    """Cached blend of a task's base colour with a core tint."""
+    return _blend_core_tint(_task_colour(task_raw), core)
+
+@functools.lru_cache(maxsize=None)
+def _task_brush(task_raw: str) -> QBrush:
+    """Cached QBrush for a task's base colour."""
+    return QBrush(_task_colour(task_raw))
+
+@functools.lru_cache(maxsize=None)
+def _task_pen_dark(task_raw: str) -> QPen:
+    """Cached dark-border QPen for a task's base colour."""
+    return QPen(_task_colour(task_raw).darker(130), 0.4)
+
+@functools.lru_cache(maxsize=None)
+def _blended_brush(task_raw: str, core: str) -> QBrush:
+    """Cached QBrush for a task blended with a core tint."""
+    return QBrush(_blended_colour(task_raw, core))
+
+@functools.lru_cache(maxsize=None)
+def _blended_pen_dark(task_raw: str, core: str) -> QPen:
+    """Cached dark-border QPen for a task blended with a core tint."""
+    return QPen(_blended_colour(task_raw, core).darker(130), 0.4)
+
+# Palette dedicated to dynamically-assigned STI note colours (distinct from
+# the task palette so task and STI markers never share the same hue).
+# (_STI_COLOURS base entries are in the USER CONFIGURATION block at the top.)
+_STI_PALETTE = [
+    "#FF6B6B", "#6BCB77", "#4D96FF", "#FFD93D",
+    "#C77DFF", "#FF9A3C", "#00C9A7", "#F72585",
+    "#48CAE4", "#E9C46A", "#A8DADC", "#E76F51",
+    "#B7E4C7", "#CDB4DB", "#FFAFCC", "#BDE0FE",
+]
+
+def _sti_colour(note: str) -> QColor:
+    """Return a stable colour for a STI note, auto-assigning if unknown."""
+    if note not in _STI_COLOURS:
+        idx = hash(note) % len(_STI_PALETTE)
+        _STI_COLOURS[note] = QColor(_STI_PALETTE[idx])
+    return _STI_COLOURS[note]
+
+# ---------------------------------------------------------------------------
+# Time-formatting helper
+# ---------------------------------------------------------------------------
+
+def _format_time(ns: int, time_scale: str = "ns") -> str:
+    """Format a timestamp into a human-readable string."""
+    if time_scale == "us":
+        ns *= 1_000
+    elif time_scale == "ms":
+        ns *= 1_000_000
+    if ns >= 1_000_000:
+        return f"{ns / 1_000_000:.3f} ms"
+    if ns >= 1_000:
+        return f"{ns / 1_000:.3f} µs"
+    return f"{ns} ns"
+
+@functools.lru_cache(maxsize=32)
+def _monospace_font(size: int, weight: int = QFont.Normal) -> QFont:
+    """Return a cached monospace QFont using the system fixed font.
+
+    Cached so the expensive QFontDatabase.systemFont() Qt bridge call is made
+    only once per (size, weight) pair regardless of how many rebuilds happen.
+    """
+    font = QFontDatabase.systemFont(QFontDatabase.FixedFont)
+    font.setPointSize(size)
+    font.setWeight(weight)
+    return font
+
+# Resolved family name of the system fixed-pitch font, used in Qt stylesheets.
+# Embedding the concrete name avoids the slow "Monospace" alias lookup that
+# would occur if the CSS generic family name "monospace" were used instead.
+_FIXED_FONT_FAMILY: str = QFontDatabase.systemFont(QFontDatabase.FixedFont).family()
+
+def _lod_reduce(segs: list, time_min: int, px_per_ns: float,
+                offset: float) -> list:
+    """Drop segments that would render to the same pixel column as the previous.
+
+    At coarse zoom levels (ns_per_px >> 1) thousands of segments are
+    sub-pixel wide and stacked on top of each other.  Keeping only the first
+    segment per pixel column reduces the rendered count by up to 30× at the
+    default fit-to-width zoom with no visible quality loss.  Callers are
+    responsible for passing segments pre-sorted by start time.
+    """
+    if len(segs) <= 1:
+        return segs
+    result: list = []
+    prev_bin = -2
+    for seg in segs:
+        b = int(offset + (seg.start - time_min) * px_per_ns)
+        if b != prev_bin:
+            result.append(seg)
+            prev_bin = b
+    return result
+
+def _nice_grid_step(ns_per_px: float, target_px: float = 100.0) -> int:
+    """Return a 'nice' grid step (in ns) so that one step ≈ target_px pixels."""
+    ideal_ns = ns_per_px * target_px
+    best = _GRID_STEPS[0]
+    for step in _GRID_STEPS:
+        if step >= ideal_ns:
+            best = step
+            break
+        best = step
+    return best
+
+# ---------------------------------------------------------------------------
+# Scene
+# ---------------------------------------------------------------------------
+
+class TimelineScene(QGraphicsScene):
+    """Manages the full timeline and renders it as QGraphicsItems.
+
+    The scene is stateless between rebuilds: every zoom or orientation change
+    calls rebuild() which calls one of four builder methods:
+
+        _build_horizontal       – task view, horizontal (time on X axis)
+        _build_vertical         – task view, vertical   (time on Y axis)
+        _build_horizontal_core  – core view, horizontal
+        _build_vertical_core    – core view, vertical
+
+    Because there is no incremental update, the scene can handle 1M+ events
+    without housekeeping overhead; the cost is paid only when zooming.
+    Paint performance is recovered via the 3-tier LOD system in _BatchRowItem.
+    """
+
+    scene_rebuilt    = pyqtSignal()          # emitted after every rebuild()
+    highlight_changed = pyqtSignal(object, bool) # (task_name_or_None, locked)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        # -- Trace data --------------------------------------------------
+        self._trace: Optional[BtfTrace] = None
+        # -- Zoom / orientation ------------------------------------------
+        self._horizontal = True
+        self._ns_per_px     = NS_PER_PX_DEFAULT
+        self._ns_per_px_fit = float('inf')   # zoom-out limit: ns/px at fit-to-view
+        # -- View state --------------------------------------------------
+        self._show_sti    = True
+        self._show_grid   = True
+        self._view_mode   = "task"       # "task" or "core"
+        self._core_expanded: Dict[str, bool] = {}   # True = expanded (default)
+        self._font_size: int = _FONT_SIZE            # label font size (pt)
+        self._label_width: int = LABEL_WIDTH            # resizable label-column width (px)
+        # -- Frozen label-column items -----------------------------------
+        # List of (item, orig_x_offset); repositioned on every scroll so
+        # the label column stays pinned to the left edge of the viewport.
+        self._frozen_items: List[tuple] = []
+        # -- Cursor overlay ----------------------------------------------
+        # Stored as ns timestamps; drawn as colored dash-lines above everything.
+        self._cursor_times: List[int] = []
+        self._cursor_items: list = []    # live QGraphicsItems for cursors
+        # -- Task highlight state ----------------------------------------
+        self._locked_task:  Optional[str] = None   # click-locked task (persistent)
+        self._hovered_task: Optional[str] = None   # hover task (transient)
+        # task_key → [(QRectF, QColor)] – populated by builders, used for hover overlays
+        self._task_row_rects: Dict[str, list] = {}
+        self._hover_overlay_items: list = []   # lightweight overlay items (no rebuild)
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def set_trace(self, trace: BtfTrace, viewport_width: int = 1200) -> None:
+        self._trace = trace
+        time_span = max(trace.time_max - trace.time_min, 1)
+        avail = max(viewport_width - self._label_width, 100)
+        self._ns_per_px = time_span / avail
+        self._ns_per_px_fit = self._ns_per_px   # record fit-to-view limit
+        self.rebuild()
+
+    def set_horizontal(self, horizontal: bool) -> None:
+        self._horizontal = horizontal
+        self.rebuild()
+
+    def set_show_sti(self, show: bool) -> None:
+        self._show_sti = show
+        self.rebuild()
+
+    def set_show_grid(self, show: bool) -> None:
+        self._show_grid = show
+        self.rebuild()
+
+    def set_view_mode(self, mode: str) -> None:
+        """Switch between 'task' (one row per task) and 'core' (one row per CPU core)."""
+        self._view_mode = mode
+        self.rebuild()
+
+    def toggle_core(self, core_name: str) -> None:
+        """Expand or collapse a core's task sub-rows in the core view."""
+        self._core_expanded[core_name] = not self._core_expanded.get(core_name, True)
+        self.rebuild()
+
+    @property
+    def ns_per_px(self) -> float:
+        return self._ns_per_px
+
+    @ns_per_px.setter
+    def ns_per_px(self, v: float) -> None:
+        self._ns_per_px = max(v, NS_PER_PX_DEFAULT)
+        self.rebuild()
+
+    def set_font_size(self, size: int) -> None:
+        """Change label font size (pt) and rebuild."""
+        self._font_size = max(6, min(size, 24))
+        self.rebuild()
+
+    def set_label_width(self, width: int) -> None:
+        """Change the Task / TaskID column width (px) and rebuild."""
+        self._label_width = max(60, min(width, 600))
+        self.rebuild()
+
+    def zoom(self, factor: float, center_ns: Optional[int] = None) -> None:
+        new_val = self._ns_per_px / factor
+        # Clamp: don't zoom in past 1:1 (NS_PER_PX_DEFAULT) or
+        # zoom out past fit-to-view level.
+        new_val = max(NS_PER_PX_DEFAULT, min(new_val, self._ns_per_px_fit))
+        if new_val == self._ns_per_px:
+            return  # already at limit – skip expensive rebuild
+        self._ns_per_px = new_val
+        self.rebuild()
+
+    def fit_to_width(self, viewport_width: int) -> None:
+        if self._trace is None:
+            return
+        time_span = max(self._trace.time_max - self._trace.time_min, 1)
+        avail = max(viewport_width - self._label_width, 100)
+        self._ns_per_px = time_span / avail
+        self._ns_per_px_fit = self._ns_per_px   # update fit-to-view limit
+        self.rebuild()
+
+    # ------------------------------------------------------------------
+    # Cursor API
+    # ------------------------------------------------------------------
+
+    def scene_to_ns(self, coord: float) -> int:
+        """Convert a scene X (horizontal) or Y (vertical) coord to ns."""
+        if self._trace is None:
+            return 0
+        ns = int((coord - self._label_width) * self._ns_per_px) + self._trace.time_min
+        return max(self._trace.time_min, min(self._trace.time_max, ns))
+
+    def ns_to_scene_coord(self, ns: int) -> float:
+        """Convert a timestamp to the scene X (horizontal) or Y (vertical) coordinate."""
+        return self._label_width + self._ns_to_px(ns)
+
+    def add_cursor(self, ns: int) -> None:
+        """Add a cursor at timestamp *ns*. Oldest is evicted when > MAX_CURSORS."""
+        self._cursor_times.append(ns)
+        if len(self._cursor_times) > MAX_CURSORS:
+            self._cursor_times.pop(0)
+        self._draw_cursors()
+
+    def remove_nearest_cursor(self, ns: int) -> None:
+        """Remove the cursor closest to *ns*."""
+        if not self._cursor_times:
+            return
+        nearest = min(self._cursor_times, key=lambda t: abs(t - ns))
+        self._cursor_times.remove(nearest)
+        self._draw_cursors()
+
+    def clear_cursors(self) -> None:
+        self._cursor_times.clear()
+        self._draw_cursors()
+
+    def zoom_to_range(self, ns_a: int, ns_b: int, viewport_px: int) -> None:
+        """Zoom so that the range [ns_a, ns_b] fills the available timeline width."""
+        span = abs(ns_b - ns_a)
+        if span < 1:
+            return
+        avail = max(viewport_px - self._label_width, 100)
+        self._ns_per_px = max(span / avail, NS_PER_PX_DEFAULT)
+        self.rebuild()
+
+    def _apply_hover_overlay(self, task_name: str) -> None:
+        """Add translucent highlight rects for *task_name* without rebuilding the scene."""
+        for rect, tc in self._task_row_rects.get(task_name, []):
+            hl_bg = QColor(tc.red(), tc.green(), tc.blue(), 35)
+            item = self.addRect(rect, QPen(tc.lighter(160), 1.0), QBrush(hl_bg))
+            item.setZValue(0.9)
+            self._hover_overlay_items.append(item)
+
+    def _remove_hover_overlay(self) -> None:
+        """Remove all current hover overlay items from the scene."""
+        for item in self._hover_overlay_items:
+            self.removeItem(item)
+        self._hover_overlay_items = []
+
+    def set_highlighted_task(self, task_name: Optional[str],
+                             locked: bool = False) -> None:
+        """Set or clear the highlighted task on the timeline.
+
+        - ``task_name=None`` always clears the highlight and the lock.
+        - ``locked=True``  pins the highlight (triggered by a click); full rebuild.
+        - ``locked=False`` is a transient hover highlight; uses a lightweight
+          overlay rect so the scene is NOT rebuilt (fast path).
+        """
+        if task_name is None:
+            self._remove_hover_overlay()
+            self._locked_task  = None
+            self._hovered_task = None
+            self.highlight_changed.emit(None, False)
+            self.rebuild()
+        elif locked:
+            self._remove_hover_overlay()
+            self._locked_task  = task_name
+            self._hovered_task = None
+            self.highlight_changed.emit(task_name, True)
+            self.rebuild()
+        else:
+            # Hover: update overlay only – no rebuild
+            self._remove_hover_overlay()
+            self._hovered_task = task_name
+            self._apply_hover_overlay(task_name)
+            self.highlight_changed.emit(self._locked_task,
+                                        self._locked_task is not None)
+
+    def clear_hover(self) -> None:
+        """Clear the transient hover highlight without rebuilding the scene."""
+        if self._hovered_task is None:
+            return
+        self._hovered_task = None
+        self._remove_hover_overlay()
+        self.highlight_changed.emit(self._locked_task,
+                                    self._locked_task is not None)
+
+    def cursor_times(self) -> List[int]:
+        return list(self._cursor_times)
+
+    # ------------------------------------------------------------------
+    # Draw cursor overlay
+    # ------------------------------------------------------------------
+
+    def _draw_cursors(self) -> None:
+        for item in self._cursor_items:
+            self.removeItem(item)
+        self._cursor_items.clear()
+
+        if self._trace is None or not self._cursor_times:
+            return
+
+        scene_r = self.sceneRect()
+        font     = _monospace_font(self._font_size)
+        font_big = _monospace_font(self._font_size + 1, QFont.Bold)
+        fm_big   = QFontMetrics(font_big)
+
+        sorted_cursors = sorted(enumerate(self._cursor_times), key=lambda x: x[1])
+
+        for order, (orig_idx, ns) in enumerate(sorted_cursors):
+            color = QColor(_CURSOR_COLORS[orig_idx % MAX_CURSORS])
+            pen   = QPen(color, 1.2, Qt.DashLine)
+
+            if self._horizontal:
+                x = self._label_width + self._ns_to_px(ns)
+                line = QGraphicsLineItem(x, 0, x, scene_r.height())
+                line.setPen(pen)
+                line.setZValue(30)
+                self.addItem(line)
+                self._cursor_items.append(line)
+
+                t_str = _format_time(ns, self._trace.time_scale)
+                lbl = self.addSimpleText(f"C{orig_idx+1}: {t_str}", font_big)
+                lbl.setBrush(QBrush(color))
+                lbl.setZValue(32)
+                tw = fm_big.horizontalAdvance(lbl.text())
+                th = fm_big.height()
+                lbl_x = min(x + 3, scene_r.width() - tw - 4)
+                lbl_y = 2 + (orig_idx + 1) * (th + 2)
+                bg = self.addRect(
+                    QRectF(lbl_x - 2, lbl_y - 1, tw + 4, th + 2),
+                    QPen(Qt.NoPen),
+                    QBrush(QColor(0, 0, 0, 180)),
+                )
+                bg.setZValue(31)
+                lbl.setPos(lbl_x, lbl_y)
+                self._cursor_items.extend([bg, lbl])
+
+                if order > 0:
+                    prev_ns = sorted_cursors[order - 1][1]
+                    delta   = abs(ns - prev_ns)
+                    d_str   = f"Δ {_format_time(delta, self._trace.time_scale)}"
+                    mid_x   = self._label_width + self._ns_to_px((ns + prev_ns) // 2)
+                    d_lbl   = self.addSimpleText(d_str, font)
+                    d_w     = QFontMetrics(font).horizontalAdvance(d_str)
+                    d_lbl.setBrush(QBrush(QColor("#FFFFFF")))
+                    d_lbl.setZValue(32)
+                    bg_rect = self.addRect(
+                        QRectF(mid_x - d_w / 2 - 3, RULER_HEIGHT + 4,
+                               d_w + 6, QFontMetrics(font).height() + 4),
+                        QPen(Qt.NoPen),
+                        QBrush(QColor(0, 0, 0, 160)),
+                    )
+                    bg_rect.setZValue(31)
+                    d_lbl.setPos(mid_x - d_w / 2, RULER_HEIGHT + 6)
+                    self._cursor_items.extend([bg_rect, d_lbl])
+
+            else:  # vertical mode
+                label_row_h = self._label_width
+                y = label_row_h + self._ns_to_px(ns)
+                line = QGraphicsLineItem(0, y, scene_r.width(), y)
+                line.setPen(pen)
+                line.setZValue(30)
+                self.addItem(line)
+                self._cursor_items.append(line)
+
+                t_str = _format_time(ns, self._trace.time_scale)
+                lbl = self.addSimpleText(f"C{orig_idx+1}: {t_str}", font_big)
+                lbl.setBrush(QBrush(color))
+                lbl.setZValue(32)
+                tw = fm_big.horizontalAdvance(lbl.text())
+                th = fm_big.height()
+                lbl_x = 2
+                lbl_y = y + 2 + (orig_idx + 1) * (th + 2)
+                bg = self.addRect(
+                    QRectF(lbl_x - 2, lbl_y - 1, tw + 4, th + 2),
+                    QPen(Qt.NoPen),
+                    QBrush(QColor(0, 0, 0, 180)),
+                )
+                bg.setZValue(31)
+                lbl.setPos(lbl_x, lbl_y)
+                self._cursor_items.extend([bg, lbl])
+
+                if order > 0:
+                    prev_ns = sorted_cursors[order - 1][1]
+                    delta   = abs(ns - prev_ns)
+                    d_str   = f"Δ {_format_time(delta, self._trace.time_scale)}"
+                    mid_y   = label_row_h + self._ns_to_px((ns + prev_ns) // 2)
+                    d_lbl   = self.addSimpleText(d_str, font)
+                    dh      = QFontMetrics(font).height()
+                    d_lbl.setBrush(QBrush(QColor("#FFFFFF")))
+                    d_lbl.setZValue(32)
+                    bg_rect = self.addRect(
+                        QRectF(RULER_HEIGHT + 4, mid_y - dh / 2 - 2,
+                               QFontMetrics(font).horizontalAdvance(d_str) + 6, dh + 4),
+                        QPen(Qt.NoPen), QBrush(QColor(0, 0, 0, 160))
+                    )
+                    bg_rect.setZValue(31)
+                    d_lbl.setPos(RULER_HEIGHT + 7, mid_y - dh / 2)
+                    self._cursor_items.extend([bg_rect, d_lbl])
+
+    # ------------------------------------------------------------------
+    # Build / rebuild
+    # ------------------------------------------------------------------
+
+    def rebuild(self) -> None:
+        self.clear()
+        self._cursor_items = []
+        self._frozen_items = []
+        self._task_row_rects = {}
+        self._hover_overlay_items = []   # clear() removed them from the scene
+        if self._trace is None:
+            return
+        if self._view_mode == "core":
+            if self._horizontal:
+                self._build_horizontal_core()
+            else:
+                self._build_vertical_core()
+        else:
+            if self._horizontal:
+                self._build_horizontal()
+            else:
+                self._build_vertical()
+        # Re-add hover overlay after rebuild (e.g. zoom while hovering)
+        if self._hovered_task is not None:
+            self._apply_hover_overlay(self._hovered_task)
+        self._draw_cursors()
+        self.scene_rebuilt.emit()
+
+    def _ns_to_px(self, ns: int) -> float:
+        return (ns - self._trace.time_min) / self._ns_per_px
+
+    def _build_horizontal(self) -> None:
+        trace = self._trace
+        font = _monospace_font(self._font_size)
+        fm   = QFontMetrics(font)
+
+        # Merge same-task-id rows from different cores into a single row
+        _seen_mk: dict = {}
+        _merged_rows: list = []
+        for _raw in trace.tasks:
+            _mk = task_merge_key(_raw)
+            if _mk not in _seen_mk:
+                _seen_mk[_mk] = _raw  # first representative raw name
+                _merged_rows.append(_mk)
+        task_rows = _merged_rows
+        sti_rows  = trace.sti_channels if self._show_sti else []
+        n_task = len(task_rows)
+        n_sti  = len(sti_rows)
+        total_rows = n_task + n_sti
+        if total_rows == 0:
+            return
+
+        time_span  = trace.time_max - trace.time_min
+        timeline_w = time_span / self._ns_per_px
+        total_h = RULER_HEIGHT + total_rows * (ROW_HEIGHT + ROW_GAP)
+        total_w = self._label_width + timeline_w
+        self.setSceneRect(0, 0, total_w, total_h)
+
+        # --- Background & ruler ------------------------------------------
+        self.addRect(QRectF(0, 0, total_w, RULER_HEIGHT),
+                     QPen(Qt.NoPen), QBrush(QColor("#2B2B2B"))).setZValue(-1)
+        _lbg = self.addRect(QRectF(0, 0, self._label_width, total_h),
+                            QPen(Qt.NoPen), QBrush(QColor("#1E1E1E")))
+        _lbg.setZValue(35)   # must be above cursor lines (z=30-32)
+        self._frozen_items.append((_lbg, 0))
+
+        _ruler = _RulerItem(trace, self._ns_per_px, total_w, total_h,
+                              font, trace.time_scale, self._show_grid,
+                              horiz=True, axis_offset=self._label_width)
+        _ruler.setZValue(0.5)
+        self.addItem(_ruler)
+
+        # Pre-cache per-task display name and color (keyed on merge key)
+        task_display: Dict[str, str]    = {k: task_display_name(_seen_mk[k]) for k in task_rows}
+        task_colors:  Dict[str, QColor] = {k: _task_colour(_seen_mk[k])      for k in task_rows}
+
+        # Shared colors/pens/brushes hoisted out of loops
+        _bg_even   = QBrush(QColor("#252526"))
+        _bg_odd    = QBrush(QColor("#2D2D2D"))
+        _sep_pen   = QPen(QColor("#333333"), 0.5)
+        _lbl_color = QColor("#D4D4D4")
+        _seg_white = QBrush(QColor("#FFFFFF"))
+
+        # Use pre-built sorted segment map from the trace (avoids O(n_seg) rebuild work)
+        seg_map = trace.seg_map_by_merge_key
+
+        # --- Task rows ---------------------------------------------------
+        # One row per unique merge-key; segments from all cores sharing the
+        # same task_id are blended with a per-core tint and rendered in a
+        # single _BatchRowItem for that row.
+        _time_min  = trace.time_min
+        _px_per_ns = 1.0 / self._ns_per_px
+        _LW        = self._label_width
+        for row_idx, task in enumerate(task_rows):
+            y_top = RULER_HEIGHT + row_idx * (ROW_HEIGHT + ROW_GAP)
+            y_ctr = y_top + ROW_HEIGHT / 2
+
+            is_hl = (task == self._locked_task)
+
+            self.addRect(QRectF(_LW, y_top, timeline_w, ROW_HEIGHT),
+                         QPen(Qt.NoPen),
+                         _bg_even if row_idx % 2 == 0 else _bg_odd).setZValue(0)
+            self._task_row_rects[task] = [(QRectF(_LW, y_top, timeline_w, ROW_HEIGHT), task_colors[task])]
+            if is_hl:
+                tc = task_colors[task]
+                hl_bg = QColor(tc.red(), tc.green(), tc.blue(), 35)
+                hl_border = QPen(tc.lighter(160), 1.0)
+                self.addRect(QRectF(_LW, y_top, timeline_w, ROW_HEIGHT),
+                             hl_border, QBrush(hl_bg)).setZValue(0.9)
+            self.addLine(0, y_top + ROW_HEIGHT + ROW_GAP - 1,
+                         total_w, y_top + ROW_HEIGHT + ROW_GAP - 1,
+                         _sep_pen).setZValue(0.5)
+
+            # Clickable label background
+            lbl_bg = _TaskLabelItem(QRectF(0, y_top, _LW, ROW_HEIGHT), task, self,
+                                    tooltip_text=task_display[task])
+            lbl_bg.setZValue(36)
+            self.addItem(lbl_bg)
+            self._frozen_items.append((lbl_bg, 0))
+
+            lbl_color = QColor("#FFD700") if is_hl else _lbl_color
+            lbl_font  = _monospace_font(self._font_size, QFont.Bold) if is_hl else font
+            _lbl_avail_w = max(0, _LW - 4 - 4)   # left=4, right margin=4
+            _lbl_elided  = QFontMetrics(lbl_font).elidedText(
+                task_display[task], Qt.ElideRight, _lbl_avail_w)
+            lbl = self.addSimpleText(_lbl_elided, lbl_font)
+            lbl.setBrush(QBrush(lbl_color))
+            lbl.setPos(4, y_ctr - fm.height() / 2)
+            lbl.setZValue(37)
+            self._frozen_items.append((lbl, 4))
+
+            disp       = task_display[task]
+            _pen_hl_h  = QPen(QColor("#FFFFFF"), 1.5)
+            _seg_data_h: list = []
+            _xs_h:      list = []
+            for i_s, seg in enumerate(_lod_reduce(seg_map.get(task, []), _time_min, _px_per_ns, _LW)):
+                x1 = _LW + (seg.start - _time_min) * _px_per_ns
+                x2 = _LW + (seg.end   - _time_min) * _px_per_ns
+                w  = x2 - x1 if x2 - x1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
+                _seg_data_h.append((
+                    QRectF(x1, y_top + 1, w, ROW_HEIGHT - 2),
+                    _blended_brush(seg.task, seg.core),
+                    _pen_hl_h if is_hl else _blended_pen_dark(seg.task, seg.core),
+                    seg,
+                ))
+                _xs_h.append((x1, x1 + w, i_s))
+            _batch_h = _BatchRowItem(
+                QRectF(_LW, y_top, timeline_w, ROW_HEIGHT),
+                _seg_data_h, trace.time_scale,
+                label_font=font, label_fm=fm, label_text=disp,
+                xs=_xs_h)
+            _batch_h.setZValue(1)
+            self.addItem(_batch_h)
+
+        # --- STI rows ---------------------------------------------------
+        # One row per STI channel containing one _BatchStiItem with all
+        # events for that channel, sorted by time (ascending scene_x).
+        for sti_idx, channel in enumerate(sti_rows):
+            row_idx = n_task + sti_idx
+            y_top   = RULER_HEIGHT + row_idx * (ROW_HEIGHT + ROW_GAP)
+            y_ctr   = y_top + ROW_HEIGHT / 2
+            self.addRect(QRectF(_LW, y_top, timeline_w, ROW_HEIGHT),
+                         QPen(Qt.NoPen), QBrush(QColor("#1A1A2E"))).setZValue(0)
+            lbl = self.addSimpleText(
+                fm.elidedText(channel, Qt.ElideRight, max(0, _LW - 4 - 4)), font)
+            lbl.setBrush(QBrush(QColor("#88AABB")))
+            lbl.setPos(4, y_ctr - fm.height() / 2)
+            lbl.setZValue(37)
+            self._frozen_items.append((lbl, 4))
+            _sti_markers = [
+                (_LW + (ev.time - _time_min) * _px_per_ns, _sti_colour(ev.note), ev)
+                for ev in trace.sti_events_by_target.get(channel, [])
+            ]
+            _sti_item = _BatchStiItem(
+                QRectF(_LW, y_top, timeline_w, ROW_HEIGHT),
+                _sti_markers, trace.time_scale, horizontal=True, axis=y_ctr)
+            _sti_item.setZValue(2)
+            self.addItem(_sti_item)
+
+        # --- Frozen label column header ----------------------------------
+        # Drawn last so it sits on top of all other frozen items (z=38-39).
+        corner = self.addRect(QRectF(0, 0, _LW, RULER_HEIGHT),
+                              QPen(Qt.NoPen), QBrush(QColor("#1A1A1A")))
+        corner.setZValue(38)
+        hdr = self.addSimpleText("Task / TaskID", font)
+        hdr.setBrush(QBrush(QColor("#888888")))
+        hdr.setPos(4, RULER_HEIGHT / 2 - fm.height() / 2)
+        hdr.setZValue(39)
+        self._frozen_items.append((corner, 0))
+        self._frozen_items.append((hdr, 4))
+
+    def _build_vertical(self) -> None:
+        trace = self._trace
+        font = _monospace_font(self._font_size)
+        fm   = QFontMetrics(font)
+
+        # Merge same-task-id columns from different cores into a single column
+        _seen_mk: dict = {}
+        _merged_cols: list = []
+        for _raw in trace.tasks:
+            _mk = task_merge_key(_raw)
+            if _mk not in _seen_mk:
+                _seen_mk[_mk] = _raw  # first representative raw name
+                _merged_cols.append(_mk)
+        task_cols = _merged_cols
+        sti_cols  = trace.sti_channels if self._show_sti else []
+        n_task = len(task_cols)
+        n_sti  = len(sti_cols)
+        total_cols = n_task + n_sti
+        if total_cols == 0:
+            return
+
+        col_w       = max(ROW_HEIGHT + ROW_GAP, 26)
+        label_row_h = self._label_width
+        time_span   = trace.time_max - trace.time_min
+        timeline_h  = time_span / self._ns_per_px
+        total_w     = col_w * total_cols + RULER_HEIGHT
+        total_h     = label_row_h + timeline_h
+        self.setSceneRect(0, 0, total_w, total_h)
+
+        self.addRect(QRectF(0, 0, RULER_HEIGHT, total_h),
+                     QPen(Qt.NoPen), QBrush(QColor("#2B2B2B"))).setZValue(-1)
+        self.addRect(QRectF(0, 0, total_w, label_row_h),
+                     QPen(Qt.NoPen), QBrush(QColor("#1E1E1E"))).setZValue(0)
+
+        _ruler = _RulerItem(trace, self._ns_per_px, total_w, total_h,
+                              font, trace.time_scale, self._show_grid,
+                              horiz=False, axis_offset=label_row_h)
+        _ruler.setZValue(0.5)
+        self.addItem(_ruler)
+
+        # Use pre-built sorted segment map from the trace (avoids O(n_seg) rebuild work)
+        seg_map = trace.seg_map_by_merge_key
+
+        # --- Task columns ------------------------------------------------
+        # Pre-cache per-task display name and color (keyed on merge key)
+        task_display: Dict[str, str]    = {k: task_display_name(_seen_mk[k]) for k in task_cols}
+        task_colors:  Dict[str, QColor] = {k: _task_colour(_seen_mk[k])      for k in task_cols}
+        _bg_even = QBrush(QColor("#252526"))
+        _bg_odd  = QBrush(QColor("#2D2D2D"))
+        _lbl_color = QColor("#D4D4D4")
+        _time_min  = trace.time_min
+        _px_per_ns = 1.0 / self._ns_per_px
+
+        for col_idx, task in enumerate(task_cols):
+            x_left   = RULER_HEIGHT + col_idx * col_w
+            is_hl    = (task == self._locked_task)
+
+            self.addRect(QRectF(x_left, label_row_h, col_w, timeline_h),
+                         QPen(Qt.NoPen),
+                         _bg_even if col_idx % 2 == 0 else _bg_odd).setZValue(0)
+            self._task_row_rects[task] = [(QRectF(x_left, label_row_h, col_w, timeline_h), task_colors[task])]
+            if is_hl:
+                tc = task_colors[task]
+                hl_bg = QColor(tc.red(), tc.green(), tc.blue(), 35)
+                self.addRect(QRectF(x_left, label_row_h, col_w, timeline_h),
+                             QPen(tc.lighter(160), 1.0), QBrush(hl_bg)).setZValue(0.9)
+
+            # Clickable label area at the top of each column
+            lbl_bg = _TaskLabelItem(QRectF(x_left, 0, col_w, label_row_h), task, self,
+                                    tooltip_text=task_display[task])
+            lbl_bg.setZValue(4)
+            self.addItem(lbl_bg)
+
+            lbl_color = QColor("#FFD700") if is_hl else _lbl_color
+            lbl_font  = _monospace_font(self._font_size, QFont.Bold) if is_hl else font
+            lbl = self.addSimpleText(task_display[task], lbl_font)
+            lbl.setBrush(QBrush(lbl_color))
+            lbl.setRotation(-90)
+            lbl.setPos(x_left + col_w / 2 + fm.height() / 2, label_row_h - 4)
+            lbl.setZValue(5)
+
+            _pen_hl_v   = QPen(QColor("#FFFFFF"), 1.5)
+            _seg_data_v: list = []
+            _xs_v:      list = []
+            for i_s, seg in enumerate(_lod_reduce(seg_map.get(task, []), _time_min, _px_per_ns, label_row_h)):
+                y1 = label_row_h + (seg.start - _time_min) * _px_per_ns
+                y2 = label_row_h + (seg.end   - _time_min) * _px_per_ns
+                h  = y2 - y1 if y2 - y1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
+                _seg_data_v.append((
+                    QRectF(x_left + 1, y1, col_w - 2, h),
+                    _blended_brush(seg.task, seg.core),
+                    _pen_hl_v if is_hl else _blended_pen_dark(seg.task, seg.core),
+                    seg,
+                ))
+                _xs_v.append((y1, y1 + h, i_s))
+            _batch_v = _BatchRowItem(
+                QRectF(x_left, label_row_h, col_w, timeline_h),
+                _seg_data_v, trace.time_scale,
+                xs=_xs_v)
+            _batch_v.setZValue(1)
+            self.addItem(_batch_v)
+
+        # --- STI columns ------------------------------------------------
+        for sti_idx, channel in enumerate(sti_cols):
+            col_idx = n_task + sti_idx
+            x_left  = RULER_HEIGHT + col_idx * col_w
+            x_ctr   = x_left + col_w / 2
+            self.addRect(QRectF(x_left, label_row_h, col_w, timeline_h),
+                         QPen(Qt.NoPen), QBrush(QColor("#1A1A2E"))).setZValue(0)
+            lbl = self.addSimpleText(channel, font)
+            lbl.setBrush(QBrush(QColor("#88AABB")))
+            lbl.setRotation(-90)
+            lbl.setPos(x_left + col_w / 2 + fm.height() / 2, label_row_h - 4)
+            lbl.setZValue(3)
+            _sti_markers_v = [
+                (label_row_h + (ev.time - _time_min) * _px_per_ns, _sti_colour(ev.note), ev)
+                for ev in trace.sti_events_by_target.get(channel, [])
+            ]
+            _sti_item_v = _BatchStiItem(
+                QRectF(x_left, label_row_h, col_w, timeline_h),
+                _sti_markers_v, trace.time_scale, horizontal=False, axis=x_ctr)
+            _sti_item_v.setZValue(2)
+            self.addItem(_sti_item_v)
+
+        self.addRect(QRectF(0, 0, RULER_HEIGHT, label_row_h),
+                     QPen(Qt.NoPen), QBrush(QColor("#1A1A1A"))).setZValue(5)
+
+    # ------------------------------------------------------------------
+    # Core view builders
+    # ------------------------------------------------------------------
+
+    def _build_horizontal_core(self) -> None:
+        """Horizontal core view: expandable cores → per-task sub-rows."""
+        trace   = self._trace
+        font    = _monospace_font(self._font_size)
+        font_sm = _monospace_font(max(6, self._font_size - 1))
+        fm      = QFontMetrics(font)
+
+        # Use pre-built core data cached at parse time (O(1), no segment iteration)
+        core_names           = trace.core_names
+        core_segs            = trace.core_segs
+        core_tasks           = trace.core_task_order
+        task_seg_map_by_core = trace.core_task_segs
+        sti_rows             = trace.sti_channels if self._show_sti else []
+
+        def _row_count(c: str) -> int:
+            return 1 + (len(core_tasks[c]) if self._core_expanded.get(c, True) else 0)
+
+        total_rows = sum(_row_count(c) for c in core_names) + len(sti_rows)
+        if total_rows == 0:
+            return
+
+        time_span  = trace.time_max - trace.time_min
+        timeline_w = time_span / self._ns_per_px
+        total_h    = RULER_HEIGHT + total_rows * (ROW_HEIGHT + ROW_GAP)
+        total_w    = self._label_width + timeline_w
+        self.setSceneRect(0, 0, total_w, total_h)
+
+        # --- Background & ruler ------------------------------------------
+        self.addRect(QRectF(0, 0, total_w, RULER_HEIGHT),
+                     QPen(Qt.NoPen), QBrush(QColor("#2B2B2B"))).setZValue(-1)
+        _lbg = self.addRect(QRectF(0, 0, self._label_width, total_h),
+                            QPen(Qt.NoPen), QBrush(QColor("#1E1E1E")))
+        _lbg.setZValue(35)   # must be above cursor lines (z=30-32)
+        self._frozen_items.append((_lbg, 0))
+
+        _ruler = _RulerItem(trace, self._ns_per_px, total_w, total_h,
+                              font, trace.time_scale, self._show_grid,
+                              horiz=True, axis_offset=self._label_width)
+        _ruler.setZValue(0.5)
+        self.addItem(_ruler)
+
+        core_dot_colors = {"Core_0": "#FF9933", "Core_1": "#33BBFF",
+                           "Core_2": "#66FF88", "Core_3": "#FF66AA"}
+        _time_min  = trace.time_min
+        _px_per_ns = 1.0 / self._ns_per_px
+        _LW        = self._label_width
+        row_idx = 0
+
+        # --- Core rows ---------------------------------------------------
+        # Each core gets one summary row (always visible) plus optional
+        # per-task sub-rows that appear when the core is expanded.
+        for core in core_names:
+            expanded = self._core_expanded.get(core, True)
+            tasks    = core_tasks[core]
+            segs     = core_segs[core]
+            dot_c    = QColor(core_dot_colors.get(core, "#AAAAAA"))
+
+            y_top = RULER_HEIGHT + row_idx * (ROW_HEIGHT + ROW_GAP)
+            y_ctr = y_top + ROW_HEIGHT / 2
+
+            self.addRect(QRectF(_LW, y_top, timeline_w, ROW_HEIGHT),
+                         QPen(Qt.NoPen), QBrush(QColor("#2A2A3E"))).setZValue(0)
+            self.addLine(0, y_top + ROW_HEIGHT + ROW_GAP - 1,
+                         total_w, y_top + ROW_HEIGHT + ROW_GAP - 1,
+                         QPen(QColor("#444466"), 0.8)).setZValue(0.5)
+
+            hdr_item = _CoreHeaderItem(
+                QRectF(0, y_top, _LW, ROW_HEIGHT), core, self)
+            hdr_item.setBrush(QBrush(QColor("#2B2B45")))
+            hdr_item.setPen(QPen(Qt.NoPen))
+            hdr_item.setZValue(36)
+            self.addItem(hdr_item)
+            self._frozen_items.append((hdr_item, 0))
+
+            arrow   = "▼" if expanded else "▶"
+            arrow_w = fm.horizontalAdvance("▼")
+            arr_txt = self.addSimpleText(arrow, font)
+            arr_txt.setBrush(QBrush(QColor("#9999CC")))
+            arr_txt.setPos(3, y_ctr - fm.height() / 2)
+            arr_txt.setZValue(37)
+            arr_txt.setAcceptedMouseButtons(Qt.NoButton)
+            arr_txt.setAcceptHoverEvents(False)
+            self._frozen_items.append((arr_txt, 3))
+
+            dot_item = QGraphicsEllipseItem(0, -5, 10, 10)
+            dot_item.setPen(QPen(Qt.NoPen))
+            dot_item.setBrush(QBrush(dot_c))
+            dot_item.setPos(arrow_w + 6, y_ctr)
+            dot_item.setZValue(37)
+            dot_item.setAcceptedMouseButtons(Qt.NoButton)
+            dot_item.setAcceptHoverEvents(False)
+            self.addItem(dot_item)
+            self._frozen_items.append((dot_item, arrow_w + 6))
+
+            _core_lbl_avail = max(0, _LW - (arrow_w + 20) - 4)
+            lbl_item = self.addSimpleText(
+                fm.elidedText(core, Qt.ElideRight, _core_lbl_avail), font)
+            lbl_item.setBrush(QBrush(QColor("#E0E0E0")))
+            lbl_item.setPos(arrow_w + 20, y_ctr - fm.height() / 2)
+            lbl_item.setZValue(37)
+            lbl_item.setAcceptedMouseButtons(Qt.NoButton)
+            lbl_item.setAcceptHoverEvents(False)
+            self._frozen_items.append((lbl_item, arrow_w + 20))
+
+            _seg_data_ch: list = []
+            _xs_ch:       list = []
+            for i_s, seg in enumerate(_lod_reduce(segs, _time_min, _px_per_ns, _LW)):
+                x1 = _LW + (seg.start - _time_min) * _px_per_ns
+                x2 = _LW + (seg.end   - _time_min) * _px_per_ns
+                w  = x2 - x1 if x2 - x1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
+                _seg_data_ch.append((
+                    QRectF(x1, y_top + 2, w, ROW_HEIGHT - 4),
+                    _task_brush(seg.task), _task_pen_dark(seg.task), seg,
+                ))
+                _xs_ch.append((x1, x1 + w, i_s))
+            _batch_ch = _BatchRowItem(
+                QRectF(_LW, y_top, timeline_w, ROW_HEIGHT),
+                _seg_data_ch, trace.time_scale,
+                xs=_xs_ch)
+            _batch_ch.setZValue(1)
+            self.addItem(_batch_ch)
+
+            row_idx += 1
+
+            if not expanded:
+                continue
+
+            # -- Per-task sub-rows (only when this core is expanded) -------
+            task_seg_map = task_seg_map_by_core[core]
+
+            for sub_idx, task_name in enumerate(tasks):
+                y_top2 = RULER_HEIGHT + row_idx * (ROW_HEIGHT + ROW_GAP)
+                y_ctr2 = y_top2 + ROW_HEIGHT / 2
+
+                _tmk   = task_merge_key(task_name)
+                is_hl  = (_tmk == self._locked_task)
+
+                sub_bg = QColor("#1E1E2C") if sub_idx % 2 == 0 else QColor("#232330")
+                self.addRect(QRectF(_LW, y_top2, timeline_w, ROW_HEIGHT),
+                             QPen(Qt.NoPen), QBrush(sub_bg)).setZValue(0)
+                _row_color = _task_colour(task_name)
+                self._task_row_rects.setdefault(_tmk, []).append(
+                    (QRectF(_LW, y_top2, timeline_w, ROW_HEIGHT), _row_color))
+                if is_hl:
+                    hl_bg = QColor(_row_color.red(), _row_color.green(), _row_color.blue(), 35)
+                    self.addRect(QRectF(_LW, y_top2, timeline_w, ROW_HEIGHT),
+                                 QPen(_row_color.lighter(160), 1.0), QBrush(hl_bg)).setZValue(0.9)
+                self.addLine(0, y_top2 + ROW_HEIGHT + ROW_GAP - 1,
+                             total_w, y_top2 + ROW_HEIGHT + ROW_GAP - 1,
+                             QPen(QColor("#2E2E3A"), 0.5)).setZValue(0.5)
+
+                stripe = self.addRect(QRectF(26, y_top2 + 3, 3, ROW_HEIGHT - 6),
+                                      QPen(Qt.NoPen), QBrush(_row_color))
+                stripe.setZValue(36)
+                self._frozen_items.append((stripe, 0))
+
+                # Clickable label background for sub-task row
+                disp      = task_display_name(task_name)
+                sub_lbl_bg = _TaskLabelItem(
+                    QRectF(0, y_top2, _LW, ROW_HEIGHT), _tmk, self,
+                    tooltip_text=disp)
+                sub_lbl_bg.setZValue(36)
+                self.addItem(sub_lbl_bg)
+                self._frozen_items.append((sub_lbl_bg, 0))
+                lbl_color = QColor("#FFD700") if is_hl else QColor("#B0B0C0")
+                lbl_fnt   = _monospace_font(max(6, self._font_size - 1),
+                                            QFont.Bold) if is_hl else font_sm
+                _sub_avail  = max(0, _LW - 33 - 4)   # left=33, right margin=4
+                _sub_elided = QFontMetrics(lbl_fnt).elidedText(
+                    disp, Qt.ElideRight, _sub_avail)
+                t_lbl = self.addSimpleText(_sub_elided, lbl_fnt)
+                t_lbl.setBrush(QBrush(lbl_color))
+                t_lbl.setPos(33, y_ctr2 - fm.height() / 2)
+                t_lbl.setZValue(37)
+                self._frozen_items.append((t_lbl, 33))
+
+                _pen_hl_cs   = QPen(QColor("#FFFFFF"), 1.5)
+                _task_pen_cs = _task_pen_dark(task_name)
+                _task_br_cs  = _task_brush(task_name)
+                _seg_data_cs: list = []
+                _xs_cs:       list = []
+                for i_s, seg in enumerate(_lod_reduce(task_seg_map[task_name], _time_min, _px_per_ns, _LW)):
+                    x1 = _LW + (seg.start - _time_min) * _px_per_ns
+                    x2 = _LW + (seg.end   - _time_min) * _px_per_ns
+                    w  = x2 - x1 if x2 - x1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
+                    _seg_data_cs.append((
+                        QRectF(x1, y_top2 + 1, w, ROW_HEIGHT - 2),
+                        _task_br_cs,
+                        _pen_hl_cs if is_hl else _task_pen_cs,
+                        seg,
+                    ))
+                    _xs_cs.append((x1, x1 + w, i_s))
+                _batch_cs = _BatchRowItem(
+                    QRectF(_LW, y_top2, timeline_w, ROW_HEIGHT),
+                    _seg_data_cs, trace.time_scale,
+                    label_font=font_sm, label_fm=fm, label_text=disp,
+                    xs=_xs_cs)
+                _batch_cs.setZValue(1)
+                self.addItem(_batch_cs)
+
+                row_idx += 1
+
+        # --- STI rows ---------------------------------------------------
+        for channel in sti_rows:
+            y_top = RULER_HEIGHT + row_idx * (ROW_HEIGHT + ROW_GAP)
+            y_ctr = y_top + ROW_HEIGHT / 2
+            self.addRect(QRectF(_LW, y_top, timeline_w, ROW_HEIGHT),
+                         QPen(Qt.NoPen), QBrush(QColor("#1A1A2E"))).setZValue(0)
+            lbl = self.addSimpleText(
+                fm.elidedText(channel, Qt.ElideRight, max(0, _LW - 4 - 4)), font)
+            lbl.setBrush(QBrush(QColor("#88AABB")))
+            lbl.setPos(4, y_ctr - fm.height() / 2)
+            lbl.setZValue(37)
+            self._frozen_items.append((lbl, 4))
+            _sti_markers_ch = [
+                (_LW + (ev.time - _time_min) * _px_per_ns, _sti_colour(ev.note), ev)
+                for ev in trace.sti_events_by_target.get(channel, [])
+            ]
+            _sti_item_ch = _BatchStiItem(
+                QRectF(_LW, y_top, timeline_w, ROW_HEIGHT),
+                _sti_markers_ch, trace.time_scale, horizontal=True, axis=y_ctr)
+            _sti_item_ch.setZValue(2)
+            self.addItem(_sti_item_ch)
+            row_idx += 1
+
+        corner = self.addRect(QRectF(0, 0, _LW, RULER_HEIGHT),
+                              QPen(Qt.NoPen), QBrush(QColor("#1A1A1A")))
+        corner.setZValue(38)
+        hdr_lbl = self.addSimpleText("Core / Task", font)
+        hdr_lbl.setBrush(QBrush(QColor("#888888")))
+        hdr_lbl.setPos(4, RULER_HEIGHT / 2 - fm.height() / 2)
+        hdr_lbl.setZValue(39)
+        self._frozen_items.append((corner, 0))
+        self._frozen_items.append((hdr_lbl, 4))
+
+    def _build_vertical_core(self) -> None:
+        """Vertical core view: expandable core columns → per-task sub-columns."""
+        trace   = self._trace
+        font    = _monospace_font(self._font_size)
+        font_sm = _monospace_font(max(6, self._font_size - 1))
+        fm      = QFontMetrics(font)
+
+        # Use pre-built core data cached at parse time (O(1), no segment iteration)
+        core_names           = trace.core_names
+        core_segs            = trace.core_segs
+        core_tasks           = trace.core_task_order
+        task_seg_map_by_core = trace.core_task_segs
+        sti_cols             = trace.sti_channels if self._show_sti else []
+
+        def _col_count(c: str) -> int:
+            return 1 + (len(core_tasks[c]) if self._core_expanded.get(c, True) else 0)
+
+        total_cols = sum(_col_count(c) for c in core_names) + len(sti_cols)
+        if total_cols == 0:
+            return
+
+        col_w       = max(ROW_HEIGHT + ROW_GAP, 26)
+        label_row_h = self._label_width
+        time_span   = trace.time_max - trace.time_min
+        timeline_h  = time_span / self._ns_per_px
+        total_w     = col_w * total_cols + RULER_HEIGHT
+        total_h     = label_row_h + timeline_h
+        self.setSceneRect(0, 0, total_w, total_h)
+
+        self.addRect(QRectF(0, 0, RULER_HEIGHT, total_h),
+                     QPen(Qt.NoPen), QBrush(QColor("#2B2B2B"))).setZValue(-1)
+        self.addRect(QRectF(0, 0, total_w, label_row_h),
+                     QPen(Qt.NoPen), QBrush(QColor("#1E1E1E"))).setZValue(0)
+
+        _ruler = _RulerItem(trace, self._ns_per_px, total_w, total_h,
+                              font, trace.time_scale, self._show_grid,
+                              horiz=False, axis_offset=label_row_h)
+        _ruler.setZValue(0.5)
+        self.addItem(_ruler)
+
+        core_dot_colors = {"Core_0": "#FF9933", "Core_1": "#33BBFF",
+                           "Core_2": "#66FF88", "Core_3": "#FF66AA"}
+        _time_min  = trace.time_min
+        _px_per_ns = 1.0 / self._ns_per_px
+
+        col_idx = 0
+
+        # --- Core columns ------------------------------------------------
+        # Each core gets one summary column (always visible) plus optional
+        # per-task sub-columns that appear when the core is expanded.
+        for core in core_names:
+            expanded = self._core_expanded.get(core, True)
+            tasks    = core_tasks[core]
+            segs     = core_segs[core]
+            dot_c    = QColor(core_dot_colors.get(core, "#AAAAAA"))
+
+            x_left = RULER_HEIGHT + col_idx * col_w
+            self.addRect(QRectF(x_left, label_row_h, col_w, timeline_h),
+                         QPen(Qt.NoPen), QBrush(QColor("#2A2A3E"))).setZValue(0)
+
+            # Clickable core column header (▼/▶ expand toggle)
+            hdr_item = _CoreHeaderItem(
+                QRectF(x_left, 0, col_w, label_row_h), core, self)
+            hdr_item.setBrush(QBrush(QColor("#2B2B45")))
+            hdr_item.setPen(QPen(Qt.NoPen))
+            hdr_item.setZValue(4)
+            self.addItem(hdr_item)
+
+            # Arrow + core name (rotated -90 like task view labels)
+            arrow   = "▼" if expanded else "▶"
+            arr_txt = self.addSimpleText(arrow, font)
+            arr_txt.setBrush(QBrush(QColor("#9999CC")))
+            arr_txt.setRotation(-90)
+            arr_txt.setPos(x_left + col_w / 2 + fm.height() / 2, label_row_h - 4)
+            arr_txt.setZValue(5)
+            arr_txt.setAcceptedMouseButtons(Qt.NoButton)
+            arr_txt.setAcceptHoverEvents(False)
+
+            # Core summary segments batch
+            _seg_data_vc: list = []
+            _xs_vc:       list = []
+            for i_s, seg in enumerate(_lod_reduce(segs, _time_min, _px_per_ns, label_row_h)):
+                y1 = label_row_h + (seg.start - _time_min) * _px_per_ns
+                y2 = label_row_h + (seg.end   - _time_min) * _px_per_ns
+                h  = y2 - y1 if y2 - y1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
+                _seg_data_vc.append((
+                    QRectF(x_left + 1, y1, col_w - 2, h),
+                    _task_brush(seg.task), _task_pen_dark(seg.task), seg,
+                ))
+                _xs_vc.append((y1, y1 + h, i_s))
+            _batch_vc = _BatchRowItem(
+                QRectF(x_left, label_row_h, col_w, timeline_h),
+                _seg_data_vc, trace.time_scale,
+                xs=_xs_vc)
+            _batch_vc.setZValue(1)
+            self.addItem(_batch_vc)
+
+            col_idx += 1
+
+            if not expanded:
+                continue
+
+            task_seg_map = task_seg_map_by_core[core]
+
+            for sub_idx, task_name in enumerate(tasks):
+                x_left2 = RULER_HEIGHT + col_idx * col_w
+                sub_bg  = QColor("#1E1E2C") if sub_idx % 2 == 0 else QColor("#232330")
+                self.addRect(QRectF(x_left2, label_row_h, col_w, timeline_h),
+                             QPen(Qt.NoPen), QBrush(sub_bg)).setZValue(0)
+
+                _tmk       = task_merge_key(task_name)
+                is_hl      = (_tmk == self._locked_task)
+                _row_color = _task_colour(task_name)
+                self._task_row_rects.setdefault(_tmk, []).append(
+                    (QRectF(x_left2, label_row_h, col_w, timeline_h), _row_color))
+                if is_hl:
+                    hl_bg = QColor(_row_color.red(), _row_color.green(), _row_color.blue(), 35)
+                    self.addRect(QRectF(x_left2, label_row_h, col_w, timeline_h),
+                                 QPen(_row_color.lighter(160), 1.0), QBrush(hl_bg)).setZValue(0.9)
+
+                # Colour stripe in label area
+                stripe = self.addRect(
+                    QRectF(x_left2 + col_w // 2 - 2, 3, 3, label_row_h - 8),
+                    QPen(Qt.NoPen), QBrush(_row_color))
+                stripe.setZValue(5)
+
+                # Clickable sub-task column label
+                disp      = task_display_name(task_name)
+                sub_lbl_bg = _TaskLabelItem(
+                    QRectF(x_left2, 0, col_w, label_row_h), _tmk, self,
+                    tooltip_text=disp)
+                sub_lbl_bg.setZValue(4)
+                self.addItem(sub_lbl_bg)
+                lbl_color = QColor("#FFD700") if is_hl else QColor("#B0B0C0")
+                lbl_fnt   = _monospace_font(max(6, self._font_size - 1),
+                                            QFont.Bold) if is_hl else font_sm
+                t_lbl = self.addSimpleText(disp, lbl_fnt)
+                t_lbl.setBrush(QBrush(lbl_color))
+                t_lbl.setRotation(-90)
+                t_lbl.setPos(x_left2 + col_w / 2 + fm.height() / 2, label_row_h - 4)
+                t_lbl.setZValue(5)
+
+                _pen_hl_cs   = QPen(QColor("#FFFFFF"), 1.5)
+                _task_pen_cs = _task_pen_dark(task_name)
+                _task_br_cs  = _task_brush(task_name)
+                _seg_data_cs: list = []
+                _xs_cs:       list = []
+                for i_s, seg in enumerate(_lod_reduce(task_seg_map[task_name], _time_min, _px_per_ns, label_row_h)):
+                    y1 = label_row_h + (seg.start - _time_min) * _px_per_ns
+                    y2 = label_row_h + (seg.end   - _time_min) * _px_per_ns
+                    h  = y2 - y1 if y2 - y1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
+                    _seg_data_cs.append((
+                        QRectF(x_left2 + 1, y1, col_w - 2, h),
+                        _task_br_cs,
+                        _pen_hl_cs if is_hl else _task_pen_cs,
+                        seg,
+                    ))
+                    _xs_cs.append((y1, y1 + h, i_s))
+                _batch_cs = _BatchRowItem(
+                    QRectF(x_left2, label_row_h, col_w, timeline_h),
+                    _seg_data_cs, trace.time_scale,
+                    xs=_xs_cs)
+                _batch_cs.setZValue(1)
+                self.addItem(_batch_cs)
+
+                col_idx += 1
+
+        # --- STI columns ------------------------------------------------
+        for channel in sti_cols:
+            x_left = RULER_HEIGHT + col_idx * col_w
+            self.addRect(QRectF(x_left, label_row_h, col_w, timeline_h),
+                         QPen(Qt.NoPen), QBrush(QColor("#1A1A2E"))).setZValue(0)
+            lbl = self.addSimpleText(channel, font)
+            lbl.setBrush(QBrush(QColor("#88AABB")))
+            lbl.setRotation(-90)
+            lbl.setPos(x_left + col_w / 2 + fm.height() / 2, label_row_h - 4)
+            lbl.setZValue(3)
+            _x_ctr_vc   = x_left + col_w / 2
+            _sti_mrk_vc = [
+                (label_row_h + (ev.time - _time_min) * _px_per_ns, _sti_colour(ev.note), ev)
+                for ev in trace.sti_events_by_target.get(channel, [])
+            ]
+            _sti_itm_vc = _BatchStiItem(
+                QRectF(x_left, label_row_h, col_w, timeline_h),
+                _sti_mrk_vc, trace.time_scale, horizontal=False, axis=_x_ctr_vc)
+            _sti_itm_vc.setZValue(2)
+            self.addItem(_sti_itm_vc)
+            col_idx += 1
+
+        self.addRect(QRectF(0, 0, RULER_HEIGHT, label_row_h),
+                     QPen(Qt.NoPen), QBrush(QColor("#1A1A1A"))).setZValue(5)
+
+# ---------------------------------------------------------------------------
+# Custom graphics items
+# ---------------------------------------------------------------------------
+
+class _RulerItem(QGraphicsItem):
+    """Lazy ruler + optional grid-line painter.
+
+    Instead of pre-creating one QGraphicsItem per tick (which freezes the UI
+    at high zoom levels where step_ns is tiny), this single item computes and
+    draws only the ticks that fall inside option.exposedRect at paint time.
+    For a 1920 px viewport at 100 px/tick that is ~20 draw calls regardless
+    of trace length or zoom level.
+
+    Parameters
+    ----------
+    horiz : True  → time on X axis (horizontal layout)
+             False → time on Y axis (vertical layout)
+    axis_offset : pixels from scene origin to the time=0 coordinate
+                  (LABEL_WIDTH for horizontal, label_row_h for vertical)
+    """
+
+    def __init__(self, trace, ns_per_px: float,
+                 total_w: float, total_h: float,
+                 font: QFont, time_scale,
+                 show_grid: bool, horiz: bool,
+                 axis_offset: float):
+        super().__init__()
+        self._trace       = trace
+        self._npp         = ns_per_px
+        self._total_w     = total_w
+        self._total_h     = total_h
+        self._font        = font
+        self._time_scale  = time_scale
+        self._show_grid   = show_grid
+        self._horiz       = horiz
+        self._axis_offset = axis_offset
+        fm = QFontMetrics(font)
+        self._text_ascent = fm.ascent()
+        # Tell Qt to supply the real exposed rect, not the full bounding rect
+        self.setFlag(QGraphicsItem.ItemUsesExtendedStyleOption, True)
+        self.setCacheMode(QGraphicsItem.NoCache)
+
+    def boundingRect(self) -> QRectF:
+        return QRectF(0, 0, self._total_w, self._total_h)
+
+    def paint(self, painter, option, widget=None) -> None:
+        trace    = self._trace
+        npp      = self._npp
+        t_min    = trace.time_min
+        t_max    = trace.time_max
+        exposed  = option.exposedRect
+        step_ns  = _nice_grid_step(npp, 100)
+        off      = self._axis_offset
+
+        if self._horiz:
+            # Compute ns range that is currently exposed
+            px_lo    = max(off, exposed.left()) - off
+            px_hi    = min(self._total_w, exposed.right()) - off
+            ns_lo    = t_min + int(px_lo * npp) - step_ns
+            ns_hi    = t_min + int(px_hi * npp) + step_ns
+            ns_lo    = max(t_min, ns_lo)
+            ns_hi    = min(t_max + step_ns, ns_hi)
+            first    = (ns_lo // step_ns) * step_ns
+            t = first
+            while t <= ns_hi:
+                if t >= t_min:
+                    x = off + (t - t_min) / npp
+                    if self._show_grid:
+                        painter.setPen(QPen(QColor("#555555"), 0.8))
+                        painter.drawLine(QLineF(x, RULER_HEIGHT, x, self._total_h))
+                    painter.setPen(QPen(QColor("#888888"), 1))
+                    painter.drawLine(QLineF(x, RULER_HEIGHT - 6, x, RULER_HEIGHT))
+                    painter.setPen(QPen(QColor("#AAAAAA")))
+                    painter.setFont(self._font)
+                    painter.drawText(QPointF(x + 2, 2 + self._text_ascent),
+                                     _format_time(t, self._time_scale))
+                t += step_ns
+        else:
+            # Vertical layout: time on Y axis
+            py_lo    = max(off, exposed.top()) - off
+            py_hi    = min(self._total_h, exposed.bottom()) - off
+            ns_lo    = t_min + int(py_lo * npp) - step_ns
+            ns_hi    = t_min + int(py_hi * npp) + step_ns
+            ns_lo    = max(t_min, ns_lo)
+            ns_hi    = min(t_max + step_ns, ns_hi)
+            first    = (ns_lo // step_ns) * step_ns
+            t = first
+            while t <= ns_hi:
+                if t >= t_min:
+                    y = off + (t - t_min) / npp
+                    if self._show_grid:
+                        painter.setPen(QPen(QColor("#3A3A3A"), 0.5))
+                        painter.drawLine(QLineF(RULER_HEIGHT, y, self._total_w, y))
+                    painter.setPen(QPen(QColor("#888888"), 1))
+                    painter.drawLine(QLineF(RULER_HEIGHT - 6, y, RULER_HEIGHT, y))
+                    painter.setPen(QPen(QColor("#AAAAAA")))
+                    painter.setFont(self._font)
+                    painter.drawText(QPointF(2, y - 2 + self._text_ascent),
+                                     _format_time(t, self._time_scale))
+                t += step_ns
+
+class _BatchRowItem(QGraphicsItem):
+    """Renders all segments for one timeline row/column in a single paint() pass.
+
+    Replacing O(n_segments) individual QGraphicsItems with one item per row
+    reduces scene item count from tens-of-thousands to a handful, eliminating
+    the multi-second freeze when switching to the core view on large traces.
+
+    3-Tier Level-of-Detail (LOD) paint strategy
+    -------------------------------------------
+    Paint cost is bounded to O(visible_segments) at all zoom levels by
+    combining pre-merged coarse data with binary-search viewport clipping:
+
+    Tier 1 – micro  (lod < _PAINT_LOD_MICRO = 0.12)
+        Single tinted rectangle per row.  Used at far-out zoom where all
+        segments are sub-pixel.  O(1) draw calls.
+
+    Tier 2 – coarse (lod < _PAINT_LOD_COARSE = 0.45)
+        Uses _coarse_data (segments merged within 6 px) via binary search
+        on _coarse_xs to skip off-screen entries.  No pen outlines drawn.
+        O(visible_merged) draw calls.
+
+    Tier 3 – full detail
+        Full segment rectangles with pen outlines and optional inline text
+        labels.  Binary search on _xs limits paint to visible viewport
+        slice.  O(visible) draw calls.
+
+    Parameters
+    ----------
+    bounding_rect : QRectF
+        Full bounding box of the row/column in scene coordinates.
+    seg_data : list of (QRectF, QBrush, QPen, segment_or_None)
+        Pre-computed rectangle + style per segment.  Pass the segment object
+        for tooltip support; None suppresses tooltips for that entry.
+    time_scale : str
+        Forwarded to _format_time() for tooltip text.
+    label_font, label_fm, label_text
+        When provided, inline text labels are drawn inside wide-enough segments.
+    xs : list of (x1, x2, index) or None
+        Pre-computed coordinate pairs (start, end) and index into seg_data for
+        O(log n) binary-search hit-testing and viewport clipping.  If not
+        supplied, xs is derived from seg_data.x() at construction time.
+    """
+
+    def __init__(self, bounding_rect: QRectF, seg_data: list, time_scale: str,
+                 label_font=None, label_fm=None, label_text: str = "",
+                 presorted: bool = False, xs: Optional[list] = None):
+        super().__init__()
+        self._bounding_rect = bounding_rect
+        self._seg_data      = seg_data      # [(QRectF, QBrush, QPen, seg|None)]
+        self._time_scale    = time_scale
+        self._label_font    = label_font
+        self._label_fm      = label_fm
+        self._label_text    = label_text
+        self._label_adv     = (label_fm.horizontalAdvance(label_text) + 4
+                               if label_fm and label_text else 0)
+        # (x1, x2, index) list for O(log n) hover hit-testing.
+        # Callers that already know x1/x2 should pass xs= to avoid redundant
+        # r.x() / r.width() Qt bridge calls for every segment.
+        if xs is not None:
+            self._xs = xs        # already in start-time order from the builder
+        else:
+            _xs: list = []
+            for i, (r, _, _, s) in enumerate(seg_data):
+                if s is not None:
+                    rx = r.x()
+                    _xs.append((rx, rx + r.width(), i))
+            self._xs = _xs if presorted else sorted(_xs, key=lambda t: t[0])
+        self.setAcceptHoverEvents(bool(seg_data))
+        # Expose the actual clip rect to paint() so we can skip off-screen segments
+        self.setFlag(QGraphicsItem.ItemUsesExtendedStyleOption, True)
+        # Orientation: horizontal rows have wide bounding rect, vertical columns are tall
+        self._horiz = bounding_rect.width() >= bounding_rect.height()
+        # Pre-compute coarse LOD segment list (merge segments within 6 scene-px)
+        self._coarse_data = self._make_coarse_data()
+        # Pre-compute (start, end) coordinate pairs for coarse LOD binary-search clipping
+        horiz = self._horiz
+        self._coarse_xs: list = [
+            (r.x(), r.x() + r.width()) if horiz else (r.y(), r.y() + r.height())
+            for r, _, _, _ in self._coarse_data
+        ]
+
+    def _make_coarse_data(self) -> list:
+        """Pre-merge segments within 6 scene-px of each other for coarse LOD paint.
+
+        Returns a shorter list used when LOD < _PAINT_LOD_COARSE.  Each merged
+        run keeps the colour of its first segment; merged rects span from the
+        first start to the last end of the run.
+        """
+        data = self._seg_data
+        if len(data) <= 10:
+            return data   # not worth merging tiny lists
+        MERGE_PX = 6.0
+        horiz    = self._horiz
+        result   = []
+        r0, br0, pen0, seg0 = data[0]
+        s0 = r0.x()       if horiz else r0.y()
+        e0 = s0 + (r0.width() if horiz else r0.height())
+        for r, br, pen, seg in data[1:]:
+            s = r.x()     if horiz else r.y()
+            e = s + (r.width() if horiz else r.height())
+            if s <= e0 + MERGE_PX:
+                if e > e0:
+                    e0 = e
+            else:
+                result.append((
+                    QRectF(s0, r0.y(), e0 - s0, r0.height()) if horiz else
+                    QRectF(r0.x(), s0, r0.width(), e0 - s0),
+                    br0, pen0, seg0,
+                ))
+                r0, br0, pen0, seg0 = r, br, pen, seg
+                s0, e0 = s, e
+        result.append((
+            QRectF(s0, r0.y(), e0 - s0, r0.height()) if horiz else
+            QRectF(r0.x(), s0, r0.width(), e0 - s0),
+            br0, pen0, seg0,
+        ))
+        return result
+
+    def boundingRect(self) -> QRectF:
+        return self._bounding_rect
+
+    def paint(self, painter: QPainter, option, widget=None) -> None:
+        lod = QStyleOptionGraphicsItem.levelOfDetailFromTransform(
+                  painter.worldTransform())
+        painter.save()
+
+        if lod < _PAINT_LOD_MICRO:
+            # ---- Tier 1: micro LOD -----------------------------------------------
+            # Row is so compressed that individual segments are meaningless.
+            # Draw a single tinted activity bar to indicate presence.
+            if self._seg_data:
+                br   = self._bounding_rect
+                col  = QColor(self._seg_data[0][1].color())
+                col.setAlpha(160)
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QBrush(col))
+                if self._horiz:
+                    h = br.height()
+                    painter.drawRect(QRectF(br.x(), br.y() + h * 0.25,
+                                           br.width(), h * 0.50))
+                else:
+                    w = br.width()
+                    painter.drawRect(QRectF(br.x() + w * 0.25, br.y(),
+                                           w * 0.50, br.height()))
+            painter.restore()
+            return
+
+        exposed = option.exposedRect
+
+        if lod < _PAINT_LOD_COARSE:
+            # ---- Tier 2: coarse LOD ----------------------------------------------
+            # Use pre-merged coarse_data with binary-search viewport clipping.
+            cxs    = self._coarse_xs
+            coarse = self._coarse_data
+            if cxs:
+                clip_lo = exposed.left() if self._horiz else exposed.top()
+                clip_hi = exposed.right() if self._horiz else exposed.bottom()
+                lo_lo, lo_hi = 0, len(cxs)
+                while lo_lo < lo_hi:
+                    mid = (lo_lo + lo_hi) >> 1
+                    if cxs[mid][1] < clip_lo:
+                        lo_lo = mid + 1
+                    else:
+                        lo_hi = mid
+                lo_idx = lo_lo
+                h_lo, h_hi = lo_idx, len(cxs)
+                while h_lo < h_hi:
+                    mid = (h_lo + h_hi) >> 1
+                    if cxs[mid][0] <= clip_hi:
+                        h_lo = mid + 1
+                    else:
+                        h_hi = mid
+                coarse = coarse[lo_idx:h_lo]
+            painter.setPen(Qt.NoPen)
+            last_brush = None
+            for rect, brush, _, _seg in coarse:
+                if brush is not last_brush:
+                    painter.setBrush(brush)
+                    last_brush = brush
+                painter.drawRect(rect)
+            painter.restore()
+            return
+
+        # ---- Tier 3: full detail ------------------------------------------------
+        # Binary-search _xs to only paint segments that intersect exposedRect.
+        xs = self._xs
+        seg_slice: list
+        if xs:
+            clip_lo = exposed.left() if self._horiz else exposed.top()
+            clip_hi = exposed.right() if self._horiz else exposed.bottom()
+            # lo_idx: first segment whose right edge >= clip_lo (not fully off left)
+            lo_lo, lo_hi = 0, len(xs)
+            while lo_lo < lo_hi:
+                mid = (lo_lo + lo_hi) >> 1
+                if xs[mid][1] < clip_lo:
+                    lo_lo = mid + 1
+                else:
+                    lo_hi = mid
+            lo_idx = lo_lo
+            # hi_idx: first segment whose left edge > clip_hi (fully off right)
+            h_lo, h_hi = lo_idx, len(xs)
+            while h_lo < h_hi:
+                mid = (h_lo + h_hi) >> 1
+                if xs[mid][0] <= clip_hi:
+                    h_lo = mid + 1
+                else:
+                    h_hi = mid
+            seg_slice = self._seg_data[lo_idx:h_lo]
+        else:
+            seg_slice = self._seg_data
+        last_brush   = None
+        last_pen_key = None
+        for rect, brush, pen, _seg in seg_slice:
+            if brush is not last_brush:
+                painter.setBrush(brush)
+                last_brush = brush
+            pen_key = (pen.color().rgba(), pen.widthF(), int(pen.style()))
+            if pen_key != last_pen_key:
+                painter.setPen(pen)
+                last_pen_key = pen_key
+            painter.drawRect(rect)
+        # Inline text labels – second pass to minimise font/pen switches
+        if self._label_font and self._label_text and self._label_adv:
+            painter.setPen(QPen(QColor("#FFFFFF")))
+            painter.setFont(self._label_font)
+            txt = self._label_text
+            adv = self._label_adv
+            for rect, _, _, _seg in seg_slice:
+                if rect.width() > adv:
+                    painter.drawText(
+                        QRectF(rect.x() + 2, rect.y(),
+                               rect.width() - 4, rect.height()),
+                        Qt.AlignVCenter | Qt.AlignLeft,
+                        txt,
+                    )
+        painter.restore()
+
+    def hoverMoveEvent(self, event) -> None:
+        if not self._xs:
+            super().hoverMoveEvent(event)
+            return
+        x  = event.pos().x()
+        xs = self._xs
+        # Binary search: rightmost entry with x1 <= x
+        lo, hi = 0, len(xs)
+        while lo < hi:
+            mid = (lo + hi) >> 1
+            if xs[mid][0] <= x:
+                lo = mid + 1
+            else:
+                hi = mid
+        for k in range(max(0, lo - 3), min(len(xs), lo + 2)):
+            x1, x2, idx = xs[k]
+            if x1 <= x <= x2:
+                seg = self._seg_data[idx][3]
+                if seg is not None:
+                    dur = seg.end - seg.start
+                    tip = (f"<b>{seg.task}</b><br>"
+                           f"Core: {seg.core}<br>"
+                           f"Start: {_format_time(seg.start, self._time_scale)}<br>"
+                           f"End:   {_format_time(seg.end,   self._time_scale)}<br>"
+                           f"Duration: {_format_time(dur,    self._time_scale)}")
+                    _get_popup().show_at(event.screenPos(), tip)
+                    super().hoverMoveEvent(event)
+                    return
+        _get_popup().hide()
+        super().hoverMoveEvent(event)
+
+    def hoverLeaveEvent(self, event) -> None:
+        _get_popup().hide()
+        super().hoverLeaveEvent(event)
+
+class _BatchStiItem(QGraphicsItem):
+    """Renders all STI markers for one channel in a single paint() pass.
+
+    Replaces O(n_sti_events) individual _StiMarkerItem objects with one item
+    per channel row, reducing scene item count dramatically on large traces.
+    Binary search on pre-sorted marker positions limits paint work to the
+    visible viewport slice at any zoom level.
+    """
+
+    def __init__(self, bounding_rect: QRectF, markers: list, time_scale: str,
+                 horizontal: bool, axis: float):
+        """
+        markers  : list of (scene_coord, QColor, StiEvent) sorted by scene_coord.
+                   scene_coord = scene_x (horizontal) or scene_y (vertical).
+        axis     : fixed scene_y for horizontal rows; fixed scene_x for vertical.
+        """
+        super().__init__()
+        self._bounding_rect = bounding_rect
+        self._markers       = markers   # sorted by coord
+        self._time_scale    = time_scale
+        self._horizontal    = horizontal
+        self._axis          = axis
+        self.setAcceptHoverEvents(bool(markers))
+        self.setFlag(QGraphicsItem.ItemUsesExtendedStyleOption, True)
+        self.setCacheMode(QGraphicsItem.NoCache)
+
+    def boundingRect(self) -> QRectF:
+        return self._bounding_rect
+
+    def paint(self, painter: QPainter, option, widget=None) -> None:
+        if not self._markers:
+            return
+        exposed  = option.exposedRect
+        h        = STI_MARKER_H
+        w        = 2
+        markers  = self._markers
+        horiz    = self._horizontal
+
+        # Compute clip bounds with a small margin for the marker size
+        lo_bound = (exposed.left()  if horiz else exposed.top())    - h * 3
+        hi_bound = (exposed.right() if horiz else exposed.bottom()) + h * 3
+
+        # Binary search: first marker with coord >= lo_bound
+        lo_lo, lo_hi = 0, len(markers)
+        while lo_lo < lo_hi:
+            mid = (lo_lo + lo_hi) >> 1
+            if markers[mid][0] < lo_bound:
+                lo_lo = mid + 1
+            else:
+                lo_hi = mid
+        lo_idx = lo_lo
+
+        # Binary search: first marker with coord > hi_bound
+        h_lo, h_hi = lo_idx, len(markers)
+        while h_lo < h_hi:
+            mid = (h_lo + h_hi) >> 1
+            if markers[mid][0] <= hi_bound:
+                h_lo = mid + 1
+            else:
+                h_hi = mid
+
+        visible = markers[lo_idx:h_lo]
+        if not visible:
+            return
+
+        lod = QStyleOptionGraphicsItem.levelOfDetailFromTransform(
+                  painter.worldTransform())
+        axis = self._axis
+
+        painter.save()
+        if horiz:
+            if lod < _PAINT_LOD_COARSE:
+                # Coarse: thin vertical ticks instead of triangles
+                for x, color, _ev in visible:
+                    painter.setPen(QPen(color, 1.0))
+                    painter.drawLine(QLineF(x, axis - h, x, axis + h))
+            else:
+                last_color = None
+                for x, color, _ev in visible:
+                    if color is not last_color:
+                        painter.setBrush(QBrush(color))
+                        painter.setPen(QPen(color.darker(150), 0.5))
+                        last_color = color
+                    painter.drawPolygon(QPolygonF([
+                        QPointF(x,     axis - h),
+                        QPointF(x + w, axis + h),
+                        QPointF(x - w, axis + h),
+                    ]))
+        else:
+            if lod < _PAINT_LOD_COARSE:
+                for y, color, _ev in visible:
+                    painter.setPen(QPen(color, 1.0))
+                    painter.drawLine(QLineF(axis - h, y, axis + h, y))
+            else:
+                last_color = None
+                for y, color, _ev in visible:
+                    if color is not last_color:
+                        painter.setBrush(QBrush(color))
+                        painter.setPen(QPen(color.darker(150), 0.5))
+                        last_color = color
+                    painter.drawPolygon(QPolygonF([
+                        QPointF(axis - h, y),
+                        QPointF(axis + h, y - w),
+                        QPointF(axis + h, y + w),
+                    ]))
+        painter.restore()
+
+    def hoverMoveEvent(self, event) -> None:
+        if not self._markers:
+            super().hoverMoveEvent(event)
+            return
+        pos     = event.pos().x() if self._horizontal else event.pos().y()
+        markers = self._markers
+        HIT     = 8   # px hit-zone half-width
+        # Binary search for the nearest candidate
+        lo_lo, lo_hi = 0, len(markers)
+        while lo_lo < lo_hi:
+            mid = (lo_lo + lo_hi) >> 1
+            if markers[mid][0] < pos - HIT:
+                lo_lo = mid + 1
+            else:
+                lo_hi = mid
+        for k in range(max(0, lo_lo - 1), min(len(markers), lo_lo + 3)):
+            c, color, ev = markers[k]
+            if abs(c - pos) <= HIT:
+                tip = (f"<b>STI: {ev.note}</b><br>"
+                       f"Time: {_format_time(ev.time, self._time_scale)}<br>"
+                       f"Core: {ev.core}<br>"
+                       f"Target: {ev.target}<br>"
+                       f"Event: {ev.event}")
+                _get_popup().show_at(event.screenPos(), tip)
+                super().hoverMoveEvent(event)
+                return
+        _get_popup().hide()
+        super().hoverMoveEvent(event)
+
+    def hoverLeaveEvent(self, event) -> None:
+        _get_popup().hide()
+        super().hoverLeaveEvent(event)
+
+class _TaskLabelItem(QGraphicsRectItem):
+    """Clickable task-name label area in the timeline label column.
+
+    Clicking toggles the highlight for that task's segments on the timeline.
+    """
+
+    _HOVER_BRUSH     = QBrush(QColor(255, 255, 255, 18))
+    _HIGHLIGHT_BRUSH = QBrush(QColor(255, 215, 0, 45))
+
+    def __init__(self, rect: QRectF, task_name: str, tl_scene,
+                 tooltip_text: str = ""):
+        super().__init__(rect)
+        self._task_name   = task_name
+        self._tl_scene    = tl_scene
+        self._tooltip_text = tooltip_text
+        self.setAcceptedMouseButtons(Qt.LeftButton)
+        self.setAcceptHoverEvents(True)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setPen(QPen(Qt.NoPen))
+        self._update_brush()
+
+    def _update_brush(self) -> None:
+        if self._tl_scene._locked_task == self._task_name:
+            self.setBrush(self._HIGHLIGHT_BRUSH)
+        else:
+            self.setBrush(QBrush(Qt.transparent))
+
+    def mousePressEvent(self, event):
+        if self._tl_scene._locked_task == self._task_name:
+            self._tl_scene.set_highlighted_task(None)   # second click → cancel lock
+        else:
+            self._tl_scene.set_highlighted_task(self._task_name, locked=True)
+        event.accept()
+
+    def hoverEnterEvent(self, event):
+        if self._tl_scene._locked_task != self._task_name:
+            self.setBrush(self._HOVER_BRUSH)
+        if self._tooltip_text:
+            _get_popup().show_at(event.screenPos(), self._tooltip_text)
+        super().hoverEnterEvent(event)
+        # Defer rebuild so it never runs while this item's event handler is active
+        task = self._task_name
+        scene = self._tl_scene
+        QTimer.singleShot(0, lambda: scene.set_highlighted_task(task, locked=False))
+
+    def hoverMoveEvent(self, event):
+        if self._tooltip_text:
+            _get_popup().show_at(event.screenPos(), self._tooltip_text)
+        super().hoverMoveEvent(event)
+
+    def hoverLeaveEvent(self, event):
+        self._update_brush()
+        _get_popup().hide()
+        super().hoverLeaveEvent(event)
+        scene = self._tl_scene
+        QTimer.singleShot(0, scene.clear_hover)
+
+class _CoreHeaderItem(QGraphicsRectItem):
+    """Clickable label area for a core row — toggles expand/collapse."""
+
+    _NORMAL_BRUSH = QBrush(QColor("#2B2B45"))
+    _HOVER_BRUSH  = QBrush(QColor(100, 100, 220, 55))
+
+    def __init__(self, rect: QRectF, core_name: str, tl_scene):
+        super().__init__(rect)
+        self._core_name = core_name
+        self._tl_scene  = tl_scene
+        self.setAcceptedMouseButtons(Qt.LeftButton)
+        self.setAcceptHoverEvents(True)
+        self.setCursor(Qt.PointingHandCursor)
+
+    def mousePressEvent(self, event):
+        self._tl_scene.toggle_core(self._core_name)
+        event.accept()
+
+    def hoverEnterEvent(self, event):
+        self.setBrush(self._HOVER_BRUSH)
+        self.update()
+        super().hoverEnterEvent(event)
+
+    def hoverLeaveEvent(self, event):
+        self.setBrush(self._NORMAL_BRUSH)
+        self.update()
+        super().hoverLeaveEvent(event)
+
+# ---------------------------------------------------------------------------
+# LEGACY item classes – superseded by _BatchRowItem / _BatchStiItem
+# These classes are no longer instantiated by any builder.  They are retained
+# here for reference and as a fallback if individual-item rendering is ever
+# needed again (e.g. for a future SVG export path).
+# ---------------------------------------------------------------------------
+
+class _SegmentItem(QGraphicsRectItem):
+    """LEGACY: A coloured execution-segment rectangle with tooltip.
+
+    Superseded by _BatchRowItem which renders the entire row in one
+    paint() call.  No longer created by any scene builder.
+    """
+
+    def __init__(self, rect: QRectF, seg, time_scale: str):
+        super().__init__(rect)
+        self._seg = seg
+        self._time_scale = time_scale
+        self.setAcceptHoverEvents(True)
+
+    def hoverEnterEvent(self, event):
+        seg = self._seg
+        dur = seg.end - seg.start
+        tip = (f"<b>{seg.task}</b><br>"
+               f"Core: {seg.core}<br>"
+               f"Start: {_format_time(seg.start, self._time_scale)}<br>"
+               f"End:   {_format_time(seg.end,   self._time_scale)}<br>"
+               f"Duration: {_format_time(dur,    self._time_scale)}")
+        _get_popup().show_at(event.screenPos(), tip)
+        super().hoverEnterEvent(event)
+
+    def hoverLeaveEvent(self, event):
+        _get_popup().hide()
+        super().hoverLeaveEvent(event)
+
+class _StiMarkerItem(QGraphicsPolygonItem):
+    """LEGACY: A small triangle marker for STI events, with tooltip.
+
+    Superseded by _BatchStiItem which renders all markers for a channel in
+    one paint() call.  No longer created by any scene builder.
+    """
+
+    _HIT_HALF = 6   # px – invisible hit-area half-width around the marker
+
+    def __init__(self, ev, time_scale: str, horizontal: bool):
+        h = STI_MARKER_H
+        w = 2          # half-width – keeps the marker thin
+        if horizontal:
+            pts = QPolygonF([QPointF(0, -h), QPointF(w, h), QPointF(-w, h)])
+        else:
+            pts = QPolygonF([QPointF(-h, 0), QPointF(h, -w), QPointF(h, w)])
+        super().__init__(pts)
+        color = _sti_colour(ev.note)
+        self.setBrush(QBrush(color))
+        self.setPen(QPen(color.darker(150), 0.5))
+        self._ev = ev
+        self._time_scale = time_scale
+        self._horizontal = horizontal
+        self.setAcceptHoverEvents(True)
+
+    def shape(self) -> QPainterPath:
+        """Return a fat invisible hit rectangle so the mouse can easily land on it."""
+        p = QPainterPath()
+        h = STI_MARKER_H
+        hh = self._HIT_HALF
+        if self._horizontal:
+            p.addRect(QRectF(-hh, -h, hh * 2, h * 2))
+        else:
+            p.addRect(QRectF(-h, -hh, h * 2, hh * 2))
+        return p
+
+    def hoverEnterEvent(self, event):
+        ev = self._ev
+        tip = (f"<b>STI: {ev.note}</b><br>"
+               f"Time: {_format_time(ev.time, self._time_scale)}<br>"
+               f"Core: {ev.core}<br>"
+               f"Target: {ev.target}<br>"
+               f"Event: {ev.event}")
+        _get_popup().show_at(event.screenPos(), tip)
+        super().hoverEnterEvent(event)
+
+    def hoverLeaveEvent(self, event):
+        _get_popup().hide()
+        super().hoverLeaveEvent(event)
+
+# ===========================================================================
+# View
+# ===========================================================================
+
+class TimelineView(QGraphicsView):
+    """Pan + zoom QGraphicsView wrapping a TimelineScene."""
+
+    zoom_changed    = pyqtSignal(float)
+    cursors_changed = pyqtSignal(list)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._scene = TimelineScene(self)
+        self.setScene(self._scene)
+
+        # -- Qt render settings ------------------------------------------
+        self.setRenderHint(QPainter.Antialiasing, True)
+        self.setRenderHint(QPainter.TextAntialiasing, True)
+        self.setOptimizationFlags(
+            QGraphicsView.DontAdjustForAntialiasing |
+            QGraphicsView.DontSavePainterState
+        )
+        self.setViewportUpdateMode(QGraphicsView.BoundingRectViewportUpdate)
+        self.setDragMode(QGraphicsView.ScrollHandDrag)
+        self.setBackgroundBrush(QBrush(QColor("#1E1E1E")))
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
+        self.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
+        self.setResizeAnchor(QGraphicsView.AnchorViewCenter)
+
+        # -- Mouse interaction state -------------------------------------
+        # Tracks the press position to distinguish click vs drag; button to
+        # distinguish left / middle / right action paths in mouseReleaseEvent.
+        self._press_pos: Optional[QPoint] = None
+        self._press_btn: Qt.MouseButton = Qt.NoButton
+        self._drag_threshold    = 6    # px – min movement to enter pan mode
+        self._dragging_cursor_idx = -1  # index of cursor being dragged, or -1
+        self._cursor_drag_threshold = 8 # px – click-zone around a cursor line
+
+        # Label-column resize drag state
+        self._LABEL_RESIZE_ZONE   = 6   # px hit zone around the right border
+        self._label_resize_dragging = False
+        self._label_resize_start_x  = 0
+        self._label_resize_start_w  = 0
+
+        # Middle-button time-range selection (drag to select, release to zoom)
+        self._mid_press_ns: Optional[int]   = None   # ns at middle-press
+        self._mid_band_item = None                   # gray overlay QGraphicsRectItem
+
+        # -- Zoom debounce -----------------------------------------------
+        # Wheel events fire very rapidly; we accumulate the zoom factor and
+        # fire one rebuild on a short (60 ms) timer. This prevents janky
+        # intermediate renders during fast scrolling.
+        self._pinch_accum = 1.0
+        # macOS native pinch zoom — intercept events on the viewport widget
+        self.viewport().installEventFilter(self)
+        # Reposition frozen label-column items whenever the scene is rebuilt
+        self._scene.scene_rebuilt.connect(self._reposition_frozen)
+
+        # Debounce zoom: accumulate factor across rapid wheel events and
+        # fire a single rebuild once the user stops scrolling.
+        self._zoom_accum: float = 1.0
+        self._zoom_anchor_pos: Optional[QPoint] = None
+        self._zoom_timer = QTimer(self)
+        self._zoom_timer.setSingleShot(True)
+        self._zoom_timer.setInterval(60)   # ms – coalesce wheel events
+        self._zoom_timer.timeout.connect(self._flush_zoom)
+
+        # -- Fit / resize mode -------------------------------------------
+        # Fit-to-window mode: when True, every resize re-runs fit_to_width().
+        self._fit_mode: bool = False
+        self._resize_timer = QTimer(self)
+        self._resize_timer.setSingleShot(True)
+        self._resize_timer.setInterval(80)   # ms – debounce rapid resize events
+        self._resize_timer.timeout.connect(self._on_resize_timeout)
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def load_trace(self, trace: BtfTrace) -> None:
+        self._fit_mode = True   # new trace always starts in fit mode
+        vw = max(self.viewport().width(), 800)
+        self._scene.set_trace(trace, vw)
+        self.zoom_changed.emit(self._scene.ns_per_px)
+
+    def add_cursor_at_view_center(self) -> None:
+        vp = self.viewport().rect()
+        scene_pt = self.mapToScene(vp.center())
+        coord = scene_pt.x() if self._scene._horizontal else scene_pt.y()
+        ns = self._scene.scene_to_ns(coord)
+        self._scene.add_cursor(ns)
+        self.cursors_changed.emit(self._scene.cursor_times())
+
+    def clear_cursors(self) -> None:
+        self._scene.clear_cursors()
+        self.cursors_changed.emit([])
+
+    def set_view_mode(self, mode: str) -> None:
+        self._scene.set_view_mode(mode)
+
+    def scroll_to_ns(self, ns: int) -> None:
+        if self._scene._trace is None:
+            return
+        coord = self._scene.ns_to_scene_coord(ns)
+        cur_scene = self.mapToScene(self.viewport().rect().center())
+        if self._scene._horizontal:
+            self.centerOn(coord, cur_scene.y())
+        else:
+            self.centerOn(cur_scene.x(), coord)
+
+    def set_horizontal(self, h: bool) -> None:
+        self._scene.set_horizontal(h)
+
+    def set_show_sti(self, show: bool) -> None:
+        self._scene.set_show_sti(show)
+
+    def set_show_grid(self, show: bool) -> None:
+        self._scene.set_show_grid(show)
+
+    def set_font_size(self, size: int) -> None:
+        self._scene.set_font_size(size)
+        self.zoom_changed.emit(self._scene.ns_per_px)
+
+    def zoom_in(self) -> None:
+        self._fit_mode = False
+        self._zoom_accum *= 2.0
+        if self._zoom_anchor_pos is None:
+            self._zoom_anchor_pos = self.viewport().rect().center()
+        self._zoom_timer.start()
+
+    def zoom_out(self) -> None:
+        self._fit_mode = False
+        self._zoom_accum *= 0.5
+        if self._zoom_anchor_pos is None:
+            self._zoom_anchor_pos = self.viewport().rect().center()
+        self._zoom_timer.start()
+
+    def zoom_fit(self) -> None:
+        self._fit_mode = True
+        vw = max(self.viewport().width(), 800)
+        self._scene.fit_to_width(vw)
+        # Ensure the view transform is identity: all zoom is handled at the
+        # scene level (ns_per_px) so there must be no view-level scale active.
+        # fitInView() would set a persistent QTransform that is not needed here.
+        self.resetTransform()
+        self.zoom_changed.emit(self._scene.ns_per_px)
+
+    def reset_zoom(self) -> None:
+        self.resetTransform()
+
+    def save_image(self, filepath: str) -> None:
+        """Capture the current visible scene content as a PNG image.
+
+        QWidget.grab() renders exactly what is on screen.  When the scene is
+        smaller than the viewport, QGraphicsView centres it and leaves blank
+        margins; we crop those away by computing the scene rect in viewport
+        coordinates so the output contains only real content.
+        """
+        vp = self.viewport()
+        vp_rect = vp.rect()
+
+        # Map the scene bounding rect into viewport pixel coordinates.
+        scene_in_vp = self.mapFromScene(self._scene.sceneRect()).boundingRect()
+
+        # Intersect with the viewport rect to get the visible content area.
+        content_rect = vp_rect.intersected(scene_in_vp)
+
+        # Fall back to the full viewport if the intersection is empty.
+        capture_rect = content_rect if not content_rect.isEmpty() else vp_rect
+
+        pixmap = vp.grab(capture_rect)
+        if not pixmap.save(filepath, "PNG"):
+            raise OSError(f"QPixmap.save() failed for path: {filepath}")
+
+    def copy_image_to_clipboard(self) -> Optional[str]:
+        """Copy the current visible scene content as a PNG image to the clipboard.
+        Returns the tool name used ('xclip', 'xsel', 'wl-copy') or None for Qt fallback."""
+        vp = self.viewport()
+        vp_rect = vp.rect()
+        scene_in_vp = self.mapFromScene(self._scene.sceneRect()).boundingRect()
+        content_rect = vp_rect.intersected(scene_in_vp)
+        capture_rect = content_rect if not content_rect.isEmpty() else vp_rect
+        pixmap = vp.grab(capture_rect)
+
+        # Encode to PNG bytes once
+        buf = QByteArray()
+        buf_dev = QBuffer(buf)
+        buf_dev.open(QIODevice.WriteOnly)
+        pixmap.save(buf_dev, 'PNG')
+        buf_dev.close()
+        png_bytes = bytes(buf)
+
+        # On Linux prefer xclip / xsel / wl-copy — Qt clipboard is unreliable for images on X11/Wayland
+        import shutil, subprocess
+        for tool, args in [
+            ('xclip',   ['xclip',   '-selection', 'clipboard', '-t', 'image/png']),
+            ('xsel',    ['xsel',    '--clipboard', '--input']),
+            ('wl-copy', ['wl-copy', '--type', 'image/png']),
+        ]:
+            if shutil.which(tool):
+                proc = subprocess.Popen(args, stdin=subprocess.PIPE)
+                proc.communicate(png_bytes)
+                return tool
+
+        # Fallback: Qt clipboard (works on Windows/macOS, variable on Linux)
+        # Set both a pixmap (X11 PIXMAP atom, understood by xclipboard) and
+        # MIME image/png so modern apps can also paste.
+        clipboard = QApplication.clipboard()
+        mime = QMimeData()
+        mime.setData('image/png', buf)
+        mime.setImageData(pixmap.toImage())
+        clipboard.setMimeData(mime)
+        # Also set as pixmap directly for legacy X11 clipboard managers
+        clipboard.setPixmap(pixmap)
+        return None
+
+    # ------------------------------------------------------------------
+    # Mouse: click → place cursor, drag → pan
+    # ------------------------------------------------------------------
+    # mousePressEvent priority (in order of evaluation):
+    #   1. MiddleButton  → start time-range selection band
+    #   2. LeftButton near label-column border → start resize drag
+    #   3. LeftButton near a cursor line → start cursor drag
+    #   4. LeftButton inside label column → let _TaskLabelItem handle it
+    #   5. Anything else → default ScrollHandDrag (pan)
+    # ------------------------------------------------------------------
+
+    def mousePressEvent(self, event) -> None:
+        self._press_pos = event.pos()
+        self._press_btn = event.button()
+
+        if event.button() == Qt.MiddleButton:
+            if self._scene._trace is not None:
+                scene_pt = self.mapToScene(event.pos())
+                coord = scene_pt.x() if self._scene._horizontal else scene_pt.y()
+                self._mid_press_ns = self._scene.scene_to_ns(coord)
+                # Remove any stale band
+                if self._mid_band_item is not None:
+                    self._scene.removeItem(self._mid_band_item)
+                    self._mid_band_item = None
+                self.setDragMode(QGraphicsView.NoDrag)
+                event.accept()
+                return
+
+        if event.button() == Qt.LeftButton:
+            # --- Check if we're starting a label-column resize drag ---
+            if self._scene._horizontal:
+                lw = self._scene._label_width
+                if abs(event.pos().x() - lw) <= self._LABEL_RESIZE_ZONE:
+                    self._label_resize_dragging = True
+                    self._label_resize_start_x  = event.pos().x()
+                    self._label_resize_start_w  = lw
+                    self.setDragMode(QGraphicsView.NoDrag)
+                    self.viewport().setCursor(Qt.SizeHorCursor)
+                    event.accept()
+                    return
+
+            # --- Check if we're starting a cursor drag ---
+            scene_pt = self.mapToScene(event.pos())
+            th = self._cursor_drag_threshold
+            for idx, cursor_ns in enumerate(self._scene._cursor_times):
+                cursor_coord = self._scene.ns_to_scene_coord(cursor_ns)
+                press_coord  = scene_pt.x() if self._scene._horizontal else scene_pt.y()
+                if abs(press_coord - cursor_coord) <= th:
+                    self._dragging_cursor_idx = idx
+                    self.setDragMode(QGraphicsView.NoDrag)
+                    self.viewport().setCursor(Qt.SizeHorCursor
+                                              if self._scene._horizontal
+                                              else Qt.SizeVerCursor)
+                    event.accept()
+                    return
+
+            # --- Clicking inside the label column: disable ScrollHandDrag so
+            #     _TaskLabelItem (and _CoreHeaderItem) can receive the click.
+            #     If the click does NOT land on any _TaskLabelItem, cancel the
+            #     current highlight (click on empty label-column area). ---
+            lw = self._scene._label_width
+            in_vp_label = (event.pos().x() < lw if self._scene._horizontal
+                           else event.pos().y() < lw)
+            if in_vp_label:
+                self.setDragMode(QGraphicsView.NoDrag)
+                scene_pt2 = self.mapToScene(event.pos())
+                hits = [it for it in self._scene.items(scene_pt2)
+                        if isinstance(it, _TaskLabelItem)]
+                if not hits and self._scene._locked_task is not None:
+                    self._scene.set_highlighted_task(None)
+
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        # Dispatch in order of drag states (mutually exclusive):
+        #   1. Label-column resize drag  (_label_resize_dragging)
+        #   2. Hover cursor near label border  (show resize cursor hint)
+        #   3. Middle-button range selection  (_mid_press_ns)
+        #   4. Cursor drag  (_dragging_cursor_idx >= 0)
+        #   5. Default pan  (super().mouseMoveEvent)
+        #      + fallback: clear stale hover if mouse leaves label column
+
+        # Label-column resize drag
+        if self._label_resize_dragging:
+            delta   = event.pos().x() - self._label_resize_start_x
+            new_w   = self._label_resize_start_w + delta
+            self._scene.set_label_width(new_w)
+            self._reposition_frozen()
+            if self._fit_mode and self._scene._trace is not None:
+                vw = max(self.viewport().width(), 800)
+                self._scene.fit_to_width(vw)
+                self.zoom_changed.emit(self._scene.ns_per_px)
+            event.accept()
+            return
+
+        # Show resize cursor when hovering near the label border
+        if (self._scene._horizontal and
+                self._scene._trace is not None and
+                not self._label_resize_dragging and
+                self._mid_press_ns is None and
+                self._dragging_cursor_idx < 0):
+            lw = self._scene._label_width
+            if abs(event.pos().x() - lw) <= self._LABEL_RESIZE_ZONE:
+                self.viewport().setCursor(Qt.SizeHorCursor)
+            else:
+                self.viewport().unsetCursor()
+
+        # Middle-button drag: update gray selection band
+        if self._mid_press_ns is not None:
+            scene_pt = self.mapToScene(event.pos())
+            coord    = scene_pt.x() if self._scene._horizontal else scene_pt.y()
+            cur_ns   = self._scene.scene_to_ns(coord)
+            a_coord  = self._scene.ns_to_scene_coord(self._mid_press_ns)
+            b_coord  = self._scene.ns_to_scene_coord(cur_ns)
+            if a_coord > b_coord:
+                a_coord, b_coord = b_coord, a_coord
+            sr   = self._scene.sceneRect()
+            # Remove old band before drawing new one
+            if self._mid_band_item is not None:
+                self._scene.removeItem(self._mid_band_item)
+                self._mid_band_item = None
+            band_brush = QBrush(QColor(180, 180, 180, 55))
+            band_pen   = QPen(QColor(220, 220, 220, 120), 1.0)
+            if self._scene._horizontal:
+                rect = QRectF(a_coord, sr.y(), b_coord - a_coord, sr.height())
+            else:
+                rect = QRectF(sr.x(), a_coord, sr.width(), b_coord - a_coord)
+            self._mid_band_item = self._scene.addRect(rect, band_pen, band_brush)
+            self._mid_band_item.setZValue(50)
+            event.accept()
+            return
+
+        if self._dragging_cursor_idx >= 0:
+            scene_pt = self.mapToScene(event.pos())
+            coord    = scene_pt.x() if self._scene._horizontal else scene_pt.y()
+            ns       = self._scene.scene_to_ns(coord)
+            self._scene._cursor_times[self._dragging_cursor_idx] = ns
+            self._scene._draw_cursors()
+            self.cursors_changed.emit(self._scene.cursor_times())
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+        # After rebuild(), newly-created _TaskLabelItems never receive hoverEnterEvent
+        # so their hoverLeaveEvent never fires.  Use position tracking as a fallback:
+        # if _hovered_task is set but the mouse is no longer over the label column,
+        # clear the hover immediately.
+        if self._scene._hovered_task is not None:
+            lw = self._scene._label_width
+            in_label = (event.pos().x() < lw if self._scene._horizontal
+                        else event.pos().y() < lw)
+            if not in_label:
+                self._scene.clear_hover()
+
+    def mouseReleaseEvent(self, event) -> None:
+        # Dispatch in order (first match returns early):
+        #   1. Middle-button release  → zoom to dragged range
+        #   2. Label-column resize end
+        #   3. Cursor drag end
+        #   4. Left-click (delta ≤ threshold) inside timeline  → place cursor
+        #   5. Right-click inside timeline → remove cursor / clear all
+
+        # Middle-button release: zoom to selected range
+        if event.button() == Qt.MiddleButton and self._mid_press_ns is not None:
+            # Remove band overlay
+            if self._mid_band_item is not None:
+                self._scene.removeItem(self._mid_band_item)
+                self._mid_band_item = None
+            scene_pt  = self.mapToScene(event.pos())
+            coord     = scene_pt.x() if self._scene._horizontal else scene_pt.y()
+            end_ns    = self._scene.scene_to_ns(coord)
+            start_ns  = self._mid_press_ns
+            self._mid_press_ns = None
+            self.setDragMode(QGraphicsView.ScrollHandDrag)
+            if abs(end_ns - start_ns) > 0:
+                ns_lo, ns_hi = min(start_ns, end_ns), max(start_ns, end_ns)
+                vw = max(self.viewport().width(), 100)
+                self._fit_mode = False
+                self._scene.zoom_to_range(ns_lo, ns_hi, vw)
+                self.zoom_changed.emit(self._scene.ns_per_px)
+                # Scroll so the selected range is centred
+                center_ns   = (ns_lo + ns_hi) // 2
+                new_coord   = self._scene.ns_to_scene_coord(center_ns)
+                vp_center   = self.viewport().rect().center()
+                cur_scene   = self.mapToScene(vp_center)
+                if self._scene._horizontal:
+                    self.centerOn(new_coord, cur_scene.y())
+                else:
+                    self.centerOn(cur_scene.x(), new_coord)
+            event.accept()
+            return
+
+        if self._label_resize_dragging:
+            self._label_resize_dragging = False
+            self.setDragMode(QGraphicsView.ScrollHandDrag)
+            self.viewport().unsetCursor()
+            event.accept()
+            return
+
+        if self._dragging_cursor_idx >= 0:
+            self._dragging_cursor_idx = -1
+            self.setDragMode(QGraphicsView.ScrollHandDrag)
+            self.viewport().unsetCursor()
+            self.cursors_changed.emit(self._scene.cursor_times())
+            event.accept()
+            return
+
+        # Restore drag mode if it was temporarily disabled for a label click
+        self.setDragMode(QGraphicsView.ScrollHandDrag)
+        super().mouseReleaseEvent(event)
+        if self._press_pos is None:
+            return
+        delta = (event.pos() - self._press_pos).manhattanLength()
+        if delta <= self._drag_threshold:
+            # Use viewport coordinates — label column is always the leftmost
+            # _label_width pixels on screen regardless of horizontal scroll.
+            lw = self._scene._label_width
+            in_vp_label = (event.pos().x() < lw if self._scene._horizontal
+                           else event.pos().y() < lw)
+            if in_vp_label:
+                self._press_pos = None
+                return
+            scene_pt = self.mapToScene(event.pos())
+            coord = scene_pt.x() if self._scene._horizontal else scene_pt.y()
+            ns = self._scene.scene_to_ns(coord)
+            if event.button() == Qt.LeftButton:
+                self._scene.add_cursor(ns)
+                self.cursors_changed.emit(self._scene.cursor_times())
+            elif event.button() == Qt.RightButton:
+                if event.modifiers() & Qt.ShiftModifier:
+                    self._scene.clear_cursors()
+                else:
+                    self._scene.remove_nearest_cursor(ns)
+                self.cursors_changed.emit(self._scene.cursor_times())
+        self._press_pos = None
+
+    def contextMenuEvent(self, event) -> None:
+        menu = QMenu(self)
+        scene_pt = self.mapToScene(event.pos())
+        coord = scene_pt.x() if self._scene._horizontal else scene_pt.y()
+        ns = self._scene.scene_to_ns(coord)
+
+        menu.addAction(
+            f"Place cursor here  ({_format_time(ns, self._scene._trace.time_scale) if self._scene._trace else ''})",
+            lambda: (self._scene.add_cursor(ns),
+                     self.cursors_changed.emit(self._scene.cursor_times()))
+        )
+        if self._scene.cursor_times():
+            menu.addAction(
+                "Remove nearest cursor",
+                lambda: (self._scene.remove_nearest_cursor(ns),
+                         self.cursors_changed.emit(self._scene.cursor_times()))
+            )
+            menu.addAction(
+                "Clear all cursors",
+                lambda: (self._scene.clear_cursors(),
+                         self.cursors_changed.emit([]))
+            )
+        menu.exec_(event.globalPos())
+
+    # ------------------------------------------------------------------
+    # Wheel + touch events
+    # ------------------------------------------------------------------
+
+    def wheelEvent(self, event: QWheelEvent) -> None:
+        if event.modifiers() & Qt.ControlModifier:
+            angle  = event.angleDelta().y()
+            factor = 1.15 if angle > 0 else 1 / 1.15
+            # Accumulate factor; record anchor from the *first* event in the
+            # batch so the zoom stays anchored at the initial cursor position.
+            self._zoom_accum *= factor
+            if self._zoom_anchor_pos is None:
+                self._zoom_anchor_pos = QPoint(event.pos())
+            # Exit fit mode immediately so a resize event that fires inside
+            # the 60 ms debounce window does not snap back to fit-to-width.
+            self._fit_mode = False
+            self._zoom_timer.start()   # restart the debounce window
+            event.accept()
+        else:
+            dy  = event.angleDelta().y()
+            dx  = event.angleDelta().x()
+            hsb = self.horizontalScrollBar()
+            vsb = self.verticalScrollBar()
+            # Shift+scroll → pan horizontally; plain scroll → natural direction
+            if event.modifiers() & Qt.ShiftModifier:
+                if dy != 0:
+                    hsb.setValue(hsb.value() - dy)
+            else:
+                if dx != 0:
+                    hsb.setValue(hsb.value() - dx)
+                if dy != 0:
+                    vsb.setValue(vsb.value() - dy)
+
+    def _flush_zoom(self) -> None:
+        """Called by the debounce timer: apply all accumulated wheel-zoom at once."""
+        factor = self._zoom_accum
+        anchor = self._zoom_anchor_pos
+        self._zoom_accum       = 1.0
+        self._zoom_anchor_pos  = None
+        if factor != 1.0:
+            self._do_zoom(factor, anchor)
+
+    def eventFilter(self, obj, e) -> bool:
+        """Intercept native pinch-zoom gestures delivered to the viewport."""
+        if obj is self.viewport():
+            if e.type() == QEvent.Leave:
+                # Mouse left the viewport — ensure any hover highlight is cleared
+                self._scene.clear_hover()
+                return False
+            if e.type() == QEvent.NativeGesture:
+                # Qt.ZoomNativeGesture == 3 (macOS two-finger pinch)
+                _ZOOM_GESTURE = getattr(Qt, 'ZoomNativeGesture', 3)
+                try:
+                    if int(e.gestureType()) == int(_ZOOM_GESTURE):
+                        factor = 1.0 + e.value()
+                        if factor > 0.1:
+                            self._do_zoom(factor, e.pos())
+                        return True
+                except AttributeError:
+                    pass
+        return super().eventFilter(obj, e)
+
+    def event(self, e) -> bool:
+        return super().event(e)
+
+    def scrollContentsBy(self, dx: int, dy: int) -> None:
+        """Called by Qt on every scroll — reposition frozen label-column items."""
+        super().scrollContentsBy(dx, dy)
+        self._reposition_frozen()
+
+    def _reposition_frozen(self) -> None:
+        """Move all frozen label-column scene items so they stay at the left edge."""
+        if not self._scene._frozen_items:
+            return
+        scene_left = self.mapToScene(QPoint(0, 0)).x()
+        for item, orig_x in self._scene._frozen_items:
+            item.setX(scene_left + orig_x)
+
+    def resizeEvent(self, event) -> None:
+        """Reflow the timeline on every resize to preserve the current zoom ratio."""
+        super().resizeEvent(event)
+        if self._scene._trace is not None:
+            self._resize_timer.start()
+
+    def _on_resize_timeout(self) -> None:
+        """Debounced resize handler.
+
+        Fit mode  → rebuild at the new fit zoom so the trace always fills
+                    the viewport (no blank space, no scrollbar).
+        Zoom mode → ns_per_px is NEVER touched.  Only update _ns_per_px_fit
+                    so the zoom-out clamp reflects the new viewport size, and
+                    reposition the frozen label column items.
+        """
+        if self._scene._trace is None:
+            return
+        vw = max(self.viewport().width(), 800)
+        time_span = max(
+            self._scene._trace.time_max - self._scene._trace.time_min, 1)
+        avail   = max(vw - self._scene._label_width, 100)
+        new_fit = time_span / avail
+
+        if self._fit_mode:
+            self._scene._ns_per_px_fit = new_fit
+            self._scene._ns_per_px     = new_fit
+            self._scene.rebuild()
+            self.resetTransform()
+            self.zoom_changed.emit(self._scene.ns_per_px)
+        else:
+            # Zoom mode: preserve zoom level exactly.
+            self._scene._ns_per_px_fit = new_fit
+            self._reposition_frozen()
+
+    def _do_zoom(self, factor: float, vp_pos=None) -> None:
+        """Zoom by factor, keeping vp_pos (viewport coords) fixed on screen."""
+        self._fit_mode = False   # any manual zoom leaves fit mode
+        if vp_pos is None:
+            vp_pos = self.viewport().rect().center()
+        # Convert anchor viewport position to ns coordinate
+        scene_pt = self.mapToScene(vp_pos)
+        center_ns = self._scene.scene_to_ns(scene_pt.x())
+        # Compute the viewport-center offset from the anchor
+        vp_center = self.viewport().rect().center()
+        offset_x = vp_center.x() - vp_pos.x()
+
+        prev_ns_per_px = self._scene.ns_per_px
+        self._scene.zoom(factor)
+        if self._scene.ns_per_px == prev_ns_per_px:
+            return  # already at zoom limit – nothing changed, skip scroll/emit
+        self.zoom_changed.emit(self._scene.ns_per_px)
+
+        # After rebuild, scroll so center_ns reappears at the same viewport x
+        new_scene_x = self._scene.ns_to_scene_coord(center_ns)
+        cur_scene_y = self.mapToScene(vp_center).y()
+        self.centerOn(new_scene_x + offset_x, cur_scene_y)
+
+# ===========================================================================
+# Main Window
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# Cursor status-bar widget
+# ---------------------------------------------------------------------------
+
+class _CursorButton(QPushButton):
+    """Status-bar cursor badge.
+
+    • Click (no drag) → emits ``clicked`` as normal (jump to cursor).
+    • Drag out of the status bar → emits ``delete_requested`` so the caller
+      can remove the corresponding cursor.
+    """
+
+    delete_requested = pyqtSignal()
+    _DRAG_THRESHOLD  = 10
+
+    def __init__(self, text: str, color: str, parent: QWidget = None):
+        super().__init__(text, parent)
+        self._color     = color
+        self._press_pos: Optional[QPoint] = None
+        self._dragging  = False
+        self._normal_ss = self._make_style(color, delete=False)
+        self._delete_ss = self._make_style(color, delete=True)
+        self.setStyleSheet(self._normal_ss)
+        self.setCursor(Qt.PointingHandCursor)
+
+    @staticmethod
+    def _make_style(c: str, delete: bool = False) -> str:
+        bg  = "#5A1A1A" if delete else "#2A2A2A"
+        hbg = "#6A2A2A" if delete else "#3A3A3A"
+        bc  = "#FF4444" if delete else c
+        return (
+            f"QPushButton {{ color: {c}; background: {bg}; "
+            f"border: 1px solid {bc}; border-radius: 3px; "
+            f"padding: 1px 7px; font-size: {_UI_FONT_SIZE}pt; "
+            f"font-family: \"{_FIXED_FONT_FAMILY}\"; }}"
+            f"QPushButton:hover   {{ background: {hbg}; }}"
+            f"QPushButton:pressed {{ background: #4A4A4A; }}"
+        )
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            self._press_pos = event.pos()
+            self._dragging  = False
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._press_pos is not None and (event.buttons() & Qt.LeftButton):
+            if (event.pos() - self._press_pos).manhattanLength() > self._DRAG_THRESHOLD:
+                self._dragging = True
+                outside = self._outside_statusbar(event.globalPos())
+                self.setStyleSheet(self._delete_ss if outside else self._normal_ss)
+                self.setCursor(Qt.ForbiddenCursor if outside else Qt.ClosedHandCursor)
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton and self._dragging:
+            outside = self._outside_statusbar(event.globalPos())
+            self.setStyleSheet(self._normal_ss)
+            self.setCursor(Qt.PointingHandCursor)
+            self._press_pos = None
+            self._dragging  = False
+            if outside:
+                self.delete_requested.emit()
+            event.accept()
+            return
+        self._press_pos = None
+        self._dragging  = False
+        super().mouseReleaseEvent(event)
+
+    def _outside_statusbar(self, global_pos: QPoint) -> bool:
+        """True when *global_pos* lies outside the enclosing QStatusBar."""
+        w = self.parentWidget()
+        while w is not None:
+            if isinstance(w, QStatusBar):
+                return not w.rect().contains(w.mapFromGlobal(global_pos))
+            w = w.parentWidget()
+        # Fallback: check own rect
+        own_parent = self.parentWidget()
+        if own_parent:
+            return not own_parent.rect().contains(own_parent.mapFromGlobal(global_pos))
+        return True
+
+class CursorBarWidget(QWidget):
+    """A row of per-cursor _CursorButtons in the status bar."""
+    jump_requested          = pyqtSignal(int)   # ns – scroll timeline
+    cursor_delete_requested = pyqtSignal(int)   # ns – remove this cursor
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._layout = QHBoxLayout(self)
+        self._layout.setContentsMargins(2, 0, 2, 0)
+        self._layout.setSpacing(4)
+        self._buttons: list = []
+        self._delta_label: Optional[QLabel] = None
+
+    def rebuild(self, times: list, trace) -> None:
+        if not times or trace is None:
+            # Clear everything only when there are no cursors.
+            if self._buttons or self._delta_label is not None:
+                while self._layout.count():
+                    item = self._layout.takeAt(0)
+                    if item.widget():
+                        item.widget().deleteLater()
+                self._buttons.clear()
+                self._delta_label = None
+            return
+
+        ts     = trace.time_scale
+        colors = ["#FF6666", "#66FF99", "#6699FF", "#FFBB44"]
+        sorted_pairs = sorted(enumerate(times), key=lambda x: x[1])
+
+        if len(sorted_pairs) != len(self._buttons):
+            # Cursor count changed — full rebuild needed.
+            while self._layout.count():
+                item = self._layout.takeAt(0)
+                if item.widget():
+                    item.widget().deleteLater()
+            self._buttons.clear()
+            self._delta_label = None
+
+            for order, (orig_idx, t) in enumerate(sorted_pairs):
+                c          = colors[orig_idx % len(colors)]
+                label_text = f"C{orig_idx + 1}: {_format_time(t, ts)}"
+                ns_capture = t
+                btn = _CursorButton(label_text, c)
+                btn.clicked.connect(
+                    lambda checked=False, ns=ns_capture: self.jump_requested.emit(ns)
+                )
+                btn.delete_requested.connect(
+                    lambda ns=ns_capture: self.cursor_delete_requested.emit(ns)
+                )
+                btn.setToolTip(
+                    f"C{orig_idx + 1}: click to jump  |  drag out of status bar to delete"
+                )
+                self._layout.addWidget(btn)
+                self._buttons.append(btn)
+
+            if len(sorted_pairs) >= 2:
+                delta_parts = []
+                for i in range(1, len(sorted_pairs)):
+                    d = sorted_pairs[i][1] - sorted_pairs[i - 1][1]
+                    delta_parts.append(f"Δ{i}={_format_time(d, ts)}")
+                dlbl = QLabel("  " + "  ".join(delta_parts))
+                dlbl.setStyleSheet(
+                    f"color:#FFFFFF; font-size:{_UI_FONT_SIZE}pt;"
+                    f" font-family:\"{_FIXED_FONT_FAMILY}\"; padding:0 4px;"
+                )
+                self._layout.addWidget(dlbl)
+                self._delta_label = dlbl
+        else:
+            # Same number of cursors — update text in-place, no widget
+            # creation/deletion, no visual flash.
+            for order, (orig_idx, t) in enumerate(sorted_pairs):
+                btn = self._buttons[order]
+                btn.setText(f"C{orig_idx + 1}: {_format_time(t, ts)}")
+                # Reconnect jump target to the new timestamp.
+                try:
+                    btn.clicked.disconnect()
+                    btn.delete_requested.disconnect()
+                except RuntimeError:
+                    pass
+                ns_capture = t
+                btn.clicked.connect(
+                    lambda checked=False, ns=ns_capture: self.jump_requested.emit(ns)
+                )
+                btn.delete_requested.connect(
+                    lambda ns=ns_capture: self.cursor_delete_requested.emit(ns)
+                )
+
+            if self._delta_label is not None and len(sorted_pairs) >= 2:
+                delta_parts = []
+                for i in range(1, len(sorted_pairs)):
+                    d = sorted_pairs[i][1] - sorted_pairs[i - 1][1]
+                    delta_parts.append(f"Δ{i}={_format_time(d, ts)}")
+                self._delta_label.setText("  " + "  ".join(delta_parts))
+
+# ---------------------------------------------------------------------------
+# Legend widget
+# ---------------------------------------------------------------------------
+
+class _LegendTaskRow(QWidget):
+    """A single task row in the legend that emits a click signal."""
+
+    clicked   = pyqtSignal(str)   # task merge key
+
+    _BG_NORMAL  = "background: transparent;"
+    _BG_HOVER   = "background: rgba(255,255,255,18); border-radius:3px;"
+    _BG_LOCKED  = "background: rgba(255,215,0,45);  border-radius:3px;"
+
+    def __init__(self, task_name: str, display_name: str,
+                 color: QColor, parent=None):
+        super().__init__(parent)
+        self._task_name = task_name
+        self._locked    = False
+
+        hl = QHBoxLayout(self)
+        hl.setContentsMargins(2, 1, 2, 1)
+        hl.setSpacing(6)
+
+        swatch = QLabel()
+        swatch.setFixedSize(14, 14)
+        swatch.setStyleSheet(
+            f"background:{color.name()}; border-radius:2px; border:1px solid #555;"
+        )
+        hl.addWidget(swatch)
+
+        self._lbl = QLabel(display_name)
+        self._lbl.setStyleSheet("color:#D4D4D4;")
+        self._lbl.setToolTip(task_name)
+        hl.addWidget(self._lbl)
+        hl.addStretch()
+
+        self.setCursor(Qt.PointingHandCursor)
+        self.setAutoFillBackground(False)
+        self._set_bg(self._BG_NORMAL)
+
+    def _set_bg(self, css: str) -> None:
+        self.setStyleSheet(css)
+
+    def set_locked(self, locked: bool) -> None:
+        """Update the visual appearance to reflect click-lock state."""
+        self._locked = locked
+        self._set_bg(self._BG_LOCKED if locked else self._BG_NORMAL)
+
+    def enterEvent(self, event):
+        if not self._locked:
+            self._set_bg(self._BG_HOVER)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        if not self._locked:
+            self._set_bg(self._BG_NORMAL)
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit(self._task_name)
+        event.accept()   # prevent bubbling up to LegendWidget.mousePressEvent
+
+class LegendWidget(QWidget):
+    """Compact scrollable colour legend with click → timeline highlight."""
+
+    task_clicked     = pyqtSignal(str)   # click: task merge key
+    cancel_highlight = pyqtSignal()      # click on background → cancel highlight
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(6, 6, 6, 6)
+        self._layout.setSpacing(2)
+        self.setAutoFillBackground(True)
+        palette = self.palette()
+        palette.setColor(QPalette.Window, QColor("#1E1E1E"))
+        self.setPalette(palette)
+        self._task_rows: Dict[str, _LegendTaskRow] = {}   # raw name → row widget
+
+    def set_locked_task(self, task_name: Optional[str]) -> None:
+        """Visually mark *task_name* as click-locked (or clear all locks)."""
+        for raw, row in self._task_rows.items():
+            row.set_locked(raw == task_name)
+
+    def mousePressEvent(self, event) -> None:
+        """Click on the legend background (outside a task row) cancels highlight."""
+        self.cancel_highlight.emit()
+        super().mousePressEvent(event)
+
+    def rebuild(self, trace: BtfTrace) -> None:
+        self._task_rows.clear()
+        while self._layout.count():
+            item = self._layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        header = QLabel("<b style='color:#AAAAAA'>Tasks</b>")
+        header.setTextFormat(Qt.RichText)
+        self._layout.addWidget(header)
+
+        # Deduplicate by merge key so each logical task appears only once
+        _seen_mk: dict = {}
+        for _raw in trace.tasks:
+            _mk = task_merge_key(_raw)
+            if _mk not in _seen_mk:
+                _seen_mk[_mk] = _raw
+        for _mk, _rep_raw in _seen_mk.items():
+            color = _task_colour(_rep_raw)
+            display = task_display_name(_rep_raw)
+            row = _LegendTaskRow(_mk, display, color)
+            row.clicked.connect(self.task_clicked)
+            self._task_rows[_mk] = row
+            self._layout.addWidget(row)
+
+        if trace.sti_channels:
+            sep = QFrame()
+            sep.setFrameShape(QFrame.HLine)
+            sep.setStyleSheet("color:#444;")
+            self._layout.addWidget(sep)
+
+            hdr2 = QLabel("<b style='color:#88AABB'>STI Events</b>")
+            hdr2.setTextFormat(Qt.RichText)
+            self._layout.addWidget(hdr2)
+
+            seen_notes = sorted({ev.note for ev in trace.sti_events if ev.note})
+            for note in seen_notes:
+                color = _sti_colour(note)
+                row_w = QWidget()
+                hl    = QHBoxLayout(row_w)
+                hl.setContentsMargins(0, 0, 0, 0)
+                hl.setSpacing(6)
+                swatch = QLabel("▼")
+                swatch.setStyleSheet(f"color:{color.name()};")
+                swatch.setFixedWidth(14)
+                hl.addWidget(swatch)
+                lbl = QLabel(note)
+                lbl.setStyleSheet("color:#D4D4D4;")
+                hl.addWidget(lbl)
+                hl.addStretch()
+                self._layout.addWidget(row_w)
+
+        self._layout.addStretch()
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+class _WheelSpinBox(QSpinBox):
+    """SpinBox that responds to scroll wheel without requiring keyboard focus."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFocusPolicy(Qt.StrongFocus)
+
+    def wheelEvent(self, event) -> None:
+        # Always handle the wheel regardless of focus state
+        delta = event.angleDelta().y()
+        if delta > 0:
+            self.setValue(self.value() + 1)
+        elif delta < 0:
+            self.setValue(self.value() - 1)
+        event.accept()
+
+# ---------------------------------------------------------------------------
+# Main Window
+# ---------------------------------------------------------------------------
+
+class MainWindow(QMainWindow):
+
+    def __init__(self):
+        super().__init__()
+        self._trace: Optional[BtfTrace] = None
+        self._current_file: str = ""
+        self._settings = QSettings("btf_viewer", "btf_viewer")
+
+        self.setWindowTitle("BTF Trace Viewer")
+        self.resize(1280, 720)
+        self._is_dark = True
+        self._apply_dark_theme()
+        self._build_ui()
+        self._build_menus()
+        self._build_toolbar()
+        self._build_status_bar()
+        self._view_mode = "task"
+
+        # Apply saved font size before loading a file
+        saved_fs = self._settings.value("font_size", _FONT_SIZE, int)
+        if saved_fs != _FONT_SIZE:
+            self._view.set_font_size(saved_fs)
+
+        # Only restore the last file if no CLI argument was supplied;
+        # when a path is given on the command line, main() will open it instead.
+        if len(sys.argv) <= 1:
+            last = self._settings.value("last_file", "")
+            if last and os.path.isfile(last):
+                self._open_file(last)
+
+    def _apply_dark_theme(self) -> None:
+        app     = QApplication.instance()
+
+        # Set the application-wide UI font to 12 pt (menus, toolbar, status bar).
+        # Timeline task labels use _FONT_SIZE (12 pt) independently.
+        base_font = app.font()
+        base_font.setPointSize(_UI_FONT_SIZE)
+        app.setFont(base_font)
+        _ui_fs = f"{_UI_FONT_SIZE}pt"   # reused in stylesheet below
+
+        palette = QPalette()
+        dark    = QColor("#1E1E1E")
+        darker  = QColor("#121212")
+        mid     = QColor("#2D2D2D")
+        light   = QColor("#D4D4D4")
+        accent  = QColor("#007ACC")
+        palette.setColor(QPalette.Window,          dark)
+        palette.setColor(QPalette.WindowText,      light)
+        palette.setColor(QPalette.Base,            darker)
+        palette.setColor(QPalette.AlternateBase,   mid)
+        palette.setColor(QPalette.Text,            light)
+        palette.setColor(QPalette.Button,          mid)
+        palette.setColor(QPalette.ButtonText,      light)
+        palette.setColor(QPalette.Highlight,       accent)
+        palette.setColor(QPalette.HighlightedText, QColor("#FFFFFF"))
+        palette.setColor(QPalette.Link,            accent)
+        palette.setColor(QPalette.ToolTipBase,     QColor("#252526"))
+        palette.setColor(QPalette.ToolTipText,     light)
+        app.setPalette(palette)
+        app.setStyleSheet(f"""
+            QToolTip  {{ background:#252526; color:#D4D4D4; border:1px solid #555;
+                         padding:4px; font-size:{_ui_fs}; }}
+            QMenuBar  {{ background:#2D2D2D; color:#D4D4D4; font-size:{_ui_fs}; }}
+            QMenuBar::item:selected {{ background:#007ACC; }}
+            QMenu     {{ background:#252526; color:#D4D4D4; font-size:{_ui_fs}; }}
+            QMenu::item:selected {{ background:#007ACC; }}
+            QToolBar  {{ background:#2D2D2D; border:none; spacing:4px;
+                         font-size:{_ui_fs}; }}
+            QToolButton {{ font-size:{_ui_fs}; }}
+            QStatusBar  {{ background:#1E1E1E; color:#AAAAAA; font-size:{_ui_fs}; }}
+            QLabel      {{ font-size:{_ui_fs}; }}
+            QCheckBox   {{ font-size:{_ui_fs}; }}
+            QSpinBox    {{ font-size:{_ui_fs}; }}
+            QDockWidget::title {{ background:#2D2D2D; color:#AAAAAA;
+                                  padding:4px; font-size:{_ui_fs}; }}
+            QScrollArea {{ background:#1E1E1E; border:none; }}
+        """)
+
+    def _apply_light_theme(self) -> None:
+        app = QApplication.instance()
+        _ui_fs = f"{_UI_FONT_SIZE}pt"
+
+        palette = QPalette()
+        bg      = QColor("#F5F5F5")
+        bg_base = QColor("#FFFFFF")
+        mid     = QColor("#E0E0E0")
+        text    = QColor("#1E1E1E")
+        accent  = QColor("#007ACC")
+        palette.setColor(QPalette.Window,          bg)
+        palette.setColor(QPalette.WindowText,      text)
+        palette.setColor(QPalette.Base,            bg_base)
+        palette.setColor(QPalette.AlternateBase,   mid)
+        palette.setColor(QPalette.Text,            text)
+        palette.setColor(QPalette.Button,          mid)
+        palette.setColor(QPalette.ButtonText,      text)
+        palette.setColor(QPalette.Highlight,       accent)
+        palette.setColor(QPalette.HighlightedText, QColor("#FFFFFF"))
+        palette.setColor(QPalette.Link,            accent)
+        palette.setColor(QPalette.ToolTipBase,     QColor("#FFFFCC"))
+        palette.setColor(QPalette.ToolTipText,     text)
+        app.setPalette(palette)
+        app.setStyleSheet(f"""
+            QToolTip  {{ background:#FFFFCC; color:#1E1E1E; border:1px solid #AAA;
+                         padding:4px; font-size:{_ui_fs}; }}
+            QMenuBar  {{ background:#E0E0E0; color:#1E1E1E; font-size:{_ui_fs}; }}
+            QMenuBar::item:selected {{ background:#007ACC; color:#FFFFFF; }}
+            QMenu     {{ background:#F5F5F5; color:#1E1E1E; font-size:{_ui_fs}; }}
+            QMenu::item:selected {{ background:#007ACC; color:#FFFFFF; }}
+            QToolBar  {{ background:#E0E0E0; border:none; spacing:4px;
+                         font-size:{_ui_fs}; }}
+            QToolButton {{ font-size:{_ui_fs}; }}
+            QStatusBar  {{ background:#F5F5F5; color:#555555; font-size:{_ui_fs}; }}
+            QLabel      {{ font-size:{_ui_fs}; }}
+            QCheckBox   {{ font-size:{_ui_fs}; }}
+            QSpinBox    {{ font-size:{_ui_fs}; }}
+            QDockWidget::title {{ background:#E0E0E0; color:#555555;
+                                  padding:4px; font-size:{_ui_fs}; }}
+            QScrollArea {{ background:#F5F5F5; border:none; }}
+        """)
+
+    def _toggle_theme(self) -> None:
+        self._is_dark = not self._is_dark
+        if self._is_dark:
+            self._apply_dark_theme()
+            self._act_theme.setText("Switch to &Light Theme")
+        else:
+            self._apply_light_theme()
+            self._act_theme.setText("Switch to &Dark Theme")
+
+    def _build_ui(self) -> None:
+        # --- Central widget: TimelineView ---
+        self._view = TimelineView(self)
+        self._view.zoom_changed.connect(self._on_zoom_changed)
+        self._view.cursors_changed.connect(self._on_cursors_changed)
+        self._view.cursors_changed.connect(
+            lambda times: self._cursor_bar.rebuild(times, self._trace)
+        )
+        self.setCentralWidget(self._view)
+
+        # --- Legend dock (right panel) ---
+        self._legend = LegendWidget()
+        scroll = QScrollArea()
+        scroll.setWidget(self._legend)
+        scroll.setWidgetResizable(True)
+        scroll.setMinimumWidth(180)
+        scroll.setMaximumWidth(260)
+        dock = QDockWidget("Legend", self)
+        dock.setWidget(scroll)
+        dock.setFeatures(QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetMovable)
+        self.addDockWidget(Qt.RightDockWidgetArea, dock)
+        self._legend_dock = dock
+
+        # --- Signal wiring: legend ↔ scene highlight sync ---
+        # Legend click → toggle locked highlight
+        sc = self._view._scene
+        self._legend.task_clicked.connect(self._on_legend_task_clicked)
+        self._legend.cancel_highlight.connect(
+            lambda: sc.set_highlighted_task(None)
+        )
+        # Keep legend lock-highlight in sync whenever the scene highlight changes
+        sc.highlight_changed.connect(
+            lambda t, lk: self._legend.set_locked_task(t if lk else None)
+        )
+
+        self.setAcceptDrops(True)
+
+    def _build_menus(self) -> None:
+        mb = self.menuBar()
+
+        # --- File menu ---
+        fm = mb.addMenu("&File")
+        self._act_open = fm.addAction("&Open…", self._on_open, QKeySequence.Open)
+        fm.addSeparator()
+        self._act_save_img = fm.addAction("Save as &Image (PNG)…", self._on_save_image, "Ctrl+S")
+        self._act_save_img.setEnabled(False)
+        self._act_copy_img = fm.addAction("&Copy Image to Clipboard", self._on_copy_image, "Ctrl+Shift+C")
+        self._act_copy_img.setEnabled(False)
+        fm.addSeparator()
+        fm.addAction("E&xit", self.close, QKeySequence.Quit)
+
+        # --- View menu (layout, visibility, zoom, mode, theme) ---
+        vm = mb.addMenu("&View")
+        self._act_horiz = vm.addAction("&Horizontal layout", lambda: self._set_orientation(True))
+        self._act_vert  = vm.addAction("&Vertical layout",   lambda: self._set_orientation(False))
+        self._act_horiz.setCheckable(True)
+        self._act_vert.setCheckable(True)
+        self._act_horiz.setChecked(True)
+        vm.addSeparator()
+        self._act_show_sti  = vm.addAction("Show &STI events", lambda: self._toggle_sti())
+        self._act_show_grid = vm.addAction("Show &grid lines", lambda: self._toggle_grid())
+        self._act_show_sti.setCheckable(True)
+        self._act_show_sti.setChecked(True)
+        self._act_show_grid.setCheckable(True)
+        self._act_show_grid.setChecked(True)
+        vm.addSeparator()
+        vm.addAction("&Zoom In",        self._view.zoom_in,   QKeySequence.ZoomIn)
+        vm.addAction("Zoom &Out",       self._view.zoom_out,  QKeySequence.ZoomOut)
+        vm.addAction("&Fit to window",  self._view.zoom_fit,  "Ctrl+0")
+        vm.addAction("&Reset zoom",     self._view.reset_zoom,"Ctrl+R")
+        vm.addSeparator()
+        self._act_legend = vm.addAction("Show &Legend")
+        self._act_legend.setShortcut("Ctrl+L")
+        self._act_legend.setCheckable(True)
+        self._act_legend.setChecked(True)
+        self._act_legend.toggled.connect(self._legend_dock.setVisible)
+        self._legend_dock.visibilityChanged.connect(self._act_legend.setChecked)
+        vm.addSeparator()
+        self._act_task_view = vm.addAction("Task &View", lambda: self._set_view_mode("task"))
+        self._act_core_view = vm.addAction("&Core View", lambda: self._set_view_mode("core"))
+        self._act_task_view.setCheckable(True)
+        self._act_core_view.setCheckable(True)
+        self._act_task_view.setChecked(True)
+        vm.addSeparator()
+        self._act_theme = vm.addAction("Switch to &Light Theme", self._toggle_theme)
+
+        # --- Cursors menu ---
+        cm = mb.addMenu("&Cursors")
+        cm.addAction("Place cursor at centre\tC",
+                     self._view.add_cursor_at_view_center, "C")
+        cm.addAction("Clear all cursors\tShift+C",
+                     self._view.clear_cursors, "Shift+C")
+        cm.addSeparator()
+        cm.addAction(
+            "Tip: Left-click on timeline to place cursor\n"
+            "Right-click on timeline to remove nearest cursor"
+        ).setEnabled(False)
+
+        # --- Help menu ---
+        hm = mb.addMenu("&Help")
+        hm.addAction("&About", self._on_about)
+
+    def _build_toolbar(self) -> None:
+        tb = self.addToolBar("Main")
+        tb.setMovable(False)
+        tb.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+
+        # --- File actions ---
+        tb.addAction("📂 Open",    self._on_open)
+        tb.addAction("💾 Save PNG", self._on_save_image)
+        tb.addAction("📋 Copy",     self._on_copy_image)
+        tb.addSeparator()
+
+        # --- Layout and zoom ---
+        tb.addAction("↔ Horizontal", lambda: self._set_orientation(True))
+        tb.addAction("↕ Vertical",   lambda: self._set_orientation(False))
+        tb.addSeparator()
+        tb.addAction("🔍+",     self._view.zoom_in)
+        tb.addAction("🔍-",     self._view.zoom_out)
+        tb.addAction("⊡ Fit",   self._view.zoom_fit)
+        tb.addAction("⟳ Reset", self._view.reset_zoom)
+        tb.addSeparator()
+
+        # --- View mode toggle (Task / Core) ---
+        self._tb_task_btn = tb.addAction("Task View", lambda: self._set_view_mode("task"))
+        self._tb_core_btn = tb.addAction("Core View", lambda: self._set_view_mode("core"))
+        self._tb_task_btn.setCheckable(True)
+        self._tb_core_btn.setCheckable(True)
+        self._tb_task_btn.setChecked(True)
+        tb.addSeparator()
+
+        # --- Cursor controls ---
+        tb.addAction("│C Place cursor", self._view.add_cursor_at_view_center)
+        tb.addAction("✕ Clear cursors", self._view.clear_cursors)
+        tb.addSeparator()
+        self._tb_legend_btn = tb.addAction("📋 Legend", lambda: self._act_legend.toggle())
+        self._tb_legend_btn.setCheckable(True)
+        self._tb_legend_btn.setChecked(True)
+        self._tb_legend_btn.setToolTip("Show / hide the Legend panel  (Ctrl+L)")
+        self._legend_dock.visibilityChanged.connect(self._tb_legend_btn.setChecked)
+        tb.addSeparator()
+
+        # --- Toolbar widgets: zoom label, STI/grid checkboxes, font spinbox ---
+        self._zoom_label = QLabel("Zoom: —")
+        self._zoom_label.setStyleSheet("color:#AAAAAA; padding: 0 8px;")
+        tb.addWidget(self._zoom_label)
+
+        self._sti_cb = QCheckBox("STI events")
+        self._sti_cb.setChecked(True)
+        self._sti_cb.stateChanged.connect(lambda s: self._view.set_show_sti(bool(s)))
+        self._sti_cb.setStyleSheet("color:#D4D4D4;")
+        tb.addWidget(self._sti_cb)
+
+        self._grid_cb = QCheckBox("Grid")
+        self._grid_cb.setChecked(True)
+        self._grid_cb.stateChanged.connect(lambda s: self._view.set_show_grid(bool(s)))
+        self._grid_cb.setStyleSheet("color:#D4D4D4;")
+        tb.addWidget(self._grid_cb)
+        tb.addSeparator()
+
+        font_lbl = QLabel(" Font:")
+        font_lbl.setStyleSheet("color:#AAAAAA;")
+        tb.addWidget(font_lbl)
+        self._font_spin = _WheelSpinBox()
+        self._font_spin.setRange(6, 24)
+        self._font_spin.setValue(self._settings.value("font_size", _FONT_SIZE, int))
+        self._font_spin.setFixedWidth(52)
+        self._font_spin.setToolTip("Label font size (pt): scroll wheel to adjust")
+        self._font_spin.setStyleSheet(
+            "QSpinBox { background:#2D2D2D; color:#D4D4D4; border:1px solid #555; "
+            "padding:1px 2px; } "
+            "QSpinBox::up-button, QSpinBox::down-button { width:14px; }"
+        )
+        self._font_spin.valueChanged.connect(self._on_font_size_changed)
+        tb.addWidget(self._font_spin)
+
+    def _build_status_bar(self) -> None:
+        sb = self.statusBar()
+
+        # --- Status labels (file path, event stats) ---
+        self._status_file  = QLabel("No file loaded")
+        self._status_stats = QLabel("")
+
+        # --- Cursor badge bar ---
+        self._cursor_bar   = CursorBarWidget()
+        self._cursor_bar.jump_requested.connect(self._view.scroll_to_ns)
+        self._cursor_bar.cursor_delete_requested.connect(self._on_cursor_delete)
+
+        # --- Hint text (interaction guide) ---
+        self._status_hint  = QLabel(
+            "Left-click: place cursor  |  Drag cursor: move it  |  "
+            "Right-click: remove  |  Ctrl+Wheel / Pinch: zoom  |  Scroll: pan"
+        )
+        self._status_hint.setStyleSheet("color:#666;")
+        sb.addWidget(self._status_file)
+        sb.addPermanentWidget(self._cursor_bar)
+        sb.addPermanentWidget(self._status_stats)
+        sb.addPermanentWidget(self._status_hint)
+
+    # ------------------------------------------------------------------
+    # Slots / callbacks
+    # ------------------------------------------------------------------
+
+    def _on_open(self) -> None:
+        last_dir = self._settings.value("last_dir", os.path.expanduser("~"))
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open BTF trace", last_dir,
+            "BTF files (*.btf);;All files (*)"
+        )
+        if path:
+            self._open_file(path)
+
+    def _open_file(self, path: str) -> None:
+        # Show a wait cursor and status message while parsing
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        self._status_file.setText(f"  Loading {os.path.basename(path)}…")
+        QApplication.processEvents()
+
+        # Parse in a background thread so the UI stays responsive
+        class _ParseThread(QThread):
+            done    = pyqtSignal(object)   # BtfTrace
+            errored = pyqtSignal(str)
+            def __init__(self, p: str):
+                super().__init__()
+                self._path = p
+            def run(self):
+                try:
+                    self.done.emit(parse_btf(self._path))
+                except Exception as exc:
+                    self.errored.emit(str(exc))
+
+        def _on_done(trace):
+            QApplication.restoreOverrideCursor()
+            self._parse_thread = None
+            self._trace = trace
+            self._current_file = path
+            self._settings.setValue("last_file", path)
+            self._settings.setValue("last_dir",  os.path.dirname(path))
+            self._view.load_trace(trace)
+            self._legend.rebuild(trace)
+            self._act_save_img.setEnabled(True)
+            self._act_copy_img.setEnabled(True)
+            fname = os.path.basename(path)
+            ts    = _format_time(trace.time_max - trace.time_min, trace.time_scale)
+            n_seg = len(trace.segments)
+            n_sti = len(trace.sti_events)
+            self.setWindowTitle(f"BTF Trace Viewer – {fname}")
+            self._status_file.setText(f"  {fname}  |  span: {ts}")
+            self._status_stats.setText(
+                f"tasks: {len(trace.tasks)}  "
+                f"segments: {n_seg}  "
+                f"STI events: {n_sti}  |  "
+            )
+
+        def _on_error(msg):
+            QApplication.restoreOverrideCursor()
+            self._parse_thread = None
+            self._status_file.setText("  No file loaded")
+            QMessageBox.critical(self, "Parse Error",
+                                 f"Failed to parse:\n{path}\n\n{msg}")
+
+        thread = _ParseThread(path)
+        thread.done.connect(_on_done)
+        thread.errored.connect(_on_error)
+        # Keep a reference so the thread is not garbage-collected
+        self._parse_thread = thread
+        thread.start()
+
+    def _on_save_image(self) -> None:
+        if self._trace is None:
+            return
+        base = os.path.splitext(self._current_file)[0] if self._current_file else "trace"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Image", base + ".png",
+            "PNG images (*.png);;All files (*)"
+        )
+        if path:
+            try:
+                self._view.save_image(path)
+                self.statusBar().showMessage(f"Saved: {path}", 4000)
+            except Exception as exc:
+                QMessageBox.critical(self, "Save Error", f"Could not save image:\n{exc}")
+
+    def _on_copy_image(self) -> None:
+        if self._trace is None:
+            return
+        import shutil, sys
+        used_tool = self._view.copy_image_to_clipboard()
+        if used_tool:
+            self.statusBar().showMessage(f"Image copied to clipboard (via {used_tool})", 3000)
+        elif sys.platform.startswith('linux'):
+            # No external tool found — Qt clipboard used (may not work on all setups)
+            missing = [t for t in ('xclip', 'xsel', 'wl-copy') if not shutil.which(t)]
+            if missing:
+                self.statusBar().showMessage(
+                    "Image copied (Qt). If paste fails, install xclip:  sudo apt install xclip", 6000)
+            else:
+                self.statusBar().showMessage("Image copied to clipboard", 3000)
+        else:
+            self.statusBar().showMessage("Image copied to clipboard", 3000)
+
+    def _set_orientation(self, horizontal: bool) -> None:
+        self._act_horiz.setChecked(horizontal)
+        self._act_vert.setChecked(not horizontal)
+        self._view.set_horizontal(horizontal)
+
+    def _set_view_mode(self, mode: str) -> None:
+        self._view_mode = mode
+        is_task = (mode == "task")
+        self._act_task_view.setChecked(is_task)
+        self._act_core_view.setChecked(not is_task)
+        self._tb_task_btn.setChecked(is_task)
+        self._tb_core_btn.setChecked(not is_task)
+        self._view.set_view_mode(mode)
+
+    def _toggle_sti(self) -> None:
+        state = self._act_show_sti.isChecked()
+        self._sti_cb.setChecked(state)
+        self._view.set_show_sti(state)
+
+    def _toggle_grid(self) -> None:
+        state = self._act_show_grid.isChecked()
+        self._grid_cb.setChecked(state)
+        self._view.set_show_grid(state)
+
+    def _on_font_size_changed(self, size: int) -> None:
+        self._view.set_font_size(size)
+        self._settings.setValue("font_size", size)
+
+    def _on_zoom_changed(self, ns_per_px: float) -> None:
+        if ns_per_px >= 1_000_000:
+            z = f"{ns_per_px/1_000_000:.1f} ms/px"
+        elif ns_per_px >= 1_000:
+            z = f"{ns_per_px/1_000:.1f} µs/px"
+        else:
+            z = f"{ns_per_px:.1f} ns/px"
+        self._zoom_label.setText(f"Zoom: {z}")
+
+    def _on_cursors_changed(self, times) -> None:
+        pass
+
+    def _on_cursor_delete(self, ns: int) -> None:
+        """Remove the cursor whose timestamp matches *ns* (from a badge drag-out)."""
+        self._view._scene.remove_nearest_cursor(ns)
+        self._view.cursors_changed.emit(self._view._scene.cursor_times())
+
+    def _on_legend_task_clicked(self, task: str) -> None:
+        """Toggle click-locked highlight for *task* from the Legend panel."""
+        sc = self._view._scene
+        if sc._locked_task == task:
+            sc.set_highlighted_task(None)          # second click on same → cancel
+        else:
+            sc.set_highlighted_task(task, locked=True)
+
+    def _on_about(self) -> None:
+        if self._is_dark:
+            c_title = "#7EC8E3"
+            c_head  = "#FFD700"
+            c_key   = "#7EC8E3"
+            c_body  = "#D4D4D4"
+        else:
+            c_title = "#005A8E"
+            c_head  = "#B8860B"
+            c_key   = "#005A8E"
+            c_body  = "#333333"
+        QMessageBox.about(
+            self, "About BTF Trace Viewer",
+            f"<h3 style='color:{c_title};'>BTF Trace Viewer</h3>"
+            f"<p style='color:{c_body};'>RTOS context-switch visualiser for .btf files.</p>"
+            f"<p style='color:{c_body};'><b style='color:{c_head};'>View modes:</b><br>"
+            f"• <b style='color:{c_key};'>Task View</b> – one row per task<br>"
+            f"• <b style='color:{c_key};'>Core View</b> – one expandable row per CPU core</p>"
+            f"<p style='color:{c_body};'><b style='color:{c_head};'>Controls:</b><br>"
+            f"• <b style='color:{c_key};'>Left-click</b> – place cursor  |  <b style='color:{c_key};'>Drag</b> cursor line – move it<br>"
+            f"• <b style='color:{c_key};'>Right-click</b> – remove cursor  |  <b style='color:{c_key};'>Status badge</b> – jump to cursor<br>"
+            f"• <b style='color:{c_key};'>Ctrl+Wheel</b> / pinch – zoom  |  <b style='color:{c_key};'>Scroll</b> – pan<br>"
+            f"• <b style='color:{c_key};'>Ctrl+0</b> – fit  |  <b style='color:{c_key};'>Ctrl+R</b> – reset zoom</p>"
+        )
+
+    def dragEnterEvent(self, event) -> None:
+        if event.mimeData().hasUrls():
+            if any(u.toLocalFile().endswith(".btf") for u in event.mimeData().urls()):
+                event.acceptProposedAction()
+
+    def dropEvent(self, event) -> None:
+        for url in event.mimeData().urls():
+            path = url.toLocalFile()
+            if path.endswith(".btf"):
+                self._open_file(path)
+                break
+
+# ===========================================================================
+# Entry point
+# ===========================================================================
+
+def main() -> None:
+    # On Windows with display scaling > 100 %, AA_EnableHighDpiScaling causes
+    # Qt to magnify everything (window size AND font pt values) by the scale
+    # factor.  Pinning QT_FONT_DPI to 96 keeps font sizes at their intended
+    # 96-DPI metrics while still letting widget geometry scale correctly.
+    os.environ.setdefault("QT_FONT_DPI", "96")
+
+    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps,   True)
+
+    app = QApplication(sys.argv)
+    app.setApplicationName("BTF Trace Viewer")
+    app.setOrganizationName("btf_viewer")
+
+    win = MainWindow()
+    win.show()
+
+    if len(sys.argv) > 1:
+        path = sys.argv[1]
+        if os.path.isfile(path):
+            win._open_file(path)
+
+    sys.exit(app.exec_())
+
+if __name__ == "__main__":
+    main()

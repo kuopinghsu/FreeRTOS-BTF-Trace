@@ -18,7 +18,7 @@ pip install PyQt5
 ## Usage
 
 ```bash
-python btfviewer.py [trace.btf]
+python btf_viewer.py [trace.btf]
 ```
 
 A file can also be opened via **File -> Open** (`Ctrl+O`) or dragged onto the window.
