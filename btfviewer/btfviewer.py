@@ -416,7 +416,8 @@ class TimelineScene(QGraphicsScene):
         super().__init__(parent)
         self._trace: Optional[BtfTrace] = None
         self._horizontal = True
-        self._ns_per_px   = NS_PER_PX_DEFAULT
+        self._ns_per_px     = NS_PER_PX_DEFAULT
+        self._ns_per_px_fit = float('inf')   # zoom-out limit: ns/px at fit-to-view
         self._show_sti    = True
         self._show_grid   = True
         self._view_mode   = "task"       # "task" or "core"
@@ -440,6 +441,7 @@ class TimelineScene(QGraphicsScene):
         time_span = max(trace.time_max - trace.time_min, 1)
         avail = max(viewport_width - LABEL_WIDTH, 100)
         self._ns_per_px = time_span / avail
+        self._ns_per_px_fit = self._ns_per_px   # record fit-to-view limit
         self.rebuild()
 
     def set_horizontal(self, horizontal: bool) -> None:
@@ -479,8 +481,13 @@ class TimelineScene(QGraphicsScene):
         self.rebuild()
 
     def zoom(self, factor: float, center_ns: Optional[int] = None) -> None:
-        self._ns_per_px /= factor
-        self._ns_per_px = max(self._ns_per_px, 1e-4)
+        new_val = self._ns_per_px / factor
+        # Clamp: don't zoom in past 1:1 (NS_PER_PX_DEFAULT) or
+        # zoom out past fit-to-view level.
+        new_val = max(NS_PER_PX_DEFAULT, min(new_val, self._ns_per_px_fit))
+        if new_val == self._ns_per_px:
+            return  # already at limit – skip expensive rebuild
+        self._ns_per_px = new_val
         self.rebuild()
 
     def fit_to_width(self, viewport_width: int) -> None:
@@ -489,6 +496,7 @@ class TimelineScene(QGraphicsScene):
         time_span = max(self._trace.time_max - self._trace.time_min, 1)
         avail = max(viewport_width - LABEL_WIDTH, 100)
         self._ns_per_px = time_span / avail
+        self._ns_per_px_fit = self._ns_per_px   # update fit-to-view limit
         self.rebuild()
 
     # ------------------------------------------------------------------
@@ -1439,6 +1447,7 @@ class TimelineView(QGraphicsView):
         self.setBackgroundBrush(QBrush(QColor("#1E1E1E")))
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
+        self.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.AnchorViewCenter)
 
@@ -1724,7 +1733,10 @@ class TimelineView(QGraphicsView):
         vp_center = self.viewport().rect().center()
         offset_x = vp_center.x() - vp_pos.x()
 
+        prev_ns_per_px = self._scene.ns_per_px
         self._scene.zoom(factor)
+        if self._scene.ns_per_px == prev_ns_per_px:
+            return  # already at zoom limit – nothing changed, skip scroll/emit
         self.zoom_changed.emit(self._scene.ns_per_px)
 
         # After rebuild, scroll so center_ns reappears at the same viewport x
@@ -2442,6 +2454,12 @@ class MainWindow(QMainWindow):
 # ===========================================================================
 
 def main() -> None:
+    # On Windows with display scaling > 100 %, AA_EnableHighDpiScaling causes
+    # Qt to magnify everything (window size AND font pt values) by the scale
+    # factor.  Pinning QT_FONT_DPI to 96 keeps font sizes at their intended
+    # 96-DPI metrics while still letting widget geometry scale correctly.
+    os.environ.setdefault("QT_FONT_DPI", "96")
+
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps,   True)
 
