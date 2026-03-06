@@ -23,7 +23,7 @@ A related approach using [BareCTF](https://barectf.org/) and [Eclipse Trace Comp
 ```
 FreeRTOS-Trace/   # Trace instrumentation library (btf_trace.c, btf_trace.h, btf_port.h)
 tools/            # gentrace: converts the binary dump to BTF or VCD
-btfviewer/        # Interactive BTF viewer (PyQt5 desktop application)
+BTFViewer/        # Interactive BTF viewer (PyQt5 desktop application)
 Demo/             # Example project targeting the srv32 RISC-V ISS
 tracedata/        # Sample trace files (example.btf, example.vcd)
 ```
@@ -51,16 +51,16 @@ This compiles the demo, executes it on the srv32 ISS, and writes `tracedata/trac
 
 ### BTF Viewer (built-in)
 
-An interactive Gantt-style viewer is included in the `btfviewer/` directory.
+An interactive Gantt-style viewer is included in the `BTFViewer/` directory.
 
 **Requirements:** Python 3.8+ and PyQt5 ≥ 5.15
 
 ```bash
 pip install PyQt5
-python btfviewer/btfviewer.py tracedata/example.btf
+python BTFViewer/btf_viewer.py tracedata/example.btf
 ```
 
-See [`btfviewer/README.md`](btfviewer/README.md) for the full feature reference (zoom, cursors, export, etc.).
+See [`BTFViewer/README.md`](BTFViewer/README.md) for the full feature reference (zoom, cursors, export, etc.).
 
 <img src="images/example.png" alt="BTF Viewer screenshot" width=640>
 
@@ -154,7 +154,7 @@ $ tools/gentrace -v dump.bin trace.vcd
 
 ### 8. Open the trace
 
-- **BTF:** open with `btfviewer/btfviewer.py` or Eclipse Trace Compass.
+- **BTF:** open with `BTFViewer/btf_viewer.py` or Eclipse Trace Compass.
 - **VCD:** open with GTKWave or any compatible VCD viewer.
 
 ---
