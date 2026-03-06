@@ -1,6 +1,6 @@
 # BTF Trace Viewer
 
-A PyQt5-based interactive visualiser for FreeRTOS context-switch traces in **Best Trace Format** (`.btf`), inspired by [Percepio Tracealyzer](https://percepio.com/tracealyzer/).
+A PyQt5-based interactive visualiser for FreeRTOS context-switch traces in **Best Trace Format** (`.btf`).
 
 ## Screenshot
 
@@ -9,7 +9,7 @@ A PyQt5-based interactive visualiser for FreeRTOS context-switch traces in **Bes
 ## Requirements
 
 - Python 3.8+
-- PyQt5 ≥ 5.15
+- PyQt5 >= 5.15
 
 ```bash
 pip install PyQt5
@@ -21,86 +21,146 @@ pip install PyQt5
 python btfviewer.py [trace.btf]
 ```
 
-A file can also be opened via **File → Open** or dragged onto the window.
+A file can also be opened via **File -> Open** (`Ctrl+O`) or dragged onto the window.
 
-## Features
+---
 
-### View Modes
+## View Modes
+
 | Mode | Description |
 |------|-------------|
-| **Task View** | One row per task across all cores; core tint applied to bars |
+| **Task View** | One row per task across all cores; core tint applied to segment bars |
 | **Core View** | One expandable row per CPU core; bars coloured by running task |
 
-In **Core View**, click a core's label to **expand** (▼) or **collapse** (▶) its per-task sub-rows.
+In **Core View**, click a core label to **expand** or **collapse** its per-task sub-rows.
 
-### Orientation
-- **Horizontal** (default) — time runs left → right
-- **Vertical** — time runs top → bottom
+## Orientation
 
-### Zoom & Pan
+- **Horizontal** (default) - time runs left to right
+- **Vertical** - time runs top to bottom
+
+Switch orientation using the toolbar or **View -> Horizontal layout / Vertical layout**.
+
+## Task Labels
+
+Regular task labels show the task name and task ID, for example `MyTask[3]`.
+IDLE and TICK tasks show their bare name (`IDLE`, `IDLE0`, `IDLE1`, etc.) without an ID suffix.
+IDLE tasks always render in grey; each IDLE task on a different core gets a distinct shade.
+
+---
+
+## Task Highlight
+
+Hovering or clicking a task name in the label column or Legend panel highlights all timeline segments for that task.
+
 | Action | Effect |
 |--------|--------|
-| `Ctrl + Scroll wheel` | Zoom in / out |
-| Two-finger pinch (macOS) | Zoom in / out |
-| Scroll wheel / trackpad swipe | Pan left / right |
-| `Ctrl+0` | Fit entire trace to window |
-| `Ctrl+R` | Reset zoom to 1:1 |
-| Toolbar 🔍+ / 🔍- | Zoom in / out by 2× |
+| Hover over a task label or Legend row | Transiently highlights that task's segments |
+| Hover leave | Removes the transient highlight and restores any persistent highlight |
+| Click a task label or Legend row | Locks the highlight on that task persistently |
+| Click the same locked task again | Cancels the persistent highlight |
+| Click empty area in the label column | Cancels the persistent highlight |
+| Click empty area in the Legend panel | Cancels the persistent highlight |
 
-### Cursors (up to 4)
+When a task is persistently highlighted, its row gets a colour tint, its label turns gold and bold,
+and its segment bars show a white border. Hovering another task while a lock is active shows both
+highlights at the same time.
+
+---
+
+## Cursors
+
+Up to 4 cursors can be placed on the timeline. Delta times between consecutive cursors are shown on
+the timeline and in the status bar.
+
+### Placing and Moving
+
 | Action | Effect |
 |--------|--------|
-| Left-click on timeline | Place a cursor |
+| Left-click on the timeline area | Place a new cursor at that time position |
 | Drag a cursor line | Move it to a new time position |
-| Right-click on timeline | Remove the nearest cursor |
-| `Shift + Right-click` | Clear all cursors |
-| `C` | Place cursor at viewport centre |
+| `C` (keyboard) | Place a cursor at the viewport centre |
+
+### Removing
+
+| Action | Effect |
+|--------|--------|
+| Right-click on the timeline area | Remove the nearest cursor |
 | `Shift+C` | Clear all cursors |
-| Click C1/C2… badge in status bar | Scroll view to that cursor |
+| Drag a status-bar cursor badge out of the status bar | Remove that specific cursor |
 
-Delta times (Δ) between consecutive cursors are shown both on the timeline and in the status bar.
+### Navigating
 
-### Export
-**File → Save as Image (PNG)** saves exactly what is visible in the current viewport as a PNG file.
+| Action | Effect |
+|--------|--------|
+| Click a `C1` / `C2` / ... badge in the status bar | Scroll the view to that cursor |
 
-### Other
-- Hover over any bar or STI marker for a detailed tooltip
-- Toggle **STI events** and **grid lines** from the toolbar or View menu
-- Colour **legend** panel (View → Show Legend)
-- Drag & drop a `.btf` file onto the window to open it
+---
 
-## BTF Format
+## Legend Panel
 
-Lines follow the pattern:
+The Legend lists every task with its colour swatch and `Name[id]` label.
 
-```
-timestamp, source, src_inst, event_type, target, tgt_inst, event[, note]
-```
+- **View -> Show Legend** (`Ctrl+L`) or the toolbar **Legend** button toggles the panel.
+- The panel is a dockable window; it can be detached, closed, and re-opened.
+- Hover and click Legend rows to highlight tasks using the same rules as the label column.
 
-| `event_type` | Meaning |
-|---|---|
-| `T` | Task context-switch (`resume` / `preempt`) |
-| `STI` | Software trace item (mutex take/give, etc.) |
-| `C` | Core event (e.g. `set_frequence`) |
+---
 
-## File Structure
+## Zoom and Pan
 
-```
-btfviewer/
-├── btfviewer.py    # Single-file application (parser + widget + window)
-└── trace.btf       # Example FreeRTOS trace
-```
+| Action | Effect |
+|--------|--------|
+| `Ctrl` + Scroll wheel | Zoom in or out centred on the pointer |
+| Two-finger pinch (macOS) | Zoom in or out |
+| Scroll wheel / trackpad swipe | Pan horizontally (or vertically in Vertical mode) |
+| `Ctrl+0` | Fit entire trace to window |
+| `Ctrl+R` | Reset zoom to default |
+| Toolbar zoom+ / zoom- buttons | Zoom in or out by 2x |
+
+---
+
+## Export
+
+**File -> Save as Image (PNG)** (`Ctrl+S`) saves the current viewport as a PNG file.
+
+---
 
 ## Keyboard Shortcuts
 
 | Key | Action |
 |-----|--------|
-| `Ctrl+O` | Open file |
-| `Ctrl+S` | Save SVG |
+| `Ctrl+O` | Open `.btf` file |
+| `Ctrl+S` | Save viewport as PNG |
 | `Ctrl++` | Zoom in |
 | `Ctrl+-` | Zoom out |
 | `Ctrl+0` | Fit to window |
 | `Ctrl+R` | Reset zoom |
-| `C` | Place cursor at centre |
+| `Ctrl+L` | Toggle Legend panel |
+| `C` | Place cursor at viewport centre |
 | `Shift+C` | Clear all cursors |
 | `Ctrl+Q` | Quit |
+
+---
+
+## Other
+
+- Hover over any segment bar or STI marker for a detailed tooltip.
+- Toggle STI events and grid lines from the toolbar or View menu.
+- Drag and drop a `.btf` file onto the window to open it.
+
+---
+
+## BTF Format
+
+Each line follows the pattern:
+
+```
+timestamp, source, src_inst, event_type, target, tgt_inst, event[, note]
+```
+
+| event_type | Meaning |
+|---|---|
+| `T` | Task context-switch (`resume` / `preempt`) |
+| `STI` | Software trace item (mutex take/give, trigger, etc.) |
+| `C` | Core event (e.g. `set_frequence`) |

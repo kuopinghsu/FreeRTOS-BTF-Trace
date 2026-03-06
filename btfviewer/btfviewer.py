@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 from PyQt5.QtCore import (
-    QEvent, QPoint, QPointF, QRectF, QSettings, Qt, pyqtSignal,
+    QEvent, QPoint, QPointF, QRectF, QSettings, Qt, QTimer, pyqtSignal,
 )
 from PyQt5.QtGui import (
     QBrush, QColor, QFont, QFontDatabase, QFontMetrics, QKeySequence, QPainter,
@@ -94,16 +94,18 @@ def parse_task_name(raw: str) -> Tuple[Optional[int], Optional[int], str]:
     return None, None, raw
 
 def task_display_name(raw: str) -> str:
-    """Short display name: strip [coreid/taskid] prefix if present."""
-    _, _, name = parse_task_name(raw)
+    """Short display name: 'Name[id]' for regular tasks; bare name for IDLE/TICK."""
+    _, task_id, name = parse_task_name(raw)
+    if task_id is not None and not re.match(r"^IDLE\d*$|^TICK$", name):
+        return f"{name}[{task_id}]"
     return name
 
 def task_sort_key(raw: str) -> Tuple[int, int, str]:
     """Sorting key: user tasks first, then IDLE, then TICK."""
     core_id, task_id, name = parse_task_name(raw)
-    if raw.startswith("IDLE"):
+    if name.startswith("IDLE"):
         group = 2
-    elif raw == "TICK":
+    elif name == "TICK":
         group = 3
     else:
         group = 1
@@ -271,7 +273,8 @@ def parse_btf(filepath: str) -> BtfTrace:
 LABEL_WIDTH   = 160
 RULER_HEIGHT  = 40
 ROW_HEIGHT    = 22
-_FONT_SIZE    = 12   # default label font size (pt); adjustable at runtime
+_FONT_SIZE    = 14   # default label font size (pt); adjustable at runtime
+_UI_FONT_SIZE = 12   # fixed UI font size for menus, toolbar, status bar (pt)
 ROW_GAP       = 4
 STI_ROW_H     = 18
 STI_MARKER_H  = 10
@@ -313,20 +316,30 @@ _SPECIAL_COLORS = {
 }
 
 def _task_colour(task_raw: str) -> QColor:
-    """Return a stable QColor for a task name."""
-    _, _, name = parse_task_name(task_raw)
-    if re.match(r"^IDLE\d*$", task_raw):
-        idx = 0
-        try:
-            idx = int(task_raw[4:]) if task_raw[4:] else 0
-        except ValueError:
-            pass
-        greys = [180, 160, 140, 120]
+    """Return a stable QColor for a task name.
+
+    Colour is keyed on the full raw name (including [core/id] prefix) so that
+    two tasks with the same display name but different IDs get different colours.
+    IDLE tasks always use grey shades, differentiated by their task_id.
+    """
+    core_id, tid, name = parse_task_name(task_raw)
+    if re.match(r"^IDLE\d*$", name):
+        # Use task_id to differentiate IDLE tasks across cores; fall back to
+        # the number suffix in the name, then 0.
+        if tid is not None:
+            idx = tid
+        else:
+            try:
+                idx = int(name[4:]) if name[4:] else 0
+            except ValueError:
+                idx = 0
+        greys = [180, 160, 140, 120, 100, 80]
         v = greys[idx % len(greys)]
         return QColor(v, v, v)
     if task_raw in _SPECIAL_COLORS:
         return _SPECIAL_COLORS[task_raw]
-    idx = hash(name) % len(_PALETTE)
+    # Hash on full raw name so same display name + different ID → different colour
+    idx = hash(task_raw) % len(_PALETTE)
     return QColor(_PALETTE[idx])
 
 def _blend_core_tint(base: QColor, core: str) -> QColor:
@@ -396,7 +409,8 @@ def _nice_grid_step(ns_per_px: float, target_px: float = 100.0) -> int:
 class TimelineScene(QGraphicsScene):
     """Draws the full timeline onto a QGraphicsScene."""
 
-    scene_rebuilt = pyqtSignal()   # emitted after every rebuild()
+    scene_rebuilt    = pyqtSignal()          # emitted after every rebuild()
+    highlight_changed = pyqtSignal(object, bool) # (task_name_or_None, locked)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -413,6 +427,9 @@ class TimelineScene(QGraphicsScene):
         # Cursor state (stored as ns timestamps, drawn as overlay)
         self._cursor_times: List[int] = []
         self._cursor_items: list = []    # live QGraphicsItems for cursors
+        # Highlighted task name (clicking a task label toggles highlight)
+        self._locked_task:  Optional[str] = None   # click-locked task (persistent)
+        self._hovered_task: Optional[str] = None   # hover task (transient)
 
     # ------------------------------------------------------------------
     # Public API
@@ -507,6 +524,37 @@ class TimelineScene(QGraphicsScene):
     def clear_cursors(self) -> None:
         self._cursor_times.clear()
         self._draw_cursors()
+
+    def set_highlighted_task(self, task_name: Optional[str],
+                             locked: bool = False) -> None:
+        """Set or clear the highlighted task on the timeline.
+
+        - ``task_name=None`` always clears the highlight and the lock.
+        - ``locked=True``  pins the highlight (triggered by a click).
+        - ``locked=False`` is a transient hover highlight; it is ignored
+          when a click-locked highlight is already active.
+        """
+        if task_name is None:
+            self._locked_task  = None
+            self._hovered_task = None
+        elif locked:
+            self._locked_task  = task_name
+            self._hovered_task = None
+        else:
+            # Hover: always update regardless of whether a lock exists
+            self._hovered_task = task_name
+        self.highlight_changed.emit(self._locked_task,
+                                    self._locked_task is not None)
+        self.rebuild()
+
+    def clear_hover(self) -> None:
+        """Clear the transient hover highlight and restore the locked state."""
+        if self._hovered_task is None:
+            return   # nothing to clear, skip rebuild
+        self._hovered_task = None
+        self.highlight_changed.emit(self._locked_task,
+                                    self._locked_task is not None)
+        self.rebuild()
 
     def cursor_times(self) -> List[int]:
         return list(self._cursor_times)
@@ -671,7 +719,7 @@ class TimelineScene(QGraphicsScene):
                      QPen(Qt.NoPen), QBrush(QColor("#2B2B2B"))).setZValue(-1)
         _lbg = self.addRect(QRectF(0, 0, LABEL_WIDTH, total_h),
                             QPen(Qt.NoPen), QBrush(QColor("#1E1E1E")))
-        _lbg.setZValue(20)   # must be above task bars (z=1)
+        _lbg.setZValue(35)   # must be above cursor lines (z=30-32)
         self._frozen_items.append((_lbg, 0))
 
         step_ns    = _nice_grid_step(self._ns_per_px, 100)
@@ -702,17 +750,33 @@ class TimelineScene(QGraphicsScene):
             y_top = RULER_HEIGHT + row_idx * (ROW_HEIGHT + ROW_GAP)
             y_ctr = y_top + ROW_HEIGHT / 2
 
+            is_hl = (task == self._locked_task or task == self._hovered_task)
+
             bg_color = QColor("#252526") if row_idx % 2 == 0 else QColor("#2D2D2D")
             self.addRect(QRectF(LABEL_WIDTH, y_top, timeline_w, ROW_HEIGHT),
                          QPen(Qt.NoPen), QBrush(bg_color)).setZValue(0)
+            if is_hl:
+                tc = _task_colour(task)
+                hl_bg = QColor(tc.red(), tc.green(), tc.blue(), 35)
+                hl_border = QPen(tc.lighter(160), 1.0)
+                self.addRect(QRectF(LABEL_WIDTH, y_top, timeline_w, ROW_HEIGHT),
+                             hl_border, QBrush(hl_bg)).setZValue(0.9)
             self.addLine(0, y_top + ROW_HEIGHT + ROW_GAP - 1,
                          total_w, y_top + ROW_HEIGHT + ROW_GAP - 1,
                          QPen(QColor("#333333"), 0.5)).setZValue(0.5)
 
-            lbl = self.addSimpleText(task_display_name(task), font)
-            lbl.setBrush(QBrush(QColor("#D4D4D4")))
+            # Clickable label background
+            lbl_bg = _TaskLabelItem(QRectF(0, y_top, LABEL_WIDTH, ROW_HEIGHT), task, self)
+            lbl_bg.setZValue(36)
+            self.addItem(lbl_bg)
+            self._frozen_items.append((lbl_bg, 0))
+
+            lbl_color = QColor("#FFD700") if is_hl else QColor("#D4D4D4")
+            lbl_font  = _monospace_font(self._font_size, QFont.Bold) if is_hl else font
+            lbl = self.addSimpleText(task_display_name(task), lbl_font)
+            lbl.setBrush(QBrush(lbl_color))
             lbl.setPos(4, y_ctr - fm.height() / 2)
-            lbl.setZValue(22)
+            lbl.setZValue(37)
             self._frozen_items.append((lbl, 4))
 
             base_color = _task_colour(task)
@@ -724,7 +788,8 @@ class TimelineScene(QGraphicsScene):
                 ri = _SegmentItem(QRectF(x1, y_top + 1, w, ROW_HEIGHT - 2),
                                   seg, trace.time_scale)
                 ri.setBrush(QBrush(color))
-                ri.setPen(QPen(color.darker(130), 0.4))
+                ri.setPen(QPen(QColor("#FFFFFF"), 1.5) if is_hl
+                          else QPen(color.darker(130), 0.4))
                 ri.setZValue(1)
                 self.addItem(ri)
                 disp = task_display_name(task)
@@ -744,7 +809,7 @@ class TimelineScene(QGraphicsScene):
             lbl = self.addSimpleText(f"{core_part} STI", font)
             lbl.setBrush(QBrush(QColor("#88AABB")))
             lbl.setPos(4, y_ctr - fm.height() / 2)
-            lbl.setZValue(22)
+            lbl.setZValue(37)
             self._frozen_items.append((lbl, 4))
             for ev in trace.sti_events:
                 if f"{ev.core}/{ev.target}" != channel:
@@ -757,11 +822,11 @@ class TimelineScene(QGraphicsScene):
 
         corner = self.addRect(QRectF(0, 0, LABEL_WIDTH, RULER_HEIGHT),
                               QPen(Qt.NoPen), QBrush(QColor("#1A1A1A")))
-        corner.setZValue(24)
+        corner.setZValue(38)
         hdr = self.addSimpleText("Task / Channel", font)
         hdr.setBrush(QBrush(QColor("#888888")))
         hdr.setPos(4, RULER_HEIGHT / 2 - fm.height() / 2)
-        hdr.setZValue(25)
+        hdr.setZValue(39)
         self._frozen_items.append((corner, 0))
         self._frozen_items.append((hdr, 4))
 
@@ -817,14 +882,29 @@ class TimelineScene(QGraphicsScene):
 
         for col_idx, task in enumerate(task_cols):
             x_left   = RULER_HEIGHT + col_idx * col_w
+            is_hl    = (task == self._locked_task or task == self._hovered_task)
+
             bg_color = QColor("#252526") if col_idx % 2 == 0 else QColor("#2D2D2D")
             self.addRect(QRectF(x_left, label_row_h, col_w, timeline_h),
                          QPen(Qt.NoPen), QBrush(bg_color)).setZValue(0)
-            lbl = self.addSimpleText(task_display_name(task), font)
-            lbl.setBrush(QBrush(QColor("#D4D4D4")))
+            if is_hl:
+                tc = _task_colour(task)
+                hl_bg = QColor(tc.red(), tc.green(), tc.blue(), 35)
+                self.addRect(QRectF(x_left, label_row_h, col_w, timeline_h),
+                             QPen(tc.lighter(160), 1.0), QBrush(hl_bg)).setZValue(0.9)
+
+            # Clickable label area at the top of each column
+            lbl_bg = _TaskLabelItem(QRectF(x_left, 0, col_w, label_row_h), task, self)
+            lbl_bg.setZValue(4)
+            self.addItem(lbl_bg)
+
+            lbl_color = QColor("#FFD700") if is_hl else QColor("#D4D4D4")
+            lbl_font  = _monospace_font(self._font_size, QFont.Bold) if is_hl else font
+            lbl = self.addSimpleText(task_display_name(task), lbl_font)
+            lbl.setBrush(QBrush(lbl_color))
             lbl.setRotation(-90)
             lbl.setPos(x_left + col_w / 2 + fm.height() / 2, label_row_h - 4)
-            lbl.setZValue(3)
+            lbl.setZValue(5)
 
             base_color = _task_colour(task)
             for seg in seg_map[task]:
@@ -835,7 +915,8 @@ class TimelineScene(QGraphicsScene):
                 ri = _SegmentItem(QRectF(x_left + 1, y1, col_w - 2, h),
                                   seg, trace.time_scale)
                 ri.setBrush(QBrush(base_color))
-                ri.setPen(QPen(base_color.darker(130), 0.4))
+                ri.setPen(QPen(QColor("#FFFFFF"), 1.5) if is_hl
+                          else QPen(base_color.darker(130), 0.4))
                 ri.setZValue(1)
                 self.addItem(ri)
 
@@ -907,7 +988,7 @@ class TimelineScene(QGraphicsScene):
                      QPen(Qt.NoPen), QBrush(QColor("#2B2B2B"))).setZValue(-1)
         _lbg = self.addRect(QRectF(0, 0, LABEL_WIDTH, total_h),
                             QPen(Qt.NoPen), QBrush(QColor("#1E1E1E")))
-        _lbg.setZValue(20)   # must be above task bars (z=1)
+        _lbg.setZValue(35)   # must be above cursor lines (z=30-32)
         self._frozen_items.append((_lbg, 0))
 
         step_ns    = _nice_grid_step(self._ns_per_px, 100)
@@ -951,7 +1032,7 @@ class TimelineScene(QGraphicsScene):
                 QRectF(0, y_top, LABEL_WIDTH, ROW_HEIGHT), core, self)
             hdr_item.setBrush(QBrush(QColor("#2B2B45")))
             hdr_item.setPen(QPen(Qt.NoPen))
-            hdr_item.setZValue(21)
+            hdr_item.setZValue(36)
             self.addItem(hdr_item)
             self._frozen_items.append((hdr_item, 0))
 
@@ -960,7 +1041,7 @@ class TimelineScene(QGraphicsScene):
             arr_txt = self.addSimpleText(arrow, font)
             arr_txt.setBrush(QBrush(QColor("#9999CC")))
             arr_txt.setPos(3, y_ctr - fm.height() / 2)
-            arr_txt.setZValue(22)
+            arr_txt.setZValue(37)
             arr_txt.setAcceptedMouseButtons(Qt.NoButton)
             arr_txt.setAcceptHoverEvents(False)
             self._frozen_items.append((arr_txt, 3))
@@ -969,7 +1050,7 @@ class TimelineScene(QGraphicsScene):
             dot_item.setPen(QPen(Qt.NoPen))
             dot_item.setBrush(QBrush(dot_c))
             dot_item.setPos(arrow_w + 6, y_ctr)
-            dot_item.setZValue(22)
+            dot_item.setZValue(37)
             dot_item.setAcceptedMouseButtons(Qt.NoButton)
             dot_item.setAcceptHoverEvents(False)
             self.addItem(dot_item)
@@ -978,7 +1059,7 @@ class TimelineScene(QGraphicsScene):
             lbl_item = self.addSimpleText(core, font)
             lbl_item.setBrush(QBrush(QColor("#E0E0E0")))
             lbl_item.setPos(arrow_w + 20, y_ctr - fm.height() / 2)
-            lbl_item.setZValue(22)
+            lbl_item.setZValue(37)
             lbl_item.setAcceptedMouseButtons(Qt.NoButton)
             lbl_item.setAcceptHoverEvents(False)
             self._frozen_items.append((lbl_item, arrow_w + 20))
@@ -1009,9 +1090,16 @@ class TimelineScene(QGraphicsScene):
                 y_top2 = RULER_HEIGHT + row_idx * (ROW_HEIGHT + ROW_GAP)
                 y_ctr2 = y_top2 + ROW_HEIGHT / 2
 
+                is_hl  = (task_name == self._locked_task or task_name == self._hovered_task)
+
                 sub_bg = QColor("#1E1E2C") if sub_idx % 2 == 0 else QColor("#232330")
                 self.addRect(QRectF(LABEL_WIDTH, y_top2, timeline_w, ROW_HEIGHT),
                              QPen(Qt.NoPen), QBrush(sub_bg)).setZValue(0)
+                if is_hl:
+                    tc = _task_colour(task_name)
+                    hl_bg = QColor(tc.red(), tc.green(), tc.blue(), 35)
+                    self.addRect(QRectF(LABEL_WIDTH, y_top2, timeline_w, ROW_HEIGHT),
+                                 QPen(tc.lighter(160), 1.0), QBrush(hl_bg)).setZValue(0.9)
                 self.addLine(0, y_top2 + ROW_HEIGHT + ROW_GAP - 1,
                              total_w, y_top2 + ROW_HEIGHT + ROW_GAP - 1,
                              QPen(QColor("#2E2E3A"), 0.5)).setZValue(0.5)
@@ -1019,14 +1107,24 @@ class TimelineScene(QGraphicsScene):
                 task_color = _task_colour(task_name)
                 stripe = self.addRect(QRectF(26, y_top2 + 3, 3, ROW_HEIGHT - 6),
                                       QPen(Qt.NoPen), QBrush(task_color))
-                stripe.setZValue(21)
+                stripe.setZValue(36)
                 self._frozen_items.append((stripe, 0))
 
-                disp  = task_display_name(task_name)
-                t_lbl = self.addSimpleText(disp, font_sm)
-                t_lbl.setBrush(QBrush(QColor("#B0B0C0")))
+                # Clickable label background for sub-task row
+                sub_lbl_bg = _TaskLabelItem(
+                    QRectF(0, y_top2, LABEL_WIDTH, ROW_HEIGHT), task_name, self)
+                sub_lbl_bg.setZValue(36)
+                self.addItem(sub_lbl_bg)
+                self._frozen_items.append((sub_lbl_bg, 0))
+
+                disp      = task_display_name(task_name)
+                lbl_color = QColor("#FFD700") if is_hl else QColor("#B0B0C0")
+                lbl_fnt   = _monospace_font(max(6, self._font_size - 1),
+                                            QFont.Bold) if is_hl else font_sm
+                t_lbl = self.addSimpleText(disp, lbl_fnt)
+                t_lbl.setBrush(QBrush(lbl_color))
                 t_lbl.setPos(33, y_ctr2 - fm.height() / 2)
-                t_lbl.setZValue(22)
+                t_lbl.setZValue(37)
                 self._frozen_items.append((t_lbl, 33))
 
                 for seg in task_seg_map[task_name]:
@@ -1037,7 +1135,8 @@ class TimelineScene(QGraphicsScene):
                     ri2 = _SegmentItem(QRectF(x1, y_top2 + 1, w, ROW_HEIGHT - 2),
                                        seg, trace.time_scale)
                     ri2.setBrush(QBrush(color))
-                    ri2.setPen(QPen(color.darker(130), 0.4))
+                    ri2.setPen(QPen(QColor("#FFFFFF"), 1.5) if is_hl
+                               else QPen(color.darker(130), 0.4))
                     ri2.setZValue(1)
                     self.addItem(ri2)
                     if w > fm.horizontalAdvance(disp) + 4:
@@ -1057,7 +1156,7 @@ class TimelineScene(QGraphicsScene):
             lbl = self.addSimpleText(f"{core_part} STI", font)
             lbl.setBrush(QBrush(QColor("#88AABB")))
             lbl.setPos(4, y_ctr - fm.height() / 2)
-            lbl.setZValue(22)
+            lbl.setZValue(37)
             self._frozen_items.append((lbl, 4))
             for ev in trace.sti_events:
                 if f"{ev.core}/{ev.target}" != channel:
@@ -1071,11 +1170,11 @@ class TimelineScene(QGraphicsScene):
 
         corner = self.addRect(QRectF(0, 0, LABEL_WIDTH, RULER_HEIGHT),
                               QPen(Qt.NoPen), QBrush(QColor("#1A1A1A")))
-        corner.setZValue(24)
+        corner.setZValue(38)
         hdr_lbl = self.addSimpleText("Core / Channel", font)
         hdr_lbl.setBrush(QBrush(QColor("#888888")))
         hdr_lbl.setPos(4, RULER_HEIGHT / 2 - fm.height() / 2)
-        hdr_lbl.setZValue(25)
+        hdr_lbl.setZValue(39)
         self._frozen_items.append((corner, 0))
         self._frozen_items.append((hdr_lbl, 4))
 
@@ -1183,6 +1282,54 @@ class TimelineScene(QGraphicsScene):
 # ---------------------------------------------------------------------------
 # Custom graphics items
 # ---------------------------------------------------------------------------
+
+class _TaskLabelItem(QGraphicsRectItem):
+    """Clickable task-name label area in the timeline label column.
+
+    Clicking toggles the highlight for that task's segments on the timeline.
+    """
+
+    _HOVER_BRUSH     = QBrush(QColor(255, 255, 255, 18))
+    _HIGHLIGHT_BRUSH = QBrush(QColor(255, 215, 0, 45))
+
+    def __init__(self, rect: QRectF, task_name: str, tl_scene):
+        super().__init__(rect)
+        self._task_name = task_name
+        self._tl_scene  = tl_scene
+        self.setAcceptedMouseButtons(Qt.LeftButton)
+        self.setAcceptHoverEvents(True)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setPen(QPen(Qt.NoPen))
+        self._update_brush()
+
+    def _update_brush(self) -> None:
+        if self._tl_scene._locked_task == self._task_name:
+            self.setBrush(self._HIGHLIGHT_BRUSH)
+        else:
+            self.setBrush(QBrush(Qt.transparent))
+
+    def mousePressEvent(self, event):
+        if self._tl_scene._locked_task == self._task_name:
+            self._tl_scene.set_highlighted_task(None)   # second click → cancel lock
+        else:
+            self._tl_scene.set_highlighted_task(self._task_name, locked=True)
+        event.accept()
+
+    def hoverEnterEvent(self, event):
+        if self._tl_scene._locked_task != self._task_name:
+            self.setBrush(self._HOVER_BRUSH)
+        super().hoverEnterEvent(event)
+        # Defer rebuild so it never runs while this item's event handler is active
+        task = self._task_name
+        scene = self._tl_scene
+        QTimer.singleShot(0, lambda: scene.set_highlighted_task(task, locked=False))
+
+    def hoverLeaveEvent(self, event):
+        self._update_brush()
+        super().hoverLeaveEvent(event)
+        scene = self._tl_scene
+        QTimer.singleShot(0, scene.clear_hover)
+
 
 class _CoreHeaderItem(QGraphicsRectItem):
     """Clickable label area for a core row — toggles expand/collapse."""
@@ -1408,6 +1555,7 @@ class TimelineView(QGraphicsView):
         self._press_btn = event.button()
 
         if event.button() == Qt.LeftButton:
+            # --- Check if we're starting a cursor drag ---
             scene_pt = self.mapToScene(event.pos())
             th = self._cursor_drag_threshold
             for idx, cursor_ns in enumerate(self._scene._cursor_times):
@@ -1421,6 +1569,20 @@ class TimelineView(QGraphicsView):
                                               else Qt.SizeVerCursor)
                     event.accept()
                     return
+
+            # --- Clicking inside the label column: disable ScrollHandDrag so
+            #     _TaskLabelItem (and _CoreHeaderItem) can receive the click.
+            #     If the click does NOT land on any _TaskLabelItem, cancel the
+            #     current highlight (click on empty label-column area). ---
+            in_vp_label = (event.pos().x() < LABEL_WIDTH if self._scene._horizontal
+                           else event.pos().y() < LABEL_WIDTH)
+            if in_vp_label:
+                self.setDragMode(QGraphicsView.NoDrag)
+                scene_pt2 = self.mapToScene(event.pos())
+                hits = [it for it in self._scene.items(scene_pt2)
+                        if isinstance(it, _TaskLabelItem)]
+                if not hits and self._scene._locked_task is not None:
+                    self._scene.set_highlighted_task(None)
 
         super().mousePressEvent(event)
 
@@ -1445,11 +1607,20 @@ class TimelineView(QGraphicsView):
             event.accept()
             return
 
+        # Restore drag mode if it was temporarily disabled for a label click
+        self.setDragMode(QGraphicsView.ScrollHandDrag)
         super().mouseReleaseEvent(event)
         if self._press_pos is None:
             return
         delta = (event.pos() - self._press_pos).manhattanLength()
         if delta <= self._drag_threshold:
+            # Use viewport coordinates — label column is always the leftmost
+            # LABEL_WIDTH pixels on screen regardless of horizontal scroll.
+            in_vp_label = (event.pos().x() < LABEL_WIDTH if self._scene._horizontal
+                           else event.pos().y() < LABEL_WIDTH)
+            if in_vp_label:
+                self._press_pos = None
+                return
             scene_pt = self.mapToScene(event.pos())
             coord = scene_pt.x() if self._scene._horizontal else scene_pt.y()
             ns = self._scene.scene_to_ns(coord)
@@ -1570,9 +1741,89 @@ class TimelineView(QGraphicsView):
 # Cursor status-bar widget
 # ---------------------------------------------------------------------------
 
+class _CursorButton(QPushButton):
+    """Status-bar cursor badge.
+
+    • Click (no drag) → emits ``clicked`` as normal (jump to cursor).
+    • Drag out of the status bar → emits ``delete_requested`` so the caller
+      can remove the corresponding cursor.
+    """
+
+    delete_requested = pyqtSignal()
+    _DRAG_THRESHOLD  = 10
+
+    def __init__(self, text: str, color: str, parent: QWidget = None):
+        super().__init__(text, parent)
+        self._color     = color
+        self._press_pos: Optional[QPoint] = None
+        self._dragging  = False
+        self._normal_ss = self._make_style(color, delete=False)
+        self._delete_ss = self._make_style(color, delete=True)
+        self.setStyleSheet(self._normal_ss)
+        self.setCursor(Qt.PointingHandCursor)
+
+    @staticmethod
+    def _make_style(c: str, delete: bool = False) -> str:
+        bg  = "#5A1A1A" if delete else "#2A2A2A"
+        hbg = "#6A2A2A" if delete else "#3A3A3A"
+        bc  = "#FF4444" if delete else c
+        return (
+            f"QPushButton {{ color: {c}; background: {bg}; "
+            f"border: 1px solid {bc}; border-radius: 3px; "
+            f"padding: 1px 7px; font-size: {_UI_FONT_SIZE}pt; "
+            f"font-family: \"{_FIXED_FONT_FAMILY}\"; }}"
+            f"QPushButton:hover   {{ background: {hbg}; }}"
+            f"QPushButton:pressed {{ background: #4A4A4A; }}"
+        )
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            self._press_pos = event.pos()
+            self._dragging  = False
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._press_pos is not None and (event.buttons() & Qt.LeftButton):
+            if (event.pos() - self._press_pos).manhattanLength() > self._DRAG_THRESHOLD:
+                self._dragging = True
+                outside = self._outside_statusbar(event.globalPos())
+                self.setStyleSheet(self._delete_ss if outside else self._normal_ss)
+                self.setCursor(Qt.ForbiddenCursor if outside else Qt.ClosedHandCursor)
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton and self._dragging:
+            outside = self._outside_statusbar(event.globalPos())
+            self.setStyleSheet(self._normal_ss)
+            self.setCursor(Qt.PointingHandCursor)
+            self._press_pos = None
+            self._dragging  = False
+            if outside:
+                self.delete_requested.emit()
+            event.accept()
+            return
+        self._press_pos = None
+        self._dragging  = False
+        super().mouseReleaseEvent(event)
+
+    def _outside_statusbar(self, global_pos: QPoint) -> bool:
+        """True when *global_pos* lies outside the enclosing QStatusBar."""
+        w = self.parentWidget()
+        while w is not None:
+            if isinstance(w, QStatusBar):
+                return not w.rect().contains(w.mapFromGlobal(global_pos))
+            w = w.parentWidget()
+        # Fallback: check own rect
+        own_parent = self.parentWidget()
+        if own_parent:
+            return not own_parent.rect().contains(own_parent.mapFromGlobal(global_pos))
+        return True
+
+
 class CursorBarWidget(QWidget):
-    """A row of per-cursor QPushButtons in the status bar."""
-    jump_requested = pyqtSignal(int)
+    """A row of per-cursor _CursorButtons in the status bar."""
+    jump_requested          = pyqtSignal(int)   # ns – scroll timeline
+    cursor_delete_requested = pyqtSignal(int)   # ns – remove this cursor
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1600,27 +1851,17 @@ class CursorBarWidget(QWidget):
         for order, (orig_idx, t) in enumerate(sorted_pairs):
             c          = colors[orig_idx % len(colors)]
             label_text = f"C{orig_idx + 1}: {_format_time(t, ts)}"
-            btn        = QPushButton(label_text)
             ns_capture = t
+            btn = _CursorButton(label_text, c)
             btn.clicked.connect(
                 lambda checked=False, ns=ns_capture: self.jump_requested.emit(ns)
             )
-            btn.setCursor(Qt.PointingHandCursor)
-            btn.setToolTip(f"Click to jump to cursor {orig_idx + 1}\n"
-                           f"Drag cursor line on the timeline to move it")
-            btn.setStyleSheet(f"""
-                QPushButton {{
-                    color: {c};
-                    background: #2A2A2A;
-                    border: 1px solid {c};
-                    border-radius: 3px;
-                    padding: 1px 7px;
-                    font-size: 11px;
-                    font-family: "{_FIXED_FONT_FAMILY}";
-                }}
-                QPushButton:hover   {{ background: #3A3A3A; }}
-                QPushButton:pressed {{ background: #4A4A4A; }}
-            """)
+            btn.delete_requested.connect(
+                lambda ns=ns_capture: self.cursor_delete_requested.emit(ns)
+            )
+            btn.setToolTip(
+                f"C{orig_idx + 1}: click to jump  |  drag out of status bar to delete"
+            )
             self._layout.addWidget(btn)
             self._buttons.append(btn)
 
@@ -1631,7 +1872,7 @@ class CursorBarWidget(QWidget):
                 delta_parts.append(f"Δ{i}={_format_time(d, ts)}")
             dlbl = QLabel("  " + "  ".join(delta_parts))
             dlbl.setStyleSheet(
-                f"color:#FFFFFF; font-size:11px; font-family:\"{_FIXED_FONT_FAMILY}\"; padding:0 4px;"
+                f"color:#FFFFFF; font-size:{_UI_FONT_SIZE}pt; font-family:\"{_FIXED_FONT_FAMILY}\"; padding:0 4px;"
             )
             self._layout.addWidget(dlbl)
             self._delta_label = dlbl
@@ -1640,8 +1881,77 @@ class CursorBarWidget(QWidget):
 # Legend widget
 # ---------------------------------------------------------------------------
 
+class _LegendTaskRow(QWidget):
+    """A single task row in the legend that emits hover/click signals."""
+
+    hovered   = pyqtSignal(str)   # task raw name
+    unhovered = pyqtSignal(str)   # task raw name
+    clicked   = pyqtSignal(str)   # task raw name
+
+    _BG_NORMAL  = "background: transparent;"
+    _BG_HOVER   = "background: rgba(255,255,255,18); border-radius:3px;"
+    _BG_LOCKED  = "background: rgba(255,215,0,45);  border-radius:3px;"
+
+    def __init__(self, task_name: str, display_name: str,
+                 color: QColor, parent=None):
+        super().__init__(parent)
+        self._task_name = task_name
+        self._locked    = False
+
+        hl = QHBoxLayout(self)
+        hl.setContentsMargins(2, 1, 2, 1)
+        hl.setSpacing(6)
+
+        swatch = QLabel()
+        swatch.setFixedSize(14, 14)
+        swatch.setStyleSheet(
+            f"background:{color.name()}; border-radius:2px; border:1px solid #555;"
+        )
+        hl.addWidget(swatch)
+
+        self._lbl = QLabel(display_name)
+        self._lbl.setStyleSheet("color:#D4D4D4;")
+        self._lbl.setToolTip(task_name)
+        hl.addWidget(self._lbl)
+        hl.addStretch()
+
+        self.setCursor(Qt.PointingHandCursor)
+        self.setAutoFillBackground(False)
+        self._set_bg(self._BG_NORMAL)
+
+    def _set_bg(self, css: str) -> None:
+        self.setStyleSheet(css)
+
+    def set_locked(self, locked: bool) -> None:
+        """Update the visual appearance to reflect click-lock state."""
+        self._locked = locked
+        self._set_bg(self._BG_LOCKED if locked else self._BG_NORMAL)
+
+    def enterEvent(self, event):
+        if not self._locked:
+            self._set_bg(self._BG_HOVER)
+        self.hovered.emit(self._task_name)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        if not self._locked:
+            self._set_bg(self._BG_NORMAL)
+        self.unhovered.emit(self._task_name)
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit(self._task_name)
+        event.accept()   # prevent bubbling up to LegendWidget.mousePressEvent
+
+
 class LegendWidget(QWidget):
-    """Compact scrollable colour legend."""
+    """Compact scrollable colour legend with hover/click → timeline highlight."""
+
+    task_hovered     = pyqtSignal(str)   # hover enter: task raw name
+    task_unhovered   = pyqtSignal(str)   # hover leave: task raw name
+    task_clicked     = pyqtSignal(str)   # click: task raw name
+    cancel_highlight = pyqtSignal()      # click on background → cancel highlight
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1652,8 +1962,20 @@ class LegendWidget(QWidget):
         palette = self.palette()
         palette.setColor(QPalette.Window, QColor("#1E1E1E"))
         self.setPalette(palette)
+        self._task_rows: Dict[str, _LegendTaskRow] = {}   # raw name → row widget
+
+    def set_locked_task(self, task_name: Optional[str]) -> None:
+        """Visually mark *task_name* as click-locked (or clear all locks)."""
+        for raw, row in self._task_rows.items():
+            row.set_locked(raw == task_name)
+
+    def mousePressEvent(self, event) -> None:
+        """Click on the legend background (outside a task row) cancels highlight."""
+        self.cancel_highlight.emit()
+        super().mousePressEvent(event)
 
     def rebuild(self, trace: BtfTrace) -> None:
+        self._task_rows.clear()
         while self._layout.count():
             item = self._layout.takeAt(0)
             if item.widget():
@@ -1665,22 +1987,12 @@ class LegendWidget(QWidget):
 
         for task in trace.tasks:
             color = _task_colour(task)
-            _, _, display = parse_task_name(task)
-            row = QWidget()
-            hl  = QHBoxLayout(row)
-            hl.setContentsMargins(0, 0, 0, 0)
-            hl.setSpacing(6)
-            swatch = QLabel()
-            swatch.setFixedSize(14, 14)
-            swatch.setStyleSheet(
-                f"background:{color.name()}; border-radius:2px; border:1px solid #555;"
-            )
-            hl.addWidget(swatch)
-            lbl = QLabel(display)
-            lbl.setStyleSheet("color:#D4D4D4; font-size:11px;")
-            lbl.setToolTip(task)
-            hl.addWidget(lbl)
-            hl.addStretch()
+            display = task_display_name(task)
+            row = _LegendTaskRow(task, display, color)
+            row.hovered.connect(self.task_hovered)
+            row.unhovered.connect(self.task_unhovered)
+            row.clicked.connect(self.task_clicked)
+            self._task_rows[task] = row
             self._layout.addWidget(row)
 
         if trace.sti_channels:
@@ -1699,19 +2011,19 @@ class LegendWidget(QWidget):
                 ("create_mutex", _sti_colour("create_mutex")),
                 ("trigger",      _sti_colour("trigger")),
             ]:
-                row = QWidget()
-                hl  = QHBoxLayout(row)
+                row_w = QWidget()
+                hl    = QHBoxLayout(row_w)
                 hl.setContentsMargins(0, 0, 0, 0)
                 hl.setSpacing(6)
                 swatch = QLabel("▼")
-                swatch.setStyleSheet(f"color:{color.name()}; font-size:11px;")
+                swatch.setStyleSheet(f"color:{color.name()};")
                 swatch.setFixedWidth(14)
                 hl.addWidget(swatch)
                 lbl = QLabel(note)
-                lbl.setStyleSheet("color:#D4D4D4; font-size:11px;")
+                lbl.setStyleSheet("color:#D4D4D4;")
                 hl.addWidget(lbl)
                 hl.addStretch()
-                self._layout.addWidget(row)
+                self._layout.addWidget(row_w)
 
         self._layout.addStretch()
 
@@ -1767,6 +2079,14 @@ class MainWindow(QMainWindow):
 
     def _apply_dark_theme(self) -> None:
         app     = QApplication.instance()
+
+        # Set the application-wide UI font to 12 pt (menus, toolbar, status bar).
+        # Timeline task labels use _FONT_SIZE (14 pt) independently.
+        base_font = app.font()
+        base_font.setPointSize(_UI_FONT_SIZE)
+        app.setFont(base_font)
+        _ui_fs = f"{_UI_FONT_SIZE}pt"   # reused in stylesheet below
+
         palette = QPalette()
         dark    = QColor("#1E1E1E")
         darker  = QColor("#121212")
@@ -1786,16 +2106,23 @@ class MainWindow(QMainWindow):
         palette.setColor(QPalette.ToolTipBase,     QColor("#252526"))
         palette.setColor(QPalette.ToolTipText,     light)
         app.setPalette(palette)
-        app.setStyleSheet("""
-            QToolTip { background:#252526; color:#D4D4D4; border:1px solid #555; padding:4px; }
-            QMenuBar  { background:#2D2D2D; color:#D4D4D4; }
-            QMenuBar::item:selected { background:#007ACC; }
-            QMenu     { background:#252526; color:#D4D4D4; }
-            QMenu::item:selected { background:#007ACC; }
-            QToolBar  { background:#2D2D2D; border:none; spacing:4px; }
-            QStatusBar { background:#1E1E1E; color:#AAAAAA; }
-            QDockWidget::title { background:#2D2D2D; color:#AAAAAA; padding:4px; }
-            QScrollArea { background:#1E1E1E; border:none; }
+        app.setStyleSheet(f"""
+            QToolTip  {{ background:#252526; color:#D4D4D4; border:1px solid #555;
+                         padding:4px; font-size:{_ui_fs}; }}
+            QMenuBar  {{ background:#2D2D2D; color:#D4D4D4; font-size:{_ui_fs}; }}
+            QMenuBar::item:selected {{ background:#007ACC; }}
+            QMenu     {{ background:#252526; color:#D4D4D4; font-size:{_ui_fs}; }}
+            QMenu::item:selected {{ background:#007ACC; }}
+            QToolBar  {{ background:#2D2D2D; border:none; spacing:4px;
+                         font-size:{_ui_fs}; }}
+            QToolButton {{ font-size:{_ui_fs}; }}
+            QStatusBar  {{ background:#1E1E1E; color:#AAAAAA; font-size:{_ui_fs}; }}
+            QLabel      {{ font-size:{_ui_fs}; }}
+            QCheckBox   {{ font-size:{_ui_fs}; }}
+            QSpinBox    {{ font-size:{_ui_fs}; }}
+            QDockWidget::title {{ background:#2D2D2D; color:#AAAAAA;
+                                  padding:4px; font-size:{_ui_fs}; }}
+            QScrollArea {{ background:#1E1E1E; border:none; }}
         """)
 
     def _build_ui(self) -> None:
@@ -1818,6 +2145,21 @@ class MainWindow(QMainWindow):
         dock.setFeatures(QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetMovable)
         self.addDockWidget(Qt.RightDockWidgetArea, dock)
         self._legend_dock = dock
+
+        # Legend hover → transient highlight; click → toggle locked highlight
+        sc = self._view._scene
+        self._legend.task_hovered.connect(
+            lambda t: sc.set_highlighted_task(t, locked=False)
+        )
+        self._legend.task_unhovered.connect(lambda _t: sc.clear_hover())
+        self._legend.task_clicked.connect(self._on_legend_task_clicked)
+        self._legend.cancel_highlight.connect(
+            lambda: sc.set_highlighted_task(None)
+        )
+        # Keep legend lock-highlight in sync whenever the scene highlight changes
+        sc.highlight_changed.connect(
+            lambda t, lk: self._legend.set_locked_task(t if lk else None)
+        )
 
         self.setAcceptDrops(True)
 
@@ -1851,7 +2193,12 @@ class MainWindow(QMainWindow):
         vm.addAction("&Fit to window",  self._view.zoom_fit,  "Ctrl+0")
         vm.addAction("&Reset zoom",     self._view.reset_zoom,"Ctrl+R")
         vm.addSeparator()
-        vm.addAction("Show &Legend", self._legend_dock.show)
+        self._act_legend = vm.addAction("Show &Legend")
+        self._act_legend.setShortcut("Ctrl+L")
+        self._act_legend.setCheckable(True)
+        self._act_legend.setChecked(True)
+        self._act_legend.toggled.connect(self._legend_dock.setVisible)
+        self._legend_dock.visibilityChanged.connect(self._act_legend.setChecked)
         vm.addSeparator()
         self._act_task_view = vm.addAction("Task &View", lambda: self._set_view_mode("task"))
         self._act_core_view = vm.addAction("&Core View", lambda: self._set_view_mode("core"))
@@ -1900,6 +2247,12 @@ class MainWindow(QMainWindow):
         tb.addAction("│C Place cursor", self._view.add_cursor_at_view_center)
         tb.addAction("✕ Clear cursors", self._view.clear_cursors)
         tb.addSeparator()
+        self._tb_legend_btn = tb.addAction("📋 Legend", lambda: self._act_legend.toggle())
+        self._tb_legend_btn.setCheckable(True)
+        self._tb_legend_btn.setChecked(True)
+        self._tb_legend_btn.setToolTip("Show / hide the Legend panel  (Ctrl+L)")
+        self._legend_dock.visibilityChanged.connect(self._tb_legend_btn.setChecked)
+        tb.addSeparator()
 
         self._zoom_label = QLabel("Zoom: —")
         self._zoom_label.setStyleSheet("color:#AAAAAA; padding: 0 8px;")
@@ -1940,6 +2293,7 @@ class MainWindow(QMainWindow):
         self._status_stats = QLabel("")
         self._cursor_bar   = CursorBarWidget()
         self._cursor_bar.jump_requested.connect(self._view.scroll_to_ns)
+        self._cursor_bar.cursor_delete_requested.connect(self._on_cursor_delete)
         self._status_hint  = QLabel(
             "Left-click: place cursor  |  Drag cursor: move it  |  "
             "Right-click: remove  |  Ctrl+Wheel / Pinch: zoom  |  Scroll: pan"
@@ -2045,6 +2399,19 @@ class MainWindow(QMainWindow):
 
     def _on_cursors_changed(self, times) -> None:
         pass
+
+    def _on_cursor_delete(self, ns: int) -> None:
+        """Remove the cursor whose timestamp matches *ns* (from a badge drag-out)."""
+        self._view._scene.remove_nearest_cursor(ns)
+        self._view.cursors_changed.emit(self._view._scene.cursor_times())
+
+    def _on_legend_task_clicked(self, task: str) -> None:
+        """Toggle click-locked highlight for *task* from the Legend panel."""
+        sc = self._view._scene
+        if sc._locked_task == task:
+            sc.set_highlighted_task(None)          # second click on same → cancel
+        else:
+            sc.set_highlighted_task(task, locked=True)
 
     def _on_about(self) -> None:
         QMessageBox.about(

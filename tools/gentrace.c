@@ -30,6 +30,9 @@
 #define VCD_SIG_RANGE (int)('~' - '!' + 1)
 #define MAX_SIG_RANGE (VCD_SIG_RANGE)*(VCD_SIG_RANGE+1)
 
+// TODO, for single core, core ID always 0
+#define CORE_ID 0
+
 static char *get_vcdsig(
     int sig
 ) {
@@ -171,58 +174,69 @@ int genbtf(
 
         switch(event->types) {
             case TRACE_EVENT_TASK_SWITCHED_IN:
-                fprintf(fout, "%u,(%04d)%s,0,T,(%04d)%s,0,%s,%s\n",
+                fprintf(fout, "%u,[%d/%04d]%s,0,T,[%d/%04d]%s,0,%s,%s\n",
                         event->time,
+                        CORE_ID,
                         current_task, get_taskname(trace_data, current_task),
+                        CORE_ID,
                         event->value, get_taskname(trace_data, event->value),
                         "resume",
                         "");
                 break;
             case TRACE_EVENT_TASK_SWITCHED_OUT:
-                fprintf(fout, "%u,(%04d)%s,0,T,(%04d)%s,0,%s,%s\n",
+                fprintf(fout, "%u,[%d/%04d]%s,0,T,[%d/%04d]%s,0,%s,%s\n",
                         event->time,
+                        CORE_ID,
                         current_task, get_taskname(trace_data, current_task),
+                        CORE_ID,
                         event->value, get_taskname(trace_data, event->value),
                         "preempt",
                         "");
                 break;
             case TRACE_EVENT_TASK_CREATE:
-                fprintf(fout, "%u,%s,0,T,(%04d)%s,0,%s,%s\n",
+                fprintf(fout, "%u,%s,0,T,[%d/%04d]%s,0,%s,%s\n",
                         event->time,
                         "Core_1",
+                        CORE_ID,
                         event->value, get_taskname(trace_data, event->value),
                         "preempt",
                         "create");
                 break;
             case TRACE_EVENT_TASK_DELETE:
                 // FIXME
-                fprintf(fout, "%u,%s,0,R,(%04d)%s,0,%s,%s\n",
+                fprintf(fout, "%u,%s,0,R,[%d/%04d]%s,0,%s,%s\n",
                         event->time,
                         "Core_1",
+                        CORE_ID,
                         event->value, get_taskname(trace_data, event->value),
                         "preempt",
                         "delete");
                 break;
             case TRACE_EVENT_TASK_SUSPEND:
-                fprintf(fout, "%u,(%04d)%s,0,T,(%04d)%s,0,%s,%s\n",
+                fprintf(fout, "%u,[%d/%04d]%s,0,T,[%d/%04d]%s,0,%s,%s\n",
                         event->time,
+                        CORE_ID,
                         current_task, get_taskname(trace_data, current_task),
+                        CORE_ID,
                         event->value, get_taskname(trace_data, event->value),
                         "wait",
                         "suspend");
                 break;
             case TRACE_EVENT_TASK_RESUME:
-                fprintf(fout, "%u,(%04d)%s,0,T,(%04d)%s,0,%s,%s\n",
+                fprintf(fout, "%u,[%d/%04d]%s,0,T,[%d/%04d]%s,0,%s,%s\n",
                         event->time,
+                        CORE_ID,
                         current_task, get_taskname(trace_data, current_task),
+                        CORE_ID,
                         event->value, get_taskname(trace_data, event->value),
                         "release",
                         "resume");
                 break;
             case TRACE_EVENT_TASK_RESUME_FROM_ISR:
-                fprintf(fout, "%u,%s,0,T,(%04d)%s,0,%s,%s\n",
+                fprintf(fout, "%u,%s,0,T,[%d/%04d]%s,0,%s,%s\n",
                         event->time,
                         "Core_1",
+                        CORE_ID,
                         event->value, get_taskname(trace_data, event->value),
                         "release",
                         "resume/isr");
