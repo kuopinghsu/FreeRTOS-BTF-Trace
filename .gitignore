@@ -60,3 +60,5 @@ trace.btf
 trace.vcd
 
 .DS_Store
+.venv
+__pycache__
