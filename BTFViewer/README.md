@@ -151,6 +151,49 @@ The Legend lists every task with its colour swatch and `Name[id]` label.
 
 ---
 
+## Generating Synthetic Traces — `gen_trace.py`
+
+`gen_trace.py` generates a synthetic FreeRTOS-style BTF trace file for testing or demo purposes.
+Task names are drawn from a realistic embedded-system pool (`CAN_Rx`, `Motor_L`, `PID_Speed`, …).
+The scheduler simulation includes task priorities, IDLE time, TICK ISRs, and optional STI events.
+
+### Quick start
+
+```bash
+# defaults: 8 cores, 100 tasks, 1 M events  →  freertos_8c_100t_1m_events.btf
+python3 gen_trace.py
+
+# 4 cores, 50 tasks, 500 K events
+python3 gen_trace.py -c 4 -t 50 -e 500000 -o my_trace.btf
+
+# 16 cores, 200 tasks, 2 M events, 500 Hz tick, reproducible seed
+python3 gen_trace.py -c 16 -t 200 -e 2000000 --tick-hz 500 --seed 7
+
+# Disable STI events; pin every task to one core
+python3 gen_trace.py --no-sti --no-migration
+```
+
+### Options
+
+| Option | Default | Description |
+|---|---|---|
+| `-c` / `--cores` | `8` | Number of CPU cores |
+| `-t` / `--tasks` | `100` | Number of worker tasks |
+| `-e` / `--events` | `1 000 000` | Target non-comment event lines |
+| `-o` / `--output` | auto | Output `.btf` file path |
+| `--tick-hz` | `1000` | RTOS tick frequency in Hz (1000 → 1 ms per tick) |
+| `--freq-hz` | `200 000 000` | CPU clock frequency in Hz (written to BTF header) |
+| `--sti-interval-us` | `30 000` | Approximate µs between STI tag events |
+| `--idle-prob` | `0.20` | Probability [0–1] that a core picks its IDLE task |
+| `--max-burst-ticks` | `5` | Maximum ticks a task runs before being preempted |
+| `--seed` | `42` | Random seed for reproducibility |
+| `--no-sti` | off | Suppress all STI software-trace events |
+| `--no-migration` | off | Pin each task to one core (disable migration) |
+
+When `--output` is omitted the file is named automatically, e.g. `freertos_8c_100t_1m_events.btf`.
+
+---
+
 ## BTF Format
 
 Each line follows the pattern:

@@ -1,0 +1,25 @@
+# btf_viewer.rc – BTF Trace Viewer settings
+# This file is managed automatically; you may edit it by hand.
+
+[window]
+width = 1714
+height = 772
+x = 507
+y = 165
+maximized = false
+
+[view]
+font_size = 10
+theme = dark
+horizontal = true
+view_mode = core
+show_sti = true
+show_grid = true
+
+[zoom]
+ns_per_px = 5.178254437869822
+
+[files]
+last_file = example-1M.btf
+last_dir = 
+
