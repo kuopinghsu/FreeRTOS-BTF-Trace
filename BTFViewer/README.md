@@ -8,13 +8,14 @@ A PyQt5-based interactive visualiser for FreeRTOS context-switch traces in **Bes
 
 ## Features
 
-- **Two view modes** — Task View (one row per task) and Core View (one row per core, expandable)
+- **Two view modes** — Task View (one row/column per task) and Core View (one row/column per core, expandable)
 - **Expand / Collapse all cores** — single-click toolbar button in Core View
 - **Per-core expand / collapse** — click any core label to expand or collapse just that core
 - **16-colour core palette** — up to 16 distinct core colours; cycles automatically beyond that
-- **Horizontal and Vertical orientation** — switch at any time without reloading the trace
+- **Horizontal and Vertical orientation** — switch at any time; active mode is highlighted in the toolbar
 - **Smooth zoom & pan** — mouse wheel, two-finger pinch (macOS), and keyboard shortcuts
-- **Viewport culling** — only visible rows and segments are rendered; no slowdown on large traces
+- **Default zoom 5 ns/px** — the **1:1** toolbar button resets to 5 nanoseconds per pixel
+- **Viewport culling** — only visible rows/columns and segments are rendered; no slowdown on large traces
 - **Up to 4 measurement cursors** — delta times shown on the timeline and in the status bar
 - **Task highlight** — hover or click any task label or Legend row to highlight all its segments
 - **Dockable Legend panel** — colour swatches for every task, with the same highlight interaction
@@ -46,20 +47,27 @@ A file can also be opened via **File → Open** (`Ctrl+O`) or dragged onto the w
 
 | Mode | Description |
 |------|-------------|
-| **Task View** | One row per task across all cores; core tint applied to segment bars |
-| **Core View** | One expandable row per CPU core; bars coloured by running task |
+| **Task View** | One row (horizontal) or column (vertical) per task across all cores; core tint applied to segment bars |
+| **Core View** | One expandable row/column per CPU core; bars coloured by running task |
 
 In **Core View**:
 
-- Click a core label to **expand** or **collapse** that individual core's per-task sub-rows.
+- Click a core label to **expand** or **collapse** that individual core's per-task sub-rows/columns.
 - Use the **⊞ Expand All** / **⊟ Collapse All** toolbar button to expand or collapse every core at once.
+- Works in both **Horizontal** and **Vertical** orientations.
 
 ## Orientation
 
-- **Horizontal** (default) — time runs left to right
-- **Vertical** — time runs top to bottom
+- **Horizontal** (default) — time runs left to right; task/core labels are on the left
+- **Vertical** — time runs top to bottom; task/core labels are at the top
 
-Switch orientation using the toolbar or **View → Horizontal layout / Vertical layout**.
+Switch orientation using the **↔ Horizontal** / **↕ Vertical** toolbar buttons or **View → Horizontal layout / Vertical layout**. The active orientation button is highlighted.
+
+In **Vertical** mode:
+- The ruler column (left edge) is frozen and always shows time labels as you scroll horizontally.
+- The label row (top edge) is frozen and always shows task/core names as you scroll vertically.
+- The top-left corner area shows the **TICK** band label when TICK events are present.
+- Drag the resize handle (the horizontal border between the label row and the timeline) to resize the label area.
 
 ## Task Labels
 
@@ -133,8 +141,9 @@ The Legend lists every task with its colour swatch and `Name[id]` label.
 |--------|--------|
 | `Ctrl` + Scroll wheel | Zoom in or out centred on the pointer |
 | Two-finger pinch (macOS) | Zoom in or out |
-| Scroll wheel / trackpad swipe | Pan horizontally (or vertically in Vertical mode) |
+| Scroll wheel / trackpad swipe | Pan along the time axis |
 | `Ctrl+0` | Fit entire trace to window |
+| **1:1** toolbar button | Reset to default zoom (5 ns/pixel) |
 | Toolbar zoom+ / zoom− buttons | Zoom in or out by 2× |
 
 ---
@@ -174,6 +183,8 @@ The Legend lists every task with its colour swatch and `Name[id]` label.
 `gen_trace.py` generates a synthetic FreeRTOS-style BTF trace file for testing or demo purposes.
 Task names are drawn from a realistic embedded-system pool (`CAN_Rx`, `Motor_L`, `PID_Speed`, …).
 The scheduler simulation includes task priorities, IDLE time, TICK ISRs, and optional STI events.
+A fast inline **xorshift32 PRNG** is used internally for high-throughput event generation
+(≈ 0.22 s for 100 000 events on typical hardware).
 
 ### Quick start
 
@@ -300,7 +311,7 @@ IDLE and TICK tasks use a **bare name** with no `[core_id/task_id]` prefix:
 | Generic IDLE | `IDLE` | `IDLE` | Single-core systems |
 | Tick ISR | `TICK` | `TICK` | System tick interrupt |
 
-IDLE tasks are always rendered in grey; each one gets a distinct shade.  
+IDLE tasks are always rendered in grey; each one gets a distinct shade.
 TICK tasks are rendered without a `[id]` suffix in labels.
 
 ---

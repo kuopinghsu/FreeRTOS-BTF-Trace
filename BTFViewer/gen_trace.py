@@ -245,6 +245,7 @@ def main():
         emit(f"{time_us},Core_{core_idx},0,C,Core_{core_idx},0,set_frequency,{freq_hz}")
     time_us += 5 * num_cores
 
+    # Create IDLE and timer-service tasks (BTF task_create events).
     for core_idx in range(num_cores):
         emit(f"{time_us},Core_{core_idx},0,T,{idle_names[core_idx]},0,preempt,task_create")
         time_us += 15
@@ -252,66 +253,77 @@ def main():
     emit(f"{time_us},Core_0,0,T,[0/{timer_service_id}]{timer_service_name},0,preempt,task_create")
     time_us += 25
 
-    for core_idx in range(num_cores):
-        emit(f"{time_us + core_idx * 10},{idle_names[core_idx]},0,T,{idle_names[core_idx]},0,resume,")
-    time_us += num_cores * 10 + 50
-
+    # Create all worker tasks upfront.  The first num_cores workers are
+    # resumed immediately (one per core); the rest go into pending_heap so
+    # they can be scheduled as soon as a core becomes free.
     for name in workers:
         emit(f"{time_us},Core_0,0,T,[0/{worker_id_by_name[name]}]{name},0,preempt,task_create")
         time_us += 18
 
-    # ── Simulation ────────────────────────────────────────────────────────────
-    sim_start = time_us + 200
+    init_core_tasks = [workers[i % len(workers)] for i in range(num_cores)]
 
-    core_task: list[str] = list(idle_names)   # each core starts on its IDLE task
+    # Resume each core's initial worker immediately.
+    for core_idx, first_task in enumerate(init_core_tasks):
+        task_label = label_map[(core_idx, first_task)]
+        emit(f"{time_us},{core_names[core_idx]},0,T,{task_label},0,resume,")
+        time_us += 5
+
+    # ── Simulation ────────────────────────────────────────────────────────────
+    sim_start = time_us + 50
+
+    # Each core begins the simulation already running its assigned worker task.
+    core_task: list[str] = list(init_core_tasks)
 
     # Two-queue scheduler:
-    #   pending_heap  – min-heap of (ready_time, task_name); tasks waiting to run
-    #   ready_list   – list of ready task names; selection is priority-weighted
-    #                   random so that ALL tasks get scheduled over time
-    #                   (a strict max-heap would starve low-priority tasks).
-    pending_heap: list[tuple[int, str]] = [(sim_start, n) for n in workers]
-    heapq.heapify(pending_heap)
-    ready_list: list[str] = []          # tasks eligible to run right now
+    #   pending_heap  – min-heap of (ready_time, task_name)
+    #   ready_list   – tasks eligible to run right now
+    # All remaining workers (not yet pinned to a core) start ready immediately.
+    pending_heap: list[tuple[int, str]] = []
+    ready_list: list[str] = [w for w in workers if w not in set(init_core_tasks)]
 
-    # ── Local bindings: avoid repeated module-attribute lookups in hot paths ──
-    _rndf  = random.random    # float in [0, 1)
-    _rndi  = random.randint   # uniform integer
-    _rndch = random.choice    # pick random element
-    _pick_ctr = 0  # round-robin counter for O(1) task selection
+    # ── Fast xorshift32 PRNG ─────────────────────────────────────────────────
+    # Not cryptographically random, but uniform-enough distribution for
+    # simulation.  State is inlined into each helper to avoid an extra
+    # Python function-call frame.
+    _xs = [random.getrandbits(32) or 0xDEADBEEF]
+
+    def _rndf() -> float:
+        x = _xs[0]; x ^= (x << 13) & 0xFFFFFFFF; x ^= x >> 17; x ^= (x << 5) & 0xFFFFFFFF
+        _xs[0] = x
+        return x * 2.3283064365e-10   # / 2^32
+
+    def _rndi(a: int, b: int) -> int:
+        x = _xs[0]; x ^= (x << 13) & 0xFFFFFFFF; x ^= x >> 17; x ^= (x << 5) & 0xFFFFFFFF
+        _xs[0] = x
+        return a + x % (b - a + 1)
+
+    def _rndch(seq):
+        x = _xs[0]; x ^= (x << 13) & 0xFFFFFFFF; x ^= x >> 17; x ^= (x << 5) & 0xFFFFFFFF
+        _xs[0] = x
+        return seq[x % len(seq)]
+
+    _pick_ctr = 0
 
     def pick_next(core: int, now: int) -> str:
-        """
-        Choose the next task for *core*.
-        - With probability IDLE_PROB, return the core's IDLE task.
-        - Otherwise pick via round-robin so ALL tasks get scheduled over time.
-        - If no task is ready, fall through to IDLE.
-        """
+        """Return next task for *core*, or IDLE if none available."""
         nonlocal _pick_ctr
         if _rndf() < idle_prob:
             return idle_names[core]
 
-        # Transfer all newly-ready tasks from pending_heap into ready_list.
+        # Transfer newly-ready tasks into ready_list.
         while pending_heap and pending_heap[0][0] <= now:
             _, name = heapq.heappop(pending_heap)
             ready_list.append(name)
 
-        if not ready_list:
-            return idle_names[core]
-
-        # Round-robin pick: O(1), no weight computation, all tasks get turns.
-        idx  = _pick_ctr % len(ready_list)
-        _pick_ctr += 1
-        last = len(ready_list) - 1
-        ready_list[idx], ready_list[last] = ready_list[last], ready_list[idx]
-        return ready_list.pop()
+        if ready_list:
+            idx  = _pick_ctr % len(ready_list)
+            _pick_ctr += 1
+            last = len(ready_list) - 1
+            ready_list[idx], ready_list[last] = ready_list[last], ready_list[idx]
+            return ready_list.pop()
+        return idle_names[core]
 
     def burst_us(task: str) -> int:
-        """
-        Run duration in µs.
-        High-priority tasks: short bursts (1–2 ticks).
-        Low-priority tasks:  up to MAX_BURST_TICKS ticks.
-        """
         prio = worker_priority.get(task, 3)
         if prio >= 8:
             ticks = _rndi(1, 2)
@@ -323,16 +335,12 @@ def main():
         return max(50, ticks * tick_us + jitter)
 
     def block_us(task: str) -> int:
-        """
-        How long the task blocks after its burst (0 = immediately re-queued).
-        Low-priority tasks sleep longer, creating more IDLE time.
-        """
         prio = worker_priority.get(task, 3)
         max_sleep_ticks = max(0, 8 - prio)
         sleep_ticks = _rndi(0, max_sleep_ticks)
         return sleep_ticks * tick_us + _rndi(0, tick_us // 4)
 
-    # Per-core scheduling heap: (next_switch_time, core_index)
+    # Per-core scheduling heap
     sched_heap: list[tuple[int, int]] = [
         (sim_start + core_idx * (max(1, tick_us // num_cores)), core_idx)
         for core_idx in range(num_cores)
@@ -344,7 +352,7 @@ def main():
     sti_no    = 0
     next_sti  = sim_start + _rndi(tick_us, sti_interval_us)
 
-    core_preempt_prob = 0.45   # timer-interrupt vs. voluntary yield
+    core_preempt_prob = 0.45
 
     try:
         while event_count < target_total:
@@ -352,19 +360,12 @@ def main():
                 break
             cur_t, core = heapq.heappop(sched_heap)
 
-            # ── TICK ISR + STI events (interleaved, strictly time-sorted) ────────
-            # Processing TICKs and STI events in a single loop guarantees that
-            # the output timestamps are monotonically non-decreasing.  The
-            # previous two-pass approach (all TICKs, then one STI) could emit
-            # an STI at timestamp T₁ after a TICK at timestamp T₂ > T₁ when
-            # multiple ticks fired in a single scheduler step.
+            # ── TICK + STI events ─────────────────────────────────────────────
             while event_count < target_total:
                 tick_due = next_tick <= cur_t
                 sti_due  = enable_sti and next_sti <= cur_t
                 if not tick_due and not sti_due:
                     break
-                # Emit whichever event is due first; prefer TICK on a tie so
-                # the TICK pair (resume t, preempt t+1) stays contiguous.
                 if tick_due and (not sti_due or next_tick <= next_sti):
                     _buf.append(f"{next_tick},{tick_task},0,T,{tick_task},0,resume,tick_{tick_no}\n")
                     _buf.append(f"{next_tick + 1},{tick_task},0,T,{tick_task},0,preempt,\n")
@@ -376,18 +377,16 @@ def main():
                     _buf.append(f"{next_sti},{core_names[core]},0,STI,{tag},0,trigger,{tag}\n")
                     event_count += 1
                     sti_no  += 1
-                    next_sti = cur_t + _rndi(
-                        sti_interval_us // 2, sti_interval_us * 2)
+                    next_sti = cur_t + _rndi(sti_interval_us // 2, sti_interval_us * 2)
                 if len(_buf) >= _FLUSH_EVERY:
                     _flush_buf()
 
             if event_count >= target_total:
                 break
 
-            old_task = core_task[core]
-            old_label  = label_map.get((core, old_task), old_task)
-
-            new_task = pick_next(core, cur_t)
+            old_task  = core_task[core]
+            old_label = label_map.get((core, old_task), old_task)
+            new_task  = pick_next(core, cur_t)
 
             # --no-migration: tasks stay on the same core (hash-pinned)
             if not enable_migration and new_task in worker_set:
@@ -397,28 +396,24 @@ def main():
 
             new_label = label_map.get((core, new_task), new_task)
 
-            # Return old worker to the pending heap after its blocking period
+            # ── Handle old task at context switch ─────────────────────────────
             if old_task in worker_set:
                 _bl = block_us(old_task)
                 if _bl == 0:
-                    # Zero block: re-add directly to ready_list (O(1))
                     ready_list.append(old_task)
                 else:
                     heapq.heappush(pending_heap, (cur_t + _bl, old_task))
 
             # ── Context switch ────────────────────────────────────────────────
             if old_task == new_task:
-                # Same task keeps running – no switch event, just reschedule
                 idle_slice = _rndi(tick_us // 8, tick_us // 2)
                 heapq.heappush(sched_heap, (cur_t + idle_slice, core))
                 continue
 
             if _rndf() < core_preempt_prob:
-                # Timer interrupt preempts the running task
                 _buf.append(f"{cur_t},{core_names[core]},0,T,{old_label},0,preempt,\n")
                 _buf.append(f"{cur_t},{old_label},0,T,{new_label},0,resume,\n")
             else:
-                # Task yields voluntarily (vTaskDelay, semaphore wait, …)
                 _buf.append(f"{cur_t},{old_label},0,T,{old_label},0,preempt,\n")
                 _buf.append(f"{cur_t},{old_label},0,T,{new_label},0,resume,\n")
             event_count += 2
@@ -427,11 +422,9 @@ def main():
 
             core_task[core] = new_task
 
-            # Schedule the next switch on this core
             if new_task in worker_set:
                 next_burst = burst_us(new_task)
             else:
-                # IDLE: run until next TICK boundary (roughly)
                 next_burst = _rndi(tick_us // 8, tick_us)
 
             heapq.heappush(sched_heap, (cur_t + next_burst, core))

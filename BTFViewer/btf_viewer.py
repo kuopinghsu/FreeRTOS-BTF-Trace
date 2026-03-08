@@ -76,20 +76,20 @@ from typing import Dict, List, Optional, Tuple
 
 from PyQt5.QtCore import (
     QBuffer, QByteArray, QEvent, QIODevice, QLineF, QMimeData,
-    QPoint, QPointF, QRectF, Qt, QThread, QTimer,
+    QPoint, QPointF, QRectF, QSize, Qt, QThread, QTimer,
     pyqtSignal,
 )
 from PyQt5.QtGui import (
-    QBrush, QColor, QFont, QFontDatabase, QFontMetrics, QKeySequence, QPainter,
+    QBrush, QColor, QFont, QFontDatabase, QFontMetrics, QIcon, QKeySequence, QPainter,
     QPalette, QPen, QPixmap, QPolygonF, QWheelEvent,
 )
 from PyQt5.QtWidgets import (
     QAction, QApplication, QCheckBox, QDockWidget, QFileDialog,
     QFrame, QGraphicsEllipseItem, QGraphicsItem, QGraphicsLineItem,
     QGraphicsRectItem, QGraphicsScene, QGraphicsView,
-    QHBoxLayout, QLabel, QMainWindow, QMenu, QMessageBox, QProgressBar,
+    QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QProgressBar,
     QProgressDialog,
-    QPushButton, QScrollArea, QSpinBox,
+    QPushButton, QScrollArea, QSpinBox, QStackedWidget,
     QStatusBar, QStyleFactory, QStyleOptionGraphicsItem,
     QToolBar, QToolButton, QVBoxLayout, QWidget,
 )
@@ -108,7 +108,8 @@ _UI_FONT_SIZE = 10   # Application UI font: menus, toolbar, status bar (pt).
 
 # ---- Layout ---------------------------------------------------------------
 LABEL_WIDTH   = 160  # Width of the frozen task-label column (px).
-RULER_HEIGHT  =  40  # Height of the time ruler (px).
+RULER_HEIGHT  =  40  # Height of the time ruler row (px) — horizontal mode.
+RULER_WIDTH   =  80  # Width of the time ruler column (px) — vertical mode.
 ROW_HEIGHT    =  22  # Height of each task / core row (px).
 ROW_GAP       =   4  # Vertical gap between rows (px).
 STI_ROW_H     =  18  # Height of an STI (software-trace) row (px).
@@ -150,6 +151,37 @@ _CORE_PALETTE = [
     "#DDFF77",  # 15 chartreuse
 ]
 
+# ---------------------------------------------------------------------------
+# SVG icon helpers
+# ---------------------------------------------------------------------------
+
+def _svg_icon(path_data: str, color: str = "#9E9E9E", size: int = 16) -> "QIcon":
+    """Build a QIcon from an SVG path string (16×16 viewBox by default)."""
+    svg = (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" '
+        f'viewBox="0 0 16 16"><path fill="{color}" d="{path_data}"/></svg>'
+    )
+    ba = QByteArray(svg.encode())
+    pm = QPixmap()
+    pm.loadFromData(ba, "SVG")
+    return QIcon(pm)
+
+# Icon path data (16×16 viewBox, single-path SVG outlines)
+_IC_OPEN   = "M2 4a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1H7L5.5 4H2z"
+_IC_SAVE   = "M2 1a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V4.5L11.5 1H2zm2 1h5v3H4V2zm4 8a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zM3 10h10v4H3v-4z"
+_IC_COPY   = "M4 1.5H3a2 2 0 0 0-2 2V14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V3.5a2 2 0 0 0-2-2h-1v1h1a1 1 0 0 1 1 1V14a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1h1v-1zM5 0h6a1 1 0 0 1 1 1v3H4V1a1 1 0 0 1 1-1z"
+_IC_HORIZ  = "M1 4h14v2H1zm0 4h14v2H1zm0 4h14v2H1z"
+_IC_VERT   = "M3 1h2v14H3zm4 0h2v14H7zm4 0h2v14h-2z"
+_IC_ZIN    = "M6.5 1a5.5 5.5 0 1 0 3.89 9.4l3.4 3.4.7-.7-3.4-3.4A5.5 5.5 0 0 0 6.5 1zm0 1a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9zM6 5v1.5H4.5v1H6V9h1V7.5h1.5v-1H7V5H6z"
+_IC_ZOUT   = "M6.5 1a5.5 5.5 0 1 0 3.89 9.4l3.4 3.4.7-.7-3.4-3.4A5.5 5.5 0 0 0 6.5 1zm0 1a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9zM4 6h5v1H4V6z"
+_IC_FIT    = "M1.5 1h5v1h-4v4h-1V1.5a.5.5 0 0 1 .5-.5zm13 0a.5.5 0 0 1 .5.5V6h-1V2h-4V1h4.5zM1 10h1v4h4v1H1.5a.5.5 0 0 1-.5-.5V10zm14 0v4.5a.5.5 0 0 1-.5.5H10v-1h4v-4h1z"
+_IC_CURSOR = "M1 1l5 12 2-4 4 4 1-1-4-4 4-2L1 1z"
+_IC_CLEAR  = "M2 2.5l.5-.5 5.5 5.5 5.5-5.5.5.5L8.5 8 14 13.5l-.5.5L8 8.5 2.5 14l-.5-.5L7.5 8 2 2.5z"
+_IC_LEGEND = "M1 2a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V2zm5-1h8v1H6V1zm0 3h8v1H6V4zm-5 3a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V7zm5-1h8v1H6V6zm0 3h8v1H6V9zm-5 3a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1v-2zm5-1h8v1H6v-1zm0 3h8v1H6v-1z"
+_IC_TASK   = "M1 2.5A1.5 1.5 0 0 1 2.5 1h11A1.5 1.5 0 0 1 15 2.5v11a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 13.5v-11zM4 5.5h8v1H4v-1zm0 3h8v1H4v-1zm0 3h5v1H4v-1z"
+_IC_CORE   = "M5 1v2H3a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2v2h1v-2h4v2h1v-2h2a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2h-2V1h-1v2H6V1H5zm-2 4h10v6H3V5zm2 1v4h6V6H5z"
+_IC_EXPAND = "M1.5 1h5v1h-4v4h-1V1.5a.5.5 0 0 1 .5-.5zm13 0a.5.5 0 0 1 .5.5V6h-1V2h-4V1h4.5zM1 10h1v4h4v1H1.5a.5.5 0 0 1-.5-.5V10zm14 0v4.5a.5.5 0 0 1-.5.5H10v-1h4v-4h1z"
+
 def _core_color(core_name: str) -> str:
     """Return a distinct color hex string for a core name like 'Core_N'."""
     if core_name.startswith("Core_"):
@@ -184,7 +216,7 @@ _STI_COLORS: Dict[str, QColor] = {
 }
 
 # ---- Performance / Level-of-Detail ----------------------------------------
-NS_PER_PX_DEFAULT = 1.0    # Initial zoom level (nanoseconds per screen pixel).
+NS_PER_PX_DEFAULT = 5.0    # Initial zoom level (nanoseconds per screen pixel).
 # _BatchRowItem.paint() LOD thresholds (Qt levelOfDetail: 1.0 = 100% zoom).
 _PAINT_LOD_COARSE = 0.45   # Below: merge nearby segments, skip pen outlines.
 _PAINT_LOD_MICRO  = 0.12   # Below: draw one tinted activity bar per row.
@@ -271,6 +303,8 @@ class BtfTrace:
     core_seg_lod_starts:            Dict[str, List[int]]                    = field(default_factory=dict)
     core_task_seg_lod:              Dict[str, Dict[str, List[TaskSegment]]] = field(default_factory=dict)
     core_task_seg_lod_starts:       Dict[str, Dict[str, List[int]]]         = field(default_factory=dict)
+    # Map from merge-key → timestamp of the task_create event (first occurrence).
+    task_create_times: Dict[str, int]                                       = field(default_factory=dict)
 
 # ---------------------------------------------------------------------------
 # Task-name helpers
@@ -349,6 +383,8 @@ def parse_btf(filepath: str,
     time_min = 0
     time_max = 0
     first_event = True
+    # raw_name → first task_create timestamp
+    _task_create_raw: Dict[str, int] = {}
 
     # ------------------------------------------------------------------
     # Phase 1 : file reading
@@ -384,23 +420,30 @@ def parse_btf(filepath: str,
             except ValueError:
                 continue
 
-            if first_event:
-                time_min = time_max = t
-                first_event = False
-            else:
-                if t < time_min:
-                    time_min = t
-                if t > time_max:
-                    time_max = t
-
             ev_type = parts[3].strip()
+            # Update time bounds only for non-C (non-set_frequency) events so
+            # that the trace start is anchored to the first scheduling event.
+            if ev_type != "C":
+                if first_event:
+                    time_min = time_max = t
+                    first_event = False
+                else:
+                    if t < time_min:
+                        time_min = t
+                    if t > time_max:
+                        time_max = t
             if ev_type == "T":
+                _note = parts[7].strip() if len(parts) > 7 else ""
+                if _note == "task_create":
+                    _tgt_raw = parts[4].strip()
+                    if _tgt_raw not in _task_create_raw:
+                        _task_create_raw[_tgt_raw] = t
                 t_events_by_time[t].append((
                     t,
                     parts[1].strip(),   # source
                     parts[6].strip(),   # event
                     parts[4].strip(),   # target
-                    parts[7].strip() if len(parts) > 7 else "",  # note
+                    _note,              # note
                 ))
             elif ev_type == "STI":
                 sti_events.append(StiEvent(
@@ -510,8 +553,12 @@ def parse_btf(filepath: str,
             mk = task_merge_key(seg.task)
             _mk_cache[seg.task] = mk
         segs_by_mk_build[mk].append(seg)
-        _core_segs_build[seg.core].append(seg)
-        _cn_set.add(seg.core)
+        # TICK is a global event not associated with any real core; suppress it
+        # from Core_? so it doesn't pollute the unknown-core row in core view.
+        _tname = parse_task_name(seg.task)[2]
+        if not (_tname == "TICK" and seg.core == "Core_?"):
+            _core_segs_build[seg.core].append(seg)
+            _cn_set.add(seg.core)
 
     task_set: set = set(_mk_cache.values())
     # Sort by the first representative raw task name for each key.
@@ -519,7 +566,11 @@ def parse_btf(filepath: str,
     for raw, mk in _mk_cache.items():
         if mk not in _mk_repr:
             _mk_repr[mk] = raw
-    tasks = sorted(task_set, key=lambda mk: task_sort_key(_mk_repr[mk]))
+    # TICK is rendered on the time-scale ruler, not as a task row.
+    _tick_mk_excl = task_merge_key("TICK")
+    tasks = sorted(
+        (mk for mk in task_set if mk != _tick_mk_excl),
+        key=lambda mk: task_sort_key(_mk_repr[mk]))
 
     sti_channels = sorted({e.target for e in sti_events})
     sti_by_target: Dict[str, List[StiEvent]] = defaultdict(list)
@@ -556,6 +607,13 @@ def parse_btf(filepath: str,
         _core_segs[c].sort(key=lambda s: s.start)
         _core_task_order[c] = sorted(_tsm.keys(), key=task_sort_key)
         _core_task_segs[c]  = _tsm
+
+    # Map raw task_create names to merge keys.
+    _task_create_times: Dict[str, int] = {}
+    for _raw_ct, _ct_time in _task_create_raw.items():
+        _mk_ct = _mk_cache.get(_raw_ct) or task_merge_key(_raw_ct)
+        if _mk_ct not in _task_create_times or _ct_time < _task_create_times[_mk_ct]:
+            _task_create_times[_mk_ct] = _ct_time
 
     # ------------------------------------------------------------------
     # Phase 4 : 1M-event performance pre-processing
@@ -666,6 +724,7 @@ def parse_btf(filepath: str,
         core_seg_lod_starts=_core_seg_lod_starts,
         core_task_seg_lod=dict(_core_task_lod),
         core_task_seg_lod_starts=dict(_core_task_lod_starts),
+        task_create_times=_task_create_times,
     )
 
 # ===========================================================================
@@ -1017,6 +1076,10 @@ class TimelineScene(QGraphicsScene):
         # List of (item, orig_x_offset); repositioned on every scroll so
         # the label column stays pinned to the left edge of the viewport.
         self._frozen_items: List[tuple] = []
+        # -- Frozen top-row (ruler + TICK band) items --------------------
+        # List of (item, orig_y_offset); repositioned on vertical scroll so
+        # the time-scale ruler stays pinned to the top edge of the viewport.
+        self._frozen_top_items: List[tuple] = []
         # -- Cursor overlay ----------------------------------------------
         # Stored as ns timestamps; drawn as colored dash-lines above everything.
         self._cursor_times: List[int] = []
@@ -1027,10 +1090,6 @@ class TimelineScene(QGraphicsScene):
         # task_key → [(QRectF, QColor)] – populated by builders, used for hover overlays
         self._task_row_rects: Dict[str, list] = {}
         self._hover_overlay_items: list = []   # lightweight overlay items (no rebuild)
-        # -- Task visibility filter --------------------------------------
-        # 0 = show all tasks; N > 0 = show only the N most-active tasks.
-        self._max_visible_tasks: int = 0
-        self._task_activity_cache: Optional[Dict[str, int]] = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -1038,7 +1097,6 @@ class TimelineScene(QGraphicsScene):
 
     def set_trace(self, trace: BtfTrace, viewport_width: int = 1200) -> None:
         self._trace = trace
-        self._task_activity_cache = None   # clear on new trace
         time_span = max(trace.time_max - trace.time_min, 1)
         avail = max(viewport_width - self._label_width, 100)
         self._ns_per_px = time_span / avail
@@ -1101,32 +1159,9 @@ class TimelineScene(QGraphicsScene):
         self._label_width = max(60, min(width, 600))
         self.rebuild()
 
-    def set_max_visible_tasks(self, n: int) -> None:
-        """Limit task view to the *n* most-active tasks (0 = show all)."""
-        self._max_visible_tasks = max(0, n)
-        self._task_activity_cache = None   # recompute rankings
-        # Do NOT set _skip_orth_culling: row Y positions are unchanged, orth
-        # bounds from the current viewport are valid.
-        self.rebuild()
-
-    def _apply_task_limit(self, task_rows: list) -> list:
-        """Return at most _max_visible_tasks rows, ranked by total execution time."""
-        if self._max_visible_tasks <= 0 or not task_rows:
-            return task_rows
-        # Build/cache a {merge_key: total_duration} map once per trace.
-        if self._task_activity_cache is None:
-            seg_map = self._trace.seg_map_by_merge_key
-            self._task_activity_cache = {
-                mk: sum(s.end - s.start for s in segs)
-                for mk, segs in seg_map.items()
-            }
-        cache = self._task_activity_cache
-        ranked = sorted(task_rows, key=lambda mk: cache.get(mk, 0), reverse=True)
-        return ranked[:self._max_visible_tasks]
-
     def zoom(self, factor: float, center_ns: Optional[int] = None) -> None:
         new_val = self._ns_per_px / factor
-        # Clamp: don't zoom in past 1:1 (NS_PER_PX_DEFAULT) or
+        # Clamp: don't zoom in past NS_PER_PX_DEFAULT or
         # zoom out past fit-to-view level.
         new_val = max(NS_PER_PX_DEFAULT, min(new_val, self._ns_per_px_fit))
         if new_val == self._ns_per_px:
@@ -1350,12 +1385,12 @@ class TimelineScene(QGraphicsScene):
                     d_lbl.setBrush(QBrush(QColor("#FFFFFF")))
                     d_lbl.setZValue(32)
                     bg_rect = self.addRect(
-                        QRectF(RULER_HEIGHT + 4, mid_y - dh / 2 - 2,
+                        QRectF(RULER_WIDTH + 4, mid_y - dh / 2 - 2,
                                QFontMetrics(font).horizontalAdvance(d_str) + 6, dh + 4),
                         QPen(Qt.NoPen), QBrush(QColor(0, 0, 0, 160))
                     )
                     bg_rect.setZValue(31)
-                    d_lbl.setPos(RULER_HEIGHT + 7, mid_y - dh / 2)
+                    d_lbl.setPos(RULER_WIDTH + 7, mid_y - dh / 2)
                     self._cursor_items.extend([bg_rect, d_lbl])
 
     # ------------------------------------------------------------------
@@ -1445,6 +1480,7 @@ class TimelineScene(QGraphicsScene):
         self.clear()
         self._cursor_items = []
         self._frozen_items = []
+        self._frozen_top_items = []
         self._task_row_rects = {}
         self._hover_overlay_items = []   # clear() removed them from the scene
         if self._trace is None:
@@ -1476,7 +1512,7 @@ class TimelineScene(QGraphicsScene):
         # trace.tasks is a sorted list of merge-keys.  task_repr maps
         # each merge-key to its representative raw name, which is needed
         # to resolve display names and colours.
-        task_rows = self._apply_task_limit(trace.tasks)
+        task_rows = trace.tasks
         sti_rows  = trace.sti_channels if self._show_sti else []
         n_task = len(task_rows)
         n_sti  = len(sti_rows)
@@ -1491,18 +1527,68 @@ class TimelineScene(QGraphicsScene):
         self.setSceneRect(0, 0, total_w, total_h)
 
         # --- Background & ruler ------------------------------------------
-        self.addRect(QRectF(0, 0, total_w, RULER_HEIGHT),
-                     QPen(Qt.NoPen), QBrush(QColor("#2B2B2B"))).setZValue(-1)
+        _ruler_bg = self.addRect(QRectF(0, 0, total_w, RULER_HEIGHT),
+                                 QPen(Qt.NoPen), QBrush(QColor("#2B2B2B")))
+        _ruler_bg.setZValue(10)   # above task rows (z=0-2) when frozen at top
+        self._frozen_top_items.append((_ruler_bg, 0))
         _lbg = self.addRect(QRectF(0, 0, self._label_width, total_h),
                             QPen(Qt.NoPen), QBrush(QColor("#1E1E1E")))
         _lbg.setZValue(35)   # must be above cursor lines (z=30-32)
         self._frozen_items.append((_lbg, 0))
 
-        _ruler = _RulerItem(trace, self._ns_per_px, total_w, total_h,
-                              font, trace.time_scale, self._show_grid,
-                              horiz=True, axis_offset=self._label_width)
-        _ruler.setZValue(0.5)
-        self.addItem(_ruler)
+        # Grid-only ruler: grid lines stay at absolute scene positions (not frozen).
+        _ruler_grid = _RulerItem(trace, self._ns_per_px, total_w, total_h,
+                                   font, trace.time_scale, self._show_grid,
+                                   horiz=True, axis_offset=self._label_width,
+                                   draw_header=False)
+        _ruler_grid.setZValue(0.5)
+        self.addItem(_ruler_grid)
+        # Header-only ruler: tick marks + labels, frozen to the top edge.
+        _ruler_hdr = _RulerItem(trace, self._ns_per_px, total_w, total_h,
+                                 font, trace.time_scale, show_grid=False,
+                                 horiz=True, axis_offset=self._label_width,
+                                 draw_grid=False)
+        _ruler_hdr.setZValue(11)
+        self.addItem(_ruler_hdr)
+        self._frozen_top_items.append((_ruler_hdr, 0))
+
+        # --- TICK band on ruler (bottom strip) ---------------------------
+        _htmk   = task_merge_key("TICK")
+        _htsegs = trace.seg_map_by_merge_key.get(_htmk, [])
+        if _htsegs:
+            _ht_lod_ns   = trace.seg_lod_ns_per_px
+            _ht_npp      = self._ns_per_px
+            _ht_vlo      = self._vp_ns_lo
+            _ht_vhi      = self._vp_ns_hi
+            _ht_tmin     = trace.time_min
+            _ht_ppns     = 1.0 / _ht_npp
+            _ht_lw       = self._label_width
+            _ht_y        = RULER_HEIGHT - 10
+            _ht_h        = 8
+            _ht_data: list = []
+            _ht_xs:   list = []
+            for _i, _seg in enumerate(_visible_segs(
+                    _htsegs,
+                    trace.seg_start_by_merge_key.get(_htmk, []),
+                    trace.seg_lod_by_merge_key.get(_htmk, []),
+                    trace.seg_lod_starts_by_merge_key.get(_htmk, []),
+                    _ht_lod_ns, _ht_npp, _ht_vlo, _ht_vhi,
+                    _ht_tmin, _ht_ppns, _ht_lw)):
+                _x1 = _ht_lw + (_seg.start - _ht_tmin) * _ht_ppns
+                _x2 = _ht_lw + (_seg.end   - _ht_tmin) * _ht_ppns
+                _w  = _x2 - _x1 if _x2 - _x1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
+                _ht_data.append((
+                    QRectF(_x1, _ht_y + 1, _w, _ht_h - 2),
+                    _task_brush(_seg.task), _task_pen_dark(_seg.task), _seg,
+                ))
+                _ht_xs.append((_x1, _x1 + _w, _i))
+            _ht_batch = _BatchRowItem(
+                QRectF(_ht_lw, _ht_y, timeline_w, _ht_h),
+                _ht_data, trace.time_scale, xs=_ht_xs,
+                time_min=trace.time_min)
+            _ht_batch.setZValue(12)   # above frozen ruler_bg+header
+            self.addItem(_ht_batch)
+            self._frozen_top_items.append((_ht_batch, 0))
 
         # Shared colors/pens/brushes hoisted out of loops
         _bg_even   = QBrush(QColor("#252526"))
@@ -1592,11 +1678,17 @@ class TimelineScene(QGraphicsScene):
                 QRectF(lw, y_top, timeline_w, ROW_HEIGHT),
                 seg_data, trace.time_scale,
                 label_font=font, label_fm=fm, label_text=disp,
-                xs=xs)
+                xs=xs, time_min=trace.time_min)
             batch.setZValue(1)
             self.addItem(batch)
 
-        # --- STI rows ---------------------------------------------------
+            # Task-create marker: 1px vertical line at the creation timestamp
+            _ct_h = trace.task_create_times.get(task)
+            if _ct_h is not None:
+                _cx = lw + (_ct_h - _time_min) * _px_per_ns
+                _cl = self.addLine(_cx, y_top, _cx, y_top + ROW_HEIGHT,
+                                   QPen(row_color, 1))
+                _cl.setZValue(2.5)
         # One row per STI channel containing one _BatchStiItem with all
         # events for that channel, sorted by time (ascending scene_x).
         for sti_idx, channel in enumerate(sti_rows):
@@ -1623,21 +1715,34 @@ class TimelineScene(QGraphicsScene):
             ]
             _sti_item = _BatchStiItem(
                 QRectF(lw, y_top, timeline_w, ROW_HEIGHT),
-                _sti_markers, trace.time_scale, horizontal=True, axis=y_ctr)
+                _sti_markers, trace.time_scale, horizontal=True, axis=y_ctr,
+                time_min=trace.time_min)
             _sti_item.setZValue(2)
             self.addItem(_sti_item)
 
         # --- Frozen label column header ----------------------------------
         # Drawn last so it sits on top of all other frozen items (z=38-39).
+        _htmk_c = task_merge_key("TICK")
+        _has_tick_h = bool(trace.seg_map_by_merge_key.get(_htmk_c, []))
         corner = self.addRect(QRectF(0, 0, lw, RULER_HEIGHT),
                               QPen(Qt.NoPen), QBrush(QColor("#1A1A1A")))
         corner.setZValue(38)
+        _hdr_band_h = RULER_HEIGHT - (10 if _has_tick_h else 0)
         hdr = self.addSimpleText("Task / TaskID", font)
         hdr.setBrush(QBrush(QColor("#888888")))
-        hdr.setPos(4, RULER_HEIGHT / 2 - fm.height() / 2)
+        hdr.setPos(4, _hdr_band_h / 2 - fm.height() / 2)
         hdr.setZValue(39)
         self._frozen_items.append((corner, 0))
         self._frozen_items.append((hdr, 4))
+        self._frozen_top_items.append((corner, 0))
+        self._frozen_top_items.append((hdr, hdr.pos().y()))
+        if _has_tick_h:
+            _tick_hdr = self.addSimpleText("TICK", font)
+            _tick_hdr.setBrush(QBrush(QColor("#E8C84A")))
+            _tick_hdr.setPos(4, RULER_HEIGHT - 10 + (10 - fm.height()) / 2)
+            _tick_hdr.setZValue(39)
+            self._frozen_items.append((_tick_hdr, 4))
+            self._frozen_top_items.append((_tick_hdr, _tick_hdr.pos().y()))
 
     def _build_vertical(self) -> None:
         trace = self._trace
@@ -1646,7 +1751,7 @@ class TimelineScene(QGraphicsScene):
 
         # trace.tasks is a sorted list of merge-keys.  task_repr maps
         # each merge-key to its representative raw name.
-        task_cols = self._apply_task_limit(trace.tasks)
+        task_cols = trace.tasks
         sti_cols  = trace.sti_channels if self._show_sti else []
         n_task = len(task_cols)
         n_sti  = len(sti_cols)
@@ -1658,20 +1763,75 @@ class TimelineScene(QGraphicsScene):
         label_row_h = self._label_width
         time_span   = trace.time_max - trace.time_min
         timeline_h  = time_span / self._ns_per_px
-        total_w     = col_w * total_cols + RULER_HEIGHT
+        total_w     = col_w * total_cols + RULER_WIDTH
         total_h     = label_row_h + timeline_h
         self.setSceneRect(0, 0, total_w, total_h)
 
-        self.addRect(QRectF(0, 0, RULER_HEIGHT, total_h),
-                     QPen(Qt.NoPen), QBrush(QColor("#2B2B2B"))).setZValue(-1)
-        self.addRect(QRectF(0, 0, total_w, label_row_h),
-                     QPen(Qt.NoPen), QBrush(QColor("#1E1E1E"))).setZValue(0)
+        # --- Ruler column (left side): frozen to left edge on X scroll ------
+        _ruler_col_bg = self.addRect(QRectF(0, 0, RULER_WIDTH, total_h),
+                                     QPen(Qt.NoPen), QBrush(QColor("#2B2B2B")))
+        _ruler_col_bg.setZValue(35)  # above cursor lines (z=30-32)
+        self._frozen_items.append((_ruler_col_bg, 0))
 
-        _ruler = _RulerItem(trace, self._ns_per_px, total_w, total_h,
-                              font, trace.time_scale, self._show_grid,
-                              horiz=False, axis_offset=label_row_h)
-        _ruler.setZValue(0.5)
-        self.addItem(_ruler)
+        # --- Label row (top): frozen to top edge on Y scroll ---------------
+        _label_row_bg = self.addRect(QRectF(0, 0, total_w, label_row_h),
+                                     QPen(Qt.NoPen), QBrush(QColor("#1E1E1E")))
+        _label_row_bg.setZValue(10)
+        self._frozen_top_items.append((_label_row_bg, 0))
+
+        # Grid-only ruler: horizontal lines at absolute Y positions (not frozen).
+        _ruler_grid = _RulerItem(trace, self._ns_per_px, total_w, total_h,
+                                   font, trace.time_scale, self._show_grid,
+                                   horiz=False, axis_offset=label_row_h,
+                                   draw_header=False)
+        _ruler_grid.setZValue(0.5)
+        self.addItem(_ruler_grid)
+        # Header-only ruler: tick marks + labels, frozen to left edge.
+        _ruler_hdr = _RulerItem(trace, self._ns_per_px, total_w, total_h,
+                                  font, trace.time_scale, show_grid=False,
+                                  horiz=False, axis_offset=label_row_h,
+                                  draw_grid=False)
+        _ruler_hdr.setZValue(36)
+        self.addItem(_ruler_hdr)
+        self._frozen_items.append((_ruler_hdr, 0))
+
+        # --- TICK band on ruler (right strip of ruler column) ------------
+        _vtmk   = task_merge_key("TICK")
+        _vtsegs = trace.seg_map_by_merge_key.get(_vtmk, [])
+        _has_tick_v = bool(_vtsegs)
+        if _has_tick_v:
+            _vt_lod_ns   = trace.seg_lod_ns_per_px
+            _vt_npp      = self._ns_per_px
+            _vt_vlo      = self._vp_ns_lo
+            _vt_vhi      = self._vp_ns_hi
+            _vt_tmin     = trace.time_min
+            _vt_ppns     = 1.0 / _vt_npp
+            _vt_x        = RULER_WIDTH - 18
+            _vt_w        = 14
+            _vt_data: list = []
+            _vt_xs:   list = []
+            for _i, _seg in enumerate(_visible_segs(
+                    _vtsegs,
+                    trace.seg_start_by_merge_key.get(_vtmk, []),
+                    trace.seg_lod_by_merge_key.get(_vtmk, []),
+                    trace.seg_lod_starts_by_merge_key.get(_vtmk, []),
+                    _vt_lod_ns, _vt_npp, _vt_vlo, _vt_vhi,
+                    _vt_tmin, _vt_ppns, label_row_h)):
+                _y1 = label_row_h + (_seg.start - _vt_tmin) * _vt_ppns
+                _y2 = label_row_h + (_seg.end   - _vt_tmin) * _vt_ppns
+                _h  = _y2 - _y1 if _y2 - _y1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
+                _vt_data.append((
+                    QRectF(_vt_x + 1, _y1, _vt_w - 2, _h),
+                    _task_brush(_seg.task), _task_pen_dark(_seg.task), _seg,
+                ))
+                _vt_xs.append((_y1, _y1 + _h, _i))
+            _vt_batch = _BatchRowItem(
+                QRectF(_vt_x, label_row_h, _vt_w, timeline_h),
+                _vt_data, trace.time_scale, xs=_vt_xs,
+                time_min=trace.time_min)
+            _vt_batch.setZValue(37)   # above ruler header (z=36)
+            self.addItem(_vt_batch)
+            self._frozen_items.append((_vt_batch, 0))
 
         # Use pre-built sorted segment map from the trace (avoids O(n_seg) rebuild work)
         seg_map = trace.seg_map_by_merge_key
@@ -1689,12 +1849,12 @@ class TimelineScene(QGraphicsScene):
         _ns_per_px = self._ns_per_px
 
         # Compute first/last visible col indices from the cached orth bounds.
-        _first_vis_c = max(0, int((self._vp_scene_orth_lo - RULER_HEIGHT) // col_w))
-        _last_vis_c  = min(n_task - 1, int((self._vp_scene_orth_hi - RULER_HEIGHT) // col_w) + 1)
+        _first_vis_c = max(0, int((self._vp_scene_orth_lo - RULER_WIDTH) // col_w))
+        _last_vis_c  = min(n_task - 1, int((self._vp_scene_orth_hi - RULER_WIDTH) // col_w) + 1)
         for col_idx in range(_first_vis_c, _last_vis_c + 1):
             task   = task_cols[col_idx]
             raw    = trace.task_repr.get(task, task)
-            x_left = RULER_HEIGHT + col_idx * col_w
+            x_left = RULER_WIDTH + col_idx * col_w
             is_hl  = (task == self._locked_task)
             disp      = task_display_name(raw)
             col_color = _task_color(raw)
@@ -1711,8 +1871,9 @@ class TimelineScene(QGraphicsScene):
             # Clickable label area at the top of each column
             lbl_bg = _TaskLabelItem(QRectF(x_left, 0, col_w, label_row_h), task, self,
                                     tooltip_text=disp)
-            lbl_bg.setZValue(4)
+            lbl_bg.setZValue(36)
             self.addItem(lbl_bg)
+            self._frozen_top_items.append((lbl_bg, 0))
 
             lbl_color = QColor("#FFD700") if is_hl else _lbl_color
             lbl_font  = _monospace_font(self._font_size, QFont.Bold) if is_hl else font
@@ -1722,8 +1883,9 @@ class TimelineScene(QGraphicsScene):
             lbl = self.addSimpleText(_lbl_disp_v, lbl_font)
             lbl.setBrush(QBrush(lbl_color))
             lbl.setRotation(-90)
-            lbl.setPos(x_left + col_w / 2 + fm.height() / 2, label_row_h - 4)
-            lbl.setZValue(5)
+            lbl.setPos(x_left + col_w / 2 - fm.height() / 2, label_row_h - 4)
+            lbl.setZValue(37)
+            self._frozen_top_items.append((lbl, lbl.pos().y()))
 
             pen_hl      = _pen_hl_v
             seg_data: list = []
@@ -1748,22 +1910,31 @@ class TimelineScene(QGraphicsScene):
             batch = _BatchRowItem(
                 QRectF(x_left, label_row_h, col_w, timeline_h),
                 seg_data, trace.time_scale,
-                xs=xs)
+                xs=xs, time_min=trace.time_min)
             batch.setZValue(1)
             self.addItem(batch)
+
+            # Task-create marker: 1px horizontal line at the creation timestamp
+            _ct_v = trace.task_create_times.get(task)
+            if _ct_v is not None:
+                _cy = label_row_h + (_ct_v - _time_min) * _px_per_ns
+                _cl_v = self.addLine(x_left, _cy, x_left + col_w, _cy,
+                                     QPen(col_color, 1))
+                _cl_v.setZValue(2.5)
 
         # --- STI columns ------------------------------------------------
         for sti_idx, channel in enumerate(sti_cols):
             col_idx = n_task + sti_idx
-            x_left  = RULER_HEIGHT + col_idx * col_w
+            x_left  = RULER_WIDTH + col_idx * col_w
             x_ctr   = x_left + col_w / 2
             self.addRect(QRectF(x_left, label_row_h, col_w, timeline_h),
                          QPen(Qt.NoPen), QBrush(QColor("#1A1A2E"))).setZValue(0)
             lbl = self.addSimpleText(channel, font)
             lbl.setBrush(QBrush(QColor("#88AABB")))
             lbl.setRotation(-90)
-            lbl.setPos(x_left + col_w / 2 + fm.height() / 2, label_row_h - 4)
-            lbl.setZValue(3)
+            lbl.setPos(x_left + col_w / 2 - fm.height() / 2, label_row_h - 4)
+            lbl.setZValue(37)
+            self._frozen_top_items.append((lbl, lbl.pos().y()))
             _sti_evs_v  = trace.sti_events_by_target.get(channel, [])
             _sti_stts_v = trace.sti_starts_by_target.get(channel, [])
             if _sti_stts_v:
@@ -1776,12 +1947,28 @@ class TimelineScene(QGraphicsScene):
             ]
             _sti_item_v = _BatchStiItem(
                 QRectF(x_left, label_row_h, col_w, timeline_h),
-                _sti_markers_v, trace.time_scale, horizontal=False, axis=x_ctr)
+                _sti_markers_v, trace.time_scale, horizontal=False, axis=x_ctr,
+                time_min=trace.time_min)
             _sti_item_v.setZValue(2)
             self.addItem(_sti_item_v)
 
-        self.addRect(QRectF(0, 0, RULER_HEIGHT, label_row_h),
-                     QPen(Qt.NoPen), QBrush(QColor("#1A1A1A"))).setZValue(5)
+        # --- Corner: ruler-column × label-row intersection ---------------
+        _vtmk_c = task_merge_key("TICK")
+        _has_tick_vc = bool(trace.seg_map_by_merge_key.get(_vtmk_c, []))
+        _vt_corner_rect = self.addRect(QRectF(0, 0, RULER_WIDTH, label_row_h),
+                                       QPen(Qt.NoPen), QBrush(QColor("#1A1A1A")))
+        _vt_corner_rect.setZValue(40)   # above ruler (35-37) and label row (10-37)
+        self._frozen_items.append((_vt_corner_rect, 0))
+        self._frozen_top_items.append((_vt_corner_rect, 0))
+        if _has_tick_vc:
+            _tick_vlbl = self.addSimpleText("TICK", font)
+            _tick_vlbl.setBrush(QBrush(QColor("#E8C84A")))
+            _tick_vlbl.setRotation(-90)
+            _vband_cx  = (RULER_WIDTH - 18) + 14 / 2
+            _tick_vlbl.setPos(_vband_cx - fm.height() / 2, label_row_h - 4)
+            _tick_vlbl.setZValue(41)
+            self._frozen_items.append((_tick_vlbl, _tick_vlbl.pos().x()))
+            self._frozen_top_items.append((_tick_vlbl, _tick_vlbl.pos().y()))
 
     # ------------------------------------------------------------------
     # Core view builders
@@ -1801,6 +1988,11 @@ class TimelineScene(QGraphicsScene):
         task_seg_map_by_core = trace.core_task_segs
         sti_rows             = trace.sti_channels if self._show_sti else []
 
+        # TICK is a global event — shown as a sticky first row above all cores.
+        _tick_mk   = task_merge_key("TICK")
+        _tick_segs = trace.seg_map_by_merge_key.get(_tick_mk, [])
+        _has_tick  = bool(_tick_segs)
+
         def _row_count(c: str) -> int:
             return 1 + (len(core_tasks[c]) if self._core_expanded.get(c, True) else 0)
 
@@ -1815,18 +2007,30 @@ class TimelineScene(QGraphicsScene):
         self.setSceneRect(0, 0, total_w, total_h)
 
         # --- Background & ruler ------------------------------------------
-        self.addRect(QRectF(0, 0, total_w, RULER_HEIGHT),
-                     QPen(Qt.NoPen), QBrush(QColor("#2B2B2B"))).setZValue(-1)
+        _ruler_bg = self.addRect(QRectF(0, 0, total_w, RULER_HEIGHT),
+                                 QPen(Qt.NoPen), QBrush(QColor("#2B2B2B")))
+        _ruler_bg.setZValue(10)
+        self._frozen_top_items.append((_ruler_bg, 0))
         _lbg = self.addRect(QRectF(0, 0, self._label_width, total_h),
                             QPen(Qt.NoPen), QBrush(QColor("#1E1E1E")))
         _lbg.setZValue(35)   # must be above cursor lines (z=30-32)
         self._frozen_items.append((_lbg, 0))
 
-        _ruler = _RulerItem(trace, self._ns_per_px, total_w, total_h,
-                              font, trace.time_scale, self._show_grid,
-                              horiz=True, axis_offset=self._label_width)
-        _ruler.setZValue(0.5)
-        self.addItem(_ruler)
+        # Grid-only ruler (not frozen — grid lines stay at their scene positions).
+        _ruler_grid = _RulerItem(trace, self._ns_per_px, total_w, total_h,
+                                   font, trace.time_scale, self._show_grid,
+                                   horiz=True, axis_offset=self._label_width,
+                                   draw_header=False)
+        _ruler_grid.setZValue(0.5)
+        self.addItem(_ruler_grid)
+        # Header-only ruler (frozen by Y — always visible at viewport top).
+        _ruler_hdr = _RulerItem(trace, self._ns_per_px, total_w, total_h,
+                                 font, trace.time_scale, show_grid=False,
+                                 horiz=True, axis_offset=self._label_width,
+                                 draw_grid=False)
+        _ruler_hdr.setZValue(11)
+        self.addItem(_ruler_hdr)
+        self._frozen_top_items.append((_ruler_hdr, 0))
 
         _time_min  = trace.time_min
         _px_per_ns = 1.0 / self._ns_per_px
@@ -1842,6 +2046,35 @@ class TimelineScene(QGraphicsScene):
         ct_seg_starts = trace.core_task_seg_starts
         _ct_lod       = trace.core_task_seg_lod
         ct_lod_starts = trace.core_task_seg_lod_starts
+        # --- TICK band: TICK segments overlaid on the bottom strip of the ruler ---
+        if _has_tick:
+            _tb_y = RULER_HEIGHT - 10   # y of TICK band within ruler (bottom 10 px)
+            _tb_h = 8                   # height of TICK band
+            _tick_seg_data: list = []
+            _tick_xs:       list = []
+            for i_s, seg in enumerate(_visible_segs(
+                    _tick_segs,
+                    trace.seg_start_by_merge_key.get(_tick_mk, []),
+                    trace.seg_lod_by_merge_key.get(_tick_mk, []),
+                    trace.seg_lod_starts_by_merge_key.get(_tick_mk, []),
+                    lod_ns_per_px, _ns_per_px, _vp_ns_lo, _vp_ns_hi,
+                    _time_min, _px_per_ns, lw)):
+                x1 = lw + (seg.start - _time_min) * _px_per_ns
+                x2 = lw + (seg.end   - _time_min) * _px_per_ns
+                w  = x2 - x1 if x2 - x1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
+                _tick_seg_data.append((
+                    QRectF(x1, _tb_y + 1, w, _tb_h - 2),
+                    _task_brush(seg.task), _task_pen_dark(seg.task), seg,
+                ))
+                _tick_xs.append((x1, x1 + w, i_s))
+            tick_batch = _BatchRowItem(
+                QRectF(lw, _tb_y, timeline_w, _tb_h),
+                _tick_seg_data, trace.time_scale,
+                xs=_tick_xs, time_min=trace.time_min)
+            tick_batch.setZValue(12)   # above frozen ruler_bg+header
+            self.addItem(tick_batch)
+            self._frozen_top_items.append((tick_batch, 0))
+
         row_idx = 0
 
         # --- Core rows ---------------------------------------------------
@@ -1894,7 +2127,8 @@ class TimelineScene(QGraphicsScene):
                 self.addItem(dot_item)
                 self._frozen_items.append((dot_item, arrow_w + 6))
 
-                _core_lbl_avail = max(0, lw - (arrow_w + 20) - 4)
+                _util_w         = fm.horizontalAdvance("100%") + 8
+                _core_lbl_avail = max(0, lw - (arrow_w + 20) - 4 - _util_w)
                 lbl_item = self.addSimpleText(
                     fm.elidedText(core, Qt.ElideRight, _core_lbl_avail), font)
                 lbl_item.setBrush(QBrush(QColor("#E0E0E0")))
@@ -1903,6 +2137,20 @@ class TimelineScene(QGraphicsScene):
                 lbl_item.setAcceptedMouseButtons(Qt.NoButton)
                 lbl_item.setAcceptHoverEvents(False)
                 self._frozen_items.append((lbl_item, arrow_w + 20))
+
+                # --- Core utilisation % (IDLE excluded) ---
+                _total_ns  = trace.time_max - trace.time_min
+                _active_ns = sum(s.end - s.start for s in segs
+                                 if parse_task_name(s.task)[2] not in ("TICK",)
+                                 and not parse_task_name(s.task)[2].startswith("IDLE"))
+                _util_pct  = 100.0 * _active_ns / _total_ns if _total_ns > 0 else 0.0
+                _util_item = self.addSimpleText(f"{_util_pct:.0f}%", font_sm)
+                _util_item.setBrush(QBrush(QColor("#77BB77")))
+                _util_item.setPos(lw - _util_w + 4, y_ctr - fm.height() / 2)
+                _util_item.setZValue(37)
+                _util_item.setAcceptedMouseButtons(Qt.NoButton)
+                _util_item.setAcceptHoverEvents(False)
+                self._frozen_items.append((_util_item, lw - _util_w + 4))
 
                 seg_data: list = []
                 xs:       list = []
@@ -1924,7 +2172,7 @@ class TimelineScene(QGraphicsScene):
                 batch = _BatchRowItem(
                     QRectF(lw, y_top, timeline_w, ROW_HEIGHT),
                     seg_data, trace.time_scale,
-                    xs=xs)
+                    xs=xs, time_min=trace.time_min)
                 batch.setZValue(1)
                 self.addItem(batch)
 
@@ -2023,7 +2271,7 @@ class TimelineScene(QGraphicsScene):
                     QRectF(lw, y_top2, timeline_w, ROW_HEIGHT),
                     seg_data, trace.time_scale,
                     label_font=font_sm, label_fm=fm, label_text=disp,
-                    xs=xs)
+                    xs=xs, time_min=trace.time_min)
                 batch.setZValue(1)
                 self.addItem(batch)
 
@@ -2051,7 +2299,8 @@ class TimelineScene(QGraphicsScene):
             ]
             _sti_item_ch = _BatchStiItem(
                 QRectF(lw, y_top, timeline_w, ROW_HEIGHT),
-                _sti_markers_ch, trace.time_scale, horizontal=True, axis=y_ctr)
+                _sti_markers_ch, trace.time_scale, horizontal=True, axis=y_ctr,
+                time_min=trace.time_min)
             _sti_item_ch.setZValue(2)
             self.addItem(_sti_item_ch)
             row_idx += 1
@@ -2059,12 +2308,22 @@ class TimelineScene(QGraphicsScene):
         corner = self.addRect(QRectF(0, 0, lw, RULER_HEIGHT),
                               QPen(Qt.NoPen), QBrush(QColor("#1A1A1A")))
         corner.setZValue(38)
+        _upper_h = RULER_HEIGHT - (10 if _has_tick else 0)
         hdr_lbl = self.addSimpleText("Core / Task", font)
         hdr_lbl.setBrush(QBrush(QColor("#888888")))
-        hdr_lbl.setPos(4, RULER_HEIGHT / 2 - fm.height() / 2)
+        hdr_lbl.setPos(4, _upper_h / 2 - fm.height() / 2)
         hdr_lbl.setZValue(39)
         self._frozen_items.append((corner, 0))
         self._frozen_items.append((hdr_lbl, 4))
+        self._frozen_top_items.append((corner, 0))
+        self._frozen_top_items.append((hdr_lbl, hdr_lbl.pos().y()))
+        if _has_tick:
+            _tick_corner = self.addSimpleText("TICK", font)
+            _tick_corner.setBrush(QBrush(QColor("#E8C84A")))
+            _tick_corner.setPos(4, RULER_HEIGHT - 10 + (10 - fm.height()) / 2)
+            _tick_corner.setZValue(39)
+            self._frozen_items.append((_tick_corner, 4))
+            self._frozen_top_items.append((_tick_corner, _tick_corner.pos().y()))
 
     def _build_vertical_core(self) -> None:
         """Vertical core view: expandable core columns → per-task sub-columns."""
@@ -2080,6 +2339,11 @@ class TimelineScene(QGraphicsScene):
         task_seg_map_by_core = trace.core_task_segs
         sti_cols             = trace.sti_channels if self._show_sti else []
 
+        # TICK is a global event — shown as a band in the ruler column.
+        _tick_mk   = task_merge_key("TICK")
+        _tick_segs = trace.seg_map_by_merge_key.get(_tick_mk, [])
+        _has_tick  = bool(_tick_segs)
+
         def _col_count(c: str) -> int:
             return 1 + (len(core_tasks[c]) if self._core_expanded.get(c, True) else 0)
 
@@ -2091,20 +2355,37 @@ class TimelineScene(QGraphicsScene):
         label_row_h = self._label_width
         time_span   = trace.time_max - trace.time_min
         timeline_h  = time_span / self._ns_per_px
-        total_w     = col_w * total_cols + RULER_HEIGHT
+        total_w     = col_w * total_cols + RULER_WIDTH
         total_h     = label_row_h + timeline_h
         self.setSceneRect(0, 0, total_w, total_h)
 
-        self.addRect(QRectF(0, 0, RULER_HEIGHT, total_h),
-                     QPen(Qt.NoPen), QBrush(QColor("#2B2B2B"))).setZValue(-1)
-        self.addRect(QRectF(0, 0, total_w, label_row_h),
-                     QPen(Qt.NoPen), QBrush(QColor("#1E1E1E"))).setZValue(0)
+        # --- Ruler column (left side): frozen to left edge on X scroll ------
+        _ruler_col_bg_c = self.addRect(QRectF(0, 0, RULER_WIDTH, total_h),
+                                       QPen(Qt.NoPen), QBrush(QColor("#2B2B2B")))
+        _ruler_col_bg_c.setZValue(35)
+        self._frozen_items.append((_ruler_col_bg_c, 0))
 
-        _ruler = _RulerItem(trace, self._ns_per_px, total_w, total_h,
-                              font, trace.time_scale, self._show_grid,
-                              horiz=False, axis_offset=label_row_h)
-        _ruler.setZValue(0.5)
-        self.addItem(_ruler)
+        # --- Label row (top): frozen to top edge on Y scroll ---------------
+        _label_row_bg_c = self.addRect(QRectF(0, 0, total_w, label_row_h),
+                                       QPen(Qt.NoPen), QBrush(QColor("#1E1E1E")))
+        _label_row_bg_c.setZValue(10)
+        self._frozen_top_items.append((_label_row_bg_c, 0))
+
+        # Grid-only ruler: horizontal grid lines at absolute Y positions.
+        _ruler_grid_c = _RulerItem(trace, self._ns_per_px, total_w, total_h,
+                                     font, trace.time_scale, self._show_grid,
+                                     horiz=False, axis_offset=label_row_h,
+                                     draw_header=False)
+        _ruler_grid_c.setZValue(0.5)
+        self.addItem(_ruler_grid_c)
+        # Header-only ruler: tick marks + labels, frozen to left edge.
+        _ruler_hdr_c = _RulerItem(trace, self._ns_per_px, total_w, total_h,
+                                    font, trace.time_scale, show_grid=False,
+                                    horiz=False, axis_offset=label_row_h,
+                                    draw_grid=False)
+        _ruler_hdr_c.setZValue(36)
+        self.addItem(_ruler_hdr_c)
+        self._frozen_items.append((_ruler_hdr_c, 0))
 
         _time_min  = trace.time_min
         _px_per_ns = 1.0 / self._ns_per_px
@@ -2120,6 +2401,35 @@ class TimelineScene(QGraphicsScene):
         _ct_lod       = trace.core_task_seg_lod
         ct_lod_starts = trace.core_task_seg_lod_starts
 
+        # --- TICK band: TICK segments overlaid on the right strip of the ruler column ---
+        if _has_tick:
+            _vtb_x = RULER_WIDTH - 18   # x of TICK band within ruler (right edge strip)
+            _vtb_w = 14                 # width of TICK band
+            _tick_seg_data_v: list = []
+            _tick_xs_v:       list = []
+            for i_s, seg in enumerate(_visible_segs(
+                    _tick_segs,
+                    trace.seg_start_by_merge_key.get(_tick_mk, []),
+                    trace.seg_lod_by_merge_key.get(_tick_mk, []),
+                    trace.seg_lod_starts_by_merge_key.get(_tick_mk, []),
+                    lod_ns_per_px, _ns_per_px, _vp_ns_lo, _vp_ns_hi,
+                    _time_min, _px_per_ns, label_row_h)):
+                y1 = label_row_h + (seg.start - _time_min) * _px_per_ns
+                y2 = label_row_h + (seg.end   - _time_min) * _px_per_ns
+                h  = y2 - y1 if y2 - y1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
+                _tick_seg_data_v.append((
+                    QRectF(_vtb_x + 1, y1, _vtb_w - 2, h),
+                    _task_brush(seg.task), _task_pen_dark(seg.task), seg,
+                ))
+                _tick_xs_v.append((y1, y1 + h, i_s))
+            tick_batch_v = _BatchRowItem(
+                QRectF(_vtb_x, label_row_h, _vtb_w, timeline_h),
+                _tick_seg_data_v, trace.time_scale,
+                xs=_tick_xs_v, time_min=trace.time_min)
+            tick_batch_v.setZValue(37)   # above ruler header (z=36)
+            self.addItem(tick_batch_v)
+            self._frozen_items.append((tick_batch_v, 0))
+
         col_idx = 0
 
         # --- Core columns ------------------------------------------------
@@ -2131,7 +2441,7 @@ class TimelineScene(QGraphicsScene):
             segs     = core_segs[core]
             dot_c    = QColor(_core_color(core))
 
-            x_left = RULER_HEIGHT + col_idx * col_w
+            x_left = RULER_WIDTH + col_idx * col_w
             col_idx += 1   # advance immediately, independent of viewport cull
 
             _core_in_vp = not (x_left + col_w < self._vp_scene_orth_lo
@@ -2145,18 +2455,23 @@ class TimelineScene(QGraphicsScene):
                     QRectF(x_left, 0, col_w, label_row_h), core, self)
                 hdr_item.setBrush(QBrush(QColor("#2B2B45")))
                 hdr_item.setPen(QPen(Qt.NoPen))
-                hdr_item.setZValue(4)
+                hdr_item.setZValue(36)
                 self.addItem(hdr_item)
+                self._frozen_top_items.append((hdr_item, 0))
 
                 # Arrow + core name (rotated -90 like task view labels)
-                arrow   = "▼" if expanded else "▶"
-                arr_txt = self.addSimpleText(arrow, font)
+                arrow     = "▼" if expanded else "▶"
+                arr_label = arrow + " " + core
+                _lbl_avail_c = max(0, label_row_h - 8)
+                arr_label = QFontMetrics(font).elidedText(arr_label, Qt.ElideRight, _lbl_avail_c)
+                arr_txt = self.addSimpleText(arr_label, font)
                 arr_txt.setBrush(QBrush(QColor("#9999CC")))
                 arr_txt.setRotation(-90)
-                arr_txt.setPos(x_left + col_w / 2 + fm.height() / 2, label_row_h - 4)
-                arr_txt.setZValue(5)
+                arr_txt.setPos(x_left + col_w / 2 - fm.height() / 2, label_row_h - 4)
+                arr_txt.setZValue(37)
                 arr_txt.setAcceptedMouseButtons(Qt.NoButton)
                 arr_txt.setAcceptHoverEvents(False)
+                self._frozen_top_items.append((arr_txt, arr_txt.pos().y()))
 
                 seg_data: list = []
                 xs:       list = []
@@ -2178,7 +2493,7 @@ class TimelineScene(QGraphicsScene):
                 batch = _BatchRowItem(
                     QRectF(x_left, label_row_h, col_w, timeline_h),
                     seg_data, trace.time_scale,
-                    xs=xs)
+                    xs=xs, time_min=trace.time_min)
                 batch.setZValue(1)
                 self.addItem(batch)
 
@@ -2191,7 +2506,7 @@ class TimelineScene(QGraphicsScene):
             # completely outside the viewport, advance col_idx in one step.
             n_tasks = len(tasks)
             if n_tasks:
-                _first_x2 = RULER_HEIGHT + col_idx * col_w
+                _first_x2 = RULER_WIDTH + col_idx * col_w
                 _last_x2  = _first_x2 + (n_tasks - 1) * col_w
                 if (_last_x2 + col_w < self._vp_scene_orth_lo
                         or _first_x2 > self._vp_scene_orth_hi):
@@ -2199,7 +2514,7 @@ class TimelineScene(QGraphicsScene):
                     continue
 
             for sub_idx, task_name in enumerate(tasks):
-                x_left2 = RULER_HEIGHT + col_idx * col_w
+                x_left2 = RULER_WIDTH + col_idx * col_w
                 col_idx += 1   # always advance before any early continue
 
                 # Orth-cull: skip ALL item creation for off-screen sub-cols.
@@ -2220,27 +2535,31 @@ class TimelineScene(QGraphicsScene):
                     self.addRect(QRectF(x_left2, label_row_h, col_w, timeline_h),
                                  QPen(_row_color.lighter(160), 1.0), QBrush(hl_bg)).setZValue(0.9)
 
-                # Color stripe in label area
+                # Horizontal colour stripe at the bottom edge of the label header
+                # (mirrors the vertical stripe at the left edge in horizontal mode)
                 stripe = self.addRect(
-                    QRectF(x_left2 + col_w // 2 - 2, 3, 3, label_row_h - 8),
+                    QRectF(x_left2 + 3, label_row_h - 4, col_w - 6, 3),
                     QPen(Qt.NoPen), QBrush(_row_color))
-                stripe.setZValue(5)
+                stripe.setZValue(38)   # above label background (z=36) and text (z=37)
+                self._frozen_top_items.append((stripe, stripe.pos().y()))
 
                 # Clickable sub-task column label
                 disp      = task_display_name(task_name)
                 sub_lbl_bg = _TaskLabelItem(
                     QRectF(x_left2, 0, col_w, label_row_h), _tmk, self,
                     tooltip_text=disp)
-                sub_lbl_bg.setZValue(4)
+                sub_lbl_bg.setZValue(36)
                 self.addItem(sub_lbl_bg)
+                self._frozen_top_items.append((sub_lbl_bg, 0))
                 lbl_color = QColor("#FFD700") if is_hl else QColor("#B0B0C0")
                 lbl_fnt   = _monospace_font(max(6, self._font_size - 1),
                                             QFont.Bold) if is_hl else font_sm
                 t_lbl = self.addSimpleText(disp, lbl_fnt)
                 t_lbl.setBrush(QBrush(lbl_color))
                 t_lbl.setRotation(-90)
-                t_lbl.setPos(x_left2 + col_w / 2 + fm.height() / 2, label_row_h - 4)
-                t_lbl.setZValue(5)
+                t_lbl.setPos(x_left2 + col_w / 2 - fm.height() / 2, label_row_h - 4)
+                t_lbl.setZValue(37)
+                self._frozen_top_items.append((t_lbl, t_lbl.pos().y()))
 
                 pen_hl       = QPen(QColor("#FFFFFF"), 1.5)
                 _task_pen_cs = _task_pen_dark(task_name)
@@ -2267,20 +2586,21 @@ class TimelineScene(QGraphicsScene):
                 batch = _BatchRowItem(
                     QRectF(x_left2, label_row_h, col_w, timeline_h),
                     seg_data, trace.time_scale,
-                    xs=xs)
+                    xs=xs, time_min=trace.time_min)
                 batch.setZValue(1)
                 self.addItem(batch)
 
         # --- STI columns ------------------------------------------------
         for channel in sti_cols:
-            x_left = RULER_HEIGHT + col_idx * col_w
+            x_left = RULER_WIDTH + col_idx * col_w
             self.addRect(QRectF(x_left, label_row_h, col_w, timeline_h),
                          QPen(Qt.NoPen), QBrush(QColor("#1A1A2E"))).setZValue(0)
             lbl = self.addSimpleText(channel, font)
             lbl.setBrush(QBrush(QColor("#88AABB")))
             lbl.setRotation(-90)
-            lbl.setPos(x_left + col_w / 2 + fm.height() / 2, label_row_h - 4)
-            lbl.setZValue(3)
+            lbl.setPos(x_left + col_w / 2 - fm.height() / 2, label_row_h - 4)
+            lbl.setZValue(37)
+            self._frozen_top_items.append((lbl, lbl.pos().y()))
             _x_ctr_vc    = x_left + col_w / 2
             _sti_evs_vc  = trace.sti_events_by_target.get(channel, [])
             _sti_stts_vc = trace.sti_starts_by_target.get(channel, [])
@@ -2294,13 +2614,18 @@ class TimelineScene(QGraphicsScene):
             ]
             _sti_itm_vc = _BatchStiItem(
                 QRectF(x_left, label_row_h, col_w, timeline_h),
-                _sti_mrk_vc, trace.time_scale, horizontal=False, axis=_x_ctr_vc)
+                _sti_mrk_vc, trace.time_scale, horizontal=False, axis=_x_ctr_vc,
+                time_min=trace.time_min)
             _sti_itm_vc.setZValue(2)
             self.addItem(_sti_itm_vc)
             col_idx += 1
 
-        self.addRect(QRectF(0, 0, RULER_HEIGHT, label_row_h),
-                     QPen(Qt.NoPen), QBrush(QColor("#1A1A1A"))).setZValue(5)
+        # --- Corner: ruler-column × label-row intersection ---------------
+        _vc_corner = self.addRect(QRectF(0, 0, RULER_WIDTH, label_row_h),
+                                  QPen(Qt.NoPen), QBrush(QColor("#1A1A1A")))
+        _vc_corner.setZValue(40)
+        self._frozen_items.append((_vc_corner, 0))
+        self._frozen_top_items.append((_vc_corner, 0))
 
 # ---------------------------------------------------------------------------
 # Custom graphics items
@@ -2327,7 +2652,8 @@ class _RulerItem(QGraphicsItem):
                  total_w: float, total_h: float,
                  font: QFont, time_scale,
                  show_grid: bool, horiz: bool,
-                 axis_offset: float):
+                 axis_offset: float,
+                 draw_header: bool = True, draw_grid: bool = True):
         super().__init__()
         self._trace       = trace
         self._npp         = ns_per_px
@@ -2338,6 +2664,8 @@ class _RulerItem(QGraphicsItem):
         self._show_grid   = show_grid
         self._horiz       = horiz
         self._axis_offset = axis_offset
+        self._draw_header = draw_header
+        self._draw_grid   = draw_grid
         fm = QFontMetrics(font)
         self._text_ascent = fm.ascent()
         # Tell Qt to supply the real exposed rect, not the full bounding rect
@@ -2345,6 +2673,12 @@ class _RulerItem(QGraphicsItem):
         self.setCacheMode(QGraphicsItem.NoCache)
 
     def boundingRect(self) -> QRectF:
+        if not self._draw_grid:
+            # Header-only variant: tight rect = just the ruler strip/column.
+            if self._horiz:
+                return QRectF(0, 0, self._total_w, RULER_HEIGHT)
+            else:
+                return QRectF(0, 0, RULER_WIDTH, self._total_h)
         return QRectF(0, 0, self._total_w, self._total_h)
 
     def paint(self, painter, option, widget=None) -> None:
@@ -2364,20 +2698,22 @@ class _RulerItem(QGraphicsItem):
             ns_hi    = t_min + int(px_hi * npp) + step_ns
             ns_lo    = max(t_min, ns_lo)
             ns_hi    = min(t_max + step_ns, ns_hi)
-            first    = (ns_lo // step_ns) * step_ns
+            # Grid anchored to t_min so the first tick is always at t_min ("0").
+            first    = t_min + ((ns_lo - t_min) // step_ns) * step_ns
             t = first
             while t <= ns_hi:
                 if t >= t_min:
                     x = off + (t - t_min) / npp
-                    if self._show_grid:
+                    if self._draw_grid and self._show_grid:
                         painter.setPen(QPen(QColor("#555555"), 0.8))
                         painter.drawLine(QLineF(x, RULER_HEIGHT, x, self._total_h))
-                    painter.setPen(QPen(QColor("#888888"), 1))
-                    painter.drawLine(QLineF(x, RULER_HEIGHT - 6, x, RULER_HEIGHT))
-                    painter.setPen(QPen(QColor("#AAAAAA")))
-                    painter.setFont(self._font)
-                    painter.drawText(QPointF(x + 2, 2 + self._text_ascent),
-                                     _format_time(t, self._time_scale))
+                    if self._draw_header:
+                        painter.setPen(QPen(QColor("#888888"), 1))
+                        painter.drawLine(QLineF(x, RULER_HEIGHT - 6, x, RULER_HEIGHT))
+                        painter.setPen(QPen(QColor("#AAAAAA")))
+                        painter.setFont(self._font)
+                        painter.drawText(QPointF(x + 2, 2 + self._text_ascent),
+                                         _format_time(t, self._time_scale))
                 t += step_ns
         else:
             # Vertical layout: time on Y axis
@@ -2387,20 +2723,22 @@ class _RulerItem(QGraphicsItem):
             ns_hi    = t_min + int(py_hi * npp) + step_ns
             ns_lo    = max(t_min, ns_lo)
             ns_hi    = min(t_max + step_ns, ns_hi)
-            first    = (ns_lo // step_ns) * step_ns
+            # Grid anchored to t_min so the first tick is always at t_min ("0").
+            first    = t_min + ((ns_lo - t_min) // step_ns) * step_ns
             t = first
             while t <= ns_hi:
                 if t >= t_min:
                     y = off + (t - t_min) / npp
-                    if self._show_grid:
+                    if self._draw_grid and self._show_grid:
                         painter.setPen(QPen(QColor("#3A3A3A"), 0.5))
-                        painter.drawLine(QLineF(RULER_HEIGHT, y, self._total_w, y))
-                    painter.setPen(QPen(QColor("#888888"), 1))
-                    painter.drawLine(QLineF(RULER_HEIGHT - 6, y, RULER_HEIGHT, y))
-                    painter.setPen(QPen(QColor("#AAAAAA")))
-                    painter.setFont(self._font)
-                    painter.drawText(QPointF(2, y - 2 + self._text_ascent),
-                                     _format_time(t, self._time_scale))
+                        painter.drawLine(QLineF(RULER_WIDTH, y, self._total_w, y))
+                    if self._draw_header:
+                        painter.setPen(QPen(QColor("#888888"), 1))
+                        painter.drawLine(QLineF(RULER_WIDTH - 6, y, RULER_WIDTH, y))
+                        painter.setPen(QPen(QColor("#AAAAAA")))
+                        painter.setFont(self._font)
+                        painter.drawText(QPointF(2, y - 2 + self._text_ascent),
+                                         _format_time(t, self._time_scale))
                 t += step_ns
 
 class _BatchRowItem(QGraphicsItem):
@@ -2448,11 +2786,13 @@ class _BatchRowItem(QGraphicsItem):
 
     def __init__(self, bounding_rect: QRectF, seg_data: list, time_scale: str,
                  label_font=None, label_fm=None, label_text: str = "",
-                 presorted: bool = False, xs: Optional[list] = None):
+                 presorted: bool = False, xs: Optional[list] = None,
+                 time_min: int = 0):
         super().__init__()
         self._bounding_rect = bounding_rect
         self._seg_data      = seg_data      # [(QRectF, QBrush, QPen, seg|None)]
         self._time_scale    = time_scale
+        self._time_min      = time_min
         self._label_font    = label_font
         self._label_fm      = label_fm
         self._label_text    = label_text
@@ -2664,7 +3004,7 @@ class _BatchRowItem(QGraphicsItem):
                            f"Core: {seg.core}<br>"
                            f"Start: {_format_time(seg.start, self._time_scale)}<br>"
                            f"End:   {_format_time(seg.end,   self._time_scale)}<br>"
-                           f"Duration: {_format_time(dur,    self._time_scale)}")
+                           f"Duration: {_format_time(dur,                     self._time_scale)}")
                     _get_popup().show_at(event.screenPos(), tip)
                     super().hoverMoveEvent(event)
                     return
@@ -2685,7 +3025,7 @@ class _BatchStiItem(QGraphicsItem):
     """
 
     def __init__(self, bounding_rect: QRectF, markers: list, time_scale: str,
-                 horizontal: bool, axis: float):
+                 horizontal: bool, axis: float, time_min: int = 0):
         """
         markers  : list of (scene_coord, QColor, StiEvent) sorted by scene_coord.
                    scene_coord = scene_x (horizontal) or scene_y (vertical).
@@ -2695,6 +3035,7 @@ class _BatchStiItem(QGraphicsItem):
         self._bounding_rect = bounding_rect
         self._markers       = markers   # sorted by coord
         self._time_scale    = time_scale
+        self._time_min      = time_min
         self._horizontal    = horizontal
         self._axis          = axis
         self.setAcceptHoverEvents(bool(markers))
@@ -2966,6 +3307,7 @@ class TimelineView(QGraphicsView):
         self.viewport().installEventFilter(self)
         # Reposition frozen label-column items whenever the scene is rebuilt
         self._scene.scene_rebuilt.connect(self._reposition_frozen)
+        self._scene.scene_rebuilt.connect(self._reposition_frozen_top)
 
         # Debounce zoom: accumulate factor across rapid wheel events and
         # fire a single rebuild once the user stops scrolling.
@@ -3005,15 +3347,23 @@ class TimelineView(QGraphicsView):
         # Cache of the last scene-left used for frozen label positioning.
         # Avoids O(n_frozen_items) updates when only vertical scrolling occurs.
         self._frozen_last_scene_left: Optional[float] = None
+        # Cache of the last scene-top used for frozen ruler positioning.
+        self._frozen_last_scene_top: Optional[float] = None
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
+    def _fit_viewport_size(self) -> int:
+        """Return the viewport dimension relevant to the time axis for fit calculations."""
+        if self._scene._horizontal:
+            return max(self.viewport().width(), 800)
+        else:
+            return max(self.viewport().height(), 600)
+
     def load_trace(self, trace: BtfTrace) -> None:
         self._fit_mode = True   # new trace always starts in fit mode
-        vw = max(self.viewport().width(), 800)
-        self._scene.set_trace(trace, vw)
+        self._scene.set_trace(trace, self._fit_viewport_size())
         self.zoom_changed.emit(self._scene.ns_per_px)
 
     def add_cursor_at_view_center(self) -> None:
@@ -3057,9 +3407,6 @@ class TimelineView(QGraphicsView):
         self._scene.set_font_size(size)
         self.zoom_changed.emit(self._scene.ns_per_px)
 
-    def set_max_visible_tasks(self, n: int) -> None:
-        self._scene.set_max_visible_tasks(n)
-
     def zoom_in(self) -> None:
         self._fit_mode = False
         self._zoom_accum *= 2.0
@@ -3076,13 +3423,39 @@ class TimelineView(QGraphicsView):
 
     def zoom_fit(self) -> None:
         self._fit_mode = True
-        vw = max(self.viewport().width(), 800)
-        self._scene.fit_to_width(vw)
+        self._scene.fit_to_width(self._fit_viewport_size())
         # Ensure the view transform is identity: all zoom is handled at the
         # scene level (ns_per_px) so there must be no view-level scale active.
         # fitInView() would set a persistent QTransform that is not needed here.
         self.resetTransform()
         self.zoom_changed.emit(self._scene.ns_per_px)
+
+    def zoom_1to1(self) -> None:
+        """Set zoom to exactly NS_PER_PX_DEFAULT (5 ns/px), keeping the current viewport centre."""
+        if self._scene._trace is None:
+            return
+        self._fit_mode = False
+        if self._scene._ns_per_px == NS_PER_PX_DEFAULT:
+            return
+        # Remember the ns coordinate at the viewport centre so we can restore it.
+        vp_center = self.viewport().rect().center()
+        scene_pt  = self.mapToScene(vp_center)
+        if self._scene._horizontal:
+            center_ns = self._scene.scene_to_ns(scene_pt.x())
+        else:
+            center_ns = self._scene.scene_to_ns(scene_pt.y())
+        self._scene._ns_per_px = NS_PER_PX_DEFAULT
+        self._scene.rebuild()
+        self.resetTransform()
+        self.zoom_changed.emit(self._scene.ns_per_px)
+        # Scroll so the same ns coordinate stays at the viewport centre.
+        # Use scene_pt (captured before rebuild) for the non-time axis so the
+        # row/column scroll position is preserved correctly.
+        new_coord = self._scene.ns_to_scene_coord(center_ns)
+        if self._scene._horizontal:
+            self.centerOn(new_coord, scene_pt.y())
+        else:
+            self.centerOn(scene_pt.x(), new_coord)
 
     def save_image(self, filepath: str) -> None:
         """Capture the current visible scene content as a PNG image.
@@ -3180,7 +3553,7 @@ class TimelineView(QGraphicsView):
                 return
 
         if event.button() == Qt.LeftButton:
-            # --- Check if we're starting a label-column resize drag ---
+            # --- Check if we're starting a label-column/row resize drag ---
             if self._scene._horizontal:
                 lw = self._scene._label_width
                 if abs(event.pos().x() - lw) <= self._LABEL_RESIZE_ZONE:
@@ -3189,6 +3562,16 @@ class TimelineView(QGraphicsView):
                     self._label_resize_start_w  = lw
                     self.setDragMode(QGraphicsView.NoDrag)
                     self.viewport().setCursor(Qt.SizeHorCursor)
+                    event.accept()
+                    return
+            else:
+                lw = self._scene._label_width
+                if abs(event.pos().y() - lw) <= self._LABEL_RESIZE_ZONE:
+                    self._label_resize_dragging = True
+                    self._label_resize_start_x  = event.pos().y()   # reused as start coord
+                    self._label_resize_start_w  = lw
+                    self.setDragMode(QGraphicsView.NoDrag)
+                    self.viewport().setCursor(Qt.SizeVerCursor)
                     event.accept()
                     return
 
@@ -3233,30 +3616,40 @@ class TimelineView(QGraphicsView):
         #   5. Default pan  (super().mouseMoveEvent)
         #      + fallback: clear stale hover if mouse leaves label column
 
-        # Label-column resize drag
+        # Label-column/row resize drag
         if self._label_resize_dragging:
-            delta   = event.pos().x() - self._label_resize_start_x
+            if self._scene._horizontal:
+                delta = event.pos().x() - self._label_resize_start_x
+            else:
+                delta = event.pos().y() - self._label_resize_start_x
             new_w   = self._label_resize_start_w + delta
             self._scene.set_label_width(new_w)
-            self._reposition_frozen()
-            if self._fit_mode and self._scene._trace is not None:
-                vw = max(self.viewport().width(), 800)
-                self._scene.fit_to_width(vw)
-                self.zoom_changed.emit(self._scene.ns_per_px)
+            if self._scene._horizontal:
+                self._reposition_frozen()
+                if self._fit_mode and self._scene._trace is not None:
+                    self._scene.fit_to_width(self._fit_viewport_size())
+                    self.zoom_changed.emit(self._scene.ns_per_px)
+            else:
+                self._reposition_frozen_top()
             event.accept()
             return
 
         # Show resize cursor when hovering near the label border
-        if (self._scene._horizontal and
-                self._scene._trace is not None and
+        if (self._scene._trace is not None and
                 not self._label_resize_dragging and
                 self._mid_press_ns is None and
                 self._dragging_cursor_idx < 0):
             lw = self._scene._label_width
-            if abs(event.pos().x() - lw) <= self._LABEL_RESIZE_ZONE:
-                self.viewport().setCursor(Qt.SizeHorCursor)
+            if self._scene._horizontal:
+                if abs(event.pos().x() - lw) <= self._LABEL_RESIZE_ZONE:
+                    self.viewport().setCursor(Qt.SizeHorCursor)
+                else:
+                    self.viewport().unsetCursor()
             else:
-                self.viewport().unsetCursor()
+                if abs(event.pos().y() - lw) <= self._LABEL_RESIZE_ZONE:
+                    self.viewport().setCursor(Qt.SizeVerCursor)
+                else:
+                    self.viewport().unsetCursor()
 
         # Middle-button drag: update gray selection band
         if self._mid_press_ns is not None:
@@ -3479,6 +3872,10 @@ class TimelineView(QGraphicsView):
         # vertical scroll (common hot path when browsing many task rows).
         if dx != 0:
             self._reposition_frozen()
+        # Frozen ruler row only depends on scene Y, so skip work on pure
+        # horizontal (time-axis) scroll.
+        if dy != 0:
+            self._reposition_frozen_top()
         # Trigger a debounced rebuild on any scroll so that:
         #   • Time-axis scroll (dx in horizontal view / dy in vertical view)
         #     refreshes _vp_ns_lo/hi and repopulates segments that were outside
@@ -3506,6 +3903,19 @@ class TimelineView(QGraphicsView):
         for item, orig_x in self._scene._frozen_items:
             item.setX(scene_left + orig_x)
 
+    def _reposition_frozen_top(self) -> None:
+        """Move all frozen top-row scene items so they stay at the top edge."""
+        if not self._scene._frozen_top_items:
+            return
+        scene_top = self.mapToScene(QPoint(0, 0)).y()
+        if self._frozen_last_scene_top is not None and abs(scene_top - self._frozen_last_scene_top) < 1e-6:
+            first_item, first_orig_y = self._scene._frozen_top_items[0]
+            if abs(first_item.y() - (scene_top + first_orig_y)) < 1e-6:
+                return
+        self._frozen_last_scene_top = scene_top
+        for item, orig_y in self._scene._frozen_top_items:
+            item.setY(scene_top + orig_y)
+
     def resizeEvent(self, event) -> None:
         """Reflow the timeline on every resize to preserve the current zoom ratio."""
         super().resizeEvent(event)
@@ -3523,10 +3933,10 @@ class TimelineView(QGraphicsView):
         """
         if self._scene._trace is None:
             return
-        vw = max(self.viewport().width(), 800)
+        vsize = self._fit_viewport_size()
         time_span = max(
             self._scene._trace.time_max - self._scene._trace.time_min, 1)
-        avail   = max(vw - self._scene._label_width, 100)
+        avail   = max(vsize - self._scene._label_width, 100)
         new_fit = time_span / avail
 
         if self._fit_mode:
@@ -3539,6 +3949,7 @@ class TimelineView(QGraphicsView):
             # Zoom mode: preserve zoom level exactly.
             self._scene._ns_per_px_fit = new_fit
             self._reposition_frozen()
+            self._reposition_frozen_top()
 
     def _on_pan_heartbeat(self) -> None:
         """During active scrolling: rebuild if viewport exceeds cached bounds."""
@@ -3873,6 +4284,7 @@ class CursorBarWidget(QWidget):
             return
 
         ts     = trace.time_scale
+        t_min  = trace.time_min
         colors = ["#FF6666", "#66FF99", "#6699FF", "#FFBB44"]
         sorted_pairs = sorted(enumerate(times), key=lambda x: x[1])
 
@@ -4020,6 +4432,14 @@ class LegendWidget(QWidget):
         palette.setColor(QPalette.Window, QColor("#1E1E1E"))
         self.setPalette(palette)
         self._task_rows: Dict[str, _LegendTaskRow] = {}   # raw name → row widget
+        self._search = QLineEdit()
+        self._search.setPlaceholderText("Filter tasks…")
+        self._search.setStyleSheet(
+            "QLineEdit { background:#2D2D2D; color:#D4D4D4; border:1px solid #555; "
+            "border-radius:3px; padding:2px 4px; }"
+        )
+        self._search.textChanged.connect(self._filter_tasks)
+        self._layout.addWidget(self._search)
 
     def set_locked_task(self, task_name: Optional[str]) -> None:
         """Visually mark *task_name* as click-locked (or clear all locks)."""
@@ -4092,6 +4512,98 @@ class LegendWidget(QWidget):
             self._layout.addStretch()
         finally:
             self.setUpdatesEnabled(True)
+
+    def _filter_tasks(self, text: str) -> None:
+        """Show / hide task rows in the legend based on the search filter."""
+        q = text.strip().lower()
+        for mk, row in self._task_rows.items():
+            row.setVisible(not q or q in mk.lower() or q in row._lbl.text().lower())
+
+# ---------------------------------------------------------------------------
+# Statistics dock panel
+# ---------------------------------------------------------------------------
+
+class StatsPanel(QWidget):
+    """Dock panel showing trace statistics (span, core utilisation, top tasks)."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        self._inner = QWidget()
+        self._ilay = QVBoxLayout(self._inner)
+        self._ilay.setContentsMargins(8, 6, 8, 6)
+        self._ilay.setSpacing(2)
+        self._ilay.addStretch()
+        scroll.setWidget(self._inner)
+        outer.addWidget(scroll)
+
+    def _clear(self) -> None:
+        while self._ilay.count():
+            item = self._ilay.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+    def _lbl(self, text: str, color: str = "#D4D4D4", bold: bool = False) -> QLabel:
+        w = QLabel(text)
+        style = f"color:{color}; background:transparent;"
+        if bold:
+            style += " font-weight:bold;"
+        w.setStyleSheet(style)
+        return w
+
+    def _sep(self) -> QFrame:
+        f = QFrame()
+        f.setFrameShape(QFrame.HLine)
+        f.setStyleSheet("color:#444;")
+        return f
+
+    def update_trace(self, trace: "BtfTrace") -> None:
+        self._clear()
+        total_ns = trace.time_max - trace.time_min
+        span_str = _format_time(total_ns, trace.time_scale)
+
+        # -- Summary row ---------------------------------------------------
+        self._ilay.addWidget(self._lbl(
+            f"Span: {span_str}  |  Tasks: {len(trace.tasks)}  |  "
+            f"Segments: {len(trace.segments)}  |  STI events: {len(trace.sti_events)}",
+            color="#AAAAAA",
+        ))
+
+        # -- Core utilisation (excl. IDLE) ---------------------------------
+        if trace.core_names:
+            self._ilay.addWidget(self._sep())
+            self._ilay.addWidget(self._lbl("Core Utilisation (excl. IDLE/TICK):", bold=True))
+            for core in trace.core_names:
+                segs = trace.core_segs.get(core, [])
+                act  = sum(s.end - s.start for s in segs
+                           if not parse_task_name(s.task)[2].startswith("IDLE")
+                           and parse_task_name(s.task)[2] != "TICK")
+                pct  = 100.0 * act / total_ns if total_ns > 0 else 0.0
+                n    = max(0, min(10, round(pct / 10)))
+                bar  = "█" * n + "░" * (10 - n)
+                self._ilay.addWidget(
+                    self._lbl(f"  {core}:  {bar}  {pct:.1f}%", color="#77BB77"))
+
+        # -- Top tasks by CPU time (excl. IDLE, top 10) -------------------
+        self._ilay.addWidget(self._sep())
+        self._ilay.addWidget(self._lbl("Top Tasks by CPU (excl. IDLE/TICK):", bold=True))
+        task_times: Dict[str, int] = {}
+        for mk, segs in trace.seg_map_by_merge_key.items():
+            raw = trace.task_repr.get(mk, mk)
+            _, _, tname = parse_task_name(raw)
+            if tname.startswith("IDLE") or tname == "TICK":
+                continue
+            task_times[mk] = sum(s.end - s.start for s in segs)
+        for mk, t_ns in sorted(task_times.items(), key=lambda kv: kv[1], reverse=True)[:10]:
+            raw  = trace.task_repr.get(mk, mk)
+            disp = task_display_name(raw)
+            pct  = 100.0 * t_ns / total_ns if total_ns > 0 else 0.0
+            self._ilay.addWidget(self._lbl(f"  {disp}:  {pct:.1f}%"))
+        self._ilay.addStretch()
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -4277,12 +4789,6 @@ class MainWindow(QMainWindow):
         if saved_fs != _FONT_SIZE:
             self._view.set_font_size(saved_fs)
 
-        # Max visible tasks
-        saved_mt = s.get_int("view", "max_tasks", 0)
-        self._max_tasks_spin.setValue(saved_mt)
-        if saved_mt > 0:
-            self._view.set_max_visible_tasks(saved_mt)
-
         # Orientation (horizontal is the default)
         if not s.get_bool("view", "horizontal", True):
             self._set_orientation(False)
@@ -4330,7 +4836,6 @@ class MainWindow(QMainWindow):
             "show_sti":   str(self._act_show_sti.isChecked()).lower(),
             "show_grid":  str(self._act_show_grid.isChecked()).lower(),
             "font_size":  str(self._font_spin.value()),
-            "max_tasks":  str(self._max_tasks_spin.value()),
         })
 
         # Zoom – save current ns/px so we can re-apply it the next time the
@@ -4393,7 +4898,12 @@ class MainWindow(QMainWindow):
             QMenu::item:selected {{ background:#007ACC; }}
             QToolBar  {{ background:#2D2D2D; border:none; spacing:4px;
                          font-size:{_ui_fs}; }}
+            QToolBar::separator {{ width:1px; background:#444444; margin:3px 2px; }}
             QToolButton {{ font-size:{_ui_fs}; }}
+            QToolButton:hover    {{ background:#3C3C3C; border-radius:3px; }}
+            QToolButton:pressed  {{ background:#1C5A9E; border-radius:3px; }}
+            QToolButton:checked  {{ background:#0E4D80; border-radius:3px; color:#FFFFFF; }}
+            QToolButton:disabled {{ color:#555555; }}
             QStatusBar  {{ background:#1E1E1E; color:#AAAAAA; font-size:{_ui_fs}; }}
             QLabel      {{ font-size:{_ui_fs}; }}
             QCheckBox   {{ font-size:{_ui_fs}; }}
@@ -4435,7 +4945,12 @@ class MainWindow(QMainWindow):
             QMenu::item:selected {{ background:#007ACC; color:#FFFFFF; }}
             QToolBar  {{ background:#E0E0E0; border:none; spacing:4px;
                          font-size:{_ui_fs}; }}
+            QToolBar::separator {{ width:1px; background:#C0C0C0; margin:3px 2px; }}
             QToolButton {{ font-size:{_ui_fs}; }}
+            QToolButton:hover    {{ background:#D0D0D0; border-radius:3px; }}
+            QToolButton:pressed  {{ background:#AACCEE; border-radius:3px; }}
+            QToolButton:checked  {{ background:#B3D1EE; border-radius:3px; color:#005A9E; }}
+            QToolButton:disabled {{ color:#BBBBBB; }}
             QStatusBar  {{ background:#F5F5F5; color:#555555; font-size:{_ui_fs}; }}
             QLabel      {{ font-size:{_ui_fs}; }}
             QCheckBox   {{ font-size:{_ui_fs}; }}
@@ -4455,13 +4970,31 @@ class MainWindow(QMainWindow):
             self._act_theme.setText("Switch to &Dark Theme")
 
     def _build_ui(self) -> None:
-        # --- Central widget: TimelineView ---
+        # --- Central widget: QStackedWidget (page 0=welcome, page 1=timeline) ---
         self._view = TimelineView(self)
         self._view.zoom_changed.connect(self._on_zoom_changed)
         self._view.cursors_changed.connect(
             lambda times: self._cursor_bar.rebuild(times, self._trace)
         )
-        self.setCentralWidget(self._view)
+
+        self._welcome_page = QWidget()
+        _wl = QVBoxLayout(self._welcome_page)
+        _wl.setAlignment(Qt.AlignCenter)
+        _wlbl = QLabel(
+            "<h2 style='color:#888;'>BTF Trace Viewer</h2>"
+            "<p style='color:#666; font-size:11pt;'>"
+            "Drop a <b>.btf</b> file here<br>"
+            "or press <b>Ctrl+O</b> to open one</p>"
+        )
+        _wlbl.setTextFormat(Qt.RichText)
+        _wlbl.setAlignment(Qt.AlignCenter)
+        _wl.addWidget(_wlbl)
+
+        self._stack = QStackedWidget()
+        self._stack.addWidget(self._welcome_page)   # index 0
+        self._stack.addWidget(self._view)            # index 1
+        self._stack.setCurrentIndex(0)
+        self.setCentralWidget(self._stack)
 
         # --- Legend dock (right panel) ---
         self._legend = LegendWidget()
@@ -4475,6 +5008,15 @@ class MainWindow(QMainWindow):
         dock.setFeatures(QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetMovable)
         self.addDockWidget(Qt.RightDockWidgetArea, dock)
         self._legend_dock = dock
+
+        # --- Statistics dock (bottom panel) ---
+        self._stats_panel = StatsPanel()
+        stats_dock = QDockWidget("Statistics", self)
+        stats_dock.setWidget(self._stats_panel)
+        stats_dock.setFeatures(QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetMovable)
+        self.addDockWidget(Qt.BottomDockWidgetArea, stats_dock)
+        self._stats_dock = stats_dock
+        stats_dock.hide()
 
         # --- Signal wiring: legend ↔ scene highlight sync ---
         # Legend click → toggle locked highlight
@@ -4529,6 +5071,12 @@ class MainWindow(QMainWindow):
         self._act_legend.setChecked(True)
         self._act_legend.toggled.connect(self._legend_dock.setVisible)
         self._legend_dock.visibilityChanged.connect(self._act_legend.setChecked)
+        self._act_stats = vm.addAction("Show S&tatistics")
+        self._act_stats.setShortcut("Ctrl+T")
+        self._act_stats.setCheckable(True)
+        self._act_stats.setChecked(False)
+        self._act_stats.toggled.connect(self._stats_dock.setVisible)
+        self._stats_dock.visibilityChanged.connect(self._act_stats.setChecked)
         vm.addSeparator()
         self._act_task_view = vm.addAction("Task &View", lambda: self._set_view_mode("task"))
         self._act_core_view = vm.addAction("&Core View", lambda: self._set_view_mode("core"))
@@ -4556,6 +5104,7 @@ class MainWindow(QMainWindow):
 
     def _build_toolbar(self) -> None:
         tb = self.addToolBar("Main")
+        self._tb = tb
         tb.setMovable(False)
         tb.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
 
@@ -4566,11 +5115,16 @@ class MainWindow(QMainWindow):
         tb.addSeparator()
 
         # --- Layout and zoom ---
-        tb.addAction("↔ Horizontal", lambda: self._set_orientation(True))
-        tb.addAction("↕ Vertical",   lambda: self._set_orientation(False))
+        self._tb_horiz_btn = tb.addAction("↔ Horizontal", lambda: self._set_orientation(True))
+        self._tb_vert_btn  = tb.addAction("↕ Vertical",   lambda: self._set_orientation(False))
+        self._tb_horiz_btn.setCheckable(True)
+        self._tb_vert_btn.setCheckable(True)
+        self._tb_horiz_btn.setChecked(True)   # default: horizontal
         tb.addSeparator()
         tb.addAction("🔍+",     self._view.zoom_in)
         tb.addAction("🔍-",     self._view.zoom_out)
+        self._act_zoom_1to1 = tb.addAction("1:1", self._view.zoom_1to1)
+        self._act_zoom_1to1.setToolTip("Zoom to 5 ns/pixel")
         tb.addAction("⊡ Fit",   self._view.zoom_fit)
         tb.addSeparator()
 
@@ -4618,11 +5172,7 @@ class MainWindow(QMainWindow):
         self._legend_dock.visibilityChanged.connect(self._tb_legend_btn.setChecked)
         tb.addSeparator()
 
-        # --- Toolbar widgets: zoom label, STI/grid checkboxes, font spinbox ---
-        self._zoom_label = QLabel("Zoom: —")
-        self._zoom_label.setStyleSheet("color:#AAAAAA; padding: 0 8px;")
-        tb.addWidget(self._zoom_label)
-
+        # --- Toolbar widgets: STI/grid checkboxes, font spinbox ---
         self._sti_cb = QCheckBox("STI events")
         self._sti_cb.setChecked(True)
         self._sti_cb.stateChanged.connect(lambda s: self._view.set_show_sti(bool(s)))
@@ -4652,26 +5202,6 @@ class MainWindow(QMainWindow):
         self._font_spin.valueChanged.connect(self._on_font_size_changed)
         tb.addWidget(self._font_spin)
 
-        tasks_lbl = QLabel(" Max tasks:")
-        tasks_lbl.setStyleSheet("color:#AAAAAA;")
-        tb.addWidget(tasks_lbl)
-        self._max_tasks_spin = _WheelSpinBox()
-        self._max_tasks_spin.setRange(0, 9999)
-        self._max_tasks_spin.setValue(0)
-        self._max_tasks_spin.setSpecialValueText("All")
-        self._max_tasks_spin.setFixedWidth(62)
-        self._max_tasks_spin.setToolTip(
-            "Maximum number of tasks shown in Task View\n"
-            "(0 / \"All\" = show every task, ranked by activity)\n"
-            "Tasks are ranked by total CPU execution time."
-        )
-        self._max_tasks_spin.setStyleSheet(
-            "QSpinBox { background:#2D2D2D; color:#D4D4D4; border:1px solid #555; "
-            "padding:1px 2px; } "
-            "QSpinBox::up-button, QSpinBox::down-button { width:14px; }"
-        )
-        self._max_tasks_spin.valueChanged.connect(self._on_max_tasks_changed)
-        tb.addWidget(self._max_tasks_spin)
 
     def _build_status_bar(self) -> None:
         sb = self.statusBar()
@@ -4687,13 +5217,17 @@ class MainWindow(QMainWindow):
 
         # --- Hint text (interaction guide) ---
         self._status_hint  = QLabel(
-            "Left-click: place cursor  |  Drag cursor: move it  |  "
-            "Right-click: remove  |  Ctrl+Wheel / Pinch: zoom  |  Scroll: pan"
+            "Left-click: cursor  |  Ctrl+Wheel: zoom  |  Scroll: pan"
         )
         self._status_hint.setStyleSheet("color:#666;")
+
+        self._zoom_label = QLabel("Zoom: —")
+        self._zoom_label.setStyleSheet("color:#AAAAAA; padding: 0 8px;")
+
         sb.addWidget(self._status_file)
         sb.addPermanentWidget(self._cursor_bar)
         sb.addPermanentWidget(self._status_stats)
+        sb.addPermanentWidget(self._zoom_label)
         sb.addPermanentWidget(self._status_hint)
 
     # ------------------------------------------------------------------
@@ -4761,6 +5295,7 @@ class MainWindow(QMainWindow):
                     "last_dir":  os.path.dirname(path),
                 })
                 self._view.load_trace(trace)
+                self._stack.setCurrentIndex(1)
                 # Re-apply the saved zoom only when re-opening the exact same file
                 # so that new files always start at fit-to-width.
                 if _prev_file == path and _saved_zoom > 0:
@@ -4771,6 +5306,8 @@ class MainWindow(QMainWindow):
                 progress_dialog.update_progress(100, "Building legend…")
                 QApplication.processEvents()
                 self._legend.rebuild(trace)
+                self._stats_panel.update_trace(trace)
+                self._stats_dock.show()
                 self._act_save_img.setEnabled(True)
                 self._act_copy_img.setEnabled(True)
                 fname = os.path.basename(path)
@@ -4847,6 +5384,8 @@ class MainWindow(QMainWindow):
     def _set_orientation(self, horizontal: bool) -> None:
         self._act_horiz.setChecked(horizontal)
         self._act_vert.setChecked(not horizontal)
+        self._tb_horiz_btn.setChecked(horizontal)
+        self._tb_vert_btn.setChecked(not horizontal)
         self._view.set_horizontal(horizontal)
 
     def _set_view_mode(self, mode: str) -> None:
@@ -4888,10 +5427,6 @@ class MainWindow(QMainWindow):
     def _on_font_size_changed(self, size: int) -> None:
         self._view.set_font_size(size)
         self._settings.set("view", "font_size", str(size))
-
-    def _on_max_tasks_changed(self, n: int) -> None:
-        self._view.set_max_visible_tasks(n)
-        self._settings.set("view", "max_tasks", str(n))
 
     def _on_zoom_changed(self, ns_per_px: float) -> None:
         if ns_per_px >= 1_000_000:
