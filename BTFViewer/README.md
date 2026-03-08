@@ -6,6 +6,23 @@ A PyQt5-based interactive visualiser for FreeRTOS context-switch traces in **Bes
 
 <img src="../images/btfviewer.png" alt="BTF Viewer screenshot" width=640>
 
+## Features
+
+- **Two view modes** — Task View (one row per task) and Core View (one row per core, expandable)
+- **Expand / Collapse all cores** — single-click toolbar button in Core View
+- **Per-core expand / collapse** — click any core label to expand or collapse just that core
+- **16-colour core palette** — up to 16 distinct core colours; cycles automatically beyond that
+- **Horizontal and Vertical orientation** — switch at any time without reloading the trace
+- **Smooth zoom & pan** — mouse wheel, two-finger pinch (macOS), and keyboard shortcuts
+- **Viewport culling** — only visible rows and segments are rendered; no slowdown on large traces
+- **Up to 4 measurement cursors** — delta times shown on the timeline and in the status bar
+- **Task highlight** — hover or click any task label or Legend row to highlight all its segments
+- **Dockable Legend panel** — colour swatches for every task, with the same highlight interaction
+- **STI event markers** — software trace items rendered as coloured diamond markers
+- **Export to PNG** — saves the current viewport as an image
+- **Drag-and-drop** — drop a `.btf` file directly onto the window
+- **Optimised for large traces** — tested with up to **128 cores, 1 000 tasks, and 5 M+ events**
+
 ## Requirements
 
 - Python 3.8+
@@ -21,7 +38,7 @@ pip install PyQt5
 python btf_viewer.py [trace.btf]
 ```
 
-A file can also be opened via **File -> Open** (`Ctrl+O`) or dragged onto the window.
+A file can also be opened via **File → Open** (`Ctrl+O`) or dragged onto the window.
 
 ---
 
@@ -32,14 +49,17 @@ A file can also be opened via **File -> Open** (`Ctrl+O`) or dragged onto the wi
 | **Task View** | One row per task across all cores; core tint applied to segment bars |
 | **Core View** | One expandable row per CPU core; bars coloured by running task |
 
-In **Core View**, click a core label to **expand** or **collapse** its per-task sub-rows.
+In **Core View**:
+
+- Click a core label to **expand** or **collapse** that individual core's per-task sub-rows.
+- Use the **⊞ Expand All** / **⊟ Collapse All** toolbar button to expand or collapse every core at once.
 
 ## Orientation
 
-- **Horizontal** (default) - time runs left to right
-- **Vertical** - time runs top to bottom
+- **Horizontal** (default) — time runs left to right
+- **Vertical** — time runs top to bottom
 
-Switch orientation using the toolbar or **View -> Horizontal layout / Vertical layout**.
+Switch orientation using the toolbar or **View → Horizontal layout / Vertical layout**.
 
 ## Task Labels
 
@@ -101,7 +121,7 @@ the timeline and in the status bar.
 
 The Legend lists every task with its colour swatch and `Name[id]` label.
 
-- **View -> Show Legend** (`Ctrl+L`) or the toolbar **Legend** button toggles the panel.
+- **View → Show Legend** (`Ctrl+L`) or the toolbar **Legend** button toggles the panel.
 - The panel is a dockable window; it can be detached, closed, and re-opened.
 - Hover and click Legend rows to highlight tasks using the same rules as the label column.
 
@@ -115,14 +135,13 @@ The Legend lists every task with its colour swatch and `Name[id]` label.
 | Two-finger pinch (macOS) | Zoom in or out |
 | Scroll wheel / trackpad swipe | Pan horizontally (or vertically in Vertical mode) |
 | `Ctrl+0` | Fit entire trace to window |
-| `Ctrl+R` | Reset zoom to default |
-| Toolbar zoom+ / zoom- buttons | Zoom in or out by 2x |
+| Toolbar zoom+ / zoom− buttons | Zoom in or out by 2× |
 
 ---
 
 ## Export
 
-**File -> Save as Image (PNG)** (`Ctrl+S`) saves the current viewport as a PNG file.
+**File → Save as Image (PNG)** (`Ctrl+S`) saves the current viewport as a PNG file.
 
 ---
 
@@ -135,7 +154,6 @@ The Legend lists every task with its colour swatch and `Name[id]` label.
 | `Ctrl++` | Zoom in |
 | `Ctrl+-` | Zoom out |
 | `Ctrl+0` | Fit to window |
-| `Ctrl+R` | Reset zoom |
 | `Ctrl+L` | Toggle Legend panel |
 | `C` | Place cursor at viewport centre |
 | `Shift+C` | Clear all cursors |
@@ -196,14 +214,223 @@ When `--output` is omitted the file is named automatically, e.g. `freertos_8c_10
 
 ## BTF Format
 
-Each line follows the pattern:
+### Line structure
+
+Every non-comment line is a comma-separated record with 7 or 8 fields:
 
 ```
 timestamp, source, src_inst, event_type, target, tgt_inst, event[, note]
 ```
 
-| event_type | Meaning |
+| Field | Index | Type | Description |
+|-------|-------|------|-------------|
+| `timestamp` | 0 | integer | Absolute time in the unit declared by `#timeScale` |
+| `source` | 1 | string | Entity that emits the event (core name or task label) |
+| `src_inst` | 2 | integer | Source instance — always `0` in this implementation |
+| `event_type` | 3 | string | `T`, `STI`, or `C` (see below) |
+| `target` | 4 | string | Entity that receives the event (task label or STI channel) |
+| `tgt_inst` | 5 | integer | Target instance — always `0` in this implementation |
+| `event` | 6 | string | Event verb (`resume`, `preempt`, `trigger`, `set_frequency`, …) |
+| `note` | 7 | string | Optional annotation (`task_create`, tick counter, mutex name, …). May be an empty string; a trailing comma is still present in that case. |
+
+---
+
+### Header comments
+
+The file begins with `#`-prefixed metadata lines. The parser extracts key–value pairs of the form `#key value`:
+
+```
+#version 2.2.0
+#creator synthetic_trace_gen
+#creationDate 2024-01-01T00:00:00Z
+#timeScale us
+```
+
+The value of `#timeScale` (`ns`, `us`, `ms`, …) determines the unit for every timestamp in the file.
+
+---
+
+### Core naming — `Core_N`
+
+Cores are identified by the string `Core_` followed by a zero-based decimal integer:
+
+```
+Core_0  Core_1  Core_2  …  Core_N
+```
+
+`Core_0` is always the first core. The parser recognises a token as a core entity when it starts with `Core_`.
+
+---
+
+### Task label naming — `[core_id/task_id]task_name`
+
+Regular (worker) tasks carry a structured prefix that encodes the core they were created on and their unique task ID:
+
+```
+[core_id/task_id]task_name
+```
+
+| Part | Example | Description |
+|------|---------|-------------|
+| `core_id` | `0` | Zero-based index of the core that created this task |
+| `task_id` | `9` | Unique integer task identifier assigned at task creation |
+| `task_name` | `CAN_Rx` | Human-readable task name |
+
+> **Note:** In traces generated by `gen_trace.py`, worker task IDs start at 9 and the timer-service task ID equals `num_workers + 9`. Task IDs in real FreeRTOS ports depend on the kernel's internal handle allocation.
+
+**Examples:**
+
+```
+[0/9]CAN_Rx          # task CAN_Rx, created on Core_0, task ID 9
+[2/17]Motor_L        # task Motor_L, created on Core_2, task ID 17
+[0/42]Tmr Svc        # FreeRTOS timer-service task
+```
+
+The viewer displays these as `CAN_Rx[9]` and `Motor_L[17]` (task ID in brackets, core prefix hidden).
+
+In **Task View** the viewer merges all instances of the same `task_id`/`task_name` pair across cores into one row, so a task that migrates between cores still appears as a single row.
+
+#### Special tasks — no prefix
+
+IDLE and TICK tasks use a **bare name** with no `[core_id/task_id]` prefix:
+
+| Entity | Name pattern | Example | Notes |
+|--------|-------------|---------|-------|
+| IDLE task | `IDLE` + core index | `IDLE0`, `IDLE1`, … | One per core, numbered from 0 |
+| Generic IDLE | `IDLE` | `IDLE` | Single-core systems |
+| Tick ISR | `TICK` | `TICK` | System tick interrupt |
+
+IDLE tasks are always rendered in grey; each one gets a distinct shade.  
+TICK tasks are rendered without a `[id]` suffix in labels.
+
+---
+
+### event_type field
+
+| `event_type` | Description |
 |---|---|
-| `T` | Task context-switch (`resume` / `preempt`) |
-| `STI` | Software trace item (mutex take/give, trigger, etc.) |
-| `C` | Core event (e.g. `set_frequence`) |
+| `T` | Task context-switch event (task is resumed or preempted) |
+| `STI` | Software Trace Item — application-level instrumentation marker |
+| `C` | Core-level event (e.g. clock frequency change) |
+
+---
+
+### T events — task context switches
+
+Each context switch produces two lines — one `preempt` and one `resume` — at the same timestamp.
+The **source** field rules are:
+
+| Switch type | `preempt` source | `resume` source |
+|---|---|---|
+| Timer-interrupt preemption | `Core_N` (the core that fired the interrupt) | Old task label (the task just preempted) |
+| Voluntary yield (e.g. `vTaskDelay`) | Old task label | Old task label |
+
+The **target** is always the task label being directly affected: the task being stopped (`preempt`) or the task being started (`resume`).
+
+| `event` verb | Meaning |
+|---|---|
+| `resume` | Task begins executing on a core |
+| `preempt` | Task stops executing (preempted or blocked) |
+
+**Examples:**
+
+```
+# Timer interrupt preempts [0/9]CAN_Rx and resumes [0/12]Motor_L on Core_0
+1000500, Core_0, 0, T, [0/9]CAN_Rx,  0, preempt,
+1000500, [0/9]CAN_Rx, 0, T, [0/12]Motor_L, 0, resume,
+
+# Task yields voluntarily (e.g. vTaskDelay)
+2001000, [0/12]Motor_L, 0, T, [0/12]Motor_L, 0, preempt,
+2001000, [0/12]Motor_L, 0, T, IDLE0, 0, resume,
+
+# Task creation notification
+  405, Core_0, 0, T, IDLE0, 0, preempt, task_create
+  420, Core_0, 0, T, [0/9]CAN_Rx, 0, preempt, task_create
+
+# TICK ISR fires (bare task name)
+1000000, TICK, 0, T, TICK, 0, resume, tick_0
+1000001, TICK, 0, T, TICK, 0, preempt,
+```
+
+---
+
+### STI events — software trace items
+
+Source is the **core** (`Core_N`) that recorded the event. Target is the **STI channel name** (a free-form string that names the instrumentation point). The `event` verb is always `trigger`. The optional `note` field carries additional detail.
+
+```
+timestamp, Core_N, 0, STI, channel_name, 0, trigger[, note]
+```
+
+**Examples:**
+
+```
+3050000, Core_0, 0, STI, Mutex_Lock,    0, trigger, Mutex_Lock
+3120000, Core_1, 0, STI, Queue_Send,    0, trigger, Queue_Send
+3200000, Core_2, 0, STI, ISR_Enter,     0, trigger, ISR_Enter
+3210000, Core_2, 0, STI, ISR_Exit,      0, trigger, ISR_Exit
+```
+
+Common STI channel names generated by `gen_trace.py`:
+
+`ISR_Enter`, `ISR_Exit`, `Sem_Post`, `Sem_Wait`, `Mutex_Lock`, `Mutex_Unlock`,
+`Queue_Send`, `Queue_Recv`, `Buf_Full`, `Buf_Empty`, `DMA_Done`, `DMA_Error`,
+`Overrun`, `Underrun`, `Checkpoint`, `Assert_OK`
+
+The viewer renders each distinct STI channel as a separate coloured row of diamond markers. Well-known notes (`take_mutex`, `give_mutex`, `create_mutex`, `trigger`) have fixed colours; others are assigned automatically from a palette.
+
+---
+
+### C events — core events
+
+Source and target are both the **core name**. Used for core-level notifications such as clock-frequency changes at startup.
+
+```
+timestamp, Core_N, 0, C, Core_N, 0, set_frequency, freq_hz
+```
+
+**Example:**
+
+```
+405, Core_0, 0, C, Core_0, 0, set_frequency, 200000000
+410, Core_1, 0, C, Core_1, 0, set_frequency, 200000000
+```
+
+---
+
+### Complete annotated example
+
+```
+#version 2.2.0
+#creator synthetic_trace_gen
+#creationDate 2024-01-01T00:00:00Z
+#timeScale us
+
+# ── Startup: set clock frequency on every core ──────────────────────────────
+405,  Core_0, 0, C,   Core_0,          0, set_frequency, 200000000
+410,  Core_1, 0, C,   Core_1,          0, set_frequency, 200000000
+
+# ── Create IDLE tasks ────────────────────────────────────────────────────────
+415,  Core_0, 0, T,   IDLE0,           0, preempt, task_create
+430,  Core_1, 0, T,   IDLE1,           0, preempt, task_create
+
+# ── IDLE tasks start running ─────────────────────────────────────────────────
+480,  IDLE0,  0, T,   IDLE0,           0, resume,
+490,  IDLE1,  0, T,   IDLE1,           0, resume,
+
+# ── Create worker tasks (on Core_0) ──────────────────────────────────────────
+510,  Core_0, 0, T,   [0/9]CAN_Rx,    0, preempt, task_create
+528,  Core_0, 0, T,   [0/10]Motor_L,  0, preempt, task_create
+
+# ── Normal context switches ───────────────────────────────────────────────────
+1000000, TICK,            0, T, TICK,            0, resume,  tick_0
+1000001, TICK,            0, T, TICK,            0, preempt,
+1001500, Core_0,          0, T, IDLE0,           0, preempt,
+1001500, [0/9]CAN_Rx,     0, T, [0/9]CAN_Rx,    0, resume,
+1003000, [0/9]CAN_Rx,     0, T, [0/9]CAN_Rx,    0, preempt,
+1003000, [0/9]CAN_Rx,     0, T, [0/10]Motor_L,  0, resume,
+
+# ── STI software instrumentation ─────────────────────────────────────────────
+1050000, Core_0, 0, STI, Mutex_Lock,   0, trigger, Mutex_Lock
+1120000, Core_1, 0, STI, Queue_Send,   0, trigger, Queue_Send
+```

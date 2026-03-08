@@ -23,8 +23,8 @@ Usage examples
   # 4 cores, 50 tasks, 500 K events
     python3 gen_trace.py -c 4 -t 50 -e 500000 -o my_trace.btf
 
-  # 16 cores, 200 tasks, 2 M events, 500 Hz tick, seed 7
-    python3 gen_trace.py -c 16 -t 200 -e 2000000 --tick-hz 500 --seed 7
+  # 16 cores, 200 tasks, 2 M events, 500 Hz tick
+    python3 gen_trace.py -c 16 -t 200 -e 2000000 --tick-hz 500
 
 Options
 -------
@@ -37,7 +37,6 @@ Options
   --sti-interval-us       Approx µs between STI tag events   (default: 30_000)
   --idle-prob             Probability a core goes IDLE [0–1] (default: 0.20)
   --max-burst-ticks       Max consecutive ticks a task runs  (default: 5)
-  --seed                  Random seed                        (default: 42)
   --no-sti                Suppress all STI events
   --no-migration          Pin each task to one core
 """
@@ -127,8 +126,6 @@ def parse_args():
                         help="Probability [0–1] a core picks IDLE instead of a worker")
     parser.add_argument("--max-burst-ticks", type=int, default=5,
                         help="Maximum RTOS ticks a task runs before being preempted")
-    parser.add_argument("--seed",          type=int, default=42,
-                        help="Random seed for reproducibility")
     parser.add_argument("--no-sti",        action="store_true",
                         help="Suppress all STI software-trace events")
     parser.add_argument("--no-migration",  action="store_true",
@@ -150,8 +147,6 @@ def main():
             sys.exit(f"error: {flag} must be >= 1")
     if not (0.0 <= args.idle_prob <= 1.0):
         sys.exit("error: --idle-prob must be between 0.0 and 1.0")
-
-    random.seed(args.seed)
 
     num_cores        = args.cores
     num_workers      = args.tasks
@@ -176,7 +171,7 @@ def main():
             used.add(base)
             workers.append(base)
         else:
-            suffix_ctr[base] = suffix_ctr.get(base, 1) + 1
+            suffix_ctr[base] = suffix_ctr.get(base, 0) + 1
             name = f"{base}_{suffix_ctr[base]}"
             used.add(name)
             workers.append(name)
@@ -197,22 +192,45 @@ def main():
         return random.randint(1, 6)
     worker_priority: dict[str, int] = {n: _task_priority(n) for n in workers}
 
-    def format_task_label(core: int, task: str) -> str:
-        if task in worker_set:
-            return f"[{core}/{worker_id_by_name[task]}]{task}"
-        if task == timer_service_name:
-            return f"[{core}/{timer_service_id}]{task}"
-        return task   # IDLE0…N and TICK are bare names
+    # ── Precomputed label map: (core_idx, task_name) → BTF label string ───────
+    core_names = [f"Core_{c}" for c in range(num_cores)]
+    label_map: dict[tuple[int, str], str] = {}
+    for _c in range(num_cores):
+        for _n in workers:
+            label_map[(_c, _n)] = f"[{_c}/{worker_id_by_name[_n]}]{_n}"
+        label_map[(_c, timer_service_name)] = (
+            f"[{_c}/{timer_service_id}]{timer_service_name}")
+        label_map[(_c, idle_names[_c])] = idle_names[_c]
 
-    # ── Output accumulator ────────────────────────────────────────────────────
-    output_lines: list[str] = []
+    # ── Output path (computed early to allow streaming writes) ────────────────
+    if args.output:
+        out_path = args.output
+    else:
+        _e_str = (f"{target_total // 1_000}k"
+                  if target_total < 1_000_000
+                  else f"{target_total // 1_000_000}m")
+        out_path = (f"freertos_{num_cores}c_{num_workers}t"
+                    f"_{_e_str}_events.btf")
+
+    # ── Streaming writer: buffer lines, flush to disk every _FLUSH_EVERY ──────
+    _FLUSH_EVERY = 100_000
+    _buf: list[str] = []
     event_count = 0
+    _fh = open(out_path, "w", encoding="utf-8", buffering=1 << 20)  # noqa: SIM115
+
+    def _flush_buf() -> None:
+        _fh.writelines(_buf)
+        _buf.clear()
 
     def emit(line: str, *, comment: bool = False) -> None:
+        """Write one BTF line.  For initialisation only; the hot loop writes
+        directly to _buf to avoid the per-call function overhead."""
         nonlocal event_count
-        output_lines.append(line)
+        _buf.append(line + "\n")
         if not comment:
             event_count += 1
+        if len(_buf) >= _FLUSH_EVERY:
+            _flush_buf()
 
     # ── BTF header ────────────────────────────────────────────────────────────
     now_s = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -247,35 +265,46 @@ def main():
 
     core_task: list[str] = list(idle_names)   # each core starts on its IDLE task
 
-    # Ready heap: (earliest_ready_time, task_name)
-    ready_heap: list[tuple[int, str]] = [(sim_start, n) for n in workers]
-    heapq.heapify(ready_heap)
+    # Two-queue scheduler:
+    #   pending_heap  – min-heap of (ready_time, task_name); tasks waiting to run
+    #   ready_list   – list of ready task names; selection is priority-weighted
+    #                   random so that ALL tasks get scheduled over time
+    #                   (a strict max-heap would starve low-priority tasks).
+    pending_heap: list[tuple[int, str]] = [(sim_start, n) for n in workers]
+    heapq.heapify(pending_heap)
+    ready_list: list[str] = []          # tasks eligible to run right now
+
+    # ── Local bindings: avoid repeated module-attribute lookups in hot paths ──
+    _rndf  = random.random    # float in [0, 1)
+    _rndi  = random.randint   # uniform integer
+    _rndch = random.choice    # pick random element
+    _pick_ctr = 0  # round-robin counter for O(1) task selection
 
     def pick_next(core: int, now: int) -> str:
         """
         Choose the next task for *core*.
         - With probability IDLE_PROB, return the core's IDLE task.
-        - Otherwise pick the highest-priority task whose ready-time <= now.
+        - Otherwise pick via round-robin so ALL tasks get scheduled over time.
         - If no task is ready, fall through to IDLE.
         """
-        if random.random() < idle_prob:
+        nonlocal _pick_ctr
+        if _rndf() < idle_prob:
             return idle_names[core]
 
-        # Drain all tasks that are ready by now into a candidates list.
-        candidates: list[str] = []
-        while ready_heap and ready_heap[0][0] <= now:
-            _, name = heapq.heappop(ready_heap)
-            candidates.append(name)
+        # Transfer all newly-ready tasks from pending_heap into ready_list.
+        while pending_heap and pending_heap[0][0] <= now:
+            _, name = heapq.heappop(pending_heap)
+            ready_list.append(name)
 
-        if not candidates:
-            return idle_names[core]   # nothing ready yet → IDLE
+        if not ready_list:
+            return idle_names[core]
 
-        # Pick highest-priority candidate; return the rest immediately.
-        best = max(candidates, key=lambda n: worker_priority[n])
-        for n in candidates:
-            if n != best:
-                heapq.heappush(ready_heap, (now, n))
-        return best
+        # Round-robin pick: O(1), no weight computation, all tasks get turns.
+        idx  = _pick_ctr % len(ready_list)
+        _pick_ctr += 1
+        last = len(ready_list) - 1
+        ready_list[idx], ready_list[last] = ready_list[last], ready_list[idx]
+        return ready_list.pop()
 
     def burst_us(task: str) -> int:
         """
@@ -285,12 +314,12 @@ def main():
         """
         prio = worker_priority.get(task, 3)
         if prio >= 8:
-            ticks = random.randint(1, 2)
+            ticks = _rndi(1, 2)
         elif prio >= 5:
-            ticks = random.randint(1, max(1, max_burst_ticks // 2))
+            ticks = _rndi(1, max(1, max_burst_ticks // 2))
         else:
-            ticks = random.randint(1, max_burst_ticks)
-        jitter = random.randint(-(tick_us // 10), tick_us // 10)
+            ticks = _rndi(1, max_burst_ticks)
+        jitter = _rndi(-(tick_us // 10), tick_us // 10)
         return max(50, ticks * tick_us + jitter)
 
     def block_us(task: str) -> int:
@@ -300,8 +329,8 @@ def main():
         """
         prio = worker_priority.get(task, 3)
         max_sleep_ticks = max(0, 8 - prio)
-        sleep_ticks = random.randint(0, max_sleep_ticks)
-        return sleep_ticks * tick_us + random.randint(0, tick_us // 4)
+        sleep_ticks = _rndi(0, max_sleep_ticks)
+        return sleep_ticks * tick_us + _rndi(0, tick_us // 4)
 
     # Per-core scheduling heap: (next_switch_time, core_index)
     sched_heap: list[tuple[int, int]] = [
@@ -313,89 +342,104 @@ def main():
     tick_no   = 0
     next_tick = sim_start + tick_us
     sti_no    = 0
-    next_sti  = sim_start + random.randint(tick_us, sti_interval_us)
+    next_sti  = sim_start + _rndi(tick_us, sti_interval_us)
 
     core_preempt_prob = 0.45   # timer-interrupt vs. voluntary yield
 
-    while event_count < target_total:
-        if not sched_heap:
-            break
-        cur_t, core = heapq.heappop(sched_heap)
+    try:
+        while event_count < target_total:
+            if not sched_heap:
+                break
+            cur_t, core = heapq.heappop(sched_heap)
 
-        # ── TICK ISR (fire every tick that elapsed up to cur_t) ───────────
-        while next_tick <= cur_t and event_count < target_total:
-            emit(f"{next_tick},{tick_task},0,T,{tick_task},0,resume,tick_{tick_no}")
-            emit(f"{next_tick + 1},{tick_task},0,T,{tick_task},0,preempt,")
-            tick_no  += 1
-            next_tick += tick_us
+            # ── TICK ISR + STI events (interleaved, strictly time-sorted) ────────
+            # Processing TICKs and STI events in a single loop guarantees that
+            # the output timestamps are monotonically non-decreasing.  The
+            # previous two-pass approach (all TICKs, then one STI) could emit
+            # an STI at timestamp T₁ after a TICK at timestamp T₂ > T₁ when
+            # multiple ticks fired in a single scheduler step.
+            while event_count < target_total:
+                tick_due = next_tick <= cur_t
+                sti_due  = enable_sti and next_sti <= cur_t
+                if not tick_due and not sti_due:
+                    break
+                # Emit whichever event is due first; prefer TICK on a tie so
+                # the TICK pair (resume t, preempt t+1) stays contiguous.
+                if tick_due and (not sti_due or next_tick <= next_sti):
+                    _buf.append(f"{next_tick},{tick_task},0,T,{tick_task},0,resume,tick_{tick_no}\n")
+                    _buf.append(f"{next_tick + 1},{tick_task},0,T,{tick_task},0,preempt,\n")
+                    event_count += 2
+                    tick_no  += 1
+                    next_tick += tick_us
+                else:
+                    tag = _rndch(_STI_TAGS)
+                    _buf.append(f"{next_sti},{core_names[core]},0,STI,{tag},0,trigger,{tag}\n")
+                    event_count += 1
+                    sti_no  += 1
+                    next_sti = cur_t + _rndi(
+                        sti_interval_us // 2, sti_interval_us * 2)
+                if len(_buf) >= _FLUSH_EVERY:
+                    _flush_buf()
 
-        # ── STI software-trace event ──────────────────────────────────────
-        if enable_sti and next_sti <= cur_t and event_count < target_total:
-            tag = random.choice(_STI_TAGS)
-            emit(f"{next_sti},Core_{core},0,STI,{tag},0,trigger,{tag}")
-            sti_no  += 1
-            next_sti = cur_t + random.randint(
-                sti_interval_us // 2, sti_interval_us * 2)
+            if event_count >= target_total:
+                break
 
-        if event_count >= target_total:
-            break
+            old_task = core_task[core]
+            old_label  = label_map.get((core, old_task), old_task)
 
-        old_task = core_task[core]
-        old_label  = format_task_label(core, old_task)
+            new_task = pick_next(core, cur_t)
 
-        new_task = pick_next(core, cur_t)
+            # --no-migration: tasks stay on the same core (hash-pinned)
+            if not enable_migration and new_task in worker_set:
+                if hash(new_task) % num_cores != core:
+                    ready_list.append(new_task)
+                    new_task = idle_names[core]
 
-        # --no-migration: tasks stay on the same core (hash-pinned)
-        if not enable_migration and new_task in worker_set:
-            if hash(new_task) % num_cores != core:
-                heapq.heappush(ready_heap, (cur_t, new_task))
-                new_task = idle_names[core]
+            new_label = label_map.get((core, new_task), new_task)
 
-        new_label = format_task_label(core, new_task)
+            # Return old worker to the pending heap after its blocking period
+            if old_task in worker_set:
+                _bl = block_us(old_task)
+                if _bl == 0:
+                    # Zero block: re-add directly to ready_list (O(1))
+                    ready_list.append(old_task)
+                else:
+                    heapq.heappush(pending_heap, (cur_t + _bl, old_task))
 
-        # Return old worker to the ready heap after its blocking period
-        if old_task in worker_set:
-            heapq.heappush(ready_heap, (cur_t + block_us(old_task), old_task))
+            # ── Context switch ────────────────────────────────────────────────
+            if old_task == new_task:
+                # Same task keeps running – no switch event, just reschedule
+                idle_slice = _rndi(tick_us // 8, tick_us // 2)
+                heapq.heappush(sched_heap, (cur_t + idle_slice, core))
+                continue
 
-        # ── Context switch ────────────────────────────────────────────────
-        if old_task == new_task:
-            # Same task keeps running – no switch event, just reschedule
-            idle_slice = random.randint(TICK_US // 8, TICK_US // 2)
-            heapq.heappush(sched_heap, (cur_t + idle_slice, core))
-            continue
+            if _rndf() < core_preempt_prob:
+                # Timer interrupt preempts the running task
+                _buf.append(f"{cur_t},{core_names[core]},0,T,{old_label},0,preempt,\n")
+                _buf.append(f"{cur_t},{old_label},0,T,{new_label},0,resume,\n")
+            else:
+                # Task yields voluntarily (vTaskDelay, semaphore wait, …)
+                _buf.append(f"{cur_t},{old_label},0,T,{old_label},0,preempt,\n")
+                _buf.append(f"{cur_t},{old_label},0,T,{new_label},0,resume,\n")
+            event_count += 2
+            if len(_buf) >= _FLUSH_EVERY:
+                _flush_buf()
 
-        if random.random() < core_preempt_prob:
-            # Timer interrupt preempts the running task
-            emit(f"{cur_t},Core_{core},0,T,{old_label},0,preempt,")
-            emit(f"{cur_t},{old_label},0,T,{new_label},0,resume,")
-        else:
-            # Task yields voluntarily (vTaskDelay, semaphore wait, …)
-            emit(f"{cur_t},{old_label},0,T,{old_label},0,preempt,")
-            emit(f"{cur_t},{old_label},0,T,{new_label},0,resume,")
+            core_task[core] = new_task
 
-        core_task[core] = new_task
+            # Schedule the next switch on this core
+            if new_task in worker_set:
+                next_burst = burst_us(new_task)
+            else:
+                # IDLE: run until next TICK boundary (roughly)
+                next_burst = _rndi(tick_us // 8, tick_us)
 
-        # Schedule the next switch on this core
-        if new_task in worker_set:
-            next_burst = burst_us(new_task)
-        else:
-            # IDLE: run until next TICK boundary (roughly)
-            next_burst = random.randint(tick_us // 8, tick_us)
+            heapq.heappush(sched_heap, (cur_t + next_burst, core))
 
-        heapq.heappush(sched_heap, (cur_t + next_burst, core))
-
-    # ── Write output ──────────────────────────────────────────────────────────
-    if args.output:
-        out_path = args.output
-    else:
-        e_str = (f"{target_total // 1_000}k"
-             if target_total < 1_000_000
-             else f"{target_total // 1_000_000}m")
-        out_path = f"freertos_{num_cores}c_{num_workers}t_{e_str}_events.btf"
-
-    with open(out_path, "w", encoding="utf-8") as fh:
-        fh.write("\n".join(output_lines))
-        fh.write("\n")
+    finally:
+        # Always flush and close, even if an exception interrupts the simulation.
+        _flush_buf()
+        _fh.close()
 
     sim_dur_ms = (next_tick - sim_start) / 1_000
     print(

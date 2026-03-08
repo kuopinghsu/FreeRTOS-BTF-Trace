@@ -56,8 +56,16 @@ FreeRTOS-Kernel/
 rvsim/rvsim
 tools/gentrace
 dump.bin
-trace.btf
-trace.vcd
+
+# Generated trace files (can be very large; regenerate with gen_trace.py)
+# Keep the committed small examples in tracedata/ via negation rules.
+*.btf
+*.vcd
+!tracedata/*.btf
+!tracedata/*.vcd
+
+# BTF viewer runtime settings (user-local, not shared)
+BTFViewer/btf_viewer.rc
 
 .DS_Store
 .venv

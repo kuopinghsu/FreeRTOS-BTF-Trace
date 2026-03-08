@@ -63,11 +63,12 @@ from __future__ import annotations
 
 import configparser
 import functools
-import math
 import os
 import re
 import shutil
+import subprocess
 import sys
+import threading
 from bisect import bisect_left, bisect_right
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -80,17 +81,17 @@ from PyQt5.QtCore import (
 )
 from PyQt5.QtGui import (
     QBrush, QColor, QFont, QFontDatabase, QFontMetrics, QKeySequence, QPainter,
-    QPainterPath, QPalette, QPen, QPixmap, QPolygonF, QTransform, QWheelEvent,
+    QPalette, QPen, QPixmap, QPolygonF, QWheelEvent,
 )
 from PyQt5.QtWidgets import (
     QAction, QApplication, QCheckBox, QDockWidget, QFileDialog,
     QFrame, QGraphicsEllipseItem, QGraphicsItem, QGraphicsLineItem,
-    QGraphicsPolygonItem,
     QGraphicsRectItem, QGraphicsScene, QGraphicsView,
-    QHBoxLayout, QLabel, QMainWindow, QMenu, QMessageBox, QProgressDialog,
-    QPushButton, QScrollArea, QSizePolicy, QSlider, QSpacerItem, QSpinBox,
-    QSplitter, QStatusBar, QStyleOptionGraphicsItem, QToolBar, QVBoxLayout,
-    QWidget,
+    QHBoxLayout, QLabel, QMainWindow, QMenu, QMessageBox, QProgressBar,
+    QProgressDialog,
+    QPushButton, QScrollArea, QSpinBox,
+    QStatusBar, QStyleFactory, QStyleOptionGraphicsItem,
+    QToolBar, QToolButton, QVBoxLayout, QWidget,
 )
 from PyQt5.QtSvg import QSvgGenerator  # noqa: F401 – kept for optional future SVG use
 
@@ -128,12 +129,34 @@ _PALETTE = [
 ]
 
 # Colour map for core header dots.
-_CORE_DOT_COLORS = {
-    "Core_0": "#FF9933",
-    "Core_1": "#33BBFF",
-    "Core_2": "#66FF88",
-    "Core_3": "#FF66AA",
-}
+# Core dot / header colors – 16 hand-picked distinct hues that cycle for
+# more than 16 cores.  Index by numeric core ID extracted from "Core_N".
+_CORE_PALETTE = [
+    "#FF9933",  # 0  orange
+    "#33BBFF",  # 1  sky blue
+    "#66FF88",  # 2  lime green
+    "#FF66AA",  # 3  pink
+    "#FFEE44",  # 4  yellow
+    "#BB77FF",  # 5  purple
+    "#44FFEE",  # 6  cyan
+    "#FF5555",  # 7  red
+    "#AADDFF",  # 8  light blue
+    "#FFBB55",  # 9  amber
+    "#88FF44",  # 10 yellow-green
+    "#FF88DD",  # 11 lavender-pink
+    "#55DDBB",  # 12 teal
+    "#FFAA77",  # 13 peach
+    "#99BBFF",  # 14 periwinkle
+    "#DDFF77",  # 15 chartreuse
+]
+
+def _core_color(core_name: str) -> str:
+    """Return a distinct color hex string for a core name like 'Core_N'."""
+    if core_name.startswith("Core_"):
+        tail = core_name[5:]
+        if tail.isdigit():
+            return _CORE_PALETTE[int(tail) % len(_CORE_PALETTE)]
+    return "#AAAAAA"
 
 # Alpha-tint overlaid on task colours to indicate which core a segment ran on.
 _CORE_TINTS = {
@@ -224,6 +247,10 @@ class BtfTrace:
     core_segs:       Dict[str, List[TaskSegment]]                     = field(default_factory=dict)
     core_task_order: Dict[str, List[str]]                             = field(default_factory=dict)
     core_task_segs:  Dict[str, Dict[str, List[TaskSegment]]]          = field(default_factory=dict)
+    # Maps each merge-key to its representative raw task name string.
+    # Used by task-view builders to look up display names and colours from
+    # merge keys (trace.tasks stores merge keys, not raw names).
+    task_repr: Dict[str, str]                                         = field(default_factory=dict)
 
     # ---- Fast viewport-clip support (1M-event performance) ----------------
     # Pre-sorted start-time lists (ints) for each key – enable O(log n) bisect
@@ -251,6 +278,7 @@ class BtfTrace:
 
 _TASK_RE = re.compile(r"^\[(\d+)/(\d+)\](.+)$")
 
+@functools.lru_cache(maxsize=16384)
 def parse_task_name(raw: str) -> Tuple[Optional[int], Optional[int], str]:
     """Return (core_id, task_id, display_name) from a raw BTF task name."""
     m = _TASK_RE.match(raw)
@@ -258,13 +286,15 @@ def parse_task_name(raw: str) -> Tuple[Optional[int], Optional[int], str]:
         return int(m.group(1)), int(m.group(2)), m.group(3).strip()
     return None, None, raw
 
+@functools.lru_cache(maxsize=16384)
 def task_display_name(raw: str) -> str:
     """Short display name: 'Name[id]' for regular tasks; bare name for IDLE/TICK."""
     _, task_id, name = parse_task_name(raw)
-    if task_id is not None and not re.match(r"^IDLE\d*$|^TICK$", name):
+    if task_id is not None and not (name.startswith("IDLE") or name == "TICK"):
         return f"{name}[{task_id}]"
     return name
 
+@functools.lru_cache(maxsize=16384)
 def task_sort_key(raw: str) -> Tuple[int, int, str]:
     """Sorting key: user tasks first, then IDLE, then TICK."""
     core_id, task_id, name = parse_task_name(raw)
@@ -276,6 +306,7 @@ def task_sort_key(raw: str) -> Tuple[int, int, str]:
         group = 1
     return (group, task_id if task_id is not None else 0, name)
 
+@functools.lru_cache(maxsize=16384)
 def task_merge_key(raw: str) -> str:
     """Stable key that ignores core_id, used to merge cross-core task rows in task view.
 
@@ -292,6 +323,7 @@ def task_merge_key(raw: str) -> str:
 # Parser
 # ---------------------------------------------------------------------------
 
+@functools.lru_cache(maxsize=4096)
 def _is_core_entity(name: str) -> bool:
     return name.startswith("Core_")
 
@@ -382,7 +414,6 @@ def parse_btf(filepath: str,
     open_seg: Dict[str, Tuple[int, str]] = {}
     last_core: Dict[str, str] = {}
     segments: List[TaskSegment] = []
-    all_task_names: set = set()
 
     if progress_callback:
         progress_callback(25, "Reconstructing segments…")
@@ -423,7 +454,6 @@ def parse_btf(filepath: str,
         for (_, src, ev, tgt, _note) in events:
             if ev == "preempt" and _is_core_entity(src):
                 core_preempts[tgt] = src
-                all_task_names.add(tgt)
 
         # Build resume-source set once (avoids O(n²) generator inside loop)
         resume_sources = {src for (_, src, ev, tgt, _n) in events if ev == "resume"}
@@ -431,8 +461,6 @@ def parse_btf(filepath: str,
         for (_, src, ev, tgt, _note) in events:
             if ev != "resume":
                 continue
-            all_task_names.add(tgt)
-            all_task_names.add(src)
 
             if src in core_preempts:
                 core = core_preempts[src]
@@ -448,16 +476,11 @@ def parse_btf(filepath: str,
 
         for (_, src, ev, tgt, _note) in events:
             if ev == "preempt":
-                all_task_names.add(tgt)
                 if tgt not in resume_sources:
                     core = core_preempts.get(tgt, last_core.get(tgt, "Core_?"))
                     _close_seg(tgt, ts)
                     if _is_core_entity(src):
                         last_core[tgt] = src
-
-        for (_, _src, ev, tgt, note) in events:
-            if ev == "preempt" and note == "task_create":
-                all_task_names.add(tgt)
 
     for task in list(open_seg.keys()):
         _close_seg(task, time_max)
@@ -472,31 +495,53 @@ def parse_btf(filepath: str,
     # ------------------------------------------------------------------
     # Task-view rows should reflect actual execution timelines.
     # Including created-but-never-run tasks produces label-only blank rows.
-    task_set = {seg.task for seg in segments if not _is_core_entity(seg.task) and seg.task}
-    tasks = sorted(task_set, key=task_sort_key)
+    # Build merge-key map in a single pass (avoids second full segment scan).
+    _mk_cache: Dict[str, str] = {}
+    segs_by_mk_build: Dict[str, list] = defaultdict(list)
+    _core_segs_build: Dict[str, list] = defaultdict(list)
+    _cn_set: set = set()
+    if cancel_check and cancel_check():
+        raise _ParseCancelledError()
+    for seg in segments:
+        if _is_core_entity(seg.task) or not seg.task:
+            continue
+        mk = _mk_cache.get(seg.task)
+        if mk is None:
+            mk = task_merge_key(seg.task)
+            _mk_cache[seg.task] = mk
+        segs_by_mk_build[mk].append(seg)
+        _core_segs_build[seg.core].append(seg)
+        _cn_set.add(seg.core)
+
+    task_set: set = set(_mk_cache.values())
+    # Sort by the first representative raw task name for each key.
+    _mk_repr: Dict[str, str] = {}
+    for raw, mk in _mk_cache.items():
+        if mk not in _mk_repr:
+            _mk_repr[mk] = raw
+    tasks = sorted(task_set, key=lambda mk: task_sort_key(_mk_repr[mk]))
 
     sti_channels = sorted({e.target for e in sti_events})
-
-    # Build target → events lookup used by scene builders (O(1) per channel)
     sti_by_target: Dict[str, List[StiEvent]] = defaultdict(list)
-    for ev in sti_events:
-        sti_by_target[ev.target].append(ev)
+    for _ev in sti_events:
+        sti_by_target[_ev.target].append(_ev)
 
-    # Pre-build merge-key → sorted-segments map so task-view rebuilds skip O(n) work
-    segs_by_mk: Dict[str, list] = defaultdict(list)
-    for seg in segments:
-        segs_by_mk[task_merge_key(seg.task)].append(seg)
+    segs_by_mk: Dict[str, list] = dict(segs_by_mk_build)
     for _lst in segs_by_mk.values():
         _lst.sort(key=lambda s: s.start)
+    def _core_sort_key(c: str):
+        if c.startswith("Core_"):
+            tail = c[5:]
+            return (0, int(tail) if tail.isdigit() else float("inf"), c)
+        return (1, float("inf"), c)
+    _core_names = sorted(_cn_set, key=_core_sort_key)
+    _core_segs: Dict[str, list] = {c: list(_core_segs_build.get(c, [])) for c in _core_names}
 
-    # Pre-build core-view maps: core → sorted segs, core → task → sorted segs
-    _cn_set: set = set()
-    for seg in segments:
-        _cn_set.add(seg.core)
-    _core_names = sorted(_cn_set, key=lambda c: (0 if c.startswith("Core_") else 1, c))
-    _core_segs: Dict[str, list] = {c: [] for c in _core_names}
-    for seg in segments:
-        _core_segs[seg.core].append(seg)
+    if progress_callback:
+        progress_callback(62, "Sorting core segments…")
+    if cancel_check and cancel_check():
+        raise _ParseCancelledError()
+
     _core_task_order: Dict[str, list] = {}
     _core_task_segs:  Dict[str, dict] = {}
     for c in _core_names:
@@ -523,7 +568,9 @@ def parse_btf(filepath: str,
     _lod_ns_per_px = _time_span / _LOD_SUMMARY_BINS  # ns per summary bin
 
     if progress_callback:
-        progress_callback(70, "Building LOD summaries…")
+        progress_callback(70, "Building task LOD summaries…")
+    if cancel_check and cancel_check():
+        raise _ParseCancelledError()
 
     def _make_lod_summary(segs_sorted: list) -> list:
         """Down-sample a sorted segment list to at most _LOD_SUMMARY_BINS entries."""
@@ -548,6 +595,11 @@ def parse_btf(filepath: str,
         _seg_lod_mk[_mk]        = _lod
         _seg_lod_starts_mk[_mk] = [s.start for s in _lod]
 
+    if progress_callback:
+        progress_callback(80, "Building core LOD summaries…")
+    if cancel_check and cancel_check():
+        raise _ParseCancelledError()
+
     # Core-view: start-time arrays + LOD summaries for core summary rows
     _core_seg_starts:     Dict[str, list] = {}
     _core_seg_lod:        Dict[str, list] = {}
@@ -557,6 +609,11 @@ def parse_btf(filepath: str,
         _lod = _make_lod_summary(_core_segs[_c])
         _core_seg_lod[_c]        = _lod
         _core_seg_lod_starts[_c] = [s.start for s in _lod]
+
+    if progress_callback:
+        progress_callback(88, "Building per-task core LOD summaries…")
+    if cancel_check and cancel_check():
+        raise _ParseCancelledError()
 
     # Core-view: start-time arrays + LOD summaries for per-task sub-rows
     _core_task_starts:     Dict[str, dict] = {}
@@ -596,6 +653,7 @@ def parse_btf(filepath: str,
         core_segs=dict(_core_segs),
         core_task_order=_core_task_order,
         core_task_segs=_core_task_segs,
+        task_repr=_mk_repr,
         # Phase 4 – 1M-event performance fields
         seg_start_by_merge_key=_seg_starts_mk,
         core_seg_starts=_core_seg_starts,
@@ -627,6 +685,8 @@ def parse_btf(filepath: str,
 class _InfoPopup(QLabel):
     """Frameless persistent info popup – shown on hover-enter, hidden on hover-leave."""
 
+    _stylesheet_applied: bool = False
+
     def __init__(self) -> None:
         super().__init__()
         self.setWindowFlags(
@@ -635,13 +695,25 @@ class _InfoPopup(QLabel):
         self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self.setTextFormat(Qt.RichText)
         self.setMargin(7)
+        # Stylesheet is deferred to first show() so that _get_fixed_font_family()
+        # can resolve the actual system fixed font (requires a live QApplication
+        # with fonts loaded).  Using only the resolved name avoids the ~100 ms
+        # "Populating font family aliases" warning that Qt emits when a font
+        # name in the CSS list doesn't exist on the current platform.
+
+    def _ensure_stylesheet(self) -> None:
+        if _InfoPopup._stylesheet_applied:
+            return
+        _InfoPopup._stylesheet_applied = True
+        fam = _get_fixed_font_family()
         self.setStyleSheet(
-            "QLabel { background:#252526; color:#E0E0E0; "
-            "border:1px solid #666; border-radius:4px; "
-            "font-size:9pt; font-family:'DejaVu Sans Mono','Consolas',monospace; }"
+            f"QLabel {{ background:#252526; color:#E0E0E0; "
+            f"border:1px solid #666; border-radius:4px; "
+            f"font-size:9pt; font-family:'{fam}',monospace; }}"
         )
 
     def show_at(self, screen_pos: QPoint, html: str) -> None:
+        self._ensure_stylesheet()
         self.setText(html)
         self.adjustSize()
         # offset so the cursor does not cover the box
@@ -769,17 +841,22 @@ def _format_time(ns: int, time_scale: str = "ns") -> str:
         return f"{ns / 1_000:.3f} µs"
     return f"{ns} ns"
 
-@functools.lru_cache(maxsize=32)
+_monospace_font_cache: dict = {}
+
 def _monospace_font(size: int, weight: int = QFont.Normal) -> QFont:
     """Return a cached monospace QFont using the system fixed font.
 
     Cached so the expensive QFontDatabase.systemFont() Qt bridge call is made
     only once per (size, weight) pair regardless of how many rebuilds happen.
     """
-    font = QFontDatabase.systemFont(QFontDatabase.FixedFont)
-    font.setPointSize(size)
-    font.setWeight(weight)
-    return font
+    key = (size, weight)
+    f = _monospace_font_cache.get(key)
+    if f is None:
+        f = QFontDatabase.systemFont(QFontDatabase.FixedFont)
+        f.setPointSize(size)
+        f.setWeight(weight)
+        _monospace_font_cache[key] = f
+    return f
 
 # Resolved family name of the system fixed-pitch font, used in Qt stylesheets.
 # Lazily initialised on first use so that import does not require a live
@@ -895,6 +972,12 @@ class TimelineScene(QGraphicsScene):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        # Disable Qt's BSP spatial index.  The default BSP index updates on
+        # every addItem() / removeItem() / clear() call which dominates rebuild
+        # time when the scene is torn down and re-created on each scroll/zoom.
+        # Hit-testing is O(n_items) with NoIndex; that is fine because a
+        # culled rebuild only materialises ~30–70 items at a time.
+        self.setItemIndexMethod(QGraphicsScene.NoIndex)
         # -- Trace data --------------------------------------------------
         self._trace: Optional[BtfTrace] = None
         # -- Zoom / orientation ------------------------------------------
@@ -944,6 +1027,10 @@ class TimelineScene(QGraphicsScene):
         # task_key → [(QRectF, QColor)] – populated by builders, used for hover overlays
         self._task_row_rects: Dict[str, list] = {}
         self._hover_overlay_items: list = []   # lightweight overlay items (no rebuild)
+        # -- Task visibility filter --------------------------------------
+        # 0 = show all tasks; N > 0 = show only the N most-active tasks.
+        self._max_visible_tasks: int = 0
+        self._task_activity_cache: Optional[Dict[str, int]] = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -951,11 +1038,15 @@ class TimelineScene(QGraphicsScene):
 
     def set_trace(self, trace: BtfTrace, viewport_width: int = 1200) -> None:
         self._trace = trace
+        self._task_activity_cache = None   # clear on new trace
         time_span = max(trace.time_max - trace.time_min, 1)
         avail = max(viewport_width - self._label_width, 100)
         self._ns_per_px = time_span / avail
         self._ns_per_px_fit = self._ns_per_px   # record fit-to-view limit
-        self._skip_orth_culling = True
+        # Do NOT set _skip_orth_culling here: the viewport bounds are valid
+        # (window is visible) and orth culling keeps the initial build to
+        # O(visible_rows) instead of O(all_rows), preventing a UI freeze
+        # when loading large traces (e.g. 128 cores × 1000 tasks).
         self.rebuild()
 
     def set_horizontal(self, horizontal: bool) -> None:
@@ -974,13 +1065,21 @@ class TimelineScene(QGraphicsScene):
     def set_view_mode(self, mode: str) -> None:
         """Switch between 'task' (one row per task) and 'core' (one row per CPU core)."""
         self._view_mode = mode
-        self._skip_orth_culling = True
+        # Do NOT set _skip_orth_culling here: both task and core views use the
+        # same Y-axis row layout, so the existing viewport orth bounds are valid.
         self.rebuild()
 
     def toggle_core(self, core_name: str) -> None:
         """Expand or collapse a core's task sub-rows in the core view."""
         self._core_expanded[core_name] = not self._core_expanded.get(core_name, True)
-        self._skip_orth_culling = True
+        self.rebuild()
+
+    def set_all_cores_expanded(self, expanded: bool) -> None:
+        """Expand or collapse every core at once in the core view."""
+        if self._trace is None:
+            return
+        for c in self._trace.core_names:
+            self._core_expanded[c] = expanded
         self.rebuild()
 
     @property
@@ -1002,6 +1101,29 @@ class TimelineScene(QGraphicsScene):
         self._label_width = max(60, min(width, 600))
         self.rebuild()
 
+    def set_max_visible_tasks(self, n: int) -> None:
+        """Limit task view to the *n* most-active tasks (0 = show all)."""
+        self._max_visible_tasks = max(0, n)
+        self._task_activity_cache = None   # recompute rankings
+        # Do NOT set _skip_orth_culling: row Y positions are unchanged, orth
+        # bounds from the current viewport are valid.
+        self.rebuild()
+
+    def _apply_task_limit(self, task_rows: list) -> list:
+        """Return at most _max_visible_tasks rows, ranked by total execution time."""
+        if self._max_visible_tasks <= 0 or not task_rows:
+            return task_rows
+        # Build/cache a {merge_key: total_duration} map once per trace.
+        if self._task_activity_cache is None:
+            seg_map = self._trace.seg_map_by_merge_key
+            self._task_activity_cache = {
+                mk: sum(s.end - s.start for s in segs)
+                for mk, segs in seg_map.items()
+            }
+        cache = self._task_activity_cache
+        ranked = sorted(task_rows, key=lambda mk: cache.get(mk, 0), reverse=True)
+        return ranked[:self._max_visible_tasks]
+
     def zoom(self, factor: float, center_ns: Optional[int] = None) -> None:
         new_val = self._ns_per_px / factor
         # Clamp: don't zoom in past 1:1 (NS_PER_PX_DEFAULT) or
@@ -1019,7 +1141,6 @@ class TimelineScene(QGraphicsScene):
         avail = max(viewport_width - self._label_width, 100)
         self._ns_per_px = time_span / avail
         self._ns_per_px_fit = self._ns_per_px   # update fit-to-view limit
-        self._skip_orth_culling = True
         self.rebuild()
 
     # ------------------------------------------------------------------
@@ -1252,6 +1373,7 @@ class TimelineScene(QGraphicsScene):
         blank edges before the next debounced rebuild fires.
         """
         if self._trace is None:
+            self._skip_orth_culling = False   # don't let a pre-load mode switch poison the first rebuild
             self._vp_ns_lo = 0
             self._vp_ns_hi = 0
             self._vp_scene_orth_lo = -1e18
@@ -1306,8 +1428,9 @@ class TimelineScene(QGraphicsScene):
             self._vp_scene_orth_lo = -1e18
             self._vp_scene_orth_hi = +1e18
         else:
-            # Buffer of 6 rows/cols so small scrolls don't immediately show blanks.
-            _ORTH_BUF = (ROW_HEIGHT + ROW_GAP) * 6
+            # Buffer of 20 rows/cols: wide enough that typical fast scrolling
+            # doesn't exhaust the pre-built region before the next rebuild fires.
+            _ORTH_BUF = (ROW_HEIGHT + ROW_GAP) * 20
             if self._horizontal:
                 vy_lo = view.mapToScene(vp_rect.topLeft()).y()
                 vy_hi = view.mapToScene(vp_rect.bottomLeft()).y()
@@ -1350,15 +1473,10 @@ class TimelineScene(QGraphicsScene):
         font = _monospace_font(self._font_size)
         fm   = QFontMetrics(font)
 
-        # Merge same-task-id rows from different cores into a single row
-        _seen_mk: dict = {}
-        _merged_rows: list = []
-        for _raw in trace.tasks:
-            _mk = task_merge_key(_raw)
-            if _mk not in _seen_mk:
-                _seen_mk[_mk] = _raw  # first representative raw name
-                _merged_rows.append(_mk)
-        task_rows = _merged_rows
+        # trace.tasks is a sorted list of merge-keys.  task_repr maps
+        # each merge-key to its representative raw name, which is needed
+        # to resolve display names and colours.
+        task_rows = self._apply_task_limit(trace.tasks)
         sti_rows  = trace.sti_channels if self._show_sti else []
         n_task = len(task_rows)
         n_sti  = len(sti_rows)
@@ -1386,45 +1504,46 @@ class TimelineScene(QGraphicsScene):
         _ruler.setZValue(0.5)
         self.addItem(_ruler)
 
-        # Pre-cache per-task display name and color (keyed on merge key)
-        task_display: Dict[str, str]    = {k: task_display_name(_seen_mk[k]) for k in task_rows}
-        task_colors:  Dict[str, QColor] = {k: _task_color(_seen_mk[k])      for k in task_rows}
-
         # Shared colors/pens/brushes hoisted out of loops
         _bg_even   = QBrush(QColor("#252526"))
         _bg_odd    = QBrush(QColor("#2D2D2D"))
         _sep_pen   = QPen(QColor("#333333"), 0.5)
         _lbl_color = QColor("#D4D4D4")
         _seg_white = QBrush(QColor("#FFFFFF"))
+        _pen_hl    = QPen(QColor("#FFFFFF"), 1.5)
 
         # Use pre-built sorted segment map from the trace (avoids O(n_seg) rebuild work)
         seg_map = trace.seg_map_by_merge_key
 
         # --- Task rows ---------------------------------------------------
-        # One row per unique merge-key; segments from all cores sharing the
-        # same task_id are blended with a per-core tint and rendered in a
-        # single _BatchRowItem for that row.
-        _time_min  = trace.time_min
-        _px_per_ns = 1.0 / self._ns_per_px
-        lw         = self._label_width
-        _vp_ns_lo  = self._vp_ns_lo
-        _vp_ns_hi  = self._vp_ns_hi
+        # Compute first/last visible row indices from the cached orth bounds.
+        # This avoids iterating all n_task rows just to skip ~95 % of them.
+        _row_stride   = ROW_HEIGHT + ROW_GAP
+        _first_vis    = max(0, int((self._vp_scene_orth_lo - RULER_HEIGHT) // _row_stride))
+        _last_vis     = min(n_task - 1, int((self._vp_scene_orth_hi - RULER_HEIGHT) // _row_stride) + 1)
+        _time_min     = trace.time_min
+        _px_per_ns    = 1.0 / self._ns_per_px
+        lw            = self._label_width
+        _vp_ns_lo     = self._vp_ns_lo
+        _vp_ns_hi     = self._vp_ns_hi
         lod_ns_per_px = trace.seg_lod_ns_per_px
-        _ns_per_px = self._ns_per_px
-        for row_idx, task in enumerate(task_rows):
-            y_top = RULER_HEIGHT + row_idx * (ROW_HEIGHT + ROW_GAP)
+        _ns_per_px    = self._ns_per_px
+        for row_idx in range(_first_vis, _last_vis + 1):
+            task  = task_rows[row_idx]
+            raw   = trace.task_repr.get(task, task)
+            y_top = RULER_HEIGHT + row_idx * _row_stride
             y_ctr = y_top + ROW_HEIGHT / 2
-
             is_hl = (task == self._locked_task)
+            disp      = task_display_name(raw)
+            row_color = _task_color(raw)
+            self._task_row_rects[task] = [(QRectF(lw, y_top, timeline_w, ROW_HEIGHT), row_color)]
 
             self.addRect(QRectF(lw, y_top, timeline_w, ROW_HEIGHT),
                          QPen(Qt.NoPen),
                          _bg_even if row_idx % 2 == 0 else _bg_odd).setZValue(0)
-            self._task_row_rects[task] = [(QRectF(lw, y_top, timeline_w, ROW_HEIGHT), task_colors[task])]
             if is_hl:
-                tc = task_colors[task]
-                hl_bg = QColor(tc.red(), tc.green(), tc.blue(), 35)
-                hl_border = QPen(tc.lighter(160), 1.0)
+                hl_bg = QColor(row_color.red(), row_color.green(), row_color.blue(), 35)
+                hl_border = QPen(row_color.lighter(160), 1.0)
                 self.addRect(QRectF(lw, y_top, timeline_w, ROW_HEIGHT),
                              hl_border, QBrush(hl_bg)).setZValue(0.9)
             self.addLine(0, y_top + ROW_HEIGHT + ROW_GAP - 1,
@@ -1433,7 +1552,7 @@ class TimelineScene(QGraphicsScene):
 
             # Clickable label background
             lbl_bg = _TaskLabelItem(QRectF(0, y_top, lw, ROW_HEIGHT), task, self,
-                                    tooltip_text=task_display[task])
+                                    tooltip_text=disp)
             lbl_bg.setZValue(36)
             self.addItem(lbl_bg)
             self._frozen_items.append((lbl_bg, 0))
@@ -1442,21 +1561,14 @@ class TimelineScene(QGraphicsScene):
             lbl_font  = _monospace_font(self._font_size, QFont.Bold) if is_hl else font
             _lbl_avail_w = max(0, lw - 4 - 4)   # left=4, right margin=4
             _lbl_elided  = QFontMetrics(lbl_font).elidedText(
-                task_display[task], Qt.ElideRight, _lbl_avail_w)
+                disp, Qt.ElideRight, _lbl_avail_w)
             lbl = self.addSimpleText(_lbl_elided, lbl_font)
             lbl.setBrush(QBrush(lbl_color))
             lbl.setPos(4, y_ctr - fm.height() / 2)
             lbl.setZValue(37)
             self._frozen_items.append((lbl, 4))
 
-            # Row is vertically outside the viewport – skip the expensive
-            # segment data and BatchRowItem.  Background, separator, and
-            # label are already created above (cheap, needed for hover/scroll).
-            if y_top + ROW_HEIGHT < self._vp_scene_orth_lo or y_top > self._vp_scene_orth_hi:
-                continue
-
-            disp       = task_display[task]
-            pen_hl     = QPen(QColor("#FFFFFF"), 1.5)
+            pen_hl     = _pen_hl
             seg_data: list = []
             xs:      list = []
             for i_s, seg in enumerate(_visible_segs(
@@ -1532,15 +1644,9 @@ class TimelineScene(QGraphicsScene):
         font = _monospace_font(self._font_size)
         fm   = QFontMetrics(font)
 
-        # Merge same-task-id columns from different cores into a single column
-        _seen_mk: dict = {}
-        _merged_cols: list = []
-        for _raw in trace.tasks:
-            _mk = task_merge_key(_raw)
-            if _mk not in _seen_mk:
-                _seen_mk[_mk] = _raw  # first representative raw name
-                _merged_cols.append(_mk)
-        task_cols = _merged_cols
+        # trace.tasks is a sorted list of merge-keys.  task_repr maps
+        # each merge-key to its representative raw name.
+        task_cols = self._apply_task_limit(trace.tasks)
         sti_cols  = trace.sti_channels if self._show_sti else []
         n_task = len(task_cols)
         n_sti  = len(sti_cols)
@@ -1571,12 +1677,10 @@ class TimelineScene(QGraphicsScene):
         seg_map = trace.seg_map_by_merge_key
 
         # --- Task columns ------------------------------------------------
-        # Pre-cache per-task display name and color (keyed on merge key)
-        task_display: Dict[str, str]    = {k: task_display_name(_seen_mk[k]) for k in task_cols}
-        task_colors:  Dict[str, QColor] = {k: _task_color(_seen_mk[k])      for k in task_cols}
-        _bg_even = QBrush(QColor("#252526"))
-        _bg_odd  = QBrush(QColor("#2D2D2D"))
+        _bg_even   = QBrush(QColor("#252526"))
+        _bg_odd    = QBrush(QColor("#2D2D2D"))
         _lbl_color = QColor("#D4D4D4")
+        _pen_hl_v  = QPen(QColor("#FFFFFF"), 1.5)
         _time_min  = trace.time_min
         _px_per_ns = 1.0 / self._ns_per_px
         _vp_ns_lo  = self._vp_ns_lo
@@ -1584,39 +1688,44 @@ class TimelineScene(QGraphicsScene):
         lod_ns_per_px = trace.seg_lod_ns_per_px
         _ns_per_px = self._ns_per_px
 
-        for col_idx, task in enumerate(task_cols):
-            x_left   = RULER_HEIGHT + col_idx * col_w
-            is_hl    = (task == self._locked_task)
+        # Compute first/last visible col indices from the cached orth bounds.
+        _first_vis_c = max(0, int((self._vp_scene_orth_lo - RULER_HEIGHT) // col_w))
+        _last_vis_c  = min(n_task - 1, int((self._vp_scene_orth_hi - RULER_HEIGHT) // col_w) + 1)
+        for col_idx in range(_first_vis_c, _last_vis_c + 1):
+            task   = task_cols[col_idx]
+            raw    = trace.task_repr.get(task, task)
+            x_left = RULER_HEIGHT + col_idx * col_w
+            is_hl  = (task == self._locked_task)
+            disp      = task_display_name(raw)
+            col_color = _task_color(raw)
+            self._task_row_rects[task] = [(QRectF(x_left, label_row_h, col_w, timeline_h), col_color)]
 
             self.addRect(QRectF(x_left, label_row_h, col_w, timeline_h),
                          QPen(Qt.NoPen),
                          _bg_even if col_idx % 2 == 0 else _bg_odd).setZValue(0)
-            self._task_row_rects[task] = [(QRectF(x_left, label_row_h, col_w, timeline_h), task_colors[task])]
             if is_hl:
-                tc = task_colors[task]
-                hl_bg = QColor(tc.red(), tc.green(), tc.blue(), 35)
+                hl_bg = QColor(col_color.red(), col_color.green(), col_color.blue(), 35)
                 self.addRect(QRectF(x_left, label_row_h, col_w, timeline_h),
-                             QPen(tc.lighter(160), 1.0), QBrush(hl_bg)).setZValue(0.9)
+                             QPen(col_color.lighter(160), 1.0), QBrush(hl_bg)).setZValue(0.9)
 
             # Clickable label area at the top of each column
             lbl_bg = _TaskLabelItem(QRectF(x_left, 0, col_w, label_row_h), task, self,
-                                    tooltip_text=task_display[task])
+                                    tooltip_text=disp)
             lbl_bg.setZValue(4)
             self.addItem(lbl_bg)
 
             lbl_color = QColor("#FFD700") if is_hl else _lbl_color
             lbl_font  = _monospace_font(self._font_size, QFont.Bold) if is_hl else font
-            lbl = self.addSimpleText(task_display[task], lbl_font)
+            _lbl_avail_v = max(0, label_row_h - 8)
+            _lbl_disp_v  = QFontMetrics(lbl_font).elidedText(
+                disp, Qt.ElideRight, _lbl_avail_v)
+            lbl = self.addSimpleText(_lbl_disp_v, lbl_font)
             lbl.setBrush(QBrush(lbl_color))
             lbl.setRotation(-90)
             lbl.setPos(x_left + col_w / 2 + fm.height() / 2, label_row_h - 4)
             lbl.setZValue(5)
 
-            # Column is horizontally outside the viewport – skip segment data.
-            if x_left + col_w < self._vp_scene_orth_lo or x_left > self._vp_scene_orth_hi:
-                continue
-
-            pen_hl      = QPen(QColor("#FFFFFF"), 1.5)
+            pen_hl      = _pen_hl_v
             seg_data: list = []
             xs:      list = []
             for i_s, seg in enumerate(_visible_segs(
@@ -1742,58 +1851,59 @@ class TimelineScene(QGraphicsScene):
             expanded = self._core_expanded.get(core, True)
             tasks    = core_tasks[core]
             segs     = core_segs[core]
-            dot_c    = QColor(_CORE_DOT_COLORS.get(core, "#AAAAAA"))
+            dot_c    = QColor(_core_color(core))
 
             y_top = RULER_HEIGHT + row_idx * (ROW_HEIGHT + ROW_GAP)
             y_ctr = y_top + ROW_HEIGHT / 2
-
-            self.addRect(QRectF(lw, y_top, timeline_w, ROW_HEIGHT),
-                         QPen(Qt.NoPen), QBrush(QColor("#2A2A3E"))).setZValue(0)
-            self.addLine(0, y_top + ROW_HEIGHT + ROW_GAP - 1,
-                         total_w, y_top + ROW_HEIGHT + ROW_GAP - 1,
-                         QPen(QColor("#444466"), 0.8)).setZValue(0.5)
-
-            hdr_item = _CoreHeaderItem(
-                QRectF(0, y_top, lw, ROW_HEIGHT), core, self)
-            hdr_item.setBrush(QBrush(QColor("#2B2B45")))
-            hdr_item.setPen(QPen(Qt.NoPen))
-            hdr_item.setZValue(36)
-            self.addItem(hdr_item)
-            self._frozen_items.append((hdr_item, 0))
-
-            arrow   = "▼" if expanded else "▶"
-            arrow_w = fm.horizontalAdvance("▼")
-            arr_txt = self.addSimpleText(arrow, font)
-            arr_txt.setBrush(QBrush(QColor("#9999CC")))
-            arr_txt.setPos(3, y_ctr - fm.height() / 2)
-            arr_txt.setZValue(37)
-            arr_txt.setAcceptedMouseButtons(Qt.NoButton)
-            arr_txt.setAcceptHoverEvents(False)
-            self._frozen_items.append((arr_txt, 3))
-
-            dot_item = QGraphicsEllipseItem(0, -5, 10, 10)
-            dot_item.setPen(QPen(Qt.NoPen))
-            dot_item.setBrush(QBrush(dot_c))
-            dot_item.setPos(arrow_w + 6, y_ctr)
-            dot_item.setZValue(37)
-            dot_item.setAcceptedMouseButtons(Qt.NoButton)
-            dot_item.setAcceptHoverEvents(False)
-            self.addItem(dot_item)
-            self._frozen_items.append((dot_item, arrow_w + 6))
-
-            _core_lbl_avail = max(0, lw - (arrow_w + 20) - 4)
-            lbl_item = self.addSimpleText(
-                fm.elidedText(core, Qt.ElideRight, _core_lbl_avail), font)
-            lbl_item.setBrush(QBrush(QColor("#E0E0E0")))
-            lbl_item.setPos(arrow_w + 20, y_ctr - fm.height() / 2)
-            lbl_item.setZValue(37)
-            lbl_item.setAcceptedMouseButtons(Qt.NoButton)
-            lbl_item.setAcceptHoverEvents(False)
-            self._frozen_items.append((lbl_item, arrow_w + 20))
+            row_idx += 1   # advance immediately, independent of viewport cull
 
             _core_in_vp = not (y_top + ROW_HEIGHT < self._vp_scene_orth_lo
                                or y_top > self._vp_scene_orth_hi)
             if _core_in_vp:
+                self.addRect(QRectF(lw, y_top, timeline_w, ROW_HEIGHT),
+                             QPen(Qt.NoPen), QBrush(QColor("#2A2A3E"))).setZValue(0)
+                self.addLine(0, y_top + ROW_HEIGHT + ROW_GAP - 1,
+                             total_w, y_top + ROW_HEIGHT + ROW_GAP - 1,
+                             QPen(QColor("#444466"), 0.8)).setZValue(0.5)
+
+                hdr_item = _CoreHeaderItem(
+                    QRectF(0, y_top, lw, ROW_HEIGHT), core, self)
+                hdr_item.setBrush(QBrush(QColor("#2B2B45")))
+                hdr_item.setPen(QPen(Qt.NoPen))
+                hdr_item.setZValue(36)
+                self.addItem(hdr_item)
+                self._frozen_items.append((hdr_item, 0))
+
+                arrow   = "▼" if expanded else "▶"
+                arrow_w = fm.horizontalAdvance("▼")
+                arr_txt = self.addSimpleText(arrow, font)
+                arr_txt.setBrush(QBrush(QColor("#9999CC")))
+                arr_txt.setPos(3, y_ctr - fm.height() / 2)
+                arr_txt.setZValue(37)
+                arr_txt.setAcceptedMouseButtons(Qt.NoButton)
+                arr_txt.setAcceptHoverEvents(False)
+                self._frozen_items.append((arr_txt, 3))
+
+                dot_item = QGraphicsEllipseItem(0, -5, 10, 10)
+                dot_item.setPen(QPen(Qt.NoPen))
+                dot_item.setBrush(QBrush(dot_c))
+                dot_item.setPos(arrow_w + 6, y_ctr)
+                dot_item.setZValue(37)
+                dot_item.setAcceptedMouseButtons(Qt.NoButton)
+                dot_item.setAcceptHoverEvents(False)
+                self.addItem(dot_item)
+                self._frozen_items.append((dot_item, arrow_w + 6))
+
+                _core_lbl_avail = max(0, lw - (arrow_w + 20) - 4)
+                lbl_item = self.addSimpleText(
+                    fm.elidedText(core, Qt.ElideRight, _core_lbl_avail), font)
+                lbl_item.setBrush(QBrush(QColor("#E0E0E0")))
+                lbl_item.setPos(arrow_w + 20, y_ctr - fm.height() / 2)
+                lbl_item.setZValue(37)
+                lbl_item.setAcceptedMouseButtons(Qt.NoButton)
+                lbl_item.setAcceptHoverEvents(False)
+                self._frozen_items.append((lbl_item, arrow_w + 20))
+
                 seg_data: list = []
                 xs:       list = []
                 for i_s, seg in enumerate(_visible_segs(
@@ -1818,18 +1928,33 @@ class TimelineScene(QGraphicsScene):
                 batch.setZValue(1)
                 self.addItem(batch)
 
-            row_idx += 1
-
             if not expanded:
                 continue
 
             # -- Per-task sub-rows (only when this core is expanded) -------
             task_seg_map = task_seg_map_by_core[core]
 
+            # Bulk-skip: if the entire sub-row block for this core lies
+            # completely outside the viewport, advance row_idx in one step
+            # and skip the O(n_tasks) inner loop entirely.
+            n_tasks = len(tasks)
+            if n_tasks:
+                _first_y2 = RULER_HEIGHT + row_idx * (ROW_HEIGHT + ROW_GAP)
+                _last_y2  = _first_y2 + (n_tasks - 1) * (ROW_HEIGHT + ROW_GAP)
+                if (_last_y2 + ROW_HEIGHT < self._vp_scene_orth_lo
+                        or _first_y2 > self._vp_scene_orth_hi):
+                    row_idx += n_tasks
+                    continue
+
             for sub_idx, task_name in enumerate(tasks):
                 y_top2 = RULER_HEIGHT + row_idx * (ROW_HEIGHT + ROW_GAP)
-                y_ctr2 = y_top2 + ROW_HEIGHT / 2
+                row_idx += 1   # always advance before any early continue
 
+                # Orth-cull: skip ALL item creation for off-screen sub-rows.
+                if y_top2 + ROW_HEIGHT < self._vp_scene_orth_lo or y_top2 > self._vp_scene_orth_hi:
+                    continue
+
+                y_ctr2 = y_top2 + ROW_HEIGHT / 2
                 _tmk   = task_merge_key(task_name)
                 is_hl  = (_tmk == self._locked_task)
 
@@ -1872,11 +1997,6 @@ class TimelineScene(QGraphicsScene):
                 t_lbl.setZValue(37)
                 self._frozen_items.append((t_lbl, 33))
 
-                # Sub-row outside viewport vertically – skip segment data.
-                if y_top2 + ROW_HEIGHT < self._vp_scene_orth_lo or y_top2 > self._vp_scene_orth_hi:
-                    row_idx += 1
-                    continue
-
                 pen_hl       = QPen(QColor("#FFFFFF"), 1.5)
                 _task_pen_cs = _task_pen_dark(task_name)
                 _task_br_cs  = _task_brush(task_name)
@@ -1906,8 +2026,6 @@ class TimelineScene(QGraphicsScene):
                     xs=xs)
                 batch.setZValue(1)
                 self.addItem(batch)
-
-                row_idx += 1
 
         # --- STI rows ---------------------------------------------------
         for channel in sti_rows:
@@ -2011,34 +2129,35 @@ class TimelineScene(QGraphicsScene):
             expanded = self._core_expanded.get(core, True)
             tasks    = core_tasks[core]
             segs     = core_segs[core]
-            dot_c    = QColor(_CORE_DOT_COLORS.get(core, "#AAAAAA"))
+            dot_c    = QColor(_core_color(core))
 
             x_left = RULER_HEIGHT + col_idx * col_w
-            self.addRect(QRectF(x_left, label_row_h, col_w, timeline_h),
-                         QPen(Qt.NoPen), QBrush(QColor("#2A2A3E"))).setZValue(0)
+            col_idx += 1   # advance immediately, independent of viewport cull
 
-            # Clickable core column header (▼/▶ expand toggle)
-            hdr_item = _CoreHeaderItem(
-                QRectF(x_left, 0, col_w, label_row_h), core, self)
-            hdr_item.setBrush(QBrush(QColor("#2B2B45")))
-            hdr_item.setPen(QPen(Qt.NoPen))
-            hdr_item.setZValue(4)
-            self.addItem(hdr_item)
-
-            # Arrow + core name (rotated -90 like task view labels)
-            arrow   = "▼" if expanded else "▶"
-            arr_txt = self.addSimpleText(arrow, font)
-            arr_txt.setBrush(QBrush(QColor("#9999CC")))
-            arr_txt.setRotation(-90)
-            arr_txt.setPos(x_left + col_w / 2 + fm.height() / 2, label_row_h - 4)
-            arr_txt.setZValue(5)
-            arr_txt.setAcceptedMouseButtons(Qt.NoButton)
-            arr_txt.setAcceptHoverEvents(False)
-
-            # Core summary segments batch
             _core_in_vp = not (x_left + col_w < self._vp_scene_orth_lo
                                or x_left > self._vp_scene_orth_hi)
             if _core_in_vp:
+                self.addRect(QRectF(x_left, label_row_h, col_w, timeline_h),
+                             QPen(Qt.NoPen), QBrush(QColor("#2A2A3E"))).setZValue(0)
+
+                # Clickable core column header (▼/▶ expand toggle)
+                hdr_item = _CoreHeaderItem(
+                    QRectF(x_left, 0, col_w, label_row_h), core, self)
+                hdr_item.setBrush(QBrush(QColor("#2B2B45")))
+                hdr_item.setPen(QPen(Qt.NoPen))
+                hdr_item.setZValue(4)
+                self.addItem(hdr_item)
+
+                # Arrow + core name (rotated -90 like task view labels)
+                arrow   = "▼" if expanded else "▶"
+                arr_txt = self.addSimpleText(arrow, font)
+                arr_txt.setBrush(QBrush(QColor("#9999CC")))
+                arr_txt.setRotation(-90)
+                arr_txt.setPos(x_left + col_w / 2 + fm.height() / 2, label_row_h - 4)
+                arr_txt.setZValue(5)
+                arr_txt.setAcceptedMouseButtons(Qt.NoButton)
+                arr_txt.setAcceptHoverEvents(False)
+
                 seg_data: list = []
                 xs:       list = []
                 for i_s, seg in enumerate(_visible_segs(
@@ -2063,15 +2182,30 @@ class TimelineScene(QGraphicsScene):
                 batch.setZValue(1)
                 self.addItem(batch)
 
-            col_idx += 1
-
             if not expanded:
                 continue
 
             task_seg_map = task_seg_map_by_core[core]
 
+            # Bulk-skip: if the entire sub-column block for this core lies
+            # completely outside the viewport, advance col_idx in one step.
+            n_tasks = len(tasks)
+            if n_tasks:
+                _first_x2 = RULER_HEIGHT + col_idx * col_w
+                _last_x2  = _first_x2 + (n_tasks - 1) * col_w
+                if (_last_x2 + col_w < self._vp_scene_orth_lo
+                        or _first_x2 > self._vp_scene_orth_hi):
+                    col_idx += n_tasks
+                    continue
+
             for sub_idx, task_name in enumerate(tasks):
                 x_left2 = RULER_HEIGHT + col_idx * col_w
+                col_idx += 1   # always advance before any early continue
+
+                # Orth-cull: skip ALL item creation for off-screen sub-cols.
+                if x_left2 + col_w < self._vp_scene_orth_lo or x_left2 > self._vp_scene_orth_hi:
+                    continue
+
                 sub_bg  = QColor("#1E1E2C") if sub_idx % 2 == 0 else QColor("#232330")
                 self.addRect(QRectF(x_left2, label_row_h, col_w, timeline_h),
                              QPen(Qt.NoPen), QBrush(sub_bg)).setZValue(0)
@@ -2108,11 +2242,6 @@ class TimelineScene(QGraphicsScene):
                 t_lbl.setPos(x_left2 + col_w / 2 + fm.height() / 2, label_row_h - 4)
                 t_lbl.setZValue(5)
 
-                # Sub-column outside viewport horizontally – skip segment data.
-                if x_left2 + col_w < self._vp_scene_orth_lo or x_left2 > self._vp_scene_orth_hi:
-                    col_idx += 1
-                    continue
-
                 pen_hl       = QPen(QColor("#FFFFFF"), 1.5)
                 _task_pen_cs = _task_pen_dark(task_name)
                 _task_br_cs  = _task_brush(task_name)
@@ -2141,8 +2270,6 @@ class TimelineScene(QGraphicsScene):
                     xs=xs)
                 batch.setZValue(1)
                 self.addItem(batch)
-
-                col_idx += 1
 
         # --- STI columns ------------------------------------------------
         for channel in sti_cols:
@@ -2849,13 +2976,23 @@ class TimelineView(QGraphicsView):
         self._zoom_timer.setInterval(60)   # ms – coalesce wheel events
         self._zoom_timer.timeout.connect(self._flush_zoom)
 
-        # Debounce orthogonal scroll (vertical in horizontal view, horizontal
-        # in vertical view): rebuild to populate newly-visible rows/columns
-        # that row-culling left un-built during the previous zoom rebuild.
+        # Two-timer scroll-rebuild strategy:
+        #   _pan_heartbeat: repeating, fires every 50ms WHILE the user is
+        #     scrolling.  Keeps the scene fresh during trackpad momentum by
+        #     doing a rebuild whenever the viewport has left the cached region.
+        #   _pan_timer (settle): single-shot, fires 120ms AFTER the last
+        #     scroll event for a final cleanup rebuild.
+        # Without the heartbeat, the settle timer is restarted on every
+        # scroll event and never fires during continuous scrolling, leaving
+        # blank rows once the orth-buffer is exhausted.
         self._pan_timer = QTimer(self)
         self._pan_timer.setSingleShot(True)
-        self._pan_timer.setInterval(80)    # ms – debounce scroll rebuilds
+        self._pan_timer.setInterval(120)   # ms – settle after scroll stops
         self._pan_timer.timeout.connect(self._on_pan_timeout)
+        self._pan_heartbeat = QTimer(self)
+        self._pan_heartbeat.setSingleShot(False)
+        self._pan_heartbeat.setInterval(50) # ms – in-flight rebuild (≈20 fps)
+        self._pan_heartbeat.timeout.connect(self._on_pan_heartbeat)
 
         # -- Fit / resize mode -------------------------------------------
         # Fit-to-window mode: when True, every resize re-runs fit_to_width().
@@ -2894,6 +3031,9 @@ class TimelineView(QGraphicsView):
     def set_view_mode(self, mode: str) -> None:
         self._scene.set_view_mode(mode)
 
+    def set_all_cores_expanded(self, expanded: bool) -> None:
+        self._scene.set_all_cores_expanded(expanded)
+
     def scroll_to_ns(self, ns: int) -> None:
         if self._scene._trace is None:
             return
@@ -2916,6 +3056,9 @@ class TimelineView(QGraphicsView):
     def set_font_size(self, size: int) -> None:
         self._scene.set_font_size(size)
         self.zoom_changed.emit(self._scene.ns_per_px)
+
+    def set_max_visible_tasks(self, n: int) -> None:
+        self._scene.set_max_visible_tasks(n)
 
     def zoom_in(self) -> None:
         self._fit_mode = False
@@ -2940,9 +3083,6 @@ class TimelineView(QGraphicsView):
         # fitInView() would set a persistent QTransform that is not needed here.
         self.resetTransform()
         self.zoom_changed.emit(self._scene.ns_per_px)
-
-    def reset_zoom(self) -> None:
-        self.resetTransform()
 
     def save_image(self, filepath: str) -> None:
         """Capture the current visible scene content as a PNG image.
@@ -2987,7 +3127,6 @@ class TimelineView(QGraphicsView):
         png_bytes = bytes(buf)
 
         # On Linux prefer xclip / xsel / wl-copy — Qt clipboard is unreliable for images on X11/Wayland
-        import subprocess
         for tool, args in [
             ('xclip',   ['xclip',   '-selection', 'clipboard', '-t', 'image/png']),
             ('xsel',    ['xsel',    '--clipboard', '--input']),
@@ -2996,7 +3135,9 @@ class TimelineView(QGraphicsView):
             if shutil.which(tool):
                 proc = subprocess.Popen(args, stdin=subprocess.PIPE)
                 proc.communicate(png_bytes)
-                return tool
+                if proc.returncode == 0:
+                    return tool
+                # tool failed — try the next one
 
         # Fallback: Qt clipboard (works on Windows/macOS, variable on Linux)
         # Set both a pixmap (X11 PIXMAP atom, understood by xclipboard) and
@@ -3345,7 +3486,9 @@ class TimelineView(QGraphicsView):
         #   • Orthogonal scroll (row/column direction) populates rows/columns
         #     that row-culling skipped during the last rebuild.
         if dx != 0 or dy != 0:
-            self._pan_timer.start()
+            self._pan_timer.start()            # restart settle countdown
+            if not self._pan_heartbeat.isActive():
+                self._pan_heartbeat.start()    # begin continuous rebuild pump
 
     def _reposition_frozen(self) -> None:
         """Move all frozen label-column scene items so they stay at the left edge."""
@@ -3397,11 +3540,22 @@ class TimelineView(QGraphicsView):
             self._scene._ns_per_px_fit = new_fit
             self._reposition_frozen()
 
-    def _on_pan_timeout(self) -> None:
-        """Rebuild after scroll only when viewport leaves cached build bounds."""
+    def _on_pan_heartbeat(self) -> None:
+        """During active scrolling: rebuild if viewport exceeds cached bounds."""
+        if not self._pan_timer.isActive():
+            # Settle timer already expired; stop heartbeat (no-op if also expired).
+            self._pan_heartbeat.stop()
+            return
         if self._scene._trace is None or self._zoom_timer.isActive():
             return
+        if self._needs_rebuild_for_scroll():
+            self._scene.rebuild()
 
+    def _on_pan_timeout(self) -> None:
+        """Final rebuild ~120 ms after scrolling stops."""
+        self._pan_heartbeat.stop()
+        if self._scene._trace is None or self._zoom_timer.isActive():
+            return
         if self._needs_rebuild_for_scroll():
             self._scene.rebuild()
 
@@ -3475,6 +3629,115 @@ class TimelineView(QGraphicsView):
 # ===========================================================================
 # Main Window
 # ===========================================================================
+
+# ---------------------------------------------------------------------------
+# Custom progress dialog (more reliable than QProgressDialog on macOS)
+# ---------------------------------------------------------------------------
+
+class _LoadProgressDialog(QWidget):
+    """Borderless progress dialog that paints reliably on macOS.
+
+    QProgressDialog on macOS respects setMinimumDuration(0) but still defers
+    its first paint until after the event loop has had at least one idle
+    cycle.  When files are opened at startup the window manager hasn't
+    settled yet, so the dialog can appear blank or not at all.
+
+    This replacement widget uses a plain QWidget with Qt.Tool window flag,
+    which bypasses the macOS sheet mechanism entirely and paints immediately.
+    """
+
+    def __init__(self, title: str, parent=None):
+        super().__init__(parent, Qt.Tool | Qt.FramelessWindowHint)
+        self.setWindowModality(Qt.ApplicationModal)
+        self.setMinimumWidth(380)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(8)
+
+        self._title_lbl = QLabel(title, self)
+        self._title_lbl.setWordWrap(True)
+        layout.addWidget(self._title_lbl)
+
+        self._bar = QProgressBar(self)
+        self._bar.setRange(0, 100)
+        self._bar.setValue(0)
+        self._bar.setTextVisible(True)
+        layout.addWidget(self._bar)
+
+        self._msg_lbl = QLabel("", self)
+        layout.addWidget(self._msg_lbl)
+
+        # Draw a subtle border via the stylesheet.
+        # Use the object name so the QWidget selector matches only this dialog.
+        self.setObjectName("loadprog")
+        self.setStyleSheet("""
+            QWidget#loadprog {
+                background: #2B2B2B;
+                border: 1px solid #555;
+                border-radius: 6px;
+            }
+            QLabel { color: #D4D4D4; font-size: 12px; }
+            QProgressBar {
+                border: 1px solid #555; border-radius: 3px;
+                background: #1E1E1E; height: 18px; text-align: center;
+                color: #D4D4D4;
+            }
+            QProgressBar::chunk { background: #0E70C0; border-radius: 2px; }
+        """)
+        self.adjustSize()
+
+    def setValue(self, pct: int) -> None:
+        self._bar.setValue(pct)
+
+    def setLabelText(self, msg: str) -> None:
+        self._msg_lbl.setText(msg)
+
+    def update_progress(self, pct: int, msg: str) -> None:
+        self._bar.setValue(pct)
+        self._msg_lbl.setText(msg)
+        QApplication.processEvents()
+
+    def _centre_on_parent(self) -> None:
+        """Reposition this dialog centred over its parent window."""
+        p = self.parent()
+        if p is None:
+            return
+        pg = p.geometry()
+        self.move(pg.center().x() - self.width() // 2,
+                  pg.center().y() - self.height() // 2)
+
+    def eventFilter(self, obj, event) -> bool:
+        """Track parent-window moves and reposition the dialog to follow."""
+        if obj is self.parent() and event.type() == QEvent.Move:
+            self._centre_on_parent()
+        return super().eventFilter(obj, event)
+
+    def closeEvent(self, event) -> None:
+        """Uninstall the parent event filter when the dialog closes."""
+        p = self.parent()
+        if p is not None:
+            p.removeEventFilter(self)
+        super().closeEvent(event)
+
+    def show_centered(self, parent_geom) -> None:
+        self.adjustSize()
+        # Track parent-window moves so the dialog follows.
+        p = self.parent()
+        if p is not None:
+            p.installEventFilter(self)
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        # Force an immediate paint so the bar is visible before the thread starts.
+        self.repaint()
+        QApplication.processEvents()
+        # Centre over the parent window.
+        _c = parent_geom.center()
+        self.move(_c.x() - self.width() // 2,
+                  _c.y() - self.height() // 2)
+        self.repaint()
+        QApplication.processEvents()
 
 # ---------------------------------------------------------------------------
 # Background parse thread
@@ -3692,7 +3955,7 @@ class _LegendTaskRow(QWidget):
     _BG_LOCKED  = "background: rgba(255,215,0,45);  border-radius:3px;"
 
     def __init__(self, task_name: str, display_name: str,
-                 color: QColor, parent=None):
+                 color: QColor, tooltip: str = "", parent=None):
         super().__init__(parent)
         self._task_name = task_name
         self._locked    = False
@@ -3710,7 +3973,7 @@ class _LegendTaskRow(QWidget):
 
         self._lbl = QLabel(display_name)
         self._lbl.setStyleSheet("color:#D4D4D4;")
-        self._lbl.setToolTip(task_name)
+        self._lbl.setToolTip(tooltip or display_name)
         hl.addWidget(self._lbl)
         hl.addStretch()
 
@@ -3770,57 +4033,65 @@ class LegendWidget(QWidget):
 
     def rebuild(self, trace: BtfTrace) -> None:
         self._task_rows.clear()
-        while self._layout.count():
-            item = self._layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
 
-        header = QLabel("<b style='color:#AAAAAA'>Tasks</b>")
-        header.setTextFormat(Qt.RichText)
-        self._layout.addWidget(header)
+        # O(1) teardown: re-parent the old layout (and all its items) onto a
+        # temporary QWidget that is immediately scheduled for deletion.  This
+        # avoids the O(n²) takeAt(0)-in-a-loop pattern where every removal
+        # shifts all remaining items.
+        _old = QWidget()
+        _old.setLayout(self._layout)
+        _old.deleteLater()
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(6, 6, 6, 6)
+        self._layout.setSpacing(2)
 
-        # Deduplicate by merge key so each logical task appears only once
-        _seen_mk: dict = {}
-        for _raw in trace.tasks:
-            _mk = task_merge_key(_raw)
-            if _mk not in _seen_mk:
-                _seen_mk[_mk] = _raw
-        for _mk, _rep_raw in _seen_mk.items():
-            color = _task_color(_rep_raw)
-            display = task_display_name(_rep_raw)
-            row = _LegendTaskRow(_mk, display, color)
-            row.clicked.connect(self.task_clicked)
-            self._task_rows[_mk] = row
-            self._layout.addWidget(row)
+        # Suppress per-addWidget layout recalculations for the whole batch.
+        self.setUpdatesEnabled(False)
+        try:
+            header = QLabel("<b style='color:#AAAAAA'>Tasks</b>")
+            header.setTextFormat(Qt.RichText)
+            self._layout.addWidget(header)
 
-        if trace.sti_channels:
-            sep = QFrame()
-            sep.setFrameShape(QFrame.HLine)
-            sep.setStyleSheet("color:#444;")
-            self._layout.addWidget(sep)
+            # trace.tasks contains merge keys; task_repr maps each to its raw name.
+            for _mk in trace.tasks:
+                _rep_raw = trace.task_repr.get(_mk, _mk)
+                color = _task_color(_rep_raw)
+                display = task_display_name(_rep_raw)
+                row = _LegendTaskRow(_mk, display, color, tooltip=_rep_raw)
+                row.clicked.connect(self.task_clicked)
+                self._task_rows[_mk] = row
+                self._layout.addWidget(row)
 
-            hdr2 = QLabel("<b style='color:#88AABB'>STI Events</b>")
-            hdr2.setTextFormat(Qt.RichText)
-            self._layout.addWidget(hdr2)
+            if trace.sti_channels:
+                sep = QFrame()
+                sep.setFrameShape(QFrame.HLine)
+                sep.setStyleSheet("color:#444;")
+                self._layout.addWidget(sep)
 
-            seen_notes = sorted({ev.note for ev in trace.sti_events if ev.note})
-            for note in seen_notes:
-                color = _sti_color(note)
-                row_w = QWidget()
-                hl    = QHBoxLayout(row_w)
-                hl.setContentsMargins(0, 0, 0, 0)
-                hl.setSpacing(6)
-                swatch = QLabel("▼")
-                swatch.setStyleSheet(f"color:{color.name()};")
-                swatch.setFixedWidth(14)
-                hl.addWidget(swatch)
-                lbl = QLabel(note)
-                lbl.setStyleSheet("color:#D4D4D4;")
-                hl.addWidget(lbl)
-                hl.addStretch()
-                self._layout.addWidget(row_w)
+                hdr2 = QLabel("<b style='color:#88AABB'>STI Events</b>")
+                hdr2.setTextFormat(Qt.RichText)
+                self._layout.addWidget(hdr2)
 
-        self._layout.addStretch()
+                seen_notes = sorted({ev.note for ev in trace.sti_events if ev.note})
+                for note in seen_notes:
+                    color = _sti_color(note)
+                    row_w = QWidget()
+                    hl    = QHBoxLayout(row_w)
+                    hl.setContentsMargins(0, 0, 0, 0)
+                    hl.setSpacing(6)
+                    swatch = QLabel("▼")
+                    swatch.setStyleSheet(f"color:{color.name()};")
+                    swatch.setFixedWidth(14)
+                    hl.addWidget(swatch)
+                    lbl = QLabel(note)
+                    lbl.setStyleSheet("color:#D4D4D4;")
+                    hl.addWidget(lbl)
+                    hl.addStretch()
+                    self._layout.addWidget(row_w)
+
+            self._layout.addStretch()
+        finally:
+            self.setUpdatesEnabled(True)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -4006,6 +4277,12 @@ class MainWindow(QMainWindow):
         if saved_fs != _FONT_SIZE:
             self._view.set_font_size(saved_fs)
 
+        # Max visible tasks
+        saved_mt = s.get_int("view", "max_tasks", 0)
+        self._max_tasks_spin.setValue(saved_mt)
+        if saved_mt > 0:
+            self._view.set_max_visible_tasks(saved_mt)
+
         # Orientation (horizontal is the default)
         if not s.get_bool("view", "horizontal", True):
             self._set_orientation(False)
@@ -4053,6 +4330,7 @@ class MainWindow(QMainWindow):
             "show_sti":   str(self._act_show_sti.isChecked()).lower(),
             "show_grid":  str(self._act_show_grid.isChecked()).lower(),
             "font_size":  str(self._font_spin.value()),
+            "max_tasks":  str(self._max_tasks_spin.value()),
         })
 
         # Zoom – save current ns/px so we can re-apply it the next time the
@@ -4061,6 +4339,19 @@ class MainWindow(QMainWindow):
             s.set("zoom", "ns_per_px", str(self._view._scene.ns_per_px))
         else:
             s.set("zoom", "ns_per_px", "-1")
+
+        # Drop the trace reference immediately so Python's GC can reclaim
+        # the millions of TaskSegment objects on a background thread instead
+        # of blocking the main thread (which would freeze the close animation).
+        _trace_to_free = self._trace
+        self._trace = None
+        self._view._scene._trace = None
+        if _trace_to_free is not None:
+            threading.Thread(
+                target=lambda t=_trace_to_free: t,
+                daemon=True,
+            ).start()
+            del _trace_to_free
 
         super().closeEvent(event)
 
@@ -4231,7 +4522,6 @@ class MainWindow(QMainWindow):
         vm.addAction("&Zoom In",        self._view.zoom_in,   QKeySequence.ZoomIn)
         vm.addAction("Zoom &Out",       self._view.zoom_out,  QKeySequence.ZoomOut)
         vm.addAction("&Fit to window",  self._view.zoom_fit,  "Ctrl+0")
-        vm.addAction("&Reset zoom",     self._view.reset_zoom,"Ctrl+R")
         vm.addSeparator()
         self._act_legend = vm.addAction("Show &Legend")
         self._act_legend.setShortcut("Ctrl+L")
@@ -4282,7 +4572,6 @@ class MainWindow(QMainWindow):
         tb.addAction("🔍+",     self._view.zoom_in)
         tb.addAction("🔍-",     self._view.zoom_out)
         tb.addAction("⊡ Fit",   self._view.zoom_fit)
-        tb.addAction("⟳ Reset", self._view.reset_zoom)
         tb.addSeparator()
 
         # --- View mode toggle (Task / Core) ---
@@ -4291,6 +4580,31 @@ class MainWindow(QMainWindow):
         self._tb_task_btn.setCheckable(True)
         self._tb_core_btn.setCheckable(True)
         self._tb_task_btn.setChecked(True)
+        # Use addAction so Qt creates and fully owns the internal QToolButton.
+        # This avoids the QWidgetAction::releaseWidget SIGSEGV on app exit that
+        # occurs when a Python-owned QToolButton is added via addWidget().
+        self._tb_expand_all_btn = tb.addAction("⊞ Expand All. ", self._toggle_expand_all_cores)
+        self._tb_expand_all_btn.setCheckable(True)
+        self._tb_expand_all_btn.setChecked(True)   # default: all expanded
+        self._tb_expand_all_btn.setEnabled(False)   # only active in core view
+        self._tb_expand_all_btn.setToolTip("Expand / collapse all cores  (only in Core View)")
+        # widgetForAction() returns the Qt-owned internal QToolButton — safe to style.
+        _ea_widget = tb.widgetForAction(self._tb_expand_all_btn)
+        if _ea_widget is not None:
+            # Store as instance attribute: QWidget::setStyle does NOT transfer ownership,
+            # so the caller must keep the QStyle alive or Qt will use a freed pointer.
+            self._ea_fusion_style = QStyleFactory.create("Fusion")
+            if self._ea_fusion_style:
+                _ea_widget.setStyle(self._ea_fusion_style)
+            _ea_widget.setStyleSheet(
+                "QToolButton { color: #D4D4D4; background: transparent; border: none; padding: 2px 4px; }"
+                "QToolButton:disabled { color: #555555; }"
+            )
+            # Fix width to the wider of the two label strings so the toolbar never shifts
+            _ea_fm = _ea_widget.fontMetrics()
+            _ea_w  = max(_ea_fm.horizontalAdvance("⊞ Expand All. "),
+                         _ea_fm.horizontalAdvance("⊟ Collapse All")) + 24
+            _ea_widget.setFixedWidth(_ea_w)
         tb.addSeparator()
 
         # --- Cursor controls ---
@@ -4337,6 +4651,27 @@ class MainWindow(QMainWindow):
         )
         self._font_spin.valueChanged.connect(self._on_font_size_changed)
         tb.addWidget(self._font_spin)
+
+        tasks_lbl = QLabel(" Max tasks:")
+        tasks_lbl.setStyleSheet("color:#AAAAAA;")
+        tb.addWidget(tasks_lbl)
+        self._max_tasks_spin = _WheelSpinBox()
+        self._max_tasks_spin.setRange(0, 9999)
+        self._max_tasks_spin.setValue(0)
+        self._max_tasks_spin.setSpecialValueText("All")
+        self._max_tasks_spin.setFixedWidth(62)
+        self._max_tasks_spin.setToolTip(
+            "Maximum number of tasks shown in Task View\n"
+            "(0 / \"All\" = show every task, ranked by activity)\n"
+            "Tasks are ranked by total CPU execution time."
+        )
+        self._max_tasks_spin.setStyleSheet(
+            "QSpinBox { background:#2D2D2D; color:#D4D4D4; border:1px solid #555; "
+            "padding:1px 2px; } "
+            "QSpinBox::up-button, QSpinBox::down-button { width:14px; }"
+        )
+        self._max_tasks_spin.valueChanged.connect(self._on_max_tasks_changed)
+        tb.addWidget(self._max_tasks_spin)
 
     def _build_status_bar(self) -> None:
         sb = self.statusBar()
@@ -4406,32 +4741,14 @@ class MainWindow(QMainWindow):
         QApplication.processEvents()
 
         # Progress dialog – created before closures so progress_dialog is defined.
-        progress_dialog = QProgressDialog(
-            f"Loading {os.path.basename(path)}…", None, 0, 100, self)
-        progress_dialog.setWindowTitle("Loading trace")
-        progress_dialog.setWindowModality(Qt.WindowModal)
-        progress_dialog.setMinimumDuration(0)   # show immediately, no 4-second delay
-        progress_dialog.setAutoClose(False)
-        progress_dialog.setAutoReset(False)
-        progress_dialog.setValue(0)
-        progress_dialog.setMinimumWidth(360)
-        progress_dialog.show()
+        progress_dialog = _LoadProgressDialog(
+            f"Loading {os.path.basename(path)}…", self)
+        progress_dialog.show_centered(self.geometry())
         self._progress_dialog = progress_dialog
-        QApplication.processEvents()   # let dialog lay out so its size is final
-        # Centre the dialog over the main window content area.
-        # Use self.geometry() (not frameGeometry()) so the reference point is
-        # stable and unaffected by window-manager title-bar decoration timing.
-        _c = self.geometry().center()
-        progress_dialog.move(
-            _c.x() - progress_dialog.width()  // 2,
-            _c.y() - progress_dialog.height() // 2,
-        )
-        QApplication.processEvents()   # force dialog to paint before thread starts
 
         def _on_done(trace):
-            progress_dialog.setValue(100)
-            progress_dialog.setLabelText("Building scene…")
-            QApplication.processEvents()   # show "Building scene…" before blocking rebuild
+            progress_dialog.update_progress(100, "Building scene…")
+            QApplication.processEvents()   # let the dialog repaint before heavy build
             self._parse_thread = None
             try:
                 self._trace = trace
@@ -4451,6 +4768,8 @@ class MainWindow(QMainWindow):
                     self._view._scene.rebuild()
                     self._view._fit_mode = False
                     self._view.zoom_changed.emit(self._view._scene.ns_per_px)
+                progress_dialog.update_progress(100, "Building legend…")
+                QApplication.processEvents()
                 self._legend.rebuild(trace)
                 self._act_save_img.setEnabled(True)
                 self._act_copy_img.setEnabled(True)
@@ -4488,8 +4807,7 @@ class MainWindow(QMainWindow):
         thread = _ParseThread(path)
         thread.done.connect(_on_done)
         thread.errored.connect(_on_error)
-        thread.progress.connect(lambda pct, msg: (progress_dialog.setValue(pct),
-                              progress_dialog.setLabelText(msg)))
+        thread.progress.connect(progress_dialog.update_progress)
         # Keep a reference so the thread is not garbage-collected
         self._parse_thread = thread
         thread.start()
@@ -4538,7 +4856,24 @@ class MainWindow(QMainWindow):
         self._act_core_view.setChecked(not is_task)
         self._tb_task_btn.setChecked(is_task)
         self._tb_core_btn.setChecked(not is_task)
+        self._tb_expand_all_btn.setEnabled(not is_task)
+        if not is_task:
+            # Sync button text/state with actual core expanded state
+            scene = self._view._scene
+            trace = scene._trace
+            if trace and trace.core_names:
+                all_expanded = all(
+                    scene._core_expanded.get(c, True) for c in trace.core_names)
+                self._tb_expand_all_btn.setChecked(all_expanded)
+                self._tb_expand_all_btn.setText(
+                    "⊞ Expand All. " if all_expanded else "⊟ Collapse All")
         self._view.set_view_mode(mode)
+
+    def _toggle_expand_all_cores(self) -> None:
+        """Expand or collapse all cores based on the button's checked state."""
+        expanded = self._tb_expand_all_btn.isChecked()
+        self._tb_expand_all_btn.setText("⊞ Expand All. " if expanded else "⊟ Collapse All")
+        self._view.set_all_cores_expanded(expanded)
 
     def _toggle_sti(self) -> None:
         state = self._act_show_sti.isChecked()
@@ -4553,6 +4888,10 @@ class MainWindow(QMainWindow):
     def _on_font_size_changed(self, size: int) -> None:
         self._view.set_font_size(size)
         self._settings.set("view", "font_size", str(size))
+
+    def _on_max_tasks_changed(self, n: int) -> None:
+        self._view.set_max_visible_tasks(n)
+        self._settings.set("view", "max_tasks", str(n))
 
     def _on_zoom_changed(self, ns_per_px: float) -> None:
         if ns_per_px >= 1_000_000:
@@ -4598,7 +4937,7 @@ class MainWindow(QMainWindow):
             f"• <b style='color:{c_key};'>Left-click</b> – place cursor  |  <b style='color:{c_key};'>Drag</b> cursor line – move it<br>"
             f"• <b style='color:{c_key};'>Right-click</b> – remove cursor  |  <b style='color:{c_key};'>Status badge</b> – jump to cursor<br>"
             f"• <b style='color:{c_key};'>Ctrl+Wheel</b> / pinch – zoom  |  <b style='color:{c_key};'>Scroll</b> – pan<br>"
-            f"• <b style='color:{c_key};'>Ctrl+0</b> – fit  |  <b style='color:{c_key};'>Ctrl+R</b> – reset zoom</p>"
+            f"• <b style='color:{c_key};'>Ctrl+0</b> – fit to window</p>"
         )
 
     def dragEnterEvent(self, event) -> None:
@@ -4638,11 +4977,11 @@ def main() -> None:
     if len(sys.argv) > 1:
         path = sys.argv[1]
         if os.path.isfile(path):
-            QTimer.singleShot(0, lambda: win._open_file(path))
+            QTimer.singleShot(100, lambda: win._open_file(path))
     else:
         last = win._settings.get("files", "last_file", "")
         if last and os.path.isfile(last):
-            QTimer.singleShot(0, lambda: win._open_file(last))
+            QTimer.singleShot(100, lambda: win._open_file(last))
 
     sys.exit(app.exec_())
 
