@@ -28,15 +28,15 @@ Usage examples
 
 Options
 -------
-  -c / --cores            Number of CPU cores                (default: 8)
-  -t / --tasks            Number of worker tasks             (default: 100)
-  -e / --events           Target non-comment event lines     (default: 1_000_000)
+  -c / --cores            Number of CPU cores                (default: DEFAULT_CORES)
+  -t / --tasks            Number of worker tasks             (default: DEFAULT_TASKS)
+  -e / --events           Target non-comment event lines     (default: DEFAULT_EVENTS)
   -o / --output           Output file path                   (default: auto)
-  --tick-hz               RTOS tick frequency in Hz          (default: 1000)
-  --freq-hz               CPU clock frequency in Hz          (default: 200_000_000)
-  --sti-interval-us       Approx µs between STI tag events   (default: 30_000)
-  --idle-prob             Probability a core goes IDLE [0–1] (default: 0.20)
-  --max-burst-ticks       Max consecutive ticks a task runs  (default: 5)
+  --tick-hz               RTOS tick frequency in Hz          (default: DEFAULT_TICK_HZ)
+  --freq-hz               CPU clock frequency in Hz          (default: DEFAULT_FREQ_HZ)
+  --sti-interval-us       Approx µs between STI tag events   (default: DEFAULT_STI_INTERVAL_US)
+  --idle-prob             Probability a core goes IDLE [0–1] (default: DEFAULT_IDLE_PROB)
+  --max-burst-ticks       Max consecutive ticks a task runs  (default: DEFAULT_MAX_BURST_TICKS)
   --no-sti                Suppress all STI events
   --no-migration          Pin each task to one core
 """
@@ -103,28 +103,41 @@ _STI_TAGS = [
 _HIGH_PRIO_KW = {"CAN", "Safety", "Watchdog", "Brake", "Motor",
                  "PID", "Kalman", "Fusion", "Health", "ISR"}
 
+# ---------------------------------------------------------------------------
+# Default settings — edit these to change the defaults without touching
+# the argument parser below.
+# ---------------------------------------------------------------------------
+DEFAULT_CORES           = 4             # Number of CPU cores
+DEFAULT_TASKS           = 100           # Number of worker tasks
+DEFAULT_EVENTS          = 8_000         # Target non-comment event lines
+DEFAULT_TICK_HZ         = 1_000         # RTOS tick frequency in Hz
+DEFAULT_FREQ_HZ         = 100_000_000   # CPU clock frequency in Hz
+DEFAULT_STI_INTERVAL_US = 30_000        # Approx µs between STI tag events
+DEFAULT_IDLE_PROB       = 0.20          # Probability [0–1] a core goes IDLE
+DEFAULT_MAX_BURST_TICKS = 5             # Max ticks a task runs before preempted
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Generate a synthetic FreeRTOS BTF trace file.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("-c", "--cores",   type=int, default=8,
+    parser.add_argument("-c", "--cores",   type=int, default=DEFAULT_CORES,
                         help="Number of CPU cores")
-    parser.add_argument("-t", "--tasks",   type=int, default=100,
+    parser.add_argument("-t", "--tasks",   type=int, default=DEFAULT_TASKS,
                         help="Number of worker tasks")
-    parser.add_argument("-e", "--events",  type=int, default=1_000_000,
+    parser.add_argument("-e", "--events",  type=int, default=DEFAULT_EVENTS,
                         help="Target non-comment event lines")
     parser.add_argument("-o", "--output",  type=str, default="",
                         help="Output BTF file (auto-generated name if omitted)")
-    parser.add_argument("--tick-hz",       type=int, default=1_000,
+    parser.add_argument("--tick-hz",       type=int, default=DEFAULT_TICK_HZ,
                         help="RTOS tick frequency in Hz (1000 → 1 ms tick)")
-    parser.add_argument("--freq-hz",       type=int, default=200_000_000,
+    parser.add_argument("--freq-hz",       type=int, default=DEFAULT_FREQ_HZ,
                         help="CPU clock frequency in Hz")
-    parser.add_argument("--sti-interval-us", type=int, default=30_000,
+    parser.add_argument("--sti-interval-us", type=int, default=DEFAULT_STI_INTERVAL_US,
                         help="Approximate µs between STI tag events")
-    parser.add_argument("--idle-prob",     type=float, default=0.20,
+    parser.add_argument("--idle-prob",     type=float, default=DEFAULT_IDLE_PROB,
                         help="Probability [0–1] a core picks IDLE instead of a worker")
-    parser.add_argument("--max-burst-ticks", type=int, default=5,
+    parser.add_argument("--max-burst-ticks", type=int, default=DEFAULT_MAX_BURST_TICKS,
                         help="Maximum RTOS ticks a task runs before being preempted")
     parser.add_argument("--no-sti",        action="store_true",
                         help="Suppress all STI software-trace events")

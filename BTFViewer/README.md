@@ -22,7 +22,7 @@ A PyQt5-based interactive visualiser for FreeRTOS context-switch traces in **Bes
 - **STI event markers** — software trace items rendered as coloured diamond markers
 - **Export to PNG** — saves the current viewport as an image
 - **Drag-and-drop** — drop a `.btf` file directly onto the window
-- **Optimised for large traces** — tested with up to **128 cores, 1 000 tasks, and 5 M+ events**
+- **Optimised for large traces** — tested with up to **128 cores, 1 024 tasks, and 5 M+ events**
 
 ## Requirements
 
