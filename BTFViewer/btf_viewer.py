@@ -23,7 +23,7 @@ Architecture overview
 
   3. Timeline scene  (TimelineScene : QGraphicsScene)
      Converts BtfTrace data into QGraphicsItems at a given zoom level
-     (ns_per_px).  Four builder methods cover the two view modes
+     (timescale_per_px).  Four builder methods cover the two view modes
      (task / core) × two orientations (horizontal / vertical).  The scene
      is fully torn down and rebuilt on every zoom/scroll action.
 
@@ -118,11 +118,11 @@ STI_MARKER_H  =   6  # Height of an STI marker triangle (px).
 MIN_SEG_WIDTH = 1.0  # Minimum painted width of a task segment (px).
 
 # ---- Performance / Level-of-Detail ----------------------------------------
-_NS_PER_PX_DEFAULT       = 2.0    # Initial zoom level (nanoseconds per screen pixel).
+_TIMESCALE_PER_PX_DEFAULT       = 2.0    # Initial zoom level (nanoseconds per screen pixel).
 _HOVER_HIGHLIGHT_ENABLED = False  # Highlight task bars when hovering the label (default off).
 _PERFORMANCE_MODE_ENABLED = False # Performance-first rendering mode (default off).
 # Performance mode: inline text is shown only when zoomed in enough.
-_PERFORMANCE_TEXT_MAX_NS_PER_PX = 6.0
+_PERFORMANCE_TEXT_MAX_TIMESCALE_PER_PX = 6.0
 # _BatchRowItem.paint() LOD thresholds (Qt levelOfDetail: 1.0 = 100% zoom).
 _PAINT_LOD_COARSE        = 0.45   # Below: merge nearby segments, skip pen outlines.
 _PAINT_LOD_MICRO         = 0.12   # Below: draw one tinted activity bar per row.
@@ -310,10 +310,10 @@ class BtfTrace:
     sti_starts_by_target:    Dict[str, List[int]]             = field(default_factory=dict)
 
     # Pre-built coarse LOD summaries (_LOD_SUMMARY_BINS bins over the full time
-    # span).  When ns_per_px >= seg_lod_ns_per_px (i.e., zoomed out past the
+    # span).  When timescale_per_px >= seg_lod_timescale_per_px (i.e., zoomed out past the
     # summary resolution), builders use these instead of iterating raw segments,
     # bounding rebuild cost to O(_LOD_SUMMARY_BINS) regardless of trace size.
-    seg_lod_ns_per_px:              float                                   = 1.0
+    seg_lod_timescale_per_px:              float                                   = 1.0
     seg_lod_by_merge_key:           Dict[str, List[TaskSegment]]            = field(default_factory=dict)
     seg_lod_starts_by_merge_key:    Dict[str, List[int]]                    = field(default_factory=dict)
     core_seg_lod:                   Dict[str, List[TaskSegment]]            = field(default_factory=dict)
@@ -640,7 +640,7 @@ def parse_btf(filepath: str,
     # segments per row at fit-to-view zoom.
     # ------------------------------------------------------------------
     _time_span = max(time_max - time_min, 1)
-    _lod_ns_per_px = _time_span / _LOD_SUMMARY_BINS  # ns per summary bin
+    _lod_timescale_per_px = _time_span / _LOD_SUMMARY_BINS  # ns per summary bin
 
     if progress_callback:
         progress_callback(70, "Building task LOD summaries…")
@@ -654,7 +654,7 @@ def parse_btf(filepath: str,
         result: list = []
         prev_bin = -2
         for s in segs_sorted:
-            b = int((s.start - time_min) / _lod_ns_per_px)
+            b = int((s.start - time_min) / _lod_timescale_per_px)
             if b != prev_bin:
                 result.append(s)
                 prev_bin = b
@@ -734,7 +734,7 @@ def parse_btf(filepath: str,
         core_seg_starts=_core_seg_starts,
         core_task_seg_starts=dict(_core_task_starts),
         sti_starts_by_target=_sti_starts_by_target,
-        seg_lod_ns_per_px=_lod_ns_per_px,
+        seg_lod_timescale_per_px=_lod_timescale_per_px,
         seg_lod_by_merge_key=_seg_lod_mk,
         seg_lod_starts_by_merge_key=_seg_lod_starts_mk,
         core_seg_lod=_core_seg_lod,
@@ -950,7 +950,7 @@ def _lod_reduce(segs: list, time_min: int, px_per_ns: float,
                 offset: float) -> list:
     """Drop segments that would render to the same pixel column as the previous.
 
-    At coarse zoom levels (ns_per_px >> 1) thousands of segments are
+    At coarse zoom levels (timescale_per_px >> 1) thousands of segments are
     sub-pixel wide and stacked on top of each other.  Keeping only the first
     segment per pixel column reduces the rendered count by up to 30× at the
     default fit-to-width zoom with no visible quality loss.  Callers are
@@ -969,14 +969,14 @@ def _lod_reduce(segs: list, time_min: int, px_per_ns: float,
 
 def _visible_segs(segs: list, starts: list,
                   lod_segs: list, lod_starts: list,
-                  lod_ns_per_px: float, cur_ns_per_px: float,
+                  lod_timescale_per_px: float, cur_timescale_per_px: float,
                   ns_lo: int, ns_hi: int,
                   time_min: int, px_per_ns: float, offset: float) -> list:
     """Return LOD-reduced, viewport-clipped segments for one timeline row/column.
 
     Two-path strategy for 1M-event performance:
 
-    *Coarse path* (cur_ns_per_px >= lod_ns_per_px, i.e. zoomed out past the
+    *Coarse path* (cur_timescale_per_px >= lod_timescale_per_px, i.e. zoomed out past the
     pre-built LOD summary resolution):
         Bisect-clip the pre-built LOD summary (at most _LOD_SUMMARY_BINS
         entries total) to the visible ns range, then run _lod_reduce on the
@@ -993,7 +993,7 @@ def _visible_segs(segs: list, starts: list,
     if not segs:
         return segs
 
-    if cur_ns_per_px >= lod_ns_per_px and lod_segs:
+    if cur_timescale_per_px >= lod_timescale_per_px and lod_segs:
         # Coarse path: use pre-built LOD summary
         if lod_starts:
             lo = max(0, bisect_left(lod_starts, ns_lo) - 1)
@@ -1015,9 +1015,9 @@ def _visible_segs(segs: list, starts: list,
     result = _lod_reduce(clipped, time_min, px_per_ns, offset)
     return result
 
-def _nice_grid_step(ns_per_px: float, target_px: float = 100.0) -> int:
+def _nice_grid_step(timescale_per_px: float, target_px: float = 100.0) -> int:
     """Return a 'nice' grid step (in ns) so that one step ≈ target_px pixels."""
-    ideal_ns = ns_per_px * target_px
+    ideal_ns = timescale_per_px * target_px
     best = _GRID_STEPS[0]
     for step in _GRID_STEPS:
         if step >= ideal_ns:
@@ -1061,9 +1061,9 @@ class TimelineScene(QGraphicsScene):
         self._trace: Optional[BtfTrace] = None
         # -- Zoom / orientation ------------------------------------------
         self._horizontal = True
-        self._ns_per_px_default: float = _NS_PER_PX_DEFAULT  # max zoom-in limit (ns/px)
-        self._ns_per_px     = self._ns_per_px_default
-        self._ns_per_px_fit = float('inf')   # zoom-out limit: ns/px at fit-to-view
+        self._timescale_per_px_default: float = _TIMESCALE_PER_PX_DEFAULT  # max zoom-in limit (ns/px)
+        self._timescale_per_px     = self._timescale_per_px_default
+        self._timescale_per_px_fit = float('inf')   # zoom-out limit: ns/px at fit-to-view
         # -- View state --------------------------------------------------
         self._show_sti    = True
         self._show_grid   = True
@@ -1134,8 +1134,8 @@ class TimelineScene(QGraphicsScene):
         self._trace = trace
         time_span = max(trace.time_max - trace.time_min, 1)
         avail = max(viewport_width - self._label_width, 100)
-        self._ns_per_px = time_span / avail
-        self._ns_per_px_fit = self._ns_per_px   # record fit-to-view limit
+        self._timescale_per_px = time_span / avail
+        self._timescale_per_px_fit = self._timescale_per_px   # record fit-to-view limit
         # Do NOT set _skip_orth_culling here: the viewport bounds are valid
         # (window is visible) and orth culling keeps the initial build to
         # O(visible_rows) instead of O(all_rows), preventing a UI freeze
@@ -1176,12 +1176,12 @@ class TimelineScene(QGraphicsScene):
         self.rebuild()
 
     @property
-    def ns_per_px(self) -> float:
-        return self._ns_per_px
+    def timescale_per_px(self) -> float:
+        return self._timescale_per_px
 
-    @ns_per_px.setter
-    def ns_per_px(self, v: float) -> None:
-        self._ns_per_px = max(v, self._ns_per_px_default)
+    @timescale_per_px.setter
+    def timescale_per_px(self, v: float) -> None:
+        self._timescale_per_px = max(v, self._timescale_per_px_default)
         self.rebuild()
 
     def set_font_size(self, size: int) -> None:
@@ -1224,11 +1224,11 @@ class TimelineScene(QGraphicsScene):
         self._task_filter_q = q
         self.rebuild()
 
-    def set_ns_per_px_default(self, v: float) -> None:
+    def set_timescale_per_px_default(self, v: float) -> None:
         """Change the maximum zoom-in limit (ns/px) and rebuild if needed."""
-        self._ns_per_px_default = max(0.5, min(v, 200.0))
-        if self._ns_per_px < self._ns_per_px_default:
-            self._ns_per_px = self._ns_per_px_default
+        self._timescale_per_px_default = max(0.5, min(v, 200.0))
+        if self._timescale_per_px < self._timescale_per_px_default:
+            self._timescale_per_px = self._timescale_per_px_default
             self.rebuild()
 
     def set_label_width(self, width: int) -> None:
@@ -1247,13 +1247,13 @@ class TimelineScene(QGraphicsScene):
         self.rebuild()
 
     def zoom(self, factor: float, center_ns: Optional[int] = None) -> None:
-        new_val = self._ns_per_px / factor
-        # Clamp: don't zoom in past _NS_PER_PX_DEFAULT or
+        new_val = self._timescale_per_px / factor
+        # Clamp: don't zoom in past _TIMESCALE_PER_PX_DEFAULT or
         # zoom out past fit-to-view level.
-        new_val = max(self._ns_per_px_default, min(new_val, self._ns_per_px_fit))
-        if new_val == self._ns_per_px:
+        new_val = max(self._timescale_per_px_default, min(new_val, self._timescale_per_px_fit))
+        if new_val == self._timescale_per_px:
             return  # already at limit – skip expensive rebuild
-        self._ns_per_px = new_val
+        self._timescale_per_px = new_val
         self.rebuild()
 
     def fit_to_width(self, viewport_width: int) -> None:
@@ -1261,8 +1261,8 @@ class TimelineScene(QGraphicsScene):
             return
         time_span = max(self._trace.time_max - self._trace.time_min, 1)
         avail = max(viewport_width - self._label_width, 100)
-        self._ns_per_px = time_span / avail
-        self._ns_per_px_fit = self._ns_per_px   # update fit-to-view limit
+        self._timescale_per_px = time_span / avail
+        self._timescale_per_px_fit = self._timescale_per_px   # update fit-to-view limit
         self.rebuild()
 
     # ------------------------------------------------------------------
@@ -1273,7 +1273,7 @@ class TimelineScene(QGraphicsScene):
         """Convert a scene X (horizontal) or Y (vertical) coord to ns."""
         if self._trace is None:
             return 0
-        ns = int((coord - self._label_width) * self._ns_per_px) + self._trace.time_min
+        ns = int((coord - self._label_width) * self._timescale_per_px) + self._trace.time_min
         return max(self._trace.time_min, min(self._trace.time_max, ns))
 
     def ns_to_scene_coord(self, ns: int) -> float:
@@ -1305,7 +1305,7 @@ class TimelineScene(QGraphicsScene):
         if span < 1:
             return
         avail = max(viewport_px - self._label_width, 100)
-        self._ns_per_px = max(span / avail, self._ns_per_px_default)
+        self._timescale_per_px = max(span / avail, self._timescale_per_px_default)
         # Supply an explicit ns range so _update_viewport_bounds() inside
         # rebuild() clips to the target region rather than deriving a wrong
         # range from the not-yet-scrolled viewport position.
@@ -1559,12 +1559,12 @@ class TimelineScene(QGraphicsScene):
             hi_coord = view.mapToScene(vp_rect.bottomLeft()).y()
 
         lw = self._label_width
-        ns_lo = t_min + int((lo_coord - lw) * self._ns_per_px)
-        ns_hi = t_min + int((hi_coord - lw) * self._ns_per_px)
+        ns_lo = t_min + int((lo_coord - lw) * self._timescale_per_px)
+        ns_hi = t_min + int((hi_coord - lw) * self._timescale_per_px)
 
         # Guard: clamp raw viewport-derived ns values to the trace bounds.
         # During zoom transitions the scroll position may not yet match the
-        # new ns_per_px (e.g. zoom_fit is called while the viewport is still
+        # new timescale_per_px (e.g. zoom_fit is called while the viewport is still
         # at the 1:1 scroll position), producing astronomically large ns_lo/hi
         # that would push _vp_ns_lo beyond t_max and leave only the very last
         # segment loaded.  If both endpoints fall outside the trace in the
@@ -1642,7 +1642,7 @@ class TimelineScene(QGraphicsScene):
     # ------------------------------------------------------------------
 
     def _ns_to_px(self, ns: int) -> float:
-        return (ns - self._trace.time_min) / self._ns_per_px
+        return (ns - self._trace.time_min) / self._timescale_per_px
 
     # ------------------------------------------------------------------
     # Filtering helpers
@@ -1705,7 +1705,7 @@ class TimelineScene(QGraphicsScene):
             return
 
         time_span  = trace.time_max - trace.time_min
-        timeline_w = time_span / self._ns_per_px
+        timeline_w = time_span / self._timescale_per_px
         total_h = RULER_HEIGHT + total_rows * (self._row_height + self._row_gap)
         total_w = self._label_width + timeline_w
         self.setSceneRect(0, 0, total_w, total_h)
@@ -1721,14 +1721,14 @@ class TimelineScene(QGraphicsScene):
         self._frozen_items.append((_lbg, 0))
 
         # Grid-only ruler: grid lines stay at absolute scene positions (not frozen).
-        _ruler_grid = _RulerItem(trace, self._ns_per_px, total_w, total_h,
+        _ruler_grid = _RulerItem(trace, self._timescale_per_px, total_w, total_h,
                                    font, trace.time_scale, self._show_grid,
                                    horiz=True, axis_offset=self._label_width,
                                    draw_header=False)
         _ruler_grid.setZValue(0.5)
         self.addItem(_ruler_grid)
         # Header-only ruler: tick marks + labels, frozen to the top edge.
-        _ruler_hdr = _RulerItem(trace, self._ns_per_px, total_w, total_h,
+        _ruler_hdr = _RulerItem(trace, self._timescale_per_px, total_w, total_h,
                                  font, trace.time_scale, show_grid=False,
                                  horiz=True, axis_offset=self._label_width,
                                  draw_grid=False)
@@ -1740,8 +1740,8 @@ class TimelineScene(QGraphicsScene):
         _tick_mk   = task_merge_key("TICK")
         _tick_segs = trace.seg_map_by_merge_key.get(_tick_mk, [])
         if _tick_segs:
-            _ht_lod_ns   = trace.seg_lod_ns_per_px
-            _ht_npp      = self._ns_per_px
+            _ht_lod_ns   = trace.seg_lod_timescale_per_px
+            _ht_npp      = self._timescale_per_px
             _ht_vlo      = self._vp_ns_lo
             _ht_vhi      = self._vp_ns_hi
             _ht_tmin     = trace.time_min
@@ -1793,12 +1793,12 @@ class TimelineScene(QGraphicsScene):
         _first_vis    = max(0, int((self._vp_scene_orth_lo - RULER_HEIGHT) // _row_stride))
         _last_vis     = min(n_task - 1, int((self._vp_scene_orth_hi - RULER_HEIGHT) // _row_stride) + 1)
         _time_min     = trace.time_min
-        _px_per_ns    = 1.0 / self._ns_per_px
+        _px_per_ns    = 1.0 / self._timescale_per_px
         lw            = self._label_width
         _vp_ns_lo     = self._vp_ns_lo
         _vp_ns_hi     = self._vp_ns_hi
-        lod_ns_per_px = trace.seg_lod_ns_per_px
-        _ns_per_px    = self._ns_per_px
+        lod_timescale_per_px = trace.seg_lod_timescale_per_px
+        _timescale_per_px    = self._timescale_per_px
         for row_idx in range(_first_vis, _last_vis + 1):
             task  = task_rows[row_idx]
             raw   = trace.task_repr.get(task, task)
@@ -1843,7 +1843,7 @@ class TimelineScene(QGraphicsScene):
                     trace.seg_start_by_merge_key.get(task, []),
                     trace.seg_lod_by_merge_key.get(task, []),
                     trace.seg_lod_starts_by_merge_key.get(task, []),
-                    lod_ns_per_px, _ns_per_px, _vp_ns_lo, _vp_ns_hi,
+                    lod_timescale_per_px, _timescale_per_px, _vp_ns_lo, _vp_ns_hi,
                     _time_min, _px_per_ns, lw)):
                 x1 = lw + (seg.start - _time_min) * _px_per_ns
                 x2 = lw + (seg.end   - _time_min) * _px_per_ns
@@ -1859,7 +1859,7 @@ class TimelineScene(QGraphicsScene):
                 QRectF(lw, y_top, timeline_w, self._row_height),
                 seg_data, trace.time_scale,
                 label_font=font_inline, label_fm=fm_inline, label_text=disp,
-                xs=xs, time_min=trace.time_min, ns_per_px=self._ns_per_px,
+                xs=xs, time_min=trace.time_min, timescale_per_px=self._timescale_per_px,
                 performance_mode=self._performance_mode,
                 interaction_active=self._zoom_interaction_active)
             batch.setZValue(1)
@@ -1957,7 +1957,7 @@ class TimelineScene(QGraphicsScene):
         col_w       = max(self._row_height + self._row_gap, 26)
         label_row_h = self._label_width
         time_span   = trace.time_max - trace.time_min
-        timeline_h  = time_span / self._ns_per_px
+        timeline_h  = time_span / self._timescale_per_px
         total_w     = col_w * total_cols + RULER_WIDTH
         total_h     = label_row_h + timeline_h
         self.setSceneRect(0, 0, total_w, total_h)
@@ -1975,14 +1975,14 @@ class TimelineScene(QGraphicsScene):
         self._frozen_top_items.append((_label_row_bg, 0))
 
         # Grid-only ruler: horizontal lines at absolute Y positions (not frozen).
-        _ruler_grid = _RulerItem(trace, self._ns_per_px, total_w, total_h,
+        _ruler_grid = _RulerItem(trace, self._timescale_per_px, total_w, total_h,
                                    font, trace.time_scale, self._show_grid,
                                    horiz=False, axis_offset=label_row_h,
                                    draw_header=False)
         _ruler_grid.setZValue(0.5)
         self.addItem(_ruler_grid)
         # Header-only ruler: tick marks + labels, frozen to left edge.
-        _ruler_hdr = _RulerItem(trace, self._ns_per_px, total_w, total_h,
+        _ruler_hdr = _RulerItem(trace, self._timescale_per_px, total_w, total_h,
                                   font, trace.time_scale, show_grid=False,
                                   horiz=False, axis_offset=label_row_h,
                                   draw_grid=False)
@@ -1995,8 +1995,8 @@ class TimelineScene(QGraphicsScene):
         _tick_segs = trace.seg_map_by_merge_key.get(_tick_mk, [])
         _has_tick_v = bool(_tick_segs)
         if _has_tick_v:
-            _vt_lod_ns   = trace.seg_lod_ns_per_px
-            _vt_npp      = self._ns_per_px
+            _vt_lod_ns   = trace.seg_lod_timescale_per_px
+            _vt_npp      = self._timescale_per_px
             _vt_vlo      = self._vp_ns_lo
             _vt_vhi      = self._vp_ns_hi
             _vt_tmin     = trace.time_min
@@ -2037,11 +2037,11 @@ class TimelineScene(QGraphicsScene):
         _lbl_color = QColor("#D4D4D4")
         _pen_hl_v  = QPen(QColor("#FFFFFF"), 1.5)
         _time_min  = trace.time_min
-        _px_per_ns = 1.0 / self._ns_per_px
+        _px_per_ns = 1.0 / self._timescale_per_px
         _vp_ns_lo  = self._vp_ns_lo
         _vp_ns_hi  = self._vp_ns_hi
-        lod_ns_per_px = trace.seg_lod_ns_per_px
-        _ns_per_px = self._ns_per_px
+        lod_timescale_per_px = trace.seg_lod_timescale_per_px
+        _timescale_per_px = self._timescale_per_px
 
         # Compute first/last visible col indices from the cached orth bounds.
         _first_vis_c = max(0, int((self._vp_scene_orth_lo - RULER_WIDTH) // col_w))
@@ -2090,7 +2090,7 @@ class TimelineScene(QGraphicsScene):
                     trace.seg_start_by_merge_key.get(task, []),
                     trace.seg_lod_by_merge_key.get(task, []),
                     trace.seg_lod_starts_by_merge_key.get(task, []),
-                    lod_ns_per_px, _ns_per_px, _vp_ns_lo, _vp_ns_hi,
+                    lod_timescale_per_px, _timescale_per_px, _vp_ns_lo, _vp_ns_hi,
                     _time_min, _px_per_ns, label_row_h)):
                 y1 = label_row_h + (seg.start - _time_min) * _px_per_ns
                 y2 = label_row_h + (seg.end   - _time_min) * _px_per_ns
@@ -2106,7 +2106,7 @@ class TimelineScene(QGraphicsScene):
                 QRectF(x_left, label_row_h, col_w, timeline_h),
                 seg_data, trace.time_scale,
                 label_font=font_inline, label_fm=fm_inline, label_text=disp,
-                xs=xs, time_min=trace.time_min, ns_per_px=self._ns_per_px,
+                xs=xs, time_min=trace.time_min, timescale_per_px=self._timescale_per_px,
                 performance_mode=self._performance_mode,
                 interaction_active=self._zoom_interaction_active)
             batch.setZValue(1)
@@ -2211,7 +2211,7 @@ class TimelineScene(QGraphicsScene):
             return
 
         time_span  = trace.time_max - trace.time_min
-        timeline_w = time_span / self._ns_per_px
+        timeline_w = time_span / self._timescale_per_px
         total_h    = RULER_HEIGHT + total_rows * (self._row_height + self._row_gap)
         total_w    = self._label_width + timeline_w
         self.setSceneRect(0, 0, total_w, total_h)
@@ -2227,14 +2227,14 @@ class TimelineScene(QGraphicsScene):
         self._frozen_items.append((_lbg, 0))
 
         # Grid-only ruler (not frozen — grid lines stay at their scene positions).
-        _ruler_grid = _RulerItem(trace, self._ns_per_px, total_w, total_h,
+        _ruler_grid = _RulerItem(trace, self._timescale_per_px, total_w, total_h,
                                    font, trace.time_scale, self._show_grid,
                                    horiz=True, axis_offset=self._label_width,
                                    draw_header=False)
         _ruler_grid.setZValue(0.5)
         self.addItem(_ruler_grid)
         # Header-only ruler (frozen by Y — always visible at viewport top).
-        _ruler_hdr = _RulerItem(trace, self._ns_per_px, total_w, total_h,
+        _ruler_hdr = _RulerItem(trace, self._timescale_per_px, total_w, total_h,
                                  font, trace.time_scale, show_grid=False,
                                  horiz=True, axis_offset=self._label_width,
                                  draw_grid=False)
@@ -2243,12 +2243,12 @@ class TimelineScene(QGraphicsScene):
         self._frozen_top_items.append((_ruler_hdr, 0))
 
         _time_min  = trace.time_min
-        _px_per_ns = 1.0 / self._ns_per_px
+        _px_per_ns = 1.0 / self._timescale_per_px
         lw         = self._label_width
         _vp_ns_lo  = self._vp_ns_lo
         _vp_ns_hi  = self._vp_ns_hi
-        lod_ns_per_px = trace.seg_lod_ns_per_px
-        _ns_per_px = self._ns_per_px
+        lod_timescale_per_px = trace.seg_lod_timescale_per_px
+        _timescale_per_px = self._timescale_per_px
         # Pre-built LOD/start-time references for core view clipping
         c_seg_starts  = trace.core_seg_starts
         _c_seg_lod    = trace.core_seg_lod
@@ -2267,7 +2267,7 @@ class TimelineScene(QGraphicsScene):
                     trace.seg_start_by_merge_key.get(_tick_mk, []),
                     trace.seg_lod_by_merge_key.get(_tick_mk, []),
                     trace.seg_lod_starts_by_merge_key.get(_tick_mk, []),
-                    lod_ns_per_px, _ns_per_px, _vp_ns_lo, _vp_ns_hi,
+                    lod_timescale_per_px, _timescale_per_px, _vp_ns_lo, _vp_ns_hi,
                     _time_min, _px_per_ns, lw)):
                 x1 = lw + (seg.start - _time_min) * _px_per_ns
                 x2 = lw + (seg.end   - _time_min) * _px_per_ns
@@ -2369,7 +2369,7 @@ class TimelineScene(QGraphicsScene):
                         c_seg_starts.get(core, []),
                         _c_seg_lod.get(core, []),
                         c_seg_lod_starts.get(core, []),
-                        lod_ns_per_px, _ns_per_px, _vp_ns_lo, _vp_ns_hi,
+                        lod_timescale_per_px, _timescale_per_px, _vp_ns_lo, _vp_ns_hi,
                         _time_min, _px_per_ns, lw)):
                     x1 = lw + (seg.start - _time_min) * _px_per_ns
                     x2 = lw + (seg.end   - _time_min) * _px_per_ns
@@ -2465,7 +2465,7 @@ class TimelineScene(QGraphicsScene):
                         ct_seg_starts.get(core, {}).get(task_name, []),
                         _ct_lod.get(core, {}).get(task_name, []),
                         ct_lod_starts.get(core, {}).get(task_name, []),
-                        lod_ns_per_px, _ns_per_px, _vp_ns_lo, _vp_ns_hi,
+                        lod_timescale_per_px, _timescale_per_px, _vp_ns_lo, _vp_ns_hi,
                         _time_min, _px_per_ns, lw)):
                     x1 = lw + (seg.start - _time_min) * _px_per_ns
                     x2 = lw + (seg.end   - _time_min) * _px_per_ns
@@ -2481,7 +2481,7 @@ class TimelineScene(QGraphicsScene):
                     QRectF(lw, y_top2, timeline_w, self._row_height),
                     seg_data, trace.time_scale,
                     label_font=font_sm, label_fm=fm_sm, label_text=disp,
-                    xs=xs, time_min=trace.time_min, ns_per_px=self._ns_per_px,
+                    xs=xs, time_min=trace.time_min, timescale_per_px=self._timescale_per_px,
                     performance_mode=self._performance_mode,
                     interaction_active=self._zoom_interaction_active)
                 batch.setZValue(1)
@@ -2580,7 +2580,7 @@ class TimelineScene(QGraphicsScene):
         col_w       = max(self._row_height + self._row_gap, 26)
         label_row_h = self._label_width
         time_span   = trace.time_max - trace.time_min
-        timeline_h  = time_span / self._ns_per_px
+        timeline_h  = time_span / self._timescale_per_px
         total_w     = col_w * total_cols + RULER_WIDTH
         total_h     = label_row_h + timeline_h
         self.setSceneRect(0, 0, total_w, total_h)
@@ -2598,14 +2598,14 @@ class TimelineScene(QGraphicsScene):
         self._frozen_top_items.append((_label_row_bg_c, 0))
 
         # Grid-only ruler: horizontal grid lines at absolute Y positions.
-        _ruler_grid_c = _RulerItem(trace, self._ns_per_px, total_w, total_h,
+        _ruler_grid_c = _RulerItem(trace, self._timescale_per_px, total_w, total_h,
                                      font, trace.time_scale, self._show_grid,
                                      horiz=False, axis_offset=label_row_h,
                                      draw_header=False)
         _ruler_grid_c.setZValue(0.5)
         self.addItem(_ruler_grid_c)
         # Header-only ruler: tick marks + labels, frozen to left edge.
-        _ruler_hdr_c = _RulerItem(trace, self._ns_per_px, total_w, total_h,
+        _ruler_hdr_c = _RulerItem(trace, self._timescale_per_px, total_w, total_h,
                                     font, trace.time_scale, show_grid=False,
                                     horiz=False, axis_offset=label_row_h,
                                     draw_grid=False)
@@ -2614,11 +2614,11 @@ class TimelineScene(QGraphicsScene):
         self._frozen_items.append((_ruler_hdr_c, 0))
 
         _time_min  = trace.time_min
-        _px_per_ns = 1.0 / self._ns_per_px
+        _px_per_ns = 1.0 / self._timescale_per_px
         _vp_ns_lo  = self._vp_ns_lo
         _vp_ns_hi  = self._vp_ns_hi
-        lod_ns_per_px = trace.seg_lod_ns_per_px
-        _ns_per_px = self._ns_per_px
+        lod_timescale_per_px = trace.seg_lod_timescale_per_px
+        _timescale_per_px = self._timescale_per_px
         # Pre-built LOD/start-time references for core view clipping
         c_seg_starts  = trace.core_seg_starts
         _c_seg_lod    = trace.core_seg_lod
@@ -2638,7 +2638,7 @@ class TimelineScene(QGraphicsScene):
                     trace.seg_start_by_merge_key.get(_tick_mk, []),
                     trace.seg_lod_by_merge_key.get(_tick_mk, []),
                     trace.seg_lod_starts_by_merge_key.get(_tick_mk, []),
-                    lod_ns_per_px, _ns_per_px, _vp_ns_lo, _vp_ns_hi,
+                    lod_timescale_per_px, _timescale_per_px, _vp_ns_lo, _vp_ns_hi,
                     _time_min, _px_per_ns, label_row_h)):
                 y1 = label_row_h + (seg.start - _time_min) * _px_per_ns
                 y2 = label_row_h + (seg.end   - _time_min) * _px_per_ns
@@ -2706,7 +2706,7 @@ class TimelineScene(QGraphicsScene):
                         c_seg_starts.get(core, []),
                         _c_seg_lod.get(core, []),
                         c_seg_lod_starts.get(core, []),
-                        lod_ns_per_px, _ns_per_px, _vp_ns_lo, _vp_ns_hi,
+                        lod_timescale_per_px, _timescale_per_px, _vp_ns_lo, _vp_ns_hi,
                         _time_min, _px_per_ns, label_row_h)):
                     y1 = label_row_h + (seg.start - _time_min) * _px_per_ns
                     y2 = label_row_h + (seg.end   - _time_min) * _px_per_ns
@@ -2797,7 +2797,7 @@ class TimelineScene(QGraphicsScene):
                         ct_seg_starts.get(core, {}).get(task_name, []),
                         _ct_lod.get(core, {}).get(task_name, []),
                         ct_lod_starts.get(core, {}).get(task_name, []),
-                        lod_ns_per_px, _ns_per_px, _vp_ns_lo, _vp_ns_hi,
+                        lod_timescale_per_px, _timescale_per_px, _vp_ns_lo, _vp_ns_hi,
                         _time_min, _px_per_ns, label_row_h)):
                     y1 = label_row_h + (seg.start - _time_min) * _px_per_ns
                     y2 = label_row_h + (seg.end   - _time_min) * _px_per_ns
@@ -2813,7 +2813,7 @@ class TimelineScene(QGraphicsScene):
                     QRectF(x_left2, label_row_h, col_w, timeline_h),
                     seg_data, trace.time_scale,
                     label_font=font_sm, label_fm=fm_sm, label_text=disp,
-                    xs=xs, time_min=trace.time_min, ns_per_px=self._ns_per_px,
+                    xs=xs, time_min=trace.time_min, timescale_per_px=self._timescale_per_px,
                     performance_mode=self._performance_mode,
                     interaction_active=self._zoom_interaction_active)
                 batch.setZValue(1)
@@ -2877,7 +2877,7 @@ class _RulerItem(QGraphicsItem):
                   (LABEL_WIDTH for horizontal, label_row_h for vertical)
     """
 
-    def __init__(self, trace, ns_per_px: float,
+    def __init__(self, trace, timescale_per_px: float,
                  total_w: float, total_h: float,
                  font: QFont, time_scale,
                  show_grid: bool, horiz: bool,
@@ -2885,7 +2885,7 @@ class _RulerItem(QGraphicsItem):
                  draw_header: bool = True, draw_grid: bool = True):
         super().__init__()
         self._trace       = trace
-        self._npp         = ns_per_px
+        self._npp         = timescale_per_px
         self._total_w     = total_w
         self._total_h     = total_h
         self._font        = font
@@ -3082,7 +3082,7 @@ class _BatchRowItem(QGraphicsItem):
     def __init__(self, bounding_rect: QRectF, seg_data: list, time_scale: str,
                  label_font=None, label_fm=None, label_text: str = "",
                  presorted: bool = False, xs: Optional[list] = None,
-                 time_min: int = 0, ns_per_px: float = 0.0,
+                 time_min: int = 0, timescale_per_px: float = 0.0,
                  performance_mode: bool = False,
                  interaction_active: bool = False):
         super().__init__()
@@ -3090,7 +3090,7 @@ class _BatchRowItem(QGraphicsItem):
         self._seg_data      = seg_data      # [(QRectF, QBrush, QPen, seg|None)]
         self._time_scale    = time_scale
         self._time_min      = time_min
-        self._ns_per_px     = ns_per_px
+        self._timescale_per_px     = timescale_per_px
         self._performance_mode = performance_mode
         self._interaction_active = interaction_active
         self._label_font    = label_font
@@ -3251,7 +3251,7 @@ class _BatchRowItem(QGraphicsItem):
         if self._performance_mode:
             _allow_inline_text = (
                 (not self._interaction_active)
-                and (self._ns_per_px <= _PERFORMANCE_TEXT_MAX_NS_PER_PX)
+                and (self._timescale_per_px <= _PERFORMANCE_TEXT_MAX_TIMESCALE_PER_PX)
             )
         if _allow_inline_text and self._label_font and self._label_text and self._label_fm:
             painter.setPen(QPen(QColor("#FFFFFF")))
@@ -3714,7 +3714,7 @@ class TimelineView(QGraphicsView):
     def load_trace(self, trace: BtfTrace) -> None:
         self._fit_mode = True   # new trace always starts in fit mode
         self._scene.set_trace(trace, self._fit_viewport_size())
-        self.zoom_changed.emit(self._scene.ns_per_px)
+        self.zoom_changed.emit(self._scene.timescale_per_px)
 
     def add_cursor_at_view_center(self) -> None:
         vp = self.viewport().rect()
@@ -3739,7 +3739,7 @@ class TimelineView(QGraphicsView):
             return
         trace = self._scene._trace
         _span = max(trace.time_max - trace.time_min, 1)
-        _vp_half = int(self._fit_viewport_size() * 10 * self._scene._ns_per_px)
+        _vp_half = int(self._fit_viewport_size() * 10 * self._scene._timescale_per_px)
         _half = max(_vp_half, _span // 100)
         self._scene._ns_range_hint = (
             max(trace.time_min, ns - _half),
@@ -3766,7 +3766,7 @@ class TimelineView(QGraphicsView):
 
     def set_font_size(self, size: int) -> None:
         self._scene.set_font_size(size)
-        self.zoom_changed.emit(self._scene.ns_per_px)
+        self.zoom_changed.emit(self._scene.timescale_per_px)
 
     def set_max_cursors(self, n: int) -> None:
         self._scene.set_max_cursors(n)
@@ -3791,23 +3791,23 @@ class TimelineView(QGraphicsView):
         self._fit_mode = True
         self._scene.fit_to_width(self._fit_viewport_size())
         # Ensure the view transform is identity: all zoom is handled at the
-        # scene level (ns_per_px) so there must be no view-level scale active.
+        # scene level (timescale_per_px) so there must be no view-level scale active.
         # fitInView() would set a persistent QTransform that is not needed here.
         self.resetTransform()
-        self.zoom_changed.emit(self._scene.ns_per_px)
+        self.zoom_changed.emit(self._scene.timescale_per_px)
 
     def zoom_1to1(self) -> None:
-        """Set zoom to exactly _NS_PER_PX_DEFAULT ns/px, scrolling to trace start when in fit mode."""
+        """Set zoom to exactly _TIMESCALE_PER_PX_DEFAULT ns/px, scrolling to trace start when in fit mode."""
         if self._scene._trace is None:
             return
         was_fit_mode = self._fit_mode
         self._fit_mode = False
-        if self._scene._ns_per_px == self._scene._ns_per_px_default:
+        if self._scene._timescale_per_px == self._scene._timescale_per_px_default:
             return
         trace = self._scene._trace
         # When transitioning from fit mode the viewport centre is the middle of
         # the entire trace.  At 1:1 zoom the viewport window is very narrow
-        # (viewport_width × ns_per_px ≈ 1280 ns for a typical 640 px window),
+        # (viewport_width × timescale_per_px ≈ 1280 ns for a typical 640 px window),
         # so centering on the trace midpoint almost never lands on a segment.
         # Instead, scroll to time_min so the first segments are immediately
         # visible — which is the same position the viewer starts at on launch.
@@ -3820,7 +3820,7 @@ class TimelineView(QGraphicsView):
                 center_ns = self._scene.scene_to_ns(scene_pt.x())
             else:
                 center_ns = self._scene.scene_to_ns(scene_pt.y())
-        self._scene._ns_per_px = self._scene._ns_per_px_default
+        self._scene._timescale_per_px = self._scene._timescale_per_px_default
         # Supply an explicit ns range hint centred on center_ns so that
         # _update_viewport_bounds() loads the correct segment region.
         #
@@ -3830,7 +3830,7 @@ class TimelineView(QGraphicsView):
         # is larger.  The 150 % margin inside _update_viewport_bounds adds
         # another 3× on top so the first scroll after 1:1 is also covered.
         _span = max(trace.time_max - trace.time_min, 1)
-        _vp_half = int(self._fit_viewport_size() * 10 * self._scene._ns_per_px_default)
+        _vp_half = int(self._fit_viewport_size() * 10 * self._scene._timescale_per_px_default)
         _half = max(_vp_half, _span // 100)
         self._scene._ns_range_hint = (
             max(trace.time_min, center_ns - _half),
@@ -3838,7 +3838,7 @@ class TimelineView(QGraphicsView):
         )
         self._scene.rebuild()
         self.resetTransform()
-        self.zoom_changed.emit(self._scene.ns_per_px)
+        self.zoom_changed.emit(self._scene.timescale_per_px)
         new_coord = self._scene.ns_to_scene_coord(center_ns)
         if self._scene._horizontal:
             self.centerOn(new_coord, scene_pt.y())
@@ -4016,7 +4016,7 @@ class TimelineView(QGraphicsView):
                 self._reposition_frozen()
                 if self._fit_mode and self._scene._trace is not None:
                     self._scene.fit_to_width(self._fit_viewport_size())
-                    self.zoom_changed.emit(self._scene.ns_per_px)
+                    self.zoom_changed.emit(self._scene.timescale_per_px)
             else:
                 self._reposition_frozen_top()
             event.accept()
@@ -4111,7 +4111,7 @@ class TimelineView(QGraphicsView):
                 vw = max(self.viewport().width(), 100)
                 self._fit_mode = False
                 self._scene.zoom_to_range(ns_lo, ns_hi, vw)
-                self.zoom_changed.emit(self._scene.ns_per_px)
+                self.zoom_changed.emit(self._scene.timescale_per_px)
                 # Scroll so the selected range is centred
                 center_ns   = (ns_lo + ns_hi) // 2
                 new_coord   = self._scene.ns_to_scene_coord(center_ns)
@@ -4276,11 +4276,11 @@ class TimelineView(QGraphicsView):
         vp_center = self.viewport().rect().center()
         offset = (vp_center.x() - vp_pos.x()) if is_horiz else (vp_center.y() - vp_pos.y())
 
-        prev_ns_per_px = self._scene.ns_per_px
+        prev_timescale_per_px = self._scene.timescale_per_px
         self._scene.zoom(factor)
-        if self._scene.ns_per_px == prev_ns_per_px:
+        if self._scene.timescale_per_px == prev_timescale_per_px:
             return  # already at zoom limit – nothing changed, skip scroll/emit
-        self.zoom_changed.emit(self._scene.ns_per_px)
+        self.zoom_changed.emit(self._scene.timescale_per_px)
 
         # After rebuild, keep the time-axis anchor fixed without drifting on
         # the orthogonal axis (prevents left/right drift in vertical mode).
@@ -4376,7 +4376,7 @@ class TimelineView(QGraphicsView):
 
         Fit mode  → rebuild at the new fit zoom so the trace always fills
                     the viewport (no blank space, no scrollbar).
-        Zoom mode → ns_per_px is NEVER touched.  Only update _ns_per_px_fit
+        Zoom mode → timescale_per_px is NEVER touched.  Only update _timescale_per_px_fit
                     so the zoom-out clamp reflects the new viewport size, and
                     reposition the frozen label column items.
         """
@@ -4389,14 +4389,14 @@ class TimelineView(QGraphicsView):
         new_fit = time_span / avail
 
         if self._fit_mode:
-            self._scene._ns_per_px_fit = new_fit
-            self._scene._ns_per_px     = new_fit
+            self._scene._timescale_per_px_fit = new_fit
+            self._scene._timescale_per_px     = new_fit
             self._scene.rebuild()
             self.resetTransform()
-            self.zoom_changed.emit(self._scene.ns_per_px)
+            self.zoom_changed.emit(self._scene.timescale_per_px)
         else:
             # Zoom mode: preserve zoom level exactly.
-            self._scene._ns_per_px_fit = new_fit
+            self._scene._timescale_per_px_fit = new_fit
             self._reposition_frozen()
             self._reposition_frozen_top()
 
@@ -4437,7 +4437,7 @@ class TimelineView(QGraphicsView):
         t_min = trace.time_min
         t_max = trace.time_max
         lw = self._scene._label_width
-        ns_per_px = self._scene._ns_per_px
+        timescale_per_px = self._scene._timescale_per_px
 
         if self._scene._horizontal:
             lo_coord = self.mapToScene(vp_rect.topLeft()).x()
@@ -4450,8 +4450,8 @@ class TimelineView(QGraphicsView):
             orth_lo = self.mapToScene(vp_rect.topLeft()).x()
             orth_hi = self.mapToScene(vp_rect.topRight()).x()
 
-        ns_lo = max(t_min, min(t_max, t_min + int((lo_coord - lw) * ns_per_px)))
-        ns_hi = max(t_min, min(t_max, t_min + int((hi_coord - lw) * ns_per_px)))
+        ns_lo = max(t_min, min(t_max, t_min + int((lo_coord - lw) * timescale_per_px)))
+        ns_hi = max(t_min, min(t_max, t_min + int((hi_coord - lw) * timescale_per_px)))
 
         # Time-axis coverage exceeded → need rebuild to repopulate segments.
         if ns_lo < self._scene._vp_ns_lo or ns_hi > self._scene._vp_ns_hi:
@@ -5133,7 +5133,7 @@ class RcSettings:
     -----------------
     [window]   width, height, x, y, maximized
     [view]     font_size, theme, horizontal, view_mode, show_sti, show_grid
-    [zoom]     ns_per_px  (-1 = use fit-to-width on next open)
+    [zoom]     timescale_per_px  (-1 = use fit-to-width on next open)
     [cursors]  positions  (space-separated ns timestamps; "" = no saved cursors)
     [files]    last_file, last_dir
     """
@@ -5157,7 +5157,7 @@ class RcSettings:
             "show_grid":  "true",
         },
         "zoom": {
-            "ns_per_px": "-1",
+            "timescale_per_px": "-1",
         },
         "cursors": {
             "positions": "",
@@ -5376,8 +5376,9 @@ class _SettingsDialog(QDialog):
                  show_legend: bool, show_stats: bool,
                  show_hover_highlight: bool,
                  performance_mode: bool,
+                 zoom_unit: str,
                  label_width: int, row_height: int, row_gap: int,
-                 ns_per_px_default: float,
+                 timescale_per_px_default: float,
                  is_dark: bool):
         super().__init__(parent, Qt.Dialog)
         self.setWindowTitle("Settings")
@@ -5507,7 +5508,7 @@ class _SettingsDialog(QDialog):
         self._perf_mode_cb.setToolTip(
             "Prefer coarse timeline rendering for smoother interaction.\n"
             "Inline segment text is hidden while zooming and shown only when\n"
-            f"zoomed in (<= {_PERFORMANCE_TEXT_MAX_NS_PER_PX:.1f} ns/px).")
+            f"zoomed in (<= {_PERFORMANCE_TEXT_MAX_TIMESCALE_PER_PX:.1f} {zoom_unit}/px).")
         v2.addWidget(self._indented(self._sti_cb))
         v2.addWidget(self._indented(self._grid_cb))
         v2.addWidget(self._indented(self._hover_hl_cb))
@@ -5547,16 +5548,16 @@ class _SettingsDialog(QDialog):
         f3.addRow(self._hline())
         f3.addRow(self._section("Zoom & cursors"))
 
-        self._ns_per_px_spin = QDoubleSpinBox()
-        self._ns_per_px_spin.setRange(0.5, 200.0)
-        self._ns_per_px_spin.setSingleStep(0.5)
-        self._ns_per_px_spin.setDecimals(1)
-        self._ns_per_px_spin.setSuffix(" ns/px")
-        self._ns_per_px_spin.setValue(ns_per_px_default)
-        self._ns_per_px_spin.setToolTip(
-            "Maximum zoom-in level (0.5\u2013200 ns/px).\n"
+        self._timescale_per_px_spin = QDoubleSpinBox()
+        self._timescale_per_px_spin.setRange(0.5, 200.0)
+        self._timescale_per_px_spin.setSingleStep(0.5)
+        self._timescale_per_px_spin.setDecimals(1)
+        self._timescale_per_px_spin.setSuffix(f" {zoom_unit}/px")
+        self._timescale_per_px_spin.setValue(timescale_per_px_default)
+        self._timescale_per_px_spin.setToolTip(
+            f"Maximum zoom-in level (0.5\u2013200 {zoom_unit}/px).\n"
             "Also sets the target level of the 1:1 zoom button.")
-        f3.addRow("1:1 zoom level:", _inp(self._ns_per_px_spin))
+        f3.addRow("1:1 zoom level:", _inp(self._timescale_per_px_spin))
 
         self._cursor_spin = QSpinBox()
         self._cursor_spin.setRange(4, _MAX_CURSORS)
@@ -5629,7 +5630,7 @@ class _SettingsDialog(QDialog):
     @property
     def row_gap(self) -> int:             return self._row_gap_spin.value()
     @property
-    def ns_per_px_default(self) -> float: return self._ns_per_px_spin.value()
+    def timescale_per_px_default(self) -> float: return self._timescale_per_px_spin.value()
     @property
     def is_dark(self) -> bool:            return self._theme_combo.currentIndex() == 0
     @property
@@ -5666,7 +5667,7 @@ class MainWindow(QMainWindow):
         self._label_width_val:       int   = LABEL_WIDTH
         self._row_height_val:        int   = ROW_HEIGHT
         self._row_gap_val:            int   = ROW_GAP
-        self._ns_per_px_default_val:  float = _NS_PER_PX_DEFAULT
+        self._timescale_per_px_default_val:  float = _TIMESCALE_PER_PX_DEFAULT
         self._hover_highlight_val:    bool  = _HOVER_HIGHLIGHT_ENABLED
         self._performance_mode_val:   bool  = _PERFORMANCE_MODE_ENABLED
 
@@ -5747,11 +5748,11 @@ class MainWindow(QMainWindow):
             self._row_gap_val = saved_rg
             self._view._scene.set_row_gap(saved_rg)
 
-        # Max zoom-in level (ns/px default)
-        saved_nppd = s.get_float("view", "ns_per_px_default", _NS_PER_PX_DEFAULT)
-        if saved_nppd != _NS_PER_PX_DEFAULT:
-            self._ns_per_px_default_val = saved_nppd
-            self._view._scene.set_ns_per_px_default(saved_nppd)
+        # Max zoom-in level (timescale/px default)
+        saved_nppd = s.get_float("view", "timescale_per_px_default", _TIMESCALE_PER_PX_DEFAULT)
+        if saved_nppd != _TIMESCALE_PER_PX_DEFAULT:
+            self._timescale_per_px_default_val = saved_nppd
+            self._view._scene.set_timescale_per_px_default(saved_nppd)
 
         # Hover label highlight
         saved_hh = s.get_bool("view", "hover_highlight", _HOVER_HIGHLIGHT_ENABLED)
@@ -5791,6 +5792,8 @@ class MainWindow(QMainWindow):
         # Keep the Light-theme menu label in sync when we restored a light theme.
         if not self._is_dark:
             self._act_theme.setText("Switch to &Dark Theme")
+
+        self._refresh_zoom_ui_unit()
 
     def closeEvent(self, event) -> None:
         """Persist all runtime state to btf_viewer.rc on exit."""
@@ -5857,7 +5860,7 @@ class MainWindow(QMainWindow):
             "label_width":       str(self._label_width_val),
             "row_height":        str(self._row_height_val),
             "row_gap":           str(self._row_gap_val),
-            "ns_per_px_default": str(self._ns_per_px_default_val),
+            "timescale_per_px_default": str(self._timescale_per_px_default_val),
             "hover_highlight":   str(self._hover_highlight_val).lower(),
             "performance_mode":  str(self._performance_mode_val).lower(),
         })
@@ -5865,9 +5868,9 @@ class MainWindow(QMainWindow):
         # Zoom – save current ns/px so we can re-apply it the next time the
         # same file is opened.  -1 means "use fit-to-width" (no saved zoom).
         if self._view._scene._trace is not None:
-            s.set("zoom", "ns_per_px", str(self._view._scene.ns_per_px))
+            s.set("zoom", "timescale_per_px", str(self._view._scene.timescale_per_px))
         else:
-            s.set("zoom", "ns_per_px", "-1")
+            s.set("zoom", "timescale_per_px", "-1")
 
         # Cursor positions – saved as space-separated ns timestamps so they are
         # restored the next time the same file is opened.
@@ -6218,7 +6221,7 @@ class MainWindow(QMainWindow):
         tb.addAction("🔍+",     self._view.zoom_in)
         tb.addAction("🔍-",     self._view.zoom_out)
         self._act_zoom_1to1 = tb.addAction("1:1", self._view.zoom_1to1)
-        self._act_zoom_1to1.setToolTip("Zoom to 5 ns/pixel")
+        self._act_zoom_1to1.setToolTip("Zoom to 1:1 scale")
         tb.addAction("⊡ Fit",   self._view.zoom_fit)
         tb.addSeparator()
 
@@ -6324,6 +6327,21 @@ class MainWindow(QMainWindow):
         if persist:
             self._settings.set("view", "show_sti", str(self._show_sti).lower())
 
+    def _current_time_unit(self) -> str:
+        if self._trace is not None and getattr(self._trace, "time_scale", ""):
+            return self._trace.time_scale
+        return "ns"
+
+    def _refresh_zoom_ui_unit(self) -> None:
+        unit = self._current_time_unit()
+        self._act_zoom_1to1.setToolTip(
+            f"Zoom to {self._timescale_per_px_default_val:.1f} {unit}/pixel"
+        )
+        if self._trace is None:
+            self._zoom_label.setText("Zoom: —")
+            return
+        self._on_zoom_changed(self._view._scene.timescale_per_px)
+
     def _set_view_mode(self, mode: str) -> None:
         self._view_mode = mode
         is_task = (mode == "task")
@@ -6426,20 +6444,21 @@ class MainWindow(QMainWindow):
                 self._current_file = path
                 # Check whether to restore the saved zoom BEFORE updating last_file.
                 _prev_file  = self._settings.get("files", "last_file", "")
-                _saved_zoom = self._settings.get_float("zoom", "ns_per_px", -1.0)
+                _saved_zoom = self._settings.get_float("zoom", "timescale_per_px", -1.0)
                 self._settings.set_many("files", {
                     "last_file": path,
                     "last_dir":  os.path.dirname(path),
                 })
                 self._view.load_trace(trace)
                 self._stack.setCurrentIndex(1)
+                self._refresh_zoom_ui_unit()
                 # Re-apply the saved zoom only when re-opening the exact same file
                 # so that new files always start at fit-to-width.
                 if _prev_file == path and _saved_zoom > 0:
-                    self._view._scene._ns_per_px = max(_NS_PER_PX_DEFAULT, _saved_zoom)
+                    self._view._scene._timescale_per_px = max(_TIMESCALE_PER_PX_DEFAULT, _saved_zoom)
                     self._view._scene.rebuild()
                     self._view._fit_mode = False
-                    self._view.zoom_changed.emit(self._view._scene.ns_per_px)
+                    self._view.zoom_changed.emit(self._view._scene.timescale_per_px)
 
                 # Restore saved cursor positions (same file only)
                 _saved_cursors = self._settings.get("cursors", "positions", "")
@@ -6556,10 +6575,11 @@ class MainWindow(QMainWindow):
             label_width=self._label_width_val,
             row_height=self._row_height_val,
             row_gap=self._row_gap_val,
-            ns_per_px_default=self._ns_per_px_default_val,
+            timescale_per_px_default=self._timescale_per_px_default_val,
             is_dark=self._is_dark,
             show_hover_highlight=self._hover_highlight_val,
             performance_mode=self._performance_mode_val,
+            zoom_unit=self._current_time_unit(),
         )
         if dlg.exec_() != QDialog.Accepted:
             return
@@ -6638,11 +6658,12 @@ class MainWindow(QMainWindow):
             self._settings.set("view", "row_gap", str(new_rg))
 
         # Max zoom-in level (ns/px default)
-        new_nppd = dlg.ns_per_px_default
-        if new_nppd != self._ns_per_px_default_val:
-            self._ns_per_px_default_val = new_nppd
-            self._view._scene.set_ns_per_px_default(new_nppd)
-            self._settings.set("view", "ns_per_px_default", str(new_nppd))
+        new_nppd = dlg.timescale_per_px_default
+        if new_nppd != self._timescale_per_px_default_val:
+            self._timescale_per_px_default_val = new_nppd
+            self._view._scene.set_timescale_per_px_default(new_nppd)
+            self._settings.set("view", "timescale_per_px_default", str(new_nppd))
+            self._refresh_zoom_ui_unit()
 
         # Hover label highlight
         new_hh = dlg.show_hover_highlight
@@ -6672,13 +6693,9 @@ class MainWindow(QMainWindow):
         # If cursors were evicted, update the status-bar cursor badge strip.
         self._view.cursors_changed.emit(self._view._scene.cursor_times())
 
-    def _on_zoom_changed(self, ns_per_px: float) -> None:
-        if ns_per_px >= 1_000_000:
-            z = f"{ns_per_px/1_000_000:.1f} ms/px"
-        elif ns_per_px >= 1_000:
-            z = f"{ns_per_px/1_000:.1f} µs/px"
-        else:
-            z = f"{ns_per_px:.1f} ns/px"
+    def _on_zoom_changed(self, timescale_per_px: float) -> None:
+        unit = self._current_time_unit()
+        z = f"{timescale_per_px:.1f} {unit}/px"
         self._zoom_label.setText(f"Zoom: {z}")
 
     def _on_cursor_delete(self, ns: int) -> None:
