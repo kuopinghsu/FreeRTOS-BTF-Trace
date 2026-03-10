@@ -69,6 +69,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import zlib
 from bisect import bisect_left, bisect_right
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -120,9 +121,6 @@ MIN_SEG_WIDTH = 1.0  # Minimum painted width of a task segment (px).
 # ---- Performance / Level-of-Detail ----------------------------------------
 _TIMESCALE_PER_PX_DEFAULT       = 2.0    # Initial zoom level (nanoseconds per screen pixel).
 _HOVER_HIGHLIGHT_ENABLED = False  # Highlight task bars when hovering the label (default off).
-_PERFORMANCE_MODE_ENABLED = False # Performance-first rendering mode (default off).
-# Performance mode: inline text is shown only when zoomed in enough.
-_PERFORMANCE_TEXT_MAX_TIMESCALE_PER_PX = 6.0
 # _BatchRowItem.paint() LOD thresholds (Qt levelOfDetail: 1.0 = 100% zoom).
 _PAINT_LOD_COARSE        = 0.45   # Below: merge nearby segments, skip pen outlines.
 _PAINT_LOD_MICRO         = 0.12   # Below: draw one tinted activity bar per row.
@@ -132,6 +130,8 @@ _PAINT_LOD_MICRO         = 0.12   # Below: draw one tinted activity bar per row.
 # The summary is stored in BtfTrace and replaces O(N_segs) _lod_reduce calls
 # with an O(4096) worst-case iteration during fit-to-view rebuilds.
 _LOD_SUMMARY_BINS        = 4096
+# Second-level coarse summary used for deep zoom-out rebuilds.
+_LOD_SUMMARY_BINS_ULTRA  = 1024
 
 # ---- Cursors --------------------------------------------------------------
 _MAX_CURSORS         = 8  # Hard upper bound – must equal len(_CURSOR_COLORS).
@@ -316,10 +316,17 @@ class BtfTrace:
     seg_lod_timescale_per_px:              float                                   = 1.0
     seg_lod_by_merge_key:           Dict[str, List[TaskSegment]]            = field(default_factory=dict)
     seg_lod_starts_by_merge_key:    Dict[str, List[int]]                    = field(default_factory=dict)
+    seg_lod_ultra_timescale_per_px:        float                                   = 1.0
+    seg_lod_ultra_by_merge_key:     Dict[str, List[TaskSegment]]            = field(default_factory=dict)
+    seg_lod_ultra_starts_by_merge_key: Dict[str, List[int]]                 = field(default_factory=dict)
     core_seg_lod:                   Dict[str, List[TaskSegment]]            = field(default_factory=dict)
     core_seg_lod_starts:            Dict[str, List[int]]                    = field(default_factory=dict)
+    core_seg_lod_ultra:             Dict[str, List[TaskSegment]]            = field(default_factory=dict)
+    core_seg_lod_ultra_starts:      Dict[str, List[int]]                    = field(default_factory=dict)
     core_task_seg_lod:              Dict[str, Dict[str, List[TaskSegment]]] = field(default_factory=dict)
     core_task_seg_lod_starts:       Dict[str, Dict[str, List[int]]]         = field(default_factory=dict)
+    core_task_seg_lod_ultra:        Dict[str, Dict[str, List[TaskSegment]]] = field(default_factory=dict)
+    core_task_seg_lod_ultra_starts: Dict[str, Dict[str, List[int]]]         = field(default_factory=dict)
     # Map from merge-key → timestamp of the task_create event (first occurrence).
     task_create_times: Dict[str, int]                                       = field(default_factory=dict)
 
@@ -641,20 +648,21 @@ def parse_btf(filepath: str,
     # ------------------------------------------------------------------
     _time_span = max(time_max - time_min, 1)
     _lod_timescale_per_px = _time_span / _LOD_SUMMARY_BINS  # ns per summary bin
+    _lod_ultra_timescale_per_px = _time_span / _LOD_SUMMARY_BINS_ULTRA
 
     if progress_callback:
         progress_callback(70, "Building task LOD summaries…")
     if cancel_check and cancel_check():
         raise _ParseCancelledError()
 
-    def _make_lod_summary(segs_sorted: list) -> list:
-        """Down-sample a sorted segment list to at most _LOD_SUMMARY_BINS entries."""
-        if len(segs_sorted) <= _LOD_SUMMARY_BINS:
+    def _make_lod_summary(segs_sorted: list, bins: int, bin_span: float) -> list:
+        """Down-sample a sorted segment list to at most *bins* entries."""
+        if len(segs_sorted) <= bins:
             return segs_sorted   # already fine, skip work
         result: list = []
         prev_bin = -2
         for s in segs_sorted:
-            b = int((s.start - time_min) / _lod_timescale_per_px)
+            b = int((s.start - time_min) / bin_span)
             if b != prev_bin:
                 result.append(s)
                 prev_bin = b
@@ -664,11 +672,16 @@ def parse_btf(filepath: str,
     _seg_starts_mk:     Dict[str, list] = {}
     _seg_lod_mk:        Dict[str, list] = {}
     _seg_lod_starts_mk: Dict[str, list] = {}
+    _seg_lod_ultra_mk:        Dict[str, list] = {}
+    _seg_lod_ultra_starts_mk: Dict[str, list] = {}
     for _mk, _lst in segs_by_mk.items():
         _seg_starts_mk[_mk] = [s.start for s in _lst]
-        _lod = _make_lod_summary(_lst)
+        _lod = _make_lod_summary(_lst, _LOD_SUMMARY_BINS, _lod_timescale_per_px)
         _seg_lod_mk[_mk]        = _lod
         _seg_lod_starts_mk[_mk] = [s.start for s in _lod]
+        _lod_ultra = _make_lod_summary(_lod, _LOD_SUMMARY_BINS_ULTRA, _lod_ultra_timescale_per_px)
+        _seg_lod_ultra_mk[_mk]        = _lod_ultra
+        _seg_lod_ultra_starts_mk[_mk] = [s.start for s in _lod_ultra]
 
     if progress_callback:
         progress_callback(80, "Building core LOD summaries…")
@@ -679,11 +692,16 @@ def parse_btf(filepath: str,
     _core_seg_starts:     Dict[str, list] = {}
     _core_seg_lod:        Dict[str, list] = {}
     _core_seg_lod_starts: Dict[str, list] = {}
+    _core_seg_lod_ultra:        Dict[str, list] = {}
+    _core_seg_lod_ultra_starts: Dict[str, list] = {}
     for _c in _core_names:
         _core_seg_starts[_c] = [s.start for s in _core_segs[_c]]
-        _lod = _make_lod_summary(_core_segs[_c])
+        _lod = _make_lod_summary(_core_segs[_c], _LOD_SUMMARY_BINS, _lod_timescale_per_px)
         _core_seg_lod[_c]        = _lod
         _core_seg_lod_starts[_c] = [s.start for s in _lod]
+        _lod_ultra = _make_lod_summary(_lod, _LOD_SUMMARY_BINS_ULTRA, _lod_ultra_timescale_per_px)
+        _core_seg_lod_ultra[_c]        = _lod_ultra
+        _core_seg_lod_ultra_starts[_c] = [s.start for s in _lod_ultra]
 
     if progress_callback:
         progress_callback(88, "Building per-task core LOD summaries…")
@@ -694,15 +712,22 @@ def parse_btf(filepath: str,
     _core_task_starts:     Dict[str, dict] = {}
     _core_task_lod:        Dict[str, dict] = {}
     _core_task_lod_starts: Dict[str, dict] = {}
+    _core_task_lod_ultra:        Dict[str, dict] = {}
+    _core_task_lod_ultra_starts: Dict[str, dict] = {}
     for _c in _core_names:
         _core_task_starts[_c]     = {}
         _core_task_lod[_c]        = {}
         _core_task_lod_starts[_c] = {}
+        _core_task_lod_ultra[_c]        = {}
+        _core_task_lod_ultra_starts[_c] = {}
         for _tn, _tsegs in _core_task_segs[_c].items():
             _core_task_starts[_c][_tn] = [s.start for s in _tsegs]
-            _lod = _make_lod_summary(_tsegs)
+            _lod = _make_lod_summary(_tsegs, _LOD_SUMMARY_BINS, _lod_timescale_per_px)
             _core_task_lod[_c][_tn]        = _lod
             _core_task_lod_starts[_c][_tn] = [s.start for s in _lod]
+            _lod_ultra = _make_lod_summary(_lod, _LOD_SUMMARY_BINS_ULTRA, _lod_ultra_timescale_per_px)
+            _core_task_lod_ultra[_c][_tn]        = _lod_ultra
+            _core_task_lod_ultra_starts[_c][_tn] = [s.start for s in _lod_ultra]
 
     # STI: start-time arrays for bisect clipping in builders
     _sti_starts_by_target: Dict[str, list] = {
@@ -737,10 +762,17 @@ def parse_btf(filepath: str,
         seg_lod_timescale_per_px=_lod_timescale_per_px,
         seg_lod_by_merge_key=_seg_lod_mk,
         seg_lod_starts_by_merge_key=_seg_lod_starts_mk,
+        seg_lod_ultra_timescale_per_px=_lod_ultra_timescale_per_px,
+        seg_lod_ultra_by_merge_key=_seg_lod_ultra_mk,
+        seg_lod_ultra_starts_by_merge_key=_seg_lod_ultra_starts_mk,
         core_seg_lod=_core_seg_lod,
         core_seg_lod_starts=_core_seg_lod_starts,
+        core_seg_lod_ultra=_core_seg_lod_ultra,
+        core_seg_lod_ultra_starts=_core_seg_lod_ultra_starts,
         core_task_seg_lod=dict(_core_task_lod),
         core_task_seg_lod_starts=dict(_core_task_lod_starts),
+        core_task_seg_lod_ultra=dict(_core_task_lod_ultra),
+        core_task_seg_lod_ultra_starts=dict(_core_task_lod_ultra_starts),
         task_create_times=_task_create_times,
     )
 
@@ -842,9 +874,9 @@ def _task_color(task_raw: str) -> QColor:
         return QColor(v, v, v)
     if name in _SPECIAL_COLORS:
         return _SPECIAL_COLORS[name]
-    # Hash on merge key (task_id + name, ignoring core_id) so the same logical
-    # task always gets the same colour regardless of which core it ran on.
-    idx = hash(task_merge_key(task_raw)) % len(_PALETTE)
+    # Use a deterministic hash so palette selection is stable across runs.
+    _key = task_merge_key(task_raw).encode("utf-8", errors="replace")
+    idx = zlib.crc32(_key) % len(_PALETTE)
     return QColor(_PALETTE[idx])
 
 def _blend_core_tint(base: QColor, core: str) -> QColor:
@@ -897,7 +929,8 @@ def _sti_color(note: str) -> QColor:
     if note in _STI_COLORS:
         return _STI_COLORS[note]
     if note not in _STI_DYNAMIC_COLORS:
-        idx = hash(note) % len(_STI_PALETTE)
+        _key = (note or "").encode("utf-8", errors="replace")
+        idx = zlib.crc32(_key) % len(_STI_PALETTE)
         _STI_DYNAMIC_COLORS[note] = QColor(_STI_PALETTE[idx])
     return _STI_DYNAMIC_COLORS[note]
 
@@ -971,7 +1004,10 @@ def _visible_segs(segs: list, starts: list,
                   lod_segs: list, lod_starts: list,
                   lod_timescale_per_px: float, cur_timescale_per_px: float,
                   ns_lo: int, ns_hi: int,
-                  time_min: int, px_per_ns: float, offset: float) -> list:
+                  time_min: int, px_per_ns: float, offset: float,
+                  lod_ultra_segs: Optional[list] = None,
+                  lod_ultra_starts: Optional[list] = None,
+                  lod_ultra_timescale_per_px: float = float("inf")) -> list:
     """Return LOD-reduced, viewport-clipped segments for one timeline row/column.
 
     Two-path strategy for 1M-event performance:
@@ -993,7 +1029,15 @@ def _visible_segs(segs: list, starts: list,
     if not segs:
         return segs
 
-    if cur_timescale_per_px >= lod_timescale_per_px and lod_segs:
+    if (cur_timescale_per_px >= lod_ultra_timescale_per_px
+            and lod_ultra_segs):
+        if lod_ultra_starts:
+            lo = max(0, bisect_left(lod_ultra_starts, ns_lo) - 1)
+            hi = min(len(lod_ultra_segs), bisect_right(lod_ultra_starts, ns_hi) + 1)
+            clipped = lod_ultra_segs[lo:hi]
+        else:
+            clipped = lod_ultra_segs
+    elif cur_timescale_per_px >= lod_timescale_per_px and lod_segs:
         # Coarse path: use pre-built LOD summary
         if lod_starts:
             lo = max(0, bisect_left(lod_starts, ns_lo) - 1)
@@ -1075,8 +1119,6 @@ class TimelineScene(QGraphicsScene):
         self._row_height: int = ROW_HEIGHT              # row height (px)
         self._row_gap:    int = ROW_GAP                 # gap between rows (px)
         self._hover_highlight: bool = _HOVER_HIGHLIGHT_ENABLED
-        self._performance_mode: bool = _PERFORMANCE_MODE_ENABLED
-        self._zoom_interaction_active: bool = False
         self._task_filter_q: str = ""
         # -- Viewport time bounds (updated at each rebuild for segment clipping) --
         # Set to None initially; _update_viewport_bounds() fills them from the
@@ -1202,15 +1244,6 @@ class TimelineScene(QGraphicsScene):
         self._hover_highlight = enabled
         if not enabled:
             self.clear_hover()
-
-    def set_performance_mode(self, enabled: bool) -> None:
-        """Enable or disable performance-first rendering mode."""
-        self._performance_mode = bool(enabled)
-        self.rebuild()
-
-    def set_zoom_interaction_active(self, active: bool) -> None:
-        """Mark whether a zoom gesture is currently in progress."""
-        self._zoom_interaction_active = bool(active)
 
     # ------------------------------------------------------------------
     # Filtering
@@ -1735,6 +1768,7 @@ class TimelineScene(QGraphicsScene):
         _ruler_hdr.setZValue(11)
         self.addItem(_ruler_hdr)
         self._frozen_top_items.append((_ruler_hdr, 0))
+        lod_ultra_timescale_per_px = trace.seg_lod_ultra_timescale_per_px
 
         # --- TICK band on ruler (bottom strip) ---------------------------
         _tick_mk   = task_merge_key("TICK")
@@ -1757,7 +1791,10 @@ class TimelineScene(QGraphicsScene):
                     trace.seg_lod_by_merge_key.get(_tick_mk, []),
                     trace.seg_lod_starts_by_merge_key.get(_tick_mk, []),
                     _ht_lod_ns, _ht_npp, _ht_vlo, _ht_vhi,
-                    _ht_tmin, _ht_ppns, _ht_lw)):
+                    _ht_tmin, _ht_ppns, _ht_lw,
+                    trace.seg_lod_ultra_by_merge_key.get(_tick_mk, []),
+                    trace.seg_lod_ultra_starts_by_merge_key.get(_tick_mk, []),
+                    lod_ultra_timescale_per_px)):
                 _x1 = _ht_lw + (_seg.start - _ht_tmin) * _ht_ppns
                 _x2 = _ht_lw + (_seg.end   - _ht_tmin) * _ht_ppns
                 _w  = _x2 - _x1 if _x2 - _x1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
@@ -1844,7 +1881,10 @@ class TimelineScene(QGraphicsScene):
                     trace.seg_lod_by_merge_key.get(task, []),
                     trace.seg_lod_starts_by_merge_key.get(task, []),
                     lod_timescale_per_px, _timescale_per_px, _vp_ns_lo, _vp_ns_hi,
-                    _time_min, _px_per_ns, lw)):
+                    _time_min, _px_per_ns, lw,
+                    trace.seg_lod_ultra_by_merge_key.get(task, []),
+                    trace.seg_lod_ultra_starts_by_merge_key.get(task, []),
+                    lod_ultra_timescale_per_px)):
                 x1 = lw + (seg.start - _time_min) * _px_per_ns
                 x2 = lw + (seg.end   - _time_min) * _px_per_ns
                 w  = x2 - x1 if x2 - x1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
@@ -1859,9 +1899,7 @@ class TimelineScene(QGraphicsScene):
                 QRectF(lw, y_top, timeline_w, self._row_height),
                 seg_data, trace.time_scale,
                 label_font=font_inline, label_fm=fm_inline, label_text=disp,
-                xs=xs, time_min=trace.time_min, timescale_per_px=self._timescale_per_px,
-                performance_mode=self._performance_mode,
-                interaction_active=self._zoom_interaction_active)
+                xs=xs, time_min=trace.time_min, timescale_per_px=self._timescale_per_px)
             batch.setZValue(1)
             self.addItem(batch)
 
@@ -1989,6 +2027,7 @@ class TimelineScene(QGraphicsScene):
         _ruler_hdr.setZValue(36)
         self.addItem(_ruler_hdr)
         self._frozen_items.append((_ruler_hdr, 0))
+        lod_ultra_timescale_per_px = trace.seg_lod_ultra_timescale_per_px
 
         # --- TICK band on ruler (right strip of ruler column) ------------
         _tick_mk   = task_merge_key("TICK")
@@ -2011,7 +2050,10 @@ class TimelineScene(QGraphicsScene):
                     trace.seg_lod_by_merge_key.get(_tick_mk, []),
                     trace.seg_lod_starts_by_merge_key.get(_tick_mk, []),
                     _vt_lod_ns, _vt_npp, _vt_vlo, _vt_vhi,
-                    _vt_tmin, _vt_ppns, label_row_h)):
+                    _vt_tmin, _vt_ppns, label_row_h,
+                    trace.seg_lod_ultra_by_merge_key.get(_tick_mk, []),
+                    trace.seg_lod_ultra_starts_by_merge_key.get(_tick_mk, []),
+                    lod_ultra_timescale_per_px)):
                 _y1 = label_row_h + (_seg.start - _vt_tmin) * _vt_ppns
                 _y2 = label_row_h + (_seg.end   - _vt_tmin) * _vt_ppns
                 _h  = _y2 - _y1 if _y2 - _y1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
@@ -2091,7 +2133,10 @@ class TimelineScene(QGraphicsScene):
                     trace.seg_lod_by_merge_key.get(task, []),
                     trace.seg_lod_starts_by_merge_key.get(task, []),
                     lod_timescale_per_px, _timescale_per_px, _vp_ns_lo, _vp_ns_hi,
-                    _time_min, _px_per_ns, label_row_h)):
+                    _time_min, _px_per_ns, label_row_h,
+                    trace.seg_lod_ultra_by_merge_key.get(task, []),
+                    trace.seg_lod_ultra_starts_by_merge_key.get(task, []),
+                    lod_ultra_timescale_per_px)):
                 y1 = label_row_h + (seg.start - _time_min) * _px_per_ns
                 y2 = label_row_h + (seg.end   - _time_min) * _px_per_ns
                 h  = y2 - y1 if y2 - y1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
@@ -2106,9 +2151,7 @@ class TimelineScene(QGraphicsScene):
                 QRectF(x_left, label_row_h, col_w, timeline_h),
                 seg_data, trace.time_scale,
                 label_font=font_inline, label_fm=fm_inline, label_text=disp,
-                xs=xs, time_min=trace.time_min, timescale_per_px=self._timescale_per_px,
-                performance_mode=self._performance_mode,
-                interaction_active=self._zoom_interaction_active)
+                xs=xs, time_min=trace.time_min, timescale_per_px=self._timescale_per_px)
             batch.setZValue(1)
             self.addItem(batch)
 
@@ -2248,14 +2291,19 @@ class TimelineScene(QGraphicsScene):
         _vp_ns_lo  = self._vp_ns_lo
         _vp_ns_hi  = self._vp_ns_hi
         lod_timescale_per_px = trace.seg_lod_timescale_per_px
+        lod_ultra_timescale_per_px = trace.seg_lod_ultra_timescale_per_px
         _timescale_per_px = self._timescale_per_px
         # Pre-built LOD/start-time references for core view clipping
         c_seg_starts  = trace.core_seg_starts
         _c_seg_lod    = trace.core_seg_lod
         c_seg_lod_starts = trace.core_seg_lod_starts
+        _c_seg_lod_ultra = trace.core_seg_lod_ultra
+        c_seg_lod_ultra_starts = trace.core_seg_lod_ultra_starts
         ct_seg_starts = trace.core_task_seg_starts
         _ct_lod       = trace.core_task_seg_lod
         ct_lod_starts = trace.core_task_seg_lod_starts
+        _ct_lod_ultra = trace.core_task_seg_lod_ultra
+        ct_lod_ultra_starts = trace.core_task_seg_lod_ultra_starts
         # --- TICK band: TICK segments overlaid on the bottom strip of the ruler ---
         if _has_tick:
             _tb_y = RULER_HEIGHT - 10   # y of TICK band within ruler (bottom 10 px)
@@ -2268,7 +2316,10 @@ class TimelineScene(QGraphicsScene):
                     trace.seg_lod_by_merge_key.get(_tick_mk, []),
                     trace.seg_lod_starts_by_merge_key.get(_tick_mk, []),
                     lod_timescale_per_px, _timescale_per_px, _vp_ns_lo, _vp_ns_hi,
-                    _time_min, _px_per_ns, lw)):
+                    _time_min, _px_per_ns, lw,
+                    trace.seg_lod_ultra_by_merge_key.get(_tick_mk, []),
+                    trace.seg_lod_ultra_starts_by_merge_key.get(_tick_mk, []),
+                    lod_ultra_timescale_per_px)):
                 x1 = lw + (seg.start - _time_min) * _px_per_ns
                 x2 = lw + (seg.end   - _time_min) * _px_per_ns
                 w  = x2 - x1 if x2 - x1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
@@ -2370,7 +2421,10 @@ class TimelineScene(QGraphicsScene):
                         _c_seg_lod.get(core, []),
                         c_seg_lod_starts.get(core, []),
                         lod_timescale_per_px, _timescale_per_px, _vp_ns_lo, _vp_ns_hi,
-                        _time_min, _px_per_ns, lw)):
+                    _time_min, _px_per_ns, lw,
+                    _c_seg_lod_ultra.get(core, []),
+                    c_seg_lod_ultra_starts.get(core, []),
+                    lod_ultra_timescale_per_px)):
                     x1 = lw + (seg.start - _time_min) * _px_per_ns
                     x2 = lw + (seg.end   - _time_min) * _px_per_ns
                     w  = x2 - x1 if x2 - x1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
@@ -2466,7 +2520,10 @@ class TimelineScene(QGraphicsScene):
                         _ct_lod.get(core, {}).get(task_name, []),
                         ct_lod_starts.get(core, {}).get(task_name, []),
                         lod_timescale_per_px, _timescale_per_px, _vp_ns_lo, _vp_ns_hi,
-                        _time_min, _px_per_ns, lw)):
+                    _time_min, _px_per_ns, lw,
+                    _ct_lod_ultra.get(core, {}).get(task_name, []),
+                    ct_lod_ultra_starts.get(core, {}).get(task_name, []),
+                    lod_ultra_timescale_per_px)):
                     x1 = lw + (seg.start - _time_min) * _px_per_ns
                     x2 = lw + (seg.end   - _time_min) * _px_per_ns
                     w  = x2 - x1 if x2 - x1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
@@ -2481,9 +2538,7 @@ class TimelineScene(QGraphicsScene):
                     QRectF(lw, y_top2, timeline_w, self._row_height),
                     seg_data, trace.time_scale,
                     label_font=font_sm, label_fm=fm_sm, label_text=disp,
-                    xs=xs, time_min=trace.time_min, timescale_per_px=self._timescale_per_px,
-                    performance_mode=self._performance_mode,
-                    interaction_active=self._zoom_interaction_active)
+                    xs=xs, time_min=trace.time_min, timescale_per_px=self._timescale_per_px)
                 batch.setZValue(1)
                 self.addItem(batch)
 
@@ -2618,14 +2673,19 @@ class TimelineScene(QGraphicsScene):
         _vp_ns_lo  = self._vp_ns_lo
         _vp_ns_hi  = self._vp_ns_hi
         lod_timescale_per_px = trace.seg_lod_timescale_per_px
+        lod_ultra_timescale_per_px = trace.seg_lod_ultra_timescale_per_px
         _timescale_per_px = self._timescale_per_px
         # Pre-built LOD/start-time references for core view clipping
         c_seg_starts  = trace.core_seg_starts
         _c_seg_lod    = trace.core_seg_lod
         c_seg_lod_starts = trace.core_seg_lod_starts
+        _c_seg_lod_ultra = trace.core_seg_lod_ultra
+        c_seg_lod_ultra_starts = trace.core_seg_lod_ultra_starts
         ct_seg_starts = trace.core_task_seg_starts
         _ct_lod       = trace.core_task_seg_lod
         ct_lod_starts = trace.core_task_seg_lod_starts
+        _ct_lod_ultra = trace.core_task_seg_lod_ultra
+        ct_lod_ultra_starts = trace.core_task_seg_lod_ultra_starts
 
         # --- TICK band: TICK segments overlaid on the right strip of the ruler column ---
         if _has_tick:
@@ -2639,7 +2699,10 @@ class TimelineScene(QGraphicsScene):
                     trace.seg_lod_by_merge_key.get(_tick_mk, []),
                     trace.seg_lod_starts_by_merge_key.get(_tick_mk, []),
                     lod_timescale_per_px, _timescale_per_px, _vp_ns_lo, _vp_ns_hi,
-                    _time_min, _px_per_ns, label_row_h)):
+                    _time_min, _px_per_ns, label_row_h,
+                    trace.seg_lod_ultra_by_merge_key.get(_tick_mk, []),
+                    trace.seg_lod_ultra_starts_by_merge_key.get(_tick_mk, []),
+                    lod_ultra_timescale_per_px)):
                 y1 = label_row_h + (seg.start - _time_min) * _px_per_ns
                 y2 = label_row_h + (seg.end   - _time_min) * _px_per_ns
                 h  = y2 - y1 if y2 - y1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
@@ -2707,7 +2770,10 @@ class TimelineScene(QGraphicsScene):
                         _c_seg_lod.get(core, []),
                         c_seg_lod_starts.get(core, []),
                         lod_timescale_per_px, _timescale_per_px, _vp_ns_lo, _vp_ns_hi,
-                        _time_min, _px_per_ns, label_row_h)):
+                    _time_min, _px_per_ns, label_row_h,
+                    _c_seg_lod_ultra.get(core, []),
+                    c_seg_lod_ultra_starts.get(core, []),
+                    lod_ultra_timescale_per_px)):
                     y1 = label_row_h + (seg.start - _time_min) * _px_per_ns
                     y2 = label_row_h + (seg.end   - _time_min) * _px_per_ns
                     h  = y2 - y1 if y2 - y1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
@@ -2798,7 +2864,10 @@ class TimelineScene(QGraphicsScene):
                         _ct_lod.get(core, {}).get(task_name, []),
                         ct_lod_starts.get(core, {}).get(task_name, []),
                         lod_timescale_per_px, _timescale_per_px, _vp_ns_lo, _vp_ns_hi,
-                        _time_min, _px_per_ns, label_row_h)):
+                    _time_min, _px_per_ns, label_row_h,
+                    _ct_lod_ultra.get(core, {}).get(task_name, []),
+                    ct_lod_ultra_starts.get(core, {}).get(task_name, []),
+                    lod_ultra_timescale_per_px)):
                     y1 = label_row_h + (seg.start - _time_min) * _px_per_ns
                     y2 = label_row_h + (seg.end   - _time_min) * _px_per_ns
                     h  = y2 - y1 if y2 - y1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
@@ -2813,9 +2882,7 @@ class TimelineScene(QGraphicsScene):
                     QRectF(x_left2, label_row_h, col_w, timeline_h),
                     seg_data, trace.time_scale,
                     label_font=font_sm, label_fm=fm_sm, label_text=disp,
-                    xs=xs, time_min=trace.time_min, timescale_per_px=self._timescale_per_px,
-                    performance_mode=self._performance_mode,
-                    interaction_active=self._zoom_interaction_active)
+                    xs=xs, time_min=trace.time_min, timescale_per_px=self._timescale_per_px)
                 batch.setZValue(1)
                 self.addItem(batch)
 
@@ -3082,17 +3149,13 @@ class _BatchRowItem(QGraphicsItem):
     def __init__(self, bounding_rect: QRectF, seg_data: list, time_scale: str,
                  label_font=None, label_fm=None, label_text: str = "",
                  presorted: bool = False, xs: Optional[list] = None,
-                 time_min: int = 0, timescale_per_px: float = 0.0,
-                 performance_mode: bool = False,
-                 interaction_active: bool = False):
+                 time_min: int = 0, timescale_per_px: float = 0.0):
         super().__init__()
         self._bounding_rect = bounding_rect
         self._seg_data      = seg_data      # [(QRectF, QBrush, QPen, seg|None)]
         self._time_scale    = time_scale
         self._time_min      = time_min
         self._timescale_per_px     = timescale_per_px
-        self._performance_mode = performance_mode
-        self._interaction_active = interaction_active
         self._label_font    = label_font
         self._label_fm      = label_fm
         self._label_text    = label_text
@@ -3191,13 +3254,7 @@ class _BatchRowItem(QGraphicsItem):
             painter.restore()
             return
 
-        # Labeled rows stay in detail mode only above a lower LOD floor;
-        # this keeps 1:1 readability while restoring fast coarse mode when
-        # zooming out further.
-        _has_inline_label = bool(self._label_font and self._label_text and self._label_fm)
-        _precision_zone = abs(_scene_left) > 2_000_000.0
-        _label_detail_lod_floor = _PAINT_LOD_COARSE if self._performance_mode else 0.0
-        if lod < _PAINT_LOD_COARSE and not (_has_inline_label and lod >= _label_detail_lod_floor):
+        if lod < _PAINT_LOD_COARSE:
             # ---- Tier 2: coarse LOD ----------------------------------------------
             # Use pre-merged coarse_data.  rebuild() already clips to ±1.5×
             # the viewport so painting all coarse entries is safe.
@@ -3244,16 +3301,7 @@ class _BatchRowItem(QGraphicsItem):
         if _rebase:
             painter.restore()
         # Inline text labels – second pass to minimise font/pen switches.
-        # Performance mode policy:
-        # 1) hide text while zoom interaction is active,
-        # 2) show text only in zoomed-in range (ns/px <= threshold).
-        _allow_inline_text = True
-        if self._performance_mode:
-            _allow_inline_text = (
-                (not self._interaction_active)
-                and (self._timescale_per_px <= _PERFORMANCE_TEXT_MAX_TIMESCALE_PER_PX)
-            )
-        if _allow_inline_text and self._label_font and self._label_text and self._label_fm:
+        if self._label_font and self._label_text and self._label_fm:
             painter.setPen(QPen(QColor("#FFFFFF")))
             painter.setFont(self._label_font)
             txt = self._label_text
@@ -3663,10 +3711,6 @@ class TimelineView(QGraphicsView):
         self._zoom_timer.setSingleShot(True)
         self._zoom_timer.setInterval(60)   # ms – coalesce wheel events
         self._zoom_timer.timeout.connect(self._flush_zoom)
-        self._zoom_text_resume_timer = QTimer(self)
-        self._zoom_text_resume_timer.setSingleShot(True)
-        self._zoom_text_resume_timer.setInterval(30)
-        self._zoom_text_resume_timer.timeout.connect(self._finish_zoom_interaction)
 
         # Two-timer scroll-rebuild strategy:
         #   _pan_heartbeat: repeating, fires every 50ms WHILE the user is
@@ -3773,7 +3817,6 @@ class TimelineView(QGraphicsView):
 
     def zoom_in(self) -> None:
         self._fit_mode = False
-        self._begin_zoom_interaction()
         self._zoom_accum *= 2.0
         if self._zoom_anchor_pos is None:
             self._zoom_anchor_pos = self.viewport().rect().center()
@@ -3781,7 +3824,6 @@ class TimelineView(QGraphicsView):
 
     def zoom_out(self) -> None:
         self._fit_mode = False
-        self._begin_zoom_interaction()
         self._zoom_accum *= 0.5
         if self._zoom_anchor_pos is None:
             self._zoom_anchor_pos = self.viewport().rect().center()
@@ -4198,7 +4240,6 @@ class TimelineView(QGraphicsView):
 
     def wheelEvent(self, event: QWheelEvent) -> None:
         if event.modifiers() & Qt.ControlModifier:
-            self._begin_zoom_interaction()
             angle  = event.angleDelta().y()
             factor = 1.15 if angle > 0 else 1 / 1.15
             # Accumulate factor; record anchor from the *first* event in the
@@ -4234,7 +4275,6 @@ class TimelineView(QGraphicsView):
         self._zoom_anchor_pos  = None
         if factor != 1.0:
             self._do_zoom(factor, anchor)
-        self._schedule_zoom_interaction_finish()
 
     def eventFilter(self, obj, e) -> bool:
         """Intercept native pinch-zoom gestures delivered to the viewport."""
@@ -4248,11 +4288,9 @@ class TimelineView(QGraphicsView):
                 _ZOOM_GESTURE = getattr(Qt, 'ZoomNativeGesture', 3)
                 try:
                     if int(e.gestureType()) == int(_ZOOM_GESTURE):
-                        self._begin_zoom_interaction()
                         factor = 1.0 + e.value()
                         if factor > 0.1:
                             self._do_zoom(factor, e.pos())
-                        self._schedule_zoom_interaction_finish()
                         return True
                 except AttributeError:
                     pass
@@ -4277,6 +4315,24 @@ class TimelineView(QGraphicsView):
         offset = (vp_center.x() - vp_pos.x()) if is_horiz else (vp_center.y() - vp_pos.y())
 
         prev_timescale_per_px = self._scene.timescale_per_px
+        trace = self._scene._trace
+        if trace is not None:
+            axis_px = self.viewport().width() if is_horiz else self.viewport().height()
+            axis_px = max(1, axis_px)
+            target_timescale = prev_timescale_per_px / factor
+            target_timescale = max(
+                self._scene._timescale_per_px_default,
+                min(target_timescale, self._scene._timescale_per_px_fit),
+            )
+            center_target_ns = center_ns + int(offset * target_timescale)
+            half_span_ns = int((axis_px * target_timescale) / 2)
+            hint_lo = max(trace.time_min, center_target_ns - half_span_ns)
+            hint_hi = min(trace.time_max, center_target_ns + half_span_ns)
+            if hint_hi > hint_lo:
+                # Rebuild uses this range immediately before centerOn() updates
+                # scrollbars, preventing far-right zoom-out from clipping to a
+                # pathological full-trace range.
+                self._scene._ns_range_hint = (hint_lo, hint_hi)
         self._scene.zoom(factor)
         if self._scene.timescale_per_px == prev_timescale_per_px:
             return  # already at zoom limit – nothing changed, skip scroll/emit
@@ -4290,21 +4346,6 @@ class TimelineView(QGraphicsView):
             self.centerOn(new_scene_coord + offset, cur_scene_center.y())
         else:
             self.centerOn(cur_scene_center.x(), new_scene_coord + offset)
-
-    def _begin_zoom_interaction(self) -> None:
-        if self._scene._performance_mode:
-            self._scene.set_zoom_interaction_active(True)
-
-    def _schedule_zoom_interaction_finish(self) -> None:
-        if self._scene._performance_mode:
-            self._zoom_text_resume_timer.start()
-
-    def _finish_zoom_interaction(self) -> None:
-        if not self._scene._performance_mode:
-            return
-        self._scene.set_zoom_interaction_active(False)
-        if self._scene._trace is not None:
-            self._scene.rebuild()
 
     # ------------------------------------------------------------------
     # Scroll and viewport sync
@@ -5375,7 +5416,6 @@ class _SettingsDialog(QDialog):
                  show_sti: bool, show_grid: bool,
                  show_legend: bool, show_stats: bool,
                  show_hover_highlight: bool,
-                 performance_mode: bool,
                  zoom_unit: str,
                  label_width: int, row_height: int, row_gap: int,
                  timescale_per_px_default: float,
@@ -5503,16 +5543,9 @@ class _SettingsDialog(QDialog):
         self._hover_hl_cb.setToolTip(
             "Dim all other segments when hovering a task label.\n"
             "Disable for better performance with large traces.")
-        self._perf_mode_cb = QCheckBox("Performance mode")
-        self._perf_mode_cb.setChecked(performance_mode)
-        self._perf_mode_cb.setToolTip(
-            "Prefer coarse timeline rendering for smoother interaction.\n"
-            "Inline segment text is hidden while zooming and shown only when\n"
-            f"zoomed in (<= {_PERFORMANCE_TEXT_MAX_TIMESCALE_PER_PX:.1f} {zoom_unit}/px).")
         v2.addWidget(self._indented(self._sti_cb))
         v2.addWidget(self._indented(self._grid_cb))
         v2.addWidget(self._indented(self._hover_hl_cb))
-        v2.addWidget(self._indented(self._perf_mode_cb))
         v2.addStretch()
 
         self._content_stack.addWidget(p2)
@@ -5635,9 +5668,6 @@ class _SettingsDialog(QDialog):
     def is_dark(self) -> bool:            return self._theme_combo.currentIndex() == 0
     @property
     def show_hover_highlight(self) -> bool: return self._hover_hl_cb.isChecked()
-    @property
-    def performance_mode(self) -> bool:   return self._perf_mode_cb.isChecked()
-
 # ---------------------------------------------------------------------------
 # Main Window
 # ---------------------------------------------------------------------------
@@ -5669,7 +5699,6 @@ class MainWindow(QMainWindow):
         self._row_gap_val:            int   = ROW_GAP
         self._timescale_per_px_default_val:  float = _TIMESCALE_PER_PX_DEFAULT
         self._hover_highlight_val:    bool  = _HOVER_HIGHLIGHT_ENABLED
-        self._performance_mode_val:   bool  = _PERFORMANCE_MODE_ENABLED
 
         self.setWindowTitle("BTF Trace Viewer")
         self.resize(1280, 720)
@@ -5759,12 +5788,6 @@ class MainWindow(QMainWindow):
         if saved_hh != _HOVER_HIGHLIGHT_ENABLED:
             self._hover_highlight_val = saved_hh
             self._view._scene.set_hover_highlight(saved_hh)
-
-        # Performance mode
-        saved_pm = s.get_bool("view", "performance_mode", _PERFORMANCE_MODE_ENABLED)
-        if saved_pm != _PERFORMANCE_MODE_ENABLED:
-            self._performance_mode_val = saved_pm
-            self._view._scene.set_performance_mode(saved_pm)
 
         # Orientation (horizontal is the default)
         if not s.get_bool("view", "horizontal", True):
@@ -5862,7 +5885,6 @@ class MainWindow(QMainWindow):
             "row_gap":           str(self._row_gap_val),
             "timescale_per_px_default": str(self._timescale_per_px_default_val),
             "hover_highlight":   str(self._hover_highlight_val).lower(),
-            "performance_mode":  str(self._performance_mode_val).lower(),
         })
 
         # Zoom – save current ns/px so we can re-apply it the next time the
@@ -6578,7 +6600,6 @@ class MainWindow(QMainWindow):
             timescale_per_px_default=self._timescale_per_px_default_val,
             is_dark=self._is_dark,
             show_hover_highlight=self._hover_highlight_val,
-            performance_mode=self._performance_mode_val,
             zoom_unit=self._current_time_unit(),
         )
         if dlg.exec_() != QDialog.Accepted:
@@ -6671,13 +6692,6 @@ class MainWindow(QMainWindow):
             self._hover_highlight_val = new_hh
             self._view._scene.set_hover_highlight(new_hh)
             self._settings.set("view", "hover_highlight", str(new_hh).lower())
-
-        # Performance mode
-        new_pm = dlg.performance_mode
-        if new_pm != self._performance_mode_val:
-            self._performance_mode_val = new_pm
-            self._view._scene.set_performance_mode(new_pm)
-            self._settings.set("view", "performance_mode", str(new_pm).lower())
 
     # -- Status / legend callbacks -------------------------------------
 
