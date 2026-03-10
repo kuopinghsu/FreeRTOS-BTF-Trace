@@ -14,7 +14,7 @@ A PyQt5-based interactive visualiser for FreeRTOS context-switch traces in **Bes
 - **16-colour core palette** — up to 16 distinct core colours; cycles automatically beyond that
 - **Horizontal and Vertical orientation** — switch at any time; active mode is highlighted in the toolbar
 - **Smooth zoom & pan** — mouse wheel, two-finger pinch (macOS), and keyboard shortcuts
-- **Default zoom 2 ns/px** — the **1:1** toolbar button resets to 2 nanoseconds per pixel (configurable in Settings)
+- **Default zoom 2 timescale units/px** — the **1:1** toolbar button resets to 2 timescale units per pixel (for `ns` timescale, the UI shows `2 ns/px`; configurable in Settings)
 - **Viewport culling** — only visible rows/columns and segments are rendered; no slowdown on large traces
 - **2–8 measurement cursors** — 4 by default; delta times shown on the timeline and in the status bar; maximum configurable in Settings
 - **Task highlight** — hover or click any task label or Legend row to highlight all its segments
@@ -146,7 +146,7 @@ The Legend lists every task with its colour swatch and `Name[id]` label.
 | Two-finger pinch (macOS) | Zoom in or out |
 | Scroll wheel / trackpad swipe | Pan along the time axis |
 | `Ctrl+0` | Fit entire trace to window |
-| **1:1** toolbar button | Reset to default zoom (2 ns/pixel; configurable in Settings) |
+| **1:1** toolbar button | Reset to default zoom (2 timescale units/pixel; for `ns` timescale, UI shows `2 ns/px`; configurable in Settings) |
 | Toolbar zoom+ / zoom− buttons | Zoom in or out by 2× |
 
 ---
@@ -188,7 +188,7 @@ Open **Settings** from the toolbar (**⚙ Settings**) or via **View → ⚙ Sett
 | Label column | Width of the frozen task/core label column (60–600 px) |
 | Row height | Height of each task/core row (12–60 px) |
 | Row gap | Vertical gap between rows (0–20 px) |
-| 1:1 zoom level | Target zoom of the **1:1** button and the maximum zoom-in limit (0.5–200 ns/px) |
+| 1:1 zoom level | Target zoom of the **1:1** button and the maximum zoom-in limit (0.5–200 timescale units/px; UI unit follows trace timescale, e.g. `ns/px`) |
 | Max cursors | Maximum number of simultaneously visible cursors (4–8) |
 
 ---
