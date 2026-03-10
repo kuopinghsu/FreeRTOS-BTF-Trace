@@ -4237,8 +4237,17 @@ class _LoadProgressDialog(QWidget):
     """
 
     def __init__(self, title: str, parent=None):
-        super().__init__(parent, Qt.Tool | Qt.FramelessWindowHint)
+        # The frameless Qt.Tool variant is primarily needed on macOS to avoid
+        # delayed first paint at startup. On Windows it may leave a tiny black
+        # artifact near (0, 0), so use a regular dialog there.
+        if sys.platform == "darwin":
+            flags = Qt.Tool | Qt.FramelessWindowHint
+        else:
+            flags = Qt.Dialog | Qt.WindowTitleHint | Qt.CustomizeWindowHint
+        super().__init__(parent, flags)
         self.setWindowModality(Qt.ApplicationModal)
+        if sys.platform != "darwin":
+            self.setWindowTitle("Loading")
         self.setMinimumWidth(380)
 
         layout = QVBoxLayout(self)
@@ -4316,16 +4325,14 @@ class _LoadProgressDialog(QWidget):
         p = self.parent()
         if p is not None:
             p.installEventFilter(self)
-        self.show()
-        self.raise_()
-        self.activateWindow()
-        # Force an immediate paint so the bar is visible before the thread starts.
-        self.repaint()
-        QApplication.processEvents()
         # Centre over the parent window.
         _c = parent_geom.center()
         self.move(_c.x() - self.width() // 2,
                   _c.y() - self.height() // 2)
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        # Force an immediate paint so the bar is visible before the thread starts.
         self.repaint()
         QApplication.processEvents()
 
