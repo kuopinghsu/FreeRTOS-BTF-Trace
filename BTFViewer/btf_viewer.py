@@ -1104,6 +1104,13 @@ class TimelineScene(QGraphicsScene):
         # Stored as ns timestamps; drawn as colored dash-lines above everything.
         self._cursor_times: List[int] = []
         self._cursor_items: list = []    # live QGraphicsItems for cursors
+        # Counter of cursor-label entries appended to _frozen_top_items by
+        # the most recent _draw_cursors() call.  Used to purge stale entries
+        # on a direct (non-rebuild) _draw_cursors() call (e.g. cursor drag).
+        self._cursor_frozen_top_count: int = 0
+        # Counter of cursor-label entries appended to _frozen_items by
+        # vertical-mode _draw_cursors() calls (left-edge frozen labels).
+        self._cursor_frozen_left_count: int = 0
         # -- Task highlight state ----------------------------------------
         self._locked_task:  Optional[str] = None   # click-locked task (persistent)
         self._hovered_task: Optional[str] = None   # hover task (transient)
@@ -1342,13 +1349,32 @@ class TimelineScene(QGraphicsScene):
             self.removeItem(item)
         self._cursor_items.clear()
 
+        # Purge any cursor-label entries that were appended to _frozen_top_items
+        # by the previous _draw_cursors() call.  This is only needed on direct
+        # calls (e.g. cursor drag); rebuild() already resets _frozen_top_items.
+        if self._cursor_frozen_top_count > 0:
+            if len(self._frozen_top_items) >= self._cursor_frozen_top_count:
+                del self._frozen_top_items[-self._cursor_frozen_top_count:]
+            self._cursor_frozen_top_count = 0
+        if self._cursor_frozen_left_count > 0:
+            if len(self._frozen_items) >= self._cursor_frozen_left_count:
+                del self._frozen_items[-self._cursor_frozen_left_count:]
+            self._cursor_frozen_left_count = 0
+
         if self._trace is None or not self._cursor_times:
             return
 
-        scene_r = self.sceneRect()
+        scene_r  = self.sceneRect()
         font     = _monospace_font(self._font_size)
         font_big = _monospace_font(self._font_size + 1, QFont.Bold)
         fm_bold  = QFontMetrics(font_big)
+
+        # Get the current scene-top so cursor labels can be registered as
+        # y-frozen items (always visible in the ruler area even when the user
+        # has scrolled the task rows down).
+        _views = self.views()
+        _scene_top = _views[0].mapToScene(QPoint(0, 0)).y() if _views else 0.0
+        _scene_left = _views[0].mapToScene(QPoint(0, 0)).x() if _views else 0.0
 
         sorted_cursors = sorted(enumerate(self._cursor_times), key=lambda x: x[1])
 
@@ -1371,15 +1397,22 @@ class TimelineScene(QGraphicsScene):
                 tw = fm_bold.horizontalAdvance(lbl.text())
                 th = fm_bold.height()
                 lbl_x = min(x + 3, scene_r.width() - tw - 4)
-                lbl_y = 2 + (orig_idx + 1) * (th + 2)
+                _orig_y = 2 + (orig_idx + 1) * (th + 2)
+                lbl_y   = _scene_top + _orig_y
                 bg = self.addRect(
-                    QRectF(lbl_x - 2, lbl_y - 1, tw + 4, th + 2),
+                    QRectF(0, 0, tw + 4, th + 2),
                     QPen(Qt.NoPen),
                     QBrush(QColor(0, 0, 0, 180)),
                 )
                 bg.setZValue(31)
+                bg.setPos(lbl_x - 2, lbl_y - 1)
                 lbl.setPos(lbl_x, lbl_y)
                 self._cursor_items.extend([bg, lbl])
+                # Register label + background as y-frozen so _reposition_frozen_top
+                # keeps them in the ruler area regardless of vertical scroll.
+                self._frozen_top_items.append((bg, _orig_y - 1))
+                self._frozen_top_items.append((lbl, _orig_y))
+                self._cursor_frozen_top_count += 2
 
                 if order > 0:
                     prev_ns = sorted_cursors[order - 1][1]
@@ -1415,16 +1448,24 @@ class TimelineScene(QGraphicsScene):
                 lbl.setZValue(32)
                 tw = fm_bold.horizontalAdvance(lbl.text())
                 th = fm_bold.height()
-                lbl_x = 2
-                lbl_y = y + 2 + (orig_idx + 1) * (th + 2)
+                # Keep vertical labels outside the frozen ruler column
+                # (ruler z=35/36 would otherwise overdraw label z=31/32).
+                _left_pad = RULER_WIDTH + 4
+                lbl_x = _scene_left + _left_pad
+                lbl_y = y + 2
                 bg = self.addRect(
-                    QRectF(lbl_x - 2, lbl_y - 1, tw + 4, th + 2),
+                    QRectF(0, 0, tw + 4, th + 2),
                     QPen(Qt.NoPen),
                     QBrush(QColor(0, 0, 0, 180)),
                 )
                 bg.setZValue(31)
+                bg.setPos(lbl_x - 2, lbl_y - 1)
                 lbl.setPos(lbl_x, lbl_y)
                 self._cursor_items.extend([bg, lbl])
+                # Keep vertical-mode cursor labels frozen at viewport-left.
+                self._frozen_items.append((bg, _left_pad - 2))
+                self._frozen_items.append((lbl, _left_pad))
+                self._cursor_frozen_left_count += 2
 
                 if order > 0:
                     prev_ns = sorted_cursors[order - 1][1]
@@ -1545,6 +1586,8 @@ class TimelineScene(QGraphicsScene):
         self._cursor_items = []
         self._frozen_items = []
         self._frozen_top_items = []
+        self._cursor_frozen_top_count = 0
+        self._cursor_frozen_left_count = 0
         self._task_row_rects = {}
         self._hover_overlay_items = []   # clear() removed them from the scene
         if self._trace is None:
@@ -3495,40 +3538,13 @@ class TimelineView(QGraphicsView):
             min(trace.time_max, ns + _half),
         )
         self._scene.rebuild()
-        coord = self._scene.ns_to_scene_coord(ns)
-        # If the cursor falls in a gap between segments, snap the viewport to
-        # the nearest loaded segment so the user sees content rather than a
-        # blank screen.  This is common when zoom is tight (e.g. 2 ns/px) and
-        # the cursor was placed sub-pixel inside a gap during fit-mode.
-        vp_half_px = self.viewport().width() / 2.0
-        is_horiz   = self._scene._horizontal
-        best_coord = coord
-        best_dist  = float('inf')
-        for item in self._scene.items():
-            seg_data = getattr(item, '_seg_data', None)
-            if not seg_data:
-                continue
-            for rect, _, _, _ in seg_data:
-                c1, c2 = (
-                    (rect.x(), rect.right()) if is_horiz
-                    else (rect.y(), rect.bottom())
-                )
-                if c1 <= coord + vp_half_px and c2 >= coord - vp_half_px:
-                    # At least one segment already overlaps the viewport.
-                    best_dist  = 0.0
-                    best_coord = coord
-                    break
-                dist = min(abs(c1 - coord), abs(c2 - coord))
-                if dist < best_dist:
-                    best_dist  = dist
-                    best_coord = (c1 + c2) / 2.0
-            if best_dist == 0.0:
-                break
+        coord     = self._scene.ns_to_scene_coord(ns)
+        is_horiz  = self._scene._horizontal
         cur_scene = self.mapToScene(self.viewport().rect().center())
         if is_horiz:
-            self.centerOn(best_coord, cur_scene.y())
+            self.centerOn(coord, cur_scene.y())
         else:
-            self.centerOn(cur_scene.x(), best_coord)
+            self.centerOn(cur_scene.x(), coord)
         self.viewport().update()
 
     def set_horizontal(self, h: bool) -> None:
@@ -3844,6 +3860,7 @@ class TimelineView(QGraphicsView):
             ns       = self._scene.scene_to_ns(coord)
             self._scene._cursor_times[self._dragging_cursor_idx] = ns
             self._scene._draw_cursors()
+            self._reposition_frozen_top()   # keep cursor labels in the ruler area
             self.cursors_changed.emit(self._scene.cursor_times())
             event.accept()
             return
@@ -4745,10 +4762,39 @@ class StatsPanel(QWidget):
                            if (_tn := parse_task_name(s.task)[2]) != "TICK"
                            and not _tn.startswith("IDLE"))
                 pct  = 100.0 * act / total_ns if total_ns > 0 else 0.0
-                n    = max(0, min(10, round(pct / 10)))
-                bar  = "█" * n + "░" * (10 - n)
-                self._ilay.addWidget(
-                    self._lbl(f"  {core}:  {bar}  {pct:.1f}%", color="#77BB77"))
+                row = QWidget()
+                hlay = QHBoxLayout(row)
+                hlay.setContentsMargins(0, 0, 0, 0)
+                hlay.setSpacing(8)
+
+                core_lbl = self._lbl(f"  {core}:", color="#D4D4D4")
+                core_lbl.setMinimumWidth(72)
+                hlay.addWidget(core_lbl)
+
+                pbar = QProgressBar()
+                pbar.setRange(0, 1000)
+                pbar.setValue(int(round(max(0.0, min(100.0, pct)) * 10.0)))
+                pbar.setTextVisible(False)
+                pbar.setFixedHeight(14)
+                pbar.setStyleSheet("""
+                    QProgressBar {
+                        border: 1px solid #4A4A4A;
+                        border-radius: 4px;
+                        background-color: #5A5A5A;
+                    }
+                    QProgressBar::chunk {
+                        background-color: #5FCF6F;
+                        border-radius: 3px;
+                    }
+                """)
+                hlay.addWidget(pbar, 1)
+
+                pct_lbl = self._lbl(f"{pct:.1f}%", color="#77BB77")
+                pct_lbl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+                hlay.addWidget(pct_lbl)
+                hlay.addStretch(1)
+
+                self._ilay.addWidget(row)
 
         # -- Top tasks by CPU time (excl. IDLE, top 10) -------------------
         self._ilay.addWidget(self._sep())
@@ -4802,6 +4848,7 @@ class RcSettings:
     [window]   width, height, x, y, maximized
     [view]     font_size, theme, horizontal, view_mode, show_sti, show_grid
     [zoom]     ns_per_px  (-1 = use fit-to-width on next open)
+    [cursors]  positions  (space-separated ns timestamps; "" = no saved cursors)
     [files]    last_file, last_dir
     """
 
@@ -4825,6 +4872,9 @@ class RcSettings:
         },
         "zoom": {
             "ns_per_px": "-1",
+        },
+        "cursors": {
+            "positions": "",
         },
         "files": {
             "last_file": "",
@@ -5511,6 +5561,12 @@ class MainWindow(QMainWindow):
         else:
             s.set("zoom", "ns_per_px", "-1")
 
+        # Cursor positions – saved as space-separated ns timestamps so they are
+        # restored the next time the same file is opened.
+        _cursor_times = self._view._scene.cursor_times()
+        s.set("cursors", "positions",
+              " ".join(str(t) for t in _cursor_times) if _cursor_times else "")
+
         # ---- 3. Hide the window immediately -----------------------------------
         # The window disappears right away so the user never sees a freeze while
         # we clean up the scene and free the trace below.
@@ -6000,6 +6056,17 @@ class MainWindow(QMainWindow):
                     self._view._scene.rebuild()
                     self._view._fit_mode = False
                     self._view.zoom_changed.emit(self._view._scene.ns_per_px)
+
+                # Restore saved cursor positions (same file only)
+                _saved_cursors = self._settings.get("cursors", "positions", "")
+                if _prev_file == path and _saved_cursors.strip():
+                    try:
+                        for _ns in [int(t) for t in _saved_cursors.split()]:
+                            self._view._scene.add_cursor(_ns)
+                        self._view.cursors_changed.emit(
+                            self._view._scene.cursor_times())
+                    except ValueError:
+                        pass  # malformed rc entry – skip silently
                 progress_dialog.update_progress(100, "Building legend…")
                 QApplication.processEvents()
                 self._legend.rebuild(trace)
