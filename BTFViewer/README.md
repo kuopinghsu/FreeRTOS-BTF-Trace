@@ -13,15 +13,21 @@ A PyQt5-based interactive visualiser for FreeRTOS context-switch traces in **Bes
 - **Per-core expand / collapse** — click any core label to expand or collapse just that core
 - **16-colour core palette** — up to 16 distinct core colours; cycles automatically beyond that
 - **Deterministic colour mapping** — task and STI colours are assigned in a stable, repeatable sequence across runs
-- **Horizontal and Vertical orientation** — switch at any time; active mode is highlighted in the toolbar
+- **Horizontal and Vertical orientation** — switch at any time; active mode is highlighted in the toolbar; last used orientation is remembered across launches
 - **Smooth zoom & pan** — mouse wheel, two-finger pinch (macOS), and keyboard shortcuts
 - **Default zoom 2 timescale units/px** — the **1:1** toolbar button resets to 2 timescale units per pixel (for `ns` timescale, the UI shows `2 ns/px`; configurable in Settings)
+- **Zoom to cursor range** — `Ctrl+R` or the **⊡ Range** toolbar button fits the viewport exactly between cursor C1 (left/top edge) and the last cursor (right/bottom edge)
 - **Viewport culling** — only visible rows/columns and segments are rendered; no slowdown on large traces
 - **2–8 measurement cursors** — 4 by default; delta times shown on the timeline and in the status bar; maximum configurable in Settings
+- **Cursor range statistics** — when 2+ cursors are placed, the status bar shows the min/max/average segment duration within the selected range
 - **Task highlight** — hover or click any task label or Legend row to highlight all its segments
 - **Dockable Legend panel** — colour swatches for every task, with a search box and the same highlight interaction
 - **Dockable Statistics panel** — per-core CPU utilisation and per-task CPU time breakdown
 - **STI event markers** — software trace items rendered as coloured diamond markers
+- **Find & Jump** — search for any task name; `F3` / `Shift+F3` steps through all matching segments
+- **Bookmarks & Annotations** — mark important timestamps and attach free-text notes; persisted per trace file in `btf_viewer.rc`
+- **Right-click context menu** — place/remove/clear cursors, add a bookmark, or add an annotation, all from a single right-click anywhere on the timeline
+- **Recent files** — **File → Open Recent** lists the 5 most recently opened traces for one-click reopening
 - **Dark / Light theme** — switch from **View → Switch to Light/Dark Theme** or **Settings → Appearance**
 - **Export to PNG / clipboard** — save the current viewport as a PNG file or copy it to the clipboard
 - **Persistent settings** — all preferences stored in `btf_viewer.rc` alongside the script
@@ -116,7 +122,8 @@ Between 2 and 8 cursors can be placed on the timeline (default: 4; adjustable in
 
 | Action | Effect |
 |--------|--------|
-| Right-click on the timeline area | Remove the nearest cursor |
+| Right-click → **Remove nearest cursor** | Remove the cursor closest to the click position |
+| Right-click → **Clear all cursors** | Remove all cursors at once |
 | `Shift+C` | Clear all cursors |
 | Drag a status-bar cursor badge out of the status bar | Remove that specific cursor |
 
@@ -125,6 +132,15 @@ Between 2 and 8 cursors can be placed on the timeline (default: 4; adjustable in
 | Action | Effect |
 |--------|--------|
 | Click a `C1` / `C2` / ... badge in the status bar | Scroll the view to that cursor |
+| `Ctrl+R` / **⊡ Range** toolbar button | Zoom view to fit exactly between C1 and the last cursor |
+
+### Cursor Range Statistics
+
+When two or more cursors are placed, the status bar shows three aggregate values computed over all task segments that start **and** end within the cursor range:
+
+- **min** — shortest segment in the range
+- **max** — longest segment in the range
+- **avg** — mean segment duration in the range
 
 ---
 
@@ -206,6 +222,83 @@ It shows:
 
 ---
 
+## Find & Jump
+
+The **Find** bar (at the bottom of the window; also reachable via **Navigate → Find Task…** or `Ctrl+F`) searches for task names within the loaded trace.
+
+| Action | Effect |
+|--------|--------|
+| Type in the search box | Highlight all matching task segments in the timeline |
+| `F3` / **Navigate → Find Next** | Jump to the next matching segment |
+| `Shift+F3` / **Navigate → Find Previous** | Jump to the previous matching segment |
+| `Esc` | Close the Find bar and clear the search |
+
+The status label next to the search box shows the total number of matches and the current position (e.g. `12 matches (at 4)`).
+
+---
+
+## Bookmarks & Annotations
+
+Both are stored per-trace in `btf_viewer.rc` and restored automatically the next time the same file is opened. They are listed together in the **Marks** dock (toggle via **View → Marks**).
+
+### Bookmarks
+
+A **bookmark** is a simple timestamped marker — a flag pinned to a specific moment in the trace. Use bookmarks when you want to quickly return to a position you already understand.
+
+**Adding a bookmark:**
+- Right-click anywhere on the timeline and choose **Add Bookmark here**.
+- Or, via **Navigate → Add Bookmark** (`Ctrl+B`) to place one at the viewport centre.
+
+### Annotations
+
+An **annotation** is a timestamped note — you supply a short text description that is stored alongside the timestamp. Use annotations when you want to record *why* a moment is interesting (observations, bug descriptions, review comments, etc.).
+
+**Adding an annotation:**
+- Right-click anywhere on the timeline and choose **Add Annotation here**; a prompt asks for the note text.
+- Or, via **Navigate → Add Annotation** to annotate the viewport centre.
+
+### Bookmark vs. Annotation — when to use which
+
+| Scenario | Use |
+|----------|-----|
+| You found the `CAN_Rx` preemption that triggers a deadline miss and want to jump back to it quickly | **Bookmark** — quick marker, no text needed |
+| You want to leave a note — *"first occurrence of 3 ms latency spike on Core_2, ticket #492"* — for yourself or a colleague | **Annotation** — the text note travels with the `.rc` file |
+| Marking several candidate events to compare before deciding which matters | **Bookmarks** — fast to place, easy to jump between |
+| Documenting a code review of a trace, explaining each anomaly | **Annotations** — each one carries the explanation inline |
+| Sharing a trace with a colleague and highlighting the two key moments for them to look at | **Annotations** — the notes appear without any external document needed |
+
+### Managing marks
+
+In the **Marks** dock:
+
+- **Double-click** a bookmark or annotation row to jump to its timestamp.
+- **Delete** key (or the **Delete** button) removes the selected mark.
+- Bookmark labels can be renamed **inline** by double-clicking the label text.
+
+---
+
+## Right-Click Context Menu
+
+Right-clicking anywhere on the timeline opens a context menu:
+
+| Item | Effect |
+|------|--------|
+| **Place cursor here** | Add a cursor at the clicked timestamp |
+| **Remove nearest cursor** | Remove the cursor closest to the click position |
+| **Clear all cursors** | Remove all cursors |
+| **Add Bookmark here** | Add a bookmark at the clicked timestamp |
+| **Add Annotation here** | Prompt for note text, then add an annotation at the clicked timestamp |
+
+The **Add Bookmark** and **Add Annotation** items are only shown when a trace is loaded.
+
+---
+
+## Recent Files
+
+**File → Open Recent** lists the 5 most recently opened `.btf` files. Clicking an entry opens it immediately without a file dialog. The list is stored in `btf_viewer.rc` and persists across launches.
+
+---
+
 ## Keyboard Shortcuts
 
 | Key | Action |
@@ -216,6 +309,11 @@ It shows:
 | `Ctrl++` | Zoom in |
 | `Ctrl+-` | Zoom out |
 | `Ctrl+0` | Fit to window |
+| `Ctrl+R` | Zoom to cursor range (requires ≥ 2 cursors) |
+| `Ctrl+F` | Open Find bar |
+| `F3` | Find next match |
+| `Shift+F3` | Find previous match |
+| `Ctrl+B` | Add bookmark at viewport centre |
 | `Ctrl+,` | Open Settings |
 | `C` | Place cursor at viewport centre |
 | `Shift+C` | Clear all cursors |
@@ -228,6 +326,7 @@ It shows:
 - Hover over any segment bar or STI marker for a detailed tooltip.
 - Toggle STI events, grid lines, and hover highlight from **Settings** (`Ctrl+,`).
 - Drag and drop a `.btf` file onto the window to open it.
+- Trace zoom level and cursor positions are saved per file and restored when the same file is reopened.
 
 ---
 

@@ -87,7 +87,7 @@ from PyQt5.QtGui import (
 )
 from PyQt5.QtWidgets import (
     QAction, QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
-    QDockWidget, QFileDialog, QFormLayout, QFrame,
+    QDockWidget, QFileDialog, QFormLayout, QFrame, QInputDialog,
     QGraphicsEllipseItem, QGraphicsItem, QGraphicsLineItem,
     QGraphicsRectItem, QGraphicsScene, QGraphicsView,
     QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QProgressBar,
@@ -3665,8 +3665,10 @@ class _CoreHeaderItem(QGraphicsRectItem):
 class TimelineView(QGraphicsView):
     """Pan + zoom QGraphicsView wrapping a TimelineScene."""
 
-    zoom_changed    = pyqtSignal(float)
-    cursors_changed = pyqtSignal(list)
+    zoom_changed         = pyqtSignal(float)
+    cursors_changed      = pyqtSignal(list)
+    bookmark_requested   = pyqtSignal(int)   # ns at right-click position
+    annotation_requested = pyqtSignal(int)   # ns at right-click position
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -4273,21 +4275,43 @@ class TimelineView(QGraphicsView):
         coord = scene_pt.x() if self._scene._horizontal else scene_pt.y()
         ns = self._scene.scene_to_ns(coord)
 
-        menu.addAction(
+        # Shared icon color — timeline always uses a dark background
+        _icon_color = "#D4D4D4"
+
+        # Place cursor
+        act = menu.addAction(
+            _svg_icon(_IC_CURSOR, _icon_color),
             f"Place cursor here  ({_format_time(ns, self._scene._trace.time_scale) if self._scene._trace else ''})",
             lambda: (self._scene.add_cursor(ns),
                      self.cursors_changed.emit(self._scene.cursor_times()))
         )
         if self._scene.cursor_times():
+            # Remove nearest cursor — use an eraser/minus-cursor icon
             menu.addAction(
+                _svg_icon("M2 2.5A.5.5 0 0 1 2.5 2h4a.5.5 0 0 1 0 1H3v9h9v-3.5a.5.5 0 0 1 1 0V12.5a.5.5 0 0 1-.5.5h-10a.5.5 0 0 1-.5-.5v-10zM14.854 2.854a.5.5 0 0 0-.708-.708L8 8.293 5.854 6.146a.5.5 0 1 0-.708.708l2.5 2.5a.5.5 0 0 0 .708 0l6.5-6.5z", _icon_color),
                 "Remove nearest cursor",
                 lambda: (self._scene.remove_nearest_cursor(ns),
                          self.cursors_changed.emit(self._scene.cursor_times()))
             )
             menu.addAction(
+                _svg_icon(_IC_CLEAR, _icon_color),
                 "Clear all cursors",
                 lambda: (self._scene.clear_cursors(),
                          self.cursors_changed.emit([]))
+            )
+        if self._scene._trace is not None:
+            menu.addSeparator()
+            # Bookmark icon — flag/ribbon shape
+            menu.addAction(
+                _svg_icon("M2 2a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v13.5a.5.5 0 0 1-.74.439L8 13.069l-5.26 2.87A.5.5 0 0 1 2 15.5V2zm2-1a1 1 0 0 0-1 1v12.566l4.74-2.586a.5.5 0 0 1 .48 0L13 14.566V2a1 1 0 0 0-1-1H4z", _icon_color),
+                f"Add Bookmark here  ({_format_time(ns, self._scene._trace.time_scale)})",
+                lambda: self.bookmark_requested.emit(ns)
+            )
+            # Annotation icon — pencil/note shape
+            menu.addAction(
+                _svg_icon("M12.854 0.146a.5.5 0 0 0-.707 0L10.5 1.793 14.207 5.5l1.647-1.646a.5.5 0 0 0 0-.708l-3-3zm.646 6.061L9.793 2.5 3.293 9H3.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.207l6.5-6.5zm-7.468 7.468A.5.5 0 0 1 6 13.5V13h-.5a.5.5 0 0 1-.5-.5V12h-.5a.5.5 0 0 1-.5-.5V11h-.5a.5.5 0 0 1-.5-.5V10h-.5a.499.499 0 0 1-.175-.032l-.179.178a.5.5 0 0 0-.11.168l-2 5a.5.5 0 0 0 .65.65l5-2a.5.5 0 0 0 .168-.11l.178-.178z", _icon_color),
+                f"Add Annotation here  ({_format_time(ns, self._scene._trace.time_scale)})",
+                lambda: self.annotation_requested.emit(ns)
             )
         menu.exec_(event.globalPos())
 
@@ -6180,6 +6204,8 @@ class MainWindow(QMainWindow):
         self._view = TimelineView(self)
         self._view.zoom_changed.connect(self._on_zoom_changed)
         self._view.cursors_changed.connect(self._on_cursors_changed)
+        self._view.bookmark_requested.connect(self._add_bookmark_at_ns)
+        self._view.annotation_requested.connect(self._add_annotation_at_ns)
 
         self._welcome_page = QWidget()
         _wl = QVBoxLayout(self._welcome_page)
@@ -6367,6 +6393,8 @@ class MainWindow(QMainWindow):
         # --- File menu ---
         fm = mb.addMenu("&File")
         self._act_open = fm.addAction("&Open…", self._on_open, QKeySequence.Open)
+        self._recent_menu = fm.addMenu("Open &Recent")
+        self._rebuild_recent_menu()
         fm.addSeparator()
         self._act_save_img = fm.addAction("Save as &Image (PNG)…", self._on_save_image, "Ctrl+S")
         self._act_save_img.setEnabled(False)
@@ -6415,6 +6443,12 @@ class MainWindow(QMainWindow):
         # --- Navigate menu ---
         nm = mb.addMenu("&Navigate")
         nm.addAction("Add &Bookmark", self._add_bookmark_at_center, "Ctrl+B")
+        nm.addSeparator()
+        self._act_zoom_range = nm.addAction(
+            "Zoom to Cursor &Range", self._zoom_to_cursor_range, "Ctrl+R"
+        )
+        self._act_zoom_range.setEnabled(False)
+        nm.addSeparator()
         nm.addAction("&Find", self._focus_find, QKeySequence.Find)
         nm.addAction("Find &Next", self._find_next, QKeySequence.FindNext)
         nm.addAction("Find &Previous", self._find_prev, QKeySequence.FindPrevious)
@@ -6447,6 +6481,9 @@ class MainWindow(QMainWindow):
         self._act_zoom_1to1 = tb.addAction("1:1", self._view.zoom_1to1)
         self._act_zoom_1to1.setToolTip("Zoom to 1:1 scale")
         tb.addAction("⊡ Fit",   self._view.zoom_fit)
+        self._tb_zoom_range_btn = tb.addAction("⊡ Range", self._zoom_to_cursor_range)
+        self._tb_zoom_range_btn.setEnabled(False)
+        self._tb_zoom_range_btn.setToolTip("Zoom view to fit between cursor C1 and C2  (Ctrl+R)")
         tb.addSeparator()
 
         # --- View mode toggle (Task / Core) ---
@@ -6605,6 +6642,26 @@ class MainWindow(QMainWindow):
         if path:
             self._open_file(path)
 
+    def _save_recent_files(self, path: str) -> None:
+        norm = os.path.abspath(path)
+        raw = self._settings.get("files", "recent", "")
+        existing = [p for p in raw.split("|") if p.strip() and p != norm]
+        recent = [norm] + existing
+        self._settings.set("files", "recent", "|".join(recent[:5]))
+
+    def _rebuild_recent_menu(self) -> None:
+        self._recent_menu.clear()
+        raw = self._settings.get("files", "recent", "")
+        paths = [p for p in raw.split("|") if p.strip()]
+        if not paths:
+            act = self._recent_menu.addAction("No recent files")
+            act.setEnabled(False)
+            return
+        for p in paths:
+            label = os.path.basename(p)
+            self._recent_menu.addAction(label, lambda checked=False, _p=p: self._open_file(_p)) \
+                .setToolTip(p)
+
     def _trace_state_key(self, path: str) -> str:
         norm = os.path.abspath(path)
         digest = zlib.crc32(norm.encode("utf-8")) & 0xFFFFFFFF
@@ -6731,6 +6788,40 @@ class MainWindow(QMainWindow):
         self._annotation_input.clear()
         self._rebuild_annotation_list()
         self._save_current_trace_state()
+
+    def _add_bookmark_at_ns(self, ns: int) -> None:
+        """Add a bookmark at an explicit timestamp (e.g. from right-click)."""
+        if self._trace is None:
+            return
+        unit = self._current_time_unit()
+        label = f"Bookmark @{_format_time(ns, unit)}"
+        self._bookmarks.append(TraceBookmark(id=self._mark_next_id, ns=ns, label=label))
+        self._mark_next_id += 1
+        self._bookmarks.sort(key=lambda b: b.ns)
+        self._rebuild_bookmark_list()
+        self._save_current_trace_state()
+        self._marks_dock.setVisible(True)
+        self._marks_dock.raise_()
+
+    def _add_annotation_at_ns(self, ns: int) -> None:
+        """Prompt for a note then add an annotation at an explicit timestamp."""
+        if self._trace is None:
+            return
+        unit = self._current_time_unit()
+        note, ok = QInputDialog.getText(
+            self, "Add Annotation",
+            f"Note for {_format_time(ns, unit)}:",
+        )
+        note = note.strip()
+        if not ok or not note:
+            return
+        self._annotations.append(TraceAnnotation(id=self._mark_next_id, ns=ns, note=note))
+        self._mark_next_id += 1
+        self._annotations.sort(key=lambda a: a.ns)
+        self._rebuild_annotation_list()
+        self._save_current_trace_state()
+        self._marks_dock.setVisible(True)
+        self._marks_dock.raise_()
 
     def _jump_selected_annotation(self) -> None:
         item = self._annotation_list.currentItem()
@@ -7005,6 +7096,8 @@ class MainWindow(QMainWindow):
                     f"segments: {n_seg}  "
                     f"STI events: {n_sti}  |  "
                 )
+                self._save_recent_files(path)
+                self._rebuild_recent_menu()
             except Exception as exc:
                 self._status_file.setText("  No file loaded")
                 QMessageBox.critical(self, "Render Error",
@@ -7214,7 +7307,10 @@ class MainWindow(QMainWindow):
 
     def _on_cursors_changed(self, times: list) -> None:
         self._cursor_bar.rebuild(times, self._trace)
-        if self._trace is None or len(times) < 2:
+        has_range = len(times) >= 2
+        self._act_zoom_range.setEnabled(has_range)
+        self._tb_zoom_range_btn.setEnabled(has_range)
+        if self._trace is None or not has_range:
             self._range_stats_label.setText("Range: place two cursors to measure")
             return
         t_sorted = sorted(times)
@@ -7252,6 +7348,42 @@ class MainWindow(QMainWindow):
             sc.set_highlighted_task(None)          # second click on same → cancel
         else:
             sc.set_highlighted_task(task, locked=True)
+
+    def _zoom_to_cursor_range(self) -> None:
+        """Fit the view tightly between the first two cursor positions."""
+        if self._trace is None:
+            return
+        times = sorted(self._view._scene.cursor_times())
+        if len(times) < 2:
+            self._status_hint.setText("Place at least 2 cursors to zoom to range")
+            return
+        ns_lo, ns_hi = times[0], times[-1]
+        if ns_lo == ns_hi:
+            return
+
+        # Use the real viewport dimension (not the _fit_viewport_size() floor)
+        # so that zoom_to_range and the centering formula are always consistent.
+        vp = self._view.viewport().rect()
+        is_horiz = self._view._scene._horizontal
+        vp_px = max(vp.width() if is_horiz else vp.height(), 100)
+
+        self._view._scene.zoom_to_range(ns_lo, ns_hi, vp_px)
+
+        # Position so C1 aligns with the right edge of the frozen label column
+        # and C2 aligns with the right edge of the viewport.
+        #   avail = vp_px - label_w  →  ns_hi_scene - ns_lo_scene == avail
+        #   centerOn(x) puts scene-x at viewport pixel-centre, so:
+        #     center_scene = ns_lo_scene - label_w + vp_px / 2
+        ns_lo_scene = self._view._scene.ns_to_scene_coord(ns_lo)
+        label_w     = self._view._scene._label_width
+        center_coord = ns_lo_scene - label_w + vp_px / 2
+        cur_scene = self._view.mapToScene(vp.center())
+        if is_horiz:
+            self._view.centerOn(center_coord, cur_scene.y())
+        else:
+            self._view.centerOn(cur_scene.x(), center_coord)
+        self._view.zoom_changed.emit(self._view._scene.timescale_per_px)
+        self._refresh_find_marker()
 
     # -- Help -----------------------------------------------------------
 
