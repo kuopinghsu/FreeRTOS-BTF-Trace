@@ -14,13 +14,16 @@ A PyQt5-based interactive visualiser for FreeRTOS context-switch traces in **Bes
 - **16-colour core palette** — up to 16 distinct core colours; cycles automatically beyond that
 - **Horizontal and Vertical orientation** — switch at any time; active mode is highlighted in the toolbar
 - **Smooth zoom & pan** — mouse wheel, two-finger pinch (macOS), and keyboard shortcuts
-- **Default zoom 5 ns/px** — the **1:1** toolbar button resets to 5 nanoseconds per pixel
+- **Default zoom 2 ns/px** — the **1:1** toolbar button resets to 2 nanoseconds per pixel (configurable in Settings)
 - **Viewport culling** — only visible rows/columns and segments are rendered; no slowdown on large traces
-- **Up to 4 measurement cursors** — delta times shown on the timeline and in the status bar
+- **2–8 measurement cursors** — 4 by default; delta times shown on the timeline and in the status bar; maximum configurable in Settings
 - **Task highlight** — hover or click any task label or Legend row to highlight all its segments
-- **Dockable Legend panel** — colour swatches for every task, with the same highlight interaction
+- **Dockable Legend panel** — colour swatches for every task, with a search box and the same highlight interaction
+- **Dockable Statistics panel** — per-core CPU utilisation and per-task CPU time breakdown
 - **STI event markers** — software trace items rendered as coloured diamond markers
-- **Export to PNG** — saves the current viewport as an image
+- **Dark / Light theme** — switch from **View → Switch to Light/Dark Theme** or **Settings → Appearance**
+- **Export to PNG / clipboard** — save the current viewport as a PNG file or copy it to the clipboard
+- **Persistent settings** — all preferences stored in `btf_viewer.rc` alongside the script
 - **Drag-and-drop** — drop a `.btf` file directly onto the window
 - **Optimised for large traces** — tested with up to **128 cores, 1 024 tasks, and 5 M+ events**
 
@@ -98,8 +101,7 @@ highlights at the same time.
 
 ## Cursors
 
-Up to 4 cursors can be placed on the timeline. Delta times between consecutive cursors are shown on
-the timeline and in the status bar.
+Between 2 and 8 cursors can be placed on the timeline (default: 4; adjustable in **Settings → Layout → Max cursors**). Delta times between consecutive cursors are shown on the timeline and in the status bar.
 
 ### Placing and Moving
 
@@ -129,8 +131,9 @@ the timeline and in the status bar.
 
 The Legend lists every task with its colour swatch and `Name[id]` label.
 
-- **View → Show Legend** (`Ctrl+L`) or the toolbar **Legend** button toggles the panel.
-- The panel is a dockable window; it can be detached, closed, and re-opened.
+- The panel is a dockable window; it can be detached, closed, and re-opened via its **✕** button.
+- Toggle visibility from **Settings → Display → Legend panel** (`Ctrl+,`).
+- A **Search** box at the top filters the displayed task list.
 - Hover and click Legend rows to highlight tasks using the same rules as the label column.
 
 ---
@@ -143,7 +146,7 @@ The Legend lists every task with its colour swatch and `Name[id]` label.
 | Two-finger pinch (macOS) | Zoom in or out |
 | Scroll wheel / trackpad swipe | Pan along the time axis |
 | `Ctrl+0` | Fit entire trace to window |
-| **1:1** toolbar button | Reset to default zoom (5 ns/pixel) |
+| **1:1** toolbar button | Reset to default zoom (2 ns/pixel; configurable in Settings) |
 | Toolbar zoom+ / zoom− buttons | Zoom in or out by 2× |
 
 ---
@@ -151,6 +154,54 @@ The Legend lists every task with its colour swatch and `Name[id]` label.
 ## Export
 
 **File → Save as Image (PNG)** (`Ctrl+S`) saves the current viewport as a PNG file.
+
+**File → Copy Image to Clipboard** (`Ctrl+Shift+C`) copies the current viewport to the system clipboard. On Linux, `xclip`, `xsel`, or `wl-copy` is used when available (Qt clipboard is unreliable for images on X11/Wayland).
+
+---
+
+## Settings
+
+Open **Settings** from the toolbar (**⚙ Settings**) or via **View → ⚙ Settings…** (`Ctrl+,`). Preferences are saved immediately to `btf_viewer.rc` in the viewer directory and restored on the next launch.
+
+### Appearance
+
+| Setting | Description |
+|---------|-------------|
+| Theme | **Dark** (default) or **Light** |
+| Timeline labels | Font size for task/core labels drawn on the timeline (pt) |
+| UI / menus | Font size for menus, toolbar, and status bar (pt) |
+
+### Display
+
+| Setting | Description |
+|---------|-------------|
+| Legend panel | Show or hide the dockable Legend panel |
+| Statistics panel | Show or hide the dockable Statistics panel |
+| STI events | Show or hide software-trace item marker rows |
+| Grid lines | Overlay vertical grid lines on the timeline |
+| Highlight on label hover | Dim all other segments when hovering a task label (disable for better performance on large traces) |
+
+### Layout
+
+| Setting | Description |
+|---------|-------------|
+| Label column | Width of the frozen task/core label column (60–600 px) |
+| Row height | Height of each task/core row (12–60 px) |
+| Row gap | Vertical gap between rows (0–20 px) |
+| 1:1 zoom level | Target zoom of the **1:1** button and the maximum zoom-in limit (0.5–200 ns/px) |
+| Max cursors | Maximum number of simultaneously visible cursors (4–8) |
+
+---
+
+## Statistics Panel
+
+The **Statistics** dock appears at the bottom of the window. Toggle it from **Settings → Display → Statistics panel**.
+
+It shows:
+
+- **Trace span** — total time range covered by the trace
+- **Core utilisation** — percentage of active (non-IDLE, non-TICK) CPU time per core
+- **Top tasks by CPU** — ranked list of worker tasks by total CPU time consumed
 
 ---
 
@@ -160,10 +211,11 @@ The Legend lists every task with its colour swatch and `Name[id]` label.
 |-----|--------|
 | `Ctrl+O` | Open `.btf` file |
 | `Ctrl+S` | Save viewport as PNG |
+| `Ctrl+Shift+C` | Copy viewport to clipboard |
 | `Ctrl++` | Zoom in |
 | `Ctrl+-` | Zoom out |
 | `Ctrl+0` | Fit to window |
-| `Ctrl+L` | Toggle Legend panel |
+| `Ctrl+,` | Open Settings |
 | `C` | Place cursor at viewport centre |
 | `Shift+C` | Clear all cursors |
 | `Ctrl+Q` | Quit |
@@ -173,7 +225,7 @@ The Legend lists every task with its colour swatch and `Name[id]` label.
 ## Other
 
 - Hover over any segment bar or STI marker for a detailed tooltip.
-- Toggle STI events and grid lines from the toolbar or View menu.
+- Toggle STI events, grid lines, and hover highlight from **Settings** (`Ctrl+,`).
 - Drag and drop a `.btf` file onto the window to open it.
 
 ---

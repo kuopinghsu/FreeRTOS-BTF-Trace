@@ -90,6 +90,7 @@ from PyQt5.QtWidgets import (
     QGraphicsRectItem, QGraphicsScene, QGraphicsView,
     QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QProgressBar,
     QProgressDialog,
+    QListWidget, QListWidgetItem,
     QPushButton, QScrollArea, QDoubleSpinBox, QSpinBox, QStackedWidget,
     QStatusBar, QStyleFactory, QStyleOptionGraphicsItem, QTabWidget,
     QToolBar, QToolButton, QVBoxLayout, QWidget,
@@ -4897,16 +4898,140 @@ class RcSettings:
 # ---------------------------------------------------------------------------
 
 class _SettingsDialog(QDialog):
-    """Modal settings dialog — tabbed: Appearance | Display | Layout."""
+    """Modal settings dialog — sidebar navigation: Appearance | Display | Layout."""
+
+    _INPUT_W = 110   # fixed pixel width for all spin / combo inputs
 
     @staticmethod
     def _hline() -> QFrame:
-        """Thin horizontal rule for visual grouping within a tab."""
         f = QFrame()
         f.setFrameShape(QFrame.HLine)
-        f.setFrameShadow(QFrame.Sunken)
-        f.setContentsMargins(0, 2, 0, 2)
+        f.setFrameShadow(QFrame.Plain)
+        f.setObjectName("sep")
         return f
+
+    @staticmethod
+    def _section(text: str) -> QLabel:
+        """Muted all-caps section header."""
+        lbl = QLabel(text.upper())
+        lbl.setObjectName("section_header")
+        lbl.setContentsMargins(0, 6, 0, 2)
+        return lbl
+
+    @staticmethod
+    def _indented(widget: QWidget, left: int = 16) -> QWidget:
+        """Return widget wrapped in a container with a left-indent."""
+        w = QWidget()
+        h = QHBoxLayout(w)
+        h.setContentsMargins(left, 0, 0, 0)
+        h.setSpacing(0)
+        h.addWidget(widget)
+        return w
+
+    @staticmethod
+    def _dialog_ss(is_dark: bool, ui_fs: str) -> str:
+        """Return a scoped stylesheet for the settings dialog."""
+        if is_dark:
+            return f"""
+                QDialog                           {{ background:#252526; }}
+                QListWidget                       {{ background:#1E1E1E; border:none;
+                                                     padding:8px 0; }}
+                QListWidget::item                 {{ color:#AAAAAA; padding:9px 16px;
+                                                     font-size:{ui_fs}; }}
+                QListWidget::item:selected        {{ background:#37373D; color:#FFFFFF;
+                                                     border-left:3px solid #007ACC;
+                                                     padding-left:13px; }}
+                QListWidget::item:hover:!selected {{ background:#2A2D2E; }}
+                QFrame#vsep                       {{ border:none; background:#3A3A3A;
+                                                     max-width:1px; }}
+                QFrame#sep, QFrame#footer_sep     {{ border:none; background:#3A3A3A;
+                                                     max-height:1px; }}
+                QLabel#section_header             {{ color:#888888; font-weight:600;
+                                                     font-size:{ui_fs}; }}
+                QLabel                            {{ font-size:{ui_fs}; }}
+                QCheckBox                         {{ font-size:{ui_fs}; }}
+                QSpinBox, QDoubleSpinBox, QComboBox {{
+                    background:#3C3C3C; color:#D4D4D4;
+                    border:1.5px solid #555555; border-radius:4px;
+                    padding:1px 6px; min-height:1.3em; font-size:{ui_fs}; }}
+                QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus
+                                                  {{ border-color:#007ACC; }}
+                QComboBox QAbstractItemView       {{ background:#3C3C3C; color:#D4D4D4;
+                                                     selection-background-color:#007ACC;
+                                                     font-size:{ui_fs}; }}
+                QCheckBox::indicator              {{ width:15px; height:15px;
+                                                     border-radius:3px;
+                                                     border:1.5px solid #555555;
+                                                     background:#2D2D2D; }}
+                QCheckBox::indicator:checked      {{ background:#007ACC;
+                                                     border-color:#007ACC; }}
+                QPushButton#btn_ok                {{ background:#007ACC; color:#FFFFFF;
+                                                     border:none; border-radius:5px;
+                                                     padding:0px 22px;
+                                                     font-weight:600;
+                                                     font-size:{ui_fs}; }}
+                QPushButton#btn_ok:hover          {{ background:#1A8ED4; }}
+                QPushButton#btn_cancel            {{ background:transparent;
+                                                     color:#AAAAAA;
+                                                     border:1.5px solid #555555;
+                                                     border-radius:5px;
+                                                     padding:0px 22px;
+                                                     font-size:{ui_fs}; }}
+                QPushButton#btn_cancel:hover      {{ background:#2A2D2E;
+                                                     border-color:#888888;
+                                                     color:#CCCCCC; }}
+            """
+        else:
+            return f"""
+                QDialog                           {{ background:#FAFAFA; }}
+                QListWidget                       {{ background:#F0F0F0; border:none;
+                                                     padding:8px 0; }}
+                QListWidget::item                 {{ color:#555555; padding:9px 16px;
+                                                     font-size:{ui_fs}; }}
+                QListWidget::item:selected        {{ background:#E8ECF0; color:#1E1E1E;
+                                                     border-left:3px solid #007ACC;
+                                                     padding-left:13px; }}
+                QListWidget::item:hover:!selected {{ background:#EBEBEB; }}
+                QFrame#vsep                       {{ border:none; background:#CCCCCC;
+                                                     max-width:1px; }}
+                QFrame#sep, QFrame#footer_sep     {{ border:none; background:#CCCCCC;
+                                                     max-height:1px; }}
+                QLabel#section_header             {{ color:#888888; font-weight:600;
+                                                     font-size:{ui_fs}; }}
+                QLabel                            {{ font-size:{ui_fs}; }}
+                QCheckBox                         {{ font-size:{ui_fs}; }}
+                QSpinBox, QDoubleSpinBox, QComboBox {{
+                    background:#FFFFFF; color:#1E1E1E;
+                    border:1.5px solid #AAAAAA; border-radius:4px;
+                    padding:1px 6px; min-height:1.3em; font-size:{ui_fs}; }}
+                QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus
+                                                  {{ border-color:#007ACC; }}
+                QComboBox QAbstractItemView       {{ background:#FFFFFF; color:#1E1E1E;
+                                                     selection-background-color:#007ACC;
+                                                     selection-color:#FFFFFF;
+                                                     font-size:{ui_fs}; }}
+                QCheckBox::indicator              {{ width:15px; height:15px;
+                                                     border-radius:3px;
+                                                     border:1.5px solid #AAAAAA;
+                                                     background:#FFFFFF; }}
+                QCheckBox::indicator:checked      {{ background:#007ACC;
+                                                     border-color:#007ACC; }}
+                QPushButton#btn_ok                {{ background:#007ACC; color:#FFFFFF;
+                                                     border:none; border-radius:5px;
+                                                     padding:0px 22px;
+                                                     font-weight:600;
+                                                     font-size:{ui_fs}; }}
+                QPushButton#btn_ok:hover          {{ background:#1A8ED4; }}
+                QPushButton#btn_cancel            {{ background:transparent;
+                                                     color:#555555;
+                                                     border:1.5px solid #AAAAAA;
+                                                     border-radius:5px;
+                                                     padding:0px 22px;
+                                                     font-size:{ui_fs}; }}
+                QPushButton#btn_cancel:hover      {{ background:#E5E5E5;
+                                                     border-color:#888888;
+                                                     color:#1E1E1E; }}
+            """
 
     def __init__(self, parent, *,
                  font_size: int, ui_font_size: int,
@@ -4920,103 +5045,164 @@ class _SettingsDialog(QDialog):
         super().__init__(parent, Qt.Dialog)
         self.setWindowTitle("Settings")
         self.setModal(True)
-        self.setMinimumWidth(390)
+        self.setMinimumSize(580, 360)
+
+        _ui_fs = f"{ui_font_size}pt"
+
+        # Set an explicit font on the dialog so every child widget (including
+        # QListWidget which uses native rendering on macOS and ignores CSS
+        # font-size) inherits the correct point size consistently regardless
+        # of which app-level theme was applied most recently.
+        _dlg_font = QApplication.instance().font()
+        _dlg_font.setPointSize(ui_font_size)
+        self.setFont(_dlg_font)
 
         root = QVBoxLayout(self)
-        root.setSpacing(8)
-        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(0)
+        root.setContentsMargins(0, 0, 0, 0)
 
-        tabs = QTabWidget()
-        tabs.setDocumentMode(True)
-        root.addWidget(tabs)
+        # -- Body: sidebar + vertical separator + content stack ---------------
+        body_w = QWidget()
+        body = QHBoxLayout(body_w)
+        body.setSpacing(0)
+        body.setContentsMargins(0, 0, 0, 0)
+        root.addWidget(body_w, 1)
 
-        # ── Tab 1: Appearance ─────────────────────────────────────────────────
-        app_page = QWidget()
-        app_form = QFormLayout(app_page)
-        app_form.setLabelAlignment(Qt.AlignRight)
-        app_form.setContentsMargins(12, 14, 12, 8)
-        app_form.setHorizontalSpacing(12)
-        app_form.setVerticalSpacing(8)
+        # Sidebar
+        self._sidebar = QListWidget()
+        self._sidebar.setFixedWidth(140)
+        self._sidebar.setFont(_dlg_font)   # explicit – CSS font-size is ignored by macOS native item delegate
+        self._sidebar.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._sidebar.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        for _name in ("Appearance", "Display", "Layout"):
+            _item = QListWidgetItem(_name)
+            _item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            _item.setSizeHint(QSize(140, 36))   # fixed row height keeps items from jumping
+            self._sidebar.addItem(_item)
+        self._sidebar.setCurrentRow(0)
+        body.addWidget(self._sidebar)
+
+        # Vertical separator
+        _vsep = QFrame()
+        _vsep.setFrameShape(QFrame.VLine)
+        _vsep.setFrameShadow(QFrame.Plain)
+        _vsep.setObjectName("vsep")
+        _vsep.setFixedWidth(1)
+        body.addWidget(_vsep)
+
+        # Content stack (pages added below)
+        self._content_stack = QStackedWidget()
+        body.addWidget(self._content_stack, 1)
+
+        def _inp(widget: QWidget) -> QWidget:
+            widget.setFixedWidth(self._INPUT_W)
+            return widget
+
+        def _form(page: QWidget) -> QFormLayout:
+            f = QFormLayout(page)
+            f.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            f.setContentsMargins(20, 16, 20, 12)
+            f.setHorizontalSpacing(16)
+            f.setVerticalSpacing(10)
+            f.setFieldGrowthPolicy(QFormLayout.FieldsStayAtSizeHint)
+            return f
+
+        # -- Page 1: Appearance -----------------------------------------------
+        p1 = QWidget()
+        f1 = _form(p1)
+
         self._theme_combo = QComboBox()
         self._theme_combo.addItem("Dark")
         self._theme_combo.addItem("Light")
         self._theme_combo.setCurrentIndex(0 if is_dark else 1)
         self._theme_combo.setToolTip("Application colour theme")
-        app_form.addRow("Theme:", self._theme_combo)
-        app_form.addRow(self._hline())
-        app_form.addRow(QLabel("<b>Fonts</b>"))
+        f1.addRow("Theme:", _inp(self._theme_combo))
+
+        f1.addRow(self._hline())
+        f1.addRow(self._section("Font sizes"))
+
         self._font_spin = QSpinBox()
         self._font_spin.setRange(6, 24)
         self._font_spin.setSuffix(" pt")
         self._font_spin.setValue(font_size)
         self._font_spin.setToolTip("Font size for task / core labels drawn on the timeline")
-        app_form.addRow("Timeline labels:", self._font_spin)
+        f1.addRow("Timeline labels:", _inp(self._font_spin))
+
         self._ui_font_spin = QSpinBox()
         self._ui_font_spin.setRange(8, 18)
         self._ui_font_spin.setSuffix(" pt")
         self._ui_font_spin.setValue(ui_font_size)
         self._ui_font_spin.setToolTip("Font size for menus, toolbar and status bar")
-        app_form.addRow("UI (menus / toolbar):", self._ui_font_spin)
-        tabs.addTab(app_page, "Appearance")
+        f1.addRow("UI / menus:", _inp(self._ui_font_spin))
 
-        # ── Tab 2: Display ────────────────────────────────────────────────────
-        disp_page = QWidget()
-        disp_vbox = QVBoxLayout(disp_page)
-        disp_vbox.setContentsMargins(14, 14, 14, 8)
-        disp_vbox.setSpacing(8)
-        disp_vbox.addWidget(QLabel("<b>Panels</b>"))
+        self._content_stack.addWidget(p1)
+
+        # -- Page 2: Display --------------------------------------------------
+        p2 = QWidget()
+        v2 = QVBoxLayout(p2)
+        v2.setContentsMargins(20, 16, 20, 12)
+        v2.setSpacing(7)
+
+        v2.addWidget(self._section("Panels"))
         self._legend_cb = QCheckBox("Legend panel")
         self._legend_cb.setChecked(show_legend)
         self._stats_cb = QCheckBox("Statistics panel")
         self._stats_cb.setChecked(show_stats)
-        disp_vbox.addWidget(self._legend_cb)
-        disp_vbox.addWidget(self._stats_cb)
-        disp_vbox.addWidget(self._hline())
-        disp_vbox.addWidget(QLabel("<b>Timeline overlays</b>"))
+        v2.addWidget(self._indented(self._legend_cb))
+        v2.addWidget(self._indented(self._stats_cb))
+
+        v2.addSpacing(6)
+        v2.addWidget(self._hline())
+        v2.addSpacing(2)
+
+        v2.addWidget(self._section("Timeline overlays"))
         self._sti_cb = QCheckBox("STI events")
         self._sti_cb.setChecked(show_sti)
         self._grid_cb = QCheckBox("Grid lines")
         self._grid_cb.setChecked(show_grid)
-        self._hover_hl_cb = QCheckBox("Highlight task segments on label hover")
+        self._hover_hl_cb = QCheckBox("Highlight segments on label hover")
         self._hover_hl_cb.setChecked(show_hover_highlight)
         self._hover_hl_cb.setToolTip(
             "Dim all other segments when hovering a task label.\n"
             "Disable for better performance with large traces.")
-        disp_vbox.addWidget(self._sti_cb)
-        disp_vbox.addWidget(self._grid_cb)
-        disp_vbox.addWidget(self._hover_hl_cb)
-        disp_vbox.addStretch()
-        tabs.addTab(disp_page, "Display")
+        v2.addWidget(self._indented(self._sti_cb))
+        v2.addWidget(self._indented(self._grid_cb))
+        v2.addWidget(self._indented(self._hover_hl_cb))
+        v2.addStretch()
 
-        # ── Tab 3: Layout ─────────────────────────────────────────────────────
-        lay_page = QWidget()
-        lay_form = QFormLayout(lay_page)
-        lay_form.setLabelAlignment(Qt.AlignRight)
-        lay_form.setContentsMargins(12, 14, 12, 8)
-        lay_form.setHorizontalSpacing(12)
-        lay_form.setVerticalSpacing(8)
-        lay_form.addRow(QLabel("<b>Row geometry</b>"))
+        self._content_stack.addWidget(p2)
+
+        # -- Page 3: Layout ---------------------------------------------------
+        p3 = QWidget()
+        f3 = _form(p3)
+
+        f3.addRow(self._section("Row geometry"))
+
         self._label_width_spin = QSpinBox()
         self._label_width_spin.setRange(60, 600)
         self._label_width_spin.setSuffix(" px")
         self._label_width_spin.setSingleStep(10)
         self._label_width_spin.setValue(label_width)
-        self._label_width_spin.setToolTip("Width of the task / core label column (60–600 px)")
-        lay_form.addRow("Label column width:", self._label_width_spin)
+        self._label_width_spin.setToolTip("Width of the task / core label column (60\u2013600 px)")
+        f3.addRow("Label column:", _inp(self._label_width_spin))
+
         self._row_height_spin = QSpinBox()
         self._row_height_spin.setRange(12, 60)
         self._row_height_spin.setSuffix(" px")
         self._row_height_spin.setValue(row_height)
-        self._row_height_spin.setToolTip("Height of each task / core row (12–60 px)")
-        lay_form.addRow("Row height:", self._row_height_spin)
+        self._row_height_spin.setToolTip("Height of each task / core row (12\u201360 px)")
+        f3.addRow("Row height:", _inp(self._row_height_spin))
+
         self._row_gap_spin = QSpinBox()
         self._row_gap_spin.setRange(0, 20)
         self._row_gap_spin.setSuffix(" px")
         self._row_gap_spin.setValue(row_gap)
-        self._row_gap_spin.setToolTip("Vertical gap between rows (0–20 px)")
-        lay_form.addRow("Row gap:", self._row_gap_spin)
-        lay_form.addRow(self._hline())
-        lay_form.addRow(QLabel("<b>Zoom &amp; cursors</b>"))
+        self._row_gap_spin.setToolTip("Vertical gap between rows (0\u201320 px)")
+        f3.addRow("Row gap:", _inp(self._row_gap_spin))
+
+        f3.addRow(self._hline())
+        f3.addRow(self._section("Zoom & cursors"))
+
         self._ns_per_px_spin = QDoubleSpinBox()
         self._ns_per_px_spin.setRange(0.5, 200.0)
         self._ns_per_px_spin.setSingleStep(0.5)
@@ -5024,21 +5210,57 @@ class _SettingsDialog(QDialog):
         self._ns_per_px_spin.setSuffix(" ns/px")
         self._ns_per_px_spin.setValue(ns_per_px_default)
         self._ns_per_px_spin.setToolTip(
-            "Maximum zoom-in level (0.5–200 ns/px).\n"
+            "Maximum zoom-in level (0.5\u2013200 ns/px).\n"
             "Also sets the target level of the 1:1 zoom button.")
-        lay_form.addRow("1:1 zoom level:", self._ns_per_px_spin)
+        f3.addRow("1:1 zoom level:", _inp(self._ns_per_px_spin))
+
         self._cursor_spin = QSpinBox()
         self._cursor_spin.setRange(4, _MAX_CURSORS)
         self._cursor_spin.setValue(max_cursors)
-        self._cursor_spin.setToolTip(f"Maximum number of simultaneous cursors (4–{_MAX_CURSORS})")
-        lay_form.addRow(f"Max cursors (4–{_MAX_CURSORS}):", self._cursor_spin)
-        tabs.addTab(lay_page, "Layout")
+        self._cursor_spin.setToolTip(f"Maximum number of simultaneous cursors (4\u2013{_MAX_CURSORS})")
+        f3.addRow("Max cursors:", _inp(self._cursor_spin))
 
-        # ── Buttons ───────────────────────────────────────────────────────────
-        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        btns.accepted.connect(self.accept)
-        btns.rejected.connect(self.reject)
-        root.addWidget(btns)
+        self._content_stack.addWidget(p3)
+
+        # -- Sidebar ↔ stack sync ---------------------------------------------
+        self._sidebar.currentRowChanged.connect(self._content_stack.setCurrentIndex)
+
+        # -- Footer separator -------------------------------------------------
+        footer_sep = QFrame()
+        footer_sep.setFrameShape(QFrame.HLine)
+        footer_sep.setFrameShadow(QFrame.Plain)
+        footer_sep.setObjectName("footer_sep")
+        footer_sep.setFixedHeight(1)
+        root.addWidget(footer_sep)
+
+        # -- Footer buttons ---------------------------------------------------
+        footer_w = QWidget()
+        footer = QHBoxLayout(footer_w)
+        footer.setContentsMargins(16, 8, 16, 12)
+        footer.setSpacing(10)
+        footer.addStretch()
+
+        _btn_w, _btn_h = 88, 30   # uniform size for both buttons
+
+        btn_cancel = QPushButton("Cancel")
+        btn_cancel.setObjectName("btn_cancel")
+        btn_cancel.setFixedSize(_btn_w, _btn_h)
+        btn_cancel.clicked.connect(self.reject)
+
+        btn_ok = QPushButton("OK")
+        btn_ok.setObjectName("btn_ok")
+        btn_ok.setFixedSize(_btn_w, _btn_h)
+        btn_ok.setDefault(True)
+        btn_ok.clicked.connect(self.accept)
+
+        footer.addWidget(btn_cancel)
+        footer.addWidget(btn_ok)
+        root.addWidget(footer_w)
+
+        # -- Scoped stylesheet ------------------------------------------------
+        self.setStyleSheet(self._dialog_ss(is_dark, _ui_fs))
+
+        self.adjustSize()
 
     # -- result accessors (read after exec_() == Accepted) ------------------
     @property
@@ -5082,7 +5304,7 @@ class MainWindow(QMainWindow):
         self._progress_dialog: Optional[QProgressDialog] = None
         self._settings = RcSettings()
 
-        # ── Runtime state for settings managed via _SettingsDialog ──────────
+        # -- Runtime state for settings managed via _SettingsDialog ----------
         self._show_sti:              bool  = True
         self._show_grid:             bool  = True
         self._show_legend:           bool  = True
@@ -5226,8 +5448,21 @@ class MainWindow(QMainWindow):
         self._view._resize_timer.stop()
 
         # ---- 2. Abort any in-progress background parse ------------------------
-        # Disconnect signals first so callbacks can't fire after we return.
-        if self._parse_thread is not None and self._parse_thread.isRunning():
+        # IMPORTANT: stop the thread BEFORE disconnecting signals.
+        # disconnect() destroys the PyQtSlotProxy C++ objects.  If the thread
+        # is still running, PyQtSlotProxy::unislot() may execute concurrently
+        # in the worker thread and call postEvent(this, ...) on the now-freed
+        # proxy, causing an EXC_BAD_ACCESS / SIGBUS crash (data race).
+        # After the thread is fully stopped no more unislot() calls can occur,
+        # making it safe to destroy the proxies.  The proxy ~QObject() then
+        # calls QObject::removePostedEvents(this, 0), purging any already-
+        # queued events so they cannot be replayed during sendPostedEvents.
+        if self._parse_thread is not None:
+            if self._parse_thread.isRunning():
+                self._parse_thread.requestInterruption()
+                # Wait up to 3 s; parse threads check interruption frequently.
+                self._parse_thread.wait(3000)
+            # Thread is now stopped – safe to destroy PyQtSlotProxy objects.
             for sig in (self._parse_thread.done,
                         self._parse_thread.errored,
                         self._parse_thread.progress):
@@ -5235,9 +5470,6 @@ class MainWindow(QMainWindow):
                     sig.disconnect()
                 except (TypeError, RuntimeError):
                     pass
-            self._parse_thread.requestInterruption()
-            # Give it 300 ms to notice; we don't block longer – it's daemon anyway.
-            self._parse_thread.wait(300)
             self._parse_thread = None
 
         # Window geometry – only save non-maximised size/position so we can
@@ -5374,7 +5606,17 @@ class MainWindow(QMainWindow):
             QStatusBar  {{ background:#1E1E1E; color:#AAAAAA; font-size:{_ui_fs}; }}
             QLabel      {{ font-size:{_ui_fs}; }}
             QCheckBox   {{ font-size:{_ui_fs}; }}
-            QSpinBox    {{ font-size:{_ui_fs}; }}
+            QSpinBox, QDoubleSpinBox {{ background:#2D2D2D; color:#D4D4D4;
+                         border:1px solid #555; font-size:{_ui_fs};
+                         padding:2px 6px; min-height:1.6em; }}
+            QLineEdit   {{ background:#2D2D2D; color:#D4D4D4;
+                         border:1px solid #555; }}
+            QComboBox   {{ background:#2D2D2D; color:#D4D4D4;
+                         border:1px solid #555; font-size:{_ui_fs};
+                         padding:2px 6px; min-height:1.6em; }}
+            QComboBox QAbstractItemView {{ background:#2D2D2D; color:#D4D4D4;
+                         selection-background-color:#007ACC;
+                         font-size:{_ui_fs}; }}
             QDockWidget::title {{ background:#2D2D2D; color:#AAAAAA;
                                   padding:4px; font-size:{_ui_fs}; }}
             QScrollArea {{ background:#1E1E1E; border:none; }}
@@ -5426,7 +5668,18 @@ class MainWindow(QMainWindow):
             QStatusBar  {{ background:#F5F5F5; color:#555555; font-size:{_ui_fs}; }}
             QLabel      {{ font-size:{_ui_fs}; }}
             QCheckBox   {{ font-size:{_ui_fs}; }}
-            QSpinBox    {{ font-size:{_ui_fs}; }}
+            QSpinBox, QDoubleSpinBox {{ background:#FFFFFF; color:#1E1E1E;
+                         border:1px solid #AAAAAA; font-size:{_ui_fs};
+                         padding:2px 6px; min-height:1.6em; }}
+            QLineEdit   {{ background:#FFFFFF; color:#1E1E1E;
+                         border:1px solid #AAAAAA; }}
+            QComboBox   {{ background:#F5F5F5; color:#1E1E1E;
+                         border:1px solid #AAAAAA; font-size:{_ui_fs};
+                         padding:2px 6px; min-height:1.6em; }}
+            QComboBox QAbstractItemView {{ background:#FFFFFF; color:#1E1E1E;
+                         selection-background-color:#007ACC;
+                         selection-color:#FFFFFF;
+                         font-size:{_ui_fs}; }}
             QDockWidget::title {{ background:#E0E0E0; color:#555555;
                                   padding:4px; font-size:{_ui_fs}; }}
             QScrollArea {{ background:#F5F5F5; border:none; }}
@@ -5674,24 +5927,29 @@ class MainWindow(QMainWindow):
             self._progress_dialog = None
 
         # Abort any in-progress load before starting a new one.
-        if self._parse_thread is not None and self._parse_thread.isRunning():
-            try:
-                self._parse_thread.done.disconnect()
-            except (TypeError, RuntimeError):
-                pass
-            try:
-                self._parse_thread.errored.disconnect()
-            except (TypeError, RuntimeError):
-                pass
-            try:
-                self._parse_thread.progress.disconnect()
-            except (TypeError, RuntimeError):
-                pass
-            self._parse_thread.requestInterruption()
-            self._parse_thread.wait(2000)
+        # Always disconnect signals before dropping the reference – even a
+        # IMPORTANT: stop the thread BEFORE disconnecting signals.
+        # disconnect() destroys PyQtSlotProxy C++ objects; if the thread is
+        # still running, PyQtSlotProxy::unislot() may execute concurrently and
+        # call postEvent(this, ...) on the already-freed proxy → SIGBUS.
+        # Stopping first guarantees no new unislot() calls are in-flight.
+        # The proxy ~QObject() then calls removePostedEvents(this, 0) to purge
+        # any already-queued events.
+        if self._parse_thread is not None:
             if self._parse_thread.isRunning():
-                self._status_file.setText("  Previous load is still stopping…")
-                return
+                self._parse_thread.requestInterruption()
+                self._parse_thread.wait(2000)
+                if self._parse_thread.isRunning():
+                    self._status_file.setText("  Previous load is still stopping…")
+                    return
+            # Thread is fully stopped – safe to destroy PyQtSlotProxy objects.
+            for sig in (self._parse_thread.done,
+                        self._parse_thread.errored,
+                        self._parse_thread.progress):
+                try:
+                    sig.disconnect()
+                except (TypeError, RuntimeError):
+                    pass
             self._parse_thread = None
 
         # Show a wait cursor and status message while parsing
@@ -5706,6 +5964,20 @@ class MainWindow(QMainWindow):
         self._progress_dialog = progress_dialog
 
         def _on_done(trace):
+            # Disconnect all signals FIRST, before processEvents() or dropping the
+            # thread reference.  This destroys the PyQtSlotProxy objects and their
+            # QObject::removePostedEvents() call purges any still-queued progress/
+            # errored events from the main-thread event queue.  Without this, a
+            # queued progress event whose proxy was freed by _parse_thread=None
+            # would be dispatched by sendPostedEvents → SIGBUS crash.
+            if self._parse_thread is not None:
+                for sig in (self._parse_thread.done,
+                            self._parse_thread.errored,
+                            self._parse_thread.progress):
+                    try:
+                        sig.disconnect()
+                    except (TypeError, RuntimeError):
+                        pass
             progress_dialog.update_progress(100, "Building scene…")
             QApplication.processEvents()   # let the dialog repaint before heavy build
             self._parse_thread = None
@@ -5758,6 +6030,16 @@ class MainWindow(QMainWindow):
                 QApplication.restoreOverrideCursor()
 
         def _on_error(msg):
+            # Same rationale as _on_done: disconnect first to purge any
+            # stale queued events before the thread / proxies are freed.
+            if self._parse_thread is not None:
+                for sig in (self._parse_thread.done,
+                            self._parse_thread.errored,
+                            self._parse_thread.progress):
+                    try:
+                        sig.disconnect()
+                    except (TypeError, RuntimeError):
+                        pass
             progress_dialog.close()
             if self._progress_dialog is progress_dialog:
                 self._progress_dialog = None
