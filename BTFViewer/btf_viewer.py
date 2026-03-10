@@ -832,7 +832,7 @@ class _InfoPopup(QLabel):
         self.setStyleSheet(
             f"QLabel {{ background:#252526; color:#E0E0E0; "
             f"border:1px solid #666; border-radius:4px; "
-            f"font-size:9pt; font-family:'{fam}',monospace; }}"
+            f"font-size:9pt; font-family:'{fam}'; }}"
         )
 
     def show_at(self, screen_pos: QPoint, html: str) -> None:
@@ -6300,7 +6300,12 @@ class MainWindow(QMainWindow):
         marks_v.addWidget(marks_tabs)
         self._range_stats_label = QLabel("Range: place two cursors to measure")
         self._range_stats_label.setStyleSheet("color:#999;")
+        self._range_stats_label.setWordWrap(True)
         marks_v.addWidget(self._range_stats_label)
+        marks_export_btn = QPushButton("📤 Export Marks as CSV…")
+        marks_export_btn.setToolTip("Save all bookmarks and annotations to a CSV file")
+        marks_export_btn.clicked.connect(self._export_marks_csv)
+        marks_v.addWidget(marks_export_btn)
 
         marks_dock = QDockWidget("Marks", self)
         marks_dock.setWidget(marks_host)
@@ -6369,6 +6374,7 @@ class MainWindow(QMainWindow):
             lambda v: setattr(self, "_show_legend", v))
         self._stats_dock.visibilityChanged.connect(
             lambda v: setattr(self, "_show_stats", v))
+        self._find_dock.visibilityChanged.connect(self._on_find_dock_visibility_changed)
         self._view.horizontalScrollBar().valueChanged.connect(lambda _: self._on_view_scrolled())
         self._view.verticalScrollBar().valueChanged.connect(lambda _: self._on_view_scrolled())
 
@@ -6435,19 +6441,21 @@ class MainWindow(QMainWindow):
         cm.addAction("Clear all cursors\tShift+C",
                      self._view.clear_cursors, "Shift+C")
         cm.addSeparator()
-        cm.addAction(
-            "Tip: Left-click on timeline to place cursor\n"
-            "Right-click on timeline to remove nearest cursor"
-        ).setEnabled(False)
+        cm.addAction("Tip: Left-click on timeline to place cursor").setEnabled(False)
+        cm.addAction("Right-click on timeline to remove nearest cursor").setEnabled(False)
 
         # --- Navigate menu ---
         nm = mb.addMenu("&Navigate")
         nm.addAction("Add &Bookmark", self._add_bookmark_at_center, "Ctrl+B")
+        nm.addAction("Add &Annotation…", self._prompt_annotation_at_center, "Ctrl+Shift+B")
         nm.addSeparator()
         self._act_zoom_range = nm.addAction(
             "Zoom to Cursor &Range", self._zoom_to_cursor_range, "Ctrl+R"
         )
         self._act_zoom_range.setEnabled(False)
+        nm.addSeparator()
+        nm.addAction("Jump to &Start", self._jump_to_trace_start, "Ctrl+Home")
+        nm.addAction("Jump to En&d",   self._jump_to_trace_end,   "Ctrl+End")
         nm.addSeparator()
         nm.addAction("&Find", self._focus_find, QKeySequence.Find)
         nm.addAction("Find &Next", self._find_next, QKeySequence.FindNext)
@@ -6455,6 +6463,8 @@ class MainWindow(QMainWindow):
 
         # --- Help menu ---
         hm = mb.addMenu("&Help")
+        hm.addAction("&Keyboard Shortcuts…", self._on_keyboard_shortcuts)
+        hm.addSeparator()
         hm.addAction("&About", self._on_about)
 
     def _build_toolbar(self) -> None:
@@ -6464,9 +6474,9 @@ class MainWindow(QMainWindow):
         tb.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
 
         # --- File actions ---
-        tb.addAction("📂 Open",    self._on_open)
-        tb.addAction("💾 Save PNG", self._on_save_image)
-        tb.addAction("📋 Copy",     self._on_copy_image)
+        tb.addAction("📂 Open",    self._on_open).setToolTip("Open BTF trace file  (Ctrl+O)")
+        tb.addAction("💾 Save PNG", self._on_save_image).setToolTip("Save viewport as PNG  (Ctrl+S)")
+        tb.addAction("📋 Copy",     self._on_copy_image).setToolTip("Copy viewport to clipboard  (Ctrl+Shift+C)")
         tb.addSeparator()
 
         # --- Layout and zoom ---
@@ -6475,12 +6485,14 @@ class MainWindow(QMainWindow):
         self._tb_horiz_btn.setCheckable(True)
         self._tb_vert_btn.setCheckable(True)
         self._tb_horiz_btn.setChecked(True)   # default: horizontal
+        self._tb_horiz_btn.setToolTip("Horizontal layout — time runs left → right")
+        self._tb_vert_btn.setToolTip("Vertical layout — time runs top → bottom")
         tb.addSeparator()
-        tb.addAction("🔍+",     self._view.zoom_in)
-        tb.addAction("🔍-",     self._view.zoom_out)
+        tb.addAction("🔍+",     self._view.zoom_in).setToolTip("Zoom in  (Ctrl++)")
+        tb.addAction("🔍-",     self._view.zoom_out).setToolTip("Zoom out  (Ctrl+-)")
         self._act_zoom_1to1 = tb.addAction("1:1", self._view.zoom_1to1)
         self._act_zoom_1to1.setToolTip("Zoom to 1:1 scale")
-        tb.addAction("⊡ Fit",   self._view.zoom_fit)
+        tb.addAction("⊡ Fit",   self._view.zoom_fit).setToolTip("Fit entire trace to window  (Ctrl+0)")
         self._tb_zoom_range_btn = tb.addAction("⊡ Range", self._zoom_to_cursor_range)
         self._tb_zoom_range_btn.setEnabled(False)
         self._tb_zoom_range_btn.setToolTip("Zoom view to fit between cursor C1 and C2  (Ctrl+R)")
@@ -6492,6 +6504,8 @@ class MainWindow(QMainWindow):
         self._tb_task_btn.setCheckable(True)
         self._tb_core_btn.setCheckable(True)
         self._tb_task_btn.setChecked(True)
+        self._tb_task_btn.setToolTip("Task View — one row per task, merges across cores")
+        self._tb_core_btn.setToolTip("Core View — one expandable row per CPU core")
         # Use addAction so Qt creates and fully owns the internal QToolButton.
         # This avoids the QWidgetAction::releaseWidget SIGSEGV on app exit that
         # occurs when a Python-owned QToolButton is added via addWidget().
@@ -6520,12 +6534,14 @@ class MainWindow(QMainWindow):
         tb.addSeparator()
 
         # --- Cursor controls ---
-        tb.addAction("│C Place cursor", self._view.add_cursor_at_view_center)
-        tb.addAction("✕ Clear cursors", self._view.clear_cursors)
+        tb.addAction("│C Place cursor", self._view.add_cursor_at_view_center).setToolTip(
+            "Place cursor at viewport centre  (C)")
+        tb.addAction("✕ Clear cursors", self._view.clear_cursors).setToolTip(
+            "Clear all cursors  (Shift+C)")
         tb.addSeparator()
 
         # --- Settings button ---
-        tb.addAction("⚙ Settings", self._open_settings)
+        tb.addAction("⚙ Settings", self._open_settings).setToolTip("Open Settings  (Ctrl+,)")
 
     def _build_status_bar(self) -> None:
         sb = self.statusBar()
@@ -6548,6 +6564,11 @@ class MainWindow(QMainWindow):
         self._zoom_label = QLabel("Zoom: —")
         self._zoom_label.setStyleSheet("color:#AAAAAA; padding: 0 8px;")
 
+        # --- Cursor range stats (compact; shown only when ≥2 cursors active) ---
+        self._status_range = QLabel("")
+        self._status_range.setStyleSheet("color:#AAAAAA; padding: 0 6px;")
+        self._status_range.setVisible(False)
+
         # --- Quick toggles ---
         self._sti_toggle_cb = QCheckBox("STI")
         self._sti_toggle_cb.setChecked(self._show_sti)
@@ -6556,6 +6577,7 @@ class MainWindow(QMainWindow):
 
         sb.addWidget(self._status_file)
         sb.addPermanentWidget(self._cursor_bar)
+        sb.addPermanentWidget(self._status_range)
         sb.addPermanentWidget(self._status_stats)
         sb.addPermanentWidget(self._sti_toggle_cb)
         sb.addPermanentWidget(self._zoom_label)
@@ -6853,6 +6875,7 @@ class MainWindow(QMainWindow):
             item = QListWidgetItem(txt)
             item.setData(Qt.UserRole, int(a.id))
             item.setData(Qt.UserRole + 1, int(a.ns))
+            item.setToolTip(f"@ {_format_time(a.ns, unit)}\n{a.note}")
             self._annotation_list.addItem(item)
         self._annotation_list.blockSignals(False)
 
@@ -6869,7 +6892,8 @@ class MainWindow(QMainWindow):
             self._find_status.setText("0 matches")
             return
         query = self._find_input.text().strip()
-        if not query:
+        # Clear highlights whenever the find dock is hidden or query is empty
+        if not query or not self._find_dock.isVisible():
             self._find_status.setText("0 matches")
             return
         mode = self._find_mode_combo.currentText().lower()
@@ -7096,6 +7120,8 @@ class MainWindow(QMainWindow):
                     f"segments: {n_seg}  "
                     f"STI events: {n_sti}  |  "
                 )
+                # Hide the beginner hint once a trace has been loaded successfully
+                self._status_hint.setVisible(False)
                 self._save_recent_files(path)
                 self._rebuild_recent_menu()
             except Exception as exc:
@@ -7296,7 +7322,7 @@ class MainWindow(QMainWindow):
 
     def _on_zoom_changed(self, timescale_per_px: float) -> None:
         unit = self._current_time_unit()
-        z = f"{timescale_per_px:.1f} {unit}/px"
+        z = f"{timescale_per_px:.3g} {unit}/px"
         self._zoom_label.setText(f"Zoom: {z}")
         self._refresh_find_marker()
 
@@ -7312,15 +7338,17 @@ class MainWindow(QMainWindow):
         self._tb_zoom_range_btn.setEnabled(has_range)
         if self._trace is None or not has_range:
             self._range_stats_label.setText("Range: place two cursors to measure")
+            self._status_range.setVisible(False)
             return
         t_sorted = sorted(times)
         lo = t_sorted[0]
-        hi = t_sorted[1]
+        hi = t_sorted[-1]
         dt = max(0, hi - lo)
         unit = self._current_time_unit()
         switches = 0
         top_task = "-"
         top_ns = 0
+        durations: list = []
         if self._trace is not None and dt > 0:
             task_acc: Dict[str, int] = {}
             for seg in self._trace.segments:
@@ -7330,6 +7358,8 @@ class MainWindow(QMainWindow):
                 if ov <= 0:
                     continue
                 switches += 1
+                dur = seg.end - seg.start
+                durations.append(dur)
                 raw = self._trace.task_repr.get(task_merge_key(seg.task), seg.task)
                 disp = task_display_name(raw)
                 task_acc[disp] = task_acc.get(disp, 0) + ov
@@ -7337,9 +7367,22 @@ class MainWindow(QMainWindow):
                 top_task, top_ns = max(task_acc.items(), key=lambda kv: kv[1])
         top_pct = (100.0 * top_ns / dt) if dt > 0 else 0.0
         self._range_stats_label.setText(
-            f"Range C1-C2: {_format_time(dt, unit)} | slices: {switches} | "
+            f"Range C1-C{len(times)}: {_format_time(dt, unit)} | slices: {switches} | "
             f"top: {top_task} ({top_pct:.1f}%)"
         )
+        # Compact status-bar version: span + segment min/max/avg
+        if durations:
+            d_min = _format_time(min(durations), unit)
+            d_max = _format_time(max(durations), unit)
+            d_avg = _format_time(int(sum(durations) / len(durations)), unit)
+            range_text = (
+                f"Range: {_format_time(dt, unit)}  "
+                f"min {d_min}  max {d_max}  avg {d_avg}"
+            )
+        else:
+            range_text = f"Range: {_format_time(dt, unit)}  (no segments)"
+        self._status_range.setText(range_text)
+        self._status_range.setVisible(True)
 
     def _on_legend_task_clicked(self, task: str) -> None:
         """Toggle click-locked highlight for *task* from the Legend panel."""
@@ -7385,7 +7428,142 @@ class MainWindow(QMainWindow):
         self._view.zoom_changed.emit(self._view._scene.timescale_per_px)
         self._refresh_find_marker()
 
+    # -- Navigation helpers ---------------------------------------------
+
+    def _jump_to_trace_start(self) -> None:
+        """Scroll the viewport to the very beginning of the trace."""
+        if self._trace is None:
+            return
+        self._view.scroll_to_ns(self._trace.time_min)
+
+    def _jump_to_trace_end(self) -> None:
+        """Scroll the viewport to the very end of the trace."""
+        if self._trace is None:
+            return
+        self._view.scroll_to_ns(self._trace.time_max)
+
+    def _prompt_annotation_at_center(self) -> None:
+        """Prompt for a note then add annotation at the viewport centre (menu / keyboard)."""
+        if self._trace is None:
+            return
+        self._add_annotation_at_ns(self._view.view_center_ns())
+
+    # -- Marks export ---------------------------------------------------
+
+    def _export_marks_csv(self) -> None:
+        """Export all bookmarks and annotations to a CSV file."""
+        if self._trace is None:
+            return
+        unit = self._current_time_unit()
+        rows = []
+        for b in self._bookmarks:
+            rows.append(("bookmark",   _format_time(b.ns, unit), b.ns, b.label))
+        for a in self._annotations:
+            rows.append(("annotation", _format_time(a.ns, unit), a.ns, a.note))
+        rows.sort(key=lambda r: r[2])
+        if not rows:
+            QMessageBox.information(self, "No Marks", "No bookmarks or annotations to export.")
+            return
+        base = os.path.splitext(os.path.basename(self._current_file or "trace"))[0]
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Marks as CSV",
+            os.path.join(os.path.dirname(self._current_file or ""), f"{base}_marks.csv"),
+            "CSV files (*.csv);;All files (*)",
+        )
+        if not path:
+            return
+        try:
+            import csv
+            with open(path, "w", newline="", encoding="utf-8") as fh:
+                writer = csv.writer(fh)
+                writer.writerow(["type", "timestamp", "raw_ns", "label_or_note"])
+                writer.writerows(rows)
+            self._status_hint.setText(f"Marks exported → {os.path.basename(path)}")
+        except OSError as exc:
+            QMessageBox.critical(self, "Export Error", str(exc))
+
+    # -- Find dock ------------------------------------------------------
+
+    def _on_find_dock_visibility_changed(self, visible: bool) -> None:
+        """Clear highlight overlays when the Find dock is hidden."""
+        if not visible:
+            self._recompute_find_hits()
+
     # -- Help -----------------------------------------------------------
+
+    def _on_keyboard_shortcuts(self) -> None:
+        """Show a reference dialog listing all keyboard shortcuts."""
+        if self._is_dark:
+            c_head = "#FFD700"
+            c_key  = "#7EC8E3"
+            c_body = "#D4D4D4"
+            c_bg   = "#2D2D2D"
+        else:
+            c_head = "#B8860B"
+            c_key  = "#005A8E"
+            c_body = "#333333"
+            c_bg   = "#F5F5F5"
+        sections = [
+            ("File", [
+                ("Ctrl+O",       "Open .btf trace file"),
+                ("Ctrl+S",       "Save viewport as PNG"),
+                ("Ctrl+Shift+C", "Copy viewport to clipboard"),
+                ("Ctrl+Q",       "Quit"),
+            ]),
+            ("View / Zoom", [
+                ("Ctrl++",    "Zoom in"),
+                ("Ctrl+-",    "Zoom out"),
+                ("Ctrl+0",    "Fit entire trace to window"),
+                ("Ctrl+R",    "Zoom to cursor range"),
+                ("Ctrl+,",    "Open Settings"),
+            ]),
+            ("Navigation", [
+                ("Ctrl+Home", "Jump to trace start"),
+                ("Ctrl+End",  "Jump to trace end"),
+            ]),
+            ("Cursors", [
+                ("C",         "Place cursor at viewport centre"),
+                ("Shift+C",   "Clear all cursors"),
+            ]),
+            ("Find", [
+                ("Ctrl+F",    "Open Find bar"),
+                ("F3",        "Find next match"),
+                ("Shift+F3",  "Find previous match"),
+            ]),
+            ("Marks", [
+                ("Ctrl+B",         "Add bookmark at viewport centre"),
+                ("Ctrl+Shift+B",   "Add annotation at viewport centre"),
+            ]),
+        ]
+        html = "<table style='border-collapse:collapse;' cellpadding='4'>"
+        for section, items in sections:
+            html += (
+                f"<tr><td colspan='2' style='padding-top:8px;'>"
+                f"<b style='color:{c_head};'>{section}</b></td></tr>"
+            )
+            for key, desc in items:
+                html += (
+                    f"<tr>"
+                    f"<td style='color:{c_key}; font-family:monospace; white-space:nowrap;"
+                    f" background:{c_bg}; padding:2px 6px; border-radius:3px;'>{key}</td>"
+                    f"<td style='color:{c_body}; padding-left:10px;'>{desc}</td>"
+                    f"</tr>"
+                )
+        html += "</table>"
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Keyboard Shortcuts")
+        dlg.setMinimumWidth(360)
+        layout = QVBoxLayout(dlg)
+        layout.setContentsMargins(16, 12, 16, 12)
+        lbl = QLabel(html)
+        lbl.setTextFormat(Qt.RichText)
+        lbl.setWordWrap(False)
+        layout.addWidget(lbl)
+        btn_box = QDialogButtonBox(QDialogButtonBox.Ok)
+        btn_box.accepted.connect(dlg.accept)
+        layout.addWidget(btn_box)
+        dlg.exec_()
 
     def _on_about(self) -> None:
         if self._is_dark:
@@ -7407,9 +7585,10 @@ class MainWindow(QMainWindow):
             f"• <b style='color:{c_key};'>Core View</b> – one expandable row per CPU core</p>"
             f"<p style='color:{c_body};'><b style='color:{c_head};'>Controls:</b><br>"
             f"• <b style='color:{c_key};'>Left-click</b> – place cursor  |  <b style='color:{c_key};'>Drag</b> cursor line – move it<br>"
-            f"• <b style='color:{c_key};'>Right-click</b> – remove cursor  |  <b style='color:{c_key};'>Status badge</b> – jump to cursor<br>"
+            f"• <b style='color:{c_key};'>Right-click</b> – context menu  |  <b style='color:{c_key};'>Status badge</b> – jump to cursor<br>"
             f"• <b style='color:{c_key};'>Ctrl+Wheel</b> / pinch – zoom  |  <b style='color:{c_key};'>Scroll</b> – pan<br>"
-            f"• <b style='color:{c_key};'>Ctrl+0</b> – fit to window</p>"
+            f"• <b style='color:{c_key};'>Ctrl+0</b> – fit  |  <b style='color:{c_key};'>Ctrl+R</b> – zoom to cursor range<br>"
+            f"• <b style='color:{c_key};'>Help → Keyboard Shortcuts</b> for the full list</p>"
         )
 
 # ===========================================================================
