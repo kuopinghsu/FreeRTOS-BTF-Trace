@@ -63,6 +63,7 @@ from __future__ import annotations
 
 import configparser
 import functools
+import json
 import os
 import re
 import shutil
@@ -274,6 +275,20 @@ class StiEvent:
     target: str         # STI target name (e.g. "mutex_event")
     event: str          # event name (e.g. "trigger")
     note: str           # detail (e.g. "take_mutex")
+
+@dataclass
+class TraceBookmark:
+    """User bookmark pinned to a timeline timestamp."""
+    id: int
+    ns: int
+    label: str
+
+@dataclass
+class TraceAnnotation:
+    """User annotation pinned to a timeline timestamp."""
+    id: int
+    ns: int
+    note: str
 
 @dataclass
 class BtfTrace:
@@ -3743,6 +3758,10 @@ class TimelineView(QGraphicsView):
         self._frozen_last_scene_left: Optional[float] = None
         # Cache of the last scene-top used for frozen ruler positioning.
         self._frozen_last_scene_top: Optional[float] = None
+        # Remember the last viewport position for each orientation.
+        # key=True  -> horizontal mode, key=False -> vertical mode
+        # value=(center_ns, orth_center_coord)
+        self._view_pos_by_orientation: Dict[bool, Tuple[int, float]] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -3767,6 +3786,13 @@ class TimelineView(QGraphicsView):
         ns = self._scene.scene_to_ns(coord)
         self._scene.add_cursor(ns)
         self.cursors_changed.emit(self._scene.cursor_times())
+
+    def view_center_ns(self) -> int:
+        """Return the timestamp currently at the viewport centre."""
+        vp = self.viewport().rect()
+        scene_pt = self.mapToScene(vp.center())
+        coord = scene_pt.x() if self._scene._horizontal else scene_pt.y()
+        return self._scene.scene_to_ns(coord)
 
     def clear_cursors(self) -> None:
         self._scene.clear_cursors()
@@ -3799,8 +3825,39 @@ class TimelineView(QGraphicsView):
             self.centerOn(cur_scene.x(), coord)
         self.viewport().update()
 
-    def set_horizontal(self, h: bool) -> None:
-        self._scene.set_horizontal(h)
+    def set_horizontal(self, horizontal: bool) -> None:
+        trace = self._scene._trace
+        old_h = self._scene._horizontal
+        if old_h == horizontal:
+            return
+        if trace is None:
+            self._scene.set_horizontal(horizontal)
+            return
+
+        vp = self.viewport().rect()
+        old_scene_pt = self.mapToScene(vp.center())
+        old_time_coord = old_scene_pt.x() if old_h else old_scene_pt.y()
+        old_ns = self._scene.scene_to_ns(old_time_coord)
+        old_orth = old_scene_pt.y() if old_h else old_scene_pt.x()
+        self._view_pos_by_orientation[old_h] = (old_ns, old_orth)
+
+        target_ns, target_orth = self._view_pos_by_orientation.get(horizontal, (old_ns, old_orth))
+
+        _span = max(trace.time_max - trace.time_min, 1)
+        _vp_half = int(self._fit_viewport_size() * 10 * self._scene._timescale_per_px)
+        _half = max(_vp_half, _span // 100)
+        self._scene._ns_range_hint = (
+            max(trace.time_min, target_ns - _half),
+            min(trace.time_max, target_ns + _half),
+        )
+
+        self._scene.set_horizontal(horizontal)
+        new_time_coord = self._scene.ns_to_scene_coord(target_ns)
+        if horizontal:
+            self.centerOn(new_time_coord, target_orth)
+        else:
+            self.centerOn(target_orth, new_time_coord)
+        self.viewport().update()
 
     def set_show_sti(self, show: bool) -> None:
         self._scene.set_show_sti(show)
@@ -5196,6 +5253,8 @@ class RcSettings:
             "view_mode":  "task",
             "show_sti":   "true",
             "show_grid":  "true",
+            "show_marks": "true",
+            "show_find": "false",
         },
         "zoom": {
             "timescale_per_px": "-1",
@@ -5699,6 +5758,13 @@ class MainWindow(QMainWindow):
         self._row_gap_val:            int   = ROW_GAP
         self._timescale_per_px_default_val:  float = _TIMESCALE_PER_PX_DEFAULT
         self._hover_highlight_val:    bool  = _HOVER_HIGHLIGHT_ENABLED
+        self._bookmarks: List[TraceBookmark] = []
+        self._annotations: List[TraceAnnotation] = []
+        self._mark_next_id: int = 1
+        self._find_hits: List[int] = []
+        self._find_hit_idx: int = -1
+        self._find_marker_ns: Optional[int] = None
+        self._find_marker_items: List[QGraphicsItem] = []
 
         self.setWindowTitle("BTF Trace Viewer")
         self.resize(1280, 720)
@@ -5811,6 +5877,8 @@ class MainWindow(QMainWindow):
         if not s.get_bool("view", "show_stats", True):
             self._show_stats = False
             self._stats_dock.setVisible(False)
+        self._marks_dock.setVisible(s.get_bool("view", "show_marks", True))
+        self._find_dock.setVisible(s.get_bool("view", "show_find", False))
 
         # Keep the Light-theme menu label in sync when we restored a light theme.
         if not self._is_dark:
@@ -5855,6 +5923,8 @@ class MainWindow(QMainWindow):
                     pass
             self._parse_thread = None
 
+        self._save_current_trace_state()
+
         # Window geometry – only save non-maximised size/position so we can
         # restore the proper normal-state geometry if the user un-maximises.
         if self.isMaximized():
@@ -5877,6 +5947,8 @@ class MainWindow(QMainWindow):
             "show_grid":     str(self._show_grid).lower(),
             "show_legend":   str(self._show_legend).lower(),
             "show_stats":    str(self._show_stats).lower(),
+            "show_marks":    str(self._marks_dock.isVisible()).lower(),
+            "show_find":     str(self._find_dock.isVisible()).lower(),
             "font_size":     str(self._font_size_val),
             "ui_font_size":  str(self._ui_font_size_val),
             "max_cursors":   str(self._max_cursors_val),
@@ -6107,9 +6179,7 @@ class MainWindow(QMainWindow):
         # --- Central widget: QStackedWidget (page 0=welcome, page 1=timeline) ---
         self._view = TimelineView(self)
         self._view.zoom_changed.connect(self._on_zoom_changed)
-        self._view.cursors_changed.connect(
-            lambda times: self._cursor_bar.rebuild(times, self._trace)
-        )
+        self._view.cursors_changed.connect(self._on_cursors_changed)
 
         self._welcome_page = QWidget()
         _wl = QVBoxLayout(self._welcome_page)
@@ -6148,11 +6218,133 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.BottomDockWidgetArea, stats_dock)
         self._stats_dock = stats_dock
 
+        # --- Marks dock (bookmarks + annotations) ---
+        marks_host = QWidget()
+        marks_v = QVBoxLayout(marks_host)
+        marks_v.setContentsMargins(6, 6, 6, 6)
+        marks_v.setSpacing(6)
+        marks_tabs = QTabWidget()
+
+        bm_page = QWidget()
+        bm_v = QVBoxLayout(bm_page)
+        bm_v.setContentsMargins(0, 0, 0, 0)
+        bm_v.setSpacing(4)
+        self._bookmark_list = QListWidget()
+        self._bookmark_list.itemDoubleClicked.connect(lambda item: self._jump_to_ns(int(item.data(Qt.UserRole + 1))))
+        self._bookmark_list.itemChanged.connect(self._on_bookmark_item_changed)
+        bm_v.addWidget(self._bookmark_list)
+        bm_btns = QHBoxLayout()
+        bm_btns.setContentsMargins(0, 0, 0, 0)
+        bm_add = QPushButton("Add")
+        bm_add.clicked.connect(self._add_bookmark_at_center)
+        bm_jump = QPushButton("Jump")
+        bm_jump.clicked.connect(self._jump_selected_bookmark)
+        bm_del = QPushButton("Delete")
+        bm_del.clicked.connect(self._delete_selected_bookmark)
+        bm_btns.addWidget(bm_add)
+        bm_btns.addWidget(bm_jump)
+        bm_btns.addWidget(bm_del)
+        bm_v.addLayout(bm_btns)
+        marks_tabs.addTab(bm_page, "Bookmarks")
+
+        an_page = QWidget()
+        an_v = QVBoxLayout(an_page)
+        an_v.setContentsMargins(0, 0, 0, 0)
+        an_v.setSpacing(4)
+        self._annotation_list = QListWidget()
+        self._annotation_list.itemDoubleClicked.connect(lambda item: self._jump_to_ns(int(item.data(Qt.UserRole + 1))))
+        an_v.addWidget(self._annotation_list)
+        self._annotation_input = QLineEdit()
+        self._annotation_input.setPlaceholderText("Annotation note...")
+        self._annotation_input.returnPressed.connect(self._add_annotation_at_center)
+        an_v.addWidget(self._annotation_input)
+        an_btns = QHBoxLayout()
+        an_btns.setContentsMargins(0, 0, 0, 0)
+        an_add = QPushButton("Add")
+        an_add.clicked.connect(self._add_annotation_at_center)
+        an_jump = QPushButton("Jump")
+        an_jump.clicked.connect(self._jump_selected_annotation)
+        an_del = QPushButton("Delete")
+        an_del.clicked.connect(self._delete_selected_annotation)
+        an_btns.addWidget(an_add)
+        an_btns.addWidget(an_jump)
+        an_btns.addWidget(an_del)
+        an_v.addLayout(an_btns)
+        marks_tabs.addTab(an_page, "Annotations")
+        marks_v.addWidget(marks_tabs)
+        self._range_stats_label = QLabel("Range: place two cursors to measure")
+        self._range_stats_label.setStyleSheet("color:#999;")
+        marks_v.addWidget(self._range_stats_label)
+
+        marks_dock = QDockWidget("Marks", self)
+        marks_dock.setWidget(marks_host)
+        marks_dock.setFeatures(QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetMovable)
+        marks_dock.setMinimumWidth(190)
+        marks_dock.setMaximumWidth(260)
+        marks_dock.setMinimumHeight(120)
+        marks_dock.setMaximumHeight(220)
+        self.addDockWidget(Qt.RightDockWidgetArea, marks_dock)
+        self._marks_dock = marks_dock
+
+        # --- Find dock ---
+        find_host = QWidget()
+        find_v = QVBoxLayout(find_host)
+        find_v.setContentsMargins(6, 6, 6, 6)
+        find_v.setSpacing(6)
+        self._find_input = QLineEdit()
+        self._find_input.setPlaceholderText("Find task or annotation text...")
+        self._find_input.textChanged.connect(self._recompute_find_hits)
+        find_v.addWidget(self._find_input)
+        self._find_mode_combo = QComboBox()
+        self._find_mode_combo.addItems(["Contains", "Exact", "Regex"])
+        self._find_mode_combo.setCurrentIndex(0)
+        self._find_mode_combo.currentIndexChanged.connect(self._recompute_find_hits)
+        find_v.addWidget(self._find_mode_combo)
+        find_btns = QHBoxLayout()
+        find_btns.setContentsMargins(0, 0, 0, 0)
+        find_prev = QPushButton("Previous")
+        find_prev.clicked.connect(self._find_prev)
+        find_next = QPushButton("Next")
+        find_next.clicked.connect(self._find_next)
+        find_btns.addWidget(find_prev)
+        find_btns.addWidget(find_next)
+        find_v.addLayout(find_btns)
+        self._find_status = QLabel("0 matches")
+        self._find_status.setStyleSheet("color:#999;")
+        find_v.addWidget(self._find_status)
+        find_dock = QDockWidget("Find & Jump", self)
+        find_dock.setWidget(find_host)
+        find_dock.setFeatures(QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetMovable)
+        find_dock.setMinimumWidth(190)
+        find_dock.setMaximumWidth(260)
+        find_dock.setMinimumHeight(120)
+        find_dock.setMaximumHeight(220)
+        self.addDockWidget(Qt.RightDockWidgetArea, find_dock)
+        self.tabifyDockWidget(self._marks_dock, find_dock)
+        self._find_dock = find_dock
+
+        # Put Marks below Legend and keep its startup height compact.
+        self.splitDockWidget(self._legend_dock, self._marks_dock, Qt.Vertical)
+        self.resizeDocks(
+            [self._legend_dock, self._marks_dock],
+            [420, 150],
+            Qt.Vertical,
+        )
+
+        # Keep right-side width compact on startup.
+        self.resizeDocks(
+            [self._legend_dock, self._marks_dock],
+            [220, 220],
+            Qt.Horizontal,
+        )
+
         # Keep runtime state in sync if the user closes a dock via its X button
         self._legend_dock.visibilityChanged.connect(
             lambda v: setattr(self, "_show_legend", v))
         self._stats_dock.visibilityChanged.connect(
             lambda v: setattr(self, "_show_stats", v))
+        self._view.horizontalScrollBar().valueChanged.connect(lambda _: self._on_view_scrolled())
+        self._view.verticalScrollBar().valueChanged.connect(lambda _: self._on_view_scrolled())
 
         # --- Signal wiring: legend ↔ scene highlight sync ---
         # Legend click → toggle locked highlight
@@ -6204,6 +6396,9 @@ class MainWindow(QMainWindow):
         self._act_theme = vm.addAction("Switch to &Light Theme", self._toggle_theme)
         vm.addSeparator()
         vm.addAction("⚙ &Settings…", self._open_settings, "Ctrl+,")
+        vm.addSeparator()
+        self._act_show_marks = vm.addAction("Show &Marks Panel", lambda: self._marks_dock.setVisible(True))
+        self._act_show_find = vm.addAction("Show &Find Panel", lambda: self._find_dock.setVisible(True))
 
         # --- Cursors menu ---
         cm = mb.addMenu("&Cursors")
@@ -6216,6 +6411,13 @@ class MainWindow(QMainWindow):
             "Tip: Left-click on timeline to place cursor\n"
             "Right-click on timeline to remove nearest cursor"
         ).setEnabled(False)
+
+        # --- Navigate menu ---
+        nm = mb.addMenu("&Navigate")
+        nm.addAction("Add &Bookmark", self._add_bookmark_at_center, "Ctrl+B")
+        nm.addAction("&Find", self._focus_find, QKeySequence.Find)
+        nm.addAction("Find &Next", self._find_next, QKeySequence.FindNext)
+        nm.addAction("Find &Previous", self._find_prev, QKeySequence.FindPrevious)
 
         # --- Help menu ---
         hm = mb.addMenu("&Help")
@@ -6334,6 +6536,7 @@ class MainWindow(QMainWindow):
         self._tb_horiz_btn.setChecked(horizontal)
         self._tb_vert_btn.setChecked(not horizontal)
         self._view.set_horizontal(horizontal)
+        self._refresh_find_marker()
 
     def _set_show_sti(self, show: bool, persist: bool = True) -> None:
         """Apply STI visibility and keep all STI UI controls in sync."""
@@ -6383,6 +6586,7 @@ class MainWindow(QMainWindow):
                 self._tb_expand_all_btn.setText(
                     "⊞ Expand All. " if all_expanded else "⊟ Collapse All")
         self._view.set_view_mode(mode)
+        self._refresh_find_marker()
 
     def _toggle_expand_all_cores(self) -> None:
         """Expand or collapse all cores based on the button's checked state."""
@@ -6401,7 +6605,295 @@ class MainWindow(QMainWindow):
         if path:
             self._open_file(path)
 
+    def _trace_state_key(self, path: str) -> str:
+        norm = os.path.abspath(path)
+        digest = zlib.crc32(norm.encode("utf-8")) & 0xFFFFFFFF
+        return f"trace_{digest:08x}"
+
+    def _save_current_trace_state(self) -> None:
+        if not self._current_file:
+            return
+        key = self._trace_state_key(self._current_file)
+        payload = {
+            "next_id": self._mark_next_id,
+            "bookmarks": [{"id": b.id, "ns": b.ns, "label": b.label} for b in self._bookmarks],
+            "annotations": [{"id": a.id, "ns": a.ns, "note": a.note} for a in self._annotations],
+        }
+        self._settings.set("trace_state", key, json.dumps(payload, ensure_ascii=True))
+
+    def _load_trace_state(self, path: str) -> None:
+        self._bookmarks = []
+        self._annotations = []
+        self._mark_next_id = 1
+        raw = self._settings.get("trace_state", self._trace_state_key(path), "")
+        if raw.strip():
+            try:
+                payload = json.loads(raw)
+                max_id = 0
+                for entry in payload.get("bookmarks", []):
+                    bid = int(entry.get("id", 0))
+                    if bid <= 0:
+                        bid = max_id + 1
+                    b = TraceBookmark(bid, int(entry.get("ns", 0)), str(entry.get("label", "")).strip())
+                    self._bookmarks.append(b)
+                    max_id = max(max_id, b.id)
+                for entry in payload.get("annotations", []):
+                    note = str(entry.get("note", "")).strip()
+                    aid = int(entry.get("id", 0))
+                    if aid <= 0:
+                        aid = max_id + 1
+                    a = TraceAnnotation(aid, int(entry.get("ns", 0)), note)
+                    self._annotations.append(a)
+                    max_id = max(max_id, a.id)
+                self._mark_next_id = max(int(payload.get("next_id", 0)), max_id + 1)
+            except (ValueError, TypeError):
+                pass
+        if self._mark_next_id < 1:
+            self._mark_next_id = 1
+        self._rebuild_bookmark_list()
+        self._rebuild_annotation_list()
+
+    def _jump_to_ns(self, ns: int) -> None:
+        if self._trace is None:
+            return
+        self._view.scroll_to_ns(ns)
+
+    def _add_bookmark_at_center(self) -> None:
+        if self._trace is None:
+            return
+        ns = self._view.view_center_ns()
+        unit = self._current_time_unit()
+        label = f"Bookmark @{_format_time(ns, unit)}"
+        self._bookmarks.append(TraceBookmark(id=self._mark_next_id, ns=ns, label=label))
+        self._mark_next_id += 1
+        self._bookmarks.sort(key=lambda b: b.ns)
+        self._rebuild_bookmark_list()
+        self._save_current_trace_state()
+
+    def _jump_selected_bookmark(self) -> None:
+        item = self._bookmark_list.currentItem()
+        if item is None:
+            return
+        self._jump_to_ns(int(item.data(Qt.UserRole + 1)))
+
+    def _delete_selected_bookmark(self) -> None:
+        item = self._bookmark_list.currentItem()
+        if item is None:
+            return
+        bid = int(item.data(Qt.UserRole))
+        for i, b in enumerate(self._bookmarks):
+            if b.id == bid:
+                self._bookmarks.pop(i)
+                break
+        self._rebuild_bookmark_list()
+        self._save_current_trace_state()
+
+    def _rebuild_bookmark_list(self) -> None:
+        self._bookmark_list.blockSignals(True)
+        self._bookmark_list.clear()
+        if self._trace is None:
+            self._bookmark_list.blockSignals(False)
+            return
+        unit = self._current_time_unit()
+        for b in sorted(self._bookmarks, key=lambda x: x.ns):
+            txt = b.label or f"Bookmark @{_format_time(b.ns, unit)}"
+            item = QListWidgetItem(txt)
+            item.setData(Qt.UserRole, int(b.id))
+            item.setData(Qt.UserRole + 1, int(b.ns))
+            item.setToolTip(f"{_format_time(b.ns, unit)}")
+            item.setFlags(item.flags() | Qt.ItemIsEditable)
+            self._bookmark_list.addItem(item)
+        self._bookmark_list.blockSignals(False)
+
+    def _on_bookmark_item_changed(self, item: QListWidgetItem) -> None:
+        if item is None:
+            return
+        bid = int(item.data(Qt.UserRole))
+        new_label = item.text().strip()
+        for b in self._bookmarks:
+            if b.id == bid:
+                # Empty label → revert to the default timestamp label so the
+                # bookmark keeps useful identity information.
+                b.label = new_label or f"Bookmark @{_format_time(b.ns, self._current_time_unit())}"
+                break
+        self._save_current_trace_state()
+
+    def _add_annotation_at_center(self) -> None:
+        if self._trace is None:
+            return
+        note = self._annotation_input.text().strip()
+        if not note:
+            return
+        ns = self._view.view_center_ns()
+        self._annotations.append(TraceAnnotation(id=self._mark_next_id, ns=ns, note=note))
+        self._mark_next_id += 1
+        self._annotations.sort(key=lambda a: a.ns)
+        self._annotation_input.clear()
+        self._rebuild_annotation_list()
+        self._save_current_trace_state()
+
+    def _jump_selected_annotation(self) -> None:
+        item = self._annotation_list.currentItem()
+        if item is None:
+            return
+        self._jump_to_ns(int(item.data(Qt.UserRole + 1)))
+
+    def _delete_selected_annotation(self) -> None:
+        item = self._annotation_list.currentItem()
+        if item is None:
+            return
+        aid = int(item.data(Qt.UserRole))
+        for i, a in enumerate(self._annotations):
+            if a.id == aid:
+                self._annotations.pop(i)
+                break
+        self._rebuild_annotation_list()
+        self._save_current_trace_state()
+
+    def _rebuild_annotation_list(self) -> None:
+        self._annotation_list.blockSignals(True)
+        self._annotation_list.clear()
+        if self._trace is None:
+            self._annotation_list.blockSignals(False)
+            return
+        unit = self._current_time_unit()
+        for a in sorted(self._annotations, key=lambda x: x.ns):
+            txt = f"{_format_time(a.ns, unit)}  {a.note}"
+            item = QListWidgetItem(txt)
+            item.setData(Qt.UserRole, int(a.id))
+            item.setData(Qt.UserRole + 1, int(a.ns))
+            self._annotation_list.addItem(item)
+        self._annotation_list.blockSignals(False)
+
+    def _focus_find(self) -> None:
+        self._find_dock.setVisible(True)
+        self._find_input.setFocus()
+        self._find_input.selectAll()
+
+    def _recompute_find_hits(self) -> None:
+        self._find_hits = []
+        self._find_hit_idx = -1
+        self._set_find_marker_ns(None)
+        if self._trace is None:
+            self._find_status.setText("0 matches")
+            return
+        query = self._find_input.text().strip()
+        if not query:
+            self._find_status.setText("0 matches")
+            return
+        mode = self._find_mode_combo.currentText().lower()
+        regex_obj = None
+        if mode == "regex":
+            try:
+                regex_obj = re.compile(query, re.IGNORECASE)
+            except re.error:
+                self._find_status.setText("Regex error")
+                self._set_find_marker_ns(None)
+                return
+        for mk, segs in self._trace.seg_map_by_merge_key.items():
+            raw = self._trace.task_repr.get(mk, mk)
+            disp = task_display_name(raw)
+            hay = f"{mk} {raw} {disp}"
+            if mode == "contains":
+                matched = query.lower() in hay.lower()
+            elif mode == "exact":
+                matched = query.lower() == mk.lower() or query.lower() == raw.lower() or query.lower() == disp.lower()
+            else:
+                matched = bool(regex_obj.search(hay)) if regex_obj is not None else False
+            if matched:
+                self._find_hits.extend(s.start for s in segs)
+        for ann in self._annotations:
+            hay = ann.note
+            if mode == "contains":
+                matched = query.lower() in hay.lower()
+            elif mode == "exact":
+                matched = query.lower() == hay.lower()
+            else:
+                matched = bool(regex_obj.search(hay)) if regex_obj is not None else False
+            if matched:
+                self._find_hits.append(ann.ns)
+        self._find_hits = sorted(set(self._find_hits))
+        self._find_status.setText(f"{len(self._find_hits)} matches")
+        if not self._find_hits:
+            self._set_find_marker_ns(None)
+
+    def _find_next(self) -> None:
+        self._step_find_hit(forward=True)
+
+    def _find_prev(self) -> None:
+        self._step_find_hit(forward=False)
+
+    def _step_find_hit(self, forward: bool) -> None:
+        if not self._find_hits:
+            return
+        n = len(self._find_hits)
+        if self._find_hit_idx < 0:
+            # No previous jump — seed from viewport position.
+            now = self._view.view_center_ns()
+            if forward:
+                idx = bisect_right(self._find_hits, now) % n
+            else:
+                idx = (bisect_left(self._find_hits, now) - 1) % n
+        else:
+            if forward:
+                idx = (self._find_hit_idx + 1) % n
+            else:
+                idx = (self._find_hit_idx - 1) % n
+        self._find_hit_idx = idx
+        self._jump_to_ns(self._find_hits[idx])
+        self._set_find_marker_ns(self._find_hits[idx])
+        self._find_status.setText(f"{n} matches (at {idx + 1})")
+
+    def _set_find_marker_ns(self, ns: Optional[int]) -> None:
+        self._find_marker_ns = ns
+        self._refresh_find_marker()
+
+    def _clear_find_marker_items(self) -> None:
+        sc = self._view._scene
+        for item in self._find_marker_items:
+            try:
+                sc.removeItem(item)
+            except RuntimeError:
+                pass
+        self._find_marker_items = []
+
+    def _refresh_find_marker(self) -> None:
+        self._clear_find_marker_items()
+        if self._find_marker_ns is None or self._trace is None:
+            return
+        sc = self._view._scene
+        coord = sc.ns_to_scene_coord(self._find_marker_ns)
+        scene_r = sc.sceneRect()
+        pen = QPen(QColor("#FFD54F"), 1.5, Qt.DotLine)
+        if sc._horizontal:
+            line = QGraphicsLineItem(coord, 0, coord, scene_r.height())
+            line.setPen(pen)
+            line.setZValue(33)
+            sc.addItem(line)
+            lbl = sc.addSimpleText("Find", _monospace_font(max(8, self._font_size_val - 1), QFont.Bold))
+            lbl.setBrush(QBrush(QColor("#FFD54F")))
+            lbl.setZValue(34)
+            lbl.setPos(min(coord + 4, scene_r.width() - 36), 2)
+            self._find_marker_items = [line, lbl]
+        else:
+            line = QGraphicsLineItem(0, coord, scene_r.width(), coord)
+            line.setPen(pen)
+            line.setZValue(33)
+            sc.addItem(line)
+            lbl = sc.addSimpleText("Find", _monospace_font(max(8, self._font_size_val - 1), QFont.Bold))
+            lbl.setBrush(QBrush(QColor("#FFD54F")))
+            lbl.setZValue(34)
+            lbl.setPos(2, min(coord + 2, scene_r.height() - 14))
+            self._find_marker_items = [line, lbl]
+
+    def _on_view_scrolled(self) -> None:
+        if self._find_marker_ns is not None:
+            self._refresh_find_marker()
+
     def _open_file(self, path: str) -> None:
+        if self._trace is not None and self._current_file:
+            self._save_current_trace_state()
+
         if self._progress_dialog is not None:
             self._progress_dialog.close()
             self._progress_dialog = None
@@ -6474,6 +6966,8 @@ class MainWindow(QMainWindow):
                 self._view.load_trace(trace)
                 self._stack.setCurrentIndex(1)
                 self._refresh_zoom_ui_unit()
+                self._load_trace_state(path)
+                self._recompute_find_hits()
                 # Re-apply the saved zoom only when re-opening the exact same file
                 # so that new files always start at fit-to-width.
                 if _prev_file == path and _saved_zoom > 0:
@@ -6711,11 +7205,45 @@ class MainWindow(QMainWindow):
         unit = self._current_time_unit()
         z = f"{timescale_per_px:.1f} {unit}/px"
         self._zoom_label.setText(f"Zoom: {z}")
+        self._refresh_find_marker()
 
     def _on_cursor_delete(self, ns: int) -> None:
         """Remove the cursor whose timestamp matches *ns* (from a badge drag-out)."""
         self._view._scene.remove_nearest_cursor(ns)
         self._view.cursors_changed.emit(self._view._scene.cursor_times())
+
+    def _on_cursors_changed(self, times: list) -> None:
+        self._cursor_bar.rebuild(times, self._trace)
+        if self._trace is None or len(times) < 2:
+            self._range_stats_label.setText("Range: place two cursors to measure")
+            return
+        t_sorted = sorted(times)
+        lo = t_sorted[0]
+        hi = t_sorted[1]
+        dt = max(0, hi - lo)
+        unit = self._current_time_unit()
+        switches = 0
+        top_task = "-"
+        top_ns = 0
+        if self._trace is not None and dt > 0:
+            task_acc: Dict[str, int] = {}
+            for seg in self._trace.segments:
+                if seg.end <= lo or seg.start >= hi:
+                    continue
+                ov = min(seg.end, hi) - max(seg.start, lo)
+                if ov <= 0:
+                    continue
+                switches += 1
+                raw = self._trace.task_repr.get(task_merge_key(seg.task), seg.task)
+                disp = task_display_name(raw)
+                task_acc[disp] = task_acc.get(disp, 0) + ov
+            if task_acc:
+                top_task, top_ns = max(task_acc.items(), key=lambda kv: kv[1])
+        top_pct = (100.0 * top_ns / dt) if dt > 0 else 0.0
+        self._range_stats_label.setText(
+            f"Range C1-C2: {_format_time(dt, unit)} | slices: {switches} | "
+            f"top: {top_task} ({top_pct:.1f}%)"
+        )
 
     def _on_legend_task_clicked(self, task: str) -> None:
         """Toggle click-locked highlight for *task* from the Legend panel."""
