@@ -120,9 +120,14 @@ MIN_SEG_WIDTH = 1.0  # Minimum painted width of a task segment (px).
 # ---- Performance / Level-of-Detail ----------------------------------------
 _NS_PER_PX_DEFAULT       = 2.0    # Initial zoom level (nanoseconds per screen pixel).
 _HOVER_HIGHLIGHT_ENABLED = False  # Highlight task bars when hovering the label (default off).
+_PERFORMANCE_MODE_ENABLED = False # Performance-first rendering mode (default off).
+# Performance mode: inline text is shown only when zoomed in enough.
+_PERFORMANCE_TEXT_MAX_NS_PER_PX = 6.0
 # _BatchRowItem.paint() LOD thresholds (Qt levelOfDetail: 1.0 = 100% zoom).
 _PAINT_LOD_COARSE        = 0.45   # Below: merge nearby segments, skip pen outlines.
 _PAINT_LOD_MICRO         = 0.12   # Below: draw one tinted activity bar per row.
+# Inline segment text is only rendered near 1:1 zoom; zoomed-out views keep
+# bars only for performance, especially at far-right large coordinates.
 # Number of bins used when pre-computing a coarse LOD summary at parse time.
 # The summary is stored in BtfTrace and replaces O(N_segs) _lod_reduce calls
 # with an O(4096) worst-case iteration during fit-to-view rebuilds.
@@ -1070,6 +1075,9 @@ class TimelineScene(QGraphicsScene):
         self._row_height: int = ROW_HEIGHT              # row height (px)
         self._row_gap:    int = ROW_GAP                 # gap between rows (px)
         self._hover_highlight: bool = _HOVER_HIGHLIGHT_ENABLED
+        self._performance_mode: bool = _PERFORMANCE_MODE_ENABLED
+        self._zoom_interaction_active: bool = False
+        self._task_filter_q: str = ""
         # -- Viewport time bounds (updated at each rebuild for segment clipping) --
         # Set to None initially; _update_viewport_bounds() fills them from the
         # attached QGraphicsView, or falls back to the full trace time range.
@@ -1194,6 +1202,27 @@ class TimelineScene(QGraphicsScene):
         self._hover_highlight = enabled
         if not enabled:
             self.clear_hover()
+
+    def set_performance_mode(self, enabled: bool) -> None:
+        """Enable or disable performance-first rendering mode."""
+        self._performance_mode = bool(enabled)
+        self.rebuild()
+
+    def set_zoom_interaction_active(self, active: bool) -> None:
+        """Mark whether a zoom gesture is currently in progress."""
+        self._zoom_interaction_active = bool(active)
+
+    # ------------------------------------------------------------------
+    # Filtering
+    # ------------------------------------------------------------------
+
+    def set_task_filter(self, text: str) -> None:
+        """Filter visible task rows/columns by merge-key/raw/display name."""
+        q = (text or "").strip().lower()
+        if q == self._task_filter_q:
+            return
+        self._task_filter_q = q
+        self.rebuild()
 
     def set_ns_per_px_default(self, v: float) -> None:
         """Change the maximum zoom-in limit (ns/px) and rebuild if needed."""
@@ -1608,19 +1637,67 @@ class TimelineScene(QGraphicsScene):
         self._draw_cursors()
         self.scene_rebuilt.emit()
 
+    # ------------------------------------------------------------------
+    # Coordinate helpers
+    # ------------------------------------------------------------------
+
     def _ns_to_px(self, ns: int) -> float:
         return (ns - self._trace.time_min) / self._ns_per_px
+
+    # ------------------------------------------------------------------
+    # Filtering helpers
+    # ------------------------------------------------------------------
+
+    def _task_merge_key_matches_filter(self, merge_key: str) -> bool:
+        if not self._task_filter_q:
+            return True
+        tr = self._trace
+        if tr is None:
+            return True
+        raw = tr.task_repr.get(merge_key, merge_key)
+        disp = task_display_name(raw)
+        q = self._task_filter_q
+        return (q in merge_key.lower()) or (q in raw.lower()) or (q in disp.lower())
+
+    def _task_raw_name_matches_filter(self, raw_name: str) -> bool:
+        if not self._task_filter_q:
+            return True
+        mk = task_merge_key(raw_name)
+        disp = task_display_name(raw_name)
+        q = self._task_filter_q
+        return (q in mk.lower()) or (q in raw_name.lower()) or (q in disp.lower())
+
+    def _sti_channel_matches_filter(self, channel: str) -> bool:
+        """Return True when *channel* or its STI notes match the active filter."""
+        q = self._task_filter_q
+        if not q:
+            return True
+        if q in channel.lower():
+            return True
+        tr = self._trace
+        if tr is None:
+            return False
+        for ev in tr.sti_events_by_target.get(channel, []):
+            if q in (ev.note or "").lower():
+                return True
+        return False
 
     def _build_horizontal(self) -> None:
         trace = self._trace
         font = _monospace_font(self._font_size)
+        # Use a slightly smaller font for inline segment labels so dense
+        # regions remain readable across platforms with different font metrics.
+        font_inline = _monospace_font(max(6, self._font_size - 1))
         fm   = QFontMetrics(font)
+        fm_inline = QFontMetrics(font_inline)
 
         # trace.tasks is a sorted list of merge-keys.  task_repr maps
         # each merge-key to its representative raw name, which is needed
         # to resolve display names and colours.
-        task_rows = trace.tasks
+        task_rows = [t for t in trace.tasks if self._task_merge_key_matches_filter(t)]
         sti_rows  = trace.sti_channels if self._show_sti else []
+        if self._task_filter_q:
+            sti_rows = [c for c in sti_rows if self._sti_channel_matches_filter(c)]
         n_task = len(task_rows)
         n_sti  = len(sti_rows)
         total_rows = n_task + n_sti
@@ -1781,8 +1858,10 @@ class TimelineScene(QGraphicsScene):
             batch = _BatchRowItem(
                 QRectF(lw, y_top, timeline_w, self._row_height),
                 seg_data, trace.time_scale,
-                label_font=font, label_fm=fm, label_text=disp,
-                xs=xs, time_min=trace.time_min)
+                label_font=font_inline, label_fm=fm_inline, label_text=disp,
+                xs=xs, time_min=trace.time_min, ns_per_px=self._ns_per_px,
+                performance_mode=self._performance_mode,
+                interaction_active=self._zoom_interaction_active)
             batch.setZValue(1)
             self.addItem(batch)
 
@@ -1857,12 +1936,18 @@ class TimelineScene(QGraphicsScene):
     def _build_vertical(self) -> None:
         trace = self._trace
         font = _monospace_font(self._font_size)
+        # Keep inline labels one size smaller for better visibility on
+        # high-DPI and wider-metric monospace fonts.
+        font_inline = _monospace_font(max(6, self._font_size - 1))
         fm   = QFontMetrics(font)
+        fm_inline = QFontMetrics(font_inline)
 
         # trace.tasks is a sorted list of merge-keys.  task_repr maps
         # each merge-key to its representative raw name.
-        task_cols = trace.tasks
+        task_cols = [t for t in trace.tasks if self._task_merge_key_matches_filter(t)]
         sti_cols  = trace.sti_channels if self._show_sti else []
+        if self._task_filter_q:
+            sti_cols = [c for c in sti_cols if self._sti_channel_matches_filter(c)]
         n_task = len(task_cols)
         n_sti  = len(sti_cols)
         total_cols = n_task + n_sti
@@ -2020,8 +2105,10 @@ class TimelineScene(QGraphicsScene):
             batch = _BatchRowItem(
                 QRectF(x_left, label_row_h, col_w, timeline_h),
                 seg_data, trace.time_scale,
-                label_font=font, label_fm=fm, label_text=disp,
-                xs=xs, time_min=trace.time_min)
+                label_font=font_inline, label_fm=fm_inline, label_text=disp,
+                xs=xs, time_min=trace.time_min, ns_per_px=self._ns_per_px,
+                performance_mode=self._performance_mode,
+                interaction_active=self._zoom_interaction_active)
             batch.setZValue(1)
             self.addItem(batch)
 
@@ -2097,6 +2184,19 @@ class TimelineScene(QGraphicsScene):
         core_tasks           = trace.core_task_order
         task_seg_map_by_core = trace.core_task_segs
         sti_rows             = trace.sti_channels if self._show_sti else []
+        if self._task_filter_q:
+            sti_rows = [c for c in sti_rows if self._sti_channel_matches_filter(c)]
+
+        if self._task_filter_q:
+            _filtered_core_names = []
+            _filtered_core_tasks = {}
+            for _core in core_names:
+                _tasks = [t for t in core_tasks[_core] if self._task_raw_name_matches_filter(t)]
+                if _tasks:
+                    _filtered_core_names.append(_core)
+                    _filtered_core_tasks[_core] = _tasks
+            core_names = _filtered_core_names
+            core_tasks = _filtered_core_tasks
 
         # TICK is a global event — shown as a sticky first row above all cores.
         _tick_mk   = task_merge_key("TICK")
@@ -2381,7 +2481,9 @@ class TimelineScene(QGraphicsScene):
                     QRectF(lw, y_top2, timeline_w, self._row_height),
                     seg_data, trace.time_scale,
                     label_font=font_sm, label_fm=fm_sm, label_text=disp,
-                    xs=xs, time_min=trace.time_min)
+                    xs=xs, time_min=trace.time_min, ns_per_px=self._ns_per_px,
+                    performance_mode=self._performance_mode,
+                    interaction_active=self._zoom_interaction_active)
                 batch.setZValue(1)
                 self.addItem(batch)
 
@@ -2449,6 +2551,19 @@ class TimelineScene(QGraphicsScene):
         core_tasks           = trace.core_task_order
         task_seg_map_by_core = trace.core_task_segs
         sti_cols             = trace.sti_channels if self._show_sti else []
+        if self._task_filter_q:
+            sti_cols = [c for c in sti_cols if self._sti_channel_matches_filter(c)]
+
+        if self._task_filter_q:
+            _filtered_core_names = []
+            _filtered_core_tasks = {}
+            for _core in core_names:
+                _tasks = [t for t in core_tasks[_core] if self._task_raw_name_matches_filter(t)]
+                if _tasks:
+                    _filtered_core_names.append(_core)
+                    _filtered_core_tasks[_core] = _tasks
+            core_names = _filtered_core_names
+            core_tasks = _filtered_core_tasks
 
         # TICK is a global event — shown as a band in the ruler column.
         _tick_mk   = task_merge_key("TICK")
@@ -2698,7 +2813,9 @@ class TimelineScene(QGraphicsScene):
                     QRectF(x_left2, label_row_h, col_w, timeline_h),
                     seg_data, trace.time_scale,
                     label_font=font_sm, label_fm=fm_sm, label_text=disp,
-                    xs=xs, time_min=trace.time_min)
+                    xs=xs, time_min=trace.time_min, ns_per_px=self._ns_per_px,
+                    performance_mode=self._performance_mode,
+                    interaction_active=self._zoom_interaction_active)
                 batch.setZValue(1)
                 self.addItem(batch)
 
@@ -2965,12 +3082,17 @@ class _BatchRowItem(QGraphicsItem):
     def __init__(self, bounding_rect: QRectF, seg_data: list, time_scale: str,
                  label_font=None, label_fm=None, label_text: str = "",
                  presorted: bool = False, xs: Optional[list] = None,
-                 time_min: int = 0):
+                 time_min: int = 0, ns_per_px: float = 0.0,
+                 performance_mode: bool = False,
+                 interaction_active: bool = False):
         super().__init__()
         self._bounding_rect = bounding_rect
         self._seg_data      = seg_data      # [(QRectF, QBrush, QPen, seg|None)]
         self._time_scale    = time_scale
         self._time_min      = time_min
+        self._ns_per_px     = ns_per_px
+        self._performance_mode = performance_mode
+        self._interaction_active = interaction_active
         self._label_font    = label_font
         self._label_fm      = label_fm
         self._label_text    = label_text
@@ -3043,6 +3165,9 @@ class _BatchRowItem(QGraphicsItem):
     def paint(self, painter: QPainter, option, widget=None) -> None:
         lod = QStyleOptionGraphicsItem.levelOfDetailFromTransform(
                   painter.worldTransform())
+        _wt0 = painter.worldTransform()
+        _m11_0 = _wt0.m11()
+        _scene_left = (-_wt0.dx() / _m11_0) if _m11_0 != 0.0 else -_wt0.dx()
         painter.save()
 
         if lod < _PAINT_LOD_MICRO:
@@ -3066,17 +3191,32 @@ class _BatchRowItem(QGraphicsItem):
             painter.restore()
             return
 
-        if lod < _PAINT_LOD_COARSE:
+        # Labeled rows stay in detail mode only above a lower LOD floor;
+        # this keeps 1:1 readability while restoring fast coarse mode when
+        # zooming out further.
+        _has_inline_label = bool(self._label_font and self._label_text and self._label_fm)
+        _precision_zone = abs(_scene_left) > 2_000_000.0
+        _label_detail_lod_floor = _PAINT_LOD_COARSE if self._performance_mode else 0.0
+        if lod < _PAINT_LOD_COARSE and not (_has_inline_label and lod >= _label_detail_lod_floor):
             # ---- Tier 2: coarse LOD ----------------------------------------------
             # Use pre-merged coarse_data.  rebuild() already clips to ±1.5×
             # the viewport so painting all coarse entries is safe.
             painter.setPen(Qt.NoPen)
+            _rebase = (abs(option.exposedRect.left()) > 2_000_000.0) if self._horiz else (abs(option.exposedRect.top()) > 2_000_000.0)
+            if _rebase:
+                painter.save()
+                if self._horiz:
+                    painter.translate(-option.exposedRect.left(), 0.0)
+                else:
+                    painter.translate(0.0, -option.exposedRect.top())
             last_brush = None
             for rect, brush, _, _seg in self._coarse_data:
                 if brush is not last_brush:
                     painter.setBrush(brush)
                     last_brush = brush
                 painter.drawRect(rect)
+            if _rebase:
+                painter.restore()
             painter.restore()
             return
 
@@ -3084,6 +3224,13 @@ class _BatchRowItem(QGraphicsItem):
         # rebuild() already pre-clips segments to ±1.5× the viewport, so
         # painting all of _seg_data is safe and correct.
         seg_slice = self._seg_data
+        _rebase = (abs(option.exposedRect.left()) > 2_000_000.0) if self._horiz else (abs(option.exposedRect.top()) > 2_000_000.0)
+        if _rebase:
+            painter.save()
+            if self._horiz:
+                painter.translate(-option.exposedRect.left(), 0.0)
+            else:
+                painter.translate(0.0, -option.exposedRect.top())
         last_brush = None
         last_pen   = None
         for rect, brush, pen, _seg in seg_slice:
@@ -3094,8 +3241,19 @@ class _BatchRowItem(QGraphicsItem):
                 painter.setPen(pen)
                 last_pen = pen
             painter.drawRect(rect)
-        # Inline text labels – second pass to minimise font/pen switches
-        if self._label_font and self._label_text and self._label_fm:
+        if _rebase:
+            painter.restore()
+        # Inline text labels – second pass to minimise font/pen switches.
+        # Performance mode policy:
+        # 1) hide text while zoom interaction is active,
+        # 2) show text only in zoomed-in range (ns/px <= threshold).
+        _allow_inline_text = True
+        if self._performance_mode:
+            _allow_inline_text = (
+                (not self._interaction_active)
+                and (self._ns_per_px <= _PERFORMANCE_TEXT_MAX_NS_PER_PX)
+            )
+        if _allow_inline_text and self._label_font and self._label_text and self._label_fm:
             painter.setPen(QPen(QColor("#FFFFFF")))
             painter.setFont(self._label_font)
             txt = self._label_text
@@ -3111,33 +3269,77 @@ class _BatchRowItem(QGraphicsItem):
             _m22   = _wt.m22()
             _vp_left = (-_wt.dx() / _m11) if _m11 != 0.0 else -_wt.dx()
             _vp_top  = (-_wt.dy() / _m22) if _m22 != 0.0 else -_wt.dy()
-            # self._bounding_rect.x() == label_width for horizontal rows
-            _content_left = _vp_left + self._bounding_rect.x()
-            # RULER_HEIGHT == header height for vertical columns
-            _content_top  = _vp_top  + RULER_HEIGHT
+            # Clip text to the visible timeline content area in scene coords.
+            # Adding viewport origin to row origin over-shifts the clamp and
+            # makes labels disappear after horizontal/vertical scrolling.
+            _content_left = max(_vp_left, self._bounding_rect.x())
+            _content_top  = max(_vp_top,  self._bounding_rect.y())
             if self._horiz:
+                # Fast path: draw in scene coordinates.
+                # Precision path: when scene X is very large, switch to device
+                # coordinates to avoid float precision loss in Qt text layout.
+                _wt = painter.worldTransform()
+                _use_device_text = abs(_content_left) > 2_000_000.0
+                if _use_device_text:
+                    painter.save()
+                    painter.resetTransform()
+
+                def _draw_text(scene_rect: QRectF, draw_txt: str) -> None:
+                    if _use_device_text:
+                        painter.drawText(_wt.mapRect(scene_rect),
+                                         Qt.AlignVCenter | Qt.AlignLeft,
+                                         draw_txt)
+                    else:
+                        painter.drawText(scene_rect,
+                                         Qt.AlignVCenter | Qt.AlignLeft,
+                                         draw_txt)
+
+                any_label_drawn = False
+                best_slot = None  # (text_w, text_x, rect)
                 for rect, _, _, _seg in seg_slice:
+                    vis_rect = rect.intersected(option.exposedRect)
+                    if vis_rect.isEmpty():
+                        continue
                     # Clamp text start to visible content area.
-                    text_x = max(rect.x() + 2.0, _content_left)
-                    text_w = rect.right() - 2.0 - text_x
+                    text_x = max(vis_rect.x() + 2.0, _content_left)
+                    text_w = vis_rect.right() - 2.0 - text_x
                     if text_w <= 4.0:
                         continue
+                    if best_slot is None or text_w > best_slot[0]:
+                        best_slot = (text_w, text_x, vis_rect)
                     if text_w >= adv:
                         draw_txt = txt
                     else:
                         draw_txt = fm.elidedText(txt, Qt.ElideRight, int(text_w) - 4)
                         if draw_txt == "\u2026":
                             continue
-                    painter.drawText(
-                        QRectF(text_x, rect.y(), text_w, rect.height()),
-                        Qt.AlignVCenter | Qt.AlignLeft,
-                        draw_txt,
-                    )
+                    _draw_text(QRectF(text_x, vis_rect.y(), text_w, vis_rect.height()), draw_txt)
+                    any_label_drawn = True
+                if not any_label_drawn and best_slot is not None:
+                    # Cross-platform fallback: when elision collapses to only an
+                    # ellipsis (common with dense traces), draw a short prefix.
+                    text_w, text_x, vis_rect = best_slot
+                    if text_w >= 8.0:
+                        avg_ch = max(1, fm.horizontalAdvance("M"))
+                        n_ch = max(1, int((text_w - 2.0) // avg_ch))
+                        draw_txt = txt[:n_ch]
+                        _draw_text(QRectF(text_x, vis_rect.y(), text_w, vis_rect.height()), draw_txt)
+                if _use_device_text:
+                    painter.restore()
             else:
+                # Keep text coordinates near zero to avoid precision loss when
+                # scene Y becomes very large on long traces.
+                _base_y = option.exposedRect.top()
+                painter.save()
+                painter.translate(0.0, _base_y)
+                any_label_drawn = False
                 for rect, _, _, _seg in seg_slice:
+                    vis_rect = rect.intersected(option.exposedRect)
+                    if vis_rect.isEmpty():
+                        continue
                     # Clamp text start to visible content area.
-                    text_y = max(rect.y() + 2.0, _content_top)
-                    text_h = rect.bottom() - 2.0 - text_y
+                    text_y = max(vis_rect.y() + 2.0, _content_top)
+                    text_h = vis_rect.bottom() - 2.0 - text_y
                     if text_h <= 0.0:
                         continue
                     if text_h >= adv:
@@ -3147,15 +3349,17 @@ class _BatchRowItem(QGraphicsItem):
                         if draw_txt == "\u2026":
                             continue
                     painter.save()
-                    painter.translate(rect.x() + rect.width() / 2,
-                                      text_y + text_h / 2)
+                    painter.translate(vis_rect.x() + vis_rect.width() / 2,
+                                      text_y - _base_y + text_h / 2)
                     painter.rotate(90)
                     painter.drawText(
-                        QRectF(-text_h / 2, -rect.width() / 2, text_h, rect.width()),
+                        QRectF(-text_h / 2, -vis_rect.width() / 2, text_h, vis_rect.width()),
                         Qt.AlignVCenter | Qt.AlignLeft,
                         draw_txt,
                     )
                     painter.restore()
+                    any_label_drawn = True
+                painter.restore()
         painter.restore()
 
     def hoverMoveEvent(self, event) -> None:
@@ -3459,6 +3663,10 @@ class TimelineView(QGraphicsView):
         self._zoom_timer.setSingleShot(True)
         self._zoom_timer.setInterval(60)   # ms – coalesce wheel events
         self._zoom_timer.timeout.connect(self._flush_zoom)
+        self._zoom_text_resume_timer = QTimer(self)
+        self._zoom_text_resume_timer.setSingleShot(True)
+        self._zoom_text_resume_timer.setInterval(30)
+        self._zoom_text_resume_timer.timeout.connect(self._finish_zoom_interaction)
 
         # Two-timer scroll-rebuild strategy:
         #   _pan_heartbeat: repeating, fires every 50ms WHILE the user is
@@ -3565,6 +3773,7 @@ class TimelineView(QGraphicsView):
 
     def zoom_in(self) -> None:
         self._fit_mode = False
+        self._begin_zoom_interaction()
         self._zoom_accum *= 2.0
         if self._zoom_anchor_pos is None:
             self._zoom_anchor_pos = self.viewport().rect().center()
@@ -3572,6 +3781,7 @@ class TimelineView(QGraphicsView):
 
     def zoom_out(self) -> None:
         self._fit_mode = False
+        self._begin_zoom_interaction()
         self._zoom_accum *= 0.5
         if self._zoom_anchor_pos is None:
             self._zoom_anchor_pos = self.viewport().rect().center()
@@ -3703,7 +3913,7 @@ class TimelineView(QGraphicsView):
         return None
 
     # ------------------------------------------------------------------
-    # Mouse: click → place cursor, drag → pan
+    # Mouse interaction
     # ------------------------------------------------------------------
     # mousePressEvent priority (in order of evaluation):
     #   1. MiddleButton  → start time-range selection band
@@ -3983,11 +4193,12 @@ class TimelineView(QGraphicsView):
         menu.exec_(event.globalPos())
 
     # ------------------------------------------------------------------
-    # Wheel + touch events
+    # Wheel and touch zoom
     # ------------------------------------------------------------------
 
     def wheelEvent(self, event: QWheelEvent) -> None:
         if event.modifiers() & Qt.ControlModifier:
+            self._begin_zoom_interaction()
             angle  = event.angleDelta().y()
             factor = 1.15 if angle > 0 else 1 / 1.15
             # Accumulate factor; record anchor from the *first* event in the
@@ -4023,6 +4234,7 @@ class TimelineView(QGraphicsView):
         self._zoom_anchor_pos  = None
         if factor != 1.0:
             self._do_zoom(factor, anchor)
+        self._schedule_zoom_interaction_finish()
 
     def eventFilter(self, obj, e) -> bool:
         """Intercept native pinch-zoom gestures delivered to the viewport."""
@@ -4036,13 +4248,67 @@ class TimelineView(QGraphicsView):
                 _ZOOM_GESTURE = getattr(Qt, 'ZoomNativeGesture', 3)
                 try:
                     if int(e.gestureType()) == int(_ZOOM_GESTURE):
+                        self._begin_zoom_interaction()
                         factor = 1.0 + e.value()
                         if factor > 0.1:
                             self._do_zoom(factor, e.pos())
+                        self._schedule_zoom_interaction_finish()
                         return True
                 except AttributeError:
                     pass
         return super().eventFilter(obj, e)
+
+    # ------------------------------------------------------------------
+    # Zoom internals
+    # ------------------------------------------------------------------
+
+    def _do_zoom(self, factor: float, vp_pos=None) -> None:
+        """Zoom by factor, keeping vp_pos (viewport coords) fixed on screen."""
+        self._fit_mode = False   # any manual zoom leaves fit mode
+        if vp_pos is None:
+            vp_pos = self.viewport().rect().center()
+        is_horiz = self._scene._horizontal
+        # Convert anchor viewport position to ns coordinate
+        scene_pt = self.mapToScene(vp_pos)
+        center_coord = scene_pt.x() if is_horiz else scene_pt.y()
+        center_ns = self._scene.scene_to_ns(center_coord)
+        # Compute the viewport-center offset from the anchor
+        vp_center = self.viewport().rect().center()
+        offset = (vp_center.x() - vp_pos.x()) if is_horiz else (vp_center.y() - vp_pos.y())
+
+        prev_ns_per_px = self._scene.ns_per_px
+        self._scene.zoom(factor)
+        if self._scene.ns_per_px == prev_ns_per_px:
+            return  # already at zoom limit – nothing changed, skip scroll/emit
+        self.zoom_changed.emit(self._scene.ns_per_px)
+
+        # After rebuild, keep the time-axis anchor fixed without drifting on
+        # the orthogonal axis (prevents left/right drift in vertical mode).
+        new_scene_coord = self._scene.ns_to_scene_coord(center_ns)
+        cur_scene_center = self.mapToScene(vp_center)
+        if is_horiz:
+            self.centerOn(new_scene_coord + offset, cur_scene_center.y())
+        else:
+            self.centerOn(cur_scene_center.x(), new_scene_coord + offset)
+
+    def _begin_zoom_interaction(self) -> None:
+        if self._scene._performance_mode:
+            self._scene.set_zoom_interaction_active(True)
+
+    def _schedule_zoom_interaction_finish(self) -> None:
+        if self._scene._performance_mode:
+            self._zoom_text_resume_timer.start()
+
+    def _finish_zoom_interaction(self) -> None:
+        if not self._scene._performance_mode:
+            return
+        self._scene.set_zoom_interaction_active(False)
+        if self._scene._trace is not None:
+            self._scene.rebuild()
+
+    # ------------------------------------------------------------------
+    # Scroll and viewport sync
+    # ------------------------------------------------------------------
 
     def scrollContentsBy(self, dx: int, dy: int) -> None:
         """Called by Qt on every scroll — reposition frozen label-column items."""
@@ -4094,6 +4360,10 @@ class TimelineView(QGraphicsView):
         self._frozen_last_scene_top = scene_top
         for item, orig_y in self._scene._frozen_top_items:
             item.setY(scene_top + orig_y)
+
+    # ------------------------------------------------------------------
+    # Resize handling
+    # ------------------------------------------------------------------
 
     def resizeEvent(self, event) -> None:
         """Reflow the timeline on every resize to preserve the current zoom ratio."""
@@ -4192,29 +4462,6 @@ class TimelineView(QGraphicsView):
             return True
 
         return False
-
-    def _do_zoom(self, factor: float, vp_pos=None) -> None:
-        """Zoom by factor, keeping vp_pos (viewport coords) fixed on screen."""
-        self._fit_mode = False   # any manual zoom leaves fit mode
-        if vp_pos is None:
-            vp_pos = self.viewport().rect().center()
-        # Convert anchor viewport position to ns coordinate
-        scene_pt = self.mapToScene(vp_pos)
-        center_ns = self._scene.scene_to_ns(scene_pt.x())
-        # Compute the viewport-center offset from the anchor
-        vp_center = self.viewport().rect().center()
-        offset_x = vp_center.x() - vp_pos.x()
-
-        prev_ns_per_px = self._scene.ns_per_px
-        self._scene.zoom(factor)
-        if self._scene.ns_per_px == prev_ns_per_px:
-            return  # already at zoom limit – nothing changed, skip scroll/emit
-        self.zoom_changed.emit(self._scene.ns_per_px)
-
-        # After rebuild, scroll so center_ns reappears at the same viewport x
-        new_scene_x = self._scene.ns_to_scene_coord(center_ns)
-        cur_scene_y = self.mapToScene(vp_center).y()
-        self.centerOn(new_scene_x + offset_x, cur_scene_y)
 
 # ===========================================================================
 # Main Window
@@ -4582,6 +4829,13 @@ class _LegendTaskRow(QWidget):
     def _set_bg(self, css: str) -> None:
         self.setStyleSheet(css)
 
+    def matches_filter(self, q: str) -> bool:
+        """Case-insensitive filter match against merge-key or display name."""
+        if not q:
+            return True
+        ql = q.lower()
+        return (ql in self._task_name.lower()) or (ql in self._lbl.text().lower())
+
     def set_locked(self, locked: bool) -> None:
         """Update the visual appearance to reflect click-lock state."""
         self._locked = locked
@@ -4607,25 +4861,44 @@ class LegendWidget(QWidget):
 
     task_clicked     = pyqtSignal(str)   # click: task merge key
     cancel_highlight = pyqtSignal()      # click on background → cancel highlight
+    filter_changed   = pyqtSignal(str)   # search text changed
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._layout = QVBoxLayout(self)
-        self._layout.setContentsMargins(6, 6, 6, 6)
-        self._layout.setSpacing(2)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(6, 6, 6, 6)
+        outer.setSpacing(4)
         self.setAutoFillBackground(True)
         palette = self.palette()
         palette.setColor(QPalette.Window, QColor("#1E1E1E"))
         self.setPalette(palette)
         self._task_rows: Dict[str, _LegendTaskRow] = {}   # raw name → row widget
+        self._sti_rows: List[tuple] = []  # [(channel_or_note_lc, row_widget)]
         self._search = QLineEdit()
         self._search.setPlaceholderText("Filter tasks…")
         self._search.setStyleSheet(
             "QLineEdit { background:#2D2D2D; color:#D4D4D4; border:1px solid #555; "
             "border-radius:3px; padding:2px 4px; }"
         )
-        self._search.textChanged.connect(self._filter_tasks)
-        self._layout.addWidget(self._search)
+        self._filter_emit_timer = QTimer(self)
+        self._filter_emit_timer.setSingleShot(True)
+        self._filter_emit_timer.setInterval(150)
+        self._filter_emit_timer.timeout.connect(
+            lambda: self.filter_changed.emit(self._search.text())
+        )
+        self._search.textChanged.connect(self._on_search_text_changed)
+        outer.addWidget(self._search)
+
+        # Sticky-search layout: only the legend rows scroll.
+        self._list_host = QWidget()
+        self._list_layout = QVBoxLayout(self._list_host)
+        self._list_layout.setContentsMargins(0, 0, 0, 0)
+        self._list_layout.setSpacing(2)
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.NoFrame)
+        self._scroll.setWidget(self._list_host)
+        outer.addWidget(self._scroll, 1)
 
     def set_locked_task(self, task_name: Optional[str]) -> None:
         """Visually mark *task_name* as click-locked (or clear all locks)."""
@@ -4637,26 +4910,23 @@ class LegendWidget(QWidget):
         self.cancel_highlight.emit()
         super().mousePressEvent(event)
 
-    def rebuild(self, trace: BtfTrace) -> None:
+    def rebuild(self, trace: BtfTrace, *, show_sti: bool = True) -> None:
         self._task_rows.clear()
+        self._sti_rows = []
 
-        # O(1) teardown: re-parent the old layout (and all its items) onto a
-        # temporary QWidget that is immediately scheduled for deletion.  This
-        # avoids the O(n²) takeAt(0)-in-a-loop pattern where every removal
-        # shifts all remaining items.
-        _old = QWidget()
-        _old.setLayout(self._layout)
-        _old.deleteLater()
-        self._layout = QVBoxLayout(self)
-        self._layout.setContentsMargins(6, 6, 6, 6)
-        self._layout.setSpacing(2)
+        while self._list_layout.count():
+            _item = self._list_layout.takeAt(0)
+            _w = _item.widget()
+            if _w is None:
+                continue
+            _w.deleteLater()
 
         # Suppress per-addWidget layout recalculations for the whole batch.
         self.setUpdatesEnabled(False)
         try:
             header = QLabel("<b style='color:#AAAAAA'>Tasks</b>")
             header.setTextFormat(Qt.RichText)
-            self._layout.addWidget(header)
+            self._list_layout.addWidget(header)
 
             # trace.tasks contains merge keys; task_repr maps each to its raw name.
             for _mk in trace.tasks:
@@ -4666,17 +4936,17 @@ class LegendWidget(QWidget):
                 row = _LegendTaskRow(_mk, display, color, tooltip=_rep_raw)
                 row.clicked.connect(self.task_clicked)
                 self._task_rows[_mk] = row
-                self._layout.addWidget(row)
+                self._list_layout.addWidget(row)
 
-            if trace.sti_channels:
+            if show_sti and trace.sti_channels:
                 sep = QFrame()
                 sep.setFrameShape(QFrame.HLine)
                 sep.setStyleSheet("color:#444;")
-                self._layout.addWidget(sep)
+                self._list_layout.addWidget(sep)
 
                 hdr2 = QLabel("<b style='color:#88AABB'>STI Events</b>")
                 hdr2.setTextFormat(Qt.RichText)
-                self._layout.addWidget(hdr2)
+                self._list_layout.addWidget(hdr2)
 
                 seen_notes = sorted({ev.note for ev in trace.sti_events if ev.note})
                 for note in seen_notes:
@@ -4693,17 +4963,26 @@ class LegendWidget(QWidget):
                     lbl.setStyleSheet("color:#D4D4D4;")
                     hl.addWidget(lbl)
                     hl.addStretch()
-                    self._layout.addWidget(row_w)
+                    self._list_layout.addWidget(row_w)
+                    self._sti_rows.append((note.lower(), row_w))
 
-            self._layout.addStretch()
+            self._list_layout.addStretch()
+            self._filter_tasks(self._search.text())
         finally:
             self.setUpdatesEnabled(True)
 
+    def _on_search_text_changed(self, text: str) -> None:
+        """Apply legend filter immediately, debounce expensive timeline rebuild."""
+        self._filter_tasks(text)
+        self._filter_emit_timer.start()
+
     def _filter_tasks(self, text: str) -> None:
-        """Show / hide task rows in the legend based on the search filter."""
+        """Show / hide task and STI rows in the legend based on the search filter."""
         q = text.strip().lower()
         for mk, row in self._task_rows.items():
-            row.setVisible(not q or q in mk.lower() or q in row._lbl.text().lower())
+            row.setVisible(row.matches_filter(q))
+        for key_lc, row_w in self._sti_rows:
+            row_w.setVisible((not q) or (q in key_lc))
 
 # ---------------------------------------------------------------------------
 # Statistics dock panel
@@ -5096,6 +5375,7 @@ class _SettingsDialog(QDialog):
                  show_sti: bool, show_grid: bool,
                  show_legend: bool, show_stats: bool,
                  show_hover_highlight: bool,
+                 performance_mode: bool,
                  label_width: int, row_height: int, row_gap: int,
                  ns_per_px_default: float,
                  is_dark: bool):
@@ -5222,9 +5502,16 @@ class _SettingsDialog(QDialog):
         self._hover_hl_cb.setToolTip(
             "Dim all other segments when hovering a task label.\n"
             "Disable for better performance with large traces.")
+        self._perf_mode_cb = QCheckBox("Performance mode")
+        self._perf_mode_cb.setChecked(performance_mode)
+        self._perf_mode_cb.setToolTip(
+            "Prefer coarse timeline rendering for smoother interaction.\n"
+            "Inline segment text is hidden while zooming and shown only when\n"
+            f"zoomed in (<= {_PERFORMANCE_TEXT_MAX_NS_PER_PX:.1f} ns/px).")
         v2.addWidget(self._indented(self._sti_cb))
         v2.addWidget(self._indented(self._grid_cb))
         v2.addWidget(self._indented(self._hover_hl_cb))
+        v2.addWidget(self._indented(self._perf_mode_cb))
         v2.addStretch()
 
         self._content_stack.addWidget(p2)
@@ -5294,7 +5581,7 @@ class _SettingsDialog(QDialog):
         footer_w = QWidget()
         footer = QHBoxLayout(footer_w)
         footer.setContentsMargins(16, 8, 16, 12)
-        footer.setSpacing(10)
+        footer.setSpacing(14)
         footer.addStretch()
 
         _btn_w, _btn_h = 88, 30   # uniform size for both buttons
@@ -5311,6 +5598,7 @@ class _SettingsDialog(QDialog):
         btn_ok.clicked.connect(self.accept)
 
         footer.addWidget(btn_cancel)
+        footer.addSpacing(8)
         footer.addWidget(btn_ok)
         root.addWidget(footer_w)
 
@@ -5346,12 +5634,18 @@ class _SettingsDialog(QDialog):
     def is_dark(self) -> bool:            return self._theme_combo.currentIndex() == 0
     @property
     def show_hover_highlight(self) -> bool: return self._hover_hl_cb.isChecked()
+    @property
+    def performance_mode(self) -> bool:   return self._perf_mode_cb.isChecked()
 
 # ---------------------------------------------------------------------------
 # Main Window
 # ---------------------------------------------------------------------------
 
 class MainWindow(QMainWindow):
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
 
     def __init__(self):
         super().__init__()
@@ -5374,6 +5668,7 @@ class MainWindow(QMainWindow):
         self._row_gap_val:            int   = ROW_GAP
         self._ns_per_px_default_val:  float = _NS_PER_PX_DEFAULT
         self._hover_highlight_val:    bool  = _HOVER_HIGHLIGHT_ENABLED
+        self._performance_mode_val:   bool  = _PERFORMANCE_MODE_ENABLED
 
         self.setWindowTitle("BTF Trace Viewer")
         self.resize(1280, 720)
@@ -5395,7 +5690,7 @@ class MainWindow(QMainWindow):
         self._restore_settings()
 
     # ------------------------------------------------------------------
-    # Settings: restore on startup, save on close
+    # Lifecycle persistence
     # ------------------------------------------------------------------
 
     def _restore_settings(self) -> None:
@@ -5464,6 +5759,12 @@ class MainWindow(QMainWindow):
             self._hover_highlight_val = saved_hh
             self._view._scene.set_hover_highlight(saved_hh)
 
+        # Performance mode
+        saved_pm = s.get_bool("view", "performance_mode", _PERFORMANCE_MODE_ENABLED)
+        if saved_pm != _PERFORMANCE_MODE_ENABLED:
+            self._performance_mode_val = saved_pm
+            self._view._scene.set_performance_mode(saved_pm)
+
         # Orientation (horizontal is the default)
         if not s.get_bool("view", "horizontal", True):
             self._set_orientation(False)
@@ -5474,8 +5775,7 @@ class MainWindow(QMainWindow):
 
         # STI / grid visibility
         if not s.get_bool("view", "show_sti", True):
-            self._show_sti = False
-            self._view.set_show_sti(False)
+            self._set_show_sti(False, persist=False)
         if not s.get_bool("view", "show_grid", True):
             self._show_grid = False
             self._view.set_show_grid(False)
@@ -5559,6 +5859,7 @@ class MainWindow(QMainWindow):
             "row_gap":           str(self._row_gap_val),
             "ns_per_px_default": str(self._ns_per_px_default_val),
             "hover_highlight":   str(self._hover_highlight_val).lower(),
+            "performance_mode":  str(self._performance_mode_val).lower(),
         })
 
         # Zoom – save current ns/px so we can re-apply it the next time the
@@ -5620,6 +5921,22 @@ class MainWindow(QMainWindow):
             del _trace_to_free
 
         super().closeEvent(event)
+
+    def dragEnterEvent(self, event) -> None:
+        if event.mimeData().hasUrls():
+            if any(u.toLocalFile().endswith(".btf") for u in event.mimeData().urls()):
+                event.acceptProposedAction()
+
+    def dropEvent(self, event) -> None:
+        for url in event.mimeData().urls():
+            path = url.toLocalFile()
+            if path.endswith(".btf"):
+                self._open_file(path)
+                break
+
+    # ------------------------------------------------------------------
+    # Theme
+    # ------------------------------------------------------------------
 
     def _apply_dark_theme(self) -> None:
         app     = QApplication.instance()
@@ -5757,6 +6074,10 @@ class MainWindow(QMainWindow):
             self._apply_light_theme()
             self._act_theme.setText("Switch to &Dark Theme")
 
+    # ------------------------------------------------------------------
+    # UI construction
+    # ------------------------------------------------------------------
+
     def _build_ui(self) -> None:
         # --- Central widget: QStackedWidget (page 0=welcome, page 1=timeline) ---
         self._view = TimelineView(self)
@@ -5786,13 +6107,10 @@ class MainWindow(QMainWindow):
 
         # --- Legend dock (right panel) ---
         self._legend = LegendWidget()
-        scroll = QScrollArea()
-        scroll.setWidget(self._legend)
-        scroll.setWidgetResizable(True)
-        scroll.setMinimumWidth(180)
-        scroll.setMaximumWidth(260)
+        self._legend.setMinimumWidth(180)
+        self._legend.setMaximumWidth(260)
         dock = QDockWidget("Legend", self)
-        dock.setWidget(scroll)
+        dock.setWidget(self._legend)
         dock.setFeatures(QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetMovable)
         self.addDockWidget(Qt.RightDockWidgetArea, dock)
         self._legend_dock = dock
@@ -5818,6 +6136,7 @@ class MainWindow(QMainWindow):
         self._legend.cancel_highlight.connect(
             lambda: sc.set_highlighted_task(None)
         )
+        self._legend.filter_changed.connect(sc.set_task_filter)
         # Keep legend lock-highlight in sync whenever the scene highlight changes
         sc.highlight_changed.connect(
             lambda t, lk: self._legend.set_locked_task(t if lk else None)
@@ -5965,15 +6284,73 @@ class MainWindow(QMainWindow):
         self._zoom_label = QLabel("Zoom: —")
         self._zoom_label.setStyleSheet("color:#AAAAAA; padding: 0 8px;")
 
+        # --- Quick toggles ---
+        self._sti_toggle_cb = QCheckBox("STI")
+        self._sti_toggle_cb.setChecked(self._show_sti)
+        self._sti_toggle_cb.setToolTip("Show or hide STI event markers")
+        self._sti_toggle_cb.toggled.connect(self._set_show_sti)
+
         sb.addWidget(self._status_file)
         sb.addPermanentWidget(self._cursor_bar)
         sb.addPermanentWidget(self._status_stats)
+        sb.addPermanentWidget(self._sti_toggle_cb)
         sb.addPermanentWidget(self._zoom_label)
         sb.addPermanentWidget(self._status_hint)
 
     # ------------------------------------------------------------------
     # Slots / callbacks
     # ------------------------------------------------------------------
+
+    # -- View actions ---------------------------------------------------
+
+    def _set_orientation(self, horizontal: bool) -> None:
+        self._act_horiz.setChecked(horizontal)
+        self._act_vert.setChecked(not horizontal)
+        self._tb_horiz_btn.setChecked(horizontal)
+        self._tb_vert_btn.setChecked(not horizontal)
+        self._view.set_horizontal(horizontal)
+
+    def _set_show_sti(self, show: bool, persist: bool = True) -> None:
+        """Apply STI visibility and keep all STI UI controls in sync."""
+        self._show_sti = bool(show)
+        self._view.set_show_sti(self._show_sti)
+        if self._trace is not None:
+            self._legend.rebuild(self._trace, show_sti=self._show_sti)
+            self._legend.set_locked_task(self._view._scene._locked_task)
+        if hasattr(self, "_sti_toggle_cb"):
+            self._sti_toggle_cb.blockSignals(True)
+            self._sti_toggle_cb.setChecked(self._show_sti)
+            self._sti_toggle_cb.blockSignals(False)
+        if persist:
+            self._settings.set("view", "show_sti", str(self._show_sti).lower())
+
+    def _set_view_mode(self, mode: str) -> None:
+        self._view_mode = mode
+        is_task = (mode == "task")
+        self._act_task_view.setChecked(is_task)
+        self._act_core_view.setChecked(not is_task)
+        self._tb_task_btn.setChecked(is_task)
+        self._tb_core_btn.setChecked(not is_task)
+        self._tb_expand_all_btn.setEnabled(not is_task)
+        if not is_task:
+            # Sync button text/state with actual core expanded state
+            scene = self._view._scene
+            trace = scene._trace
+            if trace and trace.core_names:
+                all_expanded = all(
+                    scene._core_expanded.get(c, True) for c in trace.core_names)
+                self._tb_expand_all_btn.setChecked(all_expanded)
+                self._tb_expand_all_btn.setText(
+                    "⊞ Expand All. " if all_expanded else "⊟ Collapse All")
+        self._view.set_view_mode(mode)
+
+    def _toggle_expand_all_cores(self) -> None:
+        """Expand or collapse all cores based on the button's checked state."""
+        expanded = self._tb_expand_all_btn.isChecked()
+        self._tb_expand_all_btn.setText("⊞ Expand All. " if expanded else "⊟ Collapse All")
+        self._view.set_all_cores_expanded(expanded)
+
+    # -- File actions ---------------------------------------------------
 
     def _on_open(self) -> None:
         last_dir = self._settings.get("files", "last_dir", os.path.expanduser("~"))
@@ -6076,7 +6453,7 @@ class MainWindow(QMainWindow):
                         pass  # malformed rc entry – skip silently
                 progress_dialog.update_progress(100, "Building legend…")
                 QApplication.processEvents()
-                self._legend.rebuild(trace)
+                self._legend.rebuild(trace, show_sti=self._show_sti)
                 self._stats_panel.update_trace(trace)
                 if self._show_stats:
                     self._stats_dock.show()
@@ -6163,38 +6540,7 @@ class MainWindow(QMainWindow):
         else:
             self.statusBar().showMessage("Image copied to clipboard", 3000)
 
-    def _set_orientation(self, horizontal: bool) -> None:
-        self._act_horiz.setChecked(horizontal)
-        self._act_vert.setChecked(not horizontal)
-        self._tb_horiz_btn.setChecked(horizontal)
-        self._tb_vert_btn.setChecked(not horizontal)
-        self._view.set_horizontal(horizontal)
-
-    def _set_view_mode(self, mode: str) -> None:
-        self._view_mode = mode
-        is_task = (mode == "task")
-        self._act_task_view.setChecked(is_task)
-        self._act_core_view.setChecked(not is_task)
-        self._tb_task_btn.setChecked(is_task)
-        self._tb_core_btn.setChecked(not is_task)
-        self._tb_expand_all_btn.setEnabled(not is_task)
-        if not is_task:
-            # Sync button text/state with actual core expanded state
-            scene = self._view._scene
-            trace = scene._trace
-            if trace and trace.core_names:
-                all_expanded = all(
-                    scene._core_expanded.get(c, True) for c in trace.core_names)
-                self._tb_expand_all_btn.setChecked(all_expanded)
-                self._tb_expand_all_btn.setText(
-                    "⊞ Expand All. " if all_expanded else "⊟ Collapse All")
-        self._view.set_view_mode(mode)
-
-    def _toggle_expand_all_cores(self) -> None:
-        """Expand or collapse all cores based on the button's checked state."""
-        expanded = self._tb_expand_all_btn.isChecked()
-        self._tb_expand_all_btn.setText("⊞ Expand All. " if expanded else "⊟ Collapse All")
-        self._view.set_all_cores_expanded(expanded)
+    # -- Settings actions -----------------------------------------------
 
     def _open_settings(self) -> None:
         """Open the Settings dialog and apply any changes on OK."""
@@ -6213,6 +6559,7 @@ class MainWindow(QMainWindow):
             ns_per_px_default=self._ns_per_px_default_val,
             is_dark=self._is_dark,
             show_hover_highlight=self._hover_highlight_val,
+            performance_mode=self._performance_mode_val,
         )
         if dlg.exec_() != QDialog.Accepted:
             return
@@ -6252,8 +6599,7 @@ class MainWindow(QMainWindow):
 
         # STI events
         if dlg.show_sti != self._show_sti:
-            self._show_sti = dlg.show_sti
-            self._view.set_show_sti(self._show_sti)
+            self._set_show_sti(dlg.show_sti)
 
         # Grid
         if dlg.show_grid != self._show_grid:
@@ -6305,6 +6651,15 @@ class MainWindow(QMainWindow):
             self._view._scene.set_hover_highlight(new_hh)
             self._settings.set("view", "hover_highlight", str(new_hh).lower())
 
+        # Performance mode
+        new_pm = dlg.performance_mode
+        if new_pm != self._performance_mode_val:
+            self._performance_mode_val = new_pm
+            self._view._scene.set_performance_mode(new_pm)
+            self._settings.set("view", "performance_mode", str(new_pm).lower())
+
+    # -- Status / legend callbacks -------------------------------------
+
     def _on_font_size_changed(self, size: int) -> None:
         self._font_size_val = size
         self._view.set_font_size(size)
@@ -6339,6 +6694,8 @@ class MainWindow(QMainWindow):
         else:
             sc.set_highlighted_task(task, locked=True)
 
+    # -- Help -----------------------------------------------------------
+
     def _on_about(self) -> None:
         if self._is_dark:
             c_title = "#7EC8E3"
@@ -6363,18 +6720,6 @@ class MainWindow(QMainWindow):
             f"• <b style='color:{c_key};'>Ctrl+Wheel</b> / pinch – zoom  |  <b style='color:{c_key};'>Scroll</b> – pan<br>"
             f"• <b style='color:{c_key};'>Ctrl+0</b> – fit to window</p>"
         )
-
-    def dragEnterEvent(self, event) -> None:
-        if event.mimeData().hasUrls():
-            if any(u.toLocalFile().endswith(".btf") for u in event.mimeData().urls()):
-                event.acceptProposedAction()
-
-    def dropEvent(self, event) -> None:
-        for url in event.mimeData().urls():
-            path = url.toLocalFile()
-            if path.endswith(".btf"):
-                self._open_file(path)
-                break
 
 # ===========================================================================
 # Entry point

@@ -67,6 +67,7 @@ dump.bin
 # BTF viewer runtime settings (user-local, not shared)
 BTFViewer/btf_viewer.rc
 
+*.bak
 .DS_Store
 .venv
 __pycache__
