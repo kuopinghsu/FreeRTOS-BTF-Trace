@@ -87,7 +87,7 @@ from PyQt5.QtGui import (
 )
 from PyQt5.QtWidgets import (
     QAction, QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
-    QDockWidget, QFileDialog, QFormLayout, QFrame, QInputDialog,
+    QDockWidget, QFileDialog, QFormLayout, QFrame, QGridLayout, QInputDialog,
     QGraphicsEllipseItem, QGraphicsItem, QGraphicsLineItem,
     QGraphicsRectItem, QGraphicsScene, QGraphicsView,
     QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QProgressBar,
@@ -190,7 +190,7 @@ def _svg_icon(path_data: str, color: str = "#9E9E9E", size: int = 16) -> "QIcon"
     """Build a QIcon from an SVG path string (16×16 viewBox by default)."""
     svg = (
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" '
-        f'viewBox="0 0 16 16"><path fill="{color}" d="{path_data}"/></svg>'
+        f'viewBox="0 0 16 16"><path fill="{color}" fill-rule="evenodd" d="{path_data}"/></svg>'
     )
     ba = QByteArray(svg.encode())
     pm = QPixmap()
@@ -211,7 +211,32 @@ _IC_CLEAR  = "M2 2.5l.5-.5 5.5 5.5 5.5-5.5.5.5L8.5 8 14 13.5l-.5.5L8 8.5 2.5 14l
 _IC_LEGEND = "M1 2a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V2zm5-1h8v1H6V1zm0 3h8v1H6V4zm-5 3a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V7zm5-1h8v1H6V6zm0 3h8v1H6V9zm-5 3a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1v-2zm5-1h8v1H6v-1zm0 3h8v1H6v-1z"
 _IC_TASK   = "M1 2.5A1.5 1.5 0 0 1 2.5 1h11A1.5 1.5 0 0 1 15 2.5v11a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 13.5v-11zM4 5.5h8v1H4v-1zm0 3h8v1H4v-1zm0 3h5v1H4v-1z"
 _IC_CORE   = "M5 1v2H3a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2v2h1v-2h4v2h1v-2h2a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2h-2V1h-1v2H6V1H5zm-2 4h10v6H3V5zm2 1v4h6V6H5z"
-_IC_EXPAND = "M1.5 1h5v1h-4v4h-1V1.5a.5.5 0 0 1 .5-.5zm13 0a.5.5 0 0 1 .5.5V6h-1V2h-4V1h4.5zM1 10h1v4h4v1H1.5a.5.5 0 0 1-.5-.5V10zm14 0v4.5a.5.5 0 0 1-.5.5H10v-1h4v-4h1z"
+_IC_EXPAND     = "M3 1h1v14H3zM12 1h1v14h-1zM4 5l3 3-3 3zM12 5l-3 3 3 3z"
+_IC_EXPAND_ALL = "M8 1l2.5 3h-2v3h-1V4H5.5zM8 15l-2.5-3h2v-3h1V12h2.5zM2 7.5h12v1H2z"
+_IC_1TO1     = "M6.5 1a5.5 5.5 0 1 0 3.89 9.4l3.4 3.4.7-.7-3.4-3.4A5.5 5.5 0 0 0 6.5 1zm0 1a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9zM6.5 4L5.5 5h1v4h1V4z"
+_IC_SETTINGS = ("M9.405 1.05c-.413-1.4-2.397-1.4-2.81 0l-.1.34a1.464 1.464 0 0 1-2.105.872l-.31-.17"
+                "c-1.283-.698-2.686.705-1.987 1.987l.169.311c.446.82.023 1.841-.872 2.105l-.34.1"
+                "c-1.4.413-1.4 2.397 0 2.81l.34.1a1.464 1.464 0 0 1 .872 2.105l-.17.31"
+                "c-.698 1.283.705 2.686 1.987 1.987l.311-.169a1.464 1.464 0 0 1 2.105.872l.1.34"
+                "c.413 1.4 2.397 1.4 2.81 0l.1-.34a1.464 1.464 0 0 1 2.105-.872l.31.17"
+                "c1.283.698 2.686-.705 1.987-1.987l-.169-.311a1.464 1.464 0 0 1 .872-2.105l.34-.1"
+                "c1.4-.413 1.4-2.397 0-2.81l-.34-.1a1.464 1.464 0 0 1-.872-2.105l.17-.31"
+                "c.698-1.283-.705-2.686-1.987-1.987l-.311.169a1.464 1.464 0 0 1-2.105-.872l-.1-.34z"
+                "M8 10.93a2.929 2.929 0 1 1 0-5.86 2.929 2.929 0 0 1 0 5.858z")
+
+# App icon — multi-colour 72×72 SVG rendered in the About dialog header.
+_APP_VERSION = "1.0.0"
+_APP_ICON_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" width="72" height="72" viewBox="0 0 72 72">'
+    '<rect x="3" y="3" width="66" height="66" rx="14" fill="#1C3A6E"/>'
+    '<rect x="10" y="17" width="29" height="7" rx="3.5" fill="#5B9BD5"/>'
+    '<rect x="16" y="28" width="22" height="7" rx="3.5" fill="#7EC8E3"/>'
+    '<rect x="10" y="39" width="36" height="7" rx="3.5" fill="#5B9BD5"/>'
+    '<rect x="20" y="50" width="18" height="7" rx="3.5" fill="#7EC8E3"/>'
+    '<rect x="46" y="13" width="2" height="46" fill="#FFC107"/>'
+    '<polygon points="42,13 50,13 46,20" fill="#FFC107"/>'
+    '</svg>'
+)
 
 def _core_color(core_name: str) -> str:
     """Return a distinct color hex string for a core name like 'Core_N'."""
@@ -940,7 +965,7 @@ def _task_brush(task_raw: str) -> QBrush:
 @functools.lru_cache(maxsize=None)
 def _task_pen_dark(task_raw: str) -> QPen:
     """Cached dark-border QPen for a task's base color."""
-    return QPen(_task_color(task_raw).darker(130), 0.4)
+    return QPen(_task_color(task_raw).darker(130), 0.7)
 
 @functools.lru_cache(maxsize=None)
 def _blended_brush(task_raw: str, core: str) -> QBrush:
@@ -950,7 +975,7 @@ def _blended_brush(task_raw: str, core: str) -> QBrush:
 @functools.lru_cache(maxsize=None)
 def _blended_pen_dark(task_raw: str, core: str) -> QPen:
     """Cached dark-border QPen for a task blended with a core tint."""
-    return QPen(_blended_color(task_raw, core).darker(130), 0.4)
+    return QPen(_blended_color(task_raw, core).darker(130), 0.7)
 
 # Palette dedicated to dynamically-assigned STI note colours (distinct from
 # the task palette so task and STI markers never share the same hue).
@@ -2080,7 +2105,7 @@ class TimelineScene(QGraphicsScene):
         # --- Label row (top): frozen to top edge on Y scroll ---------------
         _label_row_bg = self.addRect(QRectF(0, 0, total_w, label_row_h),
                                      QPen(Qt.NoPen), QBrush(QColor("#1E1E1E")))
-        _label_row_bg.setZValue(10)
+        _label_row_bg.setZValue(35)  # above cursor lines (z=30-32), same as ruler column
         self._frozen_top_items.append((_label_row_bg, 0))
 
         # Grid-only ruler: horizontal lines at absolute Y positions (not frozen).
@@ -2165,13 +2190,13 @@ class TimelineScene(QGraphicsScene):
 
             lbl_color    = QColor("#FFD700") if is_hl else _lbl_color
             lbl_font     = _monospace_font(self._font_size, QFont.Bold) if is_hl else font
-            _lbl_avail_v = max(0, label_row_h - 8)
+            _lbl_avail_v = max(0, label_row_h - 14)
             _lbl_fm_v    = QFontMetrics(lbl_font) if is_hl else fm
             _lbl_disp_v  = _lbl_fm_v.elidedText(disp, Qt.ElideRight, _lbl_avail_v)
             lbl = self.addSimpleText(_lbl_disp_v, lbl_font)
             lbl.setBrush(QBrush(lbl_color))
             lbl.setRotation(-90)
-            lbl.setPos(x_left + col_w / 2 - fm.height() / 2, label_row_h - 4)
+            lbl.setPos(x_left + col_w / 2 - fm.height() / 2, label_row_h - 10)
             lbl.setZValue(37)
             self._frozen_top_items.append((lbl, lbl.pos().y()))
 
@@ -2215,7 +2240,7 @@ class TimelineScene(QGraphicsScene):
             lbl = self.addSimpleText(channel, font)
             lbl.setBrush(QBrush(QColor("#88AABB")))
             lbl.setRotation(-90)
-            lbl.setPos(x_left + col_w / 2 - fm.height() / 2, label_row_h - 4)
+            lbl.setPos(x_left + col_w / 2 - fm.height() / 2, label_row_h - 10)
             lbl.setZValue(37)
             self._frozen_top_items.append((lbl, lbl.pos().y()))
             _sti_evs_v  = trace.sti_events_by_target.get(channel, [])
@@ -2243,7 +2268,7 @@ class TimelineScene(QGraphicsScene):
             _tick_vlbl.setBrush(QBrush(QColor("#E8C84A")))
             _tick_vlbl.setRotation(-90)
             _vband_cx  = (RULER_WIDTH - 18) + 14 / 2
-            _tick_vlbl.setPos(_vband_cx - fm.height() / 2, label_row_h - 4)
+            _tick_vlbl.setPos(_vband_cx - fm.height() / 2, label_row_h - 10)
             _tick_vlbl.setZValue(41)
             self._frozen_items.append((_tick_vlbl, _tick_vlbl.pos().x()))
             self._frozen_top_items.append((_tick_vlbl, _tick_vlbl.pos().y()))
@@ -2504,8 +2529,8 @@ class TimelineScene(QGraphicsScene):
                 self.addItem(sub_lbl_bg)
                 self._frozen_items.append((sub_lbl_bg, 0))
                 lbl_color = QColor("#FFD700") if is_hl else QColor("#B0B0C0")
-                lbl_fnt   = _monospace_font(max(6, self._font_size - 1),
-                                            QFont.Bold) if is_hl else font_sm
+                lbl_fnt   = _monospace_font(self._font_size,
+                                            QFont.Bold) if is_hl else font
                 _sub_avail  = max(0, lw - 33 - 4)   # left=33, right margin=4
                 _sub_elided = QFontMetrics(lbl_fnt).elidedText(
                     disp, Qt.ElideRight, _sub_avail)
@@ -2722,12 +2747,12 @@ class TimelineScene(QGraphicsScene):
                 # Arrow + core name (rotated -90 like task view labels)
                 arrow     = "▼" if expanded else "▶"
                 arr_label = arrow + " " + core
-                _lbl_avail_c = max(0, label_row_h - 8)
+                _lbl_avail_c = max(0, label_row_h - 14)
                 arr_label = QFontMetrics(font).elidedText(arr_label, Qt.ElideRight, _lbl_avail_c)
                 arr_txt = self.addSimpleText(arr_label, font)
                 arr_txt.setBrush(QBrush(QColor("#9999CC")))
                 arr_txt.setRotation(-90)
-                arr_txt.setPos(x_left + col_w / 2 - fm.height() / 2, label_row_h - 4)
+                arr_txt.setPos(x_left + col_w / 2 - fm.height() / 2, label_row_h - 10)
                 arr_txt.setZValue(37)
                 arr_txt.setAcceptedMouseButtons(Qt.NoButton)
                 arr_txt.setAcceptHoverEvents(False)
@@ -2804,12 +2829,12 @@ class TimelineScene(QGraphicsScene):
                 self.addItem(sub_lbl_bg)
                 self._frozen_top_items.append((sub_lbl_bg, 0))
                 lbl_color = QColor("#FFD700") if is_hl else QColor("#B0B0C0")
-                lbl_fnt   = _monospace_font(max(6, self._font_size - 1),
-                                            QFont.Bold) if is_hl else font_sm
+                lbl_fnt   = _monospace_font(self._font_size,
+                                            QFont.Bold) if is_hl else font
                 t_lbl = self.addSimpleText(disp, lbl_fnt)
                 t_lbl.setBrush(QBrush(lbl_color))
                 t_lbl.setRotation(-90)
-                t_lbl.setPos(x_left2 + col_w / 2 - fm.height() / 2, label_row_h - 4)
+                t_lbl.setPos(x_left2 + col_w / 2 - fm.height() / 2, label_row_h - 10)
                 t_lbl.setZValue(37)
                 self._frozen_top_items.append((t_lbl, t_lbl.pos().y()))
 
@@ -2846,7 +2871,7 @@ class TimelineScene(QGraphicsScene):
             lbl = self.addSimpleText(channel, font)
             lbl.setBrush(QBrush(QColor("#88AABB")))
             lbl.setRotation(-90)
-            lbl.setPos(x_left + col_w / 2 - fm.height() / 2, label_row_h - 4)
+            lbl.setPos(x_left + col_w / 2 - fm.height() / 2, label_row_h - 10)
             lbl.setZValue(37)
             self._frozen_top_items.append((lbl, lbl.pos().y()))
             _x_ctr_vc    = x_left + col_w / 2
@@ -5374,6 +5399,150 @@ class _RcSettings:
         self._flush()
 
 # ---------------------------------------------------------------------------
+# About Dialog
+# ---------------------------------------------------------------------------
+
+class _AboutDialog(QDialog):
+    """Modern About dialog — app icon header, theme-aware, quick-reference table."""
+
+    def __init__(self, parent, *, is_dark: bool):
+        super().__init__(parent, Qt.Dialog)
+        self.setWindowTitle("About BTF Trace Viewer")
+        self.setModal(True)
+        self.setFixedWidth(420)
+
+        # Theme palette
+        if is_dark:
+            hdr_bg  = "#1E1E1E"; bg     = "#252526"; sep_c  = "#3A3A3A"
+            title_c = "#FFFFFF";  sub_c  = "#9E9E9E"; sect_c = "#5B9BD5"
+            key_c   = "#7EC8E3"; body_c = "#D4D4D4"
+            btn_bg  = "#0E4D80"; btn_hov = "#1565C0"; btn_txt = "#FFFFFF"
+        else:
+            hdr_bg  = "#F0F0F0"; bg     = "#FAFAFA"; sep_c  = "#CCCCCC"
+            title_c = "#1E1E1E"; sub_c  = "#666666"; sect_c = "#005A9E"
+            key_c   = "#005A9E"; body_c = "#333333"
+            btn_bg  = "#005A9E"; btn_hov = "#1472B5"; btn_txt = "#FFFFFF"
+
+        root = QVBoxLayout(self)
+        root.setSpacing(0)
+        root.setContentsMargins(0, 0, 0, 0)
+
+        # ── Header: icon + title + tagline ───────────────────────────────
+        hdr = QWidget()
+        hdr.setObjectName("about_hdr")
+        hv = QVBoxLayout(hdr)
+        hv.setAlignment(Qt.AlignHCenter)
+        hv.setContentsMargins(24, 28, 24, 22)
+        hv.setSpacing(8)
+
+        icon_lbl = QLabel()
+        icon_lbl.setAlignment(Qt.AlignHCenter)
+        _pm = QPixmap()
+        _pm.loadFromData(QByteArray(_APP_ICON_SVG.encode()), "SVG")
+        icon_lbl.setPixmap(_pm)
+        hv.addWidget(icon_lbl)
+
+        name_lbl = QLabel("BTF Trace Viewer")
+        name_lbl.setAlignment(Qt.AlignHCenter)
+        name_lbl.setObjectName("about_title")
+        hv.addWidget(name_lbl)
+
+        sub_lbl = QLabel(f"RTOS context-switch timeline visualiser  ·  v{_APP_VERSION}")
+        sub_lbl.setAlignment(Qt.AlignHCenter)
+        sub_lbl.setObjectName("about_sub")
+        hv.addWidget(sub_lbl)
+        root.addWidget(hdr)
+
+        def _hsep():
+            f = QFrame()
+            f.setFrameShape(QFrame.HLine)
+            f.setFrameShadow(QFrame.Plain)
+            f.setObjectName("about_sep")
+            return f
+
+        root.addWidget(_hsep())
+
+        # ── Info body ─────────────────────────────────────────────────────
+        info_w = QWidget()
+        iv = QVBoxLayout(info_w)
+        iv.setContentsMargins(24, 16, 24, 16)
+        iv.setSpacing(10)
+
+        def _sect(text: str) -> QLabel:
+            lbl = QLabel(text.upper())
+            lbl.setObjectName("about_sect")
+            return lbl
+
+        def _kv_table(rows) -> QWidget:
+            w = QWidget()
+            g = QGridLayout(w)
+            g.setContentsMargins(8, 0, 0, 0)
+            g.setHorizontalSpacing(16)
+            g.setVerticalSpacing(3)
+            g.setColumnStretch(1, 1)
+            for r, (k, v) in enumerate(rows):
+                kl = QLabel(k); kl.setObjectName("about_key")
+                vl = QLabel(v); vl.setObjectName("about_body")
+                g.addWidget(kl, r, 0, Qt.AlignTop)
+                g.addWidget(vl, r, 1)
+            return w
+
+        iv.addWidget(_sect("View Modes"))
+        iv.addWidget(_kv_table([
+            ("Task View", "one row per task"),
+            ("Core View", "expandable rows per CPU core"),
+        ]))
+        iv.addSpacing(4)
+        iv.addWidget(_sect("Controls"))
+        iv.addWidget(_kv_table([
+            ("Left-click",  "place / drag cursor"),
+            ("Ctrl+Wheel",  "zoom in / out  ·  Scroll \u2014 pan"),
+            ("Ctrl+0",      "fit to window"),
+            ("Ctrl+R",      "zoom to cursor range"),
+            ("Help menu",   "full keyboard shortcut list"),
+        ]))
+        root.addWidget(info_w)
+
+        root.addWidget(_hsep())
+
+        # ── Footer ────────────────────────────────────────────────────────
+        foot = QWidget()
+        fh = QHBoxLayout(foot)
+        fh.setContentsMargins(16, 10, 16, 14)
+        fh.addStretch()
+        btn = QPushButton("Close")
+        btn.setObjectName("about_btn")
+        btn.setFixedSize(88, 30)
+        btn.setDefault(True)
+        btn.clicked.connect(self.accept)
+        fh.addWidget(btn)
+        root.addWidget(foot)
+
+        # ── Scoped stylesheet ─────────────────────────────────────────────
+        self.setStyleSheet(f"""
+            QDialog                     {{ background:{bg}; }}
+            QWidget#about_hdr           {{ background:{hdr_bg}; }}
+            QLabel#about_title          {{ color:{title_c}; font-size:17pt;
+                                           font-weight:700; }}
+            QLabel#about_sub            {{ color:{sub_c}; font-size:10pt; }}
+            QLabel#about_sect           {{ color:{sect_c}; font-size:8pt;
+                                           font-weight:700; letter-spacing:1px;
+                                           margin-bottom:2px; }}
+            QLabel#about_key            {{ color:{key_c}; font-size:10pt;
+                                           font-weight:600; min-width:82px; }}
+            QLabel#about_body           {{ color:{body_c}; font-size:10pt; }}
+            QFrame#about_sep            {{ border:none; background:{sep_c};
+                                           max-height:1px; }}
+            QPushButton#about_btn       {{ background:{btn_bg}; color:{btn_txt};
+                                           border:none; border-radius:5px;
+                                           font-size:10pt; font-weight:600;
+                                           padding:0px 22px; }}
+            QPushButton#about_btn:hover {{ background:{btn_hov}; }}
+        """)
+
+        self.adjustSize()
+
+# ---------------------------------------------------------------------------
 # Settings Dialog
 # ---------------------------------------------------------------------------
 
@@ -5381,6 +5550,10 @@ class _SettingsDialog(QDialog):
     """Modal settings dialog — sidebar navigation: Appearance | Display | Layout."""
 
     _INPUT_W = 110   # fixed pixel width for all spin / combo inputs
+
+    # Emitted whenever any control value changes so _open_settings can
+    # apply a live preview while the dialog is still open.
+    live_preview = pyqtSignal()
 
     @staticmethod
     def _hline() -> QFrame:
@@ -5517,7 +5690,7 @@ class _SettingsDialog(QDialog):
                  font_size: int, ui_font_size: int,
                  max_cursors: int,
                  show_sti: bool, show_grid: bool,
-                 show_legend: bool, show_stats: bool,
+                 show_legend: bool, show_stats: bool, show_marks: bool,
                  show_hover_highlight: bool,
                  zoom_unit: str,
                  label_width: int, row_height: int, row_gap: int,
@@ -5555,10 +5728,11 @@ class _SettingsDialog(QDialog):
         self._sidebar.setFont(_dlg_font)   # explicit – CSS font-size is ignored by macOS native item delegate
         self._sidebar.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._sidebar.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        _item_h = max(36, int(ui_font_size * 2.6))   # scale row height with font
         for _name in ("Appearance", "Display", "Layout"):
             _item = QListWidgetItem(_name)
             _item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-            _item.setSizeHint(QSize(140, 36))   # fixed row height keeps items from jumping
+            _item.setSizeHint(QSize(140, _item_h))
             self._sidebar.addItem(_item)
         self._sidebar.setCurrentRow(0)
         body.addWidget(self._sidebar)
@@ -5600,7 +5774,7 @@ class _SettingsDialog(QDialog):
         f1.addRow("Theme:", _inp(self._theme_combo))
 
         f1.addRow(self._hline())
-        f1.addRow(self._section("Font sizes"))
+        f1.addRow("", self._section("Font sizes"))
 
         self._font_spin = QSpinBox()
         self._font_spin.setRange(6, 24)
@@ -5629,8 +5803,11 @@ class _SettingsDialog(QDialog):
         self._legend_cb.setChecked(show_legend)
         self._stats_cb = QCheckBox("Statistics panel")
         self._stats_cb.setChecked(show_stats)
+        self._marks_cb = QCheckBox("Marks panel")
+        self._marks_cb.setChecked(show_marks)
         v2.addWidget(self._indented(self._legend_cb))
         v2.addWidget(self._indented(self._stats_cb))
+        v2.addWidget(self._indented(self._marks_cb))
 
         v2.addSpacing(6)
         v2.addWidget(self._hline())
@@ -5657,8 +5834,6 @@ class _SettingsDialog(QDialog):
         p3 = QWidget()
         f3 = _form(p3)
 
-        f3.addRow(self._section("Row geometry"))
-
         self._label_width_spin = QSpinBox()
         self._label_width_spin.setRange(60, 600)
         self._label_width_spin.setSuffix(" px")
@@ -5682,7 +5857,7 @@ class _SettingsDialog(QDialog):
         f3.addRow("Row gap:", _inp(self._row_gap_spin))
 
         f3.addRow(self._hline())
-        f3.addRow(self._section("Zoom & cursors"))
+        f3.addRow("", self._section("Zoom & cursors"))
 
         self._timescale_per_px_spin = QDoubleSpinBox()
         self._timescale_per_px_spin.setRange(0.5, 200.0)
@@ -5742,6 +5917,27 @@ class _SettingsDialog(QDialog):
         # -- Scoped stylesheet ------------------------------------------------
         self.setStyleSheet(self._dialog_ss(is_dark, _ui_fs))
 
+        # -- Live-preview wiring: broadcast any change to live_preview ---------
+        # Each signal sends a typed argument (int/float); lambda absorbs it with
+        # a default dummy parameter so all signals share a single emit adapter.
+        for _sig in (
+            self._theme_combo.currentIndexChanged,
+            self._font_spin.valueChanged,
+            self._ui_font_spin.valueChanged,
+            self._cursor_spin.valueChanged,
+            self._sti_cb.stateChanged,
+            self._grid_cb.stateChanged,
+            self._legend_cb.stateChanged,
+            self._stats_cb.stateChanged,
+            self._marks_cb.stateChanged,
+            self._hover_hl_cb.stateChanged,
+            self._label_width_spin.valueChanged,
+            self._row_height_spin.valueChanged,
+            self._row_gap_spin.valueChanged,
+            self._timescale_per_px_spin.valueChanged,
+        ):
+            _sig.connect(lambda _=None: self.live_preview.emit())
+
         self.adjustSize()
 
     # -- result accessors (read after exec_() == Accepted) ------------------
@@ -5770,6 +5966,8 @@ class _SettingsDialog(QDialog):
     @property
     def is_dark(self) -> bool:            return self._theme_combo.currentIndex() == 0
     @property
+    def show_marks(self) -> bool:         return self._marks_cb.isChecked()
+    @property
     def show_hover_highlight(self) -> bool: return self._hover_hl_cb.isChecked()
 # ---------------------------------------------------------------------------
 # Main Window
@@ -5794,6 +5992,7 @@ class MainWindow(QMainWindow):
         self._show_grid:             bool  = True
         self._show_legend:           bool  = True
         self._show_stats:            bool  = True
+        self._show_marks:            bool  = True
         self._font_size_val:         int   = FONT_SIZE
         self._ui_font_size_val:      int   = UI_FONT_SIZE
         self._max_cursors_val:       int   = _DEFAULT_MAX_CURSORS
@@ -5809,6 +6008,7 @@ class MainWindow(QMainWindow):
         self._find_hit_idx: int = -1
         self._find_marker_ns: Optional[int] = None
         self._find_marker_items: List[QGraphicsItem] = []
+        self._tb_icon_actions: list = []   # (QAction, icon_path_data) for theme-aware icons
 
         self.setWindowTitle("BTF Trace Viewer")
         self.resize(1280, 720)
@@ -5905,8 +6105,7 @@ class MainWindow(QMainWindow):
         if not s.get_bool("view", "show_sti", True):
             self._set_show_sti(False, persist=False)
         if not s.get_bool("view", "show_grid", True):
-            self._show_grid = False
-            self._view.set_show_grid(False)
+            self._set_show_grid(False, persist=False)
 
         # Legend / statistics panel visibility
         if not s.get_bool("view", "show_legend", True):
@@ -5915,7 +6114,8 @@ class MainWindow(QMainWindow):
         if not s.get_bool("view", "show_stats", True):
             self._show_stats = False
             self._stats_dock.setVisible(False)
-        self._marks_dock.setVisible(s.get_bool("view", "show_marks", True))
+        self._show_marks = s.get_bool("view", "show_marks", True)
+        self._marks_dock.setVisible(self._show_marks)
         self._find_dock.setVisible(s.get_bool("view", "show_find", False))
 
         # Keep the Light-theme menu label in sync when we restored a light theme.
@@ -5991,7 +6191,7 @@ class MainWindow(QMainWindow):
             "show_grid":     str(self._show_grid).lower(),
             "show_legend":   str(self._show_legend).lower(),
             "show_stats":    str(self._show_stats).lower(),
-            "show_marks":    str(self._marks_dock.isVisible()).lower(),
+            "show_marks":    str(self._show_marks).lower(),
             "show_find":     str(self._find_dock.isVisible()).lower(),
             "font_size":     str(self._font_size_val),
             "ui_font_size":  str(self._ui_font_size_val),
@@ -6121,8 +6321,6 @@ class MainWindow(QMainWindow):
                 scroll_bg     = "#1E1E1E",
                 sub_text      = "#888888",
                 muted_text    = "#999999",
-                ea_fg         = "#D4D4D4",
-                ea_disabled   = "#555555",
                 welcome_h2    = "#888888",
                 welcome_p     = "#666666",
             )
@@ -6161,8 +6359,6 @@ class MainWindow(QMainWindow):
             scroll_bg     = "#F5F5F5",
             sub_text      = "#555555",
             muted_text    = "#666666",
-            ea_fg         = "#1E1E1E",
-            ea_disabled   = "#AAAAAA",
             welcome_h2    = "#555555",
             welcome_p     = "#444444",
         )
@@ -6218,7 +6414,10 @@ class MainWindow(QMainWindow):
             QToolButton:pressed  {{ background:{c['tb_pressed']};    border-radius:3px; }}
             QToolButton:checked  {{ background:{c['tb_checked_bg']}; border-radius:3px; color:{c['tb_checked_fg']}; }}
             QToolButton:disabled {{ color:{c['tb_disabled']}; }}
-            QStatusBar  {{ background:{c['win_bg']}; color:{c['status_text']}; font-size:{_ui_fs}; }}
+            QStatusBar  {{ background:{c['win_bg']}; color:{c['status_text']}; font-size:{_ui_fs};
+                           border-top:1px solid {c['sep']}; }}
+            QStatusBar QLabel {{ font-size:{_ui_fs}; color:{c['sub_text']}; }}
+            QStatusBar QCheckBox {{ font-size:{_ui_fs}; color:{c['sub_text']}; padding: 0 4px; }}
             QLabel      {{ font-size:{_ui_fs}; }}
             QCheckBox   {{ font-size:{_ui_fs}; }}
             QCheckBox::indicator              {{ width:13px; height:13px; border-radius:2px;
@@ -6253,21 +6452,10 @@ class MainWindow(QMainWindow):
         """)
 
         # --- Per-widget overrides not reachable via app-wide QSS ----------
-        if hasattr(self, '_status_hint'):
-            self._status_hint.setStyleSheet(f"color:{c['sub_text']};")
-        if hasattr(self, '_zoom_label'):
-            self._zoom_label.setStyleSheet(f"color:{c['sub_text']}; padding:0 8px;")
-        if hasattr(self, '_status_range'):
-            self._status_range.setStyleSheet(f"color:{c['sub_text']}; padding:0 6px;")
         if hasattr(self, '_range_stats_label'):
             self._range_stats_label.setStyleSheet(f"color:{c['muted_text']};")
         if hasattr(self, '_find_status'):
             self._find_status.setStyleSheet(f"color:{c['muted_text']};")
-        if hasattr(self, '_ea_widget') and self._ea_widget is not None:
-            self._ea_widget.setStyleSheet(
-                f"QToolButton {{ color: {c['ea_fg']}; background: transparent; border: none; padding: 2px 4px; }}"
-                f"QToolButton:disabled {{ color: {c['ea_disabled']}; }}"
-            )
         if hasattr(self, '_welcome_label'):
             self._welcome_label.setText(
                 f"<h2 style='color:{c['welcome_h2']};'>BTF Trace Viewer</h2>"
@@ -6279,6 +6467,10 @@ class MainWindow(QMainWindow):
             self._legend.update_theme(is_dark)
         if hasattr(self, '_cursor_bar'):
             self._cursor_bar.update_theme(is_dark)
+        if getattr(self, '_tb_icon_actions', None):
+            _ic_color = "#CCCCCC" if is_dark else "#555555"
+            for _act, _ic_path in self._tb_icon_actions:
+                _act.setIcon(_svg_icon(_ic_path, _ic_color))
         if hasattr(self, '_act_theme'):
             self._act_theme.setText(
                 "Switch to &Light Theme" if is_dark else "Switch to &Dark Theme"
@@ -6339,7 +6531,7 @@ class MainWindow(QMainWindow):
         stats_dock = QDockWidget("Statistics", self)
         stats_dock.setWidget(self._stats_panel)
         stats_dock.setFeatures(QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetMovable)
-        self.addDockWidget(Qt.BottomDockWidgetArea, stats_dock)
+        self.addDockWidget(Qt.RightDockWidgetArea, stats_dock)
         self._stats_dock = stats_dock
 
         # --- Marks dock (bookmarks + annotations) ---
@@ -6376,7 +6568,8 @@ class MainWindow(QMainWindow):
         an_v.setContentsMargins(0, 0, 0, 0)
         an_v.setSpacing(4)
         self._annotation_list = QListWidget()
-        self._annotation_list.itemDoubleClicked.connect(lambda item: self._jump_to_ns(int(item.data(Qt.UserRole + 1))))
+        self._annotation_list.itemDoubleClicked.connect(
+            lambda item: self._edit_selected_annotation())
         an_v.addWidget(self._annotation_list)
         self._annotation_input = QLineEdit()
         self._annotation_input.setPlaceholderText("Annotation note...")
@@ -6388,10 +6581,13 @@ class MainWindow(QMainWindow):
         an_add.clicked.connect(self._add_annotation_at_center)
         an_jump = QPushButton("Jump")
         an_jump.clicked.connect(self._jump_selected_annotation)
+        an_edit = QPushButton("Edit")
+        an_edit.clicked.connect(self._edit_selected_annotation)
         an_del = QPushButton("Delete")
         an_del.clicked.connect(self._delete_selected_annotation)
         an_btns.addWidget(an_add)
         an_btns.addWidget(an_jump)
+        an_btns.addWidget(an_edit)
         an_btns.addWidget(an_del)
         an_v.addLayout(an_btns)
         marks_tabs.addTab(an_page, "Annotations")
@@ -6451,10 +6647,10 @@ class MainWindow(QMainWindow):
         find_dock.setMinimumWidth(190)
         find_dock.setMaximumWidth(260)
         find_dock.setMinimumHeight(120)
-        find_dock.setMaximumHeight(220)
         self.addDockWidget(Qt.RightDockWidgetArea, find_dock)
         self.tabifyDockWidget(self._marks_dock, find_dock)
         self._find_dock = find_dock
+        self.tabifyDockWidget(find_dock, self._stats_dock)
 
         # Put Marks below Legend and keep its startup height compact.
         self.splitDockWidget(self._legend_dock, self._marks_dock, Qt.Vertical)
@@ -6476,6 +6672,8 @@ class MainWindow(QMainWindow):
             lambda v: setattr(self, "_show_legend", v))
         self._stats_dock.visibilityChanged.connect(
             lambda v: setattr(self, "_show_stats", v))
+        self._marks_dock.visibilityChanged.connect(
+            lambda v: setattr(self, "_show_marks", v))
         self._find_dock.visibilityChanged.connect(self._on_find_dock_visibility_changed)
         self._view.horizontalScrollBar().valueChanged.connect(lambda _: self._on_view_scrolled())
         self._view.verticalScrollBar().valueChanged.connect(lambda _: self._on_view_scrolled())
@@ -6509,7 +6707,10 @@ class MainWindow(QMainWindow):
         self._act_copy_img = fm.addAction("&Copy Image to Clipboard", self._on_copy_image, "Ctrl+Shift+C")
         self._act_copy_img.setEnabled(False)
         fm.addSeparator()
-        fm.addAction("E&xit", self.close, QKeySequence.Quit)
+        _quit_act = fm.addAction("E&xit", self.close)
+        # QKeySequence.Quit = Ctrl+Q on macOS/Linux; unmapped on Windows (Alt+F4 used there).
+        # Provide Ctrl+Q explicitly so it works on all platforms.
+        _quit_act.setShortcut(QKeySequence("Ctrl+Q"))
 
         # --- View menu (layout, visibility, zoom, mode, theme) ---
         vm = mb.addMenu("&View")
@@ -6533,8 +6734,14 @@ class MainWindow(QMainWindow):
         vm.addSeparator()
         vm.addAction("⚙ &Settings…", self._open_settings, "Ctrl+,")
         vm.addSeparator()
-        self._act_show_marks = vm.addAction("Show &Marks Panel", lambda: self._marks_dock.setVisible(True))
-        self._act_show_find = vm.addAction("Show &Find Panel", lambda: self._find_dock.setVisible(True))
+        self._act_show_marks = vm.addAction("Show &Marks Panel",
+            lambda: self._marks_dock.setVisible(not self._marks_dock.isVisible()))
+        self._act_show_marks.setCheckable(True)
+        self._act_show_marks.setChecked(True)
+        self._act_show_find = vm.addAction("Show &Find Panel",
+            lambda: self._find_dock.setVisible(not self._find_dock.isVisible()))
+        self._act_show_find.setCheckable(True)
+        self._act_show_find.setChecked(False)
 
         # --- Cursors menu ---
         cm = mb.addMenu("&Cursors")
@@ -6569,121 +6776,130 @@ class MainWindow(QMainWindow):
         hm.addSeparator()
         hm.addAction("&About", self._on_about)
 
+        # Sync Show Marks / Show Find check state with dock X-button
+        self._marks_dock.visibilityChanged.connect(self._act_show_marks.setChecked)
+        self._find_dock.visibilityChanged.connect(self._act_show_find.setChecked)
+
     def _build_toolbar(self) -> None:
         tb = self.addToolBar("Main")
         self._tb = tb
         tb.setMovable(False)
-        tb.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        tb.setToolButtonStyle(Qt.ToolButtonIconOnly)
+        tb.setIconSize(QSize(18, 18))
+
+        self._tb_icon_actions = []
+
+        def _ia(text: str, handler, ic_path: str, tooltip: str = ""):
+            act = tb.addAction(text, handler)
+            act.setIcon(_svg_icon(ic_path))
+            if tooltip:
+                act.setToolTip(tooltip)
+            self._tb_icon_actions.append((act, ic_path))
+            return act
 
         # --- File actions ---
-        tb.addAction("📂 Open",    self._on_open).setToolTip("Open BTF trace file  (Ctrl+O)")
-        tb.addAction("💾 Save PNG", self._on_save_image).setToolTip("Save viewport as PNG  (Ctrl+S)")
-        tb.addAction("📋 Copy",     self._on_copy_image).setToolTip("Copy viewport to clipboard  (Ctrl+Shift+C)")
+        _ia("Open",     self._on_open,         _IC_OPEN, "Open BTF trace file  (Ctrl+O)")
+        _ia("Save PNG", self._on_save_image,   _IC_SAVE, "Save viewport as PNG  (Ctrl+S)")
+        _ia("Copy",     self._on_copy_image,   _IC_COPY, "Copy viewport to clipboard  (Ctrl+Shift+C)")
         tb.addSeparator()
 
         # --- Layout and zoom ---
-        self._tb_horiz_btn = tb.addAction("↔ Horizontal", lambda: self._set_orientation(True))
-        self._tb_vert_btn  = tb.addAction("↕ Vertical",   lambda: self._set_orientation(False))
+        self._tb_horiz_btn = _ia("Horizontal", lambda: self._set_orientation(True),  _IC_HORIZ)
+        self._tb_vert_btn  = _ia("Vertical",   lambda: self._set_orientation(False), _IC_VERT)
         self._tb_horiz_btn.setCheckable(True)
         self._tb_vert_btn.setCheckable(True)
         self._tb_horiz_btn.setChecked(True)   # default: horizontal
         self._tb_horiz_btn.setToolTip("Horizontal layout — time runs left → right")
         self._tb_vert_btn.setToolTip("Vertical layout — time runs top → bottom")
         tb.addSeparator()
-        tb.addAction("🔍+",     self._view.zoom_in).setToolTip("Zoom in  (Ctrl++)")
-        tb.addAction("🔍-",     self._view.zoom_out).setToolTip("Zoom out  (Ctrl+-)")
-        self._act_zoom_1to1 = tb.addAction("1:1", self._view.zoom_1to1)
-        self._act_zoom_1to1.setToolTip("Zoom to 1:1 scale")
-        tb.addAction("⊡ Fit",   self._view.zoom_fit).setToolTip("Fit entire trace to window  (Ctrl+0)")
-        self._tb_zoom_range_btn = tb.addAction("⊡ Range", self._zoom_to_cursor_range)
+        _ia("Zoom In",  self._view.zoom_in,  _IC_ZIN,  "Zoom in  (Ctrl++)")
+        _ia("Zoom Out", self._view.zoom_out, _IC_ZOUT, "Zoom out  (Ctrl+-)")
+        self._act_zoom_1to1 = _ia("1:1", self._view.zoom_1to1, _IC_1TO1, "Zoom to 1:1 scale")
+        _ia("Fit",   self._view.zoom_fit,          _IC_FIT,    "Fit entire trace to window  (Ctrl+0)")
+        self._tb_zoom_range_btn = _ia("Range", self._zoom_to_cursor_range, _IC_EXPAND,
+                                      "Zoom view to fit between cursor C1 and C2  (Ctrl+R)")
         self._tb_zoom_range_btn.setEnabled(False)
-        self._tb_zoom_range_btn.setToolTip("Zoom view to fit between cursor C1 and C2  (Ctrl+R)")
         tb.addSeparator()
 
         # --- View mode toggle (Task / Core) ---
-        self._tb_task_btn = tb.addAction("Task View", lambda: self._set_view_mode("task"))
-        self._tb_core_btn = tb.addAction("Core View", lambda: self._set_view_mode("core"))
+        self._tb_task_btn = _ia("Task", lambda: self._set_view_mode("task"), _IC_TASK,
+                                "Task View — one row per task, merges across cores")
+        self._tb_core_btn = _ia("Core", lambda: self._set_view_mode("core"), _IC_CORE,
+                                "Core View — one expandable row per CPU core")
         self._tb_task_btn.setCheckable(True)
         self._tb_core_btn.setCheckable(True)
         self._tb_task_btn.setChecked(True)
-        self._tb_task_btn.setToolTip("Task View — one row per task, merges across cores")
-        self._tb_core_btn.setToolTip("Core View — one expandable row per CPU core")
-        # Use addAction so Qt creates and fully owns the internal QToolButton.
-        # This avoids the QWidgetAction::releaseWidget SIGSEGV on app exit that
-        # occurs when a Python-owned QToolButton is added via addWidget().
-        self._tb_expand_all_btn = tb.addAction("⊞ Expand All. ", self._toggle_expand_all_cores)
+        # Task/Core are mode toggles — show short text beside icon so the active
+        # state is readable at a glance without hovering.
+        for _mode_act in (self._tb_task_btn, self._tb_core_btn):
+            _mw = tb.widgetForAction(_mode_act)
+            if _mw:
+                _mw.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self._tb_expand_all_btn = _ia("Expand All", self._toggle_expand_all_cores,
+                                      _IC_EXPAND_ALL,
+                                      "Expand / collapse all cores  (only in Core View)")
         self._tb_expand_all_btn.setCheckable(True)
         self._tb_expand_all_btn.setChecked(True)   # default: all expanded
         self._tb_expand_all_btn.setEnabled(False)   # only active in core view
-        self._tb_expand_all_btn.setToolTip("Expand / collapse all cores  (only in Core View)")
-        # widgetForAction() returns the Qt-owned internal QToolButton — safe to style.
-        self._ea_widget = tb.widgetForAction(self._tb_expand_all_btn)
-        if self._ea_widget is not None:
-            # Store as instance attribute: QWidget::setStyle does NOT transfer ownership,
-            # so the caller must keep the QStyle alive or Qt will use a freed pointer.
-            self._ea_fusion_style = QStyleFactory.create("Fusion")
-            if self._ea_fusion_style:
-                self._ea_widget.setStyle(self._ea_fusion_style)
-            self._ea_widget.setStyleSheet(
-                "QToolButton { color: #D4D4D4; background: transparent; border: none; padding: 2px 4px; }"
-                "QToolButton:disabled { color: #555555; }"
-            )
-            # Fix width to the wider of the two label strings so the toolbar never shifts
-            _ea_fm = self._ea_widget.fontMetrics()
-            _ea_w  = max(_ea_fm.horizontalAdvance("⊞ Expand All. "),
-                         _ea_fm.horizontalAdvance("⊟ Collapse All")) + 24
-            self._ea_widget.setFixedWidth(_ea_w)
         tb.addSeparator()
 
         # --- Cursor controls ---
-        tb.addAction("│C Place cursor", self._view.add_cursor_at_view_center).setToolTip(
+        _ia("Place Cursor", self._view.add_cursor_at_view_center, _IC_CURSOR,
             "Place cursor at viewport centre  (C)")
-        tb.addAction("✕ Clear cursors", self._view.clear_cursors).setToolTip(
+        _ia("Clear Cursors", self._view.clear_cursors, _IC_CLEAR,
             "Clear all cursors  (Shift+C)")
         tb.addSeparator()
 
         # --- Settings button ---
-        tb.addAction("⚙ Settings", self._open_settings).setToolTip("Open Settings  (Ctrl+,)")
+        _ia("Settings", self._open_settings, _IC_SETTINGS, "Open Settings  (Ctrl+,)")
 
     def _build_status_bar(self) -> None:
         sb = self.statusBar()
 
-        # --- Status labels (file path, event stats) ---
+        # --- LEFT: file info (stretches to fill available space) ---
         self._status_file  = QLabel("No file loaded")
-        self._status_stats = QLabel("")
+        self._status_file.setContentsMargins(4, 0, 8, 0)
 
-        # --- Cursor badge bar ---
+        # --- CENTER: cursor badge bar (permanent, but visually central) ---
         self._cursor_bar   = _CursorBarWidget()
         self._cursor_bar.jump_requested.connect(self._view.scroll_to_ns)
         self._cursor_bar.cursor_delete_requested.connect(self._on_cursor_delete)
 
-        # --- Hint text (interaction guide) ---
-        self._status_hint  = QLabel(
-            "Left-click: cursor  |  Ctrl+Wheel: zoom  |  Scroll: pan"
-        )
-        self._status_hint.setStyleSheet("color:#888888;")
-
-        self._zoom_label = QLabel("Zoom: —")
-        self._zoom_label.setStyleSheet("color:#888888; padding: 0 8px;")
-
         # --- Cursor range stats (compact; shown only when ≥2 cursors active) ---
         self._status_range = QLabel("")
-        self._status_range.setStyleSheet("color:#888888; padding: 0 6px;")
+        self._status_range.setContentsMargins(6, 0, 6, 0)
         self._status_range.setVisible(False)
 
-        # --- Quick toggles ---
+        # --- RIGHT permanent zone ---
+
+        # Quick view toggles — compact pill-style checkboxes
         self._sti_toggle_cb = QCheckBox("STI")
         self._sti_toggle_cb.setChecked(self._show_sti)
         self._sti_toggle_cb.setToolTip("Show or hide STI event markers")
         self._sti_toggle_cb.toggled.connect(self._set_show_sti)
 
+        self._grid_toggle_cb = QCheckBox("Grid")
+        self._grid_toggle_cb.setChecked(self._show_grid)
+        self._grid_toggle_cb.setToolTip("Show or hide the time grid")
+        self._grid_toggle_cb.toggled.connect(self._set_show_grid)
+
+        # Zoom indicator — concise "10 ns/px" format, no label prefix
+        self._zoom_label = QLabel("—")
+        self._zoom_label.setContentsMargins(8, 0, 8, 0)
+        self._zoom_label.setToolTip("Current zoom level (time per pixel)")
+
         sb.addWidget(self._status_file)
         sb.addPermanentWidget(self._cursor_bar)
         sb.addPermanentWidget(self._status_range)
-        sb.addPermanentWidget(self._status_stats)
         sb.addPermanentWidget(self._sti_toggle_cb)
+        sb.addPermanentWidget(self._grid_toggle_cb)
         sb.addPermanentWidget(self._zoom_label)
-        sb.addPermanentWidget(self._status_hint)
+
+        # Show interaction hint as a timed splash once the window is fully shown.
+        # Delay avoids the overlap with _status_file that occurs when showMessage()
+        # is called before Qt has finished laying out the status bar widgets.
+        QTimer.singleShot(500, lambda: self.statusBar().showMessage(
+            "Left-click: cursor  |  Ctrl+Wheel: zoom  |  Scroll: pan", 6000))
 
     # ------------------------------------------------------------------
     # Slots / callbacks
@@ -6713,6 +6929,17 @@ class MainWindow(QMainWindow):
         if persist:
             self._settings.set("view", "show_sti", str(self._show_sti).lower())
 
+    def _set_show_grid(self, show: bool, persist: bool = True) -> None:
+        """Apply grid visibility and keep all Grid UI controls in sync."""
+        self._show_grid = bool(show)
+        self._view.set_show_grid(self._show_grid)
+        if hasattr(self, "_grid_toggle_cb"):
+            self._grid_toggle_cb.blockSignals(True)
+            self._grid_toggle_cb.setChecked(self._show_grid)
+            self._grid_toggle_cb.blockSignals(False)
+        if persist:
+            self._settings.set("view", "show_grid", str(self._show_grid).lower())
+
     def _current_time_unit(self) -> str:
         if self._trace is not None and getattr(self._trace, "time_scale", ""):
             return self._trace.time_scale
@@ -6724,7 +6951,7 @@ class MainWindow(QMainWindow):
             f"Zoom to {self._timescale_per_px_default_val:.1f} {unit}/pixel"
         )
         if self._trace is None:
-            self._zoom_label.setText("Zoom: —")
+            self._zoom_label.setText("—")
             return
         self._on_zoom_changed(self._view._scene.timescale_per_px)
 
@@ -6737,22 +6964,19 @@ class MainWindow(QMainWindow):
         self._tb_core_btn.setChecked(not is_task)
         self._tb_expand_all_btn.setEnabled(not is_task)
         if not is_task:
-            # Sync button text/state with actual core expanded state
+            # Sync button state with actual core expanded state
             scene = self._view._scene
             trace = scene._trace
             if trace and trace.core_names:
                 all_expanded = all(
                     scene._core_expanded.get(c, True) for c in trace.core_names)
                 self._tb_expand_all_btn.setChecked(all_expanded)
-                self._tb_expand_all_btn.setText(
-                    "⊞ Expand All. " if all_expanded else "⊟ Collapse All")
         self._view.set_view_mode(mode)
         self._refresh_find_marker()
 
     def _toggle_expand_all_cores(self) -> None:
         """Expand or collapse all cores based on the button's checked state."""
         expanded = self._tb_expand_all_btn.isChecked()
-        self._tb_expand_all_btn.setText("⊞ Expand All. " if expanded else "⊟ Collapse All")
         self._view.set_all_cores_expanded(expanded)
 
     # -- File actions ---------------------------------------------------
@@ -6782,7 +7006,8 @@ class MainWindow(QMainWindow):
             act.setEnabled(False)
             return
         for p in paths:
-            label = os.path.basename(p)
+            parts = p.replace("\\", "/").split("/")
+            label = "/".join(parts[-2:]) if len(parts) >= 2 else parts[-1]
             self._recent_menu.addAction(label, lambda checked=False, _p=p: self._open_file(_p)) \
                 .setToolTip(p)
 
@@ -6964,6 +7189,23 @@ class MainWindow(QMainWindow):
                 break
         self._rebuild_annotation_list()
         self._save_current_trace_state()
+
+    def _edit_selected_annotation(self) -> None:
+        item = self._annotation_list.currentItem()
+        if item is None:
+            return
+        aid = int(item.data(Qt.UserRole))
+        for a in self._annotations:
+            if a.id == aid:
+                note, ok = QInputDialog.getText(
+                    self, "Edit Annotation", "Note:", QLineEdit.Normal, a.note
+                )
+                if ok and note.strip():
+                    a.note = note.strip()
+                    self._rebuild_annotation_list()
+                    self._recompute_find_hits()
+                    self._save_current_trace_state()
+                break
 
     def _rebuild_annotation_list(self) -> None:
         self._annotation_list.blockSignals(True)
@@ -7233,13 +7475,11 @@ class MainWindow(QMainWindow):
                 n_sti = len(trace.sti_events)
                 self.setWindowTitle(f"BTF Trace Viewer – {fname}")
                 self._status_file.setText(f"  {fname}  |  span: {ts}")
-                self._status_stats.setText(
+                self._status_file.setToolTip(
                     f"tasks: {len(trace.tasks)}  "
                     f"segments: {n_seg}  "
-                    f"STI events: {n_sti}  |  "
+                    f"STI events: {n_sti}"
                 )
-                # Hide the beginner hint once a trace has been loaded successfully
-                self._status_hint.setVisible(False)
                 self._save_recent_files(path)
                 self._rebuild_recent_menu()
             except (ValueError, RuntimeError, KeyError, OSError) as exc:
@@ -7307,8 +7547,110 @@ class MainWindow(QMainWindow):
 
     # -- Settings actions -----------------------------------------------
 
+    def _apply_settings_preview(self, vals: dict) -> None:
+        """Apply *vals* dict to the live UI without writing to disk.
+
+        Used for both live preview (called on every dialog change) and
+        cancel-revert (called with the pre-dialog snapshot).
+        """
+        # Batch theme rebuilds: both is_dark and ui_font_size trigger
+        # _apply_theme; accumulate and call once to avoid double-flicker.
+        _need_theme = False
+        if vals["is_dark"] != self._is_dark:
+            self._is_dark = vals["is_dark"]
+            _need_theme = True
+        if vals["ui_font_size"] != self._ui_font_size_val:
+            self._ui_font_size_val = vals["ui_font_size"]
+            _need_theme = True
+        if _need_theme:
+            self._apply_theme(self._is_dark)
+        if vals["font_size"] != self._font_size_val:
+            self._font_size_val = vals["font_size"]
+            self._view.set_font_size(self._font_size_val)
+        if vals["max_cursors"] != self._max_cursors_val:
+            self._max_cursors_val = vals["max_cursors"]
+            self._view.set_max_cursors(self._max_cursors_val)
+            self._view.cursors_changed.emit(self._view._scene.cursor_times())
+        if vals["show_sti"] != self._show_sti:
+            self._set_show_sti(vals["show_sti"], persist=False)
+        if vals["show_grid"] != self._show_grid:
+            self._set_show_grid(vals["show_grid"], persist=False)
+        if vals["show_legend"] != self._show_legend:
+            self._show_legend = vals["show_legend"]
+            self._legend_dock.setVisible(self._show_legend)
+        if vals["show_stats"] != self._show_stats:
+            self._show_stats = vals["show_stats"]
+            self._stats_dock.setVisible(self._show_stats)
+        if vals["show_marks"] != self._show_marks:
+            self._show_marks = vals["show_marks"]
+            self._marks_dock.setVisible(self._show_marks)
+        if vals["show_hover_highlight"] != self._hover_highlight_val:
+            self._hover_highlight_val = vals["show_hover_highlight"]
+            self._view._scene.set_hover_highlight(self._hover_highlight_val)
+        if vals["label_width"] != self._label_width_val:
+            self._label_width_val = vals["label_width"]
+            self._view._scene.set_label_width(self._label_width_val)
+        if vals["row_height"] != self._row_height_val:
+            self._row_height_val = vals["row_height"]
+            self._view._scene.set_row_height(self._row_height_val)
+        if vals["row_gap"] != self._row_gap_val:
+            self._row_gap_val = vals["row_gap"]
+            self._view._scene.set_row_gap(self._row_gap_val)
+        if vals["timescale_per_px_default"] != self._timescale_per_px_default_val:
+            self._timescale_per_px_default_val = vals["timescale_per_px_default"]
+            self._view._scene.set_timescale_per_px_default(self._timescale_per_px_default_val)
+            self._refresh_zoom_ui_unit()
+
+    def _persist_settings_after_dlg(self, snap: dict) -> None:
+        """Write to disk any settings that differ from the pre-dialog snapshot."""
+        if snap["is_dark"] != self._is_dark:
+            self._settings.set("view", "theme", "dark" if self._is_dark else "light")
+        if snap["font_size"] != self._font_size_val:
+            self._settings.set("view", "font_size", str(self._font_size_val))
+        if snap["ui_font_size"] != self._ui_font_size_val:
+            self._settings.set("view", "ui_font_size", str(self._ui_font_size_val))
+        if snap["max_cursors"] != self._max_cursors_val:
+            self._settings.set("view", "max_cursors", str(self._max_cursors_val))
+        if snap["show_sti"] != self._show_sti:
+            self._settings.set("view", "show_sti", str(self._show_sti).lower())
+        if snap["show_grid"] != self._show_grid:
+            self._settings.set("view", "show_grid", str(self._show_grid).lower())
+        if snap["show_legend"] != self._show_legend:
+            self._settings.set("view", "show_legend", str(self._show_legend).lower())
+        if snap["show_stats"] != self._show_stats:
+            self._settings.set("view", "show_stats", str(self._show_stats).lower())
+        if snap["show_marks"] != self._show_marks:
+            self._settings.set("view", "show_marks", str(self._show_marks).lower())
+        if snap["show_hover_highlight"] != self._hover_highlight_val:
+            self._settings.set("view", "hover_highlight", str(self._hover_highlight_val).lower())
+        if snap["label_width"] != self._label_width_val:
+            self._settings.set("view", "label_width", str(self._label_width_val))
+        if snap["row_height"] != self._row_height_val:
+            self._settings.set("view", "row_height", str(self._row_height_val))
+        if snap["row_gap"] != self._row_gap_val:
+            self._settings.set("view", "row_gap", str(self._row_gap_val))
+        if snap["timescale_per_px_default"] != self._timescale_per_px_default_val:
+            self._settings.set("view", "timescale_per_px_default",
+                               str(self._timescale_per_px_default_val))
+
     def _open_settings(self) -> None:
-        """Open the Settings dialog and apply any changes on OK."""
+        """Open the Settings dialog with live preview; reverts on Cancel."""
+        _snap = {
+            "is_dark":                  self._is_dark,
+            "font_size":                self._font_size_val,
+            "ui_font_size":             self._ui_font_size_val,
+            "max_cursors":              self._max_cursors_val,
+            "show_sti":                 self._show_sti,
+            "show_grid":                self._show_grid,
+            "show_legend":              self._show_legend,
+            "show_stats":               self._show_stats,
+            "show_marks":               self._show_marks,
+            "show_hover_highlight":     self._hover_highlight_val,
+            "label_width":              self._label_width_val,
+            "row_height":               self._row_height_val,
+            "row_gap":                  self._row_gap_val,
+            "timescale_per_px_default": self._timescale_per_px_default_val,
+        }
         dlg = _SettingsDialog(
             self,
             font_size=self._font_size_val,
@@ -7318,6 +7660,7 @@ class MainWindow(QMainWindow):
             show_grid=self._show_grid,
             show_legend=self._show_legend,
             show_stats=self._show_stats,
+            show_marks=self._show_marks,
             label_width=self._label_width_val,
             row_height=self._row_height_val,
             row_gap=self._row_gap_val,
@@ -7326,88 +7669,26 @@ class MainWindow(QMainWindow):
             show_hover_highlight=self._hover_highlight_val,
             zoom_unit=self._current_time_unit(),
         )
-        if dlg.exec_() != QDialog.Accepted:
-            return
-
-        # Theme
-        new_dark = dlg.is_dark
-        if new_dark != self._is_dark:
-            self._is_dark = new_dark
-            self._apply_theme(self._is_dark)
-
-        # Timeline label font size
-        new_fs = dlg.font_size
-        if new_fs != self._font_size_val:
-            self._font_size_val = new_fs
-            self._view.set_font_size(new_fs)
-            self._settings.set("view", "font_size", str(new_fs))
-
-        # UI font size (menus, toolbar, status bar)
-        new_ufs = dlg.ui_font_size
-        if new_ufs != self._ui_font_size_val:
-            self._ui_font_size_val = new_ufs
-            self._apply_theme(self._is_dark)
-            self._settings.set("view", "ui_font_size", str(new_ufs))
-
-        # Max cursors
-        new_mc = dlg.max_cursors
-        if new_mc != self._max_cursors_val:
-            self._on_max_cursors_changed(new_mc)
-
-        # STI events
-        if dlg.show_sti != self._show_sti:
-            self._set_show_sti(dlg.show_sti)
-
-        # Grid
-        if dlg.show_grid != self._show_grid:
-            self._show_grid = dlg.show_grid
-            self._view.set_show_grid(self._show_grid)
-
-        # Legend panel
-        if dlg.show_legend != self._show_legend:
-            self._show_legend = dlg.show_legend
-            self._legend_dock.setVisible(self._show_legend)
-
-        # Statistics panel
-        if dlg.show_stats != self._show_stats:
-            self._show_stats = dlg.show_stats
-            self._stats_dock.setVisible(self._show_stats)
-
-        # Label column width
-        new_lw = dlg.label_width
-        if new_lw != self._label_width_val:
-            self._label_width_val = new_lw
-            self._view._scene.set_label_width(new_lw)
-            self._settings.set("view", "label_width", str(new_lw))
-
-        # Row height
-        new_rh = dlg.row_height
-        if new_rh != self._row_height_val:
-            self._row_height_val = new_rh
-            self._view._scene.set_row_height(new_rh)
-            self._settings.set("view", "row_height", str(new_rh))
-
-        # Row gap
-        new_rg = dlg.row_gap
-        if new_rg != self._row_gap_val:
-            self._row_gap_val = new_rg
-            self._view._scene.set_row_gap(new_rg)
-            self._settings.set("view", "row_gap", str(new_rg))
-
-        # Max zoom-in level (ns/px default)
-        new_nppd = dlg.timescale_per_px_default
-        if new_nppd != self._timescale_per_px_default_val:
-            self._timescale_per_px_default_val = new_nppd
-            self._view._scene.set_timescale_per_px_default(new_nppd)
-            self._settings.set("view", "timescale_per_px_default", str(new_nppd))
-            self._refresh_zoom_ui_unit()
-
-        # Hover label highlight
-        new_hh = dlg.show_hover_highlight
-        if new_hh != self._hover_highlight_val:
-            self._hover_highlight_val = new_hh
-            self._view._scene.set_hover_highlight(new_hh)
-            self._settings.set("view", "hover_highlight", str(new_hh).lower())
+        dlg.live_preview.connect(lambda: self._apply_settings_preview({
+            "is_dark":                  dlg.is_dark,
+            "font_size":                dlg.font_size,
+            "ui_font_size":             dlg.ui_font_size,
+            "max_cursors":              dlg.max_cursors,
+            "show_sti":                 dlg.show_sti,
+            "show_grid":                dlg.show_grid,
+            "show_legend":              dlg.show_legend,
+            "show_stats":               dlg.show_stats,
+            "show_marks":               dlg.show_marks,
+            "show_hover_highlight":     dlg.show_hover_highlight,
+            "label_width":              dlg.label_width,
+            "row_height":               dlg.row_height,
+            "row_gap":                  dlg.row_gap,
+            "timescale_per_px_default": dlg.timescale_per_px_default,
+        }))
+        if dlg.exec_() == QDialog.Accepted:
+            self._persist_settings_after_dlg(_snap)
+        else:
+            self._apply_settings_preview(_snap)
 
     # -- Status / legend callbacks -------------------------------------
 
@@ -7426,7 +7707,7 @@ class MainWindow(QMainWindow):
     def _on_zoom_changed(self, timescale_per_px: float) -> None:
         unit = self._current_time_unit()
         z = f"{timescale_per_px:.3g} {unit}/px"
-        self._zoom_label.setText(f"Zoom: {z}")
+        self._zoom_label.setText(z)
         self._refresh_find_marker()
 
     def _on_cursor_delete(self, ns: int) -> None:
@@ -7501,7 +7782,7 @@ class MainWindow(QMainWindow):
             return
         times = sorted(self._view._scene.cursor_times())
         if len(times) < 2:
-            self._status_hint.setText("Place at least 2 cursors to zoom to range")
+            self.statusBar().showMessage("Place at least 2 cursors to zoom to range", 3000)
             return
         ns_lo, ns_hi = times[0], times[-1]
         if ns_lo == ns_hi:
@@ -7581,7 +7862,7 @@ class MainWindow(QMainWindow):
                 writer = csv.writer(fh)
                 writer.writerow(["type", "timestamp", "raw_ns", "label_or_note"])
                 writer.writerows(rows)
-            self._status_hint.setText(f"Marks exported → {os.path.basename(path)}")
+            self.statusBar().showMessage(f"Marks exported → {os.path.basename(path)}", 4000)
         except OSError as exc:
             QMessageBox.critical(self, "Export Error", str(exc))
 
@@ -7618,7 +7899,7 @@ class MainWindow(QMainWindow):
                             imported += 1
             self._rebuild_bookmark_list()
             self._rebuild_annotation_list()
-            self._status_hint.setText(f"Imported {imported} mark(s) from {os.path.basename(path)}")
+            self.statusBar().showMessage(f"Imported {imported} mark(s) from {os.path.basename(path)}", 4000)
         except OSError as exc:
             QMessageBox.critical(self, "Import Error", str(exc))
 
@@ -7648,7 +7929,7 @@ class MainWindow(QMainWindow):
                 ("Ctrl+O",       "Open .btf trace file"),
                 ("Ctrl+S",       "Save viewport as PNG"),
                 ("Ctrl+Shift+C", "Copy viewport to clipboard"),
-                ("Ctrl+Q",       "Quit"),
+                ("Ctrl+Q",       "Quit  (Alt+F4 also works on Windows)"),
             ]),
             ("View / Zoom", [
                 ("Ctrl++",    "Zoom in"),
@@ -7706,30 +7987,7 @@ class MainWindow(QMainWindow):
         dlg.exec_()
 
     def _on_about(self) -> None:
-        if self._is_dark:
-            c_title = "#7EC8E3"
-            c_head  = "#FFD700"
-            c_key   = "#7EC8E3"
-            c_body  = "#D4D4D4"
-        else:
-            c_title = "#005A8E"
-            c_head  = "#B8860B"
-            c_key   = "#005A8E"
-            c_body  = "#333333"
-        QMessageBox.about(
-            self, "About BTF Trace Viewer",
-            f"<h3 style='color:{c_title};'>BTF Trace Viewer</h3>"
-            f"<p style='color:{c_body};'>RTOS context-switch visualiser for .btf files.</p>"
-            f"<p style='color:{c_body};'><b style='color:{c_head};'>View modes:</b><br>"
-            f"• <b style='color:{c_key};'>Task View</b> – one row per task<br>"
-            f"• <b style='color:{c_key};'>Core View</b> – one expandable row per CPU core</p>"
-            f"<p style='color:{c_body};'><b style='color:{c_head};'>Controls:</b><br>"
-            f"• <b style='color:{c_key};'>Left-click</b> – place cursor  |  <b style='color:{c_key};'>Drag</b> cursor line – move it<br>"
-            f"• <b style='color:{c_key};'>Right-click</b> – context menu  |  <b style='color:{c_key};'>Status badge</b> – jump to cursor<br>"
-            f"• <b style='color:{c_key};'>Ctrl+Wheel</b> / pinch – zoom  |  <b style='color:{c_key};'>Scroll</b> – pan<br>"
-            f"• <b style='color:{c_key};'>Ctrl+0</b> – fit  |  <b style='color:{c_key};'>Ctrl+R</b> – zoom to cursor range<br>"
-            f"• <b style='color:{c_key};'>Help → Keyboard Shortcuts</b> for the full list</p>"
-        )
+        _AboutDialog(self, is_dark=self._is_dark).exec_()
 
 # ===========================================================================
 # Entry point
