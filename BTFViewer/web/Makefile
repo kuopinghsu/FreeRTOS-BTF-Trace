@@ -2,7 +2,7 @@ NPM     ?= npm
 OUTDIR  := dist
 OUT     := $(OUTDIR)/index.html
 
-.PHONY: all build dev preview dist-clean
+.PHONY: all build dev preview clean dist-clean
 
 all: build
 
@@ -23,6 +23,11 @@ node_modules: package.json
 	$(NPM) install
 	@touch node_modules
 
+## Remove build output
+clean:
+	rm -rf $(OUTDIR)
+
+dist-clean: clean
 ## Remove build output and installed dependencies
 dist-clean: clean
 	-rm -rf node_modules package-lock.json
