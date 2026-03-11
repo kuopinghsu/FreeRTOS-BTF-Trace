@@ -64,6 +64,7 @@ from __future__ import annotations
 import configparser
 import functools
 import json
+import math
 import os
 import re
 import shutil
@@ -82,7 +83,7 @@ from PyQt5.QtCore import (
     pyqtSignal,
 )
 from PyQt5.QtGui import (
-    QBrush, QColor, QFont, QFontDatabase, QFontMetrics, QIcon, QKeySequence, QPainter,
+    QBrush, QColor, QFont, QFontDatabase, QFontMetrics, QFontMetricsF, QIcon, QKeySequence, QPainter,
     QPalette, QPen, QPixmap, QPolygonF, QTransform, QWheelEvent,
 )
 from PyQt5.QtWidgets import (
@@ -118,14 +119,15 @@ UI_FONT_SIZE  = 10   # Application UI font: menus, toolbar, status bar (pt).
 _VERTICAL_LABEL_USE_PIXMAP: bool = sys.platform == "win32"
 
 # ---- Layout ---------------------------------------------------------------
-LABEL_WIDTH   = 160  # Width of the frozen task-label column (px).
-RULER_HEIGHT  =  40  # Height of the time ruler row (px) — horizontal mode.
-RULER_WIDTH   = 120  # Width of the time ruler column (px) — vertical mode.
-ROW_HEIGHT    =  22  # Height of each task / core row (px).
-ROW_GAP       =   4  # Vertical gap between rows (px).
-STI_ROW_H     =  18  # Height of an STI (software-trace) row (px).
-STI_MARKER_H  =   6  # Height of an STI marker triangle (px).
-MIN_SEG_WIDTH = 1.0  # Minimum painted width of a task segment (px).
+LABEL_WIDTH              = 160  # Width of the frozen task-label column (px).
+RULER_HEIGHT             =  40  # Height of the time ruler row (px) — horizontal mode.
+RULER_WIDTH              = 120  # Width of the time ruler column (px) — vertical mode.
+ROW_HEIGHT               =  22  # Height of each task / core row (px).
+ROW_GAP                  =   4  # Vertical gap between rows (px).
+STI_ROW_H                =  18  # Height of an STI (software-trace) row (px).
+STI_MARKER_H             =   6  # Height of an STI marker triangle (px).
+MIN_SEG_WIDTH            = 1.0  # Minimum painted width of a task segment (px).
+LABEL_BOTTOM_MARGIN      =  10  # Gap (px) between bottom edge of a vertical label and the timeline.
 
 # ---- Performance / Level-of-Detail ----------------------------------------
 _TIMESCALE_PER_PX_DEFAULT       = 2.0    # Initial zoom level (nanoseconds per screen pixel).
@@ -206,7 +208,9 @@ def _svg_icon(path_data: str, color: str = "#9E9E9E", size: int = 16) -> "QIcon"
     return QIcon(pm)
 
 # Icon path data (16×16 viewBox, single-path SVG outlines)
-_IC_OPEN   = "M2 4a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1H7L5.5 4H2z"
+_IC_OPEN   = ("M1 3.5A1.5 1.5 0 0 1 2.5 2h2.764c.958 0 1.76.56 2.311 1.184C7.985 3.648 8.48 4 9 4h4.5A1.5 1.5 0 0 1 15 5.5v.64c.57.265.94.876.856 1.546l-.64 5.124A2.5 2.5 0 0 1 12.733 15H3.267a2.5 2.5 0 0 1-2.483-2.19l-.64-5.124A1.5 1.5 0 0 1 1 6.14V3.5z"
+              "M2 6h12v-.5a.5.5 0 0 0-.5-.5H9c-.964 0-1.71-.629-2.174-1.154C6.374 3.334 5.82 3 5.264 3H2.5a.5.5 0 0 0-.5.5V6z"
+              "m-.367 1a.5.5 0 0 0-.496.562l.64 5.124A1.5 1.5 0 0 0 3.267 14h9.466a1.5 1.5 0 0 0 1.49-1.314l.64-5.124A.5.5 0 0 0 14.367 7H1.633z")
 _IC_SAVE   = "M2 1a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V4.5L11.5 1H2zm2 1h5v3H4V2zm4 8a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zM3 10h10v4H3v-4z"
 _IC_COPY   = "M4 1.5H3a2 2 0 0 0-2 2V14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V3.5a2 2 0 0 0-2-2h-1v1h1a1 1 0 0 1 1 1V14a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1h1v-1zM5 0h6a1 1 0 0 1 1 1v3H4V1a1 1 0 0 1 1-1z"
 _IC_HORIZ  = "M1 4h14v2H1zm0 4h14v2H1zm0 4h14v2H1z"
@@ -221,7 +225,13 @@ _IC_TASK   = "M1 2.5A1.5 1.5 0 0 1 2.5 1h11A1.5 1.5 0 0 1 15 2.5v11a1.5 1.5 0 0 
 _IC_CORE   = "M5 1v2H3a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2v2h1v-2h4v2h1v-2h2a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2h-2V1h-1v2H6V1H5zm-2 4h10v6H3V5zm2 1v4h6V6H5z"
 _IC_EXPAND     = "M3 1h1v14H3zM12 1h1v14h-1zM4 5l3 3-3 3zM12 5l-3 3 3 3z"
 _IC_EXPAND_ALL = "M8 1l2.5 3h-2v3h-1V4H5.5zM8 15l-2.5-3h2v-3h1V12h2.5zM2 7.5h12v1H2z"
-_IC_1TO1     = "M6.5 1a5.5 5.5 0 1 0 3.89 9.4l3.4 3.4.7-.7-3.4-3.4A5.5 5.5 0 0 0 6.5 1zm0 1a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9zM6.5 4L5.5 5h1v4h1V4z"
+_IC_1TO1     = ("M6.5 1a5.5 5.5 0 1 0 3.89 9.4l3.4 3.4.7-.7-3.4-3.4A5.5 5.5 0 0 0 6.5 1"
+               "zm0 1a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9z"
+               "M3.5 4h1.5v5h-1.5z"        # left  "1" bar
+               "M5.8 4.8h1.4v1.2H5.8z"     # ":"   top dot
+               "M5.8 6.9h1.4v1.2H5.8z"     # ":"   bottom dot
+               "M7.8 4h1.5v5H7.8z"         # right "1" bar
+               )
 _IC_SETTINGS = ("M9.405 1.05c-.413-1.4-2.397-1.4-2.81 0l-.1.34a1.464 1.464 0 0 1-2.105.872l-.31-.17"
                 "c-1.283-.698-2.686.705-1.987 1.987l.169.311c.446.82.023 1.841-.872 2.105l-.34.1"
                 "c-1.4.413-1.4 2.397 0 2.81l.34.1a1.464 1.464 0 0 1 .872 2.105l-.17.31"
@@ -1074,18 +1084,26 @@ def _make_rotated_label(scene, text: str, font: "QFont", color: "QColor",
         pad_x, pad_y = 2, 1
         px_w = fm.horizontalAdvance(text) + pad_x * 2
         px_h = fm.height() + pad_y * 2
-        pm = QPixmap(max(1, px_w), max(1, px_h))
+        dpr = QApplication.instance().devicePixelRatio()
+        pm = QPixmap(max(1, math.ceil(px_w * dpr)), max(1, math.ceil(px_h * dpr)))
+        pm.setDevicePixelRatio(dpr)
         pm.fill(Qt.transparent)
+        # Re-measure against the paint device so that subpixel hinting of the
+        # high-DPI pixmap is reflected in the draw rect.
+        fm_dev = QFontMetricsF(pm_font, pm)
+        dev_w = fm_dev.horizontalAdvance(text) + pad_x * 2
+        dev_h = fm_dev.height() + pad_y * 2
         p = QPainter(pm)
         p.setRenderHint(QPainter.Antialiasing)
         p.setRenderHint(QPainter.TextAntialiasing)
         p.setFont(pm_font)
         p.setPen(color)
-        p.drawText(QRectF(0, 0, px_w, px_h), Qt.AlignCenter, text)
+        p.drawText(QRectF(0, 0, dev_w, dev_h), Qt.AlignCenter, text)
         p.end()
         # Rotate -90° and use SmoothTransformation so the resampling step
         # does not introduce additional jaggedness.
         rotated = pm.transformed(QTransform().rotate(-90), Qt.SmoothTransformation)
+        rotated.setDevicePixelRatio(dpr)
         item = QGraphicsPixmapItem(rotated)
         # The pixmap has no further rotation applied, so pos.y is the TOP of the
         # image (extends downward).  The TextItem path anchors pos.y at the BOTTOM
@@ -1453,6 +1471,84 @@ class TimelineScene(QGraphicsScene):
     def ns_to_scene_coord(self, ns: int) -> float:
         """Convert a timestamp to the scene X (horizontal) or Y (vertical) coordinate."""
         return self._label_width + self._ns_to_px(ns)
+
+    def task_orth_scene_coord(self, task_key: str) -> Optional[float]:
+        """Return the centre orthogonal scene coordinate of *task_key*'s row/column.
+
+        Horizontal mode: centre Y of the task row.
+        Vertical mode:   centre X of the task column.
+
+        Works in both task and core view modes.  In core view, if the task's
+        parent core is collapsed (so the task has no dedicated sub-row/col),
+        returns the centre of the core's summary row/column as the nearest
+        visible representative.  Returns None if the trace is absent or the
+        task key is not found at all.
+        """
+        if self._trace is None:
+            return None
+        trace = self._trace
+
+        if self._view_mode == "task":
+            task_rows = [t for t in trace.tasks if self._task_merge_key_matches_filter(t)]
+            try:
+                idx = task_rows.index(task_key)
+            except ValueError:
+                return None
+            if self._horizontal:
+                row_stride = self._row_height + self._row_gap
+                return RULER_HEIGHT + idx * row_stride + self._row_height / 2
+            else:
+                col_w = max(self._row_height + self._row_gap, 26)
+                return RULER_WIDTH + idx * col_w + col_w / 2
+
+        # --- Core view mode -------------------------------------------
+        core_names = trace.core_names
+        core_tasks = trace.core_task_order
+        if self._task_filter_q:
+            _fcn, _fct = [], {}
+            for _c in core_names:
+                _ts = [t for t in core_tasks[_c] if self._task_raw_name_matches_filter(t)]
+                if _ts:
+                    _fcn.append(_c)
+                    _fct[_c] = _ts
+            core_names, core_tasks = _fcn, _fct
+
+        if self._horizontal:
+            row_stride = self._row_height + self._row_gap
+            row_idx = 0
+            for core in core_names:
+                expanded = self._core_expanded.get(core, True)
+                tasks = core_tasks.get(core, [])
+                core_row = row_idx
+                row_idx += 1  # core summary row
+                if expanded:
+                    for raw in tasks:
+                        if task_merge_key(raw) == task_key:
+                            return RULER_HEIGHT + row_idx * row_stride + self._row_height / 2
+                        row_idx += 1
+                else:
+                    # Collapsed: task not visible as a sub-row; return core centre
+                    for raw in tasks:
+                        if task_merge_key(raw) == task_key:
+                            return RULER_HEIGHT + core_row * row_stride + self._row_height / 2
+        else:
+            col_w = max(self._row_height + self._row_gap, 26)
+            col_idx = 0
+            for core in core_names:
+                expanded = self._core_expanded.get(core, True)
+                tasks = core_tasks.get(core, [])
+                core_col = col_idx
+                col_idx += 1  # core summary column
+                if expanded:
+                    for raw in tasks:
+                        if task_merge_key(raw) == task_key:
+                            return RULER_WIDTH + col_idx * col_w + col_w / 2
+                        col_idx += 1
+                else:
+                    for raw in tasks:
+                        if task_merge_key(raw) == task_key:
+                            return RULER_WIDTH + core_col * col_w + col_w / 2
+        return None
 
     def add_cursor(self, ns: int) -> None:
         """Add a cursor at timestamp *ns*. Oldest is evicted when > self._max_cursors."""
@@ -2144,9 +2240,11 @@ class TimelineScene(QGraphicsScene):
         self._frozen_top_items.append((corner, 0))
         self._frozen_top_items.append((hdr, hdr.pos().y()))
         if _has_tick_h:
-            _tick_hdr = self.addSimpleText("TICK", font)
+            _tick_font = _monospace_font(max(6, self._font_size - 2))
+            _tick_fm   = QFontMetrics(_tick_font)
+            _tick_hdr = self.addSimpleText("TICK", _tick_font)
             _tick_hdr.setBrush(QBrush(QColor("#E8C84A")))
-            _tick_hdr.setPos(4, RULER_HEIGHT - 10 + (10 - fm.height()) / 2)
+            _tick_hdr.setPos(4, RULER_HEIGHT - 10 + (10 - _tick_fm.height()) / 2)
             _tick_hdr.setZValue(39)
             self._frozen_items.append((_tick_hdr, 4))
             self._frozen_top_items.append((_tick_hdr, _tick_hdr.pos().y()))
@@ -2279,7 +2377,7 @@ class TimelineScene(QGraphicsScene):
             _lbl_disp_v  = _lbl_fm_v.elidedText(disp, Qt.ElideRight, _lbl_avail_v)
             lbl = _make_rotated_label(self, _lbl_disp_v, lbl_font, lbl_color,
                                       x_left + col_w / 2,
-                                      label_row_h - 10, 37)
+                                      label_row_h - LABEL_BOTTOM_MARGIN, 37)
             self._frozen_top_items.append((lbl, lbl.pos().y()))
 
             pen_hl      = _pen_hl_v
@@ -2321,7 +2419,7 @@ class TimelineScene(QGraphicsScene):
                          QPen(Qt.NoPen), QBrush(QColor("#1A1A2E"))).setZValue(0)
             lbl = _make_rotated_label(self, channel, font, QColor("#88AABB"),
                                       x_left + col_w / 2,
-                                      label_row_h - 10, 37)
+                                      label_row_h - LABEL_BOTTOM_MARGIN, 37)
             self._frozen_top_items.append((lbl, lbl.pos().y()))
             _sti_evs_v  = trace.sti_events_by_target.get(channel, [])
             _sti_stts_v = trace.sti_starts_by_target.get(channel, [])
@@ -2347,7 +2445,7 @@ class TimelineScene(QGraphicsScene):
             _vband_cx  = (RULER_WIDTH - 18) + 14 / 2
             _tick_vlbl = _make_rotated_label(self, "TICK", font, QColor("#E8C84A"),
                                              _vband_cx,
-                                             label_row_h - 10, 41)
+                                             label_row_h - LABEL_BOTTOM_MARGIN, 41)
             self._frozen_items.append((_tick_vlbl, _tick_vlbl.pos().x()))
             self._frozen_top_items.append((_tick_vlbl, _tick_vlbl.pos().y()))
 
@@ -2683,9 +2781,11 @@ class TimelineScene(QGraphicsScene):
         self._frozen_top_items.append((corner, 0))
         self._frozen_top_items.append((hdr_lbl, hdr_lbl.pos().y()))
         if _has_tick:
-            _tick_corner = self.addSimpleText("TICK", font)
+            _tick_font_c = _monospace_font(max(6, self._font_size - 2))
+            _tick_fm_c   = QFontMetrics(_tick_font_c)
+            _tick_corner = self.addSimpleText("TICK", _tick_font_c)
             _tick_corner.setBrush(QBrush(QColor("#E8C84A")))
-            _tick_corner.setPos(4, RULER_HEIGHT - 10 + (10 - fm.height()) / 2)
+            _tick_corner.setPos(4, RULER_HEIGHT - 10 + (10 - _tick_fm_c.height()) / 2)
             _tick_corner.setZValue(39)
             self._frozen_items.append((_tick_corner, 4))
             self._frozen_top_items.append((_tick_corner, _tick_corner.pos().y()))
@@ -2829,7 +2929,7 @@ class TimelineScene(QGraphicsScene):
                 arr_label = QFontMetrics(font).elidedText(arr_label, Qt.ElideRight, _lbl_avail_c)
                 arr_txt = _make_rotated_label(self, arr_label, font, QColor("#9999CC"),
                                               x_left + col_w / 2,
-                                              label_row_h - 10, 37)
+                                              label_row_h - LABEL_BOTTOM_MARGIN, 37)
                 self._frozen_top_items.append((arr_txt, arr_txt.pos().y()))
 
                 seg_data: list = []
@@ -2907,7 +3007,7 @@ class TimelineScene(QGraphicsScene):
                                             QFont.Bold) if is_hl else font
                 t_lbl = _make_rotated_label(self, disp, lbl_fnt, lbl_color,
                                             x_left2 + col_w / 2,
-                                            label_row_h - 10, 37)
+                                            label_row_h - LABEL_BOTTOM_MARGIN, 37)
                 self._frozen_top_items.append((t_lbl, t_lbl.pos().y()))
 
                 pen_hl       = QPen(QColor("#FFFFFF"), 1.5)
@@ -2942,7 +3042,7 @@ class TimelineScene(QGraphicsScene):
                          QPen(Qt.NoPen), QBrush(QColor("#1A1A2E"))).setZValue(0)
             lbl = _make_rotated_label(self, channel, font, QColor("#88AABB"),
                                       x_left + col_w / 2,
-                                      label_row_h - 10, 37)
+                                      label_row_h - LABEL_BOTTOM_MARGIN, 37)
             self._frozen_top_items.append((lbl, lbl.pos().y()))
             _x_ctr_vc    = x_left + col_w / 2
             _sti_evs_vc  = trace.sti_events_by_target.get(channel, [])
@@ -5411,7 +5511,7 @@ class _RcSettings:
             "show_find":         "false",
             # Vertical-mode label rendering workaround: on Windows, GDI cannot
             # antialias rotated text, so the pixmap path is the better default.
-            "vert_label_pixmap": "true" if sys.platform == "win32" else "false",
+            "vert_label_pixmap": str(_VERTICAL_LABEL_USE_PIXMAP).lower(),
         },
         "zoom": {
             "timescale_per_px": "-1",
@@ -6223,11 +6323,6 @@ class MainWindow(QMainWindow):
             self._hover_highlight_val = saved_hh
             self._view._scene.set_hover_highlight(saved_hh)
 
-        # Vertical label pixmap workaround
-        saved_vlp = s.get_bool("view", "vert_label_pixmap", _VERTICAL_LABEL_USE_PIXMAP)
-        if saved_vlp != _VERTICAL_LABEL_USE_PIXMAP:
-            self._set_vert_label_pixmap(saved_vlp, persist=False)
-
         # Orientation (horizontal is the default)
         if not s.get_bool("view", "horizontal", True):
             self._set_orientation(False)
@@ -6235,6 +6330,15 @@ class MainWindow(QMainWindow):
         # View mode
         if s.get("view", "view_mode", "task") == "core":
             self._set_view_mode("core")
+
+        # Vertical label pixmap workaround (applied after orientation so the
+        # horizontal-mode guard in _set_vert_label_pixmap correctly skips the
+        # rebuild when the scene is already in horizontal layout).
+        # Compare against the instance field (not the mutable global) so that
+        # any interim global mutation cannot cause the saved setting to be skipped.
+        saved_vlp = s.get_bool("view", "vert_label_pixmap", self._vert_label_pixmap_val)
+        if saved_vlp != self._vert_label_pixmap_val:
+            self._set_vert_label_pixmap(saved_vlp, persist=False)
 
         # STI / grid visibility
         if not s.get_bool("view", "show_sti", True):
@@ -7133,7 +7237,10 @@ class MainWindow(QMainWindow):
         self._vert_label_pixmap_val = bool(enabled)
         _VERTICAL_LABEL_USE_PIXMAP = self._vert_label_pixmap_val
         # Rebuild so the new label strategy takes effect immediately.
-        self._view._scene.rebuild()
+        # Skip the rebuild if the scene is in horizontal mode — the vertical-
+        # label pixmap setting has no effect there, so the rebuild is wasted.
+        if not self._view._scene._horizontal:
+            self._view._scene.rebuild()
         if persist:
             self._settings.set("view", "vert_label_pixmap",
                                str(self._vert_label_pixmap_val).lower())
@@ -7989,6 +8096,42 @@ class MainWindow(QMainWindow):
             sc.set_highlighted_task(None)          # second click on same → cancel
         else:
             sc.set_highlighted_task(task, locked=True)
+            self._scroll_view_to_task(task)
+
+    def _scroll_view_to_task(self, task: str) -> None:
+        """Scroll the orthogonal axis to bring *task*'s row/column fully into view.
+
+        The time-axis scroll position is preserved; only the row (horizontal
+        mode) or column (vertical mode) axis is adjusted.  Scrolls whenever
+        the row/column is partially or fully outside the current viewport.
+        """
+        sc = self._view._scene
+        orth = sc.task_orth_scene_coord(task)
+        if orth is None:
+            return
+        # Compute the full extent of the row (horizontal) or column (vertical).
+        if sc._horizontal:
+            half = sc._row_height / 2
+        else:
+            half = max(sc._row_height + sc._row_gap, 26) / 2
+        row_lo = orth - half
+        row_hi = orth + half
+
+        vp = self._view.viewport().rect()
+        if sc._horizontal:
+            vp_lo = self._view.mapToScene(vp.topLeft()).y()
+            vp_hi = self._view.mapToScene(vp.bottomLeft()).y()
+            if row_lo >= vp_lo and row_hi <= vp_hi:
+                return                              # row fully visible — nothing to do
+            cur = self._view.mapToScene(vp.center())
+            self._view.centerOn(cur.x(), orth)
+        else:
+            vp_lo = self._view.mapToScene(vp.topLeft()).x()
+            vp_hi = self._view.mapToScene(vp.topRight()).x()
+            if row_lo >= vp_lo and row_hi <= vp_hi:
+                return                              # column fully visible — nothing to do
+            cur = self._view.mapToScene(vp.center())
+            self._view.centerOn(orth, cur.y())
 
     def _zoom_to_cursor_range(self) -> None:
         """Fit the view tightly between the first two cursor positions."""
