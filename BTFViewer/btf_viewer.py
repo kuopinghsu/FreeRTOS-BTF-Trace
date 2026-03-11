@@ -5004,7 +5004,7 @@ class _LegendWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(6, 6, 6, 6)
+        outer.setContentsMargins(6, 6, 0, 6)  # no right margin: lets scroll bar sit flush at edge
         outer.setSpacing(4)
         self.setAutoFillBackground(True)
         self._is_dark: bool = True
@@ -6319,6 +6319,9 @@ class MainWindow(QMainWindow):
                 tab_hover_bg  = "#3C3C3C",
                 tab_hover_fg  = "#D4D4D4",
                 scroll_bg     = "#1E1E1E",
+                sb_bg         = "#2A2A2A",
+                sb_handle     = "#555555",
+                sb_handle_hov = "#777777",
                 sub_text      = "#888888",
                 muted_text    = "#999999",
                 welcome_h2    = "#888888",
@@ -6357,6 +6360,9 @@ class MainWindow(QMainWindow):
             tab_hover_bg  = "#D0D0D0",
             tab_hover_fg  = "#1E1E1E",
             scroll_bg     = "#F5F5F5",
+            sb_bg         = "#EBEBEB",
+            sb_handle     = "#BBBBBB",
+            sb_handle_hov = "#999999",
             sub_text      = "#555555",
             muted_text    = "#666666",
             welcome_h2    = "#555555",
@@ -6449,6 +6455,20 @@ class MainWindow(QMainWindow):
                                            border-bottom:2px solid {c['accent']}; }}
             QTabBar::tab:hover:!selected {{ background:{c['tab_hover_bg']}; color:{c['tab_hover_fg']}; }}
             QScrollArea {{ background:{c['scroll_bg']}; border:none; }}
+            QScrollBar:vertical   {{ background:{c['sb_bg']}; width:10px;
+                                     border:none; margin:0; }}
+            QScrollBar:horizontal {{ background:{c['sb_bg']}; height:10px;
+                                     border:none; margin:0; }}
+            QScrollBar::handle:vertical   {{ background:{c['sb_handle']};
+                                             min-height:20px; border-radius:5px; margin:1px; }}
+            QScrollBar::handle:horizontal {{ background:{c['sb_handle']};
+                                             min-width:20px; border-radius:5px; margin:1px; }}
+            QScrollBar::handle:vertical:hover,
+            QScrollBar::handle:horizontal:hover {{ background:{c['sb_handle_hov']}; }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical   {{ height:0; }}
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width:0; }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical   {{ background:none; }}
+            QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{ background:none; }}
         """)
 
         # --- Per-widget overrides not reachable via app-wide QSS ----------
@@ -6519,7 +6539,10 @@ class MainWindow(QMainWindow):
         # --- Legend dock (right panel) ---
         self._legend = _LegendWidget()
         self._legend.setMinimumWidth(180)
-        self._legend.setMaximumWidth(260)
+        # No setMaximumWidth — the widget must fill the full dock column width so the
+        # QScrollArea's scrollbar lands flush at the right edge.  The dock column width
+        # is governed by resizeDocks() below; a fixed cap here would leave a blank gap
+        # to the right of the legend whenever the Marks dock makes the column wider.
         dock = QDockWidget("Legend", self)
         dock.setWidget(self._legend)
         dock.setFeatures(QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetMovable)
