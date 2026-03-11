@@ -6442,11 +6442,18 @@ class MainWindow(QMainWindow):
                          font-size:{_ui_fs}; }}
             QDockWidget::title {{ background:{c['dock_title_bg']}; color:{c['dock_title_fg']};
                                   padding:4px; font-size:{_ui_fs}; }}
-            QPushButton {{ font-size:{_ui_fs}; }}
-            QListWidget {{ font-size:{_ui_fs}; }}
+            QPushButton {{ background:{c['mid']}; color:{c['text']};
+                         border:1px solid {c['input_border']}; border-radius:3px;
+                         padding:3px 10px; font-size:{_ui_fs}; }}
+            QPushButton:hover   {{ background:{c['tb_hover']}; }}
+            QPushButton:pressed {{ background:{c['tb_pressed']}; color:#FFFFFF; }}
+            QPushButton:disabled {{ color:{c['tb_disabled']}; background:{c['mid']}; }}
+            QListWidget {{ background:{c['win_base']}; color:{c['text']};
+                         border:1px solid {c['input_border']}; font-size:{_ui_fs}; }}
             QListWidget::item {{ font-size:{_ui_fs}; }}
             QListWidget::item:selected {{ background:{c['accent']}; color:#FFFFFF; }}
             QListWidget::item:hover:!selected {{ background:{c['list_hover']}; }}
+            QTabWidget::pane {{ background:{c['win_bg']}; border:1px solid {c['sep']}; }}
             QTabBar::tab               {{ background:{c['tab_bg']}; color:{c['tab_fg']};
                                            padding:4px 12px; border:none;
                                            border-bottom:2px solid transparent;
