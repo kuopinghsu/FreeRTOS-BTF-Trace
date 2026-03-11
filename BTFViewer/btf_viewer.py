@@ -89,7 +89,7 @@ from PyQt5.QtWidgets import (
     QAction, QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QDockWidget, QFileDialog, QFormLayout, QFrame, QGridLayout, QInputDialog,
     QGraphicsEllipseItem, QGraphicsItem, QGraphicsLineItem,
-    QGraphicsRectItem, QGraphicsScene, QGraphicsView,
+    QGraphicsRectItem, QGraphicsScene, QGraphicsTextItem, QGraphicsView,
     QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QProgressBar,
     QProgressDialog,
     QListWidget, QListWidgetItem,
@@ -1032,6 +1032,30 @@ def _monospace_font(size: int, weight: int = QFont.Normal) -> QFont:
         f.setWeight(weight)
         _monospace_font_cache[key] = f
     return f
+
+def _make_rotated_label(scene, text: str, font: "QFont", color: "QColor",
+                        x: float, y: float, z: float) -> "QGraphicsTextItem":
+    """Add an antialiased rotated label to *scene* at scene position (x, y).
+
+    Uses QGraphicsTextItem instead of QGraphicsSimpleTextItem so that the
+    QPainter text-antialiasing path is used on all platforms (SimpleTextItem
+    renders as a filled silhouette on Windows, which looks jaggy when rotated).
+
+    The item is rotated -90° and positioned so the baseline sits at the same
+    pixel as the equivalent addSimpleText(…).setRotation(-90).setPos(x, y) call
+    would have placed it.
+    """
+    item = QGraphicsTextItem(text)
+    item.setFont(font)
+    item.setDefaultTextColor(color)
+    item.setRotation(-90)
+    item.setPos(x, y)
+    item.setZValue(z)
+    # Disable interaction – labels are purely visual.
+    item.setAcceptedMouseButtons(Qt.NoButton)
+    item.setAcceptHoverEvents(False)
+    scene.addItem(item)
+    return item
 
 # Resolved family name of the system fixed-pitch font, used in Qt stylesheets.
 # Lazily initialised on first use so that import does not require a live
@@ -2193,11 +2217,9 @@ class TimelineScene(QGraphicsScene):
             _lbl_avail_v = max(0, label_row_h - 14)
             _lbl_fm_v    = QFontMetrics(lbl_font) if is_hl else fm
             _lbl_disp_v  = _lbl_fm_v.elidedText(disp, Qt.ElideRight, _lbl_avail_v)
-            lbl = self.addSimpleText(_lbl_disp_v, lbl_font)
-            lbl.setBrush(QBrush(lbl_color))
-            lbl.setRotation(-90)
-            lbl.setPos(x_left + col_w / 2 - fm.height() / 2, label_row_h - 10)
-            lbl.setZValue(37)
+            lbl = _make_rotated_label(self, _lbl_disp_v, lbl_font, lbl_color,
+                                      x_left + col_w / 2 - fm.height() / 2,
+                                      label_row_h - 10, 37)
             self._frozen_top_items.append((lbl, lbl.pos().y()))
 
             pen_hl      = _pen_hl_v
@@ -2237,11 +2259,9 @@ class TimelineScene(QGraphicsScene):
             x_ctr   = x_left + col_w / 2
             self.addRect(QRectF(x_left, label_row_h, col_w, timeline_h),
                          QPen(Qt.NoPen), QBrush(QColor("#1A1A2E"))).setZValue(0)
-            lbl = self.addSimpleText(channel, font)
-            lbl.setBrush(QBrush(QColor("#88AABB")))
-            lbl.setRotation(-90)
-            lbl.setPos(x_left + col_w / 2 - fm.height() / 2, label_row_h - 10)
-            lbl.setZValue(37)
+            lbl = _make_rotated_label(self, channel, font, QColor("#88AABB"),
+                                      x_left + col_w / 2 - fm.height() / 2,
+                                      label_row_h - 10, 37)
             self._frozen_top_items.append((lbl, lbl.pos().y()))
             _sti_evs_v  = trace.sti_events_by_target.get(channel, [])
             _sti_stts_v = trace.sti_starts_by_target.get(channel, [])
@@ -2264,12 +2284,10 @@ class TimelineScene(QGraphicsScene):
         self._frozen_items.append((_vt_corner_rect, 0))
         self._frozen_top_items.append((_vt_corner_rect, 0))
         if _has_tick_v:
-            _tick_vlbl = self.addSimpleText("TICK", font)
-            _tick_vlbl.setBrush(QBrush(QColor("#E8C84A")))
-            _tick_vlbl.setRotation(-90)
             _vband_cx  = (RULER_WIDTH - 18) + 14 / 2
-            _tick_vlbl.setPos(_vband_cx - fm.height() / 2, label_row_h - 10)
-            _tick_vlbl.setZValue(41)
+            _tick_vlbl = _make_rotated_label(self, "TICK", font, QColor("#E8C84A"),
+                                             _vband_cx - fm.height() / 2,
+                                             label_row_h - 10, 41)
             self._frozen_items.append((_tick_vlbl, _tick_vlbl.pos().x()))
             self._frozen_top_items.append((_tick_vlbl, _tick_vlbl.pos().y()))
 
@@ -2749,13 +2767,9 @@ class TimelineScene(QGraphicsScene):
                 arr_label = arrow + " " + core
                 _lbl_avail_c = max(0, label_row_h - 14)
                 arr_label = QFontMetrics(font).elidedText(arr_label, Qt.ElideRight, _lbl_avail_c)
-                arr_txt = self.addSimpleText(arr_label, font)
-                arr_txt.setBrush(QBrush(QColor("#9999CC")))
-                arr_txt.setRotation(-90)
-                arr_txt.setPos(x_left + col_w / 2 - fm.height() / 2, label_row_h - 10)
-                arr_txt.setZValue(37)
-                arr_txt.setAcceptedMouseButtons(Qt.NoButton)
-                arr_txt.setAcceptHoverEvents(False)
+                arr_txt = _make_rotated_label(self, arr_label, font, QColor("#9999CC"),
+                                              x_left + col_w / 2 - fm.height() / 2,
+                                              label_row_h - 10, 37)
                 self._frozen_top_items.append((arr_txt, arr_txt.pos().y()))
 
                 seg_data: list = []
@@ -2831,11 +2845,9 @@ class TimelineScene(QGraphicsScene):
                 lbl_color = QColor("#FFD700") if is_hl else QColor("#B0B0C0")
                 lbl_fnt   = _monospace_font(self._font_size,
                                             QFont.Bold) if is_hl else font
-                t_lbl = self.addSimpleText(disp, lbl_fnt)
-                t_lbl.setBrush(QBrush(lbl_color))
-                t_lbl.setRotation(-90)
-                t_lbl.setPos(x_left2 + col_w / 2 - fm.height() / 2, label_row_h - 10)
-                t_lbl.setZValue(37)
+                t_lbl = _make_rotated_label(self, disp, lbl_fnt, lbl_color,
+                                            x_left2 + col_w / 2 - fm.height() / 2,
+                                            label_row_h - 10, 37)
                 self._frozen_top_items.append((t_lbl, t_lbl.pos().y()))
 
                 pen_hl       = QPen(QColor("#FFFFFF"), 1.5)
@@ -2868,11 +2880,9 @@ class TimelineScene(QGraphicsScene):
             x_left = RULER_WIDTH + col_idx * col_w
             self.addRect(QRectF(x_left, label_row_h, col_w, timeline_h),
                          QPen(Qt.NoPen), QBrush(QColor("#1A1A2E"))).setZValue(0)
-            lbl = self.addSimpleText(channel, font)
-            lbl.setBrush(QBrush(QColor("#88AABB")))
-            lbl.setRotation(-90)
-            lbl.setPos(x_left + col_w / 2 - fm.height() / 2, label_row_h - 10)
-            lbl.setZValue(37)
+            lbl = _make_rotated_label(self, channel, font, QColor("#88AABB"),
+                                      x_left + col_w / 2 - fm.height() / 2,
+                                      label_row_h - 10, 37)
             self._frozen_top_items.append((lbl, lbl.pos().y()))
             _x_ctr_vc    = x_left + col_w / 2
             _sti_evs_vc  = trace.sti_events_by_target.get(channel, [])
@@ -4082,20 +4092,30 @@ class TimelineView(QGraphicsView):
             event.accept()
             return
 
-        # Show resize cursor when hovering near the label border
+        # Show resize cursor when hovering near the label border or a cursor line
         if (self._scene._trace is not None and
                 not self._label_resize_dragging and
                 self._mid_press_ns is None and
                 self._dragging_cursor_idx < 0):
             lw = self._scene._label_width
+            _hover_pt = self.mapToScene(event.pos())
+            _hover_coord = _hover_pt.x() if self._scene._horizontal else _hover_pt.y()
+            _near_cursor = any(
+                abs(_hover_coord - self._scene.ns_to_scene_coord(ns)) <= self._cursor_drag_threshold
+                for ns in self._scene._cursor_times
+            )
             if self._scene._horizontal:
                 if abs(event.pos().x() - lw) <= self._LABEL_RESIZE_ZONE:
                     self.viewport().setCursor(Qt.SizeHorCursor)
+                elif _near_cursor:
+                    self.viewport().setCursor(Qt.SplitHCursor)
                 else:
                     self.viewport().unsetCursor()
             else:
                 if abs(event.pos().y() - lw) <= self._LABEL_RESIZE_ZONE:
                     self.viewport().setCursor(Qt.SizeVerCursor)
+                elif _near_cursor:
+                    self.viewport().setCursor(Qt.SplitVCursor)
                 else:
                     self.viewport().unsetCursor()
 
