@@ -71,3 +71,7 @@ BTFViewer/btf_viewer.rc
 .DS_Store
 .venv
 __pycache__
+
+# Web viewer build artifacts
+BTFViewer/web/node_modules/
+BTFViewer/web/package-lock.json

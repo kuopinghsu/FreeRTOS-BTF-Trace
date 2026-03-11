@@ -34,7 +34,163 @@ A PyQt5-based interactive visualiser for FreeRTOS context-switch traces in **Bes
 - **Drag-and-drop** — drop a `.btf` file directly onto the window
 - **Optimised for large traces** — tested with up to **128 cores, 1 024 tasks, and 5 M+ events**
 
-## Requirements
+## Installation
+
+### Desktop viewer (`btf_viewer.py`)
+
+**Requirements:** Python 3.8+ and PyQt5 ≥ 5.15.
+
+```bash
+# Install the only runtime dependency
+pip install PyQt5
+
+# Run directly — no build step needed
+python btf_viewer.py [trace.btf]
+```
+
+A file can also be opened via **File → Open** (`Ctrl+O`) or dragged onto the window.
+
+---
+
+### Web viewer (`web/`)
+
+A browser-based version of the viewer built with **Vue 3 + Vite**.
+See the **[Web Viewer — Features & Usage](#web-viewer--features--usage)** section below for full details.
+
+**Quick start:**
+
+```bash
+cd BTFViewer/web
+make                             # build dist/index.html
+open dist/index.html             # macOS — double-click on other platforms
+```
+
+**Requirements:** [Node.js](https://nodejs.org/) 18+ and npm (build-time only; not needed to run `dist/index.html`).
+
+#### macOS — install Node.js via Homebrew
+
+```bash
+brew install node
+```
+
+#### Windows / Linux
+
+Download the LTS installer from <https://nodejs.org/> or use your system package manager (`winget install OpenJS.NodeJS`, `apt install nodejs npm`, etc.).
+
+---
+
+### Web viewer (`web/`)
+
+A browser-based port of the viewer built with **Vue 3 + Vite**.
+It runs entirely in the browser — no server, no Python, and no backend required.
+
+**Requirements:** [Node.js](https://nodejs.org/) 18+ and npm (build-time only).
+
+#### Standalone single-file build (recommended)
+
+Produces a single self-contained `dist/index.html` that can be opened directly in any browser — no server needed:
+
+```bash
+cd BTFViewer/web
+make          # installs deps and builds dist/index.html
+# or manually:
+npm install
+npm run build
+```
+
+Then just **double-click `dist/index.html`** or:
+
+```bash
+open BTFViewer/web/dist/index.html   # macOS
+```
+
+#### Development server (with hot reload)
+
+```bash
+cd BTFViewer/web
+make dev      # or: npm run dev
+# → http://localhost:5173
+```
+
+#### Makefile targets
+
+| Target | Action |
+|--------|--------|
+| `make` / `make build` | Install deps + produce `dist/index.html` |
+| `make dev` | Start Vite dev server with hot reload |
+| `make preview` | Preview the production build locally |
+| `make clean` | Remove `dist/` |
+| `make dist-clean` | Remove `dist/` and `node_modules/` |
+
+#### macOS — install Node.js via Homebrew
+
+```bash
+brew install node
+```
+
+#### Windows / Linux
+
+Download the LTS installer from <https://nodejs.org/> or use your system package manager (`winget install OpenJS.NodeJS`, `apt install nodejs npm`, etc.).
+
+---
+
+## Web Viewer — Features & Usage
+
+### View modes
+
+Same two modes as the desktop viewer:
+
+| Mode | Description |
+|------|-------------|
+| **Task View** | One row per task, coloured by task identity |
+| **Core View** | One row per CPU core; bars coloured by running task. Click the `▶` arrow in the label column to expand a core into per-task sub-rows |
+
+Toggle with the **Task** / **Core** buttons in the toolbar.
+
+### Opening a file
+
+Click **Open** in the toolbar and select any `.btf` file.
+Large files (5 M+ events) are parsed in a background thread so the UI stays responsive. A progress indicator (`Parsing… 70%`) is shown during loading.
+
+### Zoom & pan
+
+| Action | Effect |
+|--------|--------|
+| `Ctrl` + scroll wheel | Zoom in / out centred on mouse pointer |
+| `Shift` + scroll wheel | Pan horizontally |
+| Plain scroll wheel | Scroll rows vertically |
+| **+** / **−** toolbar buttons | Zoom in / out around viewport centre |
+| **Fit** toolbar button | Fit the entire trace into the viewport |
+
+### Cursors
+
+Up to 4 cursors can be placed. Delta times between consecutive cursors are shown in the **Cursors** panel on the right.
+
+| Action | Effect |
+|--------|--------|
+| Left-click on timeline | Place a cursor |
+| Left-click near an existing cursor | Remove it |
+| **✕ Cursors** toolbar button | Clear all cursors |
+
+### Task highlight
+
+Hover any task label (left column) or **Legend** swatch to transiently highlight all segments for that task. Click to lock the highlight; click again to release.
+
+### Grid lines & dark/light theme
+
+Toggle with the **grid** and **moon** buttons in the toolbar. The default theme is dark.
+
+### STI events
+
+Coloured diamond markers are shown on dedicated STI rows. Hover a marker for a tooltip showing the time, channel, event name, and note.
+
+### Status bar
+
+Shows the number of tasks, segments, STI events, and total trace duration once a file is loaded.
+
+---
+
+## Requirements (desktop viewer)
 
 - Python 3.8+
 - PyQt5 >= 5.15
