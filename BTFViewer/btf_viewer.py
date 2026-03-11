@@ -83,12 +83,12 @@ from PyQt5.QtCore import (
 )
 from PyQt5.QtGui import (
     QBrush, QColor, QFont, QFontDatabase, QFontMetrics, QIcon, QKeySequence, QPainter,
-    QPalette, QPen, QPixmap, QPolygonF, QWheelEvent,
+    QPalette, QPen, QPixmap, QPolygonF, QTransform, QWheelEvent,
 )
 from PyQt5.QtWidgets import (
     QAction, QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QDockWidget, QFileDialog, QFormLayout, QFrame, QGridLayout, QInputDialog,
-    QGraphicsEllipseItem, QGraphicsItem, QGraphicsLineItem,
+    QGraphicsEllipseItem, QGraphicsItem, QGraphicsLineItem, QGraphicsPixmapItem,
     QGraphicsRectItem, QGraphicsScene, QGraphicsTextItem, QGraphicsView,
     QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QProgressBar,
     QProgressDialog,
@@ -108,6 +108,14 @@ from PyQt5.QtWidgets import (
 FONT_SIZE     = 10   # Timeline label font size (pt).  Adjustable at runtime
                      # via the Font spinbox in the toolbar.
 UI_FONT_SIZE  = 10   # Application UI font: menus, toolbar, status bar (pt).
+
+# ---- Rendering -----------------------------------------------------------
+# Vertical-mode label rendering: use a pre-rendered QPixmap rotated 90° instead
+# of a rotated QGraphicsTextItem.  On Windows, GDI cannot antialias rotated text,
+# so the pixmap path (render text horizontally, then rotate the image) produces
+# much crisper labels.  Enabled by default on Windows; other platforms use the
+# original QGraphicsTextItem approach which works correctly with PreferAntialias.
+_VERTICAL_LABEL_USE_PIXMAP: bool = sys.platform == "win32"
 
 # ---- Layout ---------------------------------------------------------------
 LABEL_WIDTH   = 160  # Width of the frozen task-label column (px).
@@ -1034,38 +1042,80 @@ def _monospace_font(size: int, weight: int = QFont.Normal) -> QFont:
     return f
 
 def _make_rotated_label(scene, text: str, font: "QFont", color: "QColor",
-                        x_center: float, y: float, z: float) -> "QGraphicsTextItem":
+                        x_center: float, y: float, z: float) -> "QGraphicsItem":
     """Add an antialiased rotated label to *scene*.
 
-    Uses QGraphicsTextItem instead of QGraphicsSimpleTextItem so that the
-    QPainter text-antialiasing path is used on all platforms (SimpleTextItem
-    renders as a filled silhouette on Windows, which looks jaggy when rotated).
+    Two rendering strategies are available, selected by the module-level flag
+    *_VERTICAL_LABEL_USE_PIXMAP* (default: True on Windows, False elsewhere):
 
-    On Windows, GDI text rendering does not support antialiasing for rotated
-    text.  Setting QFont.PreferAntialias forces Qt to use its own antialiasing-
-    capable renderer (DirectWrite / FreeType), producing smooth output.
+    Pixmap strategy (Windows workaround)
+        Renders the text onto a QPixmap horizontally — where all platforms
+        apply full antialiasing — then rotates the finished image by -90°.
+        This sidesteps the Windows/GDI limitation that prevents antialiasing
+        of rotated text glyphs, producing smooth labels on all Windows
+        rendering back-ends (GDI, Direct2D, OpenGL).
+
+    TextItem strategy (default on non-Windows)
+        Creates a QGraphicsTextItem (not SimpleTextItem, which renders as a
+        filled silhouette) and sets QFont.PreferAntialias so Qt's own
+        subpixel renderer is used instead of GDI.  Rotation is applied via
+        QGraphicsItem.setRotation(-90°).  Works correctly on macOS / Linux.
 
     *x_center* is the horizontal centre of the column the label belongs to.
-    The item is rotated -90° and horizontally centred using the actual
-    bounding-rect height (which includes QTextDocument margins), so the label
-    sits visually centred regardless of font size.
+    The item is horizontally centred on that column.  The *y* parameter is the
+    **bottom edge** of the label in scene coordinates — the label text grows
+    upward from that point in both rendering paths.
     """
-    # Force non-GDI antialiasing on Windows so rotated glyphs are smooth.
-    aa_font = QFont(font)
-    aa_font.setStyleStrategy(QFont.PreferAntialias)
-    item = QGraphicsTextItem(text)
-    item.setFont(aa_font)
-    item.setDefaultTextColor(color)
-    item.setRotation(-90)
-    # QGraphicsTextItem bounding rect includes a 2 px document margin on each
-    # side, so use the real height rather than fm.height() for centering.
-    item.setPos(x_center - item.boundingRect().height() / 2, y)
-    item.setZValue(z)
-    # Disable interaction – labels are purely visual.
-    item.setAcceptedMouseButtons(Qt.NoButton)
-    item.setAcceptHoverEvents(False)
-    scene.addItem(item)
-    return item
+    if _VERTICAL_LABEL_USE_PIXMAP:
+        # --- Pixmap path: render text at native res, then rotate the image ---
+        pm_font = QFont(font)
+        fm = QFontMetrics(pm_font)
+        # Add small horizontal/vertical padding to avoid clipping descenders.
+        pad_x, pad_y = 2, 1
+        px_w = fm.horizontalAdvance(text) + pad_x * 2
+        px_h = fm.height() + pad_y * 2
+        pm = QPixmap(max(1, px_w), max(1, px_h))
+        pm.fill(Qt.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setRenderHint(QPainter.TextAntialiasing)
+        p.setFont(pm_font)
+        p.setPen(color)
+        p.drawText(QRectF(0, 0, px_w, px_h), Qt.AlignCenter, text)
+        p.end()
+        # Rotate -90° and use SmoothTransformation so the resampling step
+        # does not introduce additional jaggedness.
+        rotated = pm.transformed(QTransform().rotate(-90), Qt.SmoothTransformation)
+        item = QGraphicsPixmapItem(rotated)
+        # The pixmap has no further rotation applied, so pos.y is the TOP of the
+        # image (extends downward).  The TextItem path anchors pos.y at the BOTTOM
+        # of the text (it extends upward after the -90° rotation).  Shift the
+        # pixmap up by its own height so both paths share the same y anchor: the
+        # bottom edge of the label sits at y, and the text grows upward.
+        item.setPos(x_center - rotated.width() / 2.0, y - rotated.height())
+        item.setZValue(z)
+        item.setAcceptedMouseButtons(Qt.NoButton)
+        item.setAcceptHoverEvents(False)
+        scene.addItem(item)
+        return item
+    else:
+        # --- TextItem path: rotated QGraphicsTextItem with PreferAntialias ---
+        # Force non-GDI antialiasing on Windows so rotated glyphs are smooth.
+        aa_font = QFont(font)
+        aa_font.setStyleStrategy(QFont.PreferAntialias)
+        item = QGraphicsTextItem(text)
+        item.setFont(aa_font)
+        item.setDefaultTextColor(color)
+        item.setRotation(-90)
+        # QGraphicsTextItem bounding rect includes a 2 px document margin on
+        # each side, so use the real height rather than fm.height() for
+        # centering.
+        item.setPos(x_center - item.boundingRect().height() / 2, y)
+        item.setZValue(z)
+        item.setAcceptedMouseButtons(Qt.NoButton)
+        item.setAcceptHoverEvents(False)
+        scene.addItem(item)
+        return item
 
 # Resolved family name of the system fixed-pitch font, used in Qt stylesheets.
 # Lazily initialised on first use so that import does not require a live
@@ -5351,14 +5401,17 @@ class _RcSettings:
             "dock_layout_version": "0",  # bumped whenever default layout changes
         },
         "view": {
-            "font_size":  str(FONT_SIZE),
-            "theme":      "dark",
-            "horizontal": "true",
-            "view_mode":  "task",
-            "show_sti":   "true",
-            "show_grid":  "true",
-            "show_marks": "true",
-            "show_find": "false",
+            "font_size":         str(FONT_SIZE),
+            "theme":             "dark",
+            "horizontal":        "true",
+            "view_mode":         "task",
+            "show_sti":          "true",
+            "show_grid":         "true",
+            "show_marks":        "true",
+            "show_find":         "false",
+            # Vertical-mode label rendering workaround: on Windows, GDI cannot
+            # antialias rotated text, so the pixmap path is the better default.
+            "vert_label_pixmap": "true" if sys.platform == "win32" else "false",
         },
         "zoom": {
             "timescale_per_px": "-1",
@@ -5727,6 +5780,7 @@ class _SettingsDialog(QDialog):
                  show_sti: bool, show_grid: bool,
                  show_legend: bool, show_stats: bool, show_marks: bool,
                  show_hover_highlight: bool,
+                 vert_label_pixmap: bool,
                  zoom_unit: str,
                  label_width: int, row_height: int, row_gap: int,
                  timescale_per_px_default: float,
@@ -5858,9 +5912,17 @@ class _SettingsDialog(QDialog):
         self._hover_hl_cb.setToolTip(
             "Dim all other segments when hovering a task label.\n"
             "Disable for better performance with large traces.")
+        self._vert_label_pixmap_cb = QCheckBox("Vertical labels: use pixmap rendering (Windows fix)")
+        self._vert_label_pixmap_cb.setChecked(vert_label_pixmap)
+        self._vert_label_pixmap_cb.setToolTip(
+            "Render vertical-mode task labels onto a QPixmap first, then\n"
+            "rotate the image. Avoids the Windows GDI limitation that\n"
+            "prevents antialiasing of rotated text. Enabled by default on\n"
+            "Windows; other platforms use the native text path.")
         v2.addWidget(self._indented(self._sti_cb))
         v2.addWidget(self._indented(self._grid_cb))
         v2.addWidget(self._indented(self._hover_hl_cb))
+        v2.addWidget(self._indented(self._vert_label_pixmap_cb))
         v2.addStretch()
 
         self._content_stack.addWidget(p2)
@@ -5931,16 +5993,18 @@ class _SettingsDialog(QDialog):
         footer.setSpacing(14)
         footer.addStretch()
 
-        _btn_w, _btn_h = 88, 30   # uniform size for both buttons
+        _btn_w, _btn_h = 88, 30   # minimum size for both buttons
 
         btn_cancel = QPushButton("Cancel")
         btn_cancel.setObjectName("btn_cancel")
-        btn_cancel.setFixedSize(_btn_w, _btn_h)
+        btn_cancel.setMinimumWidth(_btn_w)
+        btn_cancel.setFixedHeight(_btn_h)
         btn_cancel.clicked.connect(self.reject)
 
         btn_ok = QPushButton("OK")
         btn_ok.setObjectName("btn_ok")
-        btn_ok.setFixedSize(_btn_w, _btn_h)
+        btn_ok.setMinimumWidth(_btn_w)
+        btn_ok.setFixedHeight(_btn_h)
         btn_ok.setDefault(True)
         btn_ok.clicked.connect(self.accept)
 
@@ -5966,6 +6030,7 @@ class _SettingsDialog(QDialog):
             self._stats_cb.stateChanged,
             self._marks_cb.stateChanged,
             self._hover_hl_cb.stateChanged,
+            self._vert_label_pixmap_cb.stateChanged,
             self._label_width_spin.valueChanged,
             self._row_height_spin.valueChanged,
             self._row_gap_spin.valueChanged,
@@ -6004,6 +6069,8 @@ class _SettingsDialog(QDialog):
     def show_marks(self) -> bool:         return self._marks_cb.isChecked()
     @property
     def show_hover_highlight(self) -> bool: return self._hover_hl_cb.isChecked()
+    @property
+    def vert_label_pixmap(self) -> bool:    return self._vert_label_pixmap_cb.isChecked()
 # ---------------------------------------------------------------------------
 # Main Window
 # ---------------------------------------------------------------------------
@@ -6036,6 +6103,7 @@ class MainWindow(QMainWindow):
         self._row_gap_val:            int   = ROW_GAP
         self._timescale_per_px_default_val:  float = _TIMESCALE_PER_PX_DEFAULT
         self._hover_highlight_val:    bool  = _HOVER_HIGHLIGHT_ENABLED
+        self._vert_label_pixmap_val:  bool  = _VERTICAL_LABEL_USE_PIXMAP
         self._bookmarks: List[TraceBookmark] = []
         self._annotations: List[TraceAnnotation] = []
         self._mark_next_id: int = 1
@@ -6154,6 +6222,11 @@ class MainWindow(QMainWindow):
         if saved_hh != _HOVER_HIGHLIGHT_ENABLED:
             self._hover_highlight_val = saved_hh
             self._view._scene.set_hover_highlight(saved_hh)
+
+        # Vertical label pixmap workaround
+        saved_vlp = s.get_bool("view", "vert_label_pixmap", _VERTICAL_LABEL_USE_PIXMAP)
+        if saved_vlp != _VERTICAL_LABEL_USE_PIXMAP:
+            self._set_vert_label_pixmap(saved_vlp, persist=False)
 
         # Orientation (horizontal is the default)
         if not s.get_bool("view", "horizontal", True):
@@ -7054,6 +7127,17 @@ class MainWindow(QMainWindow):
         if persist:
             self._settings.set("view", "show_grid", str(self._show_grid).lower())
 
+    def _set_vert_label_pixmap(self, enabled: bool, persist: bool = True) -> None:
+        """Switch the vertical-label rendering strategy and rebuild the scene."""
+        global _VERTICAL_LABEL_USE_PIXMAP
+        self._vert_label_pixmap_val = bool(enabled)
+        _VERTICAL_LABEL_USE_PIXMAP = self._vert_label_pixmap_val
+        # Rebuild so the new label strategy takes effect immediately.
+        self._view._scene.rebuild()
+        if persist:
+            self._settings.set("view", "vert_label_pixmap",
+                               str(self._vert_label_pixmap_val).lower())
+
     def _current_time_unit(self) -> str:
         if self._trace is not None and getattr(self._trace, "time_scale", ""):
             return self._trace.time_scale
@@ -7701,6 +7785,8 @@ class MainWindow(QMainWindow):
         if vals["show_hover_highlight"] != self._hover_highlight_val:
             self._hover_highlight_val = vals["show_hover_highlight"]
             self._view._scene.set_hover_highlight(self._hover_highlight_val)
+        if vals["vert_label_pixmap"] != self._vert_label_pixmap_val:
+            self._set_vert_label_pixmap(vals["vert_label_pixmap"], persist=False)
         if vals["label_width"] != self._label_width_val:
             self._label_width_val = vals["label_width"]
             self._view._scene.set_label_width(self._label_width_val)
@@ -7737,6 +7823,9 @@ class MainWindow(QMainWindow):
             self._settings.set("view", "show_marks", str(self._show_marks).lower())
         if snap["show_hover_highlight"] != self._hover_highlight_val:
             self._settings.set("view", "hover_highlight", str(self._hover_highlight_val).lower())
+        if snap["vert_label_pixmap"] != self._vert_label_pixmap_val:
+            self._settings.set("view", "vert_label_pixmap",
+                               str(self._vert_label_pixmap_val).lower())
         if snap["label_width"] != self._label_width_val:
             self._settings.set("view", "label_width", str(self._label_width_val))
         if snap["row_height"] != self._row_height_val:
@@ -7760,6 +7849,7 @@ class MainWindow(QMainWindow):
             "show_stats":               self._show_stats,
             "show_marks":               self._show_marks,
             "show_hover_highlight":     self._hover_highlight_val,
+            "vert_label_pixmap":        self._vert_label_pixmap_val,
             "label_width":              self._label_width_val,
             "row_height":               self._row_height_val,
             "row_gap":                  self._row_gap_val,
@@ -7781,6 +7871,7 @@ class MainWindow(QMainWindow):
             timescale_per_px_default=self._timescale_per_px_default_val,
             is_dark=self._is_dark,
             show_hover_highlight=self._hover_highlight_val,
+            vert_label_pixmap=self._vert_label_pixmap_val,
             zoom_unit=self._current_time_unit(),
         )
         dlg.live_preview.connect(lambda: self._apply_settings_preview({
@@ -7794,6 +7885,7 @@ class MainWindow(QMainWindow):
             "show_stats":               dlg.show_stats,
             "show_marks":               dlg.show_marks,
             "show_hover_highlight":     dlg.show_hover_highlight,
+            "vert_label_pixmap":        dlg.vert_label_pixmap,
             "label_width":              dlg.label_width,
             "row_height":               dlg.row_height,
             "row_gap":                  dlg.row_gap,

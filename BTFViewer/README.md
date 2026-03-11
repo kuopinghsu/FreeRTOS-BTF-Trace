@@ -197,6 +197,31 @@ Open **Settings** from the toolbar (**⚙ Settings**) or via **View → ⚙ Sett
 | STI events | Show or hide software-trace item marker rows |
 | Grid lines | Overlay vertical grid lines on the timeline |
 | Highlight on label hover | Dim all other segments when hovering a task label (disable for better performance on large traces) |
+| **Vertical labels: use pixmap rendering** | See [Windows — Vertical-mode label antialiasing](#windows--vertical-mode-label-antialiasing) |
+
+---
+
+> ### Windows — Vertical-mode label antialiasing
+>
+> **Problem:** On Windows the GDI text renderer cannot antialias glyphs that are drawn at a non-zero rotation angle. Even setting `QFont.PreferAntialias` (which normally forces Qt to bypass GDI and use DirectWrite or FreeType) does not help for rotated `QGraphicsTextItem`s, so task/core labels in **Vertical** orientation look jagged on Windows.
+>
+> **Workaround — pixmap rendering:**
+> Instead of rotating a `QGraphicsTextItem`, the viewer first renders the label text horizontally onto a `QPixmap` (all platforms apply full antialiasing to horizontal text), then rotates the *finished image* by −90°. The result is crisp, antialiased text on every Windows rendering back-end (GDI, Direct2D, OpenGL).
+>
+> **How to enable / disable:**
+>
+> | Where | How |
+> |-------|-----|
+> | Automatic (default) | Enabled automatically on Windows (`sys.platform == "win32"`); disabled on macOS and Linux. |
+> | `btf_viewer.rc` | Set `vert_label_pixmap = true` or `false` under the `[view]` section. |
+> | Settings dialog | **⚙ Settings → Display → Vertical labels: use pixmap rendering** checkbox. |
+> | Source constant | Change `_VERTICAL_LABEL_USE_PIXMAP` near the top of `btf_viewer.py` (USER CONFIGURATION section). |
+>
+> **Side effects of the pixmap path:**
+>
+> - Labels are rasterised at the *current screen resolution* and do not scale as crisply as vector text when the OS display scale factor differs from 100 % (e.g. 125 %, 150 % HiDPI on Windows). Text may appear slightly softer at non-100 % scaling.
+> - If you switch the setting while a trace is loaded, the scene is rebuilt immediately (brief repaint flash).
+> - On macOS and Linux the original `QGraphicsTextItem` path already produces antialiased rotated text; enabling the pixmap option there is harmless but provides no visual benefit.
 
 ### Layout
 
