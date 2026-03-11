@@ -54,8 +54,8 @@ Section index
                         _TaskLabelItem, _CoreHeaderItem,
                         _SegmentItem (legacy), _StiMarkerItem (legacy)
   View                – TimelineView (pan / zoom / cursor mouse handling)
-  Main Window         – _CursorButton, CursorBarWidget, LegendWidget,
-                        _WheelSpinBox, MainWindow
+  Main Window         – _CursorButton, _CursorBarWidget, _LegendWidget,
+                        _StatsPanel, _RcSettings, _WheelSpinBox, MainWindow
   Entry point         – main()
 """
 
@@ -125,6 +125,9 @@ _HOVER_HIGHLIGHT_ENABLED = False  # Highlight task bars when hovering the label 
 # _BatchRowItem.paint() LOD thresholds (Qt levelOfDetail: 1.0 = 100% zoom).
 _PAINT_LOD_COARSE        = 0.45   # Below: merge nearby segments, skip pen outlines.
 _PAINT_LOD_MICRO         = 0.12   # Below: draw one tinted activity bar per row.
+_LOD_MERGE_PX            = 6.0    # Coarse LOD: merge segments closer than this many scene-px.
+_ACTIVITY_ALPHA          = 160    # Alpha for the micro-LOD activity-presence bar.
+_HOVER_BISECT_MARGIN     = 3      # Neighbour scan window used in hoverMoveEvent bisect lookup.
 # Inline segment text is only rendered near 1:1 zoom; zoomed-out views keep
 # bars only for performance, especially at far-right large coordinates.
 # Number of bins used when pre-computing a coarse LOD summary at parse time.
@@ -289,6 +292,28 @@ class TraceAnnotation:
     id: int
     ns: int
     note: str
+
+@dataclass
+class SegLodData:
+    """Per-row/column segment LOD data bundle for _visible_segs() clipping."""
+    segs: list
+    starts: list
+    lod_segs: list
+    lod_starts: list
+    lod_ultra_segs: list = field(default_factory=list)
+    lod_ultra_starts: list = field(default_factory=list)
+
+@dataclass
+class ViewClipParams:
+    """Shared viewport/zoom parameters for _visible_segs() calls within one builder."""
+    ns_lo: int
+    ns_hi: int
+    time_min: int
+    px_per_ns: float
+    offset: float
+    cur_timescale_per_px: float
+    lod_timescale_per_px: float
+    lod_ultra_timescale_per_px: float = float("inf")
 
 @dataclass
 class BtfTrace:
@@ -808,8 +833,6 @@ def parse_btf(filepath: str,
 class _InfoPopup(QLabel):
     """Frameless persistent info popup – shown on hover-enter, hidden on hover-leave."""
 
-    _stylesheet_applied: bool = False
-
     def __init__(self) -> None:
         super().__init__()
         self.setWindowFlags(
@@ -818,25 +841,28 @@ class _InfoPopup(QLabel):
         self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self.setTextFormat(Qt.RichText)
         self.setMargin(7)
-        # Stylesheet is deferred to first show() so that _get_fixed_font_family()
-        # can resolve the actual system fixed font (requires a live QApplication
-        # with fonts loaded).  Using only the resolved name avoids the ~100 ms
-        # "Populating font family aliases" warning that Qt emits when a font
-        # name in the CSS list doesn't exist on the current platform.
+        self._ss_applied_dark: Optional[bool] = None   # None = never applied
 
-    def _ensure_stylesheet(self) -> None:
-        if _InfoPopup._stylesheet_applied:
+    def _apply_stylesheet(self, is_dark: bool) -> None:
+        if self._ss_applied_dark == is_dark:
             return
-        _InfoPopup._stylesheet_applied = True
+        self._ss_applied_dark = is_dark
         fam = _get_fixed_font_family()
-        self.setStyleSheet(
-            f"QLabel {{ background:#252526; color:#E0E0E0; "
-            f"border:1px solid #666; border-radius:4px; "
-            f"font-size:9pt; font-family:'{fam}'; }}"
-        )
+        if is_dark:
+            self.setStyleSheet(
+                f"QLabel {{ background:#252526; color:#E0E0E0; "
+                f"border:1px solid #666; border-radius:4px; "
+                f"font-size:7pt; font-family:'{fam}'; }}"
+            )
+        else:
+            self.setStyleSheet(
+                f"QLabel {{ background:#FFFFCC; color:#1E1E1E; "
+                f"border:1px solid #AAAAAA; border-radius:4px; "
+                f"font-size:7pt; font-family:'{fam}'; }}"
+            )
 
-    def show_at(self, screen_pos: QPoint, html: str) -> None:
-        self._ensure_stylesheet()
+    def show_at(self, screen_pos: QPoint, html: str, is_dark: bool = True) -> None:
+        self._apply_stylesheet(is_dark)
         self.setText(html)
         self.adjustSize()
         # offset so the cursor does not cover the box
@@ -1015,20 +1041,13 @@ def _lod_reduce(segs: list, time_min: int, px_per_ns: float,
             prev_bin = b
     return result
 
-def _visible_segs(segs: list, starts: list,
-                  lod_segs: list, lod_starts: list,
-                  lod_timescale_per_px: float, cur_timescale_per_px: float,
-                  ns_lo: int, ns_hi: int,
-                  time_min: int, px_per_ns: float, offset: float,
-                  lod_ultra_segs: Optional[list] = None,
-                  lod_ultra_starts: Optional[list] = None,
-                  lod_ultra_timescale_per_px: float = float("inf")) -> list:
+def _visible_segs(lod: SegLodData, vp: ViewClipParams) -> list:
     """Return LOD-reduced, viewport-clipped segments for one timeline row/column.
 
     Two-path strategy for 1M-event performance:
 
-    *Coarse path* (cur_timescale_per_px >= lod_timescale_per_px, i.e. zoomed out past the
-    pre-built LOD summary resolution):
+    *Coarse path* (vp.cur_timescale_per_px >= vp.lod_timescale_per_px, i.e. zoomed out
+    past the pre-built LOD summary resolution):
         Bisect-clip the pre-built LOD summary (at most _LOD_SUMMARY_BINS
         entries total) to the visible ns range, then run _lod_reduce on the
         small result.  Cost: O(log(_LOD_SUMMARY_BINS) + visible_summary).
@@ -1041,37 +1060,35 @@ def _visible_segs(segs: list, starts: list,
     Both paths eliminate the O(N_total_segs) worst-case that occurs when
     _lod_reduce is called on the un-clipped full segment list.
     """
-    if not segs:
-        return segs
+    if not lod.segs:
+        return lod.segs
 
-    if (cur_timescale_per_px >= lod_ultra_timescale_per_px
-            and lod_ultra_segs):
-        if lod_ultra_starts:
-            lo = max(0, bisect_left(lod_ultra_starts, ns_lo) - 1)
-            hi = min(len(lod_ultra_segs), bisect_right(lod_ultra_starts, ns_hi) + 1)
-            clipped = lod_ultra_segs[lo:hi]
+    if (vp.cur_timescale_per_px >= vp.lod_ultra_timescale_per_px
+            and lod.lod_ultra_segs):
+        if lod.lod_ultra_starts:
+            lo = max(0, bisect_left(lod.lod_ultra_starts, vp.ns_lo) - 1)
+            hi = min(len(lod.lod_ultra_segs), bisect_right(lod.lod_ultra_starts, vp.ns_hi) + 1)
+            clipped = lod.lod_ultra_segs[lo:hi]
         else:
-            clipped = lod_ultra_segs
-    elif cur_timescale_per_px >= lod_timescale_per_px and lod_segs:
+            clipped = lod.lod_ultra_segs
+    elif vp.cur_timescale_per_px >= vp.lod_timescale_per_px and lod.lod_segs:
         # Coarse path: use pre-built LOD summary
-        if lod_starts:
-            lo = max(0, bisect_left(lod_starts, ns_lo) - 1)
-            hi = min(len(lod_segs), bisect_right(lod_starts, ns_hi) + 1)
-            clipped = lod_segs[lo:hi]
+        if lod.lod_starts:
+            lo = max(0, bisect_left(lod.lod_starts, vp.ns_lo) - 1)
+            hi = min(len(lod.lod_segs), bisect_right(lod.lod_starts, vp.ns_hi) + 1)
+            clipped = lod.lod_segs[lo:hi]
         else:
-            clipped = lod_segs
-        _dbg_path = "COARSE"
+            clipped = lod.lod_segs
     else:
         # Fine path: clip raw segment list to viewport time range
-        if starts:
-            lo = max(0, bisect_left(starts, ns_lo) - 1)
-            hi = min(len(segs), bisect_right(starts, ns_hi) + 1)
-            clipped = segs[lo:hi]
+        if lod.starts:
+            lo = max(0, bisect_left(lod.starts, vp.ns_lo) - 1)
+            hi = min(len(lod.segs), bisect_right(lod.starts, vp.ns_hi) + 1)
+            clipped = lod.segs[lo:hi]
         else:
-            clipped = segs
-        _dbg_path = "FINE"
+            clipped = lod.segs
 
-    result = _lod_reduce(clipped, time_min, px_per_ns, offset)
+    result = _lod_reduce(clipped, vp.time_min, vp.px_per_ns, vp.offset)
     return result
 
 def _nice_grid_step(timescale_per_px: float, target_px: float = 100.0) -> int:
@@ -1730,6 +1747,78 @@ class TimelineScene(QGraphicsScene):
                 return True
         return False
 
+    # ------------------------------------------------------------------
+    # LOD / viewport helpers (used by all four builder methods)
+    # ------------------------------------------------------------------
+
+    def _view_clip_params(self) -> ViewClipParams:
+        """Build a ViewClipParams snapshot from the current scene state."""
+        tr = self._trace
+        return ViewClipParams(
+            ns_lo=self._vp_ns_lo,
+            ns_hi=self._vp_ns_hi,
+            time_min=tr.time_min,
+            px_per_ns=1.0 / self._timescale_per_px,
+            offset=self._label_width,
+            cur_timescale_per_px=self._timescale_per_px,
+            lod_timescale_per_px=tr.seg_lod_timescale_per_px,
+            lod_ultra_timescale_per_px=tr.seg_lod_ultra_timescale_per_px,
+        )
+
+    def _seg_lod_for_task(self, task: str) -> SegLodData:
+        """Build SegLodData for a task-view merge-key."""
+        tr = self._trace
+        return SegLodData(
+            segs=tr.seg_map_by_merge_key.get(task, []),
+            starts=tr.seg_start_by_merge_key.get(task, []),
+            lod_segs=tr.seg_lod_by_merge_key.get(task, []),
+            lod_starts=tr.seg_lod_starts_by_merge_key.get(task, []),
+            lod_ultra_segs=tr.seg_lod_ultra_by_merge_key.get(task, []),
+            lod_ultra_starts=tr.seg_lod_ultra_starts_by_merge_key.get(task, []),
+        )
+
+    def _seg_lod_for_tick(self) -> SegLodData:
+        """Build SegLodData for the global TICK task."""
+        return self._seg_lod_for_task(task_merge_key("TICK"))
+
+    def _seg_lod_for_core(self, core: str) -> SegLodData:
+        """Build SegLodData for a core-summary row/column."""
+        tr = self._trace
+        return SegLodData(
+            segs=tr.core_segs.get(core, []),
+            starts=tr.core_seg_starts.get(core, []),
+            lod_segs=tr.core_seg_lod.get(core, []),
+            lod_starts=tr.core_seg_lod_starts.get(core, []),
+            lod_ultra_segs=tr.core_seg_lod_ultra.get(core, []),
+            lod_ultra_starts=tr.core_seg_lod_ultra_starts.get(core, []),
+        )
+
+    def _seg_lod_for_core_task(self, core: str, task_name: str) -> SegLodData:
+        """Build SegLodData for a per-task sub-row/column within a core."""
+        tr = self._trace
+        return SegLodData(
+            segs=tr.core_task_segs.get(core, {}).get(task_name, []),
+            starts=tr.core_task_seg_starts.get(core, {}).get(task_name, []),
+            lod_segs=tr.core_task_seg_lod.get(core, {}).get(task_name, []),
+            lod_starts=tr.core_task_seg_lod_starts.get(core, {}).get(task_name, []),
+            lod_ultra_segs=tr.core_task_seg_lod_ultra.get(core, {}).get(task_name, []),
+            lod_ultra_starts=tr.core_task_seg_lod_ultra_starts.get(core, {}).get(task_name, []),
+        )
+
+    @staticmethod
+    def _clip_sti_events(events: list, starts: list, ns_lo: int, ns_hi: int) -> list:
+        """Return the viewport-visible subset of *events*.
+
+        One extra entry is kept on each side so that events whose start
+        time is just outside the viewport are still drawn (they can
+        overlap into the visible area).
+        """
+        if not starts:
+            return events
+        lo = max(0, bisect_left(starts, ns_lo) - 1)
+        hi = min(len(events), bisect_right(starts, ns_hi) + 1)
+        return events[lo:hi]
+
     def _build_horizontal(self) -> None:
         trace = self._trace
         font = _monospace_font(self._font_size)
@@ -1783,35 +1872,19 @@ class TimelineScene(QGraphicsScene):
         _ruler_hdr.setZValue(11)
         self.addItem(_ruler_hdr)
         self._frozen_top_items.append((_ruler_hdr, 0))
-        lod_ultra_timescale_per_px = trace.seg_lod_ultra_timescale_per_px
+        vp = self._view_clip_params()
 
         # --- TICK band on ruler (bottom strip) ---------------------------
         _tick_mk   = task_merge_key("TICK")
         _tick_segs = trace.seg_map_by_merge_key.get(_tick_mk, [])
         if _tick_segs:
-            _ht_lod_ns   = trace.seg_lod_timescale_per_px
-            _ht_npp      = self._timescale_per_px
-            _ht_vlo      = self._vp_ns_lo
-            _ht_vhi      = self._vp_ns_hi
-            _ht_tmin     = trace.time_min
-            _ht_ppns     = 1.0 / _ht_npp
-            _ht_lw       = self._label_width
             _ht_y        = RULER_HEIGHT - 10
             _ht_h        = 8
             _ht_data: list = []
             _ht_xs:   list = []
-            for _i, _seg in enumerate(_visible_segs(
-                    _tick_segs,
-                    trace.seg_start_by_merge_key.get(_tick_mk, []),
-                    trace.seg_lod_by_merge_key.get(_tick_mk, []),
-                    trace.seg_lod_starts_by_merge_key.get(_tick_mk, []),
-                    _ht_lod_ns, _ht_npp, _ht_vlo, _ht_vhi,
-                    _ht_tmin, _ht_ppns, _ht_lw,
-                    trace.seg_lod_ultra_by_merge_key.get(_tick_mk, []),
-                    trace.seg_lod_ultra_starts_by_merge_key.get(_tick_mk, []),
-                    lod_ultra_timescale_per_px)):
-                _x1 = _ht_lw + (_seg.start - _ht_tmin) * _ht_ppns
-                _x2 = _ht_lw + (_seg.end   - _ht_tmin) * _ht_ppns
+            for _i, _seg in enumerate(_visible_segs(self._seg_lod_for_tick(), vp)):
+                _x1 = vp.offset + (_seg.start - vp.time_min) * vp.px_per_ns
+                _x2 = vp.offset + (_seg.end   - vp.time_min) * vp.px_per_ns
                 _w  = _x2 - _x1 if _x2 - _x1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
                 _ht_data.append((
                     QRectF(_x1, _ht_y + 1, _w, _ht_h - 2),
@@ -1819,7 +1892,7 @@ class TimelineScene(QGraphicsScene):
                 ))
                 _ht_xs.append((_x1, _x1 + _w, _i))
             _ht_batch = _BatchRowItem(
-                QRectF(_ht_lw, _ht_y, timeline_w, _ht_h),
+                QRectF(vp.offset, _ht_y, timeline_w, _ht_h),
                 _ht_data, trace.time_scale, xs=_ht_xs,
                 time_min=trace.time_min)
             _ht_batch.setZValue(12)   # above frozen ruler_bg+header
@@ -1835,22 +1908,17 @@ class TimelineScene(QGraphicsScene):
         _pen_hl      = QPen(QColor("#FFFFFF"), 1.5)
         _stripe_rows: list = []   # accumulated by task + STI loops → one _RowStripesItem
 
-        # Use pre-built sorted segment map from the trace (avoids O(n_seg) rebuild work)
-        seg_map = trace.seg_map_by_merge_key
-
         # --- Task rows ---------------------------------------------------
         # Compute first/last visible row indices from the cached orth bounds.
         # This avoids iterating all n_task rows just to skip ~95 % of them.
         _row_stride   = self._row_height + self._row_gap
         _first_vis    = max(0, int((self._vp_scene_orth_lo - RULER_HEIGHT) // _row_stride))
         _last_vis     = min(n_task - 1, int((self._vp_scene_orth_hi - RULER_HEIGHT) // _row_stride) + 1)
-        _time_min     = trace.time_min
-        _px_per_ns    = 1.0 / self._timescale_per_px
+        _time_min     = vp.time_min
+        _px_per_ns    = vp.px_per_ns
         lw            = self._label_width
-        _vp_ns_lo     = self._vp_ns_lo
-        _vp_ns_hi     = self._vp_ns_hi
-        lod_timescale_per_px = trace.seg_lod_timescale_per_px
-        _timescale_per_px    = self._timescale_per_px
+        _vp_ns_lo     = vp.ns_lo
+        _vp_ns_hi     = vp.ns_hi
         for row_idx in range(_first_vis, _last_vis + 1):
             task  = task_rows[row_idx]
             raw   = trace.task_repr.get(task, task)
@@ -1890,16 +1958,7 @@ class TimelineScene(QGraphicsScene):
             pen_hl     = _pen_hl
             seg_data: list = []
             xs:      list = []
-            for i_s, seg in enumerate(_visible_segs(
-                    seg_map.get(task, []),
-                    trace.seg_start_by_merge_key.get(task, []),
-                    trace.seg_lod_by_merge_key.get(task, []),
-                    trace.seg_lod_starts_by_merge_key.get(task, []),
-                    lod_timescale_per_px, _timescale_per_px, _vp_ns_lo, _vp_ns_hi,
-                    _time_min, _px_per_ns, lw,
-                    trace.seg_lod_ultra_by_merge_key.get(task, []),
-                    trace.seg_lod_ultra_starts_by_merge_key.get(task, []),
-                    lod_ultra_timescale_per_px)):
+            for i_s, seg in enumerate(_visible_segs(self._seg_lod_for_task(task), vp)):
                 x1 = lw + (seg.start - _time_min) * _px_per_ns
                 x2 = lw + (seg.end   - _time_min) * _px_per_ns
                 w  = x2 - x1 if x2 - x1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
@@ -1941,10 +2000,7 @@ class TimelineScene(QGraphicsScene):
             self._frozen_items.append((lbl, 4))
             _sti_evs_h  = trace.sti_events_by_target.get(channel, [])
             _sti_stts_h = trace.sti_starts_by_target.get(channel, [])
-            if _sti_stts_h:
-                _slo = max(0, bisect_left(_sti_stts_h, _vp_ns_lo) - 1)
-                _shi = min(len(_sti_evs_h), bisect_right(_sti_stts_h, _vp_ns_hi) + 1)
-                _sti_evs_h = _sti_evs_h[_slo:_shi]
+            _sti_evs_h  = self._clip_sti_events(_sti_evs_h, _sti_stts_h, _vp_ns_lo, _vp_ns_hi)
             _sti_markers = [
                 (lw + (ev.time - _time_min) * _px_per_ns, _sti_color(ev.note), ev)
                 for ev in _sti_evs_h
@@ -2042,35 +2098,20 @@ class TimelineScene(QGraphicsScene):
         _ruler_hdr.setZValue(36)
         self.addItem(_ruler_hdr)
         self._frozen_items.append((_ruler_hdr, 0))
-        lod_ultra_timescale_per_px = trace.seg_lod_ultra_timescale_per_px
+        vp = self._view_clip_params()
 
         # --- TICK band on ruler (right strip of ruler column) ------------
         _tick_mk   = task_merge_key("TICK")
         _tick_segs = trace.seg_map_by_merge_key.get(_tick_mk, [])
         _has_tick_v = bool(_tick_segs)
         if _has_tick_v:
-            _vt_lod_ns   = trace.seg_lod_timescale_per_px
-            _vt_npp      = self._timescale_per_px
-            _vt_vlo      = self._vp_ns_lo
-            _vt_vhi      = self._vp_ns_hi
-            _vt_tmin     = trace.time_min
-            _vt_ppns     = 1.0 / _vt_npp
             _vt_x        = RULER_WIDTH - 18
             _vt_w        = 14
             _vt_data: list = []
             _vt_xs:   list = []
-            for _i, _seg in enumerate(_visible_segs(
-                    _tick_segs,
-                    trace.seg_start_by_merge_key.get(_tick_mk, []),
-                    trace.seg_lod_by_merge_key.get(_tick_mk, []),
-                    trace.seg_lod_starts_by_merge_key.get(_tick_mk, []),
-                    _vt_lod_ns, _vt_npp, _vt_vlo, _vt_vhi,
-                    _vt_tmin, _vt_ppns, label_row_h,
-                    trace.seg_lod_ultra_by_merge_key.get(_tick_mk, []),
-                    trace.seg_lod_ultra_starts_by_merge_key.get(_tick_mk, []),
-                    lod_ultra_timescale_per_px)):
-                _y1 = label_row_h + (_seg.start - _vt_tmin) * _vt_ppns
-                _y2 = label_row_h + (_seg.end   - _vt_tmin) * _vt_ppns
+            for _i, _seg in enumerate(_visible_segs(self._seg_lod_for_tick(), vp)):
+                _y1 = label_row_h + (_seg.start - vp.time_min) * vp.px_per_ns
+                _y2 = label_row_h + (_seg.end   - vp.time_min) * vp.px_per_ns
                 _h  = _y2 - _y1 if _y2 - _y1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
                 _vt_data.append((
                     QRectF(_vt_x + 1, _y1, _vt_w - 2, _h),
@@ -2085,20 +2126,15 @@ class TimelineScene(QGraphicsScene):
             self.addItem(_vt_batch)
             self._frozen_items.append((_vt_batch, 0))
 
-        # Use pre-built sorted segment map from the trace (avoids O(n_seg) rebuild work)
-        seg_map = trace.seg_map_by_merge_key
-
         # --- Task columns ------------------------------------------------
         _bg_even   = QBrush(QColor("#252526"))
         _bg_odd    = QBrush(QColor("#2D2D2D"))
         _lbl_color = QColor("#D4D4D4")
         _pen_hl_v  = QPen(QColor("#FFFFFF"), 1.5)
-        _time_min  = trace.time_min
-        _px_per_ns = 1.0 / self._timescale_per_px
-        _vp_ns_lo  = self._vp_ns_lo
-        _vp_ns_hi  = self._vp_ns_hi
-        lod_timescale_per_px = trace.seg_lod_timescale_per_px
-        _timescale_per_px = self._timescale_per_px
+        _time_min  = vp.time_min
+        _px_per_ns = vp.px_per_ns
+        _vp_ns_lo  = vp.ns_lo
+        _vp_ns_hi  = vp.ns_hi
 
         # Compute first/last visible col indices from the cached orth bounds.
         _first_vis_c = max(0, int((self._vp_scene_orth_lo - RULER_WIDTH) // col_w))
@@ -2142,16 +2178,7 @@ class TimelineScene(QGraphicsScene):
             pen_hl      = _pen_hl_v
             seg_data: list = []
             xs:      list = []
-            for i_s, seg in enumerate(_visible_segs(
-                    seg_map.get(task, []),
-                    trace.seg_start_by_merge_key.get(task, []),
-                    trace.seg_lod_by_merge_key.get(task, []),
-                    trace.seg_lod_starts_by_merge_key.get(task, []),
-                    lod_timescale_per_px, _timescale_per_px, _vp_ns_lo, _vp_ns_hi,
-                    _time_min, _px_per_ns, label_row_h,
-                    trace.seg_lod_ultra_by_merge_key.get(task, []),
-                    trace.seg_lod_ultra_starts_by_merge_key.get(task, []),
-                    lod_ultra_timescale_per_px)):
+            for i_s, seg in enumerate(_visible_segs(self._seg_lod_for_task(task), vp)):
                 y1 = label_row_h + (seg.start - _time_min) * _px_per_ns
                 y2 = label_row_h + (seg.end   - _time_min) * _px_per_ns
                 h  = y2 - y1 if y2 - y1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
@@ -2193,10 +2220,7 @@ class TimelineScene(QGraphicsScene):
             self._frozen_top_items.append((lbl, lbl.pos().y()))
             _sti_evs_v  = trace.sti_events_by_target.get(channel, [])
             _sti_stts_v = trace.sti_starts_by_target.get(channel, [])
-            if _sti_stts_v:
-                _slo = max(0, bisect_left(_sti_stts_v, _vp_ns_lo) - 1)
-                _shi = min(len(_sti_evs_v), bisect_right(_sti_stts_v, _vp_ns_hi) + 1)
-                _sti_evs_v = _sti_evs_v[_slo:_shi]
+            _sti_evs_v  = self._clip_sti_events(_sti_evs_v, _sti_stts_v, _vp_ns_lo, _vp_ns_hi)
             _sti_markers_v = [
                 (label_row_h + (ev.time - _time_min) * _px_per_ns, _sti_color(ev.note), ev)
                 for ev in _sti_evs_v
@@ -2240,7 +2264,6 @@ class TimelineScene(QGraphicsScene):
         core_names           = trace.core_names
         core_segs            = trace.core_segs
         core_tasks           = trace.core_task_order
-        task_seg_map_by_core = trace.core_task_segs
         sti_rows             = trace.sti_channels if self._show_sti else []
         if self._task_filter_q:
             sti_rows = [c for c in sti_rows if self._sti_channel_matches_filter(c)]
@@ -2305,36 +2328,14 @@ class TimelineScene(QGraphicsScene):
         lw         = self._label_width
         _vp_ns_lo  = self._vp_ns_lo
         _vp_ns_hi  = self._vp_ns_hi
-        lod_timescale_per_px = trace.seg_lod_timescale_per_px
-        lod_ultra_timescale_per_px = trace.seg_lod_ultra_timescale_per_px
-        _timescale_per_px = self._timescale_per_px
-        # Pre-built LOD/start-time references for core view clipping
-        c_seg_starts  = trace.core_seg_starts
-        _c_seg_lod    = trace.core_seg_lod
-        c_seg_lod_starts = trace.core_seg_lod_starts
-        _c_seg_lod_ultra = trace.core_seg_lod_ultra
-        c_seg_lod_ultra_starts = trace.core_seg_lod_ultra_starts
-        ct_seg_starts = trace.core_task_seg_starts
-        _ct_lod       = trace.core_task_seg_lod
-        ct_lod_starts = trace.core_task_seg_lod_starts
-        _ct_lod_ultra = trace.core_task_seg_lod_ultra
-        ct_lod_ultra_starts = trace.core_task_seg_lod_ultra_starts
+        vp = self._view_clip_params()
         # --- TICK band: TICK segments overlaid on the bottom strip of the ruler ---
         if _has_tick:
             _tb_y = RULER_HEIGHT - 10   # y of TICK band within ruler (bottom 10 px)
             _tb_h = 8                   # height of TICK band
             _tick_seg_data: list = []
             _tick_xs:       list = []
-            for i_s, seg in enumerate(_visible_segs(
-                    _tick_segs,
-                    trace.seg_start_by_merge_key.get(_tick_mk, []),
-                    trace.seg_lod_by_merge_key.get(_tick_mk, []),
-                    trace.seg_lod_starts_by_merge_key.get(_tick_mk, []),
-                    lod_timescale_per_px, _timescale_per_px, _vp_ns_lo, _vp_ns_hi,
-                    _time_min, _px_per_ns, lw,
-                    trace.seg_lod_ultra_by_merge_key.get(_tick_mk, []),
-                    trace.seg_lod_ultra_starts_by_merge_key.get(_tick_mk, []),
-                    lod_ultra_timescale_per_px)):
+            for i_s, seg in enumerate(_visible_segs(self._seg_lod_for_tick(), vp)):
                 x1 = lw + (seg.start - _time_min) * _px_per_ns
                 x2 = lw + (seg.end   - _time_min) * _px_per_ns
                 w  = x2 - x1 if x2 - x1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
@@ -2430,16 +2431,7 @@ class TimelineScene(QGraphicsScene):
 
                 seg_data: list = []
                 xs:       list = []
-                for i_s, seg in enumerate(_visible_segs(
-                        segs,
-                        c_seg_starts.get(core, []),
-                        _c_seg_lod.get(core, []),
-                        c_seg_lod_starts.get(core, []),
-                        lod_timescale_per_px, _timescale_per_px, _vp_ns_lo, _vp_ns_hi,
-                    _time_min, _px_per_ns, lw,
-                    _c_seg_lod_ultra.get(core, []),
-                    c_seg_lod_ultra_starts.get(core, []),
-                    lod_ultra_timescale_per_px)):
+                for i_s, seg in enumerate(_visible_segs(self._seg_lod_for_core(core), vp)):
                     x1 = lw + (seg.start - _time_min) * _px_per_ns
                     x2 = lw + (seg.end   - _time_min) * _px_per_ns
                     w  = x2 - x1 if x2 - x1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
@@ -2459,7 +2451,6 @@ class TimelineScene(QGraphicsScene):
                 continue
 
             # -- Per-task sub-rows (only when this core is expanded) -------
-            task_seg_map = task_seg_map_by_core[core]
 
             # Bulk-skip: if the entire sub-row block for this core lies
             # completely outside the viewport, advance row_idx in one step
@@ -2530,15 +2521,7 @@ class TimelineScene(QGraphicsScene):
                 seg_data: list = []
                 xs:       list = []
                 for i_s, seg in enumerate(_visible_segs(
-                        task_seg_map[task_name],
-                        ct_seg_starts.get(core, {}).get(task_name, []),
-                        _ct_lod.get(core, {}).get(task_name, []),
-                        ct_lod_starts.get(core, {}).get(task_name, []),
-                        lod_timescale_per_px, _timescale_per_px, _vp_ns_lo, _vp_ns_hi,
-                    _time_min, _px_per_ns, lw,
-                    _ct_lod_ultra.get(core, {}).get(task_name, []),
-                    ct_lod_ultra_starts.get(core, {}).get(task_name, []),
-                    lod_ultra_timescale_per_px)):
+                        self._seg_lod_for_core_task(core, task_name), vp)):
                     x1 = lw + (seg.start - _time_min) * _px_per_ns
                     x2 = lw + (seg.end   - _time_min) * _px_per_ns
                     w  = x2 - x1 if x2 - x1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
@@ -2571,10 +2554,7 @@ class TimelineScene(QGraphicsScene):
             self._frozen_items.append((lbl, 4))
             _sti_evs_ch  = trace.sti_events_by_target.get(channel, [])
             _sti_stts_ch = trace.sti_starts_by_target.get(channel, [])
-            if _sti_stts_ch:
-                _slo = max(0, bisect_left(_sti_stts_ch, _vp_ns_lo) - 1)
-                _shi = min(len(_sti_evs_ch), bisect_right(_sti_stts_ch, _vp_ns_hi) + 1)
-                _sti_evs_ch = _sti_evs_ch[_slo:_shi]
+            _sti_evs_ch  = self._clip_sti_events(_sti_evs_ch, _sti_stts_ch, _vp_ns_lo, _vp_ns_hi)
             _sti_markers_ch = [
                 (lw + (ev.time - _time_min) * _px_per_ns, _sti_color(ev.note), ev)
                 for ev in _sti_evs_ch
@@ -2619,7 +2599,6 @@ class TimelineScene(QGraphicsScene):
         core_names           = trace.core_names
         core_segs            = trace.core_segs
         core_tasks           = trace.core_task_order
-        task_seg_map_by_core = trace.core_task_segs
         sti_cols             = trace.sti_channels if self._show_sti else []
         if self._task_filter_q:
             sti_cols = [c for c in sti_cols if self._sti_channel_matches_filter(c)]
@@ -2687,20 +2666,7 @@ class TimelineScene(QGraphicsScene):
         _px_per_ns = 1.0 / self._timescale_per_px
         _vp_ns_lo  = self._vp_ns_lo
         _vp_ns_hi  = self._vp_ns_hi
-        lod_timescale_per_px = trace.seg_lod_timescale_per_px
-        lod_ultra_timescale_per_px = trace.seg_lod_ultra_timescale_per_px
-        _timescale_per_px = self._timescale_per_px
-        # Pre-built LOD/start-time references for core view clipping
-        c_seg_starts  = trace.core_seg_starts
-        _c_seg_lod    = trace.core_seg_lod
-        c_seg_lod_starts = trace.core_seg_lod_starts
-        _c_seg_lod_ultra = trace.core_seg_lod_ultra
-        c_seg_lod_ultra_starts = trace.core_seg_lod_ultra_starts
-        ct_seg_starts = trace.core_task_seg_starts
-        _ct_lod       = trace.core_task_seg_lod
-        ct_lod_starts = trace.core_task_seg_lod_starts
-        _ct_lod_ultra = trace.core_task_seg_lod_ultra
-        ct_lod_ultra_starts = trace.core_task_seg_lod_ultra_starts
+        vp = self._view_clip_params()
 
         # --- TICK band: TICK segments overlaid on the right strip of the ruler column ---
         if _has_tick:
@@ -2708,16 +2674,7 @@ class TimelineScene(QGraphicsScene):
             _vtb_w = 14                 # width of TICK band
             _tick_seg_data_v: list = []
             _tick_xs_v:       list = []
-            for i_s, seg in enumerate(_visible_segs(
-                    _tick_segs,
-                    trace.seg_start_by_merge_key.get(_tick_mk, []),
-                    trace.seg_lod_by_merge_key.get(_tick_mk, []),
-                    trace.seg_lod_starts_by_merge_key.get(_tick_mk, []),
-                    lod_timescale_per_px, _timescale_per_px, _vp_ns_lo, _vp_ns_hi,
-                    _time_min, _px_per_ns, label_row_h,
-                    trace.seg_lod_ultra_by_merge_key.get(_tick_mk, []),
-                    trace.seg_lod_ultra_starts_by_merge_key.get(_tick_mk, []),
-                    lod_ultra_timescale_per_px)):
+            for i_s, seg in enumerate(_visible_segs(self._seg_lod_for_tick(), vp)):
                 y1 = label_row_h + (seg.start - _time_min) * _px_per_ns
                 y2 = label_row_h + (seg.end   - _time_min) * _px_per_ns
                 h  = y2 - y1 if y2 - y1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
@@ -2742,7 +2699,6 @@ class TimelineScene(QGraphicsScene):
         for core in core_names:
             expanded = self._core_expanded.get(core, True)
             tasks    = core_tasks[core]
-            segs     = core_segs[core]
             dot_c    = QColor(_core_color(core))
 
             x_left = RULER_WIDTH + col_idx * col_w
@@ -2779,16 +2735,7 @@ class TimelineScene(QGraphicsScene):
 
                 seg_data: list = []
                 xs:       list = []
-                for i_s, seg in enumerate(_visible_segs(
-                        segs,
-                        c_seg_starts.get(core, []),
-                        _c_seg_lod.get(core, []),
-                        c_seg_lod_starts.get(core, []),
-                        lod_timescale_per_px, _timescale_per_px, _vp_ns_lo, _vp_ns_hi,
-                    _time_min, _px_per_ns, label_row_h,
-                    _c_seg_lod_ultra.get(core, []),
-                    c_seg_lod_ultra_starts.get(core, []),
-                    lod_ultra_timescale_per_px)):
+                for i_s, seg in enumerate(_visible_segs(self._seg_lod_for_core(core), vp)):
                     y1 = label_row_h + (seg.start - _time_min) * _px_per_ns
                     y2 = label_row_h + (seg.end   - _time_min) * _px_per_ns
                     h  = y2 - y1 if y2 - y1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
@@ -2806,8 +2753,6 @@ class TimelineScene(QGraphicsScene):
 
             if not expanded:
                 continue
-
-            task_seg_map = task_seg_map_by_core[core]
 
             # Bulk-skip: if the entire sub-column block for this core lies
             # completely outside the viewport, advance col_idx in one step.
@@ -2874,15 +2819,7 @@ class TimelineScene(QGraphicsScene):
                 seg_data: list = []
                 xs:       list = []
                 for i_s, seg in enumerate(_visible_segs(
-                        task_seg_map[task_name],
-                        ct_seg_starts.get(core, {}).get(task_name, []),
-                        _ct_lod.get(core, {}).get(task_name, []),
-                        ct_lod_starts.get(core, {}).get(task_name, []),
-                        lod_timescale_per_px, _timescale_per_px, _vp_ns_lo, _vp_ns_hi,
-                    _time_min, _px_per_ns, label_row_h,
-                    _ct_lod_ultra.get(core, {}).get(task_name, []),
-                    ct_lod_ultra_starts.get(core, {}).get(task_name, []),
-                    lod_ultra_timescale_per_px)):
+                        self._seg_lod_for_core_task(core, task_name), vp)):
                     y1 = label_row_h + (seg.start - _time_min) * _px_per_ns
                     y2 = label_row_h + (seg.end   - _time_min) * _px_per_ns
                     h  = y2 - y1 if y2 - y1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
@@ -2915,10 +2852,7 @@ class TimelineScene(QGraphicsScene):
             _x_ctr_vc    = x_left + col_w / 2
             _sti_evs_vc  = trace.sti_events_by_target.get(channel, [])
             _sti_stts_vc = trace.sti_starts_by_target.get(channel, [])
-            if _sti_stts_vc:
-                _slo = max(0, bisect_left(_sti_stts_vc, _vp_ns_lo) - 1)
-                _shi = min(len(_sti_evs_vc), bisect_right(_sti_stts_vc, _vp_ns_hi) + 1)
-                _sti_evs_vc = _sti_evs_vc[_slo:_shi]
+            _sti_evs_vc  = self._clip_sti_events(_sti_evs_vc, _sti_stts_vc, _vp_ns_lo, _vp_ns_hi)
             _sti_mrk_vc = [
                 (label_row_h + (ev.time - _time_min) * _px_per_ns, _sti_color(ev.note), ev)
                 for ev in _sti_evs_vc
@@ -3210,16 +3144,15 @@ class _BatchRowItem(QGraphicsItem):
         data = self._seg_data
         if len(data) <= 10:
             return data   # not worth merging tiny lists
-        MERGE_PX = 6.0
-        horiz    = self._horiz
-        result   = []
+        horiz  = self._horiz
+        result = []
         r0, br0, pen0, seg0 = data[0]
         s0 = r0.x()       if horiz else r0.y()
         e0 = s0 + (r0.width() if horiz else r0.height())
         for r, br, pen, seg in data[1:]:
             s = r.x()     if horiz else r.y()
             e = s + (r.width() if horiz else r.height())
-            if s <= e0 + MERGE_PX:
+            if s <= e0 + _LOD_MERGE_PX:
                 if e > e0:
                     e0 = e
             else:
@@ -3255,7 +3188,7 @@ class _BatchRowItem(QGraphicsItem):
             if self._seg_data:
                 br   = self._bounding_rect
                 col  = QColor(self._seg_data[0][1].color())
-                col.setAlpha(160)
+                col.setAlpha(_ACTIVITY_ALPHA)
                 painter.setPen(Qt.NoPen)
                 painter.setBrush(QBrush(col))
                 if self._horiz:
@@ -3439,7 +3372,8 @@ class _BatchRowItem(QGraphicsItem):
                 lo = mid + 1
             else:
                 hi = mid
-        for k in range(max(0, lo - 3), min(len(xs), lo + 2)):
+        for k in range(max(0, lo - _HOVER_BISECT_MARGIN),
+                       min(len(xs), lo + _HOVER_BISECT_MARGIN)):
             x1, x2, idx = xs[k]
             if x1 <= x <= x2:
                 seg = self._seg_data[idx][3]
@@ -4250,9 +4184,14 @@ class TimelineView(QGraphicsView):
             # Use viewport coordinates — label column is always the leftmost
             # _label_width pixels on screen regardless of horizontal scroll.
             lw = self._scene._label_width
-            in_vp_label = (event.pos().x() < lw if self._scene._horizontal
-                           else event.pos().y() < lw)
-            if in_vp_label:
+            in_vp_label  = (event.pos().x()       < lw if self._scene._horizontal
+                            else event.pos().y()       < lw)
+            # Also block when the press originated inside the label column:
+            # a tiny drag (≤ drag_threshold) from the label into the timeline
+            # must not place a cursor.
+            press_in_label = (self._press_pos.x() < lw if self._scene._horizontal
+                              else self._press_pos.y() < lw)
+            if in_vp_label or press_in_label:
                 self._press_pos = None
                 return
             scene_pt = self.mapToScene(event.pos())
@@ -4270,6 +4209,14 @@ class TimelineView(QGraphicsView):
         self._press_pos = None
 
     def contextMenuEvent(self, event) -> None:
+        # Suppress the context menu when the click lands inside the label column.
+        lw = self._scene._label_width
+        in_label = (event.pos().x() < lw if self._scene._horizontal
+                    else event.pos().y() < lw)
+        if in_label:
+            event.accept()
+            return
+
         menu = QMenu(self)
         scene_pt = self.mapToScene(event.pos())
         coord = scene_pt.x() if self._scene._horizontal else scene_pt.y()
@@ -4639,20 +4586,37 @@ class _LoadProgressDialog(QWidget):
         # Draw a subtle border via the stylesheet.
         # Use the object name so the QWidget selector matches only this dialog.
         self.setObjectName("loadprog")
-        self.setStyleSheet("""
-            QWidget#loadprog {
-                background: #2B2B2B;
-                border: 1px solid #555;
-                border-radius: 6px;
-            }
-            QLabel { color: #D4D4D4; font-size: 12px; }
-            QProgressBar {
-                border: 1px solid #555; border-radius: 3px;
-                background: #1E1E1E; height: 18px; text-align: center;
-                color: #D4D4D4;
-            }
-            QProgressBar::chunk { background: #0E70C0; border-radius: 2px; }
-        """)
+        _is_dark = QApplication.instance().palette().color(QPalette.Window).lightness() < 128
+        if _is_dark:
+            self.setStyleSheet("""
+                QWidget#loadprog {
+                    background: #2B2B2B;
+                    border: 1px solid #555;
+                    border-radius: 6px;
+                }
+                QLabel { color: #D4D4D4; font-size: 12px; }
+                QProgressBar {
+                    border: 1px solid #555; border-radius: 3px;
+                    background: #1E1E1E; height: 18px; text-align: center;
+                    color: #D4D4D4;
+                }
+                QProgressBar::chunk { background: #0E4D80; border-radius: 2px; }
+            """)
+        else:
+            self.setStyleSheet("""
+                QWidget#loadprog {
+                    background: #F5F5F5;
+                    border: 1px solid #CCCCCC;
+                    border-radius: 6px;
+                }
+                QLabel { color: #1E1E1E; font-size: 12px; }
+                QProgressBar {
+                    border: 1px solid #AAAAAA; border-radius: 3px;
+                    background: #FFFFFF; height: 18px; text-align: center;
+                    color: #1E1E1E;
+                }
+                QProgressBar::chunk { background: #005A9E; border-radius: 2px; }
+            """)
         self.adjustSize()
 
     def setValue(self, pct: int) -> None:
@@ -4746,20 +4710,28 @@ class _CursorButton(QPushButton):
     delete_requested = pyqtSignal()
     _DRAG_THRESHOLD  = 10
 
-    def __init__(self, text: str, color: str, parent: QWidget = None):
+    def __init__(self, text: str, color: str, is_dark: bool = True,
+                 parent: QWidget = None):
         super().__init__(text, parent)
         self._color     = color
+        self._is_dark   = is_dark
         self._press_pos: Optional[QPoint] = None
         self._dragging  = False
-        self._normal_ss = self._make_style(color, delete=False)
-        self._delete_ss = self._make_style(color, delete=True)
+        self._normal_ss = self._make_style(color, delete=False, is_dark=is_dark)
+        self._delete_ss = self._make_style(color, delete=True,  is_dark=is_dark)
         self.setStyleSheet(self._normal_ss)
         self.setCursor(Qt.PointingHandCursor)
 
     @staticmethod
-    def _make_style(c: str, delete: bool = False) -> str:
-        bg  = "#5A1A1A" if delete else "#2A2A2A"
-        hbg = "#6A2A2A" if delete else "#3A3A3A"
+    def _make_style(c: str, delete: bool = False, is_dark: bool = True) -> str:
+        if is_dark:
+            bg      = "#5A1A1A" if delete else "#2A2A2A"
+            hbg     = "#6A2A2A" if delete else "#3A3A3A"
+            pressed = "#4A4A4A"
+        else:
+            bg      = "#FAEAEA" if delete else "#F0F0F0"
+            hbg     = "#EACACA" if delete else "#E0E0E0"
+            pressed = "#D0D0D0"
         bc  = "#FF4444" if delete else c
         return (
             f"QPushButton {{ color: {c}; background: {bg}; "
@@ -4767,8 +4739,16 @@ class _CursorButton(QPushButton):
             f"padding: 1px 7px; font-size: {UI_FONT_SIZE}pt; "
             f"font-family: \"{_get_fixed_font_family()}\"; }}"
             f"QPushButton:hover   {{ background: {hbg}; }}"
-            f"QPushButton:pressed {{ background: #4A4A4A; }}"
+            f"QPushButton:pressed {{ background: {pressed}; }}"
         )
+
+    def update_style(self, is_dark: bool) -> None:
+        """Regenerate button stylesheets for the given theme and re-apply."""
+        self._is_dark   = is_dark
+        self._normal_ss = self._make_style(self._color, delete=False, is_dark=is_dark)
+        self._delete_ss = self._make_style(self._color, delete=True,  is_dark=is_dark)
+        # Apply the appropriate state (delete style is only shown while dragging)
+        self.setStyleSheet(self._normal_ss)
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.LeftButton:
@@ -4813,7 +4793,7 @@ class _CursorButton(QPushButton):
             return not own_parent.rect().contains(own_parent.mapFromGlobal(global_pos))
         return True
 
-class CursorBarWidget(QWidget):
+class _CursorBarWidget(QWidget):
     """A row of per-cursor _CursorButtons in the status bar."""
     jump_requested          = pyqtSignal(int)   # ns – scroll timeline
     cursor_delete_requested = pyqtSignal(int)   # ns – remove this cursor
@@ -4825,6 +4805,13 @@ class CursorBarWidget(QWidget):
         self._layout.setSpacing(4)
         self._buttons: list = []
         self._delta_label: Optional[QLabel] = None
+        self._is_dark: bool = True
+
+    def update_theme(self, is_dark: bool) -> None:
+        """Update all existing cursor buttons to reflect the new theme."""
+        self._is_dark = is_dark
+        for btn in self._buttons:
+            btn.update_style(is_dark)
 
     def rebuild(self, times: list, trace) -> None:
         if not times or trace is None:
@@ -4856,7 +4843,7 @@ class CursorBarWidget(QWidget):
                 c          = colors[orig_idx % len(colors)]
                 label_text = f"C{orig_idx + 1}: {_format_time(t, ts)}"
                 ns_capture = t
-                btn = _CursorButton(label_text, c)
+                btn = _CursorButton(label_text, c, is_dark=self._is_dark)
                 btn.clicked.connect(
                     lambda checked=False, ns=ns_capture: self.jump_requested.emit(ns)
                 )
@@ -4876,7 +4863,7 @@ class CursorBarWidget(QWidget):
                     delta_parts.append(f"Δ{i}={_format_time(d, ts)}")
                 dlbl = QLabel("  " + "  ".join(delta_parts))
                 dlbl.setStyleSheet(
-                    f"color:#FFFFFF; font-size:{UI_FONT_SIZE}pt;"
+                    f"font-size:{UI_FONT_SIZE}pt;"
                     f" font-family:\"{_get_fixed_font_family()}\"; padding:0 4px;"
                 )
                 self._layout.addWidget(dlbl)
@@ -4918,14 +4905,19 @@ class _LegendTaskRow(QWidget):
     clicked   = pyqtSignal(str)   # task merge key
 
     _BG_NORMAL  = "background: transparent;"
-    _BG_HOVER   = "background: rgba(255,255,255,18); border-radius:3px;"
     _BG_LOCKED  = "background: rgba(255,215,0,45);  border-radius:3px;"
 
     def __init__(self, task_name: str, display_name: str,
-                 color: QColor, tooltip: str = "", parent=None):
+                 color: QColor, tooltip: str = "", is_dark: bool = True,
+                 parent=None):
         super().__init__(parent)
         self._task_name = task_name
         self._locked    = False
+        # Theme-variant hover BG and swatch border
+        self._BG_HOVER  = ("background: rgba(255,255,255,18); border-radius:3px;"
+                            if is_dark else
+                            "background: rgba(0,0,0,20);       border-radius:3px;")
+        swatch_border   = "#555555" if is_dark else "#AAAAAA"
 
         hl = QHBoxLayout(self)
         hl.setContentsMargins(2, 1, 2, 1)
@@ -4934,12 +4926,11 @@ class _LegendTaskRow(QWidget):
         swatch = QLabel()
         swatch.setFixedSize(14, 14)
         swatch.setStyleSheet(
-            f"background:{color.name()}; border-radius:2px; border:1px solid #555;"
+            f"background:{color.name()}; border-radius:2px; border:1px solid {swatch_border};"
         )
         hl.addWidget(swatch)
 
         self._lbl = QLabel(display_name)
-        self._lbl.setStyleSheet("color:#D4D4D4;")
         self._lbl.setToolTip(tooltip or display_name)
         hl.addWidget(self._lbl)
         hl.addStretch()
@@ -4976,9 +4967,9 @@ class _LegendTaskRow(QWidget):
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
             self.clicked.emit(self._task_name)
-        event.accept()   # prevent bubbling up to LegendWidget.mousePressEvent
+        event.accept()   # prevent bubbling up to _LegendWidget.mousePressEvent
 
-class LegendWidget(QWidget):
+class _LegendWidget(QWidget):
     """Compact scrollable colour legend with click → timeline highlight."""
 
     task_clicked     = pyqtSignal(str)   # click: task merge key
@@ -4991,6 +4982,9 @@ class LegendWidget(QWidget):
         outer.setContentsMargins(6, 6, 6, 6)
         outer.setSpacing(4)
         self.setAutoFillBackground(True)
+        self._is_dark: bool = True
+        self._trace_ref = None        # cached for update_theme() rebuild
+        self._show_sti_flag: bool = True
         palette = self.palette()
         palette.setColor(QPalette.Window, QColor("#1E1E1E"))
         self.setPalette(palette)
@@ -5022,6 +5016,26 @@ class LegendWidget(QWidget):
         self._scroll.setWidget(self._list_host)
         outer.addWidget(self._scroll, 1)
 
+    def update_theme(self, is_dark: bool) -> None:
+        """Switch the legend palette and search-box styling to match the app theme."""
+        self._is_dark = is_dark
+        palette = self.palette()
+        palette.setColor(QPalette.Window,
+                         QColor("#1E1E1E") if is_dark else QColor("#F5F5F5"))
+        self.setPalette(palette)
+        if is_dark:
+            self._search.setStyleSheet(
+                "QLineEdit { background:#2D2D2D; color:#D4D4D4; border:1px solid #555; "
+                "border-radius:3px; padding:2px 4px; }"
+            )
+        else:
+            self._search.setStyleSheet(
+                "QLineEdit { background:#FFFFFF; color:#1E1E1E; border:1px solid #AAAAAA; "
+                "border-radius:3px; padding:2px 4px; }"
+            )
+        if self._trace_ref is not None:
+            self.rebuild(self._trace_ref, show_sti=self._show_sti_flag)
+
     def set_locked_task(self, task_name: Optional[str]) -> None:
         """Visually mark *task_name* as click-locked (or clear all locks)."""
         for raw, row in self._task_rows.items():
@@ -5033,6 +5047,8 @@ class LegendWidget(QWidget):
         super().mousePressEvent(event)
 
     def rebuild(self, trace: BtfTrace, *, show_sti: bool = True) -> None:
+        self._trace_ref      = trace
+        self._show_sti_flag  = show_sti
         self._task_rows.clear()
         self._sti_rows = []
 
@@ -5044,9 +5060,13 @@ class LegendWidget(QWidget):
             _w.deleteLater()
 
         # Suppress per-addWidget layout recalculations for the whole batch.
+        is_dark       = self._is_dark
+        hdr_color     = "#AAAAAA" if is_dark else "#555555"
+        sep_color     = "#444444" if is_dark else "#CCCCCC"
+        hdr2_color    = "#88AABB" if is_dark else "#005A9E"
         self.setUpdatesEnabled(False)
         try:
-            header = QLabel("<b style='color:#AAAAAA'>Tasks</b>")
+            header = QLabel(f"<b style='color:{hdr_color}'>Tasks</b>")
             header.setTextFormat(Qt.RichText)
             self._list_layout.addWidget(header)
 
@@ -5055,7 +5075,7 @@ class LegendWidget(QWidget):
                 _rep_raw = trace.task_repr.get(_mk, _mk)
                 color = _task_color(_rep_raw)
                 display = task_display_name(_rep_raw)
-                row = _LegendTaskRow(_mk, display, color, tooltip=_rep_raw)
+                row = _LegendTaskRow(_mk, display, color, tooltip=_rep_raw, is_dark=is_dark)
                 row.clicked.connect(self.task_clicked)
                 self._task_rows[_mk] = row
                 self._list_layout.addWidget(row)
@@ -5063,10 +5083,10 @@ class LegendWidget(QWidget):
             if show_sti and trace.sti_channels:
                 sep = QFrame()
                 sep.setFrameShape(QFrame.HLine)
-                sep.setStyleSheet("color:#444;")
+                sep.setStyleSheet(f"color:{sep_color};")
                 self._list_layout.addWidget(sep)
 
-                hdr2 = QLabel("<b style='color:#88AABB'>STI Events</b>")
+                hdr2 = QLabel(f"<b style='color:{hdr2_color}'>STI Events</b>")
                 hdr2.setTextFormat(Qt.RichText)
                 self._list_layout.addWidget(hdr2)
 
@@ -5082,7 +5102,6 @@ class LegendWidget(QWidget):
                     swatch.setFixedWidth(14)
                     hl.addWidget(swatch)
                     lbl = QLabel(note)
-                    lbl.setStyleSheet("color:#D4D4D4;")
                     hl.addWidget(lbl)
                     hl.addStretch()
                     self._list_layout.addWidget(row_w)
@@ -5110,7 +5129,7 @@ class LegendWidget(QWidget):
 # Statistics dock panel
 # ---------------------------------------------------------------------------
 
-class StatsPanel(QWidget):
+class _StatsPanel(QWidget):
     """Dock panel showing trace statistics (span, core utilisation, top tasks)."""
 
     def __init__(self, parent=None):
@@ -5134,18 +5153,19 @@ class StatsPanel(QWidget):
             if item.widget():
                 item.widget().deleteLater()
 
-    def _lbl(self, text: str, color: str = "#D4D4D4", bold: bool = False) -> QLabel:
+    def _lbl(self, text: str, color: str = "", bold: bool = False) -> QLabel:
         w = QLabel(text)
-        style = f"color:{color}; background:transparent;"
+        parts = ["background:transparent;"]
+        if color:
+            parts.insert(0, f"color:{color};")
         if bold:
-            style += " font-weight:bold;"
-        w.setStyleSheet(style)
+            parts.append("font-weight:bold;")
+        w.setStyleSheet(" ".join(parts))
         return w
 
     def _sep(self) -> QFrame:
         f = QFrame()
         f.setFrameShape(QFrame.HLine)
-        f.setStyleSheet("color:#444;")
         return f
 
     def update_trace(self, trace: "BtfTrace") -> None:
@@ -5157,7 +5177,7 @@ class StatsPanel(QWidget):
         self._ilay.addWidget(self._lbl(
             f"Span: {span_str}  |  Tasks: {len(trace.tasks)}  |  "
             f"Segments: {len(trace.segments)}  |  STI events: {len(trace.sti_events)}",
-            color="#AAAAAA",
+            color="#888888",
         ))
 
         # -- Core utilisation (excl. IDLE) ---------------------------------
@@ -5175,7 +5195,7 @@ class StatsPanel(QWidget):
                 hlay.setContentsMargins(0, 0, 0, 0)
                 hlay.setSpacing(8)
 
-                core_lbl = self._lbl(f"  {core}:", color="#D4D4D4")
+                core_lbl = self._lbl(f"  {core}:")
                 core_lbl.setMinimumWidth(72)
                 hlay.addWidget(core_lbl)
 
@@ -5186,9 +5206,9 @@ class StatsPanel(QWidget):
                 pbar.setFixedHeight(14)
                 pbar.setStyleSheet("""
                     QProgressBar {
-                        border: 1px solid #4A4A4A;
+                        border: 1px solid #888888;
                         border-radius: 4px;
-                        background-color: #5A5A5A;
+                        background: palette(alternateBase);
                     }
                     QProgressBar::chunk {
                         background-color: #5FCF6F;
@@ -5245,7 +5265,7 @@ class _WheelSpinBox(QSpinBox):
 # Persistent settings  (btf_viewer.rc)
 # ---------------------------------------------------------------------------
 
-class RcSettings:
+class _RcSettings:
     """INI-style persistent settings store backed by *btf_viewer.rc*.
 
     The file is written next to the script.  If it does not yet exist it is
@@ -5399,7 +5419,7 @@ class _SettingsDialog(QDialog):
                 QListWidget::item                 {{ color:#AAAAAA; padding:9px 16px;
                                                      font-size:{ui_fs}; }}
                 QListWidget::item:selected        {{ background:#37373D; color:#FFFFFF;
-                                                     border-left:3px solid #007ACC;
+                                                     border-left:3px solid #0E4D80;
                                                      padding-left:13px; }}
                 QListWidget::item:hover:!selected {{ background:#2A2D2E; }}
                 QFrame#vsep                       {{ border:none; background:#3A3A3A;
@@ -5415,22 +5435,22 @@ class _SettingsDialog(QDialog):
                     border:1.5px solid #555555; border-radius:4px;
                     padding:1px 6px; min-height:1.3em; font-size:{ui_fs}; }}
                 QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus
-                                                  {{ border-color:#007ACC; }}
+                                                  {{ border-color:#0E4D80; }}
                 QComboBox QAbstractItemView       {{ background:#3C3C3C; color:#D4D4D4;
-                                                     selection-background-color:#007ACC;
+                                                     selection-background-color:#0E4D80;
                                                      font-size:{ui_fs}; }}
                 QCheckBox::indicator              {{ width:15px; height:15px;
                                                      border-radius:3px;
                                                      border:1.5px solid #555555;
                                                      background:#2D2D2D; }}
-                QCheckBox::indicator:checked      {{ background:#007ACC;
-                                                     border-color:#007ACC; }}
-                QPushButton#btn_ok                {{ background:#007ACC; color:#FFFFFF;
+                QCheckBox::indicator:checked      {{ background:#0E4D80;
+                                                     border-color:#0E4D80; }}
+                QPushButton#btn_ok                {{ background:#0E4D80; color:#FFFFFF;
                                                      border:none; border-radius:5px;
                                                      padding:0px 22px;
                                                      font-weight:600;
                                                      font-size:{ui_fs}; }}
-                QPushButton#btn_ok:hover          {{ background:#1A8ED4; }}
+                QPushButton#btn_ok:hover          {{ background:#1565C0; }}
                 QPushButton#btn_cancel            {{ background:transparent;
                                                      color:#AAAAAA;
                                                      border:1.5px solid #555555;
@@ -5449,7 +5469,7 @@ class _SettingsDialog(QDialog):
                 QListWidget::item                 {{ color:#555555; padding:9px 16px;
                                                      font-size:{ui_fs}; }}
                 QListWidget::item:selected        {{ background:#E8ECF0; color:#1E1E1E;
-                                                     border-left:3px solid #007ACC;
+                                                     border-left:3px solid #005A9E;
                                                      padding-left:13px; }}
                 QListWidget::item:hover:!selected {{ background:#EBEBEB; }}
                 QFrame#vsep                       {{ border:none; background:#CCCCCC;
@@ -5465,23 +5485,23 @@ class _SettingsDialog(QDialog):
                     border:1.5px solid #AAAAAA; border-radius:4px;
                     padding:1px 6px; min-height:1.3em; font-size:{ui_fs}; }}
                 QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus
-                                                  {{ border-color:#007ACC; }}
+                                                  {{ border-color:#005A9E; }}
                 QComboBox QAbstractItemView       {{ background:#FFFFFF; color:#1E1E1E;
-                                                     selection-background-color:#007ACC;
+                                                     selection-background-color:#005A9E;
                                                      selection-color:#FFFFFF;
                                                      font-size:{ui_fs}; }}
                 QCheckBox::indicator              {{ width:15px; height:15px;
                                                      border-radius:3px;
                                                      border:1.5px solid #AAAAAA;
                                                      background:#FFFFFF; }}
-                QCheckBox::indicator:checked      {{ background:#007ACC;
-                                                     border-color:#007ACC; }}
-                QPushButton#btn_ok                {{ background:#007ACC; color:#FFFFFF;
+                QCheckBox::indicator:checked      {{ background:#005A9E;
+                                                     border-color:#005A9E; }}
+                QPushButton#btn_ok                {{ background:#005A9E; color:#FFFFFF;
                                                      border:none; border-radius:5px;
                                                      padding:0px 22px;
                                                      font-weight:600;
                                                      font-size:{ui_fs}; }}
-                QPushButton#btn_ok:hover          {{ background:#1A8ED4; }}
+                QPushButton#btn_ok:hover          {{ background:#1472B5; }}
                 QPushButton#btn_cancel            {{ background:transparent;
                                                      color:#555555;
                                                      border:1.5px solid #AAAAAA;
@@ -5767,7 +5787,7 @@ class MainWindow(QMainWindow):
         self._current_file: str = ""
         self._parse_thread = None
         self._progress_dialog: Optional[QProgressDialog] = None
-        self._settings = RcSettings()
+        self._settings = _RcSettings()
 
         # -- Runtime state for settings managed via _SettingsDialog ----------
         self._show_sti:              bool  = True
@@ -5795,10 +5815,7 @@ class MainWindow(QMainWindow):
 
         # Apply saved theme BEFORE building the UI (affects the Qt stylesheet).
         self._is_dark = (self._settings.get("view", "theme", "dark") == "dark")
-        if self._is_dark:
-            self._apply_dark_theme()
-        else:
-            self._apply_light_theme()
+        self._apply_theme(self._is_dark)
 
         self._build_ui()
         self._build_menus()
@@ -5838,10 +5855,7 @@ class MainWindow(QMainWindow):
         saved_ufs = s.get_int("view", "ui_font_size", UI_FONT_SIZE)
         if saved_ufs != UI_FONT_SIZE:
             self._ui_font_size_val = saved_ufs
-            if self._is_dark:
-                self._apply_dark_theme()
-            else:
-                self._apply_light_theme()
+            self._apply_theme(self._is_dark)
 
         # Max cursors
         saved_mc = s.get_int("view", "max_cursors", _DEFAULT_MAX_CURSORS)
@@ -5938,17 +5952,23 @@ class MainWindow(QMainWindow):
                 # Wait up to 3 s; parse threads check interruption frequently.
                 self._parse_thread.wait(3000)
             # Thread is now stopped – safe to destroy PyQtSlotProxy objects.
-            for sig in (self._parse_thread.done,
-                        self._parse_thread.errored,
-                        self._parse_thread.progress):
-                try:
-                    sig.disconnect()
-                except (TypeError, RuntimeError):
-                    pass
+            self._disconnect_parse_signals()
             self._parse_thread = None
 
         self._save_current_trace_state()
+        self._persist_settings()
 
+        # ---- 3. Hide the window immediately -----------------------------------
+        # The window disappears right away so the user never sees a freeze while
+        # we clean up the scene and free the trace below.
+        self.hide()
+        self._teardown_scene()
+
+        super().closeEvent(event)
+
+    def _persist_settings(self) -> None:
+        """Write all runtime state to the config file (btf_viewer.rc)."""
+        s = self._settings
         # Window geometry – only save non-maximised size/position so we can
         # restore the proper normal-state geometry if the user un-maximises.
         if self.isMaximized():
@@ -5985,7 +6005,7 @@ class MainWindow(QMainWindow):
 
         # Zoom – save current ns/px so we can re-apply it the next time the
         # same file is opened.  -1 means "use fit-to-width" (no saved zoom).
-        if self._view._scene._trace is not None:
+        if self._view._scene._trace is not None and not self._view._fit_mode:
             s.set("zoom", "timescale_per_px", str(self._view._scene.timescale_per_px))
         else:
             s.set("zoom", "timescale_per_px", "-1")
@@ -5996,11 +6016,12 @@ class MainWindow(QMainWindow):
         s.set("cursors", "positions",
               " ".join(str(t) for t in _cursor_times) if _cursor_times else "")
 
-        # ---- 3. Hide the window immediately -----------------------------------
-        # The window disappears right away so the user never sees a freeze while
-        # we clean up the scene and free the trace below.
-        self.hide()
+    def _teardown_scene(self) -> None:
+        """Release all scene items and free trace data on a background thread.
 
+        Called after the window is hidden so the visible freeze of freeing
+        large traces is not perceptible to the user.
+        """
         # ---- 4. Clear the scene explicitly ------------------------------------
         # Break all Python-side references held by scene items BEFORE calling
         # scene.clear().  Each _BatchRowItem stores _seg_data / _xs / _coarse_data
@@ -6041,8 +6062,6 @@ class MainWindow(QMainWindow):
             threading.Thread(target=_drop, daemon=False).start()
             del _trace_to_free
 
-        super().closeEvent(event)
-
     def dragEnterEvent(self, event) -> None:
         if event.mimeData().hasUrls():
             if any(u.toLocalFile().endswith(".btf") for u in event.mimeData().urls()):
@@ -6059,141 +6078,219 @@ class MainWindow(QMainWindow):
     # Theme
     # ------------------------------------------------------------------
 
-    def _apply_dark_theme(self) -> None:
-        app     = QApplication.instance()
+    @staticmethod
+    def _theme_tokens(is_dark: bool) -> dict:
+        """Return color tokens for the requested theme variant.
 
-        # Set the application-wide UI font to 12 pt (menus, toolbar, status bar).
-        # Timeline task labels use FONT_SIZE (12 pt) independently.
-        base_font = app.font()
-        _ui_font_size = getattr(self, '_ui_font_size_val', UI_FONT_SIZE)
-        base_font.setPointSize(_ui_font_size)
-        app.setFont(base_font)
-        _ui_fs = f"{_ui_font_size}pt"   # reused in stylesheet below
+        All values are hex strings suitable for direct use in QSS or
+        QPalette.  Edit only this method to change any theme color.
+        """
+        if is_dark:
+            return dict(
+                accent        = "#0E4D80",
+                win_bg        = "#1E1E1E",
+                win_base      = "#121212",
+                mid           = "#2D2D2D",
+                text          = "#D4D4D4",
+                tooltip_bg    = "#252526",
+                tooltip_border= "#555555",
+                menu_bg       = "#252526",
+                sep           = "#444444",
+                tb_hover      = "#3C3C3C",
+                tb_pressed    = "#1C5A9E",
+                tb_checked_bg = "#0E4D80",
+                tb_checked_fg = "#FFFFFF",
+                tb_disabled   = "#555555",
+                status_text   = "#AAAAAA",
+                cb_border     = "#555555",
+                cb_bg         = "#2D2D2D",
+                input_bg      = "#2D2D2D",
+                input_fg      = "#D4D4D4",
+                input_border  = "#555555",
+                combo_bg      = "#2D2D2D",
+                combo_view_bg = "#2D2D2D",
+                dock_title_bg = "#2D2D2D",
+                dock_title_fg = "#AAAAAA",
+                list_hover    = "#3A3A3A",
+                tab_bg        = "#2D2D2D",
+                tab_fg        = "#888888",
+                tab_sel_bg    = "#1E1E1E",
+                tab_sel_fg    = "#FFFFFF",
+                tab_hover_bg  = "#3C3C3C",
+                tab_hover_fg  = "#D4D4D4",
+                scroll_bg     = "#1E1E1E",
+                sub_text      = "#888888",
+                muted_text    = "#999999",
+                ea_fg         = "#D4D4D4",
+                ea_disabled   = "#555555",
+                welcome_h2    = "#888888",
+                welcome_p     = "#666666",
+            )
+        return dict(
+            accent        = "#005A9E",
+            win_bg        = "#F5F5F5",
+            win_base      = "#FFFFFF",
+            mid           = "#E0E0E0",
+            text          = "#1E1E1E",
+            tooltip_bg    = "#FFFFCC",
+            tooltip_border= "#AAAAAA",
+            menu_bg       = "#F5F5F5",
+            sep           = "#C0C0C0",
+            tb_hover      = "#D0D0D0",
+            tb_pressed    = "#AACCEE",
+            tb_checked_bg = "#B3D1EE",
+            tb_checked_fg = "#005A9E",
+            tb_disabled   = "#BBBBBB",
+            status_text   = "#555555",
+            cb_border     = "#AAAAAA",
+            cb_bg         = "#FFFFFF",
+            input_bg      = "#FFFFFF",
+            input_fg      = "#1E1E1E",
+            input_border  = "#AAAAAA",
+            combo_bg      = "#F5F5F5",
+            combo_view_bg = "#FFFFFF",
+            dock_title_bg = "#E0E0E0",
+            dock_title_fg = "#555555",
+            list_hover    = "#E8E8E8",
+            tab_bg        = "#E0E0E0",
+            tab_fg        = "#666666",
+            tab_sel_bg    = "#F5F5F5",
+            tab_sel_fg    = "#1E1E1E",
+            tab_hover_bg  = "#D0D0D0",
+            tab_hover_fg  = "#1E1E1E",
+            scroll_bg     = "#F5F5F5",
+            sub_text      = "#555555",
+            muted_text    = "#666666",
+            ea_fg         = "#1E1E1E",
+            ea_disabled   = "#AAAAAA",
+            welcome_h2    = "#555555",
+            welcome_p     = "#444444",
+        )
 
-        palette = QPalette()
-        dark    = QColor("#1E1E1E")
-        darker  = QColor("#121212")
-        mid     = QColor("#2D2D2D")
-        light   = QColor("#D4D4D4")
-        accent  = QColor("#007ACC")
-        palette.setColor(QPalette.Window,          dark)
-        palette.setColor(QPalette.WindowText,      light)
-        palette.setColor(QPalette.Base,            darker)
-        palette.setColor(QPalette.AlternateBase,   mid)
-        palette.setColor(QPalette.Text,            light)
-        palette.setColor(QPalette.Button,          mid)
-        palette.setColor(QPalette.ButtonText,      light)
-        palette.setColor(QPalette.Highlight,       accent)
-        palette.setColor(QPalette.HighlightedText, QColor("#FFFFFF"))
-        palette.setColor(QPalette.Link,            accent)
-        palette.setColor(QPalette.ToolTipBase,     QColor("#252526"))
-        palette.setColor(QPalette.ToolTipText,     light)
-        app.setPalette(palette)
-        app.setStyleSheet(f"""
-            QToolTip  {{ background:#252526; color:#D4D4D4; border:1px solid #555;
-                         padding:4px; font-size:{_ui_fs}; }}
-            QMenuBar  {{ background:#2D2D2D; color:#D4D4D4; font-size:{_ui_fs}; }}
-            QMenuBar::item:selected {{ background:#007ACC; }}
-            QMenu     {{ background:#252526; color:#D4D4D4; font-size:{_ui_fs}; }}
-            QMenu::item:selected {{ background:#007ACC; }}
-            QToolBar  {{ background:#2D2D2D; border:none; spacing:4px;
-                         font-size:{_ui_fs}; }}
-            QToolBar::separator {{ width:1px; background:#444444; margin:3px 2px; }}
-            QToolButton {{ font-size:{_ui_fs}; }}
-            QToolButton:hover    {{ background:#3C3C3C; border-radius:3px; }}
-            QToolButton:pressed  {{ background:#1C5A9E; border-radius:3px; }}
-            QToolButton:checked  {{ background:#0E4D80; border-radius:3px; color:#FFFFFF; }}
-            QToolButton:disabled {{ color:#555555; }}
-            QStatusBar  {{ background:#1E1E1E; color:#AAAAAA; font-size:{_ui_fs}; }}
-            QLabel      {{ font-size:{_ui_fs}; }}
-            QCheckBox   {{ font-size:{_ui_fs}; }}
-            QSpinBox, QDoubleSpinBox {{ background:#2D2D2D; color:#D4D4D4;
-                         border:1px solid #555; font-size:{_ui_fs};
-                         padding:2px 6px; min-height:1.6em; }}
-            QLineEdit   {{ background:#2D2D2D; color:#D4D4D4;
-                         border:1px solid #555; }}
-            QComboBox   {{ background:#2D2D2D; color:#D4D4D4;
-                         border:1px solid #555; font-size:{_ui_fs};
-                         padding:2px 6px; min-height:1.6em; }}
-            QComboBox QAbstractItemView {{ background:#2D2D2D; color:#D4D4D4;
-                         selection-background-color:#007ACC;
-                         font-size:{_ui_fs}; }}
-            QDockWidget::title {{ background:#2D2D2D; color:#AAAAAA;
-                                  padding:4px; font-size:{_ui_fs}; }}
-            QScrollArea {{ background:#1E1E1E; border:none; }}
-        """)
+    def _apply_theme(self, is_dark: bool) -> None:
+        """Apply the dark or light UI theme to the entire application.
 
-    def _apply_light_theme(self) -> None:
+        This is the single authoritative method for all theme changes.
+        Color values are defined in ``_theme_tokens``; all QSS and widget
+        overrides are driven from that table so there is only one place
+        to edit when adjusting a color.
+        """
         app = QApplication.instance()
+
+        # Application-wide font (menus, toolbar, status bar).
         _ui_font_size = getattr(self, '_ui_font_size_val', UI_FONT_SIZE)
         _ui_fs = f"{_ui_font_size}pt"
-
         base_font = app.font()
         base_font.setPointSize(_ui_font_size)
         app.setFont(base_font)
 
+        c = self._theme_tokens(is_dark)
+
+        # --- Qt palette ---------------------------------------------------
         palette = QPalette()
-        bg      = QColor("#F5F5F5")
-        bg_base = QColor("#FFFFFF")
-        mid     = QColor("#E0E0E0")
-        text    = QColor("#1E1E1E")
-        accent  = QColor("#007ACC")
-        palette.setColor(QPalette.Window,          bg)
-        palette.setColor(QPalette.WindowText,      text)
-        palette.setColor(QPalette.Base,            bg_base)
-        palette.setColor(QPalette.AlternateBase,   mid)
-        palette.setColor(QPalette.Text,            text)
-        palette.setColor(QPalette.Button,          mid)
-        palette.setColor(QPalette.ButtonText,      text)
-        palette.setColor(QPalette.Highlight,       accent)
+        palette.setColor(QPalette.Window,          QColor(c['win_bg']))
+        palette.setColor(QPalette.WindowText,      QColor(c['text']))
+        palette.setColor(QPalette.Base,            QColor(c['win_base']))
+        palette.setColor(QPalette.AlternateBase,   QColor(c['mid']))
+        palette.setColor(QPalette.Text,            QColor(c['text']))
+        palette.setColor(QPalette.Button,          QColor(c['mid']))
+        palette.setColor(QPalette.ButtonText,      QColor(c['text']))
+        palette.setColor(QPalette.Highlight,       QColor(c['accent']))
         palette.setColor(QPalette.HighlightedText, QColor("#FFFFFF"))
-        palette.setColor(QPalette.Link,            accent)
-        palette.setColor(QPalette.ToolTipBase,     QColor("#FFFFCC"))
-        palette.setColor(QPalette.ToolTipText,     text)
+        palette.setColor(QPalette.Link,            QColor(c['accent']))
+        palette.setColor(QPalette.ToolTipBase,     QColor(c['tooltip_bg']))
+        palette.setColor(QPalette.ToolTipText,     QColor(c['text']))
         app.setPalette(palette)
+
+        # --- App-wide QSS -------------------------------------------------
         app.setStyleSheet(f"""
-            QToolTip  {{ background:#FFFFCC; color:#1E1E1E; border:1px solid #AAA;
+            QToolTip  {{ background:{c['tooltip_bg']}; color:{c['text']}; border:1px solid {c['tooltip_border']};
                          padding:4px; font-size:{_ui_fs}; }}
-            QMenuBar  {{ background:#E0E0E0; color:#1E1E1E; font-size:{_ui_fs}; }}
-            QMenuBar::item:selected {{ background:#007ACC; color:#FFFFFF; }}
-            QMenu     {{ background:#F5F5F5; color:#1E1E1E; font-size:{_ui_fs}; }}
-            QMenu::item:selected {{ background:#007ACC; color:#FFFFFF; }}
-            QToolBar  {{ background:#E0E0E0; border:none; spacing:4px;
+            QMenuBar  {{ background:{c['mid']}; color:{c['text']}; font-size:{_ui_fs}; }}
+            QMenuBar::item:selected {{ background:{c['accent']}; color:#FFFFFF; }}
+            QMenu     {{ background:{c['menu_bg']}; color:{c['text']}; font-size:{_ui_fs}; }}
+            QMenu::item:selected {{ background:{c['accent']}; color:#FFFFFF; }}
+            QToolBar  {{ background:{c['mid']}; border:none; spacing:4px;
                          font-size:{_ui_fs}; }}
-            QToolBar::separator {{ width:1px; background:#C0C0C0; margin:3px 2px; }}
+            QToolBar::separator {{ width:1px; background:{c['sep']}; margin:3px 2px; }}
             QToolButton {{ font-size:{_ui_fs}; }}
-            QToolButton:hover    {{ background:#D0D0D0; border-radius:3px; }}
-            QToolButton:pressed  {{ background:#AACCEE; border-radius:3px; }}
-            QToolButton:checked  {{ background:#B3D1EE; border-radius:3px; color:#005A9E; }}
-            QToolButton:disabled {{ color:#BBBBBB; }}
-            QStatusBar  {{ background:#F5F5F5; color:#555555; font-size:{_ui_fs}; }}
+            QToolButton:hover    {{ background:{c['tb_hover']};      border-radius:3px; }}
+            QToolButton:pressed  {{ background:{c['tb_pressed']};    border-radius:3px; }}
+            QToolButton:checked  {{ background:{c['tb_checked_bg']}; border-radius:3px; color:{c['tb_checked_fg']}; }}
+            QToolButton:disabled {{ color:{c['tb_disabled']}; }}
+            QStatusBar  {{ background:{c['win_bg']}; color:{c['status_text']}; font-size:{_ui_fs}; }}
             QLabel      {{ font-size:{_ui_fs}; }}
             QCheckBox   {{ font-size:{_ui_fs}; }}
-            QSpinBox, QDoubleSpinBox {{ background:#FFFFFF; color:#1E1E1E;
-                         border:1px solid #AAAAAA; font-size:{_ui_fs};
+            QCheckBox::indicator              {{ width:13px; height:13px; border-radius:2px;
+                         border:1.5px solid {c['cb_border']}; background:{c['cb_bg']}; }}
+            QCheckBox::indicator:checked     {{ background:{c['accent']}; border-color:{c['accent']}; }}
+            QSpinBox, QDoubleSpinBox {{ background:{c['input_bg']}; color:{c['input_fg']};
+                         border:1px solid {c['input_border']}; font-size:{_ui_fs};
                          padding:2px 6px; min-height:1.6em; }}
-            QLineEdit   {{ background:#FFFFFF; color:#1E1E1E;
-                         border:1px solid #AAAAAA; }}
-            QComboBox   {{ background:#F5F5F5; color:#1E1E1E;
-                         border:1px solid #AAAAAA; font-size:{_ui_fs};
+            QLineEdit   {{ background:{c['input_bg']}; color:{c['input_fg']};
+                         border:1px solid {c['input_border']}; }}
+            QComboBox   {{ background:{c['combo_bg']}; color:{c['text']};
+                         border:1px solid {c['input_border']}; font-size:{_ui_fs};
                          padding:2px 6px; min-height:1.6em; }}
-            QComboBox QAbstractItemView {{ background:#FFFFFF; color:#1E1E1E;
-                         selection-background-color:#007ACC;
-                         selection-color:#FFFFFF;
+            QComboBox QAbstractItemView {{ background:{c['combo_view_bg']}; color:{c['text']};
+                         selection-background-color:{c['accent']}; selection-color:#FFFFFF;
                          font-size:{_ui_fs}; }}
-            QDockWidget::title {{ background:#E0E0E0; color:#555555;
+            QDockWidget::title {{ background:{c['dock_title_bg']}; color:{c['dock_title_fg']};
                                   padding:4px; font-size:{_ui_fs}; }}
-            QScrollArea {{ background:#F5F5F5; border:none; }}
+            QPushButton {{ font-size:{_ui_fs}; }}
+            QListWidget {{ font-size:{_ui_fs}; }}
+            QListWidget::item {{ font-size:{_ui_fs}; }}
+            QListWidget::item:selected {{ background:{c['accent']}; color:#FFFFFF; }}
+            QListWidget::item:hover:!selected {{ background:{c['list_hover']}; }}
+            QTabBar::tab               {{ background:{c['tab_bg']}; color:{c['tab_fg']};
+                                           padding:4px 12px; border:none;
+                                           border-bottom:2px solid transparent;
+                                           font-size:{_ui_fs}; }}
+            QTabBar::tab:selected      {{ background:{c['tab_sel_bg']}; color:{c['tab_sel_fg']};
+                                           border-bottom:2px solid {c['accent']}; }}
+            QTabBar::tab:hover:!selected {{ background:{c['tab_hover_bg']}; color:{c['tab_hover_fg']}; }}
+            QScrollArea {{ background:{c['scroll_bg']}; border:none; }}
         """)
+
+        # --- Per-widget overrides not reachable via app-wide QSS ----------
+        if hasattr(self, '_status_hint'):
+            self._status_hint.setStyleSheet(f"color:{c['sub_text']};")
+        if hasattr(self, '_zoom_label'):
+            self._zoom_label.setStyleSheet(f"color:{c['sub_text']}; padding:0 8px;")
+        if hasattr(self, '_status_range'):
+            self._status_range.setStyleSheet(f"color:{c['sub_text']}; padding:0 6px;")
+        if hasattr(self, '_range_stats_label'):
+            self._range_stats_label.setStyleSheet(f"color:{c['muted_text']};")
+        if hasattr(self, '_find_status'):
+            self._find_status.setStyleSheet(f"color:{c['muted_text']};")
+        if hasattr(self, '_ea_widget') and self._ea_widget is not None:
+            self._ea_widget.setStyleSheet(
+                f"QToolButton {{ color: {c['ea_fg']}; background: transparent; border: none; padding: 2px 4px; }}"
+                f"QToolButton:disabled {{ color: {c['ea_disabled']}; }}"
+            )
+        if hasattr(self, '_welcome_label'):
+            self._welcome_label.setText(
+                f"<h2 style='color:{c['welcome_h2']};'>BTF Trace Viewer</h2>"
+                f"<p style='color:{c['welcome_p']}; font-size:11pt;'>"
+                "Drop a <b>.btf</b> file here<br>"
+                "or press <b>Ctrl+O</b> to open one</p>"
+            )
+        if hasattr(self, '_legend'):
+            self._legend.update_theme(is_dark)
+        if hasattr(self, '_cursor_bar'):
+            self._cursor_bar.update_theme(is_dark)
+        if hasattr(self, '_act_theme'):
+            self._act_theme.setText(
+                "Switch to &Light Theme" if is_dark else "Switch to &Dark Theme"
+            )
+
+    # Thin wrappers kept for any external callers.
+    def _apply_dark_theme(self)  -> None: self._apply_theme(True)
+    def _apply_light_theme(self) -> None: self._apply_theme(False)
 
     def _toggle_theme(self) -> None:
         self._is_dark = not self._is_dark
-        if self._is_dark:
-            self._apply_dark_theme()
-            self._act_theme.setText("Switch to &Light Theme")
-        else:
-            self._apply_light_theme()
-            self._act_theme.setText("Switch to &Dark Theme")
+        self._apply_theme(self._is_dark)
 
     # ------------------------------------------------------------------
     # UI construction
@@ -6219,6 +6316,7 @@ class MainWindow(QMainWindow):
         _wlbl.setTextFormat(Qt.RichText)
         _wlbl.setAlignment(Qt.AlignCenter)
         _wl.addWidget(_wlbl)
+        self._welcome_label = _wlbl
 
         self._stack = QStackedWidget()
         self._stack.addWidget(self._welcome_page)   # index 0
@@ -6227,7 +6325,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self._stack)
 
         # --- Legend dock (right panel) ---
-        self._legend = LegendWidget()
+        self._legend = _LegendWidget()
         self._legend.setMinimumWidth(180)
         self._legend.setMaximumWidth(260)
         dock = QDockWidget("Legend", self)
@@ -6237,7 +6335,7 @@ class MainWindow(QMainWindow):
         self._legend_dock = dock
 
         # --- Statistics dock (bottom panel) ---
-        self._stats_panel = StatsPanel()
+        self._stats_panel = _StatsPanel()
         stats_dock = QDockWidget("Statistics", self)
         stats_dock.setWidget(self._stats_panel)
         stats_dock.setFeatures(QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetMovable)
@@ -6302,18 +6400,22 @@ class MainWindow(QMainWindow):
         self._range_stats_label.setStyleSheet("color:#999;")
         self._range_stats_label.setWordWrap(True)
         marks_v.addWidget(self._range_stats_label)
-        marks_export_btn = QPushButton("📤 Export Marks as CSV…")
+        marks_io_row = QHBoxLayout()
+        marks_import_btn = QPushButton("↓ Import Marks")
+        marks_import_btn.setToolTip("Load bookmarks and annotations from a CSV file")
+        marks_import_btn.clicked.connect(self._import_marks_csv)
+        marks_io_row.addWidget(marks_import_btn)
+        marks_export_btn = QPushButton("↑ Export Marks")
         marks_export_btn.setToolTip("Save all bookmarks and annotations to a CSV file")
         marks_export_btn.clicked.connect(self._export_marks_csv)
-        marks_v.addWidget(marks_export_btn)
+        marks_io_row.addWidget(marks_export_btn)
+        marks_v.addLayout(marks_io_row)
 
         marks_dock = QDockWidget("Marks", self)
         marks_dock.setWidget(marks_host)
         marks_dock.setFeatures(QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetMovable)
         marks_dock.setMinimumWidth(190)
-        marks_dock.setMaximumWidth(260)
         marks_dock.setMinimumHeight(120)
-        marks_dock.setMaximumHeight(220)
         self.addDockWidget(Qt.RightDockWidgetArea, marks_dock)
         self._marks_dock = marks_dock
 
@@ -6515,22 +6617,22 @@ class MainWindow(QMainWindow):
         self._tb_expand_all_btn.setEnabled(False)   # only active in core view
         self._tb_expand_all_btn.setToolTip("Expand / collapse all cores  (only in Core View)")
         # widgetForAction() returns the Qt-owned internal QToolButton — safe to style.
-        _ea_widget = tb.widgetForAction(self._tb_expand_all_btn)
-        if _ea_widget is not None:
+        self._ea_widget = tb.widgetForAction(self._tb_expand_all_btn)
+        if self._ea_widget is not None:
             # Store as instance attribute: QWidget::setStyle does NOT transfer ownership,
             # so the caller must keep the QStyle alive or Qt will use a freed pointer.
             self._ea_fusion_style = QStyleFactory.create("Fusion")
             if self._ea_fusion_style:
-                _ea_widget.setStyle(self._ea_fusion_style)
-            _ea_widget.setStyleSheet(
+                self._ea_widget.setStyle(self._ea_fusion_style)
+            self._ea_widget.setStyleSheet(
                 "QToolButton { color: #D4D4D4; background: transparent; border: none; padding: 2px 4px; }"
                 "QToolButton:disabled { color: #555555; }"
             )
             # Fix width to the wider of the two label strings so the toolbar never shifts
-            _ea_fm = _ea_widget.fontMetrics()
+            _ea_fm = self._ea_widget.fontMetrics()
             _ea_w  = max(_ea_fm.horizontalAdvance("⊞ Expand All. "),
                          _ea_fm.horizontalAdvance("⊟ Collapse All")) + 24
-            _ea_widget.setFixedWidth(_ea_w)
+            self._ea_widget.setFixedWidth(_ea_w)
         tb.addSeparator()
 
         # --- Cursor controls ---
@@ -6551,7 +6653,7 @@ class MainWindow(QMainWindow):
         self._status_stats = QLabel("")
 
         # --- Cursor badge bar ---
-        self._cursor_bar   = CursorBarWidget()
+        self._cursor_bar   = _CursorBarWidget()
         self._cursor_bar.jump_requested.connect(self._view.scroll_to_ns)
         self._cursor_bar.cursor_delete_requested.connect(self._on_cursor_delete)
 
@@ -6559,14 +6661,14 @@ class MainWindow(QMainWindow):
         self._status_hint  = QLabel(
             "Left-click: cursor  |  Ctrl+Wheel: zoom  |  Scroll: pan"
         )
-        self._status_hint.setStyleSheet("color:#666;")
+        self._status_hint.setStyleSheet("color:#888888;")
 
         self._zoom_label = QLabel("Zoom: —")
-        self._zoom_label.setStyleSheet("color:#AAAAAA; padding: 0 8px;")
+        self._zoom_label.setStyleSheet("color:#888888; padding: 0 8px;")
 
         # --- Cursor range stats (compact; shown only when ≥2 cursors active) ---
         self._status_range = QLabel("")
-        self._status_range.setStyleSheet("color:#AAAAAA; padding: 0 6px;")
+        self._status_range.setStyleSheet("color:#888888; padding: 0 6px;")
         self._status_range.setVisible(False)
 
         # --- Quick toggles ---
@@ -7005,6 +7107,24 @@ class MainWindow(QMainWindow):
         if self._find_marker_ns is not None:
             self._refresh_find_marker()
 
+    def _disconnect_parse_signals(self) -> None:
+        """Safely disconnect all signals on the current parse thread.
+
+        Calling this before ``_parse_thread = None`` ensures that any
+        PyQtSlotProxy objects are destroyed in a controlled order so that
+        stale posted events are purged before the proxy QObjects are freed,
+        preventing SIGBUS / EXC_BAD_ACCESS crashes on the next load.
+        """
+        if self._parse_thread is None:
+            return
+        for sig in (self._parse_thread.done,
+                    self._parse_thread.errored,
+                    self._parse_thread.progress):
+            try:
+                sig.disconnect()
+            except (TypeError, RuntimeError):
+                pass
+
     def _open_file(self, path: str) -> None:
         if self._trace is not None and self._current_file:
             self._save_current_trace_state()
@@ -7030,13 +7150,7 @@ class MainWindow(QMainWindow):
                     self._status_file.setText("  Previous load is still stopping…")
                     return
             # Thread is fully stopped – safe to destroy PyQtSlotProxy objects.
-            for sig in (self._parse_thread.done,
-                        self._parse_thread.errored,
-                        self._parse_thread.progress):
-                try:
-                    sig.disconnect()
-                except (TypeError, RuntimeError):
-                    pass
+            self._disconnect_parse_signals()
             self._parse_thread = None
 
         # Show a wait cursor and status message while parsing
@@ -7057,14 +7171,7 @@ class MainWindow(QMainWindow):
             # errored events from the main-thread event queue.  Without this, a
             # queued progress event whose proxy was freed by _parse_thread=None
             # would be dispatched by sendPostedEvents → SIGBUS crash.
-            if self._parse_thread is not None:
-                for sig in (self._parse_thread.done,
-                            self._parse_thread.errored,
-                            self._parse_thread.progress):
-                    try:
-                        sig.disconnect()
-                    except (TypeError, RuntimeError):
-                        pass
+            self._disconnect_parse_signals()
             progress_dialog.update_progress(100, "Building scene…")
             QApplication.processEvents()   # let the dialog repaint before heavy build
             self._parse_thread = None
@@ -7078,17 +7185,28 @@ class MainWindow(QMainWindow):
                     "last_file": path,
                     "last_dir":  os.path.dirname(path),
                 })
-                self._view.load_trace(trace)
+                # Show the trace view BEFORE load_trace() so that
+                # viewport().width/height() already returns the real layout
+                # size when _fit_viewport_size() is called inside load_trace().
+                # (Hidden widgets report 0 px even though QStackedWidget has
+                # already allocated the correct geometry to all pages.)
                 self._stack.setCurrentIndex(1)
+                QApplication.processEvents()   # force layout pass → viewport settles
+                self._view.load_trace(trace)
                 self._refresh_zoom_ui_unit()
                 self._load_trace_state(path)
                 self._recompute_find_hits()
                 # Re-apply the saved zoom only when re-opening the exact same file
-                # so that new files always start at fit-to-width.
+                # AND the user was in zoom mode (not fit mode) when they closed.
+                # A saved zoom of -1 means "fit-to-width" – never restore it.
                 if _prev_file == path and _saved_zoom > 0:
                     self._view._scene._timescale_per_px = max(_TIMESCALE_PER_PX_DEFAULT, _saved_zoom)
                     self._view._scene.rebuild()
                     self._view._fit_mode = False
+                    self._view.zoom_changed.emit(self._view._scene.timescale_per_px)
+                else:
+                    # Clear any stale positive zoom so the next save writes -1.
+                    self._settings.set("zoom", "timescale_per_px", "-1")
                     self._view.zoom_changed.emit(self._view._scene.timescale_per_px)
 
                 # Restore saved cursor positions (same file only)
@@ -7124,7 +7242,7 @@ class MainWindow(QMainWindow):
                 self._status_hint.setVisible(False)
                 self._save_recent_files(path)
                 self._rebuild_recent_menu()
-            except Exception as exc:
+            except (ValueError, RuntimeError, KeyError, OSError) as exc:
                 self._status_file.setText("  No file loaded")
                 QMessageBox.critical(self, "Render Error",
                                      f"Failed to display:\n{path}\n\n{exc}")
@@ -7137,14 +7255,7 @@ class MainWindow(QMainWindow):
         def _on_error(msg):
             # Same rationale as _on_done: disconnect first to purge any
             # stale queued events before the thread / proxies are freed.
-            if self._parse_thread is not None:
-                for sig in (self._parse_thread.done,
-                            self._parse_thread.errored,
-                            self._parse_thread.progress):
-                    try:
-                        sig.disconnect()
-                    except (TypeError, RuntimeError):
-                        pass
+            self._disconnect_parse_signals()
             progress_dialog.close()
             if self._progress_dialog is progress_dialog:
                 self._progress_dialog = None
@@ -7174,7 +7285,7 @@ class MainWindow(QMainWindow):
             try:
                 self._view.save_image(path)
                 self.statusBar().showMessage(f"Saved: {path}", 4000)
-            except Exception as exc:
+            except OSError as exc:
                 QMessageBox.critical(self, "Save Error", f"Could not save image:\n{exc}")
 
     def _on_copy_image(self) -> None:
@@ -7222,12 +7333,7 @@ class MainWindow(QMainWindow):
         new_dark = dlg.is_dark
         if new_dark != self._is_dark:
             self._is_dark = new_dark
-            if self._is_dark:
-                self._apply_dark_theme()
-                self._act_theme.setText("Switch to &Light Theme")
-            else:
-                self._apply_light_theme()
-                self._act_theme.setText("Switch to &Dark Theme")
+            self._apply_theme(self._is_dark)
 
         # Timeline label font size
         new_fs = dlg.font_size
@@ -7240,10 +7346,7 @@ class MainWindow(QMainWindow):
         new_ufs = dlg.ui_font_size
         if new_ufs != self._ui_font_size_val:
             self._ui_font_size_val = new_ufs
-            if self._is_dark:
-                self._apply_dark_theme()
-            else:
-                self._apply_light_theme()
+            self._apply_theme(self._is_dark)
             self._settings.set("view", "ui_font_size", str(new_ufs))
 
         # Max cursors
@@ -7466,7 +7569,7 @@ class MainWindow(QMainWindow):
             return
         base = os.path.splitext(os.path.basename(self._current_file or "trace"))[0]
         path, _ = QFileDialog.getSaveFileName(
-            self, "Export Marks as CSV",
+            self, "Export Marks",
             os.path.join(os.path.dirname(self._current_file or ""), f"{base}_marks.csv"),
             "CSV files (*.csv);;All files (*)",
         )
@@ -7481,6 +7584,43 @@ class MainWindow(QMainWindow):
             self._status_hint.setText(f"Marks exported → {os.path.basename(path)}")
         except OSError as exc:
             QMessageBox.critical(self, "Export Error", str(exc))
+
+    def _import_marks_csv(self) -> None:
+        """Import bookmarks and annotations from a CSV file."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import Marks",
+            os.path.dirname(self._current_file or ""),
+            "CSV files (*.csv);;All files (*)",
+        )
+        if not path:
+            return
+        try:
+            import csv
+            imported = 0
+            with open(path, "r", newline="", encoding="utf-8") as fh:
+                reader = csv.DictReader(fh)
+                for row in reader:
+                    kind = row.get("type", "").strip().lower()
+                    try:
+                        ns = int(row.get("raw_ns", 0))
+                    except (ValueError, TypeError):
+                        continue
+                    label = row.get("label_or_note", "")
+                    if kind == "bookmark":
+                        if not any(b.ns == ns for b in self._bookmarks):
+                            self._bookmarks.append(TraceBookmark(id=self._mark_next_id, ns=ns, label=label))
+                            self._mark_next_id += 1
+                            imported += 1
+                    elif kind == "annotation":
+                        if not any(a.ns == ns for a in self._annotations):
+                            self._annotations.append(TraceAnnotation(id=self._mark_next_id, ns=ns, note=label))
+                            self._mark_next_id += 1
+                            imported += 1
+            self._rebuild_bookmark_list()
+            self._rebuild_annotation_list()
+            self._status_hint.setText(f"Imported {imported} mark(s) from {os.path.basename(path)}")
+        except OSError as exc:
+            QMessageBox.critical(self, "Import Error", str(exc))
 
     # -- Find dock ------------------------------------------------------
 
@@ -7607,6 +7747,7 @@ def main() -> None:
 
     app = QApplication(sys.argv)
     app.setApplicationName("BTF Trace Viewer")
+    app.setApplicationDisplayName("BTF Trace Viewer")
     app.setOrganizationName("btf_viewer")
 
     win = MainWindow()
