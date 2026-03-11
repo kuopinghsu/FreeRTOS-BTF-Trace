@@ -5310,10 +5310,12 @@ class _RcSettings:
     _DEFAULTS: Dict[str, Dict[str, str]] = {
         "window": {
             "width":     "1280",
-            "height":    "720",
+            "height":    "800",
             "x":         "-1",
             "y":         "-1",
             "maximized": "false",
+            "dock_state": "",
+            "dock_layout_version": "0",  # bumped whenever default layout changes
         },
         "view": {
             "font_size":  str(FONT_SIZE),
@@ -6011,7 +6013,7 @@ class MainWindow(QMainWindow):
         self._tb_icon_actions: list = []   # (QAction, icon_path_data) for theme-aware icons
 
         self.setWindowTitle("BTF Trace Viewer")
-        self.resize(1280, 720)
+        self.resize(1280, 800)
 
         # Apply saved theme BEFORE building the UI (affects the Qt stylesheet).
         self._is_dark = (self._settings.get("view", "theme", "dark") == "dark")
@@ -6030,13 +6032,40 @@ class MainWindow(QMainWindow):
     # Lifecycle persistence
     # ------------------------------------------------------------------
 
+    def _apply_default_dock_sizes(self) -> None:
+        """Apply startup dock dimensions.
+
+        Called via QTimer.singleShot(0) so the window is already visible and
+        the dock layout engine has completed its first pass — resizeDocks() is
+        a no-op when called before the window is shown.
+
+        Target sizes are chosen to fit inside an 800 px window
+        (800 - OS-title ~28 - toolbar ~32 - status ~22 = ~718 px dock area).
+        300 + 148 + 245 = 693 < 718, so Qt uses the exact values instead of
+        proportionally scaling them down.
+
+        Marks/Find group: 397 * 0.85 / 2.0 ≈ 150px (−15% vs old equal split)
+        Statistics:        397 * 1.15 / 2.0 ≈ 228px (+15% vs old equal split).
+        The total 300+150+228 = 678 is kept ≤ 695 so nothing is scaled.
+        """
+        self.resizeDocks(
+            [self._legend_dock, self._marks_dock, self._stats_dock],
+            [300, 150, 228],
+            Qt.Vertical,
+        )
+        self.resizeDocks(
+            [self._legend_dock, self._marks_dock],
+            [220, 220],
+            Qt.Horizontal,
+        )
+
     def _restore_settings(self) -> None:
         """Apply all values from btf_viewer.rc after the UI has been built."""
         s = self._settings
 
         # Window geometry
         w = s.get_int("window", "width",  1280)
-        h = s.get_int("window", "height", 720)
+        h = s.get_int("window", "height", 800)
         self.resize(max(400, w), max(300, h))
         x = s.get_int("window", "x", -1)
         y = s.get_int("window", "y", -1)
@@ -6117,6 +6146,22 @@ class MainWindow(QMainWindow):
         self._show_marks = s.get_bool("view", "show_marks", True)
         self._marks_dock.setVisible(self._show_marks)
         self._find_dock.setVisible(s.get_bool("view", "show_find", False))
+
+        # Dock layout (marks/stats/legend sizes & positions).
+        # dock_layout_version gates restoration: if the saved version is older
+        # than the current one the saved geometry is discarded so new defaults
+        # (resizeDocks in _build_ui) take effect automatically.
+        _DOCK_LAYOUT_VERSION = "6"
+        _saved_dock = s.get("window", "dock_state", "")
+        _saved_ver  = s.get("window", "dock_layout_version", "0")
+        if _saved_dock and _saved_ver == _DOCK_LAYOUT_VERSION:
+            self.restoreState(QByteArray.fromBase64(_saved_dock.encode("ascii")))
+        else:
+            # Stale / absent saved state – clear it so it gets rewritten on exit.
+            s.set_many("window", {"dock_state": "", "dock_layout_version": _DOCK_LAYOUT_VERSION})
+            # Apply default dock sizes after the window is shown (resizeDocks is
+            # a no-op before the layout engine has run its first pass).
+            QTimer.singleShot(0, self._apply_default_dock_sizes)
 
         # Keep the Light-theme menu label in sync when we restored a light theme.
         if not self._is_dark:
@@ -6201,6 +6246,15 @@ class MainWindow(QMainWindow):
             "row_gap":           str(self._row_gap_val),
             "timescale_per_px_default": str(self._timescale_per_px_default_val),
             "hover_highlight":   str(self._hover_highlight_val).lower(),
+        })
+
+        # Dock layout – serialise the full QMainWindow state (all dock sizes,
+        # positions, tabbing) as a base64 string so it survives restarts.
+        _DOCK_LAYOUT_VERSION = "6"
+        _dock_bytes: QByteArray = self.saveState()
+        s.set_many("window", {
+            "dock_state":          bytes(_dock_bytes.toBase64()).decode("ascii"),
+            "dock_layout_version": _DOCK_LAYOUT_VERSION,
         })
 
         # Zoom – save current ns/px so we can re-apply it the next time the
@@ -6551,6 +6605,7 @@ class MainWindow(QMainWindow):
         # is governed by resizeDocks() below; a fixed cap here would leave a blank gap
         # to the right of the legend whenever the Marks dock makes the column wider.
         dock = QDockWidget("Legend", self)
+        dock.setObjectName("dock_legend")
         dock.setWidget(self._legend)
         dock.setFeatures(QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetMovable)
         self.addDockWidget(Qt.RightDockWidgetArea, dock)
@@ -6559,6 +6614,7 @@ class MainWindow(QMainWindow):
         # --- Statistics dock (bottom panel) ---
         self._stats_panel = _StatsPanel()
         stats_dock = QDockWidget("Statistics", self)
+        stats_dock.setObjectName("dock_statistics")
         stats_dock.setWidget(self._stats_panel)
         stats_dock.setFeatures(QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetMovable)
         self.addDockWidget(Qt.RightDockWidgetArea, stats_dock)
@@ -6638,10 +6694,11 @@ class MainWindow(QMainWindow):
         marks_v.addLayout(marks_io_row)
 
         marks_dock = QDockWidget("Marks", self)
+        marks_dock.setObjectName("dock_marks")
         marks_dock.setWidget(marks_host)
         marks_dock.setFeatures(QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetMovable)
         marks_dock.setMinimumWidth(190)
-        marks_dock.setMinimumHeight(120)
+        marks_dock.setMinimumHeight(260)  # enough to show 2 core rows + headings without scrolling
         self.addDockWidget(Qt.RightDockWidgetArea, marks_dock)
         self._marks_dock = marks_dock
 
@@ -6672,6 +6729,7 @@ class MainWindow(QMainWindow):
         self._find_status.setStyleSheet("color:#999;")
         find_v.addWidget(self._find_status)
         find_dock = QDockWidget("Find & Jump", self)
+        find_dock.setObjectName("dock_find")
         find_dock.setWidget(find_host)
         find_dock.setFeatures(QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetMovable)
         find_dock.setMinimumWidth(190)
@@ -6680,22 +6738,14 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.RightDockWidgetArea, find_dock)
         self.tabifyDockWidget(self._marks_dock, find_dock)
         self._find_dock = find_dock
-        self.tabifyDockWidget(find_dock, self._stats_dock)
+        # Statistics gets its own split below Marks/Find so its height can be
+        # set independently (tabbed docks share one fixed height).
+        self.splitDockWidget(self._marks_dock, self._stats_dock, Qt.Vertical)
 
-        # Put Marks below Legend and keep its startup height compact.
+        # Put Marks+Find group below Legend, Stats below that.
         self.splitDockWidget(self._legend_dock, self._marks_dock, Qt.Vertical)
-        self.resizeDocks(
-            [self._legend_dock, self._marks_dock],
-            [420, 150],
-            Qt.Vertical,
-        )
-
-        # Keep right-side width compact on startup.
-        self.resizeDocks(
-            [self._legend_dock, self._marks_dock],
-            [220, 220],
-            Qt.Horizontal,
-        )
+        # Default dock sizes are applied in _restore_settings via QTimer.singleShot
+        # AFTER the window is shown, where resizeDocks() is actually effective.
 
         # Keep runtime state in sync if the user closes a dock via its X button
         self._legend_dock.visibilityChanged.connect(
@@ -6812,6 +6862,7 @@ class MainWindow(QMainWindow):
 
     def _build_toolbar(self) -> None:
         tb = self.addToolBar("Main")
+        tb.setObjectName("toolbar_main")
         self._tb = tb
         tb.setMovable(False)
         tb.setToolButtonStyle(Qt.ToolButtonIconOnly)
@@ -7715,6 +7766,14 @@ class MainWindow(QMainWindow):
             "row_gap":                  dlg.row_gap,
             "timescale_per_px_default": dlg.timescale_per_px_default,
         }))
+        # The dialog carries its own scoped stylesheet (set at construction
+        # time).  Re-apply it on every live_preview so that switching the
+        # theme combo immediately repaints the dialog itself too.
+        dlg.live_preview.connect(
+            lambda: dlg.setStyleSheet(
+                _SettingsDialog._dialog_ss(dlg.is_dark, f"{dlg.ui_font_size}pt")
+            )
+        )
         if dlg.exec_() == QDialog.Accepted:
             self._persist_settings_after_dlg(_snap)
         else:
