@@ -1041,13 +1041,20 @@ def _make_rotated_label(scene, text: str, font: "QFont", color: "QColor",
     QPainter text-antialiasing path is used on all platforms (SimpleTextItem
     renders as a filled silhouette on Windows, which looks jaggy when rotated).
 
+    On Windows, GDI text rendering does not support antialiasing for rotated
+    text.  Setting QFont.PreferAntialias forces Qt to use its own antialiasing-
+    capable renderer (DirectWrite / FreeType), producing smooth output.
+
     *x_center* is the horizontal centre of the column the label belongs to.
     The item is rotated -90° and horizontally centred using the actual
     bounding-rect height (which includes QTextDocument margins), so the label
     sits visually centred regardless of font size.
     """
+    # Force non-GDI antialiasing on Windows so rotated glyphs are smooth.
+    aa_font = QFont(font)
+    aa_font.setStyleStrategy(QFont.PreferAntialias)
     item = QGraphicsTextItem(text)
-    item.setFont(font)
+    item.setFont(aa_font)
     item.setDefaultTextColor(color)
     item.setRotation(-90)
     # QGraphicsTextItem bounding rect includes a 2 px document margin on each
@@ -3650,6 +3657,7 @@ class TimelineView(QGraphicsView):
         # -- Qt render settings ------------------------------------------
         self.setRenderHint(QPainter.Antialiasing, True)
         self.setRenderHint(QPainter.TextAntialiasing, True)
+        self.setRenderHint(QPainter.SmoothPixmapTransform, True)
         self.setOptimizationFlags(
             QGraphicsView.DontAdjustForAntialiasing
         )
