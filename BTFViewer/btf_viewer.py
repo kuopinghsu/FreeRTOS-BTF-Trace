@@ -1095,26 +1095,42 @@ def _sti_color(note: str) -> QColor:
 # Time-formatting helper
 # ---------------------------------------------------------------------------
 
-def _format_time(ns: int, time_scale: str = "ns", decimals: int = 3) -> str:
-    """Format a timestamp into a human-readable string.
+# Multipliers to convert a value in the trace's native time unit to nanoseconds.
+# Unknown units fall back to 1 (treated as ns).
+_NS_MULTIPLIERS: dict[str, int] = {"ns": 1, "us": 1_000, "ms": 1_000_000}
+
+# Fixed preset zoom levels expressed in nanoseconds/pixel.
+_ZOOM_PRESET_NS_VALUES: tuple = (
+    1.0, 10.0, 100.0,
+    1_000.0, 10_000.0, 100_000.0,
+    1_000_000.0, 1_000_000_000.0,
+)
+
+# Ordered tiers for auto-scaling: (threshold_ns, divisor, unit_label)
+_TIME_TIERS: tuple = (
+    (1_000_000_000, 1_000_000_000, "s"),
+    (1_000_000,     1_000_000,     "ms"),
+    (1_000,         1_000,         "µs"),
+    (0,             1,             "ns"),
+)
+
+def _to_ns(value: float, time_scale: str) -> float:
+    """Convert *value* from the trace's native *time_scale* unit to nanoseconds."""
+    return value * _NS_MULTIPLIERS.get(time_scale, 1)
+
+def _format_time(value: float, time_scale: str = "ns", decimals: int = 3) -> str:
+    """Format a timestamp (in the trace's native *time_scale* unit) into a
+    human-readable string with automatic unit scaling (ns → µs → ms → s).
 
     *decimals* controls the number of decimal places (default 3).
     Pass ``decimals=1`` for a compact 'xx.x' display.
     """
-    if time_scale == "us":
-        ns *= 1_000
-    elif time_scale == "ms":
-        ns *= 1_000_000
+    ns = _to_ns(value, time_scale)
     fmt = f"{{:.{decimals}f}}"
-    if ns >= 1_000_000_000:
-        return f"{fmt.format(ns / 1_000_000_000)} s"
-    if ns >= 1_000_000:
-        return f"{fmt.format(ns / 1_000_000)} ms"
-    if ns >= 1_000:
-        return f"{fmt.format(ns / 1_000)} µs"
-    if decimals > 0:
-        return f"{fmt.format(float(ns))} ns"
-    return f"{ns} ns"
+    for threshold, divisor, label in _TIME_TIERS:
+        if ns >= threshold:
+            return f"{fmt.format(ns / divisor)} {label}"
+    return f"{fmt.format(ns)} ns"  # unreachable; satisfies type checkers
 
 def _format_timescale_per_px(timescale_per_px: float, time_scale: str = "ns") -> str:
     """Format *timescale_per_px* (value per pixel in the trace's native unit)
@@ -1122,19 +1138,11 @@ def _format_timescale_per_px(timescale_per_px: float, time_scale: str = "ns") ->
 
     Automatically selects the most readable unit from ns, µs, ms, s.
     """
-    if time_scale == "us":
-        ns_per_px = timescale_per_px * 1_000
-    elif time_scale == "ms":
-        ns_per_px = timescale_per_px * 1_000_000
-    else:
-        ns_per_px = timescale_per_px
-    if ns_per_px >= 1_000_000_000:
-        return f"{ns_per_px / 1_000_000_000:.1f} s/px"
-    if ns_per_px >= 1_000_000:
-        return f"{ns_per_px / 1_000_000:.1f} ms/px"
-    if ns_per_px >= 1_000:
-        return f"{ns_per_px / 1_000:.1f} µs/px"
-    return f"{ns_per_px:.1f} ns/px"
+    ns = _to_ns(timescale_per_px, time_scale)
+    for threshold, divisor, label in _TIME_TIERS:
+        if ns >= threshold:
+            return f"{ns / divisor:.1f} {label}/px"
+    return f"{ns:.1f} ns/px"  # unreachable; satisfies type checkers
 
 _monospace_font_cache: dict = {}
 
@@ -7477,6 +7485,7 @@ class MainWindow(QMainWindow):
             QStatusBar  {{ background:{c['win_bg']}; color:{c['status_text']}; font-size:{_ui_fs};
                            border-top:1px solid {c['sep']}; }}
             QStatusBar QLabel {{ font-size:{_ui_fs}; color:{c['sub_text']}; }}
+            QStatusBar QLabel#zoomScaleLabel {{ font-size:{_ui_fs}; color:{c['status_text']}; }}
             QStatusBar QCheckBox {{ font-size:{_ui_fs}; color:{c['sub_text']}; padding: 0 4px; }}
             QLabel      {{ font-size:{_ui_fs}; }}
             QCheckBox   {{ font-size:{_ui_fs}; }}
@@ -7950,25 +7959,14 @@ class MainWindow(QMainWindow):
                                       "Zoom view to fit between cursor C1 and C2  (Ctrl+R)")
         self._tb_zoom_range_btn.setEnabled(False)
 
-        # Zoom-preset quick-pick combo
-        self._zoom_presets = [
-            ("Fit",       None),
-            ("1 ns/px",   1.0),
-            ("10 ns/px",  10.0),
-            ("100 ns/px", 100.0),
-            ("1 µs/px",   1_000.0),
-            ("10 µs/px",  10_000.0),
-            ("100 µs/px", 100_000.0),
-            ("1 ms/px",   1_000_000.0),
-        ]
+        # Zoom-preset quick-pick combo (labels/values rebuilt per trace unit)
+        self._zoom_presets: list = []   # populated by _rebuild_zoom_presets()
         self._zoom_preset_combo = QComboBox()
-        self._zoom_preset_combo.setFixedWidth(88)
+        self._zoom_preset_combo.setFixedWidth(100)
         self._zoom_preset_combo.setToolTip("Zoom preset — pick a fixed scale or Fit")
-        for label, _ in self._zoom_presets:
-            self._zoom_preset_combo.addItem(label)
-        self._zoom_preset_combo.setCurrentIndex(0)
         self._zoom_preset_combo.activated.connect(self._on_zoom_preset_selected)
         tb.addWidget(self._zoom_preset_combo)
+        self._rebuild_zoom_presets()   # populate with default ns-based labels
 
         tb.addSeparator()
 
@@ -8034,17 +8032,23 @@ class MainWindow(QMainWindow):
         self._grid_toggle_cb.setToolTip("Show or hide the time grid")
         self._grid_toggle_cb.toggled.connect(self._set_show_grid)
 
-        # Zoom indicator — concise "10 ns/px" format, no label prefix
-        self._zoom_label = QLabel("—")
-        self._zoom_label.setContentsMargins(8, 0, 8, 0)
-        self._zoom_label.setToolTip("Current zoom level (time per pixel) · visible time span")
+        # Zoom scale — e.g. "2.5 µs/px"; brighter text via #zoomScaleLabel CSS rule
+        self._zoom_scale_label = QLabel("—")
+        self._zoom_scale_label.setObjectName("zoomScaleLabel")
+        self._zoom_scale_label.setContentsMargins(8, 0, 2, 0)
+        self._zoom_scale_label.setMinimumWidth(80)   # prevents layout jitter on unit change
+
+        # Visible span — e.g. "·  125.4 µs visible"; dimmer sub_text colour
+        self._zoom_visible_label = QLabel("")
+        self._zoom_visible_label.setContentsMargins(0, 0, 8, 0)
 
         sb.addWidget(self._status_file)
         sb.addPermanentWidget(self._cursor_bar)
         sb.addPermanentWidget(self._status_range)
         sb.addPermanentWidget(self._sti_toggle_cb)
         sb.addPermanentWidget(self._grid_toggle_cb)
-        sb.addPermanentWidget(self._zoom_label)
+        sb.addPermanentWidget(self._zoom_scale_label)
+        sb.addPermanentWidget(self._zoom_visible_label)
 
         # Show interaction hint as a timed splash once the window is fully shown.
         # Delay avoids the overlap with _status_file that occurs when showMessage()
@@ -8128,12 +8132,33 @@ class MainWindow(QMainWindow):
             return self._trace.time_scale
         return "ns"
 
+    def _rebuild_zoom_presets(self) -> None:
+        """Rebuild the zoom-preset combo labels and native values for the current trace unit.
+
+        The active selection is reset to "Fit" (index 0); _on_zoom_changed() will
+        re-sync the combo to the correct slot once the next zoom event fires.
+        """
+        unit = self._current_time_unit()
+        mult = _NS_MULTIPLIERS.get(unit, 1)
+        self._zoom_presets = [("Fit", None)]
+        for ns_val in _ZOOM_PRESET_NS_VALUES:
+            native_val = ns_val / mult
+            self._zoom_presets.append((_format_timescale_per_px(native_val, unit), native_val))
+        self._zoom_preset_combo.blockSignals(True)
+        self._zoom_preset_combo.clear()
+        for label, _ in self._zoom_presets:
+            self._zoom_preset_combo.addItem(label)
+        self._zoom_preset_combo.setCurrentIndex(0)  # re-synced by next _on_zoom_changed()
+        self._zoom_preset_combo.blockSignals(False)
+
     def _refresh_zoom_ui_unit(self) -> None:
+        self._rebuild_zoom_presets()
         unit = self._current_time_unit()
         _zoom_str = _format_timescale_per_px(self._timescale_per_px_default_val, unit).replace("/px", "/pixel")
         self._act_zoom_1to1.setToolTip(f"Zoom to {_zoom_str}")
         if self._trace is None:
-            self._zoom_label.setText("—")
+            self._zoom_scale_label.setText("—")
+            self._zoom_visible_label.setText("")
             return
         self._on_zoom_changed(self._view._scene.timescale_per_px)
 
@@ -8992,14 +9017,18 @@ class MainWindow(QMainWindow):
 
     def _on_zoom_changed(self, timescale_per_px: float) -> None:
         unit = self._current_time_unit()
-        z = _format_timescale_per_px(timescale_per_px, unit)
+        scale_str = _format_timescale_per_px(timescale_per_px, unit)
+        self._zoom_scale_label.setText(scale_str)
         if self._trace is not None:
             vp = self._view.viewport().rect()
             horiz = self._view._scene._horizontal
             vp_px = vp.width() if horiz else vp.height()
-            visible_val = int(vp_px * timescale_per_px)
-            z += f"  ·  {_format_time(visible_val, unit, decimals=1)} visible"
-        self._zoom_label.setText(z)
+            vis_str = _format_time(vp_px * timescale_per_px, unit, decimals=1)
+            self._zoom_visible_label.setText(f"·  {vis_str} visible")
+            self._zoom_scale_label.setToolTip(f"Zoom: {scale_str}\nVisible: {vis_str}")
+        else:
+            self._zoom_visible_label.setText("")
+            self._zoom_scale_label.setToolTip("Current zoom level (time per pixel)")
         # Sync zoom-preset combo
         if self._view._fit_mode:
             self._zoom_preset_combo.setCurrentIndex(0)  # "Fit"
