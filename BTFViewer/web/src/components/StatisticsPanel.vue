@@ -23,7 +23,9 @@
     <!-- Range stats (from cursors) -->
     <template v-if="rangeStats">
       <div class="stats-sep" />
-      <div class="stats-section-title">Cursor Range</div>
+      <div class="stats-section-title">
+        Cursor Range
+      </div>
       <div class="summary-row">
         <span class="summary-key">Span</span>
         <span class="summary-val">{{ rangeStats.span }}</span>
@@ -32,42 +34,79 @@
         <span class="summary-key">Slices</span>
         <span class="summary-val">{{ rangeStats.switches }}</span>
       </div>
-      <div class="summary-row" v-if="rangeStats.topTask">
+      <div
+        v-if="rangeStats.topTask"
+        class="summary-row"
+      >
         <span class="summary-key">Top task</span>
         <span class="summary-val">{{ rangeStats.topTask }} ({{ rangeStats.topPct }}%)</span>
       </div>
-      <div class="summary-row" v-if="rangeStats.dMin">
+      <div
+        v-if="rangeStats.dMin"
+        class="summary-row"
+      >
         <span class="summary-key">Seg min</span>
         <span class="summary-val">{{ rangeStats.dMin }}</span>
       </div>
-      <div class="summary-row" v-if="rangeStats.dMax">
+      <div
+        v-if="rangeStats.dMax"
+        class="summary-row"
+      >
         <span class="summary-key">Seg max</span>
         <span class="summary-val">{{ rangeStats.dMax }}</span>
       </div>
-      <div class="summary-row" v-if="rangeStats.dAvg">
+      <div
+        v-if="rangeStats.dAvg"
+        class="summary-row"
+      >
         <span class="summary-key">Seg avg</span>
         <span class="summary-val">{{ rangeStats.dAvg }}</span>
       </div>
     </template>
     <template v-else>
       <div class="stats-sep" />
-      <div class="range-hint">Place 2+ cursors to measure range</div>
+      <div class="range-hint">
+        Place 2+ cursors to measure range
+      </div>
     </template>
 
     <!-- Core utilization -->
     <template v-if="trace.coreNames && trace.coreNames.length > 0">
       <div class="stats-sep" />
-      <div class="stats-section-title collapsible" @click="coresCollapsed = !coresCollapsed">
-        <svg class="chevron" :class="{ collapsed: coresCollapsed }" viewBox="0 0 10 10" width="10" height="10">
-          <polyline points="2,3 5,7 8,3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      <div
+        class="stats-section-title collapsible"
+        @click="coresCollapsed = !coresCollapsed"
+      >
+        <svg
+          class="chevron"
+          :class="{ collapsed: coresCollapsed }"
+          viewBox="0 0 10 10"
+          width="10"
+          height="10"
+        >
+          <polyline
+            points="2,3 5,7 8,3"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
         </svg>
         Core Utilisation (excl. IDLE/TICK)
       </div>
       <template v-if="!coresCollapsed">
-        <div v-for="cs in coreStats" :key="cs.core" class="core-stat-row">
+        <div
+          v-for="cs in coreStats"
+          :key="cs.core"
+          class="core-stat-row"
+        >
           <span class="core-name">{{ cs.core }}</span>
           <div class="prog-bar">
-            <div class="prog-fill" :style="{ width: clampPct(cs.pct) + '%' }" />
+            <div
+              class="prog-fill"
+              :style="{ width: clampPct(cs.pct) + '%' }"
+            />
           </div>
           <span class="core-pct">{{ cs.pct.toFixed(1) }}%</span>
         </div>
@@ -76,18 +115,46 @@
 
     <!-- Top tasks -->
     <div class="stats-sep" />
-    <div class="stats-section-title collapsible" @click="tasksCollapsed = !tasksCollapsed">
-      <svg class="chevron" :class="{ collapsed: tasksCollapsed }" viewBox="0 0 10 10" width="10" height="10">
-        <polyline points="2,3 5,7 8,3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <div
+      class="stats-section-title collapsible"
+      @click="tasksCollapsed = !tasksCollapsed"
+    >
+      <svg
+        class="chevron"
+        :class="{ collapsed: tasksCollapsed }"
+        viewBox="0 0 10 10"
+        width="10"
+        height="10"
+      >
+        <polyline
+          points="2,3 5,7 8,3"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.5"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        />
       </svg>
       Top Tasks by CPU (excl. IDLE/TICK)
     </div>
     <template v-if="!tasksCollapsed">
-      <div v-if="topTasks.length === 0" class="range-hint">No user tasks found</div>
-      <div v-for="t in topTasks" :key="t.mk" class="task-stat-row">
+      <div
+        v-if="topTasks.length === 0"
+        class="range-hint"
+      >
+        No user tasks found
+      </div>
+      <div
+        v-for="t in topTasks"
+        :key="t.mk"
+        class="task-stat-row"
+      >
         <span class="task-stat-name">{{ t.name }}</span>
         <div class="prog-bar">
-          <div class="prog-fill" :style="{ width: clampPct(t.pct) + '%' }" />
+          <div
+            class="prog-fill"
+            :style="{ width: clampPct(t.pct) + '%' }"
+          />
         </div>
         <span class="task-stat-pct">{{ t.pct.toFixed(1) }}%</span>
       </div>
@@ -109,8 +176,6 @@ const coresCollapsed = ref(true)
 const tasksCollapsed = ref(true)
 
 function clampPct(v) { return Math.max(0, Math.min(100, v)).toFixed(1) }
-
-const totalNs = computed(() => props.trace.timeMax - props.trace.timeMin)
 
 const spanStr = computed(() => formatTime(props.trace.timeMax - props.trace.timeMin, props.trace.timeScale))
 

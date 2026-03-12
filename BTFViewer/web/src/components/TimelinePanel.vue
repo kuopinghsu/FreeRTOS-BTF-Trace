@@ -1,28 +1,37 @@
 <template>
-  <div class="timeline-panel" ref="panelEl">
+  <div
+    ref="panelEl"
+    class="timeline-panel"
+  >
     <!-- Left: sticky label column (hidden in vertical mode) -->
     <LabelColumn
       v-if="orientation === 'h'"
       :trace="trace"
-      :viewMode="options.viewMode"
+      :view-mode="options.viewMode"
       :expanded="expanded"
-      :scrollY="viewport.scrollY"
-      :highlightKey="options.highlightKey"
-      @expandToggle="onExpandToggle"
-      @highlightChange="(k) => emit('highlightChange', k)"
-      @highlightClick="(k) => emit('highlightClick', k)"
+      :scroll-y="viewport.scrollY"
+      :highlight-key="options.highlightKey"
+      @expand-toggle="onExpandToggle"
+      @highlight-change="(k) => emit('highlightChange', k)"
+      @highlight-click="(k) => emit('highlightClick', k)"
     />
 
     <!-- Right: canvas -->
-    <div class="canvas-wrap" ref="canvasWrapEl">
+    <div
+      ref="canvasWrapEl"
+      class="canvas-wrap"
+    >
       <canvas ref="canvasEl" />
       <!-- Overlay canvas: hover line only — redraws without triggering a full repaint -->
-      <canvas ref="overlayEl" class="overlay-canvas" />
+      <canvas
+        ref="overlayEl"
+        class="overlay-canvas"
+      />
       <StiTooltip
-        :stiEvent="stiHover"
+        :sti-event="stiHover"
         :x="stiHoverPos.x"
         :y="stiHoverPos.y"
-        :timeScale="trace?.timeScale || 'ns'"
+        :time-scale="trace?.timeScale || 'ns'"
       />
       <!-- Right-click context menu -->
       <div
@@ -31,15 +40,33 @@
         :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }"
         @mouseleave="contextMenu.visible = false"
       >
-        <div class="ctx-item" @click="onAddBookmark">
-          <svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor" style="flex-shrink:0">
-            <path d="M2 2a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v13.5a.5.5 0 0 1-.74.439L8 13.069l-5.26 2.87A.5.5 0 0 1 2 15.5V2zm2-1a1 1 0 0 0-1 1v12.566l4.26-2.325a.5.5 0 0 1 .48 0L12 14.566V2a1 1 0 0 0-1-1H4z"/>
+        <div
+          class="ctx-item"
+          @click="onAddBookmark"
+        >
+          <svg
+            viewBox="0 0 16 16"
+            width="12"
+            height="12"
+            fill="currentColor"
+            style="flex-shrink:0"
+          >
+            <path d="M2 2a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v13.5a.5.5 0 0 1-.74.439L8 13.069l-5.26 2.87A.5.5 0 0 1 2 15.5V2zm2-1a1 1 0 0 0-1 1v12.566l4.26-2.325a.5.5 0 0 1 .48 0L12 14.566V2a1 1 0 0 0-1-1H4z" />
           </svg>
           Add Bookmark
         </div>
-        <div class="ctx-item" @click="onCopyCursorTime">
-          <svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor" style="flex-shrink:0">
-            <path d="M4 1.5H3a2 2 0 0 0-2 2V14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V3.5a2 2 0 0 0-2-2h-1v1h1a1 1 0 0 1 1 1V14a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1h1v-1zM5 0h6a1 1 0 0 1 1 1v3H4V1a1 1 0 0 1 1-1z"/>
+        <div
+          class="ctx-item"
+          @click="onCopyCursorTime"
+        >
+          <svg
+            viewBox="0 0 16 16"
+            width="12"
+            height="12"
+            fill="currentColor"
+            style="flex-shrink:0"
+          >
+            <path d="M4 1.5H3a2 2 0 0 0-2 2V14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V3.5a2 2 0 0 0-2-2h-1v1h1a1 1 0 0 1 1 1V14a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1h1v-1zM5 0h6a1 1 0 0 1 1 1v3H4V1a1 1 0 0 1 1-1z" />
           </svg>
           Copy Time
         </div>
@@ -52,7 +79,7 @@
 import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import LabelColumn from './LabelColumn.vue'
 import StiTooltip  from './StiTooltip.vue'
-import { render as renderTimeline, renderVertical, buildRowLayout, drawHoverLine, drawHoverLineVertical, drawCursors, drawCursorsVertical, drawMarksHorizontal, drawMarksVertical, LABEL_W, RULER_H, ROW_H, STI_ROW_H, HEADER_H, formatTime } from '../renderer/TimelineRenderer.js'
+import { render as renderTimeline, renderVertical, buildRowLayout, drawHoverLine, drawHoverLineVertical, drawCursors, drawCursorsVertical, drawMarksHorizontal, drawMarksVertical, RULER_H, ROW_H, STI_ROW_H, HEADER_H, formatTime } from '../renderer/TimelineRenderer.js'
 import { InteractionHandler } from '../renderer/InteractionHandler.js'
 import { taskMergeKey } from '../utils/colors.js'
 
@@ -238,7 +265,7 @@ function setupHandler() {
       hoverTime.value = t
       paintHoverOverlay()  // cheap: only redraws the hover line on the overlay canvas
     },
-    onRowHover(row) {
+    onRowHover(_row) {
       // Handled via LabelColumn hover for now
     },
     onFitToWindow() {
@@ -275,7 +302,7 @@ function onCopyCursorTime() {
 }
 
 // ---- Close context menu on outside click ----------------------------------
-function onGlobalClick(e) {
+function onGlobalClick() {
   if (contextMenu.visible) {
     contextMenu.visible = false
   }
@@ -386,7 +413,7 @@ watch(stiHover, (ev) => {
   if (!ev || !canvasEl.value || !props.trace) return
   if (orientation.value === 'v') {
     // In vertical mode, X is column position, Y is time
-    const { RULER_W: rw, HEADER_H: hh, COL_W: cw } = { RULER_W: 120, HEADER_H: 160, COL_W: 26 }
+    const hh = 160
     const pxPerNs = (viewport.canvasH - hh) / (viewport.timeEnd - viewport.timeStart)
     stiHoverPos.y = hh + (ev.time - viewport.timeStart) * pxPerNs
     stiHoverPos.x = canvasEl.value.clientWidth / 2

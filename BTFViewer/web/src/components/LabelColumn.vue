@@ -1,49 +1,79 @@
 <template>
-  <div class="label-column" ref="colEl" :style="{ width: LABEL_W + 'px' }">
+  <div
+    ref="colEl"
+    class="label-column"
+    :style="{ width: LABEL_W + 'px' }"
+  >
     <!-- Ruler placeholder row -->
-    <div class="ruler-placeholder" :style="{ height: RULER_H + 'px' }" />
+    <div
+      class="ruler-placeholder"
+      :style="{ height: RULER_H + 'px' }"
+    />
 
     <!-- Task / Core label rows -->
-    <div class="labels-body" :style="{ transform: `translateY(${-scrollY}px)` }">
-      <template v-for="row in rows" :key="row.key">
+    <div
+      class="labels-body"
+      :style="{ transform: `translateY(${-scrollY}px)` }"
+    >
+      <template
+        v-for="row in rows"
+        :key="row.key"
+      >
         <!-- Core header row -->
-        <div v-if="row.type === 'core'"
-             class="label-row label-core"
-             :style="{ height: ROW_H + 'px', marginBottom: ROW_GAP + 'px' }"
-             @click="toggleExpand(row.key)">
-          <span class="core-dot" :style="{ background: row.color }" />
+        <div
+          v-if="row.type === 'core'"
+          class="label-row label-core"
+          :style="{ height: ROW_H + 'px', marginBottom: ROW_GAP + 'px' }"
+          @click="toggleExpand(row.key)"
+        >
+          <span
+            class="core-dot"
+            :style="{ background: row.color }"
+          />
           <span class="expand-arrow">{{ expanded.has(row.key) ? '▼' : '▶' }}</span>
           <span class="label-text">{{ row.label }}</span>
         </div>
 
         <!-- Core sub-task row -->
-        <div v-else-if="row.type === 'core-task'"
-             class="label-row label-core-task"
-             :style="{ height: ROW_H + 'px', marginBottom: ROW_GAP + 'px' }"
-             :class="{ highlighted: highlightKey === row.taskKey }"
-             @mouseenter="emit('highlightChange', row.taskKey)"
-             @mouseleave="emit('highlightChange', null)"
-             @click="emit('highlightClick', row.taskKey)">
-          <span class="task-swatch" :style="{ background: row.color }" />
+        <div
+          v-else-if="row.type === 'core-task'"
+          class="label-row label-core-task"
+          :style="{ height: ROW_H + 'px', marginBottom: ROW_GAP + 'px' }"
+          :class="{ highlighted: highlightKey === row.taskKey }"
+          @mouseenter="emit('highlightChange', row.taskKey)"
+          @mouseleave="emit('highlightChange', null)"
+          @click="emit('highlightClick', row.taskKey)"
+        >
+          <span
+            class="task-swatch"
+            :style="{ background: row.color }"
+          />
           <span class="label-text sub">{{ row.label }}</span>
         </div>
 
         <!-- Task row -->
-        <div v-else-if="row.type === 'task'"
-             class="label-row label-task"
-             :style="{ height: ROW_H + 'px', marginBottom: ROW_GAP + 'px' }"
-             :class="{ highlighted: highlightKey === row.key }"
-             @mouseenter="emit('highlightChange', row.key)"
-             @mouseleave="emit('highlightChange', null)"
-             @click="emit('highlightClick', row.key)">
-          <span class="task-swatch" :style="{ background: row.color }" />
+        <div
+          v-else-if="row.type === 'task'"
+          class="label-row label-task"
+          :style="{ height: ROW_H + 'px', marginBottom: ROW_GAP + 'px' }"
+          :class="{ highlighted: highlightKey === row.key }"
+          @mouseenter="emit('highlightChange', row.key)"
+          @mouseleave="emit('highlightChange', null)"
+          @click="emit('highlightClick', row.key)"
+        >
+          <span
+            class="task-swatch"
+            :style="{ background: row.color }"
+          />
           <span class="label-text">{{ row.label }}</span>
         </div>
 
         <!-- STI channel row -->
-        <div v-else-if="row.type === 'sti'"
-             class="label-row label-sti"
-             :style="{ height: STI_ROW_H + 'px', marginBottom: ROW_GAP + 'px' }">
+        <div
+          v-else-if="row.type === 'sti'"
+          class="label-row label-sti"
+          :style="{ height: STI_ROW_H + 'px', marginBottom: ROW_GAP + 'px' }"
+        >
           <span class="sti-dot">◆</span>
           <span class="label-text sti">{{ row.label }}</span>
         </div>

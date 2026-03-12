@@ -4,9 +4,18 @@
     <div class="marks-section">
       <div class="marks-section-header">
         <span>Bookmarks ({{ bookmarks.length }})</span>
-        <button class="mark-add-btn" title="Add bookmark at viewport centre" @click="emit('addBookmark')">+</button>
+        <button
+          class="mark-add-btn"
+          title="Add bookmark at viewport centre"
+          @click="emit('addBookmark')"
+        >
+          +
+        </button>
       </div>
-      <div class="mark-list" v-if="bookmarks.length > 0">
+      <div
+        v-if="bookmarks.length > 0"
+        class="mark-list"
+      >
         <div
           v-for="bm in bookmarks"
           :key="bm.id"
@@ -14,30 +23,61 @@
           :class="{ selected: selectedId === bm.id }"
           @click="emit('jumpTo', bm.ns); selectedId = bm.id"
         >
-          <span class="mark-time" :style="{ color: bookmarkColor }">{{ fmt(bm.ns) }}</span>
+          <span
+            class="mark-time"
+            :style="{ color: bookmarkColor }"
+          >{{ fmt(bm.ns) }}</span>
           <input
             class="mark-label"
             :value="bm.label"
             @change="emit('updateLabel', { id: bm.id, label: $event.target.value })"
             @click.stop
-          />
-          <button class="mark-btn mark-del" title="Delete bookmark" @click.stop="emit('deleteBookmark', bm.id)">×</button>
+          >
+          <button
+            class="mark-btn mark-del"
+            title="Delete bookmark"
+            @click.stop="emit('deleteBookmark', bm.id)"
+          >
+            ×
+          </button>
         </div>
       </div>
-      <div v-else class="mark-empty">Right-click timeline to add</div>
+      <div
+        v-else
+        class="mark-empty"
+      >
+        Right-click timeline to add
+      </div>
     </div>
 
     <!-- Export / Import row -->
     <div class="marks-actions">
-      <button class="action-btn" @click="exportCsv" :disabled="bookmarks.length === 0">Export CSV</button>
-      <button class="action-btn" @click="triggerImport">Import CSV</button>
-      <input ref="importInputEl" type="file" accept=".csv" style="display:none" @change="onImportFile" />
+      <button
+        class="action-btn"
+        :disabled="bookmarks.length === 0"
+        @click="exportCsv"
+      >
+        Export CSV
+      </button>
+      <button
+        class="action-btn"
+        @click="triggerImport"
+      >
+        Import CSV
+      </button>
+      <input
+        ref="importInputEl"
+        type="file"
+        accept=".csv"
+        style="display:none"
+        @change="onImportFile"
+      >
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref } from 'vue'
 import { formatTime } from '../renderer/TimelineRenderer.js'
 
 const props = defineProps({

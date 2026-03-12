@@ -73,29 +73,44 @@ import threading
 if sys.platform == "darwin":
     def _install_macos_stderr_filter() -> None:
         _NOISE = b"TSM AdjustCapsLockLED"
-        rfd, wfd = os.pipe()
+        try:
+            rfd, wfd = os.pipe()
+        except OSError:
+            return  # Can't create pipe; skip filter
         original_fd = os.dup(2)
-        os.dup2(wfd, 2)
+        try:
+            os.dup2(wfd, 2)
+        except OSError:
+            os.close(rfd)
+            os.close(wfd)
+            os.close(original_fd)
+            return  # Restore fd 2 unchanged
         os.close(wfd)
 
         def _relay() -> None:
             leftover = b""
-            with os.fdopen(rfd, "rb", buffering=0) as pipe:
-                while True:
-                    chunk = pipe.read(256)
-                    if not chunk:
-                        break
-                    leftover += chunk
-                    while b"\n" in leftover:
-                        line, leftover = leftover.split(b"\n", 1)
-                        if _NOISE not in line:
-                            try:
-                                os.write(original_fd, line + b"\n")
-                            except OSError:
-                                pass
-            if leftover and _NOISE not in leftover:
+            try:
+                with os.fdopen(rfd, "rb", buffering=0) as pipe:
+                    while True:
+                        chunk = pipe.read(256)
+                        if not chunk:
+                            break
+                        leftover += chunk
+                        while b"\n" in leftover:
+                            line, leftover = leftover.split(b"\n", 1)
+                            if _NOISE not in line:
+                                try:
+                                    os.write(original_fd, line + b"\n")
+                                except OSError:
+                                    pass
+                if leftover and _NOISE not in leftover:
+                    try:
+                        os.write(original_fd, leftover)
+                    except OSError:
+                        pass
+            finally:
                 try:
-                    os.write(original_fd, leftover)
+                    os.close(original_fd)
                 except OSError:
                     pass
 
@@ -128,7 +143,7 @@ from PyQt5.QtGui import (
     QPalette, QPen, QPixmap, QPolygonF, QTransform, QWheelEvent,
 )
 from PyQt5.QtWidgets import (
-    QAction, QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
+    QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QDockWidget, QFileDialog, QFormLayout, QFrame, QGridLayout, QInputDialog,
     QGraphicsEllipseItem, QGraphicsItem, QGraphicsLineItem, QGraphicsPixmapItem,
     QGraphicsPolygonItem, QGraphicsRectItem, QGraphicsScene, QGraphicsTextItem, QGraphicsView,
@@ -136,9 +151,9 @@ from PyQt5.QtWidgets import (
     QProgressDialog,
     QListWidget, QListWidgetItem,
     QPushButton, QScrollArea, QDoubleSpinBox, QSpinBox, QStackedWidget,
-    QStatusBar, QStyleFactory, QStyleOptionGraphicsItem, QAbstractItemView,
+    QStyleOptionGraphicsItem, QAbstractItemView,
     QTabWidget, QTableWidget, QTableWidgetItem,
-    QToolBar, QToolButton, QVBoxLayout, QWidget,
+    QVBoxLayout, QWidget,
 )
 
 # ===========================================================================
@@ -1080,17 +1095,46 @@ def _sti_color(note: str) -> QColor:
 # Time-formatting helper
 # ---------------------------------------------------------------------------
 
-def _format_time(ns: int, time_scale: str = "ns") -> str:
-    """Format a timestamp into a human-readable string."""
+def _format_time(ns: int, time_scale: str = "ns", decimals: int = 3) -> str:
+    """Format a timestamp into a human-readable string.
+
+    *decimals* controls the number of decimal places (default 3).
+    Pass ``decimals=1`` for a compact 'xx.x' display.
+    """
     if time_scale == "us":
         ns *= 1_000
     elif time_scale == "ms":
         ns *= 1_000_000
+    fmt = f"{{:.{decimals}f}}"
+    if ns >= 1_000_000_000:
+        return f"{fmt.format(ns / 1_000_000_000)} s"
     if ns >= 1_000_000:
-        return f"{ns / 1_000_000:.3f} ms"
+        return f"{fmt.format(ns / 1_000_000)} ms"
     if ns >= 1_000:
-        return f"{ns / 1_000:.3f} µs"
+        return f"{fmt.format(ns / 1_000)} µs"
+    if decimals > 0:
+        return f"{fmt.format(float(ns))} ns"
     return f"{ns} ns"
+
+def _format_timescale_per_px(timescale_per_px: float, time_scale: str = "ns") -> str:
+    """Format *timescale_per_px* (value per pixel in the trace's native unit)
+    to an auto-scaled human-readable string in 'xx.x unit/px' format.
+
+    Automatically selects the most readable unit from ns, µs, ms, s.
+    """
+    if time_scale == "us":
+        ns_per_px = timescale_per_px * 1_000
+    elif time_scale == "ms":
+        ns_per_px = timescale_per_px * 1_000_000
+    else:
+        ns_per_px = timescale_per_px
+    if ns_per_px >= 1_000_000_000:
+        return f"{ns_per_px / 1_000_000_000:.1f} s/px"
+    if ns_per_px >= 1_000_000:
+        return f"{ns_per_px / 1_000_000:.1f} ms/px"
+    if ns_per_px >= 1_000:
+        return f"{ns_per_px / 1_000:.1f} µs/px"
+    return f"{ns_per_px:.1f} ns/px"
 
 _monospace_font_cache: dict = {}
 
@@ -2369,7 +2413,6 @@ class TimelineScene(QGraphicsScene):
         _bg_odd      = QBrush(QColor("#2D2D2D"))
         _sep_pen     = QPen(QColor("#333333"), 0.5)
         _lbl_color   = QColor("#D4D4D4")
-        _seg_white   = QBrush(QColor("#FFFFFF"))
         _pen_hl      = QPen(QColor("#FFFFFF"), 1.5)
         _stripe_rows: list = []   # accumulated by task + STI loops → one _RowStripesItem
 
@@ -3055,12 +3098,10 @@ class TimelineScene(QGraphicsScene):
         trace   = self._trace
         font    = _monospace_font(self._font_size)
         font_sm = _monospace_font(max(6, self._font_size - 1))
-        fm      = QFontMetrics(font)
         fm_sm   = QFontMetrics(font_sm)
 
         # Use pre-built core data cached at parse time (O(1), no segment iteration)
         core_names           = trace.core_names
-        core_segs            = trace.core_segs
         core_tasks           = trace.core_task_order
         sti_cols             = trace.sti_channels if self._show_sti else []
         if self._task_filter_q:
@@ -3162,7 +3203,6 @@ class TimelineScene(QGraphicsScene):
         for core in core_names:
             expanded = self._core_expanded.get(core, True)
             tasks    = core_tasks[core]
-            dot_c    = QColor(_core_color(core))
 
             x_left = RULER_WIDTH + col_idx * col_w
             col_idx += 1   # advance immediately, independent of viewport cull
@@ -3631,9 +3671,6 @@ class _BatchRowItem(QGraphicsItem):
     def paint(self, painter: QPainter, option, widget=None) -> None:
         lod = QStyleOptionGraphicsItem.levelOfDetailFromTransform(
                   painter.worldTransform())
-        _wt0 = painter.worldTransform()
-        _m11_0 = _wt0.m11()
-        _scene_left = (-_wt0.dx() / _m11_0) if _m11_0 != 0.0 else -_wt0.dx()
         painter.save()
 
         if lod < _PAINT_LOD_MICRO:
@@ -5039,7 +5076,7 @@ class TimelineView(QGraphicsView):
             menu.addSeparator()
 
         # Place cursor
-        act = menu.addAction(
+        menu.addAction(
             _svg_icon(_IC_CURSOR, _icon_color),
             f"Place cursor here  ({_format_time(ns, self._scene._trace.time_scale) if self._scene._trace else ''})",
             lambda: (self.pre_change.emit(), self._scene.add_cursor(ns),
@@ -5609,7 +5646,6 @@ class _CursorBarWidget(QWidget):
 
     def _make_pill(self, orig_idx: int, t: int, color: str) -> None:
         """Create one badge+× pill and append to layout / _pills."""
-        ts = None   # resolved by caller, passed via closure
         badge = _CursorButton(f"C{orig_idx + 1}", color, is_dark=self._is_dark)
         badge.setToolTip(f"C{orig_idx + 1}: click to jump to this cursor")
         del_btn = _CursorDeleteButton(color, is_dark=self._is_dark)
@@ -6806,10 +6842,11 @@ class _SettingsDialog(QDialog):
         self._timescale_per_px_spin.setRange(0.5, 200.0)
         self._timescale_per_px_spin.setSingleStep(0.5)
         self._timescale_per_px_spin.setDecimals(1)
-        self._timescale_per_px_spin.setSuffix(f" {zoom_unit}/px")
+        _disp_zoom_unit = "µs" if zoom_unit == "us" else zoom_unit
+        self._timescale_per_px_spin.setSuffix(f" {_disp_zoom_unit}/px")
         self._timescale_per_px_spin.setValue(timescale_per_px_default)
         self._timescale_per_px_spin.setToolTip(
-            f"Maximum zoom-in level (0.5\u2013200 {zoom_unit}/px).\n"
+            f"Maximum zoom-in level (0.5\u2013200 {_disp_zoom_unit}/px).\n"
             "Also sets the target level of the 1:1 zoom button.")
         f3.addRow("1:1 zoom level:", _inp(self._timescale_per_px_spin))
 
@@ -7136,8 +7173,6 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         """Persist all runtime state to btf_viewer.rc on exit."""
-        s = self._settings
-
         # ---- 1. Stop all timers immediately -----------------------------------
         # Prevents any pending rebuild / zoom / resize callback from touching a
         # partially-destroyed widget tree after this point.
@@ -7292,52 +7327,6 @@ class MainWindow(QMainWindow):
             if path.endswith(".btf"):
                 self._open_file(path)
                 break
-
-    # ------------------------------------------------------------------
-    # Focus cycling — intercept Tab globally so it works on all platforms
-    # ------------------------------------------------------------------
-
-    def eventFilter(self, obj, event) -> bool:
-        if event.type() == QEvent.KeyPress:
-            key = event.key()
-            mods = event.modifiers()
-            if key == Qt.Key_Tab and not (mods & Qt.ShiftModifier):
-                self._cycle_focus(1)
-                return True
-            if key == Qt.Key_Backtab or (key == Qt.Key_Tab and (mods & Qt.ShiftModifier)):
-                self._cycle_focus(-1)
-                return True
-        return super().eventFilter(obj, event)
-
-    def _cycle_focus(self, direction: int = 1) -> None:
-        """Move keyboard focus to the next (or previous) main panel."""
-        all_panels = [
-            self._view,
-            self._legend._search,
-            self._find_input,
-            self._cursor_table,
-            self._bookmark_list,
-            self._annotation_list,
-        ]
-        # Skip panels that are hidden (e.g. dock not open).
-        panels = [w for w in all_panels if w.isVisible() and w.isEnabled()]
-        if not panels:
-            return
-        focused = QApplication.focusWidget()
-        # QAbstractScrollArea subclasses (QGraphicsView, QListWidget,
-        # QTableWidget) proxy keyboard focus to their viewport child, so
-        # focusWidget() returns the viewport rather than the widget itself.
-        idx = -1
-        for i, w in enumerate(panels):
-            vp = w.viewport() if hasattr(w, 'viewport') else None
-            if focused is w or (vp is not None and focused is vp):
-                idx = i
-                break
-        if idx == -1:
-            next_idx = 0 if direction == 1 else len(panels) - 1
-        else:
-            next_idx = (idx + direction) % len(panels)
-        panels[next_idx].setFocus(Qt.OtherFocusReason)
 
     # ------------------------------------------------------------------
     # Theme
@@ -7826,10 +7815,6 @@ class MainWindow(QMainWindow):
 
         self.setAcceptDrops(True)
 
-        # Tab-order focus cycle: install an app-level event filter so Tab
-        # reliably cycles between panels on all platforms (incl. macOS).
-        QApplication.instance().installEventFilter(self)
-
     def _build_menus(self) -> None:
         mb = self.menuBar()
 
@@ -8145,9 +8130,8 @@ class MainWindow(QMainWindow):
 
     def _refresh_zoom_ui_unit(self) -> None:
         unit = self._current_time_unit()
-        self._act_zoom_1to1.setToolTip(
-            f"Zoom to {self._timescale_per_px_default_val:.1f} {unit}/pixel"
-        )
+        _zoom_str = _format_timescale_per_px(self._timescale_per_px_default_val, unit).replace("/px", "/pixel")
+        self._act_zoom_1to1.setToolTip(f"Zoom to {_zoom_str}")
         if self._trace is None:
             self._zoom_label.setText("—")
             return
@@ -8194,7 +8178,7 @@ class MainWindow(QMainWindow):
         raw_json = self._settings.get("files", "recent_json", "")
         try:
             entries = json.loads(raw_json) if raw_json.strip() else []
-        except (json.JSONDecodeError, Exception):
+        except Exception:
             entries = []
         # Remove any existing entry for this path
         entries = [e for e in entries if e.get("path") != norm]
@@ -8216,7 +8200,7 @@ class MainWindow(QMainWindow):
         entries = []
         try:
             entries = json.loads(raw_json) if raw_json.strip() else []
-        except (json.JSONDecodeError, Exception):
+        except Exception:
             entries = []
         # Fall back to legacy pipe-separated list
         if not entries:
@@ -8651,6 +8635,8 @@ class MainWindow(QMainWindow):
         # Show a wait cursor and status message while parsing
         QApplication.setOverrideCursor(Qt.WaitCursor)
         self._status_file.setText(f"  Loading {os.path.basename(path)}…")
+        # Reset dynamic STI color assignments so new trace gets consistent colors.
+        _STI_DYNAMIC_COLORS.clear()
         QApplication.processEvents()
 
         # Progress dialog – created before closures so progress_dialog is defined.
@@ -9006,13 +8992,13 @@ class MainWindow(QMainWindow):
 
     def _on_zoom_changed(self, timescale_per_px: float) -> None:
         unit = self._current_time_unit()
-        z = f"{timescale_per_px:.3g} {unit}/px"
+        z = _format_timescale_per_px(timescale_per_px, unit)
         if self._trace is not None:
             vp = self._view.viewport().rect()
             horiz = self._view._scene._horizontal
             vp_px = vp.width() if horiz else vp.height()
-            visible_ns = int(vp_px * timescale_per_px)
-            z += f"  ·  {_format_time(visible_ns)} visible"
+            visible_val = int(vp_px * timescale_per_px)
+            z += f"  ·  {_format_time(visible_val, unit, decimals=1)} visible"
         self._zoom_label.setText(z)
         # Sync zoom-preset combo
         if self._view._fit_mode:
@@ -9466,7 +9452,6 @@ class MainWindow(QMainWindow):
                 ("↑ / ↓",            "Scroll row / time axis"),
                 ("Shift+← / →",      "Prev/next boundary (horiz)"),
                 ("Shift+↑ / ↓",      "Prev/next boundary (vert)"),
-                ("Tab / Shift+Tab",   "Cycle panel focus"),
             ]),
             ("Cursors", [
                 ("Left-click",             "Place cursor"),

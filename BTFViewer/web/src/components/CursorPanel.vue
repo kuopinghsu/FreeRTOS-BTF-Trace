@@ -1,18 +1,45 @@
 <template>
-  <div class="cursor-panel" v-if="validCursors.length > 0">
-    <div class="cursor-row" v-for="(cur, idx) in cursors" :key="idx">
+  <div
+    v-if="validCursors.length > 0"
+    class="cursor-panel"
+  >
+    <div
+      v-for="(cur, idx) in cursors"
+      :key="idx"
+      class="cursor-row"
+    >
       <template v-if="cur !== null">
-        <span class="cursor-badge" :style="{ background: CURSOR_COLORS[idx] }">C{{ idx + 1 }}</span>
-        <span class="cursor-time clickable" title="Jump to cursor" @click="emit('jumpToCursor', cur)">{{ formatTime(cur, timeScale) }}</span>
-        <button class="cursor-del" title="Remove cursor" @click="emit('deleteCursor', idx)">×</button>
+        <span
+          class="cursor-badge"
+          :style="{ background: CURSOR_COLORS[idx] }"
+        >C{{ idx + 1 }}</span>
+        <span
+          class="cursor-time clickable"
+          title="Jump to cursor"
+          @click="emit('jumpToCursor', cur)"
+        >{{ formatTime(cur, timeScale) }}</span>
+        <button
+          class="cursor-del"
+          title="Remove cursor"
+          @click="emit('deleteCursor', idx)"
+        >
+          ×
+        </button>
       </template>
-      <span v-else class="cursor-empty">–</span>
+      <span
+        v-else
+        class="cursor-empty"
+      >–</span>
     </div>
 
     <!-- Deltas between adjacent placed cursors -->
     <template v-if="deltas.length > 0">
       <div class="delta-sep" />
-      <div class="delta-row" v-for="(d, idx) in deltas" :key="'d' + idx">
+      <div
+        v-for="(d, idx) in deltas"
+        :key="'d' + idx"
+        class="delta-row"
+      >
         <span class="delta-label">Δ{{ d.from + 1 }}→{{ d.to + 1 }}</span>
         <span class="delta-value">{{ formatTime(d.delta, timeScale) }}</span>
       </div>

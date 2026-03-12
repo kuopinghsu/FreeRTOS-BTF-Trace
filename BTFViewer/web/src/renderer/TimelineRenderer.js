@@ -12,7 +12,7 @@
  *   - Timeline body occupies remaining canvas area
  */
 
-import { taskColor, taskDisplayName, taskMergeKey, coreTint, coreColor, stiNoteColor, parseTaskName } from '../utils/colors.js'
+import { taskColor, taskDisplayName, taskMergeKey, coreTint, coreColor, stiNoteColor } from '../utils/colors.js'
 import { bisectLeft, bisectRight } from '../utils/bisect.js'
 import { lodReduce } from '../utils/lod.js'
 import { visibleSegs } from '../parser/btfParser.js'
@@ -159,7 +159,6 @@ export function render(ctx, trace, viewport, options = {}) {
 
   const pxPerNs      = canvasW / timeSpan
   const nsPerPx      = timeSpan / canvasW   // timescale per pixel
-  const bodyW        = canvasW
   const bodyH        = canvasH - RULER_H
 
   // DPR-aware clear
@@ -239,7 +238,6 @@ function drawRuler(ctx, trace, timeStart, timeEnd, pxPerNs, canvasW, darkMode) {
 
   const textColor  = darkMode ? '#CCCCCC' : '#444444'
   const tickColor  = darkMode ? '#555555' : '#BBBBBB'
-  const majorColor = darkMode ? '#888888' : '#666666'
 
   ctx.font = '10px monospace'
   ctx.textAlign = 'left'
@@ -455,7 +453,7 @@ function drawStiRow(ctx, trace, row, timeStart, timeEnd, pxPerNs, darkMode) {
 
 const CURSOR_COLORS = ['#FF4444', '#44FF88', '#4499FF', '#FFAA22']
 
-export function drawCursors(ctx, cursors, trace, timeStart, pxPerNs, canvasW, canvasH, darkMode) {
+export function drawCursors(ctx, cursors, trace, timeStart, pxPerNs, canvasW, canvasH, _darkMode) {
   if (!cursors || cursors.length === 0) return
   ctx.save()
   ctx.font = 'bold 10px monospace'
@@ -536,7 +534,7 @@ export function drawHoverLine(ctx, t, trace, timeStart, pxPerNs, canvasW, canvas
  * @returns {object|null}
  */
 export function hitTestSti(trace, viewport, options, cx, cy, radius = 8) {
-  const { timeStart, timeEnd, scrollY, canvasW, canvasH } = viewport
+  const { timeStart, timeEnd, scrollY, canvasW } = viewport
   const pxPerNs = canvasW / (timeEnd - timeStart)
   const { viewMode = 'task', expanded = new Set() } = options
 
@@ -589,7 +587,7 @@ const MARK_COLOR = '#FF9933'
 /**
  * Draw bookmark marks as vertical dashed lines in horizontal mode.
  */
-export function drawMarksHorizontal(ctx, marks, trace, timeStart, pxPerNs, canvasW, canvasH, darkMode) {
+export function drawMarksHorizontal(ctx, marks, trace, timeStart, pxPerNs, canvasW, canvasH, _darkMode) {
   if (!marks || marks.length === 0) return
   ctx.save()
   ctx.font = '10px monospace'
@@ -889,7 +887,7 @@ function drawStiColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, darkMode) {
 
 // ---- Cursors (vertical mode – horizontal lines) ----------------------------
 
-export function drawCursorsVertical(ctx, cursors, trace, timeStart, pxPerNs, canvasW, canvasH, headerH, darkMode) {
+export function drawCursorsVertical(ctx, cursors, trace, timeStart, pxPerNs, canvasW, canvasH, headerH, _darkMode) {
   if (!cursors || cursors.length === 0) return
   ctx.save()
   ctx.font = 'bold 10px monospace'
@@ -956,7 +954,7 @@ export function drawHoverLineVertical(ctx, t, trace, timeStart, pxPerNs, canvasW
 
 // ---- Marks in vertical mode (horizontal dashed lines) ----------------------
 
-export function drawMarksVertical(ctx, marks, trace, timeStart, pxPerNs, canvasW, canvasH, headerH, darkMode) {
+export function drawMarksVertical(ctx, marks, trace, timeStart, pxPerNs, canvasW, canvasH, headerH, _darkMode) {
   if (!marks || marks.length === 0) return
   ctx.save()
   ctx.font = '10px monospace'
@@ -1146,7 +1144,7 @@ export function hitTestStiVertical(trace, viewport, options, cx, cy, radius = 8)
 /**
  * Return the column descriptor under canvas point (cx, cy) in vertical mode, or null.
  */
-export function hitTestColumn(trace, viewport, options, cx, cy) {
+export function hitTestColumn(trace, viewport, options, cx, _cy) {
   const { scrollX = 0 } = viewport
   const { viewMode = 'task', expanded = new Set() } = options
   if (cx < RULER_W) return null

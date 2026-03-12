@@ -1,6 +1,8 @@
 <template>
   <div class="legend-panel">
-    <div class="legend-title">Tasks</div>
+    <div class="legend-title">
+      Tasks
+    </div>
     <div class="legend-list">
       <div
         v-for="mk in visibleTasks"
@@ -11,7 +13,10 @@
         @mouseleave="emit('highlightChange', null)"
         @click="emit('highlightClick', mk)"
       >
-        <span class="swatch" :style="{ background: taskColor(mk, trace.taskRepr.get(mk)) }" />
+        <span
+          class="swatch"
+          :style="{ background: taskColor(mk, trace.taskRepr.get(mk)) }"
+        />
         <span class="name">{{ taskDisplayName(trace.taskRepr.get(mk) || mk) }}</span>
       </div>
     </div>

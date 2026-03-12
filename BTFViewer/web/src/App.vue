@@ -1,34 +1,49 @@
 <template>
-  <div class="app" :class="{ dark: uiOptions.darkMode }">
+  <div
+    class="app"
+    :class="{ dark: uiOptions.darkMode }"
+  >
     <!-- Toolbar -->
     <Toolbar
-      :modelValue="uiOptions"
-      @update:modelValue="v => Object.assign(uiOptions, v)"
-      :traceInfo="traceInfo"
+      :model-value="uiOptions"
+      :trace-info="traceInfo"
       :loading="loading"
-      :loadingPct="loadingPct"
-      :loadingMsg="loadingMsg"
+      :loading-pct="loadingPct"
+      :loading-msg="loadingMsg"
+      @update:model-value="v => Object.assign(uiOptions, v)"
       @trace-reading="onTraceReading"
       @trace-loaded="onTraceLoaded"
       @zoom="onZoom"
       @fit="onFit"
-      @clearCursors="clearCursors"
-      @expandAll="onExpandAll"
-      @collapseAll="onCollapseAll"
-      @addMark="onAddMark"
+      @clear-cursors="clearCursors"
+      @expand-all="onExpandAll"
+      @collapse-all="onCollapseAll"
+      @add-mark="onAddMark"
     />
 
     <!-- Main area -->
     <div class="main-area">
       <!-- Loading overlay -->
-      <div v-if="loading" class="loading-overlay">
+      <div
+        v-if="loading"
+        class="loading-overlay"
+      >
         <div class="loading-card">
-          <div class="loading-filename">{{ loadingFileName || 'Loading trace…' }}</div>
-          <div class="loading-msg">{{ loadingMsg || 'Please wait…' }}</div>
-          <div class="loading-bar-track">
-            <div class="loading-bar-fill" :style="{ width: loadingPct + '%' }" />
+          <div class="loading-filename">
+            {{ loadingFileName || 'Loading trace…' }}
           </div>
-          <div class="loading-pct">{{ loadingPct }}%</div>
+          <div class="loading-msg">
+            {{ loadingMsg || 'Please wait…' }}
+          </div>
+          <div class="loading-bar-track">
+            <div
+              class="loading-bar-fill"
+              :style="{ width: loadingPct + '%' }"
+            />
+          </div>
+          <div class="loading-pct">
+            {{ loadingPct }}%
+          </div>
         </div>
       </div>
       <!-- Timeline (flex: 1) -->
@@ -37,37 +52,54 @@
         :trace="trace"
         :options="timelineOptions"
         :cursors="cursors"
-        @cursorsChange="cursors = $event"
-        @highlightChange="(k) => timelineOptions.highlightKey = k ?? pinnedHighlightKey"
-        @highlightClick="onHighlightClick"
-        @addBookmark="onAddBookmark"
+        @cursors-change="cursors = $event"
+        @highlight-change="(k) => timelineOptions.highlightKey = k ?? pinnedHighlightKey"
+        @highlight-click="onHighlightClick"
+        @add-bookmark="onAddBookmark"
       />
 
       <!-- Right panel -->
-      <div class="right-panel" v-if="trace">
+      <div
+        v-if="trace"
+        class="right-panel"
+      >
         <!-- Cursor panel -->
         <div class="panel-section">
-          <div class="panel-header">Cursors</div>
-          <CursorPanel :cursors="cursors" :timeScale="trace.timeScale" @deleteCursor="onDeleteCursor" @jumpToCursor="timelinePanelRef?.jumpToNs($event)" />
+          <div class="panel-header">
+            Cursors
+          </div>
+          <CursorPanel
+            :cursors="cursors"
+            :time-scale="trace.timeScale"
+            @delete-cursor="onDeleteCursor"
+            @jump-to-cursor="timelinePanelRef?.jumpToNs($event)"
+          />
         </div>
 
         <!-- Statistics -->
         <div class="panel-section">
-          <div class="panel-header">Statistics</div>
-          <StatisticsPanel :trace="trace" :cursors="cursors" />
+          <div class="panel-header">
+            Statistics
+          </div>
+          <StatisticsPanel
+            :trace="trace"
+            :cursors="cursors"
+          />
         </div>
 
         <!-- Marks / Bookmarks -->
         <div class="panel-section">
-          <div class="panel-header">Marks</div>
+          <div class="panel-header">
+            Marks
+          </div>
           <MarksPanel
             :bookmarks="marks"
-            :timeScale="trace.timeScale"
-            @addBookmark="onAddMark"
-            @deleteBookmark="onDeleteBookmark"
-            @jumpTo="onJumpToMark"
-            @updateLabel="onUpdateMarkLabel"
-            @importBookmarks="onImportBookmarks"
+            :time-scale="trace.timeScale"
+            @add-bookmark="onAddMark"
+            @delete-bookmark="onDeleteBookmark"
+            @jump-to="onJumpToMark"
+            @update-label="onUpdateMarkLabel"
+            @import-bookmarks="onImportBookmarks"
           />
         </div>
 
@@ -79,9 +111,9 @@
           </div>
           <LegendPanel
             :trace="trace"
-            :highlightKey="timelineOptions.highlightKey"
-            @highlightChange="(k) => { timelineOptions.highlightKey = k ?? pinnedHighlightKey; scheduleRender() }"
-            @highlightClick="onHighlightClick"
+            :highlight-key="timelineOptions.highlightKey"
+            @highlight-change="(k) => { timelineOptions.highlightKey = k ?? pinnedHighlightKey; scheduleRender() }"
+            @highlight-click="onHighlightClick"
           />
         </div>
       </div>
@@ -94,7 +126,10 @@
         {{ trace.stiEvents.length.toLocaleString() }} STI events ·
         {{ formatTime(trace.timeMax - trace.timeMin, trace.timeScale) }} total
       </span>
-      <span v-else class="status-hint">
+      <span
+        v-else
+        class="status-hint"
+      >
         Open a .btf trace file to begin · Scroll = pan rows · Ctrl+scroll = zoom · Click = cursor
       </span>
     </div>

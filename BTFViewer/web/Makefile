@@ -9,6 +9,7 @@ all: build
 ## Install dependencies and produce dist/index.html (single self-contained file)
 build: node_modules
 	$(NPM) run build
+	cp dist/index.html pre-build/btf.html
 
 ## Start Vite development server with HMR
 dev: node_modules

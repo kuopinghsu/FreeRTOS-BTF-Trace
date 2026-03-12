@@ -4,11 +4,27 @@
     class="sti-tooltip"
     :style="{ left: x + 'px', top: y + 'px' }"
   >
-    <div class="sti-row"><span class="sti-key">Time</span><span class="sti-val">{{ formatTime(stiEvent.time, timeScale) }}</span></div>
-    <div class="sti-row"><span class="sti-key">Channel</span><span class="sti-val">{{ stiEvent.target }}</span></div>
-    <div class="sti-row" v-if="stiEvent.event"><span class="sti-key">Event</span><span class="sti-val">{{ stiEvent.event }}</span></div>
-    <div class="sti-row" v-if="stiEvent.note"><span class="sti-key">Note</span><span class="sti-val">{{ stiEvent.note }}</span></div>
-    <div class="sti-row"><span class="sti-key">Core</span><span class="sti-val">{{ stiEvent.core }}</span></div>
+    <div class="sti-row">
+      <span class="sti-key">Time</span><span class="sti-val">{{ formatTime(stiEvent.time, timeScale) }}</span>
+    </div>
+    <div class="sti-row">
+      <span class="sti-key">Channel</span><span class="sti-val">{{ stiEvent.target }}</span>
+    </div>
+    <div
+      v-if="stiEvent.event"
+      class="sti-row"
+    >
+      <span class="sti-key">Event</span><span class="sti-val">{{ stiEvent.event }}</span>
+    </div>
+    <div
+      v-if="stiEvent.note"
+      class="sti-row"
+    >
+      <span class="sti-key">Note</span><span class="sti-val">{{ stiEvent.note }}</span>
+    </div>
+    <div class="sti-row">
+      <span class="sti-key">Core</span><span class="sti-val">{{ stiEvent.core }}</span>
+    </div>
   </div>
 </template>
 

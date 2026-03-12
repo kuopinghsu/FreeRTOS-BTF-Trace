@@ -18,7 +18,7 @@
  */
 
 import { hitTestSti, hitTestRow, hitTestStiVertical, hitTestColumn,
-         RULER_H, ROW_H, ROW_GAP, RULER_W, HEADER_H, COL_W } from './TimelineRenderer.js'
+         RULER_H, ROW_H, ROW_GAP, RULER_W, HEADER_H } from './TimelineRenderer.js'
 
 const MAX_CURSORS = 4
 
@@ -363,11 +363,11 @@ export class InteractionHandler {
     }
   }
 
-  _onMouseUp(e) {
+  _onMouseUp() {
     this._dragging = false
   }
 
-  _onMouseLeave(e) {
+  _onMouseLeave() {
     this._dragging = false
     this._opts.onHoverTimeChange?.(null)
   }
