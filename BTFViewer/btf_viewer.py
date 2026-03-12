@@ -147,7 +147,7 @@ from PyQt5.QtWidgets import (
     QDockWidget, QFileDialog, QFormLayout, QFrame, QGridLayout, QInputDialog,
     QGraphicsEllipseItem, QGraphicsItem, QGraphicsLineItem, QGraphicsPixmapItem,
     QGraphicsPolygonItem, QGraphicsRectItem, QGraphicsScene, QGraphicsTextItem, QGraphicsView,
-    QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QProgressBar,
+    QHBoxLayout, QLabel, QLineEdit, QListView, QMainWindow, QMenu, QMessageBox, QProgressBar,
     QProgressDialog,
     QListWidget, QListWidgetItem,
     QPushButton, QScrollArea, QDoubleSpinBox, QSpinBox, QStackedWidget,
@@ -7449,6 +7449,12 @@ class MainWindow(QMainWindow):
         base_font.setPointSize(_ui_font_size)
         app.setFont(base_font)
 
+        # macOS native combo widgets ignore inherited/stylesheet font-size;
+        # force it directly on the toolbar combo if it exists already.
+        combo = getattr(self, '_zoom_preset_combo', None)
+        if combo is not None:
+            combo.setFont(base_font)
+
         c = self._theme_tokens(is_dark)
 
         # --- Qt palette ---------------------------------------------------
@@ -7483,6 +7489,7 @@ class MainWindow(QMainWindow):
             QToolButton:pressed  {{ background:{c['tb_pressed']};    border-radius:3px; }}
             QToolButton:checked  {{ background:{c['tb_checked_bg']}; border-radius:3px; color:{c['tb_checked_fg']}; }}
             QToolButton:disabled {{ color:{c['tb_disabled']}; }}
+            QToolBar QComboBox {{ font-size:{_ui_fs}; padding:1px 4px; min-height:0; }}
             QStatusBar  {{ background:{c['win_bg']}; color:{c['status_text']}; font-size:{_ui_fs};
                            border-top:1px solid {c['sep']}; }}
             QStatusBar QLabel {{ font-size:{_ui_fs}; color:{c['sub_text']}; }}
@@ -7967,6 +7974,12 @@ class MainWindow(QMainWindow):
         # Zoom-preset quick-pick combo (labels/values rebuilt per trace unit)
         self._zoom_presets: list = []   # populated by _rebuild_zoom_presets()
         self._zoom_preset_combo = QComboBox()
+        # Use a QListView popup instead of macOS native NSMenu — the native
+        # popup ignores stylesheets and looks inconsistent with the themed UI.
+        self._zoom_preset_combo.setView(QListView())
+        _combo_font = self._zoom_preset_combo.font()
+        _combo_font.setPointSize(getattr(self, '_ui_font_size_val', UI_FONT_SIZE))
+        self._zoom_preset_combo.setFont(_combo_font)
         self._zoom_preset_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
         self._zoom_preset_combo.setMinimumWidth(100)
         self._zoom_preset_combo.setToolTip("Zoom preset — pick a fixed scale or Fit")
@@ -8146,9 +8159,12 @@ class MainWindow(QMainWindow):
         """
         unit = self._current_time_unit()
         mult = _NS_MULTIPLIERS.get(unit, 1)
+        min_scale = self._view._scene._timescale_per_px_default if self._view._scene else 0
         self._zoom_presets = [("Fit", None)]
         for ns_val in _ZOOM_PRESET_NS_VALUES:
             native_val = ns_val / mult
+            if native_val < min_scale:
+                continue
             self._zoom_presets.append((_format_timescale_per_px(native_val, unit), native_val))
         self._zoom_preset_combo.blockSignals(True)
         self._zoom_preset_combo.clear()
