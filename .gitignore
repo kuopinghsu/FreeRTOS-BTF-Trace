@@ -76,3 +76,4 @@ __pycache__
 BTFViewer/web/node_modules/
 BTFViewer/web/dist/
 BTFViewer/web/package-lock.json
+.vite/
