@@ -1103,7 +1103,8 @@ _NS_MULTIPLIERS: dict[str, int] = {"ns": 1, "us": 1_000, "ms": 1_000_000}
 _ZOOM_PRESET_NS_VALUES: tuple = (
     1.0, 10.0, 100.0,
     1_000.0, 10_000.0, 100_000.0,
-    1_000_000.0, 1_000_000_000.0,
+    1_000_000.0, 10_000_000.0, 100_000_000.0,
+    1_000_000_000.0,
 )
 
 # Ordered tiers for auto-scaling: (threshold_ns, divisor, unit_label)
@@ -1996,7 +1997,7 @@ class TimelineScene(QGraphicsScene):
                 self.addItem(line)
                 self._cursor_items.append(line)
 
-                t_str = _format_time(ns, self._trace.time_scale)
+                t_str = _format_time(ns, self._trace.time_scale, decimals=3)
                 lbl = self.addSimpleText(f"C{orig_idx+1}: {t_str}", font_big)
                 lbl.setBrush(QBrush(color))
                 lbl.setZValue(32)
@@ -2023,7 +2024,7 @@ class TimelineScene(QGraphicsScene):
                 if order > 0:
                     prev_ns = sorted_cursors[order - 1][1]
                     delta   = abs(ns - prev_ns)
-                    d_str   = f"Δ {_format_time(delta, self._trace.time_scale)}"
+                    d_str   = f"Δ {_format_time(delta, self._trace.time_scale, decimals=3)}"
                     mid_x   = self._label_width + self._ns_to_px((ns + prev_ns) // 2)
                     d_lbl   = self.addSimpleText(d_str, font)
                     d_w     = QFontMetrics(font).horizontalAdvance(d_str)
@@ -2048,7 +2049,7 @@ class TimelineScene(QGraphicsScene):
                 self.addItem(line)
                 self._cursor_items.append(line)
 
-                t_str = _format_time(ns, self._trace.time_scale)
+                t_str = _format_time(ns, self._trace.time_scale, decimals=3)
                 lbl = self.addSimpleText(f"C{orig_idx+1}: {t_str}", font_big)
                 lbl.setBrush(QBrush(color))
                 lbl.setZValue(32)
@@ -2076,7 +2077,7 @@ class TimelineScene(QGraphicsScene):
                 if order > 0:
                     prev_ns = sorted_cursors[order - 1][1]
                     delta   = abs(ns - prev_ns)
-                    d_str   = f"Δ {_format_time(delta, self._trace.time_scale)}"
+                    d_str   = f"Δ {_format_time(delta, self._trace.time_scale, decimals=3)}"
                     mid_y   = label_row_h + self._ns_to_px((ns + prev_ns) // 2)
                     d_lbl   = self.addSimpleText(d_str, font)
                     dh      = QFontMetrics(font).height()
@@ -5086,7 +5087,7 @@ class TimelineView(QGraphicsView):
         # Place cursor
         menu.addAction(
             _svg_icon(_IC_CURSOR, _icon_color),
-            f"Place cursor here  ({_format_time(ns, self._scene._trace.time_scale) if self._scene._trace else ''})",
+            f"Place cursor here  ({_format_time(ns, self._scene._trace.time_scale, decimals=3) if self._scene._trace else ''})",
             lambda: (self.pre_change.emit(), self._scene.add_cursor(ns),
                      self.cursors_changed.emit(self._scene.cursor_times()))
         )
@@ -5109,13 +5110,13 @@ class TimelineView(QGraphicsView):
             # Bookmark icon — flag/ribbon shape
             menu.addAction(
                 _svg_icon("M2 2a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v13.5a.5.5 0 0 1-.74.439L8 13.069l-5.26 2.87A.5.5 0 0 1 2 15.5V2zm2-1a1 1 0 0 0-1 1v12.566l4.74-2.586a.5.5 0 0 1 .48 0L13 14.566V2a1 1 0 0 0-1-1H4z", _icon_color),
-                f"Add Bookmark here  ({_format_time(ns, self._scene._trace.time_scale)})",
+                f"Add Bookmark here  ({_format_time(ns, self._scene._trace.time_scale, decimals=3)})",
                 lambda: self.bookmark_requested.emit(ns)
             )
             # Annotation icon — pencil/note shape
             menu.addAction(
                 _svg_icon("M12.854 0.146a.5.5 0 0 0-.707 0L10.5 1.793 14.207 5.5l1.647-1.646a.5.5 0 0 0 0-.708l-3-3zm.646 6.061L9.793 2.5 3.293 9H3.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.207l6.5-6.5zm-7.468 7.468A.5.5 0 0 1 6 13.5V13h-.5a.5.5 0 0 1-.5-.5V12h-.5a.5.5 0 0 1-.5-.5V11h-.5a.5.5 0 0 1-.5-.5V10h-.5a.499.499 0 0 1-.175-.032l-.179.178a.5.5 0 0 0-.11.168l-2 5a.5.5 0 0 0 .65.65l5-2a.5.5 0 0 0 .168-.11l.178-.178z", _icon_color),
-                f"Add Annotation here  ({_format_time(ns, self._scene._trace.time_scale)})",
+                f"Add Annotation here  ({_format_time(ns, self._scene._trace.time_scale, decimals=3)})",
                 lambda: self.annotation_requested.emit(ns)
             )
         menu.exec_(event.globalPos())
@@ -5686,7 +5687,7 @@ class _CursorBarWidget(QWidget):
             for i, (orig_idx, t) in enumerate(sorted_pairs):
                 color = colors[orig_idx % len(colors)]
                 badge = _CursorButton(
-                    f"C{orig_idx + 1}: {_format_time(t, ts)}", color,
+                    f"C{orig_idx + 1}: {_format_time(t, ts, decimals=3)}", color,
                     is_dark=self._is_dark)
                 badge.setToolTip(f"C{orig_idx + 1}: click to jump to this cursor")
                 del_btn = _CursorDeleteButton(color, is_dark=self._is_dark)
@@ -5708,7 +5709,7 @@ class _CursorBarWidget(QWidget):
                 for i in range(1, len(sorted_pairs)):
                     d = sorted_pairs[i][1] - sorted_pairs[i - 1][1]
                     freq_str = f"{1e9 / d:.1f} Hz" if d > 0 else "\u221e Hz"
-                    delta_parts.append(f"\u0394{i}={_format_time(d, ts)} ({freq_str})")
+                    delta_parts.append(f"\u0394{i}={_format_time(d, ts, decimals=3)} ({freq_str})")
                 dlbl = QLabel("   " + "   ".join(delta_parts))
                 dlbl.setStyleSheet(
                     f"font-size:{UI_FONT_SIZE}pt;"
@@ -5720,7 +5721,7 @@ class _CursorBarWidget(QWidget):
             # Same count — update text in-place (no widget churn).
             for order, (orig_idx, t) in enumerate(sorted_pairs):
                 badge, del_btn = self._pills[order]
-                badge.setText(f"C{orig_idx + 1}: {_format_time(t, ts)}")
+                badge.setText(f"C{orig_idx + 1}: {_format_time(t, ts, decimals=3)}")
                 badge.setToolTip(f"C{orig_idx + 1}: click to jump to this cursor")
                 try:
                     badge.clicked.disconnect()
@@ -5738,7 +5739,7 @@ class _CursorBarWidget(QWidget):
                 for i in range(1, len(sorted_pairs)):
                     d = sorted_pairs[i][1] - sorted_pairs[i - 1][1]
                     freq_str = f"{1e9 / d:.1f} Hz" if d > 0 else "\u221e Hz"
-                    delta_parts.append(f"\u0394{i}={_format_time(d, ts)} ({freq_str})")
+                    delta_parts.append(f"\u0394{i}={_format_time(d, ts, decimals=3)} ({freq_str})")
                 self._delta_label.setText("   " + "   ".join(delta_parts))
 
 # ---------------------------------------------------------------------------
@@ -6038,7 +6039,7 @@ class _StatsPanel(QWidget):
         # -- Summary row ---------------------------------------------------
         self._ilay.addWidget(self._lbl(
             f"Span: {span_str}  |  Tasks: {len(trace.tasks)}  |  "
-            f"Segments: {len(trace.segments)}  |  STI events: {len(trace.sti_events)}",
+            f"Segments: {len(trace.segments):,}  |  STI events: {len(trace.sti_events):,}",
             color="#888888",
             ui_fs=_fs,
         ))
@@ -7554,6 +7555,8 @@ class MainWindow(QMainWindow):
             self._range_stats_label.setStyleSheet(f"color:{c['muted_text']};")
         if hasattr(self, '_find_status'):
             self._find_status.setStyleSheet(f"color:{c['muted_text']};")
+        if hasattr(self, '_cur_hint'):
+            self._cur_hint.setStyleSheet(f"color:{c['muted_text']}; font-size:9pt;")
         if hasattr(self, '_welcome_label'):
             self._welcome_label.setText(
                 f"<h2 style='color:{c['welcome_h2']};'>BTF Trace Viewer</h2>"
@@ -7671,9 +7674,9 @@ class MainWindow(QMainWindow):
         self._cursor_table.setAlternatingRowColors(True)
         self._cursor_table.cellClicked.connect(self._on_cursor_table_clicked)
         cur_v.addWidget(self._cursor_table)
-        _cur_hint = QLabel("Click a row to navigate to that cursor")
-        _cur_hint.setStyleSheet("color:#999; font-size:9pt;")
-        cur_v.addWidget(_cur_hint)
+        self._cur_hint = QLabel("Click a row to navigate to that cursor")
+        self._cur_hint.setStyleSheet("color:#999; font-size:9pt;")
+        cur_v.addWidget(self._cur_hint)
         marks_tabs.addTab(cur_page, "Cursors")
 
         bm_page = QWidget()
@@ -7771,8 +7774,10 @@ class MainWindow(QMainWindow):
         find_btns.setContentsMargins(0, 0, 0, 0)
         find_prev = QPushButton("Previous")
         find_prev.clicked.connect(self._find_prev)
+        find_prev.setToolTip("Find previous match  (Shift+F3)")
         find_next = QPushButton("Next")
         find_next.clicked.connect(self._find_next)
+        find_next.setToolTip("Find next match  (F3)")
         find_btns.addWidget(find_prev)
         find_btns.addWidget(find_next)
         find_v.addLayout(find_btns)
@@ -7962,7 +7967,8 @@ class MainWindow(QMainWindow):
         # Zoom-preset quick-pick combo (labels/values rebuilt per trace unit)
         self._zoom_presets: list = []   # populated by _rebuild_zoom_presets()
         self._zoom_preset_combo = QComboBox()
-        self._zoom_preset_combo.setFixedWidth(100)
+        self._zoom_preset_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        self._zoom_preset_combo.setMinimumWidth(100)
         self._zoom_preset_combo.setToolTip("Zoom preset — pick a fixed scale or Fit")
         self._zoom_preset_combo.activated.connect(self._on_zoom_preset_selected)
         tb.addWidget(self._zoom_preset_combo)
@@ -8320,7 +8326,7 @@ class MainWindow(QMainWindow):
         self._push_undo_snapshot()
         ns = self._view.view_center_ns()
         unit = self._current_time_unit()
-        label = f"Bookmark @{_format_time(ns, unit)}"
+        label = f"Bookmark @{_format_time(ns, unit, decimals=3)}"
         self._bookmarks.append(TraceBookmark(id=self._mark_next_id, ns=ns, label=label))
         self._mark_next_id += 1
         self._bookmarks.sort(key=lambda b: b.ns)
@@ -8354,11 +8360,11 @@ class MainWindow(QMainWindow):
             return
         unit = self._current_time_unit()
         for b in sorted(self._bookmarks, key=lambda x: x.ns):
-            txt = b.label or f"Bookmark @{_format_time(b.ns, unit)}"
+            txt = b.label or f"Bookmark @{_format_time(b.ns, unit, decimals=3)}"
             item = QListWidgetItem(txt)
             item.setData(Qt.UserRole, int(b.id))
             item.setData(Qt.UserRole + 1, int(b.ns))
-            item.setToolTip(f"{_format_time(b.ns, unit)}")
+            item.setToolTip(f"{_format_time(b.ns, unit, decimals=3)}")
             item.setFlags(item.flags() | Qt.ItemIsEditable)
             self._bookmark_list.addItem(item)
         self._bookmark_list.blockSignals(False)
@@ -8373,7 +8379,7 @@ class MainWindow(QMainWindow):
             if b.id == bid:
                 # Empty label → revert to the default timestamp label so the
                 # bookmark keeps useful identity information.
-                b.label = new_label or f"Bookmark @{_format_time(b.ns, self._current_time_unit())}"
+                b.label = new_label or f"Bookmark @{_format_time(b.ns, self._current_time_unit(), decimals=3)}"
                 break
         self._save_current_trace_state()
 
@@ -8398,7 +8404,7 @@ class MainWindow(QMainWindow):
             return
         self._push_undo_snapshot()
         unit = self._current_time_unit()
-        label = f"Bookmark @{_format_time(ns, unit)}"
+        label = f"Bookmark @{_format_time(ns, unit, decimals=3)}"
         self._bookmarks.append(TraceBookmark(id=self._mark_next_id, ns=ns, label=label))
         self._mark_next_id += 1
         self._bookmarks.sort(key=lambda b: b.ns)
@@ -8414,7 +8420,7 @@ class MainWindow(QMainWindow):
         unit = self._current_time_unit()
         note, ok = QInputDialog.getText(
             self, "Add Annotation",
-            f"Note for {_format_time(ns, unit)}:",
+            f"Note for {_format_time(ns, unit, decimals=3)}:",
         )
         note = note.strip()
         if not ok or not note:
@@ -8473,11 +8479,11 @@ class MainWindow(QMainWindow):
             return
         unit = self._current_time_unit()
         for a in sorted(self._annotations, key=lambda x: x.ns):
-            txt = f"{_format_time(a.ns, unit)}  {a.note}"
+            txt = f"{_format_time(a.ns, unit, decimals=3)}  {a.note}"
             item = QListWidgetItem(txt)
             item.setData(Qt.UserRole, int(a.id))
             item.setData(Qt.UserRole + 1, int(a.ns))
-            item.setToolTip(f"@ {_format_time(a.ns, unit)}\n{a.note}")
+            item.setToolTip(f"@ {_format_time(a.ns, unit, decimals=3)}\n{a.note}")
             self._annotation_list.addItem(item)
         self._annotation_list.blockSignals(False)
         self._view._scene.set_marks(self._bookmarks, self._annotations)
@@ -9081,21 +9087,22 @@ class MainWindow(QMainWindow):
                 top_task, top_ns = max(task_acc.items(), key=lambda kv: kv[1])
         top_pct = (100.0 * top_ns / dt) if dt > 0 else 0.0
         self._range_stats_label.setText(
-            f"Range C1-C{len(times)}: {_format_time(dt, unit)} | slices: {switches} | "
+            f"Range C1-C{len(times)}: {_format_time(dt, unit, decimals=1)} | slices: {switches} | "
             f"top: {top_task} ({top_pct:.1f}%)"
         )
         # Compact status-bar version: span + segment min/max/avg
         if durations:
-            d_min = _format_time(min(durations), unit)
-            d_max = _format_time(max(durations), unit)
-            d_avg = _format_time(int(sum(durations) / len(durations)), unit)
+            d_min = _format_time(min(durations), unit, decimals=1)
+            d_max = _format_time(max(durations), unit, decimals=1)
+            d_avg = _format_time(sum(durations) / len(durations), unit, decimals=1)
             range_text = (
-                f"Range: {_format_time(dt, unit)}  "
+                f"Range: {_format_time(dt, unit, decimals=1)}  "
                 f"min {d_min}  max {d_max}  avg {d_avg}"
             )
         else:
-            range_text = f"Range: {_format_time(dt, unit)}  (no segments)"
+            range_text = f"Range: {_format_time(dt, unit, decimals=1)}  (no segments)"
         self._status_range.setText(range_text)
+        self._status_range.setToolTip(range_text)
         self._status_range.setVisible(True)
         self._rebuild_cursor_table()
 
@@ -9107,7 +9114,7 @@ class MainWindow(QMainWindow):
                 if b.id == mark_id:
                     b.ns = new_ns
                     if b.label.startswith("Bookmark @"):
-                        b.label = f"Bookmark @{_format_time(new_ns, unit)}"
+                        b.label = f"Bookmark @{_format_time(new_ns, unit, decimals=3)}"
                     break
             self._rebuild_bookmark_list()
         else:
@@ -9157,14 +9164,14 @@ class MainWindow(QMainWindow):
         for row, ns in enumerate(sorted_times):
             ci = QTableWidgetItem(f"C{row + 1}")
             ci.setData(Qt.UserRole, ns)
-            ti = QTableWidgetItem(_format_time(ns, unit))
+            ti = QTableWidgetItem(_format_time(ns, unit, decimals=3))
             task_item = QTableWidgetItem(self._task_at_time(ns))
             if row == 0:
                 delta_item = QTableWidgetItem("—")
             else:
                 dt = ns - c1
                 sign = "+" if dt >= 0 else ""
-                delta_item = QTableWidgetItem(f"{sign}{_format_time(abs(dt), unit)}")
+                delta_item = QTableWidgetItem(f"{sign}{_format_time(abs(dt), unit, decimals=3)}")
             for it in (ci, ti, task_item, delta_item):
                 it.setFlags(it.flags() & ~Qt.ItemIsEditable)
             self._cursor_table.setItem(row, 0, ci)
