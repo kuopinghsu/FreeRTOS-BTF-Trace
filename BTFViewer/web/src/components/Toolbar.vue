@@ -73,6 +73,34 @@
       Cursors
     </button>
 
+    <!-- Add bookmark -->
+    <button class="tb-btn" title="Add bookmark at viewport center" @click="emit('addMark')" v-if="traceInfo">
+      <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
+        <path d="M2 2a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v13.5a.5.5 0 0 1-.74.439L8 13.069l-5.26 2.87A.5.5 0 0 1 2 15.5V2zm2-1a1 1 0 0 0-1 1v12.566l4.26-2.325a.5.5 0 0 1 .48 0L12 14.566V2a1 1 0 0 0-1-1H4z"/>
+      </svg>
+      Mark
+    </button>
+
+    <div class="tb-sep" />
+
+    <!-- Orientation toggle -->
+    <label class="tb-btn" :class="{ active: (modelValue.orientation || 'h') === 'h' }"
+           title="Horizontal timeline (time → right)"
+           @click="emit('update:modelValue', { ...modelValue, orientation: 'h' })">
+      <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
+        <path d="M1 8h14M11 5l3 3-3 3" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+      </svg>
+      H
+    </label>
+    <label class="tb-btn" :class="{ active: (modelValue.orientation || 'h') === 'v' }"
+           title="Vertical timeline (time ↓ down)"
+           @click="emit('update:modelValue', { ...modelValue, orientation: 'v' })">
+      <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
+        <path d="M8 1v14M5 11l3 3 3-3" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+      </svg>
+      V
+    </label>
+
     <div class="tb-sep" />
 
     <!-- Grid toggle -->
@@ -97,7 +125,13 @@
     <!-- File info -->
     <span v-if="traceInfo" class="trace-info">{{ traceInfo }}</span>
     <span v-if="loading" class="loading-badge">
-      Parsing… <span v-if="loadingPct > 0">{{ loadingPct }}%</span>
+      <span class="loading-badge-text">
+        {{ loadingMsg || 'Parsing…' }}
+        <span v-if="loadingPct > 0" class="loading-badge-pct">{{ loadingPct }}%</span>
+      </span>
+      <span class="loading-badge-bar">
+        <span class="loading-badge-fill" :style="{ width: Math.max(4, loadingPct) + '%' }" />
+      </span>
     </span>
   </div>
 </template>
@@ -110,13 +144,16 @@ const props = defineProps({
   traceInfo:   { type: String,  default: '' },
   loading:     { type: Boolean, default: false },
   loadingPct:  { type: Number,  default: 0 },
+  loadingMsg:  { type: String,  default: '' },
 })
 
-const emit = defineEmits(['update:modelValue', 'trace-loaded', 'zoom', 'fit', 'clearCursors', 'expandAll', 'collapseAll'])
+const emit = defineEmits(['update:modelValue', 'trace-reading', 'trace-loaded', 'zoom', 'fit', 'clearCursors', 'expandAll', 'collapseAll', 'addMark'])
 
 function onFileChange(e) {
   const file = e.target.files[0]
   if (!file) return
+  // Signal immediately so the loading overlay appears before FileReader blocks
+  emit('trace-reading', { name: file.name })
   const reader = new FileReader()
   reader.onload = (ev) => {
     emit('trace-loaded', { text: ev.target.result, name: file.name })
@@ -180,11 +217,46 @@ function onFileChange(e) {
   font-family: monospace;
 }
 .loading-badge {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
   font-size: 11px;
   background: var(--accent);
   color: #000;
-  padding: 2px 8px;
-  border-radius: 10px;
+  padding: 3px 8px 4px;
+  border-radius: 6px;
+  min-width: 110px;
+}
+
+.loading-badge-text {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.loading-badge-pct {
+  opacity: 0.7;
+  flex-shrink: 0;
+}
+
+.loading-badge-bar {
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(0,0,0,0.2);
+  overflow: hidden;
+}
+
+.loading-badge-fill {
+  display: block;
+  height: 100%;
+  background: rgba(0,0,0,0.55);
+  border-radius: 2px;
+  transition: width 0.15s ease;
 }
 .file-btn {
   cursor: pointer;
