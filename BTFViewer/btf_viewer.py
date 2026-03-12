@@ -1099,12 +1099,10 @@ def _sti_color(note: str) -> QColor:
 # Unknown units fall back to 1 (treated as ns).
 _NS_MULTIPLIERS: dict[str, int] = {"ns": 1, "us": 1_000, "ms": 1_000_000}
 
-# Fixed preset zoom levels expressed in nanoseconds/pixel.
-_ZOOM_PRESET_NS_VALUES: tuple = (
-    1.0, 10.0, 100.0,
-    1_000.0, 10_000.0, 100_000.0,
-    1_000_000.0, 10_000_000.0, 100_000_000.0,
-    1_000_000_000.0,
+# Fixed preset zoom levels expressed as percentage of fit-to-window.
+# 100% = entire trace visible (Fit); smaller % = more zoomed in.
+_ZOOM_PRESET_PERCENTAGES: tuple = (
+    1, 2, 5, 10, 25, 50, 75,
 )
 
 # Ordered tiers for auto-scaling: (threshold_ns, divisor, unit_label)
@@ -8152,25 +8150,31 @@ class MainWindow(QMainWindow):
         return "ns"
 
     def _rebuild_zoom_presets(self) -> None:
-        """Rebuild the zoom-preset combo labels and native values for the current trace unit.
+        """Rebuild the zoom-preset combo with percentage-based presets.
 
-        The active selection is reset to "Fit" (index 0); _on_zoom_changed() will
-        re-sync the combo to the correct slot once the next zoom event fires.
+        Each percentage represents how much of the total trace is visible:
+        Fit = 100%, 50% = half the trace visible (zoomed in 2x), etc.
+        The active selection is reset to "Fit" (index 0); _on_zoom_changed()
+        will re-sync the combo to the correct slot once the next zoom event fires.
         """
-        unit = self._current_time_unit()
-        mult = _NS_MULTIPLIERS.get(unit, 1)
-        min_scale = self._view._scene._timescale_per_px_default if self._view._scene else 0
-        self._zoom_presets = [("Fit", None)]
-        for ns_val in _ZOOM_PRESET_NS_VALUES:
-            native_val = ns_val / mult
-            if native_val < min_scale:
+        sc = self._view._scene
+        fit_tpp = sc._timescale_per_px_fit if sc else float('inf')
+        min_tpp = sc._timescale_per_px_default if sc else 0
+        # Each entry: (label, timescale_per_px | None).
+        # "Fit" is always first; percentage presets from smallest to largest.
+        self._zoom_presets = []
+        for pct in _ZOOM_PRESET_PERCENTAGES:
+            tpp = fit_tpp * pct / 100.0
+            if tpp < min_tpp:
                 continue
-            self._zoom_presets.append((_format_timescale_per_px(native_val, unit), native_val))
+            self._zoom_presets.append((f"{pct}%", tpp))
+        self._zoom_presets.append(("Fit", None))  # Fit is always last (100%)
         self._zoom_preset_combo.blockSignals(True)
         self._zoom_preset_combo.clear()
         for label, _ in self._zoom_presets:
             self._zoom_preset_combo.addItem(label)
-        self._zoom_preset_combo.setCurrentIndex(0)  # re-synced by next _on_zoom_changed()
+        fit_idx = len(self._zoom_presets) - 1
+        self._zoom_preset_combo.setCurrentIndex(fit_idx)  # re-synced by next _on_zoom_changed()
         self._zoom_preset_combo.blockSignals(False)
 
     def _refresh_zoom_ui_unit(self) -> None:
@@ -9024,8 +9028,8 @@ class MainWindow(QMainWindow):
         """Apply the zoom level chosen in the presets combo."""
         if index < 0 or index >= len(self._zoom_presets):
             return
-        label, ns_per_px = self._zoom_presets[index]
-        if ns_per_px is None:
+        label, tpp = self._zoom_presets[index]
+        if tpp is None:
             self._view.zoom_fit()
         else:
             if self._view._scene._trace is None:
@@ -9033,11 +9037,17 @@ class MainWindow(QMainWindow):
             self._view._fit_mode = False
             sc = self._view._scene
             sc._timescale_per_px = max(sc._timescale_per_px_default,
-                                       min(ns_per_px, sc._timescale_per_px_fit))
+                                       min(tpp, sc._timescale_per_px_fit))
             sc.rebuild()
             self._view.zoom_changed.emit(sc.timescale_per_px)
 
     def _on_zoom_changed(self, timescale_per_px: float) -> None:
+        # Rebuild percentage presets if the fit level changed (resize / new trace).
+        sc = self._view._scene
+        cur_fit = sc._timescale_per_px_fit if sc else float('inf')
+        if cur_fit != getattr(self, '_last_fit_tpp', None):
+            self._last_fit_tpp = cur_fit
+            self._rebuild_zoom_presets()
         unit = self._current_time_unit()
         scale_str = _format_timescale_per_px(timescale_per_px, unit)
         self._zoom_scale_label.setText(scale_str)
@@ -9052,13 +9062,18 @@ class MainWindow(QMainWindow):
             self._zoom_visible_label.setText("")
             self._zoom_scale_label.setToolTip("Current zoom level (time per pixel)")
         # Sync zoom-preset combo
+        fit_idx = len(self._zoom_presets) - 1  # "Fit" is always last
         if self._view._fit_mode:
-            self._zoom_preset_combo.setCurrentIndex(0)  # "Fit"
+            self._zoom_preset_combo.setCurrentIndex(fit_idx)
         else:
-            for idx, (_, ns_pp) in enumerate(self._zoom_presets):
-                if ns_pp is not None and abs(timescale_per_px - ns_pp) / max(ns_pp, 1e-12) < 0.01:
+            matched = False
+            for idx, (_, tpp) in enumerate(self._zoom_presets):
+                if tpp is not None and abs(timescale_per_px - tpp) / max(tpp, 1e-12) < 0.01:
                     self._zoom_preset_combo.setCurrentIndex(idx)
+                    matched = True
                     break
+            if not matched:
+                self._zoom_preset_combo.setCurrentIndex(-1)  # no preset matches
         self._refresh_find_marker()
 
     def _on_cursor_delete(self, ns: int) -> None:
