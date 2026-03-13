@@ -173,7 +173,7 @@ const props = defineProps({
 })
 
 const coresCollapsed = ref(true)
-const tasksCollapsed = ref(true)
+const tasksCollapsed = ref(false)
 
 function clampPct(v) { return Math.max(0, Math.min(100, v)).toFixed(1) }
 

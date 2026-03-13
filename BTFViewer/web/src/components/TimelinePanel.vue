@@ -382,6 +382,9 @@ function collapseAll() {
 // ---- Watchers ------------------------------------------------------------
 watch(() => props.trace, (trace) => {
   if (!trace) return
+  // Default: expand all cores so task rows are visible on startup
+  expanded.clear()
+  for (const coreName of trace.coreNames) expanded.add(coreName)
   nextTick(() => {
     fitToTrace()
     setupHandler()

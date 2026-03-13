@@ -319,7 +319,7 @@ function coreLodData(trace, coreName) {
  * Handles LOD selection, sub-pixel merging, segment fill + optional core tint.
  */
 function paintSegments(ctx, segs, timeStart, timeEnd, pxPerNs, nsPerPx, rowY, rowH,
-                       baseColor, trace, applyCoreTint, highlightKey, rowMk, darkMode) {
+                       baseColor, trace, applyCoreTint, highlightKey, rowMk, darkMode, segLabel) {
   const isHighlighted = highlightKey && rowMk === highlightKey
 
   const lod = nsPerPx > PAINT_LOD_COARSE ? 'coarse' : 'fine'
@@ -359,6 +359,21 @@ function paintSegments(ctx, segs, timeStart, timeEnd, pxPerNs, nsPerPx, rowY, ro
       ctx.lineWidth = 0.5
       ctx.strokeRect(Math.round(x1) + 0.5, rowY + 0.5, Math.ceil(w) - 1, rowH - 1)
     }
+
+    // Task name label (only when segment is wide enough)
+    if (segLabel && w >= 40) {
+      ctx.save()
+      ctx.font = '10px sans-serif'
+      ctx.fillStyle = darkMode ? 'rgba(255,255,255,0.85)' : 'rgba(0,0,0,0.75)'
+      ctx.textBaseline = 'middle'
+      const tx = Math.round(x1) + 3
+      const clipW = Math.ceil(w) - 6
+      ctx.beginPath()
+      ctx.rect(tx, rowY, clipW, rowH)
+      ctx.clip()
+      ctx.fillText(segLabel, tx, rowY + rowH / 2)
+      ctx.restore()
+    }
   }
 }
 
@@ -377,7 +392,7 @@ function drawTaskRow(ctx, trace, row, timeStart, timeEnd, pxPerNs, nsPerPx, high
   ctx.fillRect(0, row.y, ctx.canvas.clientWidth, ROW_H)
 
   paintSegments(ctx, segs, timeStart, timeEnd, pxPerNs, nsPerPx,
-    rowY, rowH, row.color, trace, /* coreTint */ true, highlightKey, mk, darkMode)
+    rowY, rowH, row.color, trace, /* coreTint */ true, highlightKey, mk, darkMode, row.label)
 }
 
 function drawCoreRow(ctx, trace, row, timeStart, timeEnd, pxPerNs, nsPerPx, darkMode) {
@@ -401,6 +416,22 @@ function drawCoreRow(ctx, trace, row, timeStart, timeEnd, pxPerNs, nsPerPx, dark
     const mk = taskMergeKey(seg.task)  // use merge key for consistent colours across views
     ctx.fillStyle = taskColor(mk, seg.task)
     ctx.fillRect(Math.round(x1), rowY, Math.ceil(w), rowH)
+
+    // Task name label inside segment
+    if (w >= 40) {
+      const name = taskDisplayName(seg.task)
+      ctx.save()
+      ctx.font = '10px sans-serif'
+      ctx.fillStyle = darkMode ? 'rgba(255,255,255,0.85)' : 'rgba(0,0,0,0.75)'
+      ctx.textBaseline = 'middle'
+      const tx = Math.round(x1) + 3
+      const clipW = Math.ceil(w) - 6
+      ctx.beginPath()
+      ctx.rect(tx, rowY, clipW, rowH)
+      ctx.clip()
+      ctx.fillText(name, tx, rowY + rowH / 2)
+      ctx.restore()
+    }
   }
 }
 
@@ -413,7 +444,7 @@ function drawCoreTaskRow(ctx, trace, row, timeStart, timeEnd, pxPerNs, nsPerPx, 
 
   const mk = taskMergeKey(row.taskKey)
   paintSegments(ctx, segs, timeStart, timeEnd, pxPerNs, nsPerPx,
-    row.y + 1, ROW_H - 2, row.color, trace, false, highlightKey, mk, darkMode)
+    row.y + 1, ROW_H - 2, row.color, trace, false, highlightKey, mk, darkMode, row.label)
 }
 
 function drawStiRow(ctx, trace, row, timeStart, timeEnd, pxPerNs, darkMode) {
@@ -758,7 +789,7 @@ function drawColumnHeaders(ctx, cols, headerH, colW, highlightKey, darkMode) {
 // ---- Segment drawing helpers (vertical) ------------------------------------
 
 function paintSegmentsVertical(ctx, segs, timeStart, pxPerNs, nsPerPx, colX, colW, headerH,
-                               baseColor, trace, applyCoreTint, highlightKey, colMk, darkMode) {
+                               baseColor, trace, applyCoreTint, highlightKey, colMk, darkMode, segLabel) {
   const isHighlighted = highlightKey && colMk === highlightKey
   const lod = nsPerPx > PAINT_LOD_COARSE ? 'coarse' : 'fine'
   const reduced = lod === 'coarse' ? lodReduce(segs, nsPerPx, trace.timeMin) : segs
@@ -794,6 +825,21 @@ function paintSegmentsVertical(ctx, segs, timeStart, pxPerNs, nsPerPx, colX, col
       ctx.lineWidth = 0.5
       ctx.strokeRect(segX + 0.5, Math.round(y1) + 0.5, segW - 1, Math.ceil(h) - 1)
     }
+
+    // Rotated task name label (only when segment is tall enough)
+    if (segLabel && h >= 40) {
+      ctx.save()
+      ctx.font = '10px sans-serif'
+      ctx.fillStyle = darkMode ? 'rgba(255,255,255,0.85)' : 'rgba(0,0,0,0.75)'
+      ctx.textBaseline = 'middle'
+      ctx.textAlign = 'left'
+      const cx = segX + segW / 2
+      const topY = Math.round(y1) + 3
+      ctx.translate(cx, topY)
+      ctx.rotate(Math.PI / 2)
+      ctx.fillText(segLabel, 0, 0)
+      ctx.restore()
+    }
   }
 }
 
@@ -811,7 +857,7 @@ function drawTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, h
   ctx.fillRect(col.x, HEADER_H, COL_W, ctx.canvas.clientHeight)
 
   paintSegmentsVertical(ctx, segs, timeStart, pxPerNs, nsPerPx,
-    col.x, COL_W, HEADER_H, col.color, trace, true, highlightKey, mk, darkMode)
+    col.x, COL_W, HEADER_H, col.color, trace, true, highlightKey, mk, darkMode, col.label)
 }
 
 function drawCoreColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, darkMode) {
@@ -835,6 +881,22 @@ function drawCoreColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, d
     const mk = taskMergeKey(seg.task)
     ctx.fillStyle = taskColor(mk, seg.task)
     ctx.fillRect(segX, Math.round(y1), segW, Math.ceil(h))
+
+    // Rotated task name label inside segment
+    if (h >= 40) {
+      const name = taskDisplayName(seg.task)
+      ctx.save()
+      ctx.font = '10px sans-serif'
+      ctx.fillStyle = darkMode ? 'rgba(255,255,255,0.85)' : 'rgba(0,0,0,0.75)'
+      ctx.textBaseline = 'middle'
+      ctx.textAlign = 'left'
+      const cx = segX + segW / 2
+      const topY = Math.round(y1) + 3
+      ctx.translate(cx, topY)
+      ctx.rotate(Math.PI / 2)
+      ctx.fillText(name, 0, 0)
+      ctx.restore()
+    }
   }
 }
 
@@ -849,7 +911,7 @@ function drawCoreTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerP
 
   const mk = taskMergeKey(col.taskKey)
   paintSegmentsVertical(ctx, segs, timeStart, pxPerNs, nsPerPx,
-    col.x, COL_W, HEADER_H, col.color, trace, false, highlightKey, mk, darkMode)
+    col.x, COL_W, HEADER_H, col.color, trace, false, highlightKey, mk, darkMode, col.label)
 }
 
 function drawStiColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, darkMode) {
