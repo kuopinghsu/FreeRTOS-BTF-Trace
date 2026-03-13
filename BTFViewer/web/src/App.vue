@@ -19,6 +19,7 @@
       @expand-all="onExpandAll"
       @collapse-all="onCollapseAll"
       @add-mark="onAddMark"
+      @show-help="helpOpen = true"
     />
 
     <!-- Main area -->
@@ -119,6 +120,66 @@
       </div>
     </div>
 
+    <!-- Help dialog -->
+    <div
+      v-if="helpOpen"
+      class="help-overlay"
+      @click.self="helpOpen = false"
+    >
+      <div
+        class="help-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Help and keyboard shortcuts"
+      >
+        <div class="help-header">
+          <div class="help-title">
+            Help & Shortcuts
+          </div>
+          <button
+            class="help-close"
+            @click="helpOpen = false"
+          >
+            ✕
+          </button>
+        </div>
+
+        <div class="help-body">
+          <div class="help-section">
+            <div class="help-section-title">Keyboard</div>
+            <div class="help-grid">
+              <div class="k">?</div><div>Open/close this help</div>
+              <div class="k">Esc</div><div>Close help</div>
+              <div class="k">1</div><div>Task view</div>
+              <div class="k">2</div><div>Core view</div>
+              <div class="k">H</div><div>Horizontal layout</div>
+              <div class="k">V</div><div>Vertical layout</div>
+              <div class="k">G</div><div>Toggle grid</div>
+              <div class="k">D</div><div>Toggle dark/light mode</div>
+              <div class="k">M</div><div>Add bookmark at viewport center</div>
+              <div class="k">C</div><div>Clear all cursors</div>
+              <div class="k">F</div><div>Fit timeline to trace</div>
+              <div class="k">+</div><div>Zoom in</div>
+              <div class="k">-</div><div>Zoom out</div>
+            </div>
+          </div>
+
+          <div class="help-section">
+            <div class="help-section-title">Mouse / Trackpad</div>
+            <div class="help-grid">
+              <div class="k">Wheel</div><div>Scroll task rows</div>
+              <div class="k">Shift + Wheel</div><div>Pan timeline left/right</div>
+              <div class="k">Ctrl/Cmd + Wheel</div><div>Zoom at pointer</div>
+              <div class="k">Middle-drag</div><div>Pan timeline</div>
+              <div class="k">Click timeline</div><div>Place/remove cursor</div>
+              <div class="k">Right-click timeline</div><div>Open context menu</div>
+              <div class="k">Double-click ruler</div><div>Fit timeline</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Status bar -->
     <div class="status-bar">
       <span v-if="trace">
@@ -130,14 +191,14 @@
         v-else
         class="status-hint"
       >
-        Open a .btf trace file to begin · Scroll = pan rows · Ctrl+scroll = zoom · Click = cursor
+        Open a .btf trace file to begin · Press ? for shortcuts/help
       </span>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, shallowRef, reactive, computed, watch, onMounted } from 'vue'
+import { ref, shallowRef, reactive, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import Toolbar          from './components/Toolbar.vue'
 import TimelinePanel    from './components/TimelinePanel.vue'
 import CursorPanel      from './components/CursorPanel.vue'
@@ -154,6 +215,7 @@ const loadingPct = ref(0)
 const loadingMsg = ref('')
 const loadingFileName = ref('')
 const cursors    = ref([null, null, null, null])
+const helpOpen   = ref(false)
 
 const uiOptions = reactive({
   viewMode:    'task',
@@ -333,6 +395,82 @@ function scheduleRender() {
   timelinePanelRef.value?.scheduleRender()
 }
 
+function isTypingTarget(el) {
+  if (!el) return false
+  const tag = el.tagName
+  return el.isContentEditable || tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
+}
+
+function onGlobalKeydown(e) {
+  if (isTypingTarget(e.target)) return
+
+  if (e.key === '?' || (e.key === '/' && e.shiftKey)) {
+    e.preventDefault()
+    helpOpen.value = !helpOpen.value
+    return
+  }
+
+  if (e.key === 'Escape') {
+    if (helpOpen.value) {
+      helpOpen.value = false
+      e.preventDefault()
+    }
+    return
+  }
+
+  if (helpOpen.value) return
+
+  const key = e.key.toLowerCase()
+  switch (key) {
+    case '1':
+      uiOptions.viewMode = 'task'
+      e.preventDefault()
+      break
+    case '2':
+      uiOptions.viewMode = 'core'
+      e.preventDefault()
+      break
+    case 'h':
+      uiOptions.orientation = 'h'
+      e.preventDefault()
+      break
+    case 'v':
+      uiOptions.orientation = 'v'
+      e.preventDefault()
+      break
+    case 'g':
+      uiOptions.showGrid = !uiOptions.showGrid
+      e.preventDefault()
+      break
+    case 'd':
+      uiOptions.darkMode = !uiOptions.darkMode
+      e.preventDefault()
+      break
+    case 'm':
+      onAddMark()
+      e.preventDefault()
+      break
+    case 'c':
+      clearCursors()
+      e.preventDefault()
+      break
+    case 'f':
+      onFit()
+      e.preventDefault()
+      break
+    case '+':
+    case '=':
+      onZoom(0.7)
+      e.preventDefault()
+      break
+    case '-':
+    case '_':
+      onZoom(1.43)
+      e.preventDefault()
+      break
+  }
+}
+
 // ---- Auto-load embedded example on startup --------------------------------
 async function loadExampleBtf() {
   // Decode base64 → gzip bytes → text via native DecompressionStream
@@ -361,7 +499,12 @@ async function loadExampleBtf() {
 }
 
 onMounted(() => {
+  window.addEventListener('keydown', onGlobalKeydown)
   loadExampleBtf()
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onGlobalKeydown)
 })
 
 // ---- Bookmarks -----------------------------------------------------------
@@ -483,6 +626,103 @@ body {
   flex-direction: column;
   gap: 10px;
   box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+}
+
+.help-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(2px);
+}
+
+.help-dialog {
+  width: min(760px, 92vw);
+  max-height: min(82vh, 760px);
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.help-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.help-title {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.help-close {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg);
+  border-radius: 6px;
+  width: 28px;
+  height: 28px;
+  cursor: pointer;
+}
+
+.help-close:hover {
+  background: var(--tb-btn-hover);
+}
+
+.help-body {
+  padding: 14px;
+  overflow: auto;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.help-section {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.help-section-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-dim);
+  margin-bottom: 8px;
+}
+
+.help-grid {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  gap: 6px 10px;
+  align-items: center;
+}
+
+.k {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--accent);
+  background: var(--tb-btn-hover);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 6px;
+  justify-self: start;
+}
+
+@media (max-width: 760px) {
+  .help-body {
+    grid-template-columns: 1fr;
+  }
 }
 
 .loading-filename {
