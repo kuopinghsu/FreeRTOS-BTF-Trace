@@ -114,7 +114,7 @@ export function buildRowLayout(trace, viewMode, expanded, yStart) {
         const taskOrder = trace.coreTaskOrder.get(coreName) || []
         for (const rawTask of taskOrder) {
           const label = taskDisplayName(rawTask)
-          const color = taskColor(trace.taskRepr.get(trace.coreTaskSegs.get(coreName)?.get(rawTask)?.[0]?.task || rawTask) || rawTask, rawTask)
+          const color = taskColor(taskMergeKey(rawTask), rawTask)
           rows.push({ type: 'core-task', key: `${coreName}__${rawTask}`, coreKey: coreName, taskKey: rawTask, label, color, y })
           y += ROW_H + ROW_GAP
         }

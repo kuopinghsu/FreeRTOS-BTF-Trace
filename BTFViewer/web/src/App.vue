@@ -146,34 +146,78 @@
 
         <div class="help-body">
           <div class="help-section">
-            <div class="help-section-title">Keyboard</div>
+            <div class="help-section-title">
+              Keyboard
+            </div>
             <div class="help-grid">
-              <div class="k">?</div><div>Open/close this help</div>
-              <div class="k">Esc</div><div>Close help</div>
-              <div class="k">1</div><div>Task view</div>
-              <div class="k">2</div><div>Core view</div>
-              <div class="k">H</div><div>Horizontal layout</div>
-              <div class="k">V</div><div>Vertical layout</div>
-              <div class="k">G</div><div>Toggle grid</div>
-              <div class="k">D</div><div>Toggle dark/light mode</div>
-              <div class="k">M</div><div>Add bookmark at viewport center</div>
-              <div class="k">C</div><div>Clear all cursors</div>
-              <div class="k">F</div><div>Fit timeline to trace</div>
-              <div class="k">+</div><div>Zoom in</div>
-              <div class="k">-</div><div>Zoom out</div>
+              <div class="k">
+                ?
+              </div><div>Open/close this help</div>
+              <div class="k">
+                Esc
+              </div><div>Close help</div>
+              <div class="k">
+                1
+              </div><div>Task view</div>
+              <div class="k">
+                2
+              </div><div>Core view</div>
+              <div class="k">
+                H
+              </div><div>Horizontal layout</div>
+              <div class="k">
+                V
+              </div><div>Vertical layout</div>
+              <div class="k">
+                G
+              </div><div>Toggle grid</div>
+              <div class="k">
+                D
+              </div><div>Toggle dark/light mode</div>
+              <div class="k">
+                M
+              </div><div>Add bookmark at viewport center</div>
+              <div class="k">
+                C
+              </div><div>Clear all cursors</div>
+              <div class="k">
+                F
+              </div><div>Fit timeline to trace</div>
+              <div class="k">
+                +
+              </div><div>Zoom in</div>
+              <div class="k">
+                -
+              </div><div>Zoom out</div>
             </div>
           </div>
 
           <div class="help-section">
-            <div class="help-section-title">Mouse / Trackpad</div>
+            <div class="help-section-title">
+              Mouse / Trackpad
+            </div>
             <div class="help-grid">
-              <div class="k">Wheel</div><div>Scroll task rows</div>
-              <div class="k">Shift + Wheel</div><div>Pan timeline left/right</div>
-              <div class="k">Ctrl/Cmd + Wheel</div><div>Zoom at pointer</div>
-              <div class="k">Middle-drag</div><div>Pan timeline</div>
-              <div class="k">Click timeline</div><div>Place/remove cursor</div>
-              <div class="k">Right-click timeline</div><div>Open context menu</div>
-              <div class="k">Double-click ruler</div><div>Fit timeline</div>
+              <div class="k">
+                Wheel
+              </div><div>Scroll task rows</div>
+              <div class="k">
+                Shift + Wheel
+              </div><div>Pan timeline left/right</div>
+              <div class="k">
+                Ctrl/Cmd + Wheel
+              </div><div>Zoom at pointer</div>
+              <div class="k">
+                Middle-drag
+              </div><div>Pan timeline</div>
+              <div class="k">
+                Click timeline
+              </div><div>Place/remove cursor</div>
+              <div class="k">
+                Right-click timeline
+              </div><div>Open context menu</div>
+              <div class="k">
+                Double-click ruler
+              </div><div>Fit timeline</div>
             </div>
           </div>
         </div>
