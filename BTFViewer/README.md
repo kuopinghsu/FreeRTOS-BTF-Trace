@@ -6,6 +6,8 @@ A PyQt5-based interactive visualiser for FreeRTOS context-switch traces in **Bes
 
 <img src="../images/btfviewer.png" alt="BTF Viewer screenshot" width=640>
 
+[DEMO](https://btf.kuoping.com/)
+
 ## Features
 
 - **Two view modes** — Task View (one row/column per task) and Core View (one row/column per core, expandable)
