@@ -11,6 +11,7 @@
       :expanded="expanded"
       :scroll-y="viewport.scrollY"
       :highlight-key="options.highlightKey"
+      :show-sti="options.showSti !== false"
       @expand-toggle="onExpandToggle"
       @highlight-change="(k) => emit('highlightChange', k)"
       @highlight-click="(k) => emit('highlightClick', k)"
@@ -57,6 +58,21 @@
         </div>
         <div
           class="ctx-item"
+          @click="onAddAnnotation"
+        >
+          <svg
+            viewBox="0 0 16 16"
+            width="12"
+            height="12"
+            fill="currentColor"
+            style="flex-shrink:0"
+          >
+            <path d="M8 0 12 4 8 8 4 4 8 0zm0 9 4 4-4 3-4-3 4-4z" />
+          </svg>
+          Add Annotation
+        </div>
+        <div
+          class="ctx-item"
           @click="onCopyCursorTime"
         >
           <svg
@@ -70,6 +86,21 @@
           </svg>
           Copy Time
         </div>
+        <div
+          class="ctx-item"
+          @click="onCopyScreenshot"
+        >
+          <svg
+            viewBox="0 0 16 16"
+            width="12"
+            height="12"
+            fill="currentColor"
+            style="flex-shrink:0"
+          >
+            <path d="M3 3.5A1.5 1.5 0 0 1 4.5 2h7A1.5 1.5 0 0 1 13 3.5V5h1a1 1 0 0 1 1 1v6.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5V6a1 1 0 0 1 1-1h1V3.5zm1 0V5h8V3.5a.5.5 0 0 0-.5-.5h-7a.5.5 0 0 0-.5.5zM8 7a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z" />
+          </svg>
+          Copy Screenshot
+        </div>
       </div>
     </div>
   </div>
@@ -77,9 +108,10 @@
 
 <script setup>
 import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { toBlob as domToBlob } from 'html-to-image'
 import LabelColumn from './LabelColumn.vue'
 import StiTooltip  from './StiTooltip.vue'
-import { render as renderTimeline, renderVertical, buildRowLayout, drawHoverLine, drawHoverLineVertical, drawCursors, drawCursorsVertical, drawMarksHorizontal, drawMarksVertical, RULER_H, ROW_H, STI_ROW_H, HEADER_H, formatTime } from '../renderer/TimelineRenderer.js'
+import { render as renderTimeline, renderVertical, buildRowLayout, buildColumnLayout, drawHoverLine, drawHoverLineVertical, drawCursors, drawCursorsVertical, drawMarksHorizontal, drawMarksVertical, RULER_H, ROW_H, STI_ROW_H, HEADER_H, formatTime } from '../renderer/TimelineRenderer.js'
 import { InteractionHandler } from '../renderer/InteractionHandler.js'
 import { taskMergeKey } from '../utils/colors.js'
 
@@ -89,7 +121,7 @@ const props = defineProps({
   options: { type: Object, required: true },  // { viewMode, highlightKey, showGrid, darkMode, orientation, marks }
   cursors: { type: Array, default: () => [] },
 })
-const emit = defineEmits(['viewportChange', 'cursorsChange', 'highlightChange', 'highlightClick', 'addBookmark'])
+const emit = defineEmits(['viewportChange', 'cursorsChange', 'highlightChange', 'highlightClick', 'addBookmark', 'addAnnotation', 'markMove', 'copyScreenshot'])
 
 // ---- Template refs -------------------------------------------------------
 const panelEl     = ref(null)
@@ -170,6 +202,7 @@ function paint() {
       expanded,
       highlightKey: props.options.highlightKey,
       showGrid:     props.options.showGrid,
+      showSti:      props.options.showSti !== false,
       darkMode:     props.options.darkMode,
     })
   } else {
@@ -178,6 +211,7 @@ function paint() {
       expanded,
       highlightKey: props.options.highlightKey,
       showGrid:     props.options.showGrid,
+      showSti:      props.options.showSti !== false,
       darkMode:     props.options.darkMode,
     })
   }
@@ -246,7 +280,13 @@ function setupHandler() {
   _handler = new InteractionHandler(canvasEl.value, {
     getTrace:    () => props.trace,
     getViewport: () => ({ ...viewport }),
-    getOptions:  () => ({ viewMode: props.options.viewMode, expanded, orientation: orientation.value }),
+    getOptions:  () => ({
+      viewMode: props.options.viewMode,
+      expanded,
+      orientation: orientation.value,
+      showSti: props.options.showSti !== false,
+    }),
+    getMarks:    () => props.options.marks || [],
     onViewportChange(vp) {
       viewport.timeStart = vp.timeStart
       viewport.timeEnd   = vp.timeEnd
@@ -257,6 +297,9 @@ function setupHandler() {
     },
     onCursorsChange(cursors) {
       emit('cursorsChange', cursors)
+    },
+    onMarkMove({ id, ns }) {
+      emit('markMove', { id, ns })
     },
     onStiHover(ev) {
       stiHover.value = ev
@@ -294,11 +337,105 @@ function onAddBookmark() {
   emit('addBookmark', contextMenu.ns)
 }
 
+function onAddAnnotation() {
+  contextMenu.visible = false
+  emit('addAnnotation', contextMenu.ns)
+}
+
 function onCopyCursorTime() {
   contextMenu.visible = false
   if (!props.trace) return
   const label = formatTime(contextMenu.ns, props.trace.timeScale)
   navigator.clipboard?.writeText(label).catch(() => {})
+}
+
+function onCopyScreenshot() {
+  contextMenu.visible = false
+  emit('copyScreenshot')
+}
+
+async function captureScreenshotBlob() {
+  const root = panelEl.value
+  const { captureW, captureH } = getCaptureSize()
+  if (!captureW || !captureH) return null
+
+  if (root) {
+    try {
+      const blob = await domToBlob(root, {
+        cacheBust: true,
+        pixelRatio: window.devicePixelRatio || 1,
+        width: captureW,
+        height: captureH,
+        filter: (node) => {
+          if (!(node instanceof HTMLElement)) return true
+          // Exclude transient overlays from capture output.
+          return !node.classList.contains('context-menu') && !node.classList.contains('sti-tooltip')
+        },
+      })
+      if (blob) return blob
+    } catch {
+      // Fall through to canvas-only fallback.
+    }
+  }
+
+  return await captureCanvasViewportBlob(captureW, captureH)
+}
+
+function getCaptureSize() {
+  const root = panelEl.value
+  if (!root) return { captureW: 0, captureH: 0 }
+
+  const panelW = root.clientWidth
+  const panelH = root.clientHeight
+  if (!props.trace) return { captureW: panelW, captureH: panelH }
+
+  if (orientation.value === 'v') {
+    const { totalWidth } = buildColumnLayout(
+      props.trace,
+      props.options.viewMode,
+      expanded,
+      viewport.scrollX || 0,
+      props.options.showSti !== false,
+    )
+    const captureW = Math.max(220, Math.min(panelW, Math.ceil(totalWidth)))
+    return { captureW, captureH: panelH }
+  }
+
+  const { totalHeight } = buildRowLayout(props.trace, props.options.viewMode, expanded, 0, props.options.showSti !== false)
+  const neededH = RULER_H + Math.max(ROW_H, totalHeight)
+  const captureH = Math.max(RULER_H + ROW_H, Math.min(panelH, Math.ceil(neededH)))
+  return { captureW: panelW, captureH }
+}
+
+async function captureCanvasViewportBlob(captureW, captureH) {
+  const base = canvasEl.value
+  const overlay = overlayEl.value
+  const wrap = canvasWrapEl.value
+  if (!base || !overlay || !wrap) return null
+
+  const dpr = window.devicePixelRatio || 1
+  const w = Math.min(captureW, wrap.clientWidth)
+  const h = Math.min(captureH, wrap.clientHeight)
+  if (w <= 0 || h <= 0) return null
+
+  const out = document.createElement('canvas')
+  out.width = Math.round(w * dpr)
+  out.height = Math.round(h * dpr)
+  const outCtx = out.getContext('2d')
+  if (!outCtx) return null
+  outCtx.setTransform(dpr, 0, 0, dpr, 0, 0)
+
+  const panelStyle = getComputedStyle(panelEl.value || wrap)
+  const bg = panelStyle.getPropertyValue('--bg').trim() || (props.options.darkMode ? '#1E1E1E' : '#FFFFFF')
+  outCtx.fillStyle = bg
+  outCtx.fillRect(0, 0, w, h)
+
+  const srcW = Math.round(w * dpr)
+  const srcH = Math.round(h * dpr)
+  outCtx.drawImage(base, 0, 0, srcW, srcH, 0, 0, w, h)
+  outCtx.drawImage(overlay, 0, 0, srcW, srcH, 0, 0, w, h)
+
+  return await new Promise((resolve) => out.toBlob(resolve, 'image/png'))
 }
 
 // ---- Close context menu on outside click ----------------------------------
@@ -312,9 +449,10 @@ function onGlobalClick() {
 
 function fitToTrace() {
   if (!props.trace) return
-  const padding = (props.trace.timeMax - props.trace.timeMin) * 0.02
-  viewport.timeStart = props.trace.timeMin - padding
-  viewport.timeEnd   = props.trace.timeMax + padding
+  const lo = props.trace.timeMin >= 0 ? Math.max(0, props.trace.timeMin) : props.trace.timeMin
+  const hi = props.trace.timeMax
+  viewport.timeStart = lo
+  viewport.timeEnd   = hi
   viewport.scrollY   = 0
   viewport.scrollX   = 0
   scheduleRender()
@@ -345,7 +483,7 @@ function getViewportCenter() {
 function scrollToTask(mergeKey) {
   if (!props.trace) return
   // Build layout at yStart=0 to get raw row offsets independent of current scrollY
-  const { rows } = buildRowLayout(props.trace, props.options.viewMode, expanded, 0)
+  const { rows } = buildRowLayout(props.trace, props.options.viewMode, expanded, 0, props.options.showSti !== false)
   // In task view: row.key === mergeKey; in core view: match on taskKey's mergeKey
   let targetRow = rows.find(r => r.type === 'task' && r.key === mergeKey)
   if (!targetRow) {
@@ -359,7 +497,7 @@ function scrollToTask(mergeKey) {
   scheduleRender()
 }
 
-defineExpose({ fitToTrace, scheduleRender, zoomCenter, expandAll, collapseAll, jumpToNs, getViewportCenter, scrollToTask })
+defineExpose({ fitToTrace, scheduleRender, zoomCenter, expandAll, collapseAll, jumpToNs, getViewportCenter, scrollToTask, captureScreenshotBlob })
 
 // ---- Expand / collapse core rows -----------------------------------------
 function onExpandToggle(coreName) {
@@ -398,7 +536,7 @@ watch([() => props.options.orientation, () => props.options.viewMode], () => {
   scheduleRender()
 })
 // Other visual options that affect segment rendering → full repaint
-watch([() => props.options.highlightKey, () => props.options.showGrid, () => props.options.darkMode], () => {
+watch([() => props.options.highlightKey, () => props.options.showGrid, () => props.options.showSti, () => props.options.darkMode], () => {
   scheduleRender()
 })
 // Marks are on the overlay — no full repaint needed
@@ -424,7 +562,13 @@ watch(stiHover, (ev) => {
     const w = canvasEl.value.clientWidth
     const pxPerNs = w / (viewport.timeEnd - viewport.timeStart)
     stiHoverPos.x = (ev.time - viewport.timeStart) * pxPerNs
-    const { rows } = buildRowLayout(props.trace, props.options.viewMode, expanded, RULER_H - viewport.scrollY)
+    const { rows } = buildRowLayout(
+      props.trace,
+      props.options.viewMode,
+      expanded,
+      RULER_H - viewport.scrollY,
+      props.options.showSti !== false,
+    )
     const row = rows.find(r => r.type === 'sti' && r.key === ev.target)
     stiHoverPos.y = row ? (row.y + STI_ROW_H / 2) : (canvasEl.value.clientHeight / 2)
   }

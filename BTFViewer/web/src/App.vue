@@ -19,6 +19,7 @@
       @expand-all="onExpandAll"
       @collapse-all="onCollapseAll"
       @add-mark="onAddMark"
+      @copy-screenshot="onCopyScreenshot"
       @show-help="helpOpen = true"
     />
 
@@ -57,6 +58,9 @@
         @highlight-change="(k) => timelineOptions.highlightKey = k ?? pinnedHighlightKey"
         @highlight-click="onHighlightClick"
         @add-bookmark="onAddBookmark"
+        @add-annotation="onAddAnnotation"
+        @mark-move="onMoveMark"
+        @copy-screenshot="onCopyScreenshot"
       />
 
       <!-- Right panel -->
@@ -94,13 +98,14 @@
             Marks
           </div>
           <MarksPanel
-            :bookmarks="marks"
+            :marks="marks"
             :time-scale="trace.timeScale"
             @add-bookmark="onAddMark"
-            @delete-bookmark="onDeleteBookmark"
+            @add-annotation="onAddAnnotationAtCenter"
+            @delete-mark="onDeleteMark"
             @jump-to="onJumpToMark"
             @update-label="onUpdateMarkLabel"
-            @import-bookmarks="onImportBookmarks"
+            @import-marks="onImportMarks"
           />
         </div>
 
@@ -172,6 +177,9 @@
                 G
               </div><div>Toggle grid</div>
               <div class="k">
+                I
+              </div><div>Show/hide STI channels</div>
+              <div class="k">
                 D
               </div><div>Toggle dark/light mode</div>
               <div class="k">
@@ -183,6 +191,9 @@
               <div class="k">
                 F
               </div><div>Fit timeline to trace</div>
+              <div class="k">
+                S
+              </div><div>Copy screenshot to clipboard</div>
               <div class="k">
                 +
               </div><div>Zoom in</div>
@@ -215,6 +226,9 @@
               <div class="k">
                 Right-click timeline
               </div><div>Open context menu</div>
+              <div class="k">
+                Context menu
+              </div><div>Copy screenshot</div>
               <div class="k">
                 Double-click ruler
               </div><div>Fit timeline</div>
@@ -265,6 +279,7 @@ const uiOptions = reactive({
   viewMode:    'task',
   darkMode:    true,
   showGrid:    false,
+  showSti:     true,
   orientation: 'h',
 })
 
@@ -272,12 +287,13 @@ const timelineOptions = reactive({
   viewMode:     'task',
   darkMode:     true,
   showGrid:     false,
+  showSti:      true,
   orientation:  'h',
   highlightKey: null,
   marks:        [],
 })
 
-// Bookmarks state
+// Marks state (bookmarks + annotations)
 const marks              = ref([])
 let   _markNextId         = 1
 const pinnedHighlightKey = ref(null)  // sticky highlight set by legend click
@@ -287,6 +303,7 @@ watch(uiOptions, (o) => {
   timelineOptions.viewMode    = o.viewMode
   timelineOptions.darkMode    = o.darkMode
   timelineOptions.showGrid    = o.showGrid
+  timelineOptions.showSti     = o.showSti
   timelineOptions.orientation = o.orientation
 }, { deep: true })
 
@@ -408,6 +425,33 @@ function onFit() {
   timelinePanelRef.value?.fitToTrace()
 }
 
+async function onCopyScreenshot() {
+  const blob = await timelinePanelRef.value?.captureScreenshotBlob?.()
+  if (!blob) {
+    alert('Unable to capture screenshot.')
+    return
+  }
+
+  const canWriteImage = typeof ClipboardItem !== 'undefined' && !!navigator.clipboard?.write
+  if (canWriteImage && window.isSecureContext) {
+    try {
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
+      alert('Screenshot copied to clipboard.')
+      return
+    } catch {
+      // Fall through to download fallback.
+    }
+  }
+
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'timeline-screenshot.png'
+  a.click()
+  URL.revokeObjectURL(url)
+  alert('Clipboard image write is unavailable. Screenshot was downloaded as PNG.')
+}
+
 function onExpandAll() {
   timelinePanelRef.value?.expandAll()
 }
@@ -486,6 +530,10 @@ function onGlobalKeydown(e) {
       uiOptions.showGrid = !uiOptions.showGrid
       e.preventDefault()
       break
+    case 'i':
+      uiOptions.showSti = !uiOptions.showSti
+      e.preventDefault()
+      break
     case 'd':
       uiOptions.darkMode = !uiOptions.darkMode
       e.preventDefault()
@@ -500,6 +548,10 @@ function onGlobalKeydown(e) {
       break
     case 'f':
       onFit()
+      e.preventDefault()
+      break
+    case 's':
+      onCopyScreenshot()
       e.preventDefault()
       break
     case '+':
@@ -551,30 +603,50 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', onGlobalKeydown)
 })
 
-// ---- Bookmarks -----------------------------------------------------------
+// ---- Marks (bookmarks + annotations) -------------------------------------
 function onAddMark() {
   // Add bookmark at the current viewport center
   if (!trace.value) return
   const center = timelinePanelRef.value?.getViewportCenter?.()
     ?? (trace.value.timeMin + (trace.value.timeMax - trace.value.timeMin) / 2)
-  addMarkAtNs(center)
+  addMarkAtNs(center, 'bookmark')
+}
+
+function onAddAnnotationAtCenter() {
+  if (!trace.value) return
+  const center = timelinePanelRef.value?.getViewportCenter?.()
+    ?? (trace.value.timeMin + (trace.value.timeMax - trace.value.timeMin) / 2)
+  addMarkAtNs(center, 'annotation')
 }
 
 function onAddBookmark(ns) {
   // Called from TimelinePanel right-click context menu
-  addMarkAtNs(ns)
+  addMarkAtNs(ns, 'bookmark')
 }
 
-function addMarkAtNs(ns) {
+function onAddAnnotation(ns) {
+  addMarkAtNs(ns, 'annotation')
+}
+
+function addMarkAtNs(ns, type = 'bookmark') {
   if (!trace.value) return
   // Clamp to trace time range
   const clamped = Math.max(trace.value.timeMin, Math.min(trace.value.timeMax, ns))
-  marks.value.push({ id: _markNextId++, ns: clamped, label: '' })
+  marks.value.push({ id: _markNextId++, ns: clamped, label: '', type: type === 'annotation' ? 'annotation' : 'bookmark' })
   marks.value.sort((a, b) => a.ns - b.ns)
 }
 
-function onDeleteBookmark(id) {
+function onDeleteMark(id) {
   marks.value = marks.value.filter(m => m.id !== id)
+}
+
+function onMoveMark({ id, ns }) {
+  if (!trace.value) return
+  const m = marks.value.find(mk => mk.id === id)
+  if (!m) return
+  const clamped = Math.max(trace.value.timeMin, Math.min(trace.value.timeMax, ns))
+  m.ns = clamped
+  marks.value.sort((a, b) => a.ns - b.ns)
 }
 
 function onJumpToMark(ns) {
@@ -586,9 +658,14 @@ function onUpdateMarkLabel({ id, label }) {
   if (m) m.label = label
 }
 
-function onImportBookmarks(imported) {
-  for (const { ns, label } of imported) {
-    marks.value.push({ id: _markNextId++, ns, label: label || '' })
+function onImportMarks(imported) {
+  for (const { ns, label, type } of imported) {
+    marks.value.push({
+      id: _markNextId++,
+      ns,
+      label: label || '',
+      type: type === 'annotation' ? 'annotation' : 'bookmark',
+    })
   }
   marks.value.sort((a, b) => a.ns - b.ns)
 }

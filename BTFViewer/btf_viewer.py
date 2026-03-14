@@ -3090,15 +3090,6 @@ class TimelineScene(QGraphicsScene):
         self._frozen_items.append((hdr_lbl, 4))
         self._frozen_top_items.append((corner, 0))
         self._frozen_top_items.append((hdr_lbl, hdr_lbl.pos().y()))
-        if _has_tick:
-            _tick_font_c = _monospace_font(max(6, self._font_size - 2))
-            _tick_fm_c   = QFontMetrics(_tick_font_c)
-            _tick_corner = self.addSimpleText("TICK", _tick_font_c)
-            _tick_corner.setBrush(QBrush(QColor("#E8C84A")))
-            _tick_corner.setPos(4, RULER_HEIGHT - 10 + (10 - _tick_fm_c.height()) / 2)
-            _tick_corner.setZValue(39)
-            self._frozen_items.append((_tick_corner, 4))
-            self._frozen_top_items.append((_tick_corner, _tick_corner.pos().y()))
 
     def _build_vertical_core(self) -> None:
         """Vertical core view: expandable core columns → per-task sub-columns."""

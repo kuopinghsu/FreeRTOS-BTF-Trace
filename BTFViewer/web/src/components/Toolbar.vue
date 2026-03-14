@@ -176,6 +176,23 @@
       Mark
     </button>
 
+    <button
+      v-if="traceInfo"
+      class="tb-btn"
+      title="Copy timeline screenshot"
+      @click="emit('copyScreenshot')"
+    >
+      <svg
+        viewBox="0 0 16 16"
+        width="16"
+        height="16"
+        fill="currentColor"
+      >
+        <path d="M3 3.5A1.5 1.5 0 0 1 4.5 2h7A1.5 1.5 0 0 1 13 3.5V5h1a1 1 0 0 1 1 1v6.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5V6a1 1 0 0 1 1-1h1V3.5zm1 0V5h8V3.5a.5.5 0 0 0-.5-.5h-7a.5.5 0 0 0-.5.5zM8 7a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z" />
+      </svg>
+      Shot
+    </button>
+
     <div class="tb-sep" />
 
     <!-- Orientation toggle -->
@@ -241,6 +258,15 @@
       >
         <path d="M1 4h14v1H1zm0 4h14v1H1zm0 4h14v1H1zM4 1v14H5V1zm4 0v14H9V1zm4 0v14h1V1z" />
       </svg>
+    </label>
+
+    <label
+      class="tb-btn"
+      :class="{ active: modelValue.showSti !== false }"
+      title="Show or hide STI channels"
+      @click="emit('update:modelValue', { ...modelValue, showSti: modelValue.showSti === false })"
+    >
+      STI
     </label>
 
     <!-- Dark mode toggle -->
@@ -313,7 +339,7 @@ defineProps({
   loadingMsg:  { type: String,  default: '' },
 })
 
-const emit = defineEmits(['update:modelValue', 'trace-reading', 'trace-loaded', 'zoom', 'fit', 'clearCursors', 'expandAll', 'collapseAll', 'addMark', 'showHelp'])
+const emit = defineEmits(['update:modelValue', 'trace-reading', 'trace-loaded', 'zoom', 'fit', 'clearCursors', 'expandAll', 'collapseAll', 'addMark', 'copyScreenshot', 'showHelp'])
 
 function onFileChange(e) {
   const file = e.target.files[0]

@@ -92,13 +92,14 @@ const props = defineProps({
   expanded:     { type: Object, default: () => new Set() },   // Set
   scrollY:      { type: Number, default: 0 },
   highlightKey: { type: [String, null], default: null },
+  showSti:      { type: Boolean, default: true },
 })
 
 const emit = defineEmits(['expandToggle', 'highlightChange', 'highlightClick'])
 
 const rows = computed(() => {
   if (!props.trace) return []
-  return buildRowLayout(props.trace, props.viewMode, props.expanded, 0).rows
+  return buildRowLayout(props.trace, props.viewMode, props.expanded, 0, props.showSti).rows
 })
 
 function toggleExpand(coreName) {

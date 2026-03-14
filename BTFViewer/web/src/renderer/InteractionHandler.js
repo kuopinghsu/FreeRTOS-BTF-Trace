@@ -18,7 +18,8 @@
  */
 
 import { hitTestSti, hitTestRow, hitTestStiVertical, hitTestColumn,
-         RULER_H, ROW_H, ROW_GAP, RULER_W, HEADER_H } from './TimelineRenderer.js'
+         RULER_H, ROW_H, ROW_GAP, RULER_W, HEADER_H,
+         findNearestCursorIndex, findNearestMark } from './TimelineRenderer.js'
 
 const MAX_CURSORS = 4
 
@@ -47,6 +48,10 @@ export class InteractionHandler {
     this._dragStartY      = 0
     this._dragStartTime   = 0   // timeStart at drag begin
     this._dragStartScrollX = 0
+    this._draggingCursorIdx = -1
+    this._draggingMarkId = null
+    this._dragCursorPx = 8
+    this._dragMarkPx = 6
 
     // Min zoom: entire trace visible
     this._minTimeSpan = 1
@@ -127,13 +132,15 @@ export class InteractionHandler {
     let newSpan = timeSpan * factor
     const trace = this._opts.getTrace()
     if (trace) {
-      const maxSpan = (trace.timeMax - trace.timeMin) * 1.05
+      const minT = trace.timeMin >= 0 ? Math.max(0, trace.timeMin) : trace.timeMin
+      const maxSpan = Math.max(1, trace.timeMax - minT)
       newSpan = Math.min(newSpan, maxSpan)
     }
     newSpan = Math.max(this._minTimeSpan, newSpan)
 
     const newStart = pivotT - (pivotX / canvasW) * newSpan
-    this._opts.onViewportChange?.({ ...vp, timeStart: newStart, timeEnd: newStart + newSpan })
+    const { s, e } = this._clampPan(newStart, newStart + newSpan)
+    this._opts.onViewportChange?.({ ...vp, timeStart: s, timeEnd: e })
   }
 
   /** Zoom around a canvas pivot (vertical mode – pivot on Y axis). */
@@ -148,14 +155,16 @@ export class InteractionHandler {
     let newSpan = timeSpan * factor
     const trace = this._opts.getTrace()
     if (trace) {
-      const maxSpan = (trace.timeMax - trace.timeMin) * 1.05
+      const minT = trace.timeMin >= 0 ? Math.max(0, trace.timeMin) : trace.timeMin
+      const maxSpan = Math.max(1, trace.timeMax - minT)
       newSpan = Math.min(newSpan, maxSpan)
     }
     newSpan = Math.max(this._minTimeSpan, newSpan)
 
     const relPos = Math.max(0, pivotY - HEADER_H) / bodyH
     const newStart = pivotT - relPos * newSpan
-    this._opts.onViewportChange?.({ ...vp, timeStart: newStart, timeEnd: newStart + newSpan })
+    const { s, e } = this._clampPan(newStart, newStart + newSpan)
+    this._opts.onViewportChange?.({ ...vp, timeStart: s, timeEnd: e })
   }
 
   _panH(deltaX) {
@@ -188,9 +197,11 @@ export class InteractionHandler {
     const trace = this._opts.getTrace()
     if (!trace) return { s: newStart, e: newEnd }
     const span   = newEnd - newStart
-    const margin = span * 0.2
-    const lo = trace.timeMin - margin
-    const hi = trace.timeMax + margin
+    const lo = trace.timeMin >= 0 ? Math.max(0, trace.timeMin) : trace.timeMin
+    const hi = trace.timeMax
+    const range = hi - lo
+    if (range <= 0) return { s: lo, e: hi }
+    if (span >= range) return { s: lo, e: hi }
     if (newStart < lo) return { s: lo, e: lo + span }
     if (newEnd   > hi) return { s: hi - span, e: hi }
     return { s: newStart, e: newEnd }
@@ -272,10 +283,44 @@ export class InteractionHandler {
       const cy   = e.clientY - rect.top
       const vert = this._isVertical()
 
+      // Some platforms/browsers are inconsistent about emitting a `dblclick`
+      // after an initial ruler press enters pan mode. Treat the 2nd primary
+      // press on the ruler as fit-to-window directly for robust behavior.
+      const isRulerClick = vert ? (cx < RULER_W || cy < HEADER_H) : (cy < RULER_H)
+      if (isRulerClick && e.detail >= 2) {
+        this._dragging = false
+        this._draggingCursorIdx = -1
+        this._draggingMarkId = null
+        this._opts.onFitToWindow?.()
+        e.preventDefault()
+        return
+      }
+
+      const t = this._canvasToTime(cx, cy)
+      if (t !== null) {
+        const span = vp.timeEnd - vp.timeStart
+        const pxBase = vert ? Math.max(1, vp.canvasH - HEADER_H) : Math.max(1, vp.canvasW)
+        const nsPerPx = span / pxBase
+        const cursorHit = findNearestCursorIndex(this._cursors, t, this._dragCursorPx * nsPerPx)
+        if (cursorHit !== -1) {
+          this._draggingCursorIdx = cursorHit
+          this._canvas.style.cursor = vert ? 'ns-resize' : 'ew-resize'
+          e.preventDefault()
+          return
+        }
+        const marks = this._opts.getMarks?.() || []
+        const markHit = findNearestMark(marks, t, this._dragMarkPx * nsPerPx)
+        if (markHit) {
+          this._draggingMarkId = markHit.id
+          this._canvas.style.cursor = vert ? 'ns-resize' : 'ew-resize'
+          e.preventDefault()
+          return
+        }
+      }
+
       if (vert) {
         if (cy >= HEADER_H && cx >= RULER_W) {
           // Click in timeline body → place cursor
-          const t = this._canvasToTime(cx, cy)
           if (t !== null) { this._placeCursor(t); return }
         }
         // Click in column header area → check for core expand/collapse
@@ -322,6 +367,25 @@ export class InteractionHandler {
     if (t !== null) this._opts.onHoverTimeChange?.(t)
     else             this._opts.onHoverTimeChange?.(null)
 
+    if (this._draggingCursorIdx !== -1) {
+      const tDrag = this._canvasToTime(cx, cy)
+      if (tDrag !== null) {
+        const next = [...this._cursors]
+        next[this._draggingCursorIdx] = tDrag
+        this._cursors = next
+        this._opts.onCursorsChange?.(next)
+      }
+      return
+    }
+
+    if (this._draggingMarkId !== null) {
+      const tDrag = this._canvasToTime(cx, cy)
+      if (tDrag !== null) {
+        this._opts.onMarkMove?.({ id: this._draggingMarkId, ns: tDrag })
+      }
+      return
+    }
+
     if (this._dragging) {
       const vp = this._opts.getViewport()
       if (!vp) return
@@ -344,6 +408,8 @@ export class InteractionHandler {
       return
     }
 
+    this._updateHoverCursor(cx, cy)
+
     // Hover: detect STI marker and row/column
     const trace = this._opts.getTrace()
     const ropts = this._opts.getOptions?.()
@@ -364,11 +430,17 @@ export class InteractionHandler {
   }
 
   _onMouseUp() {
+    this._draggingCursorIdx = -1
+    this._draggingMarkId = null
     this._dragging = false
+    this._canvas.style.cursor = 'crosshair'
   }
 
   _onMouseLeave() {
+    this._draggingCursorIdx = -1
+    this._draggingMarkId = null
     this._dragging = false
+    this._canvas.style.cursor = 'crosshair'
     this._opts.onHoverTimeChange?.(null)
   }
 
@@ -429,6 +501,30 @@ export class InteractionHandler {
     }
     this._cursors = cursors
     this._opts.onCursorsChange?.(cursors)
+  }
+
+  _updateHoverCursor(cx, cy) {
+    const vp = this._opts.getViewport()
+    if (!vp) {
+      this._canvas.style.cursor = 'crosshair'
+      return
+    }
+    const t = this._canvasToTime(cx, cy)
+    if (t === null) {
+      this._canvas.style.cursor = 'crosshair'
+      return
+    }
+    const vert = this._isVertical()
+    const span = vp.timeEnd - vp.timeStart
+    const pxBase = vert ? Math.max(1, vp.canvasH - HEADER_H) : Math.max(1, vp.canvasW)
+    const nsPerPx = span / pxBase
+    const cursorHit = findNearestCursorIndex(this._cursors, t, this._dragCursorPx * nsPerPx)
+    const markHit = findNearestMark(this._opts.getMarks?.() || [], t, this._dragMarkPx * nsPerPx)
+    if (cursorHit !== -1 || markHit) {
+      this._canvas.style.cursor = vert ? 'ns-resize' : 'ew-resize'
+      return
+    }
+    this._canvas.style.cursor = 'crosshair'
   }
 }
 

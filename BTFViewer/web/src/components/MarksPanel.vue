@@ -1,42 +1,57 @@
 <template>
   <div class="marks-panel">
-    <!-- Bookmarks section -->
+    <!-- Marks section -->
     <div class="marks-section">
       <div class="marks-section-header">
-        <span>Bookmarks ({{ bookmarks.length }})</span>
-        <button
-          class="mark-add-btn"
-          title="Add bookmark at viewport centre"
-          @click="emit('addBookmark')"
-        >
-          +
-        </button>
+        <span>Marks ({{ marks.length }})</span>
+        <div class="mark-add-group">
+          <button
+            class="mark-add-btn"
+            title="Add bookmark at viewport centre"
+            @click="emit('addBookmark')"
+          >
+            +B
+          </button>
+          <button
+            class="mark-add-btn"
+            title="Add annotation at viewport centre"
+            @click="emit('addAnnotation')"
+          >
+            +A
+          </button>
+        </div>
       </div>
       <div
-        v-if="bookmarks.length > 0"
+        v-if="marks.length > 0"
         class="mark-list"
       >
         <div
-          v-for="bm in bookmarks"
-          :key="bm.id"
+          v-for="m in marks"
+          :key="m.id"
           class="mark-item"
-          :class="{ selected: selectedId === bm.id }"
-          @click="emit('jumpTo', bm.ns); selectedId = bm.id"
+          :class="{ selected: selectedId === m.id }"
+          @click="emit('jumpTo', m.ns); selectedId = m.id"
         >
           <span
+            class="mark-kind"
+            :class="m.type === 'annotation' ? 'annotation' : 'bookmark'"
+          >
+            {{ m.type === 'annotation' ? 'A' : 'B' }}
+          </span>
+          <span
             class="mark-time"
-            :style="{ color: bookmarkColor }"
-          >{{ fmt(bm.ns) }}</span>
+            :style="{ color: markColor(m) }"
+          >{{ fmt(m.ns) }}</span>
           <input
             class="mark-label"
-            :value="bm.label"
-            @change="emit('updateLabel', { id: bm.id, label: $event.target.value })"
+            :value="m.label"
+            @change="emit('updateLabel', { id: m.id, label: $event.target.value })"
             @click.stop
           >
           <button
             class="mark-btn mark-del"
-            title="Delete bookmark"
-            @click.stop="emit('deleteBookmark', bm.id)"
+            title="Delete mark"
+            @click.stop="emit('deleteMark', m.id)"
           >
             ×
           </button>
@@ -54,7 +69,7 @@
     <div class="marks-actions">
       <button
         class="action-btn"
-        :disabled="bookmarks.length === 0"
+        :disabled="marks.length === 0"
         @click="exportCsv"
       >
         Export CSV
@@ -81,25 +96,28 @@ import { ref } from 'vue'
 import { formatTime } from '../renderer/TimelineRenderer.js'
 
 const props = defineProps({
-  bookmarks: { type: Array, default: () => [] },
+  marks: { type: Array, default: () => [] },
   timeScale: { type: String, default: 'ns' },
 })
 
-const emit = defineEmits(['addBookmark', 'deleteBookmark', 'jumpTo', 'updateLabel', 'importBookmarks'])
+const emit = defineEmits(['addBookmark', 'addAnnotation', 'deleteMark', 'jumpTo', 'updateLabel', 'importMarks'])
 
 const selectedId    = ref(null)
 const importInputEl = ref(null)
-const bookmarkColor = '#FF9933'
+
+function markColor(mark) {
+  return mark?.type === 'annotation' ? '#FF8C00' : '#FFD700'
+}
 
 function fmt(ns) {
   return formatTime(ns, props.timeScale)
 }
 
 function exportCsv() {
-  if (props.bookmarks.length === 0) return
+  if (props.marks.length === 0) return
   const rows = [['type', 'time', 'ns', 'label']]
-  for (const bm of props.bookmarks) {
-    rows.push(['bookmark', fmt(bm.ns), bm.ns, bm.label || ''])
+  for (const m of props.marks) {
+    rows.push([m.type === 'annotation' ? 'annotation' : 'bookmark', fmt(m.ns), m.ns, m.label || ''])
   }
   const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n')
   const blob = new Blob([csv], { type: 'text/csv' })
@@ -130,13 +148,14 @@ function onImportFile(e) {
       const cols = lines[i].match(/(?:"([^"]*(?:""[^"]*)*)"|([^,]*))/g)
         ?.map(c => c.startsWith('"') ? c.slice(1, -1).replace(/("")/g, '"') : c) ?? []
       // Expected cols: type, time, ns, label
+      const type = (cols[0] || '').trim().toLowerCase() === 'annotation' ? 'annotation' : 'bookmark'
       const ns = parseFloat(cols[2])
       if (!isNaN(ns)) {
-        imported.push({ ns, label: cols[3] || '' })
+        imported.push({ ns, label: cols[3] || '', type })
       }
     }
     if (imported.length > 0) {
-      emit('importBookmarks', imported)
+      emit('importMarks', imported)
     }
   }
   reader.readAsText(file)
@@ -175,6 +194,11 @@ function onImportFile(e) {
   flex-shrink: 0;
 }
 
+.mark-add-group {
+  display: flex;
+  gap: 4px;
+}
+
 .mark-add-btn {
   background: var(--tb-btn-active);
   border: 1px solid var(--accent);
@@ -202,6 +226,27 @@ function onImportFile(e) {
   padding: 2px 8px;
   cursor: pointer;
   transition: background 0.08s;
+}
+
+.mark-kind {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  font-weight: 700;
+  color: #000;
+  flex-shrink: 0;
+}
+
+.mark-kind.bookmark {
+  background: #FFD700;
+}
+
+.mark-kind.annotation {
+  background: #FF8C00;
 }
 .mark-item:hover {
   background: var(--tb-btn-hover);

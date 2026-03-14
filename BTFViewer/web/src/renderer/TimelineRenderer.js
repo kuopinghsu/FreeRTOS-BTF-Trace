@@ -39,6 +39,7 @@ export const COL_W      =  26  // column width per task/core – vertical mode
 // merged via lodReduce; below it, individual segments are drawn with outlines.
 // visibleSegs() already selects the right LOD bin tier automatically.
 const PAINT_LOD_COARSE = 200    // ns/px: use coarse (merged) paint above this zoom level
+const TICK_COLOR = '#E8C84A'
 
 // ---- Time formatting -------------------------------------------------------
 
@@ -92,7 +93,7 @@ function niceStep(span) {
  * @param {number}  yStart     Top Y coordinate of the first row (after ruler).
  * @returns {{ rows: Array, totalHeight: number }}
  */
-export function buildRowLayout(trace, viewMode, expanded, yStart) {
+export function buildRowLayout(trace, viewMode, expanded, yStart, showSti = true) {
   const rows = []
   let y = yStart
 
@@ -123,9 +124,11 @@ export function buildRowLayout(trace, viewMode, expanded, yStart) {
   }
 
   // STI rows
-  for (const ch of trace.stiChannels) {
-    rows.push({ type: 'sti', key: ch, label: ch, color: '#888', y })
-    y += STI_ROW_H + ROW_GAP
+  if (showSti) {
+    for (const ch of trace.stiChannels) {
+      rows.push({ type: 'sti', key: ch, label: ch, color: '#888', y })
+      y += STI_ROW_H + ROW_GAP
+    }
   }
 
   return { rows, totalHeight: y - yStart }
@@ -152,6 +155,7 @@ export function render(ctx, trace, viewport, options = {}) {
     darkMode    = true,
     hoverTime   = null,
     marks       = [],
+    showSti     = true,
   } = options
 
   const timeSpan = timeEnd - timeStart
@@ -173,7 +177,7 @@ export function render(ctx, trace, viewport, options = {}) {
   ctx.fillRect(0, 0, canvasW, RULER_H)
 
   // ---- Row layout ----
-  const { rows } = buildRowLayout(trace, viewMode, expanded, RULER_H - scrollY)
+  const { rows } = buildRowLayout(trace, viewMode, expanded, RULER_H - scrollY, showSti)
 
   // ---- Grid lines (optional) ----
   if (showGrid) {
@@ -234,14 +238,34 @@ export function render(ctx, trace, viewport, options = {}) {
 function drawRuler(ctx, trace, timeStart, timeEnd, pxPerNs, canvasW, darkMode) {
   const timeSpan = timeEnd - timeStart
   const step = niceStep(timeSpan)
+  const minorStep = step / 5
   const startSnap = Math.ceil(timeStart / step) * step
 
   const textColor  = darkMode ? '#CCCCCC' : '#444444'
   const tickColor  = darkMode ? '#555555' : '#BBBBBB'
+  const minorTickColor = darkMode ? '#4A4A4A' : '#CFCFCF'
 
   ctx.font = '10px monospace'
   ctx.textAlign = 'left'
   ctx.textBaseline = 'middle'
+
+  // Minor ticks
+  if (minorStep > 0) {
+    const minorStart = Math.ceil(timeStart / minorStep) * minorStep
+    ctx.strokeStyle = minorTickColor
+    ctx.lineWidth = 1
+    for (let t = minorStart; t <= timeEnd + minorStep; t += minorStep) {
+      // Skip major positions; they are rendered below with longer ticks.
+      const k = Math.round(t / step)
+      if (Math.abs(t - k * step) < minorStep * 0.08) continue
+      const x = Math.round((t - timeStart) * pxPerNs)
+      if (x < -10 || x > canvasW + 10) continue
+      ctx.beginPath()
+      ctx.moveTo(x + 0.5, RULER_H - 6)
+      ctx.lineTo(x + 0.5, RULER_H)
+      ctx.stroke()
+    }
+  }
 
   for (let t = startSnap - step; t <= timeEnd + step; t += step) {
     const x = Math.round((t - timeStart) * pxPerNs)
@@ -268,6 +292,33 @@ function drawRuler(ctx, trace, timeStart, timeEnd, pxPerNs, canvasW, darkMode) {
   ctx.moveTo(0, RULER_H - 0.5)
   ctx.lineTo(canvasW, RULER_H - 0.5)
   ctx.stroke()
+
+  drawTickMarkersOnRulerHorizontal(ctx, trace, timeStart, timeEnd, pxPerNs, canvasW)
+}
+
+function drawTickMarkersOnRulerHorizontal(ctx, trace, timeStart, timeEnd, pxPerNs, canvasW) {
+  const tickMk = taskMergeKey('TICK')
+  const segs = trace.segByMergeKey?.get(tickMk) || []
+  const starts = trace.segStartByMergeKey?.get(tickMk) || []
+  if (segs.length === 0 || starts.length === 0) return
+
+  const lo = Math.max(0, bisectLeft(starts, timeStart) - 1)
+  const hi = Math.min(segs.length, bisectRight(starts, timeEnd) + 1)
+
+  const bandTop = RULER_H - 10
+  const bandH = 8
+  ctx.save()
+  ctx.fillStyle = TICK_COLOR
+  ctx.globalAlpha = 0.95
+  for (let i = lo; i < hi; i++) {
+    const seg = segs[i]
+    const x1 = (seg.start - timeStart) * pxPerNs
+    const x2 = (seg.end - timeStart) * pxPerNs
+    if (x2 < -2 || x1 > canvasW + 2) continue
+    const w = Math.max(1, x2 - x1)
+    ctx.fillRect(Math.floor(x1), bandTop, Math.ceil(w), bandH)
+  }
+  ctx.restore()
 }
 
 // ---- Segment helpers -------------------------------------------------------
@@ -567,9 +618,10 @@ export function drawHoverLine(ctx, t, trace, timeStart, pxPerNs, canvasW, canvas
 export function hitTestSti(trace, viewport, options, cx, cy, radius = 8) {
   const { timeStart, timeEnd, scrollY, canvasW } = viewport
   const pxPerNs = canvasW / (timeEnd - timeStart)
-  const { viewMode = 'task', expanded = new Set() } = options
+  const { viewMode = 'task', expanded = new Set(), showSti = true } = options
+  if (!showSti) return null
 
-  const { rows } = buildRowLayout(trace, viewMode, expanded, RULER_H - scrollY)
+  const { rows } = buildRowLayout(trace, viewMode, expanded, RULER_H - scrollY, showSti)
 
   for (const row of rows) {
     if (row.type !== 'sti') continue
@@ -599,8 +651,8 @@ export function hitTestSti(trace, viewport, options, cx, cy, radius = 8) {
  */
 export function hitTestRow(trace, viewport, options, cx, cy) {
   const { scrollY } = viewport
-  const { viewMode = 'task', expanded = new Set() } = options
-  const { rows } = buildRowLayout(trace, viewMode, expanded, RULER_H - scrollY)
+  const { viewMode = 'task', expanded = new Set(), showSti = true } = options
+  const { rows } = buildRowLayout(trace, viewMode, expanded, RULER_H - scrollY, showSti)
   for (const row of rows) {
     if (cy >= row.y && cy < row.y + (row.type === 'sti' ? STI_ROW_H : ROW_H)) {
       return row
@@ -610,13 +662,71 @@ export function hitTestRow(trace, viewport, options, cx, cy) {
 }
 
 // ===========================================================================
-// MARKS (bookmarks)
+// MARKS (bookmarks + annotations)
 // ===========================================================================
 
-const MARK_COLOR = '#FF9933'
+const BOOKMARK_COLOR = '#FFD700'
+const ANNOTATION_COLOR = '#FF8C00'
+
+function markKind(mark) {
+  return mark?.type === 'annotation' ? 'annotation' : 'bookmark'
+}
+
+function markColor(mark) {
+  return markKind(mark) === 'annotation' ? ANNOTATION_COLOR : BOOKMARK_COLOR
+}
+
+function markLabel(mark, trace) {
+  const txt = mark?.label || mark?.note || ''
+  return txt || formatTime(mark.ns, trace.timeScale)
+}
+
+function drawMarkFlagHorizontal(ctx, x, kind) {
+  const halfW = 4
+  const tipY = RULER_H - 2
+  const baseY = tipY - 6
+  const color = kind === 'annotation' ? '#FFA500' : '#FFD700'
+  ctx.fillStyle = color
+  ctx.beginPath()
+  if (kind === 'annotation') {
+    const midY = (baseY + tipY) / 2
+    ctx.moveTo(x, baseY)
+    ctx.lineTo(x + halfW, midY)
+    ctx.lineTo(x, tipY)
+    ctx.lineTo(x - halfW, midY)
+  } else {
+    ctx.moveTo(x - halfW, baseY)
+    ctx.lineTo(x + halfW, baseY)
+    ctx.lineTo(x, tipY)
+  }
+  ctx.closePath()
+  ctx.fill()
+}
+
+function drawMarkFlagVertical(ctx, y, kind) {
+  const halfW = 4
+  const rightX = RULER_W - 2
+  const leftX = rightX - 6
+  const color = kind === 'annotation' ? '#FFA500' : '#FFD700'
+  ctx.fillStyle = color
+  ctx.beginPath()
+  if (kind === 'annotation') {
+    const midX = (leftX + rightX) / 2
+    ctx.moveTo(leftX, y)
+    ctx.lineTo(midX, y - halfW)
+    ctx.lineTo(rightX, y)
+    ctx.lineTo(midX, y + halfW)
+  } else {
+    ctx.moveTo(leftX, y - halfW)
+    ctx.lineTo(leftX, y + halfW)
+    ctx.lineTo(rightX, y)
+  }
+  ctx.closePath()
+  ctx.fill()
+}
 
 /**
- * Draw bookmark marks as vertical dashed lines in horizontal mode.
+ * Draw marks as vertical lines in horizontal mode.
  */
 export function drawMarksHorizontal(ctx, marks, trace, timeStart, pxPerNs, canvasW, canvasH, _darkMode) {
   if (!marks || marks.length === 0) return
@@ -624,13 +734,15 @@ export function drawMarksHorizontal(ctx, marks, trace, timeStart, pxPerNs, canva
   ctx.font = '10px monospace'
   ctx.textBaseline = 'top'
 
-  for (const bm of marks) {
-    const x = Math.round((bm.ns - timeStart) * pxPerNs)
+  for (const mark of marks) {
+    const x = Math.round((mark.ns - timeStart) * pxPerNs)
     if (x < -2 || x > canvasW + 2) continue
+    const kind = markKind(mark)
+    const color = markColor(mark)
 
-    ctx.strokeStyle = MARK_COLOR
-    ctx.lineWidth = 1.5
-    ctx.setLineDash([6, 3])
+    ctx.strokeStyle = color
+    ctx.lineWidth = kind === 'annotation' ? 1.0 : 1.2
+    ctx.setLineDash(kind === 'annotation' ? [6, 3] : [])
     ctx.globalAlpha = 0.75
     ctx.beginPath()
     ctx.moveTo(x + 0.5, RULER_H)
@@ -639,11 +751,13 @@ export function drawMarksHorizontal(ctx, marks, trace, timeStart, pxPerNs, canva
     ctx.setLineDash([])
     ctx.globalAlpha = 1.0
 
+    drawMarkFlagHorizontal(ctx, x, kind)
+
     // Label on ruler
-    const label = bm.label || formatTime(bm.ns, trace.timeScale)
+    const label = markLabel(mark, trace)
     const tw = ctx.measureText(label).width + 8
     const lx = Math.min(x + 3, canvasW - tw - 2)
-    ctx.fillStyle = MARK_COLOR
+    ctx.fillStyle = color
     ctx.globalAlpha = 0.85
     ctx.fillRect(lx, RULER_H - 16, tw, 13)
     ctx.globalAlpha = 1.0
@@ -667,7 +781,7 @@ export function drawMarksHorizontal(ctx, marks, trace, timeStart, pxPerNs, canva
  * @param {number} scrollX    Horizontal scroll offset in pixels
  * @returns {{ cols: Array, totalWidth: number }}
  */
-export function buildColumnLayout(trace, viewMode, expanded, scrollX = 0) {
+export function buildColumnLayout(trace, viewMode, expanded, scrollX = 0, showSti = true) {
   const cols = []
   let rawIdx = 0
 
@@ -705,10 +819,12 @@ export function buildColumnLayout(trace, viewMode, expanded, scrollX = 0) {
   }
 
   // STI columns
-  for (const ch of trace.stiChannels) {
-    const x = RULER_W + rawIdx * COL_W - scrollX
-    cols.push({ type: 'sti', key: ch, label: ch, color: '#888', x, colIdx: rawIdx })
-    rawIdx++
+  if (showSti) {
+    for (const ch of trace.stiChannels) {
+      const x = RULER_W + rawIdx * COL_W - scrollX
+      cols.push({ type: 'sti', key: ch, label: ch, color: '#888', x, colIdx: rawIdx })
+      rawIdx++
+    }
   }
 
   return { cols, totalWidth: RULER_W + rawIdx * COL_W }
@@ -719,10 +835,12 @@ export function buildColumnLayout(trace, viewMode, expanded, scrollX = 0) {
 function drawVerticalRuler(ctx, trace, timeStart, timeEnd, pxPerNs, canvasH, headerH, rulerW, darkMode) {
   const timeSpan = timeEnd - timeStart
   const step = niceStep(timeSpan)
+  const minorStep = step / 5
   const startSnap = Math.ceil(timeStart / step) * step
 
   const textColor = darkMode ? '#CCCCCC' : '#444444'
   const tickColor = darkMode ? '#555555' : '#BBBBBB'
+  const minorTickColor = darkMode ? '#4A4A4A' : '#CFCFCF'
 
   // Right border
   ctx.strokeStyle = darkMode ? '#444444' : '#CCCCCC'
@@ -735,6 +853,23 @@ function drawVerticalRuler(ctx, trace, timeStart, timeEnd, pxPerNs, canvasH, hea
   ctx.font = '10px monospace'
   ctx.textAlign = 'right'
   ctx.textBaseline = 'middle'
+
+  // Minor ticks
+  if (minorStep > 0) {
+    const minorStart = Math.ceil(timeStart / minorStep) * minorStep
+    ctx.strokeStyle = minorTickColor
+    ctx.lineWidth = 1
+    for (let t = minorStart; t <= timeEnd + minorStep; t += minorStep) {
+      const k = Math.round(t / step)
+      if (Math.abs(t - k * step) < minorStep * 0.08) continue
+      const y = headerH + (t - timeStart) * pxPerNs
+      if (y < headerH - 10 || y > canvasH + 10) continue
+      ctx.beginPath()
+      ctx.moveTo(rulerW - 5, Math.round(y) + 0.5)
+      ctx.lineTo(rulerW,     Math.round(y) + 0.5)
+      ctx.stroke()
+    }
+  }
 
   for (let t = startSnap - step; t <= timeEnd + step; t += step) {
     const y = headerH + (t - timeStart) * pxPerNs
@@ -751,6 +886,33 @@ function drawVerticalRuler(ctx, trace, timeStart, timeEnd, pxPerNs, canvasH, hea
     ctx.fillStyle = textColor
     ctx.fillText(label, rulerW - 10, Math.round(y))
   }
+
+  drawTickMarkersOnRulerVertical(ctx, trace, timeStart, timeEnd, pxPerNs, canvasH, headerH, rulerW)
+}
+
+function drawTickMarkersOnRulerVertical(ctx, trace, timeStart, timeEnd, pxPerNs, canvasH, headerH, rulerW) {
+  const tickMk = taskMergeKey('TICK')
+  const segs = trace.segByMergeKey?.get(tickMk) || []
+  const starts = trace.segStartByMergeKey?.get(tickMk) || []
+  if (segs.length === 0 || starts.length === 0) return
+
+  const lo = Math.max(0, bisectLeft(starts, timeStart) - 1)
+  const hi = Math.min(segs.length, bisectRight(starts, timeEnd) + 1)
+
+  const bandX = rulerW - 18
+  const bandW = 8
+  ctx.save()
+  ctx.fillStyle = TICK_COLOR
+  ctx.globalAlpha = 0.95
+  for (let i = lo; i < hi; i++) {
+    const seg = segs[i]
+    const y1 = headerH + (seg.start - timeStart) * pxPerNs
+    const y2 = headerH + (seg.end - timeStart) * pxPerNs
+    if (y2 < headerH - 2 || y1 > canvasH + 2) continue
+    const h = Math.max(1, y2 - y1)
+    ctx.fillRect(bandX, Math.floor(y1), bandW, Math.ceil(h))
+  }
+  ctx.restore()
 }
 
 // ---- Column header labels (rotated text) -----------------------------------
@@ -1023,13 +1185,15 @@ export function drawMarksVertical(ctx, marks, trace, timeStart, pxPerNs, canvasW
   ctx.textAlign = 'right'
   ctx.textBaseline = 'middle'
 
-  for (const bm of marks) {
-    const y = Math.round(headerH + (bm.ns - timeStart) * pxPerNs)
+  for (const mark of marks) {
+    const y = Math.round(headerH + (mark.ns - timeStart) * pxPerNs)
     if (y < headerH - 2 || y > canvasH + 2) continue
+    const kind = markKind(mark)
+    const color = markColor(mark)
 
-    ctx.strokeStyle = MARK_COLOR
-    ctx.lineWidth = 1.5
-    ctx.setLineDash([6, 3])
+    ctx.strokeStyle = color
+    ctx.lineWidth = kind === 'annotation' ? 1.0 : 1.2
+    ctx.setLineDash(kind === 'annotation' ? [6, 3] : [])
     ctx.globalAlpha = 0.75
     ctx.beginPath()
     ctx.moveTo(RULER_W, y + 0.5)
@@ -1038,11 +1202,13 @@ export function drawMarksVertical(ctx, marks, trace, timeStart, pxPerNs, canvasW
     ctx.setLineDash([])
     ctx.globalAlpha = 1.0
 
+    drawMarkFlagVertical(ctx, y, kind)
+
     // Label on ruler
-    const label = bm.label || formatTime(bm.ns, trace.timeScale)
+    const label = markLabel(mark, trace)
     const tw = ctx.measureText(label).width + 8
     const ly = Math.max(headerH + 3, Math.min(y - 7, canvasH - 17))
-    ctx.fillStyle = MARK_COLOR
+    ctx.fillStyle = color
     ctx.globalAlpha = 0.85
     ctx.fillRect(RULER_W - 2 - tw, ly, tw, 13)
     ctx.globalAlpha = 1.0
@@ -1050,6 +1216,38 @@ export function drawMarksVertical(ctx, marks, trace, timeStart, pxPerNs, canvasW
     ctx.fillText(label, RULER_W - 4, ly + 6)
   }
   ctx.restore()
+}
+
+// ---- Hit-test helpers for draggable overlays ------------------------------
+
+export function findNearestCursorIndex(cursors, t, snapNs) {
+  if (!cursors || cursors.length === 0) return -1
+  let bestIdx = -1
+  let bestDist = Infinity
+  for (let i = 0; i < cursors.length; i++) {
+    const c = cursors[i]
+    if (c == null) continue
+    const d = Math.abs(c - t)
+    if (d <= snapNs && d < bestDist) {
+      bestDist = d
+      bestIdx = i
+    }
+  }
+  return bestIdx
+}
+
+export function findNearestMark(marks, t, snapNs) {
+  if (!marks || marks.length === 0) return null
+  let best = null
+  let bestDist = Infinity
+  for (const mark of marks) {
+    const d = Math.abs(mark.ns - t)
+    if (d <= snapNs && d < bestDist) {
+      bestDist = d
+      best = mark
+    }
+  }
+  return best
 }
 
 // ===========================================================================
@@ -1076,6 +1274,7 @@ export function renderVertical(ctx, trace, viewport, options = {}) {
     darkMode     = true,
     hoverTime    = null,
     marks        = [],
+    showSti      = true,
   } = options
 
   const timeSpan = timeEnd - timeStart
@@ -1101,7 +1300,7 @@ export function renderVertical(ctx, trace, viewport, options = {}) {
   ctx.fillRect(RULER_W, 0, canvasW - RULER_W, HEADER_H)
 
   // Build column layout
-  const { cols } = buildColumnLayout(trace, viewMode, expanded, scrollX)
+  const { cols } = buildColumnLayout(trace, viewMode, expanded, scrollX, showSti)
 
   // Grid lines (horizontal, optional)
   if (showGrid) {
@@ -1176,12 +1375,13 @@ export function renderVertical(ctx, trace, viewport, options = {}) {
  */
 export function hitTestStiVertical(trace, viewport, options, cx, cy, radius = 8) {
   const { timeStart, timeEnd, scrollX = 0, canvasH } = viewport
-  const { viewMode = 'task', expanded = new Set() } = options
+  const { viewMode = 'task', expanded = new Set(), showSti = true } = options
+  if (!showSti) return null
   if (cy < HEADER_H) return null
   const pxPerNs = (canvasH - HEADER_H) / (timeEnd - timeStart)
   const tAtCy = timeStart + (cy - HEADER_H) / pxPerNs
 
-  const { cols } = buildColumnLayout(trace, viewMode, expanded, scrollX)
+  const { cols } = buildColumnLayout(trace, viewMode, expanded, scrollX, showSti)
   for (const col of cols) {
     if (col.type !== 'sti') continue
     if (Math.abs(cx - (col.x + COL_W / 2)) > COL_W) continue
@@ -1208,9 +1408,9 @@ export function hitTestStiVertical(trace, viewport, options, cx, cy, radius = 8)
  */
 export function hitTestColumn(trace, viewport, options, cx, _cy) {
   const { scrollX = 0 } = viewport
-  const { viewMode = 'task', expanded = new Set() } = options
+  const { viewMode = 'task', expanded = new Set(), showSti = true } = options
   if (cx < RULER_W) return null
-  const { cols } = buildColumnLayout(trace, viewMode, expanded, scrollX)
+  const { cols } = buildColumnLayout(trace, viewMode, expanded, scrollX, showSti)
   for (const col of cols) {
     if (cx >= col.x && cx < col.x + COL_W) return col
   }
