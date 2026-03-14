@@ -1,5 +1,5 @@
 """
-btf_viewer.py – Single-file BTF Trace Viewer (PyQt5).
+btf_viewer.py – Single-file RTOS BTF Viewer (PyQt5).
 
 Usage:
     python btf_viewer.py [trace.btf]
@@ -6314,7 +6314,7 @@ class _RcSettings:
         """Write current state to disk immediately."""
         try:
             with open(self.RC_PATH, "w", encoding="utf-8") as fh:
-                fh.write("# btf_viewer.rc – BTF Trace Viewer settings\n")
+                fh.write("# btf_viewer.rc – RTOS BTF Viewer settings\n")
                 fh.write("# This file is managed automatically; you may edit it by hand.\n\n")
                 self._cfg.write(fh)
         except OSError:
@@ -6367,9 +6367,9 @@ class _AboutDialog(QDialog):
 
     def __init__(self, parent, *, is_dark: bool):
         super().__init__(parent, Qt.Dialog)
-        self.setWindowTitle("About BTF Trace Viewer")
+        self.setWindowTitle("About RTOS BTF Viewer")
         self.setModal(True)
-        self.setFixedWidth(420)
+        self.setFixedWidth(460)
 
         # Theme palette
         if is_dark:
@@ -6402,7 +6402,7 @@ class _AboutDialog(QDialog):
         icon_lbl.setPixmap(_pm)
         hv.addWidget(icon_lbl)
 
-        name_lbl = QLabel("BTF Trace Viewer")
+        name_lbl = QLabel("RTOS BTF Viewer")
         name_lbl.setAlignment(Qt.AlignHCenter)
         name_lbl.setObjectName("about_title")
         hv.addWidget(name_lbl)
@@ -6443,6 +6443,7 @@ class _AboutDialog(QDialog):
             for r, (k, v) in enumerate(rows):
                 kl = QLabel(k); kl.setObjectName("about_key")
                 vl = QLabel(v); vl.setObjectName("about_body")
+                vl.setWordWrap(True)
                 g.addWidget(kl, r, 0, Qt.AlignTop)
                 g.addWidget(vl, r, 1)
             return w
@@ -6459,7 +6460,18 @@ class _AboutDialog(QDialog):
             ("Ctrl+Wheel",  "zoom in / out  ·  Scroll \u2014 pan"),
             ("Ctrl+0",      "fit to window"),
             ("Ctrl+R",      "zoom to cursor range"),
-            ("Help menu",   "full keyboard shortcut list"),
+        ]))
+        iv.addSpacing(4)
+        iv.addWidget(_sect("Application"))
+        iv.addWidget(_kv_table([
+            ("Product",   "RTOS BTF Viewer"),
+            ("Purpose",   "Interactive viewer for Best Trace Format (.btf) RTOS scheduling traces"),
+            ("Runtime",   f"Python {sys.version_info.major}.{sys.version_info.minor}  ·  PyQt5 desktop application"),
+        ]))
+        iv.addSpacing(4)
+        iv.addWidget(_sect("License"))
+        iv.addWidget(_kv_table([
+            ("License",   "MIT License"),
         ]))
         root.addWidget(info_w)
 
@@ -6998,7 +7010,7 @@ class MainWindow(QMainWindow):
         self._find_marker_items: List[QGraphicsItem] = []
         self._tb_icon_actions: list = []   # (QAction, icon_path_data) for theme-aware icons
 
-        self.setWindowTitle("BTF Trace Viewer")
+        self.setWindowTitle("RTOS BTF Viewer")
         self.resize(1280, 800)
 
         # Apply saved theme BEFORE building the UI (affects the Qt stylesheet).
@@ -7555,7 +7567,7 @@ class MainWindow(QMainWindow):
             self._cur_hint.setStyleSheet(f"color:{c['muted_text']}; font-size:9pt;")
         if hasattr(self, '_welcome_label'):
             self._welcome_label.setText(
-                f"<h2 style='color:{c['welcome_h2']};'>BTF Trace Viewer</h2>"
+                f"<h2 style='color:{c['welcome_h2']};'>RTOS BTF Viewer</h2>"
                 f"<p style='color:{c['welcome_p']}; font-size:11pt;'>"
                 "Drop a <b>.btf</b> file here<br>"
                 "or press <b>Ctrl+O</b> to open one</p>"
@@ -7609,7 +7621,7 @@ class MainWindow(QMainWindow):
         _wl = QVBoxLayout(self._welcome_page)
         _wl.setAlignment(Qt.AlignCenter)
         _wlbl = QLabel(
-            "<h2 style='color:#888;'>BTF Trace Viewer</h2>"
+            "<h2 style='color:#888;'>RTOS BTF Viewer</h2>"
             "<p style='color:#666; font-size:11pt;'>"
             "Drop a <b>.btf</b> file here<br>"
             "or press <b>Ctrl+O</b> to open one</p>"
@@ -8760,7 +8772,7 @@ class MainWindow(QMainWindow):
                 ts    = _format_time(trace.time_max - trace.time_min, trace.time_scale)
                 n_seg = len(trace.segments)
                 n_sti = len(trace.sti_events)
-                self.setWindowTitle(f"BTF Trace Viewer – {fname}")
+                self.setWindowTitle(f"RTOS BTF Viewer – {fname}")
                 self._status_file.setText(f"  {fname}  |  span: {ts}")
                 self._status_file.setToolTip(
                     f"tasks: {len(trace.tasks)}  "
@@ -9544,7 +9556,7 @@ class MainWindow(QMainWindow):
                 for key, desc in items:
                     h += (
                         f"<tr>"
-                        f"<td style='color:{c_key}; font-family:monospace; white-space:nowrap;"
+                        f"<td style='color:{c_key}; font-family:&quot;{_get_fixed_font_family()}&quot;; white-space:nowrap;"
                         f" background:{c_bg}; padding:2px 6px; border-radius:3px;'>{key}</td>"
                         f"<td style='color:{c_body}; padding-left:8px; white-space:nowrap;'>{desc}</td>"
                         f"</tr>"
@@ -9592,8 +9604,8 @@ def main() -> None:
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps,   True)
 
     app = QApplication(sys.argv)
-    app.setApplicationName("BTF Trace Viewer")
-    app.setApplicationDisplayName("BTF Trace Viewer")
+    app.setApplicationName("RTOS BTF Viewer")
+    app.setApplicationDisplayName("RTOS BTF Viewer")
     app.setOrganizationName("btf_viewer")
 
     win = MainWindow()

@@ -1,7 +1,7 @@
 {
   "name": "btf-viewer",
   "version": "1.0.0",
-  "description": "Web-based BTF Trace Viewer",
+  "description": "Web-based RTOS BTF Viewer",
   "type": "module",
   "scripts": {
     "dev": "vite",

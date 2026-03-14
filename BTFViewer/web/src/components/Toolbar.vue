@@ -302,6 +302,22 @@
       Help
     </button>
 
+    <button
+      class="tb-btn"
+      title="About RTOS BTF Viewer"
+      @click="emit('showAbout')"
+    >
+      <svg
+        viewBox="0 0 16 16"
+        width="16"
+        height="16"
+        fill="currentColor"
+      >
+        <path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 3.2a.9.9 0 1 1 0 1.8.9.9 0 0 1 0-1.8zm1 7.6H7v-1h.5V8H7V7h2v3.8H9v1z" />
+      </svg>
+      About
+    </button>
+
     <div class="spacer" />
 
     <!-- File info -->
@@ -339,7 +355,7 @@ defineProps({
   loadingMsg:  { type: String,  default: '' },
 })
 
-const emit = defineEmits(['update:modelValue', 'trace-reading', 'trace-loaded', 'zoom', 'fit', 'clearCursors', 'expandAll', 'collapseAll', 'addMark', 'copyScreenshot', 'showHelp'])
+const emit = defineEmits(['update:modelValue', 'trace-reading', 'trace-loaded', 'zoom', 'fit', 'clearCursors', 'expandAll', 'collapseAll', 'addMark', 'copyScreenshot', 'showHelp', 'showAbout'])
 
 function onFileChange(e) {
   const file = e.target.files[0]

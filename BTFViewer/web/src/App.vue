@@ -20,7 +20,8 @@
       @collapse-all="onCollapseAll"
       @add-mark="onAddMark"
       @copy-screenshot="onCopyScreenshot"
-      @show-help="helpOpen = true"
+      @show-help="openHelpDialog"
+      @show-about="openAboutDialog"
     />
 
     <!-- Main area -->
@@ -128,7 +129,7 @@
     <!-- Help dialog -->
     <div
       v-if="helpOpen"
-      class="help-overlay"
+      class="dialog-overlay"
       @click.self="helpOpen = false"
     >
       <div
@@ -238,6 +239,67 @@
       </div>
     </div>
 
+    <!-- About dialog -->
+    <div
+      v-if="aboutOpen"
+      class="dialog-overlay"
+      @click.self="aboutOpen = false"
+    >
+      <div
+        class="about-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label="About RTOS BTF Viewer"
+      >
+        <div class="about-hero">
+          <div class="about-icon" aria-hidden="true">
+            <span class="bar bar-1" />
+            <span class="bar bar-2" />
+            <span class="bar bar-3" />
+            <span class="bar bar-4" />
+            <span class="marker" />
+          </div>
+          <div class="about-title">RTOS BTF Viewer</div>
+          <div class="about-subtitle">RTOS context-switch timeline visualiser · v1.0.0</div>
+        </div>
+
+        <div class="about-body">
+          <div class="about-section">
+            <div class="about-section-title">View Modes</div>
+            <div class="about-grid">
+              <div class="about-key">Task View</div><div>one row per task</div>
+              <div class="about-key">Core View</div><div>expandable rows per CPU core</div>
+            </div>
+          </div>
+
+          <div class="about-section">
+            <div class="about-section-title">Application</div>
+            <div class="about-grid">
+              <div class="about-key">Product</div><div>RTOS BTF Viewer</div>
+              <div class="about-key">Purpose</div><div>Interactive viewer for Best Trace Format (.btf) RTOS scheduling traces</div>
+              <div class="about-key">Runtime</div><div>Vue 3 · Vite · Canvas-based timeline renderer</div>
+            </div>
+          </div>
+
+          <div class="about-section">
+            <div class="about-section-title">License</div>
+            <div class="about-grid">
+              <div class="about-key">License</div><div>MIT License</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="about-footer">
+          <button
+            class="about-close"
+            @click="aboutOpen = false"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- Status bar -->
     <div class="status-bar">
       <span v-if="trace">
@@ -274,6 +336,7 @@ const loadingMsg = ref('')
 const loadingFileName = ref('')
 const cursors    = ref([null, null, null, null])
 const helpOpen   = ref(false)
+const aboutOpen  = ref(false)
 
 const uiOptions = reactive({
   viewMode:    'task',
@@ -489,11 +552,22 @@ function isTypingTarget(el) {
   return el.isContentEditable || tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
 }
 
+function openHelpDialog() {
+  aboutOpen.value = false
+  helpOpen.value = true
+}
+
+function openAboutDialog() {
+  helpOpen.value = false
+  aboutOpen.value = true
+}
+
 function onGlobalKeydown(e) {
   if (isTypingTarget(e.target)) return
 
   if (e.key === '?' || (e.key === '/' && e.shiftKey)) {
     e.preventDefault()
+    aboutOpen.value = false
     helpOpen.value = !helpOpen.value
     return
   }
@@ -502,11 +576,14 @@ function onGlobalKeydown(e) {
     if (helpOpen.value) {
       helpOpen.value = false
       e.preventDefault()
+    } else if (aboutOpen.value) {
+      aboutOpen.value = false
+      e.preventDefault()
     }
     return
   }
 
-  if (helpOpen.value) return
+  if (helpOpen.value || aboutOpen.value) return
 
   const key = e.key.toLowerCase()
   switch (key) {
@@ -749,7 +826,7 @@ body {
   box-shadow: 0 8px 32px rgba(0,0,0,0.5);
 }
 
-.help-overlay {
+.dialog-overlay {
   position: absolute;
   inset: 0;
   z-index: 300;
@@ -770,6 +847,158 @@ body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+.about-dialog {
+  width: min(520px, 92vw);
+  max-height: min(82vh, 720px);
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.about-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 24px 24px 20px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 16%, var(--panel-bg)), var(--panel-bg));
+}
+
+.about-icon {
+  position: relative;
+  width: 72px;
+  height: 72px;
+  border-radius: 16px;
+  background: #1c3a6e;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08);
+}
+
+.about-icon .bar {
+  position: absolute;
+  left: 12px;
+  height: 7px;
+  border-radius: 999px;
+}
+
+.about-icon .bar-1 {
+  top: 14px;
+  width: 29px;
+  background: #5b9bd5;
+}
+
+.about-icon .bar-2 {
+  top: 26px;
+  left: 18px;
+  width: 22px;
+  background: #7ec8e3;
+}
+
+.about-icon .bar-3 {
+  top: 38px;
+  width: 36px;
+  background: #5b9bd5;
+}
+
+.about-icon .bar-4 {
+  top: 50px;
+  left: 22px;
+  width: 18px;
+  background: #7ec8e3;
+}
+
+.about-icon .marker {
+  position: absolute;
+  top: 10px;
+  right: 24px;
+  width: 2px;
+  height: 46px;
+  background: #ffc107;
+}
+
+.about-icon .marker::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -3px;
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 8px solid #ffc107;
+}
+
+.about-title {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.about-subtitle {
+  color: var(--fg-dim);
+  font-size: 12px;
+  text-align: center;
+}
+
+.about-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px 20px;
+  overflow: auto;
+}
+
+.about-section {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+}
+
+.about-section-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-dim);
+  margin-bottom: 10px;
+}
+
+.about-grid {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 8px 12px;
+}
+
+.about-key {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.about-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 20px 18px;
+}
+
+.about-close {
+  border: 1px solid transparent;
+  background: var(--accent);
+  color: white;
+  border-radius: 8px;
+  min-width: 84px;
+  height: 34px;
+  padding: 0 16px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.about-close:hover {
+  filter: brightness(1.08);
 }
 
 .help-header {
@@ -842,6 +1071,10 @@ body {
 
 @media (max-width: 760px) {
   .help-body {
+    grid-template-columns: 1fr;
+  }
+
+  .about-grid {
     grid-template-columns: 1fr;
   }
 }
