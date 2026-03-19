@@ -58,6 +58,7 @@
         @cursors-change="cursors = $event"
         @highlight-change="(k) => timelineOptions.highlightKey = k ?? pinnedHighlightKey"
         @highlight-click="onHighlightClick"
+          @segment-click="onSegmentClick"
         @add-bookmark="onAddBookmark"
         @add-annotation="onAddAnnotation"
         @mark-move="onMoveMark"
@@ -326,6 +327,7 @@ import LegendPanel      from './components/LegendPanel.vue'
 import StatisticsPanel  from './components/StatisticsPanel.vue'
 import MarksPanel       from './components/MarksPanel.vue'
 import { formatTime }   from './renderer/TimelineRenderer.js'
+import { taskMergeKey } from './utils/colors.js'
 import exampleBtfB64   from 'virtual:example-btf'
 
 // ---- State ---------------------------------------------------------------
@@ -354,12 +356,122 @@ const timelineOptions = reactive({
   orientation:  'h',
   highlightKey: null,
   marks:        [],
+  highlightSegment: null,
 })
 
 // Marks state (bookmarks + annotations)
 const marks              = ref([])
 let   _markNextId         = 1
 const pinnedHighlightKey = ref(null)  // sticky highlight set by legend click
+const highlightSegment = ref(null)   // single-segment lock (bar click or Tab nav)
+
+// ---- Segment navigation cache (built lazily per trace) -------------------
+let _navCache = null   // { trace, segs: TaskSegment[] sorted by time + identity }
+
+function _sameSegment(a, b) {
+  if (!a || !b) return false
+  return a.start === b.start && a.end === b.end && a.task === b.task && a.core === b.core
+}
+
+function _segmentCmp(a, b) {
+  if (a.start !== b.start) return a.start - b.start
+  if (a.end !== b.end) return a.end - b.end
+  const t = a.task.localeCompare(b.task)
+  if (t !== 0) return t
+  return a.core.localeCompare(b.core)
+}
+
+function _ensureNavCache() {
+  if (!trace.value || _navCache?.trace === trace.value) return
+  const tickMk = taskMergeKey('TICK')
+  const isCoreEntity = (name) => typeof name === 'string' && name.startsWith('Core_')
+  _navCache = {
+    trace: trace.value,
+    segs: trace.value.segments
+      .filter(s => !!s.task)
+      .filter(s => !isCoreEntity(s.task))
+      .filter(s => taskMergeKey(s.task) !== tickMk)
+      .sort(_segmentCmp),
+  }
+}
+
+function cycleHighlightedSegment(forward) {
+  if (!trace.value) return
+  _ensureNavCache()
+  const segs = _navCache?.segs
+  if (!segs || segs.length === 0) return
+
+  const cur      = highlightSegment.value
+  const centerNs = timelinePanelRef.value?.getViewportCenter?.() ?? 0
+  const isCoreView = uiOptions.viewMode === 'core'
+  const centerCore = isCoreView ? (timelinePanelRef.value?.getCoreAtViewportCenter?.() ?? null) : null
+  const curCore = cur?.core ?? centerCore
+  const navSegs = (isCoreView && curCore)
+    ? segs.filter(s => s.core === curCore)
+    : segs
+  if (!navSegs || navSegs.length === 0) return
+
+  const curTaskKey = cur
+    ? taskMergeKey(cur.task)
+    : (timelineOptions.highlightKey ?? pinnedHighlightKey.value ?? null)
+
+  let idx = -1
+  if (cur) idx = navSegs.findIndex(s => _sameSegment(s, cur))
+
+  const pickForwardFrom = (startIdx) => {
+    let i = startIdx
+    for (let step = 0; step < navSegs.length; step++) {
+      const seg = navSegs[i]
+      if (!curTaskKey || taskMergeKey(seg.task) !== curTaskKey) return seg
+      i = (i + 1) % navSegs.length
+    }
+    return navSegs[startIdx]
+  }
+
+  const pickBackwardFrom = (startIdx) => {
+    let i = startIdx
+    for (let step = 0; step < navSegs.length; step++) {
+      const seg = navSegs[i]
+      if (!curTaskKey || taskMergeKey(seg.task) !== curTaskKey) return seg
+      i = (i - 1 + navSegs.length) % navSegs.length
+    }
+    return navSegs[startIdx]
+  }
+
+  let next
+  if (forward) {
+    if (idx >= 0) {
+      let ni = (idx + 1) % navSegs.length
+      next = pickForwardFrom(ni)
+    } else {
+      const refNs = cur?.start ?? centerNs
+      let ni = navSegs.findIndex(s => s.start >= refNs)
+      if (ni < 0) ni = 0
+      next = pickForwardFrom(ni)
+    }
+  } else {
+    if (idx >= 0) {
+      let pi = (idx - 1 + navSegs.length) % navSegs.length
+      next = pickBackwardFrom(pi)
+    } else {
+      const refNs = cur?.start ?? centerNs
+      let pi = navSegs.length - 1
+      for (let i = navSegs.length - 1; i >= 0; i--) {
+        if (navSegs[i].start <= refNs) { pi = i; break }
+      }
+      next = pickBackwardFrom(pi)
+    }
+  }
+
+  highlightSegment.value = next
+  timelineOptions.highlightSegment = next
+  timelinePanelRef.value?.scrollToSegmentIfNeeded(next)
+}
+
+function onSegmentClick(seg) {
+  highlightSegment.value = seg
+  timelineOptions.highlightSegment = seg
+}
 
 // Keep timelineOptions in sync with uiOptions + marks
 watch(uiOptions, (o) => {
@@ -435,6 +547,9 @@ async function onTraceLoaded({ text, name }) {
       cursors.value = [null, null, null, null]
       timelineOptions.highlightKey = null
       pinnedHighlightKey.value = null
+      highlightSegment.value = null
+      timelineOptions.highlightSegment = null
+      _navCache = null
     } catch (err) {
       console.error('BTF parse error:', err)
       alert('Failed to parse BTF file: ' + err.message)
@@ -459,6 +574,9 @@ async function onTraceLoaded({ text, name }) {
       loading.value = false
       _parseWorker = null
       worker.terminate()
+      highlightSegment.value = null
+      timelineOptions.highlightSegment = null
+      _navCache = null
     } else if (data.type === 'error') {
       console.error('BTF parse error:', data.message)
       alert('Failed to parse BTF file: ' + data.message)
@@ -564,6 +682,12 @@ function openAboutDialog() {
 
 function onGlobalKeydown(e) {
   if (isTypingTarget(e.target)) return
+
+  if (e.key === 'Tab') {
+    e.preventDefault()
+    cycleHighlightedSegment(!e.shiftKey)
+    return
+  }
 
   if (e.key === '?' || (e.key === '/' && e.shiftKey)) {
     e.preventDefault()

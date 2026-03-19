@@ -111,7 +111,7 @@ import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } 
 import { toBlob as domToBlob } from 'html-to-image'
 import LabelColumn from './LabelColumn.vue'
 import StiTooltip  from './StiTooltip.vue'
-import { render as renderTimeline, renderVertical, buildRowLayout, buildColumnLayout, drawHoverLine, drawHoverLineVertical, drawCursors, drawCursorsVertical, drawMarksHorizontal, drawMarksVertical, RULER_H, ROW_H, STI_ROW_H, HEADER_H, formatTime } from '../renderer/TimelineRenderer.js'
+import { render as renderTimeline, renderVertical, buildRowLayout, buildColumnLayout, drawHoverLine, drawHoverLineVertical, drawCursors, drawCursorsVertical, drawMarksHorizontal, drawMarksVertical, RULER_H, ROW_H, STI_ROW_H, RULER_W, COL_W, HEADER_H, formatTime } from '../renderer/TimelineRenderer.js'
 import { InteractionHandler } from '../renderer/InteractionHandler.js'
 import { taskMergeKey } from '../utils/colors.js'
 
@@ -121,7 +121,7 @@ const props = defineProps({
   options: { type: Object, required: true },  // { viewMode, highlightKey, showGrid, darkMode, orientation, marks }
   cursors: { type: Array, default: () => [] },
 })
-const emit = defineEmits(['viewportChange', 'cursorsChange', 'highlightChange', 'highlightClick', 'addBookmark', 'addAnnotation', 'markMove', 'copyScreenshot'])
+const emit = defineEmits(['viewportChange', 'cursorsChange', 'highlightChange', 'highlightClick', 'segmentClick', 'addBookmark', 'addAnnotation', 'markMove', 'copyScreenshot'])
 
 // ---- Template refs -------------------------------------------------------
 const panelEl     = ref(null)
@@ -196,24 +196,19 @@ function paint() {
     return
   }
 
+  const renderOpts = {
+    viewMode:         props.options.viewMode,
+    expanded,
+    highlightKey:     props.options.highlightKey,
+    highlightSegment: props.options.highlightSegment ?? null,
+    showGrid:         props.options.showGrid,
+    showSti:          props.options.showSti !== false,
+    darkMode:         props.options.darkMode,
+  }
   if (orientation.value === 'v') {
-    renderVertical(ctx, props.trace, viewport, {
-      viewMode:     props.options.viewMode,
-      expanded,
-      highlightKey: props.options.highlightKey,
-      showGrid:     props.options.showGrid,
-      showSti:      props.options.showSti !== false,
-      darkMode:     props.options.darkMode,
-    })
+    renderVertical(ctx, props.trace, viewport, renderOpts)
   } else {
-    renderTimeline(ctx, props.trace, viewport, {
-      viewMode:     props.options.viewMode,
-      expanded,
-      highlightKey: props.options.highlightKey,
-      showGrid:     props.options.showGrid,
-      showSti:      props.options.showSti !== false,
-      darkMode:     props.options.darkMode,
-    })
+    renderTimeline(ctx, props.trace, viewport, renderOpts)
   }
 
   // Repaint the overlay to keep hover line in sync after a full canvas repaint
@@ -309,7 +304,24 @@ function setupHandler() {
       paintHoverOverlay()  // cheap: only redraws the hover line on the overlay canvas
     },
     onRowHover(_row) {
-      // Handled via LabelColumn hover for now
+      if (orientation.value !== 'v') return
+      if (!_row) {
+        emit('highlightChange', null)
+        return
+      }
+      if (_row.type === 'task') {
+        emit('highlightChange', _row.key)
+      } else if (_row.type === 'core-task') {
+        emit('highlightChange', taskMergeKey(_row.taskKey))
+      } else {
+        emit('highlightChange', null)
+      }
+    },
+    onHighlightClick(key) {
+      emit('highlightClick', key)
+    },
+    onSegmentClick(seg) {
+      emit('segmentClick', seg)
     },
     onFitToWindow() {
       fitToTrace()
@@ -480,6 +492,65 @@ function getViewportCenter() {
   return (viewport.timeStart + viewport.timeEnd) / 2
 }
 
+function getCoreAtViewportCenter() {
+  if (!props.trace || props.options.viewMode !== 'core') return null
+
+  if (orientation.value === 'v') {
+    const centerX = RULER_W + (viewport.canvasW - RULER_W) / 2
+    const { cols } = buildColumnLayout(
+      props.trace,
+      props.options.viewMode,
+      expanded,
+      viewport.scrollX,
+      props.options.showSti !== false,
+    )
+    const coreCols = cols.filter(c => c.type === 'core' || c.type === 'core-task')
+    if (coreCols.length === 0) return null
+
+    const hit = coreCols.find(c => centerX >= c.x && centerX < c.x + COL_W)
+    if (hit) return hit.type === 'core' ? hit.key : hit.coreKey
+
+    let best = coreCols[0]
+    let bestDist = Math.abs(centerX - (best.x + COL_W / 2))
+    for (let i = 1; i < coreCols.length; i++) {
+      const c = coreCols[i]
+      const d = Math.abs(centerX - (c.x + COL_W / 2))
+      if (d < bestDist) {
+        best = c
+        bestDist = d
+      }
+    }
+    return best.type === 'core' ? best.key : best.coreKey
+  }
+
+  const centerY = RULER_H + (viewport.canvasH - RULER_H) / 2
+  const { rows } = buildRowLayout(
+    props.trace,
+    props.options.viewMode,
+    expanded,
+    RULER_H - viewport.scrollY,
+    props.options.showSti !== false,
+  )
+  const coreRows = rows.filter(r => r.type === 'core' || r.type === 'core-task')
+  if (coreRows.length === 0) return null
+
+  const rowHeight = (r) => (r.type === 'sti' ? STI_ROW_H : ROW_H)
+  const hit = coreRows.find(r => centerY >= r.y && centerY < r.y + rowHeight(r))
+  if (hit) return hit.type === 'core' ? hit.key : hit.coreKey
+
+  let best = coreRows[0]
+  let bestDist = Math.abs(centerY - (best.y + rowHeight(best) / 2))
+  for (let i = 1; i < coreRows.length; i++) {
+    const r = coreRows[i]
+    const d = Math.abs(centerY - (r.y + rowHeight(r) / 2))
+    if (d < bestDist) {
+      best = r
+      bestDist = d
+    }
+  }
+  return best.type === 'core' ? best.key : best.coreKey
+}
+
 function scrollToTask(mergeKey) {
   if (!props.trace) return
   // Build layout at yStart=0 to get raw row offsets independent of current scrollY
@@ -497,7 +568,76 @@ function scrollToTask(mergeKey) {
   scheduleRender()
 }
 
-defineExpose({ fitToTrace, scheduleRender, zoomCenter, expandAll, collapseAll, jumpToNs, getViewportCenter, scrollToTask, captureScreenshotBlob })
+/**
+ * Scroll the viewport so that seg is fully visible.
+ * No-op if the segment is already within the visible time range and row.
+ */
+function scrollToSegmentIfNeeded(seg) {
+  if (!props.trace || !seg) return
+  const { timeStart, timeEnd, scrollY, scrollX, canvasH, canvasW } = viewport
+  const mk = taskMergeKey(seg.task)
+  const isHorizontal = orientation.value === 'h'
+
+  // Time-axis visibility
+  const timeVisible = seg.start >= timeStart && seg.end <= timeEnd
+
+  let rowOutOfView = false
+  let colOutOfView = false
+  let targetRow = null
+  let targetCol = null
+  if (isHorizontal) {
+    const { rows } = buildRowLayout(props.trace, props.options.viewMode, expanded, 0, props.options.showSti !== false)
+    if (props.options.viewMode === 'core') {
+      targetRow = rows.find(
+        r => r.type === 'core-task' && r.coreKey === seg.core && taskMergeKey(r.taskKey) === mk,
+      )
+      if (!targetRow) {
+        targetRow = rows.find(r => r.type === 'core-task' && taskMergeKey(r.taskKey) === mk)
+      }
+    } else {
+      targetRow = rows.find(r => r.type === 'task' && r.key === mk)
+    }
+
+    if (targetRow) {
+      const actualRowY = RULER_H - scrollY + targetRow.y
+      rowOutOfView = (actualRowY + ROW_H <= RULER_H) || (actualRowY >= canvasH)
+    }
+  } else {
+    const { cols } = buildColumnLayout(props.trace, props.options.viewMode, expanded, scrollX, props.options.showSti !== false)
+    if (props.options.viewMode === 'core') {
+      targetCol = cols.find(
+        c => c.type === 'core-task' && c.coreKey === seg.core && taskMergeKey(c.taskKey) === mk,
+      )
+      if (!targetCol) {
+        targetCol = cols.find(c => c.type === 'core-task' && taskMergeKey(c.taskKey) === mk)
+      }
+    } else {
+      targetCol = cols.find(c => c.type === 'task' && c.key === mk)
+    }
+
+    if (targetCol) {
+      colOutOfView = (targetCol.x + COL_W <= RULER_W) || (targetCol.x >= canvasW)
+    }
+  }
+
+  if (!timeVisible) {
+    const span = timeEnd - timeStart
+    viewport.timeStart = seg.start - span / 2
+    viewport.timeEnd   = seg.start + span / 2
+  }
+  if (isHorizontal && rowOutOfView && targetRow) {
+    viewport.scrollY = Math.max(0, RULER_H + targetRow.y + ROW_H / 2 - canvasH / 2)
+  }
+  if (!isHorizontal && colOutOfView && targetCol) {
+    const rawX = targetCol.x + scrollX
+    viewport.scrollX = Math.max(0, RULER_W + rawX + COL_W / 2 - canvasW / 2)
+  }
+  if (!timeVisible || (isHorizontal && rowOutOfView && targetRow) || (!isHorizontal && colOutOfView && targetCol)) {
+    scheduleRender()
+  }
+}
+
+defineExpose({ fitToTrace, scheduleRender, zoomCenter, expandAll, collapseAll, jumpToNs, getViewportCenter, getCoreAtViewportCenter, scrollToTask, scrollToSegmentIfNeeded, captureScreenshotBlob })
 
 // ---- Expand / collapse core rows -----------------------------------------
 function onExpandToggle(coreName) {
@@ -536,7 +676,7 @@ watch([() => props.options.orientation, () => props.options.viewMode], () => {
   scheduleRender()
 })
 // Other visual options that affect segment rendering → full repaint
-watch([() => props.options.highlightKey, () => props.options.showGrid, () => props.options.showSti, () => props.options.darkMode], () => {
+watch([() => props.options.highlightKey, () => props.options.highlightSegment, () => props.options.showGrid, () => props.options.showSti, () => props.options.darkMode], () => {
   scheduleRender()
 })
 // Marks are on the overlay — no full repaint needed

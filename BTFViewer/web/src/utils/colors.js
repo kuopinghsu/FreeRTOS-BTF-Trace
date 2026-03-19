@@ -193,3 +193,62 @@ export function stiChannelColor(channel) {
 }
 
 export { CORE_PALETTE, PALETTE }
+
+// ---- Segment highlight colour helpers ------------------------------------
+
+function _hexToHsv(cssHex) {
+  const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(cssHex)
+  if (!m) return null
+  const r = parseInt(m[1], 16) / 255
+  const g = parseInt(m[2], 16) / 255
+  const b = parseInt(m[3], 16) / 255
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min
+  let h = 0
+  if (d !== 0) {
+    if (max === r)      h = (g - b) / d % 6
+    else if (max === g) h = (b - r) / d + 2
+    else                h = (r - g) / d + 4
+    h = h / 6; if (h < 0) h += 1
+  }
+  return { h, s: max === 0 ? 0 : d / max, v: max, d }
+}
+
+function _hsvToHex(h, s, v) {
+  const i = Math.floor(h * 6), f = h * 6 - i
+  const p = v * (1 - s), q = v * (1 - f * s), t = v * (1 - (1 - f) * s)
+  let r, g, b
+  switch (i % 6) {
+    case 0: r = v; g = t; b = p; break
+    case 1: r = q; g = v; b = p; break
+    case 2: r = p; g = v; b = t; break
+    case 3: r = p; g = q; b = v; break
+    case 4: r = t; g = p; b = v; break
+    case 5: r = v; g = p; b = q; break
+    default: r = 0; g = 0; b = 0
+  }
+  const x = n => Math.round(n * 255).toString(16).padStart(2, '0')
+  return `#${x(r)}${x(g)}${x(b)}`
+}
+
+/**
+ * Return a CSS hex colour lighter than cssHex by multiplying HSV value by factor.
+ */
+export function lighterColor(cssHex, factor = 1.6) {
+  const hsv = _hexToHsv(cssHex)
+  if (!hsv) return cssHex
+  return _hsvToHex(hsv.h, hsv.s, Math.min(1, hsv.v * factor))
+}
+
+/**
+ * Return the complementary (hue-opposite, boosted saturation/value) of cssHex.
+ * Falls back to gold for achromatic colours.
+ */
+export function complementaryColor(cssHex) {
+  const hsv = _hexToHsv(cssHex)
+  if (!hsv || hsv.d < 0.01) return '#FFD700'
+  return _hsvToHex(
+    (hsv.h + 0.5) % 1,
+    Math.max(hsv.s, 0.85),
+    Math.max(hsv.v, 0.90),
+  )
+}

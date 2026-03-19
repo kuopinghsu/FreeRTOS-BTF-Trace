@@ -18,8 +18,10 @@
  */
 
 import { hitTestSti, hitTestRow, hitTestStiVertical, hitTestColumn,
+         hitTestSegment, hitTestSegmentVertical,
          RULER_H, ROW_H, ROW_GAP, RULER_W, HEADER_H,
          findNearestCursorIndex, findNearestMark } from './TimelineRenderer.js'
+import { taskMergeKey } from '../utils/colors.js'
 
 const MAX_CURSORS = 4
 
@@ -320,10 +322,17 @@ export class InteractionHandler {
 
       if (vert) {
         if (cy >= HEADER_H && cx >= RULER_W) {
+          // First check if a segment bar was clicked; if so highlight it instead
+          const traceObj = this._opts.getTrace()
+          const ropts    = this._opts.getOptions?.()
+          if (traceObj && ropts) {
+            const seg = hitTestSegmentVertical(traceObj, vp, ropts, cx, cy)
+            if (seg) { this._opts.onSegmentClick?.(seg); return }
+          }
           // Click in timeline body → place cursor
           if (t !== null) { this._placeCursor(t); return }
         }
-        // Click in column header area → check for core expand/collapse
+        // Click in column header area → core expand/collapse or task highlight
         if (cy < HEADER_H && cx >= RULER_W) {
           const trace = this._opts.getTrace()
           const ropts = this._opts.getOptions?.()
@@ -331,6 +340,16 @@ export class InteractionHandler {
             const col = hitTestColumn(trace, vp, ropts, cx, cy)
             if (col?.type === 'core') {
               this._opts.onExpandToggle?.(col.key)
+              e.preventDefault()
+              return
+            }
+            if (col?.type === 'task') {
+              this._opts.onHighlightClick?.(col.key)
+              e.preventDefault()
+              return
+            }
+            if (col?.type === 'core-task') {
+              this._opts.onHighlightClick?.(taskMergeKey(col.taskKey))
               e.preventDefault()
               return
             }
@@ -344,8 +363,15 @@ export class InteractionHandler {
         this._dragStartScrollX = vp.scrollX ?? 0
       } else {
         if (cy >= RULER_H) {
-          const t = this._canvasToTime(cx, cy)
-          this._placeCursor(t)
+          // First check if a segment bar was clicked; if so highlight it instead
+          const traceObj = this._opts.getTrace()
+          const ropts    = this._opts.getOptions?.()
+          if (traceObj && ropts) {
+            const seg = hitTestSegment(traceObj, vp, ropts, cx, cy)
+            if (seg) { this._opts.onSegmentClick?.(seg); return }
+          }
+          const tClick = this._canvasToTime(cx, cy)
+          this._placeCursor(tClick)
           return
         }
         // Click on ruler → start panning

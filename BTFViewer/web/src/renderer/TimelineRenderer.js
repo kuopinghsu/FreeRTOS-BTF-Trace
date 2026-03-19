@@ -12,7 +12,7 @@
  *   - Timeline body occupies remaining canvas area
  */
 
-import { taskColor, taskDisplayName, taskMergeKey, coreTint, coreColor, stiNoteColor } from '../utils/colors.js'
+import { taskColor, taskDisplayName, taskMergeKey, coreTint, coreColor, stiNoteColor, lighterColor, complementaryColor } from '../utils/colors.js'
 import { bisectLeft, bisectRight } from '../utils/bisect.js'
 import { lodReduce } from '../utils/lod.js'
 import { visibleSegs } from '../parser/btfParser.js'
@@ -157,6 +157,7 @@ export function render(ctx, trace, viewport, options = {}) {
     marks       = [],
     showSti     = true,
   } = options
+  const highlightSegment = options.highlightSegment ?? null
 
   const timeSpan = timeEnd - timeStart
   if (timeSpan <= 0 || canvasW <= 0) return
@@ -209,11 +210,11 @@ export function render(ctx, trace, viewport, options = {}) {
     if (rowY + ROW_H < RULER_H || rowY > canvasH) continue  // row not visible
 
     if (row.type === 'task') {
-      drawTaskRow(ctx, trace, row, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, darkMode)
+      drawTaskRow(ctx, trace, row, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, darkMode, highlightSegment)
     } else if (row.type === 'core') {
       drawCoreRow(ctx, trace, row, timeStart, timeEnd, pxPerNs, nsPerPx, darkMode)
     } else if (row.type === 'core-task') {
-      drawCoreTaskRow(ctx, trace, row, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, darkMode)
+      drawCoreTaskRow(ctx, trace, row, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, darkMode, highlightSegment)
     } else if (row.type === 'sti') {
       drawStiRow(ctx, trace, row, timeStart, timeEnd, pxPerNs, darkMode)
     }
@@ -370,8 +371,8 @@ function coreLodData(trace, coreName) {
  * Handles LOD selection, sub-pixel merging, segment fill + optional core tint.
  */
 function paintSegments(ctx, segs, timeStart, timeEnd, pxPerNs, nsPerPx, rowY, rowH,
-                       baseColor, trace, applyCoreTint, highlightKey, rowMk, darkMode, segLabel) {
-  const isHighlighted = highlightKey && rowMk === highlightKey
+                       baseColor, trace, applyCoreTint, highlightKey, rowMk, darkMode, segLabel, hlSeg) {
+  const isHighlighted = (highlightKey && rowMk === highlightKey) && !hlSeg
 
   const lod = nsPerPx > PAINT_LOD_COARSE ? 'coarse' : 'fine'
 
@@ -386,7 +387,8 @@ function paintSegments(ctx, segs, timeStart, timeEnd, pxPerNs, nsPerPx, rowY, ro
     if (x1 > ctx.canvas.clientWidth + 2 || x1 + w < -2) continue
 
     // Base colour
-    ctx.fillStyle = baseColor
+    const isSegLocked = hlSeg && seg.start === hlSeg.start && seg.end === hlSeg.end && seg.task === hlSeg.task
+    ctx.fillStyle = isSegLocked ? lighterColor(baseColor) : baseColor
     ctx.fillRect(Math.round(x1), rowY, Math.ceil(w), rowH)
 
     // Core tint
@@ -406,8 +408,13 @@ function paintSegments(ctx, segs, timeStart, timeEnd, pxPerNs, nsPerPx, rowY, ro
 
     // Outline (fine LOD only, wide enough segments)
     if (lod === 'fine' && w >= 3) {
-      ctx.strokeStyle = darkMode ? 'rgba(0,0,0,0.4)' : 'rgba(0,0,0,0.3)'
-      ctx.lineWidth = 0.5
+      if (isSegLocked) {
+        ctx.strokeStyle = complementaryColor(baseColor)
+        ctx.lineWidth = 2.5
+      } else {
+        ctx.strokeStyle = darkMode ? 'rgba(0,0,0,0.4)' : 'rgba(0,0,0,0.3)'
+        ctx.lineWidth = 0.5
+      }
       ctx.strokeRect(Math.round(x1) + 0.5, rowY + 0.5, Math.ceil(w) - 1, rowH - 1)
     }
 
@@ -430,7 +437,7 @@ function paintSegments(ctx, segs, timeStart, timeEnd, pxPerNs, nsPerPx, rowY, ro
 
 // ---- Row drawing functions -------------------------------------------------
 
-function drawTaskRow(ctx, trace, row, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, darkMode) {
+function drawTaskRow(ctx, trace, row, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, darkMode, hlSeg) {
   const mk = row.key
   const ld = taskLodData(trace, mk)
   const segs = visibleSegs(ld, timeStart, timeEnd, nsPerPx, trace.lodTimescalePerPx, trace.lodUltraTimescalePerPx)
@@ -443,7 +450,7 @@ function drawTaskRow(ctx, trace, row, timeStart, timeEnd, pxPerNs, nsPerPx, high
   ctx.fillRect(0, row.y, ctx.canvas.clientWidth, ROW_H)
 
   paintSegments(ctx, segs, timeStart, timeEnd, pxPerNs, nsPerPx,
-    rowY, rowH, row.color, trace, /* coreTint */ true, highlightKey, mk, darkMode, row.label)
+    rowY, rowH, row.color, trace, /* coreTint */ true, highlightKey, mk, darkMode, row.label, hlSeg)
 }
 
 function drawCoreRow(ctx, trace, row, timeStart, timeEnd, pxPerNs, nsPerPx, darkMode) {
@@ -486,7 +493,7 @@ function drawCoreRow(ctx, trace, row, timeStart, timeEnd, pxPerNs, nsPerPx, dark
   }
 }
 
-function drawCoreTaskRow(ctx, trace, row, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, darkMode) {
+function drawCoreTaskRow(ctx, trace, row, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, darkMode, hlSeg) {
   const ld = coreTaskLodData(trace, row.coreKey, row.taskKey)
   const segs = visibleSegs(ld, timeStart, timeEnd, nsPerPx, trace.lodTimescalePerPx, trace.lodUltraTimescalePerPx)
 
@@ -495,7 +502,7 @@ function drawCoreTaskRow(ctx, trace, row, timeStart, timeEnd, pxPerNs, nsPerPx, 
 
   const mk = taskMergeKey(row.taskKey)
   paintSegments(ctx, segs, timeStart, timeEnd, pxPerNs, nsPerPx,
-    row.y + 1, ROW_H - 2, row.color, trace, false, highlightKey, mk, darkMode, row.label)
+    row.y + 1, ROW_H - 2, row.color, trace, false, highlightKey, mk, darkMode, row.label, hlSeg)
 }
 
 function drawStiRow(ctx, trace, row, timeStart, timeEnd, pxPerNs, darkMode) {
@@ -664,6 +671,84 @@ export function hitTestRow(trace, viewport, options, cx, cy) {
 // ===========================================================================
 // MARKS (bookmarks + annotations)
 // ===========================================================================
+
+/**
+ * Return the exact segment (raw object) under canvas point (cx, cy) in
+ * horizontal mode, or null if no segment bar was clicked.
+ */
+export function hitTestSegment(trace, viewport, options, cx, cy) {
+  const { timeStart, timeEnd, scrollY, canvasW } = viewport
+  const { viewMode = 'task', expanded = new Set(), showSti = true } = options
+  if (cy < RULER_H) return null
+  const pxPerNs = canvasW / (timeEnd - timeStart)
+  const { rows } = buildRowLayout(trace, viewMode, expanded, RULER_H - scrollY, showSti)
+
+  let row = null
+  for (const r of rows) {
+    if (r.type !== 'task' && r.type !== 'core-task') continue
+    if (cy >= r.y && cy < r.y + ROW_H) { row = r; break }
+  }
+  if (!row) return null
+
+  const tAtCx = timeStart + cx / pxPerNs
+  let segs, starts
+  if (row.type === 'task') {
+    segs   = trace.segByMergeKey.get(row.key) || []
+    starts = trace.segStartByMergeKey.get(row.key) || []
+  } else {
+    const cMap      = trace.coreTaskSegs.get(row.coreKey)
+    const cStartMap = trace.coreTaskSegStarts.get(row.coreKey)
+    segs   = (cMap      && cMap.get(row.taskKey))      || []
+    starts = (cStartMap && cStartMap.get(row.taskKey)) || []
+  }
+
+  const lo = Math.max(0, bisectLeft(starts, tAtCx) - 1)
+  for (let i = lo; i < segs.length; i++) {
+    const s = segs[i]
+    if (s.start > tAtCx) break
+    if (s.end >= tAtCx) return s
+  }
+  return null
+}
+
+/**
+ * Return the exact segment under canvas point (cx, cy) in vertical mode, or null.
+ */
+export function hitTestSegmentVertical(trace, viewport, options, cx, cy) {
+  const { timeStart, timeEnd, scrollX = 0, canvasH } = viewport
+  const { viewMode = 'task', expanded = new Set(), showSti = true } = options
+  if (cy < HEADER_H || cx < RULER_W) return null
+  const bodyH   = canvasH - HEADER_H
+  const pxPerNs = bodyH / (timeEnd - timeStart)
+  const tAtCy   = timeStart + (cy - HEADER_H) / pxPerNs
+
+  const { cols } = buildColumnLayout(trace, viewMode, expanded, scrollX, showSti)
+  let col = null
+  for (const c of cols) {
+    if (c.type !== 'task' && c.type !== 'core-task') continue
+    if (cx >= c.x && cx < c.x + COL_W) { col = c; break }
+  }
+  if (!col) return null
+
+  let segs, starts
+  if (col.type === 'task') {
+    segs   = trace.segByMergeKey.get(col.key) || []
+    starts = trace.segStartByMergeKey.get(col.key) || []
+  } else {
+    const cMap      = trace.coreTaskSegs.get(col.coreKey)
+    const cStartMap = trace.coreTaskSegStarts.get(col.coreKey)
+    segs   = (cMap      && cMap.get(col.taskKey))      || []
+    starts = (cStartMap && cStartMap.get(col.taskKey)) || []
+  }
+
+  const lo = Math.max(0, bisectLeft(starts, tAtCy) - 1)
+  for (let i = lo; i < segs.length; i++) {
+    const s = segs[i]
+    if (s.start > tAtCy) break
+    if (s.end >= tAtCy) return s
+  }
+  return null
+}
 
 const BOOKMARK_COLOR = '#FFD700'
 const ANNOTATION_COLOR = '#FF8C00'
@@ -951,8 +1036,8 @@ function drawColumnHeaders(ctx, cols, headerH, colW, highlightKey, darkMode) {
 // ---- Segment drawing helpers (vertical) ------------------------------------
 
 function paintSegmentsVertical(ctx, segs, timeStart, pxPerNs, nsPerPx, colX, colW, headerH,
-                               baseColor, trace, applyCoreTint, highlightKey, colMk, darkMode, segLabel) {
-  const isHighlighted = highlightKey && colMk === highlightKey
+                               baseColor, trace, applyCoreTint, highlightKey, colMk, darkMode, segLabel, hlSeg) {
+  const isHighlighted = (highlightKey && colMk === highlightKey) && !hlSeg
   const lod = nsPerPx > PAINT_LOD_COARSE ? 'coarse' : 'fine'
   const reduced = lod === 'coarse' ? lodReduce(segs, nsPerPx, trace.timeMin) : segs
 
@@ -967,6 +1052,8 @@ function paintSegmentsVertical(ctx, segs, timeStart, pxPerNs, nsPerPx, colX, col
     if (y1 > ctx.canvas.clientHeight + 2 || y1 + h < headerH - 2) continue
 
     ctx.fillStyle = baseColor
+    const isSegLocked = hlSeg && seg.start === hlSeg.start && seg.end === hlSeg.end && seg.task === hlSeg.task
+    ctx.fillStyle = isSegLocked ? lighterColor(baseColor) : baseColor
     ctx.fillRect(segX, Math.round(y1), segW, Math.ceil(h))
 
     if (applyCoreTint) {
@@ -983,8 +1070,13 @@ function paintSegmentsVertical(ctx, segs, timeStart, pxPerNs, nsPerPx, colX, col
     }
 
     if (lod === 'fine' && h >= 3) {
-      ctx.strokeStyle = darkMode ? 'rgba(0,0,0,0.4)' : 'rgba(0,0,0,0.3)'
-      ctx.lineWidth = 0.5
+      if (isSegLocked) {
+        ctx.strokeStyle = complementaryColor(baseColor)
+        ctx.lineWidth = 2.5
+      } else {
+        ctx.strokeStyle = darkMode ? 'rgba(0,0,0,0.4)' : 'rgba(0,0,0,0.3)'
+        ctx.lineWidth = 0.5
+      }
       ctx.strokeRect(segX + 0.5, Math.round(y1) + 0.5, segW - 1, Math.ceil(h) - 1)
     }
 
@@ -1007,7 +1099,7 @@ function paintSegmentsVertical(ctx, segs, timeStart, pxPerNs, nsPerPx, colX, col
 
 // ---- Column drawing functions ----------------------------------------------
 
-function drawTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, darkMode) {
+function drawTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, darkMode, hlSeg) {
   const mk = col.key
   const ld = taskLodData(trace, mk)
   const segs = visibleSegs(ld, timeStart, timeEnd, nsPerPx, trace.lodTimescalePerPx, trace.lodUltraTimescalePerPx)
@@ -1019,7 +1111,7 @@ function drawTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, h
   ctx.fillRect(col.x, HEADER_H, COL_W, ctx.canvas.clientHeight)
 
   paintSegmentsVertical(ctx, segs, timeStart, pxPerNs, nsPerPx,
-    col.x, COL_W, HEADER_H, col.color, trace, true, highlightKey, mk, darkMode, col.label)
+    col.x, COL_W, HEADER_H, col.color, trace, true, highlightKey, mk, darkMode, col.label, hlSeg)
 }
 
 function drawCoreColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, darkMode) {
@@ -1062,7 +1154,7 @@ function drawCoreColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, d
   }
 }
 
-function drawCoreTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, darkMode) {
+function drawCoreTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, darkMode, hlSeg) {
   const ld = coreTaskLodData(trace, col.coreKey, col.taskKey)
   const segs = visibleSegs(ld, timeStart, timeEnd, nsPerPx, trace.lodTimescalePerPx, trace.lodUltraTimescalePerPx)
 
@@ -1073,7 +1165,7 @@ function drawCoreTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerP
 
   const mk = taskMergeKey(col.taskKey)
   paintSegmentsVertical(ctx, segs, timeStart, pxPerNs, nsPerPx,
-    col.x, COL_W, HEADER_H, col.color, trace, false, highlightKey, mk, darkMode, col.label)
+    col.x, COL_W, HEADER_H, col.color, trace, false, highlightKey, mk, darkMode, col.label, hlSeg)
 }
 
 function drawStiColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, darkMode) {
@@ -1276,6 +1368,7 @@ export function renderVertical(ctx, trace, viewport, options = {}) {
     marks        = [],
     showSti      = true,
   } = options
+  const highlightSegment = options.highlightSegment ?? null
 
   const timeSpan = timeEnd - timeStart
   if (timeSpan <= 0 || canvasH <= HEADER_H) return
@@ -1329,11 +1422,11 @@ export function renderVertical(ctx, trace, viewport, options = {}) {
   for (const col of cols) {
     if (col.x + COL_W < RULER_W || col.x >= canvasW) continue
     if (col.type === 'task') {
-      drawTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, darkMode)
+      drawTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, darkMode, highlightSegment)
     } else if (col.type === 'core') {
       drawCoreColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, darkMode)
     } else if (col.type === 'core-task') {
-      drawCoreTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, darkMode)
+      drawCoreTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, darkMode, highlightSegment)
     } else if (col.type === 'sti') {
       drawStiColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, darkMode)
     }

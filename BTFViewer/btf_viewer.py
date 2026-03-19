@@ -1068,6 +1068,18 @@ def _blended_pen_dark(task_raw: str, core: str) -> QPen:
     """Cached dark-border QPen for a task blended with a core tint."""
     return QPen(_blended_color(task_raw, core).darker(130), 0.7)
 
+def _complementary_color(c: QColor) -> QColor:
+    """Return the hue-complementary (opposite on colour wheel) of *c*."""
+    h, s, v, a = c.getHsvF()
+    if h < 0:          # achromatic – fall back to a bright contrasting colour
+        return QColor(255, 215, 0, int(a * 255))
+    h = (h + 0.5) % 1.0
+    return QColor.fromHsvF(h, min(1.0, max(s, 0.85)), min(1.0, max(v, 0.90)), a)
+
+def _complementary_pen(c: QColor) -> QPen:
+    """2.5-px highlight pen whose colour is complementary to *c*."""
+    return QPen(_complementary_color(c), 2.5)
+
 # Palette dedicated to dynamically-assigned STI note colours (distinct from
 # the task palette so task and STI markers never share the same hue).
 # (_STI_COLORS base entries are in the USER CONFIGURATION block at the top.)
@@ -1440,6 +1452,9 @@ class TimelineScene(QGraphicsScene):
         self._find_hit_items: list = []
         # -- Task highlight state ----------------------------------------
         self._locked_task:  Optional[str] = None   # click-locked task (persistent)
+        self._locked_core:  Optional[str] = None   # core context for locked task (core view)
+        self._locked_ns:    Optional[int] = None   # reference time of locked selection
+        self._locked_segment_key: Optional[tuple] = None  # (mk, start, end, core)
         self._hovered_task: Optional[str] = None   # hover task (transient)
         # task_key → [(QRectF, QColor)] – populated by builders, used for hover overlays
         self._task_row_rects: Dict[str, list] = {}
@@ -1856,6 +1871,107 @@ class TimelineScene(QGraphicsScene):
                             return RULER_WIDTH + core_col * col_w + col_w / 2
         return None
 
+    def task_orth_scene_span(self, task_key: str,
+                             core_name: Optional[str] = None) -> Optional[Tuple[float, float]]:
+        """Return the visible orthogonal span of *task_key*'s row/column.
+
+        Horizontal mode: ``(top_y, bottom_y)`` of the target row.
+        Vertical mode:   ``(left_x, right_x)`` of the target column.
+
+        In core view, ``core_name`` is used to select the exact core-task row/
+        column when available; otherwise the first matching task or collapsed
+        core summary span is returned.
+        """
+        if self._trace is None:
+            return None
+        trace = self._trace
+
+        if self._view_mode == "task":
+            task_rows = [t for t in trace.tasks if self._task_merge_key_matches_filter(t)]
+            try:
+                idx = task_rows.index(task_key)
+            except ValueError:
+                return None
+            if self._horizontal:
+                row_stride = self._row_height + self._row_gap
+                top = RULER_HEIGHT + idx * row_stride
+                return (top, top + self._row_height)
+            col_w = max(self._row_height + self._row_gap, 26)
+            left = RULER_WIDTH + idx * col_w
+            return (left, left + col_w)
+
+        core_names = trace.core_names
+        core_tasks = trace.core_task_order
+        if self._task_filter_q:
+            _fcn, _fct = [], {}
+            for _c in core_names:
+                _ts = [t for t in core_tasks[_c] if self._task_raw_name_matches_filter(t)]
+                if _ts:
+                    _fcn.append(_c)
+                    _fct[_c] = _ts
+            core_names, core_tasks = _fcn, _fct
+
+        if self._horizontal:
+            row_stride = self._row_height + self._row_gap
+            row_idx = 0
+            fallback: Optional[Tuple[float, float]] = None
+            for core in core_names:
+                expanded = self._core_expanded.get(core, True)
+                tasks = core_tasks.get(core, [])
+                core_row = row_idx
+                row_idx += 1
+                if expanded:
+                    for raw in tasks:
+                        if _task_merge_key(raw) == task_key:
+                            top = RULER_HEIGHT + row_idx * row_stride
+                            span = (top, top + self._row_height)
+                            if core_name is not None and core == core_name:
+                                return span
+                            if fallback is None:
+                                fallback = span
+                        row_idx += 1
+                else:
+                    for raw in tasks:
+                        if _task_merge_key(raw) == task_key:
+                            top = RULER_HEIGHT + core_row * row_stride
+                            span = (top, top + self._row_height)
+                            if core_name is not None and core == core_name:
+                                return span
+                            if fallback is None:
+                                fallback = span
+                            break
+            return fallback
+
+        col_w = max(self._row_height + self._row_gap, 26)
+        col_idx = 0
+        fallback = None
+        for core in core_names:
+            expanded = self._core_expanded.get(core, True)
+            tasks = core_tasks.get(core, [])
+            core_col = col_idx
+            col_idx += 1
+            if expanded:
+                for raw in tasks:
+                    if _task_merge_key(raw) == task_key:
+                        left = RULER_WIDTH + col_idx * col_w
+                        span = (left, left + col_w)
+                        if core_name is not None and core == core_name:
+                            return span
+                        if fallback is None:
+                            fallback = span
+                    col_idx += 1
+            else:
+                for raw in tasks:
+                    if _task_merge_key(raw) == task_key:
+                        left = RULER_WIDTH + core_col * col_w
+                        span = (left, left + col_w)
+                        if core_name is not None and core == core_name:
+                            return span
+                        if fallback is None:
+                            fallback = span
+                        break
+        return fallback
+
     def add_cursor(self, ns: int) -> None:
         """Add a cursor at timestamp *ns*. Oldest is evicted when > self._max_cursors."""
         self._cursor_times.append(ns)
@@ -1902,8 +2018,20 @@ class TimelineScene(QGraphicsScene):
             self.removeItem(item)
         self._hover_overlay_items = []
 
+    @staticmethod
+    def _segment_lock_key(seg: TaskSegment) -> tuple:
+        return (_task_merge_key(seg.task), seg.start, seg.end, seg.core)
+
+    def _is_segment_locked(self, seg: TaskSegment) -> bool:
+        return self._locked_segment_key == self._segment_lock_key(seg)
+
+    def _is_task_lock_active(self, task_key: str) -> bool:
+        return self._locked_segment_key is None and self._locked_task == task_key
+
     def set_highlighted_task(self, task_name: Optional[str],
-                             locked: bool = False) -> None:
+                             locked: bool = False,
+                             core_name: Optional[str] = None,
+                             ref_ns: Optional[int] = None) -> None:
         """Set or clear the highlighted task on the timeline.
 
         - ``task_name=None`` always clears the highlight and the lock.
@@ -1916,12 +2044,18 @@ class TimelineScene(QGraphicsScene):
                 return
             self._remove_hover_overlay()
             self._locked_task  = None
+            self._locked_core  = None
+            self._locked_ns    = None
+            self._locked_segment_key = None
             self._hovered_task = None
             self.highlight_changed.emit(None, False)
             self.rebuild()
         elif locked:
             self._remove_hover_overlay()
             self._locked_task  = task_name
+            self._locked_core  = core_name
+            self._locked_ns    = ref_ns
+            self._locked_segment_key = None
             self._hovered_task = None
             self.highlight_changed.emit(task_name, True)
             self.rebuild()
@@ -1932,6 +2066,20 @@ class TimelineScene(QGraphicsScene):
             self._apply_hover_overlay(task_name)
             self.highlight_changed.emit(self._locked_task,
                                         self._locked_task is not None)
+
+    def set_highlighted_segment(self, seg: Optional[TaskSegment]) -> None:
+        """Lock highlight to one exact segment bar (not the whole task)."""
+        if seg is None:
+            self.set_highlighted_task(None)
+            return
+        self._remove_hover_overlay()
+        self._locked_task = _task_merge_key(seg.task)
+        self._locked_core = seg.core
+        self._locked_ns = seg.start
+        self._locked_segment_key = self._segment_lock_key(seg)
+        self._hovered_task = None
+        self.highlight_changed.emit(self._locked_task, True)
+        self.rebuild()
 
     def clear_hover(self) -> None:
         """Clear the transient hover highlight without rebuilding the scene."""
@@ -2420,7 +2568,7 @@ class TimelineScene(QGraphicsScene):
         _bg_odd      = QBrush(QColor("#2D2D2D"))
         _sep_pen     = QPen(QColor("#333333"), 0.5)
         _lbl_color   = QColor("#D4D4D4")
-        _pen_hl      = QPen(QColor("#FFFFFF"), 1.5)
+        _pen_hl      = QPen(QColor("#FFD700"), 2.5)
         _stripe_rows: list = []   # accumulated by task + STI loops → one _RowStripesItem
 
         # --- Task rows ---------------------------------------------------
@@ -2439,7 +2587,7 @@ class TimelineScene(QGraphicsScene):
             raw   = trace.task_repr.get(task, task)
             y_top = RULER_HEIGHT + row_idx * _row_stride
             y_ctr = y_top + self._row_height / 2
-            is_hl = (task == self._locked_task)
+            is_hl = self._is_task_lock_active(task)
             disp      = _task_display_name(raw)
             row_color = _task_color(raw)
             self._task_row_rects[task] = [(QRectF(lw, y_top, timeline_w, self._row_height), row_color)]
@@ -2477,10 +2625,12 @@ class TimelineScene(QGraphicsScene):
                 x1 = lw + (seg.start - _time_min) * _px_per_ns
                 x2 = lw + (seg.end   - _time_min) * _px_per_ns
                 w  = x2 - x1 if x2 - x1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
+                _seg_locked = self._is_segment_locked(seg)
+                _seg_br     = _blended_brush(seg.task, seg.core)
                 seg_data.append((
                     QRectF(x1, y_top + 1, w, self._row_height - 2),
-                    _blended_brush(seg.task, seg.core),
-                    pen_hl if is_hl else _blended_pen_dark(seg.task, seg.core),
+                    QBrush(_seg_br.color().lighter(160)) if _seg_locked else _seg_br,
+                    _complementary_pen(_seg_br.color()) if _seg_locked else (pen_hl if is_hl else _blended_pen_dark(seg.task, seg.core)),
                     seg,
                 ))
                 xs.append((x1, x1 + w, i_s))
@@ -2647,7 +2797,7 @@ class TimelineScene(QGraphicsScene):
         _bg_even   = QBrush(QColor("#252526"))
         _bg_odd    = QBrush(QColor("#2D2D2D"))
         _lbl_color = QColor("#D4D4D4")
-        _pen_hl_v  = QPen(QColor("#FFFFFF"), 1.5)
+        _pen_hl_v  = QPen(QColor("#FFD700"), 2.5)
         _time_min  = vp.time_min
         _px_per_ns = vp.px_per_ns
         _vp_ns_lo  = vp.ns_lo
@@ -2660,7 +2810,7 @@ class TimelineScene(QGraphicsScene):
             task   = task_cols[col_idx]
             raw    = trace.task_repr.get(task, task)
             x_left = RULER_WIDTH + col_idx * col_w
-            is_hl  = (task == self._locked_task)
+            is_hl  = self._is_task_lock_active(task)
             disp      = _task_display_name(raw)
             col_color = _task_color(raw)
             self._task_row_rects[task] = [(QRectF(x_left, label_row_h, col_w, timeline_h), col_color)]
@@ -2697,10 +2847,12 @@ class TimelineScene(QGraphicsScene):
                 y1 = label_row_h + (seg.start - _time_min) * _px_per_ns
                 y2 = label_row_h + (seg.end   - _time_min) * _px_per_ns
                 h  = y2 - y1 if y2 - y1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
+                _seg_locked = self._is_segment_locked(seg)
+                _seg_br     = _blended_brush(seg.task, seg.core)
                 seg_data.append((
                     QRectF(x_left + 1, y1, col_w - 2, h),
-                    _blended_brush(seg.task, seg.core),
-                    pen_hl if is_hl else _blended_pen_dark(seg.task, seg.core),
+                    QBrush(_seg_br.color().lighter(160)) if _seg_locked else _seg_br,
+                    _complementary_pen(_seg_br.color()) if _seg_locked else (pen_hl if is_hl else _blended_pen_dark(seg.task, seg.core)),
                     seg,
                 ))
                 xs.append((y1, y1 + h, i_s))
@@ -2985,7 +3137,7 @@ class TimelineScene(QGraphicsScene):
 
                 y_ctr2 = y_top2 + self._row_height / 2
                 _tmk   = _task_merge_key(task_name)
-                is_hl  = (_tmk == self._locked_task)
+                is_hl  = self._is_task_lock_active(_tmk)
 
                 sub_bg = QColor("#1E1E2C") if sub_idx % 2 == 0 else QColor("#232330")
                 self.addRect(QRectF(lw, y_top2, timeline_w, self._row_height),
@@ -3010,7 +3162,7 @@ class TimelineScene(QGraphicsScene):
                 disp      = _task_display_name(task_name)
                 sub_lbl_bg = _TaskLabelItem(
                     QRectF(0, y_top2, lw, self._row_height), _tmk, self,
-                    tooltip_text=disp)
+                    tooltip_text=disp, core_name=core)
                 sub_lbl_bg.setZValue(36)
                 self.addItem(sub_lbl_bg)
                 self._frozen_items.append((sub_lbl_bg, 0))
@@ -3026,7 +3178,7 @@ class TimelineScene(QGraphicsScene):
                 t_lbl.setZValue(37)
                 self._frozen_items.append((t_lbl, 33))
 
-                pen_hl       = QPen(QColor("#FFFFFF"), 1.5)
+                pen_hl       = QPen(QColor("#FFD700"), 2.5)
                 _task_pen_cs = _task_pen_dark(task_name)
                 _task_br_cs  = _task_brush(task_name)
                 seg_data: list = []
@@ -3036,10 +3188,11 @@ class TimelineScene(QGraphicsScene):
                     x1 = lw + (seg.start - _time_min) * _px_per_ns
                     x2 = lw + (seg.end   - _time_min) * _px_per_ns
                     w  = x2 - x1 if x2 - x1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
+                    _seg_locked = self._is_segment_locked(seg)
                     seg_data.append((
                         QRectF(x1, y_top2 + 1, w, self._row_height - 2),
-                        _task_br_cs,
-                        pen_hl if is_hl else _task_pen_cs,
+                        QBrush(_task_br_cs.color().lighter(160)) if _seg_locked else _task_br_cs,
+                        _complementary_pen(_task_br_cs.color()) if _seg_locked else (pen_hl if is_hl else _task_pen_cs),
                         seg,
                     ))
                     xs.append((x1, x1 + w, i_s))
@@ -3275,7 +3428,7 @@ class TimelineScene(QGraphicsScene):
                              QPen(Qt.NoPen), QBrush(sub_bg)).setZValue(0)
 
                 _tmk       = _task_merge_key(task_name)
-                is_hl      = (_tmk == self._locked_task)
+                is_hl      = self._is_task_lock_active(_tmk)
                 _row_color = _task_color(task_name)
                 self._task_row_rects.setdefault(_tmk, []).append(
                     (QRectF(x_left2, label_row_h, col_w, timeline_h), _row_color))
@@ -3296,7 +3449,7 @@ class TimelineScene(QGraphicsScene):
                 disp      = _task_display_name(task_name)
                 sub_lbl_bg = _TaskLabelItem(
                     QRectF(x_left2, 0, col_w, label_row_h), _tmk, self,
-                    tooltip_text=disp)
+                    tooltip_text=disp, core_name=core)
                 sub_lbl_bg.setZValue(36)
                 self.addItem(sub_lbl_bg)
                 self._frozen_top_items.append((sub_lbl_bg, 0))
@@ -3308,7 +3461,7 @@ class TimelineScene(QGraphicsScene):
                                             label_row_h - LABEL_BOTTOM_MARGIN, 37)
                 self._frozen_top_items.append((t_lbl, t_lbl.pos().y()))
 
-                pen_hl       = QPen(QColor("#FFFFFF"), 1.5)
+                pen_hl       = QPen(QColor("#FFD700"), 2.5)
                 _task_pen_cs = _task_pen_dark(task_name)
                 _task_br_cs  = _task_brush(task_name)
                 seg_data: list = []
@@ -3318,10 +3471,11 @@ class TimelineScene(QGraphicsScene):
                     y1 = label_row_h + (seg.start - _time_min) * _px_per_ns
                     y2 = label_row_h + (seg.end   - _time_min) * _px_per_ns
                     h  = y2 - y1 if y2 - y1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
+                    _seg_locked = self._is_segment_locked(seg)
                     seg_data.append((
                         QRectF(x_left2 + 1, y1, col_w - 2, h),
-                        _task_br_cs,
-                        pen_hl if is_hl else _task_pen_cs,
+                        QBrush(_task_br_cs.color().lighter(160)) if _seg_locked else _task_br_cs,
+                        _complementary_pen(_task_br_cs.color()) if _seg_locked else (pen_hl if is_hl else _task_pen_cs),
                         seg,
                     ))
                     xs.append((y1, y1 + h, i_s))
@@ -4007,11 +4161,12 @@ class _TaskLabelItem(QGraphicsRectItem):
     _HIGHLIGHT_BRUSH = QBrush(QColor(255, 215, 0, 45))
 
     def __init__(self, rect: QRectF, task_name: str, tl_scene,
-                 tooltip_text: str = ""):
+                 tooltip_text: str = "", core_name: Optional[str] = None):
         super().__init__(rect)
         self._task_name   = task_name
         self._tl_scene    = tl_scene
         self._tooltip_text = tooltip_text
+        self._core_name = core_name
         self.setAcceptedMouseButtons(Qt.LeftButton)
         self.setAcceptHoverEvents(True)
         self.setCursor(Qt.PointingHandCursor)
@@ -4028,7 +4183,8 @@ class _TaskLabelItem(QGraphicsRectItem):
         if self._tl_scene._locked_task == self._task_name:
             self._tl_scene.set_highlighted_task(None)   # second click → cancel lock
         else:
-            self._tl_scene.set_highlighted_task(self._task_name, locked=True)
+            self._tl_scene.set_highlighted_task(
+                self._task_name, locked=True, core_name=self._core_name)
         event.accept()
 
     def hoverEnterEvent(self, event):
@@ -4150,6 +4306,12 @@ class TimelineView(QGraphicsView):
         # Segment-boundary jump cache (populated lazily, keyed to trace obj).
         self._seg_starts_cache: List[int] = []
         self._seg_starts_cache_trace: object = None
+        # Tab/Shift+Tab time-order navigation cache (populated lazily per trace).
+        self._seg_nav_trace: object = None
+        self._seg_nav_all: List[tuple] = []          # [(start_ns, end_ns, merge_key, core)]
+        self._seg_nav_all_starts: List[int] = []
+        self._seg_nav_by_core: Dict[str, List[tuple]] = {}
+        self._seg_nav_by_core_starts: Dict[str, List[int]] = {}
 
         # -- Zoom debounce -----------------------------------------------
         # Wheel events fire very rapidly; we accumulate the zoom factor and
@@ -4468,6 +4630,209 @@ class TimelineView(QGraphicsView):
     #   5. Anything else → default ScrollHandDrag (pan)
     # ------------------------------------------------------------------
 
+    def _ensure_seg_nav_cache(self) -> None:
+        """Build segment-time navigation caches once per loaded trace."""
+        sc = self._scene
+        tr = sc._trace
+        if tr is None:
+            self._seg_nav_trace = None
+            self._seg_nav_all = []
+            self._seg_nav_all_starts = []
+            self._seg_nav_by_core = {}
+            self._seg_nav_by_core_starts = {}
+            return
+        if self._seg_nav_trace is tr:
+            return
+
+        tick_mk = _task_merge_key("TICK")
+        all_events: List[tuple] = []
+        by_core: Dict[str, List[tuple]] = defaultdict(list)
+        for seg in tr.segments:
+            if _is_core_entity(seg.task) or not seg.task:
+                continue
+            mk = _task_merge_key(seg.task)
+            if mk == tick_mk:
+                continue
+            ev = (seg.start, seg.end, mk, seg.core)
+            all_events.append(ev)
+            by_core[seg.core].append(ev)
+
+        all_events.sort(key=lambda t: t[0])
+        by_core_sorted: Dict[str, List[tuple]] = {}
+        by_core_starts: Dict[str, List[int]] = {}
+        for core, events in by_core.items():
+            events.sort(key=lambda t: t[0])
+            by_core_sorted[core] = events
+            by_core_starts[core] = [t[0] for t in events]
+
+        self._seg_nav_trace = tr
+        self._seg_nav_all = all_events
+        self._seg_nav_all_starts = [t[0] for t in all_events]
+        self._seg_nav_by_core = by_core_sorted
+        self._seg_nav_by_core_starts = by_core_starts
+
+    def _pick_next_task_by_time(self,
+                                events: List[tuple],
+                                starts: List[int],
+                                ref_ns: int,
+                                cur_task: Optional[str],
+                                forward: bool,
+                                task_ok) -> Optional[tuple]:
+        """Pick next/previous task event by time, skipping same-task repeats."""
+        if not events:
+            return None
+
+        if forward:
+            idx = bisect_right(starts, ref_ns)
+            while idx < len(events):
+                start, _end, mk, _core = events[idx]
+                if task_ok(mk) and (cur_task is None or mk != cur_task):
+                    return events[idx]
+                idx += 1
+            idx = 0
+            while idx < len(events):
+                start, _end, mk, _core = events[idx]
+                if task_ok(mk) and (cur_task is None or mk != cur_task):
+                    return events[idx]
+                idx += 1
+        else:
+            idx = bisect_left(starts, ref_ns) - 1
+            while idx >= 0:
+                start, _end, mk, _core = events[idx]
+                if task_ok(mk) and (cur_task is None or mk != cur_task):
+                    return events[idx]
+                idx -= 1
+            idx = len(events) - 1
+            while idx >= 0:
+                start, _end, mk, _core = events[idx]
+                if task_ok(mk) and (cur_task is None or mk != cur_task):
+                    return events[idx]
+                idx -= 1
+        return None
+
+    def _cycle_highlighted_task(self, forward: bool) -> bool:
+        """Select next/previous task by segment time order.
+
+        Task view: global timeline order.
+        Core view: timeline order within the selected core.
+        """
+        sc = self._scene
+        tr = sc._trace
+        if tr is None:
+            return False
+
+        self._ensure_seg_nav_cache()
+
+        target_task: Optional[str] = None
+        target_core: Optional[str] = None
+        target_ns: Optional[int] = None
+        target_seg_end: Optional[int] = None
+        cur_task = sc._locked_task
+        ref_ns = sc._locked_ns if sc._locked_ns is not None else self.view_center_ns()
+
+        if sc._view_mode == "core":
+            core_names = tr.core_names
+            core_tasks = tr.core_task_order
+            if sc._task_filter_q:
+                _fcn, _fct = [], {}
+                for _c in core_names:
+                    _ts = [t for t in core_tasks[_c] if sc._task_raw_name_matches_filter(t)]
+                    if _ts:
+                        _fcn.append(_c)
+                        _fct[_c] = _ts
+                core_names, core_tasks = _fcn, _fct
+            if not core_names:
+                return False
+
+            target_core = sc._locked_core if sc._locked_core in core_names else None
+            if target_core is None and cur_task is not None:
+                for _c in core_names:
+                    if any(_task_merge_key(raw) == cur_task for raw in core_tasks.get(_c, [])):
+                        target_core = _c
+                        break
+            if target_core is None:
+                target_core = core_names[0 if forward else -1]
+
+            allowed_mk = {_task_merge_key(raw) for raw in core_tasks.get(target_core, [])}
+            if not allowed_mk:
+                return False
+
+            events = self._seg_nav_by_core.get(target_core, [])
+            starts = self._seg_nav_by_core_starts.get(target_core, [])
+            picked = self._pick_next_task_by_time(
+                events, starts, ref_ns, cur_task, forward,
+                lambda mk: mk in allowed_mk and sc._task_merge_key_matches_filter(mk),
+            )
+            if picked is None:
+                return False
+            target_ns, target_seg_end, target_task, _picked_core = picked
+        else:
+            events = self._seg_nav_all
+            starts = self._seg_nav_all_starts
+            picked = self._pick_next_task_by_time(
+                events, starts, ref_ns, cur_task, forward,
+                lambda mk: sc._task_merge_key_matches_filter(mk),
+            )
+            if picked is None:
+                return False
+            target_ns, target_seg_end, target_task, target_core = picked
+
+        if target_task is None or target_ns is None or target_seg_end is None:
+            return False
+
+        nav_seg = TaskSegment(
+            task=tr.task_repr.get(target_task, target_task),
+            start=target_ns,
+            end=target_seg_end,
+            core=(target_core or "Core_?"),
+        )
+        sc.set_highlighted_segment(nav_seg)
+
+        time_coord = sc.ns_to_scene_coord(target_ns)
+        time_end_coord = sc.ns_to_scene_coord(target_seg_end)
+        vp_center_scene = self.mapToScene(self.viewport().rect().center())
+        visible_rect = self.mapToScene(self.viewport().rect()).boundingRect()
+
+        orth_span = sc.task_orth_scene_span(target_task, target_core)
+        if sc._horizontal:
+            content_left = visible_rect.left() + sc._label_width
+            time_in_view = (content_left <= time_coord and
+                            time_end_coord <= visible_rect.right())
+            orth_out_of_view = False
+            orth_center = vp_center_scene.y()
+            if orth_span is not None:
+                orth_top, orth_bottom = orth_span
+                orth_center = (orth_top + orth_bottom) / 2
+                orth_out_of_view = (orth_bottom <= visible_rect.top() or
+                                    orth_top >= visible_rect.bottom())
+        else:
+            content_top = visible_rect.top() + RULER_WIDTH
+            time_in_view = (content_top <= time_coord and
+                            time_end_coord <= visible_rect.bottom())
+            orth_out_of_view = False
+            orth_center = vp_center_scene.x()
+            if orth_span is not None:
+                orth_left, orth_right = orth_span
+                orth_center = (orth_left + orth_right) / 2
+                content_left = visible_rect.left() + RULER_WIDTH
+                orth_out_of_view = (orth_right <= content_left or
+                                    orth_left >= visible_rect.right())
+
+        if not time_in_view or orth_out_of_view:
+            if sc._horizontal:
+                self.centerOn(time_coord, orth_center if orth_out_of_view else vp_center_scene.y())
+            else:
+                self.centerOn(orth_center if orth_out_of_view else vp_center_scene.x(),
+                              time_coord)
+        return True
+
+    def focusNextPrevChild(self, next: bool) -> bool:
+        """Use Tab / Shift+Tab for timeline task navigation when view has focus."""
+        if self.hasFocus() and self._scene._trace is not None:
+            self._cycle_highlighted_task(next)
+            return True
+        return super().focusNextPrevChild(next)
+
     def keyPressEvent(self, event) -> None:
         """Arrow-key navigation.
 
@@ -4488,9 +4853,6 @@ class TimelineView(QGraphicsView):
         sc   = self._scene
         horiz = sc._horizontal
 
-        # Map logical directions to physical keys depending on the mode.
-        # time_fwd / time_back — keys that advance / retreat along the time axis
-        # row_fwd  / row_back  — keys that scroll the orthogonal (row) axis
         if horiz:
             time_fwd, time_back = Qt.Key_Right, Qt.Key_Left
             row_fwd,  row_back  = Qt.Key_Down,  Qt.Key_Up
@@ -4498,10 +4860,14 @@ class TimelineView(QGraphicsView):
             time_fwd, time_back = Qt.Key_Down,  Qt.Key_Up
             row_fwd,  row_back  = Qt.Key_Right, Qt.Key_Left
 
+        if key in (Qt.Key_Tab, Qt.Key_Backtab):
+            is_back = (key == Qt.Key_Backtab) or bool(mods & Qt.ShiftModifier)
+            self._cycle_highlighted_task(not is_back)
+            event.accept()
+            return
+
         if key in (time_fwd, time_back):
             if mods & Qt.ShiftModifier and sc._trace is not None:
-                # Lazy-build a sorted, deduplicated list of all segment starts,
-                # cached per trace so it is never rebuilt on repeated keypresses.
                 if self._seg_starts_cache_trace is not sc._trace:
                     s: set = set()
                     for _starts in sc._trace.seg_start_by_merge_key.values():
@@ -4511,8 +4877,6 @@ class TimelineView(QGraphicsView):
                 all_starts = self._seg_starts_cache
 
                 if all_starts:
-                    # Use the visible time EDGES rather than center so that each
-                    # press always jumps to a boundary outside the current viewport.
                     vp = self.viewport().rect()
                     lw = sc._label_width
                     if horiz:
@@ -4523,11 +4887,9 @@ class TimelineView(QGraphicsView):
                         edge_hi_ns = sc.scene_to_ns(self.mapToScene(QPoint(0, vp.bottom())).y())
 
                     if key == time_fwd:
-                        # First boundary strictly past the right/bottom edge
                         idx = bisect_right(all_starts, edge_hi_ns)
                         target = all_starts[min(idx, len(all_starts) - 1)]
                     else:
-                        # Last boundary strictly before the left/top edge
                         idx = bisect_left(all_starts, edge_lo_ns) - 1
                         target = all_starts[max(idx, 0)]
 
@@ -5017,6 +5379,9 @@ class TimelineView(QGraphicsView):
             coord = scene_pt.x() if self._scene._horizontal else scene_pt.y()
             ns = self._scene.scene_to_ns(coord)
             if event.button() == Qt.LeftButton:
+                hit_seg = self._hit_segment_at(scene_pt)
+                if hit_seg is not None:
+                    self._scene.set_highlighted_segment(hit_seg)
                 if event.modifiers() & Qt.ShiftModifier:
                     ns = self._snap_to_boundary(ns)
                 # Place cursor immediately; mouseDoubleClickEvent will roll it
@@ -5068,8 +5433,8 @@ class TimelineView(QGraphicsView):
             menu.addAction(
                 _svg_icon(_IC_LEGEND, _icon_color),
                 "Select in Legend",
-                lambda _t=_seg_task: self._scene.set_highlighted_task(
-                    _task_merge_key(_t), locked=True)
+                lambda _t=_seg_task, _c=hit_seg.core: self._scene.set_highlighted_task(
+                    _task_merge_key(_t), locked=True, core_name=_c, ref_ns=hit_seg.start)
             )
             menu.addSeparator()
 
@@ -5412,7 +5777,7 @@ class _LoadProgressDialog(QWidget):
         self.setWindowModality(Qt.ApplicationModal)
         if sys.platform != "darwin":
             self.setWindowTitle("Loading")
-        self.setMinimumWidth(380)
+        self.setMinimumWidth(420)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 14, 16, 14)
@@ -6369,7 +6734,7 @@ class _AboutDialog(QDialog):
         super().__init__(parent, Qt.Dialog)
         self.setWindowTitle("About RTOS BTF Viewer")
         self.setModal(True)
-        self.setFixedWidth(460)
+        self.setMinimumWidth(380)
 
         # Theme palette
         if is_dark:
@@ -6377,11 +6742,13 @@ class _AboutDialog(QDialog):
             title_c = "#FFFFFF";  sub_c  = "#9E9E9E"; sect_c = "#5B9BD5"
             key_c   = "#7EC8E3"; body_c = "#D4D4D4"
             btn_bg  = "#0E4D80"; btn_hov = "#1565C0"; btn_txt = "#FFFFFF"
+            blk_bg  = "#2B2B2C"; blk_bd = "#3A3A3A"
         else:
             hdr_bg  = "#F0F0F0"; bg     = "#FAFAFA"; sep_c  = "#CCCCCC"
             title_c = "#1E1E1E"; sub_c  = "#666666"; sect_c = "#005A9E"
             key_c   = "#005A9E"; body_c = "#333333"
             btn_bg  = "#005A9E"; btn_hov = "#1472B5"; btn_txt = "#FFFFFF"
+            blk_bg  = "#FFFFFF"; blk_bd = "#D5D5D5"
 
         root = QVBoxLayout(self)
         root.setSpacing(0)
@@ -6436,7 +6803,7 @@ class _AboutDialog(QDialog):
         def _kv_table(rows) -> QWidget:
             w = QWidget()
             g = QGridLayout(w)
-            g.setContentsMargins(8, 0, 0, 0)
+            g.setContentsMargins(0, 0, 0, 0)
             g.setHorizontalSpacing(16)
             g.setVerticalSpacing(3)
             g.setColumnStretch(1, 1)
@@ -6448,29 +6815,32 @@ class _AboutDialog(QDialog):
                 g.addWidget(vl, r, 1)
             return w
 
-        iv.addWidget(_sect("View Modes"))
-        iv.addWidget(_kv_table([
+        def _block(title: str, rows) -> QWidget:
+            box = QFrame()
+            box.setObjectName("about_block")
+            bv = QVBoxLayout(box)
+            bv.setContentsMargins(12, 10, 12, 10)
+            bv.setSpacing(8)
+            bv.addWidget(_sect(title))
+            bv.addWidget(_kv_table(rows))
+            return box
+
+        iv.addWidget(_block("View Modes", [
             ("Task View", "one row per task"),
             ("Core View", "expandable rows per CPU core"),
         ]))
-        iv.addSpacing(4)
-        iv.addWidget(_sect("Controls"))
-        iv.addWidget(_kv_table([
+        iv.addWidget(_block("Controls", [
             ("Left-click",  "place / drag cursor"),
             ("Ctrl+Wheel",  "zoom in / out  ·  Scroll \u2014 pan"),
             ("Ctrl+0",      "fit to window"),
             ("Ctrl+R",      "zoom to cursor range"),
         ]))
-        iv.addSpacing(4)
-        iv.addWidget(_sect("Application"))
-        iv.addWidget(_kv_table([
+        iv.addWidget(_block("Application", [
             ("Product",   "RTOS BTF Viewer"),
             ("Purpose",   "Interactive viewer for Best Trace Format (.btf) RTOS scheduling traces"),
             ("Runtime",   f"Python {sys.version_info.major}.{sys.version_info.minor}  ·  PyQt5 desktop application"),
         ]))
-        iv.addSpacing(4)
-        iv.addWidget(_sect("License"))
-        iv.addWidget(_kv_table([
+        iv.addWidget(_block("License", [
             ("License",   "MIT License"),
         ]))
         root.addWidget(info_w)
@@ -6503,6 +6873,8 @@ class _AboutDialog(QDialog):
             QLabel#about_key            {{ color:{key_c}; font-size:10pt;
                                            font-weight:600; min-width:82px; }}
             QLabel#about_body           {{ color:{body_c}; font-size:10pt; }}
+            QFrame#about_block          {{ background:{blk_bg}; border:1px solid {blk_bd};
+                                           border-radius:8px; }}
             QFrame#about_sep            {{ border:none; background:{sep_c};
                                            max-height:1px; }}
             QPushButton#about_btn       {{ background:{btn_bg}; color:{btn_txt};
@@ -6513,6 +6885,19 @@ class _AboutDialog(QDialog):
         """)
 
         self.adjustSize()
+
+        # Match the web app's visual proportion: slightly wider, less tall.
+        # Target ratio is width / height ≈ 1.28.
+        _target_ratio = 1.28
+        _w = max(520, min(640, self.sizeHint().width()))
+        _h_need = self.sizeHint().height()
+        _h_target = int(round(_w / _target_ratio))
+        if _h_target < _h_need:
+            _h = _h_need
+            _w = int(round(_h * _target_ratio))
+        else:
+            _h = _h_target
+        self.setFixedSize(_w, _h)
 
 # ---------------------------------------------------------------------------
 # Settings Dialog

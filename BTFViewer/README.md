@@ -106,6 +106,8 @@ Then just **double-click `dist/index.html`** or:
 open BTFViewer/web/dist/index.html   # macOS
 ```
 
+Do not open `BTFViewer/web/index.html` directly via `file://`; it is the Vite source entry used by the dev server.
+
 #### Development server (with hot reload)
 
 ```bash
