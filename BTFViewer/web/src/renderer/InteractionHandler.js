@@ -58,6 +58,10 @@ export class InteractionHandler {
     // Min zoom: entire trace visible
     this._minTimeSpan = 1
 
+    // Zoom history for double-click toggle.
+    // Each entry: { timeStart, timeEnd, scrollY, scrollX, segKey }
+    this._zoomHistory = []
+
     this._boundWheel       = this._onWheel.bind(this)
     this._boundMouseDown   = this._onMouseDown.bind(this)
     this._boundMouseMove   = this._onMouseMove.bind(this)
@@ -475,10 +479,62 @@ export class InteractionHandler {
     const cx   = e.clientX - rect.left
     const cy   = e.clientY - rect.top
     const vert = this._isVertical()
-    // Double-click on ruler → fit to window
+    // Double-click on ruler → fit to window (clears zoom history)
     if (vert ? cx < RULER_W || cy < HEADER_H : cy < RULER_H) {
+      this._zoomHistory = []
       this._opts.onFitToWindow?.()
+      return
     }
+    // Double-click on segment → zoom to fit segment, or restore on second dblclick
+    const trace = this._opts.getTrace()
+    const vp    = this._opts.getViewport()
+    const ropts = this._opts.getOptions?.()
+    if (trace && vp && ropts) {
+      const seg = vert
+        ? hitTestSegmentVertical(trace, vp, ropts, cx, cy)
+        : hitTestSegment(trace, vp, ropts, cx, cy)
+      if (seg) {
+        const segKey = `${seg.start}:${seg.end}:${seg.task}:${seg.core}`
+        if (this._zoomHistory.length &&
+            this._zoomHistory[this._zoomHistory.length - 1].segKey === segKey) {
+          this._restoreZoom()
+        } else {
+          this._zoomToSegment(seg)
+        }
+      }
+    }
+  }
+
+  _zoomToSegment(seg) {
+    const vp = this._opts.getViewport()
+    if (!vp) return
+    // Save current viewport so a second dblclick can restore it.
+    const segKey = `${seg.start}:${seg.end}:${seg.task}:${seg.core}`
+    this._zoomHistory.push({
+      timeStart: vp.timeStart,
+      timeEnd:   vp.timeEnd,
+      scrollY:   vp.scrollY ?? 0,
+      scrollX:   vp.scrollX ?? 0,
+      segKey,
+    })
+    const dur    = seg.end - seg.start
+    const margin = Math.max(1, Math.floor(dur / 10))
+    const { s, e } = this._clampPan(seg.start - margin, seg.end + margin)
+    this._opts.onViewportChange?.({ ...vp, timeStart: s, timeEnd: e })
+  }
+
+  _restoreZoom() {
+    if (!this._zoomHistory.length) return
+    const prev = this._zoomHistory.pop()
+    const vp   = this._opts.getViewport()
+    if (!vp) return
+    this._opts.onViewportChange?.({
+      ...vp,
+      timeStart: prev.timeStart,
+      timeEnd:   prev.timeEnd,
+      scrollY:   prev.scrollY,
+      scrollX:   prev.scrollX,
+    })
   }
 
   _onContextMenu(e) {

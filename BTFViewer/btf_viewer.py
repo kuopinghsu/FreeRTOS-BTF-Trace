@@ -1068,13 +1068,19 @@ def _blended_pen_dark(task_raw: str, core: str) -> QPen:
     """Cached dark-border QPen for a task blended with a core tint."""
     return QPen(_blended_color(task_raw, core).darker(130), 0.7)
 
+@functools.lru_cache(maxsize=None)
+def _complementary_color_cached(hex_str: str) -> QColor:
+    """Cached implementation keyed by hex string (e.g. '#4e9af1')."""
+    c = QColor(hex_str)
+    h, s, v, _ = c.getHsvF()
+    if h < 0:          # achromatic – fall back to a bright contrasting colour
+        return QColor(255, 215, 0)
+    h = (h + 0.5) % 1.0
+    return QColor.fromHsvF(h, min(1.0, max(s, 0.85)), min(1.0, max(v, 0.90)))
+
 def _complementary_color(c: QColor) -> QColor:
     """Return the hue-complementary (opposite on colour wheel) of *c*."""
-    h, s, v, a = c.getHsvF()
-    if h < 0:          # achromatic – fall back to a bright contrasting colour
-        return QColor(255, 215, 0, int(a * 255))
-    h = (h + 0.5) % 1.0
-    return QColor.fromHsvF(h, min(1.0, max(s, 0.85)), min(1.0, max(v, 0.90)), a)
+    return _complementary_color_cached(c.name())
 
 def _complementary_pen(c: QColor) -> QPen:
     """2.5-px highlight pen whose colour is complementary to *c*."""
@@ -2568,7 +2574,6 @@ class TimelineScene(QGraphicsScene):
         _bg_odd      = QBrush(QColor("#2D2D2D"))
         _sep_pen     = QPen(QColor("#333333"), 0.5)
         _lbl_color   = QColor("#D4D4D4")
-        _pen_hl      = QPen(QColor("#FFD700"), 2.5)
         _stripe_rows: list = []   # accumulated by task + STI loops → one _RowStripesItem
 
         # --- Task rows ---------------------------------------------------
@@ -2607,7 +2612,7 @@ class TimelineScene(QGraphicsScene):
             self.addItem(lbl_bg)
             self._frozen_items.append((lbl_bg, 0))
 
-            lbl_color    = QColor("#FFD700") if is_hl else _lbl_color
+            lbl_color    = _complementary_color(row_color) if is_hl else _lbl_color
             lbl_font     = _monospace_font(self._font_size, QFont.Bold) if is_hl else font
             _lbl_avail_w = max(0, lw - 4 - 4)   # left=4, right margin=4
             _lbl_fm      = QFontMetrics(lbl_font) if is_hl else fm
@@ -2618,7 +2623,7 @@ class TimelineScene(QGraphicsScene):
             lbl.setZValue(37)
             self._frozen_items.append((lbl, 4))
 
-            pen_hl     = _pen_hl
+            pen_hl     = _complementary_pen(row_color)
             seg_data: list = []
             xs:      list = []
             for i_s, seg in enumerate(_visible_segs(self._seg_lod_for_task(task), vp)):
@@ -2627,10 +2632,11 @@ class TimelineScene(QGraphicsScene):
                 w  = x2 - x1 if x2 - x1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
                 _seg_locked = self._is_segment_locked(seg)
                 _seg_br     = _blended_brush(seg.task, seg.core)
+                _seg_rect   = QRectF(x1, y_top + 1, w, self._row_height - 2)
                 seg_data.append((
-                    QRectF(x1, y_top + 1, w, self._row_height - 2),
-                    QBrush(_seg_br.color().lighter(160)) if _seg_locked else _seg_br,
-                    _complementary_pen(_seg_br.color()) if _seg_locked else (pen_hl if is_hl else _blended_pen_dark(seg.task, seg.core)),
+                    _seg_rect,
+                    _seg_br,
+                    pen_hl if (is_hl or _seg_locked) else _blended_pen_dark(seg.task, seg.core),
                     seg,
                 ))
                 xs.append((x1, x1 + w, i_s))
@@ -2797,7 +2803,6 @@ class TimelineScene(QGraphicsScene):
         _bg_even   = QBrush(QColor("#252526"))
         _bg_odd    = QBrush(QColor("#2D2D2D"))
         _lbl_color = QColor("#D4D4D4")
-        _pen_hl_v  = QPen(QColor("#FFD700"), 2.5)
         _time_min  = vp.time_min
         _px_per_ns = vp.px_per_ns
         _vp_ns_lo  = vp.ns_lo
@@ -2830,7 +2835,7 @@ class TimelineScene(QGraphicsScene):
             self.addItem(lbl_bg)
             self._frozen_top_items.append((lbl_bg, 0))
 
-            lbl_color    = QColor("#FFD700") if is_hl else _lbl_color
+            lbl_color    = _complementary_color(col_color) if is_hl else _lbl_color
             lbl_font     = _monospace_font(self._font_size, QFont.Bold) if is_hl else font
             _lbl_avail_v = max(0, label_row_h - 14)
             _lbl_fm_v    = QFontMetrics(lbl_font) if is_hl else fm
@@ -2840,7 +2845,7 @@ class TimelineScene(QGraphicsScene):
                                       label_row_h - LABEL_BOTTOM_MARGIN, 37)
             self._frozen_top_items.append((lbl, lbl.pos().y()))
 
-            pen_hl      = _pen_hl_v
+            pen_hl      = _complementary_pen(col_color)
             seg_data: list = []
             xs:      list = []
             for i_s, seg in enumerate(_visible_segs(self._seg_lod_for_task(task), vp)):
@@ -2849,10 +2854,11 @@ class TimelineScene(QGraphicsScene):
                 h  = y2 - y1 if y2 - y1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
                 _seg_locked = self._is_segment_locked(seg)
                 _seg_br     = _blended_brush(seg.task, seg.core)
+                _seg_rect   = QRectF(x_left + 1, y1, col_w - 2, h)
                 seg_data.append((
-                    QRectF(x_left + 1, y1, col_w - 2, h),
-                    QBrush(_seg_br.color().lighter(160)) if _seg_locked else _seg_br,
-                    _complementary_pen(_seg_br.color()) if _seg_locked else (pen_hl if is_hl else _blended_pen_dark(seg.task, seg.core)),
+                    _seg_rect,
+                    _seg_br,
+                    pen_hl if (is_hl or _seg_locked) else _blended_pen_dark(seg.task, seg.core),
                     seg,
                 ))
                 xs.append((y1, y1 + h, i_s))
@@ -3166,7 +3172,7 @@ class TimelineScene(QGraphicsScene):
                 sub_lbl_bg.setZValue(36)
                 self.addItem(sub_lbl_bg)
                 self._frozen_items.append((sub_lbl_bg, 0))
-                lbl_color = QColor("#FFD700") if is_hl else QColor("#B0B0C0")
+                lbl_color = _complementary_color(_row_color) if is_hl else QColor("#B0B0C0")
                 lbl_fnt   = _monospace_font(self._font_size,
                                             QFont.Bold) if is_hl else font
                 _sub_avail  = max(0, lw - 33 - 4)   # left=33, right margin=4
@@ -3178,7 +3184,7 @@ class TimelineScene(QGraphicsScene):
                 t_lbl.setZValue(37)
                 self._frozen_items.append((t_lbl, 33))
 
-                pen_hl       = QPen(QColor("#FFD700"), 2.5)
+                pen_hl       = _complementary_pen(_row_color)
                 _task_pen_cs = _task_pen_dark(task_name)
                 _task_br_cs  = _task_brush(task_name)
                 seg_data: list = []
@@ -3191,8 +3197,8 @@ class TimelineScene(QGraphicsScene):
                     _seg_locked = self._is_segment_locked(seg)
                     seg_data.append((
                         QRectF(x1, y_top2 + 1, w, self._row_height - 2),
-                        QBrush(_task_br_cs.color().lighter(160)) if _seg_locked else _task_br_cs,
-                        _complementary_pen(_task_br_cs.color()) if _seg_locked else (pen_hl if is_hl else _task_pen_cs),
+                        _task_br_cs,
+                        pen_hl if (is_hl or _seg_locked) else _task_pen_cs,
                         seg,
                     ))
                     xs.append((x1, x1 + w, i_s))
@@ -3453,7 +3459,7 @@ class TimelineScene(QGraphicsScene):
                 sub_lbl_bg.setZValue(36)
                 self.addItem(sub_lbl_bg)
                 self._frozen_top_items.append((sub_lbl_bg, 0))
-                lbl_color = QColor("#FFD700") if is_hl else QColor("#B0B0C0")
+                lbl_color = _complementary_color(_row_color) if is_hl else QColor("#B0B0C0")
                 lbl_fnt   = _monospace_font(self._font_size,
                                             QFont.Bold) if is_hl else font
                 t_lbl = _make_rotated_label(self, disp, lbl_fnt, lbl_color,
@@ -3461,7 +3467,7 @@ class TimelineScene(QGraphicsScene):
                                             label_row_h - LABEL_BOTTOM_MARGIN, 37)
                 self._frozen_top_items.append((t_lbl, t_lbl.pos().y()))
 
-                pen_hl       = QPen(QColor("#FFD700"), 2.5)
+                pen_hl       = _complementary_pen(_row_color)
                 _task_pen_cs = _task_pen_dark(task_name)
                 _task_br_cs  = _task_brush(task_name)
                 seg_data: list = []
@@ -3474,8 +3480,8 @@ class TimelineScene(QGraphicsScene):
                     _seg_locked = self._is_segment_locked(seg)
                     seg_data.append((
                         QRectF(x_left2 + 1, y1, col_w - 2, h),
-                        QBrush(_task_br_cs.color().lighter(160)) if _seg_locked else _task_br_cs,
-                        _complementary_pen(_task_br_cs.color()) if _seg_locked else (pen_hl if is_hl else _task_pen_cs),
+                        _task_br_cs,
+                        pen_hl if (is_hl or _seg_locked) else _task_pen_cs,
                         seg,
                     ))
                     xs.append((y1, y1 + h, i_s))
@@ -3772,6 +3778,31 @@ class _BatchRowItem(QGraphicsItem):
         self.setAcceptHoverEvents(bool(seg_data))
         # Orientation: horizontal rows have wide bounding rect, vertical columns are tall
         self._horiz = bounding_rect.width() >= bounding_rect.height()
+        # Qt clips paint() to boundingRect(), so expand it to accommodate 10%
+        # segment size growth when at least one segment is highlighted.
+        # The enlarged rect is (ROW_HEIGHT+ROW_GAP)*1.10 in the relevant axis,
+        # centred on the inner segment rect's midpoint.  Geometry per orientation:
+        #   Horiz: inner rect height = ROW_HEIGHT-2, centre at row.y + ROW_HEIGHT/2
+        #          → protrusion above row.y  = _new_dim/2 - ROW_HEIGHT/2  = 3.3 px
+        #   Vert:  inner rect width = col_w-2, centre at col.x + col_w/2
+        #          where col_w = ROW_HEIGHT+ROW_GAP  → protrusion = 1.3 px
+        # Add 2 px for the 2.5-px pen half-width + rounding safety.
+        _has_hl = any(p.widthF() > 2.0 for _, _, p, _ in seg_data) if seg_data else False
+        if _has_hl:
+            _slot    = ROW_HEIGHT + ROW_GAP  # 26 px
+            _new_dim = _slot * 1.10          # 28.6 px
+            if self._horiz:
+                # Outer band height = ROW_HEIGHT; protrusion = (_new_dim - ROW_HEIGHT) / 2
+                _hl_margin = (_new_dim - ROW_HEIGHT) / 2 + 2.0  # ~5.3 px
+                self._bounding_rect = QRectF(
+                    bounding_rect.x(), bounding_rect.y() - _hl_margin,
+                    bounding_rect.width(), bounding_rect.height() + _hl_margin * 2)
+            else:
+                # Outer band width = col_w = _slot; protrusion = (_new_dim - _slot) / 2
+                _hl_margin = (_new_dim - _slot) / 2 + 2.0  # ~3.3 px
+                self._bounding_rect = QRectF(
+                    bounding_rect.x() - _hl_margin, bounding_rect.y(),
+                    bounding_rect.width() + _hl_margin * 2, bounding_rect.height())
         # Pre-compute coarse LOD segment list (merge segments within 6 scene-px)
         self._coarse_data = self._make_coarse_data()
         # Pre-compute (start, end) coordinate pairs for coarse LOD binary-search clipping
@@ -3882,6 +3913,7 @@ class _BatchRowItem(QGraphicsItem):
                 painter.translate(0.0, -option.exposedRect.top())
         last_brush = None
         last_pen   = None
+        _horiz     = self._horiz
         for rect, brush, pen, _seg in seg_slice:
             if brush is not last_brush:
                 painter.setBrush(brush)
@@ -3889,7 +3921,25 @@ class _BatchRowItem(QGraphicsItem):
             if pen is not last_pen:
                 painter.setPen(pen)
                 last_pen = pen
-            painter.drawRect(rect)
+            # Enlarge highlighted segments (pen width > 2.0) by 10% of the
+            # full row slot (ROW_HEIGHT + ROW_GAP) so it visibly protrudes
+            # past the row boundary into the inter-row gap.
+            if pen.widthF() > 2.0:
+                if _horiz:
+                    _slot   = ROW_HEIGHT + ROW_GAP
+                    _new_h  = _slot * 1.10
+                    _orig_cy = rect.y() + rect.height() / 2
+                    draw_rect = QRectF(rect.x(), _orig_cy - _new_h / 2,
+                                       rect.width(), _new_h)
+                else:
+                    _slot   = ROW_HEIGHT + ROW_GAP
+                    _new_w  = _slot * 1.10
+                    _orig_cx = rect.x() + rect.width() / 2
+                    draw_rect = QRectF(_orig_cx - _new_w / 2, rect.y(),
+                                       _new_w, rect.height())
+            else:
+                draw_rect = rect
+            painter.drawRect(draw_rect)
         if _rebase:
             painter.restore()
         # Inline text labels – second pass to minimise font/pen switches.
@@ -4303,6 +4353,11 @@ class TimelineView(QGraphicsView):
         # we can remove that cursor before zooming (zero latency on single-click).
         self._dbl_click_undo_ns: Optional[int] = None
 
+        # Zoom history for double-click toggle: each _zoom_to_segment() call
+        # pushes (timescale_per_px, center_ns, orth_coord, fit_mode, seg_key)
+        # so that double-clicking the same segment again restores the prior view.
+        self._zoom_history: list = []
+
         # Segment-boundary jump cache (populated lazily, keyed to trace obj).
         self._seg_starts_cache: List[int] = []
         self._seg_starts_cache_trace: object = None
@@ -4382,6 +4437,7 @@ class TimelineView(QGraphicsView):
 
     def load_trace(self, trace: BtfTrace) -> None:
         self._fit_mode = True   # new trace always starts in fit mode
+        self._zoom_history.clear()  # new trace resets zoom history
         self._scene.set_trace(trace, self._fit_viewport_size())
         self.zoom_changed.emit(self._scene.timescale_per_px)
 
@@ -4951,11 +5007,28 @@ class TimelineView(QGraphicsView):
 
     def _zoom_to_segment(self, seg) -> None:
         """Zoom the viewport to fit *seg* with a small margin."""
+        # Save current zoom state so a second double-click can restore it.
+        vp     = self.viewport().rect()
+        vp_cur = self.mapToScene(vp.center())
+        if self._scene._horizontal:
+            save_ns   = self._scene.scene_to_ns(vp_cur.x())
+            save_orth = vp_cur.y()
+        else:
+            save_ns   = self._scene.scene_to_ns(vp_cur.y())
+            save_orth = vp_cur.x()
+        seg_key = (seg.start, seg.end, seg.task, seg.core)
+        self._zoom_history.append((
+            self._scene._timescale_per_px,
+            save_ns,
+            save_orth,
+            self._fit_mode,
+            seg_key,
+        ))
+
         dur    = seg.end - seg.start
         margin = max(1, dur // 10)
         ns_lo  = seg.start - margin
         ns_hi  = seg.end   + margin
-        vp     = self.viewport().rect()
         vp_px  = vp.width() if self._scene._horizontal else vp.height()
         self._fit_mode = False
         self._scene.zoom_to_range(ns_lo, ns_hi, max(vp_px, 100))
@@ -4967,6 +5040,33 @@ class TimelineView(QGraphicsView):
             self.centerOn(new_coord, vp_cur.y())
         else:
             self.centerOn(vp_cur.x(), new_coord)
+
+    def _restore_zoom(self) -> None:
+        """Pop the zoom history and restore the previous view."""
+        if not self._zoom_history or self._scene._trace is None:
+            return
+        tpp, center_ns, orth, fit_mode, _seg_key = self._zoom_history.pop()
+        self._fit_mode = fit_mode
+        if fit_mode:
+            self._scene.fit_to_width(self._fit_viewport_size())
+        else:
+            trace = self._scene._trace
+            _span = max(trace.time_max - trace.time_min, 1)
+            _vp_half = int(self._fit_viewport_size() * 10 * tpp)
+            _half = max(_vp_half, _span // 100)
+            self._scene._ns_range_hint = (
+                max(trace.time_min, center_ns - _half),
+                min(trace.time_max, center_ns + _half),
+            )
+            self._scene._timescale_per_px = tpp
+            self._scene.rebuild()
+        self.resetTransform()
+        self.zoom_changed.emit(self._scene.timescale_per_px)
+        new_coord = self._scene.ns_to_scene_coord(center_ns)
+        if self._scene._horizontal:
+            self.centerOn(new_coord, orth)
+        else:
+            self.centerOn(orth, new_coord)
 
     def mouseDoubleClickEvent(self, event) -> None:
         """Double-click on a segment to zoom the timeline to fit that segment."""
@@ -4997,7 +5097,14 @@ class TimelineView(QGraphicsView):
         if hit_seg is None:
             super().mouseDoubleClickEvent(event)
             return
-        self._zoom_to_segment(hit_seg)
+        # If this segment was the last one double-click-zoomed into, restore
+        # the previous zoom level instead of zooming in again.
+        seg_key = (hit_seg.start, hit_seg.end, hit_seg.task, hit_seg.core)
+        if (self._zoom_history
+                and self._zoom_history[-1][4] == seg_key):
+            self._restore_zoom()
+        else:
+            self._zoom_to_segment(hit_seg)
         event.accept()
 
     def _auto_fit_label_column(self) -> None:
@@ -5381,15 +5488,23 @@ class TimelineView(QGraphicsView):
             if event.button() == Qt.LeftButton:
                 hit_seg = self._hit_segment_at(scene_pt)
                 if hit_seg is not None:
-                    self._scene.set_highlighted_segment(hit_seg)
-                if event.modifiers() & Qt.ShiftModifier:
-                    ns = self._snap_to_boundary(ns)
-                # Place cursor immediately; mouseDoubleClickEvent will roll it
-                # back if this click turns out to be the first of a double-click.
-                self.pre_change.emit()
-                self._scene.add_cursor(ns)
-                self.cursors_changed.emit(self._scene.cursor_times())
-                self._dbl_click_undo_ns = ns
+                    # Single click on a task segment → highlight; second click on
+                    # same segment → un-highlight (toggle).
+                    if self._scene._locked_segment_key == self._scene._segment_lock_key(hit_seg):
+                        self._scene.set_highlighted_segment(None)
+                    else:
+                        self._scene.set_highlighted_segment(hit_seg)
+                    self._dbl_click_undo_ns = None
+                else:
+                    # Click on ruler or empty area → place cursor.
+                    if event.modifiers() & Qt.ShiftModifier:
+                        ns = self._snap_to_boundary(ns)
+                    # Place cursor immediately; mouseDoubleClickEvent will roll it
+                    # back if this click turns out to be the first of a double-click.
+                    self.pre_change.emit()
+                    self._scene.add_cursor(ns)
+                    self.cursors_changed.emit(self._scene.cursor_times())
+                    self._dbl_click_undo_ns = ns
             elif event.button() == Qt.RightButton:
                 self.pre_change.emit()
                 if event.modifiers() & Qt.ShiftModifier:

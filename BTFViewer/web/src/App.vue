@@ -469,8 +469,15 @@ function cycleHighlightedSegment(forward) {
 }
 
 function onSegmentClick(seg) {
-  highlightSegment.value = seg
-  timelineOptions.highlightSegment = seg
+  const cur = highlightSegment.value
+  const isSame = cur && cur.start === seg.start && cur.end === seg.end && cur.task === seg.task
+  if (isSame) {
+    highlightSegment.value = null
+    timelineOptions.highlightSegment = null
+  } else {
+    highlightSegment.value = seg
+    timelineOptions.highlightSegment = seg
+  }
 }
 
 // Keep timelineOptions in sync with uiOptions + marks

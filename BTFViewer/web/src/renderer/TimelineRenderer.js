@@ -222,6 +222,9 @@ export function render(ctx, trace, viewport, options = {}) {
 
   ctx.restore()
 
+  // ---- Locked segment enlarged pass (unclipped, draws over row gap) ----
+  drawLockedSegmentHoriz(ctx, trace, rows, highlightSegment, timeStart, timeEnd, pxPerNs, nsPerPx, darkMode)
+
   // ---- Marks (bookmarks) ----
   drawMarksHorizontal(ctx, marks, trace, timeStart, pxPerNs, canvasW, canvasH, darkMode)
 
@@ -388,22 +391,26 @@ function paintSegments(ctx, segs, timeStart, timeEnd, pxPerNs, nsPerPx, rowY, ro
 
     // Base colour
     const isSegLocked = hlSeg && seg.start === hlSeg.start && seg.end === hlSeg.end && seg.task === hlSeg.task
-    ctx.fillStyle = isSegLocked ? lighterColor(baseColor) : baseColor
-    ctx.fillRect(Math.round(x1), rowY, Math.ceil(w), rowH)
+    const drawX  = Math.round(x1)
+    const drawW  = Math.ceil(w)
+    const drawY  = rowY
+    const drawH  = rowH
+    ctx.fillStyle = baseColor
+    ctx.fillRect(drawX, drawY, drawW, drawH)
 
     // Core tint
     if (applyCoreTint) {
       const tint = coreTint(seg.core)
       if (tint) {
         ctx.fillStyle = tint
-        ctx.fillRect(Math.round(x1), rowY, Math.ceil(w), rowH)
+        ctx.fillRect(drawX, drawY, drawW, drawH)
       }
     }
 
     // Highlight overlay
     if (isHighlighted) {
       ctx.fillStyle = 'rgba(255,255,200,0.25)'
-      ctx.fillRect(Math.round(x1), rowY, Math.ceil(w), rowH)
+      ctx.fillRect(drawX, drawY, drawW, drawH)
     }
 
     // Outline (fine LOD only, wide enough segments)
@@ -415,7 +422,7 @@ function paintSegments(ctx, segs, timeStart, timeEnd, pxPerNs, nsPerPx, rowY, ro
         ctx.strokeStyle = darkMode ? 'rgba(0,0,0,0.4)' : 'rgba(0,0,0,0.3)'
         ctx.lineWidth = 0.5
       }
-      ctx.strokeRect(Math.round(x1) + 0.5, rowY + 0.5, Math.ceil(w) - 1, rowH - 1)
+      ctx.strokeRect(drawX + 0.5, drawY + 0.5, drawW - 1, drawH - 1)
     }
 
     // Task name label (only when segment is wide enough)
@@ -436,6 +443,96 @@ function paintSegments(ctx, segs, timeStart, timeEnd, pxPerNs, nsPerPx, rowY, ro
 }
 
 // ---- Row drawing functions -------------------------------------------------
+
+/**
+ * Draw the locked (highlighted) segment enlarged by 10% vertically,
+ * unclipped, over the body area. Called after ctx.restore() in render().
+ */
+function drawLockedSegmentHoriz(ctx, trace, rows, hlSeg, timeStart, timeEnd, pxPerNs, nsPerPx, darkMode) {
+  if (!hlSeg) return
+  const mk = taskMergeKey(hlSeg.task)
+  for (const row of rows) {
+    if (row.key !== mk && !(row.taskKey && taskMergeKey(row.taskKey) === mk)) continue
+    const rowY      = row.y + 1
+    const rowH      = ROW_H - 2
+    const x1        = (hlSeg.start - timeStart) * pxPerNs
+    const x2        = (hlSeg.end   - timeStart) * pxPerNs
+    const w         = Math.max(MIN_SEG_W, x2 - x1)
+    if (x1 > ctx.canvas.clientWidth + 2 || x1 + w < -2) return
+    const baseColor = row.color
+    const slot       = ROW_H + ROW_GAP            // full row slot including gap
+    const newH       = slot * 1.10                // 10% of slot
+    const rowCenter  = row.y + ROW_H / 2         // center of the row band
+    const drawY     = rowCenter - newH / 2
+    const drawX     = Math.round(x1)
+    const drawW     = Math.ceil(w)
+    ctx.fillStyle   = baseColor
+    ctx.fillRect(drawX, drawY, drawW, newH)
+    if (nsPerPx <= PAINT_LOD_COARSE && w >= 3) {
+      ctx.strokeStyle = complementaryColor(baseColor)
+      ctx.lineWidth   = 2.5
+      ctx.strokeRect(drawX + 0.5, drawY + 0.5, drawW - 1, newH - 1)
+    }
+    // Redraw label on top of enlarged segment
+    if (row.label && drawW >= 40) {
+      ctx.save()
+      ctx.font = '10px sans-serif'
+      ctx.fillStyle = darkMode ? 'rgba(255,255,255,0.85)' : 'rgba(0,0,0,0.75)'
+      ctx.textBaseline = 'middle'
+      const tx = drawX + 3
+      ctx.beginPath()
+      ctx.rect(tx, drawY, drawW - 6, newH)
+      ctx.clip()
+      ctx.fillText(row.label, tx, drawY + newH / 2)
+      ctx.restore()
+    }
+    return
+  }
+}
+
+function drawLockedSegmentVert(ctx, trace, cols, hlSeg, timeStart, timeEnd, pxPerNs, nsPerPx, headerH, darkMode) {
+  if (!hlSeg) return
+  const mk = taskMergeKey(hlSeg.task)
+  for (const col of cols) {
+    if (col.key !== mk && !(col.taskKey && taskMergeKey(col.taskKey) === mk)) continue
+    const colX      = col.x
+    const segX      = colX + 1
+    const segW      = COL_W - 2
+    const y1        = headerH + (hlSeg.start - timeStart) * pxPerNs
+    const y2        = headerH + (hlSeg.end   - timeStart) * pxPerNs
+    const h         = Math.max(1, y2 - y1)
+    if (y1 > ctx.canvas.clientHeight + 2 || y1 + h < headerH - 2) return
+    const baseColor = col.color
+    const slot       = COL_W + ROW_GAP            // full column slot including gap
+    const newW       = slot * 1.10
+    const colCenter  = col.x + COL_W / 2
+    const drawX     = colCenter - newW / 2
+    const drawY     = Math.round(y1)
+    const drawH     = Math.ceil(h)
+    ctx.fillStyle   = baseColor
+    ctx.fillRect(drawX, drawY, newW, drawH)
+    if (nsPerPx <= PAINT_LOD_COARSE && h >= 3) {
+      ctx.strokeStyle = complementaryColor(baseColor)
+      ctx.lineWidth   = 2.5
+      ctx.strokeRect(drawX + 0.5, drawY + 0.5, newW - 1, drawH - 1)
+    }
+    // Redraw label on top of enlarged segment (rotated, as in vertical mode)
+    if (col.label && drawH >= 40) {
+      ctx.save()
+      ctx.font = '10px sans-serif'
+      ctx.fillStyle = darkMode ? 'rgba(255,255,255,0.85)' : 'rgba(0,0,0,0.75)'
+      ctx.textBaseline = 'middle'
+      ctx.textAlign = 'left'
+      const cx = drawX + newW / 2
+      const topY = drawY + 3
+      ctx.translate(cx, topY)
+      ctx.rotate(Math.PI / 2)
+      ctx.fillText(col.label, 0, 0)
+      ctx.restore()
+    }
+    return
+  }
+}
 
 function drawTaskRow(ctx, trace, row, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, darkMode, hlSeg) {
   const mk = row.key
@@ -1051,22 +1148,25 @@ function paintSegmentsVertical(ctx, segs, timeStart, pxPerNs, nsPerPx, colX, col
 
     if (y1 > ctx.canvas.clientHeight + 2 || y1 + h < headerH - 2) continue
 
-    ctx.fillStyle = baseColor
     const isSegLocked = hlSeg && seg.start === hlSeg.start && seg.end === hlSeg.end && seg.task === hlSeg.task
-    ctx.fillStyle = isSegLocked ? lighterColor(baseColor) : baseColor
-    ctx.fillRect(segX, Math.round(y1), segW, Math.ceil(h))
+    const drawY2 = Math.round(y1)
+    const drawH2 = Math.ceil(h)
+    const drawX2 = segX
+    const drawW2 = segW
+    ctx.fillStyle = baseColor
+    ctx.fillRect(drawX2, drawY2, drawW2, drawH2)
 
     if (applyCoreTint) {
       const tint = coreTint(seg.core)
       if (tint) {
         ctx.fillStyle = tint
-        ctx.fillRect(segX, Math.round(y1), segW, Math.ceil(h))
+        ctx.fillRect(drawX2, drawY2, drawW2, drawH2)
       }
     }
 
     if (isHighlighted) {
       ctx.fillStyle = 'rgba(255,255,200,0.25)'
-      ctx.fillRect(segX, Math.round(y1), segW, Math.ceil(h))
+      ctx.fillRect(drawX2, drawY2, drawW2, drawH2)
     }
 
     if (lod === 'fine' && h >= 3) {
@@ -1077,7 +1177,7 @@ function paintSegmentsVertical(ctx, segs, timeStart, pxPerNs, nsPerPx, colX, col
         ctx.strokeStyle = darkMode ? 'rgba(0,0,0,0.4)' : 'rgba(0,0,0,0.3)'
         ctx.lineWidth = 0.5
       }
-      ctx.strokeRect(segX + 0.5, Math.round(y1) + 0.5, segW - 1, Math.ceil(h) - 1)
+      ctx.strokeRect(drawX2 + 0.5, drawY2 + 0.5, drawW2 - 1, drawH2 - 1)
     }
 
     // Rotated task name label (only when segment is tall enough)
@@ -1432,6 +1532,9 @@ export function renderVertical(ctx, trace, viewport, options = {}) {
     }
   }
   ctx.restore()
+
+  // ---- Locked segment enlarged pass (unclipped, draws over column gap) ----
+  drawLockedSegmentVert(ctx, trace, cols, highlightSegment, timeStart, timeEnd, pxPerNs, nsPerPx, HEADER_H, darkMode)
 
   // Marks (horizontal lines at bookmark timestamps)
   drawMarksVertical(ctx, marks, trace, timeStart, pxPerNs, canvasW, canvasH, HEADER_H, darkMode)
