@@ -202,6 +202,12 @@
               <div class="k">
                 -
               </div><div>Zoom out</div>
+              <div class="k">
+                Tab
+              </div><div>Next segment</div>
+              <div class="k">
+                Shift+Tab
+              </div><div>Previous segment</div>
             </div>
           </div>
 

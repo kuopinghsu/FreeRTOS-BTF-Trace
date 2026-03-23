@@ -6945,10 +6945,11 @@ class _AboutDialog(QDialog):
             ("Core View", "expandable rows per CPU core"),
         ]))
         iv.addWidget(_block("Controls", [
-            ("Left-click",  "place / drag cursor"),
-            ("Ctrl+Wheel",  "zoom in / out  ·  Scroll \u2014 pan"),
-            ("Ctrl+0",      "fit to window"),
-            ("Ctrl+R",      "zoom to cursor range"),
+            ("Left-click",       "place / drag cursor"),
+            ("Ctrl+Wheel",       "zoom in / out  \u00b7  Scroll \u2014 pan"),
+            ("Ctrl+0",           "fit to window"),
+            ("Ctrl+R",           "zoom to cursor range"),
+            ("Tab / Shift+Tab",  "cycle to next / previous task segment"),
         ]))
         iv.addWidget(_block("Application", [
             ("Product",   "RTOS BTF Viewer"),
@@ -10022,6 +10023,8 @@ class MainWindow(QMainWindow):
                 ("↑ / ↓",            "Scroll row / time axis"),
                 ("Shift+← / →",      "Prev/next boundary (horiz)"),
                 ("Shift+↑ / ↓",      "Prev/next boundary (vert)"),
+                ("Tab",               "Next task segment"),
+                ("Shift+Tab",         "Previous task segment"),
             ]),
             ("Cursors", [
                 ("Left-click",             "Place cursor"),
