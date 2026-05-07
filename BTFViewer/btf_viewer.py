@@ -1279,10 +1279,15 @@ def _lod_reduce(segs: list, time_min: int, px_per_ns: float,
     """Drop segments that would render to the same pixel column as the previous.
 
     At coarse zoom levels (timescale_per_px >> 1) thousands of segments are
-    sub-pixel wide and stacked on top of each other.  Keeping only the first
+    sub-pixel wide and stacked on top of each other.  Keeping only one
     segment per pixel column reduces the rendered count by up to 30× at the
     default fit-to-width zoom with no visible quality loss.  Callers are
     responsible for passing segments pre-sorted by start time.
+
+    When multiple segments share the same pixel column the one that extends
+    furthest to the right (latest end time) is kept.  This prevents a trivial
+    sub-pixel segment (e.g. 1 ns) from hiding a long execution segment that
+    starts just after it in the same column.
     """
     if len(segs) <= 1:
         return segs
@@ -1293,6 +1298,10 @@ def _lod_reduce(segs: list, time_min: int, px_per_ns: float,
         if b != prev_bin:
             result.append(seg)
             prev_bin = b
+        elif seg.end > result[-1].end:
+            # Same pixel column but this segment extends further right –
+            # replace the previous entry so the more important one is visible.
+            result[-1] = seg
     return result
 
 def _visible_segs(lod: SegLodData, vp: ViewClipParams) -> list:

@@ -33,7 +33,11 @@ export function makeLodSummary(segs, bins, binSpan, timeMin) {
 /**
  * Merge sub-pixel-wide segments during paint to avoid overdraw.
  * Segments whose pixel-column start equals the previous segment's start
- * (i.e., would overwrite the same pixel column) are dropped.
+ * (i.e., would overwrite the same pixel column) are dropped, UNLESS the new
+ * segment extends further to the right than the one already kept – in that
+ * case the new segment replaces the previous entry.  This prevents a trivial
+ * sub-pixel segment (e.g. 1 ns) from hiding a longer execution segment that
+ * starts just after it in the same pixel column.
  *
  * @param {Array}  segs            Segments to draw (may be LOD or raw).
  * @param {number} timescalePerPx  Current nanoseconds per canvas pixel.
@@ -49,6 +53,10 @@ export function lodReduce(segs, timescalePerPx, timeMin) {
     if (px !== prevPx) {
       result.push(s)
       prevPx = px
+    } else if (s.end > result[result.length - 1].end) {
+      // Same pixel column but this segment extends further right –
+      // replace so the more important segment is visible.
+      result[result.length - 1] = s
     }
   }
   return result
