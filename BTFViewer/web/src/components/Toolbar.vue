@@ -1,5 +1,24 @@
 <template>
   <div class="toolbar">
+    <!-- App name / About trigger -->
+    <button
+      class="app-name-btn"
+      title="About RTOS BTF Viewer"
+      @click="emit('showAbout')"
+    >
+      <svg width="16" height="16" viewBox="0 0 72 72" xmlns="http://www.w3.org/2000/svg" style="display:inline-block;vertical-align:middle;margin-right:5px">
+        <rect x="3" y="3" width="66" height="66" rx="14" fill="#1c3a6e" />
+        <rect x="12" y="16" width="29" height="7" rx="3" fill="#5b9bd5" />
+        <rect x="18" y="28" width="22" height="7" rx="3" fill="#7ec8e3" />
+        <rect x="12" y="40" width="36" height="7" rx="3" fill="#5b9bd5" />
+        <rect x="22" y="52" width="18" height="7" rx="3" fill="#7ec8e3" />
+        <rect x="40" y="12" width="3" height="46" rx="1" fill="#ffc107" />
+        <polygon points="41.5,8 38,16 45,16" fill="#ffc107" />
+      </svg>BTF Viewer
+    </button>
+
+    <div class="tb-sep" />
+
     <!-- File open -->
     <label
       class="tb-btn file-btn"
@@ -302,22 +321,6 @@
       Help
     </button>
 
-    <button
-      class="tb-btn"
-      title="About RTOS BTF Viewer"
-      @click="emit('showAbout')"
-    >
-      <svg
-        viewBox="0 0 16 16"
-        width="16"
-        height="16"
-        fill="currentColor"
-      >
-        <path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 3.2a.9.9 0 1 1 0 1.8.9.9 0 0 1 0-1.8zm1 7.6H7v-1h.5V8H7V7h2v3.8H9v1z" />
-      </svg>
-      About
-    </button>
-
     <div class="spacer" />
 
     <!-- File info -->
@@ -468,5 +471,25 @@ function onFileChange(e) {
 }
 .file-btn {
   cursor: pointer;
+}
+
+.app-name-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 700;
+  font-family: inherit;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+  letter-spacing: 0.3px;
+  display: inline-flex;
+  align-items: center;
+  transition: background 0.15s;
+}
+.app-name-btn:hover {
+  background: var(--tb-btn-hover);
 }
 </style>
