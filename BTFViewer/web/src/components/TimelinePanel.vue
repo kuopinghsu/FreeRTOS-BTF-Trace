@@ -112,6 +112,7 @@ import { toBlob as domToBlob } from 'html-to-image'
 import LabelColumn from './LabelColumn.vue'
 import StiTooltip  from './StiTooltip.vue'
 import { render as renderTimeline, renderVertical, buildRowLayout, buildColumnLayout, drawHoverLine, drawHoverLineVertical, drawCursors, drawCursorsVertical, drawMarksHorizontal, drawMarksVertical, RULER_H, ROW_H, STI_ROW_H, RULER_W, COL_W, HEADER_H, formatTime } from '../renderer/TimelineRenderer.js'
+import { renderToSvg } from '../renderer/SvgExporter.js'
 import { InteractionHandler } from '../renderer/InteractionHandler.js'
 import { taskMergeKey } from '../utils/colors.js'
 
@@ -364,6 +365,28 @@ function onCopyCursorTime() {
 function onCopyScreenshot() {
   contextMenu.visible = false
   emit('copyScreenshot')
+}
+
+function captureAsSvg() {
+  if (!props.trace) return null
+  const { canvasW, canvasH } = viewport
+  const svgStr = renderToSvg(props.trace, {
+    timeStart: viewport.timeStart,
+    timeEnd:   viewport.timeEnd,
+    scrollY:   viewport.scrollY,
+    canvasW,
+    canvasH,
+  }, {
+    viewMode: props.options.viewMode,
+    expanded,
+    darkMode: props.options.darkMode,
+    showGrid: props.options.showGrid,
+    showSti:  props.options.showSti !== false,
+    cursors:  props.cursors || [],
+    marks:    props.options.marks || [],
+  })
+  if (!svgStr) return null
+  return new Blob([svgStr], { type: 'image/svg+xml' })
 }
 
 async function captureScreenshotBlob() {
@@ -637,7 +660,7 @@ function scrollToSegmentIfNeeded(seg) {
   }
 }
 
-defineExpose({ fitToTrace, scheduleRender, zoomCenter, expandAll, collapseAll, jumpToNs, getViewportCenter, getCoreAtViewportCenter, scrollToTask, scrollToSegmentIfNeeded, captureScreenshotBlob })
+defineExpose({ fitToTrace, scheduleRender, zoomCenter, expandAll, collapseAll, jumpToNs, getViewportCenter, getCoreAtViewportCenter, scrollToTask, scrollToSegmentIfNeeded, captureScreenshotBlob, captureAsSvg })
 
 // ---- Expand / collapse core rows -----------------------------------------
 function onExpandToggle(coreName) {

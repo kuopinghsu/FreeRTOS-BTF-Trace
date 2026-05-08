@@ -212,6 +212,18 @@
       Shot
     </button>
 
+    <button
+      v-if="traceInfo"
+      class="tb-btn"
+      title="Export timeline as SVG"
+      @click="emit('exportSvg')"
+    >
+      <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
+        <path d="M7.5 1a.5.5 0 0 1 .5.5v8.793l2.146-2.147a.5.5 0 0 1 .708.708l-3 3a.5.5 0 0 1-.708 0l-3-3a.5.5 0 0 1 .708-.708L7 10.293V1.5a.5.5 0 0 1 .5-.5zM2.5 13a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5z"/>
+      </svg>
+      SVG
+    </button>
+
     <div class="tb-sep" />
 
     <!-- Orientation toggle -->
@@ -358,7 +370,7 @@ defineProps({
   loadingMsg:  { type: String,  default: '' },
 })
 
-const emit = defineEmits(['update:modelValue', 'trace-reading', 'trace-loaded', 'zoom', 'fit', 'clearCursors', 'expandAll', 'collapseAll', 'addMark', 'copyScreenshot', 'showHelp', 'showAbout'])
+const emit = defineEmits(['update:modelValue', 'trace-reading', 'trace-loaded', 'zoom', 'fit', 'clearCursors', 'expandAll', 'collapseAll', 'addMark', 'copyScreenshot', 'exportSvg', 'showHelp', 'showAbout'])
 
 function onFileChange(e) {
   const file = e.target.files[0]

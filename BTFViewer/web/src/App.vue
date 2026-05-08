@@ -20,6 +20,7 @@
       @collapse-all="onCollapseAll"
       @add-mark="onAddMark"
       @copy-screenshot="onCopyScreenshot"
+      @export-svg="onExportSvg"
       @show-help="openHelpDialog"
       @show-about="openAboutDialog"
     />
@@ -63,6 +64,7 @@
         @add-annotation="onAddAnnotation"
         @mark-move="onMoveMark"
         @copy-screenshot="onCopyScreenshot"
+        @export-svg="onExportSvg"
       />
 
       <!-- Right panel -->
@@ -644,6 +646,20 @@ async function onCopyScreenshot() {
   a.click()
   URL.revokeObjectURL(url)
   alert('Clipboard image write is unavailable. Screenshot was downloaded as PNG.')
+}
+
+function onExportSvg() {
+  const blob = timelinePanelRef.value?.captureAsSvg?.()
+  if (!blob) {
+    alert('Unable to generate SVG export.')
+    return
+  }
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'timeline-export.svg'
+  a.click()
+  URL.revokeObjectURL(url)
 }
 
 function onExpandAll() {

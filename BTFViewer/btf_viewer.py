@@ -142,6 +142,7 @@ from PyQt5.QtGui import (
     QBrush, QColor, QFont, QFontDatabase, QFontMetrics, QFontMetricsF, QIcon, QKeySequence, QPainter,
     QPalette, QPen, QPixmap, QPolygonF, QTransform, QWheelEvent,
 )
+from PyQt5.QtSvg import QSvgGenerator
 from PyQt5.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QDockWidget, QFileDialog, QFormLayout, QFrame, QGridLayout, QInputDialog,
@@ -283,7 +284,10 @@ def _svg_icon(path_data: str, color: str = "#9E9E9E", size: int = 16) -> "QIcon"
 _IC_OPEN   = ("M1 3.5A1.5 1.5 0 0 1 2.5 2h2.764c.958 0 1.76.56 2.311 1.184C7.985 3.648 8.48 4 9 4h4.5A1.5 1.5 0 0 1 15 5.5v.64c.57.265.94.876.856 1.546l-.64 5.124A2.5 2.5 0 0 1 12.733 15H3.267a2.5 2.5 0 0 1-2.483-2.19l-.64-5.124A1.5 1.5 0 0 1 1 6.14V3.5z"
               "M2 6h12v-.5a.5.5 0 0 0-.5-.5H9c-.964 0-1.71-.629-2.174-1.154C6.374 3.334 5.82 3 5.264 3H2.5a.5.5 0 0 0-.5.5V6z"
               "m-.367 1a.5.5 0 0 0-.496.562l.64 5.124A1.5 1.5 0 0 0 3.267 14h9.466a1.5 1.5 0 0 0 1.49-1.314l.64-5.124A.5.5 0 0 0 14.367 7H1.633z")
-_IC_SAVE   = "M2 1a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V4.5L11.5 1H2zm2 1h5v3H4V2zm4 8a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zM3 10h10v4H3v-4z"
+_IC_SAVE     = "M2 1a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V4.5L11.5 1H2zm2 1h5v3H4V2zm4 8a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zM3 10h10v4H3v-4z"
+_IC_SAVE_SVG = ("M7.5 1a.5.5 0 0 1 .5.5v8.793l2.146-2.147a.5.5 0 0 1 .708.708l-3 3"
+                "a.5.5 0 0 1-.708 0l-3-3a.5.5 0 0 1 .708-.708L7 10.293V1.5a.5.5 0 0 1 .5-.5z"
+                "M2.5 13a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5z")
 _IC_COPY   = "M4 1.5H3a2 2 0 0 0-2 2V14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V3.5a2 2 0 0 0-2-2h-1v1h1a1 1 0 0 1 1 1V14a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1h1v-1zM5 0h6a1 1 0 0 1 1 1v3H4V1a1 1 0 0 1 1-1z"
 _IC_HORIZ  = "M1 4h14v2H1zm0 4h14v2H1zm0 4h14v2H1z"
 _IC_VERT   = "M3 1h2v14H3zm4 0h2v14H7zm4 0h2v14h-2z"
@@ -315,7 +319,7 @@ _IC_SETTINGS = ("M9.405 1.05c-.413-1.4-2.397-1.4-2.81 0l-.1.34a1.464 1.464 0 0 1
                 "M8 10.93a2.929 2.929 0 1 1 0-5.86 2.929 2.929 0 0 1 0 5.858z")
 
 # App icon — multi-colour 72×72 SVG rendered in the About dialog header.
-_APP_VERSION = "1.0.0"
+_APP_VERSION = "1.0.1"
 _APP_ICON_SVG = (
     '<svg xmlns="http://www.w3.org/2000/svg" width="72" height="72" viewBox="0 0 72 72">'
     '<rect x="3" y="3" width="66" height="66" rx="14" fill="#1C3A6E"/>'
@@ -8358,6 +8362,8 @@ class MainWindow(QMainWindow):
         fm.addSeparator()
         self._act_save_img = fm.addAction("Save as &Image (PNG)…", self._on_save_image, "Ctrl+S")
         self._act_save_img.setEnabled(False)
+        self._act_save_svg = fm.addAction("Save as &SVG…", self._on_save_svg, "Ctrl+Shift+S")
+        self._act_save_svg.setEnabled(False)
         self._act_copy_img = fm.addAction("&Copy Image to Clipboard", self._on_copy_image, "Ctrl+Shift+C")
         self._act_copy_img.setEnabled(False)
         fm.addSeparator()
@@ -8433,7 +8439,7 @@ class MainWindow(QMainWindow):
 
         # --- Help menu ---
         hm = mb.addMenu("&Help")
-        hm.addAction("&Keyboard Shortcuts…", self._on_keyboard_shortcuts)
+        hm.addAction("&Keyboard && Mouse Shortcuts…", self._on_keyboard_shortcuts)
         hm.addSeparator()
         hm.addAction("&About", self._on_about)
 
@@ -8460,9 +8466,10 @@ class MainWindow(QMainWindow):
             return act
 
         # --- File actions ---
-        _ia("Open",     self._on_open,         _IC_OPEN, "Open BTF trace file  (Ctrl+O)")
-        _ia("Save PNG", self._on_save_image,   _IC_SAVE, "Save viewport as PNG  (Ctrl+S)")
-        _ia("Copy",     self._on_copy_image,   _IC_COPY, "Copy viewport to clipboard  (Ctrl+Shift+C)")
+        _ia("Open",     self._on_open,         _IC_OPEN,     "Open BTF trace file  (Ctrl+O)")
+        _ia("Save PNG", self._on_save_image,   _IC_SAVE,     "Save viewport as PNG  (Ctrl+S)")
+        _ia("Save SVG", self._on_save_svg,     _IC_SAVE_SVG, "Save viewport as SVG  (Ctrl+Shift+S)")
+        _ia("Copy",     self._on_copy_image,   _IC_COPY,     "Copy viewport to clipboard  (Ctrl+Shift+C)")
         tb.addSeparator()
 
         # --- Layout and zoom ---
@@ -9277,6 +9284,7 @@ class MainWindow(QMainWindow):
                 if self._show_stats:
                     self._stats_dock.show()
                 self._act_save_img.setEnabled(True)
+                self._act_save_svg.setEnabled(True)
                 self._act_copy_img.setEnabled(True)
                 fname = os.path.basename(path)
                 ts    = _format_time(trace.time_max - trace.time_min, trace.time_scale)
@@ -9336,6 +9344,39 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage(f"Saved: {path}", 4000)
             except OSError as exc:
                 QMessageBox.critical(self, "Save Error", f"Could not save image:\n{exc}")
+
+    def _on_save_svg(self) -> None:
+        if self._trace is None:
+            return
+        base = os.path.splitext(self._current_file)[0] if self._current_file else "trace"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save SVG", base + ".svg",
+            "SVG files (*.svg);;All files (*)"
+        )
+        if not path:
+            return
+        try:
+            view = self._view
+            scene = view._scene
+            vp_rect = view.viewport().rect()
+            scene_rect = QRectF(
+                view.mapToScene(vp_rect.topLeft()),
+                view.mapToScene(vp_rect.bottomRight()),
+            )
+            w = vp_rect.width()
+            h = vp_rect.height()
+            gen = QSvgGenerator()
+            gen.setFileName(path)
+            gen.setSize(QSize(int(w), int(h)))
+            gen.setViewBox(QRectF(0, 0, w, h))
+            gen.setTitle("BTF Timeline")
+            gen.setDescription("Generated by RTOS BTF Viewer")
+            painter = QPainter(gen)
+            scene.render(painter, QRectF(0, 0, w, h), scene_rect)
+            painter.end()
+            self.statusBar().showMessage(f"Saved: {path}", 4000)
+        except (OSError, RuntimeError) as exc:
+            QMessageBox.critical(self, "Save Error", f"Could not save SVG:\n{exc}")
 
     def _on_copy_image(self) -> None:
         if self._trace is None:
@@ -10056,6 +10097,23 @@ class MainWindow(QMainWindow):
                 ("Gold ▼ on ruler",     "Bookmark flag"),
                 ("Orange ◆ on ruler",   "Annotation flag"),
             ]),
+            ("Mouse / Trackpad", [
+                ("Scroll wheel",                  "Pan vertically (rows)"),
+                ("Shift+Scroll",                  "Pan horizontally (time)"),
+                ("Ctrl+Scroll",                   "Zoom in/out around cursor"),
+                ("Two-finger pinch  (macOS)",     "Zoom in/out"),
+                ("Left-drag  (on background)",    "Pan timeline"),
+                ("Middle-click-drag",             "Draw time-range selection band → zoom"),
+                ("Left-click  (timeline)",        "Place cursor at click position"),
+                ("Shift+Left-click",              "Snap cursor to nearest segment boundary"),
+                ("Right-click  (timeline)",       "Remove nearest cursor / context menu"),
+                ("Shift+Right-click",             "Clear all cursors"),
+                ("Double-click  (segment)",       "Zoom to that segment"),
+                ("Left-drag  (label edge)",       "Resize label column"),
+                ("Double-click  (label edge)",    "Auto-fit label column width"),
+                ("Left-drag  (cursor line)",      "Drag cursor to new position"),
+                ("Left-drag  (mark flag)",        "Move bookmark / annotation"),
+            ]),
         ]
 
         def _sec_html(sec_list):
@@ -10080,8 +10138,8 @@ class MainWindow(QMainWindow):
         right_html = f"<table style='border-collapse:collapse;' cellpadding='3'>{_sec_html(sections[mid:])}</table>"
 
         dlg = QDialog(self)
-        dlg.setWindowTitle("Keyboard Shortcuts")
-        dlg.setMinimumWidth(620)
+        dlg.setWindowTitle("Keyboard & Mouse Shortcuts")
+        dlg.setMinimumWidth(780)
         layout = QVBoxLayout(dlg)
         layout.setContentsMargins(16, 12, 16, 12)
         cols = QHBoxLayout()
