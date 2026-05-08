@@ -1489,6 +1489,13 @@ class TimelineScene(QGraphicsScene):
         avail = max(viewport_width - self._label_width, 100)
         self._timescale_per_px = time_span / avail
         self._timescale_per_px_fit = self._timescale_per_px   # record fit-to-view limit
+        # Scale the max-zoom-in limit to the trace's native time unit.
+        # _TIMESCALE_PER_PX_DEFAULT is 2 ns/px; dividing by the ns-per-trace-unit
+        # multiplier yields the equivalent limit in trace units (e.g. 0.002 µs/px
+        # for a µs-scale trace), ensuring zoom-in works correctly regardless of
+        # the time scale used by the BTF file.
+        _ns_mult = _NS_MULTIPLIERS.get(trace.time_scale, 1)
+        self._timescale_per_px_default = _TIMESCALE_PER_PX_DEFAULT / _ns_mult
         # Do NOT set _skip_orth_culling here: the viewport bounds are valid
         # (window is visible) and orth culling keeps the initial build to
         # O(visible_rows) instead of O(all_rows), preventing a UI freeze
@@ -1757,8 +1764,11 @@ class TimelineScene(QGraphicsScene):
         self.rebuild()
 
     def set_timescale_per_px_default(self, v: float) -> None:
-        """Change the maximum zoom-in limit (ns/px) and rebuild if needed."""
-        self._timescale_per_px_default = max(0.5, min(v, 200.0))
+        """Change the maximum zoom-in limit (in trace-native time-units/px) and rebuild if needed."""
+        # Accept any positive value; do not apply a unit-dependent hard range here
+        # because the value is already in trace-native units (ns, µs, or ms) and
+        # a limit of 0.5 makes no sense for µs/ms traces (0.5 µs/px = 500 ns/px).
+        self._timescale_per_px_default = max(1e-9, v)
         if self._timescale_per_px < self._timescale_per_px_default:
             self._timescale_per_px = self._timescale_per_px_default
             self.rebuild()
@@ -1780,9 +1790,12 @@ class TimelineScene(QGraphicsScene):
 
     def zoom(self, factor: float, center_ns: Optional[int] = None) -> None:
         new_val = self._timescale_per_px / factor
-        # Clamp: don't zoom in past _TIMESCALE_PER_PX_DEFAULT or
-        # zoom out past fit-to-view level.
-        new_val = max(self._timescale_per_px_default, min(new_val, self._timescale_per_px_fit))
+        # Clamp: don't zoom in past _timescale_per_px_default (2 ns/px in trace
+        # units, scaled by set_trace) or zoom out past fit-to-view level.
+        # _timescale_per_px_default is always ≤ _timescale_per_px_fit after
+        # set_trace() rescales it, so max(default, min(val, fit)) is correct.
+        new_val = max(self._timescale_per_px_default,
+                      min(new_val, self._timescale_per_px_fit))
         if new_val == self._timescale_per_px:
             return  # already at limit – skip expensive rebuild
         self._timescale_per_px = new_val
@@ -2558,22 +2571,25 @@ class TimelineScene(QGraphicsScene):
         vp = self._view_clip_params()
 
         # --- TICK band on ruler (bottom strip) ---------------------------
+        # Each TICK event is rendered as a narrow 2-px-wide vertical mark at
+        # the tick START time, so individual ticks are always distinguishable
+        # regardless of the ISR execution-window duration.
         _tick_mk   = _task_merge_key("TICK")
         _tick_segs = trace.seg_map_by_merge_key.get(_tick_mk, [])
         if _tick_segs:
             _ht_y        = RULER_HEIGHT - 10
             _ht_h        = 8
+            _tick_mark_w = 2.0    # fixed tick-mark width in scene pixels
+            _tick_no_pen = QPen(Qt.NoPen)
             _ht_data: list = []
             _ht_xs:   list = []
             for _i, _seg in enumerate(_visible_segs(self._seg_lod_for_tick(), vp)):
                 _x1 = vp.offset + (_seg.start - vp.time_min) * vp.px_per_ns
-                _x2 = vp.offset + (_seg.end   - vp.time_min) * vp.px_per_ns
-                _w  = _x2 - _x1 if _x2 - _x1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
                 _ht_data.append((
-                    QRectF(_x1, _ht_y + 1, _w, _ht_h - 2),
-                    _task_brush(_seg.task), _task_pen_dark(_seg.task), _seg,
+                    QRectF(_x1 - 0.5, _ht_y, _tick_mark_w, _ht_h),
+                    _task_brush(_seg.task), _tick_no_pen, _seg,
                 ))
-                _ht_xs.append((_x1, _x1 + _w, _i))
+                _ht_xs.append((_x1 - 0.5, _x1 + 1.5, _i))
             _ht_batch = _BatchRowItem(
                 QRectF(vp.offset, _ht_y, timeline_w, _ht_h),
                 _ht_data, trace.time_scale, xs=_ht_xs,
@@ -2787,23 +2803,25 @@ class TimelineScene(QGraphicsScene):
         vp = self._view_clip_params()
 
         # --- TICK band on ruler (right strip of ruler column) ------------
+        # Each TICK event is rendered as a narrow 2-px-wide horizontal mark at
+        # the tick START time (vertical layout: time on Y axis).
         _tick_mk   = _task_merge_key("TICK")
         _tick_segs = trace.seg_map_by_merge_key.get(_tick_mk, [])
         _has_tick_v = bool(_tick_segs)
         if _has_tick_v:
             _vt_x        = RULER_WIDTH - 18
             _vt_w        = 14
+            _tick_mark_h = 2.0    # fixed tick-mark height in scene pixels
+            _tick_no_pen_v = QPen(Qt.NoPen)
             _vt_data: list = []
             _vt_xs:   list = []
             for _i, _seg in enumerate(_visible_segs(self._seg_lod_for_tick(), vp)):
                 _y1 = label_row_h + (_seg.start - vp.time_min) * vp.px_per_ns
-                _y2 = label_row_h + (_seg.end   - vp.time_min) * vp.px_per_ns
-                _h  = _y2 - _y1 if _y2 - _y1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
                 _vt_data.append((
-                    QRectF(_vt_x + 1, _y1, _vt_w - 2, _h),
-                    _task_brush(_seg.task), _task_pen_dark(_seg.task), _seg,
+                    QRectF(_vt_x, _y1 - 0.5, _vt_w, _tick_mark_h),
+                    _task_brush(_seg.task), _tick_no_pen_v, _seg,
                 ))
-                _vt_xs.append((_y1, _y1 + _h, _i))
+                _vt_xs.append((_y1 - 0.5, _y1 + 1.5, _i))
             _vt_batch = _BatchRowItem(
                 QRectF(_vt_x, label_row_h, _vt_w, timeline_h),
                 _vt_data, trace.time_scale, xs=_vt_xs,
@@ -2950,6 +2968,10 @@ class TimelineScene(QGraphicsScene):
         if self._task_filter_q:
             sti_rows = [c for c in sti_rows if self._sti_channel_matches_filter(c)]
 
+        # TICK is rendered on the ruler band — exclude it from per-task sub-rows.
+        core_tasks = {c: [t for t in tasks if _parse_task_name(t)[2] != "TICK"]
+                      for c, tasks in core_tasks.items()}
+
         if self._task_filter_q:
             _filtered_core_names = []
             _filtered_core_tasks = {}
@@ -3011,21 +3033,23 @@ class TimelineScene(QGraphicsScene):
         _vp_ns_lo  = self._vp_ns_lo
         _vp_ns_hi  = self._vp_ns_hi
         vp = self._view_clip_params()
-        # --- TICK band: TICK segments overlaid on the bottom strip of the ruler ---
+        # --- TICK band: TICK events as narrow tick marks on the ruler bottom strip ---
+        # Each mark is 2 px wide at the tick START time so individual ticks are
+        # always distinguishable regardless of the ISR execution-window duration.
         if _has_tick:
             _tb_y = RULER_HEIGHT - 10   # y of TICK band within ruler (bottom 10 px)
             _tb_h = 8                   # height of TICK band
+            _tick_mark_w_c = 2.0        # fixed tick-mark width in scene pixels
+            _tick_no_pen_c = QPen(Qt.NoPen)
             _tick_seg_data: list = []
             _tick_xs:       list = []
             for i_s, seg in enumerate(_visible_segs(self._seg_lod_for_tick(), vp)):
                 x1 = lw + (seg.start - _time_min) * _px_per_ns
-                x2 = lw + (seg.end   - _time_min) * _px_per_ns
-                w  = x2 - x1 if x2 - x1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
                 _tick_seg_data.append((
-                    QRectF(x1, _tb_y + 1, w, _tb_h - 2),
-                    _task_brush(seg.task), _task_pen_dark(seg.task), seg,
+                    QRectF(x1 - 0.5, _tb_y, _tick_mark_w_c, _tb_h),
+                    _task_brush(seg.task), _tick_no_pen_c, seg,
                 ))
-                _tick_xs.append((x1, x1 + w, i_s))
+                _tick_xs.append((x1 - 0.5, x1 + 1.5, i_s))
             tick_batch = _BatchRowItem(
                 QRectF(lw, _tb_y, timeline_w, _tb_h),
                 _tick_seg_data, trace.time_scale,
@@ -3277,6 +3301,10 @@ class TimelineScene(QGraphicsScene):
         if self._task_filter_q:
             sti_cols = [c for c in sti_cols if self._sti_channel_matches_filter(c)]
 
+        # TICK is rendered on the ruler band — exclude it from per-task sub-columns.
+        core_tasks = {c: [t for t in tasks if _parse_task_name(t)[2] != "TICK"]
+                      for c, tasks in core_tasks.items()}
+
         if self._task_filter_q:
             _filtered_core_names = []
             _filtered_core_tasks = {}
@@ -3342,21 +3370,22 @@ class TimelineScene(QGraphicsScene):
         _vp_ns_hi  = self._vp_ns_hi
         vp = self._view_clip_params()
 
-        # --- TICK band: TICK segments overlaid on the right strip of the ruler column ---
+        # --- TICK band: TICK events as narrow tick marks on the ruler right strip ---
+        # Each mark is 2 px tall at the tick START time (vertical layout).
         if _has_tick:
             _vtb_x = RULER_WIDTH - 18   # x of TICK band within ruler (right edge strip)
             _vtb_w = 14                 # width of TICK band
+            _tick_mark_h_vc = 2.0       # fixed tick-mark height in scene pixels
+            _tick_no_pen_vc = QPen(Qt.NoPen)
             _tick_seg_data_v: list = []
             _tick_xs_v:       list = []
             for i_s, seg in enumerate(_visible_segs(self._seg_lod_for_tick(), vp)):
                 y1 = label_row_h + (seg.start - _time_min) * _px_per_ns
-                y2 = label_row_h + (seg.end   - _time_min) * _px_per_ns
-                h  = y2 - y1 if y2 - y1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
                 _tick_seg_data_v.append((
-                    QRectF(_vtb_x + 1, y1, _vtb_w - 2, h),
-                    _task_brush(seg.task), _task_pen_dark(seg.task), seg,
+                    QRectF(_vtb_x, y1 - 0.5, _vtb_w, _tick_mark_h_vc),
+                    _task_brush(seg.task), _tick_no_pen_vc, seg,
                 ))
-                _tick_xs_v.append((y1, y1 + h, i_s))
+                _tick_xs_v.append((y1 - 0.5, y1 + 1.5, i_s))
             tick_batch_v = _BatchRowItem(
                 QRectF(_vtb_x, label_row_h, _vtb_w, timeline_h),
                 _tick_seg_data_v, trace.time_scale,
@@ -9245,6 +9274,9 @@ class MainWindow(QMainWindow):
                 self._stack.setCurrentIndex(1)
                 QApplication.processEvents()   # force layout pass → viewport settles
                 self._view.load_trace(trace)
+                # Sync the displayed zoom-in limit with the per-trace-unit scaled
+                # default that set_trace() computed (2 ns/px converted to trace units).
+                self._timescale_per_px_default_val = self._view._scene._timescale_per_px_default
                 self._refresh_zoom_ui_unit()
                 self._load_trace_state(path)
                 self._recompute_find_hits()
@@ -9252,7 +9284,8 @@ class MainWindow(QMainWindow):
                 # AND the user was in zoom mode (not fit mode) when they closed.
                 # A saved zoom of -1 means "fit-to-width" – never restore it.
                 if _prev_file == path and _saved_zoom > 0:
-                    self._view._scene._timescale_per_px = max(_TIMESCALE_PER_PX_DEFAULT, _saved_zoom)
+                    self._view._scene._timescale_per_px = max(
+                        self._view._scene._timescale_per_px_default, _saved_zoom)
                     self._view._scene.rebuild()
                     self._view._fit_mode = False
                     self._view.zoom_changed.emit(self._view._scene.timescale_per_px)

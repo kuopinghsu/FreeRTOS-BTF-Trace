@@ -12,7 +12,7 @@
  *   - Timeline body occupies remaining canvas area
  */
 
-import { taskColor, taskDisplayName, taskMergeKey, coreTint, coreColor, stiNoteColor, lighterColor, complementaryColor } from '../utils/colors.js'
+import { taskColor, taskDisplayName, taskMergeKey, parseTaskName, coreTint, coreColor, stiNoteColor, lighterColor, complementaryColor } from '../utils/colors.js'
 import { bisectLeft, bisectRight } from '../utils/bisect.js'
 import { lodReduce } from '../utils/lod.js'
 import { visibleSegs } from '../parser/btfParser.js'
@@ -112,7 +112,9 @@ export function buildRowLayout(trace, viewMode, expanded, yStart, showSti = true
       rows.push({ type: 'core', key: coreName, label: coreName, color: cc, y })
       y += ROW_H + ROW_GAP
       if (expanded.has(coreName)) {
-        const taskOrder = trace.coreTaskOrder.get(coreName) || []
+        // TICK is rendered on the ruler band – exclude it from per-task sub-rows.
+        const taskOrder = (trace.coreTaskOrder.get(coreName) || [])
+          .filter(t => parseTaskName(t).name !== 'TICK')
         for (const rawTask of taskOrder) {
           const label = taskDisplayName(rawTask)
           const color = taskColor(taskMergeKey(rawTask), rawTask)
@@ -317,10 +319,9 @@ function drawTickMarkersOnRulerHorizontal(ctx, trace, timeStart, timeEnd, pxPerN
   for (let i = lo; i < hi; i++) {
     const seg = segs[i]
     const x1 = (seg.start - timeStart) * pxPerNs
-    const x2 = (seg.end - timeStart) * pxPerNs
-    if (x2 < -2 || x1 > canvasW + 2) continue
-    const w = Math.max(1, x2 - x1)
-    ctx.fillRect(Math.floor(x1), bandTop, Math.ceil(w), bandH)
+    if (x1 < -2 || x1 > canvasW + 2) continue
+    // Fixed 2 px mark at tick START time (mirrors Python btf_viewer.py behaviour).
+    ctx.fillRect(Math.round(x1) - 0.5, bandTop, 2, bandH)
   }
   ctx.restore()
 }
@@ -564,6 +565,8 @@ function drawCoreRow(ctx, trace, row, timeStart, timeEnd, pxPerNs, nsPerPx, dark
   const reduced = lodReduce(segs, nsPerPx, trace.timeMin)
   for (const seg of reduced) {
     if (isCoreName(seg.task)) continue
+    // TICK is shown as ruler band marks – skip it in the core summary row.
+    if (parseTaskName(seg.task).name === 'TICK') continue
     const x1 = (seg.start - timeStart) * pxPerNs
     const x2 = (seg.end   - timeStart) * pxPerNs
     const w  = Math.max(MIN_SEG_W, x2 - x1)
@@ -984,7 +987,9 @@ export function buildColumnLayout(trace, viewMode, expanded, scrollX = 0, showSt
       cols.push({ type: 'core', key: coreName, label: coreName, color: cc, x, colIdx: rawIdx })
       rawIdx++
       if (expanded.has(coreName)) {
-        const taskOrder = trace.coreTaskOrder.get(coreName) || []
+        // TICK is rendered on the ruler band – exclude it from per-task sub-columns.
+        const taskOrder = (trace.coreTaskOrder.get(coreName) || [])
+          .filter(t => parseTaskName(t).name !== 'TICK')
         for (const rawTask of taskOrder) {
           const lbl = taskDisplayName(rawTask)
           const mk = taskMergeKey(rawTask)
@@ -1089,10 +1094,9 @@ function drawTickMarkersOnRulerVertical(ctx, trace, timeStart, timeEnd, pxPerNs,
   for (let i = lo; i < hi; i++) {
     const seg = segs[i]
     const y1 = headerH + (seg.start - timeStart) * pxPerNs
-    const y2 = headerH + (seg.end - timeStart) * pxPerNs
-    if (y2 < headerH - 2 || y1 > canvasH + 2) continue
-    const h = Math.max(1, y2 - y1)
-    ctx.fillRect(bandX, Math.floor(y1), bandW, Math.ceil(h))
+    if (y1 < headerH - 2 || y1 > canvasH + 2) continue
+    // Fixed 2 px mark at tick START time (mirrors Python btf_viewer.py behaviour).
+    ctx.fillRect(bandX, Math.round(y1) - 0.5, bandW, 2)
   }
   ctx.restore()
 }
@@ -1228,6 +1232,8 @@ function drawCoreColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, d
   const segW = COL_W - 2
   for (const seg of reduced) {
     if (isCoreName(seg.task)) continue
+    // TICK is shown as ruler band marks – skip it in the core summary column.
+    if (parseTaskName(seg.task).name === 'TICK') continue
     const y1 = HEADER_H + (seg.start - timeStart) * pxPerNs
     const y2 = HEADER_H + (seg.end   - timeStart) * pxPerNs
     const h  = Math.max(1, y2 - y1)

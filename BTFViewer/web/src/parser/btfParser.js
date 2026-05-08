@@ -251,9 +251,15 @@ export function parseBtf(text, progressCallback) {
     if (!segsByMkBuild.has(mk)) segsByMkBuild.set(mk, [])
     segsByMkBuild.get(mk).push(seg)
 
-    // TICK on Core_? – suppress from unknown-core row in core view
+    // TICK on Core_? – suppress from unknown-core row in core view.
+    // Also exclude ALL TICK segments from coreSegs: TICK is rendered as ruler
+    // band marks (from segByMergeKey), not as per-core timeline bars.  If TICK
+    // is kept in coreSegs it can become the first entry in a LOD bin (because
+    // TICK resume events appear before task resume events in the BTF file),
+    // causing the LOD de-duplication to drop real task segments and leaving the
+    // core summary row empty after TICK is filtered from rendering.
     const { name } = parseTaskName(seg.task)
-    if (!(name === 'TICK' && seg.core === 'Core_?')) {
+    if (name !== 'TICK') {
       if (!coreSegsBuild.has(seg.core)) coreSegsBuild.set(seg.core, [])
       coreSegsBuild.get(seg.core).push(seg)
       cnSet.add(seg.core)
