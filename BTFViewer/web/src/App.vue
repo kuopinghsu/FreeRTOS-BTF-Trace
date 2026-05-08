@@ -269,7 +269,7 @@
             <span class="marker" />
           </div>
           <div class="about-title">RTOS BTF Viewer</div>
-          <div class="about-subtitle">RTOS context-switch timeline visualiser · v1.0.0</div>
+          <div class="about-subtitle">RTOS context-switch timeline visualiser · v{{ appVersion }}</div>
         </div>
 
         <div class="about-body">
@@ -339,6 +339,7 @@ import { taskMergeKey } from './utils/colors.js'
 import exampleBtfB64   from 'virtual:example-btf'
 
 // ---- State ---------------------------------------------------------------
+const appVersion = __APP_VERSION__
 const trace      = shallowRef(null)
 const loading    = ref(false)
 const loadingPct = ref(0)

@@ -5,6 +5,10 @@ import { readFileSync } from 'fs'
 import { gzipSync } from 'zlib'
 import { resolve, dirname } from 'path'
 import { fileURLToPath } from 'url'
+import { createRequire } from 'module'
+
+const require = createRequire(import.meta.url)
+const pkg = require('./package.json')
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -31,6 +35,9 @@ function inlineExampleBtfPlugin() {
 export default defineConfig({
   plugins: [vue(), viteSingleFile(), inlineExampleBtfPlugin()],
   base: './',
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+  },
   build: {
     assetsInlineLimit: 100_000_000,
     cssCodeSplit: false,
