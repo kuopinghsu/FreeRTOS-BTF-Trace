@@ -488,6 +488,8 @@ class BtfTrace:
     core_task_seg_lod_ultra_starts: Dict[str, Dict[str, List[int]]]         = field(default_factory=dict)
     # Map from merge-key → timestamp of the task_create event (first occurrence).
     task_create_times: Dict[str, int]                                       = field(default_factory=dict)
+    # Sorted timestamps from STI TICK events – rendered as ruler marks.
+    tick_sti_times: List[int]                                               = field(default_factory=list)
 
 # ---------------------------------------------------------------------------
 # Task-name helpers
@@ -563,6 +565,7 @@ def _parse_btf(filepath: str,
     # T-events grouped by timestamp for O(1) same-tick access
     t_events_by_time: Dict[int, List[Tuple]] = defaultdict(list)
     sti_events: List[StiEvent] = []
+    tick_sti_times: List[int] = []  # timestamps from STI TICK events → rendered on ruler
     time_min = 0
     time_max = 0
     first_event = True
@@ -629,13 +632,18 @@ def _parse_btf(filepath: str,
                     _note,              # note
                 ))
             elif ev_type == "STI":
-                sti_events.append(StiEvent(
-                    time=t,
-                    core=parts[1].strip(),
-                    target=parts[4].strip(),
-                    event=parts[6].strip(),
-                    note=parts[7].strip() if len(parts) > 7 else "",
-                ))
+                _sti_target = parts[4].strip()
+                if _sti_target == "TICK":
+                    # STI TICK events are rendered as ruler marks, not STI channel rows.
+                    tick_sti_times.append(t)
+                else:
+                    sti_events.append(StiEvent(
+                        time=t,
+                        core=parts[1].strip(),
+                        target=_sti_target,
+                        event=parts[6].strip(),
+                        note=parts[7].strip() if len(parts) > 7 else "",
+                    ))
 
     open_seg: Dict[str, Tuple[int, str]] = {}
     last_core: Dict[str, str] = {}
@@ -933,6 +941,7 @@ def _parse_btf(filepath: str,
         core_task_seg_lod_ultra=dict(_core_task_lod_ultra),
         core_task_seg_lod_ultra_starts=dict(_core_task_lod_ultra_starts),
         task_create_times=_task_create_times,
+        tick_sti_times=sorted(tick_sti_times),
     )
 
 # ===========================================================================
@@ -2576,20 +2585,33 @@ class TimelineScene(QGraphicsScene):
         # regardless of the ISR execution-window duration.
         _tick_mk   = _task_merge_key("TICK")
         _tick_segs = trace.seg_map_by_merge_key.get(_tick_mk, [])
-        if _tick_segs:
+        _tick_sti  = trace.tick_sti_times
+        if _tick_segs or _tick_sti:
             _ht_y        = RULER_HEIGHT - 10
             _ht_h        = 8
             _tick_mark_w = 2.0    # fixed tick-mark width in scene pixels
             _tick_no_pen = QPen(Qt.NoPen)
             _ht_data: list = []
             _ht_xs:   list = []
-            for _i, _seg in enumerate(_visible_segs(self._seg_lod_for_tick(), vp)):
-                _x1 = vp.offset + (_seg.start - vp.time_min) * vp.px_per_ns
-                _ht_data.append((
-                    QRectF(_x1 - 0.5, _ht_y, _tick_mark_w, _ht_h),
-                    _task_brush(_seg.task), _tick_no_pen, _seg,
-                ))
-                _ht_xs.append((_x1 - 0.5, _x1 + 1.5, _i))
+            if _tick_segs:
+                for _i, _seg in enumerate(_visible_segs(self._seg_lod_for_tick(), vp)):
+                    _x1 = vp.offset + (_seg.start - vp.time_min) * vp.px_per_ns
+                    _ht_data.append((
+                        QRectF(_x1 - 0.5, _ht_y, _tick_mark_w, _ht_h),
+                        _task_brush(_seg.task), _tick_no_pen, _seg,
+                    ))
+                    _ht_xs.append((_x1 - 0.5, _x1 + 1.5, len(_ht_data) - 1))
+            # STI TICK timestamps – drawn as same-style marks, no tooltip.
+            if _tick_sti:
+                _sti_tick_brush = QBrush(QColor("#E8C84A"))
+                _lo = max(0, bisect_left(_tick_sti, vp.ns_lo) - 1)
+                _hi = min(len(_tick_sti), bisect_right(_tick_sti, vp.ns_hi) + 1)
+                for _ts in _tick_sti[_lo:_hi]:
+                    _x1 = vp.offset + (_ts - vp.time_min) * vp.px_per_ns
+                    _ht_data.append((
+                        QRectF(_x1 - 0.5, _ht_y, _tick_mark_w, _ht_h),
+                        _sti_tick_brush, _tick_no_pen, None,
+                    ))
             _ht_batch = _BatchRowItem(
                 QRectF(vp.offset, _ht_y, timeline_w, _ht_h),
                 _ht_data, trace.time_scale, xs=_ht_xs,
@@ -2807,7 +2829,8 @@ class TimelineScene(QGraphicsScene):
         # the tick START time (vertical layout: time on Y axis).
         _tick_mk   = _task_merge_key("TICK")
         _tick_segs = trace.seg_map_by_merge_key.get(_tick_mk, [])
-        _has_tick_v = bool(_tick_segs)
+        _tick_sti_v = trace.tick_sti_times
+        _has_tick_v = bool(_tick_segs) or bool(_tick_sti_v)
         if _has_tick_v:
             _vt_x        = RULER_WIDTH - 18
             _vt_w        = 14
@@ -2815,13 +2838,25 @@ class TimelineScene(QGraphicsScene):
             _tick_no_pen_v = QPen(Qt.NoPen)
             _vt_data: list = []
             _vt_xs:   list = []
-            for _i, _seg in enumerate(_visible_segs(self._seg_lod_for_tick(), vp)):
-                _y1 = label_row_h + (_seg.start - vp.time_min) * vp.px_per_ns
-                _vt_data.append((
-                    QRectF(_vt_x, _y1 - 0.5, _vt_w, _tick_mark_h),
-                    _task_brush(_seg.task), _tick_no_pen_v, _seg,
-                ))
-                _vt_xs.append((_y1 - 0.5, _y1 + 1.5, _i))
+            if _tick_segs:
+                for _i, _seg in enumerate(_visible_segs(self._seg_lod_for_tick(), vp)):
+                    _y1 = label_row_h + (_seg.start - vp.time_min) * vp.px_per_ns
+                    _vt_data.append((
+                        QRectF(_vt_x, _y1 - 0.5, _vt_w, _tick_mark_h),
+                        _task_brush(_seg.task), _tick_no_pen_v, _seg,
+                    ))
+                    _vt_xs.append((_y1 - 0.5, _y1 + 1.5, len(_vt_data) - 1))
+            # STI TICK timestamps – drawn as same-style marks, no tooltip.
+            if _tick_sti_v:
+                _sti_tick_brush_v = QBrush(QColor("#E8C84A"))
+                _lo2 = max(0, bisect_left(_tick_sti_v, vp.ns_lo) - 1)
+                _hi2 = min(len(_tick_sti_v), bisect_right(_tick_sti_v, vp.ns_hi) + 1)
+                for _ts in _tick_sti_v[_lo2:_hi2]:
+                    _y1 = label_row_h + (_ts - vp.time_min) * vp.px_per_ns
+                    _vt_data.append((
+                        QRectF(_vt_x, _y1 - 0.5, _vt_w, _tick_mark_h),
+                        _sti_tick_brush_v, _tick_no_pen_v, None,
+                    ))
             _vt_batch = _BatchRowItem(
                 QRectF(_vt_x, label_row_h, _vt_w, timeline_h),
                 _vt_data, trace.time_scale, xs=_vt_xs,
@@ -2986,7 +3021,8 @@ class TimelineScene(QGraphicsScene):
         # TICK is a global event — shown as a sticky first row above all cores.
         _tick_mk   = _task_merge_key("TICK")
         _tick_segs = trace.seg_map_by_merge_key.get(_tick_mk, [])
-        _has_tick  = bool(_tick_segs)
+        _tick_sti_h = trace.tick_sti_times
+        _has_tick  = bool(_tick_segs) or bool(_tick_sti_h)
 
         def _row_count(c: str) -> int:
             return 1 + (len(core_tasks[c]) if self._core_expanded.get(c, True) else 0)
@@ -3043,13 +3079,24 @@ class TimelineScene(QGraphicsScene):
             _tick_no_pen_c = QPen(Qt.NoPen)
             _tick_seg_data: list = []
             _tick_xs:       list = []
-            for i_s, seg in enumerate(_visible_segs(self._seg_lod_for_tick(), vp)):
-                x1 = lw + (seg.start - _time_min) * _px_per_ns
-                _tick_seg_data.append((
-                    QRectF(x1 - 0.5, _tb_y, _tick_mark_w_c, _tb_h),
-                    _task_brush(seg.task), _tick_no_pen_c, seg,
-                ))
-                _tick_xs.append((x1 - 0.5, x1 + 1.5, i_s))
+            if _tick_segs:
+                for i_s, seg in enumerate(_visible_segs(self._seg_lod_for_tick(), vp)):
+                    x1 = lw + (seg.start - _time_min) * _px_per_ns
+                    _tick_seg_data.append((
+                        QRectF(x1 - 0.5, _tb_y, _tick_mark_w_c, _tb_h),
+                        _task_brush(seg.task), _tick_no_pen_c, seg,
+                    ))
+                    _tick_xs.append((x1 - 0.5, x1 + 1.5, len(_tick_seg_data) - 1))
+            if _tick_sti_h:
+                _sti_tick_brush_h = QBrush(QColor("#E8C84A"))
+                _lo_h = max(0, bisect_left(_tick_sti_h, vp.ns_lo) - 1)
+                _hi_h = min(len(_tick_sti_h), bisect_right(_tick_sti_h, vp.ns_hi) + 1)
+                for _ts in _tick_sti_h[_lo_h:_hi_h]:
+                    x1 = lw + (_ts - _time_min) * _px_per_ns
+                    _tick_seg_data.append((
+                        QRectF(x1 - 0.5, _tb_y, _tick_mark_w_c, _tb_h),
+                        _sti_tick_brush_h, _tick_no_pen_c, None,
+                    ))
             tick_batch = _BatchRowItem(
                 QRectF(lw, _tb_y, timeline_w, _tb_h),
                 _tick_seg_data, trace.time_scale,
@@ -3319,7 +3366,8 @@ class TimelineScene(QGraphicsScene):
         # TICK is a global event — shown as a band in the ruler column.
         _tick_mk   = _task_merge_key("TICK")
         _tick_segs = trace.seg_map_by_merge_key.get(_tick_mk, [])
-        _has_tick  = bool(_tick_segs)
+        _tick_sti_v2 = trace.tick_sti_times
+        _has_tick  = bool(_tick_segs) or bool(_tick_sti_v2)
 
         def _col_count(c: str) -> int:
             return 1 + (len(core_tasks[c]) if self._core_expanded.get(c, True) else 0)
@@ -3379,13 +3427,24 @@ class TimelineScene(QGraphicsScene):
             _tick_no_pen_vc = QPen(Qt.NoPen)
             _tick_seg_data_v: list = []
             _tick_xs_v:       list = []
-            for i_s, seg in enumerate(_visible_segs(self._seg_lod_for_tick(), vp)):
-                y1 = label_row_h + (seg.start - _time_min) * _px_per_ns
-                _tick_seg_data_v.append((
-                    QRectF(_vtb_x, y1 - 0.5, _vtb_w, _tick_mark_h_vc),
-                    _task_brush(seg.task), _tick_no_pen_vc, seg,
-                ))
-                _tick_xs_v.append((y1 - 0.5, y1 + 1.5, i_s))
+            if _tick_segs:
+                for i_s, seg in enumerate(_visible_segs(self._seg_lod_for_tick(), vp)):
+                    y1 = label_row_h + (seg.start - _time_min) * _px_per_ns
+                    _tick_seg_data_v.append((
+                        QRectF(_vtb_x, y1 - 0.5, _vtb_w, _tick_mark_h_vc),
+                        _task_brush(seg.task), _tick_no_pen_vc, seg,
+                    ))
+                    _tick_xs_v.append((y1 - 0.5, y1 + 1.5, len(_tick_seg_data_v) - 1))
+            if _tick_sti_v2:
+                _sti_tick_brush_v2 = QBrush(QColor("#E8C84A"))
+                _lo_v2 = max(0, bisect_left(_tick_sti_v2, vp.ns_lo) - 1)
+                _hi_v2 = min(len(_tick_sti_v2), bisect_right(_tick_sti_v2, vp.ns_hi) + 1)
+                for _ts in _tick_sti_v2[_lo_v2:_hi_v2]:
+                    y1 = label_row_h + (_ts - _time_min) * _px_per_ns
+                    _tick_seg_data_v.append((
+                        QRectF(_vtb_x, y1 - 0.5, _vtb_w, _tick_mark_h_vc),
+                        _sti_tick_brush_v2, _tick_no_pen_vc, None,
+                    ))
             tick_batch_v = _BatchRowItem(
                 QRectF(_vtb_x, label_row_h, _vtb_w, timeline_h),
                 _tick_seg_data_v, trace.time_scale,

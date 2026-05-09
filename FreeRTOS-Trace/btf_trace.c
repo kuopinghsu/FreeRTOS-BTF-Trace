@@ -329,7 +329,7 @@ void btf_dump(
                 printf( "%lu,%s,0,STI,%s,0,%s,tick_%ld\n",
                         event->time,
                         "Core_1",
-                        "tick_event",
+                        "TICK",
                         "trigger",
                         event->value);
                 break;

@@ -2,7 +2,6 @@ import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { viteSingleFile } from 'vite-plugin-singlefile'
 import { readFileSync } from 'fs'
-import { gzipSync } from 'zlib'
 import { resolve, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { createRequire } from 'module'
@@ -24,8 +23,7 @@ function inlineExampleBtfPlugin() {
       if (id === resolvedId) {
         const btfPath = resolve(__dirname, 'example.btf')
         const raw = readFileSync(btfPath)
-        const gz  = gzipSync(raw, { level: 9 })
-        const b64 = gz.toString('base64')
+        const b64 = raw.toString('base64')
         return `export default "${b64}"`
       }
     },

@@ -306,11 +306,12 @@ int genbtf(
                         "queue_delete");
                 break;
             case TRACE_EVENT_TASK_INCREMENT_TICK:
-                fprintf(fout, "%u,TICK,0,T,TICK,0,resume,tick_%d\n",
+                fprintf(fout, "%u,%s,0,STI,%s,0,%s,tick_%d\n",
                         event->time,
+                        "Core_1",
+                        "TICK",
+                        "trigger",
                         event->value);
-                fprintf(fout, "%u,TICK,0,T,TICK,0,preempt,\n",
-                        event->time+1);
                 break;
             default:
                 break;

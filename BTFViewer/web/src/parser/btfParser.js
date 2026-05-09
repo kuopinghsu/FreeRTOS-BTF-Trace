@@ -78,6 +78,7 @@ export function parseBtf(text, progressCallback) {
   // Map<number, Array<{time, source, event, target, note}>>
   const tEventsByTime = new Map()
   const stiEvents = []
+  const tickStiTimes = []  // timestamps from STI TICK events → drawn on ruler
 
   let timeMin = 0
   let timeMax = 0
@@ -143,13 +144,19 @@ export function parseBtf(text, progressCallback) {
         note,
       })
     } else if (evType === 'STI') {
-      stiEvents.push({
-        time:   t,
-        core:   parts[1].trim(),
-        target: parts[4].trim(),
-        event:  parts[6].trim(),
-        note:   parts.length > 7 ? parts[7].trim() : '',
-      })
+      const stiTarget = parts[4].trim()
+      if (stiTarget === 'TICK') {
+        // STI TICK events are rendered as ruler marks, not as STI channel rows.
+        tickStiTimes.push(t)
+      } else {
+        stiEvents.push({
+          time:   t,
+          core:   parts[1].trim(),
+          target: stiTarget,
+          event:  parts[6].trim(),
+          note:   parts.length > 7 ? parts[7].trim() : '',
+        })
+      }
     }
   }
 
@@ -434,6 +441,7 @@ export function parseBtf(text, progressCallback) {
     stiChannels,
     stiEventsByTarget: stiByTarget,
     stiStartsByTarget,
+    tickStiTimes: tickStiTimes.sort((a, b) => a - b),
 
     // ---- Task-view lookup tables ----
     segByMergeKey:              segsByMk,

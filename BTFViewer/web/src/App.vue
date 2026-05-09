@@ -800,28 +800,11 @@ function onGlobalKeydown(e) {
 
 // ---- Auto-load embedded example on startup --------------------------------
 async function loadExampleBtf() {
-  // Decode base64 → gzip bytes → text via native DecompressionStream
+  // Decode base64 → UTF-8 text using atob + TextDecoder (works in Firefox 52+).
   const binStr  = atob(exampleBtfB64)
   const bytes   = new Uint8Array(binStr.length)
   for (let i = 0; i < binStr.length; i++) bytes[i] = binStr.charCodeAt(i)
-
-  const ds     = new DecompressionStream('gzip')
-  const writer = ds.writable.getWriter()
-  const reader = ds.readable.getReader()
-  writer.write(bytes)
-  writer.close()
-
-  const chunks = []
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    chunks.push(value)
-  }
-  const totalLen = chunks.reduce((s, c) => s + c.length, 0)
-  const merged   = new Uint8Array(totalLen)
-  let offset = 0
-  for (const c of chunks) { merged.set(c, offset); offset += c.length }
-  const text = new TextDecoder().decode(merged)
+  const text = new TextDecoder().decode(bytes)
   await onTraceLoaded({ text, name: 'example.btf' })
 }
 

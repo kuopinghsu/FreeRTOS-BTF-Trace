@@ -303,26 +303,39 @@ function drawRuler(ctx, trace, timeStart, timeEnd, pxPerNs, canvasW, darkMode) {
 }
 
 function drawTickMarkersOnRulerHorizontal(ctx, trace, timeStart, timeEnd, pxPerNs, canvasW) {
-  const tickMk = taskMergeKey('TICK')
-  const segs = trace.segByMergeKey?.get(tickMk) || []
-  const starts = trace.segStartByMergeKey?.get(tickMk) || []
-  if (segs.length === 0 || starts.length === 0) return
-
-  const lo = Math.max(0, bisectLeft(starts, timeStart) - 1)
-  const hi = Math.min(segs.length, bisectRight(starts, timeEnd) + 1)
-
   const bandTop = RULER_H - 10
   const bandH = 8
   ctx.save()
   ctx.fillStyle = TICK_COLOR
   ctx.globalAlpha = 0.95
-  for (let i = lo; i < hi; i++) {
-    const seg = segs[i]
-    const x1 = (seg.start - timeStart) * pxPerNs
-    if (x1 < -2 || x1 > canvasW + 2) continue
-    // Fixed 2 px mark at tick START time (mirrors Python btf_viewer.py behaviour).
-    ctx.fillRect(Math.round(x1) - 0.5, bandTop, 2, bandH)
+
+  // Task-type TICK segments
+  const tickMk = taskMergeKey('TICK')
+  const segs = trace.segByMergeKey?.get(tickMk) || []
+  const starts = trace.segStartByMergeKey?.get(tickMk) || []
+  if (segs.length > 0 && starts.length > 0) {
+    const lo = Math.max(0, bisectLeft(starts, timeStart) - 1)
+    const hi = Math.min(segs.length, bisectRight(starts, timeEnd) + 1)
+    for (let i = lo; i < hi; i++) {
+      const seg = segs[i]
+      const x1 = (seg.start - timeStart) * pxPerNs
+      if (x1 < -2 || x1 > canvasW + 2) continue
+      ctx.fillRect(Math.round(x1) - 0.5, bandTop, 2, bandH)
+    }
   }
+
+  // STI-type TICK events
+  const stiTimes = trace.tickStiTimes || []
+  if (stiTimes.length > 0) {
+    const lo2 = Math.max(0, bisectLeft(stiTimes, timeStart) - 1)
+    const hi2 = Math.min(stiTimes.length, bisectRight(stiTimes, timeEnd) + 1)
+    for (let i = lo2; i < hi2; i++) {
+      const x1 = (stiTimes[i] - timeStart) * pxPerNs
+      if (x1 < -2 || x1 > canvasW + 2) continue
+      ctx.fillRect(Math.round(x1) - 0.5, bandTop, 2, bandH)
+    }
+  }
+
   ctx.restore()
 }
 
@@ -1078,26 +1091,39 @@ function drawVerticalRuler(ctx, trace, timeStart, timeEnd, pxPerNs, canvasH, hea
 }
 
 function drawTickMarkersOnRulerVertical(ctx, trace, timeStart, timeEnd, pxPerNs, canvasH, headerH, rulerW) {
-  const tickMk = taskMergeKey('TICK')
-  const segs = trace.segByMergeKey?.get(tickMk) || []
-  const starts = trace.segStartByMergeKey?.get(tickMk) || []
-  if (segs.length === 0 || starts.length === 0) return
-
-  const lo = Math.max(0, bisectLeft(starts, timeStart) - 1)
-  const hi = Math.min(segs.length, bisectRight(starts, timeEnd) + 1)
-
   const bandX = rulerW - 18
   const bandW = 8
   ctx.save()
   ctx.fillStyle = TICK_COLOR
   ctx.globalAlpha = 0.95
-  for (let i = lo; i < hi; i++) {
-    const seg = segs[i]
-    const y1 = headerH + (seg.start - timeStart) * pxPerNs
-    if (y1 < headerH - 2 || y1 > canvasH + 2) continue
-    // Fixed 2 px mark at tick START time (mirrors Python btf_viewer.py behaviour).
-    ctx.fillRect(bandX, Math.round(y1) - 0.5, bandW, 2)
+
+  // Task-type TICK segments
+  const tickMk = taskMergeKey('TICK')
+  const segs = trace.segByMergeKey?.get(tickMk) || []
+  const starts = trace.segStartByMergeKey?.get(tickMk) || []
+  if (segs.length > 0 && starts.length > 0) {
+    const lo = Math.max(0, bisectLeft(starts, timeStart) - 1)
+    const hi = Math.min(segs.length, bisectRight(starts, timeEnd) + 1)
+    for (let i = lo; i < hi; i++) {
+      const seg = segs[i]
+      const y1 = headerH + (seg.start - timeStart) * pxPerNs
+      if (y1 < headerH - 2 || y1 > canvasH + 2) continue
+      ctx.fillRect(bandX, Math.round(y1) - 0.5, bandW, 2)
+    }
   }
+
+  // STI-type TICK events
+  const stiTimes = trace.tickStiTimes || []
+  if (stiTimes.length > 0) {
+    const lo2 = Math.max(0, bisectLeft(stiTimes, timeStart) - 1)
+    const hi2 = Math.min(stiTimes.length, bisectRight(stiTimes, timeEnd) + 1)
+    for (let i = lo2; i < hi2; i++) {
+      const y1 = headerH + (stiTimes[i] - timeStart) * pxPerNs
+      if (y1 < headerH - 2 || y1 > canvasH + 2) continue
+      ctx.fillRect(bandX, Math.round(y1) - 0.5, bandW, 2)
+    }
+  }
+
   ctx.restore()
 }
 
