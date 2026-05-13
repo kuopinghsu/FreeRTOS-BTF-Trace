@@ -5,6 +5,7 @@ import { readFileSync } from 'fs'
 import { resolve, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { createRequire } from 'module'
+import { gzipSync } from 'zlib'
 
 const require = createRequire(import.meta.url)
 const pkg = require('./package.json')
@@ -23,7 +24,8 @@ function inlineExampleBtfPlugin() {
       if (id === resolvedId) {
         const btfPath = resolve(__dirname, 'example.btf')
         const raw = readFileSync(btfPath)
-        const b64 = raw.toString('base64')
+        const gz = gzipSync(raw, { level: 9 })
+        const b64 = gz.toString('base64')
         return `export default "${b64}"`
       }
     },

@@ -13,6 +13,7 @@
       @update:model-value="v => Object.assign(uiOptions, v)"
       @trace-reading="onTraceReading"
       @trace-loaded="onTraceLoaded"
+      @load-demo="onLoadDemo"
       @zoom="onZoom"
       @fit="onFit"
       @clear-cursors="clearCursors"
@@ -320,7 +321,7 @@
         v-else
         class="status-hint"
       >
-        Open a .btf trace file to begin · Press ? for shortcuts/help
+        Open a .btf trace file or click Demo to begin · Press ? for shortcuts/help
       </span>
     </div>
   </div>
@@ -800,17 +801,28 @@ function onGlobalKeydown(e) {
 
 // ---- Auto-load embedded example on startup --------------------------------
 async function loadExampleBtf() {
-  // Decode base64 → UTF-8 text using atob + TextDecoder (works in Firefox 52+).
+  if (typeof DecompressionStream === 'undefined') {
+    alert('Demo trace loading requires gzip decompression support in this browser. Open a .btf file directly instead.')
+    return
+  }
+
+  // Decode base64 → gzip bytes → UTF-8 text.
   const binStr  = atob(exampleBtfB64)
   const bytes   = new Uint8Array(binStr.length)
   for (let i = 0; i < binStr.length; i++) bytes[i] = binStr.charCodeAt(i)
-  const text = new TextDecoder().decode(bytes)
+
+  const compressed = new Blob([bytes], { type: 'application/gzip' })
+  const decompressedStream = compressed.stream().pipeThrough(new DecompressionStream('gzip'))
+  const text = await new Response(decompressedStream).text()
   await onTraceLoaded({ text, name: 'example.btf' })
+}
+
+function onLoadDemo() {
+  loadExampleBtf()
 }
 
 onMounted(() => {
   window.addEventListener('keydown', onGlobalKeydown)
-  loadExampleBtf()
 })
 
 onBeforeUnmount(() => {

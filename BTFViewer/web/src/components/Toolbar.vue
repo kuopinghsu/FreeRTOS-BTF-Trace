@@ -41,6 +41,22 @@
       >
     </label>
 
+    <button
+      class="tb-btn"
+      title="Load the bundled demo trace"
+      @click="emit('loadDemo')"
+    >
+      <svg
+        viewBox="0 0 16 16"
+        width="16"
+        height="16"
+        fill="currentColor"
+      >
+        <path d="M3 2.5A1.5 1.5 0 0 1 4.5 1h7A1.5 1.5 0 0 1 13 2.5v11a1.5 1.5 0 0 1-1.5 1.5h-7A1.5 1.5 0 0 1 3 13.5v-11zm3 2.354v6.292L11 8 6 4.854z" />
+      </svg>
+      Demo
+    </button>
+
     <div class="tb-sep" />
 
     <!-- View mode -->
@@ -370,7 +386,7 @@ defineProps({
   loadingMsg:  { type: String,  default: '' },
 })
 
-const emit = defineEmits(['update:modelValue', 'trace-reading', 'trace-loaded', 'zoom', 'fit', 'clearCursors', 'expandAll', 'collapseAll', 'addMark', 'copyScreenshot', 'exportSvg', 'showHelp', 'showAbout'])
+const emit = defineEmits(['update:modelValue', 'trace-reading', 'trace-loaded', 'loadDemo', 'zoom', 'fit', 'clearCursors', 'expandAll', 'collapseAll', 'addMark', 'copyScreenshot', 'exportSvg', 'showHelp', 'showAbout'])
 
 function onFileChange(e) {
   const file = e.target.files[0]

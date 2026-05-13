@@ -10,7 +10,7 @@ import {
   LABEL_W, RULER_H, ROW_H, ROW_GAP, STI_ROW_H, MIN_SEG_W,
   buildRowLayout, formatTime,
 } from './TimelineRenderer.js'
-import { taskColor, taskMergeKey, stiNoteColor } from '../utils/colors.js'
+import { taskColor, taskDisplayName, taskMergeKey, stiNoteColor } from '../utils/colors.js'
 
 // ---- Helpers ---------------------------------------------------------------
 
@@ -20,6 +20,11 @@ function esc(s) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
+}
+
+function segmentLabelText(row, seg) {
+  if (row.type === 'core') return taskDisplayName(seg.task)
+  return row.label || ''
 }
 
 function niceStep(span) {
@@ -78,6 +83,8 @@ export function renderToSvg(trace, viewport, options = {}) {
   const gridColor = darkMode ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)'
 
   const els = []
+  const defs = []
+  let clipId = 0
 
   // Full background
   els.push(`<rect width="${canvasW}" height="${canvasH}" fill="${bgColor}"/>`)
@@ -137,6 +144,27 @@ export function renderToSvg(trace, viewport, options = {}) {
         `width="${w.toFixed(1)}" height="${(rowH - 2)}" ` +
         `fill="${color}" rx="1"/>`
       )
+
+      const label = segmentLabelText(row, seg)
+      if (label && w >= 40) {
+        const textX = Math.round(x1) + 3
+        const clipW = Math.ceil(w) - 6
+        if (clipW > 0) {
+          const textY = row.y + rowH / 2
+          const currentClipId = `seg-label-${clipId++}`
+          defs.push(
+            `<clipPath id="${currentClipId}">` +
+            `<rect x="${textX}" y="${(row.y + 1).toFixed(1)}" width="${clipW}" height="${rowH - 2}" rx="1"/>` +
+            `</clipPath>`
+          )
+          els.push(
+            `<text x="${textX}" y="${textY.toFixed(1)}" ` +
+            `fill="${darkMode ? 'rgba(255,255,255,0.85)' : 'rgba(0,0,0,0.75)'}" ` +
+            `font-family="sans-serif" font-size="10" dominant-baseline="middle" ` +
+            `clip-path="url(#${currentClipId})">${esc(label)}</text>`
+          )
+        }
+      }
     }
   }
 
@@ -238,6 +266,7 @@ export function renderToSvg(trace, viewport, options = {}) {
     `<svg xmlns="http://www.w3.org/2000/svg" ` +
     `width="${canvasW}" height="${canvasH}" ` +
     `viewBox="0 0 ${canvasW} ${canvasH}">\n` +
+    (defs.length ? `<defs>\n${defs.join('\n')}\n</defs>\n` : '') +
     els.join('\n') +
     `\n</svg>`
   )
