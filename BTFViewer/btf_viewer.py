@@ -496,6 +496,7 @@ class BtfTrace:
 # ---------------------------------------------------------------------------
 
 _TASK_RE = re.compile(r"^\[(\d+)/(\d+)\](.+)$")
+_IDLE_RE = re.compile(r"^idle(?:\s*(\d+))?$", re.IGNORECASE)
 
 @functools.lru_cache(maxsize=16384)
 def _parse_task_name(raw: str) -> Tuple[Optional[int], Optional[int], str]:
@@ -506,10 +507,24 @@ def _parse_task_name(raw: str) -> Tuple[Optional[int], Optional[int], str]:
     return None, None, raw
 
 @functools.lru_cache(maxsize=16384)
+def _is_idle_task_name(name: str) -> bool:
+    return _IDLE_RE.match(name) is not None
+
+@functools.lru_cache(maxsize=16384)
+def _idle_task_index(name: str) -> int:
+    m = _IDLE_RE.match(name)
+    if m and m.group(1):
+        try:
+            return int(m.group(1))
+        except ValueError:
+            return 0
+    return 0
+
+@functools.lru_cache(maxsize=16384)
 def _task_display_name(raw: str) -> str:
     """Short display name: 'Name[id]' for regular tasks; bare name for IDLE/TICK."""
     _, task_id, name = _parse_task_name(raw)
-    if task_id is not None and not (name.startswith("IDLE") or name == "TICK"):
+    if task_id is not None and not (_is_idle_task_name(name) or name == "TICK"):
         return f"{name}[{task_id}]"
     return name
 
@@ -517,7 +532,7 @@ def _task_display_name(raw: str) -> str:
 def _task_sort_key(raw: str) -> Tuple[int, int, str]:
     """Sorting key: user tasks first, then IDLE, then TICK."""
     core_id, task_id, name = _parse_task_name(raw)
-    if name.startswith("IDLE"):
+    if _is_idle_task_name(name):
         group = 2
     elif name == "TICK":
         group = 3
@@ -1025,19 +1040,16 @@ def _task_color(task_raw: str) -> QColor:
 
     Color is keyed on the full raw name (including [core/id] prefix) so that
     two tasks with the same display name but different IDs get different colors.
-    IDLE tasks always use grey shades, differentiated by their task_id.
+    IDLE tasks always use grey shades, differentiated by their IDLE index.
     """
     core_id, tid, name = _parse_task_name(task_raw)
-    if re.match(r"^IDLE\d*$", name):
+    if _is_idle_task_name(name):
         # Use task_id to differentiate IDLE tasks across cores; fall back to
         # the number suffix in the name, then 0.
         if tid is not None:
             idx = tid
         else:
-            try:
-                idx = int(name[4:]) if name[4:] else 0
-            except ValueError:
-                idx = 0
+            idx = _idle_task_index(name)
         greys = [180, 160, 140, 120, 100, 80]
         v = greys[idx % len(greys)]
         return QColor(v, v, v)
@@ -3172,7 +3184,7 @@ class TimelineScene(QGraphicsScene):
                 _total_ns  = trace.time_max - trace.time_min
                 _active_ns = sum(s.end - s.start for s in segs
                                  if (_tn := _parse_task_name(s.task)[2]) != "TICK"
-                                 and not _tn.startswith("IDLE"))
+                                 and not _is_idle_task_name(_tn))
                 _util_pct  = 100.0 * _active_ns / _total_ns if _total_ns > 0 else 0.0
                 _util_item = self.addSimpleText(f"{_util_pct:.0f}%", font_sm)
                 _util_item.setBrush(QBrush(QColor("#77BB77")))
@@ -6622,7 +6634,7 @@ class _StatsPanel(QWidget):
                 segs = trace.core_segs.get(core, [])
                 act  = sum(s.end - s.start for s in segs
                            if (_tn := _parse_task_name(s.task)[2]) != "TICK"
-                           and not _tn.startswith("IDLE"))
+                           and not _is_idle_task_name(_tn))
                 pct  = 100.0 * act / total_ns if total_ns > 0 else 0.0
                 row = QWidget()
                 hlay = QHBoxLayout(row)
@@ -6665,7 +6677,7 @@ class _StatsPanel(QWidget):
         for mk, segs in trace.seg_map_by_merge_key.items():
             raw = trace.task_repr.get(mk, mk)
             _, _, tname = _parse_task_name(raw)
-            if tname.startswith("IDLE") or tname == "TICK":
+            if _is_idle_task_name(tname) or tname == "TICK":
                 continue
             task_times[mk] = sum(s.end - s.start for s in segs)
         for mk, t_ns in sorted(task_times.items(), key=lambda kv: kv[1], reverse=True)[:10]:

@@ -79,6 +79,17 @@ function crc32(str) {
 // ---- Task display-name helpers --------------------------------------------
 
 const TASK_RE = /^\[(\d+)\/(\d+)\](.+)$/
+const IDLE_RE = /^idle(?:\s*(\d+))?$/i
+
+function isIdleTaskName(name) {
+  return IDLE_RE.test(name)
+}
+
+function idleTaskIndex(name) {
+  const m = IDLE_RE.exec(name)
+  if (m && m[1]) return parseInt(m[1], 10)
+  return 0
+}
 
 /**
  * Parse a raw BTF task name into { coreId, taskId, name }.
@@ -95,7 +106,7 @@ export function parseTaskName(raw) {
  */
 export function taskDisplayName(raw) {
   const { taskId, name } = parseTaskName(raw)
-  if (taskId !== null && !name.startsWith('IDLE') && name !== 'TICK') {
+  if (taskId !== null && !isIdleTaskName(name) && name !== 'TICK') {
     return `${name}[${taskId}]`
   }
   return name
@@ -117,7 +128,7 @@ export function taskMergeKey(raw) {
 export function taskSortKey(raw) {
   const { taskId, name } = parseTaskName(raw)
   let group = 1
-  if (name.startsWith('IDLE')) group = 2
+  if (isIdleTaskName(name)) group = 2
   else if (name === 'TICK') group = 3
   return [group, taskId ?? 0, name]
 }
@@ -129,9 +140,9 @@ export function taskSortKey(raw) {
 export function taskColor(mergeKey, repr) {
   const { name } = parseTaskName(repr || mergeKey)
   if (name === 'TICK') return SPECIAL_COLORS['TICK']
-  if (name.startsWith('IDLE')) {
+  if (isIdleTaskName(name)) {
     // Shade IDLE tasks slightly differently by index.
-    const idx = parseInt(name.replace('IDLE', '') || '0') || 0
+    const idx = idleTaskIndex(name)
     const v = Math.max(80, 130 - idx * 15)
     return `rgb(${v},${v},${v})`
   }
