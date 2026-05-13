@@ -495,15 +495,19 @@ class BtfTrace:
 # Task-name helpers
 # ---------------------------------------------------------------------------
 
-_TASK_RE = re.compile(r"^\[(\d+)/(\d+)\](.+)$")
-_IDLE_RE = re.compile(r"^idle(?:\s*(\d+))?$", re.IGNORECASE)
+_TASK_RE = re.compile(r"^\[((?:0[xX][0-9a-fA-F]+|\d+))/((?:0[xX][0-9a-fA-F]+|\d+))\](.+)$")
+# Matches: idle, idle0, idle 0, idle(0x...), idle 0(0x...), idle0(0x...)
+_IDLE_RE = re.compile(
+    r"^idle(?:\s*(\d+))?\s*(?:\((?:0[xX][0-9a-fA-F]+|\d+)\))?$",
+    re.IGNORECASE,
+)
 
 @functools.lru_cache(maxsize=16384)
 def _parse_task_name(raw: str) -> Tuple[Optional[int], Optional[int], str]:
     """Return (core_id, task_id, display_name) from a raw BTF task name."""
     m = _TASK_RE.match(raw)
     if m:
-        return int(m.group(1)), int(m.group(2)), m.group(3).strip()
+        return int(m.group(1), 0), int(m.group(2), 0), m.group(3).strip()
     return None, None, raw
 
 @functools.lru_cache(maxsize=16384)
@@ -521,10 +525,21 @@ def _idle_task_index(name: str) -> int:
     return 0
 
 @functools.lru_cache(maxsize=16384)
+def _normalize_idle_name(name: str) -> str:
+    """Normalize any idle variant (e.g. 'idle 0(0x1)') to 'idle' or 'idle<N>'."""
+    m = _IDLE_RE.match(name)
+    if m:
+        idx = m.group(1)
+        return f"idle{idx}" if idx else "idle"
+    return name
+
+@functools.lru_cache(maxsize=16384)
 def _task_display_name(raw: str) -> str:
     """Short display name: 'Name[id]' for regular tasks; bare name for IDLE/TICK."""
     _, task_id, name = _parse_task_name(raw)
-    if task_id is not None and not (_is_idle_task_name(name) or name == "TICK"):
+    if _is_idle_task_name(name):
+        return _normalize_idle_name(name)
+    if task_id is not None and name != "TICK":
         return f"{name}[{task_id}]"
     return name
 

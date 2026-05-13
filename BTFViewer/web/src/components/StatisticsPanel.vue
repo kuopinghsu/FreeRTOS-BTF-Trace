@@ -165,7 +165,7 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
 import { formatTime } from '../renderer/TimelineRenderer.js'
-import { taskDisplayName, parseTaskName, taskMergeKey } from '../utils/colors.js'
+import { taskDisplayName, parseTaskName, taskMergeKey, isIdleTaskName } from '../utils/colors.js'
 
 const props = defineProps({
   trace:   { type: Object, required: true },
@@ -191,7 +191,7 @@ const coreStats = computed(() => {
     let active = 0
     for (const s of segs) {
       const { name } = parseTaskName(s.task)
-      if (name === 'TICK' || name.startsWith('IDLE')) continue
+      if (name === 'TICK' || isIdleTaskName(name)) continue
       active += s.end - s.start
     }
     return { core, pct: 100.0 * active / total }
@@ -209,7 +209,7 @@ const topTasks = computed(() => {
   for (const [mk, segs] of tr.segByMergeKey) {
     const repr = tr.taskRepr.get(mk) || mk
     const { name } = parseTaskName(repr)
-    if (name.startsWith('IDLE') || name === 'TICK') continue
+    if (isIdleTaskName(name) || name === 'TICK') continue
     let t = 0
     for (const s of segs) t += s.end - s.start
     if (t > 0) accum.set(mk, t)

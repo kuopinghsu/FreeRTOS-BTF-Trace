@@ -78,10 +78,11 @@ function crc32(str) {
 
 // ---- Task display-name helpers --------------------------------------------
 
-const TASK_RE = /^\[(\d+)\/(\d+)\](.+)$/
-const IDLE_RE = /^idle(?:\s*(\d+))?$/i
+const TASK_RE = /^\[((?:0[xX][0-9a-fA-F]+|\d+))\/((?:0[xX][0-9a-fA-F]+|\d+))\](.+)$/
+// Matches: idle, idle0, idle 0, idle(0x...), idle 0(0x...), idle0(0x...)
+const IDLE_RE = /^idle(?:\s*(\d+))?\s*(?:\((?:0[xX][0-9a-fA-F]+|\d+)\))?$/i
 
-function isIdleTaskName(name) {
+export function isIdleTaskName(name) {
   return IDLE_RE.test(name)
 }
 
@@ -91,13 +92,19 @@ function idleTaskIndex(name) {
   return 0
 }
 
+function normalizeIdleName(name) {
+  const m = IDLE_RE.exec(name)
+  if (m) return m[1] ? `idle${m[1]}` : 'idle'
+  return name
+}
+
 /**
  * Parse a raw BTF task name into { coreId, taskId, name }.
  * Returns { coreId: null, taskId: null, name: raw } for simple names.
  */
 export function parseTaskName(raw) {
   const m = TASK_RE.exec(raw)
-  if (m) return { coreId: parseInt(m[1]), taskId: parseInt(m[2]), name: m[3].trim() }
+  if (m) return { coreId: Number(m[1]), taskId: Number(m[2]), name: m[3].trim() }
   return { coreId: null, taskId: null, name: raw }
 }
 
@@ -106,7 +113,8 @@ export function parseTaskName(raw) {
  */
 export function taskDisplayName(raw) {
   const { taskId, name } = parseTaskName(raw)
-  if (taskId !== null && !isIdleTaskName(name) && name !== 'TICK') {
+  if (isIdleTaskName(name)) return normalizeIdleName(name)
+  if (taskId !== null && name !== 'TICK') {
     return `${name}[${taskId}]`
   }
   return name
