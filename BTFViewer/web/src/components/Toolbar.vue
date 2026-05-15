@@ -369,7 +369,7 @@ defineProps({
   loadingMsg:  { type: String,  default: '' },
 })
 
-const emit = defineEmits(['update:modelValue', 'trace-reading', 'trace-loaded', 'loadDemo', 'zoom', 'fit', 'expandAll', 'collapseAll', 'addMark', 'copyScreenshot', 'exportSvg', 'showHelp', 'showAbout'])
+const emit = defineEmits(['update:modelValue', 'trace-reading', 'trace-loaded', 'loadDemo', 'zoom', 'fit', 'expandAll', 'collapseAll', 'addMark', 'copyScreenshot', 'exportSvg', 'showHelp', 'showAbout', 'file-error'])
 
 function onFileChange(e) {
   const file = e.target.files[0]
@@ -381,7 +381,7 @@ function onFileChange(e) {
     emit('trace-loaded', { text: ev.target.result, name: file.name })
   }
   reader.onerror = () => {
-    alert(`Failed to read "${file.name}": ${reader.error?.message ?? 'unknown error'}`)
+    emit('file-error', `Failed to read "${file.name}": ${reader.error?.message ?? 'unknown error'}`)
   }
   reader.readAsText(file)
   // Reset input so same file can be re-loaded

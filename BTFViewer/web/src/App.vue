@@ -1,16 +1,17 @@
 <template>
   <div
     class="app"
-    :class="{ dark: uiOptions.darkMode }"
+    :class="{ dark: timelineOptions.darkMode }"
   >
     <!-- Toolbar -->
     <Toolbar
-      :model-value="uiOptions"
+      :model-value="timelineOptions"
       :trace-info="traceInfo"
       :loading="loading"
       :loading-pct="loadingPct"
       :loading-msg="loadingMsg"
-      @update:model-value="v => Object.assign(uiOptions, v)"
+      @update:model-value="v => Object.assign(timelineOptions, v)"
+      @file-error="showToast($event, 'error')"
       @trace-reading="onTraceReading"
       @trace-loaded="onTraceLoaded"
       @load-demo="onLoadDemo"
@@ -312,6 +313,18 @@
       </div>
     </div>
 
+    <!-- Toast notification -->
+    <Transition name="toast">
+      <div
+        v-if="toastVisible"
+        class="toast-notification"
+        :class="toastType"
+        @click="toastVisible = false"
+      >
+        {{ toastMsg }}
+      </div>
+    </Transition>
+
     <!-- Status bar -->
     <div class="status-bar">
       <span v-if="trace">
@@ -352,13 +365,18 @@ const cursors    = ref([null, null, null, null])
 const helpOpen   = ref(false)
 const aboutOpen  = ref(false)
 
-const uiOptions = reactive({
-  viewMode:    'task',
-  darkMode:    true,
-  showGrid:    false,
-  showSti:     true,
-  orientation: 'h',
-})
+const toastMsg     = ref('')
+const toastType    = ref('info')
+const toastVisible = ref(false)
+let   _toastTimer  = null
+
+function showToast(msg, type = 'info') {
+  toastMsg.value     = msg
+  toastType.value    = type
+  toastVisible.value = true
+  clearTimeout(_toastTimer)
+  _toastTimer = setTimeout(() => { toastVisible.value = false }, type === 'error' ? 5000 : 3000)
+}
 
 const timelineOptions = reactive({
   viewMode:        'task',
@@ -416,7 +434,7 @@ function cycleHighlightedSegment(forward) {
 
   const cur      = highlightSegment.value
   const centerNs = timelinePanelRef.value?.getViewportCenter?.() ?? 0
-  const isCoreView = uiOptions.viewMode === 'core'
+  const isCoreView = timelineOptions.viewMode === 'core'
   const centerCore = isCoreView ? (timelinePanelRef.value?.getCoreAtViewportCenter?.() ?? null) : null
   const curCore = cur?.core ?? centerCore
   const navSegs = (isCoreView && curCore)
@@ -493,15 +511,6 @@ function onSegmentClick(seg) {
   }
 }
 
-// Keep timelineOptions in sync with uiOptions + marks
-watch(uiOptions, (o) => {
-  timelineOptions.viewMode    = o.viewMode
-  timelineOptions.darkMode    = o.darkMode
-  timelineOptions.showGrid    = o.showGrid
-  timelineOptions.showSti     = o.showSti
-  timelineOptions.orientation = o.orientation
-}, { deep: true })
-
 watch(marks, (m) => {
   timelineOptions.marks = m
 }, { deep: true })
@@ -572,7 +581,7 @@ async function onTraceLoaded({ text, name }) {
       _navCache = null
     } catch (err) {
       console.error('BTF parse error:', err)
-      alert('Failed to parse BTF file: ' + err.message)
+      showToast('Failed to parse BTF file: ' + err.message, 'error')
     }
     loading.value = false
     return
@@ -599,7 +608,7 @@ async function onTraceLoaded({ text, name }) {
       _navCache = null
     } else if (data.type === 'error') {
       console.error('BTF parse error:', data.message)
-      alert('Failed to parse BTF file: ' + data.message)
+      showToast('Failed to parse BTF file: ' + data.message, 'error')
       loading.value = false
       _parseWorker = null
       worker.terminate()
@@ -608,7 +617,7 @@ async function onTraceLoaded({ text, name }) {
 
   worker.onerror = (e) => {
     console.error('Worker error:', e)
-    alert('Parser worker error: ' + e.message)
+    showToast('Parser worker error: ' + e.message, 'error')
     loading.value = false
     _parseWorker = null
     worker.terminate()
@@ -629,7 +638,7 @@ function onFit() {
 async function onCopyScreenshot() {
   const blob = await timelinePanelRef.value?.captureScreenshotBlob?.()
   if (!blob) {
-    alert('Unable to capture screenshot.')
+    showToast('Unable to capture screenshot.', 'error')
     return
   }
 
@@ -637,7 +646,7 @@ async function onCopyScreenshot() {
   if (canWriteImage && window.isSecureContext) {
     try {
       await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
-      alert('Screenshot copied to clipboard.')
+      showToast('Screenshot copied to clipboard.')
       return
     } catch {
       // Fall through to download fallback.
@@ -650,13 +659,13 @@ async function onCopyScreenshot() {
   a.download = 'timeline-screenshot.png'
   a.click()
   URL.revokeObjectURL(url)
-  alert('Clipboard image write is unavailable. Screenshot was downloaded as PNG.')
+  showToast('Clipboard image write is unavailable. Screenshot was downloaded as PNG.')
 }
 
 function onExportSvg() {
   const blob = timelinePanelRef.value?.captureAsSvg?.()
   if (!blob) {
-    alert('Unable to generate SVG export.')
+    showToast('Unable to generate SVG export.', 'error')
     return
   }
   const url = URL.createObjectURL(blob)
@@ -746,31 +755,31 @@ function onGlobalKeydown(e) {
   const key = e.key.toLowerCase()
   switch (key) {
     case '1':
-      uiOptions.viewMode = 'task'
+      timelineOptions.viewMode = 'task'
       e.preventDefault()
       break
     case '2':
-      uiOptions.viewMode = 'core'
+      timelineOptions.viewMode = 'core'
       e.preventDefault()
       break
     case 'h':
-      uiOptions.orientation = 'h'
+      timelineOptions.orientation = 'h'
       e.preventDefault()
       break
     case 'v':
-      uiOptions.orientation = 'v'
+      timelineOptions.orientation = 'v'
       e.preventDefault()
       break
     case 'g':
-      uiOptions.showGrid = !uiOptions.showGrid
+      timelineOptions.showGrid = !timelineOptions.showGrid
       e.preventDefault()
       break
     case 'i':
-      uiOptions.showSti = !uiOptions.showSti
+      timelineOptions.showSti = !timelineOptions.showSti
       e.preventDefault()
       break
     case 'd':
-      uiOptions.darkMode = !uiOptions.darkMode
+      timelineOptions.darkMode = !timelineOptions.darkMode
       e.preventDefault()
       break
     case 'm':
@@ -805,7 +814,7 @@ function onGlobalKeydown(e) {
 // ---- Auto-load embedded example on startup --------------------------------
 async function loadExampleBtf() {
   if (typeof DecompressionStream === 'undefined') {
-    alert('Demo trace loading requires gzip decompression support in this browser. Open a .btf file directly instead.')
+    showToast('Demo trace loading requires gzip decompression support. Open a .btf file directly instead.', 'error')
     return
   }
 
@@ -1324,5 +1333,56 @@ body {
 
 .status-hint {
   opacity: 0.6;
+}
+
+/* ---- Toast notification ---- */
+.toast-notification {
+  position: fixed;
+  bottom: 40px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 8px 18px;
+  border-radius: 6px;
+  font-size: 12px;
+  z-index: 10000;
+  cursor: pointer;
+  max-width: 520px;
+  text-align: center;
+  pointer-events: auto;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+}
+
+.toast-notification.info {
+  background: var(--panel-bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+}
+
+.toast-notification.error {
+  background: #3a1010;
+  color: #ff9090;
+  border: 1px solid #7a3333;
+}
+
+.app:not(.dark) .toast-notification.info {
+  background: #f5f5f5;
+  color: #1e1e1e;
+  border: 1px solid #ccc;
+}
+
+.app:not(.dark) .toast-notification.error {
+  background: #fff0f0;
+  color: #b00;
+  border: 1px solid #e99;
+}
+
+.toast-enter-active,
+.toast-leave-active {
+  transition: opacity 0.2s ease;
+}
+
+.toast-enter-from,
+.toast-leave-to {
+  opacity: 0;
 }
 </style>

@@ -44,7 +44,7 @@ function coreOrder(coreName) {
     const tail = coreName.slice(5)
     if (/^\d+$/.test(tail)) return [0, parseInt(tail), coreName]
   }
-  return [1, Infinity, coreName]
+  return [1, Number.MAX_SAFE_INTEGER, coreName]
 }
 
 function compareCores(a, b) {
@@ -92,6 +92,7 @@ export function parseBtf(text, progressCallback) {
   // -----------------------------------------------------------------------
   progress(2, 'Reading file…')
 
+  let skippedLines = 0
   const lines = text.split('\n')
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim()
@@ -112,10 +113,10 @@ export function parseBtf(text, progressCallback) {
     const parts = line.split(',')
     // Re-join excess fields into the note slot so commas within notes are preserved.
     if (parts.length > 8) parts[7] = parts.splice(7).join(',')
-    if (parts.length < 7) continue
+    if (parts.length < 7) { skippedLines++; continue }
 
     const t = parseInt(parts[0], 10)
-    if (isNaN(t)) continue
+    if (isNaN(t)) { skippedLines++; continue }
 
     const evType = parts[3].trim()
 
@@ -237,6 +238,7 @@ export function parseBtf(text, progressCallback) {
   for (const [task] of openSeg) {
     closeSeg(task, timeMax)
   }
+  tEventsByTime.clear()  // release per-timestamp event arrays; no longer needed
 
   // -----------------------------------------------------------------------
   // Phase 3 – Post-processing: build lookup tables
@@ -428,6 +430,7 @@ export function parseBtf(text, progressCallback) {
     meta,
     timeMin,
     timeMax,
+    skippedLines,
 
     // ---- Task view ----
     tasks,              // merge keys, sorted

@@ -151,6 +151,7 @@ function parseCSVRow(line) {
       }
       fields.push(val)
       if (line[i] === ',') i++ // skip field separator
+      else break               // last quoted field – stop without extra empty entry
     } else {
       const end = line.indexOf(',', i)
       if (end === -1) { fields.push(line.slice(i)); break }

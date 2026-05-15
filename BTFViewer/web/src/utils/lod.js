@@ -18,10 +18,11 @@
  */
 export function makeLodSummary(segs, bins, binSpan, timeMin) {
   if (segs.length <= bins) return segs  // already small – skip work
+  const safeBinSpan = binSpan > 0 ? binSpan : 1e-9
   const result = []
   let prevBin = -2
   for (const s of segs) {
-    const b = Math.floor((s.start - timeMin) / binSpan)
+    const b = Math.floor((s.start - timeMin) / safeBinSpan)
     if (b !== prevBin) {
       result.push(s)
       prevBin = b

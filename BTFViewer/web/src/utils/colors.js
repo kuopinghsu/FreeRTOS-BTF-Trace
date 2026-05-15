@@ -180,24 +180,21 @@ export function coreColor(coreName) {
 
 // Separate caches for STI note and channel colours to avoid name collisions.
 const _stiNoteCache    = new Map()
-let   _stiNoteIdx      = 0
 const _stiChannelCache = new Map()
 let   _stiChannelIdx   = 0
 
 /** Reset STI colour assignments between file loads. */
 export function resetStiColors() {
   _stiNoteCache.clear()
-  _stiNoteIdx    = 0
   _stiChannelCache.clear()
   _stiChannelIdx = 0
 }
 
-/** Return a colour for a STI note string. */
+/** Return a deterministic colour for a STI note string (CRC32 → palette). */
 export function stiNoteColor(note) {
   if (STI_COLORS[note]) return STI_COLORS[note]
   if (_stiNoteCache.has(note)) return _stiNoteCache.get(note)
-  const color = STI_PALETTE[_stiNoteIdx % STI_PALETTE.length]
-  _stiNoteIdx++
+  const color = STI_PALETTE[crc32(note) % STI_PALETTE.length]
   _stiNoteCache.set(note, color)
   return color
 }

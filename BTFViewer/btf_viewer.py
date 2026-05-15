@@ -606,6 +606,7 @@ def _parse_btf(filepath: str,
     time_min = 0
     time_max = 0
     first_event = True
+    _skipped_lines: int = 0  # lines with unparseable timestamps (reported in meta)
     # raw_name → first task_create timestamp
     _task_create_raw: Dict[str, int] = {}
 
@@ -641,6 +642,7 @@ def _parse_btf(filepath: str,
             try:
                 t = int(parts[0])
             except ValueError:
+                _skipped_lines += 1
                 continue
 
             ev_type = parts[3].strip()
@@ -756,6 +758,12 @@ def _parse_btf(filepath: str,
     for task in list(open_seg.keys()):
         _close_seg(task, time_max)
 
+    # Free the raw event dict – no longer needed after segment reconstruction.
+    t_events_by_time.clear()
+
+    if _skipped_lines:
+        meta["_skipped_lines"] = str(_skipped_lines)
+
     if progress_callback:
         progress_callback(55, "Building lookup tables…")
 
@@ -811,8 +819,8 @@ def _parse_btf(filepath: str,
     def _core_sort_key(c: str):
         if c.startswith("Core_"):
             tail = c[5:]
-            return (0, int(tail) if tail.isdigit() else float("inf"), c)
-        return (1, float("inf"), c)
+            return (0, int(tail) if tail.isdigit() else sys.maxsize, c)
+        return (1, sys.maxsize, c)
     _core_names = sorted(_cn_set, key=_core_sort_key)
     _core_segs: Dict[str, list] = {c: list(_core_segs_build.get(c, [])) for c in _core_names}
 
@@ -863,10 +871,11 @@ def _parse_btf(filepath: str,
         """Down-sample a sorted segment list to at most *bins* entries."""
         if len(segs_sorted) <= bins:
             return segs_sorted   # already fine, skip work
+        safe_span = max(bin_span, 1e-9)  # guard against zero-span edge case
         result: list = []
         prev_bin = -2
         for s in segs_sorted:
-            b = int((s.start - time_min) / bin_span)
+            b = int((s.start - time_min) / safe_span)
             if b != prev_bin:
                 result.append(s)
                 prev_bin = b
@@ -1341,7 +1350,7 @@ def _lod_reduce(segs: list, time_min: int, px_per_ns: float,
     result: list = []
     prev_bin = -2
     for seg in segs:
-        b = int(offset + (seg.start - time_min) * px_per_ns)
+        b = math.floor(offset + (seg.start - time_min) * px_per_ns)
         if b != prev_bin:
             result.append(seg)
             prev_bin = b
@@ -8048,6 +8057,16 @@ class MainWindow(QMainWindow):
         _scene.clear()
         del _scene
 
+        # ---- 4b. Release the module-level info popup --------------------------
+        # _info_popup is a frameless QLabel parented to nothing.  Freeing it
+        # here prevents a C++ object-after-destruction crash during interpreter
+        # shutdown when the QApplication is torn down before the GC collects it.
+        global _info_popup
+        if _info_popup is not None:
+            _info_popup.hide()
+            _info_popup.deleteLater()
+            _info_popup = None
+
         # ---- 5. Free trace data on a background thread -----------------------
         # The trace can hold millions of TaskSegment objects; handing the last
         # reference to a non-daemon background thread lets Python's GC run
@@ -8984,7 +9003,7 @@ class MainWindow(QMainWindow):
         raw_json = self._settings.get("files", "recent_json", "")
         try:
             entries = json.loads(raw_json) if raw_json.strip() else []
-        except Exception:
+        except (json.JSONDecodeError, ValueError):
             entries = []
         # Remove any existing entry for this path
         entries = [e for e in entries if e.get("path") != norm]
@@ -9006,7 +9025,7 @@ class MainWindow(QMainWindow):
         entries = []
         try:
             entries = json.loads(raw_json) if raw_json.strip() else []
-        except Exception:
+        except (json.JSONDecodeError, ValueError):
             entries = []
         # Fall back to legacy pipe-separated list
         if not entries:
@@ -9448,6 +9467,15 @@ class MainWindow(QMainWindow):
         self._status_file.setText(f"  Loading {os.path.basename(path)}…")
         # Reset dynamic STI color assignments so new trace gets consistent colors.
         _STI_DYNAMIC_COLORS.clear()
+        # Clear Qt-object LRU caches so stale task colors/brushes/pens from a
+        # previous trace do not linger in memory across loads.
+        _task_color.cache_clear()
+        _blended_color.cache_clear()
+        _task_brush.cache_clear()
+        _task_pen_dark.cache_clear()
+        _blended_brush.cache_clear()
+        _blended_pen_dark.cache_clear()
+        _complementary_color_cached.cache_clear()
         QApplication.processEvents()
 
         # Progress dialog – created before closures so progress_dialog is defined.
