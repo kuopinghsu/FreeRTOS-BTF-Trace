@@ -16,7 +16,6 @@
       @load-demo="onLoadDemo"
       @zoom="onZoom"
       @fit="onFit"
-      @clear-cursors="clearCursors"
       @expand-all="onExpandAll"
       @collapse-all="onCollapseAll"
       @add-mark="onAddMark"
@@ -83,6 +82,7 @@
             :time-scale="trace.timeScale"
             @delete-cursor="onDeleteCursor"
             @jump-to-cursor="timelinePanelRef?.jumpToNs($event)"
+            @clear-all="clearCursors"
           />
         </div>
 
@@ -111,6 +111,8 @@
             @jump-to="onJumpToMark"
             @update-label="onUpdateMarkLabel"
             @import-marks="onImportMarks"
+            @clear-marks="onClearMarks"
+            @select-mark="timelineOptions.selectedMarkId = $event"
           />
         </div>
 
@@ -359,14 +361,15 @@ const uiOptions = reactive({
 })
 
 const timelineOptions = reactive({
-  viewMode:     'task',
-  darkMode:     true,
-  showGrid:     false,
-  showSti:      true,
-  orientation:  'h',
-  highlightKey: null,
-  marks:        [],
+  viewMode:        'task',
+  darkMode:        true,
+  showGrid:        false,
+  showSti:         true,
+  orientation:     'h',
+  highlightKey:    null,
+  marks:           [],
   highlightSegment: null,
+  selectedMarkId:  null,
 })
 
 // Marks state (bookmarks + annotations)
@@ -831,18 +834,22 @@ onBeforeUnmount(() => {
 
 // ---- Marks (bookmarks + annotations) -------------------------------------
 function onAddMark() {
-  // Add bookmark at the current viewport center
+  // Priority: mouse hover position → last-moved/placed cursor → viewport center
   if (!trace.value) return
-  const center = timelinePanelRef.value?.getViewportCenter?.()
-    ?? (trace.value.timeMin + (trace.value.timeMax - trace.value.timeMin) / 2)
-  addMarkAtNs(center, 'bookmark')
+  const hoverNs  = timelinePanelRef.value?.getHoverTime?.() ?? null
+  const cursorNs = timelinePanelRef.value?.getLastActiveCursorTime?.() ?? null
+  const ns = hoverNs ?? cursorNs ?? (timelinePanelRef.value?.getViewportCenter?.()
+    ?? (trace.value.timeMin + (trace.value.timeMax - trace.value.timeMin) / 2))
+  addMarkAtNs(ns, 'bookmark')
 }
 
 function onAddAnnotationAtCenter() {
   if (!trace.value) return
-  const center = timelinePanelRef.value?.getViewportCenter?.()
-    ?? (trace.value.timeMin + (trace.value.timeMax - trace.value.timeMin) / 2)
-  addMarkAtNs(center, 'annotation')
+  const hoverNs  = timelinePanelRef.value?.getHoverTime?.() ?? null
+  const cursorNs = timelinePanelRef.value?.getLastActiveCursorTime?.() ?? null
+  const ns = hoverNs ?? cursorNs ?? (timelinePanelRef.value?.getViewportCenter?.()
+    ?? (trace.value.timeMin + (trace.value.timeMax - trace.value.timeMin) / 2))
+  addMarkAtNs(ns, 'annotation')
 }
 
 function onAddBookmark(ns) {
@@ -894,6 +901,10 @@ function onImportMarks(imported) {
     })
   }
   marks.value.sort((a, b) => a.ns - b.ns)
+}
+
+function onClearMarks() {
+  marks.value = []
 }
 </script>
 

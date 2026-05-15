@@ -243,13 +243,13 @@ function paintHoverOverlay() {
   if (orientation.value === 'v') {
     const bodyH   = canvasH - HEADER_H
     const pxPerNs = bodyH / (timeEnd - timeStart)
-    drawMarksVertical(ctx, marks, props.trace, timeStart, pxPerNs, canvasW, canvasH, HEADER_H, darkMode)
+    drawMarksVertical(ctx, marks, props.trace, timeStart, pxPerNs, canvasW, canvasH, HEADER_H, darkMode, props.options.selectedMarkId ?? null)
     drawCursorsVertical(ctx, props.cursors, props.trace, timeStart, pxPerNs, canvasW, canvasH, HEADER_H, darkMode)
     if (hoverTime.value !== null)
       drawHoverLineVertical(ctx, hoverTime.value, props.trace, timeStart, pxPerNs, canvasW, canvasH, HEADER_H, darkMode)
   } else {
     const pxPerNs = canvasW / (timeEnd - timeStart)
-    drawMarksHorizontal(ctx, marks, props.trace, timeStart, pxPerNs, canvasW, canvasH, darkMode)
+    drawMarksHorizontal(ctx, marks, props.trace, timeStart, pxPerNs, canvasW, canvasH, darkMode, props.options.selectedMarkId ?? null)
     drawCursors(ctx, props.cursors, props.trace, timeStart, pxPerNs, canvasW, canvasH, darkMode)
     if (hoverTime.value !== null)
       drawHoverLine(ctx, hoverTime.value, props.trace, timeStart, pxPerNs, canvasW, canvasH, darkMode)
@@ -286,7 +286,15 @@ function setupHandler() {
     onViewportChange(vp) {
       viewport.timeStart = vp.timeStart
       viewport.timeEnd   = vp.timeEnd
-      viewport.scrollY   = vp.scrollY ?? viewport.scrollY
+      if (vp.scrollY != null) {
+        if (props.trace) {
+          const { totalHeight } = buildRowLayout(props.trace, props.options.viewMode, expanded, 0, props.options.showSti !== false)
+          const maxScrollY = Math.max(0, totalHeight - (viewport.canvasH - RULER_H))
+          viewport.scrollY = Math.max(0, Math.min(vp.scrollY, maxScrollY))
+        } else {
+          viewport.scrollY = Math.max(0, vp.scrollY)
+        }
+      }
       viewport.scrollX   = vp.scrollX ?? viewport.scrollX
       emit('viewportChange', { ...viewport })
       scheduleRender()
@@ -383,7 +391,11 @@ function captureAsSvg() {
     showGrid: props.options.showGrid,
     showSti:  props.options.showSti !== false,
     cursors:  props.cursors || [],
-    marks:    props.options.marks || [],
+    marks:    (props.options.marks || []).map(m => [
+      m.ns,
+      m.label || '',
+      m.type === 'annotation' ? '#FF8C00' : '#FFD700',
+    ]),
   })
   if (!svgStr) return null
   return new Blob([svgStr], { type: 'image/svg+xml' })
@@ -660,7 +672,10 @@ function scrollToSegmentIfNeeded(seg) {
   }
 }
 
-defineExpose({ fitToTrace, scheduleRender, zoomCenter, expandAll, collapseAll, jumpToNs, getViewportCenter, getCoreAtViewportCenter, scrollToTask, scrollToSegmentIfNeeded, captureScreenshotBlob, captureAsSvg })
+function getHoverTime() { return hoverTime.value }
+function getLastActiveCursorTime() { return _handler?.getLastActiveCursorTime() ?? null }
+
+defineExpose({ fitToTrace, scheduleRender, zoomCenter, expandAll, collapseAll, jumpToNs, getViewportCenter, getCoreAtViewportCenter, scrollToTask, scrollToSegmentIfNeeded, captureScreenshotBlob, captureAsSvg, getHoverTime, getLastActiveCursorTime })
 
 // ---- Expand / collapse core rows -----------------------------------------
 function onExpandToggle(coreName) {
@@ -706,6 +721,10 @@ watch([() => props.options.highlightKey, () => props.options.highlightSegment, (
 watch(() => props.options.marks, () => {
   paintHoverOverlay()
 }, { deep: true })
+
+watch(() => props.options.selectedMarkId, () => {
+  paintHoverOverlay()
+})
 
 watch(() => props.cursors, (c) => {
   _handler?.setCursors(c)

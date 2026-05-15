@@ -1,49 +1,69 @@
 <template>
-  <div
-    v-if="validCursors.length > 0"
-    class="cursor-panel"
-  >
+  <div class="cursor-panel">
     <div
-      v-for="(cur, idx) in cursors"
-      :key="idx"
-      class="cursor-row"
+      v-if="validCursors.length > 0"
+      class="cursor-list"
     >
-      <template v-if="cur !== null">
+      <div
+        v-for="(cur, idx) in cursors"
+        :key="idx"
+        class="cursor-row"
+      >
+        <template v-if="cur !== null">
+          <span
+            class="cursor-badge"
+            :style="{ background: CURSOR_COLORS[idx] }"
+          >C{{ idx + 1 }}</span>
+          <span
+            class="cursor-time clickable"
+            title="Jump to cursor"
+            @click="emit('jumpToCursor', cur)"
+          >{{ formatTime(cur, timeScale) }}</span>
+          <button
+            class="cursor-del"
+            title="Remove cursor"
+            @click="emit('deleteCursor', idx)"
+          >
+            ×
+          </button>
+        </template>
         <span
-          class="cursor-badge"
-          :style="{ background: CURSOR_COLORS[idx] }"
-        >C{{ idx + 1 }}</span>
-        <span
-          class="cursor-time clickable"
-          title="Jump to cursor"
-          @click="emit('jumpToCursor', cur)"
-        >{{ formatTime(cur, timeScale) }}</span>
-        <button
-          class="cursor-del"
-          title="Remove cursor"
-          @click="emit('deleteCursor', idx)"
+          v-else
+          class="cursor-empty"
+        >–</span>
+      </div>
+
+      <!-- Deltas between adjacent placed cursors -->
+      <template v-if="deltas.length > 0">
+        <div class="delta-sep" />
+        <div
+          v-for="(d, idx) in deltas"
+          :key="'d' + idx"
+          class="delta-row"
         >
-          ×
-        </button>
+          <span class="delta-label">Δ{{ d.from + 1 }}→{{ d.to + 1 }}</span>
+          <span class="delta-value">{{ formatTime(d.delta, timeScale) }}</span>
+        </div>
       </template>
-      <span
-        v-else
-        class="cursor-empty"
-      >–</span>
+    </div>
+    <div
+      v-else
+      class="cursor-empty-msg"
+    >
+      Click timeline to place cursors
     </div>
 
-    <!-- Deltas between adjacent placed cursors -->
-    <template v-if="deltas.length > 0">
-      <div class="delta-sep" />
-      <div
-        v-for="(d, idx) in deltas"
-        :key="'d' + idx"
-        class="delta-row"
+    <!-- Clear All row -->
+    <div class="cursor-actions">
+      <button
+        class="action-btn"
+        :disabled="validCursors.length === 0"
+        title="Clear all cursors"
+        @click="emit('clearAll')"
       >
-        <span class="delta-label">Δ{{ d.from + 1 }}→{{ d.to + 1 }}</span>
-        <span class="delta-value">{{ formatTime(d.delta, timeScale) }}</span>
-      </div>
-    </template>
+        Clear All
+      </button>
+    </div>
   </div>
 </template>
 
@@ -58,7 +78,7 @@ const props = defineProps({
   timeScale: { type: String, default: 'ns' },
 })
 
-const emit = defineEmits(['deleteCursor', 'jumpToCursor'])
+const emit = defineEmits(['deleteCursor', 'jumpToCursor', 'clearAll'])
 
 const validCursors = computed(() => props.cursors.filter(c => c !== null))
 
@@ -81,11 +101,22 @@ const deltas = computed(() => {
 .cursor-panel {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 8px 12px;
   font-size: 11px;
   font-family: monospace;
-  min-width: 200px;
+}
+
+.cursor-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 12px 4px;
+}
+
+.cursor-empty-msg {
+  padding: 8px 12px 4px;
+  color: var(--fg-dim);
+  font-size: 11px;
+  font-family: monospace;
 }
 
 .cursor-row {
@@ -162,5 +193,29 @@ const deltas = computed(() => {
 .delta-value {
   color: var(--fg);
   font-weight: 500;
+}
+
+.cursor-actions {
+  padding: 6px 12px 8px;
+  border-top: 1px solid var(--border);
+  margin-top: 2px;
+}
+
+.action-btn {
+  font-size: 11px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+}
+.action-btn:hover:not(:disabled) {
+  background: var(--tb-btn-hover);
+}
+.action-btn:disabled {
+  color: var(--fg-dim);
+  opacity: 0.4;
+  cursor: default;
 }
 </style>

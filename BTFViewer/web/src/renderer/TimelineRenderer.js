@@ -49,20 +49,20 @@ const TICK_COLOR = '#E8C84A'
  * @param {string} scale   Trace timeScale string (e.g. 'ns', 'us', 'ms').
  * @returns {string}
  */
-export function formatTime(t, scale) {
+export function formatTime(t, scale, decimals = 3) {
   if (scale === 'ns') {
-    if (t >= 1e9)  return `${(t / 1e9).toFixed(3)} s`
-    if (t >= 1e6)  return `${(t / 1e6).toFixed(3)} ms`
-    if (t >= 1e3)  return `${(t / 1e3).toFixed(3)} µs`
+    if (t >= 1e9)  return `${(t / 1e9).toFixed(decimals)} s`
+    if (t >= 1e6)  return `${(t / 1e6).toFixed(decimals)} ms`
+    if (t >= 1e3)  return `${(t / 1e3).toFixed(decimals)} µs`
     return `${t} ns`
   }
   if (scale === 'us') {
-    if (t >= 1e6)  return `${(t / 1e6).toFixed(3)} s`
-    if (t >= 1e3)  return `${(t / 1e3).toFixed(3)} ms`
+    if (t >= 1e6)  return `${(t / 1e6).toFixed(decimals)} s`
+    if (t >= 1e3)  return `${(t / 1e3).toFixed(decimals)} ms`
     return `${t} µs`
   }
   if (scale === 'ms') {
-    if (t >= 1e3)  return `${(t / 1e3).toFixed(3)} s`
+    if (t >= 1e3)  return `${(t / 1e3).toFixed(decimals)} s`
     return `${t} ms`
   }
   return `${t} ${scale}`
@@ -926,7 +926,7 @@ function drawMarkFlagVertical(ctx, y, kind) {
 /**
  * Draw marks as vertical lines in horizontal mode.
  */
-export function drawMarksHorizontal(ctx, marks, trace, timeStart, pxPerNs, canvasW, canvasH, _darkMode) {
+export function drawMarksHorizontal(ctx, marks, trace, timeStart, pxPerNs, canvasW, canvasH, _darkMode, selectedId = null) {
   if (!marks || marks.length === 0) return
   ctx.save()
   ctx.font = '10px monospace'
@@ -937,11 +937,21 @@ export function drawMarksHorizontal(ctx, marks, trace, timeStart, pxPerNs, canva
     if (x < -2 || x > canvasW + 2) continue
     const kind = markKind(mark)
     const color = markColor(mark)
+    const isSelected = selectedId !== null && mark.id === selectedId
 
+    if (isSelected) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.35)'
+      ctx.lineWidth = 5
+      ctx.setLineDash([])
+      ctx.beginPath()
+      ctx.moveTo(x + 0.5, RULER_H)
+      ctx.lineTo(x + 0.5, canvasH)
+      ctx.stroke()
+    }
     ctx.strokeStyle = color
-    ctx.lineWidth = kind === 'annotation' ? 1.0 : 1.2
-    ctx.setLineDash(kind === 'annotation' ? [6, 3] : [])
-    ctx.globalAlpha = 0.75
+    ctx.lineWidth = isSelected ? 2.5 : (kind === 'annotation' ? 1.0 : 1.2)
+    ctx.setLineDash(isSelected ? [] : (kind === 'annotation' ? [6, 3] : []))
+    ctx.globalAlpha = isSelected ? 1.0 : 0.75
     ctx.beginPath()
     ctx.moveTo(x + 0.5, RULER_H)
     ctx.lineTo(x + 0.5, canvasH)
@@ -956,7 +966,7 @@ export function drawMarksHorizontal(ctx, marks, trace, timeStart, pxPerNs, canva
     const tw = ctx.measureText(label).width + 8
     const lx = Math.min(x + 3, canvasW - tw - 2)
     ctx.fillStyle = color
-    ctx.globalAlpha = 0.85
+    ctx.globalAlpha = isSelected ? 1.0 : 0.85
     ctx.fillRect(lx, RULER_H - 16, tw, 13)
     ctx.globalAlpha = 1.0
     ctx.fillStyle = '#000'
@@ -1402,7 +1412,7 @@ export function drawHoverLineVertical(ctx, t, trace, timeStart, pxPerNs, canvasW
 
 // ---- Marks in vertical mode (horizontal dashed lines) ----------------------
 
-export function drawMarksVertical(ctx, marks, trace, timeStart, pxPerNs, canvasW, canvasH, headerH, _darkMode) {
+export function drawMarksVertical(ctx, marks, trace, timeStart, pxPerNs, canvasW, canvasH, headerH, _darkMode, selectedId = null) {
   if (!marks || marks.length === 0) return
   ctx.save()
   ctx.font = '10px monospace'
@@ -1414,11 +1424,21 @@ export function drawMarksVertical(ctx, marks, trace, timeStart, pxPerNs, canvasW
     if (y < headerH - 2 || y > canvasH + 2) continue
     const kind = markKind(mark)
     const color = markColor(mark)
+    const isSelected = selectedId !== null && mark.id === selectedId
 
+    if (isSelected) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.35)'
+      ctx.lineWidth = 5
+      ctx.setLineDash([])
+      ctx.beginPath()
+      ctx.moveTo(RULER_W, y + 0.5)
+      ctx.lineTo(canvasW, y + 0.5)
+      ctx.stroke()
+    }
     ctx.strokeStyle = color
-    ctx.lineWidth = kind === 'annotation' ? 1.0 : 1.2
-    ctx.setLineDash(kind === 'annotation' ? [6, 3] : [])
-    ctx.globalAlpha = 0.75
+    ctx.lineWidth = isSelected ? 2.5 : (kind === 'annotation' ? 1.0 : 1.2)
+    ctx.setLineDash(isSelected ? [] : (kind === 'annotation' ? [6, 3] : []))
+    ctx.globalAlpha = isSelected ? 1.0 : 0.75
     ctx.beginPath()
     ctx.moveTo(RULER_W, y + 0.5)
     ctx.lineTo(canvasW, y + 0.5)
@@ -1433,7 +1453,7 @@ export function drawMarksVertical(ctx, marks, trace, timeStart, pxPerNs, canvasW
     const tw = ctx.measureText(label).width + 8
     const ly = Math.max(headerH + 3, Math.min(y - 7, canvasH - 17))
     ctx.fillStyle = color
-    ctx.globalAlpha = 0.85
+    ctx.globalAlpha = isSelected ? 1.0 : 0.85
     ctx.fillRect(RULER_W - 2 - tw, ly, tw, 13)
     ctx.globalAlpha = 1.0
     ctx.fillStyle = '#000'

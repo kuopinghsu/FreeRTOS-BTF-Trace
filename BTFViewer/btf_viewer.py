@@ -151,7 +151,7 @@ from PyQt5.QtWidgets import (
     QHBoxLayout, QLabel, QLineEdit, QListView, QMainWindow, QMenu, QMessageBox, QProgressBar,
     QProgressDialog,
     QListWidget, QListWidgetItem,
-    QPushButton, QScrollArea, QDoubleSpinBox, QSpinBox, QStackedWidget,
+    QPushButton, QScrollArea, QShortcut, QDoubleSpinBox, QSpinBox, QStackedWidget,
     QStyleOptionGraphicsItem, QAbstractItemView,
     QTabWidget, QTableWidget, QTableWidgetItem,
     QVBoxLayout, QWidget,
@@ -295,6 +295,7 @@ _IC_ZIN    = "M6.5 1a5.5 5.5 0 1 0 3.89 9.4l3.4 3.4.7-.7-3.4-3.4A5.5 5.5 0 0 0 6
 _IC_ZOUT   = "M6.5 1a5.5 5.5 0 1 0 3.89 9.4l3.4 3.4.7-.7-3.4-3.4A5.5 5.5 0 0 0 6.5 1zm0 1a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9zM4 6h5v1H4V6z"
 _IC_FIT    = "M1.5 1h5v1h-4v4h-1V1.5a.5.5 0 0 1 .5-.5zm13 0a.5.5 0 0 1 .5.5V6h-1V2h-4V1h4.5zM1 10h1v4h4v1H1.5a.5.5 0 0 1-.5-.5V10zm14 0v4.5a.5.5 0 0 1-.5.5H10v-1h4v-4h1z"
 _IC_CURSOR = "M1 1l5 12 2-4 4 4 1-1-4-4 4-2L1 1z"
+_IC_MARK   = "M3 2a1 1 0 0 1 1-1h8a1 1 0 0 1 1 1v12.5a.5.5 0 0 1-.777.416L8 12.101l-4.223 2.815A.5.5 0 0 1 3 14.5V2z"
 _IC_CLEAR  = "M2 2.5l.5-.5 5.5 5.5 5.5-5.5.5.5L8.5 8 14 13.5l-.5.5L8 8.5 2.5 14l-.5-.5L7.5 8 2 2.5z"
 _IC_LEGEND = "M1 2a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V2zm5-1h8v1H6V1zm0 3h8v1H6V4zm-5 3a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V7zm5-1h8v1H6V6zm0 3h8v1H6V9zm-5 3a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1v-2zm5-1h8v1H6v-1zm0 3h8v1H6v-1z"
 _IC_TASK   = "M1 2.5A1.5 1.5 0 0 1 2.5 1h11A1.5 1.5 0 0 1 15 2.5v11a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 13.5v-11zM4 5.5h8v1H4v-1zm0 3h8v1H4v-1zm0 3h5v1H4v-1z"
@@ -502,12 +503,18 @@ _IDLE_RE = re.compile(
     re.IGNORECASE,
 )
 
+def _parse_int_token(s: str) -> int:
+    """Parse an integer token that may be hex (0x...) or decimal (with optional leading zeros)."""
+    if s.startswith(("0x", "0X")):
+        return int(s, 16)
+    return int(s, 10)
+
 @functools.lru_cache(maxsize=16384)
 def _parse_task_name(raw: str) -> Tuple[Optional[int], Optional[int], str]:
     """Return (core_id, task_id, display_name) from a raw BTF task name."""
     m = _TASK_RE.match(raw)
     if m:
-        return int(m.group(1), 0), int(m.group(2), 0), m.group(3).strip()
+        return _parse_int_token(m.group(1)), _parse_int_token(m.group(2)), m.group(3).strip()
     return None, None, raw
 
 @functools.lru_cache(maxsize=16384)
@@ -1514,6 +1521,11 @@ class TimelineScene(QGraphicsScene):
         # task_key → [(QRectF, QColor)] – populated by builders, used for hover overlays
         self._task_row_rects: Dict[str, list] = {}
         self._hover_overlay_items: list = []   # lightweight overlay items (no rebuild)
+        # -- Mouse-hover indicator ---------------------------------------
+        # Ghost dashed line + time label that follows the mouse; never placed
+        # as a real cursor.  Redrawn on every mouse-move, cleared on leave.
+        self._hover_ns: Optional[int] = None
+        self._hover_items: list = []
 
     # ------------------------------------------------------------------
     # Public API
@@ -2162,6 +2174,76 @@ class TimelineScene(QGraphicsScene):
         return list(self._cursor_times)
 
     # ------------------------------------------------------------------
+    # Mouse-hover indicator (ghost line)
+    # ------------------------------------------------------------------
+
+    def _draw_hover_line(self) -> None:
+        """Draw a thin dashed ghost line at self._hover_ns with a time label."""
+        for item in self._hover_items:
+            self.removeItem(item)
+        self._hover_items.clear()
+        if self._trace is None or self._hover_ns is None:
+            return
+        scene_r = self.sceneRect()
+        _views  = self.views()
+        _scene_top  = _views[0].mapToScene(QPoint(0, 0)).y()  if _views else 0.0
+        _scene_left = _views[0].mapToScene(QPoint(0, 0)).x()  if _views else 0.0
+        pen = QPen(QColor(255, 255, 255, 80), 1.0, Qt.DashLine)
+        pen.setDashPattern([3, 3])
+        font = _monospace_font(max(8, self._font_size - 1))
+        fm   = QFontMetrics(font)
+        t_str = _format_time(self._hover_ns, self._trace.time_scale, decimals=3)
+        tw = fm.horizontalAdvance(t_str) + 8
+        th = fm.height()
+        if self._horizontal:
+            x = self._label_width + self._ns_to_px(self._hover_ns)
+            line = QGraphicsLineItem(x, 0, x, scene_r.height())
+            line.setPen(pen)
+            line.setZValue(25)
+            self.addItem(line)
+            self._hover_items.append(line)
+            # Time label centred on x, pinned near the bottom of the ruler
+            lbl_x = min(x - tw / 2, scene_r.width() - tw - 4)
+            lbl_x = max(self._label_width + 2, lbl_x)
+            lbl_y = _scene_top + RULER_HEIGHT - th - 4
+            bg = self.addRect(
+                QRectF(lbl_x, lbl_y, tw, th + 2),
+                QPen(Qt.NoPen), QBrush(QColor(40, 90, 200, 170)))
+            bg.setZValue(26)
+            lbl = self.addSimpleText(t_str, font)
+            lbl.setBrush(QBrush(QColor("#AAC8FF")))
+            lbl.setZValue(27)
+            lbl.setPos(lbl_x + 4, lbl_y + 1)
+            self._hover_items.extend([bg, lbl])
+        else:
+            label_row_h = self._label_width
+            y = label_row_h + self._ns_to_px(self._hover_ns)
+            line = QGraphicsLineItem(0, y, scene_r.width(), y)
+            line.setPen(pen)
+            line.setZValue(25)
+            self.addItem(line)
+            self._hover_items.append(line)
+            # Time label to the right of the ruler, centred vertically on y
+            lbl_x = _scene_left + RULER_WIDTH + 4
+            lbl_y = y - (th + 2) / 2
+            bg = self.addRect(
+                QRectF(lbl_x, lbl_y, tw, th + 2),
+                QPen(Qt.NoPen), QBrush(QColor(40, 90, 200, 170)))
+            bg.setZValue(26)
+            lbl = self.addSimpleText(t_str, font)
+            lbl.setBrush(QBrush(QColor("#AAC8FF")))
+            lbl.setZValue(27)
+            lbl.setPos(lbl_x + 4, lbl_y + 1)
+            self._hover_items.extend([bg, lbl])
+
+    def clear_hover_line(self) -> None:
+        """Remove the hover ghost line from the scene."""
+        for item in self._hover_items:
+            self.removeItem(item)
+        self._hover_items.clear()
+        self._hover_ns = None
+
+    # ------------------------------------------------------------------
     # Draw cursor overlay
     # ------------------------------------------------------------------
 
@@ -2414,6 +2496,7 @@ class TimelineScene(QGraphicsScene):
         self._mark_frozen_left_count = 0
         self._task_row_rects = {}
         self._hover_overlay_items = []   # clear() removed them from the scene
+        self._hover_items = []             # clear() removed them from the scene
         if self._trace is None:
             return
         if self._view_mode == "core":
@@ -5525,6 +5608,31 @@ class TimelineView(QGraphicsView):
             if not in_label:
                 self._scene.clear_hover()
 
+        # Update mouse-hover ghost line (only when not dragging)
+        if (self._scene._trace is not None
+                and self._mid_press_ns is None
+                and self._dragging_cursor_idx < 0
+                and self._dragging_mark_idx < 0
+                and not self._label_resize_dragging):
+            lw = self._scene._label_width
+            in_label = (event.pos().x() < lw if self._scene._horizontal
+                        else event.pos().y() < lw)
+            if in_label:
+                self._scene.clear_hover_line()
+            else:
+                scene_pt = self.mapToScene(event.pos())
+                coord = scene_pt.x() if self._scene._horizontal else scene_pt.y()
+                ns = self._scene.scene_to_ns(coord)
+                self._scene._hover_ns = ns
+                self._scene._draw_hover_line()
+        else:
+            self._scene.clear_hover_line()
+
+    def leaveEvent(self, event) -> None:
+        if self._scene._trace is not None:
+            self._scene.clear_hover_line()
+        super().leaveEvent(event)
+
     def mouseReleaseEvent(self, event) -> None:
         # Dispatch in order (first match returns early):
         #   1. Middle-button release  → zoom to dragged range
@@ -8324,6 +8432,9 @@ class MainWindow(QMainWindow):
         self._bookmark_list.itemClicked.connect(lambda item: self._jump_to_ns(int(item.data(Qt.UserRole + 1))))
         self._bookmark_list.itemDoubleClicked.connect(lambda item: self._jump_to_ns(int(item.data(Qt.UserRole + 1))))
         self._bookmark_list.itemChanged.connect(self._on_bookmark_item_changed)
+        _bm_del_key = QShortcut(QKeySequence(Qt.Key_Delete), self._bookmark_list)
+        _bm_del_key.setContext(Qt.WidgetShortcut)
+        _bm_del_key.activated.connect(self._delete_selected_bookmark)
         bm_v.addWidget(self._bookmark_list)
         bm_btns = QHBoxLayout()
         bm_btns.setContentsMargins(0, 0, 0, 0)
@@ -8347,6 +8458,9 @@ class MainWindow(QMainWindow):
         self._annotation_list.itemClicked.connect(lambda item: self._jump_to_ns(int(item.data(Qt.UserRole + 1))))
         self._annotation_list.itemDoubleClicked.connect(
             lambda item: self._edit_selected_annotation())
+        _an_del_key = QShortcut(QKeySequence(Qt.Key_Delete), self._annotation_list)
+        _an_del_key.setContext(Qt.WidgetShortcut)
+        _an_del_key.activated.connect(self._delete_selected_annotation)
         an_v.addWidget(self._annotation_list)
         self._annotation_input = QLineEdit()
         self._annotation_input.setPlaceholderText("Annotation note...")
@@ -8536,7 +8650,8 @@ class MainWindow(QMainWindow):
 
         # --- Navigate menu ---
         nm = mb.addMenu("&Navigate")
-        nm.addAction("Add &Bookmark", self._add_bookmark_at_center, "Ctrl+B")
+        act_bookmark = nm.addAction("Add &Bookmark", self._add_bookmark_at_center, "Ctrl+B")
+        act_bookmark.setShortcuts([QKeySequence("Ctrl+B"), QKeySequence("M")])
         nm.addAction("Add &Annotation…", self._prompt_annotation_at_center, "Ctrl+Shift+B")
         nm.addSeparator()
         self._act_zoom_range = nm.addAction(
@@ -8649,6 +8764,11 @@ class MainWindow(QMainWindow):
             "Place cursor at viewport centre  (C)")
         _ia("Clear Cursors", self._view.clear_cursors, _IC_CLEAR,
             "Clear all cursors  (Shift+C)")
+        tb.addSeparator()
+
+        # --- Mark ---
+        _ia("Add Mark", self._add_bookmark_at_center, _IC_MARK,
+            "Add bookmark at first cursor (or viewport centre)  (M)")
         tb.addSeparator()
 
         # --- Settings button ---
@@ -8979,7 +9099,12 @@ class MainWindow(QMainWindow):
         if self._trace is None:
             return
         self._push_undo_snapshot()
-        ns = self._view.view_center_ns()
+        # Priority: hover position → first placed cursor → viewport centre
+        hover_ns   = self._view._scene._hover_ns
+        cursor_times = self._view._scene.cursor_times()
+        ns = (hover_ns if hover_ns is not None
+              else cursor_times[0] if cursor_times
+              else self._view.view_center_ns())
         unit = self._current_time_unit()
         label = f"Bookmark @{_format_time(ns, unit, decimals=3)}"
         self._bookmarks.append(TraceBookmark(id=self._mark_next_id, ns=ns, label=label))
@@ -10067,10 +10192,16 @@ class MainWindow(QMainWindow):
                 self._jump_to_ns(ns)
 
     def _prompt_annotation_at_center(self) -> None:
-        """Prompt for a note then add annotation at the viewport centre (menu / keyboard)."""
+        """Prompt for a note then add annotation at the first cursor (or viewport centre)."""
         if self._trace is None:
             return
-        self._add_annotation_at_ns(self._view.view_center_ns())
+        # Priority: hover position → first placed cursor → viewport centre
+        hover_ns     = self._view._scene._hover_ns
+        cursor_times = self._view._scene.cursor_times()
+        ns = (hover_ns if hover_ns is not None
+              else cursor_times[0] if cursor_times
+              else self._view.view_center_ns())
+        self._add_annotation_at_ns(ns)
 
     # -- Marks export ---------------------------------------------------
 
@@ -10079,6 +10210,7 @@ class MainWindow(QMainWindow):
         if self._trace is None:
             return
         unit = self._current_time_unit()
+        time_scale = self._trace.time_scale
         rows = []
         for b in self._bookmarks:
             rows.append(("bookmark",   _format_time(b.ns, unit), b.ns, b.label))
@@ -10099,8 +10231,8 @@ class MainWindow(QMainWindow):
         try:
             import csv
             with open(path, "w", newline="", encoding="utf-8") as fh:
-                writer = csv.writer(fh)
-                writer.writerow(["type", "timestamp", "raw_ns", "label_or_note"])
+                writer = csv.writer(fh, quoting=csv.QUOTE_ALL)
+                writer.writerow(["type", "time", time_scale, "label"])
                 writer.writerows(rows)
             self.statusBar().showMessage(f"Marks exported → {os.path.basename(path)}", 4000)
         except OSError as exc:
@@ -10115,28 +10247,54 @@ class MainWindow(QMainWindow):
         )
         if not path:
             return
+        # Timescale conversion: value * from_mult / to_mult  (both relative to ns)
+        _to_ns: dict[str, int] = {"ns": 1, "us": 1_000, "ms": 1_000_000, "s": 1_000_000_000}
+        trace_scale = self._trace.time_scale if self._trace else "ns"
+        def _convert_scale(value: float, from_scale: str, to_scale: str) -> int:
+            if from_scale == to_scale:
+                return int(value)
+            from_mult = _to_ns.get(from_scale, 1)
+            to_mult   = _to_ns.get(to_scale, 1)
+            return int(value * from_mult / to_mult)
         try:
             import csv
             imported = 0
             with open(path, "r", newline="", encoding="utf-8") as fh:
-                reader = csv.DictReader(fh)
-                for row in reader:
-                    kind = row.get("type", "").strip().lower()
-                    try:
-                        ns = int(row.get("raw_ns", 0))
-                    except (ValueError, TypeError):
-                        continue
-                    label = row.get("label_or_note", "")
-                    if kind == "bookmark":
-                        if not any(b.ns == ns for b in self._bookmarks):
-                            self._bookmarks.append(TraceBookmark(id=self._mark_next_id, ns=ns, label=label))
-                            self._mark_next_id += 1
-                            imported += 1
-                    elif kind == "annotation":
-                        if not any(a.ns == ns for a in self._annotations):
-                            self._annotations.append(TraceAnnotation(id=self._mark_next_id, ns=ns, note=label))
-                            self._mark_next_id += 1
-                            imported += 1
+                reader = csv.reader(fh)
+                rows = list(reader)
+            if not rows:
+                return
+            # Header row: col[0]="type", col[1]="time", col[2]=timescale (e.g. "us"), col[3]="label"
+            header = rows[0]
+            has_header = len(header) > 0 and header[0].strip().lower() == "type"
+            if has_header:
+                csv_scale = header[2].strip().lower() if len(header) > 2 else trace_scale
+                if csv_scale not in _to_ns:
+                    csv_scale = trace_scale
+                data_rows = rows[1:]
+            else:
+                csv_scale = trace_scale
+                data_rows = rows
+            for cols in data_rows:
+                if len(cols) < 3:
+                    continue
+                kind = cols[0].strip().lower()
+                try:
+                    raw = float(cols[2])
+                except (ValueError, IndexError):
+                    continue
+                ns = _convert_scale(raw, csv_scale, trace_scale)
+                label = cols[3].strip() if len(cols) > 3 else ""
+                if kind == "bookmark":
+                    if not any(b.ns == ns for b in self._bookmarks):
+                        self._bookmarks.append(TraceBookmark(id=self._mark_next_id, ns=ns, label=label))
+                        self._mark_next_id += 1
+                        imported += 1
+                elif kind == "annotation":
+                    if not any(a.ns == ns for a in self._annotations):
+                        self._annotations.append(TraceAnnotation(id=self._mark_next_id, ns=ns, note=label))
+                        self._mark_next_id += 1
+                        imported += 1
             self._rebuild_bookmark_list()
             self._rebuild_annotation_list()
             self.statusBar().showMessage(f"Imported {imported} mark(s) from {os.path.basename(path)}", 4000)
@@ -10211,8 +10369,8 @@ class MainWindow(QMainWindow):
                 ("Shift+F3",  "Find previous"),
             ]),
             ("Marks", [
-                ("Ctrl+B",              "Add bookmark at centre"),
-                ("Ctrl+Shift+B",        "Add annotation at centre"),
+                ("M / Ctrl+B",          "Add bookmark at first cursor (or centre)"),
+                ("Ctrl+Shift+B",        "Add annotation at first cursor (or centre)"),
                 ("Gold ▼ on ruler",     "Bookmark flag"),
                 ("Orange ◆ on ruler",   "Annotation flag"),
             ]),

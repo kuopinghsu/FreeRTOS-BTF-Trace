@@ -52,6 +52,7 @@ export class InteractionHandler {
     this._dragStartScrollX = 0
     this._draggingCursorIdx = -1
     this._draggingMarkId = null
+    this._lastActiveCursorIdx = -1  // index of most recently placed/moved cursor
     this._dragCursorPx = 8
     this._dragMarkPx = 6
 
@@ -95,6 +96,12 @@ export class InteractionHandler {
   setCursors(cursors) {
     this._cursors = cursors.slice(0, MAX_CURSORS)
     while (this._cursors.length < MAX_CURSORS) this._cursors.push(null)
+  }
+
+  /** Return the timestamp of the most recently placed or dragged cursor, or null. */
+  getLastActiveCursorTime() {
+    if (this._lastActiveCursorIdx < 0) return null
+    return this._cursors[this._lastActiveCursorIdx] ?? null
   }
 
   setMinTimeSpan(span) {
@@ -403,6 +410,7 @@ export class InteractionHandler {
         const next = [...this._cursors]
         next[this._draggingCursorIdx] = tDrag
         this._cursors = next
+        this._lastActiveCursorIdx = this._draggingCursorIdx
         this._opts.onCursorsChange?.(next)
       }
       return
@@ -576,9 +584,11 @@ export class InteractionHandler {
       const emptyIdx = cursors.findIndex(c => c === null)
       if (emptyIdx !== -1) {
         cursors[emptyIdx] = t
+        this._lastActiveCursorIdx = emptyIdx
       } else {
         cursors.shift()
         cursors.push(t)
+        this._lastActiveCursorIdx = cursors.length - 1
       }
     }
     this._cursors = cursors

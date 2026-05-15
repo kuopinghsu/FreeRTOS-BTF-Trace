@@ -176,23 +176,6 @@
 
     <div class="tb-sep" />
 
-    <!-- Clear cursors -->
-    <button
-      class="tb-btn"
-      title="Clear all cursors"
-      @click="emit('clearCursors')"
-    >
-      <svg
-        viewBox="0 0 16 16"
-        width="16"
-        height="16"
-        fill="currentColor"
-      >
-        <path d="M1 1l5 12 2-4 4 4 1-1-4-4 4-2L1 1z" />
-      </svg>
-      Cursors
-    </button>
-
     <!-- Add bookmark -->
     <button
       v-if="traceInfo"
@@ -386,7 +369,7 @@ defineProps({
   loadingMsg:  { type: String,  default: '' },
 })
 
-const emit = defineEmits(['update:modelValue', 'trace-reading', 'trace-loaded', 'loadDemo', 'zoom', 'fit', 'clearCursors', 'expandAll', 'collapseAll', 'addMark', 'copyScreenshot', 'exportSvg', 'showHelp', 'showAbout'])
+const emit = defineEmits(['update:modelValue', 'trace-reading', 'trace-loaded', 'loadDemo', 'zoom', 'fit', 'expandAll', 'collapseAll', 'addMark', 'copyScreenshot', 'exportSvg', 'showHelp', 'showAbout'])
 
 function onFileChange(e) {
   const file = e.target.files[0]

@@ -30,7 +30,9 @@
           :key="m.id"
           class="mark-item"
           :class="{ selected: selectedId === m.id }"
-          @click="emit('jumpTo', m.ns); selectedId = m.id"
+          tabindex="0"
+          @click="emit('jumpTo', m.ns); emit('selectMark', m.id); selectedId = m.id"
+          @keydown.delete.stop="emit('deleteMark', m.id)"
         >
           <span
             class="mark-kind"
@@ -44,8 +46,13 @@
           >{{ fmt(m.ns) }}</span>
           <input
             class="mark-label"
-            :value="m.label"
-            @change="emit('updateLabel', { id: m.id, label: $event.target.value })"
+            placeholder="label…"
+            :value="editingId === m.id ? editingLabel : m.label"
+            @focus="editingId = m.id; editingLabel = m.label"
+            @blur="onLabelBlur(m)"
+            @input="editingLabel = $event.target.value"
+            @keydown.enter.stop="$event.target.blur()"
+            @keydown.escape.stop="editingLabel = m.label; $event.target.blur()"
             @click.stop
           >
           <button
@@ -72,13 +79,21 @@
         :disabled="marks.length === 0"
         @click="exportCsv"
       >
-        Export CSV
+        Export
       </button>
       <button
         class="action-btn"
         @click="triggerImport"
       >
-        Import CSV
+        Import
+      </button>
+      <button
+        class="action-btn"
+        :disabled="marks.length === 0"
+        title="Clear all marks"
+        @click="emit('clearMarks')"
+      >
+        Clear All
       </button>
       <input
         ref="importInputEl"
@@ -100,22 +115,63 @@ const props = defineProps({
   timeScale: { type: String, default: 'ns' },
 })
 
-const emit = defineEmits(['addBookmark', 'addAnnotation', 'deleteMark', 'jumpTo', 'updateLabel', 'importMarks'])
+const emit = defineEmits(['addBookmark', 'addAnnotation', 'deleteMark', 'jumpTo', 'updateLabel', 'importMarks', 'clearMarks', 'selectMark'])
 
 const selectedId    = ref(null)
 const importInputEl = ref(null)
+const editingId     = ref(null)
+const editingLabel  = ref('')
+
+function onLabelBlur(mark) {
+  if (editingId.value === mark.id) {
+    emit('updateLabel', { id: mark.id, label: editingLabel.value })
+    editingId.value = null
+  }
+}
+
+/**
+ * Parse a single CSV row, correctly handling quoted fields (including embedded
+ * commas and escaped double-quotes "").
+ */
+function parseCSVRow(line) {
+  const fields = []
+  let i = 0
+  while (i <= line.length) {
+    if (i === line.length) { fields.push(''); break }
+    if (line[i] === '"') {
+      i++ // skip opening quote
+      let val = ''
+      while (i < line.length) {
+        if (line[i] === '"') {
+          if (line[i + 1] === '"') { val += '"'; i += 2 } // escaped quote
+          else { i++; break }                              // closing quote
+        } else {
+          val += line[i++]
+        }
+      }
+      fields.push(val)
+      if (line[i] === ',') i++ // skip field separator
+    } else {
+      const end = line.indexOf(',', i)
+      if (end === -1) { fields.push(line.slice(i)); break }
+      fields.push(line.slice(i, end))
+      i = end + 1
+    }
+  }
+  return fields
+}
 
 function markColor(mark) {
   return mark?.type === 'annotation' ? '#FF8C00' : '#FFD700'
 }
 
 function fmt(ns) {
-  return formatTime(ns, props.timeScale)
+  return formatTime(ns, props.timeScale, 2)
 }
 
 function exportCsv() {
   if (props.marks.length === 0) return
-  const rows = [['type', 'time', 'ns', 'label']]
+  const rows = [['type', 'time', props.timeScale, 'label']]
   for (const m of props.marks) {
     rows.push([m.type === 'annotation' ? 'annotation' : 'bookmark', fmt(m.ns), m.ns, m.label || ''])
   }
@@ -133,6 +189,16 @@ function triggerImport() {
   importInputEl.value?.click()
 }
 
+/** Convert a value from one timescale to another (both in { 'ns','us','ms','s' }). */
+function convertTimeScale(value, fromScale, toScale) {
+  if (fromScale === toScale) return value
+  // Convert to nanoseconds first, then to target
+  const toNs = { ns: 1, us: 1e3, ms: 1e6, s: 1e9 }
+  const fromNs = toNs[fromScale] ?? 1
+  const destNs = toNs[toScale]  ?? 1
+  return value * fromNs / destNs
+}
+
 function onImportFile(e) {
   const file = e.target.files[0]
   if (!file) return
@@ -141,16 +207,18 @@ function onImportFile(e) {
     const text = ev.target.result
     const lines = text.split(/\r?\n/).filter(l => l.trim())
     const imported = []
-    // Skip header row (type,time,ns,label)
-    const startIdx = lines[0]?.toLowerCase().includes('ns') ? 1 : 0
+    // Detect header row and read its timescale (3rd column)
+    const headerCols = parseCSVRow(lines[0] || '')
+    const hasHeader = headerCols[0]?.toLowerCase() === 'type'
+    const csvScale = hasHeader ? (headerCols[2]?.toLowerCase() || props.timeScale) : props.timeScale
+    const startIdx = hasHeader ? 1 : 0
     for (let i = startIdx; i < lines.length; i++) {
-      // Simple CSV parse: split on comma, strip surrounding quotes
-      const cols = lines[i].match(/(?:"([^"]*(?:""[^"]*)*)"|([^,]*))/g)
-        ?.map(c => c.startsWith('"') ? c.slice(1, -1).replace(/("")/g, '"') : c) ?? []
-      // Expected cols: type, time, ns, label
+      const cols = parseCSVRow(lines[i])
+      // Expected cols: type, time, <scale>, label
       const type = (cols[0] || '').trim().toLowerCase() === 'annotation' ? 'annotation' : 'bookmark'
-      const ns = parseFloat(cols[2])
-      if (!isNaN(ns)) {
+      const raw = parseFloat(cols[2])
+      if (!isNaN(raw)) {
+        const ns = convertTimeScale(raw, csvScale, props.timeScale)
         imported.push({ ns, label: cols[3] || '', type })
       }
     }
