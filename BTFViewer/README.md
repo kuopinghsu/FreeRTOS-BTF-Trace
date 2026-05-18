@@ -6,7 +6,7 @@ A PyQt5-based interactive visualiser for FreeRTOS context-switch traces in **Bes
 
 <img src="../images/btfviewer.png" alt="BTF Viewer screenshot" width=640>
 
-[DEMO](https://apps.kuoping.com/btf.html)
+[DEMO](https://apps.kuoping.com/btf-viewer.html)
 
 ## Features
 
