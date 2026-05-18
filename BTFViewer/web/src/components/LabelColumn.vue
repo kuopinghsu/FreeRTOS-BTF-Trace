@@ -68,13 +68,25 @@
           <span class="label-text">{{ row.label }}</span>
         </div>
 
-        <!-- STI channel row -->
+        <!-- STI channel row (regular, non-tag) -->
         <div
-          v-else-if="row.type === 'sti'"
+          v-else-if="row.type === 'sti' && !row.isTag"
           class="label-row label-sti"
           :style="{ height: STI_ROW_H + 'px', marginBottom: ROW_GAP + 'px' }"
         >
           <span class="sti-dot">◆</span>
+          <span class="label-text sti">{{ row.label }}</span>
+        </div>
+
+        <!-- STI tag-event channel row (expandable waveform) -->
+        <div
+          v-else-if="row.type === 'sti' && row.isTag"
+          class="label-row label-sti label-sti-tag"
+          :style="{ height: (row.isExpanded ? STI_WAVEFORM_H : STI_ROW_H) + 'px', marginBottom: ROW_GAP + 'px' }"
+          @click="emit('stiExpandToggle', row.key)"
+        >
+          <span class="expand-arrow">{{ row.isExpanded ? '▼' : '▶' }}</span>
+          <span class="sti-wave-icon">〰</span>
           <span class="label-text sti">{{ row.label }}</span>
         </div>
       </template>
@@ -84,22 +96,23 @@
 
 <script setup>
 import { computed } from 'vue'
-import { buildRowLayout, LABEL_W, RULER_H, ROW_H, ROW_GAP, STI_ROW_H } from '../renderer/TimelineRenderer.js'
+import { buildRowLayout, LABEL_W, RULER_H, ROW_H, ROW_GAP, STI_ROW_H, STI_WAVEFORM_H } from '../renderer/TimelineRenderer.js'
 
 const props = defineProps({
   trace:        { type: Object, default: null },
   viewMode:     { type: String, default: 'task' },
   expanded:     { type: Object, default: () => new Set() },   // Set
+  stiExpanded:  { type: Object, default: () => new Set() },   // Set of expanded tag-event STI channels
   scrollY:      { type: Number, default: 0 },
   highlightKey: { type: [String, null], default: null },
   showSti:      { type: Boolean, default: true },
 })
 
-const emit = defineEmits(['expandToggle', 'highlightChange', 'highlightClick'])
+const emit = defineEmits(['expandToggle', 'highlightChange', 'highlightClick', 'stiExpandToggle'])
 
 const rows = computed(() => {
   if (!props.trace) return []
-  return buildRowLayout(props.trace, props.viewMode, props.expanded, 0, props.showSti).rows
+  return buildRowLayout(props.trace, props.viewMode, props.expanded, 0, props.showSti, props.stiExpanded).rows
 })
 
 function toggleExpand(coreName) {
@@ -160,6 +173,17 @@ function toggleExpand(coreName) {
 .label-sti {
   cursor: default;
   opacity: 0.8;
+}
+
+.label-sti-tag {
+  cursor: pointer;
+  opacity: 1;
+}
+
+.sti-wave-icon {
+  font-size: 12px;
+  color: #5BC8FF;
+  flex-shrink: 0;
 }
 
 .core-dot {

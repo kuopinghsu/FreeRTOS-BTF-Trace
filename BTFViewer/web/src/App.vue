@@ -192,7 +192,10 @@
               </div><div>Toggle dark/light mode</div>
               <div class="k">
                 M
-              </div><div>Add bookmark at viewport center</div>
+              </div><div>Add bookmark at current position</div>
+              <div class="k">
+                A
+              </div><div>Add annotation at current position</div>
               <div class="k">
                 C
               </div><div>Clear all cursors</div>
@@ -383,6 +386,7 @@ const timelineOptions = reactive({
   darkMode:        true,
   showGrid:        false,
   showSti:         true,
+  stiLogScale:     false,
   orientation:     'h',
   highlightKey:    null,
   marks:           [],
@@ -784,6 +788,10 @@ function onGlobalKeydown(e) {
       break
     case 'm':
       onAddMark()
+      e.preventDefault()
+      break
+    case 'a':
+      onAddAnnotationAtCenter()
       e.preventDefault()
       break
     case 'c':

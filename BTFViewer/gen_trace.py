@@ -380,7 +380,7 @@ def main():
                 if not tick_due and not sti_due:
                     break
                 if tick_due and (not sti_due or next_tick <= next_sti):
-                    _buf.append(f"{next_tick},{tick_task},0,T,{tick_task},0,resume,tick_{tick_no}\n")
+                    _buf.append(f"{next_tick},{tick_task},0,T,{tick_task},0,resume,{tick_no}\n")
                     _buf.append(f"{next_tick + 1},{tick_task},0,T,{tick_task},0,preempt,\n")
                     event_count += 2
                     tick_no  += 1

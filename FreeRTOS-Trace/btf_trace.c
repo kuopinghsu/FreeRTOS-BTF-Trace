@@ -326,7 +326,7 @@ void btf_dump(
                         "queue_delete");
                 break;
             case TRACE_EVENT_TASK_INCREMENT_TICK:
-                printf( "%lu,%s,0,STI,%s,0,%s,tick_%ld\n",
+                printf( "%lu,%s,0,STI,%s,0,%s,%ld\n",
                         event->time,
                         "Core_1",
                         "TICK",

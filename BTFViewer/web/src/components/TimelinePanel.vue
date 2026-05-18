@@ -9,12 +9,14 @@
       :trace="trace"
       :view-mode="options.viewMode"
       :expanded="expanded"
+      :sti-expanded="stiExpanded"
       :scroll-y="viewport.scrollY"
       :highlight-key="options.highlightKey"
       :show-sti="options.showSti !== false"
       @expand-toggle="onExpandToggle"
       @highlight-change="(k) => emit('highlightChange', k)"
       @highlight-click="(k) => emit('highlightClick', k)"
+      @sti-expand-toggle="onStiExpandToggle"
     />
 
     <!-- Right: canvas -->
@@ -131,7 +133,8 @@ const canvasEl    = ref(null)
 const overlayEl   = ref(null)
 
 // ---- Local state ----------------------------------------------------------
-const expanded = reactive(new Set())
+const expanded    = reactive(new Set())
+const stiExpanded = reactive(new Set())
 
 const orientation = computed(() => props.options.orientation || 'h')
 
@@ -200,10 +203,12 @@ function paint() {
   const renderOpts = {
     viewMode:         props.options.viewMode,
     expanded,
+    stiExpanded,
     highlightKey:     props.options.highlightKey,
     highlightSegment: props.options.highlightSegment ?? null,
     showGrid:         props.options.showGrid,
     showSti:          props.options.showSti !== false,
+    stiLogScale:      !!props.options.stiLogScale,
     darkMode:         props.options.darkMode,
   }
   if (orientation.value === 'v') {
@@ -279,6 +284,7 @@ function setupHandler() {
     getOptions:  () => ({
       viewMode: props.options.viewMode,
       expanded,
+      stiExpanded,
       orientation: orientation.value,
       showSti: props.options.showSti !== false,
     }),
@@ -288,7 +294,7 @@ function setupHandler() {
       viewport.timeEnd   = vp.timeEnd
       if (vp.scrollY != null) {
         if (props.trace) {
-          const { totalHeight } = buildRowLayout(props.trace, props.options.viewMode, expanded, 0, props.options.showSti !== false)
+          const { totalHeight } = buildRowLayout(props.trace, props.options.viewMode, expanded, 0, props.options.showSti !== false, stiExpanded)
           const maxScrollY = Math.max(0, totalHeight - (viewport.canvasH - RULER_H))
           viewport.scrollY = Math.max(0, Math.min(vp.scrollY, maxScrollY))
         } else {
@@ -389,12 +395,15 @@ function captureAsSvg() {
     expanded,
     darkMode: props.options.darkMode,
     showGrid: props.options.showGrid,
-    showSti:  props.options.showSti !== false,
-    cursors:  props.cursors || [],
+    showSti:     props.options.showSti !== false,
+    stiExpanded,
+    stiLogScale: !!props.options.stiLogScale,
+    cursors:     props.cursors || [],
     marks:    (props.options.marks || []).map(m => [
       m.ns,
       m.label || '',
       m.type === 'annotation' ? '#FF8C00' : '#FFD700',
+      m.type === 'annotation' ? 'annotation' : 'bookmark',
     ]),
   })
   if (!svgStr) return null
@@ -448,7 +457,7 @@ function getCaptureSize() {
     return { captureW, captureH: panelH }
   }
 
-  const { totalHeight } = buildRowLayout(props.trace, props.options.viewMode, expanded, 0, props.options.showSti !== false)
+  const { totalHeight } = buildRowLayout(props.trace, props.options.viewMode, expanded, 0, props.options.showSti !== false, stiExpanded)
   const neededH = RULER_H + Math.max(ROW_H, totalHeight)
   const captureH = Math.max(RULER_H + ROW_H, Math.min(panelH, Math.ceil(neededH)))
   return { captureW: panelW, captureH }
@@ -565,6 +574,7 @@ function getCoreAtViewportCenter() {
     expanded,
     RULER_H - viewport.scrollY,
     props.options.showSti !== false,
+    stiExpanded,
   )
   const coreRows = rows.filter(r => r.type === 'core' || r.type === 'core-task')
   if (coreRows.length === 0) return null
@@ -589,7 +599,7 @@ function getCoreAtViewportCenter() {
 function scrollToTask(mergeKey) {
   if (!props.trace) return
   // Build layout at yStart=0 to get raw row offsets independent of current scrollY
-  const { rows } = buildRowLayout(props.trace, props.options.viewMode, expanded, 0, props.options.showSti !== false)
+  const { rows } = buildRowLayout(props.trace, props.options.viewMode, expanded, 0, props.options.showSti !== false, stiExpanded)
   // In task view: row.key === mergeKey; in core view: match on taskKey's mergeKey
   let targetRow = rows.find(r => r.type === 'task' && r.key === mergeKey)
   if (!targetRow) {
@@ -684,6 +694,13 @@ function onExpandToggle(coreName) {
   scheduleRender()
 }
 
+// ---- Expand / collapse tag-event STI waveform rows -----------------------
+function onStiExpandToggle(channelName) {
+  if (stiExpanded.has(channelName)) stiExpanded.delete(channelName)
+  else stiExpanded.add(channelName)
+  scheduleRender()
+}
+
 function expandAll() {
   if (!props.trace) return
   for (const coreName of props.trace.coreNames) expanded.add(coreName)
@@ -714,7 +731,7 @@ watch([() => props.options.orientation, () => props.options.viewMode], () => {
   scheduleRender()
 })
 // Other visual options that affect segment rendering → full repaint
-watch([() => props.options.highlightKey, () => props.options.highlightSegment, () => props.options.showGrid, () => props.options.showSti, () => props.options.darkMode], () => {
+watch([() => props.options.highlightKey, () => props.options.highlightSegment, () => props.options.showGrid, () => props.options.showSti, () => props.options.darkMode, () => props.options.stiLogScale], () => {
   scheduleRender()
 })
 // Marks are on the overlay — no full repaint needed

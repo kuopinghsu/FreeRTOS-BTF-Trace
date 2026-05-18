@@ -164,9 +164,9 @@ from PyQt5.QtWidgets import (
 # ===========================================================================
 
 # ---- Fonts ----------------------------------------------------------------
-FONT_SIZE     = 10   # Timeline label font size (pt).  Adjustable at runtime
-                     # via the Font spinbox in the toolbar.
-UI_FONT_SIZE  = 10   # Application UI font: menus, toolbar, status bar (pt).
+FONT_SIZE                = 10   # Timeline label font size (pt).  Adjustable at runtime
+                                # via the Font spinbox in the toolbar.
+UI_FONT_SIZE             = 8    # Application UI font: menus, toolbar, status bar (pt).
 
 # ---- Rendering -----------------------------------------------------------
 # Vertical-mode label rendering: use a pre-rendered QPixmap rotated 90° instead
@@ -188,7 +188,7 @@ MIN_SEG_WIDTH            = 1.0  # Minimum painted width of a task segment (px).
 LABEL_BOTTOM_MARGIN      =  10  # Gap (px) between bottom edge of a vertical label and the timeline.
 
 # ---- Performance / Level-of-Detail ----------------------------------------
-_TIMESCALE_PER_PX_DEFAULT       = 2.0    # Initial zoom level (nanoseconds per screen pixel).
+_TIMESCALE_PER_PX_DEFAULT= 2.0    # Initial zoom level (nanoseconds per screen pixel).
 _HOVER_HIGHLIGHT_ENABLED = False  # Highlight task bars when hovering the label (default off).
 # _BatchRowItem.paint() LOD thresholds (Qt levelOfDetail: 1.0 = 100% zoom).
 _PAINT_LOD_COARSE        = 0.45   # Below: merge nearby segments, skip pen outlines.
@@ -8270,6 +8270,7 @@ class MainWindow(QMainWindow):
                          font-size:{_ui_fs}; }}
             QDockWidget::title {{ background:{c['dock_title_bg']}; color:{c['dock_title_fg']};
                                   padding:4px; font-size:{_ui_fs}; }}
+            QMainWindow::separator {{ background:{c['sep']}; width:1px; height:1px; }}
             QPushButton {{ background:{c['mid']}; color:{c['text']};
                          border:1px solid {c['input_border']}; border-radius:3px;
                          padding:3px 10px; font-size:{_ui_fs}; }}
@@ -8441,7 +8442,7 @@ class MainWindow(QMainWindow):
         self._cur_hint = QLabel("Click a row to navigate to that cursor")
         self._cur_hint.setStyleSheet("color:#999; font-size:9pt;")
         cur_v.addWidget(self._cur_hint)
-        marks_tabs.addTab(cur_page, "Cursors")
+        marks_tabs.addTab(cur_page, "Curs.")
 
         bm_page = QWidget()
         bm_v = QVBoxLayout(bm_page)
@@ -8467,7 +8468,7 @@ class MainWindow(QMainWindow):
         bm_btns.addWidget(bm_jump)
         bm_btns.addWidget(bm_del)
         bm_v.addLayout(bm_btns)
-        marks_tabs.addTab(bm_page, "Bookmarks")
+        marks_tabs.addTab(bm_page, "Bookm.")
 
         an_page = QWidget()
         an_v = QVBoxLayout(an_page)
@@ -8500,7 +8501,7 @@ class MainWindow(QMainWindow):
         an_btns.addWidget(an_edit)
         an_btns.addWidget(an_del)
         an_v.addLayout(an_btns)
-        marks_tabs.addTab(an_page, "Annotations")
+        marks_tabs.addTab(an_page, "Anno.")
         marks_v.addWidget(marks_tabs)
         self._range_stats_label = QLabel("Range: place two cursors to measure")
         self._range_stats_label.setStyleSheet("color:#999;")

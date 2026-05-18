@@ -23,12 +23,21 @@ function isCoreName(name) {
 }
 
 // ---- Layout constants (must match CSS in TimelinePanel.vue) ---------------
-export const LABEL_W    = 160  // width of left label column (px)  [DOM, not canvas]
-export const RULER_H    =  40  // height of ruler row (px)
-export const ROW_H      =  24  // task row height (px)
-export const ROW_GAP    =   4  // gap between rows (px)
-export const STI_ROW_H  =  18  // STI channel row height (px)
-export const MIN_SEG_W  =   1  // minimum segment paint width (px)
+export const LABEL_W        = 160  // width of left label column (px)  [DOM, not canvas]
+export const RULER_H        =  40  // height of ruler row (px)
+export const ROW_H          =  24  // task row height (px)
+export const ROW_GAP        =   4  // gap between rows (px)
+export const STI_ROW_H      =  18  // STI channel row height (px)
+export const STI_WAVEFORM_H =  64  // expanded tag-event waveform row height (px)
+export const MIN_SEG_W      =   1  // minimum segment paint width (px)
+
+/**
+ * Returns true if the STI channel name is a tag-event waveform channel.
+ * Matches: tag_event, tag0_event … tag7_event
+ */
+export function isStiTagChannel(name) {
+  return /^tag[0-7]?_event$/.test(name)
+}
 
 // ---- Vertical mode layout constants ----------------------------------------
 export const RULER_W    = 120  // left ruler column width (px) – vertical mode
@@ -93,7 +102,7 @@ function niceStep(span) {
  * @param {number}  yStart     Top Y coordinate of the first row (after ruler).
  * @returns {{ rows: Array, totalHeight: number }}
  */
-export function buildRowLayout(trace, viewMode, expanded, yStart, showSti = true) {
+export function buildRowLayout(trace, viewMode, expanded, yStart, showSti = true, stiExpanded = new Set()) {
   const rows = []
   let y = yStart
 
@@ -128,8 +137,11 @@ export function buildRowLayout(trace, viewMode, expanded, yStart, showSti = true
   // STI rows
   if (showSti) {
     for (const ch of trace.stiChannels) {
-      rows.push({ type: 'sti', key: ch, label: ch, color: '#888', y })
-      y += STI_ROW_H + ROW_GAP
+      const isTag = isStiTagChannel(ch)
+      const isExpanded = isTag && stiExpanded.has(ch)
+      const rowH = isExpanded ? STI_WAVEFORM_H : STI_ROW_H
+      rows.push({ type: 'sti', key: ch, label: ch, color: '#888', y, isTag, isExpanded })
+      y += rowH + ROW_GAP
     }
   }
 
@@ -158,6 +170,8 @@ export function render(ctx, trace, viewport, options = {}) {
     hoverTime   = null,
     marks       = [],
     showSti     = true,
+    stiExpanded = new Set(),
+    stiLogScale = false,
   } = options
   const highlightSegment = options.highlightSegment ?? null
 
@@ -180,7 +194,7 @@ export function render(ctx, trace, viewport, options = {}) {
   ctx.fillRect(0, 0, canvasW, RULER_H)
 
   // ---- Row layout ----
-  const { rows } = buildRowLayout(trace, viewMode, expanded, RULER_H - scrollY, showSti)
+  const { rows } = buildRowLayout(trace, viewMode, expanded, RULER_H - scrollY, showSti, stiExpanded)
 
   // ---- Grid lines (optional) ----
   if (showGrid) {
@@ -209,7 +223,8 @@ export function render(ctx, trace, viewport, options = {}) {
   // ---- Task / Core rows ----
   for (const row of rows) {
     const rowY = row.y
-    if (rowY + ROW_H < RULER_H || rowY > canvasH) continue  // row not visible
+    const rowH = row.type === 'sti' ? (row.isExpanded ? STI_WAVEFORM_H : STI_ROW_H) : ROW_H
+    if (rowY + rowH < RULER_H || rowY > canvasH) continue  // row not visible
 
     if (row.type === 'task') {
       drawTaskRow(ctx, trace, row, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, darkMode, highlightSegment)
@@ -218,7 +233,7 @@ export function render(ctx, trace, viewport, options = {}) {
     } else if (row.type === 'core-task') {
       drawCoreTaskRow(ctx, trace, row, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, darkMode, highlightSegment)
     } else if (row.type === 'sti') {
-      drawStiRow(ctx, trace, row, timeStart, timeEnd, pxPerNs, darkMode)
+      drawStiRow(ctx, trace, row, timeStart, timeEnd, pxPerNs, darkMode, stiLogScale)
     }
   }
 
@@ -618,7 +633,12 @@ function drawCoreTaskRow(ctx, trace, row, timeStart, timeEnd, pxPerNs, nsPerPx, 
     row.y + 1, ROW_H - 2, row.color, trace, false, highlightKey, mk, darkMode, row.label, hlSeg)
 }
 
-function drawStiRow(ctx, trace, row, timeStart, timeEnd, pxPerNs, darkMode) {
+function drawStiRow(ctx, trace, row, timeStart, timeEnd, pxPerNs, darkMode, logScale = false) {
+  if (row.isExpanded) {
+    drawStiWaveformRow(ctx, trace, row, timeStart, timeEnd, pxPerNs, darkMode, logScale)
+    return
+  }
+
   const rowY = row.y
   const evs = trace.stiEventsByTarget.get(row.key) || []
   const starts = trace.stiStartsByTarget.get(row.key) || []
@@ -648,6 +668,179 @@ function drawStiRow(ctx, trace, row, timeStart, timeEnd, pxPerNs, darkMode) {
     ctx.fill()
     ctx.stroke()
   }
+  ctx.restore()
+}
+
+/**
+ * Draw an expanded tag-event STI channel as an analog line-chart waveform.
+ * Values are mapped: 0 → bottom of row, 100 → top of row.
+ * Points outside [0,100] are clamped. The line holds the last value (step-hold)
+ * until the next event.
+ */
+function drawStiWaveformRow(ctx, trace, row, timeStart, timeEnd, pxPerNs, darkMode, logScale = false) {
+  const rowY = row.y
+  const rowH = STI_WAVEFORM_H
+  const canvasW = ctx.canvas.clientWidth
+
+  const evs = trace.stiEventsByTarget.get(row.key) || []
+  const starts = trace.stiStartsByTarget.get(row.key) || []
+
+  // Row background
+  ctx.fillStyle = darkMode ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.03)'
+  ctx.fillRect(0, rowY, canvasW, rowH)
+
+  // Axis lines at scale 0 and scale 100
+  const PAD = 4
+  const chartTop    = rowY + PAD
+  const chartBottom = rowY + rowH - PAD
+  const chartH      = chartBottom - chartTop
+
+  const axisColor = darkMode ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.12)'
+  ctx.strokeStyle = axisColor
+  ctx.lineWidth = 0.5
+  ctx.setLineDash([3, 3])
+  ctx.beginPath()
+  ctx.moveTo(0, chartBottom + 0.5)
+  ctx.lineTo(canvasW, chartBottom + 0.5)
+  ctx.stroke()
+  ctx.beginPath()
+  ctx.moveTo(0, chartTop + 0.5)
+  ctx.lineTo(canvasW, chartTop + 0.5)
+  ctx.stroke()
+  ctx.setLineDash([])
+
+  // Scale labels — will be replaced with real min/max after we compute them,
+  // so we defer the label draw to after evVal/valMin/valMax are known.
+  // (labels are drawn later in this function)
+
+  if (evs.length === 0) return
+
+  // Helper: extract numeric value from an event (note field holds the value,
+  // e.g. "12345,Core_0,0,STI,tag0_event,0,trigger,42" → note="42")
+  function evVal(ev) {
+    return parseFloat(ev.note !== '' ? ev.note : ev.event)
+  }
+
+  // Compute global min/max across the entire channel so the scale stays
+  // stable while panning/zooming.
+  let valMin = Infinity, valMax = -Infinity
+  for (let i = 0; i < evs.length; i++) {
+    const v = evVal(evs[i])
+    if (isNaN(v)) continue
+    if (v < valMin) valMin = v
+    if (v > valMax) valMax = v
+  }
+  if (!isFinite(valMin)) return   // no numeric values at all — nothing to draw
+
+  // If all values are identical give a tiny ±1 padding so the line is visible
+  if (valMin === valMax) { valMin -= 1; valMax += 1 }
+
+  // Log₂ transform: signed log2 so it handles zero and negatives gracefully.
+  // signedLog2(v) = sign(v) * log2(1 + |v|)
+  function signedLog2(v) {
+    return Math.sign(v) * Math.log2(1 + Math.abs(v))
+  }
+
+  const mappedMin = logScale ? signedLog2(valMin) : valMin
+  const mappedMax = logScale ? signedLog2(valMax) : valMax
+  const mappedRange = mappedMax - mappedMin
+
+  // Helper: map a numeric value to canvas Y (valMin = bottom, valMax = top)
+  function valToY(v) {
+    const mapped = logScale ? signedLog2(v) : v
+    return chartBottom - ((mapped - mappedMin) / mappedRange) * chartH
+  }
+
+  // Find events in the visible range (extend one step before/after for step-hold)
+  const lo = Math.max(0, bisectLeft(starts, timeStart) - 1)
+  const hi = Math.min(evs.length, bisectRight(starts, timeEnd) + 1)
+
+  // Gather the slice we'll draw
+  const slice = evs.slice(lo, hi)
+  if (slice.length === 0) return
+
+  const lineColor = darkMode ? '#5BC8FF' : '#0070CC'
+  const dotColor  = darkMode ? '#80DFFF' : '#0050AA'
+
+  // Draw axis labels now that we know the real scale
+  function fmtVal(v) {
+    if (Math.abs(v) >= 1e6) return (v / 1e6).toFixed(2) + 'M'
+    if (Math.abs(v) >= 1e3) return (v / 1e3).toFixed(1) + 'k'
+    return String(Math.round(v))
+  }
+  ctx.font = '9px monospace'
+  ctx.textAlign = 'right'
+  ctx.textBaseline = 'bottom'
+  ctx.fillStyle = darkMode ? 'rgba(255,255,255,0.3)' : 'rgba(0,0,0,0.3)'
+  ctx.fillText(fmtVal(valMax), canvasW - 2, chartTop + 10)
+  ctx.textBaseline = 'top'
+  ctx.fillText(fmtVal(valMin), canvasW - 2, chartBottom - 10)
+  if (logScale) {
+    ctx.textAlign = 'left'
+    ctx.textBaseline = 'top'
+    ctx.fillStyle = darkMode ? 'rgba(91,200,255,0.55)' : 'rgba(0,100,200,0.55)'
+    ctx.fillText('log₂', 4, chartTop + 2)
+  }
+
+  ctx.save()
+  ctx.beginPath()
+  ctx.rect(0, rowY, canvasW, rowH)
+  ctx.clip()
+
+  ctx.strokeStyle = lineColor
+  ctx.lineWidth = 1.5
+  ctx.lineJoin = 'round'
+
+  let firstPoint = true
+  for (let i = 0; i < slice.length; i++) {
+    const ev = slice[i]
+    const val = evVal(ev)
+    if (isNaN(val)) continue
+
+    const cx = (ev.time - timeStart) * pxPerNs
+    const cy = valToY(val)
+
+    if (firstPoint) {
+      // If there is a prior event off-screen to the left, start the line from
+      // the interpolated position at the canvas left edge.
+      if (lo > 0) {
+        const prevEv  = evs[lo - 1]
+        const prevVal = evVal(prevEv)
+        if (!isNaN(prevVal)) {
+          const prevCx = (prevEv.time - timeStart) * pxPerNs
+          const prevCy = valToY(prevVal)
+          // Linear interpolation to x=0
+          const t = prevCx === cx ? 0 : (0 - prevCx) / (cx - prevCx)
+          const startCy = prevCy + t * (cy - prevCy)
+          ctx.beginPath()
+          ctx.moveTo(0, startCy)
+          ctx.lineTo(cx, cy)
+          firstPoint = false
+          continue
+        }
+      }
+      ctx.beginPath()
+      ctx.moveTo(cx, cy)
+      firstPoint = false
+    } else {
+      ctx.lineTo(cx, cy)   // straight line to next point
+    }
+  }
+  ctx.stroke()
+
+  // Draw dots at each sample point
+  ctx.fillStyle = dotColor
+  for (let i = 0; i < slice.length; i++) {
+    const ev = slice[i]
+    const val = evVal(ev)
+    if (isNaN(val)) continue
+    const cx = (ev.time - timeStart) * pxPerNs
+    const cy = valToY(val)
+    ctx.beginPath()
+    ctx.arc(cx, cy, 2.5, 0, Math.PI * 2)
+    ctx.fill()
+  }
+
   ctx.restore()
 }
 
@@ -738,15 +931,16 @@ export function drawHoverLine(ctx, t, trace, timeStart, pxPerNs, canvasW, canvas
 export function hitTestSti(trace, viewport, options, cx, cy, radius = 8) {
   const { timeStart, timeEnd, scrollY, canvasW } = viewport
   const pxPerNs = canvasW / (timeEnd - timeStart)
-  const { viewMode = 'task', expanded = new Set(), showSti = true } = options
+  const { viewMode = 'task', expanded = new Set(), showSti = true, stiExpanded = new Set() } = options
   if (!showSti) return null
 
-  const { rows } = buildRowLayout(trace, viewMode, expanded, RULER_H - scrollY, showSti)
+  const { rows } = buildRowLayout(trace, viewMode, expanded, RULER_H - scrollY, showSti, stiExpanded)
 
   for (const row of rows) {
     if (row.type !== 'sti') continue
-    const cy_row = row.y + STI_ROW_H / 2
-    if (Math.abs(cy - cy_row) > radius * 2) continue
+    const rowH = row.isExpanded ? STI_WAVEFORM_H : STI_ROW_H
+    const cy_row = row.y + rowH / 2
+    if (Math.abs(cy - cy_row) > rowH) continue
 
     const evs = trace.stiEventsByTarget.get(row.key) || []
     const starts = trace.stiStartsByTarget.get(row.key) || []
@@ -771,10 +965,11 @@ export function hitTestSti(trace, viewport, options, cx, cy, radius = 8) {
  */
 export function hitTestRow(trace, viewport, options, cx, cy) {
   const { scrollY } = viewport
-  const { viewMode = 'task', expanded = new Set(), showSti = true } = options
-  const { rows } = buildRowLayout(trace, viewMode, expanded, RULER_H - scrollY, showSti)
+  const { viewMode = 'task', expanded = new Set(), showSti = true, stiExpanded = new Set() } = options
+  const { rows } = buildRowLayout(trace, viewMode, expanded, RULER_H - scrollY, showSti, stiExpanded)
   for (const row of rows) {
-    if (cy >= row.y && cy < row.y + (row.type === 'sti' ? STI_ROW_H : ROW_H)) {
+    const rowH = row.type === 'sti' ? (row.isExpanded ? STI_WAVEFORM_H : STI_ROW_H) : ROW_H
+    if (cy >= row.y && cy < row.y + rowH) {
       return row
     }
   }
@@ -791,10 +986,10 @@ export function hitTestRow(trace, viewport, options, cx, cy) {
  */
 export function hitTestSegment(trace, viewport, options, cx, cy) {
   const { timeStart, timeEnd, scrollY, canvasW } = viewport
-  const { viewMode = 'task', expanded = new Set(), showSti = true } = options
+  const { viewMode = 'task', expanded = new Set(), showSti = true, stiExpanded = new Set() } = options
   if (cy < RULER_H) return null
   const pxPerNs = canvasW / (timeEnd - timeStart)
-  const { rows } = buildRowLayout(trace, viewMode, expanded, RULER_H - scrollY, showSti)
+  const { rows } = buildRowLayout(trace, viewMode, expanded, RULER_H - scrollY, showSti, stiExpanded)
 
   let row = null
   for (const r of rows) {

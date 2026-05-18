@@ -7,7 +7,7 @@
  */
 
 import {
-  LABEL_W, RULER_H, ROW_H, ROW_GAP, STI_ROW_H, MIN_SEG_W,
+  LABEL_W, RULER_H, ROW_H, ROW_GAP, STI_ROW_H, STI_WAVEFORM_H, MIN_SEG_W,
   buildRowLayout, formatTime,
 } from './TimelineRenderer.js'
 import { taskColor, taskDisplayName, taskMergeKey, stiNoteColor } from '../utils/colors.js'
@@ -63,13 +63,20 @@ export function renderToSvg(trace, viewport, options = {}) {
     showGrid  = false,
     cursors   = [],
     marks     = [],
-    showSti   = true,
+    showSti     = true,
+    stiExpanded = new Set(),
+    stiLogScale = false,
   } = options
 
   const timeSpan = timeEnd - timeStart
   if (timeSpan <= 0 || canvasW <= 0 || canvasH <= 0) return ''
 
   const pxPerNs = canvasW / timeSpan
+
+  // canvasW is the timeline-only canvas width (label column is a separate DOM element).
+  // In the SVG we place both side by side, so the total SVG width is wider.
+  const OX   = LABEL_W          // x-offset: all timeline content starts here
+  const svgW = canvasW + LABEL_W // total SVG width
 
   // --- Colour scheme ---
   const bgColor   = darkMode ? '#1E1E1E' : '#FFFFFF'
@@ -87,22 +94,23 @@ export function renderToSvg(trace, viewport, options = {}) {
   let clipId = 0
 
   // Full background
-  els.push(`<rect width="${canvasW}" height="${canvasH}" fill="${bgColor}"/>`)
+  els.push(`<rect width="${svgW}" height="${canvasH}" fill="${bgColor}"/>`)
 
-  // Ruler background
-  els.push(`<rect x="0" y="0" width="${canvasW}" height="${RULER_H}" fill="${rulerBg}"/>`)
+  // Ruler background (full width)
+  els.push(`<rect x="0" y="0" width="${svgW}" height="${RULER_H}" fill="${rulerBg}"/>`)
 
   // Row layout (mirrors TimelineRenderer.js buildRowLayout call)
-  const { rows } = buildRowLayout(trace, viewMode, expanded, RULER_H - scrollY, showSti)
+  const { rows } = buildRowLayout(trace, viewMode, expanded, RULER_H - scrollY, showSti, stiExpanded)
 
   // ---- Grid lines (optional) ----
   if (showGrid) {
     const step = niceStep(timeSpan)
     const startSnap = Math.ceil(timeStart / step) * step
     for (let t = startSnap; t <= timeEnd; t += step) {
-      const x = (t - timeStart) * pxPerNs
-      if (x >= 0 && x <= canvasW) {
-        els.push(`<line x1="${x.toFixed(1)}" y1="${RULER_H}" x2="${x.toFixed(1)}" y2="${canvasH}" stroke="${gridColor}" stroke-width="1"/>`)
+      const rawX = (t - timeStart) * pxPerNs
+      if (rawX >= 0 && rawX <= canvasW) {
+        const x = (OX + rawX).toFixed(1)
+        els.push(`<line x1="${x}" y1="${RULER_H}" x2="${x}" y2="${canvasH}" stroke="${gridColor}" stroke-width="1"/>`)
       }
     }
   }
@@ -110,14 +118,15 @@ export function renderToSvg(trace, viewport, options = {}) {
   // ---- Row backgrounds ----
   for (let i = 0; i < rows.length; i++) {
     const row  = rows[i]
-    const rowH = row.type === 'sti' ? STI_ROW_H : ROW_H
+    const rowH = row.type === 'sti' ? (row.isExpanded ? STI_WAVEFORM_H : STI_ROW_H) : ROW_H
     if (row.y + rowH < 0 || row.y >= canvasH) continue
     const bg = row.type === 'sti' ? stiBg : (i % 2 === 0 ? evenBg : oddBg)
-    els.push(`<rect x="0" y="${row.y.toFixed(1)}" width="${canvasW}" height="${rowH}" fill="${bg}"/>`)
-    // Separator line
+    // Row background covers only the timeline area (label column drawn separately)
+    els.push(`<rect x="${OX}" y="${row.y.toFixed(1)}" width="${canvasW}" height="${rowH}" fill="${bg}"/>`)
+    // Separator line spans full row width
     if (row.type !== 'sti') {
       const sepY = (row.y + rowH + ROW_GAP - 1).toFixed(1)
-      els.push(`<line x1="0" y1="${sepY}" x2="${canvasW}" y2="${sepY}" stroke="${sepColor}" stroke-width="0.5"/>`)
+      els.push(`<line x1="0" y1="${sepY}" x2="${svgW}" y2="${sepY}" stroke="${sepColor}" stroke-width="0.5"/>`)
     }
   }
 
@@ -132,11 +141,12 @@ export function renderToSvg(trace, viewport, options = {}) {
 
     for (const seg of segs) {
       if (seg.end <= timeStart || seg.start >= timeEnd) continue
-      const x1 = (seg.start - timeStart) * pxPerNs
-      const x2 = (seg.end   - timeStart) * pxPerNs
-      const w  = Math.max(MIN_SEG_W, x2 - x1)
-      if (x1 + w < 0 || x1 > canvasW) continue
+      const rawX1 = (seg.start - timeStart) * pxPerNs
+      const rawX2 = (seg.end   - timeStart) * pxPerNs
+      const w     = Math.max(MIN_SEG_W, rawX2 - rawX1)
+      if (rawX1 + w < 0 || rawX1 > canvasW) continue
 
+      const x1 = OX + rawX1
       const repr  = trace.taskRepr?.get(taskMergeKey(seg.task)) ?? seg.task
       const color = taskColor(taskMergeKey(seg.task), repr)
       els.push(
@@ -168,22 +178,90 @@ export function renderToSvg(trace, viewport, options = {}) {
     }
   }
 
-  // ---- STI markers ----
+  // ---- STI markers / waveforms ----
   for (const row of rows) {
     if (row.type !== 'sti') continue
-    const rowH = STI_ROW_H
+    const rowH = row.isExpanded ? STI_WAVEFORM_H : STI_ROW_H
     if (row.y + rowH < 0 || row.y > canvasH) continue
 
-    const evs  = trace.stiEventsByTarget?.get(row.key) ?? []
-    const midY = row.y + rowH / 2
+    const evs = trace.stiEventsByTarget?.get(row.key) ?? []
 
-    for (const ev of evs) {
-      if (ev.time < timeStart || ev.time > timeEnd) continue
-      const x     = (ev.time - timeStart) * pxPerNs
-      const color = stiNoteColor(ev.note)
-      const hw = 4, h = 6
-      const pts = `${x.toFixed(1)},${(midY - h).toFixed(1)} ${(x - hw).toFixed(1)},${midY.toFixed(1)} ${(x + hw).toFixed(1)},${midY.toFixed(1)}`
-      els.push(`<polygon points="${pts}" fill="${color}"/>`)
+    if (row.isExpanded) {
+      // ---- Expanded waveform ----
+      if (evs.length === 0) continue
+      const PAD         = 4
+      const chartTop    = row.y + PAD
+      const chartBottom = row.y + rowH - PAD
+      const chartHt     = chartBottom - chartTop
+
+      const evVal = ev => parseFloat(ev.note !== '' ? ev.note : ev.event)
+
+      let valMin = Infinity, valMax = -Infinity
+      for (const ev of evs) {
+        const v = evVal(ev)
+        if (!isNaN(v)) { if (v < valMin) valMin = v; if (v > valMax) valMax = v }
+      }
+      if (!isFinite(valMin)) continue
+      if (valMin === valMax) { valMin -= 1; valMax += 1 }
+
+      const signedLog2  = v => Math.sign(v) * Math.log2(1 + Math.abs(v))
+      const mappedMin   = stiLogScale ? signedLog2(valMin) : valMin
+      const mappedMax   = stiLogScale ? signedLog2(valMax) : valMax
+      const mappedRange = mappedMax - mappedMin
+      const valToY      = v => chartBottom - (((stiLogScale ? signedLog2(v) : v) - mappedMin) / mappedRange) * chartHt
+
+      // Axis dashed lines (span timeline area only)
+      const axisColor = darkMode ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.12)'
+      els.push(`<line x1="${OX}" y1="${chartBottom.toFixed(1)}" x2="${svgW}" y2="${chartBottom.toFixed(1)}" stroke="${axisColor}" stroke-width="0.5" stroke-dasharray="3,3"/>`)
+      els.push(`<line x1="${OX}" y1="${chartTop.toFixed(1)}" x2="${svgW}" y2="${chartTop.toFixed(1)}" stroke="${axisColor}" stroke-width="0.5" stroke-dasharray="3,3"/>`)
+
+      // Axis value labels
+      const fmtVal   = v => Math.abs(v) >= 1e6 ? (v / 1e6).toFixed(2) + 'M' : Math.abs(v) >= 1e3 ? (v / 1e3).toFixed(1) + 'k' : String(Math.round(v))
+      const dimColor = darkMode ? 'rgba(255,255,255,0.3)' : 'rgba(0,0,0,0.3)'
+      els.push(`<text x="${svgW - 2}" y="${(chartTop + 10).toFixed(1)}" text-anchor="end" fill="${dimColor}" font-family="monospace" font-size="9">${esc(fmtVal(valMax))}</text>`)
+      els.push(`<text x="${svgW - 2}" y="${(chartBottom - 2).toFixed(1)}" text-anchor="end" fill="${dimColor}" font-family="monospace" font-size="9">${esc(fmtVal(valMin))}</text>`)
+      if (stiLogScale) {
+        const scaleColor = darkMode ? 'rgba(91,200,255,0.55)' : 'rgba(0,100,200,0.55)'
+        els.push(`<text x="${OX + 4}" y="${(chartTop + 2).toFixed(1)}" dominant-baseline="hanging" fill="${scaleColor}" font-family="monospace" font-size="9">log&#x2082;</text>`)
+      }
+
+      // Clip region (timeline area only)
+      const wfClipId = `wf-${clipId++}`
+      defs.push(`<clipPath id="${wfClipId}"><rect x="${OX}" y="${row.y.toFixed(1)}" width="${canvasW}" height="${rowH}"/></clipPath>`)
+
+      // Polyline (include one event before range for step-hold continuity)
+      const lineColor = darkMode ? '#5BC8FF' : '#0070CC'
+      const dotColor  = darkMode ? '#80DFFF' : '#0050AA'
+      let prevEv = null
+      const rangeEvs = []
+      for (const ev of evs) {
+        if (ev.time < timeStart) { prevEv = ev }
+        else if (ev.time <= timeEnd) { rangeEvs.push(ev) }
+      }
+      const pts = []
+      if (prevEv) { const pv = evVal(prevEv); if (!isNaN(pv)) pts.push(`${OX},${valToY(pv).toFixed(1)}`) }
+      for (const ev of rangeEvs) {
+        const v = evVal(ev)
+        if (!isNaN(v)) pts.push(`${(OX + (ev.time - timeStart) * pxPerNs).toFixed(1)},${valToY(v).toFixed(1)}`)
+      }
+      if (pts.length >= 2) {
+        els.push(`<polyline points="${pts.join(' ')}" fill="none" stroke="${lineColor}" stroke-width="1.5" stroke-linejoin="round" clip-path="url(#${wfClipId})"/>`)
+      }
+      for (const ev of rangeEvs) {
+        const v = evVal(ev); if (isNaN(v)) continue
+        els.push(`<circle cx="${(OX + (ev.time - timeStart) * pxPerNs).toFixed(1)}" cy="${valToY(v).toFixed(1)}" r="2.5" fill="${dotColor}" clip-path="url(#${wfClipId})"/>`)
+      }
+    } else {
+      // ---- Collapsed: diamond markers ----
+      const midY = row.y + STI_ROW_H / 2
+      for (const ev of evs) {
+        if (ev.time < timeStart || ev.time > timeEnd) continue
+        const x     = OX + (ev.time - timeStart) * pxPerNs
+        const color = stiNoteColor(ev.note)
+        const hw = 4, h = 6
+        const pts = `${x.toFixed(1)},${(midY - h).toFixed(1)} ${(x - hw).toFixed(1)},${midY.toFixed(1)} ${(x + hw).toFixed(1)},${midY.toFixed(1)}`
+        els.push(`<polygon points="${pts}" fill="${color}"/>`)
+      }
     }
   }
 
@@ -192,8 +270,9 @@ export function renderToSvg(trace, viewport, options = {}) {
     const step      = niceStep(timeSpan)
     const startSnap = Math.ceil(timeStart / step) * step
     for (let t = startSnap; t <= timeEnd; t += step) {
-      const x = (t - timeStart) * pxPerNs
-      if (x < 0 || x > canvasW) continue
+      const rawX = (t - timeStart) * pxPerNs
+      if (rawX < 0 || rawX > canvasW) continue
+      const x = OX + rawX
       els.push(`<line x1="${x.toFixed(1)}" y1="${RULER_H - 6}" x2="${x.toFixed(1)}" y2="${RULER_H}" stroke="${rulerText}" stroke-width="1"/>`)
       els.push(
         `<text x="${(x + 3).toFixed(1)}" y="${RULER_H - 9}" ` +
@@ -203,12 +282,10 @@ export function renderToSvg(trace, viewport, options = {}) {
     }
   }
 
-  // ---- Row labels (right-side fixed column — drawn last so always visible) ----
-  // Clip text to LABEL_W characters using SVG clipPath is complex; instead we
-  // just draw the label in the left LABEL_W column and truncate the string.
+  // ---- Row labels (left fixed column) ----
   for (let i = 0; i < rows.length; i++) {
     const row  = rows[i]
-    const rowH = row.type === 'sti' ? STI_ROW_H : ROW_H
+    const rowH = row.type === 'sti' ? (row.isExpanded ? STI_WAVEFORM_H : STI_ROW_H) : ROW_H
     if (row.y + rowH < 0 || row.y > canvasH) continue
 
     const midY       = row.y + rowH / 2
@@ -217,8 +294,8 @@ export function renderToSvg(trace, viewport, options = {}) {
     const label      = rawLabel.length > maxChars ? rawLabel.slice(0, maxChars - 1) + '…' : rawLabel
     const labelColor = row.type === 'sti' ? '#88AABB' : (row.type === 'core' ? '#E0E0E0' : textColor)
 
-    // Label background to separate from segments
-    els.push(`<rect x="0" y="${row.y.toFixed(1)}" width="${LABEL_W}" height="${rowH}" fill="${darkMode ? '#1E1E1E' : '#F8F8F8'}" opacity="0.92"/>`)
+    // Opaque label column background (matches separate LabelColumn DOM element)
+    els.push(`<rect x="0" y="${row.y.toFixed(1)}" width="${LABEL_W}" height="${rowH}" fill="${darkMode ? '#1E1E1E' : '#F8F8F8'}"/>`)
     els.push(
       `<text x="4" y="${midY.toFixed(1)}" ` +
       `fill="${labelColor}" font-family="monospace" font-size="10" dominant-baseline="middle">` +
@@ -226,7 +303,7 @@ export function renderToSvg(trace, viewport, options = {}) {
     )
   }
 
-  // Corner (ruler × label column overlap)
+  // Corner (ruler × label column)
   els.push(`<rect x="0" y="0" width="${LABEL_W}" height="${RULER_H}" fill="${darkMode ? '#1A1A1A' : '#E8E8E8'}"/>`)
   els.push(
     `<text x="4" y="${RULER_H / 2}" fill="${rulerText}" font-family="monospace" font-size="10" dominant-baseline="middle">` +
@@ -236,36 +313,70 @@ export function renderToSvg(trace, viewport, options = {}) {
   // ---- Cursor lines ----
   const CURSOR_COLORS = ['#FF4444','#44FF88','#4499FF','#FFAA22','#FF44FF','#44FFFF','#FFFF44','#CC44FF']
   cursors.forEach((cur, idx) => {
-    if (!cur || cur.ns == null) return
-    const x = (cur.ns - timeStart) * pxPerNs
-    if (x < 0 || x > canvasW) return
+    if (cur == null) return
+    const rawX = (cur - timeStart) * pxPerNs
+    if (rawX < 0 || rawX > canvasW) return
+    const x     = OX + rawX
     const color = CURSOR_COLORS[idx % CURSOR_COLORS.length]
     els.push(
-      `<line x1="${x.toFixed(1)}" y1="${RULER_H}" x2="${x.toFixed(1)}" y2="${canvasH}" ` +
-      `stroke="${color}" stroke-width="1.2" stroke-dasharray="4,3"/>`
+      `<line x1="${x.toFixed(1)}" y1="0" x2="${x.toFixed(1)}" y2="${canvasH}" ` +
+      `stroke="${color}" stroke-width="1.5" stroke-dasharray="4,3"/>`
     )
+    // Time label badge in ruler
+    const timeLabel = formatTime(cur, trace.timeScale)
+    const badgeW = timeLabel.length * 6 + 8
+    const lx = Math.min(x + 2, svgW - badgeW - 2)
+    els.push(`<rect x="${lx.toFixed(1)}" y="2" width="${badgeW}" height="14" fill="${color}" rx="2"/>`)
+    els.push(`<text x="${(lx + 4).toFixed(1)}" y="3" dominant-baseline="hanging" fill="#000" font-family="monospace" font-size="10" font-weight="bold">${esc(timeLabel)}</text>`)
   })
 
-  // ---- Mark lines ----
-  for (const [ns, label, color] of marks) {
-    const x = (ns - timeStart) * pxPerNs
-    if (x < 0 || x > canvasW) continue
+  // ---- Mark lines (mirrors drawMarksHorizontal canvas behavior) ----
+  for (const [ns, label, color, type = 'bookmark'] of marks) {
+    const rawX = (ns - timeStart) * pxPerNs
+    if (rawX < 0 || rawX > canvasW) continue
+    const x = OX + rawX
+    const isAnnotation = type === 'annotation'
+
+    // Vertical line — starts at RULER_H
     els.push(
-      `<line x1="${x.toFixed(1)}" y1="0" x2="${x.toFixed(1)}" y2="${canvasH}" ` +
-      `stroke="${color}" stroke-width="1" stroke-dasharray="4,2" opacity="0.8"/>`
+      `<line x1="${x.toFixed(1)}" y1="${RULER_H}" x2="${x.toFixed(1)}" y2="${canvasH}" ` +
+      `stroke="${color}" stroke-width="${isAnnotation ? '1.0' : '1.2'}" ` +
+      (isAnnotation ? `stroke-dasharray="6,3" ` : '') +
+      `opacity="0.75"/>`
     )
-    if (label) {
-      els.push(
-        `<text x="${(x + 3).toFixed(1)}" y="${RULER_H + 14}" ` +
-        `fill="${color}" font-family="monospace" font-size="9">${esc(label)}</text>`
-      )
+
+    // Triangle flag at ruler edge
+    const halfW = 4
+    const tipY  = RULER_H - 2
+    const baseY = tipY - 6
+    if (isAnnotation) {
+      const midY = (baseY + tipY) / 2
+      els.push(`<polygon points="${x},${baseY} ${x + halfW},${midY} ${x},${tipY} ${x - halfW},${midY}" fill="${color}"/>`)
+    } else {
+      els.push(`<polygon points="${x - halfW},${baseY} ${x + halfW},${baseY} ${x},${tipY}" fill="${color}"/>`)
+    }
+
+    // Time badge at top of ruler area
+    const timeLabel = formatTime(ns, trace.timeScale)
+    const timeW = timeLabel.length * 6 + 8
+    const tx = Math.min(x + 2, svgW - timeW - 2)
+    els.push(`<rect x="${tx.toFixed(1)}" y="2" width="${timeW}" height="14" fill="${color}" rx="2" opacity="0.85"/>`)
+    els.push(`<text x="${(tx + 4).toFixed(1)}" y="3" dominant-baseline="hanging" fill="#000" font-family="monospace" font-size="10">${esc(timeLabel)}</text>`)
+
+    // User label badge in ruler area (bottom)
+    const ltext = label || ''
+    if (ltext) {
+      const estW = ltext.length * 6 + 8
+      const lx   = Math.min(x + 3, svgW - estW - 2)
+      els.push(`<rect x="${lx.toFixed(1)}" y="${RULER_H - 16}" width="${estW}" height="13" fill="${color}" rx="1" opacity="0.85"/>`)
+      els.push(`<text x="${(lx + 4).toFixed(1)}" y="${RULER_H - 14}" dominant-baseline="hanging" fill="#000" font-family="monospace" font-size="10">${esc(ltext)}</text>`)
     }
   }
 
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" ` +
-    `width="${canvasW}" height="${canvasH}" ` +
-    `viewBox="0 0 ${canvasW} ${canvasH}">\n` +
+    `width="${svgW}" height="${canvasH}" ` +
+    `viewBox="0 0 ${svgW} ${canvasH}">\n` +
     (defs.length ? `<defs>\n${defs.join('\n')}\n</defs>\n` : '') +
     els.join('\n') +
     `\n</svg>`

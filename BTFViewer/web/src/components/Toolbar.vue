@@ -299,6 +299,15 @@
       STI
     </label>
 
+    <label
+      class="tb-btn"
+      :class="{ active: modelValue.stiLogScale }"
+      title="Toggle STI waveform scale: Linear / Log₂"
+      @click="emit('update:modelValue', { ...modelValue, stiLogScale: !modelValue.stiLogScale })"
+    >
+      Log&#8322;
+    </label>
+
     <!-- Dark mode toggle -->
     <label
       class="tb-btn"
