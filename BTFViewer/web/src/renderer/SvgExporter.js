@@ -93,14 +93,25 @@ export function renderToSvg(trace, viewport, options = {}) {
   const defs = []
   let clipId = 0
 
+  // Row layout (mirrors TimelineRenderer.js buildRowLayout call)
+  const { rows } = buildRowLayout(trace, viewMode, expanded, RULER_H - scrollY, showSti, stiExpanded)
+
+  // Compute the actual rendered height — the bottom of the last visible row.
+  // Using canvasH (the full window height) leaves blank space when the task list
+  // is small; svgH trims the SVG to exactly the content that is present.
+  let svgH = RULER_H
+  for (const row of rows) {
+    const rowH = row.type === 'sti' ? (row.isExpanded ? STI_WAVEFORM_H : STI_ROW_H) : ROW_H
+    if (row.y >= canvasH || row.y + rowH < 0) continue
+    const bottom = Math.min(row.y + rowH + ROW_GAP, canvasH)
+    if (bottom > svgH) svgH = bottom
+  }
+
   // Full background
-  els.push(`<rect width="${svgW}" height="${canvasH}" fill="${bgColor}"/>`)
+  els.push(`<rect width="${svgW}" height="${svgH}" fill="${bgColor}"/>`)
 
   // Ruler background (full width)
   els.push(`<rect x="0" y="0" width="${svgW}" height="${RULER_H}" fill="${rulerBg}"/>`)
-
-  // Row layout (mirrors TimelineRenderer.js buildRowLayout call)
-  const { rows } = buildRowLayout(trace, viewMode, expanded, RULER_H - scrollY, showSti, stiExpanded)
 
   // ---- Grid lines (optional) ----
   if (showGrid) {
@@ -110,7 +121,7 @@ export function renderToSvg(trace, viewport, options = {}) {
       const rawX = (t - timeStart) * pxPerNs
       if (rawX >= 0 && rawX <= canvasW) {
         const x = (OX + rawX).toFixed(1)
-        els.push(`<line x1="${x}" y1="${RULER_H}" x2="${x}" y2="${canvasH}" stroke="${gridColor}" stroke-width="1"/>`)
+        els.push(`<line x1="${x}" y1="${RULER_H}" x2="${x}" y2="${svgH}" stroke="${gridColor}" stroke-width="1"/>`)
       }
     }
   }
@@ -319,7 +330,7 @@ export function renderToSvg(trace, viewport, options = {}) {
     const x     = OX + rawX
     const color = CURSOR_COLORS[idx % CURSOR_COLORS.length]
     els.push(
-      `<line x1="${x.toFixed(1)}" y1="0" x2="${x.toFixed(1)}" y2="${canvasH}" ` +
+      `<line x1="${x.toFixed(1)}" y1="0" x2="${x.toFixed(1)}" y2="${svgH}" ` +
       `stroke="${color}" stroke-width="1.5" stroke-dasharray="4,3"/>`
     )
     // Time label badge in ruler
@@ -339,7 +350,7 @@ export function renderToSvg(trace, viewport, options = {}) {
 
     // Vertical line — starts at RULER_H
     els.push(
-      `<line x1="${x.toFixed(1)}" y1="${RULER_H}" x2="${x.toFixed(1)}" y2="${canvasH}" ` +
+      `<line x1="${x.toFixed(1)}" y1="${RULER_H}" x2="${x.toFixed(1)}" y2="${svgH}" ` +
       `stroke="${color}" stroke-width="${isAnnotation ? '1.0' : '1.2'}" ` +
       (isAnnotation ? `stroke-dasharray="6,3" ` : '') +
       `opacity="0.75"/>`
@@ -375,8 +386,8 @@ export function renderToSvg(trace, viewport, options = {}) {
 
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" ` +
-    `width="${svgW}" height="${canvasH}" ` +
-    `viewBox="0 0 ${svgW} ${canvasH}">\n` +
+    `width="${svgW}" height="${svgH}" ` +
+    `viewBox="0 0 ${svgW} ${svgH}">\n` +
     (defs.length ? `<defs>\n${defs.join('\n')}\n</defs>\n` : '') +
     els.join('\n') +
     `\n</svg>`
