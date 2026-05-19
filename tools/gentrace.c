@@ -28,7 +28,7 @@
 #include "btf_trace.h"
 
 #define VCD_SIG_RANGE (int)('~' - '!' + 1)
-#define MAX_SIG_RANGE (VCD_SIG_RANGE)*(VCD_SIG_RANGE+1)
+#define MAX_SIG_RANGE ((VCD_SIG_RANGE)*(VCD_SIG_RANGE+1))
 
 // TODO, for single core, core ID always 0
 #define CORE_ID 0
@@ -39,6 +39,12 @@ static char *get_vcdsig(
     int  a, b;
     static char str[4];
 
+    if (sig < 0 || sig >= MAX_SIG_RANGE) {
+        str[0] = '?';
+        str[1] = 0;
+        return str;
+    }
+
     a = sig / VCD_SIG_RANGE;
     b = sig % VCD_SIG_RANGE;
 
@@ -47,7 +53,7 @@ static char *get_vcdsig(
     str[0] = '!' + b;
     str[2] = 0;
 
-    return (char*)&str;
+    return str;
 }
 
 void usage(void) {
@@ -87,39 +93,46 @@ int genbtf(
     char *infile,
     char *outfile
 ) {
-    TRACE *trace_data;
-    FILE *fin, *fout;
-    int i;
+    TRACE *trace_data = NULL;
+    FILE *fin = NULL, *fout = NULL;
+    uint32_t i;
     int current_task;
     int current_index;
-    int result;
+    size_t result;
+    long size;
     EVENT *event;
     time_t curr_time;
     struct tm* info;
+    int ret = 1;
 
     if ((fin = fopen(infile, "rb")) == NULL) {
         printf("file %s not found\n", infile);
-        return 1;
+        goto cleanup;
     }
     if ((fout = fopen(outfile, "w")) == NULL) {
         printf("file %s can not be created\n", outfile);
-        return 1;
+        goto cleanup;
     }
 
     // get file size
     fseek(fin, 0, SEEK_END);
-    int size = ftell(fin);
+    size = ftell(fin);
     fseek(fin, 0, SEEK_SET);
 
-    if ((trace_data = malloc(size)) == NULL) {
-        printf("malloc error\n");
-        return 1;
+    if (size <= (long)sizeof(TRACE_HEADER)) {
+        printf("file too small\n");
+        goto cleanup;
     }
 
-    result = fread((void*)trace_data, sizeof(char), size, fin);
-    if (result != size) {
+    if ((trace_data = malloc((size_t)size)) == NULL) {
+        printf("malloc error\n");
+        goto cleanup;
+    }
+
+    result = fread((void*)trace_data, sizeof(char), (size_t)size, fin);
+    if (result != (size_t)size) {
         printf("data read error\n");
-        return 1;
+        goto cleanup;
     }
 
     // Check header
@@ -128,19 +141,19 @@ int genbtf(
         trace_data->h.header[2] != 'F' ||
         trace_data->h.header[3] != '2') {
         printf("The header of trace data is not correct.\n");
-        return 1;
+        goto cleanup;
     }
 
     // TODO: check endian. If this value is not 1, the rest values
     // should be converted to another endian. (big endian <-> little endian)
     if (trace_data->h.tag != 1) {
         printf("Incompatible endian\n");
-        return 1;
+        goto cleanup;
     }
 
     if (trace_data->h.version != TRACE_VERSION) {
         printf("Incompatible version\n");
-        return 1;
+        goto cleanup;
     }
 
     fprintf(fout,"#version 2.2.0\n");
@@ -152,7 +165,7 @@ int genbtf(
     // end)
     time(&curr_time);
     info=gmtime(&curr_time);
-    fprintf(fout,"#creationDate %04d-%02d-%02dT%02d:%02d:%2dZ\n", info->tm_year+1900,
+    fprintf(fout,"#creationDate %04d-%02d-%02dT%02d:%02d:%02dZ\n", info->tm_year+1900,
             info->tm_mon+1, info->tm_mday, info->tm_hour, info->tm_min, info->tm_sec);
 
     fprintf(fout,"#timeScale us\n");
@@ -182,6 +195,7 @@ int genbtf(
                         event->value, get_taskname(trace_data, event->value),
                         "resume",
                         "");
+                current_task = (int)event->value;
                 break;
             case TRACE_EVENT_TASK_SWITCHED_OUT:
                 fprintf(fout, "%u,[%d/%04d]%s,0,T,[%d/%04d]%s,0,%s,%s\n",
@@ -192,6 +206,7 @@ int genbtf(
                         event->value, get_taskname(trace_data, event->value),
                         "preempt",
                         "");
+                current_task = (int)event->value;
                 break;
             case TRACE_EVENT_TASK_CREATE:
                 fprintf(fout, "%u,%s,0,T,[%d/%04d]%s,0,%s,%s\n",
@@ -382,53 +397,61 @@ int genbtf(
 		exit(1);
                 break;
         }
-        current_task = event->value;
         current_index = ((current_index + 1) % trace_data->h.max_events);
     }
 
     printf("%d events generated\n", trace_data->h.event_count);
 
-    fclose(fin);
-    fclose(fout);
-    free(trace_data);
+    ret = 0;
 
-    return 0;
+cleanup:
+    if (fin) fclose(fin);
+    if (fout) fclose(fout);
+    if (trace_data) free(trace_data);
+    return ret;
 }
 
 int genvcd(
     char *infile,
     char *outfile
 ) {
-    TRACE *trace_data;
-    FILE *fin, *fout;
-    int i;
+    TRACE *trace_data = NULL;
+    FILE *fin = NULL, *fout = NULL;
+    uint32_t i;
     int current_index;
-    int result;
+    size_t result;
+    long size;
     int tick_id;
+    int ret = 1;
 
     if ((fin = fopen(infile, "rb")) == NULL) {
         printf("file %s not found\n", infile);
-        return 1;
+        goto cleanup;
     }
     if ((fout = fopen(outfile, "w")) == NULL) {
         printf("file %s can not be created\n", outfile);
-        return 1;
+        goto cleanup;
     }
 
     // get file size
     fseek(fin, 0, SEEK_END);
-    int size = ftell(fin);
+    size = ftell(fin);
     fseek(fin, 0, SEEK_SET);
 
-    if ((trace_data = malloc(size)) == NULL) {
-        printf("malloc error\n");
-        return 1;
+    if (size <= (long)sizeof(TRACE_HEADER)) {
+        printf("file too small\n");
+        goto cleanup;
     }
 
-    result = fread((void*)trace_data, sizeof(char), size, fin);
-    if (result != size) {
+    if ((trace_data = malloc((size_t)size)) == NULL) {
+        printf("malloc error\n");
+        goto cleanup;
+    }
+
+    result = fread((void*)trace_data, sizeof(char), (size_t)size, fin);
+    if (result != (size_t)size) {
         printf("data read error\n");
-        return 1;
+        goto cleanup;
     }
 
     // Check header
@@ -437,19 +460,19 @@ int genvcd(
         trace_data->h.header[2] != 'F' ||
         trace_data->h.header[3] != '2') {
         printf("The header of trace data is not correct.\n");
-        return 1;
+        goto cleanup;
     }
 
     // TODO: check endian. If this value is not 1, the rest values
     // should be converted to another endian. (big endian <-> little endian)
     if (trace_data->h.tag != 1) {
         printf("Incompatible endian\n");
-        return 1;
+        goto cleanup;
     }
 
     if (trace_data->h.version != TRACE_VERSION) {
-        printf("Uncomatible version\n");
-        return 1;
+        printf("Incompatible version\n");
+        goto cleanup;
     }
 
     // headers
@@ -477,9 +500,7 @@ int genvcd(
     if (trace_data->h.event_count != trace_data->h.max_events) {
         current_index = 0;
     } else {
-        current_index = trace_data->h.current_index == 0 ?
-                        trace_data->h.max_events - 1 :
-                        trace_data->h.current_index - 1;
+        current_index = trace_data->h.current_index;
     }
 
     for(i = 0; i < trace_data->h.event_count; i++) {
@@ -521,11 +542,13 @@ int genvcd(
 
     printf("%d events generated\n", trace_data->h.event_count);
 
-    fclose(fin);
-    fclose(fout);
-    free(trace_data);
+    ret = 0;
 
-    return 0;
+cleanup:
+    if (fin) fclose(fin);
+    if (fout) fclose(fout);
+    if (trace_data) free(trace_data);
+    return ret;
 }
 
 int main(int argc, char **argv) {
@@ -558,9 +581,9 @@ int main(int argc, char **argv) {
         }
     }
 
-    if (optind < argc) {
-        infile = (char*)argv[optind];
-        outfile = (char*)argv[optind+1];
+    if (argc - optind >= 2) {
+        infile  = argv[optind];
+        outfile = argv[optind + 1];
     }
 
     if (!infile || !outfile) {
@@ -568,11 +591,6 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    if (btf)
-        genbtf(infile, outfile);
-    else
-        genvcd(infile, outfile);
-
-    return 0;
+    return btf ? genbtf(infile, outfile) : genvcd(infile, outfile);
 }
 

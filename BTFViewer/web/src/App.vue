@@ -191,7 +191,7 @@
                 D
               </div><div>Toggle dark/light mode</div>
               <div class="k">
-                M
+                B
               </div><div>Add bookmark at current position</div>
               <div class="k">
                 A
@@ -786,7 +786,7 @@ function onGlobalKeydown(e) {
       timelineOptions.darkMode = !timelineOptions.darkMode
       e.preventDefault()
       break
-    case 'm':
+    case 'b':
       onAddMark()
       e.preventDefault()
       break

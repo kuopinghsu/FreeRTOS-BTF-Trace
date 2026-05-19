@@ -59,7 +59,7 @@
 
 #include "btf_port.h"
 
-static uint32_t trace_en;
+static volatile uint32_t trace_en;
 static TRACE trace_data;
 
 void btf_traceSTART(void) {
@@ -83,13 +83,13 @@ void btf_traceEND(void) {
     trace_en = 0;
 
 #ifdef HAVE_SYS_DUMP
-    sys_dump((int)&trace_data, (int)sizeof(trace_data));
+    sys_dump((uintptr_t)&trace_data, (int)sizeof(trace_data));
 #endif
 #ifdef PRINT_BTF_DUMP
     btf_dump();
 #endif
 
-    printf("%ld events generated.\n", trace_data.h.event_count);
+    printf("%lu events generated.\n", (unsigned long)trace_data.h.event_count);
 }
 
 void btf_traceTAG(int t, int v) {
@@ -103,9 +103,8 @@ void btf_trace_add_task (
     event_t  event)
 {
     if (!trace_en) return;
-    assert (trace_data.h.event_count <= configMAX_TRACE_EVENTS);
 
-    if (task_id > configMAX_TRACE_TASKS) {
+    if (task_id >= configMAX_TRACE_TASKS) {
         printf("Warning: the maximum number of tasks allowed is exceeded and cannot be tracked.\n");
         trace_en = 0;
         return;
@@ -134,7 +133,6 @@ void btf_trace_add_event (
     event_t  event)
 {
     if (!trace_en) return;
-    assert (trace_data.h.event_count <= configMAX_TRACE_EVENTS);
     assert (trace_data.h.current_index < configMAX_TRACE_EVENTS);
 
     trace_data.d.event_lists[trace_data.h.current_index].time = xGetTime();
@@ -345,6 +343,7 @@ void btf_dump(
                         "tag0_event",
                         "trigger",
                         event->value);
+                break;
             case TRACE_EVENT_TAG1:
                 printf( "%lu,%s,0,STI,%s,0,%s,%ld\n",
                         event->time,
@@ -352,6 +351,7 @@ void btf_dump(
                         "tag1_event",
                         "trigger",
                         event->value);
+                break;
             case TRACE_EVENT_TAG2:
                 printf( "%lu,%s,0,STI,%s,0,%s,%ld\n",
                         event->time,
@@ -359,6 +359,7 @@ void btf_dump(
                         "tag2_event",
                         "trigger",
                         event->value);
+                break;
             case TRACE_EVENT_TAG3:
                 printf( "%lu,%s,0,STI,%s,0,%s,%ld\n",
                         event->time,
@@ -366,6 +367,7 @@ void btf_dump(
                         "tag3_event",
                         "trigger",
                         event->value);
+                break;
             case TRACE_EVENT_TAG4:
                 printf( "%lu,%s,0,STI,%s,0,%s,%ld\n",
                         event->time,
@@ -373,6 +375,7 @@ void btf_dump(
                         "tag4_event",
                         "trigger",
                         event->value);
+                break;
             case TRACE_EVENT_TAG5:
                 printf( "%lu,%s,0,STI,%s,0,%s,%ld\n",
                         event->time,
@@ -380,6 +383,7 @@ void btf_dump(
                         "tag5_event",
                         "trigger",
                         event->value);
+                break;
             case TRACE_EVENT_TAG6:
                 printf( "%lu,%s,0,STI,%s,0,%s,%ld\n",
                         event->time,
@@ -387,6 +391,7 @@ void btf_dump(
                         "tag6_event",
                         "trigger",
                         event->value);
+                break;
             case TRACE_EVENT_TAG7:
                 printf( "%lu,%s,0,STI,%s,0,%s,%ld\n",
                         event->time,
@@ -394,6 +399,7 @@ void btf_dump(
                         "tag7_event",
                         "trigger",
                         event->value);
+                break;
             default:
                 break;
         }

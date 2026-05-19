@@ -4,11 +4,9 @@ import { viteSingleFile } from 'vite-plugin-singlefile'
 import { readFileSync } from 'fs'
 import { resolve, dirname } from 'path'
 import { fileURLToPath } from 'url'
-import { createRequire } from 'module'
 import { gzipSync } from 'zlib'
 
-const require = createRequire(import.meta.url)
-const pkg = require('./package.json')
+const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url)))
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 

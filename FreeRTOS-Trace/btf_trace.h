@@ -40,7 +40,7 @@
 #define configMAX_TRACE_TASK_NAME_LEN   8
 #endif
 
-#define ALIGN4(n) (((n)+3)&0xfffffffc)
+#define ALIGN4(n) (((n)+3)&~3u)
 
 typedef enum {
     TRACE_EVENT_TASK_SWITCHED_IN     = 1,

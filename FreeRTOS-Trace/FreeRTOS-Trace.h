@@ -23,41 +23,41 @@
 
 #include "btf_trace.h"
 
-#define addEVENT( tag, event ) {                \
+#define addEVENT( tag, event ) do {             \
     taskENTER_CRITICAL();                       \
     btf_trace_add_event ( tag, event );         \
     taskEXIT_CRITICAL();                        \
-}
+} while(0)
 
-#define addEVENT_ISR( tag, event ) {            \
+#define addEVENT_ISR( tag, event ) do {         \
     int mask = taskENTER_CRITICAL_FROM_ISR();   \
     btf_trace_add_event ( tag, event );         \
     taskEXIT_CRITICAL_FROM_ISR(mask);           \
-}
+} while(0)
 
 #ifndef traceSTART
-# define traceSTART() {                         \
+# define traceSTART() do {                      \
     taskENTER_CRITICAL();                       \
     btf_traceSTART();                           \
     taskEXIT_CRITICAL();                        \
-}
+} while(0)
 #endif // traceSTART
 
 #ifndef traceEND
-# define traceEND() {                           \
+# define traceEND() do {                        \
     taskENTER_CRITICAL();                       \
     btf_traceEND();                             \
     taskEXIT_CRITICAL();                        \
-}
-#endif // traceSTART
+} while(0)
+#endif // traceEND
 
 #ifndef traceTAG
-# define traceTAG(t,v) {                        \
+# define traceTAG(t,v) do {                     \
     taskENTER_CRITICAL();                       \
     btf_traceTAG(t, v);                         \
     taskEXIT_CRITICAL();                        \
-}
-#endif // traceSTART
+} while(0)
+#endif // traceTAG
 
 #ifndef traceTASK_SWITCHED_IN
 # define traceTASK_SWITCHED_IN() addEVENT_ISR( (uint32_t)pxCurrentTCB->uxTCBNumber, TRACE_EVENT_TASK_SWITCHED_IN )
@@ -68,7 +68,7 @@
 #endif // traceTASK_SWITCHED_OUT
 
 #ifndef traceTASK_CREATE
-# define traceTASK_CREATE( pxNewTCB ) {         \
+# define traceTASK_CREATE( pxNewTCB ) do {      \
     taskENTER_CRITICAL();                       \
     btf_trace_add_task (                        \
         (uint8_t*)pxNewTCB->pcTaskName,         \
@@ -76,7 +76,7 @@
         TRACE_EVENT_TASK_CREATE                 \
     );                                          \
     taskEXIT_CRITICAL();                        \
-}
+} while(0)
 #endif // traceTASK_CREATE
 
 #ifndef traceTASK_DELETE
@@ -129,14 +129,14 @@
 #endif // traceQUEUE_DELETE
 
 #ifndef traceTASK_INCREMENT_TICK
-# define traceTASK_INCREMENT_TICK( xTickCount ) {   \
+# define traceTASK_INCREMENT_TICK( xTickCount ) do { \
     int mask = taskENTER_CRITICAL_FROM_ISR();   \
     btf_trace_add_event (                       \
         (uint32_t)xTickCount,                   \
         TRACE_EVENT_TASK_INCREMENT_TICK         \
     );                                          \
     taskEXIT_CRITICAL_FROM_ISR(mask);           \
-}
+} while(0)
 #endif // traceTASK_INCREMENT_TICK
 
 #endif // __FREERTOS_TRACE_H__

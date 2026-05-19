@@ -22,12 +22,10 @@ void vApplicationStackOverflowHook( TaskHandle_t xTask, char *pcTaskName )
 #if configUSE_TICK_HOOK && !defined(USER_DEFINED_TICK_HOOK)
 void vApplicationTickHook( void )
 {
-/*
     size_t total_heap = configTOTAL_HEAP_SIZE; // Defined in FreeRTOSConfig.h
     size_t free_heap  = xPortGetFreeHeapSize();
     size_t used_heap  = total_heap - free_heap;
     traceTAG(0, used_heap);
-*/
 }
 #endif
 

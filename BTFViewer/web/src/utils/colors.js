@@ -68,10 +68,13 @@ const CRC32_TABLE = (() => {
   return t
 })()
 
+const _utf8Encoder = new TextEncoder()
+
 function crc32(str) {
+  const bytes = _utf8Encoder.encode(str)
   let crc = 0xFFFFFFFF
-  for (let i = 0; i < str.length; i++) {
-    crc = CRC32_TABLE[(crc ^ str.charCodeAt(i)) & 0xFF] ^ (crc >>> 8)
+  for (let i = 0; i < bytes.length; i++) {
+    crc = CRC32_TABLE[(crc ^ bytes[i]) & 0xFF] ^ (crc >>> 8)
   }
   return (crc ^ 0xFFFFFFFF) >>> 0
 }

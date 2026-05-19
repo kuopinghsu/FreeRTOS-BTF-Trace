@@ -415,8 +415,8 @@ function paintSegments(ctx, segs, timeStart, timeEnd, pxPerNs, nsPerPx, rowY, ro
     const x2 = (seg.end   - timeStart) * pxPerNs
     let w = Math.max(MIN_SEG_W, x2 - x1)
 
-    // Skip completely off-screen
-    if (x1 > ctx.canvas.clientWidth + 2 || x1 + w < -2) continue
+    // Skip completely off-screen (derive width from time params, not DOM, to avoid racing a resize)
+    if (x1 > (timeEnd - timeStart) * pxPerNs + 2 || x1 + w < -2) continue
 
     // Base colour
     const isSegLocked = hlSeg && seg.start === hlSeg.start && seg.end === hlSeg.end && seg.task === hlSeg.task
@@ -482,12 +482,10 @@ function drawLockedSegmentHoriz(ctx, trace, rows, hlSeg, timeStart, timeEnd, pxP
   const mk = taskMergeKey(hlSeg.task)
   for (const row of rows) {
     if (row.key !== mk && !(row.taskKey && taskMergeKey(row.taskKey) === mk)) continue
-    const rowY      = row.y + 1
-    const rowH      = ROW_H - 2
     const x1        = (hlSeg.start - timeStart) * pxPerNs
     const x2        = (hlSeg.end   - timeStart) * pxPerNs
     const w         = Math.max(MIN_SEG_W, x2 - x1)
-    if (x1 > ctx.canvas.clientWidth + 2 || x1 + w < -2) return
+    if (x1 > (timeEnd - timeStart) * pxPerNs + 2 || x1 + w < -2) return
     const baseColor = row.color
     const slot       = ROW_H + ROW_GAP            // full row slot including gap
     const newH       = slot * 1.10                // 10% of slot

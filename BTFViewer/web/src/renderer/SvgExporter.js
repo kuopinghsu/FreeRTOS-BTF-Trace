@@ -259,7 +259,7 @@ export function renderToSvg(trace, viewport, options = {}) {
         const x     = OX + (ev.time - timeStart) * pxPerNs
         const color = stiNoteColor(ev.note)
         const hw = 4, h = 6
-        const pts = `${x.toFixed(1)},${(midY - h).toFixed(1)} ${(x - hw).toFixed(1)},${midY.toFixed(1)} ${(x + hw).toFixed(1)},${midY.toFixed(1)}`
+        const pts = `${x.toFixed(1)},${(midY - h).toFixed(1)} ${(x - hw).toFixed(1)},${midY.toFixed(1)} ${x.toFixed(1)},${(midY + h).toFixed(1)} ${(x + hw).toFixed(1)},${midY.toFixed(1)}`
         els.push(`<polygon points="${pts}" fill="${color}"/>`)
       }
     }

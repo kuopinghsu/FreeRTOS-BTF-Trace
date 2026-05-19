@@ -116,7 +116,7 @@ export function parseBtf(text, progressCallback) {
     if (parts.length < 7) { skippedLines++; continue }
 
     const t = parseInt(parts[0], 10)
-    if (isNaN(t)) { skippedLines++; continue }
+    if (isNaN(t) || !Number.isSafeInteger(t)) { skippedLines++; continue }
 
     const evType = parts[3].trim()
 
@@ -199,7 +199,7 @@ export function parseBtf(text, progressCallback) {
       }
     }
 
-    // Build set of tasks that have a resume at this tick
+    // Build set of sources that issued a resume (detects naked preempts)
     const resumeSources = new Set()
     for (const ev of events) {
       if (ev.event === 'resume') resumeSources.add(ev.source)

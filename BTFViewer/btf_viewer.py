@@ -121,7 +121,11 @@ if sys.platform == "darwin":
     del _install_macos_stderr_filter
 
 import configparser
+import csv
+import datetime
 import functools
+import hashlib
+import itertools
 import json
 import math
 import re
@@ -184,7 +188,7 @@ ROW_HEIGHT               =  22  # Height of each task / core row (px).
 ROW_GAP                  =   4  # Vertical gap between rows (px).
 STI_ROW_H                =  18  # Height of a collapsed STI row (px)
 STI_WAVEFORM_H           =  80  # Height of an expanded STI waveform row (px).
-STI_LINE_STYLE           = "step"  # Default STI waveform draw style: "step" or "linear".
+STI_LINE_STYLE           = "linear"  # Default STI waveform draw style: "step" or "linear".
 
 # Regex pattern: only tag_event and tag0_event…tag7_event channels can be expanded.
 # Uses a capturing group so the digit (if any) can be extracted for sort ordering.
@@ -752,8 +756,8 @@ def _parse_btf(filepath: str,
             if ev == "preempt" and _is_core_entity(src):
                 core_preempts[tgt] = src
 
-        # Build resume-source set once (avoids O(n²) generator inside loop)
-        resume_sources = {src for (_, src, ev, tgt, _n) in events if ev == "resume"}
+        # Build set of sources that issued a resume (used to detect naked preempts).
+        resumed_srcs = {src for (_, src, ev, tgt, _n) in events if ev == "resume"}
 
         for (_, src, ev, tgt, _note) in events:
             if ev != "resume":
@@ -773,7 +777,7 @@ def _parse_btf(filepath: str,
 
         for (_, src, ev, tgt, _note) in events:
             if ev == "preempt":
-                if tgt not in resume_sources:
+                if tgt not in resumed_srcs:
                     core = core_preempts.get(tgt, last_core.get(tgt, "Core_?"))
                     _close_seg(tgt, ts)
                     if _is_core_entity(src):
@@ -894,7 +898,7 @@ def _parse_btf(filepath: str,
     def _make_lod_summary(segs_sorted: list, bins: int, bin_span: float) -> list:
         """Down-sample a sorted segment list to at most *bins* entries."""
         if len(segs_sorted) <= bins:
-            return segs_sorted   # already fine, skip work
+            return list(segs_sorted)   # return a copy to prevent aliasing the source list
         safe_span = max(bin_span, 1e-9)  # guard against zero-span edge case
         result: list = []
         prev_bin = -2
@@ -1089,7 +1093,7 @@ _GRID_STEPS = [
 #  the USER CONFIGURATION block near the top of this file.)
 # ---------------------------------------------------------------------------
 
-@functools.lru_cache(maxsize=None)
+@functools.lru_cache(maxsize=4096)
 def _task_color(task_raw: str) -> QColor:
     """Return a stable QColor for a task name.
 
@@ -1123,32 +1127,32 @@ def _blend_core_tint(base: QColor, core: str) -> QColor:
     b = int(base.blue()  * (1 - tint.alphaF()) + tint.blue()  * tint.alphaF())
     return QColor(r, g, b)
 
-@functools.lru_cache(maxsize=None)
+@functools.lru_cache(maxsize=4096)
 def _blended_color(task_raw: str, core: str) -> QColor:
     """Cached blend of a task's base color with a core tint."""
     return _blend_core_tint(_task_color(task_raw), core)
 
-@functools.lru_cache(maxsize=None)
+@functools.lru_cache(maxsize=4096)
 def _task_brush(task_raw: str) -> QBrush:
     """Cached QBrush for a task's base color."""
     return QBrush(_task_color(task_raw))
 
-@functools.lru_cache(maxsize=None)
+@functools.lru_cache(maxsize=4096)
 def _task_pen_dark(task_raw: str) -> QPen:
     """Cached dark-border QPen for a task's base color."""
     return QPen(_task_color(task_raw).darker(130), 0.7)
 
-@functools.lru_cache(maxsize=None)
+@functools.lru_cache(maxsize=4096)
 def _blended_brush(task_raw: str, core: str) -> QBrush:
     """Cached QBrush for a task blended with a core tint."""
     return QBrush(_blended_color(task_raw, core))
 
-@functools.lru_cache(maxsize=None)
+@functools.lru_cache(maxsize=4096)
 def _blended_pen_dark(task_raw: str, core: str) -> QPen:
     """Cached dark-border QPen for a task blended with a core tint."""
     return QPen(_blended_color(task_raw, core).darker(130), 0.7)
 
-@functools.lru_cache(maxsize=None)
+@functools.lru_cache(maxsize=4096)
 def _complementary_color_cached(hex_str: str) -> QColor:
     """Cached implementation keyed by hex string (e.g. '#4e9af1')."""
     c = QColor(hex_str)
@@ -1642,7 +1646,7 @@ class TimelineScene(QGraphicsScene):
 
     def set_sti_line_style(self, style: str) -> None:
         """Switch STI waveform draw style (\"step\" or \"linear\") and rebuild."""
-        self._sti_line_style = style if style in ("step", "linear") else "step"
+        self._sti_line_style = style if style in ("step", "linear") else STI_LINE_STYLE
         if self._sti_expanded:
             self.rebuild()
 
@@ -7405,6 +7409,16 @@ class _RcSettings:
             self._cfg.set(section, key, str(value))
         self._flush()
 
+    def prune_section(self, section: str, keep: int) -> None:
+        """Remove the oldest entries from *section*, keeping at most *keep* entries."""
+        if not self._cfg.has_section(section):
+            return
+        keys = self._cfg.options(section)
+        if len(keys) > keep:
+            for k in keys[:-keep]:
+                self._cfg.remove_option(section, k)
+            self._flush()
+
 # ---------------------------------------------------------------------------
 # About Dialog
 # ---------------------------------------------------------------------------
@@ -8062,7 +8076,7 @@ class _SettingsDialog(QDialog):
         self._row_gap_spin.setValue(ROW_GAP)
         self._sti_row_h_spin.setValue(STI_ROW_H)
         self._sti_waveform_h_spin.setValue(STI_WAVEFORM_H)
-        self._sti_line_style_combo.setCurrentIndex(0)  # "step"
+        self._sti_line_style_combo.setCurrentIndex(1 if STI_LINE_STYLE == "linear" else 0)
         self._timescale_per_px_spin.setValue(_TIMESCALE_PER_PX_DEFAULT)
         self._cursor_spin.setValue(_DEFAULT_MAX_CURSORS)
 
@@ -9480,7 +9494,6 @@ class MainWindow(QMainWindow):
                 else:
                     meta_parts.append(f"{size} B")
             if mtime > 0:
-                import datetime
                 dt = datetime.datetime.fromtimestamp(mtime)
                 meta_parts.append(dt.strftime("%Y-%m-%d"))
             if meta_parts:
@@ -9490,8 +9503,8 @@ class MainWindow(QMainWindow):
 
     def _trace_state_key(self, path: str) -> str:
         norm = os.path.abspath(path)
-        digest = zlib.crc32(norm.encode("utf-8")) & 0xFFFFFFFF
-        return f"trace_{digest:08x}"
+        digest = hashlib.sha256(norm.encode("utf-8")).hexdigest()[:16]
+        return f"trace_{digest}"
 
     def _save_current_trace_state(self) -> None:
         if not self._current_file:
@@ -9503,6 +9516,8 @@ class MainWindow(QMainWindow):
             "annotations": [{"id": a.id, "ns": a.ns, "note": a.note} for a in self._annotations],
         }
         self._settings.set("trace_state", key, json.dumps(payload, ensure_ascii=True))
+        # Keep the trace_state section bounded to the recent-files limit.
+        self._settings.prune_section("trace_state", 8)
 
     def _load_trace_state(self, path: str) -> None:
         self._bookmarks = []
@@ -9518,6 +9533,8 @@ class MainWindow(QMainWindow):
                     if bid <= 0:
                         bid = max_id + 1
                     b = TraceBookmark(bid, int(entry.get("ns", 0)), str(entry.get("label", "")).strip())
+                    if self._trace is not None:
+                        b = TraceBookmark(bid, max(0, min(b.ns, self._trace.time_max)), b.label)
                     self._bookmarks.append(b)
                     max_id = max(max_id, b.id)
                 for entry in payload.get("annotations", []):
@@ -9526,6 +9543,8 @@ class MainWindow(QMainWindow):
                     if aid <= 0:
                         aid = max_id + 1
                     a = TraceAnnotation(aid, int(entry.get("ns", 0)), note)
+                    if self._trace is not None:
+                        a = TraceAnnotation(aid, max(0, min(a.ns, self._trace.time_max)), a.note)
                     self._annotations.append(a)
                     max_id = max(max_id, a.id)
                 self._mark_next_id = max(int(payload.get("next_id", 0)), max_id + 1)
@@ -10727,20 +10746,20 @@ class MainWindow(QMainWindow):
         if not path:
             return
         # Timescale conversion: value * from_mult / to_mult  (both relative to ns)
-        _to_ns: dict[str, int] = {"ns": 1, "us": 1_000, "ms": 1_000_000, "s": 1_000_000_000}
+        _ns_mult_table: dict[str, int] = {"ns": 1, "us": 1_000, "ms": 1_000_000, "s": 1_000_000_000}
         trace_scale = self._trace.time_scale if self._trace else "ns"
         def _convert_scale(value: float, from_scale: str, to_scale: str) -> int:
             if from_scale == to_scale:
                 return int(value)
-            from_mult = _to_ns.get(from_scale, 1)
-            to_mult   = _to_ns.get(to_scale, 1)
+            from_mult = _ns_mult_table.get(from_scale, 1)
+            to_mult   = _ns_mult_table.get(to_scale, 1)
             return int(value * from_mult / to_mult)
+        _MAX_CSV_ROWS = 100_000   # guard against memory exhaustion from huge files
         try:
-            import csv
             imported = 0
             with open(path, "r", newline="", encoding="utf-8") as fh:
                 reader = csv.reader(fh)
-                rows = list(reader)
+                rows = list(itertools.islice(reader, _MAX_CSV_ROWS))
             if not rows:
                 return
             # Header row: col[0]="type", col[1]="time", col[2]=timescale (e.g. "us"), col[3]="label"
@@ -10748,7 +10767,7 @@ class MainWindow(QMainWindow):
             has_header = len(header) > 0 and header[0].strip().lower() == "type"
             if has_header:
                 csv_scale = header[2].strip().lower() if len(header) > 2 else trace_scale
-                if csv_scale not in _to_ns:
+                if csv_scale not in _ns_mult_table:
                     csv_scale = trace_scale
                 data_rows = rows[1:]
             else:
@@ -10760,6 +10779,8 @@ class MainWindow(QMainWindow):
                 kind = cols[0].strip().lower()
                 try:
                     raw = float(cols[2])
+                    if not math.isfinite(raw):
+                        continue
                 except (ValueError, IndexError):
                     continue
                 ns = _convert_scale(raw, csv_scale, trace_scale)
@@ -10777,7 +10798,7 @@ class MainWindow(QMainWindow):
             self._rebuild_bookmark_list()
             self._rebuild_annotation_list()
             self.statusBar().showMessage(f"Imported {imported} mark(s) from {os.path.basename(path)}", 4000)
-        except OSError as exc:
+        except (OSError, OverflowError, ValueError, TypeError) as exc:
             QMessageBox.critical(self, "Import Error", str(exc))
 
     # -- Find dock ------------------------------------------------------

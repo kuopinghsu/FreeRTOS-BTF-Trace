@@ -21,9 +21,11 @@
 #ifndef __PORT_H__
 #define __PORT_H__
 
+#include <stdint.h>
+
 #ifdef __riscv
 #ifndef portGET_RUN_TIME_COUNTER_VALUE
-#define portGET_RUN_TIME_COUNTER_VALUE() ({int cycles; asm volatile ("rdcycle %0" : "=r"(cycles)); cycles; })
+#define portGET_RUN_TIME_COUNTER_VALUE() ({uint32_t cycles; asm volatile ("rdcycle %0" : "=r"(cycles)); cycles; })
 #endif
 
 // get time in nano seconds
@@ -34,12 +36,12 @@
 
 // This is only for srv32 simulator
 // syscall for memory dumping
-static inline void sys_dump(int start_addr, int size) {
+static inline void sys_dump(uintptr_t start_addr, int size) {
     asm volatile("addi a0, %[start], 0\n"
                  "addi a1, %[end], 0\n"
                  "li a7, 0x99\n"
                  "ecall\n"
-                 : : [start] "r"(start_addr), [end] "r"(start_addr+size)
+                 : : [start] "r"(start_addr), [end] "r"(start_addr+(uintptr_t)size)
                  : "a0", "a1", "a7");
 }
 
