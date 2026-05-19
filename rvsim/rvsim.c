@@ -176,10 +176,10 @@ void prog_exit(struct rv *rv, int exitcode) {
 #ifdef RV32C_ENABLED
         printf("\nExcuting %lld instructions, %lld cycles, %1.3f CPI, %1.3f%% overhead\n",
                rv->csr.instret.c, rv->csr.cycle.c,
-               ((float)rv->csr.cycle.c)/rv->csr.instret.c, (overhead*100.0)/rv->csr.instret.c);
+               ((double)rv->csr.cycle.c)/rv->csr.instret.c, (overhead*100.0)/rv->csr.instret.c);
 #else
         printf("\nExcuting %lld instructions, %lld cycles, %1.3f CPI\n", rv->csr.instret.c,
-               rv->csr.cycle.c, ((float)rv->csr.cycle.c)/rv->csr.instret.c);
+               rv->csr.cycle.c, ((double)rv->csr.cycle.c)/rv->csr.instret.c);
 #endif // RV32C_ENABLED
 
         printf("Program terminate\n");
@@ -187,9 +187,9 @@ void prog_exit(struct rv *rv, int exitcode) {
         printf("\n");
         printf("Simulation statistics\n");
         printf("=====================\n");
-        printf("Simulation time  : %0.3f s\n", (float)diff);
+        printf("Simulation time  : %0.3f s\n", (double)diff);
         printf("Simulation cycles: %lld\n", rv->csr.cycle.c);
-        printf("Simulation speed : %0.3f MHz\n", (float)(rv->csr.cycle.c / diff / 1000000.0));
+        printf("Simulation speed : %0.3f MHz\n", (double)(rv->csr.cycle.c / diff / 1000000.0));
         printf("\n");
     }
     exit(exitcode);
@@ -323,7 +323,7 @@ int csr_rw(struct rv *rv, int regs, int mode, int val, int update, int *legal) {
 
 static inline void srv32_cycle_add(struct rv *rv, int count) {
     rv->csr.cycle.c = rv->csr.cycle.c + count;
-    if (!rv->mtime_update) rv->csr.mtime.c = rv->csr.mtime.c + count;
+    if (!rv->mtime_update) { rv->csr.mtime.c = rv->csr.mtime.c + count; }
 }
 
 static inline void srv32_trap(struct rv *rv, int cause, int val) {
@@ -341,8 +341,9 @@ static inline void srv32_trap(struct rv *rv, int cause, int val) {
 static inline void srv32_int(struct rv *rv, int cause, int src, int compressed) {
     /* When the branch instruction is interrupted, do not accumulate cycles, */
     /* which has been added when the branch instruction is executed. */
-    if (rv->pc == (compressed ? rv->prev_pc+2 : rv->prev_pc+4))
+    if (rv->pc == (compressed ? rv->prev_pc+2 : rv->prev_pc+4)) {
         srv32_cycle_add(rv, rv->branch_penalty);
+    }
 
     rv->csr.mcause = cause;
     rv->csr.mstatus = (rv->csr.mstatus &  (1<<MIE)) ?
@@ -372,8 +373,9 @@ void srv32_write_regs(struct rv *rv, int n, int32_t v) {
 }
 
 void *srv32_get_memptr(struct rv *rv, int32_t addr) {
-    if (addr < rv->mem_base || addr > (rv->mem_base + rv->mem_size))
+    if (addr < rv->mem_base || addr > (rv->mem_base + rv->mem_size)) {
         return NULL;
+    }
 
     return (void*)&((char*)rv->mem)[addr - rv->mem_base];
 }
@@ -384,8 +386,9 @@ bool srv32_write_mem(struct rv *rv, int32_t addr, int32_t len, void *ptr)
     char *src = (char*)ptr;
     char *dst = (char*)&((char*)rv->mem)[addr - rv->mem_base];
 
-    if (addr < rv->mem_base || (addr + len) > (rv->mem_base + rv->mem_size))
+    if (addr < rv->mem_base || (addr + len) > (rv->mem_base + rv->mem_size)) {
         return false;
+    }
 
     for(i = 0; i < len; i++)
         dst[i] = src[i];
@@ -399,8 +402,9 @@ bool srv32_read_mem(struct rv *rv, int32_t addr, int32_t len, void *ptr)
     char *src = (char*)&((char*)rv->mem)[addr - rv->mem_base];
     char *dst = (char*)ptr;
 
-    if (addr < rv->mem_base || (addr + len) > (rv->mem_base + rv->mem_size))
+    if (addr < rv->mem_base || (addr + len) > (rv->mem_base + rv->mem_size)) {
         return false;
+    }
 
     for(i = 0; i < len; i++)
         dst[i] = src[i];
@@ -494,10 +498,10 @@ static int memrw(struct rv *rv, int type, int op, int32_t address, int32_t *val)
 
         switch(op) {
             case OP_LB:
-                if (data & 0x80) data |= 0xffffff00;
+                if (data & 0x80) { data |= 0xffffff00; }
                 break;
             case OP_LH:
-                if (data & 0x8000) data |= 0xffff0000;
+                if (data & 0x8000) { data |= 0xffff0000; }
                 break;
             case OP_LBU:
             case OP_LHU:
@@ -744,7 +748,7 @@ int main(int argc, char **argv) {
     }
 
     aligned_free(rv->mem);
-    if (rv->ft) fclose(rv->ft);
+    if (rv->ft) { fclose(rv->ft); }
     aligned_free(rv);
 }
 
@@ -955,32 +959,36 @@ void srv32_step(struct rv *rv) {
                 case OP_BEQ:
                     if (srv32_read_regs(rv, inst.b.rs1) == srv32_read_regs(rv, inst.b.rs2)) {
                         rv->pc += offset;
-                        if ((!rv->branch_predict || offset > 0) && (rv->pc & 3) == 0)
+                        if ((!rv->branch_predict || offset > 0) && (rv->pc & 3) == 0) {
                             srv32_cycle_add(rv, rv->branch_penalty);
+                        }
                         return;
                     }
                     break;
                 case OP_BNE:
                     if (srv32_read_regs(rv, inst.b.rs1) != srv32_read_regs(rv, inst.b.rs2)) {
                         rv->pc += offset;
-                        if ((!rv->branch_predict || offset > 0) && (rv->pc & 3) == 0)
+                        if ((!rv->branch_predict || offset > 0) && (rv->pc & 3) == 0) {
                             srv32_cycle_add(rv, rv->branch_penalty);
+                        }
                         return;
                     }
                     break;
                 case OP_BLT:
                     if (srv32_read_regs(rv, inst.b.rs1) < srv32_read_regs(rv, inst.b.rs2)) {
                         rv->pc += offset;
-                        if ((!rv->branch_predict || offset > 0) && (rv->pc & 3) == 0)
+                        if ((!rv->branch_predict || offset > 0) && (rv->pc & 3) == 0) {
                             srv32_cycle_add(rv, rv->branch_penalty);
+                        }
                         return;
                     }
                     break;
                 case OP_BGE:
                     if (srv32_read_regs(rv, inst.b.rs1) >= srv32_read_regs(rv, inst.b.rs2)) {
                         rv->pc += offset;
-                        if ((!rv->branch_predict || offset > 0) && (rv->pc & 3) == 0)
+                        if ((!rv->branch_predict || offset > 0) && (rv->pc & 3) == 0) {
                             srv32_cycle_add(rv, rv->branch_penalty);
+                        }
                         return;
                     }
                     break;
@@ -988,8 +996,9 @@ void srv32_step(struct rv *rv) {
                     if (((uint32_t)srv32_read_regs(rv, inst.b.rs1)) <
                         ((uint32_t)srv32_read_regs(rv, inst.b.rs2))) {
                         rv->pc += offset;
-                        if ((!rv->branch_predict || offset > 0) && (rv->pc & 3) == 0)
+                        if ((!rv->branch_predict || offset > 0) && (rv->pc & 3) == 0) {
                             srv32_cycle_add(rv, rv->branch_penalty);
+                        }
                         return;
                     }
                     break;
@@ -997,8 +1006,9 @@ void srv32_step(struct rv *rv) {
                     if (((uint32_t)srv32_read_regs(rv, inst.b.rs1)) >=
                         ((uint32_t)srv32_read_regs(rv, inst.b.rs2))) {
                         rv->pc += offset;
-                        if ((!rv->branch_predict || offset > 0) && (rv->pc & 3) == 0)
+                        if ((!rv->branch_predict || offset > 0) && (rv->pc & 3) == 0) {
                             srv32_cycle_add(rv, rv->branch_penalty);
+                        }
                         return;
                     }
                     break;
@@ -1018,7 +1028,7 @@ void srv32_step(struct rv *rv) {
 
             int result = memrw(rv, OP_LOAD, inst.i.func3, address, &data);
 
-            if (rv->singleram) srv32_cycle_add(rv, 1);
+            if (rv->singleram) { srv32_cycle_add(rv, 1); }
 
             switch(result) {
                 case TRAP_LD_FAIL:
@@ -1060,7 +1070,7 @@ void srv32_step(struct rv *rv) {
 
             int result = memrw(rv, OP_STORE, inst.i.func3, address, &data);
 
-            if (rv->singleram) srv32_cycle_add(rv, 1);
+            if (rv->singleram) { srv32_cycle_add(rv, 1); }
 
             switch(result) {
                 case TRAP_ST_FAIL:
@@ -1166,7 +1176,8 @@ void srv32_step(struct rv *rv) {
                                           31, 27, 13, 23, 21, 19, 16, 7, 26, 12, 18, 6, 11, 5, 10, 9
                                         };
                                         int32_t n = (!x) ? 32 :
-                                            (int32_t)table[((uint32_t)((x & -x) * 0x077CB531U)) >> 27];
+                                            (int32_t)table[
+                                                ((uint32_t)((x & -x) * 0x077CB531U)) >> 27];
                                         srv32_write_regs(rv, inst.i.rd, n);
                                     }
                                     break;
@@ -1420,15 +1431,18 @@ void srv32_step(struct rv *rv) {
                         #ifdef RV32B_ENABLED
                         case OP_AND: // ANDN
                             srv32_write_regs(rv, inst.r.rd,
-                                srv32_read_regs(rv, inst.r.rs1) & ~(srv32_read_regs(rv, inst.r.rs2)));
+                                srv32_read_regs(rv, inst.r.rs1) &
+                                ~(srv32_read_regs(rv, inst.r.rs2)));
                             break;
                         case OP_OR: // ORN
                             srv32_write_regs(rv, inst.r.rd,
-                                srv32_read_regs(rv, inst.r.rs1) | ~(srv32_read_regs(rv, inst.r.rs2)));
+                                srv32_read_regs(rv, inst.r.rs1) |
+                                ~(srv32_read_regs(rv, inst.r.rs2)));
                             break;
                         case OP_XOR: // XNOR
                             srv32_write_regs(rv, inst.r.rd,
-                                ~(srv32_read_regs(rv, inst.r.rs1) ^ srv32_read_regs(rv, inst.r.rs2)));
+                                ~(srv32_read_regs(rv, inst.r.rs1) ^
+                                srv32_read_regs(rv, inst.r.rs2)));
                             break;
                         #endif // RV32B_ENABLED
                         default:
@@ -1463,8 +1477,9 @@ void srv32_step(struct rv *rv) {
                                 uint32_t b = srv32_read_regs(rv, inst.r.rs2);
                                 int32_t n = 0;
 
-                                for(int i = 1; i < 32; i++)
-                                    if ((b >> i) & 1) n ^= (a >> (32 - i));
+                                for(int i = 1; i < 32; i++) {
+                                    if ((b >> i) & 1) { n ^= (a >> (32 - i)); }
+                                }
 
                                 srv32_write_regs(rv, inst.r.rd, n);
                             }
@@ -1475,8 +1490,9 @@ void srv32_step(struct rv *rv) {
                                 uint32_t b = srv32_read_regs(rv, inst.r.rs2);
                                 int32_t n = 0;
 
-                                for(int i = 0; i < 32; i++)
-                                    if ((b >> i) & 1) n ^= (a >> (32 - i - 1));
+                                for(int i = 0; i < 32; i++) {
+                                    if ((b >> i) & 1) { n ^= (a >> (32 - i - 1)); }
+                                }
 
                                 srv32_write_regs(rv, inst.r.rd, n);
                             }
@@ -1649,8 +1665,9 @@ void srv32_step(struct rv *rv) {
                                }
                                break;
                                #else
-                               if (res != -1)
+                               if (res != -1) {
                                     srv32_write_regs(rv, A0, res);
+                               }
                                srv32_trap(rv, TRAP_ECALL, 0);
                                return;
                                #endif

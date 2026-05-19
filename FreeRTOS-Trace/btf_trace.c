@@ -19,6 +19,7 @@
 // SOFTWARE.
 
 #include <stdio.h>
+#include <string.h>
 #include <assert.h>
 #include "FreeRTOS.h"
 #include "btf_trace.h"
@@ -47,7 +48,8 @@
                      (__DATE__[0] == 'D')                                             ? 12 : \
                                                                                         99)
 
-#define BUILD_DAY   ((((__DATE__[4] >= '0') ? (__DATE__[4]) : '0') - '0') * 10 + (__DATE__[ 5]) - '0')
+#define BUILD_DAY   ((((__DATE__[4] >= '0') ? (__DATE__[4]) : '0') - '0') * 10 \
+                    + (__DATE__[ 5]) - '0')
 
 // Example of __TIME__ string: "21:06:19"
 //                              01234567
@@ -102,7 +104,7 @@ void btf_trace_add_task (
     uint32_t task_id,
     event_t  event)
 {
-    if (!trace_en) return;
+    if (!trace_en) { return; }
 
     if (task_id >= configMAX_TRACE_TASKS) {
         printf("Warning: the maximum number of tasks allowed is exceeded and cannot be tracked.\n");
@@ -111,7 +113,8 @@ void btf_trace_add_task (
     }
 
     // task_id is a unique ID, which will increase by 1 each time a TCB is created.
-    strncpy((char*)trace_data.d.task_lists[task_id], (char*)task_name, configMAX_TRACE_TASK_NAME_LEN);
+    strncpy((char*)trace_data.d.task_lists[task_id], (char*)task_name,
+            configMAX_TRACE_TASK_NAME_LEN);
     trace_data.d.task_lists[task_id][configMAX_TRACE_TASK_NAME_LEN] = 0;
     trace_data.h.task_count++;
 
@@ -124,15 +127,16 @@ void btf_trace_add_task (
         trace_data.h.current_index = 0;
         printf("\nWarning: trace data wrap, only last events will be recorded.\n");
     }
-    if (trace_data.h.event_count < configMAX_TRACE_EVENTS)
+    if (trace_data.h.event_count < configMAX_TRACE_EVENTS) {
         trace_data.h.event_count++;
+    }
 }
 
 void btf_trace_add_event (
     uint32_t value,
     event_t  event)
 {
-    if (!trace_en) return;
+    if (!trace_en) { return; }
     assert (trace_data.h.current_index < configMAX_TRACE_EVENTS);
 
     trace_data.d.event_lists[trace_data.h.current_index].time = xGetTime();
@@ -144,8 +148,9 @@ void btf_trace_add_event (
         trace_data.h.current_index = 0;
         printf("\nWarning: trace data wrap, only last events will be recorded.\n");
     }
-    if (trace_data.h.event_count < configMAX_TRACE_EVENTS)
+    if (trace_data.h.event_count < configMAX_TRACE_EVENTS) {
         trace_data.h.event_count++;
+    }
 }
 
 #ifdef PRINT_BTF_DUMP

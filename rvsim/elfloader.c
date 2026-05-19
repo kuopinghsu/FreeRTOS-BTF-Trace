@@ -73,8 +73,9 @@ static int elf32_read(FILE *fp, struct rv *rv)
                             (int)ph->p_vaddr,
                             (int)ph->p_memsz);
 
-        if (ph->p_type != PT_LOAD)
+        if (ph->p_type != PT_LOAD) {
             continue;
+        }
 
         fseek(fp, ph->p_offset, SEEK_SET);
 
@@ -104,12 +105,12 @@ static int elf32_read(FILE *fp, struct rv *rv)
         free(ptr);
     }
 
-    if (elf32_phdr) free(elf32_phdr);
+    if (elf32_phdr) { free(elf32_phdr); }
     return 1;
 
 // LCOV_EXCL_START
 fail:
-    if (elf32_phdr) free(elf32_phdr);
+    if (elf32_phdr) { free(elf32_phdr); }
     return 0;
 // LCOV_EXCL_STOP
 }

@@ -5,8 +5,7 @@ import { readFileSync } from 'fs'
 import { resolve, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { gzipSync } from 'zlib'
-
-const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url)))
+import pkg from './package.json' with { type: 'json' }
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -35,6 +34,7 @@ export default defineConfig({
   base: './',
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
+    __BUILD_DATE__: JSON.stringify(new Date().toISOString().slice(0, 10)),
   },
   build: {
     assetsInlineLimit: 100_000_000,

@@ -117,6 +117,7 @@ DEFAULT_IDLE_PROB       = 0.20          # Probability [0–1] a core goes IDLE
 DEFAULT_MAX_BURST_TICKS = 5             # Max ticks a task runs before preempted
 
 def parse_args():
+    """Parse and return command-line arguments for trace generation."""
     parser = argparse.ArgumentParser(
         description="Generate a synthetic FreeRTOS BTF trace file.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -150,6 +151,7 @@ def parse_args():
     return parser.parse_args()
 
 def main():
+    """Entry point: parse arguments, generate and write synthetic BTF trace."""
     args = parse_args()
 
     # ── Validate ──────────────────────────────────────────────────────────────
@@ -200,6 +202,7 @@ def main():
 
     # Task priorities: high-prio keywords → 7–10, others → 1–6
     def _task_priority(name: str) -> int:
+        """Return random priority for task by name (high-prio keywords → 7-10)."""
         if any(k in name for k in _HIGH_PRIO_KW):
             return random.randint(7, 10)
         return random.randint(1, 6)
@@ -232,6 +235,7 @@ def main():
     _fh = open(out_path, "w", encoding="utf-8", buffering=1 << 20)  # noqa: SIM115
 
     def _flush_buf() -> None:
+        """Flush the line buffer to disk."""
         _fh.writelines(_buf)
         _buf.clear()
 
@@ -301,16 +305,19 @@ def main():
     _xs = [random.getrandbits(32) or 0xDEADBEEF]
 
     def _rndf() -> float:
+        """Return a pseudo-random float in [0, 1) using xorshift32."""
         x = _xs[0]; x ^= (x << 13) & 0xFFFFFFFF; x ^= x >> 17; x ^= (x << 5) & 0xFFFFFFFF
         _xs[0] = x
         return x * 2.3283064365e-10   # / 2^32
 
     def _rndi(a: int, b: int) -> int:
+        """Return a pseudo-random integer in [a, b] inclusive using xorshift32."""
         x = _xs[0]; x ^= (x << 13) & 0xFFFFFFFF; x ^= x >> 17; x ^= (x << 5) & 0xFFFFFFFF
         _xs[0] = x
         return a + x % (b - a + 1)
 
     def _rndch(seq):
+        """Return a pseudo-random element from seq using xorshift32."""
         x = _xs[0]; x ^= (x << 13) & 0xFFFFFFFF; x ^= x >> 17; x ^= (x << 5) & 0xFFFFFFFF
         _xs[0] = x
         return seq[x % len(seq)]
@@ -337,6 +344,7 @@ def main():
         return idle_names[core]
 
     def burst_us(task: str) -> int:
+        """Return task run duration in microseconds based on priority."""
         prio = worker_priority.get(task, 3)
         if prio >= 8:
             ticks = _rndi(1, 2)
@@ -348,6 +356,7 @@ def main():
         return max(50, ticks * tick_us + jitter)
 
     def block_us(task: str) -> int:
+        """Return task block/sleep duration in microseconds based on priority."""
         prio = worker_priority.get(task, 3)
         max_sleep_ticks = max(0, 8 - prio)
         sleep_ticks = _rndi(0, max_sleep_ticks)

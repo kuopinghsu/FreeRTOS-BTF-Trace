@@ -170,10 +170,11 @@ int genbtf(
 
     fprintf(fout,"#timeScale us\n");
 
-    if (trace_data->h.event_count != trace_data->h.max_events)
+    if (trace_data->h.event_count != trace_data->h.max_events) {
         current_index = 0;
-    else
+    } else {
         current_index = trace_data->h.current_index;
+    }
 
     event = get_event(trace_data, current_index);
 
@@ -405,9 +406,9 @@ int genbtf(
     ret = 0;
 
 cleanup:
-    if (fin) fclose(fin);
-    if (fout) fclose(fout);
-    if (trace_data) free(trace_data);
+    if (fin) { fclose(fin); }
+    if (fout) { fclose(fout); }
+    if (trace_data) { free(trace_data); }
     return ret;
 }
 
@@ -545,9 +546,9 @@ int genvcd(
     ret = 0;
 
 cleanup:
-    if (fin) fclose(fin);
-    if (fout) fclose(fout);
-    if (trace_data) free(trace_data);
+    if (fin) { fclose(fin); }
+    if (fout) { fclose(fout); }
+    if (trace_data) { free(trace_data); }
     return ret;
 }
 

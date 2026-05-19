@@ -1,0 +1,6 @@
+Demo/Common/printf.c
+Demo/Common/printf.h
+FreeRTOS-Kernel/**
+rvsim/elf.h
+rvsim/opcode.h
+web/pre-build/btf-viewer.html

@@ -294,6 +294,7 @@
               <div class="about-key">Product</div><div>RTOS BTF Viewer</div>
               <div class="about-key">Purpose</div><div>Interactive viewer for Best Trace Format (.btf) RTOS scheduling traces</div>
               <div class="about-key">Runtime</div><div>Vue 3 · Vite · Canvas-based timeline renderer</div>
+              <div class="about-key">Build Date</div><div>{{ buildDate }}</div>
             </div>
           </div>
 
@@ -359,6 +360,7 @@ import exampleBtfB64   from 'virtual:example-btf'
 
 // ---- State ---------------------------------------------------------------
 const appVersion = __APP_VERSION__
+const buildDate  = __BUILD_DATE__
 const trace      = shallowRef(null)
 const loading    = ref(false)
 const loadingPct = ref(0)

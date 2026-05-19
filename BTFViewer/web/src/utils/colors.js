@@ -165,7 +165,7 @@ export function taskColor(mergeKey, repr) {
  * Return a CSS rgba() tint string for a core name, or null for Core_0 (no tint).
  */
 export function coreTint(coreName) {
-  const t = CORE_TINTS[coreName] || CORE_TINTS['Core_?']
+  const t = (Object.hasOwn(CORE_TINTS, coreName) ? CORE_TINTS[coreName] : null) || CORE_TINTS['Core_?']
   if (t[3] === 0) return null
   return `rgba(${t[0]},${t[1]},${t[2]},${(t[3] / 255).toFixed(3)})`
 }
@@ -195,7 +195,7 @@ export function resetStiColors() {
 
 /** Return a deterministic colour for a STI note string (CRC32 → palette). */
 export function stiNoteColor(note) {
-  if (STI_COLORS[note]) return STI_COLORS[note]
+  if (Object.hasOwn(STI_COLORS, note)) return STI_COLORS[note]
   if (_stiNoteCache.has(note)) return _stiNoteCache.get(note)
   const color = STI_PALETTE[crc32(note) % STI_PALETTE.length]
   _stiNoteCache.set(note, color)

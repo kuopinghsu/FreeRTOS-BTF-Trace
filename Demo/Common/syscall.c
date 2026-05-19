@@ -179,8 +179,9 @@ _sbrk (int nbytes)
 {
     char *base;
 
-    if (!heap_ptr)
+    if (!heap_ptr) {
         heap_ptr = (char *)&_end;
+    }
 
     if ((int)(heap_ptr+nbytes) >= (int)&_stack) {
         return 0;

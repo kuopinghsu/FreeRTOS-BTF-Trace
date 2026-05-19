@@ -30,8 +30,8 @@ function isCoreName(name) {
  * Sorting comparator for task merge keys using taskSortKey tuple logic.
  */
 function compareMergeKeys(mkA, mkB, reprMap) {
-  const ka = taskSortKey(reprMap[mkA] || mkA)
-  const kb = taskSortKey(reprMap[mkB] || mkB)
+  const ka = taskSortKey((Object.hasOwn(reprMap, mkA) ? reprMap[mkA] : null) || mkA)
+  const kb = taskSortKey((Object.hasOwn(reprMap, mkB) ? reprMap[mkB] : null) || mkB)
   for (let i = 0; i < ka.length; i++) {
     if (ka[i] < kb[i]) return -1
     if (ka[i] > kb[i]) return  1
@@ -71,7 +71,7 @@ export function parseBtf(text, progressCallback) {
   // Reset STI colour state so colours are consistent across multiple file loads.
   resetStiColors()
 
-  const meta = {}
+  const meta = Object.create(null)
   let timeScale = 'ns'
 
   // T-events grouped by timestamp.
@@ -104,7 +104,7 @@ export function parseBtf(text, progressCallback) {
       if (spaceIdx !== -1) {
         const key = stripped.slice(0, spaceIdx)
         const value = stripped.slice(spaceIdx + 1).trim()
-        meta[key] = value
+        if (/^[\w.-]+$/.test(key)) meta[key] = value
         if (key === 'timeScale') timeScale = value
       }
       continue

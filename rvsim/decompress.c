@@ -300,7 +300,8 @@ int compressed_decoder (
         switch(instc.ci.func3) {
             // OP_CADD, OP_CEBREAK, OP_CJALR, OP_CMV, OP_CJR
             case OP_CADD    :
-                if (instc.ci.imm_h == 0 && instc.ci.rd != 0 && instc.ci.imm_l == 0) { // c.jr -> jalr x0, 0(rs1)
+                // c.jr -> jalr x0, 0(rs1)
+                if (instc.ci.imm_h == 0 && instc.ci.rd != 0 && instc.ci.imm_l == 0) {
                     r.i.op    = OP_JALR;
                     r.i.rd    = 0;
                     r.i.func3 = 0x0;
@@ -317,11 +318,13 @@ int compressed_decoder (
                     r.r.func7 = 0;
                     break;
                 }
-                if (instc.ci.imm_h == 1 && instc.ci.rd == 0 && instc.ci.imm_l == 0) { // c.ebreak -> ebreak
+                // c.ebreak -> ebreak
+                if (instc.ci.imm_h == 1 && instc.ci.rd == 0 && instc.ci.imm_l == 0) {
                     r.inst    = 0x00100073;
                     break;
                 }
-                if (instc.ci.imm_h == 1 && instc.ci.rd != 0 && instc.ci.imm_l == 0) { // c.jalr -> jalr x1, 0(rs1)
+                // c.jalr -> jalr x1, 0(rs1)
+                if (instc.ci.imm_h == 1 && instc.ci.rd != 0 && instc.ci.imm_l == 0) {
                     r.i.op    = OP_JALR;
                     r.i.rd    = 1;
                     r.i.func3 = 0x0;
