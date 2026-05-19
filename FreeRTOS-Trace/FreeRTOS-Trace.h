@@ -51,6 +51,14 @@
 }
 #endif // traceSTART
 
+#ifndef traceTAG
+# define traceTAG(t,v) {                        \
+    taskENTER_CRITICAL();                       \
+    btf_traceTAG(t, v);                         \
+    taskEXIT_CRITICAL();                        \
+}
+#endif // traceSTART
+
 #ifndef traceTASK_SWITCHED_IN
 # define traceTASK_SWITCHED_IN() addEVENT_ISR( (uint32_t)pxCurrentTCB->uxTCBNumber, TRACE_EVENT_TASK_SWITCHED_IN )
 #endif // traceTASK_SWITCHED_IN

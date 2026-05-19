@@ -182,8 +182,32 @@ RULER_HEIGHT             =  40  # Height of the time ruler row (px) — horizont
 RULER_WIDTH              = 120  # Width of the time ruler column (px) — vertical mode.
 ROW_HEIGHT               =  22  # Height of each task / core row (px).
 ROW_GAP                  =   4  # Vertical gap between rows (px).
-STI_ROW_H                =  18  # Height of an STI (software-trace) row (px).
-STI_MARKER_H             =   6  # Height of an STI marker triangle (px).
+STI_ROW_H                =  18  # Height of a collapsed STI row (px)
+STI_WAVEFORM_H           =  80  # Height of an expanded STI waveform row (px).
+STI_LINE_STYLE           = "step"  # Default STI waveform draw style: "step" or "linear".
+
+# Regex pattern: only tag_event and tag0_event…tag7_event channels can be expanded.
+# Uses a capturing group so the digit (if any) can be extracted for sort ordering.
+_STI_EXPANDABLE_RE = re.compile(r'^tag([0-7])?_event$', re.IGNORECASE)
+
+def _is_tag_sti_channel(channel: str) -> bool:
+    """Return True if *channel* is a tag_event / tag[0-7]_event channel (expandable)."""
+    return bool(_STI_EXPANDABLE_RE.match(channel))
+
+def _sti_channel_sort_key(channel: str) -> tuple:
+    """Sort key placing tag channels first, then everything else alphabetically.
+
+    Order:
+      1. tag_event          (treated as digit -1 so it precedes tag0)
+      2. tag0_event … tag7_event  (numeric digit order)
+      3. all other channels (alphabetical)
+    """
+    m = _STI_EXPANDABLE_RE.match(channel)
+    if m:
+        digit = m.group(1)
+        return (0, int(digit) if digit else -1, channel.lower())
+    return (1, 0, channel.lower())
+STI_MARKER_H             =   3  # Height of an STI marker triangle (px).
 MIN_SEG_WIDTH            = 1.0  # Minimum painted width of a task segment (px).
 LABEL_BOTTOM_MARGIN      =  10  # Gap (px) between bottom edge of a vertical label and the timeline.
 
@@ -808,7 +832,7 @@ def _parse_btf(filepath: str,
         (mk for mk in task_set if mk != _tick_mk_excl),
         key=lambda mk: _task_sort_key(_mk_repr[mk]))
 
-    sti_channels = sorted({e.target for e in sti_events})
+    sti_channels = sorted({e.target for e in sti_events}, key=_sti_channel_sort_key)
     sti_by_target: Dict[str, List[StiEvent]] = defaultdict(list)
     for _ev in sti_events:
         sti_by_target[_ev.target].append(_ev)
@@ -1464,6 +1488,11 @@ class TimelineScene(QGraphicsScene):
         self._show_grid   = True
         self._view_mode   = "task"       # "task" or "core"
         self._core_expanded: Dict[str, bool] = {}   # True = expanded (default)
+        self._sti_expanded: set = set()             # channels with expanded waveform
+        self._sti_log_scale: bool = False           # log₂ scale for STI waveform
+        self._sti_line_style: str = STI_LINE_STYLE  # waveform draw style: "step" or "linear"
+        self._sti_row_h_val:      int = STI_ROW_H       # collapsed STI row height (px)
+        self._sti_waveform_h_val: int = STI_WAVEFORM_H  # expanded STI waveform height (px)
         self._font_size: int = FONT_SIZE            # label font size (pt)
         self._max_cursors: int = _DEFAULT_MAX_CURSORS  # max simultaneous cursors
         self._label_width: int = LABEL_WIDTH            # resizable label-column width (px)
@@ -1590,6 +1619,41 @@ class TimelineScene(QGraphicsScene):
             return
         for c in self._trace.core_names:
             self._core_expanded[c] = expanded
+        self.rebuild()
+
+    def toggle_sti_channel(self, channel: str) -> None:
+        """Expand or collapse a single STI channel's waveform view.
+
+        Only tag_event / tag[0-7]_event channels support expansion.
+        """
+        if not _is_tag_sti_channel(channel):
+            return
+        if channel in self._sti_expanded:
+            self._sti_expanded.discard(channel)
+        else:
+            self._sti_expanded.add(channel)
+        self.rebuild()
+
+    def set_sti_log_scale(self, enabled: bool) -> None:
+        """Switch the STI waveform y-axis between linear and log₂ scale."""
+        self._sti_log_scale = bool(enabled)
+        if self._sti_expanded:
+            self.rebuild()
+
+    def set_sti_line_style(self, style: str) -> None:
+        """Switch STI waveform draw style (\"step\" or \"linear\") and rebuild."""
+        self._sti_line_style = style if style in ("step", "linear") else "step"
+        if self._sti_expanded:
+            self.rebuild()
+
+    def set_sti_row_h(self, h: int) -> None:
+        """Change the collapsed STI row height (px) and rebuild."""
+        self._sti_row_h_val = max(12, min(h, 60))
+        self.rebuild()
+
+    def set_sti_waveform_h(self, h: int) -> None:
+        """Change the expanded STI waveform height (px) and rebuild."""
+        self._sti_waveform_h_val = max(40, min(h, 300))
         self.rebuild()
 
     @property
@@ -2667,7 +2731,10 @@ class TimelineScene(QGraphicsScene):
 
         time_span  = trace.time_max - trace.time_min
         timeline_w = time_span / self._timescale_per_px
-        total_h = RULER_HEIGHT + total_rows * (self._row_height + self._row_gap)
+        _sti_total_h = sum(
+            (self._sti_waveform_h_val if c in self._sti_expanded else self._sti_row_h_val) + self._row_gap
+            for c in sti_rows)
+        total_h = RULER_HEIGHT + n_task * (self._row_height + self._row_gap) + _sti_total_h
         total_w = self._label_width + timeline_w
         self.setSceneRect(0, 0, total_w, total_h)
 
@@ -2825,33 +2892,60 @@ class TimelineScene(QGraphicsScene):
                 _cl = self.addLine(_cx, y_top, _cx, y_top + self._row_height,
                                    QPen(row_color, 1))
                 _cl.setZValue(2.5)
-        # One row per STI channel containing one _BatchStiItem with all
-        # events for that channel, sorted by time (ascending scene_x).
+        # One row per STI channel: collapsed shows diamond markers, expanded
+        # shows a step-chart waveform.  Row heights vary per channel.
         _sti_bg = QBrush(QColor("#1A1A2E"))
-        for sti_idx, channel in enumerate(sti_rows):
-            row_idx = n_task + sti_idx
-            y_top   = RULER_HEIGHT + row_idx * (self._row_height + self._row_gap)
-            y_ctr   = y_top + self._row_height / 2
-            _stripe_rows.append((y_top, self._row_height, self._row_gap, _sti_bg, None))
-            lbl = self.addSimpleText(
-                fm.elidedText(channel, Qt.ElideRight, max(0, lw - 4 - 4)), font)
+        _sti_y  = RULER_HEIGHT + n_task * (self._row_height + self._row_gap)
+        for channel in sti_rows:
+            is_exp     = channel in self._sti_expanded
+            expandable = _is_tag_sti_channel(channel)
+            row_h  = self._sti_waveform_h_val if is_exp else self._sti_row_h_val
+            y_top  = _sti_y
+            y_ctr  = y_top + row_h / 2
+            _stripe_rows.append((y_top, row_h, self._row_gap, _sti_bg, None))
+            # Label with expand/collapse indicator (only for expandable channels)
+            if expandable:
+                _ind  = "▼" if is_exp else "▶"
+                _ltxt = fm.elidedText(f"{_ind} {channel}", Qt.ElideRight, max(0, lw - 4 - 4))
+            else:
+                _ltxt = fm.elidedText(channel, Qt.ElideRight, max(0, lw - 4 - 4))
+            lbl_bg = _StiLabelItem(QRectF(0, y_top, lw, row_h), channel, self,
+                                   expandable=expandable)
+            lbl_bg.setZValue(36)
+            self.addItem(lbl_bg)
+            self._frozen_items.append((lbl_bg, 0))
+            lbl = self.addSimpleText(_ltxt, font)
             lbl.setBrush(QBrush(QColor("#88AABB")))
             lbl.setPos(4, y_ctr - fm.height() / 2)
             lbl.setZValue(37)
             self._frozen_items.append((lbl, 4))
             _sti_evs_h  = trace.sti_events_by_target.get(channel, [])
             _sti_stts_h = trace.sti_starts_by_target.get(channel, [])
-            _sti_evs_h  = self._clip_sti_events(_sti_evs_h, _sti_stts_h, _vp_ns_lo, _vp_ns_hi)
-            _sti_markers = [
-                (lw + (ev.time - _time_min) * _px_per_ns, _sti_color(ev.note), ev)
-                for ev in _sti_evs_h
-            ]
-            _sti_item = _BatchStiItem(
-                QRectF(lw, y_top, timeline_w, self._row_height),
-                _sti_markers, trace.time_scale, horizontal=True, axis=y_ctr,
-                time_min=trace.time_min)
-            _sti_item.setZValue(2)
-            self.addItem(_sti_item)
+            if is_exp:
+                # Expanded: full step-chart waveform (all events, no viewport clip)
+                _wf = _BatchStiWaveformItem(
+                    QRectF(lw, y_top, timeline_w, row_h),
+                    _sti_evs_h, trace.time_scale,
+                    time_min=_time_min, px_per_ns=_px_per_ns, x_offset=lw,
+                    log_scale=self._sti_log_scale,
+                    line_style=self._sti_line_style)
+                _wf.setZValue(2)
+                self.addItem(_wf)
+            else:
+                # Collapsed: marker diamonds inside the viewport clip window
+                _sti_evs_clipped = self._clip_sti_events(
+                    _sti_evs_h, _sti_stts_h, _vp_ns_lo, _vp_ns_hi)
+                _sti_markers = [
+                    (lw + (ev.time - _time_min) * _px_per_ns, _sti_color(ev.note), ev)
+                    for ev in _sti_evs_clipped
+                ]
+                _sti_item = _BatchStiItem(
+                    QRectF(lw, y_top, timeline_w, row_h),
+                    _sti_markers, trace.time_scale, horizontal=True, axis=y_ctr,
+                    time_min=trace.time_min)
+                _sti_item.setZValue(2)
+                self.addItem(_sti_item)
+            _sti_y += row_h + self._row_gap
 
         if _stripe_rows:
             _stripes = _RowStripesItem(
@@ -3152,7 +3246,11 @@ class TimelineScene(QGraphicsScene):
 
         time_span  = trace.time_max - trace.time_min
         timeline_w = time_span / self._timescale_per_px
-        total_h    = RULER_HEIGHT + total_rows * (self._row_height + self._row_gap)
+        _n_non_sti = sum(_row_count(c) for c in core_names)
+        _sti_total_h = sum(
+            (self._sti_waveform_h_val if c in self._sti_expanded else self._sti_row_h_val) + self._row_gap
+            for c in sti_rows)
+        total_h    = RULER_HEIGHT + _n_non_sti * (self._row_height + self._row_gap) + _sti_total_h
         total_w    = self._label_width + timeline_w
         self.setSceneRect(0, 0, total_w, total_h)
 
@@ -3414,31 +3512,55 @@ class TimelineScene(QGraphicsScene):
                 self.addItem(batch)
 
         # --- STI rows ---------------------------------------------------
+        _sti_y = RULER_HEIGHT + row_idx * (self._row_height + self._row_gap)
         for channel in sti_rows:
-            y_top = RULER_HEIGHT + row_idx * (self._row_height + self._row_gap)
-            y_ctr = y_top + self._row_height / 2
-            self.addRect(QRectF(lw, y_top, timeline_w, self._row_height),
+            is_exp     = channel in self._sti_expanded
+            expandable = _is_tag_sti_channel(channel)
+            row_h  = self._sti_waveform_h_val if is_exp else self._sti_row_h_val
+            y_top  = _sti_y
+            y_ctr  = y_top + row_h / 2
+            self.addRect(QRectF(lw, y_top, timeline_w, row_h),
                          QPen(Qt.NoPen), QBrush(QColor("#1A1A2E"))).setZValue(0)
-            lbl = self.addSimpleText(
-                fm.elidedText(channel, Qt.ElideRight, max(0, lw - 4 - 4)), font)
+            if expandable:
+                _ind  = "▼" if is_exp else "▶"
+                _ltxt = fm.elidedText(f"{_ind} {channel}", Qt.ElideRight, max(0, lw - 4 - 4))
+            else:
+                _ltxt = fm.elidedText(channel, Qt.ElideRight, max(0, lw - 4 - 4))
+            lbl_bg = _StiLabelItem(QRectF(0, y_top, lw, row_h), channel, self,
+                                   expandable=expandable)
+            lbl_bg.setZValue(36)
+            self.addItem(lbl_bg)
+            self._frozen_items.append((lbl_bg, 0))
+            lbl = self.addSimpleText(_ltxt, font)
             lbl.setBrush(QBrush(QColor("#88AABB")))
             lbl.setPos(4, y_ctr - fm.height() / 2)
             lbl.setZValue(37)
             self._frozen_items.append((lbl, 4))
             _sti_evs_ch  = trace.sti_events_by_target.get(channel, [])
             _sti_stts_ch = trace.sti_starts_by_target.get(channel, [])
-            _sti_evs_ch  = self._clip_sti_events(_sti_evs_ch, _sti_stts_ch, _vp_ns_lo, _vp_ns_hi)
-            _sti_markers_ch = [
-                (lw + (ev.time - _time_min) * _px_per_ns, _sti_color(ev.note), ev)
-                for ev in _sti_evs_ch
-            ]
-            _sti_item_ch = _BatchStiItem(
-                QRectF(lw, y_top, timeline_w, self._row_height),
-                _sti_markers_ch, trace.time_scale, horizontal=True, axis=y_ctr,
-                time_min=trace.time_min)
-            _sti_item_ch.setZValue(2)
-            self.addItem(_sti_item_ch)
-            row_idx += 1
+            if is_exp:
+                _wf = _BatchStiWaveformItem(
+                    QRectF(lw, y_top, timeline_w, row_h),
+                    _sti_evs_ch, trace.time_scale,
+                    time_min=_time_min, px_per_ns=_px_per_ns, x_offset=lw,
+                    log_scale=self._sti_log_scale,
+                    line_style=self._sti_line_style)
+                _wf.setZValue(2)
+                self.addItem(_wf)
+            else:
+                _sti_evs_clipped = self._clip_sti_events(
+                    _sti_evs_ch, _sti_stts_ch, _vp_ns_lo, _vp_ns_hi)
+                _sti_markers_ch = [
+                    (lw + (ev.time - _time_min) * _px_per_ns, _sti_color(ev.note), ev)
+                    for ev in _sti_evs_clipped
+                ]
+                _sti_item_ch = _BatchStiItem(
+                    QRectF(lw, y_top, timeline_w, row_h),
+                    _sti_markers_ch, trace.time_scale, horizontal=True, axis=y_ctr,
+                    time_min=trace.time_min)
+                _sti_item_ch.setZValue(2)
+                self.addItem(_sti_item_ch)
+            _sti_y += row_h + self._row_gap
 
         corner = self.addRect(QRectF(0, 0, lw, RULER_HEIGHT),
                               QPen(Qt.NoPen), QBrush(QColor("#1A1A1A")))
@@ -4510,6 +4632,194 @@ class _CoreHeaderItem(QGraphicsRectItem):
         self.update()
         super().hoverLeaveEvent(event)
 
+class _StiLabelItem(QGraphicsRectItem):
+    """Clickable label area for an STI channel row — toggles waveform expand/collapse.
+
+    Only tag_event / tag[0-7]_event channels are *expandable*; for other channels
+    the item still provides a consistent hit area but does nothing on click.
+    """
+
+    _HOVER_BRUSH = QBrush(QColor(100, 180, 255, 50))
+
+    def __init__(self, rect: QRectF, channel: str, tl_scene, expandable: bool = True):
+        super().__init__(rect)
+        self._channel    = channel
+        self._tl_scene   = tl_scene
+        self._expandable = expandable
+        self.setAcceptedMouseButtons(Qt.LeftButton)
+        self.setAcceptHoverEvents(True)
+        if expandable:
+            self.setCursor(Qt.PointingHandCursor)
+        self.setPen(QPen(Qt.NoPen))
+        self.setBrush(QBrush(Qt.transparent))
+
+    def mousePressEvent(self, event):
+        if self._expandable:
+            self._tl_scene.toggle_sti_channel(self._channel)
+        event.accept()
+
+    def hoverEnterEvent(self, event):
+        self.setBrush(self._HOVER_BRUSH)
+        self.update()
+        super().hoverEnterEvent(event)
+
+    def hoverLeaveEvent(self, event):
+        self.setBrush(QBrush(Qt.transparent))
+        self.update()
+        super().hoverLeaveEvent(event)
+
+
+class _BatchStiWaveformItem(QGraphicsItem):
+    """Renders an expanded step-chart waveform for one STI channel.
+
+    Numeric values are taken from ``StiEvent.note`` (falling back to
+    ``StiEvent.event``).  Non-numeric notes are assigned a stable integer
+    category index so that categorical channels still produce a readable chart.
+    When *log_scale* is True the y-axis uses log₂(1 + |value|) with the
+    original sign preserved.
+    """
+
+    def __init__(self, bounding_rect: QRectF, events: list, time_scale: str,
+                 time_min: int, px_per_ns: float, x_offset: float,
+                 log_scale: bool = False, line_style: str = "step"):
+        super().__init__()
+        self._bounding_rect = bounding_rect
+        self._events        = events      # all StiEvent objects for this channel
+        self._time_scale    = time_scale
+        self._time_min      = time_min
+        self._px_per_ns     = px_per_ns
+        self._x_offset      = x_offset
+        self._log_scale     = log_scale
+        self._line_style    = line_style  # "step" (hold) or "linear" (point-to-point)
+        self._category_map: dict = {}     # note → stable int (for categorical channels)
+        self.setCacheMode(QGraphicsItem.NoCache)
+        self.setAcceptHoverEvents(True)
+
+    # ------------------------------------------------------------------ helpers
+    def _ev_value(self, ev) -> float:
+        """Return a numeric float for *ev*; categorical notes map to stable ints."""
+        raw = ev.note or ev.event or ""
+        try:
+            return float(raw)
+        except (ValueError, TypeError):
+            pass
+        if raw not in self._category_map:
+            self._category_map[raw] = float(len(self._category_map))
+        return self._category_map[raw]
+
+    @staticmethod
+    def _signed_log2(v: float) -> float:
+        import math
+        return math.copysign(math.log2(1.0 + abs(v)), v)
+
+    # ------------------------------------------------------------------ Qt API
+    def boundingRect(self) -> QRectF:
+        return self._bounding_rect
+
+    def paint(self, painter: QPainter, option, widget=None) -> None:
+        if not self._events:
+            return
+
+        PAD        = 4
+        rect       = self._bounding_rect
+        chart_top  = rect.top()    + PAD
+        chart_bot  = rect.bottom() - PAD
+        chart_h    = chart_bot - chart_top
+        if chart_h <= 0:
+            return
+
+        vals = [self._ev_value(ev) for ev in self._events]
+        if self._log_scale:
+            mapped = [self._signed_log2(v) for v in vals]
+        else:
+            mapped = list(vals)
+
+        v_min = min(mapped)
+        v_max = max(mapped)
+        if v_min == v_max:
+            v_min -= 1.0
+            v_max += 1.0
+        v_rng = v_max - v_min
+
+        def val_to_y(m: float) -> float:
+            return chart_bot - ((m - v_min) / v_rng) * chart_h
+
+        def ev_to_x(ev) -> float:
+            return self._x_offset + (ev.time - self._time_min) * self._px_per_ns
+
+        painter.save()
+
+        # Axis lines (top / bottom of chart area)
+        _axis_pen = QPen(QColor(255, 255, 255, 28), 0.5, Qt.DashLine)
+        painter.setPen(_axis_pen)
+        painter.drawLine(QLineF(rect.left(), chart_top, rect.right(), chart_top))
+        painter.drawLine(QLineF(rect.left(), chart_bot,  rect.right(), chart_bot))
+
+        # Polyline: step-hold or direct point-to-point
+        line_color = QColor("#5BC8FF")
+        painter.setPen(QPen(line_color, 1.5))
+        painter.setBrush(Qt.NoBrush)
+
+        pts: list = []
+        if self._line_style == "linear":
+            for ev, m in zip(self._events, mapped):
+                pts.append((ev_to_x(ev), val_to_y(m)))
+        else:  # "step" (default): hold value until next event
+            for ev, m in zip(self._events, mapped):
+                x = ev_to_x(ev)
+                y = val_to_y(m)
+                if pts:
+                    prev_x, prev_y = pts[-1]
+                    pts.append((x, prev_y))   # horizontal leg of the step
+                pts.append((x, y))
+
+        if len(pts) >= 2:
+            poly = QPolygonF([QPointF(px, py) for px, py in pts])
+            painter.drawPolyline(poly)
+
+        # Event dots
+        dot_color = QColor("#80DFFF")
+        painter.setPen(QPen(dot_color.darker(130), 0.5))
+        painter.setBrush(QBrush(dot_color))
+        for ev, m in zip(self._events, mapped):
+            x = ev_to_x(ev)
+            y = val_to_y(m)
+            painter.drawEllipse(QPointF(x, y), 2.5, 2.5)
+
+        painter.restore()
+
+    def hoverMoveEvent(self, event) -> None:
+        if not self._events:
+            _get_popup().hide()
+            super().hoverMoveEvent(event)
+            return
+        pos_x = event.pos().x()
+        HIT   = 8    # px hit-zone half-width
+        best_ev   = None
+        best_dist = float('inf')
+        for ev in self._events:
+            x = self._x_offset + (ev.time - self._time_min) * self._px_per_ns
+            d = abs(x - pos_x)
+            if d < best_dist:
+                best_dist = d
+                best_ev   = ev
+            if x > pos_x + HIT and best_dist <= HIT:
+                break
+        if best_ev is not None and best_dist <= HIT:
+            tip = (f"<b>STI: {best_ev.note}</b><br>"
+                   f"Time: {_format_time(best_ev.time, self._time_scale)}<br>"
+                   f"Core: {best_ev.core}<br>"
+                   f"Target: {best_ev.target}<br>"
+                   f"Event: {best_ev.event}")
+            _get_popup().show_at(event.screenPos(), tip)
+        else:
+            _get_popup().hide()
+        super().hoverMoveEvent(event)
+
+    def hoverLeaveEvent(self, event) -> None:
+        _get_popup().hide()
+        super().hoverLeaveEvent(event)
+
 # ===========================================================================
 # View
 # ===========================================================================
@@ -4748,6 +5058,18 @@ class TimelineView(QGraphicsView):
 
     def set_show_grid(self, show: bool) -> None:
         self._scene.set_show_grid(show)
+
+    def set_sti_log_scale(self, enabled: bool) -> None:
+        self._scene.set_sti_log_scale(enabled)
+
+    def set_sti_line_style(self, style: str) -> None:
+        self._scene.set_sti_line_style(style)
+
+    def set_sti_row_h(self, h: int) -> None:
+        self._scene.set_sti_row_h(h)
+
+    def set_sti_waveform_h(self, h: int) -> None:
+        self._scene.set_sti_waveform_h(h)
 
     def set_font_size(self, size: int) -> None:
         self._scene.set_font_size(size)
@@ -7413,6 +7735,7 @@ class _SettingsDialog(QDialog):
                  vert_label_pixmap: bool,
                  zoom_unit: str,
                  label_width: int, row_height: int, row_gap: int,
+                 sti_row_h: int, sti_waveform_h: int, sti_line_style: str,
                  timescale_per_px_default: float,
                  is_dark: bool,
                  colorblind_safe: bool = False):
@@ -7592,6 +7915,34 @@ class _SettingsDialog(QDialog):
         f3.addRow("Row gap:", _inp(self._row_gap_spin))
 
         f3.addRow(self._hline())
+        f3.addRow("", self._section("STI rows"))
+
+        self._sti_row_h_spin = QSpinBox()
+        self._sti_row_h_spin.setRange(12, 60)
+        self._sti_row_h_spin.setSuffix(" px")
+        self._sti_row_h_spin.setValue(sti_row_h)
+        self._sti_row_h_spin.setToolTip("Height of collapsed STI channel rows (12\u201360 px)")
+        f3.addRow("STI collapsed height:", _inp(self._sti_row_h_spin))
+
+        self._sti_waveform_h_spin = QSpinBox()
+        self._sti_waveform_h_spin.setRange(40, 300)
+        self._sti_waveform_h_spin.setSuffix(" px")
+        self._sti_waveform_h_spin.setValue(sti_waveform_h)
+        self._sti_waveform_h_spin.setToolTip("Height of expanded STI waveform rows (40\u2013300 px)")
+        f3.addRow("STI expanded height:", _inp(self._sti_waveform_h_spin))
+
+        self._sti_line_style_combo = QComboBox()
+        self._sti_line_style_combo.addItem("Step (hold value)", "step")
+        self._sti_line_style_combo.addItem("Linear (point to point)", "linear")
+        _style_idx = 1 if sti_line_style == "linear" else 0
+        self._sti_line_style_combo.setCurrentIndex(_style_idx)
+        self._sti_line_style_combo.setToolTip(
+            "How the waveform line is drawn between events:\n"
+            "\u2022 Step: hold the previous value until the next event (staircase)\n"
+            "\u2022 Linear: connect events with a straight diagonal line")
+        f3.addRow("STI line style:", _inp(self._sti_line_style_combo))
+
+        f3.addRow(self._hline())
         f3.addRow("", self._section("Zoom & cursors"))
 
         self._timescale_per_px_spin = QDoubleSpinBox()
@@ -7630,9 +7981,18 @@ class _SettingsDialog(QDialog):
         footer = QHBoxLayout(footer_w)
         footer.setContentsMargins(16, 8, 16, 12)
         footer.setSpacing(14)
-        footer.addStretch()
 
         _btn_w, _btn_h = 88, 30   # minimum size for both buttons
+
+        btn_reset = QPushButton("Reset to Defaults")
+        btn_reset.setObjectName("btn_cancel")
+        btn_reset.setMinimumWidth(_btn_w)
+        btn_reset.setFixedHeight(_btn_h)
+        btn_reset.setToolTip("Restore all settings on this page to their built-in defaults")
+        btn_reset.clicked.connect(self._reset_to_defaults)
+        footer.addWidget(btn_reset)
+
+        footer.addStretch()
 
         btn_cancel = QPushButton("Cancel")
         btn_cancel.setObjectName("btn_cancel")
@@ -7674,11 +8034,37 @@ class _SettingsDialog(QDialog):
             self._label_width_spin.valueChanged,
             self._row_height_spin.valueChanged,
             self._row_gap_spin.valueChanged,
+            self._sti_row_h_spin.valueChanged,
+            self._sti_waveform_h_spin.valueChanged,
+            self._sti_line_style_combo.currentIndexChanged,
             self._timescale_per_px_spin.valueChanged,
         ):
             _sig.connect(lambda _=None: self.live_preview.emit())
 
         self.adjustSize()
+
+    # -- Reset all controls to built-in defaults ---------------------------
+    def _reset_to_defaults(self) -> None:
+        """Restore every control to its module-level default value."""
+        self._theme_combo.setCurrentIndex(0)           # Dark
+        self._colorblind_cb.setChecked(False)
+        self._font_spin.setValue(FONT_SIZE)
+        self._ui_font_spin.setValue(UI_FONT_SIZE)
+        self._sti_cb.setChecked(True)
+        self._grid_cb.setChecked(True)
+        self._legend_cb.setChecked(True)
+        self._stats_cb.setChecked(True)
+        self._marks_cb.setChecked(True)
+        self._hover_hl_cb.setChecked(_HOVER_HIGHLIGHT_ENABLED)
+        self._vert_label_pixmap_cb.setChecked(_VERTICAL_LABEL_USE_PIXMAP)
+        self._label_width_spin.setValue(LABEL_WIDTH)
+        self._row_height_spin.setValue(ROW_HEIGHT)
+        self._row_gap_spin.setValue(ROW_GAP)
+        self._sti_row_h_spin.setValue(STI_ROW_H)
+        self._sti_waveform_h_spin.setValue(STI_WAVEFORM_H)
+        self._sti_line_style_combo.setCurrentIndex(0)  # "step"
+        self._timescale_per_px_spin.setValue(_TIMESCALE_PER_PX_DEFAULT)
+        self._cursor_spin.setValue(_DEFAULT_MAX_CURSORS)
 
     # -- result accessors (read after exec_() == Accepted) ------------------
     @property
@@ -7703,6 +8089,12 @@ class _SettingsDialog(QDialog):
     def row_height(self) -> int:          return self._row_height_spin.value()
     @property
     def row_gap(self) -> int:             return self._row_gap_spin.value()
+    @property
+    def sti_row_h(self) -> int:           return self._sti_row_h_spin.value()
+    @property
+    def sti_waveform_h(self) -> int:      return self._sti_waveform_h_spin.value()
+    @property
+    def sti_line_style(self) -> str:      return self._sti_line_style_combo.currentData()
     @property
     def timescale_per_px_default(self) -> float: return self._timescale_per_px_spin.value()
     @property
@@ -7743,6 +8135,9 @@ class MainWindow(QMainWindow):
         self._label_width_val:       int   = LABEL_WIDTH
         self._row_height_val:        int   = ROW_HEIGHT
         self._row_gap_val:            int   = ROW_GAP
+        self._sti_row_h_val:          int   = STI_ROW_H
+        self._sti_waveform_h_val:     int   = STI_WAVEFORM_H
+        self._sti_line_style_val:     str   = STI_LINE_STYLE
         self._timescale_per_px_default_val:  float = _TIMESCALE_PER_PX_DEFAULT
         self._hover_highlight_val:    bool  = _HOVER_HIGHLIGHT_ENABLED
         self._vert_label_pixmap_val:  bool  = _VERTICAL_LABEL_USE_PIXMAP
@@ -7859,6 +8254,20 @@ class MainWindow(QMainWindow):
         if saved_nppd != _TIMESCALE_PER_PX_DEFAULT:
             self._timescale_per_px_default_val = saved_nppd
             self._view._scene.set_timescale_per_px_default(saved_nppd)
+
+        # STI row heights and line style
+        saved_srh = s.get_int("view", "sti_row_h", STI_ROW_H)
+        if saved_srh != STI_ROW_H:
+            self._sti_row_h_val = saved_srh
+            self._view._scene.set_sti_row_h(saved_srh)
+        saved_swh = s.get_int("view", "sti_waveform_h", STI_WAVEFORM_H)
+        if saved_swh != STI_WAVEFORM_H:
+            self._sti_waveform_h_val = saved_swh
+            self._view._scene.set_sti_waveform_h(saved_swh)
+        saved_sls = s.get("view", "sti_line_style", STI_LINE_STYLE)
+        if saved_sls != STI_LINE_STYLE:
+            self._sti_line_style_val = saved_sls
+            self._view._scene.set_sti_line_style(saved_sls)
 
         # Hover label highlight
         saved_hh = s.get_bool("view", "hover_highlight", _HOVER_HIGHLIGHT_ENABLED)
@@ -8791,6 +9200,18 @@ class MainWindow(QMainWindow):
             "Add bookmark at first cursor (or viewport centre)  (M)")
         tb.addSeparator()
 
+        # --- STI waveform scale toggle ---
+        self._tb_log2_btn = tb.addAction("Log₂", self._toggle_sti_log_scale)
+        self._tb_log2_btn.setCheckable(True)
+        self._tb_log2_btn.setChecked(False)
+        self._tb_log2_btn.setToolTip(
+            "STI waveform y-axis: toggle between linear and log₂ scale\n"
+            "(only active when an STI row is expanded)")
+        _l2w = tb.widgetForAction(self._tb_log2_btn)
+        if _l2w:
+            _l2w.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        tb.addSeparator()
+
         # --- Settings button ---
         _ia("Settings", self._open_settings, _IC_SETTINGS, "Open Settings  (Ctrl+,)")
 
@@ -8886,6 +9307,11 @@ class MainWindow(QMainWindow):
             self._grid_toggle_cb.blockSignals(False)
         if persist:
             self._settings.set("view", "show_grid", str(self._show_grid).lower())
+
+    def _toggle_sti_log_scale(self) -> None:
+        """Toggle the STI waveform y-axis between linear and log₂ scale."""
+        enabled = self._tb_log2_btn.isChecked()
+        self._view.set_sti_log_scale(enabled)
 
     def _set_vert_label_pixmap(self, enabled: bool, persist: bool = True) -> None:
         """Switch the vertical-label rendering strategy and rebuild the scene."""
@@ -9724,6 +10150,15 @@ class MainWindow(QMainWindow):
         if vals["row_gap"] != self._row_gap_val:
             self._row_gap_val = vals["row_gap"]
             self._view._scene.set_row_gap(self._row_gap_val)
+        if vals["sti_row_h"] != self._sti_row_h_val:
+            self._sti_row_h_val = vals["sti_row_h"]
+            self._view.set_sti_row_h(self._sti_row_h_val)
+        if vals["sti_waveform_h"] != self._sti_waveform_h_val:
+            self._sti_waveform_h_val = vals["sti_waveform_h"]
+            self._view.set_sti_waveform_h(self._sti_waveform_h_val)
+        if vals["sti_line_style"] != self._sti_line_style_val:
+            self._sti_line_style_val = vals["sti_line_style"]
+            self._view.set_sti_line_style(self._sti_line_style_val)
         if vals["timescale_per_px_default"] != self._timescale_per_px_default_val:
             self._timescale_per_px_default_val = vals["timescale_per_px_default"]
             self._view._scene.set_timescale_per_px_default(self._timescale_per_px_default_val)
@@ -9762,6 +10197,12 @@ class MainWindow(QMainWindow):
             self._settings.set("view", "row_height", str(self._row_height_val))
         if snap["row_gap"] != self._row_gap_val:
             self._settings.set("view", "row_gap", str(self._row_gap_val))
+        if snap["sti_row_h"] != self._sti_row_h_val:
+            self._settings.set("view", "sti_row_h", str(self._sti_row_h_val))
+        if snap["sti_waveform_h"] != self._sti_waveform_h_val:
+            self._settings.set("view", "sti_waveform_h", str(self._sti_waveform_h_val))
+        if snap["sti_line_style"] != self._sti_line_style_val:
+            self._settings.set("view", "sti_line_style", self._sti_line_style_val)
         if snap["timescale_per_px_default"] != self._timescale_per_px_default_val:
             self._settings.set("view", "timescale_per_px_default",
                                str(self._timescale_per_px_default_val))
@@ -9784,6 +10225,9 @@ class MainWindow(QMainWindow):
             "label_width":              self._label_width_val,
             "row_height":               self._row_height_val,
             "row_gap":                  self._row_gap_val,
+            "sti_row_h":                self._sti_row_h_val,
+            "sti_waveform_h":           self._sti_waveform_h_val,
+            "sti_line_style":           self._sti_line_style_val,
             "timescale_per_px_default": self._timescale_per_px_default_val,
         }
         dlg = _SettingsDialog(
@@ -9799,6 +10243,9 @@ class MainWindow(QMainWindow):
             label_width=self._label_width_val,
             row_height=self._row_height_val,
             row_gap=self._row_gap_val,
+            sti_row_h=self._sti_row_h_val,
+            sti_waveform_h=self._sti_waveform_h_val,
+            sti_line_style=self._sti_line_style_val,
             timescale_per_px_default=self._timescale_per_px_default_val,
             is_dark=self._is_dark,
             show_hover_highlight=self._hover_highlight_val,
@@ -9822,6 +10269,9 @@ class MainWindow(QMainWindow):
             "label_width":              dlg.label_width,
             "row_height":               dlg.row_height,
             "row_gap":                  dlg.row_gap,
+            "sti_row_h":                dlg.sti_row_h,
+            "sti_waveform_h":           dlg.sti_waveform_h,
+            "sti_line_style":           dlg.sti_line_style,
             "timescale_per_px_default": dlg.timescale_per_px_default,
         }))
         # The dialog carries its own scoped stylesheet (set at construction

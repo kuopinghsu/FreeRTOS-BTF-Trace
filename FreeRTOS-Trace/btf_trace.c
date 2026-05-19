@@ -92,6 +92,11 @@ void btf_traceEND(void) {
     printf("%ld events generated.\n", trace_data.h.event_count);
 }
 
+void btf_traceTAG(int t, int v) {
+    t &= 7; // limit to 0 .. 7
+    btf_trace_add_event ((uint32_t)v, (event_t)(TRACE_EVENT_TAG + t));
+}
+
 void btf_trace_add_task (
     uint8_t *task_name,
     uint32_t task_id,
@@ -333,6 +338,62 @@ void btf_dump(
                         "trigger",
                         event->value);
                 break;
+            case TRACE_EVENT_TAG:
+                printf( "%lu,%s,0,STI,%s,0,%s,%ld\n",
+                        event->time,
+                        "Core_1",
+                        "tag0_event",
+                        "trigger",
+                        event->value);
+            case TRACE_EVENT_TAG1:
+                printf( "%lu,%s,0,STI,%s,0,%s,%ld\n",
+                        event->time,
+                        "Core_1",
+                        "tag1_event",
+                        "trigger",
+                        event->value);
+            case TRACE_EVENT_TAG2:
+                printf( "%lu,%s,0,STI,%s,0,%s,%ld\n",
+                        event->time,
+                        "Core_1",
+                        "tag2_event",
+                        "trigger",
+                        event->value);
+            case TRACE_EVENT_TAG3:
+                printf( "%lu,%s,0,STI,%s,0,%s,%ld\n",
+                        event->time,
+                        "Core_1",
+                        "tag3_event",
+                        "trigger",
+                        event->value);
+            case TRACE_EVENT_TAG4:
+                printf( "%lu,%s,0,STI,%s,0,%s,%ld\n",
+                        event->time,
+                        "Core_1",
+                        "tag4_event",
+                        "trigger",
+                        event->value);
+            case TRACE_EVENT_TAG5:
+                printf( "%lu,%s,0,STI,%s,0,%s,%ld\n",
+                        event->time,
+                        "Core_1",
+                        "tag5_event",
+                        "trigger",
+                        event->value);
+            case TRACE_EVENT_TAG6:
+                printf( "%lu,%s,0,STI,%s,0,%s,%ld\n",
+                        event->time,
+                        "Core_1",
+                        "tag6_event",
+                        "trigger",
+                        event->value);
+            case TRACE_EVENT_TAG7:
+                printf( "%lu,%s,0,STI,%s,0,%s,%ld\n",
+                        event->time,
+                        "Core_1",
+                        "tag7_event",
+                        "trigger",
+                        event->value);
             default:
                 break;
         }

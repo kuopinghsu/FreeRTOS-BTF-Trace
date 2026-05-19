@@ -313,7 +313,73 @@ int genbtf(
                         "trigger",
                         event->value);
                 break;
+            case TRACE_EVENT_TAG:
+                fprintf(fout, "%u,%s,0,STI,%s,0,%s,%d\n",
+                        event->time,
+                        "Core_1",
+                        "tag0_event",
+                        "trigger",
+                        event->value);
+                break;
+            case TRACE_EVENT_TAG1:
+                fprintf(fout, "%u,%s,0,STI,%s,0,%s,%d\n",
+                        event->time,
+                        "Core_1",
+                        "tag1_event",
+                        "trigger",
+                        event->value);
+                break;
+            case TRACE_EVENT_TAG2:
+                fprintf(fout, "%u,%s,0,STI,%s,0,%s,%d\n",
+                        event->time,
+                        "Core_1",
+                        "tag2_event",
+                        "trigger",
+                        event->value);
+                break;
+            case TRACE_EVENT_TAG3:
+                fprintf(fout, "%u,%s,0,STI,%s,0,%s,%d\n",
+                        event->time,
+                        "Core_1",
+                        "tag3_event",
+                        "trigger",
+                        event->value);
+                break;
+            case TRACE_EVENT_TAG4:
+                fprintf(fout, "%u,%s,0,STI,%s,0,%s,%d\n",
+                        event->time,
+                        "Core_1",
+                        "tag4_event",
+                        "trigger",
+                        event->value);
+                break;
+            case TRACE_EVENT_TAG5:
+                fprintf(fout, "%u,%s,0,STI,%s,0,%s,%d\n",
+                        event->time,
+                        "Core_1",
+                        "tag5_event",
+                        "trigger",
+                        event->value);
+                break;
+            case TRACE_EVENT_TAG6:
+                fprintf(fout, "%u,%s,0,STI,%s,0,%s,%d\n",
+                        event->time,
+                        "Core_1",
+                        "tag6_event",
+                        "trigger",
+                        event->value);
+                break;
+            case TRACE_EVENT_TAG7:
+                fprintf(fout, "%u,%s,0,STI,%s,0,%s,%d\n",
+                        event->time,
+                        "Core_1",
+                        "tag7_event",
+                        "trigger",
+                        event->value);
+                break;
             default:
+		fprintf(stderr, "Unknown event: %d\n", event->types);
+		exit(1);
                 break;
         }
         current_task = event->value;

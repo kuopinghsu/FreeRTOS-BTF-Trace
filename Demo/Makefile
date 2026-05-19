@@ -8,7 +8,7 @@ FREERTOS_SRC = \
     $(FREERTOS_SOURCE_DIR)/timers.c \
     $(FREERTOS_SOURCE_DIR)/stream_buffer.c \
     $(FREERTOS_SOURCE_DIR)/event_groups.c \
-    $(FREERTOS_SOURCE_DIR)/portable/MemMang/heap_3.c
+    $(FREERTOS_SOURCE_DIR)/portable/MemMang/heap_4.c
 
 PORT_SRC = $(FREERTOS_SOURCE_DIR)/portable/GCC/RISC-V/port.c \
            $(ROOTDIR)/FreeRTOS-Trace/btf_trace.c \

@@ -1,7 +1,5 @@
 # FreeRTOS-BTF-Trace
 
-[![Codacy Badge](https://app.codacy.com/project/badge/Grade/f952ae549fe94c2b88401a2cf935359b)](https://www.codacy.com/gh/kuopinghsu/FreeRTOS-BTF-Trace/dashboard?utm_source=github.com&utm_medium=referral&utm_content=kuopinghsu/FreeRTOS-BTF-Trace&utm_campaign=Badge_Grade)
-
 A lightweight, open-source framework for recording and visualising FreeRTOS task scheduling traces.
 Trace output is produced in two industry-standard formats:
 

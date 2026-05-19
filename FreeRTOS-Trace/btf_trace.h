@@ -33,7 +33,7 @@
 #endif
 
 #ifndef configMAX_TRACE_EVENTS
-#define configMAX_TRACE_EVENTS          4096
+#define configMAX_TRACE_EVENTS          8192
 #endif
 
 #ifndef configMAX_TRACE_TASK_NAME_LEN
@@ -58,7 +58,15 @@ typedef enum {
     TRACE_EVENT_QUEUE_RECEIVE        = 13,
     TRACE_EVENT_QUEUE_PEEK           = 14,
     TRACE_EVENT_QUEUE_DELETE         = 15,
-    TRACE_EVENT_TASK_INCREMENT_TICK  = 16
+    TRACE_EVENT_TASK_INCREMENT_TICK  = 16,
+    TRACE_EVENT_TAG                  = 90,
+    TRACE_EVENT_TAG1                 = 91,
+    TRACE_EVENT_TAG2                 = 92,
+    TRACE_EVENT_TAG3                 = 93,
+    TRACE_EVENT_TAG4                 = 94,
+    TRACE_EVENT_TAG5                 = 95,
+    TRACE_EVENT_TAG6                 = 96,
+    TRACE_EVENT_TAG7                 = 97
 } event_t;
 
 typedef struct {
@@ -92,6 +100,7 @@ typedef struct {
 
 void btf_traceSTART(void);
 void btf_traceEND(void);
+void btf_traceTAG(int t, int v);
 void btf_trace_add_task(uint8_t *task_name, uint32_t task_id, event_t event);
 void btf_trace_add_event(uint32_t value, event_t event);
 void btf_dump(void);
