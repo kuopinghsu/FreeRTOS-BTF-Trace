@@ -104,6 +104,49 @@
           Copy Screenshot
         </div>
       </div>
+
+      <!-- Horizontal scrollbar (time axis in H-mode / column scroll in V-mode) -->
+      <div
+        v-if="showHScrollbar"
+        class="scrollbar-track scrollbar-track-h"
+        :class="{ 'has-v-sb': showVScrollbar }"
+        @mousedown.prevent.stop="onHTrackClick"
+      >
+        <div
+          class="scrollbar-thumb"
+          :style="hThumbStyle"
+          @mousedown.prevent.stop="onHThumbMouseDown"
+        />
+      </div>
+
+      <!-- Vertical scrollbar (row scroll in H-mode / time axis in V-mode) -->
+      <div
+        v-if="showVScrollbar"
+        class="scrollbar-track scrollbar-track-v"
+        :class="{ 'has-h-sb': showHScrollbar }"
+        @mousedown.prevent.stop="onVTrackClick"
+      >
+        <div
+          class="scrollbar-thumb"
+          :style="vThumbStyle"
+          @mousedown.prevent.stop="onVThumbMouseDown"
+        />
+      </div>
+
+      <!-- Navigator popup: shows full-view thumbnail with current viewport highlighted -->
+      <Transition name="overview-fade">
+        <div
+          v-if="overviewVisible"
+          class="overview-popup"
+        >
+          <canvas
+            ref="overviewCanvasEl"
+            class="overview-canvas"
+            width="260"
+            height="130"
+          />
+        </div>
+      </Transition>
     </div>
   </div>
 </template>
@@ -116,7 +159,7 @@ import StiTooltip  from './StiTooltip.vue'
 import { render as renderTimeline, renderVertical, buildRowLayout, buildColumnLayout, drawHoverLine, drawHoverLineVertical, drawCursors, drawCursorsVertical, drawMarksHorizontal, drawMarksVertical, RULER_H, ROW_H, STI_ROW_H, RULER_W, COL_W, HEADER_H, formatTime } from '../renderer/TimelineRenderer.js'
 import { renderToSvg } from '../renderer/SvgExporter.js'
 import { InteractionHandler } from '../renderer/InteractionHandler.js'
-import { taskMergeKey } from '../utils/colors.js'
+import { taskMergeKey, taskColor, coreColor, parseTaskName, stiChannelColor } from '../utils/colors.js'
 
 // ---- Props & emits -------------------------------------------------------
 const props = defineProps({
@@ -138,6 +181,93 @@ const stiExpanded = reactive(new Set())
 
 const orientation = computed(() => props.options.orientation || 'h')
 
+// ---- Scrollbar geometry --------------------------------------------------
+const traceBounds = computed(() => {
+  if (!props.trace) return null
+  const lo = props.trace.timeMin >= 0 ? Math.max(0, props.trace.timeMin) : props.trace.timeMin
+  return { lo, hi: props.trace.timeMax, span: props.trace.timeMax - lo }
+})
+
+const totalRowHeight = computed(() => {
+  if (!props.trace || orientation.value !== 'h') return 0
+  const { totalHeight } = buildRowLayout(
+    props.trace, props.options.viewMode, expanded, 0,
+    props.options.showSti !== false, stiExpanded,
+  )
+  return totalHeight
+})
+
+const showHScrollbar = computed(() => {
+  if (!props.trace || !traceBounds.value) return false
+  if (orientation.value === 'h') {
+    return (viewport.timeEnd - viewport.timeStart) < traceBounds.value.span - 1
+  }
+  // Vertical mode: H scrollbar = column scroll
+  const { totalWidth } = buildColumnLayout(
+    props.trace, props.options.viewMode, expanded, 0, props.options.showSti !== false,
+  )
+  return totalWidth > viewport.canvasW + 1
+})
+
+const showVScrollbar = computed(() => {
+  if (!props.trace || !traceBounds.value) return false
+  if (orientation.value === 'h') {
+    return totalRowHeight.value > (viewport.canvasH - RULER_H) + 1
+  }
+  // Vertical mode: V scrollbar = time scroll
+  return (viewport.timeEnd - viewport.timeStart) < traceBounds.value.span - 1
+})
+
+const hThumbStyle = computed(() => {
+  if (!showHScrollbar.value || !traceBounds.value || !props.trace) return {}
+  const vSbW  = showVScrollbar.value ? SCROLLBAR_SIZE : 0
+  const trackW = viewport.canvasW - vSbW
+  if (orientation.value === 'h') {
+    const visSpan = viewport.timeEnd - viewport.timeStart
+    const thumbW  = Math.max(20, (visSpan / traceBounds.value.span) * trackW)
+    const maxLeft = trackW - thumbW
+    const thumbL  = maxLeft > 0
+      ? Math.min(maxLeft, ((viewport.timeStart - traceBounds.value.lo) / (traceBounds.value.span - visSpan)) * maxLeft)
+      : 0
+    return { width: `${thumbW}px`, left: `${Math.max(0, thumbL)}px` }
+  }
+  // Vertical mode – column scroll
+  const { totalWidth } = buildColumnLayout(
+    props.trace, props.options.viewMode, expanded, 0, props.options.showSti !== false,
+  )
+  const thumbW  = Math.max(20, (viewport.canvasW / Math.max(1, totalWidth)) * trackW)
+  const maxLeft = trackW - thumbW
+  const thumbL  = maxLeft > 0
+    ? Math.min(maxLeft, ((viewport.scrollX || 0) / Math.max(1, totalWidth - viewport.canvasW)) * maxLeft)
+    : 0
+  return { width: `${thumbW}px`, left: `${Math.max(0, thumbL)}px` }
+})
+
+const vThumbStyle = computed(() => {
+  if (!showVScrollbar.value || !traceBounds.value || !props.trace) return {}
+  const hSbH   = showHScrollbar.value ? SCROLLBAR_SIZE : 0
+  const trackH = viewport.canvasH - hSbH
+  if (orientation.value === 'h') {
+    const visH    = viewport.canvasH - RULER_H
+    const bodyH   = trackH - RULER_H
+    const thumbH  = Math.max(20, (visH / Math.max(1, totalRowHeight.value)) * bodyH)
+    const maxTop  = bodyH - thumbH
+    const thumbT  = maxTop > 0
+      ? Math.min(maxTop, (viewport.scrollY / Math.max(1, totalRowHeight.value - visH)) * maxTop)
+      : 0
+    return { height: `${thumbH}px`, top: `${RULER_H + thumbT}px` }
+  }
+  // Vertical mode – time scroll
+  const visSpan = viewport.timeEnd - viewport.timeStart
+  const bodyH   = trackH - HEADER_H
+  const thumbH  = Math.max(20, (visSpan / traceBounds.value.span) * bodyH)
+  const maxTop  = bodyH - thumbH
+  const thumbT  = maxTop > 0
+    ? Math.min(maxTop, ((viewport.timeStart - traceBounds.value.lo) / (traceBounds.value.span - visSpan)) * maxTop)
+    : 0
+  return { height: `${thumbH}px`, top: `${HEADER_H + thumbT}px` }
+})
+
 const viewport = reactive({
   timeStart: 0,
   timeEnd:   1,
@@ -153,6 +283,13 @@ const hoverTime   = ref(null)
 
 // Right-click context menu
 const contextMenu = reactive({ visible: false, x: 0, y: 0, ns: 0 })
+
+// ---- Scrollbars & navigator popup ----------------------------------------
+const SCROLLBAR_SIZE   = 10          // px – scrollbar track thickness
+const overviewCanvasEl = ref(null)
+const overviewVisible  = ref(false)
+let   _overviewHideTimer = null
+let   _sbDrag            = null      // active scrollbar drag state: { type, … }
 
 // ---- Renderer loop --------------------------------------------------------
 let _rafId = null
@@ -743,6 +880,20 @@ watch(() => props.options.selectedMarkId, () => {
   paintHoverOverlay()
 })
 
+// Show navigator popup on scroll / pan when content overflows the viewport
+watch(
+  [() => viewport.timeStart, () => viewport.timeEnd, () => viewport.scrollY, () => viewport.scrollX],
+  () => {
+    if (!props.trace) return
+    if (showHScrollbar.value || showVScrollbar.value) {
+      showOverviewPopup()
+    } else {
+      clearTimeout(_overviewHideTimer)
+      overviewVisible.value = false
+    }
+  },
+)
+
 watch(() => props.cursors, (c) => {
   _handler?.setCursors(c)
   paintHoverOverlay()  // cursors are on the overlay canvas — no full repaint needed
@@ -773,6 +924,304 @@ watch(stiHover, (ev) => {
   }
 })
 
+// ---- Navigator popup & scrollbar interaction -----------------------------
+
+function showOverviewPopup() {
+  overviewVisible.value = true
+  clearTimeout(_overviewHideTimer)
+  // Only schedule auto-hide when not actively dragging
+  if (!_sbDrag) {
+    _overviewHideTimer = setTimeout(() => { overviewVisible.value = false }, 1800)
+  }
+  nextTick(paintOverview)
+}
+
+function paintOverview() {
+  const canvas = overviewCanvasEl.value
+  if (!canvas || !props.trace || !traceBounds.value) return
+  const W   = canvas.width
+  const H   = canvas.height
+  const ctx = canvas.getContext('2d')
+  const tr  = props.trace
+  const { lo, hi } = traceBounds.value
+  const span = hi - lo
+  if (span <= 0) return
+
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
+
+  // ---- Background --------------------------------------------------------
+  ctx.fillStyle = props.options.darkMode ? '#1a1a1a' : '#e8e8e8'
+  ctx.fillRect(0, 0, W, H)
+
+  const pxPerNs  = W / span
+  const isCore   = props.options.viewMode === 'core'
+
+  // ---- Build flat row descriptors ----------------------------------------
+  // Each: { segs, color }  – no ruler, no labels, pure colored bars.
+  const rowDefs = []
+
+  if (!isCore) {
+    for (const mk of tr.tasks) {
+      const repr = tr.taskRepr.get(mk)
+      const segs = tr.segLodUltraByMergeKey.get(mk) || tr.segByMergeKey.get(mk) || []
+      if (!segs.length) continue
+      rowDefs.push({ segs, color: taskColor(mk, repr) })
+    }
+  } else {
+    for (const coreName of tr.coreNames) {
+      // Core header row (solid core colour)
+      const hdrSegs = tr.coreSegLodUltra.get(coreName) || tr.coreSegs.get(coreName) || []
+      if (hdrSegs.length) {
+        rowDefs.push({ segs: hdrSegs, color: coreColor(coreName) })
+      }
+      // Task sub-rows (task colour, TICK excluded)
+      const taskOrder = (tr.coreTaskOrder.get(coreName) || [])
+        .filter(t => parseTaskName(t).name !== 'TICK')
+      for (const taskRaw of taskOrder) {
+        const mk     = taskMergeKey(taskRaw)
+        const tSegs  = tr.coreTaskSegLodUltra.get(coreName)?.get(taskRaw)
+                    || tr.coreTaskSegs.get(coreName)?.get(taskRaw) || []
+        if (!tSegs.length) continue
+        rowDefs.push({ segs: tSegs, color: taskColor(mk, taskRaw) })
+      }
+    }
+  }
+
+  // ---- STI channel rows (separate array, painted at bottom of minimap) ---
+  const stiDefs = []
+  if (props.options.showSti !== false && tr.stiChannels?.length) {
+    for (const ch of tr.stiChannels) {
+      const evs = tr.stiEventsByTarget?.get(ch) || []
+      if (!evs.length) continue
+      stiDefs.push({ evs, color: stiChannelColor(ch), isExpanded: stiExpanded.has(ch) })
+    }
+  }
+
+  // ---- Paint rows --------------------------------------------------------
+  const STI_MINI_H  = 12  // minimum px per STI row in minimap
+  const stiTotalH   = Math.min(H * 0.4, stiDefs.length * STI_MINI_H)
+  const taskAreaH   = H - stiTotalH
+
+  if (rowDefs.length) {
+    const rowH = taskAreaH / rowDefs.length
+    for (let i = 0; i < rowDefs.length; i++) {
+      const { segs, color } = rowDefs[i]
+      const y  = i * rowH
+      const rh = Math.max(1, rowH - 0.3)
+      ctx.fillStyle = color
+      for (const seg of segs) {
+        const x  = (seg.start - lo) * pxPerNs
+        const sw = Math.max(0.5, (seg.end - seg.start) * pxPerNs)
+        ctx.fillRect(x, y, sw, rh)
+      }
+    }
+  }
+
+  if (stiDefs.length) {
+    const stiRowH = stiTotalH / stiDefs.length
+    for (let i = 0; i < stiDefs.length; i++) {
+      const { evs, color, isExpanded } = stiDefs[i]
+      const y  = taskAreaH + i * stiRowH
+      const rh = Math.max(2, stiRowH - 0.5)
+      ctx.fillStyle = color
+      if (isExpanded) {
+        // Step-hold mini chart using numeric note values
+        let vMin = Infinity, vMax = -Infinity
+        for (const ev of evs) {
+          const v = parseFloat(ev.note !== '' ? ev.note : ev.event)
+          if (!isNaN(v)) { if (v < vMin) vMin = v; if (v > vMax) vMax = v }
+        }
+        if (isFinite(vMin) && vMin !== vMax) {
+          for (let j = 0; j < evs.length; j++) {
+            const ev  = evs[j]
+            const v   = parseFloat(ev.note !== '' ? ev.note : ev.event)
+            if (isNaN(v)) continue
+            const x1    = (ev.time - lo) * pxPerNs
+            const x2    = j + 1 < evs.length ? (evs[j + 1].time - lo) * pxPerNs : W
+            const normV = (v - vMin) / (vMax - vMin)
+            const barH  = Math.max(1, normV * rh)
+            ctx.fillRect(x1, y + rh - barH, Math.max(1, x2 - x1), barH)
+          }
+        } else {
+          // All same value or non-numeric — fall back to 2 px marks
+          for (const ev of evs) {
+            ctx.fillRect((ev.time - lo) * pxPerNs - 1, y, 2, rh)
+          }
+        }
+      } else {
+        // Collapsed: 2 px vertical marks at each event time
+        for (const ev of evs) {
+          ctx.fillRect((ev.time - lo) * pxPerNs - 1, y, 2, rh)
+        }
+      }
+    }
+  }
+
+  // ---- Viewport indicator ------------------------------------------------
+  const dark = props.options.darkMode
+  ctx.strokeStyle = dark ? 'rgba(255,160,60,0.9)'  : 'rgba(200,70,10,0.85)'
+  ctx.fillStyle   = dark ? 'rgba(255,160,60,0.18)' : 'rgba(200,70,10,0.12)'
+  ctx.lineWidth   = 1.5
+
+  if (orientation.value === 'h') {
+    const vx = Math.max(0, (viewport.timeStart - lo) * pxPerNs)
+    const vw = Math.min(W - vx, (viewport.timeEnd - viewport.timeStart) * pxPerNs)
+    const totH = totalRowHeight.value
+    const visH = viewport.canvasH - RULER_H
+    let vy = 0
+    let vh = H
+    if (totH > visH && totH > 0) {
+      vy = (viewport.scrollY / (totH - visH)) * (H - (visH / totH) * H)
+      vh = Math.max(2, (visH / totH) * H)
+    }
+    ctx.beginPath()
+    ctx.rect(vx, vy, Math.max(2, vw), vh)
+    ctx.fill()
+    ctx.stroke()
+  } else {
+    const pxPerNsV = H / span
+    const vy = Math.max(0, (viewport.timeStart - lo) * pxPerNsV)
+    const vh = Math.min(H - vy, (viewport.timeEnd - viewport.timeStart) * pxPerNsV)
+    ctx.beginPath()
+    ctx.rect(0, vy, W, Math.max(2, vh))
+    ctx.fill()
+    ctx.stroke()
+  }
+}
+
+// Scrollbar mouse-move / mouse-up (attached to document during drag)
+function _sbMouseMove(e) {
+  if (!_sbDrag || !props.trace) return
+  if (_sbDrag.type === 'h') {
+    const dx   = e.clientX - _sbDrag.startX
+    const newL = Math.max(0, Math.min(_sbDrag.usableW, _sbDrag.startL + dx))
+    const ratio = _sbDrag.usableW > 0 ? newL / _sbDrag.usableW : 0
+    if (orientation.value === 'h') {
+      const newStart = _sbDrag.lo + ratio * (_sbDrag.span - _sbDrag.visSpan)
+      viewport.timeStart = newStart
+      viewport.timeEnd   = newStart + _sbDrag.visSpan
+    } else {
+      const { totalWidth } = buildColumnLayout(
+        props.trace, props.options.viewMode, expanded, 0, props.options.showSti !== false,
+      )
+      viewport.scrollX = Math.max(0, ratio * Math.max(0, totalWidth - viewport.canvasW))
+    }
+    scheduleRender()
+  } else {
+    const dy   = e.clientY - _sbDrag.startY
+    const newT = Math.max(0, Math.min(_sbDrag.usableH, _sbDrag.startT + dy))
+    const ratio = _sbDrag.usableH > 0 ? newT / _sbDrag.usableH : 0
+    if (orientation.value === 'h') {
+      viewport.scrollY = ratio * _sbDrag.maxScrollY
+    } else {
+      const newStart = _sbDrag.lo + ratio * (_sbDrag.span - _sbDrag.visSpan)
+      viewport.timeStart = newStart
+      viewport.timeEnd   = newStart + _sbDrag.visSpan
+    }
+    scheduleRender()
+  }
+}
+
+function _sbMouseUp() {
+  _sbDrag = null
+  document.removeEventListener('mousemove', _sbMouseMove)
+  document.removeEventListener('mouseup', _sbMouseUp)
+  // Keep overview visible for 1.5 s after releasing
+  _overviewHideTimer = setTimeout(() => { overviewVisible.value = false }, 1500)
+}
+
+function onHThumbMouseDown(e) {
+  if (!props.trace || !traceBounds.value) return
+  const { lo, span } = traceBounds.value
+  const vSbW   = showVScrollbar.value ? SCROLLBAR_SIZE : 0
+  const trackW = viewport.canvasW - vSbW
+  const visSpan = viewport.timeEnd - viewport.timeStart
+  const thumbW  = Math.max(20, (visSpan / span) * trackW)
+  const usableW = trackW - thumbW
+  const startL  = usableW > 0
+    ? Math.min(usableW, ((viewport.timeStart - lo) / (span - visSpan)) * usableW)
+    : 0
+  _sbDrag = { type: 'h', startX: e.clientX, startL, usableW, lo, span, visSpan }
+  document.addEventListener('mousemove', _sbMouseMove)
+  document.addEventListener('mouseup', _sbMouseUp)
+  showOverviewPopup()
+}
+
+function onVThumbMouseDown(e) {
+  if (!props.trace || !traceBounds.value) return
+  const { lo, span } = traceBounds.value
+  const hSbH   = showHScrollbar.value ? SCROLLBAR_SIZE : 0
+  const trackH = viewport.canvasH - hSbH
+  if (orientation.value === 'h') {
+    const visH    = viewport.canvasH - RULER_H
+    const bodyH   = trackH - RULER_H
+    const thumbH  = Math.max(20, (visH / Math.max(1, totalRowHeight.value)) * bodyH)
+    const usableH = bodyH - thumbH
+    const maxScrollY = Math.max(0, totalRowHeight.value - visH)
+    const startT  = usableH > 0 ? Math.min(usableH, (viewport.scrollY / Math.max(1, maxScrollY)) * usableH) : 0
+    _sbDrag = { type: 'v', startY: e.clientY, startT, usableH, maxScrollY }
+  } else {
+    const visSpan = viewport.timeEnd - viewport.timeStart
+    const bodyH   = trackH - HEADER_H
+    const thumbH  = Math.max(20, (visSpan / span) * bodyH)
+    const usableH = bodyH - thumbH
+    const startT  = usableH > 0
+      ? Math.min(usableH, ((viewport.timeStart - lo) / (span - visSpan)) * usableH)
+      : 0
+    _sbDrag = { type: 'v', startY: e.clientY, startT, usableH, lo, span, visSpan }
+  }
+  document.addEventListener('mousemove', _sbMouseMove)
+  document.addEventListener('mouseup', _sbMouseUp)
+  showOverviewPopup()
+}
+
+function onHTrackClick(e) {
+  if (!props.trace || !traceBounds.value) return
+  const { lo, span } = traceBounds.value
+  const rect   = e.currentTarget.getBoundingClientRect()
+  const clickX = e.clientX - rect.left
+  const vSbW   = showVScrollbar.value ? SCROLLBAR_SIZE : 0
+  const trackW = viewport.canvasW - vSbW
+  const ratio  = Math.max(0, Math.min(1, clickX / trackW))
+  if (orientation.value === 'h') {
+    const visSpan  = viewport.timeEnd - viewport.timeStart
+    const newStart = lo + ratio * (span - visSpan)
+    viewport.timeStart = newStart
+    viewport.timeEnd   = newStart + visSpan
+  } else {
+    const { totalWidth } = buildColumnLayout(
+      props.trace, props.options.viewMode, expanded, 0, props.options.showSti !== false,
+    )
+    viewport.scrollX = Math.max(0, ratio * Math.max(0, totalWidth - viewport.canvasW))
+  }
+  scheduleRender()
+  showOverviewPopup()
+}
+
+function onVTrackClick(e) {
+  if (!props.trace || !traceBounds.value) return
+  const { lo, span } = traceBounds.value
+  const rect   = e.currentTarget.getBoundingClientRect()
+  const clickY = e.clientY - rect.top
+  const hSbH   = showHScrollbar.value ? SCROLLBAR_SIZE : 0
+  const trackH = viewport.canvasH - hSbH
+  if (orientation.value === 'h') {
+    const bodyH  = trackH - RULER_H
+    const ratio  = Math.max(0, Math.min(1, (clickY - RULER_H) / bodyH))
+    const visH   = viewport.canvasH - RULER_H
+    viewport.scrollY = ratio * Math.max(0, totalRowHeight.value - visH)
+  } else {
+    const bodyH  = trackH - HEADER_H
+    const ratio  = Math.max(0, Math.min(1, (clickY - HEADER_H) / bodyH))
+    const visSpan  = viewport.timeEnd - viewport.timeStart
+    const newStart = lo + ratio * (span - visSpan)
+    viewport.timeStart = newStart
+    viewport.timeEnd   = newStart + visSpan
+  }
+  scheduleRender()
+  showOverviewPopup()
+}
+
 // ---- Lifecycle -----------------------------------------------------------
 onMounted(() => {
   setupResize()
@@ -789,6 +1238,9 @@ onBeforeUnmount(() => {
   if (_handler) _handler.destroy()
   if (_rafId) cancelAnimationFrame(_rafId)
   document.removeEventListener('click', onGlobalClick)
+  clearTimeout(_overviewHideTimer)
+  document.removeEventListener('mousemove', _sbMouseMove)
+  document.removeEventListener('mouseup', _sbMouseUp)
 })
 </script>
 
@@ -842,6 +1294,97 @@ canvas {
   cursor: pointer;
   color: var(--fg);
   transition: background 0.08s;
+}
+
+/* ---- Custom scrollbars ------------------------------------------------- */
+.scrollbar-track {
+  position: absolute;
+  z-index: 15;
+  border-radius: 4px;
+  background: transparent;
+  transition: background 0.15s;
+}
+.scrollbar-track:hover {
+  background: rgba(128, 128, 128, 0.10);
+}
+
+.scrollbar-track-h {
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 10px;
+  cursor: pointer;
+}
+.scrollbar-track-h.has-v-sb {
+  right: 10px;
+}
+
+.scrollbar-track-v {
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 10px;
+  cursor: pointer;
+}
+.scrollbar-track-v.has-h-sb {
+  bottom: 10px;
+}
+
+.scrollbar-thumb {
+  position: absolute;
+  background: var(--sb-thumb, rgba(128, 128, 128, 0.45));
+  border-radius: 3px;
+  transition: background 0.1s;
+}
+.scrollbar-thumb:hover,
+.scrollbar-track:hover .scrollbar-thumb {
+  background: var(--sb-thumb-hover, rgba(128, 128, 128, 0.70));
+}
+
+/* H thumb: fill the track height, position set by :style (left/width) */
+.scrollbar-track-h .scrollbar-thumb {
+  top: 1px;
+  bottom: 1px;
+  cursor: grab;
+}
+.scrollbar-track-h .scrollbar-thumb:active { cursor: grabbing; }
+
+/* V thumb: fill the track width, position set by :style (top/height) */
+.scrollbar-track-v .scrollbar-thumb {
+  left: 1px;
+  right: 1px;
+  cursor: grab;
+}
+.scrollbar-track-v .scrollbar-thumb:active { cursor: grabbing; }
+
+/* ---- Navigator / overview popup ---------------------------------------- */
+.overview-popup {
+  position: absolute;
+  bottom: 18px;
+  right: 18px;
+  z-index: 50;
+  border-radius: 6px;
+  border: 1px solid var(--border, rgba(128, 128, 128, 0.35));
+  background: var(--panel-bg, #1e1e1e);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  padding: 3px;
+  pointer-events: none;
+}
+
+.overview-canvas {
+  display: block;
+  border-radius: 3px;
+}
+
+.overview-fade-enter-active {
+  transition: opacity 0.08s ease-out;
+}
+.overview-fade-leave-active {
+  transition: opacity 0.40s ease-in;
+}
+.overview-fade-enter-from,
+.overview-fade-leave-to {
+  opacity: 0;
 }
 .ctx-item:hover {
   background: var(--tb-btn-hover);

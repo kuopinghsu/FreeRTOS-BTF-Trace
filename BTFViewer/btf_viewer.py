@@ -138,9 +138,9 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 from PyQt5.QtCore import (
-    QBuffer, QByteArray, QEvent, QIODevice, QLineF, QMimeData,
+    QBuffer, QByteArray, QEasingCurve, QEvent, QIODevice, QLineF, QMimeData,
     QPoint, QPointF, QRectF, QSize, Qt, QThread, QTimer,
-    pyqtSignal,
+    QPropertyAnimation, pyqtSignal,
 )
 from PyQt5.QtGui import (
     QBrush, QColor, QFont, QFontDatabase, QFontMetrics, QFontMetricsF, QIcon, QKeySequence, QPainter,
@@ -150,7 +150,8 @@ from PyQt5.QtSvg import QSvgGenerator
 from PyQt5.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QDockWidget, QFileDialog, QFormLayout, QFrame, QGridLayout, QInputDialog,
-    QGraphicsEllipseItem, QGraphicsItem, QGraphicsLineItem, QGraphicsPixmapItem,
+    QGraphicsEllipseItem, QGraphicsItem, QGraphicsLineItem, QGraphicsOpacityEffect,
+    QGraphicsPixmapItem,
     QGraphicsPolygonItem, QGraphicsRectItem, QGraphicsScene, QGraphicsTextItem, QGraphicsView,
     QHBoxLayout, QLabel, QLineEdit, QListView, QMainWindow, QMenu, QMessageBox, QProgressBar,
     QProgressDialog,
@@ -4825,6 +4826,85 @@ class _BatchStiWaveformItem(QGraphicsItem):
         super().hoverLeaveEvent(event)
 
 # ===========================================================================
+# Navigator Popup
+# ===========================================================================
+
+class _NavigatorPopup(QWidget):
+    """260×130 thumbnail that shows the full trace with a viewport indicator.
+
+    Painted entirely in Python and overlaid on the TimelineView viewport at
+    the bottom-right corner.  The widget is mouse-transparent so it does not
+    interfere with pan / zoom interaction.
+    Appearance changes are animated with a 80 ms fade-in / 350 ms fade-out.
+    """
+
+    W: int = 260
+    H: int = 130
+    MARGIN: int = 8   # gap from the viewport edge (px)
+
+    def __init__(self, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.setFixedSize(self.W, self.H)
+        self._pix: Optional[QPixmap] = None
+        self.setVisible(False)
+
+        # Opacity effect + animations
+        self._opacity_effect = QGraphicsOpacityEffect(self)
+        self._opacity_effect.setOpacity(0.0)
+        self.setGraphicsEffect(self._opacity_effect)
+
+        self._anim_in = QPropertyAnimation(self._opacity_effect, b"opacity", self)
+        self._anim_in.setDuration(80)
+        self._anim_in.setStartValue(0.0)
+        self._anim_in.setEndValue(1.0)
+        self._anim_in.setEasingCurve(QEasingCurve.OutCubic)
+
+        self._anim_out = QPropertyAnimation(self._opacity_effect, b"opacity", self)
+        self._anim_out.setDuration(350)
+        self._anim_out.setStartValue(1.0)
+        self._anim_out.setEndValue(0.0)
+        self._anim_out.setEasingCurve(QEasingCurve.InCubic)
+        self._anim_out.finished.connect(super().hide)
+
+    def fade_in(self) -> None:
+        """Make the popup visible with a fade-in animation."""
+        self._anim_out.stop()
+        self._opacity_effect.setOpacity(self._opacity_effect.opacity())
+        super().show()
+        self.raise_()
+        self._anim_in.setStartValue(self._opacity_effect.opacity())
+        self._anim_in.start()
+
+    def fade_out(self) -> None:
+        """Fade the popup out, then hide it."""
+        if not self.isVisible():
+            return
+        self._anim_in.stop()
+        self._anim_out.setStartValue(self._opacity_effect.opacity())
+        self._anim_out.start()
+
+    def reposition(self) -> None:
+        """Move to the bottom-right of the parent widget."""
+        pw = self.parentWidget()
+        if pw is None:
+            return
+        x = pw.width()  - self.W - self.MARGIN
+        y = pw.height() - self.H - self.MARGIN
+        self.move(max(0, x), max(0, y))
+
+    def set_pixmap(self, pix: QPixmap) -> None:
+        self._pix = pix
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        if self._pix is None:
+            return
+        p = QPainter(self)
+        p.drawPixmap(0, 0, self._pix)
+        p.end()
+
+# ===========================================================================
 # View
 # ===========================================================================
 
@@ -4835,9 +4915,11 @@ class TimelineView(QGraphicsView):
     cursors_changed      = pyqtSignal(list)
     mark_moved           = pyqtSignal(str, int, int)  # kind, id, new_ns — final drop
     mark_dragging        = pyqtSignal(str, int, int)  # kind, id, new_ns — live during drag
-    bookmark_requested   = pyqtSignal(int)   # ns at right-click position
-    annotation_requested = pyqtSignal(int)   # ns at right-click position
-    pre_change           = pyqtSignal()      # emitted before any cursor/mark mutation
+    bookmark_requested          = pyqtSignal(int)   # ns at right-click position
+    annotation_requested        = pyqtSignal(int)   # ns at right-click position
+    clear_bookmarks_requested   = pyqtSignal()      # clear all bookmarks
+    clear_annotations_requested = pyqtSignal()      # clear all annotations
+    pre_change                  = pyqtSignal()      # emitted before any cursor/mark mutation
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -4958,6 +5040,15 @@ class TimelineView(QGraphicsView):
         # value=(center_ns, orth_center_coord)
         self._view_pos_by_orientation: Dict[bool, Tuple[int, float]] = {}
 
+        # -- Navigator popup overlay ------------------------------------
+        # A 260×130 thumbnail that appears at the top-left of the canvas
+        # whenever the viewport is scrolled / zoomed while content overflows.
+        self._nav_popup = _NavigatorPopup(self.viewport())
+        self._nav_hide_timer = QTimer(self)
+        self._nav_hide_timer.setSingleShot(True)
+        self._nav_hide_timer.setInterval(1800)  # ms – fade-out after idle
+        self._nav_hide_timer.timeout.connect(self._nav_popup.fade_out)
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -4983,6 +5074,16 @@ class TimelineView(QGraphicsView):
         self.pre_change.emit()
         self._scene.add_cursor(ns)
         self.cursors_changed.emit(self._scene.cursor_times())
+
+    def add_cursor_at_hover_or_center(self) -> None:
+        """Place a cursor at the mouse-pointer position, falling back to viewport centre."""
+        hover_ns = self._scene._hover_ns
+        if hover_ns is not None:
+            self.pre_change.emit()
+            self._scene.add_cursor(hover_ns)
+            self.cursors_changed.emit(self._scene.cursor_times())
+        else:
+            self.add_cursor_at_view_center()
 
     def view_center_ns(self) -> int:
         """Return the timestamp currently at the viewport centre."""
@@ -6159,6 +6260,22 @@ class TimelineView(QGraphicsView):
                 f"Add Annotation here  ({_format_time(ns, self._scene._trace.time_scale, decimals=3)})",
                 lambda: self.annotation_requested.emit(ns)
             )
+            _has_bm = getattr(self, '_has_bookmarks', False)
+            _has_an = getattr(self, '_has_annotations', False)
+            if _has_bm or _has_an:
+                menu.addSeparator()
+                if _has_bm:
+                    menu.addAction(
+                        _svg_icon(_IC_CLEAR, _icon_color),
+                        "Clear all bookmarks",
+                        lambda: self.clear_bookmarks_requested.emit()
+                    )
+                if _has_an:
+                    menu.addAction(
+                        _svg_icon(_IC_CLEAR, _icon_color),
+                        "Clear all annotations",
+                        lambda: self.clear_annotations_requested.emit()
+                    )
         menu.exec_(event.globalPos())
 
     # ------------------------------------------------------------------
@@ -6273,10 +6390,208 @@ class TimelineView(QGraphicsView):
             self.centerOn(new_scene_coord + offset, cur_scene_center.y())
         else:
             self.centerOn(cur_scene_center.x(), new_scene_coord + offset)
+        self._show_nav()
 
     # ------------------------------------------------------------------
     # Scroll and viewport sync
     # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Navigator popup
+    # ------------------------------------------------------------------
+
+    def _paint_nav_pixmap(self) -> QPixmap:
+        """Render a 260×130 minimap of the full trace with a viewport indicator.
+
+        Task view: one row per task, colored by task color.
+        Core view: one header row per core (blended per-segment colors) followed
+                   by one sub-row per task within that core.
+        Time runs left→right; rows stacked top→bottom regardless of orientation.
+        The orange rectangle shows the currently visible time + row range.
+        """
+        W, H = _NavigatorPopup.W, _NavigatorPopup.H
+        sc = self._scene
+        tr = sc._trace
+
+        pix = QPixmap(W, H)
+        pix.fill(QColor(30, 30, 30, 230))
+
+        if tr is None:
+            return pix
+
+        p = QPainter(pix)
+        p.setRenderHint(QPainter.Antialiasing, False)
+
+        time_span = max(tr.time_max - tr.time_min, 1)
+
+        # ------------------------------------------------------------------
+        # Build flat row list: each entry is {'segs': [...], 'fixed_color': QColor|None}
+        # fixed_color=None means "color per segment using _blended_color(seg.task, seg.core)"
+        # ------------------------------------------------------------------
+        row_data: list = []
+
+        if sc._view_mode == "task":
+            for mk in tr.tasks:
+                segs = (tr.seg_lod_ultra_by_merge_key.get(mk)
+                        or tr.seg_map_by_merge_key.get(mk, []))
+                if not segs:
+                    continue
+                raw = tr.task_repr.get(mk, mk)
+                col = QColor(_task_color(raw))
+                col.setAlpha(210)
+                row_data.append({'segs': segs, 'fixed_color': col})
+        else:
+            # Core view: header row for each core + task sub-rows
+            for core in tr.core_names:
+                # Core header row — color each segment by its actual task blend
+                hdr_segs = (tr.core_seg_lod_ultra.get(core)
+                            or tr.core_segs.get(core, []))
+                if hdr_segs:
+                    row_data.append({'segs': hdr_segs, 'fixed_color': None})
+                # Per-task sub-rows
+                for task_raw in tr.core_task_order.get(core, []):
+                    t_segs = (tr.core_task_seg_lod_ultra.get(core, {}).get(task_raw)
+                              or tr.core_task_segs.get(core, {}).get(task_raw, []))
+                    if not t_segs:
+                        continue
+                    col = QColor(_blended_color(task_raw, core))
+                    col.setAlpha(210)
+                    row_data.append({'segs': t_segs, 'fixed_color': col})
+
+        # STI channel rows (separate list, painted at bottom of minimap)
+        sti_row_data: list = []
+        if sc._show_sti:
+            for ch_idx, ch in enumerate(tr.sti_channels):
+                ch_evs = tr.sti_events_by_target.get(ch, [])
+                if not ch_evs:
+                    continue
+                ch_color = QColor(_STI_PALETTE[ch_idx % len(_STI_PALETTE)])
+                ch_color.setAlpha(200)
+                is_exp = ch in sc._sti_expanded
+                sti_row_data.append({'evs': ch_evs, 'color': ch_color, 'is_expanded': is_exp})
+
+        if not row_data and not sti_row_data:
+            p.end()
+            return pix
+
+        # Allocate heights: STI rows at bottom, task/core rows at top
+        _STI_MINI_H   = 12.0
+        sti_total_h   = min(H * 0.4, len(sti_row_data) * _STI_MINI_H)
+        task_area_h   = float(H) - sti_total_h
+        n_rows        = max(1, len(row_data))
+        row_h         = task_area_h / n_rows if row_data else float(H)
+        p.setPen(Qt.NoPen)
+
+        # Paint task/core rows
+        for i, rd in enumerate(row_data):
+            y   = i * row_h
+            rh  = max(1.0, row_h - 0.5)
+            fixed = rd['fixed_color']
+            for seg in rd['segs']:
+                x1 = (seg.start - tr.time_min) / time_span * W
+                x2 = (seg.end   - tr.time_min) / time_span * W
+                sw = max(0.5, x2 - x1)
+                if fixed is not None:
+                    col = fixed
+                else:
+                    col = QColor(_blended_color(seg.task, seg.core))
+                    col.setAlpha(200)
+                p.fillRect(QRectF(x1, y, sw, rh), col)
+
+        # Paint STI rows at the bottom of the minimap
+        if sti_row_data:
+            sti_row_h = sti_total_h / len(sti_row_data)
+            for i, rd in enumerate(sti_row_data):
+                y   = task_area_h + i * sti_row_h
+                rh  = max(2.0, sti_row_h - 0.5)
+                col = rd['color']
+                evs = rd['evs']
+                if rd['is_expanded']:
+                    # Step-hold mini chart using numeric note values
+                    vals: list = []
+                    for ev in evs:
+                        try:
+                            note_str = (ev.note or '').strip()
+                            v = float(note_str) if note_str else float(ev.event or 0)
+                            vals.append(v)
+                        except (ValueError, TypeError):
+                            vals.append(None)
+                    valid_vals = [v for v in vals if v is not None]
+                    if valid_vals and len(set(valid_vals)) > 1:
+                        v_min = min(valid_vals)
+                        v_max = max(valid_vals)
+                        for j, (ev, v) in enumerate(zip(evs, vals)):
+                            if v is None:
+                                continue
+                            x1 = (ev.time - tr.time_min) / time_span * W
+                            x2 = ((evs[j + 1].time - tr.time_min) / time_span * W
+                                  if j + 1 < len(evs) else float(W))
+                            norm_v = (v - v_min) / (v_max - v_min)
+                            bar_h  = max(1.0, norm_v * rh)
+                            p.fillRect(QRectF(x1, y + rh - bar_h,
+                                             max(1.0, x2 - x1), bar_h), col)
+                    else:
+                        # All same value or non-numeric — 2 px marks
+                        for ev in evs:
+                            x1 = (ev.time - tr.time_min) / time_span * W
+                            p.fillRect(QRectF(x1 - 1.0, y, 2.0, rh), col)
+                else:
+                    # Collapsed: 2 px vertical marks
+                    for ev in evs:
+                        x1 = (ev.time - tr.time_min) / time_span * W
+                        p.fillRect(QRectF(x1 - 1.0, y, 2.0, rh), col)
+
+        # ---- Viewport indicator (orange rectangle) ----
+        # Horizontal: time range
+        ns_lo = sc._vp_ns_lo
+        ns_hi = sc._vp_ns_hi
+        vx1 = (ns_lo - tr.time_min) / time_span * W
+        vx2 = (ns_hi - tr.time_min) / time_span * W
+
+        # Vertical: row scroll position derived from the relevant scrollbar
+        vbar = self.verticalScrollBar() if sc._horizontal else self.horizontalScrollBar()
+        v_range = vbar.maximum() - vbar.minimum()
+        v_total = v_range + vbar.pageStep()
+        if v_total > 0 and v_range > 0:
+            vy1 = (vbar.value() - vbar.minimum()) / v_total * H
+            vy_h = vbar.pageStep() / v_total * H
+        else:
+            vy1, vy_h = 0.0, float(H)
+
+        # Clamp to pixmap bounds
+        vx1  = max(0.0, min(float(W), vx1))
+        vx2  = max(0.0, min(float(W), vx2))
+        vy1  = max(0.0, min(float(H), vy1))
+        vy_h = min(float(H) - vy1, vy_h)
+
+        # Border around entire minimap
+        p.setPen(QPen(QColor(70, 70, 70), 1))
+        p.setBrush(Qt.NoBrush)
+        p.drawRect(0, 0, W - 1, H - 1)
+
+        # Orange viewport rect
+        p.setPen(QPen(QColor(255, 140, 0), 1.5))
+        p.setBrush(QBrush(QColor(255, 140, 0, 35)))
+        p.drawRect(QRectF(vx1, vy1, max(1.5, vx2 - vx1), max(1.5, vy_h)))
+
+        p.end()
+        return pix
+
+    def _show_nav(self) -> None:
+        """Show the navigator popup if the viewport is scrolled while content overflows."""
+        hbar = self.horizontalScrollBar()
+        vbar = self.verticalScrollBar()
+        h_overflow = hbar.maximum() > hbar.minimum()
+        v_overflow = vbar.maximum() > vbar.minimum()
+        if not (h_overflow or v_overflow):
+            self._nav_hide_timer.stop()
+            self._nav_popup.hide()
+            return
+        pix = self._paint_nav_pixmap()
+        self._nav_popup.set_pixmap(pix)
+        self._nav_popup.reposition()
+        self._nav_popup.fade_in()
+        self._nav_hide_timer.start()
 
     def scrollContentsBy(self, dx: int, dy: int) -> None:
         """Called by Qt on every scroll — reposition frozen label-column items."""
@@ -6299,6 +6614,7 @@ class TimelineView(QGraphicsView):
             self._pan_timer.start()            # restart settle countdown
             if not self._pan_heartbeat.isActive():
                 self._pan_heartbeat.start()    # begin continuous rebuild pump
+            self._show_nav()
 
     def _reposition_frozen(self) -> None:
         """Move all frozen label-column scene items so they stay at the left edge."""
@@ -6336,6 +6652,7 @@ class TimelineView(QGraphicsView):
     def resizeEvent(self, event) -> None:
         """Reflow the timeline on every resize to preserve the current zoom ratio."""
         super().resizeEvent(event)
+        self._nav_popup.reposition()
         if self._scene._trace is not None:
             self._resize_timer.start()
 
@@ -8790,6 +9107,8 @@ class MainWindow(QMainWindow):
         self._view.mark_dragging.connect(self._on_mark_dragging)
         self._view.bookmark_requested.connect(self._add_bookmark_at_ns)
         self._view.annotation_requested.connect(self._add_annotation_at_ns)
+        self._view.clear_bookmarks_requested.connect(self._clear_all_bookmarks)
+        self._view.clear_annotations_requested.connect(self._clear_all_annotations)
         self._view.pre_change.connect(self._push_undo_snapshot)
 
         # Undo / Redo stacks (cursor + mark state)
@@ -9083,8 +9402,8 @@ class MainWindow(QMainWindow):
 
         # --- Cursors menu ---
         cm = mb.addMenu("&Cursors")
-        cm.addAction("Place cursor at centre\tC",
-                     self._view.add_cursor_at_view_center, "C")
+        cm.addAction("Place cursor at pointer\tC",
+                     self._view.add_cursor_at_hover_or_center, "C")
         cm.addAction("Clear all cursors\tShift+C",
                      self._view.clear_cursors, "Shift+C")
         cm.addSeparator()
@@ -9094,8 +9413,11 @@ class MainWindow(QMainWindow):
         # --- Navigate menu ---
         nm = mb.addMenu("&Navigate")
         act_bookmark = nm.addAction("Add &Bookmark", self._add_bookmark_at_center, "Ctrl+B")
-        act_bookmark.setShortcuts([QKeySequence("Ctrl+B"), QKeySequence("M")])
-        nm.addAction("Add &Annotation…", self._prompt_annotation_at_center, "Ctrl+Shift+B")
+        act_bookmark.setShortcuts([QKeySequence("Ctrl+B"), QKeySequence("M"), QKeySequence("B")])
+        act_annotation = nm.addAction("Add &Annotation…", self._prompt_annotation_at_center, "Ctrl+Shift+B")
+        act_annotation.setShortcuts([QKeySequence("Ctrl+Shift+B"), QKeySequence("A")])
+        nm.addAction("Clear all &Bookmarks", self._clear_all_bookmarks, "Shift+B")
+        nm.addAction("Clear all Ann&otations", self._clear_all_annotations, "Shift+A")
         nm.addSeparator()
         self._act_zoom_range = nm.addAction(
             "Zoom to Cursor &Range", self._zoom_to_cursor_range, "Ctrl+R"
@@ -9614,6 +9936,7 @@ class MainWindow(QMainWindow):
             self._bookmark_list.addItem(item)
         self._bookmark_list.blockSignals(False)
         self._view._scene.set_marks(self._bookmarks, self._annotations)
+        self._view._has_bookmarks = bool(self._bookmarks)
 
     def _on_bookmark_item_changed(self, item: QListWidgetItem) -> None:
         if item is None:
@@ -9679,6 +10002,24 @@ class MainWindow(QMainWindow):
         self._marks_dock.setVisible(True)
         self._marks_dock.raise_()
 
+    def _clear_all_bookmarks(self) -> None:
+        """Remove every bookmark (undoable)."""
+        if not self._bookmarks:
+            return
+        self._push_undo_snapshot()
+        self._bookmarks.clear()
+        self._rebuild_bookmark_list()
+        self._save_current_trace_state()
+
+    def _clear_all_annotations(self) -> None:
+        """Remove every annotation (undoable)."""
+        if not self._annotations:
+            return
+        self._push_undo_snapshot()
+        self._annotations.clear()
+        self._rebuild_annotation_list()
+        self._save_current_trace_state()
+
     def _jump_selected_annotation(self) -> None:
         item = self._annotation_list.currentItem()
         if item is None:
@@ -9732,6 +10073,7 @@ class MainWindow(QMainWindow):
             self._annotation_list.addItem(item)
         self._annotation_list.blockSignals(False)
         self._view._scene.set_marks(self._bookmarks, self._annotations)
+        self._view._has_annotations = bool(self._annotations)
 
     def _focus_find(self) -> None:
         self._find_dock.setVisible(True)
@@ -10859,7 +11201,7 @@ class MainWindow(QMainWindow):
                 ("Right-click",            "Remove nearest cursor"),
                 ("Right-click on segment", "Context menu"),
                 ("Shift+Right-click",      "Clear all cursors"),
-                ("C",                      "Cursor at viewport centre"),
+                ("C",                      "Place cursor at pointer (falls back to centre)"),
                 ("Shift+C",                "Clear all cursors"),
                 ("× in status bar",        "Delete that cursor"),
             ]),
@@ -10869,8 +11211,10 @@ class MainWindow(QMainWindow):
                 ("Shift+F3",  "Find previous"),
             ]),
             ("Marks", [
-                ("M / Ctrl+B",          "Add bookmark at first cursor (or centre)"),
-                ("Ctrl+Shift+B",        "Add annotation at first cursor (or centre)"),
+                ("B / M / Ctrl+B",      "Add bookmark at current cursor"),
+                ("Shift+B",             "Clear all bookmarks"),
+                ("A / Ctrl+Shift+B",    "Add annotation at current cursor"),
+                ("Shift+A",             "Clear all annotations"),
                 ("Gold ▼ on ruler",     "Bookmark flag"),
                 ("Orange ◆ on ruler",   "Annotation flag"),
             ]),

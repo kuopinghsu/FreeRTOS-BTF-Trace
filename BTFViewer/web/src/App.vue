@@ -940,6 +940,8 @@ function onClearMarks() {
   --fg:            #D4D4D4;
   --fg-dim:        #858585;
   --accent:        #4F8BFF;
+  --sb-thumb:       rgba(160, 160, 160, 0.40);
+  --sb-thumb-hover: rgba(160, 160, 160, 0.65);
 }
 
 .app:not(.dark) {
@@ -953,9 +955,34 @@ function onClearMarks() {
   --fg:            #1E1E1E;
   --fg-dim:        #666666;
   --accent:        #0066CC;
+  --sb-thumb:       rgba(80, 80, 80, 0.38);
+  --sb-thumb-hover: rgba(80, 80, 80, 0.62);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* ---- Native scrollbar theming (all panels) ---- */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--sb-thumb) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--sb-thumb);
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--sb-thumb-hover);
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
 
 body {
   background: var(--bg);
