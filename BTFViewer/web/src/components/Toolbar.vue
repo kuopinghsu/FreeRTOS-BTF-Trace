@@ -176,24 +176,6 @@
 
     <div class="tb-sep" />
 
-    <!-- Add bookmark -->
-    <button
-      v-if="traceInfo"
-      class="tb-btn"
-      title="Add bookmark at viewport center"
-      @click="emit('addMark')"
-    >
-      <svg
-        viewBox="0 0 16 16"
-        width="16"
-        height="16"
-        fill="currentColor"
-      >
-        <path d="M2 2a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v13.5a.5.5 0 0 1-.74.439L8 13.069l-5.26 2.87A.5.5 0 0 1 2 15.5V2zm2-1a1 1 0 0 0-1 1v12.566l4.26-2.325a.5.5 0 0 1 .48 0L12 14.566V2a1 1 0 0 0-1-1H4z" />
-      </svg>
-      Mark
-    </button>
-
     <button
       v-if="traceInfo"
       class="tb-btn"

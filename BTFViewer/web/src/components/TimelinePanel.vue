@@ -156,7 +156,7 @@ import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } 
 import { toBlob as domToBlob } from 'html-to-image'
 import LabelColumn from './LabelColumn.vue'
 import StiTooltip  from './StiTooltip.vue'
-import { render as renderTimeline, renderVertical, buildRowLayout, buildColumnLayout, drawHoverLine, drawHoverLineVertical, drawCursors, drawCursorsVertical, drawMarksHorizontal, drawMarksVertical, RULER_H, ROW_H, STI_ROW_H, RULER_W, COL_W, HEADER_H, formatTime } from '../renderer/TimelineRenderer.js'
+import { render as renderTimeline, renderVertical, buildRowLayout, buildColumnLayout, drawHoverLine, drawHoverLineVertical, drawCursors, drawCursorsVertical, drawMarksHorizontal, drawMarksVertical, RULER_H, ROW_H, STI_ROW_H, STI_WAVEFORM_H, ROW_GAP, isStiTagChannel, RULER_W, COL_W, HEADER_H, formatTime } from '../renderer/TimelineRenderer.js'
 import { renderToSvg } from '../renderer/SvgExporter.js'
 import { InteractionHandler } from '../renderer/InteractionHandler.js'
 import { taskMergeKey, taskColor, coreColor, parseTaskName, stiChannelColor } from '../utils/colors.js'
@@ -302,6 +302,7 @@ let _ovBgTrace       = null   // trace identity (object ref)
 let _ovBgMode        = null   // viewMode string
 let _ovBgShowSti     = null   // showSti option value
 let _ovBgExpandedKey = null   // sorted join of expanded STI channels
+let _ovBgTaskAreaH   = 0     // task area height used in the last background paint
 
 // ---- Renderer loop --------------------------------------------------------
 let _rafId = null
@@ -962,7 +963,7 @@ function paintOverview() {
   // ---- Background cache --------------------------------------------------
   // The static part (rows + STI bars + border) never changes on scroll/pan.
   // Rebuild it only when the trace, view mode or STI state changes.
-  const expandedKey = [...stiExpanded].sort().join(',')
+  const expandedKey = [...stiExpanded].sort().join(',') + '|' + [...expanded].sort().join(',')
   const needsBgRebuild = _ovBgCanvas === null
     || _ovBgTrace       !== tr
     || _ovBgMode        !== props.options.viewMode
@@ -978,7 +979,7 @@ function paintOverview() {
       bg.width  = W
       bg.height = H
     }
-    _paintOverviewBg(bg, tr, lo, hi, span, W, H)
+    _paintOverviewBg(bg, tr, lo, hi, span, W, H, totalRowHeight.value)
     _ovBgCanvas      = bg
     _ovBgTrace       = tr
     _ovBgMode        = props.options.viewMode
@@ -1004,6 +1005,7 @@ function paintOverview() {
     let vy = 0
     let vh = H
     if (totH > visH && totH > 0) {
+      // Thumbnail is proportional to the actual view — simple linear mapping
       vy = (viewport.scrollY / (totH - visH)) * (H - (visH / totH) * H)
       vh = Math.max(2, (visH / totH) * H)
     }
@@ -1022,7 +1024,7 @@ function paintOverview() {
   }
 }
 
-function _paintOverviewBg(bgCanvas, tr, lo, hi, span, W, H) {
+function _paintOverviewBg(bgCanvas, tr, lo, hi, span, W, H, totH) {
   const ctx     = bgCanvas.getContext('2d')
   const dark    = props.options.darkMode
   const pxPerNs = W / span
@@ -1044,14 +1046,16 @@ function _paintOverviewBg(bgCanvas, tr, lo, hi, span, W, H) {
     for (const coreName of tr.coreNames) {
       const hdrSegs = tr.coreSegLodUltra.get(coreName) || tr.coreSegs.get(coreName) || []
       if (hdrSegs.length) rowDefs.push({ segs: hdrSegs, color: coreColor(coreName) })
-      const taskOrder = (tr.coreTaskOrder.get(coreName) || [])
-        .filter(t => parseTaskName(t).name !== 'TICK')
-      for (const taskRaw of taskOrder) {
-        const mk    = taskMergeKey(taskRaw)
-        const tSegs = tr.coreTaskSegLodUltra.get(coreName)?.get(taskRaw)
-                   || tr.coreTaskSegs.get(coreName)?.get(taskRaw) || []
-        if (!tSegs.length) continue
-        rowDefs.push({ segs: tSegs, color: taskColor(mk, taskRaw) })
+      if (expanded.has(coreName)) {
+        const taskOrder = (tr.coreTaskOrder.get(coreName) || [])
+          .filter(t => parseTaskName(t).name !== 'TICK')
+        for (const taskRaw of taskOrder) {
+          const mk    = taskMergeKey(taskRaw)
+          const tSegs = tr.coreTaskSegLodUltra.get(coreName)?.get(taskRaw)
+                     || tr.coreTaskSegs.get(coreName)?.get(taskRaw) || []
+          if (!tSegs.length) continue
+          rowDefs.push({ segs: tSegs, color: taskColor(mk, taskRaw) })
+        }
       }
     }
   }
@@ -1065,9 +1069,19 @@ function _paintOverviewBg(bgCanvas, tr, lo, hi, span, W, H) {
     }
   }
 
-  const STI_MINI_H = 12
-  const stiTotalH  = Math.min(H * 0.4, stiDefs.length * STI_MINI_H)
+  // Compute the actual STI height in main-view pixels (matching buildRowLayout) so
+  // the thumbnail allocates space proportionally — no more over-represented STI zone.
+  let stiMainH = 0
+  if (props.options.showSti !== false && tr.stiChannels?.length) {
+    for (const ch of tr.stiChannels) {
+      const isExp = isStiTagChannel(ch) && stiExpanded.has(ch)
+      stiMainH += (isExp ? STI_WAVEFORM_H : STI_ROW_H) + ROW_GAP
+    }
+  }
+  const totHSafe   = Math.max(1, totH)
+  const stiTotalH  = stiMainH / totHSafe * H
   const taskAreaH  = H - stiTotalH
+  _ovBgTaskAreaH   = taskAreaH
 
   if (rowDefs.length) {
     const rowH = taskAreaH / rowDefs.length

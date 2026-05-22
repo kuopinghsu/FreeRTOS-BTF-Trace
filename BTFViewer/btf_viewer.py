@@ -5062,6 +5062,7 @@ class TimelineView(QGraphicsView):
         # On every scroll we just copy the cached bg and overlay the viewport rect.
         self._nav_bg_pix: Optional[QPixmap] = None
         self._nav_bg_key: object             = None
+        self._nav_bg_task_area_h: float      = 0.0   # task-area height used in last bg paint
 
     # ------------------------------------------------------------------
     # Public API
@@ -6414,7 +6415,7 @@ class TimelineView(QGraphicsView):
     # Navigator popup
     # ------------------------------------------------------------------
 
-    def _build_nav_bg(self, W: int, H: int, sc, tr) -> 'QPixmap':
+    def _build_nav_bg(self, W: int, H: int, sc, tr, v_total: float) -> 'QPixmap':
         """Render the static background of the nav popup (rows + STI + border).
 
         Does NOT include the orange viewport indicator – that is painted on a
@@ -6453,14 +6454,15 @@ class TimelineView(QGraphicsView):
                             or tr.core_segs.get(core, []))
                 if hdr_segs:
                     row_data.append({'segs': hdr_segs, 'fixed_color': None})
-                for task_raw in tr.core_task_order.get(core, []):
-                    t_segs = (tr.core_task_seg_lod_ultra.get(core, {}).get(task_raw)
-                              or tr.core_task_segs.get(core, {}).get(task_raw, []))
-                    if not t_segs:
-                        continue
-                    col = QColor(_blended_color(task_raw, core))
-                    col.setAlpha(210)
-                    row_data.append({'segs': t_segs, 'fixed_color': col})
+                if sc._core_expanded.get(core, True):
+                    for task_raw in tr.core_task_order.get(core, []):
+                        t_segs = (tr.core_task_seg_lod_ultra.get(core, {}).get(task_raw)
+                                  or tr.core_task_segs.get(core, {}).get(task_raw, []))
+                        if not t_segs:
+                            continue
+                        col = QColor(_blended_color(task_raw, core))
+                        col.setAlpha(210)
+                        row_data.append({'segs': t_segs, 'fixed_color': col})
 
         sti_row_data: list = []
         if sc._show_sti:
@@ -6481,9 +6483,18 @@ class TimelineView(QGraphicsView):
             p.end()
             return pix
 
-        _STI_MINI_H   = 12.0
-        sti_total_h   = min(H * 0.4, len(sti_row_data) * _STI_MINI_H)
+        # Compute actual STI height in main-view pixels (matching scene layout) so
+        # the thumbnail allocates space proportionally — no more over-represented STI zone.
+        _sti_main_h = 0.0
+        if sc._show_sti and tr.sti_channels:
+            for ch in tr.sti_channels:
+                is_exp = ch in sc._sti_expanded
+                _sti_main_h += (sc._sti_waveform_h_val if is_exp else sc._sti_row_h_val) + sc._row_gap
+        # Denominator: total non-ruler scene height
+        _tot_h_safe   = max(1.0, float(v_total) - RULER_HEIGHT)
+        sti_total_h   = _sti_main_h / _tot_h_safe * H
         task_area_h   = float(H) - sti_total_h
+        self._nav_bg_task_area_h = task_area_h  # remembered for potential future use
         n_rows        = max(1, len(row_data))
         row_h         = task_area_h / n_rows if row_data else float(H)
         p.setPen(Qt.NoPen)
@@ -6587,11 +6598,18 @@ class TimelineView(QGraphicsView):
         sc   = self._scene
         tr   = sc._trace
 
+        # ---- Scrollbar metrics (needed for both bg proportions and indicator) ----
+        vbar = self.verticalScrollBar() if sc._horizontal else self.horizontalScrollBar()
+        v_range = vbar.maximum() - vbar.minimum()
+        v_total = v_range + vbar.pageStep()
+
         # ---- Background cache --------------------------------------------
         bg_key = (id(tr), sc._view_mode, sc._show_sti,
-                  frozenset(sc._sti_expanded))
+                  vbar.pageStep(),   # rebuilds on window resize (proportions change)
+                  frozenset(sc._sti_expanded),
+                  frozenset(sc._core_expanded.items()))
         if bg_key != self._nav_bg_key or self._nav_bg_pix is None:
-            self._nav_bg_pix = self._build_nav_bg(W, H, sc, tr)
+            self._nav_bg_pix = self._build_nav_bg(W, H, sc, tr, float(v_total))
             self._nav_bg_key = bg_key
 
         # Copy the cached background (Qt pixmap is copy-on-write)
@@ -6610,12 +6628,12 @@ class TimelineView(QGraphicsView):
         vx1 = (ns_lo - tr.time_min) / time_span * W
         vx2 = (ns_hi - tr.time_min) / time_span * W
 
-        vbar = self.verticalScrollBar() if sc._horizontal else self.horizontalScrollBar()
-        v_range = vbar.maximum() - vbar.minimum()
-        v_total = v_range + vbar.pageStep()
-        if v_total > 0 and v_range > 0:
-            vy1  = (vbar.value() - vbar.minimum()) / v_total * H
-            vy_h = vbar.pageStep() / v_total * H
+        # Thumbnail is proportional to actual view — simple linear indicator mapping.
+        content_h = max(1.0, float(v_total) - RULER_HEIGHT)
+        if content_h > 0 and v_range > 0:
+            scroll_val = max(0.0, float(vbar.value() - vbar.minimum()) - RULER_HEIGHT)
+            vy1  = scroll_val / content_h * H
+            vy_h = max(1.5, vbar.pageStep() / content_h * H)
         else:
             vy1, vy_h = 0.0, float(H)
 
@@ -9582,11 +9600,6 @@ class MainWindow(QMainWindow):
             "Place cursor at viewport centre  (C)")
         _ia("Clear Cursors", self._view.clear_cursors, _IC_CLEAR,
             "Clear all cursors  (Shift+C)")
-        tb.addSeparator()
-
-        # --- Mark ---
-        _ia("Add Mark", self._add_bookmark_at_center, _IC_MARK,
-            "Add bookmark at first cursor (or viewport centre)  (M)")
         tb.addSeparator()
 
         # --- STI waveform scale toggle ---
