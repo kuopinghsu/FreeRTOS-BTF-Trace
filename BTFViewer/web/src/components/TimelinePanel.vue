@@ -970,7 +970,14 @@ function paintOverview() {
     || _ovBgExpandedKey !== expandedKey
 
   if (needsBgRebuild) {
-    const bg = new OffscreenCanvas(W, H)
+    let bg
+    if (typeof OffscreenCanvas !== 'undefined') {
+      bg = new OffscreenCanvas(W, H)
+    } else {
+      bg = document.createElement('canvas')
+      bg.width  = W
+      bg.height = H
+    }
     _paintOverviewBg(bg, tr, lo, hi, span, W, H)
     _ovBgCanvas      = bg
     _ovBgTrace       = tr

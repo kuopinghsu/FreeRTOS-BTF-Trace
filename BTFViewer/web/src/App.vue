@@ -843,12 +843,20 @@ function onLoadDemo() {
   loadExampleBtf()
 }
 
+// Prevent Firefox from intercepting Ctrl+scroll for page-zoom so the
+// canvas wheel handler (non-passive) can handle it exclusively.
+function _onDocWheel(e) {
+  if (e.ctrlKey || e.metaKey) e.preventDefault()
+}
+
 onMounted(() => {
   window.addEventListener('keydown', onGlobalKeydown)
+  document.addEventListener('wheel', _onDocWheel, { passive: false, capture: true })
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onGlobalKeydown)
+  document.removeEventListener('wheel', _onDocWheel, { capture: true })
 })
 
 // ---- Marks (bookmarks + annotations) -------------------------------------
