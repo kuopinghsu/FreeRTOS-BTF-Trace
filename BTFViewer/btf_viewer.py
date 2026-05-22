@@ -134,6 +134,7 @@ import subprocess
 import zlib
 from bisect import bisect_left, bisect_right
 from collections import defaultdict
+from operator import attrgetter as _attrgetter
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
@@ -842,9 +843,10 @@ def _parse_btf(filepath: str,
     for _ev in sti_events:
         sti_by_target[_ev.target].append(_ev)
 
+    _seg_start_key = _attrgetter('start')
     segs_by_mk: Dict[str, list] = dict(segs_by_mk_build)
     for _lst in segs_by_mk.values():
-        _lst.sort(key=lambda s: s.start)
+        _lst.sort(key=_seg_start_key)
     def _core_sort_key(c: str):
         if c.startswith("Core_"):
             tail = c[5:]
@@ -868,8 +870,8 @@ def _parse_btf(filepath: str,
             else:
                 _tsm[seg.task] = [seg]
         for _lst in _tsm.values():
-            _lst.sort(key=lambda s: s.start)
-        _core_segs[c].sort(key=lambda s: s.start)
+            _lst.sort(key=_seg_start_key)
+        _core_segs[c].sort(key=_seg_start_key)
         _core_task_order[c] = sorted(_tsm.keys(), key=_task_sort_key)
         _core_task_segs[c]  = _tsm
 
@@ -897,18 +899,25 @@ def _parse_btf(filepath: str,
         raise _ParseCancelledError()
 
     def _make_lod_summary(segs_sorted: list, bins: int, bin_span: float) -> list:
-        """Down-sample a sorted segment list to at most *bins* entries."""
+        """Down-sample *segs_sorted* to at most *bins* entries.
+
+        Returns a ``(summary, starts)`` tuple so callers avoid a second
+        iteration to extract the start-time list.
+        """
         if len(segs_sorted) <= bins:
-            return list(segs_sorted)   # return a copy to prevent aliasing the source list
+            result = list(segs_sorted)   # copy to prevent aliasing
+            return result, list(map(_attrgetter('start'), result))
         safe_span = max(bin_span, 1e-9)  # guard against zero-span edge case
         result: list = []
+        starts: list = []
         prev_bin = -2
         for s in segs_sorted:
-            b = int((s.start - time_min) / safe_span)
+            b = (s.start - time_min) // safe_span  # floor-div avoids int() overhead
             if b != prev_bin:
                 result.append(s)
+                starts.append(s.start)
                 prev_bin = b
-        return result
+        return result, starts
 
     # Task-view: start-time arrays + LOD summaries keyed by merge-key
     _seg_starts_mk:     Dict[str, list] = {}
@@ -917,13 +926,13 @@ def _parse_btf(filepath: str,
     _seg_lod_ultra_mk:        Dict[str, list] = {}
     _seg_lod_ultra_starts_mk: Dict[str, list] = {}
     for _mk, _lst in segs_by_mk.items():
-        _seg_starts_mk[_mk] = [s.start for s in _lst]
-        _lod = _make_lod_summary(_lst, _LOD_SUMMARY_BINS, _lod_timescale_per_px)
+        _seg_starts_mk[_mk] = list(map(_attrgetter('start'), _lst))
+        _lod, _lod_starts = _make_lod_summary(_lst, _LOD_SUMMARY_BINS, _lod_timescale_per_px)
         _seg_lod_mk[_mk]        = _lod
-        _seg_lod_starts_mk[_mk] = [s.start for s in _lod]
-        _lod_ultra = _make_lod_summary(_lod, _LOD_SUMMARY_BINS_ULTRA, _lod_ultra_timescale_per_px)
+        _seg_lod_starts_mk[_mk] = _lod_starts
+        _lod_ultra, _lod_ultra_starts = _make_lod_summary(_lod, _LOD_SUMMARY_BINS_ULTRA, _lod_ultra_timescale_per_px)
         _seg_lod_ultra_mk[_mk]        = _lod_ultra
-        _seg_lod_ultra_starts_mk[_mk] = [s.start for s in _lod_ultra]
+        _seg_lod_ultra_starts_mk[_mk] = _lod_ultra_starts
 
     if progress_callback:
         progress_callback(80, "Building core LOD summaries…")
@@ -937,13 +946,13 @@ def _parse_btf(filepath: str,
     _core_seg_lod_ultra:        Dict[str, list] = {}
     _core_seg_lod_ultra_starts: Dict[str, list] = {}
     for _c in _core_names:
-        _core_seg_starts[_c] = [s.start for s in _core_segs[_c]]
-        _lod = _make_lod_summary(_core_segs[_c], _LOD_SUMMARY_BINS, _lod_timescale_per_px)
+        _core_seg_starts[_c] = list(map(_attrgetter('start'), _core_segs[_c]))
+        _lod, _lod_starts = _make_lod_summary(_core_segs[_c], _LOD_SUMMARY_BINS, _lod_timescale_per_px)
         _core_seg_lod[_c]        = _lod
-        _core_seg_lod_starts[_c] = [s.start for s in _lod]
-        _lod_ultra = _make_lod_summary(_lod, _LOD_SUMMARY_BINS_ULTRA, _lod_ultra_timescale_per_px)
+        _core_seg_lod_starts[_c] = _lod_starts
+        _lod_ultra, _lod_ultra_starts = _make_lod_summary(_lod, _LOD_SUMMARY_BINS_ULTRA, _lod_ultra_timescale_per_px)
         _core_seg_lod_ultra[_c]        = _lod_ultra
-        _core_seg_lod_ultra_starts[_c] = [s.start for s in _lod_ultra]
+        _core_seg_lod_ultra_starts[_c] = _lod_ultra_starts
 
     if progress_callback:
         progress_callback(88, "Building per-task core LOD summaries…")
@@ -963,13 +972,13 @@ def _parse_btf(filepath: str,
         _core_task_lod_ultra[_c]        = {}
         _core_task_lod_ultra_starts[_c] = {}
         for _tn, _tsegs in _core_task_segs[_c].items():
-            _core_task_starts[_c][_tn] = [s.start for s in _tsegs]
-            _lod = _make_lod_summary(_tsegs, _LOD_SUMMARY_BINS, _lod_timescale_per_px)
+            _core_task_starts[_c][_tn] = list(map(_attrgetter('start'), _tsegs))
+            _lod, _lod_starts = _make_lod_summary(_tsegs, _LOD_SUMMARY_BINS, _lod_timescale_per_px)
             _core_task_lod[_c][_tn]        = _lod
-            _core_task_lod_starts[_c][_tn] = [s.start for s in _lod]
-            _lod_ultra = _make_lod_summary(_lod, _LOD_SUMMARY_BINS_ULTRA, _lod_ultra_timescale_per_px)
+            _core_task_lod_starts[_c][_tn] = _lod_starts
+            _lod_ultra, _lod_ultra_starts = _make_lod_summary(_lod, _LOD_SUMMARY_BINS_ULTRA, _lod_ultra_timescale_per_px)
             _core_task_lod_ultra[_c][_tn]        = _lod_ultra
-            _core_task_lod_ultra_starts[_c][_tn] = [s.start for s in _lod_ultra]
+            _core_task_lod_ultra_starts[_c][_tn] = _lod_ultra_starts
 
     # STI: start-time arrays for bisect clipping in builders
     _sti_starts_by_target: Dict[str, list] = {
@@ -5048,6 +5057,11 @@ class TimelineView(QGraphicsView):
         self._nav_hide_timer.setSingleShot(True)
         self._nav_hide_timer.setInterval(1800)  # ms – fade-out after idle
         self._nav_hide_timer.timeout.connect(self._nav_popup.fade_out)
+        # Background pixmap cache for the nav popup.  Rebuilt only when the
+        # trace, view-mode, STI visibility or expansion state changes.
+        # On every scroll we just copy the cached bg and overlay the viewport rect.
+        self._nav_bg_pix: Optional[QPixmap] = None
+        self._nav_bg_key: object             = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -6400,19 +6414,13 @@ class TimelineView(QGraphicsView):
     # Navigator popup
     # ------------------------------------------------------------------
 
-    def _paint_nav_pixmap(self) -> QPixmap:
-        """Render a 260×130 minimap of the full trace with a viewport indicator.
+    def _build_nav_bg(self, W: int, H: int, sc, tr) -> 'QPixmap':
+        """Render the static background of the nav popup (rows + STI + border).
 
-        Task view: one row per task, colored by task color.
-        Core view: one header row per core (blended per-segment colors) followed
-                   by one sub-row per task within that core.
-        Time runs left→right; rows stacked top→bottom regardless of orientation.
-        The orange rectangle shows the currently visible time + row range.
+        Does NOT include the orange viewport indicator – that is painted on a
+        copy of this pixmap in ``_paint_nav_pixmap`` so the expensive row
+        painting only happens when the trace/mode/STI state actually changes.
         """
-        W, H = _NavigatorPopup.W, _NavigatorPopup.H
-        sc = self._scene
-        tr = sc._trace
-
         pix = QPixmap(W, H)
         pix.fill(QColor(30, 30, 30, 230))
 
@@ -6425,8 +6433,7 @@ class TimelineView(QGraphicsView):
         time_span = max(tr.time_max - tr.time_min, 1)
 
         # ------------------------------------------------------------------
-        # Build flat row list: each entry is {'segs': [...], 'fixed_color': QColor|None}
-        # fixed_color=None means "color per segment using _blended_color(seg.task, seg.core)"
+        # Build flat row list
         # ------------------------------------------------------------------
         row_data: list = []
 
@@ -6441,14 +6448,11 @@ class TimelineView(QGraphicsView):
                 col.setAlpha(210)
                 row_data.append({'segs': segs, 'fixed_color': col})
         else:
-            # Core view: header row for each core + task sub-rows
             for core in tr.core_names:
-                # Core header row — color each segment by its actual task blend
                 hdr_segs = (tr.core_seg_lod_ultra.get(core)
                             or tr.core_segs.get(core, []))
                 if hdr_segs:
                     row_data.append({'segs': hdr_segs, 'fixed_color': None})
-                # Per-task sub-rows
                 for task_raw in tr.core_task_order.get(core, []):
                     t_segs = (tr.core_task_seg_lod_ultra.get(core, {}).get(task_raw)
                               or tr.core_task_segs.get(core, {}).get(task_raw, []))
@@ -6458,7 +6462,6 @@ class TimelineView(QGraphicsView):
                     col.setAlpha(210)
                     row_data.append({'segs': t_segs, 'fixed_color': col})
 
-        # STI channel rows (separate list, painted at bottom of minimap)
         sti_row_data: list = []
         if sc._show_sti:
             for ch_idx, ch in enumerate(tr.sti_channels):
@@ -6471,10 +6474,13 @@ class TimelineView(QGraphicsView):
                 sti_row_data.append({'evs': ch_evs, 'color': ch_color, 'is_expanded': is_exp})
 
         if not row_data and not sti_row_data:
+            # Border only
+            p.setPen(QPen(QColor(70, 70, 70), 1))
+            p.setBrush(Qt.NoBrush)
+            p.drawRect(0, 0, W - 1, H - 1)
             p.end()
             return pix
 
-        # Allocate heights: STI rows at bottom, task/core rows at top
         _STI_MINI_H   = 12.0
         sti_total_h   = min(H * 0.4, len(sti_row_data) * _STI_MINI_H)
         task_area_h   = float(H) - sti_total_h
@@ -6482,7 +6488,9 @@ class TimelineView(QGraphicsView):
         row_h         = task_area_h / n_rows if row_data else float(H)
         p.setPen(Qt.NoPen)
 
-        # Paint task/core rows
+        # Per-(task,core) colour cache for core-header rows (fixed_color=None)
+        _seg_color_cache: dict = {}
+
         for i, rd in enumerate(row_data):
             y   = i * row_h
             rh  = max(1.0, row_h - 0.5)
@@ -6494,11 +6502,14 @@ class TimelineView(QGraphicsView):
                 if fixed is not None:
                     col = fixed
                 else:
-                    col = QColor(_blended_color(seg.task, seg.core))
-                    col.setAlpha(200)
+                    ck = (seg.task, seg.core)
+                    col = _seg_color_cache.get(ck)
+                    if col is None:
+                        col = QColor(_blended_color(seg.task, seg.core))
+                        col.setAlpha(200)
+                        _seg_color_cache[ck] = col
                 p.fillRect(QRectF(x1, y, sw, rh), col)
 
-        # Paint STI rows at the bottom of the minimap
         if sti_row_data:
             sti_row_h = sti_total_h / len(sti_row_data)
             for i, rd in enumerate(sti_row_data):
@@ -6507,73 +6518,115 @@ class TimelineView(QGraphicsView):
                 col = rd['color']
                 evs = rd['evs']
                 if rd['is_expanded']:
-                    # Step-hold mini chart using numeric note values
-                    vals: list = []
+                    # Single-pass min/max extraction
+                    v_min = math.inf
+                    v_max = -math.inf
+                    fvals: list = []
                     for ev in evs:
+                        note_str = (ev.note or '').strip()
                         try:
-                            note_str = (ev.note or '').strip()
                             v = float(note_str) if note_str else float(ev.event or 0)
-                            vals.append(v)
                         except (ValueError, TypeError):
-                            vals.append(None)
-                    valid_vals = [v for v in vals if v is not None]
-                    if valid_vals and len(set(valid_vals)) > 1:
-                        v_min = min(valid_vals)
-                        v_max = max(valid_vals)
-                        for j, (ev, v) in enumerate(zip(evs, vals)):
-                            if v is None:
-                                continue
-                            x1 = (ev.time - tr.time_min) / time_span * W
-                            x2 = ((evs[j + 1].time - tr.time_min) / time_span * W
-                                  if j + 1 < len(evs) else float(W))
-                            norm_v = (v - v_min) / (v_max - v_min)
-                            bar_h  = max(1.0, norm_v * rh)
-                            p.fillRect(QRectF(x1, y + rh - bar_h,
-                                             max(1.0, x2 - x1), bar_h), col)
+                            fvals.append(None)
+                            continue
+                        if v < v_min: v_min = v
+                        if v > v_max: v_max = v
+                        fvals.append(v)
+                    if math.isfinite(v_min) and v_min != v_max:
+                        v_rng = v_max - v_min
+                        pts: list = []
+                        if sc._sti_line_style == 'step':
+                            for ev, v in zip(evs, fvals):
+                                if v is None:
+                                    continue
+                                px = (ev.time - tr.time_min) / time_span * W
+                                py = y + rh - (v - v_min) / v_rng * rh
+                                if pts:
+                                    pts.append(QPointF(px, pts[-1].y()))
+                                pts.append(QPointF(px, py))
+                        else:  # linear (default)
+                            for ev, v in zip(evs, fvals):
+                                if v is None:
+                                    continue
+                                px = (ev.time - tr.time_min) / time_span * W
+                                py = y + rh - (v - v_min) / v_rng * rh
+                                pts.append(QPointF(px, py))
+                        if len(pts) >= 2:
+                            p.setPen(QPen(col, 1.0))
+                            p.drawPolyline(QPolygonF(pts))
+                            p.setPen(Qt.NoPen)
                     else:
-                        # All same value or non-numeric — 2 px marks
+                        p.setPen(Qt.NoPen)
+                        p.setBrush(QBrush(col))
                         for ev in evs:
                             x1 = (ev.time - tr.time_min) / time_span * W
-                            p.fillRect(QRectF(x1 - 1.0, y, 2.0, rh), col)
+                            p.drawEllipse(QPointF(x1, y + rh / 2), 2.0, 2.0)
                 else:
-                    # Collapsed: 2 px vertical marks
+                    p.setPen(Qt.NoPen)
+                    p.setBrush(QBrush(col))
                     for ev in evs:
                         x1 = (ev.time - tr.time_min) / time_span * W
-                        p.fillRect(QRectF(x1 - 1.0, y, 2.0, rh), col)
+                        p.drawEllipse(QPointF(x1, y + rh / 2), 2.0, 2.0)
 
-        # ---- Viewport indicator (orange rectangle) ----
-        # Horizontal: time range
+        # Static border
+        p.setPen(QPen(QColor(70, 70, 70), 1))
+        p.setBrush(Qt.NoBrush)
+        p.drawRect(0, 0, W - 1, H - 1)
+        p.end()
+        return pix
+
+    def _paint_nav_pixmap(self) -> QPixmap:
+        """Return a 260×130 minimap pixmap with the viewport indicator overlaid.
+
+        The static background (all rows + border) is cached and only rebuilt
+        when the trace, view-mode, STI visibility or expansion state changes.
+        On every scroll the function just copies the cache and draws the
+        orange rectangle, making per-scroll cost O(1) instead of O(segments).
+        """
+        W, H = _NavigatorPopup.W, _NavigatorPopup.H
+        sc   = self._scene
+        tr   = sc._trace
+
+        # ---- Background cache --------------------------------------------
+        bg_key = (id(tr), sc._view_mode, sc._show_sti,
+                  frozenset(sc._sti_expanded))
+        if bg_key != self._nav_bg_key or self._nav_bg_pix is None:
+            self._nav_bg_pix = self._build_nav_bg(W, H, sc, tr)
+            self._nav_bg_key = bg_key
+
+        # Copy the cached background (Qt pixmap is copy-on-write)
+        pix = QPixmap(self._nav_bg_pix)
+
+        if tr is None:
+            return pix
+
+        # ---- Overlay: viewport indicator (orange rectangle) ---------------
+        p = QPainter(pix)
+        p.setRenderHint(QPainter.Antialiasing, False)
+
+        time_span = max(tr.time_max - tr.time_min, 1)
         ns_lo = sc._vp_ns_lo
         ns_hi = sc._vp_ns_hi
         vx1 = (ns_lo - tr.time_min) / time_span * W
         vx2 = (ns_hi - tr.time_min) / time_span * W
 
-        # Vertical: row scroll position derived from the relevant scrollbar
         vbar = self.verticalScrollBar() if sc._horizontal else self.horizontalScrollBar()
         v_range = vbar.maximum() - vbar.minimum()
         v_total = v_range + vbar.pageStep()
         if v_total > 0 and v_range > 0:
-            vy1 = (vbar.value() - vbar.minimum()) / v_total * H
+            vy1  = (vbar.value() - vbar.minimum()) / v_total * H
             vy_h = vbar.pageStep() / v_total * H
         else:
             vy1, vy_h = 0.0, float(H)
 
-        # Clamp to pixmap bounds
         vx1  = max(0.0, min(float(W), vx1))
         vx2  = max(0.0, min(float(W), vx2))
         vy1  = max(0.0, min(float(H), vy1))
         vy_h = min(float(H) - vy1, vy_h)
 
-        # Border around entire minimap
-        p.setPen(QPen(QColor(70, 70, 70), 1))
-        p.setBrush(Qt.NoBrush)
-        p.drawRect(0, 0, W - 1, H - 1)
-
-        # Orange viewport rect
         p.setPen(QPen(QColor(255, 140, 0), 1.5))
         p.setBrush(QBrush(QColor(255, 140, 0, 35)))
         p.drawRect(QRectF(vx1, vy1, max(1.5, vx2 - vx1), max(1.5, vy_h)))
-
         p.end()
         return pix
 
@@ -9986,12 +10039,23 @@ class MainWindow(QMainWindow):
         if self._trace is None:
             return
         unit = self._current_time_unit()
-        note, ok = QInputDialog.getText(
-            self, "Add Annotation",
-            f"Note for {_format_time(ns, unit, decimals=3)}:",
+        dlg = QInputDialog(self)
+        dlg.setWindowTitle("Add Annotation")
+        dlg.setLabelText(f"Note for {_format_time(ns, unit, decimals=3)}:")
+        dlg.setInputMode(QInputDialog.TextInput)
+        dlg.adjustSize()
+        # Explicitly center over the main window.
+        # QInputDialog.getText() can misplace the dialog at (0,0) on first show
+        # because Qt resolves the size hint after the initial position is set.
+        _g = self.geometry()
+        dlg.move(
+            _g.x() + (_g.width()  - dlg.sizeHint().width())  // 2,
+            _g.y() + (_g.height() - dlg.sizeHint().height()) // 2,
         )
-        note = note.strip()
-        if not ok or not note:
+        if dlg.exec() != QDialog.Accepted:
+            return
+        note = dlg.textValue().strip()
+        if not note:
             return
         self._push_undo_snapshot()
         self._annotations.append(TraceAnnotation(id=self._mark_next_id, ns=ns, note=note))

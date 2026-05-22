@@ -17,18 +17,23 @@
  * @returns {Array} Down-sampled segment array (may be same reference if already small).
  */
 export function makeLodSummary(segs, bins, binSpan, timeMin) {
-  if (segs.length <= bins) return segs.slice()  // already small – return a copy to prevent aliasing
+  if (segs.length <= bins) {
+    const r = segs.slice()  // copy to prevent aliasing
+    return [r, r.map(s => s.start)]
+  }
   const safeBinSpan = binSpan > 0 ? binSpan : 1e-9
   const result = []
+  const starts = []
   let prevBin = -2
   for (const s of segs) {
     const b = Math.floor((s.start - timeMin) / safeBinSpan)
     if (b !== prevBin) {
       result.push(s)
+      starts.push(s.start)
       prevBin = b
     }
   }
-  return result
+  return [result, starts]
 }
 
 /**

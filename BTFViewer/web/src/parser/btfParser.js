@@ -360,12 +360,12 @@ export function parseBtf(text, progressCallback) {
 
   for (const [mk, segs] of segsByMk) {
     segStartByMk.set(mk, segs.map(s => s.start))
-    const lod = makeLodSummary(segs, LOD_SUMMARY_BINS, lodTimescalePerPx, timeMin)
+    const [lod, lodStarts] = makeLodSummary(segs, LOD_SUMMARY_BINS, lodTimescalePerPx, timeMin)
     segLodByMk.set(mk, lod)
-    segLodStartsByMk.set(mk, lod.map(s => s.start))
-    const ultra = makeLodSummary(lod, LOD_SUMMARY_BINS_ULTRA, lodUltraTimescalePerPx, timeMin)
+    segLodStartsByMk.set(mk, lodStarts)
+    const [ultra, ultraStarts] = makeLodSummary(lod, LOD_SUMMARY_BINS_ULTRA, lodUltraTimescalePerPx, timeMin)
     segLodUltraByMk.set(mk, ultra)
-    segLodUltraStartsByMk.set(mk, ultra.map(s => s.start))
+    segLodUltraStartsByMk.set(mk, ultraStarts)
   }
 
   progress(80, 'Building core LOD summaries…')
@@ -380,12 +380,12 @@ export function parseBtf(text, progressCallback) {
   for (const c of coreNames) {
     const segs = coreSegs.get(c)
     coreSegStarts.set(c, segs.map(s => s.start))
-    const lod = makeLodSummary(segs, LOD_SUMMARY_BINS, lodTimescalePerPx, timeMin)
+    const [lod, lodStarts] = makeLodSummary(segs, LOD_SUMMARY_BINS, lodTimescalePerPx, timeMin)
     coreSegLod.set(c, lod)
-    coreSegLodStarts.set(c, lod.map(s => s.start))
-    const ultra = makeLodSummary(lod, LOD_SUMMARY_BINS_ULTRA, lodUltraTimescalePerPx, timeMin)
+    coreSegLodStarts.set(c, lodStarts)
+    const [ultra, ultraStarts] = makeLodSummary(lod, LOD_SUMMARY_BINS_ULTRA, lodUltraTimescalePerPx, timeMin)
     coreSegLodUltra.set(c, ultra)
-    coreSegLodUltraStarts.set(c, ultra.map(s => s.start))
+    coreSegLodUltraStarts.set(c, ultraStarts)
   }
 
   progress(88, 'Building per-task core LOD summaries…')
@@ -402,12 +402,12 @@ export function parseBtf(text, progressCallback) {
     const tsLodUltra = new Map(), tsLodUltraStarts = new Map()
     for (const [tn, tsegs] of ts) {
       tsStarts.set(tn, tsegs.map(s => s.start))
-      const lod = makeLodSummary(tsegs, LOD_SUMMARY_BINS, lodTimescalePerPx, timeMin)
+      const [lod, lodStarts] = makeLodSummary(tsegs, LOD_SUMMARY_BINS, lodTimescalePerPx, timeMin)
       tsLod.set(tn, lod)
-      tsLodStarts.set(tn, lod.map(s => s.start))
-      const ultra = makeLodSummary(lod, LOD_SUMMARY_BINS_ULTRA, lodUltraTimescalePerPx, timeMin)
+      tsLodStarts.set(tn, lodStarts)
+      const [ultra, ultraStarts] = makeLodSummary(lod, LOD_SUMMARY_BINS_ULTRA, lodUltraTimescalePerPx, timeMin)
       tsLodUltra.set(tn, ultra)
-      tsLodUltraStarts.set(tn, ultra.map(s => s.start))
+      tsLodUltraStarts.set(tn, ultraStarts)
     }
     coreTaskSegStarts.set(c, tsStarts)
     coreTaskSegLod.set(c, tsLod)
@@ -420,6 +420,21 @@ export function parseBtf(text, progressCallback) {
   const stiStartsByTarget = new Map()
   for (const [ch, evs] of stiByTarget) {
     stiStartsByTarget.set(ch, evs.map(e => e.time))
+  }
+
+  // STI numeric value ranges (valMin/valMax per channel) for waveform rows.
+  // Mirrors the evVal() logic in TimelineRenderer.js so the renderer can skip
+  // the O(N) scan on every animation frame.
+  const stiValRange = new Map()
+  for (const [ch, evs] of stiByTarget) {
+    let vMin = Infinity, vMax = -Infinity
+    for (const ev of evs) {
+      const v = parseFloat(ev.note !== '' ? ev.note : ev.event)
+      if (isNaN(v)) continue
+      if (v < vMin) vMin = v
+      if (v > vMax) vMax = v
+    }
+    if (isFinite(vMin)) stiValRange.set(ch, { min: vMin, max: vMax })
   }
 
   progress(95, 'Finalising…')
@@ -444,6 +459,7 @@ export function parseBtf(text, progressCallback) {
     stiChannels,
     stiEventsByTarget: stiByTarget,
     stiStartsByTarget,
+    stiValRange,
     tickStiTimes: tickStiTimes.sort((a, b) => a - b),
 
     // ---- Task-view lookup tables ----

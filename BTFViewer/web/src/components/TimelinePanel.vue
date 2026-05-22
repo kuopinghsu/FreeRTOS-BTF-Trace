@@ -197,16 +197,23 @@ const totalRowHeight = computed(() => {
   return totalHeight
 })
 
+// Cached column-layout total width for vertical mode (avoids calling
+// buildColumnLayout twice per reactive update for showHScrollbar + hThumbStyle).
+const totalColumnWidth = computed(() => {
+  if (!props.trace || orientation.value !== 'v') return 0
+  const { totalWidth } = buildColumnLayout(
+    props.trace, props.options.viewMode, expanded, 0, props.options.showSti !== false,
+  )
+  return totalWidth
+})
+
 const showHScrollbar = computed(() => {
   if (!props.trace || !traceBounds.value) return false
   if (orientation.value === 'h') {
     return (viewport.timeEnd - viewport.timeStart) < traceBounds.value.span - 1
   }
   // Vertical mode: H scrollbar = column scroll
-  const { totalWidth } = buildColumnLayout(
-    props.trace, props.options.viewMode, expanded, 0, props.options.showSti !== false,
-  )
-  return totalWidth > viewport.canvasW + 1
+  return totalColumnWidth.value > viewport.canvasW + 1
 })
 
 const showVScrollbar = computed(() => {
@@ -232,9 +239,7 @@ const hThumbStyle = computed(() => {
     return { width: `${thumbW}px`, left: `${Math.max(0, thumbL)}px` }
   }
   // Vertical mode – column scroll
-  const { totalWidth } = buildColumnLayout(
-    props.trace, props.options.viewMode, expanded, 0, props.options.showSti !== false,
-  )
+  const totalWidth = totalColumnWidth.value
   const thumbW  = Math.max(20, (viewport.canvasW / Math.max(1, totalWidth)) * trackW)
   const maxLeft = trackW - thumbW
   const thumbL  = maxLeft > 0
@@ -290,6 +295,13 @@ const overviewCanvasEl = ref(null)
 const overviewVisible  = ref(false)
 let   _overviewHideTimer = null
 let   _sbDrag            = null      // active scrollbar drag state: { type, … }
+// OffscreenCanvas cache for the overview background (rows + STI + border).
+// Rebuilt only when trace/mode/STI state changes; scroll only repaints the overlay rect.
+let _ovBgCanvas      = null   // OffscreenCanvas | null
+let _ovBgTrace       = null   // trace identity (object ref)
+let _ovBgMode        = null   // viewMode string
+let _ovBgShowSti     = null   // showSti option value
+let _ovBgExpandedKey = null   // sorted join of expanded STI channels
 
 // ---- Renderer loop --------------------------------------------------------
 let _rafId = null
@@ -947,118 +959,32 @@ function paintOverview() {
   const span = hi - lo
   if (span <= 0) return
 
+  // ---- Background cache --------------------------------------------------
+  // The static part (rows + STI bars + border) never changes on scroll/pan.
+  // Rebuild it only when the trace, view mode or STI state changes.
+  const expandedKey = [...stiExpanded].sort().join(',')
+  const needsBgRebuild = _ovBgCanvas === null
+    || _ovBgTrace       !== tr
+    || _ovBgMode        !== props.options.viewMode
+    || _ovBgShowSti     !== props.options.showSti
+    || _ovBgExpandedKey !== expandedKey
+
+  if (needsBgRebuild) {
+    const bg = new OffscreenCanvas(W, H)
+    _paintOverviewBg(bg, tr, lo, hi, span, W, H)
+    _ovBgCanvas      = bg
+    _ovBgTrace       = tr
+    _ovBgMode        = props.options.viewMode
+    _ovBgShowSti     = props.options.showSti
+    _ovBgExpandedKey = expandedKey
+  }
+
   ctx.setTransform(1, 0, 0, 1, 0, 0)
+  ctx.drawImage(_ovBgCanvas, 0, 0)
 
-  // ---- Background --------------------------------------------------------
-  ctx.fillStyle = props.options.darkMode ? '#1a1a1a' : '#e8e8e8'
-  ctx.fillRect(0, 0, W, H)
-
+  // ---- Overlay: viewport indicator (only this changes on scroll/zoom) ----
+  const dark     = props.options.darkMode
   const pxPerNs  = W / span
-  const isCore   = props.options.viewMode === 'core'
-
-  // ---- Build flat row descriptors ----------------------------------------
-  // Each: { segs, color }  – no ruler, no labels, pure colored bars.
-  const rowDefs = []
-
-  if (!isCore) {
-    for (const mk of tr.tasks) {
-      const repr = tr.taskRepr.get(mk)
-      const segs = tr.segLodUltraByMergeKey.get(mk) || tr.segByMergeKey.get(mk) || []
-      if (!segs.length) continue
-      rowDefs.push({ segs, color: taskColor(mk, repr) })
-    }
-  } else {
-    for (const coreName of tr.coreNames) {
-      // Core header row (solid core colour)
-      const hdrSegs = tr.coreSegLodUltra.get(coreName) || tr.coreSegs.get(coreName) || []
-      if (hdrSegs.length) {
-        rowDefs.push({ segs: hdrSegs, color: coreColor(coreName) })
-      }
-      // Task sub-rows (task colour, TICK excluded)
-      const taskOrder = (tr.coreTaskOrder.get(coreName) || [])
-        .filter(t => parseTaskName(t).name !== 'TICK')
-      for (const taskRaw of taskOrder) {
-        const mk     = taskMergeKey(taskRaw)
-        const tSegs  = tr.coreTaskSegLodUltra.get(coreName)?.get(taskRaw)
-                    || tr.coreTaskSegs.get(coreName)?.get(taskRaw) || []
-        if (!tSegs.length) continue
-        rowDefs.push({ segs: tSegs, color: taskColor(mk, taskRaw) })
-      }
-    }
-  }
-
-  // ---- STI channel rows (separate array, painted at bottom of minimap) ---
-  const stiDefs = []
-  if (props.options.showSti !== false && tr.stiChannels?.length) {
-    for (const ch of tr.stiChannels) {
-      const evs = tr.stiEventsByTarget?.get(ch) || []
-      if (!evs.length) continue
-      stiDefs.push({ evs, color: stiChannelColor(ch), isExpanded: stiExpanded.has(ch) })
-    }
-  }
-
-  // ---- Paint rows --------------------------------------------------------
-  const STI_MINI_H  = 12  // minimum px per STI row in minimap
-  const stiTotalH   = Math.min(H * 0.4, stiDefs.length * STI_MINI_H)
-  const taskAreaH   = H - stiTotalH
-
-  if (rowDefs.length) {
-    const rowH = taskAreaH / rowDefs.length
-    for (let i = 0; i < rowDefs.length; i++) {
-      const { segs, color } = rowDefs[i]
-      const y  = i * rowH
-      const rh = Math.max(1, rowH - 0.3)
-      ctx.fillStyle = color
-      for (const seg of segs) {
-        const x  = (seg.start - lo) * pxPerNs
-        const sw = Math.max(0.5, (seg.end - seg.start) * pxPerNs)
-        ctx.fillRect(x, y, sw, rh)
-      }
-    }
-  }
-
-  if (stiDefs.length) {
-    const stiRowH = stiTotalH / stiDefs.length
-    for (let i = 0; i < stiDefs.length; i++) {
-      const { evs, color, isExpanded } = stiDefs[i]
-      const y  = taskAreaH + i * stiRowH
-      const rh = Math.max(2, stiRowH - 0.5)
-      ctx.fillStyle = color
-      if (isExpanded) {
-        // Step-hold mini chart using numeric note values
-        let vMin = Infinity, vMax = -Infinity
-        for (const ev of evs) {
-          const v = parseFloat(ev.note !== '' ? ev.note : ev.event)
-          if (!isNaN(v)) { if (v < vMin) vMin = v; if (v > vMax) vMax = v }
-        }
-        if (isFinite(vMin) && vMin !== vMax) {
-          for (let j = 0; j < evs.length; j++) {
-            const ev  = evs[j]
-            const v   = parseFloat(ev.note !== '' ? ev.note : ev.event)
-            if (isNaN(v)) continue
-            const x1    = (ev.time - lo) * pxPerNs
-            const x2    = j + 1 < evs.length ? (evs[j + 1].time - lo) * pxPerNs : W
-            const normV = (v - vMin) / (vMax - vMin)
-            const barH  = Math.max(1, normV * rh)
-            ctx.fillRect(x1, y + rh - barH, Math.max(1, x2 - x1), barH)
-          }
-        } else {
-          // All same value or non-numeric — fall back to 2 px marks
-          for (const ev of evs) {
-            ctx.fillRect((ev.time - lo) * pxPerNs - 1, y, 2, rh)
-          }
-        }
-      } else {
-        // Collapsed: 2 px vertical marks at each event time
-        for (const ev of evs) {
-          ctx.fillRect((ev.time - lo) * pxPerNs - 1, y, 2, rh)
-        }
-      }
-    }
-  }
-
-  // ---- Viewport indicator ------------------------------------------------
-  const dark = props.options.darkMode
   ctx.strokeStyle = dark ? 'rgba(255,160,60,0.9)'  : 'rgba(200,70,10,0.85)'
   ctx.fillStyle   = dark ? 'rgba(255,160,60,0.18)' : 'rgba(200,70,10,0.12)'
   ctx.lineWidth   = 1.5
@@ -1087,6 +1013,129 @@ function paintOverview() {
     ctx.fill()
     ctx.stroke()
   }
+}
+
+function _paintOverviewBg(bgCanvas, tr, lo, hi, span, W, H) {
+  const ctx     = bgCanvas.getContext('2d')
+  const dark    = props.options.darkMode
+  const pxPerNs = W / span
+  const isCore  = props.options.viewMode === 'core'
+
+  ctx.fillStyle = dark ? '#1a1a1a' : '#e8e8e8'
+  ctx.fillRect(0, 0, W, H)
+
+  // ---- Build flat row descriptors ----------------------------------------
+  const rowDefs = []
+  if (!isCore) {
+    for (const mk of tr.tasks) {
+      const repr = tr.taskRepr.get(mk)
+      const segs = tr.segLodUltraByMergeKey.get(mk) || tr.segByMergeKey.get(mk) || []
+      if (!segs.length) continue
+      rowDefs.push({ segs, color: taskColor(mk, repr) })
+    }
+  } else {
+    for (const coreName of tr.coreNames) {
+      const hdrSegs = tr.coreSegLodUltra.get(coreName) || tr.coreSegs.get(coreName) || []
+      if (hdrSegs.length) rowDefs.push({ segs: hdrSegs, color: coreColor(coreName) })
+      const taskOrder = (tr.coreTaskOrder.get(coreName) || [])
+        .filter(t => parseTaskName(t).name !== 'TICK')
+      for (const taskRaw of taskOrder) {
+        const mk    = taskMergeKey(taskRaw)
+        const tSegs = tr.coreTaskSegLodUltra.get(coreName)?.get(taskRaw)
+                   || tr.coreTaskSegs.get(coreName)?.get(taskRaw) || []
+        if (!tSegs.length) continue
+        rowDefs.push({ segs: tSegs, color: taskColor(mk, taskRaw) })
+      }
+    }
+  }
+
+  const stiDefs = []
+  if (props.options.showSti !== false && tr.stiChannels?.length) {
+    for (const ch of tr.stiChannels) {
+      const evs = tr.stiEventsByTarget?.get(ch) || []
+      if (!evs.length) continue
+      stiDefs.push({ evs, color: stiChannelColor(ch), isExpanded: stiExpanded.has(ch), ch })
+    }
+  }
+
+  const STI_MINI_H = 12
+  const stiTotalH  = Math.min(H * 0.4, stiDefs.length * STI_MINI_H)
+  const taskAreaH  = H - stiTotalH
+
+  if (rowDefs.length) {
+    const rowH = taskAreaH / rowDefs.length
+    for (let i = 0; i < rowDefs.length; i++) {
+      const { segs, color } = rowDefs[i]
+      const y  = i * rowH
+      const rh = Math.max(1, rowH - 0.3)
+      ctx.fillStyle = color
+      for (const seg of segs) {
+        const x  = (seg.start - lo) * pxPerNs
+        const sw = Math.max(0.5, (seg.end - seg.start) * pxPerNs)
+        ctx.fillRect(x, y, sw, rh)
+      }
+    }
+  }
+
+  if (stiDefs.length) {
+    const stiRowH = stiTotalH / stiDefs.length
+    for (let i = 0; i < stiDefs.length; i++) {
+      const { evs, color, isExpanded, ch } = stiDefs[i]
+      const y  = taskAreaH + i * stiRowH
+      const rh = Math.max(2, stiRowH - 0.5)
+      ctx.fillStyle = color
+      if (isExpanded) {
+        // Use precomputed value range from parser (O(1)) instead of scanning
+        const range = tr.stiValRange?.get(ch)
+        const vMin = range?.min ?? Infinity
+        const vMax = range?.max ?? -Infinity
+        if (isFinite(vMin) && vMin !== vMax) {
+          // Draw as a line chart to match the main timeline view
+          const vRng = vMax - vMin
+          ctx.save()
+          ctx.strokeStyle = color
+          ctx.lineWidth   = 1.0
+          ctx.lineJoin    = 'round'
+          ctx.beginPath()
+          let firstPt = true
+          for (let j = 0; j < evs.length; j++) {
+            const ev = evs[j]
+            const v  = parseFloat(ev.note !== '' ? ev.note : ev.event)
+            if (isNaN(v)) continue
+            const cx = (ev.time - lo) * pxPerNs
+            const cy = y + rh - (v - vMin) / vRng * rh
+            if (firstPt) { ctx.moveTo(cx, cy); firstPt = false }
+            else ctx.lineTo(cx, cy)
+          }
+          if (!firstPt) ctx.stroke()
+          ctx.restore()
+        } else {
+          ctx.save()
+          ctx.fillStyle = color
+          for (const ev of evs) {
+            ctx.beginPath()
+            ctx.arc((ev.time - lo) * pxPerNs, y + rh / 2, 2, 0, Math.PI * 2)
+            ctx.fill()
+          }
+          ctx.restore()
+        }
+      } else {
+        ctx.save()
+        ctx.fillStyle = color
+        for (const ev of evs) {
+          ctx.beginPath()
+          ctx.arc((ev.time - lo) * pxPerNs, y + rh / 2, 2, 0, Math.PI * 2)
+          ctx.fill()
+        }
+        ctx.restore()
+      }
+    }
+  }
+
+  // Static border
+  ctx.strokeStyle = dark ? 'rgba(120,120,120,0.6)' : 'rgba(80,80,80,0.5)'
+  ctx.lineWidth   = 1
+  ctx.strokeRect(0.5, 0.5, W - 1, H - 1)
 }
 
 // Scrollbar mouse-move / mouse-up (attached to document during drag)

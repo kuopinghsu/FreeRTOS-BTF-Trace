@@ -1,6 +1,6 @@
 {
   "name": "btf-viewer",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Web-based RTOS BTF Viewer",
   "type": "module",
   "scripts": {
