@@ -364,6 +364,11 @@ export class InteractionHandler {
               e.preventDefault()
               return
             }
+            if (col?.type === 'sti' && col.isExpandable) {
+              this._opts.onStiExpandToggle?.(col.key)
+              e.preventDefault()
+              return
+            }
           }
         }
         // Click on ruler or header (non-core) → start pan

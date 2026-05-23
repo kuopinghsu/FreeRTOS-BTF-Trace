@@ -1211,34 +1211,42 @@ export function drawMarksHorizontal(ctx, marks, trace, timeStart, pxPerNs, canva
 
 /**
  * Build a flat column descriptor array for the current view mode (vertical orientation).
- * Each col: { type: 'task'|'core'|'core-task'|'sti', key, label, color, x, colIdx }
+ * Each col: { type: 'task'|'core'|'core-task'|'sti', key, label, color, x, colIdx, colWidth,
+ *             isExpanded?, isExpandable? }
+ *
+ * STI tag-event channels are expandable; when expanded they use STI_WAVEFORM_H as column width.
  *
  * @param {object} trace
- * @param {string} viewMode   'task' or 'core'
- * @param {Set}    expanded   Set of expanded core names
- * @param {number} scrollX    Horizontal scroll offset in pixels
+ * @param {string} viewMode      'task' or 'core'
+ * @param {Set}    expanded      Set of expanded core names
+ * @param {number} scrollX       Horizontal scroll offset in pixels
+ * @param {boolean} showSti
+ * @param {Set}    stiExpanded   Set of expanded STI channel names
  * @returns {{ cols: Array, totalWidth: number }}
  */
-export function buildColumnLayout(trace, viewMode, expanded, scrollX = 0, showSti = true) {
+export function buildColumnLayout(trace, viewMode, expanded, scrollX = 0, showSti = true, stiExpanded = new Set()) {
   const cols = []
   let rawIdx = 0
+  let xAcc   = 0  // accumulated pixel offset from RULER_W (before scrollX)
 
   if (viewMode === 'task') {
     for (const mk of trace.tasks) {
       const repr = trace.taskRepr.get(mk)
       const label = taskDisplayName(repr || mk)
       const color = taskColor(mk, repr)
-      const x = RULER_W + rawIdx * COL_W - scrollX
-      cols.push({ type: 'task', key: mk, label, color, x, colIdx: rawIdx })
+      const x = RULER_W + xAcc - scrollX
+      cols.push({ type: 'task', key: mk, label, color, x, colIdx: rawIdx, colWidth: COL_W })
       rawIdx++
+      xAcc += COL_W
     }
   } else {
     // Core view
     for (const coreName of trace.coreNames) {
       const cc = coreColor(coreName)
-      const x = RULER_W + rawIdx * COL_W - scrollX
-      cols.push({ type: 'core', key: coreName, label: coreName, color: cc, x, colIdx: rawIdx })
+      const x = RULER_W + xAcc - scrollX
+      cols.push({ type: 'core', key: coreName, label: coreName, color: cc, x, colIdx: rawIdx, colWidth: COL_W })
       rawIdx++
+      xAcc += COL_W
       if (expanded.has(coreName)) {
         // TICK is rendered on the ruler band – exclude it from per-task sub-columns.
         const taskOrder = (trace.coreTaskOrder.get(coreName) || [])
@@ -1247,27 +1255,32 @@ export function buildColumnLayout(trace, viewMode, expanded, scrollX = 0, showSt
           const lbl = taskDisplayName(rawTask)
           const mk = taskMergeKey(rawTask)
           const col = taskColor(mk, rawTask)
-          const cx = RULER_W + rawIdx * COL_W - scrollX
+          const cx = RULER_W + xAcc - scrollX
           cols.push({
             type: 'core-task', key: `${coreName}__${rawTask}`,
-            coreKey: coreName, taskKey: rawTask, label: lbl, color: col, x: cx, colIdx: rawIdx,
+            coreKey: coreName, taskKey: rawTask, label: lbl, color: col, x: cx, colIdx: rawIdx, colWidth: COL_W,
           })
           rawIdx++
+          xAcc += COL_W
         }
       }
     }
   }
 
-  // STI columns
+  // STI columns — tag-event channels can be expanded to show a wider waveform column
   if (showSti) {
     for (const ch of trace.stiChannels) {
-      const x = RULER_W + rawIdx * COL_W - scrollX
-      cols.push({ type: 'sti', key: ch, label: ch, color: '#888', x, colIdx: rawIdx })
+      const isExpandable = isStiTagChannel(ch)
+      const isExpanded   = isExpandable && stiExpanded.has(ch)
+      const cw           = isExpanded ? STI_WAVEFORM_H : COL_W
+      const x = RULER_W + xAcc - scrollX
+      cols.push({ type: 'sti', key: ch, label: ch, color: '#888', x, colIdx: rawIdx, colWidth: cw, isExpanded, isExpandable })
       rawIdx++
+      xAcc += cw
     }
   }
 
-  return { cols, totalWidth: RULER_W + rawIdx * COL_W }
+  return { cols, totalWidth: RULER_W + xAcc }
 }
 
 // ---- Vertical ruler (left side) -------------------------------------------
@@ -1371,8 +1384,9 @@ function drawTickMarkersOnRulerVertical(ctx, trace, timeStart, timeEnd, pxPerNs,
 
 function drawColumnHeaders(ctx, cols, headerH, colW, highlightKey, darkMode) {
   for (const col of cols) {
+    const cw = col.colWidth ?? colW
     const x = col.x
-    const cx = x + colW / 2
+    const cx = x + cw / 2
 
     // Column separator line
     ctx.strokeStyle = darkMode ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)'
@@ -1394,7 +1408,9 @@ function drawColumnHeaders(ctx, cols, headerH, colW, highlightKey, darkMode) {
     ctx.fillStyle = color
     // Elide to available header height
     const maxChars = Math.max(1, Math.floor((headerH - 20) / 7))
-    const label = col.label.length > maxChars ? col.label.substring(0, maxChars - 1) + '…' : col.label
+    let rawLabel = col.label
+    if (col.isExpandable) rawLabel = (col.isExpanded ? '▼ ' : '▶ ') + rawLabel
+    const label = rawLabel.length > maxChars ? rawLabel.substring(0, maxChars - 1) + '…' : rawLabel
     ctx.fillText(label, 0, 0)
     ctx.restore()
   }
@@ -1567,14 +1583,20 @@ function drawCoreTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerP
 }
 
 function drawStiColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, canvasH, darkMode) {
+  const cw = col.colWidth ?? COL_W
   ctx.fillStyle = darkMode ? '#1A1A2E' : '#F0F0FF'
-  ctx.fillRect(col.x, HEADER_H, COL_W, canvasH)
+  ctx.fillRect(col.x, HEADER_H, cw, canvasH)
+
+  if (col.isExpanded) {
+    drawStiColumnWaveform(ctx, trace, col, cw, timeStart, timeEnd, pxPerNs, canvasH, darkMode)
+    return
+  }
 
   const evs    = trace.stiEventsByTarget.get(col.key) || []
   const starts = trace.stiStartsByTarget.get(col.key) || []
   const lo = Math.max(0, bisectLeft(starts, timeStart) - 1)
   const hi = bisectRight(starts, timeEnd) + 1
-  const cx = col.x + COL_W / 2
+  const cx = col.x + cw / 2
   const markerR = 4
 
   ctx.save()
@@ -1599,6 +1621,148 @@ function drawStiColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, canvasH, da
     ctx.fill()
     ctx.stroke()
   }
+  ctx.restore()
+}
+
+/**
+ * Draw an expanded STI waveform inside a vertical column (time on Y, values on X).
+ */
+function drawStiColumnWaveform(ctx, trace, col, colW, timeStart, timeEnd, pxPerNs, canvasH, darkMode) {
+  const evs    = trace.stiEventsByTarget.get(col.key) || []
+  const starts = trace.stiStartsByTarget.get(col.key) || []
+  if (evs.length === 0) return
+
+  const PAD        = 4
+  const chartLeft  = col.x + PAD
+  const chartRight = col.x + colW - PAD
+  const chartW     = chartRight - chartLeft
+  if (chartW <= 0) return
+
+  // Axis guide lines
+  const axisColor = darkMode ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.12)'
+  ctx.save()
+  ctx.strokeStyle = axisColor
+  ctx.lineWidth = 0.5
+  ctx.setLineDash([3, 3])
+  ctx.beginPath()
+  ctx.moveTo(chartLeft + 0.5, HEADER_H)
+  ctx.lineTo(chartLeft + 0.5, canvasH)
+  ctx.stroke()
+  ctx.beginPath()
+  ctx.moveTo(chartRight + 0.5, HEADER_H)
+  ctx.lineTo(chartRight + 0.5, canvasH)
+  ctx.stroke()
+  ctx.setLineDash([])
+  ctx.restore()
+
+  function evVal(ev) { return parseFloat(ev.note !== '' ? ev.note : ev.event) }
+
+  const preRange = trace.stiValRange?.get(col.key)
+  let valMin, valMax
+  if (preRange) {
+    valMin = preRange.min
+    valMax = preRange.max
+  } else {
+    valMin = Infinity; valMax = -Infinity
+    for (const ev of evs) {
+      const v = evVal(ev)
+      if (isNaN(v)) continue
+      if (v < valMin) valMin = v
+      if (v > valMax) valMax = v
+    }
+  }
+  if (!isFinite(valMin)) return
+  if (valMin === valMax) { valMin -= 1; valMax += 1 }
+  const valRange = valMax - valMin
+  function valToX(v) { return chartLeft + ((v - valMin) / valRange) * chartW }
+
+  const lo = Math.max(0, bisectLeft(starts, timeStart) - 1)
+  const hi = Math.min(evs.length, bisectRight(starts, timeEnd) + 1)
+  const slice = evs.slice(lo, hi)
+  if (slice.length === 0) return
+
+  // Scale labels at top of chart area
+  function fmtVal(v) {
+    if (Math.abs(v) >= 1e6) return (v / 1e6).toFixed(2) + 'M'
+    if (Math.abs(v) >= 1e3) return (v / 1e3).toFixed(1) + 'k'
+    return String(Math.round(v))
+  }
+  ctx.save()
+  ctx.font = '9px monospace'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'top'
+  ctx.fillStyle = darkMode ? 'rgba(255,255,255,0.3)' : 'rgba(0,0,0,0.3)'
+  ctx.fillText(fmtVal(valMin), chartLeft + 2, HEADER_H + 2)
+  ctx.fillText(fmtVal(valMax), chartRight - 2, HEADER_H + 2)
+  ctx.restore()
+
+  // Clip drawing to the timeline area so lines don't bleed into the header
+  ctx.save()
+  ctx.beginPath()
+  ctx.rect(col.x, HEADER_H, colW, canvasH - HEADER_H)
+  ctx.clip()
+
+  ctx.strokeStyle = darkMode ? '#5BC8FF' : '#0070CC'
+  ctx.lineWidth = 1.5
+  ctx.lineJoin = 'round'
+
+  // Build polyline connecting events with straight lines.
+  // When the first event in 'slice' has a predecessor above the viewport,
+  // interpolate the line back to y=HEADER_H so there is no gap at the top.
+  ctx.beginPath()
+  let firstPoint = true
+  for (let i = 0; i < slice.length; i++) {
+    const ev  = slice[i]
+    const val = evVal(ev)
+    if (isNaN(val)) continue
+
+    const cy = HEADER_H + (ev.time - timeStart) * pxPerNs
+    const cx = valToX(val)
+
+    if (firstPoint) {
+      if (lo > 0) {
+        // There is an off-screen event above the viewport — interpolate to y=HEADER_H
+        const prevEv  = evs[lo - 1]
+        const prevVal = evVal(prevEv)
+        if (!isNaN(prevVal)) {
+          const prevCy = HEADER_H + (prevEv.time - timeStart) * pxPerNs
+          const prevCx = valToX(prevVal)
+          const t       = prevCy === cy ? 0 : (HEADER_H - prevCy) / (cy - prevCy)
+          const startCx = prevCx + t * (cx - prevCx)
+          ctx.moveTo(startCx, HEADER_H)
+          ctx.lineTo(cx, cy)
+          firstPoint = false
+          continue
+        }
+      }
+      ctx.moveTo(cx, cy)
+      firstPoint = false
+    } else {
+      ctx.lineTo(cx, cy)
+    }
+  }
+  // Hold last value to canvas bottom
+  if (!firstPoint) {
+    const lastSliceEv = slice[slice.length - 1]
+    const lastVal = evVal(lastSliceEv)
+    if (!isNaN(lastVal)) ctx.lineTo(valToX(lastVal), canvasH)
+  }
+  ctx.stroke()
+
+  // Dots at each event
+  ctx.fillStyle = darkMode ? '#80DFFF' : '#0050AA'
+  for (let i = 0; i < slice.length; i++) {
+    const ev  = slice[i]
+    const val = evVal(ev)
+    if (isNaN(val)) continue
+    const cx = valToX(val)
+    const cy = HEADER_H + (ev.time - timeStart) * pxPerNs
+    if (cy < HEADER_H - 4 || cy > canvasH + 4) continue
+    ctx.beginPath()
+    ctx.arc(cx, cy, 2.5, 0, Math.PI * 2)
+    ctx.fill()
+  }
+
   ctx.restore()
 }
 
@@ -1778,6 +1942,7 @@ export function renderVertical(ctx, trace, viewport, options = {}) {
     hoverTime    = null,
     marks        = [],
     showSti      = true,
+    stiExpanded  = new Set(),
   } = options
   const highlightSegment = options.highlightSegment ?? null
 
@@ -1804,7 +1969,7 @@ export function renderVertical(ctx, trace, viewport, options = {}) {
   ctx.fillRect(RULER_W, 0, canvasW - RULER_W, HEADER_H)
 
   // Build column layout
-  const { cols } = buildColumnLayout(trace, viewMode, expanded, scrollX, showSti)
+  const { cols } = buildColumnLayout(trace, viewMode, expanded, scrollX, showSti, stiExpanded)
 
   // Grid lines (horizontal, optional)
   if (showGrid) {
@@ -1882,16 +2047,17 @@ export function renderVertical(ctx, trace, viewport, options = {}) {
  */
 export function hitTestStiVertical(trace, viewport, options, cx, cy, radius = 8) {
   const { timeStart, timeEnd, scrollX = 0, canvasH } = viewport
-  const { viewMode = 'task', expanded = new Set(), showSti = true } = options
+  const { viewMode = 'task', expanded = new Set(), showSti = true, stiExpanded = new Set() } = options
   if (!showSti) return null
   if (cy < HEADER_H) return null
   const pxPerNs = (canvasH - HEADER_H) / (timeEnd - timeStart)
   const tAtCy = timeStart + (cy - HEADER_H) / pxPerNs
 
-  const { cols } = buildColumnLayout(trace, viewMode, expanded, scrollX, showSti)
+  const { cols } = buildColumnLayout(trace, viewMode, expanded, scrollX, showSti, stiExpanded)
   for (const col of cols) {
     if (col.type !== 'sti') continue
-    if (Math.abs(cx - (col.x + COL_W / 2)) > COL_W) continue
+    const cw = col.colWidth ?? COL_W
+    if (Math.abs(cx - (col.x + cw / 2)) > cw) continue
 
     const evs    = trace.stiEventsByTarget.get(col.key) || []
     const starts = trace.stiStartsByTarget.get(col.key) || []
@@ -1915,11 +2081,11 @@ export function hitTestStiVertical(trace, viewport, options, cx, cy, radius = 8)
  */
 export function hitTestColumn(trace, viewport, options, cx, _cy) {
   const { scrollX = 0 } = viewport
-  const { viewMode = 'task', expanded = new Set(), showSti = true } = options
+  const { viewMode = 'task', expanded = new Set(), showSti = true, stiExpanded = new Set() } = options
   if (cx < RULER_W) return null
-  const { cols } = buildColumnLayout(trace, viewMode, expanded, scrollX, showSti)
+  const { cols } = buildColumnLayout(trace, viewMode, expanded, scrollX, showSti, stiExpanded)
   for (const col of cols) {
-    if (cx >= col.x && cx < col.x + COL_W) return col
+    if (cx >= col.x && cx < col.x + (col.colWidth ?? COL_W)) return col
   }
   return null
 }

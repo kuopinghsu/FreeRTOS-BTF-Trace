@@ -159,7 +159,7 @@ import StiTooltip  from './StiTooltip.vue'
 import { render as renderTimeline, renderVertical, buildRowLayout, buildColumnLayout, drawHoverLine, drawHoverLineVertical, drawCursors, drawCursorsVertical, drawMarksHorizontal, drawMarksVertical, RULER_H, ROW_H, STI_ROW_H, STI_WAVEFORM_H, ROW_GAP, isStiTagChannel, RULER_W, COL_W, HEADER_H, formatTime } from '../renderer/TimelineRenderer.js'
 import { renderToSvg } from '../renderer/SvgExporter.js'
 import { InteractionHandler } from '../renderer/InteractionHandler.js'
-import { taskMergeKey, taskColor, coreColor, parseTaskName, stiChannelColor } from '../utils/colors.js'
+import { taskMergeKey, taskColor, coreColor, coreTint, stiNoteColor, parseTaskName, stiChannelColor } from '../utils/colors.js'
 
 // ---- Props & emits -------------------------------------------------------
 const props = defineProps({
@@ -202,7 +202,7 @@ const totalRowHeight = computed(() => {
 const totalColumnWidth = computed(() => {
   if (!props.trace || orientation.value !== 'v') return 0
   const { totalWidth } = buildColumnLayout(
-    props.trace, props.options.viewMode, expanded, 0, props.options.showSti !== false,
+    props.trace, props.options.viewMode, expanded, 0, props.options.showSti !== false, stiExpanded,
   )
   return totalWidth
 })
@@ -493,6 +493,9 @@ function setupHandler() {
     },
     onExpandToggle(key) {
       onExpandToggle(key)
+    },
+    onStiExpandToggle(key) {
+      onStiExpandToggle(key)
     },
     onContextMenu({ ns, x, y }) {
       // x, y are client coordinates; convert to element-relative
@@ -979,7 +982,10 @@ function paintOverview() {
       bg.width  = W
       bg.height = H
     }
-    _paintOverviewBg(bg, tr, lo, hi, span, W, H, totalRowHeight.value)
+    const bgTotH = orientation.value === 'h'
+      ? totalRowHeight.value
+      : buildRowLayout(tr, props.options.viewMode, expanded, 0, props.options.showSti !== false, stiExpanded).totalHeight
+    _paintOverviewBg(bg, tr, lo, hi, span, W, H, bgTotH)
     _ovBgCanvas      = bg
     _ovBgTrace       = tr
     _ovBgMode        = props.options.viewMode
@@ -1014,11 +1020,21 @@ function paintOverview() {
     ctx.fill()
     ctx.stroke()
   } else {
-    const pxPerNsV = H / span
-    const vy = Math.max(0, (viewport.timeStart - lo) * pxPerNsV)
-    const vh = Math.min(H - vy, (viewport.timeEnd - viewport.timeStart) * pxPerNsV)
+    // Vertical mode: the thumbnail background always maps time→X and columns→Y,
+    // so the indicator also maps time→X (same as horizontal mode) and
+    // column-scroll→Y to stay consistent with the background.
+    const vx = Math.max(0, (viewport.timeStart - lo) * pxPerNs)
+    const vw = Math.min(W - vx, (viewport.timeEnd - viewport.timeStart) * pxPerNs)
+    const totW = totalColumnWidth.value
+    const visW = viewport.canvasW
+    let vy = 0
+    let vh = H
+    if (totW > visW && totW > 0) {
+      vy = ((viewport.scrollX || 0) / (totW - visW)) * (H - (visW / totW) * H)
+      vh = Math.max(2, (visW / totW) * H)
+    }
     ctx.beginPath()
-    ctx.rect(0, vy, W, Math.max(2, vh))
+    ctx.rect(vx, vy, Math.max(2, vw), vh)
     ctx.fill()
     ctx.stroke()
   }
@@ -1040,12 +1056,14 @@ function _paintOverviewBg(bgCanvas, tr, lo, hi, span, W, H, totH) {
       const repr = tr.taskRepr.get(mk)
       const segs = tr.segLodUltraByMergeKey.get(mk) || tr.segByMergeKey.get(mk) || []
       if (!segs.length) continue
-      rowDefs.push({ segs, color: taskColor(mk, repr) })
+      // Store base colour + blend flag; core tint is applied per-segment in the draw loop.
+      rowDefs.push({ segs, color: taskColor(mk, repr), blend: true })
     }
   } else {
     for (const coreName of tr.coreNames) {
       const hdrSegs = tr.coreSegLodUltra.get(coreName) || tr.coreSegs.get(coreName) || []
-      if (hdrSegs.length) rowDefs.push({ segs: hdrSegs, color: coreColor(coreName) })
+      // Core header: per-segment task colour (no core tint), matching drawCoreRow.
+      if (hdrSegs.length) rowDefs.push({ segs: hdrSegs, perSegColor: true })
       if (expanded.has(coreName)) {
         const taskOrder = (tr.coreTaskOrder.get(coreName) || [])
           .filter(t => parseTaskName(t).name !== 'TICK')
@@ -1085,15 +1103,38 @@ function _paintOverviewBg(bgCanvas, tr, lo, hi, span, W, H, totH) {
 
   if (rowDefs.length) {
     const rowH = taskAreaH / rowDefs.length
+    // Colour cache keyed by task string for per-segment core-header lookups.
+    const segColorCache = new Map()
     for (let i = 0; i < rowDefs.length; i++) {
-      const { segs, color } = rowDefs[i]
+      const rd = rowDefs[i]
       const y  = i * rowH
       const rh = Math.max(1, rowH - 0.3)
-      ctx.fillStyle = color
-      for (const seg of segs) {
+      for (const seg of rd.segs) {
         const x  = (seg.start - lo) * pxPerNs
         const sw = Math.max(0.5, (seg.end - seg.start) * pxPerNs)
-        ctx.fillRect(x, y, sw, rh)
+        if (rd.perSegColor) {
+          // Core header: per-segment task colour (no core tint), matching drawCoreRow.
+          if (seg.task?.startsWith('Core_')) continue
+          let c = segColorCache.get(seg.task)
+          if (c === undefined) {
+            c = taskColor(taskMergeKey(seg.task), seg.task)
+            segColorCache.set(seg.task, c)
+          }
+          ctx.fillStyle = c
+          ctx.fillRect(x, y, sw, rh)
+        } else {
+          // Task row or core-task sub-row: fill base colour first…
+          ctx.fillStyle = rd.color
+          ctx.fillRect(x, y, sw, rh)
+          // …then overlay core tint per-segment (task mode only), matching paintSegments.
+          if (rd.blend) {
+            const tint = coreTint(seg.core)
+            if (tint) {
+              ctx.fillStyle = tint
+              ctx.fillRect(x, y, sw, rh)
+            }
+          }
+        }
       }
     }
   }
@@ -1101,20 +1142,22 @@ function _paintOverviewBg(bgCanvas, tr, lo, hi, span, W, H, totH) {
   if (stiDefs.length) {
     const stiRowH = stiTotalH / stiDefs.length
     for (let i = 0; i < stiDefs.length; i++) {
-      const { evs, color, isExpanded, ch } = stiDefs[i]
+      const { evs, isExpanded, ch } = stiDefs[i]
       const y  = taskAreaH + i * stiRowH
       const rh = Math.max(2, stiRowH - 0.5)
-      ctx.fillStyle = color
       if (isExpanded) {
         // Use precomputed value range from parser (O(1)) instead of scanning
         const range = tr.stiValRange?.get(ch)
         const vMin = range?.min ?? Infinity
         const vMax = range?.max ?? -Infinity
+        // Use the same waveform colours as drawStiWaveformRow in TimelineRenderer.js.
+        const wfLineColor = dark ? '#5BC8FF' : '#0070CC'
+        const wfDotColor  = dark ? '#80DFFF' : '#0050AA'
         if (isFinite(vMin) && vMin !== vMax) {
           // Draw as a line chart to match the main timeline view
           const vRng = vMax - vMin
           ctx.save()
-          ctx.strokeStyle = color
+          ctx.strokeStyle = wfLineColor
           ctx.lineWidth   = 1.0
           ctx.lineJoin    = 'round'
           ctx.beginPath()
@@ -1132,7 +1175,7 @@ function _paintOverviewBg(bgCanvas, tr, lo, hi, span, W, H, totH) {
           ctx.restore()
         } else {
           ctx.save()
-          ctx.fillStyle = color
+          ctx.fillStyle = wfDotColor
           for (const ev of evs) {
             ctx.beginPath()
             ctx.arc((ev.time - lo) * pxPerNs, y + rh / 2, 2, 0, Math.PI * 2)
@@ -1141,9 +1184,10 @@ function _paintOverviewBg(bgCanvas, tr, lo, hi, span, W, H, totH) {
           ctx.restore()
         }
       } else {
+        // Collapsed: per-event note colour matching drawStiRow in TimelineRenderer.js.
         ctx.save()
-        ctx.fillStyle = color
         for (const ev of evs) {
+          ctx.fillStyle = stiNoteColor(ev.note || ev.event || '')
           ctx.beginPath()
           ctx.arc((ev.time - lo) * pxPerNs, y + rh / 2, 2, 0, Math.PI * 2)
           ctx.fill()
@@ -1172,7 +1216,7 @@ function _sbMouseMove(e) {
       viewport.timeEnd   = newStart + _sbDrag.visSpan
     } else {
       const { totalWidth } = buildColumnLayout(
-        props.trace, props.options.viewMode, expanded, 0, props.options.showSti !== false,
+        props.trace, props.options.viewMode, expanded, 0, props.options.showSti !== false, stiExpanded,
       )
       viewport.scrollX = Math.max(0, ratio * Math.max(0, totalWidth - viewport.canvasW))
     }
@@ -1260,7 +1304,7 @@ function onHTrackClick(e) {
     viewport.timeEnd   = newStart + visSpan
   } else {
     const { totalWidth } = buildColumnLayout(
-      props.trace, props.options.viewMode, expanded, 0, props.options.showSti !== false,
+      props.trace, props.options.viewMode, expanded, 0, props.options.showSti !== false, stiExpanded,
     )
     viewport.scrollX = Math.max(0, ratio * Math.max(0, totalWidth - viewport.canvasW))
   }

@@ -3018,7 +3018,14 @@ class TimelineScene(QGraphicsScene):
         label_row_h = self._label_width
         time_span   = trace.time_max - trace.time_min
         timeline_h  = time_span / self._timescale_per_px
-        total_w     = col_w * total_cols + RULER_WIDTH
+        # STI columns may be wider when expanded
+        total_sti_w = sum(
+            (self._sti_waveform_h_val
+             if (_is_tag_sti_channel(c) and c in self._sti_expanded)
+             else col_w)
+            for c in sti_cols
+        )
+        total_w     = RULER_WIDTH + n_task * col_w + total_sti_w
         total_h     = label_row_h + timeline_h
         self.setSceneRect(0, 0, total_w, total_h)
 
@@ -3172,29 +3179,62 @@ class TimelineScene(QGraphicsScene):
                 _cl_v.setZValue(2.5)
 
         # --- STI columns ------------------------------------------------
+        _sti_x_acc = RULER_WIDTH + n_task * col_w
         for sti_idx, channel in enumerate(sti_cols):
-            col_idx = n_task + sti_idx
-            x_left  = RULER_WIDTH + col_idx * col_w
-            x_ctr   = x_left + col_w / 2
-            self.addRect(QRectF(x_left, label_row_h, col_w, timeline_h),
+            col_idx    = n_task + sti_idx
+            expandable = _is_tag_sti_channel(channel)
+            is_exp     = expandable and channel in self._sti_expanded
+            cw_sti     = self._sti_waveform_h_val if is_exp else col_w
+            x_left     = _sti_x_acc
+            x_ctr      = x_left + cw_sti / 2
+            self.addRect(QRectF(x_left, label_row_h, cw_sti, timeline_h),
                          QPen(Qt.NoPen), QBrush(QColor("#1A1A2E"))).setZValue(0)
-            lbl = _make_rotated_label(self, channel, font, QColor("#88AABB"),
-                                      x_left + col_w / 2,
+
+            # Clickable column header (expands/collapses waveform)
+            lbl_bg = _StiLabelItem(QRectF(x_left, 0, cw_sti, label_row_h),
+                                   channel, self, expandable=expandable)
+            lbl_bg.setZValue(36)
+            self.addItem(lbl_bg)
+            self._frozen_top_items.append((lbl_bg, 0))
+
+            # Rotated label with optional expand indicator
+            _ind_txt  = ("▼ " if is_exp else "▶ ") if expandable else ""
+            _lbl_avail_v = max(0, label_row_h - 14)
+            _lbl_txt  = fm.elidedText(_ind_txt + channel, Qt.ElideRight, _lbl_avail_v)
+            lbl = _make_rotated_label(self, _lbl_txt, font, QColor("#88AABB"),
+                                      x_ctr,
                                       label_row_h - LABEL_BOTTOM_MARGIN, 37)
             self._frozen_top_items.append((lbl, lbl.pos().y()))
+
             _sti_evs_v  = trace.sti_events_by_target.get(channel, [])
             _sti_stts_v = trace.sti_starts_by_target.get(channel, [])
-            _sti_evs_v  = self._clip_sti_events(_sti_evs_v, _sti_stts_v, _vp_ns_lo, _vp_ns_hi)
-            _sti_markers_v = [
-                (label_row_h + (ev.time - _time_min) * _px_per_ns, _sti_color(ev.note), ev)
-                for ev in _sti_evs_v
-            ]
-            _sti_item_v = _BatchStiItem(
-                QRectF(x_left, label_row_h, col_w, timeline_h),
-                _sti_markers_v, trace.time_scale, horizontal=False, axis=x_ctr,
-                time_min=trace.time_min)
-            _sti_item_v.setZValue(2)
-            self.addItem(_sti_item_v)
+            if is_exp:
+                # Expanded: full step-chart waveform (time on Y, values on X)
+                _sti_evs_clipped_v = self._clip_sti_events(
+                    _sti_evs_v, _sti_stts_v, _vp_ns_lo, _vp_ns_hi)
+                _wf_col = _BatchStiWaveformColumnItem(
+                    QRectF(x_left, label_row_h, cw_sti, timeline_h),
+                    _sti_evs_clipped_v, _sti_evs_v,
+                    trace.time_scale, trace.time_min, _px_per_ns, label_row_h,
+                    log_scale=self._sti_log_scale,
+                    line_style=self._sti_line_style)
+                _wf_col.setZValue(2)
+                self.addItem(_wf_col)
+            else:
+                _sti_evs_clipped_v = self._clip_sti_events(
+                    _sti_evs_v, _sti_stts_v, _vp_ns_lo, _vp_ns_hi)
+                _sti_markers_v = [
+                    (label_row_h + (ev.time - _time_min) * _px_per_ns, _sti_color(ev.note), ev)
+                    for ev in _sti_evs_clipped_v
+                ]
+                _sti_item_v = _BatchStiItem(
+                    QRectF(x_left, label_row_h, cw_sti, timeline_h),
+                    _sti_markers_v, trace.time_scale, horizontal=False, axis=x_ctr,
+                    time_min=trace.time_min)
+                _sti_item_v.setZValue(2)
+                self.addItem(_sti_item_v)
+
+            _sti_x_acc += cw_sti
 
         # --- Corner: ruler-column × label-row intersection ---------------
         _vt_corner_rect = self.addRect(QRectF(0, 0, RULER_WIDTH, label_row_h),
@@ -3627,7 +3667,8 @@ class TimelineScene(QGraphicsScene):
         def _col_count(c: str) -> int:
             return 1 + (len(core_tasks[c]) if self._core_expanded.get(c, True) else 0)
 
-        total_cols = sum(_col_count(c) for c in core_names) + len(sti_cols)
+        _core_col_count = sum(_col_count(c) for c in core_names)
+        total_cols = _core_col_count + len(sti_cols)
         if total_cols == 0:
             return
 
@@ -3635,7 +3676,14 @@ class TimelineScene(QGraphicsScene):
         label_row_h = self._label_width
         time_span   = trace.time_max - trace.time_min
         timeline_h  = time_span / self._timescale_per_px
-        total_w     = col_w * total_cols + RULER_WIDTH
+        # STI columns may be wider when expanded
+        total_sti_w = sum(
+            (self._sti_waveform_h_val
+             if (_is_tag_sti_channel(c) and c in self._sti_expanded)
+             else col_w)
+            for c in sti_cols
+        )
+        total_w     = RULER_WIDTH + _core_col_count * col_w + total_sti_w
         total_h     = label_row_h + timeline_h
         self.setSceneRect(0, 0, total_w, total_h)
 
@@ -3850,29 +3898,63 @@ class TimelineScene(QGraphicsScene):
                 self.addItem(batch)
 
         # --- STI columns ------------------------------------------------
+        _sti_x_acc_vc = RULER_WIDTH + _core_col_count * col_w
         for channel in sti_cols:
-            x_left = RULER_WIDTH + col_idx * col_w
-            self.addRect(QRectF(x_left, label_row_h, col_w, timeline_h),
+            expandable = _is_tag_sti_channel(channel)
+            is_exp     = expandable and channel in self._sti_expanded
+            cw_sti_vc  = self._sti_waveform_h_val if is_exp else col_w
+            x_left     = _sti_x_acc_vc
+            x_ctr_vc   = x_left + cw_sti_vc / 2
+            self.addRect(QRectF(x_left, label_row_h, cw_sti_vc, timeline_h),
                          QPen(Qt.NoPen), QBrush(QColor("#1A1A2E"))).setZValue(0)
-            lbl = _make_rotated_label(self, channel, font, QColor("#88AABB"),
-                                      x_left + col_w / 2,
+
+            # Clickable column header (expands/collapses waveform)
+            lbl_bg_vc = _StiLabelItem(QRectF(x_left, 0, cw_sti_vc, label_row_h),
+                                      channel, self, expandable=expandable)
+            lbl_bg_vc.setZValue(36)
+            self.addItem(lbl_bg_vc)
+            self._frozen_top_items.append((lbl_bg_vc, 0))
+
+            # Rotated label with optional expand indicator
+            _ind_txt_vc  = ("▼ " if is_exp else "▶ ") if expandable else ""
+            _lbl_avail_vc = max(0, label_row_h - 14)
+            _lbl_txt_vc  = QFontMetrics(font).elidedText(
+                _ind_txt_vc + channel, Qt.ElideRight, _lbl_avail_vc)
+            lbl = _make_rotated_label(self, _lbl_txt_vc, font, QColor("#88AABB"),
+                                      x_ctr_vc,
                                       label_row_h - LABEL_BOTTOM_MARGIN, 37)
             self._frozen_top_items.append((lbl, lbl.pos().y()))
-            _x_ctr_vc    = x_left + col_w / 2
+
             _sti_evs_vc  = trace.sti_events_by_target.get(channel, [])
             _sti_stts_vc = trace.sti_starts_by_target.get(channel, [])
-            _sti_evs_vc  = self._clip_sti_events(_sti_evs_vc, _sti_stts_vc, _vp_ns_lo, _vp_ns_hi)
-            _sti_mrk_vc = [
-                (label_row_h + (ev.time - _time_min) * _px_per_ns, _sti_color(ev.note), ev)
-                for ev in _sti_evs_vc
-            ]
-            _sti_itm_vc = _BatchStiItem(
-                QRectF(x_left, label_row_h, col_w, timeline_h),
-                _sti_mrk_vc, trace.time_scale, horizontal=False, axis=_x_ctr_vc,
-                time_min=trace.time_min)
-            _sti_itm_vc.setZValue(2)
-            self.addItem(_sti_itm_vc)
+            if is_exp:
+                # Expanded: full step-chart waveform (time on Y, values on X)
+                _sti_evs_clipped_vc = self._clip_sti_events(
+                    _sti_evs_vc, _sti_stts_vc, _vp_ns_lo, _vp_ns_hi)
+                _wf_col_vc = _BatchStiWaveformColumnItem(
+                    QRectF(x_left, label_row_h, cw_sti_vc, timeline_h),
+                    _sti_evs_clipped_vc, _sti_evs_vc,
+                    trace.time_scale, trace.time_min, _px_per_ns, label_row_h,
+                    log_scale=self._sti_log_scale,
+                    line_style=self._sti_line_style)
+                _wf_col_vc.setZValue(2)
+                self.addItem(_wf_col_vc)
+            else:
+                _sti_evs_clipped_vc = self._clip_sti_events(
+                    _sti_evs_vc, _sti_stts_vc, _vp_ns_lo, _vp_ns_hi)
+                _sti_mrk_vc = [
+                    (label_row_h + (ev.time - _time_min) * _px_per_ns, _sti_color(ev.note), ev)
+                    for ev in _sti_evs_clipped_vc
+                ]
+                _sti_itm_vc = _BatchStiItem(
+                    QRectF(x_left, label_row_h, cw_sti_vc, timeline_h),
+                    _sti_mrk_vc, trace.time_scale, horizontal=False, axis=x_ctr_vc,
+                    time_min=trace.time_min)
+                _sti_itm_vc.setZValue(2)
+                self.addItem(_sti_itm_vc)
+
             col_idx += 1
+            _sti_x_acc_vc += cw_sti_vc
 
         # --- Corner: ruler-column × label-row intersection ---------------
         _vc_corner = self.addRect(QRectF(0, 0, RULER_WIDTH, label_row_h),
@@ -4833,6 +4915,140 @@ class _BatchStiWaveformItem(QGraphicsItem):
     def hoverLeaveEvent(self, event) -> None:
         _get_popup().hide()
         super().hoverLeaveEvent(event)
+
+
+class _BatchStiWaveformColumnItem(QGraphicsItem):
+    """Renders an expanded STI step-chart waveform inside a vertical COLUMN.
+
+    Unlike _BatchStiWaveformItem (time on X, values on Y), this variant uses:
+      - Y axis  → time
+      - X axis  → numeric value
+
+    Parameters
+    ----------
+    bounding_rect : QRectF   Full column area (x_left..x_right, y_offset..bottom)
+    events        : list     Visible StiEvent objects for this channel
+    all_events    : list     All StiEvent objects (used to compute stable value range)
+    time_min      : int      Trace time_min (scene Y = y_offset + (t - time_min) * px_per_ns)
+    px_per_ns     : float    Scene pixels per nanosecond (vertical axis)
+    y_offset      : float    Scene Y coordinate of time=time_min
+    log_scale     : bool     Use log₂(1+|v|) mapping
+    line_style    : str      "step" (hold) or "linear"
+    """
+
+    def __init__(self, bounding_rect: QRectF, events: list, all_events: list,
+                 time_scale: str, time_min: int, px_per_ns: float, y_offset: float,
+                 log_scale: bool = False, line_style: str = "linear"):
+        super().__init__()
+        self._bounding_rect = bounding_rect
+        self._events        = events
+        self._all_events    = all_events
+        self._time_scale    = time_scale
+        self._time_min      = time_min
+        self._px_per_ns     = px_per_ns
+        self._y_offset      = y_offset
+        self._log_scale     = log_scale
+        self._line_style    = line_style
+        self._category_map: dict = {}
+        self.setCacheMode(QGraphicsItem.NoCache)
+
+    def _ev_value(self, ev) -> float:
+        raw = ev.note or ev.event or ""
+        try:
+            return float(raw)
+        except (ValueError, TypeError):
+            pass
+        if raw not in self._category_map:
+            self._category_map[raw] = float(len(self._category_map))
+        return self._category_map[raw]
+
+    @staticmethod
+    def _signed_log2(v: float) -> float:
+        import math
+        return math.copysign(math.log2(1.0 + abs(v)), v)
+
+    def boundingRect(self) -> QRectF:
+        return self._bounding_rect
+
+    def paint(self, painter: QPainter, option, widget=None) -> None:
+        if not self._events:
+            return
+
+        PAD         = 4
+        rect        = self._bounding_rect
+        chart_left  = rect.left()  + PAD
+        chart_right = rect.right() - PAD
+        chart_w     = chart_right - chart_left
+        if chart_w <= 0:
+            return
+
+        # Compute value range from ALL events for stable scaling across zoom
+        all_mapped = []
+        for ev in self._all_events:
+            v = self._ev_value(ev)
+            m = self._signed_log2(v) if self._log_scale else v
+            all_mapped.append(m)
+        if not all_mapped:
+            return
+        v_min = min(all_mapped)
+        v_max = max(all_mapped)
+        if v_min == v_max:
+            v_min -= 1.0
+            v_max += 1.0
+        v_rng = v_max - v_min
+
+        def val_to_x(m: float) -> float:
+            return chart_left + ((m - v_min) / v_rng) * chart_w
+
+        def ev_to_y(ev) -> float:
+            return self._y_offset + (ev.time - self._time_min) * self._px_per_ns
+
+        painter.save()
+
+        # Axis guide lines (left / right of chart area)
+        _axis_pen = QPen(QColor(255, 255, 255, 28), 0.5, Qt.DashLine)
+        painter.setPen(_axis_pen)
+        painter.drawLine(QLineF(chart_left, rect.top(),    chart_left, rect.bottom()))
+        painter.drawLine(QLineF(chart_right, rect.top(), chart_right, rect.bottom()))
+
+        # Polyline
+        line_color = QColor("#5BC8FF")
+        painter.setPen(QPen(line_color, 1.5))
+        painter.setBrush(Qt.NoBrush)
+
+        pts: list = []
+        for ev in self._events:
+            v = self._ev_value(ev)
+            m = self._signed_log2(v) if self._log_scale else v
+            x = val_to_x(m)
+            y = ev_to_y(ev)
+            if self._line_style == "step" and pts:
+                prev_x, prev_y = pts[-1]
+                pts.append((prev_x, y))   # vertical leg: hold prev value in time
+            pts.append((x, y))
+
+        # Extend last point to bottom of bounding rect
+        if pts:
+            last_x, _ = pts[-1]
+            pts.append((last_x, rect.bottom()))
+
+        if len(pts) >= 2:
+            poly = QPolygonF([QPointF(px, py) for px, py in pts])
+            painter.drawPolyline(poly)
+
+        # Event dots
+        dot_color = QColor("#80DFFF")
+        painter.setPen(QPen(dot_color.darker(130), 0.5))
+        painter.setBrush(QBrush(dot_color))
+        for ev in self._events:
+            v = self._ev_value(ev)
+            m = self._signed_log2(v) if self._log_scale else v
+            x = val_to_x(m)
+            y = ev_to_y(ev)
+            painter.drawEllipse(QPointF(x, y), 2.5, 2.5)
+
+        painter.restore()
+
 
 # ===========================================================================
 # Navigator Popup
@@ -6444,23 +6660,26 @@ class TimelineView(QGraphicsView):
                         or tr.seg_map_by_merge_key.get(mk, []))
                 if not segs:
                     continue
-                raw = tr.task_repr.get(mk, mk)
-                col = QColor(_task_color(raw))
-                col.setAlpha(210)
-                row_data.append({'segs': segs, 'fixed_color': col})
+                # Use per-segment blended color (task color + core tint) to
+                # match the main view's _blended_brush(seg.task, seg.core).
+                row_data.append({'segs': segs, 'fixed_color': None, 'blend': True})
         else:
             for core in tr.core_names:
                 hdr_segs = (tr.core_seg_lod_ultra.get(core)
                             or tr.core_segs.get(core, []))
                 if hdr_segs:
-                    row_data.append({'segs': hdr_segs, 'fixed_color': None})
+                    # Core header: per-segment base task color (no core tint),
+                    # matching main view's _task_brush(seg.task).
+                    row_data.append({'segs': hdr_segs, 'fixed_color': None, 'blend': False})
                 if sc._core_expanded.get(core, True):
                     for task_raw in tr.core_task_order.get(core, []):
                         t_segs = (tr.core_task_seg_lod_ultra.get(core, {}).get(task_raw)
                                   or tr.core_task_segs.get(core, {}).get(task_raw, []))
                         if not t_segs:
                             continue
-                        col = QColor(_blended_color(task_raw, core))
+                        # Sub-task row: base task color (no core tint), matching
+                        # main view's _task_brush(task_name).
+                        col = QColor(_task_color(task_raw))
                         col.setAlpha(210)
                         row_data.append({'segs': t_segs, 'fixed_color': col})
 
@@ -6490,8 +6709,10 @@ class TimelineView(QGraphicsView):
             for ch in tr.sti_channels:
                 is_exp = ch in sc._sti_expanded
                 _sti_main_h += (sc._sti_waveform_h_val if is_exp else sc._sti_row_h_val) + sc._row_gap
-        # Denominator: total non-ruler scene height
-        _tot_h_safe   = max(1.0, float(v_total) - RULER_HEIGHT)
+        # Use actual content heights for proportioning rather than scrollbar-derived
+        # v_total, which can be unreliable (zero/near-zero) before layout settles.
+        _task_main_h  = len(row_data) * (sc._row_height + sc._row_gap)
+        _tot_h_safe   = max(1.0, _task_main_h + _sti_main_h)
         sti_total_h   = _sti_main_h / _tot_h_safe * H
         task_area_h   = float(H) - sti_total_h
         self._nav_bg_task_area_h = task_area_h  # remembered for potential future use
@@ -6499,13 +6720,15 @@ class TimelineView(QGraphicsView):
         row_h         = task_area_h / n_rows if row_data else float(H)
         p.setPen(Qt.NoPen)
 
-        # Per-(task,core) colour cache for core-header rows (fixed_color=None)
+        # Per-(task,core) colour cache – keyed by (task, core, blend) to avoid
+        # collisions between blended (task mode) and base (core-header) colours.
         _seg_color_cache: dict = {}
 
         for i, rd in enumerate(row_data):
-            y   = i * row_h
-            rh  = max(1.0, row_h - 0.5)
+            y     = i * row_h
+            rh    = max(1.0, row_h - 0.5)
             fixed = rd['fixed_color']
+            blend = rd.get('blend', False)
             for seg in rd['segs']:
                 x1 = (seg.start - tr.time_min) / time_span * W
                 x2 = (seg.end   - tr.time_min) / time_span * W
@@ -6513,10 +6736,13 @@ class TimelineView(QGraphicsView):
                 if fixed is not None:
                     col = fixed
                 else:
-                    ck = (seg.task, seg.core)
+                    ck = (seg.task, seg.core, blend)
                     col = _seg_color_cache.get(ck)
                     if col is None:
-                        col = QColor(_blended_color(seg.task, seg.core))
+                        if blend:
+                            col = QColor(_blended_color(seg.task, seg.core))
+                        else:
+                            col = QColor(_task_color(seg.task))
                         col.setAlpha(200)
                         _seg_color_cache[ck] = col
                 p.fillRect(QRectF(x1, y, sw, rh), col)
@@ -6543,6 +6769,9 @@ class TimelineView(QGraphicsView):
                         if v < v_min: v_min = v
                         if v > v_max: v_max = v
                         fvals.append(v)
+                    # Use the same waveform colours as _BatchStiWaveformItem.
+                    _wf_line_col = QColor("#5BC8FF")
+                    _wf_dot_col  = QColor("#80DFFF")
                     if math.isfinite(v_min) and v_min != v_max:
                         v_rng = v_max - v_min
                         pts: list = []
@@ -6563,20 +6792,22 @@ class TimelineView(QGraphicsView):
                                 py = y + rh - (v - v_min) / v_rng * rh
                                 pts.append(QPointF(px, py))
                         if len(pts) >= 2:
-                            p.setPen(QPen(col, 1.0))
+                            p.setPen(QPen(_wf_line_col, 1.0))
                             p.drawPolyline(QPolygonF(pts))
                             p.setPen(Qt.NoPen)
                     else:
                         p.setPen(Qt.NoPen)
-                        p.setBrush(QBrush(col))
+                        p.setBrush(QBrush(_wf_dot_col))
                         for ev in evs:
                             x1 = (ev.time - tr.time_min) / time_span * W
                             p.drawEllipse(QPointF(x1, y + rh / 2), 2.0, 2.0)
                 else:
+                    # Collapsed: draw each event with its per-note colour,
+                    # matching the main view's _sti_color(ev.note) per event.
                     p.setPen(Qt.NoPen)
-                    p.setBrush(QBrush(col))
                     for ev in evs:
                         x1 = (ev.time - tr.time_min) / time_span * W
+                        p.setBrush(QBrush(_sti_color(ev.note)))
                         p.drawEllipse(QPointF(x1, y + rh / 2), 2.0, 2.0)
 
         # Static border
@@ -6623,10 +6854,26 @@ class TimelineView(QGraphicsView):
         p.setRenderHint(QPainter.Antialiasing, False)
 
         time_span = max(tr.time_max - tr.time_min, 1)
-        ns_lo = sc._vp_ns_lo
-        ns_hi = sc._vp_ns_hi
-        vx1 = (ns_lo - tr.time_min) / time_span * W
-        vx2 = (ns_hi - tr.time_min) / time_span * W
+        # Compute the actual visible time range directly from the view geometry.
+        # sc._vp_ns_lo/hi carry a 150% segment-loading margin and are set to a
+        # near-full-range buffer on orientation switches — both produce a
+        # misleadingly large (often full-width) indicator rectangle.
+        vp_r = self.viewport().rect()
+        if sc._horizontal:
+            lo_coord = self.mapToScene(vp_r.topLeft()).x()
+            hi_coord = self.mapToScene(vp_r.topRight()).x()
+        else:
+            lo_coord = self.mapToScene(vp_r.topLeft()).y()
+            hi_coord = self.mapToScene(vp_r.bottomLeft()).y()
+        lw = sc._label_width
+        act_ns_lo = tr.time_min + int((lo_coord - lw) * sc._timescale_per_px)
+        act_ns_hi = tr.time_min + int((hi_coord - lw) * sc._timescale_per_px)
+        act_ns_lo = max(tr.time_min, min(tr.time_max, act_ns_lo))
+        act_ns_hi = max(tr.time_min, min(tr.time_max, act_ns_hi))
+        if act_ns_lo >= act_ns_hi:
+            act_ns_lo, act_ns_hi = tr.time_min, tr.time_max
+        vx1 = (act_ns_lo - tr.time_min) / time_span * W
+        vx2 = (act_ns_hi - tr.time_min) / time_span * W
 
         # Thumbnail is proportional to actual view — simple linear indicator mapping.
         content_h = max(1.0, float(v_total) - RULER_HEIGHT)
