@@ -96,36 +96,20 @@
 #endif // traceTASK_RESUME_FROM_ISR
 
 //--
-#ifndef traceCREATE_MUTEX
-# define traceCREATE_MUTEX( pxNewQueue ) addEVENT( 0, TRACE_EVENT_CREATE_MUTEX )
-#endif // traceCREATE_MUTEX
-
-#ifndef traceGIVE_MUTEX_RECURSIVE
-# define traceGIVE_MUTEX_RECURSIVE( pxMutex ) addEVENT( 0, TRACE_EVENT_GIVE_MUTEX_RECURSIVE )
-#endif // traceGIVE_MUTEX_RECURSIVE
-
-#ifndef traceTAKE_MUTEX_RECURSIVE
-# define traceTAKE_MUTEX_RECURSIVE( pxMutex ) addEVENT( 0, TRACE_EVENT_TAKE_MUTEX_RECURSIVE )
-#endif // traceTAKE_MUTEX_RECURSIVE
-
 #ifndef traceQUEUE_CREATE
-# define traceQUEUE_CREATE( pxNewQueue ) addEVENT( 0, TRACE_EVENT_QUEUE_CREATE )
+# define traceQUEUE_CREATE( pxQueue ) addEVENT( (uint32_t)(pxQueue)->ucQueueType, TRACE_EVENT_QUEUE_CREATE )
 #endif // traceQUEUE_CREATE
 
 #ifndef traceQUEUE_SEND
-# define traceQUEUE_SEND( pxQueue ) addEVENT( 0, TRACE_EVENT_QUEUE_SEND )
+# define traceQUEUE_SEND( pxQueue ) addEVENT( (uint32_t)(pxQueue)->ucQueueType, TRACE_EVENT_QUEUE_SEND )
 #endif // traceQUEUE_SEND
 
 #ifndef traceQUEUE_RECEIVE
-# define traceQUEUE_RECEIVE( pxQueue ) addEVENT( 0, TRACE_EVENT_QUEUE_RECEIVE )
+# define traceQUEUE_RECEIVE( pxQueue ) addEVENT( (uint32_t)(pxQueue)->ucQueueType, TRACE_EVENT_QUEUE_RECEIVE )
 #endif // traceQUEUE_RECEIVE
 
-#ifndef traceQUEUE_PEEK
-# define traceQUEUE_PEEK( pxQueue ) addEVENT( 0, TRACE_EVENT_QUEUE_PEEK )
-#endif // traceQUEUE_PEEK
-
 #ifndef traceQUEUE_DELETE
-# define traceQUEUE_DELETE( pxQueue ) addEVENT( 0, TRACE_EVENT_QUEUE_DELETE )
+# define traceQUEUE_DELETE( pxQueue ) addEVENT( (uint32_t)(pxQueue)->ucQueueType, TRACE_EVENT_QUEUE_DELETE )
 #endif // traceQUEUE_DELETE
 
 #ifndef traceTASK_INCREMENT_TICK

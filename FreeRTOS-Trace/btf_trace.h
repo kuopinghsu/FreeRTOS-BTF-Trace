@@ -50,15 +50,11 @@ typedef enum {
     TRACE_EVENT_TASK_SUSPEND         = 5,
     TRACE_EVENT_TASK_RESUME          = 6,
     TRACE_EVENT_TASK_RESUME_FROM_ISR = 7,
-    TRACE_EVENT_CREATE_MUTEX         = 8,
-    TRACE_EVENT_GIVE_MUTEX_RECURSIVE = 9,
-    TRACE_EVENT_TAKE_MUTEX_RECURSIVE = 10,
-    TRACE_EVENT_QUEUE_CREATE         = 11,
-    TRACE_EVENT_QUEUE_SEND           = 12,
-    TRACE_EVENT_QUEUE_RECEIVE        = 13,
-    TRACE_EVENT_QUEUE_PEEK           = 14,
-    TRACE_EVENT_QUEUE_DELETE         = 15,
-    TRACE_EVENT_TASK_INCREMENT_TICK  = 16,
+    TRACE_EVENT_QUEUE_CREATE         = 8,
+    TRACE_EVENT_QUEUE_SEND           = 9,
+    TRACE_EVENT_QUEUE_RECEIVE        = 10,
+    TRACE_EVENT_QUEUE_DELETE         = 11,
+    TRACE_EVENT_TASK_INCREMENT_TICK  = 12,
     TRACE_EVENT_TAG                  = 90,
     TRACE_EVENT_TAG1                 = 91,
     TRACE_EVENT_TAG2                 = 92,
@@ -68,6 +64,12 @@ typedef enum {
     TRACE_EVENT_TAG6                 = 96,
     TRACE_EVENT_TAG7                 = 97
 } event_t;
+
+#define QUEUE_TYPE_BASE            0U  // regular queue
+#define QUEUE_TYPE_MUTEX           1U  // non-recursive mutex
+#define QUEUE_TYPE_COUNTING_SEM    2U  // counting semaphore
+#define QUEUE_TYPE_BINARY_SEM      3U  // binary semaphore
+#define QUEUE_TYPE_RECURSIVE_MUTEX 4U  // recursive mutex
 
 typedef struct {
     uint32_t    time;

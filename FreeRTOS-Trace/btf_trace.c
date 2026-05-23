@@ -222,9 +222,9 @@ void btf_dump(
                         "");
                 break;
             case TRACE_EVENT_TASK_CREATE:
-                printf( "%lu,%s,0,T,[%d/%04ld]%s,0,%s,%s\n",
+                printf( "%lu,Core_%d,0,T,[%d/%04ld]%s,0,%s,%s\n",
                         event->time,
-                        "Core_1",
+                        CORE_ID,
                         CORE_ID,
                         event->value, get_taskname(trace_data, event->value),
                         "preempt",
@@ -232,9 +232,9 @@ void btf_dump(
                 break;
             case TRACE_EVENT_TASK_DELETE:
                 // FIXME
-                printf( "%lu,%s,0,R,[%d/%04ld]%s,0,%s,%s\n",
+                printf( "%lu,Core_%d,0,R,[%d/%04ld]%s,0,%s,%s\n",
                         event->time,
-                        "Core_1",
+                        CORE_ID,
                         CORE_ID,
                         event->value, get_taskname(trace_data, event->value),
                         "preempt",
@@ -261,146 +261,196 @@ void btf_dump(
                         "resume");
                 break;
             case TRACE_EVENT_TASK_RESUME_FROM_ISR:
-                printf( "%lu,%s,0,T,[%d/%04ld]%s,0,%s,%s\n",
+                printf( "%lu,Core_%d,0,T,[%d/%04ld]%s,0,%s,%s\n",
                         event->time,
-                        "Core_1",
+                        CORE_ID,
                         CORE_ID,
                         event->value, get_taskname(trace_data, event->value),
                         "release",
                         "resume/isr");
                 break;
-            case TRACE_EVENT_CREATE_MUTEX:
-                printf( "%lu,%s,0,STI,%s,0,%s,%s\n",
-                        event->time,
-                        "Core_1",
-                        "mutex",
-                        "trigger",
-                        "create_mutex");
-                break;
-            case TRACE_EVENT_GIVE_MUTEX_RECURSIVE:
-                printf( "%lu,%s,0,STI,%s,0,%s,%s\n",
-                        event->time,
-                        "Core_1",
-                        "mutex",
-                        "trigger",
-                        "give_mutex_recursive");
-                break;
-            case TRACE_EVENT_TAKE_MUTEX_RECURSIVE:
-                printf( "%lu,%s,0,STI,%s,0,%s,%s\n",
-                        event->time,
-                        "Core_1",
-                        "mutex",
-                        "trigger",
-                        "take_mutex_recursive");
-                break;
             case TRACE_EVENT_QUEUE_CREATE:
-                printf( "%lu,%s,0,STI,%s,0,%s,%s\n",
-                        event->time,
-                        "Core_1",
-                        "queue",
-                        "trigger",
-                        "queue_create");
+                switch(event->value) {
+                case QUEUE_TYPE_MUTEX:
+                case QUEUE_TYPE_RECURSIVE_MUTEX:
+                    printf( "%lu,Core_%d,0,STI,%s,0,%s,%s\n",
+                            event->time,
+                            CORE_ID,
+                            "mutex",
+                            "trigger",
+                            "create");
+                    break;
+                case QUEUE_TYPE_COUNTING_SEM:
+                case QUEUE_TYPE_BINARY_SEM:
+                    printf( "%lu,Core_%d,0,STI,%s,0,%s,%s\n",
+                            event->time,
+                            CORE_ID,
+                            "sem",
+                            "trigger",
+                            "create");
+                    break;
+                default:
+                    printf( "%lu,Core_%d,0,STI,%s,0,%s,%s\n",
+                            event->time,
+                            CORE_ID,
+                            "queue",
+                            "trigger",
+                            "create");
+                }
                 break;
             case TRACE_EVENT_QUEUE_SEND:
-                printf( "%lu,%s,0,STI,%s,0,%s,%s\n",
-                        event->time,
-                        "Core_1",
-                        "queue",
-                        "trigger",
-                        "queue_send");
+                switch(event->value) {
+                case QUEUE_TYPE_MUTEX:
+                case QUEUE_TYPE_RECURSIVE_MUTEX:
+                    printf( "%lu,Core_%d,0,STI,%s,0,%s,%s\n",
+                            event->time,
+                            CORE_ID,
+                            "mutex",
+                            "trigger",
+                            "give");
+                    break;
+                case QUEUE_TYPE_COUNTING_SEM:
+                case QUEUE_TYPE_BINARY_SEM:
+                    printf( "%lu,Core_%d,0,STI,%s,0,%s,%s\n",
+                            event->time,
+                            CORE_ID,
+                            "sem",
+                            "trigger",
+                            "give");
+                    break;
+                default:
+                    printf( "%lu,Core_%d,0,STI,%s,0,%s,%s\n",
+                            event->time,
+                            CORE_ID,
+                            "queue",
+                            "trigger",
+                            "send");
+                }
                 break;
             case TRACE_EVENT_QUEUE_RECEIVE:
-                printf( "%lu,%s,0,STI,%s,0,%s,%s\n",
-                        event->time,
-                        "Core_1",
-                        "queue",
-                        "trigger",
-                        "queue_receive");
-                break;
-            case TRACE_EVENT_QUEUE_PEEK:
-                printf( "%lu,%s,0,STI,%s,0,%s,%s\n",
-                        event->time,
-                        "Core_1",
-                        "queue",
-                        "trigger",
-                        "queue_peek");
+                case QUEUE_TYPE_MUTEX:
+                case QUEUE_TYPE_RECURSIVE_MUTEX:
+                    printf( "%lu,Core_%d,0,STI,%s,0,%s,%s\n",
+                            event->time,
+                            CORE_ID,
+                            "mutex",
+                            "trigger",
+                            "take");
+                    break;
+                case QUEUE_TYPE_COUNTING_SEM:
+                case QUEUE_TYPE_BINARY_SEM:
+                    printf( "%lu,Core_%d,0,STI,%s,0,%s,%s\n",
+                            event->time,
+                            CORE_ID,
+                            "sem",
+                            "trigger",
+                            "take");
+                    break;
+                default:
+                    printf( "%lu,Core_%d,0,STI,%s,0,%s,%s\n",
+                            event->time,
+                            CORE_ID,
+                            "queue",
+                            "trigger",
+                            "recv");
+                }
                 break;
             case TRACE_EVENT_QUEUE_DELETE:
-                printf( "%lu,%s,0,STI,%s,0,%s,%s\n",
-                        event->time,
-                        "Core_1",
-                        "queue",
-                        "trigger",
-                        "queue_delete");
+                case QUEUE_TYPE_MUTEX:
+                case QUEUE_TYPE_RECURSIVE_MUTEX:
+                    printf( "%lu,Core_%d,0,STI,%s,0,%s,%s\n",
+                            event->time,
+                            CORE_ID,
+                            "mutex",
+                            "trigger",
+                            "delete");
+                    break;
+                case QUEUE_TYPE_COUNTING_SEM:
+                case QUEUE_TYPE_BINARY_SEM:
+                    printf( "%lu,Core_%d,0,STI,%s,0,%s,%s\n",
+                            event->time,
+                            CORE_ID,
+                            "sem",
+                            "trigger",
+                            "delete");
+                    break;
+                default:
+                    printf( "%lu,Core_%d,0,STI,%s,0,%s,%s\n",
+                            event->time,
+                            CORE_ID,
+                            "queue",
+                            "trigger",
+                            "delete");
+                }
                 break;
             case TRACE_EVENT_TASK_INCREMENT_TICK:
-                printf( "%lu,%s,0,STI,%s,0,%s,%ld\n",
+                printf( "%lu,Core_%d,0,STI,%s,0,%s,%ld\n",
                         event->time,
-                        "Core_1",
+                        CORE_ID,
                         "TICK",
                         "trigger",
                         event->value);
                 break;
             case TRACE_EVENT_TAG:
-                printf( "%lu,%s,0,STI,%s,0,%s,%ld\n",
+                printf( "%lu,Core_%d,0,STI,%s,0,%s,%ld\n",
                         event->time,
-                        "Core_1",
+                        CORE_ID,
                         "tag0_event",
                         "trigger",
                         event->value);
                 break;
             case TRACE_EVENT_TAG1:
-                printf( "%lu,%s,0,STI,%s,0,%s,%ld\n",
+                printf( "%lu,Core_%d,0,STI,%s,0,%s,%ld\n",
                         event->time,
-                        "Core_1",
+                        CORE_ID,
                         "tag1_event",
                         "trigger",
                         event->value);
                 break;
             case TRACE_EVENT_TAG2:
-                printf( "%lu,%s,0,STI,%s,0,%s,%ld\n",
+                printf( "%lu,Core_%d,0,STI,%s,0,%s,%ld\n",
                         event->time,
-                        "Core_1",
+                        CORE_ID,
                         "tag2_event",
                         "trigger",
                         event->value);
                 break;
             case TRACE_EVENT_TAG3:
-                printf( "%lu,%s,0,STI,%s,0,%s,%ld\n",
+                printf( "%lu,Core_%d,0,STI,%s,0,%s,%ld\n",
                         event->time,
-                        "Core_1",
+                        CORE_ID,
                         "tag3_event",
                         "trigger",
                         event->value);
                 break;
             case TRACE_EVENT_TAG4:
-                printf( "%lu,%s,0,STI,%s,0,%s,%ld\n",
+                printf( "%lu,Core_%d,0,STI,%s,0,%s,%ld\n",
                         event->time,
-                        "Core_1",
+                        CORE_ID,
                         "tag4_event",
                         "trigger",
                         event->value);
                 break;
             case TRACE_EVENT_TAG5:
-                printf( "%lu,%s,0,STI,%s,0,%s,%ld\n",
+                printf( "%lu,Core_%d,0,STI,%s,0,%s,%ld\n",
                         event->time,
-                        "Core_1",
+                        CORE_ID,
                         "tag5_event",
                         "trigger",
                         event->value);
                 break;
             case TRACE_EVENT_TAG6:
-                printf( "%lu,%s,0,STI,%s,0,%s,%ld\n",
+                printf( "%lu,Core_%d,0,STI,%s,0,%s,%ld\n",
                         event->time,
-                        "Core_1",
+                        CORE_ID,
                         "tag6_event",
                         "trigger",
                         event->value);
                 break;
             case TRACE_EVENT_TAG7:
-                printf( "%lu,%s,0,STI,%s,0,%s,%ld\n",
+                printf( "%lu,Core_%d,0,STI,%s,0,%s,%ld\n",
                         event->time,
-                        "Core_1",
+                        CORE_ID,
                         "tag7_event",
                         "trigger",
                         event->value);
