@@ -9095,7 +9095,13 @@ class SnapshotEditorDialog(QDialog):
 
     def __init__(self, pixmap: QPixmap, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self._orig_pixmap: QPixmap = pixmap
+        # Normalize DPR so draw/edit/export all use one pixel coordinate space.
+        # QWidget.grab() can return a high-DPI pixmap (e.g. DPR=2 on macOS),
+        # while annotation geometry is stored in raw pixel units.
+        # Keeping DPR>1 here causes exported objects to be offset/scaled.
+        self._orig_pixmap: QPixmap = QPixmap(pixmap)
+        if abs(self._orig_pixmap.devicePixelRatioF() - 1.0) > 1e-6:
+            self._orig_pixmap.setDevicePixelRatio(1.0)
         self._shapes: list = []
         self._drawing: Optional[dict] = None
         self._drag_idx: int = -1
