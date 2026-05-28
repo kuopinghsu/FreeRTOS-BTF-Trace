@@ -145,7 +145,7 @@ from PyQt5.QtCore import (
 )
 from PyQt5.QtGui import (
     QBrush, QColor, QFont, QFontDatabase, QFontMetrics, QFontMetricsF, QIcon, QKeySequence, QPainter,
-    QPalette, QPen, QPixmap, QPolygonF, QTransform, QWheelEvent,
+    QPainterPath, QPalette, QPen, QPixmap, QPolygonF, QTransform, QWheelEvent,
 )
 from PyQt5.QtSvg import QSvgGenerator
 from PyQt5.QtWidgets import (
@@ -350,7 +350,7 @@ _IC_SETTINGS = ("M9.405 1.05c-.413-1.4-2.397-1.4-2.81 0l-.1.34a1.464 1.464 0 0 1
                 "M8 10.93a2.929 2.929 0 1 1 0-5.86 2.929 2.929 0 0 1 0 5.858z")
 
 # App icon — multi-colour 72×72 SVG rendered in the About dialog header.
-_APP_VERSION = "1.0.1"
+_APP_VERSION = "1.1.0"
 _APP_ICON_SVG = (
     '<svg xmlns="http://www.w3.org/2000/svg" width="72" height="72" viewBox="0 0 72 72">'
     '<rect x="3" y="3" width="66" height="66" rx="14" fill="#1C3A6E"/>'
@@ -5486,6 +5486,15 @@ class TimelineView(QGraphicsView):
         else:
             self.centerOn(scene_pt.x(), new_coord)
 
+    def _capture_pixmap(self) -> QPixmap:
+        """Capture the current visible scene content as a QPixmap."""
+        vp = self.viewport()
+        vp_rect = vp.rect()
+        scene_in_vp = self.mapFromScene(self._scene.sceneRect()).boundingRect()
+        content_rect = vp_rect.intersected(scene_in_vp)
+        capture_rect = content_rect if not content_rect.isEmpty() else vp_rect
+        return vp.grab(capture_rect)
+
     def save_image(self, filepath: str) -> None:
         """Capture the current visible scene content as a PNG image.
 
@@ -5494,31 +5503,14 @@ class TimelineView(QGraphicsView):
         margins; we crop those away by computing the scene rect in viewport
         coordinates so the output contains only real content.
         """
-        vp = self.viewport()
-        vp_rect = vp.rect()
-
-        # Map the scene bounding rect into viewport pixel coordinates.
-        scene_in_vp = self.mapFromScene(self._scene.sceneRect()).boundingRect()
-
-        # Intersect with the viewport rect to get the visible content area.
-        content_rect = vp_rect.intersected(scene_in_vp)
-
-        # Fall back to the full viewport if the intersection is empty.
-        capture_rect = content_rect if not content_rect.isEmpty() else vp_rect
-
-        pixmap = vp.grab(capture_rect)
+        pixmap = self._capture_pixmap()
         if not pixmap.save(filepath, "PNG"):
             raise OSError(f"QPixmap.save() failed for path: {filepath}")
 
     def copy_image_to_clipboard(self) -> Optional[str]:
         """Copy the current visible scene content as a PNG image to the clipboard.
         Returns the tool name used ('xclip', 'xsel', 'wl-copy') or None for Qt fallback."""
-        vp = self.viewport()
-        vp_rect = vp.rect()
-        scene_in_vp = self.mapFromScene(self._scene.sceneRect()).boundingRect()
-        content_rect = vp_rect.intersected(scene_in_vp)
-        capture_rect = content_rect if not content_rect.isEmpty() else vp_rect
-        pixmap = vp.grab(capture_rect)
+        pixmap = self._capture_pixmap()
 
         # Encode to PNG bytes once
         buf = QByteArray()
@@ -8755,8 +8747,652 @@ class _SettingsDialog(QDialog):
     @property
     def vert_label_pixmap(self) -> bool:    return self._vert_label_pixmap_cb.isChecked()
 # ---------------------------------------------------------------------------
+# Snapshot Annotation Editor
+# ---------------------------------------------------------------------------
+
+def _point_to_seg_dist(px: float, py: float,
+                       x1: float, y1: float,
+                       x2: float, y2: float) -> float:
+    """Shortest distance from point (px,py) to segment (x1,y1)–(x2,y2)."""
+    dx, dy = x2 - x1, y2 - y1
+    length_sq = dx * dx + dy * dy
+    if length_sq < 1e-6:
+        return math.hypot(px - x1, py - y1)
+    t = max(0.0, min(1.0, ((px - x1) * dx + (py - y1) * dy) / length_sq))
+    return math.hypot(px - (x1 + t * dx), py - (y1 + t * dy))
+
+
+class _AnnotationCanvas(QWidget):
+    """Canvas widget that renders the background image and all annotation shapes."""
+
+    def __init__(self, editor: 'SnapshotEditorDialog', disp_w: int, disp_h: int) -> None:
+        super().__init__(editor)
+        self._editor = editor
+        self.setFixedSize(disp_w, disp_h)
+        self.setMouseTracking(True)
+        self.setCursor(Qt.CrossCursor)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        ed = self._editor
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        # Background image scaled to display size
+        painter.drawPixmap(0, 0, ed._disp_w, ed._disp_h, ed._orig_pixmap)
+        # Scale painter to image coordinates
+        painter.scale(ed._scale, ed._scale)
+        # Two-pass rendering: white outline, then colour
+        ed._paint_shapes(painter, ed._shapes, QColor('#ffffff'), 2)
+        if ed._drawing:
+            ed._paint_shapes(painter, [ed._drawing], QColor('#ffffff'), 2)
+        ed._paint_shapes(painter, ed._shapes)
+        if ed._drawing:
+            ed._paint_shapes(painter, [ed._drawing])
+        painter.end()
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() != Qt.LeftButton:
+            return
+        ed = self._editor
+        x, y = ed._to_img(event.x(), event.y())
+        if ed._tool == 'text':
+            text, ok = QInputDialog.getText(self, "Add Text", "Enter text:")
+            if ok and text:
+                ed._shapes.append({
+                    'type': 'text',
+                    'color': QColor(ed._color),
+                    'font_size': ed._font_size,
+                    'x': x, 'y': y,
+                    'text': text,
+                })
+                self.update()
+        else:
+            # Try to pick up an existing shape for dragging
+            hit = ed._hit_test(x, y)
+            if hit >= 0:
+                ed._drag_idx = hit
+                ed._drag_prev = (x, y)
+                self.setCursor(Qt.SizeAllCursor)
+            else:
+                ed._drawing = {
+                    'type': ed._tool,
+                    'color': QColor(ed._color),
+                    'width': ed._line_width,
+                    'x1': x, 'y1': y,
+                    'x2': x, 'y2': y,
+                    'x': x, 'y': y, 'w': 0.0, 'h': 0.0,
+                }
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        ed = self._editor
+        x, y = ed._to_img(event.x(), event.y())
+        if ed._drag_idx >= 0:
+            dx = x - ed._drag_prev[0]
+            dy = y - ed._drag_prev[1]
+            ed._move_shape(ed._drag_idx, dx, dy)
+            ed._drag_prev = (x, y)
+            self.update()
+        elif ed._drawing is not None:
+            d = ed._drawing
+            d['x2'] = x;  d['y2'] = y
+            d['w']  = x - d['x'];  d['h'] = y - d['y']
+            self.update()
+        else:
+            # Update cursor to hint that the shape under the pointer is movable
+            hit = ed._hit_test(x, y)
+            self.setCursor(Qt.SizeAllCursor if hit >= 0 else Qt.CrossCursor)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if event.button() != Qt.LeftButton:
+            return
+        ed = self._editor
+        if ed._drag_idx >= 0:
+            ed._drag_idx = -1
+            self.setCursor(Qt.CrossCursor)
+            self.update()
+        elif ed._drawing is not None:
+            x, y = ed._to_img(event.x(), event.y())
+            d = ed._drawing
+            d['x2'] = x;  d['y2'] = y
+            d['w']  = x - d['x'];  d['h'] = y - d['y']
+            # Discard zero-size shapes (accidental single click with no drag)
+            span = max(abs(d['x2'] - d['x1']), abs(d['y2'] - d['y1']),
+                       abs(d['w']), abs(d['h']))
+            if span > 2:
+                ed._shapes.append(d)
+            ed._drawing = None
+            self.update()
+
+    def contextMenuEvent(self, event) -> None:  # noqa: N802
+        # Guard against the spurious second context-menu event Qt fires after
+        # QMenu.exec_() returns on Linux (button-press AND button-release both
+        # generate a QContextMenuEvent).  The flag is held until the secondary
+        # dialog is fully closed, so no residual event can sneak through.
+        if getattr(self, '_ctx_busy', False):
+            event.accept()
+            return
+
+        from PyQt5.QtWidgets import QColorDialog, QMenu
+        ed = self._editor
+        x, y = ed._to_img(event.x(), event.y())
+        idx = ed._hit_test(x, y)
+        if idx < 0:
+            return
+
+        event.accept()
+        self._ctx_busy = True
+
+        shape = ed._shapes[idx]
+        is_text = shape['type'] == 'text'
+
+        menu = QMenu(self)
+        act_delete    = menu.addAction("Delete")
+        menu.addSeparator()
+        act_color     = menu.addAction("Change Color…")
+        act_size      = None if is_text else menu.addAction("Change Size…")
+        act_edit_text = menu.addAction("Edit Text…")     if is_text else None
+        act_font_size = menu.addAction("Change Font Size…") if is_text else None
+
+        chosen = menu.exec_(event.globalPos())
+
+        if chosen is None or chosen == act_delete:
+            if chosen == act_delete:
+                ed._shapes.pop(idx)
+                self.update()
+            # Release guard after one event-loop cycle so any residual
+            # context-menu event already in the queue gets swallowed first.
+            QTimer.singleShot(0, lambda: setattr(self, '_ctx_busy', False))
+            return
+
+        # For actions that open a secondary dialog: hold the guard inside the
+        # dialog via try/finally — it is released only after the dialog closes.
+        def _open_dialog():
+            try:
+                if chosen == act_color:
+                    color = QColorDialog.getColor(shape['color'], self, "Pick Colour")
+                    if color.isValid():
+                        shape['color'] = color
+                        self.update()
+                elif act_size and chosen == act_size:
+                    val, ok = QInputDialog.getInt(
+                        self, "Change Size", "Stroke width (px):",
+                        shape.get('width', 3), 1, 20)
+                    if ok:
+                        shape['width'] = val
+                        self.update()
+                elif act_edit_text and chosen == act_edit_text:
+                    text, ok = QInputDialog.getText(
+                        self, "Edit Text", "Text:", text=shape.get('text', ''))
+                    if ok and text:
+                        shape['text'] = text
+                        self.update()
+                elif act_font_size and chosen == act_font_size:
+                    val, ok = QInputDialog.getInt(
+                        self, "Change Font Size", "Font size (pt):",
+                        shape.get('font_size', 20), 8, 72)
+                    if ok:
+                        shape['font_size'] = val
+                        self.update()
+            finally:
+                self._ctx_busy = False  # released only after dialog fully closes
+
+        QTimer.singleShot(0, _open_dialog)
+
+
+class SnapshotEditorDialog(QDialog):
+    """Annotation editor dialog opened when the user captures a viewport snapshot.
+
+    Supported tools: arrow, line, dash-line, rectangle, circle, text.
+    All shapes are rendered with a white outline pass followed by a colour
+    pass, mirroring the web-app behaviour.
+    """
+
+    _TOOLS = ('arrow', 'line', 'dash', 'rect', 'circle', 'text')
+    _TOOL_LABELS = {
+        'arrow':  'Arrow',
+        'line':   'Line',
+        'dash':   'Dashed Line',
+        'rect':   'Rectangle',
+        'circle': 'Circle / Ellipse',
+        'text':   'Add Text (click to place)',
+    }
+    # SVG icon data for each tool (mirrors the web app icons)
+    _TOOL_ICONS = {
+        'arrow': b'<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 14L13 3M13 3H7M13 3V9"/></svg>',
+        'line':  b'<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><line x1="2" y1="14" x2="14" y2="2"/></svg>',
+        'dash':  b'<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="3 2.5"><line x1="2" y1="14" x2="14" y2="2"/></svg>',
+        'rect':  b'<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2" y="3" width="12" height="9" rx="1"/></svg>',
+        'circle':b'<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><ellipse cx="8" cy="8" rx="6" ry="5"/></svg>',
+        'text':  b'<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 4h10M8 4v9M5 13h6"/></svg>',
+    }
+
+    @staticmethod
+    def _make_svg_icon(svg_bytes: bytes, color: str = '#b0b0cc', size: int = 16) -> 'QIcon':
+        """Render SVG bytes (with `currentColor`) to a QIcon pair (normal + checked)."""
+        from PyQt5.QtSvg import QSvgRenderer
+        from PyQt5.QtGui import QIcon, QPixmap
+        from PyQt5.QtCore import Qt
+
+        def _render(stroke: str) -> QPixmap:
+            data = svg_bytes.replace(b'currentColor', stroke.encode())
+            renderer = QSvgRenderer(data)
+            pm = QPixmap(size, size)
+            pm.fill(Qt.transparent)
+            from PyQt5.QtGui import QPainter
+            p = QPainter(pm)
+            renderer.render(p)
+            p.end()
+            return pm
+
+        icon = QIcon()
+        icon.addPixmap(_render(color),   QIcon.Normal,  QIcon.Off)
+        icon.addPixmap(_render('#e3f2fd'), QIcon.Normal, QIcon.On)
+        return icon
+
+    def __init__(self, pixmap: QPixmap, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._orig_pixmap: QPixmap = pixmap
+        self._shapes: list = []
+        self._drawing: Optional[dict] = None
+        self._drag_idx: int = -1
+        self._drag_prev: tuple = (0.0, 0.0)
+        self._tool: str = 'arrow'
+        self._color: QColor = QColor('#ff4444')
+        self._line_width: int = 3
+        self._font_size: int = 20
+
+        # Compute display scale so the canvas fits the available screen area
+        screen = QApplication.desktop().availableGeometry(self)
+        max_w = screen.width() - 120
+        max_h = screen.height() - 220
+        iw, ih = pixmap.width(), pixmap.height()
+        self._scale: float = min(1.0, max_w / max(iw, 1), max_h / max(ih, 1))
+        self._disp_w: int = max(1, int(iw * self._scale))
+        self._disp_h: int = max(1, int(ih * self._scale))
+
+        self._build_ui()
+        self.setWindowTitle("Snapshot Editor")
+        self.setModal(True)
+        QShortcut(QKeySequence("Ctrl+Z"), self, self._undo)
+
+    # ------------------------------------------------------------------
+    # UI construction
+    # ------------------------------------------------------------------
+
+    def _build_ui(self) -> None:
+        main = QVBoxLayout(self)
+        main.setContentsMargins(6, 6, 6, 6)
+        main.setSpacing(4)
+
+        # ---- Tool bar ----
+        tb = QHBoxLayout()
+        tb.setSpacing(2)
+        self._tool_btns: dict = {}
+        _tool_btn_ss = (
+            "QPushButton {"
+            "  border: 1px solid #888; border-radius: 3px; padding: 2px 4px;"
+            "}"
+            "QPushButton:checked {"
+            "  background-color: #1976D2; color: #ffffff;"
+            "  border: 1px solid #0D47A1;"
+            "}"
+            "QPushButton:hover:!checked { background-color: #3a3a3a; }"
+        )
+        _ICON_H = 28          # uniform height for every toolbar widget
+        for tid in self._TOOLS:
+            btn = QPushButton()
+            btn.setIcon(self._make_svg_icon(self._TOOL_ICONS[tid]))
+            btn.setIconSize(QSize(16, 16))
+            btn.setCheckable(True)
+            btn.setChecked(tid == self._tool)
+            btn.setFixedSize(_ICON_H, _ICON_H)
+            btn.setToolTip(self._TOOL_LABELS[tid])
+            btn.setStyleSheet(_tool_btn_ss)
+            btn.clicked.connect(lambda _checked, t=tid: self._select_tool(t))
+            tb.addWidget(btn)
+            self._tool_btns[tid] = btn
+
+        tb.addSpacing(8)
+        tb.addWidget(QLabel("Color:"))
+        self._color_btn = QPushButton()
+        self._color_btn.setFixedSize(_ICON_H, _ICON_H)
+        self._color_btn.setToolTip("Pick colour")
+        self._color_btn.clicked.connect(self._pick_color)
+        self._refresh_color_btn()
+        tb.addWidget(self._color_btn)
+
+        tb.addSpacing(8)
+        tb.addWidget(QLabel("Size:"))
+        self._width_spin = QSpinBox()
+        self._width_spin.setRange(1, 20)
+        self._width_spin.setValue(self._line_width)
+        self._width_spin.setSuffix(" px")
+        self._width_spin.setFixedHeight(_ICON_H)
+        self._width_spin.setToolTip("Stroke width")
+        self._width_spin.valueChanged.connect(lambda v: setattr(self, '_line_width', v))
+        tb.addWidget(self._width_spin)
+
+        tb.addSpacing(8)
+        tb.addWidget(QLabel("Font:"))
+        self._font_spin = QSpinBox()
+        self._font_spin.setRange(8, 72)
+        self._font_spin.setValue(self._font_size)
+        self._font_spin.setSuffix(" pt")
+        self._font_spin.setFixedHeight(_ICON_H)
+        self._font_spin.setToolTip("Text font size")
+        self._font_spin.valueChanged.connect(lambda v: setattr(self, '_font_size', v))
+        tb.addWidget(self._font_spin)
+        tb.addStretch()
+        main.addLayout(tb)
+
+        # ---- Canvas in a scroll area ----
+        self._canvas = _AnnotationCanvas(self, self._disp_w, self._disp_h)
+        scroll = QScrollArea()
+        scroll.setWidget(self._canvas)
+        scroll.setWidgetResizable(False)
+        scroll.setFrameShape(QFrame.NoFrame)
+        main.addWidget(scroll, stretch=1)
+
+        # ---- Bottom bar ----
+        bot = QHBoxLayout()
+        bot.setSpacing(6)
+        copy_btn = QPushButton("Copy to Clipboard")
+        copy_btn.clicked.connect(self._on_copy)
+        save_btn = QPushButton("Save PNG…")
+        save_btn.clicked.connect(self._on_save)
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.close)
+        self._status_lbl = QLabel("")
+        bot.addWidget(copy_btn)
+        bot.addWidget(save_btn)
+        bot.addStretch()
+        bot.addWidget(self._status_lbl)
+        bot.addWidget(close_btn)
+        main.addLayout(bot)
+
+        self.resize(self._disp_w + 40, self._disp_h + 130)
+
+    # ------------------------------------------------------------------
+    # Tool / colour helpers
+    # ------------------------------------------------------------------
+
+    def _select_tool(self, tool: str) -> None:
+        self._tool = tool
+        for tid, btn in self._tool_btns.items():
+            btn.setChecked(tid == tool)
+
+    def _pick_color(self) -> None:
+        from PyQt5.QtWidgets import QColorDialog  # always available, import locally
+        color = QColorDialog.getColor(self._color, self, "Pick Colour")
+        if color.isValid():
+            self._color = color
+            self._refresh_color_btn()
+
+    def _refresh_color_btn(self) -> None:
+        self._color_btn.setStyleSheet(
+            f"background-color: {self._color.name()}; border: 1px solid #888;")
+
+    def _to_img(self, cx: float, cy: float) -> tuple:
+        """Convert canvas display coordinates to image pixel coordinates."""
+        return cx / self._scale, cy / self._scale
+
+    # ------------------------------------------------------------------
+    # Undo
+    # ------------------------------------------------------------------
+
+    def _undo(self) -> None:
+        if self._shapes:
+            self._shapes.pop()
+            self._canvas.update()
+
+    # ------------------------------------------------------------------
+    # Hit-testing and shape movement
+    # ------------------------------------------------------------------
+
+    def _hit_test(self, x: float, y: float) -> int:
+        """Return index of the topmost shape at image-coord (x,y), or -1."""
+        thr = 10.0 / max(self._scale, 0.01)  # 10 display px in image space
+        for i in range(len(self._shapes) - 1, -1, -1):
+            s = self._shapes[i]
+            t = s['type']
+            if t in ('arrow', 'line', 'dash'):
+                d = _point_to_seg_dist(x, y, s['x1'], s['y1'], s['x2'], s['y2'])
+                if d < thr + s.get('width', 2):
+                    return i
+            elif t in ('rect', 'circle'):
+                rx, ry, rw, rh = s['x'], s['y'], s['w'], s['h']
+                if rw < 0: rx += rw; rw = -rw
+                if rh < 0: ry += rh; rh = -rh
+                if rx - thr <= x <= rx + rw + thr and ry - thr <= y <= ry + rh + thr:
+                    return i
+            elif t == 'text':
+                fs = s['font_size']
+                approx_w = len(s['text']) * fs * 0.65
+                if (s['x'] - thr <= x <= s['x'] + approx_w + thr and
+                        s['y'] - fs - thr <= y <= s['y'] + thr):
+                    return i
+        return -1
+
+    def _move_shape(self, idx: int, dx: float, dy: float) -> None:
+        """Translate shape at *idx* by (dx, dy) in image coordinates."""
+        s = self._shapes[idx]
+        t = s['type']
+        if t in ('arrow', 'line', 'dash'):
+            s['x1'] += dx;  s['y1'] += dy
+            s['x2'] += dx;  s['y2'] += dy
+        elif t in ('rect', 'circle'):
+            s['x'] += dx;  s['y'] += dy
+        elif t == 'text':
+            s['x'] += dx;  s['y'] += dy
+
+    # ------------------------------------------------------------------
+    # Shape rendering
+    # ------------------------------------------------------------------
+
+    def _paint_shapes(
+        self,
+        painter: QPainter,
+        shapes: list,
+        override_color: Optional[QColor] = None,
+        extra_width: int = 0,
+    ) -> None:
+        for shape in shapes:
+            t = shape['type']
+            col = override_color if override_color is not None else shape['color']
+            w = shape.get('width', 2) + extra_width
+            if t == 'text':
+                self._paint_text(painter, shape, override_color, extra_width)
+            elif t == 'arrow':
+                self._paint_arrow(painter, shape, col, w, extra_width)
+            elif t in ('line', 'dash'):
+                if t == 'dash':
+                    # Use CustomDashLine with pixel-normalised values so that
+                    # both the white-outline pass (width+2) and the colour pass
+                    # (width) produce the same absolute dash/gap lengths and
+                    # therefore stay perfectly aligned.
+                    pen = QPen(col, w, Qt.CustomDashLine, Qt.RoundCap, Qt.RoundJoin)
+                    pen.setDashPattern([20.0 / max(w, 1), 10.0 / max(w, 1)])
+                else:
+                    pen = QPen(col, w, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+                painter.setPen(pen)
+                painter.setBrush(Qt.NoBrush)
+                painter.drawLine(QPointF(shape['x1'], shape['y1']),
+                                 QPointF(shape['x2'], shape['y2']))
+            elif t == 'rect':
+                pen = QPen(col, w, Qt.SolidLine, Qt.SquareCap, Qt.MiterJoin)
+                painter.setPen(pen)
+                painter.setBrush(Qt.NoBrush)
+                painter.drawRect(QRectF(shape['x'], shape['y'],
+                                        shape['w'], shape['h']))
+            elif t == 'circle':
+                pen = QPen(col, w, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+                painter.setPen(pen)
+                painter.setBrush(Qt.NoBrush)
+                painter.drawEllipse(QRectF(shape['x'], shape['y'],
+                                           shape['w'], shape['h']))
+
+    def _paint_arrow(
+        self,
+        painter: QPainter,
+        shape: dict,
+        col: QColor,
+        w: int,
+        extra_width: int,
+    ) -> None:
+        x1, y1 = shape['x1'], shape['y1']
+        x2, y2 = shape['x2'], shape['y2']
+        length = math.hypot(x2 - x1, y2 - y1)
+        if length < 1:
+            return
+        angle = math.atan2(y2 - y1, x2 - x1)
+        arrow_len = max(12.0, shape['width'] * 4.0)
+        arrow_ang = math.pi / 6.0
+
+        # Shaft
+        painter.setPen(QPen(col, w, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawLine(QPointF(x1, y1), QPointF(x2, y2))
+
+        # Arrowhead polygon
+        tip = QPointF(x2, y2)
+        p1 = QPointF(x2 - arrow_len * math.cos(angle - arrow_ang),
+                     y2 - arrow_len * math.sin(angle - arrow_ang))
+        p2 = QPointF(x2 - arrow_len * math.cos(angle + arrow_ang),
+                     y2 - arrow_len * math.sin(angle + arrow_ang))
+        poly = QPolygonF([tip, p1, p2])
+        stroke_w = max(1, extra_width)
+        painter.setPen(QPen(col, stroke_w, Qt.SolidLine))
+        painter.setBrush(QBrush(col))
+        painter.drawPolygon(poly)
+
+    def _paint_text(
+        self,
+        painter: QPainter,
+        shape: dict,
+        override_color: Optional[QColor],
+        extra_width: int,
+    ) -> None:
+        col = override_color if override_color is not None else shape['color']
+        font = QFont()
+        font.setPixelSize(shape['font_size'])
+        path = QPainterPath()
+        path.addText(shape['x'], shape['y'], font, shape['text'])
+        if override_color is not None:
+            # Outline pass: stroke path with a wider pen (4 px → 2 px halo each side)
+            stroke_w = 4 + extra_width * 2
+            painter.strokePath(path,
+                               QPen(col, stroke_w, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        else:
+            # Colour pass: fill the glyph path
+            painter.setPen(Qt.NoPen)
+            painter.fillPath(path, col)
+
+    # ------------------------------------------------------------------
+    # Export
+    # ------------------------------------------------------------------
+
+    def _render_final_pixmap(self) -> QPixmap:
+        """Composite the original image and all annotations at full resolution."""
+        result = QPixmap(self._orig_pixmap)
+        painter = QPainter(result)
+        painter.setRenderHint(QPainter.Antialiasing)
+        self._paint_shapes(painter, self._shapes, QColor('#ffffff'), 2)
+        self._paint_shapes(painter, self._shapes)
+        painter.end()
+        return result
+
+    def _on_copy(self) -> None:
+        pixmap = self._render_final_pixmap()
+        buf = QByteArray()
+        buf_dev = QBuffer(buf)
+        buf_dev.open(QIODevice.WriteOnly)
+        pixmap.save(buf_dev, 'PNG')
+        buf_dev.close()
+        png_bytes = bytes(buf)
+
+        used_tool: Optional[str] = None
+        for tool, args in [
+            ('xclip',   ['xclip',   '-selection', 'clipboard', '-t', 'image/png']),
+            ('xsel',    ['xsel',    '--clipboard', '--input']),
+            ('wl-copy', ['wl-copy', '--type', 'image/png']),
+        ]:
+            if shutil.which(tool):
+                proc = subprocess.Popen(args, stdin=subprocess.PIPE)
+                proc.communicate(png_bytes)
+                if proc.returncode == 0:
+                    used_tool = tool
+                    break
+
+        if used_tool is None:
+            clipboard = QApplication.clipboard()
+            mime = QMimeData()
+            mime.setData('image/png', buf)
+            mime.setImageData(pixmap.toImage())
+            clipboard.setMimeData(mime)
+            clipboard.setPixmap(pixmap)
+
+        self._show_status("Copied to clipboard!")
+
+    def _on_save(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Annotated Image", "annotated-snapshot.png",
+            "PNG images (*.png);;All files (*)"
+        )
+        if not path:
+            return
+        pixmap = self._render_final_pixmap()
+        if not pixmap.save(path, "PNG"):
+            QMessageBox.critical(self, "Save Error", f"Could not save image:\n{path}")
+            return
+        self._show_status(f"Saved: {os.path.basename(path)}")
+
+    def _show_status(self, msg: str) -> None:
+        self._status_lbl.setText(msg)
+        QTimer.singleShot(3000, lambda: self._status_lbl.setText(""))
+
+
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # Main Window
 # ---------------------------------------------------------------------------
+
+def _exec_centred(dlg, parent):
+    """Call exec_() after centring *dlg* over *parent*.
+    Pre-positioning the window before exec_() prevents an X11 placement flash
+    where the WM briefly maps the window at a stale position before
+    repositioning it to honour Qt's centering request.
+    """
+    pg = parent.frameGeometry()
+    w  = dlg.width()  if dlg.width()  > 0 else dlg.sizeHint().width()
+    h  = dlg.height() if dlg.height() > 0 else dlg.sizeHint().height()
+    dlg.move(
+        max(0, pg.x() + (pg.width()  - w) // 2),
+        max(0, pg.y() + (pg.height() - h) // 2),
+    )
+    return dlg.exec_()
+
+
+def _dialog_guard(fn):
+    """Decorator: prevents a dialog-opening method from being entered while it
+    is already running (e.g. due to spurious double-trigger on Linux/X11).
+    The guard is held for the entire duration of the modal call via try/finally,
+    so any re-entrant invocation that arrives while the dialog is open is
+    silently dropped.
+    """
+    _attr = '_dguard_' + fn.__name__
+
+    def _wrapper(self, *args, **kwargs):
+        if getattr(self, _attr, False):
+            return
+        setattr(self, _attr, True)
+        try:
+            return fn(self, *args, **kwargs)
+        finally:
+            setattr(self, _attr, False)
+
+    _wrapper.__name__ = fn.__name__
+    _wrapper.__doc__  = fn.__doc__
+    return _wrapper
+
 
 class MainWindow(QMainWindow):
 
@@ -10064,6 +10700,7 @@ class MainWindow(QMainWindow):
 
     # -- File actions ---------------------------------------------------
 
+    @_dialog_guard
     def _on_open(self) -> None:
         last_dir = self._settings.get("files", "last_dir", os.path.expanduser("~"))
         path, _ = QFileDialog.getOpenFileName(
@@ -10714,21 +11351,15 @@ class MainWindow(QMainWindow):
         self._parse_thread = thread
         thread.start()
 
+    @_dialog_guard
     def _on_save_image(self) -> None:
         if self._trace is None:
             return
-        base = os.path.splitext(self._current_file)[0] if self._current_file else "trace"
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save Image", base + ".png",
-            "PNG images (*.png);;All files (*)"
-        )
-        if path:
-            try:
-                self._view.save_image(path)
-                self.statusBar().showMessage(f"Saved: {path}", 4000)
-            except OSError as exc:
-                QMessageBox.critical(self, "Save Error", f"Could not save image:\n{exc}")
+        pixmap = self._view._capture_pixmap()
+        dlg = SnapshotEditorDialog(pixmap, self)
+        _exec_centred(dlg, self)
 
+    @_dialog_guard
     def _on_save_svg(self) -> None:
         if self._trace is None:
             return
@@ -10762,22 +11393,13 @@ class MainWindow(QMainWindow):
         except (OSError, RuntimeError) as exc:
             QMessageBox.critical(self, "Save Error", f"Could not save SVG:\n{exc}")
 
+    @_dialog_guard
     def _on_copy_image(self) -> None:
         if self._trace is None:
             return
-        used_tool = self._view.copy_image_to_clipboard()
-        if used_tool:
-            self.statusBar().showMessage(f"Image copied to clipboard (via {used_tool})", 3000)
-        elif sys.platform.startswith('linux'):
-            # No external tool found — Qt clipboard used (may not work on all setups)
-            missing = [t for t in ('xclip', 'xsel', 'wl-copy') if not shutil.which(t)]
-            if missing:
-                self.statusBar().showMessage(
-                    "Image copied (Qt). If paste fails, install xclip:  sudo apt install xclip", 6000)
-            else:
-                self.statusBar().showMessage("Image copied to clipboard", 3000)
-        else:
-            self.statusBar().showMessage("Image copied to clipboard", 3000)
+        pixmap = self._view._capture_pixmap()
+        dlg = SnapshotEditorDialog(pixmap, self)
+        _exec_centred(dlg, self)
 
     # -- Settings actions -----------------------------------------------
 
@@ -10892,6 +11514,7 @@ class MainWindow(QMainWindow):
             self._settings.set("view", "timescale_per_px_default",
                                str(self._timescale_per_px_default_val))
 
+    @_dialog_guard
     def _open_settings(self) -> None:
         """Open the Settings dialog with live preview; reverts on Cancel."""
         _snap = {
@@ -10967,7 +11590,7 @@ class MainWindow(QMainWindow):
                 _SettingsDialog._dialog_ss(dlg.is_dark, f"{dlg.ui_font_size}pt")
             )
         )
-        if dlg.exec_() == QDialog.Accepted:
+        if _exec_centred(dlg, self) == QDialog.Accepted:
             self._persist_settings_after_dlg(_snap)
         else:
             self._apply_settings_preview(_snap)
@@ -11347,10 +11970,11 @@ class MainWindow(QMainWindow):
             return
         self._view.scroll_to_ns(self._trace.time_max)
 
+    @_dialog_guard
     def _on_jump_to_time(self) -> None:
         """Open the Jump-to-Time dialog (Ctrl+G)."""
         dlg = _JumpToTimeDialog(self._trace, parent=self)
-        if dlg.exec_() == QDialog.Accepted:
+        if _exec_centred(dlg, self) == QDialog.Accepted:
             ns = dlg.result_ns()
             if ns is not None:
                 self._jump_to_ns(ns)
@@ -11476,6 +12100,7 @@ class MainWindow(QMainWindow):
 
     # -- Help -----------------------------------------------------------
 
+    @_dialog_guard
     def _on_keyboard_shortcuts(self) -> None:
         """Show a reference dialog listing all keyboard shortcuts."""
         if self._is_dark:
@@ -11599,10 +12224,11 @@ class MainWindow(QMainWindow):
         btn_box = QDialogButtonBox(QDialogButtonBox.Ok)
         btn_box.accepted.connect(dlg.accept)
         layout.addWidget(btn_box)
-        dlg.exec_()
+        _exec_centred(dlg, self)
 
+    @_dialog_guard
     def _on_about(self) -> None:
-        _AboutDialog(self, is_dark=self._is_dark).exec_()
+        _exec_centred(_AboutDialog(self, is_dark=self._is_dark), self)
 
 # ===========================================================================
 # Entry point

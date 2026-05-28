@@ -317,6 +317,13 @@
       </div>
     </div>
 
+    <!-- Snapshot editor -->
+    <SnapshotEditor
+      v-if="snapshotEditorOpen"
+      :image-url="snapshotImageUrl"
+      @close="onSnapshotEditorClose"
+    />
+
     <!-- Toast notification -->
     <Transition name="toast">
       <div
@@ -354,6 +361,7 @@ import CursorPanel      from './components/CursorPanel.vue'
 import LegendPanel      from './components/LegendPanel.vue'
 import StatisticsPanel  from './components/StatisticsPanel.vue'
 import MarksPanel       from './components/MarksPanel.vue'
+import SnapshotEditor   from './components/SnapshotEditor.vue'
 import { formatTime }   from './renderer/TimelineRenderer.js'
 import { taskMergeKey } from './utils/colors.js'
 import exampleBtfB64   from 'virtual:example-btf'
@@ -369,6 +377,10 @@ const loadingFileName = ref('')
 const cursors    = ref([null, null, null, null])
 const helpOpen   = ref(false)
 const aboutOpen  = ref(false)
+
+// ---- Snapshot editor -------------------------------------------------------
+const snapshotEditorOpen = ref(false)
+const snapshotImageUrl   = ref(null)
 
 const toastMsg     = ref('')
 const toastType    = ref('info')
@@ -647,25 +659,18 @@ async function onCopyScreenshot() {
     showToast('Unable to capture screenshot.', 'error')
     return
   }
+  // Open snapshot editor so user can annotate before copying/saving
+  if (snapshotImageUrl.value) URL.revokeObjectURL(snapshotImageUrl.value)
+  snapshotImageUrl.value   = URL.createObjectURL(blob)
+  snapshotEditorOpen.value = true
+}
 
-  const canWriteImage = typeof ClipboardItem !== 'undefined' && !!navigator.clipboard?.write
-  if (canWriteImage && window.isSecureContext) {
-    try {
-      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
-      showToast('Screenshot copied to clipboard.')
-      return
-    } catch {
-      // Fall through to download fallback.
-    }
+function onSnapshotEditorClose() {
+  snapshotEditorOpen.value = false
+  if (snapshotImageUrl.value) {
+    URL.revokeObjectURL(snapshotImageUrl.value)
+    snapshotImageUrl.value = null
   }
-
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = 'timeline-screenshot.png'
-  a.click()
-  URL.revokeObjectURL(url)
-  showToast('Clipboard image write is unavailable. Screenshot was downloaded as PNG.')
 }
 
 function onExportSvg() {
