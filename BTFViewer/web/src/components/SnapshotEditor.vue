@@ -256,6 +256,7 @@ function closeColorPanel() {
 }
 const shapes    = ref([])
 const drawing   = ref(null)
+const selectedIdx = ref(-1)
 
 const imgNW  = ref(1)
 const imgNH  = ref(1)
@@ -278,10 +279,14 @@ let _mouseDown   = false
 let _startPos    = null
 let _dragIdx     = -1
 let _dragPrev    = null
+let _dragHandle  = null
+let _dragAnchor  = null
 let _rafId       = null
 let _statusTimer = null
 
 const hoverIdx = ref(-1)
+const hoverHandleId = ref('')
+const dragMode = ref('none') // none | move | handle
 
 const statusMsg     = ref('')
 const statusType    = ref('info')
@@ -301,8 +306,14 @@ const canvasStyle = computed(() => ({
   display: 'block',
   width:   `${Math.round(imgNW.value * dScale.value)}px`,
   height:  `${Math.round(imgNH.value * dScale.value)}px`,
-  cursor:  (_dragIdx >= 0 || hoverIdx.value >= 0) && tool.value !== 'text'
-             ? 'move'
+  cursor:  tool.value === 'text'
+             ? 'text'
+             : dragMode.value === 'handle'
+               ? cursorForHandle(hoverHandleId.value || _dragHandle)
+               : hoverHandleId.value
+                 ? cursorForHandle(hoverHandleId.value)
+                 : (_dragIdx >= 0 || hoverIdx.value >= 0)
+                   ? 'move'
              : (TOOL_CURSORS[tool.value] || 'crosshair'),
 }))
 
@@ -433,14 +444,31 @@ function onMouseDown(e) {
     return
   }
 
-  // Hit-test: drag an existing shape rather than drawing a new one
-  const hit = hitTest(pos.x, pos.y)
-  if (hit >= 0) {
-    _dragIdx  = hit
-    _dragPrev = pos
+  const handleHit = hitControlPoint(pos.x, pos.y)
+  if (handleHit && selectedIdx.value >= 0) {
+    _dragIdx    = selectedIdx.value
+    _dragHandle = handleHit
+    _dragAnchor = getHandleAnchor(shapes.value[_dragIdx], handleHit)
+    dragMode.value = 'handle'
     return
   }
 
+  // Hit-test: select and drag an existing shape rather than drawing a new one
+  const hit = hitTest(pos.x, pos.y)
+  if (hit >= 0) {
+    selectedIdx.value = hit
+    _dragIdx  = hit
+    _dragPrev = pos
+    _dragHandle = null
+    _dragAnchor = null
+    dragMode.value = 'move'
+    hoverHandleId.value = ''
+    scheduleRedraw()
+    return
+  }
+
+  selectedIdx.value = -1
+  hoverHandleId.value = ''
   _mouseDown = true
   _startPos  = pos
   drawing.value = buildShape(tool.value, pos, pos, e.shiftKey)
@@ -449,7 +477,13 @@ function onMouseDown(e) {
 function onMouseMove(e) {
   const pos = getPos(e)
 
-  if (_dragIdx >= 0 && _dragPrev) {
+  if (dragMode.value === 'handle' && _dragIdx >= 0 && _dragHandle) {
+    updateShapeByHandle(_dragIdx, _dragHandle, pos, e.shiftKey)
+    scheduleRedraw()
+    return
+  }
+
+  if (dragMode.value === 'move' && _dragIdx >= 0 && _dragPrev) {
     moveShape(_dragIdx, pos.x - _dragPrev.x, pos.y - _dragPrev.y)
     _dragPrev = pos
     scheduleRedraw()
@@ -462,16 +496,21 @@ function onMouseMove(e) {
     return
   }
 
-  // Hover: update cursor hint for draggable shapes
+  // Hover: update cursor hint for draggable shapes / control points
   if (tool.value !== 'text') {
-    hoverIdx.value = hitTest(pos.x, pos.y)
+    const handleHit = hitControlPoint(pos.x, pos.y)
+    hoverHandleId.value = handleHit || ''
+    hoverIdx.value = handleHit ? -1 : hitTest(pos.x, pos.y)
   }
 }
 
 function onMouseUp(e) {
-  if (_dragIdx >= 0) {
+  if (dragMode.value !== 'none') {
     _dragIdx  = -1
     _dragPrev = null
+    _dragHandle = null
+    _dragAnchor = null
+    dragMode.value = 'none'
     scheduleRedraw()
     return
   }
@@ -489,9 +528,13 @@ function onMouseUp(e) {
 
 function onMouseLeave() {
   hoverIdx.value = -1
-  if (_dragIdx >= 0) {
+  hoverHandleId.value = ''
+  if (dragMode.value !== 'none') {
     _dragIdx  = -1
     _dragPrev = null
+    _dragHandle = null
+    _dragAnchor = null
+    dragMode.value = 'none'
     scheduleRedraw()
     return
   }
@@ -541,6 +584,131 @@ function moveShape(idx, dx, dy) {
   }
 }
 
+function getControlPoints(shape) {
+  if (!shape) return []
+  if (shape.type === 'line' || shape.type === 'arrow' || shape.type === 'dash') {
+    return [
+      { id: 'start', x: shape.x1, y: shape.y1 },
+      { id: 'end', x: shape.x2, y: shape.y2 },
+    ]
+  }
+  if (shape.type === 'rect' || shape.type === 'circle') {
+    return [
+      { id: 'nw', x: shape.x,           y: shape.y },
+      { id: 'n',  x: shape.x + shape.w / 2, y: shape.y },
+      { id: 'ne', x: shape.x + shape.w, y: shape.y },
+      { id: 'e',  x: shape.x + shape.w, y: shape.y + shape.h / 2 },
+      { id: 'se', x: shape.x + shape.w, y: shape.y + shape.h },
+      { id: 's',  x: shape.x + shape.w / 2, y: shape.y + shape.h },
+      { id: 'sw', x: shape.x,           y: shape.y + shape.h },
+      { id: 'w',  x: shape.x,           y: shape.y + shape.h / 2 },
+    ]
+  }
+  return []
+}
+
+function hitControlPoint(x, y) {
+  if (selectedIdx.value < 0 || selectedIdx.value >= shapes.value.length) return null
+  const points = getControlPoints(shapes.value[selectedIdx.value])
+  if (!points.length) return null
+  const thr = Math.max(8, 10 / dScale.value)
+  for (const p of points) {
+    if (Math.hypot(x - p.x, y - p.y) <= thr) return p.id
+  }
+  return null
+}
+
+function getHandleAnchor(shape, handleId) {
+  if (!shape) return null
+  if (shape.type === 'rect' || shape.type === 'circle') {
+    if (handleId === 'nw') return { x: shape.x + shape.w, y: shape.y + shape.h }
+    if (handleId === 'n')  return { x: shape.x + shape.w / 2, y: shape.y + shape.h }
+    if (handleId === 'ne') return { x: shape.x, y: shape.y + shape.h }
+    if (handleId === 'e')  return { x: shape.x, y: shape.y + shape.h / 2 }
+    if (handleId === 'se') return { x: shape.x, y: shape.y }
+    if (handleId === 's')  return { x: shape.x + shape.w / 2, y: shape.y }
+    if (handleId === 'sw') return { x: shape.x + shape.w, y: shape.y }
+    if (handleId === 'w')  return { x: shape.x + shape.w, y: shape.y + shape.h / 2 }
+  }
+  return null
+}
+
+function updateShapeByHandle(idx, handleId, pos, forceSnap = false) {
+  const s = shapes.value[idx]
+  if (!s) return
+  if (s.type === 'line' || s.type === 'arrow' || s.type === 'dash') {
+    if (handleId === 'start') {
+      const end = snapLineEnd(s.x2, s.y2, pos.x, pos.y, forceSnap)
+      s.x1 = end.x
+      s.y1 = end.y
+    } else if (handleId === 'end') {
+      const end = snapLineEnd(s.x1, s.y1, pos.x, pos.y, forceSnap)
+      s.x2 = end.x
+      s.y2 = end.y
+    }
+    return
+  }
+
+  if ((s.type === 'rect' || s.type === 'circle') && handleId === 'n') {
+    const bottom = s.y + s.h
+    const top = pos.y
+    s.y = Math.min(top, bottom)
+    s.h = Math.abs(bottom - top)
+    return
+  }
+
+  if ((s.type === 'rect' || s.type === 'circle') && handleId === 's') {
+    const top = s.y
+    const bottom = pos.y
+    s.y = Math.min(top, bottom)
+    s.h = Math.abs(bottom - top)
+    return
+  }
+
+  if ((s.type === 'rect' || s.type === 'circle') && handleId === 'w') {
+    const right = s.x + s.w
+    const left = pos.x
+    s.x = Math.min(left, right)
+    s.w = Math.abs(right - left)
+    return
+  }
+
+  if ((s.type === 'rect' || s.type === 'circle') && handleId === 'e') {
+    const left = s.x
+    const right = pos.x
+    s.x = Math.min(left, right)
+    s.w = Math.abs(right - left)
+    return
+  }
+
+  if ((s.type === 'rect' || s.type === 'circle') && _dragAnchor) {
+    let x1 = pos.x
+    let y1 = pos.y
+    const x2 = _dragAnchor.x
+    const y2 = _dragAnchor.y
+
+    if (forceSnap) {
+      const dx = x1 - x2
+      const dy = y1 - y2
+      const size = Math.min(Math.abs(dx), Math.abs(dy))
+      x1 = x2 + (dx < 0 ? -size : size)
+      y1 = y2 + (dy < 0 ? -size : size)
+    }
+    s.x = Math.min(x1, x2)
+    s.y = Math.min(y1, y2)
+    s.w = Math.abs(x1 - x2)
+    s.h = Math.abs(y1 - y2)
+  }
+}
+
+function cursorForHandle(handleId) {
+  if (handleId === 'nw' || handleId === 'se') return 'nwse-resize'
+  if (handleId === 'ne' || handleId === 'sw') return 'nesw-resize'
+  if (handleId === 'n' || handleId === 's') return 'ns-resize'
+  if (handleId === 'e' || handleId === 'w') return 'ew-resize'
+  return 'crosshair'
+}
+
 // ── Context menu ──────────────────────────────────────────────────────────────
 
 const ctxMenu  = reactive({ visible: false, x: 0, y: 0, idx: -1 })
@@ -553,6 +721,7 @@ function onContextMenu(e) {
   const pos = getPos(e)
   const hit = hitTest(pos.x, pos.y)
   if (hit < 0) return
+  selectedIdx.value = hit
   ctxMenu.idx     = hit
   ctxMenu.x       = e.clientX
   ctxMenu.y       = e.clientY
@@ -564,6 +733,7 @@ function closeCtxMenu() {
 }
 
 function ctxDelete() {
+  if (ctxMenu.idx === selectedIdx.value) selectedIdx.value = -1
   shapes.value.splice(ctxMenu.idx, 1)
   closeCtxMenu()
   scheduleRedraw()
@@ -672,6 +842,7 @@ function undo() {
   if (textEdit.active) { cancelText(); return }
   if (shapes.value.length) {
     shapes.value.pop()
+    if (selectedIdx.value >= shapes.value.length) selectedIdx.value = -1
     scheduleRedraw()
   }
 }
@@ -679,6 +850,7 @@ function undo() {
 function clearAll() {
   cancelText()
   shapes.value = []
+  selectedIdx.value = -1
   scheduleRedraw()
 }
 
@@ -703,6 +875,50 @@ function redraw() {
   if (drawing.value) paint(ctx, drawing.value, '#ffffff', 2)
   for (const shape of shapes.value) paint(ctx, shape)
   if (drawing.value) paint(ctx, drawing.value)
+  if (selectedIdx.value >= 0 && selectedIdx.value < shapes.value.length && !drawing.value && !textEdit.active) {
+    paintSelection(ctx, shapes.value[selectedIdx.value])
+  }
+}
+
+function shapeBounds(shape) {
+  if (shape.type === 'rect' || shape.type === 'circle') {
+    return { x: shape.x, y: shape.y, w: shape.w, h: shape.h }
+  }
+  if (shape.type === 'text') {
+    const w = shape.fontSize * 0.65 * shape.text.length
+    return { x: shape.x, y: shape.y, w, h: shape.fontSize }
+  }
+  return {
+    x: Math.min(shape.x1, shape.x2),
+    y: Math.min(shape.y1, shape.y2),
+    w: Math.abs(shape.x2 - shape.x1),
+    h: Math.abs(shape.y2 - shape.y1),
+  }
+}
+
+function paintSelection(ctx, shape) {
+  const b = shapeBounds(shape)
+  ctx.save()
+  ctx.setLineDash([5 / dScale.value, 4 / dScale.value])
+  ctx.lineWidth = Math.max(1, 1.5 / dScale.value)
+  ctx.strokeStyle = 'rgba(80, 190, 255, 0.95)'
+  ctx.strokeRect(b.x, b.y, Math.max(1, b.w), Math.max(1, b.h))
+  ctx.setLineDash([])
+
+  const points = getControlPoints(shape)
+  if (points.length) {
+    const r = Math.max(4, 6 / dScale.value)
+    for (const p of points) {
+      ctx.beginPath()
+      ctx.arc(p.x, p.y, r, 0, 2 * Math.PI)
+      ctx.fillStyle = '#ffffff'
+      ctx.fill()
+      ctx.lineWidth = Math.max(1.2, 1.8 / dScale.value)
+      ctx.strokeStyle = '#2c8cff'
+      ctx.stroke()
+    }
+  }
+  ctx.restore()
 }
 
 function paint(ctx, shape, overrideColor = null, extraWidth = 0) {
@@ -760,6 +976,22 @@ function paint(ctx, shape, overrideColor = null, extraWidth = 0) {
 
   } else if (type === 'circle') {
     if (shape.w < 1 && shape.h < 1) { ctx.restore(); return }
+    if (shape.w < 1) {
+      ctx.beginPath()
+      ctx.moveTo(shape.x, shape.y)
+      ctx.lineTo(shape.x, shape.y + shape.h)
+      ctx.stroke()
+      ctx.restore()
+      return
+    }
+    if (shape.h < 1) {
+      ctx.beginPath()
+      ctx.moveTo(shape.x, shape.y)
+      ctx.lineTo(shape.x + shape.w, shape.y)
+      ctx.stroke()
+      ctx.restore()
+      return
+    }
     ctx.beginPath()
     ctx.ellipse(
       shape.x + shape.w / 2,

@@ -131,6 +131,7 @@ import math
 import re
 import shutil
 import subprocess
+import tempfile
 import traceback
 import zlib
 from bisect import bisect_left, bisect_right
@@ -8830,6 +8831,8 @@ class _AnnotationCanvas(QWidget):
         ed._paint_shapes(painter, ed._shapes)
         if ed._drawing:
             ed._paint_shapes(painter, [ed._drawing])
+        if ed._selected_idx >= 0 and ed._selected_idx < len(ed._shapes) and ed._drawing is None:
+            ed._paint_selection(painter, ed._shapes[ed._selected_idx])
         painter.end()
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
@@ -8847,15 +8850,31 @@ class _AnnotationCanvas(QWidget):
                     'x': x, 'y': y,
                     'text': text,
                 })
+                ed._selected_idx = -1
                 self.update()
         else:
+            handle = ed._hit_control_point(x, y)
+            if handle and ed._selected_idx >= 0:
+                ed._drag_idx = ed._selected_idx
+                ed._drag_mode = 'handle'
+                ed._drag_handle = handle
+                ed._drag_anchor = ed._get_handle_anchor(ed._shapes[ed._drag_idx], handle)
+                self.setCursor(ed._cursor_for_handle(handle))
+                return
+
             # Try to pick up an existing shape for dragging
             hit = ed._hit_test(x, y)
             if hit >= 0:
+                ed._selected_idx = hit
                 ed._drag_idx = hit
                 ed._drag_prev = (x, y)
+                ed._drag_mode = 'move'
+                ed._drag_handle = ''
+                ed._drag_anchor = None
                 self.setCursor(Qt.SizeAllCursor)
+                self.update()
             else:
+                ed._selected_idx = -1
                 ed._drawing = {
                     'type': ed._tool,
                     'color': QColor(ed._color),
@@ -8868,7 +8887,11 @@ class _AnnotationCanvas(QWidget):
     def mouseMoveEvent(self, event) -> None:  # noqa: N802
         ed = self._editor
         x, y = ed._to_img(event.x(), event.y())
-        if ed._drag_idx >= 0:
+        if ed._drag_mode == 'handle' and ed._drag_idx >= 0 and ed._drag_handle:
+            force = bool(event.modifiers() & Qt.ShiftModifier)
+            ed._resize_shape_by_handle(ed._drag_idx, ed._drag_handle, x, y, force)
+            self.update()
+        elif ed._drag_mode == 'move' and ed._drag_idx >= 0:
             dx = x - ed._drag_prev[0]
             dy = y - ed._drag_prev[1]
             ed._move_shape(ed._drag_idx, dx, dy)
@@ -8891,17 +8914,26 @@ class _AnnotationCanvas(QWidget):
                     d['w'] = abs(x - x1); d['h'] = abs(y - y1)
             self.update()
         else:
-            # Update cursor to hint that the shape under the pointer is movable
+            # Update cursor to hint movable shape or active control handle.
+            handle = ed._hit_control_point(x, y)
+            ed._hover_handle = handle or ''
+            if handle:
+                self.setCursor(ed._cursor_for_handle(handle))
+                return
             hit = ed._hit_test(x, y)
+            ed._hover_idx = hit
             self.setCursor(Qt.SizeAllCursor if hit >= 0 else Qt.CrossCursor)
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
         if event.button() != Qt.LeftButton:
             return
         ed = self._editor
-        if ed._drag_idx >= 0:
+        if ed._drag_mode in ('move', 'handle') and ed._drag_idx >= 0:
             ed._drag_idx = -1
-            self.setCursor(Qt.CrossCursor)
+            ed._drag_mode = 'none'
+            ed._drag_handle = ''
+            ed._drag_anchor = None
+            self.setCursor(Qt.SizeAllCursor if ed._selected_idx >= 0 else Qt.CrossCursor)
             self.update()
         elif ed._drawing is not None:
             x, y = ed._to_img(event.x(), event.y())
@@ -8924,6 +8956,7 @@ class _AnnotationCanvas(QWidget):
                        abs(d['w']), abs(d['h']))
             if span > 2:
                 ed._shapes.append(d)
+                ed._selected_idx = len(ed._shapes) - 1
             ed._drawing = None
             self.update()
 
@@ -8942,6 +8975,9 @@ class _AnnotationCanvas(QWidget):
         idx = ed._hit_test(x, y)
         if idx < 0:
             return
+
+        ed._selected_idx = idx
+        self.update()
 
         event.accept()
         self._ctx_busy = True
@@ -8962,6 +8998,10 @@ class _AnnotationCanvas(QWidget):
         if chosen is None or chosen == act_delete:
             if chosen == act_delete:
                 ed._shapes.pop(idx)
+                if ed._selected_idx == idx:
+                    ed._selected_idx = -1
+                elif ed._selected_idx > idx:
+                    ed._selected_idx -= 1
                 self.update()
             # Release guard after one event-loop cycle so any residual
             # context-menu event already in the queue gets swallowed first.
@@ -9060,6 +9100,12 @@ class SnapshotEditorDialog(QDialog):
         self._drawing: Optional[dict] = None
         self._drag_idx: int = -1
         self._drag_prev: tuple = (0.0, 0.0)
+        self._drag_mode: str = 'none'      # none | move | handle
+        self._drag_handle: str = ''
+        self._drag_anchor: Optional[tuple] = None
+        self._selected_idx: int = -1
+        self._hover_idx: int = -1
+        self._hover_handle: str = ''
         self._tool: str = 'arrow'
         self._color: QColor = QColor('#ff4444')
         self._line_width: int = 3
@@ -9182,6 +9228,7 @@ class SnapshotEditorDialog(QDialog):
 
     def _select_tool(self, tool: str) -> None:
         self._tool = tool
+        self._hover_handle = ''
         for tid, btn in self._tool_btns.items():
             btn.setChecked(tid == tool)
 
@@ -9207,6 +9254,8 @@ class SnapshotEditorDialog(QDialog):
     def _undo(self) -> None:
         if self._shapes:
             self._shapes.pop()
+            if self._selected_idx >= len(self._shapes):
+                self._selected_idx = -1
             self._canvas.update()
 
     # ------------------------------------------------------------------
@@ -9248,6 +9297,139 @@ class SnapshotEditorDialog(QDialog):
             s['x'] += dx;  s['y'] += dy
         elif t == 'text':
             s['x'] += dx;  s['y'] += dy
+
+    def _get_control_points(self, shape: dict) -> list:
+        t = shape['type']
+        if t in ('line', 'arrow', 'dash'):
+            return [
+                ('start', shape['x1'], shape['y1']),
+                ('end', shape['x2'], shape['y2']),
+            ]
+        if t in ('rect', 'circle'):
+            x, y, w, h = shape['x'], shape['y'], shape['w'], shape['h']
+            return [
+                ('nw', x, y), ('n', x + w / 2.0, y), ('ne', x + w, y),
+                ('e', x + w, y + h / 2.0),
+                ('se', x + w, y + h), ('s', x + w / 2.0, y + h), ('sw', x, y + h),
+                ('w', x, y + h / 2.0),
+            ]
+        return []
+
+    def _hit_control_point(self, x: float, y: float) -> Optional[str]:
+        if self._selected_idx < 0 or self._selected_idx >= len(self._shapes):
+            return None
+        points = self._get_control_points(self._shapes[self._selected_idx])
+        if not points:
+            return None
+        thr = max(8.0, 10.0 / max(self._scale, 0.01))
+        for hid, hx, hy in points:
+            if math.hypot(x - hx, y - hy) <= thr:
+                return hid
+        return None
+
+    def _get_handle_anchor(self, shape: dict, handle: str) -> Optional[tuple]:
+        if shape['type'] not in ('rect', 'circle'):
+            return None
+        x, y, w, h = shape['x'], shape['y'], shape['w'], shape['h']
+        if handle == 'nw': return (x + w, y + h)
+        if handle == 'ne': return (x, y + h)
+        if handle == 'se': return (x, y)
+        if handle == 'sw': return (x + w, y)
+        return None
+
+    def _cursor_for_handle(self, handle: str):
+        if handle in ('nw', 'se'):
+            return Qt.SizeFDiagCursor
+        if handle in ('ne', 'sw'):
+            return Qt.SizeBDiagCursor
+        if handle in ('n', 's'):
+            return Qt.SizeVerCursor
+        if handle in ('e', 'w'):
+            return Qt.SizeHorCursor
+        return Qt.CrossCursor
+
+    def _resize_shape_by_handle(self, idx: int, handle: str, x: float, y: float, force_snap: bool = False) -> None:
+        s = self._shapes[idx]
+        t = s['type']
+
+        if t in ('line', 'arrow', 'dash'):
+            if handle == 'start':
+                s['x1'], s['y1'] = _snap_line_end(s['x2'], s['y2'], x, y, force_snap)
+            elif handle == 'end':
+                s['x2'], s['y2'] = _snap_line_end(s['x1'], s['y1'], x, y, force_snap)
+            return
+
+        if t not in ('rect', 'circle'):
+            return
+
+        if handle == 'n':
+            bottom = s['y'] + s['h']
+            top = y
+            s['y'] = min(top, bottom)
+            s['h'] = abs(bottom - top)
+            return
+        if handle == 's':
+            top = s['y']
+            bottom = y
+            s['y'] = min(top, bottom)
+            s['h'] = abs(bottom - top)
+            return
+        if handle == 'w':
+            right = s['x'] + s['w']
+            left = x
+            s['x'] = min(left, right)
+            s['w'] = abs(right - left)
+            return
+        if handle == 'e':
+            left = s['x']
+            right = x
+            s['x'] = min(left, right)
+            s['w'] = abs(right - left)
+            return
+
+        if handle in ('nw', 'ne', 'se', 'sw') and self._drag_anchor is not None:
+            ax, ay = self._drag_anchor
+            x1, y1 = x, y
+            if force_snap:
+                dx = x1 - ax
+                dy = y1 - ay
+                size = min(abs(dx), abs(dy))
+                x1 = ax + (-size if dx < 0 else size)
+                y1 = ay + (-size if dy < 0 else size)
+            s['x'] = min(x1, ax)
+            s['y'] = min(y1, ay)
+            s['w'] = abs(x1 - ax)
+            s['h'] = abs(y1 - ay)
+
+    def _shape_bounds(self, shape: dict) -> tuple:
+        t = shape['type']
+        if t in ('rect', 'circle'):
+            return shape['x'], shape['y'], shape['w'], shape['h']
+        if t == 'text':
+            fs = shape.get('font_size', 20)
+            w = len(shape.get('text', '')) * fs * 0.65
+            return shape['x'], shape['y'] - fs, w, fs
+        x1 = min(shape['x1'], shape['x2'])
+        y1 = min(shape['y1'], shape['y2'])
+        return x1, y1, abs(shape['x2'] - shape['x1']), abs(shape['y2'] - shape['y1'])
+
+    def _paint_selection(self, painter: QPainter, shape: dict) -> None:
+        x, y, w, h = self._shape_bounds(shape)
+        sel_pen = QPen(QColor('#50beff'), max(1.0, 1.5 / max(self._scale, 0.01)), Qt.DashLine)
+        sel_pen.setDashPattern([5.0 / max(self._scale, 0.01), 4.0 / max(self._scale, 0.01)])
+        painter.setPen(sel_pen)
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRect(QRectF(x, y, max(1.0, w), max(1.0, h)))
+
+        points = self._get_control_points(shape)
+        if not points:
+            return
+        r = max(4.0, 6.0 / max(self._scale, 0.01))
+        outline_pen = QPen(QColor('#2c8cff'), max(1.2, 1.8 / max(self._scale, 0.01)))
+        painter.setPen(outline_pen)
+        painter.setBrush(QBrush(QColor('#ffffff')))
+        for _hid, px, py in points:
+            painter.drawEllipse(QPointF(px, py), r, r)
 
     # ------------------------------------------------------------------
     # Shape rendering
@@ -9375,17 +9557,25 @@ class SnapshotEditorDialog(QDialog):
         png_bytes = bytes(buf)
 
         used_tool: Optional[str] = None
-        for tool, args in [
-            ('xclip',   ['xclip',   '-selection', 'clipboard', '-t', 'image/png']),
-            ('xsel',    ['xsel',    '--clipboard', '--input']),
-            ('wl-copy', ['wl-copy', '--type', 'image/png']),
-        ]:
-            if shutil.which(tool):
-                proc = subprocess.Popen(args, stdin=subprocess.PIPE)
-                proc.communicate(png_bytes)
-                if proc.returncode == 0:
-                    used_tool = tool
-                    break
+
+        # WSL: write directly to the Windows clipboard using PowerShell.
+        if self._is_wsl() and self._copy_image_to_windows_clipboard(png_bytes):
+            used_tool = 'powershell'
+
+        # Prefer tools that explicitly support image MIME types.
+        # xsel often accepts bytes but does not advertise/store image targets,
+        # which results in an empty image paste in many apps.
+        if used_tool is None:
+            for tool, args in [
+                ('wl-copy', ['wl-copy', '--type', 'image/png']),
+                ('xclip',   ['xclip',   '-selection', 'clipboard', '-t', 'image/png']),
+            ]:
+                if shutil.which(tool):
+                    proc = subprocess.Popen(args, stdin=subprocess.PIPE)
+                    proc.communicate(png_bytes)
+                    if proc.returncode == 0:
+                        used_tool = tool
+                        break
 
         if used_tool is None:
             clipboard = QApplication.clipboard()
@@ -9396,6 +9586,53 @@ class SnapshotEditorDialog(QDialog):
             clipboard.setPixmap(pixmap)
 
         self._show_status("Copied to clipboard!")
+
+    @staticmethod
+    def _is_wsl() -> bool:
+        if os.environ.get('WSL_DISTRO_NAME'):
+            return True
+        try:
+            with open('/proc/version', 'r', encoding='utf-8', errors='ignore') as f:
+                return 'microsoft' in f.read().lower()
+        except Exception:
+            return False
+
+    @staticmethod
+    def _copy_image_to_windows_clipboard(png_bytes: bytes) -> bool:
+        """WSL helper: copy PNG bytes to Windows clipboard as an image via PowerShell."""
+        if not shutil.which('powershell.exe'):
+            return False
+
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(prefix='btf_snapshot_', suffix='.png', delete=False) as tmp:
+                tmp.write(png_bytes)
+                tmp_path = tmp.name
+
+            # Convert /tmp/... to a Windows path visible to powershell.exe
+            win_path = subprocess.check_output(['wslpath', '-w', tmp_path], text=True).strip()
+            ps_script = (
+                "Add-Type -AssemblyName System.Windows.Forms; "
+                "Add-Type -AssemblyName System.Drawing; "
+                "$img = [System.Drawing.Image]::FromFile($args[0]); "
+                "[System.Windows.Forms.Clipboard]::SetImage($img); "
+                "$img.Dispose()"
+            )
+            proc = subprocess.run(
+                ['powershell.exe', '-NoProfile', '-STA', '-Command', ps_script, win_path],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            return proc.returncode == 0
+        except Exception:
+            return False
+        finally:
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
 
     def _on_save(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
