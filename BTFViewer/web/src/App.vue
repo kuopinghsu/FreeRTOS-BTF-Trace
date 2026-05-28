@@ -860,6 +860,10 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  if (_parseWorker) {
+    _parseWorker.terminate()
+    _parseWorker = null
+  }
   window.removeEventListener('keydown', onGlobalKeydown)
   document.removeEventListener('wheel', _onDocWheel, { capture: true })
 })

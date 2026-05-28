@@ -485,6 +485,8 @@ export class InteractionHandler {
     this._dragging = false
     this._canvas.style.cursor = 'crosshair'
     this._opts.onHoverTimeChange?.(null)
+    this._opts.onStiHover?.(null)
+    this._opts.onRowHover?.(null)
   }
 
   _onDblClick(e) {

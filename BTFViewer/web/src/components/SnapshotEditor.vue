@@ -211,11 +211,11 @@ const TOOLS = [
     icon: `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="3 2.5"><line x1="2" y1="14" x2="14" y2="2"/></svg>`,
   },
   {
-    id: 'rect', label: 'Rectangle',
+    id: 'rect', label: 'Rectangle (Shift: square)',
     icon: `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2" y="3" width="12" height="9" rx="1"/></svg>`,
   },
   {
-    id: 'circle', label: 'Circle / Ellipse',
+    id: 'circle', label: 'Circle / Ellipse (Shift: circle)',
     icon: `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><ellipse cx="8" cy="8" rx="6" ry="5"/></svg>`,
   },
   {
@@ -443,7 +443,7 @@ function onMouseDown(e) {
 
   _mouseDown = true
   _startPos  = pos
-  drawing.value = buildShape(tool.value, pos, pos)
+  drawing.value = buildShape(tool.value, pos, pos, e.shiftKey)
 }
 
 function onMouseMove(e) {
@@ -582,6 +582,18 @@ function isTrivial(shape) {
   return false
 }
 
+function constrainBox(p1, p2) {
+  const dx = p2.x - p1.x
+  const dy = p2.y - p1.y
+  const size = Math.min(Math.abs(dx), Math.abs(dy))
+  return {
+    x: p1.x + (dx < 0 ? -size : 0),
+    y: p1.y + (dy < 0 ? -size : 0),
+    w: size,
+    h: size,
+  }
+}
+
 // Snap angles: 0°, ±45°, ±90°, ±135°, 180°
 const _SNAP_ANGLES = [0, 45, 90, 135, 180, -135, -90, -45].map(d => d * Math.PI / 180)
 const _SNAP_THRESH = 2 * Math.PI / 180
@@ -611,12 +623,15 @@ function snapLineEnd(x1, y1, x2, y2, force = false) {
 function buildShape(type, p1, p2, forceSnap = false) {
   const base = { type, color: color.value, width: lineWidth.value }
   if (type === 'rect' || type === 'circle') {
-    return {
-      ...base,
+    const box = forceSnap ? constrainBox(p1, p2) : {
       x: Math.min(p1.x, p2.x),
       y: Math.min(p1.y, p2.y),
       w: Math.abs(p2.x - p1.x),
       h: Math.abs(p2.y - p1.y),
+    }
+    return {
+      ...base,
+      ...box,
     }
   }
   // Line-based tools: apply angle snapping to the endpoint

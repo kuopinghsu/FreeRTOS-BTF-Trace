@@ -131,6 +131,7 @@ import math
 import re
 import shutil
 import subprocess
+import traceback
 import zlib
 from bisect import bisect_left, bisect_right
 from collections import defaultdict
@@ -7219,7 +7220,7 @@ class _ParseThread(QThread):
         except _ParseCancelledError:
             return
         except Exception as exc:
-            self.errored.emit(str(exc))
+            self.errored.emit(f"{exc}\n\n{traceback.format_exc()}")
 
 # ---------------------------------------------------------------------------
 # Cursor status-bar widget
@@ -8792,6 +8793,18 @@ def _snap_line_end(x1: float, y1: float, x2: float, y2: float, force: bool = Fal
     return x2, y2
 
 
+def _constrain_box(x1: float, y1: float, x2: float, y2: float):
+    dx = x2 - x1
+    dy = y2 - y1
+    size = min(abs(dx), abs(dy))
+    return {
+        'x': x1 + (-size if dx < 0 else 0),
+        'y': y1 + (-size if dy < 0 else 0),
+        'w': size,
+        'h': size,
+    }
+
+
 class _AnnotationCanvas(QWidget):
     """Canvas widget that renders the background image and all annotation shapes."""
 
@@ -8868,7 +8881,14 @@ class _AnnotationCanvas(QWidget):
                 d['x2'], d['y2'] = _snap_line_end(d['x1'], d['y1'], x, y, force)
             else:
                 d['x2'] = x;  d['y2'] = y
-                d['w']  = x - d['x'];  d['h'] = y - d['y']
+                x1 = d['x1']; y1 = d['y1']
+                if bool(event.modifiers() & Qt.ShiftModifier):
+                    box = _constrain_box(x1, y1, x, y)
+                    d['x'] = box['x'];  d['y'] = box['y']
+                    d['w'] = box['w'];  d['h'] = box['h']
+                else:
+                    d['x'] = min(x1, x); d['y'] = min(y1, y)
+                    d['w'] = abs(x - x1); d['h'] = abs(y - y1)
             self.update()
         else:
             # Update cursor to hint that the shape under the pointer is movable
@@ -8891,7 +8911,14 @@ class _AnnotationCanvas(QWidget):
                 d['x2'], d['y2'] = _snap_line_end(d['x1'], d['y1'], x, y, force)
             else:
                 d['x2'] = x;  d['y2'] = y
-                d['w']  = x - d['x'];  d['h'] = y - d['y']
+                x1 = d['x1']; y1 = d['y1']
+                if bool(event.modifiers() & Qt.ShiftModifier):
+                    box = _constrain_box(x1, y1, x, y)
+                    d['x'] = box['x'];  d['y'] = box['y']
+                    d['w'] = box['w'];  d['h'] = box['h']
+                else:
+                    d['x'] = min(x1, x); d['y'] = min(y1, y)
+                    d['w'] = abs(x - x1); d['h'] = abs(y - y1)
             # Discard zero-size shapes (accidental single click with no drag)
             span = max(abs(d['x2'] - d['x1']), abs(d['y2'] - d['y1']),
                        abs(d['w']), abs(d['h']))
@@ -8989,8 +9016,8 @@ class SnapshotEditorDialog(QDialog):
         'arrow':  'Arrow',
         'line':   'Line',
         'dash':   'Dashed Line',
-        'rect':   'Rectangle',
-        'circle': 'Circle / Ellipse',
+        'rect':   'Rectangle  (Shift: square)',
+        'circle': 'Circle / Ellipse  (Shift: circle)',
         'text':   'Add Text (click to place)',
     }
     # SVG icon data for each tool (mirrors the web app icons)
@@ -9043,7 +9070,7 @@ class SnapshotEditorDialog(QDialog):
         max_w = screen.width() - 120
         max_h = screen.height() - 220
         iw, ih = pixmap.width(), pixmap.height()
-        self._scale: float = min(1.0, max_w / max(iw, 1), max_h / max(ih, 1))
+        self._scale: float = max(0.01, min(1.0, max_w / max(iw, 1), max_h / max(ih, 1)))
         self._disp_w: int = max(1, int(iw * self._scale))
         self._disp_h: int = max(1, int(ih * self._scale))
 

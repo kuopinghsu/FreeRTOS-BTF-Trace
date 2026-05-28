@@ -18,6 +18,11 @@ self.onmessage = function (e) {
     })
     self.postMessage({ type: 'done', trace })
   } catch (err) {
-    self.postMessage({ type: 'error', message: err.message })
+    self.postMessage({
+      type: 'error',
+      message: err?.message || String(err),
+      name: err?.name || 'Error',
+      stack: err?.stack || '',
+    })
   }
 }
