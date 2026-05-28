@@ -457,7 +457,7 @@ function onMouseMove(e) {
   }
 
   if (_mouseDown && _startPos) {
-    drawing.value = buildShape(tool.value, _startPos, pos)
+    drawing.value = buildShape(tool.value, _startPos, pos, e.shiftKey)
     scheduleRedraw()
     return
   }
@@ -479,7 +479,7 @@ function onMouseUp(e) {
   _mouseDown = false
   if (drawing.value && _startPos) {
     const pos   = getPos(e)
-    const shape = buildShape(tool.value, _startPos, pos)
+    const shape = buildShape(tool.value, _startPos, pos, e.shiftKey)
     if (!isTrivial(shape)) shapes.value.push(shape)
     drawing.value = null
   }
@@ -582,7 +582,33 @@ function isTrivial(shape) {
   return false
 }
 
-function buildShape(type, p1, p2) {
+// Snap angles: 0°, ±45°, ±90°, ±135°, 180°
+const _SNAP_ANGLES = [0, 45, 90, 135, 180, -135, -90, -45].map(d => d * Math.PI / 180)
+const _SNAP_THRESH = 2 * Math.PI / 180
+
+// force=true (Shift held): always snap to nearest axis
+// force=false: snap only when within 2° threshold
+function snapLineEnd(x1, y1, x2, y2, force = false) {
+  const dx   = x2 - x1
+  const dy   = y2 - y1
+  const dist = Math.hypot(dx, dy)
+  if (dist < 2) return { x: x2, y: y2 }
+  const angle = Math.atan2(dy, dx)   // atan2 range: [-π, π]
+  let best = null
+  let bestDiff = force ? Infinity : _SNAP_THRESH
+  for (const snap of _SNAP_ANGLES) {
+    let diff = angle - snap
+    if (diff >  Math.PI) diff -= 2 * Math.PI  // normalise to [-π, π]
+    if (diff < -Math.PI) diff += 2 * Math.PI
+    const abs = Math.abs(diff)
+    if (abs < bestDiff) { bestDiff = abs; best = snap }
+  }
+  return best !== null
+    ? { x: x1 + dist * Math.cos(best), y: y1 + dist * Math.sin(best) }
+    : { x: x2, y: y2 }
+}
+
+function buildShape(type, p1, p2, forceSnap = false) {
   const base = { type, color: color.value, width: lineWidth.value }
   if (type === 'rect' || type === 'circle') {
     return {
@@ -593,7 +619,11 @@ function buildShape(type, p1, p2) {
       h: Math.abs(p2.y - p1.y),
     }
   }
-  return { ...base, x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y }
+  // Line-based tools: apply angle snapping to the endpoint
+  const end = (type === 'line' || type === 'arrow' || type === 'dash')
+    ? snapLineEnd(p1.x, p1.y, p2.x, p2.y, forceSnap)
+    : { x: p2.x, y: p2.y }
+  return { ...base, x1: p1.x, y1: p1.y, x2: end.x, y2: end.y }
 }
 
 // ── Text editing ──────────────────────────────────────────────────────────────

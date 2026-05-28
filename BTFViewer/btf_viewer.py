@@ -8762,6 +8762,36 @@ def _point_to_seg_dist(px: float, py: float,
     return math.hypot(px - (x1 + t * dx), py - (y1 + t * dy))
 
 
+_SNAP_ANGLES = [a * math.pi / 180 for a in (0, 45, 90, 135, 180, -135, -90, -45)]
+_SNAP_THRESH = 2 * math.pi / 180
+
+
+def _snap_line_end(x1: float, y1: float, x2: float, y2: float, force: bool = False):
+    """Return (x2, y2) snapped to the nearest 45° axis.
+
+    force=True  (Shift held): always snap to nearest axis.
+    force=False : snap only when within 2° threshold.
+    """
+    dx, dy = x2 - x1, y2 - y1
+    dist = math.hypot(dx, dy)
+    if dist < 2:
+        return x2, y2
+    angle = math.atan2(dy, dx)   # range [-π, π]
+    best      = None
+    best_diff = math.inf if force else _SNAP_THRESH
+    for snap in _SNAP_ANGLES:
+        diff = angle - snap
+        if diff >  math.pi: diff -= 2 * math.pi
+        if diff < -math.pi: diff += 2 * math.pi
+        abs_diff = abs(diff)
+        if abs_diff < best_diff:
+            best_diff = abs_diff
+            best = snap
+    if best is not None:
+        return x1 + dist * math.cos(best), y1 + dist * math.sin(best)
+    return x2, y2
+
+
 class _AnnotationCanvas(QWidget):
     """Canvas widget that renders the background image and all annotation shapes."""
 
@@ -8833,8 +8863,12 @@ class _AnnotationCanvas(QWidget):
             self.update()
         elif ed._drawing is not None:
             d = ed._drawing
-            d['x2'] = x;  d['y2'] = y
-            d['w']  = x - d['x'];  d['h'] = y - d['y']
+            if d['type'] in ('line', 'arrow', 'dash'):
+                force = bool(event.modifiers() & Qt.ShiftModifier)
+                d['x2'], d['y2'] = _snap_line_end(d['x1'], d['y1'], x, y, force)
+            else:
+                d['x2'] = x;  d['y2'] = y
+                d['w']  = x - d['x'];  d['h'] = y - d['y']
             self.update()
         else:
             # Update cursor to hint that the shape under the pointer is movable
@@ -8852,8 +8886,12 @@ class _AnnotationCanvas(QWidget):
         elif ed._drawing is not None:
             x, y = ed._to_img(event.x(), event.y())
             d = ed._drawing
-            d['x2'] = x;  d['y2'] = y
-            d['w']  = x - d['x'];  d['h'] = y - d['y']
+            if d['type'] in ('line', 'arrow', 'dash'):
+                force = bool(event.modifiers() & Qt.ShiftModifier)
+                d['x2'], d['y2'] = _snap_line_end(d['x1'], d['y1'], x, y, force)
+            else:
+                d['x2'] = x;  d['y2'] = y
+                d['w']  = x - d['x'];  d['h'] = y - d['y']
             # Discard zero-size shapes (accidental single click with no drag)
             span = max(abs(d['x2'] - d['x1']), abs(d['y2'] - d['y1']),
                        abs(d['w']), abs(d['h']))
