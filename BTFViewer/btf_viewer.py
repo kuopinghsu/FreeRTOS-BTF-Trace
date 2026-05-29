@@ -141,7 +141,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 from PyQt5.QtCore import (
-    QBuffer, QByteArray, QEasingCurve, QEvent, QIODevice, QLineF, QMimeData,
+    QBuffer, QByteArray, QEasingCurve, QEvent, QEventLoop, QIODevice, QLineF, QMimeData,
     QPoint, QPointF, QRectF, QSize, Qt, QThread, QTimer,
     QPropertyAnimation, pyqtSignal,
 )
@@ -401,7 +401,6 @@ _STI_COLORS: Dict[str, QColor] = {
 # ===========================================================================
 # BTF Parser
 # ===========================================================================
-
 @dataclass
 class RawEvent:
     """One raw parsed line from the BTF file before segment reconstruction."""
@@ -1030,7 +1029,6 @@ def _parse_btf(filepath: str,
         tick_sti_times=sorted(tick_sti_times),
     )
 
-# ===========================================================================
 # Timeline Widget
 # ===========================================================================
 
@@ -1194,6 +1192,37 @@ _STI_PALETTE = [
 
 # Dynamic STI color assignments (kept separate from the user-config _STI_COLORS).
 _STI_DYNAMIC_COLORS: Dict[str, QColor] = {}
+
+def _clear_render_color_caches(include_complementary: bool = False) -> None:
+    """Clear all task/render color caches.
+
+    Keep this centralised so palette/state changes do not rely on duplicated
+    call-order across multiple code paths.
+    """
+    _task_color.cache_clear()
+    _blended_color.cache_clear()
+    _task_brush.cache_clear()
+    _task_pen_dark.cache_clear()
+    _blended_brush.cache_clear()
+    _blended_pen_dark.cache_clear()
+    if include_complementary:
+        _complementary_color_cached.cache_clear()
+
+def _set_colorblind_mode(enabled: bool) -> None:
+    """Apply colorblind palette mode and invalidate dependent caches."""
+    global _colorblind_active
+    _colorblind_active = bool(enabled)
+    _clear_render_color_caches()
+
+def _set_vertical_label_pixmap_mode(enabled: bool) -> None:
+    """Apply vertical-label rendering mode at module scope."""
+    global _VERTICAL_LABEL_USE_PIXMAP
+    _VERTICAL_LABEL_USE_PIXMAP = bool(enabled)
+
+def _reset_render_state_for_new_trace() -> None:
+    """Reset dynamic render state before loading a new trace."""
+    _STI_DYNAMIC_COLORS.clear()
+    _clear_render_color_caches(include_complementary=True)
 
 def _sti_color(note: str) -> QColor:
     """Return a stable color for a STI note, auto-assigning if unknown."""
@@ -1460,6 +1489,13 @@ def _nice_grid_step(timescale_per_px: float, target_px: float = 100.0) -> int:
             break
         best = step
     return best
+
+def _process_ui_events_safely() -> None:
+    """Pump paint/progress updates without allowing user-input re-entrancy."""
+    app = QApplication.instance()
+    if app is None:
+        return
+    app.processEvents(QEventLoop.ExcludeUserInputEvents)
 
 # ---------------------------------------------------------------------------
 # Scene
@@ -7156,7 +7192,7 @@ class _LoadProgressDialog(QWidget):
     def update_progress(self, pct: int, msg: str) -> None:
         self._bar.setValue(pct)
         self._msg_lbl.setText(msg)
-        QApplication.processEvents()
+        _process_ui_events_safely()
 
     def _centre_on_parent(self) -> None:
         """Reposition this dialog centred over its parent window."""
@@ -7195,7 +7231,7 @@ class _LoadProgressDialog(QWidget):
         self.activateWindow()
         # Force an immediate paint so the bar is visible before the thread starts.
         self.repaint()
-        QApplication.processEvents()
+        _process_ui_events_safely()
 
 # ---------------------------------------------------------------------------
 # Background parse thread
@@ -7421,19 +7457,16 @@ class _LegendTaskRow(QWidget):
 
     clicked   = pyqtSignal(str)   # task merge key
 
-    _BG_NORMAL  = "background: transparent;"
-    _BG_LOCKED  = "background: rgba(255,215,0,45);  border-radius:3px;"
-
     def __init__(self, task_name: str, display_name: str,
                  color: QColor, tooltip: str = "", is_dark: bool = True,
                  parent=None):
         super().__init__(parent)
         self._task_name = task_name
         self._locked    = False
+        self._hovered   = False
         # Theme-variant hover BG and swatch border
-        self._BG_HOVER  = ("background: rgba(255,255,255,18); border-radius:3px;"
-                            if is_dark else
-                            "background: rgba(0,0,0,20);       border-radius:3px;")
+        self._bg_hover = QColor(255, 255, 255, 18) if is_dark else QColor(0, 0, 0, 20)
+        self._bg_locked = QColor(255, 215, 0, 45)
         swatch_border   = "#555555" if is_dark else "#AAAAAA"
 
         hl = QHBoxLayout(self)
@@ -7454,10 +7487,7 @@ class _LegendTaskRow(QWidget):
 
         self.setCursor(Qt.PointingHandCursor)
         self.setAutoFillBackground(False)
-        self._set_bg(self._BG_NORMAL)
-
-    def _set_bg(self, css: str) -> None:
-        self.setStyleSheet(css)
+        self.setAttribute(Qt.WA_StyledBackground, False)
 
     def matches_filter(self, q: str) -> bool:
         """Case-insensitive filter match against merge-key or display name."""
@@ -7469,17 +7499,28 @@ class _LegendTaskRow(QWidget):
     def set_locked(self, locked: bool) -> None:
         """Update the visual appearance to reflect click-lock state."""
         self._locked = locked
-        self._set_bg(self._BG_LOCKED if locked else self._BG_NORMAL)
+        self.update()
 
     def enterEvent(self, event):
-        if not self._locked:
-            self._set_bg(self._BG_HOVER)
+        self._hovered = True
+        self.update()
         super().enterEvent(event)
 
     def leaveEvent(self, event):
-        if not self._locked:
-            self._set_bg(self._BG_NORMAL)
+        self._hovered = False
+        self.update()
         super().leaveEvent(event)
+
+    def paintEvent(self, event):
+        # Paint lightweight hover/locked background without stylesheet churn.
+        bg = self._bg_locked if self._locked else (self._bg_hover if self._hovered else None)
+        if bg is not None:
+            p = QPainter(self)
+            p.setRenderHint(QPainter.Antialiasing, True)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QBrush(bg))
+            p.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 3, 3)
+        super().paintEvent(event)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -7498,6 +7539,7 @@ class _LegendWidget(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(6, 6, 0, 6)  # no right margin: lets scroll bar sit flush at edge
         outer.setSpacing(4)
+        self.setObjectName("legend_root")
         self.setAutoFillBackground(True)
         self._is_dark: bool = True
         self._trace_ref = None        # cached for update_theme() rebuild
@@ -7524,22 +7566,39 @@ class _LegendWidget(QWidget):
 
         # Sticky-search layout: only the legend rows scroll.
         self._list_host = QWidget()
+        self._list_host.setObjectName("legend_list_host")
+        self._list_host.setAutoFillBackground(True)
         self._list_layout = QVBoxLayout(self._list_host)
         self._list_layout.setContentsMargins(0, 0, 0, 0)
         self._list_layout.setSpacing(2)
         self._scroll = QScrollArea()
+        self._scroll.setObjectName("legend_scroll")
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.NoFrame)
         self._scroll.setWidget(self._list_host)
+        self._scroll.viewport().setObjectName("legend_scroll_viewport")
+        self._scroll.viewport().setAutoFillBackground(True)
         outer.addWidget(self._scroll, 1)
 
     def update_theme(self, is_dark: bool) -> None:
         """Switch the legend palette and search-box styling to match the app theme."""
         self._is_dark = is_dark
+        bg = QColor("#1E1E1E") if is_dark else QColor("#F5F5F5")
         palette = self.palette()
-        palette.setColor(QPalette.Window,
-                         QColor("#1E1E1E") if is_dark else QColor("#F5F5F5"))
+        palette.setColor(QPalette.Window, bg)
         self.setPalette(palette)
+        # Keep child surfaces explicitly in sync; otherwise some platforms keep
+        # stale dark backgrounds on the scroll viewport when switching theme.
+        for w in (self._list_host, self._scroll.viewport()):
+            p = w.palette()
+            p.setColor(QPalette.Window, bg)
+            p.setColor(QPalette.Base, bg)
+            w.setPalette(p)
+        self._scroll.setStyleSheet(
+            f"QScrollArea#legend_scroll {{ background:{bg.name()}; border:none; }}"
+            f"QWidget#legend_scroll_viewport {{ background:{bg.name()}; }}"
+            f"QWidget#legend_list_host {{ background:{bg.name()}; }}"
+        )
         _fs = f"{getattr(QApplication.instance(), '_ui_font_size_val', UI_FONT_SIZE)}pt"
         if is_dark:
             self._search.setStyleSheet(
@@ -7956,6 +8015,7 @@ class _RcSettings:
 
     def __init__(self) -> None:
         self._cfg = configparser.ConfigParser()
+        self._dirty = False
         # Seed every section/key with the compiled defaults so callers always
         # get a valid value even when the rc file is absent or incomplete.
         for section, keys in self._DEFAULTS.items():
@@ -7974,8 +8034,14 @@ class _RcSettings:
                 fh.write("# btf_viewer.rc – RTOS BTF Viewer settings\n")
                 fh.write("# This file is managed automatically; you may edit it by hand.\n\n")
                 self._cfg.write(fh)
+            self._dirty = False
         except OSError:
             pass   # silently ignore write failures (read-only fs, etc.)
+
+    def flush(self) -> None:
+        """Flush pending deferred writes, if any."""
+        if self._dirty:
+            self._flush()
 
     # ---------------------------------------------------------------- getters
     def get(self, section: str, key: str, fallback: str = "") -> str:
@@ -8000,20 +8066,26 @@ class _RcSettings:
             return fallback
 
     # ---------------------------------------------------------------- setters
-    def set(self, section: str, key: str, value) -> None:
+    def set(self, section: str, key: str, value, *, flush: bool = True) -> None:
         """Set *key* in *section* and immediately flush to disk."""
         if not self._cfg.has_section(section):
             self._cfg.add_section(section)
         self._cfg.set(section, key, str(value))
-        self._flush()
+        if flush:
+            self._flush()
+        else:
+            self._dirty = True
 
-    def set_many(self, section: str, pairs: Dict[str, str]) -> None:
+    def set_many(self, section: str, pairs: Dict[str, str], *, flush: bool = True) -> None:
         """Set multiple keys at once with a single disk flush."""
         if not self._cfg.has_section(section):
             self._cfg.add_section(section)
         for key, value in pairs.items():
             self._cfg.set(section, key, str(value))
-        self._flush()
+        if flush:
+            self._flush()
+        else:
+            self._dirty = True
 
     def prune_section(self, section: str, keep: int) -> None:
         """Remove the oldest entries from *section*, keeping at most *keep* entries."""
@@ -8215,6 +8287,10 @@ class _SettingsDialog(QDialog):
     # apply a live preview while the dialog is still open.
     live_preview = pyqtSignal()
 
+    def _schedule_live_preview(self, *_args) -> None:
+        """Coalesce rapid control changes and defer preview to next UI turn."""
+        self._preview_timer.start()
+
     @staticmethod
     def _hline() -> QFrame:
         f = QFrame()
@@ -8363,6 +8439,13 @@ class _SettingsDialog(QDialog):
         self.setWindowTitle("Settings")
         self.setModal(True)
         self.setMinimumSize(580, 360)
+
+        # Defer heavy live-preview work until the current widget event
+        # (e.g. combo popup close) has finished to keep selection responsive.
+        self._preview_timer = QTimer(self)
+        self._preview_timer.setSingleShot(True)
+        self._preview_timer.setInterval(0)
+        self._preview_timer.timeout.connect(self.live_preview.emit)
 
         _ui_fs = f"{ui_font_size}pt"
 
@@ -8635,9 +8718,10 @@ class _SettingsDialog(QDialog):
         # -- Scoped stylesheet ------------------------------------------------
         self.setStyleSheet(self._dialog_ss(is_dark, _ui_fs))
 
-        # -- Live-preview wiring: broadcast any change to live_preview ---------
-        # Each signal sends a typed argument (int/float); lambda absorbs it with
-        # a default dummy parameter so all signals share a single emit adapter.
+        # -- Live-preview wiring -----------------------------------------------
+        # Each signal sends a typed argument (int/float).  Route them through
+        # a single-shot timer so expensive preview work runs after the current
+        # UI event completes (keeps combo selection close responsive).
         for _sig in (
             self._theme_combo.currentIndexChanged,
             self._colorblind_cb.stateChanged,
@@ -8659,7 +8743,7 @@ class _SettingsDialog(QDialog):
             self._sti_line_style_combo.currentIndexChanged,
             self._timescale_per_px_spin.valueChanged,
         ):
-            _sig.connect(lambda _=None: self.live_preview.emit())
+            _sig.connect(self._schedule_live_preview)
 
         self.adjustSize()
 
@@ -9690,6 +9774,7 @@ class MainWindow(QMainWindow):
         self._trace: Optional[BtfTrace] = None
         self._current_file: str = ""
         self._parse_thread = None
+        self._load_in_progress: bool = False
         self._progress_dialog: Optional[QProgressDialog] = None
         self._settings = _RcSettings()
 
@@ -9732,6 +9817,8 @@ class MainWindow(QMainWindow):
         self._build_menus()
         self._build_toolbar()
         self._build_status_bar()
+        # Re-apply the selected theme now that all widgets/docks exist.
+        self._apply_theme(self._is_dark)
         self._view_mode = "task"
 
         # Restore all persisted settings (geometry, zoom, orientation, …).
@@ -9952,7 +10039,7 @@ class MainWindow(QMainWindow):
         # Window geometry – only save non-maximised size/position so we can
         # restore the proper normal-state geometry if the user un-maximises.
         if self.isMaximized():
-            s.set("window", "maximized", "true")
+            s.set("window", "maximized", "true", flush=False)
         else:
             s.set_many("window", {
                 "maximized": "false",
@@ -9960,7 +10047,7 @@ class MainWindow(QMainWindow):
                 "height":    str(self.height()),
                 "x":         str(self.x()),
                 "y":         str(self.y()),
-            })
+            }, flush=False)
 
         # View settings
         s.set_many("view", {
@@ -9981,7 +10068,7 @@ class MainWindow(QMainWindow):
             "row_gap":           str(self._row_gap_val),
             "timescale_per_px_default": str(self._timescale_per_px_default_val),
             "hover_highlight":   str(self._hover_highlight_val).lower(),
-        })
+        }, flush=False)
 
         # Dock layout – serialise the full QMainWindow state (all dock sizes,
         # positions, tabbing) as a base64 string so it survives restarts.
@@ -9990,20 +10077,22 @@ class MainWindow(QMainWindow):
         s.set_many("window", {
             "dock_state":          bytes(_dock_bytes.toBase64()).decode("ascii"),
             "dock_layout_version": _DOCK_LAYOUT_VERSION,
-        })
+        }, flush=False)
 
         # Zoom – save current ns/px so we can re-apply it the next time the
         # same file is opened.  -1 means "use fit-to-width" (no saved zoom).
         if self._view._scene._trace is not None and not self._view._fit_mode:
-            s.set("zoom", "timescale_per_px", str(self._view._scene.timescale_per_px))
+            s.set("zoom", "timescale_per_px", str(self._view._scene.timescale_per_px), flush=False)
         else:
-            s.set("zoom", "timescale_per_px", "-1")
+            s.set("zoom", "timescale_per_px", "-1", flush=False)
 
         # Cursor positions – saved as space-separated ns timestamps so they are
         # restored the next time the same file is opened.
         _cursor_times = self._view._scene.cursor_times()
         s.set("cursors", "positions",
-              " ".join(str(t) for t in _cursor_times) if _cursor_times else "")
+              " ".join(str(t) for t in _cursor_times) if _cursor_times else "",
+              flush=False)
+        s.flush()
 
     def _teardown_scene(self) -> None:
         """Release all scene items and free trace data on a background thread.
@@ -10247,6 +10336,7 @@ class MainWindow(QMainWindow):
             QComboBox QAbstractItemView {{ background:{c['combo_view_bg']}; color:{c['text']};
                          selection-background-color:{c['accent']}; selection-color:#FFFFFF;
                          font-size:{_ui_fs}; }}
+            QDockWidget {{ border:1px solid {c['sep']}; }}
             QDockWidget::title {{ background:{c['dock_title_bg']}; color:{c['dock_title_fg']};
                                   padding:4px; font-size:{_ui_fs}; }}
             QMainWindow::separator {{ background:{c['sep']}; width:1px; height:1px; }}
@@ -10310,6 +10400,12 @@ class MainWindow(QMainWindow):
             )
         if hasattr(self, '_legend'):
             self._legend.update_theme(is_dark)
+        if hasattr(self, '_legend_dock') and self._legend_dock.widget() is not None:
+            _legend_host = self._legend_dock.widget()
+            _host_pal = _legend_host.palette()
+            _host_pal.setColor(QPalette.Window, QColor(c['win_bg']))
+            _host_pal.setColor(QPalette.Base, QColor(c['win_bg']))
+            _legend_host.setPalette(_host_pal)
         if hasattr(self, '_stats_panel'):
             self._stats_panel._ui_font_size = _ui_font_size
             if self._trace is not None:
@@ -10378,13 +10474,20 @@ class MainWindow(QMainWindow):
         # --- Legend dock (right panel) ---
         self._legend = _LegendWidget()
         self._legend.setMinimumWidth(180)
+        legend_host = QWidget()
+        legend_host.setObjectName("legend_dock_host")
+        legend_host.setAutoFillBackground(True)
+        legend_v = QVBoxLayout(legend_host)
+        legend_v.setContentsMargins(0, 0, 0, 0)
+        legend_v.setSpacing(0)
+        legend_v.addWidget(self._legend)
         # No setMaximumWidth — the widget must fill the full dock column width so the
         # QScrollArea's scrollbar lands flush at the right edge.  The dock column width
         # is governed by resizeDocks() below; a fixed cap here would leave a blank gap
         # to the right of the legend whenever the Marks dock makes the column wider.
         dock = QDockWidget("Legend", self)
         dock.setObjectName("dock_legend")
-        dock.setWidget(self._legend)
+        dock.setWidget(legend_host)
         dock.setFeatures(QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetMovable)
         self.addDockWidget(Qt.RightDockWidgetArea, dock)
         self._legend_dock = dock
@@ -10885,9 +10988,8 @@ class MainWindow(QMainWindow):
 
     def _set_vert_label_pixmap(self, enabled: bool, persist: bool = True) -> None:
         """Switch the vertical-label rendering strategy and rebuild the scene."""
-        global _VERTICAL_LABEL_USE_PIXMAP
         self._vert_label_pixmap_val = bool(enabled)
-        _VERTICAL_LABEL_USE_PIXMAP = self._vert_label_pixmap_val
+        _set_vertical_label_pixmap_mode(self._vert_label_pixmap_val)
         # Rebuild so the new label strategy takes effect immediately.
         # Skip the rebuild if the scene is in horizontal mode — the vertical-
         # label pixmap setting has no effect there, so the rebuild is wasted.
@@ -10899,16 +11001,8 @@ class MainWindow(QMainWindow):
 
     def _set_colorblind_safe(self, enabled: bool) -> None:
         """Switch the task colour palette to/from the Okabe-Ito colorblind-safe set."""
-        global _colorblind_active
         self._colorblind_val = bool(enabled)
-        _colorblind_active   = self._colorblind_val
-        # Invalidate lru_cache so next rebuild picks up the new palette.
-        _task_color.cache_clear()
-        _blended_color.cache_clear()
-        _task_brush.cache_clear()
-        _task_pen_dark.cache_clear()
-        _blended_brush.cache_clear()
-        _blended_pen_dark.cache_clear()
+        _set_colorblind_mode(self._colorblind_val)
         if self._view._scene._trace is not None:
             self._view._scene.rebuild()
         # Also refresh legend swatches which cache colors at build time.
@@ -11012,9 +11106,9 @@ class MainWindow(QMainWindow):
         except OSError:
             size, mtime = 0, 0
         entries.insert(0, {"path": norm, "size": size, "mtime": mtime})
-        self._settings.set("files", "recent_json", json.dumps(entries[:8], ensure_ascii=True))
+        self._settings.set("files", "recent_json", json.dumps(entries[:8], ensure_ascii=True), flush=False)
         # Keep legacy key for backwards compatibility
-        self._settings.set("files", "recent", "|".join(e["path"] for e in entries[:8]))
+        self._settings.set("files", "recent", "|".join(e["path"] for e in entries[:8]), flush=False)
 
     def _rebuild_recent_menu(self) -> None:
         self._recent_menu.clear()
@@ -11072,9 +11166,10 @@ class MainWindow(QMainWindow):
             "bookmarks": [{"id": b.id, "ns": b.ns, "label": b.label} for b in self._bookmarks],
             "annotations": [{"id": a.id, "ns": a.ns, "note": a.note} for a in self._annotations],
         }
-        self._settings.set("trace_state", key, json.dumps(payload, ensure_ascii=True))
+        self._settings.set("trace_state", key, json.dumps(payload, ensure_ascii=True), flush=False)
         # Keep the trace_state section bounded to the recent-files limit.
         self._settings.prune_section("trace_state", 8)
+        self._settings.flush()
 
     def _load_trace_state(self, path: str) -> None:
         self._bookmarks = []
@@ -11462,6 +11557,7 @@ class MainWindow(QMainWindow):
             return
         for sig in (self._parse_thread.done,
                     self._parse_thread.errored,
+                    self._parse_thread.cancelled,
                     self._parse_thread.progress):
             try:
                 sig.disconnect()
@@ -11469,6 +11565,11 @@ class MainWindow(QMainWindow):
                 pass
 
     def _open_file(self, path: str) -> None:
+        if self._load_in_progress:
+            self._status_file.setText("  A load is already in progress…")
+            return
+        self._load_in_progress = True
+
         path = os.path.abspath(os.path.expanduser(path))
 
         if self._trace is not None and self._current_file:
@@ -11493,6 +11594,7 @@ class MainWindow(QMainWindow):
                 self._parse_thread.wait(2000)
                 if self._parse_thread.isRunning():
                     self._status_file.setText("  Previous load is still stopping…")
+                    self._load_in_progress = False
                     return
             # Thread is fully stopped – safe to destroy PyQtSlotProxy objects.
             self._disconnect_parse_signals()
@@ -11501,18 +11603,9 @@ class MainWindow(QMainWindow):
         # Show a wait cursor and status message while parsing
         QApplication.setOverrideCursor(Qt.WaitCursor)
         self._status_file.setText(f"  Loading {os.path.basename(path)}…")
-        # Reset dynamic STI color assignments so new trace gets consistent colors.
-        _STI_DYNAMIC_COLORS.clear()
-        # Clear Qt-object LRU caches so stale task colors/brushes/pens from a
-        # previous trace do not linger in memory across loads.
-        _task_color.cache_clear()
-        _blended_color.cache_clear()
-        _task_brush.cache_clear()
-        _task_pen_dark.cache_clear()
-        _blended_brush.cache_clear()
-        _blended_pen_dark.cache_clear()
-        _complementary_color_cached.cache_clear()
-        QApplication.processEvents()
+        # Reset dynamic render state so new traces never inherit stale colors.
+        _reset_render_state_for_new_trace()
+        _process_ui_events_safely()
 
         # Progress dialog – created before closures so progress_dialog is defined.
         progress_dialog = _LoadProgressDialog(
@@ -11528,6 +11621,7 @@ class MainWindow(QMainWindow):
                 pass
             if self._progress_dialog is progress_dialog:
                 self._progress_dialog = None
+            self._load_in_progress = False
             if QApplication.overrideCursor() is not None:
                 QApplication.restoreOverrideCursor()
 
@@ -11540,7 +11634,7 @@ class MainWindow(QMainWindow):
             # would be dispatched by sendPostedEvents → SIGBUS crash.
             self._disconnect_parse_signals()
             progress_dialog.update_progress(100, "Building scene…")
-            QApplication.processEvents()   # let the dialog repaint before heavy build
+            _process_ui_events_safely()   # let the dialog repaint before heavy build
             self._parse_thread = None
             try:
                 self._trace = trace
@@ -11551,14 +11645,14 @@ class MainWindow(QMainWindow):
                 self._settings.set_many("files", {
                     "last_file": path,
                     "last_dir":  os.path.dirname(path),
-                })
+                }, flush=False)
                 # Show the trace view BEFORE load_trace() so that
                 # viewport().width/height() already returns the real layout
                 # size when _fit_viewport_size() is called inside load_trace().
                 # (Hidden widgets report 0 px even though QStackedWidget has
                 # already allocated the correct geometry to all pages.)
                 self._stack.setCurrentIndex(1)
-                QApplication.processEvents()   # force layout pass → viewport settles
+                _process_ui_events_safely()   # force layout pass → viewport settles
                 self._view.load_trace(trace)
                 # Sync the displayed zoom-in limit with the per-trace-unit scaled
                 # default that set_trace() computed (2 ns/px converted to trace units).
@@ -11577,7 +11671,7 @@ class MainWindow(QMainWindow):
                     self._view.zoom_changed.emit(self._view._scene.timescale_per_px)
                 else:
                     # Clear any stale positive zoom so the next save writes -1.
-                    self._settings.set("zoom", "timescale_per_px", "-1")
+                    self._settings.set("zoom", "timescale_per_px", "-1", flush=False)
                     self._view.zoom_changed.emit(self._view._scene.timescale_per_px)
 
                 # Restore saved cursor positions (same file only)
@@ -11591,7 +11685,7 @@ class MainWindow(QMainWindow):
                     except ValueError:
                         pass  # malformed rc entry – skip silently
                 progress_dialog.update_progress(100, "Building legend…")
-                QApplication.processEvents()
+                _process_ui_events_safely()
                 self._legend.rebuild(trace, show_sti=self._show_sti)
                 self._stats_panel._ui_font_size = self._ui_font_size_val
                 self._stats_panel.rebuild(trace)
@@ -11618,6 +11712,7 @@ class MainWindow(QMainWindow):
                 )
                 self._save_recent_files(path)
                 self._rebuild_recent_menu()
+                self._settings.flush()
             except (ValueError, RuntimeError, KeyError, OSError) as exc:
                 self._status_file.setText("  No file loaded")
                 QMessageBox.critical(self, "Render Error",
@@ -11650,7 +11745,15 @@ class MainWindow(QMainWindow):
         thread.progress.connect(progress_dialog.update_progress)
         # Keep a reference so the thread is not garbage-collected
         self._parse_thread = thread
-        thread.start()
+        try:
+            thread.start()
+        except Exception as exc:
+            _teardown_loading_dialog()
+            self._disconnect_parse_signals()
+            self._parse_thread = None
+            self._status_file.setText("  No file loaded")
+            QMessageBox.critical(self, "Load Error",
+                                 f"Failed to start parser thread:\n{path}\n\n{exc}")
 
     @_dialog_guard
     def _on_save_image(self) -> None:
@@ -12552,7 +12655,7 @@ def main() -> None:
 
     win = MainWindow()
     win.show()
-    QApplication.processEvents()  # ensure the window is painted before any file open
+    _process_ui_events_safely()  # ensure the window is painted before any file open
 
     if len(sys.argv) > 1:
         path = sys.argv[1]
