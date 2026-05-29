@@ -182,7 +182,7 @@ UI_FONT_SIZE             = 8    # Application UI font: menus, toolbar, status ba
 # so the pixmap path (render text horizontally, then rotate the image) produces
 # much crisper labels.  Enabled by default on Windows; other platforms use the
 # original QGraphicsTextItem approach which works correctly with PreferAntialias.
-_VERTICAL_LABEL_USE_PIXMAP: bool = sys.platform == "win32"
+_VERTICAL_LABEL_USE_PIXMAP_DEFAULT: bool = sys.platform == "win32"
 
 # ---- Layout ---------------------------------------------------------------
 LABEL_WIDTH              = 160  # Width of the frozen task-label column (px).
@@ -272,8 +272,15 @@ _PALETTE_COLORBLIND = [
     "#000000",  # black
 ]
 
-# Set True when Settings → Appearance 'Colorblind-safe colors' is enabled.
-_colorblind_active: bool = False
+@dataclass
+class _RenderRuntimeState:
+    """Process-local mutable render toggles and cache-affecting state."""
+
+    colorblind_active: bool = False
+    vertical_label_use_pixmap: bool = _VERTICAL_LABEL_USE_PIXMAP_DEFAULT
+
+
+_RENDER_RUNTIME = _RenderRuntimeState()
 
 # Colour map for core header dots.
 # Core dot / header colors – 16 hand-picked distinct hues that cycle for
@@ -1126,7 +1133,7 @@ def _task_color(task_raw: str) -> QColor:
         return _SPECIAL_COLORS[name]
     # Use a deterministic hash so palette selection is stable across runs.
     _key = _task_merge_key(task_raw).encode("utf-8", errors="replace")
-    palette = _PALETTE_COLORBLIND if _colorblind_active else _PALETTE
+    palette = _PALETTE_COLORBLIND if _RENDER_RUNTIME.colorblind_active else _PALETTE
     idx = zlib.crc32(_key) % len(palette)
     return QColor(palette[idx])
 
@@ -1210,14 +1217,12 @@ def _clear_render_color_caches(include_complementary: bool = False) -> None:
 
 def _set_colorblind_mode(enabled: bool) -> None:
     """Apply colorblind palette mode and invalidate dependent caches."""
-    global _colorblind_active
-    _colorblind_active = bool(enabled)
+    _RENDER_RUNTIME.colorblind_active = bool(enabled)
     _clear_render_color_caches()
 
 def _set_vertical_label_pixmap_mode(enabled: bool) -> None:
     """Apply vertical-label rendering mode at module scope."""
-    global _VERTICAL_LABEL_USE_PIXMAP
-    _VERTICAL_LABEL_USE_PIXMAP = bool(enabled)
+    _RENDER_RUNTIME.vertical_label_use_pixmap = bool(enabled)
 
 def _reset_render_state_for_new_trace() -> None:
     """Reset dynamic render state before loading a new trace."""
@@ -1308,7 +1313,7 @@ def _make_rotated_label(scene, text: str, font: "QFont", color: "QColor",
     """Add an antialiased rotated label to *scene*.
 
     Two rendering strategies are available, selected by the module-level flag
-    *_VERTICAL_LABEL_USE_PIXMAP* (default: True on Windows, False elsewhere):
+    *_VERTICAL_LABEL_USE_PIXMAP_DEFAULT* (default: True on Windows, False elsewhere):
 
     Pixmap strategy (Windows workaround)
         Renders the text onto a QPixmap horizontally — where all platforms
@@ -1328,7 +1333,7 @@ def _make_rotated_label(scene, text: str, font: "QFont", color: "QColor",
     **bottom edge** of the label in scene coordinates — the label text grows
     upward from that point in both rendering paths.
     """
-    if _VERTICAL_LABEL_USE_PIXMAP:
+    if _RENDER_RUNTIME.vertical_label_use_pixmap:
         # --- Pixmap path: render text at native res, then rotate the image ---
         pm_font = QFont(font)
         fm = QFontMetrics(pm_font)
@@ -7999,7 +8004,7 @@ class _RcSettings:
             "show_find":         "false",
             # Vertical-mode label rendering workaround: on Windows, GDI cannot
             # antialias rotated text, so the pixmap path is the better default.
-            "vert_label_pixmap": str(_VERTICAL_LABEL_USE_PIXMAP).lower(),
+            "vert_label_pixmap": str(_VERTICAL_LABEL_USE_PIXMAP_DEFAULT).lower(),
         },
         "zoom": {
             "timescale_per_px": "-1",
@@ -8016,6 +8021,7 @@ class _RcSettings:
     def __init__(self) -> None:
         self._cfg = configparser.ConfigParser()
         self._dirty = False
+        self._last_error: str = ""
         # Seed every section/key with the compiled defaults so callers always
         # get a valid value even when the rc file is absent or incomplete.
         for section, keys in self._DEFAULTS.items():
@@ -8035,13 +8041,22 @@ class _RcSettings:
                 fh.write("# This file is managed automatically; you may edit it by hand.\n\n")
                 self._cfg.write(fh)
             self._dirty = False
+            self._last_error = ""
         except OSError:
-            pass   # silently ignore write failures (read-only fs, etc.)
+            self._last_error = "Unable to write settings file"
 
     def flush(self) -> None:
         """Flush pending deferred writes, if any."""
         if self._dirty:
             self._flush()
+
+    def last_error(self) -> str:
+        """Return the most recent settings write error, or an empty string."""
+        return self._last_error
+
+    def clear_error(self) -> None:
+        """Clear stored settings write error after the UI has reported it."""
+        self._last_error = ""
 
     # ---------------------------------------------------------------- getters
     def get(self, section: str, key: str, fallback: str = "") -> str:
@@ -8067,7 +8082,7 @@ class _RcSettings:
 
     # ---------------------------------------------------------------- setters
     def set(self, section: str, key: str, value, *, flush: bool = True) -> None:
-        """Set *key* in *section* and immediately flush to disk."""
+        """Set *key* in *section* and optionally flush to disk."""
         if not self._cfg.has_section(section):
             self._cfg.add_section(section)
         self._cfg.set(section, key, str(value))
@@ -8760,7 +8775,7 @@ class _SettingsDialog(QDialog):
         self._stats_cb.setChecked(True)
         self._marks_cb.setChecked(True)
         self._hover_hl_cb.setChecked(_HOVER_HIGHLIGHT_ENABLED)
-        self._vert_label_pixmap_cb.setChecked(_VERTICAL_LABEL_USE_PIXMAP)
+        self._vert_label_pixmap_cb.setChecked(_VERTICAL_LABEL_USE_PIXMAP_DEFAULT)
         self._label_width_spin.setValue(LABEL_WIDTH)
         self._row_height_spin.setValue(ROW_HEIGHT)
         self._row_gap_spin.setValue(ROW_GAP)
@@ -9773,7 +9788,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self._trace: Optional[BtfTrace] = None
         self._current_file: str = ""
-        self._parse_thread = None
+        self._parse_thread: Optional[_ParseThread] = None
         self._load_in_progress: bool = False
         self._progress_dialog: Optional[QProgressDialog] = None
         self._settings = _RcSettings()
@@ -9795,7 +9810,7 @@ class MainWindow(QMainWindow):
         self._sti_line_style_val:     str   = STI_LINE_STYLE
         self._timescale_per_px_default_val:  float = _TIMESCALE_PER_PX_DEFAULT
         self._hover_highlight_val:    bool  = _HOVER_HIGHLIGHT_ENABLED
-        self._vert_label_pixmap_val:  bool  = _VERTICAL_LABEL_USE_PIXMAP
+        self._vert_label_pixmap_val:  bool  = _RENDER_RUNTIME.vertical_label_use_pixmap
         self._colorblind_val:         bool  = False
         self._bookmarks: List[TraceBookmark] = []
         self._annotations: List[TraceAnnotation] = []
@@ -10013,17 +10028,14 @@ class MainWindow(QMainWindow):
         # making it safe to destroy the proxies.  The proxy ~QObject() then
         # calls QObject::removePostedEvents(this, 0), purging any already-
         # queued events so they cannot be replayed during sendPostedEvents.
-        if self._parse_thread is not None:
-            if self._parse_thread.isRunning():
-                self._parse_thread.requestInterruption()
-                # Wait up to 3 s; parse threads check interruption frequently.
-                self._parse_thread.wait(3000)
-            # Thread is now stopped – safe to destroy PyQtSlotProxy objects.
-            self._disconnect_parse_signals()
-            self._parse_thread = None
+        if not self._stop_parse_thread(wait_ms=3000):
+            event.ignore()
+            self._status_file.setText("  Parser is still stopping; please close again.")
+            return
 
         self._save_current_trace_state()
         self._persist_settings()
+        self._report_settings_io_failure(prefix="Settings save warning")
 
         # ---- 3. Hide the window immediately -----------------------------------
         # The window disappears right away so the user never sees a freeze while
@@ -10032,6 +10044,14 @@ class MainWindow(QMainWindow):
         self._teardown_scene()
 
         super().closeEvent(event)
+
+    def _report_settings_io_failure(self, prefix: str = "Settings warning") -> None:
+        """Surface any deferred settings I/O failure in the status area."""
+        err = self._settings.last_error()
+        if not err:
+            return
+        self.statusBar().showMessage(f"{prefix}: {err}", 6000)
+        self._settings.clear_error()
 
     def _persist_settings(self) -> None:
         """Write all runtime state to the config file (btf_viewer.rc)."""
@@ -10093,6 +10113,20 @@ class MainWindow(QMainWindow):
               " ".join(str(t) for t in _cursor_times) if _cursor_times else "",
               flush=False)
         s.flush()
+        self._report_settings_io_failure(prefix="Settings save warning")
+
+    def _stop_parse_thread(self, wait_ms: int) -> bool:
+        """Stop current parser thread safely; return True when fully stopped."""
+        if self._parse_thread is None:
+            return True
+        if self._parse_thread.isRunning():
+            self._parse_thread.requestInterruption()
+            self._parse_thread.wait(wait_ms)
+            if self._parse_thread.isRunning():
+                return False
+        self._disconnect_parse_signals()
+        self._parse_thread = None
+        return True
 
     def _teardown_scene(self) -> None:
         """Release all scene items and free trace data on a background thread.
@@ -10472,35 +10506,10 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self._stack)
 
         # --- Legend dock (right panel) ---
-        self._legend = _LegendWidget()
-        self._legend.setMinimumWidth(180)
-        legend_host = QWidget()
-        legend_host.setObjectName("legend_dock_host")
-        legend_host.setAutoFillBackground(True)
-        legend_v = QVBoxLayout(legend_host)
-        legend_v.setContentsMargins(0, 0, 0, 0)
-        legend_v.setSpacing(0)
-        legend_v.addWidget(self._legend)
-        # No setMaximumWidth — the widget must fill the full dock column width so the
-        # QScrollArea's scrollbar lands flush at the right edge.  The dock column width
-        # is governed by resizeDocks() below; a fixed cap here would leave a blank gap
-        # to the right of the legend whenever the Marks dock makes the column wider.
-        dock = QDockWidget("Legend", self)
-        dock.setObjectName("dock_legend")
-        dock.setWidget(legend_host)
-        dock.setFeatures(QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetMovable)
-        self.addDockWidget(Qt.RightDockWidgetArea, dock)
-        self._legend_dock = dock
+        self._build_legend_dock()
 
         # --- Statistics dock (bottom panel) ---
-        self._stats_panel = _StatsPanel()
-        self._stats_panel.task_clicked.connect(self._on_legend_task_clicked)
-        stats_dock = QDockWidget("Statistics", self)
-        stats_dock.setObjectName("dock_statistics")
-        stats_dock.setWidget(self._stats_panel)
-        stats_dock.setFeatures(QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetMovable)
-        self.addDockWidget(Qt.RightDockWidgetArea, stats_dock)
-        self._stats_dock = stats_dock
+        self._build_stats_dock()
 
         # --- Marks dock (bookmarks + annotations) ---
         marks_host = QWidget()
@@ -10681,6 +10690,35 @@ class MainWindow(QMainWindow):
         sc.highlight_changed.connect(
             lambda t, lk: self._legend.set_locked_task(t if lk else None)
         )
+
+    def _build_legend_dock(self) -> None:
+        """Create the legend dock and host container."""
+        self._legend = _LegendWidget()
+        self._legend.setMinimumWidth(180)
+        legend_host = QWidget()
+        legend_host.setObjectName("legend_dock_host")
+        legend_host.setAutoFillBackground(True)
+        legend_v = QVBoxLayout(legend_host)
+        legend_v.setContentsMargins(0, 0, 0, 0)
+        legend_v.setSpacing(0)
+        legend_v.addWidget(self._legend)
+        dock = QDockWidget("Legend", self)
+        dock.setObjectName("dock_legend")
+        dock.setWidget(legend_host)
+        dock.setFeatures(QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetMovable)
+        self.addDockWidget(Qt.RightDockWidgetArea, dock)
+        self._legend_dock = dock
+
+    def _build_stats_dock(self) -> None:
+        """Create the statistics dock."""
+        self._stats_panel = _StatsPanel()
+        self._stats_panel.task_clicked.connect(self._on_legend_task_clicked)
+        stats_dock = QDockWidget("Statistics", self)
+        stats_dock.setObjectName("dock_statistics")
+        stats_dock.setWidget(self._stats_panel)
+        stats_dock.setFeatures(QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetMovable)
+        self.addDockWidget(Qt.RightDockWidgetArea, stats_dock)
+        self._stats_dock = stats_dock
 
         self.setAcceptDrops(True)
 
@@ -11580,25 +11618,11 @@ class MainWindow(QMainWindow):
             self._progress_dialog = None
 
         # Abort any in-progress load before starting a new one.
-        # Always disconnect signals before dropping the reference – even a
-        # IMPORTANT: stop the thread BEFORE disconnecting signals.
-        # disconnect() destroys PyQtSlotProxy C++ objects; if the thread is
-        # still running, PyQtSlotProxy::unislot() may execute concurrently and
-        # call postEvent(this, ...) on the already-freed proxy → SIGBUS.
-        # Stopping first guarantees no new unislot() calls are in-flight.
-        # The proxy ~QObject() then calls removePostedEvents(this, 0) to purge
-        # any already-queued events.
-        if self._parse_thread is not None:
-            if self._parse_thread.isRunning():
-                self._parse_thread.requestInterruption()
-                self._parse_thread.wait(2000)
-                if self._parse_thread.isRunning():
-                    self._status_file.setText("  Previous load is still stopping…")
-                    self._load_in_progress = False
-                    return
-            # Thread is fully stopped – safe to destroy PyQtSlotProxy objects.
-            self._disconnect_parse_signals()
-            self._parse_thread = None
+        # _stop_parse_thread() preserves the required shutdown ordering.
+        if not self._stop_parse_thread(wait_ms=2000):
+            self._status_file.setText("  Previous load is still stopping…")
+            self._load_in_progress = False
+            return
 
         # Show a wait cursor and status message while parsing
         QApplication.setOverrideCursor(Qt.WaitCursor)
@@ -11637,82 +11661,7 @@ class MainWindow(QMainWindow):
             _process_ui_events_safely()   # let the dialog repaint before heavy build
             self._parse_thread = None
             try:
-                self._trace = trace
-                self._current_file = path
-                # Check whether to restore the saved zoom BEFORE updating last_file.
-                _prev_file  = self._settings.get("files", "last_file", "")
-                _saved_zoom = self._settings.get_float("zoom", "timescale_per_px", -1.0)
-                self._settings.set_many("files", {
-                    "last_file": path,
-                    "last_dir":  os.path.dirname(path),
-                }, flush=False)
-                # Show the trace view BEFORE load_trace() so that
-                # viewport().width/height() already returns the real layout
-                # size when _fit_viewport_size() is called inside load_trace().
-                # (Hidden widgets report 0 px even though QStackedWidget has
-                # already allocated the correct geometry to all pages.)
-                self._stack.setCurrentIndex(1)
-                _process_ui_events_safely()   # force layout pass → viewport settles
-                self._view.load_trace(trace)
-                # Sync the displayed zoom-in limit with the per-trace-unit scaled
-                # default that set_trace() computed (2 ns/px converted to trace units).
-                self._timescale_per_px_default_val = self._view._scene._timescale_per_px_default
-                self._refresh_zoom_ui_unit()
-                self._load_trace_state(path)
-                self._recompute_find_hits()
-                # Re-apply the saved zoom only when re-opening the exact same file
-                # AND the user was in zoom mode (not fit mode) when they closed.
-                # A saved zoom of -1 means "fit-to-width" – never restore it.
-                if _prev_file == path and _saved_zoom > 0:
-                    self._view._scene._timescale_per_px = max(
-                        self._view._scene._timescale_per_px_default, _saved_zoom)
-                    self._view._scene.rebuild()
-                    self._view._fit_mode = False
-                    self._view.zoom_changed.emit(self._view._scene.timescale_per_px)
-                else:
-                    # Clear any stale positive zoom so the next save writes -1.
-                    self._settings.set("zoom", "timescale_per_px", "-1", flush=False)
-                    self._view.zoom_changed.emit(self._view._scene.timescale_per_px)
-
-                # Restore saved cursor positions (same file only)
-                _saved_cursors = self._settings.get("cursors", "positions", "")
-                if _prev_file == path and _saved_cursors.strip():
-                    try:
-                        for _ns in [int(t) for t in _saved_cursors.split()]:
-                            self._view._scene.add_cursor(_ns)
-                        self._view.cursors_changed.emit(
-                            self._view._scene.cursor_times())
-                    except ValueError:
-                        pass  # malformed rc entry – skip silently
-                progress_dialog.update_progress(100, "Building legend…")
-                _process_ui_events_safely()
-                self._legend.rebuild(trace, show_sti=self._show_sti)
-                self._stats_panel._ui_font_size = self._ui_font_size_val
-                self._stats_panel.rebuild(trace)
-                # Clear undo/redo stacks when loading a new trace
-                self._undo_stack.clear()
-                self._redo_stack.clear()
-                self._act_undo.setEnabled(False)
-                self._act_redo.setEnabled(False)
-                if self._show_stats:
-                    self._stats_dock.show()
-                self._act_save_img.setEnabled(True)
-                self._act_save_svg.setEnabled(True)
-                self._act_copy_img.setEnabled(True)
-                fname = os.path.basename(path)
-                ts    = _format_time(trace.time_max - trace.time_min, trace.time_scale)
-                n_seg = len(trace.segments)
-                n_sti = len(trace.sti_events)
-                self.setWindowTitle(f"RTOS BTF Viewer – {fname}")
-                self._status_file.setText(f"  {fname}  |  span: {ts}")
-                self._status_file.setToolTip(
-                    f"tasks: {len(trace.tasks)}  "
-                    f"segments: {n_seg}  "
-                    f"STI events: {n_sti}"
-                )
-                self._save_recent_files(path)
-                self._rebuild_recent_menu()
-                self._settings.flush()
+                self._finalize_loaded_trace(trace, path, progress_dialog)
             except (ValueError, RuntimeError, KeyError, OSError) as exc:
                 self._status_file.setText("  No file loaded")
                 QMessageBox.critical(self, "Render Error",
@@ -11754,6 +11703,79 @@ class MainWindow(QMainWindow):
             self._status_file.setText("  No file loaded")
             QMessageBox.critical(self, "Load Error",
                                  f"Failed to start parser thread:\n{path}\n\n{exc}")
+
+    def _finalize_loaded_trace(self, trace: BtfTrace, path: str,
+                               progress_dialog: _LoadProgressDialog) -> None:
+        """Complete all post-parse UI/state updates for a successful load."""
+        self._trace = trace
+        self._current_file = path
+
+        # Check whether to restore the saved zoom BEFORE updating last_file.
+        prev_file = self._settings.get("files", "last_file", "")
+        saved_zoom = self._settings.get_float("zoom", "timescale_per_px", -1.0)
+        self._settings.set_many("files", {
+            "last_file": path,
+            "last_dir":  os.path.dirname(path),
+        }, flush=False)
+
+        self._stack.setCurrentIndex(1)
+        _process_ui_events_safely()   # force layout pass → viewport settles
+        self._view.load_trace(trace)
+        self._timescale_per_px_default_val = self._view._scene._timescale_per_px_default
+        self._refresh_zoom_ui_unit()
+        self._load_trace_state(path)
+        self._recompute_find_hits()
+
+        if prev_file == path and saved_zoom > 0:
+            self._view._scene._timescale_per_px = max(
+                self._view._scene._timescale_per_px_default, saved_zoom)
+            self._view._scene.rebuild()
+            self._view._fit_mode = False
+            self._view.zoom_changed.emit(self._view._scene.timescale_per_px)
+        else:
+            self._settings.set("zoom", "timescale_per_px", "-1", flush=False)
+            self._view.zoom_changed.emit(self._view._scene.timescale_per_px)
+
+        saved_cursors = self._settings.get("cursors", "positions", "")
+        if prev_file == path and saved_cursors.strip():
+            try:
+                for ns in [int(t) for t in saved_cursors.split()]:
+                    self._view._scene.add_cursor(ns)
+                self._view.cursors_changed.emit(self._view._scene.cursor_times())
+            except ValueError:
+                pass
+
+        progress_dialog.update_progress(100, "Building legend…")
+        _process_ui_events_safely()
+        self._legend.rebuild(trace, show_sti=self._show_sti)
+        self._stats_panel._ui_font_size = self._ui_font_size_val
+        self._stats_panel.rebuild(trace)
+
+        self._undo_stack.clear()
+        self._redo_stack.clear()
+        self._act_undo.setEnabled(False)
+        self._act_redo.setEnabled(False)
+        if self._show_stats:
+            self._stats_dock.show()
+        self._act_save_img.setEnabled(True)
+        self._act_save_svg.setEnabled(True)
+        self._act_copy_img.setEnabled(True)
+
+        fname = os.path.basename(path)
+        ts = _format_time(trace.time_max - trace.time_min, trace.time_scale)
+        n_seg = len(trace.segments)
+        n_sti = len(trace.sti_events)
+        self.setWindowTitle(f"RTOS BTF Viewer – {fname}")
+        self._status_file.setText(f"  {fname}  |  span: {ts}")
+        self._status_file.setToolTip(
+            f"tasks: {len(trace.tasks)}  "
+            f"segments: {n_seg}  "
+            f"STI events: {n_sti}"
+        )
+        self._save_recent_files(path)
+        self._rebuild_recent_menu()
+        self._settings.flush()
+        self._report_settings_io_failure(prefix="Settings save warning")
 
     @_dialog_guard
     def _on_save_image(self) -> None:
@@ -11877,46 +11899,48 @@ class MainWindow(QMainWindow):
 
     def _persist_settings_after_dlg(self, snap: dict) -> None:
         """Write to disk any settings that differ from the pre-dialog snapshot."""
+        updates: Dict[str, str] = {}
         if snap["is_dark"] != self._is_dark:
-            self._settings.set("view", "theme", "dark" if self._is_dark else "light")
+            updates["theme"] = "dark" if self._is_dark else "light"
         if snap["font_size"] != self._font_size_val:
-            self._settings.set("view", "font_size", str(self._font_size_val))
+            updates["font_size"] = str(self._font_size_val)
         if snap["ui_font_size"] != self._ui_font_size_val:
-            self._settings.set("view", "ui_font_size", str(self._ui_font_size_val))
+            updates["ui_font_size"] = str(self._ui_font_size_val)
         if snap["max_cursors"] != self._max_cursors_val:
-            self._settings.set("view", "max_cursors", str(self._max_cursors_val))
+            updates["max_cursors"] = str(self._max_cursors_val)
         if snap["show_sti"] != self._show_sti:
-            self._settings.set("view", "show_sti", str(self._show_sti).lower())
+            updates["show_sti"] = str(self._show_sti).lower()
         if snap["show_grid"] != self._show_grid:
-            self._settings.set("view", "show_grid", str(self._show_grid).lower())
+            updates["show_grid"] = str(self._show_grid).lower()
         if snap["show_legend"] != self._show_legend:
-            self._settings.set("view", "show_legend", str(self._show_legend).lower())
+            updates["show_legend"] = str(self._show_legend).lower()
         if snap["show_stats"] != self._show_stats:
-            self._settings.set("view", "show_stats", str(self._show_stats).lower())
+            updates["show_stats"] = str(self._show_stats).lower()
         if snap["show_marks"] != self._show_marks:
-            self._settings.set("view", "show_marks", str(self._show_marks).lower())
+            updates["show_marks"] = str(self._show_marks).lower()
         if snap["show_hover_highlight"] != self._hover_highlight_val:
-            self._settings.set("view", "hover_highlight", str(self._hover_highlight_val).lower())
+            updates["hover_highlight"] = str(self._hover_highlight_val).lower()
         if snap["vert_label_pixmap"] != self._vert_label_pixmap_val:
-            self._settings.set("view", "vert_label_pixmap",
-                               str(self._vert_label_pixmap_val).lower())
+            updates["vert_label_pixmap"] = str(self._vert_label_pixmap_val).lower()
         if snap["colorblind_safe"] != self._colorblind_val:
-            self._settings.set("view", "colorblind_safe", str(self._colorblind_val).lower())
+            updates["colorblind_safe"] = str(self._colorblind_val).lower()
         if snap["label_width"] != self._label_width_val:
-            self._settings.set("view", "label_width", str(self._label_width_val))
+            updates["label_width"] = str(self._label_width_val)
         if snap["row_height"] != self._row_height_val:
-            self._settings.set("view", "row_height", str(self._row_height_val))
+            updates["row_height"] = str(self._row_height_val)
         if snap["row_gap"] != self._row_gap_val:
-            self._settings.set("view", "row_gap", str(self._row_gap_val))
+            updates["row_gap"] = str(self._row_gap_val)
         if snap["sti_row_h"] != self._sti_row_h_val:
-            self._settings.set("view", "sti_row_h", str(self._sti_row_h_val))
+            updates["sti_row_h"] = str(self._sti_row_h_val)
         if snap["sti_waveform_h"] != self._sti_waveform_h_val:
-            self._settings.set("view", "sti_waveform_h", str(self._sti_waveform_h_val))
+            updates["sti_waveform_h"] = str(self._sti_waveform_h_val)
         if snap["sti_line_style"] != self._sti_line_style_val:
-            self._settings.set("view", "sti_line_style", self._sti_line_style_val)
+            updates["sti_line_style"] = self._sti_line_style_val
         if snap["timescale_per_px_default"] != self._timescale_per_px_default_val:
-            self._settings.set("view", "timescale_per_px_default",
-                               str(self._timescale_per_px_default_val))
+            updates["timescale_per_px_default"] = str(self._timescale_per_px_default_val)
+        if updates:
+            self._settings.set_many("view", updates)
+            self._report_settings_io_failure(prefix="Settings save warning")
 
     @_dialog_guard
     def _open_settings(self) -> None:
