@@ -7601,36 +7601,7 @@ class _LegendWidget(QWidget):
                 self._task_rows[_mk] = row
                 self._list_layout.addWidget(row)
 
-            seen_notes = sorted({
-                ev.note
-                for ev in trace.sti_events
-                if ev.note and not _is_tag_sti_channel(ev.target)
-            })
-            if show_sti and seen_notes:
-                sep = QFrame()
-                sep.setFrameShape(QFrame.HLine)
-                sep.setStyleSheet(f"color:{sep_color};")
-                self._list_layout.addWidget(sep)
-
-                hdr2 = QLabel(f"<b style='color:{hdr2_color}'>STI Events</b>")
-                hdr2.setTextFormat(Qt.RichText)
-                self._list_layout.addWidget(hdr2)
-
-                for note in seen_notes:
-                    color = _sti_color(note)
-                    row_w = QWidget()
-                    hl    = QHBoxLayout(row_w)
-                    hl.setContentsMargins(0, 0, 0, 0)
-                    hl.setSpacing(6)
-                    swatch = QLabel("▼")
-                    swatch.setStyleSheet(f"color:{color.name()};")
-                    swatch.setFixedWidth(14)
-                    hl.addWidget(swatch)
-                    lbl = QLabel(note)
-                    hl.addWidget(lbl)
-                    hl.addStretch()
-                    self._list_layout.addWidget(row_w)
-                    self._sti_rows.append((note.lower(), row_w))
+            # Legend is task-only by design: STI events are not listed here.
 
             self._list_layout.addStretch()
             self._filter_tasks(self._search.text())
