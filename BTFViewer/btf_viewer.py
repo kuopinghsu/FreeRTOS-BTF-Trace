@@ -7205,6 +7205,7 @@ class _ParseThread(QThread):
     """Parses a BTF file in a background thread, emitting progress updates."""
     done     = pyqtSignal(object)   # BtfTrace
     errored  = pyqtSignal(str)
+    cancelled = pyqtSignal()
     progress = pyqtSignal(int, str) # pct, message
 
     def __init__(self, path: str):
@@ -7219,7 +7220,7 @@ class _ParseThread(QThread):
                 cancel_check=self.isInterruptionRequested,
             ))
         except _ParseCancelledError:
-            return
+            self.cancelled.emit()
         except Exception as exc:
             self.errored.emit(f"{exc}\n\n{traceback.format_exc()}")
 
@@ -7600,7 +7601,12 @@ class _LegendWidget(QWidget):
                 self._task_rows[_mk] = row
                 self._list_layout.addWidget(row)
 
-            if show_sti and trace.sti_channels:
+            seen_notes = sorted({
+                ev.note
+                for ev in trace.sti_events
+                if ev.note and not _is_tag_sti_channel(ev.target)
+            })
+            if show_sti and seen_notes:
                 sep = QFrame()
                 sep.setFrameShape(QFrame.HLine)
                 sep.setStyleSheet(f"color:{sep_color};")
@@ -7610,7 +7616,6 @@ class _LegendWidget(QWidget):
                 hdr2.setTextFormat(Qt.RichText)
                 self._list_layout.addWidget(hdr2)
 
-                seen_notes = sorted({ev.note for ev in trace.sti_events if ev.note})
                 for note in seen_notes:
                     color = _sti_color(note)
                     row_w = QWidget()
@@ -7703,12 +7708,13 @@ class _StatsPanel(QWidget):
         self._clear()
         total_ns = trace.time_max - trace.time_min
         span_str = _format_time(total_ns, trace.time_scale)
+        sti_count = sum(1 for ev in trace.sti_events if not _is_tag_sti_channel(ev.target))
         _fs = f"{self._ui_font_size}pt"
 
         # -- Summary row ---------------------------------------------------
         self._ilay.addWidget(self._lbl(
             f"Span: {span_str}  |  Tasks: {len(trace.tasks)}  |  "
-            f"Segments: {len(trace.segments):,}  |  STI events: {len(trace.sti_events):,}",
+            f"Segments: {len(trace.segments):,}  |  STI events: {sti_count:,}",
             color="#888888",
             ui_fs=_fs,
         ))
@@ -11492,6 +11498,8 @@ class MainWindow(QMainWindow):
                 pass
 
     def _open_file(self, path: str) -> None:
+        path = os.path.abspath(os.path.expanduser(path))
+
         if self._trace is not None and self._current_file:
             self._save_current_trace_state()
 
@@ -11540,6 +11548,17 @@ class MainWindow(QMainWindow):
             f"Loading {os.path.basename(path)}…", self)
         progress_dialog.show_centered(self.geometry())
         self._progress_dialog = progress_dialog
+
+        def _teardown_loading_dialog() -> None:
+            try:
+                progress_dialog.close()
+                progress_dialog.deleteLater()
+            except RuntimeError:
+                pass
+            if self._progress_dialog is progress_dialog:
+                self._progress_dialog = None
+            if QApplication.overrideCursor() is not None:
+                QApplication.restoreOverrideCursor()
 
         def _on_done(trace):
             # Disconnect all signals FIRST, before processEvents() or dropping the
@@ -11633,27 +11652,30 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "Render Error",
                                      f"Failed to display:\n{path}\n\n{exc}")
             finally:
-                progress_dialog.close()   # close after all heavy work is done
-                if self._progress_dialog is progress_dialog:
-                    self._progress_dialog = None
-                QApplication.restoreOverrideCursor()
+                _teardown_loading_dialog()   # close after all heavy work is done
 
         def _on_error(msg):
             # Same rationale as _on_done: disconnect first to purge any
             # stale queued events before the thread / proxies are freed.
             self._disconnect_parse_signals()
-            progress_dialog.close()
-            if self._progress_dialog is progress_dialog:
-                self._progress_dialog = None
-            QApplication.restoreOverrideCursor()
+            _teardown_loading_dialog()
             self._parse_thread = None
             self._status_file.setText("  No file loaded")
             QMessageBox.critical(self, "Parse Error",
                                  f"Failed to parse:\n{path}\n\n{msg}")
 
+        def _on_cancelled():
+            # Cancellation can happen when a load is interrupted before
+            # done/errored handlers run. Ensure UI state is always restored.
+            self._disconnect_parse_signals()
+            _teardown_loading_dialog()
+            self._parse_thread = None
+            self._status_file.setText("  Load cancelled")
+
         thread = _ParseThread(path)
         thread.done.connect(_on_done)
         thread.errored.connect(_on_error)
+        thread.cancelled.connect(_on_cancelled)
         thread.progress.connect(progress_dialog.update_progress)
         # Keep a reference so the thread is not garbage-collected
         self._parse_thread = thread
@@ -12567,6 +12589,9 @@ def main() -> None:
             QTimer.singleShot(100, lambda: win._open_file(path))
     else:
         last = win._settings.get("files", "last_file", "")
+        if last and not os.path.isabs(last):
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            last = os.path.abspath(os.path.join(base_dir, last))
         if last and os.path.isfile(last):
             QTimer.singleShot(100, lambda: win._open_file(last))
 
