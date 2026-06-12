@@ -146,14 +146,7 @@
 #if configINCLUDE_OSTICK_EVENTS
 
 #ifndef traceTASK_INCREMENT_TICK
-# define traceTASK_INCREMENT_TICK( xTickCount ) do { \
-    int mask = taskENTER_CRITICAL_FROM_ISR();   \
-    btf_trace_add_event (                       \
-        (uint32_t)xTickCount,                   \
-        TRACE_EVENT_TASK_INCREMENT_TICK         \
-    );                                          \
-    taskEXIT_CRITICAL_FROM_ISR(mask);           \
-} while(0)
+# define traceTASK_INCREMENT_TICK( xTickCount ) addEVENT_ISR( (uint32_t)xTickCount, TRACE_EVENT_TASK_INCREMENT_TICK )
 #endif // traceTASK_INCREMENT_TICK
 
 #endif // configINCLUDE_OSTICK_EVENTS

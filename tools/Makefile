@@ -1,19 +1,22 @@
-CFLAGS  = -O3 -g -Wall -I../FreeRTOS-Trace
-LDFLAGS =
+BUILD_DIR ?= ../build/tools
+CFLAGS    = -O3 -g -Wall -I../FreeRTOS-Trace
+LDFLAGS   =
 
 SRC     = gentrace.c
-OBJECTS = $(SRC:.c=.o)
-EXE     = gentrace
+OBJECTS = $(BUILD_DIR)/gentrace.o
+EXE     = $(BUILD_DIR)/gentrace
 
-.SUFFIXS: .c .o
+.PHONY: all clean distclean
 
-.PHONY: clean
-
-%.o: %.c
-	$(CC) -c -o $@ $< $(CFLAGS)
+all: $(EXE)
 
 $(EXE): $(OBJECTS)
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $(EXE) $(OBJECTS)
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^
+
+$(BUILD_DIR)/%.o: %.c
+	mkdir -p $(BUILD_DIR)
+	$(CC) -c -o $@ $< $(CFLAGS)
 
 clean:
 	-$(RM) $(OBJECTS) $(EXE)

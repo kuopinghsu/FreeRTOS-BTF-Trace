@@ -53,9 +53,8 @@ dkms.conf
 
 FreeRTOS-Kernel/
 *.dis
-rvsim/rvsim
-tools/gentrace
-dump.bin
+trace.bin
+build
 
 # Generated trace files (can be very large; regenerate with gen_trace.py)
 # Keep the committed small examples in tracedata/ via negation rules.

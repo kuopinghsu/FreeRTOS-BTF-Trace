@@ -1,21 +1,19 @@
-FREERTOS_VER ?= V11.1.0
+FREERTOS_VER ?= V11.3.0
+RISCV_PREFIX ?= /opt/xpack-riscv-none-elf-gcc-15.2.0-1/bin/riscv-none-elf-
 
 all: check
-	make -C Demo
-	make -C tools
-	make -C rvsim
+	$(MAKE) -C Demo RISCV_PREFIX=$(RISCV_PREFIX)
+	$(MAKE) -C tools BUILD_DIR=$(abspath build/tools)
+	$(MAKE) -C sim
 
 run: all
-	make -C Demo run
+	$(MAKE) -C Demo run RISCV_PREFIX=$(RISCV_PREFIX)
 
 check:
 	[ -d FreeRTOS-Kernel ] || git clone -b ${FREERTOS_VER} https://github.com/FreeRTOS/FreeRTOS-Kernel.git FreeRTOS-Kernel
 
 clean:
-	make -C Demo clean
-	make -C tools clean
-	make -C rvsim clean
-	-rm tracedata/trace.*
+	-rm -rf build tracedata/trace.*
 
 distclean:
 	-rm -rf FreeRTOS-Kernel

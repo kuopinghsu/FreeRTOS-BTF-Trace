@@ -19,8 +19,7 @@ A related approach using [BareCTF](https://barectf.org/) and [Eclipse Trace Comp
 ```
 FreeRTOS trace hooks
   → btf_trace_add_*() (ring buffer in RAM)
-  → traceEND() / simulator syscall
-  → dump.bin
+  → traceEND() writes trace.bin via fopen/fwrite/fclose
   → tools/gentrace
   → .btf / .vcd
   → BTFViewer (desktop or web) / Trace Compass / GTKWave
@@ -31,10 +30,10 @@ FreeRTOS trace hooks
 ## Repository Structure
 
 ```
-FreeRTOS-Trace/   Trace library (hooks, ring buffer, optional live BTF dump)
+FreeRTOS-Trace/   Trace library (hooks, ring buffer, file dump via fopen)
 tools/            gentrace — binary dump → BTF or VCD
-rvsim/            Bundled RV32IM instruction-set simulator (syscall 0x99 → dump.bin)
-Demo/             Example FreeRTOS apps built for RISC-V, run under rvsim
+sim/              RV64 SMP instruction-set simulator (C++, supports --cores N)
+Demo/             FreeRTOS SMP demo built for RV64, run under sim/
 BTFViewer/        Interactive BTF viewer (PyQt5 desktop + Vue 3 web app)
 tracedata/        Sample outputs (example.btf, example.vcd)
 images/           Documentation screenshots
@@ -46,17 +45,71 @@ images/           Documentation screenshots
 
 ### Prerequisites
 
-The included demo targets **RISC-V** and runs on the bundled **`rvsim`** simulator (also compatible with external ISS tools such as [srv32](https://github.com/kuopinghsu/srv32)).
+The demo targets **RISC-V RV64** and runs on the included **`sim/`** simulator (a custom C++ RV64 ISS that supports SMP via `--cores N`).
 
-Install a RISC-V embedded toolchain (`riscv64-unknown-elf-gcc`, etc.) as described in the srv32 [Building toolchains](https://github.com/kuopinghsu/srv32#building-toolchains) section.
+Install the [xPack RISC-V Embedded GCC](https://github.com/xpack-dev-tools/riscv-none-elf-gcc-xpack) toolchain.  The default path expected by the build system is:
+
+```
+/opt/xpack-riscv-none-elf-gcc-15.2.0-1/bin/riscv-none-elf-gcc
+```
+
+Override with `RISCV_PREFIX` if yours is installed elsewhere:
+
+```bash
+make run RISCV_PREFIX=/path/to/riscv-none-elf-
+```
 
 ### Build and Run
 
 ```bash
+# Single-core (default)
 make run
+
+# SMP — 2 cores
+make CORES=2 run
+
+# SMP — 8 cores
+make CORES=8 run
 ```
 
-This clones FreeRTOS Kernel V11.1.0 (first run), builds the demo, runs it under `rvsim/rvsim`, and writes `tracedata/trace.btf` and `tracedata/trace.vcd` via `tools/gentrace`.
+On the first run, `FreeRTOS-Kernel` (V11.3.0) is cloned automatically.  
+The build produces:
+
+- `build/demo/examples/cores<N>/freertos_test.elf` — the FreeRTOS test binary
+- `build/sim/riscv64-sim` — the RV64 simulator
+- `build/tools/gentrace` — the trace converter
+
+After the simulator exits it writes `trace.bin`; `gentrace` converts it to `tracedata/trace.btf` and `tracedata/trace.vcd`.
+
+---
+
+## Demo
+
+The demo (`Demo/examples/freertos_test/`) runs six SMP stress tests:
+
+| # | Test | What it exercises |
+|---|------|-------------------|
+| 1 | Context-switch stress | Rapid voluntary yields across all cores |
+| 2 | Mutex contention | Priority-inheritance mutex under load |
+| 3 | Counting semaphore + mutex | Mixed synchronisation primitives |
+| 4 | Task notifications | Direct-to-task notification API |
+| 5 | Event groups | Multi-bit event synchronisation |
+| 6 | Queue stress | Producer/consumer queues at speed |
+
+Expected output (CORES=2 example):
+
+```
+freertos_test: starting
+  cores=2   workers=6    sem_slots=2   iter_fast=50   iter_slow=20
+test 1: context-switch stress       ... pass
+test 2: mutex contention            ... pass
+test 3: counting-sem + mutex        ... pass
+test 4: task notifications          ... pass
+test 5: event group                 ... pass
+test 6: queue stress                ... pass
+5034 events generated.
+freertos_test: all tests passed
+```
 
 ---
 
@@ -70,25 +123,19 @@ An interactive Gantt-style viewer is included in the `BTFViewer/` directory (des
 
 ```bash
 pip install PyQt5
-python BTFViewer/btf_viewer.py tracedata/example.btf
+python BTFViewer/btf_viewer.py tracedata/trace.btf
 ```
 
 See [`BTFViewer/README.md`](BTFViewer/README.md) for the full feature reference (zoom, cursors, trace compare, session restore, export, etc.).
 
 ### Eclipse Trace Compass
 
-Convert the binary dump to BTF format using `gentrace`, then open the resulting file in [Trace Compass](https://www.eclipse.org/tracecompass/):
-
-```bash
-tools/gentrace dump.bin trace.btf
-```
+Open `tracedata/trace.btf` directly in [Trace Compass](https://www.eclipse.org/tracecompass/).
 
 ### GTKWave / VCD Viewer
 
-Convert the binary dump to VCD format:
-
 ```bash
-tools/gentrace -v dump.bin trace.vcd
+gtkwave tracedata/trace.vcd
 ```
 
 ---
@@ -115,23 +162,21 @@ Enable tracing in config:
 
 ### 2. Implement the time source
 
-Edit `FreeRTOS-Trace/btf_port.h` and define the `xGetCycles()` macro to return the current system 32-bit cycle counter:
+Edit `FreeRTOS-Trace/btf_port.h` and define the `xGetCycles()` macro to return the current system cycle counter:
 
 ```c
 #define xGetCycles()  /* your platform timer, e.g. DWT cycle counter */
 ```
 
-On non-RISC-V targets, remove the `#error` guard and provide your own port block.
+The RISC-V port uses `portGET_RUN_TIME_COUNTER_VALUE()` which maps to `rdcycle`.
 
 ### 3. Choose dump mode
 
-| Mode | When to use | Configuration |
-|------|-------------|---------------|
-| **Buffer + host dump** | Production firmware, JTAG/mem dump | Do **not** define `PRINT_BTF_DUMP`; read `trace_data` from RAM after run |
-| **Simulator auto-dump** | rvsim / custom ISS with syscall `0x99` | Define `HAVE_SYS_DUMP` (default on `__riscv` in `btf_port.h`) |
-| **Live stdout BTF** | Quick bring-up only | Uncomment `#define PRINT_BTF_DUMP` in `btf_port.h`. Set `TIMESCALE_US` to `1` (microseconds, default) or `0` (nanoseconds) for the `#timeScale` header |
-
-For real targets, keep events in RAM and dump the `trace_data` symbol after `traceEND()` — do not rely on `sys_dump()` unless your simulator or bootloader provides it.
+| Mode | Configuration |
+|------|---------------|
+| **File dump** (default) | `HAVE_FILE_DUMP` in `btf_port.h` — writes `trace.bin` via `fopen`/`fwrite`/`fclose` at `traceEND()` |
+| **Live stdout BTF** | Uncomment `#define PRINT_BTF_DUMP` in `btf_port.h` |
+| **Buffer only** | Define neither — keep events in RAM and dump the `trace_data` symbol after the run via debugger/JTAG |
 
 ### 4. Add the source file to your build
 
@@ -139,39 +184,38 @@ Compile `FreeRTOS-Trace/btf_trace.c` as part of your project.
 
 ### 5. Start and stop tracing
 
-Call `traceSTART()` before the code you want to observe and `traceEND()` when done:
-
 ```c
+int main(void)
+{
 #if configUSE_TRACE_FACILITY
     traceSTART();
 #endif
 
-/* ... code under observation ... */
+    xTaskCreate( ... );
+    vTaskStartScheduler();
+}
 
+/* Inside the task that finishes last: */
 #if configUSE_TRACE_FACILITY
-    traceEND();
+    traceEND();   /* writes trace.bin */
 #endif
+exit(0);
 ```
 
-### 6. Locate the trace buffer
+### 6. SMP considerations
 
-After building, use `readelf` to find the address and size of the `trace_data` symbol:
+All trace hooks in `FreeRTOS-Trace/FreeRTOS-Trace.h` are protected by either `taskENTER_CRITICAL()` (task context) or `taskENTER_CRITICAL_FROM_ISR()` (ISR / context-switch context).
 
-```bash
-$ readelf -a task.elf | grep trace_data
-21: 00021d44 65572 OBJECT  LOCAL  DEFAULT    4 trace_data
-```
-
-Run the application and dump the reported byte count from the reported address to a binary file (or use `rvsim`, which writes `dump.bin` automatically via the dump syscall).
+The RISC-V SMP port (`Demo/port/RISC-V/port.c`) implements both the task lock and the ISR lock as **recursive** spinlocks (owner + count), mirroring the Xtensa `xt_mutex` design.  This allows `traceTASK_SWITCHED_OUT/IN` — which fire inside `vTaskSwitchContext` while the ISR lock is already held — to safely re-enter the same lock without deadlocking.
 
 ### 7. Convert to BTF or VCD
 
 ```bash
 # BTF format
-$ tools/gentrace dump.bin trace.btf
+tools/gentrace trace.bin trace.btf
 
 # VCD format
-$ tools/gentrace -v dump.bin trace.vcd
+tools/gentrace -v trace.bin trace.vcd
 ```
 
 ### 8. Open the trace
@@ -183,7 +227,7 @@ $ tools/gentrace -v dump.bin trace.vcd
 
 ## Memory & configuration
 
-Default trace buffer size is controlled by `configMAX_TRACE_EVENTS` and `configMAX_TRACE_TASKS` in `FreeRTOSConfig.h`. Each event is 12 bytes; task names add `max_tasks × max_taskname_len` bytes. The Demo uses 4096 events (~55 KB for events alone). When the ring buffer fills, older events are overwritten and a warning is printed.
+Default trace buffer size is controlled by `configMAX_TRACE_EVENTS` and `configMAX_TRACE_TASKS` in `FreeRTOSConfig.h`. Each event is 12 bytes; task names add `max_tasks × max_taskname_len` bytes. When the buffer fills, `btf_trace_add_event()` silently drops new events (no overwrite, no assert).
 
 ---
 

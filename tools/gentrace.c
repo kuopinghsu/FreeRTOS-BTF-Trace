@@ -486,7 +486,7 @@ int genbtf(
         current_index = ((current_index + 1) % trace_data->h.max_events);
     }
 
-    printf("%d events generated\n", trace_data->h.event_count);
+    printf("BTF %d events converted\n", trace_data->h.event_count);
 
     ret = 0;
 
@@ -633,7 +633,7 @@ int genvcd(
         current_index = ((current_index + 1) % trace_data->h.max_events);
     }
 
-    printf("%d events generated\n", trace_data->h.event_count);
+    printf("VCD %d events converted\n", trace_data->h.event_count);
 
     ret = 0;
 

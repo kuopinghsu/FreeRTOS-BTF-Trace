@@ -16,7 +16,7 @@
     .endm
 
 #ifndef portGET_RUN_TIME_COUNTER_VALUE
-#define portGET_RUN_TIME_COUNTER_VALUE() ({int cycles; asm volatile ("rdcycle %0" : "=r"(cycles)); cycles; })
+#define portGET_RUN_TIME_COUNTER_VALUE() ({unsigned long cycles; asm volatile ("rdcycle %0" : "=r"(cycles)); cycles; })
 #endif
 
 #endif // __SET_EXTENSIONS_H__

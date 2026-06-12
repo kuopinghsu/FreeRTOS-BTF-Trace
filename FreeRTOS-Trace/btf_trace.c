@@ -98,8 +98,14 @@ void btf_traceSTART(void) {
 void btf_traceEND(void) {
     trace_en = 0;
 
-#ifdef HAVE_SYS_DUMP
-    sys_dump((uintptr_t)&trace_data, (int)sizeof(trace_data));
+#ifdef HAVE_FILE_DUMP
+    do {
+        FILE *fp = fopen(TRACE_DUMP_FILENAME, "wb");
+        if (fp) {
+            fwrite(&trace_data, 1, sizeof(trace_data), fp);
+            fclose(fp);
+        }
+    } while (0);
 #endif
 #ifdef PRINT_BTF_DUMP
     btf_dump();
@@ -160,7 +166,8 @@ void btf_trace_add_event (
     event_t  event)
 {
     if (!trace_en) { return; }
-    assert (trace_data.h.current_index < configMAX_TRACE_EVENTS);
+
+    if (trace_data.h.current_index >= configMAX_TRACE_EVENTS) { return; }
 
     trace_data.d.event_lists[trace_data.h.current_index].timestamp = xGetCycles();
     trace_data.d.event_lists[trace_data.h.current_index].value = value;
@@ -234,7 +241,7 @@ void btf_dump(
 
     // Timestamp of the start of simulation or measurement. The format has to comply
     // with "ISO 8601 extended specification for representations of dates and times"
-    // YYYY-MMDDTHH:MM:SS. The time should be in UTC time (indicated by a “Z” at the
+    // YYYY-MMDDTHH:MM:SS. The time should be in UTC time (indicated by a "Z" at the
     // end)
     printf("#creationDate %04d-%02d-%02dT%02d:%02d:%02dZ\n", BUILD_YEAR, BUILD_MONTH,
            BUILD_DAY, BUILD_HOUR, BUILD_MIN, BUILD_SEC);
