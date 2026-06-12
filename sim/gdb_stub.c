@@ -134,7 +134,7 @@ static int parse_thread_spec(const char *str, int *pid, int *tid) {
         str++;
     }
 
-    char *dot = strchr(str, '.');
+    char *dot = (char*)strchr(str, '.');
     if (dot) {
         *pid = (int)strtol(str, NULL, 16);
         *tid = (int)strtol(dot + 1, NULL, 16);

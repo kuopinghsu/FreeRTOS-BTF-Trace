@@ -129,6 +129,7 @@ import html
 import itertools
 import json
 import math
+import time
 import re
 import shutil
 import subprocess
@@ -272,6 +273,19 @@ _HOVER_BISECT_MARGIN     = 3      # Neighbour scan window used in hoverMoveEvent
 _LOD_SUMMARY_BINS        = 4096
 # Second-level coarse summary used for deep zoom-out rebuilds.
 _LOD_SUMMARY_BINS_ULTRA  = 1024
+# Orthogonal scroll culling: keep at least this many rows/cols beyond the
+# viewport so fast vertical scrolling does not trigger a full rebuild every
+# few hundred pixels (critical for traces with hundreds of task rows).
+_ORTH_BUF_MIN_ROWS        = 40
+_ORTH_BUF_VIEWPORT_MULT   = 3.0
+# Pan-rebuild timers: heartbeat polls while scrolling; min interval caps how
+# often an in-flight scroll may trigger scene.clear()+rebuild.
+_PAN_HEARTBEAT_MS         = 100
+_PAN_HEARTBEAT_MIN_REBUILD_MS = 180
+_PAN_SETTLE_MS            = 120
+_NAV_SCROLL_DEBOUNCE_MS   = 120
+# Never draw grid lines closer than this (px); dense lines read as solid gray.
+_MIN_GRID_SPACING_PX      = 12.0
 
 # ---- Cursors --------------------------------------------------------------
 _MAX_CURSORS         = 8  # Hard upper bound - must equal len(_CURSOR_COLORS).
@@ -2187,14 +2201,20 @@ def _visible_segs(lod: SegLodData, vp: ViewClipParams) -> list:
 
 def _nice_grid_step(timescale_per_px: float, target_px: float = 100.0) -> int:
     """Return a 'nice' grid step (in ns) so that one step ~= target_px pixels."""
-    ideal_ns = timescale_per_px * target_px
-    best = _GRID_STEPS[0]
-    for step in _GRID_STEPS:
+    ideal_ns = max(float(timescale_per_px) * target_px, 1.0)
+    if ideal_ns <= _GRID_STEPS[-1]:
+        for step in _GRID_STEPS:
+            if step >= ideal_ns:
+                return step
+        return _GRID_STEPS[-1]
+    # Fit-to-window on long traces can need multi-second steps; extend the
+    # 1-2-5-10 decade ladder beyond the fixed microsecond table.
+    mag = 10.0 ** math.floor(math.log10(ideal_ns))
+    for mult in (1, 2, 5, 10):
+        step = int(round(mag * mult))
         if step >= ideal_ns:
-            best = step
-            break
-        best = step
-    return best
+            return max(step, 1)
+    return max(int(round(mag * 10)), 1)
 
 def _process_ui_events_safely() -> None:
     """Pump paint/progress updates without allowing user-input re-entrancy."""
@@ -2283,6 +2303,8 @@ class TimelineScene(QGraphicsScene):
         # first rebuild before a live view is attached.
         self._vp_scene_orth_lo: float = -1e18
         self._vp_scene_orth_hi: float = +1e18
+        # Half-width of the orthogonal culling margin (px), set in rebuild().
+        self._vp_orth_buf: float = 0.0
         # -- Frozen label-column items -----------------------------------
         # List of (item, orig_x_offset); repositioned on every scroll so
         # the label column stays pinned to the left edge of the viewport.
@@ -3381,9 +3403,18 @@ class TimelineScene(QGraphicsScene):
             self._vp_scene_orth_lo = -1e18
             self._vp_scene_orth_hi = +1e18
         else:
-            # Buffer of 20 rows/cols: wide enough that typical fast scrolling
-            # doesn't exhaust the pre-built region before the next rebuild fires.
-            _ORTH_BUF = (self._row_height + self._row_gap) * 20
+            _row_stride = self._row_height + self._row_gap
+            if self._horizontal:
+                _orth_extent = max(_row_stride, vp_rect.height())
+            else:
+                _orth_extent = max(_row_stride, vp_rect.width())
+            _visible_rows = max(1, int(_orth_extent / _row_stride))
+            _buf_rows = max(
+                _ORTH_BUF_MIN_ROWS,
+                int(_visible_rows * _ORTH_BUF_VIEWPORT_MULT),
+            )
+            _ORTH_BUF = _row_stride * _buf_rows
+            self._vp_orth_buf = _ORTH_BUF
             if self._horizontal:
                 vy_lo = view.mapToScene(vp_rect.topLeft()).y()
                 vy_hi = view.mapToScene(vp_rect.bottomLeft()).y()
@@ -4778,6 +4809,11 @@ class _RulerItem(QGraphicsItem):
         t_max    = trace.time_max
         exposed  = option.exposedRect
         step_ns  = _nice_grid_step(npp, 100)
+        step_px  = step_ns / max(npp, 1e-12)
+        draw_grid_lines = (
+            self._draw_grid and self._show_grid
+            and step_px >= _MIN_GRID_SPACING_PX
+        )
         off      = self._axis_offset
 
         if self._horiz:
@@ -4794,7 +4830,7 @@ class _RulerItem(QGraphicsItem):
             while t <= ns_hi:
                 if t >= t_min:
                     x = off + (t - t_min) / npp
-                    if self._draw_grid and self._show_grid:
+                    if draw_grid_lines:
                         painter.setPen(QPen(QColor("#555555"), 0.8))
                         painter.drawLine(QLineF(x, RULER_HEIGHT, x, self._total_h))
                     if self._draw_header:
@@ -4819,7 +4855,7 @@ class _RulerItem(QGraphicsItem):
             while t <= ns_hi:
                 if t >= t_min:
                     y = off + (t - t_min) / npp
-                    if self._draw_grid and self._show_grid:
+                    if draw_grid_lines:
                         painter.setPen(QPen(QColor("#3A3A3A"), 0.5))
                         painter.drawLine(QLineF(RULER_WIDTH, y, self._total_w, y))
                     if self._draw_header:
@@ -5866,6 +5902,7 @@ class _NavigatorPopup(QWidget):
         """Make the popup visible with a fade-in animation."""
         self._anim_out.stop()
         self._opacity_effect.setOpacity(self._opacity_effect.opacity())
+        self.reposition()
         super().show()
         self.raise_()
         self._anim_in.setStartValue(self._opacity_effect.opacity())
@@ -5880,13 +5917,16 @@ class _NavigatorPopup(QWidget):
         self._anim_out.start()
 
     def reposition(self) -> None:
-        """Move to the bottom-right of the parent widget."""
-        pw = self.parentWidget()
-        if pw is None:
+        """Pin to the bottom-right of the timeline canvas (inside scrollbars)."""
+        view = self.parentWidget()
+        if view is None:
             return
-        x = pw.width()  - self.W - self.MARGIN
-        y = pw.height() - self.H - self.MARGIN
-        self.move(max(0, x), max(0, y))
+        # Child of QGraphicsView, not its viewport: map through viewport
+        # geometry so the popup stays fixed when the scene scrolls.
+        vp = view.viewport() if hasattr(view, "viewport") else view
+        x = vp.x() + vp.width()  - self.W - self.MARGIN
+        y = vp.y() + vp.height() - self.H - self.MARGIN
+        self.move(max(vp.x(), x), max(vp.y(), y))
 
     def set_pixmap(self, pix: QPixmap) -> None:
         self._pix = pix
@@ -5928,7 +5968,7 @@ class TimelineView(QGraphicsView):
         self.setOptimizationFlags(
             QGraphicsView.DontAdjustForAntialiasing
         )
-        self.setViewportUpdateMode(QGraphicsView.FullViewportUpdate)
+        self.setViewportUpdateMode(QGraphicsView.SmartViewportUpdate)
         self.setDragMode(QGraphicsView.ScrollHandDrag)
         self.setBackgroundBrush(QBrush(QColor("#1E1E1E")))
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
@@ -6000,22 +6040,24 @@ class TimelineView(QGraphicsView):
         self._zoom_timer.timeout.connect(self._flush_zoom)
 
         # Two-timer scroll-rebuild strategy:
-        #   _pan_heartbeat: repeating, fires every 50ms WHILE the user is
-        #     scrolling.  Keeps the scene fresh during trackpad momentum by
-        #     doing a rebuild whenever the viewport has left the cached region.
-        #   _pan_timer (settle): single-shot, fires 120ms AFTER the last
-        #     scroll event for a final cleanup rebuild.
-        # Without the heartbeat, the settle timer is restarted on every
-        # scroll event and never fires during continuous scrolling, leaving
-        # blank rows once the orth-buffer is exhausted.
+        #   _pan_heartbeat: repeating, fires while the user is scrolling.
+        #     Rebuilds when the viewport leaves the cached orth/time region,
+        #     rate-limited so momentum scroll does not clear()+rebuild at 20fps.
+        #   _pan_timer (settle): single-shot, fires after the last scroll
+        #     event for a final strict cleanup rebuild.
         self._pan_timer = QTimer(self)
         self._pan_timer.setSingleShot(True)
-        self._pan_timer.setInterval(120)   # ms - settle after scroll stops
+        self._pan_timer.setInterval(_PAN_SETTLE_MS)
         self._pan_timer.timeout.connect(self._on_pan_timeout)
         self._pan_heartbeat = QTimer(self)
         self._pan_heartbeat.setSingleShot(False)
-        self._pan_heartbeat.setInterval(50) # ms - in-flight rebuild (~=20 fps)
+        self._pan_heartbeat.setInterval(_PAN_HEARTBEAT_MS)
         self._pan_heartbeat.timeout.connect(self._on_pan_heartbeat)
+        self._last_pan_rebuild_ms: float = 0.0
+        self._nav_scroll_timer = QTimer(self)
+        self._nav_scroll_timer.setSingleShot(True)
+        self._nav_scroll_timer.setInterval(_NAV_SCROLL_DEBOUNCE_MS)
+        self._nav_scroll_timer.timeout.connect(self._show_nav)
 
         # -- Fit / resize mode -------------------------------------------
         # Fit-to-window mode: when True, every resize re-runs fit_to_width().
@@ -6036,9 +6078,9 @@ class TimelineView(QGraphicsView):
         self._view_pos_by_orientation: Dict[bool, Tuple[int, float, float]] = {}
 
         # -- Navigator popup overlay ------------------------------------
-        # A 260x130 thumbnail that appears at the top-left of the canvas
-        # whenever the viewport is scrolled / zoomed while content overflows.
-        self._nav_popup = _NavigatorPopup(self.viewport())
+        # A 260x130 thumbnail at the bottom-right of the canvas whenever the
+        # viewport is scrolled / zoomed while content overflows.
+        self._nav_popup = _NavigatorPopup(self)
         self._nav_hide_timer = QTimer(self)
         self._nav_hide_timer.setSingleShot(True)
         self._nav_hide_timer.setInterval(1800)  # ms - fade-out after idle
@@ -7727,9 +7769,14 @@ class TimelineView(QGraphicsView):
         #     that row-culling skipped during the last rebuild.
         if dx != 0 or dy != 0:
             self._pan_timer.start()            # restart settle countdown
-            if not self._pan_heartbeat.isActive():
-                self._pan_heartbeat.start()    # begin continuous rebuild pump
-            self._show_nav()
+            # Only pump heartbeat rebuilds when the viewport is near or past
+            # the cached orth/time margin; in-buffer scroll is paint-only.
+            if self._needs_rebuild_for_scroll(strict=False):
+                if not self._pan_heartbeat.isActive():
+                    self._pan_heartbeat.start()
+            self._nav_scroll_timer.start()     # debounce minimap repaint
+        if self._nav_popup.isVisible():
+            self._nav_popup.reposition()
 
     def _reposition_frozen(self) -> None:
         """Move all frozen label-column scene items so they stay at the left edge."""
@@ -7809,23 +7856,34 @@ class TimelineView(QGraphicsView):
             return
         if self._scene._trace is None or self._zoom_timer.isActive():
             return
-        if self._needs_rebuild_for_scroll():
-            self._scene.rebuild()
+        if not self._needs_rebuild_for_scroll(strict=False):
+            return
+        now_ms = time.monotonic() * 1000.0
+        if now_ms - self._last_pan_rebuild_ms < _PAN_HEARTBEAT_MIN_REBUILD_MS:
+            return
+        self._last_pan_rebuild_ms = now_ms
+        self._scene.rebuild()
 
     def _on_pan_timeout(self) -> None:
-        """Final rebuild ~120 ms after scrolling stops."""
+        """Final rebuild after scrolling stops."""
         self._pan_heartbeat.stop()
         if self._scene._trace is None or self._zoom_timer.isActive():
             return
-        if self._needs_rebuild_for_scroll():
+        if self._needs_rebuild_for_scroll(strict=True):
+            self._last_pan_rebuild_ms = time.monotonic() * 1000.0
             self._scene.rebuild()
+        self._show_nav()
 
-    def _needs_rebuild_for_scroll(self) -> bool:
+    def _needs_rebuild_for_scroll(self, *, strict: bool = True) -> bool:
         """Return True when current viewport exceeds the last rebuild coverage.
 
         The scene stores expanded time/orthogonal ranges (_vp_ns_* and
         _vp_scene_orth_*) computed at the last rebuild. During scrolling we can
         skip expensive rebuilds while the viewport remains inside those ranges.
+
+        *strict=False* (heartbeat): require the viewport to penetrate further
+        into the culling margin before triggering rebuild, and use a smaller
+        time-axis hysteresis so fit-to-window vertical scroll stays cheap.
         """
         trace = self._scene._trace
         if trace is None:
@@ -7854,12 +7912,21 @@ class TimelineView(QGraphicsView):
         ns_lo = max(t_min, min(t_max, t_min + int((lo_coord - lw) * timescale_per_px)))
         ns_hi = max(t_min, min(t_max, t_min + int((hi_coord - lw) * timescale_per_px)))
 
+        time_slack = 0
+        orth_slack = 0.0
+        if not strict:
+            span = max(self._scene._vp_ns_hi - self._scene._vp_ns_lo, 1)
+            time_slack = max(int(span * 0.05), 1)
+            orth_slack = self._scene._vp_orth_buf * 0.25
+
         # Time-axis coverage exceeded -> need rebuild to repopulate segments.
-        if ns_lo < self._scene._vp_ns_lo or ns_hi > self._scene._vp_ns_hi:
+        if ns_lo < self._scene._vp_ns_lo - time_slack or ns_hi > self._scene._vp_ns_hi + time_slack:
             return True
 
         # Orthogonal coverage exceeded -> need rebuild to populate culled rows/cols.
-        if orth_lo < self._scene._vp_scene_orth_lo or orth_hi > self._scene._vp_scene_orth_hi:
+        if orth_lo < self._scene._vp_scene_orth_lo - orth_slack:
+            return True
+        if orth_hi > self._scene._vp_scene_orth_hi + orth_slack:
             return True
 
         return False
