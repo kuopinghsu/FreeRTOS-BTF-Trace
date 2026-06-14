@@ -53,8 +53,7 @@ _start:
 
 .Lenter_main:
     call main
-    li a0, 0                    /* exit code 0 */
-    call _exit
+    call _exit                  /* a0 = main() return value */
 
 5:
     wfi
@@ -62,12 +61,14 @@ _start:
 
 .size _start, . - _start
 
-/* Weak stub: single-core builds never have secondary harts reach this,
- * but the linker needs the symbol.  SMP port.c provides the strong version. */
+/* Weak stub for bare-metal SMP examples: secondary harts enter main().
+ * FreeRTOS builds link port.c which provides the strong override. */
 .section .text
 .weak vPortSecondaryHartEntry
 .type vPortSecondaryHartEntry, @function
 vPortSecondaryHartEntry:
+    call main
+    call _exit                  /* a0 = main() return value */
 2:  wfi
     j 2b
 .size vPortSecondaryHartEntry, . - vPortSecondaryHartEntry
