@@ -55,19 +55,13 @@
  * frequency. */
 #define configCPU_CLOCK_HZ    ( ( unsigned long ) 20000000 )
 
-/* CLINT memory map for the riscv64-sim platform.
- * mtime    lives at CLINT_BASE + 0xBFF8 = 0x0200BFF8
- * mtimecmp lives at CLINT_BASE + 0x4000 = 0x02004000  (per-hart, 8 bytes apart) */
-#define configMTIME_BASE_ADDRESS     ( 0x0200BFF8UL )
-#define configMTIMECMP_BASE_ADDRESS  ( 0x02004000UL )
-
 /******************************************************************************/
 /* Scheduling behaviour related definitions. **********************************/
 /******************************************************************************/
 
 /* configTICK_RATE_HZ sets frequency of the tick interrupt in Hz, normally
  * calculated from the configCPU_CLOCK_HZ value. */
-#define configTICK_RATE_HZ                         100
+#define configTICK_RATE_HZ                         1000
 
 /* Set configUSE_PREEMPTION to 1 to use pre-emptive scheduling.  Set
  * configUSE_PREEMPTION to 0 to use co-operative scheduling.
@@ -319,7 +313,7 @@
  * the build.  The application writer is responsible for providing the hook
  * function for any set to 1.  See https://www.freertos.org/a00016.html. */
 #define configUSE_IDLE_HOOK                   0
-#define configUSE_TICK_HOOK                   0
+#define configUSE_TICK_HOOK                   1
 #define configUSE_MALLOC_FAILED_HOOK          0
 #define configUSE_DAEMON_TASK_STARTUP_HOOK    0
 
@@ -500,10 +494,6 @@
 #define INCLUDE_xTaskAbortDelay                0
 #define INCLUDE_xTaskGetHandle                 0
 #define INCLUDE_xTaskResumeFromISR             1
-
-/* Trace definitions */
-#define configMAX_TRACE_TASKS                  1024
-#define configMAX_TRACE_EVENTS                 32768
 
 #if configUSE_TRACE_FACILITY
 #include "FreeRTOS-Trace.h"

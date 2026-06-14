@@ -19,7 +19,6 @@
 // SOFTWARE.
 
 #include <stdio.h>
-#include <string.h>
 #include <stdint.h>
 #include <inttypes.h>
 #include <assert.h>
@@ -69,6 +68,8 @@
 static volatile uint32_t trace_en;
 static TRACE trace_data;
 static int trace_wrap_warned;
+static uint32_t trace_last_tick;
+static int trace_last_tick_valid;
 
 static uint32_t last_timestamp;
 static uint64_t cyc_to_time_acc;
@@ -93,6 +94,7 @@ void btf_traceSTART(void) {
     last_timestamp = 0;
     cyc_to_time_acc = 0;
     trace_wrap_warned = 0;
+    trace_last_tick_valid = 0;
 }
 
 void btf_traceEND(void) {
@@ -124,18 +126,19 @@ void btf_trace_add_task (
     uint32_t task_id,
     event_t  event)
 {
+    int i;
     if (!trace_en) { return; }
 
-    if (task_id >= configMAX_TRACE_TASKS) {
-        printf("Warning: the maximum number of tasks allowed is exceeded and cannot be tracked.\n");
-        trace_en = 0;
-        return;
-    }
-
     // task_id is a unique ID, which will increase by 1 each time a TCB is created.
-    strncpy((char*)trace_data.d.task_lists[task_id], (char*)task_name,
-            configMAX_TRACE_TASK_NAME_LEN);
-    trace_data.d.task_lists[task_id][configMAX_TRACE_TASK_NAME_LEN] = 0;
+    // Copy task name with a local loop instead of strncpy() to avoid pulling in
+    // libc string helpers in the FreeRTOS firmware build.
+    i = 0;
+    while( i < ( configMAX_TRACE_TASK_NAME_LEN - 1 ) && task_name[ i ] != 0 )
+    {
+        trace_data.d.task_lists[ task_id ][ i ] = task_name[ i ];
+        i++;
+    }
+    trace_data.d.task_lists[ task_id ][ i ] = 0;
     trace_data.h.task_count++;
 
     trace_data.d.event_lists[trace_data.h.current_index].timestamp = xGetCycles();
@@ -167,8 +170,6 @@ void btf_trace_add_event (
 {
     if (!trace_en) { return; }
 
-    if (trace_data.h.current_index >= configMAX_TRACE_EVENTS) { return; }
-
     trace_data.d.event_lists[trace_data.h.current_index].timestamp = xGetCycles();
     trace_data.d.event_lists[trace_data.h.current_index].value = value;
 
@@ -192,6 +193,29 @@ void btf_trace_add_event (
     }
 }
 
+void btf_trace_increment_tick (
+    uint32_t xTickCount)
+{
+    UBaseType_t uxSavedInterruptStatus;
+
+    if (!trace_en) { return; }
+
+    /* Official FreeRTOS calls traceTASK_INCREMENT_TICK() before xTickCount is
+     * updated.  While the scheduler is suspended, core 0 may still take timer
+     * IRQs; each call passes the same xTickCount.  Drop those duplicates here
+     * so BTF has one STI TICK line per tick-number step. */
+    if (trace_last_tick_valid && trace_last_tick == xTickCount) {
+        return;
+    }
+
+    trace_last_tick = xTickCount;
+    trace_last_tick_valid = 1;
+
+    uxSavedInterruptStatus = taskENTER_CRITICAL_FROM_ISR();
+    btf_trace_add_event( xTickCount, TRACE_EVENT_TASK_INCREMENT_TICK );
+    taskEXIT_CRITICAL_FROM_ISR( uxSavedInterruptStatus );
+}
+
 #ifdef PRINT_BTF_DUMP
 
 #ifndef TIMESCALE_US
@@ -206,8 +230,7 @@ void btf_trace_add_event (
 #define get_taskname(n,i) n.d.task_lists[i]
 #define get_event(n,i) (&n.d.event_lists[i])
 
-// convert raw cycles count to a monotonic time
-// timestamp is a 32-bit counter that wraps at 2^32.
+// Reconstruct monotonic BTF time from xGetCycles() 32-bit raw stamps (wrap at 2^32).
 static uint64_t cyc_to_time(uint32_t timestamp) {
     if (timestamp < last_timestamp) {
         cyc_to_time_acc += ((uint64_t)(UINT32_MAX) + 1) * TIMESCALE / configCPU_CLOCK_HZ;
@@ -225,6 +248,9 @@ void btf_dump(
     int current_index;
     uint64_t current_time;
     EVENT *event;
+
+    last_timestamp = 0;
+    cyc_to_time_acc = 0;
 
     // Check header
     if (trace_data.h.header[0] != 'B' ||

@@ -82,5 +82,11 @@ export function isRestorableViewport(vp, trace) {
   const vpSpan = vp.timeEnd - vp.timeStart
   // Sentinel from _emptyViewport() / resetTabForLoad before session restore
   if (vp.timeStart === 0 && vp.timeEnd === 1 && vpSpan <= 1) return false
-  return vpSpan > 0 && vp.timeStart < hi && vp.timeEnd > lo
+  if (vpSpan <= 0 || vp.timeStart >= hi || vp.timeEnd <= lo) return false
+  const overlapLo = Math.max(vp.timeStart, lo)
+  const overlapHi = Math.min(vp.timeEnd, hi)
+  const overlap = overlapHi - overlapLo
+  // Reject saved zoom windows that overlap the trace by less than ~0.01% (min 1 µs/ms unit).
+  const minSpan = Math.max(1000, (hi - lo) * 0.0001)
+  return overlap >= minSpan
 }

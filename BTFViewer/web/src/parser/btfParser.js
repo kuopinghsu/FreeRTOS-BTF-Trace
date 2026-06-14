@@ -7,7 +7,7 @@
  *
  * Usage:
  *   import { parseBtf } from './parser/btfParser.js'
- *   const trace = parseBtf(fileText, progressCallback)
+ *   const trace = await parseBtf(fileText, progressCallback)
  *
  * progressCallback(pct, message) is optional; called with 0-100 + status string.
  */
@@ -20,6 +20,16 @@ import { buildMigrationIndex } from '../utils/migrationAnalysis.js'
 // LOD bin counts (match Python constants).
 const LOD_SUMMARY_BINS       = 4096
 const LOD_SUMMARY_BINS_ULTRA = 1024
+
+// Yield to the host event loop so progress callbacks can repaint (main thread).
+const LINE_YIELD_EVERY = 8192
+const TS_YIELD_EVERY   = 4096
+const LOD_YIELD_EVERY  = 8
+const STI_YIELD_EVERY  = 4
+
+function yieldToHost() {
+  return new Promise(resolve => setTimeout(resolve, 0))
+}
 
 // ---- Task-name helpers ----------------------------------------------------
 
@@ -69,9 +79,9 @@ function compareCores(a, b) {
  *
  * @param {string}   text              Full file content as a string.
  * @param {Function} [progressCallback] Called as (pct:number, msg:string).
- * @returns {object} BtfTrace
+ * @returns {Promise<object>} BtfTrace
  */
-export function parseBtf(text, progressCallback) {
+export async function parseBtf(text, progressCallback) {
   const progress = progressCallback || (() => {})
 
   // Reset STI colour state so colours are consistent across multiple file loads.
@@ -94,76 +104,94 @@ export function parseBtf(text, progressCallback) {
   const taskCreateRaw = new Map()
 
   // -----------------------------------------------------------------------
-  // Phase 1 – File reading
+  // Phase 1 – File reading (line-at-a-time so progress can update during scan)
   // -----------------------------------------------------------------------
-  progress(2, 'Reading file…')
+  progress(1, 'Reading file…')
+  await yieldToHost()
 
   let skippedLines = 0
-  const lines = text.split('\n')
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim()
-    if (!line) continue
+  const textLen = text.length
+  let pos = 0
+  let lineIndex = 0
 
-    if (line.startsWith('#')) {
-      const stripped = line.slice(1).trim()
-      const spaceIdx = stripped.indexOf(' ')
-      if (spaceIdx !== -1) {
-        const key = stripped.slice(0, spaceIdx)
-        const value = stripped.slice(spaceIdx + 1).trim()
-        if (/^[\w.-]+$/.test(key)) meta[key] = value
-        if (key === 'timeScale') timeScale = value
+  while (pos <= textLen) {
+    let lineEnd = text.indexOf('\n', pos)
+    if (lineEnd === -1) lineEnd = textLen
+    const line = text.slice(pos, lineEnd).trim()
+    pos = lineEnd < textLen ? lineEnd + 1 : textLen + 1
+
+    if (line) {
+      if (line.startsWith('#')) {
+        const stripped = line.slice(1).trim()
+        const spaceIdx = stripped.indexOf(' ')
+        if (spaceIdx !== -1) {
+          const key = stripped.slice(0, spaceIdx)
+          const value = stripped.slice(spaceIdx + 1).trim()
+          if (/^[\w.-]+$/.test(key)) meta[key] = value
+          if (key === 'timeScale') timeScale = value
+        }
+      } else {
+        const parts = line.split(',')
+        // Re-join excess fields into the note slot so commas within notes are preserved.
+        if (parts.length > 8) parts[7] = parts.splice(7).join(',')
+        if (parts.length < 7) {
+          skippedLines++
+        } else {
+          const t = parseInt(parts[0], 10)
+          if (isNaN(t) || !Number.isSafeInteger(t)) {
+            skippedLines++
+          } else {
+            const evType = parts[3].trim()
+
+            if (evType !== 'C') {
+              if (firstEvent) {
+                timeMin = timeMax = t
+                firstEvent = false
+              } else {
+                if (t < timeMin) timeMin = t
+                if (t > timeMax) timeMax = t
+              }
+            }
+
+            if (evType === 'T') {
+              const note = parts.length > 7 ? parts[7].trim() : ''
+              const tgt = parts[4].trim()
+              if (note === 'task_create' && !taskCreateRaw.has(tgt)) {
+                taskCreateRaw.set(tgt, t)
+              }
+              if (!tEventsByTime.has(t)) tEventsByTime.set(t, [])
+              tEventsByTime.get(t).push({
+                time:   t,
+                source: parts[1].trim(),
+                event:  parts[6].trim(),
+                target: tgt,
+                note,
+              })
+            } else if (evType === 'STI') {
+              const stiTarget = parts[4].trim()
+              if (stiTarget === 'TICK') {
+                // STI TICK events are rendered as ruler marks, not as STI channel rows.
+                tickStiTimes.push(t)
+              } else {
+                stiEvents.push({
+                  time:   t,
+                  core:   parts[1].trim(),
+                  target: stiTarget,
+                  event:  parts[6].trim(),
+                  note:   parts.length > 7 ? parts[7].trim() : '',
+                })
+              }
+            }
+          }
+        }
       }
-      continue
     }
 
-    const parts = line.split(',')
-    // Re-join excess fields into the note slot so commas within notes are preserved.
-    if (parts.length > 8) parts[7] = parts.splice(7).join(',')
-    if (parts.length < 7) { skippedLines++; continue }
-
-    const t = parseInt(parts[0], 10)
-    if (isNaN(t) || !Number.isSafeInteger(t)) { skippedLines++; continue }
-
-    const evType = parts[3].trim()
-
-    if (evType !== 'C') {
-      if (firstEvent) {
-        timeMin = timeMax = t
-        firstEvent = false
-      } else {
-        if (t < timeMin) timeMin = t
-        if (t > timeMax) timeMax = t
-      }
-    }
-
-    if (evType === 'T') {
-      const note = parts.length > 7 ? parts[7].trim() : ''
-      const tgt = parts[4].trim()
-      if (note === 'task_create' && !taskCreateRaw.has(tgt)) {
-        taskCreateRaw.set(tgt, t)
-      }
-      if (!tEventsByTime.has(t)) tEventsByTime.set(t, [])
-      tEventsByTime.get(t).push({
-        time:   t,
-        source: parts[1].trim(),
-        event:  parts[6].trim(),
-        target: tgt,
-        note,
-      })
-    } else if (evType === 'STI') {
-      const stiTarget = parts[4].trim()
-      if (stiTarget === 'TICK') {
-        // STI TICK events are rendered as ruler marks, not as STI channel rows.
-        tickStiTimes.push(t)
-      } else {
-        stiEvents.push({
-          time:   t,
-          core:   parts[1].trim(),
-          target: stiTarget,
-          event:  parts[6].trim(),
-          note:   parts.length > 7 ? parts[7].trim() : '',
-        })
-      }
+    lineIndex++
+    if (lineIndex % LINE_YIELD_EVERY === 0) {
+      const filePct = textLen > 0 ? Math.min(100, Math.floor((lineEnd / textLen) * 100)) : 100
+      progress(1 + Math.floor((lineEnd / Math.max(textLen, 1)) * 22), `Reading file… ${filePct}%`)
+      await yieldToHost()
     }
   }
 
@@ -171,6 +199,7 @@ export function parseBtf(text, progressCallback) {
   // Phase 2 – State-machine segment reconstruction
   // -----------------------------------------------------------------------
   progress(25, 'Reconstructing segments…')
+  await yieldToHost()
 
   const openSeg  = new Map()  // taskName → {start, core}
   const lastCore = new Map()  // taskName → coreName
@@ -194,7 +223,9 @@ export function parseBtf(text, progressCallback) {
 
   // Process events in chronological order
   const sortedTimestamps = Array.from(tEventsByTime.keys()).sort((a, b) => a - b)
-  for (const ts of sortedTimestamps) {
+  const tsCount = sortedTimestamps.length
+  for (let ti = 0; ti < tsCount; ti++) {
+    const ts = sortedTimestamps[ti]
     const events = tEventsByTime.get(ts)
 
     // Build core-preempt map: preempted-task → core (for Core_N src events)
@@ -246,6 +277,11 @@ export function parseBtf(text, progressCallback) {
         }
       }
     }
+
+    if (ti > 0 && ti % TS_YIELD_EVERY === 0) {
+      progress(25 + Math.floor((ti / tsCount) * 28), 'Reconstructing segments…')
+      await yieldToHost()
+    }
   }
 
   // Close any still-open segments at trace end
@@ -258,6 +294,7 @@ export function parseBtf(text, progressCallback) {
   // Phase 3 – Post-processing: build lookup tables
   // -----------------------------------------------------------------------
   progress(55, 'Building lookup tables…')
+  await yieldToHost()
 
   const mkCache = new Map()        // rawTaskName → mergeKey
   const segsByMkBuild = new Map()  // mergeKey   → TaskSegment[]
@@ -326,6 +363,7 @@ export function parseBtf(text, progressCallback) {
 
   // Per-core, per-task ordering for core view
   progress(62, 'Sorting core segments…')
+  await yieldToHost()
   const coreTaskOrder = new Map()  // coreName → taskRawName[]
   const coreTaskSegs  = new Map()  // coreName → Map<taskRawName, TaskSegment[]>
 
@@ -360,6 +398,7 @@ export function parseBtf(text, progressCallback) {
   // Phase 4 – 1M-event performance pre-processing (LOD + bisect arrays)
   // -----------------------------------------------------------------------
   progress(70, 'Building task LOD summaries…')
+  await yieldToHost()
 
   const timeSpan = Math.max(timeMax - timeMin, 1)
   const lodTimescalePerPx      = timeSpan / LOD_SUMMARY_BINS
@@ -372,7 +411,9 @@ export function parseBtf(text, progressCallback) {
   const segLodUltraByMk       = new Map()
   const segLodUltraStartsByMk = new Map()
 
-  for (const [mk, segs] of segsByMk) {
+  const mkEntries = [...segsByMk.entries()]
+  for (let mi = 0; mi < mkEntries.length; mi++) {
+    const [mk, segs] = mkEntries[mi]
     segStartByMk.set(mk, segs.map(s => s.start))
     const [lod, lodStarts] = makeLodSummary(segs, LOD_SUMMARY_BINS, lodTimescalePerPx, timeMin)
     segLodByMk.set(mk, lod)
@@ -380,9 +421,15 @@ export function parseBtf(text, progressCallback) {
     const [ultra, ultraStarts] = makeLodSummary(lod, LOD_SUMMARY_BINS_ULTRA, lodUltraTimescalePerPx, timeMin)
     segLodUltraByMk.set(mk, ultra)
     segLodUltraStartsByMk.set(mk, ultraStarts)
+
+    if (mi > 0 && mi % LOD_YIELD_EVERY === 0) {
+      progress(70 + Math.floor((mi / mkEntries.length) * 9), 'Building task LOD summaries…')
+      await yieldToHost()
+    }
   }
 
   progress(80, 'Building core LOD summaries…')
+  await yieldToHost()
 
   // Core-view: start arrays + LODs for core summary rows
   const coreSegStarts            = new Map()
@@ -391,7 +438,8 @@ export function parseBtf(text, progressCallback) {
   const coreSegLodUltra          = new Map()
   const coreSegLodUltraStarts    = new Map()
 
-  for (const c of coreNames) {
+  for (let ci = 0; ci < coreNames.length; ci++) {
+    const c = coreNames[ci]
     const segs = coreSegs.get(c)
     coreSegStarts.set(c, segs.map(s => s.start))
     const [lod, lodStarts] = makeLodSummary(segs, LOD_SUMMARY_BINS, lodTimescalePerPx, timeMin)
@@ -400,9 +448,15 @@ export function parseBtf(text, progressCallback) {
     const [ultra, ultraStarts] = makeLodSummary(lod, LOD_SUMMARY_BINS_ULTRA, lodUltraTimescalePerPx, timeMin)
     coreSegLodUltra.set(c, ultra)
     coreSegLodUltraStarts.set(c, ultraStarts)
+
+    if (ci > 0 && ci % LOD_YIELD_EVERY === 0) {
+      progress(80 + Math.floor((ci / coreNames.length) * 7), 'Building core LOD summaries…')
+      await yieldToHost()
+    }
   }
 
   progress(88, 'Building per-task core LOD summaries…')
+  await yieldToHost()
 
   const coreTaskSegStarts         = new Map()
   const coreTaskSegLod            = new Map()
@@ -410,11 +464,15 @@ export function parseBtf(text, progressCallback) {
   const coreTaskSegLodUltra       = new Map()
   const coreTaskSegLodUltraStarts = new Map()
 
-  for (const c of coreNames) {
+  for (let ci = 0; ci < coreNames.length; ci++) {
+    const c = coreNames[ci]
     const ts = coreTaskSegs.get(c)
     const tsStarts = new Map(), tsLod = new Map(), tsLodStarts = new Map()
     const tsLodUltra = new Map(), tsLodUltraStarts = new Map()
-    for (const [tn, tsegs] of ts) {
+    const taskNames = [...ts.keys()]
+    for (let ti = 0; ti < taskNames.length; ti++) {
+      const tn = taskNames[ti]
+      const tsegs = ts.get(tn)
       tsStarts.set(tn, tsegs.map(s => s.start))
       const [lod, lodStarts] = makeLodSummary(tsegs, LOD_SUMMARY_BINS, lodTimescalePerPx, timeMin)
       tsLod.set(tn, lod)
@@ -422,6 +480,11 @@ export function parseBtf(text, progressCallback) {
       const [ultra, ultraStarts] = makeLodSummary(lod, LOD_SUMMARY_BINS_ULTRA, lodUltraTimescalePerPx, timeMin)
       tsLodUltra.set(tn, ultra)
       tsLodUltraStarts.set(tn, ultraStarts)
+
+      if (ti > 0 && ti % LOD_YIELD_EVERY === 0) {
+        progress(88 + Math.floor(((ci + ti / Math.max(taskNames.length, 1)) / coreNames.length) * 6), 'Building per-task core LOD summaries…')
+        await yieldToHost()
+      }
     }
     coreTaskSegStarts.set(c, tsStarts)
     coreTaskSegLod.set(c, tsLod)
@@ -431,15 +494,29 @@ export function parseBtf(text, progressCallback) {
   }
 
   // STI start-time arrays for bisect clipping
+  progress(92, 'Building STI indexes…')
+  await yieldToHost()
+
   const stiStartsByTarget = new Map()
+  const stiChannelCount = stiByTarget.size
+  let stiIdx = 0
   for (const [ch, evs] of stiByTarget) {
     stiStartsByTarget.set(ch, evs.map(e => e.time))
+    stiIdx++
+    if (stiIdx % STI_YIELD_EVERY === 0) {
+      progress(92 + Math.floor((stiIdx / Math.max(stiChannelCount, 1)) * 3), 'Building STI indexes…')
+      await yieldToHost()
+    }
   }
 
   // STI numeric value ranges (valMin/valMax per channel) for waveform rows.
   // Mirrors the evVal() logic in TimelineRenderer.js so the renderer can skip
   // the O(N) scan on every animation frame.
+  progress(95, 'Analysing STI channels…')
+  await yieldToHost()
+
   const stiValRange = new Map()
+  stiIdx = 0
   for (const [ch, evs] of stiByTarget) {
     let vMin = Infinity, vMax = -Infinity
     for (const ev of evs) {
@@ -449,9 +526,18 @@ export function parseBtf(text, progressCallback) {
       if (v > vMax) vMax = v
     }
     if (isFinite(vMin)) stiValRange.set(ch, { min: vMin, max: vMax })
+    stiIdx++
+    if (stiIdx % STI_YIELD_EVERY === 0) {
+      progress(95 + Math.floor((stiIdx / Math.max(stiChannelCount, 1)) * 2), 'Analysing STI channels…')
+      await yieldToHost()
+    }
   }
 
-  progress(95, 'Finalising…')
+  progress(97, 'Finalising…')
+  await yieldToHost()
+  const sortedTickStiTimes = tickStiTimes.sort((a, b) => a - b)
+  progress(98, 'Finalising…')
+  await yieldToHost()
 
   return {
     // ---- Metadata ----
@@ -474,7 +560,7 @@ export function parseBtf(text, progressCallback) {
     stiEventsByTarget: stiByTarget,
     stiStartsByTarget,
     stiValRange,
-    tickStiTimes: tickStiTimes.sort((a, b) => a - b),
+    tickStiTimes: sortedTickStiTimes,
 
     // ---- Task-view lookup tables ----
     segByMergeKey:              segsByMk,

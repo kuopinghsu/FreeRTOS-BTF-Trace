@@ -10,13 +10,23 @@
 
 import { parseBtf } from './btfParser.js'
 
-self.onmessage = function (e) {
+self.onmessage = async function (e) {
   const { text } = e.data
   try {
-    const trace = parseBtf(text, (pct, msg) => {
+    const trace = await parseBtf(text, (pct, msg) => {
       self.postMessage({ type: 'progress', pct, msg })
     })
-    self.postMessage({ type: 'done', trace })
+    self.postMessage({ type: 'progress', pct: 99, msg: 'Transferring trace…' })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    try {
+      self.postMessage({ type: 'done', trace })
+    } catch (postErr) {
+      self.postMessage({
+        type: 'error',
+        message: postErr?.message || String(postErr),
+        name: postErr?.name || 'DataCloneError',
+      })
+    }
   } catch (err) {
     self.postMessage({
       type: 'error',

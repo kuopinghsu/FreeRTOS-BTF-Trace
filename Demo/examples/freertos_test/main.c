@@ -1,16 +1,18 @@
 /*
  * freertos_test/main.c
  *
- * Comprehensive FreeRTOS test suite scalable from 1 to 8 cores.
+ * Comprehensive FreeRTOS test suite scalable from 1 to 16 cores.
  *
  * All sizing constants derive from configNUMBER_OF_CORES so the same
- * source compiles and runs correctly for CORES = 1 ... 8.
+ * source compiles and runs correctly for CORES = 1 ... 16.
  *
  * Tests
  * -----
- *  1. Context-switch stress   - (2xCORES+2) tasks at equal priority each
- *                               call taskYIELD() ITER_FAST times; forces
- *                               intra-core and cross-core context switches.
+ *  1. Context-switch stress   - (2xCORES+2) tasks at equal priority;
+ *                               counting semaphore (SEM_SLOTS) bounds
+ *                               concurrency, mutex serialises counter
+ *                               updates; multiple taskYIELD() per loop
+ *                               to maximise SMP context switches.
  *
  *  2. Mutex contention        - (2xCORES+2) tasks race for one mutex and
  *                               increment a shared counter.  Final value
@@ -37,6 +39,9 @@
  *                               (CORES+1) consumers; queue depth = CORES+1
  *                               so it fills quickly, exercising cross-core
  *                               block / unblock wakeup chains.
+ *
+ * Tests run back-to-back with only taskYIELD() handoffs between phases
+ * (no vTaskDelay gaps) so all cores stay busy under SMP load.
  */
 
 #include <stdio.h>
@@ -81,11 +86,12 @@
 /* Queue producers == queue consumers == CORES+1 (half of NUM_WORKERS). */
 #define Q_HALF             ( NUM_WORKERS / 2 )
 
-/* Iterations for CPU-bound loops (no vTaskDelay). */
-#define ITER_FAST          50
+/* Iterations scale with core count to keep SMP busy (no vTaskDelay in workers). */
+#define ITER_FAST          ( configNUMBER_OF_CORES * 12 )
+#define ITER_SLOW          ( configNUMBER_OF_CORES * 6 )
 
-/* Iterations for test 3 (contains taskYIELD inside the loop). */
-#define ITER_SLOW          20
+/* Extra yields per test-1 loop (inside/outside mutex). */
+#define T1_YIELDS          3
 
 /* Stack depth for worker tasks (words). */
 #define TASK_STACK_WORDS   192u
@@ -111,28 +117,39 @@ void vApplicationStackOverflowHook( TaskHandle_t xTask,
 }
 
 /* ==================================================================
- * TEST 1 - Context-switch stress
+ * TEST 1 - Context-switch stress (counting sem + mutex + yields)
  *
- * NUM_WORKERS tasks at equal priority (WORKER_PRIORITY) each loop
- * ITER_FAST times: increment a private slot then call taskYIELD().
- * taskYIELD() forces the scheduler to run the next ready task, so
- * ITER_FAST context switches occur per task.  On SMP the scheduler
- * must simultaneously manage tasks on every core.
+ * NUM_WORKERS tasks at equal priority (WORKER_PRIORITY).  Each loop:
+ *   (a) Take counting semaphore (max SEM_SLOTS = CORES concurrent tasks).
+ *   (b) taskYIELD() T1_YIELDS times (cross-core scheduling pressure).
+ *   (c) Take mutex, increment private slot, release mutex.
+ *   (d) taskYIELD() T1_YIELDS times again before leaving the shared area.
  *
  * Correctness: each slot must reach exactly ITER_FAST.
  * ================================================================== */
 
 static volatile uint32_t  t1_counts[ NUM_WORKERS ];
-static SemaphoreHandle_t  t1_done;
+static SemaphoreHandle_t  t1_area, t1_mtx, t1_done;
 
 static void vCtxSwitchWorker( void *pvArg )
 {
-    int slot = (int)(intptr_t)pvArg, i;
+    int slot = (int)(intptr_t)pvArg, i, y;
 
     for( i = 0; i < ITER_FAST; ++i )
     {
+        xSemaphoreTake( t1_area, portMAX_DELAY );
+
+        for( y = 0; y < T1_YIELDS; ++y )
+            taskYIELD();
+
+        xSemaphoreTake( t1_mtx, portMAX_DELAY );
         t1_counts[ slot ]++;
-        taskYIELD();
+        xSemaphoreGive( t1_mtx );
+
+        for( y = 0; y < T1_YIELDS; ++y )
+            taskYIELD();
+
+        xSemaphoreGive( t1_area );
     }
     xSemaphoreGive( t1_done );
     vTaskDelete( NULL );
@@ -143,8 +160,10 @@ static int run_test1( void )
     int i, fail = 0;
 
     memset( (void *)t1_counts, 0, sizeof t1_counts );
+    t1_area = xSemaphoreCreateCounting( SEM_SLOTS, SEM_SLOTS );
+    t1_mtx  = xSemaphoreCreateMutex();
     t1_done = xSemaphoreCreateCounting( NUM_WORKERS, 0 );
-    configASSERT( t1_done );
+    configASSERT( t1_area && t1_mtx && t1_done );
 
     for( i = 0; i < NUM_WORKERS; ++i )
         configASSERT( xTaskCreate( vCtxSwitchWorker, "CS",
@@ -154,6 +173,8 @@ static int run_test1( void )
     for( i = 0; i < NUM_WORKERS; ++i )
         xSemaphoreTake( t1_done, portMAX_DELAY );
 
+    vSemaphoreDelete( t1_area );
+    vSemaphoreDelete( t1_mtx );
     vSemaphoreDelete( t1_done );
 
     for( i = 0; i < NUM_WORKERS; ++i )
@@ -192,6 +213,7 @@ static void vMutexWorker( void *pvArg )
         xSemaphoreTake( t2_mtx, portMAX_DELAY );
         t2_ctr++;
         xSemaphoreGive( t2_mtx );
+        taskYIELD();
     }
     xSemaphoreGive( t2_done );
     vTaskDelete( NULL );
@@ -258,6 +280,7 @@ static void vSemMutexWorker( void *pvArg )
         xSemaphoreTake( t3_area, portMAX_DELAY );
 
         /* Simulate parallel work inside the shared area. */
+        taskYIELD();
         taskYIELD();
 
         /* -- Critical section: single writer -- */
@@ -413,6 +436,8 @@ static void vEventWorker( void *pvArg )
     for( i = 0; i < ITER_FAST; ++i )
         taskYIELD();
 
+    taskYIELD();
+
     xEventGroupSetBits( t5_eg, (EventBits_t)( (EventBits_t)1 << bit ) );
     vTaskDelete( NULL );
 }
@@ -543,6 +568,15 @@ static const test_entry_t tests[] =
 
 #define N_TESTS  ( (int)( sizeof( tests ) / sizeof( tests[ 0 ] ) ) )
 
+/* Brief yield handoff between phases (no vTaskDelay idle gaps). */
+static void prvPhaseHandoff( void )
+{
+    int i;
+
+    for( i = 0; i < (int)configNUMBER_OF_CORES; ++i )
+        taskYIELD();
+}
+
 static void vTestRunner( void *pvArg )
 {
     int total_fail = 0, i;
@@ -550,9 +584,9 @@ static void vTestRunner( void *pvArg )
 
     printf( "freertos_test: starting\n" );
     printf( "  cores=%-2d  workers=%-3d  sem_slots=%-2d"
-            "  iter_fast=%-3d  iter_slow=%d\n",
+            "  iter_fast=%-3d  iter_slow=%d  t1_yields=%d\n",
             configNUMBER_OF_CORES, NUM_WORKERS, SEM_SLOTS,
-            ITER_FAST, ITER_SLOW );
+            ITER_FAST, ITER_SLOW, T1_YIELDS );
 
     for( i = 0; i < N_TESTS; ++i )
     {
@@ -561,9 +595,7 @@ static void vTestRunner( void *pvArg )
         fflush( stdout );
         total_fail += tests[ i ].fn();
         printf( "%s\n", ( total_fail == prev ) ? "pass" : "FAIL" );
-        /* Give the idle task time to free memory from deleted tasks
-         * before the next phase creates new ones.                    */
-        vTaskDelay( pdMS_TO_TICKS( 50 ) );
+        prvPhaseHandoff();
     }
 
 #if configUSE_TRACE_FACILITY
@@ -581,6 +613,36 @@ static void vTestRunner( void *pvArg )
         exit( 1 );
     }
 }
+
+#if configUSE_TICK_HOOK
+/*
+ * Tick hook — sample heap usage every RTOS tick (see configTICK_RATE_HZ).
+ *
+ * Requires configUSE_TICK_HOOK = 1 in FreeRTOSConfig.h and heap_4.c linked
+ * into the build (the demo Makefile already selects heap_4.c).
+ *
+ * xPortGetFreeHeapSize() reports free bytes in the heap_4 pool; subtracting
+ * from configTOTAL_HEAP_SIZE yields bytes currently allocated by tasks,
+ * queues, semaphores, etc.
+ *
+ * btf_traceTAG( 0, bytes ) appends an STI tag0_event to the trace buffer
+ * (configINCLUDE_TAGS must be 1 — default in FreeRTOS-Trace.h).  After
+ * `make run`, open tracedata/trace.btf in BTFViewer and expand the
+ * tag0_event row to plot allocated heap over time.
+ *
+ * Eight tag channels (0–7) are available via btf_traceTAG( n, value ).
+ */
+void vApplicationTickHook( void )
+{
+#if configUSE_TRACE_FACILITY
+    size_t total_heap = configTOTAL_HEAP_SIZE;
+    size_t free_heap  = xPortGetFreeHeapSize();
+    size_t currently_allocated_bytes = total_heap - free_heap;
+
+    btf_traceTAG( 0, (int) currently_allocated_bytes );
+#endif
+}
+#endif
 
 /* ==================================================================
  * main
@@ -604,6 +666,8 @@ int main( void )
     prvWriteMtvec( freertos_risc_v_trap_handler );
 
 #if configUSE_TRACE_FACILITY
+    /* Enable trace capture before any traced tasks are created.  traceEND() is
+     * called from vTestRunner when all tests finish (writes trace.bin). */
     traceSTART();
 #endif
 

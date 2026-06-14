@@ -70,7 +70,7 @@ void usage(void) {
         "       -h|--help                    help\n"
         "       -b|--btf                     generate btf file (default)\n"
         "       -v|--vcd                     generate vcd file\n"
-	"       -t [0|1]|--timescale [0|1]   0: timescale ns, 1: timescale us (default)\n"
+    "       -t [0|1]|--timescale [0|1]   0: timescale ns, 1: timescale us (default)\n"
         "\n"
     );
 }
@@ -78,6 +78,7 @@ void usage(void) {
 static uint32_t last_timestamp = 0;
 static uint64_t cyc_to_time_acc = 0;
 
+/* Extend xGetCycles() 32-bit timestamps to 64-bit trace time (detect wrap). */
 static uint64_t cyc_to_time(uint32_t timestamp, int frequency) {
     if (timestamp < last_timestamp) {
         cyc_to_time_acc += ((uint64_t)(UINT32_MAX) + 1) * (timescale ? 1000000LL : 1000000000LL) / frequency;
@@ -88,6 +89,11 @@ static uint64_t cyc_to_time(uint32_t timestamp, int frequency) {
     return ((uint64_t)timestamp * (timescale ? 1000000LL : 1000000000LL) / frequency) + cyc_to_time_acc;
 }
 
+static void reset_cyc_to_time(void) {
+    last_timestamp = 0;
+    cyc_to_time_acc = 0;
+}
+
 static char *get_taskname(
     TRACE *trace_data,
     int index
@@ -96,6 +102,108 @@ static char *get_taskname(
     int n = trace_data->h.max_taskname_len * index;
 
     return (char*)&ptr[n];
+}
+
+/* VCD $var identifiers must not contain whitespace. */
+static void vcd_sanitize_token(char *dst, size_t dst_size, const char *src)
+{
+    size_t i = 0;
+
+    if (dst_size == 0) {
+        return;
+    }
+
+    while (src[i] != '\0' && i + 1 < dst_size) {
+        char c = src[i];
+
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
+            c = '_';
+        }
+        dst[i] = c;
+        ++i;
+    }
+    dst[i] = '\0';
+}
+
+/* FreeRTOS SMP names idle tasks IDLE0..IDLE9 then IDLE:, IDLE;, ... because the
+ * kernel suffix is (char)('0' + coreID) in one character (see prvCreateIdleTasks). */
+static int trace_idle_core_from_name(const char *name)
+{
+    unsigned char suffix;
+
+    if (strncmp(name, "IDLE", 4) != 0) {
+        return -1;
+    }
+
+    suffix = (unsigned char) name[4];
+    if (suffix == '\0' || name[5] != '\0') {
+        return -1;
+    }
+
+    return (int) (suffix - (unsigned char) '0');
+}
+
+static void trace_format_taskname(
+    char *dst,
+    size_t dst_size,
+    const char *raw_name
+) {
+    int core;
+
+    if (dst_size == 0) {
+        return;
+    }
+
+    core = trace_idle_core_from_name(raw_name);
+    if (core >= 0) {
+        snprintf(dst, dst_size, "IDLE%d", core);
+    } else {
+        vcd_sanitize_token(dst, dst_size, raw_name);
+    }
+}
+
+static char display_name_bufs[2][128];
+static int display_name_slot;
+
+static void reset_display_tasknames(void)
+{
+    display_name_slot = 0;
+}
+
+static const char *display_taskname(
+    TRACE *trace_data,
+    int index
+) {
+    char *buf = display_name_bufs[display_name_slot & 1];
+
+    display_name_slot++;
+    trace_format_taskname(buf, sizeof(display_name_bufs[0]),
+                          get_taskname(trace_data, index));
+    return buf;
+}
+
+static char *get_vcd_taskname(
+    TRACE *trace_data,
+    int index,
+    char *buf,
+    size_t buf_size
+) {
+    char safe[128];
+
+    trace_format_taskname(safe, sizeof(safe), get_taskname(trace_data, index));
+    snprintf(buf, buf_size, "(%04u)%s", (unsigned)index, safe);
+    return buf;
+}
+
+static int vcd_task_has_name(
+    TRACE *trace_data,
+    uint32_t task_id
+) {
+    if (task_id == 0 || task_id >= trace_data->h.max_tasks) {
+        return 0;
+    }
+
+    return get_taskname(trace_data, (int)task_id)[0] != '\0';
 }
 
 static EVENT *get_event(
@@ -177,6 +285,8 @@ int genbtf(
         goto cleanup;
     }
 
+    reset_cyc_to_time();
+
     if ((current_task = malloc(sizeof(int)*trace_data->h.num_cores)) == NULL) {
         printf("malloc fail\n");
         goto cleanup;
@@ -222,14 +332,16 @@ int genbtf(
 
         current_time = cyc_to_time(event->timestamp, trace_data->h.core_clock);
 
+        reset_display_tasknames();
+
         switch(event->types & EVENT_MASK) {
             case TRACE_EVENT_TASK_SWITCHED_IN:
                 fprintf(fout, "%" PRIu64 ",[%d/%04d]%s,0,T,[%d/%04d]%s,0,%s,%s\n",
                         current_time,
                         coreid,
-                        current_task[coreid], get_taskname(trace_data, current_task[coreid]),
+                        current_task[coreid], display_taskname(trace_data, current_task[coreid]),
                         coreid,
-                        event->value, get_taskname(trace_data, event->value),
+                        event->value, display_taskname(trace_data, (int)event->value),
                         "resume",
                         "");
                 break;
@@ -238,7 +350,7 @@ int genbtf(
                         current_time,
                         coreid,
                         coreid,
-                        event->value, get_taskname(trace_data, event->value),
+                        event->value, display_taskname(trace_data, (int)event->value),
                         "preempt",
                         "");
                 current_task[coreid] = (int)event->value;
@@ -248,7 +360,7 @@ int genbtf(
                         current_time,
                         coreid,
                         coreid,
-                        event->value, get_taskname(trace_data, event->value),
+                        event->value, display_taskname(trace_data, (int)event->value),
                         "preempt",
                         "create");
                 break;
@@ -259,7 +371,7 @@ int genbtf(
                         "task",
                         "trigger",
                         "delete",
-                        get_taskname(trace_data, event->value),
+                        display_taskname(trace_data, (int)event->value),
                         event->value);
                 break;
             case TRACE_EVENT_TASK_SUSPEND:
@@ -269,7 +381,7 @@ int genbtf(
                         "task",
                         "trigger",
                         "suspend",
-                        get_taskname(trace_data, event->value),
+                        display_taskname(trace_data, (int)event->value),
                         event->value);
                 break;
             case TRACE_EVENT_TASK_RESUME:
@@ -279,7 +391,7 @@ int genbtf(
                         "task",
                         "trigger",
                         "resume",
-                        get_taskname(trace_data, event->value),
+                        display_taskname(trace_data, (int)event->value),
                         event->value);
                 break;
             case TRACE_EVENT_TASK_RESUME_FROM_ISR:
@@ -479,8 +591,8 @@ int genbtf(
                         event->value);
                 break;
             default:
-		fprintf(stderr, "Unknown event: %d\n", event->types);
-		exit(1);
+        fprintf(stderr, "Unknown event: %d\n", event->types);
+        exit(1);
                 break;
         }
         current_index = ((current_index + 1) % trace_data->h.max_events);
@@ -509,6 +621,7 @@ int genvcd(
     long size;
     int tick_id;
     int ret = 1;
+    char vcd_name[160];
 
     if ((fin = fopen(infile, "rb")) == NULL) {
         printf("file %s not found\n", infile);
@@ -561,6 +674,8 @@ int genvcd(
         goto cleanup;
     }
 
+    reset_cyc_to_time();
+
     // headers
     fprintf(fout,"$version\n");
     fprintf(fout,"    FreeRTOS trace logger\n");
@@ -578,10 +693,13 @@ int genvcd(
     fprintf(fout,"$var wire 1 %s %s $end\n", get_vcdsig(tick_id),
             "(0000)tick_event");
 
-    // task lists, task number starts from 1
-    for (i = 1; i <= trace_data->h.task_count; i++ ) {
-        fprintf(fout,"$var wire 1 %s (%04d)%s $end\n", get_vcdsig(i), i,
-                get_taskname(trace_data, i));
+    /* task_id (uxTCBNumber) is not 1..task_count; declare every named slot. */
+    for (i = 1; i < trace_data->h.max_tasks; i++ ) {
+        if (!vcd_task_has_name(trace_data, i)) {
+            continue;
+        }
+        fprintf(fout,"$var wire 1 %s %s $end\n", get_vcdsig((int)i),
+                get_vcd_taskname(trace_data, (int)i, vcd_name, sizeof(vcd_name)));
     }
 
     fprintf(fout, "$upscope $end\n");
@@ -596,31 +714,52 @@ int genvcd(
 
     for(i = 0; i < trace_data->h.event_count; i++) {
         EVENT *event = get_event(trace_data, current_index);
-	uint64_t current_time = cyc_to_time(event->timestamp, trace_data->h.core_clock);
+    uint64_t current_time = cyc_to_time(event->timestamp, trace_data->h.core_clock);
 
         fprintf(fout, "#%" PRIu64 "\n", current_time);
 
-        switch(event->types) {
+        switch(event->types & EVENT_MASK) {
             case TRACE_EVENT_TASK_SWITCHED_IN:
-                fprintf(fout, "1%s\n", get_vcdsig(event->value));
+                if (!vcd_task_has_name(trace_data, event->value)) {
+                    break;
+                }
+                fprintf(fout, "1%s\n", get_vcdsig((int)event->value));
                 break;
             case TRACE_EVENT_TASK_SWITCHED_OUT:
-                fprintf(fout, "0%s\n", get_vcdsig(event->value));
+                if (!vcd_task_has_name(trace_data, event->value)) {
+                    break;
+                }
+                fprintf(fout, "0%s\n", get_vcdsig((int)event->value));
                 break;
             case TRACE_EVENT_TASK_CREATE:
-                fprintf(fout, "0%s\n", get_vcdsig(event->value));
+                if (!vcd_task_has_name(trace_data, event->value)) {
+                    break;
+                }
+                fprintf(fout, "0%s\n", get_vcdsig((int)event->value));
                 break;
             case TRACE_EVENT_TASK_DELETE:
-                fprintf(fout, "x%s\n", get_vcdsig(event->value));
+                if (!vcd_task_has_name(trace_data, event->value)) {
+                    break;
+                }
+                fprintf(fout, "x%s\n", get_vcdsig((int)event->value));
                 break;
             case TRACE_EVENT_TASK_SUSPEND:
-                fprintf(fout, "0%s\n", get_vcdsig(event->value));
+                if (!vcd_task_has_name(trace_data, event->value)) {
+                    break;
+                }
+                fprintf(fout, "0%s\n", get_vcdsig((int)event->value));
                 break;
             case TRACE_EVENT_TASK_RESUME:
-                fprintf(fout, "1%s\n", get_vcdsig(event->value));
+                if (!vcd_task_has_name(trace_data, event->value)) {
+                    break;
+                }
+                fprintf(fout, "1%s\n", get_vcdsig((int)event->value));
                 break;
             case TRACE_EVENT_TASK_RESUME_FROM_ISR:
-                fprintf(fout, "1%s\n", get_vcdsig(event->value));
+                if (!vcd_task_has_name(trace_data, event->value)) {
+                    break;
+                }
+                fprintf(fout, "1%s\n", get_vcdsig((int)event->value));
                 break;
             case TRACE_EVENT_TASK_INCREMENT_TICK:
                 fprintf(fout, "1%s\n", get_vcdsig(tick_id));

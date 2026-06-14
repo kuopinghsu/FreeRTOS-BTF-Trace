@@ -139,7 +139,7 @@ int main(int argc, char **argv) {
             double mhz = stats.sim_hz() / 1e6;
             std::fprintf(stderr,
                 "-------------------------------\n"
-                "retired = %-12" PRIu64 "\ncycles  = %-12" PRIu64
+                "retired = %-12" PRIu64 "\nmtime   = %-12" PRIu64
                 "\nspeed   = %.0f Hz (%.2f MHz)\nwall    = %.3f s\n"
                 "-------------------------------\n",
                 stats.insns_retired, stats.cycles,

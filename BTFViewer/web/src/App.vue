@@ -584,7 +584,7 @@ import SnapshotEditor   from './components/SnapshotEditor.vue'
 import { formatTime }   from './renderer/TimelineRenderer.js'
 import { taskDisplayName, taskMergeKey } from './utils/colors.js'
 import { useTraceTabs } from './composables/useTraceTabs.js'
-import { loadSession, saveSession, getSavedTabState, applySavedTabState, buildSessionSnapshot } from './utils/sessionStore.js'
+import { loadSession, saveSession, getSavedTabState, applySavedTabState, buildSessionSnapshot, isRestorableViewport } from './utils/sessionStore.js'
 import exampleBtfB64   from 'virtual:example-btf'
 
 // ---- State ---------------------------------------------------------------
@@ -887,9 +887,47 @@ function onTraceReading({ name }) {
   // Show the loading overlay immediately while FileReader is still reading the file
   if (_parseWorker) { _parseWorker.terminate(); _parseWorker = null }
   loading.value         = true
-  loadingPct.value      = 0
+  loadingPct.value      = 1
   loadingMsg.value      = 'Reading file…'
   loadingFileName.value = name || 'trace.btf'
+}
+
+function finishTraceLoadTab(tab) {
+  timelineOptions.highlightKey = tab.pinnedHighlightKey ?? null
+  timelineOptions.showCpuLoad = true
+  timelineOptions.highlightSegment = tab.highlightSegment ?? null
+  loading.value    = false
+  loadingPct.value = 0
+  loadingMsg.value = ''
+  // Ensure timeline shows the loaded trace (avoid stale {0,1} viewport sentinel).
+  nextTick(() => applyTimelineViewport())
+}
+
+function paintLoadingProgress(pct, msg) {
+  loadingPct.value = pct
+  loadingMsg.value = msg || ''
+}
+
+async function flushLoadingProgress(pct, msg) {
+  paintLoadingProgress(pct, msg)
+  await new Promise(resolve => requestAnimationFrame(resolve))
+}
+
+async function attachParsedTrace(name, trace) {
+  await flushLoadingProgress(100, 'Opening trace…')
+  const tab = openTab(name || 'trace.btf')
+  resetTabForLoad(tab)
+  tab.trace = trace
+  restoreTabState(tab)
+  finishTraceLoadTab(tab)
+}
+
+async function parseTraceOnMainThread(text, name) {
+  const { parseBtf } = await import('./parser/btfParser.js')
+  const result = await parseBtf(text, (pct, msg) => {
+    paintLoadingProgress(pct, msg)
+  })
+  await attachParsedTrace(name, result)
 }
 
 async function onTraceLoaded({ text, name }) {
@@ -897,8 +935,8 @@ async function onTraceLoaded({ text, name }) {
   if (_parseWorker) { _parseWorker.terminate(); _parseWorker = null }
 
   loading.value         = true
-  loadingPct.value      = 0
-  loadingMsg.value      = 'Reading file…'
+  loadingPct.value      = 1
+  loadingMsg.value      = 'Parsing trace…'
   loadingFileName.value = name || 'trace.btf'
 
   // Yield one animation frame so the browser can paint the loading overlay
@@ -920,25 +958,14 @@ async function onTraceLoaded({ text, name }) {
   }
 
   if (!workerOk) {
-    // Synchronous fallback – runs on main thread (no Workers on file://)
-    // Yield another frame so the overlay is guaranteed to be painted before
-    // parseBtf() blocks the main thread for potentially several seconds.
     await new Promise(r => requestAnimationFrame(r))
     try {
-      const { parseBtf } = await import('./parser/btfParser.js')
-      const result = parseBtf(text, (pct, msg) => { loadingPct.value = pct; loadingMsg.value = msg || '' })
-      const tab = openTab(name || 'trace.btf')
-      resetTabForLoad(tab)
-      tab.trace = result
-      restoreTabState(tab)
-      timelineOptions.highlightKey = tab.pinnedHighlightKey ?? null
-      timelineOptions.showCpuLoad = true
-      timelineOptions.highlightSegment = tab.highlightSegment ?? null
+      await parseTraceOnMainThread(text, name)
     } catch (err) {
       console.error('BTF parse error:', err)
       showToast('Failed to parse BTF file: ' + err.message, 'error')
+      loading.value = false
     }
-    loading.value = false
     return
   }
 
@@ -951,31 +978,38 @@ async function onTraceLoaded({ text, name }) {
       loadingPct.value = data.pct
       loadingMsg.value = data.msg || ''
     } else if (data.type === 'done') {
-      const tab = openTab(name || 'trace.btf')
-      resetTabForLoad(tab)
-      tab.trace = data.trace
-      restoreTabState(tab)
-      timelineOptions.highlightKey = tab.pinnedHighlightKey ?? null
-      timelineOptions.showCpuLoad = true
-      timelineOptions.highlightSegment = tab.highlightSegment ?? null
-      loading.value = false
       _parseWorker = null
       worker.terminate()
+      attachParsedTrace(name, data.trace).catch((err) => {
+        console.error('Failed to open trace:', err)
+        showToast('Failed to open trace: ' + (err?.message || String(err)), 'error')
+        loading.value = false
+      })
     } else if (data.type === 'error') {
       console.error('BTF parse error:', data.message)
-      showToast('Failed to parse BTF file: ' + data.message, 'error')
-      loading.value = false
       _parseWorker = null
       worker.terminate()
+      loadingPct.value = 1
+      loadingMsg.value = 'Parsing on main thread…'
+      parseTraceOnMainThread(text, name).catch((err) => {
+        console.error('BTF main-thread fallback failed:', err)
+        showToast('Failed to parse BTF file: ' + (err?.message || data.message), 'error')
+        loading.value = false
+      })
     }
   }
 
   worker.onerror = (e) => {
     console.error('Worker error:', e)
-    showToast('Parser worker error: ' + e.message, 'error')
-    loading.value = false
     _parseWorker = null
     worker.terminate()
+    loadingPct.value = 1
+    loadingMsg.value = 'Parsing on main thread…'
+    parseTraceOnMainThread(text, name).catch((err) => {
+      console.error('BTF main-thread fallback failed:', err)
+      showToast('Failed to parse BTF file: ' + (err?.message || e.message), 'error')
+      loading.value = false
+    })
   }
 
   worker.postMessage({ text })
@@ -1100,7 +1134,12 @@ function syncTimelineViewport() {
 function applyTimelineViewport() {
   const tab = activeTab.value
   if (!tab?.trace) return
-  timelinePanelRef.value?.applyViewport?.(tab.timelineViewport)
+  if (isRestorableViewport(tab.timelineViewport, tab.trace)) {
+    timelinePanelRef.value?.applyViewport?.(tab.timelineViewport)
+  } else {
+    timelinePanelRef.value?.fitToTrace?.()
+    syncTimelineViewport()
+  }
 }
 
 function clearCursors() {

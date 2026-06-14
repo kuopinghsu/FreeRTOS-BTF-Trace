@@ -72,7 +72,7 @@ make CORES=2 run
 make CORES=8 run
 ```
 
-On the first run, `FreeRTOS-Kernel` (V11.3.0) is cloned automatically.  
+On the first run, `FreeRTOS-Kernel` (V11.3.0) is cloned automatically.
 The build produces:
 
 - `build/demo/examples/cores<N>/freertos_test.elf` — the FreeRTOS test binary
@@ -110,6 +110,50 @@ test 6: queue stress                ... pass
 5034 events generated.
 freertos_test: all tests passed
 ```
+
+### Use case: monitor heap usage with the tick hook
+
+The demo records **heap bytes in use** on every RTOS tick and plots them in BTFViewer as an analog waveform.
+
+**Setup (already enabled in this repo):**
+
+| Item | Where | Setting |
+|------|-------|---------|
+| Heap allocator | `Demo/examples/Makefile` | `heap_4.c` (coalescing heap; exposes `xPortGetFreeHeapSize()`) |
+| Tick hook | `Demo/conf/FreeRTOSConfig.h` | `configUSE_TICK_HOOK` = `1` |
+| Tag events | `FreeRTOS-Trace/FreeRTOS-Trace.h` | `configINCLUDE_TAGS` = `1` (default) |
+| Sampling code | `Demo/examples/freertos_test/main.c` | `vApplicationTickHook()` |
+
+**What the hook does:**
+
+```c
+void vApplicationTickHook( void )
+{
+#if configUSE_TRACE_FACILITY
+    size_t allocated = configTOTAL_HEAP_SIZE - xPortGetFreeHeapSize();
+    btf_traceTAG( 0, (int) allocated );   /* STI tag0_event in the trace */
+#endif
+}
+```
+
+Each call emits a BTF line like:
+
+```
+1234567,Core_0,0,STI,tag0_event,0,trigger,4096
+```
+
+The last field is **bytes allocated** from the heap_4 pool at that tick.
+
+**Run and view:**
+
+```bash
+make run
+python BTFViewer/btf_viewer.py tracedata/trace.btf
+```
+
+In BTFViewer, locate the **tag0_event** STI row in the label column and expand it to show the heap-usage waveform over time. Tags `1`–`7` (`btf_traceTAG( 1 … 7, value )`) are available for other periodic signals (stack high-water, custom counters, etc.).
+
+<img src="images/memusage.png">
 
 ---
 

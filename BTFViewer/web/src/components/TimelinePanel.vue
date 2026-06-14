@@ -165,12 +165,14 @@ import { toBlob as domToBlob } from 'html-to-image'
 import LabelColumn from './LabelColumn.vue'
 import StiTooltip  from './StiTooltip.vue'
 import SegmentTooltip from './SegmentTooltip.vue'
-import { render as renderTimeline, renderVertical, buildRowLayout, buildColumnLayout, drawHoverLine, drawHoverLineVertical, drawCursors, drawCursorsVertical, drawMarksHorizontal, drawMarksVertical, RULER_H, ROW_H, STI_ROW_H, STI_WAVEFORM_H, ROW_GAP, isStiTagChannel, RULER_W, COL_W, HEADER_H, formatTime, OVERVIEW_MICRO_ROWS, rowBandHeight, visibleRowIndexRange } from '../renderer/TimelineRenderer.js'
+import { render as renderTimeline, renderVertical, buildRowLayout, buildColumnLayout, drawHoverLine, drawHoverLineVertical, drawCursors, drawCursorsVertical, drawMarksHorizontal, drawMarksVertical, RULER_H, ROW_H, STI_ROW_H, STI_WAVEFORM_H, ROW_GAP, isStiTagChannel, RULER_W, COL_W, HEADER_H, formatTime, rowBandHeight, visibleRowIndexRange } from '../renderer/TimelineRenderer.js'
 import { renderToSvg } from '../renderer/SvgExporter.js'
 import { InteractionHandler } from '../renderer/InteractionHandler.js'
 import { taskMergeKey, taskColor, coreColor, coreTint, stiNoteColor, parseTaskName, stiChannelColor, taskDisplayName } from '../utils/colors.js'
 import { segmentTooltipLines as buildSegmentTooltipLines } from '../utils/statsAnalysis.js'
 import { isRestorableViewport } from '../utils/sessionStore.js'
+import { isMigratedTask } from '../utils/migrationAnalysis.js'
+import { lodReduce } from '../utils/lod.js'
 
 // ---- Props & emits -------------------------------------------------------
 const props = defineProps({
@@ -336,11 +338,28 @@ let _ovBgTrace       = null   // trace identity (object ref)
 let _ovBgMode        = null   // viewMode string
 let _ovBgShowSti     = null   // showSti option value
 let _ovBgExpandedKey = null   // sorted join of expanded STI channels
-let _ovBgTaskAreaH   = 0     // task area height used in the last background paint
+let _ovBgMainAreaH   = 0     // task/column strip area height in the thumbnail
+let _ovBgOrientation = null  // 'h' | 'v' when background was built
+
+// ---- Interaction fast-paint (coarse LOD while panning/zooming) ------------
+let _interacting = false
+let _interactEndTimer = null
+const INTERACT_SETTLE_MS = 250
+
+function markInteracting() {
+  _interacting = true
+  clearTimeout(_interactEndTimer)
+  _interactEndTimer = setTimeout(() => {
+    _interacting = false
+    scheduleRender()
+    if (overviewVisible.value) scheduleOverviewPaint()
+  }, INTERACT_SETTLE_MS)
+}
 
 // ---- Renderer loop --------------------------------------------------------
 let _rafId = null
 let _dirty = false
+let _ovPaintRaf = null
 
 function scheduleRender() {
   _dirty = true
@@ -350,9 +369,20 @@ function scheduleRender() {
       if (_dirty) {
         _dirty = false
         paint()
+        if (overviewVisible.value && !_interacting) scheduleOverviewPaint()
       }
     })
   }
+}
+
+function scheduleOverviewPaint() {
+  nextTick(() => {
+    if (_ovPaintRaf) return
+    _ovPaintRaf = requestAnimationFrame(() => {
+      _ovPaintRaf = null
+      if (overviewVisible.value) paintOverview()
+    })
+  })
 }
 
 function paint() {
@@ -396,6 +426,7 @@ function paint() {
     darkMode:         props.options.darkMode,
     migratedOnlyFilter: !!props.options.migratedOnlyFilter,
     lockedTaskKey:    props.options.viewMode === 'core' ? (props.options.lockedTaskKey ?? null) : null,
+    fastPaint:        _interacting,
     rowLayout:        cachedRowLayout.value,
     columnLayout:     cachedColumnLayout.value,
   }
@@ -494,6 +525,7 @@ function setupHandler() {
       }
       viewport.scrollX   = vp.scrollX ?? viewport.scrollX
       emit('viewportChange', { ...viewport })
+      markInteracting()
       scheduleRender()
     },
     onCursorsChange(cursors) {
@@ -722,6 +754,10 @@ function fitToTrace() {
 
 function applyViewport(vp) {
   if (!props.trace || !vp) return false
+  if (!isRestorableViewport(vp, props.trace)) {
+    fitToTrace()
+    return true
+  }
   const lo = props.trace.timeMin >= 0 ? Math.max(0, props.trace.timeMin) : props.trace.timeMin
   const hi = props.trace.timeMax
   let timeStart = vp.timeStart
@@ -754,6 +790,7 @@ function zoomCenter(factor) {
   const center = (viewport.timeStart + viewport.timeEnd) / 2
   viewport.timeStart = center - span / 2
   viewport.timeEnd   = center + span / 2
+  markInteracting()
   emitViewportChange()
   scheduleRender()
 }
@@ -951,6 +988,7 @@ function collapseAll() {
 
 // ---- Watchers ------------------------------------------------------------
 watch(() => props.trace, (trace) => {
+  _ovBgCanvas = null
   if (!trace) return
   expanded.clear()
   if (trace.coreNames.length <= AUTO_EXPAND_CORES_MAX) {
@@ -1002,11 +1040,16 @@ watch(
         } else {
           clearTimeout(_overviewHideTimer)
           overviewVisible.value = false
+          _ovBgCanvas = null
         }
       })
     }
   },
 )
+
+watch(overviewVisible, (vis) => {
+  if (vis) scheduleOverviewPaint()
+})
 
 watch(() => props.cursors, (c) => {
   _handler?.setCursors(c)
@@ -1088,7 +1131,19 @@ function showOverviewPopup() {
   if (!_sbDrag) {
     _overviewHideTimer = setTimeout(() => { overviewVisible.value = false }, 1800)
   }
-  nextTick(paintOverview)
+  scheduleOverviewPaint()
+}
+
+/** Map main-view scroll position to the overview thumbnail strip area. */
+function overviewStripRect(totalMain, visibleMain, scrollPos, stripAreaH) {
+  const areaH = Math.max(1, stripAreaH)
+  if (totalMain <= visibleMain || totalMain <= 0) {
+    return { pos: 0, size: areaH }
+  }
+  const size = Math.max(2, (visibleMain / totalMain) * areaH)
+  const maxPos = Math.max(0, areaH - size)
+  const pos = (scrollPos / (totalMain - visibleMain)) * maxPos
+  return { pos, size }
 }
 
 function paintOverview() {
@@ -1105,35 +1160,44 @@ function paintOverview() {
   // ---- Background cache --------------------------------------------------
   // The static part (rows + STI bars + border) never changes on scroll/pan.
   // Rebuild it only when the trace, view mode or STI state changes.
-  const expandedKey = [...stiExpanded].sort().join(',') + '|' + [...expanded].sort().join(',')
+  const expandedKey = [
+    [...stiExpanded].sort().join(','),
+    [...expanded].sort().join(','),
+    props.options.migratedOnlyFilter ? '1' : '0',
+    props.options.darkMode ? '1' : '0',
+    orientation.value,
+  ].join('|')
   const needsBgRebuild = _ovBgCanvas === null
     || _ovBgTrace       !== tr
     || _ovBgMode        !== props.options.viewMode
     || _ovBgShowSti     !== props.options.showSti
     || _ovBgExpandedKey !== expandedKey
+    || _ovBgOrientation !== orientation.value
+
+  const bgTotSize = orientation.value === 'h'
+    ? totalRowHeight.value
+    : totalColumnWidth.value
 
   if (needsBgRebuild) {
-    let bg
-    if (typeof OffscreenCanvas !== 'undefined') {
-      bg = new OffscreenCanvas(W, H)
-    } else {
-      bg = document.createElement('canvas')
-      bg.width  = W
-      bg.height = H
-    }
-    const bgTotH = orientation.value === 'h'
-      ? totalRowHeight.value
-      : buildRowLayout(tr, props.options.viewMode, expanded, 0, props.options.showSti !== false, stiExpanded).totalHeight
-    _paintOverviewBg(bg, tr, lo, hi, span, W, H, bgTotH)
-    _ovBgCanvas      = bg
-    _ovBgTrace       = tr
-    _ovBgMode        = props.options.viewMode
-    _ovBgShowSti     = props.options.showSti
-    _ovBgExpandedKey = expandedKey
+    const bg = document.createElement('canvas')
+    bg.width  = W
+    bg.height = H
+    _paintOverviewBg(bg, tr, lo, hi, span, W, H, bgTotSize)
+    _ovBgCanvas       = bg
+    _ovBgTrace        = tr
+    _ovBgMode         = props.options.viewMode
+    _ovBgShowSti      = props.options.showSti
+    _ovBgExpandedKey  = expandedKey
+    _ovBgOrientation  = orientation.value
   }
 
   ctx.setTransform(1, 0, 0, 1, 0, 0)
-  ctx.drawImage(_ovBgCanvas, 0, 0)
+  ctx.clearRect(0, 0, W, H)
+  if (_ovBgCanvas) {
+    ctx.drawImage(_ovBgCanvas, 0, 0, W, H)
+  } else {
+    _paintOverviewBg(canvas, tr, lo, hi, span, W, H, bgTotSize)
+  }
 
   // ---- Overlay: viewport indicator (only this changes on scroll/zoom) ----
   const dark     = props.options.darkMode
@@ -1142,36 +1206,24 @@ function paintOverview() {
   ctx.fillStyle   = dark ? 'rgba(255,160,60,0.18)' : 'rgba(200,70,10,0.12)'
   ctx.lineWidth   = 1.5
 
+  const mainAreaH = _ovBgMainAreaH > 0 ? _ovBgMainAreaH : H
+
   if (orientation.value === 'h') {
     const vx = Math.max(0, (viewport.timeStart - lo) * pxPerNs)
     const vw = Math.min(W - vx, (viewport.timeEnd - viewport.timeStart) * pxPerNs)
     const totH = totalRowHeight.value
     const visH = viewport.canvasH - RULER_H
-    let vy = 0
-    let vh = H
-    if (totH > visH && totH > 0) {
-      // Thumbnail is proportional to the actual view — simple linear mapping
-      vy = (viewport.scrollY / (totH - visH)) * (H - (visH / totH) * H)
-      vh = Math.max(2, (visH / totH) * H)
-    }
+    const { pos: vy, size: vh } = overviewStripRect(totH, visH, viewport.scrollY, mainAreaH)
     ctx.beginPath()
     ctx.rect(vx, vy, Math.max(2, vw), vh)
     ctx.fill()
     ctx.stroke()
   } else {
-    // Vertical mode: the thumbnail background always maps time→X and columns→Y,
-    // so the indicator also maps time→X (same as horizontal mode) and
-    // column-scroll→Y to stay consistent with the background.
     const vx = Math.max(0, (viewport.timeStart - lo) * pxPerNs)
     const vw = Math.min(W - vx, (viewport.timeEnd - viewport.timeStart) * pxPerNs)
     const totW = totalColumnWidth.value
     const visW = viewport.canvasW
-    let vy = 0
-    let vh = H
-    if (totW > visW && totW > 0) {
-      vy = ((viewport.scrollX || 0) / (totW - visW)) * (H - (visW / totW) * H)
-      vh = Math.max(2, (visW / totW) * H)
-    }
+    const { pos: vy, size: vh } = overviewStripRect(totW, visW, viewport.scrollX || 0, mainAreaH)
     ctx.beginPath()
     ctx.rect(vx, vy, Math.max(2, vw), vh)
     ctx.fill()
@@ -1179,88 +1231,137 @@ function paintOverview() {
   }
 }
 
-function _paintOverviewBg(bgCanvas, tr, lo, hi, span, W, H, totH) {
+function _paintOverviewBg(bgCanvas, tr, lo, hi, span, W, H, totMainSize) {
   const ctx     = bgCanvas.getContext('2d')
   const dark    = props.options.darkMode
   const pxPerNs = W / span
   const isCore  = props.options.viewMode === 'core'
+  const isVert  = orientation.value === 'v'
+  const migratedOnly = !!props.options.migratedOnlyFilter
 
   ctx.fillStyle = dark ? '#1a1a1a' : '#e8e8e8'
   ctx.fillRect(0, 0, W, H)
 
-  // ---- Build flat row descriptors ----------------------------------------
-  const rowDefs = []
-  if (!isCore) {
-    for (const mk of tr.tasks) {
-      const repr = tr.taskRepr.get(mk)
-      const segs = tr.segLodUltraByMergeKey.get(mk) || tr.segByMergeKey.get(mk) || []
-      if (!segs.length) continue
-      // Store base colour + blend flag; core tint is applied per-segment in the draw loop.
-      rowDefs.push({ segs, color: taskColor(mk, repr), blend: true })
-    }
-  } else {
-    for (const coreName of tr.coreNames) {
-      const hdrSegs = tr.coreSegLodUltra.get(coreName) || tr.coreSegs.get(coreName) || []
-      // Core header: per-segment task colour (no core tint), matching drawCoreRow.
-      if (hdrSegs.length) rowDefs.push({ segs: hdrSegs, perSegColor: true })
-      if (expanded.has(coreName)) {
-        const taskOrder = (tr.coreTaskOrder.get(coreName) || [])
-          .filter(t => parseTaskName(t).name !== 'TICK')
-        for (const taskRaw of taskOrder) {
-          const mk    = taskMergeKey(taskRaw)
-          const tSegs = tr.coreTaskSegLodUltra.get(coreName)?.get(taskRaw)
-                     || tr.coreTaskSegs.get(coreName)?.get(taskRaw) || []
-          if (!tSegs.length) continue
-          rowDefs.push({ segs: tSegs, color: taskColor(mk, taskRaw) })
+  const stripDefs = []
+  const stiDefs = []
+
+  if (!isVert) {
+    if (!isCore) {
+      for (const mk of tr.tasks) {
+        if (migratedOnly && !isMigratedTask(tr, mk)) continue
+        const repr = tr.taskRepr.get(mk)
+        const segs = tr.segLodUltraByMergeKey.get(mk) || tr.segByMergeKey.get(mk) || []
+        if (!segs.length) continue
+        stripDefs.push({ segs, color: taskColor(mk, repr), blend: true })
+      }
+    } else {
+      for (const coreName of tr.coreNames) {
+        const hdrSegs = tr.coreSegLodUltra.get(coreName) || tr.coreSegs.get(coreName) || []
+        if (hdrSegs.length) stripDefs.push({ segs: hdrSegs, perSegColor: true })
+        if (expanded.has(coreName)) {
+          const taskOrder = (tr.coreTaskOrder.get(coreName) || [])
+            .filter(t => parseTaskName(t).name !== 'TICK')
+          for (const taskRaw of taskOrder) {
+            const mk = taskMergeKey(taskRaw)
+            if (migratedOnly && !isMigratedTask(tr, mk)) continue
+            const tSegs = tr.coreTaskSegLodUltra.get(coreName)?.get(taskRaw)
+                       || tr.coreTaskSegs.get(coreName)?.get(taskRaw) || []
+            if (!tSegs.length) continue
+            stripDefs.push({ segs: tSegs, color: taskColor(mk, taskRaw) })
+          }
         }
       }
     }
-  }
-
-  const stiDefs = []
-  if (props.options.showSti !== false && tr.stiChannels?.length) {
-    for (const ch of tr.stiChannels) {
-      const evs = tr.stiEventsByTarget?.get(ch) || []
-      if (!evs.length) continue
-      stiDefs.push({ evs, color: stiChannelColor(ch), isExpanded: stiExpanded.has(ch), ch })
+    if (props.options.showSti !== false && tr.stiChannels?.length) {
+      for (const ch of tr.stiChannels) {
+        const evs = tr.stiEventsByTarget?.get(ch) || []
+        if (!evs.length) continue
+        stiDefs.push({ evs, color: stiChannelColor(ch), isExpanded: stiExpanded.has(ch), ch })
+      }
     }
-  }
-
-  // Compute the actual STI height in main-view pixels (matching buildRowLayout) so
-  // the thumbnail allocates space proportionally — no more over-represented STI zone.
-  let stiMainH = 0
-  if (props.options.showSti !== false && tr.stiChannels?.length) {
-    for (const ch of tr.stiChannels) {
-      const isExp = isStiTagChannel(ch) && stiExpanded.has(ch)
-      stiMainH += (isExp ? STI_WAVEFORM_H : STI_ROW_H) + ROW_GAP
-    }
-  }
-  const totHSafe   = Math.max(1, totH)
-  const stiTotalH  = stiMainH / totHSafe * H
-  const taskAreaH  = H - stiTotalH
-  _ovBgTaskAreaH   = taskAreaH
-
-  if (rowDefs.length) {
-    const rowH = taskAreaH / rowDefs.length
-    const microOverview = rowDefs.length > OVERVIEW_MICRO_ROWS
-    const segColorCache = new Map()
-    for (let i = 0; i < rowDefs.length; i++) {
-      const rd = rowDefs[i]
-      const y  = i * rowH
-      const rh = Math.max(1, rowH - 0.3)
-      if (microOverview) {
-        if (!rd.segs.length) continue
-        ctx.globalAlpha = 0.55
-        ctx.fillStyle = rd.color || '#888'
-        ctx.fillRect(0, y + rh * 0.25, W, rh * 0.5)
-        ctx.globalAlpha = 1
+  } else {
+    const layout = buildColumnLayout(
+      tr, props.options.viewMode, expanded, 0,
+      props.options.showSti !== false, stiExpanded, migratedOnly,
+    )
+    for (const col of layout.cols) {
+      if (col.type === 'sti') {
+        const evs = tr.stiEventsByTarget?.get(col.key) || []
+        if (!evs.length) continue
+        stripDefs.push({ sti: true, evs, isExpanded: stiExpanded.has(col.key), ch: col.key })
         continue
       }
-      for (const seg of rd.segs) {
+      let segs = []
+      let color = col.color
+      let blend = false
+      let perSegColor = false
+      if (col.type === 'task') {
+        segs = tr.segLodUltraByMergeKey.get(col.key) || tr.segByMergeKey.get(col.key) || []
+        blend = true
+      } else if (col.type === 'core') {
+        segs = tr.coreSegLodUltra.get(col.key) || tr.coreSegs.get(col.key) || []
+        perSegColor = true
+      } else if (col.type === 'core-task') {
+        segs = tr.coreTaskSegLodUltra.get(col.coreKey)?.get(col.taskKey)
+            || tr.coreTaskSegs.get(col.coreKey)?.get(col.taskKey) || []
+      }
+      if (!segs.length) continue
+      stripDefs.push({ segs, color, blend, perSegColor })
+    }
+  }
+
+  let stiMainSize = 0
+  if (props.options.showSti !== false && tr.stiChannels?.length) {
+    if (isVert) {
+      for (const ch of tr.stiChannels) {
+        const isExp = isStiTagChannel(ch) && stiExpanded.has(ch)
+        stiMainSize += (isExp ? STI_WAVEFORM_H : COL_W)
+      }
+    } else {
+      for (const ch of tr.stiChannels) {
+        const isExp = isStiTagChannel(ch) && stiExpanded.has(ch)
+        stiMainSize += (isExp ? STI_WAVEFORM_H : STI_ROW_H) + ROW_GAP
+      }
+    }
+  }
+  const totSafe = Math.max(1, totMainSize)
+  const stiAreaH = isVert
+    ? 0  // vertical: STI strips share the same Y stack as task columns
+    : (stiMainSize / totSafe) * H
+  const mainAreaH = isVert ? H : (H - stiAreaH)
+  _ovBgMainAreaH = mainAreaH
+  const nsPerPxThumb = span / W
+
+  if (stripDefs.length) {
+    const stripH = mainAreaH / stripDefs.length
+    const segColorCache = new Map()
+    for (let i = 0; i < stripDefs.length; i++) {
+      const rd = stripDefs[i]
+      const y  = i * stripH
+      const rh = Math.max(1, stripH - 0.3)
+      if (rd.sti) {
+        const reducedEvs = lodReduce(
+          rd.evs.map(ev => ({ start: ev.time, end: ev.time + 1, _ev: ev })),
+          nsPerPxThumb,
+          lo,
+        )
+        ctx.save()
+        for (const seg of reducedEvs) {
+          const ev = seg._ev
+          ctx.fillStyle = stiNoteColor(ev.note || ev.event || '')
+          ctx.beginPath()
+          ctx.arc((ev.time - lo) * pxPerNs, y + rh / 2, Math.max(0.5, rh * 0.35), 0, Math.PI * 2)
+          ctx.fill()
+        }
+        ctx.restore()
+        continue
+      }
+      const reduced = lodReduce(rd.segs, nsPerPxThumb, lo)
+      for (const seg of reduced) {
         const x  = (seg.start - lo) * pxPerNs
         const sw = Math.max(0.5, (seg.end - seg.start) * pxPerNs)
+        if (x + sw < 0 || x > W) continue
         if (rd.perSegColor) {
-          // Core header: per-segment task colour (no core tint), matching drawCoreRow.
           if (seg.task?.startsWith('Core_')) continue
           let c = segColorCache.get(seg.task)
           if (c === undefined) {
@@ -1270,10 +1371,8 @@ function _paintOverviewBg(bgCanvas, tr, lo, hi, span, W, H, totH) {
           ctx.fillStyle = c
           ctx.fillRect(x, y, sw, rh)
         } else {
-          // Task row or core-task sub-row: fill base colour first…
           ctx.fillStyle = rd.color
           ctx.fillRect(x, y, sw, rh)
-          // …then overlay core tint per-segment (task mode only), matching paintSegments.
           if (rd.blend) {
             const tint = coreTint(seg.core)
             if (tint) {
@@ -1286,11 +1385,11 @@ function _paintOverviewBg(bgCanvas, tr, lo, hi, span, W, H, totH) {
     }
   }
 
-  if (stiDefs.length) {
-    const stiRowH = stiTotalH / stiDefs.length
+  if (stiDefs.length && !isVert) {
+    const stiRowH = stiAreaH / stiDefs.length
     for (let i = 0; i < stiDefs.length; i++) {
       const { evs, isExpanded, ch } = stiDefs[i]
-      const y  = taskAreaH + i * stiRowH
+      const y  = mainAreaH + i * stiRowH
       const rh = Math.max(2, stiRowH - 0.5)
       if (isExpanded) {
         // Use precomputed value range from parser (O(1)) instead of scanning
@@ -1367,6 +1466,7 @@ function _sbMouseMove(e) {
       )
       viewport.scrollX = Math.max(0, ratio * Math.max(0, totalWidth - viewport.canvasW))
     }
+    markInteracting()
     scheduleRender()
   } else {
     const dy   = e.clientY - _sbDrag.startY
@@ -1379,6 +1479,7 @@ function _sbMouseMove(e) {
       viewport.timeStart = newStart
       viewport.timeEnd   = newStart + _sbDrag.visSpan
     }
+    markInteracting()
     scheduleRender()
   }
 }
@@ -1498,6 +1599,9 @@ onBeforeUnmount(() => {
   if (_resizeObs) _resizeObs.disconnect()
   if (_handler) _handler.destroy()
   if (_rafId) cancelAnimationFrame(_rafId)
+  if (_ovPaintRaf) cancelAnimationFrame(_ovPaintRaf)
+  if (_overviewRaf) cancelAnimationFrame(_overviewRaf)
+  clearTimeout(_interactEndTimer)
   document.removeEventListener('click', onGlobalClick)
   clearTimeout(_overviewHideTimer)
   document.removeEventListener('mousemove', _sbMouseMove)

@@ -378,14 +378,13 @@ freertos_risc_v_trap_handler:
 
     portSMPupdateMtimerCompareRegister
 
-    /* Only hart 0 drives the FreeRTOS tick counter. */
+    /* Only hart 0 drives the FreeRTOS tick counter; secondaries sync via MSIP. */
     csrr    t0, mhartid
-    bnez    t0, .Lsmp_timer_switch
+    bnez    t0, .Lsmp_done
 
     call    xPortTimerTickHandler
-    beqz    a0, .Lsmp_done     /* pdFALSE → no switch needed */
+    beqz    a0, .Lsmp_done
 
-.Lsmp_timer_switch:
     csrr    a0, mhartid
     call    vTaskSwitchContext
     j       .Lsmp_done

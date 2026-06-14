@@ -330,21 +330,34 @@ void vPortSetupTimerInterrupt( void )
         ( volatile uint64_t * ) ( ullMachineTimerCompareRegisterBase +
                                   ( ulHartId * sizeof( uint64_t ) ) );
 
-    do {
-        ulCurrentTimeHigh = *pulTimeHigh;
-        ulCurrentTimeLow  = *pulTimeLow;
-    } while( ulCurrentTimeHigh != *pulTimeHigh );
+    if( ulHartId == 0U )
+    {
+        /* Hart 0 owns the FreeRTOS tick: local MTIP drives xTaskIncrementTick.
+         * Other cores are synchronised via MSIP (portYIELD_CORE) from the kernel. */
+        do {
+            ulCurrentTimeHigh = *pulTimeHigh;
+            ulCurrentTimeLow  = *pulTimeLow;
+        } while( ulCurrentTimeHigh != *pulTimeHigh );
 
-    ullNextTimes[ ulHartId ]  = ( uint64_t ) ulCurrentTimeHigh;
-    ullNextTimes[ ulHartId ] <<= 32ULL;
-    ullNextTimes[ ulHartId ] |= ( uint64_t ) ulCurrentTimeLow;
-    ullNextTimes[ ulHartId ] += ( uint64_t ) uxTimerIncrementsForOneTick;
+        ullNextTimes[ 0 ]  = ( uint64_t ) ulCurrentTimeHigh;
+        ullNextTimes[ 0 ] <<= 32ULL;
+        ullNextTimes[ 0 ] |= ( uint64_t ) ulCurrentTimeLow;
+        ullNextTimes[ 0 ] += ( uint64_t ) uxTimerIncrementsForOneTick;
 
-    *pullMachineTimerCompareRegisters[ ulHartId ] = ullNextTimes[ ulHartId ];
-    ullNextTimes[ ulHartId ] += ( uint64_t ) uxTimerIncrementsForOneTick;
+        *pullMachineTimerCompareRegisters[ 0 ] = ullNextTimes[ 0 ];
+        ullNextTimes[ 0 ] += ( uint64_t ) uxTimerIncrementsForOneTick;
 
-    /* Enable MTIE | MEIE | MSIE (timer, external, software interrupts). */
-    __asm volatile( "csrs mie, %0" :: "r"( 0x888u ) : "memory" );
+        /* MTIE | MSIE | MEIE */
+        __asm volatile( "csrs mie, %0" :: "r"( 0x888u ) : "memory" );
+    }
+    else
+    {
+        /* Secondary harts: no local tick timer — only IPI (MSIP) and external IRQs. */
+        *pullMachineTimerCompareRegisters[ ulHartId ] = UINT64_MAX;
+
+        /* MSIE | MEIE (no MTIE). */
+        __asm volatile( "csrs mie, %0" :: "r"( 0x808u ) : "memory" );
+    }
 }
 
 /* ---- xPortStartScheduler (called only from hart 0) ---- */

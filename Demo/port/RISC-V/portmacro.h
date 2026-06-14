@@ -118,7 +118,8 @@ typedef portUBASE_TYPE   TickType_t;
 #define portYIELD()    __asm volatile ( "ecall" )
 
 /* ================================================================
- * Legacy configCLINT_BASE_ADDRESS compatibility
+ * CLINT / MTIME — optional legacy configCLINT_BASE_ADDRESS override,
+ * then chip defaults from freertos_risc_v_chip_specific_extensions.h.
  * ================================================================ */
 #if defined( configCLINT_BASE_ADDRESS ) && !defined( configMTIME_BASE_ADDRESS ) && ( configCLINT_BASE_ADDRESS == 0 )
     #define configMTIME_BASE_ADDRESS       ( 0 )
@@ -126,8 +127,12 @@ typedef portUBASE_TYPE   TickType_t;
 #elif defined( configCLINT_BASE_ADDRESS ) && !defined( configMTIME_BASE_ADDRESS )
     #define configMTIME_BASE_ADDRESS       ( ( configCLINT_BASE_ADDRESS ) + 0xBFF8UL )
     #define configMTIMECMP_BASE_ADDRESS    ( ( configCLINT_BASE_ADDRESS ) + 0x4000UL )
-#elif !defined( configMTIME_BASE_ADDRESS ) || !defined( configMTIMECMP_BASE_ADDRESS )
-    #error "configMTIME_BASE_ADDRESS and configMTIMECMP_BASE_ADDRESS must be defined in FreeRTOSConfig.h."
+#endif
+
+#include "freertos_risc_v_chip_specific_extensions.h"
+
+#if !defined( configMTIME_BASE_ADDRESS ) || !defined( configMTIMECMP_BASE_ADDRESS )
+    #error "configMTIME_BASE_ADDRESS and configMTIMECMP_BASE_ADDRESS must be defined in freertos_risc_v_chip_specific_extensions.h."
 #endif
 
 /* ================================================================

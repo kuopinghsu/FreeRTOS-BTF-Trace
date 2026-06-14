@@ -54,7 +54,7 @@ struct Options {
 
 struct RunStats {
     uint64_t insns_retired  = 0;  // total instructions retired across all harts
-    uint64_t cycles         = 0;  // simulated mtime ticks
+    uint64_t cycles         = 0;  // CLINT mtime (global clock ticks, not insns retired)
     double   wall_seconds   = 0.0;
     double   sim_hz() const {
         return wall_seconds > 0.0 ? static_cast<double>(insns_retired) / wall_seconds : 0.0;
@@ -282,8 +282,7 @@ private:
     void write_mainvars(uint64_t addr, uint64_t limit);
     void dump_all_hart_registers(FILE *out) const;
 
-    void tick();
-    void tick_n(int n);  // advance mtime_ by n and update all hart timer-pending bits
+    void tick();  // advance global mtime_ by one clock tick; refresh MTIP on all harts
     void step_internal(int hart_id);
     void execute_trap(int hart_id, const Trap &trap, uint64_t trap_pc, bool advance_pc);
     bool handle_interrupt(int hart_id);

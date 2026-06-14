@@ -146,7 +146,9 @@
 #if configINCLUDE_OSTICK_EVENTS
 
 #ifndef traceTASK_INCREMENT_TICK
-# define traceTASK_INCREMENT_TICK( xTickCount ) addEVENT_ISR( (uint32_t)xTickCount, TRACE_EVENT_TASK_INCREMENT_TICK )
+/* Kernel hook runs on every timer IRQ (same xTickCount while scheduler suspended).
+ * btf_trace_increment_tick() filters duplicates; kernel stays upstream-compatible. */
+# define traceTASK_INCREMENT_TICK( xTickCount ) btf_trace_increment_tick( (uint32_t)( xTickCount ) )
 #endif // traceTASK_INCREMENT_TICK
 
 #endif // configINCLUDE_OSTICK_EVENTS

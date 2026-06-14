@@ -33,7 +33,7 @@
 #endif
 
 #ifndef configMAX_TRACE_EVENTS
-#define configMAX_TRACE_EVENTS          8192
+#define configMAX_TRACE_EVENTS          4096
 #endif
 
 #ifndef configMAX_TRACE_TASK_NAME_LEN
@@ -106,6 +106,7 @@ void btf_traceEND(void);
 void btf_traceTAG(int t, int v);
 void btf_trace_add_task(uint8_t *task_name, uint32_t task_id, event_t event);
 void btf_trace_add_event(uint32_t value, event_t event);
+void btf_trace_increment_tick(uint32_t xTickCount);
 void btf_dump(void);
 
 #endif // __BTF_TRACE_H__

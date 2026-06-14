@@ -39,6 +39,10 @@ GENTRACE         ?= ../../build/tools/gentrace
 TRACEDATA        := ../../tracedata
 TRACE_BIN        := trace.bin
 
+# Override btf_trace.h default (4096). Passed on the compile line so the trace
+# library and firmware agree on TRACE_DATA layout without editing FreeRTOSConfig.h.
+MAX_TRACE_EVENTS ?= 80000
+
 # Demo/port/RISC-V/ is self-contained (portmacro.h, portContext.h,
 # freertos_risc_v_chip_specific_extensions.h all live there).
 # FreeRTOS-Kernel/portable/GCC/RISC-V/ is NOT on the include path.
@@ -47,7 +51,8 @@ FREERTOS_CPPFLAGS := \
     -I$(FREERTOS_CHIPS) \
     -I$(FREERTOS_CONF) \
     -I$(FREERTOS_TRACE) \
-    -DconfigNUMBER_OF_CORES=$(CORES)
+    -DconfigNUMBER_OF_CORES=$(CORES) \
+    -DconfigMAX_TRACE_EVENTS=$(MAX_TRACE_EVENTS)
 
 # ── Port source selection ──────────────────────────────────────────────────────
 FREERTOS_PORT_C    := $(FREERTOS_CHIPS)/port.c

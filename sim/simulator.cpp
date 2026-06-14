@@ -13,7 +13,7 @@
 //   - Instruction-level trace with disassembly (--trace)
 //
 // Memory map:
-//   0x02000000  CLINT (mtime/mtimecmp)
+//   0x02000000  CLINT (mtime/mtimecmp — global fixed-rate clock, not per-insn)
 //   0x80000000  RAM base (default 128 MB)
 //   0x83FFF000  HTIF tohost/fromhost (arch-test ELFs)
 // ============================================================================
@@ -411,11 +411,9 @@ RunStats Simulator::run() {
 
             bool advanced = false;
             bool waiting = false;
-            int steps = 0;
             for (int hart = 0; hart < options_.cores; ++hart) {
                 if (step_hart(hart)) {
                     advanced = true;
-                    ++steps;
                     ++retired;
                     if (options_.max_instructions != 0 && retired >= options_.max_instructions) {
                         throw std::runtime_error("instruction limit reached");
@@ -426,12 +424,11 @@ RunStats Simulator::run() {
                 }
             }
 
-            // Advance simulated time by the number of instructions executed
-            // this iteration and update all per-hart timer-pending bits in
-            // one pass — far cheaper than calling tick() once per instruction.
-            if (steps > 0) {
-                tick_n(steps);
-            }
+            /* Advance the global CLINT mtime by one clock tick per simulator
+             * loop iteration.  mtime is a platform timebase (cycle counter at
+             * configCPU_CLOCK_HZ on the guest), not a sum of retired instructions
+             * and not scaled by the number of active harts. */
+            tick();
 
             service_htif();
 
@@ -445,7 +442,6 @@ RunStats Simulator::run() {
 
             if (!advanced) {
                 if (waiting) {
-                    tick();
                     continue;
                 }
                 break;
@@ -1286,17 +1282,6 @@ void Simulator::write_mainvars(uint64_t addr, uint64_t limit) {
 
 void Simulator::tick() {
     ++mtime_;
-    for (int hart = 0; hart < options_.cores; ++hart) {
-        if (mtime_ >= mtimecmp_[hart]) {
-            harts_[hart].mip |= kMipMtip;
-        } else {
-            harts_[hart].mip &= ~kMipMtip;
-        }
-    }
-}
-
-void Simulator::tick_n(int n) {
-    mtime_ += static_cast<uint64_t>(n);
     for (int hart = 0; hart < options_.cores; ++hart) {
         if (mtime_ >= mtimecmp_[hart]) {
             harts_[hart].mip |= kMipMtip;
