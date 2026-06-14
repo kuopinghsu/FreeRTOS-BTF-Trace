@@ -21,7 +21,7 @@
 #include "simulator.h"
 #include "riscv-dis.h"
 
-#include <elf.h>
+#include "elf.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -51,7 +51,6 @@ void on_sigint(int) {
     g_sigint_requested = 1;
 }
 
-constexpr uint64_t kInsnAddrMisaligned = 0;
 constexpr uint64_t kInsnAccessFault = 1;
 constexpr uint64_t kIllegalInstruction = 2;
 constexpr uint64_t kBreakpoint = 3;
