@@ -256,7 +256,7 @@ exit(0);
 
 All trace hooks in `FreeRTOS-Trace/FreeRTOS-Trace.h` are protected by either `taskENTER_CRITICAL()` (task context) or `taskENTER_CRITICAL_FROM_ISR()` (ISR / context-switch context).
 
-The RISC-V SMP port (`Demo/port/RISC-V/port.c`) implements both the task lock and the ISR lock as **recursive** spinlocks (owner + count), mirroring the Xtensa `xt_mutex` design.  This allows `traceTASK_SWITCHED_OUT/IN` — which fire inside `vTaskSwitchContext` while the ISR lock is already held — to safely re-enter the same lock without deadlocking.
+The RISC-V SMP port (`Demo/port/RISC-V/port.c`) implements both the task lock and the ISR lock as **recursive** spinlocks (owner + count).  This allows `traceTASK_SWITCHED_OUT/IN` — which fire inside `vTaskSwitchContext` while the ISR lock is already held — to safely re-enter the same lock without deadlocking.
 
 ### 7. Convert to BTF or VCD
 
