@@ -6,13 +6,7 @@ A PyQt5-based interactive visualiser for FreeRTOS context-switch traces in **Bes
 
 ## Screenshot
 
-Task view and CPU load:
-
 <img src="../images/btfviewer.png" alt="BTF Viewer screenshot" width=640>
-
-Histogram of Execution Time:
-
-<img src="../images/btfviewer-2.png" alt="Histogram of Execution Time" width=640>
 
 [DEMO](https://apps.kuoping.com/btf-viewer.html)
 

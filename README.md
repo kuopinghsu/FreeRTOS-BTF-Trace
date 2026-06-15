@@ -6,6 +6,12 @@ Trace output is produced in two industry-standard formats:
 - **BTF (Best Trace Format)** — a CSV-based format designed for system-level timing and performance analysis of embedded real-time systems. Specification available [here](https://assets.vector.com/cms/content/products/TA_Tool_Suite/Docs/BTF_Specification.pdf).
 - **VCD (Value Change Dump)** — an ASCII-based waveform format compatible with logic simulation tools such as [GTKWave](http://gtkwave.sourceforge.net).
 
+## Screenshot
+
+<img src="images/btfviewer.png" alt="BTF Viewer screenshot" width=640>
+
+[DEMO](https://apps.kuoping.com/btf-viewer.html)
+
 ---
 
 ## Overview
