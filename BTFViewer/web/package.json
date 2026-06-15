@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "node scripts/embed-wasm.mjs && vite build",
+    "wasm": "wat2wasm wasm/timeline_accel.wat -o src/renderer/timeline_accel.wasm && node scripts/embed-wasm.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

@@ -54,16 +54,18 @@ export function lodReduce(segs, timescalePerPx, timeMin) {
   if (segs.length === 0) return segs
   const result = []
   let prevPx = -2
+  let cur = null
   for (const s of segs) {
     const px = Math.floor((s.start - timeMin) / timescalePerPx)
     if (px !== prevPx) {
-      result.push(s)
+      if (cur) result.push(cur)
+      cur = { ...s }
       prevPx = px
-    } else if (s.end > result[result.length - 1].end) {
-      // Same pixel column but this segment extends further right –
-      // replace so the more important segment is visible.
-      result[result.length - 1] = s
+    } else {
+      cur.start = Math.min(cur.start, s.start)
+      cur.end = Math.max(cur.end, s.end)
     }
   }
+  if (cur) result.push(cur)
   return result
 }

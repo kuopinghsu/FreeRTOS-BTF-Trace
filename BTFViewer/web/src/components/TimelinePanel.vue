@@ -165,7 +165,7 @@ import { toBlob as domToBlob } from 'html-to-image'
 import LabelColumn from './LabelColumn.vue'
 import StiTooltip  from './StiTooltip.vue'
 import SegmentTooltip from './SegmentTooltip.vue'
-import { render as renderTimeline, renderVertical, buildRowLayout, buildColumnLayout, drawHoverLine, drawHoverLineVertical, drawCursors, drawCursorsVertical, drawMarksHorizontal, drawMarksVertical, RULER_H, ROW_H, STI_ROW_H, STI_WAVEFORM_H, ROW_GAP, isStiTagChannel, RULER_W, COL_W, HEADER_H, formatTime, rowBandHeight, visibleRowIndexRange } from '../renderer/TimelineRenderer.js'
+import { render as renderTimeline, renderVertical, buildRowLayout, buildColumnLayout, drawHoverLine, drawHoverLineVertical, drawRangeSelect, drawRangeSelectVertical, drawCursors, drawCursorsVertical, drawMarksHorizontal, drawMarksVertical, RULER_H, ROW_H, STI_ROW_H, STI_WAVEFORM_H, ROW_GAP, isStiTagChannel, RULER_W, COL_W, HEADER_H, formatTime, rowBandHeight, visibleRowIndexRange } from '../renderer/TimelineRenderer.js'
 import { renderToSvg } from '../renderer/SvgExporter.js'
 import { InteractionHandler } from '../renderer/InteractionHandler.js'
 import { taskMergeKey, taskColor, coreColor, coreTint, stiNoteColor, parseTaskName, stiChannelColor, taskDisplayName } from '../utils/colors.js'
@@ -173,6 +173,13 @@ import { segmentTooltipLines as buildSegmentTooltipLines } from '../utils/statsA
 import { isRestorableViewport } from '../utils/sessionStore.js'
 import { isMigratedTask } from '../utils/migrationAnalysis.js'
 import { lodReduce } from '../utils/lod.js'
+import {
+  initWasmAccel,
+  registerTraceWasmAccel,
+  unregisterTraceWasmAccel,
+  packRowLayoutWasm,
+  wasmAccelReady,
+} from '../renderer/wasmAccel.js'
 
 // ---- Props & emits -------------------------------------------------------
 const props = defineProps({
@@ -321,6 +328,7 @@ const segmentTooltipLines = computed(() => {
   return buildSegmentTooltipLines(props.trace, segmentHover.value, formatTime, taskDisplayName)
 })
 const hoverTime   = ref(null)
+const rangeSelect = ref(null)  // { t0, t1 } while middle-dragging a zoom region
 
 // Right-click context menu
 const contextMenu = reactive({ visible: false, x: 0, y: 0, ns: 0 })
@@ -340,6 +348,10 @@ let _ovBgShowSti     = null   // showSti option value
 let _ovBgExpandedKey = null   // sorted join of expanded STI channels
 let _ovBgMainAreaH   = 0     // task/column strip area height in the thumbnail
 let _ovBgOrientation = null  // 'h' | 'v' when background was built
+
+// WASM row cull cache (rebuilt when layout or trace changes).
+let _packedRows = null
+let _mainCtx = null
 
 // ---- Interaction fast-paint (coarse LOD while panning/zooming) ------------
 let _interacting = false
@@ -388,15 +400,18 @@ function scheduleOverviewPaint() {
 function paint() {
   const canvas = canvasEl.value
   if (!canvas) return
-  const ctx = canvas.getContext('2d')
-  const dpr = window.devicePixelRatio || 1
+  if (!_mainCtx) {
+    _mainCtx = canvas.getContext('2d', { alpha: false, desynchronized: true })
+  }
+  const ctx = _mainCtx
+  const dpr = _interacting ? 1 : (window.devicePixelRatio || 1)
   const w   = canvas.clientWidth
   const h   = canvas.clientHeight
 
   if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
     canvas.width  = Math.round(w * dpr)
     canvas.height = Math.round(h * dpr)
-    ctx.scale(dpr, dpr)
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
   }
 
   viewport.canvasW = w
@@ -429,6 +444,7 @@ function paint() {
     fastPaint:        _interacting,
     rowLayout:        cachedRowLayout.value,
     columnLayout:     cachedColumnLayout.value,
+    packedRows:       _packedRows,
   }
   if (orientation.value === 'v') {
     renderVertical(ctx, props.trace, viewport, renderOpts)
@@ -436,8 +452,8 @@ function paint() {
     renderTimeline(ctx, props.trace, viewport, renderOpts)
   }
 
-  // Repaint the overlay to keep hover line in sync after a full canvas repaint
-  paintHoverOverlay()
+  // Overlay is updated on hover; skip during pan/zoom to avoid extra canvas work.
+  if (!_interacting) paintHoverOverlay()
 }
 
 // ---- Overlay canvas: hover line only -------------------------------------
@@ -446,7 +462,7 @@ function paintHoverOverlay() {
   const canvas = overlayEl.value
   if (!canvas) return
   const ctx = canvas.getContext('2d')
-  const dpr = window.devicePixelRatio || 1
+  const dpr = _interacting ? 1 : (window.devicePixelRatio || 1)
   const w   = canvas.clientWidth
   const h   = canvas.clientHeight
   const targetW = Math.round(w * dpr)
@@ -469,12 +485,16 @@ function paintHoverOverlay() {
     const pxPerNs = bodyH / (timeEnd - timeStart)
     drawMarksVertical(ctx, marks, props.trace, timeStart, pxPerNs, canvasW, canvasH, HEADER_H, darkMode, props.options.selectedMarkId ?? null)
     drawCursorsVertical(ctx, props.cursors, props.trace, timeStart, pxPerNs, canvasW, canvasH, HEADER_H, darkMode)
+    if (rangeSelect.value)
+      drawRangeSelectVertical(ctx, rangeSelect.value.t0, rangeSelect.value.t1, timeStart, pxPerNs, canvasW, canvasH, HEADER_H, darkMode)
     if (hoverTime.value !== null)
       drawHoverLineVertical(ctx, hoverTime.value, props.trace, timeStart, pxPerNs, canvasW, canvasH, HEADER_H, darkMode)
   } else {
     const pxPerNs = canvasW / (timeEnd - timeStart)
     drawMarksHorizontal(ctx, marks, props.trace, timeStart, pxPerNs, canvasW, canvasH, darkMode, props.options.selectedMarkId ?? null)
     drawCursors(ctx, props.cursors, props.trace, timeStart, pxPerNs, canvasW, canvasH, darkMode)
+    if (rangeSelect.value)
+      drawRangeSelect(ctx, rangeSelect.value.t0, rangeSelect.value.t1, timeStart, pxPerNs, canvasW, canvasH, darkMode)
     if (hoverTime.value !== null)
       drawHoverLine(ctx, hoverTime.value, props.trace, timeStart, pxPerNs, canvasW, canvasH, darkMode)
   }
@@ -523,7 +543,15 @@ function setupHandler() {
           viewport.scrollY = Math.max(0, vp.scrollY)
         }
       }
-      viewport.scrollX   = vp.scrollX ?? viewport.scrollX
+      if (vp.scrollX != null) {
+        if (props.trace && orientation.value === 'v') {
+          const totalWidth = cachedColumnLayout.value?.totalWidth ?? 0
+          const maxScrollX = Math.max(0, totalWidth - viewport.canvasW)
+          viewport.scrollX = Math.max(0, Math.min(vp.scrollX, maxScrollX))
+        } else {
+          viewport.scrollX = Math.max(0, vp.scrollX)
+        }
+      }
       emit('viewportChange', { ...viewport })
       markInteracting()
       scheduleRender()
@@ -543,7 +571,7 @@ function setupHandler() {
     onHoverTimeChange(t) {
       hoverTime.value = t
       emit('hoverTimeChange', t)
-      paintHoverOverlay()  // cheap: only redraws the hover line on the overlay canvas
+      if (!_interacting) paintHoverOverlay()
     },
     onRowHover(_row) {
       if (orientation.value !== 'v') return
@@ -585,6 +613,15 @@ function setupHandler() {
       contextMenu.x       = x - rect.left
       contextMenu.y       = y - rect.top
       contextMenu.visible = true
+    },
+    onRangeSelectChange({ t0, t1 }) {
+      rangeSelect.value = { t0, t1 }
+      markInteracting()
+      paintHoverOverlay()
+    },
+    onRangeSelectEnd() {
+      rangeSelect.value = null
+      paintHoverOverlay()
     },
   })
   _handler.setCursors(props.cursors)
@@ -702,7 +739,7 @@ async function captureCanvasViewportBlob(captureW, captureH) {
   const wrap = canvasWrapEl.value
   if (!base || !overlay || !wrap) return null
 
-  const dpr = window.devicePixelRatio || 1
+  const dpr = _interacting ? 1 : (window.devicePixelRatio || 1)
   const w = Math.min(captureW, wrap.clientWidth)
   const h = Math.min(captureH, wrap.clientHeight)
   if (w <= 0 || h <= 0) return null
@@ -736,6 +773,19 @@ function onGlobalClick() {
 
 function emitViewportChange() {
   emit('viewportChange', { ...viewport })
+}
+
+/** Keep scroll within content after row/column layout shrinks (e.g. collapse all). */
+function clampScrollToContent() {
+  if (!props.trace) return
+  if (orientation.value === 'h') {
+    const visH = viewport.canvasH - RULER_H
+    const maxScrollY = Math.max(0, totalRowHeight.value - visH)
+    viewport.scrollY = Math.max(0, Math.min(viewport.scrollY || 0, maxScrollY))
+  } else {
+    const maxScrollX = Math.max(0, totalColumnWidth.value - viewport.canvasW)
+    viewport.scrollX = Math.max(0, Math.min(viewport.scrollX || 0, maxScrollX))
+  }
 }
 
 // ---- Fit to trace ----------------------------------------------------------
@@ -841,26 +891,31 @@ function getCoreAtViewportCenter() {
   }
 
   const centerY = RULER_H + (viewport.canvasH - RULER_H) / 2
+  const scrollY = viewport.scrollY
   const { rows } = buildRowLayout(
     props.trace,
     props.options.viewMode,
     expanded,
-    RULER_H - viewport.scrollY,
+    0,
     props.options.showSti !== false,
     stiExpanded,
   )
   const coreRows = rows.filter(r => r.type === 'core' || r.type === 'core-task')
   if (coreRows.length === 0) return null
 
-  const rowHeight = (r) => (r.type === 'sti' ? STI_ROW_H : ROW_H)
-  const hit = coreRows.find(r => centerY >= r.y && centerY < r.y + rowHeight(r))
+  const canvasTop = (r) => RULER_H - scrollY + r.y
+  const hit = coreRows.find(r => {
+    const h = rowBandHeight(r)
+    const top = canvasTop(r)
+    return centerY >= top && centerY < top + h
+  })
   if (hit) return hit.type === 'core' ? hit.key : hit.coreKey
 
   let best = coreRows[0]
-  let bestDist = Math.abs(centerY - (best.y + rowHeight(best) / 2))
+  let bestDist = Math.abs(centerY - (canvasTop(best) + rowBandHeight(best) / 2))
   for (let i = 1; i < coreRows.length; i++) {
     const r = coreRows[i]
-    const d = Math.abs(centerY - (r.y + rowHeight(r) / 2))
+    const d = Math.abs(centerY - (canvasTop(r) + rowBandHeight(r) / 2))
     if (d < bestDist) {
       best = r
       bestDist = d
@@ -869,20 +924,33 @@ function getCoreAtViewportCenter() {
   return best.type === 'core' ? best.key : best.coreKey
 }
 
+function findRowForTask(rows, mergeKey) {
+  let targetRow = rows.find(r => r.type === 'task' && r.key === mergeKey)
+  if (targetRow) return targetRow
+  if (props.options.viewMode !== 'core') return null
+  targetRow = rows.find(r => r.type === 'core-task' && taskMergeKey(r.taskKey) === mergeKey)
+  if (targetRow) return targetRow
+  // Collapsed core view: task has no sub-row — use the parent core summary row.
+  for (const coreName of props.trace.coreNames || []) {
+    const taskOrder = props.trace.coreTaskOrder.get(coreName) || []
+    if (taskOrder.some(t => taskMergeKey(t) === mergeKey)) {
+      return rows.find(r => r.type === 'core' && r.key === coreName) || null
+    }
+  }
+  return null
+}
+
 function scrollToTask(mergeKey) {
   if (!props.trace) return
   // Build layout at yStart=0 to get raw row offsets independent of current scrollY
   const { rows } = buildRowLayout(props.trace, props.options.viewMode, expanded, 0, props.options.showSti !== false, stiExpanded)
-  // In task view: row.key === mergeKey; in core view: match on taskKey's mergeKey
-  let targetRow = rows.find(r => r.type === 'task' && r.key === mergeKey)
-  if (!targetRow) {
-    targetRow = rows.find(r => r.type === 'core-task' && taskMergeKey(r.taskKey) === mergeKey)
-  }
+  const targetRow = findRowForTask(rows, mergeKey)
   if (!targetRow) return
   // In rendering: canvas Y of row = (RULER_H - scrollY) + row.y
   // To center row mid in canvas body: RULER_H - scrollY + row.y + ROW_H/2 = canvasH/2
   // => scrollY = RULER_H + row.y + ROW_H/2 - canvasH/2
   viewport.scrollY = Math.max(0, RULER_H + targetRow.y + ROW_H / 2 - viewport.canvasH / 2)
+  clampScrollToContent()
   scheduleRender()
 }
 
@@ -912,6 +980,9 @@ function scrollToSegmentIfNeeded(seg) {
       if (!targetRow) {
         targetRow = rows.find(r => r.type === 'core-task' && taskMergeKey(r.taskKey) === mk)
       }
+      if (!targetRow && seg.core) {
+        targetRow = rows.find(r => r.type === 'core' && r.key === seg.core)
+      }
     } else {
       targetRow = rows.find(r => r.type === 'task' && r.key === mk)
     }
@@ -928,6 +999,9 @@ function scrollToSegmentIfNeeded(seg) {
       )
       if (!targetCol) {
         targetCol = cols.find(c => c.type === 'core-task' && taskMergeKey(c.taskKey) === mk)
+      }
+      if (!targetCol && seg.core) {
+        targetCol = cols.find(c => c.type === 'core' && c.key === seg.core)
       }
     } else {
       targetCol = cols.find(c => c.type === 'task' && c.key === mk)
@@ -965,6 +1039,8 @@ defineExpose({ fitToTrace, applyViewport, scheduleRender, zoomCenter, expandAll,
 function onExpandToggle(coreName) {
   if (expanded.has(coreName)) expanded.delete(coreName)
   else expanded.add(coreName)
+  clampScrollToContent()
+  _ovBgCanvas = null
   scheduleRender()
 }
 
@@ -978,18 +1054,37 @@ function onStiExpandToggle(channelName) {
 function expandAll() {
   if (!props.trace) return
   for (const coreName of props.trace.coreNames) expanded.add(coreName)
+  clampScrollToContent()
+  _ovBgCanvas = null
   scheduleRender()
 }
 
 function collapseAll() {
   expanded.clear()
+  clampScrollToContent()
+  _ovBgCanvas = null
   scheduleRender()
 }
 
 // ---- Watchers ------------------------------------------------------------
-watch(() => props.trace, (trace) => {
+function rebuildPackedRows() {
+  const layout = cachedRowLayout.value
+  _packedRows = (layout?.rows && wasmAccelReady())
+    ? packRowLayoutWasm(layout.rows, rowBandHeight)
+    : null
+}
+
+watch(() => props.trace, async (trace, prev) => {
   _ovBgCanvas = null
-  if (!trace) return
+  _mainCtx = null
+  if (prev) unregisterTraceWasmAccel(prev)
+  await initWasmAccel()
+  if (!trace) {
+    _packedRows = null
+    return
+  }
+  registerTraceWasmAccel(trace)
+  rebuildPackedRows()
   expanded.clear()
   if (trace.coreNames.length <= AUTO_EXPAND_CORES_MAX) {
     for (const coreName of trace.coreNames) expanded.add(coreName)
@@ -1006,8 +1101,15 @@ watch(() => props.trace, (trace) => {
   })
 })
 
+watch(cachedRowLayout, () => {
+  rebuildPackedRows()
+  clampScrollToContent()
+})
+
 // Handler re-creation only needed when orientation or viewMode changes
 watch([() => props.options.orientation, () => props.options.viewMode], () => {
+  clampScrollToContent()
+  _ovBgCanvas = null
   setupHandler()
   scheduleRender()
 })
@@ -1585,7 +1687,8 @@ function onVTrackClick(e) {
 }
 
 // ---- Lifecycle -----------------------------------------------------------
-onMounted(() => {
+onMounted(async () => {
+  await initWasmAccel()
   setupResize()
   setupHandler()
   document.addEventListener('click', onGlobalClick)

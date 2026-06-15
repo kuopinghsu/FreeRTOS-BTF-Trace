@@ -7,9 +7,14 @@ OUT     := $(OUTDIR)/index.html
 all: build
 
 ## Install dependencies and produce dist/index.html (single self-contained file)
-build: node_modules
+build: node_modules wasm
 	$(NPM) run build
 	cp dist/index.html pre-build/btf-viewer.html
+
+## Compile WASM timeline accelerator and embed base64 for single-file build
+wasm:
+	wat2wasm wasm/timeline_accel.wat -o src/renderer/timeline_accel.wasm
+	node scripts/embed-wasm.mjs
 
 ## Start Vite development server with HMR
 dev: node_modules

@@ -389,6 +389,9 @@
               </div><div>Zoom at pointer</div>
               <div class="k">
                 Middle-drag
+              </div><div>Draw a time region and zoom in on release</div>
+              <div class="k">
+                Left-drag ruler
               </div><div>Pan timeline</div>
               <div class="k">
                 Click timeline

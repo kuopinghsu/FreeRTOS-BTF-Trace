@@ -57,6 +57,11 @@ export class InteractionHandler {
     this._dragCursorPx = 8
     this._dragMarkPx = 6
 
+    // Middle-button drag: select time range → zoom on release
+    this._midRangePressPos = null  // { x, y } canvas coords at press
+    this._midRangePressT   = null  // timestamp at press
+    this._midRangeDragging = false
+
     // Min zoom: entire trace visible
     this._minTimeSpan = 1
 
@@ -133,7 +138,34 @@ export class InteractionHandler {
     return (this._opts.getOptions?.()?.orientation ?? 'h') === 'v'
   }
 
-  /** Convert canvas coordinates to a timestamp. */
+  _zoomToRange(t0, t1) {
+    const vp = this._opts.getViewport()
+    if (!vp) return
+    const lo = Math.min(t0, t1)
+    const hi = Math.max(t0, t1)
+    if (hi - lo < this._minTimeSpan) return
+    const { s, e } = this._clampPan(lo, hi)
+    this._opts.onViewportChange?.({ ...vp, timeStart: s, timeEnd: e })
+  }
+
+  /** Map canvas coordinates to time (includes ruler/header bands). */
+  _canvasToTimeForRange(cx, cy) {
+    const vp = this._opts.getViewport()
+    if (!vp) return null
+    const { timeStart, timeEnd } = vp
+    if (this._isVertical()) {
+      const bodyH = vp.canvasH - HEADER_H
+      const pxPerNs = bodyH / (timeEnd - timeStart)
+      if (pxPerNs <= 0) return null
+      const y = Math.max(0, cy - HEADER_H)
+      return timeStart + y / pxPerNs
+    }
+    const nsPerPx = (timeEnd - timeStart) / vp.canvasW
+    if (nsPerPx <= 0) return null
+    return timeStart + cx * nsPerPx
+  }
+
+  /** Convert canvas coordinates to a timestamp (timeline body only). */
   _canvasToTime(cx, cy) {
     const vp = this._opts.getViewport()
     if (!vp) return null
@@ -334,14 +366,18 @@ export class InteractionHandler {
 
   _onMouseDown(e) {
     if (e.button === 1) {
-      // Middle button: start pan-drag
-      this._dragging       = true
-      this._dragStartX     = e.clientX
-      this._dragStartY     = e.clientY
-      const vp = this._opts.getViewport()
-      this._dragStartTime  = vp?.timeStart ?? 0
-      this._dragStartScrollX = vp?.scrollX ?? 0
-      e.preventDefault()
+      const trace = this._opts.getTrace()
+      if (!trace) return
+      const rect = this._canvas.getBoundingClientRect()
+      const cx   = e.clientX - rect.left
+      const cy   = e.clientY - rect.top
+      const t = this._canvasToTimeForRange(cx, cy)
+      if (t !== null) {
+        this._midRangePressPos = { x: cx, y: cy }
+        this._midRangePressT   = t
+        this._midRangeDragging = false
+        e.preventDefault()
+      }
       return
     }
     if (e.button === 0) {
@@ -466,10 +502,12 @@ export class InteractionHandler {
     const cy   = e.clientY - rect.top
     const vert = this._isVertical()
 
-    // Track hover time
-    const t = this._canvasToTime(cx, cy)
-    if (t !== null) this._opts.onHoverTimeChange?.(t)
-    else             this._opts.onHoverTimeChange?.(null)
+    // Track hover time (skip during pan / middle range select)
+    if (!this._dragging && this._midRangePressT === null) {
+      const t = this._canvasToTime(cx, cy)
+      if (t !== null) this._opts.onHoverTimeChange?.(t)
+      else             this._opts.onHoverTimeChange?.(null)
+    }
 
     if (this._draggingCursorIdx !== -1) {
       const tDrag = this._canvasToTime(cx, cy)
@@ -492,23 +530,43 @@ export class InteractionHandler {
     }
 
     if (this._dragging) {
-      const vp = this._opts.getViewport()
-      if (!vp) return
+      const dx = e.clientX - this._dragStartX
+      const dy = e.clientY - this._dragStartY
       if (vert) {
-        const dy      = e.clientY - this._dragStartY
-        const dx      = e.clientX - this._dragStartX
-        const bodyH   = vp.canvasH - HEADER_H
-        const nsPerPx = (vp.timeEnd - vp.timeStart) / bodyH
-        const rawStart = this._dragStartTime - dy * nsPerPx
-        const { s, e: eT } = this._clampPan(rawStart, rawStart + (vp.timeEnd - vp.timeStart))
-        const newScrollX = Math.max(0, this._dragStartScrollX - dx)
-        this._opts.onViewportChange?.({ ...vp, timeStart: s, timeEnd: eT, scrollX: newScrollX })
+        this._queueViewport(vp => {
+          const bodyH   = vp.canvasH - HEADER_H
+          const nsPerPx = (vp.timeEnd - vp.timeStart) / bodyH
+          const rawStart = this._dragStartTime - dy * nsPerPx
+          const { s, e: eT } = this._clampPan(rawStart, rawStart + (vp.timeEnd - vp.timeStart))
+          const newScrollX = Math.max(0, this._dragStartScrollX - dx)
+          return { ...vp, timeStart: s, timeEnd: eT, scrollX: newScrollX }
+        })
       } else {
-        const dx      = e.clientX - this._dragStartX
-        const nsPerPx = (vp.timeEnd - vp.timeStart) / vp.canvasW
-        const rawStart = this._dragStartTime - dx * nsPerPx
-        const { s, e: eT } = this._clampPan(rawStart, rawStart + (vp.timeEnd - vp.timeStart))
-        this._opts.onViewportChange?.({ ...vp, timeStart: s, timeEnd: eT })
+        this._queueViewport(vp => {
+          const ns = (vp.timeEnd - vp.timeStart) / vp.canvasW
+          const rawStart = this._dragStartTime - dx * ns
+          const { s, e: eT } = this._clampPan(rawStart, rawStart + (vp.timeEnd - vp.timeStart))
+          return { ...vp, timeStart: s, timeEnd: eT }
+        })
+      }
+      return
+    }
+
+    if (this._midRangePressT !== null) {
+      const dx = cx - this._midRangePressPos.x
+      const dy = cy - this._midRangePressPos.y
+      if (!this._midRangeDragging && (Math.abs(dx) > 6 || Math.abs(dy) > 6)) {
+        this._midRangeDragging = true
+      }
+      if (this._midRangeDragging) {
+        const t = this._canvasToTimeForRange(cx, cy)
+        if (t !== null) {
+          e.preventDefault()
+          this._opts.onRangeSelectChange?.({
+            t0: this._midRangePressT,
+            t1: t,
+          })
+        }
       }
       return
     }
@@ -549,7 +607,23 @@ export class InteractionHandler {
     }
   }
 
-  _onMouseUp() {
+  _onMouseUp(e) {
+    if (e.button === 1 && this._midRangePressT !== null) {
+      const rect = this._canvas.getBoundingClientRect()
+      const cx   = e.clientX - rect.left
+      const cy   = e.clientY - rect.top
+      if (this._midRangeDragging) {
+        const t = this._canvasToTimeForRange(cx, cy)
+        if (t !== null) {
+          this._zoomToRange(this._midRangePressT, t)
+        }
+        this._opts.onRangeSelectEnd?.()
+      }
+      this._midRangePressPos = null
+      this._midRangePressT   = null
+      this._midRangeDragging = false
+      return
+    }
     this._draggingCursorIdx = -1
     this._draggingMarkId = null
     this._dragging = false
@@ -557,6 +631,12 @@ export class InteractionHandler {
   }
 
   _onMouseLeave() {
+    if (this._midRangePressT !== null) {
+      this._midRangePressPos = null
+      this._midRangePressT   = null
+      this._midRangeDragging = false
+      this._opts.onRangeSelectEnd?.()
+    }
     this._draggingCursorIdx = -1
     this._draggingMarkId = null
     this._dragging = false

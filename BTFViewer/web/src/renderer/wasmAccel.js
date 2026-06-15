@@ -43,6 +43,14 @@ function jsVisibleSegRange(starts, nsLo, nsHi) {
  * still show activity across the entire trace width.
  */
 function jsLodReduceIndices(starts, ends, from, to, timeStart, timeEnd, nsPerPx, maxOut) {
+  const count = to - from + 1
+  if (count <= maxOut) {
+    const out = new Array(count)
+    for (let i = from, j = 0; i <= to; i++, j++) out[j] = i
+    return out
+  }
+
+  const span = Math.max(timeEnd - timeStart, 1)
   const collect = (tpp) => {
     const cols = []
     let prevPx = -2
@@ -60,21 +68,25 @@ function jsLodReduceIndices(starts, ends, from, to, timeStart, timeEnd, nsPerPx,
     return cols
   }
 
-  let cols = collect(nsPerPx)
-  if (cols.length <= maxOut) return cols
-
-  const span = Math.max(timeEnd - timeStart, 1)
-  if (cols.length > maxOut * 8) {
-    cols = collect(Math.max(nsPerPx, span / maxOut))
-    if (cols.length <= maxOut) return cols
+  const subsample = (cols) => {
+    const out = []
+    const step = cols.length / maxOut
+    for (let j = 0; j < maxOut; j++) {
+      out.push(cols[Math.min(cols.length - 1, Math.floor(j * step))])
+    }
+    return out
   }
 
-  const out = []
-  const step = cols.length / maxOut
-  for (let j = 0; j < maxOut; j++) {
-    out.push(cols[Math.min(cols.length - 1, Math.floor(j * step))])
+  // Very large rows: one coarse pass across the full viewport (fast).
+  if (count > maxOut * 8) {
+    const cols = collect(Math.max(nsPerPx, span / maxOut))
+    return cols.length <= maxOut ? cols : subsample(cols)
   }
-  return out
+
+  // Moderate rows: fine pixel columns + even subsample (preserves coverage).
+  const fine = collect(nsPerPx)
+  if (fine.length <= maxOut) return fine
+  return subsample(fine)
 }
 
 function ensureMem(bytes) {
