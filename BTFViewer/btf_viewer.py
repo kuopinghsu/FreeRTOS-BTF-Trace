@@ -162,8 +162,8 @@ from PyQt5.QtWidgets import (
     QProgressDialog,
     QListWidget, QListWidgetItem,
     QPushButton, QScrollArea, QShortcut, QDoubleSpinBox, QSpinBox, QStackedWidget,
-    QStyleOptionGraphicsItem, QAbstractItemView,
-    QTabWidget, QTableWidget, QTableWidgetItem,
+    QStyle, QStyleFactory, QStyleOptionGraphicsItem, QAbstractItemView,
+    QProxyStyle, QTabBar, QTabWidget, QTableWidget, QTableWidgetItem,
     QVBoxLayout, QWidget, QSizePolicy, QSplitter,
 )
 
@@ -212,7 +212,6 @@ def _stats_table_viewport_height(visible_rows: int = STATS_MAX_VISIBLE_ROWS,
     if reserve_h_scroll:
         h += STATS_TABLE_HSCROLL_H
     return h
-
 
 STATS_TABLE_DEFAULT_H    = _stats_table_viewport_height()
 STATS_TABLE_MIG_DEFAULT_H = _stats_table_viewport_height(reserve_h_scroll=True)
@@ -312,7 +311,6 @@ _CURSOR_COLORS_LIGHT = [
     "#6A1B9A",  # 8 purple
 ]
 
-
 def _cursor_colors(is_dark: bool = True) -> list:
     return _CURSOR_COLORS if is_dark else _CURSOR_COLORS_LIGHT
 
@@ -343,7 +341,6 @@ class _RenderRuntimeState:
 
     colorblind_active: bool = False
     vertical_label_use_pixmap: bool = _VERTICAL_LABEL_USE_PIXMAP_DEFAULT
-
 
 _RENDER_RUNTIME = _RenderRuntimeState()
 
@@ -383,7 +380,6 @@ def _svg_icon(path_data: str, color: str = "#9E9E9E", size: int = 16) -> "QIcon"
     pm = QPixmap()
     pm.loadFromData(ba, "SVG")
     return QIcon(pm)
-
 
 def _svg_icon_markup(inner: str, size: int = 16) -> "QIcon":
     """Build a QIcon from raw SVG markup (supports stroke icons)."""
@@ -1005,13 +1001,11 @@ def _fmt_signed_pct_delta(delta: float) -> str:
     sign = "+" if delta >= 0 else ""
     return f"{sign}{delta:.1f}"
 
-
 def _compare_csv_cell(v: object) -> str:
     s = str(v)
     if any(c in s for c in '",\n\r'):
         return '"' + s.replace('"', '""') + '"'
     return s
-
 
 def _table_widget_rows(table: "QTableWidget") -> List[List[str]]:
     rows: List[List[str]] = []
@@ -1022,7 +1016,6 @@ def _table_widget_rows(table: "QTableWidget") -> List[List[str]]:
             row.append(item.text() if item else "")
         rows.append(row)
     return rows
-
 
 def _build_compare_csv(name_a: str, name_b: str, scope_enabled: bool,
                          summary: List[List], top: List[List],
@@ -1055,7 +1048,6 @@ def _build_compare_csv(name_a: str, name_b: str, scope_enabled: bool,
 
     return "\n".join(lines)
 
-
 _COMPARE_HTML_STYLE = """
   :root { --bg:#e9edf3; --paper:#fff; --ink:#182230; --muted:#5f6f82; --line:#d9e0ea; --header:#16324f; }
   * { box-sizing:border-box; }
@@ -1073,7 +1065,6 @@ _COMPARE_HTML_STYLE = """
   tbody tr:nth-child(even) td { background:#f7f9fc; }
   .empty { text-align:center; color:var(--muted); }
 """
-
 
 def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
                         summary: List[List], top: List[List],
@@ -1119,7 +1110,6 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
     <tbody>{mig_body}</tbody></table>
   </section>
 </div></body></html>"""
-
 
 def _core_sort_key_tuple(c: str) -> tuple:
     if c.startswith("Core_"):
@@ -5570,7 +5560,6 @@ class _StiLabelItem(QGraphicsRectItem):
         self.update()
         super().hoverLeaveEvent(event)
 
-
 class _BatchStiWaveformItem(QGraphicsItem):
     """Renders an expanded step-chart waveform for one STI channel.
 
@@ -5722,7 +5711,6 @@ class _BatchStiWaveformItem(QGraphicsItem):
         _get_popup().hide()
         super().hoverLeaveEvent(event)
 
-
 class _BatchStiWaveformColumnItem(QGraphicsItem):
     """Renders an expanded STI step-chart waveform inside a vertical COLUMN.
 
@@ -5854,7 +5842,6 @@ class _BatchStiWaveformColumnItem(QGraphicsItem):
             painter.drawEllipse(QPointF(x, y), 2.5, 2.5)
 
         painter.restore()
-
 
 # ===========================================================================
 # Navigator Popup
@@ -8786,7 +8773,6 @@ class _ScatterWidget(QWidget):
             self.update()
             self.point_clicked.emit(self._points[best_i][2])
 
-
 class _HistogramWidget(QWidget):
     """Histogram of metric values with p50/p95 markers."""
 
@@ -8905,7 +8891,6 @@ class _HistogramWidget(QWidget):
             p.drawText(gx + 3, MT + 12, lbl_text)
 
         p.end()
-
 
 class _MetricsPlotDialog(QDialog):
     """Modeless popup: scatter plot + histogram for one task metric.
@@ -9066,7 +9051,6 @@ class _MetricsPlotDialog(QDialog):
         except (OSError, RuntimeError) as exc:
             QMessageBox.critical(self, "SVG Export Error", str(exc))
 
-
 # ---------------------------------------------------------------------------
 # Statistics dock panel
 # ---------------------------------------------------------------------------
@@ -9130,7 +9114,6 @@ class _StatsHoverRow(QWidget):
             return
         super().mousePressEvent(event)
 
-
 class _StatsTableHoverFilter(QObject):
     """Clear stats-table row hover highlight when the pointer leaves the table."""
 
@@ -9142,7 +9125,6 @@ class _StatsTableHoverFilter(QObject):
         if event.type() == QEvent.Leave:
             self._clear_fn()
         return False
-
 
 class _StatsSectionGrip(QWidget):
     """Horizontal drag handle below a stats table to adjust its max height."""
@@ -9206,7 +9188,6 @@ class _StatsSectionGrip(QWidget):
         p.setPen(QPen(c, 2))
         p.drawLine(4, y, self.width() - 4, y)
         p.end()
-
 
 class _TraceCompareDialog(QDialog):
     """Compare summary, top tasks, and core migrations between two open trace tabs."""
@@ -9470,7 +9451,6 @@ class _TraceCompareDialog(QDialog):
         wnd = self.window()
         if isinstance(wnd, QMainWindow):
             wnd.statusBar().showMessage(f"Exported trace compare: {path}", 4000)
-
 
 class _StatsPanel(QWidget):
     """Dock panel showing trace statistics (span, core utilisation, top tasks)."""
@@ -11995,10 +11975,8 @@ def _point_to_seg_dist(px: float, py: float,
     t = max(0.0, min(1.0, ((px - x1) * dx + (py - y1) * dy) / length_sq))
     return math.hypot(px - (x1 + t * dx), py - (y1 + t * dy))
 
-
 _SNAP_ANGLES = [a * math.pi / 180 for a in (0, 45, 90, 135, 180, -135, -90, -45)]
 _SNAP_THRESH = 2 * math.pi / 180
-
 
 def _snap_line_end(x1: float, y1: float, x2: float, y2: float, force: bool = False):
     """Return (x2, y2) snapped to the nearest 45deg axis.
@@ -12025,7 +12003,6 @@ def _snap_line_end(x1: float, y1: float, x2: float, y2: float, force: bool = Fal
         return x1 + dist * math.cos(best), y1 + dist * math.sin(best)
     return x2, y2
 
-
 def _constrain_box(x1: float, y1: float, x2: float, y2: float):
     dx = x2 - x1
     dy = y2 - y1
@@ -12036,7 +12013,6 @@ def _constrain_box(x1: float, y1: float, x2: float, y2: float):
         'w': size,
         'h': size,
     }
-
 
 class _AnnotationCanvas(QWidget):
     """Canvas widget that renders the background image and all annotation shapes."""
@@ -12303,7 +12279,6 @@ class _AnnotationCanvas(QWidget):
         ed._drag_anchor = None
         ed._begin_edit_shape_text(idx)
         self.update()
-
 
 class SnapshotEditorDialog(QDialog):
     """Annotation editor dialog opened when the user captures a viewport snapshot.
@@ -13237,7 +13212,6 @@ class SnapshotEditorDialog(QDialog):
         self._status_lbl.setText(msg)
         QTimer.singleShot(3000, lambda: self._status_lbl.setText(""))
 
-
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # Main Window
@@ -13258,7 +13232,6 @@ def _exec_centred(dlg, parent):
     )
     return dlg.exec_()
 
-
 # ===========================================================================
 # CPU Load Graph
 # ===========================================================================
@@ -13266,7 +13239,6 @@ def _exec_centred(dlg, parent):
 # ===========================================================================
 # CPU Load Graph
 # ===========================================================================
-
 
 class _CpuLoadGraph(QWidget):
     """Synchronised CPU load chart below the main timeline.
@@ -13785,6 +13757,15 @@ class _CpuLoadGraph(QWidget):
     # ------------------------------------------------------------------
 
     def paintEvent(self, event) -> None:  # noqa: N802
+        dark = self._is_dark
+        bg   = QColor("#1E1E1E") if dark else QColor("#F5F5F5")
+        w    = self.width()
+        h    = self.height()
+
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, False)
+        p.fillRect(0, 0, w, h, bg)
+
         scene = self._view._scene
         if self._trace is None or scene is None:
             return
@@ -13801,20 +13782,11 @@ class _CpuLoadGraph(QWidget):
             return
 
         rows = self._get_rows()
-        w    = self.width()
         plot_right = self._plot_right_x()
-        h    = self.height()
 
-        dark = self._is_dark
-        bg   = QColor("#1E1E1E") if dark else QColor("#F0F0F0")
-        lblb = QColor("#252525") if dark else QColor("#E0E0E0")
         sepc = QColor("#444444") if dark else QColor("#AAAAAA")
         txtc = QColor("#AAAAAA") if dark else QColor("#444444")
         grdc = QColor("#2E2E2E") if dark else QColor("#D0D0D0")
-
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing, False)
-        p.fillRect(0, 0, w, h, bg)
 
         vis_ns_lo, vis_ns_hi = self._visible_time_ns_range(scene)
         vis_span = max(1, vis_ns_hi - vis_ns_lo)
@@ -13993,7 +13965,6 @@ class _CpuLoadGraph(QWidget):
 
         p.end()
 
-
 def _dialog_guard(fn):
     """Decorator: prevents a dialog-opening method from being entered while it
     is already running (e.g. due to spurious double-trigger on Linux/X11).
@@ -14016,6 +13987,27 @@ def _dialog_guard(fn):
     _wrapper.__doc__  = fn.__doc__
     return _wrapper
 
+class _LeftTabStyle(QProxyStyle):
+    """Force left tab-bar alignment (ignored by the macOS native QStyle)."""
+
+    def styleHint(self, hint, option=None, widget=None, returnData=None):  # noqa: N802
+        if hint == QStyle.SH_TabBar_Alignment:
+            return int(Qt.AlignLeft)
+        return super().styleHint(hint, option, widget, returnData)
+
+class _LeftAlignedTabBar(QTabBar):
+    """Tab bar that stays left-aligned (macOS native style centers tabs by default)."""
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setExpanding(False)
+        if sys.platform == "darwin":
+            base = QStyleFactory.create("Fusion") or QApplication.style()
+            self.setStyle(_LeftTabStyle(base))
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        self.setExpanding(False)
 
 class _TraceTab:
     """One open trace file: timeline, CPU load graph, and per-tab marks/find state."""
@@ -14065,7 +14057,6 @@ class _TraceTab:
         self.cpu_splitter.splitterMoved.connect(win._on_cpu_splitter_moved)
         if not win._show_cpu_load:
             self.cpu_load_scroll.hide()
-
 
 class MainWindow(QMainWindow):
 
@@ -14261,6 +14252,7 @@ class MainWindow(QMainWindow):
         scroll.viewport().installEventFilter(filt)
         scroll.installEventFilter(filt)
         graph._sync_scroll_size()
+        self._sync_cpu_load_scroll_theme(scroll, graph, self._is_dark)
 
     def _wire_cpu_load_graph(self, view: TimelineView, graph: _CpuLoadGraph) -> None:
         def _repaint_cpu_graph(*_args) -> None:
@@ -14285,6 +14277,98 @@ class MainWindow(QMainWindow):
         graph._viewport_sync_filter = filt
         view.viewport().installEventFilter(filt)
 
+    def _sync_timeline_view_theme(self, view: TimelineView, is_dark: bool) -> None:
+        """Keep QGraphicsView and its viewport background in sync with the app theme."""
+        c = self._theme_tokens(is_dark)
+        bg = QColor(c["win_bg"])
+        view.setBackgroundBrush(QBrush(bg))
+        for w in (view, view.viewport()):
+            pal = w.palette()
+            pal.setColor(QPalette.Window, bg)
+            pal.setColor(QPalette.Base, bg)
+            w.setPalette(pal)
+            w.setAutoFillBackground(True)
+        view.viewport().setStyleSheet(
+            f"background-color: {c['win_bg']}; border: none;"
+        )
+
+    def _sync_cpu_load_scroll_theme(
+        self, scroll: QScrollArea, graph: _CpuLoadGraph, is_dark: bool,
+    ) -> None:
+        """Keep CPU load scroll area and graph widget backgrounds in sync with the theme."""
+        c = self._theme_tokens(is_dark)
+        bg = QColor(c["scroll_bg"])
+        graph.set_dark(is_dark)
+        scroll.setObjectName("cpu_load_scroll")
+        scroll.viewport().setObjectName("cpu_load_scroll_viewport")
+        scroll.viewport().setAutoFillBackground(True)
+        graph.setAutoFillBackground(True)
+        for w in (scroll, scroll.viewport(), graph):
+            pal = w.palette()
+            pal.setColor(QPalette.Window, bg)
+            pal.setColor(QPalette.Base, bg)
+            w.setPalette(pal)
+        scroll.setStyleSheet(
+            f"QScrollArea#cpu_load_scroll {{ background:{c['scroll_bg']}; border:none; }}"
+            f"QWidget#cpu_load_scroll_viewport {{ background:{c['scroll_bg']}; }}"
+        )
+        graph.update()
+
+    def _sync_trace_tab_widget_theme(self, is_dark: bool) -> None:
+        """Keep trace-file tab bar and pane backgrounds in sync with the app theme."""
+        if not hasattr(self, "_tab_widget"):
+            return
+        c = self._theme_tokens(is_dark)
+        win_bg = QColor(c["win_bg"])
+        strip_bg = QColor(c["mid"])
+        _ui_fs = f"{getattr(self, '_ui_font_size_val', UI_FONT_SIZE)}pt"
+
+        tw = self._tab_widget
+        tb = tw.tabBar()
+        tb.setExpanding(False)
+        if sys.platform == "darwin":
+            base = QStyleFactory.create("Fusion") or QApplication.style()
+            tb.setStyle(_LeftTabStyle(base))
+            tw.setStyle(_LeftTabStyle(base))
+        tw.setObjectName("trace_tab_widget")
+        tb.setObjectName("trace_tab_bar")
+
+        for w in (tw, tb):
+            pal = w.palette()
+            pal.setColor(QPalette.Window, win_bg)
+            pal.setColor(QPalette.Base, win_bg)
+            pal.setColor(QPalette.Button, QColor(c["tab_bg"]))
+            pal.setColor(QPalette.ButtonText, QColor(c["tab_fg"]))
+            w.setPalette(pal)
+            w.setAutoFillBackground(True)
+
+        for attr in ("_central_stack", "_welcome_page"):
+            host = getattr(self, attr, None)
+            if host is None:
+                continue
+            pal = host.palette()
+            pal.setColor(QPalette.Window, win_bg)
+            pal.setColor(QPalette.Base, win_bg)
+            host.setPalette(pal)
+            host.setAutoFillBackground(True)
+
+        tw.setStyleSheet(
+            f"QTabWidget#trace_tab_widget {{ background:{c['win_bg']}; }}"
+            f"QTabWidget#trace_tab_widget::tab-bar {{ alignment: left; }}"
+            f"QTabWidget#trace_tab_widget::pane {{ background:{c['win_bg']}; "
+            f"border:1px solid {c['sep']}; top:-1px; }}"
+            f"QTabWidget#trace_tab_widget QTabBar#trace_tab_bar {{ "
+            f"background:{c['mid']}; border-bottom:1px solid {c['sep']}; }}"
+            f"QTabWidget#trace_tab_widget QTabBar#trace_tab_bar::tab {{ "
+            f"background:{c['tab_bg']}; color:{c['tab_fg']}; padding:4px 12px; "
+            f"border:none; border-bottom:2px solid transparent; font-size:{_ui_fs}; }}"
+            f"QTabWidget#trace_tab_widget QTabBar#trace_tab_bar::tab:selected {{ "
+            f"background:{c['tab_sel_bg']}; color:{c['tab_sel_fg']}; "
+            f"border-bottom:2px solid {c['accent']}; }}"
+            f"QTabWidget#trace_tab_widget QTabBar#trace_tab_bar::tab:hover:!selected {{ "
+            f"background:{c['tab_hover_bg']}; color:{c['tab_hover_fg']}; }}"
+        )
+
     def _apply_view_settings(self, view: TimelineView) -> None:
         view.set_font_size(self._font_size_val)
         view.set_max_cursors(self._max_cursors_val)
@@ -14298,7 +14382,7 @@ class MainWindow(QMainWindow):
         sc.set_sti_line_style(self._sti_line_style_val)
         sc.set_hover_highlight(self._hover_highlight_val)
         sc.set_theme(self._is_dark, rebuild=False)
-        view.setBackgroundBrush(QBrush(QColor(self._theme_tokens(self._is_dark)["win_bg"])))
+        self._sync_timeline_view_theme(view, self._is_dark)
         view.set_horizontal(self._act_horiz.isChecked() if hasattr(self, "_act_horiz") else True)
         view.set_show_sti(self._show_sti)
         view.set_show_grid(self._show_grid)
@@ -14606,6 +14690,12 @@ class MainWindow(QMainWindow):
     def _add_trace_tab(self, path: str, trace: BtfTrace) -> _TraceTab:
         tab = _TraceTab(path, trace, self)
         self._apply_view_settings(tab.view)
+        c = self._theme_tokens(self._is_dark)
+        win_bg = QColor(c["win_bg"])
+        tab_pal = tab.cpu_splitter.palette()
+        tab_pal.setColor(QPalette.Window, win_bg)
+        tab.cpu_splitter.setPalette(tab_pal)
+        tab.cpu_splitter.setAutoFillBackground(True)
         self._tabs.append(tab)
         idx = self._tab_widget.addTab(tab.cpu_splitter, os.path.basename(path))
         self._tab_widget.setTabToolTip(idx, path)
@@ -15298,6 +15388,9 @@ class MainWindow(QMainWindow):
                          border:none; border-bottom:1px solid {c['sep']};
                          padding:3px 6px; font-size:{_ui_fs}; }}
             QTabWidget::pane {{ background:{c['win_bg']}; border:1px solid {c['sep']}; }}
+            QTabWidget {{ background:{c['win_bg']}; }}
+            QTabBar {{ background:{c['mid']}; }}
+            QStackedWidget {{ background:{c['win_bg']}; }}
             QTabBar::tab               {{ background:{c['tab_bg']}; color:{c['tab_fg']};
                                            padding:4px 12px; border:none;
                                            border-bottom:2px solid transparent;
@@ -15350,13 +15443,23 @@ class MainWindow(QMainWindow):
             )
         if hasattr(self, '_view'):
             c = self._theme_tokens(is_dark)
+            win_bg = QColor(c["win_bg"])
             for view in self._iter_tab_views():
-                view.setBackgroundBrush(QBrush(QColor(c['win_bg'])))
+                self._sync_timeline_view_theme(view, is_dark)
                 view._scene.set_theme(is_dark, rebuild=(view._scene._trace is not None))
-        if hasattr(self, '_settings_cpu_graph'):
-            self._settings_cpu_graph.set_dark(is_dark)
-        for tab in self._tabs:
-            tab.cpu_load_graph.set_dark(is_dark)
+            for tab in self._tabs:
+                tab_pal = tab.cpu_splitter.palette()
+                tab_pal.setColor(QPalette.Window, win_bg)
+                tab.cpu_splitter.setPalette(tab_pal)
+                tab.cpu_splitter.setAutoFillBackground(True)
+                self._sync_cpu_load_scroll_theme(
+                    tab.cpu_load_scroll, tab.cpu_load_graph, is_dark,
+                )
+            if hasattr(self, "_settings_cpu_scroll") and hasattr(self, "_settings_cpu_graph"):
+                self._sync_cpu_load_scroll_theme(
+                    self._settings_cpu_scroll, self._settings_cpu_graph, is_dark,
+                )
+        self._sync_trace_tab_widget_theme(is_dark)
         if hasattr(self, '_legend'):
             self._legend.update_theme(is_dark)
         if hasattr(self, '_legend_dock') and self._legend_dock.widget() is not None:
@@ -15433,8 +15536,15 @@ class MainWindow(QMainWindow):
         self._welcome_label = _wlbl
 
         self._tab_widget = QTabWidget()
+        self._tab_widget.setTabBar(_LeftAlignedTabBar(self._tab_widget))
         self._tab_widget.setTabsClosable(True)
-        self._tab_widget.setDocumentMode(True)
+        # Native document-mode tabs on macOS ignore QSS/palette theme updates.
+        if sys.platform == "darwin":
+            self._tab_widget.setDocumentMode(False)
+            base = QStyleFactory.create("Fusion") or QApplication.style()
+            self._tab_widget.setStyle(_LeftTabStyle(base))
+        else:
+            self._tab_widget.setDocumentMode(True)
         self._tab_widget.setMovable(True)
         self._tab_widget.tabCloseRequested.connect(self._close_trace_tab)
         self._tab_widget.currentChanged.connect(self._on_trace_tab_changed)
