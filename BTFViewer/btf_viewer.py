@@ -427,6 +427,9 @@ _IC_CPU_LOAD = ("M1 11a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1H2a1 1 0 0 1
                 "M5 7a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V7z"
                 "M9 3a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1h-2a1 1 0 0 1-1-1V3z"
                 "M13 1a1 1 0 0 1 1-1h1a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-1a1 1 0 0 1-1-1V1z")
+_IC_HEATMAP = ("M1 1h4v4H1V1zm5 0h4v4H6V1zm5 0h4v4h-4V1z"
+               "M1 6h4v4H1V6zm5 0h4v4H6V6zm5 0h4v4h-4V6z"
+               "M1 11h4v4H1v-4zm5 0h4v4H6v-4zm5 0h4v4h-4v-4z")
 _IC_EXPORT_CSV = ("M2 1h12a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1zm0 1v12h12V2H2zm2 2h8v1H4V4zm0 2h8v1H4V6zm0 2h5v1H4V8z")
 _IC_THEME_DARK = ("M8 1.2a.5.5 0 0 1 .47.66A5.8 5.8 0 1 0 14.14 9a.5.5 0 0 1 .66.47"
                   "A6.8 6.8 0 1 1 8 1.2z")
@@ -908,6 +911,75 @@ def _migration_rows(trace: "BtfTrace",
     rows.sort(key=lambda r: (-r[2], r[1].lower()))
     return rows
 
+_TICK_HEALTH_PERIOD = 1000   # expected tick period in trace units (1 ms @ us scale)
+_TICK_HEALTH_GAP_FACTOR = 2.0
+
+def _tick_health_report(trace: "BtfTrace",
+                        lo: Optional[int] = None, hi: Optional[int] = None) -> dict:
+    """Summarise STI TICK timestamps: gaps, missed-tick estimate, health status."""
+    times = trace.tick_sti_times
+    if lo is not None and hi is not None:
+        times = [t for t in times if lo <= t <= hi]
+    if not times:
+        return {"tick_count": 0, "health": "unknown", "large_gaps": [],
+                "avg_period": 0, "max_gap": 0, "missed_estimate": 0}
+
+    threshold = _TICK_HEALTH_PERIOD * _TICK_HEALTH_GAP_FACTOR
+    large_gaps = []
+    sum_delta = 0
+    max_gap = 0
+    missed_total = 0
+    for i in range(1, len(times)):
+        delta = times[i] - times[i - 1]
+        sum_delta += delta
+        if delta > max_gap:
+            max_gap = delta
+        if delta > threshold:
+            missed = max(0, round(delta / _TICK_HEALTH_PERIOD) - 1)
+            missed_total += missed
+            large_gaps.append((times[i - 1], times[i], delta, missed))
+
+    avg_period = sum_delta / (len(times) - 1) if len(times) > 1 else _TICK_HEALTH_PERIOD
+    health = "good"
+    if large_gaps:
+        health = "critical" if max_gap / _TICK_HEALTH_PERIOD > 10 else "warning"
+    return {
+        "tick_count": len(times),
+        "avg_period": int(round(avg_period)),
+        "max_gap": max_gap,
+        "large_gaps": large_gaps,
+        "missed_estimate": missed_total,
+        "health": health,
+    }
+
+def _migration_heatmap_data(trace: "BtfTrace",
+                            lo: Optional[int] = None, hi: Optional[int] = None,
+                            time_bins: int = 32) -> Tuple[list, list, int]:
+    """Core-pair rows × time bins grid for migration heatmap."""
+    cores = trace.core_names
+    pairs = []
+    for fc in cores:
+        for tc in cores:
+            if fc != tc:
+                pairs.append((fc, tc,
+                              f"{_core_short_name(fc)}→{_core_short_name(tc)}"))
+    t_min = lo if lo is not None else trace.time_min
+    t_hi = hi if hi is not None else trace.time_max
+    span = max(t_hi - t_min, 1)
+    bin_w = span / time_bins
+    grid = [[0] * time_bins for _ in pairs]
+    for m in trace.migrations:
+        if lo is not None and m.ns < lo:
+            continue
+        if hi is not None and m.ns > hi:
+            continue
+        for pi, (fc, tc, _) in enumerate(pairs):
+            if m.from_core == fc and m.to_core == tc:
+                bi = min(time_bins - 1, max(0, int((m.ns - t_min) / bin_w)))
+                grid[pi][bi] += 1
+                break
+    return pairs, grid, time_bins
+
 def _trace_summary_snapshot(trace: "BtfTrace",
                             lo: Optional[int] = None, hi: Optional[int] = None) -> dict:
     """Summary metrics for trace compare (optional cursor scope)."""
@@ -1116,6 +1188,17 @@ def _core_sort_key_tuple(c: str) -> tuple:
         tail = c[5:]
         return (0, int(tail) if tail.isdigit() else sys.maxsize, c)
     return (1, sys.maxsize, c)
+
+def _core_short_name(core: str) -> str:
+    """Short core label for heatmap rows, e.g. Core_0 -> c0."""
+    if core.startswith("Core_"):
+        tail = core[5:]
+        if tail.isdigit():
+            return f"c{tail}"
+    return core
+
+def _trace_is_multi_core(trace: "BtfTrace") -> bool:
+    return len(trace.core_names) >= 2
 
 def _find_wcet_segment(segs: list,
                        lo: Optional[int] = None, hi: Optional[int] = None
@@ -9452,6 +9535,96 @@ class _TraceCompareDialog(QDialog):
         if isinstance(wnd, QMainWindow):
             wnd.statusBar().showMessage(f"Exported trace compare: {path}", 4000)
 
+class _MigrationHeatmapWidget(QWidget):
+    """Paint core-pair × time-bin migration counts."""
+
+    _ROW_H = 16
+    _CELL_MIN_W = 8
+    _LEFT_PAD = 6
+
+    def __init__(self, pairs: list, grid: list, parent=None):
+        super().__init__(parent)
+        self._pairs = pairs
+        self._grid = grid
+        self._max_val = max((v for row in grid for v in row), default=0)
+        n_bins = len(grid[0]) if grid else 1
+        fm = QFontMetrics(self.font())
+        max_lbl = max((fm.horizontalAdvance(p[2]) for p in pairs), default=0)
+        self._label_w = max(52, max_lbl + 10)
+        min_w = self._LEFT_PAD + self._label_w + n_bins * self._CELL_MIN_W + 8
+        self.setMinimumSize(min_w, max(60, len(pairs) * self._ROW_H + 8))
+
+    def sizeHint(self) -> QSize:
+        n_bins = len(self._grid[0]) if self._grid else 1
+        w = self._LEFT_PAD + self._label_w + n_bins * self._CELL_MIN_W + 8
+        h = max(60, len(self._pairs) * self._ROW_H + 8)
+        return QSize(w, h)
+
+    def paintEvent(self, event) -> None:
+        if not self._pairs:
+            return
+        p = QPainter(self)
+        w = self.width()
+        n_bins = len(self._grid[0]) if self._grid else 1
+        x0 = self._LEFT_PAD + self._label_w
+        cell_w = max(self._CELL_MIN_W, (w - x0 - 4) // max(1, n_bins))
+        y = 4
+        for ri, row in enumerate(self._grid):
+            p.setPen(QPen(QColor("#888888")))
+            p.drawText(
+                QRectF(self._LEFT_PAD, y, self._label_w, self._ROW_H),
+                Qt.AlignLeft | Qt.AlignVCenter,
+                self._pairs[ri][2],
+            )
+            x = x0
+            for v in row:
+                alpha = int(50 + 180 * v / self._max_val) if self._max_val else 30
+                p.fillRect(QRectF(x, y, cell_w - 1, self._ROW_H - 3),
+                           QColor(91, 155, 213, alpha if v else 15))
+                x += cell_w
+            y += self._ROW_H
+        p.end()
+
+class _MigrationHeatmapDialog(QDialog):
+    """Popup: migration heatmap for the loaded trace."""
+
+    def __init__(self, trace: "BtfTrace", parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Migration Heatmap")
+        self.setMinimumSize(480, 320)
+        lo = hi = None
+        scope = ""
+        wnd = parent
+        if isinstance(wnd, QMainWindow):
+            tab = wnd._active_tab
+            if tab is not None:
+                times = sorted(tab.view._scene.cursor_times())
+                if len(times) >= 2:
+                    lo, hi = times[0], times[-1]
+                    scope = (f"  (C1–C{len(times)}: "
+                             f"{_format_time(lo, trace.time_scale)} … "
+                             f"{_format_time(hi, trace.time_scale)})")
+        pairs, grid, _ = _migration_heatmap_data(trace, lo, hi)
+        lay = QVBoxLayout(self)
+        lay.addWidget(QLabel(f"Core-pair migrations over time bins{scope}"))
+        if not pairs or not any(any(r for r in row) for row in grid):
+            lay.addWidget(QLabel("No migrations in scope."))
+        else:
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(False)
+            scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            scroll.setFrameShape(QFrame.NoFrame)
+            canvas = _MigrationHeatmapWidget(pairs, grid)
+            scroll.setWidget(canvas)
+            lay.addWidget(scroll, 1)
+        lay.addWidget(QLabel("Rows: from→to core pairs  ·  Columns: time bins",
+                             styleSheet="color:#888888;"))
+        btns = QDialogButtonBox(QDialogButtonBox.Close)
+        btns.rejected.connect(self.reject)
+        btns.accepted.connect(self.accept)
+        lay.addWidget(btns)
+
 class _StatsPanel(QWidget):
     """Dock panel showing trace statistics (span, core utilisation, top tasks)."""
 
@@ -9476,6 +9649,7 @@ class _StatsPanel(QWidget):
             "exec": False,
             "block": False,
             "inter": False,
+            "health": False,
         }
         self._section_table_heights: Dict[str, int] = {
             "migrations": STATS_TABLE_MIG_DEFAULT_H,
@@ -10388,6 +10562,7 @@ class _StatsPanel(QWidget):
         block_rows = self._blocking_time_rows_export(trace, lo, hi)
         mig_rows = _migration_rows(trace, lo, hi)
         ctx_count, core_gaps = _scheduling_stats(trace, lo, hi)
+        tick = _tick_health_report(trace, lo, hi)
 
         def _esc(v: object) -> str:
             return html.escape(str(v), quote=True)
@@ -10440,6 +10615,37 @@ class _StatsPanel(QWidget):
             f"<tr><td>{_esc(name)}</td><td>{pct:.1f}%</td></tr>"
             for _, name, pct in task_rows
         ) or '<tr><td colspan="2" class="empty">No data</td></tr>'
+
+        if tick["tick_count"]:
+            tick_gap_body = "".join(
+                f"<tr><td>{_esc(_format_time(s, trace.time_scale))}</td>"
+                f"<td>{_esc(_format_time(e, trace.time_scale))}</td>"
+                f"<td>{_esc(_format_time(d, trace.time_scale))}</td><td>{missed}</td></tr>"
+                for s, e, d, missed in tick["large_gaps"]
+            ) or '<tr><td colspan="4" class="empty">No large gaps</td></tr>'
+            tick_health_html = f"""
+    <section class=\"report-card\">
+    <h2>Trace Health (TICK){_esc(scope_title)}</h2>
+    <table>
+      <tbody>
+        <tr><td>Status</td><td>{_esc(tick['health'].upper())}</td></tr>
+        <tr><td>Ticks</td><td>{tick['tick_count']:,}</td></tr>
+        <tr><td>Avg period</td><td>{_esc(_format_time(tick['avg_period'], trace.time_scale))}</td></tr>
+        <tr><td>Max gap</td><td>{_esc(_format_time(tick['max_gap'], trace.time_scale))}</td></tr>
+        <tr><td>Missed ticks (est.)</td><td>{tick['missed_estimate']}</td></tr>
+      </tbody>
+    </table>
+    <h2 style=\"margin-top:12px;font-size:14px;\">Large TICK gaps</h2>
+    <table>
+      <thead><tr><th>Start</th><th>End</th><th>Gap</th><th>Missed</th></tr></thead>
+      <tbody>{tick_gap_body}</tbody>
+    </table>
+  </section>"""
+        else:
+            tick_health_html = (
+                f"<section class=\"report-card\"><h2>Trace Health (TICK){_esc(scope_title)}</h2>"
+                "<p class=\"empty\">No STI TICK events</p></section>"
+            )
 
         if lo is not None and hi is not None:
             task_count = sum(
@@ -10583,6 +10789,7 @@ class _StatsPanel(QWidget):
       <tbody>{task_body}</tbody>
     </table>
   </section>
+    {tick_health_html}
     {_render_exec_table(exec_rows)}
     <section class=\"report-card\">
     <h2>Core Migrations{_esc(scope_title)}</h2>
@@ -10663,6 +10870,7 @@ class _StatsPanel(QWidget):
         block_rows = self._blocking_time_rows_export(trace, lo, hi)
         mig_rows = _migration_rows(trace, lo, hi)
         ctx_count, core_gaps = _scheduling_stats(trace, lo, hi)
+        tick = _tick_health_report(trace, lo, hi)
 
         def _us(v: object) -> str:
             return str(v).replace("µs", "us").replace("μs", "us")
@@ -10702,6 +10910,30 @@ class _StatsPanel(QWidget):
                         writer.writerow([name, f"{pct:.1f}%"])
                 else:
                     writer.writerow(["No data", ""])
+
+                writer.writerow([])
+                writer.writerow([f"Trace Health (TICK){scope_suffix}"])
+                if tick["tick_count"]:
+                    writer.writerow(["Status", tick["health"].upper()])
+                    writer.writerow(["Ticks", tick["tick_count"]])
+                    writer.writerow(["Avg period", _us(_format_time(tick["avg_period"], trace.time_scale))])
+                    writer.writerow(["Max gap", _us(_format_time(tick["max_gap"], trace.time_scale))])
+                    writer.writerow(["Missed ticks (est.)", tick["missed_estimate"]])
+                    writer.writerow([])
+                    writer.writerow(["Large TICK gaps"])
+                    writer.writerow(["Start", "End", "Gap", "Missed"])
+                    if tick["large_gaps"]:
+                        for start, end, dur, missed in tick["large_gaps"]:
+                            writer.writerow([
+                                _us(_format_time(start, trace.time_scale)),
+                                _us(_format_time(end, trace.time_scale)),
+                                _us(_format_time(dur, trace.time_scale)),
+                                missed,
+                            ])
+                    else:
+                        writer.writerow(["No large gaps", "", "", ""])
+                else:
+                    writer.writerow(["No STI TICK events", ""])
 
                 writer.writerow([])
                 writer.writerow([f"Execution Time Per Slice{scope_suffix}"])
@@ -10855,6 +11087,52 @@ class _StatsPanel(QWidget):
             _populate_tasks,
         )
 
+        # -- Trace health (TICK) ------------------------------------------
+        _tick = _tick_health_report(trace, lo, hi)
+
+        def _populate_health(blay: QVBoxLayout) -> None:
+            if _tick["tick_count"] == 0:
+                blay.addWidget(self._lbl("No STI TICK events", color="#888888", ui_fs=_fs))
+                return
+            colors = {"good": "#5FCF6F", "warning": "#E8C84A", "critical": "#E85D5D"}
+            blay.addWidget(self._lbl(
+                f"{_tick['health'].upper()}  ·  {_tick['tick_count']:,} ticks  ·  "
+                f"avg {_format_time(_tick['avg_period'], trace.time_scale)}  ·  "
+                f"max gap {_format_time(_tick['max_gap'], trace.time_scale)}",
+                color=colors.get(_tick["health"], "#888888"),
+                ui_fs=_fs,
+            ))
+            if _tick["large_gaps"]:
+                blay.addWidget(self._lbl(
+                    f"{len(_tick['large_gaps'])} large gap(s) · "
+                    f"~{_tick['missed_estimate']} missed ticks",
+                    color="#888888", ui_fs=_fs))
+                table = QTableWidget(min(8, len(_tick["large_gaps"])), 4)
+                table.setHorizontalHeaderLabels(["Start", "End", "Gap", "Missed"])
+                table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+                table.verticalHeader().setVisible(False)
+                table.setShowGrid(False)
+                table.setFrameShape(QFrame.NoFrame)
+                table.setStyleSheet(f"font-size:{_fs};")
+                for r, (start, end, dur, missed) in enumerate(_tick["large_gaps"][:8]):
+                    table.setItem(r, 0, QTableWidgetItem(
+                        _format_time(start, trace.time_scale)))
+                    table.setItem(r, 1, QTableWidgetItem(
+                        _format_time(end, trace.time_scale)))
+                    table.setItem(r, 2, QTableWidgetItem(
+                        _format_time(dur, trace.time_scale)))
+                    table.setItem(r, 3, QTableWidgetItem(str(missed)))
+                table.setFixedHeight(
+                    STATS_TABLE_HEADER_H + min(8, len(_tick["large_gaps"])) * STATS_TABLE_ROW_H + 2)
+                blay.addWidget(table)
+
+        self._add_collapsible_section(
+            "health",
+            f"Trace Health (TICK){scope}",
+            _fs,
+            _populate_health,
+        )
+
         # -- Core migrations ----------------------------------------------
         _mig_rows = _migration_rows(trace, lo, hi)
         empty_mig = ("No multi-core tasks in cursor range" if scope
@@ -10955,6 +11233,7 @@ class _StatsPanel(QWidget):
             _fs,
             _populate_inter,
         )
+
         self._ilay.addStretch()
 
 # ---------------------------------------------------------------------------
@@ -15959,6 +16238,10 @@ class MainWindow(QMainWindow):
         _clw = tb.widgetForAction(self._tb_cpu_load_btn)
         if _clw:
             _clw.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self._tb_heatmap_btn = _ia(
+            "Heatmap", self._open_migration_heatmap, _IC_HEATMAP,
+            "Migration heatmap — core-pair counts over time (multi-core traces only)")
+        self._tb_heatmap_btn.setEnabled(False)
         tb.addSeparator()
 
         # --- STI waveform scale toggle ---
@@ -16216,6 +16499,20 @@ class MainWindow(QMainWindow):
         self._cpu_splitter.setSizes([total - new_bottom, new_bottom])
         self._cpu_load_graph._sync_scroll_size()
 
+    def _open_migration_heatmap(self) -> None:
+        trace = self._trace
+        if trace is None or not _trace_is_multi_core(trace):
+            return
+        dlg = _MigrationHeatmapDialog(trace, parent=self)
+        dlg.exec_()
+
+    def _sync_heatmap_toolbar(self) -> None:
+        if not hasattr(self, "_tb_heatmap_btn"):
+            return
+        trace = self._trace
+        self._tb_heatmap_btn.setEnabled(
+            trace is not None and _trace_is_multi_core(trace))
+
     def _toggle_expand_all_cores(self) -> None:
         """Expand or collapse all cores based on the button's checked state."""
         expanded = self._tb_expand_all_btn.isChecked()
@@ -16236,6 +16533,7 @@ class MainWindow(QMainWindow):
 
     def _sync_toolbar_to_active_tab(self) -> None:
         """Refresh toolbar toggles that reflect per-tab view state."""
+        self._sync_heatmap_toolbar()
         if hasattr(self, "_tb_cpu_load_btn"):
             self._tb_cpu_load_btn.blockSignals(True)
             self._tb_cpu_load_btn.setChecked(self._show_cpu_load)

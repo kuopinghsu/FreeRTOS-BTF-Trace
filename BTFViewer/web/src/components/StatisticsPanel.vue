@@ -16,7 +16,8 @@
       <span class="stats-scope-label">{{ scopeRangeLabel }}</span>
     </div>
 
-    <!-- Summary -->
+    <!-- Summary and sections (require loaded trace) -->
+    <template v-if="trace">
     <div class="stats-summary">
       <div class="summary-row">
         <span class="summary-key">Span{{ scopeSuffixStr }}</span>
@@ -51,7 +52,7 @@
     </div>
 
     <!-- Core utilization -->
-    <template v-if="trace.coreNames && trace.coreNames.length > 0">
+    <template v-if="trace?.coreNames?.length > 0">
       <div class="stats-sep" />
       <div
         class="stats-section-title collapsible"
@@ -158,6 +159,169 @@
       </div>
     </template>
 
+    <!-- Trace health (TICK) -->
+    <div class="stats-sep" />
+    <div
+      class="stats-section-title collapsible"
+      @click="healthCollapsed = !healthCollapsed"
+    >
+      <svg
+        class="chevron"
+        :class="{ collapsed: healthCollapsed }"
+        viewBox="0 0 10 10"
+        width="10"
+        height="10"
+      >
+        <polyline
+          points="2,3 5,7 8,3"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.5"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        />
+      </svg>
+      Trace Health (TICK){{ scopeSuffixStr }}
+    </div>
+    <template v-if="!healthCollapsed">
+      <div
+        v-if="!tickHealth.tickCount"
+        class="range-hint"
+      >
+        No STI TICK events
+      </div>
+      <template v-else>
+        <div
+          class="health-banner"
+          :class="'health-' + tickHealth.health"
+        >
+          {{ tickHealth.health.toUpperCase() }}
+          · {{ tickHealth.tickCount.toLocaleString() }} ticks
+          · avg {{ fmtTime(tickHealth.avgPeriod) }}
+          · max gap {{ fmtTime(tickHealth.maxGap) }}
+        </div>
+        <div
+          v-if="tickHealth.largeGaps.length"
+          class="range-hint"
+        >
+          {{ tickHealth.largeGaps.length }} large gap(s)
+          · ~{{ tickHealth.missedTicksEstimate }} missed ticks
+        </div>
+        <div
+          v-if="tickHealth.largeGaps.length"
+          class="stats-table-wrap"
+          style="max-height: 140px"
+        >
+          <table class="stats-table compact">
+            <thead>
+              <tr>
+                <th>Start</th>
+                <th>End</th>
+                <th>Gap</th>
+                <th>Missed</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="(g, i) in tickHealth.largeGaps.slice(0, 8)"
+                :key="i"
+              >
+                <td>{{ fmtTime(g.start) }}</td>
+                <td>{{ fmtTime(g.end) }}</td>
+                <td>{{ fmtTime(g.duration) }}</td>
+                <td>{{ g.missedTicks }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </template>
+    </template>
+
+    <!-- Core migrations -->
+    <div class="stats-sep" />
+    <div
+      class="stats-section-title collapsible"
+      @click="migrationCollapsed = !migrationCollapsed"
+    >
+      <svg
+        class="chevron"
+        :class="{ collapsed: migrationCollapsed }"
+        viewBox="0 0 10 10"
+        width="10"
+        height="10"
+      >
+        <polyline
+          points="2,3 5,7 8,3"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.5"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        />
+      </svg>
+      Core Migrations{{ scopeSuffixStr }}
+    </div>
+    <template v-if="!migrationCollapsed">
+      <div
+        v-if="migrationStats.length === 0"
+        class="range-hint"
+      >
+        {{ statsRange ? 'No migrated tasks in cursor range' : 'No tasks ran on multiple cores' }}
+      </div>
+      <div
+        v-else
+        class="stats-table-block"
+      >
+        <div
+          class="stats-table-wrap"
+          :style="{ maxHeight: tableHeight('migrations') + 'px' }"
+        >
+          <table class="stats-table stats-table-migration">
+          <thead>
+            <tr>
+              <th>Task</th>
+              <th>Migr</th>
+              <th>Cores</th>
+              <th>Primary</th>
+              <th>Ping</th>
+              <th>STI±</th>
+              <th>Gap after</th>
+              <th>Gap other</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="row in migrationStats"
+              :key="row.mk"
+              class="stats-table-row clickable"
+              :title="`Highlight ${row.name}`"
+              tabindex="0"
+              @click="emit('highlightTask', row.mk)"
+              @keydown.enter.prevent="emit('highlightTask', row.mk)"
+              @keydown.space.prevent="emit('highlightTask', row.mk)"
+            >
+              <td class="task-col">{{ row.name }}</td>
+              <td>{{ row.migrations }}</td>
+              <td>{{ row.coreCount }}</td>
+              <td>{{ row.primary }} ({{ row.primaryPct.toFixed(0) }}%)</td>
+              <td>{{ row.pingPong }}</td>
+              <td>{{ row.stiNear }}</td>
+              <td>{{ row.gapAfter }}</td>
+              <td>{{ row.gapOther }}</td>
+            </tr>
+          </tbody>
+        </table>
+        </div>
+        <div
+          class="stats-section-resizer"
+          role="separator"
+          aria-label="Resize core migrations table"
+          aria-orientation="horizontal"
+          @mousedown.prevent="onTableResizeStart('migrations', $event)"
+        />
+      </div>
+    </template>
+
     <!-- Execution time per slice -->
     <div class="stats-sep" />
     <div
@@ -249,91 +413,6 @@
           aria-label="Resize execution time table"
           aria-orientation="horizontal"
           @mousedown.prevent="onTableResizeStart('exec', $event)"
-        />
-      </div>
-    </template>
-
-    <!-- Core migrations -->
-    <div class="stats-sep" />
-    <div
-      class="stats-section-title collapsible"
-      @click="migrationCollapsed = !migrationCollapsed"
-    >
-      <svg
-        class="chevron"
-        :class="{ collapsed: migrationCollapsed }"
-        viewBox="0 0 10 10"
-        width="10"
-        height="10"
-      >
-        <polyline
-          points="2,3 5,7 8,3"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.5"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        />
-      </svg>
-      Core Migrations{{ scopeSuffixStr }}
-    </div>
-    <template v-if="!migrationCollapsed">
-      <div
-        v-if="migrationStats.length === 0"
-        class="range-hint"
-      >
-        {{ statsRange ? 'No migrated tasks in cursor range' : 'No tasks ran on multiple cores' }}
-      </div>
-      <div
-        v-else
-        class="stats-table-block"
-      >
-        <div
-          class="stats-table-wrap"
-          :style="{ maxHeight: tableHeight('migrations') + 'px' }"
-        >
-          <table class="stats-table stats-table-migration">
-          <thead>
-            <tr>
-              <th>Task</th>
-              <th>Migr</th>
-              <th>Cores</th>
-              <th>Primary</th>
-              <th>Ping</th>
-              <th>STI±</th>
-              <th>Gap after</th>
-              <th>Gap other</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="row in migrationStats"
-              :key="row.mk"
-              class="stats-table-row clickable"
-              :title="`Highlight ${row.name}`"
-              tabindex="0"
-              @click="emit('highlightTask', row.mk)"
-              @keydown.enter.prevent="emit('highlightTask', row.mk)"
-              @keydown.space.prevent="emit('highlightTask', row.mk)"
-            >
-              <td class="task-col">{{ row.name }}</td>
-              <td>{{ row.migrations }}</td>
-              <td>{{ row.coreCount }}</td>
-              <td>{{ row.primary }} ({{ row.primaryPct.toFixed(0) }}%)</td>
-              <td>{{ row.pingPong }}</td>
-              <td>{{ row.stiNear }}</td>
-              <td>{{ row.gapAfter }}</td>
-              <td>{{ row.gapOther }}</td>
-            </tr>
-          </tbody>
-        </table>
-        </div>
-        <div
-          class="stats-section-resizer"
-          role="separator"
-          aria-label="Resize core migrations table"
-          aria-orientation="horizontal"
-          @mousedown.prevent="onTableResizeStart('migrations', $event)"
         />
       </div>
     </template>
@@ -581,6 +660,13 @@
       >
         Trace Compare…
       </button>
+    </div>
+    </template>
+    <div
+      v-else
+      class="range-hint stats-empty-hint"
+    >
+      Open a trace file to view statistics.
     </div>
   </div>
 
@@ -875,10 +961,11 @@ import {
   findExtremeInterArrivalSegment,
 } from '../utils/statsAnalysis.js'
 import { migrationRows } from '../utils/migrationAnalysis.js'
+import { tickHealthReport } from '../utils/tickHealth.js'
 import TraceCompareDialog from './TraceCompareDialog.vue'
 
 const props = defineProps({
-  trace:   { type: Object, required: true },
+  trace:   { type: Object, default: null },
   cursors: { type: Array, default: () => [] },
   tabs:    { type: Array, default: () => [] },
 })
@@ -887,6 +974,7 @@ const emit = defineEmits(['highlightTask', 'selectSegment'])
 
 const coresCollapsed = ref(false)
 const tasksCollapsed = ref(false)
+const healthCollapsed = ref(false)
 const execSliceCollapsed = ref(false)
 const blockingCollapsed = ref(false)
 const migrationCollapsed = ref(false)
@@ -970,6 +1058,15 @@ const placedCursorCount = computed(() => getPlacedCursors(props.cursors).length)
 const statsRange = computed(() => getStatsRange(props.cursors, scopeToCursors.value))
 
 const scopeSuffixStr = computed(() => scopeSuffix(statsRange.value))
+
+const tickHealth = computed(() => {
+  const r = statsRange.value
+  return tickHealthReport(props.trace, r?.lo ?? null, r?.hi ?? null)
+})
+
+function fmtTime(ns) {
+  return formatTime(ns, props.trace.timeScale)
+}
 
 const scopeRangeLabel = computed(() => {
   const r = statsRange.value
@@ -1591,21 +1688,32 @@ function exportCsv() {
     lines.push('No data,')
   }
 
+  const tick = tickHealthReport(tr, lo, hi)
   lines.push('')
-  lines.push(`Execution Time Per Slice${suffix}`)
-  lines.push('Task,Runs,CPU%,Min,Avg,TrimMean(5%),Max,p50,p95')
-  for (const r of execReportRows) {
-    lines.push([
-      _csvCell(r.name),
-      _csvCell(r.runs),
-      _csvCell(`${r.cpuPct.toFixed(1)}%`),
-      _csvCell(r.min),
-      _csvCell(r.avg),
-      _csvCell(r.trimMean),
-      _csvCell(r.max),
-      _csvCell(r.p50),
-      _csvCell(r.p95),
-    ].join(','))
+  lines.push(`Trace Health (TICK)${suffix}`)
+  if (tick.tickCount) {
+    lines.push(`Status,${_csvCell(tick.health.toUpperCase())}`)
+    lines.push(`Ticks,${_csvCell(tick.tickCount)}`)
+    lines.push(`Avg period,${_csvCell(formatTime(tick.avgPeriod, tr.timeScale))}`)
+    lines.push(`Max gap,${_csvCell(formatTime(tick.maxGap, tr.timeScale))}`)
+    lines.push(`Missed ticks (est.),${_csvCell(tick.missedTicksEstimate)}`)
+    lines.push('')
+    lines.push('Large TICK gaps')
+    lines.push('Start,End,Gap,Missed')
+    if (tick.largeGaps.length) {
+      for (const g of tick.largeGaps) {
+        lines.push([
+          _csvCell(formatTime(g.start, tr.timeScale)),
+          _csvCell(formatTime(g.end, tr.timeScale)),
+          _csvCell(formatTime(g.duration, tr.timeScale)),
+          _csvCell(g.missedTicks),
+        ].join(','))
+      }
+    } else {
+      lines.push('No large gaps,,,')
+    }
+  } else {
+    lines.push('No STI TICK events,')
   }
 
   lines.push('')
@@ -1623,6 +1731,23 @@ function exportCsv() {
       _csvCell(r.stiNear),
       _csvCell(r.gapAfter),
       _csvCell(r.gapOther),
+    ].join(','))
+  }
+
+  lines.push('')
+  lines.push(`Execution Time Per Slice${suffix}`)
+  lines.push('Task,Runs,CPU%,Min,Avg,TrimMean(5%),Max,p50,p95')
+  for (const r of execReportRows) {
+    lines.push([
+      _csvCell(r.name),
+      _csvCell(r.runs),
+      _csvCell(`${r.cpuPct.toFixed(1)}%`),
+      _csvCell(r.min),
+      _csvCell(r.avg),
+      _csvCell(r.trimMean),
+      _csvCell(r.max),
+      _csvCell(r.p50),
+      _csvCell(r.p95),
     ].join(','))
   }
 
@@ -1898,6 +2023,21 @@ function exportHtml() {
     ? taskRows.map(r => `<tr><td>${_htmlCell(r.name)}</td><td>${_htmlCell(r.pct)}%</td></tr>`).join('')
     : '<tr><td colspan="2" class="empty">No data</td></tr>'
   }</tbody></table></section>`
+  const tick = tickHealthReport(tr, lo, hi)
+  const tickGapBody = tick.largeGaps.length
+    ? tick.largeGaps.map(g => `<tr><td>${_htmlCell(formatTime(g.start, tr.timeScale))}</td><td>${_htmlCell(formatTime(g.end, tr.timeScale))}</td><td>${_htmlCell(formatTime(g.duration, tr.timeScale))}</td><td>${g.missedTicks}</td></tr>`).join('')
+    : '<tr><td colspan="4" class="empty">No large gaps</td></tr>'
+  const tickHealthHtml = tick.tickCount
+    ? `<section class="report-card"><h2>Trace Health (TICK)${_htmlCell(suffix)}</h2><table><tbody>
+        <tr><th>Status</th><td>${_htmlCell(tick.health.toUpperCase())}</td></tr>
+        <tr><th>Ticks</th><td>${tick.tickCount.toLocaleString()}</td></tr>
+        <tr><th>Avg period</th><td>${_htmlCell(formatTime(tick.avgPeriod, tr.timeScale))}</td></tr>
+        <tr><th>Max gap</th><td>${_htmlCell(formatTime(tick.maxGap, tr.timeScale))}</td></tr>
+        <tr><th>Missed ticks (est.)</th><td>${tick.missedTicksEstimate}</td></tr>
+      </tbody></table>
+      <h2 style="margin-top:12px;font-size:14px;">Large TICK gaps</h2>
+      <table><thead><tr><th>Start</th><th>End</th><th>Gap</th><th>Missed</th></tr></thead><tbody>${tickGapBody}</tbody></table></section>`
+    : `<section class="report-card"><h2>Trace Health (TICK)${_htmlCell(suffix)}</h2><p class="empty">No STI TICK events</p></section>`
   const migHtml = `<section class="report-card"><h2>Core Migrations${_htmlCell(suffix)}</h2><table><thead><tr><th>Task</th><th>Migr</th><th>Cores</th><th>Primary</th><th>Ping</th><th>STI±</th><th>Gap after</th><th>Gap other</th></tr></thead><tbody>${migReportRows.length
     ? migReportRows.map(r => `<tr><td>${_htmlCell(r.name)}</td><td>${_htmlCell(r.migrations)}</td><td>${_htmlCell(r.coreCount)}</td><td>${_htmlCell(`${r.primary} (${r.primaryPct.toFixed(0)}%)`)}</td><td>${_htmlCell(r.pingPong)}</td><td>${_htmlCell(r.stiNear)}</td><td>${_htmlCell(r.gapAfter)}</td><td>${_htmlCell(r.gapOther)}</td></tr>`).join('')
     : '<tr><td colspan="8" class="empty">No migrated tasks</td></tr>'
@@ -2015,6 +2155,7 @@ function exportHtml() {
     ${rangeHtml}
     ${coreHtml}
     ${taskHtml}
+    ${tickHealthHtml}
     ${migHtml}
     ${_renderHtmlTableReport(`Execution Time Per Slice${suffix}`, execReportRows, true)}
     ${_renderHtmlTableReport(`Blocking Time (off-CPU gap)${suffix}`, blockReportRows)}
@@ -2220,6 +2361,16 @@ watch(plotData, () => {
   font-size: 10px;
   font-style: italic;
 }
+
+.health-banner {
+  font-size: 11px;
+  padding: 4px 0 2px;
+  font-weight: 500;
+}
+.health-banner.health-good { color: #5FCF6F; }
+.health-banner.health-warning { color: #E8C84A; }
+.health-banner.health-critical { color: #E85D5D; }
+.health-banner.health-unknown { color: var(--fg-dim); }
 
 .stats-util-scroll {
   display: flex;

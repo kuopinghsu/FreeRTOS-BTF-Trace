@@ -7,6 +7,7 @@
     <Toolbar
       :model-value="timelineOptions"
       :trace-info="traceInfo"
+      :heatmap-enabled="heatmapEnabled"
       :loading="loading"
       :loading-pct="loadingPct"
       :loading-msg="loadingMsg"
@@ -22,6 +23,7 @@
       @add-mark="onAddMark"
       @copy-screenshot="onCopyScreenshot"
       @export-svg="onExportSvg"
+      @show-heatmap="heatmapOpen = true"
       @show-help="openHelpDialog"
       @show-about="openAboutDialog"
     />
@@ -520,6 +522,13 @@
       </div>
     </div>
 
+    <MigrationHeatmapDialog
+      v-if="heatmapOpen && trace"
+      :trace="trace"
+      :cursors="cursors"
+      @close="heatmapOpen = false"
+    />
+
     <!-- Snapshot editor -->
     <SnapshotEditor
       v-if="snapshotEditorOpen"
@@ -581,8 +590,10 @@ import LegendPanel      from './components/LegendPanel.vue'
 import StatisticsPanel  from './components/StatisticsPanel.vue'
 import MarksPanel       from './components/MarksPanel.vue'
 import SnapshotEditor   from './components/SnapshotEditor.vue'
+import MigrationHeatmapDialog from './components/MigrationHeatmapDialog.vue'
 import { formatTime }   from './renderer/TimelineRenderer.js'
 import { taskDisplayName, taskMergeKey } from './utils/colors.js'
+import { traceIsMultiCore } from './utils/migrationAnalysis.js'
 import { useTraceTabs } from './composables/useTraceTabs.js'
 import { loadSession, saveSession, getSavedTabState, applySavedTabState, buildSessionSnapshot, isRestorableViewport } from './utils/sessionStore.js'
 import exampleBtfB64   from 'virtual:example-btf'
@@ -613,6 +624,7 @@ const loadingMsg = ref('')
 const loadingFileName = ref('')
 const helpOpen   = ref(false)
 const aboutOpen  = ref(false)
+const heatmapOpen = ref(false)
 const rightPanelTab = ref('stats')
 
 // ---- Snapshot editor -------------------------------------------------------
@@ -823,6 +835,8 @@ const traceInfo = computed(() => {
   const t = trace.value
   return `${t.meta?.creator || ''} · ${t.tasks.length}T · ${t.segments.length.toLocaleString()} segs`
 })
+
+const heatmapEnabled = computed(() => traceIsMultiCore(trace.value))
 
 const cursorRangeStats = computed(() => {
   const tr = trace.value
@@ -1274,7 +1288,10 @@ function onGlobalKeydown(e) {
   }
 
   if (e.key === 'Escape') {
-    if (helpOpen.value) {
+    if (heatmapOpen.value) {
+      heatmapOpen.value = false
+      e.preventDefault()
+    } else if (helpOpen.value) {
       helpOpen.value = false
       e.preventDefault()
     } else if (aboutOpen.value) {
@@ -1284,7 +1301,7 @@ function onGlobalKeydown(e) {
     return
   }
 
-  if (helpOpen.value || aboutOpen.value) return
+  if (helpOpen.value || aboutOpen.value || heatmapOpen.value) return
 
   const key = e.key.toLowerCase()
   switch (key) {

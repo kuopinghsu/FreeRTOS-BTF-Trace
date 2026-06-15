@@ -138,3 +138,47 @@ export function migrationFindHits(trace, query) {
   }
   return [...new Set(hits)].sort((a, b) => a - b)
 }
+
+export function coreShortName(core) {
+  if (core?.startsWith('Core_')) {
+    const tail = core.slice(5)
+    if (/^\d+$/.test(tail)) return `c${tail}`
+  }
+  return core
+}
+
+export function traceIsMultiCore(trace) {
+  return (trace?.coreNames?.length ?? 0) >= 2
+}
+
+/** Core-pair rows × time bins for migration heatmap popup. */
+export function migrationHeatmapGrid(trace, lo = null, hi = null, timeBins = 32) {
+  if (!trace) return { pairs: [], grid: [], timeBins, tMin: 0, tMax: 0 }
+  const cores = trace.coreNames || []
+  const pairs = []
+  for (const fc of cores) {
+    for (const tc of cores) {
+      if (fc !== tc) {
+        pairs.push({
+          from: fc,
+          to: tc,
+          label: `${coreShortName(fc)}→${coreShortName(tc)}`,
+        })
+      }
+    }
+  }
+  const tMin = lo ?? trace.timeMin
+  const tHi = hi ?? trace.timeMax
+  const span = Math.max(tHi - tMin, 1)
+  const binW = span / timeBins
+  const grid = pairs.map(() => Array(timeBins).fill(0))
+  for (const m of trace.migrations || []) {
+    if (lo != null && m.ns < lo) continue
+    if (hi != null && m.ns > hi) continue
+    const pi = pairs.findIndex(p => p.from === m.fromCore && p.to === m.toCore)
+    if (pi < 0) continue
+    const bi = Math.min(timeBins - 1, Math.max(0, Math.floor((m.ns - tMin) / binW)))
+    grid[pi][bi]++
+  }
+  return { pairs, grid, binW, tMin, timeBins }
+}

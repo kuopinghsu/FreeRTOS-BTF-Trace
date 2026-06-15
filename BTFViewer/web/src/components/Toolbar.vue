@@ -147,6 +147,24 @@
       Load
     </label>
 
+    <button
+      class="tb-btn"
+      :class="{ disabled: !heatmapEnabled }"
+      :disabled="!heatmapEnabled"
+      title="Migration heatmap — core-pair counts over time (multi-core traces only)"
+      @click="heatmapEnabled && emit('showHeatmap')"
+    >
+      <svg
+        viewBox="0 0 16 16"
+        width="16"
+        height="16"
+        fill="currentColor"
+      >
+        <path d="M1 1h4v4H1V1zm5 0h4v4H6V1zm5 0h4v4h-4V1zM1 6h4v4H1V6zm5 0h4v4H6V6zm5 0h4v4h-4V6zM1 11h4v4H1v-4zm5 0h4v4H6v-4zm5 0h4v4h-4v-4z" />
+      </svg>
+      Heatmap
+    </button>
+
     <div class="tb-sep" />
 
     <!-- Zoom controls -->
@@ -374,12 +392,13 @@
 defineProps({
   modelValue:  { type: Object,  required: true },
   traceInfo:   { type: String,  default: '' },
+  heatmapEnabled: { type: Boolean, default: false },
   loading:     { type: Boolean, default: false },
   loadingPct:  { type: Number,  default: 0 },
   loadingMsg:  { type: String,  default: '' },
 })
 
-const emit = defineEmits(['update:modelValue', 'trace-reading', 'trace-loaded', 'loadDemo', 'zoom', 'fit', 'expandAll', 'collapseAll', 'addMark', 'copyScreenshot', 'exportSvg', 'showHelp', 'showAbout', 'file-error'])
+const emit = defineEmits(['update:modelValue', 'trace-reading', 'trace-loaded', 'loadDemo', 'zoom', 'fit', 'expandAll', 'collapseAll', 'addMark', 'copyScreenshot', 'exportSvg', 'showHelp', 'showAbout', 'showHeatmap', 'file-error'])
 
 function onFileChange(e) {
   const file = e.target.files[0]
@@ -433,6 +452,12 @@ function onFileChange(e) {
   background: var(--tb-btn-active);
   border-color: var(--accent);
   color: var(--accent);
+}
+.tb-btn.disabled,
+.tb-btn:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+  pointer-events: none;
 }
 .tb-sep {
   width: 1px;

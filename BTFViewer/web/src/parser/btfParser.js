@@ -16,6 +16,7 @@ import { bisectLeft, bisectRight } from '../utils/bisect.js'
 import { makeLodSummary } from '../utils/lod.js'
 import { parseTaskName, taskMergeKey, taskSortKey, resetStiColors } from '../utils/colors.js'
 import { buildMigrationIndex } from '../utils/migrationAnalysis.js'
+import { analyzeTickHealth } from '../utils/tickHealth.js'
 
 // LOD bin counts (match Python constants).
 const LOD_SUMMARY_BINS       = 4096
@@ -536,8 +537,9 @@ export async function parseBtf(text, progressCallback) {
   progress(97, 'Finalising…')
   await yieldToHost()
   const sortedTickStiTimes = tickStiTimes.sort((a, b) => a - b)
-  progress(98, 'Finalising…')
+  progress(98, 'Analysing tick health…')
   await yieldToHost()
+  const tickHealth = analyzeTickHealth(sortedTickStiTimes)
 
   return {
     // ---- Metadata ----
@@ -561,6 +563,7 @@ export async function parseBtf(text, progressCallback) {
     stiStartsByTarget,
     stiValRange,
     tickStiTimes: sortedTickStiTimes,
+    tickHealth,
 
     // ---- Task-view lookup tables ----
     segByMergeKey:              segsByMk,
