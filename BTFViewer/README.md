@@ -25,7 +25,7 @@ A PyQt5-based interactive visualiser for FreeRTOS context-switch traces in **Bes
 - **Multi-tab traces** — open several `.btf` files at once (Desktop: closable tabs; Web: tab bar under the toolbar). Desktop restores session tabs, active tab, and per-tab zoom/cursors from `btf_viewer.rc` on launch; Web restores per-tab cursors, marks, viewport, and view options from browser `localStorage` when you reload a trace by name
 - **Measurement cursors** — Desktop supports 2–8 cursors (default: 4); Web supports up to 4 cursors
 - **Trace compare** — with 2+ tabs open, **Trace Compare…** in the Statistics panel diffs **Summary**, **Top Tasks**, and **Core Migrations** side-by-side (Desktop + Web). Optional **Limit to each tab's cursor range** compares metrics within C1–Cn when 2+ cursors are placed on each trace
-- **Core migration analysis** — detect tasks that run on multiple cores; **Core Migrations** stats table (ping-pong, STI correlation, gap-after vs other gaps), **Migrated tasks only** legend filter, and Find **Migrations** mode (Desktop)
+- **Core migration analysis** — detect tasks that run on multiple cores; **Core Migrations** stats table (ping-pong, STI correlation, gap-after vs other gaps), **Migration heatmap** (core-pair counts over time bins), **Migrated tasks only** legend filter, and Find **Migrations** mode (Desktop)
 - **Cursor-scoped statistics** — with 2+ cursors, the Statistics panel can limit all metrics (CPU%, execution slices, blocking time, inter-arrival, scheduling summary, exports, and charts) to the window from C1 through the last cursor; toggle **Limit to cursor range (C1–Cn)** (Desktop + Web)
 - **Cursor range summary** — with 2+ cursors, Desktop also shows a quick min/max/avg segment summary in the status bar; Web shows range stats in the **Cursors** panel
 - **Task highlight** — hover or click any task label or Legend row to highlight all its segments
@@ -46,7 +46,7 @@ A PyQt5-based interactive visualiser for FreeRTOS context-switch traces in **Bes
 - **Export to PNG / SVG / clipboard** — capture the viewport in the **Snapshot Editor** (annotate with arrows, shapes, and text, then save or copy); direct clipboard copy also available from the menu
 - **Persistent settings** — all preferences stored in `btf_viewer.rc` alongside the script
 - **Drag-and-drop** — drop a `.btf` file directly onto the window
-- **Optimised for large traces** — tested with up to **128 cores, 1 024 tasks, and 5 M+ events**
+- **Optimised for large traces** — tested with up to **128 cores, 1 024 tasks, and 5 M+ events** (desktop). Web viewer: flat segment storage, parse worker, precomputed CPU-load bins, WASM-accelerated bisect/LOD, and debounced stats worker for 100k+ segment traces
 
 ## Installation
 
@@ -71,7 +71,7 @@ On launch (with no command-line file), the viewer restores the previous session:
 ### Web viewer (`web/`)
 
 A browser-based port of the viewer built with **Vue 3 + Vite**.
-It runs entirely in the browser — no server, no Python, and no backend required.
+It runs entirely in the browser — no server, no Python, and no backend required (use `make preview` or the hosted demo for best performance on large traces).
 
 **Requirements:** [Node.js](https://nodejs.org/) 18+ and npm (build-time only).
 
@@ -89,13 +89,26 @@ npm install
 npm run build
 ```
 
-Then just **double-click `dist/index.html`** or:
+Then open the build:
 
 ```bash
-open BTFViewer/web/dist/index.html   # macOS
+open BTFViewer/web/dist/index.html   # macOS — double-click also works
 ```
 
+The same file is copied to `BTFViewer/web/pre-build/btf-viewer.html` on each `make build` (used by the hosted [demo](https://apps.kuoping.com/btf-viewer.html)).
+
 Do not open `BTFViewer/web/index.html` directly via `file://`; it is the Vite source entry used by the dev server.
+
+#### `file://` vs local HTTP
+
+| Open method | Works? | Notes |
+|-------------|--------|--------|
+| Double-click `dist/index.html` | Yes | Basic use; Chrome may block Web Workers on `file://`, so parsing falls back to the main thread (UI can freeze briefly on very large traces). |
+| `make preview` | **Recommended** | Serves the build over HTTP — Web Workers, WASM accel, and the stats worker all work as intended. |
+| `make dev` | Dev | Hot reload at `http://localhost:5173`. |
+| Hosted demo | **Recommended** | [apps.kuoping.com/btf-viewer.html](https://apps.kuoping.com/btf-viewer.html) |
+
+For large traces (e.g. `tracedata/example-16cores.btf` — 16 cores, 100k+ segments), prefer **`make preview`** or the hosted demo rather than `file://`.
 
 #### Development server (with hot reload)
 
@@ -109,9 +122,10 @@ make dev      # or: npm run dev
 
 | Target | Action |
 |--------|--------|
-| `make` / `make build` | Install deps + produce `dist/index.html` |
+| `make` / `make build` | Install deps + produce `dist/index.html` and copy to `pre-build/btf-viewer.html` |
 | `make dev` | Start Vite dev server with hot reload |
-| `make preview` | Preview the production build locally |
+| `make preview` | Serve the production build locally (recommended for large traces) |
+| `make wasm` | Rebuild WASM timeline accelerator from `wasm/timeline_accel.wat` |
 | `make clean` | Remove `dist/` |
 | `make dist-clean` | Remove `dist/` and `node_modules/` |
 
@@ -145,7 +159,12 @@ Toggle with the **Task** / **Core** buttons in the toolbar.
 Click **Open** in the toolbar and select any `.btf` file.
 Each file opens in a new **tab** in the bar below the toolbar; click a tab to switch traces, or **×** to close one.
 Opening the same filename again focuses the existing tab.
-Large files (5 M+ events) are parsed in a background thread so the UI stays responsive. A progress indicator (`Parsing… 70%`) is shown during loading.
+
+**Parsing:** traces are parsed in a **Web Worker** when the page is served over HTTP (`make dev`, `make preview`, or the hosted demo). On `file://` URLs some browsers block workers, so parsing may run on the main thread instead. A progress overlay (`Reading…` / `Parsing…` / `Opening trace…`) is shown until the timeline is ready.
+
+**Large traces:** the web viewer is optimised for high segment counts (flat segment storage, precomputed CPU-load bins, WASM-accelerated bisect/LOD, debounced stats worker). On first paint after load it briefly uses a coarse LOD (like pan/zoom) and upgrades to full quality within a few hundred milliseconds — this keeps the UI responsive on traces such as `tracedata/example-16cores.btf` (16 cores, 100k+ segments).
+
+Sample traces in the repo: `tracedata/example.btf` (small), `tracedata/example-16cores.btf` (large SMP).
 
 ### Zoom & pan
 
@@ -194,6 +213,7 @@ The right side holds **Cursor / Bookmark** and **Statistics** pages (tab bar at 
 - **Resize** — drag the vertical bar between the timeline and the right panel to change panel width.
 - **Legend** — task colour swatches, search filter, and **Migrated tasks only** (hide tasks that never left their first core).
 - **Statistics** — same collapsible sections as the desktop viewer; click **Min** / **Max** in metric tables to jump to the corresponding slice; **Trace Compare…** when 2+ trace tabs are open.
+- **Migration heatmap** — toolbar **Heatmap** button (enabled for multi-core traces only); see [Migration heatmap](#migration-heatmap).
 
 ### Multi-tab traces (Web)
 
@@ -221,6 +241,21 @@ The web viewer persists session state in browser `localStorage` (key `btf-viewer
 - Trace data is never stored — only layout and UI state.
 - `localStorage` may be unavailable in strict private browsing modes.
 
+### Web performance architecture
+
+The web viewer shares the desktop feature set but uses a different rendering pipeline tuned for the browser:
+
+| Stage | Implementation |
+|-------|----------------|
+| **Parse** | `btfParser.js` in a Web Worker; results packed via `tracePack.js` (flat `SegStore`, index arrays per task/core/LOD tier) |
+| **Transfer** | Structured clone to the main thread (no transferable buffer detach issues) |
+| **CPU load** | Bins precomputed at parse time (`cpuLoadBins.js`) — the CPU Load panel reads bins, not raw segments |
+| **Timeline paint** | Canvas 2D with viewport culling, LOD binning, per-frame segment budget, optional WASM bisect (`wasmAccel.js`) |
+| **Statistics tables** | Summary metrics on the main thread; expanded execution/blocking/inter-arrival tables in a debounced stats worker (`statsWorker.js`) |
+| **Initial load** | Coarse “load-settle” paint, then full quality; WASM upload deferred to idle time so the first frame is not blocked |
+
+Chrome DevTools may log `[Violation] 'requestAnimationFrame' handler took …ms` on very large traces during the final full-quality repaint — that is a performance hint, not an error.
+
 ### Statistics panel — cursor-scoped metrics
 
 When **2 or more cursors** are placed, check **Limit to cursor range (C1–Cn)** at the top of the Statistics panel (enabled by default). All summary counts, CPU tables, execution/blocking/inter-arrival metrics, CSV/HTML export, and distribution charts then use only data inside the cursor window:
@@ -240,7 +275,7 @@ Uncheck the box to return to full-trace statistics.
 
 Below the scope checkbox, a **scheduling summary** line shows context-switch count and average/max core gap (idle time between consecutive slices on each core). Metric tables (**Core Utilisation**, **Top Tasks**, **Core Migrations**, **Execution Time**, **Blocking Time**, **Inter-Arrival**) are **collapsible** — click a section title to expand or collapse it. Drag the handle below a metric table to resize its height.
 
-**Core Migrations** lists tasks that ran on two or more cores (see [Core migration analysis](#core-migration-analysis)). **Trace Compare…** (footer, next to Export) opens a dialog with **Summary**, **Top Tasks**, and **Core Migrations** tabs to diff two open trace tabs; optional cursor-range scoping compares each tab's C1–Cn window independently.
+**Core Migrations** lists tasks that ran on two or more cores (see [Core migration analysis](#core-migration-analysis)). For multi-core traces, open the **Migration heatmap** from the toolbar **Heatmap** button to see migration counts per core pair over time bins (see [Migration heatmap](#migration-heatmap)). **Trace Compare…** (footer, next to Export) opens a dialog with **Summary**, **Top Tasks**, and **Core Migrations** tabs to diff two open trace tabs; optional cursor-range scoping compares each tab's C1–Cn window independently.
 
 ### Snapshot Editor
 
@@ -532,12 +567,13 @@ It shows:
 
 ### Core migration analysis
 
-A **migration** is recorded when consecutive slices of the same task (merge-key) run on different cores. Migrations are detected at parse time from the segment timeline — there are no separate markers drawn on the timeline; use the **Core Migrations** table, **Trace Compare…**, or Find **Migrations** mode (Desktop) to inspect them.
+A **migration** is recorded when consecutive slices of the same task (merge-key) run on different cores. Migrations are detected at parse time from the segment timeline — there are no separate markers drawn on the timeline; use the **Core Migrations** table, **Migration heatmap**, **Trace Compare…**, or Find **Migrations** mode (Desktop) to inspect them.
 
 | Feature | Desktop | Web |
 |---------|---------|-----|
 | Core tint legend + **Migrated tasks only** filter | ✓ | ✓ |
 | **Core Migrations** stats table | ✓ | ✓ |
+| **Migration heatmap** | ✓ | ✓ |
 | Cursor-scoped migration stats | ✓ | ✓ |
 | Resizable metric table height (drag handle below table) | ✓ | ✓ |
 | Resizable timeline / CPU load divider | ✓ | ✓ |
@@ -564,6 +600,20 @@ A **migration** is recorded when consecutive slices of the same task (merge-key)
 | **Gap other** | Average blocking gap elsewhere for the same task |
 
 Click a row to highlight that task on the timeline. Drag the resize handle below the table to show more or fewer rows.
+
+#### Migration heatmap
+
+Visualise **when** migrations happen between core pairs — complementary to the per-task **Core Migrations** table.
+
+| | |
+|--|--|
+| **Open** | Toolbar **Heatmap** (Desktop + Web). Enabled only when the trace has **2 or more cores** (single-core traces such as `example.btf` disable the button). |
+| **Rows** | One row per directed core pair (`c0→c1`, `c1→c0`, …). Core names are shortened in the labels (e.g. `Core_0` → `c0`). |
+| **Columns** | **32 equal time bins** across the scoped window. Cell colour intensity is the migration count in that bin (darker = more migrations). Hover a cell for the exact count. |
+| **Scope** | **Full trace** by default. With **2 or more cursors** placed, the grid uses the time window from **C1** through the last cursor (subtitle shows the range). This matches desktop behaviour and is independent of the Statistics panel **Limit to cursor range** toggle. |
+| **Empty state** | *No migrations in scope.* when no migration events fall in the current window. |
+
+Use the heatmap to spot bursts of cross-core traffic (e.g. ping-pong between two cores in a specific phase of the trace) before drilling into individual tasks in **Core Migrations** or on the timeline.
 
 #### Trace Compare…
 
@@ -1007,14 +1057,20 @@ timestamp, Core_N, 0, C, Core_N, 0, set_frequency, freq_hz
 | Component | Location | Notes |
 |-----------|----------|-------|
 | **Desktop viewer** | `btf_viewer.py` (~17k lines) | PyQt5 monolith: parser, `TimelineScene` rebuild, stats, trace compare |
-| **Web parser** | `web/src/parser/btfParser.js` | Mirrors Python parser; runs in Web Worker with `file://` fallback |
-| **Web renderer** | `web/src/renderer/TimelineRenderer.js` | Canvas 2D, viewport culling, LOD binning |
+| **Web parser** | `web/src/parser/btfParser.js` | Mirrors Python parser; runs in Web Worker (`btfWorker.js`) with `file://` main-thread fallback |
+| **Web segment storage** | `web/src/parser/segStore.js`, `tracePack.js` | Flat typed arrays + `SegList` views; pack/unpack for worker → main transfer |
+| **Web CPU / stats prep** | `web/src/parser/cpuLoadBins.js`, `statsCompute.js` | Precomputed at parse time in the worker |
+| **Web stats worker** | `web/src/parser/statsWorker.js` | Debounced expanded metric tables (120 ms); falls back to main thread if worker unavailable |
+| **Web renderer** | `web/src/renderer/TimelineRenderer.js` | Canvas 2D, viewport culling, LOD binning, per-frame paint budget |
+| **Web WASM accel** | `web/src/renderer/wasmAccel.js`, `wasm/timeline_accel.wat` | Optional bisect / row-cull / LOD reduce; JS fallback when WASM unavailable |
 | **Session store** | `web/src/utils/sessionStore.js` | `localStorage` key `btf-viewer-session-v1` |
 | **Trace compare** | `traceCompare.js` / `_TraceCompareDialog` | Optional per-tab C1–Cn scope (Desktop + Web) |
+| **Migration heatmap** | `migrationAnalysis.js` / `_MigrationHeatmapDialog` | Core-pair × time-bin grid; 32 bins; multi-core traces only (Desktop + Web) |
+| **Pre-built HTML** | `web/pre-build/btf-viewer.html` | Copy of `dist/index.html` produced by `make build` |
 
 Desktop session persistence uses `btf_viewer.rc` (tab paths, zoom, cursors). Web session uses `localStorage` keyed by filename — see [Session restore (Web)](#session-restore-web).
 
-There is no shared automated test suite; validate parser changes against `tracedata/example.btf` and synthetic traces from `gen_trace.py`.
+There is no shared automated test suite; validate parser changes against `tracedata/example.btf`, `tracedata/example-16cores.btf`, and synthetic traces from `gen_trace.py`.
 
 ---
 
