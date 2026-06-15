@@ -583,7 +583,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick, markRaw } from 'vue'
 import { toBlob as domToBlob, toSvg as domToSvg } from 'html-to-image'
 import Toolbar          from './components/Toolbar.vue'
 import TimelinePanel    from './components/TimelinePanel.vue'
@@ -707,7 +707,7 @@ function _ensureNavCache() {
   const isCoreEntity = (name) => typeof name === 'string' && name.startsWith('Core_')
   _navCache = {
     trace: trace.value,
-    segs: trace.value.segments
+    segs: [...trace.value.segments]
       .filter(s => !!s.task)
       .filter(s => !isCoreEntity(s.task))
       .filter(s => taskMergeKey(s.task) !== tickMk)
@@ -916,8 +916,6 @@ function finishTraceLoadTab(tab) {
   loading.value    = false
   loadingPct.value = 0
   loadingMsg.value = ''
-  // Ensure timeline shows the loaded trace (avoid stale {0,1} viewport sentinel).
-  nextTick(() => applyTimelineViewport())
 }
 
 function paintLoadingProgress(pct, msg) {
@@ -930,20 +928,42 @@ async function flushLoadingProgress(pct, msg) {
   await new Promise(resolve => requestAnimationFrame(resolve))
 }
 
-async function attachParsedTrace(name, trace) {
-  await flushLoadingProgress(100, 'Opening trace…')
-  const tab = openTab(name || 'trace.btf')
-  resetTabForLoad(tab)
-  tab.trace = trace
-  restoreTabState(tab)
-  finishTraceLoadTab(tab)
+async function attachParsedTrace(name, packedOrTrace) {
+  paintLoadingProgress(100, 'Opening trace…')
+  try {
+    const { unpackTrace } = await import('./parser/tracePack.js')
+    const trace = packedOrTrace?.segStore ? packedOrTrace : unpackTrace(packedOrTrace)
+    const tab = openTab(name || 'trace.btf')
+    resetTabForLoad(tab)
+    restoreTabState(tab)
+
+    tab.trace = markRaw(trace)
+    await nextTick()
+
+    finishTraceLoadTab(tab)
+    await nextTick()
+    applyTimelineViewport()
+    scheduleRender()
+
+    setTimeout(() => {
+      import('./utils/statsWorkerClient.js')
+        .then(m => m.registerTraceWithStatsWorker(trace))
+        .catch(() => {})
+    }, 0)
+  } catch (err) {
+    loading.value = false
+    loadingPct.value = 0
+    loadingMsg.value = ''
+    throw err
+  }
 }
 
 async function parseTraceOnMainThread(text, name) {
   const { parseBtf } = await import('./parser/btfParser.js')
-  const result = await parseBtf(text, (pct, msg) => {
+  const { finalizeAndEnrich } = await import('./parser/tracePack.js')
+  const result = finalizeAndEnrich(await parseBtf(text, (pct, msg) => {
     paintLoadingProgress(pct, msg)
-  })
+  }))
   await attachParsedTrace(name, result)
 }
 
@@ -997,7 +1017,7 @@ async function onTraceLoaded({ text, name }) {
     } else if (data.type === 'done') {
       _parseWorker = null
       worker.terminate()
-      attachParsedTrace(name, data.trace).catch((err) => {
+      attachParsedTrace(name, data.packed).catch((err) => {
         console.error('Failed to open trace:', err)
         showToast('Failed to open trace: ' + (err?.message || String(err)), 'error')
         loading.value = false
@@ -1138,9 +1158,18 @@ function onTimelineViewportChange(vp) {
   if (activeTab.value) Object.assign(activeTab.value.timelineViewport, vp)
 }
 
+let _cpuVpApplyRaf = null
+let _cpuVpPending = null
 function onCpuLoadViewportChange(vp) {
   onTimelineViewportChange(vp)
-  timelinePanelRef.value?.applyViewport?.(vp)
+  _cpuVpPending = vp
+  if (_cpuVpApplyRaf) return
+  _cpuVpApplyRaf = requestAnimationFrame(() => {
+    _cpuVpApplyRaf = null
+    const pending = _cpuVpPending
+    _cpuVpPending = null
+    timelinePanelRef.value?.applyViewport?.(pending)
+  })
 }
 
 function syncTimelineViewport() {
@@ -1151,12 +1180,15 @@ function syncTimelineViewport() {
 function applyTimelineViewport() {
   const tab = activeTab.value
   if (!tab?.trace) return
+  const panel = timelinePanelRef.value
+  if (!panel) return
   if (isRestorableViewport(tab.timelineViewport, tab.trace)) {
-    timelinePanelRef.value?.applyViewport?.(tab.timelineViewport)
+    const ok = panel.applyViewport?.(tab.timelineViewport)
+    if (!ok) panel.fitToTrace?.()
   } else {
-    timelinePanelRef.value?.fitToTrace?.()
-    syncTimelineViewport()
+    panel.applyTraceViewport?.() ?? panel.fitToTrace?.()
   }
+  syncTimelineViewport()
 }
 
 function clearCursors() {
@@ -1376,6 +1408,12 @@ async function loadExampleBtf() {
     return
   }
 
+  loading.value = true
+  loadingPct.value = 1
+  loadingMsg.value = 'Loading demo trace…'
+  loadingFileName.value = 'example.btf'
+  await new Promise(r => requestAnimationFrame(r))
+
   // Decode base64 → gzip bytes → UTF-8 text.
   const binStr  = atob(exampleBtfB64)
   const bytes   = new Uint8Array(binStr.length)
@@ -1388,13 +1426,11 @@ async function loadExampleBtf() {
 }
 
 function onLoadDemo() {
-  loadExampleBtf()
-}
-
-// Prevent Firefox from intercepting Ctrl+scroll for page-zoom so the
-// canvas wheel handler (non-passive) can handle it exclusively.
-function _onDocWheel(e) {
-  if (e.ctrlKey || e.metaKey) e.preventDefault()
+  loadExampleBtf().catch((err) => {
+    console.error('Demo load failed:', err)
+    showToast('Failed to load demo trace: ' + (err?.message || String(err)), 'error')
+    loading.value = false
+  })
 }
 
 onMounted(() => {
@@ -1403,7 +1439,6 @@ onMounted(() => {
     Object.assign(timelineOptions, saved.timelineOptions)
   }
   window.addEventListener('keydown', onGlobalKeydown)
-  document.addEventListener('wheel', _onDocWheel, { passive: false, capture: true })
 })
 
 onBeforeUnmount(() => {
@@ -1411,10 +1446,15 @@ onBeforeUnmount(() => {
     _parseWorker.terminate()
     _parseWorker = null
   }
+  import('./utils/statsWorkerClient.js').then(m => m.terminateStatsWorker()).catch(() => {})
   onRightPanelResizeEnd()
   onCpuLoadResizeEnd()
+  if (_cpuVpApplyRaf) {
+    cancelAnimationFrame(_cpuVpApplyRaf)
+    _cpuVpApplyRaf = null
+  }
+  _cpuVpPending = null
   window.removeEventListener('keydown', onGlobalKeydown)
-  document.removeEventListener('wheel', _onDocWheel, { capture: true })
 })
 
 // ---- Marks (bookmarks + annotations) -------------------------------------

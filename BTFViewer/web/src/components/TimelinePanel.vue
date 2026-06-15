@@ -355,14 +355,107 @@ let _mainCtx = null
 
 // ---- Interaction fast-paint (coarse LOD while panning/zooming) ------------
 let _interacting = false
+let _interactTimeAxis = false
 let _interactEndTimer = null
 const INTERACT_SETTLE_MS = 250
 
-function markInteracting() {
+// After trace load, paint coarse LOD once then upgrade — avoids multi-hundred-ms rAF stalls.
+let _loadSettling = false
+let _loadSettleTimer = null
+const LOAD_SETTLE_MS = 350
+/** Above this segment count, fit-to-window stays on coarse LOD; full quality only when zoomed in. */
+const LARGE_TRACE_SEGS = 25_000
+
+function isLargeTrace() {
+  return (props.trace?.segments?.length ?? 0) >= LARGE_TRACE_SEGS
+}
+
+function traceTimeBounds() {
+  if (!props.trace) return null
+  const lo = props.trace.timeMin >= 0 ? Math.max(0, props.trace.timeMin) : props.trace.timeMin
+  return { lo, hi: props.trace.timeMax }
+}
+
+/** Fraction of trace span visible; 1 = fit-to-window. */
+function visibleTimeSpanRatio() {
+  const b = traceTimeBounds()
+  if (!b) return 1
+  const traceSpan = b.hi - b.lo
+  if (traceSpan <= 0) return 1
+  return (viewport.timeEnd - viewport.timeStart) / traceSpan
+}
+
+/** True when the visible window shows essentially the whole trace (post-Fit zoom). */
+function isFitToWindowZoom() {
+  return visibleTimeSpanRatio() >= 0.92
+}
+
+/**
+ * Coarse LOD / reduced paint budget.
+ * Large traces at overview zoom; initial load. Row scroll alone keeps full detail.
+ */
+function paintCoarse() {
+  if (_loadSettling) return true
+  if (isLargeTrace() && isFitToWindowZoom() && !_interacting) return true
+  if (_interacting && _interactTimeAxis && isLargeTrace() && isFitToWindowZoom()) return true
+  return false
+}
+
+/** Coarse LOD — see paintCoarse(). */
+function paintFast() {
+  return paintCoarse()
+}
+
+function paintDpr() {
+  if (_loadSettling) return 1
+  if (isLargeTrace()) {
+    // Allow retina once zoomed in past overview level.
+    if (visibleTimeSpanRatio() < 0.5) return window.devicePixelRatio || 1
+    return 1
+  }
+  return window.devicePixelRatio || 1
+}
+
+function scheduleFullQualityRender() {
+  const run = () => {
+    if (!props.trace) return
+    scheduleRender()
+  }
+  if (typeof requestIdleCallback === 'function') {
+    requestIdleCallback(run, { timeout: 1000 })
+  } else {
+    setTimeout(run, 32)
+  }
+}
+
+function endLoadSettlePaint() {
+  _loadSettling = false
+  _loadSettleTimer = null
+  scheduleRender()
+}
+
+function beginLoadSettle() {
+  _loadSettling = true
+  clearTimeout(_loadSettleTimer)
+  _loadSettleTimer = setTimeout(() => {
+    endLoadSettlePaint()
+    if (overviewVisible.value) scheduleOverviewPaint()
+  }, LOAD_SETTLE_MS)
+}
+
+function endLoadSettle() {
+  _loadSettling = false
+  clearTimeout(_loadSettleTimer)
+  _loadSettleTimer = null
+}
+
+function markInteracting(timeAxisChanged = false) {
   _interacting = true
+  if (timeAxisChanged) _interactTimeAxis = true
   clearTimeout(_interactEndTimer)
   _interactEndTimer = setTimeout(() => {
     _interacting = false
+    _interactTimeAxis = false
     scheduleRender()
     if (overviewVisible.value) scheduleOverviewPaint()
   }, INTERACT_SETTLE_MS)
@@ -381,7 +474,7 @@ function scheduleRender() {
       if (_dirty) {
         _dirty = false
         paint()
-        if (overviewVisible.value && !_interacting) scheduleOverviewPaint()
+        if (overviewVisible.value && !paintFast()) scheduleOverviewPaint()
       }
     })
   }
@@ -404,7 +497,7 @@ function paint() {
     _mainCtx = canvas.getContext('2d', { alpha: false, desynchronized: true })
   }
   const ctx = _mainCtx
-  const dpr = _interacting ? 1 : (window.devicePixelRatio || 1)
+  const dpr = paintDpr()
   const w   = canvas.clientWidth
   const h   = canvas.clientHeight
 
@@ -416,6 +509,13 @@ function paint() {
 
   viewport.canvasW = w
   viewport.canvasH = h
+
+  if (props.trace && (w <= 0 || h <= 0)) {
+    requestAnimationFrame(() => scheduleRender())
+    return
+  }
+
+  if (ensureTraceViewport()) return
 
   if (!props.trace) {
     ctx.clearRect(0, 0, w, h)
@@ -441,7 +541,7 @@ function paint() {
     darkMode:         props.options.darkMode,
     migratedOnlyFilter: !!props.options.migratedOnlyFilter,
     lockedTaskKey:    props.options.viewMode === 'core' ? (props.options.lockedTaskKey ?? null) : null,
-    fastPaint:        _interacting,
+    fastPaint:        paintFast(),
     rowLayout:        cachedRowLayout.value,
     columnLayout:     cachedColumnLayout.value,
     packedRows:       _packedRows,
@@ -452,8 +552,8 @@ function paint() {
     renderTimeline(ctx, props.trace, viewport, renderOpts)
   }
 
-  // Overlay is updated on hover; skip during pan/zoom to avoid extra canvas work.
-  if (!_interacting) paintHoverOverlay()
+  // Overlay is updated on hover; skip during pan/zoom and initial trace load.
+  if (!paintFast()) paintHoverOverlay()
 }
 
 // ---- Overlay canvas: hover line only -------------------------------------
@@ -462,7 +562,7 @@ function paintHoverOverlay() {
   const canvas = overlayEl.value
   if (!canvas) return
   const ctx = canvas.getContext('2d')
-  const dpr = _interacting ? 1 : (window.devicePixelRatio || 1)
+  const dpr = paintDpr()
   const w   = canvas.clientWidth
   const h   = canvas.clientHeight
   const targetW = Math.round(w * dpr)
@@ -532,6 +632,11 @@ function setupHandler() {
     }),
     getMarks:    () => props.options.marks || [],
     onViewportChange(vp) {
+      const vert = orientation.value === 'v'
+      const timeAxisChanged = vp.timeStart !== viewport.timeStart
+        || vp.timeEnd !== viewport.timeEnd
+        || (vert && vp.scrollX != null && vp.scrollX !== (viewport.scrollX || 0))
+
       viewport.timeStart = vp.timeStart
       viewport.timeEnd   = vp.timeEnd
       if (vp.scrollY != null) {
@@ -553,7 +658,7 @@ function setupHandler() {
         }
       }
       emit('viewportChange', { ...viewport })
-      markInteracting()
+      markInteracting(timeAxisChanged)
       scheduleRender()
     },
     onCursorsChange(cursors) {
@@ -616,7 +721,7 @@ function setupHandler() {
     },
     onRangeSelectChange({ t0, t1 }) {
       rangeSelect.value = { t0, t1 }
-      markInteracting()
+      markInteracting(true)
       paintHoverOverlay()
     },
     onRangeSelectEnd() {
@@ -812,7 +917,10 @@ function applyViewport(vp) {
   const hi = props.trace.timeMax
   let timeStart = vp.timeStart
   let timeEnd = vp.timeEnd
-  if (timeEnd <= timeStart) return false
+  if (timeEnd <= timeStart) {
+    fitToTrace()
+    return true
+  }
   const minSpan = Math.max(1, (hi - lo) * 1e-6)
   if (timeEnd - timeStart < minSpan) {
     const center = (timeStart + timeEnd) / 2
@@ -840,7 +948,7 @@ function zoomCenter(factor) {
   const center = (viewport.timeStart + viewport.timeEnd) / 2
   viewport.timeStart = center - span / 2
   viewport.timeEnd   = center + span / 2
-  markInteracting()
+  markInteracting(true)
   emitViewportChange()
   scheduleRender()
 }
@@ -1033,7 +1141,7 @@ function getHoverTime() { return hoverTime.value }
 function getLastActiveCursorTime() { return _handler?.getLastActiveCursorTime() ?? null }
 function getViewport() { return { ...viewport } }
 
-defineExpose({ fitToTrace, applyViewport, scheduleRender, zoomCenter, expandAll, collapseAll, jumpToNs, getViewport, getViewportCenter, getCoreAtViewportCenter, scrollToTask, scrollToSegmentIfNeeded, captureScreenshotBlob, captureAsSvg, getHoverTime, getLastActiveCursorTime })
+defineExpose({ fitToTrace, applyViewport, applyTraceViewport, ensureTraceViewport, beginLoadSettle, scheduleRender, zoomCenter, expandAll, collapseAll, jumpToNs, getViewport, getViewportCenter, getCoreAtViewportCenter, scrollToTask, scrollToSegmentIfNeeded, captureScreenshotBlob, captureAsSvg, getHoverTime, getLastActiveCursorTime })
 
 // ---- Expand / collapse core rows -----------------------------------------
 function onExpandToggle(coreName) {
@@ -1074,31 +1182,80 @@ function rebuildPackedRows() {
     : null
 }
 
+function applyTraceViewport() {
+  if (!props.trace) return
+  const saved = props.persistedViewport
+  if (isRestorableViewport(saved, props.trace)) {
+    applyViewport(saved)
+  } else {
+    fitToTrace()
+  }
+}
+
+/** True when the local viewport time window overlaps the loaded trace. */
+function viewportOverlapsTrace() {
+  if (!props.trace) return true
+  const lo = props.trace.timeMin >= 0 ? Math.max(0, props.trace.timeMin) : props.trace.timeMin
+  const hi = props.trace.timeMax
+  if (hi <= lo) return false
+  const span = viewport.timeEnd - viewport.timeStart
+  if (span <= 0) return false
+  // Sentinel from _emptyViewport() before fit — segments are outside [0,1].
+  if (viewport.timeStart === 0 && viewport.timeEnd === 1 && span <= 1) return false
+  const overlapLo = Math.max(viewport.timeStart, lo)
+  const overlapHi = Math.min(viewport.timeEnd, hi)
+  // Deep zoom can legitimately show far fewer than 1000 time units; any overlap counts.
+  return overlapHi > overlapLo
+}
+
+function ensureTraceViewport() {
+  if (!props.trace || _interacting || viewportOverlapsTrace()) return false
+  fitToTrace()
+  return true
+}
+
+function deferWasmSetup(trace) {
+  const run = () => {
+    if (props.trace !== trace) return
+    registerTraceWasmAccel(trace)
+    rebuildPackedRows()
+    setupHandler()
+    if (_loadSettling) return
+    if (isLargeTrace() && isFitToWindowZoom()) scheduleRender()
+    else scheduleFullQualityRender()
+  }
+  if (typeof requestIdleCallback === 'function') {
+    requestIdleCallback(run, { timeout: 500 })
+  } else {
+    setTimeout(run, 0)
+  }
+}
+
 watch(() => props.trace, async (trace, prev) => {
   _ovBgCanvas = null
   _mainCtx = null
   if (prev) unregisterTraceWasmAccel(prev)
-  await initWasmAccel()
   if (!trace) {
     _packedRows = null
+    expanded.clear()
+    endLoadSettle()
+    viewport.timeStart = 0
+    viewport.timeEnd = 1
+    viewport.scrollY = 0
+    viewport.scrollX = 0
     return
   }
-  registerTraceWasmAccel(trace)
-  rebuildPackedRows()
+
+  beginLoadSettle()
   expanded.clear()
   if (trace.coreNames.length <= AUTO_EXPAND_CORES_MAX) {
     for (const coreName of trace.coreNames) expanded.add(coreName)
   }
-  nextTick(() => {
-    const saved = props.persistedViewport
-    if (isRestorableViewport(saved, trace)) {
-      applyViewport(saved)
-    } else {
-      fitToTrace()
-    }
-    setupHandler()
-    scheduleRender()
-  })
+
+  applyTraceViewport()
+
+  await initWasmAccel()
+  deferWasmSetup(trace)
 })
 
 watch(cachedRowLayout, () => {
@@ -1562,13 +1719,14 @@ function _sbMouseMove(e) {
       const newStart = _sbDrag.lo + ratio * (_sbDrag.span - _sbDrag.visSpan)
       viewport.timeStart = newStart
       viewport.timeEnd   = newStart + _sbDrag.visSpan
+      markInteracting(true)
     } else {
       const { totalWidth } = buildColumnLayout(
         props.trace, props.options.viewMode, expanded, 0, props.options.showSti !== false, stiExpanded,
       )
       viewport.scrollX = Math.max(0, ratio * Math.max(0, totalWidth - viewport.canvasW))
+      markInteracting(false)
     }
-    markInteracting()
     scheduleRender()
   } else {
     const dy   = e.clientY - _sbDrag.startY
@@ -1576,12 +1734,13 @@ function _sbMouseMove(e) {
     const ratio = _sbDrag.usableH > 0 ? newT / _sbDrag.usableH : 0
     if (orientation.value === 'h') {
       viewport.scrollY = ratio * _sbDrag.maxScrollY
+      markInteracting(false)
     } else {
       const newStart = _sbDrag.lo + ratio * (_sbDrag.span - _sbDrag.visSpan)
       viewport.timeStart = newStart
       viewport.timeEnd   = newStart + _sbDrag.visSpan
+      markInteracting(true)
     }
-    markInteracting()
     scheduleRender()
   }
 }
@@ -1705,6 +1864,7 @@ onBeforeUnmount(() => {
   if (_ovPaintRaf) cancelAnimationFrame(_ovPaintRaf)
   if (_overviewRaf) cancelAnimationFrame(_overviewRaf)
   clearTimeout(_interactEndTimer)
+  clearTimeout(_loadSettleTimer)
   document.removeEventListener('click', onGlobalClick)
   clearTimeout(_overviewHideTimer)
   document.removeEventListener('mousemove', _sbMouseMove)

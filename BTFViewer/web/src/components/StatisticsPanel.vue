@@ -962,6 +962,8 @@ import {
 } from '../utils/statsAnalysis.js'
 import { migrationRows } from '../utils/migrationAnalysis.js'
 import { tickHealthReport } from '../utils/tickHealth.js'
+import { requestStatsCompute } from '../utils/statsWorkerClient.js'
+import { computeStatsTables, segIndicesMapFromTrace } from '../parser/statsCompute.js'
 import TraceCompareDialog from './TraceCompareDialog.vue'
 
 const props = defineProps({
@@ -980,6 +982,91 @@ const blockingCollapsed = ref(false)
 const migrationCollapsed = ref(false)
 const interArrivalCollapsed = ref(false)
 const scopeToCursors = ref(true)
+
+const workerExecRows = ref([])
+const workerBlockRows = ref([])
+const workerInterRows = ref([])
+const workerTaskCpuNs = ref(null)
+let _statsRefreshTimer = null
+
+function formatStatsRow(row, scale) {
+  return {
+    ...row,
+    min: formatTime(row.min, scale),
+    avg: formatTime(row.avg, scale),
+    max: formatTime(row.max, scale),
+    p95: formatTime(row.p95, scale),
+  }
+}
+
+async function refreshStatsTables() {
+  const tr = props.trace
+  if (!tr?.segStore) {
+    workerExecRows.value = []
+    workerBlockRows.value = []
+    workerInterRows.value = []
+    workerTaskCpuNs.value = null
+    return
+  }
+
+  const wantExec = !execSliceCollapsed.value
+  const wantBlock = !blockingCollapsed.value
+  const wantInter = !interArrivalCollapsed.value
+  if (!wantExec && !wantBlock && !wantInter) {
+    workerExecRows.value = []
+    workerBlockRows.value = []
+    workerInterRows.value = []
+    return
+  }
+
+  const r = statsRange.value
+  const lo = r?.lo ?? null
+  const hi = r?.hi ?? null
+  const totalNs = r ? (r.hi - r.lo) : (tr.timeMax - tr.timeMin)
+  const scale = tr.timeScale
+
+  let data = await requestStatsCompute({ lo, hi, wantExec, wantBlock, wantInter })
+
+  if (!data) {
+    const result = computeStatsTables(tr.segStore, {
+      tasks: tr.tasks,
+      taskRepr: tr.taskRepr,
+      segIndicesByMk: segIndicesMapFromTrace(tr),
+      lo,
+      hi,
+      totalNs,
+    })
+    data = {
+      exec: wantExec ? result.exec : null,
+      block: wantBlock ? result.block : null,
+      inter: wantInter ? result.inter : null,
+      taskCpuNs: result.taskCpuNs,
+    }
+  }
+
+  if (data.exec) {
+    workerExecRows.value = data.exec.map(row => ({
+      ...formatStatsRow(row, scale),
+      cpuPct: row.cpuPct,
+    }))
+  } else if (!wantExec) workerExecRows.value = []
+
+  if (data.block) {
+    workerBlockRows.value = data.block.map(row => formatStatsRow(row, scale))
+  } else if (!wantBlock) workerBlockRows.value = []
+
+  if (data.inter) {
+    workerInterRows.value = data.inter.map(row => formatStatsRow(row, scale))
+  } else if (!wantInter) workerInterRows.value = []
+
+  if (data.taskCpuNs) workerTaskCpuNs.value = data.taskCpuNs
+}
+
+function scheduleStatsRefresh() {
+  clearTimeout(_statsRefreshTimer)
+  _statsRefreshTimer = setTimeout(() => { refreshStatsTables() }, 120)
+}
+
 const TABLE_MIN_H = 80
 const TABLE_MAX_H = 480
 const STATS_MAX_VISIBLE_ROWS = 8
@@ -1051,7 +1138,10 @@ function onTableResizeEnd() {
   document.removeEventListener('mouseup', onTableResizeEnd)
 }
 
-onBeforeUnmount(onTableResizeEnd)
+onBeforeUnmount(() => {
+  clearTimeout(_statsRefreshTimer)
+  onTableResizeEnd()
+})
 
 const placedCursorCount = computed(() => getPlacedCursors(props.cursors).length)
 
@@ -1105,7 +1195,15 @@ const summarySegCount = computed(() => {
   const tr = props.trace
   const r = statsRange.value
   if (!r) return tr.segments.length
-  return tr.segments.filter(s => segOverlapsRange(s, r.lo, r.hi)).length
+  let n = 0
+  for (const segs of tr.segByMergeKey.values()) {
+    for (const s of segs) {
+      if (s.end <= r.lo) continue
+      if (s.start > r.hi) break
+      if (segOverlapsRange(s, r.lo, r.hi)) n++
+    }
+  }
+  return n
 })
 
 const summaryStiCount = computed(() => {
@@ -1158,29 +1256,16 @@ const coreStats = computed(() => {
 // ---- Top 10 tasks by CPU -----------------------------------------------
 const topTasks = computed(() => {
   const tr = props.trace
-  if (!tr || !tr.segByMergeKey) return []
+  if (!tr) return []
   const r = statsRange.value
   const total = r ? (r.hi - r.lo) : (tr.timeMax - tr.timeMin)
   if (total <= 0) return []
-  const accum = new Map()
-  for (const [mk, segs] of traceMapEntries(tr.segByMergeKey)) {
-    const repr = taskReprGet(tr, mk) || mk
-    const { name } = parseTaskName(repr)
-    if (isIdleTaskName(name) || name === 'TICK') continue
-    let t = 0
-    for (const s of segs) {
-      t += r ? segOverlapNs(s, r.lo, r.hi) : (s.end - s.start)
-    }
-    if (t > 0) accum.set(mk, t)
-  }
-  return [...accum.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 10)
-    .map(([mk, t]) => ({
-      mk,
-      name: taskDisplayName(taskReprGet(tr, mk) || mk),
-      pct: 100.0 * t / total,
-    }))
+  const source = (r && workerTaskCpuNs.value) ? workerTaskCpuNs.value : (tr.taskCpuNs || [])
+  return source.slice(0, 10).map(([mk, t]) => ({
+    mk,
+    name: taskDisplayName(taskReprGet(tr, mk) || mk),
+    pct: 100.0 * t / total,
+  }))
 })
 
 function _summarizeSamples(samples, scale) {
@@ -1197,75 +1282,9 @@ function _summarizeSamples(samples, scale) {
   }
 }
 
-const execSliceStats = computed(() => {
-  if (execSliceCollapsed.value) return []
-  const tr = props.trace
-  if (!tr || !tr.segByMergeKey) return []
-  const scale = tr.timeScale
-  const r = statsRange.value
-  const total = r ? (r.hi - r.lo) : (tr.timeMax - tr.timeMin)
-  const rows = []
+const execSliceStats = computed(() => workerExecRows.value)
 
-  for (const [mk, segs] of tr.segByMergeKey) {
-    if (!segs || segs.length === 0) continue
-    const repr = tr.taskRepr.get(mk) || mk
-    const { name } = parseTaskName(repr)
-    if (isIdleTaskName(name) || name === 'TICK') continue
-
-    const samples = []
-    for (const s of segs) {
-      const d = s.end - s.start
-      if (d <= 0) continue
-      if (r && !segFullyInRange(s, r.lo, r.hi)) continue
-      samples.push(d)
-    }
-    const summary = _summarizeSamples(samples, scale)
-    if (!summary) continue
-    const taskTotal = samples.reduce((a, b) => a + b, 0)
-
-    rows.push({
-      mk,
-      name: taskDisplayName(repr),
-      runs: samples.length,
-      cpuPct: total > 0 ? (100.0 * taskTotal / total) : 0,
-      min: summary.min,
-      avg: summary.avg,
-      max: summary.max,
-      p95: summary.p95,
-    })
-  }
-
-  return rows.sort((a, b) => b.runs - a.runs || a.name.localeCompare(b.name))
-})
-
-const blockingStats = computed(() => {
-  if (blockingCollapsed.value) return []
-  const tr = props.trace
-  if (!tr || !tr.segByMergeKey) return []
-  const scale = tr.timeScale
-  const r = statsRange.value
-  const lo = r?.lo ?? null
-  const hi = r?.hi ?? null
-  const rows = []
-
-  for (const [mk, segs] of tr.segByMergeKey) {
-    if (!segs || segs.length < 2) continue
-    const repr = tr.taskRepr.get(mk) || mk
-    const { name } = parseTaskName(repr)
-    if (isIdleTaskName(name) || name === 'TICK') continue
-    const samples = blockingTimeSamples(segs, lo, hi)
-    const summary = _summarizeSamples(samples, scale)
-    if (!summary) continue
-    rows.push({
-      mk,
-      name: taskDisplayName(repr),
-      gaps: samples.length,
-      ...summary,
-    })
-  }
-
-  return rows.sort((a, b) => b.gaps - a.gaps || a.name.localeCompare(b.name))
-})
+const blockingStats = computed(() => workerBlockRows.value)
 
 const migrationStats = computed(() => {
   if (migrationCollapsed.value) return []
@@ -1295,47 +1314,7 @@ function jumpToSegment(mk, kind, findMax) {
   if (seg) emit('selectSegment', seg)
 }
 
-const interArrivalStats = computed(() => {
-  if (interArrivalCollapsed.value) return []
-  const tr = props.trace
-  if (!tr || !tr.segByMergeKey) return []
-  const scale = tr.timeScale
-  const r = statsRange.value
-  const rows = []
-
-  for (const [mk, segs] of tr.segByMergeKey) {
-    if (!segs || segs.length < 2) continue
-    const repr = tr.taskRepr.get(mk) || mk
-    const { name } = parseTaskName(repr)
-    if (isIdleTaskName(name) || name === 'TICK') continue
-
-    const starts = [...segs].map(s => s.start).sort((a, b) => a - b)
-    const samples = []
-    for (let i = 1; i < starts.length; i++) {
-      if (r && (starts[i] < r.lo || starts[i] > r.hi)) continue
-      const d = starts[i] - starts[i - 1]
-      if (d > 0) samples.push(d)
-    }
-    const summary = _summarizeSamples(samples, scale)
-    if (!summary) continue
-
-    const runs = r
-      ? segs.filter(s => s.start >= r.lo && s.start <= r.hi).length
-      : starts.length
-
-    rows.push({
-      mk,
-      name: taskDisplayName(repr),
-      runs,
-      min: summary.min,
-      avg: summary.avg,
-      max: summary.max,
-      p95: summary.p95,
-    })
-  }
-
-  return rows.sort((a, b) => b.runs - a.runs || a.name.localeCompare(b.name))
-})
+const interArrivalStats = computed(() => workerInterRows.value)
 
 function _summarizeNumericSamples(samples) {
   if (!samples || samples.length === 0) return null
@@ -2241,7 +2220,13 @@ watch(() => props.cursors, (cursors) => {
 
 watch(() => props.trace, () => {
   closePlot()
+  scheduleStatsRefresh()
 })
+
+watch(
+  [statsRange, execSliceCollapsed, blockingCollapsed, interArrivalCollapsed, scopeToCursors],
+  scheduleStatsRefresh,
+)
 
 watch(plotData, () => {
   selectedPlotPoint.value = -1

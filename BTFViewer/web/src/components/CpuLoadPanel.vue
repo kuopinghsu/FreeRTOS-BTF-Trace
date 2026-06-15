@@ -2,7 +2,6 @@
   <div
     ref="panelRef"
     class="cpu-load-panel"
-    @wheel="onWheel"
   >
     <div class="cpu-load-title-row">
       <div class="cpu-load-title">CPU LOAD</div>
@@ -192,7 +191,7 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { formatTime } from '../renderer/TimelineRenderer.js'
 import { coreColor, isIdleTaskName, parseTaskName, taskColor, taskDisplayName, taskMergeKey } from '../utils/colors.js'
 import {
@@ -201,6 +200,7 @@ import {
   getPlacedCursorRange,
   loadAtNs,
 } from '../utils/cpuLoadHelpers.js'
+import { CPU_LOAD_NUM_BINS } from '../parser/cpuLoadBins.js'
 import {
   applyPanPlotX,
   applyPanPlotY,
@@ -208,8 +208,7 @@ import {
   applyZoomAroundPlotY,
 } from '../utils/viewportWheel.js'
 
-const NUM_BINS = 1024
-const ROW_H = 60
+const NUM_BINS = CPU_LOAD_NUM_BINS
 const COLLAPSED_H = 22
 const ROW_GAP = 2
 const LABEL_W = 156
@@ -240,145 +239,24 @@ const collapsedCores = ref(new Set())
 
 const binsState = computed(() => {
   const trace = props.trace
-  if (!trace) {
-    return {
-      binWNs: 1,
-      coreBins: {},
-      taskBins: {},
-      taskCoreBins: {},
-      totalBins: [],
-      avgLoad: {},
-    }
+  const empty = {
+    binWNs: 1,
+    coreBins: {},
+    taskBins: {},
+    taskCoreBins: {},
+    totalBins: [],
+    avgLoad: {},
   }
-
-  const n = NUM_BINS
-  const tMin = trace.timeMin
-  const tMax = trace.timeMax
-  const span = Math.max(1, tMax - tMin)
-  const binW = span / n
-  const cores = trace.coreNames || []
-
-  const coreBusy = Object.fromEntries(cores.map(core => [core, new Array(n).fill(0)]))
-  const coreDiff = Object.fromEntries(cores.map(core => [core, new Array(n + 2).fill(0)]))
-  const taskBusy = new Map()
-  const taskDiff = new Map()
-  const taskCoreBusy = new Map()
-  const taskCoreDiff = new Map()
-
-  for (const seg of trace.segments) {
-    const mk = taskMergeKey(seg.task)
-    const { name } = parseTaskName(seg.task)
-    const skipCoreLoad = isIdleTaskName(name) || name.toUpperCase() === 'TICK'
-
-    const rawB0 = Math.floor((seg.start - tMin) / binW)
-    const rawB1 = Math.floor((seg.end - tMin) / binW)
-    const b0 = Math.max(0, Math.min(n - 1, rawB0))
-    const b1 = Math.max(0, Math.min(n - 1, rawB1))
-
-    const firstEnd = tMin + (b0 + 1) * binW
-    const firstChunk = Math.max(0, Math.min(seg.end, firstEnd) - seg.start)
-    const lastChunk = Math.max(0, seg.end - (tMin + b1 * binW))
-
-    if (!skipCoreLoad && coreBusy[seg.core]) {
-      const busy = coreBusy[seg.core]
-      const diff = coreDiff[seg.core]
-      busy[b0] += firstChunk
-      if (b1 > b0) {
-        busy[b1] += lastChunk
-        if (b1 > b0 + 1) {
-          diff[b0 + 1] += binW
-          diff[b1] -= binW
-        }
-      }
-    }
-
-    if (!taskBusy.has(mk)) {
-      taskBusy.set(mk, new Array(n).fill(0))
-      taskDiff.set(mk, new Array(n + 2).fill(0))
-    }
-    const totalBusy = taskBusy.get(mk)
-    const totalDiff = taskDiff.get(mk)
-    totalBusy[b0] += firstChunk
-    if (b1 > b0) {
-      totalBusy[b1] += lastChunk
-      if (b1 > b0 + 1) {
-        totalDiff[b0 + 1] += binW
-        totalDiff[b1] -= binW
-      }
-    }
-
-    if (!taskCoreBusy.has(mk)) {
-      taskCoreBusy.set(mk, new Map())
-      taskCoreDiff.set(mk, new Map())
-    }
-    const perCoreBusy = taskCoreBusy.get(mk)
-    const perCoreDiff = taskCoreDiff.get(mk)
-    if (!perCoreBusy.has(seg.core)) {
-      perCoreBusy.set(seg.core, new Array(n).fill(0))
-      perCoreDiff.set(seg.core, new Array(n + 2).fill(0))
-    }
-    const taskCoreBusyBins = perCoreBusy.get(seg.core)
-    const taskCoreDiffBins = perCoreDiff.get(seg.core)
-    taskCoreBusyBins[b0] += firstChunk
-    if (b1 > b0) {
-      taskCoreBusyBins[b1] += lastChunk
-      if (b1 > b0 + 1) {
-        taskCoreDiffBins[b0 + 1] += binW
-        taskCoreDiffBins[b1] -= binW
-      }
-    }
+  if (!trace?.cpuLoadBins) return empty
+  const b = trace.cpuLoadBins
+  return {
+    binWNs: b.binWNs,
+    coreBins: b.coreBins,
+    taskBins: b.taskBins,
+    taskCoreBins: b.taskCoreBins,
+    totalBins: b.totalBins,
+    avgLoad: b.avgLoad,
   }
-
-  const inv = 1 / binW
-  const materialize = (busy, diff) => {
-    const out = [...busy]
-    let run = 0
-    for (let i = 0; i < n; i++) {
-      run += diff[i]
-      out[i] += run
-      out[i] = Math.min(1, Math.max(0, out[i] * inv))
-    }
-    return out
-  }
-
-  const coreBins = {}
-  for (const core of cores) {
-    coreBins[core] = materialize(coreBusy[core], coreDiff[core])
-  }
-
-  const taskBins = {}
-  for (const [mk, busy] of taskBusy.entries()) {
-    taskBins[mk] = materialize(busy, taskDiff.get(mk))
-  }
-
-  const taskCoreBins = {}
-  for (const [mk, coreMap] of taskCoreBusy.entries()) {
-    taskCoreBins[mk] = {}
-    const diffMap = taskCoreDiff.get(mk)
-    for (const [core, busy] of coreMap.entries()) {
-      taskCoreBins[mk][core] = materialize(busy, diffMap.get(core))
-    }
-  }
-
-  const totalBins = cores.length > 0
-    ? Array.from({ length: n }, (_, idx) => {
-      let sum = 0
-      for (const core of cores) sum += coreBins[core]?.[idx] || 0
-      return Math.min(1, Math.max(0, sum / cores.length))
-    })
-    : []
-
-  const avgLoad = {}
-  for (const core of cores) {
-    const bins = coreBins[core] || []
-    avgLoad[core] = bins.length > 0 ? bins.reduce((sum, value) => sum + value, 0) / bins.length : 0
-  }
-  for (const [mk, bins] of Object.entries(taskBins)) {
-    avgLoad[mk] = bins.length > 0 ? bins.reduce((sum, value) => sum + value, 0) / bins.length : 0
-  }
-  avgLoad.total = totalBins.length > 0 ? totalBins.reduce((sum, value) => sum + value, 0) / totalBins.length : 0
-
-  return { binWNs: binW, coreBins, taskBins, taskCoreBins, totalBins, avgLoad }
 })
 
 const rows = computed(() => {
@@ -416,7 +294,7 @@ const rowModels = computed(() => {
 
   return rows.value.map(row => {
     const collapsed = row.kind === 'core' && collapsedCores.value.has(row.key)
-    const height = collapsed ? COLLAPSED_H : ROW_H
+    const height = collapsed ? COLLAPSED_H : TIMELINE_ROW_H
     const bins = binsForRow(row.kind, row.key)
     const rects = []
 
@@ -491,6 +369,74 @@ function onRowLabelClick(row) {
   collapsedCores.value = next
 }
 
+let _wheelQueue = null
+let _wheelFlushRaf = null
+let _rowsScrollDelta = 0
+
+function _flushWheel() {
+  _wheelFlushRaf = null
+  if (_rowsScrollDelta !== 0) {
+    const rowsEl = rowsRef.value
+    if (rowsEl) rowsEl.scrollTop += _rowsScrollDelta
+    _rowsScrollDelta = 0
+    return
+  }
+  const queue = _wheelQueue
+  _wheelQueue = null
+  if (!queue?.length || !props.trace || !props.viewport) return
+  let vp = { ...props.viewport }
+  for (const fn of queue) {
+    vp = fn(vp) ?? vp
+  }
+  emit('viewportChange', vp)
+}
+
+function _queueWheel(updateFn) {
+  if (!_wheelQueue) _wheelQueue = []
+  _wheelQueue.push(updateFn)
+  if (!_wheelFlushRaf) {
+    _wheelFlushRaf = requestAnimationFrame(_flushWheel)
+  }
+}
+
+function _buildWheelMutator(e) {
+  const panel = panelRef.value
+  if (!panel) return null
+  const rect = panel.getBoundingClientRect()
+  const vert = props.orientation === 'v'
+  const plotLeft = vert ? rect.left : rect.left + LABEL_W
+  const plotTop = rect.top + (vert ? TITLE_H : 0)
+  const plotWidth = vert ? rect.width : Math.max(1, rect.right - plotLeft)
+  const plotHeight = vert ? Math.max(1, rect.bottom - plotTop) : rect.height
+  const plotX = e.clientX - plotLeft
+  const plotY = e.clientY - plotTop
+
+  if (e.ctrlKey || e.metaKey) {
+    const factor = e.deltaY > 0 ? 1.15 : 0.87
+    return vp => (vert
+      ? applyZoomAroundPlotY(vp, props.trace, plotY, plotHeight, TITLE_H, factor)
+      : applyZoomAroundPlotX(vp, props.trace, plotX, plotWidth, factor))
+  }
+  if (vert) {
+    const isHorizInput = e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)
+    if (isHorizInput) {
+      const dx = e.shiftKey ? e.deltaY : e.deltaX
+      return vp => ({ ...vp, scrollX: Math.max(0, (vp.scrollX || 0) + dx) })
+    }
+    const dy = e.deltaMode === 1 ? e.deltaY * TIMELINE_ROW_H : e.deltaY
+    return vp => applyPanPlotY(vp, props.trace, dy, plotHeight, TITLE_H)
+  }
+  const isHorizInput = Math.abs(e.deltaX) > Math.abs(e.deltaY)
+  if (isHorizInput) {
+    return vp => applyPanPlotX(vp, props.trace, e.deltaX, plotWidth)
+  }
+  if (e.shiftKey) {
+    return vp => applyPanPlotX(vp, props.trace, e.deltaY, plotWidth)
+  }
+  const dy = e.deltaMode === 1 ? e.deltaY * TIMELINE_ROW_H : e.deltaY
+  return vp => ({ ...vp, scrollY: Math.max(0, (vp.scrollY || 0) + dy) })
+}
+
 function onWheel(e) {
   if (!props.trace || !props.viewport) return
   e.preventDefault()
@@ -501,51 +447,33 @@ function onWheel(e) {
       && rowsEl.scrollHeight > rowsEl.clientHeight + 1
       && !e.ctrlKey && !e.metaKey && !e.shiftKey
       && Math.abs(e.deltaY) >= Math.abs(e.deltaX)) {
-    rowsEl.scrollTop += e.deltaY
+    _wheelQueue = null
+    const dy = e.deltaMode === 1 ? e.deltaY * TIMELINE_ROW_H : e.deltaY
+    _rowsScrollDelta += dy
+    if (!_wheelFlushRaf) {
+      _wheelFlushRaf = requestAnimationFrame(_flushWheel)
+    }
     return
   }
 
-  const panel = panelRef.value
-  if (!panel) return
-  const rect = panel.getBoundingClientRect()
-  const vert = props.orientation === 'v'
-  const plotLeft = vert ? rect.left : rect.left + LABEL_W
-  const plotTop = rect.top + (vert ? TITLE_H : 0)
-  const plotWidth = vert ? rect.width : Math.max(1, rect.right - plotLeft)
-  const plotHeight = vert ? Math.max(1, rect.bottom - plotTop) : rect.height
-  const plotX = e.clientX - plotLeft
-  const plotY = e.clientY - plotTop
-
-  let vp = { ...props.viewport }
-
-  if (e.ctrlKey || e.metaKey) {
-    const factor = e.deltaY > 0 ? 1.15 : 0.87
-    vp = vert
-      ? applyZoomAroundPlotY(vp, props.trace, plotY, plotHeight, TITLE_H, factor)
-      : applyZoomAroundPlotX(vp, props.trace, plotX, plotWidth, factor)
-  } else if (vert) {
-    const isHorizInput = e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)
-    if (isHorizInput) {
-      const dx = e.shiftKey ? e.deltaY : e.deltaX
-      vp = { ...vp, scrollX: Math.max(0, (vp.scrollX || 0) + dx) }
-    } else {
-      const dy = e.deltaMode === 1 ? e.deltaY * TIMELINE_ROW_H : e.deltaY
-      vp = applyPanPlotY(vp, props.trace, dy, plotHeight, TITLE_H)
-    }
-  } else {
-    const isHorizInput = Math.abs(e.deltaX) > Math.abs(e.deltaY)
-    if (isHorizInput) {
-      vp = applyPanPlotX(vp, props.trace, e.deltaX, plotWidth)
-    } else if (e.shiftKey) {
-      vp = applyPanPlotX(vp, props.trace, e.deltaY, plotWidth)
-    } else {
-      const dy = e.deltaMode === 1 ? e.deltaY * TIMELINE_ROW_H : e.deltaY
-      vp = { ...vp, scrollY: Math.max(0, (vp.scrollY || 0) + dy) }
-    }
-  }
-
-  emit('viewportChange', vp)
+  _rowsScrollDelta = 0
+  const mutator = _buildWheelMutator(e)
+  if (mutator) _queueWheel(mutator)
 }
+
+onMounted(() => {
+  panelRef.value?.addEventListener('wheel', onWheel, { passive: false })
+})
+
+onBeforeUnmount(() => {
+  if (_wheelFlushRaf) {
+    cancelAnimationFrame(_wheelFlushRaf)
+    _wheelFlushRaf = null
+  }
+  _wheelQueue = null
+  _rowsScrollDelta = 0
+  panelRef.value?.removeEventListener('wheel', onWheel)
+})
 
 function timeToPlotX(ns, visibleStart, visibleEnd, visibleSpan) {
   if (ns < visibleStart || ns > visibleEnd) return null

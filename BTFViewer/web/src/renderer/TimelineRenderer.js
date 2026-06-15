@@ -57,15 +57,15 @@ export const COL_W      =  26  // column width per task/core – vertical mode
 const PAINT_LOD_COARSE = 200    // ns/px: use coarse (merged) paint above this zoom level
 /** Max segment rectangles drawn per row/column per frame. */
 const PAINT_SEG_BUDGET   = 5000
-/** Reduced cap while the user is actively panning/zooming. */
-const PAINT_SEG_BUDGET_FAST = 900
+/** Reduced cap while panning/zooming at overview zoom (fit-to-window). */
+const PAINT_SEG_BUDGET_FAST = 1800
 /** Minimum segment budget guaranteed per visible row/column. */
 const PAINT_SEG_MIN_SLOT = 48
-/** Minimum per slot during fast paint. */
-const PAINT_SEG_MIN_SLOT_FAST = 12
+/** Minimum per slot during overview-zoom interaction. */
+const PAINT_SEG_MIN_SLOT_FAST = 24
 /** Max rows/columns that share the paint budget (avoids tiny per-slot caps). */
 const PAINT_BUDGET_MAX_SLOTS = 48
-const PAINT_BUDGET_MAX_SLOTS_FAST = 28
+const PAINT_BUDGET_MAX_SLOTS_FAST = 36
 /** Fraction of budget at which outlines, labels, and core tint are skipped. */
 const PAINT_BUDGET_LITE  = 0.40
 /** Task rows above this count use micro bars in the navigator thumbnail. */

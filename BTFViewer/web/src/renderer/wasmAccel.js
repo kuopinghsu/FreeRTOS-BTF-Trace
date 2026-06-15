@@ -99,22 +99,36 @@ function ensureMem(bytes) {
   _f64 = new Float64Array(_mem.buffer)
 }
 
-function endsArray(segs) {
-  if (!segs?.length) return new Float64Array(0)
-  if (segs._endsF64?.length === segs.length) return segs._endsF64
-  const ends = new Float64Array(segs.length)
-  for (let i = 0; i < segs.length; i++) ends[i] = segs[i].end
-  segs._endsF64 = ends
-  return ends
-}
-
 function startsArray(segs) {
   if (!segs?.length) return new Float64Array(0)
   if (segs._startsF64?.length === segs.length) return segs._startsF64
+  if (segs._indices && segs._store) {
+    const arr = segs._store.startsForIndices(segs._indices)
+    segs._startsF64 = arr
+    return arr
+  }
   const starts = new Float64Array(segs.length)
   for (let i = 0; i < segs.length; i++) starts[i] = segs[i].start
   segs._startsF64 = starts
   return starts
+}
+
+function endsArray(segs) {
+  if (!segs?.length) return new Float64Array(0)
+  if (segs._endsF64?.length === segs.length) return segs._endsF64
+  if (segs._indices && segs._store) {
+    const n = segs._indices.length
+    const arr = new Float64Array(n)
+    const ends = segs._store.ends
+    const indices = segs._indices
+    for (let i = 0; i < n; i++) arr[i] = ends[indices[i]]
+    segs._endsF64 = arr
+    return arr
+  }
+  const ends = new Float64Array(segs.length)
+  for (let i = 0; i < segs.length; i++) ends[i] = segs[i].end
+  segs._endsF64 = ends
+  return ends
 }
 
 function uploadF64(arr) {

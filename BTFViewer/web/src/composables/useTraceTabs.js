@@ -96,6 +96,7 @@ export function useTraceTabs() {
   }
 
   function resetTabForLoad(tab) {
+    tab.trace = null
     tab.cursors = [null, null, null, null]
     tab.marks = []
     tab.markNextId = 1

@@ -1,14 +1,8 @@
 /**
  * btfWorker.js – Web Worker wrapper around parseBtf().
- *
- * Receives: { text: string }
- * Posts back:
- *   { type: 'progress', pct: number, msg: string }
- *   { type: 'done',     trace: BtfTrace }
- *   { type: 'error',    message: string }
  */
-
 import { parseBtf } from './btfParser.js'
+import { packTrace } from './tracePack.js'
 
 self.onmessage = async function (e) {
   const { text } = e.data
@@ -16,17 +10,10 @@ self.onmessage = async function (e) {
     const trace = await parseBtf(text, (pct, msg) => {
       self.postMessage({ type: 'progress', pct, msg })
     })
-    self.postMessage({ type: 'progress', pct: 99, msg: 'Transferring trace…' })
+    self.postMessage({ type: 'progress', pct: 99, msg: 'Packing trace…' })
     await new Promise(resolve => setTimeout(resolve, 0))
-    try {
-      self.postMessage({ type: 'done', trace })
-    } catch (postErr) {
-      self.postMessage({
-        type: 'error',
-        message: postErr?.message || String(postErr),
-        name: postErr?.name || 'DataCloneError',
-      })
-    }
+    const { payload } = packTrace(trace)
+    self.postMessage({ type: 'done', packed: payload })
   } catch (err) {
     self.postMessage({
       type: 'error',
