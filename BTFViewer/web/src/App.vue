@@ -8,6 +8,7 @@
       :model-value="timelineOptions"
       :trace-info="traceInfo"
       :heatmap-enabled="heatmapEnabled"
+      :task-filter-active="!!timelineOptions.taskFilterKeys?.length"
       :loading="loading"
       :loading-pct="loadingPct"
       :loading-msg="loadingMsg"
@@ -24,6 +25,7 @@
       @copy-screenshot="onCopyScreenshot"
       @export-svg="onExportSvg"
       @show-heatmap="heatmapOpen = true"
+      @clear-task-filter="clearHeatmapTaskFilter"
       @show-help="openHelpDialog"
       @show-about="openAboutDialog"
     />
@@ -240,9 +242,12 @@
               <LegendPanel
                 :trace="trace"
                 :highlight-key="timelineOptions.highlightKey"
+                :task-filter-keys="timelineOptions.taskFilterKeys"
+                :heatmap-filter-label="timelineOptions.heatmapFilterLabel"
                 @highlight-change="(k) => { timelineOptions.highlightKey = k ?? pinnedHighlightKey; scheduleRender() }"
                 @highlight-click="onHighlightClick"
                 @migrated-filter-change="onMigratedFilterChange"
+                @clear-task-filter="clearHeatmapTaskFilter"
               />
             </div>
           </div>
@@ -529,7 +534,12 @@
       v-if="heatmapOpen && trace"
       :trace="trace"
       :cursors="cursors"
+      :task-filter-active="!!timelineOptions.taskFilterKeys?.length"
+      :task-filter-label="timelineOptions.heatmapFilterLabel"
+      :task-filter-count="timelineOptions.taskFilterKeys?.length ?? 0"
       @close="heatmapOpen = false"
+      @drill-down="onHeatmapDrillDown"
+      @clear-filter="clearHeatmapTaskFilter"
     />
 
     <!-- Snapshot editor -->
@@ -683,6 +693,8 @@ const timelineOptions = reactive({
   highlightSegment: null,
   selectedMarkId:  null,
   migratedOnlyFilter: false,
+  taskFilterKeys:     null,
+  heatmapFilterLabel: null,
   lockedTaskKey:   null,
 })
 const cpuLoadHoverTime = ref(null)
@@ -961,6 +973,8 @@ async function attachParsedTrace(name, packedOrTrace) {
     const trace = packedOrTrace?.segStore ? packedOrTrace : unpackTrace(packedOrTrace)
     const tab = openTab(name || 'trace.btf')
     resetTabForLoad(tab)
+    timelineOptions.taskFilterKeys = null
+    timelineOptions.heatmapFilterLabel = null
     restoreTabState(tab)
 
     tab.trace = markRaw(trace)
@@ -1242,7 +1256,55 @@ function clearCpuLoadSelection() {
 
 function onMigratedFilterChange(enabled) {
   timelineOptions.migratedOnlyFilter = !!enabled
+  if (enabled) clearHeatmapTaskFilter()
+  else scheduleRender()
+}
+
+function clearHeatmapTaskFilter() {
+  const hadFilter = !!timelineOptions.taskFilterKeys?.length
+  timelineOptions.taskFilterKeys = null
+  timelineOptions.heatmapFilterLabel = null
+  clearCursors()
+  pinnedHighlightKey.value = null
+  timelineOptions.highlightKey = null
+  timelineOptions.highlightSegment = null
+  timelineOptions.lockedTaskKey = null
+  highlightSegment.value = null
   scheduleRender()
+  if (hadFilter) showToast('Showing all tasks', 'info')
+}
+
+function onHeatmapDrillDown(payload) {
+  timelineOptions.viewMode = 'task'
+  timelineOptions.migratedOnlyFilter = false
+  timelineOptions.taskFilterKeys = payload.mergeKeys
+  timelineOptions.heatmapFilterLabel = payload.pairLabel
+
+  const c = [...cursors.value]
+  c[0] = payload.binLo
+  c[1] = payload.binHi
+  cursors.value = c
+
+  highlightSegment.value = null
+  timelineOptions.highlightSegment = null
+
+  nextTick(() => {
+    timelinePanelRef.value?.zoomToTimeRange(payload.binLo, payload.binHi)
+    if (payload.mergeKeys.length === 1) {
+      onHighlightClick(payload.mergeKeys[0])
+    } else {
+      pinnedHighlightKey.value = null
+      timelineOptions.highlightKey = null
+      timelineOptions.lockedTaskKey = null
+      scheduleRender()
+    }
+  })
+
+  const n = payload.mergeKeys.length
+  showToast(
+    `Zoomed to ${payload.pairLabel} · ${n} task${n === 1 ? '' : 's'} with migrations in this bin. Toolbar or Legend → Clear to show all.`,
+    'info',
+  )
 }
 
 function onHighlightClick(key) {

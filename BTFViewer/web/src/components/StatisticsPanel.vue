@@ -784,6 +784,240 @@
       </div>
     </template>
 
+    <!-- Preemption Chain Analysis -->
+    <div class="stats-sep" />
+    <div
+      class="stats-section-title collapsible"
+      @click="preemptionCollapsed = !preemptionCollapsed"
+    >
+      <svg
+        class="chevron"
+        :class="{ collapsed: preemptionCollapsed }"
+        viewBox="0 0 10 10"
+        width="10"
+        height="10"
+      >
+        <polyline
+          points="2,3 5,7 8,3"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.5"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        />
+      </svg>
+      Preemption Chain Analysis{{ scopeSuffixStr }}
+    </div>
+    <template v-if="!preemptionCollapsed">
+      <div
+        v-if="preemptionStats.length === 0"
+        class="range-hint"
+      >
+        {{ statsRange ? 'No preemption events in cursor range' : 'No preemption events found' }}
+      </div>
+      <div
+        v-else
+        class="stats-table-block"
+      >
+        <div
+          class="stats-table-wrap"
+          :style="{ maxHeight: tableHeight('preemption') + 'px' }"
+        >
+          <table class="stats-table stats-table-preemption">
+            <thead>
+              <tr>
+                <th
+                  :class="thSortClass('preemption', 'victim')"
+                  @click="toggleTableSort('preemption', 'victim')"
+                >
+                  Victim
+                </th>
+                <th
+                  :class="thSortClass('preemption', 'preemptor')"
+                  @click="toggleTableSort('preemption', 'preemptor')"
+                >
+                  Preemptor
+                </th>
+                <th
+                  :class="thSortClass('preemption', 'count')"
+                  @click="toggleTableSort('preemption', 'count')"
+                >
+                  Count
+                </th>
+                <th
+                  :class="thSortClass('preemption', 'total')"
+                  @click="toggleTableSort('preemption', 'total')"
+                >
+                  Total
+                </th>
+                <th
+                  :class="thSortClass('preemption', 'avg')"
+                  @click="toggleTableSort('preemption', 'avg')"
+                >
+                  Avg
+                </th>
+                <th
+                  :class="thSortClass('preemption', 'max')"
+                  @click="toggleTableSort('preemption', 'max')"
+                >
+                  Max
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="row in sortedPreemptionStats"
+                :key="`${row.mk}-${row.preemptor}`"
+                class="stats-table-row clickable"
+                :title="`Open preemption plot for ${row.victim} ← ${row.preemptor}`"
+                tabindex="0"
+                @click="openPreemptPlot(row.mk, row.preemptor)"
+                @keydown.enter.prevent="openPreemptPlot(row.mk, row.preemptor)"
+                @keydown.space.prevent="openPreemptPlot(row.mk, row.preemptor)"
+              >
+                <td class="task-col">{{ row.victim }}</td>
+                <td class="task-col">{{ row.preemptor }}</td>
+                <td>{{ row.count }}</td>
+                <td>{{ row.total }}</td>
+                <td>{{ row.avg }}</td>
+                <td>{{ row.max }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div
+          class="stats-section-resizer"
+          role="separator"
+          aria-label="Resize preemption chain table"
+          aria-orientation="horizontal"
+          @mousedown.prevent="onTableResizeStart('preemption', $event)"
+        />
+      </div>
+    </template>
+
+    <!-- Response Time Analysis -->
+    <div class="stats-sep" />
+    <div
+      class="stats-section-title collapsible"
+      @click="responseCollapsed = !responseCollapsed"
+    >
+      <svg
+        class="chevron"
+        :class="{ collapsed: responseCollapsed }"
+        viewBox="0 0 10 10"
+        width="10"
+        height="10"
+      >
+        <polyline
+          points="2,3 5,7 8,3"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.5"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        />
+      </svg>
+      Response Time Analysis{{ scopeSuffixStr }}
+    </div>
+    <template v-if="!responseCollapsed">
+      <div
+        v-if="responseTimeStats.length === 0"
+        class="range-hint"
+      >
+        {{ statsRange ? 'No response time data in cursor range' : 'Need at least 2 activations per task' }}
+      </div>
+      <div
+        v-else
+        class="stats-table-block"
+      >
+        <div
+          class="stats-table-wrap"
+          :style="{ maxHeight: tableHeight('response') + 'px' }"
+        >
+          <table class="stats-table">
+            <thead>
+              <tr>
+                <th
+                  :class="thSortClass('response', 'task')"
+                  @click="toggleTableSort('response', 'task')"
+                >
+                  Task
+                </th>
+                <th
+                  :class="thSortClass('response', 'count')"
+                  @click="toggleTableSort('response', 'count')"
+                >
+                  Events
+                </th>
+                <th
+                  :class="thSortClass('response', 'min')"
+                  @click="toggleTableSort('response', 'min')"
+                >
+                  Min
+                </th>
+                <th
+                  :class="thSortClass('response', 'avg')"
+                  @click="toggleTableSort('response', 'avg')"
+                >
+                  Avg
+                </th>
+                <th
+                  :class="thSortClass('response', 'max')"
+                  @click="toggleTableSort('response', 'max')"
+                >
+                  Max
+                </th>
+                <th
+                  :class="thSortClass('response', 'p95')"
+                  @click="toggleTableSort('response', 'p95')"
+                >
+                  p95
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="row in sortedResponseTimeStats"
+                :key="row.mk"
+                class="stats-table-row clickable"
+                :title="`Open response-time plot for ${row.name}`"
+                tabindex="0"
+                @click="openPlot(row.mk, 'response')"
+                @keydown.enter.prevent="openPlot(row.mk, 'response')"
+                @keydown.space.prevent="openPlot(row.mk, 'response')"
+              >
+                <td class="task-col">{{ row.name }}</td>
+                <td>{{ row.count }}</td>
+                <td
+                  class="extreme-col"
+                  :title="`Jump to shortest response time for ${row.name}`"
+                  @click.stop="jumpToResponseSegment(row, false)"
+                >
+                  {{ row.min }}
+                </td>
+                <td>{{ row.avg }}</td>
+                <td
+                  class="extreme-col"
+                  :title="`Jump to longest response time for ${row.name}`"
+                  @click.stop="jumpToResponseSegment(row, true)"
+                >
+                  {{ row.max }}
+                </td>
+                <td>{{ row.p95 }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div
+          class="stats-section-resizer"
+          role="separator"
+          aria-label="Resize response time table"
+          aria-orientation="horizontal"
+          @mousedown.prevent="onTableResizeStart('response', $event)"
+        />
+      </div>
+    </template>
+
     <!-- Export -->
     <div class="stats-export-row">
       <button
@@ -1140,6 +1374,10 @@ import {
   findBcetSegment,
   findExtremeBlockingSegment,
   findExtremeInterArrivalSegment,
+  preemptionChainRows,
+  preemptionChainPlotPoints,
+  responseTimeRows,
+  responseTimePlotPoints,
 } from '../utils/statsAnalysis.js'
 import { migrationRows } from '../utils/migrationAnalysis.js'
 import { tickHealthReport } from '../utils/tickHealth.js'
@@ -1155,6 +1393,8 @@ import {
   BLOCK_SORT_ACCESSORS,
   INTER_SORT_ACCESSORS,
   HEALTH_GAP_SORT_ACCESSORS,
+  PREEMPTION_SORT_ACCESSORS,
+  RESPONSE_SORT_ACCESSORS,
 } from '../utils/statsTableSort.js'
 import TraceCompareDialog from './TraceCompareDialog.vue'
 
@@ -1173,6 +1413,8 @@ const execSliceCollapsed = ref(false)
 const blockingCollapsed = ref(false)
 const migrationCollapsed = ref(false)
 const interArrivalCollapsed = ref(false)
+const preemptionCollapsed = ref(false)
+const responseCollapsed = ref(false)
 const scopeToCursors = ref(true)
 
 const STATS_SECTION_FLAGS = [
@@ -1183,6 +1425,8 @@ const STATS_SECTION_FLAGS = [
   execSliceCollapsed,
   blockingCollapsed,
   interArrivalCollapsed,
+  preemptionCollapsed,
+  responseCollapsed,
 ]
 
 function expandAllSections() {
@@ -1306,6 +1550,8 @@ const sectionHeights = ref({
   exec: STATS_TABLE_DEFAULT_H,
   block: STATS_TABLE_DEFAULT_H,
   inter: STATS_TABLE_DEFAULT_H,
+  preemption: STATS_TABLE_MIG_DEFAULT_H,
+  response: STATS_TABLE_DEFAULT_H,
 })
 let _tableResize = null
 const openPlotRef = ref(null)   // { mk, kind } when plot dialog is open
@@ -1319,6 +1565,8 @@ const tableSort = ref({
   block: defaultStatsTableSort(),
   inter: defaultStatsTableSort(),
   health: defaultStatsTableSort(),
+  preemption: defaultStatsTableSort(),
+  response: defaultStatsTableSort(),
 })
 
 function toggleTableSort(tableId, col) {
@@ -1547,6 +1795,37 @@ const sortedTickHealthGaps = computed(() =>
     HEALTH_GAP_SORT_ACCESSORS,
   ))
 
+const preemptionStats = computed(() => {
+  if (preemptionCollapsed.value) return []
+  const tr = props.trace
+  if (!tr) return []
+  const r = statsRange.value
+  const lo = r?.lo ?? null
+  const hi = r?.hi ?? null
+  return preemptionChainRows(tr, lo, hi)
+})
+
+const sortedPreemptionStats = computed(() =>
+  sortStatsRows(preemptionStats.value, tableSort.value.preemption, PREEMPTION_SORT_ACCESSORS))
+
+const responseTimeStats = computed(() => {
+  if (responseCollapsed.value) return []
+  const tr = props.trace
+  if (!tr) return []
+  const r = statsRange.value
+  const lo = r?.lo ?? null
+  const hi = r?.hi ?? null
+  return responseTimeRows(tr, lo, hi)
+})
+
+const sortedResponseTimeStats = computed(() =>
+  sortStatsRows(responseTimeStats.value, tableSort.value.response, RESPONSE_SORT_ACCESSORS))
+
+function jumpToResponseSegment(row, findMax) {
+  const seg = findMax ? row.worstSeg : row.bestSeg
+  if (seg) emit('selectSegment', seg)
+}
+
 function jumpToSegment(mk, kind, findMax) {
   const tr = props.trace
   if (!tr) return
@@ -1676,12 +1955,63 @@ function _buildBlockPlot(trace, mk, range) {
   }
 }
 
+function _buildResponsePlot(trace, mk, range) {
+  const segs = trace?.segByMergeKey?.get(mk) || []
+  if (segs.length < 2) return null
+  const repr = trace.taskRepr.get(mk) || mk
+  const suffix = scopeSuffix(range)
+  const lo = range?.lo ?? null
+  const hi = range?.hi ?? null
+  const rawPoints = responseTimePlotPoints(segs, lo, hi)
+  const points = rawPoints.map((pt, index) => ({
+    index,
+    xNs: pt.xNs,
+    yValue: pt.yValue,
+    payload: pt.payload,
+    label: `${taskDisplayName(repr)}: ${formatTime(pt.yValue, trace.timeScale)} response at ${formatTime(pt.xNs, trace.timeScale)}`,
+  }))
+  return {
+    kind: 'response',
+    mk,
+    title: `${taskDisplayName(repr)} - Response Time${suffix}`,
+    color: taskColor(mk, repr),
+    points,
+  }
+}
+
+function _buildPreemptPlot(trace, victimMk, preemptor, range) {
+  const repr = trace?.taskRepr?.get(victimMk) || victimMk
+  const suffix = scopeSuffix(range)
+  const lo = range?.lo ?? null
+  const hi = range?.hi ?? null
+  const rawPoints = preemptionChainPlotPoints(trace, victimMk, preemptor, lo, hi)
+  const points = rawPoints.map((pt, index) => ({
+    index,
+    xNs: pt.xNs,
+    yValue: pt.yValue,
+    payload: pt.payload,
+    label: `${taskDisplayName(repr)} ← ${preemptor}: ${formatTime(pt.yValue, trace.timeScale)} at ${formatTime(pt.xNs, trace.timeScale)}`,
+  }))
+  return {
+    kind: 'preempt',
+    mk: victimMk,
+    preemptor,
+    title: `${taskDisplayName(repr)} ← preempted by ${preemptor}${suffix}`,
+    color: taskColor(victimMk, repr),
+    points,
+  }
+}
+
 const plotData = computed(() => {
   const open = openPlotRef.value
   if (!open) return null
   const range = statsRange.value
   if (open.kind === 'exec') return _buildExecPlot(props.trace, open.mk, range)
   if (open.kind === 'block') return _buildBlockPlot(props.trace, open.mk, range)
+  if (open.kind === 'response') return _buildResponsePlot(props.trace, open.mk, range)
+  if (open.kind === 'preempt') {
+    return _buildPreemptPlot(props.trace, open.mk, open.preemptor, range)
+  }
   return _buildInterPlot(props.trace, open.mk, range)
 })
 
@@ -1695,9 +2025,18 @@ function openPlot(mk, kind) {
   let plot
   if (kind === 'exec') plot = _buildExecPlot(props.trace, mk, range)
   else if (kind === 'block') plot = _buildBlockPlot(props.trace, mk, range)
+  else if (kind === 'response') plot = _buildResponsePlot(props.trace, mk, range)
   else plot = _buildInterPlot(props.trace, mk, range)
   if (!plot || plot.points.length === 0) return
   openPlotRef.value = { mk, kind }
+  selectedPlotPoint.value = -1
+}
+
+function openPreemptPlot(victimMk, preemptor) {
+  const range = statsRange.value
+  const plot = _buildPreemptPlot(props.trace, victimMk, preemptor, range)
+  if (!plot || plot.points.length === 0) return
+  openPlotRef.value = { mk: victimMk, kind: 'preempt', preemptor }
   selectedPlotPoint.value = -1
 }
 
@@ -1863,6 +2202,8 @@ function exportCsv() {
   const taskRows = _taskCpuRows(tr, r)
   const lo = r?.lo ?? null
   const hi = r?.hi ?? null
+  const preemptReportRows = preemptionChainRows(tr, lo, hi)
+  const respReportRows = responseTimeRows(tr, lo, hi)
   const { contextSwitches, coreGaps } = schedulingStats(tr, lo, hi)
   const lines = []
 
@@ -2009,6 +2350,42 @@ function exportCsv() {
       _csvCell(r.p50),
       _csvCell(r.p95),
     ].join(','))
+  }
+
+  lines.push('')
+  lines.push(`Preemption Chain Analysis${suffix}`)
+  lines.push('Victim,Preemptor,Count,Total,Avg,Max')
+  if (preemptReportRows.length) {
+    for (const row of preemptReportRows) {
+      lines.push([
+        _csvCell(row.victim),
+        _csvCell(row.preemptor),
+        _csvCell(row.count),
+        _csvCell(row.total),
+        _csvCell(row.avg),
+        _csvCell(row.max),
+      ].join(','))
+    }
+  } else {
+    lines.push('No preemption events found,,,,,')
+  }
+
+  lines.push('')
+  lines.push(`Response Time Analysis${suffix}`)
+  lines.push('Task,Events,Min,Avg,Max,p95')
+  if (respReportRows.length) {
+    for (const row of respReportRows) {
+      lines.push([
+        _csvCell(row.name),
+        _csvCell(row.count),
+        _csvCell(row.min),
+        _csvCell(row.avg),
+        _csvCell(row.max),
+        _csvCell(row.p95),
+      ].join(','))
+    }
+  } else {
+    lines.push('No data,,,,,')
   }
 
   _downloadText(`statistics-${_stamp()}.csv`, `\uFEFF${lines.join('\n')}`, 'text/csv;charset=utf-8')
@@ -2227,6 +2604,8 @@ function exportHtml() {
   const lo = r?.lo ?? null
   const hi = r?.hi ?? null
   const migReportRows = migrationRows(tr, lo, hi)
+  const preemptHtmlRows = preemptionChainRows(tr, lo, hi)
+  const respHtmlRows = responseTimeRows(tr, lo, hi)
   const { contextSwitches, coreGaps } = schedulingStats(tr, lo, hi)
   const schedKpi = schedulingSummary.value
   const range = !r ? rangeStats.value : null
@@ -2371,6 +2750,8 @@ function exportHtml() {
       <li><strong>Execution Time Per Slice:</strong> Duration of each continuous task run between two context switches. Lower and tighter values indicate more predictable execution.</li>
       <li><strong>Inter-Arrival Time:</strong> Time between consecutive activations of the same task (slice start to next slice start). It reflects activation cadence and jitter.</li>
       <li><strong>Blocking Time:</strong> Off-CPU gap between the end of one slice and the start of the next for the same task.</li>
+      <li><strong>Preemption Chain Analysis:</strong> For each blocking gap of a victim task, identifies which task ran on the same core during that gap. High counts or long totals point to recurring preemption bottlenecks.</li>
+      <li><strong>Response Time Analysis:</strong> Time from the end of a task slice to the start of its next slice (= off-CPU blocking gap). Max and p95 values indicate worst-case scheduling latency for that task.</li>
       <li><strong>Context switches:</strong> Count of segment boundaries on all cores whose start time falls inside the statistics scope.</li>
       <li><strong>Min (Minimum):</strong> The fastest execution time recorded. It represents the best-case scenario under zero system load.</li>
       <li><strong>Max (Maximum):</strong> The slowest execution time recorded. It identifies worst-case bottlenecks, spikes, or resource contention.</li>
@@ -2388,6 +2769,22 @@ function exportHtml() {
     ${_renderHtmlTableReport(`Execution Time Per Slice${suffix}`, execReportRows, true)}
     ${_renderHtmlTableReport(`Blocking Time (off-CPU gap)${suffix}`, blockReportRows)}
     ${_renderHtmlTableReport(`Inter-Arrival Time${suffix}`, interReportRows)}
+    <section class="report-card"><h2>Preemption Chain Analysis${_htmlCell(suffix)}</h2>
+    <table><thead><tr><th>Victim</th><th>Preemptor</th><th>Count</th><th>Total</th><th>Avg</th><th>Max</th></tr></thead>
+    <tbody>${preemptHtmlRows.length
+      ? preemptHtmlRows.map(row =>
+          `<tr><td>${_htmlCell(row.victim)}</td><td>${_htmlCell(row.preemptor)}</td><td>${row.count}</td><td>${_htmlCell(row.total)}</td><td>${_htmlCell(row.avg)}</td><td>${_htmlCell(row.max)}</td></tr>`
+        ).join('')
+      : '<tr><td colspan="6" class="empty">No preemption events found</td></tr>'
+    }</tbody></table></section>
+    <section class="report-card"><h2>Response Time Analysis${_htmlCell(suffix)}</h2>
+    <table><thead><tr><th>Task</th><th>Events</th><th>Min</th><th>Avg</th><th>Max</th><th>p95</th></tr></thead>
+    <tbody>${respHtmlRows.length
+      ? respHtmlRows.map(row =>
+          `<tr><td>${_htmlCell(row.name)}</td><td>${row.count}</td><td>${_htmlCell(row.min)}</td><td>${_htmlCell(row.avg)}</td><td>${_htmlCell(row.max)}</td><td>${_htmlCell(row.p95)}</td></tr>`
+        ).join('')
+      : '<tr><td colspan="6" class="empty">No data</td></tr>'
+    }</tbody></table></section>
     <div class="report-foot">Generated by BTF Viewer</div>
   </div>
 </body>
@@ -2470,11 +2867,12 @@ watch(() => props.cursors, (cursors) => {
 watch(() => props.trace, () => {
   closePlot()
   scheduleStatsRefresh()
-})
+}, { immediate: true })
 
 watch(
   [statsRange, execSliceCollapsed, blockingCollapsed, interArrivalCollapsed, scopeToCursors],
   scheduleStatsRefresh,
+  { immediate: true },
 )
 
 watch(plotData, () => {
@@ -2762,6 +3160,10 @@ watch(plotData, () => {
 
 .stats-table-migration {
   min-width: 520px;
+}
+
+.stats-table-preemption {
+  min-width: 380px;
 }
 
 .stats-table {

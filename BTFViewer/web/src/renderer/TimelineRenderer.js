@@ -23,6 +23,9 @@ import {
   accelLodReduceIndices,
   getWasmHandles,
 } from './wasmAccel.js'
+import { formatTime, formatMigrationGapTime } from '../utils/timeFormat.js'
+
+export { formatTime, formatMigrationGapTime }
 
 // ---- Helpers ---------------------------------------------------------------
 function isCoreName(name) {
@@ -148,40 +151,14 @@ function segsForPaint(lodData, timeStart, timeEnd, nsPerPx, lodTpp, ultraTpp) {
 
 const TICK_COLOR = '#E8C84A'
 
-// ---- Time formatting -------------------------------------------------------
-
-/**
- * Format a timestamp for display on the ruler.
- * @param {number} t       Timestamp in trace time-scale units.
- * @param {string} scale   Trace timeScale string (e.g. 'ns', 'us', 'ms').
- * @returns {string}
- */
-export function formatTime(t, scale, decimals = 3) {
-  if (scale === 'ns') {
-    if (t >= 1e9)  return `${(t / 1e9).toFixed(decimals)} s`
-    if (t >= 1e6)  return `${(t / 1e6).toFixed(decimals)} ms`
-    if (t >= 1e3)  return `${(t / 1e3).toFixed(decimals)} µs`
-    return `${t} ns`
+/** Row visibility: heatmap task filter overrides migrated-only filter. */
+export function taskPassesRowFilter(trace, mk, migratedOnlyFilter, taskFilterKeys) {
+  if (taskFilterKeys?.length) {
+    const set = taskFilterKeys instanceof Set ? taskFilterKeys : new Set(taskFilterKeys)
+    return set.has(mk)
   }
-  if (scale === 'us') {
-    if (t >= 1e6)  return `${(t / 1e6).toFixed(decimals)} s`
-    if (t >= 1e3)  return `${(t / 1e3).toFixed(decimals)} ms`
-    return `${t} µs`
-  }
-  if (scale === 'ms') {
-    if (t >= 1e3)  return `${(t / 1e3).toFixed(decimals)} s`
-    return `${t} ms`
-  }
-  return `${t} ${scale}`
-}
-
-/** Format migration gap columns in native trace units (Core Migrations table). */
-export function formatMigrationGapTime(t, scale) {
-  const v = Number(t)
-  if (!Number.isFinite(v)) return '-'
-  if (scale === 'ms') return `${v.toFixed(3)} ms`
-  if (scale === 'us') return `${Math.round(v)} us`
-  return formatTime(v, scale)
+  if (migratedOnlyFilter) return isMigratedTask(trace, mk)
+  return true
 }
 
 /**
@@ -209,13 +186,13 @@ function niceStep(span) {
  * @param {number}  yStart     Top Y coordinate of the first row (after ruler).
  * @returns {{ rows: Array, totalHeight: number }}
  */
-export function buildRowLayout(trace, viewMode, expanded, yStart, showSti = true, stiExpanded = new Set(), migratedOnlyFilter = false) {
+export function buildRowLayout(trace, viewMode, expanded, yStart, showSti = true, stiExpanded = new Set(), migratedOnlyFilter = false, taskFilterKeys = null) {
   const rows = []
   let y = yStart
 
   if (viewMode === 'task') {
     for (const mk of trace.tasks) {
-      if (migratedOnlyFilter && !isMigratedTask(trace, mk)) continue
+      if (!taskPassesRowFilter(trace, mk, migratedOnlyFilter, taskFilterKeys)) continue
       const repr = trace.taskRepr.get(mk)
       const label = taskDisplayName(repr || mk)
       const color = taskColor(mk, repr)
@@ -234,7 +211,7 @@ export function buildRowLayout(trace, viewMode, expanded, yStart, showSti = true
           .filter(t => parseTaskName(t).name !== 'TICK')
         for (const rawTask of taskOrder) {
           const mk = taskMergeKey(rawTask)
-          if (migratedOnlyFilter && !isMigratedTask(trace, mk)) continue
+          if (!taskPassesRowFilter(trace, mk, migratedOnlyFilter, taskFilterKeys)) continue
           const label = taskDisplayName(rawTask)
           const color = taskColor(mk, rawTask)
           rows.push({ type: 'core-task', key: `${coreName}__${rawTask}`, coreKey: coreName, taskKey: rawTask, label, color, y })
@@ -284,14 +261,16 @@ export function offsetRowLayout(layout, yStart) {
 
 /** Cached scroll-independent row list from options, or build on demand. */
 function resolveRows(trace, options, viewMode, expanded, showSti, stiExpanded, migratedOnlyFilter) {
+  const taskFilterKeys = options.taskFilterKeys || null
   if (options.rowLayout?.rows) return options.rowLayout.rows
-  return buildRowLayout(trace, viewMode, expanded, 0, showSti, stiExpanded, migratedOnlyFilter).rows
+  return buildRowLayout(trace, viewMode, expanded, 0, showSti, stiExpanded, migratedOnlyFilter, taskFilterKeys).rows
 }
 
 /** Cached scroll-independent column list from options, or build on demand. */
 function resolveCols(trace, options, viewMode, expanded, showSti, stiExpanded, migratedOnlyFilter) {
+  const taskFilterKeys = options.taskFilterKeys || null
   if (options.columnLayout?.cols) return options.columnLayout.cols
-  return buildColumnLayout(trace, viewMode, expanded, 0, showSti, stiExpanded, migratedOnlyFilter).cols
+  return buildColumnLayout(trace, viewMode, expanded, 0, showSti, stiExpanded, migratedOnlyFilter, taskFilterKeys).cols
 }
 
 // ---- Main render function --------------------------------------------------
@@ -346,7 +325,7 @@ export function render(ctx, trace, viewport, options = {}) {
   // ---- Row layout (scroll offset applied inline — no per-frame row copy) ----
   const rowLayoutBase = options.rowLayout
   const rows = rowLayoutBase?.rows
-    ?? buildRowLayout(trace, viewMode, expanded, 0, showSti, stiExpanded, migratedOnlyFilter).rows
+    ?? buildRowLayout(trace, viewMode, expanded, 0, showSti, stiExpanded, migratedOnlyFilter, options.taskFilterKeys || null).rows
   const yOff = RULER_H - scrollY
   const rowBuffer = paintFast ? 1 : 2
   const { i0, i1 } = visibleRowIndexRange(rows, scrollY, bodyH, rowBuffer, options.packedRows)
@@ -1544,14 +1523,14 @@ export function drawMarksHorizontal(ctx, marks, trace, timeStart, pxPerNs, canva
  * @param {Set}    stiExpanded   Set of expanded STI channel names
  * @returns {{ cols: Array, totalWidth: number }}
  */
-export function buildColumnLayout(trace, viewMode, expanded, scrollX = 0, showSti = true, stiExpanded = new Set(), migratedOnlyFilter = false) {
+export function buildColumnLayout(trace, viewMode, expanded, scrollX = 0, showSti = true, stiExpanded = new Set(), migratedOnlyFilter = false, taskFilterKeys = null) {
   const cols = []
   let rawIdx = 0
   let xAcc   = 0  // accumulated pixel offset from RULER_W (before scrollX)
 
   if (viewMode === 'task') {
     for (const mk of trace.tasks) {
-      if (migratedOnlyFilter && !isMigratedTask(trace, mk)) continue
+      if (!taskPassesRowFilter(trace, mk, migratedOnlyFilter, taskFilterKeys)) continue
       const repr = trace.taskRepr.get(mk)
       const label = taskDisplayName(repr || mk)
       const color = taskColor(mk, repr)
@@ -1574,7 +1553,7 @@ export function buildColumnLayout(trace, viewMode, expanded, scrollX = 0, showSt
           .filter(t => parseTaskName(t).name !== 'TICK')
         for (const rawTask of taskOrder) {
           const mk = taskMergeKey(rawTask)
-          if (migratedOnlyFilter && !isMigratedTask(trace, mk)) continue
+          if (!taskPassesRowFilter(trace, mk, migratedOnlyFilter, taskFilterKeys)) continue
           const lbl = taskDisplayName(rawTask)
           const col = taskColor(mk, rawTask)
           const cx = RULER_W + xAcc - scrollX
@@ -2373,7 +2352,7 @@ export function renderVertical(ctx, trace, viewport, options = {}) {
   const colLayoutBase = options.columnLayout
   const { cols } = colLayoutBase
     ? offsetColumnLayout(colLayoutBase, scrollX)
-    : buildColumnLayout(trace, viewMode, expanded, scrollX, showSti, stiExpanded, migratedOnlyFilter)
+    : buildColumnLayout(trace, viewMode, expanded, scrollX, showSti, stiExpanded, migratedOnlyFilter, options.taskFilterKeys || null)
 
   // Grid lines (horizontal, optional)
   if (showGrid && !paintFast) {

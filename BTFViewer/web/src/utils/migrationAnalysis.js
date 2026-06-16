@@ -6,7 +6,7 @@ import { bisectLeft, bisectRight } from './bisect.js'
 import { parseTaskName, taskLabelForMergeKey, taskReprGet } from './colors.js'
 import { blockingTimeSamples } from './statsAnalysis.js'
 import { segFullyInRange, segOverlapsRange } from './statsRange.js'
-import { formatMigrationGapTime } from '../renderer/TimelineRenderer.js'
+import { formatMigrationGapTime } from './timeFormat.js'
 
 export const MIGRATION_PING_PONG_WINDOW = 1000
 export const MIGRATION_STI_WINDOW = 500
@@ -156,7 +156,7 @@ export function traceIsMultiCore(trace) {
 
 /** Core-pair rows × time bins for migration heatmap popup. */
 export function migrationHeatmapGrid(trace, lo = null, hi = null, timeBins = 32) {
-  if (!trace) return { pairs: [], grid: [], timeBins, tMin: 0, tMax: 0 }
+  if (!trace) return { pairs: [], grid: [], timeBins, tMin: 0, tMax: 0, binW: 0 }
   const cores = trace.coreNames || []
   const pairs = []
   for (const fc of cores) {
@@ -183,5 +183,52 @@ export function migrationHeatmapGrid(trace, lo = null, hi = null, timeBins = 32)
     const bi = Math.min(timeBins - 1, Math.max(0, Math.floor((m.ns - tMin) / binW)))
     grid[pi][bi]++
   }
-  return { pairs, grid, binW, tMin, timeBins }
+  return { pairs, grid, binW, tMin, timeBins, tMax: tHi }
+}
+
+/** Time bounds [lo, hi) for one heatmap column index. */
+export function heatmapBinRange(tMin, binW, timeBins, tMax, binIndex) {
+  const binLo = Math.floor(tMin + binIndex * binW)
+  const binHi = binIndex >= timeBins - 1 ? tMax : Math.floor(tMin + (binIndex + 1) * binW)
+  return { binLo, binHi }
+}
+
+/** Merge keys of tasks with a migration from→to core in [binLo, binHi). */
+export function mergeKeysForHeatmapCell(trace, fromCore, toCore, binLo, binHi) {
+  const keys = new Set()
+  for (const m of trace.migrations || []) {
+    if (m.fromCore !== fromCore || m.toCore !== toCore) continue
+    if (m.ns < binLo || m.ns >= binHi) continue
+    keys.add(m.mergeKey)
+  }
+  return [...keys]
+}
+
+/** Task rows × sub-bins for one core-pair / time-bin drill-down. */
+export function migrationTaskHeatmapGrid(trace, fromCore, toCore, binLo, binHi, timeBins = 32) {
+  if (!trace) return { rows: [], timeBins, tMin: binLo, tMax: binHi, binW: 0 }
+  const tMin = binLo
+  const tHi = binHi
+  const span = Math.max(tHi - tMin, 1)
+  const binW = span / timeBins
+  const taskBins = new Map()
+  for (const m of trace.migrations || []) {
+    if (m.fromCore !== fromCore || m.toCore !== toCore) continue
+    if (m.ns < binLo || m.ns >= binHi) continue
+    const mk = m.mergeKey
+    if (!taskBins.has(mk)) taskBins.set(mk, Array(timeBins).fill(0))
+    const bi = Math.min(timeBins - 1, Math.max(0, Math.floor((m.ns - tMin) / binW)))
+    taskBins.get(mk)[bi]++
+  }
+  const items = [...taskBins.entries()].sort((a, b) => {
+    const sa = a[1].reduce((x, y) => x + y, 0)
+    const sb = b[1].reduce((x, y) => x + y, 0)
+    return sb - sa || a[0].localeCompare(b[0])
+  })
+  const rows = items.map(([mk, grid]) => ({
+    mk,
+    label: taskLabelForMergeKey(trace, mk),
+    grid,
+  }))
+  return { rows, timeBins, binW, tMin, tMax: tHi }
 }

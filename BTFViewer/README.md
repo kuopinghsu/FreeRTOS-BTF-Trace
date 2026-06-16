@@ -1,6 +1,6 @@
 # BTF Trace Viewer
 
-Current version: **1.3.0** (Desktop Python app + Web app)
+Current version: **1.3.1** (Desktop Python app + Web app)
 
 A PyQt5-based interactive visualiser for FreeRTOS context-switch traces in **Best Trace Format** (`.btf`).
 
@@ -25,15 +25,15 @@ A PyQt5-based interactive visualiser for FreeRTOS context-switch traces in **Bes
 - **Multi-tab traces** — open several `.btf` files at once (Desktop: closable tabs; Web: tab bar under the toolbar). Desktop restores session tabs, active tab, and per-tab zoom/cursors from `btf_viewer.rc` on launch; Web restores per-tab cursors, marks, viewport, and view options from browser `localStorage` when you reload a trace by name
 - **Measurement cursors** — Desktop supports 2–8 cursors (default: 4); Web supports up to 4 cursors
 - **Trace compare** — with 2+ tabs open, **Trace Compare…** in the Statistics panel diffs **Summary**, **Top Tasks**, and **Core Migrations** side-by-side (Desktop + Web). Optional **Limit to each tab's cursor range** compares metrics within C1–Cn when 2+ cursors are placed on each trace
-- **Core migration analysis** — detect tasks that run on multiple cores; **Core Migrations** stats table (ping-pong, STI correlation, gap-after vs other gaps), **Migration heatmap** (core-pair counts over time bins), **Migrated tasks only** legend filter, and Find **Migrations** mode (Desktop)
-- **Cursor-scoped statistics** — with 2+ cursors, the Statistics panel can limit all metrics (CPU%, execution slices, blocking time, inter-arrival, scheduling summary, exports, and charts) to the window from C1 through the last cursor; toggle **Limit to cursor range (C1–Cn)** (Desktop + Web)
+- **Core migration analysis** — detect tasks that run on multiple cores; **Core Migrations** stats table (ping-pong, STI correlation, gap-after vs other gaps), **clickable two-level Migration heatmap** (core-pair overview → per-task sub-bins → timeline drill-down), **Migrated tasks only** legend filter, toolbar **All tasks** reset, and Find **Migrations** mode (Desktop)
+- **Cursor-scoped statistics** — with 2+ cursors, the Statistics panel can limit all metrics (CPU%, execution slices, blocking time, inter-arrival, **response time**, **preemption chain**, scheduling summary, exports, and charts) to the window from C1 through the last cursor; toggle **Limit to cursor range (C1–Cn)** (Desktop + Web)
 - **Cursor range summary** — with 2+ cursors, Desktop also shows a quick min/max/avg segment summary in the status bar; Web shows range stats in the **Cursors** panel
 - **Task highlight** — hover or click any task label or Legend row to highlight all its segments
-- **Dockable Legend panel** — colour swatches for every task, with a search box, **Migrated tasks only** filter, and the same highlight interaction
-- **Dockable Statistics panel** — per-core CPU utilisation, top tasks, scheduling summary (context switches, core-gap avg/max), and collapsible metric tables
+- **Dockable Legend panel** — colour swatches for every task, with a search box, **Migrated tasks only** filter, a **heatmap filter banner** (when drilled from the heatmap), and the same highlight interaction
+- **Dockable Statistics panel** — per-core CPU utilisation, top tasks, scheduling summary (context switches, core-gap avg/max), trace health (TICK), and collapsible metric tables including **Response Time** and **Preemption Chain** analysis
 - **Tag View** — inspect tag channels/events (`tag_event`, `tag0_event` … `tag7_event`) alongside task/core activity
-- **Metrics tables** — Execution Time Per Slice, **Blocking Time** (off-CPU gap between activations), and Inter-Arrival (runs, min/avg/max/p95, CPU%); click **Min** / **Max** (dotted underline) to jump to the BCET / WCET slice or the shortest / longest gap (Desktop + Web)
-- **Metrics distribution charts** — click any row in the Execution Time, Blocking Time, or Inter-Arrival table to open a scatter-plot + histogram popup for that task; charts live-update when cursors move or cursor-range scope is toggled (Desktop + Web). On Desktop, each trace tab remembers its own open chart when you switch tabs
+- **Metrics tables** — Execution Time Per Slice, **Blocking Time** (off-CPU gap between activations), **Inter-Arrival**, **Response Time** (scheduling latency between slices), and **Preemption Chain** (which tasks preempted whom); click **Min** / **Max** (dotted underline) to jump to the BCET / WCET slice or the shortest / longest gap (Desktop + Web)
+- **Metrics distribution charts** — click any row in Execution Time, Blocking Time, Inter-Arrival, Response Time, or Preemption Chain tables to open a scatter-plot + histogram popup; charts live-update when cursors move or cursor-range scope is toggled (Desktop + Web). On Desktop, each trace tab remembers its own open chart when you switch tabs
 - **Segment tooltips** — hover any segment bar for duration, slice index on core, previous/next task on that core, and gap before the slice
 - **CPU Load Graph** — bar chart below the timeline showing per-core CPU utilisation; row labels show the **visible-window average** and, with 2+ cursors, a cursor-range average (`· C:xx%`); toggle with the **Load** toolbar button; drag the divider between timeline and CPU load to resize (Desktop + Web)
 - **Resizable panels** — drag dividers between timeline and CPU load, dock panels (Desktop), the right-side panel (Web), and metric table sections in Statistics (Desktop + Web); splitter and table heights persist in `btf_viewer.rc` on Desktop
@@ -164,7 +164,7 @@ Opening the same filename again focuses the existing tab.
 
 **Large traces:** the web viewer is optimised for high segment counts (flat segment storage, precomputed CPU-load bins, WASM-accelerated bisect/LOD, debounced stats worker). On first paint after load it briefly uses a coarse LOD (like pan/zoom) and upgrades to full quality within a few hundred milliseconds — this keeps the UI responsive on traces such as `tracedata/example-16cores.btf` (16 cores, 100k+ segments).
 
-Sample traces in the repo: `tracedata/example.btf` (small), `tracedata/example-16cores.btf` (large SMP).
+Sample traces in the repo: `tracedata/example.btf` (small), `tracedata/example-4cores.btf` (4-core SMP, good for statistics demos), `tracedata/example-16cores.btf` (large SMP).
 
 ### Zoom & pan
 
@@ -211,9 +211,9 @@ A bar chart below the timeline shows per-core (or total) CPU utilisation over th
 The right side holds **Cursor / Bookmark** and **Statistics** pages (tab bar at the bottom of the panel).
 
 - **Resize** — drag the vertical bar between the timeline and the right panel to change panel width.
-- **Legend** — task colour swatches, search filter, and **Migrated tasks only** (hide tasks that never left their first core).
+- **Legend** — on the **Marks** page: task colour swatches, search filter, **Migrated tasks only**, and a **heatmap filter banner** with **Clear** when a heatmap drill-down is active.
 - **Statistics** — same collapsible sections as the desktop viewer; click **Min** / **Max** in metric tables to jump to the corresponding slice; **Trace Compare…** when 2+ trace tabs are open.
-- **Migration heatmap** — toolbar **Heatmap** button (enabled for multi-core traces only); see [Migration heatmap](#migration-heatmap).
+- **Migration heatmap** — toolbar **Heatmap** button (multi-core traces only). Two-level drill-down: core-pair grid → task grid → timeline zoom/filter. Toolbar **All tasks** appears while filtered. See [Migration heatmap](#migration-heatmap).
 
 ### Multi-tab traces (Web)
 
@@ -251,7 +251,7 @@ The web viewer shares the desktop feature set but uses a different rendering pip
 | **Transfer** | Structured clone to the main thread (no transferable buffer detach issues) |
 | **CPU load** | Bins precomputed at parse time (`cpuLoadBins.js`) — the CPU Load panel reads bins, not raw segments |
 | **Timeline paint** | Canvas 2D with viewport culling, LOD binning, per-frame segment budget, optional WASM bisect (`wasmAccel.js`) |
-| **Statistics tables** | Summary metrics on the main thread; expanded execution/blocking/inter-arrival tables in a debounced stats worker (`statsWorker.js`) |
+| **Statistics tables** | Summary metrics on the main thread; expanded execution/blocking/inter-arrival tables in a debounced stats worker (`statsWorker.js`); response time and preemption chain on the main thread |
 | **Initial load** | Coarse “load-settle” paint, then full quality; WASM upload deferred to idle time so the first frame is not blocked |
 
 Chrome DevTools may log `[Violation] 'requestAnimationFrame' handler took …ms` on very large traces during the final full-quality repaint — that is a performance hint, not an error.
@@ -267,15 +267,31 @@ When **2 or more cursors** are placed, check **Limit to cursor range (C1–Cn)**
 | Execution time per slice | Only slices **fully inside** the range |
 | Blocking time | Off-CPU gap between consecutive slices; only pairs where **both** slices are fully inside the range |
 | Inter-arrival | Activations whose start time falls inside the range |
+| Response time | Same gap as blocking time (end of slice → start of next); only pairs where **both** slices are fully inside the range |
+| Preemption chain | Preemption overlaps counted only when the victim's blocking gap and the preemptor overlap are inside the range |
 | Core migrations | Migration events and per-core active time with overlap in the range |
 
 <img src="../images/statistics.png" alt="Statistics panel with cursor-scoped metrics">
 
 Uncheck the box to return to full-trace statistics.
 
-Below the scope checkbox, a **scheduling summary** line shows context-switch count and average/max core gap (idle time between consecutive slices on each core). Metric tables (**Core Utilisation**, **Top Tasks**, **Core Migrations**, **Execution Time**, **Blocking Time**, **Inter-Arrival**) are **collapsible** — click a section title to expand or collapse it. Drag the handle below a metric table to resize its height.
+Below the scope checkbox, a **scheduling summary** line shows context-switch count and average/max core gap (idle time between consecutive slices on each core). Metric tables are **collapsible** — click a section title to expand or collapse it. Drag the handle below a metric table to resize its height.
 
-**Core Migrations** lists tasks that ran on two or more cores (see [Core migration analysis](#core-migration-analysis)). For multi-core traces, open the **Migration heatmap** from the toolbar **Heatmap** button to see migration counts per core pair over time bins (see [Migration heatmap](#migration-heatmap)). **Trace Compare…** (footer, next to Export) opens a dialog with **Summary**, **Top Tasks**, and **Core Migrations** tabs to diff two open trace tabs; optional cursor-range scoping compares each tab's C1–Cn window independently.
+| Section | What it shows |
+|---------|----------------|
+| **Core Utilisation** | Active (non-IDLE, non-TICK) CPU time per core as a percentage |
+| **Top Tasks by CPU** | Top 10 worker tasks ranked by total CPU time |
+| **Trace Health (TICK)** | STI TICK period regularity, large gaps, missed-tick estimate |
+| **Core Migrations** | Per-task cross-core migration stats (see [Core migration analysis](#core-migration-analysis)) |
+| **Execution Time Per Slice** | Per-task slice duration stats (runs, CPU%, min/avg/max/p95) |
+| **Blocking Time** | Off-CPU gap between consecutive activations of the same task |
+| **Inter-Arrival Time** | Gap between successive activation start times |
+| **Response Time Analysis** | Scheduling latency from slice end to next slice start (same gap as blocking, framed as response time) |
+| **Preemption Chain Analysis** | For each victim task, which preemptors ran during its off-CPU gaps |
+
+**Core Migrations** lists tasks that ran on two or more cores. For multi-core traces, open the **Migration heatmap** from the toolbar **Heatmap** button — click core-pair cells to drill into per-task sub-bins, then into Task View (see [Migration heatmap](#migration-heatmap)). **Trace Compare…** (footer, next to Export) opens a dialog with **Summary**, **Top Tasks**, and **Core Migrations** tabs to diff two open trace tabs; optional cursor-range scoping compares each tab's C1–Cn window independently.
+
+See [Statistics metric tables](#statistics-metric-tables) for column definitions, distribution-chart usage, and example plots from `tracedata/example-4cores.btf`.
 
 ### Snapshot Editor
 
@@ -291,14 +307,19 @@ Click the **Shot** toolbar button (or press `S` when focus is not in a text fiel
 
 ### Metrics Distribution Charts
 
-In the **Statistics** panel, click any row in the **Execution Time**, **Blocking Time**, or **Inter-Arrival** table to open a floating chart popup for that task:
+In the **Statistics** panel, click any row in **Execution Time**, **Blocking Time**, **Inter-Arrival**, **Response Time**, or **Preemption Chain** to open a floating chart popup:
 
-- **Scatter plot** — every individual slice duration, blocking gap, or inter-arrival gap plotted in arrival order, so you can spot trends or outliers.
-- **Histogram** — a bar chart showing the distribution of durations, revealing multimodal behaviour or long tails.
+- **Scatter plot** — each event plotted in trace time order so you can spot trends, bursts, or outliers.
+- **Histogram** — bar chart of the value distribution (50 bins), with dashed reference lines for **avg**, **p50**, and **p95**.
+- **Export PNG / SVG** — buttons in the chart footer save the current scatter + histogram.
 
 The popup can be dragged, resized, and closed independently of the main window.
 If the chart is open, it **updates live** when you move cursors or toggle cursor-range scope.
 Each browser tab keeps its own chart state when you switch between open traces.
+
+**Jump links:** in Execution Time, Blocking Time, Inter-Arrival, and Response Time tables, click **Min** or **Max** (dotted underline) to jump to the slice at the shortest or longest value. In Preemption Chain, click a scatter point to jump to the **preemptor's segment** on the timeline.
+
+Example plots from `tracedata/example-4cores.btf` (4-core SMP trace, 67 tasks) are in [Statistics metric tables](#statistics-metric-tables).
 
 ### STI events
 
@@ -442,7 +463,8 @@ The Legend lists every task with its colour swatch and `Name[id]` label.
 - The panel is a dockable window; it can be detached, closed, and re-opened via its **✕** button.
 - Toggle visibility from **Settings → Display → Legend panel** (`Ctrl+,`).
 - A **Search** box at the top filters the displayed task list.
-- **Migrated tasks only** (Web: checkbox in Legend; Desktop: same filter in the legend dock) hides tasks that ran on a single core only — useful with [core migration analysis](#core-migration-analysis).
+- **Migrated tasks only** (Web: checkbox in Legend on the Marks page; Desktop: same filter in the legend dock) hides tasks that ran on a single core only — useful with [core migration analysis](#core-migration-analysis).
+- After a **heatmap drill-down**, a blue **Heatmap: … (N)** banner appears with a **Clear** button; it filters the legend list to match the timeline.
 - Hover and click Legend rows to highlight tasks using the same rules as the label column.
 
 ---
@@ -558,12 +580,161 @@ It shows:
 - **Scheduling summary** — context-switch count and average/max core gap between consecutive slices on each core
 - **Core utilisation** — percentage of active (non-IDLE, non-TICK) CPU time per core (collapsible)
 - **Top tasks by CPU** — ranked list of worker tasks by total CPU time consumed (collapsible)
+- **Trace health (TICK)** — tick period regularity, large gaps, missed-tick estimate (collapsible)
 - **Core Migrations** — per-task migration count, core count, primary core (% time), ping-pong count, STI events near migrations, and average off-CPU gap after migration vs other gaps; click a row to highlight the task (collapsible)
 - **Execution Time Per Slice** — per-task min/avg/max/p95, run count, and CPU%; click a row for a scatter + histogram popup; click **Min** / **Max** to jump to the BCET / WCET slice
 - **Blocking Time** — off-CPU gap between consecutive activations of the same task (min/avg/max/p95); click a row for a distribution chart; click **Min** / **Max** to jump to the slice at the shortest / longest off-CPU gap (collapsible)
 - **Inter-Arrival Time** — same statistics for gaps between task activations; click **Min** / **Max** to jump to the activation at the shortest / longest inter-arrival gap (collapsible)
+- **Response Time Analysis** — scheduling latency from end of one slice to start of the next (min/avg/max/p95); click a row for a distribution chart; click **Min** / **Max** to jump to the best/worst resume segment (collapsible)
+- **Preemption Chain Analysis** — for each victim/preemptor pair: count, total/average/max preemption overlap; click a row for a distribution chart; click a scatter point to jump to the preemptor segment (collapsible)
 
 **Export CSV** / **Export HTML** respect the current cursor scope. **Trace Compare…** compares summary, top tasks, and core migrations between two open tabs; enable **Limit to each tab's cursor range** to scope each side to its own C1–Cn window. Open metrics charts update live when cursors move or scope is toggled; each trace tab remembers its own open chart when you switch tabs.
+
+Full column definitions, chart axis meanings, and example plots: [Statistics metric tables](#statistics-metric-tables).
+
+### Statistics metric tables
+
+The Statistics panel (Desktop dock + Web **Statistics** tab) organises metrics into collapsible sections. Tables are **sortable** — click a column header to sort ascending/descending. **Export CSV** and **Export HTML** at the panel footer include all sections and honour the current cursor scope.
+
+**How to use the panel**
+
+1. Open a trace (e.g. `tracedata/example-4cores.btf` for a 4-core SMP workload, or `tracedata/example.btf` for a smaller single-core demo).
+2. Expand the sections you care about (or use the **+** / **−** icons at the top to expand/collapse all).
+3. Optionally place **2+ cursors** and enable **Limit to cursor range (C1–Cn)** to restrict every metric to a time window.
+4. Click a **table row** to open a distribution chart (where supported), or click **Min** / **Max** to jump to an extreme slice on the timeline.
+5. Use **Trace Compare…** when two traces are open to diff summary and migration stats.
+
+The example plots below were generated from **`tracedata/example-4cores.btf`** (4 cores, 67 tasks, ~7 100 segments, time scale `us`). Regenerate them with:
+
+```bash
+node BTFViewer/web/scripts/export-stats-plots.mjs tracedata/example-4cores.btf images/stats
+```
+
+#### Execution Time Per Slice
+
+Measures how long each **on-CPU slice** lasts for a task.
+
+| Column | Meaning |
+|--------|---------|
+| **Task** | Display name (`Name[id]`) |
+| **Runs** | Number of slices in scope |
+| **CPU%** | Share of total trace (or cursor-range) active time |
+| **Min / Avg / Max / p95** | Slice duration statistics |
+| **Min / Max** links | Jump to BCET / WCET slice |
+
+**Distribution chart** — click any row:
+
+- **Scatter:** x = slice start time, y = slice duration.
+- **Histogram:** distribution of slice durations.
+
+In `example-4cores.btf`, task **CS[8]** has 356 slices with a long tail of longer runs (context-switch stress tasks):
+
+<img src="../images/stats/stats-exec-cs8.svg" alt="Execution time distribution for CS[8] in example-4cores.btf" width="820">
+
+The scatter shows periodic bursts of short slices; the histogram reveals a dominant short-slice mode plus a secondary bump at longer durations (preemption or blocking before the task resumes).
+
+#### Blocking Time
+
+Measures the **off-CPU gap** between the end of one slice and the start of the next for the same task — time spent waiting to run again (preempted, blocked on a resource, or delayed by the scheduler).
+
+| Column | Meaning |
+|--------|---------|
+| **Task** | Display name |
+| **Gaps** | Number of positive off-CPU gaps |
+| **Min / Avg / Max / p95** | Gap duration statistics |
+| **Min / Max** links | Jump to resume slice at shortest / longest gap |
+
+**Distribution chart** — click any row:
+
+- **Scatter:** x = resume time, y = off-CPU gap.
+- **Histogram:** distribution of blocking gaps.
+
+**CS[8]** in `example-4cores.btf` (355 gaps):
+
+<img src="../images/stats/stats-block-cs8.svg" alt="Blocking time distribution for CS[8] in example-4cores.btf" width="820">
+
+High blocking gaps clustered at certain times often correlate with lock contention or a higher-priority task dominating the core.
+
+#### Inter-Arrival Time
+
+Measures the gap between **successive activation start times** of the same task (time between slice starts, not off-CPU gap).
+
+| Column | Meaning |
+|--------|---------|
+| **Task** | Display name |
+| **Runs** | Number of inter-arrival samples |
+| **Min / Avg / Max / p95** | Gap between activation starts |
+| **Min / Max** links | Jump to activation at shortest / longest inter-arrival |
+
+**Distribution chart** — click any row:
+
+- **Scatter:** x = activation time, y = gap since previous activation.
+- **Histogram:** distribution of inter-arrival gaps.
+
+**CS[8]** in `example-4cores.btf`:
+
+<img src="../images/stats/stats-inter-cs8.svg" alt="Inter-arrival time distribution for CS[8] in example-4cores.btf" width="820">
+
+Compare with Blocking Time: inter-arrival includes time the task was **running**, so values are typically larger than off-CPU gaps alone.
+
+#### Response Time Analysis
+
+**Response time** is the scheduling latency from the **end of one slice** to the **start of the next** for the same task. Numerically it equals the off-CPU gap used in Blocking Time, but the table is framed around **how long the task waits to resume** after yielding the CPU.
+
+| Column | Meaning |
+|--------|---------|
+| **Task** | Display name |
+| **Events** | Number of response-time samples (needs ≥ 2 activations) |
+| **Min / Avg / Max / p95** | Response time statistics |
+| **Min / Max** links | Jump to the resume segment at the best / worst response time |
+
+**Distribution chart** — click any row:
+
+- **Scatter:** x = resume time, y = response time (off-CPU gap).
+- **Histogram:** distribution of response times.
+- **Min / Max** cells still jump to the best / worst resume segment.
+
+**Runner[1]** in `example-4cores.btf` (89 samples) — the main application task on Core 0:
+
+<img src="../images/stats/stats-response-runner1.svg" alt="Response time distribution for Runner[1] in example-4cores.btf" width="820">
+
+Use this view when you care about **deadline-style latency** (when did the task get the CPU back?) rather than raw blocking semantics. Spikes in the scatter plot mark moments where the runner waited unusually long to resume.
+
+#### Preemption Chain Analysis
+
+For each **victim** task's off-CPU gap, the analyser finds which **preemptor** tasks ran on **any core** during that gap and aggregates overlap duration.
+
+| Column | Meaning |
+|--------|---------|
+| **Victim** | Task that was off-CPU |
+| **Preemptor** | Task that ran during the victim's gap |
+| **Count** | Number of preemption overlap events |
+| **Total / Avg / Max** | Overlap duration (how long the preemptor held the CPU during victim gaps) |
+
+**Distribution chart** — click any row (victim ← preemptor pair):
+
+- **Scatter:** x = when the preemption overlap started, y = overlap duration.
+- **Histogram:** how long that preemptor typically held the CPU during gaps.
+- **Click a point** to jump to the **preemptor's segment** on the timeline.
+
+**CS[10] ← CS[11]** in `example-4cores.btf` (155 overlap events, 14.7 ms total overlap) — two context-switch stress tasks repeatedly preempting each other:
+
+<img src="../images/stats/stats-preempt-cs10-cs11.svg" alt="Preemption chain distribution CS[10] preempted by CS[11] in example-4cores.btf" width="820">
+
+High **Count** with moderate **Avg** overlap suggests frequent short preemptions; a few points with large **y** values are long stretches where CS[11] ran while CS[10] waited. Use this table to answer *who preempted whom* and whether a victim's blocking is dominated by one preemptor or many.
+
+#### Trace Health (TICK)
+
+Uses STI **TICK** timestamps to estimate scheduler tick regularity.
+
+| Field | Meaning |
+|-------|---------|
+| **Status** | `good` / `warning` / `critical` based on gap threshold |
+| **Ticks** | TICK event count in scope |
+| **Avg period / Max gap** | Observed tick spacing |
+| **Missed ticks (est.)** | Rough count of skipped ticks from large gaps |
+
+Large gaps may indicate CPU overload, long critical sections, or tracing gaps — not necessarily a FreeRTOS configuration error.
 
 ### Core migration analysis
 
@@ -578,7 +749,8 @@ A **migration** is recorded when consecutive slices of the same task (merge-key)
 | Resizable metric table height (drag handle below table) | ✓ | ✓ |
 | Resizable timeline / CPU load divider | ✓ | ✓ |
 | Resizable right panel / dock width | ✓ (docks) | ✓ |
-| **Min** / **Max** slice links (execution / blocking / inter-arrival) | ✓ | ✓ |
+| **Min** / **Max** slice links (execution / blocking / inter-arrival / response) | ✓ | ✓ |
+| **Preemption chain** table + distribution charts | ✓ | ✓ |
 | Find bar **Migrations** mode | ✓ | — |
 | **Trace Compare…** (2+ open traces) | ✓ | ✓ |
 | **Trace Compare…** cursor-scoped mode | ✓ | ✓ |
@@ -603,17 +775,47 @@ Click a row to highlight that task on the timeline. Drag the resize handle below
 
 #### Migration heatmap
 
-Visualise **when** migrations happen between core pairs — complementary to the per-task **Core Migrations** table.
+Visualise **when** migrations happen between core pairs — complementary to the per-task **Core Migrations** table. The heatmap is a **two-level** drill-down: first pick *where* (core pair + time bin), then pick *which task* (sub-bin), then jump to the timeline.
+
+**Typical workflow**
+
+1. Open **Heatmap** from the toolbar (`tracedata/example-4cores.btf` is a good demo).
+2. **Level 1** — click a hot cell on a core-pair row to open the task grid for that bin.
+3. **Level 2** — click a task cell to zoom the timeline, place **C1** / **C2**, switch to **Task View**, and show only that task.
+4. **Show all tasks** — when done, reset the filter, clear cursors, and return the heatmap to the core-pair overview.
 
 | | |
 |--|--|
-| **Open** | Toolbar **Heatmap** (Desktop + Web). Enabled only when the trace has **2 or more cores** (single-core traces such as `example.btf` disable the button). |
-| **Rows** | One row per directed core pair (`c0→c1`, `c1→c0`, …). Core names are shortened in the labels (e.g. `Core_0` → `c0`). |
-| **Columns** | **32 equal time bins** across the scoped window. Cell colour intensity is the migration count in that bin (darker = more migrations). Hover a cell for the exact count. |
-| **Scope** | **Full trace** by default. With **2 or more cursors** placed, the grid uses the time window from **C1** through the last cursor (subtitle shows the range). This matches desktop behaviour and is independent of the Statistics panel **Limit to cursor range** toggle. |
-| **Empty state** | *No migrations in scope.* when no migration events fall in the current window. |
+| **Open** | Toolbar **Heatmap** (Desktop + Web). Enabled only when the trace has **2 or more cores** (single-core traces such as `example.btf` disable the button). Desktop: non-modal dialog (timeline stays interactive). Web: semi-transparent overlay. |
+| **Level 1 rows** | One row per directed core pair (`c0→c1`, `c1→c0`, …). Core names are shortened in the labels (e.g. `Core_0` → `c0`). |
+| **Level 1 columns** | **32 equal time bins** across the scoped window. Cell colour intensity is the migration count in that bin (darker = more migrations). Hover for time range, count, and task names. |
+| **Level 2 rows** | Task display names that migrated on the selected core pair in the selected bin. |
+| **Level 2 columns** | **32 sub-bins** within the Level 1 cell's time window. |
+| **← Back** | Return from Level 2 to the core-pair overview without closing the dialog. |
+| **Click cell** | Level 1 → Level 2; Level 2 → timeline drill-down. Details in [What happens when you click a cell](#what-happens-when-you-click-a-cell) below. |
+| **All tasks** (toolbar) | Shown next to **Heatmap** while a heatmap task filter is active. Same reset as **Show all tasks** below. |
+| **Show all tasks** | Clears the task filter, **removes all cursors**, rebuilds the heatmap at **Level 1** over the **full trace**, and restores every task row. Available from: toolbar **All tasks**, heatmap dialog **Show all tasks**, Legend **Clear** (Web: Marks page; Desktop: legend dock), or enabling **Migrated tasks only**. Loading a new trace or switching tabs also clears the filter (Desktop closes the heatmap dialog on tab switch). |
+| **Scope** | **Full trace** by default. With **2 or more cursors** placed, Level 1 uses the time window from **C1** through the last cursor (subtitle shows the range). Independent of the Statistics panel **Limit to cursor range** toggle. **Show all tasks** clears cursors so scope returns to the full trace. |
+| **Empty state** | *No migrations in scope.* (Level 1) or *No task migrations in this cell.* (Level 2) when no events fall in the current window. |
 
-Use the heatmap to spot bursts of cross-core traffic (e.g. ping-pong between two cores in a specific phase of the trace) before drilling into individual tasks in **Core Migrations** or on the timeline.
+##### What happens when you click a cell
+
+Only cells with at least one migration (count > 0) are clickable.
+
+**Level 1 — core-pair overview** (rows = `c0→c1`, … · columns = 32 time bins)
+
+1. **Click a cell** — Opens **Level 2** for that core pair and time bin. The heatmap stays open; use **← Back** to return without resetting the timeline.
+
+**Level 2 — task detail** (rows = task names · columns = 32 sub-bins)
+
+2. **Click a cell** — The timeline zooms to that sub-bin, **C1** and **C2** are placed at the sub-bin edges, the view switches to **Task View**, and only that **task** row is shown. The task is click-locked and scrolled into view automatically.
+3. **Another Level 2 cell** — Each click **replaces** the previous filter (last task wins). The heatmap dialog stays open so you can try other cells.
+
+**Reset — Show all tasks**
+
+4. Clears the task filter and **all cursors**, clears task highlight/lock, returns the heatmap to **Level 1** over the **full trace**, and shows every task row again.
+
+Use the heatmap to spot bursts of cross-core traffic, drill into the contributing tasks, then jump to Task View for slice-level inspection. For aggregate per-task migration statistics (ping-pong, STI correlation, gap-after), use **Core Migrations** in the Statistics panel.
 
 #### Trace Compare…
 
@@ -1065,12 +1267,12 @@ timestamp, Core_N, 0, C, Core_N, 0, set_frequency, freq_hz
 | **Web WASM accel** | `web/src/renderer/wasmAccel.js`, `wasm/timeline_accel.wat` | Optional bisect / row-cull / LOD reduce; JS fallback when WASM unavailable |
 | **Session store** | `web/src/utils/sessionStore.js` | `localStorage` key `btf-viewer-session-v1` |
 | **Trace compare** | `traceCompare.js` / `_TraceCompareDialog` | Optional per-tab C1–Cn scope (Desktop + Web) |
-| **Migration heatmap** | `migrationAnalysis.js` / `_MigrationHeatmapDialog` | Core-pair × time-bin grid; 32 bins; multi-core traces only (Desktop + Web) |
+| **Migration heatmap** | `migrationAnalysis.js` / `_MigrationHeatmapDialog` | Two-level drill-down: core-pair × 32 bins → task × 32 sub-bins → timeline zoom/filter; `migrationHeatmapGrid()` + `migrationTaskHeatmapGrid()`; non-modal on Desktop; multi-core traces only |
 | **Pre-built HTML** | `web/pre-build/btf-viewer.html` | Copy of `dist/index.html` produced by `make build` |
 
 Desktop session persistence uses `btf_viewer.rc` (tab paths, zoom, cursors). Web session uses `localStorage` keyed by filename — see [Session restore (Web)](#session-restore-web).
 
-There is no shared automated test suite; validate parser changes against `tracedata/example.btf`, `tracedata/example-16cores.btf`, and synthetic traces from `gen_trace.py`.
+There is no shared automated test suite; validate parser changes against `tracedata/example.btf`, `tracedata/example-4cores.btf`, `tracedata/example-16cores.btf`, and synthetic traces from `gen_trace.py`.
 
 ---
 

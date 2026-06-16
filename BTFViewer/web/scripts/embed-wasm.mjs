@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 /**
- * Compile timeline_accel.wat → wasm, embed as base64 for single-file builds.
+ * Compile timeline_accel.wat → wasm (when wat2wasm is available), then embed
+ * as base64 for single-file builds.  Falls back to the committed .wasm binary
+ * when wat2wasm is not installed.
  */
-import { readFileSync, writeFileSync, existsSync } from 'fs'
+import { readFileSync, writeFileSync, existsSync, statSync } from 'fs'
 import { resolve, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { execSync } from 'child_process'
@@ -13,12 +15,37 @@ const wat = resolve(root, 'wasm/timeline_accel.wat')
 const wasmOut = resolve(root, 'src/renderer/timeline_accel.wasm')
 const jsOut = resolve(root, 'src/renderer/wasmBytes.js')
 
+function hasWat2Wasm() {
+  try {
+    execSync('wat2wasm --version', { stdio: 'ignore' })
+    return true
+  } catch {
+    return false
+  }
+}
+
+function wasmNeedsCompile() {
+  if (!existsSync(wasmOut)) return true
+  if (!existsSync(wat)) return false
+  return statSync(wat).mtimeMs > statSync(wasmOut).mtimeMs
+}
+
 if (!existsSync(wat)) {
   console.error('Missing', wat)
   process.exit(1)
 }
 
-execSync(`wat2wasm "${wat}" -o "${wasmOut}"`, { stdio: 'inherit' })
+if (hasWat2Wasm() && wasmNeedsCompile()) {
+  execSync(`wat2wasm "${wat}" -o "${wasmOut}"`, { stdio: 'inherit' })
+} else if (!existsSync(wasmOut)) {
+  console.error(
+    'timeline_accel.wasm is missing and wat2wasm is not installed.\n'
+    + 'Install WebAssembly Binary Toolkit (wabt), or restore src/renderer/timeline_accel.wasm.',
+  )
+  process.exit(1)
+} else if (!hasWat2Wasm()) {
+  console.log('wat2wasm not found — embedding committed timeline_accel.wasm')
+}
 
 const wasm = readFileSync(wasmOut)
 const b64 = wasm.toString('base64')

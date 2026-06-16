@@ -17,6 +17,19 @@
         <span>{{ item.label }}</span>
       </div>
     </div>
+    <div
+      v-if="taskFilterSet"
+      class="heatmap-filter-banner"
+    >
+      <span>Heatmap: {{ heatmapFilterLabel || 'filtered' }} ({{ taskFilterSet.size }})</span>
+      <button
+        type="button"
+        class="heatmap-filter-clear"
+        @click="emit('clearTaskFilter')"
+      >
+        Clear
+      </button>
+    </div>
     <label class="migrated-filter">
       <input
         v-model="migratedOnly"
@@ -53,10 +66,18 @@ const props = defineProps({
   trace:        { type: Object, default: null },
   highlightKey: { type: [String, null], default: null },
   filterText:   { type: String, default: '' },
+  taskFilterKeys:     { type: Array, default: null },
+  heatmapFilterLabel: { type: String, default: null },
 })
-const emit = defineEmits(['highlightChange', 'highlightClick', 'migratedFilterChange'])
+const emit = defineEmits(['highlightChange', 'highlightClick', 'migratedFilterChange', 'clearTaskFilter'])
 
 const migratedOnly = ref(false)
+
+const taskFilterSet = computed(() => {
+  const keys = props.taskFilterKeys
+  if (!keys?.length) return null
+  return new Set(keys)
+})
 
 watch(migratedOnly, (v) => emit('migratedFilterChange', v))
 
@@ -71,6 +92,7 @@ const visibleTasks = computed(() => {
   const tasks = props.trace?.tasks || []
   const q = (props.filterText || '').trim().toLowerCase()
   return tasks.filter((mk) => {
+    if (taskFilterSet.value && !taskFilterSet.value.has(mk)) return false
     if (migratedOnly.value && props.trace && !isMigratedTask(props.trace, mk)) return false
     if (!q) return true
     const raw = props.trace?.taskRepr?.get(mk) || mk
@@ -124,6 +146,31 @@ const visibleTasks = computed(() => {
   margin-bottom: 8px;
   font-size: 11px;
   color: var(--fg);
+  cursor: pointer;
+}
+
+.heatmap-filter-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 5px 8px;
+  border-radius: 4px;
+  background: rgba(91, 155, 213, 0.12);
+  border: 1px solid rgba(91, 155, 213, 0.35);
+  font-size: 10px;
+  color: var(--fg);
+}
+
+.heatmap-filter-clear {
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  background: var(--tb-bg);
+  color: var(--fg);
+  border-radius: 3px;
+  padding: 1px 6px;
+  font-size: 10px;
   cursor: pointer;
 }
 

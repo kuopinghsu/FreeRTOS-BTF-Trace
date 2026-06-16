@@ -213,6 +213,7 @@ const cachedRowLayout = computed(() => {
     props.trace, props.options.viewMode, expanded, 0,
     props.options.showSti !== false, stiExpanded,
     !!props.options.migratedOnlyFilter,
+    props.options.taskFilterKeys || null,
   )
 })
 
@@ -222,6 +223,7 @@ const cachedColumnLayout = computed(() => {
     props.trace, props.options.viewMode, expanded, 0,
     props.options.showSti !== false, stiExpanded,
     !!props.options.migratedOnlyFilter,
+    props.options.taskFilterKeys || null,
   )
 })
 
@@ -540,6 +542,7 @@ function paint() {
     stiLogScale:      !!props.options.stiLogScale,
     darkMode:         props.options.darkMode,
     migratedOnlyFilter: !!props.options.migratedOnlyFilter,
+    taskFilterKeys:     props.options.taskFilterKeys || null,
     lockedTaskKey:    props.options.viewMode === 'core' ? (props.options.lockedTaskKey ?? null) : null,
     fastPaint:        paintFast(),
     rowLayout:        cachedRowLayout.value,
@@ -963,6 +966,27 @@ function jumpToNs(ns) {
   scheduleRender()
 }
 
+function zoomToTimeRange(lo, hi, paddingFrac = 0.05) {
+  if (!props.trace || hi <= lo) return
+  const tLo = props.trace.timeMin >= 0 ? Math.max(0, props.trace.timeMin) : props.trace.timeMin
+  const tHi = props.trace.timeMax
+  const span = hi - lo
+  const pad = Math.max(1, span * paddingFrac)
+  let timeStart = Math.max(tLo, lo - pad)
+  let timeEnd = Math.min(tHi, hi + pad)
+  const minSpan = Math.max(1, (tHi - tLo) * 1e-6)
+  if (timeEnd - timeStart < minSpan) {
+    const c = (lo + hi) / 2
+    timeStart = Math.max(tLo, c - minSpan / 2)
+    timeEnd = Math.min(tHi, c + minSpan / 2)
+  }
+  viewport.timeStart = timeStart
+  viewport.timeEnd = timeEnd
+  viewport.scrollY = 0
+  emitViewportChange()
+  scheduleRender()
+}
+
 function getViewportCenter() {
   return (viewport.timeStart + viewport.timeEnd) / 2
 }
@@ -1141,7 +1165,7 @@ function getHoverTime() { return hoverTime.value }
 function getLastActiveCursorTime() { return _handler?.getLastActiveCursorTime() ?? null }
 function getViewport() { return { ...viewport } }
 
-defineExpose({ fitToTrace, applyViewport, applyTraceViewport, ensureTraceViewport, beginLoadSettle, scheduleRender, zoomCenter, expandAll, collapseAll, jumpToNs, getViewport, getViewportCenter, getCoreAtViewportCenter, scrollToTask, scrollToSegmentIfNeeded, captureScreenshotBlob, captureAsSvg, getHoverTime, getLastActiveCursorTime })
+defineExpose({ fitToTrace, applyViewport, applyTraceViewport, ensureTraceViewport, beginLoadSettle, scheduleRender, zoomCenter, expandAll, collapseAll, jumpToNs, zoomToTimeRange, getViewport, getViewportCenter, getCoreAtViewportCenter, scrollToTask, scrollToSegmentIfNeeded, captureScreenshotBlob, captureAsSvg, getHoverTime, getLastActiveCursorTime })
 
 // ---- Expand / collapse core rows -----------------------------------------
 function onExpandToggle(coreName) {
@@ -1271,7 +1295,7 @@ watch([() => props.options.orientation, () => props.options.viewMode], () => {
   scheduleRender()
 })
 // Other visual options that affect segment rendering → full repaint
-watch([() => props.options.highlightKey, () => props.options.highlightSegment, () => props.options.showGrid, () => props.options.showSti, () => props.options.darkMode, () => props.options.stiLogScale, () => props.options.migratedOnlyFilter, () => props.options.lockedTaskKey], () => {
+watch([() => props.options.highlightKey, () => props.options.highlightSegment, () => props.options.showGrid, () => props.options.showSti, () => props.options.darkMode, () => props.options.stiLogScale, () => props.options.migratedOnlyFilter, () => props.options.taskFilterKeys, () => props.options.lockedTaskKey], () => {
   scheduleRender()
 })
 // Marks are on the overlay — no full repaint needed

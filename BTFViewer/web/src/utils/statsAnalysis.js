@@ -3,6 +3,9 @@
  */
 
 import { segFullyInRange } from './statsRange.js'
+import { bisectRight } from './bisect.js'
+import { parseTaskName, taskMergeKey, taskDisplayName, isIdleTaskName, taskReprGet } from './colors.js'
+import { formatTime } from './timeFormat.js'
 
 /** @returns {{ prev: object|null, next: object|null, index: number, total: number }} */
 export function segCoreNeighbors(trace, seg) {
@@ -210,4 +213,218 @@ export function segmentTooltipLines(trace, seg, formatTimeFn, taskDisplayNameFn)
     }
   }
   return lines
+}
+
+/** @typedef {{ mk: string, preemptor: string, timeNs: number, durationNs: number, payload: object }} PreemptionEvent */
+
+/** @returns {PreemptionEvent[]} */
+export function collectPreemptionEvents(trace, lo, hi) {
+  const coreSegs = trace?.coreSegs
+  if (!coreSegs || !trace?.segByMergeKey) return []
+
+  const coreStarts = new Map()
+  for (const [core, segs] of coreSegs) {
+    coreStarts.set(core, segs.map(s => s.start))
+  }
+
+  const events = []
+  for (const [mk, segs] of trace.segByMergeKey) {
+    if (!segs || segs.length < 2) continue
+    const repr = taskReprGet(trace, mk) || mk
+    const { name } = parseTaskName(repr)
+    if (isIdleTaskName(name) || name === 'TICK') continue
+
+    const ordered = [...segs].sort((a, b) => a.start - b.start)
+    for (let i = 1; i < ordered.length; i++) {
+      const prev = ordered[i - 1]
+      const nxt = ordered[i]
+      const gapStart = prev.end
+      const gapEnd = nxt.start
+      if (gapEnd <= gapStart) continue
+      if (lo != null && hi != null) {
+        if (!segFullyInRange(prev, lo, hi) || !segFullyInRange(nxt, lo, hi)) continue
+      }
+
+      for (const [core, coreSegList] of coreSegs) {
+        const starts = coreStarts.get(core)
+        const i0 = bisectRight(starts, gapEnd - 1)
+        const iStart = Math.max(0, i0 - 1)
+        for (let j = iStart; j < coreSegList.length; j++) {
+          const cs = coreSegList[j]
+          if (cs.start >= gapEnd) break
+          if (cs.end <= gapStart) continue
+          const preemptorMk = taskMergeKey(cs.task)
+          if (preemptorMk === mk) continue
+          const preRepr = taskReprGet(trace, preemptorMk) || cs.task
+          const { name: preName } = parseTaskName(preRepr)
+          if (isIdleTaskName(preName)) continue
+          const ovLo = Math.max(cs.start, gapStart)
+          const ovHi = Math.min(cs.end, gapEnd)
+          const overlap = ovHi - ovLo
+          if (overlap <= 0) continue
+          events.push({
+            mk,
+            preemptor: taskDisplayName(preRepr),
+            timeNs: ovLo,
+            durationNs: overlap,
+            payload: cs,
+          })
+        }
+      }
+    }
+  }
+  return events
+}
+
+/**
+ * Preemption Chain Analysis.
+ * For each blocking gap of a victim task, finds which tasks ran on the same
+ * core during that gap (the preemptors).
+ *
+ * @param {object} trace
+ * @param {number|null} lo
+ * @param {number|null} hi
+ * @returns {Array<{mk: string, victim: string, preemptor: string, count: number,
+ *                  totalNs: number, avgNs: number, maxNs: number,
+ *                  total: string, avg: string, max: string}>}
+ */
+export function preemptionChainRows(trace, lo, hi) {
+  const scale = trace?.timeScale || 'ns'
+  const data = new Map()
+
+  for (const ev of collectPreemptionEvents(trace, lo, hi)) {
+    if (!data.has(ev.mk)) data.set(ev.mk, new Map())
+    const victimMap = data.get(ev.mk)
+    if (!victimMap.has(ev.preemptor)) victimMap.set(ev.preemptor, [])
+    victimMap.get(ev.preemptor).push(ev.durationNs)
+  }
+
+  const rows = []
+  for (const [mk, preemptors] of data) {
+    const repr = taskReprGet(trace, mk) || mk
+    const victimDisp = taskDisplayName(repr)
+    for (const [preDisp, samples] of preemptors) {
+      const total = samples.reduce((a, b) => a + b, 0)
+      const count = samples.length
+      const avg = Math.round(total / count)
+      const max = Math.max(...samples)
+      rows.push({
+        mk,
+        victim: victimDisp,
+        preemptor: preDisp,
+        count,
+        totalNs: total,
+        avgNs: avg,
+        maxNs: max,
+        total: formatTime(total, scale),
+        avg: formatTime(avg, scale),
+        max: formatTime(max, scale),
+      })
+    }
+  }
+
+  rows.sort((a, b) => b.totalNs - a.totalNs || a.victim.localeCompare(b.victim))
+  return rows
+}
+
+/** Plot points for one victim/preemptor pair. */
+export function preemptionChainPlotPoints(trace, victimMk, preemptorDisp, lo, hi) {
+  return collectPreemptionEvents(trace, lo, hi)
+    .filter(ev => ev.mk === victimMk && ev.preemptor === preemptorDisp)
+    .map(ev => ({
+      xNs: ev.timeNs,
+      yValue: ev.durationNs,
+      payload: ev.payload,
+    }))
+}
+
+/** Plot points for response time (resume time vs off-CPU gap). */
+export function responseTimePlotPoints(segs, lo, hi) {
+  if (!segs || segs.length < 2) return []
+  const ordered = [...segs].sort((a, b) => a.start - b.start)
+  const points = []
+  for (let i = 1; i < ordered.length; i++) {
+    const prev = ordered[i - 1]
+    const nxt = ordered[i]
+    if (lo != null && hi != null) {
+      if (!segFullyInRange(prev, lo, hi) || !segFullyInRange(nxt, lo, hi)) continue
+    }
+    const gap = nxt.start - prev.end
+    if (gap > 0) {
+      points.push({ xNs: nxt.start, yValue: gap, payload: nxt })
+    }
+  }
+  return points
+}
+
+/**
+ * Response Time Analysis.
+ * Response time = time from end of one slice to start of the next (off-CPU gap).
+ *
+ * @param {object} trace
+ * @param {number|null} lo
+ * @param {number|null} hi
+ * @returns {Array<{mk: string, name: string, count: number,
+ *                  minNs: number, avgNs: number, maxNs: number, p95Ns: number,
+ *                  min: string, avg: string, max: string, p95: string,
+ *                  worstSeg: object|null, bestSeg: object|null}>}
+ */
+export function responseTimeRows(trace, lo, hi) {
+  const scale = trace?.timeScale || 'ns'
+  if (!trace?.segByMergeKey) return []
+
+  const rows = []
+
+  for (const [mk, segs] of trace.segByMergeKey) {
+    if (!segs || segs.length < 2) continue
+    const repr = taskReprGet(trace, mk) || mk
+    const { name } = parseTaskName(repr)
+    if (isIdleTaskName(name) || name === 'TICK') continue
+
+    const ordered = [...segs].sort((a, b) => a.start - b.start)
+    const samples = []
+    let worstSeg = null
+    let bestSeg = null
+    let worstRt = 0
+    let bestRt = null
+
+    for (let i = 1; i < ordered.length; i++) {
+      const prev = ordered[i - 1]
+      const nxt = ordered[i]
+      if (lo != null && hi != null) {
+        if (!segFullyInRange(prev, lo, hi) || !segFullyInRange(nxt, lo, hi)) continue
+      }
+      const rt = nxt.start - prev.end
+      if (rt <= 0) continue
+      samples.push(rt)
+      if (rt > worstRt) { worstRt = rt; worstSeg = nxt }
+      if (bestRt == null || rt < bestRt) { bestRt = rt; bestSeg = nxt }
+    }
+
+    if (samples.length === 0) continue
+    const sorted = [...samples].sort((a, b) => a - b)
+    const n = sorted.length
+    const sum = sorted.reduce((a, b) => a + b, 0)
+    const p95Idx = Math.min(n - 1, Math.ceil(n * 0.95) - 1)
+    const avgNs = Math.round(sum / n)
+
+    rows.push({
+      mk,
+      name: taskDisplayName(repr),
+      count: n,
+      minNs: sorted[0],
+      avgNs,
+      maxNs: sorted[n - 1],
+      p95Ns: sorted[p95Idx],
+      min: formatTime(sorted[0], scale),
+      avg: formatTime(avgNs, scale),
+      max: formatTime(sorted[n - 1], scale),
+      p95: formatTime(sorted[p95Idx], scale),
+      worstSeg,
+      bestSeg,
+    })
+  }
+
+  rows.sort((a, b) => b.maxNs - a.maxNs)
+  return rows
 }

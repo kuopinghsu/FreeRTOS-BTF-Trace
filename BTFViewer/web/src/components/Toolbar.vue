@@ -165,6 +165,23 @@
       Heatmap
     </button>
 
+    <button
+      v-if="taskFilterActive"
+      class="tb-btn active"
+      title="Clear heatmap task filter and show all tasks"
+      @click="emit('clearTaskFilter')"
+    >
+      <svg
+        viewBox="0 0 16 16"
+        width="16"
+        height="16"
+        fill="currentColor"
+      >
+        <path d="M2 3h12v1H2V3zm0 4h12v1H2V7zm0 4h12v1H2v-1zm0 4h8v1H2v-1z" />
+      </svg>
+      All tasks
+    </button>
+
     <div class="tb-sep" />
 
     <!-- Zoom controls -->
@@ -393,12 +410,13 @@ defineProps({
   modelValue:  { type: Object,  required: true },
   traceInfo:   { type: String,  default: '' },
   heatmapEnabled: { type: Boolean, default: false },
+  taskFilterActive: { type: Boolean, default: false },
   loading:     { type: Boolean, default: false },
   loadingPct:  { type: Number,  default: 0 },
   loadingMsg:  { type: String,  default: '' },
 })
 
-const emit = defineEmits(['update:modelValue', 'trace-reading', 'trace-loaded', 'loadDemo', 'zoom', 'fit', 'expandAll', 'collapseAll', 'addMark', 'copyScreenshot', 'exportSvg', 'showHelp', 'showAbout', 'showHeatmap', 'file-error'])
+const emit = defineEmits(['update:modelValue', 'trace-reading', 'trace-loaded', 'loadDemo', 'zoom', 'fit', 'expandAll', 'collapseAll', 'addMark', 'copyScreenshot', 'exportSvg', 'showHelp', 'showAbout', 'showHeatmap', 'clearTaskFilter', 'file-error'])
 
 function onFileChange(e) {
   const file = e.target.files[0]

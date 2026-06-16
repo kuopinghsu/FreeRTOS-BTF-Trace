@@ -6,51 +6,63 @@ import { segIndicesMapFromTrace } from '../parser/statsCompute.js'
 let _worker = null
 let _ready = false
 let _pendingRegister = null
+let _initPromise = null
 let _seq = 0
 const _callbacks = new Map()
 
-function ensureWorker() {
-  if (_worker) return _worker
-  try {
-    const WorkerCtor = globalThis.Worker
-    if (!WorkerCtor) return null
-    _worker = new Worker(new URL('../parser/statsWorker.js', import.meta.url), { type: 'module' })
-    _worker.onmessage = ({ data }) => {
-      if (data.type === 'registered') {
-        _ready = true
-        _pendingRegister?.resolve()
-        _pendingRegister = null
-        return
-      }
-      if (data.type === 'result') {
-        const cb = _callbacks.get(data.id)
-        if (cb) {
-          _callbacks.delete(data.id)
-          cb(data)
-        }
-        return
-      }
-      if (data.type === 'error') {
-        const cb = _callbacks.get(data.id)
-        if (cb) {
-          _callbacks.delete(data.id)
-          cb(data)
-        }
-      }
-    }
-    _worker.onerror = () => {
-      _ready = false
-      _pendingRegister?.reject(new Error('Stats worker error'))
+function wireWorker(worker) {
+  worker.onmessage = ({ data }) => {
+    if (data.type === 'registered') {
+      _ready = true
+      _pendingRegister?.resolve()
       _pendingRegister = null
+      return
     }
-    return _worker
-  } catch {
-    return null
+    if (data.type === 'result') {
+      const cb = _callbacks.get(data.id)
+      if (cb) {
+        _callbacks.delete(data.id)
+        cb(data)
+      }
+      return
+    }
+    if (data.type === 'error') {
+      const cb = _callbacks.get(data.id)
+      if (cb) {
+        _callbacks.delete(data.id)
+        cb(data)
+      }
+    }
+  }
+  worker.onerror = () => {
+    _ready = false
+    _pendingRegister?.reject(new Error('Stats worker error'))
+    _pendingRegister = null
   }
 }
 
+async function ensureWorker() {
+  if (_worker) return _worker
+  if (_initPromise) return _initPromise
+
+  _initPromise = (async () => {
+    try {
+      if (!globalThis.Worker) return null
+      const InlineWorker = (await import('../parser/statsWorker.js?worker&inline')).default
+      const worker = new InlineWorker()
+      wireWorker(worker)
+      _worker = worker
+      return worker
+    } catch {
+      return null
+    }
+  })()
+
+  return _initPromise
+}
+
 export function statsWorkerAvailable() {
-  return !!ensureWorker()
+  return _worker != null
 }
 
 function copyArrayBuffer(buf) {
@@ -58,7 +70,7 @@ function copyArrayBuffer(buf) {
 }
 
 export async function registerTraceWithStatsWorker(trace) {
-  const worker = ensureWorker()
+  const worker = await ensureWorker()
   if (!worker || !trace?.segStore) return false
 
   _ready = false
@@ -104,15 +116,15 @@ export async function registerTraceWithStatsWorker(trace) {
   }
 }
 
-export function requestStatsCompute({
+export async function requestStatsCompute({
   lo,
   hi,
   wantExec,
   wantBlock,
   wantInter,
 }) {
-  const worker = ensureWorker()
-  if (!worker || !_ready) return Promise.resolve(null)
+  const worker = await ensureWorker()
+  if (!worker || !_ready) return null
 
   const id = ++_seq
   return new Promise((resolve) => {
@@ -140,6 +152,7 @@ export function terminateStatsWorker() {
     _worker.terminate()
     _worker = null
     _ready = false
+    _initPromise = null
     _callbacks.clear()
   }
 }

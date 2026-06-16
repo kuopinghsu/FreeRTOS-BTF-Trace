@@ -96,3 +96,21 @@ export const HEALTH_GAP_SORT_ACCESSORS = {
   gap: g => g.duration,
   missed: g => g.missedTicks,
 }
+
+export const PREEMPTION_SORT_ACCESSORS = {
+  victim: r => r.victim.toLowerCase(),
+  preemptor: r => r.preemptor.toLowerCase(),
+  count: r => r.count,
+  total: r => r.totalNs,
+  avg: r => r.avgNs,
+  max: r => r.maxNs,
+}
+
+export const RESPONSE_SORT_ACCESSORS = {
+  task: r => r.name.toLowerCase(),
+  count: r => r.count,
+  min: r => r.minNs,
+  avg: r => r.avgNs,
+  max: r => r.maxNs,
+  p95: r => r.p95Ns,
+}
