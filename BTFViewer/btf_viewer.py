@@ -163,7 +163,7 @@ from PyQt5.QtWidgets import (
     QListWidget, QListWidgetItem,
     QPushButton, QScrollArea, QShortcut, QDoubleSpinBox, QSpinBox, QStackedWidget,
     QStyle, QStyleFactory, QStyleOptionGraphicsItem, QAbstractItemView,
-    QProxyStyle, QTabBar, QTabWidget, QTableWidget, QTableWidgetItem,
+    QProxyStyle, QTabBar, QTabWidget, QTableWidget, QTableWidgetItem, QToolButton,
     QVBoxLayout, QWidget, QSizePolicy, QSplitter,
 )
 
@@ -193,7 +193,7 @@ RULER_WIDTH              = 120  # Width of the time ruler column (px) - vertical
 ROW_HEIGHT               =  22  # Height of each task / core row (px).
 ROW_GAP                  =   4  # Vertical gap between rows (px).
 STI_ROW_H                =  18  # Height of a collapsed STI row (px)
-CPU_LOAD_ROW_H           =  60  # CPU load graph row height (px) - independent of timeline rows.
+CPU_LOAD_ROW_H           =  30  # CPU load graph row height (px) - independent of timeline rows.
 CPU_LOAD_ROW_GAP         =   2  # Gap between CPU load rows (px).
 CPU_LOAD_COLLAPSED_H     =  20  # Height of a collapsed CPU load row (px - enough to show label).
 CPU_LOAD_PANE_MAX_H      = 480  # Max CPU load pane height before inner vertical scroll (web parity).
@@ -392,6 +392,21 @@ def _svg_icon_markup(inner: str, size: int = 16) -> "QIcon":
     pm.loadFromData(ba, "SVG")
     return QIcon(pm)
 
+def _stats_chevron_icon(collapsed: bool, is_dark: bool = True) -> QIcon:
+    """Chevron for statistics section headers (matches web StatisticsPanel)."""
+    color = "#9E9E9E" if is_dark else "#666666"
+    if collapsed:
+        inner = (
+            f'<polyline points="5,3 11,8 5,13" fill="none" stroke="{color}" '
+            f'stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>'
+        )
+    else:
+        inner = (
+            f'<polyline points="3,5 8,11 13,5" fill="none" stroke="{color}" '
+            f'stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>'
+        )
+    return _svg_icon_markup(inner, size=10)
+
 # Icon path data (16x16 viewBox, single-path SVG outlines)
 _IC_OPEN   = ("M1 3.5A1.5 1.5 0 0 1 2.5 2h2.764c.958 0 1.76.56 2.311 1.184C7.985 3.648 8.48 4 9 4h4.5A1.5 1.5 0 0 1 15 5.5v.64c.57.265.94.876.856 1.546l-.64 5.124A2.5 2.5 0 0 1 12.733 15H3.267a2.5 2.5 0 0 1-2.483-2.19l-.64-5.124A1.5 1.5 0 0 1 1 6.14V3.5z"
               "M2 6h12v-.5a.5.5 0 0 0-.5-.5H9c-.964 0-1.71-.629-2.174-1.154C6.374 3.334 5.82 3 5.264 3H2.5a.5.5 0 0 0-.5.5V6z"
@@ -416,6 +431,8 @@ _IC_TASK   = "M1 2.5A1.5 1.5 0 0 1 2.5 1h11A1.5 1.5 0 0 1 15 2.5v11a1.5 1.5 0 0 
 _IC_CORE   = "M5 1v2H3a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2v2h1v-2h4v2h1v-2h2a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2h-2V1h-1v2H6V1H5zm-2 4h10v6H3V5zm2 1v4h6V6H5z"
 _IC_EXPAND     = "M3 1h1v14H3zM12 1h1v14h-1zM4 5l3 3-3 3zM12 5l-3 3 3 3z"
 _IC_EXPAND_ALL = "M8 1l2.5 3h-2v3h-1V4H5.5zM8 15l-2.5-3h2v-3h1V12h2.5zM2 7.5h12v1H2z"
+_IC_SECTIONS_EXPAND = "M8 2v5H3v1h5v5h1V8h5V7H9V2H8z"
+_IC_SECTIONS_COLLAPSE = "M2 7h12v2H2z"
 _IC_1TO1     = ("M6.5 1a5.5 5.5 0 1 0 3.89 9.4l3.4 3.4.7-.7-3.4-3.4A5.5 5.5 0 0 0 6.5 1"
                "zm0 1a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9z"
                "M3.5 4h1.5v5h-1.5z"        # left  "1" bar
@@ -1963,6 +1980,31 @@ def _format_time(value: float, time_scale: str = "ns", decimals: int = 3) -> str
         if ns >= threshold:
             return f"{fmt.format(ns / divisor)} {label}"
     return f"{fmt.format(ns)} ns"  # unreachable; satisfies type checkers
+
+_TIME_LABEL_TO_NS: Dict[str, float] = {
+    "ns": 1.0,
+    "µs": 1_000.0,
+    "us": 1_000.0,
+    "ms": 1_000_000.0,
+    "s": 1_000_000_000.0,
+}
+
+def _time_label_sort_key(text: str) -> float:
+    """Convert a formatted duration label back to nanoseconds for table sorting."""
+    s = str(text).strip()
+    if not s or s == "-":
+        return -1.0
+    parts = s.split()
+    if len(parts) < 2:
+        try:
+            return float(parts[0])
+        except ValueError:
+            return 0.0
+    try:
+        val = float(parts[0])
+    except ValueError:
+        return 0.0
+    return val * _TIME_LABEL_TO_NS.get(parts[1], 1.0)
 
 def _format_timescale_per_px(timescale_per_px: float, time_scale: str = "ns") -> str:
     """Format *timescale_per_px* (value per pixel in the trace's native unit)
@@ -9209,6 +9251,21 @@ class _StatsTableHoverFilter(QObject):
             self._clear_fn()
         return False
 
+class _StatsSortItem(QTableWidgetItem):
+    """Table cell that sorts by an explicit key (numeric/time) instead of display text."""
+
+    def __init__(self, text, sort_key=None) -> None:
+        super().__init__(str(text))
+        self._sort_key = sort_key if sort_key is not None else str(text).lower()
+
+    def __lt__(self, other) -> bool:  # noqa: N802
+        if isinstance(other, _StatsSortItem):
+            a, b = self._sort_key, other._sort_key
+            if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+                return a < b
+            return str(a).lower() < str(b).lower()
+        return super().__lt__(other)
+
 class _StatsSectionGrip(QWidget):
     """Horizontal drag handle below a stats table to adjust its max height."""
 
@@ -9651,6 +9708,9 @@ class _StatsPanel(QWidget):
             "inter": False,
             "health": False,
         }
+        self._section_headers: Dict[str, QPushButton] = {}
+        self._section_bodies: Dict[str, QWidget] = {}
+        self._section_populate: Dict[str, object] = {}
         self._section_table_heights: Dict[str, int] = {
             "migrations": STATS_TABLE_MIG_DEFAULT_H,
             "exec": STATS_TABLE_DEFAULT_H,
@@ -9674,17 +9734,35 @@ class _StatsPanel(QWidget):
         self._scope_label = QLabel("")
         self._scope_label.setStyleSheet("color:#888888;")
         scope_row.addWidget(self._scope_label, 1)
+        _ic = "#9E9E9E"
+        self._btn_stats_expand = QToolButton()
+        self._btn_stats_expand.setIcon(_svg_icon(_IC_SECTIONS_EXPAND, _ic))
+        self._btn_stats_expand.setIconSize(QSize(14, 14))
+        self._btn_stats_expand.setToolTip("Expand all statistics sections")
+        self._btn_stats_expand.setAutoRaise(True)
+        self._btn_stats_expand.clicked.connect(self._expand_all_sections)
+        scope_row.addWidget(self._btn_stats_expand)
+        self._btn_stats_collapse = QToolButton()
+        self._btn_stats_collapse.setIcon(_svg_icon(_IC_SECTIONS_COLLAPSE, _ic))
+        self._btn_stats_collapse.setIconSize(QSize(14, 14))
+        self._btn_stats_collapse.setToolTip("Collapse all statistics sections")
+        self._btn_stats_collapse.setAutoRaise(True)
+        self._btn_stats_collapse.clicked.connect(self._collapse_all_sections)
+        scope_row.addWidget(self._btn_stats_collapse)
         outer.addLayout(scope_row)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
+        self._scroll = scroll
         self._inner = QWidget()
+        self._inner.setObjectName("stats_inner")
         self._ilay = QVBoxLayout(self._inner)
         self._ilay.setContentsMargins(8, 6, 8, 6)
         self._ilay.setSpacing(2)
         self._ilay.addStretch()
         scroll.setWidget(self._inner)
         outer.addWidget(scroll)
+        self._apply_panel_theme()
 
         exp_row = QHBoxLayout()
         exp_row.setContentsMargins(8, 6, 8, 8)
@@ -9706,6 +9784,9 @@ class _StatsPanel(QWidget):
 
     def _clear(self) -> None:
         self._table_grips.clear()
+        self._section_headers.clear()
+        self._section_bodies.clear()
+        self._section_populate.clear()
         while self._ilay.count():
             item = self._ilay.takeAt(0)
             if item.widget():
@@ -9754,6 +9835,72 @@ class _StatsPanel(QWidget):
         grip.height_changed.connect(_on_height)
         lay.addWidget(table)
         lay.addWidget(grip)
+
+    def _apply_panel_theme(self) -> None:
+        """Keep stats scroll surfaces in sync (Windows native style ignores QSS)."""
+        bg = QColor("#1E1E1E") if self._is_dark else QColor("#F5F5F5")
+        bg_name = bg.name()
+        scroll = getattr(self, "_scroll", None)
+        inner = getattr(self, "_inner", None)
+        targets = [self]
+        if scroll is not None:
+            scroll.setObjectName("stats_scroll")
+            scroll.viewport().setObjectName("stats_scroll_viewport")
+            targets.extend((scroll, scroll.viewport()))
+        if inner is not None:
+            targets.append(inner)
+        for w in targets:
+            pal = w.palette()
+            pal.setColor(QPalette.Window, bg)
+            pal.setColor(QPalette.Base, bg)
+            w.setPalette(pal)
+            w.setAutoFillBackground(True)
+        if scroll is not None:
+            scroll.setStyleSheet(
+                f"QScrollArea#stats_scroll {{ background:{bg_name}; border:none; }}"
+                f"QWidget#stats_scroll_viewport {{ background:{bg_name}; }}"
+                f"QWidget#stats_inner {{ background:{bg_name}; }}"
+            )
+            scroll.viewport().setStyleSheet(
+                f"background-color: {bg_name}; border: none;"
+            )
+
+    def _stats_table_colors(self) -> Tuple[QColor, QColor, str]:
+        """Theme colours for stats tables (match MainWindow._theme_tokens)."""
+        if self._is_dark:
+            return QColor("#121212"), QColor("#D4D4D4"), "#9A9A9A"
+        return QColor("#FFFFFF"), QColor("#1E1E1E"), "#666666"
+
+    def _stats_table_qss(self, ui_fs: str, bg: str, fg: str, muted: str) -> str:
+        """QSS for stats-panel tables."""
+        return (
+            f"font-size:{ui_fs};"
+            f"QTableWidget#stats_table{{background:{bg}; color:{fg}; border:none;}}"
+            f"QWidget#stats_table_viewport{{background:{bg};}}"
+            "QTableWidget::item{border:none; padding:0px 3px;}"
+            f"QHeaderView::section{{border:none; background:transparent; "
+            f"color:{muted}; padding:0px 3px;}}"
+        )
+
+    def _apply_stats_table_theme(self, table: QTableWidget, ui_fs: str) -> QBrush:
+        """Paint stats-table surfaces explicitly (required on Windows Qt)."""
+        bg, fg, muted = self._stats_table_colors()
+        bg_name = bg.name()
+        fg_name = fg.name()
+        table.setObjectName("stats_table")
+        table.viewport().setObjectName("stats_table_viewport")
+        table.setStyleSheet(self._stats_table_qss(ui_fs, bg_name, fg_name, muted))
+        for w in (table, table.viewport()):
+            pal = w.palette()
+            pal.setColor(QPalette.Window, bg)
+            pal.setColor(QPalette.Base, bg)
+            pal.setColor(QPalette.Text, fg)
+            w.setPalette(pal)
+            w.setAutoFillBackground(True)
+        table.viewport().setStyleSheet(
+            f"background-color: {bg_name}; border: none;"
+        )
+        return QBrush(bg)
 
     def _lbl(self, text: str, color: str = "", bold: bool = False,
               ui_fs: str = "") -> QLabel:
@@ -9848,6 +9995,7 @@ class _StatsPanel(QWidget):
 
     def set_dark(self, is_dark: bool) -> None:
         self._is_dark = is_dark
+        self._apply_panel_theme()
         for grip in self._table_grips:
             grip.set_dark(is_dark)
         if self._plot_dlg is not None:
@@ -10047,36 +10195,82 @@ class _StatsPanel(QWidget):
         f.setFrameShape(QFrame.HLine)
         return f
 
-    def _toggle_section(self, section_id: str) -> None:
-        self._section_collapsed[section_id] = not self._section_collapsed.get(
-            section_id, False)
-        if self._trace is not None:
-            self.rebuild(self._trace)
+    def _update_section_header_icon(self, section_id: str) -> None:
+        hdr = self._section_headers.get(section_id)
+        if hdr is not None:
+            collapsed = self._section_collapsed.get(section_id, False)
+            hdr.setIcon(_stats_chevron_icon(collapsed, self._is_dark))
 
-    def _add_collapsible_section(self, section_id: str, title: str, ui_fs: str,
-                               populate) -> None:
-        """Add a collapsible statistics section (parity with web StatisticsPanel)."""
-        self._ilay.addWidget(self._sep())
-        collapsed = self._section_collapsed.get(section_id, False)
-        chevron = "\u25b6" if collapsed else "\u25bc"
-        hdr = QPushButton(f"  {chevron}  {title}")
-        hdr.setFlat(True)
-        hdr.setCursor(Qt.PointingHandCursor)
-        hdr.setStyleSheet(
-            f"text-align:left; padding:2px 0; border:none; background:transparent;"
-            f" font-weight:bold; font-size:{ui_fs};"
-        )
-        hdr.clicked.connect(
-            lambda _checked=False, sid=section_id: self._toggle_section(sid))
-        self._ilay.addWidget(hdr)
-        if collapsed:
+    def _ensure_section_body(self, section_id: str) -> None:
+        """Create a section body on first expand; reuse on later toggles."""
+        body = self._section_bodies.get(section_id)
+        if body is not None:
+            body.setVisible(True)
+            return
+        populate = self._section_populate.get(section_id)
+        hdr = self._section_headers.get(section_id)
+        if populate is None or hdr is None:
             return
         body = QWidget()
         blay = QVBoxLayout(body)
         blay.setContentsMargins(0, 0, 0, 0)
         blay.setSpacing(2)
         populate(blay)
-        self._ilay.addWidget(body)
+        idx = self._ilay.indexOf(hdr)
+        self._ilay.insertWidget(idx + 1, body)
+        self._section_bodies[section_id] = body
+
+    def _set_section_collapsed(self, section_id: str, collapsed: bool) -> None:
+        self._section_collapsed[section_id] = collapsed
+        if collapsed:
+            body = self._section_bodies.get(section_id)
+            if body is not None:
+                body.setVisible(False)
+        else:
+            self._ensure_section_body(section_id)
+        self._update_section_header_icon(section_id)
+
+    def _toggle_section(self, section_id: str) -> None:
+        self._set_section_collapsed(
+            section_id, not self._section_collapsed.get(section_id, False))
+
+    def _expand_all_sections(self) -> None:
+        self._inner.setUpdatesEnabled(False)
+        try:
+            for key in self._section_collapsed:
+                self._set_section_collapsed(key, False)
+        finally:
+            self._inner.setUpdatesEnabled(True)
+
+    def _collapse_all_sections(self) -> None:
+        self._inner.setUpdatesEnabled(False)
+        try:
+            for key in self._section_collapsed:
+                self._set_section_collapsed(key, True)
+        finally:
+            self._inner.setUpdatesEnabled(True)
+
+    def _add_collapsible_section(self, section_id: str, title: str, ui_fs: str,
+                               populate) -> None:
+        """Add a collapsible statistics section (parity with web StatisticsPanel)."""
+        self._ilay.addWidget(self._sep())
+        collapsed = self._section_collapsed.get(section_id, False)
+        hdr = QPushButton(title)
+        hdr.setFlat(True)
+        hdr.setCursor(Qt.PointingHandCursor)
+        hdr.setIcon(_stats_chevron_icon(collapsed, self._is_dark))
+        hdr.setIconSize(QSize(10, 10))
+        hdr.setStyleSheet(
+            f"text-align:left; padding:2px 0 2px 2px; border:none; background:transparent;"
+            f" font-weight:bold; font-size:{ui_fs};"
+        )
+        hdr.clicked.connect(
+            lambda _checked=False, sid=section_id: self._toggle_section(sid))
+        self._ilay.addWidget(hdr)
+        self._section_headers[section_id] = hdr
+        self._section_populate[section_id] = populate
+        if not collapsed:
+            self._ensure_section_body(section_id)
 
     def _core_util_rows(self, trace: "BtfTrace",
                         lo: Optional[int] = None, hi: Optional[int] = None) -> List[Tuple[str, float]]:
@@ -10389,21 +10583,18 @@ class _StatsPanel(QWidget):
         table.verticalHeader().setMinimumSectionSize(STATS_TABLE_ROW_H)
         table.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
         table.horizontalHeader().setFixedHeight(18)
+        table.horizontalHeader().setSectionsClickable(True)
+        table.horizontalHeader().setSortIndicatorShown(True)
         if migrations:
             table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
             table.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
             table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        table.setStyleSheet(
-            f"font-size:{ui_fs};"
-            "QTableWidget::item{border:none; padding:0px 3px;}"
-            "QHeaderView::section{border:none; background:transparent; color:#9A9A9A; padding:0px 3px;}"
-        )
+        _default_bg = self._apply_stats_table_theme(table, ui_fs)
 
         _min_col = 3 if include_cpu else 2
         _max_col = 5 if include_cpu else 4
         _link_color = QBrush(QColor("#88AAFF"))
         _hover_bg = QBrush(QColor("#3A3A50") if self._is_dark else QColor("#E0E0EC"))
-        _default_bg = QBrush()
         _hovered_row = [-1]
         _interactive = bool(on_row_click or on_min_click or on_max_click)
         _row_tip = "Click to view distribution chart"
@@ -10438,19 +10629,35 @@ class _StatsPanel(QWidget):
                     f"{primary} ({primary_pct:.0f}%)",
                     str(ping), str(sti), g_after, g_other,
                 ]
+                sort_keys = [
+                    name.lower(), n_mig, n_cores, primary_pct, ping, sti,
+                    _time_label_sort_key(g_after), _time_label_sort_key(g_other),
+                ]
             elif include_cpu:
                 mk_r, name, runs, cpu, mn, avg, mx, p95 = row
                 vals = [name, runs, f"{cpu:.1f}%", mn, avg, mx, p95]
+                sort_keys = [
+                    name.lower(), runs, cpu,
+                    _time_label_sort_key(mn), _time_label_sort_key(avg),
+                    _time_label_sort_key(mx), _time_label_sort_key(p95),
+                ]
             else:
                 mk_r, name, runs, mn, avg, mx, p95 = row
                 vals = [name, runs, mn, avg, mx, p95]
+                sort_keys = [
+                    name.lower(), runs,
+                    _time_label_sort_key(mn), _time_label_sort_key(avg),
+                    _time_label_sort_key(mx), _time_label_sort_key(p95),
+                ]
 
             for c, v in enumerate(vals):
-                item = QTableWidgetItem(str(v))
+                item = _StatsSortItem(v, sort_keys[c])
+                item.setBackground(_default_bg)
                 if migrations:
                     if c == 0:
                         item.setData(Qt.UserRole, mk)
                 elif c == 0:
+                    item.setData(Qt.UserRole, mk_r)
                     tip = (f"{_row_tip} for {name}"
                            if on_row_click is not None else str(name))
                     item.setToolTip(tip)
@@ -10480,7 +10687,6 @@ class _StatsPanel(QWidget):
             table.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         table.setAlternatingRowColors(False)
         table.setShowGrid(False)
-        table.setSortingEnabled(False)
 
         if _interactive:
             if migrations:
@@ -10490,8 +10696,13 @@ class _StatsPanel(QWidget):
                         on_row_click(item.data(Qt.UserRole))
                 table.cellClicked.connect(_cell_clicked_mig)
             else:
-                def _cell_clicked(r: int, c: int, _rows=rows) -> None:
-                    mk = _rows[r][0]
+                def _cell_clicked(r: int, c: int) -> None:
+                    item = table.item(r, 0)
+                    if item is None:
+                        return
+                    mk = item.data(Qt.UserRole)
+                    if mk is None:
+                        return
                     if on_min_click is not None and c == _min_col:
                         on_min_click(mk)
                     elif on_max_click is not None and c == _max_col:
@@ -10516,8 +10727,7 @@ class _StatsPanel(QWidget):
         for r in range(table.rowCount()):
             table.setRowHeight(r, STATS_TABLE_ROW_H)
 
-        table.horizontalHeader().setStyleSheet("QHeaderView::section { border: none; }")
-        table.verticalHeader().setStyleSheet("QHeaderView::section { border: none; }")
+        table.setSortingEnabled(True)
 
         self._wrap_table_with_resizer(lay, table, section_id)
         return host
@@ -11113,15 +11323,23 @@ class _StatsPanel(QWidget):
                 table.verticalHeader().setVisible(False)
                 table.setShowGrid(False)
                 table.setFrameShape(QFrame.NoFrame)
-                table.setStyleSheet(f"font-size:{_fs};")
+                table.horizontalHeader().setSectionsClickable(True)
+                table.horizontalHeader().setSortIndicatorShown(True)
+                _item_bg = self._apply_stats_table_theme(table, _fs)
                 for r, (start, end, dur, missed) in enumerate(_tick["large_gaps"][:8]):
-                    table.setItem(r, 0, QTableWidgetItem(
-                        _format_time(start, trace.time_scale)))
-                    table.setItem(r, 1, QTableWidgetItem(
-                        _format_time(end, trace.time_scale)))
-                    table.setItem(r, 2, QTableWidgetItem(
-                        _format_time(dur, trace.time_scale)))
-                    table.setItem(r, 3, QTableWidgetItem(str(missed)))
+                    for c, val in enumerate((
+                        _format_time(start, trace.time_scale),
+                        _format_time(end, trace.time_scale),
+                        _format_time(dur, trace.time_scale),
+                        str(missed),
+                    )):
+                        keys = (
+                            start, end, dur, missed,
+                        )
+                        item = _StatsSortItem(val, keys[c])
+                        item.setBackground(_item_bg)
+                        table.setItem(r, c, item)
+                table.setSortingEnabled(True)
                 table.setFixedHeight(
                     STATS_TABLE_HEADER_H + min(8, len(_tick["large_gaps"])) * STATS_TABLE_ROW_H + 2)
                 blay.addWidget(table)

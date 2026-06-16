@@ -196,6 +196,8 @@ import { formatTime } from '../renderer/TimelineRenderer.js'
 import { coreColor, isIdleTaskName, parseTaskName, taskColor, taskDisplayName, taskMergeKey } from '../utils/colors.js'
 import {
   avgBinsForNsRange,
+  CPU_LOAD_COLLAPSED_H,
+  CPU_LOAD_ROW_H,
   cursorRangeShade,
   getPlacedCursorRange,
   loadAtNs,
@@ -209,11 +211,8 @@ import {
 } from '../utils/viewportWheel.js'
 
 const NUM_BINS = CPU_LOAD_NUM_BINS
-const COLLAPSED_H = 22
-const ROW_GAP = 2
 const LABEL_W = 156
 const TITLE_H = 22
-const TIMELINE_ROW_H = 26
 const PLOT_W = 1000
 const CURSOR_COLORS = ['#FF4444', '#44FF88', '#4499FF', '#FFAA22', '#FF44FF', '#44FFFF', '#FFFF44', '#CC44FF']
 const BOOKMARK_COLOR = '#FFD700'
@@ -294,7 +293,7 @@ const rowModels = computed(() => {
 
   return rows.value.map(row => {
     const collapsed = row.kind === 'core' && collapsedCores.value.has(row.key)
-    const height = collapsed ? COLLAPSED_H : TIMELINE_ROW_H
+    const height = collapsed ? CPU_LOAD_COLLAPSED_H : CPU_LOAD_ROW_H
     const bins = binsForRow(row.kind, row.key)
     const rects = []
 
@@ -423,7 +422,7 @@ function _buildWheelMutator(e) {
       const dx = e.shiftKey ? e.deltaY : e.deltaX
       return vp => ({ ...vp, scrollX: Math.max(0, (vp.scrollX || 0) + dx) })
     }
-    const dy = e.deltaMode === 1 ? e.deltaY * TIMELINE_ROW_H : e.deltaY
+    const dy = e.deltaMode === 1 ? e.deltaY * CPU_LOAD_ROW_H : e.deltaY
     return vp => applyPanPlotY(vp, props.trace, dy, plotHeight, TITLE_H)
   }
   const isHorizInput = Math.abs(e.deltaX) > Math.abs(e.deltaY)
@@ -433,7 +432,7 @@ function _buildWheelMutator(e) {
   if (e.shiftKey) {
     return vp => applyPanPlotX(vp, props.trace, e.deltaY, plotWidth)
   }
-  const dy = e.deltaMode === 1 ? e.deltaY * TIMELINE_ROW_H : e.deltaY
+  const dy = e.deltaMode === 1 ? e.deltaY * CPU_LOAD_ROW_H : e.deltaY
   return vp => ({ ...vp, scrollY: Math.max(0, (vp.scrollY || 0) + dy) })
 }
 
@@ -448,7 +447,7 @@ function onWheel(e) {
       && !e.ctrlKey && !e.metaKey && !e.shiftKey
       && Math.abs(e.deltaY) >= Math.abs(e.deltaX)) {
     _wheelQueue = null
-    const dy = e.deltaMode === 1 ? e.deltaY * TIMELINE_ROW_H : e.deltaY
+    const dy = e.deltaMode === 1 ? e.deltaY * CPU_LOAD_ROW_H : e.deltaY
     _rowsScrollDelta += dy
     if (!_wheelFlushRaf) {
       _wheelFlushRaf = requestAnimationFrame(_flushWheel)
@@ -599,21 +598,25 @@ watch(() => props.trace, () => {
 .cpu-load-rows {
   display: flex;
   flex-direction: column;
-  gap: 0;
+  gap: 2px;
   padding: 6px 0 0;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   flex: 1;
   min-height: 0;
 }
 
 .cpu-load-row {
   display: flex;
-  min-height: 0;
+  flex-shrink: 0;
+  height: 30px;
+  min-height: 30px;
   border-bottom: 1px solid var(--border);
 }
 
 .cpu-load-row.collapsed {
-  min-height: 22px;
+  height: 20px;
+  min-height: 20px;
 }
 
 .cpu-load-label {
@@ -683,6 +686,7 @@ watch(() => props.trace, () => {
 .cpu-load-plot {
   flex: 1;
   min-width: 0;
+  height: 100%;
   min-height: 0;
   background: var(--bg);
 }

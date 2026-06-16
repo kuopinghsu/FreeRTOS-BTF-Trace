@@ -2,17 +2,43 @@
   <div class="stats-panel">
     <!-- Cursor range scope -->
     <div class="stats-scope-row">
-      <label
-        class="stats-scope-check"
-        :title="'When two or more cursors are placed, restrict all statistics to the time window from C1 through the last cursor.'"
-      >
-        <input
-          v-model="scopeToCursors"
-          type="checkbox"
-          :disabled="placedCursorCount < 2"
+      <div class="stats-scope-top">
+        <label
+          class="stats-scope-check"
+          :title="'When two or more cursors are placed, restrict all statistics to the time window from C1 through the last cursor.'"
         >
-        Limit to cursor range (C1–Cn)
-      </label>
+          <input
+            v-model="scopeToCursors"
+            type="checkbox"
+            :disabled="placedCursorCount < 2"
+          >
+          Limit to cursor range (C1–Cn)
+        </label>
+        <div class="stats-scope-actions">
+          <button
+            type="button"
+            class="stats-icon-btn"
+            title="Expand all statistics sections"
+            aria-label="Expand all statistics sections"
+            @click="expandAllSections"
+          >
+            <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true">
+              <path d="M8 2v5H3v1h5v5h1V8h5V7H9V2H8z" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            class="stats-icon-btn"
+            title="Collapse all statistics sections"
+            aria-label="Collapse all statistics sections"
+            @click="collapseAllSections"
+          >
+            <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true">
+              <path d="M2 7h12v2H2z" />
+            </svg>
+          </button>
+        </div>
+      </div>
       <span class="stats-scope-label">{{ scopeRangeLabel }}</span>
     </div>
 
@@ -215,15 +241,35 @@
           <table class="stats-table compact">
             <thead>
               <tr>
-                <th>Start</th>
-                <th>End</th>
-                <th>Gap</th>
-                <th>Missed</th>
+                <th
+                  :class="thSortClass('health', 'start')"
+                  @click="toggleTableSort('health', 'start')"
+                >
+                  Start
+                </th>
+                <th
+                  :class="thSortClass('health', 'end')"
+                  @click="toggleTableSort('health', 'end')"
+                >
+                  End
+                </th>
+                <th
+                  :class="thSortClass('health', 'gap')"
+                  @click="toggleTableSort('health', 'gap')"
+                >
+                  Gap
+                </th>
+                <th
+                  :class="thSortClass('health', 'missed')"
+                  @click="toggleTableSort('health', 'missed')"
+                >
+                  Missed
+                </th>
               </tr>
             </thead>
             <tbody>
               <tr
-                v-for="(g, i) in tickHealth.largeGaps.slice(0, 8)"
+                v-for="(g, i) in sortedTickHealthGaps"
                 :key="i"
               >
                 <td>{{ fmtTime(g.start) }}</td>
@@ -279,19 +325,59 @@
           <table class="stats-table stats-table-migration">
           <thead>
             <tr>
-              <th>Task</th>
-              <th>Migr</th>
-              <th>Cores</th>
-              <th>Primary</th>
-              <th>Ping</th>
-              <th>STI±</th>
-              <th>Gap after</th>
-              <th>Gap other</th>
+              <th
+                :class="thSortClass('migrations', 'task')"
+                @click="toggleTableSort('migrations', 'task')"
+              >
+                Task
+              </th>
+              <th
+                :class="thSortClass('migrations', 'migr')"
+                @click="toggleTableSort('migrations', 'migr')"
+              >
+                Migr
+              </th>
+              <th
+                :class="thSortClass('migrations', 'cores')"
+                @click="toggleTableSort('migrations', 'cores')"
+              >
+                Cores
+              </th>
+              <th
+                :class="thSortClass('migrations', 'primary')"
+                @click="toggleTableSort('migrations', 'primary')"
+              >
+                Primary
+              </th>
+              <th
+                :class="thSortClass('migrations', 'ping')"
+                @click="toggleTableSort('migrations', 'ping')"
+              >
+                Ping
+              </th>
+              <th
+                :class="thSortClass('migrations', 'sti')"
+                @click="toggleTableSort('migrations', 'sti')"
+              >
+                STI±
+              </th>
+              <th
+                :class="thSortClass('migrations', 'gapAfter')"
+                @click="toggleTableSort('migrations', 'gapAfter')"
+              >
+                Gap after
+              </th>
+              <th
+                :class="thSortClass('migrations', 'gapOther')"
+                @click="toggleTableSort('migrations', 'gapOther')"
+              >
+                Gap other
+              </th>
             </tr>
           </thead>
           <tbody>
             <tr
-              v-for="row in migrationStats"
+              v-for="row in sortedMigrationStats"
               :key="row.mk"
               class="stats-table-row clickable"
               :title="`Highlight ${row.name}`"
@@ -364,18 +450,53 @@
         <table class="stats-table">
           <thead>
             <tr>
-              <th>Task</th>
-              <th>Runs</th>
-              <th>CPU%</th>
-              <th>Min</th>
-              <th>Avg</th>
-              <th>Max</th>
-              <th>p95</th>
+              <th
+                :class="thSortClass('exec', 'task')"
+                @click="toggleTableSort('exec', 'task')"
+              >
+                Task
+              </th>
+              <th
+                :class="thSortClass('exec', 'runs')"
+                @click="toggleTableSort('exec', 'runs')"
+              >
+                Runs
+              </th>
+              <th
+                :class="thSortClass('exec', 'cpu')"
+                @click="toggleTableSort('exec', 'cpu')"
+              >
+                CPU%
+              </th>
+              <th
+                :class="thSortClass('exec', 'min')"
+                @click="toggleTableSort('exec', 'min')"
+              >
+                Min
+              </th>
+              <th
+                :class="thSortClass('exec', 'avg')"
+                @click="toggleTableSort('exec', 'avg')"
+              >
+                Avg
+              </th>
+              <th
+                :class="thSortClass('exec', 'max')"
+                @click="toggleTableSort('exec', 'max')"
+              >
+                Max
+              </th>
+              <th
+                :class="thSortClass('exec', 'p95')"
+                @click="toggleTableSort('exec', 'p95')"
+              >
+                p95
+              </th>
             </tr>
           </thead>
           <tbody>
             <tr
-              v-for="row in execSliceStats"
+              v-for="row in sortedExecSliceStats"
               :key="row.mk"
               class="stats-table-row clickable"
               :title="`Open execution-time plot for ${row.name}`"
@@ -459,17 +580,47 @@
         <table class="stats-table">
           <thead>
             <tr>
-              <th>Task</th>
-              <th>Gaps</th>
-              <th>Min</th>
-              <th>Avg</th>
-              <th>Max</th>
-              <th>p95</th>
+              <th
+                :class="thSortClass('block', 'task')"
+                @click="toggleTableSort('block', 'task')"
+              >
+                Task
+              </th>
+              <th
+                :class="thSortClass('block', 'gaps')"
+                @click="toggleTableSort('block', 'gaps')"
+              >
+                Gaps
+              </th>
+              <th
+                :class="thSortClass('block', 'min')"
+                @click="toggleTableSort('block', 'min')"
+              >
+                Min
+              </th>
+              <th
+                :class="thSortClass('block', 'avg')"
+                @click="toggleTableSort('block', 'avg')"
+              >
+                Avg
+              </th>
+              <th
+                :class="thSortClass('block', 'max')"
+                @click="toggleTableSort('block', 'max')"
+              >
+                Max
+              </th>
+              <th
+                :class="thSortClass('block', 'p95')"
+                @click="toggleTableSort('block', 'p95')"
+              >
+                p95
+              </th>
             </tr>
           </thead>
           <tbody>
             <tr
-              v-for="row in blockingStats"
+              v-for="row in sortedBlockingStats"
               :key="row.mk"
               class="stats-table-row clickable"
               :title="`Open blocking-time plot for ${row.name}`"
@@ -552,17 +703,47 @@
         <table class="stats-table">
           <thead>
             <tr>
-              <th>Task</th>
-              <th>Runs</th>
-              <th>Min</th>
-              <th>Avg</th>
-              <th>Max</th>
-              <th>p95</th>
+              <th
+                :class="thSortClass('inter', 'task')"
+                @click="toggleTableSort('inter', 'task')"
+              >
+                Task
+              </th>
+              <th
+                :class="thSortClass('inter', 'runs')"
+                @click="toggleTableSort('inter', 'runs')"
+              >
+                Runs
+              </th>
+              <th
+                :class="thSortClass('inter', 'min')"
+                @click="toggleTableSort('inter', 'min')"
+              >
+                Min
+              </th>
+              <th
+                :class="thSortClass('inter', 'avg')"
+                @click="toggleTableSort('inter', 'avg')"
+              >
+                Avg
+              </th>
+              <th
+                :class="thSortClass('inter', 'max')"
+                @click="toggleTableSort('inter', 'max')"
+              >
+                Max
+              </th>
+              <th
+                :class="thSortClass('inter', 'p95')"
+                @click="toggleTableSort('inter', 'p95')"
+              >
+                p95
+              </th>
             </tr>
           </thead>
           <tbody>
             <tr
-              v-for="row in interArrivalStats"
+              v-for="row in sortedInterArrivalStats"
               :key="row.mk"
               class="stats-table-row clickable"
               :title="`Open inter-arrival plot for ${row.name}`"
@@ -964,6 +1145,17 @@ import { migrationRows } from '../utils/migrationAnalysis.js'
 import { tickHealthReport } from '../utils/tickHealth.js'
 import { requestStatsCompute } from '../utils/statsWorkerClient.js'
 import { computeStatsTables, segIndicesMapFromTrace } from '../parser/statsCompute.js'
+import {
+  defaultStatsTableSort,
+  nextSortState,
+  sortStatsRows,
+  sortHeaderClass,
+  MIGRATION_SORT_ACCESSORS,
+  EXEC_SORT_ACCESSORS,
+  BLOCK_SORT_ACCESSORS,
+  INTER_SORT_ACCESSORS,
+  HEALTH_GAP_SORT_ACCESSORS,
+} from '../utils/statsTableSort.js'
 import TraceCompareDialog from './TraceCompareDialog.vue'
 
 const props = defineProps({
@@ -983,6 +1175,24 @@ const migrationCollapsed = ref(false)
 const interArrivalCollapsed = ref(false)
 const scopeToCursors = ref(true)
 
+const STATS_SECTION_FLAGS = [
+  coresCollapsed,
+  tasksCollapsed,
+  healthCollapsed,
+  migrationCollapsed,
+  execSliceCollapsed,
+  blockingCollapsed,
+  interArrivalCollapsed,
+]
+
+function expandAllSections() {
+  for (const flag of STATS_SECTION_FLAGS) flag.value = false
+}
+
+function collapseAllSections() {
+  for (const flag of STATS_SECTION_FLAGS) flag.value = true
+}
+
 const workerExecRows = ref([])
 const workerBlockRows = ref([])
 const workerInterRows = ref([])
@@ -992,6 +1202,10 @@ let _statsRefreshTimer = null
 function formatStatsRow(row, scale) {
   return {
     ...row,
+    minNs: row.min,
+    avgNs: row.avg,
+    maxNs: row.max,
+    p95Ns: row.p95,
     min: formatTime(row.min, scale),
     avg: formatTime(row.avg, scale),
     max: formatTime(row.max, scale),
@@ -1098,6 +1312,22 @@ const openPlotRef = ref(null)   // { mk, kind } when plot dialog is open
 const plotContentRef = ref(null)
 const selectedPlotPoint = ref(-1)
 const compareOpen = ref(false)
+
+const tableSort = ref({
+  migrations: defaultStatsTableSort(),
+  exec: defaultStatsTableSort(),
+  block: defaultStatsTableSort(),
+  inter: defaultStatsTableSort(),
+  health: defaultStatsTableSort(),
+})
+
+function toggleTableSort(tableId, col) {
+  tableSort.value[tableId] = nextSortState(tableSort.value[tableId], col)
+}
+
+function thSortClass(tableId, col) {
+  return sortHeaderClass(tableSort.value[tableId], col)
+}
 
 const loadedTabs = computed(() => props.tabs.filter(t => t.trace))
 const canCompareTabs = computed(() => loadedTabs.value.length >= 2)
@@ -1293,8 +1523,29 @@ const migrationStats = computed(() => {
   const r = statsRange.value
   const lo = r?.lo ?? null
   const hi = r?.hi ?? null
-  return migrationRows(tr, lo, hi, formatTime)
+  return migrationRows(tr, lo, hi)
 })
+
+const sortedMigrationStats = computed(() =>
+  sortStatsRows(migrationStats.value, tableSort.value.migrations, MIGRATION_SORT_ACCESSORS))
+
+const sortedExecSliceStats = computed(() =>
+  sortStatsRows(execSliceStats.value, tableSort.value.exec, EXEC_SORT_ACCESSORS))
+
+const sortedBlockingStats = computed(() =>
+  sortStatsRows(blockingStats.value, tableSort.value.block, BLOCK_SORT_ACCESSORS))
+
+const interArrivalStats = computed(() => workerInterRows.value)
+
+const sortedInterArrivalStats = computed(() =>
+  sortStatsRows(interArrivalStats.value, tableSort.value.inter, INTER_SORT_ACCESSORS))
+
+const sortedTickHealthGaps = computed(() =>
+  sortStatsRows(
+    tickHealth.value.largeGaps.slice(0, 8),
+    tableSort.value.health,
+    HEALTH_GAP_SORT_ACCESSORS,
+  ))
 
 function jumpToSegment(mk, kind, findMax) {
   const tr = props.trace
@@ -1313,8 +1564,6 @@ function jumpToSegment(mk, kind, findMax) {
   }
   if (seg) emit('selectSegment', seg)
 }
-
-const interArrivalStats = computed(() => workerInterRows.value)
 
 function _summarizeNumericSamples(samples) {
   if (!samples || samples.length === 0) return null
@@ -1698,7 +1947,7 @@ function exportCsv() {
   lines.push('')
   lines.push(`Core Migrations${suffix}`)
   lines.push('Task,Migrations,Core count,Primary core,Primary %,Ping-pong,STI near,Gap after avg,Gap other avg')
-  const migReportRows = migrationRows(tr, lo, hi, formatTime)
+  const migReportRows = migrationRows(tr, lo, hi)
   for (const r of migReportRows) {
     lines.push([
       _csvCell(r.name),
@@ -1977,7 +2226,7 @@ function exportHtml() {
   const taskRows = _taskCpuRows(tr, r)
   const lo = r?.lo ?? null
   const hi = r?.hi ?? null
-  const migReportRows = migrationRows(tr, lo, hi, formatTime)
+  const migReportRows = migrationRows(tr, lo, hi)
   const { contextSwitches, coreGaps } = schedulingStats(tr, lo, hi)
   const schedKpi = schedulingSummary.value
   const range = !r ? rangeStats.value : null
@@ -2255,6 +2504,39 @@ watch(plotData, () => {
   border-bottom: 1px solid var(--border);
 }
 
+.stats-scope-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.stats-scope-actions {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.stats-icon-btn {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--fg-dim);
+  padding: 2px 4px;
+  border-radius: 3px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.stats-icon-btn:hover,
+.stats-icon-btn:focus-visible {
+  background: var(--tb-btn-hover);
+  color: var(--fg);
+  outline: none;
+}
+
 .stats-scope-check {
   display: flex;
   align-items: center;
@@ -2505,6 +2787,29 @@ watch(plotData, () => {
   color: var(--fg-dim);
   font-weight: 600;
   z-index: 1;
+}
+
+.stats-table th.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.stats-table th.sortable:hover {
+  color: var(--fg);
+}
+
+.stats-table th.sort-asc::after,
+.stats-table th.sort-desc::after {
+  font-size: 8px;
+  opacity: 0.85;
+}
+
+.stats-table th.sort-asc::after {
+  content: ' ▲';
+}
+
+.stats-table th.sort-desc::after {
+  content: ' ▼';
 }
 
 .stats-table th:first-child,

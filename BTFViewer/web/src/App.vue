@@ -597,6 +597,7 @@ import MigrationHeatmapDialog from './components/MigrationHeatmapDialog.vue'
 import { formatTime }   from './renderer/TimelineRenderer.js'
 import { taskDisplayName, taskMergeKey } from './utils/colors.js'
 import { traceIsMultiCore } from './utils/migrationAnalysis.js'
+import { cpuLoadPreferredPaneHeight, CPU_LOAD_PANE_DEFAULT_H, CPU_LOAD_PANE_MIN_H, CPU_LOAD_PANE_MAX_H } from './utils/cpuLoadHelpers.js'
 import { useTraceTabs } from './composables/useTraceTabs.js'
 import { loadSession, saveSession, getSavedTabState, applySavedTabState, buildSessionSnapshot, isRestorableViewport } from './utils/sessionStore.js'
 import exampleBtfB64   from 'virtual:example-btf'
@@ -640,10 +641,21 @@ const RIGHT_PANEL_MIN_W = 180
 const RIGHT_PANEL_MAX_W = 520
 let _rightPanelResize = null
 
-const cpuLoadPaneHeight = ref(180)
-const CPU_LOAD_MIN_H = 60
-const CPU_LOAD_MAX_H = 480
+const cpuLoadPaneHeight = ref(CPU_LOAD_PANE_DEFAULT_H)
 let _cpuLoadResize = null
+let _cpuLoadUserSized = false
+
+function autofitCpuLoadPaneHeight() {
+  if (_cpuLoadUserSized || !timelineOptions.showCpuLoad) return
+  const tr = trace.value
+  if (!tr) return
+  cpuLoadPaneHeight.value = cpuLoadPreferredPaneHeight(
+    tr,
+    timelineOptions.viewMode,
+    cpuLoadSelectedTask.value,
+    cpuLoadExpanded.value,
+  )
+}
 
 const toastMsg     = ref('')
 const toastType    = ref('info')
@@ -811,8 +823,22 @@ watch(activeTabId, () => {
   timelineOptions.highlightSegment = tab?.highlightSegment ?? null
   timelineOptions.lockedTaskKey = tab?.pinnedHighlightKey ?? null
   _navCache = tab ? getNavCache(tab) : null
-  nextTick(() => applyTimelineViewport())
+  nextTick(() => {
+    applyTimelineViewport()
+    autofitCpuLoadPaneHeight()
+  })
 })
+
+watch(
+  () => [
+    trace.value,
+    timelineOptions.viewMode,
+    timelineOptions.showCpuLoad,
+    cpuLoadExpanded.value,
+    cpuLoadSelectedTask.value,
+  ],
+  () => nextTick(() => autofitCpuLoadPaneHeight()),
+)
 
 watch([tabs, activeTabId, cursors, marks, timelineViewport], scheduleSessionSave, { deep: true })
 watch(
@@ -940,10 +966,12 @@ async function attachParsedTrace(name, packedOrTrace) {
     tab.trace = markRaw(trace)
     await nextTick()
 
+    _cpuLoadUserSized = false
     finishTraceLoadTab(tab)
     await nextTick()
     applyTimelineViewport()
     scheduleRender()
+    autofitCpuLoadPaneHeight()
 
     setTimeout(() => {
       import('./utils/statsWorkerClient.js')
@@ -1147,11 +1175,13 @@ async function captureLeftPaneSvgBlob() {
 function onExpandAll() {
   timelinePanelRef.value?.expandAll()
   cpuLoadExpanded.value = true
+  autofitCpuLoadPaneHeight()
 }
 
 function onCollapseAll() {
   timelinePanelRef.value?.collapseAll()
   cpuLoadExpanded.value = false
+  autofitCpuLoadPaneHeight()
 }
 
 function onTimelineViewportChange(vp) {
@@ -1267,6 +1297,7 @@ function onRightPanelResizeEnd() {
 }
 
 function onCpuLoadResizeStart(e) {
+  _cpuLoadUserSized = true
   _cpuLoadResize = { startY: e.clientY, startH: cpuLoadPaneHeight.value }
   document.body.classList.add('row-resizing')
   document.addEventListener('mousemove', onCpuLoadResizeMove)
@@ -1277,8 +1308,8 @@ function onCpuLoadResizeMove(e) {
   if (!_cpuLoadResize) return
   const dy = _cpuLoadResize.startY - e.clientY
   cpuLoadPaneHeight.value = Math.max(
-    CPU_LOAD_MIN_H,
-    Math.min(CPU_LOAD_MAX_H, _cpuLoadResize.startH + dy),
+    CPU_LOAD_PANE_MIN_H,
+    Math.min(CPU_LOAD_PANE_MAX_H, _cpuLoadResize.startH + dy),
   )
   scheduleRender()
 }

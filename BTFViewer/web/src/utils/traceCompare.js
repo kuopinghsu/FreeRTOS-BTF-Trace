@@ -34,7 +34,7 @@ export function traceSummarySnapshot(trace, lo = null, hi = null) {
   let migratedTasks = (trace.tasks || []).filter(mk => isMigratedTask(trace, mk)).length
   if (lo != null && hi != null) {
     migrations = (trace.migrations || []).filter(m => m.ns >= lo && m.ns <= hi).length
-    migratedTasks = migrationRows(trace, lo, hi, formatTime).length
+    migratedTasks = migrationRows(trace, lo, hi).length
   }
   return {
     spanNs,
@@ -187,12 +187,12 @@ export function buildMigrationCompareRows(traceA, traceB, tabA = null, tabB = nu
   const mapA = new Map()
   const mapB = new Map()
   if (traceA) {
-    for (const row of migrationRows(traceA, ra.lo, ra.hi, formatTime)) {
+    for (const row of migrationRows(traceA, ra.lo, ra.hi)) {
       mapA.set(row.mk, row)
     }
   }
   if (traceB) {
-    for (const row of migrationRows(traceB, rb.lo, rb.hi, formatTime)) {
+    for (const row of migrationRows(traceB, rb.lo, rb.hi)) {
       mapB.set(row.mk, row)
     }
   }

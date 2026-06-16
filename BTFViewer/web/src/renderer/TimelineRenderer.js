@@ -175,6 +175,15 @@ export function formatTime(t, scale, decimals = 3) {
   return `${t} ${scale}`
 }
 
+/** Format migration gap columns in native trace units (Core Migrations table). */
+export function formatMigrationGapTime(t, scale) {
+  const v = Number(t)
+  if (!Number.isFinite(v)) return '-'
+  if (scale === 'ms') return `${v.toFixed(3)} ms`
+  if (scale === 'us') return `${Math.round(v)} us`
+  return formatTime(v, scale)
+}
+
 /**
  * Pick a "nice" ruler step that produces 5–12 tick marks across the viewport.
  */

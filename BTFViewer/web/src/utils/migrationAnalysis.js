@@ -6,6 +6,7 @@ import { bisectLeft, bisectRight } from './bisect.js'
 import { parseTaskName, taskLabelForMergeKey, taskReprGet } from './colors.js'
 import { blockingTimeSamples } from './statsAnalysis.js'
 import { segFullyInRange, segOverlapsRange } from './statsRange.js'
+import { formatMigrationGapTime } from '../renderer/TimelineRenderer.js'
 
 export const MIGRATION_PING_PONG_WINDOW = 1000
 export const MIGRATION_STI_WINDOW = 500
@@ -79,7 +80,7 @@ export function migrationStiNearCount(trace, migs, window = MIGRATION_STI_WINDOW
   return count
 }
 
-export function migrationRows(trace, lo, hi, formatTimeFn) {
+export function migrationRows(trace, lo, hi) {
   const rows = []
   for (const mk of trace.tasks || []) {
     if (!isMigratedTask(trace, mk)) continue
@@ -119,8 +120,10 @@ export function migrationRows(trace, lo, hi, formatTimeFn) {
       primaryPct,
       pingPong: countPingPong(migs),
       stiNear: migrationStiNearCount(trace, migs),
-      gapAfter: avgAfter ? formatTimeFn(avgAfter, trace.timeScale) : '-',
-      gapOther: avgOther ? formatTimeFn(avgOther, trace.timeScale) : '-',
+      gapAfter: avgAfter ? formatMigrationGapTime(avgAfter, trace.timeScale) : '-',
+      gapOther: avgOther ? formatMigrationGapTime(avgOther, trace.timeScale) : '-',
+      gapAfterNs: avgAfter || -1,
+      gapOtherNs: avgOther || -1,
     })
   }
   rows.sort((a, b) => b.migrations - a.migrations || a.name.localeCompare(b.name))
