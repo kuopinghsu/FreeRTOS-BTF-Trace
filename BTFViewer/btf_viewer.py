@@ -989,7 +989,6 @@ def _collect_preemption_events(
 
     return events
 
-
 def _preemption_chain_rows(
     trace: "BtfTrace",
     lo: Optional[int] = None,
@@ -1027,7 +1026,6 @@ def _preemption_chain_rows(
     rows.sort(key=lambda r: (-_time_label_sort_key(r[4]), r[1].lower(), r[2].lower()))
     return rows
 
-
 def _preemption_chain_plot_points(
     trace: "BtfTrace",
     victim_mk: str,
@@ -1041,7 +1039,6 @@ def _preemption_chain_plot_points(
         for mk, pre_disp, t, d, seg in _collect_preemption_events(trace, lo, hi)
         if mk == victim_mk and pre_disp == preemptor_disp
     ]
-
 
 def _response_time_plot_points(
     segs: list,
@@ -1062,7 +1059,6 @@ def _response_time_plot_points(
         if gap > 0:
             pts.append((nxt.start, gap, nxt))
     return pts
-
 
 def _response_time_rows(
     trace: "BtfTrace",
@@ -1150,7 +1146,6 @@ def _response_time_rows(
     rows.sort(key=lambda r: -_time_label_sort_key(r[5]))
     return rows
 
-
 def _tick_health_report(trace: "BtfTrace",
                         lo: Optional[int] = None, hi: Optional[int] = None) -> dict:
     """Summarise STI TICK timestamps: gaps, missed-tick estimate, health status."""
@@ -1220,13 +1215,11 @@ def _migration_heatmap_data(trace: "BtfTrace",
         grid[pi][bi] += 1
     return pairs, grid, time_bins
 
-
 def _heatmap_bin_range(t_min: int, bin_w: float, time_bins: int, t_max: int,
                        bin_index: int) -> Tuple[int, int]:
     bin_lo = int(t_min + bin_index * bin_w)
     bin_hi = t_max if bin_index >= time_bins - 1 else int(t_min + (bin_index + 1) * bin_w)
     return bin_lo, bin_hi
-
 
 def _migration_ns_in_bin(ns: int, bin_lo: int, bin_hi: int, *,
                          bin_index: int, time_bins: int) -> bool:
@@ -1236,7 +1229,6 @@ def _migration_ns_in_bin(ns: int, bin_lo: int, bin_hi: int, *,
     if bin_index >= time_bins - 1:
         return ns <= bin_hi
     return ns < bin_hi
-
 
 def _heatmap_bin_index_for_ns(t_min: int, bin_w: float, time_bins: int, t_max: int,
                               ns: int) -> int:
@@ -1249,7 +1241,6 @@ def _heatmap_bin_index_for_ns(t_min: int, bin_w: float, time_bins: int, t_max: i
         if _migration_ns_in_bin(ns, blo, bhi, bin_index=b, time_bins=time_bins):
             return b
     return bi
-
 
 def _range_stats_over_segments(trace: "BtfTrace", lo: int, hi: int
                                ) -> Tuple[int, Dict[str, int], list]:
@@ -1278,7 +1269,6 @@ def _range_stats_over_segments(trace: "BtfTrace", lo: int, hi: int
             task_acc[disp] = task_acc.get(disp, 0) + ov
     return switches, task_acc, durations
 
-
 def _merge_keys_for_heatmap_cell(trace: "BtfTrace", from_core: str, to_core: str,
                                  bin_lo: int, bin_hi: int,
                                  bin_index: int, time_bins: int) -> set:
@@ -1291,7 +1281,6 @@ def _merge_keys_for_heatmap_cell(trace: "BtfTrace", from_core: str, to_core: str
             continue
         keys.add(m.merge_key)
     return keys
-
 
 def _migration_task_heatmap_data(trace: "BtfTrace", from_core: str, to_core: str,
                                  bin_lo: int, bin_hi: int,
@@ -2687,7 +2676,6 @@ class _SuspendRebuild:
         sc._rebuild_suspend = max(0, sc._rebuild_suspend - 1)
         if sc._rebuild_suspend == 0:
             sc.rebuild()
-
 
 class TimelineScene(QGraphicsScene):
     """Manages the full timeline and renders it as QGraphicsItems.
