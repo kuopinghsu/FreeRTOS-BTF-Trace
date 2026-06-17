@@ -8,6 +8,7 @@
       v-if="orientation === 'h'"
       :key="options.layoutRev"
       :trace="trace"
+      :label-width="labelWidth"
       :view-mode="options.viewMode"
       :expanded="expanded"
       :sti-expanded="stiExpanded"
@@ -21,6 +22,13 @@
       @highlight-change="(k) => emit('highlightChange', k)"
       @highlight-click="(k) => emit('highlightClick', k)"
       @sti-expand-toggle="onStiExpandToggle"
+    />
+
+    <div
+      v-if="orientation === 'h'"
+      class="label-resizer"
+      title="Drag to resize label column"
+      @mousedown.prevent.stop="onLabelResizeStart"
     />
 
     <!-- Right: canvas -->
@@ -52,6 +60,27 @@
         :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }"
         @mouseleave="contextMenu.visible = false"
       >
+        <template v-if="contextMenu.segment">
+          <div
+            class="ctx-item"
+            @click="onCtxCopyTaskName"
+          >
+            Copy task name{{ ctxSegmentTaskName ? `  "${ctxSegmentTaskName}"` : '' }}
+          </div>
+          <div
+            class="ctx-item"
+            @click="onCtxZoomToSegment"
+          >
+            Zoom to this segment
+          </div>
+          <div
+            class="ctx-item"
+            @click="onCtxSelectInLegend"
+          >
+            Select in Legend
+          </div>
+          <div class="ctx-sep" />
+        </template>
         <div
           class="ctx-item"
           @click="onCtxPlaceCursor"
@@ -188,14 +217,14 @@ import LabelColumn from './LabelColumn.vue'
 import StiTooltip  from './StiTooltip.vue'
 import SegmentTooltip from './SegmentTooltip.vue'
 import { render as renderTimeline, renderVertical, buildRowLayout, buildColumnLayout, drawHoverLine, drawHoverLineVertical, drawRangeSelect, drawRangeSelectVertical, drawCursors, drawCursorsVertical, drawMarksHorizontal, drawMarksVertical, drawFindHits, drawFindHitsVertical, RULER_H, isStiTagChannel, RULER_W, COL_W, HEADER_H, formatTime, rowBandHeight, visibleRowIndexRange } from '../renderer/TimelineRenderer.js'
-import { getTimelineLayout } from '../utils/timelineLayout.js'
+import { getTimelineLayout, setTimelineLayout } from '../utils/timelineLayout.js'
 
 function layout() {
   return getTimelineLayout()
 }
 import { renderToSvg } from '../renderer/SvgExporter.js'
 import { InteractionHandler } from '../renderer/InteractionHandler.js'
-import { taskMergeKey, taskColor, coreColor, coreTint, stiNoteColor, parseTaskName, stiChannelColor, taskDisplayName } from '../utils/colors.js'
+import { taskMergeKey, taskColor, coreColor, coreTint, stiNoteColor, parseTaskName, stiChannelColor, taskDisplayName, taskReprGet } from '../utils/colors.js'
 import { segmentTooltipLines as buildSegmentTooltipLines } from '../utils/statsAnalysis.js'
 import { isRestorableViewport } from '../utils/sessionStore.js'
 import { isMigratedTask } from '../utils/migrationAnalysis.js'
@@ -216,12 +245,17 @@ const props = defineProps({
   options: { type: Object, required: true },  // { viewMode, highlightKey, showGrid, darkMode, orientation, marks }
   cursors: { type: Array, default: () => [] },
   maxCursors: { type: Number, default: 8 },
+  labelWidth: { type: Number, default: 160 },
   findHits: { type: Array, default: () => [] },
   findMarkerNs: { type: Number, default: null },
   /** Per-tab viewport from session store; applied on trace load instead of fit-to-trace when valid. */
   persistedViewport: { type: Object, default: null },
 })
-const emit = defineEmits(['viewportChange', 'cursorsChange', 'hoverTimeChange', 'highlightChange', 'highlightClick', 'segmentClick', 'clearSelection', 'addBookmark', 'addAnnotation', 'markMove', 'copyScreenshot'])
+const emit = defineEmits([
+  'viewportChange', 'cursorsChange', 'hoverTimeChange', 'highlightChange', 'highlightClick',
+  'segmentClick', 'clearSelection', 'addBookmark', 'addAnnotation', 'markMove', 'copyScreenshot',
+  'beforeCursorChange', 'beforeMarkChange', 'labelWidthChange',
+])
 
 // ---- Template refs -------------------------------------------------------
 const panelEl     = ref(null)
@@ -367,7 +401,14 @@ const hoverTime   = ref(null)
 const rangeSelect = ref(null)  // { t0, t1 } while middle-dragging a zoom region
 
 // Right-click context menu
-const contextMenu = reactive({ visible: false, x: 0, y: 0, ns: 0, shiftKey: false })
+const contextMenu = reactive({ visible: false, x: 0, y: 0, ns: 0, shiftKey: false, segment: null })
+
+const ctxSegmentTaskName = computed(() => {
+  const seg = contextMenu.segment
+  if (!seg || !props.trace) return ''
+  const raw = taskReprGet(props.trace, taskMergeKey(seg.task)) || seg.task
+  return taskDisplayName(raw)
+})
 
 const hasPlacedCursors = computed(() => props.cursors.some(c => c != null))
 
@@ -753,7 +794,13 @@ function setupHandler() {
     onStiExpandToggle(key) {
       onStiExpandToggle(key)
     },
-    onContextMenu({ ns, x, y, shiftKey }) {
+    onBeforeCursorChange() {
+      emit('beforeCursorChange')
+    },
+    onBeforeMarkChange() {
+      emit('beforeMarkChange')
+    },
+    onContextMenu({ ns, x, y, shiftKey, segment }) {
       if (shiftKey) {
         _handler?.clearAllCursors()
         return
@@ -764,6 +811,7 @@ function setupHandler() {
       contextMenu.x       = x - rect.left
       contextMenu.y       = y - rect.top
       contextMenu.shiftKey = !!shiftKey
+      contextMenu.segment = segment ?? null
       contextMenu.visible = true
     },
     onRangeSelectChange({ t0, t1 }) {
@@ -811,6 +859,25 @@ function onCopyCursorTime() {
   if (!props.trace) return
   const label = formatTime(contextMenu.ns, props.trace.timeScale)
   navigator.clipboard?.writeText(label).catch(() => {})
+}
+
+function onCtxCopyTaskName() {
+  contextMenu.visible = false
+  if (!ctxSegmentTaskName.value) return
+  navigator.clipboard?.writeText(ctxSegmentTaskName.value).catch(() => {})
+}
+
+function onCtxZoomToSegment() {
+  contextMenu.visible = false
+  const seg = contextMenu.segment
+  if (seg) _handler?.zoomToSegment(seg)
+}
+
+function onCtxSelectInLegend() {
+  contextMenu.visible = false
+  const seg = contextMenu.segment
+  if (!seg) return
+  emit('highlightClick', taskMergeKey(seg.task))
 }
 
 function onCopyScreenshot() {
@@ -1377,6 +1444,29 @@ function collapseAll() {
   scheduleRender()
 }
 
+let _labelResizeCleanup = null
+
+function onLabelResizeStart(e) {
+  const startX = e.clientX
+  const startW = props.labelWidth
+  const onMove = (ev) => {
+    const newW = Math.max(60, Math.min(600, startW + (ev.clientX - startX)))
+    setTimelineLayout({ labelW: newW })
+    emit('labelWidthChange', newW, false)
+  }
+  const onUp = () => {
+    document.removeEventListener('mousemove', onMove)
+    document.removeEventListener('mouseup', onUp)
+    document.body.classList.remove('col-resizing')
+    _labelResizeCleanup = null
+    emit('labelWidthChange', getTimelineLayout().labelW, true)
+  }
+  _labelResizeCleanup = onUp
+  document.body.classList.add('col-resizing')
+  document.addEventListener('mousemove', onMove)
+  document.addEventListener('mouseup', onUp)
+}
+
 // ---- Watchers ------------------------------------------------------------
 function rebuildPackedRows() {
   const layout = cachedRowLayout.value
@@ -1433,6 +1523,10 @@ function deferWasmSetup(trace) {
     setTimeout(run, 0)
   }
 }
+
+watch(() => props.labelWidth, (w) => {
+  setTimelineLayout({ labelW: w })
+})
 
 watch(() => props.trace, async (trace, prev) => {
   _ovBgCanvas = null
@@ -2065,6 +2159,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  _labelResizeCleanup?.()
   if (_resizeObs) _resizeObs.disconnect()
   if (_handler) _handler.destroy()
   if (_rafId) cancelAnimationFrame(_rafId)
@@ -2085,6 +2180,32 @@ onBeforeUnmount(() => {
   flex: 1;
   overflow: hidden;
   position: relative;
+}
+
+.label-resizer {
+  flex-shrink: 0;
+  width: 10px;
+  margin: 0 -4px;
+  cursor: col-resize;
+  position: relative;
+  z-index: 5;
+  touch-action: none;
+}
+.label-resizer::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  transform: translateX(-50%);
+  background: var(--border);
+  opacity: 0.6;
+  transition: opacity 0.1s, background 0.1s;
+}
+.label-resizer:hover::after {
+  opacity: 1;
+  background: var(--accent, #4a9eff);
 }
 
 .canvas-wrap {

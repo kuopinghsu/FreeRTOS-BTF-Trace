@@ -33,7 +33,6 @@
         >–</span>
       </div>
 
-      <!-- Deltas between adjacent placed cursors -->
       <template v-if="deltas.length > 0">
         <div class="delta-sep" />
         <div
@@ -53,7 +52,40 @@
       Click timeline to place cursors
     </div>
 
-    <!-- Clear All row -->
+    <div
+      v-if="comparisonRows.length > 0"
+      class="comparison-block"
+    >
+      <div class="comparison-title">
+        Task at cursor
+      </div>
+      <table class="comparison-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Time</th>
+            <th>Task</th>
+            <th>Δ C1</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr
+            v-for="row in comparisonRows"
+            :key="row.label"
+            class="comparison-row"
+            @click="emit('jumpToCursor', row.ns)"
+          >
+            <td>{{ row.label }}</td>
+            <td>{{ row.time }}</td>
+            <td class="task-cell">
+              {{ row.task }}
+            </td>
+            <td>{{ row.delta }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
     <div class="cursor-actions">
       <button
         class="action-btn"
@@ -69,17 +101,24 @@
 
 <script setup>
 import { computed } from 'vue'
-import { formatTime } from '../renderer/TimelineRenderer.js'
+import { formatTime } from '../utils/timeFormat.js'
 import { CURSOR_COLORS } from '../utils/cursorColors.js'
+import { cursorComparisonRows } from '../utils/cursorAnalysis.js'
 
 const props = defineProps({
   cursors:   { type: Array, required: true },
+  trace:     { type: Object, default: null },
   timeScale: { type: String, default: 'ns' },
 })
 
 const emit = defineEmits(['deleteCursor', 'jumpToCursor', 'clearAll'])
 
 const validCursors = computed(() => props.cursors.filter(c => c !== null))
+
+const comparisonRows = computed(() => {
+  if (!props.trace) return []
+  return cursorComparisonRows(props.trace, props.cursors, props.timeScale)
+})
 
 const deltas = computed(() => {
   const placed = []
@@ -192,6 +231,46 @@ const deltas = computed(() => {
 .delta-value {
   color: var(--fg);
   font-weight: 500;
+}
+
+.comparison-block {
+  padding: 6px 8px 4px;
+  border-top: 1px solid var(--border);
+}
+.comparison-title {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--fg-dim);
+  margin-bottom: 4px;
+  padding: 0 4px;
+}
+.comparison-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 10px;
+}
+.comparison-table th {
+  text-align: left;
+  color: var(--fg-dim);
+  font-weight: 500;
+  padding: 2px 4px;
+  border-bottom: 1px solid var(--border);
+}
+.comparison-row {
+  cursor: pointer;
+}
+.comparison-row:hover {
+  background: var(--tb-btn-hover);
+}
+.comparison-table td {
+  padding: 3px 4px;
+  vertical-align: top;
+}
+.task-cell {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .cursor-actions {

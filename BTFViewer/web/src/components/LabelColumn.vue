@@ -2,7 +2,7 @@
   <div
     ref="colEl"
     class="label-column"
-    :style="{ width: layout().labelW + 'px' }"
+    :style="{ width: labelWidth + 'px' }"
   >
     <!-- Ruler placeholder row -->
     <div
@@ -108,6 +108,7 @@ function layout() {
 
 const props = defineProps({
   trace:        { type: Object, default: null },
+  labelWidth:   { type: Number, default: 160 },
   viewMode:     { type: String, default: 'task' },
   expanded:     { type: Object, default: () => new Set() },   // Set
   stiExpanded:  { type: Object, default: () => new Set() },   // Set of expanded tag-event STI channels

@@ -95,12 +95,33 @@
       >
         Clear All
       </button>
+      <button
+        class="action-btn"
+        title="Export portable session (cursors, marks, viewport)"
+        @click="emit('exportSession')"
+      >
+        Session
+      </button>
+      <button
+        class="action-btn"
+        title="Import portable session JSON"
+        @click="triggerSessionImport"
+      >
+        Import Session
+      </button>
       <input
         ref="importInputEl"
         type="file"
         accept=".csv"
         style="display:none"
         @change="onImportFile"
+      >
+      <input
+        ref="sessionImportEl"
+        type="file"
+        accept=".json,application/json"
+        style="display:none"
+        @change="onSessionImportFile"
       >
     </div>
   </div>
@@ -115,10 +136,14 @@ const props = defineProps({
   timeScale: { type: String, default: 'ns' },
 })
 
-const emit = defineEmits(['addBookmark', 'addAnnotation', 'deleteMark', 'jumpTo', 'updateLabel', 'importMarks', 'clearMarks', 'selectMark'])
+const emit = defineEmits([
+  'addBookmark', 'addAnnotation', 'deleteMark', 'jumpTo', 'updateLabel',
+  'importMarks', 'clearMarks', 'selectMark', 'exportSession', 'importSession',
+])
 
 const selectedId    = ref(null)
 const importInputEl = ref(null)
+const sessionImportEl = ref(null)
 const editingId     = ref(null)
 const editingLabel  = ref('')
 
@@ -188,6 +213,17 @@ function exportCsv() {
 
 function triggerImport() {
   importInputEl.value?.click()
+}
+
+function triggerSessionImport() {
+  sessionImportEl.value?.click()
+}
+
+function onSessionImportFile(e) {
+  const file = e.target.files[0]
+  if (!file) return
+  emit('importSession', file)
+  e.target.value = ''
 }
 
 /** Convert a value from one timescale to another (both in { 'ns','us','ms','s' }). */

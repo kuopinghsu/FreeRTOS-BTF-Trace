@@ -147,7 +147,12 @@ export class InteractionHandler {
     this._placeCursor(ns, shiftSnap)
   }
 
+  zoomToSegment(seg) {
+    this._zoomToSegment(seg)
+  }
+
   removeNearestCursor(ns) {
+    this._opts.onBeforeCursorChange?.()
     const vp = this._opts.getViewport()
     if (!vp) return
     const snapNs = 5 * this._nsPerPx()
@@ -170,6 +175,7 @@ export class InteractionHandler {
   }
 
   clearAllCursors() {
+    this._opts.onBeforeCursorChange?.()
     const mc = maxCursorsFrom(this._opts)
     this._cursors = Array.from({ length: mc }, () => null)
     this._lastActiveCursorIdx = -1
@@ -452,6 +458,7 @@ export class InteractionHandler {
         const nsPerPx = span / pxBase
         const cursorHit = findNearestCursorIndex(this._cursors, t, this._dragCursorPx * nsPerPx)
         if (cursorHit !== -1) {
+          this._opts.onBeforeCursorChange?.()
           this._draggingCursorIdx = cursorHit
           this._canvas.style.cursor = vert ? 'ns-resize' : 'ew-resize'
           e.preventDefault()
@@ -460,6 +467,7 @@ export class InteractionHandler {
         const marks = this._opts.getMarks?.() || []
         const markHit = findNearestMark(marks, t, this._dragMarkPx * nsPerPx)
         if (markHit) {
+          this._opts.onBeforeMarkChange?.()
           this._draggingMarkId = markHit.id
           this._canvas.style.cursor = vert ? 'ns-resize' : 'ew-resize'
           e.preventDefault()
@@ -760,8 +768,17 @@ export class InteractionHandler {
     const cx   = e.clientX - rect.left
     const cy   = e.clientY - rect.top
     const t    = this._canvasToTime(cx, cy)
+    let segment = null
+    const traceObj = this._opts.getTrace?.()
+    const ropts = this._opts.getOptions?.()
+    const vp = this._opts.getViewport()
+    if (traceObj && ropts && vp && t !== null) {
+      segment = this._isVertical()
+        ? hitTestSegmentVertical(traceObj, vp, ropts, cx, cy)
+        : hitTestSegment(traceObj, vp, ropts, cx, cy)
+    }
     if (t !== null) {
-      this._opts.onContextMenu?.({ ns: t, x: e.clientX, y: e.clientY, shiftKey: e.shiftKey })
+      this._opts.onContextMenu?.({ ns: t, x: e.clientX, y: e.clientY, shiftKey: e.shiftKey, segment })
     }
   }
 
@@ -775,6 +792,7 @@ export class InteractionHandler {
   }
 
   _placeCursor(t, shiftSnap = false) {
+    this._opts.onBeforeCursorChange?.()
     const trace = this._opts.getTrace?.()
     let placeT = t
     if (shiftSnap && trace) {

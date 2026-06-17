@@ -17093,6 +17093,7 @@ class MainWindow(QMainWindow):
         self._range_stats_label.setStyleSheet("color:#999;")
         self._range_stats_label.setWordWrap(True)
         marks_v.addWidget(self._range_stats_label)
+
         marks_io_row = QHBoxLayout()
         marks_import_btn = QPushButton("v Import Marks")
         marks_import_btn.setToolTip("Load bookmarks and annotations from a CSV file")
@@ -18202,30 +18203,11 @@ class MainWindow(QMainWindow):
         self._marks_dock.raise_()
 
     def _add_annotation_at_ns(self, ns: int) -> None:
-        """Prompt for a note then add an annotation at an explicit timestamp."""
+        """Add an annotation at timestamp with an empty note."""
         if self._trace is None:
             return
-        unit = self._current_time_unit()
-        dlg = QInputDialog(self)
-        dlg.setWindowTitle("Add Annotation")
-        dlg.setLabelText(f"Note for {_format_time(ns, unit, decimals=3)}:")
-        dlg.setInputMode(QInputDialog.TextInput)
-        dlg.adjustSize()
-        # Explicitly center over the main window.
-        # QInputDialog.getText() can misplace the dialog at (0,0) on first show
-        # because Qt resolves the size hint after the initial position is set.
-        _g = self.geometry()
-        dlg.move(
-            _g.x() + (_g.width()  - dlg.sizeHint().width())  // 2,
-            _g.y() + (_g.height() - dlg.sizeHint().height()) // 2,
-        )
-        if dlg.exec() != QDialog.Accepted:
-            return
-        note = dlg.textValue().strip()
-        if not note:
-            return
         self._push_undo_snapshot()
-        self._annotations.append(TraceAnnotation(id=self._mark_next_id, ns=ns, note=note))
+        self._annotations.append(TraceAnnotation(id=self._mark_next_id, ns=ns, note=""))
         self._mark_next_id += 1
         self._annotations.sort(key=lambda a: a.ns)
         self._rebuild_annotation_list()
@@ -18277,15 +18259,20 @@ class MainWindow(QMainWindow):
         aid = int(item.data(Qt.UserRole))
         for a in self._annotations:
             if a.id == aid:
-                note, ok = QInputDialog.getText(
-                    self, "Edit Annotation", "Note:", QLineEdit.Normal, a.note
-                )
-                if ok and note.strip():
-                    self._push_undo_snapshot()
-                    a.note = note.strip()
-                    self._rebuild_annotation_list()
-                    self._recompute_find_hits()
-                    self._save_current_trace_state()
+                dlg = QInputDialog(self)
+                dlg.setWindowTitle("Edit Annotation")
+                dlg.setLabelText("Note:")
+                dlg.setTextValue(a.note)
+                dlg.setInputMode(QInputDialog.TextInput)
+                dlg.adjustSize()
+                if _exec_centred(dlg, self) != QDialog.Accepted:
+                    return
+                note = dlg.textValue().strip()
+                self._push_undo_snapshot()
+                a.note = note
+                self._rebuild_annotation_list()
+                self._recompute_find_hits()
+                self._save_current_trace_state()
                 break
 
     def _rebuild_annotation_list(self) -> None:

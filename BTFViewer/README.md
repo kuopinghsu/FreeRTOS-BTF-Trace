@@ -383,7 +383,7 @@ In **Vertical** mode:
 - The ruler column (left edge) is frozen and always shows time labels as you scroll horizontally.
 - The label row (top edge) is frozen and always shows task/core names as you scroll vertically.
 - The top-left corner area shows the **TICK** band label when TICK events are present.
-- Drag the resize handle (the horizontal border between the label row and the timeline) to resize the label area.
+- Drag the resize handle on the **right edge** of the label column (horizontal layout) to resize the label area. Width is saved in Settings / `localStorage`.
 
 ## Task Labels
 
@@ -772,7 +772,12 @@ A **migration** is recorded when consecutive slices of the same task (merge-key)
 | **1:1** zoom toolbar button | ✓ | ✓ |
 | Jump to time / trace start / end | ✓ | ✓ |
 | Drag-and-drop `.btf` open | ✓ | ✓ |
-| **Open Recent** (8 filenames) | ✓ | ✓ |
+| **Open Recent** (8 filenames) | ✓ | ✓ (Chromium: one-click reopen when opened via File System Access) |
+| Segment right-click (copy task, zoom, select in legend) | ✓ | ✓ |
+| Cursor comparison table (task at each cursor) | ✓ | ✓ |
+| Global undo/redo (cursors + marks) | ✓ | ✓ |
+| Portable session export/import (JSON) | — | ✓ |
+| Drag-resize label column | ✓ | ✓ |
 | Direct clipboard copy (`Ctrl+Shift+C`) | ✓ | ✓ |
 | Persist panel widths / stats table heights | ✓ | ✓ |
 | Restore tab names on page load (re-open files to load) | ✓ | ✓ |

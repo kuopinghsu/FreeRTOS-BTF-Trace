@@ -20,9 +20,10 @@
     <div class="tb-sep" />
 
     <!-- File open -->
-    <label
+    <button
       class="tb-btn file-btn"
       title="Open BTF file"
+      @click="onOpenClick"
     >
       <svg
         viewBox="0 0 16 16"
@@ -33,13 +34,14 @@
         <path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h2.764c.958 0 1.76.56 2.311 1.184C7.985 3.648 8.48 4 9 4h4.5A1.5 1.5 0 0 1 15 5.5v7a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5v-9z" />
       </svg>
       Open
-      <input
-        type="file"
-        accept=".btf"
-        style="display:none"
-        @change="onFileChange"
-      >
-    </label>
+    </button>
+    <input
+      ref="fileInputEl"
+      type="file"
+      accept=".btf"
+      style="display:none"
+      @change="onFileChange"
+    >
 
     <button
       class="tb-btn"
@@ -481,6 +483,7 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { getTimelineLayout } from '../utils/timelineLayout.js'
+import { supportsFileHandles, pickAndReadBtf } from '../utils/recentFileHandles.js'
 
 const props = defineProps({
   modelValue:  { type: Object,  required: true },
@@ -502,12 +505,26 @@ const emit = defineEmits([
 ])
 
 const recentOpen = ref(false)
+const fileInputEl = ref(null)
 
 const zoom1to1Title = computed(() => {
   const tspx = getTimelineLayout().timescalePerPxDefault
   const u = props.timeScale || 'ns'
   return `Zoom to 1:1 scale (${tspx} ${u}/px)`
 })
+
+async function onOpenClick() {
+  if (supportsFileHandles()) {
+    const file = await pickAndReadBtf()
+    if (file) {
+      emit('trace-reading', { name: file.name })
+      const text = await file.text()
+      emit('trace-loaded', { text, name: file.name })
+    }
+    return
+  }
+  fileInputEl.value?.click()
+}
 
 function onFileChange(e) {
   const file = e.target.files[0]

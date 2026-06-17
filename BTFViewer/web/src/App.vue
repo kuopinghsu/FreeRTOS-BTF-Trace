@@ -107,6 +107,7 @@
             :options="timelineOptions"
             :cursors="cursors"
             :max-cursors="appSettings.maxCursors"
+            :label-width="appSettings.labelWidth"
             :find-hits="findHits"
             :find-marker-ns="findMarkerNs"
             :persisted-viewport="timelineViewport"
@@ -122,6 +123,9 @@
             @mark-move="onMoveMark"
             @copy-screenshot="onCopyScreenshot"
             @export-svg="onExportSvg"
+            @before-cursor-change="pushUndoSnapshot"
+            @before-mark-change="pushUndoSnapshot"
+            @label-width-change="onLabelWidthChange"
           />
         </div>
 
@@ -177,6 +181,7 @@
               </div>
               <CursorPanel
                 :cursors="cursors"
+                :trace="trace"
                 :time-scale="trace.timeScale"
                 @delete-cursor="onDeleteCursor"
                 @jump-to-cursor="timelinePanelRef?.jumpToNs($event)"
@@ -254,6 +259,8 @@
                 @update-label="onUpdateMarkLabel"
                 @import-marks="onImportMarks"
                 @clear-marks="onClearMarks"
+                @export-session="onExportSession"
+                @import-session="onImportSession"
                 @select-mark="timelineOptions.selectedMarkId = $event"
               />
             </div>
@@ -421,6 +428,12 @@
               <div class="k">
                 Shift+C
               </div><div>Clear all cursors</div>
+              <div class="k">
+                Ctrl+Z
+              </div><div>Undo cursor / mark changes</div>
+              <div class="k">
+                Ctrl+Y
+              </div><div>Redo</div>
               <div class="k">
                 Ctrl+F
               </div><div>Open Find panel</div>
@@ -738,6 +751,11 @@ import {
 import { useTraceTabs } from './composables/useTraceTabs.js'
 import { loadSession, saveSession, getSavedTabState, applySavedTabState, buildSessionSnapshot, isRestorableViewport, applySavedLayout } from './utils/sessionStore.js'
 import { loadRecentFiles, addRecentFile } from './utils/recentFilesStore.js'
+import { readRecentFile, storeFileHandle } from './utils/recentFileHandles.js'
+import { createUndoStack } from './utils/undoStack.js'
+import {
+  buildPortableSession, parsePortableSession, applyPortableSession, downloadPortableSession,
+} from './utils/sessionPortable.js'
 import { computeFindHits, stepFindHitIndex } from './utils/findAnalysis.js'
 import exampleBtfB64   from 'virtual:example-btf'
 
@@ -859,6 +877,8 @@ const timelineOptions = reactive({
   showHoverHighlight: true,
   layoutRev:       0,
 })
+
+const undoStack = createUndoStack()
 
 function syncTimelineOptionsFromSettings(s = appSettings) {
   timelineOptions.darkMode = s.darkMode
@@ -1042,6 +1062,7 @@ watch(marks, (m) => {
 }, { deep: true })
 
 watch(activeTabId, () => {
+  undoStack.clear()
   const tab = activeTab.value
   timelineOptions.highlightKey = tab?.pinnedHighlightKey ?? null
   timelineOptions.highlightSegment = tab?.highlightSegment ?? null
@@ -1187,6 +1208,7 @@ async function attachParsedTrace(name, packedOrTrace) {
     const tab = openTab(name || 'trace.btf')
     resizeTabCursors(tabs.value, appSettings.maxCursors)
     resetTabForLoad(tab)
+    undoStack.clear()
     timelineOptions.taskFilterKeys = null
     timelineOptions.heatmapFilterLabel = null
     restoreTabState(tab)
@@ -1416,7 +1438,18 @@ function focusFindPanel() {
   nextTick(() => findPanelRef.value?.focusInput())
 }
 
-function onOpenRecent(name) {
+async function onOpenRecent(name) {
+  const file = await readRecentFile(name)
+  if (file) {
+    onTraceReading({ name: file.name })
+    try {
+      const text = await file.text()
+      await onTraceLoaded({ text, name: file.name })
+    } catch {
+      showToast(`Failed to read "${name}"`, 'error')
+    }
+    return
+  }
   showToast(`Use Open to select "${name}"`, 'info')
 }
 
@@ -1439,7 +1472,7 @@ function onDragLeave() {
   if (_dragDepth === 0) dragOver.value = false
 }
 
-function onFileDrop(e) {
+async function onFileDrop(e) {
   _dragDepth = 0
   dragOver.value = false
   const file = e.dataTransfer?.files?.[0]
@@ -1448,6 +1481,13 @@ function onFileDrop(e) {
     showToast('Only .btf files are supported', 'error')
     return
   }
+  try {
+    const item = e.dataTransfer?.items?.[0]
+    if (item?.getAsFileSystemHandle) {
+      const handle = await item.getAsFileSystemHandle()
+      if (handle) await storeFileHandle(file.name, handle)
+    }
+  } catch { /* FSA unavailable */ }
   onTraceReading({ name: file.name })
   const reader = new FileReader()
   reader.onload = (ev) => onTraceLoaded({ text: ev.target.result, name: file.name })
@@ -1611,9 +1651,55 @@ function clearCursors() {
 }
 
 function onDeleteCursor(idx) {
+  pushUndoSnapshot()
   const c = [...cursors.value]
   c[idx] = null
   cursors.value = c
+}
+
+function pushUndoSnapshot() {
+  if (!activeTab.value) return
+  undoStack.push({
+    cursors: cursors.value,
+    marks: marks.value,
+    markNextId: activeTab.value.markNextId,
+  })
+}
+
+function applyUndoSnapshot(snap) {
+  if (!snap || !activeTab.value) return
+  cursors.value = [...snap.cursors]
+  marks.value = JSON.parse(JSON.stringify(snap.marks))
+  if (snap.markNextId != null) activeTab.value.markNextId = snap.markNextId
+  scheduleSessionSave()
+  scheduleRender()
+}
+
+function onUndo() {
+  const snap = undoStack.undo({
+    cursors: cursors.value,
+    marks: marks.value,
+    markNextId: activeTab.value?.markNextId ?? 1,
+  })
+  if (snap) applyUndoSnapshot(snap)
+}
+
+function onRedo() {
+  const snap = undoStack.redo({
+    cursors: cursors.value,
+    marks: marks.value,
+    markNextId: activeTab.value?.markNextId ?? 1,
+  })
+  if (snap) applyUndoSnapshot(snap)
+}
+
+function onLabelWidthChange(w, commit = true) {
+  appSettings.labelWidth = w
+  scheduleRender()
+  if (commit) {
+    saveSettings(appSettings)
+    timelineOptions.layoutRev += 1
+  }
 }
 
 function clearCpuLoadSelection() {
@@ -1875,6 +1961,17 @@ function onGlobalKeydown(e) {
     openSettingsDialog()
     return
   }
+  if (mod && e.key.toLowerCase() === 'z' && !e.shiftKey) {
+    e.preventDefault()
+    onUndo()
+    return
+  }
+  if (mod && (e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z'))) {
+    e.preventDefault()
+    onRedo()
+    return
+  }
+
   if (mod && e.key.toLowerCase() === 'f') {
     e.preventDefault()
     focusFindPanel()
@@ -2107,6 +2204,7 @@ function onAddAnnotation(ns) {
 
 function addMarkAtNs(ns, type = 'bookmark') {
   if (!trace.value || !activeTab.value) return
+  pushUndoSnapshot()
   const clamped = Math.max(trace.value.timeMin, Math.min(trace.value.timeMax, ns))
   marks.value.push({
     id: activeTab.value.markNextId++,
@@ -2118,6 +2216,7 @@ function addMarkAtNs(ns, type = 'bookmark') {
 }
 
 function onDeleteMark(id) {
+  pushUndoSnapshot()
   marks.value = marks.value.filter(m => m.id !== id)
 }
 
@@ -2170,6 +2269,7 @@ function onUpdateMarkLabel({ id, label }) {
 
 function onImportMarks(imported) {
   if (!activeTab.value) return
+  pushUndoSnapshot()
   for (const { ns, label, type } of imported) {
     marks.value.push({
       id: activeTab.value.markNextId++,
@@ -2182,7 +2282,53 @@ function onImportMarks(imported) {
 }
 
 function onClearMarks() {
+  pushUndoSnapshot()
   marks.value = []
+}
+
+function onExportSession() {
+  if (!activeTab.value) return
+  const payload = buildPortableSession({
+    traceName: activeTab.value.name,
+    cursors: cursors.value,
+    marks: marks.value,
+    markNextId: activeTab.value.markNextId,
+    timelineViewport: { ...timelineViewport.value },
+    timelineOptions,
+    findQuery: findQuery.value,
+    findMode: findMode.value,
+    pinnedHighlightKey: pinnedHighlightKey.value,
+  })
+  const base = (activeTab.value.name || 'trace').replace(/\.btf$/i, '')
+  downloadPortableSession(payload, `${base}-session.json`)
+  showToast('Session exported', 'info')
+}
+
+async function onImportSession(file) {
+  if (!activeTab.value) return
+  try {
+    const text = await file.text()
+    const data = parsePortableSession(text)
+    if (data.traceName && activeTab.value.name && data.traceName !== activeTab.value.name) {
+      showToast(`Session is for "${data.traceName}" (current: ${activeTab.value.name})`, 'info')
+    }
+    pushUndoSnapshot()
+    applyPortableSession(activeTab.value, data, timelineOptions)
+    resizeTabCursors(tabs.value, appSettings.maxCursors)
+    pinnedHighlightKey.value = data.pinnedHighlightKey ?? null
+    timelineOptions.highlightKey = data.pinnedHighlightKey ?? null
+    timelineOptions.lockedTaskKey = data.pinnedHighlightKey ?? null
+    if (data.findQuery != null) findQuery.value = data.findQuery
+    if (data.findMode != null) findMode.value = data.findMode
+    nextTick(() => {
+      applyTimelineViewport()
+      if (findQuery.value) recomputeFind()
+      scheduleRender()
+    })
+    showToast('Session imported', 'info')
+  } catch (err) {
+    showToast(err?.message || 'Failed to import session', 'error')
+  }
 }
 </script>
 
