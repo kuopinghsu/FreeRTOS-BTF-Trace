@@ -23,6 +23,7 @@
         :key="row.key"
         class="cpu-load-row"
         :class="{ collapsed: row.collapsed }"
+        :style="{ height: `${row.height}px`, minHeight: `${row.height}px` }"
       >
         <button
           type="button"
@@ -197,7 +198,7 @@ import { coreColor, isIdleTaskName, parseTaskName, taskColor, taskDisplayName, t
 import {
   avgBinsForNsRange,
   CPU_LOAD_COLLAPSED_H,
-  CPU_LOAD_ROW_H,
+  CPU_LOAD_ROW_GAP,
   cursorRangeShade,
   getPlacedCursorRange,
   loadAtNs,
@@ -229,6 +230,8 @@ const props = defineProps({
   cursors: { type: Array, default: () => [] },
   hoverTime: { type: Number, default: null },
   marks: { type: Array, default: () => [] },
+  cpuLoadRowH: { type: Number, default: 30 },
+  layoutRev: { type: Number, default: 0 },
 })
 const emit = defineEmits(['clearSelection', 'viewportChange'])
 
@@ -259,6 +262,7 @@ const binsState = computed(() => {
 })
 
 const rows = computed(() => {
+  void props.layoutRev
   const trace = props.trace
   if (!trace) return []
   const selectedTask = props.selectedTask
@@ -278,6 +282,7 @@ const rows = computed(() => {
 })
 
 const rowModels = computed(() => {
+  void props.cpuLoadRowH
   const trace = props.trace
   const { timeStart, timeEnd } = props.viewport
   if (!trace || timeEnd <= timeStart) return []
@@ -293,7 +298,7 @@ const rowModels = computed(() => {
 
   return rows.value.map(row => {
     const collapsed = row.kind === 'core' && collapsedCores.value.has(row.key)
-    const height = collapsed ? CPU_LOAD_COLLAPSED_H : CPU_LOAD_ROW_H
+    const height = collapsed ? CPU_LOAD_COLLAPSED_H : props.cpuLoadRowH
     const bins = binsForRow(row.kind, row.key)
     const rects = []
 
@@ -422,7 +427,7 @@ function _buildWheelMutator(e) {
       const dx = e.shiftKey ? e.deltaY : e.deltaX
       return vp => ({ ...vp, scrollX: Math.max(0, (vp.scrollX || 0) + dx) })
     }
-    const dy = e.deltaMode === 1 ? e.deltaY * CPU_LOAD_ROW_H : e.deltaY
+    const dy = e.deltaMode === 1 ? e.deltaY * props.cpuLoadRowH : e.deltaY
     return vp => applyPanPlotY(vp, props.trace, dy, plotHeight, TITLE_H)
   }
   const isHorizInput = Math.abs(e.deltaX) > Math.abs(e.deltaY)
@@ -432,7 +437,7 @@ function _buildWheelMutator(e) {
   if (e.shiftKey) {
     return vp => applyPanPlotX(vp, props.trace, e.deltaY, plotWidth)
   }
-  const dy = e.deltaMode === 1 ? e.deltaY * CPU_LOAD_ROW_H : e.deltaY
+  const dy = e.deltaMode === 1 ? e.deltaY * props.cpuLoadRowH : e.deltaY
   return vp => ({ ...vp, scrollY: Math.max(0, (vp.scrollY || 0) + dy) })
 }
 
@@ -447,7 +452,7 @@ function onWheel(e) {
       && !e.ctrlKey && !e.metaKey && !e.shiftKey
       && Math.abs(e.deltaY) >= Math.abs(e.deltaX)) {
     _wheelQueue = null
-    const dy = e.deltaMode === 1 ? e.deltaY * CPU_LOAD_ROW_H : e.deltaY
+    const dy = e.deltaMode === 1 ? e.deltaY * props.cpuLoadRowH : e.deltaY
     _rowsScrollDelta += dy
     if (!_wheelFlushRaf) {
       _wheelFlushRaf = requestAnimationFrame(_flushWheel)
@@ -609,14 +614,7 @@ watch(() => props.trace, () => {
 .cpu-load-row {
   display: flex;
   flex-shrink: 0;
-  height: 30px;
-  min-height: 30px;
   border-bottom: 1px solid var(--border);
-}
-
-.cpu-load-row.collapsed {
-  height: 20px;
-  min-height: 20px;
 }
 
 .cpu-load-label {

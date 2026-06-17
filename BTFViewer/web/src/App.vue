@@ -24,10 +24,11 @@
       @add-mark="onAddMark"
       @copy-screenshot="onCopyScreenshot"
       @export-svg="onExportSvg"
-      @show-heatmap="heatmapOpen = true"
+      @show-heatmap="onOpenHeatmap"
       @clear-task-filter="clearHeatmapTaskFilter"
       @show-help="openHelpDialog"
       @show-about="openAboutDialog"
+      @show-settings="openSettingsDialog"
     />
 
     <!-- Trace tabs -->
@@ -128,6 +129,8 @@
           :cursors="cursors"
           :hover-time="cpuLoadHoverTime"
           :marks="marks"
+          :cpu-load-row-h="appSettings.cpuLoadRowH"
+          :layout-rev="timelineOptions.layoutRev"
           @clear-selection="clearCpuLoadSelection"
           @viewport-change="onCpuLoadViewportChange"
         />
@@ -216,7 +219,10 @@
               </div>
             </div>
 
-            <div class="panel-section">
+            <div
+              v-if="appSettings.showMarks"
+              class="panel-section"
+            >
               <div class="panel-header">
                 Marks
               </div>
@@ -234,7 +240,10 @@
               />
             </div>
 
-            <div class="panel-section flex-fill">
+            <div
+              v-if="appSettings.showLegend"
+              class="panel-section flex-fill"
+            >
               <div class="panel-header">
                 Legend
                 <span class="task-count">({{ trace.tasks.length }})</span>
@@ -261,6 +270,7 @@
                 :trace="trace"
                 :cursors="cursors"
                 :tabs="tabs"
+                :stats-paused="statsPaused"
                 @highlight-task="onHighlightClick"
                 @select-segment="onStatsSelectSegment"
               />
@@ -279,6 +289,7 @@
             Cursor / Bookmark
           </button>
           <button
+            v-if="appSettings.showStats"
             class="panel-tab"
             :class="{ active: rightPanelTab === 'stats' }"
             role="tab"
@@ -290,6 +301,16 @@
         </div>
       </div>
     </div>
+
+    <!-- Settings dialog -->
+    <SettingsDialog
+      v-if="settingsOpen"
+      :model-value="appSettings"
+      :time-scale="trace?.timeScale || 'ns'"
+      @close="onSettingsCancel"
+      @preview="onSettingsPreview"
+      @save="onSettingsSave"
+    />
 
     <!-- Help dialog -->
     <div
@@ -323,10 +344,13 @@
             <div class="help-grid">
               <div class="k">
                 ?
-              </div><div>Open/close this help</div>
+              </div><div>Open/close help</div>
+              <div class="k">
+                Ctrl+,
+              </div><div>Open settings</div>
               <div class="k">
                 Esc
-              </div><div>Close help</div>
+              </div><div>Close dialog</div>
               <div class="k">
                 1
               </div><div>Task view</div>
@@ -537,7 +561,7 @@
       :task-filter-active="!!timelineOptions.taskFilterKeys?.length"
       :task-filter-label="timelineOptions.heatmapFilterLabel"
       :task-filter-count="timelineOptions.taskFilterKeys?.length ?? 0"
-      @close="heatmapOpen = false"
+      @close="onHeatmapClose"
       @drill-down="onHeatmapDrillDown"
       @clear-filter="clearHeatmapTaskFilter"
     />
@@ -604,10 +628,17 @@ import StatisticsPanel  from './components/StatisticsPanel.vue'
 import MarksPanel       from './components/MarksPanel.vue'
 import SnapshotEditor   from './components/SnapshotEditor.vue'
 import MigrationHeatmapDialog from './components/MigrationHeatmapDialog.vue'
+import SettingsDialog from './components/SettingsDialog.vue'
 import { formatTime }   from './renderer/TimelineRenderer.js'
-import { taskDisplayName, taskMergeKey } from './utils/colors.js'
+import { taskDisplayName, taskMergeKey, setColorblindMode } from './utils/colors.js'
+import {
+  loadSettings, saveSettings, applySettingsToRuntime, resizeTabCursors, normalizeSettings,
+} from './utils/settingsStore.js'
 import { traceIsMultiCore } from './utils/migrationAnalysis.js'
-import { cpuLoadPreferredPaneHeight, CPU_LOAD_PANE_DEFAULT_H, CPU_LOAD_PANE_MIN_H, CPU_LOAD_PANE_MAX_H } from './utils/cpuLoadHelpers.js'
+import {
+  cpuLoadPreferredPaneHeight, cpuLoadPaneDefaultH, cpuLoadPaneMaxH,
+  CPU_LOAD_PANE_MIN_H,
+} from './utils/cpuLoadHelpers.js'
 import { useTraceTabs } from './composables/useTraceTabs.js'
 import { loadSession, saveSession, getSavedTabState, applySavedTabState, buildSessionSnapshot, isRestorableViewport } from './utils/sessionStore.js'
 import exampleBtfB64   from 'virtual:example-btf'
@@ -638,7 +669,11 @@ const loadingMsg = ref('')
 const loadingFileName = ref('')
 const helpOpen   = ref(false)
 const aboutOpen  = ref(false)
+const settingsOpen = ref(false)
 const heatmapOpen = ref(false)
+/** Viewport/cursors saved when migration heatmap opens; restored by Show all tasks. */
+let _heatmapRestoreSnapshot = null
+const statsPaused = ref(false)
 const rightPanelTab = ref('stats')
 
 // ---- Snapshot editor -------------------------------------------------------
@@ -651,14 +686,19 @@ const RIGHT_PANEL_MIN_W = 180
 const RIGHT_PANEL_MAX_W = 520
 let _rightPanelResize = null
 
-const cpuLoadPaneHeight = ref(CPU_LOAD_PANE_DEFAULT_H)
+const appSettings = reactive(applySettingsToRuntime(loadSettings()))
+
+const cpuLoadPaneHeight = ref(cpuLoadPaneDefaultH())
 let _cpuLoadResize = null
 let _cpuLoadUserSized = false
 
 function autofitCpuLoadPaneHeight() {
   if (_cpuLoadUserSized || !timelineOptions.showCpuLoad) return
   const tr = trace.value
-  if (!tr) return
+  if (!tr) {
+    cpuLoadPaneHeight.value = cpuLoadPaneDefaultH()
+    return
+  }
   cpuLoadPaneHeight.value = cpuLoadPreferredPaneHeight(
     tr,
     timelineOptions.viewMode,
@@ -696,7 +736,59 @@ const timelineOptions = reactive({
   taskFilterKeys:     null,
   heatmapFilterLabel: null,
   lockedTaskKey:   null,
+  showHoverHighlight: true,
+  layoutRev:       0,
 })
+
+function syncTimelineOptionsFromSettings(s = appSettings) {
+  timelineOptions.darkMode = s.darkMode
+  timelineOptions.showGrid = s.showGrid
+  timelineOptions.showSti = s.showSti
+  timelineOptions.showCpuLoad = s.showCpuLoad
+  timelineOptions.showHoverHighlight = s.hoverHighlight
+  timelineOptions.layoutRev += 1
+  if (!s.showStats && rightPanelTab.value === 'stats') {
+    rightPanelTab.value = 'marks'
+  }
+}
+
+function applyAppSettings(next, { silent = false, persist = true } = {}) {
+  Object.assign(appSettings, applySettingsToRuntime(next))
+  setColorblindMode(appSettings.colorblindSafe)
+  syncTimelineOptionsFromSettings()
+  resizeTabCursors(tabs.value, appSettings.maxCursors)
+  if (persist) saveSettings(appSettings)
+  scheduleRender()
+  autofitCpuLoadPaneHeight()
+  if (!silent) showToast('Settings saved', 'info')
+}
+
+let settingsRevertSnapshot = null
+
+function openSettingsDialog() {
+  helpOpen.value = false
+  aboutOpen.value = false
+  settingsRevertSnapshot = normalizeSettings(appSettings)
+  settingsOpen.value = true
+}
+
+function onSettingsPreview(next) {
+  applyAppSettings(next, { silent: true, persist: false })
+}
+
+function onSettingsCancel() {
+  if (settingsRevertSnapshot) {
+    applyAppSettings(settingsRevertSnapshot, { silent: true, persist: false })
+    settingsRevertSnapshot = null
+  }
+  settingsOpen.value = false
+}
+
+function onSettingsSave(next) {
+  applyAppSettings(next, { silent: false, persist: true })
+  settingsRevertSnapshot = null
+  settingsOpen.value = false
+}
 const cpuLoadHoverTime = ref(null)
 
 const cpuLoadSelectedTask = computed(() => {
@@ -848,6 +940,7 @@ watch(
     timelineOptions.showCpuLoad,
     cpuLoadExpanded.value,
     cpuLoadSelectedTask.value,
+    appSettings.cpuLoadRowH,
   ],
   () => nextTick(() => autofitCpuLoadPaneHeight()),
 )
@@ -972,6 +1065,7 @@ async function attachParsedTrace(name, packedOrTrace) {
     const { unpackTrace } = await import('./parser/tracePack.js')
     const trace = packedOrTrace?.segStore ? packedOrTrace : unpackTrace(packedOrTrace)
     const tab = openTab(name || 'trace.btf')
+    resizeTabCursors(tabs.value, appSettings.maxCursors)
     resetTabForLoad(tab)
     timelineOptions.taskFilterKeys = null
     timelineOptions.heatmapFilterLabel = null
@@ -1260,18 +1354,68 @@ function onMigratedFilterChange(enabled) {
   else scheduleRender()
 }
 
+function onOpenHeatmap() {
+  syncTimelineViewport()
+  if (activeTab.value) {
+    _heatmapRestoreSnapshot = {
+      viewport: { ...activeTab.value.timelineViewport },
+      cursors: [...cursors.value],
+      pinnedHighlightKey: pinnedHighlightKey.value,
+      highlightSegment: highlightSegment.value
+        ? { ...highlightSegment.value } : null,
+      highlightKey: timelineOptions.highlightKey,
+      lockedTaskKey: timelineOptions.lockedTaskKey,
+      viewMode: timelineOptions.viewMode,
+    }
+  }
+  heatmapOpen.value = true
+}
+
+function onHeatmapClose() {
+  heatmapOpen.value = false
+}
+
 function clearHeatmapTaskFilter() {
   const hadFilter = !!timelineOptions.taskFilterKeys?.length
+  const snap = _heatmapRestoreSnapshot
+  statsPaused.value = true
+
   timelineOptions.taskFilterKeys = null
   timelineOptions.heatmapFilterLabel = null
-  clearCursors()
   pinnedHighlightKey.value = null
   timelineOptions.highlightKey = null
   timelineOptions.highlightSegment = null
   timelineOptions.lockedTaskKey = null
   highlightSegment.value = null
-  scheduleRender()
-  if (hadFilter) showToast('Showing all tasks', 'info')
+
+  const restored = !!(snap && activeTab.value)
+  if (restored) {
+    timelineOptions.viewMode = snap.viewMode
+    pinnedHighlightKey.value = snap.pinnedHighlightKey
+    highlightSegment.value = snap.highlightSegment
+    timelineOptions.highlightKey = snap.highlightKey
+    timelineOptions.highlightSegment = snap.highlightSegment
+    timelineOptions.lockedTaskKey = snap.lockedTaskKey
+    cursors.value = [...snap.cursors]
+    nextTick(() => {
+      timelinePanelRef.value?.applyViewport?.(snap.viewport)
+      syncTimelineViewport()
+      scheduleRender()
+      requestAnimationFrame(() => {
+        statsPaused.value = false
+      })
+    })
+  } else {
+    clearCursors()
+    scheduleRender()
+    requestAnimationFrame(() => {
+      statsPaused.value = false
+    })
+  }
+
+  _heatmapRestoreSnapshot = null
+
+  if (hadFilter || restored) showToast('Showing all tasks', 'info')
 }
 
 function onHeatmapDrillDown(payload) {
@@ -1280,7 +1424,7 @@ function onHeatmapDrillDown(payload) {
   timelineOptions.taskFilterKeys = payload.mergeKeys
   timelineOptions.heatmapFilterLabel = payload.pairLabel
 
-  const c = [...cursors.value]
+  const c = Array(appSettings.maxCursors).fill(null)
   c[0] = payload.binLo
   c[1] = payload.binHi
   cursors.value = c
@@ -1371,7 +1515,7 @@ function onCpuLoadResizeMove(e) {
   const dy = _cpuLoadResize.startY - e.clientY
   cpuLoadPaneHeight.value = Math.max(
     CPU_LOAD_PANE_MIN_H,
-    Math.min(CPU_LOAD_PANE_MAX_H, _cpuLoadResize.startH + dy),
+    Math.min(cpuLoadPaneMaxH(), _cpuLoadResize.startH + dy),
   )
   scheduleRender()
 }
@@ -1391,11 +1535,13 @@ function isTypingTarget(el) {
 
 function openHelpDialog() {
   aboutOpen.value = false
+  if (settingsOpen.value) onSettingsCancel()
   helpOpen.value = true
 }
 
 function openAboutDialog() {
   helpOpen.value = false
+  if (settingsOpen.value) onSettingsCancel()
   aboutOpen.value = true
 }
 
@@ -1417,7 +1563,10 @@ function onGlobalKeydown(e) {
 
   if (e.key === 'Escape') {
     if (heatmapOpen.value) {
-      heatmapOpen.value = false
+      onHeatmapClose()
+      e.preventDefault()
+    } else if (settingsOpen.value) {
+      onSettingsCancel()
       e.preventDefault()
     } else if (helpOpen.value) {
       helpOpen.value = false
@@ -1429,7 +1578,13 @@ function onGlobalKeydown(e) {
     return
   }
 
-  if (helpOpen.value || aboutOpen.value || heatmapOpen.value) return
+  if (helpOpen.value || aboutOpen.value || heatmapOpen.value || settingsOpen.value) return
+
+  if ((e.ctrlKey || e.metaKey) && e.key === ',') {
+    e.preventDefault()
+    openSettingsDialog()
+    return
+  }
 
   const key = e.key.toLowerCase()
   switch (key) {
@@ -1527,9 +1682,11 @@ function onLoadDemo() {
 }
 
 onMounted(() => {
+  applyAppSettings(loadSettings(), { silent: true })
   const saved = loadSession()
   if (saved?.timelineOptions) {
     Object.assign(timelineOptions, saved.timelineOptions)
+    syncTimelineOptionsFromSettings()
   }
   window.addEventListener('keydown', onGlobalKeydown)
 })
@@ -1714,7 +1871,7 @@ body {
   background: var(--bg);
   color: var(--fg);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  font-size: 13px;
+  font-size: var(--ui-font-size, 13px);
   overflow: hidden;
 }
 

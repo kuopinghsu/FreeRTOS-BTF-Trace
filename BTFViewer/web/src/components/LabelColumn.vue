@@ -2,7 +2,7 @@
   <div
     ref="colEl"
     class="label-column"
-    :style="{ width: LABEL_W + 'px' }"
+    :style="{ width: layout().labelW + 'px' }"
   >
     <!-- Ruler placeholder row -->
     <div
@@ -98,8 +98,13 @@
 
 <script setup>
 import { computed } from 'vue'
-import { rowBandHeight, visibleRowIndexRange, LABEL_W, RULER_H, ROW_H, STI_ROW_H, STI_WAVEFORM_H } from '../renderer/TimelineRenderer.js'
+import { rowBandHeight, visibleRowIndexRange, RULER_H } from '../renderer/TimelineRenderer.js'
+import { getTimelineLayout } from '../utils/timelineLayout.js'
 import { taskMergeKey } from '../utils/colors.js'
+
+function layout() {
+  return getTimelineLayout()
+}
 
 const props = defineProps({
   trace:        { type: Object, default: null },
@@ -185,7 +190,7 @@ function taskRowKey(row) {
   gap: 6px;
   padding: 0 8px;
   cursor: pointer;
-  font-size: 11px;
+  font-size: v-bind('layout().labelFontSize + "px"');
   color: var(--fg);
   transition: background 0.08s;
   box-sizing: border-box;

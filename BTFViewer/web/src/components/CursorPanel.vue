@@ -70,8 +70,7 @@
 <script setup>
 import { computed } from 'vue'
 import { formatTime } from '../renderer/TimelineRenderer.js'
-
-const CURSOR_COLORS = ['#FF4444', '#44FF88', '#4499FF', '#FFAA22']
+import { CURSOR_COLORS } from '../utils/cursorColors.js'
 
 const props = defineProps({
   cursors:   { type: Array, required: true },

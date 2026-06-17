@@ -7,10 +7,15 @@
  */
 
 import {
-  LABEL_W, RULER_H, ROW_H, ROW_GAP, STI_ROW_H, STI_WAVEFORM_H, MIN_SEG_W,
+  RULER_H, MIN_SEG_W,
   buildRowLayout, formatTime,
 } from './TimelineRenderer.js'
+import { getTimelineLayout } from '../utils/timelineLayout.js'
 import { taskColor, taskDisplayName, taskMergeKey, stiNoteColor } from '../utils/colors.js'
+
+function L() {
+  return getTimelineLayout()
+}
 
 // ---- Helpers ---------------------------------------------------------------
 
@@ -75,8 +80,8 @@ export function renderToSvg(trace, viewport, options = {}) {
 
   // canvasW is the timeline-only canvas width (label column is a separate DOM element).
   // In the SVG we place both side by side, so the total SVG width is wider.
-  const OX   = LABEL_W          // x-offset: all timeline content starts here
-  const svgW = canvasW + LABEL_W // total SVG width
+  const OX   = L().labelW          // x-offset: all timeline content starts here
+  const svgW = canvasW + L().labelW // total SVG width
 
   // --- Colour scheme ---
   const bgColor   = darkMode ? '#1E1E1E' : '#FFFFFF'
@@ -101,9 +106,9 @@ export function renderToSvg(trace, viewport, options = {}) {
   // is small; svgH trims the SVG to exactly the content that is present.
   let svgH = RULER_H
   for (const row of rows) {
-    const rowH = row.type === 'sti' ? (row.isExpanded ? STI_WAVEFORM_H : STI_ROW_H) : ROW_H
+    const rowH = row.type === 'sti' ? (row.isExpanded ? L().stiWaveformH : L().stiRowH) : L().rowH
     if (row.y >= canvasH || row.y + rowH < 0) continue
-    const bottom = Math.min(row.y + rowH + ROW_GAP, canvasH)
+    const bottom = Math.min(row.y + rowH + L().rowGap, canvasH)
     if (bottom > svgH) svgH = bottom
   }
 
@@ -129,14 +134,14 @@ export function renderToSvg(trace, viewport, options = {}) {
   // ---- Row backgrounds ----
   for (let i = 0; i < rows.length; i++) {
     const row  = rows[i]
-    const rowH = row.type === 'sti' ? (row.isExpanded ? STI_WAVEFORM_H : STI_ROW_H) : ROW_H
+    const rowH = row.type === 'sti' ? (row.isExpanded ? L().stiWaveformH : L().stiRowH) : L().rowH
     if (row.y + rowH < 0 || row.y >= canvasH) continue
     const bg = row.type === 'sti' ? stiBg : (i % 2 === 0 ? evenBg : oddBg)
     // Row background covers only the timeline area (label column drawn separately)
     els.push(`<rect x="${OX}" y="${row.y.toFixed(1)}" width="${canvasW}" height="${rowH}" fill="${bg}"/>`)
     // Separator line spans full row width
     if (row.type !== 'sti') {
-      const sepY = (row.y + rowH + ROW_GAP - 1).toFixed(1)
+      const sepY = (row.y + rowH + L().rowGap - 1).toFixed(1)
       els.push(`<line x1="0" y1="${sepY}" x2="${svgW}" y2="${sepY}" stroke="${sepColor}" stroke-width="0.5"/>`)
     }
   }
@@ -144,7 +149,7 @@ export function renderToSvg(trace, viewport, options = {}) {
   // ---- Task / core segment bars ----
   for (const row of rows) {
     if (row.type === 'sti') continue
-    const rowH = ROW_H
+    const rowH = L().rowH
     if (row.y + rowH < 0 || row.y > canvasH) continue
 
     const segs = getSegsForRow(trace, row)
@@ -192,7 +197,7 @@ export function renderToSvg(trace, viewport, options = {}) {
   // ---- STI markers / waveforms ----
   for (const row of rows) {
     if (row.type !== 'sti') continue
-    const rowH = row.isExpanded ? STI_WAVEFORM_H : STI_ROW_H
+    const rowH = row.isExpanded ? L().stiWaveformH : L().stiRowH
     if (row.y + rowH < 0 || row.y > canvasH) continue
 
     const evs = trace.stiEventsByTarget?.get(row.key) ?? []
@@ -264,7 +269,7 @@ export function renderToSvg(trace, viewport, options = {}) {
       }
     } else {
       // ---- Collapsed: diamond markers ----
-      const midY = row.y + STI_ROW_H / 2
+      const midY = row.y + L().stiRowH / 2
       for (const ev of evs) {
         if (ev.time < timeStart || ev.time > timeEnd) continue
         const x     = OX + (ev.time - timeStart) * pxPerNs
@@ -296,17 +301,17 @@ export function renderToSvg(trace, viewport, options = {}) {
   // ---- Row labels (left fixed column) ----
   for (let i = 0; i < rows.length; i++) {
     const row  = rows[i]
-    const rowH = row.type === 'sti' ? (row.isExpanded ? STI_WAVEFORM_H : STI_ROW_H) : ROW_H
+    const rowH = row.type === 'sti' ? (row.isExpanded ? L().stiWaveformH : L().stiRowH) : L().rowH
     if (row.y + rowH < 0 || row.y > canvasH) continue
 
     const midY       = row.y + rowH / 2
-    const maxChars   = Math.floor(LABEL_W / 7)
+    const maxChars   = Math.floor(L().labelW / 7)
     const rawLabel   = row.label
     const label      = rawLabel.length > maxChars ? rawLabel.slice(0, maxChars - 1) + '…' : rawLabel
     const labelColor = row.type === 'sti' ? '#88AABB' : (row.type === 'core' ? '#E0E0E0' : textColor)
 
     // Opaque label column background (matches separate LabelColumn DOM element)
-    els.push(`<rect x="0" y="${row.y.toFixed(1)}" width="${LABEL_W}" height="${rowH}" fill="${darkMode ? '#1E1E1E' : '#F8F8F8'}"/>`)
+    els.push(`<rect x="0" y="${row.y.toFixed(1)}" width="${L().labelW}" height="${rowH}" fill="${darkMode ? '#1E1E1E' : '#F8F8F8'}"/>`)
     els.push(
       `<text x="4" y="${midY.toFixed(1)}" ` +
       `fill="${labelColor}" font-family="monospace" font-size="10" dominant-baseline="middle">` +
@@ -315,7 +320,7 @@ export function renderToSvg(trace, viewport, options = {}) {
   }
 
   // Corner (ruler × label column)
-  els.push(`<rect x="0" y="0" width="${LABEL_W}" height="${RULER_H}" fill="${darkMode ? '#1A1A1A' : '#E8E8E8'}"/>`)
+  els.push(`<rect x="0" y="0" width="${L().labelW}" height="${RULER_H}" fill="${darkMode ? '#1A1A1A' : '#E8E8E8'}"/>`)
   els.push(
     `<text x="4" y="${RULER_H / 2}" fill="${rulerText}" font-family="monospace" font-size="10" dominant-baseline="middle">` +
     `${viewMode === 'core' ? 'Core / Task' : 'Task / TaskID'}</text>`

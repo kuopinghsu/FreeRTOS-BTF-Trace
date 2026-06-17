@@ -1402,6 +1402,7 @@ const props = defineProps({
   trace:   { type: Object, default: null },
   cursors: { type: Array, default: () => [] },
   tabs:    { type: Array, default: () => [] },
+  statsPaused: { type: Boolean, default: false },
 })
 
 const emit = defineEmits(['highlightTask', 'selectSegment'])
@@ -1521,6 +1522,7 @@ async function refreshStatsTables() {
 }
 
 function scheduleStatsRefresh() {
+  if (props.statsPaused) return
   clearTimeout(_statsRefreshTimer)
   _statsRefreshTimer = setTimeout(() => { refreshStatsTables() }, 120)
 }
@@ -2870,8 +2872,11 @@ watch(() => props.trace, () => {
 }, { immediate: true })
 
 watch(
-  [statsRange, execSliceCollapsed, blockingCollapsed, interArrivalCollapsed, scopeToCursors],
-  scheduleStatsRefresh,
+  [statsRange, execSliceCollapsed, blockingCollapsed, interArrivalCollapsed, scopeToCursors, () => props.statsPaused],
+  () => {
+    if (props.statsPaused) return
+    scheduleStatsRefresh()
+  },
   { immediate: true },
 )
 

@@ -24,22 +24,27 @@ import {
   getWasmHandles,
 } from './wasmAccel.js'
 import { formatTime, formatMigrationGapTime } from '../utils/timeFormat.js'
+import { getTimelineLayout } from '../utils/timelineLayout.js'
+import { CURSOR_COLORS } from '../utils/cursorColors.js'
 
 export { formatTime, formatMigrationGapTime }
+export { getTimelineLayout } from '../utils/timelineLayout.js'
+
+// ---- Layout (defaults; live values from Settings via getTimelineLayout()) --
+export const RULER_H        =  40  // height of ruler row (px)
+export const RULER_W        = 120  // left ruler column width (px) – vertical mode
+export const HEADER_H       = 160  // top label row height (px) – vertical mode
+export const COL_W          =  26  // column width per task/core – vertical mode
+export const MIN_SEG_W      =   1  // minimum segment paint width (px)
+
+function L() {
+  return getTimelineLayout()
+}
 
 // ---- Helpers ---------------------------------------------------------------
 function isCoreName(name) {
   return typeof name === 'string' && name.startsWith('Core_')
 }
-
-// ---- Layout constants (must match CSS in TimelinePanel.vue) ---------------
-export const LABEL_W        = 160  // width of left label column (px)  [DOM, not canvas]
-export const RULER_H        =  40  // height of ruler row (px)
-export const ROW_H          =  24  // task row height (px)
-export const ROW_GAP        =   4  // gap between rows (px)
-export const STI_ROW_H      =  18  // STI channel row height (px)
-export const STI_WAVEFORM_H =  64  // expanded tag-event waveform row height (px)
-export const MIN_SEG_W      =   1  // minimum segment paint width (px)
 
 /**
  * Returns true if the STI channel name is a tag-event waveform channel.
@@ -50,9 +55,7 @@ export function isStiTagChannel(name) {
 }
 
 // ---- Vertical mode layout constants ----------------------------------------
-export const RULER_W    = 120  // left ruler column width (px) – vertical mode
-export const HEADER_H   = 160  // top label row height (px) – vertical mode
-export const COL_W      =  26  // column width per task/core – vertical mode
+// (RULER_W, HEADER_H, COL_W exported above)
 
 // LOD thresholds (ns/px). Above PAINT_LOD_COARSE, nearby sub-pixel segments are
 // merged via lodReduce; below it, individual segments are drawn with outlines.
@@ -197,14 +200,14 @@ export function buildRowLayout(trace, viewMode, expanded, yStart, showSti = true
       const label = taskDisplayName(repr || mk)
       const color = taskColor(mk, repr)
       rows.push({ type: 'task', key: mk, label, color, y })
-      y += ROW_H + ROW_GAP
+      y += L().rowH + L().rowGap
     }
   } else {
     // Core view
     for (const coreName of trace.coreNames) {
       const cc = coreColor(coreName)
       rows.push({ type: 'core', key: coreName, label: coreName, color: cc, y })
-      y += ROW_H + ROW_GAP
+      y += L().rowH + L().rowGap
       if (expanded.has(coreName)) {
         // TICK is rendered on the ruler band – exclude it from per-task sub-rows.
         const taskOrder = (trace.coreTaskOrder.get(coreName) || [])
@@ -215,7 +218,7 @@ export function buildRowLayout(trace, viewMode, expanded, yStart, showSti = true
           const label = taskDisplayName(rawTask)
           const color = taskColor(mk, rawTask)
           rows.push({ type: 'core-task', key: `${coreName}__${rawTask}`, coreKey: coreName, taskKey: rawTask, label, color, y })
-          y += ROW_H + ROW_GAP
+          y += L().rowH + L().rowGap
         }
       }
     }
@@ -226,9 +229,9 @@ export function buildRowLayout(trace, viewMode, expanded, yStart, showSti = true
     for (const ch of trace.stiChannels) {
       const isTag = isStiTagChannel(ch)
       const isExpanded = isTag && stiExpanded.has(ch)
-      const rowH = isExpanded ? STI_WAVEFORM_H : STI_ROW_H
+      const rowH = isExpanded ? L().stiWaveformH : L().stiRowH
       rows.push({ type: 'sti', key: ch, label: ch, color: '#888', y, isTag, isExpanded })
-      y += rowH + ROW_GAP
+      y += rowH + L().rowGap
     }
   }
 
@@ -237,8 +240,8 @@ export function buildRowLayout(trace, viewMode, expanded, yStart, showSti = true
 
 /** Row band height in px (excludes inter-row gap — gap is encoded in row.y spacing). */
 export function rowBandHeight(row) {
-  if (row.type === 'sti') return row.isExpanded ? STI_WAVEFORM_H : STI_ROW_H
-  return ROW_H
+  if (row.type === 'sti') return row.isExpanded ? L().stiWaveformH : L().stiRowH
+  return L().rowH
 }
 
 /**
@@ -300,6 +303,7 @@ export function render(ctx, trace, viewport, options = {}) {
     migratedOnlyFilter = false,
     lockedTaskKey = null,
     fastPaint   = false,
+    showHoverHighlight = true,
   } = options
   const highlightSegment = options.highlightSegment ?? null
 
@@ -364,11 +368,11 @@ export function render(ctx, trace, viewport, options = {}) {
     const rowBudget = { n: 0, max: budgetSpec.max, fast: budgetSpec.fast }
 
     if (row.type === 'task') {
-      drawTaskRow(ctx, trace, row, rowY, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, canvasW, darkMode, highlightSegment, rowBudget)
+      drawTaskRow(ctx, trace, row, rowY, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, canvasW, darkMode, highlightSegment, rowBudget, showHoverHighlight)
     } else if (row.type === 'core') {
       drawCoreRow(ctx, trace, row, rowY, timeStart, timeEnd, pxPerNs, nsPerPx, canvasW, darkMode, rowBudget)
     } else if (row.type === 'core-task') {
-      drawCoreTaskRow(ctx, trace, row, rowY, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, canvasW, darkMode, highlightSegment, lockedTaskKey, rowBudget)
+      drawCoreTaskRow(ctx, trace, row, rowY, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, canvasW, darkMode, highlightSegment, lockedTaskKey, rowBudget, showHoverHighlight)
     } else if (row.type === 'sti') {
       drawStiRow(ctx, trace, row, rowY, timeStart, timeEnd, pxPerNs, canvasW, darkMode, stiLogScale)
     }
@@ -740,10 +744,10 @@ function drawLockedSegmentHoriz(ctx, trace, rows, yOff, hlSeg, timeStart, timeEn
       ? taskColor(mk, hlSeg.task)
       : row.color
     const label     = row.type === 'core' ? taskDisplayName(hlSeg.task) : row.label
-    const slot       = ROW_H + ROW_GAP            // full row slot including gap
+    const slot       = L().rowH + L().rowGap            // full row slot including gap
     const newH       = slot * 1.10                // 10% of slot
     const canvasRowY = row.y + yOff
-    const rowCenter  = canvasRowY + ROW_H / 2         // center of the row band
+    const rowCenter  = canvasRowY + L().rowH / 2         // center of the row band
     const drawY     = rowCenter - newH / 2
     const drawX     = Math.round(x1)
     const drawW     = Math.ceil(w)
@@ -787,7 +791,7 @@ function drawLockedSegmentVert(ctx, trace, cols, hlSeg, timeStart, timeEnd, pxPe
       ? taskColor(mk, hlSeg.task)
       : col.color
     const label     = col.type === 'core' ? taskDisplayName(hlSeg.task) : col.label
-    const slot       = COL_W + ROW_GAP            // full column slot including gap
+    const slot       = COL_W + L().rowGap            // full column slot including gap
     const newW       = slot * 1.10
     const colCenter  = col.x + COL_W / 2
     const drawX     = colCenter - newW / 2
@@ -818,7 +822,7 @@ function drawLockedSegmentVert(ctx, trace, cols, hlSeg, timeStart, timeEnd, pxPe
   }
 }
 
-function drawTaskRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, canvasW, darkMode, hlSeg, budget) {
+function drawTaskRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, canvasW, darkMode, hlSeg, budget, showHoverHighlight = true) {
   const mk = row.key
   const ld = taskLodData(trace, mk)
   const fast = budget.fast
@@ -829,16 +833,21 @@ function drawTaskRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, n
   )
 
   const rowY = canvasRowY + 1
-  const rowH = ROW_H - 2
+  const rowH = L().rowH - 2
+  const dim = showHoverHighlight && highlightKey && mk !== highlightKey && !hlSeg
+  if (dim) ctx.save()
+  if (dim) ctx.globalAlpha = 45 / 255
 
   if (!fast) {
     ctx.fillStyle = darkMode ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.02)'
-    ctx.fillRect(0, canvasRowY, canvasW, ROW_H)
+    ctx.fillRect(0, canvasRowY, canvasW, L().rowH)
   }
 
   paintSegments(ctx, segs, timeStart, timeEnd, pxPerNs, nsPerPx,
     rowY, rowH, row.color, trace, /* coreTint */ true, highlightKey, mk, darkMode, row.label, hlSeg, budget,
     indices)
+
+  if (dim) ctx.restore()
 }
 
 function drawCoreRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, nsPerPx, canvasW, darkMode, budget) {
@@ -852,11 +861,11 @@ function drawCoreRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, n
 
   if (!fast) {
     ctx.fillStyle = darkMode ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.03)'
-    ctx.fillRect(0, canvasRowY, canvasW, ROW_H)
+    ctx.fillRect(0, canvasRowY, canvasW, L().rowH)
   }
 
   const rowY = canvasRowY + 1
-  const rowH = ROW_H - 2
+  const rowH = L().rowH - 2
   const drawLabels = !fast && !forceCoarse && !budgetLite(budget)
 
   const colorCache = new Map()
@@ -912,7 +921,7 @@ function drawCoreRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, n
   }
 }
 
-function drawCoreTaskRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, canvasW, darkMode, hlSeg, lockedTaskKey, budget) {
+function drawCoreTaskRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, canvasW, darkMode, hlSeg, lockedTaskKey, budget, showHoverHighlight = true) {
   const ld = coreTaskLodData(trace, row.coreKey, row.taskKey)
   const mk = taskMergeKey(row.taskKey)
   const wasmKey = `${row.coreKey}__${row.taskKey}`
@@ -925,14 +934,16 @@ function drawCoreTaskRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerN
 
   if (!fast) {
     ctx.fillStyle = darkMode ? 'rgba(255,255,255,0.01)' : 'rgba(0,0,0,0.01)'
-    ctx.fillRect(0, canvasRowY, canvasW, ROW_H)
+    ctx.fillRect(0, canvasRowY, canvasW, L().rowH)
   }
 
-  const dim = lockedTaskKey && mk !== lockedTaskKey
+  const dimLocked = lockedTaskKey && mk !== lockedTaskKey
+  const dimHover = showHoverHighlight && highlightKey && mk !== highlightKey && !hlSeg && !lockedTaskKey
+  const dim = dimLocked || dimHover
   if (dim) ctx.save()
   if (dim) ctx.globalAlpha = 45 / 255
   paintSegments(ctx, segs, timeStart, timeEnd, pxPerNs, nsPerPx,
-    canvasRowY + 1, ROW_H - 2, row.color, trace, false, highlightKey, mk, darkMode, row.label, hlSeg, budget,
+    canvasRowY + 1, L().rowH - 2, row.color, trace, false, highlightKey, mk, darkMode, row.label, hlSeg, budget,
     indices)
   if (dim) ctx.restore()
 }
@@ -951,7 +962,7 @@ function drawStiRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, ca
   const hi = bisectRight(starts, timeEnd) + 1
 
   const markerR = 5
-  const cy = rowY + STI_ROW_H / 2
+  const cy = rowY + L().stiRowH / 2
 
   ctx.save()
   ctx.strokeStyle = darkMode ? 'rgba(255,255,255,0.5)' : 'rgba(0,0,0,0.4)'
@@ -986,7 +997,7 @@ function drawStiRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, ca
  */
 function drawStiWaveformRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, canvasW, darkMode, logScale = false) {
   const rowY = canvasRowY
-  const rowH = STI_WAVEFORM_H
+  const rowH = L().stiWaveformH
 
   const evs = trace.stiEventsByTarget.get(row.key) || []
   const starts = trace.stiStartsByTarget.get(row.key) || []
@@ -1138,7 +1149,16 @@ function drawStiWaveformRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxP
       ctx.moveTo(cx, cy)
       firstPoint = false
     } else {
-      ctx.lineTo(cx, cy)   // straight line to next point
+      if (L().stiLineStyle === 'step' && i > 0) {
+        const prevEv = slice[i - 1]
+        const prevVal = evVal(prevEv)
+        if (!isNaN(prevVal)) {
+          const prevCx = (prevEv.time - timeStart) * pxPerNs
+          const prevCy = valToY(prevVal)
+          ctx.lineTo(cx, prevCy)
+        }
+      }
+      ctx.lineTo(cx, cy)
     }
   }
   ctx.stroke()
@@ -1160,8 +1180,6 @@ function drawStiWaveformRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxP
 }
 
 // ---- Cursors ---------------------------------------------------------------
-
-const CURSOR_COLORS = ['#FF4444', '#44FF88', '#4499FF', '#FFAA22']
 
 export function drawCursors(ctx, cursors, trace, timeStart, pxPerNs, canvasW, canvasH, _darkMode) {
   if (!cursors || cursors.length === 0) return
@@ -1513,7 +1531,7 @@ export function drawMarksHorizontal(ctx, marks, trace, timeStart, pxPerNs, canva
  * Each col: { type: 'task'|'core'|'core-task'|'sti', key, label, color, x, colIdx, colWidth,
  *             isExpanded?, isExpandable? }
  *
- * STI tag-event channels are expandable; when expanded they use STI_WAVEFORM_H as column width.
+ * STI tag-event channels are expandable; when expanded they use L().stiWaveformH as column width.
  *
  * @param {object} trace
  * @param {string} viewMode      'task' or 'core'
@@ -1573,7 +1591,7 @@ export function buildColumnLayout(trace, viewMode, expanded, scrollX = 0, showSt
     for (const ch of trace.stiChannels) {
       const isExpandable = isStiTagChannel(ch)
       const isExpanded   = isExpandable && stiExpanded.has(ch)
-      const cw           = isExpanded ? STI_WAVEFORM_H : COL_W
+      const cw           = isExpanded ? L().stiWaveformH : COL_W
       const x = RULER_W + xAcc - scrollX
       cols.push({ type: 'sti', key: ch, label: ch, color: '#888', x, colIdx: rawIdx, colWidth: cw, isExpanded, isExpandable })
       rawIdx++

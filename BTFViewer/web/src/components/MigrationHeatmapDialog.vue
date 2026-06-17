@@ -38,6 +38,7 @@
       </div>
       <div
         v-else
+        ref="scrollRef"
         class="heatmap-scroll"
       >
         <div class="heatmap-body">
@@ -70,7 +71,9 @@
         v-if="taskFilterActive"
         class="heatmap-filter-bar"
       >
-        <span>Showing {{ taskFilterCount }} task{{ taskFilterCount === 1 ? '' : 's' }}: {{ taskFilterLabel || 'filtered' }}</span>
+        <span>
+          Showing {{ taskFilterCount }} task{{ taskFilterCount === 1 ? '' : 's' }}: {{ taskFilterLabel || 'filtered' }}
+        </span>
         <button
           type="button"
           class="heatmap-show-all"
@@ -84,7 +87,7 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { formatTime } from '../renderer/TimelineRenderer.js'
 import {
   migrationHeatmapGrid,
@@ -105,9 +108,19 @@ const emit = defineEmits(['close', 'drillDown', 'clearFilter'])
 
 const drillLevel = ref(0)
 const drillCtx = ref(null)
+const scrollRef = ref(null)
+const overviewScopeCache = new Map()
+
+function overviewScopeKey(lo, hi) {
+  return `${lo ?? ''}:${hi ?? ''}`
+}
 
 watch(() => props.taskFilterActive, (active) => {
   if (!active) goLevel0()
+})
+
+watch(() => props.trace, () => {
+  overviewScopeCache.clear()
 })
 
 const statsRange = computed(() => {
@@ -126,7 +139,12 @@ const overviewHeatmap = computed(() => {
   const r = statsRange.value
   const lo = r?.lo ?? null
   const hi = r?.hi ?? null
-  return migrationHeatmapGrid(props.trace, lo, hi)
+  const key = overviewScopeKey(lo, hi)
+  const cached = overviewScopeCache.get(key)
+  if (cached) return cached
+  const hm = migrationHeatmapGrid(props.trace, lo, hi)
+  overviewScopeCache.set(key, hm)
+  return hm
 })
 
 const taskHeatmap = computed(() => {
@@ -138,6 +156,9 @@ const taskHeatmap = computed(() => {
     ctx.toCore,
     ctx.binLo,
     ctx.binHi,
+    ctx.parentTimeBins ?? 32,
+    ctx.parentBinIndex ?? 0,
+    ctx.parentTimeBins ?? 32,
   )
 })
 
@@ -193,13 +214,23 @@ const hintText = computed(() =>
     ? 'Rows: from→to core pairs · Columns: time bins · Click a cell to drill into tasks'
     : 'Rows: tasks · Columns: sub-bins · Click a cell to zoom and filter in Task View')
 
+function scrollHeatmapToTop() {
+  nextTick(() => {
+    const el = scrollRef.value
+    if (el) {
+      el.scrollTop = 0
+      el.scrollLeft = 0
+    }
+  })
+}
+
 function goLevel0() {
   drillLevel.value = 0
   drillCtx.value = null
+  scrollHeatmapToTop()
 }
 
 function onShowAll() {
-  goLevel0()
   emit('clearFilter')
 }
 
@@ -239,8 +270,11 @@ function onCellClick(ri, bi) {
       pairLabel: row.pairLabel,
       binLo,
       binHi,
+      parentBinIndex: bi,
+      parentTimeBins: hm.timeBins,
     }
     drillLevel.value = 1
+    scrollHeatmapToTop()
     return
   }
 

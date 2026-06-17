@@ -6,6 +6,7 @@
     <!-- Left: sticky label column (hidden in vertical mode) -->
     <LabelColumn
       v-if="orientation === 'h'"
+      :key="options.layoutRev"
       :trace="trace"
       :view-mode="options.viewMode"
       :expanded="expanded"
@@ -165,7 +166,12 @@ import { toBlob as domToBlob } from 'html-to-image'
 import LabelColumn from './LabelColumn.vue'
 import StiTooltip  from './StiTooltip.vue'
 import SegmentTooltip from './SegmentTooltip.vue'
-import { render as renderTimeline, renderVertical, buildRowLayout, buildColumnLayout, drawHoverLine, drawHoverLineVertical, drawRangeSelect, drawRangeSelectVertical, drawCursors, drawCursorsVertical, drawMarksHorizontal, drawMarksVertical, RULER_H, ROW_H, STI_ROW_H, STI_WAVEFORM_H, ROW_GAP, isStiTagChannel, RULER_W, COL_W, HEADER_H, formatTime, rowBandHeight, visibleRowIndexRange } from '../renderer/TimelineRenderer.js'
+import { render as renderTimeline, renderVertical, buildRowLayout, buildColumnLayout, drawHoverLine, drawHoverLineVertical, drawRangeSelect, drawRangeSelectVertical, drawCursors, drawCursorsVertical, drawMarksHorizontal, drawMarksVertical, RULER_H, isStiTagChannel, RULER_W, COL_W, HEADER_H, formatTime, rowBandHeight, visibleRowIndexRange } from '../renderer/TimelineRenderer.js'
+import { getTimelineLayout } from '../utils/timelineLayout.js'
+
+function layout() {
+  return getTimelineLayout()
+}
 import { renderToSvg } from '../renderer/SvgExporter.js'
 import { InteractionHandler } from '../renderer/InteractionHandler.js'
 import { taskMergeKey, taskColor, coreColor, coreTint, stiNoteColor, parseTaskName, stiChannelColor, taskDisplayName } from '../utils/colors.js'
@@ -208,6 +214,7 @@ const orientation = computed(() => props.options.orientation || 'h')
 
 // Cached row/column structure (scroll-independent — offset applied at paint time).
 const cachedRowLayout = computed(() => {
+  void props.options.layoutRev
   if (!props.trace) return null
   return buildRowLayout(
     props.trace, props.options.viewMode, expanded, 0,
@@ -218,6 +225,7 @@ const cachedRowLayout = computed(() => {
 })
 
 const cachedColumnLayout = computed(() => {
+  void props.options.layoutRev
   if (!props.trace) return null
   return buildColumnLayout(
     props.trace, props.options.viewMode, expanded, 0,
@@ -544,6 +552,7 @@ function paint() {
     migratedOnlyFilter: !!props.options.migratedOnlyFilter,
     taskFilterKeys:     props.options.taskFilterKeys || null,
     lockedTaskKey:    props.options.viewMode === 'core' ? (props.options.lockedTaskKey ?? null) : null,
+    showHoverHighlight: props.options.showHoverHighlight !== false,
     fastPaint:        paintFast(),
     rowLayout:        cachedRowLayout.value,
     columnLayout:     cachedColumnLayout.value,
@@ -836,8 +845,8 @@ function getCaptureSize() {
   }
 
   const { totalHeight } = buildRowLayout(props.trace, props.options.viewMode, expanded, 0, props.options.showSti !== false, stiExpanded)
-  const neededH = RULER_H + Math.max(ROW_H, totalHeight)
-  const captureH = Math.max(RULER_H + ROW_H, Math.min(panelH, Math.ceil(neededH)))
+  const neededH = RULER_H + Math.max(layout().rowH, totalHeight)
+  const captureH = Math.max(RULER_H + layout().rowH, Math.min(panelH, Math.ceil(neededH)))
   return { captureW: panelW, captureH }
 }
 
@@ -1079,9 +1088,9 @@ function scrollToTask(mergeKey) {
   const targetRow = findRowForTask(rows, mergeKey)
   if (!targetRow) return
   // In rendering: canvas Y of row = (RULER_H - scrollY) + row.y
-  // To center row mid in canvas body: RULER_H - scrollY + row.y + ROW_H/2 = canvasH/2
-  // => scrollY = RULER_H + row.y + ROW_H/2 - canvasH/2
-  viewport.scrollY = Math.max(0, RULER_H + targetRow.y + ROW_H / 2 - viewport.canvasH / 2)
+  // To center row mid in canvas body: RULER_H - scrollY + row.y + layout().rowH/2 = canvasH/2
+  // => scrollY = RULER_H + row.y + layout().rowH/2 - canvasH/2
+  viewport.scrollY = Math.max(0, RULER_H + targetRow.y + layout().rowH / 2 - viewport.canvasH / 2)
   clampScrollToContent()
   scheduleRender()
 }
@@ -1121,7 +1130,7 @@ function scrollToSegmentIfNeeded(seg) {
 
     if (targetRow) {
       const actualRowY = RULER_H - scrollY + targetRow.y
-      rowOutOfView = (actualRowY + ROW_H <= RULER_H) || (actualRowY >= canvasH)
+      rowOutOfView = (actualRowY + layout().rowH <= RULER_H) || (actualRowY >= canvasH)
     }
   } else {
     const { cols } = buildColumnLayout(props.trace, props.options.viewMode, expanded, scrollX, props.options.showSti !== false)
@@ -1150,7 +1159,7 @@ function scrollToSegmentIfNeeded(seg) {
     viewport.timeEnd   = seg.start + span / 2
   }
   if (isHorizontal && rowOutOfView && targetRow) {
-    viewport.scrollY = Math.max(0, RULER_H + targetRow.y + ROW_H / 2 - canvasH / 2)
+    viewport.scrollY = Math.max(0, RULER_H + targetRow.y + layout().rowH / 2 - canvasH / 2)
   }
   if (!isHorizontal && colOutOfView && targetCol) {
     const rawX = targetCol.x + scrollX
@@ -1400,7 +1409,7 @@ watch(segmentHover, (seg) => {
       }
     }
     segmentHoverPos.y = row
-      ? (RULER_H + row.y - viewport.scrollY + ROW_H / 2)
+      ? (RULER_H + row.y - viewport.scrollY + layout().rowH / 2)
       : (canvasEl.value.clientHeight / 2)
   }
 })
@@ -1598,12 +1607,12 @@ function _paintOverviewBg(bgCanvas, tr, lo, hi, span, W, H, totMainSize) {
     if (isVert) {
       for (const ch of tr.stiChannels) {
         const isExp = isStiTagChannel(ch) && stiExpanded.has(ch)
-        stiMainSize += (isExp ? STI_WAVEFORM_H : COL_W)
+        stiMainSize += (isExp ? layout().stiWaveformH : COL_W)
       }
     } else {
       for (const ch of tr.stiChannels) {
         const isExp = isStiTagChannel(ch) && stiExpanded.has(ch)
-        stiMainSize += (isExp ? STI_WAVEFORM_H : STI_ROW_H) + ROW_GAP
+        stiMainSize += (isExp ? layout().stiWaveformH : layout().stiRowH) + layout().rowGap
       }
     }
   }

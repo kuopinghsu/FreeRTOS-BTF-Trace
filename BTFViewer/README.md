@@ -509,7 +509,15 @@ In the editor you can draw annotation shapes (arrow, double arrow, line, rectang
 
 ## Settings
 
-Open **Settings** from the toolbar (**⚙ Settings**) or via **View → ⚙ Settings…** (`Ctrl+,`). Preferences are saved immediately to `btf_viewer.rc` in the viewer directory and restored on the next launch.
+Open **Settings** from the toolbar (**⚙ Settings**) or via **View → ⚙ Settings…** (`Ctrl+,`).
+
+| | Desktop | Web |
+|--|---------|-----|
+| **Storage** | `btf_viewer.rc` in the viewer directory | Browser `localStorage` key `btf-viewer-settings-v1` |
+| **When saved** | Immediately on each change | Immediately on **Save** (or when closing with **Save**); **Cancel** reverts unsaved edits |
+| **Live preview** | — | Changes apply to the open trace while the dialog is open; cancel restores the pre-open snapshot |
+
+Preferences are restored on the next launch (desktop) or page reload (web).
 
 ### Appearance
 
@@ -782,7 +790,7 @@ Visualise **when** migrations happen between core pairs — complementary to the
 1. Open **Heatmap** from the toolbar (`tracedata/example-4cores.btf` is a good demo).
 2. **Level 1** — click a hot cell on a core-pair row to open the task grid for that bin.
 3. **Level 2** — click a task cell to zoom the timeline, place **C1** / **C2**, switch to **Task View**, and show only that task.
-4. **Show all tasks** — when done, reset the filter, clear cursors, and return the heatmap to the core-pair overview.
+4. **Show all tasks** — when done, clear the task filter and restore the timeline viewport, cursors, and highlights from before the heatmap was opened; the heatmap returns to the core-pair overview.
 
 | | |
 |--|--|
@@ -794,8 +802,8 @@ Visualise **when** migrations happen between core pairs — complementary to the
 | **← Back** | Return from Level 2 to the core-pair overview without closing the dialog. |
 | **Click cell** | Level 1 → Level 2; Level 2 → timeline drill-down. Details in [What happens when you click a cell](#what-happens-when-you-click-a-cell) below. |
 | **All tasks** (toolbar) | Shown next to **Heatmap** while a heatmap task filter is active. Same reset as **Show all tasks** below. |
-| **Show all tasks** | Clears the task filter, **removes all cursors**, rebuilds the heatmap at **Level 1** over the **full trace**, and restores every task row. Available from: toolbar **All tasks**, heatmap dialog **Show all tasks**, Legend **Clear** (Web: Marks page; Desktop: legend dock), or enabling **Migrated tasks only**. Loading a new trace or switching tabs also clears the filter (Desktop closes the heatmap dialog on tab switch). |
-| **Scope** | **Full trace** by default. With **2 or more cursors** placed, Level 1 uses the time window from **C1** through the last cursor (subtitle shows the range). Independent of the Statistics panel **Limit to cursor range** toggle. **Show all tasks** clears cursors so scope returns to the full trace. |
+| **Show all tasks** | Clears the task filter and **restores the timeline state captured when the heatmap was opened** (viewport, cursors, highlights, view mode). The heatmap returns to **Level 1**; heatmap time scope follows the restored cursors (full trace if fewer than two cursors were saved). Available from: toolbar **All tasks**, heatmap dialog **Show all tasks**, Legend **Clear** (Web: Marks page; Desktop: legend dock), or enabling **Migrated tasks only**. Loading a new trace or switching tabs also clears the filter (Desktop closes the heatmap dialog on tab switch). |
+| **Scope** | **Full trace** by default. With **2 or more cursors** placed, Level 1 uses the time window from **C1** through the last cursor (subtitle shows the range). Independent of the Statistics panel **Limit to cursor range** toggle. **Show all tasks** restores pre-heatmap cursors, so heatmap scope matches that saved window. |
 | **Empty state** | *No migrations in scope.* (Level 1) or *No task migrations in this cell.* (Level 2) when no events fall in the current window. |
 
 ##### What happens when you click a cell
@@ -813,7 +821,7 @@ Only cells with at least one migration (count > 0) are clickable.
 
 **Reset — Show all tasks**
 
-4. Clears the task filter and **all cursors**, clears task highlight/lock, returns the heatmap to **Level 1** over the **full trace**, and shows every task row again.
+4. Clears the task filter, restores the viewport/cursors/highlights saved when the heatmap was opened, returns the heatmap to **Level 1**, and shows every task row again.
 
 Use the heatmap to spot bursts of cross-core traffic, drill into the contributing tasks, then jump to Task View for slice-level inspection. For aggregate per-task migration statistics (ping-pong, STI correlation, gap-after), use **Core Migrations** in the Statistics panel.
 

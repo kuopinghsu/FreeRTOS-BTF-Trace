@@ -19,8 +19,13 @@
 
 import { hitTestSti, hitTestRow, hitTestStiVertical, hitTestColumn,
          hitTestSegment, hitTestSegmentVertical,
-         RULER_H, ROW_H, ROW_GAP, RULER_W, HEADER_H,
-         findNearestCursorIndex, findNearestMark } from './TimelineRenderer.js'
+         findNearestCursorIndex, findNearestMark,
+         RULER_H, RULER_W, HEADER_H, COL_W } from './TimelineRenderer.js'
+import { getTimelineLayout } from '../utils/timelineLayout.js'
+
+function layout() {
+  return getTimelineLayout()
+}
 import { taskMergeKey } from '../utils/colors.js'
 
 const MAX_CURSORS = 4
@@ -347,7 +352,7 @@ export class InteractionHandler {
         const dx = e.shiftKey ? e.deltaY : e.deltaX
         this._queueViewport(vp => this._applyScrollX(vp, dx))
       } else {
-        const dy = e.deltaMode === 1 ? e.deltaY * (ROW_H + ROW_GAP) : e.deltaY
+        const dy = e.deltaMode === 1 ? e.deltaY * (layout().rowH + layout().rowGap) : e.deltaY
         this._queueViewport(vp => this._applyPanV(vp, dy))
       }
     } else {
@@ -358,7 +363,7 @@ export class InteractionHandler {
       } else if (e.shiftKey) {
         this._queueViewport(vp => this._applyPanH(vp, e.deltaY))
       } else {
-        const deltaY = e.deltaMode === 1 ? e.deltaY * (ROW_H + ROW_GAP) : e.deltaY
+        const deltaY = e.deltaMode === 1 ? e.deltaY * (layout().rowH + layout().rowGap) : e.deltaY
         this._queueViewport(vp => this._applyScrollY(vp, deltaY))
       }
     }

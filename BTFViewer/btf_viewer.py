@@ -1195,9 +1195,11 @@ def _migration_heatmap_data(trace: "BtfTrace",
     """Core-pair rows × time bins grid for migration heatmap."""
     cores = trace.core_names
     pairs = []
+    pair_idx: Dict[Tuple[str, str], int] = {}
     for fc in cores:
         for tc in cores:
             if fc != tc:
+                pair_idx[(fc, tc)] = len(pairs)
                 pairs.append((fc, tc,
                               f"{_core_short_name(fc)}→{_core_short_name(tc)}"))
     t_min = lo if lo is not None else trace.time_min
@@ -1210,11 +1212,12 @@ def _migration_heatmap_data(trace: "BtfTrace",
             continue
         if hi is not None and m.ns > hi:
             continue
-        for pi, (fc, tc, _) in enumerate(pairs):
-            if m.from_core == fc and m.to_core == tc:
-                bi = min(time_bins - 1, max(0, int((m.ns - t_min) / bin_w)))
-                grid[pi][bi] += 1
-                break
+        pi = pair_idx.get((m.from_core, m.to_core))
+        if pi is None:
+            continue
+        bi = _heatmap_bin_index_for_ns(
+            t_min, bin_w, time_bins, t_hi, m.ns)
+        grid[pi][bi] += 1
     return pairs, grid, time_bins
 
 
@@ -1225,13 +1228,66 @@ def _heatmap_bin_range(t_min: int, bin_w: float, time_bins: int, t_max: int,
     return bin_lo, bin_hi
 
 
+def _migration_ns_in_bin(ns: int, bin_lo: int, bin_hi: int, *,
+                         bin_index: int, time_bins: int) -> bool:
+    """Half-open [bin_lo, bin_hi) except the last bin includes bin_hi."""
+    if ns < bin_lo:
+        return False
+    if bin_index >= time_bins - 1:
+        return ns <= bin_hi
+    return ns < bin_hi
+
+
+def _heatmap_bin_index_for_ns(t_min: int, bin_w: float, time_bins: int, t_max: int,
+                              ns: int) -> int:
+    """Bin index for ns; retries bi+1 when int division lands on an upper boundary."""
+    bi = min(time_bins - 1, max(0, int((ns - t_min) / bin_w)))
+    for b in (bi, bi + 1):
+        if b >= time_bins:
+            continue
+        blo, bhi = _heatmap_bin_range(t_min, bin_w, time_bins, t_max, b)
+        if _migration_ns_in_bin(ns, blo, bhi, bin_index=b, time_bins=time_bins):
+            return b
+    return bi
+
+
+def _range_stats_over_segments(trace: "BtfTrace", lo: int, hi: int
+                               ) -> Tuple[int, Dict[str, int], list]:
+    """Segments overlapping [lo, hi]: count, per-task overlap ns, slice durations."""
+    switches = 0
+    task_acc: Dict[str, int] = {}
+    durations: list = []
+    for mk, segs in trace.seg_map_by_merge_key.items():
+        starts = trace.seg_start_by_merge_key.get(mk)
+        if not starts:
+            continue
+        i0 = max(0, bisect_left(starts, lo) - 1)
+        for j in range(i0, len(segs)):
+            seg = segs[j]
+            if seg.start >= hi:
+                break
+            if seg.end <= lo:
+                continue
+            ov = min(seg.end, hi) - max(seg.start, lo)
+            if ov <= 0:
+                continue
+            switches += 1
+            durations.append(seg.end - seg.start)
+            raw = trace.task_repr.get(mk, mk)
+            disp = _task_display_name(raw)
+            task_acc[disp] = task_acc.get(disp, 0) + ov
+    return switches, task_acc, durations
+
+
 def _merge_keys_for_heatmap_cell(trace: "BtfTrace", from_core: str, to_core: str,
-                                 bin_lo: int, bin_hi: int) -> set:
+                                 bin_lo: int, bin_hi: int,
+                                 bin_index: int, time_bins: int) -> set:
     keys: set = set()
     for m in trace.migrations:
         if m.from_core != from_core or m.to_core != to_core:
             continue
-        if m.ns < bin_lo or m.ns >= bin_hi:
+        if not _migration_ns_in_bin(m.ns, bin_lo, bin_hi,
+                                    bin_index=bin_index, time_bins=time_bins):
             continue
         keys.add(m.merge_key)
     return keys
@@ -1239,7 +1295,9 @@ def _merge_keys_for_heatmap_cell(trace: "BtfTrace", from_core: str, to_core: str
 
 def _migration_task_heatmap_data(trace: "BtfTrace", from_core: str, to_core: str,
                                  bin_lo: int, bin_hi: int,
-                                 time_bins: int = 32) -> Tuple[list, list, int, int, int, float]:
+                                 time_bins: int = 32,
+                                 parent_bin_index: int = 0,
+                                 parent_time_bins: int = 32) -> Tuple[list, list, int, int, int, float]:
     """Task rows × sub-bins for one core-pair / time-bin drill-down."""
     t_min, t_hi = bin_lo, bin_hi
     span = max(t_hi - t_min, 1)
@@ -1248,12 +1306,14 @@ def _migration_task_heatmap_data(trace: "BtfTrace", from_core: str, to_core: str
     for m in trace.migrations:
         if m.from_core != from_core or m.to_core != to_core:
             continue
-        if m.ns < bin_lo or m.ns >= bin_hi:
+        if not _migration_ns_in_bin(m.ns, bin_lo, bin_hi,
+                                    bin_index=parent_bin_index,
+                                    time_bins=parent_time_bins):
             continue
         mk = m.merge_key
         if mk not in task_bins:
             task_bins[mk] = [0] * time_bins
-        bi = min(time_bins - 1, max(0, int((m.ns - t_min) / bin_w)))
+        bi = _heatmap_bin_index_for_ns(t_min, bin_w, time_bins, t_hi, m.ns)
         task_bins[mk][bi] += 1
     items = sorted(task_bins.items(),
                    key=lambda x: (-sum(x[1]), x[0]))
@@ -2610,6 +2670,25 @@ def _process_ui_events_safely() -> None:
 # Scene
 # ---------------------------------------------------------------------------
 
+class _SuspendRebuild:
+    """Defer TimelineScene.rebuild() until the outermost suspend context exits."""
+
+    __slots__ = ('_scene',)
+
+    def __init__(self, scene: 'TimelineScene') -> None:
+        self._scene = scene
+
+    def __enter__(self) -> '_SuspendRebuild':
+        self._scene._rebuild_suspend += 1
+        return self
+
+    def __exit__(self, *_args) -> None:
+        sc = self._scene
+        sc._rebuild_suspend = max(0, sc._rebuild_suspend - 1)
+        if sc._rebuild_suspend == 0:
+            sc.rebuild()
+
+
 class TimelineScene(QGraphicsScene):
     """Manages the full timeline and renders it as QGraphicsItems.
 
@@ -2665,6 +2744,7 @@ class TimelineScene(QGraphicsScene):
         self._task_filter_q: str = ""
         self._migrated_only_filter: bool = False
         self._heatmap_filter_mks: Optional[set] = None
+        self._rebuild_suspend: int = 0
         # -- Viewport time bounds (updated at each rebuild for segment clipping) --
         # Set to None initially; _update_viewport_bounds() fills them from the
         # attached QGraphicsView, or falls back to the full trace time range.
@@ -2783,6 +2863,9 @@ class TimelineScene(QGraphicsScene):
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    def suspend_rebuild(self) -> _SuspendRebuild:
+        return _SuspendRebuild(self)
 
     def set_trace(self, trace: BtfTrace, viewport_width: int = 1200) -> None:
         self._trace = trace
@@ -3822,6 +3905,8 @@ class TimelineScene(QGraphicsScene):
             self._vp_scene_orth_hi = vy_hi + _ORTH_BUF
 
     def rebuild(self) -> None:
+        if self._rebuild_suspend > 0:
+            return
         self._update_viewport_bounds()
         self.clear()
         self._cursor_items = []
@@ -8890,6 +8975,12 @@ class _LegendWidget(QWidget):
                 f"Heatmap: {label or 'filtered'} ({n})")
         self._filter_tasks(self._search.text())
 
+    def set_migrated_only_checked(self, checked: bool) -> None:
+        """Set migrated-only checkbox without re-emitting toggled signal."""
+        self._migrated_only_cb.blockSignals(True)
+        self._migrated_only_cb.setChecked(bool(checked))
+        self._migrated_only_cb.blockSignals(False)
+
     def mousePressEvent(self, event) -> None:
         """Click on the legend background (outside a task row) cancels highlight."""
         self.cancel_highlight.emit()
@@ -9927,24 +10018,36 @@ class _MigrationHeatmapWidget(QWidget):
         self._label_w = 52
         self.set_data(row_labels, grid)
 
+    def _content_size(self) -> QSize:
+        n_bins = len(self._grid[0]) if self._grid and self._grid[0] else 1
+        w = self._LEFT_PAD + self._label_w + n_bins * self._CELL_MIN_W + 8
+        h = max(60, len(self._row_labels) * self._ROW_H + 8)
+        return QSize(w, h)
+
+    def _sync_widget_size(self) -> None:
+        """Match widget geometry to grid so QScrollArea range updates on drill-down."""
+        size = self._content_size()
+        parent = self.parentWidget()
+        if isinstance(parent, QScrollArea):
+            vp_w = parent.viewport().width()
+            if vp_w > 0:
+                size.setWidth(max(size.width(), vp_w))
+        self.setMinimumSize(size)
+        self.resize(size)
+        self.updateGeometry()
+
     def set_data(self, row_labels: List[str], grid: list) -> None:
         self._row_labels = list(row_labels)
         self._grid = grid if grid else [[]]
         self._max_val = max((v for row in self._grid for v in row), default=0)
-        n_bins = len(self._grid[0]) if self._grid and self._grid[0] else 1
         fm = QFontMetrics(self.font())
         max_lbl = max((fm.horizontalAdvance(lbl) for lbl in self._row_labels), default=0)
         self._label_w = max(52, max_lbl + 10)
-        min_w = self._LEFT_PAD + self._label_w + n_bins * self._CELL_MIN_W + 8
-        self.setMinimumSize(min_w, max(60, len(self._row_labels) * self._ROW_H + 8))
-        self.updateGeometry()
+        self._sync_widget_size()
         self.update()
 
     def sizeHint(self) -> QSize:
-        n_bins = len(self._grid[0]) if self._grid else 1
-        w = self._LEFT_PAD + self._label_w + n_bins * self._CELL_MIN_W + 8
-        h = max(60, len(self._row_labels) * self._ROW_H + 8)
-        return QSize(w, h)
+        return self._content_size()
 
     def _cell_geometry(self) -> Tuple[int, float]:
         n_bins = len(self._grid[0]) if self._grid else 1
@@ -10027,6 +10130,9 @@ class _MigrationHeatmapDialog(QDialog):
         self._drill_label = ""
         self._drill_bin_lo = 0
         self._drill_bin_hi = 0
+        self._filter_count = 0
+        self._owner_tab_path: Optional[str] = None
+        self._scope_cache: Dict[Tuple[Optional[int], Optional[int]], dict] = {}
 
         lo = hi = None
         wnd = parent
@@ -10056,6 +10162,7 @@ class _MigrationHeatmapDialog(QDialog):
         self._ov_t_max = t_hi
         self._ov_bin_w = span / time_bins
         self._ov_time_bins = time_bins
+        self._cache_scope_grid(lo, hi, pairs, grid, time_bins, t_min, t_hi, span)
 
         lay = QVBoxLayout(self)
         nav = QHBoxLayout()
@@ -10110,14 +10217,53 @@ class _MigrationHeatmapDialog(QDialog):
         self._go_level0()
 
     def set_filter_banner(self, label: Optional[str], count: int) -> None:
+        self._filter_count = count
         active = count > 0
-        if self._show_all_btn is not None:
-            self._show_all_btn.setEnabled(active)
         self._filter_bar.setVisible(active)
         if active:
             self._filter_bar.setText(
                 f"Showing {count} task{'s' if count != 1 else ''}: "
                 f"{label or 'filtered'}")
+        self._update_show_all_btn()
+
+    def _update_show_all_btn(self) -> None:
+        if self._show_all_btn is not None:
+            self._show_all_btn.setEnabled(self._filter_count > 0)
+
+    def _owner_tab_still_active(self, owner_tab_path: Optional[str]) -> bool:
+        if owner_tab_path is None:
+            return True
+        wnd = self.parent()
+        if not isinstance(wnd, QMainWindow):
+            return True
+        tab = wnd._active_tab
+        return tab is not None and tab.path == owner_tab_path
+
+    def _cache_scope_grid(self, lo: Optional[int], hi: Optional[int],
+                          pairs: list, grid: list, time_bins: int,
+                          t_min: int, t_hi: int, span: int) -> None:
+        self._scope_cache[(lo, hi)] = {
+            'pairs': pairs,
+            'grid0': grid,
+            'time_bins': time_bins,
+            'ov_t_min': t_min,
+            'ov_t_max': t_hi,
+            'ov_bin_w': span / time_bins,
+            'ov_time_bins': time_bins,
+        }
+
+    def _apply_scope_cache(self, lo: Optional[int], hi: Optional[int]) -> bool:
+        ent = self._scope_cache.get((lo, hi))
+        if ent is None:
+            return False
+        self._pairs = ent['pairs']
+        self._grid0 = ent['grid0']
+        self._time_bins = ent['time_bins']
+        self._ov_t_min = ent['ov_t_min']
+        self._ov_t_max = ent['ov_t_max']
+        self._ov_bin_w = ent['ov_bin_w']
+        self._ov_time_bins = ent['ov_time_bins']
+        return True
 
     def refresh_scope(self) -> None:
         """Rebuild level-0 grid from current cursor scope (full trace if <2 cursors)."""
@@ -10135,6 +10281,9 @@ class _MigrationHeatmapDialog(QDialog):
                         f"{_format_time(lo, self._trace.time_scale)} … "
                         f"{_format_time(hi, self._trace.time_scale)})")
         self._scope_suffix = suffix
+        if self._apply_scope_cache(lo, hi):
+            self._go_level0()
+            return
         pairs, grid, time_bins = _migration_heatmap_data(
             self._trace, lo, hi)
         self._pairs = pairs
@@ -10142,6 +10291,7 @@ class _MigrationHeatmapDialog(QDialog):
         t_min = lo if lo is not None else self._trace.time_min
         t_hi = hi if hi is not None else self._trace.time_max
         span = max(t_hi - t_min, 1)
+        self._cache_scope_grid(lo, hi, pairs, grid, time_bins, t_min, t_hi, span)
         self._ov_t_min = t_min
         self._ov_t_max = t_hi
         self._ov_bin_w = span / time_bins
@@ -10152,15 +10302,40 @@ class _MigrationHeatmapDialog(QDialog):
         self._canvas.set_data(row_labels, grid)
 
     def _schedule_level1(self, fc: str, tc: str, label: str,
-                         bin_lo: int, bin_hi: int) -> None:
-        QTimer.singleShot(0, lambda: self._go_level1(fc, tc, label, bin_lo, bin_hi))
+                         bin_lo: int, bin_hi: int, parent_bin_index: int) -> None:
+        owner = self._owner_tab_path
+        QTimer.singleShot(
+            0, lambda fc=fc, tc=tc, label=label, bin_lo=bin_lo, bin_hi=bin_hi,
+            parent_bin_index=parent_bin_index, owner=owner:
+                self._go_level1(
+                    fc, tc, label, bin_lo, bin_hi, parent_bin_index, owner))
 
     def _schedule_drill(self, fc: str, tc: str, label: str,
                         bin_lo: int, bin_hi: int, merge_keys: set) -> None:
         if not self._on_drill:
             return
+        owner = self._owner_tab_path
         QTimer.singleShot(
-            0, lambda: self._on_drill(fc, tc, label, bin_lo, bin_hi, merge_keys))
+            0, lambda fc=fc, tc=tc, label=label, bin_lo=bin_lo, bin_hi=bin_hi,
+            merge_keys=merge_keys, owner=owner:
+                self._dispatch_drill(
+                    fc, tc, label, bin_lo, bin_hi, merge_keys, owner))
+
+    def _dispatch_drill(self, fc: str, tc: str, label: str,
+                        bin_lo: int, bin_hi: int, merge_keys: set,
+                        owner_tab_path: Optional[str]) -> None:
+        if not self._on_drill or not self._owner_tab_still_active(owner_tab_path):
+            return
+        self._on_drill(fc, tc, label, bin_lo, bin_hi, merge_keys)
+
+    def _scroll_heatmap_to_top(self) -> None:
+        """Reset scroll after level/content change (level-1 grid is often shorter)."""
+        def _do() -> None:
+            self._canvas._sync_widget_size()
+            self._scroll.updateGeometry()
+            self._scroll.verticalScrollBar().setValue(0)
+            self._scroll.horizontalScrollBar().setValue(0)
+        QTimer.singleShot(0, _do)
 
     def _go_level0(self) -> None:
         self._level = 0
@@ -10181,9 +10356,14 @@ class _MigrationHeatmapDialog(QDialog):
         self._hint_label.setText(
             "Rows: from→to core pairs · Columns: time bins · "
             "Click a cell to drill into tasks")
+        self._update_show_all_btn()
+        self._scroll_heatmap_to_top()
 
     def _go_level1(self, fc: str, tc: str, label: str,
-                    bin_lo: int, bin_hi: int) -> None:
+                    bin_lo: int, bin_hi: int, parent_bin_index: int,
+                    owner_tab_path: Optional[str] = None) -> None:
+        if not self._owner_tab_still_active(owner_tab_path):
+            return
         self._level = 1
         self._drill_fc = fc
         self._drill_tc = tc
@@ -10196,7 +10376,9 @@ class _MigrationHeatmapDialog(QDialog):
             f"Tasks · {label} · "
             f"{_format_time(bin_lo, ts)}–{_format_time(bin_hi, ts)}")
         rows, grid, time_bins, t_min, t_hi, bin_w = _migration_task_heatmap_data(
-            self._trace, fc, tc, bin_lo, bin_hi, self._time_bins)
+            self._trace, fc, tc, bin_lo, bin_hi, self._ov_time_bins,
+            parent_bin_index=parent_bin_index,
+            parent_time_bins=self._ov_time_bins)
         self._task_rows = rows
         self._task_grid = grid
         self._t_min = t_min
@@ -10212,6 +10394,8 @@ class _MigrationHeatmapDialog(QDialog):
         self._hint_label.setText(
             "Rows: tasks · Columns: sub-bins · "
             "Click a cell to zoom and filter in Task View")
+        self._update_show_all_btn()
+        self._scroll_heatmap_to_top()
 
     def _on_cell_clicked(self, ri: int, bi: int) -> None:
         if self._level == 0:
@@ -10222,7 +10406,7 @@ class _MigrationHeatmapDialog(QDialog):
                 return
             bin_lo, bin_hi = _heatmap_bin_range(
                 self._t_min, self._bin_w, self._time_bins, self._t_max, bi)
-            self._schedule_level1(fc, tc, label, bin_lo, bin_hi)
+            self._schedule_level1(fc, tc, label, bin_lo, bin_hi, bi)
             return
         if ri < 0 or ri >= len(self._task_rows):
             return
@@ -10561,6 +10745,11 @@ class _StatsPanel(QWidget):
 
     def set_cursor_times(self, times: list, *, refresh_stats: bool = True) -> None:
         """Update placed cursor timestamps; optionally rebuild statistics."""
+        was_scoped = (
+            self._trace is not None
+            and self._scope_to_cursors
+            and len(self._cursor_times) >= 2
+        )
         self._cursor_times = list(times)
         can_scope = len(times) >= 2
         self._scope_cb.blockSignals(True)
@@ -10573,7 +10762,8 @@ class _StatsPanel(QWidget):
         self._scope_cb.blockSignals(False)
         self._update_scope_header()
         scoped = self._stats_range() is not None
-        if refresh_stats and self._trace is not None and (scoped or not can_scope):
+        leave_scoped = was_scoped and not scoped
+        if refresh_stats and self._trace is not None and (scoped or leave_scoped):
             self.rebuild(self._trace)
         if self._plot_dlg is not None and self._plot_dlg.isVisible():
             self._refresh_open_plot()
@@ -15364,6 +15554,8 @@ class MainWindow(QMainWindow):
         self._find_marker_ns: Optional[int] = None
         self._find_marker_items: List[QGraphicsItem] = []
         self._heatmap_dlg: Optional[_MigrationHeatmapDialog] = None
+        self._heatmap_view_snapshot: Optional[dict] = None
+        self._defer_stats_refresh: bool = False
         self._tb_icon_actions: list = []   # (QAction, icon_path_data) for theme-aware icons
 
         self.setWindowTitle("RTOS BTF Viewer")
@@ -15805,7 +15997,7 @@ class MainWindow(QMainWindow):
         self._act_redo.setEnabled(bool(self._redo_stack))
 
     def _sync_panels_to_active_tab(self) -> None:
-        self._close_heatmap_dialog()
+        self._sync_heatmap_dialog_to_tab()
         tab = self._active_tab
         trace = self._trace
         if tab is None or trace is None:
@@ -17493,6 +17685,137 @@ class MainWindow(QMainWindow):
             self._heatmap_dlg.close()
             self._heatmap_dlg = None
 
+    def _sync_heatmap_dialog_to_tab(self) -> None:
+        dlg = self._heatmap_dlg
+        if dlg is None:
+            return
+        tab = self._active_tab
+        owner = getattr(dlg, "_owner_tab_path", None)
+        cur = tab.path if tab else None
+        if tab is None or cur != owner:
+            self._close_heatmap_dialog()
+            return
+        dlg.refresh_scope()
+        mks = tab.view._scene._heatmap_filter_mks
+        dlg.set_filter_banner(
+            getattr(self._legend, "_heatmap_filter_label", None),
+            len(mks) if mks else 0)
+
+    def _capture_heatmap_view_snapshot(self, tab: _TraceTab) -> None:
+        """Remember timeline zoom/pan/cursors before heatmap drill-down."""
+        view = tab.view
+        sc = view._scene
+        vp = view.viewport().rect()
+        center = view.mapToScene(vp.center())
+        is_horiz = sc._horizontal
+        center_ns = sc.scene_to_ns(center.x() if is_horiz else center.y())
+        orth = center.y() if is_horiz else center.x()
+        self._heatmap_view_snapshot = {
+            "fit_mode": bool(view._fit_mode),
+            "timescale_per_px": sc.timescale_per_px,
+            "cursors": list(sc.cursor_times()),
+            "center_ns": center_ns,
+            "orth": orth,
+            "horizontal": is_horiz,
+        }
+
+    def _center_view_on_heatmap_snapshot(self, tab: _TraceTab, snap: dict) -> None:
+        if snap.get("fit_mode"):
+            return
+        view = tab.view
+        sc = view._scene
+        coord = sc.ns_to_scene_coord(int(snap["center_ns"]))
+        if snap["horizontal"]:
+            view.centerOn(coord, float(snap["orth"]))
+        else:
+            view.centerOn(float(snap["orth"]), coord)
+
+    def _clear_heatmap_task_filter(self) -> None:
+        had_filter = self._heatmap_filter_active()
+        tab = self._active_tab
+        if tab is None:
+            self._legend.set_heatmap_filter(None, None)
+            if self._heatmap_dlg is not None:
+                self._heatmap_dlg.set_filter_banner(None, 0)
+            return
+
+        view = tab.view
+        sc = view._scene
+        snap = self._heatmap_view_snapshot
+        restored = snap is not None
+        had_highlight = sc._locked_task is not None or sc._hovered_task is not None
+
+        with sc.suspend_rebuild():
+            sc._heatmap_filter_mks = None
+            sc._remove_hover_overlay()
+            sc._locked_task = None
+            sc._locked_core = None
+            sc._locked_ns = None
+            sc._locked_segment_key = None
+            sc._hovered_task = None
+
+            self._legend.set_heatmap_filter(None, None)
+            self._legend.set_locked_task(None)
+
+            if snap:
+                view._fit_mode = bool(snap["fit_mode"])
+                sc._ns_range_hint = None
+                if view._fit_mode:
+                    avail = view._fit_viewport_size()
+                    tr = sc._trace
+                    time_span = max(tr.time_max - tr.time_min, 1)
+                    sc._timescale_per_px = time_span / max(
+                        avail - sc._label_width, 100)
+                    sc._timescale_per_px_fit = sc._timescale_per_px
+                    view.resetTransform()
+                else:
+                    sc._timescale_per_px = max(
+                        sc._timescale_per_px_default,
+                        float(snap["timescale_per_px"]))
+                sc._cursor_times = []
+                for ns in snap.get("cursors", []):
+                    try:
+                        sc._cursor_times.append(int(ns))
+                    except (ValueError, TypeError):
+                        pass
+            elif not restored:
+                view._fit_mode = False
+                sc._cursor_times = []
+
+        if snap:
+            self._center_view_on_heatmap_snapshot(tab, snap)
+
+        _process_ui_events_safely()
+
+        self._defer_stats_refresh = True
+        try:
+            view.cursors_changed.emit(sc.cursor_times())
+            view.zoom_changed.emit(sc.timescale_per_px)
+        finally:
+            self._defer_stats_refresh = False
+
+        if had_highlight:
+            sc.highlight_changed.emit(None, False)
+        self._sync_show_all_tasks_btn()
+        if self._heatmap_dlg is not None:
+            dlg = self._heatmap_dlg
+            QTimer.singleShot(0, lambda d=dlg: self._finish_heatmap_clear_ui(d))
+        if (
+            self._stats_panel._scope_to_cursors
+            and len(sc.cursor_times()) >= 2
+        ):
+            times_copy = list(sc.cursor_times())
+            QTimer.singleShot(
+                0, lambda: self._stats_panel.set_cursor_times(
+                    times_copy, refresh_stats=True))
+        if had_filter or restored:
+            self.statusBar().showMessage("Showing all tasks", 3000)
+        self._heatmap_view_snapshot = None
+
+    def _finish_heatmap_clear_ui(self, dlg: _MigrationHeatmapDialog) -> None:
+        dlg.refresh_scope()
+        dlg.set_filter_banner(None, 0)
+
     def _open_migration_heatmap(self) -> None:
         trace = self._trace
         if trace is None or not _trace_is_multi_core(trace):
@@ -17501,12 +17824,16 @@ class MainWindow(QMainWindow):
             self._heatmap_dlg.raise_()
             self._heatmap_dlg.activateWindow()
             return
+        tab = self._active_tab
+        if tab is not None:
+            self._capture_heatmap_view_snapshot(tab)
         dlg = _MigrationHeatmapDialog(
             trace, parent=self, on_drill=self._on_heatmap_drill,
             on_clear=self._clear_heatmap_task_filter)
+        dlg._owner_tab_path = (
+            self._active_tab.path if self._active_tab else None)
         dlg.finished.connect(self._on_heatmap_dlg_closed)
         self._heatmap_dlg = dlg
-        active = self._heatmap_filter_active()
         tab = self._active_tab
         mks = tab.view._scene._heatmap_filter_mks if tab else None
         dlg.set_filter_banner(
@@ -17527,49 +17854,41 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_tb_show_all_tasks_btn"):
             self._tb_show_all_tasks_btn.setVisible(self._heatmap_filter_active())
 
-    def _clear_heatmap_task_filter(self) -> None:
-        had_filter = self._heatmap_filter_active()
-        for view in self._iter_tab_views():
-            view._scene.set_heatmap_task_filter(None)
-        self._legend.set_heatmap_filter(None, None)
-        self._view._scene.set_highlighted_task(None)
-        self._legend.set_locked_task(None)
-        self._view.clear_cursors()
-        self._stats_panel.set_cursor_times([], refresh_stats=False)
-        self._sync_show_all_tasks_btn()
-        if self._heatmap_dlg is not None:
-            self._heatmap_dlg.refresh_scope()
-            self._heatmap_dlg.set_filter_banner(None, 0)
-        if had_filter:
-            self.statusBar().showMessage("Showing all tasks", 3000)
-
     def _on_heatmap_drill(self, from_core: str, to_core: str, label: str,
                           bin_lo: int, bin_hi: int, merge_keys: set) -> None:
         if not merge_keys:
             return
+        tab = self._active_tab
+        if tab is None:
+            return
+        dlg = self._heatmap_dlg
+        owner = getattr(dlg, "_owner_tab_path", None) if dlg else None
+        if owner is not None and tab.path != owner:
+            return
         self._set_view_mode("task")
-        self._legend._migrated_only_cb.blockSignals(True)
-        self._legend._migrated_only_cb.setChecked(False)
-        self._legend._migrated_only_cb.blockSignals(False)
-        for view in self._iter_tab_views():
-            view._scene.set_heatmap_task_filter(set(merge_keys))
+        self._legend.set_migrated_only_checked(False)
+        tab.view._scene.set_heatmap_task_filter(set(merge_keys))
         self._legend.set_heatmap_filter(label, merge_keys)
         self._sync_show_all_tasks_btn()
         if self._heatmap_dlg is not None:
             self._heatmap_dlg.set_filter_banner(label, len(merge_keys))
-        vp_px = max(self._view.viewport().width() - self._view._scene._label_width, 100)
-        self._view._scene.clear_cursors()
-        self._view._scene.add_cursor(bin_lo)
-        self._view._scene.add_cursor(bin_hi)
-        self._view._scene.zoom_to_range(bin_lo, bin_hi, vp_px)
-        self._view.scroll_to_ns((bin_lo + bin_hi) // 2)
+        view = tab.view
+        view._fit_mode = False
+        view.clear_cursors()
+        view._scene.add_cursor(bin_lo)
+        view._scene.add_cursor(bin_hi)
+        view.cursors_changed.emit(view._scene.cursor_times())
+        vp_px = max(view.viewport().width() - view._scene._label_width, 100)
+        view._scene.zoom_to_range(bin_lo, bin_hi, vp_px)
+        view.scroll_to_ns((bin_lo + bin_hi) // 2)
+        view.zoom_changed.emit(view._scene.timescale_per_px)
         if len(merge_keys) == 1:
             mk = next(iter(merge_keys))
             self._on_legend_task_clicked(mk)
         else:
-            self._view._scene.set_highlighted_task(None)
+            view._scene.set_highlighted_task(None)
         self._stats_panel.set_cursor_times(
-            self._view._scene.cursor_times(), refresh_stats=False)
+            view._scene.cursor_times(), refresh_stats=False)
         n = len(merge_keys)
         self.statusBar().showMessage(
             f"Heatmap {label}: showing {n} task(s) with migrations in "
@@ -18678,9 +18997,17 @@ class MainWindow(QMainWindow):
     def _on_cursors_changed(self, times: list, view: TimelineView = None) -> None:
         if view is not None and view is not self._view:
             return
-        self._cursor_bar.rebuild(times, self._trace)
+        placed_n = len(times)
+        prev_n = getattr(self, "_placed_cursor_count", 0)
+        refresh_stats = False
+        if hasattr(self, "_stats_panel") and not self._defer_stats_refresh:
+            panel = self._stats_panel
+            if panel._scope_to_cursors and (placed_n >= 2 or prev_n >= 2):
+                refresh_stats = True
+        self._placed_cursor_count = placed_n
         if hasattr(self, "_stats_panel"):
-            self._stats_panel.set_cursor_times(times)
+            self._stats_panel.set_cursor_times(times, refresh_stats=refresh_stats)
+        self._cursor_bar.rebuild(times, self._trace)
         has_range = len(times) >= 2
         self._act_zoom_range.setEnabled(has_range)
         self._tb_zoom_range_btn.setEnabled(has_range)
@@ -18694,26 +19021,12 @@ class MainWindow(QMainWindow):
         hi = t_sorted[-1]
         dt = max(0, hi - lo)
         unit = self._current_time_unit()
-        switches = 0
+        switches, task_acc, durations = _range_stats_over_segments(
+            self._trace, lo, hi)
         top_task = "-"
         top_ns = 0
-        durations: list = []
-        if self._trace is not None and dt > 0:
-            task_acc: Dict[str, int] = {}
-            for seg in self._trace.segments:
-                if seg.end <= lo or seg.start >= hi:
-                    continue
-                ov = min(seg.end, hi) - max(seg.start, lo)
-                if ov <= 0:
-                    continue
-                switches += 1
-                dur = seg.end - seg.start
-                durations.append(dur)
-                raw = self._trace.task_repr.get(_task_merge_key(seg.task), seg.task)
-                disp = _task_display_name(raw)
-                task_acc[disp] = task_acc.get(disp, 0) + ov
-            if task_acc:
-                top_task, top_ns = max(task_acc.items(), key=lambda kv: kv[1])
+        if task_acc:
+            top_task, top_ns = max(task_acc.items(), key=lambda kv: kv[1])
         top_pct = (100.0 * top_ns / dt) if dt > 0 else 0.0
         self._range_stats_label.setText(
             f"Range C1-C{len(times)}: {_format_time(dt, unit, decimals=1)} | slices: {switches} | "
