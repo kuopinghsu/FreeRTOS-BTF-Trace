@@ -144,6 +144,7 @@ const emit = defineEmits([
 const selectedId    = ref(null)
 const importInputEl = ref(null)
 const sessionImportEl = ref(null)
+const MAX_MARKS_CSV_ROWS = 100_000
 const editingId     = ref(null)
 const editingLabel  = ref('')
 
@@ -249,7 +250,11 @@ function onImportFile(e) {
     const hasHeader = headerCols[0]?.toLowerCase() === 'type'
     const csvScale = hasHeader ? (headerCols[2]?.toLowerCase() || props.timeScale) : props.timeScale
     const startIdx = hasHeader ? 1 : 0
-    for (let i = startIdx; i < lines.length; i++) {
+    const maxRows = Math.min(lines.length, startIdx + MAX_MARKS_CSV_ROWS)
+    if (lines.length - startIdx > MAX_MARKS_CSV_ROWS) {
+      console.warn(`Marks CSV truncated to ${MAX_MARKS_CSV_ROWS} rows`)
+    }
+    for (let i = startIdx; i < maxRows; i++) {
       const cols = parseCSVRow(lines[i])
       // Expected cols: type, time, <scale>, label
       const type = (cols[0] || '').trim().toLowerCase() === 'annotation' ? 'annotation' : 'bookmark'

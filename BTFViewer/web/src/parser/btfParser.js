@@ -13,6 +13,7 @@
  */
 
 import { bisectLeft, bisectRight } from '../utils/bisect.js'
+import { applyBtfVersionWarning } from '../utils/btfMeta.js'
 import { makeLodSummary } from '../utils/lod.js'
 import { parseTaskName, taskMergeKey, taskSortKey, resetStiColors } from '../utils/colors.js'
 import { buildMigrationIndex } from '../utils/migrationAnalysis.js'
@@ -540,6 +541,8 @@ export async function parseBtf(text, progressCallback) {
   progress(98, 'Analysing tick health…')
   await yieldToHost()
   const tickHealth = analyzeTickHealth(sortedTickStiTimes)
+
+  applyBtfVersionWarning(meta)
 
   return {
     // ---- Metadata ----

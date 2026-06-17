@@ -41,7 +41,7 @@ A PyQt5-based interactive visualiser for FreeRTOS context-switch traces in **Bes
 - **Find & Jump** — search for any task name; `F3` / `Shift+F3` steps through all matching segments
 - **Bookmarks & Annotations** — mark important timestamps and attach free-text notes; persisted per trace file in `btf_viewer.rc`
 - **Right-click context menu** — place/remove/clear cursors, add a bookmark, or add an annotation, all from a single right-click anywhere on the timeline
-- **Recent files** — **File → Open Recent** lists the 8 most recently opened traces for one-click reopening
+- **Recent files (Desktop)** — **File → Open Recent** lists the 8 most recently opened traces for one-click reopening
 - **Dark / Light theme** — switch from **View → Switch to Light/Dark Theme** or **Settings → Appearance**
 - **Export to PNG / SVG / clipboard** — capture the viewport in the **Snapshot Editor** (annotate with arrows, shapes, and text, then save or copy); direct clipboard copy also available from the menu
 - **Persistent settings** — all preferences stored in `btf_viewer.rc` alongside the script
@@ -62,7 +62,7 @@ pip install PyQt5
 python btf_viewer.py [trace.btf]
 ```
 
-A file can also be opened via **File → Open** (`Ctrl+O`) or dragged onto the window. Each open file appears in its own **tab**; use **File → Close Tab** (`Ctrl+W`) to close the active tab. Re-opening the same path switches to the existing tab instead of loading it twice.
+A file can also be opened via **File → Open** (`Ctrl+O`) or dragged onto the window. Each open file appears in its own **tab**; use **File → Close Tab** (`Ctrl+W`) to close the active tab, or **Ctrl+Tab** / **Ctrl+Shift+Tab** to cycle between open tabs. Re-opening the same path switches to the existing tab instead of loading it twice.
 
 On launch (with no command-line file), the viewer restores the previous session: all tabs listed in `btf_viewer.rc`, the last active tab, and each tab’s saved zoom level and cursor positions.
 
@@ -103,7 +103,7 @@ Do not open `BTFViewer/web/index.html` directly via `file://`; it is the Vite so
 
 | Open method | Works? | Notes |
 |-------------|--------|--------|
-| Double-click `dist/index.html` | Yes | Basic use; Chrome may block Web Workers on `file://`, so parsing falls back to the main thread (UI can freeze briefly on very large traces). |
+| Double-click `dist/index.html` | Yes | Basic use; Chrome may block Web Workers on `file://`, so parsing falls back to the main thread (UI can freeze briefly on very large traces). Use **Open** to pick a `.btf` file. |
 | `make preview` | **Recommended** | Serves the build over HTTP — Web Workers, WASM accel, and the stats worker all work as intended. |
 | `make dev` | Dev | Hot reload at `http://localhost:5173`. |
 | Hosted demo | **Recommended** | [apps.kuoping.com/btf-viewer.html](https://apps.kuoping.com/btf-viewer.html) |
@@ -217,7 +217,7 @@ The right side holds **Cursor / Bookmark** and **Statistics** pages (tab bar at 
 
 ### Multi-tab traces (Web)
 
-Same tab bar behaviour as desktop: each `.btf` opens in its own tab with independent cursors, marks, zoom, chart state, and Find queries. On page reload, **tab names** and per-tab session state are restored from `localStorage`; use **Open**, **Recent**, or **Demo** to load trace data again. **Trace Compare…** uses any two loaded tabs — useful for before/after or build-to-build diffs.
+Same tab bar behaviour as desktop: each `.btf` opens in its own tab with independent cursors, marks, zoom, chart state, and Find queries. Use **Ctrl+Tab** / **Ctrl+Shift+Tab** to cycle tabs. On page reload, **tab names** and per-tab session state are restored from `localStorage`; use **Open** or **Demo** to load trace data again. **Trace Compare…** uses any two loaded tabs — useful for before/after or build-to-build diffs.
 
 ### Session restore (Web)
 
@@ -231,7 +231,7 @@ The web viewer persists session state in browser `localStorage` (key `btf-viewer
 
 **Limitations:**
 
-- Browser security prevents auto-loading file contents — you must **Open**, pick from **Recent**, or use **Demo** after refresh.
+- Browser security prevents auto-loading file contents — you must **Open** or use **Demo** after refresh.
 - Drag-and-drop a `.btf` onto the window works the same as **Open**.
 - `localStorage` may be unavailable in strict private browsing modes.
 
@@ -355,7 +355,7 @@ python btf_viewer.py [trace.btf]
 
 Passing a file on the command line opens that trace in a tab immediately. With no argument, the viewer restores the previous session from `btf_viewer.rc`.
 
-Files can also be opened via **File → Open** (`Ctrl+O`), **File → Close Tab** (`Ctrl+W`), or drag-and-drop onto the window.
+Files can also be opened via **File → Open** (`Ctrl+O`), **File → Close Tab** (`Ctrl+W`), **Ctrl+Tab** / **Ctrl+Shift+Tab** (cycle tabs), or drag-and-drop onto the window.
 
 ---
 
@@ -454,6 +454,7 @@ For full per-task/per-core metrics scoped to the cursor window, use the **Statis
 |--------|--------|
 | **File → Open** (`Ctrl+O`) | Open a trace in a **new tab** (or switch to it if already open) |
 | **File → Close Tab** (`Ctrl+W`) | Close the active tab |
+| **Ctrl+Tab** / **Ctrl+Shift+Tab** | Next / previous trace tab |
 | Click a tab | Switch the timeline, legend, statistics, marks, and CPU load graph to that trace |
 | **×** on a tab | Close that tab |
 
@@ -772,11 +773,12 @@ A **migration** is recorded when consecutive slices of the same task (merge-key)
 | **1:1** zoom toolbar button | ✓ | ✓ |
 | Jump to time / trace start / end | ✓ | ✓ |
 | Drag-and-drop `.btf` open | ✓ | ✓ |
-| **Open Recent** (8 filenames) | ✓ | ✓ (Chromium: one-click reopen when opened via File System Access) |
+| **Open Recent** (8 filenames) | ✓ | — |
 | Segment right-click (copy task, zoom, select in legend) | ✓ | ✓ |
 | Cursor comparison table (task at each cursor) | ✓ | ✓ |
 | Global undo/redo (cursors + marks) | ✓ | ✓ |
-| Portable session export/import (JSON) | — | ✓ |
+| Portable session export/import (JSON) | ✓ | ✓ |
+| Cycle trace tabs (`Ctrl+Tab` / `Ctrl+Shift+Tab`) | ✓ | ✓ |
 | Drag-resize label column | ✓ | ✓ |
 | Direct clipboard copy (`Ctrl+Shift+C`) | ✓ | ✓ |
 | Persist panel widths / stats table heights | ✓ | ✓ |
@@ -939,6 +941,7 @@ In the **Marks** dock:
 - **Double-click** a bookmark or annotation row to jump to its timestamp.
 - **Delete** key (or the **Delete** button) removes the selected mark.
 - Bookmark labels can be renamed **inline** by double-clicking the label text.
+- **Session** / **Import Session** — export or import a portable JSON file with cursors, marks, viewport zoom/pan, view options, Find query, and pinned highlight. The format is shared between Desktop and Web so you can move analysis state between platforms (open the same trace first, then import).
 
 ---
 
@@ -987,6 +990,8 @@ Settings, window layout, bookmarks, and multi-tab state are stored in `btf_viewe
 |-----|--------|
 | `Ctrl+O` | Open `.btf` file (new tab) |
 | `Ctrl+W` | Close active tab |
+| `Ctrl+Tab` | Next trace tab |
+| `Ctrl+Shift+Tab` | Previous trace tab |
 | `Ctrl+S` | Open snapshot editor (capture viewport for annotation) |
 | `Ctrl+Shift+C` | Copy viewport to clipboard (no editor) |
 | `Ctrl+Shift+S` | Save viewport as SVG |
@@ -1093,6 +1098,8 @@ The file begins with `#`-prefixed metadata lines. The parser extracts key–valu
 ```
 
 The value of `#timeScale` (`ns`, `us`, `ms`, …) determines the unit for every timestamp in the file.
+
+Both parsers read `#version` and warn if it is present but not a **2.x** release (e.g. `#version 2.2.0` is supported). Meta keys must match `[\w.-]+` on Desktop and Web.
 
 ---
 
@@ -1296,6 +1303,8 @@ timestamp, Core_N, 0, C, Core_N, 0, set_frequency, freq_hz
 | **Web WASM accel** | `web/src/renderer/wasmAccel.js`, `wasm/timeline_accel.wat` | Optional bisect / row-cull / LOD reduce; JS fallback when WASM unavailable |
 | **Find analysis** | `findAnalysis.js` / Find dock | Contains, Exact, Regex, Migrations modes; F3 navigation (Desktop + Web) |
 | **Session store** | `web/src/utils/sessionStore.js` | `localStorage` key `btf-viewer-session-v1` |
+| **Portable session** | `web/src/utils/sessionPortable.js`, Desktop Marks dock | Shared JSON v1: cursors, marks, viewport, view options, Find, highlight |
+| **File open (web)** | `web/src/utils/fileOpen.js` | FSA picker on `http://localhost`; `<input type="file">` on `file://` |
 | **Trace compare** | `traceCompare.js` / `_TraceCompareDialog` | Optional per-tab C1–Cn scope (Desktop + Web) |
 | **Migration heatmap** | `migrationAnalysis.js` / `_MigrationHeatmapDialog` | Two-level drill-down: core-pair × 32 bins → task × 32 sub-bins → timeline zoom/filter; `migrationHeatmapGrid()` + `migrationTaskHeatmapGrid()`; non-modal on Desktop; multi-core traces only |
 | **Pre-built HTML** | `web/pre-build/btf-viewer.html` | Copy of `dist/index.html` produced by `make build` |

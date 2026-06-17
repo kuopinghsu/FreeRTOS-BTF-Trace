@@ -32,7 +32,6 @@ node_modules: package.json
 clean:
 	rm -rf $(OUTDIR)
 
-dist-clean: clean
 ## Remove build output and installed dependencies
 dist-clean: clean
 	-rm -rf node_modules package-lock.json

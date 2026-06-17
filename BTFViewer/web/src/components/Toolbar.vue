@@ -59,35 +59,6 @@
       Demo
     </button>
 
-    <div
-      v-if="recentFiles.length"
-      class="recent-wrap"
-    >
-      <button
-        class="tb-btn"
-        title="Open a recently used trace"
-        @click="recentOpen = !recentOpen"
-      >
-        Recent ▾
-      </button>
-      <div
-        v-if="recentOpen"
-        class="recent-menu"
-        @mouseleave="recentOpen = false"
-      >
-        <button
-          v-for="name in recentFiles"
-          :key="name"
-          type="button"
-          class="recent-item"
-          :title="name"
-          @click="onRecentClick(name)"
-        >
-          {{ name }}
-        </button>
-      </div>
-    </div>
-
     <div class="tb-sep" />
 
     <!-- View mode -->
@@ -483,7 +454,7 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { getTimelineLayout } from '../utils/timelineLayout.js'
-import { supportsFileHandles, pickAndReadBtf } from '../utils/recentFileHandles.js'
+import { supportsFileHandles, pickAndReadBtf } from '../utils/fileOpen.js'
 
 const props = defineProps({
   modelValue:  { type: Object,  required: true },
@@ -493,18 +464,16 @@ const props = defineProps({
   loading:     { type: Boolean, default: false },
   loadingPct:  { type: Number,  default: 0 },
   loadingMsg:  { type: String,  default: '' },
-  recentFiles: { type: Array, default: () => [] },
   timeScale:   { type: String, default: 'ns' },
 })
 
 const emit = defineEmits([
   'update:modelValue', 'trace-reading', 'trace-loaded', 'loadDemo', 'zoom', 'fit',
-  'zoom1to1', 'zoomRange', 'showFind', 'openRecent',
+  'zoom1to1', 'zoomRange', 'showFind',
   'expandAll', 'collapseAll', 'addMark', 'copyScreenshot', 'exportSvg',
   'showHelp', 'showAbout', 'showSettings', 'showHeatmap', 'clearTaskFilter', 'file-error',
 ])
 
-const recentOpen = ref(false)
 const fileInputEl = ref(null)
 
 const zoom1to1Title = computed(() => {
@@ -518,8 +487,12 @@ async function onOpenClick() {
     const file = await pickAndReadBtf()
     if (file) {
       emit('trace-reading', { name: file.name })
-      const text = await file.text()
-      emit('trace-loaded', { text, name: file.name })
+      try {
+        const text = await file.text()
+        emit('trace-loaded', { text, name: file.name })
+      } catch {
+        emit('file-error', `Failed to read "${file.name}"`)
+      }
     }
     return
   }
@@ -529,7 +502,6 @@ async function onOpenClick() {
 function onFileChange(e) {
   const file = e.target.files[0]
   if (!file) return
-  // Signal immediately so the loading overlay appears before FileReader blocks
   emit('trace-reading', { name: file.name })
   const reader = new FileReader()
   reader.onload = (ev) => {
@@ -539,13 +511,7 @@ function onFileChange(e) {
     emit('file-error', `Failed to read "${file.name}": ${reader.error?.message ?? 'unknown error'}`)
   }
   reader.readAsText(file)
-  // Reset input so same file can be re-loaded
   e.target.value = ''
-}
-
-function onRecentClick(name) {
-  recentOpen.value = false
-  emit('openRecent', name)
 }
 </script>
 
@@ -667,40 +633,6 @@ function onRecentClick(name) {
   transition: background 0.15s;
 }
 .app-name-btn:hover {
-  background: var(--tb-btn-hover);
-}
-.recent-wrap {
-  position: relative;
-}
-.recent-menu {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  z-index: 200;
-  min-width: 180px;
-  max-width: 320px;
-  margin-top: 2px;
-  padding: 4px 0;
-  background: var(--panel-bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.25);
-}
-.recent-item {
-  display: block;
-  width: 100%;
-  text-align: left;
-  padding: 6px 12px;
-  border: none;
-  background: transparent;
-  color: var(--fg);
-  font-size: 12px;
-  cursor: pointer;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.recent-item:hover {
   background: var(--tb-btn-hover);
 }
 </style>

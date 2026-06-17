@@ -118,6 +118,17 @@ export function useTraceTabs() {
     }
   }
 
+  function cycleTraceTab(forward = true) {
+    const list = tabs.value
+    if (list.length < 2 || activeTabId.value == null) return
+    const idx = list.findIndex(t => t.id === activeTabId.value)
+    if (idx < 0) return
+    const nxt = forward
+      ? (idx + 1) % list.length
+      : (idx - 1 + list.length) % list.length
+    activeTabId.value = list[nxt].id
+  }
+
   function resetTabForLoad(tab) {
     tab.trace = null
     tab.placeholder = false
@@ -155,6 +166,7 @@ export function useTraceTabs() {
     cpuLoadExpanded,
     openTab,
     closeTab,
+    cycleTraceTab,
     resetTabForLoad,
     restorePlaceholderTabs,
     getNavCache,

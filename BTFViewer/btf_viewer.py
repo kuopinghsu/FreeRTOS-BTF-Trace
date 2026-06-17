@@ -289,6 +289,12 @@ _MIN_GRID_SPACING_PX      = 12.0
 # ---- Cursors --------------------------------------------------------------
 _MAX_CURSORS         = 8  # Hard upper bound - must equal len(_CURSOR_COLORS).
 _DEFAULT_MAX_CURSORS = 4  # Default number of simultaneously visible cursors.
+
+# Portable session JSON (shared with BTFViewer/web sessionPortable.js)
+SESSION_PORTABLE_VERSION = 1
+_PORTABLE_FIND_MODES = ("contains", "exact", "regex", "migrations")
+_META_KEY_RE = re.compile(r"^[\w.-]+$")
+_MAX_FIND_REGEX_LEN = 200
 _CURSOR_COLORS = [
     "#FF4444",  # 1 red
     "#44FF88",  # 2 green
@@ -1658,9 +1664,10 @@ def _parse_btf(filepath: str,
                 stripped = line[1:].strip()
                 if " " in stripped:
                     key, _, value = stripped.partition(" ")
-                    meta[key] = value.strip()
-                    if key == "timeScale":
-                        time_scale = value.strip()
+                    if _META_KEY_RE.match(key):
+                        meta[key] = value.strip()
+                        if key == "timeScale":
+                            time_scale = value.strip()
                 continue
 
             parts = line.split(",", 8)
@@ -1811,6 +1818,15 @@ def _parse_btf(filepath: str,
 
     if _skipped_lines:
         meta["_skipped_lines"] = str(_skipped_lines)
+
+    _ver = meta.get("version")
+    if _ver:
+        try:
+            if int(str(_ver).split(".")[0]) != 2:
+                meta["_version_warning"] = (
+                    f"Unsupported BTF format version: {_ver} (expected 2.x)")
+        except ValueError:
+            meta["_version_warning"] = f"Unrecognized BTF version: {_ver}"
 
     if progress_callback:
         progress_callback(55, "Building lookup tables…")
@@ -15561,6 +15577,13 @@ class MainWindow(QMainWindow):
         self._apply_theme(self._is_dark)
         self._view_mode = "task"
 
+        _tab_fwd = QShortcut(QKeySequence("Ctrl+Tab"), self)
+        _tab_fwd.setContext(Qt.WidgetWithChildrenShortcut)
+        _tab_fwd.activated.connect(lambda: self._cycle_trace_tab(True))
+        _tab_bwd = QShortcut(QKeySequence("Ctrl+Shift+Tab"), self)
+        _tab_bwd.setContext(Qt.WidgetWithChildrenShortcut)
+        _tab_bwd.activated.connect(lambda: self._cycle_trace_tab(False))
+
         # Restore all persisted settings (geometry, zoom, orientation, ...).
         self._restore_settings()
 
@@ -17103,6 +17126,15 @@ class MainWindow(QMainWindow):
         marks_export_btn.setToolTip("Save all bookmarks and annotations to a CSV file")
         marks_export_btn.clicked.connect(self._export_marks_csv)
         marks_io_row.addWidget(marks_export_btn)
+        marks_session_btn = QPushButton("Session")
+        marks_session_btn.setToolTip(
+            "Export portable session JSON (cursors, marks, viewport — Web compatible)")
+        marks_session_btn.clicked.connect(self._export_portable_session)
+        marks_io_row.addWidget(marks_session_btn)
+        marks_session_import_btn = QPushButton("Import Session")
+        marks_session_import_btn.setToolTip("Import portable session JSON")
+        marks_session_import_btn.clicked.connect(self._import_portable_session)
+        marks_io_row.addWidget(marks_session_import_btn)
         marks_v.addLayout(marks_io_row)
 
         marks_dock = QDockWidget("Marks", self)
@@ -18331,6 +18363,10 @@ class MainWindow(QMainWindow):
             return
         regex_obj = None
         if mode == "regex":
+            if len(query) > _MAX_FIND_REGEX_LEN:
+                self._find_status.setText("Regex too long")
+                self._view._scene.set_find_hits([])
+                return
             try:
                 regex_obj = re.compile(query, re.IGNORECASE)
             except re.error:
@@ -18606,6 +18642,9 @@ class MainWindow(QMainWindow):
         self._rebuild_recent_menu()
         self._settings.flush()
         self._report_settings_io_failure(prefix="Settings save warning")
+        warn = (trace.meta or {}).get("_version_warning")
+        if warn:
+            self.statusBar().showMessage(warn, 8000)
         self._continue_session_restore()
 
     def _capture_viewport_pixmap(self) -> QPixmap:
@@ -19310,6 +19349,234 @@ class MainWindow(QMainWindow):
 
     # -- Marks export ---------------------------------------------------
 
+    def _cycle_trace_tab(self, forward: bool = True) -> None:
+        """Switch to next/previous trace tab (Ctrl+Tab / Ctrl+Shift+Tab)."""
+        n = len(self._tabs)
+        if n < 2:
+            return
+        cur = self._tab_widget.currentIndex()
+        if cur < 0:
+            cur = 0
+        nxt = (cur + 1) % n if forward else (cur - 1) % n
+        self._tab_widget.setCurrentIndex(nxt)
+
+    def _build_portable_session_payload(self) -> dict:
+        """Build portable session dict (format shared with Web viewer)."""
+        if self._trace is None:
+            raise ValueError("No trace loaded")
+        tab = self._active_tab
+        sc = self._view._scene
+        view = self._view
+        ns_lo, ns_hi = self._cpu_load_graph._visible_time_ns_range(sc)
+        vp_rect = view.viewport().rect()
+        times = sc.cursor_times()
+        max_c = max(self._max_cursors_val, len(times))
+        cursors = [times[i] if i < len(times) else None for i in range(max_c)]
+        marks = []
+        for b in self._bookmarks:
+            marks.append({
+                "id": b.id, "ns": b.ns, "label": b.label or "", "type": "bookmark",
+            })
+        for a in self._annotations:
+            marks.append({
+                "id": a.id, "ns": a.ns, "label": a.note or "", "type": "annotation",
+            })
+        marks.sort(key=lambda m: m["ns"])
+        find_idx = self._find_mode_combo.currentIndex()
+        find_mode = (_PORTABLE_FIND_MODES[find_idx]
+                     if 0 <= find_idx < len(_PORTABLE_FIND_MODES) else "contains")
+        return {
+            "version": SESSION_PORTABLE_VERSION,
+            "traceName": os.path.basename(tab.path if tab else self._current_file or "trace.btf"),
+            "exportedAt": datetime.datetime.now(datetime.timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"),
+            "cursors": cursors,
+            "marks": marks,
+            "markNextId": self._mark_next_id,
+            "timelineViewport": {
+                "timeStart": ns_lo,
+                "timeEnd": ns_hi,
+                "scrollY": view.verticalScrollBar().value() if sc._horizontal else 0,
+                "scrollX": view.horizontalScrollBar().value() if not sc._horizontal else 0,
+                "canvasW": vp_rect.width(),
+                "canvasH": vp_rect.height(),
+            },
+            "timelineOptions": {
+                "viewMode": sc._view_mode,
+                "orientation": "h" if sc._horizontal else "v",
+                "showGrid": self._show_grid,
+                "showSti": self._show_sti,
+                "showCpuLoad": self._show_cpu_load,
+                "darkMode": self._is_dark,
+                "migratedOnlyFilter": sc._migrated_only_filter,
+            },
+            "findQuery": self._find_input.text().strip(),
+            "findMode": find_mode,
+            "pinnedHighlightKey": sc._locked_task,
+        }
+
+    def _apply_portable_session_payload(self, data: dict) -> None:
+        """Restore cursors, marks, viewport, and UI state from portable session JSON."""
+        if not isinstance(data, dict):
+            raise ValueError("Invalid session file")
+        if data.get("version") != SESSION_PORTABLE_VERSION:
+            raise ValueError(f"Unsupported session version: {data.get('version')}")
+
+        exp_name = data.get("traceName") or ""
+        cur_name = os.path.basename(self._current_file or "")
+        if exp_name and cur_name and exp_name != cur_name:
+            self.statusBar().showMessage(
+                f"Session is for \"{exp_name}\" (current: {cur_name})", 5000)
+
+        self._push_undo_snapshot()
+        sc = self._view._scene
+        view = self._view
+
+        opts = data.get("timelineOptions") or {}
+        if opts.get("viewMode") in ("task", "core"):
+            self._set_view_mode(opts["viewMode"])
+        want_horiz = opts.get("orientation", "h") != "v"
+        if sc._horizontal != want_horiz:
+            self._set_orientation(want_horiz)
+        if "showGrid" in opts:
+            self._set_show_grid(bool(opts["showGrid"]), persist=False)
+        if "showSti" in opts:
+            self._set_show_sti(bool(opts["showSti"]), persist=False)
+        if "showCpuLoad" in opts:
+            want_cpu = bool(opts["showCpuLoad"])
+            self._show_cpu_load = want_cpu
+            for tab in self._tabs:
+                tab.cpu_load_scroll.setVisible(want_cpu)
+            if hasattr(self, "_tb_cpu_load_btn"):
+                self._tb_cpu_load_btn.blockSignals(True)
+                self._tb_cpu_load_btn.setChecked(want_cpu)
+                self._tb_cpu_load_btn.blockSignals(False)
+        if "darkMode" in opts:
+            want_dark = bool(opts["darkMode"])
+            if self._is_dark != want_dark:
+                self._is_dark = want_dark
+                self._apply_theme(want_dark)
+        sc.set_migrated_only_filter(bool(opts.get("migratedOnlyFilter", False)))
+        self._legend.set_migrated_only_checked(sc._migrated_only_filter)
+
+        tvp = data.get("timelineViewport")
+        if isinstance(tvp, dict) and self._trace is not None:
+            try:
+                t0 = int(tvp.get("timeStart", 0))
+                t1 = int(tvp.get("timeEnd", 0))
+            except (TypeError, ValueError):
+                t0 = t1 = 0
+            if t1 > t0:
+                vp_rect = view.viewport().rect()
+                is_horiz = sc._horizontal
+                vp_px = max(vp_rect.width() if is_horiz else vp_rect.height(), 100)
+                view._fit_mode = False
+                sc.zoom_to_range(t0, t1, vp_px)
+                view.zoom_changed.emit(sc.timescale_per_px)
+                if is_horiz and "scrollY" in tvp:
+                    view.verticalScrollBar().setValue(int(tvp["scrollY"]))
+                if not is_horiz and "scrollX" in tvp:
+                    view.horizontalScrollBar().setValue(int(tvp["scrollX"]))
+
+        curs = data.get("cursors") or []
+        placed = sum(1 for c in curs if c is not None)
+        if placed:
+            needed = min(_MAX_CURSORS, max(self._max_cursors_val, len(curs)))
+            if needed != self._max_cursors_val:
+                self._max_cursors_val = needed
+                view.set_max_cursors(needed)
+        sc.clear_cursors()
+        for ns in curs:
+            if ns is not None:
+                sc.add_cursor(int(ns))
+        view.cursors_changed.emit(sc.cursor_times())
+
+        self._bookmarks.clear()
+        self._annotations.clear()
+        max_id = self._mark_next_id
+        for m in data.get("marks") or []:
+            try:
+                mid = int(m.get("id", max_id))
+                ns = int(m["ns"])
+            except (TypeError, ValueError, KeyError):
+                continue
+            label = m.get("label") or ""
+            max_id = max(max_id, mid + 1)
+            if m.get("type") == "annotation":
+                self._annotations.append(TraceAnnotation(id=mid, ns=ns, note=label))
+            else:
+                self._bookmarks.append(TraceBookmark(id=mid, ns=ns, label=label))
+        if data.get("markNextId") is not None:
+            self._mark_next_id = int(data["markNextId"])
+        else:
+            self._mark_next_id = max_id
+        self._rebuild_bookmark_list()
+        self._rebuild_annotation_list()
+
+        self._find_input.blockSignals(True)
+        self._find_input.setText(data.get("findQuery") or "")
+        self._find_input.blockSignals(False)
+        mode = (data.get("findMode") or "contains").lower()
+        try:
+            self._find_mode_combo.setCurrentIndex(_PORTABLE_FIND_MODES.index(mode))
+        except ValueError:
+            self._find_mode_combo.setCurrentIndex(0)
+        self._recompute_find_hits()
+
+        mk = data.get("pinnedHighlightKey")
+        if mk:
+            sc.set_highlighted_task(mk, locked=True)
+        else:
+            sc.set_highlighted_task(None)
+
+        if tab := self._active_tab:
+            self._stash_tab_state(tab)
+
+    def _export_portable_session(self) -> None:
+        """Export portable session JSON (Web-compatible)."""
+        try:
+            payload = self._build_portable_session_payload()
+        except ValueError as exc:
+            QMessageBox.information(self, "Export Session", str(exc))
+            return
+        base = os.path.splitext(os.path.basename(self._current_file or "trace"))[0]
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Session",
+            os.path.join(os.path.dirname(self._current_file or ""), f"{base}-session.json"),
+            "JSON files (*.json);;All files (*)",
+        )
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(payload, fh, indent=2, ensure_ascii=True)
+                fh.write("\n")
+            self.statusBar().showMessage(
+                f"Session exported → {os.path.basename(path)}", 4000)
+        except OSError as exc:
+            QMessageBox.critical(self, "Export Error", str(exc))
+
+    def _import_portable_session(self) -> None:
+        """Import portable session JSON."""
+        if self._trace is None:
+            QMessageBox.information(self, "Import Session", "Open a trace first.")
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import Session",
+            os.path.dirname(self._current_file or ""),
+            "JSON files (*.json);;All files (*)",
+        )
+        if not path:
+            return
+        try:
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh)
+            self._apply_portable_session_payload(data)
+            self.statusBar().showMessage(
+                f"Session imported from {os.path.basename(path)}", 4000)
+        except (OSError, json.JSONDecodeError, ValueError, TypeError) as exc:
+            QMessageBox.critical(self, "Import Session", str(exc))
+
     def _export_marks_csv(self) -> None:
         """Export all bookmarks and annotations to a CSV file."""
         if self._trace is None:
@@ -19439,6 +19706,9 @@ class MainWindow(QMainWindow):
         sections = [
             ("File", [
                 ("Ctrl+O",       "Open .btf trace file"),
+                ("Ctrl+W",       "Close active tab"),
+                ("Ctrl+Tab",     "Next trace tab"),
+                ("Ctrl+Shift+Tab", "Previous trace tab"),
                 ("Ctrl+S",       "Open snapshot editor"),
                 ("Ctrl+Shift+C", "Copy viewport to clipboard"),
                 ("Ctrl+Q",       "Quit  (Alt+F4 also works on Windows)"),

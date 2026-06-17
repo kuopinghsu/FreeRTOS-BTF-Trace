@@ -16,14 +16,12 @@
       :loading="loading"
       :loading-pct="loadingPct"
       :loading-msg="loadingMsg"
-      :recent-files="recentFiles"
       :time-scale="trace?.timeScale || 'ns'"
       @update:model-value="v => Object.assign(timelineOptions, v)"
       @file-error="showToast($event, 'error')"
       @trace-reading="onTraceReading"
       @trace-loaded="onTraceLoaded"
       @load-demo="onLoadDemo"
-      @open-recent="onOpenRecent"
       @zoom="onZoom"
       @fit="onFit"
       @zoom1to1="onZoom1to1"
@@ -456,6 +454,12 @@
                 Ctrl+W
               </div><div>Close active tab</div>
               <div class="k">
+                Ctrl+Tab
+              </div><div>Next trace tab</div>
+              <div class="k">
+                Ctrl+Shift+Tab
+              </div><div>Previous trace tab</div>
+              <div class="k">
                 F
               </div><div>Fit timeline to trace</div>
               <div class="k">
@@ -740,8 +744,7 @@ import JumpToTimeDialog from './components/JumpToTimeDialog.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
 import { formatTime }   from './renderer/TimelineRenderer.js'
 import { taskDisplayName, taskMergeKey, setColorblindMode } from './utils/colors.js'
-import {
-  loadSettings, saveSettings, applySettingsToRuntime, resizeTabCursors, normalizeSettings,
+import { loadSettings, saveSettings, applySettingsToRuntime, resizeTabCursors, normalizeSettings,
 } from './utils/settingsStore.js'
 import { traceIsMultiCore } from './utils/migrationAnalysis.js'
 import {
@@ -750,11 +753,10 @@ import {
 } from './utils/cpuLoadHelpers.js'
 import { useTraceTabs } from './composables/useTraceTabs.js'
 import { loadSession, saveSession, getSavedTabState, applySavedTabState, buildSessionSnapshot, isRestorableViewport, applySavedLayout } from './utils/sessionStore.js'
-import { loadRecentFiles, addRecentFile } from './utils/recentFilesStore.js'
-import { readRecentFile, storeFileHandle } from './utils/recentFileHandles.js'
 import { createUndoStack } from './utils/undoStack.js'
 import {
   buildPortableSession, parsePortableSession, applyPortableSession, downloadPortableSession,
+  sessionCursorsSlotCount,
 } from './utils/sessionPortable.js'
 import { computeFindHits, stepFindHitIndex } from './utils/findAnalysis.js'
 import exampleBtfB64   from 'virtual:example-btf'
@@ -775,6 +777,7 @@ const {
   cpuLoadExpanded,
   openTab,
   closeTab,
+  cycleTraceTab,
   resetTabForLoad,
   restorePlaceholderTabs,
   getNavCache,
@@ -796,7 +799,6 @@ let _heatmapRestoreSnapshot = null
 const statsPaused = ref(false)
 const rightPanelTab = ref('stats')
 const jumpDialogOpen = ref(false)
-const recentFiles = ref(loadRecentFiles())
 const dragOver = ref(false)
 const statsSectionHeights = ref({})
 let _dragDepth = 0
@@ -1214,6 +1216,9 @@ async function attachParsedTrace(name, packedOrTrace) {
     restoreTabState(tab)
 
     tab.trace = markRaw(trace)
+    if (trace.meta?._versionWarning) {
+      showToast(trace.meta._versionWarning, 'info')
+    }
     await nextTick()
 
     _cpuLoadUserSized = false
@@ -1246,7 +1251,6 @@ async function parseTraceOnMainThread(text, name) {
 }
 
 async function onTraceLoaded({ text, name }) {
-  recentFiles.value = addRecentFile(name)
   // Terminate any in-progress parse
   if (_parseWorker) { _parseWorker.terminate(); _parseWorker = null }
 
@@ -1438,21 +1442,6 @@ function focusFindPanel() {
   nextTick(() => findPanelRef.value?.focusInput())
 }
 
-async function onOpenRecent(name) {
-  const file = await readRecentFile(name)
-  if (file) {
-    onTraceReading({ name: file.name })
-    try {
-      const text = await file.text()
-      await onTraceLoaded({ text, name: file.name })
-    } catch {
-      showToast(`Failed to read "${name}"`, 'error')
-    }
-    return
-  }
-  showToast(`Use Open to select "${name}"`, 'info')
-}
-
 function onDragEnter(e) {
   if (e.dataTransfer?.types?.includes('Files')) {
     _dragDepth++
@@ -1481,13 +1470,6 @@ async function onFileDrop(e) {
     showToast('Only .btf files are supported', 'error')
     return
   }
-  try {
-    const item = e.dataTransfer?.items?.[0]
-    if (item?.getAsFileSystemHandle) {
-      const handle = await item.getAsFileSystemHandle()
-      if (handle) await storeFileHandle(file.name, handle)
-    }
-  } catch { /* FSA unavailable */ }
   onTraceReading({ name: file.name })
   const reader = new FileReader()
   reader.onload = (ev) => onTraceLoaded({ text: ev.target.result, name: file.name })
@@ -1919,6 +1901,13 @@ function onGlobalKeydown(e) {
     return
   }
 
+  const mod = e.ctrlKey || e.metaKey
+  if (mod && e.key === 'Tab') {
+    e.preventDefault()
+    cycleTraceTab(!e.shiftKey)
+    return
+  }
+
   if (e.key === 'Tab') {
     e.preventDefault()
     cycleHighlightedSegment(!e.shiftKey)
@@ -1953,8 +1942,6 @@ function onGlobalKeydown(e) {
   }
 
   if (helpOpen.value || aboutOpen.value || heatmapOpen.value || settingsOpen.value || jumpDialogOpen.value) return
-
-  const mod = e.ctrlKey || e.metaKey
 
   if (mod && e.key === ',') {
     e.preventDefault()
@@ -2313,13 +2300,13 @@ async function onImportSession(file) {
       showToast(`Session is for "${data.traceName}" (current: ${activeTab.value.name})`, 'info')
     }
     pushUndoSnapshot()
-    applyPortableSession(activeTab.value, data, timelineOptions)
+    const needed = sessionCursorsSlotCount(data, appSettings.maxCursors)
+    if (needed > appSettings.maxCursors) {
+      appSettings.maxCursors = needed
+      saveSettings(appSettings)
+    }
+    applyPortableSession(activeTab.value, data, timelineOptions, trace.value)
     resizeTabCursors(tabs.value, appSettings.maxCursors)
-    pinnedHighlightKey.value = data.pinnedHighlightKey ?? null
-    timelineOptions.highlightKey = data.pinnedHighlightKey ?? null
-    timelineOptions.lockedTaskKey = data.pinnedHighlightKey ?? null
-    if (data.findQuery != null) findQuery.value = data.findQuery
-    if (data.findMode != null) findMode.value = data.findMode
     nextTick(() => {
       applyTimelineViewport()
       if (findQuery.value) recomputeFind()

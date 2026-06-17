@@ -6,6 +6,7 @@ import { bisectLeft, bisectRight } from './bisect.js'
 import { taskLabelForMergeKey, taskReprGet } from './colors.js'
 
 export const FIND_MODES = ['contains', 'exact', 'regex', 'migrations']
+const MAX_REGEX_LEN = 200
 
 /**
  * @param {object} trace
@@ -38,6 +39,7 @@ export function computeFindHits(trace, query, mode, annotations = []) {
 
   let regexObj = null
   if (modeKey === 'regex') {
+    if (q.length > MAX_REGEX_LEN) return { hits: [], error: 'Regex too long' }
     try {
       regexObj = new RegExp(q, 'i')
     } catch {
