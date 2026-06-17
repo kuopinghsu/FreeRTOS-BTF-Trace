@@ -22,8 +22,8 @@ A PyQt5-based interactive visualiser for FreeRTOS context-switch traces in **Bes
 - **Default zoom 2 timescale units/px** — the **1:1** toolbar button resets to 2 timescale units per pixel (for `ns` timescale, the UI shows `2 ns/px`; configurable in Settings)
 - **Zoom to cursor range** — `Ctrl+R` or the **⊡ Range** toolbar button fits the viewport exactly between cursor C1 (left/top edge) and the last cursor (right/bottom edge)
 - **Viewport culling** — only visible rows/columns and segments are rendered; no slowdown on large traces
-- **Multi-tab traces** — open several `.btf` files at once (Desktop: closable tabs; Web: tab bar under the toolbar). Desktop restores session tabs, active tab, and per-tab zoom/cursors from `btf_viewer.rc` on launch; Web restores per-tab cursors, marks, viewport, and view options from browser `localStorage` when you reload a trace by name
-- **Measurement cursors** — Desktop supports 2–8 cursors (default: 4); Web supports up to 4 cursors
+- **Multi-tab traces** — open several `.btf` files at once (Desktop: closable tabs; Web: tab bar under the toolbar). Desktop restores session tabs, active tab, and per-tab zoom/cursors from `btf_viewer.rc` on launch; Web restores tab names, per-tab cursors, marks, viewport, layout sizes, and view options from browser `localStorage` (re-open each file to load trace data)
+- **Measurement cursors** — Desktop and Web support 2–8 cursors (default: 4); configurable in Settings
 - **Trace compare** — with 2+ tabs open, **Trace Compare…** in the Statistics panel diffs **Summary**, **Top Tasks**, and **Core Migrations** side-by-side (Desktop + Web). Optional **Limit to each tab's cursor range** compares metrics within C1–Cn when 2+ cursors are placed on each trace
 - **Core migration analysis** — detect tasks that run on multiple cores; **Core Migrations** stats table (ping-pong, STI correlation, gap-after vs other gaps), **clickable two-level Migration heatmap** (core-pair overview → per-task sub-bins → timeline drill-down), **Migrated tasks only** legend filter, toolbar **All tasks** reset, and Find **Migrations** mode (Desktop)
 - **Cursor-scoped statistics** — with 2+ cursors, the Statistics panel can limit all metrics (CPU%, execution slices, blocking time, inter-arrival, **response time**, **preemption chain**, scheduling summary, exports, and charts) to the window from C1 through the last cursor; toggle **Limit to cursor range (C1–Cn)** (Desktop + Web)
@@ -217,11 +217,23 @@ The right side holds **Cursor / Bookmark** and **Statistics** pages (tab bar at 
 
 ### Multi-tab traces (Web)
 
-Same tab bar behaviour as desktop: each `.btf` opens in its own tab with independent cursors, marks, zoom, and chart state. When you reload a trace by name, cursors, marks, viewport, and pinned highlights are restored from browser `localStorage`. **Trace Compare…** uses any two loaded tabs — useful for before/after or build-to-build diffs.
+Same tab bar behaviour as desktop: each `.btf` opens in its own tab with independent cursors, marks, zoom, chart state, and Find queries. On page reload, **tab names** and per-tab session state are restored from `localStorage`; use **Open**, **Recent**, or **Demo** to load trace data again. **Trace Compare…** uses any two loaded tabs — useful for before/after or build-to-build diffs.
 
 ### Session restore (Web)
 
-The web viewer persists session state in browser `localStorage` (key `btf-viewer-session-v1`). State is saved automatically (debounced ~400 ms) when you change cursors, marks, zoom/pan, or view options.
+The web viewer persists session state in browser `localStorage` (key `btf-viewer-session-v1`). State is saved automatically (debounced ~400 ms) when you change cursors, marks, zoom/pan, view options, Find queries, panel widths, or stats table heights.
+
+**On page load:**
+
+- Restores **tab names** (placeholder tabs) and the last active tab.
+- Restores per-tab cursors, marks, viewport, Find state, and open distribution-chart selection when you re-open a file with the same name.
+- Restores right-panel width, CPU-load panel height, and stats table section heights.
+
+**Limitations:**
+
+- Browser security prevents auto-loading file contents — you must **Open**, pick from **Recent**, or use **Demo** after refresh.
+- Drag-and-drop a `.btf` onto the window works the same as **Open**.
+- `localStorage` may be unavailable in strict private browsing modes.
 
 **Saved per trace name** (basename of the opened file, e.g. `example.btf`):
 
@@ -234,12 +246,7 @@ The web viewer persists session state in browser `localStorage` (key `btf-viewer
 
 **How to restore:** re-open the same `.btf` file (same tab name) after a page refresh. Zoom is stored as the visible time window (`timeStart`–`timeEnd`), not a separate scale factor — pan/zoom once more before closing if you want to be sure the latest view is saved.
 
-**Limitations:**
-
-- Does **not** auto-reopen files on page load — choose **Open** or **Demo** after refreshing the browser.
-- Tab identity is the **filename only**; two different paths with the same basename share one saved slot.
-- Trace data is never stored — only layout and UI state.
-- `localStorage` may be unavailable in strict private browsing modes.
+Tab identity is the **filename only**; two different paths with the same basename share one saved slot. Trace data is never stored — only layout and UI state.
 
 ### Web performance architecture
 
@@ -759,7 +766,16 @@ A **migration** is recorded when consecutive slices of the same task (merge-key)
 | Resizable right panel / dock width | ✓ (docks) | ✓ |
 | **Min** / **Max** slice links (execution / blocking / inter-arrival / response) | ✓ | ✓ |
 | **Preemption chain** table + distribution charts | ✓ | ✓ |
-| Find bar **Migrations** mode | ✓ | — |
+| Find bar **Migrations** mode | ✓ | ✓ |
+| **Find** panel (Contains / Exact / Regex / Migrations) | ✓ | ✓ |
+| **Zoom to cursor range** (`Ctrl+R`, **⊡ Range**) | ✓ | ✓ |
+| **1:1** zoom toolbar button | ✓ | ✓ |
+| Jump to time / trace start / end | ✓ | ✓ |
+| Drag-and-drop `.btf` open | ✓ | ✓ |
+| **Open Recent** (8 filenames) | ✓ | ✓ |
+| Direct clipboard copy (`Ctrl+Shift+C`) | ✓ | ✓ |
+| Persist panel widths / stats table heights | ✓ | ✓ |
+| Restore tab names on page load (re-open files to load) | ✓ | ✓ |
 | **Trace Compare…** (2+ open traces) | ✓ | ✓ |
 | **Trace Compare…** cursor-scoped mode | ✓ | ✓ |
 | Web session restore (`localStorage`) | — | ✓ |
@@ -1273,6 +1289,7 @@ timestamp, Core_N, 0, C, Core_N, 0, set_frequency, freq_hz
 | **Web stats worker** | `web/src/parser/statsWorker.js` | Debounced expanded metric tables (120 ms); falls back to main thread if worker unavailable |
 | **Web renderer** | `web/src/renderer/TimelineRenderer.js` | Canvas 2D, viewport culling, LOD binning, per-frame paint budget |
 | **Web WASM accel** | `web/src/renderer/wasmAccel.js`, `wasm/timeline_accel.wat` | Optional bisect / row-cull / LOD reduce; JS fallback when WASM unavailable |
+| **Find analysis** | `findAnalysis.js` / Find dock | Contains, Exact, Regex, Migrations modes; F3 navigation (Desktop + Web) |
 | **Session store** | `web/src/utils/sessionStore.js` | `localStorage` key `btf-viewer-session-v1` |
 | **Trace compare** | `traceCompare.js` / `_TraceCompareDialog` | Optional per-tab C1–Cn scope (Desktop + Web) |
 | **Migration heatmap** | `migrationAnalysis.js` / `_MigrationHeatmapDialog` | Two-level drill-down: core-pair × 32 bins → task × 32 sub-bins → timeline zoom/filter; `migrationHeatmapGrid()` + `migrationTaskHeatmapGrid()`; non-modal on Desktop; multi-core traces only |

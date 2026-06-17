@@ -57,6 +57,35 @@
       Demo
     </button>
 
+    <div
+      v-if="recentFiles.length"
+      class="recent-wrap"
+    >
+      <button
+        class="tb-btn"
+        title="Open a recently used trace"
+        @click="recentOpen = !recentOpen"
+      >
+        Recent ▾
+      </button>
+      <div
+        v-if="recentOpen"
+        class="recent-menu"
+        @mouseleave="recentOpen = false"
+      >
+        <button
+          v-for="name in recentFiles"
+          :key="name"
+          type="button"
+          class="recent-item"
+          :title="name"
+          @click="onRecentClick(name)"
+        >
+          {{ name }}
+        </button>
+      </div>
+    </div>
+
     <div class="tb-sep" />
 
     <!-- View mode -->
@@ -226,6 +255,33 @@
       >
         <path d="M1.5 1h5v1h-4v4h-1V1.5a.5.5 0 0 1 .5-.5zm13 0a.5.5 0 0 1 .5.5V6h-1V2h-4V1h4.5zM1 10h1v4h4v1H1.5a.5.5 0 0 1-.5-.5V10zm14 0v4.5a.5.5 0 0 1-.5.5H10v-1h4v-4h1z" />
       </svg>
+    </button>
+    <button
+      v-if="traceInfo"
+      class="tb-btn"
+      :title="zoom1to1Title"
+      @click="emit('zoom1to1')"
+    >
+      1:1
+    </button>
+    <button
+      v-if="traceInfo"
+      class="tb-btn"
+      title="Zoom to cursor range (Ctrl+R)"
+      @click="emit('zoomRange')"
+    >
+      ⊡ Range
+    </button>
+    <button
+      v-if="traceInfo"
+      class="tb-btn"
+      title="Find task or migration (Ctrl+F)"
+      @click="emit('showFind')"
+    >
+      <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
+        <path d="M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398h-.001l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.85-3.85zm-5.242 1.1a5.5 5.5 0 1 1 0-11 5.5 5.5 0 0 1 0 11z" />
+      </svg>
+      Find
     </button>
 
     <div class="tb-sep" />
@@ -423,7 +479,10 @@
 </template>
 
 <script setup>
-defineProps({
+import { ref, computed } from 'vue'
+import { getTimelineLayout } from '../utils/timelineLayout.js'
+
+const props = defineProps({
   modelValue:  { type: Object,  required: true },
   traceInfo:   { type: String,  default: '' },
   heatmapEnabled: { type: Boolean, default: false },
@@ -431,9 +490,24 @@ defineProps({
   loading:     { type: Boolean, default: false },
   loadingPct:  { type: Number,  default: 0 },
   loadingMsg:  { type: String,  default: '' },
+  recentFiles: { type: Array, default: () => [] },
+  timeScale:   { type: String, default: 'ns' },
 })
 
-const emit = defineEmits(['update:modelValue', 'trace-reading', 'trace-loaded', 'loadDemo', 'zoom', 'fit', 'expandAll', 'collapseAll', 'addMark', 'copyScreenshot', 'exportSvg', 'showHelp', 'showAbout', 'showSettings', 'showHeatmap', 'clearTaskFilter', 'file-error'])
+const emit = defineEmits([
+  'update:modelValue', 'trace-reading', 'trace-loaded', 'loadDemo', 'zoom', 'fit',
+  'zoom1to1', 'zoomRange', 'showFind', 'openRecent',
+  'expandAll', 'collapseAll', 'addMark', 'copyScreenshot', 'exportSvg',
+  'showHelp', 'showAbout', 'showSettings', 'showHeatmap', 'clearTaskFilter', 'file-error',
+])
+
+const recentOpen = ref(false)
+
+const zoom1to1Title = computed(() => {
+  const tspx = getTimelineLayout().timescalePerPxDefault
+  const u = props.timeScale || 'ns'
+  return `Zoom to 1:1 scale (${tspx} ${u}/px)`
+})
 
 function onFileChange(e) {
   const file = e.target.files[0]
@@ -450,6 +524,11 @@ function onFileChange(e) {
   reader.readAsText(file)
   // Reset input so same file can be re-loaded
   e.target.value = ''
+}
+
+function onRecentClick(name) {
+  recentOpen.value = false
+  emit('openRecent', name)
 }
 </script>
 
@@ -571,6 +650,40 @@ function onFileChange(e) {
   transition: background 0.15s;
 }
 .app-name-btn:hover {
+  background: var(--tb-btn-hover);
+}
+.recent-wrap {
+  position: relative;
+}
+.recent-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 200;
+  min-width: 180px;
+  max-width: 320px;
+  margin-top: 2px;
+  padding: 4px 0;
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+}
+.recent-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 12px;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.recent-item:hover {
   background: var(--tb-btn-hover);
 }
 </style>

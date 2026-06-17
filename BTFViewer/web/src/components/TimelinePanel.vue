@@ -54,6 +54,27 @@
       >
         <div
           class="ctx-item"
+          @click="onCtxPlaceCursor"
+        >
+          Place cursor here
+        </div>
+        <div
+          v-if="hasPlacedCursors"
+          class="ctx-item"
+          @click="onCtxRemoveNearestCursor"
+        >
+          Remove nearest cursor
+        </div>
+        <div
+          v-if="hasPlacedCursors"
+          class="ctx-item"
+          @click="onCtxClearCursors"
+        >
+          Clear all cursors
+        </div>
+        <div class="ctx-sep" />
+        <div
+          class="ctx-item"
           @click="onAddBookmark"
         >
           <svg
@@ -166,7 +187,7 @@ import { toBlob as domToBlob } from 'html-to-image'
 import LabelColumn from './LabelColumn.vue'
 import StiTooltip  from './StiTooltip.vue'
 import SegmentTooltip from './SegmentTooltip.vue'
-import { render as renderTimeline, renderVertical, buildRowLayout, buildColumnLayout, drawHoverLine, drawHoverLineVertical, drawRangeSelect, drawRangeSelectVertical, drawCursors, drawCursorsVertical, drawMarksHorizontal, drawMarksVertical, RULER_H, isStiTagChannel, RULER_W, COL_W, HEADER_H, formatTime, rowBandHeight, visibleRowIndexRange } from '../renderer/TimelineRenderer.js'
+import { render as renderTimeline, renderVertical, buildRowLayout, buildColumnLayout, drawHoverLine, drawHoverLineVertical, drawRangeSelect, drawRangeSelectVertical, drawCursors, drawCursorsVertical, drawMarksHorizontal, drawMarksVertical, drawFindHits, drawFindHitsVertical, RULER_H, isStiTagChannel, RULER_W, COL_W, HEADER_H, formatTime, rowBandHeight, visibleRowIndexRange } from '../renderer/TimelineRenderer.js'
 import { getTimelineLayout } from '../utils/timelineLayout.js'
 
 function layout() {
@@ -179,6 +200,8 @@ import { segmentTooltipLines as buildSegmentTooltipLines } from '../utils/statsA
 import { isRestorableViewport } from '../utils/sessionStore.js'
 import { isMigratedTask } from '../utils/migrationAnalysis.js'
 import { lodReduce } from '../utils/lod.js'
+import { collectSegmentStarts } from '../utils/snapBoundary.js'
+import { bisectLeft, bisectRight } from '../utils/bisect.js'
 import {
   initWasmAccel,
   registerTraceWasmAccel,
@@ -192,6 +215,9 @@ const props = defineProps({
   trace:   { type: Object, default: null },
   options: { type: Object, required: true },  // { viewMode, highlightKey, showGrid, darkMode, orientation, marks }
   cursors: { type: Array, default: () => [] },
+  maxCursors: { type: Number, default: 8 },
+  findHits: { type: Array, default: () => [] },
+  findMarkerNs: { type: Number, default: null },
   /** Per-tab viewport from session store; applied on trace load instead of fit-to-trace when valid. */
   persistedViewport: { type: Object, default: null },
 })
@@ -341,7 +367,9 @@ const hoverTime   = ref(null)
 const rangeSelect = ref(null)  // { t0, t1 } while middle-dragging a zoom region
 
 // Right-click context menu
-const contextMenu = reactive({ visible: false, x: 0, y: 0, ns: 0 })
+const contextMenu = reactive({ visible: false, x: 0, y: 0, ns: 0, shiftKey: false })
+
+const hasPlacedCursors = computed(() => props.cursors.some(c => c != null))
 
 // ---- Scrollbars & navigator popup ----------------------------------------
 const SCROLLBAR_SIZE   = 10          // px – scrollbar track thickness
@@ -597,6 +625,7 @@ function paintHoverOverlay() {
     const pxPerNs = bodyH / (timeEnd - timeStart)
     drawMarksVertical(ctx, marks, props.trace, timeStart, pxPerNs, canvasW, canvasH, HEADER_H, darkMode, props.options.selectedMarkId ?? null)
     drawCursorsVertical(ctx, props.cursors, props.trace, timeStart, pxPerNs, canvasW, canvasH, HEADER_H, darkMode)
+    drawFindHitsVertical(ctx, props.findHits, props.findMarkerNs, props.trace, timeStart, pxPerNs, canvasW, canvasH, HEADER_H, darkMode)
     if (rangeSelect.value)
       drawRangeSelectVertical(ctx, rangeSelect.value.t0, rangeSelect.value.t1, timeStart, pxPerNs, canvasW, canvasH, HEADER_H, darkMode)
     if (hoverTime.value !== null)
@@ -605,6 +634,7 @@ function paintHoverOverlay() {
     const pxPerNs = canvasW / (timeEnd - timeStart)
     drawMarksHorizontal(ctx, marks, props.trace, timeStart, pxPerNs, canvasW, canvasH, darkMode, props.options.selectedMarkId ?? null)
     drawCursors(ctx, props.cursors, props.trace, timeStart, pxPerNs, canvasW, canvasH, darkMode)
+    drawFindHits(ctx, props.findHits, props.findMarkerNs, props.trace, timeStart, pxPerNs, canvasW, canvasH, darkMode)
     if (rangeSelect.value)
       drawRangeSelect(ctx, rangeSelect.value.t0, rangeSelect.value.t1, timeStart, pxPerNs, canvasW, canvasH, darkMode)
     if (hoverTime.value !== null)
@@ -632,6 +662,7 @@ function setupHandler() {
   _handler = new InteractionHandler(canvasEl.value, {
     getTrace:    () => props.trace,
     getViewport: () => ({ ...viewport }),
+    getMaxCursors: () => props.maxCursors,
     getOptions:  () => ({
       viewMode: props.options.viewMode,
       expanded,
@@ -722,13 +753,17 @@ function setupHandler() {
     onStiExpandToggle(key) {
       onStiExpandToggle(key)
     },
-    onContextMenu({ ns, x, y }) {
-      // x, y are client coordinates; convert to element-relative
+    onContextMenu({ ns, x, y, shiftKey }) {
+      if (shiftKey) {
+        _handler?.clearAllCursors()
+        return
+      }
       const rect = canvasWrapEl.value?.getBoundingClientRect()
       if (!rect) return
       contextMenu.ns      = ns
       contextMenu.x       = x - rect.left
       contextMenu.y       = y - rect.top
+      contextMenu.shiftKey = !!shiftKey
       contextMenu.visible = true
     },
     onRangeSelectChange({ t0, t1 }) {
@@ -745,6 +780,21 @@ function setupHandler() {
 }
 
 // ---- Context menu actions -------------------------------------------------
+
+function onCtxPlaceCursor() {
+  contextMenu.visible = false
+  _handler?.placeCursorAt(contextMenu.ns, contextMenu.shiftKey)
+}
+
+function onCtxRemoveNearestCursor() {
+  contextMenu.visible = false
+  _handler?.removeNearestCursor(contextMenu.ns)
+}
+
+function onCtxClearCursors() {
+  contextMenu.visible = false
+  _handler?.clearAllCursors()
+}
 
 function onAddBookmark() {
   contextMenu.visible = false
@@ -980,7 +1030,7 @@ function zoomToTimeRange(lo, hi, paddingFrac = 0.05) {
   const tLo = props.trace.timeMin >= 0 ? Math.max(0, props.trace.timeMin) : props.trace.timeMin
   const tHi = props.trace.timeMax
   const span = hi - lo
-  const pad = Math.max(1, span * paddingFrac)
+  const pad = paddingFrac > 0 ? Math.max(1, span * paddingFrac) : 0
   let timeStart = Math.max(tLo, lo - pad)
   let timeEnd = Math.min(tHi, hi + pad)
   const minSpan = Math.max(1, (tHi - tLo) * 1e-6)
@@ -994,6 +1044,119 @@ function zoomToTimeRange(lo, hi, paddingFrac = 0.05) {
   viewport.scrollY = 0
   emitViewportChange()
   scheduleRender()
+}
+
+function zoomToCursorRange() {
+  const placed = props.cursors.filter(c => c != null).sort((a, b) => a - b)
+  if (placed.length < 2) return false
+  zoomToTimeRange(placed[0], placed[placed.length - 1], 0)
+  return true
+}
+
+function zoom1to1(wasFit = false) {
+  if (!props.trace) return
+  const tspx = layout().timescalePerPxDefault
+  const lo = props.trace.timeMin >= 0 ? Math.max(0, props.trace.timeMin) : props.trace.timeMin
+  const hi = props.trace.timeMax
+  const centerNs = wasFit ? lo : getViewportCenter()
+  const axisPx = orientation.value === 'v'
+    ? Math.max(1, viewport.canvasH - HEADER_H)
+    : Math.max(1, viewport.canvasW)
+  const span = axisPx * tspx
+  let timeStart = centerNs - span / 2
+  let timeEnd = centerNs + span / 2
+  if (timeStart < lo) {
+    timeEnd += lo - timeStart
+    timeStart = lo
+  }
+  if (timeEnd > hi) {
+    timeStart -= timeEnd - hi
+    timeEnd = hi
+  }
+  timeStart = Math.max(lo, timeStart)
+  timeEnd = Math.min(hi, Math.max(timeStart + 1, timeEnd))
+  viewport.timeStart = timeStart
+  viewport.timeEnd = timeEnd
+  emitViewportChange()
+  scheduleRender()
+}
+
+function jumpToTraceStart() {
+  if (!props.trace) return
+  jumpToNs(props.trace.timeMin >= 0 ? Math.max(0, props.trace.timeMin) : props.trace.timeMin)
+}
+
+function jumpToTraceEnd() {
+  if (!props.trace) return
+  jumpToNs(props.trace.timeMax)
+}
+
+let _segStartsCache = null
+let _segStartsTrace = null
+
+function jumpSegmentBoundary(forward) {
+  if (!props.trace) return
+  if (_segStartsTrace !== props.trace) {
+    _segStartsCache = collectSegmentStarts(props.trace)
+    _segStartsTrace = props.trace
+  }
+  const allStarts = _segStartsCache
+  if (!allStarts?.length) return
+  const horiz = orientation.value === 'h'
+  const edgeLo = viewport.timeStart
+  const edgeHi = viewport.timeEnd
+  let target
+  if (forward) {
+    const idx = bisectRight(allStarts, edgeHi)
+    target = allStarts[Math.min(idx, allStarts.length - 1)]
+  } else {
+    const idx = bisectLeft(allStarts, edgeLo) - 1
+    target = allStarts[Math.max(idx, 0)]
+  }
+  jumpToNs(target)
+}
+
+function scrollTimeAxis(fraction) {
+  const span = viewport.timeEnd - viewport.timeStart
+  const delta = span * fraction
+  if (orientation.value === 'v') {
+    viewport.timeStart += delta
+    viewport.timeEnd += delta
+  } else {
+    viewport.timeStart += delta
+    viewport.timeEnd += delta
+  }
+  emitViewportChange()
+  scheduleRender()
+}
+
+function scrollRowAxis(fraction) {
+  const vert = orientation.value === 'v'
+  if (vert) {
+    const totalW = cachedColumnLayout.value?.totalWidth ?? 0
+    const maxScroll = Math.max(0, totalW - viewport.canvasW)
+    viewport.scrollX = Math.max(0, Math.min(maxScroll, (viewport.scrollX || 0) + maxScroll * fraction))
+  } else {
+    const totalH = cachedRowLayout.value?.totalHeight ?? 0
+    const visH = Math.max(0, viewport.canvasH - RULER_H)
+    const maxScroll = Math.max(0, totalH - visH)
+    viewport.scrollY = Math.max(0, Math.min(maxScroll, (viewport.scrollY || 0) + maxScroll * fraction))
+  }
+  emitViewportChange()
+  scheduleRender()
+}
+
+function placeCursorAtCenter(shiftSnap = false) {
+  const ns = getHoverTime() ?? getLastActiveCursorTime() ?? getViewportCenter()
+  _handler?.placeCursorAt(ns, shiftSnap)
+}
+
+function removeNearestCursorAt(ns) {
+  _handler?.removeNearestCursor(ns ?? getViewportCenter())
+}
+
+function clearAllCursorsViaHandler() {
+  _handler?.clearAllCursors()
 }
 
 function getViewportCenter() {
@@ -1174,7 +1337,14 @@ function getHoverTime() { return hoverTime.value }
 function getLastActiveCursorTime() { return _handler?.getLastActiveCursorTime() ?? null }
 function getViewport() { return { ...viewport } }
 
-defineExpose({ fitToTrace, applyViewport, applyTraceViewport, ensureTraceViewport, beginLoadSettle, scheduleRender, zoomCenter, expandAll, collapseAll, jumpToNs, zoomToTimeRange, getViewport, getViewportCenter, getCoreAtViewportCenter, scrollToTask, scrollToSegmentIfNeeded, captureScreenshotBlob, captureAsSvg, getHoverTime, getLastActiveCursorTime })
+defineExpose({
+  fitToTrace, applyViewport, applyTraceViewport, ensureTraceViewport, beginLoadSettle, scheduleRender,
+  zoomCenter, expandAll, collapseAll, jumpToNs, zoomToTimeRange, zoomToCursorRange, zoom1to1,
+  jumpToTraceStart, jumpToTraceEnd, jumpSegmentBoundary, scrollTimeAxis, scrollRowAxis,
+  placeCursorAtCenter, removeNearestCursorAt, clearAllCursorsViaHandler,
+  getViewport, getViewportCenter, getCoreAtViewportCenter, scrollToTask, scrollToSegmentIfNeeded,
+  captureScreenshotBlob, captureAsSvg, getHoverTime, getLastActiveCursorTime,
+})
 
 // ---- Expand / collapse core rows -----------------------------------------
 function onExpandToggle(coreName) {
@@ -1346,6 +1516,10 @@ watch(overviewVisible, (vis) => {
 watch(() => props.cursors, (c) => {
   _handler?.setCursors(c)
   paintHoverOverlay()  // cursors are on the overlay canvas — no full repaint needed
+}, { deep: true })
+
+watch(() => [props.findHits, props.findMarkerNs], () => {
+  paintHoverOverlay()
 }, { deep: true })
 
 // Sync STI tooltip position
@@ -2046,6 +2220,11 @@ canvas {
 .overview-fade-enter-from,
 .overview-fade-leave-to {
   opacity: 0;
+}
+.ctx-sep {
+  height: 1px;
+  margin: 4px 8px;
+  background: var(--border);
 }
 .ctx-item:hover {
   background: var(--tb-btn-hover);

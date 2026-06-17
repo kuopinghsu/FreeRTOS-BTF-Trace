@@ -27,8 +27,12 @@ function layout() {
   return getTimelineLayout()
 }
 import { taskMergeKey } from '../utils/colors.js'
+import { snapToBoundary } from '../utils/snapBoundary.js'
 
-const MAX_CURSORS = 4
+function maxCursorsFrom(opts) {
+  const n = opts.getMaxCursors?.() ?? 8
+  return Math.max(4, Math.min(8, n))
+}
 
 export class InteractionHandler {
   /**
@@ -48,7 +52,8 @@ export class InteractionHandler {
   constructor(canvas, options = {}) {
     this._canvas  = canvas
     this._opts    = options
-    this._cursors = [null, null, null, null]  // up to MAX_CURSORS timestamps
+    const mc = maxCursorsFrom(options)
+    this._cursors = Array.from({ length: mc }, () => null)
 
     // Drag state
     this._dragging        = false
@@ -123,8 +128,9 @@ export class InteractionHandler {
   // ---- Public API --------------------------------------------------------
 
   setCursors(cursors) {
-    this._cursors = cursors.slice(0, MAX_CURSORS)
-    while (this._cursors.length < MAX_CURSORS) this._cursors.push(null)
+    const mc = maxCursorsFrom(this._opts)
+    this._cursors = cursors.slice(0, mc)
+    while (this._cursors.length < mc) this._cursors.push(null)
   }
 
   /** Return the timestamp of the most recently placed or dragged cursor, or null. */
@@ -135,6 +141,39 @@ export class InteractionHandler {
 
   setMinTimeSpan(span) {
     this._minTimeSpan = Math.max(1, span)
+  }
+
+  placeCursorAt(ns, shiftSnap = false) {
+    this._placeCursor(ns, shiftSnap)
+  }
+
+  removeNearestCursor(ns) {
+    const vp = this._opts.getViewport()
+    if (!vp) return
+    const snapNs = 5 * this._nsPerPx()
+    const cursors = [...this._cursors]
+    let bestIdx = -1
+    let bestDist = snapNs
+    for (let i = 0; i < cursors.length; i++) {
+      if (cursors[i] == null) continue
+      const d = Math.abs(cursors[i] - ns)
+      if (d < bestDist) {
+        bestDist = d
+        bestIdx = i
+      }
+    }
+    if (bestIdx >= 0) {
+      cursors[bestIdx] = null
+      this._cursors = cursors
+      this._opts.onCursorsChange?.(cursors)
+    }
+  }
+
+  clearAllCursors() {
+    const mc = maxCursorsFrom(this._opts)
+    this._cursors = Array.from({ length: mc }, () => null)
+    this._lastActiveCursorIdx = -1
+    this._opts.onCursorsChange?.(this._cursors)
   }
 
   // ---- Helpers -----------------------------------------------------------
@@ -440,7 +479,7 @@ export class InteractionHandler {
           // Click in timeline body → place cursor
           if (t !== null) {
             this._opts.onClearSelection?.()
-            this._placeCursor(t)
+            this._placeCursor(t, e.shiftKey)
             return
           }
         }
@@ -490,7 +529,7 @@ export class InteractionHandler {
           }
           const tClick = this._canvasToTime(cx, cy)
           this._opts.onClearSelection?.()
-          this._placeCursor(tClick)
+          this._placeCursor(tClick, e.shiftKey)
           return
         }
         // Click on ruler → start panning
@@ -722,11 +761,25 @@ export class InteractionHandler {
     const cy   = e.clientY - rect.top
     const t    = this._canvasToTime(cx, cy)
     if (t !== null) {
-      this._opts.onContextMenu?.({ ns: t, x: e.clientX, y: e.clientY })
+      this._opts.onContextMenu?.({ ns: t, x: e.clientX, y: e.clientY, shiftKey: e.shiftKey })
     }
   }
 
-  _placeCursor(t) {
+  _nsPerPx() {
+    const vp = this._opts.getViewport()
+    if (!vp) return 1
+    const vert = this._isVertical()
+    const span = vp.timeEnd - vp.timeStart
+    const pxBase = vert ? Math.max(1, vp.canvasH - HEADER_H) : Math.max(1, vp.canvasW)
+    return span / pxBase
+  }
+
+  _placeCursor(t, shiftSnap = false) {
+    const trace = this._opts.getTrace?.()
+    let placeT = t
+    if (shiftSnap && trace) {
+      placeT = snapToBoundary(trace, t, this._nsPerPx())
+    }
     const cursors = [...this._cursors]
     let placed = false
     // Clicking near an existing cursor removes it
@@ -751,13 +804,15 @@ export class InteractionHandler {
       }
     }
     if (!placed) {
+      const mc = maxCursorsFrom(this._opts)
+      while (cursors.length < mc) cursors.push(null)
       const emptyIdx = cursors.findIndex(c => c === null)
       if (emptyIdx !== -1) {
-        cursors[emptyIdx] = t
+        cursors[emptyIdx] = placeT
         this._lastActiveCursorIdx = emptyIdx
       } else {
         cursors.shift()
-        cursors.push(t)
+        cursors.push(placeT)
         this._lastActiveCursorIdx = cursors.length - 1
       }
     }

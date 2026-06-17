@@ -1214,6 +1214,49 @@ export function drawCursors(ctx, cursors, trace, timeStart, pxPerNs, canvasW, ca
   ctx.restore()
 }
 
+/** Find-hit markers (all matches) and optional active marker highlight. */
+export function drawFindHits(ctx, hitNsList, activeNs, trace, timeStart, pxPerNs, canvasW, canvasH, darkMode) {
+  if (!hitNsList?.length || !trace) return
+  ctx.save()
+  for (const ns of hitNsList) {
+    const x = Math.round((ns - timeStart) * pxPerNs)
+    if (x < 0 || x > canvasW) continue
+    const isActive = activeNs != null && ns === activeNs
+    ctx.strokeStyle = isActive
+      ? (darkMode ? '#FFD54F' : '#E65100')
+      : (darkMode ? 'rgba(255, 200, 80, 0.55)' : 'rgba(200, 100, 0, 0.45)')
+    ctx.lineWidth = isActive ? 2.5 : 1
+    ctx.setLineDash(isActive ? [] : [2, 4])
+    ctx.beginPath()
+    ctx.moveTo(x + 0.5, 0)
+    ctx.lineTo(x + 0.5, canvasH)
+    ctx.stroke()
+  }
+  ctx.setLineDash([])
+  ctx.restore()
+}
+
+export function drawFindHitsVertical(ctx, hitNsList, activeNs, trace, timeStart, pxPerNs, canvasW, canvasH, headerH, darkMode) {
+  if (!hitNsList?.length || !trace) return
+  ctx.save()
+  for (const ns of hitNsList) {
+    const y = Math.round(headerH + (ns - timeStart) * pxPerNs)
+    if (y < headerH || y > canvasH) continue
+    const isActive = activeNs != null && ns === activeNs
+    ctx.strokeStyle = isActive
+      ? (darkMode ? '#FFD54F' : '#E65100')
+      : (darkMode ? 'rgba(255, 200, 80, 0.55)' : 'rgba(200, 100, 0, 0.45)')
+    ctx.lineWidth = isActive ? 2.5 : 1
+    ctx.setLineDash(isActive ? [] : [2, 4])
+    ctx.beginPath()
+    ctx.moveTo(0, y + 0.5)
+    ctx.lineTo(canvasW, y + 0.5)
+    ctx.stroke()
+  }
+  ctx.setLineDash([])
+  ctx.restore()
+}
+
 // ---- Hover line (mouse position indicator) ---------------------------------
 
 export function drawHoverLine(ctx, t, trace, timeStart, pxPerNs, canvasW, canvasH, darkMode) {

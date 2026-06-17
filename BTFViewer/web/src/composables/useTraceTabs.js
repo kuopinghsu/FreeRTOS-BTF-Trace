@@ -6,11 +6,12 @@ function _emptyViewport() {
   return { timeStart: 0, timeEnd: 1, scrollY: 0, scrollX: 0, canvasW: 1, canvasH: 1 }
 }
 
-export function createTraceTab(name) {
+export function createTraceTab(name, { placeholder = false } = {}) {
   return {
     id: _nextTabId++,
     name: name || 'trace.btf',
     trace: null,
+    placeholder,
     cursors: [null, null, null, null],
     marks: [],
     markNextId: 1,
@@ -19,6 +20,12 @@ export function createTraceTab(name) {
     timelineViewport: _emptyViewport(),
     cpuLoadExpanded: true,
     navCache: null,
+    findQuery: '',
+    findMode: 'contains',
+    findHits: [],
+    findHitIdx: -1,
+    findMarkerNs: null,
+    openPlot: null,
   }
 }
 
@@ -73,16 +80,32 @@ export function useTraceTabs() {
     return tabs.value.find(t => t.name === name) ?? null
   }
 
-  function openTab(name) {
+  function openTab(name, opts = {}) {
     const existing = findTabByName(name)
     if (existing) {
       activeTabId.value = existing.id
+      if (!opts.placeholder) existing.placeholder = false
       return existing
     }
-    const tab = createTraceTab(name)
+    const tab = createTraceTab(name, opts)
     tabs.value.push(tab)
     activeTabId.value = tab.id
     return tab
+  }
+
+  function restorePlaceholderTabs(tabOrder, activeTabName) {
+    if (!tabOrder?.length) return
+    for (const name of tabOrder) {
+      if (!name || findTabByName(name)) continue
+      tabs.value.push(createTraceTab(name, { placeholder: true }))
+    }
+    if (activeTabName) {
+      const tab = findTabByName(activeTabName)
+      if (tab) activeTabId.value = tab.id
+      else if (tabs.value.length) activeTabId.value = tabs.value[0].id
+    } else if (tabs.value.length) {
+      activeTabId.value = tabs.value[0].id
+    }
   }
 
   function closeTab(id) {
@@ -97,6 +120,7 @@ export function useTraceTabs() {
 
   function resetTabForLoad(tab) {
     tab.trace = null
+    tab.placeholder = false
     tab.cursors = [null, null, null, null]
     tab.marks = []
     tab.markNextId = 1
@@ -104,6 +128,9 @@ export function useTraceTabs() {
     tab.highlightSegment = null
     tab.navCache = null
     tab.cpuLoadExpanded = true
+    tab.findHits = []
+    tab.findHitIdx = -1
+    tab.findMarkerNs = null
     Object.assign(tab.timelineViewport, _emptyViewport())
   }
 
@@ -129,6 +156,7 @@ export function useTraceTabs() {
     openTab,
     closeTab,
     resetTabForLoad,
+    restorePlaceholderTabs,
     getNavCache,
     setNavCache,
   }

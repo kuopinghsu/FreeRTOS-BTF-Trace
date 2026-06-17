@@ -1403,9 +1403,11 @@ const props = defineProps({
   cursors: { type: Array, default: () => [] },
   tabs:    { type: Array, default: () => [] },
   statsPaused: { type: Boolean, default: false },
+  openPlot: { type: Object, default: null },
+  sectionHeights: { type: Object, default: null },
 })
 
-const emit = defineEmits(['highlightTask', 'selectSegment'])
+const emit = defineEmits(['highlightTask', 'selectSegment', 'update:openPlot', 'update:sectionHeights'])
 
 const coresCollapsed = ref(false)
 const tasksCollapsed = ref(false)
@@ -1555,8 +1557,14 @@ const sectionHeights = ref({
   preemption: STATS_TABLE_MIG_DEFAULT_H,
   response: STATS_TABLE_DEFAULT_H,
 })
+watch(() => props.sectionHeights, (v) => {
+  if (v) Object.assign(sectionHeights.value, v)
+}, { immediate: true, deep: true })
 let _tableResize = null
-const openPlotRef = ref(null)   // { mk, kind } when plot dialog is open
+const openPlotRef = computed({
+  get: () => props.openPlot,
+  set: (v) => emit('update:openPlot', v),
+})
 const plotContentRef = ref(null)
 const selectedPlotPoint = ref(-1)
 const compareOpen = ref(false)
@@ -1616,6 +1624,7 @@ function onTableResizeEnd() {
   document.body.classList.remove('row-resizing')
   document.removeEventListener('mousemove', onTableResizeMove)
   document.removeEventListener('mouseup', onTableResizeEnd)
+  emit('update:sectionHeights', { ...sectionHeights.value })
 }
 
 onBeforeUnmount(() => {
@@ -2867,7 +2876,6 @@ watch(() => props.cursors, (cursors) => {
 }, { deep: true })
 
 watch(() => props.trace, () => {
-  closePlot()
   scheduleStatsRefresh()
 }, { immediate: true })
 

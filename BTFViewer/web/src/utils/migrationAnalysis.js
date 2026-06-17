@@ -4,6 +4,7 @@
 
 import { bisectLeft, bisectRight } from './bisect.js'
 import { parseTaskName, taskLabelForMergeKey, taskReprGet } from './colors.js'
+import { computeFindHits } from './findAnalysis.js'
 import { blockingTimeSamples } from './statsAnalysis.js'
 import { segFullyInRange, segOverlapsRange } from './statsRange.js'
 import { formatMigrationGapTime } from './timeFormat.js'
@@ -131,15 +132,7 @@ export function migrationRows(trace, lo, hi) {
 }
 
 export function migrationFindHits(trace, query) {
-  const q = (query || '').trim().toLowerCase()
-  const hits = []
-  for (const m of trace.migrations || []) {
-    const raw = taskReprGet(trace, m.mergeKey) || m.mergeKey
-    const disp = taskLabelForMergeKey(trace, m.mergeKey)
-    const hay = `${m.mergeKey} ${raw} ${disp} ${m.fromCore} ${m.toCore}`.toLowerCase()
-    if (!q || hay.includes(q)) hits.push(m.ns)
-  }
-  return [...new Set(hits)].sort((a, b) => a - b)
+  return computeFindHits(trace, query, 'migrations').hits
 }
 
 export function coreShortName(core) {

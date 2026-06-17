@@ -1,7 +1,11 @@
 <template>
   <div
     class="app"
-    :class="{ dark: timelineOptions.darkMode }"
+    :class="{ dark: timelineOptions.darkMode, 'drag-over': dragOver }"
+    @dragenter.prevent="onDragEnter"
+    @dragover.prevent="onDragOver"
+    @dragleave.prevent="onDragLeave"
+    @drop.prevent="onFileDrop"
   >
     <!-- Toolbar -->
     <Toolbar
@@ -12,13 +16,19 @@
       :loading="loading"
       :loading-pct="loadingPct"
       :loading-msg="loadingMsg"
+      :recent-files="recentFiles"
+      :time-scale="trace?.timeScale || 'ns'"
       @update:model-value="v => Object.assign(timelineOptions, v)"
       @file-error="showToast($event, 'error')"
       @trace-reading="onTraceReading"
       @trace-loaded="onTraceLoaded"
       @load-demo="onLoadDemo"
+      @open-recent="onOpenRecent"
       @zoom="onZoom"
       @fit="onFit"
+      @zoom1to1="onZoom1to1"
+      @zoom-range="onZoomRange"
+      @show-find="focusFindPanel"
       @expand-all="onExpandAll"
       @collapse-all="onCollapseAll"
       @add-mark="onAddMark"
@@ -50,6 +60,11 @@
         @click="activeTabId = tab.id"
       >
         <span class="trace-tab-label">{{ tab.name }}</span>
+        <span
+          v-if="!tab.trace"
+          class="trace-tab-placeholder"
+          title="Re-open this file to restore session"
+        >○</span>
         <span
           class="trace-tab-close"
           title="Close tab"
@@ -91,6 +106,9 @@
             :trace="trace"
             :options="timelineOptions"
             :cursors="cursors"
+            :max-cursors="appSettings.maxCursors"
+            :find-hits="findHits"
+            :find-marker-ns="findMarkerNs"
             :persisted-viewport="timelineViewport"
             @cursors-change="cursors = $event"
             @hover-time-change="cpuLoadHoverTime = $event"
@@ -261,6 +279,27 @@
             </div>
           </div>
 
+          <div v-else-if="rightPanelTab === 'find'" class="panel-page panel-page-find">
+            <div class="panel-section flex-fill">
+              <div class="panel-header">
+                Find
+              </div>
+              <FindPanel
+                ref="findPanelRef"
+                :query="findQuery"
+                :mode="findMode"
+                :hit-count="findHits.length"
+                :hit-index="findHitIdx"
+                :error="findError"
+                @update:query="onFindQueryChange"
+                @update:mode="onFindModeChange"
+                @recompute="recomputeFind"
+                @next="() => stepFind(true)"
+                @prev="() => stepFind(false)"
+              />
+            </div>
+          </div>
+
           <div v-else class="panel-page panel-page-stats">
             <div class="panel-section flex-fill">
               <div class="panel-header">
@@ -271,6 +310,10 @@
                 :cursors="cursors"
                 :tabs="tabs"
                 :stats-paused="statsPaused"
+                :open-plot="activeTab?.openPlot ?? null"
+                :section-heights="statsSectionHeights"
+                @update:open-plot="onOpenPlotChange"
+                @update:section-heights="onSectionHeightsChange"
                 @highlight-task="onHighlightClick"
                 @select-segment="onStatsSelectSegment"
               />
@@ -287,6 +330,15 @@
             @click="rightPanelTab = 'marks'"
           >
             Cursor / Bookmark
+          </button>
+          <button
+            class="panel-tab"
+            :class="{ active: rightPanelTab === 'find' }"
+            role="tab"
+            :aria-selected="rightPanelTab === 'find'"
+            @click="rightPanelTab = 'find'"
+          >
+            Find
           </button>
           <button
             v-if="appSettings.showStats"
@@ -364,6 +416,36 @@
                 V
               </div><div>Vertical layout</div>
               <div class="k">
+                C
+              </div><div>Place cursor at hover / centre</div>
+              <div class="k">
+                Shift+C
+              </div><div>Clear all cursors</div>
+              <div class="k">
+                Ctrl+F
+              </div><div>Open Find panel</div>
+              <div class="k">
+                F3 / Shift+F3
+              </div><div>Find next / previous match</div>
+              <div class="k">
+                Ctrl+R
+              </div><div>Zoom to cursor range</div>
+              <div class="k">
+                Ctrl+G
+              </div><div>Jump to time</div>
+              <div class="k">
+                Ctrl+Home / End
+              </div><div>Jump to trace start / end</div>
+              <div class="k">
+                Ctrl+Shift+C
+              </div><div>Copy viewport to clipboard (no editor)</div>
+              <div class="k">
+                Ctrl+W
+              </div><div>Close active tab</div>
+              <div class="k">
+                F
+              </div><div>Fit timeline to trace</div>
+              <div class="k">
                 G
               </div><div>Toggle grid</div>
               <div class="k">
@@ -379,14 +461,8 @@
                 A
               </div><div>Add annotation at current position</div>
               <div class="k">
-                C
-              </div><div>Clear all cursors</div>
-              <div class="k">
-                F
-              </div><div>Fit timeline to trace</div>
-              <div class="k">
                 S
-              </div><div>Copy screenshot to clipboard</div>
+              </div><div>Open screenshot editor</div>
               <div class="k">
                 +
               </div><div>Zoom in</div>
@@ -424,7 +500,16 @@
               </div><div>Pan timeline</div>
               <div class="k">
                 Click timeline
-              </div><div>Place/remove cursor</div>
+              </div><div>Place/remove cursor (Shift = snap to segment boundary)</div>
+              <div class="k">
+                Shift+right-click
+              </div><div>Clear all cursors</div>
+              <div class="k">
+                Arrows
+              </div><div>Scroll time (time axis) or rows (orthogonal axis)</div>
+              <div class="k">
+                Shift+arrows
+              </div><div>Jump to previous / next segment boundary</div>
               <div class="k">
                 Move mouse
               </div><div>Show live hover cursor in timeline and CPU load view</div>
@@ -554,6 +639,15 @@
       </div>
     </div>
 
+    <JumpToTimeDialog
+      v-if="jumpDialogOpen && trace"
+      :trace="trace"
+      @close="jumpDialogOpen = false"
+      @jump="onJumpToTime"
+      @jump-start="onJumpToTraceStart"
+      @jump-end="onJumpToTraceEnd"
+    />
+
     <MigrationHeatmapDialog
       v-if="heatmapOpen && trace"
       :trace="trace"
@@ -628,6 +722,8 @@ import StatisticsPanel  from './components/StatisticsPanel.vue'
 import MarksPanel       from './components/MarksPanel.vue'
 import SnapshotEditor   from './components/SnapshotEditor.vue'
 import MigrationHeatmapDialog from './components/MigrationHeatmapDialog.vue'
+import FindPanel from './components/FindPanel.vue'
+import JumpToTimeDialog from './components/JumpToTimeDialog.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
 import { formatTime }   from './renderer/TimelineRenderer.js'
 import { taskDisplayName, taskMergeKey, setColorblindMode } from './utils/colors.js'
@@ -640,7 +736,9 @@ import {
   CPU_LOAD_PANE_MIN_H,
 } from './utils/cpuLoadHelpers.js'
 import { useTraceTabs } from './composables/useTraceTabs.js'
-import { loadSession, saveSession, getSavedTabState, applySavedTabState, buildSessionSnapshot, isRestorableViewport } from './utils/sessionStore.js'
+import { loadSession, saveSession, getSavedTabState, applySavedTabState, buildSessionSnapshot, isRestorableViewport, applySavedLayout } from './utils/sessionStore.js'
+import { loadRecentFiles, addRecentFile } from './utils/recentFilesStore.js'
+import { computeFindHits, stepFindHitIndex } from './utils/findAnalysis.js'
 import exampleBtfB64   from 'virtual:example-btf'
 
 // ---- State ---------------------------------------------------------------
@@ -660,9 +758,13 @@ const {
   openTab,
   closeTab,
   resetTabForLoad,
+  restorePlaceholderTabs,
   getNavCache,
   setNavCache,
 } = useTraceTabs()
+const timelinePanelRef = ref(null)
+const findPanelRef = ref(null)
+const leftPaneRef = ref(null)
 const loading    = ref(false)
 const loadingPct = ref(0)
 const loadingMsg = ref('')
@@ -675,6 +777,24 @@ const heatmapOpen = ref(false)
 let _heatmapRestoreSnapshot = null
 const statsPaused = ref(false)
 const rightPanelTab = ref('stats')
+const jumpDialogOpen = ref(false)
+const recentFiles = ref(loadRecentFiles())
+const dragOver = ref(false)
+const statsSectionHeights = ref({})
+let _dragDepth = 0
+
+const findQuery = computed({
+  get: () => activeTab.value?.findQuery ?? '',
+  set: (v) => { if (activeTab.value) activeTab.value.findQuery = v },
+})
+const findMode = computed({
+  get: () => activeTab.value?.findMode ?? 'contains',
+  set: (v) => { if (activeTab.value) activeTab.value.findMode = v },
+})
+const findHits = computed(() => activeTab.value?.findHits ?? [])
+const findHitIdx = computed(() => activeTab.value?.findHitIdx ?? -1)
+const findMarkerNs = computed(() => activeTab.value?.findMarkerNs ?? null)
+const findError = ref('')
 
 // ---- Snapshot editor -------------------------------------------------------
 const snapshotEditorOpen = ref(false)
@@ -959,9 +1079,9 @@ watch(
   scheduleSessionSave,
 )
 
-// ---- Refs ----------------------------------------------------------------
-const leftPaneRef = ref(null)
-const timelinePanelRef = ref(null)
+watch(marks, () => {
+  if (findQuery.value?.trim()) recomputeFind()
+}, { deep: true })
 
 // ---- Trace info for toolbar -----------------------------------------------
 const traceInfo = computed(() => {
@@ -1104,6 +1224,7 @@ async function parseTraceOnMainThread(text, name) {
 }
 
 async function onTraceLoaded({ text, name }) {
+  recentFiles.value = addRecentFile(name)
   // Terminate any in-progress parse
   if (_parseWorker) { _parseWorker.terminate(); _parseWorker = null }
 
@@ -1197,6 +1318,162 @@ function onZoom(factor) {
 function onFit() {
   timelinePanelRef.value?.fitToTrace()
   syncTimelineViewport()
+}
+
+function onZoom1to1() {
+  const vp = timelinePanelRef.value?.getViewport?.()
+  const lo = trace.value?.timeMin ?? 0
+  const hi = trace.value?.timeMax ?? 1
+  const wasFit = vp && (vp.timeEnd - vp.timeStart) >= (hi - lo) * 0.92
+  timelinePanelRef.value?.zoom1to1(wasFit)
+  syncTimelineViewport()
+}
+
+function onZoomRange() {
+  const ok = timelinePanelRef.value?.zoomToCursorRange?.()
+  if (!ok) showToast('Place at least 2 cursors to zoom to range', 'info')
+  else syncTimelineViewport()
+}
+
+function onJumpToTraceStart() {
+  jumpDialogOpen.value = false
+  timelinePanelRef.value?.jumpToTraceStart()
+  syncTimelineViewport()
+}
+
+function onJumpToTraceEnd() {
+  jumpDialogOpen.value = false
+  timelinePanelRef.value?.jumpToTraceEnd()
+  syncTimelineViewport()
+}
+
+function onJumpToTime(ns) {
+  jumpDialogOpen.value = false
+  timelinePanelRef.value?.jumpToNs(ns)
+  syncTimelineViewport()
+}
+
+function onOpenPlotChange(v) {
+  if (activeTab.value) activeTab.value.openPlot = v
+  scheduleSessionSave()
+}
+
+function onSectionHeightsChange(v) {
+  Object.assign(statsSectionHeights.value, v)
+  scheduleSessionSave()
+}
+
+function onFindQueryChange(v) {
+  findQuery.value = v
+}
+
+function onFindModeChange(v) {
+  findMode.value = v
+}
+
+function recomputeFind() {
+  if (!activeTab.value || !trace.value) {
+    findError.value = ''
+    return
+  }
+  const { hits, error } = computeFindHits(
+    trace.value,
+    activeTab.value.findQuery,
+    activeTab.value.findMode,
+    marks.value,
+  )
+  activeTab.value.findHits = hits
+  activeTab.value.findHitIdx = -1
+  activeTab.value.findMarkerNs = null
+  findError.value = error || ''
+  timelinePanelRef.value?.scheduleRender()
+  scheduleSessionSave()
+}
+
+function stepFind(forward) {
+  if (!activeTab.value?.findHits?.length) {
+    recomputeFind()
+    if (!activeTab.value?.findHits?.length) return
+  }
+  const center = timelinePanelRef.value?.getViewportCenter?.() ?? 0
+  const idx = stepFindHitIndex(
+    activeTab.value.findHits,
+    activeTab.value.findHitIdx,
+    center,
+    forward,
+  )
+  activeTab.value.findHitIdx = idx
+  const ns = activeTab.value.findHits[idx]
+  activeTab.value.findMarkerNs = ns
+  timelinePanelRef.value?.jumpToNs(ns)
+  syncTimelineViewport()
+  timelinePanelRef.value?.scheduleRender()
+  scheduleSessionSave()
+}
+
+function focusFindPanel() {
+  rightPanelTab.value = 'find'
+  nextTick(() => findPanelRef.value?.focusInput())
+}
+
+function onOpenRecent(name) {
+  showToast(`Use Open to select "${name}"`, 'info')
+}
+
+function onDragEnter(e) {
+  if (e.dataTransfer?.types?.includes('Files')) {
+    _dragDepth++
+    dragOver.value = true
+  }
+}
+
+function onDragOver(e) {
+  if (e.dataTransfer?.types?.includes('Files')) {
+    e.dataTransfer.dropEffect = 'copy'
+    dragOver.value = true
+  }
+}
+
+function onDragLeave() {
+  _dragDepth = Math.max(0, _dragDepth - 1)
+  if (_dragDepth === 0) dragOver.value = false
+}
+
+function onFileDrop(e) {
+  _dragDepth = 0
+  dragOver.value = false
+  const file = e.dataTransfer?.files?.[0]
+  if (!file) return
+  if (!file.name.toLowerCase().endsWith('.btf')) {
+    showToast('Only .btf files are supported', 'error')
+    return
+  }
+  onTraceReading({ name: file.name })
+  const reader = new FileReader()
+  reader.onload = (ev) => onTraceLoaded({ text: ev.target.result, name: file.name })
+  reader.onerror = () => showToast(`Failed to read "${file.name}"`, 'error')
+  reader.readAsText(file)
+}
+
+async function onCopyClipboardDirect() {
+  const blob = timelineOptions.showCpuLoad
+    ? await captureLeftPaneBlob()
+    : await timelinePanelRef.value?.captureScreenshotBlob?.()
+  if (!blob) {
+    showToast('Unable to capture screenshot.', 'error')
+    return
+  }
+  try {
+    await navigator.clipboard.write([
+      new ClipboardItem({ [blob.type]: blob }),
+    ])
+    showToast('Copied to clipboard', 'info')
+  } catch {
+    if (snapshotImageUrl.value) URL.revokeObjectURL(snapshotImageUrl.value)
+    snapshotImageUrl.value = URL.createObjectURL(blob)
+    snapshotEditorOpen.value = true
+    showToast('Clipboard blocked — use Save/Copy in the editor', 'info')
+  }
 }
 
 async function onCopyScreenshot() {
@@ -1330,7 +1607,7 @@ function applyTimelineViewport() {
 }
 
 function clearCursors() {
-  cursors.value = [null, null, null, null]
+  timelinePanelRef.value?.clearAllCursorsViaHandler()
 }
 
 function onDeleteCursor(idx) {
@@ -1500,6 +1777,7 @@ function onRightPanelResizeEnd() {
   document.body.classList.remove('col-resizing')
   document.removeEventListener('mousemove', onRightPanelResizeMove)
   document.removeEventListener('mouseup', onRightPanelResizeEnd)
+  scheduleSessionSave()
 }
 
 function onCpuLoadResizeStart(e) {
@@ -1525,6 +1803,7 @@ function onCpuLoadResizeEnd() {
   document.body.classList.remove('row-resizing')
   document.removeEventListener('mousemove', onCpuLoadResizeMove)
   document.removeEventListener('mouseup', onCpuLoadResizeEnd)
+  scheduleSessionSave()
 }
 
 function isTypingTarget(el) {
@@ -1548,6 +1827,12 @@ function openAboutDialog() {
 function onGlobalKeydown(e) {
   if (isTypingTarget(e.target)) return
 
+  if (e.key === 'F3') {
+    e.preventDefault()
+    stepFind(!e.shiftKey)
+    return
+  }
+
   if (e.key === 'Tab') {
     e.preventDefault()
     cycleHighlightedSegment(!e.shiftKey)
@@ -1562,7 +1847,10 @@ function onGlobalKeydown(e) {
   }
 
   if (e.key === 'Escape') {
-    if (heatmapOpen.value) {
+    if (jumpDialogOpen.value) {
+      jumpDialogOpen.value = false
+      e.preventDefault()
+    } else if (heatmapOpen.value) {
       onHeatmapClose()
       e.preventDefault()
     } else if (settingsOpen.value) {
@@ -1578,15 +1866,82 @@ function onGlobalKeydown(e) {
     return
   }
 
-  if (helpOpen.value || aboutOpen.value || heatmapOpen.value || settingsOpen.value) return
+  if (helpOpen.value || aboutOpen.value || heatmapOpen.value || settingsOpen.value || jumpDialogOpen.value) return
 
-  if ((e.ctrlKey || e.metaKey) && e.key === ',') {
+  const mod = e.ctrlKey || e.metaKey
+
+  if (mod && e.key === ',') {
     e.preventDefault()
     openSettingsDialog()
     return
   }
+  if (mod && e.key.toLowerCase() === 'f') {
+    e.preventDefault()
+    focusFindPanel()
+    return
+  }
+  if (mod && e.key.toLowerCase() === 'r') {
+    e.preventDefault()
+    onZoomRange()
+    return
+  }
+  if (mod && e.key.toLowerCase() === 'g') {
+    e.preventDefault()
+    if (trace.value) jumpDialogOpen.value = true
+    return
+  }
+  if (mod && e.key === 'Home') {
+    e.preventDefault()
+    onJumpToTraceStart()
+    return
+  }
+  if (mod && e.key === 'End') {
+    e.preventDefault()
+    onJumpToTraceEnd()
+    return
+  }
+  if (mod && e.shiftKey && e.key.toLowerCase() === 'c') {
+    e.preventDefault()
+    onCopyClipboardDirect()
+    return
+  }
+  if (mod && e.key.toLowerCase() === 'w') {
+    e.preventDefault()
+    if (activeTabId.value) closeTab(activeTabId.value)
+    return
+  }
+
+  if (trace.value && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) {
+    const horiz = (timelineOptions.orientation || 'h') === 'h'
+    const timeKeys = horiz ? ['ArrowLeft', 'ArrowRight'] : ['ArrowUp', 'ArrowDown']
+    const rowKeys = horiz ? ['ArrowUp', 'ArrowDown'] : ['ArrowLeft', 'ArrowRight']
+    if (e.shiftKey && timeKeys.includes(e.key)) {
+      e.preventDefault()
+      timelinePanelRef.value?.jumpSegmentBoundary(e.key === timeKeys[1])
+      syncTimelineViewport()
+      return
+    }
+    if (timeKeys.includes(e.key)) {
+      e.preventDefault()
+      timelinePanelRef.value?.scrollTimeAxis(e.key === timeKeys[1] ? 0.2 : -0.2)
+      syncTimelineViewport()
+      return
+    }
+    if (rowKeys.includes(e.key)) {
+      e.preventDefault()
+      timelinePanelRef.value?.scrollRowAxis(e.key === rowKeys[1] ? 0.2 : -0.2)
+      return
+    }
+  }
 
   const key = e.key.toLowerCase()
+  if (key === 'c' && !mod) {
+    e.preventDefault()
+    if (e.shiftKey) clearCursors()
+    else timelinePanelRef.value?.placeCursorAtCenter(e.shiftKey)
+    return
+  }
+
   switch (key) {
     case '1':
       timelineOptions.viewMode = 'task'
@@ -1597,16 +1952,20 @@ function onGlobalKeydown(e) {
       e.preventDefault()
       break
     case 'h':
-      timelineOptions.orientation = 'h'
-      e.preventDefault()
+      if (!mod) {
+        timelineOptions.orientation = 'h'
+        e.preventDefault()
+      }
       break
     case 'v':
       timelineOptions.orientation = 'v'
       e.preventDefault()
       break
     case 'g':
-      timelineOptions.showGrid = !timelineOptions.showGrid
-      e.preventDefault()
+      if (!mod) {
+        timelineOptions.showGrid = !timelineOptions.showGrid
+        e.preventDefault()
+      }
       break
     case 'i':
       timelineOptions.showSti = !timelineOptions.showSti
@@ -1624,17 +1983,17 @@ function onGlobalKeydown(e) {
       onAddAnnotationAtCenter()
       e.preventDefault()
       break
-    case 'c':
-      clearCursors()
-      e.preventDefault()
-      break
     case 'f':
-      onFit()
-      e.preventDefault()
+      if (!mod) {
+        onFit()
+        e.preventDefault()
+      }
       break
     case 's':
-      onCopyScreenshot()
-      e.preventDefault()
+      if (!mod) {
+        onCopyScreenshot()
+        e.preventDefault()
+      }
       break
     case '+':
     case '=':
@@ -1687,6 +2046,16 @@ onMounted(() => {
   if (saved?.timelineOptions) {
     Object.assign(timelineOptions, saved.timelineOptions)
     syncTimelineOptionsFromSettings()
+  }
+  applySavedLayout(saved?.layout, {
+    rightPanelWidth,
+    cpuLoadPaneHeight,
+    sectionHeights: statsSectionHeights,
+    rightPanelTab,
+    setCpuLoadUserSized: () => { _cpuLoadUserSized = true },
+  })
+  if (saved?.tabOrder?.length) {
+    restorePlaceholderTabs(saved.tabOrder, saved.activeTabName)
   }
   window.addEventListener('keydown', onGlobalKeydown)
 })
@@ -1772,6 +2141,7 @@ function restoreTabState(tab) {
   timelineOptions.highlightKey = saved.pinnedHighlightKey ?? null
   timelineOptions.highlightSegment = saved.highlightSegment ?? null
   timelineOptions.lockedTaskKey = saved.pinnedHighlightKey ?? null
+  if (tab.findQuery) nextTick(() => recomputeFind())
 }
 
 let _sessionSaveTimer = null
@@ -1783,6 +2153,12 @@ function scheduleSessionSave() {
       tabs: tabs.value,
       activeTabId: activeTabId.value,
       timelineOptions,
+      layout: {
+        rightPanelWidth: rightPanelWidth.value,
+        cpuLoadPaneHeight: cpuLoadPaneHeight.value,
+        sectionHeights: { ...statsSectionHeights.value },
+        rightPanelTab: rightPanelTab.value,
+      },
     }))
   }, 400)
 }
@@ -1881,6 +2257,15 @@ body {
   height: 100vh;
   background: var(--bg);
   color: var(--fg);
+}
+.app.drag-over {
+  outline: 2px dashed var(--accent);
+  outline-offset: -4px;
+}
+.trace-tab-placeholder {
+  margin-left: 4px;
+  opacity: 0.55;
+  font-size: 10px;
 }
 
 .trace-tabs {

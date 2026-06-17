@@ -1,4 +1,4 @@
-/** Persist web viewer session (tab names, cursors, marks, viewport) in localStorage. */
+/** Persist web viewer session (tab names, cursors, marks, viewport, layout) in localStorage. */
 
 const SESSION_KEY = 'btf-viewer-session-v1'
 
@@ -30,6 +30,7 @@ export function buildSessionSnapshot({
   tabs,
   activeTabId,
   timelineOptions,
+  layout,
 }) {
   const tabStates = {}
   for (const tab of tabs) {
@@ -43,6 +44,10 @@ export function buildSessionSnapshot({
       timelineViewport: tab.timelineViewport
         ? { ...tab.timelineViewport }
         : null,
+      findQuery: tab.findQuery ?? '',
+      findMode: tab.findMode ?? 'contains',
+      findHitIdx: tab.findHitIdx ?? -1,
+      openPlot: tab.openPlot ? { ...tab.openPlot } : null,
     }
   }
   return {
@@ -58,6 +63,7 @@ export function buildSessionSnapshot({
       darkMode: timelineOptions.darkMode,
       migratedOnlyFilter: timelineOptions.migratedOnlyFilter,
     },
+    layout: layout ? { ...layout } : null,
   }
 }
 
@@ -71,6 +77,10 @@ export function applySavedTabState(tab, saved) {
   if (saved.timelineViewport) {
     Object.assign(tab.timelineViewport, saved.timelineViewport)
   }
+  tab.findQuery = saved.findQuery ?? ''
+  tab.findMode = saved.findMode ?? 'contains'
+  tab.findHitIdx = saved.findHitIdx ?? -1
+  tab.openPlot = saved.openPlot ? { ...saved.openPlot } : null
 }
 
 /** True when saved viewport has a real zoom/pan window for this trace. */
@@ -89,4 +99,24 @@ export function isRestorableViewport(vp, trace) {
   // Reject saved zoom windows that overlap the trace by less than ~0.01% (min 1 µs/ms unit).
   const minSpan = Math.max(1000, (hi - lo) * 0.0001)
   return overlap >= minSpan
+}
+
+export function applySavedLayout(layout, targets) {
+  if (!layout || !targets) return
+  const { rightPanelWidth, cpuLoadPaneHeight, sectionHeights, rightPanelTab } = layout
+  if (rightPanelWidth != null && targets.rightPanelWidth) {
+    targets.rightPanelWidth.value = rightPanelWidth
+  }
+  if (cpuLoadPaneHeight != null && targets.cpuLoadPaneHeight) {
+    targets.cpuLoadPaneHeight.value = cpuLoadPaneHeight
+  }
+  if (cpuLoadPaneHeight != null && targets.setCpuLoadUserSized) {
+    targets.setCpuLoadUserSized(true)
+  }
+  if (sectionHeights && targets.sectionHeights) {
+    Object.assign(targets.sectionHeights.value, sectionHeights)
+  }
+  if (rightPanelTab && targets.rightPanelTab) {
+    targets.rightPanelTab.value = rightPanelTab
+  }
 }
