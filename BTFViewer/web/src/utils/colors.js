@@ -14,6 +14,23 @@ const PALETTE = [
   '#7B68EE', '#EE687B', '#68EE7B', '#EEB468',
 ]
 
+// Okabe-Ito palette — distinguishable for deuteranopia / protanopia.
+const PALETTE_COLORBLIND = [
+  '#0072B2', '#E69F00', '#009E73', '#CC79A7',
+  '#56B4E9', '#D55E00', '#F0E442', '#000000',
+]
+
+let _colorblindActive = false
+
+/** Switch task palette to/from Okabe-Ito (desktop parity). */
+export function setColorblindMode(enabled) {
+  _colorblindActive = !!enabled
+}
+
+export function isColorblindMode() {
+  return _colorblindActive
+}
+
 // Per-core header / dot colours.
 const CORE_PALETTE = [
   '#FF9933', '#33BBFF', '#66FF88', '#FF66AA',
@@ -194,8 +211,9 @@ export function taskColor(mergeKey, repr) {
     const v = Math.max(80, 130 - idx * 15)
     return `rgb(${v},${v},${v})`
   }
-  const idx = crc32(mergeKey) % PALETTE.length
-  return PALETTE[idx]
+  const palette = _colorblindActive ? PALETTE_COLORBLIND : PALETTE
+  const idx = crc32(mergeKey) % palette.length
+  return palette[idx]
 }
 
 /**

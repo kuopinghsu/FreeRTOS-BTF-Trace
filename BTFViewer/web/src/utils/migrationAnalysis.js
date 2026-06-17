@@ -159,9 +159,11 @@ export function migrationHeatmapGrid(trace, lo = null, hi = null, timeBins = 32)
   if (!trace) return { pairs: [], grid: [], timeBins, tMin: 0, tMax: 0, binW: 0 }
   const cores = trace.coreNames || []
   const pairs = []
+  const pairIndex = new Map()
   for (const fc of cores) {
     for (const tc of cores) {
       if (fc !== tc) {
+        pairIndex.set(`${fc}\0${tc}`, pairs.length)
         pairs.push({
           from: fc,
           to: tc,
@@ -178,9 +180,9 @@ export function migrationHeatmapGrid(trace, lo = null, hi = null, timeBins = 32)
   for (const m of trace.migrations || []) {
     if (lo != null && m.ns < lo) continue
     if (hi != null && m.ns > hi) continue
-    const pi = pairs.findIndex(p => p.from === m.fromCore && p.to === m.toCore)
-    if (pi < 0) continue
-    const bi = Math.min(timeBins - 1, Math.max(0, Math.floor((m.ns - tMin) / binW)))
+    const pi = pairIndex.get(`${m.fromCore}\0${m.toCore}`)
+    if (pi == null) continue
+    const bi = heatmapBinIndexForNs(tMin, binW, timeBins, tHi, m.ns)
     grid[pi][bi]++
   }
   return { pairs, grid, binW, tMin, timeBins, tMax: tHi }
@@ -193,19 +195,40 @@ export function heatmapBinRange(tMin, binW, timeBins, tMax, binIndex) {
   return { binLo, binHi }
 }
 
+/** Half-open [binLo, binHi) except the last bin includes binHi. */
+export function migrationNsInBin(ns, binLo, binHi, binIndex, timeBins) {
+  if (ns < binLo) return false
+  if (binIndex >= timeBins - 1) return ns <= binHi
+  return ns < binHi
+}
+
+/** Bin index for ns; retries bi+1 when floor division lands on an upper boundary. */
+export function heatmapBinIndexForNs(tMin, binW, timeBins, tMax, ns) {
+  let bi = Math.min(timeBins - 1, Math.max(0, Math.floor((ns - tMin) / binW)))
+  for (const b of [bi, bi + 1]) {
+    if (b >= timeBins) continue
+    const { binLo, binHi } = heatmapBinRange(tMin, binW, timeBins, tMax, b)
+    if (migrationNsInBin(ns, binLo, binHi, b, timeBins)) return b
+  }
+  return bi
+}
+
 /** Merge keys of tasks with a migration from→to core in [binLo, binHi). */
-export function mergeKeysForHeatmapCell(trace, fromCore, toCore, binLo, binHi) {
+export function mergeKeysForHeatmapCell(trace, fromCore, toCore, binLo, binHi,
+                                        binIndex, timeBins) {
   const keys = new Set()
   for (const m of trace.migrations || []) {
     if (m.fromCore !== fromCore || m.toCore !== toCore) continue
-    if (m.ns < binLo || m.ns >= binHi) continue
+    if (!migrationNsInBin(m.ns, binLo, binHi, binIndex, timeBins)) continue
     keys.add(m.mergeKey)
   }
   return [...keys]
 }
 
 /** Task rows × sub-bins for one core-pair / time-bin drill-down. */
-export function migrationTaskHeatmapGrid(trace, fromCore, toCore, binLo, binHi, timeBins = 32) {
+export function migrationTaskHeatmapGrid(trace, fromCore, toCore, binLo, binHi,
+                                         timeBins = 32, parentBinIndex = 0,
+                                         parentTimeBins = 32) {
   if (!trace) return { rows: [], timeBins, tMin: binLo, tMax: binHi, binW: 0 }
   const tMin = binLo
   const tHi = binHi
@@ -214,10 +237,10 @@ export function migrationTaskHeatmapGrid(trace, fromCore, toCore, binLo, binHi, 
   const taskBins = new Map()
   for (const m of trace.migrations || []) {
     if (m.fromCore !== fromCore || m.toCore !== toCore) continue
-    if (m.ns < binLo || m.ns >= binHi) continue
+    if (!migrationNsInBin(m.ns, binLo, binHi, parentBinIndex, parentTimeBins)) continue
     const mk = m.mergeKey
     if (!taskBins.has(mk)) taskBins.set(mk, Array(timeBins).fill(0))
-    const bi = Math.min(timeBins - 1, Math.max(0, Math.floor((m.ns - tMin) / binW)))
+    const bi = heatmapBinIndexForNs(tMin, binW, timeBins, tHi, m.ns)
     taskBins.get(mk)[bi]++
   }
   const items = [...taskBins.entries()].sort((a, b) => {

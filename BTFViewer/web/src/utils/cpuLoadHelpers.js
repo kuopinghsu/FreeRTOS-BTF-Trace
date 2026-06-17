@@ -1,22 +1,36 @@
 /** CPU load graph helpers (parity with desktop _CpuLoadGraph). */
 
+import { getTimelineLayout } from './timelineLayout.js'
+
 export const CPU_LOAD_ROW_H = 30
 export const CPU_LOAD_COLLAPSED_H = 20
 export const CPU_LOAD_ROW_GAP = 2
 export const CPU_LOAD_MAX_VISIBLE_ROWS = 8
 export const CPU_LOAD_PANE_CHROME_H = 30
 export const CPU_LOAD_PANE_MIN_H = 60
+/** Legacy cap when row height is default (30px); use cpuLoadPaneMaxH() for current settings. */
 export const CPU_LOAD_PANE_MAX_H = 480
 
 export function cpuLoadRowsViewportHeight(
   visibleRows = CPU_LOAD_MAX_VISIBLE_ROWS,
   allExpanded = true,
+  rowH = getTimelineLayout().cpuLoadRowH,
 ) {
   const vis = Math.max(1, visibleRows)
-  const rowH = allExpanded ? CPU_LOAD_ROW_H : CPU_LOAD_COLLAPSED_H
-  return vis * rowH + Math.max(0, vis - 1) * CPU_LOAD_ROW_GAP
+  const h = allExpanded ? rowH : CPU_LOAD_COLLAPSED_H
+  return vis * h + Math.max(0, vis - 1) * CPU_LOAD_ROW_GAP
 }
 
+/** Max pane height for up to CPU_LOAD_MAX_VISIBLE_ROWS at the configured row height. */
+export function cpuLoadPaneMaxH(rowH = getTimelineLayout().cpuLoadRowH) {
+  return CPU_LOAD_PANE_CHROME_H + cpuLoadRowsViewportHeight(CPU_LOAD_MAX_VISIBLE_ROWS, true, rowH) + 2
+}
+
+export function cpuLoadPaneDefaultH(rowH = getTimelineLayout().cpuLoadRowH) {
+  return cpuLoadPaneMaxH(rowH)
+}
+
+/** @deprecated use cpuLoadPaneDefaultH() — kept for static default at module load */
 export const CPU_LOAD_PANE_DEFAULT_H =
   CPU_LOAD_PANE_CHROME_H + cpuLoadRowsViewportHeight(CPU_LOAD_MAX_VISIBLE_ROWS) + 2
 
@@ -28,12 +42,14 @@ export function cpuLoadRowCount(trace, viewMode, selectedTask) {
 
 /** Preferred outer pane height — up to 8 visible rows; fewer cores use actual count. */
 export function cpuLoadPreferredPaneHeight(trace, viewMode, selectedTask, allExpanded = true) {
+  const rowH = getTimelineLayout().cpuLoadRowH
   const n = cpuLoadRowCount(trace, viewMode, selectedTask)
   if (n === 0) return CPU_LOAD_PANE_MIN_H
   const visibleRows = Math.min(n, CPU_LOAD_MAX_VISIBLE_ROWS)
-  const rowsH = cpuLoadRowsViewportHeight(visibleRows, allExpanded)
+  const rowsH = cpuLoadRowsViewportHeight(visibleRows, allExpanded, rowH)
   const preferred = CPU_LOAD_PANE_CHROME_H + rowsH + 2
-  return Math.max(CPU_LOAD_PANE_MIN_H, Math.min(CPU_LOAD_PANE_MAX_H, preferred))
+  const maxH = cpuLoadPaneMaxH(rowH)
+  return Math.max(CPU_LOAD_PANE_MIN_H, Math.min(maxH, preferred))
 }
 
 export function binIndicesForNsRange(trace, binW, nsLo, nsHi, numBins) {
