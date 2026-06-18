@@ -55,6 +55,8 @@ typedef enum {
     TRACE_EVENT_QUEUE_RECEIVE        = 10,
     TRACE_EVENT_QUEUE_DELETE         = 11,
     TRACE_EVENT_TASK_INCREMENT_TICK  = 12,
+    TRACE_EVENT_INTERVAL_START       = 13,
+    TRACE_EVENT_INTERVAL_STOP        = 14,
     TRACE_EVENT_TAG                  = 90,
     TRACE_EVENT_TAG1                 = 91,
     TRACE_EVENT_TAG2                 = 92,
@@ -104,6 +106,8 @@ typedef struct {
 void btf_traceSTART(void);
 void btf_traceEND(void);
 void btf_traceTAG(int t, int v);
+void btf_traceINTERVAL_START(int id);
+void btf_traceINTERVAL_STOP(int id);
 void btf_trace_add_task(uint8_t *task_name, uint32_t task_id, event_t event);
 void btf_trace_add_event(uint32_t value, event_t event);
 void btf_trace_increment_tick(uint32_t xTickCount);

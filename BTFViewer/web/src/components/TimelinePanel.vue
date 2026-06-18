@@ -216,7 +216,7 @@ import { toBlob as domToBlob } from 'html-to-image'
 import LabelColumn from './LabelColumn.vue'
 import StiTooltip  from './StiTooltip.vue'
 import SegmentTooltip from './SegmentTooltip.vue'
-import { render as renderTimeline, renderVertical, buildRowLayout, buildColumnLayout, drawHoverLine, drawHoverLineVertical, drawRangeSelect, drawRangeSelectVertical, drawCursors, drawCursorsVertical, drawMarksHorizontal, drawMarksVertical, drawFindHits, drawFindHitsVertical, RULER_H, isStiTagChannel, RULER_W, COL_W, HEADER_H, formatTime, rowBandHeight, visibleRowIndexRange } from '../renderer/TimelineRenderer.js'
+import { render as renderTimeline, renderVertical, buildRowLayout, buildColumnLayout, drawHoverLine, drawHoverLineVertical, drawRangeSelect, drawRangeSelectVertical, drawCursors, drawCursorsVertical, drawMarksHorizontal, drawMarksVertical, drawFindHits, drawFindHitsVertical, RULER_H, isStiTagChannel, RULER_W, COL_W, HEADER_H, formatTime, rowBandHeight, visibleRowIndexRange, orthRowBuffer, taskPassesRowFilter, filteredCoreViewTasks, coreViewTaskFilterActive } from '../renderer/TimelineRenderer.js'
 import { getTimelineLayout, setTimelineLayout } from '../utils/timelineLayout.js'
 
 function layout() {
@@ -545,8 +545,18 @@ let _rafId = null
 let _dirty = false
 let _ovPaintRaf = null
 
-function scheduleRender() {
+function scheduleRender(immediate = false) {
   _dirty = true
+  if (immediate) {
+    if (_rafId) {
+      cancelAnimationFrame(_rafId)
+      _rafId = null
+    }
+    _dirty = false
+    paint()
+    if (overviewVisible.value && !paintFast()) scheduleOverviewPaint()
+    return
+  }
   if (!_rafId) {
     _rafId = requestAnimationFrame(() => {
       _rafId = null
@@ -717,9 +727,11 @@ function setupHandler() {
     getMarks:    () => props.options.marks || [],
     onViewportChange(vp) {
       const vert = orientation.value === 'v'
+      const prevScrollY = viewport.scrollY
+      const prevScrollX = viewport.scrollX || 0
       const timeAxisChanged = vp.timeStart !== viewport.timeStart
         || vp.timeEnd !== viewport.timeEnd
-        || (vert && vp.scrollX != null && vp.scrollX !== (viewport.scrollX || 0))
+        || (vert && vp.scrollX != null && vp.scrollX !== prevScrollX)
 
       viewport.timeStart = vp.timeStart
       viewport.timeEnd   = vp.timeEnd
@@ -741,9 +753,13 @@ function setupHandler() {
           viewport.scrollX = Math.max(0, vp.scrollX)
         }
       }
+      const orthChanged = viewport.scrollY !== prevScrollY
+        || viewport.scrollX !== prevScrollX
       emit('viewportChange', { ...viewport })
       markInteracting(timeAxisChanged)
-      scheduleRender()
+      // Orthogonal scroll: paint immediately — deferring to the next rAF leaves
+      // one frame of empty canvas when the wheel queue flushes in this frame.
+      scheduleRender(orthChanged && !timeAxisChanged)
     },
     onCursorsChange(cursors) {
       emit('cursorsChange', cursors)
@@ -961,7 +977,12 @@ function getCaptureSize() {
     return { captureW, captureH: panelH }
   }
 
-  const { totalHeight } = buildRowLayout(props.trace, props.options.viewMode, expanded, 0, props.options.showSti !== false, stiExpanded)
+  const { totalHeight } = buildRowLayout(
+    props.trace, props.options.viewMode, expanded, 0,
+    props.options.showSti !== false, stiExpanded,
+    !!props.options.migratedOnlyFilter,
+    props.options.taskFilterKeys || null,
+  )
   const neededH = RULER_H + Math.max(layout().rowH, totalHeight)
   const captureH = Math.max(RULER_H + layout().rowH, Math.min(panelH, Math.ceil(neededH)))
   return { captureW: panelW, captureH }
@@ -1210,12 +1231,17 @@ function scrollRowAxis(fraction) {
     viewport.scrollY = Math.max(0, Math.min(maxScroll, (viewport.scrollY || 0) + maxScroll * fraction))
   }
   emitViewportChange()
-  scheduleRender()
+  scheduleRender(true)
 }
 
 function placeCursorAtCenter(shiftSnap = false) {
   const ns = getHoverTime() ?? getLastActiveCursorTime() ?? getViewportCenter()
   _handler?.placeCursorAt(ns, shiftSnap)
+}
+
+function placeCursorAtTime(ns) {
+  if (ns == null || !Number.isFinite(ns)) return
+  _handler?.placeCursorAtTime(ns)
 }
 
 function removeNearestCursorAt(ns) {
@@ -1270,6 +1296,8 @@ function getCoreAtViewportCenter() {
     0,
     props.options.showSti !== false,
     stiExpanded,
+    !!props.options.migratedOnlyFilter,
+    props.options.taskFilterKeys || null,
   )
   const coreRows = rows.filter(r => r.type === 'core' || r.type === 'core-task')
   if (coreRows.length === 0) return null
@@ -1314,7 +1342,12 @@ function findRowForTask(rows, mergeKey) {
 function scrollToTask(mergeKey) {
   if (!props.trace) return
   // Build layout at yStart=0 to get raw row offsets independent of current scrollY
-  const { rows } = buildRowLayout(props.trace, props.options.viewMode, expanded, 0, props.options.showSti !== false, stiExpanded)
+  const { rows } = buildRowLayout(
+    props.trace, props.options.viewMode, expanded, 0,
+    props.options.showSti !== false, stiExpanded,
+    !!props.options.migratedOnlyFilter,
+    props.options.taskFilterKeys || null,
+  )
   const targetRow = findRowForTask(rows, mergeKey)
   if (!targetRow) return
   // In rendering: canvas Y of row = (RULER_H - scrollY) + row.y
@@ -1343,7 +1376,12 @@ function scrollToSegmentIfNeeded(seg) {
   let targetRow = null
   let targetCol = null
   if (isHorizontal) {
-    const { rows } = buildRowLayout(props.trace, props.options.viewMode, expanded, 0, props.options.showSti !== false)
+    const { rows } = buildRowLayout(
+      props.trace, props.options.viewMode, expanded, 0,
+      props.options.showSti !== false, stiExpanded,
+      !!props.options.migratedOnlyFilter,
+      props.options.taskFilterKeys || null,
+    )
     if (props.options.viewMode === 'core') {
       targetRow = rows.find(
         r => r.type === 'core-task' && r.coreKey === seg.core && taskMergeKey(r.taskKey) === mk,
@@ -1363,7 +1401,12 @@ function scrollToSegmentIfNeeded(seg) {
       rowOutOfView = (actualRowY + layout().rowH <= RULER_H) || (actualRowY >= canvasH)
     }
   } else {
-    const { cols } = buildColumnLayout(props.trace, props.options.viewMode, expanded, scrollX, props.options.showSti !== false)
+    const { cols } = buildColumnLayout(
+      props.trace, props.options.viewMode, expanded, scrollX,
+      props.options.showSti !== false, stiExpanded,
+      !!props.options.migratedOnlyFilter,
+      props.options.taskFilterKeys || null,
+    )
     if (props.options.viewMode === 'core') {
       targetCol = cols.find(
         c => c.type === 'core-task' && c.coreKey === seg.core && taskMergeKey(c.taskKey) === mk,
@@ -1406,9 +1449,9 @@ function getViewport() { return { ...viewport } }
 
 defineExpose({
   fitToTrace, applyViewport, applyTraceViewport, ensureTraceViewport, beginLoadSettle, scheduleRender,
-  zoomCenter, expandAll, collapseAll, jumpToNs, zoomToTimeRange, zoomToCursorRange, zoom1to1,
+  zoomCenter, expandAll, collapseAll, expandCoresForMergeKeys, jumpToNs, zoomToTimeRange, zoomToCursorRange, zoom1to1,
   jumpToTraceStart, jumpToTraceEnd, jumpSegmentBoundary, scrollTimeAxis, scrollRowAxis,
-  placeCursorAtCenter, removeNearestCursorAt, clearAllCursorsViaHandler,
+  placeCursorAtCenter, placeCursorAtTime, removeNearestCursorAt, clearAllCursorsViaHandler,
   getViewport, getViewportCenter, getCoreAtViewportCenter, scrollToTask, scrollToSegmentIfNeeded,
   captureScreenshotBlob, captureAsSvg, getHoverTime, getLastActiveCursorTime,
 })
@@ -1439,6 +1482,20 @@ function expandAll() {
 
 function collapseAll() {
   expanded.clear()
+  clampScrollToContent()
+  _ovBgCanvas = null
+  scheduleRender()
+}
+
+/** Expand only cores that contain one of *mergeKeys* (heatmap drill-down). */
+function expandCoresForMergeKeys(mergeKeys) {
+  if (!props.trace || !mergeKeys?.length) return
+  const mks = new Set(mergeKeys)
+  expanded.clear()
+  for (const coreName of props.trace.coreNames) {
+    const tasks = props.trace.coreTaskOrder.get(coreName) || []
+    if (tasks.some(t => mks.has(taskMergeKey(t)))) expanded.add(coreName)
+  }
   clampScrollToContent()
   _ovBgCanvas = null
   scheduleRender()
@@ -1569,7 +1626,9 @@ watch([() => props.options.orientation, () => props.options.viewMode], () => {
 })
 // Other visual options that affect segment rendering → full repaint
 watch([() => props.options.highlightKey, () => props.options.highlightSegment, () => props.options.showGrid, () => props.options.showSti, () => props.options.darkMode, () => props.options.stiLogScale, () => props.options.migratedOnlyFilter, () => props.options.taskFilterKeys, () => props.options.lockedTaskKey], () => {
+  _ovBgCanvas = null
   scheduleRender()
+  if (overviewVisible.value) scheduleOverviewPaint()
 })
 // Marks are on the overlay — no full repaint needed
 watch(() => props.options.marks, () => {
@@ -1724,6 +1783,7 @@ function paintOverview() {
     [...stiExpanded].sort().join(','),
     [...expanded].sort().join(','),
     props.options.migratedOnlyFilter ? '1' : '0',
+    (props.options.taskFilterKeys || []).join(','),
     props.options.darkMode ? '1' : '0',
     orientation.value,
   ].join('|')
@@ -1798,6 +1858,8 @@ function _paintOverviewBg(bgCanvas, tr, lo, hi, span, W, H, totMainSize) {
   const isCore  = props.options.viewMode === 'core'
   const isVert  = orientation.value === 'v'
   const migratedOnly = !!props.options.migratedOnlyFilter
+  const taskFilterKeys = props.options.taskFilterKeys || null
+  const skipCoreHdr = coreViewTaskFilterActive(migratedOnly, taskFilterKeys)
 
   ctx.fillStyle = dark ? '#1a1a1a' : '#e8e8e8'
   ctx.fillRect(0, 0, W, H)
@@ -1808,22 +1870,22 @@ function _paintOverviewBg(bgCanvas, tr, lo, hi, span, W, H, totMainSize) {
   if (!isVert) {
     if (!isCore) {
       for (const mk of tr.tasks) {
-        if (migratedOnly && !isMigratedTask(tr, mk)) continue
+        if (!taskPassesRowFilter(tr, mk, migratedOnly, taskFilterKeys)) continue
         const repr = tr.taskRepr.get(mk)
         const segs = tr.segLodUltraByMergeKey.get(mk) || tr.segByMergeKey.get(mk) || []
         if (!segs.length) continue
         stripDefs.push({ segs, color: taskColor(mk, repr), blend: true })
       }
     } else {
-      for (const coreName of tr.coreNames) {
-        const hdrSegs = tr.coreSegLodUltra.get(coreName) || tr.coreSegs.get(coreName) || []
-        if (hdrSegs.length) stripDefs.push({ segs: hdrSegs, perSegColor: true })
+      const cores = filteredCoreViewTasks(tr, migratedOnly, taskFilterKeys)
+      for (const { coreName, tasks } of cores) {
+        if (!skipCoreHdr) {
+          const hdrSegs = tr.coreSegLodUltra.get(coreName) || tr.coreSegs.get(coreName) || []
+          if (hdrSegs.length) stripDefs.push({ segs: hdrSegs, perSegColor: true })
+        }
         if (expanded.has(coreName)) {
-          const taskOrder = (tr.coreTaskOrder.get(coreName) || [])
-            .filter(t => parseTaskName(t).name !== 'TICK')
-          for (const taskRaw of taskOrder) {
+          for (const taskRaw of tasks) {
             const mk = taskMergeKey(taskRaw)
-            if (migratedOnly && !isMigratedTask(tr, mk)) continue
             const tSegs = tr.coreTaskSegLodUltra.get(coreName)?.get(taskRaw)
                        || tr.coreTaskSegs.get(coreName)?.get(taskRaw) || []
             if (!tSegs.length) continue
@@ -1843,6 +1905,7 @@ function _paintOverviewBg(bgCanvas, tr, lo, hi, span, W, H, totMainSize) {
     const layout = buildColumnLayout(
       tr, props.options.viewMode, expanded, 0,
       props.options.showSti !== false, stiExpanded, migratedOnly,
+      taskFilterKeys,
     )
     for (const col of layout.cols) {
       if (col.type === 'sti') {
@@ -1859,6 +1922,7 @@ function _paintOverviewBg(bgCanvas, tr, lo, hi, span, W, H, totMainSize) {
         segs = tr.segLodUltraByMergeKey.get(col.key) || tr.segByMergeKey.get(col.key) || []
         blend = true
       } else if (col.type === 'core') {
+        if (skipCoreHdr) continue
         segs = tr.coreSegLodUltra.get(col.key) || tr.coreSegs.get(col.key) || []
         perSegColor = true
       } else if (col.type === 'core-task') {
@@ -2021,6 +2085,7 @@ function _sbMouseMove(e) {
       viewport.timeStart = newStart
       viewport.timeEnd   = newStart + _sbDrag.visSpan
       markInteracting(true)
+      scheduleRender()
     } else {
       const { totalWidth } = buildColumnLayout(
         props.trace, props.options.viewMode, expanded, 0, props.options.showSti !== false, stiExpanded,
@@ -2028,7 +2093,7 @@ function _sbMouseMove(e) {
       viewport.scrollX = Math.max(0, ratio * Math.max(0, totalWidth - viewport.canvasW))
       markInteracting(false)
     }
-    scheduleRender()
+    scheduleRender(orientation.value === 'v')
   } else {
     const dy   = e.clientY - _sbDrag.startY
     const newT = Math.max(0, Math.min(_sbDrag.usableH, _sbDrag.startT + dy))
@@ -2036,13 +2101,14 @@ function _sbMouseMove(e) {
     if (orientation.value === 'h') {
       viewport.scrollY = ratio * _sbDrag.maxScrollY
       markInteracting(false)
+      scheduleRender(true)
     } else {
       const newStart = _sbDrag.lo + ratio * (_sbDrag.span - _sbDrag.visSpan)
       viewport.timeStart = newStart
       viewport.timeEnd   = newStart + _sbDrag.visSpan
       markInteracting(true)
+      scheduleRender()
     }
-    scheduleRender()
   }
 }
 

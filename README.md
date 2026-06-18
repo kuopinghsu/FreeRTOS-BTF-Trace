@@ -161,6 +161,46 @@ In BTFViewer, locate the **tag0_event** STI row in the label column and expand i
 
 <img src="images/memusage.png">
 
+### Use case: measure code execution intervals
+
+Pair **interval start/stop** events to bracket a region of code and record when it ran and how long it took. The demo wraps each stress test (and each test iteration) with these calls.
+
+**Setup:** same as tag events — `configUSE_TRACE_FACILITY` = `1` and `configINCLUDE_TAGS` = `1` (default in `FreeRTOS-Trace/FreeRTOS-Trace.h`).
+
+| API | Context | Description |
+|-----|---------|-------------|
+| `traceINTERVAL_START( id )` | Task | Record interval *start*; `id` is a user-defined integer (0 … 2³²−1) |
+| `traceINTERVAL_STOP( id )`  | Task | Record interval *stop* for the same `id` |
+| `btf_traceINTERVAL_START( id )` | Any* | Low-level start (no critical-section wrapper) |
+| `btf_traceINTERVAL_STOP( id )`  | Any* | Low-level stop (no critical-section wrapper) |
+
+\*Prefer the `traceINTERVAL_*` macros in task code. Use the `btf_traceINTERVAL_*` functions only when you already hold the trace lock or are in a context where the macro wrappers are unsuitable.
+
+**Example:**
+
+```c
+#if configUSE_TRACE_FACILITY
+    traceINTERVAL_START( 1 );
+#endif
+    do_work();
+#if configUSE_TRACE_FACILITY
+    traceINTERVAL_STOP( 1 );
+#endif
+```
+
+Each call emits a BTF STI line. The channel name identifies start vs. stop; the last field is the interval `id`:
+
+```
+151509,Core_0,0,STI,interval_start,0,trigger,1
+153253,Core_1,0,STI,interval_stop,0,trigger,1
+```
+
+In the demo (`Demo/examples/freertos_test/main.c`), `id` **0** brackets an entire test function; **1**–**6** bracket the inner loop of tests 1–6 respectively.
+
+**In BTFViewer:** each interval `id` appears as an **Interval N** row at the bottom of the timeline (horizontal task view). Colored bars show each start→stop span. Open **Statistics → Interval Analysis** for min/avg/max duration and a duration plot (Tracealyzer-style interval plot).
+
+**Binary event types** (in `btf_trace.h`): `TRACE_EVENT_INTERVAL_START` (13), `TRACE_EVENT_INTERVAL_STOP` (14).
+
 ---
 
 ## Visualising the Trace
@@ -251,6 +291,18 @@ int main(void)
 #endif
 exit(0);
 ```
+
+### 5a. Custom instrumentation (tags & intervals)
+
+When `configINCLUDE_TAGS` is `1`, you can emit user-defined STI events from application code:
+
+| Macro | Underlying function | Purpose |
+|-------|---------------------|---------|
+| `traceTAG( t, v )` | `btf_traceTAG()` | Periodic sample; `t` = 0…7, `v` = 32-bit payload |
+| `traceINTERVAL_START( id )` | `btf_traceINTERVAL_START()` | Mark the start of a timed code region |
+| `traceINTERVAL_STOP( id )` | `btf_traceINTERVAL_STOP()` | Mark the end of the same region (`id` must match) |
+
+See [Use case: monitor heap usage with the tick hook](#use-case-monitor-heap-usage-with-the-tick-hook) and [Use case: measure code execution intervals](#use-case-measure-code-execution-intervals) for worked examples.
 
 ### 6. SMP considerations
 

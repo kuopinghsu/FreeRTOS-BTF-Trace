@@ -18,6 +18,7 @@ import { makeLodSummary } from '../utils/lod.js'
 import { parseTaskName, taskMergeKey, taskSortKey, resetStiColors } from '../utils/colors.js'
 import { buildMigrationIndex } from '../utils/migrationAnalysis.js'
 import { analyzeTickHealth } from '../utils/tickHealth.js'
+import { buildIntervalData, isIntervalMarkerChannel } from '../utils/intervalAnalysis.js'
 
 // LOD bin counts (match Python constants).
 const LOD_SUMMARY_BINS       = 4096
@@ -348,12 +349,23 @@ export async function parseBtf(text, progressCallback) {
   const { migrations, migrationsByMk } = buildMigrationIndex(segsByMk)
 
   // STI channels
-  const stiChannels = [...new Set(stiEvents.map(e => e.target))].sort()
+  const stiChannels = [...new Set(stiEvents.map(e => e.target))]
+    .filter(ch => !isIntervalMarkerChannel(ch))
+    .sort()
   const stiByTarget = new Map()
   for (const ev of stiEvents) {
     if (!stiByTarget.has(ev.target)) stiByTarget.set(ev.target, [])
     stiByTarget.get(ev.target).push(ev)
   }
+
+  progress(58, 'Pairing interval events…')
+  await yieldToHost()
+  const {
+    intervalInstances,
+    intervalIds,
+    intervalInstancesById,
+    unmatchedStarts: intervalUnmatchedStarts,
+  } = buildIntervalData(stiEvents)
 
   // Core names sorted
   const coreNames = [...cnSet].sort(compareCores)
@@ -567,6 +579,12 @@ export async function parseBtf(text, progressCallback) {
     stiValRange,
     tickStiTimes: sortedTickStiTimes,
     tickHealth,
+
+    // ---- Interval instrumentation (paired start/stop) ----
+    intervalInstances,
+    intervalIds,
+    intervalInstancesById,
+    intervalUnmatchedStarts,
 
     // ---- Task-view lookup tables ----
     segByMergeKey:              segsByMk,

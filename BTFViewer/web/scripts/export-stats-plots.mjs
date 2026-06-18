@@ -13,6 +13,7 @@ import {
   preemptionChainRows,
   responseTimePlotPoints,
 } from '../src/utils/statsAnalysis.js'
+import { intervalColor, intervalPlotPoints } from '../src/utils/intervalAnalysis.js'
 import { taskColor, taskDisplayName, taskReprGet } from '../src/utils/colors.js'
 import { formatTime } from '../src/utils/timeFormat.js'
 
@@ -107,6 +108,19 @@ function buildPreemptPlot(trace, victimMk, preemptor) {
   return {
     title: `${taskDisplayName(repr)} ← preempted by ${preemptor}`,
     color: taskColor(victimMk, repr),
+    points,
+  }
+}
+
+function buildIntervalPlot(trace, intervalId) {
+  const points = intervalPlotPoints(trace, intervalId, null, null).map((pt, index) => ({
+    index,
+    xNs: pt.xNs,
+    yValue: pt.yValue,
+  }))
+  return {
+    title: `Interval ${intervalId} — Duration`,
+    color: intervalColor(intervalId),
     points,
   }
 }
@@ -302,6 +316,10 @@ const Y_LABELS = {
     scatter: 'x = preemption overlap start, y = overlap duration',
     histogram: 'overlap duration distribution for this preemptor',
   },
+  interval: {
+    scatter: 'x = interval stop time, y = interval duration',
+    histogram: 'distribution of interval durations',
+  },
 }
 
 function findMkByDisplay(trace, display) {
@@ -328,6 +346,11 @@ const exports = [
     id: 'preempt-cs10-cs11',
     plot: buildPreemptPlot(trace, preemptRow.mk, preemptRow.preemptor),
     kind: 'preempt',
+  },
+  {
+    id: 'interval-1',
+    plot: buildIntervalPlot(trace, '1'),
+    kind: 'interval',
   },
 ]
 

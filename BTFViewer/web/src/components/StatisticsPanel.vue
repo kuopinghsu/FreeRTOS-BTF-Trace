@@ -810,7 +810,13 @@
     </div>
     <template v-if="!preemptionCollapsed">
       <div
-        v-if="preemptionStats.length === 0"
+        v-if="preemptionComputing"
+        class="range-hint"
+      >
+        Computing preemption chain…
+      </div>
+      <div
+        v-else-if="preemptionRows.length === 0"
         class="range-hint"
       >
         {{ statsRange ? 'No preemption events in cursor range' : 'No preemption events found' }}
@@ -819,6 +825,12 @@
         v-else
         class="stats-table-block"
       >
+        <div
+          v-if="preemptionRows.length > PREEMPTION_CHAIN_MAX_ROWS"
+          class="range-hint"
+        >
+          Showing top {{ PREEMPTION_CHAIN_MAX_ROWS.toLocaleString() }} pairs by total preemption time.
+        </div>
         <div
           class="stats-table-wrap"
           :style="{ maxHeight: tableHeight('preemption') + 'px' }"
@@ -891,6 +903,117 @@
           aria-label="Resize preemption chain table"
           aria-orientation="horizontal"
           @mousedown.prevent="onTableResizeStart('preemption', $event)"
+        />
+      </div>
+    </template>
+
+    <!-- Interval Analysis -->
+    <div class="stats-sep" />
+    <div
+      class="stats-section-title collapsible"
+      @click="intervalsCollapsed = !intervalsCollapsed"
+    >
+      <svg
+        class="chevron"
+        :class="{ collapsed: intervalsCollapsed }"
+        viewBox="0 0 10 10"
+        width="10"
+        height="10"
+      >
+        <polyline
+          points="2,3 5,7 8,3"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.5"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        />
+      </svg>
+      Interval Analysis{{ scopeSuffixStr }}
+    </div>
+    <template v-if="!intervalsCollapsed">
+      <div
+        v-if="intervalStats.length === 0"
+        class="range-hint"
+      >
+        {{ statsRange ? 'No interval data in cursor range' : 'No paired interval_start / interval_stop events in trace' }}
+      </div>
+      <div
+        v-else
+        class="stats-table-block"
+      >
+        <div
+          class="stats-table-wrap"
+          :style="{ maxHeight: tableHeight('intervals') + 'px' }"
+        >
+          <table class="stats-table">
+            <thead>
+              <tr>
+                <th
+                  :class="thSortClass('intervals', 'id')"
+                  @click="toggleTableSort('intervals', 'id')"
+                >
+                  ID
+                </th>
+                <th
+                  :class="thSortClass('intervals', 'count')"
+                  @click="toggleTableSort('intervals', 'count')"
+                >
+                  Count
+                </th>
+                <th
+                  :class="thSortClass('intervals', 'min')"
+                  @click="toggleTableSort('intervals', 'min')"
+                >
+                  Min
+                </th>
+                <th
+                  :class="thSortClass('intervals', 'avg')"
+                  @click="toggleTableSort('intervals', 'avg')"
+                >
+                  Avg
+                </th>
+                <th
+                  :class="thSortClass('intervals', 'max')"
+                  @click="toggleTableSort('intervals', 'max')"
+                >
+                  Max
+                </th>
+                <th
+                  :class="thSortClass('intervals', 'p95')"
+                  @click="toggleTableSort('intervals', 'p95')"
+                >
+                  P95
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="row in sortedIntervalStats"
+                :key="row.id"
+                class="stats-table-row clickable"
+                :title="`Open interval duration plot for ID ${row.id}`"
+                tabindex="0"
+                @click="openIntervalPlot(row.id)"
+                @keydown.enter.prevent="openIntervalPlot(row.id)"
+                @keydown.space.prevent="openIntervalPlot(row.id)"
+              >
+                <td class="task-col">{{ row.label }}</td>
+                <td>{{ row.count }}</td>
+                <td>{{ row.min }}</td>
+                <td>{{ row.avg }}</td>
+                <td>{{ row.max }}</td>
+                <td>{{ row.p95 }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div
+          class="stats-section-resizer"
+          role="separator"
+          aria-label="Resize interval analysis table"
+          aria-orientation="horizontal"
+          @mousedown.prevent="onTableResizeStart('intervals', $event)"
         />
       </div>
     </template>
@@ -1374,11 +1497,18 @@ import {
   findBcetSegment,
   findExtremeBlockingSegment,
   findExtremeInterArrivalSegment,
+  extremeSegmentNote,
   preemptionChainRows,
   preemptionChainPlotPoints,
+  PREEMPTION_CHAIN_MAX_ROWS,
   responseTimeRows,
   responseTimePlotPoints,
 } from '../utils/statsAnalysis.js'
+import {
+  intervalStatsRows,
+  intervalPlotPoints,
+  intervalColor,
+} from '../utils/intervalAnalysis.js'
 import { migrationRows } from '../utils/migrationAnalysis.js'
 import { tickHealthReport } from '../utils/tickHealth.js'
 import { requestStatsCompute } from '../utils/statsWorkerClient.js'
@@ -1395,6 +1525,7 @@ import {
   HEALTH_GAP_SORT_ACCESSORS,
   PREEMPTION_SORT_ACCESSORS,
   RESPONSE_SORT_ACCESSORS,
+  INTERVAL_SORT_ACCESSORS,
 } from '../utils/statsTableSort.js'
 import TraceCompareDialog from './TraceCompareDialog.vue'
 
@@ -1407,7 +1538,7 @@ const props = defineProps({
   sectionHeights: { type: Object, default: null },
 })
 
-const emit = defineEmits(['highlightTask', 'selectSegment', 'update:openPlot', 'update:sectionHeights'])
+const emit = defineEmits(['highlightTask', 'plotPointActivate', 'update:openPlot', 'update:sectionHeights'])
 
 const coresCollapsed = ref(false)
 const tasksCollapsed = ref(false)
@@ -1417,6 +1548,7 @@ const blockingCollapsed = ref(false)
 const migrationCollapsed = ref(false)
 const interArrivalCollapsed = ref(false)
 const preemptionCollapsed = ref(false)
+const intervalsCollapsed = ref(false)
 const responseCollapsed = ref(false)
 const scopeToCursors = ref(true)
 
@@ -1429,6 +1561,7 @@ const STATS_SECTION_FLAGS = [
   blockingCollapsed,
   interArrivalCollapsed,
   preemptionCollapsed,
+  intervalsCollapsed,
   responseCollapsed,
 ]
 
@@ -1444,7 +1577,10 @@ const workerExecRows = ref([])
 const workerBlockRows = ref([])
 const workerInterRows = ref([])
 const workerTaskCpuNs = ref(null)
+const preemptionRows = ref([])
+const preemptionComputing = ref(false)
 let _statsRefreshTimer = null
+let _preemptionGen = 0
 
 function formatStatsRow(row, scale) {
   return {
@@ -1523,6 +1659,30 @@ async function refreshStatsTables() {
   if (data.taskCpuNs) workerTaskCpuNs.value = data.taskCpuNs
 }
 
+function schedulePreemptionRefresh() {
+  if (preemptionCollapsed.value || props.statsPaused) {
+    preemptionRows.value = []
+    preemptionComputing.value = false
+    return
+  }
+  const tr = props.trace
+  if (!tr) {
+    preemptionRows.value = []
+    preemptionComputing.value = false
+    return
+  }
+  const gen = ++_preemptionGen
+  preemptionComputing.value = true
+  const r = statsRange.value
+  const lo = r?.lo ?? null
+  const hi = r?.hi ?? null
+  setTimeout(() => {
+    if (gen !== _preemptionGen) return
+    preemptionRows.value = preemptionChainRows(tr, lo, hi)
+    preemptionComputing.value = false
+  }, 0)
+}
+
 function scheduleStatsRefresh() {
   if (props.statsPaused) return
   clearTimeout(_statsRefreshTimer)
@@ -1576,6 +1736,7 @@ const tableSort = ref({
   inter: defaultStatsTableSort(),
   health: defaultStatsTableSort(),
   preemption: defaultStatsTableSort(),
+  intervals: defaultStatsTableSort(),
   response: defaultStatsTableSort(),
 })
 
@@ -1629,6 +1790,7 @@ function onTableResizeEnd() {
 
 onBeforeUnmount(() => {
   clearTimeout(_statsRefreshTimer)
+  _preemptionGen++
   onTableResizeEnd()
 })
 
@@ -1806,18 +1968,21 @@ const sortedTickHealthGaps = computed(() =>
     HEALTH_GAP_SORT_ACCESSORS,
   ))
 
-const preemptionStats = computed(() => {
-  if (preemptionCollapsed.value) return []
+const sortedPreemptionStats = computed(() =>
+  sortStatsRows(preemptionRows.value, tableSort.value.preemption, PREEMPTION_SORT_ACCESSORS))
+
+const intervalStats = computed(() => {
+  if (intervalsCollapsed.value) return []
   const tr = props.trace
-  if (!tr) return []
+  if (!tr?.intervalIds?.length) return []
   const r = statsRange.value
   const lo = r?.lo ?? null
   const hi = r?.hi ?? null
-  return preemptionChainRows(tr, lo, hi)
+  return intervalStatsRows(tr, lo, hi)
 })
 
-const sortedPreemptionStats = computed(() =>
-  sortStatsRows(preemptionStats.value, tableSort.value.preemption, PREEMPTION_SORT_ACCESSORS))
+const sortedIntervalStats = computed(() =>
+  sortStatsRows(intervalStats.value, tableSort.value.intervals, INTERVAL_SORT_ACCESSORS))
 
 const responseTimeStats = computed(() => {
   if (responseCollapsed.value) return []
@@ -1832,9 +1997,15 @@ const responseTimeStats = computed(() => {
 const sortedResponseTimeStats = computed(() =>
   sortStatsRows(responseTimeStats.value, tableSort.value.response, RESPONSE_SORT_ACCESSORS))
 
+function activateExtremeSegment(mk, kind, seg, findMax) {
+  if (!seg) return
+  const note = extremeSegmentNote(props.trace, mk, kind, seg, findMax)
+  emit('plotPointActivate', { ns: seg.start, note, segment: seg })
+}
+
 function jumpToResponseSegment(row, findMax) {
   const seg = findMax ? row.worstSeg : row.bestSeg
-  if (seg) emit('selectSegment', seg)
+  activateExtremeSegment(row.mk, 'response', seg, findMax)
 }
 
 function jumpToSegment(mk, kind, findMax) {
@@ -1852,7 +2023,7 @@ function jumpToSegment(mk, kind, findMax) {
   } else if (kind === 'inter') {
     seg = findExtremeInterArrivalSegment(segs, lo, hi, findMax)
   }
-  if (seg) emit('selectSegment', seg)
+  if (seg) activateExtremeSegment(mk, kind, seg, findMax)
 }
 
 function _summarizeNumericSamples(samples) {
@@ -2013,6 +2184,27 @@ function _buildPreemptPlot(trace, victimMk, preemptor, range) {
   }
 }
 
+function _buildIntervalPlot(trace, id, range) {
+  const suffix = scopeSuffix(range)
+  const lo = range?.lo ?? null
+  const hi = range?.hi ?? null
+  const rawPoints = intervalPlotPoints(trace, id, lo, hi)
+  const points = rawPoints.map((pt, index) => ({
+    index,
+    xNs: pt.xNs,
+    yValue: pt.yValue,
+    payload: pt.payload,
+    label: `Interval ${id}: ${formatTime(pt.yValue, trace.timeScale)} [${formatTime(pt.payload.startNs, trace.timeScale)} – ${formatTime(pt.payload.stopNs, trace.timeScale)}]`,
+  }))
+  return {
+    kind: 'interval',
+    intervalId: id,
+    title: `Interval ${id} — Duration${suffix}`,
+    color: intervalColor(id),
+    points,
+  }
+}
+
 const plotData = computed(() => {
   const open = openPlotRef.value
   if (!open) return null
@@ -2022,6 +2214,9 @@ const plotData = computed(() => {
   if (open.kind === 'response') return _buildResponsePlot(props.trace, open.mk, range)
   if (open.kind === 'preempt') {
     return _buildPreemptPlot(props.trace, open.mk, open.preemptor, range)
+  }
+  if (open.kind === 'interval') {
+    return _buildIntervalPlot(props.trace, open.intervalId, range)
   }
   return _buildInterPlot(props.trace, open.mk, range)
 })
@@ -2051,6 +2246,14 @@ function openPreemptPlot(victimMk, preemptor) {
   selectedPlotPoint.value = -1
 }
 
+function openIntervalPlot(id) {
+  const range = statsRange.value
+  const plot = _buildIntervalPlot(props.trace, id, range)
+  if (!plot || plot.points.length === 0) return
+  openPlotRef.value = { intervalId: id, kind: 'interval' }
+  selectedPlotPoint.value = -1
+}
+
 function closePlot() {
   openPlotRef.value = null
   selectedPlotPoint.value = -1
@@ -2058,7 +2261,20 @@ function closePlot() {
 
 function onPlotPointClick(point) {
   selectedPlotPoint.value = point.index
-  if (point.payload) emit('selectSegment', point.payload)
+  const ns = annotationNsForPlotPoint(point)
+  const note = point.label || ''
+  const kind = openPlotRef.value?.kind
+  const segment = (point.payload?.start != null && kind !== 'interval') ? point.payload : null
+  const interval = (kind === 'interval' && point.payload?.startNs != null) ? point.payload : null
+  if (ns == null && !segment && !interval) return
+  emit('plotPointActivate', { ns, note, segment, interval })
+}
+
+function annotationNsForPlotPoint(point) {
+  const payload = point.payload
+  if (payload?.startNs != null && payload?.stopNs != null) return payload.startNs
+  if (payload?.start != null) return payload.start
+  return point.xNs ?? null
 }
 
 const scatterModel = computed(() => {
@@ -2381,6 +2597,26 @@ function exportCsv() {
     lines.push('No preemption events found,,,,,')
   }
 
+  const intervalReportRows = intervalStatsRows(tr, lo, hi)
+  lines.push('')
+  lines.push(`Interval Analysis${suffix}`)
+  lines.push('ID,Label,Count,Min,Avg,Max,p95')
+  if (intervalReportRows.length) {
+    for (const row of intervalReportRows) {
+      lines.push([
+        _csvCell(row.id),
+        _csvCell(row.label),
+        _csvCell(row.count),
+        _csvCell(row.min),
+        _csvCell(row.avg),
+        _csvCell(row.max),
+        _csvCell(row.p95),
+      ].join(','))
+    }
+  } else {
+    lines.push('No interval data,,,,,,')
+  }
+
   lines.push('')
   lines.push(`Response Time Analysis${suffix}`)
   lines.push('Task,Events,Min,Avg,Max,p95')
@@ -2616,6 +2852,7 @@ function exportHtml() {
   const hi = r?.hi ?? null
   const migReportRows = migrationRows(tr, lo, hi)
   const preemptHtmlRows = preemptionChainRows(tr, lo, hi)
+  const intervalHtmlRows = intervalStatsRows(tr, lo, hi)
   const respHtmlRows = responseTimeRows(tr, lo, hi)
   const { contextSwitches, coreGaps } = schedulingStats(tr, lo, hi)
   const schedKpi = schedulingSummary.value
@@ -2762,6 +2999,7 @@ function exportHtml() {
       <li><strong>Inter-Arrival Time:</strong> Time between consecutive activations of the same task (slice start to next slice start). It reflects activation cadence and jitter.</li>
       <li><strong>Blocking Time:</strong> Off-CPU gap between the end of one slice and the start of the next for the same task.</li>
       <li><strong>Preemption Chain Analysis:</strong> For each blocking gap of a victim task, identifies which task ran on the same core during that gap. High counts or long totals point to recurring preemption bottlenecks.</li>
+      <li><strong>Interval Analysis:</strong> Pairs <code>interval_start</code> / <code>interval_stop</code> STI events by id; shows count, min/avg/max/p95 duration per interval id (Tracealyzer-style interval plot).</li>
       <li><strong>Response Time Analysis:</strong> Time from the end of a task slice to the start of its next slice (= off-CPU blocking gap). Max and p95 values indicate worst-case scheduling latency for that task.</li>
       <li><strong>Context switches:</strong> Count of segment boundaries on all cores whose start time falls inside the statistics scope.</li>
       <li><strong>Min (Minimum):</strong> The fastest execution time recorded. It represents the best-case scenario under zero system load.</li>
@@ -2787,6 +3025,14 @@ function exportHtml() {
           `<tr><td>${_htmlCell(row.victim)}</td><td>${_htmlCell(row.preemptor)}</td><td>${row.count}</td><td>${_htmlCell(row.total)}</td><td>${_htmlCell(row.avg)}</td><td>${_htmlCell(row.max)}</td></tr>`
         ).join('')
       : '<tr><td colspan="6" class="empty">No preemption events found</td></tr>'
+    }</tbody></table></section>
+    <section class="report-card"><h2>Interval Analysis${_htmlCell(suffix)}</h2>
+    <table><thead><tr><th>ID</th><th>Label</th><th>Count</th><th>Min</th><th>Avg</th><th>Max</th><th>p95</th></tr></thead>
+    <tbody>${intervalHtmlRows.length
+      ? intervalHtmlRows.map(row =>
+          `<tr><td>${_htmlCell(row.id)}</td><td>${_htmlCell(row.label)}</td><td>${row.count}</td><td>${_htmlCell(row.min)}</td><td>${_htmlCell(row.avg)}</td><td>${_htmlCell(row.max)}</td><td>${_htmlCell(row.p95)}</td></tr>`
+        ).join('')
+      : '<tr><td colspan="7" class="empty">No interval data</td></tr>'
     }</tbody></table></section>
     <section class="report-card"><h2>Response Time Analysis${_htmlCell(suffix)}</h2>
     <table><thead><tr><th>Task</th><th>Events</th><th>Min</th><th>Avg</th><th>Max</th><th>p95</th></tr></thead>
@@ -2885,6 +3131,12 @@ watch(
     if (props.statsPaused) return
     scheduleStatsRefresh()
   },
+  { immediate: true },
+)
+
+watch(
+  [() => props.trace, statsRange, preemptionCollapsed, () => props.statsPaused],
+  () => schedulePreemptionRefresh(),
   { immediate: true },
 )
 

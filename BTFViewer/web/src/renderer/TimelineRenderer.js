@@ -26,6 +26,12 @@ import {
 import { formatTime, formatMigrationGapTime } from '../utils/timeFormat.js'
 import { getTimelineLayout } from '../utils/timelineLayout.js'
 import { CURSOR_COLORS } from '../utils/cursorColors.js'
+import {
+  intervalColor,
+  isIntervalMarkerChannel,
+  visibleIntervalInstances,
+  fillIntervalStripedBar,
+} from '../utils/intervalAnalysis.js'
 
 export { formatTime, formatMigrationGapTime }
 export { getTimelineLayout } from '../utils/timelineLayout.js'
@@ -76,6 +82,17 @@ const PAINT_BUDGET_MAX_SLOTS_FAST = 36
 const PAINT_BUDGET_LITE  = 0.40
 /** Task rows above this count use micro bars in the navigator thumbnail. */
 export const OVERVIEW_MICRO_ROWS = 128
+
+const ORTH_BUF_HUGE_TASKS = 768
+const ORTH_BUF_LARGE_TASKS = 256
+
+/** Extra rows above/below the viewport when culling (larger on big traces). */
+export function orthRowBuffer(nTasks = 0, fastPaint = false) {
+  if (fastPaint) return 2
+  if (nTasks > ORTH_BUF_HUGE_TASKS) return 5
+  if (nTasks > ORTH_BUF_LARGE_TASKS) return 4
+  return 2
+}
 
 function createPaintBudget(visibleSlots = 1, fastPaint = false) {
   const cap = fastPaint ? PAINT_BUDGET_MAX_SLOTS_FAST : PAINT_BUDGET_MAX_SLOTS
@@ -164,6 +181,31 @@ export function taskPassesRowFilter(trace, mk, migratedOnlyFilter, taskFilterKey
   return true
 }
 
+/** True when core view should limit rows/segments (heatmap, migrated-only). */
+export function coreViewTaskFilterActive(migratedOnlyFilter, taskFilterKeys) {
+  return !!(taskFilterKeys?.length || migratedOnlyFilter)
+}
+
+/**
+ * Per-core task lists (no TICK). Cores with no matching tasks are omitted when a filter is active.
+ * @returns {{ coreName: string, tasks: string[] }[]}
+ */
+export function filteredCoreViewTasks(trace, migratedOnlyFilter, taskFilterKeys) {
+  const filterActive = coreViewTaskFilterActive(migratedOnlyFilter, taskFilterKeys)
+  const out = []
+  for (const coreName of trace.coreNames) {
+    const taskOrder = (trace.coreTaskOrder.get(coreName) || [])
+      .filter(t => parseTaskName(t).name !== 'TICK')
+    const tasks = filterActive
+      ? taskOrder.filter(t => taskPassesRowFilter(trace, taskMergeKey(t), migratedOnlyFilter, taskFilterKeys))
+      : taskOrder
+    if (!filterActive || tasks.length > 0) {
+      out.push({ coreName, tasks })
+    }
+  }
+  return out
+}
+
 /**
  * Pick a "nice" ruler step that produces 5–12 tick marks across the viewport.
  */
@@ -204,17 +246,14 @@ export function buildRowLayout(trace, viewMode, expanded, yStart, showSti = true
     }
   } else {
     // Core view
-    for (const coreName of trace.coreNames) {
+    const cores = filteredCoreViewTasks(trace, migratedOnlyFilter, taskFilterKeys)
+    for (const { coreName, tasks } of cores) {
       const cc = coreColor(coreName)
       rows.push({ type: 'core', key: coreName, label: coreName, color: cc, y })
       y += L().rowH + L().rowGap
       if (expanded.has(coreName)) {
-        // TICK is rendered on the ruler band – exclude it from per-task sub-rows.
-        const taskOrder = (trace.coreTaskOrder.get(coreName) || [])
-          .filter(t => parseTaskName(t).name !== 'TICK')
-        for (const rawTask of taskOrder) {
+        for (const rawTask of tasks) {
           const mk = taskMergeKey(rawTask)
-          if (!taskPassesRowFilter(trace, mk, migratedOnlyFilter, taskFilterKeys)) continue
           const label = taskDisplayName(rawTask)
           const color = taskColor(mk, rawTask)
           rows.push({ type: 'core-task', key: `${coreName}__${rawTask}`, coreKey: coreName, taskKey: rawTask, label, color, y })
@@ -224,14 +263,25 @@ export function buildRowLayout(trace, viewMode, expanded, yStart, showSti = true
     }
   }
 
-  // STI rows
+  // STI rows (raw marker channels; interval start/stop are paired into interval rows)
   if (showSti) {
     for (const ch of trace.stiChannels) {
+      if (isIntervalMarkerChannel(ch)) continue
       const isTag = isStiTagChannel(ch)
       const isExpanded = isTag && stiExpanded.has(ch)
       const rowH = isExpanded ? L().stiWaveformH : L().stiRowH
       rows.push({ type: 'sti', key: ch, label: ch, color: '#888', y, isTag, isExpanded })
       y += rowH + L().rowGap
+    }
+    for (const id of (trace.intervalIds || [])) {
+      rows.push({
+        type: 'interval',
+        key: id,
+        label: `Interval ${id}`,
+        color: intervalColor(id),
+        y,
+      })
+      y += L().rowH + L().rowGap
     }
   }
 
@@ -306,6 +356,7 @@ export function render(ctx, trace, viewport, options = {}) {
     showHoverHighlight = true,
   } = options
   const highlightSegment = options.highlightSegment ?? null
+  const skipCoreSummarySegs = coreViewTaskFilterActive(migratedOnlyFilter, options.taskFilterKeys)
 
   const timeSpan = timeEnd - timeStart
   if (timeSpan <= 0 || canvasW <= 0) return
@@ -331,7 +382,8 @@ export function render(ctx, trace, viewport, options = {}) {
   const rows = rowLayoutBase?.rows
     ?? buildRowLayout(trace, viewMode, expanded, 0, showSti, stiExpanded, migratedOnlyFilter, options.taskFilterKeys || null).rows
   const yOff = RULER_H - scrollY
-  const rowBuffer = paintFast ? 1 : 2
+  const nTasks = trace.tasks?.length ?? rows.length
+  const rowBuffer = orthRowBuffer(nTasks, paintFast)
   const { i0, i1 } = visibleRowIndexRange(rows, scrollY, bodyH, rowBuffer, options.packedRows)
   const visibleRowCount = Math.max(1, i1 - i0)
 
@@ -370,11 +422,13 @@ export function render(ctx, trace, viewport, options = {}) {
     if (row.type === 'task') {
       drawTaskRow(ctx, trace, row, rowY, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, canvasW, darkMode, highlightSegment, rowBudget, showHoverHighlight)
     } else if (row.type === 'core') {
-      drawCoreRow(ctx, trace, row, rowY, timeStart, timeEnd, pxPerNs, nsPerPx, canvasW, darkMode, rowBudget)
+      drawCoreRow(ctx, trace, row, rowY, timeStart, timeEnd, pxPerNs, nsPerPx, canvasW, darkMode, rowBudget, skipCoreSummarySegs)
     } else if (row.type === 'core-task') {
       drawCoreTaskRow(ctx, trace, row, rowY, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, canvasW, darkMode, highlightSegment, lockedTaskKey, rowBudget, showHoverHighlight)
     } else if (row.type === 'sti') {
       drawStiRow(ctx, trace, row, rowY, timeStart, timeEnd, pxPerNs, canvasW, darkMode, stiLogScale)
+    } else if (row.type === 'interval') {
+      drawIntervalRow(ctx, trace, row, rowY, timeStart, timeEnd, pxPerNs, canvasW, darkMode)
     }
   }
 
@@ -850,19 +904,20 @@ function drawTaskRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, n
   if (dim) ctx.restore()
 }
 
-function drawCoreRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, nsPerPx, canvasW, darkMode, budget) {
-  const ld = coreLodData(trace, row.key)
+function drawCoreRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, nsPerPx, canvasW, darkMode, budget, skipSummarySegs = false) {
   const fast = budget.fast
+  if (!fast) {
+    ctx.fillStyle = darkMode ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.03)'
+    ctx.fillRect(0, canvasRowY, canvasW, L().rowH)
+  }
+  if (skipSummarySegs) return
+
+  const ld = coreLodData(trace, row.key)
   const forceCoarse = fast || budgetLite(budget) || nsPerPx > PAINT_LOD_COARSE
   const { segs, indices } = queryPaintIndices(
     trace, 'core', row.key, ld, timeStart, timeEnd, nsPerPx,
     trace.lodTimescalePerPx, trace.lodUltraTimescalePerPx, budget.max, true, fast,
   )
-
-  if (!fast) {
-    ctx.fillStyle = darkMode ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.03)'
-    ctx.fillRect(0, canvasRowY, canvasW, L().rowH)
-  }
 
   const rowY = canvasRowY + 1
   const rowH = L().rowH - 2
@@ -945,7 +1000,46 @@ function drawCoreTaskRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerN
   paintSegments(ctx, segs, timeStart, timeEnd, pxPerNs, nsPerPx,
     canvasRowY + 1, L().rowH - 2, row.color, trace, false, highlightKey, mk, darkMode, row.label, hlSeg, budget,
     indices)
-  if (dim) ctx.restore()
+  if (dim)   ctx.restore()
+}
+
+/** Draw paired interval spans as horizontal bars (Tracealyzer-style interval lane). */
+function drawIntervalRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, canvasW, darkMode) {
+  const rowY = canvasRowY
+  const rowH = L().rowH
+  ctx.fillStyle = darkMode ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.02)'
+  ctx.fillRect(0, canvasRowY, canvasW, rowH)
+  const instances = trace.intervalInstancesById?.get(row.key) || []
+  const visible = visibleIntervalInstances(instances, timeStart, timeEnd)
+  const base = row.color || intervalColor(row.key)
+  const stroke = darkMode ? lighterColor(base, 1.55) : lighterColor(base, 0.72)
+
+  const bars = []
+  for (const inst of visible) {
+    const x1 = (inst.startNs - timeStart) * pxPerNs
+    const x2 = (inst.stopNs - timeStart) * pxPerNs
+    if (x2 < -2 || x1 > canvasW + 2) continue
+    const cx = Math.max(0, Math.floor(x1))
+    const cx2 = Math.min(Math.ceil(x2), canvasW)
+    const drawW = cx2 - cx
+    if (drawW < 0.5) continue
+    bars.push({ inst, cx, drawW })
+  }
+
+  ctx.save()
+  for (const bar of bars) {
+    const { inst, cx, drawW } = bar
+    const barY = rowY + 2
+    const barH = rowH - 4
+    fillIntervalStripedBar(ctx, cx, barY, drawW, barH, base, darkMode,
+      inst.startNs, inst.stopNs, timeStart, pxPerNs)
+    if (drawW >= 3) {
+      ctx.strokeStyle = stroke
+      ctx.lineWidth = 1.25
+      ctx.strokeRect(cx + 0.5, barY + 0.5, drawW - 1, barH - 1)
+    }
+  }
+  ctx.restore()
 }
 
 function drawStiRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, canvasW, darkMode, logScale = false) {
@@ -1602,19 +1696,16 @@ export function buildColumnLayout(trace, viewMode, expanded, scrollX = 0, showSt
     }
   } else {
     // Core view
-    for (const coreName of trace.coreNames) {
+    const cores = filteredCoreViewTasks(trace, migratedOnlyFilter, taskFilterKeys)
+    for (const { coreName, tasks } of cores) {
       const cc = coreColor(coreName)
       const x = RULER_W + xAcc - scrollX
       cols.push({ type: 'core', key: coreName, label: coreName, color: cc, x, colIdx: rawIdx, colWidth: COL_W })
       rawIdx++
       xAcc += COL_W
       if (expanded.has(coreName)) {
-        // TICK is rendered on the ruler band – exclude it from per-task sub-columns.
-        const taskOrder = (trace.coreTaskOrder.get(coreName) || [])
-          .filter(t => parseTaskName(t).name !== 'TICK')
-        for (const rawTask of taskOrder) {
+        for (const rawTask of tasks) {
           const mk = taskMergeKey(rawTask)
-          if (!taskPassesRowFilter(trace, mk, migratedOnlyFilter, taskFilterKeys)) continue
           const lbl = taskDisplayName(rawTask)
           const col = taskColor(mk, rawTask)
           const cx = RULER_W + xAcc - scrollX
@@ -1930,14 +2021,15 @@ function drawTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, h
     indices)
 }
 
-function drawCoreColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, canvasH, darkMode, budget) {
-  const ld = coreLodData(trace, col.key)
-  const segs = segsForPaint(ld, timeStart, timeEnd, nsPerPx, trace.lodTimescalePerPx, trace.lodUltraTimescalePerPx)
-
+function drawCoreColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, canvasH, darkMode, budget, skipSummarySegs = false) {
   ctx.fillStyle = col.colIdx % 2 === 0
     ? (darkMode ? '#252526' : '#FAFAFA')
     : (darkMode ? '#2D2D2D' : '#F5F5F5')
   ctx.fillRect(col.x, HEADER_H, COL_W, canvasH)
+  if (skipSummarySegs) return
+
+  const ld = coreLodData(trace, col.key)
+  const segs = segsForPaint(ld, timeStart, timeEnd, nsPerPx, trace.lodTimescalePerPx, trace.lodUltraTimescalePerPx)
 
   const forceCoarse = budgetLite(budget) || nsPerPx > PAINT_LOD_COARSE
   const drawLabels = !forceCoarse && !budgetLite(budget)
@@ -2385,6 +2477,7 @@ export function renderVertical(ctx, trace, viewport, options = {}) {
     fastPaint   = false,
   } = options
   const highlightSegment = options.highlightSegment ?? null
+  const skipCoreSummarySegs = coreViewTaskFilterActive(migratedOnlyFilter, options.taskFilterKeys)
 
   const timeSpan = timeEnd - timeStart
   if (timeSpan <= 0 || canvasH <= HEADER_H) return
@@ -2454,7 +2547,7 @@ export function renderVertical(ctx, trace, viewport, options = {}) {
     if (col.type === 'task') {
       drawTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, canvasH, darkMode, highlightSegment, colBudget)
     } else if (col.type === 'core') {
-      drawCoreColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, canvasH, darkMode, colBudget)
+      drawCoreColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, canvasH, darkMode, colBudget, skipCoreSummarySegs)
     } else if (col.type === 'core-task') {
       drawCoreTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, canvasH, darkMode, highlightSegment, lockedTaskKey, colBudget)
     } else if (col.type === 'sti') {

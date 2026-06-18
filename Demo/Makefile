@@ -3,7 +3,7 @@ SIM          ?= ../build/sim/riscv64-sim
 RISCV_PREFIX ?= /opt/xpack-riscv-none-elf-gcc-15.2.0-1/bin/riscv-none-elf-
 
 # Max events for CORES=16 example
-MAX_TRACE_EVENTS ?= 320000
+MAX_TRACE_EVENTS ?= 400000
 
 .PHONY: all clean list run
 

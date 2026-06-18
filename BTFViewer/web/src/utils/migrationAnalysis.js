@@ -147,6 +147,59 @@ export function traceIsMultiCore(trace) {
   return (trace?.coreNames?.length ?? 0) >= 2
 }
 
+/** Above this core count, heatmap level-0 uses a core×core matrix instead of pair×time rows. */
+export const MIGRATION_HEATMAP_MATRIX_CORE_THRESHOLD = 16
+
+export function migrationHeatmapUsesMatrix(trace) {
+  return (trace?.coreNames?.length ?? 0) > MIGRATION_HEATMAP_MATRIX_CORE_THRESHOLD
+}
+
+/** Source × destination core counts for large traces (one overview row per source core). */
+export function migrationHeatmapMatrix(trace, lo = null, hi = null) {
+  if (!trace) return { cores: [], grid: [] }
+  const cores = trace.coreNames || []
+  const n = cores.length
+  const coreIndex = new Map(cores.map((c, i) => [c, i]))
+  const grid = Array.from({ length: n }, () => Array(n).fill(0))
+  for (const m of trace.migrations || []) {
+    if (lo != null && m.ns < lo) continue
+    if (hi != null && m.ns > hi) continue
+    const fi = coreIndex.get(m.fromCore)
+    const ti = coreIndex.get(m.toCore)
+    if (fi == null || ti == null || fi === ti) continue
+    grid[fi][ti]++
+  }
+  return { cores, grid }
+}
+
+/** Time bins for one directed core pair (heatmap drill-down after matrix pick). */
+export function migrationPairTimeBins(trace, fromCore, toCore, lo = null, hi = null, timeBins = 32) {
+  if (!trace) {
+    return { pairs: [], grid: [], timeBins, tMin: 0, tMax: 0, binW: 0 }
+  }
+  const tMin = lo ?? trace.timeMin
+  const tHi = hi ?? trace.timeMax
+  const span = Math.max(tHi - tMin, 1)
+  const binW = span / timeBins
+  const bins = Array(timeBins).fill(0)
+  for (const m of trace.migrations || []) {
+    if (m.fromCore !== fromCore || m.toCore !== toCore) continue
+    if (lo != null && m.ns < lo) continue
+    if (hi != null && m.ns > hi) continue
+    const bi = heatmapBinIndexForNs(tMin, binW, timeBins, tHi, m.ns)
+    bins[bi]++
+  }
+  const label = `${coreShortName(fromCore)}→${coreShortName(toCore)}`
+  return {
+    pairs: [{ from: fromCore, to: toCore, label }],
+    grid: [bins],
+    binW,
+    tMin,
+    timeBins,
+    tMax: tHi,
+  }
+}
+
 /** Core-pair rows × time bins for migration heatmap popup. */
 export function migrationHeatmapGrid(trace, lo = null, hi = null, timeBins = 32) {
   if (!trace) return { pairs: [], grid: [], timeBins, tMin: 0, tMax: 0, binW: 0 }

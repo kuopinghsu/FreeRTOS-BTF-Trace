@@ -6,12 +6,11 @@ function _emptyViewport() {
   return { timeStart: 0, timeEnd: 1, scrollY: 0, scrollX: 0, canvasW: 1, canvasH: 1 }
 }
 
-export function createTraceTab(name, { placeholder = false } = {}) {
+export function createTraceTab(name) {
   return {
     id: _nextTabId++,
     name: name || 'trace.btf',
     trace: null,
-    placeholder,
     cursors: [null, null, null, null],
     marks: [],
     markNextId: 1,
@@ -80,32 +79,16 @@ export function useTraceTabs() {
     return tabs.value.find(t => t.name === name) ?? null
   }
 
-  function openTab(name, opts = {}) {
+  function openTab(name) {
     const existing = findTabByName(name)
     if (existing) {
       activeTabId.value = existing.id
-      if (!opts.placeholder) existing.placeholder = false
       return existing
     }
-    const tab = createTraceTab(name, opts)
+    const tab = createTraceTab(name)
     tabs.value.push(tab)
     activeTabId.value = tab.id
     return tab
-  }
-
-  function restorePlaceholderTabs(tabOrder, activeTabName) {
-    if (!tabOrder?.length) return
-    for (const name of tabOrder) {
-      if (!name || findTabByName(name)) continue
-      tabs.value.push(createTraceTab(name, { placeholder: true }))
-    }
-    if (activeTabName) {
-      const tab = findTabByName(activeTabName)
-      if (tab) activeTabId.value = tab.id
-      else if (tabs.value.length) activeTabId.value = tabs.value[0].id
-    } else if (tabs.value.length) {
-      activeTabId.value = tabs.value[0].id
-    }
   }
 
   function closeTab(id) {
@@ -131,7 +114,6 @@ export function useTraceTabs() {
 
   function resetTabForLoad(tab) {
     tab.trace = null
-    tab.placeholder = false
     tab.cursors = [null, null, null, null]
     tab.marks = []
     tab.markNextId = 1
@@ -168,7 +150,6 @@ export function useTraceTabs() {
     closeTab,
     cycleTraceTab,
     resetTabForLoad,
-    restorePlaceholderTabs,
     getNavCache,
     setNavCache,
   }

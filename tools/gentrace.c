@@ -526,6 +526,22 @@ int genbtf(
                         "trigger",
                         event->value);
                 break;
+            case TRACE_EVENT_INTERVAL_START:
+                fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%d\n",
+                        current_time,
+                        coreid,
+                        "interval_start",
+                        "trigger",
+                        event->value);
+                break;
+            case TRACE_EVENT_INTERVAL_STOP:
+                fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%d\n",
+                        current_time,
+                        coreid,
+                        "interval_stop",
+                        "trigger",
+                        event->value);
+                break;
             case TRACE_EVENT_TAG:
                 fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%d\n",
                         current_time,

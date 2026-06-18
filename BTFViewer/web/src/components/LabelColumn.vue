@@ -90,6 +90,19 @@
           <span class="sti-wave-icon">〰</span>
           <span class="label-text sti">{{ row.label }}</span>
         </div>
+
+        <!-- Interval span row -->
+        <div
+          v-else-if="row.type === 'interval'"
+          class="label-row label-interval"
+          :style="labelRowStyle(row)"
+        >
+          <span
+            class="task-swatch interval-swatch"
+            :style="{ background: row.color }"
+          />
+          <span class="label-text">{{ row.label }}</span>
+        </div>
       </template>
       </div>
     </div>
@@ -98,7 +111,7 @@
 
 <script setup>
 import { computed } from 'vue'
-import { rowBandHeight, visibleRowIndexRange, RULER_H } from '../renderer/TimelineRenderer.js'
+import { rowBandHeight, visibleRowIndexRange, orthRowBuffer, RULER_H } from '../renderer/TimelineRenderer.js'
 import { getTimelineLayout } from '../utils/timelineLayout.js'
 import { taskMergeKey } from '../utils/colors.js'
 
@@ -127,7 +140,9 @@ const totalHeight = computed(() => props.rowLayout?.totalHeight ?? 0)
 const visibleRows = computed(() => {
   const rows = props.rowLayout?.rows
   if (!rows?.length) return []
-  const { i0, i1 } = visibleRowIndexRange(rows, props.scrollY, props.bodyH, 5)
+  const { i0, i1 } = visibleRowIndexRange(
+    rows, props.scrollY, props.bodyH, Math.max(5, orthRowBuffer(rows.length)),
+  )
   return rows.slice(i0, i1)
 })
 
@@ -221,6 +236,16 @@ function taskRowKey(row) {
 .label-sti-tag {
   cursor: pointer;
   opacity: 1;
+}
+
+.label-interval {
+  cursor: default;
+  opacity: 1;
+}
+
+.interval-swatch {
+  border: 1px solid rgba(0, 0, 0, 0.35);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.15);
 }
 
 .sti-wave-icon {

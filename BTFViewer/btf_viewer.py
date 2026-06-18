@@ -200,6 +200,8 @@ CPU_LOAD_PANE_MAX_H      = 480  # Max CPU load pane height before inner vertical
 STATS_UTIL_BAR_H         =   8  # Core/task CPU % bar height in Statistics panel (px).
 STATS_UTIL_ROW_H         =  16  # Row height; matches stats-table row size (px).
 STATS_UTIL_ROW_GAP       =   1  # Vertical gap between utilisation rows (px).
+STATS_UTIL_LABEL_W       = 128  # Fixed label column so progress bars align (px).
+STATS_UTIL_PCT_W         =  44  # Fixed CPU % column width (px).
 STATS_TABLE_HEADER_H     =  18  # QTableWidget header row height (px).
 STATS_TABLE_ROW_H        =  16  # QTableWidget body row height (px).
 STATS_TABLE_HSCROLL_H    =  14  # Horizontal scrollbar strip inside wide tables (px).
@@ -263,6 +265,9 @@ _PAINT_LOD_COARSE        = 0.45   # Below: merge nearby segments, skip pen outli
 _PAINT_LOD_MICRO         = 0.12   # Below: draw one tinted activity bar per row.
 _LOD_MERGE_PX            = 6.0    # Coarse LOD: merge segments closer than this many scene-px.
 _ACTIVITY_ALPHA          = 160    # Alpha for the micro-LOD activity-presence bar.
+_INTERVAL_MAX_STRIPES    = 12     # Cap stripe count per interval bar (paint cost).
+_INTERVAL_MIN_PX         = 0.5    # Skip sub-pixel interval bars (avoids merge artefacts).
+_INTERVAL_STRIPE_PERIOD  = 8      # Stripe period in trace time units (~4px at 2 units/px).
 _HOVER_BISECT_MARGIN     = 3      # Neighbour scan window used in hoverMoveEvent bisect lookup.
 # Inline segment text is only rendered near 1:1 zoom; zoomed-out views keep
 # bars only for performance, especially at far-right large coordinates.
@@ -277,10 +282,17 @@ _LOD_SUMMARY_BINS_ULTRA  = 1024
 # few hundred pixels (critical for traces with hundreds of task rows).
 _ORTH_BUF_MIN_ROWS        = 40
 _ORTH_BUF_VIEWPORT_MULT   = 3.0
+_ORTH_BUF_LARGE_TASKS     = 256   # reduce orth margin above this task count
+_ORTH_BUF_HUGE_TASKS      = 768
+_MAX_FINE_SEGS_PER_ROW    = 512   # fall back to LOD summary above this per row
+_ZOOM_DEBOUNCE_MS         = 60
+_ZOOM_DEBOUNCE_LARGE_MS   = 120
+_ZOOM_DEBOUNCE_HUGE_MS    = 160
 # Pan-rebuild timers: heartbeat polls while scrolling; min interval caps how
 # often an in-flight scroll may trigger scene.clear()+rebuild.
 _PAN_HEARTBEAT_MS         = 100
 _PAN_HEARTBEAT_MIN_REBUILD_MS = 180
+_PAN_ORTH_URGENT_REBUILD_MS   = 40   # faster rebuild when viewport outruns orth margin
 _PAN_SETTLE_MS            = 120
 _NAV_SCROLL_DEBOUNCE_MS   = 120
 # Never draw grid lines closer than this (px); dense lines read as solid gray.
@@ -568,6 +580,336 @@ class StiEvent:
     note: str           # detail (e.g. "take_mutex")
 
 @dataclass
+class IntervalInstance:
+    """Paired interval_start / interval_stop span."""
+    id: str
+    start_ns: int
+    stop_ns: int
+    start_core: str = ""
+    stop_core: str = ""
+
+_INTERVAL_START_CHANNELS = frozenset({"interval_start", "start_intval"})
+_INTERVAL_STOP_CHANNELS  = frozenset({"interval_stop", "stop_intval"})
+_INTERVAL_COLORS = (
+    "#E74C3C", "#2ECC71", "#F39C12", "#3498DB", "#9B59B6",
+    "#1ABC9C", "#E91E63", "#F1C40F", "#00BCD4", "#FF5722",
+)
+
+def _is_interval_marker_channel(channel: str) -> bool:
+    return channel in _INTERVAL_START_CHANNELS or channel in _INTERVAL_STOP_CHANNELS
+
+def _interval_color(interval_id: str) -> str:
+    try:
+        idx = abs(int(interval_id)) % len(_INTERVAL_COLORS)
+    except ValueError:
+        idx = 0
+    return _INTERVAL_COLORS[idx]
+
+def _interval_stripe_colors(color: QColor) -> Tuple[QColor, QColor]:
+    """Dark/light pair for striped interval bars (start edge = dark stripe)."""
+    return color.darker(155), color.lighter(118)
+
+def _interval_bars_for_viewport(
+    instances: List["IntervalInstance"],
+    time_min: int,
+    px_per_ns: float,
+    label_width: float,
+    vp_ns_lo: int,
+    vp_ns_hi: int,
+) -> list:
+    """Build [(scene_x, width_px, start_ns, stop_ns), ...] for visible intervals.
+
+    *instances* must be sorted by start_ns.  Includes spans that began before the
+    viewport but still overlap it (long-running nested intervals).
+    """
+    if not instances:
+        return []
+    visible: list = []
+    for inst in instances:
+        if inst.start_ns >= vp_ns_hi:
+            break
+        if inst.stop_ns <= vp_ns_lo:
+            continue
+        visible.append(inst)
+    visible = _interval_instances_cull_nested(visible)
+    bars: list = []
+    for inst in visible:
+        x1f = label_width + (inst.start_ns - time_min) * px_per_ns
+        x2f = label_width + (inst.stop_ns - time_min) * px_per_ns
+        x1 = math.floor(x1f)
+        x2 = math.ceil(x2f)
+        w = x2 - x1
+        if w < _INTERVAL_MIN_PX:
+            continue
+        bars.append((float(x1), float(w), inst.start_ns, inst.stop_ns))
+    return bars
+
+def _interval_instances_cull_nested(instances: list) -> list:
+    """Drop instances fully covered by a longer one (time-domain containment).
+
+    Keep this in time space (not pixel space) so zoom changes don't alter which
+    parent interval survives culling.
+    """
+    if len(instances) <= 1:
+        return instances
+    by_duration = sorted(
+        instances,
+        key=lambda inst: ((inst.stop_ns - inst.start_ns), -inst.start_ns, inst.stop_ns),
+        reverse=True,
+    )
+    kept: list = []
+    for inst in by_duration:
+        if any(
+            p.start_ns <= inst.start_ns and p.stop_ns >= inst.stop_ns
+            for p in kept
+        ):
+            continue
+        kept.append(inst)
+    kept.sort(key=lambda inst: inst.start_ns)
+    return kept
+
+def _paint_interval_striped_bar(
+    painter: QPainter,
+    x: float, y: float, w: float, h: float,
+    dark: QColor, light: QColor,
+    outline_pen: QPen,
+    start_ns: int,
+    stop_ns: int,
+    time_min: int,
+    label_width: float,
+    px_per_ns: float,
+) -> None:
+    """Paint one interval span; stripe phase is anchored to trace time."""
+    base_period = float(_INTERVAL_STRIPE_PERIOD)
+    span_t = stop_ns - start_ns
+    if span_t <= 0 or w < _INTERVAL_MIN_PX or px_per_ns <= 0:
+        return
+    painter.setPen(Qt.NoPen)
+    x_end = x + w
+    if w < 2.0:
+        painter.setBrush(dark)
+        painter.drawRect(QRectF(x, y, w, h))
+    else:
+        t_clip_lo = max(start_ns, time_min + (x - label_width) / px_per_ns)
+        t_clip_hi = min(stop_ns, time_min + (x_end - label_width) / px_per_ns)
+        if t_clip_hi <= t_clip_lo:
+            return
+        paint_period = base_period
+        if span_t / base_period > _INTERVAL_MAX_STRIPES:
+            paint_period = span_t / _INTERVAL_MAX_STRIPES
+        i0 = max(0, int(math.floor((t_clip_lo - start_ns) / paint_period)))
+        t = start_ns + i0 * paint_period
+        while t < t_clip_hi - 1e-9:
+            seg_end_t = min(t + paint_period, t_clip_hi)
+            lo_t = max(t, t_clip_lo)
+            hi_t = min(seg_end_t, t_clip_hi)
+            if hi_t > lo_t + 1e-9:
+                idx = int(math.floor((t - start_ns) / base_period)) % 2
+                sx = label_width + (lo_t - time_min) * px_per_ns
+                sx2 = label_width + (hi_t - time_min) * px_per_ns
+                clip_lo = max(sx, x)
+                clip_hi = min(sx2, x_end)
+                if clip_hi > clip_lo + 0.01:
+                    painter.setBrush(dark if idx % 2 == 0 else light)
+                    painter.drawRect(QRectF(clip_lo, y, clip_hi - clip_lo, h))
+            t += paint_period
+    painter.setPen(outline_pen)
+    painter.setBrush(Qt.NoBrush)
+    if w >= 3.0:
+        painter.drawRect(QRectF(x, y, w, h))
+
+def _build_interval_data(
+    sti_events: List[StiEvent],
+) -> Tuple[List["IntervalInstance"], List[str], Dict[str, List["IntervalInstance"]], int]:
+    """Pair interval marker STI events into measurable spans."""
+    open_stacks: Dict[str, List[StiEvent]] = {}
+    instances: List[IntervalInstance] = []
+    unmatched = 0
+
+    def _is_start(ev: StiEvent) -> bool:
+        return ev.target in _INTERVAL_START_CHANNELS
+
+    def _ev_id(ev: StiEvent) -> str:
+        return ev.note if ev.note else "0"
+
+    ordered = sorted(
+        [ev for ev in sti_events if _is_start(ev) or ev.target in _INTERVAL_STOP_CHANNELS],
+        key=lambda e: (e.time, 0 if _is_start(e) else 1),
+    )
+    for ev in ordered:
+        iid = _ev_id(ev)
+        if _is_start(ev):
+            open_stacks.setdefault(iid, []).append(ev)
+        else:
+            stack = open_stacks.get(iid)
+            if not stack:
+                continue
+            start_ev = stack.pop()
+            if ev.time > start_ev.time:
+                instances.append(IntervalInstance(
+                    id=iid,
+                    start_ns=start_ev.time,
+                    stop_ns=ev.time,
+                    start_core=start_ev.core,
+                    stop_core=ev.core,
+                ))
+    for stack in open_stacks.values():
+        unmatched += len(stack)
+
+    by_id: Dict[str, List[IntervalInstance]] = defaultdict(list)
+    for inst in instances:
+        by_id[inst.id].append(inst)
+
+    for lst in by_id.values():
+        lst.sort(key=lambda inst: (inst.start_ns, inst.stop_ns))
+
+    def _id_sort_key(s: str):
+        try:
+            return (0, int(s))
+        except ValueError:
+            return (1, s)
+
+    ids = sorted(by_id.keys(), key=_id_sort_key)
+    return instances, ids, dict(by_id), unmatched
+
+def _interval_overlaps_range(inst: "IntervalInstance",
+                             lo: Optional[int], hi: Optional[int]) -> bool:
+    if lo is None or hi is None:
+        return True
+    return inst.stop_ns > lo and inst.start_ns < hi
+
+def _interval_stats_rows(
+    trace: "BtfTrace",
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> List[tuple]:
+    """Per-interval-id stats: (id, label, count, min, avg, max, p95) as formatted strings."""
+    scale = trace.time_scale
+    rows = []
+    for iid in trace.interval_ids:
+        samples = [
+            inst.stop_ns - inst.start_ns
+            for inst in trace.interval_instances_by_id.get(iid, [])
+            if _interval_overlaps_range(inst, lo, hi)
+        ]
+        if not samples:
+            continue
+        samples.sort()
+        total = sum(samples)
+        count = len(samples)
+        mn = samples[0]
+        mx = samples[-1]
+        avg = int(round(total / count))
+        p95_idx = min(len(samples) - 1, max(0, int(math.ceil(0.95 * len(samples))) - 1))
+        p95 = samples[p95_idx]
+        rows.append((
+            iid,
+            f"Interval {iid}",
+            count,
+            _format_time(mn, scale),
+            _format_time(avg, scale),
+            _format_time(mx, scale),
+            _format_time(p95, scale),
+            mn, avg, mx, p95,
+        ))
+    return rows
+
+def _interval_plot_points(
+    trace: "BtfTrace",
+    interval_id: str,
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> List[Tuple[int, int, "IntervalInstance"]]:
+    pts: List[Tuple[int, int, IntervalInstance]] = []
+    for inst in trace.interval_instances_by_id.get(interval_id, []):
+        if not _interval_overlaps_range(inst, lo, hi):
+            continue
+        dur = inst.stop_ns - inst.start_ns
+        pts.append((inst.stop_ns, dur, inst))
+    return pts
+
+def _plot_point_mark_ns(payload, x_ns: int) -> int:
+    """Timeline position for an annotation created from a metrics plot point."""
+    if isinstance(payload, IntervalInstance):
+        return payload.start_ns
+    if isinstance(payload, TaskSegment):
+        return payload.start
+    return x_ns
+
+def _format_plot_point_note(
+    trace: "BtfTrace",
+    kind: str,
+    mk: Optional[str],
+    preemptor: Optional[str],
+    x_ns: int,
+    y_ns: int,
+    payload,
+) -> str:
+    """Human-readable note for a statistics distribution plot point."""
+    scale = trace.time_scale
+    fmt = lambda v: _format_time(v, scale)
+    if isinstance(payload, IntervalInstance):
+        return (f"Interval {payload.id}: {fmt(y_ns)} "
+                f"[{fmt(payload.start_ns)} – {fmt(payload.stop_ns)}]")
+    if isinstance(payload, TaskSegment):
+        raw = trace.task_repr.get(mk, mk) if mk else payload.task
+        name = _task_display_name(raw)
+        if kind == "exec":
+            return f"{name}: {fmt(y_ns)} at {fmt(x_ns)}"
+        if kind == "block":
+            return f"{name}: {fmt(y_ns)} blocked before {fmt(x_ns)}"
+        if kind == "inter":
+            return f"{name}: {fmt(y_ns)} inter-arrival at {fmt(x_ns)}"
+        if kind == "response":
+            return f"{name}: {fmt(y_ns)} response at {fmt(x_ns)}"
+        if kind == "preempt":
+            pre = preemptor or "?"
+            return f"{name} ← {pre}: {fmt(y_ns)} at {fmt(x_ns)}"
+    return f"{fmt(y_ns)} at {fmt(x_ns)}"
+
+def _gap_before_segment(segs: list, seg: "TaskSegment", kind: str) -> Optional[int]:
+    ordered = sorted(segs, key=lambda s: s.start)
+    idx = next(
+        (i for i, s in enumerate(ordered)
+         if s is seg or (s.start == seg.start and s.end == seg.end and s.task == seg.task)),
+        -1,
+    )
+    if idx <= 0:
+        return None
+    prev, nxt = ordered[idx - 1], ordered[idx]
+    if kind == "inter":
+        return nxt.start - prev.start
+    return nxt.start - prev.end
+
+def _format_extreme_segment_note(
+    trace: "BtfTrace",
+    mk: str,
+    kind: str,
+    seg: "TaskSegment",
+    find_max: bool,
+) -> str:
+    """Annotation note for Min/Max links in statistics tables."""
+    raw = trace.task_repr.get(mk, mk)
+    name = _task_display_name(raw)
+    scale = trace.time_scale
+    fmt = lambda v: _format_time(v, scale)
+    label = "max" if find_max else "min"
+    if kind == "exec":
+        dur = seg.end - seg.start
+        extreme = "WCET" if find_max else "BCET"
+        return f"{name} {extreme}: {fmt(dur)} at {fmt(seg.start)}"
+    segs = trace.seg_map_by_merge_key.get(mk, [])
+    gap = _gap_before_segment(segs, seg, kind)
+    gap_s = fmt(gap) if gap is not None else "?"
+    if kind == "block":
+        return f"{name} {label} blocking: {gap_s} before {fmt(seg.start)}"
+    if kind == "inter":
+        return f"{name} {label} inter-arrival: {gap_s} at {fmt(seg.start)}"
+    if kind == "response":
+        return f"{name} {label} response: {gap_s} at {fmt(seg.start)}"
+    return f"{name} at {fmt(seg.start)}"
+
+@dataclass
 class TraceBookmark:
     """User bookmark pinned to a timeline timestamp."""
     id: int
@@ -662,6 +1004,10 @@ class BtfTrace:
     # Core migrations: consecutive slices of the same merge-key on different cores.
     migrations: List[MigrationEvent]                                        = field(default_factory=list)
     migrations_by_mk: Dict[str, List[MigrationEvent]]                       = field(default_factory=dict)
+    interval_instances: List["IntervalInstance"]                            = field(default_factory=list)
+    interval_ids: List[str]                                                 = field(default_factory=list)
+    interval_instances_by_id: Dict[str, List["IntervalInstance"]]            = field(default_factory=dict)
+    interval_unmatched_starts: int                                          = 0
 
 # ---------------------------------------------------------------------------
 # Task-name helpers
@@ -767,6 +1113,15 @@ def _seg_fully_in_range(seg: TaskSegment, lo: int, hi: int) -> bool:
 def _seg_overlaps_range(seg: TaskSegment, lo: int, hi: int) -> bool:
     return seg.end > lo and seg.start < hi
 
+def _safe_scene_remove_items(scene: "QGraphicsScene", items: list) -> None:
+    """Remove graphics items without crashing if clear() already destroyed them."""
+    for item in items:
+        try:
+            if item.scene() is scene:
+                scene.removeItem(item)
+        except RuntimeError:
+            pass
+
 def _seg_core_neighbors(trace: "BtfTrace", seg: TaskSegment
                         ) -> Tuple[Optional[TaskSegment], Optional[TaskSegment], int, int]:
     """Return (prev_on_core, next_on_core, 1-based_index, total_on_core) for *seg*."""
@@ -774,11 +1129,21 @@ def _seg_core_neighbors(trace: "BtfTrace", seg: TaskSegment
     n = len(segs)
     if not n:
         return None, None, 0, 0
+    starts = trace.core_seg_starts.get(seg.core)
     idx = -1
-    for i, s in enumerate(segs):
-        if s.start == seg.start and s.end == seg.end and s.task == seg.task:
-            idx = i
-            break
+    if starts and len(starts) == n:
+        i0 = bisect_left(starts, seg.start)
+        for i in (i0 - 1, i0, i0 + 1):
+            if 0 <= i < n:
+                s = segs[i]
+                if s.start == seg.start and s.end == seg.end and s.task == seg.task:
+                    idx = i
+                    break
+    if idx < 0:
+        for i, s in enumerate(segs):
+            if s.start == seg.start and s.end == seg.end and s.task == seg.task:
+                idx = i
+                break
     if idx < 0:
         return None, None, 0, n
     prev = segs[idx - 1] if idx > 0 else None
@@ -936,6 +1301,7 @@ def _migration_rows(trace: "BtfTrace",
 
 _TICK_HEALTH_PERIOD = 1000   # expected tick period in trace units (1 ms @ us scale)
 _TICK_HEALTH_GAP_FACTOR = 2.0
+PREEMPTION_CHAIN_MAX_ROWS = 2000
 
 def _collect_preemption_events(
     trace: "BtfTrace",
@@ -968,30 +1334,34 @@ def _collect_preemption_events(
                 if not (_seg_fully_in_range(prev, lo, hi) and _seg_fully_in_range(nxt, lo, hi)):
                     continue
 
-            for core, core_seg_list in core_segs.items():
-                starts = core_starts[core]
-                i0 = bisect_right(starts, gap_end - 1)
-                i_start = max(0, i0 - 1)
-                for j in range(i_start, len(core_seg_list)):
-                    cs = core_seg_list[j]
-                    if cs.start >= gap_end:
-                        break
-                    if cs.end <= gap_start:
-                        continue
-                    preemptor_mk = _task_merge_key(cs.task)
-                    if preemptor_mk == mk:
-                        continue
-                    pre_raw = trace.task_repr.get(preemptor_mk, cs.task)
-                    _, _, pre_tname = _parse_task_name(pre_raw)
-                    if _is_idle_task_name(pre_tname):
-                        continue
-                    ov_lo = max(cs.start, gap_start)
-                    ov_hi = min(cs.end, gap_end)
-                    overlap = ov_hi - ov_lo
-                    if overlap <= 0:
-                        continue
-                    pre_disp = _task_display_name(pre_raw)
-                    events.append((mk, pre_disp, ov_lo, overlap, cs))
+            # Preemptors ran on the same core the victim was on when descheduled.
+            core = prev.core
+            core_seg_list = core_segs.get(core)
+            if not core_seg_list:
+                continue
+            starts = core_starts[core]
+            i0 = bisect_right(starts, gap_end - 1)
+            i_start = max(0, i0 - 1)
+            for j in range(i_start, len(core_seg_list)):
+                cs = core_seg_list[j]
+                if cs.start >= gap_end:
+                    break
+                if cs.end <= gap_start:
+                    continue
+                preemptor_mk = _task_merge_key(cs.task)
+                if preemptor_mk == mk:
+                    continue
+                pre_raw = trace.task_repr.get(preemptor_mk, cs.task)
+                _, _, pre_tname = _parse_task_name(pre_raw)
+                if _is_idle_task_name(pre_tname):
+                    continue
+                ov_lo = max(cs.start, gap_start)
+                ov_hi = min(cs.end, gap_end)
+                overlap = ov_hi - ov_lo
+                if overlap <= 0:
+                    continue
+                pre_disp = _task_display_name(pre_raw)
+                events.append((mk, pre_disp, ov_lo, overlap, cs))
 
     return events
 
@@ -1030,6 +1400,8 @@ def _preemption_chain_rows(
             ))
 
     rows.sort(key=lambda r: (-_time_label_sort_key(r[4]), r[1].lower(), r[2].lower()))
+    if len(rows) > PREEMPTION_CHAIN_MAX_ROWS:
+        return rows[:PREEMPTION_CHAIN_MAX_ROWS]
     return rows
 
 def _preemption_chain_plot_points(
@@ -1102,15 +1474,10 @@ def _response_time_rows(
             if rt <= 0:
                 continue
             samples.append(rt)
-            if worst_seg is None or rt > (worst_seg.start - ordered[samples.index(max(samples[:len(samples) - 1]) if len(samples) > 1 else 0) - 1].end if False else 0):
-                worst_seg = nxt
-            if best_seg is None:
-                best_seg = nxt
 
         if len(samples) < 1:
             continue
 
-        # recompute worst/best cleanly
         worst_rt = 0
         best_rt: Optional[int] = None
         worst_seg = best_seg = None
@@ -1220,6 +1587,53 @@ def _migration_heatmap_data(trace: "BtfTrace",
             t_min, bin_w, time_bins, t_hi, m.ns)
         grid[pi][bi] += 1
     return pairs, grid, time_bins
+
+_MIGRATION_HEATMAP_MATRIX_CORE_THRESHOLD = 16
+
+def _migration_heatmap_uses_matrix(trace: "BtfTrace") -> bool:
+    return len(trace.core_names) > _MIGRATION_HEATMAP_MATRIX_CORE_THRESHOLD
+
+def _migration_heatmap_matrix(trace: "BtfTrace",
+                              lo: Optional[int] = None, hi: Optional[int] = None
+                              ) -> Tuple[list, list]:
+    """Source × destination core counts (one row per source core)."""
+    cores = trace.core_names
+    n = len(cores)
+    core_idx = {c: i for i, c in enumerate(cores)}
+    grid = [[0] * n for _ in range(n)]
+    for m in trace.migrations:
+        if lo is not None and m.ns < lo:
+            continue
+        if hi is not None and m.ns > hi:
+            continue
+        fi = core_idx.get(m.from_core)
+        ti = core_idx.get(m.to_core)
+        if fi is None or ti is None or fi == ti:
+            continue
+        grid[fi][ti] += 1
+    return cores, grid
+
+def _migration_pair_time_bins(trace: "BtfTrace", from_core: str, to_core: str,
+                              lo: Optional[int] = None, hi: Optional[int] = None,
+                              time_bins: int = 32) -> Tuple[list, list, int, int, int, float]:
+    """Time bins for one directed core pair (matrix drill-down)."""
+    t_min = lo if lo is not None else trace.time_min
+    t_hi = hi if hi is not None else trace.time_max
+    span = max(t_hi - t_min, 1)
+    bin_w = span / time_bins
+    bins = [0] * time_bins
+    for m in trace.migrations:
+        if m.from_core != from_core or m.to_core != to_core:
+            continue
+        if lo is not None and m.ns < lo:
+            continue
+        if hi is not None and m.ns > hi:
+            continue
+        bi = _heatmap_bin_index_for_ns(t_min, bin_w, time_bins, t_hi, m.ns)
+        bins[bi] += 1
+    label = f"{_core_short_name(from_core)}→{_core_short_name(to_core)}"
+    pairs = [(from_core, to_core, label)]
+    return pairs, [bins], time_bins, t_min, t_hi, bin_w
 
 def _heatmap_bin_range(t_min: int, bin_w: float, time_bins: int, t_max: int,
                        bin_index: int) -> Tuple[int, int]:
@@ -1872,10 +2286,17 @@ def _parse_btf(filepath: str,
         (mk for mk in task_set if mk != _tick_mk_excl),
         key=lambda mk: _task_sort_key(_mk_repr[mk]))
 
-    sti_channels = sorted({e.target for e in sti_events}, key=_sti_channel_sort_key)
+    sti_channels = sorted(
+        {e.target for e in sti_events if not _is_interval_marker_channel(e.target)},
+        key=_sti_channel_sort_key,
+    )
     sti_by_target: Dict[str, List[StiEvent]] = defaultdict(list)
     for _ev in sti_events:
         sti_by_target[_ev.target].append(_ev)
+
+    _interval_instances, _interval_ids, _interval_by_id, _interval_unmatched = (
+        _build_interval_data(sti_events)
+    )
 
     _seg_start_key = _attrgetter('start')
     segs_by_mk: Dict[str, list] = dict(segs_by_mk_build)
@@ -2063,6 +2484,10 @@ def _parse_btf(filepath: str,
         tick_sti_times=sorted(tick_sti_times),
         migrations=_migrations,
         migrations_by_mk=dict(_migrations_by_mk),
+        interval_instances=_interval_instances,
+        interval_ids=_interval_ids,
+        interval_instances_by_id=_interval_by_id,
+        interval_unmatched_starts=_interval_unmatched,
     )
 
 # Timeline Widget
@@ -2645,7 +3070,32 @@ def _visible_segs(lod: SegLodData, vp: ViewClipParams) -> list:
             clipped = lod.segs
 
     result = _lod_reduce(clipped, vp.time_min, vp.px_per_ns, vp.offset)
+    if (len(result) > _MAX_FINE_SEGS_PER_ROW
+            and vp.cur_timescale_per_px >= vp.lod_timescale_per_px
+            and lod.lod_segs):
+        if lod.lod_starts:
+            lo = max(0, bisect_left(lod.lod_starts, vp.ns_lo) - 1)
+            hi = min(len(lod.lod_segs), bisect_right(lod.lod_starts, vp.ns_hi) + 1)
+            clipped = lod.lod_segs[lo:hi]
+        else:
+            clipped = lod.lod_segs
+        result = _lod_reduce(clipped, vp.time_min, vp.px_per_ns, vp.offset)
     return result
+
+def _orth_cull_params(n_tasks: int) -> Tuple[int, float]:
+    """Orthogonal row/column margin for rebuild culling (smaller on large traces)."""
+    if n_tasks > _ORTH_BUF_HUGE_TASKS:
+        return 24, 2.0
+    if n_tasks > _ORTH_BUF_LARGE_TASKS:
+        return 30, 2.25
+    return _ORTH_BUF_MIN_ROWS, _ORTH_BUF_VIEWPORT_MULT
+
+def _zoom_debounce_ms(n_tasks: int) -> int:
+    if n_tasks > _ORTH_BUF_HUGE_TASKS:
+        return _ZOOM_DEBOUNCE_HUGE_MS
+    if n_tasks > _ORTH_BUF_LARGE_TASKS:
+        return _ZOOM_DEBOUNCE_LARGE_MS
+    return _ZOOM_DEBOUNCE_MS
 
 def _nice_grid_step(timescale_per_px: float, target_px: float = 100.0) -> int:
     """Return a 'nice' grid step (in ns) so that one step ~= target_px pixels."""
@@ -2814,6 +3264,7 @@ class TimelineScene(QGraphicsScene):
         # Ghost dashed line + time label that follows the mouse; never placed
         # as a real cursor.  Redrawn on every mouse-move, cleared on leave.
         self._hover_ns: Optional[int] = None
+        self._hover_line_ns: Optional[int] = None
         self._hover_items: list = []
         self._is_dark_ui: bool = True
         self.set_theme(True, rebuild=False)
@@ -2999,8 +3450,7 @@ class TimelineScene(QGraphicsScene):
 
     def _draw_marks(self) -> None:
         """Draw a dotted vertical/horizontal line + label for every mark."""
-        for item in self._mark_items:
-            self.removeItem(item)
+        _safe_scene_remove_items(self, self._mark_items)
         self._mark_items.clear()
         # Purge frozen entries added by the previous call.
         if self._mark_frozen_top_set:
@@ -3156,8 +3606,7 @@ class TimelineScene(QGraphicsScene):
 
     def _draw_find_markers(self) -> None:
         """Draw thin vertical/horizontal lines for each find hit."""
-        for item in self._find_hit_items:
-            self.removeItem(item)
+        _safe_scene_remove_items(self, self._find_hit_items)
         self._find_hit_items.clear()
         if self._trace is None or not self._find_hit_ns_list:
             return
@@ -3214,6 +3663,14 @@ class TimelineScene(QGraphicsScene):
         self._heatmap_filter_mks = mks
         if mks:
             self._migrated_only_filter = False
+            # Expand only cores that contain a filtered task so core view
+            # draws task sub-rows instead of heavy per-core summary bars.
+            tr = self._trace
+            if tr is not None:
+                for core in tr.core_names:
+                    self._core_expanded[core] = any(
+                        _task_merge_key(t) in mks
+                        for t in tr.core_task_order.get(core, []))
         self.rebuild()
 
     def set_timescale_per_px_default(self, v: float) -> None:
@@ -3499,8 +3956,7 @@ class TimelineScene(QGraphicsScene):
 
     def _remove_hover_overlay(self) -> None:
         """Remove all current hover overlay items from the scene."""
-        for item in self._hover_overlay_items:
-            self.removeItem(item)
+        _safe_scene_remove_items(self, self._hover_overlay_items)
         self._hover_overlay_items = []
 
     @staticmethod
@@ -3584,16 +4040,26 @@ class TimelineScene(QGraphicsScene):
 
     def _draw_hover_line(self) -> None:
         """Draw a thin dashed ghost line at self._hover_ns with a time label."""
-        for item in self._hover_items:
-            self.removeItem(item)
-        self._hover_items.clear()
-        self.hover_changed.emit()
         if self._trace is None or self._hover_ns is None:
+            _safe_scene_remove_items(self, self._hover_items)
+            self._hover_items.clear()
+            if self._hover_line_ns is not None:
+                self._hover_line_ns = None
+                self.hover_changed.emit()
             return
+        if self._hover_ns == self._hover_line_ns:
+            return
+        _safe_scene_remove_items(self, self._hover_items)
+        self._hover_items.clear()
+        self._hover_line_ns = self._hover_ns
+        self.hover_changed.emit()
         scene_r = self.sceneRect()
         _views  = self.views()
-        _scene_top  = _views[0].mapToScene(QPoint(0, 0)).y()  if _views else 0.0
-        _scene_left = _views[0].mapToScene(QPoint(0, 0)).x()  if _views else 0.0
+        try:
+            _scene_top  = _views[0].mapToScene(QPoint(0, 0)).y()  if _views else 0.0
+            _scene_left = _views[0].mapToScene(QPoint(0, 0)).x()  if _views else 0.0
+        except RuntimeError:
+            _scene_top = _scene_left = 0.0
         font = _monospace_font(max(8, self._font_size - 1))
         fm   = QFontMetrics(font)
         t_str = _format_time(self._hover_ns, self._trace.time_scale, decimals=3)
@@ -3652,10 +4118,13 @@ class TimelineScene(QGraphicsScene):
 
     def clear_hover_line(self) -> None:
         """Remove the hover ghost line from the scene."""
-        for item in self._hover_items:
-            self.removeItem(item)
+        if not self._hover_items and self._hover_line_ns is None:
+            self._hover_ns = None
+            return
+        _safe_scene_remove_items(self, self._hover_items)
         self._hover_items.clear()
         self._hover_ns = None
+        self._hover_line_ns = None
         self.hover_changed.emit()
 
     # ------------------------------------------------------------------
@@ -3663,8 +4132,7 @@ class TimelineScene(QGraphicsScene):
     # ------------------------------------------------------------------
 
     def _draw_cursors(self) -> None:
-        for item in self._cursor_items:
-            self.removeItem(item)
+        _safe_scene_remove_items(self, self._cursor_items)
         self._cursor_items.clear()
 
         # Purge any cursor-label entries that were appended to _frozen_top_items
@@ -3893,9 +4361,10 @@ class TimelineScene(QGraphicsScene):
             else:
                 _orth_extent = max(_row_stride, vp_rect.width())
             _visible_rows = max(1, int(_orth_extent / _row_stride))
+            _min_rows, _mult = _orth_cull_params(len(self._trace.tasks))
             _buf_rows = max(
-                _ORTH_BUF_MIN_ROWS,
-                int(_visible_rows * _ORTH_BUF_VIEWPORT_MULT),
+                _min_rows,
+                int(_visible_rows * _mult),
             )
             _ORTH_BUF = _row_stride * _buf_rows
             self._vp_orth_buf = _ORTH_BUF
@@ -3924,6 +4393,7 @@ class TimelineScene(QGraphicsScene):
         self._task_row_rects = {}
         self._hover_overlay_items = []   # clear() removed them from the scene
         self._hover_items = []             # clear() removed them from the scene
+        self._hover_line_ns = None
         self._find_hit_items = []
         if self._trace is None:
             return
@@ -3980,6 +4450,33 @@ class TimelineScene(QGraphicsScene):
         disp = _task_display_name(raw_name)
         q = self._task_filter_q
         return (q in mk.lower()) or (q in raw_name.lower()) or (q in disp.lower())
+
+    def _core_view_task_filter_active(self) -> bool:
+        """True when core view should hide non-matching tasks (heatmap, migrated, search)."""
+        return (self._heatmap_filter_mks is not None
+                or self._migrated_only_filter
+                or bool(self._task_filter_q))
+
+    def _filtered_core_view_tasks(self) -> Tuple[List[str], Dict[str, List[str]]]:
+        """Core names and per-core task lists (no TICK) after active filters."""
+        trace = self._trace
+        core_names = list(trace.core_names)
+        core_tasks = {
+            c: [t for t in trace.core_task_order.get(c, [])
+                if _parse_task_name(t)[2] != "TICK"]
+            for c in core_names
+        }
+        if not self._core_view_task_filter_active():
+            return core_names, core_tasks
+        out_names: List[str] = []
+        out_tasks: Dict[str, List[str]] = {}
+        for core in core_names:
+            tasks = [t for t in core_tasks[core]
+                     if self._task_merge_key_matches_filter(_task_merge_key(t))]
+            if tasks:
+                out_names.append(core)
+                out_tasks[core] = tasks
+        return out_names, out_tasks
 
     def _sti_channel_matches_filter(self, channel: str) -> bool:
         """Return True when *channel* or its STI notes match the active filter."""
@@ -4154,9 +4651,11 @@ class TimelineScene(QGraphicsScene):
         sti_rows  = trace.sti_channels if self._show_sti else []
         if self._task_filter_q:
             sti_rows = [c for c in sti_rows if self._sti_channel_matches_filter(c)]
+        interval_rows = trace.interval_ids if self._show_sti else []
         n_task = len(task_rows)
         n_sti  = len(sti_rows)
-        total_rows = n_task + n_sti
+        n_interval = len(interval_rows)
+        total_rows = n_task + n_sti + n_interval
         if total_rows == 0:
             return
 
@@ -4165,6 +4664,7 @@ class TimelineScene(QGraphicsScene):
         _sti_total_h = sum(
             (self._sti_waveform_h_val if c in self._sti_expanded else self._sti_row_h_val) + self._row_gap
             for c in sti_rows)
+        _sti_total_h += n_interval * (self._row_height + self._row_gap)
         total_h = RULER_HEIGHT + n_task * (self._row_height + self._row_gap) + _sti_total_h
         total_w = self._label_width + timeline_w
         self.setSceneRect(0, 0, total_w, total_h)
@@ -4269,10 +4769,13 @@ class TimelineScene(QGraphicsScene):
                     seg,
                 ))
                 xs.append((x1, x1 + w, i_s))
+            _inline_labels = len(seg_data) <= 48
             batch = _BatchRowItem(
                 QRectF(lw, y_top, timeline_w, self._row_height),
                 seg_data, trace.time_scale,
-                label_font=font_inline, label_fm=fm_inline, label_text=disp,
+                label_font=font_inline if _inline_labels else None,
+                label_fm=fm_inline if _inline_labels else None,
+                label_text=disp if _inline_labels else "",
                 trace=trace,
                 xs=xs, time_min=trace.time_min, timescale_per_px=self._timescale_per_px)
             batch.setZValue(1)
@@ -4338,6 +4841,42 @@ class TimelineScene(QGraphicsScene):
                     time_min=trace.time_min)
                 _sti_item.setZValue(2)
                 self.addItem(_sti_item)
+            _sti_y += row_h + self._row_gap
+
+        for interval_id in interval_rows:
+            row_h = self._row_height
+            y_top = _sti_y
+            y_ctr = y_top + row_h / 2
+            _stripe_rows.append((y_top, row_h, self._row_gap, _sti_bg, None))
+            lbl_bg = _StiLabelItem(QRectF(0, y_top, lw, row_h), f"interval:{interval_id}", self,
+                                   expandable=False)
+            lbl_bg.setZValue(36)
+            self.addItem(lbl_bg)
+            self._frozen_items.append((lbl_bg, 0))
+            color = QColor(_interval_color(interval_id))
+            swatch = self.addRect(QRectF(4, y_ctr - 5, 10, 10),
+                                   QPen(color.darker(140), 1.0), QBrush(color))
+            swatch.setZValue(37)
+            self._frozen_items.append((swatch, 4))
+            _lbl = fm.elidedText(f"Interval {interval_id}", Qt.ElideRight, max(0, lw - 18 - 4))
+            lbl = self.addSimpleText(_lbl, font)
+            lbl.setBrush(QBrush(self._c_sti_lbl))
+            lbl.setPos(18, y_ctr - fm.height() / 2)
+            lbl.setZValue(37)
+            self._frozen_items.append((lbl, 18))
+            pen = QPen(color.darker(145), 1.25)
+            insts = trace.interval_instances_by_id.get(interval_id, [])
+            _interval_bars = _interval_bars_for_viewport(
+                insts, _time_min, _px_per_ns, lw, _vp_ns_lo, _vp_ns_hi)
+            if _interval_bars:
+                _bar_y = y_top + 1
+                _bar_h = row_h - 2
+                _bar_item = _IntervalRowBarsItem(
+                    QRectF(lw, _bar_y, timeline_w, _bar_h),
+                    _interval_bars, _bar_y, _bar_h, color, pen,
+                    _time_min, _px_per_ns, lw)
+                _bar_item.setZValue(2)
+                self.addItem(_bar_item)
             _sti_y += row_h + self._row_gap
 
         if _stripe_rows:
@@ -4503,10 +5042,13 @@ class TimelineScene(QGraphicsScene):
                     seg,
                 ))
                 xs.append((y1, y1 + h, i_s))
+            _inline_labels = len(seg_data) <= 48
             batch = _BatchRowItem(
                 QRectF(x_left, label_row_h, col_w, timeline_h),
                 seg_data, trace.time_scale,
-                label_font=font_inline, label_fm=fm_inline, label_text=disp,
+                label_font=font_inline if _inline_labels else None,
+                label_fm=fm_inline if _inline_labels else None,
+                label_text=disp if _inline_labels else "",
                 trace=trace,
                 xs=xs, time_min=trace.time_min, timescale_per_px=self._timescale_per_px)
             batch.setZValue(1)
@@ -4607,25 +5149,12 @@ class TimelineScene(QGraphicsScene):
         # Use pre-built core data cached at parse time (O(1), no segment iteration)
         core_names           = trace.core_names
         core_segs            = trace.core_segs
-        core_tasks           = trace.core_task_order
         sti_rows             = trace.sti_channels if self._show_sti else []
         if self._task_filter_q:
             sti_rows = [c for c in sti_rows if self._sti_channel_matches_filter(c)]
 
-        # TICK is rendered on the ruler band - exclude it from per-task sub-rows.
-        core_tasks = {c: [t for t in tasks if _parse_task_name(t)[2] != "TICK"]
-                      for c, tasks in core_tasks.items()}
-
-        if self._task_filter_q:
-            _filtered_core_names = []
-            _filtered_core_tasks = {}
-            for _core in core_names:
-                _tasks = [t for t in core_tasks[_core] if self._task_raw_name_matches_filter(t)]
-                if _tasks:
-                    _filtered_core_names.append(_core)
-                    _filtered_core_tasks[_core] = _tasks
-            core_names = _filtered_core_names
-            core_tasks = _filtered_core_tasks
+        core_names, core_tasks = self._filtered_core_view_tasks()
+        _skip_core_summary_segs = self._core_view_task_filter_active()
 
         # TICK is a global event - shown as a sticky first row above all cores.
         _has_tick = (bool(trace.seg_map_by_merge_key.get(_task_merge_key("TICK"), []))
@@ -4759,24 +5288,25 @@ class TimelineScene(QGraphicsScene):
                 _util_item.setAcceptHoverEvents(False)
                 self._frozen_items.append((_util_item, lw - _util_w + 4))
 
-                seg_data: list = []
-                xs:       list = []
-                for i_s, seg in enumerate(_visible_segs(self._seg_lod_for_core(core), vp)):
-                    x1 = lw + (seg.start - _time_min) * _px_per_ns
-                    x2 = lw + (seg.end   - _time_min) * _px_per_ns
-                    w  = x2 - x1 if x2 - x1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
-                    seg_data.append((
-                        QRectF(x1, y_top + 2, w, self._row_height - 4),
-                        _task_brush(seg.task), _task_pen_dark(seg.task), seg,
-                    ))
-                    xs.append((x1, x1 + w, i_s))
-                batch = _BatchRowItem(
-                    QRectF(lw, y_top, timeline_w, self._row_height),
-                    seg_data, trace.time_scale,
-                    trace=trace,
-                    xs=xs, time_min=trace.time_min)
-                batch.setZValue(1)
-                self.addItem(batch)
+                if not _skip_core_summary_segs:
+                    seg_data: list = []
+                    xs:       list = []
+                    for i_s, seg in enumerate(_visible_segs(self._seg_lod_for_core(core), vp)):
+                        x1 = lw + (seg.start - _time_min) * _px_per_ns
+                        x2 = lw + (seg.end   - _time_min) * _px_per_ns
+                        w  = x2 - x1 if x2 - x1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
+                        seg_data.append((
+                            QRectF(x1, y_top + 2, w, self._row_height - 4),
+                            _task_brush(seg.task), _task_pen_dark(seg.task), seg,
+                        ))
+                        xs.append((x1, x1 + w, i_s))
+                    batch = _BatchRowItem(
+                        QRectF(lw, y_top, timeline_w, self._row_height),
+                        seg_data, trace.time_scale,
+                        trace=trace,
+                        xs=xs, time_min=trace.time_min)
+                    batch.setZValue(1)
+                    self.addItem(batch)
 
             if not expanded:
                 continue
@@ -4946,25 +5476,12 @@ class TimelineScene(QGraphicsScene):
 
         # Use pre-built core data cached at parse time (O(1), no segment iteration)
         core_names           = trace.core_names
-        core_tasks           = trace.core_task_order
         sti_cols             = trace.sti_channels if self._show_sti else []
         if self._task_filter_q:
             sti_cols = [c for c in sti_cols if self._sti_channel_matches_filter(c)]
 
-        # TICK is rendered on the ruler band - exclude it from per-task sub-columns.
-        core_tasks = {c: [t for t in tasks if _parse_task_name(t)[2] != "TICK"]
-                      for c, tasks in core_tasks.items()}
-
-        if self._task_filter_q:
-            _filtered_core_names = []
-            _filtered_core_tasks = {}
-            for _core in core_names:
-                _tasks = [t for t in core_tasks[_core] if self._task_raw_name_matches_filter(t)]
-                if _tasks:
-                    _filtered_core_names.append(_core)
-                    _filtered_core_tasks[_core] = _tasks
-            core_names = _filtered_core_names
-            core_tasks = _filtered_core_tasks
+        core_names, core_tasks = self._filtered_core_view_tasks()
+        _skip_core_summary_segs = self._core_view_task_filter_active()
 
         # TICK is a global event - shown as a band in the ruler column.
         _has_tick = (bool(trace.seg_map_by_merge_key.get(_task_merge_key("TICK"), []))
@@ -5065,24 +5582,25 @@ class TimelineScene(QGraphicsScene):
                                               label_row_h - LABEL_BOTTOM_MARGIN, 37)
                 self._frozen_top_items.append((arr_txt, arr_txt.pos().y()))
 
-                seg_data: list = []
-                xs:       list = []
-                for i_s, seg in enumerate(_visible_segs(self._seg_lod_for_core(core), vp)):
-                    y1 = label_row_h + (seg.start - _time_min) * _px_per_ns
-                    y2 = label_row_h + (seg.end   - _time_min) * _px_per_ns
-                    h  = y2 - y1 if y2 - y1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
-                    seg_data.append((
-                        QRectF(x_left + 1, y1, col_w - 2, h),
-                        _task_brush(seg.task), _task_pen_dark(seg.task), seg,
-                    ))
-                    xs.append((y1, y1 + h, i_s))
-                batch = _BatchRowItem(
-                    QRectF(x_left, label_row_h, col_w, timeline_h),
-                    seg_data, trace.time_scale,
-                    trace=trace,
-                    xs=xs, time_min=trace.time_min)
-                batch.setZValue(1)
-                self.addItem(batch)
+                if not _skip_core_summary_segs:
+                    seg_data: list = []
+                    xs:       list = []
+                    for i_s, seg in enumerate(_visible_segs(self._seg_lod_for_core(core), vp)):
+                        y1 = label_row_h + (seg.start - _time_min) * _px_per_ns
+                        y2 = label_row_h + (seg.end   - _time_min) * _px_per_ns
+                        h  = y2 - y1 if y2 - y1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
+                        seg_data.append((
+                            QRectF(x_left + 1, y1, col_w - 2, h),
+                            _task_brush(seg.task), _task_pen_dark(seg.task), seg,
+                        ))
+                        xs.append((y1, y1 + h, i_s))
+                    batch = _BatchRowItem(
+                        QRectF(x_left, label_row_h, col_w, timeline_h),
+                        seg_data, trace.time_scale,
+                        trace=trace,
+                        xs=xs, time_min=trace.time_min)
+                    batch.setZValue(1)
+                    self.addItem(batch)
 
             if not expanded:
                 continue
@@ -5356,6 +5874,78 @@ class _RulerItem(QGraphicsItem):
                                          _format_time(t, self._time_scale))
                 t += step_ns
 
+class _IntervalRowBarsItem(QGraphicsItem):
+    """Paints all interval bars for one row in a single paint() pass.
+
+    Replaces O(n_intervals * n_stripes) individual QGraphicsRectItems with one
+    item per interval row, avoiding multi-second freezes in scene.clear() when
+    zooming after many back-to-back intervals are visible.
+    """
+
+    __slots__ = ('_bounds', '_bars', '_bar_y', '_bar_h', '_color', '_outline_pen',
+                 '_time_min', '_px_per_ns', '_label_width')
+
+    def __init__(
+        self,
+        bounding_rect: QRectF,
+        bars: list,
+        bar_y: float,
+        bar_h: float,
+        color: QColor,
+        outline_pen: QPen,
+        time_min: int,
+        px_per_ns: float,
+        label_width: float,
+    ) -> None:
+        super().__init__()
+        self._bounds = bounding_rect
+        self._bars = bars          # [(x, w, start_ns, stop_ns), ...] sorted by start x
+        self._bar_y = bar_y
+        self._bar_h = bar_h
+        self._color = color
+        self._outline_pen = outline_pen
+        self._time_min = time_min
+        self._px_per_ns = px_per_ns
+        self._label_width = label_width
+        self.setFlag(QGraphicsItem.ItemUsesExtendedStyleOption, True)
+
+    def boundingRect(self) -> QRectF:
+        return self._bounds
+
+    def paint(self, painter, option, widget=None) -> None:
+        bars = self._bars
+        if not bars:
+            return
+        exposed = option.exposedRect
+        exp_left = exposed.left()
+        exp_right = exposed.right()
+        dark, light = _interval_stripe_colors(self._color)
+        y = self._bar_y
+        h = self._bar_h
+        pen = self._outline_pen
+
+        lo, hi = 0, len(bars)
+        while lo < hi:
+            mid = (lo + hi) >> 1
+            x, w, _s0, _s1 = bars[mid]
+            if x + w < exp_left:
+                lo = mid + 1
+            else:
+                hi = mid
+        for i in range(lo, len(bars)):
+            x, w, start_ns, stop_ns = bars[i]
+            if x >= exp_right:
+                break
+            cx = max(x, exp_left)
+            cx2 = min(x + w, exp_right)
+            cw = cx2 - cx
+            if cw < _INTERVAL_MIN_PX:
+                continue
+            _paint_interval_striped_bar(
+                painter, cx, y, cw, h, dark, light, pen,
+                start_ns, stop_ns, self._time_min, self._label_width, self._px_per_ns)
+
+
 class _RowStripesItem(QGraphicsItem):
     """Draws N row background rectangles and optional separator lines in one pass.
 
@@ -5523,13 +6113,23 @@ class _BatchRowItem(QGraphicsItem):
                     bounding_rect.x() - _hl_margin, bounding_rect.y(),
                     bounding_rect.width() + _hl_margin * 2, bounding_rect.height())
         # Pre-compute coarse LOD segment list (merge segments within 6 scene-px)
-        self._coarse_data = self._make_coarse_data()
-        # Pre-compute (start, end) coordinate pairs for coarse LOD binary-search clipping
+        self._coarse_data_cache: Optional[list] = None
         horiz = self._horiz
-        self._coarse_xs: list = [
-            (r.x(), r.x() + r.width()) if horiz else (r.y(), r.y() + r.height())
-            for r, _, _, _ in self._coarse_data
-        ]
+        self._coarse_xs: Optional[list] = None
+
+    def _get_coarse_data(self) -> list:
+        if self._coarse_data_cache is None:
+            self._coarse_data_cache = self._make_coarse_data()
+            horiz = self._horiz
+            self._coarse_xs = [
+                (r.x(), r.x() + r.width()) if horiz else (r.y(), r.y() + r.height())
+                for r, _, _, _ in self._coarse_data_cache
+            ]
+        return self._coarse_data_cache
+
+    def _get_coarse_xs(self) -> list:
+        self._get_coarse_data()
+        return self._coarse_xs or []
 
     def _make_coarse_data(self) -> list:
         """Pre-merge segments within 6 scene-px of each other for coarse LOD paint.
@@ -5609,7 +6209,7 @@ class _BatchRowItem(QGraphicsItem):
                 else:
                     painter.translate(0.0, -option.exposedRect.top())
             last_brush = None
-            for rect, brush, _, _seg in self._coarse_data:
+            for rect, brush, _, _seg in self._get_coarse_data():
                 if brush is not last_brush:
                     painter.setBrush(brush)
                     last_brush = brush
@@ -6522,8 +7122,12 @@ class TimelineView(QGraphicsView):
         self._zoom_anchor_pos: Optional[QPoint] = None
         self._zoom_timer = QTimer(self)
         self._zoom_timer.setSingleShot(True)
-        self._zoom_timer.setInterval(60)   # ms - coalesce wheel events
+        self._zoom_timer.setInterval(60)   # tuned in load_trace
         self._zoom_timer.timeout.connect(self._flush_zoom)
+        self._nav_zoom_timer = QTimer(self)
+        self._nav_zoom_timer.setSingleShot(True)
+        self._nav_zoom_timer.setInterval(80)
+        self._nav_zoom_timer.timeout.connect(self._show_nav)
 
         # Two-timer scroll-rebuild strategy:
         #   _pan_heartbeat: repeating, fires while the user is scrolling.
@@ -6613,6 +7217,7 @@ class TimelineView(QGraphicsView):
     def load_trace(self, trace: BtfTrace) -> None:
         self._fit_mode = True   # new trace always starts in fit mode
         self._zoom_history.clear()  # new trace resets zoom history
+        self._zoom_timer.setInterval(_zoom_debounce_ms(len(trace.tasks)))
         self._scene.set_trace(trace, self._fit_viewport_size())
         self.zoom_changed.emit(self._scene.timescale_per_px)
         self._show_nav()
@@ -7361,7 +7966,7 @@ class TimelineView(QGraphicsView):
                 self._mid_press_ns = self._scene.scene_to_ns(coord)
                 # Remove any stale band
                 if self._mid_band_item is not None:
-                    self._scene.removeItem(self._mid_band_item)
+                    _safe_scene_remove_items(self._scene, [self._mid_band_item])
                     self._mid_band_item = None
                 self.setDragMode(QGraphicsView.NoDrag)
                 event.accept()
@@ -7518,7 +8123,7 @@ class TimelineView(QGraphicsView):
             sr   = self._scene.sceneRect()
             # Remove old band before drawing new one
             if self._mid_band_item is not None:
-                self._scene.removeItem(self._mid_band_item)
+                _safe_scene_remove_items(self._scene, [self._mid_band_item])
                 self._mid_band_item = None
             band_brush = QBrush(QColor(180, 180, 180, 55))
             band_pen   = QPen(QColor(220, 220, 220, 120), 1.0)
@@ -7592,11 +8197,15 @@ class TimelineView(QGraphicsView):
             if in_label:
                 self._scene.clear_hover_line()
             else:
-                scene_pt = self.mapToScene(event.pos())
-                coord = scene_pt.x() if self._scene._horizontal else scene_pt.y()
-                ns = self._scene.scene_to_ns(coord)
-                self._scene._hover_ns = ns
-                self._scene._draw_hover_line()
+                try:
+                    scene_pt = self.mapToScene(event.pos())
+                except RuntimeError:
+                    self._scene.clear_hover_line()
+                else:
+                    coord = scene_pt.x() if self._scene._horizontal else scene_pt.y()
+                    ns = self._scene.scene_to_ns(coord)
+                    self._scene._hover_ns = ns
+                    self._scene._draw_hover_line()
         else:
             self._scene.clear_hover_line()
 
@@ -7617,7 +8226,7 @@ class TimelineView(QGraphicsView):
         if event.button() == Qt.MiddleButton and self._mid_press_ns is not None:
             # Remove band overlay
             if self._mid_band_item is not None:
-                self._scene.removeItem(self._mid_band_item)
+                _safe_scene_remove_items(self._scene, [self._mid_band_item])
                 self._mid_band_item = None
             scene_pt  = self.mapToScene(event.pos())
             coord     = scene_pt.x() if self._scene._horizontal else scene_pt.y()
@@ -7926,7 +8535,7 @@ class TimelineView(QGraphicsView):
             self.centerOn(new_scene_coord + offset, cur_scene_center.y())
         else:
             self.centerOn(cur_scene_center.x(), new_scene_coord + offset)
-        self._show_nav()
+        self._nav_zoom_timer.start()
 
     # ------------------------------------------------------------------
     # Scroll and viewport sync
@@ -7965,6 +8574,8 @@ class TimelineView(QGraphicsView):
 
         if sc._view_mode == "task":
             for mk in tr.tasks:
+                if not sc._task_merge_key_matches_filter(mk):
+                    continue
                 segs = (tr.seg_lod_ultra_by_merge_key.get(mk)
                         or tr.seg_map_by_merge_key.get(mk, []))
                 if not segs:
@@ -7973,15 +8584,18 @@ class TimelineView(QGraphicsView):
                 # match the main view's _blended_brush(seg.task, seg.core).
                 row_data.append({'segs': segs, 'fixed_color': None, 'blend': True})
         else:
-            for core in tr.core_names:
-                hdr_segs = (tr.core_seg_lod_ultra.get(core)
-                            or tr.core_segs.get(core, []))
-                if hdr_segs:
-                    # Core header: per-segment base task color (no core tint),
-                    # matching main view's _task_brush(seg.task).
-                    row_data.append({'segs': hdr_segs, 'fixed_color': None, 'blend': False})
+            skip_hdr = sc._core_view_task_filter_active()
+            core_names, core_tasks = sc._filtered_core_view_tasks()
+            for core in core_names:
+                if not skip_hdr:
+                    hdr_segs = (tr.core_seg_lod_ultra.get(core)
+                                or tr.core_segs.get(core, []))
+                    if hdr_segs:
+                        # Core header: per-segment base task color (no core tint),
+                        # matching main view's _task_brush(seg.task).
+                        row_data.append({'segs': hdr_segs, 'fixed_color': None, 'blend': False})
                 if sc._core_expanded.get(core, True):
-                    for task_raw in tr.core_task_order.get(core, []):
+                    for task_raw in core_tasks.get(core, []):
                         t_segs = (tr.core_task_seg_lod_ultra.get(core, {}).get(task_raw)
                                   or tr.core_task_segs.get(core, {}).get(task_raw, []))
                         if not t_segs:
@@ -8151,7 +8765,10 @@ class TimelineView(QGraphicsView):
         bg_key = (id(tr), sc._view_mode, sc._show_sti, getattr(sc, '_is_dark_ui', True),
                   vbar.pageStep(),   # rebuilds on window resize (proportions change)
                   frozenset(sc._sti_expanded),
-                  frozenset(sc._core_expanded.items()))
+                  frozenset(sc._core_expanded.items()),
+                  frozenset(sc._heatmap_filter_mks or ()),
+                  sc._migrated_only_filter,
+                  sc._task_filter_q)
         if bg_key != self._nav_bg_key or self._nav_bg_pix is None:
             self._nav_bg_pix = self._build_nav_bg(W, H, sc, tr, float(v_total))
             self._nav_bg_key = bg_key
@@ -8258,7 +8875,20 @@ class TimelineView(QGraphicsView):
             # Only pump heartbeat rebuilds when the viewport is near or past
             # the cached orth/time margin; in-buffer scroll is paint-only.
             if self._needs_rebuild_for_scroll(strict=False):
-                if not self._pan_heartbeat.isActive():
+                overflow = self._orth_viewport_overflow_px()
+                row_stride = max(
+                    self._scene._row_height + self._scene._row_gap, 1.0)
+                if overflow > 0.0:
+                    now_ms = time.monotonic() * 1000.0
+                    min_gap = (_PAN_ORTH_URGENT_REBUILD_MS
+                               if overflow > row_stride * 0.5
+                               else _PAN_HEARTBEAT_MIN_REBUILD_MS)
+                    if now_ms - self._last_pan_rebuild_ms >= min_gap:
+                        self._last_pan_rebuild_ms = now_ms
+                        self._scene.rebuild()
+                    elif not self._pan_heartbeat.isActive():
+                        self._pan_heartbeat.start()
+                elif not self._pan_heartbeat.isActive():
                     self._pan_heartbeat.start()
             self._nav_scroll_timer.start()     # debounce minimap repaint
         if self._nav_popup.isVisible():
@@ -8334,6 +8964,27 @@ class TimelineView(QGraphicsView):
             self._reposition_frozen()
             self._reposition_frozen_top()
 
+    def _orth_viewport_overflow_px(self) -> float:
+        """How far (px) the live viewport extends past the last orth rebuild."""
+        sc = self._scene
+        if sc._trace is None:
+            return 0.0
+        vp_rect = self.viewport().rect()
+        if vp_rect.width() <= 1 or vp_rect.height() <= 1:
+            return 0.0
+        if sc._horizontal:
+            orth_lo = self.mapToScene(vp_rect.topLeft()).y()
+            orth_hi = self.mapToScene(vp_rect.bottomLeft()).y()
+        else:
+            orth_lo = self.mapToScene(vp_rect.topLeft()).x()
+            orth_hi = self.mapToScene(vp_rect.topRight()).x()
+        overflow = 0.0
+        if orth_lo < sc._vp_scene_orth_lo:
+            overflow = max(overflow, sc._vp_scene_orth_lo - orth_lo)
+        if orth_hi > sc._vp_scene_orth_hi:
+            overflow = max(overflow, orth_hi - sc._vp_scene_orth_hi)
+        return overflow
+
     def _on_pan_heartbeat(self) -> None:
         """During active scrolling: rebuild if viewport exceeds cached bounds."""
         if not self._pan_timer.isActive():
@@ -8345,7 +8996,12 @@ class TimelineView(QGraphicsView):
         if not self._needs_rebuild_for_scroll(strict=False):
             return
         now_ms = time.monotonic() * 1000.0
-        if now_ms - self._last_pan_rebuild_ms < _PAN_HEARTBEAT_MIN_REBUILD_MS:
+        overflow = self._orth_viewport_overflow_px()
+        row_stride = max(self._scene._row_height + self._scene._row_gap, 1.0)
+        min_gap = (_PAN_ORTH_URGENT_REBUILD_MS
+                   if overflow > row_stride * 0.5
+                   else _PAN_HEARTBEAT_MIN_REBUILD_MS)
+        if now_ms - self._last_pan_rebuild_ms < min_gap:
             return
         self._last_pan_rebuild_ms = now_ms
         self._scene.rebuild()
@@ -8403,7 +9059,10 @@ class TimelineView(QGraphicsView):
         if not strict:
             span = max(self._scene._vp_ns_hi - self._scene._vp_ns_lo, 1)
             time_slack = max(int(span * 0.05), 1)
-            orth_slack = self._scene._vp_orth_buf * 0.25
+            # Prefetch rebuild ~2 rows before the orth margin edge.  The old
+            # 25 % positive slack let fast vertical scroll outrun built rows.
+            row_stride = max(self._scene._row_height + self._scene._row_gap, 1.0)
+            orth_slack = -row_stride * 2
 
         # Time-axis coverage exceeded -> need rebuild to repopulate segments.
         if ns_lo < self._scene._vp_ns_lo - time_slack or ns_hi > self._scene._vp_ns_hi + time_slack:
@@ -9309,7 +9968,7 @@ class _ScatterWidget(QWidget):
         if best_i >= 0:
             self._highlight = best_i
             self.update()
-            self.point_clicked.emit(self._points[best_i][2])
+            self.point_clicked.emit(self._points[best_i])
 
 class _HistogramWidget(QWidget):
     """Histogram of metric values with p50/p95 markers."""
@@ -9556,9 +10215,9 @@ class _MetricsPlotDialog(QDialog):
         self._content.update()
         self.update()
 
-    def _on_scatter_click(self, payload) -> None:
-        if self._on_pt_click:
-            self._on_pt_click(payload)
+    def _on_scatter_click(self, pt) -> None:
+        if self._on_pt_click and pt:
+            self._on_pt_click(pt[0], pt[1], pt[2])
 
     def _export_png(self) -> None:
         pixmap = self._content.grab()
@@ -10006,26 +10665,47 @@ class _TraceCompareDialog(QDialog):
             wnd.statusBar().showMessage(f"Exported trace compare: {path}", 4000)
 
 class _MigrationHeatmapWidget(QWidget):
-    """Paint labelled rows × time-bin migration counts."""
+    """Paint labelled rows × time-bin migration counts (pairs or core×core matrix)."""
 
     cell_clicked = pyqtSignal(int, int)
 
     _ROW_H = 16
     _CELL_MIN_W = 8
+    _MATRIX_CELL_MIN_W = 8
     _LEFT_PAD = 6
+    _COL_HEADER_H = 40
+    _MATRIX_HEADER_LABEL_PITCH = 12
 
     def __init__(self, row_labels: List[str], grid: list, parent=None):
         super().__init__(parent)
+        self._mode = 'pairs'
         self._row_labels: List[str] = []
+        self._col_labels: List[str] = []
         self._grid: list = [[]]
         self._max_val = 0
         self._label_w = 52
         self.set_data(row_labels, grid)
 
+    def _scroll_offsets(self) -> Tuple[int, int]:
+        parent = self.parentWidget()
+        if isinstance(parent, QScrollArea):
+            return (parent.horizontalScrollBar().value(),
+                    parent.verticalScrollBar().value())
+        return 0, 0
+
+    def _header_h(self) -> int:
+        return self._COL_HEADER_H if self._mode == 'matrix' else 0
+
     def _content_size(self) -> QSize:
-        n_bins = len(self._grid[0]) if self._grid and self._grid[0] else 1
-        w = self._LEFT_PAD + self._label_w + n_bins * self._CELL_MIN_W + 8
-        h = max(60, len(self._row_labels) * self._ROW_H + 8)
+        if self._mode == 'matrix':
+            n_bins = len(self._col_labels) or 1
+            cell_w = self._MATRIX_CELL_MIN_W
+            w = self._LEFT_PAD + self._label_w + n_bins * cell_w + 8
+            h = max(60, self._header_h() + len(self._row_labels) * self._ROW_H + 8)
+        else:
+            n_bins = len(self._grid[0]) if self._grid and self._grid[0] else 1
+            w = self._LEFT_PAD + self._label_w + n_bins * self._CELL_MIN_W + 8
+            h = max(60, len(self._row_labels) * self._ROW_H + 8)
         return QSize(w, h)
 
     def _sync_widget_size(self) -> None:
@@ -10041,7 +10721,9 @@ class _MigrationHeatmapWidget(QWidget):
         self.updateGeometry()
 
     def set_data(self, row_labels: List[str], grid: list) -> None:
+        self._mode = 'pairs'
         self._row_labels = list(row_labels)
+        self._col_labels = []
         self._grid = grid if grid else [[]]
         self._max_val = max((v for row in self._grid for v in row), default=0)
         fm = QFontMetrics(self.font())
@@ -10050,14 +10732,36 @@ class _MigrationHeatmapWidget(QWidget):
         self._sync_widget_size()
         self.update()
 
+    def set_matrix_data(self, row_labels: List[str], col_labels: List[str],
+                        grid: list) -> None:
+        self._mode = 'matrix'
+        self._row_labels = list(row_labels)
+        self._col_labels = list(col_labels)
+        self._grid = grid if grid else [[]]
+        self._max_val = max((v for row in self._grid for v in row), default=0)
+        fm = QFontMetrics(self.font())
+        max_lbl = max(
+            (fm.horizontalAdvance(lbl) for lbl in self._row_labels + self._col_labels),
+            default=0)
+        self._label_w = max(52, max_lbl + 10)
+        self._sync_widget_size()
+        self.update()
+
     def sizeHint(self) -> QSize:
         return self._content_size()
 
     def _cell_geometry(self) -> Tuple[int, float]:
+        if self._mode == 'matrix':
+            n_bins = len(self._col_labels) or 1
+            x0 = self._LEFT_PAD + self._label_w
+            return x0, float(self._MATRIX_CELL_MIN_W)
         n_bins = len(self._grid[0]) if self._grid else 1
         x0 = self._LEFT_PAD + self._label_w
         cell_w = max(self._CELL_MIN_W, (self.width() - x0 - 4) // max(1, n_bins))
-        return x0, cell_w
+        return x0, float(cell_w)
+
+    def _matrix_col_label_step(self, cell_w: float) -> int:
+        return max(1, int(math.ceil(self._MATRIX_HEADER_LABEL_PITCH / max(cell_w, 1))))
 
     def mousePressEvent(self, event) -> None:
         if event.button() != Qt.LeftButton or not self._row_labels:
@@ -10065,43 +10769,107 @@ class _MigrationHeatmapWidget(QWidget):
         pos = event.position() if hasattr(event, "position") else None
         x = pos.x() if pos else event.x()
         y = pos.y() if pos else event.y()
-        ri = int((y - 4) // self._ROW_H)
+        header_h = self._header_h()
+        if y < header_h + 4:
+            return super().mousePressEvent(event)
+        ri = int((y - header_h - 4) // self._ROW_H)
         if ri < 0 or ri >= len(self._row_labels):
             return super().mousePressEvent(event)
         x0, cell_w = self._cell_geometry()
         if x < x0:
             return super().mousePressEvent(event)
         bi = int((x - x0) // cell_w)
-        if bi < 0 or bi >= len(self._grid[0]):
+        n_cols = len(self._col_labels) if self._mode == 'matrix' else len(self._grid[0])
+        if bi < 0 or bi >= n_cols:
+            return super().mousePressEvent(event)
+        if self._mode == 'matrix' and ri == bi:
             return super().mousePressEvent(event)
         if self._grid[ri][bi] <= 0:
             return super().mousePressEvent(event)
         self.cell_clicked.emit(ri, bi)
         return super().mousePressEvent(event)
 
+    def _paint_matrix_headers(self, p: QPainter, clip: QRect, scroll_x: int,
+                              scroll_y: int, x0: int, cell_w: float) -> None:
+        if scroll_y > self._COL_HEADER_H:
+            return
+        label_right = self._LEFT_PAD + self._label_w
+        header_top = scroll_y
+        axis_y = header_top + self._COL_HEADER_H - 3
+        if clip.bottom() < header_top or clip.top() > axis_y + 4:
+            return
+        p.fillRect(QRectF(scroll_x, header_top, label_right, self._COL_HEADER_H),
+                   self.palette().color(QPalette.Window))
+        p.setPen(QPen(QColor("#888888")))
+        p.drawText(QRectF(scroll_x, header_top, label_right - 4, self._COL_HEADER_H),
+                   Qt.AlignRight | Qt.AlignVCenter, "to→")
+        step = self._matrix_col_label_step(cell_w)
+        small = QFont(self.font())
+        small.setPointSize(max(7, small.pointSize() - 2))
+        p.setFont(small)
+        for bi, lbl in enumerate(self._col_labels):
+            if bi % step != 0:
+                continue
+            hx = x0 + bi * cell_w
+            if hx + cell_w <= label_right:
+                continue
+            cx = hx + (cell_w * step) / 2
+            cy = header_top + self._COL_HEADER_H - 4
+            p.save()
+            p.translate(cx, cy)
+            p.rotate(-90)
+            p.drawText(0, 0, lbl)
+            p.restore()
+        p.setFont(self.font())
+
     def paintEvent(self, event) -> None:
         if not self._row_labels:
             return
+        clip = event.rect()
         p = QPainter(self)
+        p.setClipRect(clip)
+        scroll_x, scroll_y = self._scroll_offsets()
+        header_h = self._header_h()
         w = self.width()
-        n_bins = len(self._grid[0]) if self._grid else 1
-        x0 = self._LEFT_PAD + self._label_w
-        cell_w = max(self._CELL_MIN_W, (w - x0 - 4) // max(1, n_bins))
-        y = 4
-        for ri, lbl in enumerate(self._row_labels):
+        x0, cell_w = self._cell_geometry()
+        n_cols = len(self._col_labels) if self._mode == 'matrix' else (
+            len(self._grid[0]) if self._grid and self._grid[0] else 1)
+        label_right = self._LEFT_PAD + self._label_w
+        bg = self.palette().color(QPalette.Window)
+        ri_start = max(0, int((clip.top() - header_h - 4) // self._ROW_H))
+        ri_end = min(len(self._row_labels),
+                     int((clip.bottom() - header_h - 4) // self._ROW_H) + 1)
+
+        if self._mode == 'matrix':
+            self._paint_matrix_headers(p, clip, scroll_x, scroll_y, x0, cell_w)
+
+        for ri in range(ri_start, ri_end):
+            if ri >= len(self._grid):
+                continue
+            y = header_h + 4 + ri * self._ROW_H
+            lbl = self._row_labels[ri]
+            p.fillRect(QRectF(scroll_x, y, label_right, self._ROW_H - 1), bg)
             p.setPen(QPen(QColor("#888888")))
             p.drawText(
-                QRectF(self._LEFT_PAD, y, self._label_w, self._ROW_H),
+                QRectF(self._LEFT_PAD + scroll_x, y, self._label_w, self._ROW_H),
                 Qt.AlignLeft | Qt.AlignVCenter,
                 lbl,
             )
             x = x0
-            for v in self._grid[ri]:
-                alpha = int(50 + 180 * v / self._max_val) if self._max_val else 30
-                p.fillRect(QRectF(x, y, cell_w - 1, self._ROW_H - 3),
-                           QColor(91, 155, 213, alpha if v else 15))
+            for bi, v in enumerate(self._grid[ri]):
+                if bi >= n_cols:
+                    break
+                is_diag = self._mode == 'matrix' and ri == bi
+                cell_right = x + cell_w
+                if cell_right > label_right and x < w:
+                    if is_diag:
+                        p.fillRect(QRectF(x, y, cell_w - 1, self._ROW_H - 3),
+                                   QColor(91, 155, 213, 8))
+                    else:
+                        alpha = int(50 + 180 * v / self._max_val) if self._max_val else 30
+                        p.fillRect(QRectF(x, y, cell_w - 1, self._ROW_H - 3),
+                                   QColor(91, 155, 213, alpha if v else 15))
                 x += cell_w
-            y += self._ROW_H
         p.end()
 
 class _MigrationHeatmapDialog(QDialog):
@@ -10137,6 +10905,9 @@ class _MigrationHeatmapDialog(QDialog):
         self._filter_count = 0
         self._owner_tab_path: Optional[str] = None
         self._scope_cache: Dict[Tuple[Optional[int], Optional[int]], dict] = {}
+        self._uses_matrix = _migration_heatmap_uses_matrix(trace)
+        self._matrix_cores: list = []
+        self._matrix_grid: list = []
 
         lo = hi = None
         wnd = parent
@@ -10155,6 +10926,9 @@ class _MigrationHeatmapDialog(QDialog):
         pairs, grid, time_bins = _migration_heatmap_data(trace, lo, hi)
         self._pairs = pairs
         self._grid0 = grid
+        if self._uses_matrix:
+            self._matrix_cores, self._matrix_grid = _migration_heatmap_matrix(
+                trace, lo, hi)
         self._time_bins = time_bins
         t_min = lo if lo is not None else trace.time_min
         t_hi = hi if hi is not None else trace.time_max
@@ -10172,7 +10946,7 @@ class _MigrationHeatmapDialog(QDialog):
         nav = QHBoxLayout()
         self._back_btn = QPushButton("← Back")
         self._back_btn.setVisible(False)
-        self._back_btn.clicked.connect(self._go_level0)
+        self._back_btn.clicked.connect(self._go_back)
         nav.addWidget(self._back_btn)
         nav.addStretch(1)
         lay.addLayout(nav)
@@ -10192,6 +10966,10 @@ class _MigrationHeatmapDialog(QDialog):
         self._canvas = _MigrationHeatmapWidget([], [[]])
         self._canvas.cell_clicked.connect(self._on_cell_clicked)
         self._scroll.setWidget(self._canvas)
+        self._scroll.verticalScrollBar().valueChanged.connect(
+            lambda _v: self._canvas.update())
+        self._scroll.horizontalScrollBar().valueChanged.connect(
+            lambda _v: self._canvas.update())
         lay.addWidget(self._scroll, 1)
 
         self._hint_label = QLabel()
@@ -10246,7 +11024,7 @@ class _MigrationHeatmapDialog(QDialog):
     def _cache_scope_grid(self, lo: Optional[int], hi: Optional[int],
                           pairs: list, grid: list, time_bins: int,
                           t_min: int, t_hi: int, span: int) -> None:
-        self._scope_cache[(lo, hi)] = {
+        ent = {
             'pairs': pairs,
             'grid0': grid,
             'time_bins': time_bins,
@@ -10255,6 +11033,10 @@ class _MigrationHeatmapDialog(QDialog):
             'ov_bin_w': span / time_bins,
             'ov_time_bins': time_bins,
         }
+        if self._uses_matrix:
+            ent['matrix_cores'], ent['matrix_grid'] = _migration_heatmap_matrix(
+                self._trace, lo, hi)
+        self._scope_cache[(lo, hi)] = ent
 
     def _apply_scope_cache(self, lo: Optional[int], hi: Optional[int]) -> bool:
         ent = self._scope_cache.get((lo, hi))
@@ -10267,6 +11049,9 @@ class _MigrationHeatmapDialog(QDialog):
         self._ov_t_max = ent['ov_t_max']
         self._ov_bin_w = ent['ov_bin_w']
         self._ov_time_bins = ent['ov_time_bins']
+        if self._uses_matrix:
+            self._matrix_cores = ent.get('matrix_cores', [])
+            self._matrix_grid = ent.get('matrix_grid', [])
         return True
 
     def refresh_scope(self) -> None:
@@ -10292,6 +11077,9 @@ class _MigrationHeatmapDialog(QDialog):
             self._trace, lo, hi)
         self._pairs = pairs
         self._grid0 = grid
+        if self._uses_matrix:
+            self._matrix_cores, self._matrix_grid = _migration_heatmap_matrix(
+                self._trace, lo, hi)
         t_min = lo if lo is not None else self._trace.time_min
         t_hi = hi if hi is not None else self._trace.time_max
         span = max(t_hi - t_min, 1)
@@ -10341,6 +11129,15 @@ class _MigrationHeatmapDialog(QDialog):
             self._scroll.horizontalScrollBar().setValue(0)
         QTimer.singleShot(0, _do)
 
+    def _go_back(self) -> None:
+        if self._level <= 0:
+            return
+        if self._uses_matrix and self._level == 2:
+            self._show_pair_time_level(self._drill_fc, self._drill_tc, self._drill_label)
+        else:
+            self._go_level0()
+        self._scroll_heatmap_to_top()
+
     def _go_level0(self) -> None:
         self._level = 0
         self._back_btn.setVisible(False)
@@ -10348,18 +11145,66 @@ class _MigrationHeatmapDialog(QDialog):
         self._t_max = self._ov_t_max
         self._bin_w = self._ov_bin_w
         self._time_bins = self._ov_time_bins
+        if self._uses_matrix:
+            n = len(self._matrix_cores)
+            self._sub_label.setText(
+                f"Core × core migration counts ({n} cores, row = from, "
+                f"column = to){self._scope_suffix}")
+            has_data = (self._matrix_cores
+                        and any(self._matrix_grid[i][j] > 0
+                                for i in range(len(self._matrix_grid))
+                                for j in range(len(self._matrix_grid[i]))
+                                if i != j))
+            self._empty_label.setVisible(not has_data)
+            self._scroll.setVisible(has_data)
+            if has_data:
+                row_lbls = [_core_short_name(c) for c in self._matrix_cores]
+                col_lbls = row_lbls
+                self._canvas.set_matrix_data(row_lbls, col_lbls, self._matrix_grid)
+            self._hint_label.setText(
+                "Rows: source (from) core · Columns: destination (to) core · "
+                "Click a cell to open time bins")
+        else:
+            self._sub_label.setText(
+                f"Core-pair migrations over time bins{self._scope_suffix}")
+            has_data = (self._pairs
+                        and any(any(r for r in row) for row in self._grid0))
+            self._empty_label.setVisible(not has_data)
+            self._scroll.setVisible(has_data)
+            if has_data:
+                labels = [p[2] for p in self._pairs]
+                self._set_canvas(labels, self._grid0)
+            self._hint_label.setText(
+                "Rows: from→to core pairs · Columns: time bins · "
+                "Click a cell to drill into tasks")
+        self._update_show_all_btn()
+        self._scroll_heatmap_to_top()
+
+    def _show_pair_time_level(self, fc: str, tc: str, label: str) -> None:
+        """Matrix drill-down: time bins for one core pair."""
+        self._level = 1
+        self._drill_fc = fc
+        self._drill_tc = tc
+        self._drill_label = label
+        self._back_btn.setVisible(True)
+        lo = self._scope_lo
+        hi = self._scope_hi
+        pairs, grid, time_bins, t_min, t_hi, bin_w = _migration_pair_time_bins(
+            self._trace, fc, tc, lo, hi, self._ov_time_bins)
+        self._t_min = t_min
+        self._t_max = t_hi
+        self._bin_w = bin_w
+        self._time_bins = time_bins
         self._sub_label.setText(
-            f"Core-pair migrations over time bins{self._scope_suffix}")
-        has_data = (self._pairs
-                    and any(any(r for r in row) for row in self._grid0))
+            f"Time bins · {label}{self._scope_suffix}")
+        has_data = bool(grid and any(any(r for r in row) for row in grid))
         self._empty_label.setVisible(not has_data)
+        self._empty_label.setText("No migrations in scope.")
         self._scroll.setVisible(has_data)
         if has_data:
-            labels = [p[2] for p in self._pairs]
-            self._set_canvas(labels, self._grid0)
+            self._set_canvas([label], grid)
         self._hint_label.setText(
-            "Rows: from→to core pairs · Columns: time bins · "
-            "Click a cell to drill into tasks")
+            "Columns: time bins · Click a cell to drill into tasks")
         self._update_show_all_btn()
         self._scroll_heatmap_to_top()
 
@@ -10368,7 +11213,7 @@ class _MigrationHeatmapDialog(QDialog):
                     owner_tab_path: Optional[str] = None) -> None:
         if not self._owner_tab_still_active(owner_tab_path):
             return
-        self._level = 1
+        self._level = 2 if self._uses_matrix else 1
         self._drill_fc = fc
         self._drill_tc = tc
         self._drill_label = label
@@ -10402,6 +11247,31 @@ class _MigrationHeatmapDialog(QDialog):
         self._scroll_heatmap_to_top()
 
     def _on_cell_clicked(self, ri: int, bi: int) -> None:
+        if self._uses_matrix and self._level == 0:
+            if ri < 0 or ri >= len(self._matrix_cores):
+                return
+            if bi < 0 or bi >= len(self._matrix_cores):
+                return
+            if ri == bi or self._matrix_grid[ri][bi] <= 0:
+                return
+            fc = self._matrix_cores[ri]
+            tc = self._matrix_cores[bi]
+            label = f"{_core_short_name(fc)}→{_core_short_name(tc)}"
+            self._show_pair_time_level(fc, tc, label)
+            return
+        if self._uses_matrix and self._level == 1:
+            if ri < 0 or bi < 0 or bi >= self._time_bins:
+                return
+            if (not self._canvas._grid or ri >= len(self._canvas._grid)
+                    or bi >= len(self._canvas._grid[ri])
+                    or self._canvas._grid[ri][bi] <= 0):
+                return
+            bin_lo, bin_hi = _heatmap_bin_range(
+                self._t_min, self._bin_w, self._time_bins, self._t_max, bi)
+            self._schedule_level1(
+                self._drill_fc, self._drill_tc, self._drill_label,
+                bin_lo, bin_hi, bi)
+            return
         if self._level == 0:
             if ri < 0 or ri >= len(self._pairs):
                 return
@@ -10411,6 +11281,9 @@ class _MigrationHeatmapDialog(QDialog):
             bin_lo, bin_hi = _heatmap_bin_range(
                 self._t_min, self._bin_w, self._time_bins, self._t_max, bi)
             self._schedule_level1(fc, tc, label, bin_lo, bin_hi, bi)
+            return
+        task_level = 2 if self._uses_matrix else 1
+        if self._level != task_level:
             return
         if ri < 0 or ri >= len(self._task_rows):
             return
@@ -10428,7 +11301,7 @@ class _StatsPanel(QWidget):
 
     task_clicked = pyqtSignal(str)   # merge key of the clicked task row
     segment_jump   = pyqtSignal(int)    # ns - scroll timeline to this timestamp
-    segment_select = pyqtSignal(object) # TaskSegment - highlight that exact slice
+    plot_point_clicked = pyqtSignal(object, int, str)  # payload, mark_ns, note
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -10436,8 +11309,9 @@ class _StatsPanel(QWidget):
         self._is_dark: bool = True
         self._plot_dlg = None   # keep reference to prevent GC
         self._plot_mk: Optional[str] = None
-        self._plot_kind: Optional[str] = None   # "exec", "block", "inter", "response", "preempt"
+        self._plot_kind: Optional[str] = None   # "exec", "block", "inter", "response", "preempt", "interval"
         self._plot_preemptor: Optional[str] = None
+        self._plot_interval_id: Optional[str] = None
         self._trace: Optional["BtfTrace"] = None
         self._cursor_times: List[int] = []
         self._scope_to_cursors: bool = True
@@ -10450,6 +11324,7 @@ class _StatsPanel(QWidget):
             "inter": False,
             "health": False,
             "preemption": False,
+            "intervals": False,
             "response": False,
         }
         self._section_headers: Dict[str, QPushButton] = {}
@@ -10461,6 +11336,7 @@ class _StatsPanel(QWidget):
             "block": STATS_TABLE_DEFAULT_H,
             "inter": STATS_TABLE_DEFAULT_H,
             "preemption": STATS_TABLE_MIG_DEFAULT_H,
+            "intervals": STATS_TABLE_DEFAULT_H,
             "response": STATS_TABLE_DEFAULT_H,
         }
         self._table_grips: List[_StatsSectionGrip] = []
@@ -10674,14 +11550,11 @@ class _StatsPanel(QWidget):
         hlay.setSpacing(6)
         hlay.setAlignment(Qt.AlignVCenter)
 
+        label_w = max(label_min_width, STATS_UTIL_LABEL_W)
         name_lbl = self._lbl(label, ui_fs=ui_fs)
-        name_lbl.setMinimumWidth(label_min_width)
-        if on_click is None:
-            name_lbl.setMaximumWidth(label_min_width + 88)
-        else:
-            name_lbl.setMaximumWidth(160)
-            _fm = name_lbl.fontMetrics()
-            name_lbl.setText(_fm.elidedText(label, Qt.ElideRight, 160))
+        _fm = name_lbl.fontMetrics()
+        name_lbl.setText(_fm.elidedText(label, Qt.ElideRight, label_w - 4))
+        name_lbl.setFixedWidth(label_w)
         if click_tip:
             name_lbl.setToolTip(click_tip)
         hlay.addWidget(name_lbl)
@@ -10692,6 +11565,7 @@ class _StatsPanel(QWidget):
         pbar.setValue(int(round(max(0.0, min(100.0, pct)) * 10.0)))
         pbar.setTextVisible(False)
         pbar.setFixedHeight(STATS_UTIL_BAR_H)
+        pbar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         pbar.setStyleSheet(f"""
             QProgressBar {{
                 border: 1px solid #888888;
@@ -10709,10 +11583,10 @@ class _StatsPanel(QWidget):
         row.track_widget(pbar)
 
         pct_lbl = self._lbl(f"{pct:.1f}%", color=pct_color, ui_fs=ui_fs)
-        pct_lbl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        pct_lbl.setFixedWidth(STATS_UTIL_PCT_W)
+        pct_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         hlay.addWidget(pct_lbl)
         row.track_widget(pct_lbl)
-        hlay.addStretch(1)
 
         blay.addWidget(row)
 
@@ -10820,17 +11694,25 @@ class _StatsPanel(QWidget):
     def _build_plot_points(self, trace: "BtfTrace", mk: str, kind: str
                            ) -> Optional[Tuple[str, list, "QColor"]]:
         """Return (title, points, color) for a task metric chart, or None if no task."""
-        segs = trace.seg_map_by_merge_key.get(mk, [])
-        if not segs:
-            return None
         rng = self._stats_range()
         lo = hi = None
         if rng is not None:
             lo, hi, _ = rng
+        scope = self._scope_suffix()
+        if kind == "interval":
+            iid = self._plot_interval_id or mk
+            pts = _interval_plot_points(trace, iid, lo, hi)
+            if not pts:
+                return None
+            title = f"Interval {iid} — Duration{scope}"
+            color = QColor(_interval_color(iid))
+            return title, pts, color
+        segs = trace.seg_map_by_merge_key.get(mk, [])
+        if not segs:
+            return None
         raw = trace.task_repr.get(mk, mk)
         name = _task_display_name(raw)
         color = _task_color(raw)
-        scope = self._scope_suffix()
         if kind == "exec":
             if lo is not None and hi is not None:
                 segs = [s for s in segs if _seg_fully_in_range(s, lo, hi)]
@@ -10880,6 +11762,10 @@ class _StatsPanel(QWidget):
         self._plot_mk = None
         self._plot_kind = None
         self._plot_preemptor = None
+        self._plot_interval_id = None
+
+    def _open_interval_plot(self, trace: "BtfTrace", interval_id: str) -> None:
+        self._open_plot(trace, interval_id, "interval", interval_id=interval_id)
 
     def capture_plot_session(self) -> Tuple[Optional[str], Optional[str], bool, Optional[str]]:
         """Return (mk, kind, visible, preemptor) for the current metrics plot dialog."""
@@ -10898,6 +11784,7 @@ class _StatsPanel(QWidget):
         self._plot_mk = None
         self._plot_kind = None
         self._plot_preemptor = None
+        self._plot_interval_id = None
 
     def restore_plot_session(self, trace: Optional["BtfTrace"],
                              mk: Optional[str], kind: Optional[str],
@@ -10925,9 +11812,11 @@ class _StatsPanel(QWidget):
                         scope_badge=badge, scope_detail=detail)
 
     def _open_plot(self, trace, mk: str, kind: str,
-                   preemptor: Optional[str] = None) -> None:
+                   preemptor: Optional[str] = None,
+                   interval_id: Optional[str] = None) -> None:
         """Open a metrics distribution popup for the given task and metric kind."""
         self._plot_preemptor = preemptor
+        self._plot_interval_id = interval_id
         built = self._build_plot_points(trace, mk, kind)
         if built is None:
             return
@@ -10937,7 +11826,7 @@ class _StatsPanel(QWidget):
         scoped, badge, detail = self._plot_scope_banner()
         self._plot_mk = mk
         self._plot_kind = kind
-        _on_click = lambda seg: self.segment_select.emit(seg) if seg is not None else None
+        _on_click = self._on_plot_scatter_click
         if self._plot_dlg is not None:
             try:
                 self._plot_dlg.closed.disconnect(self._on_plot_dialog_closed)
@@ -10955,6 +11844,16 @@ class _StatsPanel(QWidget):
         )
         self._plot_dlg.closed.connect(self._on_plot_dialog_closed)
         self._plot_dlg.show()
+
+    def _on_plot_scatter_click(self, x_ns: int, y_ns: int, payload) -> None:
+        """Scatter plot point: jump timeline and add an annotation (not a cursor)."""
+        if self._trace is None or payload is None:
+            return
+        note = _format_plot_point_note(
+            self._trace, self._plot_kind or "", self._plot_mk,
+            self._plot_preemptor, x_ns, y_ns, payload)
+        mark_ns = _plot_point_mark_ns(payload, x_ns)
+        self.plot_point_clicked.emit(payload, mark_ns, note)
 
     def _sep(self) -> QFrame:
         f = QFrame()
@@ -11234,33 +12133,42 @@ class _StatsPanel(QWidget):
         rows.sort(key=lambda r: (-r[2], r[1].lower()))
         return rows
 
-    def _emit_segment_select(self, seg: Optional[TaskSegment]) -> None:
-        if seg is not None:
-            self.segment_select.emit(seg)
+    def _activate_extreme_segment(self, trace: "BtfTrace", mk: str, kind: str,
+                                  seg: Optional["TaskSegment"], find_max: bool) -> None:
+        if seg is None:
+            return
+        note = _format_extreme_segment_note(trace, mk, kind, seg, find_max)
+        self.plot_point_clicked.emit(seg, seg.start, note)
 
     def _on_wcet_click(self, trace: "BtfTrace", mk: str,
                        lo: Optional[int], hi: Optional[int]) -> None:
         segs = trace.seg_map_by_merge_key.get(mk, [])
-        self._emit_segment_select(_find_wcet_segment(segs, lo, hi))
+        self._activate_extreme_segment(
+            trace, mk, "exec", _find_wcet_segment(segs, lo, hi), True)
 
     def _on_bcet_click(self, trace: "BtfTrace", mk: str,
                        lo: Optional[int], hi: Optional[int]) -> None:
         segs = trace.seg_map_by_merge_key.get(mk, [])
-        self._emit_segment_select(_find_bcet_segment(segs, lo, hi))
+        self._activate_extreme_segment(
+            trace, mk, "exec", _find_bcet_segment(segs, lo, hi), False)
 
     def _on_blocking_extreme_click(self, trace: "BtfTrace", mk: str,
                                    lo: Optional[int], hi: Optional[int],
                                    find_max: bool) -> None:
         segs = trace.seg_map_by_merge_key.get(mk, [])
-        self._emit_segment_select(
-            _find_extreme_blocking_segment(segs, lo, hi, find_max=find_max))
+        self._activate_extreme_segment(
+            trace, mk, "block",
+            _find_extreme_blocking_segment(segs, lo, hi, find_max=find_max),
+            find_max)
 
     def _on_inter_extreme_click(self, trace: "BtfTrace", mk: str,
                                 lo: Optional[int], hi: Optional[int],
                                 find_max: bool) -> None:
         segs = trace.seg_map_by_merge_key.get(mk, [])
-        self._emit_segment_select(
-            _find_extreme_inter_arrival_segment(segs, lo, hi, find_max=find_max))
+        self._activate_extreme_segment(
+            trace, mk, "inter",
+            _find_extreme_inter_arrival_segment(segs, lo, hi, find_max=find_max),
+            find_max)
 
     def _exec_slice_rows_export(self, trace: "BtfTrace",
                                 lo: Optional[int] = None, hi: Optional[int] = None) -> List[Tuple[str, int, float, str, str, str, str, str, str]]:
@@ -11645,6 +12553,7 @@ class _StatsPanel(QWidget):
         mig_rows = _migration_rows(trace, lo, hi)
         preempt_rows = _preemption_chain_rows(trace, lo, hi)
         resp_rows = _response_time_rows(trace, lo, hi)
+        interval_rows = _interval_stats_rows(trace, lo, hi)
         ctx_count, core_gaps = _scheduling_stats(trace, lo, hi)
         tick = _tick_health_report(trace, lo, hi)
 
@@ -11849,6 +12758,7 @@ class _StatsPanel(QWidget):
             <li><strong>Inter-Arrival Time:</strong> Time between consecutive activations of the same task (slice start to next slice start). It reflects activation cadence and jitter.</li>
             <li><strong>Blocking Time:</strong> Off-CPU gap between the end of one slice and the start of the next for the same task. High values may indicate preemption, blocking on a resource, or long scheduling delays.</li>
       <li><strong>Preemption Chain Analysis:</strong> For each blocking gap of a victim task, identifies which task ran on the same core during that gap. High counts or long totals point to recurring preemption bottlenecks.</li>
+      <li><strong>Interval Analysis:</strong> Paired interval_start / interval_stop spans per user-defined id (count, min/avg/max/p95 duration). See viewer docs for pairing limitations when the same id is used from multiple concurrent tasks.</li>
       <li><strong>Response Time Analysis:</strong> Time from the end of a task slice to the start of its next slice (= off-CPU blocking gap). Max and p95 values indicate worst-case scheduling latency for that task.</li>
             <li><strong>Context switches:</strong> Count of segment boundaries on all cores whose start time falls inside the statistics scope.</li>
             <li><strong>Min (Minimum):</strong> The fastest execution time recorded. It represents the best-case scenario under zero system load.</li>
@@ -11895,6 +12805,11 @@ class _StatsPanel(QWidget):
     <tbody>{"".join(
         f"<tr><td>{_esc(r[1])}</td><td>{_esc(r[2])}</td><td>{r[3]}</td><td>{_esc(r[4])}</td><td>{_esc(r[5])}</td><td>{_esc(r[6])}</td></tr>"
         for r in preempt_rows) or "<tr><td colspan=\"6\" class=\"empty\">No preemption events found</td></tr>"}</tbody></table></section>
+    <section class=\"report-card\"><h2>Interval Analysis{_esc(scope_title)}</h2>
+    <table><thead><tr><th>ID</th><th>Label</th><th>Count</th><th>Min</th><th>Avg</th><th>Max</th><th>p95</th></tr></thead>
+    <tbody>{"".join(
+        f"<tr><td>{_esc(r[0])}</td><td>{_esc(r[1])}</td><td>{r[2]}</td><td>{_esc(r[3])}</td><td>{_esc(r[4])}</td><td>{_esc(r[5])}</td><td>{_esc(r[6])}</td></tr>"
+        for r in interval_rows) or "<tr><td colspan=\"7\" class=\"empty\">No interval data</td></tr>"}</tbody></table></section>
     <section class=\"report-card\"><h2>Response Time Analysis{_esc(scope_title)}</h2>
     <table><thead><tr><th>Task</th><th>Events</th><th>Min</th><th>Avg</th><th>Max</th><th>p95</th></tr></thead>
     <tbody>{"".join(
@@ -11967,6 +12882,7 @@ class _StatsPanel(QWidget):
         mig_rows = _migration_rows(trace, lo, hi)
         preempt_rows_csv = _preemption_chain_rows(trace, lo, hi)
         resp_rows_csv = _response_time_rows(trace, lo, hi)
+        interval_rows_csv = _interval_stats_rows(trace, lo, hi)
         ctx_count, core_gaps = _scheduling_stats(trace, lo, hi)
         tick = _tick_health_report(trace, lo, hi)
 
@@ -12080,6 +12996,15 @@ class _StatsPanel(QWidget):
                         writer.writerow([victim, preemptor, count, _us(total), _us(avg), _us(mx)])
                 else:
                     writer.writerow(["No preemption events found", "", "", "", "", ""])
+
+                writer.writerow([])
+                writer.writerow([f"Interval Analysis{scope_suffix}"])
+                writer.writerow(["ID", "Label", "Count", "Min", "Avg", "Max", "p95"])
+                if interval_rows_csv:
+                    for iid, label, count, mn, avg, mx, p95 in interval_rows_csv:
+                        writer.writerow([iid, label, count, _us(mn), _us(avg), _us(mx), _us(p95)])
+                else:
+                    writer.writerow(["No interval data", "", "", "", "", "", ""])
 
                 writer.writerow([])
                 writer.writerow([f"Response Time Analysis{scope_suffix}"])
@@ -12360,10 +13285,15 @@ class _StatsPanel(QWidget):
 
         # -- Preemption Chain Analysis ----------------------------------------
         _preempt_rows = _preemption_chain_rows(trace, lo, hi)
+        _preempt_truncated = len(_preempt_rows) > PREEMPTION_CHAIN_MAX_ROWS
         empty_preempt = ("No preemption events in cursor range" if scope
                          else "No preemption events found (single-task or idle-only trace)")
 
         def _populate_preempt(blay: QVBoxLayout) -> None:
+            if _preempt_truncated:
+                blay.addWidget(self._lbl(
+                    f"Showing top {PREEMPTION_CHAIN_MAX_ROWS:,} pairs by total preemption time.",
+                    color="#888888", ui_fs=_fs))
             blay.addWidget(self._build_preemption_table(
                 _preempt_rows, _fs, empty_preempt,
                 on_row_click=lambda mk, preemptor: self._open_plot(
@@ -12375,6 +13305,28 @@ class _StatsPanel(QWidget):
             f"Preemption Chain Analysis{scope}",
             _fs,
             _populate_preempt,
+        )
+
+        # -- Interval Analysis ------------------------------------------------
+        _interval_rows = _interval_stats_rows(trace, lo, hi)
+        empty_interval = ("No interval data in cursor range" if scope
+                          else "No paired interval_start / interval_stop events in trace")
+
+        def _populate_intervals(blay: QVBoxLayout) -> None:
+            blay.addWidget(self._build_stats_table(
+                [(r[0], r[1], r[2], r[3], r[4], r[5], r[6]) for r in _interval_rows],
+                _fs,
+                empty_interval,
+                count_header="Count",
+                section_id="intervals",
+                on_row_click=lambda iid: self._open_interval_plot(trace, iid),
+            ))
+
+        self._add_collapsible_section(
+            "intervals",
+            f"Interval Analysis{scope}",
+            _fs,
+            _populate_intervals,
         )
 
         # -- Response Time Analysis -------------------------------------------
@@ -12390,10 +13342,12 @@ class _StatsPanel(QWidget):
                 count_header="Events",
                 section_id="response",
                 on_row_click=lambda mk: self._open_plot(trace, mk, "response"),
-                on_min_click=lambda mk: self._emit_segment_select(
-                    next((r[7] for r in _resp_rows if r[0] == mk), None)),
-                on_max_click=lambda mk: self._emit_segment_select(
-                    next((r[8] for r in _resp_rows if r[0] == mk), None)),
+                on_min_click=lambda mk: self._activate_extreme_segment(
+                    trace, mk, "response",
+                    next((r[7] for r in _resp_rows if r[0] == mk), None), False),
+                on_max_click=lambda mk: self._activate_extreme_segment(
+                    trace, mk, "response",
+                    next((r[8] for r in _resp_rows if r[0] == mk), None), True),
             ))
 
         self._add_collapsible_section(
@@ -16188,7 +17142,7 @@ class MainWindow(QMainWindow):
 
                 Default structure:
                     - Top: Legend
-                    - Bottom: tabbed pages (Marks / Statistics)
+                    - Bottom: tabbed pages (Statistics / Marks)
 
                 We first set side-panel width, then split with a taller
                 bottom tabbed page.
@@ -16449,6 +17403,8 @@ class MainWindow(QMainWindow):
             self._act_theme.setText("Switch to &Dark Theme")
 
         self._refresh_zoom_ui_unit()
+        if self._show_stats:
+            QTimer.singleShot(0, self._stats_dock.raise_)
 
     def closeEvent(self, event) -> None:
         """Persist all runtime state to btf_viewer.rc on exit."""
@@ -16609,11 +17565,14 @@ class MainWindow(QMainWindow):
                 if hasattr(_item, '_seg_data'):
                     _item._seg_data = []
                     _item._xs = []
-                    _item._coarse_data = []
+                    _item._coarse_data_cache = None
+                    _item._coarse_xs = None
             _scene._frozen_items = []
             _scene._frozen_top_items = []
             _scene._cursor_items = []
             _scene._hover_overlay_items = []
+            _scene._hover_items = []
+            _scene._hover_line_ns = None
             _scene._task_row_rects = {}
             _scene.clear()
             if tab.trace is not None:
@@ -17183,9 +18142,9 @@ class MainWindow(QMainWindow):
         find_dock.setMinimumHeight(120)
         self.addDockWidget(Qt.RightDockWidgetArea, find_dock)
         self._find_dock = find_dock
-        # Default: Legend on top, bottom as tabbed pages (Marks / Statistics).
+        # Default: Legend on top, bottom as tabbed pages (Statistics / Marks).
         self.splitDockWidget(self._legend_dock, self._marks_dock, Qt.Vertical)
-        self.tabifyDockWidget(self._marks_dock, self._stats_dock)
+        self.tabifyDockWidget(self._stats_dock, self._marks_dock)
         self._stats_dock.raise_()
 
         # Keep Find available below the tab group (typically hidden by default).
@@ -17235,7 +18194,7 @@ class MainWindow(QMainWindow):
         self._stats_panel = _StatsPanel()
         self._stats_panel.task_clicked.connect(self._on_legend_task_clicked)
         self._stats_panel.segment_jump.connect(self._on_segment_jump)
-        self._stats_panel.segment_select.connect(self._on_segment_select)
+        self._stats_panel.plot_point_clicked.connect(self._on_stats_plot_point_clicked)
         self._stats_panel._btn_compare_mig.clicked.connect(self._open_trace_compare)
         stats_dock = QDockWidget("Statistics", self)
         stats_dock.setObjectName("dock_statistics")
@@ -18105,22 +19064,11 @@ class MainWindow(QMainWindow):
             return
         self._view.scroll_to_ns(ns)
 
-    def _on_segment_jump(self, ns: int) -> None:
-        """Scroll the timeline to *ns* (inter-arrival click from metrics popup)."""
-        if self._trace is None:
-            return
-        self._view.scroll_to_ns(ns)
-
-    def _on_segment_select(self, seg) -> None:
-        """Scroll to and highlight a specific execution slice (exec click from metrics popup)."""
+    def _scroll_to_segment(self, seg) -> None:
+        """Scroll to and highlight *seg* without placing a cursor."""
         if self._trace is None or seg is None:
             return
         self._view.scroll_to_ns(seg.start)
-        # Re-center on both axes: scroll_to_ns only preserves the orthogonal
-        # scroll position, so if the task row is off-screen we must explicitly
-        # scroll to it.  Use task_orth_scene_span (which accepts core_name) so
-        # that in core view the exact core-task row is targeted rather than the
-        # first matching task row across all cores.
         sc = self._view._scene
         mk = _task_merge_key(seg.task)
         core_name = seg.core if sc._view_mode == "core" else None
@@ -18133,7 +19081,41 @@ class MainWindow(QMainWindow):
             else:
                 self._view.centerOn(orth, time_coord)
             self._view.viewport().update()
-        self._view._scene.set_highlighted_segment(seg)
+        sc.set_highlighted_segment(seg)
+
+    def _on_segment_jump(self, ns: int) -> None:
+        """Scroll the timeline to *ns* (non-annotation stats jumps, e.g. TICK gaps)."""
+        if self._trace is None:
+            return
+        self._view.scroll_to_ns(ns)
+
+    def _on_stats_plot_point_clicked(self, payload, mark_ns: int, note: str) -> None:
+        """Metrics plot point: jump/highlight and add an annotation with *note*."""
+        if self._trace is None:
+            return
+        if isinstance(payload, TaskSegment):
+            self._scroll_to_segment(payload)
+        elif isinstance(payload, IntervalInstance):
+            inst = payload
+            vp = self._view.viewport().rect()
+            is_horiz = self._view._scene._horizontal
+            vp_px = max(vp.width() if is_horiz else vp.height(), 100)
+            margin = max(1, (inst.stop_ns - inst.start_ns) // 10)
+            ns_lo = max(self._trace.time_min, inst.start_ns - margin)
+            ns_hi = min(self._trace.time_max, inst.stop_ns + margin)
+            self._view._fit_mode = False
+            self._view._scene.zoom_to_range(ns_lo, ns_hi, vp_px)
+            center_ns = (inst.start_ns + inst.stop_ns) // 2
+            coord = self._view._scene.ns_to_scene_coord(center_ns)
+            cur = self._view.mapToScene(vp.center())
+            if is_horiz:
+                self._view.centerOn(coord, cur.y())
+            else:
+                self._view.centerOn(cur.x(), coord)
+            self._view.zoom_changed.emit(self._view._scene.timescale_per_px)
+        else:
+            self._view.scroll_to_ns(mark_ns)
+        self._add_annotation_with_note(mark_ns, note)
 
     def _add_bookmark_at_center(self) -> None:
         if self._trace is None:
@@ -18236,10 +19218,14 @@ class MainWindow(QMainWindow):
 
     def _add_annotation_at_ns(self, ns: int) -> None:
         """Add an annotation at timestamp with an empty note."""
+        self._add_annotation_with_note(ns, "")
+
+    def _add_annotation_with_note(self, ns: int, note: str) -> None:
+        """Add an annotation at *ns* with the given note text."""
         if self._trace is None:
             return
         self._push_undo_snapshot()
-        self._annotations.append(TraceAnnotation(id=self._mark_next_id, ns=ns, note=""))
+        self._annotations.append(TraceAnnotation(id=self._mark_next_id, ns=ns, note=note or ""))
         self._mark_next_id += 1
         self._annotations.sort(key=lambda a: a.ns)
         self._rebuild_annotation_list()
@@ -18635,6 +19621,7 @@ class MainWindow(QMainWindow):
         self._act_redo.setEnabled(False)
         if self._show_stats:
             self._stats_dock.show()
+            self._stats_dock.raise_()
         if self._show_cpu_load:
             self._cpu_load_scroll.show()
 

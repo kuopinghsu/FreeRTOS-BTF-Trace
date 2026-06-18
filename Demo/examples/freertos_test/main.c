@@ -137,6 +137,9 @@ static void vCtxSwitchWorker( void *pvArg )
 
     for( i = 0; i < ITER_FAST; ++i )
     {
+#if configUSE_TRACE_FACILITY
+        traceINTERVAL_START(1);
+#endif
         xSemaphoreTake( t1_area, portMAX_DELAY );
 
         for( y = 0; y < T1_YIELDS; ++y )
@@ -150,6 +153,9 @@ static void vCtxSwitchWorker( void *pvArg )
             taskYIELD();
 
         xSemaphoreGive( t1_area );
+#if configUSE_TRACE_FACILITY
+        traceINTERVAL_STOP(1);
+#endif
     }
     xSemaphoreGive( t1_done );
     vTaskDelete( NULL );
@@ -210,10 +216,16 @@ static void vMutexWorker( void *pvArg )
 
     for( i = 0; i < ITER_FAST; ++i )
     {
+#if configUSE_TRACE_FACILITY
+        traceINTERVAL_START(2);
+#endif
         xSemaphoreTake( t2_mtx, portMAX_DELAY );
         t2_ctr++;
         xSemaphoreGive( t2_mtx );
         taskYIELD();
+#if configUSE_TRACE_FACILITY
+        traceINTERVAL_STOP(2);
+#endif
     }
     xSemaphoreGive( t2_done );
     vTaskDelete( NULL );
@@ -276,6 +288,9 @@ static void vSemMutexWorker( void *pvArg )
 
     for( i = 0; i < ITER_SLOW; ++i )
     {
+#if configUSE_TRACE_FACILITY
+        traceINTERVAL_START(3);
+#endif
         /* -- Enter shared area (max SEM_SLOTS concurrent tasks) -- */
         xSemaphoreTake( t3_area, portMAX_DELAY );
 
@@ -290,6 +305,9 @@ static void vSemMutexWorker( void *pvArg )
 
         /* -- Leave shared area -- */
         xSemaphoreGive( t3_area );
+#if configUSE_TRACE_FACILITY
+        traceINTERVAL_STOP(3);
+#endif
     }
     xSemaphoreGive( t3_done );
     vTaskDelete( NULL );
@@ -367,8 +385,14 @@ static void vNotifyWorker( void *pvArg )
 
     for( i = 0; i < ITER_FAST; ++i )
     {
+#if configUSE_TRACE_FACILITY
+        traceINTERVAL_START(4);
+#endif
         xTaskNotifyGive( t4_collector );
         taskYIELD();
+#if configUSE_TRACE_FACILITY
+        traceINTERVAL_STOP(4);
+#endif
     }
     xSemaphoreGive( t4_ndone );
     vTaskDelete( NULL );
@@ -434,7 +458,15 @@ static void vEventWorker( void *pvArg )
     int bit = (int)(intptr_t)pvArg, i;
 
     for( i = 0; i < ITER_FAST; ++i )
+    {
+#if configUSE_TRACE_FACILITY
+        traceINTERVAL_START(5);
+#endif
         taskYIELD();
+#if configUSE_TRACE_FACILITY
+        traceINTERVAL_STOP(5);
+#endif
+    }
 
     taskYIELD();
 
@@ -496,8 +528,14 @@ static void vQProd( void *pvArg )
 
     for( i = 0; i < ITER_FAST; ++i )
     {
+#if configUSE_TRACE_FACILITY
+        traceINTERVAL_START(6);
+#endif
         uint32_t v = (uint32_t)i;
         xQueueSend( t6_q, &v, portMAX_DELAY );
+#if configUSE_TRACE_FACILITY
+        traceINTERVAL_STOP(6);
+#endif
     }
     xSemaphoreGive( t6_done );
     vTaskDelete( NULL );
@@ -593,7 +631,13 @@ static void vTestRunner( void *pvArg )
         int prev = total_fail;
         printf( "test %-30s ... ", tests[ i ].name );
         fflush( stdout );
+#if configUSE_TRACE_FACILITY
+        traceINTERVAL_START(0);
+#endif
         total_fail += tests[ i ].fn();
+#if configUSE_TRACE_FACILITY
+        traceINTERVAL_STOP(0);
+#endif
         printf( "%s\n", ( total_fail == prev ) ? "pass" : "FAIL" );
         prvPhaseHandoff();
     }

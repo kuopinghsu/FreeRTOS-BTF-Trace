@@ -147,6 +147,12 @@ export class InteractionHandler {
     this._placeCursor(ns, shiftSnap)
   }
 
+  /** Place a cursor at *ns* (stats / plot navigation; does not toggle-remove). */
+  placeCursorAtTime(ns) {
+    this._opts.onBeforeCursorChange?.()
+    this._assignCursorSlot(ns)
+  }
+
   zoomToSegment(seg) {
     this._zoomToSegment(seg)
   }
@@ -821,18 +827,26 @@ export class InteractionHandler {
         }
       }
     }
-    if (!placed) {
-      const mc = maxCursorsFrom(this._opts)
-      while (cursors.length < mc) cursors.push(null)
-      const emptyIdx = cursors.findIndex(c => c === null)
-      if (emptyIdx !== -1) {
-        cursors[emptyIdx] = placeT
-        this._lastActiveCursorIdx = emptyIdx
-      } else {
-        cursors.shift()
-        cursors.push(placeT)
-        this._lastActiveCursorIdx = cursors.length - 1
-      }
+    if (placed) {
+      this._cursors = cursors
+      this._opts.onCursorsChange?.(cursors)
+    } else {
+      this._assignCursorSlot(placeT)
+    }
+  }
+
+  _assignCursorSlot(placeT) {
+    const cursors = [...this._cursors]
+    const mc = maxCursorsFrom(this._opts)
+    while (cursors.length < mc) cursors.push(null)
+    const emptyIdx = cursors.findIndex(c => c === null)
+    if (emptyIdx !== -1) {
+      cursors[emptyIdx] = placeT
+      this._lastActiveCursorIdx = emptyIdx
+    } else {
+      cursors.shift()
+      cursors.push(placeT)
+      this._lastActiveCursorIdx = cursors.length - 1
     }
     this._cursors = cursors
     this._opts.onCursorsChange?.(cursors)

@@ -121,6 +121,14 @@ void btf_traceTAG(int t, int v) {
     btf_trace_add_event ((uint32_t)v, (event_t)(TRACE_EVENT_TAG + t));
 }
 
+void btf_traceINTERVAL_START(int id) {
+    btf_trace_add_event ((uint32_t)id, (event_t)(TRACE_EVENT_INTERVAL_START));
+}
+
+void btf_traceINTERVAL_STOP(int id) {
+    btf_trace_add_event ((uint32_t)id, (event_t)(TRACE_EVENT_INTERVAL_STOP));
+}
+
 void btf_trace_add_task (
     uint8_t *task_name,
     uint32_t task_id,
@@ -496,6 +504,22 @@ void btf_dump(
                         current_time,
                         coreid,
                         "TICK",
+                        "trigger",
+                        event->value);
+                break;
+            case TRACE_EVENT_INTERVAL_START:
+                printf( "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%" PRIu32 "\n",
+                        current_time,
+                        coreid,
+                        "interval_start",
+                        "trigger",
+                        event->value);
+                break;
+            case TRACE_EVENT_INTERVAL_STOP:
+                printf( "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%" PRIu32 "\n",
+                        current_time,
+                        coreid,
+                        "interval_stop",
                         "trigger",
                         event->value);
                 break;

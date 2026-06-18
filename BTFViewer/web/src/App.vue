@@ -59,11 +59,6 @@
       >
         <span class="trace-tab-label">{{ tab.name }}</span>
         <span
-          v-if="!tab.trace"
-          class="trace-tab-placeholder"
-          title="Re-open this file to restore session"
-        >○</span>
-        <span
           class="trace-tab-close"
           title="Close tab"
           aria-label="Close tab"
@@ -320,13 +315,23 @@
                 @update:open-plot="onOpenPlotChange"
                 @update:section-heights="onSectionHeightsChange"
                 @highlight-task="onHighlightClick"
-                @select-segment="onStatsSelectSegment"
+                @plot-point-activate="onStatsPlotPointActivate"
               />
             </div>
           </div>
         </div>
 
         <div class="panel-tabs" role="tablist" aria-label="Right panel tabs">
+          <button
+            v-if="appSettings.showStats"
+            class="panel-tab"
+            :class="{ active: rightPanelTab === 'stats' }"
+            role="tab"
+            :aria-selected="rightPanelTab === 'stats'"
+            @click="rightPanelTab = 'stats'"
+          >
+            Statistics
+          </button>
           <button
             class="panel-tab"
             :class="{ active: rightPanelTab === 'marks' }"
@@ -344,16 +349,6 @@
             @click="rightPanelTab = 'find'"
           >
             Find
-          </button>
-          <button
-            v-if="appSettings.showStats"
-            class="panel-tab"
-            :class="{ active: rightPanelTab === 'stats' }"
-            role="tab"
-            :aria-selected="rightPanelTab === 'stats'"
-            @click="rightPanelTab = 'stats'"
-          >
-            Statistics
           </button>
         </div>
       </div>
@@ -752,7 +747,7 @@ import {
   CPU_LOAD_PANE_MIN_H,
 } from './utils/cpuLoadHelpers.js'
 import { useTraceTabs } from './composables/useTraceTabs.js'
-import { loadSession, saveSession, getSavedTabState, applySavedTabState, buildSessionSnapshot, isRestorableViewport, applySavedLayout } from './utils/sessionStore.js'
+import { loadSession, saveSession, buildSessionSnapshot, isRestorableViewport, applySavedLayout } from './utils/sessionStore.js'
 import { createUndoStack } from './utils/undoStack.js'
 import {
   buildPortableSession, parsePortableSession, applyPortableSession, downloadPortableSession,
@@ -779,7 +774,6 @@ const {
   closeTab,
   cycleTraceTab,
   resetTabForLoad,
-  restorePlaceholderTabs,
   getNavCache,
   setNavCache,
 } = useTraceTabs()
@@ -1088,7 +1082,6 @@ watch(
   () => nextTick(() => autofitCpuLoadPaneHeight()),
 )
 
-watch([tabs, activeTabId, cursors, marks, timelineViewport], scheduleSessionSave, { deep: true })
 watch(
   () => ({
     viewMode: timelineOptions.viewMode,
@@ -1213,7 +1206,6 @@ async function attachParsedTrace(name, packedOrTrace) {
     undoStack.clear()
     timelineOptions.taskFilterKeys = null
     timelineOptions.heatmapFilterLabel = null
-    restoreTabState(tab)
 
     tab.trace = markRaw(trace)
     if (trace.meta?._versionWarning) {
@@ -1377,6 +1369,23 @@ function onJumpToTime(ns) {
   jumpDialogOpen.value = false
   timelinePanelRef.value?.jumpToNs(ns)
   syncTimelineViewport()
+}
+
+function onStatsPlotPointActivate({ ns, note, segment, interval }) {
+  if (segment) {
+    highlightSegment.value = segment
+    timelineOptions.highlightSegment = segment
+    timelineOptions.highlightKey = taskMergeKey(segment.task)
+    timelinePanelRef.value?.scrollToSegmentIfNeeded(segment)
+  } else if (interval) {
+    timelinePanelRef.value?.zoomToTimeRange(interval.startNs, interval.stopNs)
+  } else if (ns != null) {
+    timelinePanelRef.value?.jumpToNs(ns)
+  }
+  if (ns != null) addAnnotationAtNs(ns, note)
+  rightPanelTab.value = 'marks'
+  syncTimelineViewport()
+  scheduleSessionSave()
 }
 
 function onOpenPlotChange(v) {
@@ -1778,6 +1787,7 @@ function onHeatmapDrillDown(payload) {
   timelineOptions.highlightSegment = null
 
   nextTick(() => {
+    timelinePanelRef.value?.expandCoresForMergeKeys(payload.mergeKeys)
     timelinePanelRef.value?.zoomToTimeRange(payload.binLo, payload.binHi)
     if (payload.mergeKeys.length === 1) {
       onHighlightClick(payload.mergeKeys[0])
@@ -1810,15 +1820,6 @@ function onHighlightClick(key) {
   // Scroll & center the task row in the timeline
   if (nextKey) timelinePanelRef.value?.scrollToTask(nextKey)
   scheduleRender()
-}
-
-function onStatsSelectSegment(seg) {
-  if (!seg) return
-  highlightSegment.value = seg
-  timelineOptions.highlightSegment = seg
-  timelineOptions.highlightKey = taskMergeKey(seg.task)
-  timelinePanelRef.value?.scrollToSegmentIfNeeded(seg)
-  syncTimelineViewport()
 }
 
 function scheduleRender() {
@@ -2135,12 +2136,9 @@ onMounted(() => {
     rightPanelWidth,
     cpuLoadPaneHeight,
     sectionHeights: statsSectionHeights,
-    rightPanelTab,
     setCpuLoadUserSized: () => { _cpuLoadUserSized = true },
   })
-  if (saved?.tabOrder?.length) {
-    restorePlaceholderTabs(saved.tabOrder, saved.activeTabName)
-  }
+  rightPanelTab.value = appSettings.showStats ? 'stats' : 'marks'
   window.addEventListener('keydown', onGlobalKeydown)
 })
 
@@ -2189,17 +2187,21 @@ function onAddAnnotation(ns) {
   addMarkAtNs(ns, 'annotation')
 }
 
-function addMarkAtNs(ns, type = 'bookmark') {
+function addMarkAtNs(ns, type = 'bookmark', label = '') {
   if (!trace.value || !activeTab.value) return
   pushUndoSnapshot()
   const clamped = Math.max(trace.value.timeMin, Math.min(trace.value.timeMax, ns))
   marks.value.push({
     id: activeTab.value.markNextId++,
     ns: clamped,
-    label: '',
+    label: label || '',
     type: type === 'annotation' ? 'annotation' : 'bookmark',
   })
   marks.value.sort((a, b) => a.ns - b.ns)
+}
+
+function addAnnotationAtNs(ns, note) {
+  addMarkAtNs(ns, 'annotation', note)
 }
 
 function onDeleteMark(id) {
@@ -2220,30 +2222,16 @@ function onJumpToMark(ns) {
   timelinePanelRef.value?.jumpToNs(ns)
 }
 
-function restoreTabState(tab) {
-  const saved = getSavedTabState(tab.name)
-  if (!saved) return
-  applySavedTabState(tab, saved)
-  timelineOptions.highlightKey = saved.pinnedHighlightKey ?? null
-  timelineOptions.highlightSegment = saved.highlightSegment ?? null
-  timelineOptions.lockedTaskKey = saved.pinnedHighlightKey ?? null
-  if (tab.findQuery) nextTick(() => recomputeFind())
-}
-
 let _sessionSaveTimer = null
 function scheduleSessionSave() {
   clearTimeout(_sessionSaveTimer)
   _sessionSaveTimer = setTimeout(() => {
-    if (!tabs.value.length) return
     saveSession(buildSessionSnapshot({
-      tabs: tabs.value,
-      activeTabId: activeTabId.value,
       timelineOptions,
       layout: {
         rightPanelWidth: rightPanelWidth.value,
         cpuLoadPaneHeight: cpuLoadPaneHeight.value,
         sectionHeights: { ...statsSectionHeights.value },
-        rightPanelTab: rightPanelTab.value,
       },
     }))
   }, 400)
@@ -2394,11 +2382,6 @@ body {
 .app.drag-over {
   outline: 2px dashed var(--accent);
   outline-offset: -4px;
-}
-.trace-tab-placeholder {
-  margin-left: 4px;
-  opacity: 0.55;
-  font-size: 10px;
 }
 
 .trace-tabs {

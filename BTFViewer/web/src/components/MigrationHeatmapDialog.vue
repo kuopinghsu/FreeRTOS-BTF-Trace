@@ -14,7 +14,7 @@
           v-if="drillLevel > 0"
           type="button"
           class="heatmap-back"
-          @click="goLevel0"
+          @click="goBack"
         >
           ← Back
         </button>
@@ -38,32 +38,34 @@
       </div>
       <div
         v-else
-        ref="scrollRef"
-        class="heatmap-scroll"
+        ref="viewportRef"
+        class="heatmap-viewport"
       >
-        <div class="heatmap-body">
+        <div
+          ref="scrollRef"
+          class="heatmap-scroll"
+          @scroll="scheduleDraw"
+        >
           <div
-            v-for="(row, ri) in displayRows"
-            :key="row.key"
-            class="hm-row"
-          >
-            <span class="hm-label">{{ row.label }}</span>
-            <div class="hm-cells">
-              <button
-                v-for="(v, bi) in row.grid"
-                :key="bi"
-                type="button"
-                class="hm-cell"
-                :class="{ 'hm-cell-active': v > 0 }"
-                :style="{ background: cellColor(v) }"
-                :title="cellTitle(ri, bi, v, row)"
-                :disabled="v <= 0"
-                @click="onCellClick(ri, bi)"
-              />
-            </div>
-          </div>
+            class="heatmap-spacer"
+            :style="spacerStyle"
+          />
         </div>
+        <canvas
+          ref="canvasRef"
+          class="heatmap-canvas"
+          @click="onCanvasClick"
+          @mousemove="onCanvasMove"
+          @mouseleave="hoverCell = null"
+          @wheel.prevent="onCanvasWheel"
+        />
       </div>
+      <p
+        v-if="hoverTitle"
+        class="heatmap-cell-tip"
+      >
+        {{ hoverTitle }}
+      </p>
       <p class="heatmap-hint">
         {{ hintText }}
       </p>
@@ -87,14 +89,27 @@
 </template>
 
 <script setup>
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { formatTime } from '../renderer/TimelineRenderer.js'
 import {
+  coreShortName,
   migrationHeatmapGrid,
+  migrationHeatmapMatrix,
+  migrationHeatmapUsesMatrix,
+  migrationPairTimeBins,
   migrationTaskHeatmapGrid,
   heatmapBinRange,
 } from '../utils/migrationAnalysis.js'
 import { getPlacedCursors, getStatsRange } from '../utils/statsRange.js'
+
+const ROW_H = 16
+const CELL_MIN_W = 8
+const MATRIX_CELL_MIN_W = 8
+const LEFT_PAD = 6
+const LABEL_MIN_W = 52
+const COL_HEADER_H = 40
+const MATRIX_HEADER_FONT = '9px monospace'
+const MATRIX_HEADER_LABEL_PITCH = 12
 
 const props = defineProps({
   trace:   { type: Object, required: true },
@@ -109,7 +124,12 @@ const emit = defineEmits(['close', 'drillDown', 'clearFilter'])
 const drillLevel = ref(0)
 const drillCtx = ref(null)
 const scrollRef = ref(null)
+const viewportRef = ref(null)
+const canvasRef = ref(null)
+const hoverCell = ref(null)
 const overviewScopeCache = new Map()
+let _drawRaf = 0
+let _scrollResizeObserver = null
 
 function overviewScopeKey(lo, hi) {
   return `${lo ?? ''}:${hi ?? ''}`
@@ -135,16 +155,42 @@ const scopeSuffix = computed(() => {
   return ` (C1–C${r.nCursors}: ${formatTime(r.lo, props.trace.timeScale)} … ${formatTime(r.hi, props.trace.timeScale)})`
 })
 
-const overviewHeatmap = computed(() => {
+const usesMatrixOverview = computed(() => migrationHeatmapUsesMatrix(props.trace))
+
+const taskDrillLevel = computed(() => (usesMatrixOverview.value ? 2 : 1))
+
+const scopeLoHi = computed(() => {
   const r = statsRange.value
-  const lo = r?.lo ?? null
-  const hi = r?.hi ?? null
-  const key = overviewScopeKey(lo, hi)
+  return { lo: r?.lo ?? null, hi: r?.hi ?? null }
+})
+
+const matrixHeatmap = computed(() => {
+  const { lo, hi } = scopeLoHi.value
+  const key = `matrix:${overviewScopeKey(lo, hi)}`
+  const cached = overviewScopeCache.get(key)
+  if (cached) return cached
+  const hm = migrationHeatmapMatrix(props.trace, lo, hi)
+  overviewScopeCache.set(key, hm)
+  return hm
+})
+
+const overviewHeatmap = computed(() => {
+  const { lo, hi } = scopeLoHi.value
+  const key = `pairs:${overviewScopeKey(lo, hi)}`
   const cached = overviewScopeCache.get(key)
   if (cached) return cached
   const hm = migrationHeatmapGrid(props.trace, lo, hi)
   overviewScopeCache.set(key, hm)
   return hm
+})
+
+const pairTimeHeatmap = computed(() => {
+  const ctx = drillCtx.value
+  if (!ctx?.fromCore || !ctx?.toCore) {
+    return { pairs: [], grid: [], timeBins: 32, tMin: 0, tMax: 0, binW: 0 }
+  }
+  const { lo, hi } = scopeLoHi.value
+  return migrationPairTimeBins(props.trace, ctx.fromCore, ctx.toCore, lo, hi)
 })
 
 const taskHeatmap = computed(() => {
@@ -162,27 +208,66 @@ const taskHeatmap = computed(() => {
   )
 })
 
-const activeGrid = computed(() =>
-  drillLevel.value === 0 ? overviewHeatmap.value : taskHeatmap.value)
+const isMatrixLevel = computed(() =>
+  usesMatrixOverview.value && drillLevel.value === 0)
+
+const isPairTimeLevel = computed(() =>
+  usesMatrixOverview.value && drillLevel.value === 1)
+
+const activeGrid = computed(() => {
+  if (isMatrixLevel.value) return null
+  if (isPairTimeLevel.value) return pairTimeHeatmap.value
+  if (drillLevel.value >= taskDrillLevel.value) return taskHeatmap.value
+  return overviewHeatmap.value
+})
 
 const displayRows = computed(() => {
-  if (drillLevel.value === 0) {
-    const hm = overviewHeatmap.value
-    return hm.pairs.map((p, i) => ({
+  if (isMatrixLevel.value) {
+    const hm = matrixHeatmap.value
+    return hm.cores.map((fromCore, i) => ({
+      key: fromCore,
+      label: coreShortName(fromCore),
+      fromCore,
+      toCores: hm.cores,
+      grid: hm.grid[i],
+    }))
+  }
+  if (isPairTimeLevel.value) {
+    const hm = pairTimeHeatmap.value
+    const p = hm.pairs[0]
+    if (!p) return []
+    return [{
       key: `${p.from}→${p.to}`,
       label: p.label,
       fromCore: p.from,
       toCore: p.to,
       pairLabel: p.label,
-      grid: hm.grid[i],
+      grid: hm.grid[0] || [],
+    }]
+  }
+  if (drillLevel.value >= taskDrillLevel.value) {
+    return taskHeatmap.value.rows.map(r => ({
+      key: r.mk,
+      label: r.label,
+      mk: r.mk,
+      grid: r.grid,
     }))
   }
-  return taskHeatmap.value.rows.map(r => ({
-    key: r.mk,
-    label: r.label,
-    mk: r.mk,
-    grid: r.grid,
+  const hm = overviewHeatmap.value
+  return hm.pairs.map((p, i) => ({
+    key: `${p.from}→${p.to}`,
+    label: p.label,
+    fromCore: p.from,
+    toCore: p.to,
+    pairLabel: p.label,
+    grid: hm.grid[i],
   }))
+})
+
+const columnCount = computed(() => {
+  if (isMatrixLevel.value) return matrixHeatmap.value.cores.length
+  const hm = activeGrid.value
+  return hm?.timeBins || displayRows.value[0]?.grid?.length || 1
 })
 
 const heatMax = computed(() => {
@@ -193,26 +278,307 @@ const heatMax = computed(() => {
   return m
 })
 
-const hasData = computed(() =>
-  displayRows.value.length > 0
-  && displayRows.value.some(row => row.grid.some(v => v > 0)))
-
-const subtitle = computed(() => {
-  if (drillLevel.value === 0) {
-    return `Core-pair migrations over time bins${scopeSuffix.value}`
+const labelWidth = computed(() => {
+  let max = LABEL_MIN_W
+  for (const row of displayRows.value) {
+    max = Math.max(max, row.label.length * 7 + 10)
   }
-  const ctx = drillCtx.value
-  const scale = props.trace.timeScale
-  return `Tasks · ${ctx.pairLabel} · ${formatTime(ctx.binLo, scale)} … ${formatTime(ctx.binHi, scale)}`
+  if (isMatrixLevel.value) {
+    for (const c of matrixHeatmap.value.cores) {
+      max = Math.max(max, coreShortName(c).length * 7 + 10)
+    }
+  }
+  return max
 })
 
-const emptyText = computed(() =>
-  drillLevel.value === 0 ? 'No migrations in scope.' : 'No task migrations in this cell.')
+const rowLabelRight = computed(() => LEFT_PAD + labelWidth.value)
 
-const hintText = computed(() =>
-  drillLevel.value === 0
-    ? 'Rows: from→to core pairs · Columns: time bins · Click a cell to drill into tasks'
-    : 'Rows: tasks · Columns: sub-bins · Click a cell to zoom and filter in Task View')
+const layout = computed(() => {
+  const nBins = columnCount.value || 1
+  const rowCount = displayRows.value.length
+  const viewW = scrollRef.value?.clientWidth || viewportRef.value?.clientWidth || 480
+  const minCellW = isMatrixLevel.value ? MATRIX_CELL_MIN_W : CELL_MIN_W
+  const cellW = isMatrixLevel.value
+    ? minCellW
+    : Math.max(minCellW, (viewW - LEFT_PAD - labelWidth.value - 4) / nBins)
+  const contentW = LEFT_PAD + labelWidth.value + nBins * cellW + 8
+  const headerH = isMatrixLevel.value ? COL_HEADER_H : 0
+  const contentH = Math.max(60, headerH + rowCount * ROW_H + 8)
+  return {
+    nBins,
+    rowCount,
+    cellW,
+    contentW,
+    contentH,
+    headerH,
+    x0: LEFT_PAD + labelWidth.value,
+  }
+})
+
+const spacerStyle = computed(() => ({
+  width: `${layout.value.contentW}px`,
+  height: `${layout.value.contentH}px`,
+}))
+
+const hasData = computed(() => {
+  if (!displayRows.value.length) return false
+  if (isMatrixLevel.value) {
+    return displayRows.value.some(row => row.grid.some((v, bi) => v > 0 && row.fromCore !== row.toCores[bi]))
+  }
+  return displayRows.value.some(row => row.grid.some(v => v > 0))
+})
+
+const subtitle = computed(() => {
+  if (isMatrixLevel.value) {
+    const n = matrixHeatmap.value.cores.length
+    return `Core × core migration counts (${n} cores, row = from, column = to)${scopeSuffix.value}`
+  }
+  if (isPairTimeLevel.value) {
+    const ctx = drillCtx.value
+    return `Time bins · ${ctx?.pairLabel || 'core pair'}${scopeSuffix.value}`
+  }
+  if (drillLevel.value >= taskDrillLevel.value) {
+    const ctx = drillCtx.value
+    const scale = props.trace.timeScale
+    return `Tasks · ${ctx.pairLabel} · ${formatTime(ctx.binLo, scale)} … ${formatTime(ctx.binHi, scale)}`
+  }
+  return `Core-pair migrations over time bins${scopeSuffix.value}`
+})
+
+const emptyText = computed(() => {
+  if (isMatrixLevel.value || drillLevel.value === 0) return 'No migrations in scope.'
+  return 'No task migrations in this cell.'
+})
+
+const hintText = computed(() => {
+  if (isMatrixLevel.value) {
+    return 'Rows: source (from) core · Columns: destination (to) core · Hover a cell for the pair label · Click to open time bins'
+  }
+  if (isPairTimeLevel.value) {
+    return 'Columns: time bins · Click a cell to drill into tasks'
+  }
+  if (drillLevel.value >= taskDrillLevel.value) {
+    return 'Rows: tasks · Columns: sub-bins · Click a cell to zoom and filter in Task View'
+  }
+  return 'Rows: from→to core pairs · Columns: time bins · Click a cell to drill into tasks'
+})
+
+const hoverTitle = computed(() => {
+  const hit = hoverCell.value
+  if (!hit) return ''
+  const row = displayRows.value[hit.ri]
+  if (!row) return ''
+  const count = row.grid[hit.bi] || 0
+  return cellTitle(hit.ri, hit.bi, count, row)
+})
+
+function scheduleDraw() {
+  if (_drawRaf) return
+  _drawRaf = requestAnimationFrame(() => {
+    _drawRaf = 0
+    drawHeatmap()
+  })
+}
+
+function cellTitle(ri, bi, count, row) {
+  const scale = props.trace.timeScale
+  if (isMatrixLevel.value) {
+    const toCore = row.toCores[bi]
+    const pairLabel = `${coreShortName(row.fromCore)}→${coreShortName(toCore)}`
+    return `${pairLabel} · ${count} migration(s) · Click to open time bins`
+  }
+  const hm = activeGrid.value
+  const { binLo, binHi } = heatmapBinRange(
+    hm.tMin,
+    hm.binW,
+    hm.timeBins,
+    hm.tMax,
+    bi,
+  )
+  if (drillLevel.value >= taskDrillLevel.value) {
+    return `${row.label} · ${formatTime(binLo, scale)}–${formatTime(binHi, scale)} · ${count} migration(s) · Click to drill down`
+  }
+  return `${row.pairLabel} · ${formatTime(binLo, scale)}–${formatTime(binHi, scale)} · ${count} migration(s) · Click to drill into tasks`
+}
+
+function rowTopY(ri, scrollTop, headerH) {
+  return headerH + 4 + ri * ROW_H - scrollTop
+}
+
+function matrixColLabelStep(cellW) {
+  return Math.max(1, Math.ceil(MATRIX_HEADER_LABEL_PITCH / Math.max(cellW, 1)))
+}
+
+function drawMatrixColumnHeaders(ctx, cols, nBins, cellW, x0, scrollLeft, scrollTop, viewW, viewH, labelColor, labelRight, labelBg) {
+  if (scrollTop > COL_HEADER_H) return
+
+  const step = matrixColLabelStep(cellW)
+  const biStart = Math.max(0, Math.floor((scrollLeft - x0) / cellW))
+  const biEnd = Math.min(nBins, Math.ceil((scrollLeft + viewW - x0) / cellW) + 1)
+
+  const axisY = COL_HEADER_H - 3 - scrollTop
+  if (axisY >= -4 && axisY <= viewH) {
+    ctx.fillStyle = labelBg
+    ctx.fillRect(0, 0, labelRight, COL_HEADER_H - scrollTop)
+    ctx.font = MATRIX_HEADER_FONT
+    ctx.fillStyle = labelColor
+    ctx.textAlign = 'right'
+    ctx.textBaseline = 'middle'
+    ctx.fillText('to→', labelRight - 4, axisY)
+  }
+
+  ctx.font = MATRIX_HEADER_FONT
+  ctx.fillStyle = labelColor
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'bottom'
+
+  for (let bi = biStart; bi < biEnd; bi++) {
+    if (bi % step !== 0) continue
+    const hx = x0 + bi * cellW - scrollLeft
+    if (hx + cellW <= labelRight) continue
+    if (hx + cellW < 0 || hx > viewW) continue
+    const cx = hx + (cellW * step) / 2
+    const cy = COL_HEADER_H - 4 - scrollTop
+    if (cy < -20 || cy > viewH) continue
+
+    ctx.save()
+    ctx.translate(cx, cy)
+    ctx.rotate(-Math.PI / 2)
+    ctx.fillText(coreShortName(cols[bi]), 0, 0)
+    ctx.restore()
+  }
+}
+
+function drawHeatmap() {
+  const canvas = canvasRef.value
+  const scrollEl = scrollRef.value
+  const rows = displayRows.value
+  if (!canvas || !scrollEl || !rows.length) return
+
+  const { nBins, rowCount, cellW, x0, headerH } = layout.value
+  const viewW = scrollEl.clientWidth
+  const viewH = scrollEl.clientHeight
+  if (viewW < 1 || viewH < 1) return
+  const scrollTop = scrollEl.scrollTop
+  const scrollLeft = scrollEl.scrollLeft
+  const dpr = window.devicePixelRatio || 1
+
+  canvas.width = Math.max(1, Math.floor(viewW * dpr))
+  canvas.height = Math.max(1, Math.floor(viewH * dpr))
+  canvas.style.width = `${viewW}px`
+  canvas.style.height = `${viewH}px`
+
+  const ctx = canvas.getContext('2d')
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+  ctx.clearRect(0, 0, viewW, viewH)
+
+  const maxVal = heatMax.value
+  const labelColor = getComputedStyle(scrollEl).getPropertyValue('--fg-dim').trim() || '#888888'
+  const labelBg = getComputedStyle(scrollEl).getPropertyValue('--bg').trim() || '#1e1e1e'
+  const labelRight = rowLabelRight.value
+
+  ctx.font = '11px monospace'
+  ctx.textBaseline = 'middle'
+
+  if (isMatrixLevel.value) {
+    drawMatrixColumnHeaders(
+      ctx,
+      matrixHeatmap.value.cores,
+      nBins,
+      cellW,
+      x0,
+      scrollLeft,
+      scrollTop,
+      viewW,
+      viewH,
+      labelColor,
+      labelRight,
+      labelBg,
+    )
+  }
+
+  const riStart = Math.max(0, Math.floor((scrollTop - headerH - 4) / ROW_H))
+  const riEnd = Math.min(rowCount, Math.ceil((scrollTop + viewH - headerH - 4) / ROW_H) + 1)
+
+  for (let ri = riStart; ri < riEnd; ri++) {
+    const row = rows[ri]
+    const y = rowTopY(ri, scrollTop, headerH)
+    if (y + ROW_H < 0 || y > viewH) continue
+
+    const labelBg = getComputedStyle(scrollEl).getPropertyValue('--bg').trim() || '#1e1e1e'
+    ctx.fillStyle = labelBg
+    ctx.fillRect(0, y, labelRight, ROW_H - 1)
+
+    ctx.fillStyle = labelColor
+    ctx.textAlign = 'left'
+    ctx.fillText(row.label, LEFT_PAD, y + ROW_H * 0.45)
+
+    let x = x0 - scrollLeft
+    for (let bi = 0; bi < nBins; bi++) {
+      const v = row.grid[bi] || 0
+      const isDiag = isMatrixLevel.value && row.fromCore === row.toCores?.[bi]
+      const cellRight = x + cellW
+      if (cellRight > labelRight && x < viewW && x + cellW > 0) {
+        if (isDiag) {
+          ctx.fillStyle = 'rgba(91, 155, 213, 0.03)'
+        } else {
+          const alpha = maxVal && v ? 0.2 + 0.7 * (v / maxVal) : 0.3
+          ctx.fillStyle = v
+            ? `rgba(91, 155, 213, ${alpha})`
+            : 'rgba(91, 155, 213, 0.06)'
+        }
+        ctx.fillRect(x, y, Math.max(1, cellW - 1), ROW_H - 3)
+      }
+      x += cellW
+    }
+  }
+}
+
+function hitTestCanvas(clientX, clientY) {
+  const canvas = canvasRef.value
+  const scrollEl = scrollRef.value
+  if (!canvas || !scrollEl) return null
+
+  const rect = canvas.getBoundingClientRect()
+  const x = clientX - rect.left + scrollEl.scrollLeft
+  const y = clientY - rect.top + scrollEl.scrollTop
+  const { nBins, rowCount, cellW, x0, headerH } = layout.value
+
+  if (y < headerH + 4) return null
+  const ri = Math.floor((y - headerH - 4) / ROW_H)
+  if (ri < 0 || ri >= rowCount) return null
+  if (x < x0) return null
+  const bi = Math.floor((x - x0) / cellW)
+  if (bi < 0 || bi >= nBins) return null
+  const row = displayRows.value[ri]
+  if (!row) return null
+  if (isMatrixLevel.value && row.fromCore === row.toCores[bi]) return null
+  const count = row.grid[bi] || 0
+  if (count <= 0) return null
+  return { ri, bi }
+}
+
+function onCanvasWheel(e) {
+  const el = scrollRef.value
+  if (!el) return
+  el.scrollTop += e.deltaY
+  el.scrollLeft += e.deltaX
+  scheduleDraw()
+}
+
+function onCanvasMove(e) {
+  const hit = hitTestCanvas(e.clientX, e.clientY)
+  hoverCell.value = hit
+  if (canvasRef.value) {
+    canvasRef.value.style.cursor = hit ? 'pointer' : 'default'
+  }
+}
+
+function onCanvasClick(e) {
+  const hit = hitTestCanvas(e.clientX, e.clientY)
+  if (!hit) return
+  onCellClick(hit.ri, hit.bi)
+}
 
 function scrollHeatmapToTop() {
   nextTick(() => {
@@ -221,7 +587,20 @@ function scrollHeatmapToTop() {
       el.scrollTop = 0
       el.scrollLeft = 0
     }
+    scheduleDraw()
   })
+}
+
+function goBack() {
+  if (drillLevel.value <= 0) return
+  drillLevel.value -= 1
+  if (drillLevel.value === 0) {
+    drillCtx.value = null
+  } else if (drillLevel.value === 1 && usesMatrixOverview.value) {
+    const { fromCore, toCore, pairLabel } = drillCtx.value || {}
+    drillCtx.value = { fromCore, toCore, pairLabel }
+  }
+  scrollHeatmapToTop()
 }
 
 function goLevel0() {
@@ -234,34 +613,38 @@ function onShowAll() {
   emit('clearFilter')
 }
 
-function cellColor(v) {
-  if (!v) return 'rgba(91, 155, 213, 0.06)'
-  const alpha = heatMax.value ? 0.2 + 0.7 * (v / heatMax.value) : 0.3
-  return `rgba(91, 155, 213, ${alpha})`
-}
-
-function cellTitle(ri, bi, count, row) {
-  const hm = activeGrid.value
-  const { binLo, binHi } = heatmapBinRange(
-    hm.tMin,
-    hm.binW,
-    hm.timeBins,
-    hm.tMax,
-    bi,
-  )
-  const scale = props.trace.timeScale
-  if (drillLevel.value === 0) {
-    return `${row.pairLabel} · ${formatTime(binLo, scale)}–${formatTime(binHi, scale)} · ${count} migration(s) · Click to drill into tasks`
-  }
-  return `${row.label} · ${formatTime(binLo, scale)}–${formatTime(binHi, scale)} · ${count} migration(s) · Click to drill down`
-}
-
 function onCellClick(ri, bi) {
   const row = displayRows.value[ri]
   const count = row.grid[bi]
   if (!row || count <= 0) return
+
+  if (isMatrixLevel.value) {
+    const toCore = row.toCores[bi]
+    drillCtx.value = {
+      fromCore: row.fromCore,
+      toCore,
+      pairLabel: `${coreShortName(row.fromCore)}→${coreShortName(toCore)}`,
+    }
+    drillLevel.value = 1
+    scrollHeatmapToTop()
+    return
+  }
+
   const hm = activeGrid.value
   const { binLo, binHi } = heatmapBinRange(hm.tMin, hm.binW, hm.timeBins, hm.tMax, bi)
+
+  if (isPairTimeLevel.value) {
+    drillCtx.value = {
+      ...drillCtx.value,
+      binLo,
+      binHi,
+      parentBinIndex: bi,
+      parentTimeBins: hm.timeBins,
+    }
+    drillLevel.value = 2
+    scrollHeatmapToTop()
+    return
+  }
 
   if (drillLevel.value === 0) {
     drillCtx.value = {
@@ -290,6 +673,32 @@ function onCellClick(ri, bi) {
     count,
   })
 }
+
+watch([displayRows, activeGrid, labelWidth], () => {
+  nextTick(() => scheduleDraw())
+})
+
+watch(hasData, (ready) => {
+  if (ready) nextTick(() => scheduleDraw())
+})
+
+onMounted(() => {
+  nextTick(() => {
+    scheduleDraw()
+    const el = viewportRef.value || scrollRef.value
+    if (el && typeof ResizeObserver !== 'undefined') {
+      _scrollResizeObserver = new ResizeObserver(() => scheduleDraw())
+      _scrollResizeObserver.observe(el)
+    }
+  })
+  window.addEventListener('resize', scheduleDraw)
+})
+
+onBeforeUnmount(() => {
+  if (_drawRaf) cancelAnimationFrame(_drawRaf)
+  window.removeEventListener('resize', scheduleDraw)
+  _scrollResizeObserver?.disconnect()
+})
 </script>
 
 <style scoped>
@@ -309,7 +718,10 @@ function onCellClick(ri, bi) {
   border-radius: 8px;
   min-width: 420px;
   max-width: min(92vw, 720px);
+  height: 85vh;
   max-height: 85vh;
+  min-height: 320px;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   padding: 12px 14px;
@@ -320,6 +732,7 @@ function onCellClick(ri, bi) {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  flex-shrink: 0;
 }
 .heatmap-back {
   border: 1px solid var(--border);
@@ -350,68 +763,52 @@ function onCellClick(ri, bi) {
   margin: 8px 0 6px;
   font-size: 12px;
   color: var(--fg-dim);
+  flex-shrink: 0;
 }
 .heatmap-empty {
   padding: 24px 0;
   text-align: center;
   color: var(--fg-dim);
   font-size: 13px;
+  flex-shrink: 0;
+}
+.heatmap-viewport {
+  flex: 1 1 0;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
 }
 .heatmap-scroll {
+  width: 100%;
+  height: 100%;
   overflow: auto;
-  flex: 1;
-  min-height: 0;
-  max-height: 60vh;
+  -webkit-overflow-scrolling: touch;
 }
-.heatmap-body {
-  min-width: max-content;
-  padding: 4px 0;
+.heatmap-spacer {
+  pointer-events: none;
+  display: block;
 }
-.hm-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 16px;
-  margin-bottom: 2px;
+.heatmap-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 1;
+  pointer-events: auto;
 }
-.hm-label {
-  flex: 0 0 auto;
-  min-width: 3.5em;
+.heatmap-cell-tip {
+  margin: 4px 0 0;
   font-size: 11px;
   color: var(--fg-dim);
-  text-align: left;
-  white-space: nowrap;
-  padding-left: 2px;
-}
-.hm-cells {
-  display: flex;
-  flex: 1;
-  gap: 1px;
-  min-width: 0;
-}
-.hm-cell {
-  flex: 1 1 8px;
-  min-width: 6px;
-  height: 13px;
-  border-radius: 1px;
-  border: none;
-  padding: 0;
-  margin: 0;
-}
-.hm-cell-active {
-  cursor: pointer;
-}
-.hm-cell-active:hover {
-  outline: 1px solid rgba(255, 255, 255, 0.45);
-  outline-offset: 0;
-}
-.hm-cell:disabled {
-  cursor: default;
+  min-height: 1.2em;
+  flex-shrink: 0;
 }
 .heatmap-hint {
   margin: 8px 0 0;
   font-size: 11px;
   color: var(--fg-dim);
+  flex-shrink: 0;
 }
 .heatmap-filter-bar {
   display: flex;
@@ -424,6 +821,7 @@ function onCellClick(ri, bi) {
   background: rgba(91, 155, 213, 0.12);
   border: 1px solid rgba(91, 155, 213, 0.35);
   font-size: 12px;
+  flex-shrink: 0;
 }
 .heatmap-show-all {
   flex-shrink: 0;

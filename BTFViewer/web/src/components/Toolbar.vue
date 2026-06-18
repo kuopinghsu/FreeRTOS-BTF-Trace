@@ -19,8 +19,30 @@
 
     <div class="tb-sep" />
 
-    <!-- File open -->
+    <!-- File open: label+input on file:// (last folder); FSA on http(s)/localhost -->
+    <label
+      v-if="!useFsaOpen"
+      class="tb-btn file-btn"
+      title="Open BTF file"
+    >
+      <svg
+        viewBox="0 0 16 16"
+        width="16"
+        height="16"
+        fill="currentColor"
+      >
+        <path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h2.764c.958 0 1.76.56 2.311 1.184C7.985 3.648 8.48 4 9 4h4.5A1.5 1.5 0 0 1 15 5.5v7a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5v-9z" />
+      </svg>
+      Open
+      <input
+        type="file"
+        accept=".btf"
+        style="display:none"
+        @change="onFileChange"
+      >
+    </label>
     <button
+      v-else
       class="tb-btn file-btn"
       title="Open BTF file"
       @click="onOpenClick"
@@ -35,13 +57,6 @@
       </svg>
       Open
     </button>
-    <input
-      ref="fileInputEl"
-      type="file"
-      accept=".btf"
-      style="display:none"
-      @change="onFileChange"
-    >
 
     <button
       class="tb-btn"
@@ -474,7 +489,7 @@ const emit = defineEmits([
   'showHelp', 'showAbout', 'showSettings', 'showHeatmap', 'clearTaskFilter', 'file-error',
 ])
 
-const fileInputEl = ref(null)
+const useFsaOpen = supportsFileHandles()
 
 const zoom1to1Title = computed(() => {
   const tspx = getTimelineLayout().timescalePerPxDefault
@@ -483,20 +498,15 @@ const zoom1to1Title = computed(() => {
 })
 
 async function onOpenClick() {
-  if (supportsFileHandles()) {
-    const file = await pickAndReadBtf()
-    if (file) {
-      emit('trace-reading', { name: file.name })
-      try {
-        const text = await file.text()
-        emit('trace-loaded', { text, name: file.name })
-      } catch {
-        emit('file-error', `Failed to read "${file.name}"`)
-      }
-    }
-    return
+  const file = await pickAndReadBtf()
+  if (!file) return
+  emit('trace-reading', { name: file.name })
+  try {
+    const text = await file.text()
+    emit('trace-loaded', { text, name: file.name })
+  } catch {
+    emit('file-error', `Failed to read "${file.name}"`)
   }
-  fileInputEl.value?.click()
 }
 
 function onFileChange(e) {

@@ -180,6 +180,44 @@ export function findExtremeInterArrivalSegment(segs, lo, hi, findMax = true) {
   return bestSeg
 }
 
+function _gapBeforeSegment(segs, seg, kind) {
+  if (!segs?.length || !seg) return null
+  const ordered = [...segs].sort((a, b) => a.start - b.start)
+  const idx = ordered.findIndex(s => s === seg
+    || (s.start === seg.start && s.end === seg.end && s.task === seg.task))
+  if (idx <= 0) return null
+  const prev = ordered[idx - 1]
+  const nxt = ordered[idx]
+  if (kind === 'inter') return nxt.start - prev.start
+  return nxt.start - prev.end
+}
+
+/** Annotation note for Min/Max table navigation to an extreme segment. */
+export function extremeSegmentNote(trace, mk, kind, seg, findMax) {
+  if (!seg || !trace) return ''
+  const repr = taskReprGet(trace, mk) || mk
+  const name = taskDisplayName(repr)
+  const fmt = v => formatTime(v, trace.timeScale)
+  const tag = findMax ? 'max' : 'min'
+  if (kind === 'exec') {
+    const d = seg.end - seg.start
+    return `${name} ${findMax ? 'WCET' : 'BCET'}: ${fmt(d)} at ${fmt(seg.start)}`
+  }
+  const segs = trace.segByMergeKey?.get(mk) || []
+  const gap = _gapBeforeSegment(segs, seg, kind)
+  const gapStr = gap != null ? fmt(gap) : '?'
+  if (kind === 'block') {
+    return `${name} ${tag} blocking: ${gapStr} before ${fmt(seg.start)}`
+  }
+  if (kind === 'inter') {
+    return `${name} ${tag} inter-arrival: ${gapStr} at ${fmt(seg.start)}`
+  }
+  if (kind === 'response') {
+    return `${name} ${tag} response: ${gapStr} at ${fmt(seg.start)}`
+  }
+  return `${name} at ${fmt(seg.start)}`
+}
+
 /** Build multi-line tooltip text for a segment hover. */
 export function segmentTooltipLines(trace, seg, formatTimeFn, taskDisplayNameFn) {
   if (!seg) return []
@@ -217,6 +255,9 @@ export function segmentTooltipLines(trace, seg, formatTimeFn, taskDisplayNameFn)
 
 /** @typedef {{ mk: string, preemptor: string, timeNs: number, durationNs: number, payload: object }} PreemptionEvent */
 
+/** Max victim/preemptor pairs shown in the statistics table (full data may be larger). */
+export const PREEMPTION_CHAIN_MAX_ROWS = 2000
+
 /** @returns {PreemptionEvent[]} */
 export function collectPreemptionEvents(trace, lo, hi) {
   const coreSegs = trace?.coreSegs
@@ -245,31 +286,33 @@ export function collectPreemptionEvents(trace, lo, hi) {
         if (!segFullyInRange(prev, lo, hi) || !segFullyInRange(nxt, lo, hi)) continue
       }
 
-      for (const [core, coreSegList] of coreSegs) {
-        const starts = coreStarts.get(core)
-        const i0 = bisectRight(starts, gapEnd - 1)
-        const iStart = Math.max(0, i0 - 1)
-        for (let j = iStart; j < coreSegList.length; j++) {
-          const cs = coreSegList[j]
-          if (cs.start >= gapEnd) break
-          if (cs.end <= gapStart) continue
-          const preemptorMk = taskMergeKey(cs.task)
-          if (preemptorMk === mk) continue
-          const preRepr = taskReprGet(trace, preemptorMk) || cs.task
-          const { name: preName } = parseTaskName(preRepr)
-          if (isIdleTaskName(preName)) continue
-          const ovLo = Math.max(cs.start, gapStart)
-          const ovHi = Math.min(cs.end, gapEnd)
-          const overlap = ovHi - ovLo
-          if (overlap <= 0) continue
-          events.push({
-            mk,
-            preemptor: taskDisplayName(preRepr),
-            timeNs: ovLo,
-            durationNs: overlap,
-            payload: cs,
-          })
-        }
+      // Preemptors ran on the same core the victim was on when descheduled (prev slice).
+      const core = prev.core
+      const coreSegList = coreSegs.get(core)
+      if (!coreSegList) continue
+      const starts = coreStarts.get(core)
+      const i0 = bisectRight(starts, gapEnd - 1)
+      const iStart = Math.max(0, i0 - 1)
+      for (let j = iStart; j < coreSegList.length; j++) {
+        const cs = coreSegList[j]
+        if (cs.start >= gapEnd) break
+        if (cs.end <= gapStart) continue
+        const preemptorMk = taskMergeKey(cs.task)
+        if (preemptorMk === mk) continue
+        const preRepr = taskReprGet(trace, preemptorMk) || cs.task
+        const { name: preName } = parseTaskName(preRepr)
+        if (isIdleTaskName(preName)) continue
+        const ovLo = Math.max(cs.start, gapStart)
+        const ovHi = Math.min(cs.end, gapEnd)
+        const overlap = ovHi - ovLo
+        if (overlap <= 0) continue
+        events.push({
+          mk,
+          preemptor: taskDisplayName(preRepr),
+          timeNs: ovLo,
+          durationNs: overlap,
+          payload: cs,
+        })
       }
     }
   }
@@ -307,7 +350,7 @@ export function preemptionChainRows(trace, lo, hi) {
       const total = samples.reduce((a, b) => a + b, 0)
       const count = samples.length
       const avg = Math.round(total / count)
-      const max = Math.max(...samples)
+      const max = maxNs(samples)
       rows.push({
         mk,
         victim: victimDisp,
@@ -324,6 +367,9 @@ export function preemptionChainRows(trace, lo, hi) {
   }
 
   rows.sort((a, b) => b.totalNs - a.totalNs || a.victim.localeCompare(b.victim))
+  if (rows.length > PREEMPTION_CHAIN_MAX_ROWS) {
+    return rows.slice(0, PREEMPTION_CHAIN_MAX_ROWS)
+  }
   return rows
 }
 
