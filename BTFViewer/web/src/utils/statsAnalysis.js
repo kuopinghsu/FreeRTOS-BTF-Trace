@@ -212,9 +212,6 @@ export function extremeSegmentNote(trace, mk, kind, seg, findMax) {
   if (kind === 'inter') {
     return `${name} ${tag} inter-arrival: ${gapStr} at ${fmt(seg.start)}`
   }
-  if (kind === 'response') {
-    return `${name} ${tag} response: ${gapStr} at ${fmt(seg.start)}`
-  }
   return `${name} at ${fmt(seg.start)}`
 }
 
@@ -379,95 +376,4 @@ export function preemptionChainPlotPoints(trace, victimMk, preemptorDisp, lo, hi
       yValue: ev.durationNs,
       payload: ev.payload,
     }))
-}
-
-/** Plot points for response time (resume time vs off-CPU gap). */
-export function responseTimePlotPoints(segs, lo, hi) {
-  if (!segs || segs.length < 2) return []
-  const ordered = [...segs].sort((a, b) => a.start - b.start)
-  const points = []
-  for (let i = 1; i < ordered.length; i++) {
-    const prev = ordered[i - 1]
-    const nxt = ordered[i]
-    if (lo != null && hi != null) {
-      if (!segFullyInRange(prev, lo, hi) || !segFullyInRange(nxt, lo, hi)) continue
-    }
-    const gap = nxt.start - prev.end
-    if (gap > 0) {
-      points.push({ xNs: nxt.start, yValue: gap, payload: nxt })
-    }
-  }
-  return points
-}
-
-/**
- * Response Time Analysis.
- * Response time = time from end of one slice to start of the next (off-CPU gap).
- *
- * @param {object} trace
- * @param {number|null} lo
- * @param {number|null} hi
- * @returns {Array<{mk: string, name: string, count: number,
- *                  minNs: number, avgNs: number, maxNs: number, p95Ns: number,
- *                  min: string, avg: string, max: string, p95: string,
- *                  worstSeg: object|null, bestSeg: object|null}>}
- */
-export function responseTimeRows(trace, lo, hi) {
-  const scale = trace?.timeScale || 'ns'
-  if (!trace?.segByMergeKey) return []
-
-  const rows = []
-
-  for (const [mk, segs] of trace.segByMergeKey) {
-    if (!segs || segs.length < 2) continue
-    const repr = taskReprGet(trace, mk) || mk
-    const { name } = parseTaskName(repr)
-    if (isIdleTaskName(name) || name === 'TICK') continue
-
-    const ordered = [...segs].sort((a, b) => a.start - b.start)
-    const samples = []
-    let worstSeg = null
-    let bestSeg = null
-    let worstRt = 0
-    let bestRt = null
-
-    for (let i = 1; i < ordered.length; i++) {
-      const prev = ordered[i - 1]
-      const nxt = ordered[i]
-      if (lo != null && hi != null) {
-        if (!segFullyInRange(prev, lo, hi) || !segFullyInRange(nxt, lo, hi)) continue
-      }
-      const rt = nxt.start - prev.end
-      if (rt <= 0) continue
-      samples.push(rt)
-      if (rt > worstRt) { worstRt = rt; worstSeg = nxt }
-      if (bestRt == null || rt < bestRt) { bestRt = rt; bestSeg = nxt }
-    }
-
-    if (samples.length === 0) continue
-    const sorted = [...samples].sort((a, b) => a - b)
-    const n = sorted.length
-    const sum = sorted.reduce((a, b) => a + b, 0)
-    const p95Idx = Math.min(n - 1, Math.ceil(n * 0.95) - 1)
-    const avgNs = Math.round(sum / n)
-
-    rows.push({
-      mk,
-      name: taskDisplayName(repr),
-      count: n,
-      minNs: sorted[0],
-      avgNs,
-      maxNs: sorted[n - 1],
-      p95Ns: sorted[p95Idx],
-      min: formatTime(sorted[0], scale),
-      avg: formatTime(avgNs, scale),
-      max: formatTime(sorted[n - 1], scale),
-      p95: formatTime(sorted[p95Idx], scale),
-      worstSeg,
-      bestSeg,
-    })
-  }
-
-  rows.sort((a, b) => b.maxNs - a.maxNs)
-  return rows
 }

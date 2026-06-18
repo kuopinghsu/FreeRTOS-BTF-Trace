@@ -902,8 +902,6 @@ def _format_plot_point_note(
             return f"{name}: {fmt(y_ns)} blocked before {fmt(x_ns)}"
         if kind == "inter":
             return f"{name}: {fmt(y_ns)} inter-arrival at {fmt(x_ns)}"
-        if kind == "response":
-            return f"{name}: {fmt(y_ns)} response at {fmt(x_ns)}"
         if kind == "preempt":
             pre = preemptor or "?"
             return f"{name} ← {pre}: {fmt(y_ns)} at {fmt(x_ns)}"
@@ -947,8 +945,6 @@ def _format_extreme_segment_note(
         return f"{name} {label} blocking: {gap_s} before {fmt(seg.start)}"
     if kind == "inter":
         return f"{name} {label} inter-arrival: {gap_s} at {fmt(seg.start)}"
-    if kind == "response":
-        return f"{name} {label} response: {gap_s} at {fmt(seg.start)}"
     return f"{name} at {fmt(seg.start)}"
 
 @dataclass
@@ -1461,107 +1457,6 @@ def _preemption_chain_plot_points(
         for mk, pre_disp, t, d, seg in _collect_preemption_events(trace, lo, hi)
         if mk == victim_mk and pre_disp == preemptor_disp
     ]
-
-def _response_time_plot_points(
-    segs: list,
-    lo: Optional[int] = None,
-    hi: Optional[int] = None,
-) -> List[Tuple[int, int, "TaskSegment"]]:
-    """Scatter points for response time: (resume_ns, gap_ns, resume_seg)."""
-    if len(segs) < 2:
-        return []
-    ordered = sorted(segs, key=lambda s: s.start)
-    pts: List[Tuple[int, int, "TaskSegment"]] = []
-    for i in range(1, len(ordered)):
-        prev, nxt = ordered[i - 1], ordered[i]
-        if lo is not None and hi is not None:
-            if not (_seg_fully_in_range(prev, lo, hi) and _seg_fully_in_range(nxt, lo, hi)):
-                continue
-        gap = nxt.start - prev.end
-        if gap > 0:
-            pts.append((nxt.start, gap, nxt))
-    return pts
-
-def _response_time_rows(
-    trace: "BtfTrace",
-    lo: Optional[int] = None,
-    hi: Optional[int] = None,
-) -> List[tuple]:
-    """Response time = time from end of one slice to start of the next (= blocking time).
-
-    Returns:
-        (mk, disp_name, count, min_str, avg_str, max_str, p95_str,
-         worst_resume_ns, worst_seg)  — last two for jump-to navigation.
-
-    sorted by max response time descending.
-    """
-    scale = trace.time_scale
-    rows = []
-    for mk, segs in trace.seg_map_by_merge_key.items():
-        if len(segs) < 2:
-            continue
-        raw = trace.task_repr.get(mk, mk)
-        _, _, tname = _parse_task_name(raw)
-        if _is_idle_task_name(tname) or tname == "TICK":
-            continue
-
-        ordered = sorted(segs, key=lambda s: s.start)
-        samples: List[int] = []
-        best_seg: Optional["TaskSegment"] = None
-        worst_seg: Optional["TaskSegment"] = None
-        for i in range(1, len(ordered)):
-            prev, nxt = ordered[i - 1], ordered[i]
-            if lo is not None and hi is not None:
-                if not (_seg_fully_in_range(prev, lo, hi) and _seg_fully_in_range(nxt, lo, hi)):
-                    continue
-            rt = nxt.start - prev.end
-            if rt <= 0:
-                continue
-            samples.append(rt)
-
-        if len(samples) < 1:
-            continue
-
-        worst_rt = 0
-        best_rt: Optional[int] = None
-        worst_seg = best_seg = None
-        for i in range(1, len(ordered)):
-            prev, nxt = ordered[i - 1], ordered[i]
-            if lo is not None and hi is not None:
-                if not (_seg_fully_in_range(prev, lo, hi) and _seg_fully_in_range(nxt, lo, hi)):
-                    continue
-            rt = nxt.start - prev.end
-            if rt <= 0:
-                continue
-            if rt > worst_rt:
-                worst_rt = rt
-                worst_seg = nxt
-            if best_rt is None or rt < best_rt:
-                best_rt = rt
-                best_seg = nxt
-
-        summary = None
-        if samples:
-            vals = sorted(samples)
-            n = len(vals)
-            p95_idx = min(n - 1, math.ceil(n * 0.95) - 1)
-            avg_ns = int(round(sum(vals) / n))
-            summary = (
-                _format_time(vals[0], scale),
-                _format_time(avg_ns, scale),
-                _format_time(vals[-1], scale),
-                _format_time(vals[p95_idx], scale),
-            )
-
-        if summary is None:
-            continue
-
-        mn, avg, mx, p95 = summary
-        rows.append((mk, _task_display_name(raw), len(samples),
-                     mn, avg, mx, p95, best_seg, worst_seg))
-
-    rows.sort(key=lambda r: -_time_label_sort_key(r[5]))
-    return rows
 
 def _tick_health_report(trace: "BtfTrace",
                         lo: Optional[int] = None, hi: Optional[int] = None) -> dict:
@@ -11430,7 +11325,7 @@ class _StatsPanel(QWidget):
         self._is_dark: bool = True
         self._plot_dlg = None   # keep reference to prevent GC
         self._plot_mk: Optional[str] = None
-        self._plot_kind: Optional[str] = None   # "exec", "block", "inter", "response", "preempt", "interval"
+        self._plot_kind: Optional[str] = None   # "exec", "block", "inter", "preempt", "interval"
         self._plot_preemptor: Optional[str] = None
         self._plot_interval_id: Optional[str] = None
         self._trace: Optional["BtfTrace"] = None
@@ -11446,7 +11341,6 @@ class _StatsPanel(QWidget):
             "health": False,
             "preemption": False,
             "intervals": False,
-            "response": False,
         }
         self._section_headers: Dict[str, QPushButton] = {}
         self._section_bodies: Dict[str, QWidget] = {}
@@ -11458,7 +11352,6 @@ class _StatsPanel(QWidget):
             "inter": STATS_TABLE_DEFAULT_H,
             "preemption": STATS_TABLE_MIG_DEFAULT_H,
             "intervals": STATS_TABLE_DEFAULT_H,
-            "response": STATS_TABLE_DEFAULT_H,
         }
         self._table_grips: List[_StatsSectionGrip] = []
         outer = QVBoxLayout(self)
@@ -11865,9 +11758,6 @@ class _StatsPanel(QWidget):
                 pts.append((starts[i], starts[i] - starts[i - 1],
                             start_to_seg.get(starts[i])))
             title = f"{name} — Inter-Arrival Time{scope}"
-        elif kind == "response":
-            pts = _response_time_plot_points(segs, lo, hi)
-            title = f"{name} — Response Time{scope}"
         elif kind == "preempt":
             preemptor = self._plot_preemptor
             if not preemptor:
@@ -12673,7 +12563,6 @@ class _StatsPanel(QWidget):
         block_rows = self._blocking_time_rows_export(trace, lo, hi)
         mig_rows = _migration_rows(trace, lo, hi)
         preempt_rows, _ = _preemption_chain_rows(trace, lo, hi)
-        resp_rows = _response_time_rows(trace, lo, hi)
         interval_rows = _interval_stats_rows(trace, lo, hi)
         ctx_count, core_gaps = _scheduling_stats(trace, lo, hi)
         tick = _tick_health_report(trace, lo, hi)
@@ -12880,7 +12769,6 @@ class _StatsPanel(QWidget):
             <li><strong>Blocking Time:</strong> Off-CPU gap between the end of one slice and the start of the next for the same task. High values may indicate preemption, blocking on a resource, or long scheduling delays.</li>
       <li><strong>Preemption Chain Analysis:</strong> For each blocking gap of a victim task, identifies which task ran on the same core during that gap. High counts or long totals point to recurring preemption bottlenecks.</li>
       <li><strong>Interval Analysis:</strong> Paired interval_start / interval_stop spans per user-defined id (count, min/avg/max/p95 duration). See viewer docs for pairing limitations when the same id is used from multiple concurrent tasks.</li>
-      <li><strong>Response Time Analysis:</strong> Time from the end of a task slice to the start of its next slice (= off-CPU blocking gap). Max and p95 values indicate worst-case scheduling latency for that task.</li>
             <li><strong>Context switches:</strong> Count of segment boundaries on all cores whose start time falls inside the statistics scope.</li>
             <li><strong>Min (Minimum):</strong> The fastest execution time recorded. It represents the best-case scenario under zero system load.</li>
             <li><strong>Max (Maximum):</strong> The slowest execution time recorded. It identifies worst-case bottlenecks, spikes, or resource contention.</li>
@@ -12931,11 +12819,6 @@ class _StatsPanel(QWidget):
     <tbody>{"".join(
         f"<tr><td>{_esc(r[0])}</td><td>{_esc(r[1])}</td><td>{r[2]}</td><td>{_esc(r[3])}</td><td>{_esc(r[4])}</td><td>{_esc(r[5])}</td><td>{_esc(r[6])}</td></tr>"
         for r in interval_rows) or "<tr><td colspan=\"7\" class=\"empty\">No interval data</td></tr>"}</tbody></table></section>
-    <section class=\"report-card\"><h2>Response Time Analysis{_esc(scope_title)}</h2>
-    <table><thead><tr><th>Task</th><th>Events</th><th>Min</th><th>Avg</th><th>Max</th><th>p95</th></tr></thead>
-    <tbody>{"".join(
-        f"<tr><td>{_esc(r[1])}</td><td>{r[2]}</td><td>{_esc(r[3])}</td><td>{_esc(r[4])}</td><td>{_esc(r[5])}</td><td>{_esc(r[6])}</td></tr>"
-        for r in resp_rows) or "<tr><td colspan=\"6\" class=\"empty\">No data</td></tr>"}</tbody></table></section>
         <div class=\"report-foot\">Generated by BTF Viewer</div>
     </div>
 </body>
@@ -13002,7 +12885,6 @@ class _StatsPanel(QWidget):
         block_rows = self._blocking_time_rows_export(trace, lo, hi)
         mig_rows = _migration_rows(trace, lo, hi)
         preempt_rows_csv, _ = _preemption_chain_rows(trace, lo, hi)
-        resp_rows_csv = _response_time_rows(trace, lo, hi)
         interval_rows_csv = _interval_stats_rows(trace, lo, hi)
         ctx_count, core_gaps = _scheduling_stats(trace, lo, hi)
         tick = _tick_health_report(trace, lo, hi)
@@ -13126,15 +13008,6 @@ class _StatsPanel(QWidget):
                         writer.writerow([iid, label, count, _us(mn), _us(avg), _us(mx), _us(p95)])
                 else:
                     writer.writerow(["No interval data", "", "", "", "", "", ""])
-
-                writer.writerow([])
-                writer.writerow([f"Response Time Analysis{scope_suffix}"])
-                writer.writerow(["Task", "Events", "Min", "Avg", "Max", "p95"])
-                if resp_rows_csv:
-                    for _mk, name, count, mn, avg, mx, p95, _bs, _ws in resp_rows_csv:
-                        writer.writerow([name, count, _us(mn), _us(avg), _us(mx), _us(p95)])
-                else:
-                    writer.writerow(["No data", "", "", "", "", ""])
 
             wnd = self.window()
             if isinstance(wnd, QMainWindow):
@@ -13447,34 +13320,6 @@ class _StatsPanel(QWidget):
             f"Interval Analysis{scope}",
             _fs,
             _populate_intervals,
-        )
-
-        # -- Response Time Analysis -------------------------------------------
-        _resp_rows = _response_time_rows(trace, lo, hi)
-        empty_resp = ("No response time data in cursor range" if scope
-                      else "Need at least 2 activations per task")
-
-        def _populate_resp(blay: QVBoxLayout) -> None:
-            blay.addWidget(self._build_stats_table(
-                [(r[0], r[1], r[2], r[3], r[4], r[5], r[6]) for r in _resp_rows],
-                _fs,
-                empty_resp,
-                count_header="Events",
-                section_id="response",
-                on_row_click=lambda mk: self._open_plot(trace, mk, "response"),
-                on_min_click=lambda mk: self._activate_extreme_segment(
-                    trace, mk, "response",
-                    next((r[7] for r in _resp_rows if r[0] == mk), None), False),
-                on_max_click=lambda mk: self._activate_extreme_segment(
-                    trace, mk, "response",
-                    next((r[8] for r in _resp_rows if r[0] == mk), None), True),
-            ))
-
-        self._add_collapsible_section(
-            "response",
-            f"Response Time Analysis{scope}",
-            _fs,
-            _populate_resp,
         )
 
         self._ilay.addStretch()

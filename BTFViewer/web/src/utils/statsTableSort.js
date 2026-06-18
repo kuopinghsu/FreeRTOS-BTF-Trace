@@ -106,15 +106,6 @@ export const PREEMPTION_SORT_ACCESSORS = {
   max: r => r.maxNs,
 }
 
-export const RESPONSE_SORT_ACCESSORS = {
-  task: r => r.name.toLowerCase(),
-  count: r => r.count,
-  min: r => r.minNs,
-  avg: r => r.avgNs,
-  max: r => r.maxNs,
-  p95: r => r.p95Ns,
-}
-
 export const INTERVAL_SORT_ACCESSORS = {
   id: r => {
     const n = parseInt(r.id, 10)

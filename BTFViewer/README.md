@@ -26,14 +26,14 @@ A PyQt5-based interactive visualiser for FreeRTOS context-switch traces in **Bes
 - **Measurement cursors** — Desktop and Web support 2–8 cursors (default: 4); configurable in Settings
 - **Trace compare** — with 2+ tabs open, **Trace Compare…** in the Statistics panel diffs **Summary**, **Top Tasks**, and **Core Migrations** side-by-side (Desktop + Web). Optional **Limit to each tab's cursor range** compares metrics within C1–Cn when 2+ cursors are placed on each trace
 - **Core migration analysis** — detect tasks that run on multiple cores; **Core Migrations** stats table (ping-pong, STI correlation, gap-after vs other gaps), **clickable two-level Migration heatmap** (core-pair overview → per-task sub-bins → timeline drill-down), **Migrated tasks only** legend filter, toolbar **All tasks** reset, and Find **Migrations** mode (Desktop)
-- **Cursor-scoped statistics** — with 2+ cursors, the Statistics panel can limit all metrics (CPU%, execution slices, blocking time, inter-arrival, **response time**, **preemption chain**, scheduling summary, exports, and charts) to the window from C1 through the last cursor; toggle **Limit to cursor range (C1–Cn)** (Desktop + Web)
+- **Cursor-scoped statistics** — with 2+ cursors, the Statistics panel can limit all metrics (CPU%, execution slices, blocking time, inter-arrival, **preemption chain**, scheduling summary, exports, and charts) to the window from C1 through the last cursor; toggle **Limit to cursor range (C1–Cn)** (Desktop + Web)
 - **Cursor range summary** — with 2+ cursors, Desktop also shows a quick min/max/avg segment summary in the status bar; Web shows range stats in the **Cursors** panel
 - **Task highlight** — hover or click any task label or Legend row to highlight all its segments
 - **Dockable Legend panel** — colour swatches for every task, with a search box, **Migrated tasks only** filter, a **heatmap filter banner** (when drilled from the heatmap), and the same highlight interaction
-- **Dockable Statistics panel** — per-core CPU utilisation, top tasks, scheduling summary (context switches, core-gap avg/max), trace health (TICK), and collapsible metric tables including **Response Time**, **Preemption Chain**, and **Interval Analysis**
+- **Dockable Statistics panel** — per-core CPU utilisation, top tasks, scheduling summary (context switches, core-gap avg/max), trace health (TICK), and collapsible metric tables including **Preemption Chain** and **Interval Analysis**
 - **Tag View** — inspect tag channels/events (`tag_event`, `tag0_event` … `tag7_event`) alongside task/core activity
-- **Metrics tables** — Execution Time Per Slice, **Blocking Time** (off-CPU gap between activations), **Inter-Arrival**, **Response Time** (scheduling latency between slices), **Preemption Chain** (which tasks preempted whom), and **Interval Analysis** (paired `interval_start` / `interval_stop` spans); click **Min** / **Max** (dotted underline) to jump and add an annotation at the BCET / WCET slice or shortest / longest gap (Desktop + Web)
-- **Metrics distribution charts** — click any row in Execution Time, Blocking Time, Inter-Arrival, Response Time, Preemption Chain, or **Interval Analysis** tables to open a scatter-plot + histogram popup; charts live-update when cursors move or cursor-range scope is toggled (Desktop + Web). On Desktop, each trace tab remembers its own open chart when you switch tabs
+- **Metrics tables** — Execution Time Per Slice, **Blocking Time** (off-CPU gap / scheduling latency between activations), **Inter-Arrival**, **Preemption Chain** (which tasks preempted whom), and **Interval Analysis** (paired `interval_start` / `interval_stop` spans); click **Min** / **Max** (dotted underline) to jump and add an annotation at the BCET / WCET slice or shortest / longest gap (Desktop + Web)
+- **Metrics distribution charts** — click any row in Execution Time, Blocking Time, Inter-Arrival, Preemption Chain, or **Interval Analysis** tables to open a scatter-plot + histogram popup; charts live-update when cursors move or cursor-range scope is toggled (Desktop + Web). On Desktop, each trace tab remembers its own open chart when you switch tabs
 - **Segment tooltips** — hover any segment bar for duration, slice index on core, previous/next task on that core, and gap before the slice
 - **CPU Load Graph** — bar chart below the timeline showing per-core CPU utilisation; row labels show the **visible-window average** and, with 2+ cursors, a cursor-range average (`· C:xx%`); toggle with the **Load** toolbar button; drag the divider between timeline and CPU load to resize (Desktop + Web)
 - **Resizable panels** — drag dividers between timeline and CPU load, dock panels (Desktop), the right-side panel (Web), and metric table sections in Statistics (Desktop + Web); splitter and table heights persist in `btf_viewer.rc` on Desktop
@@ -244,7 +244,7 @@ The web viewer shares the desktop feature set but uses a different rendering pip
 | **Transfer** | Structured clone to the main thread (no transferable buffer detach issues) |
 | **CPU load** | Bins precomputed at parse time (`cpuLoadBins.js`) — the CPU Load panel reads bins, not raw segments |
 | **Timeline paint** | Canvas 2D with viewport culling, LOD binning, per-frame segment budget, optional WASM bisect (`wasmAccel.js`) |
-| **Statistics tables** | Summary metrics on the main thread; expanded execution/blocking/inter-arrival tables in a debounced stats worker (`statsWorker.js`); response time and preemption chain on the main thread |
+| **Statistics tables** | Summary metrics on the main thread; expanded execution/blocking/inter-arrival tables in a debounced stats worker (`statsWorker.js`); preemption chain on the main thread |
 | **Initial load** | Coarse “load-settle” paint, then full quality; WASM upload deferred to idle time so the first frame is not blocked |
 
 Chrome DevTools may log `[Violation] 'requestAnimationFrame' handler took …ms` on very large traces during the final full-quality repaint — that is a performance hint, not an error.
@@ -260,7 +260,6 @@ When **2 or more cursors** are placed, check **Limit to cursor range (C1–Cn)**
 | Execution time per slice | Only slices **fully inside** the range |
 | Blocking time | Off-CPU gap between consecutive slices; only pairs where **both** slices are fully inside the range |
 | Inter-arrival | Activations whose start time falls inside the range |
-| Response time | Same gap as blocking time (end of slice → start of next); only pairs where **both** slices are fully inside the range |
 | Preemption chain | Preemption overlaps counted only when the victim's blocking gap and the preemptor overlap are inside the range |
 | Interval analysis | Paired spans whose start/stop times overlap the range |
 | Core migrations | Migration events and per-core active time with overlap in the range |
@@ -280,7 +279,6 @@ Below the scope checkbox, a **scheduling summary** line shows context-switch cou
 | **Execution Time Per Slice** | Per-task slice duration stats (runs, CPU%, min/avg/max/p95) |
 | **Blocking Time** | Off-CPU gap between consecutive activations of the same task |
 | **Inter-Arrival Time** | Gap between successive activation start times |
-| **Response Time Analysis** | Scheduling latency from slice end to next slice start (same gap as blocking, framed as response time) |
 | **Preemption Chain Analysis** | For each victim task, which preemptors ran during its off-CPU gaps |
 | **Interval Analysis** | Paired `interval_start` / `interval_stop` spans per user-defined id (count, min/avg/max/p95 duration) |
 
@@ -302,7 +300,7 @@ Click the **Shot** toolbar button (or press `S` when focus is not in a text fiel
 
 ### Metrics Distribution Charts
 
-In the **Statistics** panel, click any row in **Execution Time**, **Blocking Time**, **Inter-Arrival**, **Response Time**, **Preemption Chain**, or **Interval Analysis** to open a floating chart popup:
+In the **Statistics** panel, click any row in **Execution Time**, **Blocking Time**, **Inter-Arrival**, **Preemption Chain**, or **Interval Analysis** to open a floating chart popup:
 
 - **Scatter plot** — each event plotted in trace time order so you can spot trends, bursts, or outliers.
 - **Histogram** — bar chart of the value distribution (50 bins), with dashed reference lines for **avg**, **p50**, and **p95**.
@@ -312,7 +310,7 @@ The popup can be dragged, resized, and closed independently of the main window.
 If the chart is open, it **updates live** when you move cursors or toggle cursor-range scope.
 Each browser tab keeps its own chart state when you switch between open traces.
 
-**Jump links:** in Execution Time, Blocking Time, Inter-Arrival, and Response Time tables, click **Min** or **Max** (dotted underline) to jump to the slice at the shortest or longest value and add an **annotation** with a descriptive note. Click any **distribution-chart** point to jump to that event and add an annotation the same way (segment start for task metrics, interval start for **Interval Analysis**). In Preemption Chain, the annotation is placed at the **preemptor segment** start.
+**Jump links:** in Execution Time, Blocking Time, and Inter-Arrival tables, click **Min** or **Max** (dotted underline) to jump to the slice at the shortest or longest value and add an **annotation** with a descriptive note. Click any **distribution-chart** point to jump to that event and add an annotation the same way (segment start for task metrics, interval start for **Interval Analysis**). In Preemption Chain, the annotation is placed at the **preemptor segment** start.
 
 Example plots from `tracedata/example-4cores.btf` (4-core SMP trace, 67 tasks) are in [Statistics metric tables](#statistics-metric-tables).
 
@@ -591,7 +589,6 @@ It shows:
 - **Execution Time Per Slice** — per-task min/avg/max/p95, run count, and CPU%; click a row for a scatter + histogram popup; click **Min** / **Max** to jump and annotate the BCET / WCET slice
 - **Blocking Time** — off-CPU gap between consecutive activations of the same task (min/avg/max/p95); click a row for a distribution chart; click **Min** / **Max** to jump and annotate the shortest / longest off-CPU gap (collapsible)
 - **Inter-Arrival Time** — same statistics for gaps between task activations; click **Min** / **Max** to jump and annotate the shortest / longest inter-arrival gap (collapsible)
-- **Response Time Analysis** — scheduling latency from end of one slice to start of the next (min/avg/max/p95); click a row for a distribution chart; click **Min** / **Max** to jump and annotate the best/worst resume segment (collapsible)
 - **Preemption Chain Analysis** — for each victim/preemptor pair: count, total/average/max preemption overlap; click a row for a distribution chart; click a scatter point to jump and add an annotation at the preemptor segment (collapsible)
 - **Interval Analysis** — per interval id: count, min/avg/max/p95 duration of paired start→stop spans; click a row for a duration plot; click a scatter point to jump and add an annotation at the interval start (collapsible)
 
@@ -683,29 +680,6 @@ Measures the gap between **successive activation start times** of the same task 
 <img src="../images/stats/stats-inter-cs8.svg" alt="Inter-arrival time distribution for CS[8] in example-4cores.btf" width="820">
 
 Compare with Blocking Time: inter-arrival includes time the task was **running**, so values are typically larger than off-CPU gaps alone.
-
-#### Response Time Analysis
-
-**Response time** is the scheduling latency from the **end of one slice** to the **start of the next** for the same task. Numerically it equals the off-CPU gap used in Blocking Time, but the table is framed around **how long the task waits to resume** after yielding the CPU.
-
-| Column | Meaning |
-|--------|---------|
-| **Task** | Display name |
-| **Events** | Number of response-time samples (needs ≥ 2 activations) |
-| **Min / Avg / Max / p95** | Response time statistics |
-| **Min / Max** links | Jump and annotate the resume segment at the best / worst response time |
-
-**Distribution chart** — click any row:
-
-- **Scatter:** x = resume time, y = response time (off-CPU gap).
-- **Histogram:** distribution of response times.
-- **Min / Max** cells jump and annotate the best / worst resume segment.
-
-**Runner[1]** in `example-4cores.btf` (89 samples) — the main application task on Core 0:
-
-<img src="../images/stats/stats-response-runner1.svg" alt="Response time distribution for Runner[1] in example-4cores.btf" width="820">
-
-Use this view when you care about **deadline-style latency** (when did the task get the CPU back?) rather than raw blocking semantics. Spikes in the scatter plot mark moments where the runner waited unusually long to resume.
 
 #### Preemption Chain Analysis
 
@@ -889,7 +863,7 @@ A **migration** is recorded when consecutive slices of the same task (merge-key)
 | Resizable metric table height (drag handle below table) | ✓ | ✓ |
 | Resizable timeline / CPU load divider | ✓ | ✓ |
 | Resizable right panel / dock width | ✓ (docks) | ✓ |
-| **Min** / **Max** slice links (execution / blocking / inter-arrival / response) | ✓ | ✓ |
+| **Min** / **Max** slice links (execution / blocking / inter-arrival) | ✓ | ✓ |
 | **Preemption chain** table + distribution charts | ✓ | ✓ |
 | **Interval Analysis** table + distribution charts | ✓ | ✓ |
 | Find bar **Migrations** mode | ✓ | ✓ |

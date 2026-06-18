@@ -11,7 +11,6 @@ import {
   blockingTimePlotPoints,
   preemptionChainPlotPoints,
   preemptionChainRows,
-  responseTimePlotPoints,
 } from '../src/utils/statsAnalysis.js'
 import { intervalColor, intervalPlotPoints } from '../src/utils/intervalAnalysis.js'
 import { taskColor, taskDisplayName, taskReprGet } from '../src/utils/colors.js'
@@ -78,21 +77,6 @@ function buildInterPlot(trace, mk) {
   }
   return {
     title: `${taskDisplayName(repr)} — Inter-Arrival Time`,
-    color: taskColor(mk, repr),
-    points,
-  }
-}
-
-function buildResponsePlot(trace, mk) {
-  const repr = taskReprGet(trace, mk) || mk
-  const segs = trace.segByMergeKey.get(mk) || []
-  const points = responseTimePlotPoints(segs, null, null).map((pt, index) => ({
-    index,
-    xNs: pt.xNs,
-    yValue: pt.yValue,
-  }))
-  return {
-    title: `${taskDisplayName(repr)} — Response Time`,
     color: taskColor(mk, repr),
     points,
   }
@@ -308,10 +292,6 @@ const Y_LABELS = {
     scatter: 'x = activation time, y = gap since previous activation',
     histogram: 'distribution of inter-arrival gaps',
   },
-  response: {
-    scatter: 'x = resume time, y = response time (off-CPU gap)',
-    histogram: 'distribution of response times',
-  },
   preempt: {
     scatter: 'x = preemption overlap start, y = overlap duration',
     histogram: 'overlap duration distribution for this preemptor',
@@ -334,7 +314,6 @@ const trace = finalizeAndEnrich(await parseBtf(text))
 mkdirSync(outDir, { recursive: true })
 
 const cs8Mk = findMkByDisplay(trace, 'CS[8]')
-const runnerMk = findMkByDisplay(trace, 'Runner[1]')
 const { rows: _preemptExportRows } = preemptionChainRows(trace)
 const preemptRow = _preemptExportRows[1] // CS[10] ← CS[11], high count
 
@@ -342,7 +321,6 @@ const exports = [
   { id: 'exec-cs8', plot: buildExecPlot(trace, cs8Mk), kind: 'exec' },
   { id: 'block-cs8', plot: buildBlockPlot(trace, cs8Mk), kind: 'block' },
   { id: 'inter-cs8', plot: buildInterPlot(trace, cs8Mk), kind: 'inter' },
-  { id: 'response-runner1', plot: buildResponsePlot(trace, runnerMk), kind: 'response' },
   {
     id: 'preempt-cs10-cs11',
     plot: buildPreemptPlot(trace, preemptRow.mk, preemptRow.preemptor),
