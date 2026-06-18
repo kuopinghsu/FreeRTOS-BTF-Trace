@@ -3,6 +3,7 @@
  */
 import { formatTime } from './timeFormat.js'
 import { lighterColor } from './colors.js'
+import { bisectLeft } from './bisect.js'
 
 export const INTERVAL_START_CHANNELS = new Set(['interval_start', 'start_intval'])
 export const INTERVAL_STOP_CHANNELS = new Set(['interval_stop', 'stop_intval'])
@@ -22,28 +23,12 @@ export function intervalColor(id) {
   return INTERVAL_COLORS[idx]
 }
 
-/** Alternating dark/light shades of the interval base colour (start = dark stripe). */
+/** Dark/light shades of the interval base colour for start/stop tick lines. */
 export function intervalStripeColors(base, darkMode) {
   return {
     dark: lighterColor(base, darkMode ? 0.58 : 0.70),
     light: lighterColor(base, darkMode ? 1.22 : 1.12),
   }
-}
-
-const INTERVAL_MAX_STRIPES = 12
-const INTERVAL_MIN_PX = 0.5
-const INTERVAL_STRIPE_PERIOD = 8 // trace time units (~4px at 2 units/px)
-
-export function intervalRowStripeWidthPx(visibleSpanPx) {
-  let sw = 4
-  if (visibleSpanPx > 0 && visibleSpanPx / sw > INTERVAL_MAX_STRIPES) {
-    sw = Math.max(2, visibleSpanPx / INTERVAL_MAX_STRIPES)
-  }
-  return sw
-}
-
-export function intervalStripeWidthPx(clipWidthPx) {
-  return intervalRowStripeWidthPx(clipWidthPx)
 }
 
 /** Drop instances fully covered by a longer one (time-domain containment). */
@@ -63,47 +48,6 @@ export function cullNestedIntervalInstances(instances) {
   }
   kept.sort((a, b) => a.startNs - b.startNs)
   return kept
-}
-
-/** Fill an interval bar with vertical dark/light stripes (time-anchored phase). */
-export function fillIntervalStripedBar(ctx, x, y, w, h, baseColor, darkMode, startNs, stopNs, timeStart, pxPerNs) {
-  if (w < INTERVAL_MIN_PX || h <= 0 || pxPerNs <= 0) return
-  const { dark, light } = intervalStripeColors(baseColor, darkMode)
-  const basePeriod = INTERVAL_STRIPE_PERIOD
-  const spanT = stopNs - startNs
-  if (spanT <= 0) return
-  if (w < 2) {
-    ctx.fillStyle = dark
-    ctx.fillRect(x, y, w, h)
-    return
-  }
-  const xEnd = x + w
-  const tClipLo = Math.max(startNs, timeStart + x / pxPerNs)
-  const tClipHi = Math.min(stopNs, timeStart + xEnd / pxPerNs)
-  if (tClipHi <= tClipLo) return
-  let paintPeriod = basePeriod
-  if (spanT / basePeriod > INTERVAL_MAX_STRIPES) {
-    paintPeriod = spanT / INTERVAL_MAX_STRIPES
-  }
-  let i0 = Math.max(0, Math.floor((tClipLo - startNs) / paintPeriod))
-  let t = startNs + i0 * paintPeriod
-  while (t < tClipHi - 1e-9) {
-    const segEndT = Math.min(t + paintPeriod, tClipHi)
-    const loT = Math.max(t, tClipLo)
-    const hiT = Math.min(segEndT, tClipHi)
-    if (hiT > loT + 1e-9) {
-      const idx = Math.floor((t - startNs) / basePeriod) % 2
-      const sx = (loT - timeStart) * pxPerNs
-      const sx2 = (hiT - timeStart) * pxPerNs
-      const clipLo = Math.max(sx, x)
-      const clipHi = Math.min(sx2, xEnd)
-      if (clipHi > clipLo + 0.01) {
-        ctx.fillStyle = (idx % 2) === 0 ? dark : light
-        ctx.fillRect(clipLo, y, clipHi - clipLo, h)
-      }
-    }
-    t += paintPeriod
-  }
 }
 
 function isStart(ev) {
@@ -169,6 +113,21 @@ export function buildIntervalData(stiEvents) {
   })
 
   return { intervalInstances, intervalIds, intervalInstancesById, unmatchedStarts }
+}
+
+/** Per-id sorted marker events for O(log n) viewport clipping. */
+export function buildIntervalMarkerIndex(stiEvents) {
+  const byId = new Map()
+  for (const ev of stiEvents || []) {
+    if (!isStart(ev) && !isStop(ev)) continue
+    const id = intervalId(ev)
+    if (!byId.has(id)) byId.set(id, [])
+    byId.get(id).push({ timeNs: ev.time, isStart: isStart(ev) })
+  }
+  for (const events of byId.values()) {
+    events.sort((a, b) => a.timeNs - b.timeNs || (a.isStart ? 0 : 1))
+  }
+  return byId
 }
 
 export function intervalOverlapsRange(inst, lo, hi) {
@@ -244,4 +203,23 @@ export function visibleIntervalInstances(instances, timeStart, timeEnd) {
   if (!instances?.length) return []
   const visible = instances.filter(inst => inst.stopNs > timeStart && inst.startNs < timeEnd)
   return cullNestedIntervalInstances(visible)
+}
+
+/** Raw interval_start / interval_stop marker events for one id in the viewport. */
+export function visibleIntervalMarkerEvents(trace, intervalId, timeStart, timeEnd) {
+  const id = String(intervalId)
+  let byId = trace.intervalMarkerById
+  if (!byId) {
+    if (!trace.stiEventsByTarget) return []
+    byId = buildIntervalMarkerIndex(
+      [...INTERVAL_START_CHANNELS, ...INTERVAL_STOP_CHANNELS]
+        .flatMap(ch => trace.stiEventsByTarget.get(ch) || []),
+    )
+  }
+  const events = byId.get(id)
+  if (!events?.length) return []
+  const times = events.map(e => e.timeNs)
+  const lo = Math.max(0, bisectLeft(times, timeStart))
+  const hi = bisectLeft(times, timeEnd)
+  return events.slice(lo, hi)
 }

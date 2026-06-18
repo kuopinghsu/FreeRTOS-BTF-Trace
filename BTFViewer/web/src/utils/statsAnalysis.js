@@ -327,9 +327,7 @@ export function collectPreemptionEvents(trace, lo, hi) {
  * @param {object} trace
  * @param {number|null} lo
  * @param {number|null} hi
- * @returns {Array<{mk: string, victim: string, preemptor: string, count: number,
- *                  totalNs: number, avgNs: number, maxNs: number,
- *                  total: string, avg: string, max: string}>}
+ * @returns {{ rows: Array, truncated: boolean }}
  */
 export function preemptionChainRows(trace, lo, hi) {
   const scale = trace?.timeScale || 'ns'
@@ -367,10 +365,9 @@ export function preemptionChainRows(trace, lo, hi) {
   }
 
   rows.sort((a, b) => b.totalNs - a.totalNs || a.victim.localeCompare(b.victim))
-  if (rows.length > PREEMPTION_CHAIN_MAX_ROWS) {
-    return rows.slice(0, PREEMPTION_CHAIN_MAX_ROWS)
-  }
-  return rows
+  const truncated = rows.length > PREEMPTION_CHAIN_MAX_ROWS
+  const out = truncated ? rows.slice(0, PREEMPTION_CHAIN_MAX_ROWS) : rows
+  return { rows: out, truncated }
 }
 
 /** Plot points for one victim/preemptor pair. */

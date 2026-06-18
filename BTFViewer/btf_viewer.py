@@ -265,9 +265,7 @@ _PAINT_LOD_COARSE        = 0.45   # Below: merge nearby segments, skip pen outli
 _PAINT_LOD_MICRO         = 0.12   # Below: draw one tinted activity bar per row.
 _LOD_MERGE_PX            = 6.0    # Coarse LOD: merge segments closer than this many scene-px.
 _ACTIVITY_ALPHA          = 160    # Alpha for the micro-LOD activity-presence bar.
-_INTERVAL_MAX_STRIPES    = 12     # Cap stripe count per interval bar (paint cost).
 _INTERVAL_MIN_PX         = 0.5    # Skip sub-pixel interval bars (avoids merge artefacts).
-_INTERVAL_STRIPE_PERIOD  = 8      # Stripe period in trace time units (~4px at 2 units/px).
 _HOVER_BISECT_MARGIN     = 3      # Neighbour scan window used in hoverMoveEvent bisect lookup.
 # Inline segment text is only rendered near 1:1 zoom; zoomed-out views keep
 # bars only for performance, especially at far-right large coordinates.
@@ -606,7 +604,7 @@ def _interval_color(interval_id: str) -> str:
     return _INTERVAL_COLORS[idx]
 
 def _interval_stripe_colors(color: QColor) -> Tuple[QColor, QColor]:
-    """Dark/light pair for striped interval bars (start edge = dark stripe)."""
+    """Dark/light pair for interval start/stop tick lines."""
     return color.darker(155), color.lighter(118)
 
 def _interval_bars_for_viewport(
@@ -668,55 +666,99 @@ def _interval_instances_cull_nested(instances: list) -> list:
     kept.sort(key=lambda inst: inst.start_ns)
     return kept
 
-def _paint_interval_striped_bar(
+def _build_interval_marker_index(
+    sti_events: List[StiEvent],
+) -> Dict[str, dict]:
+    """Per-id sorted marker events for O(log n) viewport clipping."""
+    by_id: Dict[str, dict] = {}
+    for ev in sti_events:
+        is_start = ev.target in _INTERVAL_START_CHANNELS
+        if not is_start and ev.target not in _INTERVAL_STOP_CHANNELS:
+            continue
+        iid = ev.note if ev.note else "0"
+        row = by_id.setdefault(iid, {"events": [], "times": []})
+        row["events"].append((ev.time, is_start))
+    for row in by_id.values():
+        row["events"].sort(key=lambda t: (t[0], not t[1]))
+        row["times"] = [t[0] for t in row["events"]]
+    return by_id
+
+def _interval_marker_ticks_for_viewport(
+    trace: "BtfTrace",
+    interval_id: str,
+    time_min: int,
+    px_per_ns: float,
+    label_width: float,
+    vp_ns_lo: int,
+    vp_ns_hi: int,
+) -> list:
+    """[(scene_x, is_start), ...] for raw interval marker STI events in the viewport."""
+    iid = str(interval_id)
+    row = trace.interval_marker_by_id.get(iid)
+    if not row:
+        return []
+    times = row["times"]
+    events = row["events"]
+    lo = bisect_left(times, vp_ns_lo)
+    hi = bisect_left(times, vp_ns_hi)
+    ticks: list = []
+    for i in range(lo, hi):
+        t, is_start = events[i]
+        x = label_width + (t - time_min) * px_per_ns
+        ticks.append((float(x), is_start))
+    return ticks
+
+def _paint_interval_event_ticks(
     painter: QPainter,
-    x: float, y: float, w: float, h: float,
-    dark: QColor, light: QColor,
-    outline_pen: QPen,
-    start_ns: int,
-    stop_ns: int,
+    ticks: list,
+    y: float,
+    h: float,
+    color: QColor,
+    exp_left: float,
+    exp_right: float,
+) -> None:
+    """Vertical ticks at each interval_start / interval_stop event."""
+    if not ticks:
+        return
+    dark, light = _interval_stripe_colors(color)
+    start_pen = QPen(dark)
+    start_pen.setWidthF(1.0)
+    stop_pen = QPen(light)
+    stop_pen.setWidthF(1.0)
+    stop_pen.setStyle(Qt.DashLine)
+    y2 = y + h
+    for x, is_start in ticks:
+        if x < exp_left - 1.0 or x > exp_right + 1.0:
+            continue
+        painter.setPen(start_pen if is_start else stop_pen)
+        xi = round(x) + 0.5
+        painter.drawLine(QLineF(xi, y, xi, y2))
+
+def _paint_interval_highlight_lines(
+    painter: QPainter,
+    times: list,
+    y: float,
+    h: float,
     time_min: int,
     label_width: float,
     px_per_ns: float,
+    exp_left: float,
+    exp_right: float,
+    dark_ui: bool,
 ) -> None:
-    """Paint one interval span; stripe phase is anchored to trace time."""
-    base_period = float(_INTERVAL_STRIPE_PERIOD)
-    span_t = stop_ns - start_ns
-    if span_t <= 0 or w < _INTERVAL_MIN_PX or px_per_ns <= 0:
+    """Bold vertical lines at drill-down start/stop/mark times."""
+    if not times:
         return
-    painter.setPen(Qt.NoPen)
-    x_end = x + w
-    if w < 2.0:
-        painter.setBrush(dark)
-        painter.drawRect(QRectF(x, y, w, h))
-    else:
-        t_clip_lo = max(start_ns, time_min + (x - label_width) / px_per_ns)
-        t_clip_hi = min(stop_ns, time_min + (x_end - label_width) / px_per_ns)
-        if t_clip_hi <= t_clip_lo:
-            return
-        paint_period = base_period
-        if span_t / base_period > _INTERVAL_MAX_STRIPES:
-            paint_period = span_t / _INTERVAL_MAX_STRIPES
-        i0 = max(0, int(math.floor((t_clip_lo - start_ns) / paint_period)))
-        t = start_ns + i0 * paint_period
-        while t < t_clip_hi - 1e-9:
-            seg_end_t = min(t + paint_period, t_clip_hi)
-            lo_t = max(t, t_clip_lo)
-            hi_t = min(seg_end_t, t_clip_hi)
-            if hi_t > lo_t + 1e-9:
-                idx = int(math.floor((t - start_ns) / base_period)) % 2
-                sx = label_width + (lo_t - time_min) * px_per_ns
-                sx2 = label_width + (hi_t - time_min) * px_per_ns
-                clip_lo = max(sx, x)
-                clip_hi = min(sx2, x_end)
-                if clip_hi > clip_lo + 0.01:
-                    painter.setBrush(dark if idx % 2 == 0 else light)
-                    painter.drawRect(QRectF(clip_lo, y, clip_hi - clip_lo, h))
-            t += paint_period
-    painter.setPen(outline_pen)
-    painter.setBrush(Qt.NoBrush)
-    if w >= 3.0:
-        painter.drawRect(QRectF(x, y, w, h))
+    pen = QPen(QColor("#EBEBEB" if dark_ui else "#141414"))
+    pen.setWidthF(2.0)
+    painter.setPen(pen)
+    y2 = y + h
+    for t in times:
+        x = label_width + (t - time_min) * px_per_ns
+        if x < exp_left - 1.0 or x > exp_right + 1.0:
+            continue
+        xi = round(x) + 0.5
+        painter.drawLine(QLineF(xi, y, xi, y2))
 
 def _build_interval_data(
     sti_events: List[StiEvent],
@@ -831,7 +873,7 @@ def _interval_plot_points(
 def _plot_point_mark_ns(payload, x_ns: int) -> int:
     """Timeline position for an annotation created from a metrics plot point."""
     if isinstance(payload, IntervalInstance):
-        return payload.start_ns
+        return payload.stop_ns
     if isinstance(payload, TaskSegment):
         return payload.start
     return x_ns
@@ -1007,6 +1049,7 @@ class BtfTrace:
     interval_instances: List["IntervalInstance"]                            = field(default_factory=list)
     interval_ids: List[str]                                                 = field(default_factory=list)
     interval_instances_by_id: Dict[str, List["IntervalInstance"]]            = field(default_factory=dict)
+    interval_marker_by_id: Dict[str, dict]                                  = field(default_factory=dict)
     interval_unmatched_starts: int                                          = 0
 
 # ---------------------------------------------------------------------------
@@ -1369,10 +1412,10 @@ def _preemption_chain_rows(
     trace: "BtfTrace",
     lo: Optional[int] = None,
     hi: Optional[int] = None,
-) -> List[tuple]:
+) -> Tuple[List[tuple], bool]:
     """For each task, find which tasks preempted it and how often/long.
 
-    Returns a list of tuples:
+    Returns (rows, truncated) where rows is a list of tuples:
         (victim_mk, victim_name, preemptor_name, count, total_str, avg_str, max_str)
     sorted by total preemption time descending.
     """
@@ -1400,9 +1443,10 @@ def _preemption_chain_rows(
             ))
 
     rows.sort(key=lambda r: (-_time_label_sort_key(r[4]), r[1].lower(), r[2].lower()))
-    if len(rows) > PREEMPTION_CHAIN_MAX_ROWS:
-        return rows[:PREEMPTION_CHAIN_MAX_ROWS]
-    return rows
+    truncated = len(rows) > PREEMPTION_CHAIN_MAX_ROWS
+    if truncated:
+        rows = rows[:PREEMPTION_CHAIN_MAX_ROWS]
+    return rows, truncated
 
 def _preemption_chain_plot_points(
     trace: "BtfTrace",
@@ -2297,6 +2341,7 @@ def _parse_btf(filepath: str,
     _interval_instances, _interval_ids, _interval_by_id, _interval_unmatched = (
         _build_interval_data(sti_events)
     )
+    _interval_marker_by_id = _build_interval_marker_index(sti_events)
 
     _seg_start_key = _attrgetter('start')
     segs_by_mk: Dict[str, list] = dict(segs_by_mk_build)
@@ -2487,6 +2532,7 @@ def _parse_btf(filepath: str,
         interval_instances=_interval_instances,
         interval_ids=_interval_ids,
         interval_instances_by_id=_interval_by_id,
+        interval_marker_by_id=_interval_marker_by_id,
         interval_unmatched_starts=_interval_unmatched,
     )
 
@@ -3256,6 +3302,8 @@ class TimelineScene(QGraphicsScene):
         self._locked_core:  Optional[str] = None   # core context for locked task (core view)
         self._locked_ns:    Optional[int] = None   # reference time of locked selection
         self._locked_segment_key: Optional[tuple] = None  # (mk, start, end, core)
+        self._highlighted_interval: Optional["IntervalInstance"] = None
+        self._highlighted_interval_mark_ns: Optional[int] = None
         self._hovered_task: Optional[str] = None   # hover task (transient)
         # task_key -> [(QRectF, QColor)] - populated by builders, used for hover overlays
         self._task_row_rects: Dict[str, list] = {}
@@ -3914,6 +3962,30 @@ class TimelineScene(QGraphicsScene):
                         break
         return fallback
 
+    def interval_orth_scene_span(self, interval_id: str) -> Optional[Tuple[float, float]]:
+        """Return the visible orthogonal span of an interval row (task view, horizontal)."""
+        if self._trace is None or self._view_mode != "task" or not self._show_sti:
+            return None
+        iid = str(interval_id)
+        try:
+            idx = self._trace.interval_ids.index(iid)
+        except ValueError:
+            return None
+        if not self._horizontal:
+            return None
+        task_rows = [t for t in self._trace.tasks if self._task_merge_key_matches_filter(t)]
+        sti_rows = list(self._trace.sti_channels)
+        if self._task_filter_q:
+            sti_rows = [c for c in sti_rows if self._sti_channel_matches_filter(c)]
+        row_stride = self._row_height + self._row_gap
+        y_top = RULER_HEIGHT + len(task_rows) * row_stride
+        for ch in sti_rows:
+            h = (self._sti_waveform_h_val if ch in self._sti_expanded
+                 else self._sti_row_h_val)
+            y_top += h + self._row_gap
+        y_top += idx * row_stride
+        return (y_top, y_top + self._row_height)
+
     def add_cursor(self, ns: int) -> None:
         """Add a cursor at timestamp *ns*. Oldest is evicted when > self._max_cursors."""
         self._cursor_times.append(ns)
@@ -3988,6 +4060,8 @@ class TimelineScene(QGraphicsScene):
             self._locked_core  = None
             self._locked_ns    = None
             self._locked_segment_key = None
+            self._highlighted_interval = None
+            self._highlighted_interval_mark_ns = None
             self._hovered_task = None
             self.highlight_changed.emit(None, False)
             self.rebuild()
@@ -3997,6 +4071,8 @@ class TimelineScene(QGraphicsScene):
             self._locked_core  = core_name
             self._locked_ns    = ref_ns
             self._locked_segment_key = None
+            self._highlighted_interval = None
+            self._highlighted_interval_mark_ns = None
             self._hovered_task = None
             self.highlight_changed.emit(task_name, True)
             self.rebuild()
@@ -4010,6 +4086,8 @@ class TimelineScene(QGraphicsScene):
 
     def set_highlighted_segment(self, seg: Optional[TaskSegment]) -> None:
         """Lock highlight to one exact segment bar (not the whole task)."""
+        self._highlighted_interval = None
+        self._highlighted_interval_mark_ns = None
         if seg is None:
             self.set_highlighted_task(None)
             return
@@ -4020,6 +4098,27 @@ class TimelineScene(QGraphicsScene):
         self._locked_segment_key = self._segment_lock_key(seg)
         self._hovered_task = None
         self.highlight_changed.emit(self._locked_task, True)
+        self.rebuild()
+
+    def set_highlighted_interval(self, inst: Optional["IntervalInstance"],
+                                 mark_ns: Optional[int] = None) -> None:
+        """Highlight one interval instance row (statistics plot drill-down)."""
+        if inst is None:
+            if self._highlighted_interval is None:
+                return
+            self._highlighted_interval = None
+            self._highlighted_interval_mark_ns = None
+            self.rebuild()
+            return
+        self._remove_hover_overlay()
+        self._locked_task = None
+        self._locked_core = None
+        self._locked_ns = None
+        self._locked_segment_key = None
+        self._hovered_task = None
+        self._highlighted_interval = inst
+        self._highlighted_interval_mark_ns = mark_ns if mark_ns is not None else inst.stop_ns
+        self.highlight_changed.emit(None, False)
         self.rebuild()
 
     def clear_hover(self) -> None:
@@ -4868,13 +4967,21 @@ class TimelineScene(QGraphicsScene):
             insts = trace.interval_instances_by_id.get(interval_id, [])
             _interval_bars = _interval_bars_for_viewport(
                 insts, _time_min, _px_per_ns, lw, _vp_ns_lo, _vp_ns_hi)
-            if _interval_bars:
+            _interval_ticks = _interval_marker_ticks_for_viewport(
+                trace, interval_id, _time_min, _px_per_ns, lw, _vp_ns_lo, _vp_ns_hi)
+            _hi_times = None
+            _hi = self._highlighted_interval
+            if _hi is not None and str(_hi.id) == str(interval_id):
+                _mark = self._highlighted_interval_mark_ns or _hi.stop_ns
+                _hi_times = sorted({_hi.start_ns, _hi.stop_ns, _mark})
+            if _interval_bars or _interval_ticks or _hi_times:
                 _bar_y = y_top + 1
                 _bar_h = row_h - 2
                 _bar_item = _IntervalRowBarsItem(
                     QRectF(lw, _bar_y, timeline_w, _bar_h),
-                    _interval_bars, _bar_y, _bar_h, color, pen,
-                    _time_min, _px_per_ns, lw)
+                    _interval_bars, _interval_ticks, _bar_y, _bar_h, color, pen,
+                    _time_min, _px_per_ns, lw,
+                    highlight_times=_hi_times, dark_ui=self._is_dark_ui)
                 _bar_item.setZValue(2)
                 self.addItem(_bar_item)
             _sti_y += row_h + self._row_gap
@@ -5877,18 +5984,19 @@ class _RulerItem(QGraphicsItem):
 class _IntervalRowBarsItem(QGraphicsItem):
     """Paints all interval bars for one row in a single paint() pass.
 
-    Replaces O(n_intervals * n_stripes) individual QGraphicsRectItems with one
+    Replaces O(n_intervals) individual QGraphicsRectItems with one
     item per interval row, avoiding multi-second freezes in scene.clear() when
     zooming after many back-to-back intervals are visible.
     """
 
-    __slots__ = ('_bounds', '_bars', '_bar_y', '_bar_h', '_color', '_outline_pen',
-                 '_time_min', '_px_per_ns', '_label_width')
+    __slots__ = ('_bounds', '_bars', '_ticks', '_bar_y', '_bar_h', '_color', '_outline_pen',
+                 '_time_min', '_px_per_ns', '_label_width', '_highlight_times', '_dark_ui')
 
     def __init__(
         self,
         bounding_rect: QRectF,
         bars: list,
+        ticks: list,
         bar_y: float,
         bar_h: float,
         color: QColor,
@@ -5896,10 +6004,13 @@ class _IntervalRowBarsItem(QGraphicsItem):
         time_min: int,
         px_per_ns: float,
         label_width: float,
+        highlight_times: Optional[list] = None,
+        dark_ui: bool = True,
     ) -> None:
         super().__init__()
         self._bounds = bounding_rect
         self._bars = bars          # [(x, w, start_ns, stop_ns), ...] sorted by start x
+        self._ticks = ticks        # [(scene_x, is_start), ...]
         self._bar_y = bar_y
         self._bar_h = bar_h
         self._color = color
@@ -5907,6 +6018,8 @@ class _IntervalRowBarsItem(QGraphicsItem):
         self._time_min = time_min
         self._px_per_ns = px_per_ns
         self._label_width = label_width
+        self._highlight_times = highlight_times
+        self._dark_ui = dark_ui
         self.setFlag(QGraphicsItem.ItemUsesExtendedStyleOption, True)
 
     def boundingRect(self) -> QRectF:
@@ -5914,36 +6027,44 @@ class _IntervalRowBarsItem(QGraphicsItem):
 
     def paint(self, painter, option, widget=None) -> None:
         bars = self._bars
-        if not bars:
+        ticks = self._ticks
+        hi_times = self._highlight_times
+        if not bars and not ticks and not hi_times:
             return
         exposed = option.exposedRect
         exp_left = exposed.left()
         exp_right = exposed.right()
-        dark, light = _interval_stripe_colors(self._color)
         y = self._bar_y
         h = self._bar_h
         pen = self._outline_pen
 
-        lo, hi = 0, len(bars)
-        while lo < hi:
-            mid = (lo + hi) >> 1
-            x, w, _s0, _s1 = bars[mid]
-            if x + w < exp_left:
-                lo = mid + 1
-            else:
-                hi = mid
-        for i in range(lo, len(bars)):
-            x, w, start_ns, stop_ns = bars[i]
-            if x >= exp_right:
-                break
-            cx = max(x, exp_left)
-            cx2 = min(x + w, exp_right)
-            cw = cx2 - cx
-            if cw < _INTERVAL_MIN_PX:
-                continue
-            _paint_interval_striped_bar(
-                painter, cx, y, cw, h, dark, light, pen,
-                start_ns, stop_ns, self._time_min, self._label_width, self._px_per_ns)
+        if bars:
+            lo, hi = 0, len(bars)
+            while lo < hi:
+                mid = (lo + hi) >> 1
+                x, w, _s0, _s1 = bars[mid]
+                if x + w < exp_left:
+                    lo = mid + 1
+                else:
+                    hi = mid
+            painter.setBrush(self._color)
+            for i in range(lo, len(bars)):
+                x, w, _start_ns, _stop_ns = bars[i]
+                if x >= exp_right:
+                    break
+                cx = max(x, exp_left)
+                cx2 = min(x + w, exp_right)
+                cw = cx2 - cx
+                if cw < _INTERVAL_MIN_PX:
+                    continue
+                painter.setPen(pen if cw >= 3.0 else Qt.NoPen)
+                painter.drawRect(QRectF(cx, y, cw, h))
+        _paint_interval_event_ticks(
+            painter, ticks, y, h, self._color, exp_left, exp_right)
+        if hi_times:
+            _paint_interval_highlight_lines(
+                painter, hi_times, y, h, self._time_min, self._label_width,
+                self._px_per_ns, exp_left, exp_right, self._dark_ui)
 
 
 class _RowStripesItem(QGraphicsItem):
@@ -12551,7 +12672,7 @@ class _StatsPanel(QWidget):
         inter_rows = self._inter_arrival_rows_export(trace, lo, hi)
         block_rows = self._blocking_time_rows_export(trace, lo, hi)
         mig_rows = _migration_rows(trace, lo, hi)
-        preempt_rows = _preemption_chain_rows(trace, lo, hi)
+        preempt_rows, _ = _preemption_chain_rows(trace, lo, hi)
         resp_rows = _response_time_rows(trace, lo, hi)
         interval_rows = _interval_stats_rows(trace, lo, hi)
         ctx_count, core_gaps = _scheduling_stats(trace, lo, hi)
@@ -12880,7 +13001,7 @@ class _StatsPanel(QWidget):
         inter_rows = self._inter_arrival_rows_export(trace, lo, hi)
         block_rows = self._blocking_time_rows_export(trace, lo, hi)
         mig_rows = _migration_rows(trace, lo, hi)
-        preempt_rows_csv = _preemption_chain_rows(trace, lo, hi)
+        preempt_rows_csv, _ = _preemption_chain_rows(trace, lo, hi)
         resp_rows_csv = _response_time_rows(trace, lo, hi)
         interval_rows_csv = _interval_stats_rows(trace, lo, hi)
         ctx_count, core_gaps = _scheduling_stats(trace, lo, hi)
@@ -13284,8 +13405,7 @@ class _StatsPanel(QWidget):
         )
 
         # -- Preemption Chain Analysis ----------------------------------------
-        _preempt_rows = _preemption_chain_rows(trace, lo, hi)
-        _preempt_truncated = len(_preempt_rows) > PREEMPTION_CHAIN_MAX_ROWS
+        _preempt_rows, _preempt_truncated = _preemption_chain_rows(trace, lo, hi)
         empty_preempt = ("No preemption events in cursor range" if scope
                          else "No preemption events found (single-task or idle-only trace)")
 
@@ -19083,6 +19203,31 @@ class MainWindow(QMainWindow):
             self._view.viewport().update()
         sc.set_highlighted_segment(seg)
 
+    def _scroll_to_interval(self, inst: "IntervalInstance", mark_ns: int) -> None:
+        """Zoom to and scroll vertically to an interval instance (statistics plot drill-down)."""
+        if self._trace is None or inst is None:
+            return
+        sc = self._view._scene
+        vp = self._view.viewport().rect()
+        is_horiz = sc._horizontal
+        vp_px = max(vp.width() if is_horiz else vp.height(), 100)
+        margin = max(1, (inst.stop_ns - inst.start_ns) // 10)
+        ns_lo = max(self._trace.time_min, inst.start_ns - margin)
+        ns_hi = min(self._trace.time_max, inst.stop_ns + margin)
+        self._view._fit_mode = False
+        sc.zoom_to_range(ns_lo, ns_hi, vp_px)
+        span = sc.interval_orth_scene_span(inst.id)
+        cur = self._view.mapToScene(vp.center())
+        if span is not None:
+            orth = (span[0] + span[1]) / 2
+            if is_horiz:
+                self._view.centerOn(cur.x(), orth)
+            else:
+                self._view.centerOn(orth, cur.y())
+        self._view.zoom_changed.emit(sc.timescale_per_px)
+        sc.set_highlighted_interval(inst, mark_ns)
+        self._view.viewport().update()
+
     def _on_segment_jump(self, ns: int) -> None:
         """Scroll the timeline to *ns* (non-annotation stats jumps, e.g. TICK gaps)."""
         if self._trace is None:
@@ -19096,23 +19241,7 @@ class MainWindow(QMainWindow):
         if isinstance(payload, TaskSegment):
             self._scroll_to_segment(payload)
         elif isinstance(payload, IntervalInstance):
-            inst = payload
-            vp = self._view.viewport().rect()
-            is_horiz = self._view._scene._horizontal
-            vp_px = max(vp.width() if is_horiz else vp.height(), 100)
-            margin = max(1, (inst.stop_ns - inst.start_ns) // 10)
-            ns_lo = max(self._trace.time_min, inst.start_ns - margin)
-            ns_hi = min(self._trace.time_max, inst.stop_ns + margin)
-            self._view._fit_mode = False
-            self._view._scene.zoom_to_range(ns_lo, ns_hi, vp_px)
-            center_ns = (inst.start_ns + inst.stop_ns) // 2
-            coord = self._view._scene.ns_to_scene_coord(center_ns)
-            cur = self._view.mapToScene(vp.center())
-            if is_horiz:
-                self._view.centerOn(coord, cur.y())
-            else:
-                self._view.centerOn(cur.x(), coord)
-            self._view.zoom_changed.emit(self._view._scene.timescale_per_px)
+            self._scroll_to_interval(payload, mark_ns)
         else:
             self._view.scroll_to_ns(mark_ns)
         self._add_annotation_with_note(mark_ns, note)

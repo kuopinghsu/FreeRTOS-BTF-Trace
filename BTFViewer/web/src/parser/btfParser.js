@@ -18,7 +18,7 @@ import { makeLodSummary } from '../utils/lod.js'
 import { parseTaskName, taskMergeKey, taskSortKey, resetStiColors } from '../utils/colors.js'
 import { buildMigrationIndex } from '../utils/migrationAnalysis.js'
 import { analyzeTickHealth } from '../utils/tickHealth.js'
-import { buildIntervalData, isIntervalMarkerChannel } from '../utils/intervalAnalysis.js'
+import { buildIntervalData, isIntervalMarkerChannel, buildIntervalMarkerIndex } from '../utils/intervalAnalysis.js'
 
 // LOD bin counts (match Python constants).
 const LOD_SUMMARY_BINS       = 4096
@@ -366,6 +366,7 @@ export async function parseBtf(text, progressCallback) {
     intervalInstancesById,
     unmatchedStarts: intervalUnmatchedStarts,
   } = buildIntervalData(stiEvents)
+  const intervalMarkerById = buildIntervalMarkerIndex(stiEvents)
 
   // Core names sorted
   const coreNames = [...cnSet].sort(compareCores)
@@ -585,6 +586,7 @@ export async function parseBtf(text, progressCallback) {
     intervalIds,
     intervalInstancesById,
     intervalUnmatchedStarts,
+    intervalMarkerById,
 
     // ---- Task-view lookup tables ----
     segByMergeKey:              segsByMk,

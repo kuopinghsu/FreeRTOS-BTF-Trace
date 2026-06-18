@@ -861,7 +861,7 @@ To get reliable per-task interval statistics:
 
 ##### Timeline rendering
 
-Interval bars use **time-anchored** dark/light stripes (fixed period in trace time units) so stripe phase stays stable when you scroll or zoom. Outline and bar position still follow the usual pixel snapping.
+Interval bars are drawn as **solid** spans in the interval’s colour. **Start** and **stop** events are marked with vertical tick lines (solid at start, dashed at stop) on the interval row.
 
 #### Trace Health (TICK)
 

@@ -865,6 +865,7 @@ const timelineOptions = reactive({
   highlightKey:    null,
   marks:           [],
   highlightSegment: null,
+  highlightInterval: null,
   selectedMarkId:  null,
   migratedOnlyFilter: false,
   taskFilterKeys:     null,
@@ -1047,9 +1048,11 @@ function onSegmentClick(seg) {
   if (isSame) {
     highlightSegment.value = null
     timelineOptions.highlightSegment = null
+    timelineOptions.highlightInterval = null
   } else {
     highlightSegment.value = seg
     timelineOptions.highlightSegment = seg
+    timelineOptions.highlightInterval = null
   }
 }
 
@@ -1062,6 +1065,7 @@ watch(activeTabId, () => {
   const tab = activeTab.value
   timelineOptions.highlightKey = tab?.pinnedHighlightKey ?? null
   timelineOptions.highlightSegment = tab?.highlightSegment ?? null
+  timelineOptions.highlightInterval = null
   timelineOptions.lockedTaskKey = tab?.pinnedHighlightKey ?? null
   _navCache = tab ? getNavCache(tab) : null
   nextTick(() => {
@@ -1080,6 +1084,14 @@ watch(
     appSettings.cpuLoadRowH,
   ],
   () => nextTick(() => autofitCpuLoadPaneHeight()),
+)
+
+watch(
+  () => timelineOptions.viewMode,
+  () => {
+    timelineOptions.highlightInterval = null
+    scheduleRender()
+  },
 )
 
 watch(
@@ -1206,6 +1218,7 @@ async function attachParsedTrace(name, packedOrTrace) {
     undoStack.clear()
     timelineOptions.taskFilterKeys = null
     timelineOptions.heatmapFilterLabel = null
+    timelineOptions.highlightInterval = null
 
     tab.trace = markRaw(trace)
     if (trace.meta?._versionWarning) {
@@ -1373,13 +1386,19 @@ function onJumpToTime(ns) {
 
 function onStatsPlotPointActivate({ ns, note, segment, interval }) {
   if (segment) {
+    timelineOptions.highlightInterval = null
     highlightSegment.value = segment
     timelineOptions.highlightSegment = segment
     timelineOptions.highlightKey = taskMergeKey(segment.task)
     timelinePanelRef.value?.scrollToSegmentIfNeeded(segment)
   } else if (interval) {
+    highlightSegment.value = null
+    timelineOptions.highlightSegment = null
+    timelineOptions.highlightInterval = { ...interval, markNs: ns ?? interval.stopNs }
     timelinePanelRef.value?.zoomToTimeRange(interval.startNs, interval.stopNs)
+    timelinePanelRef.value?.scrollToIntervalRow(interval.id)
   } else if (ns != null) {
+    timelineOptions.highlightInterval = null
     timelinePanelRef.value?.jumpToNs(ns)
   }
   if (ns != null) addAnnotationAtNs(ns, note)
@@ -1698,6 +1717,7 @@ function clearCpuLoadSelection() {
   highlightSegment.value = null
   timelineOptions.highlightKey = null
   timelineOptions.highlightSegment = null
+  timelineOptions.highlightInterval = null
   timelineOptions.lockedTaskKey = null
   scheduleRender()
 }

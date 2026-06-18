@@ -335,7 +335,8 @@ mkdirSync(outDir, { recursive: true })
 
 const cs8Mk = findMkByDisplay(trace, 'CS[8]')
 const runnerMk = findMkByDisplay(trace, 'Runner[1]')
-const preemptRow = preemptionChainRows(trace)[1] // CS[10] ← CS[11], high count
+const { rows: _preemptExportRows } = preemptionChainRows(trace)
+const preemptRow = _preemptExportRows[1] // CS[10] ← CS[11], high count
 
 const exports = [
   { id: 'exec-cs8', plot: buildExecPlot(trace, cs8Mk), kind: 'exec' },

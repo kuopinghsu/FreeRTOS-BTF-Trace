@@ -30,7 +30,8 @@ import {
   intervalColor,
   isIntervalMarkerChannel,
   visibleIntervalInstances,
-  fillIntervalStripedBar,
+  visibleIntervalMarkerEvents,
+  intervalStripeColors,
 } from '../utils/intervalAnalysis.js'
 
 export { formatTime, formatMigrationGapTime }
@@ -273,15 +274,17 @@ export function buildRowLayout(trace, viewMode, expanded, yStart, showSti = true
       rows.push({ type: 'sti', key: ch, label: ch, color: '#888', y, isTag, isExpanded })
       y += rowH + L().rowGap
     }
-    for (const id of (trace.intervalIds || [])) {
-      rows.push({
-        type: 'interval',
-        key: id,
-        label: `Interval ${id}`,
-        color: intervalColor(id),
-        y,
-      })
-      y += L().rowH + L().rowGap
+    if (viewMode === 'task') {
+      for (const id of (trace.intervalIds || [])) {
+        rows.push({
+          type: 'interval',
+          key: id,
+          label: `Interval ${id}`,
+          color: intervalColor(id),
+          y,
+        })
+        y += L().rowH + L().rowGap
+      }
     }
   }
 
@@ -428,7 +431,7 @@ export function render(ctx, trace, viewport, options = {}) {
     } else if (row.type === 'sti') {
       drawStiRow(ctx, trace, row, rowY, timeStart, timeEnd, pxPerNs, canvasW, darkMode, stiLogScale)
     } else if (row.type === 'interval') {
-      drawIntervalRow(ctx, trace, row, rowY, timeStart, timeEnd, pxPerNs, canvasW, darkMode)
+      drawIntervalRow(ctx, trace, row, rowY, timeStart, timeEnd, pxPerNs, canvasW, darkMode, options.highlightInterval ?? null)
     }
   }
 
@@ -1004,7 +1007,7 @@ function drawCoreTaskRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerN
 }
 
 /** Draw paired interval spans as horizontal bars (Tracealyzer-style interval lane). */
-function drawIntervalRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, canvasW, darkMode) {
+function drawIntervalRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, canvasW, darkMode, highlightInterval = null) {
   const rowY = canvasRowY
   const rowH = L().rowH
   ctx.fillStyle = darkMode ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.02)'
@@ -1026,17 +1029,56 @@ function drawIntervalRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerN
     bars.push({ inst, cx, drawW })
   }
 
+  const markerEvents = visibleIntervalMarkerEvents(trace, row.key, timeStart, timeEnd)
+  const barY = rowY + 2
+  const barH = rowH - 4
+
   ctx.save()
   for (const bar of bars) {
-    const { inst, cx, drawW } = bar
-    const barY = rowY + 2
-    const barH = rowH - 4
-    fillIntervalStripedBar(ctx, cx, barY, drawW, barH, base, darkMode,
-      inst.startNs, inst.stopNs, timeStart, pxPerNs)
+    const { cx, drawW } = bar
+    ctx.fillStyle = base
+    ctx.fillRect(cx, barY, drawW, barH)
     if (drawW >= 3) {
       ctx.strokeStyle = stroke
       ctx.lineWidth = 1.25
       ctx.strokeRect(cx + 0.5, barY + 0.5, drawW - 1, barH - 1)
+    }
+  }
+  if (markerEvents.length > 0) {
+    const { dark: tickDark, light: tickLight } = intervalStripeColors(base, darkMode)
+    ctx.lineWidth = 1
+    for (const ev of markerEvents) {
+      const x = (ev.timeNs - timeStart) * pxPerNs
+      if (x < -1 || x > canvasW + 1) continue
+      const xi = Math.round(x) + 0.5
+      ctx.strokeStyle = ev.isStart ? tickDark : tickLight
+      if (!ev.isStart) ctx.setLineDash([2, 2])
+      else ctx.setLineDash([])
+      ctx.beginPath()
+      ctx.moveTo(xi, barY)
+      ctx.lineTo(xi, barY + barH)
+      ctx.stroke()
+    }
+    ctx.setLineDash([])
+  }
+
+  const hi = (highlightInterval && String(highlightInterval.id) === String(row.key))
+    ? highlightInterval
+    : null
+  if (hi) {
+    const markNs = hi.markNs ?? hi.stopNs
+    const times = new Set([markNs, hi.startNs, hi.stopNs])
+    ctx.strokeStyle = darkMode ? 'rgba(255,255,255,0.92)' : 'rgba(0,0,0,0.88)'
+    ctx.lineWidth = 2
+    ctx.setLineDash([])
+    for (const t of times) {
+      const x = (t - timeStart) * pxPerNs
+      if (x < -1 || x > canvasW + 1) continue
+      const xi = Math.round(x) + 0.5
+      ctx.beginPath()
+      ctx.moveTo(xi, barY)
+      ctx.lineTo(xi, barY + barH)
+      ctx.stroke()
     }
   }
   ctx.restore()

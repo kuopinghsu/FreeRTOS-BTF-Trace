@@ -826,7 +826,7 @@
         class="stats-table-block"
       >
         <div
-          v-if="preemptionRows.length > PREEMPTION_CHAIN_MAX_ROWS"
+          v-if="preemptionTruncated"
           class="range-hint"
         >
           Showing top {{ PREEMPTION_CHAIN_MAX_ROWS.toLocaleString() }} pairs by total preemption time.
@@ -1578,6 +1578,7 @@ const workerBlockRows = ref([])
 const workerInterRows = ref([])
 const workerTaskCpuNs = ref(null)
 const preemptionRows = ref([])
+const preemptionTruncated = ref(false)
 const preemptionComputing = ref(false)
 let _statsRefreshTimer = null
 let _preemptionGen = 0
@@ -1662,12 +1663,14 @@ async function refreshStatsTables() {
 function schedulePreemptionRefresh() {
   if (preemptionCollapsed.value || props.statsPaused) {
     preemptionRows.value = []
+    preemptionTruncated.value = false
     preemptionComputing.value = false
     return
   }
   const tr = props.trace
   if (!tr) {
     preemptionRows.value = []
+    preemptionTruncated.value = false
     preemptionComputing.value = false
     return
   }
@@ -1678,7 +1681,9 @@ function schedulePreemptionRefresh() {
   const hi = r?.hi ?? null
   setTimeout(() => {
     if (gen !== _preemptionGen) return
-    preemptionRows.value = preemptionChainRows(tr, lo, hi)
+    const { rows, truncated } = preemptionChainRows(tr, lo, hi)
+    preemptionRows.value = rows
+    preemptionTruncated.value = truncated
     preemptionComputing.value = false
   }, 0)
 }
@@ -2272,7 +2277,8 @@ function onPlotPointClick(point) {
 
 function annotationNsForPlotPoint(point) {
   const payload = point.payload
-  if (payload?.startNs != null && payload?.stopNs != null) return payload.startNs
+  // Interval plots use stop time on the x-axis — align the annotation with the clicked point.
+  if (payload?.startNs != null && payload?.stopNs != null) return point.xNs ?? payload.stopNs
   if (payload?.start != null) return payload.start
   return point.xNs ?? null
 }
@@ -2429,7 +2435,7 @@ function exportCsv() {
   const taskRows = _taskCpuRows(tr, r)
   const lo = r?.lo ?? null
   const hi = r?.hi ?? null
-  const preemptReportRows = preemptionChainRows(tr, lo, hi)
+  const { rows: preemptReportRows } = preemptionChainRows(tr, lo, hi)
   const respReportRows = responseTimeRows(tr, lo, hi)
   const { contextSwitches, coreGaps } = schedulingStats(tr, lo, hi)
   const lines = []
@@ -2851,7 +2857,7 @@ function exportHtml() {
   const lo = r?.lo ?? null
   const hi = r?.hi ?? null
   const migReportRows = migrationRows(tr, lo, hi)
-  const preemptHtmlRows = preemptionChainRows(tr, lo, hi)
+  const { rows: preemptHtmlRows } = preemptionChainRows(tr, lo, hi)
   const intervalHtmlRows = intervalStatsRows(tr, lo, hi)
   const respHtmlRows = responseTimeRows(tr, lo, hi)
   const { contextSwitches, coreGaps } = schedulingStats(tr, lo, hi)

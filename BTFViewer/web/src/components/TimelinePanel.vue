@@ -624,6 +624,7 @@ function paint() {
     stiExpanded,
     highlightKey:     props.options.highlightKey,
     highlightSegment: props.options.highlightSegment ?? null,
+    highlightInterval: props.options.highlightInterval ?? null,
     showGrid:         props.options.showGrid,
     showSti:          props.options.showSti !== false,
     stiLogScale:      !!props.options.stiLogScale,
@@ -1358,6 +1359,22 @@ function scrollToTask(mergeKey) {
   scheduleRender()
 }
 
+/** Scroll the viewport so an interval row is centered (statistics plot drill-down). */
+function scrollToIntervalRow(intervalId) {
+  if (!props.trace || intervalId == null) return
+  const { rows } = buildRowLayout(
+    props.trace, props.options.viewMode, expanded, 0,
+    props.options.showSti !== false, stiExpanded,
+    !!props.options.migratedOnlyFilter,
+    props.options.taskFilterKeys || null,
+  )
+  const targetRow = rows.find(r => r.type === 'interval' && String(r.key) === String(intervalId))
+  if (!targetRow) return
+  viewport.scrollY = Math.max(0, RULER_H + targetRow.y + layout().rowH / 2 - viewport.canvasH / 2)
+  clampScrollToContent()
+  scheduleRender()
+}
+
 /**
  * Scroll the viewport so that seg is fully visible.
  * No-op if the segment is already within the visible time range and row.
@@ -1452,7 +1469,7 @@ defineExpose({
   zoomCenter, expandAll, collapseAll, expandCoresForMergeKeys, jumpToNs, zoomToTimeRange, zoomToCursorRange, zoom1to1,
   jumpToTraceStart, jumpToTraceEnd, jumpSegmentBoundary, scrollTimeAxis, scrollRowAxis,
   placeCursorAtCenter, placeCursorAtTime, removeNearestCursorAt, clearAllCursorsViaHandler,
-  getViewport, getViewportCenter, getCoreAtViewportCenter, scrollToTask, scrollToSegmentIfNeeded,
+  getViewport, getViewportCenter, getCoreAtViewportCenter, scrollToTask, scrollToIntervalRow, scrollToSegmentIfNeeded,
   captureScreenshotBlob, captureAsSvg, getHoverTime, getLastActiveCursorTime,
 })
 
@@ -1625,7 +1642,7 @@ watch([() => props.options.orientation, () => props.options.viewMode], () => {
   scheduleRender()
 })
 // Other visual options that affect segment rendering → full repaint
-watch([() => props.options.highlightKey, () => props.options.highlightSegment, () => props.options.showGrid, () => props.options.showSti, () => props.options.darkMode, () => props.options.stiLogScale, () => props.options.migratedOnlyFilter, () => props.options.taskFilterKeys, () => props.options.lockedTaskKey], () => {
+watch([() => props.options.highlightKey, () => props.options.highlightSegment, () => props.options.highlightInterval, () => props.options.showGrid, () => props.options.showSti, () => props.options.darkMode, () => props.options.stiLogScale, () => props.options.migratedOnlyFilter, () => props.options.taskFilterKeys, () => props.options.lockedTaskKey], () => {
   _ovBgCanvas = null
   scheduleRender()
   if (overviewVisible.value) scheduleOverviewPaint()
