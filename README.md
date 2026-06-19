@@ -31,6 +31,37 @@ FreeRTOS trace hooks
   → BTFViewer (desktop or web) / Trace Compass / GTKWave
 ```
 
+### Binary → BTF dump mapping
+
+`tools/gentrace` and live `btf_dump()` (`PRINT_BTF_DUMP` in `btf_port.h`) use the same rules to turn each `trace.bin` event into one BTF CSV line:
+
+`time, source, 0, type, target, 0, action, note`
+
+On SMP (`configNUMBER_OF_CORES` > 1), the emitting core is stored in the high bits of `event.types` and appears as `source` (`Core_N` or `[N/…]` in task rows). `param1` / `param2` are the 32-bit fields in the `EVENT` struct (`btf_trace.h`).
+
+| Event (`event_t`) | Hook / API | `param1` | `param2` | BTF `type` | BTF `target` | BTF `action` | BTF `note` (last field) |
+|-------------------|------------|----------|----------|------------|--------------|--------------|-------------------------|
+| `TASK_SWITCHED_IN` (1) | `traceTASK_SWITCHED_IN` | task id | 0 | `T` | `[core/id]Name` | `resume` | *(empty)* |
+| `TASK_SWITCHED_OUT` (2) | `traceTASK_SWITCHED_OUT` | task id | 0 | `T` | `[core/id]Name` | `preempt` | *(empty)* |
+| `TASK_CREATE` (3) | `traceTASK_CREATE` | task id | priority | `T` | `[core/id]Name` | `preempt` | `create pri:N` |
+| `TASK_DELETE` (4) | `traceTASK_DELETE` | task id | 0 | `STI` | `task` | `trigger` | `delete Name[id]` |
+| `TASK_SUSPEND` (5) | `traceTASK_SUSPEND` | task id | 0 | `STI` | `task` | `trigger` | `suspend Name[id]` |
+| `TASK_RESUME` (6) | `traceTASK_RESUME` | task id | 0 | `STI` | `task` | `trigger` | `resume Name[id]` |
+| `TASK_RESUME_FROM_ISR` (7) | `traceTASK_RESUME_FROM_ISR` | task id | 0 | `STI` | `task` | `trigger` | `resume/isr` |
+| `TASK_PRIORITY_SET` (15) | `traceTASK_PRIORITY_SET` | task id | new priority | `STI` | `task` | `trigger` | `set_priority Name[id] pri:N` |
+| `QUEUE_CREATE` (8) | `traceQUEUE_CREATE` | queue type† | object pointer | `STI` | `queue` / `mutex` / `sem`† | `trigger` | `create 0x........` |
+| `QUEUE_SEND` (9) | `traceQUEUE_SEND` | queue type† | object pointer | `STI` | `queue` / `mutex` / `sem`† | `trigger` | `send` / `give`† `0x........` |
+| `QUEUE_RECEIVE` (10) | `traceQUEUE_RECEIVE` | queue type† | object pointer | `STI` | `queue` / `mutex` / `sem`† | `trigger` | `recv` / `take`† `0x........` |
+| `QUEUE_DELETE` (11) | `traceQUEUE_DELETE` | queue type† | object pointer | `STI` | `queue` / `mutex` / `sem`† | `trigger` | `delete 0x........` |
+| `TASK_INCREMENT_TICK` (12) | `traceTASK_INCREMENT_TICK` | tick count | 0 | `STI` | `TICK` | `trigger` | `N` |
+| `INTERVAL_START` (13) | `traceINTERVAL_START` | interval id | caller task id | `STI` | `interval_start` | `trigger` | `{id} tid:{task_id}` |
+| `INTERVAL_STOP` (14) | `traceINTERVAL_STOP` | interval id | caller task id | `STI` | `interval_stop` | `trigger` | `{id} tid:{task_id}` |
+| `TAG` … `TAG7` (90–97) | `traceTAG(t, v)` | tag value | 0 | `STI` | `tag0_event` … `tag7_event` | `trigger` | `N` |
+
+† **Queue type** (`param1`): `0` = queue, `1` = mutex, `2` = counting semaphore, `3` = binary semaphore, `4` = recursive mutex (`QUEUE_TYPE_*` in `btf_trace.h`). Mutex/semaphore rows use target `mutex` or `sem`; send/receive use `give`/`take` for mutex/sem and `send`/`recv` for queues.
+
+`TASK_CREATE` also registers the task name in the trace task table (via `btf_trace_add_task()`). Task ids in BTF rows match `uxTCBNumber` from the kernel; interval `param2` uses the same id (`vTaskSetTaskNumber` keeps `uxTaskGetTaskNumber()` in sync at task creation).
+
 ---
 
 ## Repository Structure
@@ -163,7 +194,7 @@ In BTFViewer, locate the **tag0_event** STI row in the label column and expand i
 
 ### Use case: measure code execution intervals
 
-Pair **interval start/stop** events to bracket a region of code and record when it ran and how long it took. The demo wraps each stress test (and each test iteration) with these calls.
+Pair **`interval_start` / `interval_stop`** STI events to bracket a region of code and record when it ran and how long it took. The demo wraps each stress test (and each test iteration) with these calls.
 
 **Setup:** same as tag events — `configUSE_TRACE_FACILITY` = `1` and `configINCLUDE_TAGS` = `1` (default in `FreeRTOS-Trace/FreeRTOS-Trace.h`).
 
@@ -175,6 +206,8 @@ Pair **interval start/stop** events to bracket a region of code and record when 
 | `btf_traceINTERVAL_STOP( id )`  | Any* | Low-level stop (no critical-section wrapper) |
 
 \*Prefer the `traceINTERVAL_*` macros in task code. Use the `btf_traceINTERVAL_*` functions only when you already hold the trace lock or are in a context where the macro wrappers are unsuitable.
+
+The logger records the **calling task id** automatically (`param2` in the binary event); you only pass the interval `id`.
 
 **Example:**
 
@@ -188,18 +221,19 @@ Pair **interval start/stop** events to bracket a region of code and record when 
 #endif
 ```
 
-Each call emits a BTF STI line. The channel name identifies start vs. stop; the last field is the interval `id`:
+**Binary layout** — see [Binary → BTF dump mapping](#binary--btf-dump-mapping) (`param1` = interval `id`, `param2` = caller task id).
+
+**BTF text** (from `gentrace` or live `btf_dump`): channel `interval_start` or `interval_stop`; the note field (last CSV column) is `{id} tid:{task_id}`:
 
 ```
-151509,Core_0,0,STI,interval_start,0,trigger,1
-153253,Core_1,0,STI,interval_stop,0,trigger,1
+214276,Core_0,0,STI,interval_start,0,trigger,0 tid:1
+215514,Core_0,0,STI,interval_start,0,trigger,1 tid:7
+217432,Core_1,0,STI,interval_stop,0,trigger,1 tid:7
 ```
 
 In the demo (`Demo/examples/freertos_test/main.c`), `id` **0** brackets an entire test function; **1**–**6** bracket the inner loop of tests 1–6 respectively.
 
-**In BTFViewer:** each interval `id` appears as an **Interval N** row at the bottom of the timeline (horizontal task view). Colored bars show each start→stop span. Open **Statistics → Interval Analysis** for min/avg/max duration and a duration plot (Tracealyzer-style interval plot).
-
-**Binary event types** (in `btf_trace.h`): `TRACE_EVENT_INTERVAL_START` (13), `TRACE_EVENT_INTERVAL_STOP` (14).
+**In BTFViewer:** paired spans appear as **Interval N** rows at the bottom of the timeline (horizontal task view). When the BTF note includes `tid:{task_id}`, start/stop events pair by **interval id + task id**; legacy traces without `tid` pair by the note string alone. Open **Statistics → Interval Analysis** for min/avg/max/p95 duration and a duration plot. See [`BTFViewer/README.md`](BTFViewer/README.md#interval-analysis) for pairing rules and SMP limitations.
 
 ---
 
@@ -299,8 +333,8 @@ When `configINCLUDE_TAGS` is `1`, you can emit user-defined STI events from appl
 | Macro | Underlying function | Purpose |
 |-------|---------------------|---------|
 | `traceTAG( t, v )` | `btf_traceTAG()` | Periodic sample; `t` = 0…7, `v` = 32-bit payload |
-| `traceINTERVAL_START( id )` | `btf_traceINTERVAL_START()` | Mark the start of a timed code region |
-| `traceINTERVAL_STOP( id )` | `btf_traceINTERVAL_STOP()` | Mark the end of the same region (`id` must match) |
+| `traceINTERVAL_START( id )` | `btf_traceINTERVAL_START()` | Mark the start of a timed code region (`param1` = `id`, `param2` = caller task id) |
+| `traceINTERVAL_STOP( id )` | `btf_traceINTERVAL_STOP()` | Mark the end of the same region (`id` must match; same task id recorded in `param2`) |
 
 See [Use case: monitor heap usage with the tick hook](#use-case-monitor-heap-usage-with-the-tick-hook) and [Use case: measure code execution intervals](#use-case-measure-code-execution-intervals) for worked examples.
 
@@ -319,6 +353,8 @@ tools/gentrace trace.bin trace.btf
 # VCD format
 tools/gentrace -v trace.bin trace.vcd
 ```
+
+Event-to-BTF field mapping is documented in [Binary → BTF dump mapping](#binary--btf-dump-mapping).
 
 ### 8. Open the trace
 

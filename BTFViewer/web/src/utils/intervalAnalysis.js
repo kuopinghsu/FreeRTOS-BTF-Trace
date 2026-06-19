@@ -58,8 +58,34 @@ function isStop(ev) {
   return INTERVAL_STOP_CHANNELS.has(ev.target)
 }
 
-function intervalId(ev) {
-  return (ev.note != null && ev.note !== '') ? String(ev.note) : '0'
+/** @typedef {{ intervalId: string, taskId: string|null, pairingKey: string }} ParsedIntervalNote */
+
+/**
+ * Parse interval STI note: legacy `{id}` or `{id} tid:{task_id}` (from gentrace / btf_dump).
+ * @returns {ParsedIntervalNote}
+ */
+export function parseIntervalNote(note) {
+  const raw = (note != null && note !== '') ? String(note).trim() : '0'
+  const m = /^(\S+)\s+tid:(\d+)\s*$/i.exec(raw)
+  if (m) {
+    return {
+      intervalId: m[1],
+      taskId: m[2],
+      pairingKey: `${m[1]}\0tid:${m[2]}`,
+    }
+  }
+  return { intervalId: raw, taskId: null, pairingKey: raw }
+}
+
+/** Stack key for start/stop pairing. */
+function intervalPairingKey(ev) {
+  return parseIntervalNote(ev.note).pairingKey
+}
+
+/** Row / stats bucket id (interval id when tid present, else full legacy note). */
+function intervalDisplayId(ev) {
+  const parsed = parseIntervalNote(ev.note)
+  return parsed.taskId != null ? parsed.intervalId : parsed.pairingKey
 }
 
 /** @returns {{ intervalInstances, intervalIds, intervalInstancesById, unmatchedStarts }} */
@@ -73,17 +99,20 @@ export function buildIntervalData(stiEvents) {
     .sort((a, b) => a.time - b.time || (isStart(a) ? 0 : 1))
 
   for (const ev of sorted) {
-    const id = intervalId(ev)
+    const pairKey = intervalPairingKey(ev)
+    const displayId = intervalDisplayId(ev)
+    const parsed = parseIntervalNote(ev.note)
     if (isStart(ev)) {
-      if (!open.has(id)) open.set(id, [])
-      open.get(id).push(ev)
+      if (!open.has(pairKey)) open.set(pairKey, [])
+      open.get(pairKey).push(ev)
     } else {
-      const stack = open.get(id)
+      const stack = open.get(pairKey)
       if (!stack?.length) continue
       const startEv = stack.pop()
       if (ev.time > startEv.time) {
         intervalInstances.push({
-          id,
+          id: displayId,
+          taskId: parsed.taskId,
           startNs: startEv.time,
           stopNs: ev.time,
           durationNs: ev.time - startEv.time,
@@ -120,7 +149,7 @@ export function buildIntervalMarkerIndex(stiEvents) {
   const byId = new Map()
   for (const ev of stiEvents || []) {
     if (!isStart(ev) && !isStop(ev)) continue
-    const id = intervalId(ev)
+    const id = intervalDisplayId(ev)
     if (!byId.has(id)) byId.set(id, [])
     byId.get(id).push({ timeNs: ev.time, isStart: isStart(ev) })
   }

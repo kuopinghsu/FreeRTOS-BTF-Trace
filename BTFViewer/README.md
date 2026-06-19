@@ -729,14 +729,23 @@ Most spans cluster at short durations (tight yield loops); occasional high **y**
 
 ##### Pairing algorithm
 
-At parse time, the viewer collects all `interval_start` / `interval_stop` STI events (per id), sorts them by time (start before stop at the same timestamp), and pairs them with a **per-id stack**:
+At parse time, the viewer collects all `interval_start` / `interval_stop` STI events, sorts them by time (start before stop at the same timestamp), and pairs them with a **per-key stack** (LIFO).
 
-1. **`interval_start`** — push the event onto that id's stack.
-2. **`interval_stop`** — pop the most recent unmatched start for that id and form one instance `[start_time, stop_time]`.
+**Note parsing** (last BTF CSV field):
+
+| Note format | Pairing key | Timeline / stats row id |
+|-------------|-------------|-------------------------|
+| `{id} tid:{task_id}` (current firmware) | interval `id` + `task_id` | `id` only (`Interval N`) |
+| `{id}` or other legacy text | full note string | same as note |
+
+When `tid:` is present, concurrent workers can share the same interval **id** without cross-pairing: task 7's `START(1)` only pairs with task 7's `STOP(1)`, even if task 8 uses id `1` at the same time. Legacy traces without `tid` keep the original behaviour (pair by note / id string only).
+
+1. **`interval_start`** — push the event onto that key's stack.
+2. **`interval_stop`** — pop the most recent unmatched start for that key and form one instance `[start_time, stop_time]`.
 3. **`interval_stop` with an empty stack** — ignored (orphan stop).
 4. **Unmatched starts after the trace ends** — counted internally but not shown in statistics.
 
-This is **LIFO (last-in, first-out) nesting**: a stop always closes the newest open start for the same id.
+This is **LIFO (last-in, first-out) nesting** within each pairing key.
 
 ```text
 START(id=2)           stack: [A]
@@ -749,9 +758,9 @@ Result: **two** instances — one for the inner region, one for the outer region
 
 ##### Limitations
 
-**1. Concurrent overlap with the same id (cross-pairing)**
+**1. Concurrent overlap with the same id (cross-pairing)** — *legacy traces without `tid`*
 
-The stack algorithm assumes stops arrive in the **reverse order** of starts. That holds for true call-stack nesting on one thread, but **not** when several tasks use the **same interval id** at the same time.
+When the BTF note has **no** `tid:{task_id}` suffix, pairing uses the note string only. The stack algorithm then assumes stops arrive in the **reverse order** of starts. That holds for true call-stack nesting on one thread, but **not** when several tasks use the **same interval id** at the same time.
 
 ```text
 Task on Core_1: START(2) ─────────────────────── STOP(2)
@@ -765,7 +774,7 @@ When starts and stops interleave across cores, the viewer can pair one task's **
 - **Count** — still the number of stop events that found a start on the stack (often equals the number of loop iterations).
 - **Min / Avg / Max / p95** — can be **wrong**: bogus **very long** spans inflate max and avg; the distribution chart shows outlier points far above the real iteration time.
 
-`example-4cores.btf` uses one id per stress test but **multiple worker tasks** per test (`vMutexWorker`, `vCtxSwitchWorker`, etc.), so cross-pairing is expected on ids **1–4**:
+`example-4cores.btf` (recorded with `tid` in each interval note) pairs correctly per task; older example files without `tid` may still show cross-pairing on ids **1–4** when multiple workers share one id:
 
 | Interval id | Test (see `Demo/examples/freertos_test/main.c`) | Paired **Count** | Spans &lt; 500 µs | Spans ≥ 500 µs (likely cross-paired) | **Max** duration |
 |-------------|--------------------------------------------------|------------------|-------------------|--------------------------------------|------------------|
@@ -778,7 +787,7 @@ For these traces, treat **short-duration clusters** in the scatter/histogram as 
 
 **2. SMP task migration — why pairing is not done by core**
 
-The viewer pairs by **interval id only** (stack/LIFO), not by the **core** field on each STI event. A core-based matcher might seem attractive when several tasks share one id, but on **SMP** it is **not reliable**:
+The viewer pairs by **interval id** (and **task id** when `tid` is present), not by the **core** field on each STI event. A core-based matcher might seem attractive when several tasks share one id, but on **SMP** it is **not reliable**:
 
 - A single FreeRTOS task can **migrate** between cores while an interval is open (`START` on Core_0, body runs, `STOP` on Core_2 after migration).
 - Preemption and scheduling can also make the "running core" at `START`/`STOP` differ from the core where most of the work ran.

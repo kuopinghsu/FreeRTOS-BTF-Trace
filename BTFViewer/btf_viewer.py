@@ -585,6 +585,7 @@ class IntervalInstance:
     stop_ns: int
     start_core: str = ""
     stop_core: str = ""
+    task_id: Optional[str] = None
 
 _INTERVAL_START_CHANNELS = frozenset({"interval_start", "start_intval"})
 _INTERVAL_STOP_CHANNELS  = frozenset({"interval_stop", "stop_intval"})
@@ -595,6 +596,22 @@ _INTERVAL_COLORS = (
 
 def _is_interval_marker_channel(channel: str) -> bool:
     return channel in _INTERVAL_START_CHANNELS or channel in _INTERVAL_STOP_CHANNELS
+
+def _parse_interval_note(note: str) -> Tuple[str, Optional[str], str]:
+    """Return (interval_id, task_id, pairing_key) from STI note text."""
+    raw = (note or "").strip() or "0"
+    m = re.match(r"^(\S+)\s+tid:(\d+)\s*$", raw, re.IGNORECASE)
+    if m:
+        iid, tid = m.group(1), m.group(2)
+        return iid, tid, f"{iid}\0tid:{tid}"
+    return raw, None, raw
+
+def _interval_pairing_key(ev: "StiEvent") -> str:
+    return _parse_interval_note(ev.note)[2]
+
+def _interval_display_id(ev: "StiEvent") -> str:
+    iid, tid, _ = _parse_interval_note(ev.note)
+    return iid if tid is not None else _
 
 def _interval_color(interval_id: str) -> str:
     try:
@@ -675,7 +692,7 @@ def _build_interval_marker_index(
         is_start = ev.target in _INTERVAL_START_CHANNELS
         if not is_start and ev.target not in _INTERVAL_STOP_CHANNELS:
             continue
-        iid = ev.note if ev.note else "0"
+        iid = _interval_display_id(ev)
         row = by_id.setdefault(iid, {"events": [], "times": []})
         row["events"].append((ev.time, is_start))
     for row in by_id.values():
@@ -771,29 +788,29 @@ def _build_interval_data(
     def _is_start(ev: StiEvent) -> bool:
         return ev.target in _INTERVAL_START_CHANNELS
 
-    def _ev_id(ev: StiEvent) -> str:
-        return ev.note if ev.note else "0"
-
     ordered = sorted(
         [ev for ev in sti_events if _is_start(ev) or ev.target in _INTERVAL_STOP_CHANNELS],
         key=lambda e: (e.time, 0 if _is_start(e) else 1),
     )
     for ev in ordered:
-        iid = _ev_id(ev)
+        pair_key = _interval_pairing_key(ev)
+        display_id = _interval_display_id(ev)
+        _, task_id, _ = _parse_interval_note(ev.note)
         if _is_start(ev):
-            open_stacks.setdefault(iid, []).append(ev)
+            open_stacks.setdefault(pair_key, []).append(ev)
         else:
-            stack = open_stacks.get(iid)
+            stack = open_stacks.get(pair_key)
             if not stack:
                 continue
             start_ev = stack.pop()
             if ev.time > start_ev.time:
                 instances.append(IntervalInstance(
-                    id=iid,
+                    id=display_id,
                     start_ns=start_ev.time,
                     stop_ns=ev.time,
                     start_core=start_ev.core,
                     stop_core=ev.core,
+                    task_id=task_id,
                 ))
     for stack in open_stacks.values():
         unmatched += len(stack)

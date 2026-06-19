@@ -25,7 +25,7 @@
 #include <string.h>
 
 #define TRACE_VER_MAJOR     1
-#define TRACE_VER_MINOR     3
+#define TRACE_VER_MINOR     4
 #define TRACE_VERSION       ((TRACE_VER_MAJOR<<16)|TRACE_VER_MINOR)
 
 #ifndef configMAX_TRACE_TASKS
@@ -57,6 +57,7 @@ typedef enum {
     TRACE_EVENT_TASK_INCREMENT_TICK  = 12,
     TRACE_EVENT_INTERVAL_START       = 13,
     TRACE_EVENT_INTERVAL_STOP        = 14,
+    TRACE_EVENT_TASK_PRIORITY_SET    = 15,
     TRACE_EVENT_TAG                  = 90,
     TRACE_EVENT_TAG1                 = 91,
     TRACE_EVENT_TAG2                 = 92,
@@ -75,7 +76,8 @@ typedef enum {
 
 typedef struct {
     uint32_t    timestamp;
-    uint32_t    value;
+    uint32_t    param1;
+    uint32_t    param2;
     event_t     types;
 } EVENT;
 
@@ -108,8 +110,8 @@ void btf_traceEND(void);
 void btf_traceTAG(int t, int v);
 void btf_traceINTERVAL_START(int id);
 void btf_traceINTERVAL_STOP(int id);
-void btf_trace_add_task(uint8_t *task_name, uint32_t task_id, event_t event);
-void btf_trace_add_event(uint32_t value, event_t event);
+void btf_trace_add_task(uint8_t *task_name, uint32_t task_id, uint32_t priority, event_t event);
+void btf_trace_add_event(uint32_t param1, uint32_t param2, event_t event);
 void btf_trace_increment_tick(uint32_t xTickCount);
 void btf_dump(void);
 

@@ -341,7 +341,7 @@ int genbtf(
                         coreid,
                         current_task[coreid], display_taskname(trace_data, current_task[coreid]),
                         coreid,
-                        event->value, display_taskname(trace_data, (int)event->value),
+                        event->param1, display_taskname(trace_data, (int)event->param1),
                         "resume",
                         "");
                 break;
@@ -350,19 +350,20 @@ int genbtf(
                         current_time,
                         coreid,
                         coreid,
-                        event->value, display_taskname(trace_data, (int)event->value),
+                        event->param1, display_taskname(trace_data, (int)event->param1),
                         "preempt",
                         "");
-                current_task[coreid] = (int)event->value;
+                current_task[coreid] = (int)event->param1;
                 break;
             case TRACE_EVENT_TASK_CREATE:
-                fprintf(fout, "%" PRIu64 ",Core_%d,0,T,[%d/%04d]%s,0,%s,%s\n",
+                fprintf(fout, "%" PRIu64 ",Core_%d,0,T,[%d/%04d]%s,0,%s,%s pri:%d\n",
                         current_time,
                         coreid,
                         coreid,
-                        event->value, display_taskname(trace_data, (int)event->value),
+                        event->param1, display_taskname(trace_data, (int)event->param1),
                         "preempt",
-                        "create");
+                        "create",
+                        (int)event->param2);
                 break;
             case TRACE_EVENT_TASK_DELETE:
                 fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%s %s[%d]\n",
@@ -371,8 +372,8 @@ int genbtf(
                         "task",
                         "trigger",
                         "delete",
-                        display_taskname(trace_data, (int)event->value),
-                        event->value);
+                        display_taskname(trace_data, (int)event->param1),
+                        event->param1);
                 break;
             case TRACE_EVENT_TASK_SUSPEND:
                 fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%s %s[%d]\n",
@@ -381,8 +382,8 @@ int genbtf(
                         "task",
                         "trigger",
                         "suspend",
-                        display_taskname(trace_data, (int)event->value),
-                        event->value);
+                        display_taskname(trace_data, (int)event->param1),
+                        event->param1);
                 break;
             case TRACE_EVENT_TASK_RESUME:
                 fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%s %s[%d]\n",
@@ -391,8 +392,8 @@ int genbtf(
                         "task",
                         "trigger",
                         "resume",
-                        display_taskname(trace_data, (int)event->value),
-                        event->value);
+                        display_taskname(trace_data, (int)event->param1),
+                        event->param1);
                 break;
             case TRACE_EVENT_TASK_RESUME_FROM_ISR:
                 fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%s\n",
@@ -402,120 +403,143 @@ int genbtf(
                         "trigger",
                         "resume/isr");
                 break;
+            case TRACE_EVENT_TASK_PRIORITY_SET:
+                fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%s %s[%d] pri:%d\n",
+                        current_time,
+                        coreid,
+                        "task",
+                        "trigger",
+                        "set_priority",
+                        display_taskname(trace_data, (int)event->param1),
+                        event->param1,
+                        (int)event->param2);
+                break;
             case TRACE_EVENT_QUEUE_CREATE:
-                switch(event->value) {
+                switch(event->param1) {
                 case QUEUE_TYPE_MUTEX:
                 case QUEUE_TYPE_RECURSIVE_MUTEX:
-                    fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%s\n",
+                    fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%s 0x%08x\n",
                             current_time,
                             coreid,
                             "mutex",
                             "trigger",
-                            "create");
+                            "create",
+                            (unsigned)event->param2);
                     break;
                 case QUEUE_TYPE_COUNTING_SEM:
                 case QUEUE_TYPE_BINARY_SEM:
-                    fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%s\n",
+                    fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%s 0x%08x\n",
                             current_time,
                             coreid,
                             "sem",
                             "trigger",
-                            "create");
+                            "create",
+                            (unsigned)event->param2);
                     break;
                 default:
-                    fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%s\n",
+                    fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%s 0x%08x\n",
                             current_time,
                             coreid,
                             "queue",
                             "trigger",
-                            "create");
+                            "create",
+                            (unsigned)event->param2);
                 }
                 break;
             case TRACE_EVENT_QUEUE_SEND:
-                switch(event->value) {
+                switch(event->param1) {
                 case QUEUE_TYPE_MUTEX:
                 case QUEUE_TYPE_RECURSIVE_MUTEX:
-                    fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%s\n",
+                    fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%s 0x%08x\n",
                             current_time,
                             coreid,
                             "mutex",
                             "trigger",
-                            "give");
+                            "give",
+                            (unsigned)event->param2);
                     break;
                 case QUEUE_TYPE_COUNTING_SEM:
                 case QUEUE_TYPE_BINARY_SEM:
-                    fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%s\n",
+                    fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%s 0x%08x\n",
                             current_time,
                             coreid,
                             "sem",
                             "trigger",
-                            "give");
+                            "give",
+                            (unsigned)event->param2);
                     break;
                 default:
-                    fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%s\n",
+                    fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%s 0x%08x\n",
                             current_time,
                             coreid,
                             "queue",
                             "trigger",
-                            "send");
+                            "send",
+                            (unsigned)event->param2);
                 }
                 break;
             case TRACE_EVENT_QUEUE_RECEIVE:
-                switch(event->value) {
+                switch(event->param1) {
                 case QUEUE_TYPE_MUTEX:
                 case QUEUE_TYPE_RECURSIVE_MUTEX:
-                    fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%s\n",
+                    fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%s 0x%08x\n",
                             current_time,
                             coreid,
                             "mutex",
                             "trigger",
-                            "take");
+                            "take",
+                            (unsigned)event->param2);
                     break;
                 case QUEUE_TYPE_COUNTING_SEM:
                 case QUEUE_TYPE_BINARY_SEM:
-                    fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%s\n",
+                    fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%s 0x%08x\n",
                             current_time,
                             coreid,
                             "sem",
                             "trigger",
-                            "take");
+                            "take",
+                            (unsigned)event->param2);
                     break;
                 default:
-                    fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%s\n",
+                    fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%s 0x%08x\n",
                             current_time,
                             coreid,
                             "queue",
                             "trigger",
-                            "recv");
+                            "recv",
+                            (unsigned)event->param2);
                 }
                 break;
             case TRACE_EVENT_QUEUE_DELETE:
-                switch(event->value) {
+                switch(event->param1) {
                 case QUEUE_TYPE_MUTEX:
                 case QUEUE_TYPE_RECURSIVE_MUTEX:
-                    fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%s\n",
+                    fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%s 0x%08x\n",
                             current_time,
                             coreid,
                             "mutex",
                             "trigger",
-                            "delete");
+                            "delete",
+                            (unsigned)event->param2);
                     break;
                 case QUEUE_TYPE_COUNTING_SEM:
                 case QUEUE_TYPE_BINARY_SEM:
-                    fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%s\n",
+                    fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%s 0x%08x\n",
                             current_time,
                             coreid,
                             "sem",
                             "trigger",
-                            "delete");
+                            "delete",
+                            (unsigned)event->param2);
                     break;
                 default:
-                    fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%s\n",
+                    fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%s 0x%08x\n",
                             current_time,
                             coreid,
                             "queue",
                             "trigger",
-                            "delete");
+                            "delete",
+                            (unsigned)event->param2);
                 }
                 break;
             case TRACE_EVENT_TASK_INCREMENT_TICK:
@@ -524,23 +548,25 @@ int genbtf(
                         coreid,
                         "TICK",
                         "trigger",
-                        event->value);
+                        event->param1);
                 break;
             case TRACE_EVENT_INTERVAL_START:
-                fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%d\n",
+                fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%d tid:%d\n",
                         current_time,
                         coreid,
                         "interval_start",
                         "trigger",
-                        event->value);
+                        (int)event->param1,
+                        (int)event->param2);
                 break;
             case TRACE_EVENT_INTERVAL_STOP:
-                fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%d\n",
+                fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%d tid:%d\n",
                         current_time,
                         coreid,
                         "interval_stop",
                         "trigger",
-                        event->value);
+                        (int)event->param1,
+                        (int)event->param2);
                 break;
             case TRACE_EVENT_TAG:
                 fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%d\n",
@@ -548,7 +574,7 @@ int genbtf(
                         coreid,
                         "tag0_event",
                         "trigger",
-                        event->value);
+                        event->param1);
                 break;
             case TRACE_EVENT_TAG1:
                 fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%d\n",
@@ -556,7 +582,7 @@ int genbtf(
                         coreid,
                         "tag1_event",
                         "trigger",
-                        event->value);
+                        event->param1);
                 break;
             case TRACE_EVENT_TAG2:
                 fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%d\n",
@@ -564,7 +590,7 @@ int genbtf(
                         coreid,
                         "tag2_event",
                         "trigger",
-                        event->value);
+                        event->param1);
                 break;
             case TRACE_EVENT_TAG3:
                 fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%d\n",
@@ -572,7 +598,7 @@ int genbtf(
                         coreid,
                         "tag3_event",
                         "trigger",
-                        event->value);
+                        event->param1);
                 break;
             case TRACE_EVENT_TAG4:
                 fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%d\n",
@@ -580,7 +606,7 @@ int genbtf(
                         coreid,
                         "tag4_event",
                         "trigger",
-                        event->value);
+                        event->param1);
                 break;
             case TRACE_EVENT_TAG5:
                 fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%d\n",
@@ -588,7 +614,7 @@ int genbtf(
                         coreid,
                         "tag5_event",
                         "trigger",
-                        event->value);
+                        event->param1);
                 break;
             case TRACE_EVENT_TAG6:
                 fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%d\n",
@@ -596,7 +622,7 @@ int genbtf(
                         coreid,
                         "tag6_event",
                         "trigger",
-                        event->value);
+                        event->param1);
                 break;
             case TRACE_EVENT_TAG7:
                 fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%d\n",
@@ -604,7 +630,7 @@ int genbtf(
                         coreid,
                         "tag7_event",
                         "trigger",
-                        event->value);
+                        event->param1);
                 break;
             default:
         fprintf(stderr, "Unknown event: %d\n", event->types);
@@ -736,46 +762,46 @@ int genvcd(
 
         switch(event->types & EVENT_MASK) {
             case TRACE_EVENT_TASK_SWITCHED_IN:
-                if (!vcd_task_has_name(trace_data, event->value)) {
+                if (!vcd_task_has_name(trace_data, event->param1)) {
                     break;
                 }
-                fprintf(fout, "1%s\n", get_vcdsig((int)event->value));
+                fprintf(fout, "1%s\n", get_vcdsig((int)event->param1));
                 break;
             case TRACE_EVENT_TASK_SWITCHED_OUT:
-                if (!vcd_task_has_name(trace_data, event->value)) {
+                if (!vcd_task_has_name(trace_data, event->param1)) {
                     break;
                 }
-                fprintf(fout, "0%s\n", get_vcdsig((int)event->value));
+                fprintf(fout, "0%s\n", get_vcdsig((int)event->param1));
                 break;
             case TRACE_EVENT_TASK_CREATE:
-                if (!vcd_task_has_name(trace_data, event->value)) {
+                if (!vcd_task_has_name(trace_data, event->param1)) {
                     break;
                 }
-                fprintf(fout, "0%s\n", get_vcdsig((int)event->value));
+                fprintf(fout, "0%s\n", get_vcdsig((int)event->param1));
                 break;
             case TRACE_EVENT_TASK_DELETE:
-                if (!vcd_task_has_name(trace_data, event->value)) {
+                if (!vcd_task_has_name(trace_data, event->param1)) {
                     break;
                 }
-                fprintf(fout, "x%s\n", get_vcdsig((int)event->value));
+                fprintf(fout, "x%s\n", get_vcdsig((int)event->param1));
                 break;
             case TRACE_EVENT_TASK_SUSPEND:
-                if (!vcd_task_has_name(trace_data, event->value)) {
+                if (!vcd_task_has_name(trace_data, event->param1)) {
                     break;
                 }
-                fprintf(fout, "0%s\n", get_vcdsig((int)event->value));
+                fprintf(fout, "0%s\n", get_vcdsig((int)event->param1));
                 break;
             case TRACE_EVENT_TASK_RESUME:
-                if (!vcd_task_has_name(trace_data, event->value)) {
+                if (!vcd_task_has_name(trace_data, event->param1)) {
                     break;
                 }
-                fprintf(fout, "1%s\n", get_vcdsig((int)event->value));
+                fprintf(fout, "1%s\n", get_vcdsig((int)event->param1));
                 break;
             case TRACE_EVENT_TASK_RESUME_FROM_ISR:
-                if (!vcd_task_has_name(trace_data, event->value)) {
+                if (!vcd_task_has_name(trace_data, event->param1)) {
                     break;
                 }
-                fprintf(fout, "1%s\n", get_vcdsig((int)event->value));
+                fprintf(fout, "1%s\n", get_vcdsig((int)event->param1));
                 break;
             case TRACE_EVENT_TASK_INCREMENT_TICK:
                 fprintf(fout, "1%s\n", get_vcdsig(tick_id));

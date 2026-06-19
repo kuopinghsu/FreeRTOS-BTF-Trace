@@ -62,6 +62,7 @@ build
 *.vcd
 !tracedata/*.btf
 !tracedata/*.vcd
+tracedata/trace.*
 
 # BTF viewer runtime settings (user-local, not shared)
 BTFViewer/btf_viewer.rc

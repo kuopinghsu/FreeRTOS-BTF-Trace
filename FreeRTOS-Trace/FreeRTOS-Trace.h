@@ -45,13 +45,13 @@
 
 #define addEVENT( tag, event ) do {             \
     taskENTER_CRITICAL();                       \
-    btf_trace_add_event ( tag, event );         \
+    btf_trace_add_event ( tag, 0, event );      \
     taskEXIT_CRITICAL();                        \
 } while(0)
 
 #define addEVENT_ISR( tag, event ) do {         \
     int mask = taskENTER_CRITICAL_FROM_ISR();   \
-    btf_trace_add_event ( tag, event );         \
+    btf_trace_add_event ( tag, 0, event );      \
     taskEXIT_CRITICAL_FROM_ISR(mask);           \
 } while(0)
 
@@ -77,8 +77,10 @@
     btf_trace_add_task (                        \
         (uint8_t*)pxNewTCB->pcTaskName,         \
         (uint32_t)pxNewTCB->uxTCBNumber,        \
+        (uint32_t)pxNewTCB->uxPriority,         \
         TRACE_EVENT_TASK_CREATE                 \
     );                                          \
+    vTaskSetTaskNumber( (TaskHandle_t)( pxNewTCB ), (pxNewTCB)->uxTCBNumber ); \
     taskEXIT_CRITICAL();                        \
 } while(0)
 #endif // traceTASK_CREATE
@@ -108,6 +110,17 @@
 #ifndef traceTASK_RESUME_FROM_ISR
 # define traceTASK_RESUME_FROM_ISR( pxTCB ) addEVENT_ISR( (uint32_t)pxTCB->uxTCBNumber, TRACE_EVENT_TASK_RESUME_FROM_ISR )
 #endif // traceTASK_RESUME_FROM_ISR
+
+#ifndef traceTASK_PRIORITY_SET
+# define traceTASK_PRIORITY_SET( pxTCB, uxNewPriority ) do { \
+    taskENTER_CRITICAL();                                   \
+    btf_trace_add_event(                                    \
+        (uint32_t)(pxTCB)->uxTCBNumber,                     \
+        (uint32_t)(uxNewPriority),                          \
+        TRACE_EVENT_TASK_PRIORITY_SET );                    \
+    taskEXIT_CRITICAL();                                    \
+} while(0)
+#endif // traceTASK_PRIORITY_SET
 
 #endif // configINCLUDE_SCHEDULING
 
@@ -141,20 +154,29 @@
 
 #if configINCLUDE_QUEUE_EVENTS
 
+#define addQUEUE_EVENT( pxQueue, event ) do {         \
+    taskENTER_CRITICAL();                             \
+    btf_trace_add_event(                              \
+        (uint32_t)(pxQueue)->ucQueueType,             \
+        (uint32_t)(uintptr_t)(pxQueue),               \
+        event );                                      \
+    taskEXIT_CRITICAL();                              \
+} while(0)
+
 #ifndef traceQUEUE_CREATE
-# define traceQUEUE_CREATE( pxQueue ) addEVENT( (uint32_t)(pxQueue)->ucQueueType, TRACE_EVENT_QUEUE_CREATE )
+# define traceQUEUE_CREATE( pxQueue ) addQUEUE_EVENT( (pxQueue), TRACE_EVENT_QUEUE_CREATE )
 #endif // traceQUEUE_CREATE
 
 #ifndef traceQUEUE_SEND
-# define traceQUEUE_SEND( pxQueue ) addEVENT( (uint32_t)(pxQueue)->ucQueueType, TRACE_EVENT_QUEUE_SEND )
+# define traceQUEUE_SEND( pxQueue ) addQUEUE_EVENT( (pxQueue), TRACE_EVENT_QUEUE_SEND )
 #endif // traceQUEUE_SEND
 
 #ifndef traceQUEUE_RECEIVE
-# define traceQUEUE_RECEIVE( pxQueue ) addEVENT( (uint32_t)(pxQueue)->ucQueueType, TRACE_EVENT_QUEUE_RECEIVE )
+# define traceQUEUE_RECEIVE( pxQueue ) addQUEUE_EVENT( (pxQueue), TRACE_EVENT_QUEUE_RECEIVE )
 #endif // traceQUEUE_RECEIVE
 
 #ifndef traceQUEUE_DELETE
-# define traceQUEUE_DELETE( pxQueue ) addEVENT( (uint32_t)(pxQueue)->ucQueueType, TRACE_EVENT_QUEUE_DELETE )
+# define traceQUEUE_DELETE( pxQueue ) addQUEUE_EVENT( (pxQueue), TRACE_EVENT_QUEUE_DELETE )
 #endif // traceQUEUE_DELETE
 
 #endif // configINCLUDE_QUEUE_EVENTS
