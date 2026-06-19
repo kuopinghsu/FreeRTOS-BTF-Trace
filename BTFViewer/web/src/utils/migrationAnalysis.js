@@ -172,7 +172,40 @@ export function migrationHeatmapMatrix(trace, lo = null, hi = null) {
   return { cores, grid }
 }
 
-/** Time bins for one directed core pair (heatmap drill-down after matrix pick). */
+/** Time bins for all outgoing pairs from one source core (matrix row drill-down). */
+export function migrationCoreOutgoingHeatmap(trace, fromCore, lo = null, hi = null, timeBins = 32) {
+  if (!trace || !fromCore) {
+    return { pairs: [], grid: [], timeBins, tMin: 0, tMax: 0, binW: 0 }
+  }
+  const cores = trace.coreNames || []
+  const pairs = []
+  for (const tc of cores) {
+    if (tc === fromCore) continue
+    pairs.push({
+      from: fromCore,
+      to: tc,
+      label: `${coreShortName(fromCore)}→${coreShortName(tc)}`,
+    })
+  }
+  const tMin = lo ?? trace.timeMin
+  const tHi = hi ?? trace.timeMax
+  const span = Math.max(tHi - tMin, 1)
+  const binW = span / timeBins
+  const grid = pairs.map(() => Array(timeBins).fill(0))
+  const pairIndex = new Map(pairs.map((p, i) => [`${p.to}`, i]))
+  for (const m of trace.migrations || []) {
+    if (m.fromCore !== fromCore) continue
+    if (lo != null && m.ns < lo) continue
+    if (hi != null && m.ns > hi) continue
+    const pi = pairIndex.get(m.toCore)
+    if (pi == null) continue
+    const bi = heatmapBinIndexForNs(tMin, binW, timeBins, tHi, m.ns)
+    grid[pi][bi]++
+  }
+  return { pairs, grid, binW, tMin, timeBins, tMax: tHi }
+}
+
+/** Time bins for one directed core pair (heatmap drill-down after outgoing pick). */
 export function migrationPairTimeBins(trace, fromCore, toCore, lo = null, hi = null, timeBins = 32) {
   if (!trace) {
     return { pairs: [], grid: [], timeBins, tMin: 0, tMax: 0, binW: 0 }

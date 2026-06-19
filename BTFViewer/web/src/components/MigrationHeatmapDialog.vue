@@ -56,7 +56,7 @@
           class="heatmap-canvas"
           @click="onCanvasClick"
           @mousemove="onCanvasMove"
-          @mouseleave="hoverCell = null"
+          @mouseleave="hoverCell = null; hoverRow = null"
           @wheel.prevent="onCanvasWheel"
         />
       </div>
@@ -96,7 +96,7 @@ import {
   migrationHeatmapGrid,
   migrationHeatmapMatrix,
   migrationHeatmapUsesMatrix,
-  migrationPairTimeBins,
+  migrationCoreOutgoingHeatmap,
   migrationTaskHeatmapGrid,
   heatmapBinRange,
 } from '../utils/migrationAnalysis.js'
@@ -127,6 +127,7 @@ const scrollRef = ref(null)
 const viewportRef = ref(null)
 const canvasRef = ref(null)
 const hoverCell = ref(null)
+const hoverRow = ref(null)
 const overviewScopeCache = new Map()
 let _drawRaf = 0
 let _scrollResizeObserver = null
@@ -184,13 +185,13 @@ const overviewHeatmap = computed(() => {
   return hm
 })
 
-const pairTimeHeatmap = computed(() => {
+const coreOutgoingHeatmap = computed(() => {
   const ctx = drillCtx.value
-  if (!ctx?.fromCore || !ctx?.toCore) {
+  if (!ctx?.fromCore) {
     return { pairs: [], grid: [], timeBins: 32, tMin: 0, tMax: 0, binW: 0 }
   }
   const { lo, hi } = scopeLoHi.value
-  return migrationPairTimeBins(props.trace, ctx.fromCore, ctx.toCore, lo, hi)
+  return migrationCoreOutgoingHeatmap(props.trace, ctx.fromCore, lo, hi)
 })
 
 const taskHeatmap = computed(() => {
@@ -211,12 +212,12 @@ const taskHeatmap = computed(() => {
 const isMatrixLevel = computed(() =>
   usesMatrixOverview.value && drillLevel.value === 0)
 
-const isPairTimeLevel = computed(() =>
+const isOutgoingLevel = computed(() =>
   usesMatrixOverview.value && drillLevel.value === 1)
 
 const activeGrid = computed(() => {
   if (isMatrixLevel.value) return null
-  if (isPairTimeLevel.value) return pairTimeHeatmap.value
+  if (isOutgoingLevel.value) return coreOutgoingHeatmap.value
   if (drillLevel.value >= taskDrillLevel.value) return taskHeatmap.value
   return overviewHeatmap.value
 })
@@ -232,18 +233,16 @@ const displayRows = computed(() => {
       grid: hm.grid[i],
     }))
   }
-  if (isPairTimeLevel.value) {
-    const hm = pairTimeHeatmap.value
-    const p = hm.pairs[0]
-    if (!p) return []
-    return [{
+  if (isOutgoingLevel.value) {
+    const hm = coreOutgoingHeatmap.value
+    return hm.pairs.map((p, i) => ({
       key: `${p.from}→${p.to}`,
       label: p.label,
       fromCore: p.from,
       toCore: p.to,
       pairLabel: p.label,
-      grid: hm.grid[0] || [],
-    }]
+      grid: hm.grid[i] || [],
+    }))
   }
   if (drillLevel.value >= taskDrillLevel.value) {
     return taskHeatmap.value.rows.map(r => ({
@@ -333,9 +332,10 @@ const subtitle = computed(() => {
     const n = matrixHeatmap.value.cores.length
     return `Core × core migration counts (${n} cores, row = from, column = to)${scopeSuffix.value}`
   }
-  if (isPairTimeLevel.value) {
+  if (isOutgoingLevel.value) {
     const ctx = drillCtx.value
-    return `Time bins · ${ctx?.pairLabel || 'core pair'}${scopeSuffix.value}`
+    const src = ctx?.fromCore ? coreShortName(ctx.fromCore) : '?'
+    return `Outgoing migrations from ${src} · rows = destination cores · columns = time bins${scopeSuffix.value}`
   }
   if (drillLevel.value >= taskDrillLevel.value) {
     const ctx = drillCtx.value
@@ -352,10 +352,10 @@ const emptyText = computed(() => {
 
 const hintText = computed(() => {
   if (isMatrixLevel.value) {
-    return 'Rows: source (from) core · Columns: destination (to) core · Hover a cell for the pair label · Click to open time bins'
+    return 'Rows: source (from) core · Columns: destination (to) core · Hover a row to highlight · Click a row for outgoing pairs'
   }
-  if (isPairTimeLevel.value) {
-    return 'Columns: time bins · Click a cell to drill into tasks'
+  if (isOutgoingLevel.value) {
+    return 'Rows: outgoing core pairs · Columns: time bins · Hover a row to highlight · Click a cell to drill into tasks'
   }
   if (drillLevel.value >= taskDrillLevel.value) {
     return 'Rows: tasks · Columns: sub-bins · Click a cell to zoom and filter in Task View'
@@ -365,11 +365,22 @@ const hintText = computed(() => {
 
 const hoverTitle = computed(() => {
   const hit = hoverCell.value
-  if (!hit) return ''
-  const row = displayRows.value[hit.ri]
+  const ri = hit?.ri ?? hoverRow.value
+  if (ri == null) return ''
+  const row = displayRows.value[ri]
   if (!row) return ''
-  const count = row.grid[hit.bi] || 0
-  return cellTitle(hit.ri, hit.bi, count, row)
+  if (hit) {
+    const count = row.grid[hit.bi] || 0
+    return cellTitle(hit.ri, hit.bi, count, row)
+  }
+  if (isMatrixLevel.value) {
+    const total = row.grid.reduce((sum, v, bi) => (
+      row.fromCore === row.toCores?.[bi] ? sum : sum + v
+    ), 0)
+    return `${row.label} · ${total} migration(s) · Click row for outgoing pairs`
+  }
+  const total = row.grid.reduce((sum, v) => sum + v, 0)
+  return `${row.label} · ${total} migration(s) in scope`
 })
 
 function scheduleDraw() {
@@ -385,7 +396,7 @@ function cellTitle(ri, bi, count, row) {
   if (isMatrixLevel.value) {
     const toCore = row.toCores[bi]
     const pairLabel = `${coreShortName(row.fromCore)}→${coreShortName(toCore)}`
-    return `${pairLabel} · ${count} migration(s) · Click to open time bins`
+    return `${pairLabel} · ${count} migration(s)`
   }
   const hm = activeGrid.value
   const { binLo, binHi } = heatmapBinRange(
@@ -531,7 +542,35 @@ function drawHeatmap() {
       }
       x += cellW
     }
+
+    if (hoverRow.value === ri) {
+      ctx.fillStyle = 'rgba(91, 155, 213, 0.18)'
+      ctx.fillRect(0, y, Math.min(labelRight, viewW), ROW_H - 1)
+      const cellsX = x0 - scrollLeft
+      const cellsW = nBins * cellW
+      const cellLeft = Math.max(cellsX, labelRight)
+      const cellRight = cellsX + cellsW
+      const drawW = Math.min(cellRight, viewW) - cellLeft
+      if (drawW > 0) {
+        ctx.fillRect(cellLeft, y, drawW, ROW_H - 1)
+      }
+    }
   }
+}
+
+function hitTestRow(clientX, clientY) {
+  const canvas = canvasRef.value
+  const scrollEl = scrollRef.value
+  if (!canvas || !scrollEl) return null
+
+  const rect = canvas.getBoundingClientRect()
+  const y = clientY - rect.top + scrollEl.scrollTop
+  const { rowCount, headerH } = layout.value
+
+  if (y < headerH + 4) return null
+  const ri = Math.floor((y - headerH - 4) / ROW_H)
+  if (ri < 0 || ri >= rowCount) return null
+  return { ri }
 }
 
 function hitTestCanvas(clientX, clientY) {
@@ -554,7 +593,7 @@ function hitTestCanvas(clientX, clientY) {
   if (!row) return null
   if (isMatrixLevel.value && row.fromCore === row.toCores[bi]) return null
   const count = row.grid[bi] || 0
-  if (count <= 0) return null
+  if (!isMatrixLevel.value && count <= 0) return null
   return { ri, bi }
 }
 
@@ -567,17 +606,47 @@ function onCanvasWheel(e) {
 }
 
 function onCanvasMove(e) {
+  const rowHit = hitTestRow(e.clientX, e.clientY)
+  hoverRow.value = rowHit?.ri ?? null
   const hit = hitTestCanvas(e.clientX, e.clientY)
   hoverCell.value = hit
   if (canvasRef.value) {
-    canvasRef.value.style.cursor = hit ? 'pointer' : 'default'
+    const clickable = isMatrixLevel.value
+      ? matrixRowHasMigrations(hoverRow.value)
+      : !!hit
+    canvasRef.value.style.cursor = clickable ? 'pointer' : 'default'
   }
 }
 
+function matrixRowHasMigrations(ri) {
+  if (ri == null) return false
+  const row = displayRows.value[ri]
+  if (!row) return false
+  return row.grid.some((v, bi) => v > 0 && row.fromCore !== row.toCores?.[bi])
+}
+
 function onCanvasClick(e) {
+  if (isMatrixLevel.value) {
+    const rowHit = hitTestRow(e.clientX, e.clientY)
+    if (rowHit && matrixRowHasMigrations(rowHit.ri)) {
+      onMatrixRowClick(rowHit.ri)
+      return
+    }
+  }
   const hit = hitTestCanvas(e.clientX, e.clientY)
   if (!hit) return
   onCellClick(hit.ri, hit.bi)
+}
+
+function onMatrixRowClick(ri) {
+  const row = displayRows.value[ri]
+  if (!row?.fromCore) return
+  drillCtx.value = {
+    fromCore: row.fromCore,
+    pairLabel: coreShortName(row.fromCore),
+  }
+  drillLevel.value = 1
+  scrollHeatmapToTop()
 }
 
 function scrollHeatmapToTop() {
@@ -597,8 +666,8 @@ function goBack() {
   if (drillLevel.value === 0) {
     drillCtx.value = null
   } else if (drillLevel.value === 1 && usesMatrixOverview.value) {
-    const { fromCore, toCore, pairLabel } = drillCtx.value || {}
-    drillCtx.value = { fromCore, toCore, pairLabel }
+    const { fromCore, pairLabel } = drillCtx.value || {}
+    drillCtx.value = { fromCore, pairLabel }
   }
   scrollHeatmapToTop()
 }
@@ -618,24 +687,15 @@ function onCellClick(ri, bi) {
   const count = row.grid[bi]
   if (!row || count <= 0) return
 
-  if (isMatrixLevel.value) {
-    const toCore = row.toCores[bi]
-    drillCtx.value = {
-      fromCore: row.fromCore,
-      toCore,
-      pairLabel: `${coreShortName(row.fromCore)}→${coreShortName(toCore)}`,
-    }
-    drillLevel.value = 1
-    scrollHeatmapToTop()
-    return
-  }
-
   const hm = activeGrid.value
   const { binLo, binHi } = heatmapBinRange(hm.tMin, hm.binW, hm.timeBins, hm.tMax, bi)
 
-  if (isPairTimeLevel.value) {
+  if (isOutgoingLevel.value) {
     drillCtx.value = {
       ...drillCtx.value,
+      fromCore: row.fromCore,
+      toCore: row.toCore,
+      pairLabel: row.pairLabel,
       binLo,
       binHi,
       parentBinIndex: bi,
@@ -674,7 +734,7 @@ function onCellClick(ri, bi) {
   })
 }
 
-watch([displayRows, activeGrid, labelWidth], () => {
+watch([displayRows, activeGrid, labelWidth, hoverRow], () => {
   nextTick(() => scheduleDraw())
 })
 

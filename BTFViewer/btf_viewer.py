@@ -1552,6 +1552,38 @@ def _migration_heatmap_matrix(trace: "BtfTrace",
         grid[fi][ti] += 1
     return cores, grid
 
+def _migration_core_outgoing_heatmap(trace: "BtfTrace", from_core: str,
+                                     lo: Optional[int] = None, hi: Optional[int] = None,
+                                     time_bins: int = 32) -> Tuple[list, list, int, int, int, float]:
+    """Time bins for all outgoing pairs from one source core (matrix row drill-down)."""
+    cores = trace.core_names
+    pairs = []
+    pair_idx: Dict[str, int] = {}
+    for tc in cores:
+        if tc == from_core:
+            continue
+        pair_idx[tc] = len(pairs)
+        pairs.append((from_core, tc,
+                      f"{_core_short_name(from_core)}→{_core_short_name(tc)}"))
+    t_min = lo if lo is not None else trace.time_min
+    t_hi = hi if hi is not None else trace.time_max
+    span = max(t_hi - t_min, 1)
+    bin_w = span / time_bins
+    grid = [[0] * time_bins for _ in pairs]
+    for m in trace.migrations:
+        if m.from_core != from_core:
+            continue
+        if lo is not None and m.ns < lo:
+            continue
+        if hi is not None and m.ns > hi:
+            continue
+        pi = pair_idx.get(m.to_core)
+        if pi is None:
+            continue
+        bi = _heatmap_bin_index_for_ns(t_min, bin_w, time_bins, t_hi, m.ns)
+        grid[pi][bi] += 1
+    return pairs, grid, time_bins, t_min, t_hi, bin_w
+
 def _migration_pair_time_bins(trace: "BtfTrace", from_core: str, to_core: str,
                               lo: Optional[int] = None, hi: Optional[int] = None,
                               time_bins: int = 32) -> Tuple[list, list, int, int, int, float]:
@@ -5960,7 +5992,6 @@ class _IntervalRowBarsItem(QGraphicsItem):
             _paint_interval_highlight_lines(
                 painter, hi_times, y, h, self._time_min, self._label_width,
                 self._px_per_ns, exp_left, exp_right, self._dark_ui)
-
 
 class _RowStripesItem(QGraphicsItem):
     """Draws N row background rectangles and optional separator lines in one pass.
@@ -10684,6 +10715,7 @@ class _MigrationHeatmapWidget(QWidget):
     """Paint labelled rows × time-bin migration counts (pairs or core×core matrix)."""
 
     cell_clicked = pyqtSignal(int, int)
+    row_clicked = pyqtSignal(int)
 
     _ROW_H = 16
     _CELL_MIN_W = 8
@@ -10700,6 +10732,8 @@ class _MigrationHeatmapWidget(QWidget):
         self._grid: list = [[]]
         self._max_val = 0
         self._label_w = 52
+        self._hover_ri: Optional[int] = None
+        self.setMouseTracking(True)
         self.set_data(row_labels, grid)
 
     def _scroll_offsets(self) -> Tuple[int, int]:
@@ -10738,6 +10772,7 @@ class _MigrationHeatmapWidget(QWidget):
 
     def set_data(self, row_labels: List[str], grid: list) -> None:
         self._mode = 'pairs'
+        self._hover_ri = None
         self._row_labels = list(row_labels)
         self._col_labels = []
         self._grid = grid if grid else [[]]
@@ -10751,6 +10786,7 @@ class _MigrationHeatmapWidget(QWidget):
     def set_matrix_data(self, row_labels: List[str], col_labels: List[str],
                         grid: list) -> None:
         self._mode = 'matrix'
+        self._hover_ri = None
         self._row_labels = list(row_labels)
         self._col_labels = list(col_labels)
         self._grid = grid if grid else [[]]
@@ -10779,6 +10815,44 @@ class _MigrationHeatmapWidget(QWidget):
     def _matrix_col_label_step(self, cell_w: float) -> int:
         return max(1, int(math.ceil(self._MATRIX_HEADER_LABEL_PITCH / max(cell_w, 1))))
 
+    def _matrix_row_has_migrations(self, ri: int) -> bool:
+        if ri < 0 or ri >= len(self._grid):
+            return False
+        for bi, v in enumerate(self._grid[ri]):
+            if self._mode == 'matrix' and ri == bi:
+                continue
+            if v > 0:
+                return True
+        return False
+
+    def set_hover_pos(self, _x: float, y: float) -> None:
+        header_h = self._header_h()
+        if y < header_h + 4:
+            hover_ri = None
+        else:
+            ri = int((y - header_h - 4) // self._ROW_H)
+            hover_ri = ri if 0 <= ri < len(self._row_labels) else None
+        if hover_ri != self._hover_ri:
+            self._hover_ri = hover_ri
+            self.update()
+
+    def clear_hover(self) -> None:
+        if self._hover_ri is not None:
+            self._hover_ri = None
+            self.update()
+
+    def mouseMoveEvent(self, event) -> None:
+        pos = event.position() if hasattr(event, "position") else None
+        self.set_hover_pos(
+            pos.x() if pos else event.x(),
+            pos.y() if pos else event.y(),
+        )
+        return super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self.clear_hover()
+        return super().leaveEvent(event)
+
     def mousePressEvent(self, event) -> None:
         if event.button() != Qt.LeftButton or not self._row_labels:
             return super().mousePressEvent(event)
@@ -10791,14 +10865,16 @@ class _MigrationHeatmapWidget(QWidget):
         ri = int((y - header_h - 4) // self._ROW_H)
         if ri < 0 or ri >= len(self._row_labels):
             return super().mousePressEvent(event)
+        if self._mode == 'matrix':
+            if self._matrix_row_has_migrations(ri):
+                self.row_clicked.emit(ri)
+            return super().mousePressEvent(event)
         x0, cell_w = self._cell_geometry()
         if x < x0:
             return super().mousePressEvent(event)
         bi = int((x - x0) // cell_w)
         n_cols = len(self._col_labels) if self._mode == 'matrix' else len(self._grid[0])
         if bi < 0 or bi >= n_cols:
-            return super().mousePressEvent(event)
-        if self._mode == 'matrix' and ri == bi:
             return super().mousePressEvent(event)
         if self._grid[ri][bi] <= 0:
             return super().mousePressEvent(event)
@@ -10886,6 +10962,10 @@ class _MigrationHeatmapWidget(QWidget):
                         p.fillRect(QRectF(x, y, cell_w - 1, self._ROW_H - 3),
                                    QColor(91, 155, 213, alpha if v else 15))
                 x += cell_w
+            if self._hover_ri == ri:
+                row_w = label_right + n_cols * cell_w
+                p.fillRect(QRectF(0, y, row_w, self._ROW_H - 1),
+                           QColor(91, 155, 213, 46))
         p.end()
 
 class _MigrationHeatmapDialog(QDialog):
@@ -10981,7 +11061,10 @@ class _MigrationHeatmapDialog(QDialog):
         self._scroll.setFrameShape(QFrame.NoFrame)
         self._canvas = _MigrationHeatmapWidget([], [[]])
         self._canvas.cell_clicked.connect(self._on_cell_clicked)
+        self._canvas.row_clicked.connect(self._on_matrix_row_clicked)
         self._scroll.setWidget(self._canvas)
+        self._scroll.viewport().setMouseTracking(True)
+        self._scroll.viewport().installEventFilter(self)
         self._scroll.verticalScrollBar().valueChanged.connect(
             lambda _v: self._canvas.update())
         self._scroll.horizontalScrollBar().valueChanged.connect(
@@ -11013,6 +11096,16 @@ class _MigrationHeatmapDialog(QDialog):
         lay.addWidget(btns)
 
         self._go_level0()
+
+    def eventFilter(self, watched, event) -> bool:
+        if watched is self._scroll.viewport():
+            et = event.type()
+            if et == QEvent.MouseMove:
+                pos = self._canvas.mapFrom(self._scroll.viewport(), event.pos())
+                self._canvas.set_hover_pos(pos.x(), pos.y())
+            elif et == QEvent.Leave:
+                self._canvas.clear_hover()
+        return super().eventFilter(watched, event)
 
     def set_filter_banner(self, label: Optional[str], count: int) -> None:
         self._filter_count = count
@@ -11149,7 +11242,9 @@ class _MigrationHeatmapDialog(QDialog):
         if self._level <= 0:
             return
         if self._uses_matrix and self._level == 2:
-            self._show_pair_time_level(self._drill_fc, self._drill_tc, self._drill_label)
+            self._show_outgoing_level(self._drill_fc)
+        elif self._uses_matrix and self._level == 1:
+            self._go_level0()
         else:
             self._go_level0()
         self._scroll_heatmap_to_top()
@@ -11179,7 +11274,7 @@ class _MigrationHeatmapDialog(QDialog):
                 self._canvas.set_matrix_data(row_lbls, col_lbls, self._matrix_grid)
             self._hint_label.setText(
                 "Rows: source (from) core · Columns: destination (to) core · "
-                "Click a cell to open time bins")
+                "Hover a row to highlight · Click a row for outgoing pairs")
         else:
             self._sub_label.setText(
                 f"Core-pair migrations over time bins{self._scope_suffix}")
@@ -11195,6 +11290,46 @@ class _MigrationHeatmapDialog(QDialog):
                 "Click a cell to drill into tasks")
         self._update_show_all_btn()
         self._scroll_heatmap_to_top()
+
+    def _show_outgoing_level(self, from_core: str) -> None:
+        """Matrix drill-down: outgoing pairs × time bins for one source core."""
+        self._level = 1
+        self._drill_fc = from_core
+        self._drill_tc = ""
+        self._drill_label = _core_short_name(from_core)
+        self._back_btn.setVisible(True)
+        lo = self._scope_lo
+        hi = self._scope_hi
+        pairs, grid, time_bins, t_min, t_hi, bin_w = _migration_core_outgoing_heatmap(
+            self._trace, from_core, lo, hi, self._ov_time_bins)
+        self._pairs = pairs
+        self._grid0 = grid
+        self._t_min = t_min
+        self._t_max = t_hi
+        self._bin_w = bin_w
+        self._time_bins = time_bins
+        src = _core_short_name(from_core)
+        self._sub_label.setText(
+            f"Outgoing migrations from {src} · rows = destination cores · "
+            f"columns = time bins{self._scope_suffix}")
+        has_data = bool(grid and any(any(r for r in row) for row in grid))
+        self._empty_label.setVisible(not has_data)
+        self._empty_label.setText("No migrations in scope.")
+        self._scroll.setVisible(has_data)
+        if has_data:
+            self._set_canvas([p[2] for p in pairs], grid)
+        self._hint_label.setText(
+            "Rows: outgoing core pairs · Columns: time bins · "
+            "Hover a row to highlight · Click a cell to drill into tasks")
+        self._update_show_all_btn()
+        self._scroll_heatmap_to_top()
+
+    def _on_matrix_row_clicked(self, ri: int) -> None:
+        if not self._uses_matrix or self._level != 0:
+            return
+        if ri < 0 or ri >= len(self._matrix_cores):
+            return
+        self._show_outgoing_level(self._matrix_cores[ri])
 
     def _show_pair_time_level(self, fc: str, tc: str, label: str) -> None:
         """Matrix drill-down: time bins for one core pair."""
@@ -11263,18 +11398,6 @@ class _MigrationHeatmapDialog(QDialog):
         self._scroll_heatmap_to_top()
 
     def _on_cell_clicked(self, ri: int, bi: int) -> None:
-        if self._uses_matrix and self._level == 0:
-            if ri < 0 or ri >= len(self._matrix_cores):
-                return
-            if bi < 0 or bi >= len(self._matrix_cores):
-                return
-            if ri == bi or self._matrix_grid[ri][bi] <= 0:
-                return
-            fc = self._matrix_cores[ri]
-            tc = self._matrix_cores[bi]
-            label = f"{_core_short_name(fc)}→{_core_short_name(tc)}"
-            self._show_pair_time_level(fc, tc, label)
-            return
         if self._uses_matrix and self._level == 1:
             if ri < 0 or bi < 0 or bi >= self._time_bins:
                 return
@@ -11282,11 +11405,13 @@ class _MigrationHeatmapDialog(QDialog):
                     or bi >= len(self._canvas._grid[ri])
                     or self._canvas._grid[ri][bi] <= 0):
                 return
+            if ri >= len(self._pairs):
+                return
+            fc, tc, label = self._pairs[ri]
             bin_lo, bin_hi = _heatmap_bin_range(
                 self._t_min, self._bin_w, self._time_bins, self._t_max, bi)
             self._schedule_level1(
-                self._drill_fc, self._drill_tc, self._drill_label,
-                bin_lo, bin_hi, bi)
+                fc, tc, label, bin_lo, bin_hi, bi)
             return
         if self._level == 0:
             if ri < 0 or ri >= len(self._pairs):

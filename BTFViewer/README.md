@@ -25,7 +25,7 @@ A PyQt5-based interactive visualiser for FreeRTOS context-switch traces in **Bes
 - **Multi-tab traces** — open several `.btf` files at once (Desktop: closable tabs; Web: tab bar under the toolbar). Desktop restores session tabs, active tab, and per-tab zoom/cursors from `btf_viewer.rc` on launch; Web starts with no tabs until you **Open** or **Demo**
 - **Measurement cursors** — Desktop and Web support 2–8 cursors (default: 4); configurable in Settings
 - **Trace compare** — with 2+ tabs open, **Trace Compare…** in the Statistics panel diffs **Summary**, **Top Tasks**, and **Core Migrations** side-by-side (Desktop + Web). Optional **Limit to each tab's cursor range** compares metrics within C1–Cn when 2+ cursors are placed on each trace
-- **Core migration analysis** — detect tasks that run on multiple cores; **Core Migrations** stats table (ping-pong, STI correlation, gap-after vs other gaps), **clickable two-level Migration heatmap** (core-pair overview → per-task sub-bins → timeline drill-down), **Migrated tasks only** legend filter, toolbar **All tasks** reset, and Find **Migrations** mode (Desktop)
+- **Core migration analysis** — detect tasks that run on multiple cores; **Core Migrations** stats table (ping-pong, STI correlation, gap-after vs other gaps), **clickable migration heatmap** (pair×time for ≤ 16 cores; core×core matrix → outgoing pairs for larger traces → per-task sub-bins → timeline drill-down), **Migrated tasks only** legend filter, toolbar **All tasks** reset, and Find **Migrations** mode (Desktop)
 - **Cursor-scoped statistics** — with 2+ cursors, the Statistics panel can limit all metrics (CPU%, execution slices, blocking time, inter-arrival, **preemption chain**, scheduling summary, exports, and charts) to the window from C1 through the last cursor; toggle **Limit to cursor range (C1–Cn)** (Desktop + Web)
 - **Cursor range summary** — with 2+ cursors, Desktop also shows a quick min/max/avg segment summary in the status bar; Web shows range stats in the **Cursors** panel
 - **Task highlight** — hover or click any task label or Legend row to highlight all its segments
@@ -213,7 +213,7 @@ The right side holds **Cursor / Bookmark** and **Statistics** pages (tab bar at 
 - **Resize** — drag the vertical bar between the timeline and the right panel to change panel width.
 - **Legend** — on the **Marks** page: task colour swatches, search filter, **Migrated tasks only**, and a **heatmap filter banner** with **Clear** when a heatmap drill-down is active.
 - **Statistics** — same collapsible sections as the desktop viewer; click **Min** / **Max** in metric tables to jump and add an annotation; **Trace Compare…** when 2+ trace tabs are open.
-- **Migration heatmap** — toolbar **Heatmap** button (multi-core traces only). Two-level drill-down: core-pair grid → task grid → timeline zoom/filter. Toolbar **All tasks** appears while filtered. See [Migration heatmap](#migration-heatmap).
+- **Migration heatmap** — toolbar **Heatmap** button (multi-core traces only). ≤ 16 cores: pair grid → task grid → timeline zoom/filter. > 16 cores: core×core matrix (row click) → outgoing pairs → tasks. Toolbar **All tasks** appears while filtered. See [Migration heatmap](#migration-heatmap).
 
 ### Multi-tab traces (Web)
 
@@ -905,24 +905,34 @@ Click a row to highlight that task on the timeline. Drag the resize handle below
 
 #### Migration heatmap
 
-Visualise **when** migrations happen between core pairs — complementary to the per-task **Core Migrations** table. The heatmap is a **two-level** drill-down: first pick *where* (core pair + time bin), then pick *which task* (sub-bin), then jump to the timeline.
+Visualise **when** migrations happen between core pairs — complementary to the per-task **Core Migrations** table. Traces with **more than 16 cores** use a **three-level** drill-down (core×core matrix → outgoing pairs × time bins → tasks). Smaller multi-core traces use a **two-level** flow (core-pair rows × time bins → tasks).
 
-**Typical workflow**
+**Typical workflow (≤ 16 cores)**
 
-1. Open **Heatmap** from the toolbar (`tracedata/example-4cores.btf` is a good demo).
+1. Open **Heatmap** from the toolbar (`tracedata/example-4cores.btf` or `example-16cores.btf` are good demos).
 2. **Level 1** — click a hot cell on a core-pair row to open the task grid for that bin.
 3. **Level 2** — click a task cell to zoom the timeline, place **C1** / **C2**, switch to **Task View**, and show only that task.
 4. **Show all tasks** — when done, clear the task filter and restore the timeline viewport, cursors, and highlights from before the heatmap was opened; the heatmap returns to the core-pair overview.
 
+**Typical workflow (> 16 cores)**
+
+1. **Level 1 — core×core matrix** — rows = source cores, columns = destination cores. Hover a row to highlight it; **click a row** to drill into outgoing migrations from that core.
+2. **Level 2 — outgoing pairs** — one row per destination (`c3→c1`, `c3→c2`, …), columns = 32 time bins. Hover highlights the row; click a cell to open the task grid for that pair and bin.
+3. **Level 3 — tasks** — same as Level 2 above for smaller traces.
+4. **← Back** steps up one level; **Show all tasks** resets the timeline filter and returns to Level 1 (matrix or pair overview).
+
 | | |
 |--|--|
 | **Open** | Toolbar **Heatmap** (Desktop + Web). Enabled only when the trace has **2 or more cores** (single-core traces such as `example.btf` disable the button). Desktop: non-modal dialog (timeline stays interactive). Web: semi-transparent overlay. |
-| **Level 1 rows** | One row per directed core pair (`c0→c1`, `c1→c0`, …). Core names are shortened in the labels (e.g. `Core_0` → `c0`). |
+| **Level 1 (≤ 16 cores)** | One row per directed core pair (`c0→c1`, `c1→c0`, …). Core names are shortened in the labels (e.g. `Core_0` → `c0`). |
+| **Level 1 (> 16 cores)** | **Core×core matrix** — row = source core, column = destination core. Hover highlights the row; **click a row** (not a single cell) to open outgoing pairs. |
+| **Level 2 (> 16 cores)** | Outgoing pairs from the selected source core (`c3→c1`, `c3→c2`, …) × 32 time bins. Row hover highlight; click a cell for tasks. |
 | **Level 1 columns** | **32 equal time bins** across the scoped window. Cell colour intensity is the migration count in that bin (darker = more migrations). Hover for time range, count, and task names. |
 | **Level 2 rows** | Task display names that migrated on the selected core pair in the selected bin. |
 | **Level 2 columns** | **32 sub-bins** within the Level 1 cell's time window. |
-| **← Back** | Return from Level 2 to the core-pair overview without closing the dialog. |
-| **Click cell** | Level 1 → Level 2; Level 2 → timeline drill-down. Details in [What happens when you click a cell](#what-happens-when-you-click-a-cell) below. |
+| **← Back** | Step up one level (tasks → outgoing pairs → matrix, or tasks → pair overview on smaller traces). |
+| **Click cell** | ≤ 16 cores: Level 1 → tasks. > 16 cores: Level 2 → tasks. Details below. |
+| **Click row** | > 16 cores only: matrix Level 1 → outgoing pairs for that source core. |
 | **All tasks** (toolbar) | Shown next to **Heatmap** while a heatmap task filter is active. Same reset as **Show all tasks** below. |
 | **Show all tasks** | Clears the task filter and **restores the timeline state captured when the heatmap was opened** (viewport, cursors, highlights, view mode). The heatmap returns to **Level 1**; heatmap time scope follows the restored cursors (full trace if fewer than two cursors were saved). Available from: toolbar **All tasks**, heatmap dialog **Show all tasks**, Legend **Clear** (Web: Marks page; Desktop: legend dock), or enabling **Migrated tasks only**. Loading a new trace or switching tabs also clears the filter (Desktop closes the heatmap dialog on tab switch). |
 | **Scope** | **Full trace** by default. With **2 or more cursors** placed, Level 1 uses the time window from **C1** through the last cursor (subtitle shows the range). Independent of the Statistics panel **Limit to cursor range** toggle. **Show all tasks** restores pre-heatmap cursors, so heatmap scope matches that saved window. |
@@ -932,18 +942,27 @@ Visualise **when** migrations happen between core pairs — complementary to the
 
 Only cells with at least one migration (count > 0) are clickable.
 
-**Level 1 — core-pair overview** (rows = `c0→c1`, … · columns = 32 time bins)
+**≤ 16 cores — core-pair overview** (rows = `c0→c1`, … · columns = 32 time bins)
 
-1. **Click a cell** — Opens **Level 2** for that core pair and time bin. The heatmap stays open; use **← Back** to return without resetting the timeline.
+1. **Click a cell** — Opens the task grid for that core pair and time bin.
 
-**Level 2 — task detail** (rows = task names · columns = 32 sub-bins)
+**> 16 cores — core×core matrix** (rows/columns = cores)
 
-2. **Click a cell** — The timeline zooms to that sub-bin, **C1** and **C2** are placed at the sub-bin edges, the view switches to **Task View**, and only that **task** row is shown. The task is click-locked and scrolled into view automatically.
-3. **Another Level 2 cell** — Each click **replaces** the previous filter (last task wins). The heatmap dialog stays open so you can try other cells.
+1. **Hover a row** — Highlights the source core row.
+2. **Click a row** — Opens outgoing pair rows (`cN→c1`, `cN→c2`, …) × 32 time bins.
+
+**Outgoing pairs / ≤ 16 cores Level 1** (rows = core pairs · columns = 32 time bins)
+
+3. **Click a cell** — Opens the task grid for that pair and time bin.
+
+**Task detail** (rows = task names · columns = 32 sub-bins)
+
+4. **Click a cell** — The timeline zooms to that sub-bin, **C1** and **C2** are placed at the sub-bin edges, the view switches to **Task View**, and only that **task** row is shown.
+5. **Another task cell** — Each click **replaces** the previous filter (last task wins).
 
 **Reset — Show all tasks**
 
-4. Clears the task filter, restores the viewport/cursors/highlights saved when the heatmap was opened, returns the heatmap to **Level 1**, and shows every task row again.
+6. Clears the task filter, restores the viewport/cursors/highlights saved when the heatmap was opened, returns the heatmap to **Level 1** (matrix or pair overview), and shows every task row again.
 
 Use the heatmap to spot bursts of cross-core traffic, drill into the contributing tasks, then jump to Task View for slice-level inspection. For aggregate per-task migration statistics (ping-pong, STI correlation, gap-after), use **Core Migrations** in the Statistics panel.
 
@@ -1405,7 +1424,7 @@ timestamp, Core_N, 0, C, Core_N, 0, set_frequency, freq_hz
 | **Portable session** | `web/src/utils/sessionPortable.js`, Desktop Marks dock | Shared JSON v1: cursors, marks, viewport, view options, Find, highlight |
 | **File open (web)** | `Toolbar.vue` | Native `<input type="file">` in a `<label>` (last-folder memory on `file://` and HTTP). Optional FSA helpers in `fileOpen.js` are not used for Open. |
 | **Trace compare** | `traceCompare.js` / `_TraceCompareDialog` | Optional per-tab C1–Cn scope (Desktop + Web) |
-| **Migration heatmap** | `migrationAnalysis.js` / `_MigrationHeatmapDialog` | Two-level drill-down: core-pair × 32 bins → task × 32 sub-bins → timeline zoom/filter; `migrationHeatmapGrid()` + `migrationTaskHeatmapGrid()`; non-modal on Desktop; multi-core traces only |
+| **Migration heatmap** | `migrationAnalysis.js` / `_MigrationHeatmapDialog` | ≤ 16 cores: pair × 32 bins → task × 32 sub-bins → timeline. > 16 cores: core×core matrix → outgoing pairs × 32 bins → tasks; row hover + row click on matrix |
 | **Pre-built HTML** | `web/pre-build/btf-viewer.html` | Copy of `dist/index.html` produced by `make build` |
 
 Desktop session persistence uses `btf_viewer.rc` (tab paths, zoom, cursors). Web persists layout and view options in `localStorage` — see [Session restore (Web)](#session-restore-web).
