@@ -32,7 +32,7 @@ A PyQt5-based interactive visualiser for FreeRTOS context-switch traces in **Bes
 - **Dockable Legend panel** — colour swatches for every task, with a search box, **Migrated tasks only** filter, a **heatmap filter banner** (when drilled from the heatmap), and the same highlight interaction
 - **Dockable Statistics panel** — per-core CPU utilisation, top tasks, scheduling summary (context switches, core-gap avg/max), trace health (TICK), and collapsible metric tables including **Preemption Chain** and **Interval Analysis**
 - **Tag View** — inspect tag channels/events (`tag_event`, `tag0_event` … `tag7_event`) alongside task/core activity
-- **Metrics tables** — Execution Time Per Slice, **Blocking Time** (off-CPU gap / scheduling latency between activations), **Inter-Arrival**, **Preemption Chain** (which tasks preempted whom), and **Interval Analysis** (paired `interval_start` / `interval_stop` spans); click **Min** / **Max** (dotted underline) to jump and add an annotation at the BCET / WCET slice or shortest / longest gap (Desktop + Web)
+- **Metrics tables** — Execution Time Per Slice, **Blocking Time** (off-CPU gap / scheduling latency between activations), **Inter-Arrival**, **Preemption Chain** (which tasks preempted whom), and **Interval Analysis** (paired `interval_start` / `interval_stop` spans; when the BTF note includes `tid:{task_id}`, pairing is per interval id **and** task); click **Min** / **Max** (dotted underline) to jump and add an annotation at the BCET / WCET slice or shortest / longest gap (Desktop + Web)
 - **Metrics distribution charts** — click any row in Execution Time, Blocking Time, Inter-Arrival, Preemption Chain, or **Interval Analysis** tables to open a scatter-plot + histogram popup; charts live-update when cursors move or cursor-range scope is toggled (Desktop + Web). On Desktop, each trace tab remembers its own open chart when you switch tabs
 - **Segment tooltips** — hover any segment bar for duration, slice index on core, previous/next task on that core, and gap before the slice
 - **CPU Load Graph** — bar chart below the timeline showing per-core CPU utilisation; row labels show the **visible-window average** and, with 2+ cursors, a cursor-range average (`· C:xx%`); toggle with the **Load** toolbar button; drag the divider between timeline and CPU load to resize (Desktop + Web)
@@ -280,7 +280,7 @@ Below the scope checkbox, a **scheduling summary** line shows context-switch cou
 | **Blocking Time** | Off-CPU gap between consecutive activations of the same task |
 | **Inter-Arrival Time** | Gap between successive activation start times |
 | **Preemption Chain Analysis** | For each victim task, which preemptors ran during its off-CPU gaps |
-| **Interval Analysis** | Paired `interval_start` / `interval_stop` spans per user-defined id (count, min/avg/max/p95 duration) |
+| **Interval Analysis** | Paired `interval_start` / `interval_stop` spans per interval id (count, min/avg/max/p95 duration); notes with `tid:{task_id}` pair per task |
 
 **Core Migrations** lists tasks that ran on two or more cores. For multi-core traces, open the **Migration heatmap** from the toolbar **Heatmap** button — click core-pair cells to drill into per-task sub-bins, then into Task View (see [Migration heatmap](#migration-heatmap)). **Trace Compare…** (footer, next to Export) opens a dialog with **Summary**, **Top Tasks**, and **Core Migrations** tabs to diff two open trace tabs; optional cursor-range scoping compares each tab's C1–Cn window independently.
 
@@ -318,7 +318,7 @@ Example plots from `tracedata/example-4cores.btf` (4-core SMP trace, 67 tasks) a
 
 Coloured diamond markers are shown on dedicated STI rows. Hover a marker for a tooltip showing the time, channel, event name, and note.
 
-**Interval markers** (`interval_start` / `interval_stop`, legacy `start_intval` / `stop_intval`) are paired by id and drawn as horizontal span bars on **Interval N** rows below the STI section (task view, horizontal orientation). Raw start/stop marker channels are hidden from the STI row list. See [Interval Analysis](#interval-analysis) for pairing rules, statistics vs timeline behaviour, and **limitations** when the same id is used from multiple concurrent tasks.
+**Interval markers** (`interval_start` / `interval_stop`, legacy `start_intval` / `stop_intval`) are paired into measurable spans and drawn as horizontal bars on **Interval N** rows below the STI section (task view, horizontal orientation). When the BTF **note** includes `tid:{task_id}` (current FreeRTOS trace firmware), start/stop pair by **interval id + task id**; legacy traces without `tid` pair by the note string only. Raw start/stop marker channels are hidden from the STI row list. See [Interval Analysis](#interval-analysis) for pairing rules, statistics vs timeline behaviour, and limitations.
 
 ### Status bar
 
@@ -590,7 +590,7 @@ It shows:
 - **Blocking Time** — off-CPU gap between consecutive activations of the same task (min/avg/max/p95); click a row for a distribution chart; click **Min** / **Max** to jump and annotate the shortest / longest off-CPU gap (collapsible)
 - **Inter-Arrival Time** — same statistics for gaps between task activations; click **Min** / **Max** to jump and annotate the shortest / longest inter-arrival gap (collapsible)
 - **Preemption Chain Analysis** — for each victim/preemptor pair: count, total/average/max preemption overlap; click a row for a distribution chart; click a scatter point to jump and add an annotation at the preemptor segment (collapsible)
-- **Interval Analysis** — per interval id: count, min/avg/max/p95 duration of paired start→stop spans; click a row for a duration plot; click a scatter point to jump and add an annotation at the interval start (collapsible)
+- **Interval Analysis** — per interval id: count, min/avg/max/p95 duration of paired start→stop spans; pairing uses `tid` in the note when present; click a row for a duration plot; click a scatter point to jump and add an annotation at the interval start (collapsible)
 
 **Export CSV** / **Export HTML** respect the current cursor scope. **Trace Compare…** compares summary, top tasks, and core migrations between two open tabs; enable **Limit to each tab's cursor range** to scope each side to its own C1–Cn window. Open metrics charts update live when cursors move or scope is toggled; each trace tab remembers its own open chart when you switch tabs.
 
@@ -706,11 +706,20 @@ High **Count** with moderate **Avg** overlap suggests frequent short preemptions
 
 #### Interval Analysis
 
-Pairs **`interval_start` / `interval_stop`** STI events (legacy `start_intval` / `stop_intval`) by user-defined **id** into measurable code regions. Each id gets an **Interval N** row on the timeline (horizontal task view) with colored span bars; the statistics table aggregates duration across all paired spans for that id.
+Pairs **`interval_start` / `interval_stop`** STI events (legacy `start_intval` / `stop_intval`) into measurable code regions. Each interval **id** gets an **Interval N** row on the timeline (horizontal task view) with colored span bars; the statistics table aggregates duration across all paired spans for that id.
+
+**BTF note field** (last CSV column on each interval line):
+
+| Format | Example | Viewer pairing |
+|--------|---------|----------------|
+| Current firmware | `1 tid:7` | Interval id `1` + task id `7` (same numeric id on different tasks does not cross-pair) |
+| Legacy | `1` | Full note string `1` only |
+
+Recorded by `traceINTERVAL_START(id)` / `traceINTERVAL_STOP(id)` in firmware — task id is captured automatically in `param2` and emitted in the note as `tid:…`. See [Binary → BTF dump mapping](../README.md#binary--btf-dump-mapping) in the repo root README.
 
 | Column | Meaning |
 |--------|---------|
-| **ID** | User-defined interval id from `traceINTERVAL_START(id)` / `traceINTERVAL_STOP(id)` |
+| **ID** | Interval id from `traceINTERVAL_START(id)` / `traceINTERVAL_STOP(id)` |
 | **Label** | Display name (`Interval N`) |
 | **Count** | Number of paired start→stop spans in scope |
 | **Min / Avg / Max / p95** | Interval duration statistics |
@@ -721,7 +730,7 @@ Pairs **`interval_start` / `interval_stop`** STI events (legacy `start_intval` /
 - **Histogram:** distribution of interval durations.
 - **Click a point** to jump to the **interval start** and add an annotation with duration/time notes.
 
-**Interval 1** in `example-4cores.btf` (480 spans, context-switch stress test iteration — each `vCtxSwitchWorker` loop brackets mutex/yield work with `traceINTERVAL_START(1)` / `traceINTERVAL_STOP(1)`):
+**Interval 1** in `example-4cores.btf` (480 spans from ten `vCtxSwitchWorker` tasks sharing id `1` — each worker pairs via its own `tid` in the note):
 
 <img src="../images/stats/stats-interval-1.svg" alt="Interval duration distribution for interval id 1 in example-4cores.btf" width="820">
 
@@ -748,10 +757,17 @@ When `tid:` is present, concurrent workers can share the same interval **id** wi
 This is **LIFO (last-in, first-out) nesting** within each pairing key.
 
 ```text
+# Nested on one task (same pairing key)
 START(id=2)           stack: [A]
   START(id=2)         stack: [A, B]
   STOP(id=2)    →     pairs B→B  (inner span)
 STOP(id=2)      →     pairs A→A  (outer span)
+
+# Two tasks, same interval id, with tid in note
+Task 7: START  note=1 tid:7
+Task 8: START  note=1 tid:8
+Task 7: STOP   note=1 tid:7   → pairs with task 7 start only
+Task 8: STOP   note=1 tid:8   → pairs with task 8 start only
 ```
 
 Result: **two** instances — one for the inner region, one for the outer region — each with the correct duration. **Min / Avg / Max / p95** in the statistics table are computed over **all** paired instances whose time range overlaps the active scope (full trace or cursor range). Timeline display uses a separate rule (see below).
@@ -774,16 +790,16 @@ When starts and stops interleave across cores, the viewer can pair one task's **
 - **Count** — still the number of stop events that found a start on the stack (often equals the number of loop iterations).
 - **Min / Avg / Max / p95** — can be **wrong**: bogus **very long** spans inflate max and avg; the distribution chart shows outlier points far above the real iteration time.
 
-`example-4cores.btf` (recorded with `tid` in each interval note) pairs correctly per task; older example files without `tid` may still show cross-pairing on ids **1–4** when multiple workers share one id:
+`example-4cores.btf` is recorded **with** `tid` in each interval note, so ids **1–4** pair correctly across parallel workers. **Legacy** traces that omit `tid` may still cross-pair when several tasks share one id:
 
-| Interval id | Test (see `Demo/examples/freertos_test/main.c`) | Paired **Count** | Spans &lt; 500 µs | Spans ≥ 500 µs (likely cross-paired) | **Max** duration |
-|-------------|--------------------------------------------------|------------------|-------------------|--------------------------------------|------------------|
-| 1 | Context-switch / mutex stress (`vCtxSwitchWorker`) | 480 | 300 | 180 | 181 ms |
-| 2 | Mutex workers (`vMutexWorker`) | 480 | 434 | 46 | 112 ms |
-| 3 | Area-semaphore workers | 240 | 175 | 65 | 78 ms |
-| 4 | Nested interval stress | 480 | 460 | 20 | 30 ms |
+| Interval id | Test (see `Demo/examples/freertos_test/main.c`) | Without `tid` — typical symptom |
+|-------------|--------------------------------------------------|--------------------------------|
+| 1 | Context-switch / mutex stress (`vCtxSwitchWorker`) | Inflated **Max** / outlier scatter points |
+| 2 | Mutex workers (`vMutexWorker`) | Same |
+| 3 | Area-semaphore workers | Same |
+| 4 | Nested interval stress | Same |
 
-For these traces, treat **short-duration clusters** in the scatter/histogram as the meaningful iteration times; treat isolated **very large** points and the table **Max** as pairing artefacts unless you have verified LIFO ordering for that id.
+For legacy traces, treat **short-duration clusters** in the scatter/histogram as the meaningful iteration times; treat isolated **very large** points and the table **Max** as pairing artefacts unless you have verified LIFO ordering for that id.
 
 **2. SMP task migration — why pairing is not done by core**
 
@@ -797,10 +813,10 @@ The viewer pairs by **interval id** (and **task id** when `tid` is present), not
 Task A (may migrate):
   START(2) on Core_0  … runs on Core_0, then Core_1 …  STOP(2) on Core_1
   Core-based match: no single core owns both ends → broken or missed pair
-  Id stack (current): pairs correctly if no other task uses id 2 concurrently
+  Id + tid stack: pairs correctly if no other task uses id 2 concurrently
 ```
 
-So the viewer does **not** use core as a pairing key. The practical fix for multi-task / SMP traces is still **one interval id per logical scope** (per task, per worker instance, or per non-overlapping region), not core alignment. Core columns on paired instances (`start_core` / `stop_core` in the parsed data) are informational only.
+So the viewer does **not** use core as a pairing key. With **`tid` in the note**, several tasks may share the same interval id safely; without `tid`, prefer **one interval id per logical scope** or accept LIFO-only pairing. Core columns on paired instances (`start_core` / `stop_core` in the parsed data) are informational only.
 
 **3. True time nesting vs concurrent overlap**
 
@@ -808,7 +824,8 @@ So the viewer does **not** use core as a pairing key. The practical fix for mult
 |-----------|------------------|-------------------------|
 | Nested `START`/`STOP` on **one thread** (LIFO order) | Yes | Yes — each nesting level is a separate instance |
 | **Concurrent** tasks, **different** ids | Yes | Yes — ids are independent |
-| **Concurrent** tasks, **same** id, overlapping in time | Often **no** | **Count** ok; min/avg/max may be skewed |
+| **Concurrent** tasks, **same** id, **with `tid` in note** | Yes | Yes — per-task pairing keys |
+| **Concurrent** tasks, **same** id, **no `tid`** (legacy) | Often **no** | **Count** ok; min/avg/max may be skewed |
 | Start without matching stop (crash / trace cut-off) | Partial | Unmatched starts excluded from stats |
 
 **4. Timeline bars vs statistics count**
@@ -836,10 +853,10 @@ Typical timeline bar counts for the full `example-4cores.btf` trace:
 
 To get reliable per-task interval statistics:
 
-- Use a **distinct interval id per task** (or per logical scope), not one shared id across parallel workers.
-- For nested regions on a single thread, reuse the same id — LIFO pairing matches `START`/`STOP` nesting.
-- Avoid overlapping `START(id)` on multiple cores with the same `id` unless stops are guaranteed to unwind in strict reverse order (rare under preemption).
-- Do **not** rely on **core** to disambiguate pairs on SMP: tasks can **migrate** between `START` and `STOP`, so core-based matching would miss or mis-pair valid intervals (see limitation 2 above).
+- **Preferred (firmware in this repo):** use `traceINTERVAL_START(id)` / `traceINTERVAL_STOP(id)` — the logger records **`tid:{task_id}`** in the BTF note so parallel workers can share the same numeric `id`.
+- **Legacy traces** without `tid`: use a **distinct interval id per task** (or per logical scope), not one shared id across parallel workers.
+- For nested regions on a single thread, reuse the same id — LIFO pairing matches `START`/`STOP` nesting within each pairing key.
+- Do **not** rely on **core** to disambiguate pairs on SMP: tasks can **migrate** between `START` and `STOP` (see limitation 2 above).
 - Orphan stops (stop without start) are dropped; orphan starts at end of trace are not counted in the table.
 
 ##### Timeline rendering
@@ -1359,6 +1376,30 @@ Common STI channel names generated by `gen_trace.py`:
 
 The viewer renders each distinct STI channel as a separate coloured row of diamond markers. Well-known notes (`take_mutex`, `give_mutex`, `create_mutex`, `trigger`) have fixed colours; others are assigned deterministically from a palette (same note → same colour every run).
 
+#### FreeRTOS trace firmware (`gentrace` / `Demo`)
+
+Traces from `make run` and `tools/gentrace` use these STI channels (see [Binary → BTF dump mapping](../README.md#binary--btf-dump-mapping) for the full event list):
+
+| STI `target` | BTF `note` (examples) | Purpose |
+|--------------|----------------------|---------|
+| `interval_start` | `1 tid:7` | Interval region start (`id` + caller task id) |
+| `interval_stop` | `1 tid:7` | Interval region end (pair with matching start + `tid`) |
+| `tag0_event` … `tag7_event` | numeric payload | User tags (`traceTAG(t, v)`) |
+| `TICK` | tick count | Scheduler tick (`traceTASK_INCREMENT_TICK`) |
+| `task` | `suspend Name[id]`, `resume Name[id]`, `delete …`, `set_priority Name[id] pri:N`, `resume/isr` | Task lifecycle / priority |
+| `queue` / `mutex` / `sem` | `create` / `send` / `recv` / `give` / `take` / `delete` + `0x........` | Queue and synchronisation objects |
+
+**Interval example** (from `tracedata/example-4cores.btf`):
+
+```
+214276,Core_0,0,STI,interval_start,0,trigger,0 tid:1
+217432,Core_1,0,STI,interval_stop,0,trigger,1 tid:7
+```
+
+The viewer pairs lines with the same note key: when `tid` is present, `{id} tid:{task_id}`; otherwise the full note string (legacy).
+
+**Task create** on `T` rows uses note `create pri:N` (priority in `param2`), not `task_create` (synthetic `gen_trace.py` traces still use `task_create`).
+
 ---
 
 ### C events — core events
@@ -1434,6 +1475,7 @@ timestamp, Core_N, 0, C, Core_N, 0, set_frequency, freq_hz
 | **File open (web)** | `Toolbar.vue` | Native `<input type="file">` in a `<label>` (last-folder memory on `file://` and HTTP). Optional FSA helpers in `fileOpen.js` are not used for Open. |
 | **Trace compare** | `traceCompare.js` / `_TraceCompareDialog` | Optional per-tab C1–Cn scope (Desktop + Web) |
 | **Migration heatmap** | `migrationAnalysis.js` / `_MigrationHeatmapDialog` | ≤ 16 cores: pair × 32 bins → task × 32 sub-bins → timeline. > 16 cores: core×core matrix → outgoing pairs × 32 bins → tasks; row hover + row click on matrix |
+| **Interval pairing** | `intervalAnalysis.js` / `_build_interval_data` | Parse `{id} tid:{task_id}` notes; pair by id+task when `tid` present, else legacy note string |
 | **Pre-built HTML** | `web/pre-build/btf-viewer.html` | Copy of `dist/index.html` produced by `make build` |
 
 Desktop session persistence uses `btf_viewer.rc` (tab paths, zoom, cursors). Web persists layout and view options in `localStorage` — see [Session restore (Web)](#session-restore-web).

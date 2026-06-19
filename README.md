@@ -31,6 +31,93 @@ FreeRTOS trace hooks
   → BTFViewer (desktop or web) / Trace Compass / GTKWave
 ```
 
+### `trace.bin` binary format
+
+At `traceEND()`, the firmware writes a single little-endian blob (`fwrite` of the in-RAM `TRACE` structure in `btf_trace.h`). `tools/gentrace` reads this file and converts it to BTF or VCD. The on-disk layout is:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ TRACE_HEADER  (44 bytes)                                    │
+├─────────────────────────────────────────────────────────────┤
+│ task_lists[max_tasks × max_taskname_len]  (NUL-terminated   │
+│   task name per task id slot; index = uxTCBNumber)          │
+├─────────────────────────────────────────────────────────────┤
+│ event_lists[max_events]  (ring buffer of EVENT records)     │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**File size** (bytes):
+
+```
+44 + max_tasks × max_taskname_len + max_events × 16
+```
+
+`max_tasks`, `max_taskname_len`, and `max_events` come from the header (set at `traceSTART()` from `configMAX_TRACE_TASKS`, `ALIGN4(configMAX_TRACE_TASK_NAME_LEN+1)`, and `configMAX_TRACE_EVENTS`). The demo build passes `MAX_TRACE_EVENTS` on the Makefile command line (default 400000).
+
+#### `TRACE_HEADER` (44 bytes, little-endian)
+
+| Offset | Field | Type | Description |
+|--------|-------|------|-------------|
+| 0 | `header` | `char[4]` | Magic `B` `T` `F` `2` |
+| 4 | `tag` | `uint32_t` | Endian marker — must be `1` (little-endian) |
+| 8 | `version` | `uint32_t` | `TRACE_VERSION` = `(major<<16)\|minor` (currently **1.4** → `0x00010004`) |
+| 12 | `core_clock` | `uint32_t` | CPU frequency (Hz); used to convert timestamps to BTF time |
+| 16 | `num_cores` | `uint32_t` | `configNUMBER_OF_CORES` |
+| 20 | `max_tasks` | `uint32_t` | Task name table slots |
+| 24 | `max_taskname_len` | `uint32_t` | Bytes per task name slot (4-byte aligned) |
+| 28 | `max_events` | `uint32_t` | Ring buffer capacity |
+| 32 | `task_count` | `uint32_t` | Number of `TASK_CREATE` events recorded |
+| 36 | `event_count` | `uint32_t` | Events in buffer (≤ `max_events`; stops growing after wrap) |
+| 40 | `current_index` | `uint32_t` | Next write index; also start of oldest event when full |
+
+#### Task name table
+
+- `task_lists[task_id][0 … max_taskname_len-1]` — C string, max `configMAX_TRACE_TASK_NAME_LEN` characters plus NUL.
+- Slot index is the FreeRTOS **task id** (`uxTCBNumber`), not a dense 0…N−1 index.
+- Written by `btf_trace_add_task()` on `traceTASK_CREATE`.
+
+#### `EVENT` record (16 bytes)
+
+| Offset | Field | Type | Description |
+|--------|-------|------|-------------|
+| 0 | `timestamp` | `uint32_t` | Raw counter from `xGetCycles()` (may wrap at 2³²; extended offline) |
+| 4 | `param1` | `uint32_t` | Event-specific (see [dump mapping](#binary--btf-dump-mapping)) |
+| 8 | `param2` | `uint32_t` | Event-specific |
+| 12 | `types` | `uint32_t` | Event type + optional core id (SMP) |
+
+**`types` field:**
+
+| Bits | Meaning |
+|------|---------|
+| `[23:0]` | `event_t` value (see `btf_trace.h`) |
+| `[30:24]` | Core id when `num_cores` > 1 (from `portGET_CORE_ID()` at record time) |
+| `[31]` | Unused (mask is `0x7f000000` for core) |
+
+On single-core builds, the full `types` word is just the `event_t` enum value (core bits zero).
+
+**`event_t` values:**
+
+| Value | Symbol |
+|------:|--------|
+| 1–7 | `TASK_SWITCHED_IN` … `TASK_RESUME_FROM_ISR` |
+| 8–11 | `QUEUE_CREATE` … `QUEUE_DELETE` |
+| 12 | `TASK_INCREMENT_TICK` |
+| 13–14 | `INTERVAL_START`, `INTERVAL_STOP` |
+| 15 | `TASK_PRIORITY_SET` |
+| 90–97 | `TAG` … `TAG7` |
+
+#### Ring buffer iteration
+
+Events are appended at `current_index` (mod `max_events`). When `event_count == max_events`, the buffer has wrapped: `gentrace` / `btf_dump` replay from `current_index` (oldest) through `current_index - 1` (modulo). When not full, replay starts at index `0`.
+
+After the ring is full, new events **overwrite** the oldest slots; `event_count` stays at `max_events`. Firmware prints a one-time warning: *only last events will be recorded*.
+
+#### Timestamps
+
+`timestamp` is a free-running **32-bit** counter (platform-defined via `xGetCycles()` in `btf_port.h`). `gentrace` and `btf_dump()` detect wrap and build monotonic 64-bit times scaled by `core_clock` (microseconds or nanoseconds in the output BTF file).
+
+---
+
 ### Binary → BTF dump mapping
 
 `tools/gentrace` and live `btf_dump()` (`PRINT_BTF_DUMP` in `btf_port.h`) use the same rules to turn each `trace.bin` event into one BTF CSV line:
@@ -354,7 +441,7 @@ tools/gentrace trace.bin trace.btf
 tools/gentrace -v trace.bin trace.vcd
 ```
 
-Event-to-BTF field mapping is documented in [Binary → BTF dump mapping](#binary--btf-dump-mapping).
+Event-to-BTF field mapping is documented in [Binary → BTF dump mapping](#binary--btf-dump-mapping). The input file layout is in [`trace.bin` binary format](#tracebin-binary-format).
 
 ### 8. Open the trace
 
@@ -365,7 +452,7 @@ Event-to-BTF field mapping is documented in [Binary → BTF dump mapping](#binar
 
 ## Memory & configuration
 
-Default trace buffer size is controlled by `configMAX_TRACE_EVENTS` and `configMAX_TRACE_TASKS` in `FreeRTOSConfig.h`. Each event is 12 bytes; task names add `max_tasks × max_taskname_len` bytes. When the buffer fills, `btf_trace_add_event()` silently drops new events (no overwrite, no assert).
+Default trace buffer size is controlled by `configMAX_TRACE_EVENTS` and `configMAX_TRACE_TASKS` in `FreeRTOSConfig.h` (and `MAX_TRACE_EVENTS` in the demo Makefile). Each `EVENT` is **16 bytes**; task names add `max_tasks × max_taskname_len` bytes. Total `trace.bin` size is `44 + max_tasks × max_taskname_len + max_events × 16` — see [`trace.bin` binary format](#tracebin-binary-format). When the event ring fills, newer events overwrite the oldest (ring wrap); `event_count` caps at `max_events`.
 
 ---
 
