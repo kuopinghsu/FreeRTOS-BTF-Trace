@@ -135,3 +135,12 @@ export const SYNC_OBJECT_SORT_ACCESSORS = {
   avg: r => r.avgHoldNs,
   status: r => r.statusLabel,
 }
+
+export const SYNC_ISSUE_SORT_ACCESSORS = {
+  time: i => i.timeNs,
+  object: i => (i.objKey || '').toLowerCase(),
+  issue: i => (i.kind || '').toLowerCase(),
+  detail: i => (i.detail || '').toLowerCase(),
+  task: i => (i.taskLabel || '').toLowerCase(),
+  core: i => (i.core || '').toLowerCase(),
+}

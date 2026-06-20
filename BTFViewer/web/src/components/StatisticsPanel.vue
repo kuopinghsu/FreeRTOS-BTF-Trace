@@ -235,50 +235,61 @@
         </div>
         <div
           v-if="tickHealth.largeGaps.length"
-          class="stats-table-wrap"
-          style="max-height: 140px"
+          class="stats-table-block"
         >
-          <table class="stats-table compact">
-            <thead>
-              <tr>
-                <th
-                  :class="thSortClass('health', 'start')"
-                  @click="toggleTableSort('health', 'start')"
+          <div
+            class="stats-table-wrap"
+            :style="{ maxHeight: tableHeight('health') + 'px' }"
+          >
+            <table class="stats-table compact">
+              <thead>
+                <tr>
+                  <th
+                    :class="thSortClass('health', 'start')"
+                    @click="toggleTableSort('health', 'start')"
+                  >
+                    Start
+                  </th>
+                  <th
+                    :class="thSortClass('health', 'end')"
+                    @click="toggleTableSort('health', 'end')"
+                  >
+                    End
+                  </th>
+                  <th
+                    :class="thSortClass('health', 'gap')"
+                    @click="toggleTableSort('health', 'gap')"
+                  >
+                    Gap
+                  </th>
+                  <th
+                    :class="thSortClass('health', 'missed')"
+                    @click="toggleTableSort('health', 'missed')"
+                  >
+                    Missed
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="(g, i) in sortedTickHealthGaps"
+                  :key="i"
                 >
-                  Start
-                </th>
-                <th
-                  :class="thSortClass('health', 'end')"
-                  @click="toggleTableSort('health', 'end')"
-                >
-                  End
-                </th>
-                <th
-                  :class="thSortClass('health', 'gap')"
-                  @click="toggleTableSort('health', 'gap')"
-                >
-                  Gap
-                </th>
-                <th
-                  :class="thSortClass('health', 'missed')"
-                  @click="toggleTableSort('health', 'missed')"
-                >
-                  Missed
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr
-                v-for="(g, i) in sortedTickHealthGaps"
-                :key="i"
-              >
-                <td>{{ fmtTime(g.start) }}</td>
-                <td>{{ fmtTime(g.end) }}</td>
-                <td>{{ fmtTime(g.duration) }}</td>
-                <td>{{ g.missedTicks }}</td>
-              </tr>
-            </tbody>
-          </table>
+                  <td>{{ fmtTime(g.start) }}</td>
+                  <td>{{ fmtTime(g.end) }}</td>
+                  <td>{{ fmtTime(g.duration) }}</td>
+                  <td>{{ g.missedTicks }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div
+            class="stats-section-resizer"
+            role="separator"
+            aria-label="Resize trace health gap table"
+            aria-orientation="horizontal"
+            @mousedown.prevent="onTableResizeStart('health', $event)"
+          />
         </div>
       </template>
     </template>
@@ -1136,24 +1147,61 @@
             </table>
           </div>
           <div
+            class="stats-section-resizer"
+            role="separator"
+            aria-label="Resize mutex/semaphore summary table"
+            aria-orientation="horizontal"
+            @mousedown.prevent="onTableResizeStart('sync', $event)"
+          />
+          <div
             v-if="syncIssueList.length"
             class="stats-table-wrap sync-issues-wrap"
-            :style="{ maxHeight: tableHeight('sync') + 'px' }"
+            :style="{ maxHeight: tableHeight('sync_issues') + 'px' }"
           >
             <table class="stats-table sync-issues-table">
               <thead>
                 <tr>
-                  <th>Time</th>
-                  <th>Object</th>
-                  <th>Issue</th>
-                  <th>Detail</th>
-                  <th>Task</th>
-                  <th>Core</th>
+                  <th
+                    :class="thSortClass('sync_issues', 'time')"
+                    @click="toggleTableSort('sync_issues', 'time')"
+                  >
+                    Time
+                  </th>
+                  <th
+                    :class="thSortClass('sync_issues', 'object')"
+                    @click="toggleTableSort('sync_issues', 'object')"
+                  >
+                    Object
+                  </th>
+                  <th
+                    :class="thSortClass('sync_issues', 'issue')"
+                    @click="toggleTableSort('sync_issues', 'issue')"
+                  >
+                    Issue
+                  </th>
+                  <th
+                    :class="thSortClass('sync_issues', 'detail')"
+                    @click="toggleTableSort('sync_issues', 'detail')"
+                  >
+                    Detail
+                  </th>
+                  <th
+                    :class="thSortClass('sync_issues', 'task')"
+                    @click="toggleTableSort('sync_issues', 'task')"
+                  >
+                    Task
+                  </th>
+                  <th
+                    :class="thSortClass('sync_issues', 'core')"
+                    @click="toggleTableSort('sync_issues', 'core')"
+                  >
+                    Core
+                  </th>
                 </tr>
               </thead>
               <tbody>
                 <tr
-                  v-for="(iss, idx) in syncIssueList"
+                  v-for="(iss, idx) in sortedSyncIssueList"
                   :key="`${iss.objKey}-${iss.kind}-${iss.timeNs}-${idx}`"
                   class="clickable-row"
                   tabindex="0"
@@ -1176,11 +1224,12 @@
             </table>
           </div>
           <div
+            v-if="syncIssueList.length"
             class="stats-section-resizer"
             role="separator"
-            aria-label="Resize mutex/semaphore table"
+            aria-label="Resize mutex/semaphore issues table"
             aria-orientation="horizontal"
-            @mousedown.prevent="onTableResizeStart('sync', $event)"
+            @mousedown.prevent="onTableResizeStart('sync_issues', $event)"
           />
         </div>
       </template>
@@ -1690,6 +1739,7 @@ import {
   INTERVAL_SORT_ACCESSORS,
   PRIORITY_SORT_ACCESSORS,
   SYNC_OBJECT_SORT_ACCESSORS,
+  SYNC_ISSUE_SORT_ACCESSORS,
 } from '../utils/statsTableSort.js'
 import TraceCompareDialog from './TraceCompareDialog.vue'
 
@@ -1888,6 +1938,9 @@ const sectionHeights = ref({
   preemption: STATS_TABLE_MIG_DEFAULT_H,
   priority: STATS_TABLE_DEFAULT_H,
   sync: STATS_TABLE_DEFAULT_H,
+  sync_issues: STATS_TABLE_MIG_DEFAULT_H,
+  health: STATS_TABLE_DEFAULT_H,
+  intervals: STATS_TABLE_DEFAULT_H,
 })
 watch(() => props.sectionHeights, (v) => {
   if (v) Object.assign(sectionHeights.value, v)
@@ -1910,6 +1963,7 @@ const tableSort = ref({
   preemption: defaultStatsTableSort(),
   priority: defaultStatsTableSort(),
   sync: defaultStatsTableSort(),
+  sync_issues: defaultStatsTableSort(),
   intervals: defaultStatsTableSort(),
 })
 
@@ -2183,6 +2237,9 @@ const syncIssueList = computed(() => {
   const r = statsRange.value
   return syncObjectIssueRows(tr, r?.lo ?? null, r?.hi ?? null)
 })
+
+const sortedSyncIssueList = computed(() =>
+  sortStatsRows(syncIssueList.value, tableSort.value.sync_issues, SYNC_ISSUE_SORT_ACCESSORS))
 
 const sortedSyncStats = computed(() =>
   sortStatsRows(syncStats.value, tableSort.value.sync, SYNC_OBJECT_SORT_ACCESSORS))

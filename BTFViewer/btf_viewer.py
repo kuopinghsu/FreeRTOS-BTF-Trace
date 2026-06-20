@@ -12361,8 +12361,11 @@ class _StatsPanel(QWidget):
             "block": STATS_TABLE_DEFAULT_H,
             "inter": STATS_TABLE_DEFAULT_H,
             "preemption": STATS_TABLE_MIG_DEFAULT_H,
+            "priority": STATS_TABLE_DEFAULT_H,
             "intervals": STATS_TABLE_DEFAULT_H,
+            "sync": STATS_TABLE_DEFAULT_H,
             "sync_issues": STATS_TABLE_MIG_DEFAULT_H,
+            "health": STATS_TABLE_DEFAULT_H,
         }
         self._table_grips: List[_StatsSectionGrip] = []
         outer = QVBoxLayout(self)
@@ -14295,7 +14298,7 @@ class _StatsPanel(QWidget):
                     f"{len(_tick['large_gaps'])} large gap(s) · "
                     f"~{_tick['missed_estimate']} missed ticks",
                     color="#888888", ui_fs=_fs))
-                table = QTableWidget(min(8, len(_tick["large_gaps"])), 4)
+                table = QTableWidget(len(_tick["large_gaps"]), 4)
                 table.setHorizontalHeaderLabels(["Start", "End", "Gap", "Missed"])
                 table.setEditTriggers(QAbstractItemView.NoEditTriggers)
                 table.verticalHeader().setVisible(False)
@@ -14304,23 +14307,23 @@ class _StatsPanel(QWidget):
                 table.horizontalHeader().setSectionsClickable(True)
                 table.horizontalHeader().setSortIndicatorShown(True)
                 _item_bg = self._apply_stats_table_theme(table, _fs)
-                for r, (start, end, dur, missed) in enumerate(_tick["large_gaps"][:8]):
+                for r, (start, end, dur, missed) in enumerate(_tick["large_gaps"]):
                     for c, val in enumerate((
                         _format_time(start, trace.time_scale),
                         _format_time(end, trace.time_scale),
                         _format_time(dur, trace.time_scale),
                         str(missed),
                     )):
-                        keys = (
-                            start, end, dur, missed,
-                        )
+                        keys = (start, end, dur, missed)
                         item = _StatsSortItem(val, keys[c])
                         item.setBackground(_item_bg)
                         table.setItem(r, c, item)
                 table.setSortingEnabled(True)
-                table.setFixedHeight(
-                    STATS_TABLE_HEADER_H + min(8, len(_tick["large_gaps"])) * STATS_TABLE_ROW_H + 2)
-                blay.addWidget(table)
+                host = QWidget()
+                hlay = QVBoxLayout(host)
+                hlay.setContentsMargins(0, 0, 0, 0)
+                self._wrap_table_with_resizer(hlay, table, "health")
+                blay.addWidget(host)
 
         self._add_collapsible_section(
             "health",
@@ -14481,51 +14484,37 @@ class _StatsPanel(QWidget):
                     table.setShowGrid(False)
                     table.setFrameShape(QFrame.NoFrame)
                     table.verticalHeader().setDefaultSectionSize(STATS_TABLE_ROW_H)
+                    table.horizontalHeader().setSectionsClickable(True)
+                    table.horizontalHeader().setSortIndicatorShown(True)
                     self._apply_stats_table_theme(table, _fs)
-                    _hover_bg = QBrush(QColor("#3A3A50") if self._is_dark else QColor("#E0E0EC"))
-                    _default_bg = table.palette().base()
-                    _hovered_row = [-1]
-
-                    def _clear_priority_hover() -> None:
-                        row = _hovered_row[0]
-                        if row < 0:
-                            return
-                        for c in range(len(headers)):
-                            item = table.item(row, c)
-                            if item is not None:
-                                item.setBackground(_default_bg)
-                        _hovered_row[0] = -1
-
-                    def _set_priority_hover(row: int) -> None:
-                        if row < 0 or row == _hovered_row[0]:
-                            return
-                        _clear_priority_hover()
-                        _hovered_row[0] = row
-                        for c in range(len(headers)):
-                            item = table.item(row, c)
-                            if item is not None:
-                                item.setBackground(_hover_bg)
-
-                    def _on_priority_row_clicked(row: int, _col: int) -> None:
-                        if row < 0 or row >= len(_priority_rows):
-                            return
-                        mk = _priority_rows[row][0]
-                        self._open_priority_plot(trace, mk)
-
-                    table.cellClicked.connect(_on_priority_row_clicked)
-                    table.cellEntered.connect(_set_priority_hover)
-                    table.viewport().setMouseTracking(True)
                     for ri, row in enumerate(_priority_rows):
-                        mk, label, base, peak, count, total, pattern, _ = row
+                        mk, label, base, peak, count, total, pattern, total_ns = row
                         vals = [label, str(base), str(peak), str(count), total, pattern]
+                        sort_keys = [
+                            label.lower(), base, peak, count, total_ns, pattern.lower(),
+                        ]
                         for ci, val in enumerate(vals):
-                            item = QTableWidgetItem(val)
+                            item = _StatsSortItem(val, sort_keys[ci])
                             item.setFlags(Qt.ItemIsEnabled)
+                            if ci == 0:
+                                item.setData(Qt.UserRole, mk)
                             if ci == 5 and "L/M/H" in pattern:
                                 item.setForeground(QBrush(QColor("#E74C3C")))
                             table.setItem(ri, ci, item)
+                    table.setSortingEnabled(True)
+
+                    def _on_priority_row_clicked(row: int, _col: int) -> None:
+                        item = table.item(row, 0)
+                        if item is None:
+                            return
+                        mk = item.data(Qt.UserRole)
+                        if mk:
+                            self._open_priority_plot(trace, mk)
+
+                    table.cellClicked.connect(_on_priority_row_clicked)
+                    table.setCursor(Qt.PointingHandCursor)
                     table.resizeRowsToContents()
-                    play.addWidget(table)
+                    self._wrap_table_with_resizer(play, table, "priority")
                 blay.addWidget(host)
 
             self._add_collapsible_section(
@@ -14568,19 +14557,30 @@ class _StatsPanel(QWidget):
                     table.setShowGrid(False)
                     table.setFrameShape(QFrame.NoFrame)
                     table.verticalHeader().setDefaultSectionSize(STATS_TABLE_ROW_H)
+                    table.horizontalHeader().setSectionsClickable(True)
+                    table.horizontalHeader().setSortIndicatorShown(True)
                     self._apply_stats_table_theme(table, _fs)
+                    _status_rank = {"error": 0, "warning": 1, "ok": 2}
                     for ri, row in enumerate(_sync_rows):
-                        _key, kind, ptr, label, holds, issues, avg, status, *_rest = row
-                        vals = [label, kind, str(holds), str(issues), avg, status]
+                        _key, kind, ptr, label, holds, issues, avg, status_label, status, avg_ns = row[:10]
+                        vals = [label, kind, str(holds), str(issues), avg, status_label]
+                        sort_keys = [
+                            label.lower(), kind.lower(), holds, issues,
+                            avg_ns if avg_ns is not None else -1,
+                            _status_rank.get(status, 3),
+                        ]
                         for ci, val in enumerate(vals):
-                            item = QTableWidgetItem(val)
+                            item = _StatsSortItem(val, sort_keys[ci])
                             item.setFlags(Qt.ItemIsEnabled)
-                            if ci == 5 and status != "OK":
-                                color = "#E74C3C" if status == "Error" else "#F39C12"
+                            if ci == 0:
+                                item.setData(Qt.UserRole, _key)
+                            if ci == 5 and status != "ok":
+                                color = "#E74C3C" if status == "error" else "#F39C12"
                                 item.setForeground(QBrush(QColor(color)))
                             table.setItem(ri, ci, item)
+                    table.setSortingEnabled(True)
                     table.resizeRowsToContents()
-                    play.addWidget(table)
+                    self._wrap_table_with_resizer(play, table, "sync")
                     if _sync_issues_scoped:
                         issue_headers = ["Time", "Object", "Issue", "Detail", "Task", "Core"]
                         itable = QTableWidget(len(_sync_issues_scoped), len(issue_headers))
@@ -14593,21 +14593,27 @@ class _StatsPanel(QWidget):
                         itable.setShowGrid(False)
                         itable.setFrameShape(QFrame.NoFrame)
                         itable.verticalHeader().setDefaultSectionSize(STATS_TABLE_ROW_H)
+                        itable.horizontalHeader().setSectionsClickable(True)
+                        itable.horizontalHeader().setSortIndicatorShown(True)
                         self._apply_stats_table_theme(itable, _fs)
 
                         def _on_issue_row(row: int, _col: int) -> None:
-                            if 0 <= row < len(_sync_issues_scoped):
-                                iss = _sync_issues_scoped[row]
-                                payload = SyncIssueRef(
-                                    time_ns=iss["time_ns"],
-                                    core=iss.get("core") or "",
-                                    kind=iss.get("kind", ""),
-                                    detail=iss.get("detail", ""),
-                                    obj_key=iss.get("obj_key"),
-                                    ptr=iss.get("ptr", ""),
-                                )
-                                self.plot_point_clicked.emit(
-                                    payload, iss["time_ns"], _format_sync_issue_note(iss))
+                            item = itable.item(row, 0)
+                            if item is None:
+                                return
+                            iss = item.data(Qt.UserRole)
+                            if iss is None:
+                                return
+                            payload = SyncIssueRef(
+                                time_ns=iss["time_ns"],
+                                core=iss.get("core") or "",
+                                kind=iss.get("kind", ""),
+                                detail=iss.get("detail", ""),
+                                obj_key=iss.get("obj_key"),
+                                ptr=iss.get("ptr", ""),
+                            )
+                            self.plot_point_clicked.emit(
+                                payload, iss["time_ns"], _format_sync_issue_note(iss))
 
                         itable.cellClicked.connect(_on_issue_row)
                         itable.setCursor(Qt.PointingHandCursor)
@@ -14620,12 +14626,22 @@ class _StatsPanel(QWidget):
                                 iss.get("task_label") or "—",
                                 iss.get("core") or "",
                             ]
+                            sort_keys = [
+                                iss["time_ns"],
+                                (iss.get("obj_key") or "").lower(),
+                                (iss.get("kind") or "").lower(),
+                                (iss.get("detail") or "").lower(),
+                                (iss.get("task_label") or "").lower(),
+                                (iss.get("core") or "").lower(),
+                            ]
                             tip = (f"Jump, zoom, and annotate at "
                                    f"{_format_time(iss['time_ns'], trace.time_scale)}")
                             for ci, val in enumerate(vals):
-                                item = QTableWidgetItem(val)
+                                item = _StatsSortItem(val, sort_keys[ci])
                                 item.setFlags(Qt.ItemIsEnabled)
                                 item.setToolTip(tip)
+                                if ci == 0:
+                                    item.setData(Qt.UserRole, iss)
                                 if ci == 2:
                                     sev = iss.get("severity", "")
                                     if sev == "error":
@@ -14633,6 +14649,7 @@ class _StatsPanel(QWidget):
                                     elif sev == "warning":
                                         item.setForeground(QBrush(QColor("#F39C12")))
                                 itable.setItem(ri, ci, item)
+                        itable.setSortingEnabled(True)
                         itable.resizeRowsToContents()
                         self._wrap_table_with_resizer(play, itable, "sync_issues")
                 blay.addWidget(host)
