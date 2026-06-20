@@ -31,10 +31,18 @@ assert(mtx.issues.length === 0, `main mutex should have no issues, got ${mtx.iss
 const orphans = syncObjectIssueRows(trace).filter(i => i.kind === 'orphan_give')
 assert(orphans.length === 0, `expected no orphan gives, got ${orphans.length}`)
 
+const issues = syncObjectIssueRows(trace)
+assert(issues.length === 1, `expected 1 teardown warning, got ${issues.length}: ${issues.map(i => i.kind + ' ' + i.ptr).join(', ')}`)
+assert(issues[0].kind === 'delete_while_held', issues[0].kind)
+assert(issues[0].kindLabel === 'mutex' && issues[0].ptr === '0x80018650',
+  `expected test 8 mutex teardown warning, got ${issues[0].kindLabel} ${issues[0].ptr}`)
+
 const rows = syncObjectStatsRows(trace)
 assert(rows.some(r => r.key === 'mutex:0x80018700' && r.status === 'ok'),
   'main mutex row should be OK')
+assert(rows.filter(r => r.status !== 'ok').length === 1,
+  `expected one warning row, got ${rows.filter(r => r.status !== 'ok').map(r => r.label).join(', ')}`)
 
 console.log(`ok: sync object analysis (${btfPath})`)
 console.log(`  mutex ${mtx.ptr}: ${mtx.holds.length} holds, 0 issues`)
-console.log(`  ${trace.syncObjects.size} objects, ${syncObjectIssueRows(trace).length} scoped issues`)
+console.log(`  ${trace.syncObjects.size} objects, ${issues.length} scoped issue (test 8 mutex teardown)`)

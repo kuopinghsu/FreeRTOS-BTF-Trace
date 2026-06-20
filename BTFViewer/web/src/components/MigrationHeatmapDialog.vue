@@ -70,6 +70,25 @@
         {{ hintText }}
       </p>
       <div
+        v-if="hasData"
+        class="heatmap-export-row"
+      >
+        <button
+          type="button"
+          class="heatmap-export-btn"
+          @click="exportHeatmapPng"
+        >
+          Export PNG
+        </button>
+        <button
+          type="button"
+          class="heatmap-export-btn"
+          @click="exportHeatmapSvg"
+        >
+          Export SVG
+        </button>
+      </div>
+      <div
         v-if="taskFilterActive"
         class="heatmap-filter-bar"
       >
@@ -466,14 +485,11 @@ function drawHeatmap() {
   const rows = displayRows.value
   if (!canvas || !scrollEl || !rows.length) return
 
-  const { nBins, rowCount, cellW, x0, headerH } = layout.value
   const viewW = scrollEl.clientWidth
   const viewH = scrollEl.clientHeight
   if (viewW < 1 || viewH < 1) return
-  const scrollTop = scrollEl.scrollTop
-  const scrollLeft = scrollEl.scrollLeft
-  const dpr = window.devicePixelRatio || 1
 
+  const dpr = window.devicePixelRatio || 1
   canvas.width = Math.max(1, Math.floor(viewW * dpr))
   canvas.height = Math.max(1, Math.floor(viewH * dpr))
   canvas.style.width = `${viewW}px`
@@ -481,11 +497,37 @@ function drawHeatmap() {
 
   const ctx = canvas.getContext('2d')
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+  paintHeatmap(ctx, {
+    viewW,
+    viewH,
+    scrollLeft: scrollEl.scrollLeft,
+    scrollTop: scrollEl.scrollTop,
+    showHover: true,
+  })
+}
+
+function paintHeatmap(ctx, {
+  viewW,
+  viewH,
+  scrollLeft = 0,
+  scrollTop = 0,
+  showHover = false,
+  fullExport = false,
+} = {}) {
+  const rows = displayRows.value
+  if (!ctx || !rows.length) return
+
+  const { nBins, rowCount, cellW, x0, headerH } = layout.value
   ctx.clearRect(0, 0, viewW, viewH)
 
   const maxVal = heatMax.value
-  const labelColor = getComputedStyle(scrollEl).getPropertyValue('--fg-dim').trim() || '#888888'
-  const labelBg = getComputedStyle(scrollEl).getPropertyValue('--bg').trim() || '#1e1e1e'
+  const scrollEl = scrollRef.value
+  const labelColor = scrollEl
+    ? getComputedStyle(scrollEl).getPropertyValue('--fg-dim').trim() || '#888888'
+    : '#888888'
+  const labelBg = scrollEl
+    ? getComputedStyle(scrollEl).getPropertyValue('--bg').trim() || '#1e1e1e'
+    : '#1e1e1e'
   const labelRight = rowLabelRight.value
 
   ctx.font = '11px monospace'
@@ -508,15 +550,14 @@ function drawHeatmap() {
     )
   }
 
-  const riStart = Math.max(0, Math.floor((scrollTop - headerH - 4) / ROW_H))
-  const riEnd = Math.min(rowCount, Math.ceil((scrollTop + viewH - headerH - 4) / ROW_H) + 1)
+  const riStart = fullExport ? 0 : Math.max(0, Math.floor((scrollTop - headerH - 4) / ROW_H))
+  const riEnd = fullExport ? rowCount : Math.min(rowCount, Math.ceil((scrollTop + viewH - headerH - 4) / ROW_H) + 1)
 
   for (let ri = riStart; ri < riEnd; ri++) {
     const row = rows[ri]
     const y = rowTopY(ri, scrollTop, headerH)
-    if (y + ROW_H < 0 || y > viewH) continue
+    if (!fullExport && (y + ROW_H < 0 || y > viewH)) continue
 
-    const labelBg = getComputedStyle(scrollEl).getPropertyValue('--bg').trim() || '#1e1e1e'
     ctx.fillStyle = labelBg
     ctx.fillRect(0, y, labelRight, ROW_H - 1)
 
@@ -543,7 +584,7 @@ function drawHeatmap() {
       x += cellW
     }
 
-    if (hoverRow.value === ri) {
+    if (showHover && hoverRow.value === ri) {
       ctx.fillStyle = 'rgba(91, 155, 213, 0.18)'
       ctx.fillRect(0, y, Math.min(labelRight, viewW), ROW_H - 1)
       const cellsX = x0 - scrollLeft
@@ -556,6 +597,130 @@ function drawHeatmap() {
       }
     }
   }
+}
+
+function _xmlEsc(v) {
+  return String(v ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+function _exportStamp() {
+  const d = new Date()
+  const pad = n => String(n).padStart(2, '0')
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
+}
+
+function _exportBaseName() {
+  const level = isMatrixLevel.value
+    ? 'matrix'
+    : isOutgoingLevel.value
+      ? 'outgoing'
+      : drillLevel.value >= taskDrillLevel.value
+        ? 'tasks'
+        : 'pairs'
+  return `migration-heatmap-${level}-${_exportStamp()}`
+}
+
+function _downloadBlob(filename, blob) {
+  if (!blob) return
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+function _downloadText(filename, text, mime) {
+  const blob = new Blob([text], { type: mime })
+  _downloadBlob(filename, blob)
+}
+
+function exportHeatmapPng() {
+  if (!hasData.value) return
+  const { contentW, contentH } = layout.value
+  if (contentW < 1 || contentH < 1) return
+  const canvas = document.createElement('canvas')
+  const dpr = Math.max(1, window.devicePixelRatio || 1)
+  canvas.width = Math.max(1, Math.floor(contentW * dpr))
+  canvas.height = Math.max(1, Math.floor(contentH * dpr))
+  const ctx = canvas.getContext('2d')
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+  paintHeatmap(ctx, {
+    viewW: contentW,
+    viewH: contentH,
+    scrollLeft: 0,
+    scrollTop: 0,
+    showHover: false,
+    fullExport: true,
+  })
+  canvas.toBlob(blob => {
+    if (!blob) return
+    _downloadBlob(`${_exportBaseName()}.png`, blob)
+  }, 'image/png')
+}
+
+function exportHeatmapSvg() {
+  if (!hasData.value) return
+  const { contentW, contentH, nBins, rowCount, cellW, x0, headerH } = layout.value
+  const rows = displayRows.value
+  const maxVal = heatMax.value
+  const labelRight = rowLabelRight.value
+  const bg = scrollRef.value
+    ? getComputedStyle(scrollRef.value).getPropertyValue('--bg').trim() || '#1e1e1e'
+    : '#1e1e1e'
+  const labelColor = scrollRef.value
+    ? getComputedStyle(scrollRef.value).getPropertyValue('--fg-dim').trim() || '#888888'
+    : '#888888'
+
+  const parts = [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${contentW}" height="${contentH}" viewBox="0 0 ${contentW} ${contentH}">`,
+    `<title>${_xmlEsc(subtitle.value)}</title>`,
+    `<rect width="100%" height="100%" fill="${_xmlEsc(bg)}"/>`,
+  ]
+
+  if (isMatrixLevel.value) {
+    const step = matrixColLabelStep(cellW)
+    parts.push(`<text x="${labelRight - 4}" y="${headerH - 3}" fill="${_xmlEsc(labelColor)}" font-family="monospace" font-size="9" text-anchor="end">to→</text>`)
+    for (let bi = 0; bi < nBins; bi++) {
+      if (bi % step !== 0) continue
+      const hx = x0 + bi * cellW
+      if (hx + cellW <= labelRight) continue
+      const cx = hx + (cellW * step) / 2
+      const cy = headerH - 4
+      const lbl = coreShortName(matrixHeatmap.value.cores[bi])
+      parts.push(
+        `<text x="${cx}" y="${cy}" fill="${_xmlEsc(labelColor)}" font-family="monospace" font-size="9" text-anchor="start" transform="rotate(-90 ${cx} ${cy})">${_xmlEsc(lbl)}</text>`,
+      )
+    }
+  }
+
+  for (let ri = 0; ri < rowCount; ri++) {
+    const row = rows[ri]
+    const y = rowTopY(ri, 0, headerH)
+    parts.push(`<rect x="0" y="${y}" width="${labelRight}" height="${ROW_H - 1}" fill="${_xmlEsc(bg)}"/>`)
+    parts.push(`<text x="${LEFT_PAD}" y="${y + ROW_H * 0.45}" fill="${_xmlEsc(labelColor)}" font-family="monospace" font-size="11" dominant-baseline="middle">${_xmlEsc(row.label)}</text>`)
+    let x = x0
+    for (let bi = 0; bi < nBins; bi++) {
+      const v = row.grid[bi] || 0
+      const isDiag = isMatrixLevel.value && row.fromCore === row.toCores?.[bi]
+      if (x + cellW > labelRight) {
+        if (isDiag) {
+          parts.push(`<rect x="${x}" y="${y}" width="${Math.max(1, cellW - 1)}" height="${ROW_H - 3}" fill="#5B9BD5" fill-opacity="0.03"/>`)
+        } else {
+          const opacity = maxVal && v ? 0.2 + 0.7 * (v / maxVal) : (v ? 0.3 : 0.06)
+          parts.push(`<rect x="${x}" y="${y}" width="${Math.max(1, cellW - 1)}" height="${ROW_H - 3}" fill="#5B9BD5" fill-opacity="${opacity.toFixed(3)}"/>`)
+        }
+      }
+      x += cellW
+    }
+  }
+
+  parts.push('</svg>')
+  _downloadText(`${_exportBaseName()}.svg`, parts.join('\n'), 'image/svg+xml;charset=utf-8')
 }
 
 function hitTestRow(clientX, clientY) {
@@ -869,6 +1034,24 @@ onBeforeUnmount(() => {
   font-size: 11px;
   color: var(--fg-dim);
   flex-shrink: 0;
+}
+.heatmap-export-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+  flex-shrink: 0;
+}
+.heatmap-export-btn {
+  border: 1px solid var(--border);
+  background: var(--tb-bg);
+  color: var(--fg);
+  border-radius: 4px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.heatmap-export-btn:hover {
+  border-color: var(--accent);
 }
 .heatmap-filter-bar {
   display: flex;

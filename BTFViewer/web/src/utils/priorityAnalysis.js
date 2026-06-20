@@ -255,6 +255,31 @@ export function priorityStatsRows(trace, lo, hi) {
   return rows
 }
 
+/** Per-episode detail rows for HTML/CSV export. */
+export function priorityEpisodeDetailRows(trace, lo, hi, limit = 200) {
+  if (!trace?.hasPriorityInstrumentation) return []
+  const scale = trace.timeScale
+  const rows = []
+  for (const ep of trace.priorityEpisodes || []) {
+    if (lo != null && hi != null && !(ep.stopNs > lo && ep.startNs < hi)) continue
+    rows.push({
+      task: ep.taskLabel,
+      basePri: ep.basePri,
+      peakPri: ep.peakPri,
+      startNs: ep.startNs,
+      stopNs: ep.stopNs,
+      start: formatTime(ep.startNs, scale),
+      stop: formatTime(ep.stopNs, scale),
+      duration: formatTime(ep.durationNs, scale),
+      durationNs: ep.durationNs,
+      pattern: ep.pattern || '—',
+      inherited: !!ep.inherited,
+    })
+  }
+  rows.sort((a, b) => a.startNs - b.startNs || a.stopNs - b.stopNs)
+  return limit > 0 ? rows.slice(0, limit) : rows
+}
+
 /** Suffix for task label column, e.g. " · pri 2". */
 export function taskPriorityLabelSuffix(trace, mk) {
   const pri = trace?.taskBasePriority?.get?.(mk)

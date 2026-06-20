@@ -117,3 +117,21 @@ export const INTERVAL_SORT_ACCESSORS = {
   max: r => r.maxNs,
   p95: r => r.p95Ns,
 }
+
+export const PRIORITY_SORT_ACCESSORS = {
+  task: r => r.label.toLowerCase(),
+  base: r => r.basePri,
+  peak: r => r.peakPri,
+  boosts: r => r.episodeCount,
+  total: r => r.totalBoostNs,
+  pattern: r => r.pattern,
+}
+
+export const SYNC_OBJECT_SORT_ACCESSORS = {
+  object: r => r.label.toLowerCase(),
+  kind: r => r.kind,
+  holds: r => r.holdCount,
+  issues: r => r.issueCount,
+  avg: r => r.avgHoldNs,
+  status: r => r.statusLabel,
+}

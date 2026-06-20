@@ -907,6 +907,285 @@
       </div>
     </template>
 
+    <!-- Priority inheritance -->
+    <template v-if="trace?.hasPriorityInstrumentation">
+      <div class="stats-sep" />
+      <div
+        class="stats-section-title collapsible"
+        @click="priorityCollapsed = !priorityCollapsed"
+      >
+        <svg
+          class="chevron"
+          :class="{ collapsed: priorityCollapsed }"
+          viewBox="0 0 10 10"
+          width="10"
+          height="10"
+        >
+          <polyline
+            points="2,3 5,7 8,3"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+        </svg>
+        Priority Inheritance{{ scopeSuffixStr }}
+      </div>
+      <template v-if="!priorityCollapsed">
+        <p class="range-hint priority-hint">
+          Detects tasks boosted above their <code>create pri</code> by
+          <code>set_priority</code> STI events. Orange bands = boost; red = classic
+          L/M/H pattern (medium-priority task between base and peak).
+        </p>
+        <div
+          v-if="priorityStats.length === 0"
+          class="range-hint"
+        >
+          {{ statsRange ? 'No priority boosts in cursor range' : 'No priority boosts in trace' }}
+        </div>
+        <div
+          v-else
+          class="stats-table-block"
+        >
+          <div
+            class="stats-table-wrap"
+            :style="{ maxHeight: tableHeight('priority') + 'px' }"
+          >
+            <table class="stats-table">
+              <thead>
+                <tr>
+                  <th
+                    :class="thSortClass('priority', 'task')"
+                    @click="toggleTableSort('priority', 'task')"
+                  >
+                    Task
+                  </th>
+                  <th
+                    :class="thSortClass('priority', 'base')"
+                    @click="toggleTableSort('priority', 'base')"
+                  >
+                    Base
+                  </th>
+                  <th
+                    :class="thSortClass('priority', 'peak')"
+                    @click="toggleTableSort('priority', 'peak')"
+                  >
+                    Peak
+                  </th>
+                  <th
+                    :class="thSortClass('priority', 'boosts')"
+                    @click="toggleTableSort('priority', 'boosts')"
+                  >
+                    Boosts
+                  </th>
+                  <th
+                    :class="thSortClass('priority', 'total')"
+                    @click="toggleTableSort('priority', 'total')"
+                  >
+                    Boosted
+                  </th>
+                  <th
+                    :class="thSortClass('priority', 'pattern')"
+                    @click="toggleTableSort('priority', 'pattern')"
+                  >
+                    Pattern
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="row in sortedPriorityStats"
+                  :key="row.mk"
+                  class="stats-table-row clickable"
+                  :class="{ 'priority-inversion-row': row.inversionCount > 0 }"
+                  :title="priorityRowTitle(row)"
+                  tabindex="0"
+                  @click="onPriorityRowClick(row)"
+                  @keydown.enter.prevent="onPriorityRowClick(row)"
+                  @keydown.space.prevent="onPriorityRowClick(row)"
+                >
+                  <td class="task-col">{{ row.label }}</td>
+                  <td>{{ row.basePri }}</td>
+                  <td>{{ row.peakPri }}</td>
+                  <td>{{ row.episodeCount }}</td>
+                  <td>{{ row.total }}</td>
+                  <td>
+                    <span
+                      class="priority-pattern"
+                      :class="{ inversion: row.inversionCount > 0 }"
+                    >{{ row.pattern }}</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div
+            class="stats-section-resizer"
+            role="separator"
+            aria-label="Resize priority inheritance table"
+            aria-orientation="horizontal"
+            @mousedown.prevent="onTableResizeStart('priority', $event)"
+          />
+        </div>
+      </template>
+    </template>
+
+    <!-- Mutex / Semaphore pairing -->
+    <template v-if="trace?.hasSyncObjectInstrumentation">
+      <div class="stats-sep" />
+      <div
+        class="stats-section-title collapsible"
+        @click="syncCollapsed = !syncCollapsed"
+      >
+        <svg
+          class="chevron"
+          :class="{ collapsed: syncCollapsed }"
+          viewBox="0 0 10 10"
+          width="10"
+          height="10"
+        >
+          <polyline
+            points="2,3 5,7 8,3"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+        </svg>
+        Mutex / Semaphore{{ scopeSuffixStr }}
+      </div>
+      <template v-if="!syncCollapsed">
+        <p class="range-hint priority-hint">
+          Pairs <code>take</code>/<code>give</code> STI events by object pointer
+          (<code>0x........</code>). Flags orphan gives, unmatched takes, delete-while-held,
+          and multi-mutex hold at trace end (deadlock risk).
+        </p>
+        <div
+          v-if="syncStats.length === 0"
+          class="range-hint"
+        >
+          {{ statsRange ? 'No mutex/sem activity in cursor range' : 'No mutex/sem STI events in trace' }}
+        </div>
+        <div
+          v-else
+          class="stats-table-block"
+        >
+          <div
+            class="stats-table-wrap"
+            :style="{ maxHeight: tableHeight('sync') + 'px' }"
+          >
+            <table class="stats-table">
+              <thead>
+                <tr>
+                  <th
+                    :class="thSortClass('sync', 'object')"
+                    @click="toggleTableSort('sync', 'object')"
+                  >
+                    Object
+                  </th>
+                  <th
+                    :class="thSortClass('sync', 'kind')"
+                    @click="toggleTableSort('sync', 'kind')"
+                  >
+                    Kind
+                  </th>
+                  <th
+                    :class="thSortClass('sync', 'holds')"
+                    @click="toggleTableSort('sync', 'holds')"
+                  >
+                    Holds
+                  </th>
+                  <th
+                    :class="thSortClass('sync', 'issues')"
+                    @click="toggleTableSort('sync', 'issues')"
+                  >
+                    Issues
+                  </th>
+                  <th
+                    :class="thSortClass('sync', 'avg')"
+                    @click="toggleTableSort('sync', 'avg')"
+                  >
+                    Avg hold
+                  </th>
+                  <th
+                    :class="thSortClass('sync', 'status')"
+                    @click="toggleTableSort('sync', 'status')"
+                  >
+                    Status
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="row in sortedSyncStats"
+                  :key="row.key"
+                  :class="{ 'sync-issue-row': row.status !== 'ok' }"
+                >
+                  <td>{{ row.label }}</td>
+                  <td>{{ row.kind }}</td>
+                  <td>{{ row.holdCount }}</td>
+                  <td>{{ row.issueCount }}</td>
+                  <td>{{ row.avgHold }}</td>
+                  <td :class="syncStatusClass(row.status)">
+                    {{ row.statusLabel }}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div
+            v-if="syncIssueList.length"
+            class="stats-table-wrap sync-issues-wrap"
+            :style="{ maxHeight: tableHeight('sync') + 'px' }"
+          >
+            <table class="stats-table sync-issues-table">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Object</th>
+                  <th>Issue</th>
+                  <th>Detail</th>
+                  <th>Task</th>
+                  <th>Core</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="(iss, idx) in syncIssueList"
+                  :key="`${iss.objKey}-${iss.kind}-${iss.timeNs}-${idx}`"
+                  class="clickable-row"
+                  tabindex="0"
+                  role="button"
+                  :title="`Jump, zoom, and annotate at ${fmtTime(iss.timeNs)}`"
+                  @click="onSyncIssueClick(iss)"
+                  @keydown.enter.prevent="onSyncIssueClick(iss)"
+                  @keydown.space.prevent="onSyncIssueClick(iss)"
+                >
+                  <td>{{ fmtTime(iss.timeNs) }}</td>
+                  <td>{{ iss.objKey || '—' }}</td>
+                  <td :class="syncIssueSeverityClass(iss.severity)">
+                    {{ iss.kind }}
+                  </td>
+                  <td>{{ iss.detail }}</td>
+                  <td>{{ iss.taskLabel || '—' }}</td>
+                  <td>{{ iss.core || '' }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div
+            class="stats-section-resizer"
+            role="separator"
+            aria-label="Resize mutex/semaphore table"
+            aria-orientation="horizontal"
+            @mousedown.prevent="onTableResizeStart('sync', $event)"
+          />
+        </div>
+      </template>
+    </template>
+
     <!-- Interval Analysis -->
     <div class="stats-sep" />
     <div
@@ -1231,7 +1510,7 @@
                 :cx="point.x"
                 :cy="point.y"
                 :r="point.index === selectedPlotPoint ? 5 : 3"
-                :fill="point.index === selectedPlotPoint ? '#FFFFFF' : scatterModel.color"
+                :fill="point.index === selectedPlotPoint ? '#FFFFFF' : (point.fillColor || scatterModel.color)"
                 class="plot-point"
                 :style="{ cursor: point.payload ? 'pointer' : 'default' }"
                 @click="onPlotPointClick(point)"
@@ -1352,7 +1631,7 @@
 import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { toBlob as domToBlob, toSvg as domToSvg } from 'html-to-image'
 import { formatTime, isStiTagChannel } from '../renderer/TimelineRenderer.js'
-import { taskDisplayName, parseTaskName, taskMergeKey, isIdleTaskName, taskColor, taskReprGet } from '../utils/colors.js'
+import { taskDisplayName, parseTaskName, taskMergeKey, isIdleTaskName, taskColor, taskReprGet, taskLabelForMergeKey } from '../utils/colors.js'
 import {
   getPlacedCursors,
   getStatsRange,
@@ -1384,6 +1663,15 @@ import {
   intervalPlotPoints,
   intervalColor,
 } from '../utils/intervalAnalysis.js'
+import { priorityStatsRows, priorityEpisodePlotPoints, priorityEpisodeDetailRows, BOOST_BAND_COLOR, INVERSION_BAND_COLOR } from '../utils/priorityAnalysis.js'
+import {
+  syncObjectStatsRows,
+  syncObjectIssueRows,
+  syncObjectHoldDetailRows,
+  segmentAtCoreTime,
+  syncIssueAnnotationNote,
+} from '../utils/syncObjectAnalysis.js'
+import { intervalInstanceDetailRows } from '../utils/intervalAnalysis.js'
 import { migrationRows } from '../utils/migrationAnalysis.js'
 import { tickHealthReport } from '../utils/tickHealth.js'
 import { requestStatsCompute } from '../utils/statsWorkerClient.js'
@@ -1400,6 +1688,8 @@ import {
   HEALTH_GAP_SORT_ACCESSORS,
   PREEMPTION_SORT_ACCESSORS,
   INTERVAL_SORT_ACCESSORS,
+  PRIORITY_SORT_ACCESSORS,
+  SYNC_OBJECT_SORT_ACCESSORS,
 } from '../utils/statsTableSort.js'
 import TraceCompareDialog from './TraceCompareDialog.vue'
 
@@ -1422,6 +1712,8 @@ const blockingCollapsed = ref(false)
 const migrationCollapsed = ref(false)
 const interArrivalCollapsed = ref(false)
 const preemptionCollapsed = ref(false)
+const priorityCollapsed = ref(false)
+const syncCollapsed = ref(false)
 const intervalsCollapsed = ref(false)
 const scopeToCursors = ref(true)
 
@@ -1434,6 +1726,8 @@ const STATS_SECTION_FLAGS = [
   blockingCollapsed,
   interArrivalCollapsed,
   preemptionCollapsed,
+  priorityCollapsed,
+  syncCollapsed,
   intervalsCollapsed,
 ]
 
@@ -1592,6 +1886,8 @@ const sectionHeights = ref({
   block: STATS_TABLE_DEFAULT_H,
   inter: STATS_TABLE_DEFAULT_H,
   preemption: STATS_TABLE_MIG_DEFAULT_H,
+  priority: STATS_TABLE_DEFAULT_H,
+  sync: STATS_TABLE_DEFAULT_H,
 })
 watch(() => props.sectionHeights, (v) => {
   if (v) Object.assign(sectionHeights.value, v)
@@ -1612,6 +1908,8 @@ const tableSort = ref({
   inter: defaultStatsTableSort(),
   health: defaultStatsTableSort(),
   preemption: defaultStatsTableSort(),
+  priority: defaultStatsTableSort(),
+  sync: defaultStatsTableSort(),
   intervals: defaultStatsTableSort(),
 })
 
@@ -1859,6 +2157,69 @@ const intervalStats = computed(() => {
 const sortedIntervalStats = computed(() =>
   sortStatsRows(intervalStats.value, tableSort.value.intervals, INTERVAL_SORT_ACCESSORS))
 
+const priorityStats = computed(() => {
+  if (priorityCollapsed.value) return []
+  const tr = props.trace
+  if (!tr?.hasPriorityInstrumentation) return []
+  const r = statsRange.value
+  const lo = r?.lo ?? null
+  const hi = r?.hi ?? null
+  return priorityStatsRows(tr, lo, hi)
+})
+
+const sortedPriorityStats = computed(() =>
+  sortStatsRows(priorityStats.value, tableSort.value.priority, PRIORITY_SORT_ACCESSORS))
+
+const syncStats = computed(() => {
+  const tr = props.trace
+  if (!tr?.hasSyncObjectInstrumentation) return []
+  const r = statsRange.value
+  return syncObjectStatsRows(tr, r?.lo ?? null, r?.hi ?? null)
+})
+
+const syncIssueList = computed(() => {
+  const tr = props.trace
+  if (!tr?.hasSyncObjectInstrumentation) return []
+  const r = statsRange.value
+  return syncObjectIssueRows(tr, r?.lo ?? null, r?.hi ?? null)
+})
+
+const sortedSyncStats = computed(() =>
+  sortStatsRows(syncStats.value, tableSort.value.sync, SYNC_OBJECT_SORT_ACCESSORS))
+
+function syncStatusClass(status) {
+  if (status === 'error') return 'sync-status-error'
+  if (status === 'warning') return 'sync-status-warning'
+  return 'sync-status-ok'
+}
+
+function syncIssueSeverityClass(severity) {
+  if (severity === 'error') return 'sync-status-error'
+  if (severity === 'warning') return 'sync-status-warning'
+  return ''
+}
+
+function onSyncIssueClick(issue) {
+  if (issue?.timeNs == null) return
+  const tr = props.trace
+  const segment = tr ? segmentAtCoreTime(tr.coreSegs, issue.core, issue.timeNs) : null
+  emit('plotPointActivate', {
+    ns: issue.timeNs,
+    note: syncIssueAnnotationNote(issue),
+    segment,
+    syncIssue: true,
+  })
+}
+
+function priorityRowTitle(row) {
+  return `Open boost duration plot for ${row.label}`
+}
+
+function onPriorityRowClick(row) {
+  openPriorityPlot(row.mk)
+  emit('highlightTask', row.mk)
+}
+
 function activateExtremeSegment(mk, kind, seg, findMax) {
   if (!seg) return
   const note = extremeSegmentNote(props.trace, mk, kind, seg, findMax)
@@ -2038,6 +2399,31 @@ function _buildIntervalPlot(trace, id, range) {
   }
 }
 
+function _buildPriorityPlot(trace, mk, range) {
+  const suffix = scopeSuffix(range)
+  const lo = range?.lo ?? null
+  const hi = range?.hi ?? null
+  const label = taskLabelForMergeKey(trace, mk)
+  const basePri = trace.taskBasePriority?.get?.(mk)
+  const rawPoints = priorityEpisodePlotPoints(trace, mk, lo, hi)
+  const scale = trace.timeScale
+  const points = rawPoints.map((pt) => ({
+    ...pt,
+      fillColor: pt.payload?.inversionSuspect ? INVERSION_BAND_COLOR : BOOST_BAND_COLOR,
+      label: `${pt.payload.taskLabel}: pri ${pt.payload.basePri}→${pt.payload.peakPri} — ${formatTime(pt.yValue, scale)} [${formatTime(pt.payload.startNs, scale)} – ${formatTime(pt.payload.stopNs, scale)}]${pt.payload.inherited ? ' · inherit' : ''}${pt.payload.inversionSuspect && !pt.payload.inherited ? ' · L/M/H' : ''}`,
+  }))
+  const peakPri = points.length
+    ? Math.max(...points.map(p => p.payload.peakPri))
+    : basePri
+  return {
+    kind: 'priority',
+    mk,
+    title: `${label} — Priority Boost (base ${basePri}→peak ${peakPri})${suffix}`,
+    color: BOOST_BAND_COLOR,
+    points,
+  }
+}
+
 const plotData = computed(() => {
   const open = openPlotRef.value
   if (!open) return null
@@ -2049,6 +2435,9 @@ const plotData = computed(() => {
   }
   if (open.kind === 'interval') {
     return _buildIntervalPlot(props.trace, open.intervalId, range)
+  }
+  if (open.kind === 'priority') {
+    return _buildPriorityPlot(props.trace, open.mk, range)
   }
   return _buildInterPlot(props.trace, open.mk, range)
 })
@@ -2085,6 +2474,14 @@ function openIntervalPlot(id) {
   selectedPlotPoint.value = -1
 }
 
+function openPriorityPlot(mk) {
+  const range = statsRange.value
+  const plot = _buildPriorityPlot(props.trace, mk, range)
+  if (!plot || plot.points.length === 0) return
+  openPlotRef.value = { mk, kind: 'priority' }
+  selectedPlotPoint.value = -1
+}
+
 function closePlot() {
   openPlotRef.value = null
   selectedPlotPoint.value = -1
@@ -2095,10 +2492,15 @@ function onPlotPointClick(point) {
   const ns = annotationNsForPlotPoint(point)
   const note = point.label || ''
   const kind = openPlotRef.value?.kind
-  const segment = (point.payload?.start != null && kind !== 'interval') ? point.payload : null
+  const segment = (point.payload?.start != null && kind !== 'interval' && kind !== 'priority')
+    ? point.payload
+    : null
   const interval = (kind === 'interval' && point.payload?.startNs != null) ? point.payload : null
-  if (ns == null && !segment && !interval) return
-  emit('plotPointActivate', { ns, note, segment, interval })
+  const priorityRange = (kind === 'priority' && point.payload?.startNs != null)
+    ? { startNs: point.payload.startNs, stopNs: point.payload.stopNs, mk: point.payload.mk }
+    : null
+  if (ns == null && !segment && !interval && !priorityRange) return
+  emit('plotPointActivate', { ns, note, segment, interval, priorityRange })
 }
 
 function annotationNsForPlotPoint(point) {
@@ -2150,6 +2552,7 @@ const scatterModel = computed(() => {
       ...point,
       x: scaleX(point.xNs),
       y: scaleY(point.yValue),
+      fillColor: point.fillColor || plot.color,
     })),
   }
 })
@@ -2430,6 +2833,44 @@ function exportCsv() {
 
   const intervalReportRows = intervalStatsRows(tr, lo, hi)
   lines.push('')
+  lines.push(`Priority Inheritance${suffix}`)
+  lines.push('Task,Base,Peak,Boosts,Boosted,Pattern')
+  const priorityReportRows = priorityStatsRows(tr, lo, hi)
+  if (priorityReportRows.length) {
+    for (const row of priorityReportRows) {
+      lines.push([
+        _csvCell(row.label),
+        _csvCell(row.basePri),
+        _csvCell(row.peakPri),
+        _csvCell(row.episodeCount),
+        _csvCell(row.total),
+        _csvCell(row.pattern),
+      ].join(','))
+    }
+  } else if (tr?.hasPriorityInstrumentation) {
+    lines.push('No priority boosts in scope,,,,,')
+  }
+
+  lines.push('')
+  lines.push(`Mutex / Semaphore${suffix}`)
+  lines.push('Object,Kind,Holds,Issues,AvgHold,Status')
+  const syncReportRows = syncObjectStatsRows(tr, lo, hi)
+  if (syncReportRows.length) {
+    for (const row of syncReportRows) {
+      lines.push([
+        _csvCell(row.label),
+        _csvCell(row.kind),
+        _csvCell(row.holdCount),
+        _csvCell(row.issueCount),
+        _csvCell(row.avgHold),
+        _csvCell(row.statusLabel),
+      ].join(','))
+    }
+  } else if (tr?.hasSyncObjectInstrumentation) {
+    lines.push('No mutex/sem activity in scope,,,,,')
+  }
+
+  lines.push('')
   lines.push(`Interval Analysis${suffix}`)
   lines.push('ID,Label,Count,Min,Avg,Max,p95')
   if (intervalReportRows.length) {
@@ -2652,6 +3093,96 @@ function _taskCpuRows(tr, range) {
     }))
 }
 
+function _issueSeverityClass(severity) {
+  if (severity === 'error') return 'sev-error'
+  if (severity === 'warning') return 'sev-warning'
+  return ''
+}
+
+function _renderSyncObjectReportHtml(tr, lo, hi, suffix) {
+  const syncHtmlRows = syncObjectStatsRows(tr, lo, hi)
+  const issues = syncObjectIssueRows(tr, lo, hi)
+  const holds = syncObjectHoldDetailRows(tr, lo, hi, 150)
+  const summaryBody = syncHtmlRows.length
+    ? syncHtmlRows.map(row =>
+        `<tr><td>${_htmlCell(row.label)}</td><td>${_htmlCell(row.kind)}</td><td>${row.holdCount}</td><td>${row.issueCount}</td><td>${_htmlCell(row.avgHold)}</td><td class="${syncStatusClass(row.status)}">${_htmlCell(row.statusLabel)}</td></tr>`,
+      ).join('')
+    : '<tr><td colspan="6" class="empty">No mutex/sem activity in scope</td></tr>'
+  const issueBody = issues.length
+    ? issues.map(iss =>
+        `<tr><td>${_htmlCell(formatTime(iss.timeNs, tr.timeScale))}</td><td>${_htmlCell(iss.objKey || '—')}</td><td class="${_issueSeverityClass(iss.severity)}">${_htmlCell(iss.kind)}</td><td>${_htmlCell(iss.detail)}</td><td>${_htmlCell(iss.taskLabel || '—')}</td><td>${_htmlCell(iss.core || '')}</td></tr>`,
+      ).join('')
+    : '<tr><td colspan="6" class="empty">No pairing issues in scope</td></tr>'
+  const holdBody = holds.length
+    ? holds.map(h =>
+        `<tr><td>${_htmlCell(h.object)}</td><td>${_htmlCell(h.holder)}</td><td>${_htmlCell(h.start)}</td><td>${_htmlCell(h.stop)}</td><td>${_htmlCell(h.duration)}</td><td>${_htmlCell(h.takeCore)}</td><td>${_htmlCell(h.giveCore)}</td></tr>`,
+      ).join('')
+    : '<tr><td colspan="7" class="empty">No paired holds in scope</td></tr>'
+  const holdNote = holds.length >= 150
+    ? `<p class="detail-note">Showing longest 150 hold episodes in scope.</p>`
+    : ''
+  return `<section class="report-card"><h2>Mutex / Semaphore${_htmlCell(suffix)}</h2>
+    <table><thead><tr><th>Object</th><th>Kind</th><th>Holds</th><th>Issues</th><th>Avg hold</th><th>Status</th></tr></thead>
+    <tbody>${summaryBody}</tbody></table>
+    <h3 class="sub">Pairing issues</h3>
+    <table><thead><tr><th>Time</th><th>Object</th><th>Issue</th><th>Detail</th><th>Task</th><th>Core</th></tr></thead>
+    <tbody>${issueBody}</tbody></table>
+    <h3 class="sub">Hold episodes (longest first)</h3>
+    ${holdNote}
+    <table><thead><tr><th>Object</th><th>Holder</th><th>Take</th><th>Give</th><th>Duration</th><th>Take core</th><th>Give core</th></tr></thead>
+    <tbody>${holdBody}</tbody></table></section>`
+}
+
+function _renderPriorityReportHtml(tr, lo, hi, suffix) {
+  const priorityHtmlRows = priorityStatsRows(tr, lo, hi)
+  const episodes = priorityEpisodeDetailRows(tr, lo, hi, 200)
+  const summaryBody = priorityHtmlRows.length
+    ? priorityHtmlRows.map(row =>
+        `<tr><td>${_htmlCell(row.label)}</td><td>${row.basePri}</td><td>${row.peakPri}</td><td>${row.episodeCount}</td><td>${_htmlCell(row.total)}</td><td>${_htmlCell(row.pattern)}</td></tr>`,
+      ).join('')
+    : '<tr><td colspan="6" class="empty">No priority boosts in scope</td></tr>'
+  const epBody = episodes.length
+    ? episodes.map(ep =>
+        `<tr><td>${_htmlCell(ep.task)}</td><td>${ep.basePri}→${ep.peakPri}</td><td>${_htmlCell(ep.start)}</td><td>${_htmlCell(ep.stop)}</td><td>${_htmlCell(ep.duration)}</td><td>${_htmlCell(ep.pattern)}</td></tr>`,
+      ).join('')
+    : '<tr><td colspan="6" class="empty">No boost episodes in scope</td></tr>'
+  const epNote = episodes.length >= 200
+    ? `<p class="detail-note">Showing first 200 boost episodes in scope (by start time).</p>`
+    : ''
+  return `<section class="report-card"><h2>Priority Inheritance${_htmlCell(suffix)}</h2>
+    <table><thead><tr><th>Task</th><th>Base</th><th>Peak</th><th>Boosts</th><th>Boosted</th><th>Pattern</th></tr></thead>
+    <tbody>${summaryBody}</tbody></table>
+    <h3 class="sub">Boost episodes</h3>
+    ${epNote}
+    <table><thead><tr><th>Task</th><th>pri</th><th>Start</th><th>End</th><th>Duration</th><th>Pattern</th></tr></thead>
+    <tbody>${epBody}</tbody></table></section>`
+}
+
+function _renderIntervalReportHtml(tr, lo, hi, suffix) {
+  const intervalHtmlRows = intervalStatsRows(tr, lo, hi)
+  const instances = intervalInstanceDetailRows(tr, lo, hi, 200)
+  const summaryBody = intervalHtmlRows.length
+    ? intervalHtmlRows.map(row =>
+        `<tr><td>${_htmlCell(row.id)}</td><td>${_htmlCell(row.label)}</td><td>${row.count}</td><td>${_htmlCell(row.min)}</td><td>${_htmlCell(row.avg)}</td><td>${_htmlCell(row.max)}</td><td>${_htmlCell(row.p95)}</td></tr>`,
+      ).join('')
+    : '<tr><td colspan="7" class="empty">No interval data</td></tr>'
+  const instBody = instances.length
+    ? instances.map(inst =>
+        `<tr><td>${_htmlCell(inst.id)}</td><td>${_htmlCell(inst.taskId || '—')}</td><td>${_htmlCell(inst.start)}</td><td>${_htmlCell(inst.stop)}</td><td>${_htmlCell(inst.duration)}</td><td>${_htmlCell(inst.startCore)}</td><td>${_htmlCell(inst.stopCore)}</td></tr>`,
+      ).join('')
+    : '<tr><td colspan="7" class="empty">No interval instances in scope</td></tr>'
+  const instNote = instances.length >= 200
+    ? `<p class="detail-note">Showing longest 200 interval instances in scope.</p>`
+    : ''
+  return `<section class="report-card"><h2>Interval Analysis${_htmlCell(suffix)}</h2>
+    <table><thead><tr><th>ID</th><th>Label</th><th>Count</th><th>Min</th><th>Avg</th><th>Max</th><th>p95</th></tr></thead>
+    <tbody>${summaryBody}</tbody></table>
+    <h3 class="sub">Interval instances (longest first)</h3>
+    ${instNote}
+    <table><thead><tr><th>ID</th><th>Task id</th><th>Start</th><th>Stop</th><th>Duration</th><th>Start core</th><th>Stop core</th></tr></thead>
+    <tbody>${instBody}</tbody></table></section>`
+}
+
 function exportHtml() {
   const tr = props.trace
   const r = statsRange.value
@@ -2665,7 +3196,6 @@ function exportHtml() {
   const hi = r?.hi ?? null
   const migReportRows = migrationRows(tr, lo, hi)
   const { rows: preemptHtmlRows } = preemptionChainRows(tr, lo, hi)
-  const intervalHtmlRows = intervalStatsRows(tr, lo, hi)
   const { contextSwitches, coreGaps } = schedulingStats(tr, lo, hi)
   const schedKpi = schedulingSummary.value
   const range = !r ? rangeStats.value : null
@@ -2785,6 +3315,11 @@ function exportHtml() {
     }
     tbody tr:nth-child(even) td { background: var(--stripe); }
     .empty { text-align: center !important; color: var(--muted); }
+    .detail-note { margin: 6px 0 8px; font-size: 12px; color: var(--muted); }
+    h3.sub { margin: 14px 0 8px; font-size: 14px; color: #284563; font-weight: 600; }
+    .sev-error, .sync-status-error { color: #c0392b; font-weight: 600; }
+    .sev-warning, .sync-status-warning { color: #d68910; font-weight: 600; }
+    .sync-status-ok { color: #1e8449; }
     .report-foot { margin-top: 14px; color: var(--muted); font-size: 12px; text-align: right; }
   </style>
 </head>
@@ -2811,6 +3346,8 @@ function exportHtml() {
       <li><strong>Inter-Arrival Time:</strong> Time between consecutive activations of the same task (slice start to next slice start). It reflects activation cadence and jitter.</li>
       <li><strong>Blocking Time:</strong> Off-CPU gap between the end of one slice and the start of the next for the same task (scheduling latency until resume). High values may indicate preemption, resource blocking, or long scheduler delays.</li>
       <li><strong>Preemption Chain Analysis:</strong> For each blocking gap of a victim task, identifies which task ran on the same core during that gap. High counts or long totals point to recurring preemption bottlenecks.</li>
+      <li><strong>Priority Inheritance:</strong> When traces include <code>create pri:N</code> on task create and <code>set_priority</code> STI events, lists tasks boosted above their base priority. <em>L/M/H pattern</em> flags classic priority-inversion geometry (medium-priority task between base and peak).</li>
+      <li><strong>Mutex / Semaphore:</strong> Pairs <code>take</code>/<code>give</code> STI events by object pointer (<code>0x........</code> in the note). Reports orphan gives, cross-task gives, unmatched takes, delete-while-held, and multi-mutex hold at trace end (deadlock risk).</li>
       <li><strong>Interval Analysis:</strong> Pairs <code>interval_start</code> / <code>interval_stop</code> STI events by id; shows count, min/avg/max/p95 duration per interval id (Tracealyzer-style interval plot).</li>
       <li><strong>Context switches:</strong> Count of segment boundaries on all cores whose start time falls inside the statistics scope.</li>
       <li><strong>Min (Minimum):</strong> The fastest execution time recorded. It represents the best-case scenario under zero system load.</li>
@@ -2837,14 +3374,9 @@ function exportHtml() {
         ).join('')
       : '<tr><td colspan="6" class="empty">No preemption events found</td></tr>'
     }</tbody></table></section>
-    <section class="report-card"><h2>Interval Analysis${_htmlCell(suffix)}</h2>
-    <table><thead><tr><th>ID</th><th>Label</th><th>Count</th><th>Min</th><th>Avg</th><th>Max</th><th>p95</th></tr></thead>
-    <tbody>${intervalHtmlRows.length
-      ? intervalHtmlRows.map(row =>
-          `<tr><td>${_htmlCell(row.id)}</td><td>${_htmlCell(row.label)}</td><td>${row.count}</td><td>${_htmlCell(row.min)}</td><td>${_htmlCell(row.avg)}</td><td>${_htmlCell(row.max)}</td><td>${_htmlCell(row.p95)}</td></tr>`
-        ).join('')
-      : '<tr><td colspan="7" class="empty">No interval data</td></tr>'
-    }</tbody></table></section>
+    ${tr?.hasPriorityInstrumentation ? _renderPriorityReportHtml(tr, lo, hi, suffix) : ''}
+    ${tr?.hasSyncObjectInstrumentation ? _renderSyncObjectReportHtml(tr, lo, hi, suffix) : ''}
+    ${_renderIntervalReportHtml(tr, lo, hi, suffix)}
     <div class="report-foot">Generated by BTF Viewer</div>
   </div>
 </body>
@@ -3094,6 +3626,37 @@ watch(plotData, () => {
   font-size: 10px;
   font-style: italic;
 }
+
+.priority-hint {
+  margin: 0 0 6px;
+  line-height: 1.35;
+}
+
+.priority-hint code {
+  font-size: 10px;
+}
+
+.priority-pattern {
+  font-size: 10px;
+  color: var(--fg-dim);
+}
+
+.priority-pattern.inversion {
+  color: #e74c3c;
+  font-weight: 600;
+}
+
+.priority-inversion-row .priority-pattern.inversion {
+  color: #e74c3c;
+}
+
+.sync-status-ok { color: #5FCF6F; }
+.sync-status-warning { color: #F39C12; font-weight: 600; }
+.sync-status-error { color: #E74C3C; font-weight: 600; }
+.sync-issue-row td { color: #E8C84A; }
+.sync-issues-wrap { margin-top: 6px; }
+.sync-issues-table td.sync-status-error,
+.sync-issues-table td.sync-status-warning { font-weight: 600; }
 
 .health-banner {
   font-size: 11px;

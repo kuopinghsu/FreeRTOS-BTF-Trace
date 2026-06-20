@@ -26,14 +26,14 @@ A PyQt5-based interactive visualiser for FreeRTOS context-switch traces in **Bes
 - **Measurement cursors** — Desktop and Web support 2–8 cursors (default: 4); configurable in Settings
 - **Trace compare** — with 2+ tabs open, **Trace Compare…** in the Statistics panel diffs **Summary**, **Top Tasks**, and **Core Migrations** side-by-side (Desktop + Web). Optional **Limit to each tab's cursor range** compares metrics within C1–Cn when 2+ cursors are placed on each trace
 - **Core migration analysis** — detect tasks that run on multiple cores; **Core Migrations** stats table (ping-pong, STI correlation, gap-after vs other gaps), **clickable migration heatmap** (pair×time for ≤ 16 cores; core×core matrix → outgoing pairs for larger traces → per-task sub-bins → timeline drill-down), **Migrated tasks only** legend filter, toolbar **All tasks** reset, and Find **Migrations** mode (Desktop)
-- **Cursor-scoped statistics** — with 2+ cursors, the Statistics panel can limit all metrics (CPU%, execution slices, blocking time, inter-arrival, **preemption chain**, scheduling summary, exports, and charts) to the window from C1 through the last cursor; toggle **Limit to cursor range (C1–Cn)** (Desktop + Web)
+- **Cursor-scoped statistics** — with 2+ cursors, the Statistics panel can limit all metrics (CPU%, execution slices, blocking time, inter-arrival, **preemption chain**, **priority inheritance**, **mutex / semaphore pairing**, scheduling summary, exports, and charts) to the window from C1 through the last cursor; toggle **Limit to cursor range (C1–Cn)** (Desktop + Web)
 - **Cursor range summary** — with 2+ cursors, Desktop also shows a quick min/max/avg segment summary in the status bar; Web shows range stats in the **Cursors** panel
 - **Task highlight** — hover or click any task label or Legend row to highlight all its segments
 - **Dockable Legend panel** — colour swatches for every task, with a search box, **Migrated tasks only** filter, a **heatmap filter banner** (when drilled from the heatmap), and the same highlight interaction
-- **Dockable Statistics panel** — per-core CPU utilisation, top tasks, scheduling summary (context switches, core-gap avg/max), trace health (TICK), and collapsible metric tables including **Preemption Chain** and **Interval Analysis**
+- **Dockable Statistics panel** — per-core CPU utilisation, top tasks, scheduling summary (context switches, core-gap avg/max), trace health (TICK), and collapsible metric tables including **Preemption Chain**, **Priority Inheritance**, **Mutex / Semaphore pairing**, and **Interval Analysis**
 - **Tag View** — inspect tag channels/events (`tag_event`, `tag0_event` … `tag7_event`) alongside task/core activity
-- **Metrics tables** — Execution Time Per Slice, **Blocking Time** (same metric as Tracealyzer **Response Time**: off-CPU gap / scheduling latency between activations), **Inter-Arrival**, **Preemption Chain** (which tasks preempted whom), and **Interval Analysis** (paired `interval_start` / `interval_stop` spans; when the BTF note includes `tid:{task_id}`, pairing is per interval id **and** task); click **Min** / **Max** (dotted underline) to jump and add an annotation at the BCET / WCET slice or shortest / longest gap (Desktop + Web)
-- **Metrics distribution charts** — click any row in Execution Time, Blocking Time, Inter-Arrival, Preemption Chain, or **Interval Analysis** tables to open a scatter-plot + histogram popup; charts live-update when cursors move or cursor-range scope is toggled (Desktop + Web). On Desktop, each trace tab remembers its own open chart when you switch tabs
+- **Metrics tables** — Execution Time Per Slice, **Blocking Time** (same metric as Tracealyzer **Response Time**: off-CPU gap / scheduling latency between activations), **Inter-Arrival**, **Preemption Chain** (which tasks preempted whom), **Priority Inheritance**, **Mutex / Semaphore pairing**, and **Interval Analysis** (paired `interval_start` / `interval_stop` spans; when the BTF note includes `tid:{task_id}`, pairing is per interval id **and** task); click **Min** / **Max** (dotted underline) to jump and add an annotation at the BCET / WCET slice or shortest / longest gap (Desktop + Web)
+- **Metrics distribution charts** — click any row in Execution Time, Blocking Time, Inter-Arrival, Preemption Chain, **Priority Inheritance**, or **Interval Analysis** tables to open a scatter-plot + histogram popup; charts live-update when cursors move or cursor-range scope is toggled (Desktop + Web). On Desktop, each trace tab remembers its own open chart when you switch tabs
 - **Segment tooltips** — hover any segment bar for duration, slice index on core, previous/next task on that core, and gap before the slice
 - **CPU Load Graph** — bar chart below the timeline showing per-core CPU utilisation; row labels show the **visible-window average** and, with 2+ cursors, a cursor-range average (`· C:xx%`); toggle with the **Load** toolbar button; drag the divider between timeline and CPU load to resize (Desktop + Web)
 - **Resizable panels** — drag dividers between timeline and CPU load, dock panels (Desktop), the right-side panel (Web), and metric table sections in Statistics (Desktop + Web); splitter and table heights persist in `btf_viewer.rc` on Desktop
@@ -213,7 +213,7 @@ The right side holds **Cursor / Bookmark** and **Statistics** pages (tab bar at 
 - **Resize** — drag the vertical bar between the timeline and the right panel to change panel width.
 - **Legend** — on the **Marks** page: task colour swatches, search filter, **Migrated tasks only**, and a **heatmap filter banner** with **Clear** when a heatmap drill-down is active.
 - **Statistics** — same collapsible sections as the desktop viewer; click **Min** / **Max** in metric tables to jump and add an annotation; **Trace Compare…** when 2+ trace tabs are open.
-- **Migration heatmap** — toolbar **Heatmap** button (multi-core traces only). ≤ 16 cores: pair grid → task grid → timeline zoom/filter. > 16 cores: core×core matrix (row click) → outgoing pairs → tasks. Toolbar **All tasks** appears while filtered. See [Migration heatmap](#migration-heatmap).
+- **Migration heatmap** — toolbar **Heatmap** button (multi-core traces only). ≤ 16 cores: pair grid → task grid → timeline zoom/filter. > 16 cores: core×core matrix (row click) → outgoing pairs → tasks. **Export PNG / SVG** of the current drill level from the heatmap dialog. Toolbar **All tasks** appears while filtered. See [Migration heatmap](#migration-heatmap).
 
 ### Multi-tab traces (Web)
 
@@ -280,6 +280,8 @@ Below the scope checkbox, a **scheduling summary** line shows context-switch cou
 | **Blocking Time** | Off-CPU gap between consecutive activations of the same task (Tracealyzer **Response Time** — identical definition) |
 | **Inter-Arrival Time** | Gap between successive activation start times |
 | **Preemption Chain Analysis** | For each victim task, which preemptors ran during its off-CPU gaps |
+| **Priority Inheritance** | When traces include `create pri:N` and priority STI events (`priority_inherit` / `priority_disinherit` / `set_priority`): tasks boosted above base priority |
+| **Mutex / Semaphore pairing** | Pairs `take`/`give` STI events by object pointer (`0x........`); flags orphan gives, cross-task gives, unmatched takes, delete-while-held, and multi-mutex hold at trace end |
 | **Interval Analysis** | Paired `interval_start` / `interval_stop` spans per interval id (count, min/avg/max/p95 duration); notes with `tid:{task_id}` pair per task |
 
 **Core Migrations** lists tasks that ran on two or more cores. For multi-core traces, open the **Migration heatmap** from the toolbar **Heatmap** button — click core-pair cells to drill into per-task sub-bins, then into Task View (see [Migration heatmap](#migration-heatmap)). **Trace Compare…** (footer, next to Export) opens a dialog with **Summary**, **Top Tasks**, and **Core Migrations** tabs to diff two open trace tabs; optional cursor-range scoping compares each tab's C1–Cn window independently.
@@ -300,7 +302,7 @@ Click the **Shot** toolbar button (or press `S` when focus is not in a text fiel
 
 ### Metrics Distribution Charts
 
-In the **Statistics** panel, click any row in **Execution Time**, **Blocking Time**, **Inter-Arrival**, **Preemption Chain**, or **Interval Analysis** to open a floating chart popup:
+In the **Statistics** panel, click any row in **Execution Time**, **Blocking Time**, **Inter-Arrival**, **Preemption Chain**, **Priority Inheritance**, or **Interval Analysis** to open a floating chart popup:
 
 - **Scatter plot** — each event plotted in trace time order so you can spot trends, bursts, or outliers.
 - **Histogram** — bar chart of the value distribution (50 bins), with dashed reference lines for **avg**, **p50**, and **p95**.
@@ -310,7 +312,7 @@ The popup can be dragged, resized, and closed independently of the main window.
 If the chart is open, it **updates live** when you move cursors or toggle cursor-range scope.
 Each browser tab keeps its own chart state when you switch between open traces.
 
-**Jump links:** in Execution Time, Blocking Time, and Inter-Arrival tables, click **Min** or **Max** (dotted underline) to jump to the slice at the shortest or longest value and add an **annotation** with a descriptive note. Click any **distribution-chart** point to jump to that event and add an annotation the same way (segment start for task metrics, interval start for **Interval Analysis**). In Preemption Chain, the annotation is placed at the **preemptor segment** start.
+**Jump links:** in Execution Time, Blocking Time, and Inter-Arrival tables, click **Min** or **Max** (dotted underline) to jump to the slice at the shortest or longest value and add an **annotation** with a descriptive note. Click any **distribution-chart** point to jump to that event and add an annotation the same way (segment start for task metrics; zoom + highlight for **Priority Inheritance** episodes; interval start for **Interval Analysis**). In Preemption Chain, the annotation is placed at the **preemptor segment** start. In **Mutex / Semaphore**, click any **Pairing issues** row to zoom to the running task segment on that core, jump to the issue time, and add an annotation.
 
 Example plots from `tracedata/example-4cores.btf` (4-core SMP trace, 67 tasks) are in [Statistics metric tables](#statistics-metric-tables).
 
@@ -590,29 +592,35 @@ It shows:
 - **Blocking Time** — off-CPU gap between consecutive activations of the same task (**Response Time** in Tracealyzer; same value, different label); min/avg/max/p95; click a row for a distribution chart; click **Min** / **Max** to jump and annotate the shortest / longest off-CPU gap (collapsible)
 - **Inter-Arrival Time** — same statistics for gaps between task activations; click **Min** / **Max** to jump and annotate the shortest / longest inter-arrival gap (collapsible)
 - **Preemption Chain Analysis** — for each victim/preemptor pair: count, total/average/max preemption overlap; click a row for a distribution chart; click a scatter point to jump and add an annotation at the preemptor segment (collapsible)
+- **Priority Inheritance** — per-task base/peak priority, boost episodes, boosted time, and pattern (mutex inherit / L/M/H / boost only); click a row for a duration plot; click a scatter point to zoom, highlight, and annotate the episode (collapsible)
+- **Mutex / Semaphore pairing** — per-object hold count, issue count, average hold, and status; **Pairing issues** sub-table lists orphan gives, cross-task gives, unmatched takes, and teardown warnings; click an issue row to zoom, jump, and annotate (collapsible)
 - **Interval Analysis** — per interval id: count, min/avg/max/p95 duration of paired start→stop spans; pairing uses `tid` in the note when present; click a row for a duration plot; click a scatter point to jump and add an annotation at the interval start (collapsible)
 
-**Export CSV** / **Export HTML** respect the current cursor scope. **Trace Compare…** compares summary, top tasks, and core migrations between two open tabs; enable **Limit to each tab's cursor range** to scope each side to its own C1–Cn window. Open metrics charts update live when cursors move or scope is toggled; each trace tab remembers its own open chart when you switch tabs.
+**Export CSV** / **Export HTML** respect the current cursor scope. **Export CSV** includes summary tables for every statistics section. **Export HTML** adds the same summaries plus detail sub-tables for **Priority Inheritance** (boost episodes), **Mutex / Semaphore** (pairing issues and hold episodes), and **Interval Analysis** (individual instances). **Trace Compare…** compares summary, top tasks, and core migrations between two open tabs; enable **Limit to each tab's cursor range** to scope each side to its own C1–Cn window. Open metrics charts update live when cursors move or scope is toggled; each trace tab remembers its own open chart when you switch tabs.
 
 Full column definitions, chart axis meanings, and example plots: [Statistics metric tables](#statistics-metric-tables).
 
 ### Statistics metric tables
 
-The Statistics panel (Desktop dock + Web **Statistics** tab) organises metrics into collapsible sections. Tables are **sortable** — click a column header to sort ascending/descending. **Export CSV** and **Export HTML** at the panel footer include all sections and honour the current cursor scope.
+The Statistics panel (Desktop dock + Web **Statistics** tab) organises metrics into collapsible sections. Tables are **sortable** — click a column header to sort ascending/descending. **Export CSV** and **Export HTML** at the panel footer honour the current cursor scope and include every section's summary table. **Export HTML** additionally adds detail sub-tables under Priority Inheritance, Mutex / Semaphore, and Interval Analysis (longest instances / hold episodes first, capped at 150–200 rows per sub-table).
 
 **How to use the panel**
 
 1. Open a trace (e.g. `tracedata/example-4cores.btf` for a 4-core SMP workload, or `tracedata/example.btf` for a smaller single-core demo).
 2. Expand the sections you care about (or use the **+** / **−** icons at the top to expand/collapse all).
 3. Optionally place **2+ cursors** and enable **Limit to cursor range (C1–Cn)** to restrict every metric to a time window.
-4. Click a **table row** to open a distribution chart (where supported), or click **Min** / **Max** to jump and add an annotation at an extreme slice on the timeline.
+4. Click a **table row** to open a distribution chart (where supported), click **Min** / **Max** to jump and add an annotation at an extreme slice on the timeline, or click a **Mutex / Semaphore** issue row to zoom, jump, and annotate at that STI event.
 5. Use **Trace Compare…** when two traces are open to diff summary and migration stats.
 
 The example plots below were generated from **`tracedata/example-4cores.btf`** (4 cores, 67 tasks, ~7 100 segments, time scale `us`). Regenerate them with:
 
 ```bash
 node BTFViewer/web/scripts/export-stats-plots.mjs tracedata/example-4cores.btf images/stats
+node BTFViewer/web/scripts/test-priority-analysis.mjs tracedata/example-4cores.btf
+node BTFViewer/web/scripts/test-sync-object-analysis.mjs tracedata/example-4cores.btf
 ```
+
+Timeline screenshots (e.g. `images/stats/tasks-priority-il150.svg`) are exported manually from the viewer after zooming to the region of interest. Migration heatmap screenshots (`images/migration-heatmap-pairs.svg`, `images/migration-heatmap-tasks.svg`) are exported from the heatmap dialog (**Export SVG** or **Export PNG**) after opening **Heatmap** on a multi-core trace — see [Migration heatmap](#migration-heatmap).
 
 #### Execution Time Per Slice
 
@@ -706,6 +714,97 @@ For each **victim** task's off-CPU gap, the analyser finds which **preemptor** t
 
 High **Count** with moderate **Avg** overlap suggests frequent short preemptions; a few points with large **y** values are long stretches where CS[11] ran while CS[10] waited. Use this table to answer *who preempted whom* and whether a victim's blocking is dominated by one preemptor or many.
 
+#### Priority Inheritance
+
+Shown when the trace has **`create pri:N`** on task-create `T` rows **and** at least one priority STI on the `task` channel:
+
+| STI note prefix | Hook | Meaning |
+|-----------------|------|---------|
+| `priority_inherit Name[id] pri:N` | `traceTASK_PRIORITY_INHERIT` | Mutex holder inherited priority *N* |
+| `priority_disinherit Name[id] pri:N` | `traceTASK_PRIORITY_DISINHERIT` | Mutex holder returned to base priority *N* |
+| `set_priority Name[id] pri:N` | `traceTASK_PRIORITY_SET` | Explicit `vTaskPrioritySet()` |
+
+| Column | Meaning |
+|--------|---------|
+| **Task** | Mutex holder or subject whose priority was raised |
+| **Base** | Priority at task create (`create pri:N`) |
+| **Peak** | Highest `set_priority` level observed while boosted |
+| **Boosts** | Number of boost episodes (base → above base → back to base) |
+| **Boosted** | Total time above base priority in scope |
+| **Pattern** | **Mutex inherit** when boosted via `priority_inherit`; **L/M/H pattern** when medium-priority tasks exist between base and peak; **Boost only** for manual `set_priority` |
+
+**Timeline UX** — boosted periods appear as a **bottom stripe** on the task row (horizontal) or a **right-edge stripe** (vertical): **orange** = boost only, **red** = mutex inherit or L/M/H pattern. Task labels show **`· pri N`** when create priority is known.
+
+**IL[150]** on the timeline in `example-4cores.btf` (Core view, Core_3 expanded, zoomed to test 8 ~703–707 ms). The **red bottom stripe** on the IL sub-row marks the kernel priority-boost window from `priority_inherit` to `priority_disinherit` STI events (703.266–707.222 ms). That window can start slightly before IL runs on Core_3 and end just before its last slice ends, because the stripe follows trace hooks—not the merged execution bar:
+
+<img src="../images/stats/tasks-priority-il150.svg" alt="Timeline core view: IL[150] on Core_3 with red priority-inheritance stripe (example-4cores.btf)" width="820">
+
+Export a timeline SVG from the viewer (**File → Save SVG** or toolbar) after zooming to the episode. Stats distribution plots are regenerated with the command below.
+
+**Distribution chart** — click any Priority Inheritance table row:
+
+- **Scatter:** x = boost episode end time, y = boosted duration. Orange points = boost only; red = L/M/H / mutex inherit.
+- **Histogram:** distribution of boost durations.
+- **Click a point** to zoom to that episode, scroll to the task row, highlight it, and add an annotation (re-click skips duplicate annotations).
+
+**Export HTML** includes a **Boost episodes** detail sub-table (up to 200 rows by start time).
+
+**IL[150]** distribution (test 8: one mutex inherit episode, base pri 2 → peak 4, ~3.956 ms boosted):
+
+<img src="../images/stats/stats-priority-il150.svg" alt="Priority boost distribution chart for IL[150] in example-4cores.btf" width="820">
+
+**PS[128]** (test 7: manual `vTaskPrioritySet`) is another good row to inspect in the same trace.
+
+**Note:** `traceTASK_PRIORITY_INHERIT` / `traceTASK_PRIORITY_DISINHERIT` are invoked by the FreeRTOS kernel inside `xTaskPriorityInherit()` / `xTaskPriorityDisinherit()` when `configUSE_MUTEXES` is enabled.
+
+#### Mutex / Semaphore pairing
+
+When queue trace hooks are enabled (`configINCLUDE_QUEUE_EVENTS`), mutex and semaphore STI lines include the **FreeRTOS object pointer** in the note:
+
+```text
+703266,Core_0,0,STI,mutex,0,trigger,take 0x80018700
+707222,Core_3,0,STI,mutex,0,trigger,give 0x80018700
+```
+
+The viewer pairs **`take`/`give`** (and **`create`/`delete`**) **per pointer** — not per STI channel alone — so two mutexes of the same type stay distinct. The kernel **`give`** immediately after **`create`** (mutex / binary sem available) is ignored when it falls within **1 ms** of the create event.
+
+**Semaphores** use two pairing directions automatically:
+
+| Pattern | Example | Pairing |
+|---------|---------|---------|
+| **Hold** (take → give) | Area slot sem, worker acquires then releases | `take` opens, matching `give` closes (FIFO) |
+| **Signal** (give → take) | `*_done` / `*_go` coordination sems | `give` posts, matching `take` consumes (FIFO) |
+
+**Mutexes** always use hold pairing (LIFO — owner must `give`).
+
+| Column | Meaning |
+|--------|---------|
+| **Object** | Kind + pointer (`mutex 0x80018700`) |
+| **Kind** | `mutex` or `sem` |
+| **Holds** | Number of paired take→give spans in scope |
+| **Issues** | Pairing problems in scope |
+| **Avg hold** | Mean hold duration across paired spans |
+| **Status** | **OK**, **Warning**, or **Error** |
+
+| Check | Severity | Meaning |
+|-------|----------|---------|
+| **Orphan give** | Error | Mutex `give` with no matching open `take` on that pointer |
+| **Cross-task give** | Warning | Mutex `give` by a different task than the one that `take` |
+| **Unmatched take** | Warning | `take` still open at trace end |
+| **Unmatched give** | Warning | Semaphore `give` still unmatched at trace end |
+| **Delete while held** | Warning | `delete` while resource `take`s are still open (common during teardown) |
+| **Deadlock risk** | Warning | ≥2 mutexes still held by ≥2 different tasks at trace end |
+
+The running task for each event is inferred from the **core timeline** at that timestamp (same approach as interval `tid` pairing).
+
+Below the summary table, a **Pairing issues** sub-table lists every problem in scope (time, object, issue kind, detail). **Click any issue row** to zoom to the running task segment on that core (when found), jump to the issue timestamp, highlight the segment, and add an annotation with a descriptive note (Desktop + Web). Re-clicking the same point skips duplicate annotations.
+
+**Export HTML** adds two detail sub-tables under this section: all **Pairing issues** in scope, and **Hold episodes** (longest first, up to 150 rows).
+
+`example-4cores.btf` (tests 1–3) exercises `0x80018700` (mutex) and `0x80018650` (counting sem) with clean hold pairing — the Statistics **Mutex / Semaphore** summary table should show **OK** for both during those tests. Coordination sems (`*_done`, `*_go`) pair in **signal** direction; after the fix, the only remaining warning on the full trace is **test 8** deleting `t8_mtx` while the high-priority task still holds it at teardown.
+
+Verify: `npm run test:sync tracedata/example-4cores.btf` (web analysis script).
+
 #### Interval Analysis
 
 Pairs **`interval_start` / `interval_stop`** STI events (legacy `start_intval` / `stop_intval`) into measurable code regions. Each interval **id** gets an **Interval N** row on the timeline (horizontal task view) with colored span bars; the statistics table aggregates duration across all paired spans for that id.
@@ -731,6 +830,8 @@ Recorded by `traceINTERVAL_START(id)` / `traceINTERVAL_STOP(id)` in firmware —
 - **Scatter:** x = interval stop time, y = interval duration.
 - **Histogram:** distribution of interval durations.
 - **Click a point** to jump to the **interval start** and add an annotation with duration/time notes.
+
+**Export HTML** includes an **Interval instances** detail sub-table (longest first, up to 200 rows).
 
 **Interval 1** in `example-4cores.btf` (480 spans from ten `vCtxSwitchWorker` tasks sharing id `1` — each worker pairs via its own `tid` in the note):
 
@@ -887,13 +988,17 @@ A **migration** is recorded when consecutive slices of the same task (merge-key)
 | Core tint legend + **Migrated tasks only** filter | ✓ | ✓ |
 | **Core Migrations** stats table | ✓ | ✓ |
 | **Migration heatmap** | ✓ | ✓ |
+| **Migration heatmap export (PNG / SVG)** | ✓ | ✓ |
 | Cursor-scoped migration stats | ✓ | ✓ |
 | Resizable metric table height (drag handle below table) | ✓ | ✓ |
 | Resizable timeline / CPU load divider | ✓ | ✓ |
 | Resizable right panel / dock width | ✓ (docks) | ✓ |
 | **Min** / **Max** slice links (execution / blocking / inter-arrival) | ✓ | ✓ |
 | **Preemption chain** table + distribution charts | ✓ | ✓ |
+| **Priority Inheritance** table + distribution charts | ✓ | ✓ |
+| **Mutex / Semaphore** pairing + issue drill-down | ✓ | ✓ |
 | **Interval Analysis** table + distribution charts | ✓ | ✓ |
+| **Export HTML** detail sub-tables (priority / sync / interval) | ✓ | ✓ |
 | Find bar **Migrations** mode | ✓ | ✓ |
 | **Find** panel (Contains / Exact / Regex / Migrations) | ✓ | ✓ |
 | **Zoom to cursor range** (`Ctrl+R`, **⊡ Range**) | ✓ | ✓ |
@@ -935,6 +1040,22 @@ Click a row to highlight that task on the timeline. Drag the resize handle below
 
 Visualise **when** migrations happen between core pairs — complementary to the per-task **Core Migrations** table. Traces with **more than 16 cores** use a **three-level** drill-down (core×core matrix → outgoing pairs × time bins → tasks). Smaller multi-core traces use a **two-level** flow (core-pair rows × time bins → tasks).
 
+**Example (`example-4cores.btf`)** — screenshots exported with **Export SVG** from the heatmap dialog (full current drill level, no hover highlight):
+
+**Level 1 — core-pair overview** (4 cores · 32 time bins across the trace):
+
+<img src="../images/migration-heatmap-pairs.svg" alt="Migration heatmap Level 1: core-pair rows and time bins for example-4cores.btf" width="820">
+
+Each row is a directed core pair (`c0→c1`, `c0→c2`, …). Cell colour intensity is the migration count in that bin (darker blue = more events). Horizontal bands show **when** traffic occurred — e.g. repeated activity on `c0→c2` and `c1→c0` during the context-switch stress phases. Click a non-empty cell to drill into tasks for that pair and time window.
+
+**Level 2 — task grid** (after clicking a cell on the pair overview):
+
+<img src="../images/migration-heatmap-tasks.svg" alt="Migration heatmap Level 2: per-task sub-bins after drilling from example-4cores.btf" width="820">
+
+Rows are tasks that migrated on the selected core pair within the chosen bin; columns are **32 sub-bins** spanning that bin's time window. Brighter cells mark sub-intervals where that task crossed cores most often. Click a task cell to zoom the timeline, place **C1** / **C2** at the sub-bin edges, switch to **Task View**, and filter to that task only.
+
+Regenerate from the viewer: open `tracedata/example-4cores.btf`, toolbar **Heatmap** → drill to the desired level → **Export SVG** (or **Export PNG**). Save under `images/` as `migration-heatmap-pairs.svg` / `migration-heatmap-tasks.svg`.
+
 **Typical workflow (≤ 16 cores)**
 
 1. Open **Heatmap** from the toolbar (`tracedata/example-4cores.btf` or `example-16cores.btf` are good demos).
@@ -963,6 +1084,7 @@ Visualise **when** migrations happen between core pairs — complementary to the
 | **Click row** | > 16 cores only: matrix Level 1 → outgoing pairs for that source core. |
 | **All tasks** (toolbar) | Shown next to **Heatmap** while a heatmap task filter is active. Same reset as **Show all tasks** below. |
 | **Show all tasks** | Clears the task filter and **restores the timeline state captured when the heatmap was opened** (viewport, cursors, highlights, view mode). The heatmap returns to **Level 1**; heatmap time scope follows the restored cursors (full trace if fewer than two cursors were saved). Available from: toolbar **All tasks**, heatmap dialog **Show all tasks**, Legend **Clear** (Web: Marks page; Desktop: legend dock), or enabling **Migrated tasks only**. Loading a new trace or switching tabs also clears the filter (Desktop closes the heatmap dialog on tab switch). |
+| **Export PNG / SVG** | Footer buttons export the **full current drill level** (all rows/columns, no hover highlight). Filenames: `migration-heatmap-{level}-{timestamp}.png` or `.svg` (e.g. `pairs`, `matrix`, `outgoing`, `tasks`). Desktop: file save dialog + status bar confirmation. Web: direct download. |
 | **Scope** | **Full trace** by default. With **2 or more cursors** placed, Level 1 uses the time window from **C1** through the last cursor (subtitle shows the range). Independent of the Statistics panel **Limit to cursor range** toggle. **Show all tasks** restores pre-heatmap cursors, so heatmap scope matches that saved window. |
 | **Empty state** | *No migrations in scope.* (Level 1) or *No task migrations in this cell.* (Level 2) when no events fall in the current window. |
 
@@ -1388,7 +1510,7 @@ Traces from `make run` and `tools/gentrace` use these STI channels (see [Binary 
 | `interval_stop` | `1 tid:7` | Interval region end (pair with matching start + `tid`) |
 | `tag0_event` … `tag7_event` | numeric payload | User tags (`traceTAG(t, v)`) |
 | `TICK` | tick count | Scheduler tick (`traceTASK_INCREMENT_TICK`) |
-| `task` | `suspend Name[id]`, `resume Name[id]`, `delete …`, `set_priority Name[id] pri:N`, `resume/isr` | Task lifecycle / priority |
+| `task` | `suspend Name[id]`, `resume Name[id]`, `delete …`, `set_priority Name[id] pri:N`, `priority_inherit …`, `priority_disinherit …`, `resume/isr` | Task lifecycle / priority |
 | `queue` / `mutex` / `sem` | `create` / `send` / `recv` / `give` / `take` / `delete` + `0x........` | Queue and synchronisation objects |
 
 **Interval example** (from `tracedata/example-4cores.btf`):

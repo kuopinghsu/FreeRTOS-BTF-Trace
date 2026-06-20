@@ -215,6 +215,34 @@ export function intervalStatsRows(trace, lo, hi) {
   return rows
 }
 
+/** Per-instance detail rows for HTML/CSV export. */
+export function intervalInstanceDetailRows(trace, lo, hi, limit = 200) {
+  const scale = trace?.timeScale || 'ns'
+  const byId = trace?.intervalInstancesById
+  if (!byId?.size) return []
+  const rows = []
+  for (const id of trace.intervalIds || []) {
+    for (const inst of byId.get(id) || []) {
+      if (!intervalOverlapsRange(inst, lo, hi)) continue
+      rows.push({
+        id,
+        label: `Interval ${id}`,
+        taskId: inst.taskId ?? '',
+        startNs: inst.startNs,
+        stopNs: inst.stopNs,
+        start: formatTime(inst.startNs, scale),
+        stop: formatTime(inst.stopNs, scale),
+        duration: formatTime(inst.durationNs, scale),
+        durationNs: inst.durationNs,
+        startCore: inst.startCore || '',
+        stopCore: inst.stopCore || '',
+      })
+    }
+  }
+  rows.sort((a, b) => b.durationNs - a.durationNs || a.startNs - b.startNs)
+  return limit > 0 ? rows.slice(0, limit) : rows
+}
+
 /** Plot points: x = stop time, y = duration. */
 export function intervalPlotPoints(trace, id, lo, hi) {
   const instances = trace?.intervalInstancesById?.get(id) || []

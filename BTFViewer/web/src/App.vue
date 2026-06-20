@@ -889,6 +889,12 @@ function syncTimelineOptionsFromSettings(s = appSettings) {
   }
 }
 
+/** Show Statistics tab when opening or re-selecting a trace (mirrors desktop force=True). */
+function focusStatisticsPanel(force = false) {
+  if (!appSettings.showStats) return
+  if (force) rightPanelTab.value = 'stats'
+}
+
 function applyAppSettings(next, { silent = false, persist = true } = {}) {
   Object.assign(appSettings, applySettingsToRuntime(next))
   setColorblindMode(appSettings.colorblindSafe)
@@ -1068,6 +1074,7 @@ watch(activeTabId, () => {
   timelineOptions.highlightInterval = null
   timelineOptions.lockedTaskKey = tab?.pinnedHighlightKey ?? null
   _navCache = tab ? getNavCache(tab) : null
+  focusStatisticsPanel(true)
   nextTick(() => {
     applyTimelineViewport()
     autofitCpuLoadPaneHeight()
@@ -1190,6 +1197,7 @@ function onTraceReading({ name }) {
 
 function finishTraceLoadTab(tab) {
   timelineOptions.highlightKey = tab.pinnedHighlightKey ?? null
+  timelineOptions.lockedTaskKey = null
   timelineOptions.showCpuLoad = true
   timelineOptions.highlightSegment = tab.highlightSegment ?? null
   loading.value    = false
@@ -1228,6 +1236,7 @@ async function attachParsedTrace(name, packedOrTrace) {
 
     _cpuLoadUserSized = false
     finishTraceLoadTab(tab)
+    focusStatisticsPanel(true)
     await nextTick()
     applyTimelineViewport()
     scheduleRender()
@@ -1384,19 +1393,55 @@ function onJumpToTime(ns) {
   syncTimelineViewport()
 }
 
-function onStatsPlotPointActivate({ ns, note, segment, interval }) {
+function onStatsPlotPointActivate({ ns, note, segment, interval, priorityRange, syncIssue }) {
+  if (syncIssue) {
+    pinnedHighlightKey.value = null
+    timelineOptions.lockedTaskKey = null
+    scheduleRender()
+  }
   if (segment) {
     timelineOptions.highlightInterval = null
     highlightSegment.value = segment
     timelineOptions.highlightSegment = segment
     timelineOptions.highlightKey = taskMergeKey(segment.task)
+    if (syncIssue) {
+      timelinePanelRef.value?.expandCoresForMergeKeys([taskMergeKey(segment.task)])
+      timelinePanelRef.value?.zoomToTimeRange(segment.start, segment.end)
+      if (ns != null) timelinePanelRef.value?.jumpToNs(ns)
+    }
     timelinePanelRef.value?.scrollToSegmentIfNeeded(segment)
+  } else if (syncIssue && ns != null && trace.value) {
+    timelineOptions.highlightInterval = null
+    highlightSegment.value = null
+    timelineOptions.highlightSegment = null
+    const tr = trace.value
+    const pad = Math.max(1000, Math.floor((tr.timeMax - tr.timeMin) / 200))
+    timelinePanelRef.value?.zoomToTimeRange(
+      Math.max(tr.timeMin, ns - pad),
+      Math.min(tr.timeMax, ns + pad),
+    )
+    timelinePanelRef.value?.jumpToNs(ns)
   } else if (interval) {
     highlightSegment.value = null
     timelineOptions.highlightSegment = null
     timelineOptions.highlightInterval = { ...interval, markNs: ns ?? interval.stopNs }
     timelinePanelRef.value?.zoomToTimeRange(interval.startNs, interval.stopNs)
     timelinePanelRef.value?.scrollToIntervalRow(interval.id)
+  } else if (priorityRange) {
+    highlightSegment.value = null
+    timelineOptions.highlightSegment = null
+    timelineOptions.highlightInterval = null
+    pinnedHighlightKey.value = priorityRange.mk
+    timelineOptions.highlightKey = priorityRange.mk
+    timelineOptions.lockedTaskKey = priorityRange.mk
+    timelinePanelRef.value?.expandCoresForMergeKeys([priorityRange.mk])
+    scheduleRender()
+    nextTick(() => {
+      timelinePanelRef.value?.zoomToTimeRange(priorityRange.startNs, priorityRange.stopNs)
+      timelinePanelRef.value?.scrollToTask(priorityRange.mk)
+      syncTimelineViewport()
+      scheduleRender()
+    })
   } else if (ns != null) {
     timelineOptions.highlightInterval = null
     timelinePanelRef.value?.jumpToNs(ns)
@@ -2221,7 +2266,13 @@ function addMarkAtNs(ns, type = 'bookmark', label = '') {
 }
 
 function addAnnotationAtNs(ns, note) {
-  addMarkAtNs(ns, 'annotation', note)
+  if (!trace.value || !activeTab.value) return
+  const clamped = Math.max(trace.value.timeMin, Math.min(trace.value.timeMax, ns))
+  const label = note || ''
+  const exists = marks.value.some(
+    m => m.type === 'annotation' && m.ns === clamped && (m.label || '') === label)
+  if (exists) return
+  addMarkAtNs(clamped, 'annotation', label)
 }
 
 function onDeleteMark(id) {

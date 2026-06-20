@@ -122,6 +122,28 @@
 } while(0)
 #endif // traceTASK_PRIORITY_SET
 
+#ifndef traceTASK_PRIORITY_INHERIT
+# define traceTASK_PRIORITY_INHERIT( pxTCB, uxInheritedPriority ) do { \
+    taskENTER_CRITICAL();                                             \
+    btf_trace_add_event(                                              \
+        (uint32_t)(pxTCB)->uxTCBNumber,                               \
+        (uint32_t)(uxInheritedPriority),                              \
+        TRACE_EVENT_TASK_PRIORITY_INHERIT );                          \
+    taskEXIT_CRITICAL();                                              \
+} while(0)
+#endif // traceTASK_PRIORITY_INHERIT
+
+#ifndef traceTASK_PRIORITY_DISINHERIT
+# define traceTASK_PRIORITY_DISINHERIT( pxTCB, uxOriginalPriority ) do { \
+    taskENTER_CRITICAL();                                               \
+    btf_trace_add_event(                                                \
+        (uint32_t)(pxTCB)->uxTCBNumber,                                 \
+        (uint32_t)(uxOriginalPriority),                                 \
+        TRACE_EVENT_TASK_PRIORITY_DISINHERIT );                         \
+    taskEXIT_CRITICAL();                                                \
+} while(0)
+#endif // traceTASK_PRIORITY_DISINHERIT
+
 #endif // configINCLUDE_SCHEDULING
 
 #if configINCLUDE_TAGS

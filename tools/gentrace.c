@@ -414,6 +414,28 @@ int genbtf(
                         event->param1,
                         (int)event->param2);
                 break;
+            case TRACE_EVENT_TASK_PRIORITY_INHERIT:
+                fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%s %s[%d] pri:%d\n",
+                        current_time,
+                        coreid,
+                        "task",
+                        "trigger",
+                        "priority_inherit",
+                        display_taskname(trace_data, (int)event->param1),
+                        event->param1,
+                        (int)event->param2);
+                break;
+            case TRACE_EVENT_TASK_PRIORITY_DISINHERIT:
+                fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%s %s[%d] pri:%d\n",
+                        current_time,
+                        coreid,
+                        "task",
+                        "trigger",
+                        "priority_disinherit",
+                        display_taskname(trace_data, (int)event->param1),
+                        event->param1,
+                        (int)event->param2);
+                break;
             case TRACE_EVENT_QUEUE_CREATE:
                 switch(event->param1) {
                 case QUEUE_TYPE_MUTEX:

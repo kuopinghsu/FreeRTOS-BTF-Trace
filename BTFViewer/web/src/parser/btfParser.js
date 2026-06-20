@@ -19,6 +19,8 @@ import { parseTaskName, taskMergeKey, taskSortKey, resetStiColors } from '../uti
 import { buildMigrationIndex } from '../utils/migrationAnalysis.js'
 import { analyzeTickHealth } from '../utils/tickHealth.js'
 import { buildIntervalData, isIntervalMarkerChannel, buildIntervalMarkerIndex } from '../utils/intervalAnalysis.js'
+import { buildPriorityData, parseCreatePriority } from '../utils/priorityAnalysis.js'
+import { buildSyncObjectData } from '../utils/syncObjectAnalysis.js'
 
 // LOD bin counts (match Python constants).
 const LOD_SUMMARY_BINS       = 4096
@@ -103,8 +105,10 @@ export async function parseBtf(text, progressCallback) {
   let timeMax = 0
   let firstEvent = true
 
-  // raw task name → first task_create timestamp
+  // raw task name → first task_create / create pri timestamp
   const taskCreateRaw = new Map()
+  // raw task name → { time, priority } from create pri:N
+  const taskCreatePriRaw = new Map()
 
   // -----------------------------------------------------------------------
   // Phase 1 – File reading (line-at-a-time so progress can update during scan)
@@ -161,6 +165,13 @@ export async function parseBtf(text, progressCallback) {
               const tgt = parts[4].trim()
               if (note === 'task_create' && !taskCreateRaw.has(tgt)) {
                 taskCreateRaw.set(tgt, t)
+              }
+              const createPri = parseCreatePriority(note)
+              if (createPri != null) {
+                if (!taskCreateRaw.has(tgt)) taskCreateRaw.set(tgt, t)
+                if (!taskCreatePriRaw.has(tgt)) {
+                  taskCreatePriRaw.set(tgt, { time: t, priority: createPri })
+                }
               }
               if (!tEventsByTime.has(t)) tEventsByTime.set(t, [])
               tEventsByTime.get(t).push({
@@ -409,6 +420,26 @@ export async function parseBtf(text, progressCallback) {
     }
   }
 
+  const taskCreatePriByRaw = new Map()
+  for (const [raw, rec] of taskCreatePriRaw) {
+    taskCreatePriByRaw.set(raw, rec)
+  }
+  const {
+    taskBasePriority,
+    priorityEpisodes,
+    priorityEpisodesByMk,
+    prioritySummaryByMk,
+    hasPriorityInstrumentation,
+  } = buildPriorityData(stiEvents, taskCreatePriByRaw, timeMax, mkCache, mkRepr)
+
+  progress(60, 'Analysing mutex/semaphore STI…')
+  await yieldToHost()
+  const {
+    syncObjects,
+    syncIssues,
+    hasSyncObjectInstrumentation,
+  } = buildSyncObjectData(stiEvents, coreSegs, mkRepr, timeMax)
+
   // -----------------------------------------------------------------------
   // Phase 4 – 1M-event performance pre-processing (LOD + bisect arrays)
   // -----------------------------------------------------------------------
@@ -618,6 +649,17 @@ export async function parseBtf(text, progressCallback) {
 
     // ---- Other ----
     taskCreateTimes,
+
+    // ---- Priority inheritance (create pri + set_priority) ----
+    taskBasePriority,
+    priorityEpisodes,
+    priorityEpisodesByMk,
+    prioritySummaryByMk,
+    hasPriorityInstrumentation,
+
+    syncObjects,
+    syncIssues,
+    hasSyncObjectInstrumentation,
 
     // ---- Core migrations ----
     migrations,

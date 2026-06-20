@@ -1340,8 +1340,37 @@ function findRowForTask(rows, mergeKey) {
   return null
 }
 
+function findColForTask(cols, mergeKey) {
+  let targetCol = cols.find(c => c.type === 'task' && c.key === mergeKey)
+  if (targetCol) return targetCol
+  if (props.options.viewMode !== 'core') return null
+  targetCol = cols.find(c => c.type === 'core-task' && taskMergeKey(c.taskKey) === mergeKey)
+  if (targetCol) return targetCol
+  for (const coreName of props.trace.coreNames || []) {
+    const taskOrder = props.trace.coreTaskOrder.get(coreName) || []
+    if (taskOrder.some(t => taskMergeKey(t) === mergeKey)) {
+      return cols.find(c => c.type === 'core' && c.key === coreName) || null
+    }
+  }
+  return null
+}
+
 function scrollToTask(mergeKey) {
   if (!props.trace) return
+  if (orientation.value === 'v') {
+    const { cols } = buildColumnLayout(
+      props.trace, props.options.viewMode, expanded, 0,
+      props.options.showSti !== false, stiExpanded,
+      !!props.options.migratedOnlyFilter,
+      props.options.taskFilterKeys || null,
+    )
+    const targetCol = findColForTask(cols, mergeKey)
+    if (!targetCol) return
+    viewport.scrollX = Math.max(0, RULER_W + targetCol.x + COL_W / 2 - viewport.canvasW / 2)
+    clampScrollToContent()
+    scheduleRender()
+    return
+  }
   // Build layout at yStart=0 to get raw row offsets independent of current scrollY
   const { rows } = buildRowLayout(
     props.trace, props.options.viewMode, expanded, 0,

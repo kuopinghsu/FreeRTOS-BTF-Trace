@@ -40,6 +40,19 @@
  *                               so it fills quickly, exercising cross-core
  *                               block / unblock wakeup chains.
  *
+ *  7. Task priority set       - one low-priority task blocked on a
+ *                               semaphore; runner boosts it with
+ *                               vTaskPrioritySet() before wake-up so it
+ *                               preempts equal-priority fillers; subject
+ *                               lowers its own priority before exit
+ *                               (exercises traceTASK_PRIORITY_SET).
+ *
+ *  8. Priority inversion      - low task holds a mutex while medium-
+ *                               priority work runs; high task blocks on
+ *                               the mutex.  Mutex priority inheritance
+ *                               must boost the low task to high while
+ *                               the high task waits (t8_inherit_ok).
+ *
  * Tests run back-to-back with only taskYIELD() handoffs between phases
  * (no vTaskDelay gaps) so all cores stay busy under SMP load.
  */
@@ -102,6 +115,13 @@
 /* Task priorities. */
 #define RUNNER_PRIORITY    ( configMAX_PRIORITIES - 1 )
 #define WORKER_PRIORITY    ( configMAX_PRIORITIES - 2 )
+#define LOW_PRIORITY       ( ( WORKER_PRIORITY > 0 ) ? ( WORKER_PRIORITY - 1 ) : 0 )
+#define BOOST_PRIORITY     ( WORKER_PRIORITY + 1 )
+
+/* Test 8 — L < M < H (mutex priority inheritance). */
+#define INV_LOW_PRIORITY   LOW_PRIORITY
+#define INV_MED_PRIORITY   WORKER_PRIORITY
+#define INV_HIGH_PRIORITY  BOOST_PRIORITY
 
 /* ==================================================================
  * Application hooks
@@ -583,6 +603,203 @@ static int run_test6( void )
 }
 
 /* ==================================================================
+ * TEST 7 - Task priority set (vTaskPrioritySet / traceTASK_PRIORITY_SET)
+ *
+ * One subject task starts at LOW_PRIORITY and blocks on t7_go.
+ * NUM_WORKERS filler tasks at WORKER_PRIORITY spin with taskYIELD() so
+ * cores stay busy.  The runner (run_test7, executing as the Runner task)
+ * calls vTaskPrioritySet( subject, BOOST_PRIORITY ) then posts t7_go.
+ * The subject must observe the boosted priority, increment t7_ctr, call
+ * vTaskPrioritySet( NULL, LOW_PRIORITY ) on itself, and signal done.
+ *
+ * Correctness: t7_ctr == 1 and t7_pri_ok == 1.
+ * ================================================================== */
+
+static TaskHandle_t       t7_subject;
+static SemaphoreHandle_t  t7_go, t7_done;
+static volatile uint32_t  t7_ctr;
+static volatile uint32_t  t7_pri_ok;
+
+static void vPriFiller( void *pvArg )
+{
+    int i;
+    (void)pvArg;
+
+    for( i = 0; i < ITER_SLOW; ++i )
+        taskYIELD();
+
+    vTaskDelete( NULL );
+}
+
+static void vPriSubject( void *pvArg )
+{
+    (void)pvArg;
+
+    xSemaphoreTake( t7_go, portMAX_DELAY );
+
+    if( uxTaskPriorityGet( NULL ) == BOOST_PRIORITY )
+        t7_pri_ok = 1;
+
+    t7_ctr++;
+    vTaskPrioritySet( NULL, LOW_PRIORITY );
+    xSemaphoreGive( t7_done );
+    vTaskDelete( NULL );
+}
+
+static int run_test7( void )
+{
+    int i, fail = 0;
+
+    t7_ctr    = 0;
+    t7_pri_ok = 0;
+    t7_go     = xSemaphoreCreateBinary();
+    t7_done   = xSemaphoreCreateBinary();
+    configASSERT( t7_go && t7_done );
+
+    configASSERT( xTaskCreate( vPriSubject, "PS",
+                               TASK_STACK_WORDS, NULL,
+                               LOW_PRIORITY, &t7_subject ) == pdPASS );
+
+    for( i = 0; i < NUM_WORKERS; ++i )
+        configASSERT( xTaskCreate( vPriFiller, "PF",
+                                   TASK_STACK_WORDS, NULL,
+                                   WORKER_PRIORITY, NULL ) == pdPASS );
+
+    /* Let the subject block and fillers start running. */
+    for( i = 0; i < (int)configNUMBER_OF_CORES; ++i )
+        taskYIELD();
+
+#if configUSE_TRACE_FACILITY
+    traceINTERVAL_START( 7 );
+#endif
+    vTaskPrioritySet( t7_subject, BOOST_PRIORITY );
+    xSemaphoreGive( t7_go );
+    xSemaphoreTake( t7_done, portMAX_DELAY );
+#if configUSE_TRACE_FACILITY
+    traceINTERVAL_STOP( 7 );
+#endif
+
+    vSemaphoreDelete( t7_go );
+    vSemaphoreDelete( t7_done );
+
+    if( t7_ctr != 1 )
+    {
+        printf( "  FAIL: ctr=%u want 1\n", (unsigned)t7_ctr );
+        ++fail;
+    }
+    if( t7_pri_ok != 1 )
+    {
+        printf( "  FAIL: subject did not run at boosted priority %d\n",
+                (int)BOOST_PRIORITY );
+        ++fail;
+    }
+    return fail;
+}
+
+/* ==================================================================
+ * TEST 8 - Priority inversion (mutex priority inheritance)
+ *
+ * Classic L/M/H scenario on a mutex with inheritance enabled:
+ *   L (low)  takes the mutex and spins with taskYIELD().
+ *   M (med)  runs CPU work once the mutex is held (would block H in a
+ *            non-inheritance inversion).
+ *   H (high) blocks on the mutex; the kernel must boost L to H.
+ *
+ * L records t8_inherit_ok when uxTaskPriorityGet() == INV_HIGH_PRIORITY
+ * during the hold loop.  H signals t8_h_done after it acquires the mutex.
+ *
+ * Correctness: t8_inherit_ok == 1 and high task completes.
+ * ================================================================== */
+
+static SemaphoreHandle_t  t8_mtx, t8_l_ready, t8_h_done;
+static volatile uint32_t  t8_inherit_ok;
+
+static void vInvLow( void *pvArg )
+{
+    int i;
+    (void)pvArg;
+
+    xSemaphoreTake( t8_mtx, portMAX_DELAY );
+    xSemaphoreGive( t8_l_ready );
+    xSemaphoreGive( t8_l_ready );
+
+    for( i = 0; i < ITER_SLOW * 4; ++i )
+    {
+        if( uxTaskPriorityGet( NULL ) == (UBaseType_t)INV_HIGH_PRIORITY )
+            t8_inherit_ok = 1;
+
+        taskYIELD();
+    }
+
+    xSemaphoreGive( t8_mtx );
+    vTaskDelete( NULL );
+}
+
+static void vInvHigh( void *pvArg )
+{
+    (void)pvArg;
+
+    xSemaphoreTake( t8_l_ready, portMAX_DELAY );
+    xSemaphoreTake( t8_mtx, portMAX_DELAY );
+    xSemaphoreGive( t8_h_done );
+    vTaskDelete( NULL );
+}
+
+static void vInvMed( void *pvArg )
+{
+    int i;
+    (void)pvArg;
+
+    xSemaphoreTake( t8_l_ready, portMAX_DELAY );
+
+    for( i = 0; i < ITER_FAST * 4; ++i )
+        taskYIELD();
+
+    vTaskDelete( NULL );
+}
+
+static int run_test8( void )
+{
+    int fail = 0;
+
+    t8_inherit_ok = 0;
+    t8_mtx        = xSemaphoreCreateMutex();
+    t8_l_ready    = xSemaphoreCreateCounting( 2, 0 );
+    t8_h_done     = xSemaphoreCreateBinary();
+    configASSERT( t8_mtx && t8_l_ready && t8_h_done );
+
+    configASSERT( xTaskCreate( vInvLow, "IL",
+                               TASK_STACK_WORDS, NULL,
+                               INV_LOW_PRIORITY, NULL ) == pdPASS );
+    configASSERT( xTaskCreate( vInvHigh, "IH",
+                               TASK_STACK_WORDS, NULL,
+                               INV_HIGH_PRIORITY, NULL ) == pdPASS );
+    configASSERT( xTaskCreate( vInvMed, "IM",
+                               TASK_STACK_WORDS, NULL,
+                               INV_MED_PRIORITY, NULL ) == pdPASS );
+
+#if configUSE_TRACE_FACILITY
+    traceINTERVAL_START( 8 );
+#endif
+    xSemaphoreTake( t8_h_done, portMAX_DELAY );
+#if configUSE_TRACE_FACILITY
+    traceINTERVAL_STOP( 8 );
+#endif
+
+    vSemaphoreDelete( t8_mtx );
+    vSemaphoreDelete( t8_l_ready );
+    vSemaphoreDelete( t8_h_done );
+
+    if( t8_inherit_ok != 1 )
+    {
+        printf( "  FAIL: mutex holder was not boosted to priority %d\n",
+                (int)INV_HIGH_PRIORITY );
+        ++fail;
+    }
+    return fail;
+}
+
+/* ==================================================================
  * Test-runner task
  * ================================================================== */
 
@@ -602,6 +819,8 @@ static const test_entry_t tests[] =
     { "4: task notifications",     run_test4 },
     { "5: event group",            run_test5 },
     { "6: queue stress",           run_test6 },
+    { "7: task priority set",      run_test7 },
+    { "8: priority inversion",     run_test8 },
 };
 
 #define N_TESTS  ( (int)( sizeof( tests ) / sizeof( tests[ 0 ] ) ) )

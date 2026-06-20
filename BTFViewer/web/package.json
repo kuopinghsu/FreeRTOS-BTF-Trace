@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "node scripts/embed-wasm.mjs && vite build",
+    "test:priority": "node scripts/test-priority-analysis.mjs",
+    "test:sync": "node scripts/test-sync-object-analysis.mjs",
     "wasm": "wat2wasm wasm/timeline_accel.wat -o src/renderer/timeline_accel.wasm && node scripts/embed-wasm.mjs",
     "preview": "vite preview"
   },

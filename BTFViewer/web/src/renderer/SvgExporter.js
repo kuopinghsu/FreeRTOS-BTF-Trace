@@ -12,6 +12,11 @@ import {
 } from './TimelineRenderer.js'
 import { getTimelineLayout } from '../utils/timelineLayout.js'
 import { taskColor, taskDisplayName, taskMergeKey, stiNoteColor } from '../utils/colors.js'
+import {
+  visiblePriorityEpisodes,
+  BOOST_BAND_COLOR,
+  INVERSION_BAND_COLOR,
+} from '../utils/priorityAnalysis.js'
 
 function L() {
   return getTimelineLayout()
@@ -47,6 +52,41 @@ function getSegsForRow(trace, row) {
   if (row.type === 'core')      return trace.coreSegs.get(row.key)
   if (row.type === 'core-task') return trace.coreTaskSegs.get(row.coreKey)?.get(row.taskKey)
   return null
+}
+
+function mergeKeyForRow(row) {
+  if (row.type === 'task') return row.key
+  if (row.type === 'core-task') return taskMergeKey(row.taskKey)
+  return null
+}
+
+function appendPriorityBoostBands(els, trace, mk, rowY, rowH, timeStart, timeEnd, pxPerNs, canvasW, darkMode, ox) {
+  const episodes = trace.priorityEpisodesByMk?.get(mk)
+  if (!episodes?.length) return
+  const visible = visiblePriorityEpisodes(episodes, timeStart, timeEnd)
+  if (!visible.length) return
+
+  const bandH = Math.max(3, Math.floor(rowH * 0.3))
+  const bandY = rowY + rowH - bandH
+
+  for (const ep of visible) {
+    const x1 = (ep.startNs - timeStart) * pxPerNs
+    const x2 = (ep.stopNs - timeStart) * pxPerNs
+    if (x2 < -2 || x1 > canvasW + 2) continue
+    const cx = Math.max(0, Math.floor(x1))
+    const cx2 = Math.min(Math.ceil(x2), canvasW)
+    const drawW = cx2 - cx
+    if (drawW < 0.5) continue
+    const stroke = ep.inversionSuspect ? INVERSION_BAND_COLOR : BOOST_BAND_COLOR
+    const fill = ep.inversionSuspect
+      ? (darkMode ? 'rgba(231,76,60,0.72)' : 'rgba(231,76,60,0.52)')
+      : (darkMode ? 'rgba(243,156,18,0.72)' : 'rgba(243,156,18,0.52)')
+    els.push(
+      `<rect x="${(ox + cx).toFixed(1)}" y="${bandY.toFixed(1)}" ` +
+      `width="${drawW.toFixed(1)}" height="${bandH}" ` +
+      `fill="${fill}" stroke="${stroke}" stroke-width="1" rx="0"/>`
+    )
+  }
 }
 
 // ---- Main export function --------------------------------------------------
@@ -153,44 +193,53 @@ export function renderToSvg(trace, viewport, options = {}) {
     if (row.y + rowH < 0 || row.y > canvasH) continue
 
     const segs = getSegsForRow(trace, row)
-    if (!segs) continue
 
-    for (const seg of segs) {
-      if (seg.end <= timeStart || seg.start >= timeEnd) continue
-      const rawX1 = (seg.start - timeStart) * pxPerNs
-      const rawX2 = (seg.end   - timeStart) * pxPerNs
-      const w     = Math.max(MIN_SEG_W, rawX2 - rawX1)
-      if (rawX1 + w < 0 || rawX1 > canvasW) continue
+    if (segs) {
+      for (const seg of segs) {
+        if (seg.end <= timeStart || seg.start >= timeEnd) continue
+        const rawX1 = (seg.start - timeStart) * pxPerNs
+        const rawX2 = (seg.end   - timeStart) * pxPerNs
+        const w     = Math.max(MIN_SEG_W, rawX2 - rawX1)
+        if (rawX1 + w < 0 || rawX1 > canvasW) continue
 
-      const x1 = OX + rawX1
-      const repr  = trace.taskRepr?.get(taskMergeKey(seg.task)) ?? seg.task
-      const color = taskColor(taskMergeKey(seg.task), repr)
-      els.push(
-        `<rect x="${x1.toFixed(1)}" y="${(row.y + 1).toFixed(1)}" ` +
-        `width="${w.toFixed(1)}" height="${(rowH - 2)}" ` +
-        `fill="${color}" rx="1"/>`
-      )
+        const x1 = OX + rawX1
+        const repr  = trace.taskRepr?.get(taskMergeKey(seg.task)) ?? seg.task
+        const color = taskColor(taskMergeKey(seg.task), repr)
+        els.push(
+          `<rect x="${x1.toFixed(1)}" y="${(row.y + 1).toFixed(1)}" ` +
+          `width="${w.toFixed(1)}" height="${(rowH - 2)}" ` +
+          `fill="${color}" rx="1"/>`
+        )
 
-      const label = segmentLabelText(row, seg)
-      if (label && w >= 40) {
-        const textX = Math.round(x1) + 3
-        const clipW = Math.ceil(w) - 6
-        if (clipW > 0) {
-          const textY = row.y + rowH / 2
-          const currentClipId = `seg-label-${clipId++}`
-          defs.push(
-            `<clipPath id="${currentClipId}">` +
-            `<rect x="${textX}" y="${(row.y + 1).toFixed(1)}" width="${clipW}" height="${rowH - 2}" rx="1"/>` +
-            `</clipPath>`
-          )
-          els.push(
-            `<text x="${textX}" y="${textY.toFixed(1)}" ` +
-            `fill="${darkMode ? 'rgba(255,255,255,0.85)' : 'rgba(0,0,0,0.75)'}" ` +
-            `font-family="sans-serif" font-size="10" dominant-baseline="middle" ` +
-            `clip-path="url(#${currentClipId})">${esc(label)}</text>`
-          )
+        const label = segmentLabelText(row, seg)
+        if (label && w >= 40) {
+          const textX = Math.round(x1) + 3
+          const clipW = Math.ceil(w) - 6
+          if (clipW > 0) {
+            const textY = row.y + rowH / 2
+            const currentClipId = `seg-label-${clipId++}`
+            defs.push(
+              `<clipPath id="${currentClipId}">` +
+              `<rect x="${textX}" y="${(row.y + 1).toFixed(1)}" width="${clipW}" height="${rowH - 2}" rx="1"/>` +
+              `</clipPath>`
+            )
+            els.push(
+              `<text x="${textX}" y="${textY.toFixed(1)}" ` +
+              `fill="${darkMode ? 'rgba(255,255,255,0.85)' : 'rgba(0,0,0,0.75)'}" ` +
+              `font-family="sans-serif" font-size="10" dominant-baseline="middle" ` +
+              `clip-path="url(#${currentClipId})">${esc(label)}</text>`
+            )
+          }
         }
       }
+    }
+
+    const mk = mergeKeyForRow(row)
+    if (mk) {
+      appendPriorityBoostBands(
+        els, trace, mk, row.y + 1, rowH - 2,
+        timeStart, timeEnd, pxPerNs, canvasW, darkMode, OX,
+      )
     }
   }
 

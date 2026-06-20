@@ -104,6 +104,8 @@ On single-core builds, the full `types` word is just the `event_t` enum value (c
 | 12 | `TASK_INCREMENT_TICK` |
 | 13–14 | `INTERVAL_START`, `INTERVAL_STOP` |
 | 15 | `TASK_PRIORITY_SET` |
+| 16 | `TASK_PRIORITY_INHERIT` |
+| 17 | `TASK_PRIORITY_DISINHERIT` |
 | 90–97 | `TAG` … `TAG7` |
 
 #### Ring buffer iteration
@@ -136,6 +138,8 @@ On SMP (`configNUMBER_OF_CORES` > 1), the emitting core is stored in the high bi
 | `TASK_RESUME` (6) | `traceTASK_RESUME` | task id | 0 | `STI` | `task` | `trigger` | `resume Name[id]` |
 | `TASK_RESUME_FROM_ISR` (7) | `traceTASK_RESUME_FROM_ISR` | task id | 0 | `STI` | `task` | `trigger` | `resume/isr` |
 | `TASK_PRIORITY_SET` (15) | `traceTASK_PRIORITY_SET` | task id | new priority | `STI` | `task` | `trigger` | `set_priority Name[id] pri:N` |
+| `TASK_PRIORITY_INHERIT` (16) | `traceTASK_PRIORITY_INHERIT` | task id (mutex holder) | inherited priority | `STI` | `task` | `trigger` | `priority_inherit Name[id] pri:N` |
+| `TASK_PRIORITY_DISINHERIT` (17) | `traceTASK_PRIORITY_DISINHERIT` | task id (mutex holder) | base priority | `STI` | `task` | `trigger` | `priority_disinherit Name[id] pri:N` |
 | `QUEUE_CREATE` (8) | `traceQUEUE_CREATE` | queue type† | object pointer | `STI` | `queue` / `mutex` / `sem`† | `trigger` | `create 0x........` |
 | `QUEUE_SEND` (9) | `traceQUEUE_SEND` | queue type† | object pointer | `STI` | `queue` / `mutex` / `sem`† | `trigger` | `send` / `give`† `0x........` |
 | `QUEUE_RECEIVE` (10) | `traceQUEUE_RECEIVE` | queue type† | object pointer | `STI` | `queue` / `mutex` / `sem`† | `trigger` | `recv` / `take`† `0x........` |
@@ -159,8 +163,8 @@ tools/            gentrace — binary dump → BTF or VCD
 sim/              RV64 SMP instruction-set simulator (C++, supports --cores N)
 Demo/             FreeRTOS SMP demo built for RV64, run under sim/
 BTFViewer/        Interactive BTF viewer (PyQt5 desktop + Vue 3 web app)
-tracedata/        Sample outputs (example.btf, example.vcd)
-images/           Documentation screenshots
+tracedata/        Sample outputs (example.btf, example-4cores.btf, example.vcd)
+images/           Documentation screenshots (timeline, stats plots, migration heatmaps)
 ```
 
 ---
@@ -209,7 +213,7 @@ After the simulator exits it writes `trace.bin`; `gentrace` converts it to `trac
 
 ## Demo
 
-The demo (`Demo/examples/freertos_test/`) runs six SMP stress tests:
+The demo (`Demo/examples/freertos_test/`) runs eight SMP stress tests:
 
 | # | Test | What it exercises |
 |---|------|-------------------|
@@ -219,6 +223,8 @@ The demo (`Demo/examples/freertos_test/`) runs six SMP stress tests:
 | 4 | Task notifications | Direct-to-task notification API |
 | 5 | Event groups | Multi-bit event synchronisation |
 | 6 | Queue stress | Producer/consumer queues at speed |
+| 7 | Task priority set | `vTaskPrioritySet()` and `traceTASK_PRIORITY_SET` |
+| 8 | Priority inversion | Classic L/M/H mutex inheritance (`uxTaskPriorityGet`) |
 
 Expected output (CORES=2 example):
 
@@ -231,6 +237,8 @@ test 3: counting-sem + mutex        ... pass
 test 4: task notifications          ... pass
 test 5: event group                 ... pass
 test 6: queue stress                ... pass
+test 7: task priority set           ... pass
+test 8: priority inversion          ... pass
 5034 events generated.
 freertos_test: all tests passed
 ```
@@ -318,9 +326,33 @@ The logger records the **calling task id** automatically (`param2` in the binary
 217432,Core_1,0,STI,interval_stop,0,trigger,1 tid:7
 ```
 
-In the demo (`Demo/examples/freertos_test/main.c`), `id` **0** brackets an entire test function; **1**–**6** bracket the inner loop of tests 1–6 respectively.
+In the demo (`Demo/examples/freertos_test/main.c`), `id` **0** brackets an entire test function; **1**–**8** bracket the inner loop of tests 1–8 respectively.
 
 **In BTFViewer:** paired spans appear as **Interval N** rows at the bottom of the timeline (horizontal task view). When the BTF note includes `tid:{task_id}`, start/stop events pair by **interval id + task id**; legacy traces without `tid` pair by the note string alone. Open **Statistics → Interval Analysis** for min/avg/max/p95 duration and a duration plot. See [`BTFViewer/README.md`](BTFViewer/README.md#interval-analysis) for pairing rules and SMP limitations.
+
+### Use case: SMP core migration heatmap
+
+On multi-core traces, BTFViewer detects when the same task runs on different cores and exposes **Core Migrations** in the Statistics panel plus a clickable **Migration heatmap** (toolbar **Heatmap**). The heatmap shows *when* cross-core traffic happens — complementary to the per-task migration table (ping-pong count, STI correlation, gap-after vs other gaps).
+
+Open the 4-core sample trace and explore the heatmap:
+
+```bash
+python BTFViewer/btf_viewer.py tracedata/example-4cores.btf
+```
+
+**Level 1 — core-pair overview** (directed pairs × 32 time bins):
+
+<img src="images/migration-heatmap-pairs.svg" alt="Migration heatmap Level 1: core-pair rows and time bins for example-4cores.btf" width="820">
+
+Each row is a directed core pair (`c0→c1`, `c0→c2`, …). Darker cells mean more migrations in that time bin. Click a non-empty cell to drill into the tasks that contributed.
+
+**Level 2 — task grid** (after clicking a hot cell):
+
+<img src="images/migration-heatmap-tasks.svg" alt="Migration heatmap Level 2: per-task sub-bins after drilling from example-4cores.btf" width="820">
+
+Rows are tasks that migrated on the selected pair within the chosen bin; columns are **32 sub-bins** inside that bin. Click a task cell to zoom the timeline, place cursors, switch to **Task View**, and filter to that task.
+
+Traces with **more than 16 cores** use a three-level drill-down (core×core matrix → outgoing pairs → tasks). **Export PNG / SVG** from the heatmap dialog captures the full current level. See [`BTFViewer/README.md`](BTFViewer/README.md#migration-heatmap) for workflow, cursor scoping, and **Trace Compare…** integration.
 
 ---
 
@@ -328,16 +360,20 @@ In the demo (`Demo/examples/freertos_test/main.c`), `id` **0** brackets an entir
 
 ### BTF Viewer (built-in)
 
-An interactive Gantt-style viewer is included in the `BTFViewer/` directory (desktop PyQt5 app and browser-based web viewer).
+An interactive Gantt-style viewer is included in the `BTFViewer/` directory (desktop PyQt5 app and browser-based web viewer). It supports Task/Core views, measurement cursors, CPU load graph, bookmarks, **Statistics** (execution time, blocking/response time, preemption chain, priority inheritance, mutex/semaphore pairing, interval analysis), **core migration heatmap**, trace compare, and PNG/SVG export.
 
 **Desktop requirements:** Python 3.8+ and PyQt5 ≥ 5.15
 
 ```bash
 pip install PyQt5
 python BTFViewer/btf_viewer.py tracedata/trace.btf
+# or the 4-core SMP demo trace:
+python BTFViewer/btf_viewer.py tracedata/example-4cores.btf
 ```
 
-See [`BTFViewer/README.md`](BTFViewer/README.md) for the full feature reference (zoom, cursors, trace compare, session restore, export, etc.).
+Sample traces: `tracedata/example.btf` (single-core), `tracedata/example-4cores.btf` (4-core SMP — statistics and heatmap demos), `tracedata/example-16cores.btf` (large SMP).
+
+See [`BTFViewer/README.md`](BTFViewer/README.md) for the full feature reference (zoom, cursors, [migration heatmap](BTFViewer/README.md#migration-heatmap), [statistics](BTFViewer/README.md#statistics-metric-tables), trace compare, session restore, export, etc.).
 
 ### Eclipse Trace Compass
 

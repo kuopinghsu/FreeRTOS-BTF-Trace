@@ -7,6 +7,9 @@ import { bisectLeft } from './bisect.js'
 
 export const SYNC_OBJECT_TARGETS = new Set(['mutex', 'sem'])
 
+/** Max time after `create` for the kernel post-create `give` (mutex / binary sem available). */
+export const POST_CREATE_GIVE_MAX_NS = 1000
+
 const SYNC_NOTE_RE = /^(create|take|give|delete)\s+(0x[0-9a-f]+)$/i
 
 /** @returns {{ action: string, ptr: string }|null} */
@@ -30,8 +33,29 @@ function emptyObject(kind, ptr) {
     holds: [],
     issues: [],
     openTakes: [],
-    skipNextGive: false,
+    openGives: [],
   }
+}
+
+function isPostCreateKernelGive(obj, timeNs) {
+  return obj.createNs != null && timeNs - obj.createNs <= POST_CREATE_GIVE_MAX_NS
+}
+
+function recordHold(obj, take, give, takeFirst) {
+  const start = takeFirst ? take : give
+  const stop = takeFirst ? give : take
+  obj.holds.push({
+    startNs: start.timeNs,
+    stopNs: stop.timeNs,
+    durationNs: stop.timeNs - start.timeNs,
+    holderMk: take.taskMk,
+    holderLabel: take.taskLabel,
+    takeCore: take.core,
+    giveCore: give.core,
+    giveTaskMk: give.taskMk,
+    giveTaskLabel: give.taskLabel,
+    signal: !takeFirst,
+  })
 }
 
 /** Infer running task merge key on *core* at *timeNs* from core timeline segments. */
@@ -97,74 +121,77 @@ export function buildSyncObjectData(stiEvents, coreSegs, taskRepr, timeMax) {
 
   for (const { ev, parsed } of events) {
     const key = syncObjectKey(ev.target, parsed.ptr)
-    if (!objects.has(key)) objects.set(key, emptyObject(ev.target, parsed.ptr))
-    const obj = objects.get(key)
     const taskMk = runningTaskMk(coreSegs, ev.core, ev.time)
     const taskLabel = taskMk ? taskLabelForMergeKey({ taskRepr }, taskMk) : '?'
     const { action } = parsed
 
     if (action === 'create') {
+      const obj = emptyObject(ev.target, parsed.ptr)
       obj.createNs = ev.time
-      // FreeRTOS emits an initial give after mutex/binary-sem create (object available).
-      obj.skipNextGive = true
-    } else if (action === 'take') {
-      const rec = { timeNs: ev.time, taskMk, taskLabel, core: ev.core || '' }
-      obj.openTakes.push(rec)
-    } else if (action === 'give') {
-      if (obj.skipNextGive) {
-        obj.skipNextGive = false
-        continue
-      }
-      if (obj.kind === 'mutex' || obj.kind === 'sem') {
-        if (!obj.openTakes.length) {
-          pushIssue(obj, {
-            kind: 'orphan_give',
-            severity: 'error',
-            timeNs: ev.time,
-            core: ev.core || '',
-            taskMk,
-            taskLabel,
-            detail: 'give without matching take',
-          })
+      objects.set(key, obj)
+    } else {
+      if (!objects.has(key)) objects.set(key, emptyObject(ev.target, parsed.ptr))
+      const obj = objects.get(key)
+      if (action === 'take') {
+        const rec = { timeNs: ev.time, taskMk, taskLabel, core: ev.core || '' }
+        if (obj.kind === 'sem' && obj.openGives.length) {
+          const give = obj.openGives.shift()
+          recordHold(obj, rec, give, false)
         } else {
-          const take = obj.kind === 'mutex' ? obj.openTakes.pop() : obj.openTakes.shift()
-          if (obj.kind === 'mutex' && take.taskMk && taskMk && take.taskMk !== taskMk) {
+          obj.openTakes.push(rec)
+        }
+      } else if (action === 'give') {
+        if (isPostCreateKernelGive(obj, ev.time)) {
+          continue
+        }
+        const giveRec = { timeNs: ev.time, taskMk, taskLabel, core: ev.core || '' }
+        if (obj.kind === 'mutex') {
+          if (!obj.openTakes.length) {
             pushIssue(obj, {
-              kind: 'cross_task_give',
-              severity: 'warning',
+              kind: 'orphan_give',
+              severity: 'error',
               timeNs: ev.time,
               core: ev.core || '',
               taskMk,
               taskLabel,
-              detail: `give by ${taskLabel}, held by ${take.taskLabel}`,
+              detail: 'give without matching take',
             })
+          } else {
+            const take = obj.openTakes.pop()
+            if (take.taskMk && taskMk && take.taskMk !== taskMk) {
+              pushIssue(obj, {
+                kind: 'cross_task_give',
+                severity: 'warning',
+                timeNs: ev.time,
+                core: ev.core || '',
+                taskMk,
+                taskLabel,
+                detail: `give by ${taskLabel}, held by ${take.taskLabel}`,
+              })
+            }
+            recordHold(obj, take, giveRec, true)
           }
-          obj.holds.push({
-            startNs: take.timeNs,
-            stopNs: ev.time,
-            durationNs: ev.time - take.timeNs,
-            holderMk: take.taskMk,
-            holderLabel: take.taskLabel,
-            takeCore: take.core,
-            giveCore: ev.core || '',
-            giveTaskMk: taskMk,
-            giveTaskLabel: taskLabel,
+        } else if (obj.openTakes.length) {
+          const take = obj.openTakes.shift()
+          recordHold(obj, take, giveRec, true)
+        } else {
+          obj.openGives.push(giveRec)
+        }
+      } else if (action === 'delete') {
+        obj.deleteNs = ev.time
+        if (obj.openTakes.length) {
+          pushIssue(obj, {
+            kind: 'delete_while_held',
+            severity: 'warning',
+            timeNs: ev.time,
+            core: ev.core || '',
+            taskMk,
+            taskLabel,
+            detail: `delete while ${obj.openTakes.length} take(s) unmatched`,
           })
         }
-      }
-    } else if (action === 'delete') {
-      obj.deleteNs = ev.time
-      obj.skipNextGive = false
-      if (obj.openTakes.length) {
-        pushIssue(obj, {
-          kind: 'delete_while_held',
-          severity: 'warning',
-          timeNs: ev.time,
-          core: ev.core || '',
-          taskMk,
-          taskLabel,
-          detail: `delete while ${obj.openTakes.length} take(s) unmatched`,
-        })
+        obj.openTakes = []
+        obj.openGives = []
       }
     }
   }
@@ -181,7 +208,19 @@ export function buildSyncObjectData(stiEvents, coreSegs, taskRepr, timeMax) {
         detail: 'take without matching give before trace end',
       })
     }
+    for (const give of obj.openGives) {
+      pushIssue(obj, {
+        kind: 'unmatched_give',
+        severity: 'warning',
+        timeNs: give.timeNs,
+        core: give.core,
+        taskMk: give.taskMk,
+        taskLabel: give.taskLabel,
+        detail: 'give without matching take before trace end',
+      })
+    }
     obj.openTakes = []
+    obj.openGives = []
   }
 
   const endMutexHolds = []

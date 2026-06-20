@@ -33,6 +33,12 @@ import {
   visibleIntervalMarkerEvents,
   intervalStripeColors,
 } from '../utils/intervalAnalysis.js'
+import {
+  taskPriorityLabelSuffix,
+  visiblePriorityEpisodes,
+  BOOST_BAND_COLOR,
+  INVERSION_BAND_COLOR,
+} from '../utils/priorityAnalysis.js'
 
 export { formatTime, formatMigrationGapTime }
 export { getTimelineLayout } from '../utils/timelineLayout.js'
@@ -240,7 +246,7 @@ export function buildRowLayout(trace, viewMode, expanded, yStart, showSti = true
     for (const mk of trace.tasks) {
       if (!taskPassesRowFilter(trace, mk, migratedOnlyFilter, taskFilterKeys)) continue
       const repr = trace.taskRepr.get(mk)
-      const label = taskDisplayName(repr || mk)
+      const label = taskDisplayName(repr || mk) + taskPriorityLabelSuffix(trace, mk)
       const color = taskColor(mk, repr)
       rows.push({ type: 'task', key: mk, label, color, y })
       y += L().rowH + L().rowGap
@@ -255,7 +261,7 @@ export function buildRowLayout(trace, viewMode, expanded, yStart, showSti = true
       if (expanded.has(coreName)) {
         for (const rawTask of tasks) {
           const mk = taskMergeKey(rawTask)
-          const label = taskDisplayName(rawTask)
+          const label = taskDisplayName(rawTask) + taskPriorityLabelSuffix(trace, mk)
           const color = taskColor(mk, rawTask)
           rows.push({ type: 'core-task', key: `${coreName}__${rawTask}`, coreKey: coreName, taskKey: rawTask, label, color, y })
           y += L().rowH + L().rowGap
@@ -289,6 +295,73 @@ export function buildRowLayout(trace, viewMode, expanded, yStart, showSti = true
   }
 
   return { rows, totalHeight: y - yStart }
+}
+
+function paintPriorityBoostBands(ctx, trace, mk, rowY, rowH, timeStart, timeEnd, pxPerNs, canvasW, darkMode) {
+  const episodes = trace.priorityEpisodesByMk?.get(mk)
+  if (!episodes?.length) return
+  const visible = visiblePriorityEpisodes(episodes, timeStart, timeEnd)
+  if (!visible.length) return
+
+  const bandH = Math.max(3, Math.floor(rowH * 0.3))
+  const bandY = rowY + rowH - bandH
+
+  ctx.save()
+  for (const ep of visible) {
+    const x1 = (ep.startNs - timeStart) * pxPerNs
+    const x2 = (ep.stopNs - timeStart) * pxPerNs
+    if (x2 < -2 || x1 > canvasW + 2) continue
+    const cx = Math.max(0, Math.floor(x1))
+    const cx2 = Math.min(Math.ceil(x2), canvasW)
+    const drawW = cx2 - cx
+    if (drawW < 0.5) continue
+    const color = ep.inversionSuspect ? INVERSION_BAND_COLOR : BOOST_BAND_COLOR
+    ctx.fillStyle = ep.inversionSuspect
+      ? (darkMode ? 'rgba(231,76,60,0.72)' : 'rgba(231,76,60,0.52)')
+      : (darkMode ? 'rgba(243,156,18,0.72)' : 'rgba(243,156,18,0.52)')
+    ctx.fillRect(cx, bandY, drawW, bandH)
+    if (drawW >= 4) {
+      ctx.strokeStyle = color
+      ctx.lineWidth = 1
+      ctx.strokeRect(cx + 0.5, bandY + 0.5, drawW - 1, bandH - 1)
+    }
+  }
+  ctx.restore()
+}
+
+/** Right-edge boost stripes for vertical task/core-task columns. */
+function paintPriorityBoostBandsVertical(ctx, trace, mk, colX, colW, headerH, canvasH,
+  timeStart, timeEnd, pxPerNs, darkMode) {
+  const episodes = trace.priorityEpisodesByMk?.get(mk)
+  if (!episodes?.length) return
+  const visible = visiblePriorityEpisodes(episodes, timeStart, timeEnd)
+  if (!visible.length) return
+
+  const bodyH = canvasH - headerH
+  const bandW = Math.max(3, Math.floor(colW * 0.3))
+  const bandX = colX + colW - bandW
+
+  ctx.save()
+  for (const ep of visible) {
+    const y1 = (ep.startNs - timeStart) * pxPerNs
+    const y2 = (ep.stopNs - timeStart) * pxPerNs
+    if (y2 < -2 || y1 > bodyH + 2) continue
+    const cy = Math.max(0, Math.floor(y1))
+    const cy2 = Math.min(Math.ceil(y2), bodyH)
+    const drawH = cy2 - cy
+    if (drawH < 0.5) continue
+    const color = ep.inversionSuspect ? INVERSION_BAND_COLOR : BOOST_BAND_COLOR
+    ctx.fillStyle = ep.inversionSuspect
+      ? (darkMode ? 'rgba(231,76,60,0.72)' : 'rgba(231,76,60,0.52)')
+      : (darkMode ? 'rgba(243,156,18,0.72)' : 'rgba(243,156,18,0.52)')
+    ctx.fillRect(bandX, headerH + cy, bandW, drawH)
+    if (drawH >= 4) {
+      ctx.strokeStyle = color
+      ctx.lineWidth = 1
+      ctx.strokeRect(bandX + 0.5, headerH + cy + 0.5, bandW - 1, drawH - 1)
+    }
+  }
+  ctx.restore()
 }
 
 /** Row band height in px (excludes inter-row gap — gap is encoded in row.y spacing). */
@@ -905,6 +978,8 @@ function drawTaskRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, n
     indices)
 
   if (dim) ctx.restore()
+
+  if (!fast) paintPriorityBoostBands(ctx, trace, mk, rowY, rowH, timeStart, timeEnd, pxPerNs, canvasW, darkMode)
 }
 
 function drawCoreRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, nsPerPx, canvasW, darkMode, budget, skipSummarySegs = false) {
@@ -1003,7 +1078,15 @@ function drawCoreTaskRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerN
   paintSegments(ctx, segs, timeStart, timeEnd, pxPerNs, nsPerPx,
     canvasRowY + 1, L().rowH - 2, row.color, trace, false, highlightKey, mk, darkMode, row.label, hlSeg, budget,
     indices)
-  if (dim)   ctx.restore()
+
+  if (dim) ctx.restore()
+
+  if (!fast) {
+    paintPriorityBoostBands(
+      ctx, trace, mk, canvasRowY + 1, L().rowH - 2,
+      timeStart, timeEnd, pxPerNs, canvasW, darkMode,
+    )
+  }
 }
 
 /** Draw paired interval spans as horizontal bars (Tracealyzer-style interval lane). */
@@ -1729,7 +1812,7 @@ export function buildColumnLayout(trace, viewMode, expanded, scrollX = 0, showSt
     for (const mk of trace.tasks) {
       if (!taskPassesRowFilter(trace, mk, migratedOnlyFilter, taskFilterKeys)) continue
       const repr = trace.taskRepr.get(mk)
-      const label = taskDisplayName(repr || mk)
+      const label = taskDisplayName(repr || mk) + taskPriorityLabelSuffix(trace, mk)
       const color = taskColor(mk, repr)
       const x = RULER_W + xAcc - scrollX
       cols.push({ type: 'task', key: mk, label, color, x, colIdx: rawIdx, colWidth: COL_W })
@@ -1748,7 +1831,7 @@ export function buildColumnLayout(trace, viewMode, expanded, scrollX = 0, showSt
       if (expanded.has(coreName)) {
         for (const rawTask of tasks) {
           const mk = taskMergeKey(rawTask)
-          const lbl = taskDisplayName(rawTask)
+          const lbl = taskDisplayName(rawTask) + taskPriorityLabelSuffix(trace, mk)
           const col = taskColor(mk, rawTask)
           const cx = RULER_W + xAcc - scrollX
           cols.push({
@@ -2061,6 +2144,13 @@ function drawTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, h
   paintSegmentsVertical(ctx, segs, timeStart, timeEnd, pxPerNs, nsPerPx,
     col.x, COL_W, HEADER_H, col.color, trace, true, highlightKey, mk, darkMode, col.label, hlSeg, canvasH, budget,
     indices)
+
+  if (!fast) {
+    paintPriorityBoostBandsVertical(
+      ctx, trace, mk, col.x, col.colWidth ?? COL_W, HEADER_H, canvasH,
+      timeStart, timeEnd, pxPerNs, darkMode,
+    )
+  }
 }
 
 function drawCoreColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, canvasH, darkMode, budget, skipSummarySegs = false) {
@@ -2151,6 +2241,13 @@ function drawCoreTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerP
     col.x, COL_W, HEADER_H, col.color, trace, false, highlightKey, mk, darkMode, col.label, hlSeg, canvasH, budget,
     indices)
   if (dim) ctx.restore()
+
+  if (!fast) {
+    paintPriorityBoostBandsVertical(
+      ctx, trace, mk, col.x, col.colWidth ?? COL_W, HEADER_H, canvasH,
+      timeStart, timeEnd, pxPerNs, darkMode,
+    )
+  }
 }
 
 function drawStiColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, canvasH, darkMode) {

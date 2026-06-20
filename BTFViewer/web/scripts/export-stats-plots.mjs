@@ -13,6 +13,11 @@ import {
   preemptionChainRows,
 } from '../src/utils/statsAnalysis.js'
 import { intervalColor, intervalPlotPoints } from '../src/utils/intervalAnalysis.js'
+import {
+  BOOST_BAND_COLOR,
+  INVERSION_BAND_COLOR,
+  priorityEpisodePlotPoints,
+} from '../src/utils/priorityAnalysis.js'
 import { taskColor, taskDisplayName, taskReprGet } from '../src/utils/colors.js'
 import { formatTime } from '../src/utils/timeFormat.js'
 
@@ -105,6 +110,26 @@ function buildIntervalPlot(trace, intervalId) {
   return {
     title: `Interval ${intervalId} — Duration`,
     color: intervalColor(intervalId),
+    points,
+  }
+}
+
+function buildPriorityPlot(trace, mk) {
+  const repr = taskReprGet(trace, mk) || mk
+  const basePri = trace.taskBasePriority?.get?.(mk)
+  const rawPoints = priorityEpisodePlotPoints(trace, mk, null, null)
+  const peakPri = rawPoints.length
+    ? Math.max(...rawPoints.map(pt => pt.payload?.peakPri ?? basePri))
+    : basePri
+  const points = rawPoints.map((pt, index) => ({
+    index,
+    xNs: pt.xNs,
+    yValue: pt.yValue,
+    fillColor: pt.payload?.inversionSuspect ? INVERSION_BAND_COLOR : BOOST_BAND_COLOR,
+  }))
+  return {
+    title: `${taskDisplayName(repr)} — Priority Boost (base ${basePri}→peak ${peakPri})`,
+    color: BOOST_BAND_COLOR,
     points,
   }
 }
@@ -228,7 +253,8 @@ function renderScatterSvg(model, yLabel) {
     lines.push(`<text x="${model.width - model.margin.right + 6}" y="${ref.y + 4}" fill="${ref.color}" font-size="9" font-family="monospace">${esc(ref.label)}</text>`)
   }
   for (const point of model.points) {
-    lines.push(`<circle cx="${point.x}" cy="${point.y}" r="3" fill="${model.color}" opacity="0.75"/>`)
+    const fill = point.fillColor || model.color
+    lines.push(`<circle cx="${point.x}" cy="${point.y}" r="3" fill="${fill}" opacity="0.75"/>`)
   }
   lines.push('</svg>')
   return lines.join('\n')
@@ -270,7 +296,7 @@ function renderPlotSvg(plot, timeScale, yLabel) {
   <text x="16" y="22" fill="#e0e0e0" font-size="14" font-weight="600" font-family="sans-serif">${esc(plot.title)}</text>
   <text x="16" y="38" fill="#888" font-size="10" font-family="sans-serif">Scatter: ${esc(yLabel.scatter)} · Histogram: ${esc(yLabel.histogram)} · ${plot.points.length} points</text>
   <g transform="translate(0,44)">
-    ${renderScatterSvg(scatter).replace(/^<svg[^>]*>/, '').replace(/<\/svg>$/, '')}
+    ${renderScatterSvg(scatter, 'Duration').replace(/^<svg[^>]*>/, '').replace(/<\/svg>$/, '')}
   </g>
   <g transform="translate(0,${44 + scatter.height + 8})">
     ${renderHistogramSvg(hist).replace(/^<svg[^>]*>/, '').replace(/<\/svg>$/, '')}
@@ -300,6 +326,10 @@ const Y_LABELS = {
     scatter: 'x = interval stop time, y = interval duration',
     histogram: 'distribution of interval durations',
   },
+  priority: {
+    scatter: 'x = boost episode end time, y = boosted duration (red = L/M/H or mutex inherit)',
+    histogram: 'distribution of boost durations',
+  },
 }
 
 function findMkByDisplay(trace, display) {
@@ -314,6 +344,7 @@ const trace = finalizeAndEnrich(await parseBtf(text))
 mkdirSync(outDir, { recursive: true })
 
 const cs8Mk = findMkByDisplay(trace, 'CS[8]')
+const il150Mk = findMkByDisplay(trace, 'IL[150]')
 const { rows: _preemptExportRows } = preemptionChainRows(trace)
 const preemptRow = _preemptExportRows[1] // CS[10] ← CS[11], high count
 
@@ -330,6 +361,11 @@ const exports = [
     id: 'interval-1',
     plot: buildIntervalPlot(trace, '1'),
     kind: 'interval',
+  },
+  {
+    id: 'priority-il150',
+    plot: il150Mk ? buildPriorityPlot(trace, il150Mk) : null,
+    kind: 'priority',
   },
 ]
 

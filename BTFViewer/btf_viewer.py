@@ -587,6 +587,40 @@ class IntervalInstance:
     stop_core: str = ""
     task_id: Optional[str] = None
 
+@dataclass
+class PriorityEpisode:
+    """Task priority boosted above create pri:N base."""
+    mk: str
+    task_label: str
+    base_pri: int
+    peak_pri: int
+    start_ns: int
+    stop_ns: int
+    inherited: bool = False
+    inversion_suspect: bool = False
+    medium_tasks: List[str] = field(default_factory=list)
+    pattern: str = ""
+
+@dataclass
+class SyncIssueRef:
+    """Mutex/sem pairing issue for statistics drill-down."""
+    time_ns: int
+    core: str = ""
+    kind: str = ""
+    detail: str = ""
+    obj_key: Optional[str] = None
+    ptr: str = ""
+
+_CREATE_PRI_RE = re.compile(r"^create\s+pri:(\d+)\s*$", re.IGNORECASE)
+_PRIORITY_STI_RE = re.compile(
+    r"^(set_priority|priority_inherit|priority_disinherit)\s+(.+?)\s+pri:(\d+)\s*$",
+    re.IGNORECASE,
+)
+_SET_PRIORITY_REF_RE = re.compile(r"^(.+?)\[(\d+)\]$")
+_SYNC_OBJECT_NOTE_RE = re.compile(
+    r"^(create|take|give|delete)\s+(0x[0-9a-f]+)$", re.IGNORECASE)
+_SYNC_OBJECT_TARGETS = frozenset({"mutex", "sem"})
+_POST_CREATE_GIVE_MAX_NS = 1000
 _INTERVAL_START_CHANNELS = frozenset({"interval_start", "start_intval"})
 _INTERVAL_STOP_CHANNELS  = frozenset({"interval_stop", "stop_intval"})
 _INTERVAL_COLORS = (
@@ -887,10 +921,558 @@ def _interval_plot_points(
         pts.append((inst.stop_ns, dur, inst))
     return pts
 
+def _parse_create_priority(note: str) -> Optional[int]:
+    m = _CREATE_PRI_RE.match((note or "").strip())
+    return int(m.group(1)) if m else None
+
+def _parse_priority_sti_note(note: str) -> Optional[Tuple[str, str, int]]:
+    m = _PRIORITY_STI_RE.match((note or "").strip())
+    if not m:
+        return None
+    return m.group(1).lower(), m.group(2).strip(), int(m.group(3))
+
+def _merge_key_from_priority_ref(task_ref: str) -> str:
+    ref = (task_ref or "").strip()
+    m = _SET_PRIORITY_REF_RE.match(ref)
+    if m:
+        return f"\x00{int(m.group(2))}\x00{m.group(1).strip()}"
+    return _task_merge_key(ref)
+
+def _priority_medium_blockers(
+    base_pri: int,
+    peak_pri: int,
+    task_base_priority: Dict[str, int],
+    holder_mk: str,
+    task_repr: Dict[str, str],
+) -> List[str]:
+    if peak_pri <= base_pri:
+        return []
+    out: List[str] = []
+    for mk, pri in task_base_priority.items():
+        if mk == holder_mk:
+            continue
+        if base_pri < pri < peak_pri:
+            raw = task_repr.get(mk, mk)
+            out.append(_task_display_name(raw))
+    return sorted(out)
+
+def _build_priority_data(
+    sti_events: List["StiEvent"],
+    create_pri_by_raw: Dict[str, int],
+    time_max: int,
+    raw_to_mk: Dict[str, str],
+    task_repr: Dict[str, str],
+) -> Tuple[Dict[str, int], List[PriorityEpisode], Dict[str, List[PriorityEpisode]], bool]:
+    task_base_priority: Dict[str, int] = {}
+    for raw, pri in create_pri_by_raw.items():
+        mk = raw_to_mk.get(raw) or _task_merge_key(raw)
+        if mk not in task_base_priority:
+            task_base_priority[mk] = pri
+
+    changes_by_mk: Dict[str, List[Tuple[int, int, str]]] = defaultdict(list)
+    for ev in sti_events:
+        if ev.target != "task":
+            continue
+        sp = _parse_priority_sti_note(ev.note)
+        if not sp:
+            continue
+        kind, ref, new_pri = sp
+        mk = _merge_key_from_priority_ref(ref)
+        changes_by_mk[mk].append((ev.time, new_pri, kind))
+
+    has_data = bool(task_base_priority) and any(changes_by_mk.values())
+    if not has_data:
+        return task_base_priority, [], {}, False
+
+    episodes: List[PriorityEpisode] = []
+    episodes_by_mk: Dict[str, List[PriorityEpisode]] = {}
+
+    for mk, base_pri in task_base_priority.items():
+        changes = sorted(changes_by_mk.get(mk, []))
+        if not changes:
+            continue
+        effective = base_pri
+        open_ep: Optional[Tuple[int, int, bool]] = None
+
+        def _pattern_label(peak: int, inherited: bool, medium: List[str]) -> str:
+            if inherited:
+                if medium:
+                    names = ", ".join(medium[:2])
+                    extra = f" +{len(medium) - 2}" if len(medium) > 2 else ""
+                    return f"Mutex inherit L/M/H ({names}{extra})"
+                return "Mutex inherit"
+            if medium:
+                names = ", ".join(medium[:2])
+                extra = f" +{len(medium) - 2}" if len(medium) > 2 else ""
+                return f"L/M/H ({names}{extra})"
+            if peak > base_pri:
+                return "Boost"
+            return "—"
+
+        def _close(stop_ns: int) -> None:
+            nonlocal open_ep
+            if not open_ep or stop_ns <= open_ep[0]:
+                open_ep = None
+                return
+            peak, inherited = open_ep[1], open_ep[2]
+            medium = _priority_medium_blockers(
+                base_pri, peak, task_base_priority, mk, task_repr)
+            raw = task_repr.get(mk, mk)
+            ep = PriorityEpisode(
+                mk=mk,
+                task_label=_task_display_name(raw),
+                base_pri=base_pri,
+                peak_pri=peak,
+                start_ns=open_ep[0],
+                stop_ns=stop_ns,
+                inherited=inherited,
+                inversion_suspect=inherited or bool(medium),
+                medium_tasks=medium,
+                pattern=_pattern_label(peak, inherited, medium),
+            )
+            episodes.append(ep)
+            episodes_by_mk.setdefault(mk, []).append(ep)
+            open_ep = None
+
+        for t_ns, new_pri, kind in changes:
+            prev = effective
+            effective = new_pri
+            is_inherit = kind == "priority_inherit"
+            is_disinherit = kind == "priority_disinherit"
+            if effective > base_pri and prev <= base_pri:
+                open_ep = (t_ns, effective, is_inherit)
+            elif open_ep is not None:
+                start, peak, inherited = open_ep
+                if effective > peak:
+                    peak = effective
+                if is_inherit:
+                    inherited = True
+                open_ep = (start, peak, inherited)
+                if effective <= base_pri or is_disinherit:
+                    _close(t_ns)
+        if open_ep is not None:
+            _close(time_max)
+
+    episodes.sort(key=lambda e: (e.start_ns, e.stop_ns))
+    return task_base_priority, episodes, episodes_by_mk, True
+
+def _priority_overlaps_range(ep: PriorityEpisode, lo: Optional[int], hi: Optional[int]) -> bool:
+    if lo is None or hi is None:
+        return True
+    return ep.stop_ns > lo and ep.start_ns < hi
+
+def _priority_boost_bands_for_viewport(
+    episodes: List[PriorityEpisode],
+    horiz: bool,
+    time_min: int,
+    px_per_ns: float,
+    offset: float,
+    vp_ns_lo: int,
+    vp_ns_hi: int,
+) -> list:
+    """Build [(primary_px, span_px, inversion_suspect), ...] for visible episodes."""
+    bands: list = []
+    for ep in episodes:
+        if ep.stop_ns <= vp_ns_lo or ep.start_ns >= vp_ns_hi:
+            continue
+        t1 = max(ep.start_ns, vp_ns_lo)
+        t2 = min(ep.stop_ns, vp_ns_hi)
+        c1 = offset + (t1 - time_min) * px_per_ns
+        span = (t2 - t1) * px_per_ns
+        if span < 0.5:
+            continue
+        bands.append((c1, span, ep.inversion_suspect))
+    return bands
+
+def _priority_stats_rows(
+    trace: "BtfTrace",
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> List[tuple]:
+    if not trace.has_priority_instrumentation:
+        return []
+    scale = trace.time_scale
+    by_mk: Dict[str, list] = defaultdict(list)
+    for ep in trace.priority_episodes:
+        if _priority_overlaps_range(ep, lo, hi):
+            by_mk[ep.mk].append(ep)
+    rows = []
+    for mk, eps in by_mk.items():
+        base_pri = trace.task_base_priority.get(mk, eps[0].base_pri)
+        peak_pri = max(ep.peak_pri for ep in eps)
+        total_ns = 0
+        inv_count = 0
+        inherit_count = 0
+        for ep in eps:
+            clip_lo = lo if lo is not None else ep.start_ns
+            clip_hi = hi if hi is not None else ep.stop_ns
+            clip_lo = max(clip_lo, ep.start_ns)
+            clip_hi = min(clip_hi, ep.stop_ns)
+            if clip_hi > clip_lo:
+                total_ns += clip_hi - clip_lo
+            if ep.inversion_suspect:
+                inv_count += 1
+            if ep.inherited:
+                inherit_count += 1
+        if inherit_count:
+            pattern = "Mutex inherit + L/M/H" if inv_count > inherit_count else "Mutex inherit"
+        elif inv_count:
+            pattern = "L/M/H pattern"
+        else:
+            pattern = "Boost only"
+        label = eps[0].task_label
+        rows.append((
+            mk,
+            label,
+            base_pri,
+            peak_pri,
+            len(eps),
+            _format_time(total_ns, scale),
+            pattern,
+            total_ns,
+        ))
+    rows.sort(key=lambda r: (-r[7], r[1]))
+    return rows
+
+def _priority_plot_points(
+    trace: "BtfTrace",
+    mk: str,
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> List[Tuple[int, int, PriorityEpisode]]:
+    pts: List[Tuple[int, int, PriorityEpisode]] = []
+    for ep in trace.priority_episodes_by_mk.get(mk, []):
+        if not _priority_overlaps_range(ep, lo, hi):
+            continue
+        dur = ep.stop_ns - ep.start_ns
+        pts.append((ep.stop_ns, dur, ep))
+    return pts
+
+def _parse_sync_object_note(note: str) -> Optional[Tuple[str, str]]:
+    m = _SYNC_OBJECT_NOTE_RE.match((note or "").strip())
+    if not m:
+        return None
+    return m.group(1).lower(), m.group(2).lower()
+
+def _sync_object_key(kind: str, ptr: str) -> str:
+    return f"{kind}:{ptr}"
+
+def _running_task_mk(core_segs: Dict[str, list], core: str, time_ns: int) -> Optional[str]:
+    seg = _segment_at_core_time(core_segs, core, time_ns)
+    return _task_merge_key(seg.task) if seg is not None else None
+
+def _segment_at_core_time(core_segs: Dict[str, list], core: str, time_ns: int
+                          ) -> Optional["TaskSegment"]:
+    segs = core_segs.get(core) or []
+    if not segs or time_ns is None:
+        return None
+    lo = max(0, bisect_left([s.start for s in segs], time_ns) - 1)
+    for i in range(lo, len(segs)):
+        s = segs[i]
+        if s.start > time_ns:
+            break
+        if s.end >= time_ns:
+            return s
+    return None
+
+def _format_sync_issue_note(iss: dict) -> str:
+    obj_key = iss.get("obj_key")
+    if obj_key:
+        kind = iss.get("kind_label") or iss.get("kind") or "sync"
+        ptr = iss.get("ptr") or ""
+        detail = iss.get("detail") or iss.get("kind") or ""
+        return f"{kind} {ptr}: {detail}".strip()
+    return iss.get("detail") or iss.get("kind") or "sync issue"
+
+def _build_sync_object_data(
+    sti_events: List["StiEvent"],
+    core_segs: Dict[str, list],
+    task_repr: Dict[str, str],
+    time_max: int,
+) -> Tuple[Dict[str, dict], List[dict], bool]:
+    objects: Dict[str, dict] = {}
+    global_issues: List[dict] = []
+
+    events = []
+    for ev in sti_events:
+        if ev.target not in _SYNC_OBJECT_TARGETS:
+            continue
+        parsed = _parse_sync_object_note(ev.note)
+        if parsed:
+            events.append((ev, parsed))
+    events.sort(key=lambda x: (x[0].time, x[1][0]))
+    if not events:
+        return {}, [], False
+
+    def _empty_obj(kind: str, ptr: str) -> dict:
+        return {
+            "key": _sync_object_key(kind, ptr),
+            "kind": kind,
+            "ptr": ptr,
+            "create_ns": None,
+            "delete_ns": None,
+            "holds": [],
+            "issues": [],
+            "open_takes": [],
+            "open_gives": [],
+        }
+
+    def _is_post_create_kernel_give(obj: dict, time_ns: int) -> bool:
+        create_ns = obj.get("create_ns")
+        return create_ns is not None and time_ns - create_ns <= _POST_CREATE_GIVE_MAX_NS
+
+    def _record_hold(obj: dict, take: dict, give: dict, take_first: bool) -> None:
+        start = take if take_first else give
+        stop = give if take_first else take
+        obj["holds"].append({
+            "start_ns": start["time_ns"], "stop_ns": stop["time_ns"],
+            "duration_ns": stop["time_ns"] - start["time_ns"],
+            "holder_mk": take.get("task_mk"), "holder_label": take["task_label"],
+            "take_core": take.get("core", ""), "give_core": give.get("core", ""),
+            "signal": not take_first,
+        })
+
+    for ev, (action, ptr) in events:
+        key = _sync_object_key(ev.target, ptr)
+        task_mk = _running_task_mk(core_segs, ev.core, ev.time)
+        raw = task_repr.get(task_mk, task_mk) if task_mk else "?"
+        task_label = _task_display_name(raw) if task_mk else "?"
+
+        if action == "create":
+            obj = _empty_obj(ev.target, ptr)
+            obj["create_ns"] = ev.time
+            objects[key] = obj
+        else:
+            if key not in objects:
+                objects[key] = _empty_obj(ev.target, ptr)
+            obj = objects[key]
+            if action == "take":
+                rec = {"time_ns": ev.time, "task_mk": task_mk, "task_label": task_label,
+                       "core": ev.core or ""}
+                if obj["kind"] == "sem" and obj["open_gives"]:
+                    give = obj["open_gives"].pop(0)
+                    _record_hold(obj, rec, give, False)
+                else:
+                    obj["open_takes"].append(rec)
+            elif action == "give":
+                if _is_post_create_kernel_give(obj, ev.time):
+                    continue
+                give_rec = {"time_ns": ev.time, "task_mk": task_mk, "task_label": task_label,
+                            "core": ev.core or ""}
+                if obj["kind"] == "mutex":
+                    if not obj["open_takes"]:
+                        obj["issues"].append({
+                            "kind": "orphan_give", "severity": "error", "time_ns": ev.time,
+                            "core": ev.core or "", "task_mk": task_mk, "task_label": task_label,
+                            "detail": "give without matching take",
+                        })
+                    else:
+                        take = obj["open_takes"].pop()
+                        if (take.get("task_mk") and task_mk
+                                and take["task_mk"] != task_mk):
+                            obj["issues"].append({
+                                "kind": "cross_task_give", "severity": "warning",
+                                "time_ns": ev.time, "core": ev.core or "",
+                                "task_mk": task_mk, "task_label": task_label,
+                                "detail": f"give by {task_label}, held by {take['task_label']}",
+                            })
+                        _record_hold(obj, take, give_rec, True)
+                elif obj["open_takes"]:
+                    take = obj["open_takes"].pop(0)
+                    _record_hold(obj, take, give_rec, True)
+                else:
+                    obj["open_gives"].append(give_rec)
+            elif action == "delete":
+                obj["delete_ns"] = ev.time
+                if obj["open_takes"]:
+                    obj["issues"].append({
+                        "kind": "delete_while_held", "severity": "warning", "time_ns": ev.time,
+                        "core": ev.core or "", "task_mk": task_mk, "task_label": task_label,
+                        "detail": f"delete while {len(obj['open_takes'])} take(s) unmatched",
+                    })
+                obj["open_takes"] = []
+                obj["open_gives"] = []
+
+    end_mutex_holds: List[Tuple[dict, Optional[str], str]] = []
+    for obj in objects.values():
+        for take in obj["open_takes"]:
+            obj["issues"].append({
+                "kind": "unmatched_take", "severity": "warning", "time_ns": take["time_ns"],
+                "core": take.get("core", ""), "task_mk": take.get("task_mk"),
+                "task_label": take.get("task_label", ""),
+                "detail": "take without matching give before trace end",
+            })
+            if obj["kind"] == "mutex":
+                end_mutex_holds.append((obj, take.get("task_mk"), take.get("task_label", "")))
+        for give in obj["open_gives"]:
+            obj["issues"].append({
+                "kind": "unmatched_give", "severity": "warning", "time_ns": give["time_ns"],
+                "core": give.get("core", ""), "task_mk": give.get("task_mk"),
+                "task_label": give.get("task_label", ""),
+                "detail": "give without matching take before trace end",
+            })
+        obj["open_takes"] = []
+        obj["open_gives"] = []
+
+    holders = {h[1] for h in end_mutex_holds if h[1]}
+    if len(end_mutex_holds) >= 2 and len(holders) >= 2:
+        global_issues.append({
+            "kind": "deadlock_risk", "severity": "warning", "time_ns": time_max,
+            "obj_key": None, "ptr": "", "kind_label": "mutex",
+            "detail": (f"{len(end_mutex_holds)} mutex(es) still held by "
+                       f"{len(holders)} tasks at trace end"),
+            "objects": [h[0]["key"] for h in end_mutex_holds],
+        })
+
+    sync_issues: List[dict] = []
+    for obj in objects.values():
+        for iss in obj["issues"]:
+            sync_issues.append({**iss, "obj_key": obj["key"], "ptr": obj["ptr"],
+                                "kind_label": obj["kind"]})
+    sync_issues.extend(global_issues)
+    sync_issues.sort(key=lambda i: (i["time_ns"], i.get("obj_key") or ""))
+    return objects, sync_issues, True
+
+def _sync_in_scope(time_ns: int, lo: Optional[int], hi: Optional[int]) -> bool:
+    if lo is None or hi is None:
+        return True
+    return lo <= time_ns <= hi
+
+def _sync_object_status(obj: dict, lo: Optional[int], hi: Optional[int]) -> str:
+    issues = [i for i in obj.get("issues", []) if _sync_in_scope(i["time_ns"], lo, hi)]
+    if not issues:
+        return "ok"
+    if any(i.get("severity") == "error" for i in issues):
+        return "error"
+    return "warning"
+
+def _sync_object_stats_rows(
+    trace: "BtfTrace",
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> List[tuple]:
+    if not trace.has_sync_object_instrumentation:
+        return []
+    scale = trace.time_scale
+    rows = []
+    for obj in trace.sync_objects.values():
+        holds = [h for h in obj.get("holds", [])
+                 if lo is None or hi is None or (h["stop_ns"] > lo and h["start_ns"] < hi)]
+        issues = [i for i in obj.get("issues", []) if _sync_in_scope(i["time_ns"], lo, hi)]
+        if lo is not None and hi is not None and not holds and not issues:
+            if obj.get("create_ns") is None or not _sync_in_scope(obj["create_ns"], lo, hi):
+                continue
+        status = _sync_object_status(obj, lo, hi)
+        status_label = {"ok": "OK", "error": "Error", "warning": "Warning"}[status]
+        avg_ns = (sum(h["duration_ns"] for h in holds) // len(holds)) if holds else 0
+        rows.append((
+            obj["key"],
+            obj["kind"],
+            obj["ptr"],
+            f"{obj['kind']} {obj['ptr']}",
+            len(holds),
+            len(issues),
+            _format_time(avg_ns, scale) if holds else "—",
+            status_label,
+            status,
+            avg_ns,
+        ))
+    rows.sort(key=lambda r: (
+        0 if r[8] == "error" else 1 if r[8] == "warning" else 2,
+        -r[5], r[3]))
+    return rows
+
+def _sync_object_hold_detail_rows(
+    trace: "BtfTrace",
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+    limit: int = 150,
+) -> List[dict]:
+    if not trace.has_sync_object_instrumentation:
+        return []
+    scale = trace.time_scale
+    rows: List[dict] = []
+    for obj in trace.sync_objects.values():
+        for h in obj.get("holds", []):
+            if lo is not None and hi is not None:
+                if not (h["stop_ns"] > lo and h["start_ns"] < hi):
+                    continue
+            rows.append({
+                "object": f"{obj['kind']} {obj['ptr']}",
+                "holder": h.get("holder_label") or "—",
+                "start": _format_time(h["start_ns"], scale),
+                "stop": _format_time(h["stop_ns"], scale),
+                "duration": _format_time(h["duration_ns"], scale),
+                "duration_ns": h["duration_ns"],
+                "take_core": h.get("take_core") or "",
+                "give_core": h.get("give_core") or "",
+            })
+    rows.sort(key=lambda r: (-r["duration_ns"], r.get("start", "")))
+    return rows[:limit] if limit > 0 else rows
+
+def _priority_episode_detail_rows(
+    trace: "BtfTrace",
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+    limit: int = 200,
+) -> List[dict]:
+    if not trace.has_priority_instrumentation:
+        return []
+    scale = trace.time_scale
+    rows: List[dict] = []
+    for ep in trace.priority_episodes:
+        if lo is not None and hi is not None:
+            if not (ep.stop_ns > lo and ep.start_ns < hi):
+                continue
+        rows.append({
+            "task": ep.task_label,
+            "pri": f"{ep.base_pri}→{ep.peak_pri}",
+            "start": _format_time(ep.start_ns, scale),
+            "stop": _format_time(ep.stop_ns, scale),
+            "duration": _format_time(ep.stop_ns - ep.start_ns, scale),
+            "start_ns": ep.start_ns,
+            "pattern": ep.pattern or "—",
+        })
+    rows.sort(key=lambda r: (r["start_ns"], r.get("stop", "")))
+    return rows[:limit] if limit > 0 else rows
+
+def _interval_instance_detail_rows(
+    trace: "BtfTrace",
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+    limit: int = 200,
+) -> List[dict]:
+    scale = trace.time_scale
+    rows: List[dict] = []
+    for iid in trace.interval_ids:
+        for inst in trace.interval_instances_by_id.get(iid, []):
+            if not _interval_overlaps_range(inst, lo, hi):
+                continue
+            rows.append({
+                "id": iid,
+                "task_id": inst.task_id or "—",
+                "start": _format_time(inst.start_ns, scale),
+                "stop": _format_time(inst.stop_ns, scale),
+                "duration": _format_time(inst.stop_ns - inst.start_ns, scale),
+                "duration_ns": inst.stop_ns - inst.start_ns,
+                "start_core": inst.start_core or "",
+                "stop_core": inst.stop_core or "",
+            })
+    rows.sort(key=lambda r: (-r["duration_ns"], r.get("start", "")))
+    return rows[:limit] if limit > 0 else rows
+
+def _task_priority_label_suffix(trace: "BtfTrace", mk: str) -> str:
+    pri = trace.task_base_priority.get(mk)
+    return f" · pri {pri}" if pri is not None else ""
+
 def _plot_point_mark_ns(payload, x_ns: int) -> int:
     """Timeline position for an annotation created from a metrics plot point."""
     if isinstance(payload, IntervalInstance):
         return payload.stop_ns
+    if isinstance(payload, PriorityEpisode):
+        return payload.stop_ns
+    if isinstance(payload, SyncIssueRef):
+        return payload.time_ns
     if isinstance(payload, TaskSegment):
         return payload.start
     return x_ns
@@ -910,6 +1492,10 @@ def _format_plot_point_note(
     if isinstance(payload, IntervalInstance):
         return (f"Interval {payload.id}: {fmt(y_ns)} "
                 f"[{fmt(payload.start_ns)} – {fmt(payload.stop_ns)}]")
+    if isinstance(payload, PriorityEpisode):
+        tag = " · L/M/H" if payload.inversion_suspect else ""
+        return (f"{payload.task_label}: pri {payload.base_pri}→{payload.peak_pri} "
+                f"— {fmt(y_ns)} [{fmt(payload.start_ns)} – {fmt(payload.stop_ns)}]{tag}")
     if isinstance(payload, TaskSegment):
         raw = trace.task_repr.get(mk, mk) if mk else payload.task
         name = _task_display_name(raw)
@@ -1064,6 +1650,13 @@ class BtfTrace:
     interval_instances_by_id: Dict[str, List["IntervalInstance"]]            = field(default_factory=dict)
     interval_marker_by_id: Dict[str, dict]                                  = field(default_factory=dict)
     interval_unmatched_starts: int                                          = 0
+    task_base_priority: Dict[str, int]                                     = field(default_factory=dict)
+    priority_episodes: List[PriorityEpisode]                                = field(default_factory=list)
+    priority_episodes_by_mk: Dict[str, List[PriorityEpisode]]                 = field(default_factory=dict)
+    has_priority_instrumentation: bool                                      = False
+    sync_objects: Dict[str, dict]                                           = field(default_factory=dict)
+    sync_issues: List[dict]                                                 = field(default_factory=list)
+    has_sync_object_instrumentation: bool                                   = False
 
 # ---------------------------------------------------------------------------
 # Task-name helpers
@@ -2045,6 +2638,7 @@ def _parse_btf(filepath: str,
     _skipped_lines: int = 0  # lines with unparseable timestamps (reported in meta)
     # raw_name -> first task_create timestamp
     _task_create_raw: Dict[str, int] = {}
+    _task_create_pri_raw: Dict[str, int] = {}
 
     # ------------------------------------------------------------------
     # Phase 1 : file reading
@@ -2100,6 +2694,13 @@ def _parse_btf(filepath: str,
                     _tgt_raw = parts[4].strip()
                     if _tgt_raw not in _task_create_raw:
                         _task_create_raw[_tgt_raw] = t
+                _create_pri = _parse_create_priority(_note)
+                if _create_pri is not None:
+                    _tgt_raw = parts[4].strip()
+                    if _tgt_raw not in _task_create_raw:
+                        _task_create_raw[_tgt_raw] = t
+                    if _tgt_raw not in _task_create_pri_raw:
+                        _task_create_pri_raw[_tgt_raw] = _create_pri
                 t_events_by_time[t].append((
                     t,
                     parts[1].strip(),   # source
@@ -2327,6 +2928,13 @@ def _parse_btf(filepath: str,
         if _mk_ct not in _task_create_times or _ct_time < _task_create_times[_mk_ct]:
             _task_create_times[_mk_ct] = _ct_time
 
+    _task_base_pri, _priority_episodes, _priority_by_mk, _has_priority = (
+        _build_priority_data(
+            sti_events, _task_create_pri_raw, time_max, _mk_cache, _mk_repr)
+    )
+    _sync_objects, _sync_issues, _has_sync = _build_sync_object_data(
+        sti_events, _core_segs, _mk_repr, time_max)
+
     # ------------------------------------------------------------------
     # Phase 4 : 1M-event performance pre-processing
     # Pre-build start-time arrays (for O(log n) bisect viewport clipping)
@@ -2478,6 +3086,13 @@ def _parse_btf(filepath: str,
         interval_instances_by_id=_interval_by_id,
         interval_marker_by_id=_interval_marker_by_id,
         interval_unmatched_starts=_interval_unmatched,
+        task_base_priority=_task_base_pri,
+        priority_episodes=_priority_episodes,
+        priority_episodes_by_mk=_priority_by_mk,
+        has_priority_instrumentation=_has_priority,
+        sync_objects=_sync_objects,
+        sync_issues=_sync_issues,
+        has_sync_object_instrumentation=_has_sync,
     )
 
 # Timeline Widget
@@ -4640,6 +5255,46 @@ class TimelineScene(QGraphicsScene):
             self._frozen_items.append((batch, 0))
         return True
 
+    def _add_priority_boost_bands(
+        self,
+        trace: "BtfTrace",
+        task_mk: str,
+        bounds: QRectF,
+        horiz: bool,
+        time_min: int,
+        px_per_ns: float,
+        vp_ns_lo: int,
+        vp_ns_hi: int,
+    ) -> None:
+        """Draw priority boost / inversion indicator stripes on a task row or column."""
+        if not trace.has_priority_instrumentation:
+            return
+        episodes = trace.priority_episodes_by_mk.get(task_mk)
+        if not episodes:
+            return
+        row_dim = bounds.height() if horiz else bounds.width()
+        band_thick = max(3, int(row_dim * 0.30))
+        offset = bounds.x() if horiz else bounds.y()
+        bands = _priority_boost_bands_for_viewport(
+            episodes, horiz, time_min, px_per_ns, offset, vp_ns_lo, vp_ns_hi)
+        if not bands:
+            return
+        if horiz:
+            bar_y = bounds.y() + bounds.height() - band_thick
+            bar_h = band_thick
+            bar_x = 0.0
+            bar_w = 0.0
+        else:
+            bar_x = bounds.x() + bounds.width() - band_thick
+            bar_w = band_thick
+            bar_y = 0.0
+            bar_h = 0.0
+        item = _PriorityBoostBandsItem(
+            bounds, bands, horiz, bar_y, bar_h, bar_x, bar_w,
+            dark_ui=self._is_dark_ui)
+        item.setZValue(3)
+        self.addItem(item)
+
     def _seg_lod_for_core(self, core: str) -> SegLodData:
         """Build SegLodData for a core-summary row/column."""
         tr = self._trace
@@ -4765,7 +5420,7 @@ class TimelineScene(QGraphicsScene):
             y_top = RULER_HEIGHT + row_idx * _row_stride
             y_ctr = y_top + self._row_height / 2
             is_hl = self._is_task_lock_active(task)
-            disp      = _task_display_name(raw)
+            disp      = _task_display_name(raw) + _task_priority_label_suffix(trace, task)
             row_color = _task_color(raw)
             self._task_row_rects[task] = [(QRectF(lw, y_top, timeline_w, self._row_height), row_color)]
 
@@ -4823,6 +5478,11 @@ class TimelineScene(QGraphicsScene):
                 xs=xs, time_min=trace.time_min, timescale_per_px=self._timescale_per_px)
             batch.setZValue(1)
             self.addItem(batch)
+
+            self._add_priority_boost_bands(
+                trace, task,
+                QRectF(lw, y_top, timeline_w, self._row_height),
+                True, _time_min, _px_per_ns, _vp_ns_lo, _vp_ns_hi)
 
             # Task-create marker: 1px vertical line at the creation timestamp
             _ct_h = trace.task_create_times.get(task)
@@ -5047,7 +5707,7 @@ class TimelineScene(QGraphicsScene):
             raw    = trace.task_repr.get(task, task)
             x_left = RULER_WIDTH + col_idx * col_w
             is_hl  = self._is_task_lock_active(task)
-            disp      = _task_display_name(raw)
+            disp      = _task_display_name(raw) + _task_priority_label_suffix(trace, task)
             col_color = _task_color(raw)
             self._task_row_rects[task] = [(QRectF(x_left, label_row_h, col_w, timeline_h), col_color)]
 
@@ -5104,6 +5764,11 @@ class TimelineScene(QGraphicsScene):
                 xs=xs, time_min=trace.time_min, timescale_per_px=self._timescale_per_px)
             batch.setZValue(1)
             self.addItem(batch)
+
+            self._add_priority_boost_bands(
+                trace, task,
+                QRectF(x_left, label_row_h, col_w, timeline_h),
+                False, _time_min, _px_per_ns, _vp_ns_lo, _vp_ns_hi)
 
             # Task-create marker: 1px horizontal line at the creation timestamp
             _ct_v = trace.task_create_times.get(task)
@@ -5454,6 +6119,11 @@ class TimelineScene(QGraphicsScene):
                 batch.setZValue(1)
                 self.addItem(batch)
 
+                self._add_priority_boost_bands(
+                    trace, _tmk,
+                    QRectF(lw, y_top2, timeline_w, self._row_height),
+                    True, _time_min, _px_per_ns, _vp_ns_lo, _vp_ns_hi)
+
         # --- STI rows ---------------------------------------------------
         _sti_y = RULER_HEIGHT + row_idx * (self._row_height + self._row_gap)
         for channel in sti_rows:
@@ -5740,6 +6410,11 @@ class TimelineScene(QGraphicsScene):
                 batch.setZValue(1)
                 self.addItem(batch)
 
+                self._add_priority_boost_bands(
+                    trace, _tmk,
+                    QRectF(x_left2, label_row_h, col_w, timeline_h),
+                    False, _time_min, _px_per_ns, _vp_ns_lo, _vp_ns_hi)
+
         # --- STI columns ------------------------------------------------
         _sti_x_acc_vc = RULER_WIDTH + _core_col_count * col_w
         for channel in sti_cols:
@@ -5924,6 +6599,79 @@ class _RulerItem(QGraphicsItem):
                         painter.drawText(QPointF(2, y - 2 + self._text_ascent),
                                          _format_time(t, self._time_scale))
                 t += step_ns
+
+class _PriorityBoostBandsItem(QGraphicsItem):
+    """Bottom (horizontal) or right-edge (vertical) stripes for priority boost episodes."""
+
+    __slots__ = ('_bounds', '_bands', '_horiz', '_bar_y', '_bar_h', '_bar_x', '_bar_w', '_dark_ui')
+
+    def __init__(
+        self,
+        bounding_rect: QRectF,
+        bands: list,
+        horiz: bool,
+        bar_y: float,
+        bar_h: float,
+        bar_x: float,
+        bar_w: float,
+        dark_ui: bool = True,
+    ) -> None:
+        super().__init__()
+        self._bounds = bounding_rect
+        self._bands = bands
+        self._horiz = horiz
+        self._bar_y = bar_y
+        self._bar_h = bar_h
+        self._bar_x = bar_x
+        self._bar_w = bar_w
+        self._dark_ui = dark_ui
+        self.setFlag(QGraphicsItem.ItemUsesExtendedStyleOption, True)
+
+    def boundingRect(self) -> QRectF:
+        return self._bounds
+
+    def paint(self, painter, option, widget=None) -> None:
+        if not self._bands:
+            return
+        exposed = option.exposedRect
+        if self._horiz:
+            exp_lo = exposed.left()
+            exp_hi = exposed.right()
+            for x, w, inv in self._bands:
+                if x + w < exp_lo or x >= exp_hi:
+                    continue
+                cx = max(x, exp_lo)
+                cx2 = min(x + w, exp_hi)
+                cw = cx2 - cx
+                if cw < 0.5:
+                    continue
+                base = QColor("#E74C3C" if inv else "#F39C12")
+                fill = QColor(base)
+                fill.setAlpha(184 if self._dark_ui else 133)
+                painter.fillRect(QRectF(cx, self._bar_y, cw, self._bar_h), fill)
+                if cw >= 4:
+                    painter.setPen(QPen(base))
+                    painter.setBrush(Qt.NoBrush)
+                    painter.drawRect(QRectF(cx + 0.5, self._bar_y + 0.5, cw - 1, self._bar_h - 1))
+        else:
+            exp_lo = exposed.top()
+            exp_hi = exposed.bottom()
+            for y, h, inv in self._bands:
+                if y + h < exp_lo or y >= exp_hi:
+                    continue
+                cy = max(y, exp_lo)
+                cy2 = min(y + h, exp_hi)
+                ch = cy2 - cy
+                if ch < 0.5:
+                    continue
+                base = QColor("#E74C3C" if inv else "#F39C12")
+                fill = QColor(base)
+                fill.setAlpha(184 if self._dark_ui else 133)
+                painter.fillRect(QRectF(self._bar_x, cy, self._bar_w, ch), fill)
+                if ch >= 4:
+                    painter.setPen(QPen(base))
+                    painter.setBrush(Qt.NoBrush)
+                    painter.drawRect(QRectF(self._bar_x + 0.5, cy + 0.5, self._bar_w - 1, ch - 1))
 
 class _IntervalRowBarsItem(QGraphicsItem):
     """Paints all interval bars for one row in a single paint() pass.
@@ -9936,8 +10684,6 @@ class _ScatterWidget(QWidget):
             p.drawText(ML + pw + 2, gy + 4, lbl_text)
 
         # Points
-        dot_color = QColor(self._color)
-        dot_color.setAlpha(200)
         hl_color  = QColor("#FFFFFF")
         p.setPen(Qt.NoPen)
         for i, pt in enumerate(self._points):
@@ -9947,6 +10693,11 @@ class _ScatterWidget(QWidget):
                 p.setBrush(QBrush(hl_color))
                 p.drawEllipse(cx - 5, cy - 5, 10, 10)
             else:
+                if len(pt) >= 4:
+                    dot_color = QColor(pt[3])
+                else:
+                    dot_color = QColor(self._color)
+                dot_color.setAlpha(200)
                 p.setBrush(QBrush(dot_color))
                 p.drawEllipse(cx - 3, cy - 3, 6, 6)
 
@@ -10819,14 +11570,15 @@ class _MigrationHeatmapWidget(QWidget):
     def sizeHint(self) -> QSize:
         return self._content_size()
 
-    def _cell_geometry(self) -> Tuple[int, float]:
+    def _cell_geometry(self, layout_w: Optional[int] = None) -> Tuple[int, float]:
         if self._mode == 'matrix':
             n_bins = len(self._col_labels) or 1
             x0 = self._LEFT_PAD + self._label_w
             return x0, float(self._MATRIX_CELL_MIN_W)
         n_bins = len(self._grid[0]) if self._grid else 1
         x0 = self._LEFT_PAD + self._label_w
-        cell_w = max(self._CELL_MIN_W, (self.width() - x0 - 4) // max(1, n_bins))
+        w = layout_w if layout_w is not None else self.width()
+        cell_w = max(self._CELL_MIN_W, (w - x0 - 4) // max(1, n_bins))
         return x0, float(cell_w)
 
     def _matrix_col_label_step(self, cell_w: float) -> int:
@@ -10938,9 +11690,18 @@ class _MigrationHeatmapWidget(QWidget):
         p = QPainter(self)
         p.setClipRect(clip)
         scroll_x, scroll_y = self._scroll_offsets()
+        try:
+            self._paint_grid(p, scroll_x, scroll_y, clip, show_hover=True)
+        finally:
+            p.end()
+
+    def _paint_grid(self, p: QPainter, scroll_x: int, scroll_y: int, clip: QRect,
+                    *, show_hover: bool = True, layout_w: Optional[int] = None) -> None:
+        if not self._row_labels:
+            return
         header_h = self._header_h()
-        w = self.width()
-        x0, cell_w = self._cell_geometry()
+        w = layout_w if layout_w is not None else self.width()
+        x0, cell_w = self._cell_geometry(layout_w=w)
         n_cols = len(self._col_labels) if self._mode == 'matrix' else (
             len(self._grid[0]) if self._grid and self._grid[0] else 1)
         label_right = self._LEFT_PAD + self._label_w
@@ -10979,11 +11740,47 @@ class _MigrationHeatmapWidget(QWidget):
                         p.fillRect(QRectF(x, y, cell_w - 1, self._ROW_H - 3),
                                    QColor(91, 155, 213, alpha if v else 15))
                 x += cell_w
-            if self._hover_ri == ri:
+            if show_hover and self._hover_ri == ri:
                 row_w = label_right + n_cols * cell_w
                 p.fillRect(QRectF(0, y, row_w, self._ROW_H - 1),
                            QColor(91, 155, 213, 46))
-        p.end()
+
+    def render_full_pixmap(self) -> QPixmap:
+        """Render the full heatmap grid (all rows/columns) for PNG export."""
+        size = self._content_size()
+        pix = QPixmap(size)
+        pix.fill(self.palette().color(QPalette.Window))
+        saved_hover = self._hover_ri
+        self._hover_ri = None
+        p = QPainter(pix)
+        try:
+            self._paint_grid(
+                p, 0, 0, QRect(0, 0, size.width(), size.height()),
+                show_hover=False, layout_w=size.width())
+        finally:
+            p.end()
+            self._hover_ri = saved_hover
+        return pix
+
+    def render_full_svg(self, path: str, title: str) -> None:
+        """Render the full heatmap grid to an SVG file."""
+        size = self._content_size()
+        gen = QSvgGenerator()
+        gen.setFileName(path)
+        gen.setSize(size)
+        gen.setViewBox(QRectF(0, 0, size.width(), size.height()))
+        gen.setTitle(title)
+        gen.setDescription("Generated by RTOS BTF Viewer")
+        saved_hover = self._hover_ri
+        self._hover_ri = None
+        p = QPainter(gen)
+        try:
+            self._paint_grid(
+                p, 0, 0, QRect(0, 0, size.width(), size.height()),
+                show_hover=False, layout_w=size.width())
+        finally:
+            p.end()
+            self._hover_ri = saved_hover
 
 class _MigrationHeatmapDialog(QDialog):
     """Popup: hierarchical migration heatmap (core-pair → task drill-down)."""
@@ -11098,6 +11895,19 @@ class _MigrationHeatmapDialog(QDialog):
             "color:#5B9BD5; padding:6px 8px; background:rgba(91,155,213,0.12);"
             "border:1px solid rgba(91,155,213,0.35); border-radius:4px;")
         lay.addWidget(self._filter_bar)
+
+        export_row = QHBoxLayout()
+        export_row.setContentsMargins(0, 4, 0, 0)
+        self._btn_export_png = QPushButton("Export PNG")
+        self._btn_export_svg = QPushButton("Export SVG")
+        self._btn_export_png.clicked.connect(self._export_png)
+        self._btn_export_svg.clicked.connect(self._export_svg)
+        self._btn_export_png.setEnabled(False)
+        self._btn_export_svg.setEnabled(False)
+        export_row.addWidget(self._btn_export_png)
+        export_row.addWidget(self._btn_export_svg)
+        export_row.addStretch(1)
+        lay.addLayout(export_row)
 
         btns = QDialogButtonBox(QDialogButtonBox.Close)
         if on_clear is not None:
@@ -11246,6 +12056,61 @@ class _MigrationHeatmapDialog(QDialog):
             return
         self._on_drill(fc, tc, label, bin_lo, bin_hi, merge_keys)
 
+    def _export_level_slug(self) -> str:
+        if self._uses_matrix:
+            if self._level == 0:
+                return "matrix"
+            if self._level == 1:
+                return "outgoing"
+            return "tasks"
+        if self._level >= 1:
+            return "tasks"
+        return "pairs"
+
+    def _export_base_name(self) -> str:
+        stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        return f"migration-heatmap-{self._export_level_slug()}-{stamp}"
+
+    def _export_png(self) -> None:
+        if not self._canvas._row_labels:
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Migration Heatmap PNG",
+            self._export_base_name() + ".png",
+            "PNG files (*.png);;All files (*)",
+        )
+        if not path:
+            return
+        try:
+            if self._canvas.render_full_pixmap().save(path):
+                wnd = self.parent()
+                if isinstance(wnd, QMainWindow):
+                    wnd.statusBar().showMessage(f"Exported heatmap: {path}", 4000)
+            else:
+                QMessageBox.critical(self, "Export Error", "Could not save PNG.")
+        except (OSError, RuntimeError) as exc:
+            QMessageBox.critical(self, "Export Error", str(exc))
+
+    def _export_svg(self) -> None:
+        if not self._canvas._row_labels:
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Migration Heatmap SVG",
+            self._export_base_name() + ".svg",
+            "SVG files (*.svg);;All files (*)",
+        )
+        if not path:
+            return
+        try:
+            self._canvas.render_full_svg(path, "Migration Heatmap")
+            wnd = self.parent()
+            if isinstance(wnd, QMainWindow):
+                wnd.statusBar().showMessage(f"Exported heatmap: {path}", 4000)
+        except (OSError, RuntimeError) as exc:
+            QMessageBox.critical(self, "Export Error", str(exc))
+
     def _scroll_heatmap_to_top(self) -> None:
         """Reset scroll after level/content change (level-1 grid is often shorter)."""
         def _do() -> None:
@@ -11266,6 +12131,12 @@ class _MigrationHeatmapDialog(QDialog):
             self._go_level0()
         self._scroll_heatmap_to_top()
 
+    def _set_heatmap_has_data(self, has_data: bool) -> None:
+        self._empty_label.setVisible(not has_data)
+        self._scroll.setVisible(has_data)
+        self._btn_export_png.setEnabled(has_data)
+        self._btn_export_svg.setEnabled(has_data)
+
     def _go_level0(self) -> None:
         self._level = 0
         self._back_btn.setVisible(False)
@@ -11283,8 +12154,7 @@ class _MigrationHeatmapDialog(QDialog):
                                 for i in range(len(self._matrix_grid))
                                 for j in range(len(self._matrix_grid[i]))
                                 if i != j))
-            self._empty_label.setVisible(not has_data)
-            self._scroll.setVisible(has_data)
+            self._set_heatmap_has_data(has_data)
             if has_data:
                 row_lbls = [_core_short_name(c) for c in self._matrix_cores]
                 col_lbls = row_lbls
@@ -11297,8 +12167,7 @@ class _MigrationHeatmapDialog(QDialog):
                 f"Core-pair migrations over time bins{self._scope_suffix}")
             has_data = (self._pairs
                         and any(any(r for r in row) for row in self._grid0))
-            self._empty_label.setVisible(not has_data)
-            self._scroll.setVisible(has_data)
+            self._set_heatmap_has_data(has_data)
             if has_data:
                 labels = [p[2] for p in self._pairs]
                 self._set_canvas(labels, self._grid0)
@@ -11330,9 +12199,8 @@ class _MigrationHeatmapDialog(QDialog):
             f"Outgoing migrations from {src} · rows = destination cores · "
             f"columns = time bins{self._scope_suffix}")
         has_data = bool(grid and any(any(r for r in row) for row in grid))
-        self._empty_label.setVisible(not has_data)
+        self._set_heatmap_has_data(has_data)
         self._empty_label.setText("No migrations in scope.")
-        self._scroll.setVisible(has_data)
         if has_data:
             self._set_canvas([p[2] for p in pairs], grid)
         self._hint_label.setText(
@@ -11366,9 +12234,8 @@ class _MigrationHeatmapDialog(QDialog):
         self._sub_label.setText(
             f"Time bins · {label}{self._scope_suffix}")
         has_data = bool(grid and any(any(r for r in row) for row in grid))
-        self._empty_label.setVisible(not has_data)
+        self._set_heatmap_has_data(has_data)
         self._empty_label.setText("No migrations in scope.")
-        self._scroll.setVisible(has_data)
         if has_data:
             self._set_canvas([label], grid)
         self._hint_label.setText(
@@ -11403,9 +12270,8 @@ class _MigrationHeatmapDialog(QDialog):
         self._bin_w = bin_w
         self._time_bins = time_bins
         has_data = bool(rows)
-        self._empty_label.setVisible(not has_data)
+        self._set_heatmap_has_data(has_data)
         self._empty_label.setText("No task migrations in this cell.")
-        self._scroll.setVisible(has_data)
         if has_data:
             self._set_canvas([r[1] for r in rows], grid)
         self._hint_label.setText(
@@ -11482,6 +12348,8 @@ class _StatsPanel(QWidget):
             "inter": False,
             "health": False,
             "preemption": False,
+            "priority": False,
+            "sync": False,
             "intervals": False,
         }
         self._section_headers: Dict[str, QPushButton] = {}
@@ -11494,6 +12362,7 @@ class _StatsPanel(QWidget):
             "inter": STATS_TABLE_DEFAULT_H,
             "preemption": STATS_TABLE_MIG_DEFAULT_H,
             "intervals": STATS_TABLE_DEFAULT_H,
+            "sync_issues": STATS_TABLE_MIG_DEFAULT_H,
         }
         self._table_grips: List[_StatsSectionGrip] = []
         outer = QVBoxLayout(self)
@@ -11863,6 +12732,22 @@ class _StatsPanel(QWidget):
             title = f"Interval {iid} — Duration{scope}"
             color = QColor(_interval_color(iid))
             return title, pts, color
+        if kind == "priority":
+            pts = _priority_plot_points(trace, mk, lo, hi)
+            if not pts:
+                return None
+            raw = trace.task_repr.get(mk, mk)
+            name = _task_display_name(raw)
+            base = trace.task_base_priority.get(mk, pts[0][2].base_pri)
+            peak = max(ep.peak_pri for _, _, ep in pts)
+            title = f"{name} — Priority Boost (base {base}→peak {peak}){scope}"
+            color = QColor("#F39C12")
+            pts = [
+                (x, y, ep,
+                 QColor("#E74C3C" if ep.inversion_suspect else "#F39C12"))
+                for x, y, ep in pts
+            ]
+            return title, pts, color
         segs = trace.seg_map_by_merge_key.get(mk, [])
         if not segs:
             return None
@@ -11919,6 +12804,9 @@ class _StatsPanel(QWidget):
 
     def _open_interval_plot(self, trace: "BtfTrace", interval_id: str) -> None:
         self._open_plot(trace, interval_id, "interval", interval_id=interval_id)
+
+    def _open_priority_plot(self, trace: "BtfTrace", mk: str) -> None:
+        self._open_plot(trace, mk, "priority")
 
     def capture_plot_session(self) -> Tuple[Optional[str], Optional[str], bool, Optional[str]]:
         """Return (mk, kind, visible, preemptor) for the current metrics plot dialog."""
@@ -12055,7 +12943,7 @@ class _StatsPanel(QWidget):
     def _expand_all_sections(self) -> None:
         self._inner.setUpdatesEnabled(False)
         try:
-            for key in self._section_collapsed:
+            for key in self._section_headers:
                 self._set_section_collapsed(key, False)
         finally:
             self._inner.setUpdatesEnabled(True)
@@ -12063,7 +12951,7 @@ class _StatsPanel(QWidget):
     def _collapse_all_sections(self) -> None:
         self._inner.setUpdatesEnabled(False)
         try:
-            for key in self._section_collapsed:
+            for key in self._section_headers:
                 self._set_section_collapsed(key, True)
         finally:
             self._inner.setUpdatesEnabled(True)
@@ -12071,6 +12959,7 @@ class _StatsPanel(QWidget):
     def _add_collapsible_section(self, section_id: str, title: str, ui_fs: str,
                                populate) -> None:
         """Add a collapsible statistics section (parity with web StatisticsPanel)."""
+        self._section_collapsed.setdefault(section_id, False)
         self._ilay.addWidget(self._sep())
         collapsed = self._section_collapsed.get(section_id, False)
         hdr = QPushButton(title)
@@ -12706,6 +13595,15 @@ class _StatsPanel(QWidget):
         mig_rows = _migration_rows(trace, lo, hi)
         preempt_rows, _ = _preemption_chain_rows(trace, lo, hi)
         interval_rows = _interval_stats_rows(trace, lo, hi)
+        priority_rows = _priority_stats_rows(trace, lo, hi)
+        priority_eps = _priority_episode_detail_rows(trace, lo, hi)
+        sync_rows = _sync_object_stats_rows(trace, lo, hi)
+        sync_issues_scoped = [
+            i for i in trace.sync_issues
+            if _sync_in_scope(i["time_ns"], lo, hi)
+        ] if trace.has_sync_object_instrumentation else []
+        sync_holds = _sync_object_hold_detail_rows(trace, lo, hi)
+        interval_inst = _interval_instance_detail_rows(trace, lo, hi)
         ctx_count, core_gaps = _scheduling_stats(trace, lo, hi)
         tick = _tick_health_report(trace, lo, hi)
 
@@ -12809,6 +13707,95 @@ class _StatsPanel(QWidget):
             seg_count = len(trace.segments)
             range_note = ""
 
+        def _sev_class(severity: str) -> str:
+            if severity == "error":
+                return "sev-error"
+            if severity == "warning":
+                return "sev-warning"
+            return ""
+
+        priority_html = ""
+        if trace.has_priority_instrumentation:
+            pri_body = "".join(
+                f"<tr><td>{_esc(r[1])}</td><td>{r[2]}</td><td>{r[3]}</td><td>{r[4]}</td>"
+                f"<td>{_esc(r[5])}</td><td>{_esc(r[6])}</td></tr>"
+                for r in priority_rows
+            ) or '<tr><td colspan="6" class="empty">No priority boosts in scope</td></tr>'
+            ep_body = "".join(
+                f"<tr><td>{_esc(ep['task'])}</td><td>{_esc(ep['pri'])}</td>"
+                f"<td>{_esc(ep['start'])}</td><td>{_esc(ep['stop'])}</td>"
+                f"<td>{_esc(ep['duration'])}</td><td>{_esc(ep['pattern'])}</td></tr>"
+                for ep in priority_eps
+            ) or '<tr><td colspan="6" class="empty">No boost episodes in scope</td></tr>'
+            ep_note = ('<p class="detail-note">Showing first 200 boost episodes in scope.</p>'
+                       if len(priority_eps) >= 200 else "")
+            priority_html = f"""
+    <section class=\"report-card\"><h2>Priority Inheritance{_esc(scope_title)}</h2>
+    <table><thead><tr><th>Task</th><th>Base</th><th>Peak</th><th>Boosts</th><th>Boosted</th><th>Pattern</th></tr></thead>
+    <tbody>{pri_body}</tbody></table>
+    <h3 class=\"sub\">Boost episodes</h3>{ep_note}
+    <table><thead><tr><th>Task</th><th>pri</th><th>Start</th><th>End</th><th>Duration</th><th>Pattern</th></tr></thead>
+    <tbody>{ep_body}</tbody></table></section>"""
+
+        sync_html = ""
+        if trace.has_sync_object_instrumentation:
+            sync_body = "".join(
+                f"<tr><td>{_esc(r[3])}</td><td>{_esc(r[1])}</td><td>{r[4]}</td><td>{r[5]}</td>"
+                f"<td>{_esc(r[6])}</td><td class=\"{'sev-error' if r[8] == 'error' else 'sev-warning' if r[8] == 'warning' else ''}\">"
+                f"{_esc(r[7])}</td></tr>"
+                for r in sync_rows
+            ) or '<tr><td colspan="6" class="empty">No mutex/sem activity in scope</td></tr>'
+            issue_body = "".join(
+                f"<tr><td>{_esc(_format_time(i['time_ns'], trace.time_scale))}</td>"
+                f"<td>{_esc(i.get('obj_key') or '—')}</td>"
+                f"<td class=\"{_sev_class(i.get('severity', ''))}\">{_esc(i.get('kind', ''))}</td>"
+                f"<td>{_esc(i.get('detail', ''))}</td>"
+                f"<td>{_esc(i.get('task_label') or '—')}</td>"
+                f"<td>{_esc(i.get('core') or '')}</td></tr>"
+                for i in sync_issues_scoped
+            ) or '<tr><td colspan="6" class="empty">No pairing issues in scope</td></tr>'
+            hold_body = "".join(
+                f"<tr><td>{_esc(h['object'])}</td><td>{_esc(h['holder'])}</td>"
+                f"<td>{_esc(h['start'])}</td><td>{_esc(h['stop'])}</td>"
+                f"<td>{_esc(h['duration'])}</td><td>{_esc(h['take_core'])}</td>"
+                f"<td>{_esc(h['give_core'])}</td></tr>"
+                for h in sync_holds
+            ) or '<tr><td colspan="7" class="empty">No paired holds in scope</td></tr>'
+            hold_note = ('<p class="detail-note">Showing longest 150 hold episodes in scope.</p>'
+                         if len(sync_holds) >= 150 else "")
+            sync_html = f"""
+    <section class=\"report-card\"><h2>Mutex / Semaphore{_esc(scope_title)}</h2>
+    <table><thead><tr><th>Object</th><th>Kind</th><th>Holds</th><th>Issues</th><th>Avg hold</th><th>Status</th></tr></thead>
+    <tbody>{sync_body}</tbody></table>
+    <h3 class=\"sub\">Pairing issues</h3>
+    <table><thead><tr><th>Time</th><th>Object</th><th>Issue</th><th>Detail</th><th>Task</th><th>Core</th></tr></thead>
+    <tbody>{issue_body}</tbody></table>
+    <h3 class=\"sub\">Hold episodes (longest first)</h3>{hold_note}
+    <table><thead><tr><th>Object</th><th>Holder</th><th>Take</th><th>Give</th><th>Duration</th><th>Take core</th><th>Give core</th></tr></thead>
+    <tbody>{hold_body}</tbody></table></section>"""
+
+        interval_body = "".join(
+            f"<tr><td>{_esc(r[0])}</td><td>{_esc(r[1])}</td><td>{r[2]}</td>"
+            f"<td>{_esc(r[3])}</td><td>{_esc(r[4])}</td><td>{_esc(r[5])}</td><td>{_esc(r[6])}</td></tr>"
+            for r in interval_rows
+        ) or '<tr><td colspan="7" class="empty">No interval data</td></tr>'
+        inst_body = "".join(
+            f"<tr><td>{_esc(inst['id'])}</td><td>{_esc(inst['task_id'])}</td>"
+            f"<td>{_esc(inst['start'])}</td><td>{_esc(inst['stop'])}</td>"
+            f"<td>{_esc(inst['duration'])}</td><td>{_esc(inst['start_core'])}</td>"
+            f"<td>{_esc(inst['stop_core'])}</td></tr>"
+            for inst in interval_inst
+        ) or '<tr><td colspan="7" class="empty">No interval instances in scope</td></tr>'
+        inst_note = ('<p class="detail-note">Showing longest 200 interval instances in scope.</p>'
+                     if len(interval_inst) >= 200 else "")
+        interval_html = f"""
+    <section class=\"report-card\"><h2>Interval Analysis{_esc(scope_title)}</h2>
+    <table><thead><tr><th>ID</th><th>Label</th><th>Count</th><th>Min</th><th>Avg</th><th>Max</th><th>p95</th></tr></thead>
+    <tbody>{interval_body}</tbody></table>
+    <h3 class=\"sub\">Interval instances (longest first)</h3>{inst_note}
+    <table><thead><tr><th>ID</th><th>Task id</th><th>Start</th><th>Stop</th><th>Duration</th><th>Start core</th><th>Stop core</th></tr></thead>
+    <tbody>{inst_body}</tbody></table></section>"""
+
         report = f"""<!doctype html>
 <html>
 <head>
@@ -12884,6 +13871,10 @@ class _StatsPanel(QWidget):
         }}
         tbody tr:nth-child(even) td {{ background: var(--stripe); }}
         .empty {{ text-align: center !important; color: var(--muted); }}
+        .detail-note {{ margin: 6px 0 8px; font-size: 12px; color: var(--muted); }}
+        h3.sub {{ margin: 14px 0 8px; font-size: 14px; color: #284563; font-weight: 600; }}
+        .sev-error {{ color: #c0392b; font-weight: 600; }}
+        .sev-warning {{ color: #d68910; font-weight: 600; }}
         .report-foot {{ margin-top: 14px; color: var(--muted); font-size: 12px; text-align: right; }}
   </style>
 </head>
@@ -12910,7 +13901,9 @@ class _StatsPanel(QWidget):
             <li><strong>Inter-Arrival Time:</strong> Time between consecutive activations of the same task (slice start to next slice start). It reflects activation cadence and jitter.</li>
             <li><strong>Blocking Time:</strong> Off-CPU gap between the end of one slice and the start of the next for the same task. High values may indicate preemption, blocking on a resource, or long scheduling delays.</li>
       <li><strong>Preemption Chain Analysis:</strong> For each blocking gap of a victim task, identifies which task ran on the same core during that gap. High counts or long totals point to recurring preemption bottlenecks.</li>
-      <li><strong>Interval Analysis:</strong> Paired interval_start / interval_stop spans per user-defined id (count, min/avg/max/p95 duration). See viewer docs for pairing limitations when the same id is used from multiple concurrent tasks.</li>
+      <li><strong>Priority Inheritance:</strong> When traces include <code>create pri:N</code> and priority STI events, lists tasks boosted above base priority. Detail table lists each boost episode.</li>
+      <li><strong>Mutex / Semaphore:</strong> Pairs take/give STI by object pointer; detail tables list pairing issues and hold episodes.</li>
+      <li><strong>Interval Analysis:</strong> Paired interval_start / interval_stop spans per user-defined id. Detail table lists individual instances.</li>
             <li><strong>Context switches:</strong> Count of segment boundaries on all cores whose start time falls inside the statistics scope.</li>
             <li><strong>Min (Minimum):</strong> The fastest execution time recorded. It represents the best-case scenario under zero system load.</li>
             <li><strong>Max (Maximum):</strong> The slowest execution time recorded. It identifies worst-case bottlenecks, spikes, or resource contention.</li>
@@ -12956,11 +13949,9 @@ class _StatsPanel(QWidget):
     <tbody>{"".join(
         f"<tr><td>{_esc(r[1])}</td><td>{_esc(r[2])}</td><td>{r[3]}</td><td>{_esc(r[4])}</td><td>{_esc(r[5])}</td><td>{_esc(r[6])}</td></tr>"
         for r in preempt_rows) or "<tr><td colspan=\"6\" class=\"empty\">No preemption events found</td></tr>"}</tbody></table></section>
-    <section class=\"report-card\"><h2>Interval Analysis{_esc(scope_title)}</h2>
-    <table><thead><tr><th>ID</th><th>Label</th><th>Count</th><th>Min</th><th>Avg</th><th>Max</th><th>p95</th></tr></thead>
-    <tbody>{"".join(
-        f"<tr><td>{_esc(r[0])}</td><td>{_esc(r[1])}</td><td>{r[2]}</td><td>{_esc(r[3])}</td><td>{_esc(r[4])}</td><td>{_esc(r[5])}</td><td>{_esc(r[6])}</td></tr>"
-        for r in interval_rows) or "<tr><td colspan=\"7\" class=\"empty\">No interval data</td></tr>"}</tbody></table></section>
+    {priority_html}
+    {sync_html}
+    {interval_html}
         <div class=\"report-foot\">Generated by BTF Viewer</div>
     </div>
 </body>
@@ -13028,6 +14019,8 @@ class _StatsPanel(QWidget):
         mig_rows = _migration_rows(trace, lo, hi)
         preempt_rows_csv, _ = _preemption_chain_rows(trace, lo, hi)
         interval_rows_csv = _interval_stats_rows(trace, lo, hi)
+        priority_rows_csv = _priority_stats_rows(trace, lo, hi)
+        sync_rows_csv = _sync_object_stats_rows(trace, lo, hi)
         ctx_count, core_gaps = _scheduling_stats(trace, lo, hi)
         tick = _tick_health_report(trace, lo, hi)
 
@@ -13141,6 +14134,24 @@ class _StatsPanel(QWidget):
                         writer.writerow([victim, preemptor, count, _us(total), _us(avg), _us(mx)])
                 else:
                     writer.writerow(["No preemption events found", "", "", "", "", ""])
+
+                writer.writerow([])
+                writer.writerow([f"Priority Inheritance{scope_suffix}"])
+                writer.writerow(["Task", "Base", "Peak", "Boosts", "Boosted", "Pattern"])
+                if priority_rows_csv:
+                    for _mk, label, base, peak, n_eps, total, pattern, _total_ns in priority_rows_csv:
+                        writer.writerow([label, base, peak, n_eps, _us(total), pattern])
+                elif trace.has_priority_instrumentation:
+                    writer.writerow(["No priority boosts in scope", "", "", "", "", ""])
+
+                writer.writerow([])
+                writer.writerow([f"Mutex / Semaphore{scope_suffix}"])
+                writer.writerow(["Object", "Kind", "Holds", "Issues", "Avg hold", "Status"])
+                if sync_rows_csv:
+                    for _key, kind, _ptr, label, holds, issues, avg, status_label, *_rest in sync_rows_csv:
+                        writer.writerow([label, kind, holds, issues, _us(avg), status_label])
+                elif trace.has_sync_object_instrumentation:
+                    writer.writerow(["No mutex/sem activity in scope", "", "", "", "", ""])
 
                 writer.writerow([])
                 writer.writerow([f"Interval Analysis{scope_suffix}"])
@@ -13441,6 +14452,197 @@ class _StatsPanel(QWidget):
             _fs,
             _populate_preempt,
         )
+
+        # -- Priority inheritance ---------------------------------------------
+        if trace.has_priority_instrumentation:
+            _priority_rows = _priority_stats_rows(trace, lo, hi)
+            empty_priority = ("No priority boosts in cursor range" if scope
+                              else "No priority boosts in trace")
+
+            def _populate_priority(blay: QVBoxLayout) -> None:
+                blay.addWidget(self._lbl(
+                    "Orange/red bands on task rows mark boosted periods. "
+                    "L/M/H pattern = medium-priority task between base and peak.",
+                    color="#888888", ui_fs=_fs))
+                host = QWidget()
+                play = QVBoxLayout(host)
+                play.setContentsMargins(0, 0, 0, 0)
+                if not _priority_rows:
+                    play.addWidget(self._lbl(empty_priority, color="#888888", ui_fs=_fs))
+                else:
+                    headers = ["Task", "Base", "Peak", "Boosts", "Boosted", "Pattern"]
+                    table = QTableWidget(len(_priority_rows), len(headers))
+                    table.setHorizontalHeaderLabels(headers)
+                    table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+                    table.setSelectionMode(QAbstractItemView.NoSelection)
+                    table.setFocusPolicy(Qt.NoFocus)
+                    table.verticalHeader().setVisible(False)
+                    table.horizontalHeader().setStretchLastSection(True)
+                    table.setShowGrid(False)
+                    table.setFrameShape(QFrame.NoFrame)
+                    table.verticalHeader().setDefaultSectionSize(STATS_TABLE_ROW_H)
+                    self._apply_stats_table_theme(table, _fs)
+                    _hover_bg = QBrush(QColor("#3A3A50") if self._is_dark else QColor("#E0E0EC"))
+                    _default_bg = table.palette().base()
+                    _hovered_row = [-1]
+
+                    def _clear_priority_hover() -> None:
+                        row = _hovered_row[0]
+                        if row < 0:
+                            return
+                        for c in range(len(headers)):
+                            item = table.item(row, c)
+                            if item is not None:
+                                item.setBackground(_default_bg)
+                        _hovered_row[0] = -1
+
+                    def _set_priority_hover(row: int) -> None:
+                        if row < 0 or row == _hovered_row[0]:
+                            return
+                        _clear_priority_hover()
+                        _hovered_row[0] = row
+                        for c in range(len(headers)):
+                            item = table.item(row, c)
+                            if item is not None:
+                                item.setBackground(_hover_bg)
+
+                    def _on_priority_row_clicked(row: int, _col: int) -> None:
+                        if row < 0 or row >= len(_priority_rows):
+                            return
+                        mk = _priority_rows[row][0]
+                        self._open_priority_plot(trace, mk)
+
+                    table.cellClicked.connect(_on_priority_row_clicked)
+                    table.cellEntered.connect(_set_priority_hover)
+                    table.viewport().setMouseTracking(True)
+                    for ri, row in enumerate(_priority_rows):
+                        mk, label, base, peak, count, total, pattern, _ = row
+                        vals = [label, str(base), str(peak), str(count), total, pattern]
+                        for ci, val in enumerate(vals):
+                            item = QTableWidgetItem(val)
+                            item.setFlags(Qt.ItemIsEnabled)
+                            if ci == 5 and "L/M/H" in pattern:
+                                item.setForeground(QBrush(QColor("#E74C3C")))
+                            table.setItem(ri, ci, item)
+                    table.resizeRowsToContents()
+                    play.addWidget(table)
+                blay.addWidget(host)
+
+            self._add_collapsible_section(
+                "priority",
+                f"Priority Inheritance{scope}",
+                _fs,
+                _populate_priority,
+            )
+
+        # -- Mutex / Semaphore pairing ---------------------------------------
+        if trace.has_sync_object_instrumentation:
+            _sync_rows = _sync_object_stats_rows(trace, lo, hi)
+            _sync_issues_scoped = [
+                i for i in trace.sync_issues
+                if _sync_in_scope(i["time_ns"], lo, hi)
+            ]
+            empty_sync = ("No mutex/sem activity in cursor range" if scope
+                          else "No mutex/sem STI events in trace")
+
+            def _populate_sync(blay: QVBoxLayout) -> None:
+                blay.addWidget(self._lbl(
+                    "Pairs take/give STI events by object pointer (0x........). "
+                    "Flags orphan gives, unmatched takes, delete-while-held, "
+                    "and multi-mutex hold at trace end.",
+                    color="#888888", ui_fs=_fs))
+                host = QWidget()
+                play = QVBoxLayout(host)
+                play.setContentsMargins(0, 0, 0, 0)
+                if not _sync_rows:
+                    play.addWidget(self._lbl(empty_sync, color="#888888", ui_fs=_fs))
+                else:
+                    headers = ["Object", "Kind", "Holds", "Issues", "Avg hold", "Status"]
+                    table = QTableWidget(len(_sync_rows), len(headers))
+                    table.setHorizontalHeaderLabels(headers)
+                    table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+                    table.setSelectionMode(QAbstractItemView.NoSelection)
+                    table.setFocusPolicy(Qt.NoFocus)
+                    table.verticalHeader().setVisible(False)
+                    table.horizontalHeader().setStretchLastSection(True)
+                    table.setShowGrid(False)
+                    table.setFrameShape(QFrame.NoFrame)
+                    table.verticalHeader().setDefaultSectionSize(STATS_TABLE_ROW_H)
+                    self._apply_stats_table_theme(table, _fs)
+                    for ri, row in enumerate(_sync_rows):
+                        _key, kind, ptr, label, holds, issues, avg, status, *_rest = row
+                        vals = [label, kind, str(holds), str(issues), avg, status]
+                        for ci, val in enumerate(vals):
+                            item = QTableWidgetItem(val)
+                            item.setFlags(Qt.ItemIsEnabled)
+                            if ci == 5 and status != "OK":
+                                color = "#E74C3C" if status == "Error" else "#F39C12"
+                                item.setForeground(QBrush(QColor(color)))
+                            table.setItem(ri, ci, item)
+                    table.resizeRowsToContents()
+                    play.addWidget(table)
+                    if _sync_issues_scoped:
+                        issue_headers = ["Time", "Object", "Issue", "Detail", "Task", "Core"]
+                        itable = QTableWidget(len(_sync_issues_scoped), len(issue_headers))
+                        itable.setHorizontalHeaderLabels(issue_headers)
+                        itable.setEditTriggers(QAbstractItemView.NoEditTriggers)
+                        itable.setSelectionMode(QAbstractItemView.NoSelection)
+                        itable.setFocusPolicy(Qt.NoFocus)
+                        itable.verticalHeader().setVisible(False)
+                        itable.horizontalHeader().setStretchLastSection(True)
+                        itable.setShowGrid(False)
+                        itable.setFrameShape(QFrame.NoFrame)
+                        itable.verticalHeader().setDefaultSectionSize(STATS_TABLE_ROW_H)
+                        self._apply_stats_table_theme(itable, _fs)
+
+                        def _on_issue_row(row: int, _col: int) -> None:
+                            if 0 <= row < len(_sync_issues_scoped):
+                                iss = _sync_issues_scoped[row]
+                                payload = SyncIssueRef(
+                                    time_ns=iss["time_ns"],
+                                    core=iss.get("core") or "",
+                                    kind=iss.get("kind", ""),
+                                    detail=iss.get("detail", ""),
+                                    obj_key=iss.get("obj_key"),
+                                    ptr=iss.get("ptr", ""),
+                                )
+                                self.plot_point_clicked.emit(
+                                    payload, iss["time_ns"], _format_sync_issue_note(iss))
+
+                        itable.cellClicked.connect(_on_issue_row)
+                        itable.setCursor(Qt.PointingHandCursor)
+                        for ri, iss in enumerate(_sync_issues_scoped):
+                            vals = [
+                                _format_time(iss["time_ns"], trace.time_scale),
+                                iss.get("obj_key") or "—",
+                                iss.get("kind", ""),
+                                iss.get("detail", ""),
+                                iss.get("task_label") or "—",
+                                iss.get("core") or "",
+                            ]
+                            tip = (f"Jump, zoom, and annotate at "
+                                   f"{_format_time(iss['time_ns'], trace.time_scale)}")
+                            for ci, val in enumerate(vals):
+                                item = QTableWidgetItem(val)
+                                item.setFlags(Qt.ItemIsEnabled)
+                                item.setToolTip(tip)
+                                if ci == 2:
+                                    sev = iss.get("severity", "")
+                                    if sev == "error":
+                                        item.setForeground(QBrush(QColor("#E74C3C")))
+                                    elif sev == "warning":
+                                        item.setForeground(QBrush(QColor("#F39C12")))
+                                itable.setItem(ri, ci, item)
+                        itable.resizeRowsToContents()
+                        self._wrap_table_with_resizer(play, itable, "sync_issues")
+                blay.addWidget(host)
+
+            self._add_collapsible_section(
+                "sync",
+                f"Mutex / Semaphore{scope}",
+                _fs,
+                _populate_sync,
+            )
 
         # -- Interval Analysis ------------------------------------------------
         _interval_rows = _interval_stats_rows(trace, lo, hi)
@@ -17045,6 +18247,8 @@ class MainWindow(QMainWindow):
                 self._tab_switch_guard = False
             self._previous_tab_index = idx
             self._restore_tab_state(self._tabs[idx])
+            self._focus_statistics_panel()
+            QTimer.singleShot(0, self._focus_statistics_panel)
         self._session_restore_active_idx = -1
 
     def _stash_active_tab_state(self) -> None:
@@ -17067,6 +18271,19 @@ class MainWindow(QMainWindow):
         self._sync_panels_to_active_tab()
         self._act_undo.setEnabled(bool(self._undo_stack))
         self._act_redo.setEnabled(bool(self._redo_stack))
+
+    def _focus_statistics_panel(self, force: bool = False) -> None:
+        """Show and activate the Statistics dock tab.
+
+        force=True reopens the dock when a trace file is opened.
+        force=False only raises the tab when statistics are already enabled.
+        """
+        if force:
+            self._show_stats = True
+        if not self._show_stats:
+            return
+        self._stats_dock.setVisible(True)
+        self._stats_dock.raise_()
 
     def _sync_panels_to_active_tab(self) -> None:
         self._sync_heatmap_dialog_to_tab()
@@ -17264,7 +18481,7 @@ class MainWindow(QMainWindow):
             [2, 5],
             Qt.Vertical,
         )
-        self._stats_dock.raise_()
+        self._focus_statistics_panel()
 
     def _dock_profile_key(self, width: int, height: int) -> str:
         """Build a stable per-window-size key for dock/layout persistence."""
@@ -17511,7 +18728,7 @@ class MainWindow(QMainWindow):
 
         self._refresh_zoom_ui_unit()
         if self._show_stats:
-            QTimer.singleShot(0, self._stats_dock.raise_)
+            QTimer.singleShot(0, self._focus_statistics_panel)
 
     def closeEvent(self, event) -> None:
         """Persist all runtime state to btf_viewer.rc on exit."""
@@ -18252,7 +19469,7 @@ class MainWindow(QMainWindow):
         # Default: Legend on top, bottom as tabbed pages (Statistics / Marks).
         self.splitDockWidget(self._legend_dock, self._marks_dock, Qt.Vertical)
         self.tabifyDockWidget(self._stats_dock, self._marks_dock)
-        self._stats_dock.raise_()
+        self._focus_statistics_panel()
 
         # Keep Find available below the tab group (typically hidden by default).
         self.splitDockWidget(self._marks_dock, self._find_dock, Qt.Vertical)
@@ -19203,16 +20420,95 @@ class MainWindow(QMainWindow):
         ns_hi = min(self._trace.time_max, inst.stop_ns + margin)
         self._view._fit_mode = False
         sc.zoom_to_range(ns_lo, ns_hi, vp_px)
+        sc.set_highlighted_interval(inst, mark_ns)
+        center_ns = mark_ns if mark_ns is not None else (inst.start_ns + inst.stop_ns) // 2
+        time_coord = sc.ns_to_scene_coord(center_ns)
         span = sc.interval_orth_scene_span(inst.id)
-        cur = self._view.mapToScene(vp.center())
         if span is not None:
             orth = (span[0] + span[1]) / 2
             if is_horiz:
-                self._view.centerOn(cur.x(), orth)
+                self._view.centerOn(time_coord, orth)
             else:
-                self._view.centerOn(orth, cur.y())
+                self._view.centerOn(orth, time_coord)
+        else:
+            cur = self._view.mapToScene(vp.center())
+            if is_horiz:
+                self._view.centerOn(time_coord, cur.y())
+            else:
+                self._view.centerOn(cur.x(), time_coord)
         self._view.zoom_changed.emit(sc.timescale_per_px)
-        sc.set_highlighted_interval(inst, mark_ns)
+        self._view.viewport().update()
+
+    def _scroll_to_sync_issue(self, iss: "SyncIssueRef", mark_ns: int) -> None:
+        """Zoom to and highlight a mutex/sem pairing issue."""
+        if self._trace is None or iss is None:
+            return
+        sc = self._view._scene
+        vp = self._view.viewport().rect()
+        is_horiz = sc._horizontal
+        vp_px = max(vp.width() if is_horiz else vp.height(), 100)
+        seg = _segment_at_core_time(self._trace.core_segs, iss.core, iss.time_ns)
+        center_ns = mark_ns if mark_ns is not None else iss.time_ns
+        if seg is not None:
+            margin = max(1, (seg.end - seg.start) // 10)
+            ns_lo = max(self._trace.time_min, seg.start - margin)
+            ns_hi = min(self._trace.time_max, seg.end + margin)
+            sc.set_highlighted_segment(seg)
+        else:
+            span = max(1000, (self._trace.time_max - self._trace.time_min) // 200)
+            ns_lo = max(self._trace.time_min, iss.time_ns - span)
+            ns_hi = min(self._trace.time_max, iss.time_ns + span)
+            sc.set_highlighted_segment(None)
+        self._view._fit_mode = False
+        sc.zoom_to_range(ns_lo, ns_hi, vp_px)
+        time_coord = sc.ns_to_scene_coord(center_ns)
+        if seg is not None:
+            mk = _task_merge_key(seg.task)
+            core_name = seg.core if sc._view_mode == "core" else None
+            span = sc.task_orth_scene_span(mk, core_name=core_name)
+            if span is not None:
+                orth = (span[0] + span[1]) / 2
+                if is_horiz:
+                    self._view.centerOn(time_coord, orth)
+                else:
+                    self._view.centerOn(orth, time_coord)
+            else:
+                self._view.scroll_to_ns(center_ns)
+        else:
+            self._view.scroll_to_ns(center_ns)
+        self._view.zoom_changed.emit(sc.timescale_per_px)
+        self._view.viewport().update()
+
+    def _scroll_to_priority_episode(self, ep: "PriorityEpisode", mark_ns: int) -> None:
+        """Zoom to a priority boost episode and highlight the task row."""
+        if self._trace is None or ep is None:
+            return
+        sc = self._view._scene
+        vp = self._view.viewport().rect()
+        is_horiz = sc._horizontal
+        vp_px = max(vp.width() if is_horiz else vp.height(), 100)
+        margin = max(1, (ep.stop_ns - ep.start_ns) // 10)
+        ns_lo = max(self._trace.time_min, ep.start_ns - margin)
+        ns_hi = min(self._trace.time_max, ep.stop_ns + margin)
+        self._view._fit_mode = False
+        sc.zoom_to_range(ns_lo, ns_hi, vp_px)
+        sc.set_highlighted_task(ep.mk, locked=True)
+        center_ns = mark_ns if mark_ns is not None else (ep.start_ns + ep.stop_ns) // 2
+        time_coord = sc.ns_to_scene_coord(center_ns)
+        span = sc.task_orth_scene_span(ep.mk)
+        if span is not None:
+            orth = (span[0] + span[1]) / 2
+            if is_horiz:
+                self._view.centerOn(time_coord, orth)
+            else:
+                self._view.centerOn(orth, time_coord)
+        else:
+            cur = self._view.mapToScene(vp.center())
+            if is_horiz:
+                self._view.centerOn(time_coord, cur.y())
+            else:
+                self._view.centerOn(cur.x(), time_coord)
+        self._view.zoom_changed.emit(sc.timescale_per_px)
         self._view.viewport().update()
 
     def _on_segment_jump(self, ns: int) -> None:
@@ -19229,8 +20525,22 @@ class MainWindow(QMainWindow):
             self._scroll_to_segment(payload)
         elif isinstance(payload, IntervalInstance):
             self._scroll_to_interval(payload, mark_ns)
+        elif isinstance(payload, PriorityEpisode):
+            self._scroll_to_priority_episode(payload, mark_ns)
+        elif isinstance(payload, SyncIssueRef):
+            self._scroll_to_sync_issue(payload, mark_ns)
         else:
             self._view.scroll_to_ns(mark_ns)
+        self._ensure_stats_plot_annotation(mark_ns, note)
+
+    def _ensure_stats_plot_annotation(self, mark_ns: int, note: str) -> None:
+        """Add a stats-plot annotation unless one already exists at the same point."""
+        note = note or ""
+        for ann in self._annotations:
+            if ann.ns == mark_ns and ann.note == note:
+                self._marks_dock.setVisible(True)
+                self._marks_dock.raise_()
+                return
         self._add_annotation_with_note(mark_ns, note)
 
     def _add_bookmark_at_center(self) -> None:
@@ -19603,6 +20913,8 @@ class MainWindow(QMainWindow):
         existing = self._find_tab_index(path)
         if existing >= 0:
             self._tab_widget.setCurrentIndex(existing)
+            self._focus_statistics_panel(force=True)
+            QTimer.singleShot(0, lambda: self._focus_statistics_panel(force=True))
             if self._session_restore_queue or self._session_restore_active_idx >= 0:
                 self._continue_session_restore()
             return
@@ -19735,9 +21047,8 @@ class MainWindow(QMainWindow):
         tab.redo_stack = []
         self._act_undo.setEnabled(False)
         self._act_redo.setEnabled(False)
-        if self._show_stats:
-            self._stats_dock.show()
-            self._stats_dock.raise_()
+        self._focus_statistics_panel(force=True)
+        QTimer.singleShot(0, lambda: self._focus_statistics_panel(force=True))
         if self._show_cpu_load:
             self._cpu_load_scroll.show()
 
