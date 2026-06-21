@@ -562,7 +562,7 @@
               </div><div>Use the toolbar or bottom status bar to show/hide the CPU load panel</div>
               <div class="k">
                 CPU overlay
-              </div><div>Cursors, hover cursor, bookmarks, and annotations are mirrored in CPU load view</div>
+              </div><div>Cursors, bookmarks, and annotations appear as vertical lines; hover shows load % on each row</div>
             </div>
           </div>
 

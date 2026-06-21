@@ -202,9 +202,9 @@ A bar chart below the timeline shows per-core (or total) CPU utilisation over th
 - **View modes** — in **Task View** a single *CPU Load* row shows aggregate utilisation; in **Core View** each core gets its own row.
 - **Row labels** — each row shows average load over the **currently visible** time window; with 2+ cursors placed, labels also show the average over the cursor range (`· C:xx%`), and the graph shades the C1–Cn window in blue.
 - **Expand / Collapse** — in Core View click a core row header to collapse it to a compact bar.
-- **Hover** — moving the pointer over the timeline projects a live cursor onto the load graph; a badge shows load % at the hover time.
+- **Hover** — moving the pointer over the timeline projects a live cursor onto the load graph; each row shows a load % badge at the hover time (no timestamp on the graph).
 - **Resize** — drag the horizontal bar between the timeline and CPU load panel to change the CPU load height.
-- **Cursors, bookmarks & annotations** are also mirrored in the load graph at their exact time positions.
+- **Cursors, bookmarks & annotations** appear as vertical lines in the load graph (no text labels on the graph itself).
 
 ### Right panel & layout
 
@@ -1044,13 +1044,13 @@ Visualise **when** migrations happen between core pairs — complementary to the
 
 **Level 1 — core-pair overview** (4 cores · 32 time bins across the trace):
 
-<img src="../images/migration-heatmap-pairs.svg" alt="Migration heatmap Level 1: core-pair rows and time bins for example-4cores.btf" width="820">
+<img src="../images/migration-heatmap-pairs.svg" alt="Migration heatmap Level 1: core-pair rows and time bins for example-4cores.btf" width="410">
 
 Each row is a directed core pair (`c0→c1`, `c0→c2`, …). Cell colour intensity is the migration count in that bin (darker blue = more events). Horizontal bands show **when** traffic occurred — e.g. repeated activity on `c0→c2` and `c1→c0` during the context-switch stress phases. Click a non-empty cell to drill into tasks for that pair and time window.
 
 **Level 2 — task grid** (after clicking a cell on the pair overview):
 
-<img src="../images/migration-heatmap-tasks.svg" alt="Migration heatmap Level 2: per-task sub-bins after drilling from example-4cores.btf" width="820">
+<img src="../images/migration-heatmap-tasks.svg" alt="Migration heatmap Level 2: per-task sub-bins after drilling from example-4cores.btf" width="410">
 
 Rows are tasks that migrated on the selected core pair within the chosen bin; columns are **32 sub-bins** spanning that bin's time window. Brighter cells mark sub-intervals where that task crossed cores most often. Click a task cell to zoom the timeline, place **C1** / **C2** at the sub-bin edges, switch to **Task View**, and filter to that task only.
 

@@ -11,15 +11,84 @@ import {
   buildRowLayout, formatTime,
 } from './TimelineRenderer.js'
 import { getTimelineLayout } from '../utils/timelineLayout.js'
-import { taskColor, taskDisplayName, taskMergeKey, stiNoteColor } from '../utils/colors.js'
+import { taskColor, taskDisplayName, taskMergeKey, stiNoteColor, lighterColor } from '../utils/colors.js'
 import {
   visiblePriorityEpisodes,
   BOOST_BAND_COLOR,
   INVERSION_BAND_COLOR,
 } from '../utils/priorityAnalysis.js'
+import {
+  visibleIntervalInstances,
+  visibleIntervalMarkerEvents,
+  intervalColor,
+  intervalStripeColors,
+} from '../utils/intervalAnalysis.js'
 
 function L() {
   return getTimelineLayout()
+}
+
+function rowBandHeightSvg(row) {
+  if (row.type === 'sti') return row.isExpanded ? L().stiWaveformH : L().stiRowH
+  return L().rowH
+}
+
+function appendIntervalRowBars(els, trace, row, timeStart, timeEnd, pxPerNs, canvasW, darkMode, ox, highlightInterval = null) {
+  const rowH = L().rowH
+  const instances = trace.intervalInstancesById?.get(row.key) || []
+  const visible = visibleIntervalInstances(instances, timeStart, timeEnd)
+  const base = row.color || intervalColor(row.key)
+  const stroke = darkMode ? lighterColor(base, 1.55) : lighterColor(base, 0.72)
+  const barY = row.y + 2
+  const barH = rowH - 4
+
+  for (const inst of visible) {
+    const x1 = (inst.startNs - timeStart) * pxPerNs
+    const x2 = (inst.stopNs - timeStart) * pxPerNs
+    if (x2 < -2 || x1 > canvasW + 2) continue
+    const cx = Math.max(0, Math.floor(x1))
+    const cx2 = Math.min(Math.ceil(x2), canvasW)
+    const drawW = cx2 - cx
+    if (drawW < 0.5) continue
+    els.push(
+      `<rect x="${(ox + cx).toFixed(1)}" y="${barY.toFixed(1)}" ` +
+      `width="${drawW.toFixed(1)}" height="${barH}" ` +
+      `fill="${base}" stroke="${stroke}" stroke-width="1.25" rx="0"/>`
+    )
+  }
+
+  const markerEvents = visibleIntervalMarkerEvents(trace, row.key, timeStart, timeEnd)
+  if (markerEvents.length > 0) {
+    const { dark: tickDark, light: tickLight } = intervalStripeColors(base, darkMode)
+    for (const ev of markerEvents) {
+      const x = (ev.timeNs - timeStart) * pxPerNs
+      if (x < -1 || x > canvasW + 1) continue
+      const xi = (ox + Math.round(x)).toFixed(1)
+      const color = ev.isStart ? tickDark : tickLight
+      const dash = ev.isStart ? '' : ' stroke-dasharray="2,2"'
+      els.push(
+        `<line x1="${xi}" y1="${barY.toFixed(1)}" x2="${xi}" y2="${(barY + barH).toFixed(1)}" ` +
+        `stroke="${color}" stroke-width="1"${dash}/>`
+      )
+    }
+  }
+
+  const hi = (highlightInterval && String(highlightInterval.id) === String(row.key))
+    ? highlightInterval
+    : null
+  if (hi) {
+    const markNs = hi.markNs ?? hi.stopNs
+    const hiColor = darkMode ? 'rgba(255,255,255,0.92)' : 'rgba(0,0,0,0.88)'
+    for (const t of new Set([markNs, hi.startNs, hi.stopNs])) {
+      const x = (t - timeStart) * pxPerNs
+      if (x < -1 || x > canvasW + 1) continue
+      const xi = (ox + Math.round(x)).toFixed(1)
+      els.push(
+        `<line x1="${xi}" y1="${barY.toFixed(1)}" x2="${xi}" y2="${(barY + barH).toFixed(1)}" ` +
+        `stroke="${hiColor}" stroke-width="2"/>`
+      )
+    }
+  }
 }
 
 // ---- Helpers ---------------------------------------------------------------
@@ -111,6 +180,7 @@ export function renderToSvg(trace, viewport, options = {}) {
     showSti     = true,
     stiExpanded = new Set(),
     stiLogScale = false,
+    highlightInterval = null,
   } = options
 
   const timeSpan = timeEnd - timeStart
@@ -146,7 +216,7 @@ export function renderToSvg(trace, viewport, options = {}) {
   // is small; svgH trims the SVG to exactly the content that is present.
   let svgH = RULER_H
   for (const row of rows) {
-    const rowH = row.type === 'sti' ? (row.isExpanded ? L().stiWaveformH : L().stiRowH) : L().rowH
+    const rowH = rowBandHeightSvg(row)
     if (row.y >= canvasH || row.y + rowH < 0) continue
     const bottom = Math.min(row.y + rowH + L().rowGap, canvasH)
     if (bottom > svgH) svgH = bottom
@@ -174,13 +244,13 @@ export function renderToSvg(trace, viewport, options = {}) {
   // ---- Row backgrounds ----
   for (let i = 0; i < rows.length; i++) {
     const row  = rows[i]
-    const rowH = row.type === 'sti' ? (row.isExpanded ? L().stiWaveformH : L().stiRowH) : L().rowH
+    const rowH = rowBandHeightSvg(row)
     if (row.y + rowH < 0 || row.y >= canvasH) continue
-    const bg = row.type === 'sti' ? stiBg : (i % 2 === 0 ? evenBg : oddBg)
+    const bg = (row.type === 'sti' || row.type === 'interval') ? stiBg : (i % 2 === 0 ? evenBg : oddBg)
     // Row background covers only the timeline area (label column drawn separately)
     els.push(`<rect x="${OX}" y="${row.y.toFixed(1)}" width="${canvasW}" height="${rowH}" fill="${bg}"/>`)
     // Separator line spans full row width
-    if (row.type !== 'sti') {
+    if (row.type !== 'sti' && row.type !== 'interval') {
       const sepY = (row.y + rowH + L().rowGap - 1).toFixed(1)
       els.push(`<line x1="0" y1="${sepY}" x2="${svgW}" y2="${sepY}" stroke="${sepColor}" stroke-width="0.5"/>`)
     }
@@ -188,7 +258,7 @@ export function renderToSvg(trace, viewport, options = {}) {
 
   // ---- Task / core segment bars ----
   for (const row of rows) {
-    if (row.type === 'sti') continue
+    if (row.type === 'sti' || row.type === 'interval') continue
     const rowH = L().rowH
     if (row.y + rowH < 0 || row.y > canvasH) continue
 
@@ -330,6 +400,16 @@ export function renderToSvg(trace, viewport, options = {}) {
     }
   }
 
+  // ---- Interval bars ----
+  for (const row of rows) {
+    if (row.type !== 'interval') continue
+    const rowH = L().rowH
+    if (row.y + rowH < 0 || row.y > canvasH) continue
+    appendIntervalRowBars(
+      els, trace, row, timeStart, timeEnd, pxPerNs, canvasW, darkMode, OX, highlightInterval,
+    )
+  }
+
   // ---- Ruler ticks and labels ----
   {
     const step      = niceStep(timeSpan)
@@ -350,22 +430,33 @@ export function renderToSvg(trace, viewport, options = {}) {
   // ---- Row labels (left fixed column) ----
   for (let i = 0; i < rows.length; i++) {
     const row  = rows[i]
-    const rowH = row.type === 'sti' ? (row.isExpanded ? L().stiWaveformH : L().stiRowH) : L().rowH
+    const rowH = rowBandHeightSvg(row)
     if (row.y + rowH < 0 || row.y > canvasH) continue
 
     const midY       = row.y + rowH / 2
     const maxChars   = Math.floor(L().labelW / 7)
     const rawLabel   = row.label
     const label      = rawLabel.length > maxChars ? rawLabel.slice(0, maxChars - 1) + '…' : rawLabel
-    const labelColor = row.type === 'sti' ? '#88AABB' : (row.type === 'core' ? '#E0E0E0' : textColor)
+    let labelColor = row.type === 'sti' ? '#88AABB' : (row.type === 'core' ? '#E0E0E0' : textColor)
+    if (row.type === 'interval') labelColor = row.color || intervalColor(row.key)
 
     // Opaque label column background (matches separate LabelColumn DOM element)
     els.push(`<rect x="0" y="${row.y.toFixed(1)}" width="${L().labelW}" height="${rowH}" fill="${darkMode ? '#1E1E1E' : '#F8F8F8'}"/>`)
-    els.push(
-      `<text x="4" y="${midY.toFixed(1)}" ` +
-      `fill="${labelColor}" font-family="monospace" font-size="10" dominant-baseline="middle">` +
-      `${esc(label)}</text>`
-    )
+    if (row.type === 'interval') {
+      const swatch = row.color || intervalColor(row.key)
+      els.push(`<rect x="4" y="${(midY - 5).toFixed(1)}" width="10" height="10" fill="${swatch}" stroke="${swatch}" stroke-width="1"/>`)
+      els.push(
+        `<text x="18" y="${midY.toFixed(1)}" ` +
+        `fill="${labelColor}" font-family="monospace" font-size="10" dominant-baseline="middle">` +
+        `${esc(label)}</text>`
+      )
+    } else {
+      els.push(
+        `<text x="4" y="${midY.toFixed(1)}" ` +
+        `fill="${labelColor}" font-family="monospace" font-size="10" dominant-baseline="middle">` +
+        `${esc(label)}</text>`
+      )
+    }
   }
 
   // Corner (ruler × label column)

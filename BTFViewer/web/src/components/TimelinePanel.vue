@@ -920,6 +920,7 @@ function captureAsSvg() {
     stiExpanded,
     stiLogScale: !!props.options.stiLogScale,
     cursors:     props.cursors || [],
+    highlightInterval: props.options.highlightInterval ?? null,
     marks:    (props.options.marks || []).map(m => [
       m.ns,
       m.label || '',
@@ -1366,7 +1367,8 @@ function scrollToTask(mergeKey) {
     )
     const targetCol = findColForTask(cols, mergeKey)
     if (!targetCol) return
-    viewport.scrollX = Math.max(0, RULER_W + targetCol.x + COL_W / 2 - viewport.canvasW / 2)
+    const cw = targetCol.colWidth ?? COL_W
+    viewport.scrollX = Math.max(0, targetCol.x + cw / 2 - viewport.canvasW / 2)
     clampScrollToContent()
     scheduleRender()
     return
@@ -1388,18 +1390,31 @@ function scrollToTask(mergeKey) {
   scheduleRender()
 }
 
-/** Scroll the viewport so an interval row is centered (statistics plot drill-down). */
+/** Scroll the viewport so an interval row/column is centered (statistics plot drill-down). */
 function scrollToIntervalRow(intervalId) {
   if (!props.trace || intervalId == null) return
-  const { rows } = buildRowLayout(
-    props.trace, props.options.viewMode, expanded, 0,
-    props.options.showSti !== false, stiExpanded,
-    !!props.options.migratedOnlyFilter,
-    props.options.taskFilterKeys || null,
-  )
-  const targetRow = rows.find(r => r.type === 'interval' && String(r.key) === String(intervalId))
-  if (!targetRow) return
-  viewport.scrollY = Math.max(0, RULER_H + targetRow.y + layout().rowH / 2 - viewport.canvasH / 2)
+  const showSti = props.options.showSti !== false
+  const migrated = !!props.options.migratedOnlyFilter
+  const taskFilterKeys = props.options.taskFilterKeys || null
+
+  if (orientation.value === 'v') {
+    const { cols } = buildColumnLayout(
+      props.trace, props.options.viewMode, expanded, 0,
+      showSti, stiExpanded, migrated, taskFilterKeys,
+    )
+    const targetCol = cols.find(c => c.type === 'interval' && String(c.key) === String(intervalId))
+    if (!targetCol) return
+    const cw = targetCol.colWidth ?? COL_W
+    viewport.scrollX = Math.max(0, targetCol.x + cw / 2 - viewport.canvasW / 2)
+  } else {
+    const { rows } = buildRowLayout(
+      props.trace, props.options.viewMode, expanded, 0,
+      showSti, stiExpanded, migrated, taskFilterKeys,
+    )
+    const targetRow = rows.find(r => r.type === 'interval' && String(r.key) === String(intervalId))
+    if (!targetRow) return
+    viewport.scrollY = Math.max(0, RULER_H + targetRow.y + layout().rowH / 2 - viewport.canvasH / 2)
+  }
   clampScrollToContent()
   scheduleRender()
 }
@@ -1482,7 +1497,8 @@ function scrollToSegmentIfNeeded(seg) {
   }
   if (!isHorizontal && colOutOfView && targetCol) {
     const rawX = targetCol.x + scrollX
-    viewport.scrollX = Math.max(0, RULER_W + rawX + COL_W / 2 - canvasW / 2)
+    const cw = targetCol.colWidth ?? COL_W
+    viewport.scrollX = Math.max(0, rawX + cw / 2 - canvasW / 2)
   }
   if (!timeVisible || (isHorizontal && rowOutOfView && targetRow) || (!isHorizontal && colOutOfView && targetCol)) {
     scheduleRender()

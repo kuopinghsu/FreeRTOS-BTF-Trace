@@ -2,6 +2,7 @@
   <div
     ref="panelRef"
     class="cpu-load-panel"
+    :class="{ dark: darkMode }"
   >
     <div class="cpu-load-title-row">
       <div class="cpu-load-title">CPU LOAD</div>
@@ -97,20 +98,20 @@
               class="cpu-load-hover-line"
             />
             <g
-              v-if="row.hoverCursor"
+              v-if="row.hoverCursor?.label"
               class="cpu-load-hover-badge"
             >
               <rect
                 :x="row.hoverCursor.badgeX"
                 y="2"
                 :width="row.hoverCursor.badgeW"
-                height="10"
+                height="12"
                 rx="2"
                 class="cpu-load-hover-badge-bg"
               />
               <text
                 :x="row.hoverCursor.badgeX + 4"
-                y="4"
+                y="8"
                 class="cpu-load-hover-text"
               >
                 {{ row.hoverCursor.label }}
@@ -126,64 +127,17 @@
               class="cpu-load-cursor-line"
               :style="{ stroke: cursor.color }"
             />
-            <g
-              v-for="cursor in row.cursors"
-              :key="`${row.key}-cursor-label-${cursor.index}`"
-              class="cpu-load-cursor-badge"
-            >
-              <rect
-                :x="cursor.badgeX"
-                y="2"
-                :width="cursor.badgeW"
-                height="10"
-                rx="2"
-                :fill="cursor.color"
-              />
-              <text
-                :x="cursor.badgeX + 4"
-                y="4"
-                class="cpu-load-cursor-text"
-              >
-                {{ cursor.label }}
-              </text>
-            </g>
-            <g
+            <line
               v-for="mark in row.marks"
               :key="`${row.key}-mark-${mark.id}`"
-              class="cpu-load-mark"
-            >
-              <line
-                :x1="mark.x"
-                :x2="mark.x"
-                y1="0"
-                :y2="row.height"
-                class="cpu-load-mark-line"
-                :class="{ annotation: mark.isAnnotation }"
-                :style="{ stroke: mark.color }"
-              />
-              <polygon
-                :points="mark.markerPoints"
-                :fill="mark.color"
-              />
-              <rect
-                v-if="mark.label"
-                :x="mark.badgeX"
-                y="18"
-                :width="mark.badgeW"
-                height="13"
-                rx="1"
-                :fill="mark.color"
-                opacity="0.88"
-              />
-              <text
-                v-if="mark.label"
-                :x="mark.badgeX + 4"
-                y="20"
-                class="cpu-load-mark-text"
-              >
-                {{ mark.label }}
-              </text>
-            </g>
+              :x1="mark.x"
+              :x2="mark.x"
+              y1="0"
+              :y2="row.height"
+              class="cpu-load-mark-line"
+              :class="{ annotation: mark.isAnnotation }"
+              :style="{ stroke: mark.color }"
+            />
           </svg>
         </div>
       </div>
@@ -193,7 +147,6 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { formatTime } from '../renderer/TimelineRenderer.js'
 import { coreColor, isIdleTaskName, parseTaskName, taskColor, taskDisplayName, taskMergeKey } from '../utils/colors.js'
 import {
   avgBinsForNsRange,
@@ -346,8 +299,8 @@ const rowModels = computed(() => {
       cursorRangeShade: collapsed ? null : rangeShade,
       hoverCursor: collapsed
         ? null
-        : buildHoverCursor(visibleStart, visibleEnd, visibleSpan, trace.timeScale, hoverLoad),
-      cursors: collapsed ? [] : buildCursorOverlays(visibleStart, visibleEnd, visibleSpan, trace.timeScale),
+        : buildHoverCursor(visibleStart, visibleEnd, visibleSpan, hoverLoad),
+      cursors: collapsed ? [] : buildCursorOverlays(visibleStart, visibleEnd, visibleSpan),
       marks: collapsed ? [] : buildMarkOverlays(visibleStart, visibleEnd, visibleSpan),
       pctLabel,
       pctTitle,
@@ -484,37 +437,30 @@ function timeToPlotX(ns, visibleStart, visibleEnd, visibleSpan) {
   return ((ns - visibleStart) / visibleSpan) * PLOT_W
 }
 
-function buildCursorOverlays(visibleStart, visibleEnd, visibleSpan, timeScale) {
+function buildCursorOverlays(visibleStart, visibleEnd, visibleSpan) {
   return (props.cursors || []).flatMap((ns, index) => {
     if (ns == null) return []
     const x = timeToPlotX(ns, visibleStart, visibleEnd, visibleSpan)
     if (x == null) return []
-    const label = formatTime(ns, timeScale)
-    const badgeW = Math.max(26, label.length * 6 + 8)
-    const badgeX = clampBadgeX(x + 2, badgeW)
     return [{
       index,
       x,
       color: CURSOR_COLORS[index % CURSOR_COLORS.length],
-      label,
-      badgeW,
-      badgeX,
     }]
   })
 }
 
-function buildHoverCursor(visibleStart, visibleEnd, visibleSpan, timeScale, load) {
+function buildHoverCursor(visibleStart, visibleEnd, visibleSpan, load) {
   if (props.hoverTime == null) return null
   const x = timeToPlotX(props.hoverTime, visibleStart, visibleEnd, visibleSpan)
   if (x == null) return null
-  const loadStr = load != null ? `${Math.round(load * 100)}% · ` : ''
-  const label = `${loadStr}${formatTime(props.hoverTime, timeScale)}`
-  const badgeW = Math.max(26, label.length * 6 + 8)
+  const label = load != null ? `${Math.round(load * 100)}%` : ''
+  const badgeW = label ? Math.max(22, label.length * 6 + 8) : 0
   return {
     x,
     label,
     badgeW,
-    badgeX: clampBadgeX(x - Math.round(badgeW / 2), badgeW),
+    badgeX: label ? clampBadgeX(x - Math.round(badgeW / 2), badgeW) : 0,
   }
 }
 
@@ -522,21 +468,12 @@ function buildMarkOverlays(visibleStart, visibleEnd, visibleSpan) {
   return (props.marks || []).flatMap(mark => {
     const x = timeToPlotX(mark.ns, visibleStart, visibleEnd, visibleSpan)
     if (x == null) return []
-    const label = mark.label || ''
-    const badgeW = label ? Math.max(20, label.length * 6 + 8) : 0
-    const badgeX = label ? clampBadgeX(x + 3, badgeW) : 0
     const isAnnotation = mark.type === 'annotation'
     return [{
       id: mark.id,
       x,
-      label,
-      badgeW,
-      badgeX,
       color: isAnnotation ? ANNOTATION_COLOR : BOOKMARK_COLOR,
       isAnnotation,
-      markerPoints: isAnnotation
-        ? `${x.toFixed(1)},6 ${(x + 4).toFixed(1)},10 ${x.toFixed(1)},14 ${(x - 4).toFixed(1)},10`
-        : `${(x - 4).toFixed(1)},8 ${(x + 4).toFixed(1)},8 ${x.toFixed(1)},14`,
     }]
   })
 }
@@ -718,40 +655,32 @@ watch(() => props.trace, () => {
 }
 
 .cpu-load-hover-badge-bg {
-  fill: rgba(80, 130, 255, 0.28);
+  stroke: none;
 }
 
-.cpu-load-cursor-text,
-.cpu-load-hover-text,
-.cpu-load-mark-text {
-  fill: #000;
-  font: 400 7px monospace;
-  dominant-baseline: text-before-edge;
+.cpu-load-panel.dark .cpu-load-hover-badge-bg {
+  fill: rgba(40, 40, 40, 0.82);
 }
 
-.cpu-load-cursor-text {
-  font: 700 7px monospace;
-}
-
-.cpu-load-hover-text,
-.cpu-load-mark-text {
-  font: 400 7px monospace;
+.cpu-load-panel:not(.dark) .cpu-load-hover-badge-bg {
+  fill: rgba(255, 255, 255, 0.9);
 }
 
 .cpu-load-hover-text {
-  fill: #aac8ff;
+  font: 400 8px monospace;
+  dominant-baseline: middle;
+}
+
+.cpu-load-panel.dark .cpu-load-hover-text {
+  fill: #ffffff;
+}
+
+.cpu-load-panel:not(.dark) .cpu-load-hover-text {
+  fill: #111111;
 }
 
 :global(.app:not(.dark)) .cpu-load-hover-line {
   stroke: rgba(0, 0, 0, 0.25);
-}
-
-:global(.app:not(.dark)) .cpu-load-hover-badge-bg {
-  fill: rgba(0, 80, 200, 0.18);
-}
-
-:global(.app:not(.dark)) .cpu-load-hover-text {
-  fill: #003c9a;
 }
 
 .cpu-load-mark-line {

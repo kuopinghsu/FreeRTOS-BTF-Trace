@@ -43,45 +43,44 @@
 #define configINCLUDE_OSTICK_EVENTS 1
 #endif
 
-#define addEVENT( tag, event ) do {             \
-    taskENTER_CRITICAL();                       \
-    btf_trace_add_event ( tag, 0, event );      \
-    taskEXIT_CRITICAL();                        \
+#define addEVENT( tag, event ) do {                                         \
+    taskENTER_CRITICAL();                                                   \
+    btf_trace_add_event ( tag, 0, event );                                  \
+    taskEXIT_CRITICAL();                                                    \
 } while(0)
 
-#define addEVENT_ISR( tag, event ) do {         \
-    int mask = taskENTER_CRITICAL_FROM_ISR();   \
-    btf_trace_add_event ( tag, 0, event );      \
-    taskEXIT_CRITICAL_FROM_ISR(mask);           \
+#define addEVENT_ISR( tag, event ) do {                                     \
+    int mask = taskENTER_CRITICAL_FROM_ISR();                               \
+    btf_trace_add_event ( tag, 0, event );                                  \
+    taskEXIT_CRITICAL_FROM_ISR(mask);                                       \
 } while(0)
 
 #ifndef traceSTART
-# define traceSTART() do {                      \
-    taskENTER_CRITICAL();                       \
-    btf_traceSTART();                           \
-    taskEXIT_CRITICAL();                        \
+# define traceSTART() do {                                                  \
+    taskENTER_CRITICAL();                                                   \
+    btf_traceSTART();                                                       \
+    taskEXIT_CRITICAL();                                                    \
 } while(0)
 #endif // traceSTART
 
 #ifndef traceEND
-# define traceEND() do {                        \
-    taskENTER_CRITICAL();                       \
-    btf_traceEND();                             \
-    taskEXIT_CRITICAL();                        \
+# define traceEND() do {                                                    \
+    taskENTER_CRITICAL();                                                   \
+    btf_traceEND();                                                         \
+    taskEXIT_CRITICAL();                                                    \
 } while(0)
 #endif // traceEND
 
 #ifndef traceTASK_CREATE
-# define traceTASK_CREATE( pxNewTCB ) do {      \
-    taskENTER_CRITICAL();                       \
-    btf_trace_add_task (                        \
-        (uint8_t*)pxNewTCB->pcTaskName,         \
-        (uint32_t)pxNewTCB->uxTCBNumber,        \
-        (uint32_t)pxNewTCB->uxPriority,         \
-        TRACE_EVENT_TASK_CREATE                 \
-    );                                          \
+# define traceTASK_CREATE( pxNewTCB ) do {                                  \
+    taskENTER_CRITICAL();                                                   \
+    btf_trace_add_task (                                                    \
+        (uint8_t*)pxNewTCB->pcTaskName,                                     \
+        (uint32_t)pxNewTCB->uxTCBNumber,                                    \
+        (uint32_t)pxNewTCB->uxPriority,                                     \
+        TRACE_EVENT_TASK_CREATE );                                          \
     vTaskSetTaskNumber( (TaskHandle_t)( pxNewTCB ), (pxNewTCB)->uxTCBNumber ); \
-    taskEXIT_CRITICAL();                        \
+    taskEXIT_CRITICAL();                                                    \
 } while(0)
 #endif // traceTASK_CREATE
 
@@ -112,35 +111,35 @@
 #endif // traceTASK_RESUME_FROM_ISR
 
 #ifndef traceTASK_PRIORITY_SET
-# define traceTASK_PRIORITY_SET( pxTCB, uxNewPriority ) do { \
-    taskENTER_CRITICAL();                                   \
-    btf_trace_add_event(                                    \
-        (uint32_t)(pxTCB)->uxTCBNumber,                     \
-        (uint32_t)(uxNewPriority),                          \
-        TRACE_EVENT_TASK_PRIORITY_SET );                    \
-    taskEXIT_CRITICAL();                                    \
+# define traceTASK_PRIORITY_SET( pxTCB, uxNewPriority ) do {                \
+    taskENTER_CRITICAL();                                                   \
+    btf_trace_add_event(                                                    \
+        (uint32_t)(pxTCB)->uxTCBNumber,                                     \
+        (uint32_t)(uxNewPriority),                                          \
+        TRACE_EVENT_TASK_PRIORITY_SET );                                    \
+    taskEXIT_CRITICAL();                                                    \
 } while(0)
 #endif // traceTASK_PRIORITY_SET
 
 #ifndef traceTASK_PRIORITY_INHERIT
-# define traceTASK_PRIORITY_INHERIT( pxTCB, uxInheritedPriority ) do { \
-    taskENTER_CRITICAL();                                             \
-    btf_trace_add_event(                                              \
-        (uint32_t)(pxTCB)->uxTCBNumber,                               \
-        (uint32_t)(uxInheritedPriority),                              \
-        TRACE_EVENT_TASK_PRIORITY_INHERIT );                          \
-    taskEXIT_CRITICAL();                                              \
+# define traceTASK_PRIORITY_INHERIT( pxTCB, uxInheritedPriority ) do {      \
+    taskENTER_CRITICAL();                                                   \
+    btf_trace_add_event(                                                    \
+        (uint32_t)(pxTCB)->uxTCBNumber,                                     \
+        (uint32_t)(uxInheritedPriority),                                    \
+        TRACE_EVENT_TASK_PRIORITY_INHERIT );                                \
+    taskEXIT_CRITICAL();                                                    \
 } while(0)
 #endif // traceTASK_PRIORITY_INHERIT
 
 #ifndef traceTASK_PRIORITY_DISINHERIT
-# define traceTASK_PRIORITY_DISINHERIT( pxTCB, uxOriginalPriority ) do { \
-    taskENTER_CRITICAL();                                               \
-    btf_trace_add_event(                                                \
-        (uint32_t)(pxTCB)->uxTCBNumber,                                 \
-        (uint32_t)(uxOriginalPriority),                                 \
-        TRACE_EVENT_TASK_PRIORITY_DISINHERIT );                         \
-    taskEXIT_CRITICAL();                                                \
+# define traceTASK_PRIORITY_DISINHERIT( pxTCB, uxOriginalPriority ) do {    \
+    taskENTER_CRITICAL();                                                   \
+    btf_trace_add_event(                                                    \
+        (uint32_t)(pxTCB)->uxTCBNumber,                                     \
+        (uint32_t)(uxOriginalPriority),                                     \
+        TRACE_EVENT_TASK_PRIORITY_DISINHERIT );                             \
+    taskEXIT_CRITICAL();                                                    \
 } while(0)
 #endif // traceTASK_PRIORITY_DISINHERIT
 
@@ -149,26 +148,26 @@
 #if configINCLUDE_TAGS
 
 #ifndef traceTAG
-# define traceTAG(t,v) do {                     \
-    taskENTER_CRITICAL();                       \
-    btf_traceTAG(t, v);                         \
-    taskEXIT_CRITICAL();                        \
+# define traceTAG(t,v) do {                                                 \
+    taskENTER_CRITICAL();                                                   \
+    btf_traceTAG(t, v);                                                     \
+    taskEXIT_CRITICAL();                                                    \
 } while(0)
 #endif // traceTAG
 
 #ifndef traceINTERVAL_START
-# define traceINTERVAL_START(id) do {            \
-    taskENTER_CRITICAL();                       \
-    btf_traceINTERVAL_START(id);                \
-    taskEXIT_CRITICAL();                        \
+# define traceINTERVAL_START(id) do {                                       \
+    taskENTER_CRITICAL();                                                   \
+    btf_traceINTERVAL_START(id);                                            \
+    taskEXIT_CRITICAL();                                                    \
 } while(0)
 #endif // traceINTERVAL_START
 
 #ifndef traceINTERVAL_STOP
-# define traceINTERVAL_STOP(id) do {             \
-    taskENTER_CRITICAL();                       \
-    btf_traceINTERVAL_STOP(id);                 \
-    taskEXIT_CRITICAL();                        \
+# define traceINTERVAL_STOP(id) do {                                        \
+    taskENTER_CRITICAL();                                                   \
+    btf_traceINTERVAL_STOP(id);                                             \
+    taskEXIT_CRITICAL();                                                    \
 } while(0)
 #endif // traceINTERVAL_STOP
 
@@ -176,13 +175,13 @@
 
 #if configINCLUDE_QUEUE_EVENTS
 
-#define addQUEUE_EVENT( pxQueue, event ) do {         \
-    taskENTER_CRITICAL();                             \
-    btf_trace_add_event(                              \
-        (uint32_t)(pxQueue)->ucQueueType,             \
-        (uint32_t)(uintptr_t)(pxQueue),               \
-        event );                                      \
-    taskEXIT_CRITICAL();                              \
+#define addQUEUE_EVENT( pxQueue, event ) do {                               \
+    taskENTER_CRITICAL();                                                   \
+    btf_trace_add_event(                                                    \
+        (uint32_t)(pxQueue)->ucQueueType,                                   \
+        (uint32_t)(uintptr_t)(pxQueue),                                     \
+        event );                                                            \
+    taskEXIT_CRITICAL();                                                    \
 } while(0)
 
 #ifndef traceQUEUE_CREATE

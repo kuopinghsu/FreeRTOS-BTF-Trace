@@ -280,17 +280,15 @@ export function buildRowLayout(trace, viewMode, expanded, yStart, showSti = true
       rows.push({ type: 'sti', key: ch, label: ch, color: '#888', y, isTag, isExpanded })
       y += rowH + L().rowGap
     }
-    if (viewMode === 'task') {
-      for (const id of (trace.intervalIds || [])) {
-        rows.push({
-          type: 'interval',
-          key: id,
-          label: `Interval ${id}`,
-          color: intervalColor(id),
-          y,
-        })
-        y += L().rowH + L().rowGap
-      }
+    for (const id of (trace.intervalIds || [])) {
+      rows.push({
+        type: 'interval',
+        key: id,
+        label: `Interval ${id}`,
+        color: intervalColor(id),
+        y,
+      })
+      y += L().rowH + L().rowGap
     }
   }
 
@@ -1167,6 +1165,88 @@ function drawIntervalRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerN
   ctx.restore()
 }
 
+/** Draw paired interval spans as vertical bars (vertical timeline orientation). */
+function drawIntervalColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, canvasH, darkMode, highlightInterval = null) {
+  const colX = col.x
+  const colW = col.colWidth ?? COL_W
+  const headerH = HEADER_H
+  const bodyH = canvasH - headerH
+
+  ctx.fillStyle = darkMode ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.02)'
+  ctx.fillRect(colX, headerH, colW, bodyH)
+
+  const instances = trace.intervalInstancesById?.get(col.key) || []
+  const visible = visibleIntervalInstances(instances, timeStart, timeEnd)
+  const base = col.color || intervalColor(col.key)
+  const stroke = darkMode ? lighterColor(base, 1.55) : lighterColor(base, 0.72)
+
+  const bars = []
+  for (const inst of visible) {
+    const y1 = (inst.startNs - timeStart) * pxPerNs
+    const y2 = (inst.stopNs - timeStart) * pxPerNs
+    if (y2 < -2 || y1 > bodyH + 2) continue
+    const cy = Math.max(0, Math.floor(y1))
+    const cy2 = Math.min(Math.ceil(y2), bodyH)
+    const drawH = cy2 - cy
+    if (drawH < 0.5) continue
+    bars.push({ inst, cy, drawH })
+  }
+
+  const markerEvents = visibleIntervalMarkerEvents(trace, col.key, timeStart, timeEnd)
+  const barX = colX + 2
+  const barW = colW - 4
+
+  ctx.save()
+  for (const bar of bars) {
+    const { cy, drawH } = bar
+    ctx.fillStyle = base
+    ctx.fillRect(barX, headerH + cy, barW, drawH)
+    if (drawH >= 3) {
+      ctx.strokeStyle = stroke
+      ctx.lineWidth = 1.25
+      ctx.strokeRect(barX + 0.5, headerH + cy + 0.5, barW - 1, drawH - 1)
+    }
+  }
+  if (markerEvents.length > 0) {
+    const { dark: tickDark, light: tickLight } = intervalStripeColors(base, darkMode)
+    ctx.lineWidth = 1
+    for (const ev of markerEvents) {
+      const y = (ev.timeNs - timeStart) * pxPerNs
+      if (y < -1 || y > bodyH + 1) continue
+      const yi = Math.round(headerH + y) + 0.5
+      ctx.strokeStyle = ev.isStart ? tickDark : tickLight
+      if (!ev.isStart) ctx.setLineDash([2, 2])
+      else ctx.setLineDash([])
+      ctx.beginPath()
+      ctx.moveTo(barX, yi)
+      ctx.lineTo(barX + barW, yi)
+      ctx.stroke()
+    }
+    ctx.setLineDash([])
+  }
+
+  const hi = (highlightInterval && String(highlightInterval.id) === String(col.key))
+    ? highlightInterval
+    : null
+  if (hi) {
+    const markNs = hi.markNs ?? hi.stopNs
+    const times = new Set([markNs, hi.startNs, hi.stopNs])
+    ctx.strokeStyle = darkMode ? 'rgba(255,255,255,0.92)' : 'rgba(0,0,0,0.88)'
+    ctx.lineWidth = 2
+    ctx.setLineDash([])
+    for (const t of times) {
+      const y = (t - timeStart) * pxPerNs
+      if (y < -1 || y > bodyH + 1) continue
+      const yi = Math.round(headerH + y) + 0.5
+      ctx.beginPath()
+      ctx.moveTo(barX, yi)
+      ctx.lineTo(barX + barW, yi)
+      ctx.stroke()
+    }
+  }
+  ctx.restore()
+}
+
 function drawStiRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, canvasW, darkMode, logScale = false) {
   if (row.isExpanded) {
     drawStiWaveformRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, canvasW, darkMode, logScale)
@@ -1848,6 +1928,7 @@ export function buildColumnLayout(trace, viewMode, expanded, scrollX = 0, showSt
   // STI columns — tag-event channels can be expanded to show a wider waveform column
   if (showSti) {
     for (const ch of trace.stiChannels) {
+      if (isIntervalMarkerChannel(ch)) continue
       const isExpandable = isStiTagChannel(ch)
       const isExpanded   = isExpandable && stiExpanded.has(ch)
       const cw           = isExpanded ? L().stiWaveformH : COL_W
@@ -1855,6 +1936,20 @@ export function buildColumnLayout(trace, viewMode, expanded, scrollX = 0, showSt
       cols.push({ type: 'sti', key: ch, label: ch, color: '#888', x, colIdx: rawIdx, colWidth: cw, isExpanded, isExpandable })
       rawIdx++
       xAcc += cw
+    }
+    for (const id of (trace.intervalIds || [])) {
+      const x = RULER_W + xAcc - scrollX
+      cols.push({
+        type: 'interval',
+        key: id,
+        label: `Interval ${id}`,
+        color: intervalColor(id),
+        x,
+        colIdx: rawIdx,
+        colWidth: COL_W,
+      })
+      rawIdx++
+      xAcc += COL_W
     }
   }
 
@@ -1991,7 +2086,9 @@ function drawColumnHeaders(ctx, cols, headerH, colW, highlightKey, darkMode) {
 
     // Rotated label
     const isHl = highlightKey === col.key
-    const color = isHl ? '#FFD700' : (col.type === 'sti' ? '#88AABB' : (darkMode ? '#D4D4D4' : '#1E1E1E'))
+    let color = isHl ? '#FFD700' : (darkMode ? '#D4D4D4' : '#1E1E1E')
+    if (col.type === 'sti') color = '#88AABB'
+    else if (col.type === 'interval') color = col.color || intervalColor(col.key)
     ctx.save()
     ctx.translate(cx, headerH - 10)
     ctx.rotate(-Math.PI / 2)
@@ -2691,6 +2788,8 @@ export function renderVertical(ctx, trace, viewport, options = {}) {
       drawCoreTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, canvasH, darkMode, highlightSegment, lockedTaskKey, colBudget)
     } else if (col.type === 'sti') {
       drawStiColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, canvasH, darkMode)
+    } else if (col.type === 'interval') {
+      drawIntervalColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, canvasH, darkMode, options.highlightInterval ?? null)
     }
   }
   ctx.restore()

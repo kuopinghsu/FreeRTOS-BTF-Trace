@@ -24,9 +24,9 @@
 #include <stdint.h>
 #include <string.h>
 
-#define TRACE_VER_MAJOR     1
-#define TRACE_VER_MINOR     4
-#define TRACE_VERSION       ((TRACE_VER_MAJOR<<16)|TRACE_VER_MINOR)
+#define TRACE_VER_MAJOR                 1
+#define TRACE_VER_MINOR                 4
+#define TRACE_VERSION                   ((TRACE_VER_MAJOR<<16)|TRACE_VER_MINOR)
 
 #ifndef configMAX_TRACE_TASKS
 #define configMAX_TRACE_TASKS           1024
@@ -67,14 +67,14 @@ typedef enum {
     TRACE_EVENT_TAG4                     = 94,
     TRACE_EVENT_TAG5                     = 95,
     TRACE_EVENT_TAG6                     = 96,
-    TRACE_EVENT_TAG7                 = 97
+    TRACE_EVENT_TAG7                     = 97
 } event_t;
 
-#define QUEUE_TYPE_BASE            0U  // regular queue
-#define QUEUE_TYPE_MUTEX           1U  // non-recursive mutex
-#define QUEUE_TYPE_COUNTING_SEM    2U  // counting semaphore
-#define QUEUE_TYPE_BINARY_SEM      3U  // binary semaphore
-#define QUEUE_TYPE_RECURSIVE_MUTEX 4U  // recursive mutex
+#define QUEUE_TYPE_BASE                 0U  // regular queue
+#define QUEUE_TYPE_MUTEX                1U  // non-recursive mutex
+#define QUEUE_TYPE_COUNTING_SEM         2U  // counting semaphore
+#define QUEUE_TYPE_BINARY_SEM           3U  // binary semaphore
+#define QUEUE_TYPE_RECURSIVE_MUTEX      4U  // recursive mutex
 
 typedef struct {
     uint32_t    timestamp;
