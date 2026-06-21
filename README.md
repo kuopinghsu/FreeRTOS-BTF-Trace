@@ -342,13 +342,13 @@ python BTFViewer/btf_viewer.py tracedata/example-4cores.btf
 
 **Level 1 — core-pair overview** (directed pairs × 32 time bins):
 
-<img src="images/migration-heatmap-pairs.svg" alt="Migration heatmap Level 1: core-pair rows and time bins for example-4cores.btf" width="820">
+<img src="images/migration-heatmap-pairs.svg" alt="Migration heatmap Level 1: core-pair rows and time bins for example-4cores.btf" width="410">
 
 Each row is a directed core pair (`c0→c1`, `c0→c2`, …). Darker cells mean more migrations in that time bin. Click a non-empty cell to drill into the tasks that contributed.
 
 **Level 2 — task grid** (after clicking a hot cell):
 
-<img src="images/migration-heatmap-tasks.svg" alt="Migration heatmap Level 2: per-task sub-bins after drilling from example-4cores.btf" width="820">
+<img src="images/migration-heatmap-tasks.svg" alt="Migration heatmap Level 2: per-task sub-bins after drilling from example-4cores.btf" width="410">
 
 Rows are tasks that migrated on the selected pair within the chosen bin; columns are **32 sub-bins** inside that bin. Click a task cell to zoom the timeline, place cursors, switch to **Task View**, and filter to that task.
 
