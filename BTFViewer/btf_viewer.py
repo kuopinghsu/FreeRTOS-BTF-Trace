@@ -14594,27 +14594,44 @@ class _StatsPanel(QWidget):
                 table = QTableWidget(len(_tick["large_gaps"]), 4)
                 table.setHorizontalHeaderLabels(["Start", "End", "Gap", "Missed"])
                 table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+                table.setSelectionMode(QAbstractItemView.NoSelection)
+                table.setFocusPolicy(Qt.NoFocus)
                 table.verticalHeader().setVisible(False)
+                table.horizontalHeader().setStretchLastSection(False)
                 table.setShowGrid(False)
                 table.setFrameShape(QFrame.NoFrame)
+                table.verticalHeader().setDefaultSectionSize(STATS_TABLE_ROW_H)
+                table.verticalHeader().setMinimumSectionSize(STATS_TABLE_ROW_H)
+                table.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
+                table.horizontalHeader().setFixedHeight(18)
                 table.horizontalHeader().setSectionsClickable(True)
                 table.horizontalHeader().setSortIndicatorShown(True)
+                table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+                table.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
                 _item_bg = self._apply_stats_table_theme(table, _fs)
                 for r, (start, end, dur, missed) in enumerate(_tick["large_gaps"]):
+                    keys = (start, end, dur, missed)
                     for c, val in enumerate((
                         _format_time(start, trace.time_scale),
                         _format_time(end, trace.time_scale),
                         _format_time(dur, trace.time_scale),
                         str(missed),
                     )):
-                        keys = (start, end, dur, missed)
                         item = _StatsSortItem(val, keys[c])
                         item.setBackground(_item_bg)
+                        item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                         table.setItem(r, c, item)
+                table.setAlternatingRowColors(False)
+                table.setWordWrap(False)
+                for r in range(table.rowCount()):
+                    table.setRowHeight(r, STATS_TABLE_ROW_H)
+                table.resizeColumnsToContents()
+                table.setColumnWidth(3, min(table.columnWidth(3), 76))
                 table.setSortingEnabled(True)
                 host = QWidget()
                 hlay = QVBoxLayout(host)
                 hlay.setContentsMargins(0, 0, 0, 0)
+                hlay.setSpacing(4)
                 self._wrap_table_with_resizer(hlay, table, "health")
                 blay.addWidget(host)
 
