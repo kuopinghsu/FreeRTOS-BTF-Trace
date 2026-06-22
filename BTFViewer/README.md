@@ -8,7 +8,7 @@ A PyQt5-based interactive visualiser for FreeRTOS context-switch traces in **Bes
 
 <img src="../images/btfviewer.png" alt="BTF Viewer screenshot" width=640>
 
-[DEMO](https://apps.kuoping.com/btf-viewer.html)
+[DEMO](https://apps.kuoping.com/btf_viewer.html)
 
 ## Features
 
@@ -36,7 +36,7 @@ A PyQt5-based interactive visualiser for FreeRTOS context-switch traces in **Bes
 - **Metrics distribution charts** — click any row in Execution Time, Blocking Time, Inter-Arrival, Preemption Chain, **Priority Inheritance**, or **Interval Analysis** tables to open a scatter-plot + histogram popup; charts live-update when cursors move or cursor-range scope is toggled (Desktop + Web). On Desktop, each trace tab remembers its own open chart when you switch tabs
 - **Segment tooltips** — hover any segment bar for duration, slice index on core, previous/next task on that core, and gap before the slice
 - **CPU Load Graph** — bar chart below the timeline showing per-core CPU utilisation; row labels show the **visible-window average** and, with 2+ cursors, a cursor-range average (`· C:xx%`); toggle with the **Load** toolbar button; drag the divider between timeline and CPU load to resize (Desktop + Web)
-- **Resizable panels** — drag dividers between timeline and CPU load, dock panels (Desktop), the right-side panel (Web), and metric table sections in Statistics (Desktop + Web); splitter and table heights persist in `btf_viewer.rc` on Desktop
+- **Resizable panels** — drag dividers between timeline and CPU load, dock panels (Desktop), the right-side panel (Web), the **label column** (task names), and metric table sections in Statistics (Desktop + Web); splitter, label width, and table heights persist in `btf_viewer.rc` (Desktop) or browser `localStorage` (Web)
 - **STI event markers** — software trace items rendered as coloured diamond markers
 - **Find & Jump** — search for any task name; `F3` / `Shift+F3` steps through all matching segments
 - **Bookmarks & Annotations** — mark important timestamps and attach free-text notes; persisted per trace file in `btf_viewer.rc`
@@ -95,7 +95,7 @@ Then open the build:
 open BTFViewer/web/dist/index.html   # macOS — double-click also works
 ```
 
-The same file is copied to `BTFViewer/web/pre-build/btf-viewer.html` on each `make build` (used by the hosted [demo](https://apps.kuoping.com/btf-viewer.html)).
+The same file is copied to `BTFViewer/web/pre-build/btf_viewer.html` on each `make build` (used by the hosted [demo](https://apps.kuoping.com/btf_viewer.html)).
 
 Do not open `BTFViewer/web/index.html` directly via `file://`; it is the Vite source entry used by the dev server.
 
@@ -106,7 +106,7 @@ Do not open `BTFViewer/web/index.html` directly via `file://`; it is the Vite so
 | Double-click `dist/index.html` | Yes | Basic use; Chrome may block Web Workers on `file://`, so parsing falls back to the main thread (UI can freeze briefly on very large traces). Use **Open** to pick a `.btf` file. |
 | `make preview` | **Recommended** | Serves the build over HTTP — Web Workers, WASM accel, and the stats worker all work as intended. |
 | `make dev` | Dev | Hot reload at `http://localhost:5173`. |
-| Hosted demo | **Recommended** | [apps.kuoping.com/btf-viewer.html](https://apps.kuoping.com/btf-viewer.html) |
+| Hosted demo | **Recommended** | [apps.kuoping.com/btf_viewer.html](https://apps.kuoping.com/btf_viewer.html) |
 
 For large traces (e.g. `tracedata/example-16cores.btf` — 16 cores, 100k+ segments), prefer **`make preview`** or the hosted demo rather than `file://`.
 
@@ -122,7 +122,7 @@ make dev      # or: npm run dev
 
 | Target | Action |
 |--------|--------|
-| `make` / `make build` | Install deps + produce `dist/index.html` and copy to `pre-build/btf-viewer.html` |
+| `make` / `make build` | Install deps + produce `dist/index.html` and copy to `pre-build/btf_viewer.html` |
 | `make dev` | Start Vite dev server with hot reload |
 | `make preview` | Serve the production build locally (recommended for large traces) |
 | `make wasm` | Rebuild WASM timeline accelerator from `wasm/timeline_accel.wat` |
@@ -164,7 +164,7 @@ Opening the same filename again focuses the existing tab.
 
 **Large traces:** the web viewer is optimised for high segment counts (flat segment storage, precomputed CPU-load bins, WASM-accelerated bisect/LOD, debounced stats worker). On first paint after load it briefly uses a coarse LOD (like pan/zoom) and upgrades to full quality within a few hundred milliseconds — this keeps the UI responsive on traces such as `tracedata/example-16cores.btf` (16 cores, 100k+ segments).
 
-Sample traces in the repo: `tracedata/example.btf` (small), `tracedata/example-4cores.btf` (4-core SMP, good for statistics demos), `tracedata/example-16cores.btf` (large SMP).
+Sample traces in the repo: `tracedata/example.btf` (small), `tracedata/example-4cores.btf` (4-core SMP, good for statistics demos), and `tracedata/example-16cores.btf` (large SMP).
 
 ### Zoom & pan
 
@@ -221,11 +221,12 @@ Same tab bar behaviour as desktop: each `.btf` opens in its own tab with indepen
 
 ### Session restore (Web)
 
-The web viewer persists **layout and view options** in browser `localStorage` (key `btf-viewer-session-v1`). State is saved automatically (debounced ~400 ms) when you change view mode, orientation, grid/STI/CPU-load toggles, dark mode, panel widths, or stats table heights.
+The web viewer persists **settings** in browser `localStorage` (key `btf-viewer-settings-v1`: font sizes, label column width, row height, max cursors, theme, etc.) and **layout chrome** in `btf-viewer-session-v1` (view mode, orientation, panel widths, stats table heights). Settings are saved when you accept the Settings dialog or finish a label-column drag; layout state is debounced (~400 ms) when you change view mode, orientation, grid/STI/CPU-load toggles, dark mode, or panel sizes.
 
 **On page load:**
 
-- Restores global view options (task/core mode, orientation, grid, STI, CPU load, dark mode, migrated-only filter).
+- Restores global settings from `btf-viewer-settings-v1` (including **label column width** 60–600 px).
+- Restores global view options from `btf-viewer-session-v1` (task/core mode, orientation, grid, STI, CPU load, dark mode, migrated-only filter).
 - Restores right-panel width, CPU-load panel height, and stats table section heights.
 
 **Not persisted:** open tab names, cursors, marks, zoom/pan, or trace data. After refresh, use **Open** or **Demo** to load traces again.
@@ -320,7 +321,7 @@ Example plots from `tracedata/example-4cores.btf` (4-core SMP trace, 67 tasks) a
 
 Coloured diamond markers are shown on dedicated STI rows. Hover a marker for a tooltip showing the time, channel, event name, and note.
 
-**Interval markers** (`interval_start` / `interval_stop`, legacy `start_intval` / `stop_intval`) are paired into measurable spans and drawn as horizontal bars on **Interval N** rows below the STI section (task view, horizontal orientation). When the BTF **note** includes `tid:{task_id}` (current FreeRTOS trace firmware), start/stop pair by **interval id + task id**; legacy traces without `tid` pair by the note string only. Raw start/stop marker channels are hidden from the STI row list. See [Interval Analysis](#interval-analysis) for pairing rules, statistics vs timeline behaviour, and limitations.
+**Interval markers** (`interval_start` / `interval_stop`) are paired into measurable spans and drawn as horizontal bars on **Interval N** rows below the STI section (task view, horizontal orientation). When the BTF **note** includes `tid:{task_id}` (current FreeRTOS trace firmware), start/stop pair by **interval id + task id**; legacy traces without `tid` pair by the note string only. Raw start/stop marker channels are hidden from the STI row list. See [Interval Analysis](#interval-analysis) for pairing rules, statistics vs timeline behaviour, and limitations.
 
 ### Status bar
 
@@ -369,15 +370,17 @@ In **Core View**:
 
 Switch orientation using the **↔ Horizontal** / **↕ Vertical** toolbar buttons or **View → Horizontal layout / Vertical layout**. The active orientation button is highlighted.
 
+In **Horizontal** mode (default), drag the visible splitter on the **right edge** of the task-name label column to resize it (60–600 px). Double-click that edge to auto-fit the widest visible label. Width is saved to `btf_viewer.rc` (`[view] label_width` + per-window profile) on Desktop, or `labelWidth` in `btf-viewer-settings-v1` on Web.
+
 In **Vertical** mode:
 - The ruler column (left edge) is frozen and always shows time labels as you scroll horizontally.
 - The label row (top edge) is frozen and always shows task/core names as you scroll vertically.
 - The top-left corner area shows the **TICK** band label when TICK events are present.
-- Drag the resize handle on the **right edge** of the label column (horizontal layout) to resize the label area. Width is saved in Settings / `localStorage`.
+- Drag the bottom edge of the label row to resize label height (Desktop); persisted under the same `label_width` / `labelWidth` keys as horizontal mode.
 
 ## Task Labels
 
-Regular task labels show the task name and task ID, for example `MyTask[3]`.
+Regular task labels show the task name and task ID, for example `MyTask[3]` or `Worker[0x8]`. Raw BTF task entities may use `[core/id]name`, `name[id]`, or `name(0x…)` / `name(dec)` — see [Task label naming](#task-label-naming--core_idtask_idtask_name).
 IDLE and TICK tasks show their bare name (`IDLE`, `IDLE0`, `IDLE1`, etc.) without an ID suffix.
 IDLE tasks always render in grey; each IDLE task on a different core gets a distinct shade.
 
@@ -564,7 +567,7 @@ Preferences are restored on the next launch (desktop) or page reload (web).
 
 | Setting | Description |
 |---------|-------------|
-| Label column | Width of the frozen task/core label column (60–600 px) |
+| Label column | Width of the frozen task/core label column (60–600 px). Drag the timeline splitter (Desktop + Web) or set here; persisted in `btf_viewer.rc` / `btf-viewer-settings-v1` |
 | Row height | Height of each task/core row (12–60 px) |
 | Row gap | Vertical gap between rows (0–20 px) |
 | 1:1 zoom level | Target zoom of the **1:1** button and the maximum zoom-in limit (0.5–200 timescale units/px; UI unit follows trace timescale, e.g. `ns/px`) |
@@ -807,13 +810,13 @@ Verify: `npm run test:sync tracedata/example-4cores.btf` (web analysis script).
 
 #### Interval Analysis
 
-Pairs **`interval_start` / `interval_stop`** STI events (legacy `start_intval` / `stop_intval`) into measurable code regions. Each interval **id** gets an **Interval N** row on the timeline (horizontal task view) with colored span bars; the statistics table aggregates duration across all paired spans for that id.
+Pairs **`interval_start` / `interval_stop`** STI events into measurable code regions. Each interval **id** gets an **Interval N** row on the timeline (horizontal task view) with colored span bars; the statistics table aggregates duration across all paired spans for that id.
 
 **BTF note field** (last CSV column on each interval line):
 
 | Format | Example | Viewer pairing |
 |--------|---------|----------------|
-| Current firmware | `1 tid:7` | Interval id `1` + task id `7` (same numeric id on different tasks does not cross-pair) |
+| Current firmware | `1 tid:7` or `0 tid:0x8` | Interval id + task id (decimal or `0x` hex); same numeric id on different tasks does not cross-pair |
 | Legacy | `1` | Full note string `1` only |
 
 Recorded by `traceINTERVAL_START(id)` / `traceINTERVAL_STOP(id)` in firmware — task id is captured automatically in `param2` and emitted in the note as `tid:…`. See [Binary → BTF dump mapping](../README.md#binary--btf-dump-mapping) in the repo root README.
@@ -855,7 +858,19 @@ When `tid:` is present, concurrent workers can share the same interval **id** wi
 1. **`interval_start`** — push the event onto that key's stack.
 2. **`interval_stop`** — pop the most recent unmatched start for that key and form one instance `[start_time, stop_time]`.
 3. **`interval_stop` with an empty stack** — ignored (orphan stop).
-4. **Unmatched starts after the trace ends** — counted internally but not shown in statistics.
+4. **Unmatched starts after the trace ends** — counted internally but not shown in statistics or on the timeline.
+
+An **Interval N** row appears only when at least one **start→stop** pair exists for that id. If firmware emits `interval_start` without matching `interval_stop` events (same id and `tid` when present), that id is omitted entirely.
+
+**Example — interval id with no paired spans:**
+
+| Interval id | `interval_start` | `interval_stop` | Viewer |
+|-------------|------------------|-------------------|--------|
+| 0 | 50 | 50 | **Interval 0** |
+| 1 | 100 | **0** | *(no row — nothing to pair)* |
+| 2 | 50 | 50 | **Interval 2** |
+
+If firmware emits `interval_start` for an id but never records matching `interval_stop` events (same id and `tid` when present), that id is omitted from the timeline and statistics. Ensure every `traceINTERVAL_START(id)` has a corresponding `traceINTERVAL_STOP(id)` with the same task id in the note when `tid:` is used.
 
 This is **LIFO (last-in, first-out) nesting** within each pairing key.
 
@@ -1011,13 +1026,13 @@ A **migration** is recorded when consecutive slices of the same task (merge-key)
 | Global undo/redo (cursors + marks) | ✓ | ✓ |
 | Portable session export/import (JSON) | ✓ | ✓ |
 | Cycle trace tabs (`Ctrl+Tab` / `Ctrl+Shift+Tab`) | ✓ | ✓ |
-| Drag-resize label column | ✓ | ✓ |
+| Drag-resize label column | ✓ (`btf_viewer.rc`) | ✓ (`btf-viewer-settings-v1`) |
 | Direct clipboard copy (`Ctrl+Shift+C`) | ✓ | ✓ |
 | Persist panel widths / stats table heights | ✓ | ✓ |
 | Restore tab names on page load | ✓ | — |
 | **Trace Compare…** (2+ open traces) | ✓ | ✓ |
 | **Trace Compare…** cursor-scoped mode | ✓ | ✓ |
-| Web layout/options restore (`localStorage`) | — | ✓ |
+| Web layout/options restore (`localStorage`) | — | ✓ (`btf-viewer-session-v1` + `btf-viewer-settings-v1`) |
 | Core View: dim other tasks when one is locked | ✓ | ✓ |
 
 **Legend panel:** the core-tint key explains Task View colouring by core. Check **Migrated tasks only** to hide tasks that never left their first core.
@@ -1246,6 +1261,7 @@ Settings, window layout, bookmarks, and multi-tab state are stored in `btf_viewe
 | `[files]` `last_file` | Path of the active tab (legacy; also used as fallback when `open_tabs_json` is empty) |
 | `[tab_view]` `trace_<hash>` | Per-trace zoom level, fit mode, and cursor positions |
 | `[trace_state]` `trace_<hash>` | Per-trace bookmarks and annotations |
+| `[view]` `label_width` | Task/core label column width in px (60–600); also saved per window size in `dock_profile_label_width` |
 | `[view]` `cpu_splitter_bottom_h` / `cpu_splitter_user_sized` | Timeline vs CPU load splitter height (Desktop) |
 | `[stats]` `table_height_<section>` | Per-section metric table heights in Statistics (Desktop) |
 | `[zoom]` / `[cursors]` | Zoom and cursors for the last active tab (legacy compatibility) |
@@ -1400,6 +1416,16 @@ Regular (worker) tasks carry a structured prefix that encodes the core they were
 > **Note:** In traces generated by `gen_trace.py`, worker task IDs start at 9 and the timer-service task ID equals `num_workers + 9`. Task IDs in real FreeRTOS ports depend on the kernel's internal handle allocation.
 
 **Examples:**
+
+The viewer accepts three task-name encodings (task id decimal or `0x` hex):
+
+| Form | Example | Display |
+|------|---------|---------|
+| `[core/task]name` | `[0/0001]MainCtrl`, `[2/0x9]CAN_Rx` | `MainCtrl[1]`, `CAN_Rx[0x9]` |
+| `name[task]` | `MainCtrl[1]`, `Worker[0x8]` | same |
+| `name(task)` | `Worker(0x8)`, `MyTask(42)` | `Worker[0x8]`, `MyTask[42]` |
+
+Legacy examples:
 
 ```
 [0/9]CAN_Rx          # task CAN_Rx, created on Core_0, task ID 9
@@ -1594,15 +1620,17 @@ timestamp, Core_N, 0, C, Core_N, 0, set_frequency, freq_hz
 | **Web renderer** | `web/src/renderer/TimelineRenderer.js` | Canvas 2D, viewport culling, LOD binning, per-frame paint budget |
 | **Web WASM accel** | `web/src/renderer/wasmAccel.js`, `wasm/timeline_accel.wat` | Optional bisect / row-cull / LOD reduce; JS fallback when WASM unavailable |
 | **Find analysis** | `findAnalysis.js` / Find dock | Contains, Exact, Regex, Migrations modes; F3 navigation (Desktop + Web) |
-| **Session store** | `web/src/utils/sessionStore.js` | `localStorage` key `btf-viewer-session-v1` (layout + view options only) |
+| **Task name parsing** | `_parse_task_name` in `btf_viewer.py` | `parseTaskName` in `web/src/utils/colors.js` — `[core/id]name`, `name[id]`, `name(0x…)` / `name(dec)` |
+| **Settings store** | `btf_viewer.rc` `[view]` | `web/src/utils/settingsStore.js` — `localStorage` key `btf-viewer-settings-v1` (label width, fonts, row height, …) |
+| **Session store** | `btf_viewer.rc` (tabs, zoom, cursors, docks) | `web/src/utils/sessionStore.js` — `localStorage` key `btf-viewer-session-v1` (layout chrome only) |
 | **Portable session** | `web/src/utils/sessionPortable.js`, Desktop Marks dock | Shared JSON v1: cursors, marks, viewport, view options, Find, highlight |
-| **File open (web)** | `Toolbar.vue` | Native `<input type="file">` in a `<label>` (last-folder memory on `file://` and HTTP). Optional FSA helpers in `fileOpen.js` are not used for Open. |
+| **File open (web)** | `web/src/utils/fileOpen.js` | FSA on `http://localhost`; `<input type="file">` on `file://` |
 | **Trace compare** | `traceCompare.js` / `_TraceCompareDialog` | Optional per-tab C1–Cn scope (Desktop + Web) |
 | **Migration heatmap** | `migrationAnalysis.js` / `_MigrationHeatmapDialog` | ≤ 16 cores: pair × 32 bins → task × 32 sub-bins → timeline. > 16 cores: core×core matrix → outgoing pairs × 32 bins → tasks; row hover + row click on matrix |
-| **Interval pairing** | `intervalAnalysis.js` / `_build_interval_data` | Parse `{id} tid:{task_id}` notes; pair by id+task when `tid` present, else legacy note string |
-| **Pre-built HTML** | `web/pre-build/btf-viewer.html` | Copy of `dist/index.html` produced by `make build` |
+| **Interval pairing** | `intervalAnalysis.js` / `_build_interval_data` | Parse `{id} tid:{task_id}` notes (`task_id` decimal or `0x` hex); pair by id+task when `tid` present, else legacy note string |
+| **Pre-built HTML** | `web/pre-build/btf_viewer.html` | Copy of `dist/index.html` produced by `make build` |
 
-Desktop session persistence uses `btf_viewer.rc` (tab paths, zoom, cursors). Web persists layout and view options in `localStorage` — see [Session restore (Web)](#session-restore-web).
+Desktop session persistence uses `btf_viewer.rc` (tab paths, zoom, cursors, label width, docks). Web splits **settings** (`btf-viewer-settings-v1`) and **layout chrome** (`btf-viewer-session-v1`) — see [Session restore (Web)](#session-restore-web).
 
 There is no shared automated test suite; validate parser changes against `tracedata/example.btf`, `tracedata/example-4cores.btf`, `tracedata/example-16cores.btf`, and synthetic traces from `gen_trace.py`.
 

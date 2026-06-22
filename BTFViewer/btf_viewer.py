@@ -148,7 +148,7 @@ from PyQt5.QtCore import (
     QPropertyAnimation, pyqtSignal,
 )
 from PyQt5.QtGui import (
-    QBrush, QColor, QFont, QFontDatabase, QFontMetrics, QFontMetricsF, QIcon, QKeySequence, QPainter,
+    QBrush, QColor, QCursor, QFont, QFontDatabase, QFontMetrics, QFontMetricsF, QIcon, QKeySequence, QPainter,
     QPainterPath, QPalette, QPen, QPixmap, QPolygonF, QTransform, QWheelEvent,
 )
 from PyQt5.QtSvg import QSvgGenerator
@@ -616,13 +616,12 @@ _PRIORITY_STI_RE = re.compile(
     r"^(set_priority|priority_inherit|priority_disinherit)\s+(.+?)\s+pri:(\d+)\s*$",
     re.IGNORECASE,
 )
-_SET_PRIORITY_REF_RE = re.compile(r"^(.+?)\[(\d+)\]$")
 _SYNC_OBJECT_NOTE_RE = re.compile(
     r"^(create|take|give|delete)\s+(0x[0-9a-f]+)$", re.IGNORECASE)
 _SYNC_OBJECT_TARGETS = frozenset({"mutex", "sem"})
 _POST_CREATE_GIVE_MAX_NS = 1000
-_INTERVAL_START_CHANNELS = frozenset({"interval_start", "start_intval"})
-_INTERVAL_STOP_CHANNELS  = frozenset({"interval_stop", "stop_intval"})
+_INTERVAL_START_CHANNELS = frozenset({"interval_start"})
+_INTERVAL_STOP_CHANNELS  = frozenset({"interval_stop"})
 _INTERVAL_COLORS = (
     "#E74C3C", "#2ECC71", "#F39C12", "#3498DB", "#9B59B6",
     "#1ABC9C", "#E91E63", "#F1C40F", "#00BCD4", "#FF5722",
@@ -631,13 +630,18 @@ _INTERVAL_COLORS = (
 def _is_interval_marker_channel(channel: str) -> bool:
     return channel in _INTERVAL_START_CHANNELS or channel in _INTERVAL_STOP_CHANNELS
 
+_INTERVAL_TID_RE = re.compile(
+    r"^(\S+)\s+tid:((?:0[xX][0-9a-fA-F]+|\d+))\s*$", re.IGNORECASE)
+
 def _parse_interval_note(note: str) -> Tuple[str, Optional[str], str]:
     """Return (interval_id, task_id, pairing_key) from STI note text."""
     raw = (note or "").strip() or "0"
-    m = re.match(r"^(\S+)\s+tid:(\d+)\s*$", raw, re.IGNORECASE)
+    m = _INTERVAL_TID_RE.match(raw)
     if m:
-        iid, tid = m.group(1), m.group(2)
-        return iid, tid, f"{iid}\0tid:{tid}"
+        iid, tid_token = m.group(1), m.group(2)
+        tid_val = _parse_int_token(tid_token)
+        tid_display = _format_int_token_display(tid_token, tid_val)
+        return iid, tid_display, f"{iid}\0tid:{tid_val}"
     return raw, None, raw
 
 def _interval_pairing_key(ev: "StiEvent") -> str:
@@ -1040,11 +1044,7 @@ def _parse_priority_sti_note(note: str) -> Optional[Tuple[str, str, int]]:
     return m.group(1).lower(), m.group(2).strip(), int(m.group(3))
 
 def _merge_key_from_priority_ref(task_ref: str) -> str:
-    ref = (task_ref or "").strip()
-    m = _SET_PRIORITY_REF_RE.match(ref)
-    if m:
-        return f"\x00{int(m.group(2))}\x00{m.group(1).strip()}"
-    return _task_merge_key(ref)
+    return _task_merge_key((task_ref or "").strip())
 
 def _priority_medium_blockers(
     base_pri: int,
@@ -1770,7 +1770,14 @@ class BtfTrace:
 # Task-name helpers
 # ---------------------------------------------------------------------------
 
-_TASK_RE = re.compile(r"^\[((?:0[xX][0-9a-fA-F]+|\d+))/((?:0[xX][0-9a-fA-F]+|\d+))\](.+)$")
+_TASK_BRACKET_RE = re.compile(
+    r"^\[((?:0[xX][0-9a-fA-F]+|\d+))/((?:0[xX][0-9a-fA-F]+|\d+))\](.+)$")
+_TASK_SUFFIX_BRACKET_RE = re.compile(
+    r"^(.+?)\[((?:0[xX][0-9a-fA-F]+|\d+))\]$")
+_TASK_SUFFIX_PAREN_RE = re.compile(
+    r"^(.+?)\(((?:0[xX][0-9a-fA-F]+|\d+))\)$")
+# Back-compat alias
+_TASK_RE = _TASK_BRACKET_RE
 # Matches: idle, idle0, idle 0, idle(0x...), idle 0(0x...), idle0(0x...)
 _IDLE_RE = re.compile(
     r"^idle(?:\s*(\d+))?\s*(?:\((?:0[xX][0-9a-fA-F]+|\d+)\))?$",
@@ -1783,12 +1790,42 @@ def _parse_int_token(s: str) -> int:
         return int(s, 16)
     return int(s, 10)
 
+def _format_int_token_display(token: str, value: int) -> str:
+    """Format a parsed task-id token for Name[id] labels."""
+    if token.startswith(("0x", "0X")):
+        return f"0x{value:X}"
+    return str(value)
+
+def _task_id_display_string(raw: str, task_id: int) -> str:
+    """Recover display form of task id from the raw BTF task name."""
+    for pat in (_TASK_BRACKET_RE, _TASK_SUFFIX_BRACKET_RE, _TASK_SUFFIX_PAREN_RE):
+        m = pat.match(raw)
+        if m:
+            return _format_int_token_display(m.group(2), task_id)
+    return str(task_id)
+
 @functools.lru_cache(maxsize=16384)
 def _parse_task_name(raw: str) -> Tuple[Optional[int], Optional[int], str]:
-    """Return (core_id, task_id, display_name) from a raw BTF task name."""
-    m = _TASK_RE.match(raw)
+    """Return (core_id, task_id, display_name) from a raw BTF task name.
+
+    Supported forms:
+      [core/task]name   e.g. [0/0001]MainCtrl, [2/0x9]Worker
+      name[task]        e.g. MainCtrl[1], Worker[0x8]
+      name(task)        e.g. Worker_0(0x6000d200), trace_test(42)
+    IDLE variants are left unparsed (merge key = raw string).
+    """
+    if _IDLE_RE.match(raw):
+        return None, None, raw
+    m = _TASK_BRACKET_RE.match(raw)
     if m:
-        return _parse_int_token(m.group(1)), _parse_int_token(m.group(2)), m.group(3).strip()
+        return (_parse_int_token(m.group(1)), _parse_int_token(m.group(2)),
+                m.group(3).strip())
+    m = _TASK_SUFFIX_BRACKET_RE.match(raw)
+    if m:
+        return None, _parse_int_token(m.group(2)), m.group(1).strip()
+    m = _TASK_SUFFIX_PAREN_RE.match(raw)
+    if m:
+        return None, _parse_int_token(m.group(2)), m.group(1).strip()
     return None, None, raw
 
 @functools.lru_cache(maxsize=16384)
@@ -1817,11 +1854,13 @@ def _normalize_idle_name(name: str) -> str:
 @functools.lru_cache(maxsize=16384)
 def _task_display_name(raw: str) -> str:
     """Short display name: 'Name[id]' for regular tasks; bare name for IDLE/TICK."""
+    if _IDLE_RE.match(raw):
+        return _normalize_idle_name(raw)
     _, task_id, name = _parse_task_name(raw)
     if _is_idle_task_name(name):
         return _normalize_idle_name(name)
     if task_id is not None and name != "TICK":
-        return f"{name}[{task_id}]"
+        return f"{name}[{_task_id_display_string(raw, task_id)}]"
     return name
 
 @functools.lru_cache(maxsize=16384)
@@ -8130,6 +8169,212 @@ class _NavigatorPopup(QWidget):
         p.drawPixmap(0, 0, self._pix)
         p.end()
 
+_RESIZE_EDGE_PX = 6
+
+class _HoverCursor:
+    """Application-level hover cursor for resize split lines."""
+
+    _shape: Optional[Qt.CursorShape] = None
+
+    @staticmethod
+    def _modal_cursor_active() -> bool:
+        oc = QApplication.overrideCursor()
+        return oc is not None and oc.shape() in (
+            Qt.WaitCursor, Qt.BusyCursor, Qt.ForbiddenCursor)
+
+    @classmethod
+    def show(cls, shape: Qt.CursorShape) -> None:
+        if cls._modal_cursor_active():
+            cls._shape = None
+            return
+        if QApplication.instance() is None:
+            return
+        if cls._shape == shape:
+            return
+        if cls._shape is not None:
+            QApplication.restoreOverrideCursor()
+        QApplication.setOverrideCursor(QCursor(shape))
+        cls._shape = shape
+
+    @classmethod
+    def hide(cls, shape: Optional[Qt.CursorShape] = None) -> None:
+        if shape is not None and cls._shape != shape:
+            return
+        if cls._shape is None:
+            return
+        if QApplication.instance() is None:
+            cls._shape = None
+            return
+        oc = QApplication.overrideCursor()
+        if oc is not None and oc.shape() == cls._shape:
+            QApplication.restoreOverrideCursor()
+        cls._shape = None
+
+class _SplitterHandleCursorFilter(QObject):
+    """Drive _HoverCursor from QSplitter handle enter/leave."""
+
+    def __init__(self, handle: QWidget, shape: Qt.CursorShape) -> None:
+        super().__init__(handle)
+        self._shape = shape
+        self._active = False
+        handle.setAttribute(Qt.WA_Hover, True)
+        handle.setMouseTracking(True)
+        handle.installEventFilter(self)
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        et = event.type()
+        if et in (QEvent.Enter, QEvent.HoverEnter):
+            _HoverCursor.show(self._shape)
+            self._active = True
+        elif et in (QEvent.Leave, QEvent.HoverLeave, QEvent.Hide):
+            if self._active:
+                _HoverCursor.hide(self._shape)
+                self._active = False
+        return False
+
+def _install_splitter_handle_cursor(splitter: QSplitter, index: int) -> None:
+    """Attach resize hover cursor to one QSplitter handle."""
+    handle = splitter.handle(index)
+    if handle is None:
+        return
+    shape = (Qt.SizeVerCursor if splitter.orientation() == Qt.Vertical
+             else Qt.SizeHorCursor)
+    handle.setCursor(shape)
+    if getattr(handle, "_hover_cursor_filter", None) is None:
+        handle._hover_cursor_filter = _SplitterHandleCursorFilter(handle, shape)
+
+class _ResizeSplitter(QSplitter):
+    """QSplitter whose handles show a resize cursor on hover."""
+
+    def createHandle(self):
+        handle = super().createHandle()
+        idx = self.count() - 1
+        if idx >= 1:
+            _install_splitter_handle_cursor(self, idx)
+        return handle
+
+def _wire_splitter_handle_cursors(root: QWidget) -> None:
+    """Set resize cursors on every visible QSplitter handle under *root*."""
+    for splitter in root.findChildren(QSplitter):
+        for i in range(1, splitter.count()):
+            _install_splitter_handle_cursor(splitter, i)
+
+class _EdgeResizeCursorFilter(QObject):
+    """Show a resize cursor when the pointer is near a widget edge."""
+
+    def __init__(self, host: QWidget, edges: list,
+                 margin: int = _RESIZE_EDGE_PX) -> None:
+        super().__init__(host)
+        self._host = host
+        self._edges = edges   # (edge, cursor, optional enabled callable)
+        self._margin = margin
+        self._armed = False
+        self._cursor: Optional[Qt.CursorShape] = None
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if obj is not self._host:
+            return False
+        et = event.type()
+        if et in (QEvent.MouseMove, QEvent.HoverMove):
+            cursor = self._cursor_at(event.pos())
+            if cursor is not None:
+                if self._cursor != cursor:
+                    if self._armed:
+                        _HoverCursor.hide(self._cursor)
+                    self._cursor = cursor
+                    self._armed = True
+                    _HoverCursor.show(cursor)
+            elif self._armed:
+                _HoverCursor.hide(self._cursor)
+                self._armed = False
+                self._cursor = None
+        elif et in (QEvent.Leave, QEvent.HoverLeave, QEvent.Hide):
+            if self._armed:
+                _HoverCursor.hide(self._cursor)
+                self._armed = False
+                self._cursor = None
+        return False
+
+    def _cursor_at(self, pos: QPoint):
+        w, h = self._host.width(), self._host.height()
+        for edge, cursor, enabled in self._edges:
+            if enabled is not None and not enabled():
+                continue
+            if edge == "left" and pos.x() <= self._margin:
+                return cursor
+            if edge == "right" and pos.x() >= w - self._margin:
+                return cursor
+            if edge == "top" and pos.y() <= self._margin:
+                return cursor
+            if edge == "bottom" and pos.y() >= h - self._margin:
+                return cursor
+        return None
+
+class _LabelColumnGrip(QWidget):
+    """Visible drag handle between label column and timeline (web label-resizer parity)."""
+
+    GRIP_W = 10
+
+    def __init__(self, view: "TimelineView") -> None:
+        super().__init__(view.viewport())
+        self._view = view
+        self._dragging = False
+        self._start_global_x = 0
+        self._start_w = 0
+        self.setCursor(Qt.SizeHorCursor)
+        self.setMouseTracking(True)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
+        self.setToolTip("Drag to resize label column")
+        self.hide()
+
+    def paintEvent(self, _event) -> None:
+        dark = getattr(self._view._scene, "_dark_ui", True)
+        line = QColor("#4a9eff") if (self._dragging or self.underMouse()) else (
+            QColor("#666666") if dark else QColor("#CCCCCC"))
+        p = QPainter(self)
+        try:
+            cx = self.width() // 2
+            p.setPen(QPen(line, 2))
+            p.drawLine(cx, 0, cx, self.height())
+        finally:
+            p.end()
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            self._dragging = True
+            self._start_global_x = event.globalPos().x()
+            self._start_w = self._view._scene._label_width
+            _HoverCursor.show(Qt.SizeHorCursor)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._dragging:
+            _HoverCursor.show(Qt.SizeHorCursor)
+            self._view._apply_label_width_drag(
+                self._start_w + (event.globalPos().x() - self._start_global_x))
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if self._dragging and event.button() == Qt.LeftButton:
+            self._dragging = False
+            self._view._finish_label_width_drag()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def enterEvent(self, _event) -> None:
+        _HoverCursor.show(Qt.SizeHorCursor)
+        self.update()
+
+    def leaveEvent(self, _event) -> None:
+        if not self._dragging:
+            _HoverCursor.hide(Qt.SizeHorCursor)
+        self.update()
+
 # ===========================================================================
 # View
 # ===========================================================================
@@ -8138,6 +8383,7 @@ class TimelineView(QGraphicsView):
     """Pan + zoom QGraphicsView wrapping a TimelineScene."""
 
     zoom_changed         = pyqtSignal(float)
+    label_width_changed  = pyqtSignal(int)
     cursors_changed      = pyqtSignal(list)
     mark_moved           = pyqtSignal(str, int, int)  # kind, id, new_ns - final drop
     mark_dragging        = pyqtSignal(str, int, int)  # kind, id, new_ns - live during drag
@@ -8181,10 +8427,11 @@ class TimelineView(QGraphicsView):
         self._mark_drag_threshold = 6   # px - click-zone around a mark line
 
         # Label-column resize drag state
-        self._LABEL_RESIZE_ZONE   = 6   # px hit zone around the right border
+        self._LABEL_RESIZE_ZONE   = 10  # px hit zone around the right border
         self._label_resize_dragging = False
         self._label_resize_start_x  = 0
         self._label_resize_start_w  = 0
+        self._label_grip = _LabelColumnGrip(self)
 
         # Middle-button time-range selection (drag to select, release to zoom)
         self._mid_press_ns: Optional[int]   = None   # ns at middle-press
@@ -8220,6 +8467,7 @@ class TimelineView(QGraphicsView):
         # Reposition frozen label-column items whenever the scene is rebuilt
         self._scene.scene_rebuilt.connect(self._reposition_frozen)
         self._scene.scene_rebuilt.connect(self._reposition_frozen_top)
+        self._scene.scene_rebuilt.connect(self._update_label_grip_geometry)
 
         # Debounce zoom: accumulate factor across rapid wheel events and
         # fire a single rebuild once the user stops scrolling.
@@ -8325,7 +8573,46 @@ class TimelineView(QGraphicsView):
         self._zoom_timer.setInterval(_zoom_debounce_ms(len(trace.tasks)))
         self._scene.set_trace(trace, self._fit_viewport_size())
         self.zoom_changed.emit(self._scene.timescale_per_px)
+        self._update_label_grip_geometry()
         self._show_nav()
+
+    def _update_label_grip_geometry(self) -> None:
+        """Position the visible label-column splitter on the viewport."""
+        grip = self._label_grip
+        if (not self._scene._horizontal
+                or self._scene._trace is None
+                or self.viewport().height() <= 0):
+            grip.hide()
+            return
+        lw = self._scene._label_width
+        x = max(0, lw - grip.GRIP_W // 2)
+        grip.setGeometry(x, 0, grip.GRIP_W, self.viewport().height())
+        grip.show()
+        grip.raise_()
+
+    def _apply_label_width_drag(self, new_w: int) -> None:
+        """Live label-column resize during splitter drag."""
+        self._scene.set_label_width(new_w)
+        if self._scene._horizontal:
+            self._reposition_frozen()
+            if self._fit_mode and self._scene._trace is not None:
+                self._scene.fit_to_width(self._fit_viewport_size())
+                self.zoom_changed.emit(self._scene.timescale_per_px)
+        else:
+            self._reposition_frozen_top()
+        self._update_label_grip_geometry()
+
+    def _finish_label_width_drag(self) -> None:
+        """Commit label-column width after splitter drag."""
+        self.label_width_changed.emit(int(self._scene._label_width))
+        _HoverCursor.hide(Qt.SizeHorCursor)
+        _HoverCursor.hide(Qt.SizeVerCursor)
+
+    def _set_view_hover_cursor(self, shape: Optional[Qt.CursorShape]) -> None:
+        if shape is None:
+            _HoverCursor.hide()
+        else:
+            _HoverCursor.show(shape)
 
     def add_cursor_at_view_center(self) -> None:
         vp = self.viewport().rect()
@@ -8443,6 +8730,7 @@ class TimelineView(QGraphicsView):
         self.resetTransform()
         self.zoom_changed.emit(self._scene._timescale_per_px)
         self.viewport().update()
+        self._update_label_grip_geometry()
         self._show_nav()
 
     def set_show_sti(self, show: bool) -> None:
@@ -9019,6 +9307,8 @@ class TimelineView(QGraphicsView):
             self._reposition_frozen()
         else:
             self._reposition_frozen_top()
+        self._update_label_grip_geometry()
+        self.label_width_changed.emit(int(sc._label_width))
 
     def _snap_to_boundary(self, ns: int) -> int:
         """Snap *ns* to the nearest segment boundary (start or end) within 8 px.
@@ -9086,7 +9376,7 @@ class TimelineView(QGraphicsView):
                     self._label_resize_start_x  = event.pos().x()
                     self._label_resize_start_w  = lw
                     self.setDragMode(QGraphicsView.NoDrag)
-                    self.viewport().setCursor(Qt.SizeHorCursor)
+                    _HoverCursor.show(Qt.SizeHorCursor)
                     event.accept()
                     return
             else:
@@ -9096,7 +9386,7 @@ class TimelineView(QGraphicsView):
                     self._label_resize_start_x  = event.pos().y()   # reused as start coord
                     self._label_resize_start_w  = lw
                     self.setDragMode(QGraphicsView.NoDrag)
-                    self.viewport().setCursor(Qt.SizeVerCursor)
+                    _HoverCursor.show(Qt.SizeVerCursor)
                     event.accept()
                     return
 
@@ -9110,9 +9400,9 @@ class TimelineView(QGraphicsView):
                     self.pre_change.emit()
                     self._dragging_cursor_idx = idx
                     self.setDragMode(QGraphicsView.NoDrag)
-                    self.viewport().setCursor(Qt.SizeHorCursor
-                                              if self._scene._horizontal
-                                              else Qt.SizeVerCursor)
+                    _HoverCursor.show(Qt.SizeHorCursor
+                                      if self._scene._horizontal
+                                      else Qt.SizeVerCursor)
                     event.accept()
                     return
 
@@ -9126,9 +9416,9 @@ class TimelineView(QGraphicsView):
                     self.pre_change.emit()
                     self._dragging_mark_idx = idx
                     self.setDragMode(QGraphicsView.NoDrag)
-                    self.viewport().setCursor(Qt.SizeHorCursor
-                                              if self._scene._horizontal
-                                              else Qt.SizeVerCursor)
+                    _HoverCursor.show(Qt.SizeHorCursor
+                                      if self._scene._horizontal
+                                      else Qt.SizeVerCursor)
                     event.accept()
                     return
 
@@ -9164,15 +9454,7 @@ class TimelineView(QGraphicsView):
                 delta = event.pos().x() - self._label_resize_start_x
             else:
                 delta = event.pos().y() - self._label_resize_start_x
-            new_w   = self._label_resize_start_w + delta
-            self._scene.set_label_width(new_w)
-            if self._scene._horizontal:
-                self._reposition_frozen()
-                if self._fit_mode and self._scene._trace is not None:
-                    self._scene.fit_to_width(self._fit_viewport_size())
-                    self.zoom_changed.emit(self._scene.timescale_per_px)
-            else:
-                self._reposition_frozen_top()
+            self._apply_label_width_drag(self._label_resize_start_w + delta)
             event.accept()
             return
 
@@ -9199,22 +9481,22 @@ class TimelineView(QGraphicsView):
                 )
             if self._scene._horizontal:
                 if abs(event.pos().x() - lw) <= self._LABEL_RESIZE_ZONE:
-                    self.viewport().setCursor(Qt.SizeHorCursor)
+                    self._set_view_hover_cursor(Qt.SizeHorCursor)
                 elif _near_cursor:
-                    self.viewport().setCursor(Qt.SplitHCursor)
+                    self._set_view_hover_cursor(Qt.SplitHCursor)
                 elif _near_mark:
-                    self.viewport().setCursor(Qt.SplitHCursor)
+                    self._set_view_hover_cursor(Qt.SplitHCursor)
                 else:
-                    self.viewport().unsetCursor()
+                    self._set_view_hover_cursor(None)
             else:
                 if abs(event.pos().y() - lw) <= self._LABEL_RESIZE_ZONE:
-                    self.viewport().setCursor(Qt.SizeVerCursor)
+                    self._set_view_hover_cursor(Qt.SizeVerCursor)
                 elif _near_cursor:
-                    self.viewport().setCursor(Qt.SplitVCursor)
+                    self._set_view_hover_cursor(Qt.SplitVCursor)
                 elif _near_mark:
-                    self.viewport().setCursor(Qt.SplitVCursor)
+                    self._set_view_hover_cursor(Qt.SplitVCursor)
                 else:
-                    self.viewport().unsetCursor()
+                    self._set_view_hover_cursor(None)
 
         # Middle-button drag: update gray selection band
         if self._mid_press_ns is not None:
@@ -9274,7 +9556,7 @@ class TimelineView(QGraphicsView):
                 # Mark was removed externally during drag - abort
                 self._dragging_mark_idx = -1
                 self.setDragMode(QGraphicsView.ScrollHandDrag)
-                self.viewport().unsetCursor()
+                self._set_view_hover_cursor(None)
             self._reposition_frozen_top()  # re-pin after rebuild
             event.accept()
             return
@@ -9317,6 +9599,7 @@ class TimelineView(QGraphicsView):
     def leaveEvent(self, event) -> None:
         if self._scene._trace is not None:
             self._scene.clear_hover_line()
+        self._set_view_hover_cursor(None)
         super().leaveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
@@ -9360,14 +9643,14 @@ class TimelineView(QGraphicsView):
         if self._label_resize_dragging:
             self._label_resize_dragging = False
             self.setDragMode(QGraphicsView.ScrollHandDrag)
-            self.viewport().unsetCursor()
+            self._finish_label_width_drag()
             event.accept()
             return
 
         if self._dragging_cursor_idx >= 0:
             self._dragging_cursor_idx = -1
             self.setDragMode(QGraphicsView.ScrollHandDrag)
-            self.viewport().unsetCursor()
+            self._set_view_hover_cursor(None)
             self.cursors_changed.emit(self._scene.cursor_times())
             event.accept()
             return
@@ -9379,7 +9662,7 @@ class TimelineView(QGraphicsView):
             mark_id = tup[4]
             self._dragging_mark_idx = -1
             self.setDragMode(QGraphicsView.ScrollHandDrag)
-            self.viewport().unsetCursor()
+            self._set_view_hover_cursor(None)
             self.mark_moved.emit(kind, mark_id, new_ns)
             event.accept()
             return
@@ -10035,6 +10318,7 @@ class TimelineView(QGraphicsView):
     def resizeEvent(self, event) -> None:
         """Reflow the timeline on every resize to preserve the current zoom ratio."""
         super().resizeEvent(event)
+        self._update_label_grip_geometry()
         self._nav_popup.reposition()
         if self._scene._trace is not None:
             self._resize_timer.start()
@@ -11249,7 +11533,7 @@ class _MetricsPlotDialog(QDialog):
 
         self._scatter.point_clicked.connect(self._on_scatter_click)
 
-        splitter = QSplitter(Qt.Vertical)
+        splitter = _ResizeSplitter(Qt.Vertical)
         splitter.addWidget(self._scatter)
         splitter.addWidget(self._histogram)
         splitter.setStretchFactor(0, 3)
@@ -11431,6 +11715,29 @@ class _StatsTableHoverFilter(QObject):
             self._clear_fn()
         return False
 
+class _StatsTableBodyCursorFilter(QObject):
+    """Pointing-hand cursor over clickable table cells only (not resize grips)."""
+
+    def __init__(self, table: QTableWidget) -> None:
+        super().__init__(table)
+        self._table = table
+        self._armed = False
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        et = event.type()
+        if et == QEvent.MouseMove:
+            if self._table.indexAt(event.pos()).isValid():
+                obj.setCursor(Qt.PointingHandCursor)
+                self._armed = True
+            elif self._armed:
+                obj.unsetCursor()
+                self._armed = False
+        elif et == QEvent.Leave:
+            if self._armed:
+                obj.unsetCursor()
+                self._armed = False
+        return False
+
 class _StatsSortItem(QTableWidgetItem):
     """Table cell that sorts by an explicit key (numeric/time) instead of display text."""
 
@@ -11476,6 +11783,7 @@ class _StatsSectionGrip(QWidget):
             self._dragging = True
             self._start_y = int(event.globalY())
             self._start_h = self._get_height()
+            _HoverCursor.show(Qt.SizeVerCursor)
             self.grabMouse()
             event.accept()
             return
@@ -11483,6 +11791,7 @@ class _StatsSectionGrip(QWidget):
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802
         if self._dragging:
+            _HoverCursor.show(Qt.SizeVerCursor)
             delta = int(event.globalY()) - self._start_y
             self.height_changed.emit(
                 max(self._MIN_H, min(self._MAX_H, self._start_h + delta)))
@@ -11495,14 +11804,27 @@ class _StatsSectionGrip(QWidget):
             self._dragging = False
             if self.mouseGrabber() is self:
                 self.releaseMouse()
+            if not self.underMouse():
+                _HoverCursor.hide(Qt.SizeVerCursor)
             event.accept()
             return
         super().mouseReleaseEvent(event)
 
+    def enterEvent(self, event) -> None:  # noqa: N802
+        _HoverCursor.show(Qt.SizeVerCursor)
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802
+        if not self._dragging:
+            _HoverCursor.hide(Qt.SizeVerCursor)
+        self.update()
+        super().leaveEvent(event)
+
     def paintEvent(self, event) -> None:  # noqa: N802
         super().paintEvent(event)
         p = QPainter(self)
-        c = QColor("#6688CC" if self.underMouse()
+        c = QColor("#6688CC" if self.underMouse() or self._dragging
                    else ("#555568" if self._is_dark else "#BBBBBB"))
         y = self.height() // 2
         p.setPen(QPen(c, 2))
@@ -12759,6 +13081,16 @@ class _StatsPanel(QWidget):
             host.updateGeometry()
         return h
 
+    @staticmethod
+    def _wire_stats_table_click_cursor(table: QTableWidget) -> None:
+        """Pointing-hand over data cells; leave resize grips with their own cursor."""
+        table.setMouseTracking(True)
+        vp = table.viewport()
+        vp.setMouseTracking(True)
+        filt = _StatsTableBodyCursorFilter(table)
+        vp.installEventFilter(filt)
+        table._body_cursor_filter = filt  # prevent GC
+
     def _wrap_table_with_resizer(self, lay: QVBoxLayout, table: QTableWidget,
                                  section_id: str) -> None:
         """Add *table* plus a drag grip; height is stored in *_section_table_heights*."""
@@ -13722,9 +14054,7 @@ class _StatsPanel(QWidget):
                     elif on_row_click is not None:
                         on_row_click(mk)
                 table.cellClicked.connect(_cell_clicked)
-            table.setCursor(Qt.PointingHandCursor)
-            table.setMouseTracking(True)
-            table.viewport().setMouseTracking(True)
+            self._wire_stats_table_click_cursor(table)
             if migrations:
                 table.cellEntered.connect(_set_row_hover)
             else:
@@ -13839,9 +14169,7 @@ class _StatsPanel(QWidget):
                     if preemptor is not None:
                         on_row_click(mk_item.data(Qt.UserRole), preemptor)
             table.cellClicked.connect(_cell_clicked)
-            table.setCursor(Qt.PointingHandCursor)
-            table.setMouseTracking(True)
-            table.viewport().setMouseTracking(True)
+            self._wire_stats_table_click_cursor(table)
             table.cellEntered.connect(_set_hover)
             _hover_filter = _StatsTableHoverFilter(_clear_hover)
             table.viewport().installEventFilter(_hover_filter)
@@ -14822,7 +15150,7 @@ class _StatsPanel(QWidget):
                             self._open_priority_plot(trace, mk)
 
                     table.cellClicked.connect(_on_priority_row_clicked)
-                    table.setCursor(Qt.PointingHandCursor)
+                    self._wire_stats_table_click_cursor(table)
                     table.resizeRowsToContents()
                     self._wrap_table_with_resizer(play, table, "priority")
                 blay.addWidget(host)
@@ -14926,7 +15254,7 @@ class _StatsPanel(QWidget):
                                 payload, iss["time_ns"], _format_sync_issue_note(iss))
 
                         itable.cellClicked.connect(_on_issue_row)
-                        itable.setCursor(Qt.PointingHandCursor)
+                        self._wire_stats_table_click_cursor(itable)
                         for ri, iss in enumerate(_sync_issues_scoped):
                             vals = [
                                 _format_time(iss["time_ns"], trace.time_scale),
@@ -18084,7 +18412,7 @@ class _TraceTab:
         self.cpu_load_scroll = QScrollArea()
         win._setup_cpu_load_scroll(self.cpu_load_scroll, self.cpu_load_graph)
 
-        self.cpu_splitter = QSplitter(Qt.Vertical)
+        self.cpu_splitter = _ResizeSplitter(Qt.Vertical)
         self.cpu_splitter.addWidget(self.view)
         self.cpu_splitter.addWidget(self.cpu_load_scroll)
         self.cpu_splitter.setStretchFactor(0, 1)
@@ -18243,6 +18571,8 @@ class MainWindow(QMainWindow):
 
     def _wire_timeline_view(self, view: TimelineView) -> None:
         view.zoom_changed.connect(lambda tpp, v=view: self._on_zoom_changed(tpp, v))
+        view.label_width_changed.connect(
+            lambda w, v=view: self._on_label_width_changed(w, v))
         view.cursors_changed.connect(lambda times, v=view: self._on_cursors_changed(times, v))
         view.mark_moved.connect(self._on_mark_moved)
         view.mark_dragging.connect(self._on_mark_dragging)
@@ -18809,6 +19139,7 @@ class MainWindow(QMainWindow):
             Qt.Vertical,
         )
         self._focus_statistics_panel()
+        _wire_splitter_handle_cursors(self)
 
     def _dock_profile_key(self, width: int, height: int) -> str:
         """Build a stable per-window-size key for dock/layout persistence."""
@@ -18851,6 +19182,7 @@ class MainWindow(QMainWindow):
         if label_w >= 60:
             self._label_width_val = label_w
             self._view._scene.set_label_width(label_w)
+        _wire_splitter_handle_cursors(self)
 
     def _restore_settings(self) -> None:
         """Apply all values from btf_viewer.rc after the UI has been built."""
@@ -18887,9 +19219,8 @@ class MainWindow(QMainWindow):
 
         # Label column width
         saved_lw = s.get_int("view", "label_width", LABEL_WIDTH)
-        if saved_lw != LABEL_WIDTH:
-            self._label_width_val = saved_lw
-            self._view._scene.set_label_width(saved_lw)
+        self._label_width_val = max(60, min(saved_lw, 600))
+        self._view._scene.set_label_width(self._label_width_val)
 
         # Row height
         saved_rh = s.get_int("view", "row_height", ROW_HEIGHT)
@@ -19812,6 +20143,8 @@ class MainWindow(QMainWindow):
             lambda v: setattr(self, "_show_marks", v))
         self._find_dock.visibilityChanged.connect(self._on_find_dock_visibility_changed)
 
+        self._wire_resize_cursors()
+
         # --- Signal wiring: legend <-> scene highlight sync (bound per active tab) ---
         self._legend.task_clicked.connect(self._on_legend_task_clicked)
         self._legend.migrated_filter_changed.connect(self._on_legend_migrated_filter)
@@ -19821,6 +20154,46 @@ class MainWindow(QMainWindow):
         idx = self._tab_widget.currentIndex()
         if idx >= 0:
             self._close_trace_tab(idx)
+
+    def _wire_resize_cursors(self) -> None:
+        """Resize cursors on splitters and dock/central pane edges."""
+        horiz, vert = Qt.SizeHorCursor, Qt.SizeVerCursor
+        margin = _RESIZE_EDGE_PX
+
+        def _dock_active(dock: QDockWidget):
+            return (lambda: dock.isVisible() and not dock.isFloating())
+
+        def _any_right_dock() -> bool:
+            for dock in (self._legend_dock, self._stats_dock,
+                         self._marks_dock, self._find_dock):
+                if dock.isVisible() and not dock.isFloating():
+                    if self.dockWidgetArea(dock) == Qt.RightDockWidgetArea:
+                        return True
+            return False
+
+        for w in (self._central_stack, self._tab_widget):
+            w.setMouseTracking(True)
+            w.setAttribute(Qt.WA_Hover, True)
+            filt = _EdgeResizeCursorFilter(
+                w, [("right", horiz, _any_right_dock)], margin)
+            w.installEventFilter(filt)
+            w._edge_resize_filter = filt  # prevent GC
+
+        for dock in (self._legend_dock, self._stats_dock,
+                     self._marks_dock, self._find_dock):
+            dock.setMouseTracking(True)
+            dock.setAttribute(Qt.WA_Hover, True)
+            ok = _dock_active(dock)
+            edges = [("left", horiz, ok)]
+            if dock is self._legend_dock:
+                edges.append(("bottom", vert, ok))
+            if dock is self._find_dock:
+                edges.append(("top", vert, ok))
+            filt = _EdgeResizeCursorFilter(dock, edges, margin)
+            dock.installEventFilter(filt)
+            dock._edge_resize_filter = filt
+
+        QTimer.singleShot(0, lambda: _wire_splitter_handle_cursors(self))
 
     def _build_legend_dock(self) -> None:
         """Create the legend dock and host container."""
@@ -21265,6 +21638,7 @@ class MainWindow(QMainWindow):
             return
 
         # Show a wait cursor and status message while parsing
+        _HoverCursor.hide()
         QApplication.setOverrideCursor(Qt.WaitCursor)
         self._status_file.setText(f"  Loading {os.path.basename(path)}…")
         # Reset dynamic render state so new traces never inherit stale colors.
@@ -21570,6 +21944,7 @@ class MainWindow(QMainWindow):
             updates["colorblind_safe"] = str(self._colorblind_val).lower()
         if snap["label_width"] != self._label_width_val:
             updates["label_width"] = str(self._label_width_val)
+            self._persist_label_width(self._label_width_val, flush=False)
         if snap["row_height"] != self._row_height_val:
             updates["row_height"] = str(self._row_height_val)
         if snap["row_gap"] != self._row_gap_val:
@@ -21705,6 +22080,22 @@ class MainWindow(QMainWindow):
                                        min(tpp, sc._timescale_per_px_fit))
             sc.rebuild()
             self._view.zoom_changed.emit(sc.timescale_per_px)
+
+    def _persist_label_width(self, width: int, *, flush: bool = True) -> None:
+        """Write label-column width to btf_viewer.rc (view + per-window profile)."""
+        w = max(60, min(int(width), 600))
+        self._label_width_val = w
+        self._settings.set("view", "label_width", str(w), flush=False)
+        _profile_key = self._dock_profile_key(self.width(), self.height())
+        self._settings.set("dock_profile_label_width", _profile_key, str(w), flush=flush)
+
+    def _on_label_width_changed(self, width: int,
+                                view: Optional[TimelineView] = None) -> None:
+        """Persist label-column width after drag-resize or auto-fit."""
+        v = view if view is not None else self._view
+        if v is not self._view:
+            return
+        self._persist_label_width(width)
 
     def _on_zoom_changed(self, timescale_per_px: float,
                          view: TimelineView = None) -> None:

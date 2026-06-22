@@ -9,7 +9,6 @@ export const INVERSION_BAND_COLOR = '#E74C3C'
 
 const CREATE_PRI_RE = /^create\s+pri:(\d+)\s*$/i
 const PRIORITY_STI_RE = /^(set_priority|priority_inherit|priority_disinherit)\s+(.+?)\s+pri:(\d+)\s*$/i
-const SET_PRIORITY_REF_RE = /^(.+?)\[(\d+)\]$/
 
 /** @returns {number|null} */
 export function parseCreatePriority(note) {
@@ -31,12 +30,9 @@ export function parseSetPriorityNote(note) {
   return { taskRef: p.taskRef, priority: p.priority }
 }
 
-/** Merge key from set_priority note task ref (Name[id] or raw BTF name). */
+/** Merge key from set_priority / priority_inherit note task ref. */
 export function mergeKeyFromPriorityRef(taskRef) {
-  const ref = (taskRef ?? '').trim()
-  const br = SET_PRIORITY_REF_RE.exec(ref)
-  if (br) return `\x00${parseInt(br[2], 10)}\x00${br[1].trim()}`
-  return taskMergeKey(ref)
+  return taskMergeKey((taskRef ?? '').trim())
 }
 
 function mediumBlockers(basePri, peakPri, taskBasePriority, holderMk, taskRepr) {

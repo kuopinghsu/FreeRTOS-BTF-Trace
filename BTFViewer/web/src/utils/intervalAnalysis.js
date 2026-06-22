@@ -5,8 +5,8 @@ import { formatTime } from './timeFormat.js'
 import { lighterColor } from './colors.js'
 import { bisectLeft } from './bisect.js'
 
-export const INTERVAL_START_CHANNELS = new Set(['interval_start', 'start_intval'])
-export const INTERVAL_STOP_CHANNELS = new Set(['interval_stop', 'stop_intval'])
+export const INTERVAL_START_CHANNELS = new Set(['interval_start'])
+export const INTERVAL_STOP_CHANNELS = new Set(['interval_stop'])
 
 const INTERVAL_COLORS = [
   '#E74C3C', '#2ECC71', '#F39C12', '#3498DB', '#9B59B6',
@@ -58,20 +58,34 @@ function isStop(ev) {
   return INTERVAL_STOP_CHANNELS.has(ev.target)
 }
 
+const INTERVAL_TID_RE = /^(\S+)\s+tid:((?:0[xX][0-9a-fA-F]+|\d+))\s*$/i
+
+function parseIntervalIntToken(s) {
+  const t = s.trim()
+  if (/^0[xX]/.test(t)) return parseInt(t, 16)
+  return parseInt(t, 10)
+}
+
+function formatIntervalTidDisplay(token, value) {
+  if (/^0[xX]/.test(token)) return `0x${value.toString(16).toUpperCase()}`
+  return String(value)
+}
+
 /** @typedef {{ intervalId: string, taskId: string|null, pairingKey: string }} ParsedIntervalNote */
 
 /**
- * Parse interval STI note: legacy `{id}` or `{id} tid:{task_id}` (from gentrace / btf_dump).
+ * Parse interval STI note: legacy `{id}` or `{id} tid:{task_id}` (decimal or 0x hex).
  * @returns {ParsedIntervalNote}
  */
 export function parseIntervalNote(note) {
   const raw = (note != null && note !== '') ? String(note).trim() : '0'
-  const m = /^(\S+)\s+tid:(\d+)\s*$/i.exec(raw)
+  const m = INTERVAL_TID_RE.exec(raw)
   if (m) {
+    const tidVal = parseIntervalIntToken(m[2])
     return {
       intervalId: m[1],
-      taskId: m[2],
-      pairingKey: `${m[1]}\0tid:${m[2]}`,
+      taskId: formatIntervalTidDisplay(m[2], tidVal),
+      pairingKey: `${m[1]}\0tid:${tidVal}`,
     }
   }
   return { intervalId: raw, taskId: null, pairingKey: raw }

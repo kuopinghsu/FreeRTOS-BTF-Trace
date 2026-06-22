@@ -9,7 +9,7 @@ all: build
 ## Install dependencies and produce dist/index.html (single self-contained file)
 build: node_modules wasm
 	$(NPM) run build
-	cp dist/index.html pre-build/btf-viewer.html
+	cp dist/index.html pre-build/btf_viewer.html
 
 ## Compile WASM timeline accelerator and embed base64 for single-file build
 wasm:

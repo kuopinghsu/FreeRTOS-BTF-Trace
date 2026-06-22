@@ -741,6 +741,7 @@ import { formatTime }   from './renderer/TimelineRenderer.js'
 import { taskDisplayName, taskMergeKey, setColorblindMode } from './utils/colors.js'
 import { loadSettings, saveSettings, applySettingsToRuntime, resizeTabCursors, normalizeSettings,
 } from './utils/settingsStore.js'
+import { setTimelineLayout } from './utils/timelineLayout.js'
 import { traceIsMultiCore } from './utils/migrationAnalysis.js'
 import {
   cpuLoadPreferredPaneHeight, cpuLoadPaneDefaultH, cpuLoadPaneMaxH,
@@ -1749,7 +1750,9 @@ function onRedo() {
 }
 
 function onLabelWidthChange(w, commit = true) {
-  appSettings.labelWidth = w
+  const clamped = Math.max(60, Math.min(600, Math.round(w)))
+  appSettings.labelWidth = clamped
+  setTimelineLayout({ labelW: clamped })
   scheduleRender()
   if (commit) {
     saveSettings(appSettings)

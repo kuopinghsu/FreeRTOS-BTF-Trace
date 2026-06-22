@@ -98,9 +98,32 @@ function crc32(str) {
 
 // ---- Task display-name helpers --------------------------------------------
 
-const TASK_RE = /^\[((?:0[xX][0-9a-fA-F]+|\d+))\/((?:0[xX][0-9a-fA-F]+|\d+))\](.+)$/
+const TASK_BRACKET_RE = /^\[((?:0[xX][0-9a-fA-F]+|\d+))\/((?:0[xX][0-9a-fA-F]+|\d+))\](.+)$/
+const TASK_SUFFIX_BRACKET_RE = /^(.+?)\[((?:0[xX][0-9a-fA-F]+|\d+))\]$/
+const TASK_SUFFIX_PAREN_RE = /^(.+?)\(((?:0[xX][0-9a-fA-F]+|\d+))\)$/
+/** @deprecated alias */
+const TASK_RE = TASK_BRACKET_RE
 // Matches: idle, idle0, idle 0, idle(0x...), idle 0(0x...), idle0(0x...)
 const IDLE_RE = /^idle(?:\s*(\d+))?\s*(?:\((?:0[xX][0-9a-fA-F]+|\d+)\))?$/i
+
+function parseIntToken(s) {
+  const t = s.trim()
+  if (/^0[xX]/.test(t)) return parseInt(t, 16)
+  return parseInt(t, 10)
+}
+
+function formatIntTokenDisplay(token, value) {
+  if (/^0[xX]/.test(token)) return `0x${value.toString(16).toUpperCase()}`
+  return String(value)
+}
+
+function taskIdDisplayString(raw, taskId) {
+  for (const re of [TASK_BRACKET_RE, TASK_SUFFIX_BRACKET_RE, TASK_SUFFIX_PAREN_RE]) {
+    const m = re.exec(raw)
+    if (m) return formatIntTokenDisplay(m[2], taskId)
+  }
+  return String(taskId)
+}
 
 export function isIdleTaskName(name) {
   return IDLE_RE.test(name)
@@ -120,11 +143,26 @@ function normalizeIdleName(name) {
 
 /**
  * Parse a raw BTF task name into { coreId, taskId, name }.
- * Returns { coreId: null, taskId: null, name: raw } for simple names.
+ * Supported: [core/id]name, name[id], name(id). IDLE left unparsed.
  */
 export function parseTaskName(raw) {
-  const m = TASK_RE.exec(raw)
-  if (m) return { coreId: Number(m[1]), taskId: Number(m[2]), name: m[3].trim() }
+  if (IDLE_RE.test(raw)) return { coreId: null, taskId: null, name: raw }
+  let m = TASK_BRACKET_RE.exec(raw)
+  if (m) {
+    return {
+      coreId: parseIntToken(m[1]),
+      taskId: parseIntToken(m[2]),
+      name: m[3].trim(),
+    }
+  }
+  m = TASK_SUFFIX_BRACKET_RE.exec(raw)
+  if (m) {
+    return { coreId: null, taskId: parseIntToken(m[2]), name: m[1].trim() }
+  }
+  m = TASK_SUFFIX_PAREN_RE.exec(raw)
+  if (m) {
+    return { coreId: null, taskId: parseIntToken(m[2]), name: m[1].trim() }
+  }
   return { coreId: null, taskId: null, name: raw }
 }
 
@@ -169,10 +207,11 @@ export function taskLabelForMergeKey(trace, mk) {
  * Short display name: 'Name[id]' for regular tasks; bare name for IDLE/TICK.
  */
 export function taskDisplayName(raw) {
+  if (IDLE_RE.test(raw)) return normalizeIdleName(raw)
   const { taskId, name } = parseTaskName(raw)
   if (isIdleTaskName(name)) return normalizeIdleName(name)
   if (taskId !== null && name !== 'TICK') {
-    return `${name}[${taskId}]`
+    return `${name}[${taskIdDisplayString(raw, taskId)}]`
   }
   return name
 }
