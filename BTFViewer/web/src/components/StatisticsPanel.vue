@@ -222,9 +222,29 @@
           :class="'health-' + tickHealth.health"
         >
           {{ tickHealth.health.toUpperCase() }}
+          · <span
+            class="tick-mode-badge"
+            :class="tickHealth.isTickless ? 'tick-mode-tickless' : 'tick-mode-tick'"
+            :title="tickHealth.isTickless
+              ? `Tickless mode detected (interval CV=${(tickHealth.tickCv * 100).toFixed(1)}%): tick intervals vary because the scheduler suppresses ticks during idle periods.`
+              : `Tick mode detected (interval CV=${(tickHealth.tickCv * 100).toFixed(1)}%): tick intervals are constant.`"
+          >{{ tickHealth.isTickless ? 'TICKLESS' : 'TICK' }}</span>
           · {{ tickHealth.tickCount.toLocaleString() }} ticks
           · avg {{ fmtTime(tickHealth.avgPeriod) }}
           · max gap {{ fmtTime(tickHealth.maxGap) }}
+        </div>
+        <div
+          v-if="tickHealth.isTickless"
+          class="range-hint tick-dist-hint"
+        >
+          Tickless mode: tick intervals vary.
+          <button
+            type="button"
+            class="tick-dist-btn"
+            @click="openTickDistPlot"
+          >
+            Tick Distribution…
+          </button>
         </div>
         <div
           v-if="tickHealth.largeGaps.length"
@@ -2435,6 +2455,32 @@ function _buildPreemptPlot(trace, victimMk, preemptor, range) {
   }
 }
 
+function _buildTickDistPlot(trace, range) {
+  const suffix = scopeSuffix(range)
+  let times = trace?.tickStiTimes || []
+  if (range) {
+    times = times.filter(t => t >= range.lo && t <= range.hi)
+  }
+  if (times.length < 2) return null
+  const points = []
+  for (let i = 1; i < times.length; i++) {
+    const delta = times[i] - times[i - 1]
+    points.push({
+      index: i - 1,
+      xNs: times[i],
+      yValue: delta,
+      payload: null,
+      label: `Tick #${i}: interval ${formatTime(delta, trace.timeScale)} at ${formatTime(times[i], trace.timeScale)}`,
+    })
+  }
+  return {
+    kind: 'tick',
+    title: `Tick Interval Distribution${suffix}`,
+    color: '#64B5F6',
+    points,
+  }
+}
+
 function _buildIntervalPlot(trace, id, range) {
   const suffix = scopeSuffix(range)
   const lo = range?.lo ?? null
@@ -2496,6 +2542,9 @@ const plotData = computed(() => {
   if (open.kind === 'priority') {
     return _buildPriorityPlot(props.trace, open.mk, range)
   }
+  if (open.kind === 'tick') {
+    return _buildTickDistPlot(props.trace, range)
+  }
   return _buildInterPlot(props.trace, open.mk, range)
 })
 
@@ -2536,6 +2585,14 @@ function openPriorityPlot(mk) {
   const plot = _buildPriorityPlot(props.trace, mk, range)
   if (!plot || plot.points.length === 0) return
   openPlotRef.value = { mk, kind: 'priority' }
+  selectedPlotPoint.value = -1
+}
+
+function openTickDistPlot() {
+  const range = statsRange.value
+  const plot = _buildTickDistPlot(props.trace, range)
+  if (!plot || plot.points.length === 0) return
+  openPlotRef.value = { kind: 'tick' }
   selectedPlotPoint.value = -1
 }
 
@@ -2780,6 +2837,8 @@ function exportCsv() {
   lines.push(`Trace Health (TICK)${suffix}`)
   if (tick.tickCount) {
     lines.push(`Status,${_csvCell(tick.health.toUpperCase())}`)
+    lines.push(`Mode,${_csvCell(tick.isTickless ? 'TICKLESS' : 'TICK')}`)
+    lines.push(`Interval CV,${_csvCell((tick.tickCv * 100).toFixed(2) + '%')}`)
     lines.push(`Ticks,${_csvCell(tick.tickCount)}`)
     lines.push(`Avg period,${_csvCell(formatTime(tick.avgPeriod, tr.timeScale))}`)
     lines.push(`Max gap,${_csvCell(formatTime(tick.maxGap, tr.timeScale))}`)
@@ -3284,6 +3343,8 @@ function exportHtml() {
   const tickHealthHtml = tick.tickCount
     ? `<section class="report-card"><h2>Trace Health (TICK)${_htmlCell(suffix)}</h2><table><tbody>
         <tr><th>Status</th><td>${_htmlCell(tick.health.toUpperCase())}</td></tr>
+        <tr><th>Mode</th><td>${tick.isTickless ? 'TICKLESS' : 'TICK'}</td></tr>
+        <tr><th>Interval CV</th><td>${(tick.tickCv * 100).toFixed(2)}%</td></tr>
         <tr><th>Ticks</th><td>${tick.tickCount.toLocaleString()}</td></tr>
         <tr><th>Avg period</th><td>${_htmlCell(formatTime(tick.avgPeriod, tr.timeScale))}</td></tr>
         <tr><th>Max gap</th><td>${_htmlCell(formatTime(tick.maxGap, tr.timeScale))}</td></tr>
@@ -3724,6 +3785,45 @@ watch(plotData, () => {
 .health-banner.health-warning { color: #E8C84A; }
 .health-banner.health-critical { color: #E85D5D; }
 .health-banner.health-unknown { color: var(--fg-dim); }
+
+.tick-mode-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 4px;
+  border-radius: 3px;
+  cursor: help;
+  letter-spacing: 0.03em;
+}
+.tick-mode-tick {
+  background: color-mix(in srgb, #64B5F6 18%, transparent);
+  color: #64B5F6;
+  border: 1px solid color-mix(in srgb, #64B5F6 40%, transparent);
+}
+.tick-mode-tickless {
+  background: color-mix(in srgb, #FFB74D 18%, transparent);
+  color: #FFB74D;
+  border: 1px solid color-mix(in srgb, #FFB74D 40%, transparent);
+}
+.tick-dist-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.tick-dist-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--fg-dim);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 1px 6px;
+  flex-shrink: 0;
+}
+.tick-dist-btn:hover {
+  background: var(--hover-bg, rgba(255,255,255,0.07));
+  color: var(--fg);
+}
 
 .stats-util-scroll {
   display: flex;

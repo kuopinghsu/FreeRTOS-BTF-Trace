@@ -2097,6 +2097,10 @@ def _migration_rows(trace: "BtfTrace",
 
 _TICK_HEALTH_PERIOD = 1000   # expected tick period in trace units (1 ms @ us scale)
 _TICK_HEALTH_GAP_FACTOR = 2.0
+# Coefficient-of-variation threshold for tickless-mode detection.
+# In tick mode CV is near 0; tickless idle suppresses ticks during sleep
+# so the interval distribution widens (CV grows above this threshold).
+_TICK_HEALTH_TICKLESS_CV = 0.05
 PREEMPTION_CHAIN_MAX_ROWS = 2000
 
 def _collect_preemption_events(
@@ -2217,21 +2221,30 @@ def _preemption_chain_plot_points(
 
 def _tick_health_report(trace: "BtfTrace",
                         lo: Optional[int] = None, hi: Optional[int] = None) -> dict:
-    """Summarise STI TICK timestamps: gaps, missed-tick estimate, health status."""
+    """Summarise STI TICK timestamps: gaps, missed-tick estimate, health status.
+
+    Also detects tick vs tickless mode via coefficient of variation (CV) of
+    tick intervals.  In tick mode all intervals are nearly constant (low CV);
+    in tickless mode idle periods suppress ticks so the interval distribution
+    widens (high CV).
+    """
     times = trace.tick_sti_times
     if lo is not None and hi is not None:
         times = [t for t in times if lo <= t <= hi]
     if not times:
         return {"tick_count": 0, "health": "unknown", "large_gaps": [],
-                "avg_period": 0, "max_gap": 0, "missed_estimate": 0}
+                "avg_period": 0, "max_gap": 0, "missed_estimate": 0,
+                "is_tickless": False, "tick_deltas": [], "tick_cv": 0.0}
 
     threshold = _TICK_HEALTH_PERIOD * _TICK_HEALTH_GAP_FACTOR
     large_gaps = []
+    tick_deltas = []
     sum_delta = 0
     max_gap = 0
     missed_total = 0
     for i in range(1, len(times)):
         delta = times[i] - times[i - 1]
+        tick_deltas.append(delta)
         sum_delta += delta
         if delta > max_gap:
             max_gap = delta
@@ -2240,7 +2253,16 @@ def _tick_health_report(trace: "BtfTrace",
             missed_total += missed
             large_gaps.append((times[i - 1], times[i], delta, missed))
 
-    avg_period = sum_delta / (len(times) - 1) if len(times) > 1 else _TICK_HEALTH_PERIOD
+    n = len(tick_deltas)
+    avg_period = sum_delta / n if n > 0 else _TICK_HEALTH_PERIOD
+
+    # Tickless-mode detection via CV = stddev / mean
+    tick_cv = 0.0
+    if n > 1 and avg_period > 0:
+        variance = sum((d - avg_period) ** 2 for d in tick_deltas) / n
+        tick_cv = variance ** 0.5 / avg_period
+    is_tickless = tick_cv > _TICK_HEALTH_TICKLESS_CV
+
     health = "good"
     if large_gaps:
         health = "critical" if max_gap / _TICK_HEALTH_PERIOD > 10 else "warning"
@@ -2251,6 +2273,9 @@ def _tick_health_report(trace: "BtfTrace",
         "large_gaps": large_gaps,
         "missed_estimate": missed_total,
         "health": health,
+        "is_tickless": is_tickless,
+        "tick_deltas": tick_deltas,
+        "tick_cv": tick_cv,
     }
 
 def _migration_heatmap_data(trace: "BtfTrace",
@@ -13436,6 +13461,45 @@ class _StatsPanel(QWidget):
     def _open_priority_plot(self, trace: "BtfTrace", mk: str) -> None:
         self._open_plot(trace, mk, "priority")
 
+    def _open_tick_dist_plot(self, trace: "BtfTrace") -> None:
+        """Open a tick-interval distribution scatter+histogram plot."""
+        rng = self._stats_range()
+        lo = hi = None
+        if rng is not None:
+            lo, hi, _ = rng
+        scope = self._scope_suffix()
+        times = trace.tick_sti_times
+        if lo is not None and hi is not None:
+            times = [t for t in times if lo <= t <= hi]
+        if len(times) < 2:
+            return
+        pts = [
+            (times[i], times[i] - times[i - 1], None)
+            for i in range(1, len(times))
+        ]
+        title = f"Tick Interval Distribution{scope}"
+        color = QColor("#64B5F6")
+        scoped, badge, detail = self._plot_scope_banner()
+        if self._plot_dlg is not None:
+            try:
+                self._plot_dlg.closed.disconnect(self._on_plot_dialog_closed)
+            except TypeError:
+                pass
+            self._plot_dlg.close()
+        self._plot_mk = "__tick_dist__"
+        self._plot_kind = "tick"
+        self._plot_dlg = _MetricsPlotDialog(
+            title, pts, trace.time_scale, color,
+            on_point_click=None,
+            is_dark=self._is_dark,
+            scope_scoped=scoped,
+            scope_badge=badge,
+            scope_detail=detail,
+            parent=self.window(),
+        )
+        self._plot_dlg.closed.connect(self._on_plot_dialog_closed)
+        self._plot_dlg.show()
+
     def capture_plot_session(self) -> Tuple[Optional[str], Optional[str], bool, Optional[str]]:
         """Return (mk, kind, visible, preemptor) for the current metrics plot dialog."""
         open_ = self._plot_dlg is not None and self._plot_dlg.isVisible()
@@ -14296,6 +14360,8 @@ class _StatsPanel(QWidget):
     <table>
       <tbody>
         <tr><td>Status</td><td>{_esc(tick['health'].upper())}</td></tr>
+        <tr><td>Mode</td><td>{'TICKLESS' if tick['is_tickless'] else 'TICK'}</td></tr>
+        <tr><td>Interval CV</td><td>{tick['tick_cv'] * 100.0:.2f}%</td></tr>
         <tr><td>Ticks</td><td>{tick['tick_count']:,}</td></tr>
         <tr><td>Avg period</td><td>{_esc(_format_time(tick['avg_period'], trace.time_scale))}</td></tr>
         <tr><td>Max gap</td><td>{_esc(_format_time(tick['max_gap'], trace.time_scale))}</td></tr>
@@ -14691,6 +14757,8 @@ class _StatsPanel(QWidget):
                 writer.writerow([f"Trace Health (TICK){scope_suffix}"])
                 if tick["tick_count"]:
                     writer.writerow(["Status", tick["health"].upper()])
+                    writer.writerow(["Mode", "TICKLESS" if tick["is_tickless"] else "TICK"])
+                    writer.writerow(["Interval CV", f"{tick['tick_cv'] * 100.0:.2f}%"])
                     writer.writerow(["Ticks", tick["tick_count"]])
                     writer.writerow(["Avg period", _us(_format_time(tick["avg_period"], trace.time_scale))])
                     writer.writerow(["Max gap", _us(_format_time(tick["max_gap"], trace.time_scale))])
@@ -14907,13 +14975,61 @@ class _StatsPanel(QWidget):
                 blay.addWidget(self._lbl("No STI TICK events", color="#888888", ui_fs=_fs))
                 return
             colors = {"good": "#5FCF6F", "warning": "#E8C84A", "critical": "#E85D5D"}
-            blay.addWidget(self._lbl(
+
+            # --- health + mode badge row ---
+            mode_label = "TICKLESS" if _tick["is_tickless"] else "TICK"
+            mode_color = "#FFB74D" if _tick["is_tickless"] else "#64B5F6"
+            cv_pct = _tick["tick_cv"] * 100.0
+            row_w = QWidget()
+            row_lay = QHBoxLayout(row_w)
+            row_lay.setContentsMargins(0, 0, 0, 0)
+            row_lay.setSpacing(6)
+            health_lbl = self._lbl(
                 f"{_tick['health'].upper()}  ·  {_tick['tick_count']:,} ticks  ·  "
                 f"avg {_format_time(_tick['avg_period'], trace.time_scale)}  ·  "
                 f"max gap {_format_time(_tick['max_gap'], trace.time_scale)}",
                 color=colors.get(_tick["health"], "#888888"),
                 ui_fs=_fs,
-            ))
+            )
+            mode_badge = self._lbl(mode_label, color=mode_color, ui_fs=_fs)
+            mode_badge.setToolTip(
+                f"{'Tickless' if _tick['is_tickless'] else 'Tick'} mode detected "
+                f"(interval CV={cv_pct:.1f}%): "
+                + ("tick intervals vary because the scheduler suppresses ticks during idle."
+                   if _tick["is_tickless"]
+                   else "tick intervals are constant.")
+            )
+            _badge_bg = "#3A2E15" if _tick["is_tickless"] else "#162336"
+            mode_badge.setStyleSheet(
+                f"font-weight:bold; border:1px solid {mode_color};"
+                f" background:{_badge_bg}; border-radius:3px; padding:0 4px;"
+            )
+            row_lay.addWidget(health_lbl)
+            row_lay.addWidget(mode_badge)
+            row_lay.addStretch()
+            blay.addWidget(row_w)
+
+            # --- tickless distribution button ---
+            if _tick["is_tickless"]:
+                hint_w = QWidget()
+                hint_lay = QHBoxLayout(hint_w)
+                hint_lay.setContentsMargins(0, 2, 0, 2)
+                hint_lay.setSpacing(6)
+                hint_lay.addWidget(self._lbl(
+                    "Tickless mode: tick intervals vary.", color="#888888", ui_fs=_fs))
+                dist_btn = QPushButton("Tick Distribution\u2026")
+                dist_btn.setCursor(Qt.PointingHandCursor)
+                dist_btn.setFlat(True)
+                dist_btn.setStyleSheet(
+                    f"font-size:{_fs}; border:1px solid #555; border-radius:3px;"
+                    f" padding:1px 6px; color:#aaa; background:transparent;"
+                )
+                dist_btn.clicked.connect(
+                    lambda: self._open_tick_dist_plot(trace))
+                hint_lay.addWidget(dist_btn)
+                hint_lay.addStretch()
+                blay.addWidget(hint_w)
+
             if _tick["large_gaps"]:
                 blay.addWidget(self._lbl(
                     f"{len(_tick['large_gaps'])} large gap(s) · "
