@@ -30,7 +30,7 @@ A PyQt5-based interactive visualiser for FreeRTOS context-switch traces in **Bes
 - **Cursor range summary** — with 2+ cursors, Desktop also shows a quick min/max/avg segment summary in the status bar; Web shows range stats in the **Cursors** panel
 - **Task highlight** — hover or click any task label or Legend row to highlight all its segments
 - **Dockable Legend panel** — colour swatches for every task, with a search box, **Migrated tasks only** filter, a **heatmap filter banner** (when drilled from the heatmap), and the same highlight interaction
-- **Dockable Statistics panel** — per-core CPU utilisation, top tasks, scheduling summary (context switches, core-gap avg/max), trace health (TICK), and collapsible metric tables including **Preemption Chain**, **Priority Inheritance**, **Mutex / Semaphore pairing**, and **Interval Analysis**
+- **Dockable Statistics panel** — per-core CPU utilisation, top tasks, scheduling summary (context switches, core-gap avg/max), trace health (TICK) with **tick / tickless mode detection** and tick-interval distribution plot, and collapsible metric tables including **Preemption Chain**, **Priority Inheritance**, **Mutex / Semaphore pairing**, and **Interval Analysis**
 - **Tag View** — inspect tag channels/events (`tag_event`, `tag0_event` … `tag7_event`) alongside task/core activity
 - **Metrics tables** — Execution Time Per Slice, **Blocking Time** (same metric as Tracealyzer **Response Time**: off-CPU gap / scheduling latency between activations), **Inter-Arrival**, **Preemption Chain** (which tasks preempted whom), **Priority Inheritance**, **Mutex / Semaphore pairing**, and **Interval Analysis** (paired `interval_start` / `interval_stop` spans; when the BTF note includes `tid:{task_id}`, pairing is per interval id **and** task); click **Min** / **Max** (dotted underline) to jump and add an annotation at the BCET / WCET slice or shortest / longest gap (Desktop + Web)
 - **Metrics distribution charts** — click any row in Execution Time, Blocking Time, Inter-Arrival, Preemption Chain, **Priority Inheritance**, or **Interval Analysis** tables to open a scatter-plot + histogram popup; charts live-update when cursors move or cursor-range scope is toggled (Desktop + Web). On Desktop, each trace tab remembers its own open chart when you switch tabs
@@ -275,7 +275,7 @@ Below the scope checkbox, a **scheduling summary** line shows context-switch cou
 |---------|----------------|
 | **Core Utilisation** | Active (non-IDLE, non-TICK) CPU time per core as a percentage |
 | **Top Tasks by CPU** | Top 10 worker tasks ranked by total CPU time |
-| **Trace Health (TICK)** | STI TICK period regularity, large gaps, missed-tick estimate |
+| **Trace Health (TICK)** | STI TICK period regularity, **tick / tickless mode detection**, large gaps, missed-tick estimate, and tick-interval distribution plot (tickless only) |
 | **Core Migrations** | Per-task cross-core migration stats (see [Core migration analysis](#core-migration-analysis)) |
 | **Execution Time Per Slice** | Per-task slice duration stats (runs, CPU%, min/avg/max/p95) |
 | **Blocking Time** | Off-CPU gap between consecutive activations of the same task (Tracealyzer **Response Time** — identical definition) |
@@ -589,7 +589,7 @@ It shows:
 - **Scheduling summary** — context-switch count and average/max core gap between consecutive slices on each core
 - **Core utilisation** — percentage of active (non-IDLE, non-TICK) CPU time per core (collapsible)
 - **Top tasks by CPU** — ranked list of worker tasks by total CPU time consumed (collapsible)
-- **Trace health (TICK)** — tick period regularity, large gaps, missed-tick estimate (collapsible)
+- **Trace health (TICK)** — tick period regularity, **tick / tickless mode detection** (coefficient of variation of tick intervals), large gaps, missed-tick estimate, and **Tick Distribution** chart button for tickless traces (collapsible)
 - **Core Migrations** — per-task migration count, core count, primary core (% time), ping-pong count, STI events near migrations, and average off-CPU gap after migration vs other gaps; click a row to highlight the task (collapsible)
 - **Execution Time Per Slice** — per-task min/avg/max/p95, run count, and CPU%; click a row for a scatter + histogram popup; click **Min** / **Max** to jump and annotate the BCET / WCET slice
 - **Blocking Time** — off-CPU gap between consecutive activations of the same task (**Response Time** in Tracealyzer; same value, different label); min/avg/max/p95; click a row for a distribution chart; click **Min** / **Max** to jump and annotate the shortest / longest off-CPU gap (collapsible)
@@ -983,16 +983,23 @@ Interval bars are drawn as **solid** spans in the interval’s colour. **Start**
 
 #### Trace Health (TICK)
 
-Uses STI **TICK** timestamps to estimate scheduler tick regularity.
+Uses STI **TICK** timestamps to estimate scheduler tick regularity and detect whether the trace was recorded with the standard periodic tick or FreeRTOS **tickless idle** (`configUSE_TICKLESS_IDLE`).
 
 | Field | Meaning |
 |-------|---------|
 | **Status** | `good` / `warning` / `critical` based on gap threshold |
+| **Mode badge** | `TICK` (blue) or `TICKLESS` (amber) — detected automatically from the coefficient of variation (CV = σ/μ) of consecutive tick intervals. CV > 5 % is classified as tickless. Hover the badge to see the exact CV value |
 | **Ticks** | TICK event count in scope |
 | **Avg period / Max gap** | Observed tick spacing |
 | **Missed ticks (est.)** | Rough count of skipped ticks from large gaps |
 
-Large gaps may indicate CPU overload, long critical sections, or tracing gaps — not necessarily a FreeRTOS configuration error.
+In **tick mode** the timer interrupt fires at a constant rate and tick intervals form a tight cluster. In **tickless mode** the scheduler suppresses the tick interrupt during idle periods to save power, so consecutive intervals span one or many nominal tick periods — the distribution widens significantly.
+
+When **tickless mode** is detected, a **Tick Distribution…** button appears below the mode badge. Clicking it opens the standard scatter + histogram popup showing:
+- **Scatter plot** — each tick interval over trace time; long idle periods appear as tall spikes.
+- **Histogram** — full distribution of intervals; clearly multi-modal in tickless mode (one sharp peak at 1 × period, another at 2×, 3×, etc.).
+
+Large gaps may indicate CPU overload, long critical sections, tickless idle, or tracing gaps — not necessarily a FreeRTOS configuration error.
 
 ### Core migration analysis
 
