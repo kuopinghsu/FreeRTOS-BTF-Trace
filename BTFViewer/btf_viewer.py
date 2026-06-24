@@ -68,57 +68,58 @@ import threading
 # ---------------------------------------------------------------------------
 # macOS: suppress the harmless "TSM AdjustCapsLockLEDForKeyTransitionHandling"
 # noise that macOS prints to fd 2 whenever a key is pressed in a Qt app.
-# We redirect fd 2 into a pipe and relay everything EXCEPT that line.
+# Installed from main() after QApplication() — redirecting stderr before Qt
+# initialises NSApplication can abort inside _RegisterApplication on macOS.
 # ---------------------------------------------------------------------------
-if sys.platform == "darwin":
-    def _install_macos_stderr_filter() -> None:
-        _NOISE = b"TSM AdjustCapsLockLED"
-        try:
-            rfd, wfd = os.pipe()
-        except OSError:
-            return  # Can't create pipe; skip filter
-        original_fd = os.dup(2)
-        try:
-            os.dup2(wfd, 2)
-        except OSError:
-            os.close(rfd)
-            os.close(wfd)
-            os.close(original_fd)
-            return  # Restore fd 2 unchanged
+def _install_macos_stderr_filter() -> None:
+    if sys.platform != "darwin":
+        return
+    if os.environ.get("BTF_NO_STDERR_FILTER"):
+        return
+    _NOISE = b"TSM AdjustCapsLockLED"
+    try:
+        rfd, wfd = os.pipe()
+    except OSError:
+        return  # Can't create pipe; skip filter
+    original_fd = os.dup(2)
+    try:
+        os.dup2(wfd, 2)
+    except OSError:
+        os.close(rfd)
         os.close(wfd)
+        os.close(original_fd)
+        return  # Restore fd 2 unchanged
+    os.close(wfd)
 
-        def _relay() -> None:
-            leftover = b""
-            try:
-                with os.fdopen(rfd, "rb", buffering=0) as pipe:
-                    while True:
-                        chunk = pipe.read(256)
-                        if not chunk:
-                            break
-                        leftover += chunk
-                        while b"\n" in leftover:
-                            line, leftover = leftover.split(b"\n", 1)
-                            if _NOISE not in line:
-                                try:
-                                    os.write(original_fd, line + b"\n")
-                                except OSError:
-                                    pass
-                if leftover and _NOISE not in leftover:
-                    try:
-                        os.write(original_fd, leftover)
-                    except OSError:
-                        pass
-            finally:
+    def _relay() -> None:
+        leftover = b""
+        try:
+            with os.fdopen(rfd, "rb", buffering=0) as pipe:
+                while True:
+                    chunk = pipe.read(256)
+                    if not chunk:
+                        break
+                    leftover += chunk
+                    while b"\n" in leftover:
+                        line, leftover = leftover.split(b"\n", 1)
+                        if _NOISE not in line:
+                            try:
+                                os.write(original_fd, line + b"\n")
+                            except OSError:
+                                pass
+            if leftover and _NOISE not in leftover:
                 try:
-                    os.close(original_fd)
+                    os.write(original_fd, leftover)
                 except OSError:
                     pass
+        finally:
+            try:
+                os.close(original_fd)
+            except OSError:
+                pass
 
-        t = threading.Thread(target=_relay, daemon=True, name="stderr-filter")
-        t.start()
-
-    _install_macos_stderr_filter()
-    del _install_macos_stderr_filter
+    t = threading.Thread(target=_relay, daemon=True, name="stderr-filter")
+    t.start()
 
 import configparser
 import csv
@@ -8605,6 +8606,25 @@ class _LabelColumnGrip(QWidget):
 # View
 # ===========================================================================
 
+def _is_zoom_native_gesture(event) -> bool:
+    """True for macOS trackpad pinch (Qt6 NativeGestureType is not int()-able)."""
+    try:
+        return event.gestureType() == Qt.NativeGestureType.ZoomNativeGesture
+    except AttributeError:
+        return False
+
+def _native_gesture_local_pos(event) -> QPoint:
+    if hasattr(event, "position"):
+        p = event.position()
+        return p.toPoint() if hasattr(p, "toPoint") else QPoint(int(p.x()), int(p.y()))
+    return event.pos()
+
+def _native_gesture_zoom_factor(event) -> float:
+    try:
+        return 1.0 + float(event.value())
+    except (AttributeError, TypeError, ValueError):
+        return 1.0
+
 class TimelineView(QGraphicsView):
     """Pan + zoom QGraphicsView wrapping a TimelineScene."""
 
@@ -10042,6 +10062,21 @@ class TimelineView(QGraphicsView):
     # Wheel and touch zoom
     # ------------------------------------------------------------------
 
+    def _apply_native_pinch_zoom(self, event) -> None:
+        factor = _native_gesture_zoom_factor(event)
+        if factor <= 0.1:
+            return
+        self._fit_mode = False
+        self._do_zoom(factor, _native_gesture_local_pos(event))
+
+    def event(self, event) -> bool:  # noqa: N802
+        # macOS delivers pinch gestures to QGraphicsView, not only the viewport.
+        if (event.type() == QEvent.Type.NativeGesture
+                and _is_zoom_native_gesture(event)):
+            self._apply_native_pinch_zoom(event)
+            return True
+        return super().event(event)
+
     def wheelEvent(self, event: QWheelEvent) -> None:
         if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
             angle  = event.angleDelta().y()
@@ -10087,17 +10122,9 @@ class TimelineView(QGraphicsView):
                 # Mouse left the viewport - ensure any hover highlight is cleared
                 self._scene.clear_hover()
                 return False
-            if e.type() == QEvent.Type.NativeGesture:
-                # Qt.ZoomNativeGesture == 3 (macOS two-finger pinch)
-                _ZOOM_GESTURE = getattr(Qt.NativeGestureType, 'ZoomNativeGesture', 3)
-                try:
-                    if int(e.gestureType()) == int(_ZOOM_GESTURE):
-                        factor = 1.0 + e.value()
-                        if factor > 0.1:
-                            self._do_zoom(factor, e.pos())
-                        return True
-                except AttributeError:
-                    pass
+            if e.type() == QEvent.Type.NativeGesture and _is_zoom_native_gesture(e):
+                self._apply_native_pinch_zoom(e)
+                return True
         return super().eventFilter(obj, e)
 
     # ------------------------------------------------------------------
@@ -18938,8 +18965,23 @@ def _dialog_guard(fn):
     _wrapper.__doc__  = fn.__doc__
     return _wrapper
 
+def _new_fusion_base_style() -> QStyle:
+    """Return a Fusion style for macOS tab-bar proxy styling.
+
+    Each QProxyStyle must own a distinct base style; reusing one Fusion instance
+    across multiple proxies deletes the shared C++ object after the first proxy
+    is constructed.
+    """
+    return QStyleFactory.create("Fusion") or QApplication.style()
+
 class _LeftTabStyle(QProxyStyle):
     """Force left tab-bar alignment (ignored by the macOS native QStyle)."""
+
+    def __init__(self, base: Optional[QStyle] = None) -> None:
+        if base is None:
+            base = _new_fusion_base_style()
+        super().__init__(base)
+        self._base_style = base
 
     def styleHint(self, hint, option=None, widget=None, returnData=None):  # noqa: N802
         if hint == QStyle.StyleHint.SH_TabBar_Alignment:
@@ -18953,8 +18995,7 @@ class _LeftAlignedTabBar(QTabBar):
         super().__init__(parent)
         self.setExpanding(False)
         if sys.platform == "darwin":
-            base = QStyleFactory.create("Fusion") or QApplication.style()
-            self.setStyle(_LeftTabStyle(base))
+            self.setStyle(_LeftTabStyle())
 
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
@@ -19195,20 +19236,15 @@ class MainWindow(QMainWindow):
                            if hasattr(event, "position") else event.position().toPoint())
                     self._graph._handle_wheel(event, pos, obj)
                     return True
-                if event.type() == QEvent.Type.NativeGesture:
-                    _ZOOM_GESTURE = getattr(Qt.NativeGestureType, "ZoomNativeGesture", 3)
-                    try:
-                        if int(event.gestureType()) == int(_ZOOM_GESTURE):
-                            pt = event.position().toPoint()
-                            global_pos = self._scroll.viewport().mapToGlobal(pt)
-                            anchor = self._view.mapFromGlobal(global_pos)
-                            factor = 1.0 + event.value()
-                            if factor > 0.1:
-                                self._view._fit_mode = False
-                                self._view._do_zoom(factor, anchor)
-                            return True
-                    except AttributeError:
-                        pass
+                if event.type() == QEvent.Type.NativeGesture and _is_zoom_native_gesture(event):
+                    pt = _native_gesture_local_pos(event)
+                    global_pos = self._scroll.viewport().mapToGlobal(pt)
+                    anchor = self._view.mapFromGlobal(global_pos)
+                    factor = _native_gesture_zoom_factor(event)
+                    if factor > 0.1:
+                        self._view._fit_mode = False
+                        self._view._do_zoom(factor, anchor)
+                    return True
                 return False
 
         filt = _CpuLoadScrollSync(graph, graph._view, scroll)
@@ -19291,9 +19327,8 @@ class MainWindow(QMainWindow):
         tb = tw.tabBar()
         tb.setExpanding(False)
         if sys.platform == "darwin":
-            base = QStyleFactory.create("Fusion") or QApplication.style()
-            tb.setStyle(_LeftTabStyle(base))
-            tw.setStyle(_LeftTabStyle(base))
+            tb.setStyle(_LeftTabStyle())
+            tw.setStyle(_LeftTabStyle())
         tw.setObjectName("trace_tab_widget")
         tb.setObjectName("trace_tab_bar")
 
@@ -20629,8 +20664,7 @@ class MainWindow(QMainWindow):
         # Native document-mode tabs on macOS ignore QSS/palette theme updates.
         if sys.platform == "darwin":
             self._tab_widget.setDocumentMode(False)
-            base = QStyleFactory.create("Fusion") or QApplication.style()
-            self._tab_widget.setStyle(_LeftTabStyle(base))
+            self._tab_widget.setStyle(_LeftTabStyle())
         else:
             self._tab_widget.setDocumentMode(True)
         self._tab_widget.setMovable(True)
@@ -23747,16 +23781,26 @@ def _platform_preflight() -> None:
         file=sys.stderr,
     )
 
-def main() -> None:
-    _platform_preflight()
-
+def _configure_qt_startup() -> None:
     # On Windows with display scaling > 100 %, pinning QT_FONT_DPI to 96 keeps
     # font sizes at their intended 96-DPI metrics while still letting widget
     # geometry scale correctly.  AA_EnableHighDpiScaling / AA_UseHighDpiPixmaps
     # are Qt 6 no-ops (high-DPI is always on) and have been removed.
     os.environ.setdefault("QT_FONT_DPI", "96")
 
+    # macOS aborts inside _RegisterApplication when a headless QPA platform is
+    # active (common when QT_QPA_PLATFORM=offscreen leaks from CI/IDE shells).
+    if sys.platform == "darwin":
+        plat = os.environ.get("QT_QPA_PLATFORM", "").strip().lower()
+        if plat in ("offscreen", "minimal", "vnc"):
+            del os.environ["QT_QPA_PLATFORM"]
+
+def main() -> None:
+    _platform_preflight()
+    _configure_qt_startup()
+
     app = QApplication(sys.argv)
+    _install_macos_stderr_filter()
     app.setApplicationName("RTOS BTF Viewer")
     app.setApplicationDisplayName("RTOS BTF Viewer")
     app.setOrganizationName("btf_viewer")
