@@ -1,0 +1,18 @@
+# BTFViewer dependencies
+# Python >= 3.9 recommended
+
+# Qt6 bindings — includes QtCore, QtGui, QtWidgets, QtSvg
+PySide6>=6.4.0
+
+# ── RHEL 8 / glibc 2.28 note ────────────────────────────────────────────────
+# PySide6 >= 6.5 requires libxcb-cursor.so.0 (Qt xcb platform plugin).
+# RHEL 8 does not ship this package and the binary on newer distros requires
+# glibc 2.38 (incompatible with RHEL 8's glibc 2.28).
+#
+# Solution: build a minimal stub from source (no sudo required):
+#
+#   bash build_xcb_cursor.sh
+#
+# The stub provides the 3 symbols Qt needs and is installed directly into
+# PySide6/Qt/lib/ (the plugin's RUNPATH), so no LD_LIBRARY_PATH is needed.
+# Qt falls back to built-in X11 glyph cursors — all app features work.
