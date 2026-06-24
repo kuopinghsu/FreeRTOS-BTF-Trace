@@ -2,7 +2,7 @@
 
 Current version: **1.3.1** (Desktop Python app + Web app)
 
-A PyQt5-based interactive visualiser for FreeRTOS context-switch traces in **Best Trace Format** (`.btf`).
+A PySide6-based interactive visualiser for FreeRTOS context-switch traces in **Best Trace Format** (`.btf`).
 
 ## Screenshot
 
@@ -52,11 +52,11 @@ A PyQt5-based interactive visualiser for FreeRTOS context-switch traces in **Bes
 
 ### Desktop viewer (`btf_viewer.py`)
 
-**Requirements:** Python 3.8+ and PyQt5 ≥ 5.15.
+**Requirements:** Python 3.8+ and PySide6 ≥ 6.4.
 
 ```bash
 # Install the only runtime dependency
-pip install PyQt5
+pip install -r requirements.txt
 
 # Run directly — no build step needed
 python btf_viewer.py [trace.btf]
@@ -332,10 +332,10 @@ Shows the number of tasks, segments, STI events, and total trace duration once a
 ## Requirements (desktop viewer)
 
 - Python 3.8+
-- PyQt5 >= 5.15
+- PySide6 >= 6.4
 
 ```bash
-pip install PyQt5
+pip install -r requirements.txt
 ```
 
 ## Usage
@@ -1619,7 +1619,7 @@ timestamp, Core_N, 0, C, Core_N, 0, set_frequency, freq_hz
 
 | Component | Location | Notes |
 |-----------|----------|-------|
-| **Desktop viewer** | `btf_viewer.py` (~17k lines) | PyQt5 monolith: parser, `TimelineScene` rebuild, stats, trace compare |
+| **Desktop viewer** | `btf_viewer.py` (~17k lines) | PySide6 monolith: parser, `TimelineScene` rebuild, stats, trace compare |
 | **Web parser** | `web/src/parser/btfParser.js` | Mirrors Python parser; runs in Web Worker (`btfWorker.js`) with `file://` main-thread fallback |
 | **Web segment storage** | `web/src/parser/segStore.js`, `tracePack.js` | Flat typed arrays + `SegList` views; pack/unpack for worker → main transfer |
 | **Web CPU / stats prep** | `web/src/parser/cpuLoadBins.js`, `statsCompute.js` | Precomputed at parse time in the worker |

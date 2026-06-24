@@ -3848,14 +3848,21 @@ watch(plotData, () => {
 
 .core-name {
   color: var(--fg-dim);
-  min-width: 56px;
-  flex-shrink: 0;
+  flex: 0 0 128px;
+  width: 128px;
+  min-width: 48px;
+  max-width: 128px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .task-stat-name {
   color: var(--fg);
-  min-width: 0;
-  flex: 1;
+  flex: 0 0 128px;
+  width: 128px;
+  min-width: 48px;
+  max-width: 128px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3878,13 +3885,12 @@ watch(plotData, () => {
 }
 
 .prog-bar {
-  flex: 1;
+  flex: 1 1 0;
   height: 8px;
   border-radius: 4px;
   background: var(--border);
   overflow: hidden;
-  flex-shrink: 0;
-  min-width: 30px;
+  min-width: 24px;
 }
 
 .prog-fill {
@@ -3900,15 +3906,15 @@ watch(plotData, () => {
 
 .core-pct {
   color: #77BB77;
-  min-width: 38px;
-  text-align: right;
+  min-width: 40px;
+  text-align: left;
   flex-shrink: 0;
 }
 
 .task-stat-pct {
   color: #6AAADD;
-  min-width: 38px;
-  text-align: right;
+  min-width: 40px;
+  text-align: left;
   flex-shrink: 0;
 }
 

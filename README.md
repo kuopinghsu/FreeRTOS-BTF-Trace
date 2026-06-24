@@ -162,7 +162,7 @@ FreeRTOS-Trace/   Trace library (hooks, ring buffer, file dump via fopen)
 tools/            gentrace — binary dump → BTF or VCD
 sim/              RV64 SMP instruction-set simulator (C++, supports --cores N)
 Demo/             FreeRTOS SMP demo built for RV64, run under sim/
-BTFViewer/        Interactive BTF viewer (PyQt5 desktop + Vue 3 web app)
+BTFViewer/        Interactive BTF viewer (PySide6 desktop + Vue 3 web app)
 tracedata/        Sample outputs (example.btf, example-4cores.btf, example.vcd)
 images/           Documentation screenshots (timeline, stats plots, migration heatmaps)
 ```
@@ -360,12 +360,12 @@ Traces with **more than 16 cores** use a three-level drill-down (core×core matr
 
 ### BTF Viewer (built-in)
 
-An interactive Gantt-style viewer is included in the `BTFViewer/` directory (desktop PyQt5 app and browser-based web viewer). It supports Task/Core views, measurement cursors, CPU load graph, bookmarks, **Statistics** (execution time, blocking/response time, preemption chain, priority inheritance, mutex/semaphore pairing, interval analysis), **core migration heatmap**, trace compare, and PNG/SVG export.
+An interactive Gantt-style viewer is included in the `BTFViewer/` directory (desktop PySide6 app and browser-based web viewer). It supports Task/Core views, measurement cursors, CPU load graph, bookmarks, **Statistics** (execution time, blocking/response time, preemption chain, priority inheritance, mutex/semaphore pairing, interval analysis), **core migration heatmap**, trace compare, and PNG/SVG export.
 
-**Desktop requirements:** Python 3.8+ and PyQt5 ≥ 5.15
+**Desktop requirements:** Python 3.8+ and PySide6 ≥ 6.4
 
 ```bash
-pip install PyQt5
+pip install -r BTFViewer/requirements.txt
 python BTFViewer/btf_viewer.py tracedata/trace.btf
 # or the 4-core SMP demo trace:
 python BTFViewer/btf_viewer.py tracedata/example-4cores.btf

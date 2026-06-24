@@ -1,5 +1,5 @@
 """
-btf_viewer.py - Single-file RTOS BTF Viewer (PyQt5).
+btf_viewer.py - Single-file RTOS BTF Viewer (PySide6).
 
 Usage:
     python btf_viewer.py [trace.btf]
@@ -142,17 +142,17 @@ from operator import attrgetter as _attrgetter
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Tuple
 
-from PyQt5.QtCore import (
+from PySide6.QtCore import (
     QBuffer, QByteArray, QEasingCurve, QEvent, QEventLoop, QIODevice, QLineF, QMimeData,
     QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt, QThread, QTimer,
-    QPropertyAnimation, pyqtSignal,
+    QPropertyAnimation, Signal,
 )
-from PyQt5.QtGui import (
+from PySide6.QtGui import (
     QBrush, QColor, QCursor, QFont, QFontDatabase, QFontMetrics, QFontMetricsF, QIcon, QKeySequence, QPainter,
-    QPainterPath, QPalette, QPen, QPixmap, QPolygonF, QTransform, QWheelEvent,
+    QPainterPath, QPalette, QPen, QPixmap, QPolygonF, QShortcut, QTransform, QWheelEvent,
 )
-from PyQt5.QtSvg import QSvgGenerator
-from PyQt5.QtWidgets import (
+from PySide6.QtSvg import QSvgGenerator
+from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QDockWidget, QFileDialog, QFormLayout, QFrame, QGridLayout, QInputDialog,
     QGraphicsEllipseItem, QGraphicsItem, QGraphicsLineItem, QGraphicsOpacityEffect,
@@ -161,10 +161,10 @@ from PyQt5.QtWidgets import (
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListView, QMainWindow, QMenu, QMessageBox, QProgressBar,
     QProgressDialog,
     QListWidget, QListWidgetItem,
-    QPushButton, QScrollArea, QShortcut, QDoubleSpinBox, QSpinBox, QStackedWidget,
+    QPushButton, QScrollArea, QDoubleSpinBox, QSpinBox, QStackedWidget,
     QStyle, QStyleFactory, QStyleOptionGraphicsItem, QAbstractItemView,
     QProxyStyle, QTabBar, QTabWidget, QTableWidget, QTableWidgetItem, QToolButton,
-    QVBoxLayout, QWidget, QSizePolicy, QSplitter,
+    QVBoxLayout, QWidget, QSizePolicy, QSplitter, QLayout,
 )
 
 # ===========================================================================
@@ -200,8 +200,10 @@ CPU_LOAD_PANE_MAX_H      = 480  # Max CPU load pane height before inner vertical
 STATS_UTIL_BAR_H         =   8  # Core/task CPU % bar height in Statistics panel (px).
 STATS_UTIL_ROW_H         =  16  # Row height; matches stats-table row size (px).
 STATS_UTIL_ROW_GAP       =   1  # Vertical gap between utilisation rows (px).
-STATS_UTIL_LABEL_W       = 128  # Fixed label column so progress bars align (px).
-STATS_UTIL_PCT_W         =  44  # Fixed CPU % column width (px).
+STATS_UTIL_LABEL_W       = 128  # Shared label column for core/task util rows (px).
+STATS_UTIL_LABEL_MIN_W   =  48  # Minimum util label column (px).
+STATS_UTIL_BAR_MIN_W     =  24  # Minimum util progress bar width (px).
+STATS_UTIL_PCT_W         =  40  # Fixed CPU % column width (px).
 STATS_TABLE_HEADER_H     =  18  # QTableWidget header row height (px).
 STATS_TABLE_ROW_H        =  16  # QTableWidget body row height (px).
 STATS_TABLE_HSCROLL_H    =  14  # Horizontal scrollbar strip inside wide tables (px).
@@ -836,7 +838,7 @@ def _paint_interval_event_ticks(
     start_pen.setWidthF(1.0)
     stop_pen = QPen(light)
     stop_pen.setWidthF(1.0)
-    stop_pen.setStyle(Qt.DashLine)
+    stop_pen.setStyle(Qt.PenStyle.DashLine)
     y2 = y + h
     for x, is_start in ticks:
         if x < exp_left - 1.0 or x > exp_right + 1.0:
@@ -862,7 +864,7 @@ def _paint_interval_event_ticks_vertical(
     start_pen.setWidthF(1.0)
     stop_pen = QPen(light)
     stop_pen.setWidthF(1.0)
-    stop_pen.setStyle(Qt.DashLine)
+    stop_pen.setStyle(Qt.PenStyle.DashLine)
     x2 = x + w
     for y, is_start in ticks:
         if y < exp_top - 1.0 or y > exp_bottom + 1.0:
@@ -3286,10 +3288,10 @@ class _InfoPopup(QLabel):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowFlags(
-            Qt.ToolTip | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
+            Qt.WindowType.ToolTip | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
         )
-        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        self.setTextFormat(Qt.RichText)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setTextFormat(Qt.TextFormat.RichText)
         self.setMargin(7)
         self._ss_applied_dark: Optional[bool] = None   # None = never applied
 
@@ -3311,6 +3313,24 @@ class _InfoPopup(QLabel):
                 f"font-size:7pt; font-family:'{fam}'; }}"
             )
 
+    def _ensure_transient_parent(self) -> None:
+        """Wayland: popup windows must declare a transient parent on their
+        native QWindow handle before show(), otherwise Qt logs a warning and
+        the popup is silently dropped."""
+        app = QApplication.instance()
+        if app is None:
+            return
+        active = app.activeWindow()
+        if active is None or active is self:
+            return
+        # Force creation of the native window handle if not yet realized.
+        if self.windowHandle() is None:
+            self.create()
+        handle = self.windowHandle()
+        parent_handle = active.windowHandle()
+        if handle is not None and parent_handle is not None:
+            handle.setTransientParent(parent_handle)
+
     def show_at(self, screen_pos: QPoint, html: str, is_dark: Optional[bool] = None) -> None:
         if is_dark is None:
             app = QApplication.instance()
@@ -3323,6 +3343,8 @@ class _InfoPopup(QLabel):
         self.adjustSize()
         # offset so the cursor does not cover the box
         self.move(screen_pos.x() + 16, screen_pos.y() + 8)
+        # Wayland requires popups to have a transient parent on their native handle.
+        self._ensure_transient_parent()
         self.show()
         self.raise_()
 
@@ -3557,7 +3579,7 @@ def _pixmap_to_png_bytes(pixmap: QPixmap) -> Tuple[bytes, QByteArray]:
     """Encode *pixmap* as PNG; return raw bytes and the backing QByteArray."""
     buf = QByteArray()
     buf_dev = QBuffer(buf)
-    buf_dev.open(QIODevice.WriteOnly)
+    buf_dev.open(QIODevice.OpenModeFlag.WriteOnly)
     pixmap.save(buf_dev, 'PNG')
     buf_dev.close()
     return bytes(buf), buf
@@ -3645,7 +3667,7 @@ def _stack_pixmaps_vertically(top: QPixmap, bottom: QPixmap) -> QPixmap:
     """Return a new pixmap with *bottom* drawn below *top*."""
     combined = QPixmap(max(top.width(), bottom.width()),
                        top.height() + bottom.height())
-    combined.fill(Qt.transparent)
+    combined.fill(Qt.GlobalColor.transparent)
     painter = QPainter(combined)
     try:
         painter.drawPixmap(0, 0, top)
@@ -3707,7 +3729,7 @@ def _make_rotated_label(scene, text: str, font: "QFont", color: "QColor",
         dpr = QApplication.instance().devicePixelRatio()
         pm = QPixmap(max(1, math.ceil(px_w * dpr)), max(1, math.ceil(px_h * dpr)))
         pm.setDevicePixelRatio(dpr)
-        pm.fill(Qt.transparent)
+        pm.fill(Qt.GlobalColor.transparent)
         # Re-measure against the paint device so that subpixel hinting of the
         # high-DPI pixmap is reflected in the draw rect.
         fm_dev = QFontMetricsF(pm_font, pm)
@@ -3719,12 +3741,12 @@ def _make_rotated_label(scene, text: str, font: "QFont", color: "QColor",
             p.setRenderHint(QPainter.TextAntialiasing)
             p.setFont(pm_font)
             p.setPen(color)
-            p.drawText(QRectF(0, 0, dev_w, dev_h), Qt.AlignCenter, text)
+            p.drawText(QRectF(0, 0, dev_w, dev_h), Qt.AlignmentFlag.AlignCenter, text)
         finally:
             p.end()
         # Rotate -90deg and use SmoothTransformation so the resampling step
         # does not introduce additional jaggedness.
-        rotated = pm.transformed(QTransform().rotate(-90), Qt.SmoothTransformation)
+        rotated = pm.transformed(QTransform().rotate(-90), Qt.TransformationMode.SmoothTransformation)
         rotated.setDevicePixelRatio(dpr)
         item = QGraphicsPixmapItem(rotated)
         # The pixmap has no further rotation applied, so pos.y is the TOP of the
@@ -3734,7 +3756,7 @@ def _make_rotated_label(scene, text: str, font: "QFont", color: "QColor",
         # bottom edge of the label sits at y, and the text grows upward.
         item.setPos(x_center - rotated.width() / 2.0, y - rotated.height())
         item.setZValue(z)
-        item.setAcceptedMouseButtons(Qt.NoButton)
+        item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
         item.setAcceptHoverEvents(False)
         scene.addItem(item)
         return item
@@ -3752,7 +3774,7 @@ def _make_rotated_label(scene, text: str, font: "QFont", color: "QColor",
         # centering.
         item.setPos(x_center - item.boundingRect().height() / 2, y)
         item.setZValue(z)
-        item.setAcceptedMouseButtons(Qt.NoButton)
+        item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
         item.setAcceptHoverEvents(False)
         scene.addItem(item)
         return item
@@ -3936,10 +3958,10 @@ class TimelineScene(QGraphicsScene):
     Paint performance is recovered via the 3-tier LOD system in _BatchRowItem.
     """
 
-    scene_rebuilt    = pyqtSignal()          # emitted after every rebuild()
-    highlight_changed = pyqtSignal(object, bool) # (task_name_or_None, locked)
-    hover_changed    = pyqtSignal()          # emitted when hover cursor position changes
-    marks_changed    = pyqtSignal()          # emitted when bookmark/annotation marks change
+    scene_rebuilt    = Signal()          # emitted after every rebuild()
+    highlight_changed = Signal(object, bool) # (task_name_or_None, locked)
+    hover_changed    = Signal()          # emitted when hover cursor position changes
+    marks_changed    = Signal()          # emitted when bookmark/annotation marks change
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -4254,7 +4276,7 @@ class TimelineScene(QGraphicsScene):
         for row_idx, (ns, label, color_hex, *_extra) in enumerate(self._mark_data):
             color = QColor(color_hex)
             kind = _extra[0] if _extra else "bookmark"
-            pen  = QPen(color, 1.2, Qt.SolidLine) if kind == "bookmark" else QPen(color, 1.0, Qt.DashLine)
+            pen  = QPen(color, 1.2, Qt.PenStyle.SolidLine) if kind == "bookmark" else QPen(color, 1.0, Qt.PenStyle.DashLine)
 
             if self._horizontal:
                 x = self._label_width + self._ns_to_px(ns)
@@ -4285,7 +4307,7 @@ class TimelineScene(QGraphicsScene):
                                  QPointF(x - _f_hw, _mid_y)]
                 _flag = QGraphicsPolygonItem(QPolygonF(_flag_pts))
                 _flag.setBrush(QBrush(_flag_color))
-                _flag.setPen(QPen(Qt.NoPen))
+                _flag.setPen(QPen(Qt.PenStyle.NoPen))
                 _flag.setZValue(31)   # above cursor lines (z=30)
                 _flag.setToolTip(f"{'Bookmark' if kind == 'bookmark' else 'Annotation'}: {label}")
                 self.addItem(_flag)
@@ -4304,7 +4326,7 @@ class TimelineScene(QGraphicsScene):
                 lbl_y   = _scene_top + _orig_y + RULER_HEIGHT // 2
                 bg = self.addRect(
                     QRectF(0, 0, tw + 4, th + 2),
-                    QPen(Qt.NoPen),
+                    QPen(Qt.PenStyle.NoPen),
                     QBrush(color),
                 )
                 bg.setZValue(28)
@@ -4342,7 +4364,7 @@ class TimelineScene(QGraphicsScene):
                                  QPointF(_mid_x, y + _f_hw)]
                 _flag = QGraphicsPolygonItem(QPolygonF(_flag_pts))
                 _flag.setBrush(QBrush(_flag_color))
-                _flag.setPen(QPen(Qt.NoPen))
+                _flag.setPen(QPen(Qt.PenStyle.NoPen))
                 _flag.setZValue(31)
                 _flag.setToolTip(f"{'Bookmark' if kind == 'bookmark' else 'Annotation'}: {label}")
                 self.addItem(_flag)
@@ -4361,7 +4383,7 @@ class TimelineScene(QGraphicsScene):
                 lbl_y = y + 2
                 bg = self.addRect(
                     QRectF(0, 0, tw + 4, th + 2),
-                    QPen(Qt.NoPen),
+                    QPen(Qt.PenStyle.NoPen),
                     QBrush(color),
                 )
                 bg.setZValue(28)
@@ -4390,7 +4412,7 @@ class TimelineScene(QGraphicsScene):
         if self._trace is None or not self._find_hit_ns_list:
             return
         scene_r = self.sceneRect()
-        pen = QPen(QColor("#FF6B35"), 1.0, Qt.SolidLine)
+        pen = QPen(QColor("#FF6B35"), 1.0, Qt.PenStyle.SolidLine)
         pen.setCosmetic(True)
         for ns in self._find_hit_ns_list:
             if self._horizontal:
@@ -4464,7 +4486,7 @@ class TimelineScene(QGraphicsScene):
 
     def set_label_width(self, width: int) -> None:
         """Change the Task / TaskID column width (px) and rebuild."""
-        self._label_width = max(60, min(width, 600))
+        self._label_width = max(60, min(int(width), 600))
         self.rebuild()
 
     def set_row_height(self, h: int) -> None:
@@ -4938,7 +4960,7 @@ class TimelineScene(QGraphicsScene):
             line_col = QColor(0, 102, 204, 200)
             lbl_bg   = QColor(0, 102, 204, 230)
             lbl_txt  = QColor("#FFFFFF")
-        hover_pen = QPen(line_col, 1.2 if not self._is_dark_ui else 1.0, Qt.DashLine)
+        hover_pen = QPen(line_col, 1.2 if not self._is_dark_ui else 1.0, Qt.PenStyle.DashLine)
         hover_pen.setDashPattern([3, 3])
         if self._horizontal:
             x = self._label_width + self._ns_to_px(self._hover_ns)
@@ -4953,7 +4975,7 @@ class TimelineScene(QGraphicsScene):
             lbl_y = _scene_top + RULER_HEIGHT - th - 4
             bg = self.addRect(
                 QRectF(lbl_x, lbl_y, tw, th + 2),
-                QPen(Qt.NoPen), QBrush(lbl_bg))
+                QPen(Qt.PenStyle.NoPen), QBrush(lbl_bg))
             bg.setZValue(26)
             lbl = self.addSimpleText(t_str, font)
             lbl.setBrush(QBrush(lbl_txt))
@@ -4973,7 +4995,7 @@ class TimelineScene(QGraphicsScene):
             lbl_y = y - (th + 2) / 2
             bg = self.addRect(
                 QRectF(lbl_x, lbl_y, tw, th + 2),
-                QPen(Qt.NoPen), QBrush(lbl_bg))
+                QPen(Qt.PenStyle.NoPen), QBrush(lbl_bg))
             bg.setZValue(26)
             lbl = self.addSimpleText(t_str, font)
             lbl.setBrush(QBrush(lbl_txt))
@@ -5032,7 +5054,7 @@ class TimelineScene(QGraphicsScene):
 
         for order, (orig_idx, ns) in enumerate(sorted_cursors):
             color = QColor(cursor_palette[orig_idx % len(cursor_palette)])
-            pen   = QPen(color, 1.2, Qt.DashLine)
+            pen   = QPen(color, 1.2, Qt.PenStyle.DashLine)
 
             if self._horizontal:
                 x = self._label_width + self._ns_to_px(ns)
@@ -5053,7 +5075,7 @@ class TimelineScene(QGraphicsScene):
                 lbl_y   = _scene_top + _orig_y
                 bg = self.addRect(
                     QRectF(0, 0, tw + 4, th + 2),
-                    QPen(Qt.NoPen),
+                    QPen(Qt.PenStyle.NoPen),
                     QBrush(color),
                 )
                 bg.setZValue(31)
@@ -5078,7 +5100,7 @@ class TimelineScene(QGraphicsScene):
                     bg_rect = self.addRect(
                         QRectF(mid_x - d_w / 2 - 3, RULER_HEIGHT + 4,
                                d_w + 6, QFontMetrics(font).height() + 4),
-                        QPen(Qt.NoPen),
+                        QPen(Qt.PenStyle.NoPen),
                         QBrush(color),
                     )
                     bg_rect.setZValue(31)
@@ -5107,7 +5129,7 @@ class TimelineScene(QGraphicsScene):
                 lbl_y = y + 2
                 bg = self.addRect(
                     QRectF(0, 0, tw + 4, th + 2),
-                    QPen(Qt.NoPen),
+                    QPen(Qt.PenStyle.NoPen),
                     QBrush(color),
                 )
                 bg.setZValue(31)
@@ -5131,7 +5153,7 @@ class TimelineScene(QGraphicsScene):
                     bg_rect = self.addRect(
                         QRectF(RULER_WIDTH + 4, mid_y - dh / 2 - 2,
                                QFontMetrics(font).horizontalAdvance(d_str) + 6, dh + 4),
-                        QPen(Qt.NoPen), QBrush(color)
+                        QPen(Qt.PenStyle.NoPen), QBrush(color)
                     )
                     bg_rect.setZValue(31)
                     d_lbl.setPos(RULER_WIDTH + 7, mid_y - dh / 2)
@@ -5405,7 +5427,7 @@ class TimelineScene(QGraphicsScene):
         _tick_sti = trace.tick_sti_times
         if not _tick_segs and not _tick_sti:
             return False
-        _tick_no_pen = QPen(Qt.NoPen)
+        _tick_no_pen = QPen(Qt.PenStyle.NoPen)
         _sti_tick_brush = QBrush(QColor("#E8C84A"))
         seg_data: list = []
         xs: list = []
@@ -5573,7 +5595,7 @@ class TimelineScene(QGraphicsScene):
                                    QPen(color.darker(140), 1.0), QBrush(color))
             swatch.setZValue(37)
             self._frozen_items.append((swatch, 4))
-            _lbl = fm.elidedText(f"Interval {interval_id}", Qt.ElideRight, max(0, lw - 18 - 4))
+            _lbl = fm.elidedText(f"Interval {interval_id}", Qt.TextElideMode.ElideRight, max(0, lw - 18 - 4))
             lbl = self.addSimpleText(_lbl, font)
             lbl.setBrush(QBrush(self._c_sti_lbl))
             lbl.setPos(18, y_ctr - fm.height() / 2)
@@ -5622,7 +5644,7 @@ class TimelineScene(QGraphicsScene):
             x_left = x_cursor
             x_ctr = x_left + col_w / 2
             self.addRect(QRectF(x_left, label_row_h, col_w, timeline_h),
-                         QPen(Qt.NoPen), QBrush(self._c_sti_bg)).setZValue(0)
+                         QPen(Qt.PenStyle.NoPen), QBrush(self._c_sti_bg)).setZValue(0)
             lbl_bg = _StiLabelItem(QRectF(x_left, 0, col_w, label_row_h),
                                    f"interval:{interval_id}", self, expandable=False)
             lbl_bg.setZValue(36)
@@ -5631,12 +5653,12 @@ class TimelineScene(QGraphicsScene):
             color = QColor(_interval_color(interval_id))
             stripe = self.addRect(
                 QRectF(x_left + 3, label_row_h - 4, col_w - 6, 3),
-                QPen(Qt.NoPen), QBrush(color))
+                QPen(Qt.PenStyle.NoPen), QBrush(color))
             stripe.setZValue(38)
             self._frozen_top_items.append((stripe, stripe.pos().y()))
             _lbl_avail = max(0, label_row_h - 14)
             _lbl_txt = QFontMetrics(font).elidedText(
-                f"Interval {interval_id}", Qt.ElideRight, _lbl_avail)
+                f"Interval {interval_id}", Qt.TextElideMode.ElideRight, _lbl_avail)
             lbl = _make_rotated_label(self, _lbl_txt, font, color,
                                       x_ctr, label_row_h - LABEL_BOTTOM_MARGIN, 37)
             self._frozen_top_items.append((lbl, lbl.pos().y()))
@@ -5702,11 +5724,11 @@ class TimelineScene(QGraphicsScene):
 
         # --- Background & ruler ------------------------------------------
         _ruler_bg = self.addRect(QRectF(0, 0, total_w, RULER_HEIGHT),
-                               QPen(Qt.NoPen), QBrush(self._c_ruler_bg))
+                               QPen(Qt.PenStyle.NoPen), QBrush(self._c_ruler_bg))
         _ruler_bg.setZValue(10)   # above task rows (z=0-2) when frozen at top
         self._frozen_top_items.append((_ruler_bg, 0))
         _lbg = self.addRect(QRectF(0, 0, self._label_width, total_h),
-                           QPen(Qt.NoPen), QBrush(self._c_label_bg))
+                           QPen(Qt.PenStyle.NoPen), QBrush(self._c_label_bg))
         _lbg.setZValue(35)   # must be above cursor lines (z=30-32)
         self._frozen_items.append((_lbg, 0))
 
@@ -5776,7 +5798,7 @@ class TimelineScene(QGraphicsScene):
             lbl_font     = _monospace_font(self._font_size, QFont.Bold) if is_hl else font
             _lbl_avail_w = max(0, lw - 4 - 4)   # left=4, right margin=4
             _lbl_fm      = QFontMetrics(lbl_font) if is_hl else fm
-            _lbl_elided  = _lbl_fm.elidedText(disp, Qt.ElideRight, _lbl_avail_w)
+            _lbl_elided  = _lbl_fm.elidedText(disp, Qt.TextElideMode.ElideRight, _lbl_avail_w)
             lbl = self.addSimpleText(_lbl_elided, lbl_font)
             lbl.setBrush(QBrush(lbl_color))
             lbl.setPos(4, y_ctr - fm.height() / 2)
@@ -5838,9 +5860,9 @@ class TimelineScene(QGraphicsScene):
             # Label with expand/collapse indicator (only for expandable channels)
             if expandable:
                 _ind  = "▼" if is_exp else "▶"
-                _ltxt = fm.elidedText(f"{_ind} {channel}", Qt.ElideRight, max(0, lw - 4 - 4))
+                _ltxt = fm.elidedText(f"{_ind} {channel}", Qt.TextElideMode.ElideRight, max(0, lw - 4 - 4))
             else:
-                _ltxt = fm.elidedText(channel, Qt.ElideRight, max(0, lw - 4 - 4))
+                _ltxt = fm.elidedText(channel, Qt.TextElideMode.ElideRight, max(0, lw - 4 - 4))
             lbl_bg = _StiLabelItem(QRectF(0, y_top, lw, row_h), channel, self,
                                    expandable=expandable)
             lbl_bg.setZValue(36)
@@ -5894,7 +5916,7 @@ class TimelineScene(QGraphicsScene):
         # Drawn last so it sits on top of all other frozen items (z=38-39).
         _has_tick_h = bool(trace.seg_map_by_merge_key.get(_task_merge_key("TICK"), []))
         corner = self.addRect(QRectF(0, 0, lw, RULER_HEIGHT),
-                              QPen(Qt.NoPen), QBrush(self._c_corner_bg))
+                              QPen(Qt.PenStyle.NoPen), QBrush(self._c_corner_bg))
         corner.setZValue(38)
         _hdr_band_h = RULER_HEIGHT - (10 if _has_tick_h else 0)
         hdr = self.addSimpleText("Task / TaskID", font)
@@ -5956,13 +5978,13 @@ class TimelineScene(QGraphicsScene):
 
         # --- Ruler column (left side): frozen to left edge on X scroll ------
         _ruler_col_bg = self.addRect(QRectF(0, 0, RULER_WIDTH, total_h),
-                                     QPen(Qt.NoPen), QBrush(self._c_ruler_bg))
+                                     QPen(Qt.PenStyle.NoPen), QBrush(self._c_ruler_bg))
         _ruler_col_bg.setZValue(35)  # above cursor lines (z=30-32)
         self._frozen_items.append((_ruler_col_bg, 0))
 
         # --- Label row (top): frozen to top edge on Y scroll ---------------
         _label_row_bg = self.addRect(QRectF(0, 0, total_w, label_row_h),
-                                     QPen(Qt.NoPen), QBrush(self._c_label_bg))
+                                     QPen(Qt.PenStyle.NoPen), QBrush(self._c_label_bg))
         _label_row_bg.setZValue(35)  # above cursor lines (z=30-32), same as ruler column
         self._frozen_top_items.append((_label_row_bg, 0))
 
@@ -6008,7 +6030,7 @@ class TimelineScene(QGraphicsScene):
             self._task_row_rects[task] = [(QRectF(x_left, label_row_h, col_w, timeline_h), col_color)]
 
             self.addRect(QRectF(x_left, label_row_h, col_w, timeline_h),
-                         QPen(Qt.NoPen),
+                         QPen(Qt.PenStyle.NoPen),
                          _bg_even if col_idx % 2 == 0 else _bg_odd).setZValue(0)
             if is_hl:
                 hl_bg = QColor(col_color.red(), col_color.green(), col_color.blue(), 35)
@@ -6026,7 +6048,7 @@ class TimelineScene(QGraphicsScene):
             lbl_font     = _monospace_font(self._font_size, QFont.Bold) if is_hl else font
             _lbl_avail_v = max(0, label_row_h - 14)
             _lbl_fm_v    = QFontMetrics(lbl_font) if is_hl else fm
-            _lbl_disp_v  = _lbl_fm_v.elidedText(disp, Qt.ElideRight, _lbl_avail_v)
+            _lbl_disp_v  = _lbl_fm_v.elidedText(disp, Qt.TextElideMode.ElideRight, _lbl_avail_v)
             lbl = _make_rotated_label(self, _lbl_disp_v, lbl_font, lbl_color,
                                       x_left + col_w / 2,
                                       label_row_h - LABEL_BOTTOM_MARGIN, 37)
@@ -6084,7 +6106,7 @@ class TimelineScene(QGraphicsScene):
             x_left     = _sti_x_acc
             x_ctr      = x_left + cw_sti / 2
             self.addRect(QRectF(x_left, label_row_h, cw_sti, timeline_h),
-                         QPen(Qt.NoPen), QBrush(self._c_sti_bg)).setZValue(0)
+                         QPen(Qt.PenStyle.NoPen), QBrush(self._c_sti_bg)).setZValue(0)
 
             # Clickable column header (expands/collapses waveform)
             lbl_bg = _StiLabelItem(QRectF(x_left, 0, cw_sti, label_row_h),
@@ -6096,7 +6118,7 @@ class TimelineScene(QGraphicsScene):
             # Rotated label with optional expand indicator
             _ind_txt  = ("▼ " if is_exp else "▶ ") if expandable else ""
             _lbl_avail_v = max(0, label_row_h - 14)
-            _lbl_txt  = fm.elidedText(_ind_txt + channel, Qt.ElideRight, _lbl_avail_v)
+            _lbl_txt  = fm.elidedText(_ind_txt + channel, Qt.TextElideMode.ElideRight, _lbl_avail_v)
             lbl = _make_rotated_label(self, _lbl_txt, font, self._c_sti_lbl,
                                       x_ctr,
                                       label_row_h - LABEL_BOTTOM_MARGIN, 37)
@@ -6138,7 +6160,7 @@ class TimelineScene(QGraphicsScene):
 
         # --- Corner: ruler-column x label-row intersection ---------------
         _vt_corner_rect = self.addRect(QRectF(0, 0, RULER_WIDTH, label_row_h),
-                                       QPen(Qt.NoPen), QBrush(self._c_corner_bg))
+                                       QPen(Qt.PenStyle.NoPen), QBrush(self._c_corner_bg))
         _vt_corner_rect.setZValue(40)   # above ruler (35-37) and label row (10-37)
         self._frozen_items.append((_vt_corner_rect, 0))
         self._frozen_top_items.append((_vt_corner_rect, 0))
@@ -6197,11 +6219,11 @@ class TimelineScene(QGraphicsScene):
 
         # --- Background & ruler ------------------------------------------
         _ruler_bg = self.addRect(QRectF(0, 0, total_w, RULER_HEIGHT),
-                               QPen(Qt.NoPen), QBrush(self._c_ruler_bg))
+                               QPen(Qt.PenStyle.NoPen), QBrush(self._c_ruler_bg))
         _ruler_bg.setZValue(10)
         self._frozen_top_items.append((_ruler_bg, 0))
         _lbg = self.addRect(QRectF(0, 0, self._label_width, total_h),
-                           QPen(Qt.NoPen), QBrush(self._c_label_bg))
+                           QPen(Qt.PenStyle.NoPen), QBrush(self._c_label_bg))
         _lbg.setZValue(35)   # must be above cursor lines (z=30-32)
         self._frozen_items.append((_lbg, 0))
 
@@ -6248,7 +6270,7 @@ class TimelineScene(QGraphicsScene):
                                or y_top > self._vp_scene_orth_hi)
             if _core_in_vp:
                 self.addRect(QRectF(lw, y_top, timeline_w, self._row_height),
-                             QPen(Qt.NoPen), QBrush(self._c_core_sum_bg)).setZValue(0)
+                             QPen(Qt.PenStyle.NoPen), QBrush(self._c_core_sum_bg)).setZValue(0)
                 self.addLine(0, y_top + self._row_height + self._row_gap - 1,
                              total_w, y_top + self._row_height + self._row_gap - 1,
                              QPen(self._c_core_sep, 0.8)).setZValue(0.5)
@@ -6256,7 +6278,7 @@ class TimelineScene(QGraphicsScene):
                 hdr_item = _CoreHeaderItem(
                     QRectF(0, y_top, lw, self._row_height), core, self)
                 hdr_item.setBrush(QBrush(self._c_core_hdr_bg))
-                hdr_item.setPen(QPen(Qt.NoPen))
+                hdr_item.setPen(QPen(Qt.PenStyle.NoPen))
                 hdr_item.setZValue(36)
                 self.addItem(hdr_item)
                 self._frozen_items.append((hdr_item, 0))
@@ -6267,16 +6289,16 @@ class TimelineScene(QGraphicsScene):
                 arr_txt.setBrush(QBrush(self._c_core_arrow))
                 arr_txt.setPos(3, y_ctr - fm.height() / 2)
                 arr_txt.setZValue(37)
-                arr_txt.setAcceptedMouseButtons(Qt.NoButton)
+                arr_txt.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
                 arr_txt.setAcceptHoverEvents(False)
                 self._frozen_items.append((arr_txt, 3))
 
                 dot_item = QGraphicsEllipseItem(0, -5, 10, 10)
-                dot_item.setPen(QPen(Qt.NoPen))
+                dot_item.setPen(QPen(Qt.PenStyle.NoPen))
                 dot_item.setBrush(QBrush(dot_c))
                 dot_item.setPos(arrow_w + 6, y_ctr)
                 dot_item.setZValue(37)
-                dot_item.setAcceptedMouseButtons(Qt.NoButton)
+                dot_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
                 dot_item.setAcceptHoverEvents(False)
                 self.addItem(dot_item)
                 self._frozen_items.append((dot_item, arrow_w + 6))
@@ -6284,11 +6306,11 @@ class TimelineScene(QGraphicsScene):
                 _util_w         = fm.horizontalAdvance("100%") + 8
                 _core_lbl_avail = max(0, lw - (arrow_w + 20) - 4 - _util_w)
                 lbl_item = self.addSimpleText(
-                    fm.elidedText(core, Qt.ElideRight, _core_lbl_avail), font)
+                    fm.elidedText(core, Qt.TextElideMode.ElideRight, _core_lbl_avail), font)
                 lbl_item.setBrush(QBrush(self._c_core_lbl))
                 lbl_item.setPos(arrow_w + 20, y_ctr - fm.height() / 2)
                 lbl_item.setZValue(37)
-                lbl_item.setAcceptedMouseButtons(Qt.NoButton)
+                lbl_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
                 lbl_item.setAcceptHoverEvents(False)
                 self._frozen_items.append((lbl_item, arrow_w + 20))
 
@@ -6302,7 +6324,7 @@ class TimelineScene(QGraphicsScene):
                 _util_item.setBrush(QBrush(QColor("#77BB77")))
                 _util_item.setPos(lw - _util_w + 4, y_ctr - fm.height() / 2)
                 _util_item.setZValue(37)
-                _util_item.setAcceptedMouseButtons(Qt.NoButton)
+                _util_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
                 _util_item.setAcceptHoverEvents(False)
                 self._frozen_items.append((_util_item, lw - _util_w + 4))
 
@@ -6357,7 +6379,7 @@ class TimelineScene(QGraphicsScene):
 
                 sub_bg = self._c_core_sub_even if sub_idx % 2 == 0 else self._c_core_sub_odd
                 self.addRect(QRectF(lw, y_top2, timeline_w, self._row_height),
-                             QPen(Qt.NoPen), QBrush(sub_bg)).setZValue(0)
+                             QPen(Qt.PenStyle.NoPen), QBrush(sub_bg)).setZValue(0)
                 _row_color = _task_color(task_name)
                 self._task_row_rects.setdefault(_tmk, []).append(
                     (QRectF(lw, y_top2, timeline_w, self._row_height), _row_color))
@@ -6370,7 +6392,7 @@ class TimelineScene(QGraphicsScene):
                              QPen(self._c_core_sub_sep, 0.5)).setZValue(0.5)
 
                 stripe = self.addRect(QRectF(26, y_top2 + 3, 3, self._row_height - 6),
-                                      QPen(Qt.NoPen), QBrush(_row_color))
+                                      QPen(Qt.PenStyle.NoPen), QBrush(_row_color))
                 stripe.setZValue(36)
                 self._frozen_items.append((stripe, 0))
 
@@ -6387,7 +6409,7 @@ class TimelineScene(QGraphicsScene):
                                             QFont.Bold) if is_hl else font
                 _sub_avail  = max(0, lw - 33 - 4)   # left=33, right margin=4
                 _sub_elided = QFontMetrics(lbl_fnt).elidedText(
-                    disp, Qt.ElideRight, _sub_avail)
+                    disp, Qt.TextElideMode.ElideRight, _sub_avail)
                 t_lbl = self.addSimpleText(_sub_elided, lbl_fnt)
                 t_lbl.setBrush(QBrush(lbl_color))
                 t_lbl.setPos(33, y_ctr2 - fm.height() / 2)
@@ -6435,12 +6457,12 @@ class TimelineScene(QGraphicsScene):
             y_top  = _sti_y
             y_ctr  = y_top + row_h / 2
             self.addRect(QRectF(lw, y_top, timeline_w, row_h),
-                         QPen(Qt.NoPen), QBrush(self._c_sti_bg)).setZValue(0)
+                         QPen(Qt.PenStyle.NoPen), QBrush(self._c_sti_bg)).setZValue(0)
             if expandable:
                 _ind  = "▼" if is_exp else "▶"
-                _ltxt = fm.elidedText(f"{_ind} {channel}", Qt.ElideRight, max(0, lw - 4 - 4))
+                _ltxt = fm.elidedText(f"{_ind} {channel}", Qt.TextElideMode.ElideRight, max(0, lw - 4 - 4))
             else:
-                _ltxt = fm.elidedText(channel, Qt.ElideRight, max(0, lw - 4 - 4))
+                _ltxt = fm.elidedText(channel, Qt.TextElideMode.ElideRight, max(0, lw - 4 - 4))
             lbl_bg = _StiLabelItem(QRectF(0, y_top, lw, row_h), channel, self,
                                    expandable=expandable)
             lbl_bg.setZValue(36)
@@ -6482,7 +6504,7 @@ class TimelineScene(QGraphicsScene):
             _time_min, _px_per_ns, _vp_ns_lo, _vp_ns_hi)
 
         corner = self.addRect(QRectF(0, 0, lw, RULER_HEIGHT),
-                              QPen(Qt.NoPen), QBrush(self._c_corner_bg))
+                              QPen(Qt.PenStyle.NoPen), QBrush(self._c_corner_bg))
         corner.setZValue(38)
         _upper_h = RULER_HEIGHT - (10 if _has_tick else 0)
         hdr_lbl = self.addSimpleText("Core / Task", font)
@@ -6541,13 +6563,13 @@ class TimelineScene(QGraphicsScene):
 
         # --- Ruler column (left side): frozen to left edge on X scroll ------
         _ruler_col_bg_c = self.addRect(QRectF(0, 0, RULER_WIDTH, total_h),
-                                       QPen(Qt.NoPen), QBrush(self._c_ruler_bg))
+                                       QPen(Qt.PenStyle.NoPen), QBrush(self._c_ruler_bg))
         _ruler_col_bg_c.setZValue(35)
         self._frozen_items.append((_ruler_col_bg_c, 0))
 
         # --- Label row (top): frozen to top edge on Y scroll ---------------
         _label_row_bg_c = self.addRect(QRectF(0, 0, total_w, label_row_h),
-                                       QPen(Qt.NoPen), QBrush(self._c_label_bg))
+                                       QPen(Qt.PenStyle.NoPen), QBrush(self._c_label_bg))
         _label_row_bg_c.setZValue(10)
         self._frozen_top_items.append((_label_row_bg_c, 0))
 
@@ -6590,13 +6612,13 @@ class TimelineScene(QGraphicsScene):
                                or x_left > self._vp_scene_orth_hi)
             if _core_in_vp:
                 self.addRect(QRectF(x_left, label_row_h, col_w, timeline_h),
-                             QPen(Qt.NoPen), QBrush(self._c_core_sum_bg)).setZValue(0)
+                             QPen(Qt.PenStyle.NoPen), QBrush(self._c_core_sum_bg)).setZValue(0)
 
                 # Clickable core column header (v/> expand toggle)
                 hdr_item = _CoreHeaderItem(
                     QRectF(x_left, 0, col_w, label_row_h), core, self)
                 hdr_item.setBrush(QBrush(self._c_core_hdr_bg))
-                hdr_item.setPen(QPen(Qt.NoPen))
+                hdr_item.setPen(QPen(Qt.PenStyle.NoPen))
                 hdr_item.setZValue(36)
                 self.addItem(hdr_item)
                 self._frozen_top_items.append((hdr_item, 0))
@@ -6605,7 +6627,7 @@ class TimelineScene(QGraphicsScene):
                 arrow     = "▼" if expanded else "▶"
                 arr_label = arrow + " " + core
                 _lbl_avail_c = max(0, label_row_h - 14)
-                arr_label = QFontMetrics(font).elidedText(arr_label, Qt.ElideRight, _lbl_avail_c)
+                arr_label = QFontMetrics(font).elidedText(arr_label, Qt.TextElideMode.ElideRight, _lbl_avail_c)
                 arr_txt = _make_rotated_label(self, arr_label, font, self._c_core_arrow,
                                               x_left + col_w / 2,
                                               label_row_h - LABEL_BOTTOM_MARGIN, 37)
@@ -6655,7 +6677,7 @@ class TimelineScene(QGraphicsScene):
 
                 sub_bg  = self._c_core_sub_even if sub_idx % 2 == 0 else self._c_core_sub_odd
                 self.addRect(QRectF(x_left2, label_row_h, col_w, timeline_h),
-                             QPen(Qt.NoPen), QBrush(sub_bg)).setZValue(0)
+                             QPen(Qt.PenStyle.NoPen), QBrush(sub_bg)).setZValue(0)
 
                 _tmk       = _task_merge_key(task_name)
                 is_hl      = self._is_task_lock_active(_tmk)
@@ -6671,7 +6693,7 @@ class TimelineScene(QGraphicsScene):
                 # (mirrors the vertical stripe at the left edge in horizontal mode)
                 stripe = self.addRect(
                     QRectF(x_left2 + 3, label_row_h - 4, col_w - 6, 3),
-                    QPen(Qt.NoPen), QBrush(_row_color))
+                    QPen(Qt.PenStyle.NoPen), QBrush(_row_color))
                 stripe.setZValue(38)   # above label background (z=36) and text (z=37)
                 self._frozen_top_items.append((stripe, stripe.pos().y()))
 
@@ -6732,7 +6754,7 @@ class TimelineScene(QGraphicsScene):
             x_left     = _sti_x_acc_vc
             x_ctr_vc   = x_left + cw_sti_vc / 2
             self.addRect(QRectF(x_left, label_row_h, cw_sti_vc, timeline_h),
-                         QPen(Qt.NoPen), QBrush(self._c_sti_bg)).setZValue(0)
+                         QPen(Qt.PenStyle.NoPen), QBrush(self._c_sti_bg)).setZValue(0)
 
             # Clickable column header (expands/collapses waveform)
             lbl_bg_vc = _StiLabelItem(QRectF(x_left, 0, cw_sti_vc, label_row_h),
@@ -6745,7 +6767,7 @@ class TimelineScene(QGraphicsScene):
             _ind_txt_vc  = ("v " if is_exp else "> ") if expandable else ""
             _lbl_avail_vc = max(0, label_row_h - 14)
             _lbl_txt_vc  = QFontMetrics(font).elidedText(
-                _ind_txt_vc + channel, Qt.ElideRight, _lbl_avail_vc)
+                _ind_txt_vc + channel, Qt.TextElideMode.ElideRight, _lbl_avail_vc)
             lbl = _make_rotated_label(self, _lbl_txt_vc, font, self._c_sti_lbl,
                                       x_ctr_vc,
                                       label_row_h - LABEL_BOTTOM_MARGIN, 37)
@@ -6788,7 +6810,7 @@ class TimelineScene(QGraphicsScene):
 
         # --- Corner: ruler-column x label-row intersection ---------------
         _vc_corner = self.addRect(QRectF(0, 0, RULER_WIDTH, label_row_h),
-                                  QPen(Qt.NoPen), QBrush(self._c_corner_bg))
+                                  QPen(Qt.PenStyle.NoPen), QBrush(self._c_corner_bg))
         _vc_corner.setZValue(40)
         self._frozen_items.append((_vc_corner, 0))
         self._frozen_top_items.append((_vc_corner, 0))
@@ -6835,8 +6857,8 @@ class _RulerItem(QGraphicsItem):
         fm = QFontMetrics(font)
         self._text_ascent = fm.ascent()
         # Tell Qt to supply the real exposed rect, not the full bounding rect
-        self.setFlag(QGraphicsItem.ItemUsesExtendedStyleOption, True)
-        self.setCacheMode(QGraphicsItem.NoCache)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemUsesExtendedStyleOption, True)
+        self.setCacheMode(QGraphicsItem.CacheMode.NoCache)
 
     def boundingRect(self) -> QRectF:
         if not self._draw_grid:
@@ -6937,7 +6959,7 @@ class _PriorityBoostBandsItem(QGraphicsItem):
         self._bar_x = bar_x
         self._bar_w = bar_w
         self._dark_ui = dark_ui
-        self.setFlag(QGraphicsItem.ItemUsesExtendedStyleOption, True)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemUsesExtendedStyleOption, True)
 
     def boundingRect(self) -> QRectF:
         return self._bounds
@@ -6963,7 +6985,7 @@ class _PriorityBoostBandsItem(QGraphicsItem):
                 painter.fillRect(QRectF(cx, self._bar_y, cw, self._bar_h), fill)
                 if cw >= 4:
                     painter.setPen(QPen(base))
-                    painter.setBrush(Qt.NoBrush)
+                    painter.setBrush(Qt.BrushStyle.NoBrush)
                     painter.drawRect(QRectF(cx + 0.5, self._bar_y + 0.5, cw - 1, self._bar_h - 1))
         else:
             exp_lo = exposed.top()
@@ -6982,7 +7004,7 @@ class _PriorityBoostBandsItem(QGraphicsItem):
                 painter.fillRect(QRectF(self._bar_x, cy, self._bar_w, ch), fill)
                 if ch >= 4:
                     painter.setPen(QPen(base))
-                    painter.setBrush(Qt.NoBrush)
+                    painter.setBrush(Qt.BrushStyle.NoBrush)
                     painter.drawRect(QRectF(self._bar_x + 0.5, cy + 0.5, self._bar_w - 1, ch - 1))
 
 class _IntervalRowBarsItem(QGraphicsItem):
@@ -7034,7 +7056,7 @@ class _IntervalRowBarsItem(QGraphicsItem):
                                   else label_width)
         self._highlight_times = highlight_times
         self._dark_ui = dark_ui
-        self.setFlag(QGraphicsItem.ItemUsesExtendedStyleOption, True)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemUsesExtendedStyleOption, True)
 
     def boundingRect(self) -> QRectF:
         return self._bounds
@@ -7071,7 +7093,7 @@ class _IntervalRowBarsItem(QGraphicsItem):
                     ch = cy2 - cy
                     if ch < _INTERVAL_MIN_PX:
                         continue
-                    painter.setPen(pen if ch >= 3.0 else Qt.NoPen)
+                    painter.setPen(pen if ch >= 3.0 else Qt.PenStyle.NoPen)
                     painter.drawRect(QRectF(x, cy, w, ch))
             _paint_interval_event_ticks_vertical(
                 painter, ticks, x, w, self._color, exp_lo, exp_hi)
@@ -7106,7 +7128,7 @@ class _IntervalRowBarsItem(QGraphicsItem):
                 cw = cx2 - cx
                 if cw < _INTERVAL_MIN_PX:
                     continue
-                painter.setPen(pen if cw >= 3.0 else Qt.NoPen)
+                painter.setPen(pen if cw >= 3.0 else Qt.PenStyle.NoPen)
                 painter.drawRect(QRectF(cx, y, cw, h))
         _paint_interval_event_ticks(
             painter, ticks, y, h, self._color, exp_left, exp_right)
@@ -7134,7 +7156,7 @@ class _RowStripesItem(QGraphicsItem):
         self._rows       = rows          # [(y_top, row_h, gap, brush, sep_pen|None)]
         self._timeline_x = timeline_x   # x where background rect starts (= label_width)
         self._total_w    = total_w       # full scene width (for separator lines)
-        self.setFlag(QGraphicsItem.ItemUsesExtendedStyleOption, True)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemUsesExtendedStyleOption, True)
 
     def boundingRect(self) -> QRectF:
         return self._bounding_rect
@@ -7158,7 +7180,7 @@ class _RowStripesItem(QGraphicsItem):
             else:
                 hi = mid
         # --- Background rectangles (no pen) ---
-        painter.setPen(Qt.NoPen)
+        painter.setPen(Qt.PenStyle.NoPen)
         last_brush = None
         sep_rows: list = []
         for i in range(lo, len(rows)):
@@ -7177,7 +7199,7 @@ class _RowStripesItem(QGraphicsItem):
         for sep_y, sep_pen in sep_rows:
             if sep_pen is not last_pen:
                 painter.setPen(sep_pen)
-                painter.setBrush(Qt.NoBrush)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
                 last_pen = sep_pen
             painter.drawLine(QLineF(0, sep_y, total_w, sep_y))
 
@@ -7352,7 +7374,7 @@ class _BatchRowItem(QGraphicsItem):
                 br   = self._bounding_rect
                 col  = QColor(self._seg_data[0][1].color())
                 col.setAlpha(_ACTIVITY_ALPHA)
-                painter.setPen(Qt.NoPen)
+                painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(QBrush(col))
                 if self._horiz:
                     h = br.height()
@@ -7369,7 +7391,7 @@ class _BatchRowItem(QGraphicsItem):
             # ---- Tier 2: coarse LOD ----------------------------------------------
             # Use pre-merged coarse_data.  rebuild() already clips to +/-1.5x
             # the viewport so painting all coarse entries is safe.
-            painter.setPen(Qt.NoPen)
+            painter.setPen(Qt.PenStyle.NoPen)
             _rebase = (abs(option.exposedRect.left()) > 2_000_000.0) if self._horiz else (abs(option.exposedRect.top()) > 2_000_000.0)
             if _rebase:
                 painter.save()
@@ -7465,11 +7487,11 @@ class _BatchRowItem(QGraphicsItem):
                 def _draw_text(scene_rect: QRectF, draw_txt: str) -> None:
                     if _use_device_text:
                         painter.drawText(_wt.mapRect(scene_rect),
-                                         Qt.AlignVCenter | Qt.AlignLeft,
+                                         Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
                                          draw_txt)
                     else:
                         painter.drawText(scene_rect,
-                                         Qt.AlignVCenter | Qt.AlignLeft,
+                                         Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
                                          draw_txt)
 
                 any_label_drawn = False
@@ -7488,7 +7510,7 @@ class _BatchRowItem(QGraphicsItem):
                     if text_w >= adv:
                         draw_txt = txt
                     else:
-                        draw_txt = fm.elidedText(txt, Qt.ElideRight, int(text_w) - 4)
+                        draw_txt = fm.elidedText(txt, Qt.TextElideMode.ElideRight, int(text_w) - 4)
                         if draw_txt == "\u2026":
                             continue
                     _draw_text(QRectF(text_x, vis_rect.y(), text_w, vis_rect.height()), draw_txt)
@@ -7523,7 +7545,7 @@ class _BatchRowItem(QGraphicsItem):
                     if text_h >= adv:
                         draw_txt = txt
                     else:
-                        draw_txt = fm.elidedText(txt, Qt.ElideRight, int(text_h) - 4)
+                        draw_txt = fm.elidedText(txt, Qt.TextElideMode.ElideRight, int(text_h) - 4)
                         if draw_txt == "\u2026":
                             continue
                     painter.save()
@@ -7532,7 +7554,7 @@ class _BatchRowItem(QGraphicsItem):
                     painter.rotate(90)
                     painter.drawText(
                         QRectF(-text_h / 2, -vis_rect.width() / 2, text_h, vis_rect.width()),
-                        Qt.AlignVCenter | Qt.AlignLeft,
+                        Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
                         draw_txt,
                     )
                     painter.restore()
@@ -7616,7 +7638,7 @@ class _BatchStiItem(QGraphicsItem):
         self._horizontal    = horizontal
         self._axis          = axis
         self.setAcceptHoverEvents(bool(markers))
-        self.setCacheMode(QGraphicsItem.NoCache)
+        self.setCacheMode(QGraphicsItem.CacheMode.NoCache)
 
     def boundingRect(self) -> QRectF:
         return self._bounding_rect
@@ -7719,17 +7741,17 @@ class _TaskLabelItem(QGraphicsRectItem):
         self._tl_scene    = tl_scene
         self._tooltip_text = tooltip_text
         self._core_name = core_name
-        self.setAcceptedMouseButtons(Qt.LeftButton)
+        self.setAcceptedMouseButtons(Qt.MouseButton.LeftButton)
         self.setAcceptHoverEvents(True)
-        self.setCursor(Qt.PointingHandCursor)
-        self.setPen(QPen(Qt.NoPen))
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setPen(QPen(Qt.PenStyle.NoPen))
         self._update_brush()
 
     def _update_brush(self) -> None:
         if self._tl_scene._locked_task == self._task_name:
             self.setBrush(self._HIGHLIGHT_BRUSH)
         else:
-            self.setBrush(QBrush(Qt.transparent))
+            self.setBrush(QBrush(Qt.GlobalColor.transparent))
 
     def mousePressEvent(self, event):
         if self._tl_scene._locked_task == self._task_name:
@@ -7774,9 +7796,9 @@ class _CoreHeaderItem(QGraphicsRectItem):
         super().__init__(rect)
         self._core_name = core_name
         self._tl_scene  = tl_scene
-        self.setAcceptedMouseButtons(Qt.LeftButton)
+        self.setAcceptedMouseButtons(Qt.MouseButton.LeftButton)
         self.setAcceptHoverEvents(True)
-        self.setCursor(Qt.PointingHandCursor)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
 
     def mousePressEvent(self, event):
         self._tl_scene.toggle_core(self._core_name)
@@ -7806,12 +7828,12 @@ class _StiLabelItem(QGraphicsRectItem):
         self._channel    = channel
         self._tl_scene   = tl_scene
         self._expandable = expandable
-        self.setAcceptedMouseButtons(Qt.LeftButton)
+        self.setAcceptedMouseButtons(Qt.MouseButton.LeftButton)
         self.setAcceptHoverEvents(True)
         if expandable:
-            self.setCursor(Qt.PointingHandCursor)
-        self.setPen(QPen(Qt.NoPen))
-        self.setBrush(QBrush(Qt.transparent))
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setPen(QPen(Qt.PenStyle.NoPen))
+        self.setBrush(QBrush(Qt.GlobalColor.transparent))
 
     def mousePressEvent(self, event):
         if self._expandable:
@@ -7824,7 +7846,7 @@ class _StiLabelItem(QGraphicsRectItem):
         super().hoverEnterEvent(event)
 
     def hoverLeaveEvent(self, event):
-        self.setBrush(QBrush(Qt.transparent))
+        self.setBrush(QBrush(Qt.GlobalColor.transparent))
         self.update()
         super().hoverLeaveEvent(event)
 
@@ -7851,7 +7873,7 @@ class _BatchStiWaveformItem(QGraphicsItem):
         self._log_scale     = log_scale
         self._line_style    = line_style  # "step" (hold) or "linear" (point-to-point)
         self._category_map: dict = {}     # note -> stable int (for categorical channels)
-        self.setCacheMode(QGraphicsItem.NoCache)
+        self.setCacheMode(QGraphicsItem.CacheMode.NoCache)
         self.setAcceptHoverEvents(True)
 
     # ------------------------------------------------------------------ helpers
@@ -7909,7 +7931,7 @@ class _BatchStiWaveformItem(QGraphicsItem):
         painter.save()
 
         # Axis lines (top / bottom of chart area)
-        _axis_pen = QPen(QColor(255, 255, 255, 28), 0.5, Qt.DashLine)
+        _axis_pen = QPen(QColor(255, 255, 255, 28), 0.5, Qt.PenStyle.DashLine)
         painter.setPen(_axis_pen)
         painter.drawLine(QLineF(rect.left(), chart_top, rect.right(), chart_top))
         painter.drawLine(QLineF(rect.left(), chart_bot,  rect.right(), chart_bot))
@@ -7917,7 +7939,7 @@ class _BatchStiWaveformItem(QGraphicsItem):
         # Polyline: step-hold or direct point-to-point
         line_color = QColor("#5BC8FF")
         painter.setPen(QPen(line_color, 1.5))
-        painter.setBrush(Qt.NoBrush)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
 
         pts: list = []
         if self._line_style == "linear":
@@ -8012,7 +8034,7 @@ class _BatchStiWaveformColumnItem(QGraphicsItem):
         self._log_scale     = log_scale
         self._line_style    = line_style
         self._category_map: dict = {}
-        self.setCacheMode(QGraphicsItem.NoCache)
+        self.setCacheMode(QGraphicsItem.CacheMode.NoCache)
 
     def _ev_value(self, ev) -> float:
         raw = ev.note or ev.event or ""
@@ -8068,7 +8090,7 @@ class _BatchStiWaveformColumnItem(QGraphicsItem):
         painter.save()
 
         # Axis guide lines (left / right of chart area)
-        _axis_pen = QPen(QColor(255, 255, 255, 28), 0.5, Qt.DashLine)
+        _axis_pen = QPen(QColor(255, 255, 255, 28), 0.5, Qt.PenStyle.DashLine)
         painter.setPen(_axis_pen)
         painter.drawLine(QLineF(chart_left, rect.top(),    chart_left, rect.bottom()))
         painter.drawLine(QLineF(chart_right, rect.top(), chart_right, rect.bottom()))
@@ -8076,7 +8098,7 @@ class _BatchStiWaveformColumnItem(QGraphicsItem):
         # Polyline
         line_color = QColor("#5BC8FF")
         painter.setPen(QPen(line_color, 1.5))
-        painter.setBrush(Qt.NoBrush)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
 
         pts: list = []
         for ev in self._events:
@@ -8130,7 +8152,7 @@ class _NavigatorPopup(QWidget):
 
     def __init__(self, parent: QWidget) -> None:
         super().__init__(parent)
-        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.setFixedSize(self.W, self.H)
         self._pix: Optional[QPixmap] = None
         self.setVisible(False)
@@ -8144,13 +8166,13 @@ class _NavigatorPopup(QWidget):
         self._anim_in.setDuration(80)
         self._anim_in.setStartValue(0.0)
         self._anim_in.setEndValue(1.0)
-        self._anim_in.setEasingCurve(QEasingCurve.OutCubic)
+        self._anim_in.setEasingCurve(QEasingCurve.Type.OutCubic)
 
         self._anim_out = QPropertyAnimation(self._opacity_effect, b"opacity", self)
         self._anim_out.setDuration(350)
         self._anim_out.setStartValue(1.0)
         self._anim_out.setEndValue(0.0)
-        self._anim_out.setEasingCurve(QEasingCurve.InCubic)
+        self._anim_out.setEasingCurve(QEasingCurve.Type.InCubic)
         self._anim_out.finished.connect(super().hide)
 
     def fade_in(self) -> None:
@@ -8195,6 +8217,44 @@ class _NavigatorPopup(QWidget):
         p.end()
 
 _RESIZE_EDGE_PX = 6
+_RIGHT_DOCK_MIN_W = 180  # Web parity: RIGHT_PANEL_MIN_W in web/src/App.vue
+_RIGHT_DOCK_MAX_W = 520  # Web parity: RIGHT_PANEL_MAX_W in web/src/App.vue
+
+def _relax_layout_width_constraints(lay: QLayout) -> None:
+    """Stop nested layouts from preserving a previously wide minimum width."""
+    lay.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
+    for i in range(lay.count()):
+        item = lay.itemAt(i)
+        if item is None:
+            continue
+        sub = item.layout()
+        if sub is not None:
+            _relax_layout_width_constraints(sub)
+
+def _in_legend_panel(w: QWidget) -> bool:
+    """True when *w* belongs to the Legend dock (must not get Ignored width policy)."""
+    p: Optional[QWidget] = w
+    while p is not None:
+        if p.objectName() in (
+                "legend_root", "legend_list_host",
+                "legend_scroll", "legend_scroll_viewport"):
+            return True
+        p = p.parentWidget()
+    return False
+
+def _relax_widget_tree(root: QWidget) -> None:
+    """Clear horizontal minimum-size hints so a dock column can narrow."""
+    for w in (root, *root.findChildren(QWidget)):
+        if isinstance(w, _StatsSectionGrip) or _in_legend_panel(w):
+            continue
+        w.setMinimumWidth(0)
+        # Only relax push/tool buttons — QLabel and other controls need real width.
+        if isinstance(w, (QPushButton, QToolButton)):
+            pol = w.sizePolicy()
+            pol.setHorizontalPolicy(QSizePolicy.Policy.Ignored)
+            w.setSizePolicy(pol)
+    if root.layout() is not None:
+        _relax_layout_width_constraints(root.layout())
 
 class _HoverCursor:
     """Application-level hover cursor for resize split lines."""
@@ -8205,7 +8265,7 @@ class _HoverCursor:
     def _modal_cursor_active() -> bool:
         oc = QApplication.overrideCursor()
         return oc is not None and oc.shape() in (
-            Qt.WaitCursor, Qt.BusyCursor, Qt.ForbiddenCursor)
+            Qt.CursorShape.WaitCursor, Qt.CursorShape.BusyCursor, Qt.CursorShape.ForbiddenCursor)
 
     @classmethod
     def show(cls, shape: Qt.CursorShape) -> None:
@@ -8242,16 +8302,16 @@ class _SplitterHandleCursorFilter(QObject):
         super().__init__(handle)
         self._shape = shape
         self._active = False
-        handle.setAttribute(Qt.WA_Hover, True)
+        handle.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         handle.setMouseTracking(True)
         handle.installEventFilter(self)
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
         et = event.type()
-        if et in (QEvent.Enter, QEvent.HoverEnter):
+        if et in (QEvent.Type.Enter, QEvent.Type.HoverEnter):
             _HoverCursor.show(self._shape)
             self._active = True
-        elif et in (QEvent.Leave, QEvent.HoverLeave, QEvent.Hide):
+        elif et in (QEvent.Type.Leave, QEvent.Type.HoverLeave, QEvent.Type.Hide):
             if self._active:
                 _HoverCursor.hide(self._shape)
                 self._active = False
@@ -8262,8 +8322,8 @@ def _install_splitter_handle_cursor(splitter: QSplitter, index: int) -> None:
     handle = splitter.handle(index)
     if handle is None:
         return
-    shape = (Qt.SizeVerCursor if splitter.orientation() == Qt.Vertical
-             else Qt.SizeHorCursor)
+    shape = (Qt.CursorShape.SizeVerCursor if splitter.orientation() == Qt.Orientation.Vertical
+             else Qt.CursorShape.SizeHorCursor)
     handle.setCursor(shape)
     if getattr(handle, "_hover_cursor_filter", None) is None:
         handle._hover_cursor_filter = _SplitterHandleCursorFilter(handle, shape)
@@ -8300,8 +8360,8 @@ class _EdgeResizeCursorFilter(QObject):
         if obj is not self._host:
             return False
         et = event.type()
-        if et in (QEvent.MouseMove, QEvent.HoverMove):
-            cursor = self._cursor_at(event.pos())
+        if et in (QEvent.Type.MouseMove, QEvent.Type.HoverMove):
+            cursor = self._cursor_at(event.position().toPoint())
             if cursor is not None:
                 if self._cursor != cursor:
                     if self._armed:
@@ -8313,7 +8373,7 @@ class _EdgeResizeCursorFilter(QObject):
                 _HoverCursor.hide(self._cursor)
                 self._armed = False
                 self._cursor = None
-        elif et in (QEvent.Leave, QEvent.HoverLeave, QEvent.Hide):
+        elif et in (QEvent.Type.Leave, QEvent.Type.HoverLeave, QEvent.Type.Hide):
             if self._armed:
                 _HoverCursor.hide(self._cursor)
                 self._armed = False
@@ -8335,6 +8395,122 @@ class _EdgeResizeCursorFilter(QObject):
                 return cursor
         return None
 
+class _DockWidthResizeFilter(QObject):
+    """Drag the central/right-dock seam to resize the right panel (web panel-resizer parity)."""
+
+    def __init__(self, host: QWidget, win: "MainWindow", edge: str,
+                 margin: int = _RESIZE_EDGE_PX,
+                 enabled: Optional[Callable[[], bool]] = None) -> None:
+        super().__init__(host)
+        self._host = host
+        self._win = win
+        self._edge = edge  # "left" (dock) or "right" (central pane)
+        self._margin = margin
+        self._enabled = enabled
+        self._hover_armed = False
+        self._hover_cursor: Optional[Qt.CursorShape] = None
+        self._dragging = False
+        self._start_global_x = 0.0
+        self._start_width = 0
+
+    def _active(self) -> bool:
+        if self._enabled is not None and not self._enabled():
+            return False
+        return self._win._any_visible_right_dock()
+
+    def _on_edge(self, pos: QPoint) -> bool:
+        w = self._host.width()
+        if self._edge == "left":
+            return pos.x() <= self._margin
+        if self._edge == "right":
+            return pos.x() >= w - self._margin
+        return False
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if self._dragging and obj is not self._host:
+            et = event.type()
+            if et == QEvent.Type.MouseMove:
+                _HoverCursor.show(Qt.CursorShape.SizeHorCursor)
+                self._apply_drag(event.globalPosition().x())
+                return True
+            if (et == QEvent.Type.MouseButtonRelease
+                    and event.button() == Qt.MouseButton.LeftButton):
+                self._end_drag()
+                return True
+            return False
+
+        if obj is not self._host:
+            return False
+
+        et = event.type()
+        if (et == QEvent.Type.MouseButtonPress
+                and event.button() == Qt.MouseButton.LeftButton
+                and self._active()
+                and self._on_edge(event.position().toPoint())):
+            self._begin_drag(event.globalPosition().x())
+            return True
+
+        if et in (QEvent.Type.MouseMove, QEvent.Type.HoverMove):
+            if self._active() and self._on_edge(event.position().toPoint()):
+                if not self._hover_armed:
+                    self._hover_armed = True
+                    self._hover_cursor = Qt.CursorShape.SizeHorCursor
+                    _HoverCursor.show(self._hover_cursor)
+            elif self._hover_armed:
+                _HoverCursor.hide(self._hover_cursor)
+                self._hover_armed = False
+                self._hover_cursor = None
+        elif et in (QEvent.Type.Leave, QEvent.Type.HoverLeave, QEvent.Type.Hide):
+            if self._hover_armed:
+                _HoverCursor.hide(self._hover_cursor)
+                self._hover_armed = False
+                self._hover_cursor = None
+        return False
+
+    def _begin_drag(self, global_x: float) -> None:
+        self._dragging = True
+        self._start_global_x = global_x
+        self._start_width = self._win._current_right_dock_width()
+        _HoverCursor.show(Qt.CursorShape.SizeHorCursor)
+        app = QApplication.instance()
+        if app:
+            app.installEventFilter(self)
+
+    def _apply_drag(self, global_x: float) -> None:
+        delta = global_x - self._start_global_x
+        if self._edge == "left":
+            width = self._start_width + delta
+        else:
+            width = self._start_width - delta
+        self._win._apply_right_dock_width(width)
+
+    def _end_drag(self) -> None:
+        self._dragging = False
+        app = QApplication.instance()
+        if app:
+            app.removeEventFilter(self)
+        self._win._relax_right_dock_content_widths()
+        self._win._apply_right_dock_width(self._win._current_right_dock_width())
+        _wire_splitter_handle_cursors(self._win)
+
+class _RightDockShrinkGuard(QObject):
+    """Clear latched child minimum widths when a right dock is narrowed."""
+
+    def __init__(self, win: "MainWindow", dock: QDockWidget) -> None:
+        super().__init__(dock)
+        self._win = win
+        self._dock = dock
+        self._last_w = dock.width()
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if obj is self._dock and event.type() == QEvent.Type.Resize:
+            w = self._dock.width()
+            if w < self._last_w:
+                QTimer.singleShot(
+                    0, lambda w=w: self._win._apply_right_dock_width(w))
+            self._last_w = w
+        return False
+
 class _LabelColumnGrip(QWidget):
     """Visible drag handle between label column and timeline (web label-resizer parity)."""
 
@@ -8346,9 +8522,9 @@ class _LabelColumnGrip(QWidget):
         self._dragging = False
         self._start_global_x = 0
         self._start_w = 0
-        self.setCursor(Qt.SizeHorCursor)
+        self.setCursor(Qt.CursorShape.SizeHorCursor)
         self.setMouseTracking(True)
-        self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
         self.setToolTip("Drag to resize label column")
         self.hide()
 
@@ -8364,40 +8540,65 @@ class _LabelColumnGrip(QWidget):
         finally:
             p.end()
 
+    def eventFilter(self, obj, event) -> bool:
+        """App-level mouse capture during drag — Wayland-safe replacement for grabMouse()."""
+        if not self._dragging:
+            return False
+        et = event.type()
+        if et == QEvent.Type.MouseMove:
+            _HoverCursor.show(Qt.CursorShape.SizeHorCursor)
+            self._view._apply_label_width_drag(
+                self._start_w + (event.globalPosition().x() - self._start_global_x))
+            return True
+        if et == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
+            self._dragging = False
+            app = QApplication.instance()
+            if app:
+                app.removeEventFilter(self)
+            self._view._finish_label_width_drag()
+            return True
+        return False
+
     def mousePressEvent(self, event) -> None:
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton:
             self._dragging = True
-            self._start_global_x = event.globalPos().x()
+            self._start_global_x = event.globalPosition().x()
             self._start_w = self._view._scene._label_width
-            _HoverCursor.show(Qt.SizeHorCursor)
+            _HoverCursor.show(Qt.CursorShape.SizeHorCursor)
+            app = QApplication.instance()
+            if app:
+                app.installEventFilter(self)
             event.accept()
             return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:
         if self._dragging:
-            _HoverCursor.show(Qt.SizeHorCursor)
+            _HoverCursor.show(Qt.CursorShape.SizeHorCursor)
             self._view._apply_label_width_drag(
-                self._start_w + (event.globalPos().x() - self._start_global_x))
+                self._start_w + (event.globalPosition().x() - self._start_global_x))
             event.accept()
             return
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
-        if self._dragging and event.button() == Qt.LeftButton:
+        if self._dragging and event.button() == Qt.MouseButton.LeftButton:
             self._dragging = False
+            app = QApplication.instance()
+            if app:
+                app.removeEventFilter(self)
             self._view._finish_label_width_drag()
             event.accept()
             return
         super().mouseReleaseEvent(event)
 
     def enterEvent(self, _event) -> None:
-        _HoverCursor.show(Qt.SizeHorCursor)
+        _HoverCursor.show(Qt.CursorShape.SizeHorCursor)
         self.update()
 
     def leaveEvent(self, _event) -> None:
         if not self._dragging:
-            _HoverCursor.hide(Qt.SizeHorCursor)
+            _HoverCursor.hide(Qt.CursorShape.SizeHorCursor)
         self.update()
 
 # ===========================================================================
@@ -8407,16 +8608,16 @@ class _LabelColumnGrip(QWidget):
 class TimelineView(QGraphicsView):
     """Pan + zoom QGraphicsView wrapping a TimelineScene."""
 
-    zoom_changed         = pyqtSignal(float)
-    label_width_changed  = pyqtSignal(int)
-    cursors_changed      = pyqtSignal(list)
-    mark_moved           = pyqtSignal(str, int, int)  # kind, id, new_ns - final drop
-    mark_dragging        = pyqtSignal(str, int, int)  # kind, id, new_ns - live during drag
-    bookmark_requested          = pyqtSignal(int)   # ns at right-click position
-    annotation_requested        = pyqtSignal(int)   # ns at right-click position
-    clear_bookmarks_requested   = pyqtSignal()      # clear all bookmarks
-    clear_annotations_requested = pyqtSignal()      # clear all annotations
-    pre_change                  = pyqtSignal()      # emitted before any cursor/mark mutation
+    zoom_changed         = Signal(float)
+    label_width_changed  = Signal(int)
+    cursors_changed      = Signal(list)
+    mark_moved           = Signal(str, int, int)  # kind, id, new_ns - final drop
+    mark_dragging        = Signal(str, int, int)  # kind, id, new_ns - live during drag
+    bookmark_requested          = Signal(int)   # ns at right-click position
+    annotation_requested        = Signal(int)   # ns at right-click position
+    clear_bookmarks_requested   = Signal()      # clear all bookmarks
+    clear_annotations_requested = Signal()      # clear all annotations
+    pre_change                  = Signal()      # emitted before any cursor/mark mutation
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -8433,18 +8634,18 @@ class TimelineView(QGraphicsView):
         self.setViewportUpdateMode(QGraphicsView.SmartViewportUpdate)
         self.setDragMode(QGraphicsView.ScrollHandDrag)
         self.setBackgroundBrush(QBrush(QColor("#1E1E1E")))
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
-        self.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        self.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.AnchorViewCenter)
-        self.setFocusPolicy(Qt.StrongFocus)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         # -- Mouse interaction state -------------------------------------
         # Tracks the press position to distinguish click vs drag; button to
         # distinguish left / middle / right action paths in mouseReleaseEvent.
         self._press_pos: Optional[QPoint] = None
-        self._press_btn: Qt.MouseButton = Qt.NoButton
+        self._press_btn: Qt.MouseButton = Qt.MouseButton.NoButton
         self._drag_threshold    = 6    # px - min movement to enter pan mode
         self._dragging_cursor_idx = -1  # index of cursor being dragged, or -1
         self._cursor_drag_threshold = 8 # px - click-zone around a cursor line
@@ -8617,7 +8818,7 @@ class TimelineView(QGraphicsView):
 
     def _apply_label_width_drag(self, new_w: int) -> None:
         """Live label-column resize during splitter drag."""
-        self._scene.set_label_width(new_w)
+        self._scene.set_label_width(int(new_w))
         if self._scene._horizontal:
             self._reposition_frozen()
             if self._fit_mode and self._scene._trace is not None:
@@ -8630,8 +8831,8 @@ class TimelineView(QGraphicsView):
     def _finish_label_width_drag(self) -> None:
         """Commit label-column width after splitter drag."""
         self.label_width_changed.emit(int(self._scene._label_width))
-        _HoverCursor.hide(Qt.SizeHorCursor)
-        _HoverCursor.hide(Qt.SizeVerCursor)
+        _HoverCursor.hide(Qt.CursorShape.SizeHorCursor)
+        _HoverCursor.hide(Qt.CursorShape.SizeVerCursor)
 
     def _set_view_hover_cursor(self, shape: Optional[Qt.CursorShape]) -> None:
         if shape is None:
@@ -9116,20 +9317,20 @@ class TimelineView(QGraphicsView):
         horiz = sc._horizontal
 
         if horiz:
-            time_fwd, time_back = Qt.Key_Right, Qt.Key_Left
-            row_fwd,  row_back  = Qt.Key_Down,  Qt.Key_Up
+            time_fwd, time_back = Qt.Key.Key_Right, Qt.Key.Key_Left
+            row_fwd,  row_back  = Qt.Key.Key_Down,  Qt.Key.Key_Up
         else:
-            time_fwd, time_back = Qt.Key_Down,  Qt.Key_Up
-            row_fwd,  row_back  = Qt.Key_Right, Qt.Key_Left
+            time_fwd, time_back = Qt.Key.Key_Down,  Qt.Key.Key_Up
+            row_fwd,  row_back  = Qt.Key.Key_Right, Qt.Key.Key_Left
 
-        if key in (Qt.Key_Tab, Qt.Key_Backtab):
-            is_back = (key == Qt.Key_Backtab) or bool(mods & Qt.ShiftModifier)
+        if key in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab):
+            is_back = (key == Qt.Key.Key_Backtab) or bool(mods & Qt.KeyboardModifier.ShiftModifier)
             self._cycle_highlighted_task(not is_back)
             event.accept()
             return
 
         if key in (time_fwd, time_back):
-            if mods & Qt.ShiftModifier and sc._trace is not None:
+            if mods & Qt.KeyboardModifier.ShiftModifier and sc._trace is not None:
                 if self._seg_starts_cache_trace is not sc._trace:
                     s: set = set()
                     for _starts in sc._trace.seg_start_by_merge_key.values():
@@ -9285,20 +9486,20 @@ class TimelineView(QGraphicsView):
 
         # Double-click on label-column resize border -> auto-fit column width
         lw = self._scene._label_width
-        if event.button() == Qt.LeftButton and self._scene._trace is not None:
+        if event.button() == Qt.MouseButton.LeftButton and self._scene._trace is not None:
             if self._scene._horizontal:
-                in_resize_zone = abs(event.pos().x() - lw) <= self._LABEL_RESIZE_ZONE
+                in_resize_zone = abs(event.position().x() - lw) <= self._LABEL_RESIZE_ZONE
             else:
-                in_resize_zone = abs(event.pos().y() - lw) <= self._LABEL_RESIZE_ZONE
+                in_resize_zone = abs(event.position().y() - lw) <= self._LABEL_RESIZE_ZONE
             if in_resize_zone:
                 self._auto_fit_label_column()
                 event.accept()
                 return
 
-        if event.button() != Qt.LeftButton or self._scene._trace is None:
+        if event.button() != Qt.MouseButton.LeftButton or self._scene._trace is None:
             super().mouseDoubleClickEvent(event)
             return
-        scene_pt = self.mapToScene(event.pos())
+        scene_pt = self.mapToScene(event.position().toPoint())
         hit_seg  = self._hit_segment_at(scene_pt)
         if hit_seg is None:
             super().mouseDoubleClickEvent(event)
@@ -9376,12 +9577,12 @@ class TimelineView(QGraphicsView):
         return best_ns
 
     def mousePressEvent(self, event) -> None:
-        self._press_pos = event.pos()
+        self._press_pos = event.position().toPoint()
         self._press_btn = event.button()
 
-        if event.button() == Qt.MiddleButton:
+        if event.button() == Qt.MouseButton.MiddleButton:
             if self._scene._trace is not None:
-                scene_pt = self.mapToScene(event.pos())
+                scene_pt = self.mapToScene(event.position().toPoint())
                 coord = scene_pt.x() if self._scene._horizontal else scene_pt.y()
                 self._mid_press_ns = self._scene.scene_to_ns(coord)
                 # Remove any stale band
@@ -9392,31 +9593,31 @@ class TimelineView(QGraphicsView):
                 event.accept()
                 return
 
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton:
             # --- Check if we're starting a label-column/row resize drag ---
             if self._scene._horizontal:
                 lw = self._scene._label_width
-                if abs(event.pos().x() - lw) <= self._LABEL_RESIZE_ZONE:
+                if abs(event.position().x() - lw) <= self._LABEL_RESIZE_ZONE:
                     self._label_resize_dragging = True
-                    self._label_resize_start_x  = event.pos().x()
+                    self._label_resize_start_x  = event.position().x()
                     self._label_resize_start_w  = lw
                     self.setDragMode(QGraphicsView.NoDrag)
-                    _HoverCursor.show(Qt.SizeHorCursor)
+                    _HoverCursor.show(Qt.CursorShape.SizeHorCursor)
                     event.accept()
                     return
             else:
                 lw = self._scene._label_width
-                if abs(event.pos().y() - lw) <= self._LABEL_RESIZE_ZONE:
+                if abs(event.position().y() - lw) <= self._LABEL_RESIZE_ZONE:
                     self._label_resize_dragging = True
-                    self._label_resize_start_x  = event.pos().y()   # reused as start coord
+                    self._label_resize_start_x  = event.position().y()   # reused as start coord
                     self._label_resize_start_w  = lw
                     self.setDragMode(QGraphicsView.NoDrag)
-                    _HoverCursor.show(Qt.SizeVerCursor)
+                    _HoverCursor.show(Qt.CursorShape.SizeVerCursor)
                     event.accept()
                     return
 
             # --- Check if we're starting a cursor drag ---
-            scene_pt = self.mapToScene(event.pos())
+            scene_pt = self.mapToScene(event.position().toPoint())
             th = self._cursor_drag_threshold
             for idx, cursor_ns in enumerate(self._scene._cursor_times):
                 cursor_coord = self._scene.ns_to_scene_coord(cursor_ns)
@@ -9425,9 +9626,9 @@ class TimelineView(QGraphicsView):
                     self.pre_change.emit()
                     self._dragging_cursor_idx = idx
                     self.setDragMode(QGraphicsView.NoDrag)
-                    _HoverCursor.show(Qt.SizeHorCursor
+                    _HoverCursor.show(Qt.CursorShape.SizeHorCursor
                                       if self._scene._horizontal
-                                      else Qt.SizeVerCursor)
+                                      else Qt.CursorShape.SizeVerCursor)
                     event.accept()
                     return
 
@@ -9441,9 +9642,9 @@ class TimelineView(QGraphicsView):
                     self.pre_change.emit()
                     self._dragging_mark_idx = idx
                     self.setDragMode(QGraphicsView.NoDrag)
-                    _HoverCursor.show(Qt.SizeHorCursor
+                    _HoverCursor.show(Qt.CursorShape.SizeHorCursor
                                       if self._scene._horizontal
-                                      else Qt.SizeVerCursor)
+                                      else Qt.CursorShape.SizeVerCursor)
                     event.accept()
                     return
 
@@ -9452,11 +9653,11 @@ class TimelineView(QGraphicsView):
             #     If the click does NOT land on any _TaskLabelItem, cancel the
             #     current highlight (click on empty label-column area). ---
             lw = self._scene._label_width
-            in_vp_label = (event.pos().x() < lw if self._scene._horizontal
-                           else event.pos().y() < lw)
+            in_vp_label = (event.position().x() < lw if self._scene._horizontal
+                           else event.position().y() < lw)
             if in_vp_label:
                 self.setDragMode(QGraphicsView.NoDrag)
-                scene_pt2 = self.mapToScene(event.pos())
+                scene_pt2 = self.mapToScene(event.position().toPoint())
                 hits = [it for it in self._scene.items(scene_pt2)
                         if isinstance(it, _TaskLabelItem)]
                 if not hits and self._scene._locked_task is not None:
@@ -9476,9 +9677,9 @@ class TimelineView(QGraphicsView):
         # Label-column/row resize drag
         if self._label_resize_dragging:
             if self._scene._horizontal:
-                delta = event.pos().x() - self._label_resize_start_x
+                delta = event.position().x() - self._label_resize_start_x
             else:
-                delta = event.pos().y() - self._label_resize_start_x
+                delta = event.position().y() - self._label_resize_start_x
             self._apply_label_width_drag(self._label_resize_start_w + delta)
             event.accept()
             return
@@ -9492,8 +9693,8 @@ class TimelineView(QGraphicsView):
             lw = self._scene._label_width
             _near_cursor = False
             _near_mark   = False
-            _hover_coord = (self.mapToScene(event.pos()).x() if self._scene._horizontal
-                            else self.mapToScene(event.pos()).y())
+            _hover_coord = (self.mapToScene(event.position().toPoint()).x() if self._scene._horizontal
+                            else self.mapToScene(event.position().toPoint()).y())
             if self._scene._cursor_times:
                 _near_cursor = any(
                     abs(_hover_coord - self._scene.ns_to_scene_coord(ns)) <= self._cursor_drag_threshold
@@ -9505,27 +9706,27 @@ class TimelineView(QGraphicsView):
                     for m in self._scene._mark_data
                 )
             if self._scene._horizontal:
-                if abs(event.pos().x() - lw) <= self._LABEL_RESIZE_ZONE:
-                    self._set_view_hover_cursor(Qt.SizeHorCursor)
+                if abs(event.position().x() - lw) <= self._LABEL_RESIZE_ZONE:
+                    self._set_view_hover_cursor(Qt.CursorShape.SizeHorCursor)
                 elif _near_cursor:
-                    self._set_view_hover_cursor(Qt.SplitHCursor)
+                    self._set_view_hover_cursor(Qt.CursorShape.SplitHCursor)
                 elif _near_mark:
-                    self._set_view_hover_cursor(Qt.SplitHCursor)
+                    self._set_view_hover_cursor(Qt.CursorShape.SplitHCursor)
                 else:
                     self._set_view_hover_cursor(None)
             else:
-                if abs(event.pos().y() - lw) <= self._LABEL_RESIZE_ZONE:
-                    self._set_view_hover_cursor(Qt.SizeVerCursor)
+                if abs(event.position().y() - lw) <= self._LABEL_RESIZE_ZONE:
+                    self._set_view_hover_cursor(Qt.CursorShape.SizeVerCursor)
                 elif _near_cursor:
-                    self._set_view_hover_cursor(Qt.SplitVCursor)
+                    self._set_view_hover_cursor(Qt.CursorShape.SplitVCursor)
                 elif _near_mark:
-                    self._set_view_hover_cursor(Qt.SplitVCursor)
+                    self._set_view_hover_cursor(Qt.CursorShape.SplitVCursor)
                 else:
                     self._set_view_hover_cursor(None)
 
         # Middle-button drag: update gray selection band
         if self._mid_press_ns is not None:
-            scene_pt = self.mapToScene(event.pos())
+            scene_pt = self.mapToScene(event.position().toPoint())
             coord    = scene_pt.x() if self._scene._horizontal else scene_pt.y()
             cur_ns   = self._scene.scene_to_ns(coord)
             a_coord  = self._scene.ns_to_scene_coord(self._mid_press_ns)
@@ -9549,10 +9750,10 @@ class TimelineView(QGraphicsView):
             return
 
         if self._dragging_cursor_idx >= 0:
-            scene_pt = self.mapToScene(event.pos())
+            scene_pt = self.mapToScene(event.position().toPoint())
             coord    = scene_pt.x() if self._scene._horizontal else scene_pt.y()
             ns       = self._scene.scene_to_ns(coord)
-            if event.modifiers() & Qt.ShiftModifier:
+            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
                 ns = self._snap_to_boundary(ns)
             self._scene._cursor_times[self._dragging_cursor_idx] = ns
             self._scene._draw_cursors()
@@ -9562,7 +9763,7 @@ class TimelineView(QGraphicsView):
             return
 
         if self._dragging_mark_idx >= 0:
-            scene_pt = self.mapToScene(event.pos())
+            scene_pt = self.mapToScene(event.position().toPoint())
             coord    = scene_pt.x() if self._scene._horizontal else scene_pt.y()
             ns       = self._scene.scene_to_ns(coord)
             tup      = self._scene._mark_data[self._dragging_mark_idx]
@@ -9592,8 +9793,8 @@ class TimelineView(QGraphicsView):
         # clear the hover immediately.
         if self._scene._hovered_task is not None:
             lw = self._scene._label_width
-            in_label = (event.pos().x() < lw if self._scene._horizontal
-                        else event.pos().y() < lw)
+            in_label = (event.position().x() < lw if self._scene._horizontal
+                        else event.position().y() < lw)
             if not in_label:
                 self._scene.clear_hover()
 
@@ -9604,13 +9805,13 @@ class TimelineView(QGraphicsView):
                 and self._dragging_mark_idx < 0
                 and not self._label_resize_dragging):
             lw = self._scene._label_width
-            in_label = (event.pos().x() < lw if self._scene._horizontal
-                        else event.pos().y() < lw)
+            in_label = (event.position().x() < lw if self._scene._horizontal
+                        else event.position().y() < lw)
             if in_label:
                 self._scene.clear_hover_line()
             else:
                 try:
-                    scene_pt = self.mapToScene(event.pos())
+                    scene_pt = self.mapToScene(event.position().toPoint())
                 except RuntimeError:
                     self._scene.clear_hover_line()
                 else:
@@ -9636,12 +9837,12 @@ class TimelineView(QGraphicsView):
         #   5. Right-click inside timeline -> remove cursor / clear all
 
         # Middle-button release: zoom to selected range
-        if event.button() == Qt.MiddleButton and self._mid_press_ns is not None:
+        if event.button() == Qt.MouseButton.MiddleButton and self._mid_press_ns is not None:
             # Remove band overlay
             if self._mid_band_item is not None:
                 _safe_scene_remove_items(self._scene, [self._mid_band_item])
                 self._mid_band_item = None
-            scene_pt  = self.mapToScene(event.pos())
+            scene_pt  = self.mapToScene(event.position().toPoint())
             coord     = scene_pt.x() if self._scene._horizontal else scene_pt.y()
             end_ns    = self._scene.scene_to_ns(coord)
             start_ns  = self._mid_press_ns
@@ -9697,13 +9898,13 @@ class TimelineView(QGraphicsView):
         super().mouseReleaseEvent(event)
         if self._press_pos is None:
             return
-        delta = (event.pos() - self._press_pos).manhattanLength()
+        delta = (event.position().toPoint() - self._press_pos).manhattanLength()
         if delta <= self._drag_threshold:
             # Use viewport coordinates - label column is always the leftmost
             # _label_width pixels on screen regardless of horizontal scroll.
             lw = self._scene._label_width
-            in_vp_label  = (event.pos().x()       < lw if self._scene._horizontal
-                            else event.pos().y()       < lw)
+            in_vp_label  = (event.position().x()       < lw if self._scene._horizontal
+                            else event.position().y()       < lw)
             # Also block when the press originated inside the label column:
             # a tiny drag (<= drag_threshold) from the label into the timeline
             # must not place a cursor.
@@ -9712,10 +9913,10 @@ class TimelineView(QGraphicsView):
             if in_vp_label or press_in_label:
                 self._press_pos = None
                 return
-            scene_pt = self.mapToScene(event.pos())
+            scene_pt = self.mapToScene(event.position().toPoint())
             coord = scene_pt.x() if self._scene._horizontal else scene_pt.y()
             ns = self._scene.scene_to_ns(coord)
-            if event.button() == Qt.LeftButton:
+            if event.button() == Qt.MouseButton.LeftButton:
                 hit_seg = self._hit_segment_at(scene_pt)
                 if hit_seg is not None:
                     # Single click on a task segment -> highlight; second click on
@@ -9727,7 +9928,7 @@ class TimelineView(QGraphicsView):
                     self._dbl_click_undo_ns = None
                 else:
                     # Click on ruler or empty area -> place cursor.
-                    if event.modifiers() & Qt.ShiftModifier:
+                    if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
                         ns = self._snap_to_boundary(ns)
                     # Place cursor immediately; mouseDoubleClickEvent will roll it
                     # back if this click turns out to be the first of a double-click.
@@ -9735,9 +9936,9 @@ class TimelineView(QGraphicsView):
                     self._scene.add_cursor(ns)
                     self.cursors_changed.emit(self._scene.cursor_times())
                     self._dbl_click_undo_ns = ns
-            elif event.button() == Qt.RightButton:
+            elif event.button() == Qt.MouseButton.RightButton:
                 self.pre_change.emit()
-                if event.modifiers() & Qt.ShiftModifier:
+                if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
                     self._scene.clear_cursors()
                 else:
                     self._scene.remove_nearest_cursor(ns)
@@ -9746,6 +9947,7 @@ class TimelineView(QGraphicsView):
 
     def contextMenuEvent(self, event) -> None:
         # Suppress the context menu when the click lands inside the label column.
+        # QContextMenuEvent uses .pos()/.globalPos() - NOT .position() (QMouseEvent only)
         lw = self._scene._label_width
         in_label = (event.pos().x() < lw if self._scene._horizontal
                     else event.pos().y() < lw)
@@ -9834,21 +10036,21 @@ class TimelineView(QGraphicsView):
                         "Clear all annotations",
                         lambda: self.clear_annotations_requested.emit()
                     )
-        menu.exec_(event.globalPos())
+        menu.exec(event.globalPos())
 
     # ------------------------------------------------------------------
     # Wheel and touch zoom
     # ------------------------------------------------------------------
 
     def wheelEvent(self, event: QWheelEvent) -> None:
-        if event.modifiers() & Qt.ControlModifier:
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
             angle  = event.angleDelta().y()
             factor = 1.15 if angle > 0 else 1 / 1.15
             # Accumulate factor; record anchor from the *first* event in the
             # batch so the zoom stays anchored at the initial cursor position.
             self._zoom_accum *= factor
             if self._zoom_anchor_pos is None:
-                self._zoom_anchor_pos = QPoint(event.pos())
+                self._zoom_anchor_pos = event.position().toPoint()
             # Exit fit mode immediately so a resize event that fires inside
             # the 60 ms debounce window does not snap back to fit-to-width.
             self._fit_mode = False
@@ -9860,7 +10062,7 @@ class TimelineView(QGraphicsView):
             hsb = self.horizontalScrollBar()
             vsb = self.verticalScrollBar()
             # Shift+scroll -> pan horizontally; plain scroll -> natural direction
-            if event.modifiers() & Qt.ShiftModifier:
+            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
                 if dy != 0:
                     hsb.setValue(hsb.value() - dy)
             else:
@@ -9881,13 +10083,13 @@ class TimelineView(QGraphicsView):
     def eventFilter(self, obj, e) -> bool:
         """Intercept native pinch-zoom gestures delivered to the viewport."""
         if obj is self.viewport():
-            if e.type() == QEvent.Leave:
+            if e.type() == QEvent.Type.Leave:
                 # Mouse left the viewport - ensure any hover highlight is cleared
                 self._scene.clear_hover()
                 return False
-            if e.type() == QEvent.NativeGesture:
+            if e.type() == QEvent.Type.NativeGesture:
                 # Qt.ZoomNativeGesture == 3 (macOS two-finger pinch)
-                _ZOOM_GESTURE = getattr(Qt, 'ZoomNativeGesture', 3)
+                _ZOOM_GESTURE = getattr(Qt.NativeGestureType, 'ZoomNativeGesture', 3)
                 try:
                     if int(e.gestureType()) == int(_ZOOM_GESTURE):
                         factor = 1.0 + e.value()
@@ -10034,7 +10236,7 @@ class TimelineView(QGraphicsView):
             # Border only
             try:
                 p.setPen(QPen(nav_border, 1))
-                p.setBrush(Qt.NoBrush)
+                p.setBrush(Qt.BrushStyle.NoBrush)
                 p.drawRect(0, 0, W - 1, H - 1)
             finally:
                 p.end()
@@ -10056,7 +10258,7 @@ class TimelineView(QGraphicsView):
         self._nav_bg_task_area_h = task_area_h  # remembered for potential future use
         n_rows        = max(1, len(row_data))
         row_h         = task_area_h / n_rows if row_data else float(H)
-        p.setPen(Qt.NoPen)
+        p.setPen(Qt.PenStyle.NoPen)
 
         # Per-(task,core) colour cache - keyed by (task, core, blend) to avoid
         # collisions between blended (task mode) and base (core-header) colours.
@@ -10132,9 +10334,9 @@ class TimelineView(QGraphicsView):
                         if len(pts) >= 2:
                             p.setPen(QPen(_wf_line_col, 1.0))
                             p.drawPolyline(QPolygonF(pts))
-                            p.setPen(Qt.NoPen)
+                            p.setPen(Qt.PenStyle.NoPen)
                     else:
-                        p.setPen(Qt.NoPen)
+                        p.setPen(Qt.PenStyle.NoPen)
                         p.setBrush(QBrush(_wf_dot_col))
                         for ev in evs:
                             x1 = (ev.time - tr.time_min) / time_span * W
@@ -10142,7 +10344,7 @@ class TimelineView(QGraphicsView):
                 else:
                     # Collapsed: draw each event with its per-note colour,
                     # matching the main view's _sti_color(ev.note) per event.
-                    p.setPen(Qt.NoPen)
+                    p.setPen(Qt.PenStyle.NoPen)
                     for ev in evs:
                         x1 = (ev.time - tr.time_min) / time_span * W
                         p.setBrush(QBrush(_sti_color(ev.note)))
@@ -10151,7 +10353,7 @@ class TimelineView(QGraphicsView):
         # Static border
         try:
             p.setPen(QPen(nav_border, 1))
-            p.setBrush(Qt.NoBrush)
+            p.setBrush(Qt.BrushStyle.NoBrush)
             p.drawRect(0, 0, W - 1, H - 1)
         finally:
             p.end()
@@ -10506,20 +10708,20 @@ class _LoadProgressDialog(QWidget):
     cycle.  When files are opened at startup the window manager hasn't
     settled yet, so the dialog can appear blank or not at all.
 
-    This replacement widget uses a plain QWidget with Qt.Tool window flag,
+    This replacement widget uses a plain QWidget with Qt.WindowType.Tool window flag,
     which bypasses the macOS sheet mechanism entirely and paints immediately.
     """
 
     def __init__(self, title: str, parent=None):
-        # The frameless Qt.Tool variant is primarily needed on macOS to avoid
+        # The frameless Qt.WindowType.Tool variant is primarily needed on macOS to avoid
         # delayed first paint at startup. On Windows it may leave a tiny black
         # artifact near (0, 0), so use a regular dialog there.
         if sys.platform == "darwin":
-            flags = Qt.Tool | Qt.FramelessWindowHint
+            flags = Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint
         else:
-            flags = Qt.Dialog | Qt.WindowTitleHint | Qt.CustomizeWindowHint
+            flags = Qt.WindowType.Dialog | Qt.WindowType.WindowTitleHint | Qt.WindowType.CustomizeWindowHint
         super().__init__(parent, flags)
-        self.setWindowModality(Qt.ApplicationModal)
+        self.setWindowModality(Qt.WindowModality.ApplicationModal)
         if sys.platform != "darwin":
             self.setWindowTitle("Loading")
         self.setMinimumWidth(420)
@@ -10599,7 +10801,7 @@ class _LoadProgressDialog(QWidget):
 
     def eventFilter(self, obj, event) -> bool:
         """Track parent-window moves and reposition the dialog to follow."""
-        if obj is self.parent() and event.type() == QEvent.Move:
+        if obj is self.parent() and event.type() == QEvent.Type.Move:
             self._centre_on_parent()
         return super().eventFilter(obj, event)
 
@@ -10633,10 +10835,10 @@ class _LoadProgressDialog(QWidget):
 
 class _ParseThread(QThread):
     """Parses a BTF file in a background thread, emitting progress updates."""
-    done     = pyqtSignal(object)   # BtfTrace
-    errored  = pyqtSignal(str)
-    cancelled = pyqtSignal()
-    progress = pyqtSignal(int, str) # pct, message
+    done     = Signal(object)   # BtfTrace
+    errored  = Signal(str)
+    cancelled = Signal()
+    progress = Signal(int, str) # pct, message
 
     def __init__(self, path: str):
         super().__init__()
@@ -10667,7 +10869,7 @@ class _CursorButton(QPushButton):
         self._color   = color
         self._is_dark = is_dark
         self.setStyleSheet(self._make_style(color, is_dark=is_dark))
-        self.setCursor(Qt.PointingHandCursor)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
 
     @staticmethod
     def _make_style(c: str, is_dark: bool = True) -> str:
@@ -10697,7 +10899,7 @@ class _CursorDeleteButton(QPushButton):
         self._color   = color
         self._is_dark = is_dark
         self.setStyleSheet(self._make_style(color, is_dark=is_dark))
-        self.setCursor(Qt.PointingHandCursor)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFixedWidth(18)
         self.setToolTip("Delete cursor")
 
@@ -10722,8 +10924,8 @@ class _CursorDeleteButton(QPushButton):
 
 class _CursorBarWidget(QWidget):
     """A row of per-cursor badge+delete pills in the status bar."""
-    jump_requested          = pyqtSignal(int)   # ns - scroll timeline
-    cursor_delete_requested = pyqtSignal(int)   # ns - remove this cursor
+    jump_requested          = Signal(int)   # ns - scroll timeline
+    cursor_delete_requested = Signal(int)   # ns - remove this cursor
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -10849,7 +11051,7 @@ class _CursorBarWidget(QWidget):
 class _LegendTaskRow(QWidget):
     """A single task row in the legend that emits a click signal."""
 
-    clicked   = pyqtSignal(str)   # task merge key
+    clicked   = Signal(str)   # task merge key
 
     def __init__(self, task_name: str, display_name: str,
                  color: QColor, tooltip: str = "", is_dark: bool = True,
@@ -10879,9 +11081,9 @@ class _LegendTaskRow(QWidget):
         hl.addWidget(self._lbl)
         hl.addStretch()
 
-        self.setCursor(Qt.PointingHandCursor)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setAutoFillBackground(False)
-        self.setAttribute(Qt.WA_StyledBackground, False)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
 
     def matches_filter(self, q: str) -> bool:
         """Case-insensitive filter match against merge-key or display name."""
@@ -10911,24 +11113,24 @@ class _LegendTaskRow(QWidget):
         if bg is not None:
             p = QPainter(self)
             p.setRenderHint(QPainter.Antialiasing, True)
-            p.setPen(Qt.NoPen)
+            p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(QBrush(bg))
             p.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 3, 3)
         super().paintEvent(event)
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton:
             self.clicked.emit(self._task_name)
         event.accept()   # prevent bubbling up to _LegendWidget.mousePressEvent
 
 class _LegendWidget(QWidget):
     """Compact scrollable colour legend with click -> timeline highlight."""
 
-    task_clicked     = pyqtSignal(str)   # click: task merge key
-    cancel_highlight = pyqtSignal()      # click on background -> cancel highlight
-    filter_changed   = pyqtSignal(str)   # search text changed
-    migrated_filter_changed = pyqtSignal(bool)
-    clear_heatmap_filter = pyqtSignal()
+    task_clicked     = Signal(str)   # click: task merge key
+    cancel_highlight = Signal()      # click on background -> cancel highlight
+    filter_changed   = Signal(str)   # search text changed
+    migrated_filter_changed = Signal(bool)
+    clear_heatmap_filter = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -11031,6 +11233,14 @@ class _LegendWidget(QWidget):
         if self._trace_ref is not None:
             self.rebuild(self._trace_ref, show_sti=self._show_sti_flag)
 
+    def restore_row_layout(self) -> None:
+        """Undo dock-shrink relax policies that hid task-name labels."""
+        for row in self._task_rows.values():
+            pol = row._lbl.sizePolicy()
+            pol.setHorizontalPolicy(QSizePolicy.Policy.Preferred)
+            row._lbl.setSizePolicy(pol)
+            row._lbl.setMinimumWidth(0)
+
     def set_locked_task(self, task_name: Optional[str]) -> None:
         """Visually mark *task_name* as click-locked (or clear all locks)."""
         for raw, row in self._task_rows.items():
@@ -11084,11 +11294,11 @@ class _LegendWidget(QWidget):
         self.setUpdatesEnabled(False)
         try:
             header = QLabel(f"<b style='color:{hdr_color}'>Tasks</b>")
-            header.setTextFormat(Qt.RichText)
+            header.setTextFormat(Qt.TextFormat.RichText)
             self._list_layout.addWidget(header)
 
             tint_lbl = QLabel(self._core_tint_legend_html(is_dark))
-            tint_lbl.setTextFormat(Qt.RichText)
+            tint_lbl.setTextFormat(Qt.TextFormat.RichText)
             tint_lbl.setWordWrap(True)
             self._list_layout.addWidget(tint_lbl)
 
@@ -11156,7 +11366,7 @@ class _LegendWidget(QWidget):
 class _ScatterWidget(QWidget):
     """Scatter plot: X = trace timestamp, Y = metric value.  Click a point to jump."""
 
-    point_clicked = pyqtSignal(object)   # payload: TaskSegment (exec) or int ns (inter-arrival)
+    point_clicked = Signal(object)   # payload: TaskSegment (exec) or int ns (inter-arrival)
 
     def __init__(self, points, time_scale: str, color: "QColor",
                  is_dark: bool, parent=None) -> None:
@@ -11170,9 +11380,9 @@ class _ScatterWidget(QWidget):
         self._highlight  = -1   # index of highlighted point (-1 = none)
         self._hover_idx  = -1   # index of hovered point for tooltip
         self.setMinimumHeight(160)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setMouseTracking(True)
-        self.setCursor(Qt.CrossCursor)
+        self.setCursor(Qt.CursorShape.CrossCursor)
 
     def set_points(self, points: list) -> None:
         """Replace plotted points and repaint (live cursor-range updates)."""
@@ -11223,7 +11433,7 @@ class _ScatterWidget(QWidget):
 
         if not self._points:
             p.setPen(txt)
-            p.drawText(QRect(0, 0, w, h), Qt.AlignCenter, "No data in selected range")
+            p.drawText(QRect(0, 0, w, h), Qt.AlignmentFlag.AlignCenter, "No data in selected range")
             p.end()
             return
 
@@ -11243,7 +11453,7 @@ class _ScatterWidget(QWidget):
         MR = self._marker_right_margin(p.fontMetrics())
         pw = w - ML - MR
         ph = h - MT - MB
-        p.setPen(QPen(grid, 1, Qt.DotLine))
+        p.setPen(QPen(grid, 1, Qt.PenStyle.DotLine))
         for fi in range(5):
             gy = MT + int(fi / 4 * ph)
             p.drawLine(ML, gy, ML + pw, gy)
@@ -11262,7 +11472,7 @@ class _ScatterWidget(QWidget):
             val = y0 + (y1 - y0) * fi / 4
             gy  = MT + ph - int(fi / 4 * ph)
             lbl = _format_time(int(val), self._time_scale, decimals=1)
-            p.drawText(QRect(0, gy - 8, ML - 4, 16), Qt.AlignRight | Qt.AlignVCenter, lbl)
+            p.drawText(QRect(0, gy - 8, ML - 4, 16), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, lbl)
 
         # X-axis labels (3 ticks)
         for fi in range(3):
@@ -11270,7 +11480,7 @@ class _ScatterWidget(QWidget):
             gx  = sx(val)
             lbl = _format_time(int(val), self._time_scale, decimals=1)
             p.drawText(QRect(gx - 40, MT + ph + 4, 80, 16),
-                       Qt.AlignHCenter | Qt.AlignTop, lbl)
+                       Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, lbl)
 
         # avg / p50 / p95 horizontal reference lines
         for val, lbl_text, ref_color in [
@@ -11279,7 +11489,7 @@ class _ScatterWidget(QWidget):
             (p95_val, "p95", QColor("#FF9800")),
         ]:
             gy = sy(val)
-            p.setPen(QPen(ref_color, 1, Qt.DashLine))
+            p.setPen(QPen(ref_color, 1, Qt.PenStyle.DashLine))
             p.drawLine(ML, gy, ML + pw, gy)
             p.setPen(ref_color)
             p.setFont(sf)
@@ -11287,7 +11497,7 @@ class _ScatterWidget(QWidget):
 
         # Points
         hl_color  = QColor("#FFFFFF")
-        p.setPen(Qt.NoPen)
+        p.setPen(Qt.PenStyle.NoPen)
         for i, pt in enumerate(self._points):
             cx = sx(pt[0])
             cy = sy(pt[1])
@@ -11367,7 +11577,7 @@ class _ScatterWidget(QWidget):
         return float("inf"), -1
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802
-        _, idx = self._nearest_point(event.x(), event.y(), threshold=12)
+        _, idx = self._nearest_point(event.position().x(), event.position().y(), threshold=12)
         if idx != self._hover_idx:
             self._hover_idx = idx
             self.update()
@@ -11378,9 +11588,9 @@ class _ScatterWidget(QWidget):
             self.update()
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
-        if event.button() != Qt.LeftButton or not self._points:
+        if event.button() != Qt.MouseButton.LeftButton or not self._points:
             return
-        _, best_i = self._nearest_point(event.x(), event.y(), threshold=8)
+        _, best_i = self._nearest_point(event.position().x(), event.position().y(), threshold=8)
 
         if best_i >= 0:
             self._highlight = best_i
@@ -11398,7 +11608,7 @@ class _HistogramWidget(QWidget):
         self._color      = color
         self._is_dark    = is_dark
         self.setMinimumHeight(120)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
     def set_values(self, values: list) -> None:
         """Replace histogram samples and repaint."""
@@ -11426,7 +11636,7 @@ class _HistogramWidget(QWidget):
 
         if not self._values:
             p.setPen(txt)
-            p.drawText(QRect(0, 0, w, h), Qt.AlignCenter, "No data in selected range")
+            p.drawText(QRect(0, 0, w, h), Qt.AlignmentFlag.AlignCenter, "No data in selected range")
             p.end()
             return
 
@@ -11456,7 +11666,7 @@ class _HistogramWidget(QWidget):
         bw = max(1, pw // N_BINS)
 
         # Grid
-        p.setPen(QPen(grid, 1, Qt.DotLine))
+        p.setPen(QPen(grid, 1, Qt.PenStyle.DotLine))
         for fi in (1, 2, 3, 4):
             gy = MT + int((1 - fi / 4) * ph)
             p.drawLine(ML, gy, ML + pw, gy)
@@ -11469,7 +11679,7 @@ class _HistogramWidget(QWidget):
         for fi in range(5):
             cnt = int(max_count * fi / 4)
             gy  = MT + ph - int(fi / 4 * ph)
-            p.drawText(QRect(0, gy - 8, ML - 4, 16), Qt.AlignRight | Qt.AlignVCenter, str(cnt))
+            p.drawText(QRect(0, gy - 8, ML - 4, 16), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, str(cnt))
 
         # X labels (3)
         for fi in range(3):
@@ -11477,11 +11687,11 @@ class _HistogramWidget(QWidget):
             gx  = ML + int(fi / 2 * pw)
             lbl = _format_time(int(val), self._time_scale, decimals=1)
             p.drawText(QRect(gx - 40, MT + ph + 4, 80, 16),
-                       Qt.AlignHCenter | Qt.AlignTop, lbl)
+                       Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, lbl)
 
         # Bars
         bar_color = QColor(self._color); bar_color.setAlpha(180)
-        p.setPen(Qt.NoPen)
+        p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QBrush(bar_color))
         for bi, cnt in enumerate(counts):
             if cnt == 0:
@@ -11498,7 +11708,7 @@ class _HistogramWidget(QWidget):
             (p95, marker_labels[2], QColor("#FF9800")),
         ]:
             gx = ML + int((val - v0) / vspan * pw)
-            p.setPen(QPen(lcolor, 2, Qt.DashLine))
+            p.setPen(QPen(lcolor, 2, Qt.PenStyle.DashLine))
             p.drawLine(gx, MT, gx, MT + ph)
             p.setPen(lcolor)
             p.setFont(sf)
@@ -11514,7 +11724,7 @@ class _MetricsPlotDialog(QDialog):
     ``on_point_click`` - called with the trace-ns when a scatter point is clicked.
     """
 
-    closed = pyqtSignal()
+    closed = Signal()
 
     def __init__(self, title: str,
                  points,
@@ -11526,7 +11736,7 @@ class _MetricsPlotDialog(QDialog):
                  scope_badge: str,
                  scope_detail: str,
                  parent=None) -> None:
-        super().__init__(parent, Qt.Window)
+        super().__init__(parent, Qt.WindowType.Window)
         self._title        = title
         self._is_dark      = is_dark
         self._on_pt_click  = on_point_click
@@ -11558,7 +11768,7 @@ class _MetricsPlotDialog(QDialog):
 
         self._scatter.point_clicked.connect(self._on_scatter_click)
 
-        splitter = _ResizeSplitter(Qt.Vertical)
+        splitter = _ResizeSplitter(Qt.Orientation.Vertical)
         splitter.addWidget(self._scatter)
         splitter.addWidget(self._histogram)
         splitter.setStretchFactor(0, 3)
@@ -11669,29 +11879,58 @@ class _MetricsPlotDialog(QDialog):
 # Statistics dock panel
 # ---------------------------------------------------------------------------
 
+class _ElidedUtilLabel(QLabel):
+    """Fixed-width util row label; elides when the stats column is narrow."""
+
+    def __init__(self, text: str, *, column_width: int,
+                 parent=None) -> None:
+        super().__init__(parent)
+        self._full_text = text
+        self._column_width = max(STATS_UTIL_LABEL_MIN_W, int(column_width))
+        self.setFixedWidth(self._column_width)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self._apply_elide()
+
+    def set_column_width(self, width: int) -> None:
+        width = max(STATS_UTIL_LABEL_MIN_W, int(width))
+        if width == self._column_width:
+            return
+        self._column_width = width
+        self.setFixedWidth(width)
+        self._apply_elide()
+
+    def _apply_elide(self) -> None:
+        w = max(1, self._column_width - 2)
+        self.setText(self.fontMetrics().elidedText(
+            self._full_text, Qt.TextElideMode.ElideRight, w))
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        return QSize(self._column_width, STATS_UTIL_ROW_H)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return QSize(STATS_UTIL_LABEL_MIN_W, STATS_UTIL_ROW_H)
+
 class _StatsHoverRow(QWidget):
     """Progress-bar stat row that highlights on mouse-over."""
 
     def __init__(self, is_dark: bool, on_click=None, parent=None) -> None:
         super().__init__(parent)
         self._on_click = on_click
-        self._hover_bg = "#3A3A50" if is_dark else "#E0E0EC"
+        self._hover_bg = QColor("#3A3A50") if is_dark else QColor("#E0E0EC")
         self._hovered = False
-        self.setAttribute(Qt.WA_StyledBackground, True)
         self.setMouseTracking(True)
-        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setAutoFillBackground(False)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
         if on_click is not None:
-            self.setCursor(Qt.PointingHandCursor)
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
 
     def _apply_hover(self, hovered: bool) -> None:
         if hovered == self._hovered:
             return
         self._hovered = hovered
-        if hovered:
-            self.setStyleSheet(
-                f"background-color: {self._hover_bg}; border-radius: 2px;")
-        else:
-            self.setStyleSheet("background: transparent; border-radius: 2px;")
+        self.update()
 
     def track_widget(self, w: QWidget) -> None:
         """Track *w* so hover works when the pointer is over child controls."""
@@ -11708,11 +11947,11 @@ class _StatsHoverRow(QWidget):
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
         et = event.type()
-        if et in (QEvent.Enter, QEvent.HoverEnter):
+        if et in (QEvent.Type.Enter, QEvent.Type.HoverEnter):
             self._apply_hover(True)
-        elif et in (QEvent.Leave, QEvent.HoverLeave):
+        elif et in (QEvent.Type.Leave, QEvent.Type.HoverLeave):
             QTimer.singleShot(0, self._sync_hover)
-        elif (et == QEvent.MouseButtonPress and event.button() == Qt.LeftButton
+        elif (et == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton
               and self._on_click is not None):
             self._on_click()
             return True
@@ -11721,12 +11960,56 @@ class _StatsHoverRow(QWidget):
     def _sync_hover(self) -> None:
         self._apply_hover(self.underMouse())
 
+    def paintEvent(self, event) -> None:  # noqa: N802
+        if self._hovered:
+            p = QPainter(self)
+            p.setRenderHint(QPainter.Antialiasing, True)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QBrush(self._hover_bg))
+            p.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 2, 2)
+        super().paintEvent(event)
+
     def mousePressEvent(self, event) -> None:  # noqa: N802
-        if event.button() == Qt.LeftButton and self._on_click is not None:
+        if event.button() == Qt.MouseButton.LeftButton and self._on_click is not None:
             self._on_click()
             event.accept()
             return
         super().mousePressEvent(event)
+
+class _UtilScrollResizeFilter(QObject):
+    """Keep util rows inside the scroll viewport when the panel is resized."""
+
+    def __init__(self, panel: "_StatsPanel", scroll: QScrollArea,
+                 inner: QWidget) -> None:
+        super().__init__(panel)
+        self._panel = panel
+        self._scroll = scroll
+        self._inner = inner
+
+    def pin_inner_width(self) -> None:
+        vw = self._scroll.viewport().width()
+        if vw > 0:
+            self._inner.setMaximumWidth(vw)
+            self._inner.setMinimumWidth(0)
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if event.type() == QEvent.Type.Resize:
+            self.pin_inner_width()
+            QTimer.singleShot(0, self._panel.sync_util_layout)
+        return False
+
+class _StatsPanelViewportFilter(QObject):
+    """Keep stats content within the visible scroll viewport width."""
+
+    def __init__(self, panel: "_StatsPanel") -> None:
+        super().__init__(panel)
+        self._panel = panel
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if event.type() == QEvent.Type.Resize:
+            self._panel._pin_main_inner_width()
+            QTimer.singleShot(0, self._panel.sync_util_layout)
+        return False
 
 class _StatsTableHoverFilter(QObject):
     """Clear stats-table row hover highlight when the pointer leaves the table."""
@@ -11736,7 +12019,7 @@ class _StatsTableHoverFilter(QObject):
         self._clear_fn = clear_fn
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
-        if event.type() == QEvent.Leave:
+        if event.type() == QEvent.Type.Leave:
             self._clear_fn()
         return False
 
@@ -11750,14 +12033,14 @@ class _StatsTableBodyCursorFilter(QObject):
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
         et = event.type()
-        if et == QEvent.MouseMove:
-            if self._table.indexAt(event.pos()).isValid():
-                obj.setCursor(Qt.PointingHandCursor)
+        if et == QEvent.Type.MouseMove:
+            if self._table.indexAt(event.position().toPoint()).isValid():
+                obj.setCursor(Qt.CursorShape.PointingHandCursor)
                 self._armed = True
             elif self._armed:
                 obj.unsetCursor()
                 self._armed = False
-        elif et == QEvent.Leave:
+        elif et == QEvent.Type.Leave:
             if self._armed:
                 obj.unsetCursor()
                 self._armed = False
@@ -11781,7 +12064,7 @@ class _StatsSortItem(QTableWidgetItem):
 class _StatsSectionGrip(QWidget):
     """Horizontal drag handle below a stats table to adjust its max height."""
 
-    height_changed = pyqtSignal(int)
+    height_changed = Signal(int)
 
     _MIN_H = 80
     _MAX_H = 480
@@ -11794,55 +12077,83 @@ class _StatsSectionGrip(QWidget):
         self._start_y = 0
         self._start_h = STATS_TABLE_DEFAULT_H
         self.setFixedHeight(8)
-        self.setCursor(Qt.SizeVerCursor)
+        self.setCursor(Qt.CursorShape.SizeVerCursor)
         self.setToolTip("Drag to resize table height")
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setMouseTracking(True)
 
     def set_dark(self, is_dark: bool) -> None:
         self._is_dark = is_dark
         self.update()
 
+    def _drag_start(self, global_y: int) -> None:
+        """Begin a resize drag — installs an app-level event filter so that
+        mouse events are captured even after the cursor leaves the 8 px grip
+        strip (grabMouse() is silently ignored on Wayland)."""
+        self._dragging = True
+        self._start_y = global_y
+        self._start_h = self._get_height()
+        _HoverCursor.show(Qt.CursorShape.SizeVerCursor)
+        app = QApplication.instance()
+        if app:
+            app.installEventFilter(self)
+
+    def _drag_move(self, global_y: int) -> None:
+        _HoverCursor.show(Qt.CursorShape.SizeVerCursor)
+        delta = global_y - self._start_y
+        self.height_changed.emit(
+            max(self._MIN_H, min(self._MAX_H, self._start_h + delta)))
+
+    def _drag_end(self) -> None:
+        self._dragging = False
+        app = QApplication.instance()
+        if app:
+            app.removeEventFilter(self)
+        if not self.underMouse():
+            _HoverCursor.hide(Qt.CursorShape.SizeVerCursor)
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        """App-level mouse capture during drag — Wayland-safe replacement for grabMouse()."""
+        if not self._dragging:
+            return False
+        et = event.type()
+        if et == QEvent.Type.MouseMove:
+            self._drag_move(int(event.globalPosition().y()))
+            return True
+        if et == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
+            self._drag_end()
+            return True
+        return False
+
     def mousePressEvent(self, event) -> None:  # noqa: N802
-        if event.button() == Qt.LeftButton:
-            self._dragging = True
-            self._start_y = int(event.globalY())
-            self._start_h = self._get_height()
-            _HoverCursor.show(Qt.SizeVerCursor)
-            self.grabMouse()
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_start(int(event.globalPosition().y()))
             event.accept()
             return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802
         if self._dragging:
-            _HoverCursor.show(Qt.SizeVerCursor)
-            delta = int(event.globalY()) - self._start_y
-            self.height_changed.emit(
-                max(self._MIN_H, min(self._MAX_H, self._start_h + delta)))
+            self._drag_move(int(event.globalPosition().y()))
             event.accept()
             return
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
-        if event.button() == Qt.LeftButton and self._dragging:
-            self._dragging = False
-            if self.mouseGrabber() is self:
-                self.releaseMouse()
-            if not self.underMouse():
-                _HoverCursor.hide(Qt.SizeVerCursor)
+        if event.button() == Qt.MouseButton.LeftButton and self._dragging:
+            self._drag_end()
             event.accept()
             return
         super().mouseReleaseEvent(event)
 
     def enterEvent(self, event) -> None:  # noqa: N802
-        _HoverCursor.show(Qt.SizeVerCursor)
+        _HoverCursor.show(Qt.CursorShape.SizeVerCursor)
         self.update()
         super().enterEvent(event)
 
     def leaveEvent(self, event) -> None:  # noqa: N802
         if not self._dragging:
-            _HoverCursor.hide(Qt.SizeVerCursor)
+            _HoverCursor.hide(Qt.CursorShape.SizeVerCursor)
         self.update()
         super().leaveEvent(event)
 
@@ -11889,7 +12200,7 @@ class _TraceCompareDialog(QDialog):
         self._mig_table.setHorizontalHeaderLabels(
             ["Task", "Migrations A", "Migrations B", "Δ", "Ping-pong A", "Ping-pong B"])
         for tbl in (self._summary_table, self._top_table, self._mig_table):
-            tbl.setEditTriggers(QAbstractItemView.NoEditTriggers)
+            tbl.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
             tbl.verticalHeader().setVisible(False)
             tbl.horizontalHeader().setStretchLastSection(True)
         self._pages.addTab(self._summary_table, "Summary")
@@ -11956,9 +12267,9 @@ class _TraceCompareDialog(QDialog):
             for ci, val in enumerate(vals):
                 item = QTableWidgetItem(str(val))
                 if ci < left_cols:
-                    item.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
                 else:
-                    item.setTextAlignment(Qt.AlignVCenter | Qt.AlignRight)
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
                 table.setItem(ri, ci, item)
 
     def _refresh(self) -> None:
@@ -12122,8 +12433,8 @@ class _TraceCompareDialog(QDialog):
 class _MigrationHeatmapWidget(QWidget):
     """Paint labelled rows × time-bin migration counts (pairs or core×core matrix)."""
 
-    cell_clicked = pyqtSignal(int, int)
-    row_clicked = pyqtSignal(int)
+    cell_clicked = Signal(int, int)
+    row_clicked = Signal(int)
 
     _ROW_H = 16
     _CELL_MIN_W = 8
@@ -12253,8 +12564,8 @@ class _MigrationHeatmapWidget(QWidget):
     def mouseMoveEvent(self, event) -> None:
         pos = event.position() if hasattr(event, "position") else None
         self.set_hover_pos(
-            pos.x() if pos else event.x(),
-            pos.y() if pos else event.y(),
+            pos.x() if pos else event.position().x(),
+            pos.y() if pos else event.position().y(),
         )
         return super().mouseMoveEvent(event)
 
@@ -12263,11 +12574,11 @@ class _MigrationHeatmapWidget(QWidget):
         return super().leaveEvent(event)
 
     def mousePressEvent(self, event) -> None:
-        if event.button() != Qt.LeftButton or not self._row_labels:
+        if event.button() != Qt.MouseButton.LeftButton or not self._row_labels:
             return super().mousePressEvent(event)
         pos = event.position() if hasattr(event, "position") else None
-        x = pos.x() if pos else event.x()
-        y = pos.y() if pos else event.y()
+        x = pos.x() if pos else event.position().x()
+        y = pos.y() if pos else event.position().y()
         header_h = self._header_h()
         if y < header_h + 4:
             return super().mousePressEvent(event)
@@ -12303,7 +12614,7 @@ class _MigrationHeatmapWidget(QWidget):
                    self.palette().color(QPalette.Window))
         p.setPen(QPen(QColor("#888888")))
         p.drawText(QRectF(scroll_x, header_top, label_right - 4, self._COL_HEADER_H),
-                   Qt.AlignRight | Qt.AlignVCenter, "to→")
+                   Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, "to→")
         step = self._matrix_col_label_step(cell_w)
         small = QFont(self.font())
         small.setPointSize(max(7, small.pointSize() - 2))
@@ -12362,7 +12673,7 @@ class _MigrationHeatmapWidget(QWidget):
             p.setPen(QPen(QColor("#888888")))
             p.drawText(
                 QRectF(self._LEFT_PAD + scroll_x, y, self._label_w, self._ROW_H),
-                Qt.AlignLeft | Qt.AlignVCenter,
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                 lbl,
             )
             x = x0
@@ -12510,8 +12821,8 @@ class _MigrationHeatmapDialog(QDialog):
 
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(False)
-        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self._scroll.setFrameShape(QFrame.NoFrame)
         self._canvas = _MigrationHeatmapWidget([], [[]])
         self._canvas.cell_clicked.connect(self._on_cell_clicked)
@@ -12567,10 +12878,10 @@ class _MigrationHeatmapDialog(QDialog):
     def eventFilter(self, watched, event) -> bool:
         if watched is self._scroll.viewport():
             et = event.type()
-            if et == QEvent.MouseMove:
-                pos = self._canvas.mapFrom(self._scroll.viewport(), event.pos())
+            if et == QEvent.Type.MouseMove:
+                pos = self._canvas.mapFrom(self._scroll.viewport(), event.position().toPoint())
                 self._canvas.set_hover_pos(pos.x(), pos.y())
-            elif et == QEvent.Leave:
+            elif et == QEvent.Type.Leave:
                 self._canvas.clear_hover()
         return super().eventFilter(watched, event)
 
@@ -12963,9 +13274,9 @@ class _MigrationHeatmapDialog(QDialog):
 class _StatsPanel(QWidget):
     """Dock panel showing trace statistics (span, core utilisation, top tasks)."""
 
-    task_clicked = pyqtSignal(str)   # merge key of the clicked task row
-    segment_jump   = pyqtSignal(int)    # ns - scroll timeline to this timestamp
-    plot_point_clicked = pyqtSignal(object, int, str)  # payload, mark_ns, note
+    task_clicked = Signal(str)   # merge key of the clicked task row
+    segment_jump   = Signal(int)    # ns - scroll timeline to this timestamp
+    plot_point_clicked = Signal(object, int, str)  # payload, mark_ns, note
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -13008,22 +13319,33 @@ class _StatsPanel(QWidget):
             "health": STATS_TABLE_DEFAULT_H,
         }
         self._table_grips: List[_StatsSectionGrip] = []
+        self._util_label_col_natural: int = STATS_UTIL_LABEL_W
+        self._util_label_col_w: int = STATS_UTIL_LABEL_W
+        self._util_scroll_areas: List[QScrollArea] = []
+        self._util_scroll_filters: List[_UtilScrollResizeFilter] = []
+        self.setMinimumWidth(0)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
         scope_row = QHBoxLayout()
         scope_row.setContentsMargins(8, 6, 8, 0)
         scope_row.setSpacing(6)
-        self._scope_cb = QCheckBox("Limit to cursor range (C1–Cn)")
+        self._scope_cb = QCheckBox("Limit to C1–Cn")
         self._scope_cb.setChecked(True)
         self._scope_cb.setEnabled(False)
         self._scope_cb.setToolTip(
-            "When two or more cursors are placed, restrict all statistics\n"
-            "to the time window from C1 through the last cursor.")
+            "Limit statistics to the time window from C1 through the last cursor")
         self._scope_cb.toggled.connect(self._on_scope_toggled)
-        scope_row.addWidget(self._scope_cb)
+        _scope_pol = self._scope_cb.sizePolicy()
+        _scope_pol.setHorizontalPolicy(QSizePolicy.Policy.Ignored)
+        self._scope_cb.setSizePolicy(_scope_pol)
+        self._scope_cb.setMinimumWidth(0)
+        scope_row.addWidget(self._scope_cb, 1)
         self._scope_label = QLabel("")
         self._scope_label.setStyleSheet("color:#888888;")
-        scope_row.addWidget(self._scope_label, 1)
+        self._scope_label.setMinimumWidth(0)
+        scope_row.addWidget(self._scope_label, 0)
         _ic = "#9E9E9E"
         self._btn_stats_expand = QToolButton()
         self._btn_stats_expand.setIcon(_svg_icon(_IC_SECTIONS_EXPAND, _ic))
@@ -13043,20 +13365,25 @@ class _StatsPanel(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setMinimumWidth(0)
         self._scroll = scroll
         self._inner = QWidget()
         self._inner.setObjectName("stats_inner")
+        self._inner.setMinimumWidth(0)
         self._ilay = QVBoxLayout(self._inner)
         self._ilay.setContentsMargins(8, 6, 8, 6)
         self._ilay.setSpacing(2)
         self._ilay.addStretch()
         scroll.setWidget(self._inner)
         outer.addWidget(scroll)
+        self._main_viewport_filter = _StatsPanelViewportFilter(self)
+        scroll.viewport().installEventFilter(self._main_viewport_filter)
         self._apply_panel_theme()
 
-        exp_row = QHBoxLayout()
+        exp_row = QVBoxLayout()
         exp_row.setContentsMargins(8, 6, 8, 8)
-        exp_row.setSpacing(8)
+        exp_row.setSpacing(4)
         self._btn_export_csv = QPushButton("Export CSV")
         self._btn_export_csv.clicked.connect(self._export_csv)
         self._btn_export_csv.setEnabled(False)
@@ -13070,10 +13397,15 @@ class _StatsPanel(QWidget):
             "Compare summary, top tasks, and core migrations between two open trace tabs")
         self._btn_compare_mig.setEnabled(False)
         exp_row.addWidget(self._btn_compare_mig)
+        for btn in (self._btn_export_csv, self._btn_export_html, self._btn_compare_mig):
+            btn.setMinimumWidth(0)
+            btn.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         outer.addLayout(exp_row)
 
     def _clear(self) -> None:
         self._table_grips.clear()
+        self._util_scroll_areas.clear()
+        self._util_scroll_filters.clear()
         self._section_headers.clear()
         self._section_bodies.clear()
         self._section_populate.clear()
@@ -13097,7 +13429,7 @@ class _StatsPanel(QWidget):
     def _apply_table_display_height(self, table: QTableWidget, h: int) -> int:
         """Set an explicit pixel height so drag-resize is visible (scroll inside table)."""
         h = max(_StatsSectionGrip._MIN_H, min(_StatsSectionGrip._MAX_H, int(h)))
-        table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         table.setMinimumHeight(h)
         table.setMaximumHeight(h)
         table.updateGeometry()
@@ -13116,9 +13448,37 @@ class _StatsPanel(QWidget):
         vp.installEventFilter(filt)
         table._body_cursor_filter = filt  # prevent GC
 
+    def relax_content_width(self) -> None:
+        """Let the dock shrink below a previously expanded content width."""
+        _relax_widget_tree(self)
+        if self._inner is not None:
+            _relax_widget_tree(self._inner)
+        for table in self.findChildren(QTableWidget):
+            table.setMinimumWidth(0)
+            hdr = table.horizontalHeader()
+            if hdr.stretchLastSection():
+                hdr.setStretchLastSection(False)
+                table.resizeColumnsToContents()
+            for c in range(table.columnCount()):
+                hdr.setSectionResizeMode(c, QHeaderView.ResizeMode.Fixed)
+
+    @staticmethod
+    def _fix_stats_table_column_widths(table: QTableWidget) -> None:
+        """Keep table columns content-sized so widening the dock does not latch min width."""
+        if table.columnCount() <= 0:
+            return
+        hdr = table.horizontalHeader()
+        hdr.setStretchLastSection(False)
+        table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        table.setMinimumWidth(0)
+        table.resizeColumnsToContents()
+        for c in range(table.columnCount()):
+            hdr.setSectionResizeMode(c, QHeaderView.ResizeMode.Fixed)
+
     def _wrap_table_with_resizer(self, lay: QVBoxLayout, table: QTableWidget,
                                  section_id: str) -> None:
         """Add *table* plus a drag grip; height is stored in *_section_table_heights*."""
+        self._fix_stats_table_column_widths(table)
         default_h = (STATS_TABLE_MIG_DEFAULT_H if section_id == "migrations"
                      else STATS_TABLE_DEFAULT_H)
         h = self._section_table_heights.get(section_id, default_h)
@@ -13202,6 +13562,78 @@ class _StatsPanel(QWidget):
         )
         return QBrush(bg)
 
+    def _compute_util_label_col_width(self, labels: List[str]) -> int:
+        """Widest util label (capped); shared by core and task rows for bar alignment."""
+        if not labels:
+            return STATS_UTIL_LABEL_W
+        fm = QFontMetrics(self.font())
+        max_w = STATS_UTIL_LABEL_MIN_W
+        for text in labels:
+            max_w = max(max_w, fm.horizontalAdvance(text) + 6)
+        return min(STATS_UTIL_LABEL_W, max_w)
+
+    def _pin_main_inner_width(self) -> None:
+        vw = self._scroll.viewport().width()
+        if vw > 0:
+            self._inner.setMaximumWidth(vw)
+            self._inner.setMinimumWidth(0)
+
+    def _util_row_budget_width(self) -> int:
+        """Pixel width available for one util row (label + bar + %)."""
+        budgets: List[int] = []
+        for scroll in self._util_scroll_areas:
+            vw = scroll.viewport().width()
+            if vw > 0:
+                budgets.append(vw)
+        if budgets:
+            return min(budgets)
+        main_scroll = getattr(self, "_scroll", None)
+        if main_scroll is not None:
+            mvw = main_scroll.viewport().width()
+            if mvw > 0:
+                return max(0, mvw - 16)
+        pw = self.width()
+        if pw > 0:
+            return max(0, pw - 16)
+        return 0
+
+    def _pin_util_scroll_widths(self) -> None:
+        for filt in self._util_scroll_filters:
+            filt.pin_inner_width()
+
+    def _resolve_util_label_width(self, natural_w: int) -> int:
+        """Fit the shared label column and bar into the current row budget."""
+        budget = self._util_row_budget_width()
+        if budget <= 0:
+            return min(natural_w, STATS_UTIL_LABEL_W)
+        overhead = STATS_UTIL_PCT_W + 6 * 2
+        max_label = budget - overhead - STATS_UTIL_BAR_MIN_W
+        max_label = max(STATS_UTIL_LABEL_MIN_W, max_label)
+        return max(STATS_UTIL_LABEL_MIN_W,
+                   min(natural_w, STATS_UTIL_LABEL_W, max_label))
+
+    def sync_util_layout(self) -> None:
+        """Reflow util rows after the stats dock / panel width changes."""
+        self._pin_main_inner_width()
+        self._pin_util_scroll_widths()
+        self._sync_util_label_column_width()
+
+    def _sync_util_label_column_width(self) -> None:
+        col_w = self._resolve_util_label_width(self._util_label_col_natural)
+        if col_w == self._util_label_col_w:
+            return
+        self._util_label_col_w = col_w
+        for lbl in self.findChildren(_ElidedUtilLabel):
+            lbl.set_column_width(col_w)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self.sync_util_layout()
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        QTimer.singleShot(0, self.sync_util_layout)
+
     def _lbl(self, text: str, color: str = "", bold: bool = False,
               ui_fs: str = "") -> QLabel:
         w = QLabel(text)
@@ -13215,35 +13647,53 @@ class _StatsPanel(QWidget):
         w.setStyleSheet(" ".join(parts))
         return w
 
+    @staticmethod
+    def _tick_mode_badge_style(is_dark: bool, is_tickless: bool, ui_fs: str) -> str:
+        """TICK / TICKLESS badge colours (readable in dark and light themes)."""
+        if is_tickless:
+            fg, border = "#FFB74D", "#FFB74D"
+            bg = "#3A2E15" if is_dark else "#FFF4E5"
+        else:
+            fg, border = "#64B5F6", "#64B5F6"
+            bg = "#162336" if is_dark else "#E8F4FC"
+        return (
+            f"font-weight:bold; font-size:{ui_fs}; color:{fg};"
+            f" border:1px solid {border}; background:{bg};"
+            f" border-radius:3px; padding:0 4px;"
+        )
+
     def _add_utilisation_row(self, blay: QVBoxLayout, ui_fs: str,
                              label: str, pct: float, *,
                              chunk_color: str, pct_color: str,
-                             label_min_width: int = 72,
                              on_click=None, click_tip: str = "") -> None:
         """Add a core/task CPU bar row (progress bar + %), with hover highlight."""
         row = _StatsHoverRow(self._is_dark, on_click=on_click)
         row.setFixedHeight(STATS_UTIL_ROW_H)
+        row.setMinimumWidth(0)
+        row.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         hlay = QHBoxLayout(row)
         hlay.setContentsMargins(0, 0, 0, 0)
         hlay.setSpacing(6)
-        hlay.setAlignment(Qt.AlignVCenter)
+        hlay.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
-        label_w = max(label_min_width, STATS_UTIL_LABEL_W)
-        name_lbl = self._lbl(label, ui_fs=ui_fs)
-        _fm = name_lbl.fontMetrics()
-        name_lbl.setText(_fm.elidedText(label, Qt.ElideRight, label_w - 4))
-        name_lbl.setFixedWidth(label_w)
+        name_lbl = _ElidedUtilLabel(label, column_width=self._util_label_col_w)
+        _fg = "#D4D4D4" if self._is_dark else "#1E1E1E"
+        _style = f"color:{_fg}; background:transparent;"
+        if ui_fs:
+            _style += f" font-size:{ui_fs};"
+        name_lbl.setStyleSheet(_style)
         if click_tip:
             name_lbl.setToolTip(click_tip)
-        hlay.addWidget(name_lbl)
-        row.track_widget(name_lbl)
+        hlay.addWidget(name_lbl, 0)
 
         pbar = QProgressBar()
         pbar.setRange(0, 1000)
         pbar.setValue(int(round(max(0.0, min(100.0, pct)) * 10.0)))
         pbar.setTextVisible(False)
         pbar.setFixedHeight(STATS_UTIL_BAR_H)
-        pbar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        pbar.setMinimumWidth(0)
+        pbar.setMaximumWidth(16777215)
+        pbar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         pbar.setStyleSheet(f"""
             QProgressBar {{
                 border: 1px solid #888888;
@@ -13262,29 +13712,42 @@ class _StatsPanel(QWidget):
 
         pct_lbl = self._lbl(f"{pct:.1f}%", color=pct_color, ui_fs=ui_fs)
         pct_lbl.setFixedWidth(STATS_UTIL_PCT_W)
-        pct_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        hlay.addWidget(pct_lbl)
+        pct_lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        hlay.addWidget(pct_lbl, 0)
+        row.track_widget(name_lbl)
         row.track_widget(pct_lbl)
+        hlay.setStretch(0, 0)
+        hlay.setStretch(1, 1)
+        hlay.setStretch(2, 0)
 
         blay.addWidget(row)
 
     def _wrap_util_rows_scroll(self, blay: QVBoxLayout, inner: QWidget,
                               row_count: int) -> None:
         """Scroll utilisation rows vertically when there are more than 8."""
+        inner.setMinimumWidth(0)
+        inner.setMaximumWidth(16777215)
+        inner.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         scroll = QScrollArea()
         scroll.setWidget(inner)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setVerticalScrollBarPolicy(
-            Qt.ScrollBarAsNeeded if row_count > STATS_MAX_VISIBLE_ROWS
-            else Qt.ScrollBarAlwaysOff)
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded if row_count > STATS_MAX_VISIBLE_ROWS
+            else Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         vis = min(max(row_count, 1), STATS_MAX_VISIBLE_ROWS)
         scroll_h = (vis * STATS_UTIL_ROW_H
                     + max(0, vis - 1) * STATS_UTIL_ROW_GAP + 2)
         scroll.setFixedHeight(scroll_h)
-        scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        filt = _UtilScrollResizeFilter(self, scroll, inner)
+        scroll.viewport().installEventFilter(filt)
+        self._util_scroll_filters.append(filt)
+        self._util_scroll_areas.append(scroll)
         blay.addWidget(scroll)
+        QTimer.singleShot(0, filt.pin_inner_width)
+        QTimer.singleShot(0, self.sync_util_layout)
 
     def rebuild_with_font(self, trace: "BtfTrace", ui_font_size: int) -> None:
         """Re-build using the given *ui_font_size* so labels pick it up."""
@@ -13656,7 +14119,7 @@ class _StatsPanel(QWidget):
         collapsed = self._section_collapsed.get(section_id, False)
         hdr = QPushButton(title)
         hdr.setFlat(True)
-        hdr.setCursor(Qt.PointingHandCursor)
+        hdr.setCursor(Qt.CursorShape.PointingHandCursor)
         hdr.setIcon(_stats_chevron_icon(collapsed, self._is_dark))
         hdr.setIconSize(QSize(10, 10))
         hdr.setStyleSheet(
@@ -13980,23 +14443,23 @@ class _StatsPanel(QWidget):
                        else ["Task", count_header, "Min", "Avg", "Max", "p95"])
         table = QTableWidget(len(rows), cols)
         table.setHorizontalHeaderLabels(headers)
-        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        table.setSelectionMode(QAbstractItemView.NoSelection)
-        table.setFocusPolicy(Qt.NoFocus)
+        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         table.verticalHeader().setVisible(False)
         table.horizontalHeader().setStretchLastSection(migrations)
         table.setShowGrid(False)
         table.setFrameShape(QFrame.NoFrame)
         table.verticalHeader().setDefaultSectionSize(STATS_TABLE_ROW_H)
         table.verticalHeader().setMinimumSectionSize(STATS_TABLE_ROW_H)
-        table.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
+        table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
         table.horizontalHeader().setFixedHeight(18)
         table.horizontalHeader().setSectionsClickable(True)
         table.horizontalHeader().setSortIndicatorShown(True)
         if migrations:
-            table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-            table.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-            table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         _default_bg = self._apply_stats_table_theme(table, ui_fs)
 
         _min_col = 3 if include_cpu else 2
@@ -14063,15 +14526,15 @@ class _StatsPanel(QWidget):
                 item.setBackground(_default_bg)
                 if migrations:
                     if c == 0:
-                        item.setData(Qt.UserRole, mk)
+                        item.setData(Qt.ItemDataRole.UserRole, mk)
                 elif c == 0:
-                    item.setData(Qt.UserRole, mk_r)
+                    item.setData(Qt.ItemDataRole.UserRole, mk_r)
                     tip = (f"{_row_tip} for {name}"
                            if on_row_click is not None else str(name))
                     item.setToolTip(tip)
-                    item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
                 else:
-                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 if not migrations:
                     if c == _min_col and on_min_click is not None:
                         item.setToolTip(f"Click to jump to shortest slice for {name}")
@@ -14091,8 +14554,8 @@ class _StatsPanel(QWidget):
             table.horizontalHeader().setStretchLastSection(False)
             p95_col = 6 if include_cpu else 5
             table.setColumnWidth(p95_col, min(table.columnWidth(p95_col), 76))
-            table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-            table.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         table.setAlternatingRowColors(False)
         table.setShowGrid(False)
 
@@ -14101,14 +14564,14 @@ class _StatsPanel(QWidget):
                 def _cell_clicked_mig(_row: int, _col: int) -> None:
                     item = table.item(_row, 0)
                     if item is not None and on_row_click is not None:
-                        on_row_click(item.data(Qt.UserRole))
+                        on_row_click(item.data(Qt.ItemDataRole.UserRole))
                 table.cellClicked.connect(_cell_clicked_mig)
             else:
                 def _cell_clicked(r: int, c: int) -> None:
                     item = table.item(r, 0)
                     if item is None:
                         return
-                    mk = item.data(Qt.UserRole)
+                    mk = item.data(Qt.ItemDataRole.UserRole)
                     if mk is None:
                         return
                     if on_min_click is not None and c == _min_col:
@@ -14153,22 +14616,22 @@ class _StatsPanel(QWidget):
         cols = len(headers)
         table = QTableWidget(len(rows), cols)
         table.setHorizontalHeaderLabels(headers)
-        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        table.setSelectionMode(QAbstractItemView.NoSelection)
-        table.setFocusPolicy(Qt.NoFocus)
+        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         table.verticalHeader().setVisible(False)
         table.horizontalHeader().setStretchLastSection(True)
         table.setShowGrid(False)
         table.setFrameShape(QFrame.NoFrame)
         table.verticalHeader().setDefaultSectionSize(STATS_TABLE_ROW_H)
         table.verticalHeader().setMinimumSectionSize(STATS_TABLE_ROW_H)
-        table.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
+        table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
         table.horizontalHeader().setFixedHeight(18)
         table.horizontalHeader().setSectionsClickable(True)
         table.horizontalHeader().setSortIndicatorShown(True)
-        table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        table.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         _default_bg = self._apply_stats_table_theme(table, ui_fs)
         _hover_bg = QBrush(QColor("#3A3A50") if self._is_dark else QColor("#E0E0EC"))
@@ -14207,15 +14670,15 @@ class _StatsPanel(QWidget):
                 item = _StatsSortItem(v, sort_keys[c])
                 item.setBackground(_default_bg)
                 if c == 0:
-                    item.setData(Qt.UserRole, mk)
-                    item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+                    item.setData(Qt.ItemDataRole.UserRole, mk)
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
                     item.setToolTip("Click to view preemption distribution chart")
                 elif c == 1:
-                    item.setData(Qt.UserRole, preemptor)
-                    item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+                    item.setData(Qt.ItemDataRole.UserRole, preemptor)
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
                     item.setToolTip("Click to view preemption distribution chart")
                 else:
-                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 table.setItem(r, c, item)
 
         table.setAlternatingRowColors(False)
@@ -14229,9 +14692,9 @@ class _StatsPanel(QWidget):
                 mk_item = table.item(row, 0)
                 pre_item = table.item(row, 1)
                 if mk_item is not None and pre_item is not None:
-                    preemptor = pre_item.data(Qt.UserRole)
+                    preemptor = pre_item.data(Qt.ItemDataRole.UserRole)
                     if preemptor is not None:
-                        on_row_click(mk_item.data(Qt.UserRole), preemptor)
+                        on_row_click(mk_item.data(Qt.ItemDataRole.UserRole), preemptor)
             table.cellClicked.connect(_cell_clicked)
             self._wire_stats_table_click_cursor(table)
             table.cellEntered.connect(_set_hover)
@@ -14894,6 +15357,14 @@ class _StatsPanel(QWidget):
 
         _fs = f"{self._ui_font_size}pt"
 
+        _core_rows = self._core_util_rows(trace, lo, hi) if trace.core_names else []
+        _task_rows = self._task_cpu_rows(trace, lo=lo, hi=hi)
+        _util_labels = (
+            [f"  {core}:" for core, _ in _core_rows]
+            + [f"  {disp}" for _, disp, _ in _task_rows]
+        )
+        self._util_label_col_natural = self._compute_util_label_col_width(_util_labels)
+
         # -- Summary row ---------------------------------------------------
         self._ilay.addWidget(self._lbl(
             f"Span: {span_str}{scope}  |  Tasks: {task_count}  |  "
@@ -14924,14 +15395,12 @@ class _StatsPanel(QWidget):
                 ilay = QVBoxLayout(inner)
                 ilay.setContentsMargins(0, 0, 0, 0)
                 ilay.setSpacing(STATS_UTIL_ROW_GAP)
-                core_rows = self._core_util_rows(trace, lo, hi)
-                for core, pct in core_rows:
+                for core, pct in _core_rows:
                     self._add_utilisation_row(
                         ilay, _fs, f"  {core}:", pct,
                         chunk_color="#5FCF6F", pct_color="#77BB77",
-                        label_min_width=72,
                     )
-                self._wrap_util_rows_scroll(blay, inner, len(core_rows))
+                self._wrap_util_rows_scroll(blay, inner, len(_core_rows))
 
             self._add_collapsible_section(
                 "cores",
@@ -14942,23 +15411,21 @@ class _StatsPanel(QWidget):
 
         # -- Top tasks by CPU time (excl. IDLE, top 10) -------------------
         def _populate_tasks(blay: QVBoxLayout) -> None:
-            task_rows = self._task_cpu_rows(trace, lo=lo, hi=hi)
-            if not task_rows:
+            if not _task_rows:
                 blay.addWidget(self._lbl("No user tasks found", color="#888888", ui_fs=_fs))
                 return
             inner = QWidget()
             ilay = QVBoxLayout(inner)
             ilay.setContentsMargins(0, 0, 0, 0)
             ilay.setSpacing(STATS_UTIL_ROW_GAP)
-            for mk, disp, pct in task_rows:
+            for mk, disp, pct in _task_rows:
                 self._add_utilisation_row(
                     ilay, _fs, f"  {disp}", pct,
                     chunk_color="#5B9BD5", pct_color="#6AAADD",
-                    label_min_width=100,
                     on_click=lambda key=mk: self.task_clicked.emit(key),
                     click_tip=f"Click to highlight \u2018{disp}\u2019 in the timeline",
                 )
-            self._wrap_util_rows_scroll(blay, inner, len(task_rows))
+            self._wrap_util_rows_scroll(blay, inner, len(_task_rows))
 
         self._add_collapsible_section(
             "tasks",
@@ -14978,7 +15445,6 @@ class _StatsPanel(QWidget):
 
             # --- health + mode badge row ---
             mode_label = "TICKLESS" if _tick["is_tickless"] else "TICK"
-            mode_color = "#FFB74D" if _tick["is_tickless"] else "#64B5F6"
             cv_pct = _tick["tick_cv"] * 100.0
             row_w = QWidget()
             row_lay = QHBoxLayout(row_w)
@@ -14991,7 +15457,7 @@ class _StatsPanel(QWidget):
                 color=colors.get(_tick["health"], "#888888"),
                 ui_fs=_fs,
             )
-            mode_badge = self._lbl(mode_label, color=mode_color, ui_fs=_fs)
+            mode_badge = QLabel(mode_label)
             mode_badge.setToolTip(
                 f"{'Tickless' if _tick['is_tickless'] else 'Tick'} mode detected "
                 f"(interval CV={cv_pct:.1f}%): "
@@ -14999,11 +15465,8 @@ class _StatsPanel(QWidget):
                    if _tick["is_tickless"]
                    else "tick intervals are constant.")
             )
-            _badge_bg = "#3A2E15" if _tick["is_tickless"] else "#162336"
             mode_badge.setStyleSheet(
-                f"font-weight:bold; border:1px solid {mode_color};"
-                f" background:{_badge_bg}; border-radius:3px; padding:0 4px;"
-            )
+                self._tick_mode_badge_style(self._is_dark, _tick["is_tickless"], _fs))
             row_lay.addWidget(health_lbl)
             row_lay.addWidget(mode_badge)
             row_lay.addStretch()
@@ -15018,7 +15481,7 @@ class _StatsPanel(QWidget):
                 hint_lay.addWidget(self._lbl(
                     "Tickless mode: tick intervals vary.", color="#888888", ui_fs=_fs))
                 dist_btn = QPushButton("Tick Distribution\u2026")
-                dist_btn.setCursor(Qt.PointingHandCursor)
+                dist_btn.setCursor(Qt.CursorShape.PointingHandCursor)
                 dist_btn.setFlat(True)
                 dist_btn.setStyleSheet(
                     f"font-size:{_fs}; border:1px solid #555; border-radius:3px;"
@@ -15037,21 +15500,21 @@ class _StatsPanel(QWidget):
                     color="#888888", ui_fs=_fs))
                 table = QTableWidget(len(_tick["large_gaps"]), 4)
                 table.setHorizontalHeaderLabels(["Start", "End", "Gap", "Missed"])
-                table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-                table.setSelectionMode(QAbstractItemView.NoSelection)
-                table.setFocusPolicy(Qt.NoFocus)
+                table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+                table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+                table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
                 table.verticalHeader().setVisible(False)
                 table.horizontalHeader().setStretchLastSection(False)
                 table.setShowGrid(False)
                 table.setFrameShape(QFrame.NoFrame)
                 table.verticalHeader().setDefaultSectionSize(STATS_TABLE_ROW_H)
                 table.verticalHeader().setMinimumSectionSize(STATS_TABLE_ROW_H)
-                table.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
+                table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
                 table.horizontalHeader().setFixedHeight(18)
                 table.horizontalHeader().setSectionsClickable(True)
                 table.horizontalHeader().setSortIndicatorShown(True)
-                table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-                table.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+                table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+                table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
                 _item_bg = self._apply_stats_table_theme(table, _fs)
                 for r, (start, end, dur, missed) in enumerate(_tick["large_gaps"]):
                     keys = (start, end, dur, missed)
@@ -15063,7 +15526,7 @@ class _StatsPanel(QWidget):
                     )):
                         item = _StatsSortItem(val, keys[c])
                         item.setBackground(_item_bg)
-                        item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                        item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                         table.setItem(r, c, item)
                 table.setAlternatingRowColors(False)
                 table.setWordWrap(False)
@@ -15230,9 +15693,9 @@ class _StatsPanel(QWidget):
                     headers = ["Task", "Base", "Peak", "Boosts", "Boosted", "Pattern"]
                     table = QTableWidget(len(_priority_rows), len(headers))
                     table.setHorizontalHeaderLabels(headers)
-                    table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-                    table.setSelectionMode(QAbstractItemView.NoSelection)
-                    table.setFocusPolicy(Qt.NoFocus)
+                    table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+                    table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+                    table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
                     table.verticalHeader().setVisible(False)
                     table.horizontalHeader().setStretchLastSection(True)
                     table.setShowGrid(False)
@@ -15249,9 +15712,9 @@ class _StatsPanel(QWidget):
                         ]
                         for ci, val in enumerate(vals):
                             item = _StatsSortItem(val, sort_keys[ci])
-                            item.setFlags(Qt.ItemIsEnabled)
+                            item.setFlags(Qt.ItemFlag.ItemIsEnabled)
                             if ci == 0:
-                                item.setData(Qt.UserRole, mk)
+                                item.setData(Qt.ItemDataRole.UserRole, mk)
                             if ci == 5 and "L/M/H" in pattern:
                                 item.setForeground(QBrush(QColor("#E74C3C")))
                             table.setItem(ri, ci, item)
@@ -15261,7 +15724,7 @@ class _StatsPanel(QWidget):
                         item = table.item(row, 0)
                         if item is None:
                             return
-                        mk = item.data(Qt.UserRole)
+                        mk = item.data(Qt.ItemDataRole.UserRole)
                         if mk:
                             self._open_priority_plot(trace, mk)
 
@@ -15303,9 +15766,9 @@ class _StatsPanel(QWidget):
                     headers = ["Object", "Kind", "Holds", "Issues", "Avg hold", "Status"]
                     table = QTableWidget(len(_sync_rows), len(headers))
                     table.setHorizontalHeaderLabels(headers)
-                    table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-                    table.setSelectionMode(QAbstractItemView.NoSelection)
-                    table.setFocusPolicy(Qt.NoFocus)
+                    table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+                    table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+                    table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
                     table.verticalHeader().setVisible(False)
                     table.horizontalHeader().setStretchLastSection(True)
                     table.setShowGrid(False)
@@ -15325,9 +15788,9 @@ class _StatsPanel(QWidget):
                         ]
                         for ci, val in enumerate(vals):
                             item = _StatsSortItem(val, sort_keys[ci])
-                            item.setFlags(Qt.ItemIsEnabled)
+                            item.setFlags(Qt.ItemFlag.ItemIsEnabled)
                             if ci == 0:
-                                item.setData(Qt.UserRole, _key)
+                                item.setData(Qt.ItemDataRole.UserRole, _key)
                             if ci == 5 and status != "ok":
                                 color = "#E74C3C" if status == "error" else "#F39C12"
                                 item.setForeground(QBrush(QColor(color)))
@@ -15339,9 +15802,9 @@ class _StatsPanel(QWidget):
                         issue_headers = ["Time", "Object", "Issue", "Detail", "Task", "Core"]
                         itable = QTableWidget(len(_sync_issues_scoped), len(issue_headers))
                         itable.setHorizontalHeaderLabels(issue_headers)
-                        itable.setEditTriggers(QAbstractItemView.NoEditTriggers)
-                        itable.setSelectionMode(QAbstractItemView.NoSelection)
-                        itable.setFocusPolicy(Qt.NoFocus)
+                        itable.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+                        itable.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+                        itable.setFocusPolicy(Qt.FocusPolicy.NoFocus)
                         itable.verticalHeader().setVisible(False)
                         itable.horizontalHeader().setStretchLastSection(True)
                         itable.setShowGrid(False)
@@ -15355,7 +15818,7 @@ class _StatsPanel(QWidget):
                             item = itable.item(row, 0)
                             if item is None:
                                 return
-                            iss = item.data(Qt.UserRole)
+                            iss = item.data(Qt.ItemDataRole.UserRole)
                             if iss is None:
                                 return
                             payload = SyncIssueRef(
@@ -15392,10 +15855,10 @@ class _StatsPanel(QWidget):
                                    f"{_format_time(iss['time_ns'], trace.time_scale)}")
                             for ci, val in enumerate(vals):
                                 item = _StatsSortItem(val, sort_keys[ci])
-                                item.setFlags(Qt.ItemIsEnabled)
+                                item.setFlags(Qt.ItemFlag.ItemIsEnabled)
                                 item.setToolTip(tip)
                                 if ci == 0:
-                                    item.setData(Qt.UserRole, iss)
+                                    item.setData(Qt.ItemDataRole.UserRole, iss)
                                 if ci == 2:
                                     sev = iss.get("severity", "")
                                     if sev == "error":
@@ -15438,6 +15901,12 @@ class _StatsPanel(QWidget):
         )
 
         self._ilay.addStretch()
+        self.relax_content_width()
+        self._util_label_col_w = self._resolve_util_label_width(
+            self._util_label_col_natural)
+        for lbl in self.findChildren(_ElidedUtilLabel):
+            lbl.set_column_width(self._util_label_col_w)
+        QTimer.singleShot(0, self.sync_util_layout)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -15530,7 +15999,7 @@ class _WheelSpinBox(QSpinBox):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFocusPolicy(Qt.StrongFocus)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
     def wheelEvent(self, event) -> None:
         # Always handle the wheel regardless of focus state
@@ -15715,7 +16184,7 @@ class _AboutDialog(QDialog):
     """Modern About dialog - app icon header, theme-aware, quick-reference table."""
 
     def __init__(self, parent, *, is_dark: bool):
-        super().__init__(parent, Qt.Dialog)
+        super().__init__(parent, Qt.WindowType.Dialog)
         self.setWindowTitle("About RTOS BTF Viewer")
         self.setModal(True)
         self.setMinimumWidth(380)
@@ -15742,24 +16211,24 @@ class _AboutDialog(QDialog):
         hdr = QWidget()
         hdr.setObjectName("about_hdr")
         hv = QVBoxLayout(hdr)
-        hv.setAlignment(Qt.AlignHCenter)
+        hv.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         hv.setContentsMargins(24, 28, 24, 22)
         hv.setSpacing(8)
 
         icon_lbl = QLabel()
-        icon_lbl.setAlignment(Qt.AlignHCenter)
+        icon_lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         _pm = QPixmap()
         _pm.loadFromData(QByteArray(_APP_ICON_SVG.encode()), "SVG")
         icon_lbl.setPixmap(_pm)
         hv.addWidget(icon_lbl)
 
         name_lbl = QLabel("RTOS BTF Viewer")
-        name_lbl.setAlignment(Qt.AlignHCenter)
+        name_lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         name_lbl.setObjectName("about_title")
         hv.addWidget(name_lbl)
 
         sub_lbl = QLabel(f"RTOS context-switch timeline visualiser  *  v{_APP_VERSION}")
-        sub_lbl.setAlignment(Qt.AlignHCenter)
+        sub_lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         sub_lbl.setObjectName("about_sub")
         hv.addWidget(sub_lbl)
         root.addWidget(hdr)
@@ -15795,7 +16264,7 @@ class _AboutDialog(QDialog):
                 kl = QLabel(k); kl.setObjectName("about_key")
                 vl = QLabel(v); vl.setObjectName("about_body")
                 vl.setWordWrap(True)
-                g.addWidget(kl, r, 0, Qt.AlignTop)
+                g.addWidget(kl, r, 0, Qt.AlignmentFlag.AlignTop)
                 g.addWidget(vl, r, 1)
             return w
 
@@ -15823,7 +16292,7 @@ class _AboutDialog(QDialog):
         iv.addWidget(_block("Application", [
             ("Product",   "RTOS BTF Viewer"),
             ("Purpose",   "Interactive viewer for Best Trace Format (.btf) RTOS scheduling traces"),
-            ("Runtime",   f"Python {sys.version_info.major}.{sys.version_info.minor}  *  PyQt5 desktop application"),
+            ("Runtime",   f"Python {sys.version_info.major}.{sys.version_info.minor}  *  PySide6 desktop application"),
         ]))
         iv.addWidget(_block("License", [
             ("License",   "MIT License"),
@@ -15895,7 +16364,7 @@ class _SettingsDialog(QDialog):
 
     # Emitted whenever any control value changes so _open_settings can
     # apply a live preview while the dialog is still open.
-    live_preview = pyqtSignal()
+    live_preview = Signal()
 
     def _schedule_live_preview(self, *_args) -> None:
         """Coalesce rapid control changes and defer preview to next UI turn."""
@@ -16047,7 +16516,7 @@ class _SettingsDialog(QDialog):
                  cpu_load_row_h: int = CPU_LOAD_ROW_H,
                  cpu_load: bool = True,
                  colorblind_safe: bool = False):
-        super().__init__(parent, Qt.Dialog)
+        super().__init__(parent, Qt.WindowType.Dialog)
         self.setWindowTitle("Settings")
         self.setModal(True)
         self.setMinimumSize(580, 360)
@@ -16084,12 +16553,12 @@ class _SettingsDialog(QDialog):
         self._sidebar = QListWidget()
         self._sidebar.setFixedWidth(140)
         self._sidebar.setFont(_dlg_font)   # explicit - CSS font-size is ignored by macOS native item delegate
-        self._sidebar.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self._sidebar.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._sidebar.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._sidebar.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         _item_h = max(36, int(ui_font_size * 2.6))   # scale row height with font
         for _name in ("Appearance", "Display", "Layout"):
             _item = QListWidgetItem(_name)
-            _item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            _item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             _item.setSizeHint(QSize(140, _item_h))
             self._sidebar.addItem(_item)
         self._sidebar.setCurrentRow(0)
@@ -16113,7 +16582,7 @@ class _SettingsDialog(QDialog):
 
         def _form(page: QWidget) -> QFormLayout:
             f = QFormLayout(page)
-            f.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            f.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             f.setContentsMargins(20, 16, 20, 12)
             f.setHorizontalSpacing(16)
             f.setVerticalSpacing(10)
@@ -16504,7 +16973,7 @@ class _AnnotationCanvas(QWidget):
         self._editor = editor
         self.setFixedSize(disp_w, disp_h)
         self.setMouseTracking(True)
-        self.setCursor(Qt.CrossCursor)
+        self.setCursor(Qt.CursorShape.CrossCursor)
 
     def paintEvent(self, event) -> None:  # noqa: N802
         ed = self._editor
@@ -16530,12 +16999,12 @@ class _AnnotationCanvas(QWidget):
         painter.end()
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
-        if event.button() != Qt.LeftButton:
+        if event.button() != Qt.MouseButton.LeftButton:
             return
         ed = self._editor
         if ed._text_edit_active() and ed._tool != 'text':
             ed._commit_text_edit()
-        x, y = ed._to_img(event.x(), event.y())
+        x, y = ed._to_img(event.position().x(), event.position().y())
         if ed._tool == 'text':
             hit = ed._hit_test(x, y)
             if hit >= 0 and ed._shapes[hit]['type'] == 'text':
@@ -16558,7 +17027,7 @@ class _AnnotationCanvas(QWidget):
             # Try to pick up an existing shape for dragging
             hit = ed._hit_test(x, y)
             if hit >= 0:
-                if bool(event.modifiers() & Qt.ControlModifier):
+                if bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier):
                     new_idx = ed._duplicate_shape(hit)
                     ed._selected_idx = new_idx
                     ed._sync_dash_from_shape(new_idx)
@@ -16567,7 +17036,7 @@ class _AnnotationCanvas(QWidget):
                     ed._drag_mode = 'move'
                     ed._drag_handle = ''
                     ed._drag_anchor = None
-                    self.setCursor(Qt.SizeAllCursor)
+                    self.setCursor(Qt.CursorShape.SizeAllCursor)
                     self.update()
                     return
                 ed._selected_idx = hit
@@ -16577,7 +17046,7 @@ class _AnnotationCanvas(QWidget):
                 ed._drag_mode = 'move'
                 ed._drag_handle = ''
                 ed._drag_anchor = None
-                self.setCursor(Qt.SizeAllCursor)
+                self.setCursor(Qt.CursorShape.SizeAllCursor)
                 self.update()
             else:
                 ed._selected_idx = -1
@@ -16593,9 +17062,9 @@ class _AnnotationCanvas(QWidget):
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802
         ed = self._editor
-        x, y = ed._to_img(event.x(), event.y())
+        x, y = ed._to_img(event.position().x(), event.position().y())
         if ed._drag_mode == 'handle' and ed._drag_idx >= 0 and ed._drag_handle:
-            force = bool(event.modifiers() & Qt.ShiftModifier)
+            force = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
             ed._resize_shape_by_handle(ed._drag_idx, ed._drag_handle, x, y, force)
             self.update()
         elif ed._drag_mode == 'move' and ed._drag_idx >= 0:
@@ -16607,12 +17076,12 @@ class _AnnotationCanvas(QWidget):
         elif ed._drawing is not None:
             d = ed._drawing
             if d['type'] in SnapshotEditorDialog._LINE_TOOLS:
-                force = bool(event.modifiers() & Qt.ShiftModifier)
+                force = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
                 d['x2'], d['y2'] = _snap_line_end(d['x1'], d['y1'], x, y, force)
             else:
                 d['x2'] = x;  d['y2'] = y
                 x1 = d['x1']; y1 = d['y1']
-                if bool(event.modifiers() & Qt.ShiftModifier):
+                if bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier):
                     box = _constrain_box(x1, y1, x, y)
                     d['x'] = box['x'];  d['y'] = box['y']
                     d['w'] = box['w'];  d['h'] = box['h']
@@ -16629,10 +17098,10 @@ class _AnnotationCanvas(QWidget):
                 return
             hit = ed._hit_test(x, y)
             ed._hover_idx = hit
-            self.setCursor(Qt.SizeAllCursor if hit >= 0 else Qt.CrossCursor)
+            self.setCursor(Qt.CursorShape.SizeAllCursor if hit >= 0 else Qt.CursorShape.CrossCursor)
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
-        if event.button() != Qt.LeftButton:
+        if event.button() != Qt.MouseButton.LeftButton:
             return
         ed = self._editor
         if ed._drag_mode in ('move', 'handle') and ed._drag_idx >= 0:
@@ -16640,18 +17109,18 @@ class _AnnotationCanvas(QWidget):
             ed._drag_mode = 'none'
             ed._drag_handle = ''
             ed._drag_anchor = None
-            self.setCursor(Qt.SizeAllCursor if ed._selected_idx >= 0 else Qt.CrossCursor)
+            self.setCursor(Qt.CursorShape.SizeAllCursor if ed._selected_idx >= 0 else Qt.CursorShape.CrossCursor)
             self.update()
         elif ed._drawing is not None:
-            x, y = ed._to_img(event.x(), event.y())
+            x, y = ed._to_img(event.position().x(), event.position().y())
             d = ed._drawing
             if d['type'] in SnapshotEditorDialog._LINE_TOOLS:
-                force = bool(event.modifiers() & Qt.ShiftModifier)
+                force = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
                 d['x2'], d['y2'] = _snap_line_end(d['x1'], d['y1'], x, y, force)
             else:
                 d['x2'] = x;  d['y2'] = y
                 x1 = d['x1']; y1 = d['y1']
-                if bool(event.modifiers() & Qt.ShiftModifier):
+                if bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier):
                     box = _constrain_box(x1, y1, x, y)
                     d['x'] = box['x'];  d['y'] = box['y']
                     d['w'] = box['w'];  d['h'] = box['h']
@@ -16676,9 +17145,9 @@ class _AnnotationCanvas(QWidget):
             event.accept()
             return
 
-        from PyQt5.QtWidgets import QColorDialog, QMenu
+        from PySide6.QtWidgets import QColorDialog, QMenu
         ed = self._editor
-        x, y = ed._to_img(event.x(), event.y())
+        x, y = ed._to_img(event.position().x(), event.position().y())
         idx = ed._hit_test(x, y)
         if idx < 0:
             return
@@ -16700,7 +17169,7 @@ class _AnnotationCanvas(QWidget):
         act_edit_text = menu.addAction("Edit Text...") if is_text else menu.addAction("Edit Label...")
         act_font_size = menu.addAction("Change Font Size...") if is_text else None
 
-        chosen = menu.exec_(event.globalPos())
+        chosen = menu.exec(event.globalPos())
 
         if chosen is None or chosen == act_delete:
             if chosen == act_delete:
@@ -16747,10 +17216,10 @@ class _AnnotationCanvas(QWidget):
         QTimer.singleShot(0, _open_dialog)
 
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
-        if event.button() != Qt.LeftButton:
+        if event.button() != Qt.MouseButton.LeftButton:
             return
         ed = self._editor
-        x, y = ed._to_img(event.x(), event.y())
+        x, y = ed._to_img(event.position().x(), event.position().y())
         idx = ed._hit_test(x, y)
         if idx < 0:
             return
@@ -16794,16 +17263,16 @@ class SnapshotEditorDialog(QDialog):
     @staticmethod
     def _make_svg_icon(svg_bytes: bytes, color: str = '#b0b0cc', size: int = 16) -> 'QIcon':
         """Render SVG bytes (with `currentColor`) to a QIcon pair (normal + checked)."""
-        from PyQt5.QtSvg import QSvgRenderer
-        from PyQt5.QtGui import QIcon, QPixmap
-        from PyQt5.QtCore import Qt
+        from PySide6.QtSvg import QSvgRenderer
+        from PySide6.QtGui import QIcon, QPixmap
+        from PySide6.QtCore import Qt
 
         def _render(stroke: str) -> QPixmap:
             data = svg_bytes.replace(b'currentColor', stroke.encode())
             renderer = QSvgRenderer(data)
             pm = QPixmap(size, size)
-            pm.fill(Qt.transparent)
-            from PyQt5.QtGui import QPainter
+            pm.fill(Qt.GlobalColor.transparent)
+            from PySide6.QtGui import QPainter
             p = QPainter(pm)
             try:
                 renderer.render(p)
@@ -16937,7 +17406,7 @@ class SnapshotEditorDialog(QDialog):
 
         # ---- Canvas in a scroll area ----
         self._canvas = _AnnotationCanvas(self, self._disp_w, self._disp_h)
-        self._canvas.setFocusPolicy(Qt.ClickFocus)
+        self._canvas.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         scroll = QScrollArea()
         scroll.setWidget(self._canvas)
         scroll.setWidgetResizable(False)
@@ -16999,7 +17468,7 @@ class SnapshotEditorDialog(QDialog):
         self._dash_cb.blockSignals(False)
 
     def _pick_color(self) -> None:
-        from PyQt5.QtWidgets import QColorDialog  # always available, import locally
+        from PySide6.QtWidgets import QColorDialog  # always available, import locally
         color = QColorDialog.getColor(self._color, self, "Pick Colour")
         if color.isValid():
             self._color = color
@@ -17015,10 +17484,10 @@ class SnapshotEditorDialog(QDialog):
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
         if obj is self._text_input:
-            if event.type() == QEvent.KeyPress and event.key() == Qt.Key_Escape:
+            if event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Escape:
                 self._cancel_text_edit()
                 return True
-            if event.type() == QEvent.FocusOut:
+            if event.type() == QEvent.Type.FocusOut:
                 QTimer.singleShot(0, self._deferred_commit_text_edit)
         return super().eventFilter(obj, event)
 
@@ -17030,7 +17499,7 @@ class SnapshotEditorDialog(QDialog):
         self._commit_text_edit()
 
     def keyPressEvent(self, event) -> None:  # noqa: N802
-        if event.key() == Qt.Key_Escape:
+        if event.key() == Qt.Key.Key_Escape:
             if self._text_edit_active():
                 self._cancel_text_edit()
             event.accept()
@@ -17164,7 +17633,7 @@ class SnapshotEditorDialog(QDialog):
         self._text_input.setText(initial)
         self._text_input.show()
         self._text_input.raise_()
-        self._text_input.setFocus(Qt.OtherFocusReason)
+        self._text_input.setFocus(Qt.FocusReason.OtherFocusReason)
         self._text_input.selectAll()
 
     def _begin_text_edit(
@@ -17342,14 +17811,14 @@ class SnapshotEditorDialog(QDialog):
 
     def _cursor_for_handle(self, handle: str):
         if handle in ('nw', 'se'):
-            return Qt.SizeFDiagCursor
+            return Qt.CursorShape.SizeFDiagCursor
         if handle in ('ne', 'sw'):
-            return Qt.SizeBDiagCursor
+            return Qt.CursorShape.SizeBDiagCursor
         if handle in ('n', 's'):
-            return Qt.SizeVerCursor
+            return Qt.CursorShape.SizeVerCursor
         if handle in ('e', 'w'):
-            return Qt.SizeHorCursor
-        return Qt.CrossCursor
+            return Qt.CursorShape.SizeHorCursor
+        return Qt.CursorShape.CrossCursor
 
     def _resize_shape_by_handle(self, idx: int, handle: str, x: float, y: float, force_snap: bool = False) -> None:
         s = self._shapes[idx]
@@ -17418,10 +17887,10 @@ class SnapshotEditorDialog(QDialog):
 
     def _paint_selection(self, painter: QPainter, shape: dict) -> None:
         x, y, w, h = self._shape_bounds(shape)
-        sel_pen = QPen(QColor('#50beff'), max(1.0, 1.5 / max(self._scale, 0.01)), Qt.DashLine)
+        sel_pen = QPen(QColor('#50beff'), max(1.0, 1.5 / max(self._scale, 0.01)), Qt.PenStyle.DashLine)
         sel_pen.setDashPattern([5.0 / max(self._scale, 0.01), 4.0 / max(self._scale, 0.01)])
         painter.setPen(sel_pen)
-        painter.setBrush(Qt.NoBrush)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRect(QRectF(x, y, max(1.0, w), max(1.0, h)))
 
         points = self._get_control_points(shape)
@@ -17447,14 +17916,14 @@ class SnapshotEditorDialog(QDialog):
         col: QColor,
         w: float,
         dashed: bool = False,
-        cap=Qt.RoundCap,
-        join=Qt.RoundJoin,
+        cap=Qt.PenCapStyle.RoundCap,
+        join=Qt.PenJoinStyle.RoundJoin,
     ) -> QPen:
         if dashed:
-            pen = QPen(col, w, Qt.CustomDashLine, cap, join)
+            pen = QPen(col, w, Qt.PenStyle.CustomDashLine, cap, join)
             pen.setDashPattern([20.0 / max(w, 1), 10.0 / max(w, 1)])
         else:
-            pen = QPen(col, w, Qt.SolidLine, cap, join)
+            pen = QPen(col, w, Qt.PenStyle.SolidLine, cap, join)
         return pen
 
     def _paint_shapes(
@@ -17476,7 +17945,7 @@ class SnapshotEditorDialog(QDialog):
             elif t == 'line' or t == 'dash':
                 dashed = self._shape_is_dashed(shape)
                 painter.setPen(self._stroke_pen(col, w, dashed))
-                painter.setBrush(Qt.NoBrush)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
                 self._draw_line_with_label_gap(
                     painter,
                     shape['x1'], shape['y1'], shape['x2'], shape['y2'],
@@ -17484,15 +17953,15 @@ class SnapshotEditorDialog(QDialog):
                 )
             elif t == 'rect':
                 dashed = self._shape_is_dashed(shape)
-                pen = self._stroke_pen(col, w, dashed, Qt.SquareCap, Qt.MiterJoin)
+                pen = self._stroke_pen(col, w, dashed, Qt.PenCapStyle.SquareCap, Qt.PenJoinStyle.MiterJoin)
                 painter.setPen(pen)
-                painter.setBrush(Qt.NoBrush)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
                 painter.drawRect(QRectF(shape['x'], shape['y'],
                                         shape['w'], shape['h']))
             elif t == 'circle':
                 dashed = self._shape_is_dashed(shape)
                 painter.setPen(self._stroke_pen(col, w, dashed))
-                painter.setBrush(Qt.NoBrush)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
                 painter.drawEllipse(QRectF(shape['x'], shape['y'],
                                            shape['w'], shape['h']))
             if t != 'text' and shape.get('label') and not self._is_editing_shape_label(shape):
@@ -17578,9 +18047,9 @@ class SnapshotEditorDialog(QDialog):
             stroke_w = 4 + extra_width * 2
             painter.strokePath(
                 path,
-                QPen(col, stroke_w, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+                QPen(col, stroke_w, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
         else:
-            painter.setPen(Qt.NoPen)
+            painter.setPen(Qt.PenStyle.NoPen)
             painter.fillPath(path, col)
         painter.restore()
 
@@ -17616,12 +18085,12 @@ class SnapshotEditorDialog(QDialog):
             tips = ((x2, y2, angle),)
 
         painter.setPen(self._stroke_pen(col, w, self._shape_is_dashed(shape)))
-        painter.setBrush(Qt.NoBrush)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
         self._draw_line_with_label_gap(
             painter, sx, sy, ex, ey, self._line_label_gap_half(shape))
 
         stroke_w = max(1, extra_width)
-        painter.setPen(QPen(col, stroke_w, Qt.SolidLine))
+        painter.setPen(QPen(col, stroke_w, Qt.PenStyle.SolidLine))
         painter.setBrush(QBrush(col))
         for tip_x, tip_y, ang in tips:
             tip = QPointF(tip_x, tip_y)
@@ -17650,10 +18119,10 @@ class SnapshotEditorDialog(QDialog):
             # Outline pass: stroke path with a wider pen (4 px -> 2 px halo each side)
             stroke_w = 4 + extra_width * 2
             painter.strokePath(path,
-                               QPen(col, stroke_w, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+                               QPen(col, stroke_w, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
         else:
             # Colour pass: fill the glyph path
-            painter.setPen(Qt.NoPen)
+            painter.setPen(Qt.PenStyle.NoPen)
             painter.fillPath(path, col)
 
     # ------------------------------------------------------------------
@@ -17712,7 +18181,7 @@ def _exec_centred(dlg, parent):
         max(0, pg.x() + (pg.width()  - w) // 2),
         max(0, pg.y() + (pg.height() - h) // 2),
     )
-    return dlg.exec_()
+    return dlg.exec()
 
 # ===========================================================================
 # CPU Load Graph
@@ -17757,7 +18226,7 @@ class _CpuLoadGraph(QWidget):
         self._font_size: int                                = 8
         self._hover_y: int                                  = -1
         self.setMinimumSize(40, 40)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         self.setMouseTracking(True)
         self._scroll_area: Optional["QScrollArea"] = None
         self.setToolTip(
@@ -18059,14 +18528,14 @@ class _CpuLoadGraph(QWidget):
         by = row_y + 2
         bg = QColor(40, 40, 40, 210) if dark else QColor(255, 255, 255, 230)
         fg = QColor("#FFFFFF") if dark else QColor("#111111")
-        painter.setPen(Qt.NoPen)
+        painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(bg)
         painter.drawRoundedRect(bx, by, tw, 12, 2, 2)
         painter.setPen(fg)
         sf = QFont(painter.font())
         sf.setPointSize(max(5, self._font_size - (1 if full else 2)))
         painter.setFont(sf)
-        painter.drawText(QRect(bx + 4, by, tw - 8, 12), Qt.AlignVCenter | Qt.AlignLeft, text)
+        painter.drawText(QRect(bx + 4, by, tw - 8, 12), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, text)
 
     def _visible_time_ns_range(self, scene) -> Tuple[int, int]:
         if self._trace is None:
@@ -18113,8 +18582,8 @@ class _CpuLoadGraph(QWidget):
     def _draw_time_overlay_line(self, painter: QPainter, scene, x: int,
                                 title_h: int, width_limit: int, color: QColor,
                                 dashed: bool = False, width: float = 1.0) -> None:
-        pen = QPen(color, width, Qt.DashLine if dashed else Qt.SolidLine)
-        if dashed and pen.style() == Qt.DashLine:
+        pen = QPen(color, width, Qt.PenStyle.DashLine if dashed else Qt.PenStyle.SolidLine)
+        if dashed and pen.style() == Qt.PenStyle.DashLine:
             pen.setDashPattern([3, 3])
         painter.setPen(pen)
         if scene._label_width <= x < width_limit:
@@ -18129,13 +18598,13 @@ class _CpuLoadGraph(QWidget):
         if not scene or not hasattr(scene, '_label_width'):
             super().mousePressEvent(event)
             return
-        if event.button() == Qt.LeftButton and self._trace and self._view_mode == "core":
-            if event.x() < scene._label_width:
+        if event.button() == Qt.MouseButton.LeftButton and self._trace and self._view_mode == "core":
+            if event.position().x() < scene._label_width:
                 _TITLE_H = 22
                 ry = _TITLE_H
                 for kind, key, _, _ in self._get_rows():
                     rh = self._row_effective_h(kind, key)
-                    if ry <= event.y() < ry + rh:
+                    if ry <= event.position().y() < ry + rh:
                         self.set_core_expanded(key, key in self._collapsed_cores)
                         event.accept()
                         return
@@ -18147,12 +18616,12 @@ class _CpuLoadGraph(QWidget):
         if self._trace is None or scene is None:
             super().mouseMoveEvent(event)
             return
-        hover_ns = self._time_ns_at_pos(event.pos())
+        hover_ns = self._time_ns_at_pos(event.position().toPoint())
         if hover_ns is None:
             self._hover_y = -1
             scene.clear_hover_line()
         else:
-            self._hover_y = event.y()
+            self._hover_y = event.position().y()
             scene._hover_ns = hover_ns
             scene._draw_hover_line()
             self.update()
@@ -18187,12 +18656,12 @@ class _CpuLoadGraph(QWidget):
         pos = graph_pos
         if pos is None:
             pos = (event.position().toPoint()
-                   if hasattr(event, "position") else event.pos())
+                   if hasattr(event, "position") else event.position().toPoint())
         if source is not None:
             pos = self._graph_pos_from(pos, source)
 
         mods = event.modifiers()
-        zoom_mod = Qt.ControlModifier | Qt.MetaModifier
+        zoom_mod = Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier
         if mods & zoom_mod:
             angle = event.angleDelta().y()
             if angle == 0:
@@ -18213,7 +18682,7 @@ class _CpuLoadGraph(QWidget):
         dx = event.angleDelta().x()
         scroll = self._scroll_area
         if (scroll is not None and dy != 0
-                and not (mods & Qt.ShiftModifier)
+                and not (mods & Qt.KeyboardModifier.ShiftModifier)
                 and abs(dy) >= abs(dx)):
             vp = scroll.viewport()
             if self.height() > vp.height():
@@ -18224,7 +18693,7 @@ class _CpuLoadGraph(QWidget):
 
         hsb = self._view.horizontalScrollBar()
         vsb = self._view.verticalScrollBar()
-        if mods & Qt.ShiftModifier:
+        if mods & Qt.KeyboardModifier.ShiftModifier:
             if dy != 0:
                 hsb.setValue(hsb.value() - dy)
         else:
@@ -18255,7 +18724,7 @@ class _CpuLoadGraph(QWidget):
             return
 
         tpp    = scene._timescale_per_px
-        lw     = scene._label_width
+        lw     = int(scene._label_width)
         t_min  = self._trace.time_min
         t_max  = self._trace.time_max
         n      = self._NUM_BINS
@@ -18296,7 +18765,7 @@ class _CpuLoadGraph(QWidget):
         # -- Title bar (same bg as rows) --------------------------------
         p.setFont(sf_title)
         p.setPen(txtc)
-        p.drawText(QRect(4, 0, lw - 6, _TITLE_H), Qt.AlignVCenter | Qt.AlignLeft, "CPU LOAD")
+        p.drawText(QRect(4, 0, lw - 6, _TITLE_H), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, "CPU LOAD")
         p.setPen(QPen(sepc, 1))
         p.drawLine(0, _TITLE_H, w, _TITLE_H)
 
@@ -18323,12 +18792,12 @@ class _CpuLoadGraph(QWidget):
             # 1. Triangle (white)
             p.setFont(sf_small if collapsed else sf_norm)
             p.setPen(white_col)
-            p.drawText(QRect(2, ry, 14, effective_h), Qt.AlignVCenter | Qt.AlignLeft, indicator)
+            p.drawText(QRect(2, ry, 14, effective_h), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, indicator)
 
             # 2. Coloured circle
             dot_cx = 20 + dot_r
             p.setRenderHint(QPainter.Antialiasing, True)
-            p.setPen(Qt.NoPen)
+            p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(QBrush(color))
             p.drawEllipse(dot_cx - dot_r, dot_cy - dot_r, dot_r * 2, dot_r * 2)
             p.setRenderHint(QPainter.Antialiasing, False)
@@ -18336,11 +18805,11 @@ class _CpuLoadGraph(QWidget):
             # 3. Core name (white)
             name_x = dot_cx + dot_r + 4
             p.setPen(white_col)
-            p.drawText(QRect(name_x, ry, lw - name_x - 72, effective_h), Qt.AlignVCenter | Qt.AlignLeft, lbl_text)
+            p.drawText(QRect(name_x, ry, lw - name_x - 72, effective_h), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, lbl_text)
 
             # 4. Percentage (green) — visible-window avg; · C:… when 2+ cursors
             p.setPen(green_col)
-            p.drawText(QRect(lw - 72, ry, 68, effective_h), Qt.AlignVCenter | Qt.AlignRight, pct_text)
+            p.drawText(QRect(lw - 72, ry, 68, effective_h), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, pct_text)
 
             if not collapsed:
                 # Cursor-range shading (behind bars)
@@ -18360,20 +18829,20 @@ class _CpuLoadGraph(QWidget):
                 p.setFont(sf_pct)
                 p.setPen(pct_muted)
                 p.drawText(QRect(lw + 3, ry + effective_h - 12, 28, 12),
-                           Qt.AlignLeft | Qt.AlignBottom, "0")
+                           Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom, "0")
                 for pct in (0.25, 0.5, 0.75, 1.0):
                     gy = ry + effective_h - 1 - int(pct * effective_h)
-                    p.setPen(QPen(grdc, 1, Qt.DotLine))
+                    p.setPen(QPen(grdc, 1, Qt.PenStyle.DotLine))
                     p.drawLine(lw + 1, gy, plot_right, gy)
                     if pct < 1.0:   # skip "100" - would overflow into row above
                         p.setPen(pct_muted)
                         p.drawText(QRect(lw + 3, gy - 12, 28, 12),
-                                   Qt.AlignLeft | Qt.AlignBottom, str(int(pct * 100)))
+                                   Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom, str(int(pct * 100)))
 
                 # Load bars
                 bins = self._bins_for_row(kind, key)
                 if bins:
-                    p.setPen(Qt.NoPen)
+                    p.setPen(Qt.PenStyle.NoPen)
                     p.setBrush(QBrush(color))
                     for sx, bi in sx_to_bi.items():
                         load = bins[bi]
@@ -18473,8 +18942,8 @@ class _LeftTabStyle(QProxyStyle):
     """Force left tab-bar alignment (ignored by the macOS native QStyle)."""
 
     def styleHint(self, hint, option=None, widget=None, returnData=None):  # noqa: N802
-        if hint == QStyle.SH_TabBar_Alignment:
-            return int(Qt.AlignLeft)
+        if hint == QStyle.StyleHint.SH_TabBar_Alignment:
+            return int(Qt.AlignmentFlag.AlignLeft)
         return super().styleHint(hint, option, widget, returnData)
 
 class _LeftAlignedTabBar(QTabBar):
@@ -18528,7 +18997,7 @@ class _TraceTab:
         self.cpu_load_scroll = QScrollArea()
         win._setup_cpu_load_scroll(self.cpu_load_scroll, self.cpu_load_graph)
 
-        self.cpu_splitter = _ResizeSplitter(Qt.Vertical)
+        self.cpu_splitter = _ResizeSplitter(Qt.Orientation.Vertical)
         self.cpu_splitter.addWidget(self.view)
         self.cpu_splitter.addWidget(self.cpu_load_scroll)
         self.cpu_splitter.setStretchFactor(0, 1)
@@ -18612,10 +19081,10 @@ class MainWindow(QMainWindow):
         self._view_mode = "task"
 
         _tab_fwd = QShortcut(QKeySequence("Ctrl+Tab"), self)
-        _tab_fwd.setContext(Qt.WidgetWithChildrenShortcut)
+        _tab_fwd.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         _tab_fwd.activated.connect(lambda: self._cycle_trace_tab(True))
         _tab_bwd = QShortcut(QKeySequence("Ctrl+Shift+Tab"), self)
-        _tab_bwd.setContext(Qt.WidgetWithChildrenShortcut)
+        _tab_bwd.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         _tab_bwd.activated.connect(lambda: self._cycle_trace_tab(False))
 
         # Restore all persisted settings (geometry, zoom, orientation, ...).
@@ -18706,8 +19175,8 @@ class MainWindow(QMainWindow):
         """Wire CPU load graph into a scroll area with vertical scroll when cores overflow."""
         scroll.setWidget(graph)
         scroll.setWidgetResizable(False)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         graph._scroll_area = scroll
 
         class _CpuLoadScrollSync(QObject):
@@ -18718,19 +19187,19 @@ class MainWindow(QMainWindow):
                 self._scroll = sa
 
             def eventFilter(self, obj, event):  # noqa: N802
-                if event.type() == QEvent.Resize:
+                if event.type() == QEvent.Type.Resize:
                     self._graph._sync_scroll_size()
                     return False
-                if event.type() == QEvent.Wheel:
+                if event.type() == QEvent.Type.Wheel:
                     pos = (event.position().toPoint()
-                           if hasattr(event, "position") else event.pos())
+                           if hasattr(event, "position") else event.position().toPoint())
                     self._graph._handle_wheel(event, pos, obj)
                     return True
-                if event.type() == QEvent.NativeGesture:
-                    _ZOOM_GESTURE = getattr(Qt, "ZoomNativeGesture", 3)
+                if event.type() == QEvent.Type.NativeGesture:
+                    _ZOOM_GESTURE = getattr(Qt.NativeGestureType, "ZoomNativeGesture", 3)
                     try:
                         if int(event.gestureType()) == int(_ZOOM_GESTURE):
-                            pt = event.pos()
+                            pt = event.position().toPoint()
                             global_pos = self._scroll.viewport().mapToGlobal(pt)
                             anchor = self._view.mapFromGlobal(global_pos)
                             factor = 1.0 + event.value()
@@ -18764,7 +19233,7 @@ class MainWindow(QMainWindow):
 
         class _CpuGraphViewportSync(QObject):
             def eventFilter(self, obj, event):
-                if event.type() == QEvent.Resize:
+                if event.type() == QEvent.Type.Resize:
                     graph.update()
                 return False
 
@@ -19072,6 +19541,7 @@ class MainWindow(QMainWindow):
         self._stats_panel._ui_font_size = self._ui_font_size_val
         self._stats_panel.set_cursor_times(self._view._scene.cursor_times(), refresh_stats=False)
         self._stats_panel.rebuild(trace)
+        QTimer.singleShot(0, self._stats_panel.sync_util_layout)
         self._cpu_load_graph.set_trace(trace)
         self._cpu_load_graph.set_font_size(self._font_size_val)
         self._sync_cpu_load_graph(tab)
@@ -19230,6 +19700,79 @@ class MainWindow(QMainWindow):
     # Lifecycle persistence
     # ------------------------------------------------------------------
 
+    def _any_visible_right_dock(self) -> bool:
+        for dock in (self._legend_dock, self._stats_dock,
+                     self._marks_dock, self._find_dock):
+            if dock.isVisible() and not dock.isFloating():
+                if self.dockWidgetArea(dock) == Qt.DockWidgetArea.RightDockWidgetArea:
+                    return True
+        return False
+
+    def _current_right_dock_width(self) -> int:
+        widths: list[int] = []
+        for dock in (self._legend_dock, self._stats_dock,
+                     self._marks_dock, self._find_dock):
+            if dock.isVisible() and not dock.isFloating():
+                if self.dockWidgetArea(dock) == Qt.DockWidgetArea.RightDockWidgetArea:
+                    widths.append(int(dock.width()))
+        if widths:
+            return max(widths)
+        return 330
+
+    def _right_docks(self) -> Tuple[QDockWidget, ...]:
+        return (self._legend_dock, self._stats_dock, self._marks_dock, self._find_dock)
+
+    def _visible_right_docks(self) -> List[QDockWidget]:
+        docks: List[QDockWidget] = []
+        for dock in self._right_docks():
+            if dock.isVisible() and not dock.isFloating():
+                if self.dockWidgetArea(dock) == Qt.DockWidgetArea.RightDockWidgetArea:
+                    docks.append(dock)
+        return docks
+
+    def _relax_right_dock_content_widths(self) -> None:
+        """Prevent dock children from pinning a wide minimum after the panel is expanded."""
+        for dock in self._right_docks():
+            dock.setMinimumWidth(_RIGHT_DOCK_MIN_W)
+            host = dock.widget()
+            if host is not None:
+                _relax_widget_tree(host)
+                host.setMaximumWidth(16777215)
+        panel = getattr(self, "_stats_panel", None)
+        if panel is not None:
+            panel.relax_content_width()
+        legend = getattr(self, "_legend", None)
+        if legend is not None:
+            legend.restore_row_layout()
+        cursor_table = getattr(self, "_cursor_table", None)
+        if cursor_table is not None:
+            _StatsPanel._fix_stats_table_column_widths(cursor_table)
+
+    def _resize_right_dock_column(self, w: int) -> None:
+        docks = [self._legend_dock, self._stats_dock,
+                 self._marks_dock, self._find_dock]
+        self.resizeDocks(docks, [w, w, w, w], Qt.Orientation.Horizontal)
+
+    def _apply_right_dock_width(self, width: float) -> None:
+        w = max(_RIGHT_DOCK_MIN_W, min(_RIGHT_DOCK_MAX_W, int(width)))
+        self._relax_right_dock_content_widths()
+        self._resize_right_dock_column(w)
+        self._relax_right_dock_content_widths()
+        panel = getattr(self, "_stats_panel", None)
+        if panel is not None:
+            QTimer.singleShot(0, panel.sync_util_layout)
+
+    @staticmethod
+    def _apply_right_dock_min_width(dock: QDockWidget) -> None:
+        """Keep all right-column docks on the same resize floor."""
+        dock.setMinimumWidth(_RIGHT_DOCK_MIN_W)
+        dock.setMaximumWidth(_RIGHT_DOCK_MAX_W)
+        host = dock.widget()
+        if host is not None:
+            host.setMinimumWidth(0)
+            if host.layout() is not None:
+                _relax_layout_width_constraints(host.layout())
+
     def _apply_default_dock_sizes(self) -> None:
         """Apply startup dock dimensions.
 
@@ -19244,17 +19787,14 @@ class MainWindow(QMainWindow):
                 We first set side-panel width, then split with a taller
                 bottom tabbed page.
         """
-        self.resizeDocks(
-            [self._legend_dock, self._marks_dock],
-            [520, 520],
-            Qt.Horizontal,
-        )
+        self._resize_right_dock_column(520)
         self.resizeDocks(
             [self._legend_dock, self._marks_dock],
             [2, 5],
-            Qt.Vertical,
+            Qt.Orientation.Vertical,
         )
         self._focus_statistics_panel()
+        self._relax_right_dock_content_widths()
         _wire_splitter_handle_cursors(self)
 
     def _dock_profile_key(self, width: int, height: int) -> str:
@@ -19281,11 +19821,7 @@ class MainWindow(QMainWindow):
             return
 
         if right_w > 0:
-            self.resizeDocks(
-                [self._legend_dock, self._marks_dock],
-                [right_w, right_w],
-                Qt.Horizontal,
-            )
+            self._resize_right_dock_column(right_w)
         # Marks and Statistics are tabified, so they share one bottom area.
         # Use the larger of marks/stats as the intended bottom-group height.
         bottom_h = max(int(marks_h), int(stats_h))
@@ -19293,11 +19829,12 @@ class MainWindow(QMainWindow):
             self.resizeDocks(
                 [self._legend_dock, self._marks_dock],
                 [legend_h, bottom_h],
-                Qt.Vertical,
+                Qt.Orientation.Vertical,
             )
         if label_w >= 60:
             self._label_width_val = label_w
             self._view._scene.set_label_width(label_w)
+        self._relax_right_dock_content_widths()
         _wire_splitter_handle_cursors(self)
 
     def _restore_settings(self) -> None:
@@ -19857,15 +20394,15 @@ class MainWindow(QMainWindow):
             QMenuBar::item:selected {{ background:{c['accent']}; color:#FFFFFF; }}
             QMenu     {{ background:{c['menu_bg']}; color:{c['text']}; font-size:{_ui_fs}; }}
             QMenu::item:selected {{ background:{c['accent']}; color:#FFFFFF; }}
-            QToolBar  {{ background:{c['mid']}; border:none; spacing:4px;
+            QToolBar  {{ background:{c['mid']}; color:{c['text']}; border:none; spacing:4px;
                          font-size:{_ui_fs}; }}
             QToolBar::separator {{ width:1px; background:{c['sep']}; margin:3px 2px; }}
-            QToolButton {{ font-size:{_ui_fs}; }}
-            QToolButton:hover    {{ background:{c['tb_hover']};      border-radius:3px; }}
-            QToolButton:pressed  {{ background:{c['tb_pressed']};    border-radius:3px; }}
+            QToolButton {{ font-size:{_ui_fs}; color:{c['text']}; background:transparent; }}
+            QToolButton:hover    {{ background:{c['tb_hover']};      border-radius:3px; color:{c['text']}; }}
+            QToolButton:pressed  {{ background:{c['tb_pressed']};    border-radius:3px; color:{c['text']}; }}
             QToolButton:checked  {{ background:{c['tb_checked_bg']}; border-radius:3px; color:{c['tb_checked_fg']}; }}
             QToolButton:disabled {{ color:{c['tb_disabled']}; }}
-            QToolBar QComboBox {{ font-size:{_ui_fs}; padding:1px 4px; min-height:0; }}
+            QToolBar QComboBox {{ font-size:{_ui_fs}; color:{c['text']}; padding:1px 4px; min-height:0; }}
             QStatusBar  {{ background:{c['win_bg']}; color:{c['status_text']}; font-size:{_ui_fs};
                            border-top:1px solid {c['sep']}; }}
             QStatusBar QLabel {{ font-size:{_ui_fs}; color:{c['sub_text']}; }}
@@ -20015,6 +20552,34 @@ class MainWindow(QMainWindow):
             self._act_theme.setText(
                 "Switch to &Light Theme" if is_dark else "Switch to &Dark Theme"
             )
+        self._sync_toolbar_theme(c)
+
+    def _sync_toolbar_theme(self, c: dict) -> None:
+        """Explicit toolbar palette (Windows / Fusion may ignore QSS text colour)."""
+        tb = getattr(self, "_tb", None)
+        if tb is None:
+            return
+        fg = QColor(c["text"])
+        bg = QColor(c["mid"])
+        pal = tb.palette()
+        pal.setColor(QPalette.ColorRole.Window, bg)
+        pal.setColor(QPalette.ColorRole.WindowText, fg)
+        pal.setColor(QPalette.ColorRole.ButtonText, fg)
+        pal.setColor(QPalette.ColorRole.Text, fg)
+        pal.setColor(QPalette.ColorRole.Button, bg)
+        tb.setPalette(pal)
+        tb.setAutoFillBackground(True)
+        for btn in tb.findChildren(QToolButton):
+            bp = btn.palette()
+            bp.setColor(QPalette.ColorRole.ButtonText, fg)
+            bp.setColor(QPalette.ColorRole.WindowText, fg)
+            btn.setPalette(bp)
+        combo = getattr(self, "_zoom_preset_combo", None)
+        if combo is not None:
+            cp = combo.palette()
+            cp.setColor(QPalette.ColorRole.Text, fg)
+            cp.setColor(QPalette.ColorRole.ButtonText, fg)
+            combo.setPalette(cp)
 
     # Thin wrappers kept for any external callers.
     def _apply_dark_theme(self)  -> None: self._apply_theme(True)
@@ -20046,15 +20611,15 @@ class MainWindow(QMainWindow):
 
         self._welcome_page = QWidget()
         _wl = QVBoxLayout(self._welcome_page)
-        _wl.setAlignment(Qt.AlignCenter)
+        _wl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         _wlbl = QLabel(
             "<h2 style='color:#888;'>RTOS BTF Viewer</h2>"
             "<p style='color:#666; font-size:11pt;'>"
             "Drop a <b>.btf</b> file here<br>"
             "or press <b>Ctrl+O</b> to open one</p>"
         )
-        _wlbl.setTextFormat(Qt.RichText)
-        _wlbl.setAlignment(Qt.AlignCenter)
+        _wlbl.setTextFormat(Qt.TextFormat.RichText)
+        _wlbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         _wl.addWidget(_wlbl)
         self._welcome_label = _wlbl
 
@@ -20086,9 +20651,11 @@ class MainWindow(QMainWindow):
 
         # --- Marks dock (bookmarks + annotations) ---
         marks_host = QWidget()
+        marks_host.setMinimumWidth(0)
         marks_v = QVBoxLayout(marks_host)
         marks_v.setContentsMargins(6, 6, 6, 6)
         marks_v.setSpacing(6)
+        marks_v.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
         marks_tabs = QTabWidget()
 
         # ---- Cursors comparison tab ----
@@ -20098,12 +20665,12 @@ class MainWindow(QMainWindow):
         cur_v.setSpacing(2)
         self._cursor_table = QTableWidget(0, 4)
         self._cursor_table.setHorizontalHeaderLabels(["#", "Time", "Task at cursor", "Delta to C1"])
-        self._cursor_table.horizontalHeader().setStretchLastSection(True)
-        self._cursor_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self._cursor_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self._cursor_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self._cursor_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._cursor_table.verticalHeader().setVisible(False)
         self._cursor_table.setAlternatingRowColors(True)
         self._cursor_table.cellClicked.connect(self._on_cursor_table_clicked)
+        _StatsPanel._fix_stats_table_column_widths(self._cursor_table)
         cur_v.addWidget(self._cursor_table)
         self._cur_hint = QLabel("Click a row to navigate to that cursor")
         self._cur_hint.setStyleSheet("color:#999; font-size:9pt;")
@@ -20115,11 +20682,11 @@ class MainWindow(QMainWindow):
         bm_v.setContentsMargins(0, 0, 0, 0)
         bm_v.setSpacing(4)
         self._bookmark_list = QListWidget()
-        self._bookmark_list.itemClicked.connect(lambda item: self._jump_to_ns(int(item.data(Qt.UserRole + 1))))
-        self._bookmark_list.itemDoubleClicked.connect(lambda item: self._jump_to_ns(int(item.data(Qt.UserRole + 1))))
+        self._bookmark_list.itemClicked.connect(lambda item: self._jump_to_ns(int(item.data(Qt.ItemDataRole.UserRole + 1))))
+        self._bookmark_list.itemDoubleClicked.connect(lambda item: self._jump_to_ns(int(item.data(Qt.ItemDataRole.UserRole + 1))))
         self._bookmark_list.itemChanged.connect(self._on_bookmark_item_changed)
-        _bm_del_key = QShortcut(QKeySequence(Qt.Key_Delete), self._bookmark_list)
-        _bm_del_key.setContext(Qt.WidgetShortcut)
+        _bm_del_key = QShortcut(QKeySequence(Qt.Key.Key_Delete), self._bookmark_list)
+        _bm_del_key.setContext(Qt.ShortcutContext.WidgetShortcut)
         _bm_del_key.activated.connect(self._delete_selected_bookmark)
         bm_v.addWidget(self._bookmark_list)
         bm_btns = QHBoxLayout()
@@ -20141,11 +20708,11 @@ class MainWindow(QMainWindow):
         an_v.setContentsMargins(0, 0, 0, 0)
         an_v.setSpacing(4)
         self._annotation_list = QListWidget()
-        self._annotation_list.itemClicked.connect(lambda item: self._jump_to_ns(int(item.data(Qt.UserRole + 1))))
+        self._annotation_list.itemClicked.connect(lambda item: self._jump_to_ns(int(item.data(Qt.ItemDataRole.UserRole + 1))))
         self._annotation_list.itemDoubleClicked.connect(
             lambda item: self._edit_selected_annotation())
-        _an_del_key = QShortcut(QKeySequence(Qt.Key_Delete), self._annotation_list)
-        _an_del_key.setContext(Qt.WidgetShortcut)
+        _an_del_key = QShortcut(QKeySequence(Qt.Key.Key_Delete), self._annotation_list)
+        _an_del_key.setContext(Qt.ShortcutContext.WidgetShortcut)
         _an_del_key.activated.connect(self._delete_selected_annotation)
         an_v.addWidget(self._annotation_list)
         self._annotation_input = QLineEdit()
@@ -20174,37 +20741,45 @@ class MainWindow(QMainWindow):
         self._range_stats_label.setWordWrap(True)
         marks_v.addWidget(self._range_stats_label)
 
-        marks_io_row = QHBoxLayout()
-        marks_import_btn = QPushButton("v Import Marks")
+        marks_io_row = QGridLayout()
+        marks_io_row.setContentsMargins(0, 0, 0, 0)
+        marks_io_row.setHorizontalSpacing(6)
+        marks_io_row.setVerticalSpacing(4)
+        marks_import_btn = QPushButton("Import")
         marks_import_btn.setToolTip("Load bookmarks and annotations from a CSV file")
         marks_import_btn.clicked.connect(self._import_marks_csv)
-        marks_io_row.addWidget(marks_import_btn)
-        marks_export_btn = QPushButton("↑ Export Marks")
+        marks_io_row.addWidget(marks_import_btn, 0, 0)
+        marks_export_btn = QPushButton("Export")
         marks_export_btn.setToolTip("Save all bookmarks and annotations to a CSV file")
         marks_export_btn.clicked.connect(self._export_marks_csv)
-        marks_io_row.addWidget(marks_export_btn)
+        marks_io_row.addWidget(marks_export_btn, 0, 1)
         marks_session_btn = QPushButton("Session")
         marks_session_btn.setToolTip(
             "Export portable session JSON (cursors, marks, viewport — Web compatible)")
         marks_session_btn.clicked.connect(self._export_portable_session)
-        marks_io_row.addWidget(marks_session_btn)
-        marks_session_import_btn = QPushButton("Import Session")
+        marks_io_row.addWidget(marks_session_btn, 1, 0)
+        marks_session_import_btn = QPushButton("Import session")
         marks_session_import_btn.setToolTip("Import portable session JSON")
         marks_session_import_btn.clicked.connect(self._import_portable_session)
-        marks_io_row.addWidget(marks_session_import_btn)
+        marks_io_row.addWidget(marks_session_import_btn, 1, 1)
+        for btn in (marks_import_btn, marks_export_btn, marks_session_btn,
+                    marks_session_import_btn):
+            btn.setMinimumWidth(0)
+            btn.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         marks_v.addLayout(marks_io_row)
 
         marks_dock = QDockWidget("Marks", self)
         marks_dock.setObjectName("dock_marks")
         marks_dock.setWidget(marks_host)
-        marks_dock.setFeatures(QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetMovable)
-        marks_dock.setMinimumWidth(190)
-        marks_dock.setMinimumHeight(260)  # enough to show 2 core rows + headings without scrolling
-        self.addDockWidget(Qt.RightDockWidgetArea, marks_dock)
+        marks_dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetClosable | QDockWidget.DockWidgetFeature.DockWidgetMovable)
+        self._apply_right_dock_min_width(marks_dock)
+        marks_dock.setMinimumHeight(200)  # tabified stats/marks area; allow vertical shrink
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, marks_dock)
         self._marks_dock = marks_dock
 
         # --- Find dock ---
         find_host = QWidget()
+        find_host.setMinimumWidth(0)
         find_v = QVBoxLayout(find_host)
         find_v.setContentsMargins(6, 6, 6, 6)
         find_v.setSpacing(6)
@@ -20234,19 +20809,18 @@ class MainWindow(QMainWindow):
         find_dock = QDockWidget("Find & Jump", self)
         find_dock.setObjectName("dock_find")
         find_dock.setWidget(find_host)
-        find_dock.setFeatures(QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetMovable)
-        find_dock.setMinimumWidth(190)
-        find_dock.setMaximumWidth(260)
+        find_dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetClosable | QDockWidget.DockWidgetFeature.DockWidgetMovable)
+        self._apply_right_dock_min_width(find_dock)
         find_dock.setMinimumHeight(120)
-        self.addDockWidget(Qt.RightDockWidgetArea, find_dock)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, find_dock)
         self._find_dock = find_dock
         # Default: Legend on top, bottom as tabbed pages (Statistics / Marks).
-        self.splitDockWidget(self._legend_dock, self._marks_dock, Qt.Vertical)
+        self.splitDockWidget(self._legend_dock, self._marks_dock, Qt.Orientation.Vertical)
         self.tabifyDockWidget(self._stats_dock, self._marks_dock)
         self._focus_statistics_panel()
 
         # Keep Find available below the tab group (typically hidden by default).
-        self.splitDockWidget(self._marks_dock, self._find_dock, Qt.Vertical)
+        self.splitDockWidget(self._marks_dock, self._find_dock, Qt.Orientation.Vertical)
         # Default dock sizes are applied in _restore_settings via QTimer.singleShot
         # AFTER the window is shown, where resizeDocks() is actually effective.
 
@@ -20273,48 +20847,47 @@ class MainWindow(QMainWindow):
 
     def _wire_resize_cursors(self) -> None:
         """Resize cursors on splitters and dock/central pane edges."""
-        horiz, vert = Qt.SizeHorCursor, Qt.SizeVerCursor
+        vert = Qt.CursorShape.SizeVerCursor
         margin = _RESIZE_EDGE_PX
 
         def _dock_active(dock: QDockWidget):
             return (lambda: dock.isVisible() and not dock.isFloating())
 
-        def _any_right_dock() -> bool:
-            for dock in (self._legend_dock, self._stats_dock,
-                         self._marks_dock, self._find_dock):
-                if dock.isVisible() and not dock.isFloating():
-                    if self.dockWidgetArea(dock) == Qt.RightDockWidgetArea:
-                        return True
-            return False
-
         for w in (self._central_stack, self._tab_widget):
             w.setMouseTracking(True)
-            w.setAttribute(Qt.WA_Hover, True)
-            filt = _EdgeResizeCursorFilter(
-                w, [("right", horiz, _any_right_dock)], margin)
+            w.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+            filt = _DockWidthResizeFilter(
+                w, self, "right", margin, self._any_visible_right_dock)
             w.installEventFilter(filt)
-            w._edge_resize_filter = filt  # prevent GC
+            w._dock_width_resize_filter = filt  # prevent GC
 
         for dock in (self._legend_dock, self._stats_dock,
                      self._marks_dock, self._find_dock):
             dock.setMouseTracking(True)
-            dock.setAttribute(Qt.WA_Hover, True)
+            dock.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
             ok = _dock_active(dock)
-            edges = [("left", horiz, ok)]
+            width_filt = _DockWidthResizeFilter(dock, self, "left", margin, ok)
+            dock.installEventFilter(width_filt)
+            dock._dock_width_resize_filter = width_filt
+            shrink_guard = _RightDockShrinkGuard(self, dock)
+            dock.installEventFilter(shrink_guard)
+            dock._dock_shrink_guard = shrink_guard
+            vert_edges: list = []
             if dock is self._legend_dock:
-                edges.append(("bottom", vert, ok))
+                vert_edges.append(("bottom", vert, ok))
             if dock is self._find_dock:
-                edges.append(("top", vert, ok))
-            filt = _EdgeResizeCursorFilter(dock, edges, margin)
-            dock.installEventFilter(filt)
-            dock._edge_resize_filter = filt
+                vert_edges.append(("top", vert, ok))
+            if vert_edges:
+                vert_filt = _EdgeResizeCursorFilter(dock, vert_edges, margin)
+                dock.installEventFilter(vert_filt)
+                dock._edge_resize_filter = vert_filt
 
         QTimer.singleShot(0, lambda: _wire_splitter_handle_cursors(self))
 
     def _build_legend_dock(self) -> None:
         """Create the legend dock and host container."""
         self._legend = _LegendWidget()
-        self._legend.setMinimumWidth(180)
+        self._legend.setMinimumWidth(0)
         legend_host = QWidget()
         legend_host.setObjectName("legend_dock_host")
         legend_host.setAutoFillBackground(True)
@@ -20325,8 +20898,9 @@ class MainWindow(QMainWindow):
         dock = QDockWidget("Legend", self)
         dock.setObjectName("dock_legend")
         dock.setWidget(legend_host)
-        dock.setFeatures(QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetMovable)
-        self.addDockWidget(Qt.RightDockWidgetArea, dock)
+        dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetClosable | QDockWidget.DockWidgetFeature.DockWidgetMovable)
+        self._apply_right_dock_min_width(dock)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
         self._legend_dock = dock
 
     def _build_stats_dock(self) -> None:
@@ -20339,8 +20913,10 @@ class MainWindow(QMainWindow):
         stats_dock = QDockWidget("Statistics", self)
         stats_dock.setObjectName("dock_statistics")
         stats_dock.setWidget(self._stats_panel)
-        stats_dock.setFeatures(QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetMovable)
-        self.addDockWidget(Qt.RightDockWidgetArea, stats_dock)
+        stats_dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetClosable | QDockWidget.DockWidgetFeature.DockWidgetMovable)
+        self._apply_right_dock_min_width(stats_dock)
+        stats_dock.setMinimumHeight(200)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, stats_dock)
         self._stats_dock = stats_dock
 
         self.setAcceptDrops(True)
@@ -20452,7 +21028,7 @@ class MainWindow(QMainWindow):
         tb.setObjectName("toolbar_main")
         self._tb = tb
         tb.setMovable(False)
-        tb.setToolButtonStyle(Qt.ToolButtonIconOnly)
+        tb.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         tb.setIconSize(QSize(18, 18))
 
         self._tb_icon_actions = []
@@ -20521,7 +21097,7 @@ class MainWindow(QMainWindow):
         for _mode_act in (self._tb_task_btn, self._tb_core_btn):
             _mw = tb.widgetForAction(_mode_act)
             if _mw:
-                _mw.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+                _mw.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self._tb_expand_all_btn = _ia("Expand All", self._toggle_expand_all_cores,
                                       _IC_EXPAND_ALL,
                                       "Expand / collapse all cores  (only in Core View)")
@@ -20534,7 +21110,7 @@ class MainWindow(QMainWindow):
         self._tb_cpu_load_btn.setChecked(True)
         _clw = tb.widgetForAction(self._tb_cpu_load_btn)
         if _clw:
-            _clw.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+            _clw.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self._tb_heatmap_btn = _ia(
             "Heatmap", self._open_migration_heatmap, _IC_HEATMAP,
             "Migration heatmap — core-pair counts over time (multi-core traces only)")
@@ -20554,7 +21130,7 @@ class MainWindow(QMainWindow):
             "(only active when an STI row is expanded)")
         _l2w = tb.widgetForAction(self._tb_log2_btn)
         if _l2w:
-            _l2w.setToolButtonStyle(Qt.ToolButtonTextOnly)
+            _l2w.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         tb.addSeparator()
 
         # --- Theme and settings ---
@@ -21381,14 +21957,14 @@ class MainWindow(QMainWindow):
         item = self._bookmark_list.currentItem()
         if item is None:
             return
-        self._jump_to_ns(int(item.data(Qt.UserRole + 1)))
+        self._jump_to_ns(int(item.data(Qt.ItemDataRole.UserRole + 1)))
 
     def _delete_selected_bookmark(self) -> None:
         item = self._bookmark_list.currentItem()
         if item is None:
             return
         self._push_undo_snapshot()
-        bid = int(item.data(Qt.UserRole))
+        bid = int(item.data(Qt.ItemDataRole.UserRole))
         for i, b in enumerate(self._bookmarks):
             if b.id == bid:
                 self._bookmarks.pop(i)
@@ -21406,10 +21982,10 @@ class MainWindow(QMainWindow):
         for b in sorted(self._bookmarks, key=lambda x: x.ns):
             txt = b.label or f"Bookmark @{_format_time(b.ns, unit, decimals=3)}"
             item = QListWidgetItem(txt)
-            item.setData(Qt.UserRole, int(b.id))
-            item.setData(Qt.UserRole + 1, int(b.ns))
+            item.setData(Qt.ItemDataRole.UserRole, int(b.id))
+            item.setData(Qt.ItemDataRole.UserRole + 1, int(b.ns))
             item.setToolTip(f"{_format_time(b.ns, unit, decimals=3)}")
-            item.setFlags(item.flags() | Qt.ItemIsEditable)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
             self._bookmark_list.addItem(item)
         self._bookmark_list.blockSignals(False)
         self._view._scene.set_marks(self._bookmarks, self._annotations)
@@ -21418,7 +21994,7 @@ class MainWindow(QMainWindow):
     def _on_bookmark_item_changed(self, item: QListWidgetItem) -> None:
         if item is None:
             return
-        bid = int(item.data(Qt.UserRole))
+        bid = int(item.data(Qt.ItemDataRole.UserRole))
         new_label = item.text().strip()
         for b in self._bookmarks:
             if b.id == bid:
@@ -21497,14 +22073,14 @@ class MainWindow(QMainWindow):
         item = self._annotation_list.currentItem()
         if item is None:
             return
-        self._jump_to_ns(int(item.data(Qt.UserRole + 1)))
+        self._jump_to_ns(int(item.data(Qt.ItemDataRole.UserRole + 1)))
 
     def _delete_selected_annotation(self) -> None:
         item = self._annotation_list.currentItem()
         if item is None:
             return
         self._push_undo_snapshot()
-        aid = int(item.data(Qt.UserRole))
+        aid = int(item.data(Qt.ItemDataRole.UserRole))
         for i, a in enumerate(self._annotations):
             if a.id == aid:
                 self._annotations.pop(i)
@@ -21516,7 +22092,7 @@ class MainWindow(QMainWindow):
         item = self._annotation_list.currentItem()
         if item is None:
             return
-        aid = int(item.data(Qt.UserRole))
+        aid = int(item.data(Qt.ItemDataRole.UserRole))
         for a in self._annotations:
             if a.id == aid:
                 dlg = QInputDialog(self)
@@ -21545,8 +22121,8 @@ class MainWindow(QMainWindow):
         for a in sorted(self._annotations, key=lambda x: x.ns):
             txt = f"{_format_time(a.ns, unit, decimals=3)}  {a.note}"
             item = QListWidgetItem(txt)
-            item.setData(Qt.UserRole, int(a.id))
-            item.setData(Qt.UserRole + 1, int(a.ns))
+            item.setData(Qt.ItemDataRole.UserRole, int(a.id))
+            item.setData(Qt.ItemDataRole.UserRole + 1, int(a.ns))
             item.setToolTip(f"@ {_format_time(a.ns, unit, decimals=3)}\n{a.note}")
             self._annotation_list.addItem(item)
         self._annotation_list.blockSignals(False)
@@ -21676,7 +22252,7 @@ class MainWindow(QMainWindow):
         sc = self._view._scene
         coord = sc.ns_to_scene_coord(self._find_marker_ns)
         scene_r = sc.sceneRect()
-        pen = QPen(QColor("#FFD54F"), 1.5, Qt.DotLine)
+        pen = QPen(QColor("#FFD54F"), 1.5, Qt.PenStyle.DotLine)
         if sc._horizontal:
             line = QGraphicsLineItem(coord, 0, coord, scene_r.height())
             line.setPen(pen)
@@ -21755,7 +22331,7 @@ class MainWindow(QMainWindow):
 
         # Show a wait cursor and status message while parsing
         _HoverCursor.hide()
-        QApplication.setOverrideCursor(Qt.WaitCursor)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         self._status_file.setText(f"  Loading {os.path.basename(path)}…")
         # Reset dynamic render state so new traces never inherit stale colors.
         _reset_render_state_for_new_trace()
@@ -22367,7 +22943,7 @@ class MainWindow(QMainWindow):
         self._cursor_table.setRowCount(len(sorted_times))
         for row, ns in enumerate(sorted_times):
             ci = QTableWidgetItem(f"C{row + 1}")
-            ci.setData(Qt.UserRole, ns)
+            ci.setData(Qt.ItemDataRole.UserRole, ns)
             ti = QTableWidgetItem(_format_time(ns, unit, decimals=3))
             task_item = QTableWidgetItem(self._task_at_time(ns))
             if row == 0:
@@ -22377,7 +22953,7 @@ class MainWindow(QMainWindow):
                 sign = "+" if dt >= 0 else ""
                 delta_item = QTableWidgetItem(f"{sign}{_format_time(abs(dt), unit, decimals=3)}")
             for it in (ci, ti, task_item, delta_item):
-                it.setFlags(it.flags() & ~Qt.ItemIsEditable)
+                it.setFlags(it.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self._cursor_table.setItem(row, 0, ci)
             self._cursor_table.setItem(row, 1, ti)
             self._cursor_table.setItem(row, 2, task_item)
@@ -22388,7 +22964,7 @@ class MainWindow(QMainWindow):
         """Jump the timeline to the cursor selected in the comparison table."""
         item = self._cursor_table.item(row, 0)
         if item is not None:
-            ns = item.data(Qt.UserRole)
+            ns = item.data(Qt.ItemDataRole.UserRole)
             if ns is not None:
                 self._jump_to_ns(int(ns))
 
@@ -23057,9 +23633,9 @@ class MainWindow(QMainWindow):
         cols.setSpacing(20)
         for col_html in (left_html, right_html):
             lbl = QLabel(col_html)
-            lbl.setTextFormat(Qt.RichText)
+            lbl.setTextFormat(Qt.TextFormat.RichText)
             lbl.setWordWrap(False)
-            lbl.setAlignment(Qt.AlignTop)
+            lbl.setAlignment(Qt.AlignmentFlag.AlignTop)
             cols.addWidget(lbl, 1)
         layout.addLayout(cols)
         btn_box = QDialogButtonBox(QDialogButtonBox.Ok)
@@ -23075,15 +23651,110 @@ class MainWindow(QMainWindow):
 # Entry point
 # ===========================================================================
 
-def main() -> None:
-    # On Windows with display scaling > 100 %, AA_EnableHighDpiScaling causes
-    # Qt to magnify everything (window size AND font pt values) by the scale
-    # factor.  Pinning QT_FONT_DPI to 96 keeps font sizes at their intended
-    # 96-DPI metrics while still letting widget geometry scale correctly.
-    os.environ.setdefault("QT_FONT_DPI", "96")
+_XCB_CURSOR_SONAME = "libxcb-cursor.so.0"
 
-    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
-    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps,   True)
+def _find_xcb_cursor_lib() -> str:
+    """Return a loadable path/soname for libxcb-cursor.so.0, or "" if absent.
+
+    Search order (broadest first):
+      1. ldconfig cache  — ctypes.util.find_library()
+      2. LD_LIBRARY_PATH dirs — explicit file-existence scan
+      3. Dynamic linker trial — ctypes.CDLL() (catches RPATH / other tricks)
+    """
+    import ctypes.util
+
+    SONAME = _XCB_CURSOR_SONAME
+
+    # 1. ldconfig cache
+    if ctypes.util.find_library("xcb-cursor"):
+        return SONAME
+
+    # 2. LD_LIBRARY_PATH explicit scan — returns full path so caller can use it
+    for d in os.environ.get("LD_LIBRARY_PATH", "").split(":"):
+        if not d:
+            continue
+        candidate = os.path.join(d, SONAME)
+        if os.path.isfile(candidate):
+            return candidate
+
+    # 3. Dynamic-linker trial (last resort)
+    import ctypes
+    try:
+        lib = ctypes.CDLL(SONAME)
+        return lib._name or SONAME
+    except OSError:
+        pass
+
+    return ""
+
+def _platform_preflight() -> None:
+    """Ensure libxcb-cursor.so.0 is available before QApplication loads the
+    xcb platform plugin.
+
+    The xcb plugin (Qt ≥ 6.5) requires libxcb-cursor at link time.  When the
+    library lives outside the ldconfig cache (e.g. in $HOME/.local/lib via
+    LD_LIBRARY_PATH) Qt's internal dlopen() may still fail even though the
+    dynamic linker can find it — because Qt's plugin loader sometimes runs
+    before the process environment is fully propagated to glibc's dl cache.
+
+    Solution: pre-load the library into the process with RTLD_GLOBAL *before*
+    QApplication() is called.  This puts all xcb-cursor symbols into the
+    global namespace so the xcb plugin can resolve them unconditionally.
+
+    This function is a no-op on non-Linux platforms; xcb is a Linux-only Qt
+    platform plugin and libxcb-cursor does not exist on Windows or macOS.
+    """
+    if sys.platform != "linux":
+        return
+    if os.environ.get("QT_QPA_PLATFORM", "xcb") != "xcb":
+        return
+
+    lib_path = _find_xcb_cursor_lib()
+
+    if lib_path:
+        import ctypes
+        # Pre-load with RTLD_GLOBAL: symbols become visible to every subsequent
+        # dlopen() in this process, including Qt's xcb platform plugin loader.
+        load_path = lib_path if os.sep in lib_path else _XCB_CURSOR_SONAME
+        try:
+            ctypes.CDLL(load_path, mode=ctypes.RTLD_GLOBAL)
+        except OSError:
+            # Already loaded or path changed — try the bare soname as fallback
+            try:
+                ctypes.CDLL(_XCB_CURSOR_SONAME, mode=ctypes.RTLD_GLOBAL)
+            except OSError:
+                pass
+        # Also keep LD_LIBRARY_PATH consistent so child processes benefit too
+        if os.sep in lib_path:
+            lib_dir = os.path.dirname(os.path.abspath(lib_path))
+            parts = [p for p in os.environ.get("LD_LIBRARY_PATH", "").split(":") if p]
+            if lib_dir not in parts:
+                os.environ["LD_LIBRARY_PATH"] = ":".join([lib_dir] + parts)
+        return
+
+    print(
+        "WARNING: The Qt xcb platform plugin requires libxcb-cursor0,\n"
+        "  which was not found on this system.\n"
+        "  Fix options:\n"
+        "    1) Install the missing library:\n"
+        "         sudo apt install libxcb-cursor0        # Debian / Ubuntu\n"
+        "         sudo dnf install xcb-util-cursor       # Fedora / RHEL\n"
+        "         sudo pacman -S xcb-util-cursor         # Arch\n"
+        "    2) Copy libxcb-cursor.so.0 to a local dir and launch with:\n"
+        "         LD_LIBRARY_PATH=/path/to/dir python btf_viewer.py\n"
+        "    3) Use an alternative platform plugin:\n"
+        "         QT_QPA_PLATFORM=offscreen python btf_viewer.py",
+        file=sys.stderr,
+    )
+
+def main() -> None:
+    _platform_preflight()
+
+    # On Windows with display scaling > 100 %, pinning QT_FONT_DPI to 96 keeps
+    # font sizes at their intended 96-DPI metrics while still letting widget
+    # geometry scale correctly.  AA_EnableHighDpiScaling / AA_UseHighDpiPixmaps
+    # are Qt 6 no-ops (high-DPI is always on) and have been removed.
+    os.environ.setdefault("QT_FONT_DPI", "96")
 
     app = QApplication(sys.argv)
     app.setApplicationName("RTOS BTF Viewer")
@@ -23101,7 +23772,7 @@ def main() -> None:
     else:
         QTimer.singleShot(100, win._restore_session_tabs)
 
-    sys.exit(app.exec_())
+    sys.exit(app.exec())
 
 if __name__ == "__main__":
     main()
