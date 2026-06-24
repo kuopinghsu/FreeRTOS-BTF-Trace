@@ -157,7 +157,6 @@ from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QDockWidget, QFileDialog, QFormLayout, QFrame, QGridLayout, QInputDialog,
     QGraphicsEllipseItem, QGraphicsItem, QGraphicsLineItem, QGraphicsOpacityEffect,
-    QGraphicsPixmapItem,
     QGraphicsPolygonItem, QGraphicsRectItem, QGraphicsScene, QGraphicsTextItem, QGraphicsView,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListView, QMainWindow, QMenu, QMessageBox, QProgressBar,
     QProgressDialog,
@@ -178,14 +177,31 @@ from PySide6.QtWidgets import (
 FONT_SIZE                = 8    # Timeline label font size (pt).  Adjustable at runtime
                                 # via the Font spinbox in the toolbar.
 UI_FONT_SIZE             = 8    # Application UI font: menus, toolbar, status bar (pt).
+# macOS Retina: pixel baseline (~11px matches PyQt5 8pt density). Override: BTF_UI_FONT_PX.
+UI_FONT_PIXEL_SIZE: int = int(
+    os.environ.get("BTF_UI_FONT_PX", "11" if sys.platform == "darwin" else "0")
+)
 
-# ---- Rendering -----------------------------------------------------------
-# Vertical-mode label rendering: use a pre-rendered QPixmap rotated 90deg instead
-# of a rotated QGraphicsTextItem.  On Windows, GDI cannot antialias rotated text,
-# so the pixmap path (render text horizontally, then rotate the image) produces
-# much crisper labels.  Enabled by default on Windows; other platforms use the
-# original QGraphicsTextItem approach which works correctly with PreferAntialias.
-_VERTICAL_LABEL_USE_PIXMAP_DEFAULT: bool = sys.platform == "win32"
+def _application_ui_font(point_size: int = UI_FONT_SIZE) -> QFont:
+    """Application UI font with platform-appropriate sizing (Qt6 HiDPI-safe)."""
+    base = max(6, min(int(point_size), 24))
+    app = QApplication.instance()
+    font = QFont(app.font() if app is not None else QFont())
+    px_base = UI_FONT_PIXEL_SIZE
+    if sys.platform == "darwin" and px_base > 0:
+        scale = base / max(UI_FONT_SIZE, 1)
+        font.setPixelSize(max(6, int(round(px_base * scale))))
+    else:
+        font.setPointSize(base)
+    return font
+
+def _ui_font_stylesheet_size(point_size: int = UI_FONT_SIZE) -> str:
+    """CSS font-size token matching _application_ui_font()."""
+    base = max(6, min(int(point_size), 24))
+    if sys.platform == "darwin" and UI_FONT_PIXEL_SIZE > 0:
+        scale = base / max(UI_FONT_SIZE, 1)
+        return f"{max(6, int(round(UI_FONT_PIXEL_SIZE * scale)))}px"
+    return f"{base}pt"
 
 # ---- Layout ---------------------------------------------------------------
 LABEL_WIDTH              = 160  # Width of the frozen task-label column (px).
@@ -359,7 +375,6 @@ class _RenderRuntimeState:
     """Process-local mutable render toggles and cache-affecting state."""
 
     colorblind_active: bool = False
-    vertical_label_use_pixmap: bool = _VERTICAL_LABEL_USE_PIXMAP_DEFAULT
 
 _RENDER_RUNTIME = _RenderRuntimeState()
 
@@ -3480,10 +3495,6 @@ def _set_colorblind_mode(enabled: bool) -> None:
     _RENDER_RUNTIME.colorblind_active = bool(enabled)
     _clear_render_color_caches()
 
-def _set_vertical_label_pixmap_mode(enabled: bool) -> None:
-    """Apply vertical-label rendering mode at module scope."""
-    _RENDER_RUNTIME.vertical_label_use_pixmap = bool(enabled)
-
 def _reset_render_state_for_new_trace() -> None:
     """Reset dynamic render state before loading a new trace."""
     _STI_DYNAMIC_COLORS.clear()
@@ -3698,87 +3709,26 @@ def _make_rotated_label(scene, text: str, font: "QFont", color: "QColor",
                         x_center: float, y: float, z: float) -> "QGraphicsItem":
     """Add an antialiased rotated label to *scene*.
 
-    Two rendering strategies are available, selected by the module-level flag
-    *_VERTICAL_LABEL_USE_PIXMAP_DEFAULT* (default: True on Windows, False elsewhere):
-
-    Pixmap strategy (Windows workaround)
-        Renders the text onto a QPixmap horizontally - where all platforms
-        apply full antialiasing - then rotates the finished image by -90deg.
-        This sidesteps the Windows/GDI limitation that prevents antialiasing
-        of rotated text glyphs, producing smooth labels on all Windows
-        rendering back-ends (GDI, Direct2D, OpenGL).
-
-    TextItem strategy (default on non-Windows)
-        Creates a QGraphicsTextItem (not SimpleTextItem, which renders as a
-        filled silhouette) and sets QFont.PreferAntialias so Qt's own
-        subpixel renderer is used instead of GDI.  Rotation is applied via
-        QGraphicsItem.setRotation(-90deg).  Works correctly on macOS / Linux.
-
     *x_center* is the horizontal centre of the column the label belongs to.
     The item is horizontally centred on that column.  The *y* parameter is the
     **bottom edge** of the label in scene coordinates - the label text grows
-    upward from that point in both rendering paths.
+    upward from that point.
     """
-    if _RENDER_RUNTIME.vertical_label_use_pixmap:
-        # --- Pixmap path: render text at native res, then rotate the image ---
-        pm_font = QFont(font)
-        fm = QFontMetrics(pm_font)
-        # Add small horizontal/vertical padding to avoid clipping descenders.
-        pad_x, pad_y = 2, 1
-        px_w = fm.horizontalAdvance(text) + pad_x * 2
-        px_h = fm.height() + pad_y * 2
-        dpr = QApplication.instance().devicePixelRatio()
-        pm = QPixmap(max(1, math.ceil(px_w * dpr)), max(1, math.ceil(px_h * dpr)))
-        pm.setDevicePixelRatio(dpr)
-        pm.fill(Qt.GlobalColor.transparent)
-        # Re-measure against the paint device so that subpixel hinting of the
-        # high-DPI pixmap is reflected in the draw rect.
-        fm_dev = QFontMetricsF(pm_font, pm)
-        dev_w = fm_dev.horizontalAdvance(text) + pad_x * 2
-        dev_h = fm_dev.height() + pad_y * 2
-        p = QPainter(pm)
-        try:
-            p.setRenderHint(QPainter.Antialiasing)
-            p.setRenderHint(QPainter.TextAntialiasing)
-            p.setFont(pm_font)
-            p.setPen(color)
-            p.drawText(QRectF(0, 0, dev_w, dev_h), Qt.AlignmentFlag.AlignCenter, text)
-        finally:
-            p.end()
-        # Rotate -90deg and use SmoothTransformation so the resampling step
-        # does not introduce additional jaggedness.
-        rotated = pm.transformed(QTransform().rotate(-90), Qt.TransformationMode.SmoothTransformation)
-        rotated.setDevicePixelRatio(dpr)
-        item = QGraphicsPixmapItem(rotated)
-        # The pixmap has no further rotation applied, so pos.y is the TOP of the
-        # image (extends downward).  The TextItem path anchors pos.y at the BOTTOM
-        # of the text (it extends upward after the -90deg rotation).  Shift the
-        # pixmap up by its own height so both paths share the same y anchor: the
-        # bottom edge of the label sits at y, and the text grows upward.
-        item.setPos(x_center - rotated.width() / 2.0, y - rotated.height())
-        item.setZValue(z)
-        item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
-        item.setAcceptHoverEvents(False)
-        scene.addItem(item)
-        return item
-    else:
-        # --- TextItem path: rotated QGraphicsTextItem with PreferAntialias ---
-        # Force non-GDI antialiasing on Windows so rotated glyphs are smooth.
-        aa_font = QFont(font)
-        aa_font.setStyleStrategy(QFont.PreferAntialias)
-        item = QGraphicsTextItem(text)
-        item.setFont(aa_font)
-        item.setDefaultTextColor(color)
-        item.setRotation(-90)
-        # QGraphicsTextItem bounding rect includes a 2 px document margin on
-        # each side, so use the real height rather than fm.height() for
-        # centering.
-        item.setPos(x_center - item.boundingRect().height() / 2, y)
-        item.setZValue(z)
-        item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
-        item.setAcceptHoverEvents(False)
-        scene.addItem(item)
-        return item
+    aa_font = QFont(font)
+    aa_font.setStyleStrategy(QFont.PreferAntialias)
+    item = QGraphicsTextItem(text)
+    item.setFont(aa_font)
+    item.setDefaultTextColor(color)
+    item.setRotation(-90)
+    # QGraphicsTextItem bounding rect includes a 2 px document margin on
+    # each side, so use the real height rather than fm.height() for
+    # centering.
+    item.setPos(x_center - item.boundingRect().height() / 2, y)
+    item.setZValue(z)
+    item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+    item.setAcceptHoverEvents(False)
+    scene.addItem(item)
+    return item
 
 # Resolved family name of the system fixed-pitch font, used in Qt stylesheets.
 # Lazily initialised on first use so that import does not require a live
@@ -8470,6 +8420,7 @@ class _DockWidthResizeFilter(QObject):
 
     def _begin_drag(self, global_x: float) -> None:
         self._dragging = True
+        self._win._right_dock_custom_drag = True
         self._start_global_x = global_x
         self._start_width = self._win._current_right_dock_width()
         _HoverCursor.show(Qt.CursorShape.SizeHorCursor)
@@ -8479,14 +8430,13 @@ class _DockWidthResizeFilter(QObject):
 
     def _apply_drag(self, global_x: float) -> None:
         delta = global_x - self._start_global_x
-        if self._edge == "left":
-            width = self._start_width + delta
-        else:
-            width = self._start_width - delta
+        # Match web App.vue: nextW = startW - dx (drag left → wider right panel).
+        width = self._start_width - delta
         self._win._apply_right_dock_width(width)
 
     def _end_drag(self) -> None:
         self._dragging = False
+        self._win._right_dock_custom_drag = False
         app = QApplication.instance()
         if app:
             app.removeEventFilter(self)
@@ -8494,8 +8444,8 @@ class _DockWidthResizeFilter(QObject):
         self._win._apply_right_dock_width(self._win._current_right_dock_width())
         _wire_splitter_handle_cursors(self._win)
 
-class _RightDockShrinkGuard(QObject):
-    """Clear latched child minimum widths when a right dock is narrowed."""
+class _RightDockResizeGuard(QObject):
+    """Keep the main-window frame fixed when the right dock column is resized."""
 
     def __init__(self, win: "MainWindow", dock: QDockWidget) -> None:
         super().__init__(dock)
@@ -8505,11 +8455,12 @@ class _RightDockShrinkGuard(QObject):
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
         if obj is self._dock and event.type() == QEvent.Type.Resize:
+            if getattr(self._win, "_right_dock_custom_drag", False):
+                return False
             w = self._dock.width()
-            if w < self._last_w:
-                QTimer.singleShot(
-                    0, lambda w=w: self._win._apply_right_dock_width(w))
-            self._last_w = w
+            if w != self._last_w:
+                self._last_w = w
+                self._win._schedule_stabilize_right_dock_layout()
         return False
 
 class _LabelColumnGrip(QWidget):
@@ -13311,7 +13262,7 @@ class _StatsPanel(QWidget):
         self._is_dark: bool = True
         self._plot_dlg = None   # keep reference to prevent GC
         self._plot_mk: Optional[str] = None
-        self._plot_kind: Optional[str] = None   # "exec", "block", "inter", "preempt", "interval"
+        self._plot_kind: Optional[str] = None   # "exec", "block", "inter", "preempt", "interval", "tick"
         self._plot_preemptor: Optional[str] = None
         self._plot_interval_id: Optional[str] = None
         self._trace: Optional["BtfTrace"] = None
@@ -13867,6 +13818,18 @@ class _StatsPanel(QWidget):
         if rng is not None:
             lo, hi, _ = rng
         scope = self._scope_suffix()
+        if kind == "tick":
+            times = list(trace.tick_sti_times)
+            if lo is not None and hi is not None:
+                times = [t for t in times if lo <= t <= hi]
+            if len(times) < 2:
+                return None
+            pts = [
+                (times[i], times[i] - times[i - 1], None)
+                for i in range(1, len(times))
+            ]
+            title = f"Tick Interval Distribution{scope}"
+            return title, pts, QColor("#64B5F6")
         if kind == "interval":
             iid = self._plot_interval_id or mk
             pts = _interval_plot_points(trace, iid, lo, hi)
@@ -13953,22 +13916,10 @@ class _StatsPanel(QWidget):
 
     def _open_tick_dist_plot(self, trace: "BtfTrace") -> None:
         """Open a tick-interval distribution scatter+histogram plot."""
-        rng = self._stats_range()
-        lo = hi = None
-        if rng is not None:
-            lo, hi, _ = rng
-        scope = self._scope_suffix()
-        times = trace.tick_sti_times
-        if lo is not None and hi is not None:
-            times = [t for t in times if lo <= t <= hi]
-        if len(times) < 2:
+        built = self._build_plot_points(trace, "__tick_dist__", "tick")
+        if built is None:
             return
-        pts = [
-            (times[i], times[i] - times[i - 1], None)
-            for i in range(1, len(times))
-        ]
-        title = f"Tick Interval Distribution{scope}"
-        color = QColor("#64B5F6")
+        title, pts, color = built
         scoped, badge, detail = self._plot_scope_banner()
         if self._plot_dlg is not None:
             try:
@@ -14015,7 +13966,12 @@ class _StatsPanel(QWidget):
                              preemptor: Optional[str] = None) -> None:
         """Re-open the metrics plot saved for a trace tab, if it was visible."""
         self.clear_plot_session()
-        if not open_ or not mk or not kind or trace is None:
+        if not open_ or not kind or trace is None:
+            return
+        if kind == "tick":
+            self._open_tick_dist_plot(trace)
+            return
+        if not mk:
             return
         self._open_plot(trace, mk, kind, preemptor=preemptor)
 
@@ -15501,24 +15457,26 @@ class _StatsPanel(QWidget):
 
             # --- tickless distribution button ---
             if _tick["is_tickless"]:
-                hint_w = QWidget()
-                hint_lay = QHBoxLayout(hint_w)
-                hint_lay.setContentsMargins(0, 2, 0, 2)
-                hint_lay.setSpacing(6)
-                hint_lay.addWidget(self._lbl(
-                    "Tickless mode: tick intervals vary.", color="#888888", ui_fs=_fs))
+                hint_lbl = self._lbl(
+                    "Tickless mode: tick intervals vary.",
+                    color="#888888", ui_fs=_fs)
+                hint_lbl.setWordWrap(True)
+                blay.addWidget(hint_lbl)
                 dist_btn = QPushButton("Tick Distribution\u2026")
                 dist_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-                dist_btn.setFlat(True)
                 dist_btn.setStyleSheet(
                     f"font-size:{_fs}; border:1px solid #555; border-radius:3px;"
-                    f" padding:1px 6px; color:#aaa; background:transparent;"
+                    f" padding:2px 8px; color:#aaa; background:transparent;"
                 )
                 dist_btn.clicked.connect(
-                    lambda: self._open_tick_dist_plot(trace))
-                hint_lay.addWidget(dist_btn)
-                hint_lay.addStretch()
-                blay.addWidget(hint_w)
+                    lambda: self._open_tick_dist_plot(self._trace))
+                btn_row = QWidget()
+                btn_lay = QHBoxLayout(btn_row)
+                btn_lay.setContentsMargins(0, 0, 0, 0)
+                btn_lay.setSpacing(0)
+                btn_lay.addWidget(dist_btn)
+                btn_lay.addStretch()
+                blay.addWidget(btn_row)
 
             if _tick["large_gaps"]:
                 blay.addWidget(self._lbl(
@@ -16079,9 +16037,6 @@ class _RcSettings:
             "show_grid":         "true",
             "show_marks":        "true",
             "show_find":         "false",
-            # Vertical-mode label rendering workaround: on Windows, GDI cannot
-            # antialias rotated text, so the pixmap path is the better default.
-            "vert_label_pixmap": str(_VERTICAL_LABEL_USE_PIXMAP_DEFAULT).lower(),
         },
         "zoom": {
             "timescale_per_px": "-1",
@@ -16534,7 +16489,6 @@ class _SettingsDialog(QDialog):
                  show_sti: bool, show_grid: bool,
                  show_legend: bool, show_stats: bool, show_marks: bool,
                  show_hover_highlight: bool,
-                 vert_label_pixmap: bool,
                  zoom_unit: str,
                  label_width: int, row_height: int, row_gap: int,
                  sti_row_h: int, sti_waveform_h: int, sti_line_style: str,
@@ -16555,14 +16509,13 @@ class _SettingsDialog(QDialog):
         self._preview_timer.setInterval(0)
         self._preview_timer.timeout.connect(self.live_preview.emit)
 
-        _ui_fs = f"{ui_font_size}pt"
+        _ui_fs = _ui_font_stylesheet_size(ui_font_size)
 
         # Set an explicit font on the dialog so every child widget (including
         # QListWidget which uses native rendering on macOS and ignores CSS
         # font-size) inherits the correct point size consistently regardless
         # of which app-level theme was applied most recently.
-        _dlg_font = QApplication.instance().font()
-        _dlg_font.setPointSize(ui_font_size)
+        _dlg_font = _application_ui_font(ui_font_size)
         self.setFont(_dlg_font)
 
         root = QVBoxLayout(self)
@@ -16687,17 +16640,9 @@ class _SettingsDialog(QDialog):
         self._hover_hl_cb.setToolTip(
             "Dim all other segments when hovering a task label.\n"
             "Disable for better performance with large traces.")
-        self._vert_label_pixmap_cb = QCheckBox("Vertical labels: use pixmap rendering (Windows fix)")
-        self._vert_label_pixmap_cb.setChecked(vert_label_pixmap)
-        self._vert_label_pixmap_cb.setToolTip(
-            "Render vertical-mode task labels onto a QPixmap first, then\n"
-            "rotate the image. Avoids the Windows GDI limitation that\n"
-            "prevents antialiasing of rotated text. Enabled by default on\n"
-            "Windows; other platforms use the native text path.")
         v2.addWidget(self._indented(self._sti_cb))
         v2.addWidget(self._indented(self._grid_cb))
         v2.addWidget(self._indented(self._hover_hl_cb))
-        v2.addWidget(self._indented(self._vert_label_pixmap_cb))
         v2.addStretch()
 
         self._content_stack.addWidget(p2)
@@ -16856,7 +16801,6 @@ class _SettingsDialog(QDialog):
             self._marks_cb.stateChanged,
             self._cpu_load_cb.stateChanged,
             self._hover_hl_cb.stateChanged,
-            self._vert_label_pixmap_cb.stateChanged,
             self._label_width_spin.valueChanged,
             self._row_height_spin.valueChanged,
             self._row_gap_spin.valueChanged,
@@ -16884,7 +16828,6 @@ class _SettingsDialog(QDialog):
         self._marks_cb.setChecked(True)
         self._cpu_load_cb.setChecked(True)
         self._hover_hl_cb.setChecked(_HOVER_HIGHLIGHT_ENABLED)
-        self._vert_label_pixmap_cb.setChecked(_VERTICAL_LABEL_USE_PIXMAP_DEFAULT)
         self._label_width_spin.setValue(LABEL_WIDTH)
         self._row_height_spin.setValue(ROW_HEIGHT)
         self._row_gap_spin.setValue(ROW_GAP)
@@ -16936,8 +16879,6 @@ class _SettingsDialog(QDialog):
     def show_marks(self) -> bool:         return self._marks_cb.isChecked()
     @property
     def show_hover_highlight(self) -> bool: return self._hover_hl_cb.isChecked()
-    @property
-    def vert_label_pixmap(self) -> bool:    return self._vert_label_pixmap_cb.isChecked()
 # ---------------------------------------------------------------------------
 # Snapshot Annotation Editor
 # ---------------------------------------------------------------------------
@@ -19070,6 +19011,10 @@ class MainWindow(QMainWindow):
         self._session_restore_queue: List[str] = []
         self._session_restore_active_idx: int = -1
         self._settings = _RcSettings()
+        self._dock_width_apply_guard: bool = False
+        self._dock_width_pending: Optional[float] = None
+        self._dock_stabilize_timer: Optional[QTimer] = None
+        self._right_dock_custom_drag: bool = False
 
         # -- Runtime state for settings managed via _SettingsDialog ----------
         self._show_sti:              bool  = True
@@ -19091,7 +19036,6 @@ class MainWindow(QMainWindow):
         self._sti_line_style_val:     str   = STI_LINE_STYLE
         self._timescale_per_px_default_val:  float = _TIMESCALE_PER_PX_DEFAULT
         self._hover_highlight_val:    bool  = _HOVER_HIGHLIGHT_ENABLED
-        self._vert_label_pixmap_val:  bool  = _RENDER_RUNTIME.vertical_label_use_pixmap
         self._cpu_load_row_h_val:     int   = CPU_LOAD_ROW_H
         self._colorblind_val:         bool  = False
         self._bookmarks: List[TraceBookmark] = []
@@ -19321,7 +19265,7 @@ class MainWindow(QMainWindow):
         c = self._theme_tokens(is_dark)
         win_bg = QColor(c["win_bg"])
         strip_bg = QColor(c["mid"])
-        _ui_fs = f"{getattr(self, '_ui_font_size_val', UI_FONT_SIZE)}pt"
+        _ui_fs = _ui_font_stylesheet_size(getattr(self, '_ui_font_size_val', UI_FONT_SIZE))
 
         tw = self._tab_widget
         tb = tw.tabBar()
@@ -19786,16 +19730,58 @@ class MainWindow(QMainWindow):
     def _resize_right_dock_column(self, w: int) -> None:
         docks = [self._legend_dock, self._stats_dock,
                  self._marks_dock, self._find_dock]
-        self.resizeDocks(docks, [w, w, w, w], Qt.Orientation.Horizontal)
+        sizes = [w, w, w, w]
+        if self.isMaximized() or self.isFullScreen():
+            self.resizeDocks(docks, sizes, Qt.Orientation.Horizontal)
+            return
+        # resizeDocks() on Windows can change the outer window width instead of
+        # only stealing/giving space to the central widget — pin the frame.
+        frame = self.geometry()
+        self.resizeDocks(docks, sizes, Qt.Orientation.Horizontal)
+        if self.geometry() != frame:
+            self.setGeometry(frame)
+            self.resizeDocks(docks, sizes, Qt.Orientation.Horizontal)
+
+    def _schedule_stabilize_right_dock_layout(self) -> None:
+        """Coalesce native dock splitter resizes into one stabilization pass."""
+        timer = self._dock_stabilize_timer
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.setInterval(0)
+            timer.timeout.connect(self._stabilize_right_dock_layout)
+            self._dock_stabilize_timer = timer
+        timer.start()
+
+    def _stabilize_right_dock_layout(self) -> None:
+        """Reconcile dock/central split after native splitter drags."""
+        self._apply_right_dock_width(self._current_right_dock_width())
 
     def _apply_right_dock_width(self, width: float) -> None:
-        w = max(_RIGHT_DOCK_MIN_W, min(_RIGHT_DOCK_MAX_W, int(width)))
-        self._relax_right_dock_content_widths()
-        self._resize_right_dock_column(w)
-        self._relax_right_dock_content_widths()
-        panel = getattr(self, "_stats_panel", None)
-        if panel is not None:
-            QTimer.singleShot(0, panel.sync_util_layout)
+        self._dock_width_pending = float(width)
+        self._run_right_dock_width_apply()
+
+    def _run_right_dock_width_apply(self) -> None:
+        if self._dock_width_apply_guard:
+            return
+        if self._dock_width_pending is None:
+            return
+        self._dock_width_apply_guard = True
+        try:
+            while self._dock_width_pending is not None:
+                width = self._dock_width_pending
+                self._dock_width_pending = None
+                w = max(_RIGHT_DOCK_MIN_W, min(_RIGHT_DOCK_MAX_W, int(width)))
+                self._relax_right_dock_content_widths()
+                self._resize_right_dock_column(w)
+                self._relax_right_dock_content_widths()
+            panel = getattr(self, "_stats_panel", None)
+            if panel is not None:
+                QTimer.singleShot(0, panel.sync_util_layout)
+        finally:
+            self._dock_width_apply_guard = False
+            if self._dock_width_pending is not None:
+                QTimer.singleShot(0, self._run_right_dock_width_apply)
 
     @staticmethod
     def _apply_right_dock_min_width(dock: QDockWidget) -> None:
@@ -19986,15 +19972,6 @@ class MainWindow(QMainWindow):
         # View mode
         if s.get("view", "view_mode", "task") == "core":
             self._set_view_mode("core")
-
-        # Vertical label pixmap workaround (applied after orientation so the
-        # horizontal-mode guard in _set_vert_label_pixmap correctly skips the
-        # rebuild when the scene is already in horizontal layout).
-        # Compare against the instance field (not the mutable global) so that
-        # any interim global mutation cannot cause the saved setting to be skipped.
-        saved_vlp = s.get_bool("view", "vert_label_pixmap", self._vert_label_pixmap_val)
-        if saved_vlp != self._vert_label_pixmap_val:
-            self._set_vert_label_pixmap(saved_vlp, persist=False)
 
         # Colorblind-safe task palette
         saved_cb = s.get_bool("view", "colorblind_safe", False)
@@ -20392,9 +20369,8 @@ class MainWindow(QMainWindow):
 
         # Application-wide font (menus, toolbar, status bar).
         _ui_font_size = getattr(self, '_ui_font_size_val', UI_FONT_SIZE)
-        _ui_fs = f"{_ui_font_size}pt"
-        base_font = app.font()
-        base_font.setPointSize(_ui_font_size)
+        _ui_fs = _ui_font_stylesheet_size(_ui_font_size)
+        base_font = _application_ui_font(_ui_font_size)
         app.setFont(base_font)
 
         # macOS native combo widgets ignore inherited/stylesheet font-size;
@@ -20903,9 +20879,6 @@ class MainWindow(QMainWindow):
             width_filt = _DockWidthResizeFilter(dock, self, "left", margin, ok)
             dock.installEventFilter(width_filt)
             dock._dock_width_resize_filter = width_filt
-            shrink_guard = _RightDockShrinkGuard(self, dock)
-            dock.installEventFilter(shrink_guard)
-            dock._dock_shrink_guard = shrink_guard
             vert_edges: list = []
             if dock is self._legend_dock:
                 vert_edges.append(("bottom", vert, ok))
@@ -20915,6 +20888,10 @@ class MainWindow(QMainWindow):
                 vert_filt = _EdgeResizeCursorFilter(dock, vert_edges, margin)
                 dock.installEventFilter(vert_filt)
                 dock._edge_resize_filter = vert_filt
+
+        resize_guard = _RightDockResizeGuard(self, self._stats_dock)
+        self._stats_dock.installEventFilter(resize_guard)
+        self._stats_dock._dock_resize_guard = resize_guard
 
         QTimer.singleShot(0, lambda: _wire_splitter_handle_cursors(self))
 
@@ -21106,9 +21083,8 @@ class MainWindow(QMainWindow):
         # Use a QListView popup instead of macOS native NSMenu - the native
         # popup ignores stylesheets and looks inconsistent with the themed UI.
         self._zoom_preset_combo.setView(QListView())
-        _combo_font = self._zoom_preset_combo.font()
-        _combo_font.setPointSize(getattr(self, '_ui_font_size_val', UI_FONT_SIZE))
-        self._zoom_preset_combo.setFont(_combo_font)
+        self._zoom_preset_combo.setFont(_application_ui_font(
+            getattr(self, '_ui_font_size_val', UI_FONT_SIZE)))
         self._zoom_preset_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
         self._zoom_preset_combo.setMinimumWidth(100)
         self._zoom_preset_combo.setToolTip("Zoom preset — pick a fixed scale or Fit")
@@ -21278,19 +21254,6 @@ class MainWindow(QMainWindow):
         """Toggle the STI waveform y-axis between linear and log2 scale."""
         enabled = self._tb_log2_btn.isChecked()
         self._view.set_sti_log_scale(enabled)
-
-    def _set_vert_label_pixmap(self, enabled: bool, persist: bool = True) -> None:
-        """Switch the vertical-label rendering strategy and rebuild the scene."""
-        self._vert_label_pixmap_val = bool(enabled)
-        _set_vertical_label_pixmap_mode(self._vert_label_pixmap_val)
-        # Rebuild so the new label strategy takes effect immediately.
-        # Skip the rebuild if the scene is in horizontal mode - the vertical-
-        # label pixmap setting has no effect there, so the rebuild is wasted.
-        if not self._view._scene._horizontal:
-            self._view._scene.rebuild()
-        if persist:
-            self._settings.set("view", "vert_label_pixmap",
-                               str(self._vert_label_pixmap_val).lower())
 
     def _set_colorblind_safe(self, enabled: bool) -> None:
         """Switch the task colour palette to/from the Okabe-Ito colorblind-safe set."""
@@ -22608,8 +22571,6 @@ class MainWindow(QMainWindow):
         if vals["show_hover_highlight"] != self._hover_highlight_val:
             self._hover_highlight_val = vals["show_hover_highlight"]
             self._view._scene.set_hover_highlight(self._hover_highlight_val)
-        if vals["vert_label_pixmap"] != self._vert_label_pixmap_val:
-            self._set_vert_label_pixmap(vals["vert_label_pixmap"], persist=False)
         if vals["colorblind_safe"] != self._colorblind_val:
             self._colorblind_val = vals["colorblind_safe"]
             self._set_colorblind_safe(self._colorblind_val)
@@ -22664,8 +22625,6 @@ class MainWindow(QMainWindow):
             updates["show_cpu_load"] = str(self._show_cpu_load).lower()
         if snap["show_hover_highlight"] != self._hover_highlight_val:
             updates["hover_highlight"] = str(self._hover_highlight_val).lower()
-        if snap["vert_label_pixmap"] != self._vert_label_pixmap_val:
-            updates["vert_label_pixmap"] = str(self._vert_label_pixmap_val).lower()
         if snap["colorblind_safe"] != self._colorblind_val:
             updates["colorblind_safe"] = str(self._colorblind_val).lower()
         if snap["label_width"] != self._label_width_val:
@@ -22704,7 +22663,6 @@ class MainWindow(QMainWindow):
             "show_marks":               self._show_marks,
             "show_cpu_load":            self._show_cpu_load,
             "show_hover_highlight":     self._hover_highlight_val,
-            "vert_label_pixmap":        self._vert_label_pixmap_val,
             "colorblind_safe":          self._colorblind_val,
             "label_width":              self._label_width_val,
             "row_height":               self._row_height_val,
@@ -22735,7 +22693,6 @@ class MainWindow(QMainWindow):
             timescale_per_px_default=self._timescale_per_px_default_val,
             is_dark=self._is_dark,
             show_hover_highlight=self._hover_highlight_val,
-            vert_label_pixmap=self._vert_label_pixmap_val,
             colorblind_safe=self._colorblind_val,
             zoom_unit=self._current_time_unit(),
             cpu_load_row_h=self._cpu_load_row_h_val,
@@ -22752,7 +22709,6 @@ class MainWindow(QMainWindow):
             "show_marks":               dlg.show_marks,
             "show_cpu_load":            dlg.cpu_load,
             "show_hover_highlight":     dlg.show_hover_highlight,
-            "vert_label_pixmap":        dlg.vert_label_pixmap,
             "colorblind_safe":          dlg.colorblind_safe,
             "label_width":              dlg.label_width,
             "row_height":               dlg.row_height,
@@ -22768,7 +22724,8 @@ class MainWindow(QMainWindow):
         # theme combo immediately repaints the dialog itself too.
         dlg.live_preview.connect(
             lambda: dlg.setStyleSheet(
-                _SettingsDialog._dialog_ss(dlg.is_dark, f"{dlg.ui_font_size}pt")
+                _SettingsDialog._dialog_ss(
+                    dlg.is_dark, _ui_font_stylesheet_size(dlg.ui_font_size))
             )
         )
         if _exec_centred(dlg, self) == QDialog.Accepted:
@@ -23782,11 +23739,10 @@ def _platform_preflight() -> None:
     )
 
 def _configure_qt_startup() -> None:
-    # On Windows with display scaling > 100 %, pinning QT_FONT_DPI to 96 keeps
-    # font sizes at their intended 96-DPI metrics while still letting widget
-    # geometry scale correctly.  AA_EnableHighDpiScaling / AA_UseHighDpiPixmaps
-    # are Qt 6 no-ops (high-DPI is always on) and have been removed.
-    os.environ.setdefault("QT_FONT_DPI", "96")
+    # QT_FONT_DPI=96 was a PyQt5 workaround. Qt6 applies per-monitor DPI scaling
+    # natively; forcing 96 DPI makes application fonts too small on Windows HiDPI.
+    if sys.platform == "win32":
+        os.environ.pop("QT_FONT_DPI", None)
 
     # macOS aborts inside _RegisterApplication when a headless QPA platform is
     # active (common when QT_QPA_PLATFORM=offscreen leaks from CI/IDE shells).

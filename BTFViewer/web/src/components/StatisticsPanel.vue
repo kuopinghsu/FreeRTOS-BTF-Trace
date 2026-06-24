@@ -3807,8 +3807,9 @@ watch(plotData, () => {
 }
 .tick-dist-hint {
   display: flex;
-  align-items: center;
-  gap: 6px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
 }
 .tick-dist-btn {
   background: none;
