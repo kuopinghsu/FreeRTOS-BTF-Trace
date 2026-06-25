@@ -8395,6 +8395,8 @@ def _relax_widget_tree(root: QWidget) -> None:
     for w in (root, *root.findChildren(QWidget)):
         if isinstance(w, _StatsSectionGrip) or _in_legend_panel(w):
             continue
+        if w.objectName() == "stats_scope_action":
+            continue
         w.setMinimumWidth(0)
         # Only relax push/tool buttons — QLabel and other controls need real width.
         if isinstance(w, (QPushButton, QToolButton)):
@@ -13954,9 +13956,11 @@ class _StatsPanel(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
-        scope_row = QHBoxLayout()
-        scope_row.setContentsMargins(8, 6, 8, 0)
-        scope_row.setSpacing(6)
+        scope_block = QVBoxLayout()
+        scope_block.setContentsMargins(8, 6, 8, 0)
+        scope_block.setSpacing(4)
+        scope_top = QHBoxLayout()
+        scope_top.setSpacing(6)
         self._scope_cb = QCheckBox("Limit to C1–Cn")
         self._scope_cb.setChecked(True)
         self._scope_cb.setEnabled(False)
@@ -13964,30 +13968,24 @@ class _StatsPanel(QWidget):
             "Limit statistics to the time window from C1 through the last cursor")
         self._scope_cb.toggled.connect(self._on_scope_toggled)
         _scope_pol = self._scope_cb.sizePolicy()
-        _scope_pol.setHorizontalPolicy(QSizePolicy.Policy.Ignored)
+        _scope_pol.setHorizontalPolicy(QSizePolicy.Policy.MinimumExpanding)
         self._scope_cb.setSizePolicy(_scope_pol)
         self._scope_cb.setMinimumWidth(0)
-        scope_row.addWidget(self._scope_cb, 1)
+        scope_top.addWidget(self._scope_cb, 1)
+        self._btn_stats_expand = self._make_scope_action_button(
+            _IC_SECTIONS_EXPAND, "Expand all statistics sections", self._expand_all_sections)
+        scope_top.addWidget(self._btn_stats_expand, 0)
+        self._btn_stats_collapse = self._make_scope_action_button(
+            _IC_SECTIONS_COLLAPSE, "Collapse all statistics sections",
+            self._collapse_all_sections)
+        scope_top.addWidget(self._btn_stats_collapse, 0)
+        scope_block.addLayout(scope_top)
         self._scope_label = QLabel("")
         self._scope_label.setStyleSheet("color:#888888;")
+        self._scope_label.setWordWrap(True)
         self._scope_label.setMinimumWidth(0)
-        scope_row.addWidget(self._scope_label, 0)
-        _ic = "#9E9E9E"
-        self._btn_stats_expand = QToolButton()
-        self._btn_stats_expand.setIcon(_svg_icon(_IC_SECTIONS_EXPAND, _ic))
-        self._btn_stats_expand.setIconSize(QSize(14, 14))
-        self._btn_stats_expand.setToolTip("Expand all statistics sections")
-        self._btn_stats_expand.setAutoRaise(True)
-        self._btn_stats_expand.clicked.connect(self._expand_all_sections)
-        scope_row.addWidget(self._btn_stats_expand)
-        self._btn_stats_collapse = QToolButton()
-        self._btn_stats_collapse.setIcon(_svg_icon(_IC_SECTIONS_COLLAPSE, _ic))
-        self._btn_stats_collapse.setIconSize(QSize(14, 14))
-        self._btn_stats_collapse.setToolTip("Collapse all statistics sections")
-        self._btn_stats_collapse.setAutoRaise(True)
-        self._btn_stats_collapse.clicked.connect(self._collapse_all_sections)
-        scope_row.addWidget(self._btn_stats_collapse)
-        outer.addLayout(scope_row)
+        scope_block.addWidget(self._scope_label)
+        outer.addLayout(scope_block)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
@@ -14027,6 +14025,39 @@ class _StatsPanel(QWidget):
             btn.setMinimumWidth(0)
             btn.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         outer.addLayout(exp_row)
+
+    def _scope_action_icon_color(self) -> str:
+        return "#9E9E9E" if self._is_dark else "#666666"
+
+    def _make_scope_action_button(self, icon_path: str, tooltip: str,
+                                  slot) -> QToolButton:
+        btn = QToolButton()
+        btn.setObjectName("stats_scope_action")
+        btn.setIcon(_svg_icon(icon_path, self._scope_action_icon_color()))
+        btn.setIconSize(QSize(14, 14))
+        btn.setToolTip(tooltip)
+        btn.setAutoRaise(True)
+        btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        btn.setFixedSize(26, 26)
+        pol = btn.sizePolicy()
+        pol.setHorizontalPolicy(QSizePolicy.Policy.Fixed)
+        pol.setVerticalPolicy(QSizePolicy.Policy.Fixed)
+        btn.setSizePolicy(pol)
+        btn.clicked.connect(slot)
+        return btn
+
+    def _pin_scope_action_buttons(self) -> None:
+        for btn in (self._btn_stats_expand, self._btn_stats_collapse):
+            btn.setFixedSize(26, 26)
+            pol = btn.sizePolicy()
+            pol.setHorizontalPolicy(QSizePolicy.Policy.Fixed)
+            pol.setVerticalPolicy(QSizePolicy.Policy.Fixed)
+            btn.setSizePolicy(pol)
+
+    def _update_scope_action_icons(self) -> None:
+        color = self._scope_action_icon_color()
+        self._btn_stats_expand.setIcon(_svg_icon(_IC_SECTIONS_EXPAND, color))
+        self._btn_stats_collapse.setIcon(_svg_icon(_IC_SECTIONS_COLLAPSE, color))
 
     def _clear(self) -> None:
         self._table_grips.clear()
@@ -14079,6 +14110,7 @@ class _StatsPanel(QWidget):
         _relax_widget_tree(self)
         if self._inner is not None:
             _relax_widget_tree(self._inner)
+        self._pin_scope_action_buttons()
         for table in self.findChildren(QTableWidget):
             table.setMinimumWidth(0)
             hdr = table.horizontalHeader()
@@ -14474,6 +14506,9 @@ class _StatsPanel(QWidget):
     def set_dark(self, is_dark: bool) -> None:
         self._is_dark = is_dark
         self._apply_panel_theme()
+        self._update_scope_action_icons()
+        for sid in self._section_headers:
+            self._update_section_header_icon(sid)
         for grip in self._table_grips:
             grip.set_dark(is_dark)
         if self._plot_dlg is not None:
