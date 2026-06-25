@@ -292,6 +292,8 @@ LABEL_BOTTOM_MARGIN      =  10  # Gap (px) between bottom edge of a vertical lab
 
 # ---- Performance / Level-of-Detail ----------------------------------------
 _TIMESCALE_PER_PX_DEFAULT= 2.0    # Initial zoom level (nanoseconds per screen pixel).
+# Qt QScrollBar range is capped near INT_MAX; keep scene timeline width below this.
+_MAX_SCENE_TIMELINE_PX    = 2_000_000_000
 _HOVER_HIGHLIGHT_ENABLED = False  # Highlight task bars when hovering the label (default off).
 # _BatchRowItem.paint() LOD thresholds (Qt levelOfDetail: 1.0 = 100% zoom).
 _PAINT_LOD_COARSE        = 0.45   # Below: merge nearby segments, skip pen outlines.
@@ -4124,6 +4126,9 @@ class TimelineScene(QGraphicsScene):
         # attached QGraphicsView, or falls back to the full trace time range.
         self._vp_ns_lo: int = 0
         self._vp_ns_hi: int = 0
+        # Scene time-axis origin (ns).  Timeline coords are relative to this value
+        # so QGraphicsScene width stays within Qt's scroll-bar range (~2e9 px).
+        self._scene_origin_ns: int = 0
         # When zoom_to_range() calls rebuild(), the view hasn't scrolled to
         # the new position yet, so the viewport-based ns computation would
         # cover the wrong part of the trace.  zoom_to_range() sets this hint
@@ -4246,6 +4251,7 @@ class TimelineScene(QGraphicsScene):
 
     def set_trace(self, trace: BtfTrace, viewport_width: int = 1200) -> None:
         self._trace = trace
+        self._scene_origin_ns = trace.time_min
         self._heatmap_filter_mks = None
         time_span = max(trace.time_max - trace.time_min, 1)
         avail = max(viewport_width - self._label_width, 100)
@@ -4650,7 +4656,7 @@ class TimelineScene(QGraphicsScene):
         """Convert a scene X (horizontal) or Y (vertical) coord to ns."""
         if self._trace is None:
             return 0
-        ns = int((coord - self._label_width) * self._timescale_per_px) + self._trace.time_min
+        ns = int((coord - self._label_width) * self._timescale_per_px) + self._scene_origin_ns
         return max(self._trace.time_min, min(self._trace.time_max, ns))
 
     def ns_to_scene_coord(self, ns: int) -> float:
@@ -5325,8 +5331,9 @@ class TimelineScene(QGraphicsScene):
             hi_coord = view.mapToScene(vp_rect.bottomLeft()).y()
 
         lw = self._label_width
-        ns_lo = t_min + int((lo_coord - lw) * self._timescale_per_px)
-        ns_hi = t_min + int((hi_coord - lw) * self._timescale_per_px)
+        origin = self._scene_origin_ns
+        ns_lo = origin + int((lo_coord - lw) * self._timescale_per_px)
+        ns_hi = origin + int((hi_coord - lw) * self._timescale_per_px)
 
         # Guard: clamp raw viewport-derived ns values to the trace bounds.
         # During zoom transitions the scroll position may not yet match the
@@ -5389,6 +5396,8 @@ class TimelineScene(QGraphicsScene):
         if self._rebuild_suspend > 0:
             return
         self._update_viewport_bounds()
+        if self._trace is not None:
+            self._scene_origin_ns = self._vp_ns_lo
         self.clear()
         self._cursor_items = []
         self._mark_items = []
@@ -5428,7 +5437,13 @@ class TimelineScene(QGraphicsScene):
     # ------------------------------------------------------------------
 
     def _ns_to_px(self, ns: int) -> float:
-        return (ns - self._trace.time_min) / self._timescale_per_px
+        return (ns - self._scene_origin_ns) / self._timescale_per_px
+
+    def _scene_timeline_span_px(self) -> float:
+        """Visible timeline span in pixels (capped for Qt scroll-bar limits)."""
+        visible_ns = max(self._vp_ns_hi - self._vp_ns_lo, 1)
+        span_px = visible_ns / self._timescale_per_px
+        return min(span_px, _MAX_SCENE_TIMELINE_PX)
 
     # ------------------------------------------------------------------
     # Filtering helpers
@@ -5511,7 +5526,7 @@ class TimelineScene(QGraphicsScene):
         return ViewClipParams(
             ns_lo=self._vp_ns_lo,
             ns_hi=self._vp_ns_hi,
-            time_min=tr.time_min,
+            time_min=self._scene_origin_ns,
             px_per_ns=1.0 / self._timescale_per_px,
             offset=self._label_width,
             cur_timescale_per_px=self._timescale_per_px,
@@ -5596,7 +5611,7 @@ class TimelineScene(QGraphicsScene):
 
         batch = _BatchRowItem(
             band_rect, seg_data, trace.time_scale, xs=xs,
-            time_min=trace.time_min)
+            time_min=vp.time_min)
         batch.setZValue(batch_z)
         self.addItem(batch)
         if freeze_top:
@@ -5834,7 +5849,7 @@ class TimelineScene(QGraphicsScene):
             return
 
         time_span  = trace.time_max - trace.time_min
-        timeline_w = time_span / self._timescale_per_px
+        timeline_w = self._scene_timeline_span_px()
         _sti_total_h = sum(
             (self._sti_waveform_h_val if c in self._sti_expanded else self._sti_row_h_val) + self._row_gap
             for c in sti_rows)
@@ -5857,14 +5872,16 @@ class TimelineScene(QGraphicsScene):
         _ruler_grid = _RulerItem(trace, self._timescale_per_px, total_w, total_h,
                                    font, trace.time_scale, self._show_grid,
                                    horiz=True, axis_offset=self._label_width,
-                                   draw_header=False)
+                                   draw_header=False,
+                                   scene_origin_ns=self._scene_origin_ns)
         _ruler_grid.setZValue(0.5)
         self.addItem(_ruler_grid)
         # Header-only ruler: tick marks + labels, frozen to the top edge.
         _ruler_hdr = _RulerItem(trace, self._timescale_per_px, total_w, total_h,
                                  font, trace.time_scale, show_grid=False,
                                  horiz=True, axis_offset=self._label_width,
-                                 draw_grid=False)
+                                 draw_grid=False,
+                                 scene_origin_ns=self._scene_origin_ns)
         _ruler_hdr.setZValue(11)
         self.addItem(_ruler_hdr)
         self._frozen_top_items.append((_ruler_hdr, 0))
@@ -5951,7 +5968,7 @@ class TimelineScene(QGraphicsScene):
                 label_fm=fm_inline if _inline_labels else None,
                 label_text=disp if _inline_labels else "",
                 trace=trace,
-                xs=xs, time_min=trace.time_min, timescale_per_px=self._timescale_per_px)
+                xs=xs, time_min=vp.time_min, timescale_per_px=self._timescale_per_px)
             batch.setZValue(1)
             self.addItem(batch)
 
@@ -6017,7 +6034,7 @@ class TimelineScene(QGraphicsScene):
                 _sti_item = _BatchStiItem(
                     QRectF(lw, y_top, timeline_w, row_h),
                     _sti_markers, trace.time_scale, horizontal=True, axis=y_ctr,
-                    time_min=trace.time_min)
+                    time_min=vp.time_min)
                 _sti_item.setZValue(2)
                 self.addItem(_sti_item)
             _sti_y += row_h + self._row_gap
@@ -6084,7 +6101,7 @@ class TimelineScene(QGraphicsScene):
         col_w       = max(self._row_height + self._row_gap, 26)
         label_row_h = self._label_width
         time_span   = trace.time_max - trace.time_min
-        timeline_h  = time_span / self._timescale_per_px
+        timeline_h  = self._scene_timeline_span_px()
         # STI columns may be wider when expanded
         total_sti_w = sum(
             (self._sti_waveform_h_val
@@ -6113,14 +6130,16 @@ class TimelineScene(QGraphicsScene):
         _ruler_grid = _RulerItem(trace, self._timescale_per_px, total_w, total_h,
                                    font, trace.time_scale, self._show_grid,
                                    horiz=False, axis_offset=label_row_h,
-                                   draw_header=False)
+                                   draw_header=False,
+                                   scene_origin_ns=self._scene_origin_ns)
         _ruler_grid.setZValue(0.5)
         self.addItem(_ruler_grid)
         # Header-only ruler: tick marks + labels, frozen to left edge.
         _ruler_hdr = _RulerItem(trace, self._timescale_per_px, total_w, total_h,
                                   font, trace.time_scale, show_grid=False,
                                   horiz=False, axis_offset=label_row_h,
-                                  draw_grid=False)
+                                  draw_grid=False,
+                                 scene_origin_ns=self._scene_origin_ns)
         _ruler_hdr.setZValue(36)
         self.addItem(_ruler_hdr)
         self._frozen_items.append((_ruler_hdr, 0))
@@ -6200,7 +6219,7 @@ class TimelineScene(QGraphicsScene):
                 label_fm=fm_inline if _inline_labels else None,
                 label_text=disp if _inline_labels else "",
                 trace=trace,
-                xs=xs, time_min=trace.time_min, timescale_per_px=self._timescale_per_px)
+                xs=xs, time_min=vp.time_min, timescale_per_px=self._timescale_per_px)
             batch.setZValue(1)
             self.addItem(batch)
 
@@ -6269,7 +6288,7 @@ class TimelineScene(QGraphicsScene):
                 _sti_item_v = _BatchStiItem(
                     QRectF(x_left, label_row_h, cw_sti, timeline_h),
                     _sti_markers_v, trace.time_scale, horizontal=False, axis=x_ctr,
-                    time_min=trace.time_min)
+                    time_min=vp.time_min)
                 _sti_item_v.setZValue(2)
                 self.addItem(_sti_item_v)
 
@@ -6328,7 +6347,7 @@ class TimelineScene(QGraphicsScene):
             return
 
         time_span  = trace.time_max - trace.time_min
-        timeline_w = time_span / self._timescale_per_px
+        timeline_w = self._scene_timeline_span_px()
         _n_non_sti = sum(_row_count(c) for c in core_names)
         _sti_total_h = sum(
             (self._sti_waveform_h_val if c in self._sti_expanded else self._sti_row_h_val) + self._row_gap
@@ -6352,19 +6371,21 @@ class TimelineScene(QGraphicsScene):
         _ruler_grid = _RulerItem(trace, self._timescale_per_px, total_w, total_h,
                                    font, trace.time_scale, self._show_grid,
                                    horiz=True, axis_offset=self._label_width,
-                                   draw_header=False)
+                                   draw_header=False,
+                                   scene_origin_ns=self._scene_origin_ns)
         _ruler_grid.setZValue(0.5)
         self.addItem(_ruler_grid)
         # Header-only ruler (frozen by Y - always visible at viewport top).
         _ruler_hdr = _RulerItem(trace, self._timescale_per_px, total_w, total_h,
                                  font, trace.time_scale, show_grid=False,
                                  horiz=True, axis_offset=self._label_width,
-                                 draw_grid=False)
+                                 draw_grid=False,
+                                 scene_origin_ns=self._scene_origin_ns)
         _ruler_hdr.setZValue(11)
         self.addItem(_ruler_hdr)
         self._frozen_top_items.append((_ruler_hdr, 0))
 
-        _time_min  = trace.time_min
+        _time_min  = self._scene_origin_ns
         _px_per_ns = 1.0 / self._timescale_per_px
         lw         = self._label_width
         _vp_ns_lo  = self._vp_ns_lo
@@ -6465,7 +6486,7 @@ class TimelineScene(QGraphicsScene):
                         QRectF(lw, y_top, timeline_w, self._row_height),
                         seg_data, trace.time_scale,
                         trace=trace,
-                        xs=xs, time_min=trace.time_min)
+                        xs=xs, time_min=vp.time_min)
                     batch.setZValue(1)
                     self.addItem(batch)
 
@@ -6560,7 +6581,7 @@ class TimelineScene(QGraphicsScene):
                     seg_data, trace.time_scale,
                     label_font=font_sm, label_fm=fm_sm, label_text=disp,
                     trace=trace,
-                    xs=xs, time_min=trace.time_min, timescale_per_px=self._timescale_per_px)
+                    xs=xs, time_min=vp.time_min, timescale_per_px=self._timescale_per_px)
                 batch.setZValue(1)
                 self.addItem(batch)
 
@@ -6615,7 +6636,7 @@ class TimelineScene(QGraphicsScene):
                 _sti_item_ch = _BatchStiItem(
                     QRectF(lw, y_top, timeline_w, row_h),
                     _sti_markers_ch, trace.time_scale, horizontal=True, axis=y_ctr,
-                    time_min=trace.time_min)
+                    time_min=vp.time_min)
                 _sti_item_ch.setZValue(2)
                 self.addItem(_sti_item_ch)
             _sti_y += row_h + self._row_gap
@@ -6669,7 +6690,7 @@ class TimelineScene(QGraphicsScene):
         col_w       = max(self._row_height + self._row_gap, 26)
         label_row_h = self._label_width
         time_span   = trace.time_max - trace.time_min
-        timeline_h  = time_span / self._timescale_per_px
+        timeline_h  = self._scene_timeline_span_px()
         # STI columns may be wider when expanded
         total_sti_w = sum(
             (self._sti_waveform_h_val
@@ -6698,19 +6719,21 @@ class TimelineScene(QGraphicsScene):
         _ruler_grid_c = _RulerItem(trace, self._timescale_per_px, total_w, total_h,
                                      font, trace.time_scale, self._show_grid,
                                      horiz=False, axis_offset=label_row_h,
-                                     draw_header=False)
+                                     draw_header=False,
+                                   scene_origin_ns=self._scene_origin_ns)
         _ruler_grid_c.setZValue(0.5)
         self.addItem(_ruler_grid_c)
         # Header-only ruler: tick marks + labels, frozen to left edge.
         _ruler_hdr_c = _RulerItem(trace, self._timescale_per_px, total_w, total_h,
                                     font, trace.time_scale, show_grid=False,
                                     horiz=False, axis_offset=label_row_h,
-                                    draw_grid=False)
+                                    draw_grid=False,
+                                 scene_origin_ns=self._scene_origin_ns)
         _ruler_hdr_c.setZValue(36)
         self.addItem(_ruler_hdr_c)
         self._frozen_items.append((_ruler_hdr_c, 0))
 
-        _time_min  = trace.time_min
+        _time_min  = self._scene_origin_ns
         _px_per_ns = 1.0 / self._timescale_per_px
         _vp_ns_lo  = self._vp_ns_lo
         _vp_ns_hi  = self._vp_ns_hi
@@ -6770,7 +6793,7 @@ class TimelineScene(QGraphicsScene):
                         QRectF(x_left, label_row_h, col_w, timeline_h),
                         seg_data, trace.time_scale,
                         trace=trace,
-                        xs=xs, time_min=trace.time_min)
+                        xs=xs, time_min=vp.time_min)
                     batch.setZValue(1)
                     self.addItem(batch)
 
@@ -6857,7 +6880,7 @@ class TimelineScene(QGraphicsScene):
                     seg_data, trace.time_scale,
                     label_font=font_sm, label_fm=fm_sm, label_text=disp,
                     trace=trace,
-                    xs=xs, time_min=trace.time_min, timescale_per_px=self._timescale_per_px)
+                    xs=xs, time_min=vp.time_min, timescale_per_px=self._timescale_per_px)
                 batch.setZValue(1)
                 self.addItem(batch)
 
@@ -6918,7 +6941,7 @@ class TimelineScene(QGraphicsScene):
                 _sti_itm_vc = _BatchStiItem(
                     QRectF(x_left, label_row_h, cw_sti_vc, timeline_h),
                     _sti_mrk_vc, trace.time_scale, horizontal=False, axis=x_ctr_vc,
-                    time_min=trace.time_min)
+                    time_min=vp.time_min)
                 _sti_itm_vc.setZValue(2)
                 self.addItem(_sti_itm_vc)
 
@@ -6962,7 +6985,8 @@ class _RulerItem(QGraphicsItem):
                  font: QFont, time_scale,
                  show_grid: bool, horiz: bool,
                  axis_offset: float,
-                 draw_header: bool = True, draw_grid: bool = True):
+                 draw_header: bool = True, draw_grid: bool = True,
+                 scene_origin_ns: Optional[int] = None):
         super().__init__()
         self._trace       = trace
         self._npp         = timescale_per_px
@@ -6975,6 +6999,8 @@ class _RulerItem(QGraphicsItem):
         self._axis_offset = axis_offset
         self._draw_header = draw_header
         self._draw_grid   = draw_grid
+        self._scene_origin_ns = (
+            trace.time_min if scene_origin_ns is None else scene_origin_ns)
         fm = QFontMetrics(font)
         self._text_ascent = fm.ascent()
         # Tell Qt to supply the real exposed rect, not the full bounding rect
@@ -6995,6 +7021,7 @@ class _RulerItem(QGraphicsItem):
         npp      = self._npp
         t_min    = trace.time_min
         t_max    = trace.time_max
+        origin   = self._scene_origin_ns
         exposed  = option.exposedRect
         step_ns  = _nice_grid_step(npp, 100)
         step_px  = step_ns / max(npp, 1e-12)
@@ -7008,8 +7035,8 @@ class _RulerItem(QGraphicsItem):
             # Compute ns range that is currently exposed
             px_lo    = max(off, exposed.left()) - off
             px_hi    = min(self._total_w, exposed.right()) - off
-            ns_lo    = t_min + int(px_lo * npp) - step_ns
-            ns_hi    = t_min + int(px_hi * npp) + step_ns
+            ns_lo    = origin + int(px_lo * npp) - step_ns
+            ns_hi    = origin + int(px_hi * npp) + step_ns
             ns_lo    = max(t_min, ns_lo)
             ns_hi    = min(t_max + step_ns, ns_hi)
             # Grid anchored to t_min so the first tick is always at t_min ("0").
@@ -7017,7 +7044,7 @@ class _RulerItem(QGraphicsItem):
             t = first
             while t <= ns_hi:
                 if t >= t_min:
-                    x = off + (t - t_min) / npp
+                    x = off + (t - origin) / npp
                     if draw_grid_lines:
                         painter.setPen(QPen(QColor("#555555"), 0.8))
                         painter.drawLine(QLineF(x, RULER_HEIGHT, x, self._total_h))
@@ -7033,8 +7060,8 @@ class _RulerItem(QGraphicsItem):
             # Vertical layout: time on Y axis
             py_lo    = max(off, exposed.top()) - off
             py_hi    = min(self._total_h, exposed.bottom()) - off
-            ns_lo    = t_min + int(py_lo * npp) - step_ns
-            ns_hi    = t_min + int(py_hi * npp) + step_ns
+            ns_lo    = origin + int(py_lo * npp) - step_ns
+            ns_hi    = origin + int(py_hi * npp) + step_ns
             ns_lo    = max(t_min, ns_lo)
             ns_hi    = min(t_max + step_ns, ns_hi)
             # Grid anchored to t_min so the first tick is always at t_min ("0").
@@ -7042,7 +7069,7 @@ class _RulerItem(QGraphicsItem):
             t = first
             while t <= ns_hi:
                 if t >= t_min:
-                    y = off + (t - t_min) / npp
+                    y = off + (t - origin) / npp
                     if draw_grid_lines:
                         painter.setPen(QPen(QColor("#3A3A3A"), 0.5))
                         painter.drawLine(QLineF(RULER_WIDTH, y, self._total_w, y))
@@ -8832,6 +8859,7 @@ class TimelineView(QGraphicsView):
         # macOS native pinch zoom - intercept events on the viewport widget
         self.viewport().installEventFilter(self)
         # Reposition frozen label-column items whenever the scene is rebuilt
+        self._scene.scene_rebuilt.connect(self._on_scene_rebuilt_scroll)
         self._scene.scene_rebuilt.connect(self._reposition_frozen)
         self._scene.scene_rebuilt.connect(self._reposition_frozen_top)
         self._scene.scene_rebuilt.connect(self._update_label_grip_geometry)
@@ -10559,8 +10587,9 @@ class TimelineView(QGraphicsView):
             lo_coord = self.mapToScene(vp_r.topLeft()).y()
             hi_coord = self.mapToScene(vp_r.bottomLeft()).y()
         lw = sc._label_width
-        act_ns_lo = tr.time_min + int((lo_coord - lw) * sc._timescale_per_px)
-        act_ns_hi = tr.time_min + int((hi_coord - lw) * sc._timescale_per_px)
+        origin = sc._scene_origin_ns
+        act_ns_lo = origin + int((lo_coord - lw) * sc._timescale_per_px)
+        act_ns_hi = origin + int((hi_coord - lw) * sc._timescale_per_px)
         act_ns_lo = max(tr.time_min, min(tr.time_max, act_ns_lo))
         act_ns_hi = max(tr.time_min, min(tr.time_max, act_ns_hi))
         if act_ns_lo >= act_ns_hi:
@@ -10656,6 +10685,15 @@ class TimelineView(QGraphicsView):
             self._nav_scroll_timer.start()     # debounce minimap repaint
         if self._nav_popup.isVisible():
             self._nav_popup.reposition()
+
+    def _on_scene_rebuilt_scroll(self) -> None:
+        """Reset time-axis scroll after sliding-window scene-origin shift."""
+        self._frozen_last_scene_left = None
+        self._frozen_last_scene_top = None
+        if self._scene._horizontal:
+            self.horizontalScrollBar().setValue(0)
+        else:
+            self.verticalScrollBar().setValue(0)
 
     def _reposition_frozen(self) -> None:
         """Move all frozen label-column scene items so they stay at the left edge."""
@@ -10815,8 +10853,8 @@ class TimelineView(QGraphicsView):
             orth_lo = self.mapToScene(vp_rect.topLeft()).x()
             orth_hi = self.mapToScene(vp_rect.topRight()).x()
 
-        ns_lo = max(t_min, min(t_max, t_min + int((lo_coord - lw) * timescale_per_px)))
-        ns_hi = max(t_min, min(t_max, t_min + int((hi_coord - lw) * timescale_per_px)))
+        ns_lo = max(t_min, min(t_max, self._scene._scene_origin_ns + int((lo_coord - lw) * timescale_per_px)))
+        ns_hi = max(t_min, min(t_max, self._scene._scene_origin_ns + int((hi_coord - lw) * timescale_per_px)))
 
         time_slack = 0
         orth_slack = 0.0
