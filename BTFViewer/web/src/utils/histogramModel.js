@@ -105,7 +105,7 @@ function buildBins(values, scaleMode, summary) {
     const edges = []
     const step = (hi - lo) / regularBins
     for (let i = 0; i <= regularBins; i++) edges.push(lo + step * i)
-    const counts = Array.from({ length: regularBins + 1 }, () => 0)
+    const counts = Array.from({ length: regularBins }, () => 0)
     let overflow = 0
     let underflow = 0
     for (const value of values) {
@@ -170,30 +170,45 @@ function buildBins(values, scaleMode, summary) {
   }
 }
 
+function histSlotLayout(binSpec, plotW) {
+  const { counts, hasOverflowBin, hasUnderflowBin } = binSpec
+  const leading = hasUnderflowBin ? 1 : 0
+  const regularSlots = counts.length
+  const slotCount = leading + regularSlots + (hasOverflowBin ? 1 : 0)
+  const slotW = plotW / Math.max(1, slotCount)
+  return { slotCount, slotW, leading, regularSlots, regularW: regularSlots * slotW }
+}
+
 function valueToX(value, binSpec, plotW, marginLeft) {
-  const { displayMin, displayMax, xScale, edges, hasOverflowBin } = binSpec
-  if (hasOverflowBin && value > displayMax) {
-    const slot = edges.length - 1
-    const slotW = plotW / (edges.length + (binSpec.hasUnderflowBin ? 1 : 0))
-    const base = marginLeft + slot * slotW
-    return base + slotW * 0.5
+  const { displayMin, displayMax, xScale, hasOverflowBin, hasUnderflowBin } = binSpec
+  const { slotW, leading, regularSlots, regularW } = histSlotLayout(binSpec, plotW)
+  const regionLeft = marginLeft + leading * slotW
+
+  if (hasUnderflowBin && value < displayMin) {
+    return marginLeft + slotW * 0.5
   }
+  if (hasOverflowBin && value > displayMax) {
+    const slot = leading + regularSlots
+    return marginLeft + slot * slotW + slotW * 0.5
+  }
+
+  let t
   if (xScale === 'log') {
     const lo = Math.max(displayMin, 1)
     const hi = Math.max(lo + 1, displayMax)
     const logLo = Math.log10(lo)
     const logHi = Math.log10(hi)
-    const t = (Math.log10(Math.max(value, lo)) - logLo) / Math.max(1e-9, logHi - logLo)
-    return marginLeft + t * plotW
+    t = (Math.log10(Math.max(value, lo)) - logLo) / Math.max(1e-9, logHi - logLo)
+  } else {
+    const span = Math.max(1, displayMax - displayMin)
+    t = (value - displayMin) / span
   }
-  const span = Math.max(1, displayMax - displayMin)
-  return marginLeft + ((value - displayMin) / span) * plotW
+  return regionLeft + t * regularW
 }
 
 function buildBarLayout(binSpec, plotW, plotH, margin, logY) {
   const { counts, edges, hasOverflowBin, hasUnderflowBin, overflow, underflow } = binSpec
-  const slotCount = edges.length - 1 + (hasOverflowBin ? 1 : 0) + (hasUnderflowBin ? 1 : 0)
-  const slotW = plotW / Math.max(1, slotCount)
+  const { slotCount, slotW, leading } = histSlotLayout(binSpec, plotW)
   const maxCount = Math.max(1, ...counts, overflow, underflow)
   const countHeight = count => {
     if (count <= 0) return 0
@@ -202,7 +217,7 @@ function buildBarLayout(binSpec, plotW, plotH, margin, logY) {
   }
 
   const bars = []
-  let slot = 0
+  let slot = leading
 
   if (hasUnderflowBin) {
     const h = countHeight(underflow)
@@ -250,9 +265,9 @@ function buildBarLayout(binSpec, plotW, plotH, margin, logY) {
 }
 
 function buildXTicks(binSpec, plotW, margin, formatValue) {
-  const { displayMin, displayMax, xScale, hasOverflowBin, hasUnderflowBin, edges } = binSpec
-  const slotCount = edges.length - 1 + (hasOverflowBin ? 1 : 0) + (hasUnderflowBin ? 1 : 0)
-  const slotW = plotW / Math.max(1, slotCount)
+  const { displayMin, displayMax, xScale, hasOverflowBin, hasUnderflowBin } = binSpec
+  const { slotCount, slotW, leading, regularSlots, regularW } = histSlotLayout(binSpec, plotW)
+  const regionLeft = margin.left + leading * slotW
 
   if (xScale === 'log') {
     const lo = Math.max(displayMin, 1)
@@ -270,7 +285,7 @@ function buildXTicks(binSpec, plotW, margin, formatValue) {
         const t = (Math.log10(value) - logLo) / Math.max(1e-9, logHi - logLo)
         ticks.push({
           index: idx++,
-          x: margin.left + t * plotW,
+          x: regionLeft + t * regularW,
           label: formatValue(Math.round(value)),
         })
       }
@@ -279,7 +294,7 @@ function buildXTicks(binSpec, plotW, margin, formatValue) {
       return [0, 0.5, 1].map((ratio, index) => {
         const logVal = logLo + (logHi - logLo) * ratio
         const value = Math.round(10 ** logVal)
-        return { index, x: margin.left + ratio * plotW, label: formatValue(value) }
+        return { index, x: regionLeft + ratio * regularW, label: formatValue(value) }
       })
     }
     return ticks.slice(0, 7)
@@ -289,7 +304,7 @@ function buildXTicks(binSpec, plotW, margin, formatValue) {
     const value = Math.round(displayMin + (displayMax - displayMin) * ratio)
     return {
       index,
-      x: margin.left + ratio * plotW,
+      x: regionLeft + ratio * regularW,
       label: formatValue(value),
     }
   })
@@ -297,7 +312,7 @@ function buildXTicks(binSpec, plotW, margin, formatValue) {
   if (hasOverflowBin) {
     ticks.push({
       index: ticks.length,
-      x: margin.left + (slotCount - 0.5) * slotW,
+      x: margin.left + (leading + regularSlots + 0.5) * slotW,
       label: '>p95',
     })
   }
@@ -309,17 +324,41 @@ function buildCdfPoints(values, binSpec, plotW, plotH, margin) {
   if (n < 2) return { points: [], ticks: [] }
 
   const sorted = [...values].sort((a, b) => a - b)
-  const points = []
-  const sampleCount = Math.min(80, n)
-  for (let i = 0; i < sampleCount; i++) {
-    const idx = Math.min(n - 1, Math.round((i / (sampleCount - 1)) * (n - 1)))
-    const value = sorted[idx]
-    const pct = ((idx + 1) / n) * 100
-    points.push({
-      x: valueToX(value, binSpec, plotW, margin.left),
+  const raw = []
+  for (let i = 0; i < n; i++) {
+    const pct = ((i + 1) / n) * 100
+    raw.push({
+      x: valueToX(sorted[i], binSpec, plotW, margin.left),
       y: margin.top + plotH - (pct / 100) * plotH,
       pct,
     })
+  }
+
+  // ECDF: keep the highest percentile at each x so the polyline never hooks backward.
+  const points = []
+  for (const pt of raw) {
+    const prev = points[points.length - 1]
+    if (prev && Math.abs(prev.x - pt.x) < 0.5) {
+      points[points.length - 1] = pt
+    } else if (!prev || pt.x >= prev.x - 0.5) {
+      points.push(pt)
+    }
+  }
+
+  if (points.length > 90) {
+    const sampled = []
+    const step = Math.ceil(points.length / 80)
+    for (let i = 0; i < points.length; i += step) sampled.push(points[i])
+    const last = points[points.length - 1]
+    if (sampled[sampled.length - 1] !== last) sampled.push(last)
+    return {
+      points: sampled,
+      ticks: [0, 50, 100].map((pct, index) => ({
+        index,
+        y: margin.top + plotH - (pct / 100) * plotH,
+        label: `${pct}%`,
+      })),
+    }
   }
 
   const ticks = [0, 50, 100].map((pct, index) => ({

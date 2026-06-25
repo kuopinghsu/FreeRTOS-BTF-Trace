@@ -1610,82 +1610,158 @@
           >
             No data in selected range
           </div>
-          <svg
-            v-else-if="histogramModel"
-            class="plot-svg"
-            :viewBox="`0 0 ${histogramModel.width} ${histogramModel.height}`"
-          >
-            <rect
-              x="0"
-              y="0"
-              :width="histogramModel.width"
-              :height="histogramModel.height"
-              fill="var(--bg)"
-            />
-
-            <line
-              :x1="histogramModel.margin.left"
-              :x2="histogramModel.margin.left"
-              :y1="histogramModel.margin.top"
-              :y2="histogramModel.height - histogramModel.margin.bottom"
-              stroke="var(--fg-dim)"
-            />
-            <line
-              :x1="histogramModel.margin.left"
-              :x2="histogramModel.width - histogramModel.margin.right"
-              :y1="histogramModel.height - histogramModel.margin.bottom"
-              :y2="histogramModel.height - histogramModel.margin.bottom"
-              stroke="var(--fg-dim)"
-            />
-
-            <rect
-              v-for="bar in histogramModel.bars"
-              :key="`hist-bar-${bar.index}`"
-              :x="bar.x"
-              :y="bar.y"
-              :width="bar.width"
-              :height="bar.height"
-              :fill="histogramModel.color"
-              fill-opacity="0.82"
-            />
-
-            <g
-              v-for="refLine in histogramModel.referenceLines"
-              :key="`hist-ref-${refLine.label}`"
+          <template v-else-if="histogramModel">
+            <div class="plot-histogram-toolbar">
+              <label class="plot-scale-label">
+                Histogram scale
+                <select
+                  v-model="histogramScaleMode"
+                  class="plot-scale-select"
+                >
+                  <option value="auto">Auto</option>
+                  <option value="linear">Linear</option>
+                  <option value="percentile">p5–p95</option>
+                  <option value="log">Log duration</option>
+                </select>
+              </label>
+              <span class="plot-histogram-caption">{{ histogramModel.caption }}</span>
+            </div>
+            <svg
+              class="plot-svg"
+              :viewBox="`0 0 ${histogramModel.width} ${histogramModel.height}`"
             >
+              <rect
+                x="0"
+                y="0"
+                :width="histogramModel.width"
+                :height="histogramModel.height"
+                fill="var(--bg)"
+              />
+
               <line
-                :x1="refLine.x"
-                :x2="refLine.x"
+                v-for="tick in histogramModel.yTicks"
+                :key="`hist-grid-${tick.index}`"
+                :x1="histogramModel.margin.left"
+                :x2="histogramModel.width - histogramModel.margin.right"
+                :y1="tick.y"
+                :y2="tick.y"
+                stroke="var(--border)"
+                stroke-dasharray="3 4"
+              />
+
+              <line
+                :x1="histogramModel.margin.left"
+                :x2="histogramModel.margin.left"
                 :y1="histogramModel.margin.top"
                 :y2="histogramModel.height - histogramModel.margin.bottom"
-                :stroke="refLine.color"
-                stroke-dasharray="5 5"
+                stroke="var(--fg-dim)"
               />
-              <text
-                :x="Math.min(refLine.x + 6, histogramModel.width - histogramModel.margin.right - 2)"
-                :y="histogramModel.margin.top + 12"
-                fill="var(--fg)"
-                class="plot-ref-text"
-              >
-                {{ refLine.label }}
-              </text>
-            </g>
+              <line
+                :x1="histogramModel.margin.left"
+                :x2="histogramModel.width - histogramModel.margin.right"
+                :y1="histogramModel.height - histogramModel.margin.bottom"
+                :y2="histogramModel.height - histogramModel.margin.bottom"
+                stroke="var(--fg-dim)"
+              />
+              <line
+                :x1="histogramModel.width - histogramModel.margin.right"
+                :x2="histogramModel.width - histogramModel.margin.right"
+                :y1="histogramModel.margin.top"
+                :y2="histogramModel.height - histogramModel.margin.bottom"
+                stroke="var(--fg-dim)"
+                stroke-dasharray="4 3"
+              />
 
-            <g
-              v-for="tick in histogramModel.xTicks"
-              :key="`hist-x-${tick.index}`"
-            >
-              <text
-                :x="tick.x"
-                :y="histogramModel.height - 10"
-                text-anchor="middle"
-                fill="var(--fg-dim)"
-                class="plot-axis-text"
+              <g
+                v-for="tick in histogramModel.yTicks"
+                :key="`hist-y-${tick.index}`"
               >
-                {{ tick.label }}
-              </text>
-            </g>
-          </svg>
+                <text
+                  :x="histogramModel.margin.left - 8"
+                  :y="tick.y + 4"
+                  text-anchor="end"
+                  fill="var(--fg-dim)"
+                  class="plot-axis-text"
+                >
+                  {{ tick.label }}
+                </text>
+              </g>
+
+              <g
+                v-for="tick in histogramModel.cdfTicks"
+                :key="`hist-cdf-${tick.index}`"
+              >
+                <text
+                  :x="histogramModel.width - histogramModel.margin.right + 6"
+                  :y="tick.y + 4"
+                  text-anchor="start"
+                  fill="var(--fg-dim)"
+                  class="plot-axis-text"
+                >
+                  {{ tick.label }}
+                </text>
+              </g>
+
+              <rect
+                v-for="bar in histogramModel.bars"
+                :key="`hist-bar-${bar.index}-${bar.kind || 'regular'}`"
+                :x="bar.x"
+                :y="bar.y"
+                :width="bar.width"
+                :height="bar.height"
+                :fill="histogramModel.color"
+                :fill-opacity="bar.kind === 'overflow' || bar.kind === 'underflow' ? 0.55 : 0.82"
+                :stroke="bar.kind === 'overflow' || bar.kind === 'underflow' ? 'var(--fg-dim)' : 'none'"
+                stroke-width="1"
+              />
+
+              <polyline
+                v-if="histogramModel.cdfPoints.length > 1"
+                :points="histogramModel.cdfPoints.map(p => `${p.x},${p.y}`).join(' ')"
+                fill="none"
+                stroke="#90CAF9"
+                stroke-width="1.5"
+                stroke-linejoin="round"
+              />
+
+              <g
+                v-for="refLine in histogramModel.referenceLines"
+                :key="`hist-ref-${refLine.label}`"
+              >
+                <line
+                  :x1="refLine.x"
+                  :x2="refLine.x"
+                  :y1="histogramModel.margin.top"
+                  :y2="histogramModel.height - histogramModel.margin.bottom"
+                  :stroke="refLine.color"
+                  stroke-dasharray="5 5"
+                />
+                <text
+                  :x="Math.min(refLine.x + 6, histogramModel.width - histogramModel.margin.right - 2)"
+                  :y="histogramModel.margin.top + 12"
+                  fill="var(--fg)"
+                  class="plot-ref-text"
+                >
+                  {{ refLine.label }}
+                </text>
+              </g>
+
+              <g
+                v-for="tick in histogramModel.xTicks"
+                :key="`hist-x-${tick.index}`"
+              >
+                <text
+                  :x="tick.x"
+                  :y="histogramModel.height - 10"
+                  text-anchor="middle"
+                  fill="var(--fg-dim)"
+                  class="plot-axis-text"
+                >
+                  {{ tick.label }}
+                </text>
+              </g>
+            </svg>
+          </template>
         </div>
       </div>
 
@@ -1775,6 +1851,7 @@ import {
   SYNC_ISSUE_SORT_ACCESSORS,
 } from '../utils/statsTableSort.js'
 import TraceCompareDialog from './TraceCompareDialog.vue'
+import { buildHistogramModel } from '../utils/histogramModel.js'
 
 const props = defineProps({
   trace:   { type: Object, default: null },
@@ -1985,6 +2062,7 @@ const openPlotRef = computed({
 })
 const plotContentRef = ref(null)
 const selectedPlotPoint = ref(-1)
+const histogramScaleMode = ref('auto')
 const compareOpen = ref(false)
 
 const tableSort = ref({
@@ -2687,52 +2765,12 @@ const scatterModel = computed(() => {
 const histogramModel = computed(() => {
   const plot = plotData.value
   if (!plot || plot.points.length === 0) return null
-  const width = 820
-  const height = 220
-  const margin = { left: 72, right: 24, top: 16, bottom: 34 }
-  const values = plot.points.map(point => point.yValue).sort((a, b) => a - b)
-  const v0 = values[0]
-  const v1 = values[values.length - 1]
-  const vSpan = Math.max(1, v1 - v0)
-  const plotW = width - margin.left - margin.right
-  const plotH = height - margin.top - margin.bottom
-  const binCount = 50
-  const counts = Array.from({ length: binCount }, () => 0)
-  const step = vSpan / binCount
-  for (const value of values) {
-    const rawIndex = step > 0 ? Math.floor((value - v0) / step) : 0
-    counts[Math.min(binCount - 1, Math.max(0, rawIndex))] += 1
-  }
-  const maxCount = Math.max(1, ...counts)
-  const summary = _summarizeNumericSamples(values)
-  const scaleX = value => margin.left + ((value - v0) / vSpan) * plotW
-
-  return {
-    width,
-    height,
-    margin,
+  const values = plot.points.map(point => point.yValue)
+  return buildHistogramModel(values, {
+    scaleMode: histogramScaleMode.value,
+    formatValue: value => formatTime(value, props.trace.timeScale),
     color: plot.color,
-    bars: counts.map((count, index) => {
-      const barWidth = Math.max(1, plotW / binCount - 1)
-      const barHeight = count > 0 ? (count / maxCount) * plotH : 0
-      return {
-        index,
-        x: margin.left + (index * plotW) / binCount,
-        y: margin.top + plotH - barHeight,
-        width: barWidth,
-        height: barHeight,
-      }
-    }),
-    xTicks: [0, 0.5, 1].map((ratio, index) => {
-      const value = Math.round(v0 + vSpan * ratio)
-      return { index, x: scaleX(value), label: formatTime(value, props.trace.timeScale) }
-    }),
-    referenceLines: summary ? [
-      { label: 'avg', x: scaleX(summary.avg), color: '#CE93D8' },
-      { label: 'p50', x: scaleX(summary.p50), color: '#4CAF50' },
-      { label: 'p95', x: scaleX(summary.p95), color: '#FF9800' },
-    ] : [],
-  }
+  })
 })
 
 async function exportPlotPng() {
@@ -3668,6 +3706,7 @@ watch(
 
 watch(plotData, () => {
   selectedPlotPoint.value = -1
+  histogramScaleMode.value = 'auto'
 })
 </script>
 
@@ -4304,6 +4343,39 @@ watch(plotData, () => {
 
 .plot-card-histogram .plot-empty {
   min-height: 120px;
+}
+
+.plot-histogram-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 6px 8px 4px;
+}
+
+.plot-scale-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--fg-dim);
+}
+
+.plot-scale-select {
+  font-size: 11px;
+  font-family: inherit;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+
+.plot-histogram-caption {
+  flex: 1 1 auto;
+  min-width: 180px;
+  font-size: 10px;
+  color: var(--fg-dim);
 }
 
 .plot-svg {

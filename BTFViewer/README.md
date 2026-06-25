@@ -33,7 +33,7 @@ A PySide6-based interactive visualiser for FreeRTOS context-switch traces in **B
 - **Right-side panel** — **Statistics**, **Marks**, and **Find** tabs (Desktop: docked on the right, stacked below Legend; Web: tab bar on the right). Statistics holds metric tables; Marks holds cursors, bookmarks/annotations, and (on Web) Legend; Find searches tasks, annotations, and migrations
 - **Tag View** — inspect tag channels/events (`tag_event`, `tag0_event` … `tag7_event`) alongside task/core activity
 - **Metrics tables** — Execution Time Per Slice, **Blocking Time** (same metric as Tracealyzer **Response Time**: off-CPU gap / scheduling latency between activations), **Inter-Arrival**, **Preemption Chain** (which tasks preempted whom), **Priority Inheritance**, **Mutex / Semaphore pairing**, and **Interval Analysis** (paired `interval_start` / `interval_stop` spans; when the BTF note includes `tid:{task_id}`, pairing is per interval id **and** task); click **Min** / **Max** (dotted underline) to jump and add an annotation at the BCET / WCET slice or shortest / longest gap (Desktop + Web)
-- **Metrics distribution charts** — click any row in Execution Time, Blocking Time, Inter-Arrival, Preemption Chain, **Priority Inheritance**, or **Interval Analysis** tables to open a scatter-plot + histogram popup; charts live-update when cursors move or cursor-range scope is toggled (Desktop + Web). On Desktop, each trace tab remembers its own open chart when you switch tabs
+- **Metrics distribution charts** — click any row in Execution Time, Blocking Time, Inter-Arrival, Preemption Chain, **Priority Inheritance**, or **Interval Analysis** tables to open a scatter-plot + histogram popup; histograms use **adaptive scaling** (auto linear / p5–p95 / log duration, overflow buckets, optional log-scaled counts, CDF overlay); charts live-update when cursors move or cursor-range scope is toggled (Desktop + Web). On Desktop, each trace tab remembers its own open chart when you switch tabs
 - **Segment tooltips** — hover any segment bar for duration, slice index on core, previous/next task on that core, and gap before the slice
 - **CPU Load Graph** — bar chart below the timeline showing per-core CPU utilisation; row labels show the **visible-window average** and, with 2+ cursors, a cursor-range average (`· C:xx%`); toggle with the **Load** toolbar button; drag the divider between timeline and CPU load to resize (Desktop + Web)
 - **Resizable panels** — drag dividers between timeline and CPU load, the right-side panel (Statistics / Marks / Find) and Legend dock (Desktop), the **label column** (task names), and metric table sections in Statistics (Desktop + Web); splitter, label width, and table heights persist in `btf_viewer.rc` (Desktop) or browser `localStorage` (Web)
@@ -298,7 +298,7 @@ Below the scope checkbox, a **scheduling summary** line shows context-switch cou
 
 **Core Migrations** lists tasks that ran on two or more cores. For multi-core traces, open the **Migration heatmap** from the toolbar **Heatmap** button — click core-pair cells to drill into per-task sub-bins, then into Task View (see [Migration heatmap](#migration-heatmap)). **Trace Compare…** (footer, next to Export) opens a dialog with **Summary**, **Top Tasks**, and **Core Migrations** tabs to diff two open trace tabs; optional cursor-range scoping compares each tab's C1–Cn window independently.
 
-See [Statistics metric tables](#statistics-metric-tables) for column definitions, distribution-chart usage, and example plots from `tracedata/example-4cores.btf`.
+See [Statistics metric tables](#statistics-metric-tables) for column definitions, distribution-chart usage, [CDF overlay](#cdf-overlay), and example plots from `tracedata/example-4cores.btf`.
 
 ### Snapshot Editor
 
@@ -317,12 +317,84 @@ Click the **Shot** toolbar button (or press `S` when focus is not in a text fiel
 In the **Statistics** panel, click any row in **Execution Time**, **Blocking Time**, **Inter-Arrival**, **Preemption Chain**, **Priority Inheritance**, or **Interval Analysis** to open a floating chart popup. In **Trace Health (TICK)**, use the **Tick Distribution…** button (bar-chart icon beside the mode badge on Desktop; below the health summary on Web when tickless mode is detected).
 
 - **Scatter plot** — each event plotted in trace time order so you can spot trends, bursts, or outliers.
-- **Histogram** — bar chart of the value distribution (50 bins), with dashed reference lines for **avg**, **p50**, and **p95**.
+- **Histogram** — adaptive bar chart of the value distribution:
+  - **Auto scale** (default) picks **linear**, **p5–p95**, or **log duration** from the data spread so bars are not squeezed when min/max or outliers span a wide range.
+  - **Histogram scale** dropdown (Desktop toolbar above histogram; Web above the chart): **Auto**, **Linear**, **p5–p95**, **Log duration**.
+  - **Adaptive bin count** (Freedman–Diaconis, 12–80 bins) instead of a fixed 50-bin linear split.
+  - **Overflow buckets** in p5–p95 mode — separate dimmed bars for values below p5 and above p95, with counts in the caption.
+  - **Log-scaled counts** when one bin dominates (tall spike vs many small bars).
+  - **CDF overlay** — cumulative distribution curve on the histogram (see [CDF overlay](#cdf-overlay) below).
+  - Dashed reference lines for **avg**, **p50**, and **p95**; caption shows the active scale and full min–max range.
 - **Export PNG / SVG** — buttons in the chart footer save the current scatter + histogram.
 
 The popup can be dragged, resized, and closed independently of the main window.
 If the chart is open, it **updates live** when you move cursors or toggle cursor-range scope.
 Each browser tab keeps its own chart state when you switch between open traces.
+
+#### CDF overlay
+
+Every metrics histogram includes a **cumulative distribution function (CDF)** drawn as a **blue line** over the bars. It answers a different question than the histogram alone:
+
+| View | Question it answers |
+|------|---------------------|
+| **Histogram bars** | *How many* samples fall in each duration bucket? |
+| **CDF curve** | *What fraction* of samples are **at or below** a given duration? |
+
+The CDF is an **empirical** CDF (ECDF): for each sample in the active scope (full trace or cursor range), sorted by duration from shortest to longest, the curve plots **(duration → cumulative %)**. There is one step per sample; when several samples share the same duration, the curve rises vertically at that x position.
+
+**How to read the chart**
+
+```
+ 100% ┤                              ╭── CDF (blue)
+      │                         ╭────╯
+  50% ┤              ╭──────────╯
+      │         ╭────╯
+   0% ┤─────────╯
+      └────────────────────────────────── duration →
+        short                              long
+```
+
+- **Horizontal axis (bottom)** — duration (same scale as the histogram bars: linear, p5–p95, or log, depending on **Histogram scale**).
+- **Left vertical axis** — sample **count** per bin (bar height).
+- **Right vertical axis** — cumulative **percent** (0%, 50%, 100% labels on a dashed guide line).
+- **Curve direction** — starts at the **bottom-left** (0% of samples below the shortest value) and rises toward the **top-right** (100% of samples included). A **steep** rise means many samples cluster at similar short durations; a **gradual** rise means values are spread out.
+
+**Relating the CDF to table columns and reference lines**
+
+The dashed vertical markers on the histogram are single-number summaries; the CDF shows the **full** cumulative picture:
+
+| Marker / table column | On the CDF |
+|-----------------------|------------|
+| **p50** (green) | Curve crosses **50%** on the right axis at the median duration. |
+| **p95** (orange) | Curve crosses **95%** — 95% of samples are shorter than this duration. |
+| **avg** (purple) | Shown as a vertical line; the CDF does **not** pass through a fixed “avg %” because the mean is not a percentile. |
+
+**Example readings** (Execution Time for a task with 100 slices):
+
+- At duration *D* where the CDF is at **30%**, roughly **30 slices** (30%) finished in *D* or less — useful for “how often does this task complete within my deadline?”
+- If the curve is already above **90%** while still on the **left half** of the chart, most runs are short and the tail is light.
+- If the curve stays below **50%** until far right, the distribution is **wide or skewed** — the histogram bars alone may look crowded; switch **Histogram scale** to **Log duration** or **p5–p95** and use the CDF to see where the bulk of the mass sits.
+
+**Histogram scale and the CDF**
+
+The CDF always reflects the **same samples** as the bars; only the **x mapping** changes with the scale mode:
+
+| **Histogram scale** | Effect on CDF |
+|---------------------|---------------|
+| **Auto** / **Linear** | Duration mapped linearly from min to max. |
+| **p5–p95** | Main curve spans the p5–p95 window; outliers appear in dimmed underflow / overflow buckets at the edges, and the CDF steps into those buckets at the corresponding percentiles. |
+| **Log duration** | Short and long durations are spread across the axis; the CDF is easier to read when bars would otherwise pile up on the left. |
+
+The caption above the histogram (e.g. `log-scaled duration axis · full range 17 µs–975 µs`) always shows the **true** min–max range even when the axis is compressed or clipped.
+
+**When to use the CDF**
+
+- **Deadline / budget checks** — estimate what % of activations meet a time limit without reading individual scatter points.
+- **Compare spread** — two tasks with similar **p50** can have very different CDF shapes (tight cluster vs long tail).
+- **Skewed data** — after switching away from a crowded linear histogram, use the CDF with **p50** / **p95** lines to see how much of the population sits below each marker.
+- **Cursor-scoped analysis** — with **Limit to cursor range** enabled, the CDF recalculates for only the slices inside C1–Cn, same as the table and scatter plot.
+
+The CDF is included in **Export PNG / SVG** from the plot dialog. It is not interactive (no click-to-jump); use the **scatter plot** above the histogram to jump to individual events.
 
 **Jump links:** in Execution Time, Blocking Time, and Inter-Arrival tables, click **Min** or **Max** (dotted underline) to jump to the slice at the shortest or longest value and add an **annotation** with a descriptive note. Click any **distribution-chart** point to jump to that event, add an annotation, and switch to the **Marks** tab with the new annotation selected (segment start for task metrics; tick timestamp for **Tick Distribution**; zoom + highlight for **Priority Inheritance** episodes; interval start for **Interval Analysis**). In Preemption Chain, the annotation is placed at the **preemptor segment** start. In **Mutex / Semaphore**, click any **Pairing issues** row to zoom to the running task segment on that core, jump to the issue time, and add an annotation.
 
@@ -656,13 +728,13 @@ Measures how long each **on-CPU slice** lasts for a task.
 **Distribution chart** — click any row:
 
 - **Scatter:** x = slice start time, y = slice duration.
-- **Histogram:** distribution of slice durations.
+- **Histogram:** distribution of slice durations (auto log scale when the tail is wide; see [CDF overlay](#cdf-overlay) for reading the blue cumulative curve).
 
 In `example-4cores.btf`, task **CS[8]** has 356 slices with a long tail of longer runs (context-switch stress tasks):
 
 <img src="../images/stats/stats-exec-cs8.svg" alt="Execution time distribution for CS[8] in example-4cores.btf" width="820">
 
-The scatter shows periodic bursts of short slices; the histogram reveals a dominant short-slice mode plus a secondary bump at longer durations (preemption or blocking before the task resumes).
+The scatter shows periodic bursts of short slices; the histogram uses a **log-scaled duration axis** so short and long slices are both visible. The **CDF** rises steeply on the left (most slices are short) then levels toward 100% as longer runs are included; **p50** and **p95** vertical markers align with the 50% and 95% ticks on the right axis.
 
 #### Blocking Time
 
@@ -708,7 +780,7 @@ Measures the gap between **successive activation start times** of the same task 
 
 <img src="../images/stats/stats-inter-cs8.svg" alt="Inter-arrival time distribution for CS[8] in example-4cores.btf" width="820">
 
-Compare with Blocking Time (Response Time): inter-arrival includes time the task was **running**, so values are typically larger than off-CPU gaps alone.
+Compare with Blocking Time (Response Time): inter-arrival includes time the task was **running**, so values are typically larger than off-CPU gaps alone. The histogram auto-selects **log duration** for CS[8] because activation gaps span microseconds to milliseconds.
 
 #### Preemption Chain Analysis
 
@@ -1013,7 +1085,7 @@ In **tick mode** the timer interrupt fires at a constant rate and tick intervals
 
 When tick intervals can be charted, a **Tick Distribution…** button (bar-chart icon, theme-aware amber/orange styling) appears beside the **TICK** / **TICKLESS** mode badge (Desktop) or below the health summary (Web, tickless only). Clicking it opens the standard scatter + histogram popup showing:
 - **Scatter plot** — each tick interval over trace time; long idle periods appear as tall spikes.
-- **Histogram** — full distribution of intervals; clearly multi-modal in tickless mode (one sharp peak at 1 × period, another at 2×, 3×, etc.).
+- **Histogram** — interval distribution with the same adaptive scaling and [CDF overlay](#cdf-overlay) as other metric charts (auto may choose p5–p95 or log duration when tickless idle stretches the range); clearly multi-modal in tickless mode (one sharp peak at 1 × period, another at 2×, 3×, etc.). The CDF helps quantify what fraction of tick intervals are a single period vs two or more.
 
 Click any scatter point to jump to that tick time, add an **annotation**, and open the **Marks** tab with the annotation selected (same behaviour as other metric distribution charts).
 

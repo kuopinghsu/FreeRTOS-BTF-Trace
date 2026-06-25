@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 588" width="820" height="588">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 608" width="820" height="608">
   <rect width="100%" height="100%" fill="#1a1a1a"/>
   <text x="16" y="22" fill="#e0e0e0" font-size="14" font-weight="600" font-family="sans-serif">IL[150] — Priority Boost (base 2→peak 4)</text>
   <text x="16" y="38" fill="#888" font-size="10" font-family="sans-serif">Scatter: x = boost episode end time, y = boosted duration (red = L/M/H or mutex inherit) · Histogram: distribution of boost durations · 1 points</text>
@@ -35,20 +35,32 @@
   <g transform="translate(0,372)">
 
 <rect width="100%" height="100%" fill="#1e1e1e"/>
-<line x1="72" y1="16" x2="72" y2="186" stroke="#666" stroke-width="1"/>
-<line x1="72" y1="186" x2="796" y2="186" stroke="#666" stroke-width="1"/>
-<text x="72" y="210" text-anchor="middle" fill="#aaa" font-size="10" font-family="monospace">3.956 ms</text>
-<text x="796" y="210" text-anchor="middle" fill="#aaa" font-size="10" font-family="monospace">3.957 ms</text>
-<text x="796" y="210" text-anchor="middle" fill="#aaa" font-size="10" font-family="monospace">3.957 ms</text>
-<text x="410" y="218" text-anchor="middle" fill="#888" font-size="11" font-family="sans-serif">Duration</text>
-<text transform="rotate(-90 14 110)" x="14" y="110" text-anchor="middle" fill="#888" font-size="11" font-family="sans-serif">Count</text>
-<line x1="72" y1="16" x2="72" y2="186" stroke="#CE93D8" stroke-width="1" stroke-dasharray="4 3" opacity="0.85"/>
-<text x="72" y="12" text-anchor="middle" fill="#CE93D8" font-size="9" font-family="monospace">avg</text>
-<line x1="72" y1="16" x2="72" y2="186" stroke="#4CAF50" stroke-width="1" stroke-dasharray="4 3" opacity="0.85"/>
-<text x="72" y="12" text-anchor="middle" fill="#4CAF50" font-size="9" font-family="monospace">p50</text>
-<line x1="72" y1="16" x2="72" y2="186" stroke="#FF9800" stroke-width="1" stroke-dasharray="4 3" opacity="0.85"/>
-<text x="72" y="12" text-anchor="middle" fill="#FF9800" font-size="9" font-family="monospace">p95</text>
-<rect x="72" y="16" width="13.48" height="170" fill="#F39C12" opacity="0.8"/>
+<line x1="72" y1="28" x2="776" y2="28" stroke="#333" stroke-width="1" stroke-dasharray="3 4"/>
+<text x="64" y="32" text-anchor="end" fill="#aaa" font-size="10" font-family="monospace">1</text>
+<line x1="72" y1="28" x2="776" y2="28" stroke="#333" stroke-width="1" stroke-dasharray="3 4"/>
+<text x="64" y="32" text-anchor="end" fill="#aaa" font-size="10" font-family="monospace">1</text>
+<line x1="72" y1="28" x2="776" y2="28" stroke="#333" stroke-width="1" stroke-dasharray="3 4"/>
+<text x="64" y="32" text-anchor="end" fill="#aaa" font-size="10" font-family="monospace">1</text>
+<line x1="72" y1="202" x2="776" y2="202" stroke="#333" stroke-width="1" stroke-dasharray="3 4"/>
+<text x="64" y="206" text-anchor="end" fill="#aaa" font-size="10" font-family="monospace">0</text>
+<line x1="72" y1="202" x2="776" y2="202" stroke="#333" stroke-width="1" stroke-dasharray="3 4"/>
+<text x="64" y="206" text-anchor="end" fill="#aaa" font-size="10" font-family="monospace">0</text>
+<line x1="72" y1="28" x2="72" y2="202" stroke="#666" stroke-width="1"/>
+<line x1="72" y1="202" x2="776" y2="202" stroke="#666" stroke-width="1"/>
+<line x1="776" y1="28" x2="776" y2="202" stroke="#666" stroke-width="1" stroke-dasharray="4 3"/>
+<text x="72" y="230" text-anchor="middle" fill="#aaa" font-size="10" font-family="monospace">3.956 ms</text>
+<text x="424" y="230" text-anchor="middle" fill="#aaa" font-size="10" font-family="monospace">3.956 ms</text>
+<text x="776" y="230" text-anchor="middle" fill="#aaa" font-size="10" font-family="monospace">3.956 ms</text>
+<text x="72" y="14" fill="#888" font-size="10" font-family="sans-serif">linear scale · full range 3.956 ms–3.956 ms</text>
+<text x="410" y="238" text-anchor="middle" fill="#888" font-size="11" font-family="sans-serif">Duration</text>
+<text transform="rotate(-90 14 120)" x="14" y="120" text-anchor="middle" fill="#888" font-size="11" font-family="sans-serif">Count</text>
+<line x1="72" y1="28" x2="72" y2="202" stroke="#CE93D8" stroke-width="1" stroke-dasharray="4 3" opacity="0.85"/>
+<text x="72" y="24" text-anchor="middle" fill="#CE93D8" font-size="9" font-family="monospace">avg</text>
+<line x1="72" y1="28" x2="72" y2="202" stroke="#4CAF50" stroke-width="1" stroke-dasharray="4 3" opacity="0.85"/>
+<text x="72" y="24" text-anchor="middle" fill="#4CAF50" font-size="9" font-family="monospace">p50</text>
+<line x1="72" y1="28" x2="72" y2="202" stroke="#FF9800" stroke-width="1" stroke-dasharray="4 3" opacity="0.85"/>
+<text x="72" y="24" text-anchor="middle" fill="#FF9800" font-size="9" font-family="monospace">p95</text>
+<rect x="72" y="28" width="16.6" height="174" fill="#F39C12" opacity="0.8"/>
 
   </g>
 </svg>

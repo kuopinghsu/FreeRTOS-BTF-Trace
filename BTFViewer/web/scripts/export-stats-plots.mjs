@@ -20,6 +20,7 @@ import {
 } from '../src/utils/priorityAnalysis.js'
 import { taskColor, taskDisplayName, taskReprGet } from '../src/utils/colors.js'
 import { formatTime } from '../src/utils/timeFormat.js'
+import { buildHistogramModel } from '../src/utils/histogramModel.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const defaultBtf = resolve(__dirname, '../../../tracedata/example-4cores.btf')
@@ -173,54 +174,13 @@ function buildScatterModel(plot, timeScale) {
   }
 }
 
-function buildHistogramModel(plot, timeScale) {
-  const width = 820
-  const height = 220
-  const margin = { left: 72, right: 24, top: 16, bottom: 34 }
-  const values = plot.points.map(p => p.yValue).sort((a, b) => a - b)
-  const v0 = values[0]
-  const v1 = values[values.length - 1]
-  const vSpan = Math.max(1, v1 - v0)
-  const plotW = width - margin.left - margin.right
-  const plotH = height - margin.top - margin.bottom
-  const binCount = 50
-  const counts = Array.from({ length: binCount }, () => 0)
-  const step = vSpan / binCount
-  for (const value of values) {
-    const rawIndex = step > 0 ? Math.floor((value - v0) / step) : 0
-    counts[Math.min(binCount - 1, Math.max(0, rawIndex))] += 1
-  }
-  const maxCount = Math.max(1, ...counts)
-  const summary = summarizeNumericSamples(values)
-  const scaleX = v => margin.left + ((v - v0) / vSpan) * plotW
-  return {
-    width,
-    height,
-    margin,
+function buildHistogramModelForPlot(plot, timeScale) {
+  const values = plot.points.map(p => p.yValue)
+  return buildHistogramModel(values, {
+    scaleMode: 'auto',
+    formatValue: value => formatTime(value, timeScale),
     color: plot.color,
-    bars: counts.map((count, index) => {
-      const barWidth = Math.max(1, plotW / binCount - 1)
-      const barHeight = count > 0 ? (count / maxCount) * plotH : 0
-      return {
-        index,
-        x: margin.left + (index * plotW) / binCount,
-        y: margin.top + plotH - barHeight,
-        width: barWidth,
-        height: barHeight,
-      }
-    }),
-    xTicks: [0, 0.5, 1].map((ratio, index) => {
-      const value = Math.round(v0 + vSpan * ratio)
-      return { index, x: scaleX(value), label: formatTime(value, timeScale) }
-    }),
-    referenceLines: summary
-      ? [
-          { label: 'avg', x: scaleX(summary.avg), color: '#CE93D8' },
-          { label: 'p50', x: scaleX(summary.p50), color: '#4CAF50' },
-          { label: 'p95', x: scaleX(summary.p95), color: '#FF9800' },
-        ]
-      : [],
-  }
+  })
 }
 
 function esc(s) {
@@ -266,10 +226,21 @@ function renderHistogramSvg(model) {
   lines.push(`<rect width="100%" height="100%" fill="#1e1e1e"/>`)
   const plotH = model.height - model.margin.top - model.margin.bottom
   const baseY = model.margin.top + plotH
+  for (const tick of model.yTicks || []) {
+    lines.push(`<line x1="${model.margin.left}" y1="${tick.y}" x2="${model.width - model.margin.right}" y2="${tick.y}" stroke="#333" stroke-width="1" stroke-dasharray="3 4"/>`)
+    lines.push(`<text x="${model.margin.left - 8}" y="${tick.y + 4}" text-anchor="end" fill="#aaa" font-size="10" font-family="monospace">${esc(tick.label)}</text>`)
+  }
   lines.push(`<line x1="${model.margin.left}" y1="${model.margin.top}" x2="${model.margin.left}" y2="${baseY}" stroke="#666" stroke-width="1"/>`)
   lines.push(`<line x1="${model.margin.left}" y1="${baseY}" x2="${model.width - model.margin.right}" y2="${baseY}" stroke="#666" stroke-width="1"/>`)
+  lines.push(`<line x1="${model.width - model.margin.right}" y1="${model.margin.top}" x2="${model.width - model.margin.right}" y2="${baseY}" stroke="#666" stroke-width="1" stroke-dasharray="4 3"/>`)
+  for (const tick of model.cdfTicks || []) {
+    lines.push(`<text x="${model.width - model.margin.right + 6}" y="${tick.y + 4}" text-anchor="start" fill="#aaa" font-size="10" font-family="monospace">${esc(tick.label)}</text>`)
+  }
   for (const tick of model.xTicks) {
     lines.push(`<text x="${tick.x}" y="${model.height - 10}" text-anchor="middle" fill="#aaa" font-size="10" font-family="monospace">${esc(tick.label)}</text>`)
+  }
+  if (model.caption) {
+    lines.push(`<text x="${model.margin.left}" y="14" fill="#888" font-size="10" font-family="sans-serif">${esc(model.caption)}</text>`)
   }
   lines.push(`<text x="${model.width / 2}" y="${model.height - 2}" text-anchor="middle" fill="#888" font-size="11" font-family="sans-serif">Duration</text>`)
   lines.push(`<text transform="rotate(-90 ${14} ${model.height / 2})" x="14" y="${model.height / 2}" text-anchor="middle" fill="#888" font-size="11" font-family="sans-serif">Count</text>`)
@@ -279,7 +250,12 @@ function renderHistogramSvg(model) {
   }
   for (const bar of model.bars) {
     if (bar.height <= 0) continue
-    lines.push(`<rect x="${bar.x}" y="${bar.y}" width="${bar.width}" height="${bar.height}" fill="${model.color}" opacity="0.8"/>`)
+    const opacity = (bar.kind === 'overflow' || bar.kind === 'underflow') ? 0.55 : 0.8
+    lines.push(`<rect x="${bar.x}" y="${bar.y}" width="${bar.width}" height="${bar.height}" fill="${model.color}" opacity="${opacity}"/>`)
+  }
+  if (model.cdfPoints?.length > 1) {
+    const pts = model.cdfPoints.map(p => `${p.x},${p.y}`).join(' ')
+    lines.push(`<polyline points="${pts}" fill="none" stroke="#90CAF9" stroke-width="1.5"/>`)
   }
   lines.push('</svg>')
   return lines.join('\n')
@@ -287,7 +263,7 @@ function renderHistogramSvg(model) {
 
 function renderPlotSvg(plot, timeScale, yLabel) {
   const scatter = buildScatterModel(plot, timeScale)
-  const hist = buildHistogramModel(plot, timeScale)
+  const hist = buildHistogramModelForPlot(plot, timeScale)
   const totalH = scatter.height + hist.height + 48
   const width = scatter.width
   return `<?xml version="1.0" encoding="UTF-8"?>

@@ -3269,7 +3269,9 @@ def _parse_btf(filepath: str,
     if cancel_check and cancel_check():
         raise _ParseCancelledError()
 
-    for c in _core_names:
+    for i, c in enumerate(_core_names):
+        if cancel_check and i % 4 == 0 and cancel_check():
+            raise _ParseCancelledError()
         segs = _core_segs_build.get(c, [])
         segs.sort(key=_seg_start_key)
         _core_segs[c] = segs
@@ -10986,8 +10988,8 @@ class _ParseThread(QThread):
     cancelled = Signal()
     progress = Signal(int, str) # pct, message
 
-    def __init__(self, path: str):
-        super().__init__()
+    def __init__(self, path: str, parent: Optional[QObject] = None):
+        super().__init__(parent)
         self._path = path
 
     def run(self):
@@ -11743,17 +11745,357 @@ class _ScatterWidget(QWidget):
             self.update()
             self.point_clicked.emit(self._points[best_i])
 
+def _hist_percentile(sorted_vals: list, p: float) -> float:
+    n = len(sorted_vals)
+    if n == 0:
+        return 0.0
+    idx = min(n - 1, max(0, int(math.floor(p * (n - 1)))))
+    return float(sorted_vals[idx])
+
+def _hist_summarize(values: list) -> dict:
+    vals = sorted(values)
+    n = len(vals)
+    if n == 0:
+        return {}
+    return {
+        "min": float(vals[0]),
+        "max": float(vals[-1]),
+        "avg": sum(vals) / n,
+        "p5": _hist_percentile(vals, 0.05),
+        "p50": _hist_percentile(vals, 0.50),
+        "p95": _hist_percentile(vals, 0.95),
+        "p99": _hist_percentile(vals, 0.99),
+    }
+
+def _hist_detect_scale_mode(values: list, summary: dict) -> str:
+    if len(values) < 4:
+        return "linear"
+    min_v = summary["min"]
+    max_v = summary["max"]
+    p5 = summary["p5"]
+    p95 = summary["p95"]
+    span = max(1.0, max_v - min_v)
+    core_span = max(1.0, p95 - p5)
+    tail_ratio = max_v / max(p95, 1.0)
+    crowded = core_span / span < 0.55
+    if min_v > 0:
+        range_ratio = max_v / max(min_v, 1.0)
+        if range_ratio >= 40 or (tail_ratio >= 4 and crowded):
+            return "log"
+    if tail_ratio >= 2 or crowded:
+        return "percentile"
+    return "linear"
+
+def _hist_fd_bin_count(values: list, min_val: float, max_val: float) -> int:
+    n = len(values)
+    if n < 2:
+        return 40
+    p25 = _hist_percentile(values, 0.25)
+    p75 = _hist_percentile(values, 0.75)
+    iqr = max(1.0, p75 - p25)
+    bin_w = (2 * iqr) / (n ** (1 / 3))
+    span = max(1.0, max_val - min_val)
+    return min(80, max(12, int(round(span / bin_w))))
+
+def _hist_should_use_log_y(counts: list) -> bool:
+    positive = [c for c in counts if c > 0]
+    if len(positive) < 2:
+        return False
+    max_count = max(positive)
+    positive.sort()
+    median = positive[len(positive) // 2]
+    return max_count >= 12 and median > 0 and max_count / median >= 8
+
+def _hist_log_spaced_edges(min_val: float, max_val: float, bin_count: int) -> list:
+    lo = max(min_val, 1.0)
+    hi = max(lo + 1.0, max_val)
+    log_lo = math.log10(lo)
+    log_hi = math.log10(hi)
+    return [10 ** (log_lo + (log_hi - log_lo) * i / bin_count) for i in range(bin_count + 1)]
+
+def _hist_bin_index_for_value(value: float, edges: list) -> int:
+    last = len(edges) - 2
+    if value <= edges[0]:
+        return 0
+    if value >= edges[last + 1]:
+        return last
+    for i in range(last + 1):
+        if value < edges[i + 1]:
+            return i
+    return last
+
+def _hist_build_bins(values: list, scale_mode: str, summary: dict) -> dict:
+    min_v = summary["min"]
+    max_v = summary["max"]
+    p5 = summary["p5"]
+    p95 = summary["p95"]
+    if scale_mode == "percentile":
+        lo = min(p5, p95)
+        hi = max(lo + 1.0, p95)
+        regular_bins = _hist_fd_bin_count(values, lo, hi)
+        step = (hi - lo) / regular_bins
+        edges = [lo + step * i for i in range(regular_bins + 1)]
+        counts = [0] * regular_bins
+        overflow = underflow = 0
+        for v in values:
+            if v < lo:
+                underflow += 1
+            elif v > hi:
+                overflow += 1
+            else:
+                counts[_hist_bin_index_for_value(v, edges)] += 1
+        return {
+            "counts": counts, "edges": edges, "display_min": lo, "display_max": hi,
+            "overflow": overflow, "underflow": underflow,
+            "has_overflow_bin": overflow > 0, "has_underflow_bin": underflow > 0,
+            "x_scale": "linear",
+        }
+    if scale_mode == "log" and min_v > 0:
+        bin_count = 40
+        edges = _hist_log_spaced_edges(min_v, max_v, bin_count)
+        counts = [0] * bin_count
+        for v in values:
+            counts[_hist_bin_index_for_value(v, edges)] += 1
+        return {
+            "counts": counts, "edges": edges, "display_min": min_v, "display_max": max_v,
+            "overflow": 0, "underflow": 0,
+            "has_overflow_bin": False, "has_underflow_bin": False,
+            "x_scale": "log",
+        }
+    lo = min_v
+    hi = max_v
+    span = max(1.0, hi - lo)
+    bin_count = _hist_fd_bin_count(values, lo, hi)
+    step = span / bin_count
+    edges = [lo + step * i for i in range(bin_count + 1)]
+    counts = [0] * bin_count
+    for v in values:
+        counts[_hist_bin_index_for_value(v, edges)] += 1
+    return {
+        "counts": counts, "edges": edges, "display_min": lo, "display_max": hi,
+        "overflow": 0, "underflow": 0,
+        "has_overflow_bin": False, "has_underflow_bin": False,
+        "x_scale": "linear",
+    }
+
+def _hist_slot_layout(bin_spec: dict, plot_w: int) -> tuple:
+    counts = bin_spec["counts"]
+    leading = 1 if bin_spec["has_underflow_bin"] else 0
+    regular_slots = len(counts)
+    slot_count = leading + regular_slots + (1 if bin_spec["has_overflow_bin"] else 0)
+    slot_w = plot_w / max(1, slot_count)
+    regular_w = regular_slots * slot_w
+    return slot_count, slot_w, leading, regular_slots, regular_w
+
+def _hist_value_to_x(value: float, bin_spec: dict, plot_w: int, margin_left: int) -> int:
+    display_min = bin_spec["display_min"]
+    display_max = bin_spec["display_max"]
+    _slot_count, slot_w, leading, regular_slots, regular_w = _hist_slot_layout(bin_spec, plot_w)
+    region_left = margin_left + int(leading * slot_w)
+
+    if bin_spec["has_underflow_bin"] and value < display_min:
+        return margin_left + int(slot_w * 0.5)
+    if bin_spec["has_overflow_bin"] and value > display_max:
+        slot = leading + regular_slots
+        return margin_left + int(slot * slot_w + slot_w * 0.5)
+
+    if bin_spec["x_scale"] == "log":
+        lo = max(display_min, 1.0)
+        hi = max(lo + 1.0, display_max)
+        log_lo = math.log10(lo)
+        log_hi = math.log10(hi)
+        t = (math.log10(max(value, lo)) - log_lo) / max(1e-9, log_hi - log_lo)
+        return region_left + int(t * regular_w)
+    span = max(1.0, display_max - display_min)
+    t = (value - display_min) / span
+    return region_left + int(t * regular_w)
+
+def _hist_build_bar_layout(bin_spec: dict, plot_w: int, plot_h: int,
+                           margin_left: int, margin_top: int, log_y: bool) -> tuple:
+    counts = bin_spec["counts"]
+    edges = bin_spec["edges"]
+    overflow = bin_spec["overflow"]
+    underflow = bin_spec["underflow"]
+    has_overflow = bin_spec["has_overflow_bin"]
+    has_underflow = bin_spec["has_underflow_bin"]
+    slot_count = len(counts) + (1 if has_overflow else 0) + (1 if has_underflow else 0)
+    slot_w = plot_w / max(1, slot_count)
+    max_count = max(1, *counts, overflow, underflow)
+
+    def count_height(count: int) -> int:
+        if count <= 0:
+            return 0
+        if not log_y:
+            return int(count / max_count * plot_h)
+        return int(math.log10(count + 1) / math.log10(max_count + 1) * plot_h)
+
+    bars = []
+    slot = 0
+    if has_underflow:
+        h = count_height(underflow)
+        bars.append((margin_left + int(slot * slot_w), margin_top + plot_h - h,
+                     max(1, int(slot_w) - 1), h, "underflow"))
+        slot += 1
+    for i, cnt in enumerate(counts):
+        h = count_height(cnt)
+        bars.append((margin_left + int(slot * slot_w), margin_top + plot_h - h,
+                     max(1, int(slot_w) - 1), h, "regular"))
+        slot += 1
+    if has_overflow:
+        h = count_height(overflow)
+        bars.append((margin_left + int(slot * slot_w), margin_top + plot_h - h,
+                     max(1, int(slot_w) - 1), h, "overflow"))
+    return bars, max_count, slot_count, slot_w
+
+def _hist_build_caption(scale_mode: str, summary: dict, bin_spec: dict,
+                        log_y: bool, time_scale: str) -> str:
+    parts = []
+    if scale_mode == "percentile":
+        parts.append("p5–p95 view")
+        if bin_spec["overflow"] > 0:
+            parts.append(f"{bin_spec['overflow']} above p95")
+        if bin_spec["underflow"] > 0:
+            parts.append(f"{bin_spec['underflow']} below p5")
+    elif scale_mode == "log":
+        parts.append("log-scaled duration axis")
+    else:
+        parts.append("linear scale")
+    if log_y:
+        parts.append("log-scaled counts")
+    parts.append(
+        f"full range {_format_time(int(summary['min']), time_scale, decimals=1)}–"
+        f"{_format_time(int(summary['max']), time_scale, decimals=1)}")
+    return " · ".join(parts)
+
+def _hist_build_model(values: list, time_scale: str, scale_mode: str = "auto") -> Optional[dict]:
+    if not values:
+        return None
+    sorted_vals = sorted(values)
+    summary = _hist_summarize(sorted_vals)
+    resolved = _hist_detect_scale_mode(sorted_vals, summary) if scale_mode == "auto" else scale_mode
+    effective = "percentile" if resolved == "log" and summary["min"] <= 0 else resolved
+    bin_spec = _hist_build_bins(sorted_vals, effective, summary)
+    margin_left, margin_right, margin_top, margin_bottom = 56, 44, 28, 36
+    plot_w = 820 - margin_left - margin_right
+    plot_h = 240 - margin_top - margin_bottom
+    log_y = _hist_should_use_log_y(
+        bin_spec["counts"] + [bin_spec["overflow"], bin_spec["underflow"]])
+    bars, max_count, slot_count, slot_w = _hist_build_bar_layout(
+        bin_spec, plot_w, plot_h, margin_left, margin_top, log_y)
+    _sc, _sw, leading, regular_slots, regular_w = _hist_slot_layout(bin_spec, plot_w)
+    region_left = margin_left + int(leading * _sw)
+
+    def scale_x(val: float) -> int:
+        return _hist_value_to_x(val, bin_spec, plot_w, margin_left)
+
+    x_ticks = []
+    if bin_spec["x_scale"] == "log":
+        lo = max(bin_spec["display_min"], 1.0)
+        hi = max(lo + 1.0, bin_spec["display_max"])
+        log_lo = math.log10(lo)
+        log_hi = math.log10(hi)
+        for d in range(int(math.floor(log_lo)), int(math.ceil(log_hi)) + 1):
+            for m in (1, 2, 5):
+                val = m * (10 ** d)
+                if val < lo * 0.999 or val > hi * 1.001:
+                    continue
+                t = (math.log10(val) - log_lo) / max(1e-9, log_hi - log_lo)
+                x_ticks.append((region_left + int(t * regular_w),
+                                _format_time(int(val), time_scale, decimals=1)))
+                if len(x_ticks) >= 7:
+                    break
+            if len(x_ticks) >= 7:
+                break
+        if not x_ticks:
+            for fi in range(3):
+                log_val = log_lo + (log_hi - log_lo) * fi / 2
+                val = int(round(10 ** log_val))
+                x_ticks.append((region_left + int(fi / 2 * regular_w),
+                                _format_time(val, time_scale, decimals=1)))
+    else:
+        for fi in range(3):
+            val = int(round(bin_spec["display_min"] +
+                            (bin_spec["display_max"] - bin_spec["display_min"]) * fi / 2))
+            x_ticks.append((region_left + int(fi / 2 * regular_w),
+                            _format_time(val, time_scale, decimals=1)))
+        if bin_spec["has_overflow_bin"]:
+            x_ticks.append((margin_left + int((leading + regular_slots + 0.5) * _sw), ">p95"))
+
+    y_ticks = []
+    for fi in range(5):
+        ratio = 1 - fi / 4
+        if log_y:
+            cnt = int(round(10 ** (math.log10(max_count + 1) * ratio) - 1))
+            bar_h = int(math.log10(cnt + 1) / math.log10(max_count + 1) * plot_h)
+        else:
+            cnt = int(round(max_count * ratio))
+            bar_h = int(cnt / max(1, max_count) * plot_h)
+        y_ticks.append((margin_top + plot_h - bar_h, str(cnt)))
+
+    cdf_points = []
+    n = len(sorted_vals)
+    if n >= 2:
+        raw_cdf = []
+        for i, val in enumerate(sorted_vals):
+            pct = (i + 1) / n
+            gx = _hist_value_to_x(val, bin_spec, plot_w, margin_left)
+            gy = margin_top + plot_h - int(pct * plot_h)
+            raw_cdf.append((gx, gy))
+        for gx, gy in raw_cdf:
+            if cdf_points and abs(cdf_points[-1][0] - gx) < 1:
+                cdf_points[-1] = (gx, gy)
+            elif not cdf_points or gx >= cdf_points[-1][0] - 1:
+                cdf_points.append((gx, gy))
+        if len(cdf_points) > 90:
+            step = max(1, math.ceil(len(cdf_points) / 80))
+            sampled = cdf_points[::step]
+            if sampled[-1] != cdf_points[-1]:
+                sampled.append(cdf_points[-1])
+            cdf_points = sampled
+    cdf_ticks = [(margin_top + plot_h - int(p / 100 * plot_h), f"{p}%") for p in (0, 50, 100)]
+
+    ref_lines = []
+    for val, lbl, color in [
+        (summary["avg"], "avg", QColor("#CE93D8")),
+        (summary["p50"], "p50", QColor("#4CAF50")),
+        (summary["p95"], "p95", QColor("#FF9800")),
+    ]:
+        gx = scale_x(val)
+        if margin_left <= gx <= margin_left + plot_w:
+            ref_lines.append((gx, lbl, color))
+
+    return {
+        "summary": summary,
+        "effective_mode": effective,
+        "caption": _hist_build_caption(effective, summary, bin_spec, log_y, time_scale),
+        "margin_left": margin_left,
+        "margin_right": margin_right,
+        "margin_top": margin_top,
+        "margin_bottom": margin_bottom,
+        "plot_w": plot_w,
+        "plot_h": plot_h,
+        "bars": bars,
+        "x_ticks": x_ticks,
+        "y_ticks": y_ticks,
+        "cdf_points": cdf_points,
+        "cdf_ticks": cdf_ticks,
+        "ref_lines": ref_lines,
+        "log_y": log_y,
+        "max_count": max_count,
+    }
+
 class _HistogramWidget(QWidget):
-    """Histogram of metric values with p50/p95 markers."""
+    """Histogram of metric values with adaptive scaling, CDF overlay, and markers."""
 
     def __init__(self, values, time_scale: str, color: "QColor",
                  is_dark: bool, parent=None) -> None:
         super().__init__(parent)
-        self._values     = sorted(values)
-        self._time_scale = time_scale
-        self._color      = color
-        self._is_dark    = is_dark
-        self.setMinimumHeight(120)
+        self._values      = sorted(values)
+        self._time_scale  = time_scale
+        self._color       = color
+        self._is_dark     = is_dark
+        self._scale_mode  = "auto"
+        self.setMinimumHeight(140)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
     def set_values(self, values: list) -> None:
@@ -11761,15 +12103,16 @@ class _HistogramWidget(QWidget):
         self._values = sorted(values)
         self.update()
 
+    def set_scale_mode(self, mode: str) -> None:
+        self._scale_mode = mode if mode in ("auto", "linear", "percentile", "log") else "auto"
+        self.update()
+
     def set_dark(self, is_dark: bool) -> None:
         self._is_dark = is_dark
         self.update()
 
     def paintEvent(self, event) -> None:  # noqa: N802
-        N_BINS = 50
-        w, h  = self.width(), self.height()
-        ML, MT, MB = 56, 14, 36
-
+        w, h = self.width(), self.height()
         dark = self._is_dark
         bg   = QColor("#1E1E1E") if dark else QColor("#F8F8F8")
         grid = QColor("#2E2E2E") if dark else QColor("#E0E0E0")
@@ -11786,79 +12129,95 @@ class _HistogramWidget(QWidget):
             p.end()
             return
 
-        vals = self._values
-        n    = len(vals)
-        v0, v1 = vals[0], vals[-1]
-        vspan  = max(v1 - v0, 1)
-        p50 = vals[min(n - 1, int(n * 0.50))]
-        avg = sum(vals) / n if n else 0
-        p95 = vals[min(n - 1, int(n * 0.95))]
+        model = _hist_build_model(self._values, self._time_scale, self._scale_mode)
+        if not model:
+            p.end()
+            return
 
-        # Build bins
-        bin_w_val = vspan / N_BINS
-        counts    = [0] * N_BINS
-        for v in vals:
-            bi = min(N_BINS - 1, int((v - v0) / bin_w_val))
-            counts[bi] += 1
-        max_count = max(counts) if counts else 1
+        ML = model["margin_left"]
+        MR = model["margin_right"]
+        MT = model["margin_top"]
+        MB = model["margin_bottom"]
+        pw = w - ML - MR
+        ph = h - MT - MB
+        scale = pw / max(1, model["plot_w"])
 
         sf = QFont(); sf.setPointSize(7)
         p.setFont(sf)
         fm = p.fontMetrics()
         marker_labels = ("avg", "p50", "p95")
-        MR = max(14, max(fm.horizontalAdvance(lbl) for lbl in marker_labels) + 10)
-        pw = w - ML - MR
+        MR_labels = max(14, max(fm.horizontalAdvance(lbl) for lbl in marker_labels) + 10)
+        pw = w - ML - MR_labels
         ph = h - MT - MB
-        bw = max(1, pw // N_BINS)
+        scale = pw / max(1, model["plot_w"])
 
-        # Grid
+        # Caption
+        p.setPen(txt)
+        p.drawText(QRect(ML, 4, pw, 16), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                   model["caption"])
+
+        # Grid + axes
         p.setPen(QPen(grid, 1, Qt.PenStyle.DotLine))
-        for fi in (1, 2, 3, 4):
-            gy = MT + int((1 - fi / 4) * ph)
-            p.drawLine(ML, gy, ML + pw, gy)
+        for gy, _lbl in model["y_ticks"]:
+            p.drawLine(ML, int(MT + (gy - model["margin_top"]) * ph / max(1, model["plot_h"])),
+                       ML + pw, int(MT + (gy - model["margin_top"]) * ph / max(1, model["plot_h"])))
         p.setPen(QPen(axln, 1))
         p.drawLine(ML, MT, ML, MT + ph)
         p.drawLine(ML, MT + ph, ML + pw, MT + ph)
+        p.setPen(QPen(axln, 1, Qt.PenStyle.DashLine))
+        p.drawLine(ML + pw, MT, ML + pw, MT + ph)
 
         # Y labels
         p.setPen(txt)
-        for fi in range(5):
-            cnt = int(max_count * fi / 4)
-            gy  = MT + ph - int(fi / 4 * ph)
-            p.drawText(QRect(0, gy - 8, ML - 4, 16), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, str(cnt))
+        for gy, lbl in model["y_ticks"]:
+            y = int(MT + (gy - model["margin_top"]) * ph / max(1, model["plot_h"]))
+            p.drawText(QRect(0, y - 8, ML - 4, 16),
+                       Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, lbl)
 
-        # X labels (3)
-        for fi in range(3):
-            val = v0 + vspan * fi / 2
-            gx  = ML + int(fi / 2 * pw)
-            lbl = _format_time(int(val), self._time_scale, decimals=1)
-            p.drawText(QRect(gx - 40, MT + ph + 4, 80, 16),
+        # CDF axis labels
+        for gy, lbl in model["cdf_ticks"]:
+            y = int(MT + (gy - model["margin_top"]) * ph / max(1, model["plot_h"]))
+            p.drawText(QRect(ML + pw + 4, y - 8, MR_labels - 4, 16),
+                       Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, lbl)
+
+        # X labels
+        for gx, lbl in model["x_ticks"]:
+            x = int(ML + (gx - model["margin_left"]) * scale)
+            p.drawText(QRect(x - 40, MT + ph + 4, 80, 16),
                        Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, lbl)
 
         # Bars
         bar_color = QColor(self._color); bar_color.setAlpha(180)
+        overflow_color = QColor(self._color); overflow_color.setAlpha(100)
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QBrush(bar_color))
-        for bi, cnt in enumerate(counts):
-            if cnt == 0:
-                continue
-            bx = ML + int(bi * pw / N_BINS)
-            bh = int(cnt / max_count * ph)
-            p.drawRect(bx, MT + ph - bh, max(1, bw - 1), bh)
+        for bx, by, bw, bh, kind in model["bars"]:
+            x = int(ML + (bx - model["margin_left"]) * scale)
+            y = int(MT + (by - model["margin_top"]) * ph / max(1, model["plot_h"]))
+            bar_h = int(bh * ph / max(1, model["plot_h"]))
+            bar_w = max(1, int(bw * scale))
+            p.setBrush(QBrush(overflow_color if kind in ("overflow", "underflow") else bar_color))
+            p.drawRect(x, y, bar_w, bar_h)
+
+        # CDF line
+        if len(model["cdf_points"]) > 1:
+            p.setRenderHint(QPainter.Antialiasing, True)
+            p.setPen(QPen(QColor("#90CAF9"), 1.5))
+            path_pts = []
+            for gx, gy in model["cdf_points"]:
+                path_pts.append(QPoint(int(ML + (gx - model["margin_left"]) * scale),
+                                       int(MT + (gy - model["margin_top"]) * ph / max(1, model["plot_h"]))))
+            for i in range(1, len(path_pts)):
+                p.drawLine(path_pts[i - 1], path_pts[i])
 
         # avg / p50 / p95 vertical lines
         p.setRenderHint(QPainter.Antialiasing, True)
-        for val, lbl_text, lcolor in [
-            (avg, marker_labels[0], QColor("#CE93D8")),
-            (p50, marker_labels[1], QColor("#4CAF50")),
-            (p95, marker_labels[2], QColor("#FF9800")),
-        ]:
-            gx = ML + int((val - v0) / vspan * pw)
+        for gx, lbl_text, lcolor in model["ref_lines"]:
+            x = int(ML + (gx - model["margin_left"]) * scale)
             p.setPen(QPen(lcolor, 2, Qt.PenStyle.DashLine))
-            p.drawLine(gx, MT, gx, MT + ph)
+            p.drawLine(x, MT, x, MT + ph)
             p.setPen(lcolor)
             p.setFont(sf)
-            p.drawText(gx + 3, MT + 12, lbl_text)
+            p.drawText(x + 3, MT + 12, lbl_text)
 
         p.end()
 
@@ -11912,11 +12271,29 @@ class _MetricsPlotDialog(QDialog):
         self._scatter = _ScatterWidget(points, time_scale, color, is_dark)
         self._histogram = _HistogramWidget(values, time_scale, color, is_dark)
 
+        hist_toolbar = QHBoxLayout()
+        hist_toolbar.setContentsMargins(0, 0, 0, 0)
+        hist_toolbar.setSpacing(8)
+        hist_lbl = QLabel("Histogram scale")
+        self._hist_scale = QComboBox()
+        self._hist_scale.addItems(["Auto", "Linear", "p5–p95", "Log duration"])
+        self._hist_scale.setCurrentIndex(0)
+        self._hist_scale.currentIndexChanged.connect(self._on_hist_scale_changed)
+        hist_toolbar.addWidget(hist_lbl)
+        hist_toolbar.addWidget(self._hist_scale)
+        hist_toolbar.addStretch()
+
         self._scatter.point_clicked.connect(self._on_scatter_click)
 
         splitter = _ResizeSplitter(Qt.Orientation.Vertical)
         splitter.addWidget(self._scatter)
-        splitter.addWidget(self._histogram)
+        hist_panel = QWidget()
+        hist_layout = QVBoxLayout(hist_panel)
+        hist_layout.setContentsMargins(0, 0, 0, 0)
+        hist_layout.setSpacing(2)
+        hist_layout.addLayout(hist_toolbar)
+        hist_layout.addWidget(self._histogram, 1)
+        splitter.addWidget(hist_panel)
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 2)
         cl.addWidget(splitter)
@@ -11975,6 +12352,15 @@ class _MetricsPlotDialog(QDialog):
         self._set_scope_banner(scope_scoped, scope_badge, scope_detail)
         self._scatter.set_points(points)
         self._histogram.set_values([p[1] for p in points])
+        self._hist_scale.blockSignals(True)
+        self._hist_scale.setCurrentIndex(0)
+        self._hist_scale.blockSignals(False)
+        self._histogram.set_scale_mode("auto")
+
+    def _on_hist_scale_changed(self, index: int) -> None:
+        modes = ("auto", "linear", "percentile", "log")
+        if 0 <= index < len(modes):
+            self._histogram.set_scale_mode(modes[index])
 
     def closeEvent(self, event) -> None:  # noqa: N802
         self.closed.emit()
@@ -19366,9 +19752,13 @@ class MainWindow(QMainWindow):
         # Restore all persisted settings (geometry, zoom, orientation, ...).
         self._restore_settings()
 
-    # ------------------------------------------------------------------
-    # Multi-tab trace access
-    # ------------------------------------------------------------------
+        app = QApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(self._on_app_about_to_quit)
+
+    def _on_app_about_to_quit(self) -> None:
+        """Ensure the background parser has exited before Qt tears down QObjects."""
+        self._stop_parse_thread(wait_ms=60_000)
 
     @property
     def _active_tab(self) -> Optional[_TraceTab]:
@@ -20509,18 +20899,28 @@ class MainWindow(QMainWindow):
         s.flush()
         self._report_settings_io_failure(prefix="Settings save warning")
 
-    def _stop_parse_thread(self, wait_ms: int) -> bool:
-        """Stop current parser thread safely; return True when fully stopped."""
-        if self._parse_thread is None:
+    def _finish_parse_thread(self, wait_ms: int = 30_000) -> bool:
+        """Disconnect, join, and schedule deletion of the current parser thread."""
+        thread = self._parse_thread
+        if thread is None:
             return True
-        if self._parse_thread.isRunning():
-            self._parse_thread.requestInterruption()
-            self._parse_thread.wait(wait_ms)
-            if self._parse_thread.isRunning():
-                return False
         self._disconnect_parse_signals()
         self._parse_thread = None
+        if thread.isRunning():
+            thread.wait(wait_ms)
+        if thread.isRunning():
+            return False
+        thread.deleteLater()
         return True
+
+    def _stop_parse_thread(self, wait_ms: int) -> bool:
+        """Stop current parser thread safely; return True when fully stopped."""
+        thread = self._parse_thread
+        if thread is None:
+            return True
+        if thread.isRunning():
+            thread.requestInterruption()
+        return self._finish_parse_thread(wait_ms=wait_ms)
 
     def _teardown_scene(self) -> None:
         """Release all scene items and free trace data on background threads."""
@@ -22683,44 +23083,36 @@ class MainWindow(QMainWindow):
                 QApplication.restoreOverrideCursor()
 
         def _on_done(trace):
-            # Disconnect all signals FIRST, before processEvents() or dropping the
-            # thread reference.  This destroys the PyQtSlotProxy objects and their
-            # QObject::removePostedEvents() call purges any still-queued progress/
-            # errored events from the main-thread event queue.  Without this, a
-            # queued progress event whose proxy was freed by _parse_thread=None
-            # would be dispatched by sendPostedEvents -> SIGBUS crash.
-            self._disconnect_parse_signals()
-            progress_dialog.update_progress(100, "Building scene…")
-            _process_ui_events_safely()   # let the dialog repaint before heavy build
-            self._parse_thread = None
             try:
-                self._finalize_loaded_trace(trace, path, progress_dialog)
-            except (ValueError, RuntimeError, KeyError, OSError) as exc:
-                self._status_file.setText("  No file loaded")
-                QMessageBox.critical(self, "Render Error",
-                                     f"Failed to display:\n{path}\n\n{exc}")
+                progress_dialog.update_progress(100, "Building scene…")
+                _process_ui_events_safely()   # let the dialog repaint before heavy build
+                try:
+                    self._finalize_loaded_trace(trace, path, progress_dialog)
+                except (ValueError, RuntimeError, KeyError, OSError) as exc:
+                    self._status_file.setText("  No file loaded")
+                    QMessageBox.critical(self, "Render Error",
+                                         f"Failed to display:\n{path}\n\n{exc}")
             finally:
                 _teardown_loading_dialog()   # close after all heavy work is done
+                self._finish_parse_thread()
 
         def _on_error(msg):
-            # Same rationale as _on_done: disconnect first to purge any
-            # stale queued events before the thread / proxies are freed.
-            self._disconnect_parse_signals()
-            _teardown_loading_dialog()
-            self._parse_thread = None
-            self._status_file.setText("  No file loaded")
-            QMessageBox.critical(self, "Parse Error",
-                                 f"Failed to parse:\n{path}\n\n{msg}")
+            try:
+                self._status_file.setText("  No file loaded")
+                QMessageBox.critical(self, "Parse Error",
+                                     f"Failed to parse:\n{path}\n\n{msg}")
+            finally:
+                _teardown_loading_dialog()
+                self._finish_parse_thread()
 
         def _on_cancelled():
-            # Cancellation can happen when a load is interrupted before
-            # done/errored handlers run. Ensure UI state is always restored.
-            self._disconnect_parse_signals()
-            _teardown_loading_dialog()
-            self._parse_thread = None
-            self._status_file.setText("  Load cancelled")
+            try:
+                self._status_file.setText("  Load cancelled")
+            finally:
+                _teardown_loading_dialog()
+                self._finish_parse_thread()
 
-        thread = _ParseThread(path)
+        thread = _ParseThread(path, self)
         thread.done.connect(_on_done)
         thread.errored.connect(_on_error)
         thread.cancelled.connect(_on_cancelled)
@@ -22731,8 +23123,7 @@ class MainWindow(QMainWindow):
             thread.start()
         except Exception as exc:
             _teardown_loading_dialog()
-            self._disconnect_parse_signals()
-            self._parse_thread = None
+            self._finish_parse_thread()
             self._status_file.setText("  No file loaded")
             QMessageBox.critical(self, "Load Error",
                                  f"Failed to start parser thread:\n{path}\n\n{exc}")
