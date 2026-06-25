@@ -19715,6 +19715,7 @@ class MainWindow(QMainWindow):
         self._heatmap_dlg: Optional[_MigrationHeatmapDialog] = None
         self._heatmap_view_snapshot: Optional[dict] = None
         self._defer_stats_refresh: bool = False
+        self._shutting_down: bool = False
         self._tb_icon_actions: list = []   # (QAction, icon_path_data) for theme-aware icons
 
         self.setWindowTitle("RTOS BTF Viewer")
@@ -19757,8 +19758,17 @@ class MainWindow(QMainWindow):
             app.aboutToQuit.connect(self._on_app_about_to_quit)
 
     def _on_app_about_to_quit(self) -> None:
-        """Ensure the background parser has exited before Qt tears down QObjects."""
-        self._stop_parse_thread(wait_ms=60_000)
+        """Last-chance parse-thread join (closeEvent already did the heavy lifting)."""
+        self._stop_parse_thread(wait_ms=200)
+
+    def _dismiss_auxiliary_windows(self) -> None:
+        """Close modeless dialogs so they do not prolong QWidget teardown."""
+        if hasattr(self, "_stats_panel"):
+            self._stats_panel.clear_plot_session()
+        self._close_heatmap_dialog()
+        if self._progress_dialog is not None:
+            self._progress_dialog.close()
+            self._progress_dialog = None
 
     @property
     def _active_tab(self) -> Optional[_TraceTab]:
@@ -20765,7 +20775,13 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, self._focus_statistics_panel)
 
     def closeEvent(self, event) -> None:
-        """Persist all runtime state to btf_viewer.rc on exit."""
+        """Persist runtime state and exit quickly (avoid blocking GC on large traces)."""
+        self._shutting_down = True
+        self.hide()
+        app = QApplication.instance()
+        if app is not None:
+            app.processEvents()
+
         for tab in self._tabs:
             tab.view._zoom_timer.stop()
             tab.view._pan_timer.stop()
@@ -20777,29 +20793,20 @@ class MainWindow(QMainWindow):
             self._settings_view._pan_heartbeat.stop()
             self._settings_view._resize_timer.stop()
 
-        # ---- 2. Abort any in-progress background parse ------------------------
-        # IMPORTANT: stop the thread BEFORE disconnecting signals.
-        # disconnect() destroys the PyQtSlotProxy C++ objects.  If the thread
-        # is still running, PyQtSlotProxy::unislot() may execute concurrently
-        # in the worker thread and call postEvent(this, ...) on the now-freed
-        # proxy, causing an EXC_BAD_ACCESS / SIGBUS crash (data race).
-        # After the thread is fully stopped no more unislot() calls can occur,
-        # making it safe to destroy the proxies.  The proxy ~QObject() then
-        # calls QObject::removePostedEvents(this, 0), purging any already-
-        # queued events so they cannot be replayed during sendPostedEvents.
-        if not self._stop_parse_thread(wait_ms=3000):
-            event.ignore()
-            self._status_file.setText("  Parser is still stopping; please close again.")
-            return
+        self._dismiss_auxiliary_windows()
+
+        # Stop an in-flight parse if the user quits during load.  On exit we do
+        # not block indefinitely — orphan a still-running worker and let the OS
+        # reclaim the process rather than freezing the UI for a large trace.
+        if not self._stop_parse_thread(wait_ms=1000):
+            self._disconnect_parse_signals()
+            self._parse_thread = None
 
         self._save_current_trace_state()
         self._persist_settings()
         self._report_settings_io_failure(prefix="Settings save warning")
 
-        # Hide the window immediately so cleanup freezes are not visible.
-        self.hide()
         self._teardown_scene()
-
         super().closeEvent(event)
 
     def _report_settings_io_failure(self, prefix: str = "Settings warning") -> None:
@@ -20923,52 +20930,30 @@ class MainWindow(QMainWindow):
         return self._finish_parse_thread(wait_ms=wait_ms)
 
     def _teardown_scene(self) -> None:
-        """Release all scene items and free trace data on background threads."""
-        traces_to_free: List[BtfTrace] = []
-        for tab in self._tabs:
-            tab.cpu_load_graph.set_trace(None)
-            _scene = tab.view._scene
-            _scene._trace = None
-            for _item, _ in _scene._frozen_items:
-                if hasattr(_item, '_seg_data'):
-                    _item._seg_data = []
-                    _item._xs = []
-                    _item._coarse_data_cache = None
-                    _item._coarse_xs = None
-            _scene._frozen_items = []
-            _scene._frozen_top_items = []
-            _scene._cursor_items = []
-            _scene._hover_overlay_items = []
-            _scene._hover_items = []
-            _scene._hover_line_ns = None
-            _scene._task_row_rects = {}
-            _scene.clear()
-            if tab.trace is not None:
-                traces_to_free.append(tab.trace)
-                tab.trace = None
-        self._tabs.clear()
+        """Detach trace data quickly on exit.
 
-        # ---- 4b. Release the module-level info popup --------------------------
-        # _info_popup is a frameless QLabel parented to nothing.  Freeing it
-        # here prevents a C++ object-after-destruction crash during interpreter
-        # shutdown when the QApplication is torn down before the GC collects it.
+        Avoid ``QGraphicsScene.clear()`` and background ``del`` threads here:
+        both can take many seconds on multi-million-segment traces and block
+        process exit (non-daemon GC threads hold the interpreter open).
+        """
         global _info_popup
         if _info_popup is not None:
             _info_popup.hide()
-            _info_popup.deleteLater()
             _info_popup = None
 
-        # ---- 5. Free trace data on a background thread -----------------------
-        # The trace can hold millions of TaskSegment objects; handing the last
-        # reference to a non-daemon background thread lets Python's GC run
-        # there instead of on the main thread.  Using daemon=False ensures the
-        # thread is not killed prematurely at interpreter shutdown (a daemon
-        # thread killed before it finishes would bounce the reference back to
-        # the main-thread teardown, negating the benefit).
-        for _trace_to_free in traces_to_free:
-            def _drop(_t=_trace_to_free):
-                del _t
-            threading.Thread(target=_drop, daemon=False).start()
+        for tab in self._tabs:
+            tab.cpu_load_graph.set_trace(None)
+            sc = tab.view._scene
+            sc._trace = None
+            sc._frozen_items = []
+            sc._frozen_top_items = []
+            sc._cursor_items = []
+            sc._hover_overlay_items = []
+            sc._hover_items = []
+            sc._hover_line_ns = None
+            sc._task_row_rects = {}
+            tab.trace = None
+        self._tabs.clear()
 
     def dragEnterEvent(self, event) -> None:
         if event.mimeData().hasUrls():
