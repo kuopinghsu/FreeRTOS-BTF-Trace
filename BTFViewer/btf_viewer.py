@@ -1445,16 +1445,21 @@ def _parse_sync_object_note(note: str) -> Optional[Tuple[str, str]]:
 def _sync_object_key(kind: str, ptr: str) -> str:
     return f"{kind}:{ptr}"
 
-def _running_task_mk(core_segs: Dict[str, list], core: str, time_ns: int) -> Optional[str]:
-    seg = _segment_at_core_time(core_segs, core, time_ns)
+def _running_task_mk(core_segs: Dict[str, list], core: str, time_ns: int,
+                     seg_starts: Optional[Dict[str, list]] = None) -> Optional[str]:
+    seg = _segment_at_core_time(core_segs, core, time_ns, seg_starts=seg_starts)
     return _task_merge_key(seg.task) if seg is not None else None
 
-def _segment_at_core_time(core_segs: Dict[str, list], core: str, time_ns: int
+def _segment_at_core_time(core_segs: Dict[str, list], core: str, time_ns: int,
+                          seg_starts: Optional[Dict[str, list]] = None
                           ) -> Optional["TaskSegment"]:
     segs = core_segs.get(core) or []
     if not segs or time_ns is None:
         return None
-    lo = max(0, bisect_left([s.start for s in segs], time_ns) - 1)
+    starts = seg_starts.get(core) if seg_starts is not None else None
+    if starts is None:
+        starts = [s.start for s in segs]
+    lo = max(0, bisect_left(starts, time_ns) - 1)
     for i in range(lo, len(segs)):
         s = segs[i]
         if s.start > time_ns:
@@ -1477,6 +1482,7 @@ def _build_sync_object_data(
     core_segs: Dict[str, list],
     task_repr: Dict[str, str],
     time_max: int,
+    core_seg_starts: Optional[Dict[str, list]] = None,
 ) -> Tuple[Dict[str, dict], List[dict], bool]:
     objects: Dict[str, dict] = {}
     global_issues: List[dict] = []
@@ -1522,7 +1528,7 @@ def _build_sync_object_data(
 
     for ev, (action, ptr) in events:
         key = _sync_object_key(ev.target, ptr)
-        task_mk = _running_task_mk(core_segs, ev.core, ev.time)
+        task_mk = _running_task_mk(core_segs, ev.core, ev.time, core_seg_starts)
         raw = task_repr.get(task_mk, task_mk) if task_mk else "?"
         task_label = _task_display_name(raw) if task_mk else "?"
 
@@ -3253,27 +3259,27 @@ def _parse_btf(filepath: str,
             return (0, int(tail) if tail.isdigit() else sys.maxsize, c)
         return (1, sys.maxsize, c)
     _core_names = sorted(_cn_set, key=_core_sort_key)
-    _core_segs: Dict[str, list] = {c: list(_core_segs_build.get(c, [])) for c in _core_names}
+    _core_segs: Dict[str, list] = {}
+    _core_task_order: Dict[str, list] = {}
+    _core_task_segs:  Dict[str, dict] = {}
+    _core_seg_starts: Dict[str, list] = {}
 
     if progress_callback:
         progress_callback(62, "Sorting core segments…")
     if cancel_check and cancel_check():
         raise _ParseCancelledError()
 
-    _core_task_order: Dict[str, list] = {}
-    _core_task_segs:  Dict[str, dict] = {}
     for c in _core_names:
-        _tsm: Dict[str, list] = {}
-        for seg in _core_segs[c]:
-            if seg.task in _tsm:
-                _tsm[seg.task].append(seg)
-            else:
-                _tsm[seg.task] = [seg]
-        for _lst in _tsm.values():
-            _lst.sort(key=_seg_start_key)
-        _core_segs[c].sort(key=_seg_start_key)
-        _core_task_order[c] = sorted(_tsm.keys(), key=_task_sort_key)
-        _core_task_segs[c]  = _tsm
+        segs = _core_segs_build.get(c, [])
+        segs.sort(key=_seg_start_key)
+        _core_segs[c] = segs
+        _core_seg_starts[c] = [s.start for s in segs]
+
+        tsm: Dict[str, list] = defaultdict(list)
+        for seg in segs:
+            tsm[seg.task].append(seg)
+        _core_task_segs[c] = dict(tsm)
+        _core_task_order[c] = sorted(tsm.keys(), key=_task_sort_key)
 
     # Map raw task_create names to merge keys.
     _task_create_times: Dict[str, int] = {}
@@ -3287,7 +3293,7 @@ def _parse_btf(filepath: str,
             sti_events, _task_create_pri_raw, time_max, _mk_cache, _mk_repr)
     )
     _sync_objects, _sync_issues, _has_sync = _build_sync_object_data(
-        sti_events, _core_segs, _mk_repr, time_max)
+        sti_events, _core_segs, _mk_repr, time_max, _core_seg_starts)
 
     # ------------------------------------------------------------------
     # Phase 4 : 1M-event performance pre-processing
@@ -3347,13 +3353,11 @@ def _parse_btf(filepath: str,
         raise _ParseCancelledError()
 
     # Core-view: start-time arrays + LOD summaries for core summary rows
-    _core_seg_starts:     Dict[str, list] = {}
     _core_seg_lod:        Dict[str, list] = {}
     _core_seg_lod_starts: Dict[str, list] = {}
     _core_seg_lod_ultra:        Dict[str, list] = {}
     _core_seg_lod_ultra_starts: Dict[str, list] = {}
     for _c in _core_names:
-        _core_seg_starts[_c] = list(map(_attrgetter('start'), _core_segs[_c]))
         _lod, _lod_starts = _make_lod_summary(_core_segs[_c], _LOD_SUMMARY_BINS, _lod_timescale_per_px)
         _core_seg_lod[_c]        = _lod
         _core_seg_lod_starts[_c] = _lod_starts
@@ -20047,7 +20051,7 @@ class MainWindow(QMainWindow):
 
     def _resize_right_dock_column(self, w: int) -> None:
         docks = [self._legend_dock, self._panel_dock]
-        sizes = [w, w, w, w]
+        sizes = [w, w]
         if self.isMaximized() or self.isFullScreen():
             self.resizeDocks(docks, sizes, Qt.Orientation.Horizontal)
             return
@@ -22140,7 +22144,8 @@ class MainWindow(QMainWindow):
         vp = self._view.viewport().rect()
         is_horiz = sc._horizontal
         vp_px = max(vp.width() if is_horiz else vp.height(), 100)
-        seg = _segment_at_core_time(self._trace.core_segs, iss.core, iss.time_ns)
+        seg = _segment_at_core_time(self._trace.core_segs, iss.core, iss.time_ns,
+                                    self._trace.core_seg_starts)
         center_ns = mark_ns if mark_ns is not None else iss.time_ns
         if seg is not None:
             margin = max(1, (seg.end - seg.start) // 10)
