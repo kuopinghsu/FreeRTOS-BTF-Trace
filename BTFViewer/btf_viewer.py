@@ -66,17 +66,25 @@ import sys
 import threading
 
 # ---------------------------------------------------------------------------
-# macOS: suppress the harmless "TSM AdjustCapsLockLEDForKeyTransitionHandling"
-# noise that macOS prints to fd 2 whenever a key is pressed in a Qt app.
+# macOS: suppress harmless TSM / HIToolbox stderr noise that macOS prints
+# whenever keys or menus are used in a Qt app (CapsLock LED, NSSoftLinking, …).
 # Installed from main() after QApplication() — redirecting stderr before Qt
 # initialises NSApplication can abort inside _RegisterApplication on macOS.
 # ---------------------------------------------------------------------------
+_STDERR_NOISE_MACOS: tuple = (
+    b"TSM AdjustCapsLockLED",
+    b"NSSoftLinking",
+    b"HIToolbox framework",
+)
+
+def _macos_stderr_line_is_noise(line: bytes) -> bool:
+    return any(p in line for p in _STDERR_NOISE_MACOS)
+
 def _install_macos_stderr_filter() -> None:
     if sys.platform != "darwin":
         return
     if os.environ.get("BTF_NO_STDERR_FILTER"):
         return
-    _NOISE = b"TSM AdjustCapsLockLED"
     try:
         rfd, wfd = os.pipe()
     except OSError:
@@ -102,12 +110,12 @@ def _install_macos_stderr_filter() -> None:
                     leftover += chunk
                     while b"\n" in leftover:
                         line, leftover = leftover.split(b"\n", 1)
-                        if _NOISE not in line:
+                        if not _macos_stderr_line_is_noise(line):
                             try:
                                 os.write(original_fd, line + b"\n")
                             except OSError:
                                 pass
-            if leftover and _NOISE not in leftover:
+            if leftover and not _macos_stderr_line_is_noise(leftover):
                 try:
                     os.write(original_fd, leftover)
                 except OSError:
@@ -13640,6 +13648,80 @@ class _StatsPanel(QWidget):
             f" border-radius:3px; padding:0 4px;"
         )
 
+    @staticmethod
+    def _html_export_util_css() -> str:
+        """CSS for CPU utilisation bars in statistics HTML export."""
+        return """
+        .util-list { display: flex; flex-direction: column; gap: 4px; }
+        .util-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            min-height: 18px;
+        }
+        .util-label {
+            flex: 0 0 128px;
+            max-width: 128px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            text-align: left;
+            font-size: 13px;
+            color: var(--ink);
+        }
+        .util-bar {
+            flex: 1 1 auto;
+            height: 8px;
+            min-width: 24px;
+            border-radius: 4px;
+            background: var(--line);
+            overflow: hidden;
+        }
+        .util-bar-fill {
+            height: 100%;
+            border-radius: 4px;
+            background: #5FCF6F;
+        }
+        .util-row-task .util-bar-fill { background: #5B9BD5; }
+        .util-pct {
+            flex: 0 0 44px;
+            text-align: left;
+            font-size: 13px;
+        }
+        .util-pct-core { color: #77BB77; }
+        .util-pct-task { color: #6AAADD; }
+        """
+
+    @staticmethod
+    def _html_export_util_bar_row(label: str, pct: float, kind: str) -> str:
+        """One label + progress bar + % row for HTML export."""
+        pct_v = max(0.0, min(100.0, float(pct)))
+        esc = html.escape(str(label), quote=True)
+        row_cls = "util-row util-row-core" if kind == "core" else "util-row util-row-task"
+        pct_cls = "util-pct util-pct-core" if kind == "core" else "util-pct util-pct-task"
+        return (
+            f'<div class="{row_cls}">'
+            f'<span class="util-label">{esc}</span>'
+            f'<div class="util-bar"><div class="util-bar-fill" '
+            f'style="width:{pct_v:.1f}%"></div></div>'
+            f'<span class="{pct_cls}">{pct_v:.1f}%</span>'
+            f"</div>"
+        )
+
+    @classmethod
+    def _html_export_util_section(cls, title: str, rows: list, kind: str) -> str:
+        """Report card with utilisation bar rows (core or task)."""
+        esc_title = html.escape(title, quote=True)
+        if not rows:
+            body = '<p class="empty">No data</p>'
+        else:
+            items = "".join(
+                cls._html_export_util_bar_row(label, pct, kind)
+                for label, pct in rows
+            )
+            body = f'<div class="util-list">{items}</div>'
+        return f'<section class="report-card"><h2>{esc_title}</h2>{body}</section>'
+
     def _add_utilisation_row(self, blay: QVBoxLayout, ui_fs: str,
                              label: str, pct: float, *,
                              chunk_color: str, pct_color: str,
@@ -14783,15 +14865,16 @@ class _StatsPanel(QWidget):
                 f"<tbody>{body}</tbody></table></section>"
             )
 
-        core_body = "".join(
-            f"<tr><td>{_esc(core)}</td><td>{pct:.1f}%</td></tr>"
-            for core, pct in core_rows
-        ) or '<tr><td colspan="2" class="empty">No data</td></tr>'
-
-        task_body = "".join(
-            f"<tr><td>{_esc(name)}</td><td>{pct:.1f}%</td></tr>"
-            for _, name, pct in task_rows
-        ) or '<tr><td colspan="2" class="empty">No data</td></tr>'
+        core_util_html = self._html_export_util_section(
+            f"Core Utilisation (excl. IDLE/TICK){scope_title}",
+            [(core, pct) for core, pct in core_rows],
+            "core",
+        )
+        task_util_html = self._html_export_util_section(
+            f"Top Tasks by CPU (excl. IDLE/TICK){scope_title}",
+            [(name, pct) for _, name, pct in task_rows],
+            "task",
+        )
 
         if tick["tick_count"]:
             tick_gap_body = "".join(
@@ -15012,6 +15095,7 @@ class _StatsPanel(QWidget):
         .sev-error {{ color: #c0392b; font-weight: 600; }}
         .sev-warning {{ color: #d68910; font-weight: 600; }}
         .report-foot {{ margin-top: 14px; color: var(--muted); font-size: 12px; text-align: right; }}
+        {self._html_export_util_css()}
   </style>
 </head>
 <body>
@@ -15050,21 +15134,8 @@ class _StatsPanel(QWidget):
         </ul>
     </section>
 
-    <section class=\"report-card\">
-    <h2>Core Utilisation (excl. IDLE/TICK){_esc(scope_title)}</h2>
-    <table>
-      <thead><tr><th>Core</th><th>CPU %</th></tr></thead>
-      <tbody>{core_body}</tbody>
-    </table>
-  </section>
-
-    <section class=\"report-card\">
-    <h2>Top Tasks by CPU (excl. IDLE/TICK){_esc(scope_title)}</h2>
-    <table>
-      <thead><tr><th>Task</th><th>CPU %</th></tr></thead>
-      <tbody>{task_body}</tbody>
-    </table>
-  </section>
+    {core_util_html}
+    {task_util_html}
     {tick_health_html}
     {_render_exec_table(exec_rows)}
     <section class=\"report-card\">

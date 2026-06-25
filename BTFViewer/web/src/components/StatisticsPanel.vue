@@ -2745,6 +2745,63 @@ function _htmlCell(v) {
     .replace(/"/g, '&quot;')
 }
 
+const _HTML_EXPORT_UTIL_CSS = `
+    .util-list { display: flex; flex-direction: column; gap: 4px; }
+    .util-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 18px;
+    }
+    .util-label {
+      flex: 0 0 128px;
+      max-width: 128px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      text-align: left;
+      font-size: 13px;
+      color: var(--ink);
+    }
+    .util-bar {
+      flex: 1 1 auto;
+      height: 8px;
+      min-width: 24px;
+      border-radius: 4px;
+      background: var(--line);
+      overflow: hidden;
+    }
+    .util-bar-fill {
+      height: 100%;
+      border-radius: 4px;
+      background: #5FCF6F;
+    }
+    .util-row-task .util-bar-fill { background: #5B9BD5; }
+    .util-pct {
+      flex: 0 0 44px;
+      text-align: left;
+      font-size: 13px;
+    }
+    .util-pct-core { color: #77BB77; }
+    .util-pct-task { color: #6AAADD; }
+`
+
+function _htmlUtilBarRow(label, pct, kind) {
+  const pctV = Math.max(0, Math.min(100, Number(pct) || 0))
+  const rowCls = kind === 'core' ? 'util-row util-row-core' : 'util-row util-row-task'
+  const pctCls = kind === 'core' ? 'util-pct util-pct-core' : 'util-pct util-pct-task'
+  return `<div class="${rowCls}"><span class="util-label">${_htmlCell(label)}</span>`
+    + `<div class="util-bar"><div class="util-bar-fill" style="width:${pctV.toFixed(1)}%"></div></div>`
+    + `<span class="${pctCls}">${pctV.toFixed(1)}%</span></div>`
+}
+
+function _htmlUtilSection(title, rows, kind) {
+  const body = rows.length
+    ? `<div class="util-list">${rows.map(r => _htmlUtilBarRow(r.label, r.pct, kind)).join('')}</div>`
+    : '<p class="empty">No data</p>'
+  return `<section class="report-card"><h2>${_htmlCell(title)}</h2>${body}</section>`
+}
+
 function _csvCell(v) {
   const s = String(v ?? '').replace(/[µμ]s/g, 'us')
   if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`
@@ -3328,14 +3385,16 @@ function exportHtml() {
   const scopeNote = r
     ? `<li><strong>Cursor range:</strong> ${_htmlCell(scopeRangeLabel.value)}. CPU% uses overlapping active time; slice metrics use segments fully inside the range.</li>`
     : ''
-  const coreHtml = `<section class="report-card"><h2>Core Utilisation (excl. IDLE/TICK)${_htmlCell(suffix)}</h2><table><thead><tr><th>Core</th><th>CPU %</th></tr></thead><tbody>${coreRows.length
-    ? coreRows.map(r => `<tr><td>${_htmlCell(r.core)}</td><td>${_htmlCell(r.pct)}%</td></tr>`).join('')
-    : '<tr><td colspan="2" class="empty">No data</td></tr>'
-  }</tbody></table></section>`
-  const taskHtml = `<section class="report-card"><h2>Top Tasks by CPU (excl. IDLE/TICK)${_htmlCell(suffix)}</h2><table><thead><tr><th>Task</th><th>CPU %</th></tr></thead><tbody>${taskRows.length
-    ? taskRows.map(r => `<tr><td>${_htmlCell(r.name)}</td><td>${_htmlCell(r.pct)}%</td></tr>`).join('')
-    : '<tr><td colspan="2" class="empty">No data</td></tr>'
-  }</tbody></table></section>`
+  const coreHtml = _htmlUtilSection(
+    `Core Utilisation (excl. IDLE/TICK)${suffix}`,
+    coreRows.map(r => ({ label: r.core, pct: r.pct })),
+    'core',
+  )
+  const taskHtml = _htmlUtilSection(
+    `Top Tasks by CPU (excl. IDLE/TICK)${suffix}`,
+    taskRows.map(r => ({ label: r.name, pct: r.pct })),
+    'task',
+  )
   const tick = tickHealthReport(tr, lo, hi)
   const tickGapBody = tick.largeGaps.length
     ? tick.largeGaps.map(g => `<tr><td>${_htmlCell(formatTime(g.start, tr.timeScale))}</td><td>${_htmlCell(formatTime(g.end, tr.timeScale))}</td><td>${_htmlCell(formatTime(g.duration, tr.timeScale))}</td><td>${g.missedTicks}</td></tr>`).join('')
@@ -3439,6 +3498,7 @@ function exportHtml() {
     .sev-warning, .sync-status-warning { color: #d68910; font-weight: 600; }
     .sync-status-ok { color: #1e8449; }
     .report-foot { margin-top: 14px; color: var(--muted); font-size: 12px; text-align: right; }
+    ${_HTML_EXPORT_UTIL_CSS}
   </style>
 </head>
 <body>
