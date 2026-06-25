@@ -4,6 +4,21 @@
  * These mirror the Python _make_lod_summary() and _lod_reduce() functions
  * in btf_viewer.py.
  */
+import { wasmLodSummaryIndices, wasmParseReady } from '../renderer/wasmAccel.js'
+
+/** LOD bin counts (match Python / btfParser constants). */
+export const LOD_SUMMARY_BINS = 4096
+export const LOD_SUMMARY_BINS_ULTRA = 1024
+
+/** Cache sorted segment start times as Float64Array (parse / LOD hot path). */
+export function segmentStartsF64(segs) {
+  if (!segs?.length) return new Float64Array(0)
+  if (segs._startsF64?.length === segs.length) return segs._startsF64
+  const arr = new Float64Array(segs.length)
+  for (let i = 0; i < segs.length; i++) arr[i] = segs[i].start
+  segs._startsF64 = arr
+  return arr
+}
 
 /**
  * Down-sample a sorted segment array to at most `bins` representative entries.
@@ -22,6 +37,22 @@ export function makeLodSummary(segs, bins, binSpan, timeMin) {
     return [r, r.map(s => s.start)]
   }
   const safeBinSpan = binSpan > 0 ? binSpan : 1e-9
+
+  if (wasmParseReady()) {
+    const starts = segmentStartsF64(segs)
+    const idx = wasmLodSummaryIndices(starts, safeBinSpan, timeMin, segs.length)
+    if (idx?.length) {
+      const result = new Array(idx.length)
+      const outStarts = new Array(idx.length)
+      for (let j = 0; j < idx.length; j++) {
+        const i = idx[j]
+        result[j] = segs[i]
+        outStarts[j] = starts[i]
+      }
+      return [result, outStarts]
+    }
+  }
+
   const result = []
   const starts = []
   let prevBin = -2
@@ -34,6 +65,43 @@ export function makeLodSummary(segs, bins, binSpan, timeMin) {
     }
   }
   return [result, starts]
+}
+
+/**
+ * WASM/JS LOD bin de-duplication on flat store indices (no segment object copies).
+ * @param {import('../parser/segStore.js').SegStore} store
+ * @param {Uint32Array} indices sorted segment indices into store
+ * @returns {Uint32Array} reduced index list
+ */
+export function lodIndicesFromStore(store, indices, bins, binSpan, timeMin) {
+  const n = indices.length
+  if (n <= bins) {
+    const copy = new Uint32Array(n)
+    copy.set(indices)
+    return copy
+  }
+  const starts = store.startsForIndices(indices)
+  const safeBinSpan = binSpan > 0 ? binSpan : 1e-9
+
+  if (wasmParseReady()) {
+    const pick = wasmLodSummaryIndices(starts, safeBinSpan, timeMin, n)
+    if (pick?.length) {
+      const out = new Uint32Array(pick.length)
+      for (let j = 0; j < pick.length; j++) out[j] = indices[pick[j]]
+      return out
+    }
+  }
+
+  const out = []
+  let prevBin = -2
+  for (let i = 0; i < n; i++) {
+    const b = Math.floor((starts[i] - timeMin) / safeBinSpan)
+    if (b !== prevBin) {
+      out.push(indices[i])
+      prevBin = b
+    }
+  }
+  return Uint32Array.from(out)
 }
 
 /**

@@ -36,7 +36,8 @@
       ref="canvasWrapEl"
       class="canvas-wrap"
     >
-      <canvas ref="canvasEl" />
+      <div ref="pixiHostEl" class="pixi-host" />
+      <canvas ref="canvasEl" class="chrome-canvas" />
       <!-- Overlay canvas: hover line only — redraws without triggering a full repaint -->
       <canvas
         ref="overlayEl"
@@ -231,6 +232,7 @@ import { isMigratedTask } from '../utils/migrationAnalysis.js'
 import { lodReduce } from '../utils/lod.js'
 import { collectSegmentStarts } from '../utils/snapBoundary.js'
 import { bisectLeft, bisectRight } from '../utils/bisect.js'
+import { pixiTimelineHost } from '../renderer/pixi/PixiTimelineHost.js'
 import {
   initWasmAccel,
   registerTraceWasmAccel,
@@ -250,6 +252,8 @@ const props = defineProps({
   findMarkerNs: { type: Number, default: null },
   /** Per-tab viewport from session store; applied on trace load instead of fit-to-trace when valid. */
   persistedViewport: { type: Object, default: null },
+  /** Force WebGL segment renderer on/off; auto when unset (traces with 5k+ segments). */
+  useWebGL: { type: Boolean, default: null },
 })
 const emit = defineEmits([
   'viewportChange', 'cursorsChange', 'hoverTimeChange', 'highlightChange', 'highlightClick',
@@ -260,6 +264,7 @@ const emit = defineEmits([
 // ---- Template refs -------------------------------------------------------
 const panelEl     = ref(null)
 const canvasWrapEl = ref(null)
+const pixiHostEl  = ref(null)
 const canvasEl    = ref(null)
 const overlayEl   = ref(null)
 
@@ -449,6 +454,12 @@ function isLargeTrace() {
   return (props.trace?.segments?.length ?? 0) >= LARGE_TRACE_SEGS
 }
 
+function useWebGLRenderer() {
+  if (pixiTimelineHost.failed) return false
+  if (props.useWebGL === false) return false
+  return pixiTimelineHost.ready
+}
+
 function traceTimeBounds() {
   if (!props.trace) return null
   const lo = props.trace.timeMin >= 0 ? Math.max(0, props.trace.timeMin) : props.trace.timeMin
@@ -583,7 +594,7 @@ function paint() {
   const canvas = canvasEl.value
   if (!canvas) return
   if (!_mainCtx) {
-    _mainCtx = canvas.getContext('2d', { alpha: false, desynchronized: true })
+    _mainCtx = canvas.getContext('2d', { alpha: true, desynchronized: true })
   }
   const ctx = _mainCtx
   const dpr = paintDpr()
@@ -605,6 +616,13 @@ function paint() {
   }
 
   if (ensureTraceViewport()) return
+
+  const webgl = useWebGLRenderer()
+  if (webgl) {
+    pixiTimelineHost.setBackground(props.options.darkMode ? 0x1E1E1E : 0xFFFFFF)
+    pixiTimelineHost.resize(w, h)
+    pixiTimelineHost.beginFrame()
+  }
 
   if (!props.trace) {
     ctx.clearRect(0, 0, w, h)
@@ -632,17 +650,20 @@ function paint() {
     migratedOnlyFilter: !!props.options.migratedOnlyFilter,
     taskFilterKeys:     props.options.taskFilterKeys || null,
     lockedTaskKey:    props.options.viewMode === 'core' ? (props.options.lockedTaskKey ?? null) : null,
-    showHoverHighlight: props.options.showHoverHighlight !== false,
+    showHoverHighlight: !!props.options.showHoverHighlight,
     fastPaint:        paintFast(),
     rowLayout:        cachedRowLayout.value,
     columnLayout:     cachedColumnLayout.value,
     packedRows:       _packedRows,
+    gpuBatch:         webgl ? pixiTimelineHost.batcher : null,
   }
   if (orientation.value === 'v') {
     renderVertical(ctx, props.trace, viewport, renderOpts)
   } else {
     renderTimeline(ctx, props.trace, viewport, renderOpts)
   }
+
+  if (webgl) pixiTimelineHost.endFrame()
 
   // Overlay is updated on hover; skip during pan/zoom and initial trace load.
   if (!paintFast()) paintHoverOverlay()
@@ -710,8 +731,9 @@ let _handler = null
 
 function setupHandler() {
   if (_handler) { _handler.destroy(); _handler = null }
-  if (!canvasEl.value) return
-  _handler = new InteractionHandler(canvasEl.value, {
+  const target = canvasWrapEl.value || canvasEl.value
+  if (!target) return
+  _handler = new InteractionHandler(target, {
     getTrace:    () => props.trace,
     getViewport: () => ({ ...viewport }),
     getMaxCursors: () => props.maxCursors,
@@ -1015,6 +1037,10 @@ async function captureCanvasViewportBlob(captureW, captureH) {
 
   const srcW = Math.round(w * dpr)
   const srcH = Math.round(h * dpr)
+  const pixiCanvas = pixiTimelineHost.app?.canvas
+  if (pixiCanvas && useWebGLRenderer()) {
+    outCtx.drawImage(pixiCanvas, 0, 0, srcW, srcH, 0, 0, w, h)
+  }
   outCtx.drawImage(base, 0, 0, srcW, srcH, 0, 0, w, h)
   outCtx.drawImage(overlay, 0, 0, srcW, srcH, 0, 0, w, h)
 
@@ -1687,9 +1713,15 @@ watch([() => props.options.orientation, () => props.options.viewMode], () => {
   scheduleRender()
 })
 // Other visual options that affect segment rendering → full repaint
-watch([() => props.options.highlightKey, () => props.options.highlightSegment, () => props.options.highlightInterval, () => props.options.showGrid, () => props.options.showSti, () => props.options.darkMode, () => props.options.stiLogScale, () => props.options.migratedOnlyFilter, () => props.options.taskFilterKeys, () => props.options.lockedTaskKey], () => {
+watch([() => props.options.highlightKey, () => props.options.highlightSegment, () => props.options.highlightInterval, () => props.options.showGrid, () => props.options.showSti, () => props.options.stiLogScale, () => props.options.migratedOnlyFilter, () => props.options.taskFilterKeys, () => props.options.lockedTaskKey], () => {
   _ovBgCanvas = null
   scheduleRender()
+  if (overviewVisible.value) scheduleOverviewPaint()
+})
+watch(() => props.options.darkMode, () => {
+  _ovBgCanvas = null
+  scheduleRender(true)
+  paintHoverOverlay()
   if (overviewVisible.value) scheduleOverviewPaint()
 })
 // Marks are on the overlay — no full repaint needed
@@ -2277,6 +2309,9 @@ function onVTrackClick(e) {
 // ---- Lifecycle -----------------------------------------------------------
 onMounted(async () => {
   await initWasmAccel()
+  if (pixiHostEl.value) {
+    await pixiTimelineHost.init(pixiHostEl.value)
+  }
   setupResize()
   setupHandler()
   document.addEventListener('click', onGlobalClick)
@@ -2288,6 +2323,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   _labelResizeCleanup?.()
+  pixiTimelineHost.destroy()
   if (_resizeObs) _resizeObs.disconnect()
   if (_handler) _handler.destroy()
   if (_rafId) cancelAnimationFrame(_rafId)
@@ -2340,6 +2376,14 @@ onBeforeUnmount(() => {
   flex: 1;
   overflow: hidden;
   position: relative;
+  cursor: crosshair;
+}
+
+.pixi-host {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
 }
 
 canvas {
@@ -2349,12 +2393,20 @@ canvas {
   cursor: crosshair;
 }
 
+.chrome-canvas {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+
 .overlay-canvas {
   position: absolute;
   top: 0;
   left: 0;
   width: 100%;
   height: 100%;
+  z-index: 2;
   pointer-events: none;
 }
 

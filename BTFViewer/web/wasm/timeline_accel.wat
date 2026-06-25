@@ -1,6 +1,53 @@
 ;; timeline_accel.wat – hot-path helpers for timeline pan/zoom (bisect, row cull, LOD reduce).
 (module
-  (memory (export "memory") 16)
+  (memory (export "memory") 64)
+
+  ;; ---- lod_summary_indices: first segment index per time bin -----------------
+  ;; Scan sorted starts; write u32 indices where floor((s-time_min)/bin_span) changes.
+  (func (export "lod_summary_indices")
+    (param $starts_ptr i32) (param $len i32) (param $time_min f64) (param $bin_span f64)
+    (param $out_ptr i32) (param $max_out i32) (result i32)
+    (local $i i32) (local $count i32) (local $prev_bin i64) (local $bin i64) (local $s f64)
+    (local.set $count (i32.const 0))
+    (local.set $prev_bin (i64.const -2))
+    (local.set $i (i32.const 0))
+    (block $break
+      (loop $loop
+        (br_if $break (i32.ge_u (local.get $i) (local.get $len)))
+        (br_if $break (i32.ge_u (local.get $count) (local.get $max_out)))
+        (local.set $s (f64.load (i32.add (local.get $starts_ptr) (i32.shl (local.get $i) (i32.const 3)))))
+        (local.set $bin (i64.trunc_f64_s (f64.floor (f64.div (f64.sub (local.get $s) (local.get $time_min)) (local.get $bin_span)))))
+        (if (i64.ne (local.get $bin) (local.get $prev_bin))
+          (then
+            (i32.store (i32.add (local.get $out_ptr) (i32.shl (local.get $count) (i32.const 2))) (local.get $i))
+            (local.set $count (i32.add (local.get $count) (i32.const 1)))
+            (local.set $prev_bin (local.get $bin))
+          )
+        )
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $loop)
+      )
+    )
+    (local.get $count)
+  )
+
+  ;; ---- gather_starts: out[i] = all_starts[indices[i]] -----------------------
+  (func (export "gather_starts")
+    (param $all_starts i32) (param $indices i32) (param $len i32) (param $out i32)
+    (local $i i32) (local $idx i32)
+    (local.set $i (i32.const 0))
+    (block $done
+      (loop $loop
+        (br_if $done (i32.ge_u (local.get $i) (local.get $len)))
+        (local.set $idx (i32.load (i32.add (local.get $indices) (i32.shl (local.get $i) (i32.const 2)))))
+        (f64.store
+          (i32.add (local.get $out) (i32.shl (local.get $i) (i32.const 3)))
+          (f64.load (i32.add (local.get $all_starts) (i32.shl (local.get $idx) (i32.const 3)))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $loop)
+      )
+    )
+  )
 
   ;; ---- bisect_left: first i where arr[i] >= val --------------------------------
   (func $bisect_left (param $ptr i32) (param $len i32) (param $val f64) (result i32)

@@ -360,7 +360,7 @@ Traces with **more than 16 cores** use a three-level drill-down (core×core matr
 
 ### BTF Viewer (built-in)
 
-An interactive Gantt-style viewer is included in the `BTFViewer/` directory (desktop PySide6 app and browser-based web viewer). It supports Task/Core views, measurement cursors, CPU load graph, bookmarks, **Statistics** (execution time, blocking/response time, preemption chain, priority inheritance, mutex/semaphore pairing, interval analysis), **core migration heatmap**, trace compare, and PNG/SVG export.
+An interactive Gantt-style viewer is included in the `BTFViewer/` directory (desktop PySide6 app and browser-based web viewer). Both share the same default settings (dark theme, grid on, hover dimming off, 22 px rows, etc.). They support Task/Core views, measurement cursors (2–8, default 4), CPU load graph, bookmarks, **Statistics** / **Marks** / **Find** right-side panels, **Statistics** (execution time, blocking/response time, tick health with tick-interval distribution, preemption chain, priority inheritance, mutex/semaphore pairing, interval analysis), **core migration heatmap**, trace compare, and PNG/SVG export.
 
 **Desktop requirements:** Python 3.8+ and PySide6 ≥ 6.4
 
@@ -499,7 +499,7 @@ Default trace buffer size is controlled by `configMAX_TRACE_EVENTS` and `configM
 | **Task table overflow** | `btf_trace_add_task()` disables tracing when the task name table is full |
 | **Parser parity** | BTF is parsed independently in Python (`btf_viewer.py`) and JavaScript (`btfParser.js`); no shared automated test vectors yet |
 | **CI / unit tests** | No automated test suite in this repository; validate with `make run` and manual viewer smoke tests |
-| **Web viewer** | Trace files stay client-side; session state is stored in browser `localStorage` keyed by filename |
+| **Web viewer** | Trace files stay client-side; session state is stored in browser `localStorage` keyed by filename. Settings defaults match the desktop viewer (`btf-viewer-settings-v1`); font sizes use px on Web vs pt on Desktop with the same numeric defaults |
 
 ---
 

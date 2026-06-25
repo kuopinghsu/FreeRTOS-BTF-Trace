@@ -423,7 +423,7 @@ function onSave() {
   color: var(--fg-dim);
   text-align: left;
   padding: 9px 14px;
-  font-size: var(--ui-font-size, 13px);
+  font-size: var(--ui-font-size, 8px);
   cursor: pointer;
   border-left: 3px solid transparent;
 }
@@ -463,7 +463,7 @@ function onSave() {
   grid-template-columns: 1fr 110px auto;
   align-items: center;
   gap: 10px;
-  font-size: var(--ui-font-size, 13px);
+  font-size: var(--ui-font-size, 8px);
 }
 .settings-label {
   color: var(--fg);
@@ -475,7 +475,7 @@ function onSave() {
   border-radius: 4px;
   background: var(--tb-bg);
   color: var(--fg);
-  font-size: var(--ui-font-size, 13px);
+  font-size: var(--ui-font-size, 8px);
 }
 .settings-input.wide {
   width: 100%;
@@ -491,7 +491,7 @@ function onSave() {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: var(--ui-font-size, 13px);
+  font-size: var(--ui-font-size, 8px);
   color: var(--fg);
   cursor: pointer;
 }
@@ -511,7 +511,7 @@ function onSave() {
 .settings-btn {
   border-radius: 5px;
   padding: 6px 18px;
-  font-size: var(--ui-font-size, 13px);
+  font-size: var(--ui-font-size, 8px);
   cursor: pointer;
   border: 1px solid var(--border);
 }

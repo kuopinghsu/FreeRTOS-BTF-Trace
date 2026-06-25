@@ -241,9 +241,22 @@
           <button
             type="button"
             class="tick-dist-btn"
+            title="Open tick interval distribution chart"
             @click="openTickDistPlot"
           >
-            Tick Distribution…
+            <svg
+              class="tick-dist-icon"
+              viewBox="0 0 16 16"
+              width="14"
+              height="14"
+              aria-hidden="true"
+            >
+              <path
+                fill="currentColor"
+                d="M1.5 12.5h2.5V8H1.5v4.5zm3.5 0H7.5V5H5v7.5zm3.5 0h2.5V2H8.5v10.5zm3.5 0H14v-5h-2.5v5.5z"
+              />
+            </svg>
+            <span>Tick Distribution…</span>
           </button>
         </div>
         <div
@@ -3872,18 +3885,33 @@ watch(plotData, () => {
   gap: 4px;
 }
 .tick-dist-btn {
-  background: none;
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  color: var(--fg-dim);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--tick-dist-bg);
+  border: 1px solid var(--tick-dist-border);
+  border-radius: 4px;
+  color: var(--tick-dist-fg);
   cursor: pointer;
   font-size: 11px;
-  padding: 1px 6px;
+  font-weight: 600;
+  padding: 3px 8px;
   flex-shrink: 0;
 }
-.tick-dist-btn:hover {
-  background: var(--hover-bg, rgba(255,255,255,0.07));
-  color: var(--fg);
+.tick-dist-icon {
+  color: var(--tick-dist-icon);
+  flex-shrink: 0;
+}
+.tick-dist-btn:hover,
+.tick-dist-btn:focus-visible {
+  background: color-mix(in srgb, var(--tick-dist-icon) 22%, transparent);
+  border-color: var(--tick-dist-icon);
+  color: var(--tick-dist-fg);
+  outline: none;
+}
+.tick-dist-btn:hover .tick-dist-icon,
+.tick-dist-btn:focus-visible .tick-dist-icon {
+  color: var(--tick-dist-icon);
 }
 
 .stats-util-scroll {

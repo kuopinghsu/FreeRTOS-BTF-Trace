@@ -14,7 +14,7 @@
 
 import { bisectLeft, bisectRight } from '../utils/bisect.js'
 import { applyBtfVersionWarning } from '../utils/btfMeta.js'
-import { makeLodSummary } from '../utils/lod.js'
+import { makeLodSummary, segmentStartsF64, LOD_SUMMARY_BINS, LOD_SUMMARY_BINS_ULTRA } from '../utils/lod.js'
 import { parseTaskName, taskMergeKey, taskSortKey, resetStiColors } from '../utils/colors.js'
 import { buildMigrationIndex } from '../utils/migrationAnalysis.js'
 import { analyzeTickHealth } from '../utils/tickHealth.js'
@@ -22,17 +22,17 @@ import { buildIntervalData, isIntervalMarkerChannel, buildIntervalMarkerIndex } 
 import { buildPriorityData, parseCreatePriority } from '../utils/priorityAnalysis.js'
 import { buildSyncObjectData } from '../utils/syncObjectAnalysis.js'
 
-// LOD bin counts (match Python constants).
-const LOD_SUMMARY_BINS       = 4096
-const LOD_SUMMARY_BINS_ULTRA = 1024
+// LOD bin counts imported from lod.js (LOD_SUMMARY_BINS, LOD_SUMMARY_BINS_ULTRA).
 
-// Yield to the host event loop so progress callbacks can repaint (main thread).
-const LINE_YIELD_EVERY = 8192
-const TS_YIELD_EVERY   = 4096
-const LOD_YIELD_EVERY  = 8
-const STI_YIELD_EVERY  = 4
+// Yield to the host event loop so progress callbacks can repaint (main thread only).
+const IN_WORKER = typeof globalThis.importScripts === 'function'
+const LINE_YIELD_EVERY = IN_WORKER ? 65536 : 8192
+const TS_YIELD_EVERY   = IN_WORKER ? 32768 : 4096
+const LOD_YIELD_EVERY  = IN_WORKER ? 64 : 8
+const STI_YIELD_EVERY  = IN_WORKER ? 32 : 4
 
 function yieldToHost() {
+  if (IN_WORKER) return Promise.resolve()
   return new Promise(resolve => setTimeout(resolve, 0))
 }
 
@@ -460,7 +460,7 @@ export async function parseBtf(text, progressCallback) {
   const mkEntries = [...segsByMk.entries()]
   for (let mi = 0; mi < mkEntries.length; mi++) {
     const [mk, segs] = mkEntries[mi]
-    segStartByMk.set(mk, segs.map(s => s.start))
+    segStartByMk.set(mk, segmentStartsF64(segs))
     const [lod, lodStarts] = makeLodSummary(segs, LOD_SUMMARY_BINS, lodTimescalePerPx, timeMin)
     segLodByMk.set(mk, lod)
     segLodStartsByMk.set(mk, lodStarts)
@@ -487,7 +487,7 @@ export async function parseBtf(text, progressCallback) {
   for (let ci = 0; ci < coreNames.length; ci++) {
     const c = coreNames[ci]
     const segs = coreSegs.get(c)
-    coreSegStarts.set(c, segs.map(s => s.start))
+    coreSegStarts.set(c, segmentStartsF64(segs))
     const [lod, lodStarts] = makeLodSummary(segs, LOD_SUMMARY_BINS, lodTimescalePerPx, timeMin)
     coreSegLod.set(c, lod)
     coreSegLodStarts.set(c, lodStarts)
@@ -501,43 +501,15 @@ export async function parseBtf(text, progressCallback) {
     }
   }
 
-  progress(88, 'Building per-task core LOD summaries…')
+  progress(88, 'Finalising segment tables…')
   await yieldToHost()
 
-  const coreTaskSegStarts         = new Map()
+  // Per-task core LOD is built in finalizeTraceStorage (index-based + WASM).
   const coreTaskSegLod            = new Map()
-  const coreTaskSegLodStarts      = new Map()
   const coreTaskSegLodUltra       = new Map()
+  const coreTaskSegStarts         = new Map()
+  const coreTaskSegLodStarts      = new Map()
   const coreTaskSegLodUltraStarts = new Map()
-
-  for (let ci = 0; ci < coreNames.length; ci++) {
-    const c = coreNames[ci]
-    const ts = coreTaskSegs.get(c)
-    const tsStarts = new Map(), tsLod = new Map(), tsLodStarts = new Map()
-    const tsLodUltra = new Map(), tsLodUltraStarts = new Map()
-    const taskNames = [...ts.keys()]
-    for (let ti = 0; ti < taskNames.length; ti++) {
-      const tn = taskNames[ti]
-      const tsegs = ts.get(tn)
-      tsStarts.set(tn, tsegs.map(s => s.start))
-      const [lod, lodStarts] = makeLodSummary(tsegs, LOD_SUMMARY_BINS, lodTimescalePerPx, timeMin)
-      tsLod.set(tn, lod)
-      tsLodStarts.set(tn, lodStarts)
-      const [ultra, ultraStarts] = makeLodSummary(lod, LOD_SUMMARY_BINS_ULTRA, lodUltraTimescalePerPx, timeMin)
-      tsLodUltra.set(tn, ultra)
-      tsLodUltraStarts.set(tn, ultraStarts)
-
-      if (ti > 0 && ti % LOD_YIELD_EVERY === 0) {
-        progress(88 + Math.floor(((ci + ti / Math.max(taskNames.length, 1)) / coreNames.length) * 6), 'Building per-task core LOD summaries…')
-        await yieldToHost()
-      }
-    }
-    coreTaskSegStarts.set(c, tsStarts)
-    coreTaskSegLod.set(c, tsLod)
-    coreTaskSegLodStarts.set(c, tsLodStarts)
-    coreTaskSegLodUltra.set(c, tsLodUltra)
-    coreTaskSegLodUltraStarts.set(c, tsLodUltraStarts)
-  }
 
   // STI start-time arrays for bisect clipping
   progress(92, 'Building STI indexes…')

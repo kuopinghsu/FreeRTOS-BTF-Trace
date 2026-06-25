@@ -2,6 +2,14 @@
  * Flat segment storage + SegList views (index arrays into typed buffers).
  * Reduces worker→main transfer cost and memory vs. cloning segment objects.
  */
+import { wasmGatherStarts, wasmParseReady } from '../renderer/wasmAccel.js'
+import {
+  LOD_SUMMARY_BINS,
+  LOD_SUMMARY_BINS_ULTRA,
+  lodIndicesFromStore,
+} from '../utils/lod.js'
+
+const WASM_GATHER_MIN = 4096
 
 function internStrings(strings) {
   const table = []
@@ -43,8 +51,18 @@ export class SegStore {
   }
 
   startsForIndices(indices) {
-    const out = new Float64Array(indices.length)
-    for (let i = 0; i < indices.length; i++) out[i] = this.starts[indices[i]]
+    const n = indices.length
+    if (n === 0) return new Float64Array(0)
+    if (wasmParseReady() && n >= WASM_GATHER_MIN) {
+      try {
+        const out = wasmGatherStarts(this.starts, indices)
+        if (out) return out
+      } catch {
+        /* fall back to JS gather */
+      }
+    }
+    const out = new Float64Array(n)
+    for (let i = 0; i < n; i++) out[i] = this.starts[indices[i]]
     return out
   }
 
@@ -161,10 +179,45 @@ function convertNestedStartsMap(store, nestedLod) {
   return out
 }
 
+/** Build per-core/per-task LOD index lists from raw coreTaskSegs (flat store + WASM). */
+function buildCoreTaskLodMaps(store, trace) {
+  const { lodTimescalePerPx, lodUltraTimescalePerPx, timeMin } = trace
+  const coreTaskSegLod = new Map()
+  const coreTaskSegLodUltra = new Map()
+
+  for (const [core, inner] of trace.coreTaskSegs) {
+    const lodInner = new Map()
+    const ultraInner = new Map()
+    for (const [task, list] of inner) {
+      const rawIdx = list._indices
+      if (!rawIdx.length) continue
+      const lodIdx = lodIndicesFromStore(
+        store, rawIdx, LOD_SUMMARY_BINS, lodTimescalePerPx, timeMin,
+      )
+      const lodList = createSegList(store, lodIdx)
+      lodInner.set(task, lodList)
+      if (lodIdx.length <= LOD_SUMMARY_BINS_ULTRA) {
+        ultraInner.set(task, lodList)
+      } else {
+        const ultraIdx = lodIndicesFromStore(
+          store, lodIdx, LOD_SUMMARY_BINS_ULTRA, lodUltraTimescalePerPx, timeMin,
+        )
+        ultraInner.set(task, createSegList(store, ultraIdx))
+      }
+    }
+    coreTaskSegLod.set(core, lodInner)
+    coreTaskSegLodUltra.set(core, ultraInner)
+  }
+
+  trace.coreTaskSegLod = coreTaskSegLod
+  trace.coreTaskSegLodUltra = coreTaskSegLodUltra
+}
+
 /**
  * Replace segment object arrays with SegList views backed by a flat store.
+ * @param {Function} [progress] optional (pct, msg) during expensive steps
  */
-export function finalizeTraceStorage(trace) {
+export function finalizeTraceStorage(trace, progress) {
   const store = SegStore.fromSegments(trace.segments)
 
   trace.segStore = store
@@ -186,9 +239,11 @@ export function finalizeTraceStorage(trace) {
   trace.coreSegLodUltraStarts = convertStartsFromLodMap(store, trace.coreSegLodUltra)
 
   trace.coreTaskSegs = convertNestedSegMap(store, trace.coreTaskSegs)
-  trace.coreTaskSegLod = convertNestedSegMap(store, trace.coreTaskSegLod)
-  trace.coreTaskSegLodUltra = convertNestedSegMap(store, trace.coreTaskSegLodUltra)
-  trace.coreTaskSegStarts = convertNestedStartsMap(store, trace.coreTaskSegLod)
+
+  progress?.(89, 'Building per-task core LOD summaries…')
+  buildCoreTaskLodMaps(store, trace)
+
+  trace.coreTaskSegStarts = convertNestedStartsMap(store, trace.coreTaskSegs)
   trace.coreTaskSegLodStarts = convertNestedStartsMap(store, trace.coreTaskSegLod)
   trace.coreTaskSegLodUltraStarts = convertNestedStartsMap(store, trace.coreTaskSegLodUltra)
 

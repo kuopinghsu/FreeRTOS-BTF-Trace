@@ -15,6 +15,8 @@ export class PixiTimelineHost {
     /** @type {import('pixi.js').Graphics | null} */
     this._bg = null
     this._bgColor = 0x1e1e1e
+    this._w = 0
+    this._h = 0
     this.ready = false
     this.failed = false
   }
@@ -56,18 +58,25 @@ export class PixiTimelineHost {
 
   /** @param {number} color Pixi color (e.g. 0x1E1E1E) */
   setBackground(color) {
+    if (this._bgColor === color) return
     this._bgColor = color
+    this._redrawBackground()
+  }
+
+  _redrawBackground() {
+    if (!this._bg || this._w <= 0 || this._h <= 0) return
+    this._bg.clear()
+    this._bg.rect(0, 0, this._w, this._h).fill(this._bgColor)
   }
 
   /** @param {number} w CSS pixels */
   /** @param {number} h CSS pixels */
   resize(w, h) {
     if (!this.app || w <= 0 || h <= 0) return
+    this._w = w
+    this._h = h
     this.app.renderer.resize(w, h)
-    if (this._bg) {
-      this._bg.clear()
-      this._bg.rect(0, 0, w, h).fill(this._bgColor)
-    }
+    this._redrawBackground()
   }
 
   beginFrame() {
@@ -76,6 +85,9 @@ export class PixiTimelineHost {
 
   endFrame() {
     this.batcher?.flush()
+    if (this.app?.renderer && this.stage) {
+      this.app.renderer.render(this.stage)
+    }
   }
 
   destroy() {

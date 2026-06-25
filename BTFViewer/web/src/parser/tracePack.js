@@ -56,8 +56,8 @@ function nestedStartsMapFromSegMap(store, nestedMap) {
 /**
  * Finalize flat storage, precompute bins, pack for postMessage transfer.
  */
-export function packTrace(trace) {
-  finalizeTraceStorage(trace)
+export function packTrace(trace, progress) {
+  finalizeTraceStorage(trace, progress)
   trace.cpuLoadBins = buildCpuLoadBins(trace.segStore, trace)
   const segIndicesByMk = segIndicesMapFromTrace(trace)
   trace.taskCpuNs = computeTaskCpuNs(

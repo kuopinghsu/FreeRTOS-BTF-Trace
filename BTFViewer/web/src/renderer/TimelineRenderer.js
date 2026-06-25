@@ -78,6 +78,9 @@ const PAINT_LOD_COARSE = 200    // ns/px: use coarse (merged) paint above this z
 const PAINT_SEG_BUDGET   = 5000
 /** Reduced cap while panning/zooming at overview zoom (fit-to-window). */
 const PAINT_SEG_BUDGET_FAST = 1800
+/** WebGL (PixiJS) segment budget — GPU batching supports much larger traces. */
+const GPU_PAINT_SEG_BUDGET = 120_000
+const GPU_PAINT_SEG_BUDGET_FAST = 35_000
 /** Minimum segment budget guaranteed per visible row/column. */
 const PAINT_SEG_MIN_SLOT = 48
 /** Minimum per slot during overview-zoom interaction. */
@@ -101,12 +104,31 @@ export function orthRowBuffer(nTasks = 0, fastPaint = false) {
   return 2
 }
 
-function createPaintBudget(visibleSlots = 1, fastPaint = false) {
+function createPaintBudget(visibleSlots = 1, fastPaint = false, gpu = false) {
   const cap = fastPaint ? PAINT_BUDGET_MAX_SLOTS_FAST : PAINT_BUDGET_MAX_SLOTS
   const slots = Math.min(Math.max(1, visibleSlots), cap)
-  const total = fastPaint ? PAINT_SEG_BUDGET_FAST : PAINT_SEG_BUDGET
+  const total = gpu
+    ? (fastPaint ? GPU_PAINT_SEG_BUDGET_FAST : GPU_PAINT_SEG_BUDGET)
+    : (fastPaint ? PAINT_SEG_BUDGET_FAST : PAINT_SEG_BUDGET)
   const minSlot = fastPaint ? PAINT_SEG_MIN_SLOT_FAST : PAINT_SEG_MIN_SLOT
   return { n: 0, max: Math.max(minSlot, Math.floor(total / slots)), fast: fastPaint }
+}
+
+/** Solid segment fill — Canvas 2D or batched WebGL rects. */
+function gpuFillRect(gpuBatch, ctx, x, y, w, h, color, alpha = 1) {
+  if (gpuBatch) {
+    gpuBatch.addRect(x, y, w, h, color, alpha)
+    return
+  }
+  ctx.fillStyle = color
+  if (alpha < 1) {
+    ctx.save()
+    ctx.globalAlpha = alpha
+    ctx.fillRect(x, y, w, h)
+    ctx.restore()
+  } else {
+    ctx.fillRect(x, y, w, h)
+  }
 }
 
 function budgetLite(b) {
@@ -417,7 +439,7 @@ export function render(ctx, trace, viewport, options = {}) {
     expanded    = new Set(),
     cursors     = [],
     highlightKey = null,
-    showGrid    = false,
+    showGrid    = true,
     darkMode    = true,
     hoverTime   = null,
     marks       = [],
@@ -427,10 +449,12 @@ export function render(ctx, trace, viewport, options = {}) {
     migratedOnlyFilter = false,
     lockedTaskKey = null,
     fastPaint   = false,
-    showHoverHighlight = true,
+    showHoverHighlight = false,
   } = options
   const highlightSegment = options.highlightSegment ?? null
   const skipCoreSummarySegs = coreViewTaskFilterActive(migratedOnlyFilter, options.taskFilterKeys)
+  const gpuBatch = options.gpuBatch ?? null
+  const useGpu = !!gpuBatch
 
   const timeSpan = timeEnd - timeStart
   if (timeSpan <= 0 || canvasW <= 0) return
@@ -440,12 +464,13 @@ export function render(ctx, trace, viewport, options = {}) {
   const bodyH        = canvasH - RULER_H
   const paintFast    = !!fastPaint
 
-  // DPR-aware clear
+  // DPR-aware clear — body background is on the WebGL layer when gpuBatch is set.
   ctx.clearRect(0, 0, canvasW, canvasH)
 
-  // ---- Background ----
-  ctx.fillStyle = darkMode ? '#1E1E1E' : '#FFFFFF'
-  ctx.fillRect(0, 0, canvasW, canvasH)
+  if (!useGpu) {
+    ctx.fillStyle = darkMode ? '#1E1E1E' : '#FFFFFF'
+    ctx.fillRect(0, 0, canvasW, canvasH)
+  }
 
   // Ruler background
   ctx.fillStyle = darkMode ? '#2D2D2D' : '#F0F0F0'
@@ -486,7 +511,7 @@ export function render(ctx, trace, viewport, options = {}) {
   ctx.clip()
 
   // ---- Task / Core rows (visible range only) ----
-  const budgetSpec = createPaintBudget(visibleRowCount, paintFast)
+  const budgetSpec = createPaintBudget(visibleRowCount, paintFast, useGpu)
   for (let ri = i0; ri < i1; ri++) {
     const row = rows[ri]
     const rowY = row.y + yOff
@@ -494,11 +519,11 @@ export function render(ctx, trace, viewport, options = {}) {
     const rowBudget = { n: 0, max: budgetSpec.max, fast: budgetSpec.fast }
 
     if (row.type === 'task') {
-      drawTaskRow(ctx, trace, row, rowY, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, canvasW, darkMode, highlightSegment, rowBudget, showHoverHighlight)
+      drawTaskRow(ctx, trace, row, rowY, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, canvasW, darkMode, highlightSegment, rowBudget, showHoverHighlight, gpuBatch)
     } else if (row.type === 'core') {
-      drawCoreRow(ctx, trace, row, rowY, timeStart, timeEnd, pxPerNs, nsPerPx, canvasW, darkMode, rowBudget, skipCoreSummarySegs)
+      drawCoreRow(ctx, trace, row, rowY, timeStart, timeEnd, pxPerNs, nsPerPx, canvasW, darkMode, rowBudget, skipCoreSummarySegs, gpuBatch)
     } else if (row.type === 'core-task') {
-      drawCoreTaskRow(ctx, trace, row, rowY, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, canvasW, darkMode, highlightSegment, lockedTaskKey, rowBudget, showHoverHighlight)
+      drawCoreTaskRow(ctx, trace, row, rowY, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, canvasW, darkMode, highlightSegment, lockedTaskKey, rowBudget, showHoverHighlight, gpuBatch)
     } else if (row.type === 'sti') {
       drawStiRow(ctx, trace, row, rowY, timeStart, timeEnd, pxPerNs, canvasW, darkMode, stiLogScale)
     } else if (row.type === 'interval') {
@@ -689,7 +714,7 @@ function queryPaintIndices(trace, wasmKind, wasmKey, ld, timeStart, timeEnd, nsP
  */
 function paintSegments(ctx, segs, timeStart, timeEnd, pxPerNs, nsPerPx, rowY, rowH,
                        baseColor, trace, applyCoreTint, highlightKey, rowMk, darkMode, segLabel, hlSeg, budget,
-                       segIndices = null) {
+                       segIndices = null, gpuBatch = null, fillAlpha = 1) {
   const isHighlighted = (highlightKey && rowMk === highlightKey) && !hlSeg
   const fast = budget.fast
   const forceCoarse = fast || budgetLite(budget) || nsPerPx > PAINT_LOD_COARSE
@@ -706,9 +731,8 @@ function paintSegments(ctx, segs, timeStart, timeEnd, pxPerNs, nsPerPx, rowY, ro
 
   const labelRects = []
 
-  // Fast path: batch same-color fills into one Path2D (zoomed out / panning).
+  // Fast path: batch same-color fills (Canvas Path2D or WebGL rects).
   if (!drawTint && !drawOutlines && !isHighlighted && !hlSeg) {
-    const path = new Path2D()
     let count = 0
     const addSeg = (seg) => {
       if (count >= budget.max) return false
@@ -717,18 +741,28 @@ function paintSegments(ctx, segs, timeStart, timeEnd, pxPerNs, nsPerPx, rowY, ro
       if (x2raw < -2 || x1raw > viewW + 2) return true
       const x1 = Math.max(0, x1raw)
       const x2 = Math.min(viewW, x2raw)
-      path.rect(Math.round(x1), rowY, Math.ceil(Math.max(MIN_SEG_W, x2 - x1)), rowH)
+      const rw = Math.ceil(Math.max(MIN_SEG_W, x2 - x1))
+      const rx = Math.round(x1)
+      if (gpuBatch) gpuBatch.addRect(rx, rowY, rw, rowH, baseColor, fillAlpha)
+      else path.rect(rx, rowY, rw, rowH)
       count++
       return true
     }
-    for (const seg of drawList) {
-      if (!addSeg(seg)) break
+    if (gpuBatch) {
+      for (const seg of drawList) {
+        if (!addSeg(seg)) break
+      }
+    } else {
+      const path = new Path2D()
+      for (const seg of drawList) {
+        if (!addSeg(seg)) break
+      }
+      if (count > 0) {
+        ctx.fillStyle = baseColor
+        ctx.fill(path)
+      }
     }
-    if (count > 0) {
-      ctx.fillStyle = baseColor
-      ctx.fill(path)
-      budget.n += count
-    }
+    if (count > 0) budget.n += count
     return
   }
 
@@ -747,8 +781,7 @@ function paintSegments(ctx, segs, timeStart, timeEnd, pxPerNs, nsPerPx, rowY, ro
     const drawW  = Math.ceil(w)
     const drawY  = rowY
     const drawH  = rowH
-    ctx.fillStyle = baseColor
-    ctx.fillRect(drawX, drawY, drawW, drawH)
+    gpuFillRect(gpuBatch, ctx, drawX, drawY, drawW, drawH, baseColor, fillAlpha)
     budget.n++
 
     if (drawTint && applyCoreTint) {
@@ -950,7 +983,7 @@ function drawLockedSegmentVert(ctx, trace, cols, hlSeg, timeStart, timeEnd, pxPe
   }
 }
 
-function drawTaskRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, canvasW, darkMode, hlSeg, budget, showHoverHighlight = true) {
+function drawTaskRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, canvasW, darkMode, hlSeg, budget, showHoverHighlight = false, gpuBatch = null) {
   const mk = row.key
   const ld = taskLodData(trace, mk)
   const fast = budget.fast
@@ -965,6 +998,7 @@ function drawTaskRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, n
   const dim = showHoverHighlight && highlightKey && mk !== highlightKey && !hlSeg
   if (dim) ctx.save()
   if (dim) ctx.globalAlpha = 45 / 255
+  const fillAlpha = dim ? 45 / 255 : 1
 
   if (!fast) {
     ctx.fillStyle = darkMode ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.02)'
@@ -973,14 +1007,14 @@ function drawTaskRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, n
 
   paintSegments(ctx, segs, timeStart, timeEnd, pxPerNs, nsPerPx,
     rowY, rowH, row.color, trace, /* coreTint */ true, highlightKey, mk, darkMode, row.label, hlSeg, budget,
-    indices)
+    indices, gpuBatch, fillAlpha)
 
   if (dim) ctx.restore()
 
   if (!fast) paintPriorityBoostBands(ctx, trace, mk, rowY, rowH, timeStart, timeEnd, pxPerNs, canvasW, darkMode)
 }
 
-function drawCoreRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, nsPerPx, canvasW, darkMode, budget, skipSummarySegs = false) {
+function drawCoreRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, nsPerPx, canvasW, darkMode, budget, skipSummarySegs = false, gpuBatch = null) {
   const fast = budget.fast
   if (!fast) {
     ctx.fillStyle = darkMode ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.03)'
@@ -1026,8 +1060,7 @@ function drawCoreRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, n
     }
     const drawX = Math.round(x1)
     const drawW = Math.ceil(w)
-    ctx.fillStyle = color
-    ctx.fillRect(drawX, rowY, drawW, rowH)
+    gpuFillRect(gpuBatch, ctx, drawX, rowY, drawW, rowH, color)
     budget.n++
 
     if (drawLabels && w >= 40) {
@@ -1052,7 +1085,7 @@ function drawCoreRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, n
   }
 }
 
-function drawCoreTaskRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, canvasW, darkMode, hlSeg, lockedTaskKey, budget, showHoverHighlight = true) {
+function drawCoreTaskRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, canvasW, darkMode, hlSeg, lockedTaskKey, budget, showHoverHighlight = false, gpuBatch = null) {
   const ld = coreTaskLodData(trace, row.coreKey, row.taskKey)
   const mk = taskMergeKey(row.taskKey)
   const wasmKey = `${row.coreKey}__${row.taskKey}`
@@ -1073,9 +1106,10 @@ function drawCoreTaskRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerN
   const dim = dimLocked || dimHover
   if (dim) ctx.save()
   if (dim) ctx.globalAlpha = 45 / 255
+  const fillAlpha = dim ? 45 / 255 : 1
   paintSegments(ctx, segs, timeStart, timeEnd, pxPerNs, nsPerPx,
     canvasRowY + 1, L().rowH - 2, row.color, trace, false, highlightKey, mk, darkMode, row.label, hlSeg, budget,
-    indices)
+    indices, gpuBatch, fillAlpha)
 
   if (dim) ctx.restore()
 
@@ -2110,7 +2144,7 @@ function drawColumnHeaders(ctx, cols, headerH, colW, highlightKey, darkMode) {
 
 function paintSegmentsVertical(ctx, segs, timeStart, timeEnd, pxPerNs, nsPerPx, colX, colW, headerH,
                                baseColor, trace, applyCoreTint, highlightKey, colMk, darkMode, segLabel, hlSeg, canvasH, budget,
-                               segIndices = null) {
+                               segIndices = null, gpuBatch = null, fillAlpha = 1) {
   const isHighlighted = (highlightKey && colMk === highlightKey) && !hlSeg
   const fast = budget.fast
   const forceCoarse = fast || budgetLite(budget) || nsPerPx > PAINT_LOD_COARSE
@@ -2129,23 +2163,36 @@ function paintSegmentsVertical(ctx, segs, timeStart, timeEnd, pxPerNs, nsPerPx, 
   const labelRects = []
 
   if (!drawTint && !drawOutlines && !isHighlighted && !hlSeg) {
-    const path = new Path2D()
     let count = 0
-    for (const seg of drawList) {
-      if (count >= budget.max) break
-      const y1raw = (seg.start - timeStart) * pxPerNs
-      const y2raw = (seg.end   - timeStart) * pxPerNs
-      if (y2raw < -2 || y1raw > bodyH + 2) continue
-      const y1 = Math.max(0, y1raw)
-      const y2 = Math.min(bodyH, y2raw)
-      path.rect(segX, headerH + Math.round(y1), segW, Math.ceil(Math.max(1, y2 - y1)))
-      count++
+    if (gpuBatch) {
+      for (const seg of drawList) {
+        if (count >= budget.max) break
+        const y1raw = (seg.start - timeStart) * pxPerNs
+        const y2raw = (seg.end   - timeStart) * pxPerNs
+        if (y2raw < -2 || y1raw > bodyH + 2) continue
+        const y1 = Math.max(0, y1raw)
+        const y2 = Math.min(bodyH, y2raw)
+        gpuBatch.addRect(segX, headerH + Math.round(y1), segW, Math.ceil(Math.max(1, y2 - y1)), baseColor, fillAlpha)
+        count++
+      }
+    } else {
+      const path = new Path2D()
+      for (const seg of drawList) {
+        if (count >= budget.max) break
+        const y1raw = (seg.start - timeStart) * pxPerNs
+        const y2raw = (seg.end   - timeStart) * pxPerNs
+        if (y2raw < -2 || y1raw > bodyH + 2) continue
+        const y1 = Math.max(0, y1raw)
+        const y2 = Math.min(bodyH, y2raw)
+        path.rect(segX, headerH + Math.round(y1), segW, Math.ceil(Math.max(1, y2 - y1)))
+        count++
+      }
+      if (count > 0) {
+        ctx.fillStyle = baseColor
+        ctx.fill(path)
+      }
     }
-    if (count > 0) {
-      ctx.fillStyle = baseColor
-      ctx.fill(path)
-      budget.n += count
-    }
+    if (count > 0) budget.n += count
     return
   }
 
@@ -2164,8 +2211,7 @@ function paintSegmentsVertical(ctx, segs, timeStart, timeEnd, pxPerNs, nsPerPx, 
     const drawH2 = Math.ceil(h)
     const drawX2 = segX
     const drawW2 = segW
-    ctx.fillStyle = baseColor
-    ctx.fillRect(drawX2, drawY2, drawW2, drawH2)
+    gpuFillRect(gpuBatch, ctx, drawX2, drawY2, drawW2, drawH2, baseColor, fillAlpha)
     budget.n++
 
     if (drawTint && applyCoreTint) {
@@ -2221,7 +2267,7 @@ function paintSegmentsVertical(ctx, segs, timeStart, timeEnd, pxPerNs, nsPerPx, 
 
 // ---- Column drawing functions ----------------------------------------------
 
-function drawTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, canvasH, darkMode, hlSeg, budget) {
+function drawTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, canvasH, darkMode, hlSeg, budget, gpuBatch = null) {
   const mk = col.key
   const ld = taskLodData(trace, mk)
   const fast = budget.fast
@@ -2240,7 +2286,7 @@ function drawTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, h
 
   paintSegmentsVertical(ctx, segs, timeStart, timeEnd, pxPerNs, nsPerPx,
     col.x, COL_W, HEADER_H, col.color, trace, true, highlightKey, mk, darkMode, col.label, hlSeg, canvasH, budget,
-    indices)
+    indices, gpuBatch)
 
   if (!fast) {
     paintPriorityBoostBandsVertical(
@@ -2250,7 +2296,7 @@ function drawTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, h
   }
 }
 
-function drawCoreColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, canvasH, darkMode, budget, skipSummarySegs = false) {
+function drawCoreColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, canvasH, darkMode, budget, skipSummarySegs = false, gpuBatch = null) {
   ctx.fillStyle = col.colIdx % 2 === 0
     ? (darkMode ? '#252526' : '#FAFAFA')
     : (darkMode ? '#2D2D2D' : '#F5F5F5')
@@ -2289,8 +2335,7 @@ function drawCoreColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, c
     }
     const drawY2 = HEADER_H + Math.round(y1)
     const drawH2 = Math.ceil(h)
-    ctx.fillStyle = color
-    ctx.fillRect(segX, drawY2, segW, drawH2)
+    gpuFillRect(gpuBatch, ctx, segX, drawY2, segW, drawH2, color)
     budget.n++
 
     if (drawLabels && h >= 40) {
@@ -2313,7 +2358,7 @@ function drawCoreColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, c
   }
 }
 
-function drawCoreTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, canvasH, darkMode, hlSeg, lockedTaskKey, budget) {
+function drawCoreTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, canvasH, darkMode, hlSeg, lockedTaskKey, budget, gpuBatch = null) {
   const ld = coreTaskLodData(trace, col.coreKey, col.taskKey)
   const wasmKey = `${col.coreKey}__${col.taskKey}`
   const fast = budget.fast
@@ -2334,9 +2379,10 @@ function drawCoreTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerP
   const dim = lockedTaskKey && mk !== lockedTaskKey
   if (dim) ctx.save()
   if (dim) ctx.globalAlpha = 45 / 255
+  const fillAlpha = dim ? 45 / 255 : 1
   paintSegmentsVertical(ctx, segs, timeStart, timeEnd, pxPerNs, nsPerPx,
     col.x, COL_W, HEADER_H, col.color, trace, false, highlightKey, mk, darkMode, col.label, hlSeg, canvasH, budget,
-    indices)
+    indices, gpuBatch, fillAlpha)
   if (dim) ctx.restore()
 
   if (!fast) {
@@ -2702,7 +2748,7 @@ export function renderVertical(ctx, trace, viewport, options = {}) {
     expanded     = new Set(),
     cursors      = [],
     highlightKey = null,
-    showGrid     = false,
+    showGrid     = true,
     darkMode     = true,
     hoverTime    = null,
     marks        = [],
@@ -2714,6 +2760,8 @@ export function renderVertical(ctx, trace, viewport, options = {}) {
   } = options
   const highlightSegment = options.highlightSegment ?? null
   const skipCoreSummarySegs = coreViewTaskFilterActive(migratedOnlyFilter, options.taskFilterKeys)
+  const gpuBatch = options.gpuBatch ?? null
+  const useGpu = !!gpuBatch
 
   const timeSpan = timeEnd - timeStart
   if (timeSpan <= 0 || canvasH <= HEADER_H) return
@@ -2723,12 +2771,13 @@ export function renderVertical(ctx, trace, viewport, options = {}) {
   const nsPerPx = timeSpan / bodyH
   const paintFast = !!fastPaint
 
-  // Clear
+  // Clear — body background is on the WebGL layer when gpuBatch is set.
   ctx.clearRect(0, 0, canvasW, canvasH)
 
-  // Background
-  ctx.fillStyle = darkMode ? '#1E1E1E' : '#FFFFFF'
-  ctx.fillRect(0, 0, canvasW, canvasH)
+  if (!useGpu) {
+    ctx.fillStyle = darkMode ? '#1E1E1E' : '#FFFFFF'
+    ctx.fillRect(0, 0, canvasW, canvasH)
+  }
 
   // Ruler background (left strip)
   ctx.fillStyle = darkMode ? '#2B2B2B' : '#E8E8E8'
@@ -2775,17 +2824,17 @@ export function renderVertical(ctx, trace, viewport, options = {}) {
   }
   visibleColCount = Math.max(1, visibleColCount)
 
-  const colBudgetSpec = createPaintBudget(visibleColCount, paintFast)
+  const colBudgetSpec = createPaintBudget(visibleColCount, paintFast, useGpu)
   for (const col of cols) {
     const cw = col.colWidth ?? COL_W
     if (col.x + cw < RULER_W || col.x >= canvasW) continue
     const colBudget = { n: 0, max: colBudgetSpec.max, fast: colBudgetSpec.fast }
     if (col.type === 'task') {
-      drawTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, canvasH, darkMode, highlightSegment, colBudget)
+      drawTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, canvasH, darkMode, highlightSegment, colBudget, gpuBatch)
     } else if (col.type === 'core') {
-      drawCoreColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, canvasH, darkMode, colBudget, skipCoreSummarySegs)
+      drawCoreColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, canvasH, darkMode, colBudget, skipCoreSummarySegs, gpuBatch)
     } else if (col.type === 'core-task') {
-      drawCoreTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, canvasH, darkMode, highlightSegment, lockedTaskKey, colBudget)
+      drawCoreTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, canvasH, darkMode, highlightSegment, lockedTaskKey, colBudget, gpuBatch)
     } else if (col.type === 'sti') {
       drawStiColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, canvasH, darkMode)
     } else if (col.type === 'interval') {

@@ -1,28 +1,28 @@
-/** Persistent web viewer settings (localStorage). Parity with desktop btf_viewer.rc. */
-
+/** Persistent web viewer settings (localStorage). Parity with desktop btf_viewer.rc / btf_viewer.py USER CONFIGURATION. */
 import { syncTimelineLayoutFromSettings } from './timelineLayout.js'
 
 const SETTINGS_KEY = 'btf-viewer-settings-v1'
 
 export const MAX_CURSORS = 8
 
+/** Defaults mirror btf_viewer.py: FONT_SIZE, UI_FONT_SIZE, LABEL_WIDTH, ROW_HEIGHT, … */
 export const DEFAULT_SETTINGS = {
   darkMode: true,
   colorblindSafe: false,
-  labelFontSize: 10,
-  uiFontSize: 13,
+  labelFontSize: 8,
+  uiFontSize: 8,
   showLegend: true,
   showStats: true,
   showMarks: true,
   showCpuLoad: true,
   showSti: true,
-  showGrid: false,
-  hoverHighlight: true,
+  showGrid: true,
+  hoverHighlight: false,
   labelWidth: 160,
-  rowHeight: 24,
+  rowHeight: 22,
   rowGap: 4,
   stiRowH: 18,
-  stiWaveformH: 64,
+  stiWaveformH: 80,
   stiLineStyle: 'linear',
   timescalePerPxDefault: 2,
   maxCursors: 4,
@@ -55,7 +55,7 @@ export function normalizeSettings(raw) {
     showCpuLoad: s.showCpuLoad !== false,
     showSti: s.showSti !== false,
     showGrid: !!s.showGrid,
-    hoverHighlight: s.hoverHighlight !== false,
+    hoverHighlight: !!s.hoverHighlight,
     labelWidth: clampInt(s.labelWidth, 60, 600, DEFAULT_SETTINGS.labelWidth),
     rowHeight: clampInt(s.rowHeight, 12, 60, DEFAULT_SETTINGS.rowHeight),
     rowGap: clampInt(s.rowGap, 0, 20, DEFAULT_SETTINGS.rowGap),

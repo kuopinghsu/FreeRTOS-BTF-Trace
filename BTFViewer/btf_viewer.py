@@ -129,6 +129,7 @@ def _install_macos_stderr_filter() -> None:
     t = threading.Thread(target=_relay, daemon=True, name="stderr-filter")
     t.start()
 
+import base64
 import configparser
 import csv
 import datetime
@@ -254,7 +255,12 @@ DEFAULT_WINDOW_WIDTH     = 1916
 DEFAULT_WINDOW_HEIGHT    = 1088
 DEFAULT_WINDOW_X         = 254
 DEFAULT_WINDOW_Y         = 47
-DEFAULT_DOCK_LAYOUT_VERSION = "7"
+DEFAULT_DOCK_LAYOUT_VERSION = "9"
+
+# Right-panel tab indices (Statistics / Marks / Find — web parity).
+_PANEL_TAB_STATS = 0
+_PANEL_TAB_MARKS = 1
+_PANEL_TAB_FIND = 2
 # Keep empty so first run uses code-driven dock sizing/tab defaults instead
 # of a host-dependent serialized Qt dock_state blob.
 DEFAULT_DOCK_STATE_B64 = ""
@@ -423,6 +429,10 @@ def _svg_icon(path_data: str, color: str = "#9E9E9E", size: int = 16) -> "QIcon"
     pm.loadFromData(ba, "SVG")
     return QIcon(pm)
 
+def _svg_pixmap(path_data: str, color: str = "#9E9E9E", size: int = 16) -> QPixmap:
+    """Rasterise an SVG path to a pixmap (for QLabel icons)."""
+    return _svg_icon(path_data, color, size).pixmap(QSize(size, size))
+
 def _svg_icon_markup(inner: str, size: int = 16) -> "QIcon":
     """Build a QIcon from raw SVG markup (supports stroke icons)."""
     svg = (
@@ -464,6 +474,8 @@ _IC_HORIZ  = "M1 4h14v2H1zm0 4h14v2H1zm0 4h14v2H1z"
 _IC_VERT   = "M3 1h2v14H3zm4 0h2v14H7zm4 0h2v14h-2z"
 _IC_ZIN    = "M6.5 1a5.5 5.5 0 1 0 3.89 9.4l3.4 3.4.7-.7-3.4-3.4A5.5 5.5 0 0 0 6.5 1zm0 1a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9zM6 5v1.5H4.5v1H6V9h1V7.5h1.5v-1H7V5H6z"
 _IC_ZOUT   = "M6.5 1a5.5 5.5 0 1 0 3.89 9.4l3.4 3.4.7-.7-3.4-3.4A5.5 5.5 0 0 0 6.5 1zm0 1a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9zM4 6h5v1H4V6z"
+_IC_FIND   = ("M6.5 1a5.5 5.5 0 1 0 3.89 9.4l3.4 3.4.7-.7-3.4-3.4A5.5 5.5 0 0 0 6.5 1"
+              "zm0 1a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9z")
 _IC_FIT    = "M1.5 1h5v1h-4v4h-1V1.5a.5.5 0 0 1 .5-.5zm13 0a.5.5 0 0 1 .5.5V6h-1V2h-4V1h4.5zM1 10h1v4h4v1H1.5a.5.5 0 0 1-.5-.5V10zm14 0v4.5a.5.5 0 0 1-.5.5H10v-1h4v-4h1z"
 _IC_CURSOR = "M1 1l5 12 2-4 4 4 1-1-4-4 4-2L1 1z"
 _IC_MARK   = "M3 2a1 1 0 0 1 1-1h8a1 1 0 0 1 1 1v12.5a.5.5 0 0 1-.777.416L8 12.101l-4.223 2.815A.5.5 0 0 1 3 14.5V2z"
@@ -490,6 +502,7 @@ _IC_HEATMAP = ("M1 1h4v4H1V1zm5 0h4v4H6V1zm5 0h4v4h-4V1z"
                "M1 6h4v4H1V6zm5 0h4v4H6V6zm5 0h4v4h-4V6z"
                "M1 11h4v4H1v-4zm5 0h4v4H6v-4zm5 0h4v4h-4v-4z")
 _IC_EXPORT_CSV = ("M2 1h12a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1zm0 1v12h12V2H2zm2 2h8v1H4V4zm0 2h8v1H4V6zm0 2h5v1H4V8z")
+_IC_TICK_DIST = ("M1.5 12.5h2.5V8H1.5v4.5zm3.5 0H7.5V5H5v7.5zm3.5 0h2.5V2H8.5v10.5zm3.5 0H14v-5h-2.5v5.5z")
 _IC_THEME_DARK = ("M8 1.2a.5.5 0 0 1 .47.66A5.8 5.8 0 1 0 14.14 9a.5.5 0 0 1 .66.47"
                   "A6.8 6.8 0 1 1 8 1.2z")
 _IC_THEME_LIGHT = ("M8 1.5a.5.5 0 0 1 .5.5V3a.5.5 0 0 1-1 0V2a.5.5 0 0 1 .5-.5z"
@@ -524,6 +537,147 @@ _APP_ICON_SVG = (
     '<polygon points="42,13 50,13 46,20" fill="#FFC107"/>'
     '</svg>'
 )
+
+_APP_DIR = os.path.dirname(os.path.abspath(__file__))
+# User-supplied icons next to btf_viewer.py (or via btf_viewer.rc / BTF_VIEWER_ICON).
+# When none are present, _APP_ICON_SVG is rasterised in-process (no external file).
+_APP_ICON_CANDIDATES = (
+    os.path.join(_APP_DIR, "app_icon.icns"),
+    os.path.join(_APP_DIR, "app_icon.ico"),
+    os.path.join(_APP_DIR, "app_icon.png"),
+    os.path.join(os.path.dirname(_APP_DIR), "images", "app_icon.png"),
+)
+_APP_ICON_SIZES = (16, 24, 32, 48, 64, 128, 256)
+_APP_ICON_CACHE: Optional["QIcon"] = None
+
+def _icon_add_pixmap(icon: QIcon, pm: QPixmap) -> None:
+    """Register one pixmap for all standard QIcon modes."""
+    if pm.isNull():
+        return
+    for mode in (QIcon.Mode.Normal, QIcon.Mode.Active, QIcon.Mode.Selected):
+        icon.addPixmap(pm, mode, QIcon.State.Off)
+
+def _resolve_app_icon_path() -> Optional[str]:
+    """Return path to a user/bundled app icon, or None for the built-in SVG."""
+    env = os.environ.get("BTF_VIEWER_ICON", "").strip()
+    if env:
+        env = os.path.expanduser(env)
+        if os.path.isfile(env):
+            return env
+    rc_path = os.path.join(_APP_DIR, "btf_viewer.rc")
+    if os.path.isfile(rc_path):
+        cfg = configparser.ConfigParser()
+        cfg.read(rc_path, encoding="utf-8")
+        custom = cfg.get("app", "icon_path", fallback="").strip()
+        if custom:
+            custom = os.path.expanduser(custom)
+            if not os.path.isabs(custom):
+                custom = os.path.normpath(os.path.join(_APP_DIR, custom))
+            if os.path.isfile(custom):
+                return custom
+    for path in _APP_ICON_CANDIDATES:
+        if os.path.isfile(path):
+            return path
+    return None
+
+def _icon_from_native_file(path: str) -> Optional[QIcon]:
+    """Load a multi-resolution .ico / .icns (Windows / macOS)."""
+    if not path.lower().endswith((".ico", ".icns")):
+        return None
+    icon = QIcon(path)
+    return icon if not icon.isNull() else None
+
+def _pixmap_from_app_svg(size: int) -> QPixmap:
+    svg = (
+        _APP_ICON_SVG
+        .replace('width="72"', f'width="{size}"')
+        .replace('height="72"', f'height="{size}"')
+    )
+    pm = QPixmap()
+    pm.loadFromData(QByteArray(svg.encode()), "SVG")
+    return pm
+
+def _pixmap_from_embedded_app_icon(size: int) -> QPixmap:
+    """Rasterise the built-in app icon without any external file."""
+    if sys.platform != "win32":
+        pm = _pixmap_from_app_svg(size)
+        if not pm.isNull():
+            return pm
+    # Windows often lacks the Qt SVG plugin; QPainter path is always available.
+    pm = QPixmap(size, size)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    s = size / 72.0
+
+    def _rr(x: float, y: float, w: float, h: float, r: float, color: str) -> None:
+        p.setBrush(QBrush(QColor(color)))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawRoundedRect(QRectF(x * s, y * s, w * s, h * s), r * s, r * s)
+
+    _rr(3, 3, 66, 66, 14, "#1C3A6E")
+    _rr(10, 17, 29, 7, 3.5, "#5B9BD5")
+    _rr(16, 28, 22, 7, 3.5, "#7EC8E3")
+    _rr(10, 39, 36, 7, 3.5, "#5B9BD5")
+    _rr(20, 50, 18, 7, 3.5, "#7EC8E3")
+    _rr(46, 13, 2, 46, 0, "#FFC107")
+    p.setBrush(QBrush(QColor("#FFC107")))
+    p.drawPolygon(QPolygonF([
+        QPointF(42 * s, 13 * s),
+        QPointF(50 * s, 13 * s),
+        QPointF(46 * s, 20 * s),
+    ]))
+    p.end()
+    return pm
+
+def _embedded_app_icon() -> QIcon:
+    """Default icon compiled into the app (vector fallback, no external file)."""
+    icon = QIcon()
+    for sz in _APP_ICON_SIZES:
+        _icon_add_pixmap(icon, _pixmap_from_embedded_app_icon(sz))
+    return icon
+
+def _build_app_icon(icon_path: Optional[str] = None) -> QIcon:
+    """Build a multi-resolution QIcon for window title bar and OS taskbar/dock."""
+    path = icon_path if icon_path is not None else _resolve_app_icon_path()
+    if path and os.path.isfile(path):
+        native = _icon_from_native_file(path)
+        if native is not None:
+            return native
+        icon = QIcon()
+        if path.lower().endswith(".svg"):
+            with open(path, encoding="utf-8") as fh:
+                svg_data = fh.read()
+            for sz in _APP_ICON_SIZES:
+                sized = (
+                    svg_data
+                    .replace('width="72"', f'width="{sz}"')
+                    .replace('height="72"', f'height="{sz}"')
+                )
+                pm = QPixmap()
+                if pm.loadFromData(QByteArray(sized.encode()), "SVG") and not pm.isNull():
+                    _icon_add_pixmap(icon, pm)
+            if not icon.isNull():
+                return icon
+        else:
+            source = QPixmap(path)
+            if not source.isNull():
+                for sz in _APP_ICON_SIZES:
+                    _icon_add_pixmap(icon, source.scaled(
+                        sz, sz,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    ))
+                if not icon.isNull():
+                    return icon
+    return _embedded_app_icon()
+
+def app_icon() -> QIcon:
+    """Cached application icon (taskbar / dock / window chrome)."""
+    global _APP_ICON_CACHE
+    if _APP_ICON_CACHE is None:
+        _APP_ICON_CACHE = _build_app_icon()
+    return _APP_ICON_CACHE
 
 def _core_color(core_name: str) -> str:
     """Return a distinct color hex string for a core name like 'Core_N'."""
@@ -1642,6 +1796,8 @@ def _format_plot_point_note(
         if kind == "preempt":
             pre = preemptor or "?"
             return f"{name} ← {pre}: {fmt(y_ns)} at {fmt(x_ns)}"
+    if kind == "tick":
+        return f"Tick interval {fmt(y_ns)} at {fmt(x_ns)}"
     return f"{fmt(y_ns)} at {fmt(x_ns)}"
 
 def _gap_before_segment(segs: list, seg: "TaskSegment", kind: str) -> Optional[int]:
@@ -11962,6 +12118,62 @@ class _StatsHoverRow(QWidget):
             return
         super().mousePressEvent(event)
 
+class _IconTextButton(QWidget):
+    """Clickable icon + label (macOS QPushButton QSS often suppresses setIcon)."""
+
+    clicked = Signal()
+
+    def __init__(self, text: str, icon_path: str, icon_color: str, *,
+                 ui_fs: str, fg: str, border: str, bg: str, hover_bg: str,
+                 parent=None) -> None:
+        super().__init__(parent)
+        self._fg = fg
+        self._border = border
+        self._bg = bg
+        self._hover_bg = hover_bg
+        self._hovered = False
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(8, 3, 10, 3)
+        lay.setSpacing(5)
+        icon_lbl = QLabel()
+        icon_lbl.setPixmap(_svg_pixmap(icon_path, icon_color, 14))
+        icon_lbl.setFixedSize(14, 14)
+        icon_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        lay.addWidget(icon_lbl)
+        text_lbl = QLabel(text)
+        text_lbl.setStyleSheet(
+            f"color:{fg}; font-size:{ui_fs}; font-weight:600; background:transparent;")
+        text_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        lay.addWidget(text_lbl)
+
+    def enterEvent(self, event) -> None:  # noqa: N802
+        self._hovered = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802
+        self._hovered = False
+        self.update()
+        super().leaveEvent(event)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        bg = self._hover_bg if self._hovered else self._bg
+        p.setPen(QPen(QColor(self._border)))
+        p.setBrush(QBrush(QColor(bg)))
+        p.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 4, 4)
+        super().paintEvent(event)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
 class _UtilScrollResizeFilter(QObject):
     """Keep util rows inside the scroll viewport when the panel is resized."""
 
@@ -13648,6 +13860,23 @@ class _StatsPanel(QWidget):
             f" border-radius:3px; padding:0 4px;"
         )
 
+    def _tick_dist_btn_colors(self) -> Tuple[str, str, str, str, str]:
+        """(fg, icon, border, bg, hover_bg) for Tick Distribution button."""
+        if self._is_dark:
+            return "#FFCC80", "#FFB74D", "#FFB74D", "#3A2E15", "#4A3820"
+        return "#BF360C", "#E65100", "#E65100", "#FFF4E5", "#FFE8CC"
+
+    def _make_tick_dist_button(self, ui_fs: str) -> _IconTextButton:
+        """Bar-chart button for tick-interval distribution (Trace Health)."""
+        fg, icon, border, bg, hover_bg = self._tick_dist_btn_colors()
+        btn = _IconTextButton(
+            "Tick Distribution\u2026", _IC_TICK_DIST, icon,
+            ui_fs=ui_fs, fg=fg, border=border, bg=bg, hover_bg=hover_bg,
+        )
+        btn.setToolTip("Open tick interval distribution chart")
+        btn.clicked.connect(lambda: self._open_tick_dist_plot(self._trace))
+        return btn
+
     @staticmethod
     def _html_export_util_css() -> str:
         """CSS for CPU utilisation bars in statistics HTML export."""
@@ -13998,30 +14227,7 @@ class _StatsPanel(QWidget):
 
     def _open_tick_dist_plot(self, trace: "BtfTrace") -> None:
         """Open a tick-interval distribution scatter+histogram plot."""
-        built = self._build_plot_points(trace, "__tick_dist__", "tick")
-        if built is None:
-            return
-        title, pts, color = built
-        scoped, badge, detail = self._plot_scope_banner()
-        if self._plot_dlg is not None:
-            try:
-                self._plot_dlg.closed.disconnect(self._on_plot_dialog_closed)
-            except TypeError:
-                pass
-            self._plot_dlg.close()
-        self._plot_mk = "__tick_dist__"
-        self._plot_kind = "tick"
-        self._plot_dlg = _MetricsPlotDialog(
-            title, pts, trace.time_scale, color,
-            on_point_click=None,
-            is_dark=self._is_dark,
-            scope_scoped=scoped,
-            scope_badge=badge,
-            scope_detail=detail,
-            parent=self.window(),
-        )
-        self._plot_dlg.closed.connect(self._on_plot_dialog_closed)
-        self._plot_dlg.show()
+        self._open_plot(trace, "__tick_dist__", "tick")
 
     def capture_plot_session(self) -> Tuple[Optional[str], Optional[str], bool, Optional[str]]:
         """Return (mk, kind, visible, preemptor) for the current metrics plot dialog."""
@@ -14108,7 +14314,9 @@ class _StatsPanel(QWidget):
 
     def _on_plot_scatter_click(self, x_ns: int, y_ns: int, payload) -> None:
         """Scatter plot point: jump timeline and add an annotation (not a cursor)."""
-        if self._trace is None or payload is None:
+        if self._trace is None:
+            return
+        if payload is None and self._plot_kind != "tick":
             return
         note = _format_plot_point_note(
             self._trace, self._plot_kind or "", self._plot_mk,
@@ -15497,13 +15705,9 @@ class _StatsPanel(QWidget):
                 return
             colors = {"good": "#5FCF6F", "warning": "#E8C84A", "critical": "#E85D5D"}
 
-            # --- health + mode badge row ---
+            # --- health summary (full width; wraps in narrow stats dock) ---
             mode_label = "TICKLESS" if _tick["is_tickless"] else "TICK"
             cv_pct = _tick["tick_cv"] * 100.0
-            row_w = QWidget()
-            row_lay = QHBoxLayout(row_w)
-            row_lay.setContentsMargins(0, 0, 0, 0)
-            row_lay.setSpacing(6)
             health_lbl = self._lbl(
                 f"{_tick['health'].upper()}  ·  {_tick['tick_count']:,} ticks  ·  "
                 f"avg {_format_time(_tick['avg_period'], trace.time_scale)}  ·  "
@@ -15511,6 +15715,16 @@ class _StatsPanel(QWidget):
                 color=colors.get(_tick["health"], "#888888"),
                 ui_fs=_fs,
             )
+            health_lbl.setWordWrap(True)
+            health_lbl.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+            blay.addWidget(health_lbl)
+
+            # --- mode badge + tick distribution (always visible when plottable) ---
+            badge_row = QWidget()
+            badge_lay = QHBoxLayout(badge_row)
+            badge_lay.setContentsMargins(0, 0, 0, 0)
+            badge_lay.setSpacing(6)
             mode_badge = QLabel(mode_label)
             mode_badge.setToolTip(
                 f"{'Tickless' if _tick['is_tickless'] else 'Tick'} mode detected "
@@ -15521,33 +15735,18 @@ class _StatsPanel(QWidget):
             )
             mode_badge.setStyleSheet(
                 self._tick_mode_badge_style(self._is_dark, _tick["is_tickless"], _fs))
-            row_lay.addWidget(health_lbl)
-            row_lay.addWidget(mode_badge)
-            row_lay.addStretch()
-            blay.addWidget(row_w)
+            badge_lay.addWidget(mode_badge, 0)
+            if _tick["tick_count"] >= 2:
+                badge_lay.addWidget(self._make_tick_dist_button(_fs), 0)
+            badge_lay.addStretch(1)
+            blay.addWidget(badge_row)
 
-            # --- tickless distribution button ---
             if _tick["is_tickless"]:
                 hint_lbl = self._lbl(
                     "Tickless mode: tick intervals vary.",
                     color="#888888", ui_fs=_fs)
                 hint_lbl.setWordWrap(True)
                 blay.addWidget(hint_lbl)
-                dist_btn = QPushButton("Tick Distribution\u2026")
-                dist_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-                dist_btn.setStyleSheet(
-                    f"font-size:{_fs}; border:1px solid #555; border-radius:3px;"
-                    f" padding:2px 8px; color:#aaa; background:transparent;"
-                )
-                dist_btn.clicked.connect(
-                    lambda: self._open_tick_dist_plot(self._trace))
-                btn_row = QWidget()
-                btn_lay = QHBoxLayout(btn_row)
-                btn_lay.setContentsMargins(0, 0, 0, 0)
-                btn_lay.setSpacing(0)
-                btn_lay.addWidget(dist_btn)
-                btn_lay.addStretch()
-                blay.addWidget(btn_row)
 
             if _tick["large_gaps"]:
                 blay.addWidget(self._lbl(
@@ -16107,7 +16306,7 @@ class _RcSettings:
             "show_sti":          "true",
             "show_grid":         "true",
             "show_marks":        "true",
-            "show_find":         "false",
+            "show_find":         "true",
         },
         "zoom": {
             "timescale_per_px": "-1",
@@ -16120,6 +16319,11 @@ class _RcSettings:
             "last_dir":  os.path.expanduser("~"),
             "open_tabs_json": "[]",
             "active_tab_index": "0",
+        },
+        "app": {
+            # Optional custom taskbar/dock icon (.png, .ico, .icns, .svg).
+            # Relative paths resolve from the btf_viewer.py directory.
+            "icon_path": "",
         },
     }
 
@@ -19071,6 +19275,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
+        self.setWindowIcon(app_icon())
         self._tabs: List[_TraceTab] = []
         self._previous_tab_index: int = -1
         self._tab_switch_guard: bool = False
@@ -19096,6 +19301,7 @@ class MainWindow(QMainWindow):
         self._cpu_splitter_user_sized: bool = False
         self._cpu_splitter_bottom_h: Optional[int] = None
         self._show_marks:            bool  = True
+        self._show_find:             bool  = True
         self._font_size_val:         int   = FONT_SIZE
         self._ui_font_size_val:      int   = UI_FONT_SIZE
         self._max_cursors_val:       int   = _DEFAULT_MAX_CURSORS
@@ -19142,6 +19348,16 @@ class MainWindow(QMainWindow):
         _tab_bwd = QShortcut(QKeySequence("Ctrl+Shift+Tab"), self)
         _tab_bwd.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         _tab_bwd.activated.connect(lambda: self._cycle_trace_tab(False))
+
+        _sc_find = QShortcut(QKeySequence.StandardKey.Find, self)
+        _sc_find.setContext(Qt.ShortcutContext.ApplicationShortcut)
+        _sc_find.activated.connect(self._focus_find)
+        _sc_find_next = QShortcut(QKeySequence.StandardKey.FindNext, self)
+        _sc_find_next.setContext(Qt.ShortcutContext.ApplicationShortcut)
+        _sc_find_next.activated.connect(self._find_next)
+        _sc_find_prev = QShortcut(QKeySequence.StandardKey.FindPrevious, self)
+        _sc_find_prev.setContext(Qt.ShortcutContext.ApplicationShortcut)
+        _sc_find_prev.activated.connect(self._find_prev)
 
         # Restore all persisted settings (geometry, zoom, orientation, ...).
         self._restore_settings()
@@ -19565,17 +19781,50 @@ class MainWindow(QMainWindow):
         self._act_redo.setEnabled(bool(self._redo_stack))
 
     def _focus_statistics_panel(self, force: bool = False) -> None:
-        """Show and activate the Statistics dock tab.
-
-        force=True reopens the dock when a trace file is opened.
-        force=False only raises the tab when statistics are already enabled.
-        """
+        """Show and activate the Statistics tab in the right panel."""
         if force:
             self._show_stats = True
+            self._sync_panel_tab_visibility()
         if not self._show_stats:
             return
-        self._stats_dock.setVisible(True)
-        self._stats_dock.raise_()
+        self._focus_panel_tab(_PANEL_TAB_STATS)
+
+    def _focus_panel_tab(self, tab_index: int) -> None:
+        """Show the right panel dock and switch to *tab_index*."""
+        self._panel_dock.setVisible(True)
+        self._panel_dock.raise_()
+        if self._panel_tabs.isTabVisible(tab_index):
+            self._panel_tabs.setCurrentIndex(tab_index)
+
+    def _sync_panel_tab_visibility(self) -> None:
+        """Apply show_stats / show_marks / show_find to panel tab visibility."""
+        if not hasattr(self, "_panel_tabs"):
+            return
+        self._panel_tabs.setTabVisible(_PANEL_TAB_STATS, self._show_stats)
+        self._panel_tabs.setTabVisible(_PANEL_TAB_MARKS, self._show_marks)
+        self._panel_tabs.setTabVisible(_PANEL_TAB_FIND, self._show_find)
+        visible = [
+            i for i in (_PANEL_TAB_STATS, _PANEL_TAB_MARKS, _PANEL_TAB_FIND)
+            if self._panel_tabs.isTabVisible(i)
+        ]
+        if visible and self._panel_tabs.currentIndex() not in visible:
+            self._panel_tabs.setCurrentIndex(visible[0])
+
+    def _toggle_show_marks_panel(self) -> None:
+        self._show_marks = not self._show_marks
+        self._act_show_marks.setChecked(self._show_marks)
+        self._sync_panel_tab_visibility()
+        if self._show_marks:
+            self._focus_panel_tab(_PANEL_TAB_MARKS)
+
+    def _toggle_show_find_panel(self) -> None:
+        self._show_find = not self._show_find
+        self._act_show_find.setChecked(self._show_find)
+        self._sync_panel_tab_visibility()
+        if self._show_find:
+            self._focus_find()
+        else:
+            self._recompute_find_hits()
 
     def _sync_panels_to_active_tab(self) -> None:
         self._sync_heatmap_dialog_to_tab()
@@ -19751,8 +20000,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _any_visible_right_dock(self) -> bool:
-        for dock in (self._legend_dock, self._stats_dock,
-                     self._marks_dock, self._find_dock):
+        for dock in (self._legend_dock, self._panel_dock):
             if dock.isVisible() and not dock.isFloating():
                 if self.dockWidgetArea(dock) == Qt.DockWidgetArea.RightDockWidgetArea:
                     return True
@@ -19760,8 +20008,7 @@ class MainWindow(QMainWindow):
 
     def _current_right_dock_width(self) -> int:
         widths: list[int] = []
-        for dock in (self._legend_dock, self._stats_dock,
-                     self._marks_dock, self._find_dock):
+        for dock in (self._legend_dock, self._panel_dock):
             if dock.isVisible() and not dock.isFloating():
                 if self.dockWidgetArea(dock) == Qt.DockWidgetArea.RightDockWidgetArea:
                     widths.append(int(dock.width()))
@@ -19770,7 +20017,7 @@ class MainWindow(QMainWindow):
         return 330
 
     def _right_docks(self) -> Tuple[QDockWidget, ...]:
-        return (self._legend_dock, self._stats_dock, self._marks_dock, self._find_dock)
+        return (self._legend_dock, self._panel_dock)
 
     def _visible_right_docks(self) -> List[QDockWidget]:
         docks: List[QDockWidget] = []
@@ -19799,8 +20046,7 @@ class MainWindow(QMainWindow):
             _StatsPanel._fix_stats_table_column_widths(cursor_table)
 
     def _resize_right_dock_column(self, w: int) -> None:
-        docks = [self._legend_dock, self._stats_dock,
-                 self._marks_dock, self._find_dock]
+        docks = [self._legend_dock, self._panel_dock]
         sizes = [w, w, w, w]
         if self.isMaximized() or self.isFullScreen():
             self.resizeDocks(docks, sizes, Qt.Orientation.Horizontal)
@@ -19874,14 +20120,14 @@ class MainWindow(QMainWindow):
 
                 Default structure:
                     - Top: Legend
-                    - Bottom: tabbed pages (Statistics / Marks)
+                    - Bottom: tabbed pages (Statistics / Marks / Find)
 
                 We first set side-panel width, then split with a taller
                 bottom tabbed page.
         """
         self._resize_right_dock_column(520)
         self.resizeDocks(
-            [self._legend_dock, self._marks_dock],
+            [self._legend_dock, self._panel_dock],
             [2, 5],
             Qt.Orientation.Vertical,
         )
@@ -19895,12 +20141,11 @@ class MainWindow(QMainWindow):
 
     def _collect_dock_metrics(self) -> str:
         """Return compact CSV metrics snapshot for dock sizes."""
-        right_w = int(max(self._legend_dock.width(), self._marks_dock.width(), self._stats_dock.width()))
+        right_w = int(max(self._legend_dock.width(), self._panel_dock.width()))
         legend_h = int(self._legend_dock.height())
-        marks_h = int(self._marks_dock.height())
-        stats_h = int(self._stats_dock.height())
+        panel_h = int(self._panel_dock.height())
         label_w = int(self._view._scene._label_width)
-        return f"{right_w},{legend_h},{marks_h},{stats_h},{label_w}"
+        return f"{right_w},{legend_h},{panel_h},{panel_h},{label_w}"
 
     def _restore_dock_metrics(self, packed: str) -> None:
         """Apply dock-size metrics persisted via _collect_dock_metrics()."""
@@ -19919,7 +20164,7 @@ class MainWindow(QMainWindow):
         bottom_h = max(int(marks_h), int(stats_h))
         if legend_h > 0 and bottom_h > 0:
             self.resizeDocks(
-                [self._legend_dock, self._marks_dock],
+                [self._legend_dock, self._panel_dock],
                 [legend_h, bottom_h],
                 Qt.Orientation.Vertical,
             )
@@ -20061,10 +20306,11 @@ class MainWindow(QMainWindow):
             self._legend_dock.setVisible(False)
         if not s.get_bool("view", "show_stats", True):
             self._show_stats = False
-            self._stats_dock.setVisible(False)
         self._show_marks = s.get_bool("view", "show_marks", True)
-        self._marks_dock.setVisible(self._show_marks)
-        self._find_dock.setVisible(s.get_bool("view", "show_find", False))
+        self._show_find = s.get_bool("view", "show_find", True)
+        self._sync_panel_tab_visibility()
+        self._panel_dock.setVisible(
+            self._show_stats or self._show_marks or self._show_find)
 
         # Dock layout (marks/stats/legend sizes & positions).
         # dock_layout_version gates restoration: if the saved version is older
@@ -20199,7 +20445,7 @@ class MainWindow(QMainWindow):
             "show_legend":   str(self._show_legend).lower(),
             "show_stats":    str(self._show_stats).lower(),
             "show_marks":    str(self._show_marks).lower(),
-            "show_find":     str(self._find_dock.isVisible()).lower(),
+            "show_find":     str(self._show_find).lower(),
             "font_size":     str(self._font_size_val),
             "ui_font_size":  str(self._ui_font_size_val),
             "max_cursors":   str(self._max_cursors_val),
@@ -20727,8 +20973,8 @@ class MainWindow(QMainWindow):
         # --- Legend dock (right panel) ---
         self._build_legend_dock()
 
-        # --- Statistics dock (bottom panel) ---
-        self._build_stats_dock()
+        # --- Statistics panel (widget only; hosted in right-panel tabs) ---
+        self._build_stats_panel()
 
         # --- Marks dock (bookmarks + annotations) ---
         marks_host = QWidget()
@@ -20817,6 +21063,7 @@ class MainWindow(QMainWindow):
         an_v.addLayout(an_btns)
         marks_tabs.addTab(an_page, "Anno.")
         marks_v.addWidget(marks_tabs)
+        self._marks_tabs = marks_tabs
         self._range_stats_label = QLabel("Range: place two cursors to measure")
         self._range_stats_label.setStyleSheet("color:#999;")
         self._range_stats_label.setWordWrap(True)
@@ -20849,16 +21096,7 @@ class MainWindow(QMainWindow):
             btn.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         marks_v.addLayout(marks_io_row)
 
-        marks_dock = QDockWidget("Marks", self)
-        marks_dock.setObjectName("dock_marks")
-        marks_dock.setWidget(marks_host)
-        marks_dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetClosable | QDockWidget.DockWidgetFeature.DockWidgetMovable)
-        self._apply_right_dock_min_width(marks_dock)
-        marks_dock.setMinimumHeight(200)  # tabified stats/marks area; allow vertical shrink
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, marks_dock)
-        self._marks_dock = marks_dock
-
-        # --- Find dock ---
+        # --- Find panel (tab content) ---
         find_host = QWidget()
         find_host.setMinimumWidth(0)
         find_v = QVBoxLayout(find_host)
@@ -20867,6 +21105,7 @@ class MainWindow(QMainWindow):
         self._find_input = QLineEdit()
         self._find_input.setPlaceholderText("Find task, annotation, or migration…")
         self._find_input.textChanged.connect(self._recompute_find_hits)
+        self._find_input.returnPressed.connect(self._find_next)
         find_v.addWidget(self._find_input)
         self._find_mode_combo = QComboBox()
         self._find_mode_combo.addItems(["Contains", "Exact", "Regex", "Migrations"])
@@ -20887,32 +21126,39 @@ class MainWindow(QMainWindow):
         self._find_status = QLabel("0 matches")
         self._find_status.setStyleSheet("color:#999;")
         find_v.addWidget(self._find_status)
-        find_dock = QDockWidget("Find & Jump", self)
-        find_dock.setObjectName("dock_find")
-        find_dock.setWidget(find_host)
-        find_dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetClosable | QDockWidget.DockWidgetFeature.DockWidgetMovable)
-        self._apply_right_dock_min_width(find_dock)
-        find_dock.setMinimumHeight(120)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, find_dock)
-        self._find_dock = find_dock
-        # Default: Legend on top, bottom as tabbed pages (Statistics / Marks).
-        self.splitDockWidget(self._legend_dock, self._marks_dock, Qt.Orientation.Vertical)
-        self.tabifyDockWidget(self._stats_dock, self._marks_dock)
-        self._focus_statistics_panel()
 
-        # Keep Find available below the tab group (typically hidden by default).
-        self.splitDockWidget(self._marks_dock, self._find_dock, Qt.Orientation.Vertical)
+        # --- Right panel: Statistics / Marks / Find tabs (web parity) ---
+        self._panel_tabs = QTabWidget()
+        self._panel_tabs.setDocumentMode(True)
+        self._panel_tabs.addTab(self._stats_panel, "Statistics")
+        self._panel_tabs.addTab(marks_host, "Marks")
+        self._panel_tabs.addTab(find_host, "Find")
+
+        panel_dock = QDockWidget("", self)
+        panel_dock.setObjectName("dock_panel")
+        panel_dock.setWidget(self._panel_tabs)
+        panel_dock.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetClosable
+            | QDockWidget.DockWidgetFeature.DockWidgetMovable)
+        self._apply_right_dock_min_width(panel_dock)
+        panel_dock.setMinimumHeight(200)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, panel_dock)
+        self._panel_dock = panel_dock
+        # Legacy aliases — all panel tabs live in one dock.
+        self._stats_dock = panel_dock
+        self._marks_dock = panel_dock
+        self._find_dock = panel_dock
+
+        self.splitDockWidget(self._legend_dock, self._panel_dock, Qt.Orientation.Vertical)
+        self._sync_panel_tab_visibility()
+        self._focus_statistics_panel()
         # Default dock sizes are applied in _restore_settings via QTimer.singleShot
         # AFTER the window is shown, where resizeDocks() is actually effective.
 
         # Keep runtime state in sync if the user closes a dock via its X button
         self._legend_dock.visibilityChanged.connect(
             lambda v: setattr(self, "_show_legend", v))
-        self._stats_dock.visibilityChanged.connect(
-            lambda v: setattr(self, "_show_stats", v))
-        self._marks_dock.visibilityChanged.connect(
-            lambda v: setattr(self, "_show_marks", v))
-        self._find_dock.visibilityChanged.connect(self._on_find_dock_visibility_changed)
+        self._panel_dock.visibilityChanged.connect(self._on_panel_dock_visibility_changed)
 
         self._wire_resize_cursors()
 
@@ -20942,8 +21188,7 @@ class MainWindow(QMainWindow):
             w.installEventFilter(filt)
             w._dock_width_resize_filter = filt  # prevent GC
 
-        for dock in (self._legend_dock, self._stats_dock,
-                     self._marks_dock, self._find_dock):
+        for dock in (self._legend_dock, self._panel_dock):
             dock.setMouseTracking(True)
             dock.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
             ok = _dock_active(dock)
@@ -20953,16 +21198,14 @@ class MainWindow(QMainWindow):
             vert_edges: list = []
             if dock is self._legend_dock:
                 vert_edges.append(("bottom", vert, ok))
-            if dock is self._find_dock:
-                vert_edges.append(("top", vert, ok))
             if vert_edges:
                 vert_filt = _EdgeResizeCursorFilter(dock, vert_edges, margin)
                 dock.installEventFilter(vert_filt)
                 dock._edge_resize_filter = vert_filt
 
-        resize_guard = _RightDockResizeGuard(self, self._stats_dock)
-        self._stats_dock.installEventFilter(resize_guard)
-        self._stats_dock._dock_resize_guard = resize_guard
+        resize_guard = _RightDockResizeGuard(self, self._panel_dock)
+        self._panel_dock.installEventFilter(resize_guard)
+        self._panel_dock._dock_resize_guard = resize_guard
 
         QTimer.singleShot(0, lambda: _wire_splitter_handle_cursors(self))
 
@@ -20985,22 +21228,13 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
         self._legend_dock = dock
 
-    def _build_stats_dock(self) -> None:
-        """Create the statistics dock."""
+    def _build_stats_panel(self) -> None:
+        """Create the statistics panel widget (hosted in the right-panel tab bar)."""
         self._stats_panel = _StatsPanel()
         self._stats_panel.task_clicked.connect(self._on_legend_task_clicked)
         self._stats_panel.segment_jump.connect(self._on_segment_jump)
         self._stats_panel.plot_point_clicked.connect(self._on_stats_plot_point_clicked)
         self._stats_panel._btn_compare_mig.clicked.connect(self._open_trace_compare)
-        stats_dock = QDockWidget("Statistics", self)
-        stats_dock.setObjectName("dock_statistics")
-        stats_dock.setWidget(self._stats_panel)
-        stats_dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetClosable | QDockWidget.DockWidgetFeature.DockWidgetMovable)
-        self._apply_right_dock_min_width(stats_dock)
-        stats_dock.setMinimumHeight(200)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, stats_dock)
-        self._stats_dock = stats_dock
-
         self.setAcceptDrops(True)
 
     def _build_menus(self) -> None:
@@ -21054,14 +21288,12 @@ class MainWindow(QMainWindow):
         vm.addSeparator()
         vm.addAction("⚙ &Settings…", self._open_settings, "Ctrl+,")
         vm.addSeparator()
-        self._act_show_marks = vm.addAction("Show &Marks Panel",
-            lambda: self._marks_dock.setVisible(not self._marks_dock.isVisible()))
+        self._act_show_marks = vm.addAction("Show &Marks Panel", self._toggle_show_marks_panel)
         self._act_show_marks.setCheckable(True)
         self._act_show_marks.setChecked(True)
-        self._act_show_find = vm.addAction("Show &Find Panel",
-            lambda: self._find_dock.setVisible(not self._find_dock.isVisible()))
+        self._act_show_find = vm.addAction("Show &Find Panel", self._toggle_show_find_panel)
         self._act_show_find.setCheckable(True)
-        self._act_show_find.setChecked(False)
+        self._act_show_find.setChecked(True)
 
         # --- Cursors menu ---
         cm = mb.addMenu("&Cursors")
@@ -21100,10 +21332,6 @@ class MainWindow(QMainWindow):
         hm.addAction("&Keyboard && Mouse Shortcuts…", self._on_keyboard_shortcuts)
         hm.addSeparator()
         hm.addAction("&About", self._on_about)
-
-        # Sync Show Marks / Show Find check state with dock X-button
-        self._marks_dock.visibilityChanged.connect(self._act_show_marks.setChecked)
-        self._find_dock.visibilityChanged.connect(self._act_show_find.setChecked)
 
     def _build_toolbar(self) -> None:
         tb = self.addToolBar("Main")
@@ -21147,6 +21375,11 @@ class MainWindow(QMainWindow):
         self._tb_zoom_range_btn = _ia("Range", self._zoom_to_cursor_range, _IC_EXPAND,
                                       "Zoom view to fit between cursor C1 and C2  (Ctrl+R)")
         self._tb_zoom_range_btn.setEnabled(False)
+
+        _ia("Find", self._focus_find, _IC_FIND,
+            "Find task, annotation, or migration  (Ctrl+F)")
+        self._tb_find_btn = self._tb_icon_actions[-1][0]
+        self._tb_find_btn.setShortcut(QKeySequence.StandardKey.Find)
 
         # Zoom-preset quick-pick combo (labels/values rebuilt per trace unit)
         self._zoom_presets: list = []   # populated by _rebuild_zoom_presets()
@@ -21998,10 +22231,9 @@ class MainWindow(QMainWindow):
         note = note or ""
         for ann in self._annotations:
             if ann.ns == mark_ns and ann.note == note:
-                self._marks_dock.setVisible(True)
-                self._marks_dock.raise_()
+                self._focus_marks_annotation_panel(ann.id)
                 return
-        self._add_annotation_with_note(mark_ns, note)
+        self._add_annotation_with_note(mark_ns, note, focus_annotation_tab=True)
 
     def _add_bookmark_at_center(self) -> None:
         if self._trace is None:
@@ -22099,25 +22331,29 @@ class MainWindow(QMainWindow):
         self._bookmarks.sort(key=lambda b: b.ns)
         self._rebuild_bookmark_list()
         self._save_current_trace_state()
-        self._marks_dock.setVisible(True)
-        self._marks_dock.raise_()
+        self._focus_panel_tab(_PANEL_TAB_MARKS)
 
     def _add_annotation_at_ns(self, ns: int) -> None:
         """Add an annotation at timestamp with an empty note."""
         self._add_annotation_with_note(ns, "")
 
-    def _add_annotation_with_note(self, ns: int, note: str) -> None:
+    def _add_annotation_with_note(
+        self, ns: int, note: str, *, focus_annotation_tab: bool = False,
+    ) -> None:
         """Add an annotation at *ns* with the given note text."""
         if self._trace is None:
             return
         self._push_undo_snapshot()
-        self._annotations.append(TraceAnnotation(id=self._mark_next_id, ns=ns, note=note or ""))
+        ann_id = self._mark_next_id
+        self._annotations.append(TraceAnnotation(id=ann_id, ns=ns, note=note or ""))
         self._mark_next_id += 1
         self._annotations.sort(key=lambda a: a.ns)
         self._rebuild_annotation_list()
         self._save_current_trace_state()
-        self._marks_dock.setVisible(True)
-        self._marks_dock.raise_()
+        if focus_annotation_tab:
+            self._focus_marks_annotation_panel(ann_id)
+        else:
+            self._focus_panel_tab(_PANEL_TAB_MARKS)
 
     def _clear_all_bookmarks(self) -> None:
         """Remove every bookmark (undoable)."""
@@ -22197,10 +22433,29 @@ class MainWindow(QMainWindow):
         self._view._scene.set_marks(self._bookmarks, self._annotations)
         self._view._has_annotations = bool(self._annotations)
 
+    def _focus_marks_annotation_panel(self, annotation_id: Optional[int] = None) -> None:
+        """Show Marks tab, switch to Anno. sub-tab, optionally select a row."""
+        self._show_marks = True
+        self._sync_panel_tab_visibility()
+        self._focus_panel_tab(_PANEL_TAB_MARKS)
+        self._marks_tabs.setCurrentIndex(2)
+        if annotation_id is not None:
+            for row in range(self._annotation_list.count()):
+                item = self._annotation_list.item(row)
+                if item is not None and int(item.data(Qt.ItemDataRole.UserRole)) == annotation_id:
+                    self._annotation_list.setCurrentItem(item)
+                    self._annotation_list.scrollToItem(item)
+                    break
+
     def _focus_find(self) -> None:
-        self._find_dock.setVisible(True)
+        """Show the Find tab and focus the search field."""
+        self._show_find = True
+        self._act_show_find.setChecked(True)
+        self._sync_panel_tab_visibility()
+        self._focus_panel_tab(_PANEL_TAB_FIND)
         self._find_input.setFocus()
         self._find_input.selectAll()
+        self._recompute_find_hits()
 
     def _recompute_find_hits(self) -> None:
         self._find_hits = []
@@ -22211,8 +22466,7 @@ class MainWindow(QMainWindow):
             self._view._scene.set_find_hits([])
             return
         query = self._find_input.text().strip()
-        # Clear highlights whenever the find dock is hidden or query is empty
-        if not query or not self._find_dock.isVisible():
+        if not query:
             self._find_status.setText("0 matches")
             self._view._scene.set_find_hits([])
             return
@@ -22630,10 +22884,10 @@ class MainWindow(QMainWindow):
             self._legend_dock.setVisible(self._show_legend)
         if vals["show_stats"] != self._show_stats:
             self._show_stats = vals["show_stats"]
-            self._stats_dock.setVisible(self._show_stats)
+            self._sync_panel_tab_visibility()
         if vals["show_marks"] != self._show_marks:
             self._show_marks = vals["show_marks"]
-            self._marks_dock.setVisible(self._show_marks)
+            self._sync_panel_tab_visibility()
         if vals.get("show_cpu_load", self._show_cpu_load) != self._show_cpu_load:
             self._show_cpu_load = vals["show_cpu_load"]
             for tab in self._tabs:
@@ -23567,10 +23821,10 @@ class MainWindow(QMainWindow):
         except (OSError, OverflowError, ValueError, TypeError) as exc:
             QMessageBox.critical(self, "Import Error", str(exc))
 
-    # -- Find dock ------------------------------------------------------
+    # -- Right panel / Find ------------------------------------------------
 
-    def _on_find_dock_visibility_changed(self, visible: bool) -> None:
-        """Clear highlight overlays when the Find dock is hidden."""
+    def _on_panel_dock_visibility_changed(self, visible: bool) -> None:
+        """Clear find overlays when the entire right panel is hidden."""
         if not visible:
             self._recompute_find_hits()
 
@@ -23831,6 +24085,7 @@ def main() -> None:
     app.setApplicationName("RTOS BTF Viewer")
     app.setApplicationDisplayName("RTOS BTF Viewer")
     app.setOrganizationName("btf_viewer")
+    app.setWindowIcon(app_icon())
 
     win = MainWindow()
     win.show()

@@ -243,6 +243,7 @@
                 Marks
               </div>
               <MarksPanel
+                ref="marksPanelRef"
                 :marks="marks"
                 :time-scale="trace.timeScale"
                 @add-bookmark="onAddMark"
@@ -780,6 +781,7 @@ const {
 } = useTraceTabs()
 const timelinePanelRef = ref(null)
 const findPanelRef = ref(null)
+const marksPanelRef = ref(null)
 const leftPaneRef = ref(null)
 const loading    = ref(false)
 const loadingPct = ref(0)
@@ -858,7 +860,7 @@ function showToast(msg, type = 'info') {
 const timelineOptions = reactive({
   viewMode:        'task',
   darkMode:        true,
-  showGrid:        false,
+  showGrid:        true,
   showSti:         true,
   showCpuLoad:     true,
   stiLogScale:     false,
@@ -872,7 +874,7 @@ const timelineOptions = reactive({
   taskFilterKeys:     null,
   heatmapFilterLabel: null,
   lockedTaskKey:   null,
-  showHoverHighlight: true,
+  showHoverHighlight: false,
   layoutRev:       0,
 })
 
@@ -1257,6 +1259,8 @@ async function attachParsedTrace(name, packedOrTrace) {
 }
 
 async function parseTraceOnMainThread(text, name) {
+  const { initWasmAccel } = await import('./renderer/wasmAccel.js')
+  await initWasmAccel()
   const { parseBtf } = await import('./parser/btfParser.js')
   const { finalizeAndEnrich } = await import('./parser/tracePack.js')
   const result = finalizeAndEnrich(await parseBtf(text, (pct, msg) => {
@@ -1447,8 +1451,15 @@ function onStatsPlotPointActivate({ ns, note, segment, interval, priorityRange, 
     timelineOptions.highlightInterval = null
     timelinePanelRef.value?.jumpToNs(ns)
   }
-  if (ns != null) addAnnotationAtNs(ns, note)
-  rightPanelTab.value = 'marks'
+  if (ns != null) {
+    const annId = addAnnotationAtNs(ns, note)
+    rightPanelTab.value = 'marks'
+    nextTick(() => {
+      if (annId != null) marksPanelRef.value?.focusAnnotation(annId)
+    })
+  } else {
+    rightPanelTab.value = 'marks'
+  }
   syncTimelineViewport()
   scheduleSessionSave()
 }
@@ -2269,13 +2280,15 @@ function addMarkAtNs(ns, type = 'bookmark', label = '') {
 }
 
 function addAnnotationAtNs(ns, note) {
-  if (!trace.value || !activeTab.value) return
+  if (!trace.value || !activeTab.value) return null
   const clamped = Math.max(trace.value.timeMin, Math.min(trace.value.timeMax, ns))
   const label = note || ''
-  const exists = marks.value.some(
+  const existing = marks.value.find(
     m => m.type === 'annotation' && m.ns === clamped && (m.label || '') === label)
-  if (exists) return
+  if (existing) return existing.id
+  const annId = activeTab.value.markNextId
   addMarkAtNs(clamped, 'annotation', label)
+  return annId
 }
 
 function onDeleteMark(id) {
@@ -2394,6 +2407,10 @@ async function onImportSession(file) {
   --fg:            #D4D4D4;
   --fg-dim:        #858585;
   --accent:        #4F8BFF;
+  --tick-dist-icon:  #FFB74D;
+  --tick-dist-fg:    #FFCC80;
+  --tick-dist-border: color-mix(in srgb, #FFB74D 55%, #3C3C3C);
+  --tick-dist-bg:    color-mix(in srgb, #FFB74D 16%, transparent);
   --sb-thumb:       rgba(160, 160, 160, 0.40);
   --sb-thumb-hover: rgba(160, 160, 160, 0.65);
 }
@@ -2409,6 +2426,10 @@ async function onImportSession(file) {
   --fg:            #1E1E1E;
   --fg-dim:        #666666;
   --accent:        #0066CC;
+  --tick-dist-icon:  #E65100;
+  --tick-dist-fg:    #BF360C;
+  --tick-dist-border: color-mix(in srgb, #E65100 45%, #DDDDDD);
+  --tick-dist-bg:    color-mix(in srgb, #E65100 10%, #FFFFFF);
   --sb-thumb:       rgba(80, 80, 80, 0.38);
   --sb-thumb-hover: rgba(80, 80, 80, 0.62);
 }
@@ -2442,7 +2463,7 @@ body {
   background: var(--bg);
   color: var(--fg);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  font-size: var(--ui-font-size, 13px);
+  font-size: var(--ui-font-size, 8px);
   overflow: hidden;
 }
 

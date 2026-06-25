@@ -23,6 +23,7 @@
       </div>
       <div
         v-if="marks.length > 0"
+        ref="listEl"
         class="mark-list"
       >
         <div
@@ -30,6 +31,7 @@
           :key="m.id"
           class="mark-item"
           :class="{ selected: selectedId === m.id }"
+          :data-mark-id="m.id"
           tabindex="0"
           @click="emit('jumpTo', m.ns); emit('selectMark', m.id); selectedId = m.id"
           @keydown.delete.stop="emit('deleteMark', m.id)"
@@ -128,7 +130,7 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { nextTick, ref } from 'vue'
 import { formatTime } from '../renderer/TimelineRenderer.js'
 
 const props = defineProps({
@@ -142,6 +144,7 @@ const emit = defineEmits([
 ])
 
 const selectedId    = ref(null)
+const listEl          = ref(null)
 const importInputEl = ref(null)
 const sessionImportEl = ref(null)
 const MAX_MARKS_CSV_ROWS = 100_000
@@ -272,6 +275,17 @@ function onImportFile(e) {
   // Reset input so the same file can be re-imported
   e.target.value = ''
 }
+
+function focusAnnotation(markId) {
+  if (markId == null) return
+  selectedId.value = markId
+  nextTick(() => {
+    const el = listEl.value?.querySelector(`[data-mark-id="${markId}"]`)
+    el?.scrollIntoView({ block: 'nearest' })
+  })
+}
+
+defineExpose({ focusAnnotation })
 </script>
 
 <style scoped>

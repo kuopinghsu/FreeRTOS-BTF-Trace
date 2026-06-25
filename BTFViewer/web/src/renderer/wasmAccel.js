@@ -15,6 +15,11 @@ let _uploadEnd = 4096
 
 const SCRATCH_I32 = 0
 const SCRATCH_INDICES = 256  // byte offset; room for 4k u32 indices (16 KiB)
+const PARSE_UPLOAD_BASE = 65536  // parse-time uploads (LOD, gather) — above timeline scratch
+
+function align8(n) {
+  return (n + 7) & ~7
+}
 
 function jsVisibleRowRange(rows, scrollY, bodyH, buffer, rowBandHeightFn) {
   if (!rows?.length) return { i0: 0, i1: 0 }
@@ -194,6 +199,66 @@ export function unregisterTraceWasmAccel(trace) {
 
 export function wasmAccelReady() {
   return !!_wasm
+}
+
+/** Alias — parse-time LOD / gather helpers use the same WASM module. */
+export function wasmParseReady() {
+  return !!_wasm
+}
+
+function ensureParseMem(totalBytes) {
+  if (!_mem) return 0
+  const need = PARSE_UPLOAD_BASE + totalBytes
+  if (need <= _mem.buffer.byteLength) return PARSE_UPLOAD_BASE
+  const pages = Math.ceil(need / 65536)
+  _mem.grow(pages - Math.floor(_mem.buffer.byteLength / 65536))
+  _i32 = new Int32Array(_mem.buffer)
+  _f64 = new Float64Array(_mem.buffer)
+  return PARSE_UPLOAD_BASE
+}
+
+/**
+ * WASM LOD bin de-duplication on sorted segment start times.
+ * @param {Float64Array} starts
+ * @returns {Uint32Array|null} indices into starts/segs
+ */
+export function wasmLodSummaryIndices(starts, binSpan, timeMin, maxOut = 8192) {
+  if (!_wasm?.lod_summary_indices || !starts?.length) return null
+  const len = starts.length
+  const bytesIn = len * 8
+  const bytesOut = maxOut * 4
+  const base = ensureParseMem(bytesIn + bytesOut)
+  const inPtr = base
+  new Float64Array(_mem.buffer, inPtr, len).set(starts)
+  const outPtr = inPtr + bytesIn
+  const count = _wasm.lod_summary_indices(inPtr, len, timeMin, binSpan, outPtr, maxOut)
+  if (count <= 0) return new Uint32Array(0)
+  return new Uint32Array(_mem.buffer, outPtr, count).slice()
+}
+
+/**
+ * WASM gather: out[i] = allStarts[indices[i]].
+ * @param {Float64Array} allStarts
+ * @param {Uint32Array} indices
+ * @returns {Float64Array}
+ */
+export function wasmGatherStarts(allStarts, indices) {
+  if (!_wasm?.gather_starts || !indices?.length) return null
+  const len = indices.length
+  const nAll = allStarts.length
+  const bytesIdx = len * 4
+  const bytesOut = len * 8
+  const startsPtr = align8(PARSE_UPLOAD_BASE)
+  const idxPtr = align8(startsPtr + nAll * 8)
+  const outPtr = align8(idxPtr + bytesIdx)
+  const totalBytes = outPtr - PARSE_UPLOAD_BASE + bytesOut
+  ensureParseMem(totalBytes)
+  new Float64Array(_mem.buffer, startsPtr, nAll).set(allStarts)
+  new Uint32Array(_mem.buffer, idxPtr, len).set(indices)
+  _wasm.gather_starts(startsPtr, idxPtr, len, outPtr)
+  const out = new Float64Array(len)
+  out.set(new Float64Array(_mem.buffer, outPtr, len))
+  return out
 }
 
 export async function initWasmAccel() {

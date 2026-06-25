@@ -1,6 +1,6 @@
 #version 2.2.0
 #creator FreeRTOS trace logger
-#creationDate 2026-06-20T08:33:35Z
+#creationDate 2026-06-25T00:46:35Z
 #timeScale us
 213195,Core_0,0,C,Core_0,0,set_frequency,20000000
 213195,Core_1,0,C,Core_1,0,set_frequency,20000000
