@@ -532,7 +532,7 @@ _IC_SETTINGS = ("M9.405 1.05c-.413-1.4-2.397-1.4-2.81 0l-.1.34a1.464 1.464 0 0 1
                 "M8 10.93a2.929 2.929 0 1 1 0-5.86 2.929 2.929 0 0 1 0 5.858z")
 
 # App icon - multi-colour 72x72 SVG rendered in the About dialog header.
-_APP_VERSION = "1.3.1"
+_APP_VERSION = "1.3.2"
 _APP_ICON_SVG = (
     '<svg xmlns="http://www.w3.org/2000/svg" width="72" height="72" viewBox="0 0 72 72">'
     '<rect x="3" y="3" width="66" height="66" rx="14" fill="#1C3A6E"/>'
@@ -8450,8 +8450,8 @@ class _NavigatorPopup(QWidget):
     """260x130 thumbnail that shows the full trace with a viewport indicator.
 
     Painted entirely in Python and overlaid on the TimelineView viewport at
-    the bottom-right corner.  The widget is mouse-transparent so it does not
-    interfere with pan / zoom interaction.
+    the bottom-right corner.  Click outside the indicator jumps the main view;
+    drag the indicator to pan time / scroll position.
     Appearance changes are animated with a 80 ms fade-in / 350 ms fade-out.
     """
 
@@ -8461,10 +8461,13 @@ class _NavigatorPopup(QWidget):
 
     def __init__(self, parent: QWidget) -> None:
         super().__init__(parent)
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.setFixedSize(self.W, self.H)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
         self._pix: Optional[QPixmap] = None
         self.setVisible(False)
+        self._dragging: bool = False
+        self._grab_x: float = 0.0
+        self._grab_y: float = 0.0
 
         # Opacity effect + animations
         self._opacity_effect = QGraphicsOpacityEffect(self)
@@ -8524,6 +8527,39 @@ class _NavigatorPopup(QWidget):
         p = QPainter(self)
         p.drawPixmap(0, 0, self._pix)
         p.end()
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            view = self.parentWidget()
+            if view is not None and hasattr(view, '_nav_popup_handle_press'):
+                if view._nav_popup_handle_press(
+                        event.position().x(), event.position().y(), self):
+                    event.accept()
+                    return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        if self._dragging:
+            view = self.parentWidget()
+            if view is not None and hasattr(view, '_nav_popup_handle_drag'):
+                view._nav_popup_handle_drag(
+                    event.position().x(), event.position().y(),
+                    self._grab_x, self._grab_y)
+                event.accept()
+                return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if self._dragging and event.button() == Qt.MouseButton.LeftButton:
+            self._dragging = False
+            self.releaseMouse()
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+            view = self.parentWidget()
+            if view is not None and hasattr(view, '_nav_popup_handle_release'):
+                view._nav_popup_handle_release()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
 _RESIZE_EDGE_PX = 6
 _RIGHT_DOCK_MIN_W = 180  # Web parity: RIGHT_PANEL_MIN_W in web/src/App.vue
@@ -9559,7 +9595,8 @@ class TimelineView(QGraphicsView):
         self._nav_popup.reposition()
         if force_show or not self._nav_popup.isVisible():
             self._nav_popup.fade_in()
-        self._nav_hide_timer.start()
+        if not self._nav_popup._dragging:
+            self._nav_hide_timer.start()
 
     def _after_time_axis_pan(self, *, immediate: bool = False) -> None:
         """Refresh navigator/minimap after any time-axis pan (wheel, bar, overlay)."""
@@ -11556,14 +11593,39 @@ class TimelineView(QGraphicsView):
             return pix
 
         # ---- Overlay: viewport indicator (orange rectangle) ---------------
+        m = self._nav_popup_metrics()
+        vx1, vy1, vw, vh = m['vx1'], m['vy1'], m['vw'], m['vh']
+
         p = QPainter(pix)
         p.setRenderHint(QPainter.Antialiasing, False)
+        try:
+            p.setPen(QPen(QColor(255, 140, 0), 1.5))
+            p.setBrush(QBrush(QColor(255, 140, 0, 35)))
+            p.drawRect(QRectF(vx1, vy1, vw, vh))
+        finally:
+            p.end()
+        return pix
+
+    def _nav_popup_metrics(self) -> dict:
+        """Return navigator minimap geometry for painting and interaction."""
+        W = float(_NavigatorPopup.W)
+        H = float(_NavigatorPopup.H)
+        sc = self._scene
+        tr = sc._trace
+        vbar = self.verticalScrollBar() if sc._horizontal else self.horizontalScrollBar()
+        v_range = vbar.maximum() - vbar.minimum()
+        v_total = v_range + vbar.pageStep()
+        content_h = max(1.0, float(v_total) - RULER_HEIGHT)
+
+        if tr is None:
+            return {
+                'W': W, 'H': H, 'time_span': 1, 'vis_span_ns': 1,
+                'vx1': 0.0, 'vy1': 0.0, 'vw': W, 'vh': H,
+                'vbar': vbar, 'v_range': v_range, 'content_h': content_h,
+            }
 
         time_span = max(tr.time_max - tr.time_min, 1)
-        # Compute the actual visible time range directly from the view geometry.
-        # sc._vp_ns_lo/hi carry a 150% segment-loading margin and are set to a
-        # near-full-range buffer on orientation switches - both produce a
-        # misleadingly large (often full-width) indicator rectangle.
+        vis_span_ns = self._visible_time_span_ns()
         vp_r = self.viewport().rect()
         if sc._horizontal:
             lo_coord = self.mapToScene(vp_r.topLeft()).x()
@@ -11586,27 +11648,102 @@ class TimelineView(QGraphicsView):
         vx1 = (act_ns_lo - tr.time_min) / time_span * W
         vx2 = (act_ns_hi - tr.time_min) / time_span * W
 
-        # Thumbnail is proportional to actual view - simple linear indicator mapping.
-        content_h = max(1.0, float(v_total) - RULER_HEIGHT)
         if content_h > 0 and v_range > 0:
             scroll_val = max(0.0, float(vbar.value() - vbar.minimum()) - RULER_HEIGHT)
-            vy1  = scroll_val / content_h * H
+            vy1 = scroll_val / content_h * H
             vy_h = max(1.5, vbar.pageStep() / content_h * H)
         else:
             vy1, vy_h = 0.0, float(H)
 
-        vx1  = max(0.0, min(float(W), vx1))
-        vx2  = max(0.0, min(float(W), vx2))
-        vy1  = max(0.0, min(float(H), vy1))
-        vy_h = min(float(H) - vy1, vy_h)
+        vx1 = max(0.0, min(W, vx1))
+        vx2 = max(0.0, min(W, vx2))
+        vy1 = max(0.0, min(H, vy1))
+        vy_h = min(H - vy1, vy_h)
+        vw = max(1.5, vx2 - vx1)
+        vh = max(1.5, vy_h)
 
-        try:
-            p.setPen(QPen(QColor(255, 140, 0), 1.5))
-            p.setBrush(QBrush(QColor(255, 140, 0, 35)))
-            p.drawRect(QRectF(vx1, vy1, max(1.5, vx2 - vx1), max(1.5, vy_h)))
-        finally:
-            p.end()
-        return pix
+        return {
+            'W': W, 'H': H, 'time_span': time_span, 'vis_span_ns': vis_span_ns,
+            'vx1': vx1, 'vy1': vy1, 'vw': vw, 'vh': vh,
+            'vbar': vbar, 'v_range': v_range, 'content_h': content_h,
+        }
+
+    def _nav_popup_apply_from_indicator_pos(self, vx1: float, vy1: float) -> None:
+        """Move the main view so the nav indicator sits at *vx1*, *vy1*."""
+        sc = self._scene
+        tr = sc._trace
+        if tr is None:
+            return
+        m = self._nav_popup_metrics()
+        W, H = m['W'], m['H']
+        vw, vh = m['vw'], m['vh']
+        vx1 = max(0.0, min(W - vw, vx1))
+        vy1 = max(0.0, min(H - vh, vy1))
+
+        scrollable_w = max(W - vw, 1.0)
+        ratio_x = vx1 / scrollable_w
+        target_lo_ns = tr.time_min + int(ratio_x * max(0, m['time_span'] - m['vis_span_ns']))
+        target_center_ns = target_lo_ns + m['vis_span_ns'] // 2
+        self._navigate_time_to_ns(target_center_ns)
+
+        vbar = m['vbar']
+        if m['content_h'] > 0 and m['v_range'] > 0:
+            scrollable_h = max(H - vh, 1.0)
+            ratio_y = vy1 / scrollable_h
+            scroll_val = ratio_y * m['content_h'] + RULER_HEIGHT + vbar.minimum()
+            scroll_val = max(float(vbar.minimum()), min(float(vbar.maximum()), scroll_val))
+            vbar.setValue(int(scroll_val))
+
+        self._refresh_nav_pan_window(force_show=True)
+
+    def _nav_popup_jump_to(self, cx: float, cy: float) -> None:
+        """Jump the main timeline to the time / scroll under a nav click."""
+        sc = self._scene
+        tr = sc._trace
+        if tr is None:
+            return
+        m = self._nav_popup_metrics()
+        W, H = m['W'], m['H']
+        ratio_x = max(0.0, min(1.0, cx / max(W, 1.0)))
+        ratio_y = max(0.0, min(1.0, cy / max(H, 1.0)))
+
+        target_lo_ns = tr.time_min + int(ratio_x * max(0, m['time_span'] - m['vis_span_ns']))
+        target_center_ns = target_lo_ns + m['vis_span_ns'] // 2
+        self._navigate_time_to_ns(target_center_ns)
+
+        vbar = m['vbar']
+        if m['content_h'] > 0 and m['v_range'] > 0:
+            scroll_val = ratio_y * m['content_h'] + RULER_HEIGHT + vbar.minimum()
+            scroll_val = max(float(vbar.minimum()), min(float(vbar.maximum()), scroll_val))
+            vbar.setValue(int(scroll_val))
+
+        self._refresh_nav_pan_window(force_show=True)
+
+    def _nav_popup_handle_press(self, cx: float, cy: float,
+                                popup: '_NavigatorPopup') -> bool:
+        """Begin nav drag or jump on click."""
+        m = self._nav_popup_metrics()
+        rect = QRectF(m['vx1'], m['vy1'], m['vw'], m['vh'])
+        if rect.contains(cx, cy):
+            popup._dragging = True
+            popup._grab_x = cx - m['vx1']
+            popup._grab_y = cy - m['vy1']
+            popup.setCursor(Qt.CursorShape.ClosedHandCursor)
+            popup.grabMouse()
+            self._nav_hide_timer.stop()
+            return True
+        self._nav_popup_jump_to(cx, cy)
+        return True
+
+    def _nav_popup_handle_drag(self, cx: float, cy: float,
+                               grab_x: float, grab_y: float) -> None:
+        """Drag the nav viewport indicator."""
+        self._nav_popup_apply_from_indicator_pos(cx - grab_x, cy - grab_y)
+        self._nav_hide_timer.stop()
+
+    def _nav_popup_handle_release(self) -> None:
+        """End nav indicator drag."""
+        self._nav_hide_timer.start()
 
     def _show_nav(self) -> None:
         """Show the navigator popup if the viewport is scrolled while content overflows."""

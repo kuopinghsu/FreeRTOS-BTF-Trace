@@ -226,8 +226,10 @@
           <canvas
             ref="overviewCanvasEl"
             class="overview-canvas"
+            :class="{ dragging: overviewDragging }"
             width="260"
             height="130"
+            @mousedown.prevent.stop="onOverviewMouseDown"
           />
         </div>
       </Transition>
@@ -451,8 +453,10 @@ const hasPlacedCursors = computed(() => props.cursors.some(c => c != null))
 const SCROLLBAR_SIZE   = 10          // px – scrollbar track thickness
 const overviewCanvasEl = ref(null)
 const overviewVisible  = ref(false)
+const overviewDragging = ref(false)
 let   _overviewHideTimer = null
 let   _sbDrag            = null      // active scrollbar drag state: { type, … }
+let   _ovDrag            = null      // active overview indicator drag: { grabX, grabY, ind }
 // OffscreenCanvas cache for the overview background (rows + STI + border).
 // Rebuilt only when trace/mode/STI state changes; scroll only repaints the overlay rect.
 let _ovBgCanvas      = null   // OffscreenCanvas | null
@@ -1914,10 +1918,134 @@ function showOverviewPopup() {
   overviewVisible.value = true
   clearTimeout(_overviewHideTimer)
   // Only schedule auto-hide when not actively dragging
-  if (!_sbDrag) {
+  if (!_sbDrag && !_ovDrag) {
     _overviewHideTimer = setTimeout(() => { overviewVisible.value = false }, 1800)
   }
   scheduleOverviewPaint()
+}
+
+function _overviewIndicatorRect() {
+  const canvas = overviewCanvasEl.value
+  if (!canvas || !props.trace || !traceBounds.value) return null
+  const W = canvas.width
+  const { lo } = traceBounds.value
+  const span = traceBounds.value.hi - lo
+  if (span <= 0) return null
+  const pxPerNs = W / span
+  const mainAreaH = _ovBgMainAreaH > 0 ? _ovBgMainAreaH : canvas.height
+
+  if (orientation.value === 'h') {
+    const vx = Math.max(0, (viewport.timeStart - lo) * pxPerNs)
+    const vw = Math.min(W - vx, (viewport.timeEnd - viewport.timeStart) * pxPerNs)
+    const totH = totalRowHeight.value
+    const visH = viewport.canvasH - RULER_H
+    const { pos: vy, size: vh } = overviewStripRect(totH, visH, viewport.scrollY, mainAreaH)
+    return { x: vx, y: vy, w: Math.max(2, vw), h: vh, W, mainAreaH, lo, span }
+  }
+  const vx = Math.max(0, (viewport.timeStart - lo) * pxPerNs)
+  const vw = Math.min(W - vx, (viewport.timeEnd - viewport.timeStart) * pxPerNs)
+  const totW = totalColumnWidth.value
+  const visW = viewport.canvasW
+  const { pos: vy, size: vh } = overviewStripRect(totW, visW, viewport.scrollX || 0, mainAreaH)
+  return { x: vx, y: vy, w: Math.max(2, vw), h: vh, W, mainAreaH, lo, span }
+}
+
+function _overviewApplyIndicatorPos(vx, vy, ind) {
+  const { W, mainAreaH, lo, span } = ind
+  const scrollableW = Math.max(W - ind.w, 1)
+  const ratioX = vx / scrollableW
+  const visSpan = viewport.timeEnd - viewport.timeStart
+  const newStart = lo + ratioX * (span - visSpan)
+  viewport.timeStart = newStart
+  viewport.timeEnd = newStart + visSpan
+
+  const scrollableH = Math.max(mainAreaH - ind.h, 1)
+  const ratioY = vy / scrollableH
+  if (orientation.value === 'h') {
+    const visH = viewport.canvasH - RULER_H
+    viewport.scrollY = ratioY * Math.max(0, totalRowHeight.value - visH)
+  } else {
+    const totW = totalColumnWidth.value
+    viewport.scrollX = ratioY * Math.max(0, totW - viewport.canvasW)
+  }
+  markInteracting(true)
+  scheduleRender()
+}
+
+function _overviewJumpTo(cx, cy) {
+  const canvas = overviewCanvasEl.value
+  if (!canvas || !traceBounds.value) return
+  const W = canvas.width
+  const { lo, span } = traceBounds.value
+  const ratioX = Math.max(0, Math.min(1, cx / W))
+  const mainAreaH = _ovBgMainAreaH > 0 ? _ovBgMainAreaH : canvas.height
+  const ratioY = Math.max(0, Math.min(1, cy / mainAreaH))
+
+  if (orientation.value === 'h') {
+    const visSpan = viewport.timeEnd - viewport.timeStart
+    const newStart = lo + ratioX * (span - visSpan)
+    viewport.timeStart = newStart
+    viewport.timeEnd = newStart + visSpan
+    const visH = viewport.canvasH - RULER_H
+    viewport.scrollY = ratioY * Math.max(0, totalRowHeight.value - visH)
+    markInteracting(true)
+    scheduleRender()
+  } else {
+    const visSpan = viewport.timeEnd - viewport.timeStart
+    const newStart = lo + ratioX * (span - visSpan)
+    viewport.timeStart = newStart
+    viewport.timeEnd = newStart + visSpan
+    const totW = totalColumnWidth.value
+    viewport.scrollX = ratioY * Math.max(0, totW - viewport.canvasW)
+    markInteracting(true)
+    scheduleRender()
+  }
+}
+
+/** Click outside the indicator jumps; drag the indicator to pan. */
+function onOverviewMouseDown(e) {
+  if (!props.trace || !traceBounds.value) return
+  const canvas = overviewCanvasEl.value
+  if (!canvas) return
+  const rect = canvas.getBoundingClientRect()
+  const cx = e.clientX - rect.left
+  const cy = e.clientY - rect.top
+  const ind = _overviewIndicatorRect()
+  if (ind
+      && cx >= ind.x && cx <= ind.x + ind.w
+      && cy >= ind.y && cy <= ind.y + ind.h) {
+    _ovDrag = { grabX: cx - ind.x, grabY: cy - ind.y, ind }
+    overviewDragging.value = true
+    document.addEventListener('mousemove', _ovMouseMove)
+    document.addEventListener('mouseup', _ovMouseUp)
+    clearTimeout(_overviewHideTimer)
+    showOverviewPopup()
+    return
+  }
+  _overviewJumpTo(cx, cy)
+  showOverviewPopup()
+}
+
+function _ovMouseMove(e) {
+  if (!_ovDrag) return
+  const canvas = overviewCanvasEl.value
+  if (!canvas) return
+  const rect = canvas.getBoundingClientRect()
+  const cx = e.clientX - rect.left
+  const cy = e.clientY - rect.top
+  const { ind, grabX, grabY } = _ovDrag
+  const vx = Math.max(0, Math.min(ind.W - ind.w, cx - grabX))
+  const vy = Math.max(0, Math.min(ind.mainAreaH - ind.h, cy - grabY))
+  _overviewApplyIndicatorPos(vx, vy, ind)
+  scheduleOverviewPaint()
+}
+
+function _ovMouseUp() {
+  _ovDrag = null
+  overviewDragging.value = false
+  document.removeEventListener('mousemove', _ovMouseMove)
+  document.removeEventListener('mouseup', _ovMouseUp)
+  _overviewHideTimer = setTimeout(() => { overviewVisible.value = false }, 1500)
 }
 
 /** Map main-view scroll position to the overview thumbnail strip area. */
@@ -2421,6 +2549,8 @@ onBeforeUnmount(() => {
   clearTimeout(_overviewHideTimer)
   document.removeEventListener('mousemove', _sbMouseMove)
   document.removeEventListener('mouseup', _sbMouseUp)
+  document.removeEventListener('mousemove', _ovMouseMove)
+  document.removeEventListener('mouseup', _ovMouseUp)
 })
 </script>
 
@@ -2638,6 +2768,12 @@ canvas {
 .overview-canvas {
   display: block;
   border-radius: 3px;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.overview-canvas.dragging {
+  cursor: grabbing;
 }
 
 .overview-fade-enter-active {

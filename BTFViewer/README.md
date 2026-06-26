@@ -1,6 +1,6 @@
 # BTF Trace Viewer
 
-Current version: **1.3.1** (Desktop Python app + Web app)
+Current version: **1.3.2** (Desktop Python app + Web app)
 
 A PySide6-based interactive visualiser for FreeRTOS context-switch traces in **Best Trace Format** (`.btf`).
 
