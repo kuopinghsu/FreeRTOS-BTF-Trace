@@ -707,8 +707,6 @@ The example plots below were generated from **`tracedata/example-4cores.btf`** (
 
 ```bash
 node BTFViewer/web/scripts/export-stats-plots.mjs tracedata/example-4cores.btf images/stats
-node BTFViewer/web/scripts/test-priority-analysis.mjs tracedata/example-4cores.btf
-node BTFViewer/web/scripts/test-sync-object-analysis.mjs tracedata/example-4cores.btf
 ```
 
 Timeline screenshots (e.g. `images/stats/tasks-priority-il150.svg`) are exported manually from the viewer after zooming to the region of interest. Migration heatmap screenshots (`images/migration-heatmap-pairs.svg`, `images/migration-heatmap-tasks.svg`) are exported from the heatmap dialog (**Export SVG** or **Export PNG**) after opening **Heatmap** on a multi-core trace — see [Migration heatmap](#migration-heatmap).

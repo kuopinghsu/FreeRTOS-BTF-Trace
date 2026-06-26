@@ -48,6 +48,13 @@
       @sti-expand-toggle="onStiExpandToggle"
     />
 
+    <div
+      v-if="orientation === 'v'"
+      class="header-resizer"
+      title="Drag to resize label row"
+      @mousedown.prevent.stop="onHeaderResizeStart"
+    />
+
     <!-- Timeline canvas -->
     <div
       ref="canvasWrapEl"
@@ -1621,11 +1628,15 @@ function expandCoresForMergeKeys(mergeKeys) {
 
 let _labelResizeCleanup = null
 
+function _clampLabelWidth(w) {
+  return Math.max(60, Math.min(600, Math.round(w)))
+}
+
 function onLabelResizeStart(e) {
   const startX = e.clientX
   const startW = props.labelWidth
   const onMove = (ev) => {
-    const newW = Math.max(60, Math.min(600, startW + (ev.clientX - startX)))
+    const newW = _clampLabelWidth(startW + (ev.clientX - startX))
     setTimelineLayout({ labelW: newW })
     emit('labelWidthChange', newW, false)
   }
@@ -1638,6 +1649,27 @@ function onLabelResizeStart(e) {
   }
   _labelResizeCleanup = onUp
   document.body.classList.add('col-resizing')
+  document.addEventListener('mousemove', onMove)
+  document.addEventListener('mouseup', onUp)
+}
+
+function onHeaderResizeStart(e) {
+  const startY = e.clientY
+  const startW = props.labelWidth
+  const onMove = (ev) => {
+    const newW = _clampLabelWidth(startW + (ev.clientY - startY))
+    setTimelineLayout({ labelW: newW })
+    emit('labelWidthChange', newW, false)
+  }
+  const onUp = () => {
+    document.removeEventListener('mousemove', onMove)
+    document.removeEventListener('mouseup', onUp)
+    document.body.classList.remove('row-resizing')
+    _labelResizeCleanup = null
+    emit('labelWidthChange', getTimelineLayout().labelW, true)
+  }
+  _labelResizeCleanup = onUp
+  document.body.classList.add('row-resizing')
   document.addEventListener('mousemove', onMove)
   document.addEventListener('mouseup', onUp)
 }
@@ -2376,6 +2408,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   _labelResizeCleanup?.()
+  document.body.classList.remove('col-resizing', 'row-resizing')
   pixiTimelineHost.destroy()
   if (_resizeObs) _resizeObs.disconnect()
   if (_handler) _handler.destroy()
@@ -2436,6 +2469,33 @@ onBeforeUnmount(() => {
   transition: opacity 0.1s, background 0.1s;
 }
 .label-resizer:hover::after {
+  opacity: 1;
+  background: var(--accent, #4a9eff);
+}
+
+.header-resizer {
+  flex-shrink: 0;
+  width: 100%;
+  height: 10px;
+  margin: -4px 0;
+  cursor: row-resize;
+  position: relative;
+  z-index: 5;
+  touch-action: none;
+}
+.header-resizer::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 2px;
+  transform: translateY(-50%);
+  background: var(--border);
+  opacity: 0.6;
+  transition: opacity 0.1s, background 0.1s;
+}
+.header-resizer:hover::after {
   opacity: 1;
   background: var(--accent, #4a9eff);
 }

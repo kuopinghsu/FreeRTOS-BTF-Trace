@@ -4,6 +4,7 @@
 import { SegStore, createSegList, finalizeTraceStorage } from './segStore.js'
 import { buildCpuLoadBins } from './cpuLoadBins.js'
 import { computeTaskCpuNs, segIndicesMapFromTrace } from './statsCompute.js'
+import { cullNestedIntervalInstances } from '../utils/intervalAnalysis.js'
 
 function packPlainMap(map) {
   return [...map.entries()]
@@ -119,6 +120,7 @@ export function packTrace(trace, progress) {
       intervalInstances: trace.intervalInstances,
       intervalIds: trace.intervalIds,
       intervalInstancesById: packPlainMap(trace.intervalInstancesById),
+      intervalInstancesCulledById: packPlainMap(trace.intervalInstancesCulledById),
       intervalMarkerById: packPlainMap(trace.intervalMarkerById),
       intervalUnmatchedStarts: trace.intervalUnmatchedStarts ?? 0,
       taskBasePriority: packPlainMap(trace.taskBasePriority),
@@ -220,6 +222,7 @@ export function unpackTrace(packed) {
     intervalInstances: p.intervalInstances || [],
     intervalIds: p.intervalIds || [],
     intervalInstancesById: unpackPlainMap(p.intervalInstancesById || []),
+    intervalInstancesCulledById: unpackPlainMap(p.intervalInstancesCulledById || []),
     intervalMarkerById: unpackPlainMap(p.intervalMarkerById || []),
     intervalUnmatchedStarts: p.intervalUnmatchedStarts ?? 0,
     taskBasePriority: unpackPlainMap(p.taskBasePriority || []),
@@ -247,6 +250,12 @@ export function unpackTrace(packed) {
 /** Main-thread parse path (no worker transfer). */
 export function finalizeAndEnrich(trace) {
   finalizeTraceStorage(trace)
+  if (!trace.intervalInstancesCulledById?.size && trace.intervalInstancesById?.size) {
+    trace.intervalInstancesCulledById = new Map()
+    for (const [id, list] of trace.intervalInstancesById) {
+      trace.intervalInstancesCulledById.set(id, cullNestedIntervalInstances(list))
+    }
+  }
   trace.cpuLoadBins = buildCpuLoadBins(trace.segStore, trace)
   const segIndicesByMk = segIndicesMapFromTrace(trace)
   trace.taskCpuNs = computeTaskCpuNs(

@@ -40,7 +40,11 @@
             class="task-swatch interval-swatch"
             :style="{ background: col.color }"
           />
-          <span class="col-label">{{ displayLabel(col) }}</span>
+          <span
+            class="col-label"
+            :style="labelStyle(col)"
+            :title="col.label"
+          >{{ col.label }}</span>
         </div>
       </div>
     </div>
@@ -49,14 +53,17 @@
 
 <script setup>
 import { computed } from 'vue'
-import { colBandWidth, visibleColumnIndexRange, RULER_W, HEADER_H } from '../renderer/TimelineRenderer.js'
+import { colBandWidth, visibleColumnIndexRange, RULER_W } from '../renderer/TimelineRenderer.js'
 import { taskMergeKey } from '../utils/colors.js'
+
+const LABEL_TOP = 16
+const LABEL_BOTTOM = 8
 
 const props = defineProps({
   columnLayout: { type: Object, default: null },
   scrollX:      { type: Number, default: 0 },
   canvasW:      { type: Number, default: 800 },
-  headerH:      { type: Number, default: HEADER_H },
+  headerH:      { type: Number, default: 160 },
   highlightKey: { type: [String, null], default: null },
   expanded:     { type: Object, default: () => new Set() },
 })
@@ -65,6 +72,8 @@ const emit = defineEmits(['expandToggle', 'stiExpandToggle', 'highlightChange', 
 
 const totalWidth = computed(() => props.columnLayout?.totalWidth ?? 0)
 const bodyWidth = computed(() => Math.max(0, totalWidth.value - RULER_W))
+
+const labelTrackH = computed(() => Math.max(20, props.headerH - LABEL_TOP - LABEL_BOTTOM))
 
 const visibleCols = computed(() => {
   const cols = props.columnLayout?.cols
@@ -92,6 +101,16 @@ function colHeaderStyle(col) {
   }
 }
 
+function labelStyle(col) {
+  const cw = colBandWidth(col)
+  return {
+    left: `${cw / 2}px`,
+    top: `${LABEL_TOP}px`,
+    maxHeight: `${labelTrackH.value}px`,
+    maxWidth: `${Math.max(12, cw - 4)}px`,
+  }
+}
+
 function colClass(col) {
   const key = taskRowKey(col)
   return {
@@ -100,13 +119,6 @@ function colClass(col) {
     'col-sti': col.type === 'sti',
     'col-interval': col.type === 'interval',
   }
-}
-
-function displayLabel(col) {
-  let raw = col.label
-  const maxChars = Math.max(1, Math.floor((props.headerH - 20) / 7))
-  if (raw.length > maxChars) raw = raw.substring(0, maxChars - 1) + '…'
-  return raw
 }
 
 function taskRowKey(col) {
@@ -171,7 +183,7 @@ function onColHover(col, enter) {
   box-sizing: border-box;
   cursor: pointer;
   border-left: 1px solid var(--border);
-  overflow: visible;
+  overflow: hidden;
 }
 
 .col-header:hover {
@@ -180,6 +192,11 @@ function onColHover(col, enter) {
 
 .col-header.highlighted {
   background: rgba(255, 255, 180, 0.12);
+}
+
+.col-header.highlighted .col-label {
+  color: #ffd700;
+  font-weight: bold;
 }
 
 .col-sti {
@@ -192,12 +209,13 @@ function onColHover(col, enter) {
 
 .task-swatch {
   position: absolute;
-  top: 6px;
+  top: 4px;
   left: 50%;
   transform: translateX(-50%);
   width: 8px;
   height: 8px;
   border-radius: 1px;
+  z-index: 1;
 }
 
 .interval-swatch {
@@ -206,25 +224,26 @@ function onColHover(col, enter) {
 
 .expand-arrow {
   position: absolute;
-  top: 4px;
-  left: 3px;
+  top: 3px;
+  left: 2px;
   font-size: 8px;
   line-height: 1;
-  opacity: 0.75;
+  opacity: 0.85;
+  z-index: 1;
 }
 
 .col-label {
   position: absolute;
-  left: 50%;
-  bottom: 10px;
-  transform: translateX(-50%) rotate(-90deg);
-  transform-origin: center center;
+  transform: translateX(-50%);
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
   white-space: nowrap;
-  font: 11px monospace;
-  color: var(--fg);
-  max-width: 140px;
   overflow: hidden;
   text-overflow: ellipsis;
+  font: 11px monospace;
+  line-height: 1.15;
+  color: var(--fg);
+  letter-spacing: 0.02em;
 }
 
 .col-sti .col-label {

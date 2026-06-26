@@ -31,22 +31,24 @@ export function intervalStripeColors(base, darkMode) {
   }
 }
 
-/** Drop instances fully covered by a longer one (time-domain containment). */
+/** Drop instances fully covered by a longer one (time-domain containment). O(n log n). */
 export function cullNestedIntervalInstances(instances) {
   if (!instances?.length || instances.length <= 1) return instances || []
-  const byDuration = [...instances].sort((a, b) => {
-    const da = a.stopNs - a.startNs
-    const db = b.stopNs - b.startNs
-    if (db !== da) return db - da
+  const ordered = [...instances].sort((a, b) => {
     if (a.startNs !== b.startNs) return a.startNs - b.startNs
     return b.stopNs - a.stopNs
   })
   const kept = []
-  for (const inst of byDuration) {
-    if (kept.some(k => k.startNs <= inst.startNs && k.stopNs >= inst.stopNs)) continue
+  for (const inst of ordered) {
+    while (kept.length
+           && kept[kept.length - 1].startNs >= inst.startNs
+           && kept[kept.length - 1].stopNs <= inst.stopNs) {
+      kept.pop()
+    }
+    const last = kept[kept.length - 1]
+    if (last && inst.startNs >= last.startNs && inst.stopNs <= last.stopNs) continue
     kept.push(inst)
   }
-  kept.sort((a, b) => a.startNs - b.startNs)
   return kept
 }
 
@@ -102,7 +104,7 @@ function intervalDisplayId(ev) {
   return parsed.taskId != null ? parsed.intervalId : parsed.pairingKey
 }
 
-/** @returns {{ intervalInstances, intervalIds, intervalInstancesById, unmatchedStarts }} */
+/** @returns {{ intervalInstances, intervalIds, intervalInstancesById, intervalInstancesCulledById, unmatchedStarts }} */
 export function buildIntervalData(stiEvents) {
   const open = new Map()
   const intervalInstances = []
@@ -148,6 +150,11 @@ export function buildIntervalData(stiEvents) {
     list.sort((a, b) => a.startNs - b.startNs || a.stopNs - b.stopNs)
   }
 
+  const intervalInstancesCulledById = new Map()
+  for (const [id, list] of intervalInstancesById) {
+    intervalInstancesCulledById.set(id, cullNestedIntervalInstances(list))
+  }
+
   const intervalIds = [...intervalInstancesById.keys()].sort((a, b) => {
     const na = parseInt(a, 10)
     const nb = parseInt(b, 10)
@@ -155,7 +162,7 @@ export function buildIntervalData(stiEvents) {
     return a.localeCompare(b)
   })
 
-  return { intervalInstances, intervalIds, intervalInstancesById, unmatchedStarts }
+  return { intervalInstances, intervalIds, intervalInstancesById, intervalInstancesCulledById, unmatchedStarts }
 }
 
 /** Per-id sorted marker events for O(log n) viewport clipping. */
@@ -269,11 +276,26 @@ export function intervalPlotPoints(trace, id, lo, hi) {
     }))
 }
 
+/** Instances for timeline drawing (pre-culled list when available). */
+export function intervalInstancesForDraw(trace, intervalId) {
+  const id = String(intervalId)
+  const culledMap = trace?.intervalInstancesCulledById
+  if (culledMap?.has(id)) {
+    return { instances: culledMap.get(id) || [], preCulled: true }
+  }
+  return { instances: trace?.intervalInstancesById?.get(id) || [], preCulled: false }
+}
+
 /** Visible interval instances for timeline drawing (time overlap with viewport). */
-export function visibleIntervalInstances(instances, timeStart, timeEnd) {
+export function visibleIntervalInstances(instances, timeStart, timeEnd, preCulled = false) {
   if (!instances?.length) return []
-  const visible = instances.filter(inst => inst.stopNs > timeStart && inst.startNs < timeEnd)
-  return cullNestedIntervalInstances(visible)
+  const visible = []
+  for (const inst of instances) {
+    if (inst.startNs >= timeEnd) break
+    if (inst.stopNs <= timeStart) continue
+    visible.push(inst)
+  }
+  return preCulled ? visible : cullNestedIntervalInstances(visible)
 }
 
 /** Raw interval_start / interval_stop marker events for one id in the viewport. */

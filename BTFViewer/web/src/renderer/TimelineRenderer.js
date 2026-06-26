@@ -29,6 +29,7 @@ import { CURSOR_COLORS } from '../utils/cursorColors.js'
 import {
   intervalColor,
   isIntervalMarkerChannel,
+  intervalInstancesForDraw,
   visibleIntervalInstances,
   visibleIntervalMarkerEvents,
   intervalStripeColors,
@@ -1170,8 +1171,8 @@ function drawIntervalRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerN
   const rowH = L().rowH
   ctx.fillStyle = darkMode ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.02)'
   ctx.fillRect(0, canvasRowY, canvasW, rowH)
-  const instances = trace.intervalInstancesById?.get(row.key) || []
-  const visible = visibleIntervalInstances(instances, timeStart, timeEnd)
+  const { instances, preCulled } = intervalInstancesForDraw(trace, row.key)
+  const visible = visibleIntervalInstances(instances, timeStart, timeEnd, preCulled)
   const base = row.color || intervalColor(row.key)
   const stroke = darkMode ? lighterColor(base, 1.55) : lighterColor(base, 0.72)
 
@@ -1252,8 +1253,8 @@ function drawIntervalColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, canvas
   ctx.fillStyle = darkMode ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.02)'
   ctx.fillRect(colX, headerH, colW, bodyH)
 
-  const instances = trace.intervalInstancesById?.get(col.key) || []
-  const visible = visibleIntervalInstances(instances, timeStart, timeEnd)
+  const { instances, preCulled } = intervalInstancesForDraw(trace, col.key)
+  const visible = visibleIntervalInstances(instances, timeStart, timeEnd, preCulled)
   const base = col.color || intervalColor(col.key)
   const stroke = darkMode ? lighterColor(base, 1.55) : lighterColor(base, 0.72)
 

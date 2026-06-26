@@ -18,7 +18,11 @@ import { makeLodSummary, segmentStartsF64, LOD_SUMMARY_BINS, LOD_SUMMARY_BINS_UL
 import { parseTaskName, taskMergeKey, taskSortKey, resetStiColors } from '../utils/colors.js'
 import { buildMigrationIndex } from '../utils/migrationAnalysis.js'
 import { analyzeTickHealth } from '../utils/tickHealth.js'
-import { buildIntervalData, isIntervalMarkerChannel, buildIntervalMarkerIndex } from '../utils/intervalAnalysis.js'
+import {
+  buildIntervalData,
+  buildIntervalMarkerIndex,
+  isIntervalMarkerChannel,
+} from '../utils/intervalAnalysis.js'
 import { buildPriorityData, parseCreatePriority } from '../utils/priorityAnalysis.js'
 import { buildSyncObjectData } from '../utils/syncObjectAnalysis.js'
 
@@ -375,6 +379,7 @@ export async function parseBtf(text, progressCallback) {
     intervalInstances,
     intervalIds,
     intervalInstancesById,
+    intervalInstancesCulledById,
     unmatchedStarts: intervalUnmatchedStarts,
   } = buildIntervalData(stiEvents)
   const intervalMarkerById = buildIntervalMarkerIndex(stiEvents)
@@ -588,6 +593,7 @@ export async function parseBtf(text, progressCallback) {
     intervalInstances,
     intervalIds,
     intervalInstancesById,
+    intervalInstancesCulledById,
     intervalUnmatchedStarts,
     intervalMarkerById,
 

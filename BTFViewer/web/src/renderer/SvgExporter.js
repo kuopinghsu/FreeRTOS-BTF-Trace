@@ -20,6 +20,7 @@ import {
 import {
   visibleIntervalInstances,
   visibleIntervalMarkerEvents,
+  intervalInstancesForDraw,
   intervalColor,
   intervalStripeColors,
 } from '../utils/intervalAnalysis.js'
@@ -35,8 +36,8 @@ function rowBandHeightSvg(row) {
 
 function appendIntervalRowBars(els, trace, row, timeStart, timeEnd, pxPerNs, canvasW, darkMode, ox, highlightInterval = null) {
   const rowH = L().rowH
-  const instances = trace.intervalInstancesById?.get(row.key) || []
-  const visible = visibleIntervalInstances(instances, timeStart, timeEnd)
+  const { instances, preCulled } = intervalInstancesForDraw(trace, row.key)
+  const visible = visibleIntervalInstances(instances, timeStart, timeEnd, preCulled)
   const base = row.color || intervalColor(row.key)
   const stroke = darkMode ? lighterColor(base, 1.55) : lighterColor(base, 0.72)
   const barY = row.y + 2

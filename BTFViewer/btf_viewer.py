@@ -891,25 +891,43 @@ def _interval_instances_cull_nested(instances: list) -> list:
     """Drop instances fully covered by a longer one (time-domain containment).
 
     Keep this in time space (not pixel space) so zoom changes don't alter which
-    parent interval survives culling.
+    parent interval survives culling.  O(n log n) via start-order sweep.
     """
     if len(instances) <= 1:
         return instances
-    by_duration = sorted(
-        instances,
-        key=lambda inst: ((inst.stop_ns - inst.start_ns), -inst.start_ns, inst.stop_ns),
-        reverse=True,
-    )
+    ordered = sorted(instances, key=lambda inst: (inst.start_ns, -inst.stop_ns))
     kept: list = []
-    for inst in by_duration:
-        if any(
-            p.start_ns <= inst.start_ns and p.stop_ns >= inst.stop_ns
-            for p in kept
-        ):
+    for inst in ordered:
+        while (kept
+               and kept[-1].start_ns >= inst.start_ns
+               and kept[-1].stop_ns <= inst.stop_ns):
+            kept.pop()
+        if (kept
+                and inst.start_ns >= kept[-1].start_ns
+                and inst.stop_ns <= kept[-1].stop_ns):
             continue
         kept.append(inst)
-    kept.sort(key=lambda inst: inst.start_ns)
     return kept
+
+def _interval_instances_for_draw(trace: "BtfTrace",
+                               interval_id: str) -> Tuple[list, bool]:
+    """Return (instances, nested_already_culled) for timeline interval rows."""
+    culled = trace.interval_instances_culled_by_id
+    if culled and interval_id in culled:
+        return culled[interval_id], True
+    return trace.interval_instances_by_id.get(interval_id, []), False
+
+def _core_util_pct_for(trace: "BtfTrace", core: str) -> float:
+    """Full-trace core utilisation % (IDLE/TICK excluded), with parse-time cache."""
+    if trace.core_util_pct and core in trace.core_util_pct:
+        return trace.core_util_pct[core]
+    segs = trace.core_segs.get(core, [])
+    total_ns = max(trace.time_max - trace.time_min, 1)
+    active_ns = sum(
+        s.end - s.start for s in segs
+        if (_tn := _parse_task_name(s.task)[2]) != "TICK"
+        and not _is_idle_task_name(_tn))
+    return 100.0 * active_ns / total_ns
 
 def _build_interval_marker_index(
     sti_events: List[StiEvent],
@@ -3428,6 +3446,11 @@ def _parse_btf(filepath: str,
             and not _is_idle_task_name(_tn))
         _core_util_pct[_c] = 100.0 * _active_ns / _total_ns
 
+    if progress_callback:
+        progress_callback(97, "Culling interval instances…")
+    if cancel_check and cancel_check():
+        raise _ParseCancelledError()
+
     _interval_culled_by_id: Dict[str, list] = {
         _iid: _interval_instances_cull_nested(_insts)
         for _iid, _insts in _interval_by_id.items()
@@ -4136,7 +4159,7 @@ class TimelineScene(QGraphicsScene):
         self._show_sti    = True
         self._show_grid   = True
         self._view_mode   = "task"       # "task" or "core"
-        self._core_expanded: Dict[str, bool] = {}   # True = expanded (default)
+        self._core_expanded: Dict[str, bool] = {}   # True = task sub-rows visible
         self._sti_expanded: set = set()             # channels with expanded waveform
         self._sti_log_scale: bool = False           # log2 scale for STI waveform
         self._sti_line_style: str = STI_LINE_STYLE  # waveform draw style: "step" or "linear"
@@ -4185,6 +4208,11 @@ class TimelineScene(QGraphicsScene):
         # List of (item, orig_x_offset); repositioned on every scroll so
         # the label column stays pinned to the left edge of the viewport.
         self._frozen_items: List[tuple] = []
+        # Timeline row backgrounds (not frozen) clipped to the viewport splitter on pan.
+        self._row_stripe_item: Optional["_RowStripesItem"] = None
+        self._timeline_bg_rects: List = []
+        self._timeline_sep_lines: List = []
+        self._ruler_grid_item: Optional["_RulerItem"] = None
         # -- Frozen top-row (ruler + TICK band) items --------------------
         # List of (item, orig_y_offset); repositioned on vertical scroll so
         # the time-scale ruler stays pinned to the top edge of the viewport.
@@ -4282,6 +4310,10 @@ class TimelineScene(QGraphicsScene):
     def suspend_rebuild(self) -> _SuspendRebuild:
         return _SuspendRebuild(self)
 
+    def _core_is_expanded(self, core: str) -> bool:
+        """Whether a core's per-task sub-rows are shown (default collapsed)."""
+        return self._core_expanded.get(core, False)
+
     def set_trace(self, trace: BtfTrace, viewport_width: int = 1200) -> None:
         self._trace = trace
         self._scene_origin_ns = trace.time_min
@@ -4330,7 +4362,7 @@ class TimelineScene(QGraphicsScene):
 
     def toggle_core(self, core_name: str) -> None:
         """Expand or collapse a core's task sub-rows in the core view."""
-        self._core_expanded[core_name] = not self._core_expanded.get(core_name, True)
+        self._core_expanded[core_name] = not self._core_is_expanded(core_name)
         self.rebuild()
 
     def set_all_cores_expanded(self, expanded: bool) -> None:
@@ -4746,7 +4778,7 @@ class TimelineScene(QGraphicsScene):
             row_stride = self._row_height + self._row_gap
             row_idx = 0
             for core in core_names:
-                expanded = self._core_expanded.get(core, True)
+                expanded = self._core_is_expanded(core)
                 tasks = core_tasks.get(core, [])
                 core_row = row_idx
                 row_idx += 1  # core summary row
@@ -4764,7 +4796,7 @@ class TimelineScene(QGraphicsScene):
             col_w = max(self._row_height + self._row_gap, 26)
             col_idx = 0
             for core in core_names:
-                expanded = self._core_expanded.get(core, True)
+                expanded = self._core_is_expanded(core)
                 tasks = core_tasks.get(core, [])
                 core_col = col_idx
                 col_idx += 1  # core summary column
@@ -4824,7 +4856,7 @@ class TimelineScene(QGraphicsScene):
             row_idx = 0
             fallback: Optional[Tuple[float, float]] = None
             for core in core_names:
-                expanded = self._core_expanded.get(core, True)
+                expanded = self._core_is_expanded(core)
                 tasks = core_tasks.get(core, [])
                 core_row = row_idx
                 row_idx += 1
@@ -4854,7 +4886,7 @@ class TimelineScene(QGraphicsScene):
         col_idx = 0
         fallback = None
         for core in core_names:
-            expanded = self._core_expanded.get(core, True)
+            expanded = self._core_is_expanded(core)
             tasks = core_tasks.get(core, [])
             core_col = col_idx
             col_idx += 1
@@ -4905,7 +4937,7 @@ class TimelineScene(QGraphicsScene):
         n = 0
         for c in core_names:
             n += 1
-            if self._core_expanded.get(c, True):
+            if self._core_is_expanded(c):
                 n += len(core_tasks[c])
         return n
 
@@ -5362,10 +5394,12 @@ class TimelineScene(QGraphicsScene):
         vp_rect = view.viewport().rect()
 
         if self._horizontal:
-            lo_coord = view.mapToScene(vp_rect.topLeft()).x()
+            lw_pt = int(self._label_width)
+            lo_coord = view.mapToScene(QPoint(lw_pt, vp_rect.top())).x()
             hi_coord = view.mapToScene(vp_rect.topRight()).x()
         else:
-            lo_coord = view.mapToScene(vp_rect.topLeft()).y()
+            lw_pt = int(self._label_width)
+            lo_coord = view.mapToScene(QPoint(vp_rect.left(), lw_pt)).y()
             hi_coord = view.mapToScene(vp_rect.bottomLeft()).y()
 
         lw = self._label_width
@@ -5480,6 +5514,10 @@ class TimelineScene(QGraphicsScene):
         self._mark_items = []
         self._frozen_items = []
         self._frozen_top_items = []
+        self._row_stripe_item = None
+        self._timeline_bg_rects = []
+        self._timeline_sep_lines = []
+        self._ruler_grid_item = None
         self._cursor_frozen_top_set = set()
         self._cursor_frozen_left_set = set()
         self._mark_frozen_top_set = set()
@@ -5622,6 +5660,20 @@ class TimelineScene(QGraphicsScene):
             lod_ultra_segs=tr.seg_lod_ultra_by_merge_key.get(task, []),
             lod_ultra_starts=tr.seg_lod_ultra_starts_by_merge_key.get(task, []),
         )
+
+    def _track_timeline_bg(self, item) -> None:
+        """Register a timeline row background rect clipped on horizontal pan."""
+        self._timeline_bg_rects.append(item)
+
+    def _track_timeline_sep_line(self, item) -> None:
+        """Register a horizontal row separator clipped on horizontal pan."""
+        self._timeline_sep_lines.append(item)
+
+    def _add_frozen_label_grip(self, lw: float, total_h: float) -> None:
+        """Scene-frozen resize grip (stays on the label/timeline boundary while panning)."""
+        grip = _LabelColumnGripItem(self, total_h)
+        self.addItem(grip)
+        self._frozen_items.append((grip, int(lw)))
 
     def _seg_lod_for_tick(self) -> SegLodData:
         """Build SegLodData for the global TICK task."""
@@ -5815,11 +5867,10 @@ class TimelineScene(QGraphicsScene):
             lbl.setZValue(37)
             self._frozen_items.append((lbl, 18))
             pen = QPen(color.darker(145), 1.25)
-            insts = (trace.interval_instances_culled_by_id.get(interval_id)
-                     or trace.interval_instances_by_id.get(interval_id, []))
+            insts, _pre_culled = _interval_instances_for_draw(trace, interval_id)
             _interval_bars = _interval_bars_for_viewport(
                 insts, time_min, px_per_ns, lw, vp_ns_lo, vp_ns_hi,
-                instances_nested_culled=bool(trace.interval_instances_culled_by_id))
+                instances_nested_culled=_pre_culled)
             _interval_ticks = _interval_marker_ticks_for_viewport(
                 trace, interval_id, time_min, px_per_ns, lw, vp_ns_lo, vp_ns_hi)
             _hi_times = None
@@ -5878,11 +5929,10 @@ class TimelineScene(QGraphicsScene):
                                       x_ctr, label_row_h - LABEL_BOTTOM_MARGIN, 37)
             self._frozen_top_items.append((lbl, lbl.pos().y()))
             pen = QPen(color.darker(145), 1.25)
-            insts = (trace.interval_instances_culled_by_id.get(interval_id)
-                     or trace.interval_instances_by_id.get(interval_id, []))
+            insts, _pre_culled = _interval_instances_for_draw(trace, interval_id)
             _interval_bars = _interval_bars_for_viewport_vertical(
                 insts, time_min, px_per_ns, label_row_h, vp_ns_lo, vp_ns_hi,
-                instances_nested_culled=bool(trace.interval_instances_culled_by_id))
+                instances_nested_culled=_pre_culled)
             _interval_ticks = _interval_marker_ticks_for_viewport_vertical(
                 trace, interval_id, time_min, px_per_ns, label_row_h, vp_ns_lo, vp_ns_hi)
             _hi_times = None
@@ -5957,6 +6007,7 @@ class TimelineScene(QGraphicsScene):
                                    scene_origin_ns=self._scene_origin_ns)
         _ruler_grid.setZValue(0.5)
         self.addItem(_ruler_grid)
+        self._ruler_grid_item = _ruler_grid
         # Header-only ruler: tick marks + labels, frozen to the top edge.
         _ruler_hdr = _RulerItem(trace, self._timescale_per_px, total_w, total_h,
                                  font, trace.time_scale, show_grid=False,
@@ -6003,8 +6054,10 @@ class TimelineScene(QGraphicsScene):
             if is_hl:
                 hl_bg = QColor(row_color.red(), row_color.green(), row_color.blue(), 35)
                 hl_border = QPen(row_color.lighter(160), 1.0)
-                self.addRect(QRectF(lw, y_top, timeline_w, self._row_height),
-                             hl_border, QBrush(hl_bg)).setZValue(0.9)
+                _hl_rect = self.addRect(QRectF(lw, y_top, timeline_w, self._row_height),
+                                        hl_border, QBrush(hl_bg))
+                _hl_rect.setZValue(0.9)
+                self._track_timeline_bg(_hl_rect)
 
             # Clickable label background
             lbl_bg = _TaskLabelItem(QRectF(0, y_top, lw, self._row_height), task, self,
@@ -6130,6 +6183,7 @@ class TimelineScene(QGraphicsScene):
                 _stripe_rows, lw, total_w)
             _stripes.setZValue(0)
             self.addItem(_stripes)
+            self._row_stripe_item = _stripes
 
         # --- Frozen label column header ----------------------------------
         # Drawn last so it sits on top of all other frozen items (z=38-39).
@@ -6155,6 +6209,7 @@ class TimelineScene(QGraphicsScene):
             _tick_hdr.setZValue(39)
             self._frozen_items.append((_tick_hdr, 4))
             self._frozen_top_items.append((_tick_hdr, _tick_hdr.pos().y()))
+        self._add_frozen_label_grip(lw, total_h)
 
     def _build_vertical(self) -> None:
         trace = self._trace
@@ -6421,7 +6476,7 @@ class TimelineScene(QGraphicsScene):
                      or bool(trace.tick_sti_times))
 
         def _row_count(c: str) -> int:
-            return 1 + (len(core_tasks[c]) if self._core_expanded.get(c, True) else 0)
+            return 1 + (len(core_tasks[c]) if self._core_is_expanded(c) else 0)
 
         total_rows = sum(_row_count(c) for c in core_names) + len(sti_rows) + len(interval_rows)
         if total_rows == 0:
@@ -6456,6 +6511,7 @@ class TimelineScene(QGraphicsScene):
                                    scene_origin_ns=self._scene_origin_ns)
         _ruler_grid.setZValue(0.5)
         self.addItem(_ruler_grid)
+        self._ruler_grid_item = _ruler_grid
         # Header-only ruler (frozen by Y - always visible at viewport top).
         _ruler_hdr = _RulerItem(trace, self._timescale_per_px, total_w, total_h,
                                  font, trace.time_scale, show_grid=False,
@@ -6480,7 +6536,7 @@ class TimelineScene(QGraphicsScene):
         # Each core gets one summary row (always visible) plus optional
         # per-task sub-rows that appear when the core is expanded.
         for core in core_names:
-            expanded = self._core_expanded.get(core, True)
+            expanded = self._core_is_expanded(core)
             tasks    = core_tasks[core]
             segs     = core_segs[core]
             dot_c    = QColor(_core_color(core))
@@ -6492,11 +6548,15 @@ class TimelineScene(QGraphicsScene):
             _core_in_vp = not (y_top + self._row_height < self._vp_scene_orth_lo
                                or y_top > self._vp_scene_orth_hi)
             if _core_in_vp:
-                self.addRect(QRectF(lw, y_top, timeline_w, self._row_height),
-                             QPen(Qt.PenStyle.NoPen), QBrush(self._c_core_sum_bg)).setZValue(0)
-                self.addLine(0, y_top + self._row_height + self._row_gap - 1,
-                             total_w, y_top + self._row_height + self._row_gap - 1,
-                             QPen(self._c_core_sep, 0.8)).setZValue(0.5)
+                _core_bg = self.addRect(QRectF(lw, y_top, timeline_w, self._row_height),
+                                        QPen(Qt.PenStyle.NoPen), QBrush(self._c_core_sum_bg))
+                _core_bg.setZValue(0)
+                self._track_timeline_bg(_core_bg)
+                _sep = self.addLine(0, y_top + self._row_height + self._row_gap - 1,
+                                    total_w, y_top + self._row_height + self._row_gap - 1,
+                                    QPen(self._c_core_sep, 0.8))
+                _sep.setZValue(0.5)
+                self._track_timeline_sep_line(_sep)
 
                 hdr_item = _CoreHeaderItem(
                     QRectF(0, y_top, lw, self._row_height), core, self)
@@ -6538,7 +6598,7 @@ class TimelineScene(QGraphicsScene):
                 self._frozen_items.append((lbl_item, arrow_w + 20))
 
                 # --- Core utilisation % (IDLE excluded) ---
-                _util_pct  = trace.core_util_pct.get(core, 0.0)
+                _util_pct  = _core_util_pct_for(trace, core)
                 _util_item = self.addSimpleText(f"{_util_pct:.0f}%", font_sm)
                 _util_item.setBrush(QBrush(QColor("#77BB77")))
                 _util_item.setPos(lw - _util_w + 4, y_ctr - fm.height() / 2)
@@ -6597,18 +6657,24 @@ class TimelineScene(QGraphicsScene):
                 is_hl  = self._is_task_lock_active(_tmk)
 
                 sub_bg = self._c_core_sub_even if sub_idx % 2 == 0 else self._c_core_sub_odd
-                self.addRect(QRectF(lw, y_top2, timeline_w, self._row_height),
-                             QPen(Qt.PenStyle.NoPen), QBrush(sub_bg)).setZValue(0)
+                _sub_bg_rect = self.addRect(QRectF(lw, y_top2, timeline_w, self._row_height),
+                                            QPen(Qt.PenStyle.NoPen), QBrush(sub_bg))
+                _sub_bg_rect.setZValue(0)
+                self._track_timeline_bg(_sub_bg_rect)
                 _row_color = _task_color(task_name)
                 self._task_row_rects.setdefault(_tmk, []).append(
                     (QRectF(lw, y_top2, timeline_w, self._row_height), _row_color))
                 if is_hl:
                     hl_bg = QColor(_row_color.red(), _row_color.green(), _row_color.blue(), 35)
-                    self.addRect(QRectF(lw, y_top2, timeline_w, self._row_height),
-                                 QPen(_row_color.lighter(160), 1.0), QBrush(hl_bg)).setZValue(0.9)
-                self.addLine(0, y_top2 + self._row_height + self._row_gap - 1,
-                             total_w, y_top2 + self._row_height + self._row_gap - 1,
-                             QPen(self._c_core_sub_sep, 0.5)).setZValue(0.5)
+                    _sub_hl = self.addRect(QRectF(lw, y_top2, timeline_w, self._row_height),
+                                           QPen(_row_color.lighter(160), 1.0), QBrush(hl_bg))
+                    _sub_hl.setZValue(0.9)
+                    self._track_timeline_bg(_sub_hl)
+                _sub_sep = self.addLine(0, y_top2 + self._row_height + self._row_gap - 1,
+                                        total_w, y_top2 + self._row_height + self._row_gap - 1,
+                                        QPen(self._c_core_sub_sep, 0.5))
+                _sub_sep.setZValue(0.5)
+                self._track_timeline_sep_line(_sub_sep)
 
                 stripe = self.addRect(QRectF(26, y_top2 + 3, 3, self._row_height - 6),
                                       QPen(Qt.PenStyle.NoPen), QBrush(_row_color))
@@ -6675,8 +6741,10 @@ class TimelineScene(QGraphicsScene):
             row_h  = self._sti_waveform_h_val if is_exp else self._sti_row_h_val
             y_top  = _sti_y
             y_ctr  = y_top + row_h / 2
-            self.addRect(QRectF(lw, y_top, timeline_w, row_h),
-                         QPen(Qt.PenStyle.NoPen), QBrush(self._c_sti_bg)).setZValue(0)
+            _sti_bg_rect = self.addRect(QRectF(lw, y_top, timeline_w, row_h),
+                                        QPen(Qt.PenStyle.NoPen), QBrush(self._c_sti_bg))
+            _sti_bg_rect.setZValue(0)
+            self._track_timeline_bg(_sti_bg_rect)
             if expandable:
                 _ind  = "▼" if is_exp else "▶"
                 _ltxt = fm.elidedText(f"{_ind} {channel}", Qt.TextElideMode.ElideRight, max(0, lw - 4 - 4))
@@ -6734,6 +6802,7 @@ class TimelineScene(QGraphicsScene):
         self._frozen_items.append((hdr_lbl, 4))
         self._frozen_top_items.append((corner, 0))
         self._frozen_top_items.append((hdr_lbl, hdr_lbl.pos().y()))
+        self._add_frozen_label_grip(lw, total_h)
 
     def _build_vertical_core(self) -> None:
         """Vertical core view: expandable core columns -> per-task sub-columns."""
@@ -6757,7 +6826,7 @@ class TimelineScene(QGraphicsScene):
                      or bool(trace.tick_sti_times))
 
         def _col_count(c: str) -> int:
-            return 1 + (len(core_tasks[c]) if self._core_expanded.get(c, True) else 0)
+            return 1 + (len(core_tasks[c]) if self._core_is_expanded(c) else 0)
 
         _core_col_count = sum(_col_count(c) for c in core_names)
         total_cols = _core_col_count + len(sti_cols) + len(interval_cols)
@@ -6823,7 +6892,7 @@ class TimelineScene(QGraphicsScene):
         # Each core gets one summary column (always visible) plus optional
         # per-task sub-columns that appear when the core is expanded.
         for core in core_names:
-            expanded = self._core_expanded.get(core, True)
+            expanded = self._core_is_expanded(core)
             tasks    = core_tasks[core]
 
             x_left = RULER_WIDTH + col_idx * col_w
@@ -7076,6 +7145,7 @@ class _RulerItem(QGraphicsItem):
         self._axis_offset = axis_offset
         self._draw_header = draw_header
         self._draw_grid   = draw_grid
+        self._grid_clip_x = axis_offset
         self._scene_origin_ns = (
             trace.time_min if scene_origin_ns is None else scene_origin_ns)
         fm = QFontMetrics(font)
@@ -7092,6 +7162,13 @@ class _RulerItem(QGraphicsItem):
             else:
                 return QRectF(0, 0, RULER_WIDTH, self._total_h)
         return QRectF(0, 0, self._total_w, self._total_h)
+
+    def set_grid_clip_x(self, clip_x: float) -> None:
+        """Hide vertical grid lines left of *clip_x* (viewport splitter alignment)."""
+        if abs(clip_x - self._grid_clip_x) < 0.5:
+            return
+        self._grid_clip_x = clip_x
+        self.update()
 
     def paint(self, painter, option, widget=None) -> None:
         trace    = self._trace
@@ -7122,7 +7199,7 @@ class _RulerItem(QGraphicsItem):
             while t <= ns_hi:
                 if t >= t_min:
                     x = off + (t - origin) / npp
-                    if draw_grid_lines:
+                    if draw_grid_lines and x >= self._grid_clip_x - 0.5:
                         painter.setPen(QPen(QColor("#555555"), 0.8))
                         painter.drawLine(QLineF(x, RULER_HEIGHT, x, self._total_h))
                     if self._draw_header:
@@ -7386,6 +7463,13 @@ class _RowStripesItem(QGraphicsItem):
     def boundingRect(self) -> QRectF:
         return self._bounding_rect
 
+    def set_timeline_left(self, timeline_x: float) -> None:
+        """Move the painted stripe region's left edge (viewport splitter sync)."""
+        if abs(timeline_x - self._timeline_x) < 0.5:
+            return
+        self._timeline_x = timeline_x
+        self.update()
+
     def paint(self, painter, option, widget=None) -> None:
         rows = self._rows
         if not rows:
@@ -7426,7 +7510,7 @@ class _RowStripesItem(QGraphicsItem):
                 painter.setPen(sep_pen)
                 painter.setBrush(Qt.BrushStyle.NoBrush)
                 last_pen = sep_pen
-            painter.drawLine(QLineF(0, sep_y, total_w, sep_y))
+            painter.drawLine(QLineF(tx, sep_y, total_w, sep_y))
 
 class _BatchRowItem(QGraphicsItem):
     """Renders all segments for one timeline row/column in a single paint() pass.
@@ -8739,8 +8823,84 @@ class _RightDockResizeGuard(QObject):
                 self._win._schedule_stabilize_right_dock_layout()
         return False
 
+class _LabelColumnGripItem(QGraphicsItem):
+    """Frozen scene-item resize grip (moves with the label column on horizontal pan)."""
+
+    GRIP_W = 10
+
+    def __init__(self, scene: "TimelineScene", total_h: float) -> None:
+        super().__init__()
+        self._scene = scene
+        self._total_h = total_h
+        self._dragging = False
+        self._start_global_x = 0.0
+        self._start_w = 0
+        self._hovered = False
+        self.setAcceptHoverEvents(True)
+        self.setCursor(Qt.CursorShape.SizeHorCursor)
+        self.setToolTip("Drag to resize label column")
+        self.setZValue(42)
+
+    def _view(self) -> Optional["TimelineView"]:
+        views = self._scene.views()
+        return views[0] if views else None
+
+    def boundingRect(self) -> QRectF:
+        hw = self.GRIP_W / 2.0
+        return QRectF(-hw, 0, self.GRIP_W, self._total_h)
+
+    def paint(self, painter, _option, _widget=None) -> None:
+        dark = getattr(self._scene, "_is_dark_ui", True)
+        line = QColor("#4a9eff") if (self._dragging or self._hovered) else (
+            QColor("#666666") if dark else QColor("#CCCCCC"))
+        painter.setPen(QPen(line, 2))
+        painter.drawLine(QPointF(0, 0), QPointF(0, self._total_h))
+
+    def hoverEnterEvent(self, event) -> None:
+        self._hovered = True
+        self.update()
+        super().hoverEnterEvent(event)
+
+    def hoverLeaveEvent(self, event) -> None:
+        self._hovered = False
+        self.update()
+        super().hoverLeaveEvent(event)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._dragging = True
+            self._start_global_x = event.screenPosition().x()
+            self._start_w = self._scene._label_width
+            _HoverCursor.show(Qt.CursorShape.SizeHorCursor)
+            self.grabMouse()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._dragging:
+            view = self._view()
+            if view is not None:
+                _HoverCursor.show(Qt.CursorShape.SizeHorCursor)
+                view._apply_label_width_drag(
+                    int(self._start_w + (event.screenPosition().x() - self._start_global_x)))
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if self._dragging and event.button() == Qt.MouseButton.LeftButton:
+            self._dragging = False
+            self.ungrabMouse()
+            view = self._view()
+            if view is not None:
+                view._finish_label_width_drag()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
 class _LabelColumnGrip(QWidget):
-    """Visible drag handle between label column and timeline (web label-resizer parity)."""
+    """Legacy viewport QWidget grip — hidden; use _LabelColumnGripItem instead."""
 
     GRIP_W = 10
 
@@ -8969,6 +9129,7 @@ class TimelineView(QGraphicsView):
         self._scene.scene_rebuilt.connect(self._on_scene_rebuilt_scroll)
         self._scene.scene_rebuilt.connect(self._reposition_frozen)
         self._scene.scene_rebuilt.connect(self._reposition_frozen_top)
+        self._scene.scene_rebuilt.connect(self._sync_timeline_column_clip)
         self._scene.scene_rebuilt.connect(self._update_label_grip_geometry)
 
         # Debounce zoom: accumulate factor across rapid wheel events and
@@ -9198,6 +9359,7 @@ class TimelineView(QGraphicsView):
             overlay.show()
             self._position_virt_trace_bar()
             self._sync_native_scene_scrollbar()
+            native.installEventFilter(self)
             native.valueChanged.connect(
                 self._on_native_time_bar_interaction,
                 Qt.ConnectionType.UniqueConnection)
@@ -9210,6 +9372,7 @@ class TimelineView(QGraphicsView):
                 native.valueChanged.disconnect(self._on_native_time_bar_interaction)
             except RuntimeError:
                 pass
+            native.removeEventFilter(self)
             overlay.hide()
             self._collapse_native_time_bar(False)
 
@@ -9261,14 +9424,8 @@ class TimelineView(QGraphicsView):
         trace = self._scene._trace
         if trace is None:
             return 0, 0
-        vp_rect = self.viewport().rect()
         sc = self._scene
-        if sc._horizontal:
-            lo_coord = self.mapToScene(vp_rect.topLeft()).x()
-            hi_coord = self.mapToScene(vp_rect.topRight()).x()
-        else:
-            lo_coord = self.mapToScene(vp_rect.topLeft()).y()
-            hi_coord = self.mapToScene(vp_rect.bottomLeft()).y()
+        lo_coord, hi_coord = self._timeline_viewport_time_coords()
         lw = sc._label_width
         origin = sc._scene_origin_ns
         tpp = sc._timescale_per_px
@@ -9309,17 +9466,32 @@ class TimelineView(QGraphicsView):
         return self._virt_time_scroll_px >= self._max_virt_time_scroll_px() - slack_px
 
     def _native_scroll_for_ns_lo(self, ns_lo: float) -> int:
+        """Scene-local scroll placing *ns_lo* at the timeline viewport's left edge.
+
+        Does not include label_width: the frozen label column is repositioned
+        separately via _reposition_frozen(), so only timeline pixels scroll.
+        """
         sc = self._scene
-        lw = sc._label_width
         tpp = sc._timescale_per_px
-        return max(0, int(round(lw + (ns_lo - sc._scene_origin_ns) / tpp)))
+        return max(0, int(round((ns_lo - sc._scene_origin_ns) / tpp)))
 
     def _ideal_native_scroll_for_ns_lo(self, ns_lo: float) -> int:
         """Scene-local scroll for *ns_lo* without clamping to the native bar range."""
         sc = self._scene
-        lw = sc._label_width
         tpp = sc._timescale_per_px
-        return int(round(lw + (ns_lo - sc._scene_origin_ns) / tpp))
+        return int(round((ns_lo - sc._scene_origin_ns) / tpp))
+
+    def _timeline_viewport_time_coords(self) -> Tuple[float, float]:
+        """Scene time-axis coordinates at the left and right timeline viewport edges."""
+        lw = self._scene._label_width
+        vp_rect = self.viewport().rect()
+        if self._scene._horizontal:
+            lo = self.mapToScene(QPoint(int(lw), vp_rect.top())).x()
+            hi = self.mapToScene(vp_rect.topRight()).x()
+        else:
+            lo = self.mapToScene(QPoint(vp_rect.left(), int(lw))).y()
+            hi = self.mapToScene(vp_rect.bottomLeft()).y()
+        return lo, hi
 
     def _update_virt_trace_bar_range(self) -> None:
         """Map the full trace onto the overlay bar (thumb shrinks when zoomed in)."""
@@ -9767,18 +9939,8 @@ class TimelineView(QGraphicsView):
         self._update_label_grip_geometry()
 
     def _update_label_grip_geometry(self) -> None:
-        """Position the visible label-column splitter on the viewport."""
-        grip = self._label_grip
-        if (not self._scene._horizontal
-                or self._scene._trace is None
-                or self.viewport().height() <= 0):
-            grip.hide()
-            return
-        lw = self._scene._label_width
-        x = max(0, lw - grip.GRIP_W // 2)
-        grip.setGeometry(x, 0, grip.GRIP_W, self.viewport().height())
-        grip.show()
-        grip.raise_()
+        """Hide the legacy viewport QWidget grip (scene-frozen grip is used instead)."""
+        self._label_grip.hide()
 
     def _apply_label_width_drag(self, new_w: int) -> None:
         """Live label-column resize during splitter drag."""
@@ -11072,6 +11234,14 @@ class TimelineView(QGraphicsView):
         if obj is self._virt_trace_bar and e.type() == QEvent.Type.Wheel:
             self.wheelEvent(e)
             return True
+        if e.type() == QEvent.Type.Wheel:
+            we = e
+            if not (we.modifiers() & Qt.KeyboardModifier.ControlModifier):
+                if (self._should_use_virtual_scroll()
+                        and self._scene._trace is not None):
+                    if obj is self.viewport() or obj is self._native_time_axis_bar():
+                        self.wheelEvent(we)
+                        return True
         if obj is self.viewport():
             if e.type() == QEvent.Type.Leave:
                 # Mouse left the viewport - ensure any hover highlight is cleared
@@ -11200,7 +11370,7 @@ class TimelineView(QGraphicsView):
                         # Core header: per-segment base task color (no core tint),
                         # matching main view's _task_brush(seg.task).
                         row_data.append({'segs': hdr_segs, 'fixed_color': None, 'blend': False})
-                if sc._core_expanded.get(core, True):
+                if sc._core_is_expanded(core):
                     for task_raw in core_tasks.get(core, []):
                         t_segs = (tr.core_task_seg_lod_ultra.get(core, {}).get(task_raw)
                                   or tr.core_task_segs.get(core, {}).get(task_raw, []))
@@ -11538,9 +11708,34 @@ class TimelineView(QGraphicsView):
             if not self._zoom_reanchor_pending:
                 self._push_virt_trace_bar()
 
+    def _sync_timeline_column_clip(self) -> None:
+        """Clip timeline row backgrounds / grid to the viewport splitter edge."""
+        sc = self._scene
+        if not sc._horizontal or sc._trace is None or self._virt_scroll_rebuild:
+            return
+        lw = float(sc._label_width)
+        scroll = self.mapToScene(QPoint(0, 0)).x()
+        tx = lw + scroll
+        total_w = sc.sceneRect().width()
+        tw = max(0.0, total_w - tx)
+        stripe = sc._row_stripe_item
+        if stripe is not None:
+            stripe.set_timeline_left(tx)
+        for rect_item in sc._timeline_bg_rects:
+            r = rect_item.rect()
+            rect_item.setRect(QRectF(tx, r.y(), tw, r.height()))
+        for sep_line in sc._timeline_sep_lines:
+            ln = sep_line.line()
+            sep_line.setLine(tx, ln.y1(), total_w, ln.y2())
+        grid = sc._ruler_grid_item
+        if grid is not None:
+            grid.set_grid_clip_x(tx)
+
     def _reposition_frozen(self) -> None:
         """Move all frozen label-column scene items so they stay at the left edge."""
         if not self._scene._frozen_items:
+            return
+        if self._virt_scroll_rebuild:
             return
         scene_left = self.mapToScene(QPoint(0, 0)).x()
         if self._frozen_last_scene_left is not None and abs(scene_left - self._frozen_last_scene_left) < 1e-6:
@@ -11552,7 +11747,11 @@ class TimelineView(QGraphicsView):
                 return
         self._frozen_last_scene_left = scene_left
         for item, orig_x in self._scene._frozen_items:
-            item.setX(scene_left + orig_x)
+            if isinstance(item, _LabelColumnGripItem):
+                item.setX(scene_left + self._scene._label_width)
+            else:
+                item.setX(scene_left + orig_x)
+        self._sync_timeline_column_clip()
 
     def _reposition_frozen_top(self) -> None:
         """Move all frozen top-row scene items so they stay at the top edge."""
@@ -11693,13 +11892,11 @@ class TimelineView(QGraphicsView):
         timescale_per_px = self._scene._timescale_per_px
 
         if self._scene._horizontal:
-            lo_coord = self.mapToScene(vp_rect.topLeft()).x()
-            hi_coord = self.mapToScene(vp_rect.topRight()).x()
+            lo_coord, hi_coord = self._timeline_viewport_time_coords()
             orth_lo = self.mapToScene(vp_rect.topLeft()).y()
             orth_hi = self.mapToScene(vp_rect.bottomLeft()).y()
         else:
-            lo_coord = self.mapToScene(vp_rect.topLeft()).y()
-            hi_coord = self.mapToScene(vp_rect.bottomLeft()).y()
+            lo_coord, hi_coord = self._timeline_viewport_time_coords()
             orth_lo = self.mapToScene(vp_rect.topLeft()).x()
             orth_hi = self.mapToScene(vp_rect.topRight()).x()
 
@@ -20962,7 +21159,7 @@ class MainWindow(QMainWindow):
         if mode == "core" and trace and trace.core_names:
             sc = tab.view._scene
             for core in trace.core_names:
-                graph.set_core_expanded(core, sc._core_expanded.get(core, True))
+                graph.set_core_expanded(core, sc._core_is_expanded(core))
 
     def _stash_tab_state(self, tab: _TraceTab) -> None:
         tab.bookmarks = list(self._bookmarks)
@@ -22950,7 +23147,7 @@ class MainWindow(QMainWindow):
             trace = scene._trace
             if trace and trace.core_names:
                 all_expanded = all(
-                    scene._core_expanded.get(c, True) for c in trace.core_names)
+                    scene._core_is_expanded(c) for c in trace.core_names)
                 self._tb_expand_all_btn.setChecked(all_expanded)
         for tab in self._tabs:
             tab.view.set_view_mode(mode)
@@ -23260,7 +23457,7 @@ class MainWindow(QMainWindow):
             trace = scene._trace
             if trace and trace.core_names:
                 all_expanded = all(
-                    scene._core_expanded.get(c, True) for c in trace.core_names)
+                    scene._core_is_expanded(c) for c in trace.core_names)
                 self._tb_expand_all_btn.blockSignals(True)
                 self._tb_expand_all_btn.setChecked(all_expanded)
                 self._tb_expand_all_btn.blockSignals(False)
