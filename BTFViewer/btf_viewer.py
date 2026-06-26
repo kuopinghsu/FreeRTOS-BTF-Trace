@@ -319,6 +319,7 @@ _ORTH_BUF_MIN_ROWS        = 40
 _ORTH_BUF_VIEWPORT_MULT   = 3.0
 _ORTH_BUF_LARGE_TASKS     = 256   # reduce orth margin above this task count
 _ORTH_BUF_HUGE_TASKS      = 768
+_AUTO_EXPAND_CORES_MAX    = 8     # match web TimelinePanel.vue; larger SMP traces start collapsed
 _MAX_FINE_SEGS_PER_ROW    = 512   # fall back to LOD summary above this per row
 _ZOOM_DEBOUNCE_MS         = 60
 _ZOOM_DEBOUNCE_LARGE_MS   = 120
@@ -855,6 +856,8 @@ def _interval_bars_for_viewport(
     label_width: float,
     vp_ns_lo: int,
     vp_ns_hi: int,
+    *,
+    instances_nested_culled: bool = False,
 ) -> list:
     """Build [(scene_x, width_px, start_ns, stop_ns), ...] for visible intervals.
 
@@ -870,7 +873,8 @@ def _interval_bars_for_viewport(
         if inst.stop_ns <= vp_ns_lo:
             continue
         visible.append(inst)
-    visible = _interval_instances_cull_nested(visible)
+    if not instances_nested_culled:
+        visible = _interval_instances_cull_nested(visible)
     bars: list = []
     for inst in visible:
         x1f = label_width + (inst.start_ns - time_min) * px_per_ns
@@ -956,6 +960,8 @@ def _interval_bars_for_viewport_vertical(
     label_row_h: float,
     vp_ns_lo: int,
     vp_ns_hi: int,
+    *,
+    instances_nested_culled: bool = False,
 ) -> list:
     """Build [(scene_y, height_px, start_ns, stop_ns), ...] for vertical interval columns."""
     if not instances:
@@ -967,7 +973,8 @@ def _interval_bars_for_viewport_vertical(
         if inst.stop_ns <= vp_ns_lo:
             continue
         visible.append(inst)
-    visible = _interval_instances_cull_nested(visible)
+    if not instances_nested_culled:
+        visible = _interval_instances_cull_nested(visible)
     bars: list = []
     for inst in visible:
         y1f = label_row_h + (inst.start_ns - time_min) * px_per_ns
@@ -1950,6 +1957,10 @@ class BtfTrace:
     interval_instances: List["IntervalInstance"]                            = field(default_factory=list)
     interval_ids: List[str]                                                 = field(default_factory=list)
     interval_instances_by_id: Dict[str, List["IntervalInstance"]]            = field(default_factory=dict)
+    # Nested intervals culled once at parse time so rebuild() only bisect-clips
+    # the viewport slice (O(log n + visible)) instead of O(n²) nested culling.
+    interval_instances_culled_by_id: Dict[str, List["IntervalInstance"]]     = field(default_factory=dict)
+    core_util_pct: Dict[str, float]                                         = field(default_factory=dict)
     interval_marker_by_id: Dict[str, dict]                                  = field(default_factory=dict)
     interval_unmatched_starts: int                                          = 0
     task_base_priority: Dict[str, int]                                     = field(default_factory=dict)
@@ -3408,6 +3419,20 @@ def _parse_btf(filepath: str,
     if progress_callback:
         progress_callback(95, "Finalising…")
 
+    _total_ns = max(time_max - time_min, 1)
+    _core_util_pct: Dict[str, float] = {}
+    for _c in _core_names:
+        _active_ns = sum(
+            s.end - s.start for s in _core_segs[_c]
+            if (_tn := _parse_task_name(s.task)[2]) != "TICK"
+            and not _is_idle_task_name(_tn))
+        _core_util_pct[_c] = 100.0 * _active_ns / _total_ns
+
+    _interval_culled_by_id: Dict[str, list] = {
+        _iid: _interval_instances_cull_nested(_insts)
+        for _iid, _insts in _interval_by_id.items()
+    }
+
     return BtfTrace(
         time_scale=time_scale,
         tasks=tasks,
@@ -3450,6 +3475,8 @@ def _parse_btf(filepath: str,
         interval_instances=_interval_instances,
         interval_ids=_interval_ids,
         interval_instances_by_id=_interval_by_id,
+        interval_instances_culled_by_id=_interval_culled_by_id,
+        core_util_pct=_core_util_pct,
         interval_marker_by_id=_interval_marker_by_id,
         interval_unmatched_starts=_interval_unmatched,
         task_base_priority=_task_base_pri,
@@ -4259,6 +4286,11 @@ class TimelineScene(QGraphicsScene):
         self._trace = trace
         self._scene_origin_ns = trace.time_min
         self._heatmap_filter_mks = None
+        self._core_expanded.clear()
+        if trace.core_names:
+            _auto_expand = len(trace.core_names) <= _AUTO_EXPAND_CORES_MAX
+            for _c in trace.core_names:
+                self._core_expanded[_c] = _auto_expand
         time_span = max(trace.time_max - trace.time_min, 1)
         avail = max(viewport_width - self._label_width, 100)
         self._timescale_per_px = time_span / avail
@@ -5783,9 +5815,11 @@ class TimelineScene(QGraphicsScene):
             lbl.setZValue(37)
             self._frozen_items.append((lbl, 18))
             pen = QPen(color.darker(145), 1.25)
-            insts = trace.interval_instances_by_id.get(interval_id, [])
+            insts = (trace.interval_instances_culled_by_id.get(interval_id)
+                     or trace.interval_instances_by_id.get(interval_id, []))
             _interval_bars = _interval_bars_for_viewport(
-                insts, time_min, px_per_ns, lw, vp_ns_lo, vp_ns_hi)
+                insts, time_min, px_per_ns, lw, vp_ns_lo, vp_ns_hi,
+                instances_nested_culled=bool(trace.interval_instances_culled_by_id))
             _interval_ticks = _interval_marker_ticks_for_viewport(
                 trace, interval_id, time_min, px_per_ns, lw, vp_ns_lo, vp_ns_hi)
             _hi_times = None
@@ -5844,9 +5878,11 @@ class TimelineScene(QGraphicsScene):
                                       x_ctr, label_row_h - LABEL_BOTTOM_MARGIN, 37)
             self._frozen_top_items.append((lbl, lbl.pos().y()))
             pen = QPen(color.darker(145), 1.25)
-            insts = trace.interval_instances_by_id.get(interval_id, [])
+            insts = (trace.interval_instances_culled_by_id.get(interval_id)
+                     or trace.interval_instances_by_id.get(interval_id, []))
             _interval_bars = _interval_bars_for_viewport_vertical(
-                insts, time_min, px_per_ns, label_row_h, vp_ns_lo, vp_ns_hi)
+                insts, time_min, px_per_ns, label_row_h, vp_ns_lo, vp_ns_hi,
+                instances_nested_culled=bool(trace.interval_instances_culled_by_id))
             _interval_ticks = _interval_marker_ticks_for_viewport_vertical(
                 trace, interval_id, time_min, px_per_ns, label_row_h, vp_ns_lo, vp_ns_hi)
             _hi_times = None
@@ -6502,11 +6538,7 @@ class TimelineScene(QGraphicsScene):
                 self._frozen_items.append((lbl_item, arrow_w + 20))
 
                 # --- Core utilisation % (IDLE excluded) ---
-                _total_ns  = trace.time_max - trace.time_min
-                _active_ns = sum(s.end - s.start for s in segs
-                                 if (_tn := _parse_task_name(s.task)[2]) != "TICK"
-                                 and not _is_idle_task_name(_tn))
-                _util_pct  = 100.0 * _active_ns / _total_ns if _total_ns > 0 else 0.0
+                _util_pct  = trace.core_util_pct.get(core, 0.0)
                 _util_item = self.addSimpleText(f"{_util_pct:.0f}%", font_sm)
                 _util_item.setBrush(QBrush(QColor("#77BB77")))
                 _util_item.setPos(lw - _util_w + 4, y_ctr - fm.height() / 2)

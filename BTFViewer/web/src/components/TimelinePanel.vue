@@ -500,17 +500,20 @@ function visibleTimeSpanRatio() {
 
 /** True when the visible window shows essentially the whole trace (post-Fit zoom). */
 function isFitToWindowZoom() {
-  return visibleTimeSpanRatio() >= 0.92
+  const ratio = visibleTimeSpanRatio()
+  // Core summary rows multiplex every task on a core — stay on coarse LOD longer.
+  if (props.options.viewMode === 'core' && isLargeTrace()) return ratio >= 0.65
+  return ratio >= 0.92
 }
 
 /**
  * Coarse LOD / reduced paint budget.
- * Large traces at overview zoom; initial load. Row scroll alone keeps full detail.
+ * Large traces: coarse while panning/zooming/scrolling and at overview zoom when idle.
  */
 function paintCoarse() {
   if (_loadSettling) return true
-  if (isLargeTrace() && isFitToWindowZoom() && !_interacting) return true
-  if (_interacting && _interactTimeAxis && isLargeTrace() && isFitToWindowZoom()) return true
+  if (isLargeTrace() && _interacting) return true
+  if (isLargeTrace() && isFitToWindowZoom()) return true
   return false
 }
 
@@ -520,7 +523,7 @@ function paintFast() {
 }
 
 function paintDpr() {
-  if (_loadSettling) return 1
+  if (_loadSettling || (isLargeTrace() && _interacting)) return 1
   if (isLargeTrace()) {
     // Allow retina once zoomed in past overview level.
     if (visibleTimeSpanRatio() < 0.5) return window.devicePixelRatio || 1
@@ -1746,6 +1749,7 @@ watch([() => props.options.orientation, () => props.options.viewMode], () => {
   }
   clampScrollToContent()
   _ovBgCanvas = null
+  if (props.trace && isLargeTrace()) beginLoadSettle()
   setupHandler()
   scheduleRender(true)
 })
