@@ -3,20 +3,6 @@
     <div class="legend-title">
       Tasks
     </div>
-    <div class="core-tint-legend">
-      <div class="tint-title">Core tints (Task View)</div>
-      <div
-        v-for="item in coreTintItems"
-        :key="item.core"
-        class="tint-row"
-      >
-        <span
-          class="swatch"
-          :style="{ background: item.color }"
-        />
-        <span>{{ item.label }}</span>
-      </div>
-    </div>
     <div
       v-if="taskFilterSet"
       class="heatmap-filter-banner"
@@ -59,7 +45,7 @@
 
 <script setup>
 import { computed, ref, watch } from 'vue'
-import { coreColor, taskColor, taskDisplayName } from '../utils/colors.js'
+import { taskColor, taskDisplayName } from '../utils/colors.js'
 import { isMigratedTask } from '../utils/migrationAnalysis.js'
 
 const props = defineProps({
@@ -80,13 +66,6 @@ const taskFilterSet = computed(() => {
 })
 
 watch(migratedOnly, (v) => emit('migratedFilterChange', v))
-
-const coreTintItems = [
-  { core: 'Core_0', color: coreColor('Core_0'), label: 'Core_0: base colour' },
-  { core: 'Core_1', color: coreColor('Core_1'), label: 'Core_1: blue tint' },
-  { core: 'Core_2', color: coreColor('Core_2'), label: 'Core_2: green tint' },
-  { core: 'Core_3', color: coreColor('Core_3'), label: 'Core_3: red tint' },
-]
 
 const visibleTasks = computed(() => {
   const tasks = props.trace?.tasks || []
@@ -119,24 +98,6 @@ const visibleTasks = computed(() => {
   margin-bottom: 6px;
   padding-bottom: 4px;
   border-bottom: 1px solid var(--border);
-}
-
-.core-tint-legend {
-  margin-bottom: 8px;
-  font-size: 10px;
-  color: var(--fg-dim);
-  line-height: 1.35;
-}
-
-.tint-title {
-  font-weight: 600;
-  margin-bottom: 2px;
-}
-
-.tint-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
 }
 
 .migrated-filter {

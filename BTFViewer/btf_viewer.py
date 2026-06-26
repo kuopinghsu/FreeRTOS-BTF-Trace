@@ -191,15 +191,23 @@ UI_FONT_PIXEL_SIZE: int = int(
     os.environ.get("BTF_UI_FONT_PX", "11" if sys.platform == "darwin" else "0")
 )
 
+def _scaled_font_pixel_size(point_size: int,
+                            *, reference_pt: int = UI_FONT_SIZE) -> int | None:
+    """Map a pt setting to a pixel size on macOS HiDPI; None → use pt directly."""
+    base = max(6, min(int(point_size), 24))
+    if sys.platform == "darwin" and UI_FONT_PIXEL_SIZE > 0:
+        scale = base / max(reference_pt, 1)
+        return max(6, int(round(UI_FONT_PIXEL_SIZE * scale)))
+    return None
+
 def _application_ui_font(point_size: int = UI_FONT_SIZE) -> QFont:
     """Application UI font with platform-appropriate sizing (Qt6 HiDPI-safe)."""
     base = max(6, min(int(point_size), 24))
     app = QApplication.instance()
     font = QFont(app.font() if app is not None else QFont())
-    px_base = UI_FONT_PIXEL_SIZE
-    if sys.platform == "darwin" and px_base > 0:
-        scale = base / max(UI_FONT_SIZE, 1)
-        font.setPixelSize(max(6, int(round(px_base * scale))))
+    px = _scaled_font_pixel_size(base)
+    if px is not None:
+        font.setPixelSize(px)
     else:
         font.setPointSize(base)
     return font
@@ -207,9 +215,9 @@ def _application_ui_font(point_size: int = UI_FONT_SIZE) -> QFont:
 def _ui_font_stylesheet_size(point_size: int = UI_FONT_SIZE) -> str:
     """CSS font-size token matching _application_ui_font()."""
     base = max(6, min(int(point_size), 24))
-    if sys.platform == "darwin" and UI_FONT_PIXEL_SIZE > 0:
-        scale = base / max(UI_FONT_SIZE, 1)
-        return f"{max(6, int(round(UI_FONT_PIXEL_SIZE * scale)))}px"
+    px = _scaled_font_pixel_size(base)
+    if px is not None:
+        return f"{px}px"
     return f"{base}pt"
 
 # ---- Layout ---------------------------------------------------------------
@@ -3921,12 +3929,17 @@ def _monospace_font(size: int, weight: int = QFont.Normal) -> QFont:
 
     Cached so the expensive QFontDatabase.systemFont() Qt bridge call is made
     only once per (size, weight) pair regardless of how many rebuilds happen.
+    Uses the same macOS pixel scaling as application UI fonts.
     """
-    key = (size, weight)
+    key = (size, weight, sys.platform, UI_FONT_PIXEL_SIZE)
     f = _monospace_font_cache.get(key)
     if f is None:
         f = QFontDatabase.systemFont(QFontDatabase.FixedFont)
-        f.setPointSize(size)
+        px = _scaled_font_pixel_size(size, reference_pt=FONT_SIZE)
+        if px is not None:
+            f.setPixelSize(px)
+        else:
+            f.setPointSize(size)
         f.setWeight(weight)
         _monospace_font_cache[key] = f
     return f
@@ -8098,9 +8111,6 @@ class _TaskLabelItem(QGraphicsRectItem):
 class _CoreHeaderItem(QGraphicsRectItem):
     """Clickable label area for a core row - toggles expand/collapse."""
 
-    _NORMAL_BRUSH = QBrush(QColor("#2B2B45"))
-    _HOVER_BRUSH  = QBrush(QColor(100, 100, 220, 55))
-
     def __init__(self, rect: QRectF, core_name: str, tl_scene):
         super().__init__(rect)
         self._core_name = core_name
@@ -8109,17 +8119,27 @@ class _CoreHeaderItem(QGraphicsRectItem):
         self.setAcceptHoverEvents(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
+    def _normal_brush(self) -> QBrush:
+        return QBrush(self._tl_scene._c_core_hdr_bg)
+
+    def _hover_brush(self) -> QBrush:
+        sc = self._tl_scene
+        if sc._is_dark_ui:
+            return QBrush(QColor(100, 100, 220, 55))
+        h = sc._c_core_hdr_bg.lighter(108)
+        return QBrush(QColor(h.red(), h.green(), h.blue(), 160))
+
     def mousePressEvent(self, event):
         self._tl_scene.toggle_core(self._core_name)
         event.accept()
 
     def hoverEnterEvent(self, event):
-        self.setBrush(self._HOVER_BRUSH)
+        self.setBrush(self._hover_brush())
         self.update()
         super().hoverEnterEvent(event)
 
     def hoverLeaveEvent(self, event):
-        self.setBrush(self._NORMAL_BRUSH)
+        self.setBrush(self._normal_brush())
         self.update()
         super().hoverLeaveEvent(event)
 
@@ -9239,6 +9259,7 @@ class TimelineView(QGraphicsView):
         self._virt_scroll_scale: float = 1.0
         self._syncing_time_scrollbar: bool = False
         self._virtual_time_scroll_active: bool = False
+        self._native_time_bar_interaction_connected: bool = False
         self._virt_scroll_rebuild: bool = False
         self._syncing_virt_bar: bool = False
         self._virt_bar_dragging: bool = False
@@ -9396,18 +9417,23 @@ class TimelineView(QGraphicsView):
             self._position_virt_trace_bar()
             self._sync_native_scene_scrollbar()
             native.installEventFilter(self)
-            native.valueChanged.connect(
-                self._on_native_time_bar_interaction,
-                Qt.ConnectionType.UniqueConnection)
+            if not self._native_time_bar_interaction_connected:
+                native.valueChanged.connect(
+                    self._on_native_time_bar_interaction,
+                    Qt.ConnectionType.UniqueConnection)
+                self._native_time_bar_interaction_connected = True
             if not self._zoom_reanchor_pending:
                 self._capture_virt_time_scroll_px()
             self._update_virt_trace_bar_range()
             self._push_virt_trace_bar()
         else:
-            try:
-                native.valueChanged.disconnect(self._on_native_time_bar_interaction)
-            except RuntimeError:
-                pass
+            if self._native_time_bar_interaction_connected:
+                try:
+                    native.valueChanged.disconnect(
+                        self._on_native_time_bar_interaction)
+                except (RuntimeError, TypeError):
+                    pass
+                self._native_time_bar_interaction_connected = False
             native.removeEventFilter(self)
             overlay.hide()
             self._collapse_native_time_bar(False)
@@ -12236,63 +12262,80 @@ class _CursorButton(QPushButton):
     """Status-bar cursor badge.  Click -> jumps to cursor position."""
 
     def __init__(self, text: str, color: str, is_dark: bool = True,
-                 parent: QWidget = None):
+                 ui_font_size: int = UI_FONT_SIZE, parent: QWidget = None):
         super().__init__(text, parent)
         self._color   = color
         self._is_dark = is_dark
-        self.setStyleSheet(self._make_style(color, is_dark=is_dark))
+        self._ui_font_size = ui_font_size
+        self.setStyleSheet(self._make_style(color, is_dark=is_dark,
+                                           ui_font_size=ui_font_size))
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
     @staticmethod
-    def _make_style(c: str, is_dark: bool = True) -> str:
+    def _make_style(c: str, is_dark: bool = True,
+                    ui_font_size: int = UI_FONT_SIZE) -> str:
         if is_dark:
             bg, hbg, pressed = "#2A2A2A", "#3A3A3A", "#4A4A4A"
         else:
             bg, hbg, pressed = "#F0F0F0", "#E0E0E0", "#D0D0D0"
+        ui_fs = _ui_font_stylesheet_size(ui_font_size)
         return (
             f"QPushButton {{ color: {c}; background: {bg}; "
             f"border: 1px solid {c}; border-right: none; "
             f"border-radius: 3px; border-top-right-radius: 0; border-bottom-right-radius: 0; "
-            f"padding: 1px 7px; font-size: {UI_FONT_SIZE}pt; "
+            f"padding: 1px 7px; font-size: {ui_fs}; "
             f"font-family: \"{_get_fixed_font_family()}\"; }}"
             f"QPushButton:hover   {{ background: {hbg}; }}"
             f"QPushButton:pressed {{ background: {pressed}; }}"
         )
 
-    def update_style(self, is_dark: bool) -> None:
+    def update_style(self, is_dark: bool,
+                     ui_font_size: int | None = None) -> None:
         self._is_dark = is_dark
-        self.setStyleSheet(self._make_style(self._color, is_dark=is_dark))
+        if ui_font_size is not None:
+            self._ui_font_size = ui_font_size
+        self.setStyleSheet(self._make_style(self._color, is_dark=is_dark,
+                                            ui_font_size=self._ui_font_size))
 
 class _CursorDeleteButton(QPushButton):
     """Small x button paired with a _CursorButton to form a delete pill."""
 
-    def __init__(self, color: str, is_dark: bool = True, parent: QWidget = None):
+    def __init__(self, color: str, is_dark: bool = True,
+                 ui_font_size: int = UI_FONT_SIZE, parent: QWidget = None):
         super().__init__("x", parent)
         self._color   = color
         self._is_dark = is_dark
-        self.setStyleSheet(self._make_style(color, is_dark=is_dark))
+        self._ui_font_size = ui_font_size
+        self.setStyleSheet(self._make_style(color, is_dark=is_dark,
+                                            ui_font_size=ui_font_size))
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFixedWidth(18)
         self.setToolTip("Delete cursor")
 
     @staticmethod
-    def _make_style(c: str, is_dark: bool = True) -> str:
+    def _make_style(c: str, is_dark: bool = True,
+                    ui_font_size: int = UI_FONT_SIZE) -> str:
         if is_dark:
             bg, hbg, pressed = "#2A2A2A", "#5A1A1A", "#4A4A4A"
         else:
             bg, hbg, pressed = "#F0F0F0", "#FAEAEA", "#D0D0D0"
+        ui_fs = _ui_font_stylesheet_size(ui_font_size)
         return (
             f"QPushButton {{ color: {c}; background: {bg}; "
             f"border: 1px solid {c}; "
             f"border-radius: 3px; border-top-left-radius: 0; border-bottom-left-radius: 0; "
-            f"padding: 1px 2px; font-size: {UI_FONT_SIZE}pt; }}"
+            f"padding: 1px 2px; font-size: {ui_fs}; }}"
             f"QPushButton:hover   {{ background: {hbg}; color: #FF4444; border-color: #FF4444; }}"
             f"QPushButton:pressed {{ background: {pressed}; }}"
         )
 
-    def update_style(self, is_dark: bool) -> None:
+    def update_style(self, is_dark: bool,
+                     ui_font_size: int | None = None) -> None:
         self._is_dark = is_dark
-        self.setStyleSheet(self._make_style(self._color, is_dark=is_dark))
+        if ui_font_size is not None:
+            self._ui_font_size = ui_font_size
+        self.setStyleSheet(self._make_style(self._color, is_dark=is_dark,
+                                            ui_font_size=self._ui_font_size))
 
 class _CursorBarWidget(QWidget):
     """A row of per-cursor badge+delete pills in the status bar."""
@@ -12308,12 +12351,24 @@ class _CursorBarWidget(QWidget):
         self._pills: list = []
         self._delta_label: Optional[QLabel] = None
         self._is_dark: bool = True
+        self._ui_font_size: int = UI_FONT_SIZE
 
-    def update_theme(self, is_dark: bool) -> None:
+    def _delta_label_style(self) -> str:
+        return (
+            f"font-size:{_ui_font_stylesheet_size(self._ui_font_size)};"
+            f" font-family:\"{_get_fixed_font_family()}\"; padding:0 4px;"
+        )
+
+    def update_theme(self, is_dark: bool,
+                     ui_font_size: int | None = None) -> None:
         self._is_dark = is_dark
+        if ui_font_size is not None:
+            self._ui_font_size = ui_font_size
         for badge, del_btn in self._pills:
-            badge.update_style(is_dark)
-            del_btn.update_style(is_dark)
+            badge.update_style(is_dark, self._ui_font_size)
+            del_btn.update_style(is_dark, self._ui_font_size)
+        if self._delta_label is not None:
+            self._delta_label.setStyleSheet(self._delta_label_style())
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -12329,9 +12384,11 @@ class _CursorBarWidget(QWidget):
 
     def _make_pill(self, orig_idx: int, t: int, color: str) -> None:
         """Create one badge+x pill and append to layout / _pills."""
-        badge = _CursorButton(f"C{orig_idx + 1}", color, is_dark=self._is_dark)
+        badge = _CursorButton(f"C{orig_idx + 1}", color, is_dark=self._is_dark,
+                              ui_font_size=self._ui_font_size)
         badge.setToolTip(f"C{orig_idx + 1}: click to jump to this cursor")
-        del_btn = _CursorDeleteButton(color, is_dark=self._is_dark)
+        del_btn = _CursorDeleteButton(color, is_dark=self._is_dark,
+                                      ui_font_size=self._ui_font_size)
         # Wire up signals (ns captured per pill)
         ns_cap = t
         badge.clicked.connect(
@@ -12362,9 +12419,10 @@ class _CursorBarWidget(QWidget):
                 color = colors[orig_idx % len(colors)]
                 badge = _CursorButton(
                     f"C{orig_idx + 1}: {_format_time(t, ts, decimals=3)}", color,
-                    is_dark=self._is_dark)
+                    is_dark=self._is_dark, ui_font_size=self._ui_font_size)
                 badge.setToolTip(f"C{orig_idx + 1}: click to jump to this cursor")
-                del_btn = _CursorDeleteButton(color, is_dark=self._is_dark)
+                del_btn = _CursorDeleteButton(color, is_dark=self._is_dark,
+                                              ui_font_size=self._ui_font_size)
                 ns_cap = t
                 badge.clicked.connect(
                     lambda checked=False, ns=ns_cap: self.jump_requested.emit(ns))
@@ -12385,10 +12443,7 @@ class _CursorBarWidget(QWidget):
                     freq_str = f"{1e9 / d:.1f} Hz" if d > 0 else "\u221e Hz"
                     delta_parts.append(f"\u0394{i}={_format_time(d, ts, decimals=3)} ({freq_str})")
                 dlbl = QLabel("   " + "   ".join(delta_parts))
-                dlbl.setStyleSheet(
-                    f"font-size:{UI_FONT_SIZE}pt;"
-                    f" font-family:\"{_get_fixed_font_family()}\"; padding:0 4px;"
-                )
+                dlbl.setStyleSheet(self._delta_label_style())
                 self._layout.addWidget(dlbl)
                 self._delta_label = dlbl
         else:
@@ -12523,10 +12578,7 @@ class _LegendWidget(QWidget):
         self._heatmap_filter_label: Optional[str] = None
         self._search = QLineEdit()
         self._search.setPlaceholderText("Filter tasks...")
-        self._search.setStyleSheet(
-            "QLineEdit { background:#2D2D2D; color:#D4D4D4; border:1px solid #555; "
-            "border-radius:3px; padding:2px 4px; }"
-        )
+        self._sync_search_theme()
         self._filter_emit_timer = QTimer(self)
         self._filter_emit_timer.setSingleShot(True)
         self._filter_emit_timer.setInterval(150)
@@ -12572,7 +12624,20 @@ class _LegendWidget(QWidget):
         self._scroll.viewport().setAutoFillBackground(True)
         outer.addWidget(self._scroll, 1)
 
-    def update_theme(self, is_dark: bool) -> None:
+    def _sync_search_theme(self) -> None:
+        """Keep the filter field colours in sync (palette avoids per-widget QSS crashes)."""
+        if self._is_dark:
+            bg, fg, ph = QColor("#2D2D2D"), QColor("#D4D4D4"), QColor("#888888")
+        else:
+            bg, fg, ph = QColor("#FFFFFF"), QColor("#1E1E1E"), QColor("#999999")
+        pal = self._search.palette()
+        pal.setColor(QPalette.Base, bg)
+        pal.setColor(QPalette.Text, fg)
+        pal.setColor(QPalette.PlaceholderText, ph)
+        self._search.setPalette(pal)
+        self._search.setAutoFillBackground(True)
+
+    def update_theme(self, is_dark: bool, *, defer_rebuild: bool = False) -> None:
         """Switch the legend palette and search-box styling to match the app theme."""
         self._is_dark = is_dark
         bg = QColor("#1E1E1E") if is_dark else QColor("#F5F5F5")
@@ -12586,23 +12651,9 @@ class _LegendWidget(QWidget):
             p.setColor(QPalette.Window, bg)
             p.setColor(QPalette.Base, bg)
             w.setPalette(p)
-        self._scroll.setStyleSheet(
-            f"QScrollArea#legend_scroll {{ background:{bg.name()}; border:none; }}"
-            f"QWidget#legend_scroll_viewport {{ background:{bg.name()}; }}"
-            f"QWidget#legend_list_host {{ background:{bg.name()}; }}"
-        )
-        _fs = f"{getattr(QApplication.instance(), '_ui_font_size_val', UI_FONT_SIZE)}pt"
-        if is_dark:
-            self._search.setStyleSheet(
-                f"QLineEdit {{ background:#2D2D2D; color:#D4D4D4; border:1px solid #555; "
-                f"border-radius:3px; padding:2px 4px; font-size:{_fs}; }}"
-            )
-        else:
-            self._search.setStyleSheet(
-                f"QLineEdit {{ background:#FFFFFF; color:#1E1E1E; border:1px solid #AAAAAA; "
-                f"border-radius:3px; padding:2px 4px; font-size:{_fs}; }}"
-            )
-        if self._trace_ref is not None:
+            w.setAutoFillBackground(True)
+        self._sync_search_theme()
+        if self._trace_ref is not None and not defer_rebuild:
             self.rebuild(self._trace_ref, show_sti=self._show_sti_flag)
 
     def restore_row_layout(self) -> None:
@@ -12669,11 +12720,6 @@ class _LegendWidget(QWidget):
             header.setTextFormat(Qt.TextFormat.RichText)
             self._list_layout.addWidget(header)
 
-            tint_lbl = QLabel(self._core_tint_legend_html(is_dark))
-            tint_lbl.setTextFormat(Qt.TextFormat.RichText)
-            tint_lbl.setWordWrap(True)
-            self._list_layout.addWidget(tint_lbl)
-
             # trace.tasks contains merge keys; task_repr maps each to its raw name.
             for _mk in trace.tasks:
                 _rep_raw = trace.task_repr.get(_mk, _mk)
@@ -12713,23 +12759,6 @@ class _LegendWidget(QWidget):
             row.setVisible(visible)
         for key_lc, row_w in self._sti_rows:
             row_w.setVisible((not q) or (q in key_lc))
-
-    @staticmethod
-    def _core_tint_legend_html(is_dark: bool) -> str:
-        lines = ["<b>Core tints (Task View)</b>"]
-        tint_desc = {
-            "Core_0": "base colour",
-            "Core_1": "blue tint",
-            "Core_2": "green tint",
-            "Core_3": "red tint",
-        }
-        for core, desc in tint_desc.items():
-            col = _core_color(core)
-            lines.append(
-                f"<span style='color:{col};'>\u25a0</span> {core}: {desc}")
-        lines.append("<span style='color:#888888;'>\u25a0</span> Core_4+: grey tint")
-        color = "#AAAAAA" if is_dark else "#555555"
-        return f"<span style='color:{color}; font-size:8pt;'>" + "<br>".join(lines) + "</span>"
 
 # ===========================================================================
 # Metrics Plot Dialog
@@ -15279,6 +15308,32 @@ class _StatsPanel(QWidget):
             btn.setMinimumWidth(0)
             btn.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         outer.addLayout(exp_row)
+        self._sync_stats_panel_chrome_font()
+
+    def _ui_fs(self) -> str:
+        """CSS font-size token matching app menus/toolbar (_ui_font_stylesheet_size)."""
+        return _ui_font_stylesheet_size(self._ui_font_size)
+
+    def _sync_stats_panel_chrome_font(self) -> None:
+        """Apply UI / menu font size to stats panel chrome (scope row, export buttons)."""
+        ui_fs = self._ui_fs()
+        font = _application_ui_font(self._ui_font_size)
+        self._scope_cb.setFont(font)
+        self._scope_label.setStyleSheet(f"color:#888888; font-size:{ui_fs};")
+        for btn in (
+            self._btn_stats_expand, self._btn_stats_collapse,
+            self._btn_export_csv, self._btn_export_html, self._btn_compare_mig,
+        ):
+            btn.setFont(font)
+
+    def apply_ui_font_size(self, ui_font_size: int) -> None:
+        """Re-layout stats content when UI / menu font size changes."""
+        self._ui_font_size = int(ui_font_size)
+        self._sync_stats_panel_chrome_font()
+        if self._trace is not None:
+            self.rebuild(self._trace)
+        else:
+            self._refresh_stats_table_themes()
 
     def _scope_action_icon_color(self) -> str:
         return "#9E9E9E" if self._is_dark else "#666666"
@@ -15411,7 +15466,6 @@ class _StatsPanel(QWidget):
     def _apply_panel_theme(self) -> None:
         """Keep stats scroll surfaces in sync (Windows native style ignores QSS)."""
         bg = QColor("#1E1E1E") if self._is_dark else QColor("#F5F5F5")
-        bg_name = bg.name()
         scroll = getattr(self, "_scroll", None)
         inner = getattr(self, "_inner", None)
         targets = [self]
@@ -15427,41 +15481,59 @@ class _StatsPanel(QWidget):
             pal.setColor(QPalette.Base, bg)
             w.setPalette(pal)
             w.setAutoFillBackground(True)
-        if scroll is not None:
-            scroll.setStyleSheet(
-                f"QScrollArea#stats_scroll {{ background:{bg_name}; border:none; }}"
-                f"QWidget#stats_scroll_viewport {{ background:{bg_name}; }}"
-                f"QWidget#stats_inner {{ background:{bg_name}; }}"
-            )
-            scroll.viewport().setStyleSheet(
-                f"background-color: {bg_name}; border: none;"
-            )
 
-    def _stats_table_colors(self) -> Tuple[QColor, QColor, str]:
+    def _refresh_stats_table_themes(self) -> None:
+        """Re-apply table colours without rebuilding the whole statistics panel."""
+        ui_fs = self._ui_fs()
+        for table in self.findChildren(QTableWidget):
+            if table.objectName() == "stats_table":
+                self._apply_stats_table_theme(table, ui_fs)
+
+    def _stats_table_colors(self) -> Tuple[QColor, QColor, str, QColor]:
         """Theme colours for stats tables (match MainWindow._theme_tokens)."""
         if self._is_dark:
-            return QColor("#121212"), QColor("#D4D4D4"), "#9A9A9A"
-        return QColor("#FFFFFF"), QColor("#1E1E1E"), "#666666"
+            return (
+                QColor("#121212"), QColor("#D4D4D4"), "#9A9A9A", QColor("#2D2D2D"),
+            )
+        return QColor("#FFFFFF"), QColor("#1E1E1E"), "#666666", QColor("#E0E0E0")
 
-    def _stats_table_qss(self, ui_fs: str, bg: str, fg: str, muted: str) -> str:
+    def _stats_table_hover_bg(self) -> QBrush:
+        return QBrush(QColor("#3A3A50") if self._is_dark else QColor("#E0E0EC"))
+
+    def _stats_table_qss(self, ui_fs: str, bg: str, fg: str, muted: str,
+                         hdr_bg: str) -> str:
         """QSS for stats-panel tables."""
         return (
             f"font-size:{ui_fs};"
             f"QTableWidget#stats_table{{background:{bg}; color:{fg}; border:none;}}"
             f"QWidget#stats_table_viewport{{background:{bg};}}"
-            "QTableWidget::item{border:none; padding:0px 3px;}"
-            f"QHeaderView::section{{border:none; background:transparent; "
-            f"color:{muted}; padding:0px 3px;}}"
+            f"QTableWidget#stats_table::item{{background:{bg}; color:{fg}; "
+            f"border:none; padding:0px 3px;}}"
+            f"QHeaderView#stats_table_header::section{{border:none; "
+            f"background:{hdr_bg}; color:{muted}; padding:0px 3px;}}"
         )
+
+    def _sync_stats_table_item_backgrounds(self, table: QTableWidget,
+                                           default_bg: QBrush) -> None:
+        """Keep per-cell brushes in sync after a theme change."""
+        for r in range(table.rowCount()):
+            for c in range(table.columnCount()):
+                item = table.item(r, c)
+                if item is not None:
+                    item.setBackground(default_bg)
 
     def _apply_stats_table_theme(self, table: QTableWidget, ui_fs: str) -> QBrush:
         """Paint stats-table surfaces explicitly (required on Windows Qt)."""
-        bg, fg, muted = self._stats_table_colors()
+        bg, fg, muted, hdr_bg = self._stats_table_colors()
         bg_name = bg.name()
         fg_name = fg.name()
+        hdr_name = hdr_bg.name()
         table.setObjectName("stats_table")
         table.viewport().setObjectName("stats_table_viewport")
-        table.setStyleSheet(self._stats_table_qss(ui_fs, bg_name, fg_name, muted))
+        table.setStyleSheet(
+            self._stats_table_qss(ui_fs, bg_name, fg_name, muted, hdr_name))
+        table.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        table.viewport().setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         for w in (table, table.viewport()):
             pal = w.palette()
             pal.setColor(QPalette.Window, bg)
@@ -15469,10 +15541,18 @@ class _StatsPanel(QWidget):
             pal.setColor(QPalette.Text, fg)
             w.setPalette(pal)
             w.setAutoFillBackground(True)
-        table.viewport().setStyleSheet(
-            f"background-color: {bg_name}; border: none;"
-        )
-        return QBrush(bg)
+        hdr = table.horizontalHeader()
+        hdr.setObjectName("stats_table_header")
+        hdr.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        hp = hdr.palette()
+        hp.setColor(QPalette.Window, hdr_bg)
+        hp.setColor(QPalette.Button, hdr_bg)
+        hp.setColor(QPalette.WindowText, QColor(muted))
+        hdr.setPalette(hp)
+        hdr.setAutoFillBackground(True)
+        default_bg = QBrush(bg)
+        self._sync_stats_table_item_backgrounds(table, default_bg)
+        return default_bg
 
     def _compute_util_label_col_width(self, labels: List[str]) -> int:
         """Widest util label (capped); shared by core and task rows for bar alignment."""
@@ -15754,10 +15834,11 @@ class _StatsPanel(QWidget):
 
     def rebuild_with_font(self, trace: "BtfTrace", ui_font_size: int) -> None:
         """Re-build using the given *ui_font_size* so labels pick it up."""
-        self._ui_font_size = ui_font_size
+        self._ui_font_size = int(ui_font_size)
+        self._sync_stats_panel_chrome_font()
         self.rebuild(trace)
 
-    def set_dark(self, is_dark: bool) -> None:
+    def set_dark(self, is_dark: bool, *, refresh_tables: bool = True) -> None:
         self._is_dark = is_dark
         self._apply_panel_theme()
         self._update_scope_action_icons()
@@ -15765,6 +15846,8 @@ class _StatsPanel(QWidget):
             self._update_section_header_icon(sid)
         for grip in self._table_grips:
             grip.set_dark(is_dark)
+        if refresh_tables:
+            self._refresh_stats_table_themes()
         if self._plot_dlg is not None:
             self._plot_dlg.set_dark(is_dark)
 
@@ -16455,7 +16538,7 @@ class _StatsPanel(QWidget):
         _min_col = 3 if include_cpu else 2
         _max_col = 5 if include_cpu else 4
         _link_color = QBrush(QColor("#88AAFF"))
-        _hover_bg = QBrush(QColor("#3A3A50") if self._is_dark else QColor("#E0E0EC"))
+        _hover_bg = self._stats_table_hover_bg()
         _hovered_row = [-1]
         _interactive = bool(on_row_click or on_min_click or on_max_click)
         _row_tip = "Click to view distribution chart"
@@ -16624,7 +16707,7 @@ class _StatsPanel(QWidget):
         table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         _default_bg = self._apply_stats_table_theme(table, ui_fs)
-        _hover_bg = QBrush(QColor("#3A3A50") if self._is_dark else QColor("#E0E0EC"))
+        _hover_bg = self._stats_table_hover_bg()
         _hovered_row = [-1]
 
         def _clear_hover() -> None:
@@ -17334,7 +17417,7 @@ class _StatsPanel(QWidget):
             task_count = len(trace.tasks)
             seg_count = len(trace.segments)
 
-        _fs = f"{self._ui_font_size}pt"
+        _fs = self._ui_fs()
 
         _core_rows = self._core_util_rows(trace, lo, hi) if trace.core_names else []
         _task_rows = self._task_cpu_rows(trace, lo=lo, hi=hi)
@@ -17676,6 +17759,7 @@ class _StatsPanel(QWidget):
                     table.horizontalHeader().setSectionsClickable(True)
                     table.horizontalHeader().setSortIndicatorShown(True)
                     self._apply_stats_table_theme(table, _fs)
+                    _item_bg = QBrush(self._stats_table_colors()[0])
                     for ri, row in enumerate(_priority_rows):
                         mk, label, base, peak, count, total, pattern, total_ns = row
                         vals = [label, str(base), str(peak), str(count), total, pattern]
@@ -17685,6 +17769,7 @@ class _StatsPanel(QWidget):
                         for ci, val in enumerate(vals):
                             item = _StatsSortItem(val, sort_keys[ci])
                             item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                            item.setBackground(_item_bg)
                             if ci == 0:
                                 item.setData(Qt.ItemDataRole.UserRole, mk)
                             if ci == 5 and "L/M/H" in pattern:
@@ -17749,6 +17834,7 @@ class _StatsPanel(QWidget):
                     table.horizontalHeader().setSectionsClickable(True)
                     table.horizontalHeader().setSortIndicatorShown(True)
                     self._apply_stats_table_theme(table, _fs)
+                    _item_bg = QBrush(self._stats_table_colors()[0])
                     _status_rank = {"error": 0, "warning": 1, "ok": 2}
                     for ri, row in enumerate(_sync_rows):
                         _key, kind, ptr, label, holds, issues, avg, status_label, status, avg_ns = row[:10]
@@ -17761,6 +17847,7 @@ class _StatsPanel(QWidget):
                         for ci, val in enumerate(vals):
                             item = _StatsSortItem(val, sort_keys[ci])
                             item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                            item.setBackground(_item_bg)
                             if ci == 0:
                                 item.setData(Qt.ItemDataRole.UserRole, _key)
                             if ci == 5 and status != "ok":
@@ -17785,6 +17872,7 @@ class _StatsPanel(QWidget):
                         itable.horizontalHeader().setSectionsClickable(True)
                         itable.horizontalHeader().setSortIndicatorShown(True)
                         self._apply_stats_table_theme(itable, _fs)
+                        _item_bg = QBrush(self._stats_table_colors()[0])
 
                         def _on_issue_row(row: int, _col: int) -> None:
                             item = itable.item(row, 0)
@@ -17828,6 +17916,7 @@ class _StatsPanel(QWidget):
                             for ci, val in enumerate(vals):
                                 item = _StatsSortItem(val, sort_keys[ci])
                                 item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                                item.setBackground(_item_bg)
                                 item.setToolTip(tip)
                                 if ci == 0:
                                     item.setData(Qt.ItemDataRole.UserRole, iss)
@@ -20492,8 +20581,7 @@ class _CpuLoadGraph(QWidget):
         painter.setBrush(bg)
         painter.drawRoundedRect(bx, by, tw, 12, 2, 2)
         painter.setPen(fg)
-        sf = QFont(painter.font())
-        sf.setPointSize(max(5, self._font_size - (1 if full else 2)))
+        sf = _monospace_font(max(5, self._font_size - (1 if full else 2)))
         painter.setFont(sf)
         painter.drawText(QRect(bx + 4, by, tw - 8, 12), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, text)
 
@@ -20714,10 +20802,10 @@ class _CpuLoadGraph(QWidget):
                 sx_to_bi[sx] = min(n - 1, max(0, int((t - t_min) / bin_w)))
 
         _TITLE_H  = 22
-        sf_title  = QFont(); sf_title.setPointSize(self._font_size)
-        sf_norm   = QFont(); sf_norm.setPointSize(self._font_size)
-        sf_small  = QFont(); sf_small.setPointSize(max(6, self._font_size - 1))
-        sf_pct    = QFont(); sf_pct.setPointSize(max(5, self._font_size - 3))
+        sf_title  = _monospace_font(self._font_size)
+        sf_norm   = _monospace_font(self._font_size)
+        sf_small  = _monospace_font(max(6, self._font_size - 1))
+        sf_pct    = _monospace_font(max(5, self._font_size - 3))
         pct_muted = QColor("#555555") if dark else QColor("#AAAAAA")
         white_col = QColor("#FFFFFF") if dark else QColor("#111111")
         green_col = QColor("#4CAF50")
@@ -21043,6 +21131,10 @@ class MainWindow(QMainWindow):
         self._heatmap_view_snapshot: Optional[dict] = None
         self._defer_stats_refresh: bool = False
         self._shutting_down: bool = False
+        self._applying_theme: bool = False
+        self._theme_widgets_pending: bool = False
+        self._theme_op_id: int = 0
+        self._theme_change_in_flight: bool = False
         self._tb_icon_actions: list = []   # (QAction, icon_path_data) for theme-aware icons
 
         self.setWindowTitle("RTOS BTF Viewer")
@@ -21256,9 +21348,6 @@ class MainWindow(QMainWindow):
             pal.setColor(QPalette.Base, bg)
             w.setPalette(pal)
             w.setAutoFillBackground(True)
-        view.viewport().setStyleSheet(
-            f"background-color: {c['win_bg']}; border: none;"
-        )
 
     def _sync_cpu_load_scroll_theme(
         self, scroll: QScrollArea, graph: _CpuLoadGraph, is_dark: bool,
@@ -21276,10 +21365,6 @@ class MainWindow(QMainWindow):
             pal.setColor(QPalette.Window, bg)
             pal.setColor(QPalette.Base, bg)
             w.setPalette(pal)
-        scroll.setStyleSheet(
-            f"QScrollArea#cpu_load_scroll {{ background:{c['scroll_bg']}; border:none; }}"
-            f"QWidget#cpu_load_scroll_viewport {{ background:{c['scroll_bg']}; }}"
-        )
         graph.update()
 
     def _sync_trace_tab_widget_theme(self, is_dark: bool) -> None:
@@ -21288,15 +21373,14 @@ class MainWindow(QMainWindow):
             return
         c = self._theme_tokens(is_dark)
         win_bg = QColor(c["win_bg"])
-        strip_bg = QColor(c["mid"])
-        _ui_fs = _ui_font_stylesheet_size(getattr(self, '_ui_font_size_val', UI_FONT_SIZE))
 
         tw = self._tab_widget
         tb = tw.tabBar()
         tb.setExpanding(False)
-        if sys.platform == "darwin":
+        if sys.platform == "darwin" and not getattr(self, "_trace_tabs_left_style_applied", False):
             tb.setStyle(_LeftTabStyle())
             tw.setStyle(_LeftTabStyle())
+            self._trace_tabs_left_style_applied = True
         tw.setObjectName("trace_tab_widget")
         tb.setObjectName("trace_tab_bar")
 
@@ -21319,22 +21403,81 @@ class MainWindow(QMainWindow):
             host.setPalette(pal)
             host.setAutoFillBackground(True)
 
-        tw.setStyleSheet(
-            f"QTabWidget#trace_tab_widget {{ background:{c['win_bg']}; }}"
-            f"QTabWidget#trace_tab_widget::tab-bar {{ alignment: left; }}"
-            f"QTabWidget#trace_tab_widget::pane {{ background:{c['win_bg']}; "
-            f"border:1px solid {c['sep']}; top:-1px; }}"
-            f"QTabWidget#trace_tab_widget QTabBar#trace_tab_bar {{ "
-            f"background:{c['mid']}; border-bottom:1px solid {c['sep']}; }}"
-            f"QTabWidget#trace_tab_widget QTabBar#trace_tab_bar::tab {{ "
-            f"background:{c['tab_bg']}; color:{c['tab_fg']}; padding:4px 12px; "
-            f"border:none; border-bottom:2px solid transparent; font-size:{_ui_fs}; }}"
-            f"QTabWidget#trace_tab_widget QTabBar#trace_tab_bar::tab:selected {{ "
-            f"background:{c['tab_sel_bg']}; color:{c['tab_sel_fg']}; "
-            f"border-bottom:2px solid {c['accent']}; }}"
-            f"QTabWidget#trace_tab_widget QTabBar#trace_tab_bar::tab:hover:!selected {{ "
-            f"background:{c['tab_hover_bg']}; color:{c['tab_hover_fg']}; }}"
-        )
+    def _sync_panel_tabs_theme(self, is_dark: bool) -> None:
+        """Keep Statistics / Marks / Find tab surfaces in sync with the app theme."""
+        if not hasattr(self, "_panel_tabs"):
+            return
+        c = self._theme_tokens(is_dark)
+        win_bg = QColor(c["win_bg"])
+
+        tw = self._panel_tabs
+        tb = tw.tabBar()
+        tb.setExpanding(False)
+        if sys.platform == "darwin" and not getattr(self, "_panel_tabs_left_style_applied", False):
+            tw.setStyle(_LeftTabStyle())
+            tb.setStyle(_LeftTabStyle())
+            self._panel_tabs_left_style_applied = True
+        tw.setObjectName("panel_tab_widget")
+        tb.setObjectName("panel_tab_bar")
+        tw.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        tb.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        mid_bg = QColor(c["mid"])
+        pal = tw.palette()
+        pal.setColor(QPalette.Window, win_bg)
+        pal.setColor(QPalette.Base, win_bg)
+        pal.setColor(QPalette.Button, QColor(c["tab_bg"]))
+        pal.setColor(QPalette.ButtonText, QColor(c["tab_fg"]))
+        tw.setPalette(pal)
+        tw.setAutoFillBackground(True)
+        pal = tb.palette()
+        pal.setColor(QPalette.Window, mid_bg)
+        pal.setColor(QPalette.Base, mid_bg)
+        pal.setColor(QPalette.Button, QColor(c["tab_bg"]))
+        pal.setColor(QPalette.ButtonText, QColor(c["tab_fg"]))
+        tb.setPalette(pal)
+        tb.setAutoFillBackground(True)
+
+        for host in (
+            getattr(self, "_marks_host", None),
+            getattr(self, "_find_host", None),
+            getattr(self, "_stats_panel", None),
+        ):
+            if host is None:
+                continue
+            pal = host.palette()
+            pal.setColor(QPalette.Window, win_bg)
+            pal.setColor(QPalette.Base, win_bg)
+            host.setPalette(pal)
+            host.setAutoFillBackground(True)
+
+        marks_tabs = getattr(self, "_marks_tabs", None)
+        if marks_tabs is not None:
+            marks_tabs.setObjectName("marks_tab_widget")
+            mtb = marks_tabs.tabBar()
+            mtb.setObjectName("marks_tab_bar")
+            for w in (marks_tabs, mtb):
+                pal = w.palette()
+                pal.setColor(QPalette.Window, win_bg)
+                pal.setColor(QPalette.Base, win_bg)
+                w.setPalette(pal)
+                w.setAutoFillBackground(True)
+            for i in range(marks_tabs.count()):
+                page = marks_tabs.widget(i)
+                if page is None:
+                    continue
+                pal = page.palette()
+                pal.setColor(QPalette.Window, win_bg)
+                pal.setColor(QPalette.Base, win_bg)
+                page.setPalette(pal)
+                page.setAutoFillBackground(True)
+
+        panel_dock = getattr(self, "_panel_dock", None)
+        if panel_dock is not None:
+            pal = panel_dock.palette()
+            pal.setColor(QPalette.Window, win_bg)
+            pal.setColor(QPalette.Base, win_bg)
+            panel_dock.setPalette(pal)
+            panel_dock.setAutoFillBackground(True)
 
     def _apply_view_settings(self, view: TimelineView) -> None:
         view.set_font_size(self._font_size_val)
@@ -22401,49 +22544,62 @@ class MainWindow(QMainWindow):
             welcome_p     = "#444444",
         )
 
-    def _apply_theme(self, is_dark: bool) -> None:
+    def _apply_theme(self, is_dark: bool, *, op: int | None = None) -> None:
         """Apply the dark or light UI theme to the entire application.
 
         This is the single authoritative method for all theme changes.
         Color values are defined in ``_theme_tokens``; all QSS and widget
         overrides are driven from that table so there is only one place
         to edit when adjusting a color.
+
+        Heavy per-widget sync and rebuilds are deferred to the next event-loop
+        tick so they do not run while Qt is still repolishing widgets after
+        ``app.setStyleSheet`` (avoids macOS crashes).
         """
+        if op is not None and op != self._theme_op_id:
+            return
+        if self._applying_theme:
+            if op is not None:
+                QTimer.singleShot(20, lambda: self._apply_theme_if_current(op, is_dark))
+            return
+        self._applying_theme = True
         app = QApplication.instance()
-        self._is_dark = bool(is_dark)
+        self.setUpdatesEnabled(False)
+        try:
+            self._is_dark = bool(is_dark)
 
-        # Application-wide font (menus, toolbar, status bar).
-        _ui_font_size = getattr(self, '_ui_font_size_val', UI_FONT_SIZE)
-        _ui_fs = _ui_font_stylesheet_size(_ui_font_size)
-        base_font = _application_ui_font(_ui_font_size)
-        app.setFont(base_font)
+            # Application-wide font (menus, toolbar, status bar).
+            _ui_font_size = getattr(self, '_ui_font_size_val', UI_FONT_SIZE)
+            _ui_fs = _ui_font_stylesheet_size(_ui_font_size)
+            base_font = _application_ui_font(_ui_font_size)
+            app.setFont(base_font)
 
-        # macOS native combo widgets ignore inherited/stylesheet font-size;
-        # force it directly on the toolbar combo if it exists already.
-        combo = getattr(self, '_zoom_preset_combo', None)
-        if combo is not None:
-            combo.setFont(base_font)
+            # macOS native combo widgets ignore inherited/stylesheet font-size;
+            # force it directly on the toolbar combo if it exists already.
+            combo = getattr(self, '_zoom_preset_combo', None)
+            if combo is not None:
+                combo.setFont(base_font)
 
-        c = self._theme_tokens(is_dark)
+            c = self._theme_tokens(is_dark)
 
-        # --- Qt palette ---------------------------------------------------
-        palette = QPalette()
-        palette.setColor(QPalette.Window,          QColor(c['win_bg']))
-        palette.setColor(QPalette.WindowText,      QColor(c['text']))
-        palette.setColor(QPalette.Base,            QColor(c['win_base']))
-        palette.setColor(QPalette.AlternateBase,   QColor(c['mid']))
-        palette.setColor(QPalette.Text,            QColor(c['text']))
-        palette.setColor(QPalette.Button,          QColor(c['mid']))
-        palette.setColor(QPalette.ButtonText,      QColor(c['text']))
-        palette.setColor(QPalette.Highlight,       QColor(c['accent']))
-        palette.setColor(QPalette.HighlightedText, QColor("#FFFFFF"))
-        palette.setColor(QPalette.Link,            QColor(c['accent']))
-        palette.setColor(QPalette.ToolTipBase,     QColor(c['tooltip_bg']))
-        palette.setColor(QPalette.ToolTipText,     QColor(c['text']))
-        app.setPalette(palette)
+            # --- Qt palette ---------------------------------------------------
+            palette = QPalette()
+            palette.setColor(QPalette.Window,          QColor(c['win_bg']))
+            palette.setColor(QPalette.WindowText,      QColor(c['text']))
+            palette.setColor(QPalette.Base,            QColor(c['win_base']))
+            palette.setColor(QPalette.AlternateBase,   QColor(c['mid']))
+            palette.setColor(QPalette.Text,            QColor(c['text']))
+            palette.setColor(QPalette.Button,          QColor(c['mid']))
+            palette.setColor(QPalette.ButtonText,      QColor(c['text']))
+            palette.setColor(QPalette.Highlight,       QColor(c['accent']))
+            palette.setColor(QPalette.HighlightedText, QColor("#FFFFFF"))
+            palette.setColor(QPalette.Link,            QColor(c['accent']))
+            palette.setColor(QPalette.ToolTipBase,     QColor(c['tooltip_bg']))
+            palette.setColor(QPalette.ToolTipText,     QColor(c['text']))
+            app.setPalette(palette)
 
-        # --- App-wide QSS -------------------------------------------------
-        app.setStyleSheet(f"""
+            # --- App-wide QSS -------------------------------------------------
+            app.setStyleSheet(f"""
             QToolTip  {{ background:{c['tooltip_bg']}; color:{c['text']}; border:1px solid {c['tooltip_border']};
                          padding:4px; font-size:{_ui_fs}; }}
             QMenuBar  {{ background:{c['mid']}; color:{c['text']}; font-size:{_ui_fs}; }}
@@ -22498,6 +22654,12 @@ class MainWindow(QMainWindow):
             QTableWidget {{ background:{c['win_base']}; color:{c['text']};
                          border:1px solid {c['input_border']}; font-size:{_ui_fs};
                          gridline-color:{c['sep']}; }}
+            QTableWidget#stats_table {{ background:{c['win_base']}; color:{c['text']};
+                         border:none; gridline-color:transparent; }}
+            QTableWidget#stats_table::item {{ background:{c['win_base']}; color:{c['text']};
+                         border:none; padding:0px 3px; }}
+            QHeaderView#stats_table_header::section {{ background:{c['mid']};
+                         color:{c['muted_text']}; border:none; padding:0px 3px; }}
             QTableWidget::item {{ font-size:{_ui_fs}; padding:2px 4px; }}
             QTableWidget::item:selected {{ background:{c['accent']}; color:#FFFFFF; }}
             QHeaderView::section {{ background:{c['mid']}; color:{c['text']};
@@ -22541,28 +22703,88 @@ class MainWindow(QMainWindow):
             QSplitter::handle:horizontal {{
                 width:6px;
             }}
+            QTabWidget#trace_tab_widget {{ background:{c['win_bg']}; }}
+            QTabWidget#trace_tab_widget::tab-bar {{ alignment: left; }}
+            QTabWidget#trace_tab_widget::pane {{ background:{c['win_bg']};
+                         border:1px solid {c['sep']}; top:-1px; }}
+            QTabWidget#trace_tab_widget QTabBar#trace_tab_bar {{
+                         background:{c['mid']}; border-bottom:1px solid {c['sep']}; }}
+            QTabWidget#trace_tab_widget QTabBar#trace_tab_bar::tab {{
+                         background:{c['tab_bg']}; color:{c['tab_fg']}; padding:4px 12px;
+                         border:none; border-bottom:2px solid transparent;
+                         font-size:{_ui_fs}; }}
+            QTabWidget#trace_tab_widget QTabBar#trace_tab_bar::tab:selected {{
+                         background:{c['tab_sel_bg']}; color:{c['tab_sel_fg']};
+                         border-bottom:2px solid {c['accent']}; }}
+            QTabWidget#trace_tab_widget QTabBar#trace_tab_bar::tab:hover:!selected {{
+                         background:{c['tab_hover_bg']}; color:{c['tab_hover_fg']}; }}
+            QTabWidget#panel_tab_widget {{ background:{c['win_bg']}; }}
+            QTabWidget#panel_tab_widget::tab-bar {{
+                         background:{c['mid']}; border-bottom:1px solid {c['sep']}; }}
+            QTabWidget#panel_tab_widget::pane {{ background:{c['win_bg']};
+                         border:1px solid {c['sep']}; top:-1px; }}
+            QTabWidget#panel_tab_widget QTabBar#panel_tab_bar {{
+                         background:{c['mid']}; border-bottom:1px solid {c['sep']}; }}
+            QTabWidget#panel_tab_widget QTabBar#panel_tab_bar::tab {{
+                         background:{c['tab_bg']}; color:{c['tab_fg']}; padding:4px 12px;
+                         border:none; border-bottom:2px solid transparent;
+                         font-size:{_ui_fs}; }}
+            QTabWidget#panel_tab_widget QTabBar#panel_tab_bar::tab:selected {{
+                         background:{c['tab_sel_bg']}; color:{c['tab_sel_fg']};
+                         border-bottom:2px solid {c['accent']}; }}
+            QTabWidget#panel_tab_widget QTabBar#panel_tab_bar::tab:hover:!selected {{
+                         background:{c['tab_hover_bg']}; color:{c['tab_hover_fg']}; }}
+            QTabWidget#marks_tab_widget {{ background:{c['win_bg']}; }}
+            QTabWidget#marks_tab_widget::pane {{ background:{c['win_bg']};
+                         border:1px solid {c['sep']}; top:-1px; }}
+            QTabWidget#marks_tab_widget QTabBar#marks_tab_bar {{
+                         background:{c['win_bg']}; }}
         """)
+        finally:
+            self.setUpdatesEnabled(True)
+            self._applying_theme = False
 
-        # --- Per-widget overrides not reachable via app-wide QSS ----------
-        if hasattr(self, '_range_stats_label'):
-            self._range_stats_label.setStyleSheet(f"color:{c['muted_text']};")
-        if hasattr(self, '_find_status'):
-            self._find_status.setStyleSheet(f"color:{c['muted_text']};")
-        if hasattr(self, '_cur_hint'):
-            self._cur_hint.setStyleSheet(f"color:{c['muted_text']}; font-size:9pt;")
-        if hasattr(self, '_welcome_label'):
-            self._welcome_label.setText(
-                f"<h2 style='color:{c['welcome_h2']};'>RTOS BTF Viewer</h2>"
-                f"<p style='color:{c['welcome_p']}; font-size:11pt;'>"
-                "Drop a <b>.btf</b> file here<br>"
-                "or press <b>Ctrl+O</b> to open one</p>"
-            )
         if hasattr(self, '_view'):
-            c = self._theme_tokens(is_dark)
-            win_bg = QColor(c["win_bg"])
+            self._schedule_theme_widgets(op)
+
+    def _schedule_theme_widgets(self, op: int | None = None) -> None:
+        """Defer per-widget theme sync until after app QSS has settled."""
+        if self._shutting_down:
+            return
+        if op is None:
+            op = self._theme_op_id
+        if not self._theme_widgets_pending:
+            self._theme_widgets_pending = True
+            QTimer.singleShot(10, lambda: self._apply_theme_widgets_if_current(op))
+
+    def _apply_theme_widgets_if_current(self, op: int) -> None:
+        if op != self._theme_op_id:
+            self._theme_widgets_pending = False
+            return
+        QTimer.singleShot(0, lambda: self._apply_theme_widgets_chrome(op))
+
+    def _apply_theme_widgets_chrome(self, op: int) -> None:
+        """Dock chrome, stats, toolbar — no timeline/graphics surfaces."""
+        if op != self._theme_op_id or self._shutting_down:
+            return
+        self._apply_theme_widgets(op=op)
+
+    def _apply_theme_widgets_timeline(self, op: int) -> None:
+        """Timeline / CPU-load surfaces (deferred from chrome pass)."""
+        if op != self._theme_op_id or self._shutting_down:
+            return
+        is_dark = self._is_dark
+        c = self._theme_tokens(is_dark)
+        if not hasattr(self, '_view'):
+            self._release_theme_change()
+            return
+        win_bg = QColor(c["win_bg"])
+        defer_rebuilds = False
+        self.setUpdatesEnabled(False)
+        try:
             for view in self._iter_tab_views():
                 self._sync_timeline_view_theme(view, is_dark)
-                view._scene.set_theme(is_dark, rebuild=(view._scene._trace is not None))
+                view._scene.set_theme(is_dark, rebuild=False)
             for tab in self._tabs:
                 tab_pal = tab.cpu_splitter.palette()
                 tab_pal.setColor(QPalette.Window, win_bg)
@@ -22575,40 +22797,131 @@ class MainWindow(QMainWindow):
                 self._sync_cpu_load_scroll_theme(
                     self._settings_cpu_scroll, self._settings_cpu_graph, is_dark,
                 )
-        self._sync_trace_tab_widget_theme(is_dark)
-        if hasattr(self, '_legend'):
-            self._legend.update_theme(is_dark)
-        if hasattr(self, '_legend_dock') and self._legend_dock.widget() is not None:
-            _legend_host = self._legend_dock.widget()
-            _host_pal = _legend_host.palette()
-            _host_pal.setColor(QPalette.Window, QColor(c['win_bg']))
-            _host_pal.setColor(QPalette.Base, QColor(c['win_bg']))
-            _legend_host.setPalette(_host_pal)
+            defer_rebuilds = any(
+                v._scene._trace is not None for v in self._iter_tab_views())
+        finally:
+            self.setUpdatesEnabled(True)
+        if defer_rebuilds:
+            QTimer.singleShot(0, lambda: self._finish_theme_rebuilds_if_current(op))
+        else:
+            self._release_theme_change()
+
+    def _apply_theme_widgets(self, *, op: int | None = None) -> None:
+        """Per-widget palette/stylesheet sync (runs on the next event-loop tick)."""
+        self._theme_widgets_pending = False
+        if op is not None and op != self._theme_op_id:
+            return
+        if self._shutting_down:
+            return
+        if self._applying_theme:
+            if op is not None:
+                QTimer.singleShot(20, lambda: self._apply_theme_widgets_if_current(op))
+            return
+        self._applying_theme = True
+        is_dark = self._is_dark
+        c = self._theme_tokens(is_dark)
+        _ui_font_size = getattr(self, '_ui_font_size_val', UI_FONT_SIZE)
+        defer_rebuilds = False
+        self.setUpdatesEnabled(False)
+        try:
+            if hasattr(self, '_range_stats_label'):
+                _pal = self._range_stats_label.palette()
+                _pal.setColor(QPalette.WindowText, QColor(c['muted_text']))
+                self._range_stats_label.setPalette(_pal)
+            if hasattr(self, '_find_status'):
+                _pal = self._find_status.palette()
+                _pal.setColor(QPalette.WindowText, QColor(c['muted_text']))
+                self._find_status.setPalette(_pal)
+            if hasattr(self, '_cur_hint'):
+                _pal = self._cur_hint.palette()
+                _pal.setColor(QPalette.WindowText, QColor(c['muted_text']))
+                self._cur_hint.setPalette(_pal)
+            if hasattr(self, '_welcome_label'):
+                self._welcome_label.setText(
+                    f"<h2 style='color:{c['welcome_h2']};'>RTOS BTF Viewer</h2>"
+                    f"<p style='color:{c['welcome_p']}; font-size:11pt;'>"
+                    "Drop a <b>.btf</b> file here<br>"
+                    "or press <b>Ctrl+O</b> to open one</p>"
+                )
+            if hasattr(self, '_view'):
+                defer_rebuilds = any(
+                    v._scene._trace is not None for v in self._iter_tab_views())
+            self._sync_trace_tab_widget_theme(is_dark)
+            self._sync_panel_tabs_theme(is_dark)
+            if hasattr(self, '_legend'):
+                self._legend.update_theme(is_dark, defer_rebuild=defer_rebuilds)
+            if hasattr(self, '_legend_dock') and self._legend_dock.widget() is not None:
+                _legend_host = self._legend_dock.widget()
+                _host_pal = _legend_host.palette()
+                _host_pal.setColor(QPalette.Window, QColor(c['win_bg']))
+                _host_pal.setColor(QPalette.Base, QColor(c['win_bg']))
+                _legend_host.setPalette(_host_pal)
+            if hasattr(self, '_stats_panel'):
+                self._stats_panel.set_dark(is_dark, refresh_tables=False)
+            if hasattr(self, '_stats_panel'):
+                self._stats_panel._ui_font_size = _ui_font_size
+                self._stats_panel._sync_stats_panel_chrome_font()
+            if hasattr(self, '_cursor_bar'):
+                self._cursor_bar.update_theme(is_dark, _ui_font_size)
+            if getattr(self, '_tb_icon_actions', None):
+                _ic_color = "#CCCCCC" if is_dark else "#555555"
+                for _act, _ic_path in self._tb_icon_actions:
+                    _act.setIcon(_svg_icon(_ic_path, _ic_color))
+            if hasattr(self, '_tb_theme_btn'):
+                _theme_ic = _IC_THEME_LIGHT if is_dark else _IC_THEME_DARK
+                self._tb_theme_btn.setIcon(_svg_icon(_theme_ic, _ic_color))
+                self._tb_theme_btn.setToolTip(
+                    "Switch to light theme" if is_dark else "Switch to dark theme"
+                )
+            if hasattr(self, '_act_theme'):
+                self._act_theme.setText(
+                    "Switch to &Light Theme" if is_dark else "Switch to &Dark Theme"
+                )
+            self._sync_toolbar_theme(c)
+        finally:
+            self.setUpdatesEnabled(True)
+            self._applying_theme = False
+
+        if defer_rebuilds:
+            rebuild_op = op if op is not None else self._theme_op_id
+            QTimer.singleShot(0, lambda: self._apply_theme_widgets_timeline(rebuild_op))
+        else:
+            if hasattr(self, '_stats_panel') and self._stats_panel._trace is not None:
+                QTimer.singleShot(0, self._stats_panel._refresh_stats_table_themes)
+            self._release_theme_change()
+
+    def _release_theme_change(self) -> None:
+        self._theme_change_in_flight = False
+
+    def _finish_theme_rebuilds_if_current(self, op: int) -> None:
+        if op != self._theme_op_id:
+            self._release_theme_change()
+            return
+        self._finish_theme_rebuilds()
+
+    def _finish_theme_rebuilds(self) -> None:
+        if self._shutting_down:
+            self._release_theme_change()
+            return
+        op = self._theme_op_id
         if hasattr(self, '_stats_panel'):
-            self._stats_panel.set_dark(is_dark)
-        if hasattr(self, '_stats_panel'):
-            self._stats_panel._ui_font_size = _ui_font_size
-            if self._trace is not None:
-                self._stats_panel.rebuild(self._trace)
-        if hasattr(self, '_cursor_bar'):
-            self._cursor_bar.update_theme(is_dark)
-            if self._trace is not None:
-                self._cursor_bar.rebuild(self._view._scene.cursor_times(), self._trace)
-        if getattr(self, '_tb_icon_actions', None):
-            _ic_color = "#CCCCCC" if is_dark else "#555555"
-            for _act, _ic_path in self._tb_icon_actions:
-                _act.setIcon(_svg_icon(_ic_path, _ic_color))
-        if hasattr(self, '_tb_theme_btn'):
-            _theme_ic = _IC_THEME_LIGHT if is_dark else _IC_THEME_DARK
-            self._tb_theme_btn.setIcon(_svg_icon(_theme_ic, _ic_color))
-            self._tb_theme_btn.setToolTip(
-                "Switch to light theme" if is_dark else "Switch to dark theme"
-            )
-        if hasattr(self, '_act_theme'):
-            self._act_theme.setText(
-                "Switch to &Light Theme" if is_dark else "Switch to &Dark Theme"
-            )
-        self._sync_toolbar_theme(c)
+            QTimer.singleShot(0, self._stats_panel._refresh_stats_table_themes)
+        QTimer.singleShot(50, lambda: self._rebuild_timelines_for_theme_if_current(op))
+
+    def _rebuild_timelines_for_theme_if_current(self, op: int) -> None:
+        if op != self._theme_op_id or self._shutting_down:
+            self._release_theme_change()
+            return
+        self.setUpdatesEnabled(False)
+        try:
+            for view in self._iter_tab_views():
+                sc = view._scene
+                if sc._trace is not None:
+                    sc.rebuild()
+                    view.viewport().update()
+        finally:
+            self.setUpdatesEnabled(True)
+        self._release_theme_change()
 
     def _sync_toolbar_theme(self, c: dict) -> None:
         """Explicit toolbar palette (Windows / Fusion may ignore QSS text colour)."""
@@ -22642,8 +22955,19 @@ class MainWindow(QMainWindow):
     def _apply_light_theme(self) -> None: self._apply_theme(False)
 
     def _toggle_theme(self) -> None:
+        if self._theme_change_in_flight:
+            return
+        self._theme_change_in_flight = True
         self._is_dark = not self._is_dark
-        self._apply_theme(self._is_dark)
+        self._settings.set("view", "theme", "dark" if self._is_dark else "light")
+        self._theme_op_id += 1
+        op = self._theme_op_id
+        QTimer.singleShot(0, lambda: self._apply_theme_if_current(op, self._is_dark))
+
+    def _apply_theme_if_current(self, op: int, is_dark: bool) -> None:
+        if op != self._theme_op_id:
+            return
+        self._apply_theme(is_dark, op=op)
 
     # ------------------------------------------------------------------
     # UI construction
@@ -22707,6 +23031,7 @@ class MainWindow(QMainWindow):
         # --- Marks dock (bookmarks + annotations) ---
         marks_host = QWidget()
         marks_host.setMinimumWidth(0)
+        self._marks_host = marks_host
         marks_v = QVBoxLayout(marks_host)
         marks_v.setContentsMargins(6, 6, 6, 6)
         marks_v.setSpacing(6)
@@ -22827,6 +23152,7 @@ class MainWindow(QMainWindow):
         # --- Find panel (tab content) ---
         find_host = QWidget()
         find_host.setMinimumWidth(0)
+        self._find_host = find_host
         find_v = QVBoxLayout(find_host)
         find_v.setContentsMargins(6, 6, 6, 6)
         find_v.setSpacing(6)
@@ -22857,7 +23183,9 @@ class MainWindow(QMainWindow):
 
         # --- Right panel: Statistics / Marks / Find tabs (web parity) ---
         self._panel_tabs = QTabWidget()
-        self._panel_tabs.setDocumentMode(True)
+        if sys.platform == "darwin":
+            self._panel_tabs.setTabBar(_LeftAlignedTabBar(self._panel_tabs))
+        self._panel_tabs.setDocumentMode(False)
         self._panel_tabs.addTab(self._stats_panel, "Statistics")
         self._panel_tabs.addTab(marks_host, "Marks")
         self._panel_tabs.addTab(find_host, "Find")
@@ -24608,14 +24936,20 @@ class MainWindow(QMainWindow):
         # Batch theme rebuilds: both is_dark and ui_font_size trigger
         # _apply_theme; accumulate and call once to avoid double-flicker.
         _need_theme = False
+        _ui_font_changed = False
         if vals["is_dark"] != self._is_dark:
             self._is_dark = vals["is_dark"]
             _need_theme = True
         if vals["ui_font_size"] != self._ui_font_size_val:
             self._ui_font_size_val = vals["ui_font_size"]
+            _ui_font_changed = True
             _need_theme = True
         if _need_theme:
             self._apply_theme(self._is_dark)
+        if _ui_font_changed and hasattr(self, "_stats_panel"):
+            self._stats_panel.apply_ui_font_size(self._ui_font_size_val)
+        if _ui_font_changed and hasattr(self, "_cursor_bar"):
+            self._cursor_bar.update_theme(self._is_dark, self._ui_font_size_val)
         if vals["font_size"] != self._font_size_val:
             self._font_size_val = vals["font_size"]
             self._view.set_font_size(self._font_size_val)
@@ -25344,7 +25678,8 @@ class MainWindow(QMainWindow):
             want_dark = bool(opts["darkMode"])
             if self._is_dark != want_dark:
                 self._is_dark = want_dark
-                self._apply_theme(want_dark)
+                self._theme_op_id += 1
+                self._apply_theme(want_dark, op=self._theme_op_id)
         sc.set_migrated_only_filter(bool(opts.get("migratedOnlyFilter", False)))
         self._legend.set_migrated_only_checked(sc._migrated_only_filter)
 
