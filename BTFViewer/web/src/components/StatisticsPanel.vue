@@ -1496,9 +1496,38 @@
           </div>
           <svg
             v-else-if="scatterModel"
+            ref="scatterSvgEl"
             class="plot-svg"
             :viewBox="`0 0 ${scatterModel.width} ${scatterModel.height}`"
+            @mousemove="onScatterMouseMove"
+            @mouseleave="onScatterMouseLeave"
           >
+            <defs>
+              <linearGradient
+                id="plot-cross-v"
+                gradientUnits="userSpaceOnUse"
+                :x1="scatterCrosshair?.x ?? 0"
+                :y1="scatterModel.margin.top"
+                :x2="scatterCrosshair?.x ?? 0"
+                :y2="scatterModel.height - scatterModel.margin.bottom"
+              >
+                <stop offset="0%" stop-color="var(--plot-cross)" stop-opacity="0" />
+                <stop offset="50%" stop-color="var(--plot-cross)" stop-opacity="0.85" />
+                <stop offset="100%" stop-color="var(--plot-cross)" stop-opacity="0" />
+              </linearGradient>
+              <linearGradient
+                id="plot-cross-h"
+                gradientUnits="userSpaceOnUse"
+                :x1="scatterModel.margin.left"
+                :y1="scatterCrosshair?.y ?? 0"
+                :x2="scatterModel.width - scatterModel.margin.right"
+                :y2="scatterCrosshair?.y ?? 0"
+              >
+                <stop offset="0%" stop-color="var(--plot-cross)" stop-opacity="0" />
+                <stop offset="50%" stop-color="var(--plot-cross)" stop-opacity="0.85" />
+                <stop offset="100%" stop-color="var(--plot-cross)" stop-opacity="0" />
+              </linearGradient>
+            </defs>
             <rect
               x="0"
               y="0"
@@ -1583,6 +1612,55 @@
               >
                 {{ refLine.label }}
               </text>
+            </g>
+
+            <g v-if="scatterCrosshair">
+              <line
+                :x1="scatterCrosshair.x"
+                :x2="scatterCrosshair.x"
+                :y1="scatterCrosshair.plotTop"
+                :y2="scatterCrosshair.plotBottom"
+                class="plot-crosshair-line"
+                stroke="url(#plot-cross-v)"
+              />
+              <line
+                :x1="scatterCrosshair.plotLeft"
+                :x2="scatterCrosshair.plotRight"
+                :y1="scatterCrosshair.y"
+                :y2="scatterCrosshair.y"
+                class="plot-crosshair-line"
+                stroke="url(#plot-cross-h)"
+              />
+              <circle
+                :cx="scatterCrosshair.x"
+                :cy="scatterCrosshair.y"
+                r="4"
+                class="plot-crosshair-ring"
+              />
+              <g v-if="scatterCrosshair.tooltip">
+                <rect
+                  :x="scatterCrosshair.tooltip.x"
+                  :y="scatterCrosshair.tooltip.y"
+                  :width="scatterCrosshair.tooltip.width"
+                  :height="scatterCrosshair.tooltip.height"
+                  rx="4"
+                  class="plot-crosshair-tip-bg"
+                />
+                <text
+                  :x="scatterCrosshair.tooltip.x + 6"
+                  :y="scatterCrosshair.tooltip.y + 12"
+                  class="plot-crosshair-tip-text"
+                >
+                  {{ scatterCrosshair.tooltip.line1 }}
+                </text>
+                <text
+                  :x="scatterCrosshair.tooltip.x + 6"
+                  :y="scatterCrosshair.tooltip.y + 24"
+                  class="plot-crosshair-tip-sub"
+                >
+                  {{ scatterCrosshair.tooltip.line2 }}
+                </text>
+              </g>
             </g>
 
             <g>
@@ -2061,7 +2139,9 @@ const openPlotRef = computed({
   set: (v) => emit('update:openPlot', v),
 })
 const plotContentRef = ref(null)
+const scatterSvgEl = ref(null)
 const selectedPlotPoint = ref(-1)
+const plotHoverPointIndex = ref(-1)
 const histogramScaleMode = ref('auto')
 const compareOpen = ref(false)
 
@@ -2753,12 +2833,88 @@ const scatterModel = computed(() => {
       { label: 'p50', y: scaleY(summary.p50), color: '#4CAF50' },
       { label: 'p95', y: scaleY(summary.p95), color: '#FF9800' },
     ] : [],
-    points: plot.points.map(point => ({
+    points: plot.points.map((point, index) => ({
       ...point,
+      index,
       x: scaleX(point.xNs),
       y: scaleY(point.yValue),
       fillColor: point.fillColor || plot.color,
     })),
+  }
+})
+
+function _scatterSvgPoint(event) {
+  const svg = scatterSvgEl.value
+  if (!svg) return null
+  const pt = svg.createSVGPoint()
+  pt.x = event.clientX
+  pt.y = event.clientY
+  const ctm = svg.getScreenCTM()
+  if (!ctm) return null
+  return pt.matrixTransform(ctm.inverse())
+}
+
+function _nearestScatterPointIndex(svgX, svgY, model) {
+  if (!model?.points?.length) return -1
+  const { margin, width, height } = model
+  const plotLeft = margin.left
+  const plotRight = width - margin.right
+  const plotTop = margin.top
+  const plotBottom = height - margin.bottom
+  if (svgX < plotLeft || svgX > plotRight || svgY < plotTop || svgY > plotBottom) return -1
+  let best = -1
+  let bestD = Infinity
+  for (const pt of model.points) {
+    const dx = pt.x - svgX
+    const dy = pt.y - svgY
+    const d = dx * dx + dy * dy
+    if (d < bestD) {
+      bestD = d
+      best = pt.index
+    }
+  }
+  return best
+}
+
+function onScatterMouseMove(event) {
+  const model = scatterModel.value
+  if (!model) return
+  const pt = _scatterSvgPoint(event)
+  if (!pt) return
+  plotHoverPointIndex.value = _nearestScatterPointIndex(pt.x, pt.y, model)
+}
+
+function onScatterMouseLeave() {
+  plotHoverPointIndex.value = -1
+}
+
+const scatterCrosshair = computed(() => {
+  const model = scatterModel.value
+  const idx = plotHoverPointIndex.value
+  if (!model || idx < 0) return null
+  const point = model.points.find(p => p.index === idx)
+  if (!point) return null
+  const plotLeft = model.margin.left
+  const plotRight = model.width - model.margin.right
+  const plotTop = model.margin.top
+  const plotBottom = model.height - model.margin.bottom
+  const line1 = formatTime(point.yValue, props.trace.timeScale)
+  const line2 = `@ ${formatTime(point.xNs, props.trace.timeScale)}`
+  const tipW = Math.max(line1.length, line2.length) * 6.2 + 12
+  const tipH = 30
+  let tipX = point.x + 10
+  let tipY = point.y - tipH / 2
+  if (tipX + tipW > model.width - 4) tipX = point.x - tipW - 10
+  if (tipY < 4) tipY = 4
+  if (tipY + tipH > model.height - 4) tipY = model.height - tipH - 4
+  return {
+    x: point.x,
+    y: point.y,
+    plotLeft,
+    plotRight,
+    plotTop,
+    plotBottom,
+    tooltip: { x: tipX, y: tipY, width: tipW, height: tipH, line1, line2 },
   }
 })
 
@@ -3706,6 +3862,7 @@ watch(
 
 watch(plotData, () => {
   selectedPlotPoint.value = -1
+  plotHoverPointIndex.value = -1
   histogramScaleMode.value = 'auto'
 })
 </script>
@@ -4378,10 +4535,45 @@ watch(plotData, () => {
   color: var(--fg-dim);
 }
 
+.plot-card-scatter {
+  --plot-cross: #ffa03c;
+}
+
 .plot-svg {
   display: block;
   width: 100%;
   height: auto;
+  cursor: crosshair;
+}
+
+.plot-crosshair-line {
+  stroke-width: 1;
+  pointer-events: none;
+}
+
+.plot-crosshair-ring {
+  fill: none;
+  stroke: var(--plot-cross);
+  stroke-width: 1.5;
+  pointer-events: none;
+}
+
+.plot-crosshair-tip-bg {
+  fill: color-mix(in srgb, var(--panel-bg) 82%, var(--bg));
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.plot-crosshair-tip-text {
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  fill: var(--fg);
+}
+
+.plot-crosshair-tip-sub {
+  font-size: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  fill: var(--fg-dim);
 }
 
 .plot-point:hover {

@@ -158,7 +158,7 @@ from PySide6.QtCore import (
     QPropertyAnimation, Signal,
 )
 from PySide6.QtGui import (
-    QBrush, QColor, QCursor, QFont, QFontDatabase, QFontMetrics, QFontMetricsF, QIcon, QKeySequence, QPainter,
+    QBrush, QColor, QCursor, QFont, QFontDatabase, QFontMetrics, QFontMetricsF, QIcon, QKeySequence, QLinearGradient, QPainter,
     QPainterPath, QPalette, QPen, QPixmap, QPolygonF, QShortcut, QTransform, QWheelEvent,
 )
 from PySide6.QtSvg import QSvgGenerator
@@ -12751,6 +12751,7 @@ class _ScatterWidget(QWidget):
         self._is_dark    = is_dark
         self._highlight  = -1   # index of highlighted point (-1 = none)
         self._hover_idx  = -1   # index of hovered point for tooltip
+        self._crosshair_idx = -1  # nearest point for crosshair guides
         self.setMinimumHeight(160)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setMouseTracking(True)
@@ -12763,6 +12764,8 @@ class _ScatterWidget(QWidget):
             self._highlight = -1
         if self._hover_idx >= len(self._points):
             self._hover_idx = -1
+        if self._crosshair_idx >= len(self._points):
+            self._crosshair_idx = -1
         self.update()
 
     def set_dark(self, is_dark: bool) -> None:
@@ -12867,6 +12870,13 @@ class _ScatterWidget(QWidget):
             p.setFont(sf)
             p.drawText(ML + pw + 2, gy + 4, lbl_text)
 
+        # Crosshair guides to the nearest point under the cursor
+        if self._crosshair_idx >= 0 and self._crosshair_idx < len(self._points):
+            hpt = self._points[self._crosshair_idx]
+            cx = sx(hpt[0])
+            cy = sy(hpt[1])
+            self._draw_crosshair_grad(p, cx, cy, ML, MT, pw, ph, dark)
+
         # Points
         hl_color  = QColor("#FFFFFF")
         p.setPen(Qt.PenStyle.NoPen)
@@ -12921,42 +12931,102 @@ class _ScatterWidget(QWidget):
 
         p.end()
 
-    def _nearest_point(self, ex: int, ey: int, threshold: int = 12):
-        """Return (distance_sq, index) of the nearest scatter point within threshold px."""
-        if not self._points:
-            return float("inf"), -1
+    @staticmethod
+    def _draw_crosshair_grad(p, cx: int, cy: int, ml: int, mt: int, pw: int, ph: int,
+                             dark: bool) -> None:
+        """Fade crosshair lines through the nearest scatter point."""
+        accent = QColor("#FFA03C" if dark else "#C8460A")
+
+        def _fade(alpha: int) -> QColor:
+            c = QColor(accent)
+            c.setAlpha(alpha)
+            return c
+
+        gv = QLinearGradient(float(cx), float(mt), float(cx), float(mt + ph))
+        gv.setColorAt(0.0, _fade(0))
+        gv.setColorAt(0.5, _fade(210))
+        gv.setColorAt(1.0, _fade(0))
+        p.setPen(QPen(QBrush(gv), 1))
+        p.drawLine(cx, mt, cx, mt + ph)
+
+        gh = QLinearGradient(float(ml), float(cy), float(ml + pw), float(cy))
+        gh.setColorAt(0.0, _fade(0))
+        gh.setColorAt(0.5, _fade(210))
+        gh.setColorAt(1.0, _fade(0))
+        p.setPen(QPen(QBrush(gh), 1))
+        p.drawLine(ml, cy, ml + pw, cy)
+
+    def _plot_margins(self) -> tuple:
         w, h = self.width(), self.height()
-        ML, MT, MB = 56, 14, 36
+        ml, mt, mb = 56, 14, 36
+        sf = QFont(); sf.setPointSize(7)
+        mr = self._marker_right_margin(QFontMetrics(sf))
+        pw = w - ml - mr
+        ph = h - mt - mb
+        return ml, mt, mb, mr, pw, ph
+
+    def _plot_coord_funcs(self, ml: int, mt: int, pw: int, ph: int):
+        if not self._points:
+            return None, None, None, None
         xs = [p[0] for p in self._points]
         ys = [p[1] for p in self._points]
         x0, x1 = min(xs), max(xs)
-        y1 = max(ys) if ys else 1
-        sf = QFont(); sf.setPointSize(7)
-        MR = self._marker_right_margin(QFontMetrics(sf))
-        pw = w - ML - MR
-        ph = h - MT - MB
-        def sx(x): return ML + int((x - x0) / max(x1 - x0, 1) * pw)
-        def sy(y): return MT + ph - int(y / max(y1, 1) * ph)
+        y0, y1 = 0, max(ys) if max(ys) > 0 else 1
+        xspan = max(x1 - x0, 1)
+        yspan = max(y1 - y0, 1)
+
+        def sx(x): return ml + int((x - x0) / xspan * pw)
+        def sy(y): return mt + ph - int((y - y0) / yspan * ph)
+        return sx, sy, x0, x1
+
+    def _nearest_point_index(self, ex: float, ey: float) -> int:
+        """Index of the nearest scatter point when *ex*, *ey* is inside the plot area."""
+        if not self._points:
+            return -1
+        ml, mt, _mb, _mr, pw, ph = self._plot_margins()
+        if not (ml <= ex <= ml + pw and mt <= ey <= mt + ph):
+            return -1
+        sx, sy, _, _ = self._plot_coord_funcs(ml, mt, pw, ph)
+        if sx is None:
+            return -1
         best_d, best_i = float("inf"), -1
         for i, pt in enumerate(self._points):
             dx = sx(pt[0]) - ex
             dy = sy(pt[1]) - ey
-            d  = dx * dx + dy * dy
+            d = dx * dx + dy * dy
             if d < best_d:
                 best_d, best_i = d, i
+        return best_i
+
+    def _nearest_point(self, ex: int, ey: int, threshold: int = 12):
+        """Return (distance_sq, index) of the nearest scatter point within threshold px."""
+        idx = self._nearest_point_index(ex, ey)
+        if idx < 0:
+            return float("inf"), -1
+        ml, mt, _mb, _mr, pw, ph = self._plot_margins()
+        sx, sy, _, _ = self._plot_coord_funcs(ml, mt, pw, ph)
+        pt = self._points[idx]
+        dx = sx(pt[0]) - ex
+        dy = sy(pt[1]) - ey
+        best_d = dx * dx + dy * dy
         if best_d <= threshold * threshold:
-            return best_d, best_i
+            return best_d, idx
         return float("inf"), -1
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802
-        _, idx = self._nearest_point(event.position().x(), event.position().y(), threshold=12)
-        if idx != self._hover_idx:
-            self._hover_idx = idx
+        ex = event.position().x()
+        ey = event.position().y()
+        cross_idx = self._nearest_point_index(ex, ey)
+        _, hover_idx = self._nearest_point(ex, ey, threshold=12)
+        if cross_idx != self._crosshair_idx or hover_idx != self._hover_idx:
+            self._crosshair_idx = cross_idx
+            self._hover_idx = hover_idx
             self.update()
 
     def leaveEvent(self, event) -> None:  # noqa: N802
-        if self._hover_idx != -1:
+        if self._hover_idx != -1 or self._crosshair_idx != -1:
             self._hover_idx = -1
+            self._crosshair_idx = -1
             self.update()
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
