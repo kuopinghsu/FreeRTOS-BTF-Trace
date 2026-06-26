@@ -796,7 +796,7 @@ $$
 d_k = t_{\text{end},k} - t_{\text{start},k}
 $$
 
-Table statistics (Min / Avg / Max / p95) are computed over all slices {*d*<sub>k</sub>}. **CPU%** is the task's share of total active CPU time in scope:
+Table statistics (Min / Avg / Max / p95) are computed over all slice durations *d*<sub>k</sub> in scope. **CPU%** is the task's share of total active CPU time in scope:
 
 $$
 \text{CPU}_i = \frac{T_{\text{exec},i}}{\sum_j T_{\text{exec},j}} \times 100
@@ -835,7 +835,7 @@ $$
 g_k = t_{\text{start},k+1} - t_{\text{end},k}
 $$
 
-Only positive gaps are counted. Min / Avg / Max / p95 are taken over {*g*<sub>k</sub>} in scope.
+Only positive gaps are counted. Min / Avg / Max / p95 are taken over all gaps *g*<sub>k</sub> in scope.
 
 **What it tells you:** Blocking time is pure **wait time** — the task is runnable or blocked but not on-CPU. High **Avg** or **Max** gaps often point to lock contention, priority inversion, or a higher-priority task monopolizing the core. Spikes clustered at specific times in the scatter plot usually correlate with a particular preemptor or synchronization object; use **Preemption Chain Analysis** or **Mutex / Semaphore** pairing to find the cause.
 
@@ -867,7 +867,7 @@ $$
 \Delta t_k = t_{\text{start},k+1} - t_{\text{start},k}
 $$
 
-Min / Avg / Max / p95 are taken over {Δ*t*<sub>k</sub>} in scope.
+Min / Avg / Max / p95 are taken over all inter-arrival samples Δ*t*<sub>k</sub> in scope.
 
 **What it tells you:** Inter-arrival time reflects how often the task is **scheduled to run**, including time it spent on-CPU. For periodic tasks it should cluster near the expected period; drift or bimodality hints at missed deadlines, timer jitter, or workload-dependent release patterns. Because Δ*t*<sub>k</sub> = *d*<sub>k</sub> + *g*<sub>k</sub> (slice duration plus blocking gap), inter-arrival is always **≥** blocking time for the same activations — compare both tables to see whether jitter comes from short runs or long waits.
 
@@ -1091,7 +1091,7 @@ $$
 \tau_j = t_e - t_s
 $$
 
-**Count** is the number of paired spans in scope; Min / Avg / Max / p95 are over {τ<sub>j</sub>}.
+**Count** is the number of paired spans in scope; Min / Avg / Max / p95 are over all interval durations τ<sub>j</sub>.
 
 **What it tells you:** Interval metrics measure **how long instrumented code regions take** — loop iterations, critical sections, or end-to-end handlers. Tight clusters in the distribution chart mean stable iteration time; outliers or a high **Max** often mark contention, preemption inside the region, or pairing artefacts (see **Limitations** under Interval Analysis below). Compare interval ids to separate workloads (e.g. mutex stress vs lighter loops in the same trace).
 
