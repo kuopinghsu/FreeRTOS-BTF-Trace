@@ -14,9 +14,25 @@ Trace output is produced in two industry-standard formats:
 
 ---
 
+## Table of contents
+
+| Section | For |
+|---------|-----|
+| [Overview](#overview) | What this project does and the trace pipeline |
+| [Repository structure](#repository-structure) | Top-level directories |
+| [Quick start](#quick-start) | Build the RV64 demo and generate `trace.btf` |
+| [Demo](#demo) | SMP stress tests included in the repo |
+| [Visualising traces](#visualising-traces) | BTF Viewer, Trace Compass, GTKWave |
+| [Use cases](#use-cases) | Heap tags, intervals, migration heatmap |
+| [Porting guide](#porting-guide) | Integrate into your FreeRTOS project |
+| [Reference](#reference) | `trace.bin` layout, event → BTF mapping, RAM sizing |
+| [Known limitations](#known-limitations) | Current gaps and caveats |
+
+---
+
 ## Overview
 
-Identifying performance bottlenecks in real-time embedded systems often requires a full-featured commercial tool such as [Percepio Tracealyzer](https://percepio.com/tracealyzer/). This project provides a simple, extensible, and completely free alternative. It instruments FreeRTOS with trace hooks, captures context-switch events into a compact in-memory buffer, and converts that buffer to BTF or VCD for offline analysis.
+Identifying performance bottlenecks in real-time embedded systems often requires a full-featured commercial tool such as [Percepio Tracealyzer](https://percepio.com/tracealyzer/). This project provides a simple, extensible, and completely free alternative: instrument FreeRTOS with trace hooks, capture context-switch events into a compact in-memory buffer, and convert that buffer to BTF or VCD for offline analysis.
 
 A related approach using [BareCTF](https://barectf.org/) and [Eclipse Trace Compass](https://www.eclipse.org/tracecompass/) is available at [freertos-barectf](https://github.com/gpollo/freertos-barectf).
 
@@ -30,6 +46,352 @@ FreeRTOS trace hooks
   → .btf / .vcd
   → BTFViewer (desktop or web) / Trace Compass / GTKWave
 ```
+
+## Repository structure
+
+```
+FreeRTOS-Trace/   Trace library (hooks, ring buffer, file dump via fopen)
+tools/            gentrace — binary dump → BTF or VCD
+sim/              RV64 SMP instruction-set simulator (C++, supports --cores N)
+Demo/             FreeRTOS SMP demo built for RV64, run under sim/
+BTFViewer/        Interactive BTF viewer (PySide6 desktop + Vue 3 web app)
+tracedata/        Sample outputs (example.btf, example-4cores.btf, example.vcd)
+images/           Documentation screenshots (timeline, stats plots, migration heatmaps)
+```
+
+---
+
+## Quick start
+
+### Prerequisites
+
+The demo targets **RISC-V RV64** and runs on the included **`sim/`** simulator (a custom C++ RV64 ISS that supports SMP via `--cores N`).
+
+Install the [xPack RISC-V Embedded GCC](https://github.com/xpack-dev-tools/riscv-none-elf-gcc-xpack) toolchain.  The default path expected by the build system is:
+
+```
+/opt/xpack-riscv-none-elf-gcc-15.2.0-1/bin/riscv-none-elf-gcc
+```
+
+Override with `RISCV_PREFIX` if yours is installed elsewhere:
+
+```bash
+make run RISCV_PREFIX=/path/to/riscv-none-elf-
+```
+
+### Build and Run
+
+```bash
+# Single-core (default)
+make run
+
+# SMP — 2 cores
+make CORES=2 run
+
+# SMP — 8 cores
+make CORES=8 run
+```
+
+On the first run, `FreeRTOS-Kernel` (V11.3.0) is cloned automatically.
+The build produces:
+
+- `build/demo/examples/cores<N>/freertos_test.elf` — the FreeRTOS test binary
+- `build/sim/riscv64-sim` — the RV64 simulator
+- `build/tools/gentrace` — the trace converter
+
+After the simulator exits it writes `trace.bin`; `gentrace` converts it to `tracedata/trace.btf` and `tracedata/trace.vcd`.
+
+**View the trace:**
+
+```bash
+pip install -r BTFViewer/requirements.txt
+python BTFViewer/btf_viewer.py tracedata/trace.btf
+```
+
+Sample traces: `tracedata/example.btf`, `tracedata/example-4cores.btf` (SMP demos), `tracedata/example-16cores.btf` (large). Full viewer docs: [`BTFViewer/README.md`](BTFViewer/README.md).
+
+---
+
+## Demo
+
+The demo (`Demo/examples/freertos_test/`) runs eight SMP stress tests:
+
+| # | Test | What it exercises |
+|---|------|-------------------|
+| 1 | Context-switch stress | Rapid voluntary yields across all cores |
+| 2 | Mutex contention | Priority-inheritance mutex under load |
+| 3 | Counting semaphore + mutex | Mixed synchronisation primitives |
+| 4 | Task notifications | Direct-to-task notification API |
+| 5 | Event groups | Multi-bit event synchronisation |
+| 6 | Queue stress | Producer/consumer queues at speed |
+| 7 | Task priority set | `vTaskPrioritySet()` and `traceTASK_PRIORITY_SET` |
+| 8 | Priority inversion | Classic L/M/H mutex inheritance (`uxTaskPriorityGet`) |
+
+Expected output (CORES=2 example):
+
+```
+freertos_test: starting
+  cores=2   workers=6    sem_slots=2   iter_fast=50   iter_slow=20
+test 1: context-switch stress       ... pass
+test 2: mutex contention            ... pass
+test 3: counting-sem + mutex        ... pass
+test 4: task notifications          ... pass
+test 5: event group                 ... pass
+test 6: queue stress                ... pass
+test 7: task priority set           ... pass
+test 8: priority inversion          ... pass
+5034 events generated.
+freertos_test: all tests passed
+```
+
+## Use cases
+
+Worked examples from the demo firmware and BTFViewer. Detailed viewer workflows: [`BTFViewer/README.md`](BTFViewer/README.md).
+
+### Use case: monitor heap usage with the tick hook
+
+The demo records **heap bytes in use** on every RTOS tick and plots them in BTFViewer as an analog waveform.
+
+**Setup (already enabled in this repo):**
+
+| Item | Where | Setting |
+|------|-------|---------|
+| Heap allocator | `Demo/examples/Makefile` | `heap_4.c` (coalescing heap; exposes `xPortGetFreeHeapSize()`) |
+| Tick hook | `Demo/conf/FreeRTOSConfig.h` | `configUSE_TICK_HOOK` = `1` |
+| Tag events | `FreeRTOS-Trace/FreeRTOS-Trace.h` | `configINCLUDE_TAGS` = `1` (default) |
+| Sampling code | `Demo/examples/freertos_test/main.c` | `vApplicationTickHook()` |
+
+**What the hook does:**
+
+```c
+void vApplicationTickHook( void )
+{
+#if configUSE_TRACE_FACILITY
+    size_t allocated = configTOTAL_HEAP_SIZE - xPortGetFreeHeapSize();
+    btf_traceTAG( 0, (int) allocated );   /* STI tag0_event in the trace */
+#endif
+}
+```
+
+Each call emits a BTF line like:
+
+```
+1234567,Core_0,0,STI,tag0_event,0,trigger,4096
+```
+
+The last field is **bytes allocated** from the heap_4 pool at that tick.
+
+**Run and view:**
+
+```bash
+make run
+python BTFViewer/btf_viewer.py tracedata/trace.btf
+```
+
+In BTFViewer, locate the **tag0_event** STI row in the label column and expand it to show the heap-usage waveform over time. Tags `1`–`7` (`btf_traceTAG( 1 … 7, value )`) are available for other periodic signals (stack high-water, custom counters, etc.).
+
+<img src="images/memusage.png">
+
+### Use case: measure code execution intervals
+
+Pair **`interval_start` / `interval_stop`** STI events to bracket a region of code and record when it ran and how long it took. The demo wraps each stress test (and each test iteration) with these calls.
+
+**Setup:** same as tag events — `configUSE_TRACE_FACILITY` = `1` and `configINCLUDE_TAGS` = `1` (default in `FreeRTOS-Trace/FreeRTOS-Trace.h`).
+
+| API | Context | Description |
+|-----|---------|-------------|
+| `traceINTERVAL_START( id )` | Task | Record interval *start*; `id` is a user-defined integer (0 … 2³²−1) |
+| `traceINTERVAL_STOP( id )`  | Task | Record interval *stop* for the same `id` |
+| `btf_traceINTERVAL_START( id )` | Any* | Low-level start (no critical-section wrapper) |
+| `btf_traceINTERVAL_STOP( id )`  | Any* | Low-level stop (no critical-section wrapper) |
+
+\*Prefer the `traceINTERVAL_*` macros in task code. Use the `btf_traceINTERVAL_*` functions only when you already hold the trace lock or are in a context where the macro wrappers are unsuitable.
+
+The logger records the **calling task id** automatically (`param2` in the binary event); you only pass the interval `id`.
+
+**Example:**
+
+```c
+#if configUSE_TRACE_FACILITY
+    traceINTERVAL_START( 1 );
+#endif
+    do_work();
+#if configUSE_TRACE_FACILITY
+    traceINTERVAL_STOP( 1 );
+#endif
+```
+
+**Binary layout** — see [Binary → BTF dump mapping](#binary--btf-dump-mapping) (`param1` = interval `id`, `param2` = caller task id).
+
+**BTF text** (from `gentrace` or live `btf_dump`): channel `interval_start` or `interval_stop`; the note field (last CSV column) is `{id} tid:{task_id}`:
+
+```
+214276,Core_0,0,STI,interval_start,0,trigger,0 tid:1
+215514,Core_0,0,STI,interval_start,0,trigger,1 tid:7
+217432,Core_1,0,STI,interval_stop,0,trigger,1 tid:7
+```
+
+In the demo (`Demo/examples/freertos_test/main.c`), `id` **0** brackets an entire test function; **1**–**8** bracket the inner loop of tests 1–8 respectively.
+
+**In BTFViewer:** paired spans appear as **Interval N** rows at the bottom of the timeline (horizontal task view). When the BTF note includes `tid:{task_id}`, start/stop events pair by **interval id + task id**; legacy traces without `tid` pair by the note string alone. Open **Statistics → Interval Analysis** for min/avg/max/p95 duration and a duration plot. See [`BTFViewer/README.md`](BTFViewer/README.md#interval-analysis) for pairing rules and SMP limitations.
+
+### Use case: SMP core migration heatmap
+
+On multi-core traces, BTFViewer detects when the same task runs on different cores and exposes **Core Migrations** in the Statistics panel plus a clickable **Migration heatmap** (toolbar **Heatmap**). The heatmap shows *when* cross-core traffic happens — complementary to the per-task migration table (ping-pong count, STI correlation, gap-after vs other gaps).
+
+Open the 4-core sample trace and explore the heatmap:
+
+```bash
+python BTFViewer/btf_viewer.py tracedata/example-4cores.btf
+```
+
+**Level 1 — core-pair overview** (directed pairs × 32 time bins):
+
+<img src="images/migration-heatmap-pairs.svg" alt="Migration heatmap Level 1: core-pair rows and time bins for example-4cores.btf" width="410">
+
+Each row is a directed core pair (`c0→c1`, `c0→c2`, …). Darker cells mean more migrations in that time bin. Click a non-empty cell to drill into the tasks that contributed.
+
+**Level 2 — task grid** (after clicking a hot cell):
+
+<img src="images/migration-heatmap-tasks.svg" alt="Migration heatmap Level 2: per-task sub-bins after drilling from example-4cores.btf" width="410">
+
+Rows are tasks that migrated on the selected pair within the chosen bin; columns are **32 sub-bins** inside that bin. Click a task cell to zoom the timeline, place cursors, switch to **Task View**, and filter to that task.
+
+Traces with **more than 16 cores** use a three-level drill-down (core×core matrix → outgoing pairs → tasks). **Export PNG / SVG** from the heatmap dialog captures the full current level. See [`BTFViewer/README.md`](BTFViewer/README.md#migration-heatmap) for workflow, cursor scoping, and **Trace Compare…** integration.
+
+---
+
+## Visualising traces
+
+### BTF Viewer (built-in)
+
+An interactive Gantt-style viewer is included in the `BTFViewer/` directory (desktop PySide6 app and browser-based web viewer). Both share the same default settings (dark theme, grid on, hover dimming off, 22 px rows, etc.). They support Task/Core views, measurement cursors (2–8, default 4), CPU load graph, bookmarks, **Statistics** / **Marks** / **Find** right-side panels, **Statistics** (execution time, blocking/response time, tick health with tick-interval distribution, preemption chain, priority inheritance, mutex/semaphore pairing, interval analysis), **adaptive metrics histograms** (auto linear / p5–p95 / log scaling, CDF overlay), **core migration heatmap**, trace compare, and PNG/SVG export.
+
+**Desktop requirements:** Python 3.8+ and PySide6 ≥ 6.4
+
+```bash
+pip install -r BTFViewer/requirements.txt
+python BTFViewer/btf_viewer.py tracedata/trace.btf
+# or the 4-core SMP demo trace:
+python BTFViewer/btf_viewer.py tracedata/example-4cores.btf
+```
+
+See [`BTFViewer/README.md`](BTFViewer/README.md) for the full feature reference (zoom, cursors, [migration heatmap](BTFViewer/README.md#migration-heatmap), [statistics](BTFViewer/README.md#statistics--metrics), trace compare, headless CLI, session restore, export, etc.).
+
+### Eclipse Trace Compass
+
+Open `tracedata/trace.btf` directly in [Trace Compass](https://www.eclipse.org/tracecompass/).
+
+### GTKWave / VCD Viewer
+
+```bash
+gtkwave tracedata/trace.vcd
+```
+
+---
+
+## Porting guide
+
+Follow these steps to integrate the trace library into your own FreeRTOS project.
+
+### 1. Include the trace header
+
+Add the following line to your `FreeRTOSConfig.h`:
+
+```c
+#include "FreeRTOS-Trace/FreeRTOS-Trace.h"
+```
+
+Enable tracing in config:
+
+```c
+#define configUSE_TRACE_FACILITY  1
+#define configMAX_TRACE_EVENTS    4096   /* adjust for RAM budget */
+#define configMAX_TRACE_TASKS     64
+```
+
+### 2. Implement the time source
+
+Edit `FreeRTOS-Trace/btf_port.h` and define the `xGetCycles()` macro to return the current system cycle counter:
+
+```c
+#define xGetCycles()  /* your platform timer, e.g. DWT cycle counter */
+```
+
+The RISC-V port uses `portGET_RUN_TIME_COUNTER_VALUE()` which maps to `rdcycle`.
+
+### 3. Choose dump mode
+
+| Mode | Configuration |
+|------|---------------|
+| **File dump** (default) | `HAVE_FILE_DUMP` in `btf_port.h` — writes `trace.bin` via `fopen`/`fwrite`/`fclose` at `traceEND()` |
+| **Live stdout BTF** | Uncomment `#define PRINT_BTF_DUMP` in `btf_port.h` |
+| **Buffer only** | Define neither — keep events in RAM and dump the `trace_data` symbol after the run via debugger/JTAG |
+
+### 4. Add the source file to your build
+
+Compile `FreeRTOS-Trace/btf_trace.c` as part of your project.
+
+### 5. Start and stop tracing
+
+```c
+int main(void)
+{
+#if configUSE_TRACE_FACILITY
+    traceSTART();
+#endif
+
+    xTaskCreate( ... );
+    vTaskStartScheduler();
+}
+
+/* Inside the task that finishes last: */
+#if configUSE_TRACE_FACILITY
+    traceEND();   /* writes trace.bin */
+#endif
+exit(0);
+```
+
+### 5a. Custom instrumentation (tags & intervals)
+
+When `configINCLUDE_TAGS` is `1`, you can emit user-defined STI events from application code:
+
+| Macro | Underlying function | Purpose |
+|-------|---------------------|---------|
+| `traceTAG( t, v )` | `btf_traceTAG()` | Periodic sample; `t` = 0…7, `v` = 32-bit payload |
+| `traceINTERVAL_START( id )` | `btf_traceINTERVAL_START()` | Mark the start of a timed code region (`param1` = `id`, `param2` = caller task id) |
+| `traceINTERVAL_STOP( id )` | `btf_traceINTERVAL_STOP()` | Mark the end of the same region (`id` must match; same task id recorded in `param2`) |
+
+See [Use case: monitor heap usage with the tick hook](#use-case-monitor-heap-usage-with-the-tick-hook) and [Use case: measure code execution intervals](#use-case-measure-code-execution-intervals) for worked examples.
+
+### 6. SMP considerations
+
+All trace hooks in `FreeRTOS-Trace/FreeRTOS-Trace.h` are protected by either `taskENTER_CRITICAL()` (task context) or `taskENTER_CRITICAL_FROM_ISR()` (ISR / context-switch context).
+
+The RISC-V SMP port (`Demo/port/RISC-V/port.c`) implements both the task lock and the ISR lock as **recursive** spinlocks (owner + count).  This allows `traceTASK_SWITCHED_OUT/IN` — which fire inside `vTaskSwitchContext` while the ISR lock is already held — to safely re-enter the same lock without deadlocking.
+
+### 7. Convert to BTF or VCD
+
+```bash
+# BTF format
+tools/gentrace trace.bin trace.btf
+
+# VCD format
+tools/gentrace -v trace.bin trace.vcd
+```
+
+Event-to-BTF field mapping is documented in [Binary → BTF dump mapping](#binary--btf-dump-mapping). The input file layout is in [`trace.bin` binary format](#tracebin-binary-format).
+
+### 8. Open the trace
+
+- **BTF:** open with `BTFViewer/btf_viewer.py`, the web viewer, or Eclipse Trace Compass.
+- **VCD:** open with GTKWave or any compatible VCD viewer.
+
+---
+
+## Reference
+
+On-disk `trace.bin` layout, event encoding, and BTF line generation. For BTF **text** file semantics (task names, STI channels, intervals), see [`BTFViewer/README.md`](BTFViewer/README.md#btf-format).
 
 ### `trace.bin` binary format
 
@@ -155,338 +517,7 @@ On SMP (`configNUMBER_OF_CORES` > 1), the emitting core is stored in the high bi
 
 ---
 
-## Repository Structure
-
-```
-FreeRTOS-Trace/   Trace library (hooks, ring buffer, file dump via fopen)
-tools/            gentrace — binary dump → BTF or VCD
-sim/              RV64 SMP instruction-set simulator (C++, supports --cores N)
-Demo/             FreeRTOS SMP demo built for RV64, run under sim/
-BTFViewer/        Interactive BTF viewer (PySide6 desktop + Vue 3 web app)
-tracedata/        Sample outputs (example.btf, example-4cores.btf, example.vcd)
-images/           Documentation screenshots (timeline, stats plots, migration heatmaps)
-```
-
----
-
-## Getting Started
-
-### Prerequisites
-
-The demo targets **RISC-V RV64** and runs on the included **`sim/`** simulator (a custom C++ RV64 ISS that supports SMP via `--cores N`).
-
-Install the [xPack RISC-V Embedded GCC](https://github.com/xpack-dev-tools/riscv-none-elf-gcc-xpack) toolchain.  The default path expected by the build system is:
-
-```
-/opt/xpack-riscv-none-elf-gcc-15.2.0-1/bin/riscv-none-elf-gcc
-```
-
-Override with `RISCV_PREFIX` if yours is installed elsewhere:
-
-```bash
-make run RISCV_PREFIX=/path/to/riscv-none-elf-
-```
-
-### Build and Run
-
-```bash
-# Single-core (default)
-make run
-
-# SMP — 2 cores
-make CORES=2 run
-
-# SMP — 8 cores
-make CORES=8 run
-```
-
-On the first run, `FreeRTOS-Kernel` (V11.3.0) is cloned automatically.
-The build produces:
-
-- `build/demo/examples/cores<N>/freertos_test.elf` — the FreeRTOS test binary
-- `build/sim/riscv64-sim` — the RV64 simulator
-- `build/tools/gentrace` — the trace converter
-
-After the simulator exits it writes `trace.bin`; `gentrace` converts it to `tracedata/trace.btf` and `tracedata/trace.vcd`.
-
----
-
-## Demo
-
-The demo (`Demo/examples/freertos_test/`) runs eight SMP stress tests:
-
-| # | Test | What it exercises |
-|---|------|-------------------|
-| 1 | Context-switch stress | Rapid voluntary yields across all cores |
-| 2 | Mutex contention | Priority-inheritance mutex under load |
-| 3 | Counting semaphore + mutex | Mixed synchronisation primitives |
-| 4 | Task notifications | Direct-to-task notification API |
-| 5 | Event groups | Multi-bit event synchronisation |
-| 6 | Queue stress | Producer/consumer queues at speed |
-| 7 | Task priority set | `vTaskPrioritySet()` and `traceTASK_PRIORITY_SET` |
-| 8 | Priority inversion | Classic L/M/H mutex inheritance (`uxTaskPriorityGet`) |
-
-Expected output (CORES=2 example):
-
-```
-freertos_test: starting
-  cores=2   workers=6    sem_slots=2   iter_fast=50   iter_slow=20
-test 1: context-switch stress       ... pass
-test 2: mutex contention            ... pass
-test 3: counting-sem + mutex        ... pass
-test 4: task notifications          ... pass
-test 5: event group                 ... pass
-test 6: queue stress                ... pass
-test 7: task priority set           ... pass
-test 8: priority inversion          ... pass
-5034 events generated.
-freertos_test: all tests passed
-```
-
-### Use case: monitor heap usage with the tick hook
-
-The demo records **heap bytes in use** on every RTOS tick and plots them in BTFViewer as an analog waveform.
-
-**Setup (already enabled in this repo):**
-
-| Item | Where | Setting |
-|------|-------|---------|
-| Heap allocator | `Demo/examples/Makefile` | `heap_4.c` (coalescing heap; exposes `xPortGetFreeHeapSize()`) |
-| Tick hook | `Demo/conf/FreeRTOSConfig.h` | `configUSE_TICK_HOOK` = `1` |
-| Tag events | `FreeRTOS-Trace/FreeRTOS-Trace.h` | `configINCLUDE_TAGS` = `1` (default) |
-| Sampling code | `Demo/examples/freertos_test/main.c` | `vApplicationTickHook()` |
-
-**What the hook does:**
-
-```c
-void vApplicationTickHook( void )
-{
-#if configUSE_TRACE_FACILITY
-    size_t allocated = configTOTAL_HEAP_SIZE - xPortGetFreeHeapSize();
-    btf_traceTAG( 0, (int) allocated );   /* STI tag0_event in the trace */
-#endif
-}
-```
-
-Each call emits a BTF line like:
-
-```
-1234567,Core_0,0,STI,tag0_event,0,trigger,4096
-```
-
-The last field is **bytes allocated** from the heap_4 pool at that tick.
-
-**Run and view:**
-
-```bash
-make run
-python BTFViewer/btf_viewer.py tracedata/trace.btf
-```
-
-In BTFViewer, locate the **tag0_event** STI row in the label column and expand it to show the heap-usage waveform over time. Tags `1`–`7` (`btf_traceTAG( 1 … 7, value )`) are available for other periodic signals (stack high-water, custom counters, etc.).
-
-<img src="images/memusage.png">
-
-### Use case: measure code execution intervals
-
-Pair **`interval_start` / `interval_stop`** STI events to bracket a region of code and record when it ran and how long it took. The demo wraps each stress test (and each test iteration) with these calls.
-
-**Setup:** same as tag events — `configUSE_TRACE_FACILITY` = `1` and `configINCLUDE_TAGS` = `1` (default in `FreeRTOS-Trace/FreeRTOS-Trace.h`).
-
-| API | Context | Description |
-|-----|---------|-------------|
-| `traceINTERVAL_START( id )` | Task | Record interval *start*; `id` is a user-defined integer (0 … 2³²−1) |
-| `traceINTERVAL_STOP( id )`  | Task | Record interval *stop* for the same `id` |
-| `btf_traceINTERVAL_START( id )` | Any* | Low-level start (no critical-section wrapper) |
-| `btf_traceINTERVAL_STOP( id )`  | Any* | Low-level stop (no critical-section wrapper) |
-
-\*Prefer the `traceINTERVAL_*` macros in task code. Use the `btf_traceINTERVAL_*` functions only when you already hold the trace lock or are in a context where the macro wrappers are unsuitable.
-
-The logger records the **calling task id** automatically (`param2` in the binary event); you only pass the interval `id`.
-
-**Example:**
-
-```c
-#if configUSE_TRACE_FACILITY
-    traceINTERVAL_START( 1 );
-#endif
-    do_work();
-#if configUSE_TRACE_FACILITY
-    traceINTERVAL_STOP( 1 );
-#endif
-```
-
-**Binary layout** — see [Binary → BTF dump mapping](#binary--btf-dump-mapping) (`param1` = interval `id`, `param2` = caller task id).
-
-**BTF text** (from `gentrace` or live `btf_dump`): channel `interval_start` or `interval_stop`; the note field (last CSV column) is `{id} tid:{task_id}`:
-
-```
-214276,Core_0,0,STI,interval_start,0,trigger,0 tid:1
-215514,Core_0,0,STI,interval_start,0,trigger,1 tid:7
-217432,Core_1,0,STI,interval_stop,0,trigger,1 tid:7
-```
-
-In the demo (`Demo/examples/freertos_test/main.c`), `id` **0** brackets an entire test function; **1**–**8** bracket the inner loop of tests 1–8 respectively.
-
-**In BTFViewer:** paired spans appear as **Interval N** rows at the bottom of the timeline (horizontal task view). When the BTF note includes `tid:{task_id}`, start/stop events pair by **interval id + task id**; legacy traces without `tid` pair by the note string alone. Open **Statistics → Interval Analysis** for min/avg/max/p95 duration and a duration plot. See [`BTFViewer/README.md`](BTFViewer/README.md#interval-analysis) for pairing rules and SMP limitations.
-
-### Use case: SMP core migration heatmap
-
-On multi-core traces, BTFViewer detects when the same task runs on different cores and exposes **Core Migrations** in the Statistics panel plus a clickable **Migration heatmap** (toolbar **Heatmap**). The heatmap shows *when* cross-core traffic happens — complementary to the per-task migration table (ping-pong count, STI correlation, gap-after vs other gaps).
-
-Open the 4-core sample trace and explore the heatmap:
-
-```bash
-python BTFViewer/btf_viewer.py tracedata/example-4cores.btf
-```
-
-**Level 1 — core-pair overview** (directed pairs × 32 time bins):
-
-<img src="images/migration-heatmap-pairs.svg" alt="Migration heatmap Level 1: core-pair rows and time bins for example-4cores.btf" width="410">
-
-Each row is a directed core pair (`c0→c1`, `c0→c2`, …). Darker cells mean more migrations in that time bin. Click a non-empty cell to drill into the tasks that contributed.
-
-**Level 2 — task grid** (after clicking a hot cell):
-
-<img src="images/migration-heatmap-tasks.svg" alt="Migration heatmap Level 2: per-task sub-bins after drilling from example-4cores.btf" width="410">
-
-Rows are tasks that migrated on the selected pair within the chosen bin; columns are **32 sub-bins** inside that bin. Click a task cell to zoom the timeline, place cursors, switch to **Task View**, and filter to that task.
-
-Traces with **more than 16 cores** use a three-level drill-down (core×core matrix → outgoing pairs → tasks). **Export PNG / SVG** from the heatmap dialog captures the full current level. See [`BTFViewer/README.md`](BTFViewer/README.md#migration-heatmap) for workflow, cursor scoping, and **Trace Compare…** integration.
-
----
-
-## Visualising the Trace
-
-### BTF Viewer (built-in)
-
-An interactive Gantt-style viewer is included in the `BTFViewer/` directory (desktop PySide6 app and browser-based web viewer). Both share the same default settings (dark theme, grid on, hover dimming off, 22 px rows, etc.). They support Task/Core views, measurement cursors (2–8, default 4), CPU load graph, bookmarks, **Statistics** / **Marks** / **Find** right-side panels, **Statistics** (execution time, blocking/response time, tick health with tick-interval distribution, preemption chain, priority inheritance, mutex/semaphore pairing, interval analysis), **adaptive metrics histograms** (auto linear / p5–p95 / log scaling, CDF overlay), **core migration heatmap**, trace compare, and PNG/SVG export.
-
-**Desktop requirements:** Python 3.8+ and PySide6 ≥ 6.4
-
-```bash
-pip install -r BTFViewer/requirements.txt
-python BTFViewer/btf_viewer.py tracedata/trace.btf
-# or the 4-core SMP demo trace:
-python BTFViewer/btf_viewer.py tracedata/example-4cores.btf
-```
-
-Sample traces: `tracedata/example.btf` (single-core), `tracedata/example-4cores.btf` (4-core SMP — statistics and heatmap demos), `tracedata/example-16cores.btf` (large SMP).
-
-See [`BTFViewer/README.md`](BTFViewer/README.md) for the full feature reference (zoom, cursors, [migration heatmap](BTFViewer/README.md#migration-heatmap), [statistics](BTFViewer/README.md#statistics-metric-tables), trace compare, session restore, export, etc.).
-
-### Eclipse Trace Compass
-
-Open `tracedata/trace.btf` directly in [Trace Compass](https://www.eclipse.org/tracecompass/).
-
-### GTKWave / VCD Viewer
-
-```bash
-gtkwave tracedata/trace.vcd
-```
-
----
-
-## Porting Guide
-
-Follow these steps to integrate the trace library into your own FreeRTOS project.
-
-### 1. Include the trace header
-
-Add the following line to your `FreeRTOSConfig.h`:
-
-```c
-#include "FreeRTOS-Trace/FreeRTOS-Trace.h"
-```
-
-Enable tracing in config:
-
-```c
-#define configUSE_TRACE_FACILITY  1
-#define configMAX_TRACE_EVENTS    4096   /* adjust for RAM budget */
-#define configMAX_TRACE_TASKS     64
-```
-
-### 2. Implement the time source
-
-Edit `FreeRTOS-Trace/btf_port.h` and define the `xGetCycles()` macro to return the current system cycle counter:
-
-```c
-#define xGetCycles()  /* your platform timer, e.g. DWT cycle counter */
-```
-
-The RISC-V port uses `portGET_RUN_TIME_COUNTER_VALUE()` which maps to `rdcycle`.
-
-### 3. Choose dump mode
-
-| Mode | Configuration |
-|------|---------------|
-| **File dump** (default) | `HAVE_FILE_DUMP` in `btf_port.h` — writes `trace.bin` via `fopen`/`fwrite`/`fclose` at `traceEND()` |
-| **Live stdout BTF** | Uncomment `#define PRINT_BTF_DUMP` in `btf_port.h` |
-| **Buffer only** | Define neither — keep events in RAM and dump the `trace_data` symbol after the run via debugger/JTAG |
-
-### 4. Add the source file to your build
-
-Compile `FreeRTOS-Trace/btf_trace.c` as part of your project.
-
-### 5. Start and stop tracing
-
-```c
-int main(void)
-{
-#if configUSE_TRACE_FACILITY
-    traceSTART();
-#endif
-
-    xTaskCreate( ... );
-    vTaskStartScheduler();
-}
-
-/* Inside the task that finishes last: */
-#if configUSE_TRACE_FACILITY
-    traceEND();   /* writes trace.bin */
-#endif
-exit(0);
-```
-
-### 5a. Custom instrumentation (tags & intervals)
-
-When `configINCLUDE_TAGS` is `1`, you can emit user-defined STI events from application code:
-
-| Macro | Underlying function | Purpose |
-|-------|---------------------|---------|
-| `traceTAG( t, v )` | `btf_traceTAG()` | Periodic sample; `t` = 0…7, `v` = 32-bit payload |
-| `traceINTERVAL_START( id )` | `btf_traceINTERVAL_START()` | Mark the start of a timed code region (`param1` = `id`, `param2` = caller task id) |
-| `traceINTERVAL_STOP( id )` | `btf_traceINTERVAL_STOP()` | Mark the end of the same region (`id` must match; same task id recorded in `param2`) |
-
-See [Use case: monitor heap usage with the tick hook](#use-case-monitor-heap-usage-with-the-tick-hook) and [Use case: measure code execution intervals](#use-case-measure-code-execution-intervals) for worked examples.
-
-### 6. SMP considerations
-
-All trace hooks in `FreeRTOS-Trace/FreeRTOS-Trace.h` are protected by either `taskENTER_CRITICAL()` (task context) or `taskENTER_CRITICAL_FROM_ISR()` (ISR / context-switch context).
-
-The RISC-V SMP port (`Demo/port/RISC-V/port.c`) implements both the task lock and the ISR lock as **recursive** spinlocks (owner + count).  This allows `traceTASK_SWITCHED_OUT/IN` — which fire inside `vTaskSwitchContext` while the ISR lock is already held — to safely re-enter the same lock without deadlocking.
-
-### 7. Convert to BTF or VCD
-
-```bash
-# BTF format
-tools/gentrace trace.bin trace.btf
-
-# VCD format
-tools/gentrace -v trace.bin trace.vcd
-```
-
-Event-to-BTF field mapping is documented in [Binary → BTF dump mapping](#binary--btf-dump-mapping). The input file layout is in [`trace.bin` binary format](#tracebin-binary-format).
-
-### 8. Open the trace
-
-- **BTF:** open with `BTFViewer/btf_viewer.py`, the web viewer, or Eclipse Trace Compass.
-- **VCD:** open with GTKWave or any compatible VCD viewer.
-
----
-
-## Memory & configuration
+### Memory & configuration
 
 Default trace buffer size is controlled by `configMAX_TRACE_EVENTS` and `configMAX_TRACE_TASKS` in `FreeRTOSConfig.h` (and `MAX_TRACE_EVENTS` in the demo Makefile). Each `EVENT` is **16 bytes**; task names add `max_tasks × max_taskname_len` bytes. Total `trace.bin` size is `44 + max_tasks × max_taskname_len + max_events × 16` — see [`trace.bin` binary format](#tracebin-binary-format). When the event ring fills, newer events overwrite the oldest (ring wrap); `event_count` caps at `max_events`.
 

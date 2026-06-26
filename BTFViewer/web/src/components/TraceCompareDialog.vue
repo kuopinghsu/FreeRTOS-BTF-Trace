@@ -142,11 +142,17 @@
           <thead>
             <tr>
               <th>Task</th>
-              <th>Migrations A</th>
-              <th>Migrations B</th>
+              <th>Migr A</th>
+              <th>Migr B</th>
               <th>Δ</th>
-              <th>Ping-pong A</th>
-              <th>Ping-pong B</th>
+              <th>Rate A</th>
+              <th>Rate B</th>
+              <th>Rate Δ</th>
+              <th>Dwell A</th>
+              <th>Dwell B</th>
+              <th>Dwell Δ</th>
+              <th>Ping A</th>
+              <th>Ping B</th>
             </tr>
           </thead>
           <tbody>
@@ -158,12 +164,18 @@
               <td>{{ row.migrationsA }}</td>
               <td>{{ row.migrationsB }}</td>
               <td>{{ row.delta }}</td>
+              <td>{{ row.rateA }}</td>
+              <td>{{ row.rateB }}</td>
+              <td>{{ row.rateDelta }}</td>
+              <td>{{ row.dwellA }}</td>
+              <td>{{ row.dwellB }}</td>
+              <td>{{ row.dwellDelta }}</td>
               <td>{{ row.pingA }}</td>
               <td>{{ row.pingB }}</td>
             </tr>
             <tr v-if="migrationRows.length === 0">
               <td
-                colspan="6"
+                colspan="12"
                 class="compare-empty"
               >
                 No migrated tasks in either trace
@@ -314,7 +326,7 @@ function onExportHtml() {
 }
 
 .compare-dialog {
-  width: min(760px, 92vw);
+  width: min(1080px, 98vw);
   max-height: min(82vh, 540px);
   background: var(--panel-bg);
   border: 1px solid var(--border);

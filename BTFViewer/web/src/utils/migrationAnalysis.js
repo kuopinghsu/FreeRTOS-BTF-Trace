@@ -7,7 +7,102 @@ import { parseTaskName, taskLabelForMergeKey, taskReprGet } from './colors.js'
 import { computeFindHits } from './findAnalysis.js'
 import { blockingTimeSamples } from './statsAnalysis.js'
 import { segFullyInRange, segOverlapsRange } from './statsRange.js'
-import { formatMigrationGapTime } from './timeFormat.js'
+import { formatMigrationGapTime, formatTime } from './timeFormat.js'
+
+const NS_PER_SCALE = { ns: 1e9, us: 1e6, ms: 1e3, s: 1 }
+
+/** Distinct cores with on-CPU slices or migrations in scope. */
+export function coresInScope(segs, migs, lo, hi) {
+  const cores = new Set()
+  for (const s of segs) {
+    if (lo != null && hi != null) {
+      if (!segOverlapsRange(s, lo, hi)) continue
+    }
+    cores.add(s.core)
+  }
+  if (!cores.size && migs?.length) {
+    for (const m of migs) {
+      cores.add(m.fromCore)
+      cores.add(m.toCore)
+    }
+  }
+  return cores
+}
+
+function clipSegmentsForScope(segs, lo, hi) {
+  const clipped = []
+  for (const s of segs) {
+    let segLo
+    let segHi
+    if (lo != null && hi != null) {
+      if (!segOverlapsRange(s, lo, hi)) continue
+      segLo = Math.max(s.start, lo)
+      segHi = Math.min(s.end, hi)
+    } else {
+      segLo = s.start
+      segHi = s.end
+    }
+    if (segLo <= segHi) clipped.push([segLo, segHi])
+  }
+  clipped.sort((a, b) => a[0] - b[0])
+  return clipped
+}
+
+/** TICK events in scope while this task was on-CPU (trace time units). */
+export function tickCountForTask(segs, tickTimes, lo, hi) {
+  const clipped = clipSegmentsForScope(segs, lo, hi)
+  if (!clipped.length || !tickTimes?.length) return 0
+  let count = 0
+  let i = 0
+  const n = clipped.length
+  for (const t of tickTimes) {
+    if (lo != null && hi != null && (t < lo || t > hi)) continue
+    while (i + 1 < n && clipped[i + 1][0] <= t) i++
+    const [segLo, segHi] = clipped[i]
+    if (segLo <= t && t <= segHi) count++
+  }
+  return count
+}
+
+export function coreDwellSamples(segs, lo, hi) {
+  const samples = []
+  for (const s of segs) {
+    let ovLo
+    let ovHi
+    if (lo != null && hi != null) {
+      if (!segOverlapsRange(s, lo, hi)) continue
+      ovLo = Math.max(s.start, lo)
+      ovHi = Math.min(s.end, hi)
+    } else {
+      ovLo = s.start
+      ovHi = s.end
+    }
+    const dur = Math.max(0, ovHi - ovLo)
+    if (dur > 0) samples.push(dur)
+  }
+  return samples
+}
+
+export function formatMigrationRate(nMig, taskActive, tickCount, timeScale) {
+  if (nMig <= 0) return { label: '-', ratePerS: -1 }
+  const div = NS_PER_SCALE[timeScale] || 1e9
+  let perS = -1
+  let perSLabel = null
+  if (taskActive > 0) {
+    const activeS = taskActive / div
+    if (activeS > 0) {
+      perS = nMig / activeS
+      perSLabel = `${perS.toFixed(2)}/s`
+    }
+  }
+  if (tickCount > 0) {
+    const tickLabel = `${(nMig / tickCount).toFixed(3)}/tick`
+    if (perSLabel) return { label: `${perSLabel} · ${tickLabel}`, ratePerS: perS }
+    return { label: tickLabel, ratePerS: perS }
+  }
+  if (perSLabel) return { label: perSLabel, ratePerS: perS }
+  return { label: '-', ratePerS: -1 }
+}
 
 export const MIGRATION_PING_PONG_WINDOW = 1000
 export const MIGRATION_STI_WINDOW = 500
@@ -83,6 +178,7 @@ export function migrationStiNearCount(trace, migs, window = MIGRATION_STI_WINDOW
 
 export function migrationRows(trace, lo, hi) {
   const rows = []
+  const tickTimes = trace.tickStiTimes || []
   for (const mk of trace.tasks || []) {
     if (!isMigratedTask(trace, mk)) continue
     const segs = trace.segByMergeKey?.get(mk) || []
@@ -105,18 +201,38 @@ export function migrationRows(trace, lo, hi) {
       coreTime.set(s.core, (coreTime.get(s.core) || 0) + Math.max(0, ovHi - ovLo))
     }
     const total = [...coreTime.values()].reduce((a, b) => a + b, 0)
-    if (total <= 0) continue
-    let primary = [...coreTime.entries()].sort((a, b) => b[1] - a[1])[0][0]
-    const primaryPct = 100 * coreTime.get(primary) / total
+    if (total <= 0 && !migs.length) continue
+    const cores = taskCoresUsed(trace, mk)
+    const scopedCores = coresInScope(segs, migs, lo, hi)
+    const coreCount = scopedCores.size || cores.size
+    let primary
+    let primaryPct
+    if (total > 0) {
+      primary = [...coreTime.entries()].sort((a, b) => b[1] - a[1])[0][0]
+      primaryPct = 100 * coreTime.get(primary) / total
+    } else {
+      primary = [...cores].sort()[0] ?? '-'
+      primaryPct = 0
+    }
+    const tickCount = tickCountForTask(segs, tickTimes, lo, hi)
     const gapsAfter = migs.filter(m => m.gapNs > 0).map(m => m.gapNs)
     const allGaps = blockingTimeSamples(segs, lo, hi)
     const avgAfter = gapsAfter.length ? gapsAfter.reduce((a, b) => a + b, 0) / gapsAfter.length : 0
     const avgOther = allGaps.length ? allGaps.reduce((a, b) => a + b, 0) / allGaps.length : 0
+    const dwellSamples = coreDwellSamples(segs, lo, hi)
+    const avgDwellTu = dwellSamples.length
+      ? Math.round(dwellSamples.reduce((a, b) => a + b, 0) / dwellSamples.length)
+      : 0
+    const { label: migrRate, ratePerS } = formatMigrationRate(migs.length, total, tickCount, trace.timeScale)
     rows.push({
       mk,
       name: taskLabelForMergeKey(trace, mk),
       migrations: migs.length,
-      coreCount: coreTime.size,
+      migrRate,
+      ratePerS,
+      avgDwell: avgDwellTu ? formatTime(avgDwellTu, trace.timeScale) : '-',
+      avgDwellTu: avgDwellTu || -1,
+      coreCount,
       primary,
       primaryPct,
       pingPong: countPingPong(migs),

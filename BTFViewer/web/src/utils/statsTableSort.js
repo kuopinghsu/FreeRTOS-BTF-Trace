@@ -54,6 +54,8 @@ export function sortHeaderClass(sortState, col) {
 export const MIGRATION_SORT_ACCESSORS = {
   task: r => r.name.toLowerCase(),
   migr: r => r.migrations,
+  rate: r => r.ratePerS,
+  dwell: r => r.avgDwellTu,
   cores: r => r.coreCount,
   primary: r => r.primaryPct,
   ping: r => r.pingPong,

@@ -48,6 +48,21 @@ A PySide6-based interactive visualiser for FreeRTOS context-switch traces in **B
 - **Drag-and-drop** — drop a `.btf` file directly onto the window
 - **Optimised for large traces** — tested with up to **128 cores, 1 024 tasks, and 5 M+ events** (desktop). Web viewer: flat segment storage, parse worker, precomputed CPU-load bins, WASM-accelerated bisect/LOD, and debounced stats worker for 100k+ segment traces
 
+## Table of contents
+
+| Section | Contents |
+|---------|----------|
+| [Installation](#installation) | Desktop (Python) and web (Node.js) setup |
+| [Desktop viewer](#desktop-viewer) | GUI usage, headless CLI, view modes, cursors, export, settings |
+| [Web viewer](#web-viewer) | Build, open traces, web-specific UI and performance |
+| [Statistics & metrics](#statistics--metrics) | Panel overview, metric tables, migrations, trace compare, charts |
+| [Find, marks & menus](#find--jump) | Search, bookmarks, annotations, context menu, recent files |
+| [Session persistence](#session-persistence-btf_viewerrc) | `btf_viewer.rc` and browser `localStorage` |
+| [Keyboard shortcuts](#keyboard-shortcuts) | Desktop and web key bindings |
+| [Reference](#reference) | `gen_trace.py`, BTF format, implementation map |
+
+---
+
 ## Installation
 
 ### Desktop viewer (`btf_viewer.py`)
@@ -59,7 +74,9 @@ A PySide6-based interactive visualiser for FreeRTOS context-switch traces in **B
 pip install -r requirements.txt
 
 # Run directly — no build step needed
-python btf_viewer.py [trace.btf]
+python btf_viewer.py [-h] [trace.btf]
+
+# Headless CLI — see [Headless CLI (desktop only)](#headless-cli-desktop-only) in Desktop viewer
 ```
 
 A file can also be opened via **File → Open** (`Ctrl+O`) or dragged onto the window. Each open file appears in its own **tab**; use **File → Close Tab** (`Ctrl+W`) to close the active tab, or **Ctrl+Tab** / **Ctrl+Shift+Tab** to cycle between open tabs. Re-opening the same path switches to the existing tab instead of loading it twice.
@@ -141,7 +158,290 @@ Download the LTS installer from <https://nodejs.org/> or use your system package
 
 ---
 
-## Web Viewer — Features & Usage
+## Desktop viewer
+
+Interactive PySide6 GUI and optional **headless CLI** (same statistics engine as the Statistics panel).
+
+| Topic | Section |
+|-------|---------|
+| Launch & CLI | [Usage](#usage) · [Headless CLI](#headless-cli-desktop-only) |
+| Timeline | [View modes](#view-modes) · [Orientation](#orientation) · [Zoom and pan](#zoom-and-pan) |
+| Analysis UI | [Cursors](#cursors) · [Legend](#legend-panel) · [Export](#export) · [Settings](#settings) |
+
+## Usage
+
+```bash
+python btf_viewer.py [-h] [trace.btf]
+```
+
+Passing a file on the command line opens that trace in a tab immediately. With no argument, the viewer restores the previous session from `btf_viewer.rc`.
+
+### Headless CLI (desktop only)
+
+| Command | Description |
+|---------|-------------|
+| `info` | Trace summary on stdout (`--json` for machine-readable output) |
+| `report` | Full statistics export (same as Statistics → Export CSV/HTML) |
+| `compare` | Two-trace diff (same as Trace Compare → Export) |
+| `migrations` | Core Migrations table as CSV |
+
+```bash
+python btf_viewer.py info trace.btf [--json] [--lo T] [--hi T]
+
+python btf_viewer.py report trace.btf -o|--output PATH [--format html|csv|both] [--lo T] [--hi T]
+
+python btf_viewer.py compare a.btf b.btf -o|--output PATH [--format html|csv|both] \
+  [--name-a LABEL] [--name-b LABEL] \
+  [--lo T --hi T | --lo-a T --hi-a T --lo-b T --hi-b T]
+
+python btf_viewer.py migrations trace.btf [-o PATH] [--lo T] [--hi T]   # default: stdout
+```
+
+Files can also be opened via **File → Open** (`Ctrl+O`), **File → Close Tab** (`Ctrl+W`), **Ctrl+Tab** / **Ctrl+Shift+Tab** (cycle tabs), or drag-and-drop onto the window.
+
+---
+
+## View Modes
+
+| Mode | Description |
+|------|-------------|
+| **Task View** | One row (horizontal) or column (vertical) per task across all cores; core tint applied to segment bars |
+| **Core View** | One expandable row/column per CPU core; bars coloured by running task |
+
+In **Core View**:
+
+- Click a core label to **expand** or **collapse** that individual core's per-task sub-rows/columns.
+- Use the **⊞ Expand All** / **⊟ Collapse All** toolbar button to expand or collapse every core at once.
+- Works in both **Horizontal** and **Vertical** orientations.
+
+## Orientation
+
+- **Horizontal** (default) — time runs left to right; task/core labels are on the left
+- **Vertical** — time runs top to bottom; task/core labels are at the top
+
+Switch orientation using the **↔ Horizontal** / **↕ Vertical** toolbar buttons or **View → Horizontal layout / Vertical layout**. The active orientation button is highlighted.
+
+In **Horizontal** mode (default), drag the visible splitter on the **right edge** of the task-name label column to resize it (60–600 px). Double-click that edge to auto-fit the widest visible label. Width is saved to `btf_viewer.rc` (`[view] label_width` + per-window profile) on Desktop, or `labelWidth` in `btf-viewer-settings-v1` on Web.
+
+In **Vertical** mode:
+- The ruler column (left edge) is frozen and always shows time labels as you scroll horizontally.
+- The label row (top edge) is frozen and always shows task/core names as you scroll vertically.
+- The top-left corner area shows the **TICK** band label when TICK events are present.
+- Drag the bottom edge of the label row to resize label height (Desktop); persisted under the same `label_width` / `labelWidth` keys as horizontal mode.
+
+## Task Labels
+
+Regular task labels show the task name and task ID, for example `MyTask[3]` or `Worker[0x8]`. Raw BTF task entities may use `[core/id]name`, `name[id]`, or `name(0x…)` / `name(dec)` — see [Task label naming](#task-label-naming--core_idtask_idtask_name).
+IDLE and TICK tasks show their bare name (`IDLE`, `IDLE0`, `IDLE1`, etc.) without an ID suffix.
+IDLE tasks always render in grey; each IDLE task on a different core gets a distinct shade.
+
+---
+
+## Task Highlight
+
+Hovering or clicking a task name in the label column or Legend panel highlights all timeline segments for that task.
+
+| Action | Effect |
+|--------|--------|
+| Hover over a task label or Legend row | Transiently highlights that task's segments |
+| Hover leave | Removes the transient highlight and restores any persistent highlight |
+| Click a task label or Legend row | Locks the highlight on that task persistently |
+| Click the same locked task again | Cancels the persistent highlight |
+| Click empty area in the label column | Cancels the persistent highlight |
+| Click empty area in the Legend panel | Cancels the persistent highlight |
+
+When **Highlight segments on label hover** is enabled in Settings (off by default), hovering a label also **dims** segments of other tasks. Leave it off on very large traces for smoother scrolling.
+
+When a task is persistently highlighted, its row gets a colour tint, its label turns gold and bold,
+and its segment bars show a white border. Hovering another task while a lock is active shows both
+highlights at the same time.
+
+---
+
+## Cursors
+
+Between 2 and 8 cursors can be placed on the timeline (default: 4; adjustable in **Settings → Layout → Max cursors**). Delta times between consecutive cursors are shown on the timeline and in the status bar.
+
+### Placing and Moving
+
+| Action | Effect |
+|--------|--------|
+| Left-click on the timeline area | Place a new cursor at that time position |
+| Drag a cursor line | Move it to a new time position |
+| `C` (keyboard) | Place a cursor at the viewport centre |
+
+### Removing
+
+| Action | Effect |
+|--------|--------|
+| Right-click → **Remove nearest cursor** | Remove the cursor closest to the click position |
+| Right-click → **Clear all cursors** | Remove all cursors at once |
+| `Shift+C` | Clear all cursors |
+| Drag a status-bar cursor badge out of the status bar | Remove that specific cursor |
+
+### Navigating
+
+| Action | Effect |
+|--------|--------|
+| Click a `C1` / `C2` / ... badge in the status bar | Scroll the view to that cursor |
+| `Ctrl+R` / **⊡ Range** toolbar button | Zoom view to fit exactly between C1 and the last cursor |
+
+### Cursor range summary (status bar)
+
+When two or more cursors are placed, the **status bar** shows a quick summary of segment durations for slices that start **and** end within the cursor range: **min**, **max**, and **avg**.
+
+For full per-task/per-core metrics scoped to the cursor window, use the **Statistics** panel — see [Statistics & metrics](#statistics--metrics) and **Limit to cursor range (C1–Cn)**.
+
+---
+
+## Multi-tab traces (Desktop)
+
+| Action | Effect |
+|--------|--------|
+| **File → Open** (`Ctrl+O`) | Open a trace in a **new tab** (or switch to it if already open) |
+| **File → Close Tab** (`Ctrl+W`) | Close the active tab |
+| **Ctrl+Tab** / **Ctrl+Shift+Tab** | Next / previous trace tab |
+| Click a tab | Switch the timeline, legend, statistics, marks, and CPU load graph to that trace |
+| **×** on a tab | Close that tab |
+
+Each tab has its own cursors, zoom level, bookmarks, annotations, find state, and metrics chart session. Shared settings (theme, orientation, row height, etc.) apply to all tabs.
+
+On exit, the viewer saves the list of open tab paths, the active tab index, and per-tab zoom/cursor layout to `btf_viewer.rc`. The next launch reopens the same tabs automatically (unless a file path on the command line overrides session restore).
+
+---
+
+## Legend Panel
+
+The Legend lists every task with its colour swatch and `Name[id]` label.
+
+- The panel is a dockable window; it can be detached, closed, and re-opened via its **✕** button.
+- Toggle visibility from **Settings → Display → Legend panel** (`Ctrl+,`).
+- A **Search** box at the top filters the displayed task list.
+- **Migrated tasks only** (Web: checkbox in Legend on the Marks page; Desktop: same filter in the legend dock) hides tasks that ran on a single core only — useful with [core migration analysis](#core-migration-analysis).
+- After a **heatmap drill-down**, a blue **Heatmap: … (N)** banner appears with a **Clear** button; it filters the legend list to match the timeline.
+- Hover and click Legend rows to highlight tasks using the same rules as the label column.
+
+---
+
+## Zoom and Pan
+
+| Action | Effect |
+|--------|--------|
+| `Ctrl` + Scroll wheel | Zoom in or out centred on the pointer |
+| Two-finger pinch (macOS) | Zoom in or out |
+| Scroll wheel / trackpad swipe | Pan along the time axis |
+| `Ctrl+0` | Fit entire trace to window |
+| **1:1** toolbar button | Reset to default zoom (2 timescale units/pixel; for `ns` timescale, UI shows `2 ns/px`; configurable in Settings) |
+| Toolbar zoom+ / zoom− buttons | Zoom in or out by 2× |
+
+---
+
+## Export
+
+### Snapshot Editor (PNG)
+
+**File → Save as Image (PNG)…** (`Ctrl+S`), the toolbar **Save PNG** / **Shot** buttons, and the plot-dialog **Export PNG** action all capture the current viewport and open the **Snapshot Editor** — they do **not** write a file immediately.
+
+In the editor you can draw annotation shapes (arrow, double arrow, line, rectangle, circle, text) and then:
+
+- Check **Dash** to draw dashed strokes (lines, arrows, rectangles, circles).
+- Click a shape to select and drag it; **Ctrl+click** duplicates the shape (then drag to position the copy).
+- **Double-click** any shape to add or edit its label inline (lines/arrows: centered, aligned to the segment; rectangles/circles: centered).
+- Single-click with the **Text** tool adds a standalone text label inline.
+- **Save PNG…** — write the annotated image to disk (includes CPU load graph when **Load** is on).
+- **Copy to Clipboard** — copy the annotated image.
+
+### Direct clipboard copy
+
+**File → Copy Image to Clipboard** (`Ctrl+Shift+C`) copies the raw viewport (timeline + CPU load when visible) without opening the editor. On Linux, `xclip`, `xsel`, or `wl-copy` is used when available (Qt clipboard is unreliable for images on X11/Wayland).
+
+### SVG
+
+**File → Save as SVG…** (`Ctrl+Shift+S`) or the toolbar **Save SVG** button exports the current viewport as vector SVG (includes CPU load when visible).
+
+---
+
+## Settings
+
+Open **Settings** from the toolbar (**⚙ Settings**) or via **View → ⚙ Settings…** (`Ctrl+,`).
+
+| | Desktop | Web |
+|--|---------|-----|
+| **Storage** | `btf_viewer.rc` in the viewer directory | Browser `localStorage` key `btf-viewer-settings-v1` |
+| **When saved** | Immediately on each change | Immediately on **Save** (or when closing with **Save**); **Cancel** reverts unsaved edits |
+| **Live preview** | — | Changes apply to the open trace while the dialog is open; cancel restores the pre-open snapshot |
+
+Preferences are restored on the next launch (desktop) or page reload (web).
+
+### Appearance
+
+| Setting | Description |
+|---------|-------------|
+| Theme | **Dark** (default) or **Light** |
+| Timeline labels | Font size for task/core labels drawn on the timeline (pt on Desktop, px on Web; default **8**) |
+| UI / menus | Font size for menus, toolbar, and status bar (pt on Desktop, px on Web; default **8**) |
+
+### Display
+
+| Setting | Description |
+|---------|-------------|
+| Legend panel | Show or hide the dockable Legend panel |
+| Statistics panel | Show or hide the dockable Statistics panel |
+| STI events | Show or hide software-trace item marker rows |
+| Grid lines | Overlay vertical grid lines on the timeline (**on** by default) |
+| Highlight on label hover | Dim all other segments when hovering a task label (**off** by default; enable for emphasis, disable for better performance on large traces) |
+
+### Layout
+
+| Setting | Description |
+|---------|-------------|
+| Label column | Width of the frozen task/core label column (60–600 px). Drag the timeline splitter (Desktop + Web) or set here; persisted in `btf_viewer.rc` / `btf-viewer-settings-v1` |
+| Row height | Height of each task/core row (12–60 px; default **22**) |
+| Row gap | Vertical gap between rows (0–20 px; default **4**) |
+| 1:1 zoom level | Target zoom of the **1:1** button and the maximum zoom-in limit (0.5–200 timescale units/px; UI unit follows trace timescale, e.g. `ns/px`; default **2**) |
+| Max cursors | Maximum number of simultaneously visible cursors (4–8; default **4**) |
+| CPU load row height | Height of each CPU load graph row (16–120 px; default **30**) |
+| STI row height | Collapsed STI channel row height (12–60 px; default **18**) |
+| STI waveform height | Expanded tag-event waveform row height (40–300 px; default **80**) |
+
+### Default values (Desktop + Web)
+
+These match the compiled defaults in `btf_viewer.py` (`USER CONFIGURATION`) and `web/src/utils/settingsStore.js` (`DEFAULT_SETTINGS`). Desktop stores font sizes in **pt**; the web viewer uses the same numeric values in **px**.
+
+| Setting | Default |
+|---------|---------|
+| Theme | Dark |
+| Timeline label font | 8 |
+| UI / menus font | 8 |
+| Show Legend / Statistics / Marks / STI / CPU load | On |
+| Grid lines | **On** |
+| Highlight segments on label hover | **Off** |
+| Colorblind-safe palette | Off |
+| Label column width | 160 px |
+| Row height | 22 px |
+| Row gap | 4 px |
+| STI row height | 18 px |
+| STI waveform height | 80 px |
+| STI waveform style | Linear |
+| 1:1 zoom level | 2 timescale units/px |
+| Max cursors | 4 |
+| CPU load row height | 30 px |
+
+Existing saved settings (`btf_viewer.rc` or browser `localStorage`) are not overwritten when defaults change — use **Reset to defaults** in the Settings dialog (or clear `btf-viewer-settings-v1`) to pick up new defaults.
+
+---
+
+## Web viewer
+
+Browser-based viewer (Vue 3 + Vite). Feature parity with the desktop app for timeline, statistics, and trace compare; rendering uses Web Workers, PixiJS, and optional WASM acceleration.
+
+**No CLI** — scripted export uses desktop `btf_viewer.py` (`report`, `compare`, `migrations`, …).
+
+| Topic | Section |
+|-------|---------|
+| UI & files | [Opening a file](#opening-a-file) · [View modes](#view-modes-1) · [Multi-tab traces](#multi-tab-traces-web) |
+| Layout | [Right panel](#right-panel--layout) · [CPU load](#cpu-load-graph) · [Session restore](#session-restore-web) |
+| Performance | [Web performance architecture](#web-performance-architecture) |
 
 ### View modes
 
@@ -296,7 +596,7 @@ Below the scope checkbox, a **scheduling summary** line shows context-switch cou
 | **Mutex / Semaphore pairing** | Pairs `take`/`give` STI events by object pointer (`0x........`); flags orphan gives, cross-task gives, unmatched takes, delete-while-held, and multi-mutex hold at trace end |
 | **Interval Analysis** | Paired `interval_start` / `interval_stop` spans per interval id (count, min/avg/max/p95 duration); notes with `tid:{task_id}` pair per task |
 
-**Core Migrations** lists tasks that ran on two or more cores. For multi-core traces, open the **Migration heatmap** from the toolbar **Heatmap** button — click core-pair cells to drill into per-task sub-bins, then into Task View (see [Migration heatmap](#migration-heatmap)). **Trace Compare…** (footer, next to Export) opens a dialog with **Summary**, **Top Tasks**, and **Core Migrations** tabs to diff two open trace tabs; optional cursor-range scoping compares each tab's C1–Cn window independently.
+**Core Migrations** lists tasks that ran on two or more cores, with **Rate** (migrations per second of active time and per tick) and **Dwell** (average on-CPU slice length). For multi-core traces, open the **Migration heatmap** from the toolbar **Heatmap** button — click core-pair cells to drill into per-task sub-bins, then into Task View (see [Migration heatmap](#migration-heatmap)). **Trace Compare…** (footer, next to Export) opens a dialog with **Summary**, **Top Tasks**, and **Core Migrations** tabs to diff two open trace tabs; optional cursor-range scoping compares each tab's C1–Cn window independently.
 
 See [Statistics metric tables](#statistics-metric-tables) for column definitions, distribution-chart usage, [CDF overlay](#cdf-overlay), and example plots from `tracedata/example-4cores.btf`.
 
@@ -412,258 +712,9 @@ Shows the number of tasks, segments, STI events, and total trace duration once a
 
 ---
 
-## Requirements (desktop viewer)
+## Statistics & metrics
 
-- Python 3.8+
-- PySide6 >= 6.4
-
-```bash
-pip install -r requirements.txt
-```
-
-## Usage
-
-```bash
-python btf_viewer.py [trace.btf]
-```
-
-Passing a file on the command line opens that trace in a tab immediately. With no argument, the viewer restores the previous session from `btf_viewer.rc`.
-
-Files can also be opened via **File → Open** (`Ctrl+O`), **File → Close Tab** (`Ctrl+W`), **Ctrl+Tab** / **Ctrl+Shift+Tab** (cycle tabs), or drag-and-drop onto the window.
-
----
-
-## View Modes
-
-| Mode | Description |
-|------|-------------|
-| **Task View** | One row (horizontal) or column (vertical) per task across all cores; core tint applied to segment bars |
-| **Core View** | One expandable row/column per CPU core; bars coloured by running task |
-
-In **Core View**:
-
-- Click a core label to **expand** or **collapse** that individual core's per-task sub-rows/columns.
-- Use the **⊞ Expand All** / **⊟ Collapse All** toolbar button to expand or collapse every core at once.
-- Works in both **Horizontal** and **Vertical** orientations.
-
-## Orientation
-
-- **Horizontal** (default) — time runs left to right; task/core labels are on the left
-- **Vertical** — time runs top to bottom; task/core labels are at the top
-
-Switch orientation using the **↔ Horizontal** / **↕ Vertical** toolbar buttons or **View → Horizontal layout / Vertical layout**. The active orientation button is highlighted.
-
-In **Horizontal** mode (default), drag the visible splitter on the **right edge** of the task-name label column to resize it (60–600 px). Double-click that edge to auto-fit the widest visible label. Width is saved to `btf_viewer.rc` (`[view] label_width` + per-window profile) on Desktop, or `labelWidth` in `btf-viewer-settings-v1` on Web.
-
-In **Vertical** mode:
-- The ruler column (left edge) is frozen and always shows time labels as you scroll horizontally.
-- The label row (top edge) is frozen and always shows task/core names as you scroll vertically.
-- The top-left corner area shows the **TICK** band label when TICK events are present.
-- Drag the bottom edge of the label row to resize label height (Desktop); persisted under the same `label_width` / `labelWidth` keys as horizontal mode.
-
-## Task Labels
-
-Regular task labels show the task name and task ID, for example `MyTask[3]` or `Worker[0x8]`. Raw BTF task entities may use `[core/id]name`, `name[id]`, or `name(0x…)` / `name(dec)` — see [Task label naming](#task-label-naming--core_idtask_idtask_name).
-IDLE and TICK tasks show their bare name (`IDLE`, `IDLE0`, `IDLE1`, etc.) without an ID suffix.
-IDLE tasks always render in grey; each IDLE task on a different core gets a distinct shade.
-
----
-
-## Task Highlight
-
-Hovering or clicking a task name in the label column or Legend panel highlights all timeline segments for that task.
-
-| Action | Effect |
-|--------|--------|
-| Hover over a task label or Legend row | Transiently highlights that task's segments |
-| Hover leave | Removes the transient highlight and restores any persistent highlight |
-| Click a task label or Legend row | Locks the highlight on that task persistently |
-| Click the same locked task again | Cancels the persistent highlight |
-| Click empty area in the label column | Cancels the persistent highlight |
-| Click empty area in the Legend panel | Cancels the persistent highlight |
-
-When **Highlight segments on label hover** is enabled in Settings (off by default), hovering a label also **dims** segments of other tasks. Leave it off on very large traces for smoother scrolling.
-
-When a task is persistently highlighted, its row gets a colour tint, its label turns gold and bold,
-and its segment bars show a white border. Hovering another task while a lock is active shows both
-highlights at the same time.
-
----
-
-## Cursors
-
-Between 2 and 8 cursors can be placed on the timeline (default: 4; adjustable in **Settings → Layout → Max cursors**). Delta times between consecutive cursors are shown on the timeline and in the status bar.
-
-### Placing and Moving
-
-| Action | Effect |
-|--------|--------|
-| Left-click on the timeline area | Place a new cursor at that time position |
-| Drag a cursor line | Move it to a new time position |
-| `C` (keyboard) | Place a cursor at the viewport centre |
-
-### Removing
-
-| Action | Effect |
-|--------|--------|
-| Right-click → **Remove nearest cursor** | Remove the cursor closest to the click position |
-| Right-click → **Clear all cursors** | Remove all cursors at once |
-| `Shift+C` | Clear all cursors |
-| Drag a status-bar cursor badge out of the status bar | Remove that specific cursor |
-
-### Navigating
-
-| Action | Effect |
-|--------|--------|
-| Click a `C1` / `C2` / ... badge in the status bar | Scroll the view to that cursor |
-| `Ctrl+R` / **⊡ Range** toolbar button | Zoom view to fit exactly between C1 and the last cursor |
-
-### Cursor range summary (status bar)
-
-When two or more cursors are placed, the **status bar** shows a quick summary of segment durations for slices that start **and** end within the cursor range: **min**, **max**, and **avg**.
-
-For full per-task/per-core metrics scoped to the cursor window, use the **Statistics** panel — see [Statistics Panel](#statistics-panel) and **Limit to cursor range (C1–Cn)**.
-
----
-
-## Multi-tab traces (Desktop)
-
-| Action | Effect |
-|--------|--------|
-| **File → Open** (`Ctrl+O`) | Open a trace in a **new tab** (or switch to it if already open) |
-| **File → Close Tab** (`Ctrl+W`) | Close the active tab |
-| **Ctrl+Tab** / **Ctrl+Shift+Tab** | Next / previous trace tab |
-| Click a tab | Switch the timeline, legend, statistics, marks, and CPU load graph to that trace |
-| **×** on a tab | Close that tab |
-
-Each tab has its own cursors, zoom level, bookmarks, annotations, find state, and metrics chart session. Shared settings (theme, orientation, row height, etc.) apply to all tabs.
-
-On exit, the viewer saves the list of open tab paths, the active tab index, and per-tab zoom/cursor layout to `btf_viewer.rc`. The next launch reopens the same tabs automatically (unless a file path on the command line overrides session restore).
-
----
-
-## Legend Panel
-
-The Legend lists every task with its colour swatch and `Name[id]` label.
-
-- The panel is a dockable window; it can be detached, closed, and re-opened via its **✕** button.
-- Toggle visibility from **Settings → Display → Legend panel** (`Ctrl+,`).
-- A **Search** box at the top filters the displayed task list.
-- **Migrated tasks only** (Web: checkbox in Legend on the Marks page; Desktop: same filter in the legend dock) hides tasks that ran on a single core only — useful with [core migration analysis](#core-migration-analysis).
-- After a **heatmap drill-down**, a blue **Heatmap: … (N)** banner appears with a **Clear** button; it filters the legend list to match the timeline.
-- Hover and click Legend rows to highlight tasks using the same rules as the label column.
-
----
-
-## Zoom and Pan
-
-| Action | Effect |
-|--------|--------|
-| `Ctrl` + Scroll wheel | Zoom in or out centred on the pointer |
-| Two-finger pinch (macOS) | Zoom in or out |
-| Scroll wheel / trackpad swipe | Pan along the time axis |
-| `Ctrl+0` | Fit entire trace to window |
-| **1:1** toolbar button | Reset to default zoom (2 timescale units/pixel; for `ns` timescale, UI shows `2 ns/px`; configurable in Settings) |
-| Toolbar zoom+ / zoom− buttons | Zoom in or out by 2× |
-
----
-
-## Export
-
-### Snapshot Editor (PNG)
-
-**File → Save as Image (PNG)…** (`Ctrl+S`), the toolbar **Save PNG** / **Shot** buttons, and the plot-dialog **Export PNG** action all capture the current viewport and open the **Snapshot Editor** — they do **not** write a file immediately.
-
-In the editor you can draw annotation shapes (arrow, double arrow, line, rectangle, circle, text) and then:
-
-- Check **Dash** to draw dashed strokes (lines, arrows, rectangles, circles).
-- Click a shape to select and drag it; **Ctrl+click** duplicates the shape (then drag to position the copy).
-- **Double-click** any shape to add or edit its label inline (lines/arrows: centered, aligned to the segment; rectangles/circles: centered).
-- Single-click with the **Text** tool adds a standalone text label inline.
-- **Save PNG…** — write the annotated image to disk (includes CPU load graph when **Load** is on).
-- **Copy to Clipboard** — copy the annotated image.
-
-### Direct clipboard copy
-
-**File → Copy Image to Clipboard** (`Ctrl+Shift+C`) copies the raw viewport (timeline + CPU load when visible) without opening the editor. On Linux, `xclip`, `xsel`, or `wl-copy` is used when available (Qt clipboard is unreliable for images on X11/Wayland).
-
-### SVG
-
-**File → Save as SVG…** (`Ctrl+Shift+S`) or the toolbar **Save SVG** button exports the current viewport as vector SVG (includes CPU load when visible).
-
----
-
-## Settings
-
-Open **Settings** from the toolbar (**⚙ Settings**) or via **View → ⚙ Settings…** (`Ctrl+,`).
-
-| | Desktop | Web |
-|--|---------|-----|
-| **Storage** | `btf_viewer.rc` in the viewer directory | Browser `localStorage` key `btf-viewer-settings-v1` |
-| **When saved** | Immediately on each change | Immediately on **Save** (or when closing with **Save**); **Cancel** reverts unsaved edits |
-| **Live preview** | — | Changes apply to the open trace while the dialog is open; cancel restores the pre-open snapshot |
-
-Preferences are restored on the next launch (desktop) or page reload (web).
-
-### Appearance
-
-| Setting | Description |
-|---------|-------------|
-| Theme | **Dark** (default) or **Light** |
-| Timeline labels | Font size for task/core labels drawn on the timeline (pt on Desktop, px on Web; default **8**) |
-| UI / menus | Font size for menus, toolbar, and status bar (pt on Desktop, px on Web; default **8**) |
-
-### Display
-
-| Setting | Description |
-|---------|-------------|
-| Legend panel | Show or hide the dockable Legend panel |
-| Statistics panel | Show or hide the dockable Statistics panel |
-| STI events | Show or hide software-trace item marker rows |
-| Grid lines | Overlay vertical grid lines on the timeline (**on** by default) |
-| Highlight on label hover | Dim all other segments when hovering a task label (**off** by default; enable for emphasis, disable for better performance on large traces) |
-
-### Layout
-
-| Setting | Description |
-|---------|-------------|
-| Label column | Width of the frozen task/core label column (60–600 px). Drag the timeline splitter (Desktop + Web) or set here; persisted in `btf_viewer.rc` / `btf-viewer-settings-v1` |
-| Row height | Height of each task/core row (12–60 px; default **22**) |
-| Row gap | Vertical gap between rows (0–20 px; default **4**) |
-| 1:1 zoom level | Target zoom of the **1:1** button and the maximum zoom-in limit (0.5–200 timescale units/px; UI unit follows trace timescale, e.g. `ns/px`; default **2**) |
-| Max cursors | Maximum number of simultaneously visible cursors (4–8; default **4**) |
-| CPU load row height | Height of each CPU load graph row (16–120 px; default **30**) |
-| STI row height | Collapsed STI channel row height (12–60 px; default **18**) |
-| STI waveform height | Expanded tag-event waveform row height (40–300 px; default **80**) |
-
-### Default values (Desktop + Web)
-
-These match the compiled defaults in `btf_viewer.py` (`USER CONFIGURATION`) and `web/src/utils/settingsStore.js` (`DEFAULT_SETTINGS`). Desktop stores font sizes in **pt**; the web viewer uses the same numeric values in **px**.
-
-| Setting | Default |
-|---------|---------|
-| Theme | Dark |
-| Timeline label font | 8 |
-| UI / menus font | 8 |
-| Show Legend / Statistics / Marks / STI / CPU load | On |
-| Grid lines | **On** |
-| Highlight segments on label hover | **Off** |
-| Colorblind-safe palette | Off |
-| Label column width | 160 px |
-| Row height | 22 px |
-| Row gap | 4 px |
-| STI row height | 18 px |
-| STI waveform height | 80 px |
-| STI waveform style | Linear |
-| 1:1 zoom level | 2 timescale units/px |
-| Max cursors | 4 |
-| CPU load row height | 30 px |
-
-Existing saved settings (`btf_viewer.rc` or browser `localStorage`) are not overwritten when defaults change — use **Reset to defaults** in the Settings dialog (or clear `btf-viewer-settings-v1`) to pick up new defaults.
-
----
-
-## Statistics Panel
+Shared by the Desktop **Statistics** tab and the Web **Statistics** panel.
 
 The **Statistics** tab in the right-side panel (Desktop dock + Web tab) shows per-core CPU utilisation, top tasks, scheduling summary, trace health, and collapsible metric tables. Toggle visibility from **Settings → Display → Statistics panel**.
 
@@ -678,7 +729,7 @@ It shows:
 - **Core utilisation** — percentage of active (non-IDLE, non-TICK) CPU time per core (collapsible)
 - **Top tasks by CPU** — ranked list of worker tasks by total CPU time consumed (collapsible)
 - **Trace health (TICK)** — tick period regularity, **tick / tickless mode detection** (coefficient of variation of tick intervals), large gaps, missed-tick estimate, and **Tick Distribution…** chart button (bar-chart icon; Desktop: shown when ≥ 2 ticks; Web: tickless mode only) (collapsible)
-- **Core Migrations** — per-task migration count, core count, primary core (% time), ping-pong count, STI events near migrations, and average off-CPU gap after migration vs other gaps; click a row to highlight the task (collapsible)
+- **Core Migrations** — per-task migration count, **migration rate** (normalized per second of active time and per scheduler tick), **average core dwell time**, core count, primary core (% time), ping-pong count, STI events near migrations, and average off-CPU gap after migration vs other gaps; click a row to highlight the task (collapsible)
 - **Execution Time Per Slice** — per-task min/avg/max/p95, run count, and CPU%; click a row for a scatter + histogram popup; click **Min** / **Max** to jump and annotate the BCET / WCET slice
 - **Blocking Time** — off-CPU gap between consecutive activations of the same task (**Response Time** in Tracealyzer; same value, different label); min/avg/max/p95; click a row for a distribution chart; click **Min** / **Max** to jump and annotate the shortest / longest off-CPU gap (collapsible)
 - **Inter-Arrival Time** — same statistics for gaps between task activations; click **Min** / **Max** to jump and annotate the shortest / longest inter-arrival gap (collapsible)
@@ -711,9 +762,39 @@ node BTFViewer/web/scripts/export-stats-plots.mjs tracedata/example-4cores.btf i
 
 Timeline screenshots (e.g. `images/stats/tasks-priority-il150.svg`) are exported manually from the viewer after zooming to the region of interest. Migration heatmap screenshots (`images/migration-heatmap-pairs.svg`, `images/migration-heatmap-tasks.svg`) are exported from the heatmap dialog (**Export SVG** or **Export PNG**) after opening **Heatmap** on a multi-core trace — see [Migration heatmap](#migration-heatmap).
 
+#### Summary, scheduling, and core utilisation
+
+These sections appear at the top of the Statistics panel (not sortable tables).
+
+**Summary** — scope-wide counts: trace span, tasks, segments, STI events. Span is \(t_{\max} - t_{\min}\) in the active scope (full trace or cursor range).
+
+**Scheduling summary** — per core, **context switches** count slice boundaries and **core gap** is idle time between consecutive slices on that core:
+
+$$g_{\text{core}} = t_{\text{start},k+1} - t_{\text{end},k}$$
+
+Large **max core gap** on a core that should be busy suggests starvation, tickless idle, or a single long-running task blocking others.
+
+**Core utilisation** — per core, share of non-IDLE, non-TICK active time in scope:
+
+$$U_{\text{core}} = \frac{T_{\text{active,core}}}{T_{\text{scope}}} \times 100\%$$
+
+**What it tells you:** Imbalanced utilisation across cores may indicate poor affinity, lock pinning, or workload placement issues — cross-check with **Core Migrations** and the migration heatmap.
+
+**Top tasks by CPU** — ranks tasks by \(T_{\text{exec},i}\) (same denominator as **CPU%** in Execution Time Per Slice).
+
 #### Execution Time Per Slice
 
-Measures how long each **on-CPU slice** lasts for a task.
+Measures how long each **on-CPU slice** lasts for a task — from switch-in until the task blocks, yields, or is preempted.
+
+**Formula** — for task *i*, each on-CPU slice *k* in scope:
+
+$$d_k = t_{\text{end},k} - t_{\text{start},k}$$
+
+Table statistics (Min / Avg / Max / p95) are computed over all slices \(\{d_k\}\). **CPU%** is the task's share of total active CPU time in scope:
+
+$$\text{CPU\%}_i = \frac{T_{\text{exec},i}}{\sum_j T_{\text{exec},j}} \times 100$$
+
+**What it tells you:** Short, uniform slices suggest periodic or tick-driven scheduling. A long **Max** or heavy **p95** tail marks worst-case execution time (WCET) slices — often critical sections, lock holds, or interrupt-disabled regions. Compare **Min** (BCET) and **Max** (WCET) to judge jitter; a wide spread on a real-time task may violate deadline assumptions even when **Avg** looks acceptable.
 
 | Column | Meaning |
 |--------|---------|
@@ -740,6 +821,14 @@ Measures the **off-CPU gap** between the end of one slice and the start of the n
 
 > **Name alias — Response Time:** Percepio Tracealyzer and similar tools call this metric **Response Time** (time from the end of one task activation to the start of the next). BTFViewer labels it **Blocking Time** only; the statistic, formula, and charts are the same — there is no separate Response Time row in the UI.
 
+**Formula** — for consecutive activations *k* and *k+1* of task *i*:
+
+$$g_k = t_{\text{start},k+1} - t_{\text{end},k}$$
+
+Only positive gaps are counted. Min / Avg / Max / p95 are taken over \(\{g_k\}\) in scope.
+
+**What it tells you:** Blocking time is pure **wait time** — the task is runnable or blocked but not on-CPU. High **Avg** or **Max** gaps often point to lock contention, priority inversion, or a higher-priority task monopolizing the core. Spikes clustered at specific times in the scatter plot usually correlate with a particular preemptor or synchronization object; use **Preemption Chain Analysis** or **Mutex / Semaphore** pairing to find the cause.
+
 | Column | Meaning |
 |--------|---------|
 | **Task** | Display name |
@@ -762,6 +851,14 @@ High blocking gaps clustered at certain times often correlate with lock contenti
 
 Measures the gap between **successive activation start times** of the same task (time between slice starts, not off-CPU gap).
 
+**Formula** — for consecutive activations *k* and *k+1*:
+
+$$\Delta t_k = t_{\text{start},k+1} - t_{\text{start},k}$$
+
+Min / Avg / Max / p95 are taken over \(\{\Delta t_k\}\) in scope.
+
+**What it tells you:** Inter-arrival time reflects how often the task is **scheduled to run**, including time it spent on-CPU. For periodic tasks it should cluster near the expected period; drift or bimodality hints at missed deadlines, timer jitter, or workload-dependent release patterns. Because \(\Delta t_k = d_k + g_k\) (slice duration plus blocking gap), inter-arrival is always **≥** blocking time for the same activations — compare both tables to see whether jitter comes from short runs or long waits.
+
 | Column | Meaning |
 |--------|---------|
 | **Task** | Display name |
@@ -783,6 +880,14 @@ Compare with Blocking Time (Response Time): inter-arrival includes time the task
 #### Preemption Chain Analysis
 
 For each **victim** task's off-CPU gap, the analyser finds which **preemptor** tasks ran on the **same core** as the victim during that gap and aggregates overlap duration.
+
+**Formula** — for victim *v* and preemptor *p* on the same core during gap *g*:
+
+$$\text{overlap}(v,p,g) = \sum_{\text{segments of } p \text{ inside } g} \min(t_{\text{end}}, g_{\text{end}}) - \max(t_{\text{start}}, g_{\text{start}})$$
+
+**Count** is the number of such overlap events; **Total** / **Avg** / **Max** summarise overlap durations for each victim←preemptor pair.
+
+**What it tells you:** Answers *who ran while this task waited*. A single pair with high **Count** and **Total** means one preemptor dominates the victim's blocking; many pairs with moderate counts suggest fair sharing or frequent context switches. Large **Max** overlap points to long stretches where the victim was ready but could not run — a common sign of priority misconfiguration or a CPU hog.
 
 | Column | Meaning |
 |--------|---------|
@@ -813,6 +918,14 @@ Shown when the trace has **`create pri:N`** on task-create `T` rows **and** at l
 | `priority_disinherit Name[id] pri:N` | `traceTASK_PRIORITY_DISINHERIT` | Mutex holder returned to base priority *N* |
 | `set_priority Name[id] pri:N` | `traceTASK_PRIORITY_SET` | Explicit `vTaskPrioritySet()` |
 
+**Formula** — a **boost episode** is a contiguous interval where the task's effective priority is above its **Base** (from `create pri:N`):
+
+$$T_{\text{boosted}} = \sum_{\text{episodes}} (t_{\text{disinherit or set\_back}} - t_{\text{inherit or set\_up}})$$
+
+**Boosts** counts episodes; **Peak** is the highest priority observed while boosted.
+
+**What it tells you:** Priority inheritance prevents priority inversion when a low-priority mutex holder blocks a high-priority waiter. Long **Boosted** time or many **Boosts** on a task that is not the mutex owner under test may indicate lock contention or chained inheritance. **Mutex inherit** confirms the kernel raised priority via `priority_inherit`; **L/M/H pattern** flags the classic three-level inversion geometry (see below); **Boost only** means manual `vTaskPrioritySet()` without mutex hooks.
+
 | Column | Meaning |
 |--------|---------|
 | **Task** | Mutex holder or subject whose priority was raised |
@@ -820,9 +933,59 @@ Shown when the trace has **`create pri:N`** on task-create `T` rows **and** at l
 | **Peak** | Highest `set_priority` level observed while boosted |
 | **Boosts** | Number of boost episodes (base → above base → back to base) |
 | **Boosted** | Total time above base priority in scope |
-| **Pattern** | **Mutex inherit** when boosted via `priority_inherit`; **L/M/H pattern** when medium-priority tasks exist between base and peak; **Boost only** for manual `set_priority` |
+| **Pattern** | Summary label — see [L/M/H pattern](#lmh-pattern-priority-inversion-geometry) and table below |
 
-**Timeline UX** — boosted periods appear as a **bottom stripe** on the task row (horizontal) or a **right-edge stripe** (vertical): **orange** = boost only, **red** = mutex inherit or L/M/H pattern. Task labels show **`· pri N`** when create priority is known.
+| **Pattern** (summary) | When it appears |
+|-------------------------|-----------------|
+| **Mutex inherit** | At least one boost episode used `priority_inherit` / `priority_disinherit`, and no extra inversion episodes beyond inherits |
+| **Mutex inherit + L/M/H** | Mutex inheritance **and** additional boost episodes where medium-priority tasks sit between base and peak |
+| **L/M/H pattern** | Boost above base (usually `set_priority`) with medium-priority tasks between **Base** and **Peak**, but no `priority_inherit` on that task |
+| **Boost only** | Raised above base with no medium tasks in range and no mutex inherit |
+
+Per-episode detail (distribution chart tooltips, **Export HTML → Boost episodes**) can be more specific, e.g. `Mutex inherit L/M/H (IM[152])` or `L/M/H (CS[10], CS[11] +70)` — listing up to two medium-task names plus a count of any others.
+
+##### L/M/H pattern (priority inversion geometry)
+
+**L/M/H** names the textbook **priority-inversion** layout on three priority levels:
+
+| Role | Meaning | In `example-4cores.btf` test 8 |
+|------|---------|--------------------------------|
+| **L** (Low) | Mutex holder at the lowest priority of the three | **IL[150]** — `create pri:2`, holds `t8_mtx` |
+| **M** (Medium) | Runnable work at a priority **between** L and H; can preempt L while H waits | **IM[152]** — `create pri:3`, CPU loop after L takes the mutex |
+| **H** (High) | Blocked on the mutex L holds; triggers inheritance | **IH[151]** — `create pri:4`, blocks on `t8_mtx` |
+
+Without mutex priority inheritance, **M** would run while **H** waited on **L** — unbounded inversion. FreeRTOS boosts **L** to **H**'s priority (`priority_inherit IL[150] pri:4` at 703.266 ms in the trace) so **L** finishes its critical section before **M** can starve **H**.
+
+```text
+  pri 4  ─── H (IH) ───────── blocks on mutex ────┐
+  pri 3  ─── M (IM) ─── runs while L held lock ─┤  classic inversion
+  pri 2  ─── L (IL) ─── holds mutex, yields ────┘
+              │
+              └── kernel boosts L → pri 4 (priority_inherit)
+```
+
+**How the viewer detects L/M/H:** at the end of each boost episode, it scans every task with a known `create pri:N`. Any task whose **base priority** satisfies \(\text{Base} < p < \text{Peak}\) (strictly between the boosted task's base and peak) is a **medium blocker**. If at least one exists, the episode is an **inversion suspect** and contributes to the **L/M/H** pattern.
+
+- **Episode** level: `inversionSuspect` when the episode was mutex-inherited **or** medium blockers exist; episode **Pattern** may list medium task names.
+- **Summary** level (table **Pattern** column): aggregates episodes — `Mutex inherit`, `L/M/H pattern`, `Mutex inherit + L/M/H`, or `Boost only`.
+
+**Important:** medium-blocker detection uses **all** tasks in the trace with recorded create priorities, not only tasks active in that instant. On a busy SMP trace (many workers at `pri:3` from earlier tests), the episode label may show several medium names (e.g. `Mutex inherit L/M/H (CS[10], CS[11] +70)`). For test 8, **IM[152]** is the semantically relevant **M**; cross-check with the timeline around the boost window (~703–707 ms) and `Demo/examples/freertos_test/main.c` test 8 (`vInvLow` / `vInvMed` / `vInvHigh`).
+
+**Example — test 8 in `example-4cores.btf` (`IL[150]`):**
+
+| Field | Value |
+|-------|--------|
+| **Base / Peak** | 2 → 4 |
+| **Boosts / Boosted** | 1 episode, ~3.956 ms |
+| **Summary Pattern** | **Mutex inherit** |
+| **Episode Pattern** | **Mutex inherit L/M/H** (medium tasks include **IM[152]** at pri 3) |
+| **STI window** | `priority_inherit` 703266 µs → `priority_disinherit` 707222 µs |
+
+Zoom the timeline to that window (or click the **IL[150]** stats row / scatter point) to see the **red** boost stripe on the IL row and **IH** blocked on the mutex.
+
+**Contrast — test 7 (`PS[128]`, manual boost):** the runner calls `vTaskPrioritySet(subject, BOOST_PRIORITY)` — trace shows `set_priority` STI events, not `priority_inherit`. **PS[128]** has the same numeric geometry (base 2, peak 4, medium fillers at pri 3) so the summary **Pattern** is **L/M/H pattern** (not **Mutex inherit**). Boost duration is much shorter (~108 µs) because no mutex hold loop is involved. Use **PS[128]** vs **IL[150]** to separate kernel inheritance from application-driven priority changes.
+
+**Timeline UX** — boosted periods appear as a **bottom stripe** on the task row (horizontal) or a **right-edge stripe** (vertical): **orange** = boost only (`Boost only` / manual `set_priority` without L/M/H geometry); **red** = mutex inherit or any L/M/H-related pattern. Task labels show **`· pri N`** when create priority is known.
 
 **IL[150]** on the timeline in `example-4cores.btf` (Core view, Core_3 expanded, zoomed to test 8 ~703–707 ms). The **red bottom stripe** on the IL sub-row marks the kernel priority-boost window from `priority_inherit` to `priority_disinherit` STI events (703.266–707.222 ms). That window can start slightly before IL runs on Core_3 and end just before its last slice ends, because the stripe follows trace hooks—not the merged execution bar:
 
@@ -842,7 +1005,7 @@ Export a timeline SVG from the viewer (**File → Save SVG** or toolbar) after z
 
 <img src="../images/stats/stats-priority-il150.svg" alt="Priority boost distribution chart for IL[150] in example-4cores.btf" width="820">
 
-**PS[128]** (test 7: manual `vTaskPrioritySet`) is another good row to inspect in the same trace.
+**PS[128]** (test 7: manual `vTaskPrioritySet`, **L/M/H pattern**, ~108 µs boosted) contrasts with **IL[150]** above — same base/peak numbers, different mechanism and duration.
 
 **Note:** `traceTASK_PRIORITY_INHERIT` / `traceTASK_PRIORITY_DISINHERIT` are invoked by the FreeRTOS kernel inside `xTaskPriorityInherit()` / `xTaskPriorityDisinherit()` when `configUSE_MUTEXES` is enabled.
 
@@ -865,6 +1028,12 @@ The viewer pairs **`take`/`give`** (and **`create`/`delete`**) **per pointer** �
 | **Signal** (give → take) | `*_done` / `*_go` coordination sems | `give` posts, matching `take` consumes (FIFO) |
 
 **Mutexes** always use hold pairing (LIFO — owner must `give`).
+
+**Formula** — for each paired hold span *h* of duration \(\tau_h\):
+
+$$\overline{\tau}_{\text{hold}} = \frac{1}{N_{\text{holds}}} \sum_h \tau_h$$
+
+**What it tells you:** **Avg hold** shows typical lock or semaphore residency time — very long holds inflate blocking for waiters. **Issues** > 0 (orphan give, cross-task give, unmatched take, delete while held) mean the trace does not form clean take/give pairs and hold statistics may be incomplete. **Deadlock risk** at trace end flags multiple mutexes still held by different tasks — verify whether that is expected teardown or a real stall.
 
 | Column | Meaning |
 |--------|---------|
@@ -892,11 +1061,17 @@ Below the summary table, a **Pairing issues** sub-table lists every problem in s
 
 `example-4cores.btf` (tests 1–3) exercises `0x80018700` (mutex) and `0x80018650` (counting sem) with clean hold pairing — the Statistics **Mutex / Semaphore** summary table should show **OK** for both during those tests. Coordination sems (`*_done`, `*_go`) pair in **signal** direction; after the fix, the only remaining warning on the full trace is **test 8** deleting `t8_mtx` while the high-priority task still holds it at teardown.
 
-Verify: `npm run test:sync tracedata/example-4cores.btf` (web analysis script).
-
 #### Interval Analysis
 
 Pairs **`interval_start` / `interval_stop`** STI events into measurable code regions. Each interval **id** gets an **Interval N** row on the timeline (horizontal task view) with colored span bars; the statistics table aggregates duration across all paired spans for that id.
+
+**Formula** — for each paired instance *j* with start \(t_s\) and stop \(t_e\):
+
+$$\tau_j = t_e - t_s$$
+
+**Count** is the number of paired spans in scope; Min / Avg / Max / p95 are over \(\{\tau_j\}\).
+
+**What it tells you:** Interval metrics measure **how long instrumented code regions take** — loop iterations, critical sections, or end-to-end handlers. Tight clusters in the distribution chart mean stable iteration time; outliers or a high **Max** often mark contention, preemption inside the region, or pairing artefacts (see **Limitations** under Interval Analysis below). Compare interval ids to separate workloads (e.g. mutex stress vs lighter loops in the same trace).
 
 **BTF note field** (last CSV column on each interval line):
 
@@ -1071,6 +1246,14 @@ Interval bars are drawn as **solid** spans in the interval’s colour. **Start**
 
 Uses STI **TICK** timestamps to estimate scheduler tick regularity and detect whether the trace was recorded with the standard periodic tick or FreeRTOS **tickless idle** (`configUSE_TICKLESS_IDLE`).
 
+**Formula** — for consecutive TICK events at times \(t_n\):
+
+$$\Delta_n = t_n - t_{n-1}, \quad \mu = \text{mean}(\Delta_n), \quad \sigma = \text{stdev}(\Delta_n), \quad \text{CV} = \frac{\sigma}{\mu}$$
+
+**Missed ticks (est.)** counts large gaps where \(\Delta_n \gg \mu\) (roughly \(\lfloor \Delta_n / \mu \rfloor - 1\)).
+
+**What it tells you:** In **TICK** mode (CV ≤ 5 %), intervals cluster at one nominal period — the scheduler clock is steady. **TICKLESS** mode (CV > 5 %) widens the distribution because idle periods suppress the tick interrupt; tall spikes in the scatter plot are multi-tick sleeps, not necessarily overload. Large **Max gap** with **good** status may still be worth inspecting for long critical sections or trace dropouts.
+
 | Field | Meaning |
 |-------|---------|
 | **Status** | `good` / `warning` / `critical` based on gap threshold |
@@ -1095,7 +1278,7 @@ A **migration** is recorded when consecutive slices of the same task (merge-key)
 
 | Feature | Desktop | Web |
 |---------|---------|-----|
-| Core tint legend + **Migrated tasks only** filter | ✓ | ✓ |
+| Core tint + **Migrated tasks only** filter | ✓ | ✓ |
 | **Core Migrations** stats table | ✓ | ✓ |
 | **Migration heatmap** | ✓ | ✓ |
 | **Migration heatmap export (PNG / SVG)** | ✓ | ✓ |
@@ -1131,14 +1314,33 @@ A **migration** is recorded when consecutive slices of the same task (merge-key)
 | Web layout/options restore (`localStorage`) | — | ✓ (`btf-viewer-session-v1` + `btf-viewer-settings-v1`) |
 | Core View: dim other tasks when one is locked | ✓ | ✓ |
 
-**Legend panel:** the core-tint key explains Task View colouring by core. Check **Migrated tasks only** to hide tasks that never left their first core.
+**Legend panel:** check **Migrated tasks only** to hide tasks that never left their first core.
 
-**Statistics → Core Migrations** (collapsible section):
+**Statistics → Core Migrations** (collapsible section) — tasks that ran on two or more cores:
+
+**Migration rate** — normalizes raw migration count against task active time and (when TICK STIs exist) scheduler ticks, so a task that migrates often relative to how much it runs stands out:
+
+$$R_m = \frac{N_{\text{migrations},i}}{T_{\text{exec},i}}$$
+
+The **Rate** column shows \(R_m\) as migrations per second of on-CPU time (e.g. `1.23/s`). When the trace includes TICK events, it also shows migrations per **on-CPU** scheduler tick for that task (e.g. `2.785/tick`) — TICK STIs that fall inside one of the task's slices in scope, not trace-wide tick count.
+
+**What it tells you:** A high rate means the task is **bouncing** between cores (thrashing). For high-priority real-time tasks you ideally want this close to zero.
+
+**Average core dwell time** — mean duration of each on-CPU stay before the task blocks, yields, or migrates:
+
+$$\bar{T}_d = \frac{1}{N_{\text{slices}}} \sum_k d_k = \frac{T_{\text{exec},i}}{N_{\text{slices},i}}$$
+
+Each slice \(d_k\) is one switch-in episode (equivalent to averaging per-core dwell \(\frac{T_{\text{on core }X}}{N_{\text{switch-ins on }X}}\) aggregated across all cores the task visited).
+
+**What it tells you:** If **Dwell** is extremely short (e.g. less than a few milliseconds or close to your system tick period), the scheduler is spending disproportionate effort moving the task between cores instead of letting it compute.
 
 | Column | Meaning |
 |--------|---------|
+| **Task** | Display name (`Name[id]`) |
 | **Migr** | Migration count in the current scope (full trace, or cursor range when **Limit to cursor range** is on) |
-| **Cores** | Number of distinct cores the task ran on |
+| **Rate** | Migration rate — `/s` of task active time; `/tick` = migrations per on-CPU TICK for this task in scope |
+| **Dwell** | Average on-CPU slice duration (core dwell time) in scope |
+| **Cores** | Distinct cores with on-CPU time or migrations in the current scope |
 | **Primary** | Core with the most active time in scope, with its share (%) |
 | **Ping** | Ping-pong migrations — three consecutive migrations A→B→A within 1 µs |
 | **STI±** | Migrations with an STI event within ±500 ns |
@@ -1253,14 +1455,18 @@ Each row shows Trace A, Trace B, and **Δ** (signed difference).
 
 **Top Tasks** — top 10 user tasks by CPU% from each trace, unioned by display name (`Name[id]`). Tasks present in only one trace show **—** for the missing side.
 
-**Core Migrations** — same table as before:
+**Core Migrations** — same columns as the Statistics panel, compared side-by-side:
 
 | Column | Meaning |
 |--------|---------|
 | **Task** | Display name (`Name[id]`) |
-| **Migrations A** / **B** | Migration count in scope for that trace |
+| **Migr A** / **B** | Migration count in scope for that trace |
 | **Δ** | Difference (A − B) |
-| **Ping-pong A** / **B** | Ping-pong count in each trace |
+| **Rate A** / **B** | Migration rate label (`/s` and `/tick`) per trace |
+| **Rate Δ** | Signed difference of migrations per second of on-CPU time (A − B) |
+| **Dwell A** / **B** | Average on-CPU slice duration per trace |
+| **Dwell Δ** | Signed difference of average dwell time (A − B) |
+| **Ping A** / **B** | Ping-pong count in each trace |
 
 Use this to compare builds, configurations, or runs of the same workload without merging traces manually.
 
@@ -1401,7 +1607,11 @@ Settings, window layout, bookmarks, and multi-tab state are stored in `btf_viewe
 
 ---
 
-## Generating Synthetic Traces — `gen_trace.py`
+## Reference
+
+Synthetic trace generation, BTF file format reference, and source code map.
+
+### Generating synthetic traces — `gen_trace.py`
 
 `gen_trace.py` generates a synthetic FreeRTOS-style BTF trace file for testing or demo purposes.
 Task names are drawn from a realistic embedded-system pool (`CAN_Rx`, `Motor_L`, `PID_Speed`, …).
@@ -1445,7 +1655,7 @@ When `--output` is omitted the file is named automatically, e.g. `freertos_8c_10
 
 ---
 
-## BTF Format
+### BTF format
 
 ### Line structure
 
@@ -1706,7 +1916,7 @@ timestamp, Core_N, 0, C, Core_N, 0, set_frequency, freq_hz
 
 ---
 
-## Implementation notes
+### Implementation notes
 
 | Component | Location | Notes |
 |-----------|----------|-------|

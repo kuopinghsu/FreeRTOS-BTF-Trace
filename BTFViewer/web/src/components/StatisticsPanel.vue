@@ -382,6 +382,20 @@
                 Migr
               </th>
               <th
+                :class="thSortClass('migrations', 'rate')"
+                @click="toggleTableSort('migrations', 'rate')"
+                title="Migrations per second of on-CPU time (and per on-CPU tick when TICK events exist)"
+              >
+                Rate
+              </th>
+              <th
+                :class="thSortClass('migrations', 'dwell')"
+                @click="toggleTableSort('migrations', 'dwell')"
+                title="Average on-core run time before block, yield, or migration"
+              >
+                Dwell
+              </th>
+              <th
                 :class="thSortClass('migrations', 'cores')"
                 @click="toggleTableSort('migrations', 'cores')"
               >
@@ -432,6 +446,8 @@
             >
               <td class="task-col">{{ row.name }}</td>
               <td>{{ row.migrations }}</td>
+              <td>{{ row.migrRate }}</td>
+              <td>{{ row.avgDwell }}</td>
               <td>{{ row.coreCount }}</td>
               <td>{{ row.primary }} ({{ row.primaryPct.toFixed(0) }}%)</td>
               <td>{{ row.pingPong }}</td>
@@ -3128,12 +3144,14 @@ function exportCsv() {
 
   lines.push('')
   lines.push(`Core Migrations${suffix}`)
-  lines.push('Task,Migrations,Core count,Primary core,Primary %,Ping-pong,STI near,Gap after avg,Gap other avg')
+  lines.push('Task,Migrations,Migr rate,Avg dwell,Core count,Primary core,Primary %,Ping-pong,STI near,Gap after avg,Gap other avg')
   const migReportRows = migrationRows(tr, lo, hi)
   for (const r of migReportRows) {
     lines.push([
       _csvCell(r.name),
       _csvCell(r.migrations),
+      _csvCell(r.migrRate),
+      _csvCell(r.avgDwell),
       _csvCell(r.coreCount),
       _csvCell(r.primary),
       _csvCell(`${r.primaryPct.toFixed(1)}%`),
@@ -3619,9 +3637,9 @@ function exportHtml() {
       <h2 style="margin-top:12px;font-size:14px;">Large TICK gaps</h2>
       <table><thead><tr><th>Start</th><th>End</th><th>Gap</th><th>Missed</th></tr></thead><tbody>${tickGapBody}</tbody></table></section>`
     : `<section class="report-card"><h2>Trace Health (TICK)${_htmlCell(suffix)}</h2><p class="empty">No STI TICK events</p></section>`
-  const migHtml = `<section class="report-card"><h2>Core Migrations${_htmlCell(suffix)}</h2><table><thead><tr><th>Task</th><th>Migr</th><th>Cores</th><th>Primary</th><th>Ping</th><th>STI±</th><th>Gap after</th><th>Gap other</th></tr></thead><tbody>${migReportRows.length
-    ? migReportRows.map(r => `<tr><td>${_htmlCell(r.name)}</td><td>${_htmlCell(r.migrations)}</td><td>${_htmlCell(r.coreCount)}</td><td>${_htmlCell(`${r.primary} (${r.primaryPct.toFixed(0)}%)`)}</td><td>${_htmlCell(r.pingPong)}</td><td>${_htmlCell(r.stiNear)}</td><td>${_htmlCell(r.gapAfter)}</td><td>${_htmlCell(r.gapOther)}</td></tr>`).join('')
-    : '<tr><td colspan="8" class="empty">No migrated tasks</td></tr>'
+  const migHtml = `<section class="report-card"><h2>Core Migrations${_htmlCell(suffix)}</h2><table><thead><tr><th>Task</th><th>Migr</th><th>Rate</th><th>Dwell</th><th>Cores</th><th>Primary</th><th>Ping</th><th>STI±</th><th>Gap after</th><th>Gap other</th></tr></thead><tbody>${migReportRows.length
+    ? migReportRows.map(r => `<tr><td>${_htmlCell(r.name)}</td><td>${_htmlCell(r.migrations)}</td><td>${_htmlCell(r.migrRate)}</td><td>${_htmlCell(r.avgDwell)}</td><td>${_htmlCell(r.coreCount)}</td><td>${_htmlCell(`${r.primary} (${r.primaryPct.toFixed(0)}%)`)}</td><td>${_htmlCell(r.pingPong)}</td><td>${_htmlCell(r.stiNear)}</td><td>${_htmlCell(r.gapAfter)}</td><td>${_htmlCell(r.gapOther)}</td></tr>`).join('')
+    : '<tr><td colspan="10" class="empty">No migrated tasks</td></tr>'
   }</tbody></table></section>`
 
   const html = `<!doctype html>

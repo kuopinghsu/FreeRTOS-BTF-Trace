@@ -2,7 +2,14 @@
 btf_viewer.py - Single-file RTOS BTF Viewer (PySide6).
 
 Usage:
-    python btf_viewer.py [trace.btf]
+    python btf_viewer.py [-h] [trace.btf]              # interactive GUI viewer
+    python btf_viewer.py info [-h] trace.btf [--json] [--lo T] [--hi T]
+    python btf_viewer.py report [-h] trace.btf -o PATH [--format html|csv|both] [--lo T] [--hi T]
+    python btf_viewer.py compare [-h] a.btf b.btf -o PATH [options]
+    python btf_viewer.py migrations [-h] trace.btf [-o PATH] [--lo T] [--hi T]
+
+    Headless CLI commands mirror Statistics / Trace Compare exports in the GUI.
+    --lo and --hi use raw trace timestamps (see # timeScale in the .btf file).
 
 Parses RTOS .btf context-switch traces and renders an interactive
 Gantt-style timeline with multi-cursor, drag-to-move, zoom/pan, and
@@ -129,6 +136,7 @@ def _install_macos_stderr_filter() -> None:
     t = threading.Thread(target=_relay, daemon=True, name="stderr-filter")
     t.start()
 
+import argparse
 import base64
 import configparser
 import csv
@@ -2277,11 +2285,124 @@ def _migration_sti_near_count(trace: "BtfTrace", migs: List[MigrationEvent],
             count += 1
     return count
 
+def _cores_in_scope(
+    segs: List["TaskSegment"],
+    migs: List[MigrationEvent],
+    lo: Optional[int] = None, hi: Optional[int] = None,
+) -> set:
+    """Distinct cores with on-CPU slices or migrations in scope."""
+    cores: set = set()
+    for s in segs:
+        if lo is not None and hi is not None:
+            if not _seg_overlaps_range(s, lo, hi):
+                continue
+        cores.add(s.core)
+    if not cores and migs:
+        for m in migs:
+            cores.add(m.from_core)
+            cores.add(m.to_core)
+    return cores
+
+def _clip_segments_for_scope(
+    segs: List["TaskSegment"],
+    lo: Optional[int] = None, hi: Optional[int] = None,
+) -> List[Tuple[int, int]]:
+    """Segment [start, end] intervals clipped to scope, sorted by start."""
+    clipped: List[Tuple[int, int]] = []
+    for s in segs:
+        if lo is not None and hi is not None:
+            if not _seg_overlaps_range(s, lo, hi):
+                continue
+            seg_lo = max(s.start, lo)
+            seg_hi = min(s.end, hi)
+        else:
+            seg_lo, seg_hi = s.start, s.end
+        if seg_lo <= seg_hi:
+            clipped.append((seg_lo, seg_hi))
+    clipped.sort(key=lambda x: x[0])
+    return clipped
+
+def _tick_count_for_task(
+    segs: List["TaskSegment"],
+    tick_times: List[int],
+    lo: Optional[int] = None, hi: Optional[int] = None,
+) -> int:
+    """TICK events in scope while this task was on-CPU."""
+    clipped = _clip_segments_for_scope(segs, lo, hi)
+    if not clipped or not tick_times:
+        return 0
+    count = 0
+    i = 0
+    n = len(clipped)
+    for t in tick_times:
+        if lo is not None and hi is not None and not (lo <= t <= hi):
+            continue
+        while i + 1 < n and clipped[i + 1][0] <= t:
+            i += 1
+        seg_lo, seg_hi = clipped[i]
+        if seg_lo <= t <= seg_hi:
+            count += 1
+    return count
+
+def _core_dwell_samples(
+    segs: List["TaskSegment"],
+    lo: Optional[int] = None, hi: Optional[int] = None,
+) -> List[int]:
+    """Per on-core run duration: each slice until block, yield, or migration."""
+    samples: List[int] = []
+    for s in segs:
+        if lo is not None and hi is not None:
+            if not _seg_overlaps_range(s, lo, hi):
+                continue
+            ov_lo = max(s.start, lo)
+            ov_hi = min(s.end, hi)
+        else:
+            ov_lo, ov_hi = s.start, s.end
+        dur = max(0, ov_hi - ov_lo)
+        if dur > 0:
+            samples.append(dur)
+    return samples
+
+def _format_migration_rate(n_mig: int, task_active: int, tick_count: int,
+                           time_scale: str) -> Tuple[str, float]:
+    """Return (display label, migrations per second of task active time) for sorting."""
+    if n_mig <= 0:
+        return "-", -1.0
+    per_s = -1.0
+    per_s_label: Optional[str] = None
+    if task_active > 0:
+        active_s = _to_ns(task_active, time_scale) / 1_000_000_000.0
+        if active_s > 0:
+            per_s = n_mig / active_s
+            per_s_label = f"{per_s:.2f}/s"
+    if tick_count > 0:
+        per_tick = n_mig / tick_count
+        tick_label = f"{per_tick:.3f}/tick"
+        if per_s_label:
+            return f"{per_s_label} · {tick_label}", per_s
+        return tick_label, per_s
+    if per_s_label:
+        return per_s_label, per_s
+    return "-", -1.0
+
+def _migration_row_html(r: tuple) -> str:
+    """One Core Migrations table row for statistics HTML export."""
+    (_mk, name, n_mig, n_cores, _cores, primary, primary_pct,
+     ping, sti, g_after, g_other, migr_rate, _rps, avg_dwell, _dwell_tu) = r
+    esc = html.escape
+    return (
+        f"<tr><td>{esc(str(name))}</td><td>{n_mig}</td>"
+        f"<td>{esc(str(migr_rate))}</td><td>{esc(str(avg_dwell))}</td><td>{n_cores}</td>"
+        f"<td>{esc(str(primary))} ({primary_pct:.0f}%)</td><td>{ping}</td><td>{sti}</td>"
+        f"<td>{esc(str(g_after))}</td><td>{esc(str(g_other))}</td></tr>"
+    )
+
 def _migration_rows(trace: "BtfTrace",
                     lo: Optional[int] = None, hi: Optional[int] = None
                     ) -> List[tuple]:
     """Rows for the Core Migrations stats table."""
     scale = trace.time_scale
+    tick_times = trace.tick_sti_times
     rows: List[tuple] = []
     for mk in trace.tasks:
         if not _is_migrated_task(trace, mk):
@@ -2293,6 +2414,8 @@ def _migration_rows(trace: "BtfTrace",
             if not migs and not any(_seg_overlaps_range(s, lo, hi) for s in segs):
                 continue
         cores = _task_cores_used(trace, mk)
+        cores_in_scope = _cores_in_scope(segs, migs, lo, hi)
+        n_cores = len(cores_in_scope) if cores_in_scope else len(cores)
         core_time: Dict[str, int] = defaultdict(int)
         for s in segs:
             if lo is not None and hi is not None:
@@ -2304,24 +2427,34 @@ def _migration_rows(trace: "BtfTrace",
                 ov_lo, ov_hi = s.start, s.end
             core_time[s.core] += max(0, ov_hi - ov_lo)
         total = sum(core_time.values())
-        if total <= 0:
+        if total <= 0 and not migs:
             continue
-        primary = max(core_time, key=core_time.get)
-        primary_pct = 100.0 * core_time[primary] / total
+        if total > 0:
+            primary = max(core_time, key=core_time.get)
+            primary_pct = 100.0 * core_time[primary] / total
+        else:
+            primary = sorted(cores, key=_core_sort_key_tuple)[0] if cores else "-"
+            primary_pct = 0.0
+        tick_count = _tick_count_for_task(segs, tick_times, lo, hi)
         ping = _count_ping_pong(migs)
         sti_near = _migration_sti_near_count(trace, migs)
         gaps_after = [m.gap_ns for m in migs if m.gap_ns > 0]
         all_gaps = _blocking_time_samples(segs, lo, hi)
         avg_after = (sum(gaps_after) / len(gaps_after)) if gaps_after else 0
         avg_other = (sum(all_gaps) / len(all_gaps)) if all_gaps else 0
+        dwell_samples = _core_dwell_samples(segs, lo, hi)
+        avg_dwell_tu = int(round(sum(dwell_samples) / len(dwell_samples))) if dwell_samples else 0
+        migr_rate, rate_per_s = _format_migration_rate(len(migs), total, tick_count, scale)
+        avg_dwell = _format_time(avg_dwell_tu, scale) if avg_dwell_tu else "-"
         raw = trace.task_repr.get(mk, mk)
         disp = _task_display_name(raw)
-        cores_str = ", ".join(sorted(cores, key=_core_sort_key_tuple))
+        cores_str = ", ".join(sorted(cores_in_scope or cores, key=_core_sort_key_tuple))
         rows.append((
-            mk, disp, len(migs), len(cores), cores_str, primary, primary_pct,
+            mk, disp, len(migs), n_cores, cores_str, primary, primary_pct,
             ping, sti_near,
             _format_time(int(avg_after), scale) if avg_after else "-",
             _format_time(int(avg_other), scale) if avg_other else "-",
+            migr_rate, rate_per_s, avg_dwell, avg_dwell_tu,
         ))
     rows.sort(key=lambda r: (-r[2], r[1].lower()))
     return rows
@@ -2811,6 +2944,108 @@ def _fmt_signed_pct_delta(delta: float) -> str:
     sign = "+" if delta >= 0 else ""
     return f"{sign}{delta:.1f}"
 
+def _fmt_signed_rate_delta(rate_a: float, rate_b: float) -> str:
+    if rate_a < 0 or rate_b < 0:
+        return "—"
+    delta = rate_a - rate_b
+    if abs(delta) < 0.005:
+        return "0"
+    sign = "+" if delta >= 0 else ""
+    return f"{sign}{delta:.2f}/s"
+
+def _fmt_signed_dwell_delta(dwell_a: int, dwell_b: int, scale: str) -> str:
+    if dwell_a < 0 or dwell_b < 0:
+        return "—"
+    delta = dwell_a - dwell_b
+    if delta == 0:
+        return "0"
+    sign = "+" if delta > 0 else "−"
+    return f"{sign}{_format_time(abs(delta), scale)}"
+
+def _build_trace_compare_rows(
+    trace_a: "BtfTrace",
+    trace_b: "BtfTrace",
+    lo_a: Optional[int] = None,
+    hi_a: Optional[int] = None,
+    lo_b: Optional[int] = None,
+    hi_b: Optional[int] = None,
+) -> Tuple[List[List], List[List], List[List]]:
+    """Summary, top-task, and migration compare tables (Trace Compare dialog / CLI)."""
+    a = _trace_summary_snapshot(trace_a, lo_a, hi_a)
+    b = _trace_summary_snapshot(trace_b, lo_b, hi_b)
+    scale = a["time_scale"]
+    summary_rows = [
+        ["Span",
+         _format_time(a["span_ns"], scale),
+         _format_time(b["span_ns"], scale),
+         _fmt_signed_time_delta(a["span_ns"] - b["span_ns"], scale)],
+        ["Tasks", a["tasks"], b["tasks"], _fmt_signed_int_delta(a["tasks"] - b["tasks"])],
+        ["Segments", a["segments"], b["segments"],
+         _fmt_signed_int_delta(a["segments"] - b["segments"])],
+        ["STI events", a["sti_events"], b["sti_events"],
+         _fmt_signed_int_delta(a["sti_events"] - b["sti_events"])],
+        ["Context switches", a["context_switches"], b["context_switches"],
+         _fmt_signed_int_delta(a["context_switches"] - b["context_switches"])],
+        ["Core gap avg",
+         _format_time(a["gap_avg_ns"], scale),
+         _format_time(b["gap_avg_ns"], scale),
+         _fmt_signed_time_delta(a["gap_avg_ns"] - b["gap_avg_ns"], scale)],
+        ["Core gap max",
+         _format_time(a["gap_max_ns"], scale),
+         _format_time(b["gap_max_ns"], scale),
+         _fmt_signed_time_delta(a["gap_max_ns"] - b["gap_max_ns"], scale)],
+        ["Migrations (total)", a["migrations"], b["migrations"],
+         _fmt_signed_int_delta(a["migrations"] - b["migrations"])],
+        ["Migrated tasks", a["migrated_tasks"], b["migrated_tasks"],
+         _fmt_signed_int_delta(a["migrated_tasks"] - b["migrated_tasks"])],
+    ]
+
+    map_a = _top_tasks_cpu_by_name(trace_a, lo=lo_a, hi=hi_a)
+    map_b = _top_tasks_cpu_by_name(trace_b, lo=lo_b, hi=hi_b)
+    names = sorted(set(map_a) | set(map_b),
+                   key=lambda n: (-max(map_a.get(n, 0.0), map_b.get(n, 0.0)), n.lower()))
+    top_rows: List[List] = []
+    for name in names:
+        pa = map_a.get(name)
+        pb = map_b.get(name)
+        a_val = pa if pa is not None else 0.0
+        b_val = pb if pb is not None else 0.0
+        top_rows.append([
+            name,
+            f"{pa:.1f}" if pa is not None else "—",
+            f"{pb:.1f}" if pb is not None else "—",
+            _fmt_signed_pct_delta(a_val - b_val),
+        ])
+
+    rows_a = {r[0]: r for r in _migration_rows(trace_a, lo_a, hi_a)}
+    rows_b = {r[0]: r for r in _migration_rows(trace_b, lo_b, hi_b)}
+    keys = sorted(set(rows_a) | set(rows_b),
+                  key=lambda k: rows_a.get(k, rows_b.get(k))[1].lower())
+    mig_rows: List[List] = []
+    for mk in keys:
+        ra = rows_a.get(mk)
+        rb = rows_b.get(mk)
+        name = (ra or rb)[1]
+        ma = ra[2] if ra else 0
+        mb = rb[2] if rb else 0
+        ra_rate = ra[11] if ra else "—"
+        rb_rate = rb[11] if rb else "—"
+        ra_dwell = ra[13] if ra else "—"
+        rb_dwell = rb[13] if rb else "—"
+        ra_rps = ra[12] if ra else -1.0
+        rb_rps = rb[12] if rb else -1.0
+        ra_dtu = ra[14] if ra else -1
+        rb_dtu = rb[14] if rb else -1
+        pa = ra[7] if ra else 0
+        pb = rb[7] if rb else 0
+        mig_rows.append([
+            name, ma, mb, ma - mb, ra_rate, rb_rate,
+            _fmt_signed_rate_delta(ra_rps, rb_rps),
+            ra_dwell, rb_dwell, _fmt_signed_dwell_delta(ra_dtu, rb_dtu, scale),
+            pa, pb,
+        ])
+    return summary_rows, top_rows, mig_rows
+
 def _compare_csv_cell(v: object) -> str:
     s = str(v)
     if any(c in s for c in '",\n\r'):
@@ -2851,10 +3086,10 @@ def _build_compare_csv(name_a: str, name_b: str, scope_enabled: bool,
 
     lines.append("")
     lines.append("Core Migrations")
-    lines.append("Task,Migrations A,Migrations B,Δ,Ping-pong A,Ping-pong B")
+    lines.append("Task,Migrations A,Migrations B,Δ,Rate A,Rate B,Rate Δ,Dwell A,Dwell B,Dwell Δ,Ping-pong A,Ping-pong B")
     for row in mig:
-        if len(row) >= 6:
-            lines.append(",".join(_compare_csv_cell(c) for c in row[:6]))
+        if len(row) >= 12:
+            lines.append(",".join(_compare_csv_cell(c) for c in row[:12]))
 
     return "\n".join(lines)
 
@@ -2897,7 +3132,7 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
 
     summary_body = _rows_html(summary, 4, "No data")
     top_body = _rows_html(top, 4, "No user tasks in either trace")
-    mig_body = _rows_html(mig, 6, "No migrated tasks in either trace")
+    mig_body = _rows_html(mig, 12, "No migrated tasks in either trace")
 
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"/><title>BTF Trace Compare</title>
@@ -2916,7 +3151,7 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
     <tbody>{top_body}</tbody></table>
   </section>
   <section class="report-card"><h2>Core Migrations</h2>
-    <table><thead><tr><th>Task</th><th>Migr A</th><th>Migr B</th><th>Δ</th><th>Ping-pong A</th><th>Ping-pong B</th></tr></thead>
+    <table><thead><tr><th>Task</th><th>Migr A</th><th>Migr B</th><th>Δ</th><th>Rate A</th><th>Rate B</th><th>Rate Δ</th><th>Dwell A</th><th>Dwell B</th><th>Dwell Δ</th><th>Ping A</th><th>Ping B</th></tr></thead>
     <tbody>{mig_body}</tbody></table>
   </section>
 </div></body></html>"""
@@ -14107,9 +14342,10 @@ class _TraceCompareDialog(QDialog):
         self._top_table = QTableWidget(0, 4)
         self._top_table.setHorizontalHeaderLabels(
             ["Task", "CPU% A", "CPU% B", "Δ"])
-        self._mig_table = QTableWidget(0, 6)
+        self._mig_table = QTableWidget(0, 12)
         self._mig_table.setHorizontalHeaderLabels(
-            ["Task", "Migrations A", "Migrations B", "Δ", "Ping-pong A", "Ping-pong B"])
+            ["Task", "Migr A", "Migr B", "Δ", "Rate A", "Rate B", "Rate Δ",
+             "Dwell A", "Dwell B", "Dwell Δ", "Ping A", "Ping B"])
         for tbl in (self._summary_table, self._top_table, self._mig_table):
             tbl.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
             tbl.verticalHeader().setVisible(False)
@@ -14186,85 +14422,17 @@ class _TraceCompareDialog(QDialog):
     def _refresh(self) -> None:
         ta = self._trace_for_combo(self._combo_a)
         tb = self._trace_for_combo(self._combo_b)
-        self._refresh_summary(ta, tb)
-        self._refresh_top_tasks(ta, tb)
-        self._refresh_migrations(ta, tb)
-
-    def _refresh_summary(self, ta: Optional[BtfTrace], tb: Optional[BtfTrace]) -> None:
         if ta is None or tb is None:
             self._summary_table.setRowCount(0)
+            self._top_table.setRowCount(0)
+            self._mig_table.setRowCount(0)
             return
         lo_a, hi_a = self._range_for_trace(self._combo_a)
         lo_b, hi_b = self._range_for_trace(self._combo_b)
-        a = _trace_summary_snapshot(ta, lo_a, hi_a)
-        b = _trace_summary_snapshot(tb, lo_b, hi_b)
-        scale = a["time_scale"]
-        rows = [
-            ["Span",
-             _format_time(a["span_ns"], scale),
-             _format_time(b["span_ns"], scale),
-             _fmt_signed_time_delta(a["span_ns"] - b["span_ns"], scale)],
-            ["Tasks", a["tasks"], b["tasks"], _fmt_signed_int_delta(a["tasks"] - b["tasks"])],
-            ["Segments", a["segments"], b["segments"],
-             _fmt_signed_int_delta(a["segments"] - b["segments"])],
-            ["STI events", a["sti_events"], b["sti_events"],
-             _fmt_signed_int_delta(a["sti_events"] - b["sti_events"])],
-            ["Context switches", a["context_switches"], b["context_switches"],
-             _fmt_signed_int_delta(a["context_switches"] - b["context_switches"])],
-            ["Core gap avg",
-             _format_time(a["gap_avg_ns"], scale),
-             _format_time(b["gap_avg_ns"], scale),
-             _fmt_signed_time_delta(a["gap_avg_ns"] - b["gap_avg_ns"], scale)],
-            ["Core gap max",
-             _format_time(a["gap_max_ns"], scale),
-             _format_time(b["gap_max_ns"], scale),
-             _fmt_signed_time_delta(a["gap_max_ns"] - b["gap_max_ns"], scale)],
-            ["Migrations (total)", a["migrations"], b["migrations"],
-             _fmt_signed_int_delta(a["migrations"] - b["migrations"])],
-            ["Migrated tasks", a["migrated_tasks"], b["migrated_tasks"],
-             _fmt_signed_int_delta(a["migrated_tasks"] - b["migrated_tasks"])],
-        ]
-        self._fill_table(self._summary_table, rows)
-
-    def _refresh_top_tasks(self, ta: Optional[BtfTrace], tb: Optional[BtfTrace]) -> None:
-        lo_a, hi_a = self._range_for_trace(self._combo_a)
-        lo_b, hi_b = self._range_for_trace(self._combo_b)
-        map_a = _top_tasks_cpu_by_name(ta, lo=lo_a, hi=hi_a) if ta else {}
-        map_b = _top_tasks_cpu_by_name(tb, lo=lo_b, hi=hi_b) if tb else {}
-        names = sorted(set(map_a) | set(map_b),
-                       key=lambda n: (-max(map_a.get(n, 0.0), map_b.get(n, 0.0)), n.lower()))
-        rows: List[List] = []
-        for name in names:
-            pa = map_a.get(name)
-            pb = map_b.get(name)
-            a_val = pa if pa is not None else 0.0
-            b_val = pb if pb is not None else 0.0
-            rows.append([
-                name,
-                f"{pa:.1f}" if pa is not None else "—",
-                f"{pb:.1f}" if pb is not None else "—",
-                _fmt_signed_pct_delta(a_val - b_val),
-            ])
-        self._fill_table(self._top_table, rows)
-
-    def _refresh_migrations(self, ta: Optional[BtfTrace], tb: Optional[BtfTrace]) -> None:
-        lo_a, hi_a = self._range_for_trace(self._combo_a)
-        lo_b, hi_b = self._range_for_trace(self._combo_b)
-        rows_a = {r[0]: r for r in (_migration_rows(ta, lo_a, hi_a) if ta else [])}
-        rows_b = {r[0]: r for r in (_migration_rows(tb, lo_b, hi_b) if tb else [])}
-        keys = sorted(set(rows_a) | set(rows_b),
-                      key=lambda k: rows_a.get(k, rows_b.get(k))[1].lower())
-        mig_rows: List[List] = []
-        for mk in keys:
-            ra = rows_a.get(mk)
-            rb = rows_b.get(mk)
-            name = (ra or rb)[1]
-            ma = ra[2] if ra else 0
-            mb = rb[2] if rb else 0
-            pa = ra[7] if ra else 0
-            pb = rb[7] if rb else 0
-            mig_rows.append([name, ma, mb, ma - mb, pa, pb])
-        self._fill_table(self._mig_table, mig_rows)
+        summary, top, mig = _build_trace_compare_rows(ta, tb, lo_a, hi_a, lo_b, hi_b)
+        self._fill_table(self._summary_table, summary)
+        self._fill_table(self._top_table, top)
+        self._fill_table(self._mig_table, mig)
 
     def _tab_name(self, combo: QComboBox) -> str:
         return combo.currentText() or "Trace"
@@ -15199,6 +15367,7 @@ class _StatsPanel(QWidget):
         self._plot_preemptor: Optional[str] = None
         self._plot_interval_id: Optional[str] = None
         self._trace: Optional["BtfTrace"] = None
+        self._export_scope_override: Optional[Tuple[int, int]] = None
         self._cursor_times: List[int] = []
         self._scope_to_cursors: bool = True
         self._section_collapsed: Dict[str, bool] = {
@@ -15885,6 +16054,11 @@ class _StatsPanel(QWidget):
 
     def _stats_range(self) -> Optional[Tuple[int, int, int]]:
         """Return (lo, hi, n_cursors) when cursor-scoped stats are active."""
+        if self._export_scope_override is not None:
+            lo, hi = self._export_scope_override
+            if hi > lo:
+                return lo, hi, 2
+            return None
         if not self._scope_to_cursors or len(self._cursor_times) < 2 or self._trace is None:
             return None
         t_sorted = sorted(self._cursor_times)
@@ -16506,7 +16680,7 @@ class _StatsPanel(QWidget):
             return host
 
         if migrations:
-            headers = ["Task", "Migr", "Cores", "Primary", "Ping", "STI±",
+            headers = ["Task", "Migr", "Rate", "Dwell", "Cores", "Primary", "Ping", "STI±",
                        "Gap after", "Gap other"]
             cols = len(headers)
         else:
@@ -16515,7 +16689,25 @@ class _StatsPanel(QWidget):
                        if include_cpu
                        else ["Task", count_header, "Min", "Avg", "Max", "p95"])
         table = QTableWidget(len(rows), cols)
-        table.setHorizontalHeaderLabels(headers)
+        if migrations:
+            _mig_header_tips = [
+                "Task display name",
+                "Migration count in the current statistics scope",
+                "Migrations per second of on-CPU time; /tick = per on-CPU scheduler tick",
+                "Average on-CPU slice duration before block, yield, or migration",
+                "Distinct cores used in scope",
+                "Core with the most active time in scope (share %)",
+                "Ping-pong migrations (A→B→A within 1 µs)",
+                "Migrations with an STI event within ±500 ns",
+                "Average off-CPU gap immediately after a migration",
+                "Average blocking gap elsewhere for this task",
+            ]
+            for ci, (hdr, tip) in enumerate(zip(headers, _mig_header_tips)):
+                item = QTableWidgetItem(hdr)
+                item.setToolTip(tip)
+                table.setHorizontalHeaderItem(ci, item)
+        else:
+            table.setHorizontalHeaderLabels(headers)
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -16567,14 +16759,15 @@ class _StatsPanel(QWidget):
 
         for r, row in enumerate(rows):
             if migrations:
-                mk, name, n_mig, n_cores, _cores, primary, primary_pct, ping, sti, g_after, g_other = row
+                mk, name, n_mig, n_cores, _cores, primary, primary_pct, ping, sti, g_after, g_other, migr_rate, _rate_per_s, avg_dwell, _avg_dwell_tu = row
                 vals = [
-                    name, str(n_mig), str(n_cores),
+                    name, str(n_mig), migr_rate, avg_dwell, str(n_cores),
                     f"{primary} ({primary_pct:.0f}%)",
                     str(ping), str(sti), g_after, g_other,
                 ]
                 sort_keys = [
-                    name.lower(), n_mig, n_cores, primary_pct, ping, sti,
+                    name.lower(), n_mig, _rate_per_s, _avg_dwell_tu, n_cores, primary_pct,
+                    ping, sti,
                     _time_label_sort_key(g_after), _time_label_sort_key(g_other),
                 ]
             elif include_cpu:
@@ -16778,20 +16971,10 @@ class _StatsPanel(QWidget):
         self._wrap_table_with_resizer(lay, table, "preemption")
         return host
 
-    def _export_html(self) -> None:
+    def write_statistics_html_report(self, path: str) -> None:
         trace = self._trace
         if trace is None:
-            return
-
-        stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Export Statistics HTML",
-            f"statistics-{stamp}.html",
-            "HTML files (*.html);;All files (*)",
-        )
-        if not path:
-            return
+            raise ValueError("no trace loaded")
 
         rng = self._stats_range()
         lo = hi = None
@@ -17149,12 +17332,8 @@ class _StatsPanel(QWidget):
     <section class=\"report-card\">
     <h2>Core Migrations{_esc(scope_title)}</h2>
     <table>
-      <thead><tr><th>Task</th><th>Migr</th><th>Cores</th><th>Primary</th><th>Ping</th><th>STI±</th><th>Gap after</th><th>Gap other</th></tr></thead>
-      <tbody>{"".join(
-        f"<tr><td>{_esc(r[1])}</td><td>{r[2]}</td><td>{r[3]}</td>"
-        f"<td>{_esc(r[5])} ({r[6]:.0f}%)</td><td>{r[7]}</td><td>{r[8]}</td>"
-        f"<td>{_esc(r[9])}</td><td>{_esc(r[10])}</td></tr>"
-        for r in mig_rows) or '<tr><td colspan="8" class="empty">No data</td></tr>'}</tbody>
+      <thead><tr><th>Task</th><th>Migr</th><th>Rate</th><th>Dwell</th><th>Cores</th><th>Primary</th><th>Ping</th><th>STI±</th><th>Gap after</th><th>Gap other</th></tr></thead>
+      <tbody>{"".join(_migration_row_html(r) for r in mig_rows) or '<tr><td colspan="10" class="empty">No data</td></tr>'}</tbody>
     </table>
   </section>
     {_render_stats_table(f'Blocking Time (off-CPU gap){scope_title}', block_rows)}
@@ -17173,9 +17352,25 @@ class _StatsPanel(QWidget):
 </html>
 """
 
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(report)
+
+    def _export_html(self) -> None:
+        if self._trace is None:
+            return
+
+        stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Statistics HTML",
+            f"statistics-{stamp}.html",
+            "HTML files (*.html);;All files (*)",
+        )
+        if not path:
+            return
+
         try:
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(report)
+            self.write_statistics_html_report(path)
         except OSError as exc:
             QMessageBox.critical(self, "Export Error", f"Could not export HTML:\n{exc}")
             return
@@ -17184,20 +17379,10 @@ class _StatsPanel(QWidget):
         if isinstance(wnd, QMainWindow):
             wnd.statusBar().showMessage(f"Exported statistics: {path}", 4000)
 
-    def _export_csv(self) -> None:
+    def write_statistics_csv_report(self, path: str) -> None:
         trace = self._trace
         if trace is None:
-            return
-
-        stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Export Statistics CSV",
-            f"statistics-{stamp}.csv",
-            "CSV files (*.csv);;All files (*)",
-        )
-        if not path:
-            return
+            raise ValueError("no trace loaded")
 
         rng = self._stats_range()
         lo = hi = None
@@ -17242,148 +17427,168 @@ class _StatsPanel(QWidget):
         def _us(v: object) -> str:
             return str(v).replace("µs", "us").replace("μs", "us")
 
+        with open(path, "w", newline="", encoding="utf-8-sig") as fh:
+            writer = csv.writer(fh, quoting=csv.QUOTE_MINIMAL)
+
+            writer.writerow(["Summary"])
+            writer.writerow(["Metric", "Value"])
+            writer.writerow([f"Span{scope_suffix}", _us(span_str)])
+            if scope_suffix:
+                writer.writerow(["Cursor range", scope_suffix.strip(" ()")])
+            writer.writerow(["Tasks", task_count])
+            writer.writerow(["Segments", seg_count])
+            writer.writerow(["STI Events", sti_count])
+            writer.writerow([f"Context switches{scope_suffix}", ctx_count])
+            if core_gaps:
+                gap_avg = int(round(sum(core_gaps) / len(core_gaps)))
+                writer.writerow([f"Core gap avg{scope_suffix}", _us(_format_time(gap_avg, trace.time_scale))])
+                writer.writerow([f"Core gap max{scope_suffix}", _us(_format_time(max(core_gaps), trace.time_scale))])
+
+            writer.writerow([])
+            writer.writerow([f"Core Utilisation (excl. IDLE/TICK){scope_suffix}"])
+            writer.writerow(["Core", "CPU %"])
+            if core_rows:
+                for core, pct in core_rows:
+                    writer.writerow([core, f"{pct:.1f}%"])
+            else:
+                writer.writerow(["No data", ""])
+
+            writer.writerow([])
+            writer.writerow([f"Top Tasks by CPU (excl. IDLE/TICK){scope_suffix}"])
+            writer.writerow(["Task", "CPU %"])
+            if task_rows:
+                for _, name, pct in task_rows:
+                    writer.writerow([name, f"{pct:.1f}%"])
+            else:
+                writer.writerow(["No data", ""])
+
+            writer.writerow([])
+            writer.writerow([f"Trace Health (TICK){scope_suffix}"])
+            if tick["tick_count"]:
+                writer.writerow(["Status", tick["health"].upper()])
+                writer.writerow(["Mode", "TICKLESS" if tick["is_tickless"] else "TICK"])
+                writer.writerow(["Interval CV", f"{tick['tick_cv'] * 100.0:.2f}%"])
+                writer.writerow(["Ticks", tick["tick_count"]])
+                writer.writerow(["Avg period", _us(_format_time(tick["avg_period"], trace.time_scale))])
+                writer.writerow(["Max gap", _us(_format_time(tick["max_gap"], trace.time_scale))])
+                writer.writerow(["Missed ticks (est.)", tick["missed_estimate"]])
+                writer.writerow([])
+                writer.writerow(["Large TICK gaps"])
+                writer.writerow(["Start", "End", "Gap", "Missed"])
+                if tick["large_gaps"]:
+                    for start, end, dur, missed in tick["large_gaps"]:
+                        writer.writerow([
+                            _us(_format_time(start, trace.time_scale)),
+                            _us(_format_time(end, trace.time_scale)),
+                            _us(_format_time(dur, trace.time_scale)),
+                            missed,
+                        ])
+                else:
+                    writer.writerow(["No large gaps", "", "", ""])
+            else:
+                writer.writerow(["No STI TICK events", ""])
+
+            writer.writerow([])
+            writer.writerow([f"Execution Time Per Slice{scope_suffix}"])
+            writer.writerow(["Task", "Runs", "CPU%", "Min", "Avg", "TrimMean(5%)", "Max", "p50", "p95"])
+            if exec_rows:
+                for mk_r, name, runs, cpu, mn, avg, tmean, mx, p50, p95 in exec_rows:
+                    writer.writerow([name, runs, f"{cpu:.1f}%", _us(mn), _us(avg), _us(tmean), _us(mx), _us(p50), _us(p95)])
+            else:
+                writer.writerow(["No data", "", "", "", "", "", "", "", ""])
+
+            writer.writerow([])
+            writer.writerow([f"Core Migrations{scope_suffix}"])
+            writer.writerow(["Task", "Migrations", "Migr rate", "Avg dwell",
+                             "Core count", "Primary core",
+                             "Primary %", "Ping-pong", "STI near",
+                             "Avg gap after", "Avg gap other"])
+            if mig_rows:
+                for row in mig_rows:
+                    (_mk, name, n_mig, n_cores, _cs, primary, pct, ping, sti,
+                     ga, go, migr_rate, _rps, avg_dwell, _adtu) = row
+                    writer.writerow([name, n_mig, migr_rate, avg_dwell, n_cores, primary,
+                                     f"{pct:.1f}", ping, sti, ga, go])
+            else:
+                writer.writerow(["No data", "", "", "", "", "", "", "", "", "", ""])
+
+            writer.writerow([])
+            writer.writerow([f"Blocking Time (off-CPU gap){scope_suffix}"])
+            writer.writerow(["Task", "Gaps", "Min", "Avg", "TrimMean(5%)", "Max", "p50", "p95"])
+            if block_rows:
+                for mk_r, name, runs, mn, avg, tmean, mx, p50, p95 in block_rows:
+                    writer.writerow([name, runs, _us(mn), _us(avg), _us(tmean), _us(mx), _us(p50), _us(p95)])
+            else:
+                writer.writerow(["No data", "", "", "", "", "", "", ""])
+
+            writer.writerow([])
+            writer.writerow([f"Inter-Arrival Time{scope_suffix}"])
+            writer.writerow(["Task", "Runs", "Min", "Avg", "TrimMean(5%)", "Max", "p50", "p95"])
+            if inter_rows:
+                for mk_r, name, runs, mn, avg, tmean, mx, p50, p95 in inter_rows:
+                    writer.writerow([name, runs, _us(mn), _us(avg), _us(tmean), _us(mx), _us(p50), _us(p95)])
+            else:
+                writer.writerow(["No data", "", "", "", "", "", "", ""])
+
+            writer.writerow([])
+            writer.writerow([f"Preemption Chain Analysis{scope_suffix}"])
+            writer.writerow(["Victim", "Preemptor", "Count", "Total", "Avg", "Max"])
+            if preempt_rows_csv:
+                for _mk, victim, preemptor, count, total, avg, mx in preempt_rows_csv:
+                    writer.writerow([victim, preemptor, count, _us(total), _us(avg), _us(mx)])
+            else:
+                writer.writerow(["No preemption events found", "", "", "", "", ""])
+
+            writer.writerow([])
+            writer.writerow([f"Priority Inheritance{scope_suffix}"])
+            writer.writerow(["Task", "Base", "Peak", "Boosts", "Boosted", "Pattern"])
+            if priority_rows_csv:
+                for _mk, label, base, peak, n_eps, total, pattern, _total_ns in priority_rows_csv:
+                    writer.writerow([label, base, peak, n_eps, _us(total), pattern])
+            elif trace.has_priority_instrumentation:
+                writer.writerow(["No priority boosts in scope", "", "", "", "", ""])
+
+            writer.writerow([])
+            writer.writerow([f"Mutex / Semaphore{scope_suffix}"])
+            writer.writerow(["Object", "Kind", "Holds", "Issues", "Avg hold", "Status"])
+            if sync_rows_csv:
+                for _key, kind, _ptr, label, holds, issues, avg, status_label, *_rest in sync_rows_csv:
+                    writer.writerow([label, kind, holds, issues, _us(avg), status_label])
+            elif trace.has_sync_object_instrumentation:
+                writer.writerow(["No mutex/sem activity in scope", "", "", "", "", ""])
+
+            writer.writerow([])
+            writer.writerow([f"Interval Analysis{scope_suffix}"])
+            writer.writerow(["ID", "Label", "Count", "Min", "Avg", "Max", "p95"])
+            if interval_rows_csv:
+                for iid, label, count, mn, avg, mx, p95, *_raw in interval_rows_csv:
+                    writer.writerow([iid, label, count, _us(mn), _us(avg), _us(mx), _us(p95)])
+            else:
+                writer.writerow(["No interval data", "", "", "", "", "", ""])
+
+    def _export_csv(self) -> None:
+        if self._trace is None:
+            return
+
+        stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Statistics CSV",
+            f"statistics-{stamp}.csv",
+            "CSV files (*.csv);;All files (*)",
+        )
+        if not path:
+            return
+
         try:
-            with open(path, "w", newline="", encoding="utf-8-sig") as fh:
-                writer = csv.writer(fh, quoting=csv.QUOTE_MINIMAL)
-
-                writer.writerow(["Summary"])
-                writer.writerow(["Metric", "Value"])
-                writer.writerow([f"Span{scope_suffix}", _us(span_str)])
-                if scope_suffix:
-                    writer.writerow(["Cursor range", scope_suffix.strip(" ()")])
-                writer.writerow(["Tasks", task_count])
-                writer.writerow(["Segments", seg_count])
-                writer.writerow(["STI Events", sti_count])
-                writer.writerow([f"Context switches{scope_suffix}", ctx_count])
-                if core_gaps:
-                    gap_avg = int(round(sum(core_gaps) / len(core_gaps)))
-                    writer.writerow([f"Core gap avg{scope_suffix}", _us(_format_time(gap_avg, trace.time_scale))])
-                    writer.writerow([f"Core gap max{scope_suffix}", _us(_format_time(max(core_gaps), trace.time_scale))])
-
-                writer.writerow([])
-                writer.writerow([f"Core Utilisation (excl. IDLE/TICK){scope_suffix}"])
-                writer.writerow(["Core", "CPU %"])
-                if core_rows:
-                    for core, pct in core_rows:
-                        writer.writerow([core, f"{pct:.1f}%"])
-                else:
-                    writer.writerow(["No data", ""])
-
-                writer.writerow([])
-                writer.writerow([f"Top Tasks by CPU (excl. IDLE/TICK){scope_suffix}"])
-                writer.writerow(["Task", "CPU %"])
-                if task_rows:
-                    for _, name, pct in task_rows:
-                        writer.writerow([name, f"{pct:.1f}%"])
-                else:
-                    writer.writerow(["No data", ""])
-
-                writer.writerow([])
-                writer.writerow([f"Trace Health (TICK){scope_suffix}"])
-                if tick["tick_count"]:
-                    writer.writerow(["Status", tick["health"].upper()])
-                    writer.writerow(["Mode", "TICKLESS" if tick["is_tickless"] else "TICK"])
-                    writer.writerow(["Interval CV", f"{tick['tick_cv'] * 100.0:.2f}%"])
-                    writer.writerow(["Ticks", tick["tick_count"]])
-                    writer.writerow(["Avg period", _us(_format_time(tick["avg_period"], trace.time_scale))])
-                    writer.writerow(["Max gap", _us(_format_time(tick["max_gap"], trace.time_scale))])
-                    writer.writerow(["Missed ticks (est.)", tick["missed_estimate"]])
-                    writer.writerow([])
-                    writer.writerow(["Large TICK gaps"])
-                    writer.writerow(["Start", "End", "Gap", "Missed"])
-                    if tick["large_gaps"]:
-                        for start, end, dur, missed in tick["large_gaps"]:
-                            writer.writerow([
-                                _us(_format_time(start, trace.time_scale)),
-                                _us(_format_time(end, trace.time_scale)),
-                                _us(_format_time(dur, trace.time_scale)),
-                                missed,
-                            ])
-                    else:
-                        writer.writerow(["No large gaps", "", "", ""])
-                else:
-                    writer.writerow(["No STI TICK events", ""])
-
-                writer.writerow([])
-                writer.writerow([f"Execution Time Per Slice{scope_suffix}"])
-                writer.writerow(["Task", "Runs", "CPU%", "Min", "Avg", "TrimMean(5%)", "Max", "p50", "p95"])
-                if exec_rows:
-                    for mk_r, name, runs, cpu, mn, avg, tmean, mx, p50, p95 in exec_rows:
-                        writer.writerow([name, runs, f"{cpu:.1f}%", _us(mn), _us(avg), _us(tmean), _us(mx), _us(p50), _us(p95)])
-                else:
-                    writer.writerow(["No data", "", "", "", "", "", "", "", ""])
-
-                writer.writerow([])
-                writer.writerow([f"Core Migrations{scope_suffix}"])
-                writer.writerow(["Task", "Migrations", "Core count", "Primary core",
-                                 "Primary %", "Ping-pong", "STI near",
-                                 "Avg gap after", "Avg gap other"])
-                if mig_rows:
-                    for _mk, name, n_mig, n_cores, _cs, primary, pct, ping, sti, ga, go in mig_rows:
-                        writer.writerow([name, n_mig, n_cores, primary, f"{pct:.1f}",
-                                         ping, sti, _us(ga), _us(go)])
-                else:
-                    writer.writerow(["No data", "", "", "", "", "", "", "", ""])
-
-                writer.writerow([])
-                writer.writerow([f"Blocking Time (off-CPU gap){scope_suffix}"])
-                writer.writerow(["Task", "Gaps", "Min", "Avg", "TrimMean(5%)", "Max", "p50", "p95"])
-                if block_rows:
-                    for mk_r, name, runs, mn, avg, tmean, mx, p50, p95 in block_rows:
-                        writer.writerow([name, runs, _us(mn), _us(avg), _us(tmean), _us(mx), _us(p50), _us(p95)])
-                else:
-                    writer.writerow(["No data", "", "", "", "", "", "", ""])
-
-                writer.writerow([])
-                writer.writerow([f"Inter-Arrival Time{scope_suffix}"])
-                writer.writerow(["Task", "Runs", "Min", "Avg", "TrimMean(5%)", "Max", "p50", "p95"])
-                if inter_rows:
-                    for mk_r, name, runs, mn, avg, tmean, mx, p50, p95 in inter_rows:
-                        writer.writerow([name, runs, _us(mn), _us(avg), _us(tmean), _us(mx), _us(p50), _us(p95)])
-                else:
-                    writer.writerow(["No data", "", "", "", "", "", "", ""])
-
-                writer.writerow([])
-                writer.writerow([f"Preemption Chain Analysis{scope_suffix}"])
-                writer.writerow(["Victim", "Preemptor", "Count", "Total", "Avg", "Max"])
-                if preempt_rows_csv:
-                    for _mk, victim, preemptor, count, total, avg, mx in preempt_rows_csv:
-                        writer.writerow([victim, preemptor, count, _us(total), _us(avg), _us(mx)])
-                else:
-                    writer.writerow(["No preemption events found", "", "", "", "", ""])
-
-                writer.writerow([])
-                writer.writerow([f"Priority Inheritance{scope_suffix}"])
-                writer.writerow(["Task", "Base", "Peak", "Boosts", "Boosted", "Pattern"])
-                if priority_rows_csv:
-                    for _mk, label, base, peak, n_eps, total, pattern, _total_ns in priority_rows_csv:
-                        writer.writerow([label, base, peak, n_eps, _us(total), pattern])
-                elif trace.has_priority_instrumentation:
-                    writer.writerow(["No priority boosts in scope", "", "", "", "", ""])
-
-                writer.writerow([])
-                writer.writerow([f"Mutex / Semaphore{scope_suffix}"])
-                writer.writerow(["Object", "Kind", "Holds", "Issues", "Avg hold", "Status"])
-                if sync_rows_csv:
-                    for _key, kind, _ptr, label, holds, issues, avg, status_label, *_rest in sync_rows_csv:
-                        writer.writerow([label, kind, holds, issues, _us(avg), status_label])
-                elif trace.has_sync_object_instrumentation:
-                    writer.writerow(["No mutex/sem activity in scope", "", "", "", "", ""])
-
-                writer.writerow([])
-                writer.writerow([f"Interval Analysis{scope_suffix}"])
-                writer.writerow(["ID", "Label", "Count", "Min", "Avg", "Max", "p95"])
-                if interval_rows_csv:
-                    for iid, label, count, mn, avg, mx, p95 in interval_rows_csv:
-                        writer.writerow([iid, label, count, _us(mn), _us(avg), _us(mx), _us(p95)])
-                else:
-                    writer.writerow(["No interval data", "", "", "", "", "", ""])
-
-            wnd = self.window()
-            if isinstance(wnd, QMainWindow):
-                wnd.statusBar().showMessage(f"Exported statistics: {path}", 4000)
+            self.write_statistics_csv_report(path)
         except OSError as exc:
             QMessageBox.critical(self, "Export Error", f"Could not export CSV:\n{exc}")
+            return
+
+        wnd = self.window()
+        if isinstance(wnd, QMainWindow):
+            wnd.statusBar().showMessage(f"Exported statistics: {path}", 4000)
 
     def rebuild(self, trace: "BtfTrace") -> None:
         self._trace = trace
@@ -26160,7 +26365,583 @@ def _configure_qt_startup() -> None:
         if plat in ("offscreen", "minimal", "vnc"):
             del os.environ["QT_QPA_PLATFORM"]
 
+def _cli_validate_range_pair(lo: Optional[int], hi: Optional[int], label: str) -> Optional[str]:
+    if (lo is None) ^ (hi is None):
+        return f"error: {label} requires both endpoints (e.g. --{label}-lo and --{label}-hi)"
+    if lo is not None and hi is not None and hi <= lo:
+        return f"error: {label} end must be greater than start"
+    return None
+
+def _cli_load_trace(path: str) -> Tuple[Optional["BtfTrace"], Optional[str]]:
+    trace_path = os.path.abspath(path)
+    if not os.path.isfile(trace_path):
+        return None, f"error: trace file not found: {trace_path}"
+    try:
+        return _parse_btf(trace_path), None
+    except Exception as exc:
+        return None, f"error: failed to parse {trace_path}: {exc}"
+
+def _cli_dual_ranges(args: argparse.Namespace) -> Tuple[Optional[int], Optional[int],
+                                                        Optional[int], Optional[int],
+                                                        Optional[str]]:
+    """Resolve compare scope: shared --lo/--hi or per-trace --lo-a/--hi-a/--lo-b/--hi-b."""
+    shared = args.lo is not None or args.hi is not None
+    per_a = args.lo_a is not None or args.hi_a is not None
+    per_b = args.lo_b is not None or args.hi_b is not None
+    if shared and (per_a or per_b):
+        return None, None, None, None, (
+            "error: use either --lo/--hi (both traces) or --lo-a/--hi-a / --lo-b/--hi-b")
+    if shared:
+        err = _cli_validate_range_pair(args.lo, args.hi, "range")
+        if err:
+            return None, None, None, None, err
+        return args.lo, args.hi, args.lo, args.hi, None
+    err = _cli_validate_range_pair(args.lo_a, args.hi_a, "lo-a/hi-a")
+    if err:
+        return None, None, None, None, err
+    err = _cli_validate_range_pair(args.lo_b, args.hi_b, "lo-b/hi-b")
+    if err:
+        return None, None, None, None, err
+    return args.lo_a, args.hi_a, args.lo_b, args.hi_b, None
+
+def _trace_info_payload(trace: "BtfTrace", path: str,
+                        lo: Optional[int], hi: Optional[int]) -> dict:
+    snap = _trace_summary_snapshot(trace, lo, hi)
+    tick = _tick_health_report(trace, lo, hi)
+    scale = trace.time_scale
+    span_ns = snap["span_ns"]
+    return {
+        "file": path,
+        "meta": dict(trace.meta),
+        "time_scale": scale,
+        "time_min": trace.time_min,
+        "time_max": trace.time_max,
+        "span_ns": span_ns,
+        "span": _format_time(span_ns, scale),
+        "cores": list(trace.core_names),
+        "multi_core": _trace_is_multi_core(trace),
+        "scope": {"lo": lo, "hi": hi} if lo is not None and hi is not None else None,
+        "summary": {
+            "tasks": snap["tasks"],
+            "segments": snap["segments"],
+            "sti_events": snap["sti_events"],
+            "context_switches": snap["context_switches"],
+            "core_gap_avg": _format_time(snap["gap_avg_ns"], scale),
+            "core_gap_max": _format_time(snap["gap_max_ns"], scale),
+            "migrations": snap["migrations"],
+            "migrated_tasks": snap["migrated_tasks"],
+        },
+        "instrumentation": {
+            "priority": trace.has_priority_instrumentation,
+            "sync_objects": trace.has_sync_object_instrumentation,
+            "intervals": bool(trace.interval_ids),
+        },
+        "tick_health": tick,
+    }
+
+def _build_migrations_csv(trace: "BtfTrace",
+                          lo: Optional[int] = None,
+                          hi: Optional[int] = None) -> str:
+    header = ("Task,Migrations,Migr rate,Avg dwell,Core count,Primary core,"
+              "Primary %,Ping-pong,STI near,Avg gap after,Avg gap other")
+    lines = [header]
+    for row in _migration_rows(trace, lo, hi):
+        (_mk, name, n_mig, n_cores, _cores, primary, pct, ping, sti,
+         ga, go, migr_rate, _rps, avg_dwell, _adtu) = row
+        lines.append(",".join(_compare_csv_cell(c) for c in (
+            name, n_mig, migr_rate, avg_dwell, n_cores, primary,
+            f"{pct:.1f}", ping, sti, ga, go,
+        )))
+    return "\n".join(lines) + "\n"
+
+_CLI_HELP = """\
+Headless analysis commands (desktop only — no GUI, no Qt window):
+
+  info         Quick trace summary on stdout (--json for scripts).
+  report       Full statistics export (Statistics panel → Export CSV/HTML).
+  compare      Two-trace diff (Trace Compare dialog → Export).
+  migrations   Core Migrations table only (CSV).
+
+Time range (--lo / --hi):
+  Values are raw trace timestamps in the file's time units (see # timeScale
+  in the .btf header: ns, us, ms, …). Both endpoints are required together;
+  hi must be greater than lo. Omit for the full trace span.
+
+Output format (--format, report and compare only):
+  html   Styled report (default when -o has no extension or ends in .html)
+  csv    Tabular export (default when -o ends in .csv)
+  both   Write PATH.html and PATH.csv (or stem.html + stem.csv)
+"""
+
+_CLI_EPILOG_GUI = """\
+GUI examples:
+  %(prog)s                          restore previous session (btf_viewer.rc)
+  %(prog)s tracedata/example.btf    open one trace in the interactive viewer
+
+CLI examples:
+  %(prog)s info tracedata/example-4cores.btf
+  %(prog)s info tracedata/example-4cores.btf --json
+  %(prog)s report tracedata/example-4cores.btf -o /tmp/stats.html
+  %(prog)s report tracedata/example-4cores.btf -o /tmp/stats --format both
+  %(prog)s compare run1.btf run2.btf -o /tmp/compare.html --name-a baseline --name-b tuned
+  %(prog)s migrations tracedata/example-4cores.btf -o /tmp/migrations.csv
+
+Run "%(prog)s <command> -h" for command-specific help.
+"""
+
+_CLI_EPILOG_INFO = """\
+Prints span, core list, task/segment counts, context switches, migration
+totals, instrumentation flags, and TICK health (when STI TICK events exist).
+
+examples:
+  %(prog)s trace.btf
+  %(prog)s trace.btf --json
+  %(prog)s trace.btf --lo 200000 --hi 400000
+"""
+
+_CLI_EPILOG_REPORT = """\
+Same content as Statistics → Export in the GUI:
+
+  HTML — summary KPIs, CPU bars, and detail tables (priority episodes,
+         mutex/semaphore holds, interval instances).
+  CSV  — all statistics sections as worksheets in one file.
+
+examples:
+  %(prog)s trace.btf -o statistics.html
+  %(prog)s trace.btf -o statistics.csv --format csv
+  %(prog)s trace.btf -o report --format both
+  %(prog)s trace.btf -o scoped.html --lo 1000000 --hi 5000000
+"""
+
+_CLI_EPILOG_COMPARE = """\
+Same tables as Trace Compare → Export:
+
+  Summary        span, tasks, segments, STI, context switches, core gaps,
+                 migration totals (with Δ column).
+  Top Tasks      CPU%% per display name (union of both traces).
+  Core Migrations  per-task migr count, rate, dwell, ping-pong (A vs B + Δ).
+
+Scope:
+  Omit range flags for the full trace on each side.
+  --lo/--hi        apply the same window to both traces.
+  --lo-a/--hi-a    window for trace A only (like C1–Cn on tab A).
+  --lo-b/--hi-b    window for trace B only (like C1–Cn on tab B).
+  Do not mix shared --lo/--hi with per-trace --lo-a/--hi-a/--lo-b/--hi-b.
+
+examples:
+  %(prog)s before.btf after.btf -o compare.html
+  %(prog)s a.btf b.btf -o diff.csv --format csv
+  %(prog)s a.btf b.btf -o cmp --format both
+  %(prog)s a.btf b.btf -o cmp.html --lo-a 0 --hi-a 100000 --lo-b 0 --hi-b 100000
+"""
+
+_CLI_EPILOG_MIGRATIONS = """\
+Columns: Task, Migrations, Migr rate (/s and /tick), Avg dwell, Core count,
+Primary core, Primary %%, Ping-pong, STI±, Avg gap after, Avg gap other.
+
+examples:
+  %(prog)s trace.btf                    # write CSV to stdout
+  %(prog)s trace.btf -o migrations.csv
+  %(prog)s trace.btf -o -               # explicit stdout
+  %(prog)s trace.btf -o out.csv --lo T --hi T
+"""
+
+_CLI_LO_HELP = (
+    "range start (trace time units; must be used with --hi; "
+    "see # timeScale in the .btf file)"
+)
+_CLI_HI_HELP = (
+    "range end (trace time units; must be greater than --lo)"
+)
+
+def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.ArgumentParser]]:
+    """Return (top-level parser, subcommand parsers keyed by name)."""
+    parser = argparse.ArgumentParser(
+        prog="btf_viewer.py",
+        description=(
+            "RTOS BTF trace viewer (interactive GUI) and headless analysis (CLI).\n\n"
+            + _CLI_HELP
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=_CLI_EPILOG_GUI,
+    )
+    sub = parser.add_subparsers(
+        dest="command",
+        metavar="command",
+        title="commands",
+        description="headless analysis (run with -h for details)",
+    )
+
+    report = sub.add_parser(
+        "report",
+        help="export full statistics report (Statistics → Export CSV/HTML)",
+        description=(
+            "Export a complete statistics report for one trace.\n\n"
+            "Matches Statistics → Export CSV / Export HTML in the GUI."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=_CLI_EPILOG_REPORT,
+    )
+    report.add_argument(
+        "trace", metavar="trace.btf",
+        help="path to the .btf trace file to analyse",
+    )
+    report.add_argument(
+        "-o", "--output", required=True, metavar="PATH",
+        help=(
+            "output path: .html or .csv file, or a stem when --format both "
+            "(writes stem.html and stem.csv)"
+        ),
+    )
+    report.add_argument(
+        "--format", choices=("html", "csv", "both"), default=None,
+        metavar="FMT",
+        help=(
+            "output format: html, csv, or both (default: infer from -o extension, "
+            "else html)"
+        ),
+    )
+    report.add_argument("--lo", type=int, default=None, metavar="T", help=_CLI_LO_HELP)
+    report.add_argument("--hi", type=int, default=None, metavar="T", help=_CLI_HI_HELP)
+
+    compare = sub.add_parser(
+        "compare",
+        help="compare two traces side-by-side (Trace Compare → Export)",
+        description=(
+            "Compare two .btf traces: summary metrics, top tasks by CPU%%, and "
+            "core migration tables with A/B deltas.\n\n"
+            "Matches Trace Compare → Export CSV / Export HTML in the GUI."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=_CLI_EPILOG_COMPARE,
+    )
+    compare.add_argument(
+        "trace_a", metavar="trace_a.btf",
+        help="first trace (.btf); shown as Trace A in the report",
+    )
+    compare.add_argument(
+        "trace_b", metavar="trace_b.btf",
+        help="second trace (.btf); shown as Trace B in the report",
+    )
+    compare.add_argument(
+        "-o", "--output", required=True, metavar="PATH",
+        help="output path (.html / .csv) or stem when --format both",
+    )
+    compare.add_argument(
+        "--format", choices=("html", "csv", "both"), default=None,
+        metavar="FMT",
+        help="output format (default: infer from -o extension, else html)",
+    )
+    compare.add_argument(
+        "--name-a", default=None, metavar="LABEL",
+        help="display label for trace A (default: basename of trace_a.btf)",
+    )
+    compare.add_argument(
+        "--name-b", default=None, metavar="LABEL",
+        help="display label for trace B (default: basename of trace_b.btf)",
+    )
+    compare.add_argument(
+        "--lo", type=int, default=None, metavar="T",
+        help="shared range start for both traces (alternative to --lo-a/--lo-b)",
+    )
+    compare.add_argument(
+        "--hi", type=int, default=None, metavar="T",
+        help="shared range end for both traces (alternative to --hi-a/--hi-b)",
+    )
+    compare.add_argument(
+        "--lo-a", type=int, default=None, metavar="T",
+        help="range start for trace A only",
+    )
+    compare.add_argument(
+        "--hi-a", type=int, default=None, metavar="T",
+        help="range end for trace A only",
+    )
+    compare.add_argument(
+        "--lo-b", type=int, default=None, metavar="T",
+        help="range start for trace B only",
+    )
+    compare.add_argument(
+        "--hi-b", type=int, default=None, metavar="T",
+        help="range end for trace B only",
+    )
+
+    info = sub.add_parser(
+        "info",
+        help="print trace summary on stdout",
+        description=(
+            "Print a concise summary for one trace: span, cores, counts, "
+            "migrations, instrumentation, and TICK health."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=_CLI_EPILOG_INFO,
+    )
+    info.add_argument(
+        "trace", metavar="trace.btf",
+        help="path to the .btf trace file to summarise",
+    )
+    info.add_argument(
+        "--json", action="store_true",
+        help="emit machine-readable JSON (file path, meta, summary, tick_health)",
+    )
+    info.add_argument("--lo", type=int, default=None, metavar="T", help=_CLI_LO_HELP)
+    info.add_argument("--hi", type=int, default=None, metavar="T", help=_CLI_HI_HELP)
+
+    migrations = sub.add_parser(
+        "migrations",
+        help="export Core Migrations statistics table as CSV",
+        description=(
+            "Export the Core Migrations table (Rate, Dwell, ping-pong, STI±, "
+            "gaps, …) as CSV. Useful for scripting without the full statistics report."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=_CLI_EPILOG_MIGRATIONS,
+    )
+    migrations.add_argument(
+        "trace", metavar="trace.btf",
+        help="path to the .btf trace file",
+    )
+    migrations.add_argument(
+        "-o", "--output", default="-", metavar="PATH",
+        help="output CSV path (default: '-' = stdout)",
+    )
+    migrations.add_argument("--lo", type=int, default=None, metavar="T", help=_CLI_LO_HELP)
+    migrations.add_argument("--hi", type=int, default=None, metavar="T", help=_CLI_HI_HELP)
+
+    return parser, {
+        "report": report,
+        "compare": compare,
+        "info": info,
+        "migrations": migrations,
+    }
+
+def _cli_export_output_paths(output: str, fmt: Optional[str]) -> Tuple[str, str, str]:
+    """Return (format, html_path, csv_path) for the report subcommand."""
+    low = output.lower()
+    if fmt is None:
+        if low.endswith(".csv"):
+            fmt = "csv"
+        elif low.endswith(".html") or low.endswith(".htm"):
+            fmt = "html"
+        else:
+            fmt = "html"
+    if fmt == "html":
+        html_path = output if low.endswith((".html", ".htm")) else f"{output}.html"
+        return fmt, html_path, ""
+    if fmt == "csv":
+        csv_path = output if low.endswith(".csv") else f"{output}.csv"
+        return fmt, "", csv_path
+    # both
+    root, ext = os.path.splitext(output)
+    if ext.lower() in (".html", ".htm", ".csv"):
+        stem = root
+    else:
+        stem = output
+    return fmt, f"{stem}.html", f"{stem}.csv"
+
+def _cli_report_run(args: argparse.Namespace) -> int:
+    trace_path = os.path.abspath(args.trace)
+    if not os.path.isfile(trace_path):
+        print(f"error: trace file not found: {trace_path}", file=sys.stderr)
+        return 1
+    if (args.lo is None) ^ (args.hi is None):
+        print("error: --lo and --hi must be given together", file=sys.stderr)
+        return 1
+    if args.lo is not None and args.hi is not None and args.hi <= args.lo:
+        print("error: --hi must be greater than --lo", file=sys.stderr)
+        return 1
+
+    fmt, html_path, csv_path = _cli_export_output_paths(args.output, args.format)
+
+    try:
+        trace = _parse_btf(trace_path)
+    except Exception as exc:
+        print(f"error: failed to parse trace: {exc}", file=sys.stderr)
+        return 1
+
+    panel = _StatsPanel.__new__(_StatsPanel)
+    panel._trace = trace
+    panel._export_scope_override = None
+    panel._scope_to_cursors = False
+    panel._cursor_times = []
+    if args.lo is not None and args.hi is not None:
+        panel._export_scope_override = (args.lo, args.hi)
+
+    written: List[str] = []
+    try:
+        if fmt in ("html", "both"):
+            panel.write_statistics_html_report(html_path)
+            written.append(html_path)
+        if fmt in ("csv", "both"):
+            panel.write_statistics_csv_report(csv_path)
+            written.append(csv_path)
+    except (OSError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    for path in written:
+        print(path)
+    return 0
+
+def _cli_report_main(argv: List[str]) -> int:
+    _parsers = _make_arg_parser()[1]
+    args = _parsers["report"].parse_args(argv)
+    return _cli_report_run(args)
+
+def _cli_compare_run(args: argparse.Namespace) -> int:
+    lo_a, hi_a, lo_b, hi_b, err = _cli_dual_ranges(args)
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+
+    path_a = os.path.abspath(args.trace_a)
+    path_b = os.path.abspath(args.trace_b)
+    trace_a, err_a = _cli_load_trace(path_a)
+    if err_a:
+        print(err_a, file=sys.stderr)
+        return 1
+    trace_b, err_b = _cli_load_trace(path_b)
+    if err_b:
+        print(err_b, file=sys.stderr)
+        return 1
+
+    name_a = args.name_a or os.path.basename(path_a)
+    name_b = args.name_b or os.path.basename(path_b)
+    scope_enabled = (lo_a is not None) or (lo_b is not None)
+    summary, top, mig = _build_trace_compare_rows(
+        trace_a, trace_b, lo_a, hi_a, lo_b, hi_b)
+
+    fmt, html_path, csv_path = _cli_export_output_paths(args.output, args.format)
+    written: List[str] = []
+    try:
+        if fmt in ("html", "both"):
+            with open(html_path, "w", encoding="utf-8") as fh:
+                fh.write(_build_compare_html(
+                    name_a, name_b, scope_enabled, summary, top, mig))
+            written.append(html_path)
+        if fmt in ("csv", "both"):
+            text = _build_compare_csv(name_a, name_b, scope_enabled, summary, top, mig)
+            with open(csv_path, "w", newline="", encoding="utf-8-sig") as fh:
+                fh.write(text)
+            written.append(csv_path)
+    except OSError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    for path in written:
+        print(path)
+    return 0
+
+def _cli_compare_main(argv: List[str]) -> int:
+    args = _make_arg_parser()[1]["compare"].parse_args(argv)
+    return _cli_compare_run(args)
+
+def _cli_info_run(args: argparse.Namespace) -> int:
+    path = os.path.abspath(args.trace)
+    err = _cli_validate_range_pair(args.lo, args.hi, "range")
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+
+    trace, err_load = _cli_load_trace(path)
+    if err_load:
+        print(err_load, file=sys.stderr)
+        return 1
+
+    payload = _trace_info_payload(trace, path, args.lo, args.hi)
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0
+
+    scope = payload["scope"]
+    scope_line = ""
+    if scope:
+        scale = payload["time_scale"]
+        scope_line = (
+            f"Scope: {_format_time(scope['lo'], scale)} … "
+            f"{_format_time(scope['hi'], scale)}  "
+            f"({_format_time(scope['hi'] - scope['lo'], scale)})\n"
+        )
+    s = payload["summary"]
+    inst = payload["instrumentation"]
+    tick = payload["tick_health"]
+    lines = [
+        f"File: {payload['file']}",
+        f"Span: {payload['span']}  ({payload['time_min']} … {payload['time_max']} {payload['time_scale']})",
+        scope_line.rstrip(),
+        f"Cores ({len(payload['cores'])}): {', '.join(payload['cores']) or '—'}",
+        f"Tasks: {s['tasks']}  Segments: {s['segments']}  STI events: {s['sti_events']}",
+        f"Context switches: {s['context_switches']}  "
+        f"Core gap avg/max: {s['core_gap_avg']} / {s['core_gap_max']}",
+        f"Migrations: {s['migrations']}  Migrated tasks: {s['migrated_tasks']}",
+        f"Instrumentation: priority={inst['priority']}  "
+        f"sync={inst['sync_objects']}  intervals={inst['intervals']}",
+    ]
+    if tick.get("tick_count"):
+        lines.append(
+            f"TICK health: {tick['health'].upper()}  "
+            f"({'TICKLESS' if tick['is_tickless'] else 'TICK'})  "
+            f"ticks={tick['tick_count']}  CV={tick['tick_cv'] * 100.0:.2f}%"
+        )
+    print("\n".join(line for line in lines if line))
+    return 0
+
+def _cli_info_main(argv: List[str]) -> int:
+    args = _make_arg_parser()[1]["info"].parse_args(argv)
+    return _cli_info_run(args)
+
+def _cli_migrations_run(args: argparse.Namespace) -> int:
+    err = _cli_validate_range_pair(args.lo, args.hi, "range")
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+
+    path = os.path.abspath(args.trace)
+    trace, err_load = _cli_load_trace(path)
+    if err_load:
+        print(err_load, file=sys.stderr)
+        return 1
+
+    text = _build_migrations_csv(trace, args.lo, args.hi)
+    out = args.output
+    if out in ("-", ""):
+        sys.stdout.write(text)
+        return 0
+    try:
+        with open(out, "w", newline="", encoding="utf-8-sig") as fh:
+            fh.write(text)
+    except OSError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(out)
+    return 0
+
+def _cli_migrations_main(argv: List[str]) -> int:
+    args = _make_arg_parser()[1]["migrations"].parse_args(argv)
+    return _cli_migrations_run(args)
+
+_CLI_COMMANDS = {
+    "report": _cli_report_main,
+    "compare": _cli_compare_main,
+    "info": _cli_info_main,
+    "migrations": _cli_migrations_main,
+}
+
 def main() -> None:
+    argv = sys.argv[1:]
+    parser, _subs = _make_arg_parser()
+
+    if argv in (["-h"], ["--help"]):
+        parser.print_help()
+        raise SystemExit(0)
+
+    if argv and argv[0] in _CLI_COMMANDS:
+        raise SystemExit(_CLI_COMMANDS[argv[0]](argv[1:]))
+
+    if argv and argv[0].startswith("-"):
+        parser.print_help()
+        print(f"\nerror: unrecognized arguments: {' '.join(argv)}", file=sys.stderr)
+        raise SystemExit(2)
+
     _platform_preflight()
     _configure_qt_startup()
 
@@ -26175,10 +26956,12 @@ def main() -> None:
     win.show()
     _process_ui_events_safely()  # ensure the window is painted before any file open
 
-    if len(sys.argv) > 1:
-        path = sys.argv[1]
+    if len(argv) == 1:
+        path = argv[0]
         if os.path.isfile(path):
             QTimer.singleShot(100, lambda: win._open_file(path))
+        else:
+            QTimer.singleShot(100, win._restore_session_tabs)
     else:
         QTimer.singleShot(100, win._restore_session_tabs)
 

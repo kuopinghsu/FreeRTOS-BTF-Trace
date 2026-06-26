@@ -181,6 +181,21 @@ export function buildTopTasksCompareRows(traceA, traceB, tabA = null, tabB = nul
     })
 }
 
+function signedRateDelta(rateA, rateB) {
+  if (rateA < 0 || rateB < 0) return '—'
+  const d = rateA - rateB
+  if (Math.abs(d) < 0.005) return '0'
+  return (d >= 0 ? '+' : '') + d.toFixed(2) + '/s'
+}
+
+function signedDwellDelta(dwellA, dwellB, timeScale) {
+  if (dwellA < 0 || dwellB < 0) return '—'
+  const d = dwellA - dwellB
+  if (d === 0) return '0'
+  const sign = d > 0 ? '+' : '−'
+  return sign + formatTime(Math.abs(d), timeScale)
+}
+
 export function buildMigrationCompareRows(traceA, traceB, tabA = null, tabB = null, scopeEnabled = false) {
   const ra = rangeForTab(tabA, scopeEnabled)
   const rb = rangeForTab(tabB, scopeEnabled)
@@ -202,17 +217,28 @@ export function buildMigrationCompareRows(traceA, traceB, tabA = null, tabB = nu
     const nb = (mapA.get(b) || mapB.get(b))?.name ?? taskLabelForMergeKey(traceA || traceB, b)
     return na.localeCompare(nb)
   })
+  const timeScale = traceA?.timeScale || traceB?.timeScale || 'us'
   return keys.map((mk) => {
     const raRow = mapA.get(mk)
     const rbRow = mapB.get(mk)
     const ma = raRow?.migrations ?? 0
     const mb = rbRow?.migrations ?? 0
+    const rateA = raRow?.ratePerS ?? -1
+    const rateB = rbRow?.ratePerS ?? -1
+    const dwellA = raRow?.avgDwellTu ?? -1
+    const dwellB = rbRow?.avgDwellTu ?? -1
     return {
       mk,
       name: raRow?.name ?? rbRow?.name ?? taskLabelForMergeKey(traceA || traceB, mk),
       migrationsA: ma,
       migrationsB: mb,
       delta: ma - mb,
+      rateA: raRow?.migrRate ?? '—',
+      rateB: rbRow?.migrRate ?? '—',
+      rateDelta: signedRateDelta(rateA, rateB),
+      dwellA: raRow?.avgDwell ?? '—',
+      dwellB: rbRow?.avgDwell ?? '—',
+      dwellDelta: signedDwellDelta(dwellA, dwellB, timeScale),
       pingA: raRow?.pingPong ?? 0,
       pingB: rbRow?.pingPong ?? 0,
     }
@@ -256,13 +282,19 @@ export function buildCompareCsv(nameA, nameB, summaryRows, topTaskRows, migratio
 
   lines.push('')
   lines.push('Core Migrations')
-  lines.push('Task,Migrations A,Migrations B,Δ,Ping-pong A,Ping-pong B')
+  lines.push('Task,Migrations A,Migrations B,Δ,Rate A,Rate B,Rate Δ,Dwell A,Dwell B,Dwell Δ,Ping-pong A,Ping-pong B')
   for (const row of migrationRows) {
     lines.push([
       csvCell(row.name),
       csvCell(row.migrationsA),
       csvCell(row.migrationsB),
       csvCell(row.delta),
+      csvCell(row.rateA),
+      csvCell(row.rateB),
+      csvCell(row.rateDelta),
+      csvCell(row.dwellA),
+      csvCell(row.dwellB),
+      csvCell(row.dwellDelta),
       csvCell(row.pingA),
       csvCell(row.pingB),
     ].join(','))
@@ -309,9 +341,9 @@ export function buildCompareHtml(nameA, nameB, summaryRows, topTaskRows, migrati
 
   const migHtml = migrationRows.length
     ? migrationRows.map(r =>
-      `<tr><td>${htmlCell(r.name)}</td><td>${htmlCell(r.migrationsA)}</td><td>${htmlCell(r.migrationsB)}</td><td>${htmlCell(r.delta)}</td><td>${htmlCell(r.pingA)}</td><td>${htmlCell(r.pingB)}</td></tr>`,
+      `<tr><td>${htmlCell(r.name)}</td><td>${htmlCell(r.migrationsA)}</td><td>${htmlCell(r.migrationsB)}</td><td>${htmlCell(r.delta)}</td><td>${htmlCell(r.rateA)}</td><td>${htmlCell(r.rateB)}</td><td>${htmlCell(r.rateDelta)}</td><td>${htmlCell(r.dwellA)}</td><td>${htmlCell(r.dwellB)}</td><td>${htmlCell(r.dwellDelta)}</td><td>${htmlCell(r.pingA)}</td><td>${htmlCell(r.pingB)}</td></tr>`,
     ).join('')
-    : '<tr><td colspan="6" class="empty">No migrated tasks in either trace</td></tr>'
+    : '<tr><td colspan="12" class="empty">No migrated tasks in either trace</td></tr>'
 
   return `<!doctype html>
 <html><head><meta charset="utf-8"/><title>BTF Trace Compare</title><style>${_COMPARE_HTML_STYLE}</style></head>
@@ -327,7 +359,7 @@ export function buildCompareHtml(nameA, nameB, summaryRows, topTaskRows, migrati
     <table><thead><tr><th>Task</th><th>CPU% A</th><th>CPU% B</th><th>Δ</th></tr></thead><tbody>${topHtml}</tbody></table>
   </section>
   <section class="report-card"><h2>Core Migrations</h2>
-    <table><thead><tr><th>Task</th><th>Migr A</th><th>Migr B</th><th>Δ</th><th>Ping-pong A</th><th>Ping-pong B</th></tr></thead><tbody>${migHtml}</tbody></table>
+    <table><thead><tr><th>Task</th><th>Migr A</th><th>Migr B</th><th>Δ</th><th>Rate A</th><th>Rate B</th><th>Rate Δ</th><th>Dwell A</th><th>Dwell B</th><th>Dwell Δ</th><th>Ping A</th><th>Ping B</th></tr></thead><tbody>${migHtml}</tbody></table>
   </section>
 </div></body></html>`
 }
