@@ -766,12 +766,12 @@ Timeline screenshots (e.g. `images/stats/tasks-priority-il150.svg`) are exported
 
 These sections appear at the top of the Statistics panel (not sortable tables).
 
-**Summary** — scope-wide counts: trace span, tasks, segments, STI events. Span is $t_{\max} - t_{\min}$ in the active scope (full trace or cursor range).
+**Summary** — scope-wide counts: trace span, tasks, segments, STI events. Span is *t*<sub>max</sub> − *t*<sub>min</sub> in the active scope (full trace or cursor range).
 
 **Scheduling summary** — per core, **context switches** count slice boundaries and **core gap** is idle time between consecutive slices on that core:
 
 $$
-g_{\mathrm{core}} = t_{\mathrm{start},\,k+1} - t_{\mathrm{end},\,k}
+g_{\text{core}} = t_{\text{start},k+1} - t_{\text{end},k}
 $$
 
 Large **max core gap** on a core that should be busy suggests starvation, tickless idle, or a single long-running task blocking others.
@@ -779,12 +779,12 @@ Large **max core gap** on a core that should be busy suggests starvation, tickle
 **Core utilisation** — per core, share of non-IDLE, non-TICK active time in scope:
 
 $$
-U_{\mathrm{core}} = \frac{T_{\mathrm{active,core}}}{T_{\mathrm{scope}}} \times 100\%
+U_{\text{core}} = \frac{T_{\text{active,core}}}{T_{\text{scope}}} \times 100
 $$
 
 **What it tells you:** Imbalanced utilisation across cores may indicate poor affinity, lock pinning, or workload placement issues — cross-check with **Core Migrations** and the migration heatmap.
 
-**Top tasks by CPU** — ranks tasks by $T_{\mathrm{exec},i}$ (same denominator as **CPU%** in Execution Time Per Slice).
+**Top tasks by CPU** — ranks tasks by *T*<sub>exec,i</sub> (same denominator as **CPU%** in Execution Time Per Slice).
 
 #### Execution Time Per Slice
 
@@ -793,13 +793,13 @@ Measures how long each **on-CPU slice** lasts for a task — from switch-in unti
 **Formula** — for task *i*, each on-CPU slice *k* in scope:
 
 $$
-d_k = t_{\mathrm{end},\,k} - t_{\mathrm{start},\,k}
+d_k = t_{\text{end},k} - t_{\text{start},k}
 $$
 
-Table statistics (Min / Avg / Max / p95) are computed over all slices $\{d_k\}$. **CPU%** is the task's share of total active CPU time in scope:
+Table statistics (Min / Avg / Max / p95) are computed over all slices {*d*<sub>k</sub>}. **CPU%** is the task's share of total active CPU time in scope:
 
 $$
-\mathrm{CPU\%}_i = \frac{T_{\mathrm{exec},i}}{\sum_j T_{\mathrm{exec},j}} \times 100
+\text{CPU}_i = \frac{T_{\text{exec},i}}{\sum_j T_{\text{exec},j}} \times 100
 $$
 
 **What it tells you:** Short, uniform slices suggest periodic or tick-driven scheduling. A long **Max** or heavy **p95** tail marks worst-case execution time (WCET) slices — often critical sections, lock holds, or interrupt-disabled regions. Compare **Min** (BCET) and **Max** (WCET) to judge jitter; a wide spread on a real-time task may violate deadline assumptions even when **Avg** looks acceptable.
@@ -832,10 +832,10 @@ Measures the **off-CPU gap** between the end of one slice and the start of the n
 **Formula** — for consecutive activations *k* and *k+1* of task *i*:
 
 $$
-g_k = t_{\mathrm{start},\,k+1} - t_{\mathrm{end},\,k}
+g_k = t_{\text{start},k+1} - t_{\text{end},k}
 $$
 
-Only positive gaps are counted. Min / Avg / Max / p95 are taken over $\{g_k\}$ in scope.
+Only positive gaps are counted. Min / Avg / Max / p95 are taken over {*g*<sub>k</sub>} in scope.
 
 **What it tells you:** Blocking time is pure **wait time** — the task is runnable or blocked but not on-CPU. High **Avg** or **Max** gaps often point to lock contention, priority inversion, or a higher-priority task monopolizing the core. Spikes clustered at specific times in the scatter plot usually correlate with a particular preemptor or synchronization object; use **Preemption Chain Analysis** or **Mutex / Semaphore** pairing to find the cause.
 
@@ -864,12 +864,12 @@ Measures the gap between **successive activation start times** of the same task 
 **Formula** — for consecutive activations *k* and *k+1*:
 
 $$
-\Delta t_k = t_{\mathrm{start},\,k+1} - t_{\mathrm{start},\,k}
+\Delta t_k = t_{\text{start},k+1} - t_{\text{start},k}
 $$
 
-Min / Avg / Max / p95 are taken over $\{\Delta t_k\}$ in scope.
+Min / Avg / Max / p95 are taken over {Δ*t*<sub>k</sub>} in scope.
 
-**What it tells you:** Inter-arrival time reflects how often the task is **scheduled to run**, including time it spent on-CPU. For periodic tasks it should cluster near the expected period; drift or bimodality hints at missed deadlines, timer jitter, or workload-dependent release patterns. Because $\Delta t_k = d_k + g_k$ (slice duration plus blocking gap), inter-arrival is always **≥** blocking time for the same activations — compare both tables to see whether jitter comes from short runs or long waits.
+**What it tells you:** Inter-arrival time reflects how often the task is **scheduled to run**, including time it spent on-CPU. For periodic tasks it should cluster near the expected period; drift or bimodality hints at missed deadlines, timer jitter, or workload-dependent release patterns. Because Δ*t*<sub>k</sub> = *d*<sub>k</sub> + *g*<sub>k</sub> (slice duration plus blocking gap), inter-arrival is always **≥** blocking time for the same activations — compare both tables to see whether jitter comes from short runs or long waits.
 
 | Column | Meaning |
 |--------|---------|
@@ -896,7 +896,7 @@ For each **victim** task's off-CPU gap, the analyser finds which **preemptor** t
 **Formula** — for victim *v* and preemptor *p* on the same core during gap *g*:
 
 $$
-\mathrm{overlap}(v,p,g) = \sum_{p \in g} \Bigl[\min(t_{\mathrm{end}}, g_{\mathrm{end}}) - \max(t_{\mathrm{start}}, g_{\mathrm{start}})\Bigr]
+\text{overlap}(v,p,g) = \sum_{p \in g} \left[\min(t_{\text{end}}, g_{\text{end}}) - \max(t_{\text{start}}, g_{\text{start}})\right]
 $$
 
 **Count** is the number of such overlap events; **Total** / **Avg** / **Max** summarise overlap durations for each victim←preemptor pair.
@@ -935,10 +935,10 @@ Shown when the trace has **`create pri:N`** on task-create `T` rows **and** at l
 **Formula** — a **boost episode** is a contiguous interval where the task's effective priority is above its **Base** (from `create pri:N`):
 
 $$
-T_{\mathrm{boosted}} = \sum_{\mathrm{episodes}} \bigl(t_{\mathrm{end}} - t_{\mathrm{start}}\bigr)
+T_{\text{boosted}} = \sum_{\text{episodes}} (t_{\text{end}} - t_{\text{start}})
 $$
 
-where $t_{\mathrm{start}}$ is the inherit / set-up STI and $t_{\mathrm{end}}$ is the disinherit / set-back STI for each episode.
+where *t*<sub>start</sub> is the inherit / set-up STI and *t*<sub>end</sub> is the disinherit / set-back STI for each episode.
 
 **Boosts** counts episodes; **Peak** is the highest priority observed while boosted.
 
@@ -982,7 +982,7 @@ Without mutex priority inheritance, **M** would run while **H** waited on **L** 
               └── kernel boosts L → pri 4 (priority_inherit)
 ```
 
-**How the viewer detects L/M/H:** at the end of each boost episode, it scans every task with a known `create pri:N`. Any task whose **base priority** satisfies $\mathrm{Base} \lt p \lt \mathrm{Peak}$ (strictly between the boosted task's base and peak) is a **medium blocker**. If at least one exists, the episode is an **inversion suspect** and contributes to the **L/M/H** pattern.
+**How the viewer detects L/M/H:** at the end of each boost episode, it scans every task with a known `create pri:N`. Any task whose **base priority** satisfies **Base** &lt; *p* &lt; **Peak** (strictly between the boosted task's base and peak) is a **medium blocker**. If at least one exists, the episode is an **inversion suspect** and contributes to the **L/M/H** pattern.
 
 - **Episode** level: `inversionSuspect` when the episode was mutex-inherited **or** medium blockers exist; episode **Pattern** may list medium task names.
 - **Summary** level (table **Pattern** column): aggregates episodes — `Mutex inherit`, `L/M/H pattern`, `Mutex inherit + L/M/H`, or `Boost only`.
@@ -1047,10 +1047,10 @@ The viewer pairs **`take`/`give`** (and **`create`/`delete`**) **per pointer** �
 
 **Mutexes** always use hold pairing (LIFO — owner must `give`).
 
-**Formula** — for each paired hold span *h* of duration $\tau_h$:
+**Formula** — for each paired hold span *h* of duration τ<sub>h</sub>:
 
 $$
-\overline{\tau}_{\mathrm{hold}} = \frac{1}{N_{\mathrm{holds}}} \sum_h \tau_h
+\overline{\tau}_{\text{hold}} = \frac{1}{N_{\text{holds}}} \sum_h \tau_h
 $$
 
 **What it tells you:** **Avg hold** shows typical lock or semaphore residency time — very long holds inflate blocking for waiters. **Issues** > 0 (orphan give, cross-task give, unmatched take, delete while held) mean the trace does not form clean take/give pairs and hold statistics may be incomplete. **Deadlock risk** at trace end flags multiple mutexes still held by different tasks — verify whether that is expected teardown or a real stall.
@@ -1085,13 +1085,13 @@ Below the summary table, a **Pairing issues** sub-table lists every problem in s
 
 Pairs **`interval_start` / `interval_stop`** STI events into measurable code regions. Each interval **id** gets an **Interval N** row on the timeline (horizontal task view) with colored span bars; the statistics table aggregates duration across all paired spans for that id.
 
-**Formula** — for each paired instance *j* with start $t_s$ and stop $t_e$:
+**Formula** — for each paired instance *j* with start *t*<sub>s</sub> and stop *t*<sub>e</sub>:
 
 $$
 \tau_j = t_e - t_s
 $$
 
-**Count** is the number of paired spans in scope; Min / Avg / Max / p95 are over $\{\tau_j\}$.
+**Count** is the number of paired spans in scope; Min / Avg / Max / p95 are over {τ<sub>j</sub>}.
 
 **What it tells you:** Interval metrics measure **how long instrumented code regions take** — loop iterations, critical sections, or end-to-end handlers. Tight clusters in the distribution chart mean stable iteration time; outliers or a high **Max** often mark contention, preemption inside the region, or pairing artefacts (see **Limitations** under Interval Analysis below). Compare interval ids to separate workloads (e.g. mutex stress vs lighter loops in the same trace).
 
@@ -1268,13 +1268,13 @@ Interval bars are drawn as **solid** spans in the interval’s colour. **Start**
 
 Uses STI **TICK** timestamps to estimate scheduler tick regularity and detect whether the trace was recorded with the standard periodic tick or FreeRTOS **tickless idle** (`configUSE_TICKLESS_IDLE`).
 
-**Formula** — for consecutive TICK events at times $t_n$:
+**Formula** — for consecutive TICK events at times *t*<sub>n</sub>:
 
 $$
-\Delta_n = t_n - t_{n-1}, \quad \mu = \mathrm{mean}(\Delta_n), \quad \sigma = \mathrm{stdev}(\Delta_n), \quad \mathrm{CV} = \frac{\sigma}{\mu}
+\Delta_n = t_n - t_{n-1}, \quad \mu = \text{mean}(\Delta_n), \quad \sigma = \text{stdev}(\Delta_n), \quad \text{CV} = \frac{\sigma}{\mu}
 $$
 
-**Missed ticks (est.)** counts large gaps where $\Delta_n \gg \mu$ (roughly $\lfloor \Delta_n / \mu \rfloor - 1$).
+**Missed ticks (est.)** counts large gaps where Δ<sub>n</sub> ≫ μ (roughly ⌊Δ<sub>n</sub> / μ⌋ − 1).
 
 **What it tells you:** In **TICK** mode (CV ≤ 5 %), intervals cluster at one nominal period — the scheduler clock is steady. **TICKLESS** mode (CV > 5 %) widens the distribution because idle periods suppress the tick interrupt; tall spikes in the scatter plot are multi-tick sleeps, not necessarily overload. Large **Max gap** with **good** status may still be worth inspecting for long critical sections or trace dropouts.
 
@@ -1345,20 +1345,20 @@ A **migration** is recorded when consecutive slices of the same task (merge-key)
 **Migration rate** — normalizes raw migration count against task active time and (when TICK STIs exist) scheduler ticks, so a task that migrates often relative to how much it runs stands out:
 
 $$
-R_m = \frac{N_{\mathrm{migrations},i}}{T_{\mathrm{exec},i}}
+R_m = \frac{N_{\text{migrations},i}}{T_{\text{exec},i}}
 $$
 
-The **Rate** column shows $R_m$ as migrations per second of on-CPU time (e.g. `1.23/s`). When the trace includes TICK events, it also shows migrations per **on-CPU** scheduler tick for that task (e.g. `2.785/tick`) — TICK STIs that fall inside one of the task's slices in scope, not trace-wide tick count.
+The **Rate** column shows *R*<sub>m</sub> as migrations per second of on-CPU time (e.g. `1.23/s`). When the trace includes TICK events, it also shows migrations per **on-CPU** scheduler tick for that task (e.g. `2.785/tick`) — TICK STIs that fall inside one of the task's slices in scope, not trace-wide tick count.
 
 **What it tells you:** A high rate means the task is **bouncing** between cores (thrashing). For high-priority real-time tasks you ideally want this close to zero.
 
 **Average core dwell time** — mean duration of each on-CPU stay before the task blocks, yields, or migrates:
 
 $$
-\bar{T}_d = \frac{1}{N_{\mathrm{slices}}} \sum_k d_k = \frac{T_{\mathrm{exec},i}}{N_{\mathrm{slices},i}}
+\bar{T}_d = \frac{1}{N_{\text{slices}}} \sum_k d_k = \frac{T_{\text{exec},i}}{N_{\text{slices},i}}
 $$
 
-Each slice $d_k$ is one switch-in episode (equivalent to averaging per-core dwell, $T_{\mathrm{on}} / N_{\mathrm{slices}}$, on each core the task visited).
+Each slice *d*<sub>k</sub> is one switch-in episode (equivalent to averaging per-core dwell, *T*<sub>on</sub> / *N*<sub>slices</sub>, on each core the task visited).
 
 **What it tells you:** If **Dwell** is extremely short (e.g. less than a few milliseconds or close to your system tick period), the scheduler is spending disproportionate effort moving the task between cores instead of letting it compute.
 
