@@ -2,8 +2,9 @@
   <div
     ref="panelEl"
     class="timeline-panel"
+    :class="{ 'vert-orient': orientation === 'v' }"
   >
-    <!-- Left: sticky label column (hidden in vertical mode) -->
+    <!-- Left: sticky label column (horizontal mode only) -->
     <LabelColumn
       v-if="orientation === 'h'"
       :key="options.layoutRev"
@@ -31,7 +32,23 @@
       @mousedown.prevent.stop="onLabelResizeStart"
     />
 
-    <!-- Right: canvas -->
+    <!-- Top: column headers (vertical mode — sibling above canvas, not an overlay) -->
+    <ColumnHeaderRow
+      v-if="orientation === 'v' && trace"
+      :key="options.layoutRev"
+      :column-layout="cachedColumnLayout"
+      :scroll-x="viewport.scrollX"
+      :canvas-w="viewport.canvasW"
+      :header-h="vertLabelHeaderH"
+      :highlight-key="options.highlightKey"
+      :expanded="expanded"
+      @expand-toggle="onExpandToggle"
+      @highlight-change="(k) => emit('highlightChange', k)"
+      @highlight-click="(k) => emit('highlightClick', k)"
+      @sti-expand-toggle="onStiExpandToggle"
+    />
+
+    <!-- Timeline canvas -->
     <div
       ref="canvasWrapEl"
       class="canvas-wrap"
@@ -215,6 +232,7 @@
 import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { toBlob as domToBlob } from 'html-to-image'
 import LabelColumn from './LabelColumn.vue'
+import ColumnHeaderRow from './ColumnHeaderRow.vue'
 import StiTooltip  from './StiTooltip.vue'
 import SegmentTooltip from './SegmentTooltip.vue'
 import { render as renderTimeline, renderVertical, buildRowLayout, buildColumnLayout, drawHoverLine, drawHoverLineVertical, drawRangeSelect, drawRangeSelectVertical, drawCursors, drawCursorsVertical, drawMarksHorizontal, drawMarksVertical, drawFindHits, drawFindHitsVertical, RULER_H, isStiTagChannel, RULER_W, COL_W, HEADER_H, formatTime, rowBandHeight, visibleRowIndexRange, orthRowBuffer, taskPassesRowFilter, filteredCoreViewTasks, coreViewTaskFilterActive } from '../renderer/TimelineRenderer.js'
@@ -276,6 +294,11 @@ const stiExpanded = reactive(new Set())
 const AUTO_EXPAND_CORES_MAX = 8
 
 const orientation = computed(() => props.options.orientation || 'h')
+
+/** Vertical-mode top label band height (DOM header row above the canvas). */
+const vertLabelHeaderH = computed(() => props.labelWidth || HEADER_H)
+/** Vertical canvas has no internal header band — the DOM row sits above canvas-wrap. */
+const vertCanvasHeaderH = 0
 
 // Cached row/column structure (scroll-independent — offset applied at paint time).
 const cachedRowLayout = computed(() => {
@@ -374,15 +397,15 @@ const vThumbStyle = computed(() => {
       : 0
     return { height: `${thumbH}px`, top: `${RULER_H + thumbT}px` }
   }
-  // Vertical mode – time scroll
+  // Vertical mode – time scroll (canvas-wrap is body-only; no header band inside)
   const visSpan = viewport.timeEnd - viewport.timeStart
-  const bodyH   = trackH - HEADER_H
+  const bodyH   = trackH
   const thumbH  = Math.max(20, (visSpan / traceBounds.value.span) * bodyH)
   const maxTop  = bodyH - thumbH
   const thumbT  = maxTop > 0
     ? Math.min(maxTop, ((viewport.timeStart - traceBounds.value.lo) / (traceBounds.value.span - visSpan)) * maxTop)
     : 0
-  return { height: `${thumbH}px`, top: `${HEADER_H + thumbT}px` }
+  return { height: `${thumbH}px`, top: `${thumbT}px` }
 })
 
 const viewport = reactive({
@@ -656,6 +679,8 @@ function paint() {
     columnLayout:     cachedColumnLayout.value,
     packedRows:       _packedRows,
     gpuBatch:         webgl ? pixiTimelineHost.batcher : null,
+    skipColumnHeaders: orientation.value === 'v',
+    labelHeaderH: orientation.value === 'v' ? vertCanvasHeaderH : vertLabelHeaderH.value,
   }
   if (orientation.value === 'v') {
     renderVertical(ctx, props.trace, viewport, renderOpts)
@@ -694,15 +719,16 @@ function paintHoverOverlay() {
   const darkMode = props.options.darkMode
 
   if (orientation.value === 'v') {
-    const bodyH   = canvasH - HEADER_H
+    const hh = vertCanvasHeaderH
+    const bodyH   = canvasH
     const pxPerNs = bodyH / (timeEnd - timeStart)
-    drawMarksVertical(ctx, marks, props.trace, timeStart, pxPerNs, canvasW, canvasH, HEADER_H, darkMode, props.options.selectedMarkId ?? null)
-    drawCursorsVertical(ctx, props.cursors, props.trace, timeStart, pxPerNs, canvasW, canvasH, HEADER_H, darkMode)
-    drawFindHitsVertical(ctx, props.findHits, props.findMarkerNs, props.trace, timeStart, pxPerNs, canvasW, canvasH, HEADER_H, darkMode)
+    drawMarksVertical(ctx, marks, props.trace, timeStart, pxPerNs, canvasW, canvasH, hh, darkMode, props.options.selectedMarkId ?? null)
+    drawCursorsVertical(ctx, props.cursors, props.trace, timeStart, pxPerNs, canvasW, canvasH, hh, darkMode)
+    drawFindHitsVertical(ctx, props.findHits, props.findMarkerNs, props.trace, timeStart, pxPerNs, canvasW, canvasH, hh, darkMode)
     if (rangeSelect.value)
-      drawRangeSelectVertical(ctx, rangeSelect.value.t0, rangeSelect.value.t1, timeStart, pxPerNs, canvasW, canvasH, HEADER_H, darkMode)
+      drawRangeSelectVertical(ctx, rangeSelect.value.t0, rangeSelect.value.t1, timeStart, pxPerNs, canvasW, canvasH, hh, darkMode)
     if (hoverTime.value !== null)
-      drawHoverLineVertical(ctx, hoverTime.value, props.trace, timeStart, pxPerNs, canvasW, canvasH, HEADER_H, darkMode)
+      drawHoverLineVertical(ctx, hoverTime.value, props.trace, timeStart, pxPerNs, canvasW, canvasH, hh, darkMode)
   } else {
     const pxPerNs = canvasW / (timeEnd - timeStart)
     drawMarksHorizontal(ctx, marks, props.trace, timeStart, pxPerNs, canvasW, canvasH, darkMode, props.options.selectedMarkId ?? null)
@@ -746,6 +772,7 @@ function setupHandler() {
       migratedOnlyFilter: !!props.options.migratedOnlyFilter,
       rowLayout: cachedRowLayout.value,
       columnLayout: cachedColumnLayout.value,
+      vertHeaderH: orientation.value === 'v' ? vertCanvasHeaderH : vertLabelHeaderH.value,
     }),
     getMarks:    () => props.options.marks || [],
     onViewportChange(vp) {
@@ -1176,7 +1203,7 @@ function zoom1to1(wasFit = false) {
   const hi = props.trace.timeMax
   const centerNs = wasFit ? lo : getViewportCenter()
   const axisPx = orientation.value === 'v'
-    ? Math.max(1, viewport.canvasH - HEADER_H)
+    ? Math.max(1, viewport.canvasH)
     : Math.max(1, viewport.canvasW)
   const span = axisPx * tspx
   let timeStart = centerNs - span / 2
@@ -1705,12 +1732,22 @@ watch(cachedRowLayout, () => {
   clampScrollToContent()
 })
 
+watch(cachedColumnLayout, () => {
+  clampScrollToContent()
+})
+
 // Handler re-creation only needed when orientation or viewMode changes
 watch([() => props.options.orientation, () => props.options.viewMode], () => {
+  if (orientation.value === 'v') {
+    viewport.scrollX = 0
+    viewport.scrollY = 0
+  } else {
+    viewport.scrollX = 0
+  }
   clampScrollToContent()
   _ovBgCanvas = null
   setupHandler()
-  scheduleRender()
+  scheduleRender(true)
 })
 // Other visual options that affect segment rendering → full repaint
 watch([() => props.options.highlightKey, () => props.options.highlightSegment, () => props.options.highlightInterval, () => props.options.showGrid, () => props.options.showSti, () => props.options.stiLogScale, () => props.options.migratedOnlyFilter, () => props.options.taskFilterKeys, () => props.options.lockedTaskKey], () => {
@@ -1774,8 +1811,8 @@ watch(stiHover, (ev) => {
   if (!ev || !canvasEl.value || !props.trace) return
   if (orientation.value === 'v') {
     // In vertical mode, X is column position, Y is time
-    const hh = 160
-    const pxPerNs = (viewport.canvasH - hh) / (viewport.timeEnd - viewport.timeStart)
+    const hh = vertCanvasHeaderH
+    const pxPerNs = viewport.canvasH / (viewport.timeEnd - viewport.timeStart)
     stiHoverPos.y = hh + (ev.time - viewport.timeStart) * pxPerNs
     stiHoverPos.x = canvasEl.value.clientWidth / 2
   } else {
@@ -1793,9 +1830,9 @@ watch(stiHover, (ev) => {
 watch(segmentHover, (seg) => {
   if (!seg || !canvasEl.value || !props.trace) return
   if (orientation.value === 'v') {
-    const bodyH = viewport.canvasH - HEADER_H
-    const pxPerNs = bodyH / (viewport.timeEnd - viewport.timeStart)
-    segmentHoverPos.y = HEADER_H + (seg.start - viewport.timeStart) * pxPerNs
+    const hh = vertCanvasHeaderH
+    const pxPerNs = viewport.canvasH / (viewport.timeEnd - viewport.timeStart)
+    segmentHoverPos.y = hh + (seg.start - viewport.timeStart) * pxPerNs
     const cols = cachedColumnLayout.value?.cols
     let col = null
     if (cols) {
@@ -2181,10 +2218,8 @@ function _sbMouseMove(e) {
       markInteracting(true)
       scheduleRender()
     } else {
-      const { totalWidth } = buildColumnLayout(
-        props.trace, props.options.viewMode, expanded, 0, props.options.showSti !== false, stiExpanded,
-      )
-      viewport.scrollX = Math.max(0, ratio * Math.max(0, totalWidth - viewport.canvasW))
+      const maxScroll = _sbDrag.maxScrollX ?? Math.max(0, totalColumnWidth.value - viewport.canvasW)
+      viewport.scrollX = Math.max(0, ratio * maxScroll)
       markInteracting(false)
     }
     scheduleRender(orientation.value === 'v')
@@ -2216,9 +2251,23 @@ function _sbMouseUp() {
 
 function onHThumbMouseDown(e) {
   if (!props.trace || !traceBounds.value) return
-  const { lo, span } = traceBounds.value
   const vSbW   = showVScrollbar.value ? SCROLLBAR_SIZE : 0
   const trackW = viewport.canvasW - vSbW
+  if (orientation.value === 'v') {
+    const totalWidth = totalColumnWidth.value
+    const thumbW  = Math.max(20, (viewport.canvasW / Math.max(1, totalWidth)) * trackW)
+    const usableW = trackW - thumbW
+    const maxScrollX = Math.max(0, totalWidth - viewport.canvasW)
+    const startL  = usableW > 0
+      ? Math.min(usableW, ((viewport.scrollX || 0) / Math.max(1, maxScrollX)) * usableW)
+      : 0
+    _sbDrag = { type: 'h', startX: e.clientX, startL, usableW, maxScrollX, totalWidth }
+    document.addEventListener('mousemove', _sbMouseMove)
+    document.addEventListener('mouseup', _sbMouseUp)
+    showOverviewPopup()
+    return
+  }
+  const { lo, span } = traceBounds.value
   const visSpan = viewport.timeEnd - viewport.timeStart
   const thumbW  = Math.max(20, (visSpan / span) * trackW)
   const usableW = trackW - thumbW
@@ -2246,7 +2295,7 @@ function onVThumbMouseDown(e) {
     _sbDrag = { type: 'v', startY: e.clientY, startT, usableH, maxScrollY }
   } else {
     const visSpan = viewport.timeEnd - viewport.timeStart
-    const bodyH   = trackH - HEADER_H
+    const bodyH   = trackH
     const thumbH  = Math.max(20, (visSpan / span) * bodyH)
     const usableH = bodyH - thumbH
     const startT  = usableH > 0
@@ -2295,8 +2344,8 @@ function onVTrackClick(e) {
     const visH   = viewport.canvasH - RULER_H
     viewport.scrollY = ratio * Math.max(0, totalRowHeight.value - visH)
   } else {
-    const bodyH  = trackH - HEADER_H
-    const ratio  = Math.max(0, Math.min(1, (clickY - HEADER_H) / bodyH))
+    const bodyH  = trackH
+    const ratio  = Math.max(0, Math.min(1, clickY / bodyH))
     const visSpan  = viewport.timeEnd - viewport.timeStart
     const newStart = lo + ratio * (span - visSpan)
     viewport.timeStart = newStart
@@ -2344,6 +2393,21 @@ onBeforeUnmount(() => {
   flex: 1;
   overflow: hidden;
   position: relative;
+}
+
+.timeline-panel.vert-orient {
+  flex-direction: column;
+}
+
+.timeline-panel.vert-orient > .column-header-row {
+  flex-shrink: 0;
+  width: 100%;
+}
+
+.timeline-panel.vert-orient > .canvas-wrap {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
 }
 
 .label-resizer {

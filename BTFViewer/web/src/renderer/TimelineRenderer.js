@@ -50,6 +50,17 @@ export const HEADER_H       = 160  // top label row height (px) – vertical mod
 export const COL_W          =  26  // column width per task/core – vertical mode
 export const MIN_SEG_W      =   1  // minimum segment paint width (px)
 
+/** Runtime vertical header band inside canvas (0 when DOM ColumnHeaderRow is used). */
+let _vertHeaderBand = HEADER_H
+
+export function setVertHeaderBand(h) {
+  _vertHeaderBand = h
+}
+
+export function vertHeaderBand() {
+  return _vertHeaderBand
+}
+
 function L() {
   return getTimelineLayout()
 }
@@ -397,6 +408,38 @@ export function rowBandHeight(row) {
 export function visibleRowIndexRange(rows, scrollY, bodyH, buffer = 2, packedRows = null) {
   if (!rows || rows.length === 0) return { i0: 0, i1: 0 }
   return accelVisibleRowRange(rows, scrollY, bodyH, buffer, rowBandHeight, packedRows)
+}
+
+/** Column band width in px (vertical mode). */
+export function colBandWidth(col) {
+  return col.colWidth ?? COL_W
+}
+
+/**
+ * Index range [i0, i1) of columns that intersect the horizontal viewport.
+ * Columns use scroll-independent x (scrollX=0 layout).
+ */
+export function visibleColumnIndexRange(cols, scrollX, canvasW, buffer = 2, rulerW = RULER_W) {
+  if (!cols?.length) return { i0: 0, i1: 0 }
+  const sx = scrollX || 0
+  const viewLo = sx + rulerW
+  const viewHi = sx + canvasW
+  let i0 = 0
+  let i1 = cols.length
+  for (let i = 0; i < cols.length; i++) {
+    const cw = colBandWidth(cols[i])
+    if (cols[i].x + cw > viewLo) {
+      i0 = Math.max(0, i - buffer)
+      break
+    }
+  }
+  for (let i = cols.length - 1; i >= 0; i--) {
+    if (cols[i].x < viewHi) {
+      i1 = Math.min(cols.length, i + 1 + buffer)
+      break
+    }
+  }
+  return { i0, i1 }
 }
 
 /** Apply scroll offset to a layout built with yStart=0. Prefer inline yOff in hot paths. */
@@ -1203,7 +1246,7 @@ function drawIntervalRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerN
 function drawIntervalColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, canvasH, darkMode, highlightInterval = null) {
   const colX = col.x
   const colW = col.colWidth ?? COL_W
-  const headerH = HEADER_H
+  const headerH = vertHeaderBand()
   const bodyH = canvasH - headerH
 
   ctx.fillStyle = darkMode ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.02)'
@@ -1766,10 +1809,11 @@ export function hitTestSegment(trace, viewport, options, cx, cy) {
 export function hitTestSegmentVertical(trace, viewport, options, cx, cy) {
   const { timeStart, timeEnd, scrollX = 0, canvasH } = viewport
   const { viewMode = 'task', expanded = new Set(), showSti = true, stiExpanded = new Set(), migratedOnlyFilter = false } = options
-  if (cy < HEADER_H || cx < RULER_W) return null
-  const bodyH   = canvasH - HEADER_H
+  const headerH = options.vertHeaderH ?? HEADER_H
+  if (cy < headerH || cx < RULER_W) return null
+  const bodyH   = canvasH - headerH
   const pxPerNs = bodyH / (timeEnd - timeStart)
-  const tAtCy   = timeStart + (cy - HEADER_H) / pxPerNs
+  const tAtCy   = timeStart + (cy - headerH) / pxPerNs
 
   const cols = resolveCols(trace, options, viewMode, expanded, showSti, stiExpanded, migratedOnlyFilter)
   let col = null
@@ -2265,9 +2309,24 @@ function paintSegmentsVertical(ctx, segs, timeStart, timeEnd, pxPerNs, nsPerPx, 
   }
 }
 
+/** Column band behind segments — opaque stripes on Canvas2D; subtle tint when WebGL draws segments. */
+function paintVertColumnBand(ctx, col, headerH, canvasH, darkMode, gpuBatch, fast) {
+  if (fast) return
+  const cw = col.colWidth ?? COL_W
+  if (gpuBatch) {
+    ctx.fillStyle = darkMode ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.02)'
+  } else {
+    ctx.fillStyle = col.colIdx % 2 === 0
+      ? (darkMode ? '#252526' : '#FAFAFA')
+      : (darkMode ? '#2D2D2D' : '#F5F5F5')
+  }
+  ctx.fillRect(col.x, headerH, cw, canvasH - headerH)
+}
+
 // ---- Column drawing functions ----------------------------------------------
 
 function drawTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, canvasH, darkMode, hlSeg, budget, gpuBatch = null) {
+  const headerH = vertHeaderBand()
   const mk = col.key
   const ld = taskLodData(trace, mk)
   const fast = budget.fast
@@ -2277,30 +2336,23 @@ function drawTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, h
     trace.lodTimescalePerPx, trace.lodUltraTimescalePerPx, budget.max, forceCoarse, fast,
   )
 
-  if (!fast) {
-    ctx.fillStyle = col.colIdx % 2 === 0
-      ? (darkMode ? '#252526' : '#FAFAFA')
-      : (darkMode ? '#2D2D2D' : '#F5F5F5')
-    ctx.fillRect(col.x, HEADER_H, COL_W, canvasH)
-  }
+  paintVertColumnBand(ctx, col, headerH, canvasH, darkMode, gpuBatch, fast)
 
   paintSegmentsVertical(ctx, segs, timeStart, timeEnd, pxPerNs, nsPerPx,
-    col.x, COL_W, HEADER_H, col.color, trace, true, highlightKey, mk, darkMode, col.label, hlSeg, canvasH, budget,
+    col.x, COL_W, headerH, col.color, trace, true, highlightKey, mk, darkMode, col.label, hlSeg, canvasH, budget,
     indices, gpuBatch)
 
   if (!fast) {
     paintPriorityBoostBandsVertical(
-      ctx, trace, mk, col.x, col.colWidth ?? COL_W, HEADER_H, canvasH,
+      ctx, trace, mk, col.x, col.colWidth ?? COL_W, headerH, canvasH,
       timeStart, timeEnd, pxPerNs, darkMode,
     )
   }
 }
 
 function drawCoreColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, canvasH, darkMode, budget, skipSummarySegs = false, gpuBatch = null) {
-  ctx.fillStyle = col.colIdx % 2 === 0
-    ? (darkMode ? '#252526' : '#FAFAFA')
-    : (darkMode ? '#2D2D2D' : '#F5F5F5')
-  ctx.fillRect(col.x, HEADER_H, COL_W, canvasH)
+  const headerH = vertHeaderBand()
+  paintVertColumnBand(ctx, col, headerH, canvasH, darkMode, gpuBatch, budget.fast)
   if (skipSummarySegs) return
 
   const ld = coreLodData(trace, col.key)
@@ -2320,7 +2372,7 @@ function drawCoreColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, c
     if (budgetFull(budget)) break
     if (isCoreName(seg.task)) continue
     if (parseTaskName(seg.task).name === 'TICK') continue
-    const bodyH = canvasH - HEADER_H
+    const bodyH = canvasH - headerH
     const y1raw = (seg.start - timeStart) * pxPerNs
     const y2raw = (seg.end   - timeStart) * pxPerNs
     if (y2raw < -2 || y1raw > bodyH + 2) continue
@@ -2333,7 +2385,7 @@ function drawCoreColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, c
       color = taskColor(taskMergeKey(seg.task), seg.task)
       colorCache.set(seg.task, color)
     }
-    const drawY2 = HEADER_H + Math.round(y1)
+    const drawY2 = headerH + Math.round(y1)
     const drawH2 = Math.ceil(h)
     gpuFillRect(gpuBatch, ctx, segX, drawY2, segW, drawH2, color)
     budget.n++
@@ -2359,6 +2411,7 @@ function drawCoreColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, c
 }
 
 function drawCoreTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, canvasH, darkMode, hlSeg, lockedTaskKey, budget, gpuBatch = null) {
+  const headerH = vertHeaderBand()
   const ld = coreTaskLodData(trace, col.coreKey, col.taskKey)
   const wasmKey = `${col.coreKey}__${col.taskKey}`
   const fast = budget.fast
@@ -2368,12 +2421,7 @@ function drawCoreTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerP
     trace.lodTimescalePerPx, trace.lodUltraTimescalePerPx, budget.max, forceCoarse, fast,
   )
 
-  if (!fast) {
-    ctx.fillStyle = col.colIdx % 2 === 0
-      ? (darkMode ? '#252526' : '#FAFAFA')
-      : (darkMode ? '#2D2D2D' : '#F5F5F5')
-    ctx.fillRect(col.x, HEADER_H, COL_W, canvasH)
-  }
+  paintVertColumnBand(ctx, col, headerH, canvasH, darkMode, gpuBatch, fast)
 
   const mk = taskMergeKey(col.taskKey)
   const dim = lockedTaskKey && mk !== lockedTaskKey
@@ -2381,22 +2429,23 @@ function drawCoreTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerP
   if (dim) ctx.globalAlpha = 45 / 255
   const fillAlpha = dim ? 45 / 255 : 1
   paintSegmentsVertical(ctx, segs, timeStart, timeEnd, pxPerNs, nsPerPx,
-    col.x, COL_W, HEADER_H, col.color, trace, false, highlightKey, mk, darkMode, col.label, hlSeg, canvasH, budget,
+    col.x, COL_W, headerH, col.color, trace, false, highlightKey, mk, darkMode, col.label, hlSeg, canvasH, budget,
     indices, gpuBatch, fillAlpha)
   if (dim) ctx.restore()
 
   if (!fast) {
     paintPriorityBoostBandsVertical(
-      ctx, trace, mk, col.x, col.colWidth ?? COL_W, HEADER_H, canvasH,
+      ctx, trace, mk, col.x, col.colWidth ?? COL_W, headerH, canvasH,
       timeStart, timeEnd, pxPerNs, darkMode,
     )
   }
 }
 
 function drawStiColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, canvasH, darkMode) {
+  const headerH = vertHeaderBand()
   const cw = col.colWidth ?? COL_W
   ctx.fillStyle = darkMode ? '#1A1A2E' : '#F0F0FF'
-  ctx.fillRect(col.x, HEADER_H, cw, canvasH)
+  ctx.fillRect(col.x, headerH, cw, canvasH - headerH)
 
   if (col.isExpanded) {
     drawStiColumnWaveform(ctx, trace, col, cw, timeStart, timeEnd, pxPerNs, canvasH, darkMode)
@@ -2416,8 +2465,8 @@ function drawStiColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, canvasH, da
   const stiColorCache = new Map()
   for (let i = lo; i < Math.min(hi, evs.length); i++) {
     const ev = evs[i]
-    const cy = HEADER_H + (ev.time - timeStart) * pxPerNs
-    if (cy < HEADER_H - 8 || cy > canvasH + 8) continue
+    const cy = headerH + (ev.time - timeStart) * pxPerNs
+    if (cy < headerH - 8 || cy > canvasH + 8) continue
 
     const noteKey = ev.note || ev.event || 'trigger'
     let color = stiColorCache.get(noteKey)
@@ -2439,6 +2488,7 @@ function drawStiColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, canvasH, da
  * Draw an expanded STI waveform inside a vertical column (time on Y, values on X).
  */
 function drawStiColumnWaveform(ctx, trace, col, colW, timeStart, timeEnd, pxPerNs, canvasH, darkMode) {
+  const headerH = vertHeaderBand()
   const evs    = trace.stiEventsByTarget.get(col.key) || []
   const starts = trace.stiStartsByTarget.get(col.key) || []
   if (evs.length === 0) return
@@ -2456,11 +2506,11 @@ function drawStiColumnWaveform(ctx, trace, col, colW, timeStart, timeEnd, pxPerN
   ctx.lineWidth = 0.5
   ctx.setLineDash([3, 3])
   ctx.beginPath()
-  ctx.moveTo(chartLeft + 0.5, HEADER_H)
+  ctx.moveTo(chartLeft + 0.5, headerH)
   ctx.lineTo(chartLeft + 0.5, canvasH)
   ctx.stroke()
   ctx.beginPath()
-  ctx.moveTo(chartRight + 0.5, HEADER_H)
+  ctx.moveTo(chartRight + 0.5, headerH)
   ctx.lineTo(chartRight + 0.5, canvasH)
   ctx.stroke()
   ctx.setLineDash([])
@@ -2503,14 +2553,14 @@ function drawStiColumnWaveform(ctx, trace, col, colW, timeStart, timeEnd, pxPerN
   ctx.textAlign = 'center'
   ctx.textBaseline = 'top'
   ctx.fillStyle = darkMode ? 'rgba(255,255,255,0.3)' : 'rgba(0,0,0,0.3)'
-  ctx.fillText(fmtVal(valMin), chartLeft + 2, HEADER_H + 2)
-  ctx.fillText(fmtVal(valMax), chartRight - 2, HEADER_H + 2)
+  ctx.fillText(fmtVal(valMin), chartLeft + 2, headerH + 2)
+  ctx.fillText(fmtVal(valMax), chartRight - 2, headerH + 2)
   ctx.restore()
 
   // Clip drawing to the timeline area so lines don't bleed into the header
   ctx.save()
   ctx.beginPath()
-  ctx.rect(col.x, HEADER_H, colW, canvasH - HEADER_H)
+  ctx.rect(col.x, headerH, colW, canvasH - headerH)
   ctx.clip()
 
   ctx.strokeStyle = darkMode ? '#5BC8FF' : '#0070CC'
@@ -2519,7 +2569,7 @@ function drawStiColumnWaveform(ctx, trace, col, colW, timeStart, timeEnd, pxPerN
 
   // Build polyline connecting events with straight lines.
   // When the first event in 'slice' has a predecessor above the viewport,
-  // interpolate the line back to y=HEADER_H so there is no gap at the top.
+  // interpolate the line back to y=headerH so there is no gap at the top.
   ctx.beginPath()
   let firstPoint = true
   for (let i = 0; i < slice.length; i++) {
@@ -2527,20 +2577,20 @@ function drawStiColumnWaveform(ctx, trace, col, colW, timeStart, timeEnd, pxPerN
     const val = evVal(ev)
     if (isNaN(val)) continue
 
-    const cy = HEADER_H + (ev.time - timeStart) * pxPerNs
+    const cy = headerH + (ev.time - timeStart) * pxPerNs
     const cx = valToX(val)
 
     if (firstPoint) {
       if (lo > 0) {
-        // There is an off-screen event above the viewport — interpolate to y=HEADER_H
+        // There is an off-screen event above the viewport — interpolate to y=headerH
         const prevEv  = evs[lo - 1]
         const prevVal = evVal(prevEv)
         if (!isNaN(prevVal)) {
-          const prevCy = HEADER_H + (prevEv.time - timeStart) * pxPerNs
+          const prevCy = headerH + (prevEv.time - timeStart) * pxPerNs
           const prevCx = valToX(prevVal)
-          const t       = prevCy === cy ? 0 : (HEADER_H - prevCy) / (cy - prevCy)
+          const t       = prevCy === cy ? 0 : (headerH - prevCy) / (cy - prevCy)
           const startCx = prevCx + t * (cx - prevCx)
-          ctx.moveTo(startCx, HEADER_H)
+          ctx.moveTo(startCx, headerH)
           ctx.lineTo(cx, cy)
           firstPoint = false
           continue
@@ -2567,8 +2617,8 @@ function drawStiColumnWaveform(ctx, trace, col, colW, timeStart, timeEnd, pxPerN
     const val = evVal(ev)
     if (isNaN(val)) continue
     const cx = valToX(val)
-    const cy = HEADER_H + (ev.time - timeStart) * pxPerNs
-    if (cy < HEADER_H - 4 || cy > canvasH + 4) continue
+    const cy = headerH + (ev.time - timeStart) * pxPerNs
+    if (cy < headerH - 4 || cy > canvasH + 4) continue
     ctx.beginPath()
     ctx.arc(cx, cy, 2.5, 0, Math.PI * 2)
     ctx.fill()
@@ -2762,15 +2812,22 @@ export function renderVertical(ctx, trace, viewport, options = {}) {
   const skipCoreSummarySegs = coreViewTaskFilterActive(migratedOnlyFilter, options.taskFilterKeys)
   const gpuBatch = options.gpuBatch ?? null
   const useGpu = !!gpuBatch
+  const headerH = options.labelHeaderH ?? HEADER_H
+  const prevBand = vertHeaderBand()
+  setVertHeaderBand(headerH)
 
   const timeSpan = timeEnd - timeStart
-  if (timeSpan <= 0 || canvasH <= HEADER_H) return
+  if (timeSpan <= 0 || canvasH <= headerH) {
+    setVertHeaderBand(prevBand)
+    return
+  }
 
-  const bodyH   = canvasH - HEADER_H
+  const bodyH   = canvasH - headerH
   const pxPerNs = bodyH / timeSpan
   const nsPerPx = timeSpan / bodyH
   const paintFast = !!fastPaint
 
+  try {
   // Clear — body background is on the WebGL layer when gpuBatch is set.
   ctx.clearRect(0, 0, canvasW, canvasH)
 
@@ -2783,9 +2840,9 @@ export function renderVertical(ctx, trace, viewport, options = {}) {
   ctx.fillStyle = darkMode ? '#2B2B2B' : '#E8E8E8'
   ctx.fillRect(0, 0, RULER_W, canvasH)
 
-  // Header background (top strip, right of ruler)
+  // Header background (top strip, right of ruler) — labels drawn by DOM overlay when skipColumnHeaders
   ctx.fillStyle = darkMode ? '#1E1E1E' : '#F5F5F5'
-  ctx.fillRect(RULER_W, 0, canvasW - RULER_W, HEADER_H)
+  ctx.fillRect(RULER_W, 0, canvasW - RULER_W, headerH)
 
   // Build column layout
   const colLayoutBase = options.columnLayout
@@ -2800,7 +2857,7 @@ export function renderVertical(ctx, trace, viewport, options = {}) {
     ctx.strokeStyle = darkMode ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)'
     ctx.lineWidth = 1
     for (let t = startSnap; t <= timeEnd; t += step) {
-      const y = HEADER_H + (t - timeStart) * pxPerNs
+      const y = headerH + (t - timeStart) * pxPerNs
       ctx.beginPath()
       ctx.moveTo(RULER_W, Math.round(y) + 0.5)
       ctx.lineTo(canvasW, Math.round(y) + 0.5)
@@ -2809,12 +2866,12 @@ export function renderVertical(ctx, trace, viewport, options = {}) {
   }
 
   // Vertical ruler (left side)
-  drawVerticalRuler(ctx, trace, timeStart, timeEnd, pxPerNs, canvasH, HEADER_H, RULER_W, darkMode, paintFast)
+  drawVerticalRuler(ctx, trace, timeStart, timeEnd, pxPerNs, canvasH, headerH, RULER_W, darkMode, paintFast)
 
   // Clip to column body area (right of ruler, below header)
   ctx.save()
   ctx.beginPath()
-  ctx.rect(RULER_W, HEADER_H, canvasW - RULER_W, bodyH + 1)
+  ctx.rect(RULER_W, headerH, canvasW - RULER_W, bodyH + 1)
   ctx.clip()
 
   let visibleColCount = 0
@@ -2845,24 +2902,30 @@ export function renderVertical(ctx, trace, viewport, options = {}) {
 
   // ---- Locked segment enlarged pass (unclipped, draws over column gap) ----
   if (!paintFast) {
-    drawLockedSegmentVert(ctx, trace, cols, highlightSegment, timeStart, timeEnd, pxPerNs, nsPerPx, HEADER_H, canvasH, darkMode)
+    drawLockedSegmentVert(ctx, trace, cols, highlightSegment, timeStart, timeEnd, pxPerNs, nsPerPx, headerH, canvasH, darkMode)
   }
   // Marks, cursors, hover — overlay canvas (TimelinePanel).
 
-  // Column headers (drawn last, on top)
-  ctx.save()
-  ctx.beginPath()
-  ctx.rect(RULER_W, 0, canvasW - RULER_W, HEADER_H)
-  ctx.clip()
-  drawColumnHeaders(ctx, cols, HEADER_H, COL_W, highlightKey, darkMode)
-  ctx.restore()
+  // Column headers (DOM ColumnHeaderRow in TimelinePanel; canvas fallback for export)
+  if (!options.skipColumnHeaders) {
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(RULER_W, 0, canvasW - RULER_W, headerH)
+    ctx.clip()
+    drawColumnHeaders(ctx, cols, headerH, COL_W, highlightKey, darkMode)
+    ctx.restore()
+  }
 
   // Corner: covers ruler+header intersection
   ctx.fillStyle = darkMode ? '#1A1A1A' : '#E0E0E0'
-  ctx.fillRect(0, 0, RULER_W, HEADER_H)
+  ctx.fillRect(0, 0, RULER_W, headerH)
   ctx.strokeStyle = darkMode ? '#3C3C3C' : '#CCCCCC'
   ctx.lineWidth = 1
-  ctx.strokeRect(0.5, 0.5, RULER_W - 1, HEADER_H - 1)
+  ctx.strokeRect(0.5, 0.5, RULER_W - 1, headerH - 1)
+
+  } finally {
+    setVertHeaderBand(prevBand)
+  }
 }
 
 // ---- Hit-test (vertical mode) -----------------------------------------------
@@ -2874,9 +2937,10 @@ export function renderVertical(ctx, trace, viewport, options = {}) {
 export function hitTestStiVertical(trace, viewport, options, cx, cy, radius = 8) {
   const { timeStart, timeEnd, scrollX = 0, canvasH } = viewport
   const { viewMode = 'task', expanded = new Set(), showSti = true, stiExpanded = new Set(), migratedOnlyFilter = false } = options
-  if (!showSti || cy < HEADER_H) return null
-  const pxPerNs = (canvasH - HEADER_H) / (timeEnd - timeStart)
-  const tAtCy = timeStart + (cy - HEADER_H) / pxPerNs
+  const headerH = options.vertHeaderH ?? HEADER_H
+  if (!showSti || cy < headerH) return null
+  const pxPerNs = (canvasH - headerH) / (timeEnd - timeStart)
+  const tAtCy = timeStart + (cy - headerH) / pxPerNs
 
   const cols = resolveCols(trace, options, viewMode, expanded, showSti, stiExpanded, migratedOnlyFilter)
   for (const col of cols) {
@@ -2893,7 +2957,7 @@ export function hitTestStiVertical(trace, viewport, options, cx, cy, radius = 8)
     let best = null, bestDist = radius + 1
     for (let i = lo; i < Math.min(hi, evs.length); i++) {
       const ev = evs[i]
-      const ey = HEADER_H + (ev.time - timeStart) * pxPerNs
+      const ey = headerH + (ev.time - timeStart) * pxPerNs
       const d = Math.abs(ey - cy)
       if (d < bestDist) { bestDist = d; best = ev }
     }

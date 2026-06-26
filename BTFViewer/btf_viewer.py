@@ -170,7 +170,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListView, QMainWindow, QMenu, QMessageBox, QProgressBar,
     QProgressDialog,
     QListWidget, QListWidgetItem,
-    QPushButton, QScrollArea, QDoubleSpinBox, QSpinBox, QStackedWidget,
+    QPushButton, QScrollArea, QScrollBar, QDoubleSpinBox, QSpinBox, QStackedWidget,
     QStyle, QStyleFactory, QStyleOptionGraphicsItem, QAbstractItemView,
     QProxyStyle, QTabBar, QTabWidget, QTableWidget, QTableWidgetItem, QToolButton,
     QVBoxLayout, QWidget, QSizePolicy, QSplitter, QLayout,
@@ -294,6 +294,8 @@ LABEL_BOTTOM_MARGIN      =  10  # Gap (px) between bottom edge of a vertical lab
 _TIMESCALE_PER_PX_DEFAULT= 2.0    # Initial zoom level (nanoseconds per screen pixel).
 # Qt QScrollBar range is capped near INT_MAX; keep scene timeline width below this.
 _MAX_SCENE_TIMELINE_PX    = 2_000_000_000
+# Virtual time-axis scrollbar maps the full trace into this range when zoomed in.
+_VIRT_SCROLL_MAX          = 2_000_000_000
 _HOVER_HIGHLIGHT_ENABLED = False  # Highlight task bars when hovering the label (default off).
 # _BatchRowItem.paint() LOD thresholds (Qt levelOfDetail: 1.0 = 100% zoom).
 _PAINT_LOD_COARSE        = 0.45   # Below: merge nearby segments, skip pen outlines.
@@ -328,6 +330,8 @@ _PAN_HEARTBEAT_MIN_REBUILD_MS = 180
 _PAN_ORTH_URGENT_REBUILD_MS   = 40   # faster rebuild when viewport outruns orth margin
 _PAN_SETTLE_MS            = 120
 _NAV_SCROLL_DEBOUNCE_MS   = 120
+_NAV_SCROLL_ACTIVE_MS     = 40    # faster minimap refresh while panning
+_WINDOW_SHIFT_MIN_MS      = 150   # throttle sliding-window rebuilds at trace edges
 # Never draw grid lines closer than this (px); dense lines read as solid gray.
 _MIN_GRID_SPACING_PX      = 12.0
 
@@ -3932,10 +3936,10 @@ def _lod_reduce(segs: list, time_min: int, px_per_ns: float,
     if len(segs) <= 1:
         return segs
     result: list = []
-    prev_bin = -2
+    prev_bin: Optional[int] = None
     for seg in segs:
         b = math.floor(offset + (seg.start - time_min) * px_per_ns)
-        if b != prev_bin:
+        if prev_bin is None or b != prev_bin:
             result.append(seg)
             prev_bin = b
         elif seg.end > result[-1].end:
@@ -4129,6 +4133,8 @@ class TimelineScene(QGraphicsScene):
         # Scene time-axis origin (ns).  Timeline coords are relative to this value
         # so QGraphicsScene width stays within Qt's scroll-bar range (~2e9 px).
         self._scene_origin_ns: int = 0
+        # Pins scene time origin before rebuild() when jumping along the trace.
+        self._virt_jump_origin_ns: Optional[int] = None
         # When zoom_to_range() calls rebuild(), the view hasn't scrolled to
         # the new position yet, so the viewport-based ns computation would
         # cover the wrong part of the trace.  zoom_to_range() sets this hint
@@ -5345,8 +5351,14 @@ class TimelineScene(QGraphicsScene):
         # always returns a useful result.
         ns_lo = max(t_min, min(t_max, ns_lo))
         ns_hi = max(t_min, min(t_max, ns_hi))
+        page_ns = max(1, int(view._timeline_viewport_px() * self._timescale_per_px))
         if ns_lo >= ns_hi:
-            ns_lo, ns_hi = t_min, t_max
+            # At trace start/end the clamped window can collapse to a point.
+            # Do NOT fall back to the full trace (that jumps virtual scroll to
+            # the left); keep a minimal span anchored at the visible edge.
+            ns_lo, ns_hi = _fix_collapsed_time_ns_range(
+                ns_lo, ns_hi, lo_coord, hi_coord, t_min, t_max,
+                self._timescale_per_px, min_span_ns=page_ns)
 
         # If zoom_to_range() supplied an explicit hint, use it so the rebuild
         # clips to the correct (target) region even though the viewport scroll
@@ -5395,8 +5407,41 @@ class TimelineScene(QGraphicsScene):
     def rebuild(self) -> None:
         if self._rebuild_suspend > 0:
             return
+        view = self.views()[0] if self.views() else None
+        virt_active = (getattr(view, '_virtual_time_scroll_active', False)
+                       if view is not None else False)
+        virt_window_shift = (getattr(view, '_virt_scroll_rebuild', False)
+                             if view is not None else False)
+        # Orthogonal rebuild: clip/load the time window from canonical virt
+        # (not the live viewport, which scene.clear() will corrupt) and
+        # remember the native bar value to restore after the scene is rebuilt.
+        if (view is not None and virt_active and self._trace is not None
+                and not virt_window_shift
+                and self._virt_jump_origin_ns is None):
+            # Reuse the loaded time slice from the last rebuild.  A tight
+            # virt-centered hint shrinks the scene after horizontal panning
+            # (native bar max drops below the preserved scroll → time jump).
+            if self._vp_ns_lo < self._vp_ns_hi:
+                self._ns_range_hint = (self._vp_ns_lo, self._vp_ns_hi)
+            else:
+                ns_lo_v = view._ns_lo_from_virt_px(view._virt_time_scroll_px)
+                page_ns = view._timeline_viewport_px() * self._timescale_per_px
+                margin_ns = max(1, int(page_ns * 0.75))
+                self._ns_range_hint = (
+                    max(self._trace.time_min, int(ns_lo_v - margin_ns)),
+                    min(self._trace.time_max, int(ns_lo_v + page_ns + margin_ns)),
+                )
+            view._preserve_virt_scroll = True
+            view._preserved_virt_scroll_px = view._virt_time_scroll_px
         self._update_viewport_bounds()
-        if self._trace is not None:
+        if self._virt_jump_origin_ns is not None:
+            self._scene_origin_ns = self._virt_jump_origin_ns
+            self._virt_jump_origin_ns = None
+        elif virt_active:
+            # Orth / margin rebuild: keep the sliding-window origin; do not
+            # re-anchor to _vp_ns_lo (would jump time when scrolling rows).
+            pass
+        elif self._trace is not None:
             self._scene_origin_ns = self._vp_ns_lo
         self.clear()
         self._cursor_items = []
@@ -8775,6 +8820,34 @@ def _native_gesture_zoom_factor(event) -> float:
     except (AttributeError, TypeError, ValueError):
         return 1.0
 
+def _fix_collapsed_time_ns_range(
+    ns_lo: int,
+    ns_hi: int,
+    lo_coord: float,
+    hi_coord: float,
+    t_min: int,
+    t_max: int,
+    tpp: float,
+    *,
+    min_span_ns: int = 0,
+) -> Tuple[int, int]:
+    """When clamped viewport time bounds collapse or invert, anchor at the edge."""
+    if ns_lo < ns_hi:
+        return ns_lo, ns_hi
+    span_ns = max(1, int(abs(hi_coord - lo_coord) * tpp))
+    if hi_coord < lo_coord and min_span_ns > 0:
+        span_ns = max(span_ns, min_span_ns)
+    if hi_coord < lo_coord or ns_hi >= t_max - 1:
+        ns_hi = t_max
+        ns_lo = max(t_min, t_max - span_ns)
+    elif ns_lo <= t_min + 1:
+        ns_lo = t_min
+        ns_hi = min(t_max, t_min + span_ns)
+    else:
+        ns_lo = max(t_min, min(ns_lo, t_max - 1))
+        ns_hi = min(t_max, max(ns_hi, ns_lo + 1))
+    return ns_lo, ns_hi
+
 class TimelineView(QGraphicsView):
     """Pan + zoom QGraphicsView wrapping a TimelineScene."""
 
@@ -8932,6 +9005,695 @@ class TimelineView(QGraphicsView):
         self._nav_bg_key: object             = None
         self._nav_bg_task_area_h: float      = 0.0   # task-area height used in last bg paint
 
+        # Full-trace time scrollbar (overlay; native bar stays scene-local/hidden).
+        self._virt_time_scroll_px: float = 0.0
+        self._virt_scroll_scale: float = 1.0
+        self._syncing_time_scrollbar: bool = False
+        self._virtual_time_scroll_active: bool = False
+        self._virt_scroll_rebuild: bool = False
+        self._syncing_virt_bar: bool = False
+        self._virt_bar_dragging: bool = False
+        self._virt_trace_bar = QScrollBar(Qt.Orientation.Horizontal, self)
+        self._virt_trace_bar.hide()
+        self._virt_trace_bar.valueChanged.connect(self._on_virt_trace_bar_changed)
+        self._virt_trace_bar.sliderPressed.connect(self._on_virt_trace_bar_pressed)
+        self._virt_trace_bar.sliderReleased.connect(self._on_virt_trace_bar_released)
+        self._virt_trace_bar.installEventFilter(self)
+        self._last_window_shift_ms: float = 0.0
+        self._pending_shift_ns_lo: Optional[float] = None
+        self._pending_shift_ns_hi: Optional[float] = None
+        self._window_shift_timer = QTimer(self)
+        self._window_shift_timer.setSingleShot(True)
+        self._window_shift_timer.timeout.connect(self._flush_pending_window_shift)
+        self._zoom_reanchor_pending: bool = False
+        self._preserve_virt_scroll: bool = False
+        self._preserved_virt_scroll_px: float = 0.0
+        self.zoom_changed.connect(self._defer_virt_scroll_sync)
+
+    # ------------------------------------------------------------------
+    # Full-trace time scrollbar (overlay when zoomed past fit-to-window)
+    #
+    # Virtual-scroll model
+    # --------------------
+    # _virt_time_scroll_px  - canonical position along the full trace (px from
+    #                         trace.time_min); authoritative whenever virtual
+    #                         scroll is active.
+    # _apply_virt_time_scroll_px() - sole applicator that moves the viewport.
+    # _reposition_time_at_viewport() - place an ns at a viewport pixel (zoom anchor).
+    # _navigate_time_to_ns()         - center an ns on the time axis.
+    # _capture_virt_time_scroll_px() - read canonical from the live viewport
+    #                         (after in-window Qt wheel / native scroll only).
+    # _push_virt_trace_bar() - reflect canonical position on the overlay bar.
+    # ------------------------------------------------------------------
+
+    def _should_use_virtual_scroll(self) -> bool:
+        """True when zoomed in past fit-to-window (overlay scrollbar model)."""
+        if self._fit_mode or self._scene._trace is None:
+            return False
+        fit = self._scene._timescale_per_px_fit
+        if math.isfinite(fit) and self._scene._timescale_per_px >= fit * 0.999:
+            return False
+        return True
+
+    def _timeline_offset_px(self, vp_pos: QPoint) -> float:
+        """Pixels from the viewport origin to *vp_pos* along the time axis (past labels)."""
+        lw = float(self._scene._label_width)
+        if self._scene._horizontal:
+            return max(0.0, float(vp_pos.x()) - lw)
+        return max(0.0, float(vp_pos.y()) - lw)
+
+    def _virt_px_for_ns_at_offset(self, ns: float, timeline_offset_px: float) -> float:
+        """Full-trace scroll px placing *ns* at *timeline_offset_px* into the timeline area."""
+        tpp = self._scene._timescale_per_px
+        return self._virt_px_from_ns_lo(float(ns) - timeline_offset_px * tpp)
+
+    def _reposition_time_at_viewport(
+        self,
+        ns: int,
+        vp_pos: QPoint,
+        orth_scene: Optional[float] = None,
+        *,
+        force_window: bool = False,
+    ) -> None:
+        """Keep *ns* fixed at *vp_pos* on the time axis (zoom anchor / cursor jump)."""
+        if self._scene._trace is None:
+            return
+        trace = self._scene._trace
+        ns = max(trace.time_min, min(trace.time_max, int(ns)))
+        is_horiz = self._scene._horizontal
+        vp_center = self.viewport().rect().center()
+        offset = ((vp_center.x() - vp_pos.x()) if is_horiz
+                  else (vp_center.y() - vp_pos.y()))
+        if self._should_use_virtual_scroll():
+            if not self._virtual_time_scroll_active:
+                self._set_virtual_scroll_enabled(True)
+            off = self._timeline_offset_px(vp_pos)
+            self._apply_virt_time_scroll_px(
+                self._virt_px_for_ns_at_offset(ns, off),
+                force_window=force_window,
+            )
+            return
+        new_coord = self._scene.ns_to_scene_coord(ns)
+        if orth_scene is None:
+            cur = self.mapToScene(vp_center)
+            orth_scene = cur.y() if is_horiz else cur.x()
+        if is_horiz:
+            self.centerOn(new_coord + offset, orth_scene)
+        else:
+            self.centerOn(orth_scene, new_coord + offset)
+
+    def _set_virt_from_time_anchor(self, anchor_ns: int, vp_pos: QPoint) -> None:
+        """Update canonical scroll px so *anchor_ns* stays at *vp_pos*."""
+        off = self._timeline_offset_px(vp_pos)
+        self._virt_time_scroll_px = self._clamp_virt_time_scroll_px(
+            self._virt_px_for_ns_at_offset(anchor_ns, off))
+
+    def _defer_virt_scroll_sync(self, _tpp: float) -> None:
+        QTimer.singleShot(0, self._sync_virt_after_zoom)
+
+    def _sync_virt_after_zoom(self) -> None:
+        if self._scene._trace is None:
+            return
+        if self._fit_mode:
+            self._virt_time_scroll_px = 0.0
+            self._set_virtual_scroll_enabled(False)
+        elif not self._should_use_virtual_scroll():
+            self._set_virtual_scroll_enabled(False)
+        else:
+            if not self._virtual_time_scroll_active:
+                self._set_virtual_scroll_enabled(True)
+            else:
+                self._update_virt_trace_bar_range()
+            self._push_virt_trace_bar()
+
+    def _native_time_axis_bar(self) -> QScrollBar:
+        return (self.horizontalScrollBar() if self._scene._horizontal
+                else self.verticalScrollBar())
+
+    def _collapse_native_time_bar(self, collapsed: bool) -> None:
+        """Keep native time bar in the tree for macOS wheel routing; hide visually."""
+        bar = self._native_time_axis_bar()
+        if collapsed:
+            if self._scene._horizontal:
+                bar.setStyleSheet(
+                    "QScrollBar:horizontal { height: 1px; max-height: 1px;"
+                    " min-height: 1px; border: none; background: transparent; }")
+                bar.setFixedHeight(1)
+            else:
+                bar.setStyleSheet(
+                    "QScrollBar:vertical { width: 1px; max-width: 1px;"
+                    " min-width: 1px; border: none; background: transparent; }")
+                bar.setFixedWidth(1)
+            bar.show()
+        else:
+            bar.setStyleSheet("")
+            bar.setMinimumHeight(0)
+            bar.setMaximumHeight(16777215)
+            bar.setMinimumWidth(0)
+            bar.setMaximumWidth(16777215)
+            if self._scene._horizontal:
+                bar.setFixedHeight(bar.sizeHint().height())
+            else:
+                bar.setFixedWidth(bar.sizeHint().width())
+            bar.show()
+
+    def _set_virtual_scroll_enabled(self, enabled: bool) -> None:
+        self._virtual_time_scroll_active = bool(enabled)
+        native = self._native_time_axis_bar()
+        overlay = self._virt_trace_bar
+        if enabled and self._scene._trace is not None:
+            self._collapse_native_time_bar(True)
+            overlay.show()
+            self._position_virt_trace_bar()
+            self._sync_native_scene_scrollbar()
+            native.valueChanged.connect(
+                self._on_native_time_bar_interaction,
+                Qt.ConnectionType.UniqueConnection)
+            if not self._zoom_reanchor_pending:
+                self._capture_virt_time_scroll_px()
+            self._update_virt_trace_bar_range()
+            self._push_virt_trace_bar()
+        else:
+            try:
+                native.valueChanged.disconnect(self._on_native_time_bar_interaction)
+            except RuntimeError:
+                pass
+            overlay.hide()
+            self._collapse_native_time_bar(False)
+
+    def _position_virt_trace_bar(self) -> None:
+        if not self._virt_trace_bar.isVisible():
+            return
+        vp = self.viewport()
+        vp_x, vp_y = vp.x(), vp.y()
+        vp_w, vp_h = vp.width(), vp.height()
+        bar = self._virt_trace_bar
+        if self._scene._horizontal:
+            bar.setOrientation(Qt.Orientation.Horizontal)
+            h = max(bar.sizeHint().height(), 14)
+            bar.setGeometry(vp_x, vp_y + max(0, vp_h - h), vp_w, h)
+        else:
+            bar.setOrientation(Qt.Orientation.Vertical)
+            w = max(bar.sizeHint().width(), 14)
+            bar.setGeometry(vp_x + max(0, vp_w - w), vp_y, w, vp_h)
+        bar.raise_()
+
+    def _sync_native_scene_scrollbar(self) -> None:
+        """Keep the hidden native bar matched to the sliding scene window."""
+        if self._fit_mode or self._scene._trace is None:
+            return
+        bar = self._native_time_axis_bar()
+        if self._scene._horizontal:
+            scene_span = int(self._scene.sceneRect().width())
+            page = int(self._timeline_viewport_px())
+        else:
+            scene_span = int(self._scene.sceneRect().height())
+            page = int(self._timeline_viewport_px())
+        bar.blockSignals(True)
+        bar.setRange(0, max(0, scene_span - page))
+        bar.setPageStep(max(1, min(page, max(1, bar.maximum()))))
+        bar.setSingleStep(max(1, page // 20))
+        bar.blockSignals(False)
+
+    def _timeline_viewport_px(self) -> float:
+        return max(1.0, self._time_axis_viewport_px() - self._scene._label_width)
+
+    def _full_trace_timeline_px(self) -> float:
+        trace = self._scene._trace
+        if trace is None:
+            return 1.0
+        span = max(trace.time_max - trace.time_min, 1)
+        return max(1.0, span / self._scene._timescale_per_px)
+
+    def _visible_time_ns_range(self) -> Tuple[int, int]:
+        trace = self._scene._trace
+        if trace is None:
+            return 0, 0
+        vp_rect = self.viewport().rect()
+        sc = self._scene
+        if sc._horizontal:
+            lo_coord = self.mapToScene(vp_rect.topLeft()).x()
+            hi_coord = self.mapToScene(vp_rect.topRight()).x()
+        else:
+            lo_coord = self.mapToScene(vp_rect.topLeft()).y()
+            hi_coord = self.mapToScene(vp_rect.bottomLeft()).y()
+        lw = sc._label_width
+        origin = sc._scene_origin_ns
+        tpp = sc._timescale_per_px
+        ns_lo = origin + int((lo_coord - lw) * tpp)
+        ns_hi = origin + int((hi_coord - lw) * tpp)
+        ns_lo = max(trace.time_min, min(trace.time_max, ns_lo))
+        ns_hi = max(trace.time_min, min(trace.time_max, ns_hi))
+        page_ns = max(1, int(self._timeline_viewport_px() * tpp))
+        if ns_lo >= ns_hi:
+            ns_lo, ns_hi = _fix_collapsed_time_ns_range(
+                ns_lo, ns_hi, lo_coord, hi_coord,
+                trace.time_min, trace.time_max, tpp, min_span_ns=page_ns)
+        return ns_lo, ns_hi
+
+    def _virt_px_from_ns_lo(self, ns_lo: float) -> float:
+        trace = self._scene._trace
+        if trace is None:
+            return 0.0
+        return max(0.0, (ns_lo - trace.time_min) / self._scene._timescale_per_px)
+
+    def _ns_lo_from_virt_px(self, virt_px: float) -> float:
+        trace = self._scene._trace
+        if trace is None:
+            return 0.0
+        return trace.time_min + virt_px * self._scene._timescale_per_px
+
+    def _clamp_virt_time_scroll_px(self, virt_px: float) -> float:
+        max_px = max(0.0, self._full_trace_timeline_px() - self._timeline_viewport_px())
+        return max(0.0, min(max_px, virt_px))
+
+    def _max_virt_time_scroll_px(self) -> float:
+        return max(0.0, self._full_trace_timeline_px() - self._timeline_viewport_px())
+
+    def _virt_scroll_at_trace_start(self, slack_px: float = 0.5) -> bool:
+        return self._virt_time_scroll_px <= slack_px
+
+    def _virt_scroll_at_trace_end(self, slack_px: float = 0.5) -> bool:
+        return self._virt_time_scroll_px >= self._max_virt_time_scroll_px() - slack_px
+
+    def _native_scroll_for_ns_lo(self, ns_lo: float) -> int:
+        sc = self._scene
+        lw = sc._label_width
+        tpp = sc._timescale_per_px
+        return max(0, int(round(lw + (ns_lo - sc._scene_origin_ns) / tpp)))
+
+    def _ideal_native_scroll_for_ns_lo(self, ns_lo: float) -> int:
+        """Scene-local scroll for *ns_lo* without clamping to the native bar range."""
+        sc = self._scene
+        lw = sc._label_width
+        tpp = sc._timescale_per_px
+        return int(round(lw + (ns_lo - sc._scene_origin_ns) / tpp))
+
+    def _update_virt_trace_bar_range(self) -> None:
+        """Map the full trace onto the overlay bar (thumb shrinks when zoomed in)."""
+        if not self._virtual_time_scroll_active or self._scene._trace is None:
+            return
+        full_px = self._full_trace_timeline_px()
+        page_px = self._timeline_viewport_px()
+        max_scroll_px = max(0.0, full_px - page_px)
+        if max_scroll_px > _VIRT_SCROLL_MAX:
+            self._virt_scroll_scale = max_scroll_px / _VIRT_SCROLL_MAX
+            bar_max = _VIRT_SCROLL_MAX
+        else:
+            self._virt_scroll_scale = 1.0
+            bar_max = int(max_scroll_px)
+        page_step = max(1, int(page_px / self._virt_scroll_scale))
+        bar = self._virt_trace_bar
+        bar.blockSignals(True)
+        bar.setRange(0, max(0, bar_max))
+        bar.setPageStep(min(page_step, max(1, bar_max or 1)))
+        bar.setSingleStep(max(1, int(20.0 / self._virt_scroll_scale)))
+        bar.blockSignals(False)
+
+    def _capture_virt_time_scroll_px(self) -> None:
+        """Update canonical scroll position from the current viewport."""
+        if not self._virtual_time_scroll_active or self._scene._trace is None:
+            return
+        if (self._preserve_virt_scroll or self._virt_scroll_rebuild
+                or self._zoom_reanchor_pending):
+            return
+        self._virt_time_scroll_px = self._virt_px_from_ns_lo(
+            float(self._visible_time_ns_range()[0]))
+
+    def _push_virt_trace_bar(self) -> None:
+        """Reflect canonical _virt_time_scroll_px on the overlay scrollbar."""
+        if (not self._virtual_time_scroll_active
+                or self._scene._trace is None
+                or self._virt_bar_dragging):
+            return
+        val = int(self._virt_time_scroll_px / self._virt_scroll_scale)
+        bar = self._virt_trace_bar
+        val = max(bar.minimum(), min(bar.maximum(), val))
+        self._syncing_virt_bar = True
+        try:
+            bar.blockSignals(True)
+            bar.setValue(val)
+            bar.blockSignals(False)
+        finally:
+            self._syncing_virt_bar = False
+
+    def _sync_virt_trace_bar_from_view(self) -> None:
+        """Capture viewport position, then update the overlay bar."""
+        if self._preserve_virt_scroll:
+            return
+        self._capture_virt_time_scroll_px()
+        self._push_virt_trace_bar()
+
+    def _refresh_nav_pan_window(self, *, force_show: bool = False) -> None:
+        """Repaint and show the navigator minimap (orange viewport box)."""
+        if not self._navigator_eligible():
+            self._nav_hide_timer.stop()
+            self._nav_popup.hide()
+            return
+        pix = self._paint_nav_pixmap()
+        self._nav_popup.set_pixmap(pix)
+        self._nav_popup.reposition()
+        if force_show or not self._nav_popup.isVisible():
+            self._nav_popup.fade_in()
+        self._nav_hide_timer.start()
+
+    def _after_time_axis_pan(self, *, immediate: bool = False) -> None:
+        """Refresh navigator/minimap after any time-axis pan (wheel, bar, overlay)."""
+        self._pan_timer.start()
+        if immediate or self._virt_bar_dragging:
+            self._refresh_nav_pan_window(force_show=True)
+            return
+        interval = (_NAV_SCROLL_ACTIVE_MS
+                    if self._virtual_time_scroll_active
+                    else _NAV_SCROLL_DEBOUNCE_MS)
+        self._nav_scroll_timer.setInterval(interval)
+        self._nav_scroll_timer.start()
+        if self._nav_popup.isVisible():
+            self._refresh_nav_pan_window()
+
+    def _loaded_window_covers_viewport_ns(self, ns_lo: float, ns_hi: float) -> bool:
+        """True when the viewport time range still fits the last rebuild's segment band."""
+        sc = self._scene
+        if sc._trace is None:
+            return True
+        prefetch_ns = max(1, int((ns_hi - ns_lo) * 0.08))
+        return (ns_lo >= sc._vp_ns_lo + prefetch_ns
+                and ns_hi <= sc._vp_ns_hi - prefetch_ns)
+
+    def _needs_window_shift_for_time(
+        self, ns_lo: float, ns_hi: float, bar: QScrollBar,
+    ) -> bool:
+        """True when native in-scene scroll cannot satisfy the target position."""
+        trace = self._scene._trace
+        if trace is None:
+            return False
+        ideal = self._ideal_native_scroll_for_ns_lo(ns_lo)
+        if ideal < bar.minimum() or ideal > bar.maximum():
+            return True
+        page_px = self._timeline_viewport_px()
+        tpp = self._scene._timescale_per_px
+        edge_slack = max(2, int(page_px * 0.05))
+        edge_ns = max(1, int(page_px * tpp * 0.02))
+
+        # Already showing the trace start/end — do not slide the loaded window.
+        if ns_hi >= trace.time_max - edge_ns and ideal >= bar.maximum() - edge_slack:
+            return False
+        if ns_lo <= trace.time_min + edge_ns and ideal <= bar.minimum() + edge_slack:
+            return False
+
+        at_native_edge = (ideal <= bar.minimum() + edge_slack
+                          or ideal >= bar.maximum() - edge_slack)
+        if not at_native_edge:
+            return False
+        return not self._loaded_window_covers_viewport_ns(ns_lo, ns_hi)
+
+    def _apply_virt_time_scroll_px(
+        self,
+        virt_px: float,
+        *,
+        force_window: bool = False,
+        sync_bar: bool = True,
+    ) -> None:
+        """Move the timeline to *virt_px* along the full trace (single applicator)."""
+        trace = self._scene._trace
+        if trace is None:
+            return
+        prev_virt = self._virt_time_scroll_px
+        virt_px = self._clamp_virt_time_scroll_px(float(virt_px))
+        if not force_window and abs(virt_px - prev_virt) < 0.5:
+            self._virt_time_scroll_px = virt_px
+            if sync_bar and not self._virt_bar_dragging:
+                self._push_virt_trace_bar()
+            return
+        ns_lo = max(float(trace.time_min), min(float(trace.time_max),
+                    self._ns_lo_from_virt_px(virt_px)))
+        page_px = self._timeline_viewport_px()
+        tpp = self._scene._timescale_per_px
+        ns_hi = min(float(trace.time_max), ns_lo + page_px * tpp)
+        self._sync_native_scene_scrollbar()
+        bar = self._native_time_axis_bar()
+        ideal = self._ideal_native_scroll_for_ns_lo(ns_lo)
+        if ideal >= bar.minimum() and ideal <= bar.maximum():
+            self._virt_time_scroll_px = virt_px
+            moved = self._set_native_time_scroll_local(ideal)
+            if not moved and abs(virt_px - prev_virt) >= 0.5:
+                self._shift_time_window_to(ns_lo, ns_hi, force=True)
+                return
+            if sync_bar and not self._virt_bar_dragging:
+                self._push_virt_trace_bar()
+            self._after_time_axis_pan(immediate=self._virt_bar_dragging)
+        else:
+            self._shift_time_window_to(ns_lo, ns_hi, force=force_window)
+
+    def _scroll_time_axis_native(self, delta: int) -> None:
+        """Scroll along the native time scrollbar (non-virtual / scene-local)."""
+        if delta == 0 or self._scene._trace is None:
+            return
+        sc = self._scene
+        bar = self._native_time_axis_bar()
+        new_val = bar.value() - delta
+        if bar.minimum() <= new_val <= bar.maximum():
+            if sc._horizontal:
+                self.scrollContentsBy(-delta, 0)
+            else:
+                self.scrollContentsBy(0, -delta)
+        else:
+            bar.setValue(max(bar.minimum(), min(bar.maximum(), new_val)))
+
+    def _scroll_orth_axis_by(self, delta: int) -> None:
+        """Scroll along the row/column axis (same path as dragging the scrollbar)."""
+        if delta == 0 or self._scene._trace is None:
+            return
+        bar = (self.verticalScrollBar() if self._scene._horizontal
+               else self.horizontalScrollBar())
+        new_val = max(bar.minimum(), min(bar.maximum(), bar.value() - delta))
+        if new_val != bar.value():
+            bar.setValue(new_val)
+
+    def _scroll_time_axis_virt_by(self, delta: int) -> None:
+        """Pan the time axis when virtual scroll is active (Qt native delta sign)."""
+        if delta == 0 or self._scene._trace is None:
+            return
+        # delta > 0  -> earlier time; delta < 0 -> later time (matches native bar).
+        if delta > 0 and self._virt_scroll_at_trace_start():
+            return
+        if delta < 0 and self._virt_scroll_at_trace_end():
+            return
+        new_virt = self._virt_time_scroll_px - delta
+        self._apply_virt_time_scroll_px(
+            new_virt, sync_bar=True, force_window=True)
+
+    def _wheel_gesture_plan(self, event: QWheelEvent) -> Tuple[bool, int, bool, int]:
+        """Return (do_time, time_delta, do_orth, orth_delta) for a wheel/trackpad event.
+
+        Classify by scroll *magnitude* first (pixelDelta with angleDelta fill-in).
+        angleDelta is only used when magnitudes tie, so horizontal pans are not
+        stolen by small vertical noise and vice versa.
+        """
+        ad = event.angleDelta()
+        dx, dy = self._wheel_pan_deltas(event)
+        shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+        horiz = self._scene._horizontal
+        if horiz:
+            mag_time, mag_orth = (dy, dx) if shift else (dx, dy)
+            ad_time, ad_orth = ad.x(), ad.y()
+        else:
+            mag_time, mag_orth = (dx, dy) if shift else (dy, dx)
+            ad_time, ad_orth = ad.y(), ad.x()
+
+        if mag_time == 0 and ad_time != 0:
+            mag_time = ad_time // 8
+        if mag_orth == 0 and ad_orth != 0:
+            mag_orth = ad_orth // 8
+
+        mt, mo = abs(mag_time), abs(mag_orth)
+        if mt == 0 and mo == 0:
+            return False, 0, False, 0
+        # Near trace start/end, prefer orthogonal pans on ambiguous diagonals so
+        # corner scrolls (e.g. bottom-right -> top-right) do not drag time axis.
+        if (self._virtual_time_scroll_active and mo > 0 and mt > 0
+                and (self._virt_scroll_at_trace_start()
+                     or self._virt_scroll_at_trace_end())
+                and mo >= mt * 0.7):
+            return False, 0, True, mag_orth
+        if mo > mt:
+            return False, 0, True, mag_orth
+        if mt > mo:
+            return True, mag_time, False, 0
+        if abs(ad_orth) > abs(ad_time):
+            return False, 0, mag_orth != 0, mag_orth
+        return mag_time != 0, mag_time, mag_orth != 0, mag_orth
+
+    def _on_virt_trace_bar_pressed(self) -> None:
+        self._virt_bar_dragging = True
+        self._refresh_nav_pan_window(force_show=True)
+
+    def _on_virt_trace_bar_released(self) -> None:
+        self._virt_bar_dragging = False
+        self._sync_virt_trace_bar_from_view()
+        self._refresh_nav_pan_window(force_show=True)
+
+    def _on_virt_trace_bar_changed(self, value: int) -> None:
+        if not self._virtual_time_scroll_active or self._syncing_virt_bar:
+            return
+        self._apply_virt_time_scroll_px(
+            value * self._virt_scroll_scale,
+            force_window=True,
+            sync_bar=False,
+        )
+
+    def _on_native_time_bar_interaction(self, _value: int = 0) -> None:
+        """Native (scene-local) time bar moved by the user."""
+        if (self._syncing_time_scrollbar or self._preserve_virt_scroll
+                or self._scene._trace is None):
+            return
+        if self._virtual_time_scroll_active:
+            if not self._virt_bar_dragging:
+                self._sync_virt_trace_bar_from_view()
+            self._after_time_axis_pan(immediate=True)
+
+    def _set_native_time_scroll_local(self, local_px: int) -> bool:
+        """Scroll the scene-local time bar to *local_px*. Returns True if it moved."""
+        self._sync_native_scene_scrollbar()
+        bar = self._native_time_axis_bar()
+        target = max(bar.minimum(), min(bar.maximum(), int(local_px)))
+        if target == bar.value():
+            return False
+        self._syncing_time_scrollbar = True
+        try:
+            bar.setValue(target)
+        finally:
+            self._syncing_time_scrollbar = False
+        if self._scene._horizontal:
+            self._reposition_frozen()
+        else:
+            self._reposition_frozen_top()
+        return True
+
+    def _flush_pending_window_shift(self) -> None:
+        if self._pending_shift_ns_lo is None:
+            return
+        ns_lo = self._pending_shift_ns_lo
+        self._pending_shift_ns_lo = None
+        self._pending_shift_ns_hi = None
+        self._apply_virt_time_scroll_px(
+            self._virt_px_from_ns_lo(ns_lo), force_window=True)
+
+    def _shift_time_window_to(
+        self, ns_lo: float, ns_hi: float, *, force: bool = False,
+    ) -> None:
+        trace = self._scene._trace
+        if trace is None:
+            return
+        tpp = self._scene._timescale_per_px
+        page_px = self._timeline_viewport_px()
+        page_ns = page_px * tpp
+        edge_ns = max(1, int(page_ns * 0.02))
+        max_left_ns = trace.time_max - page_ns
+        left_ns = int(round(max(trace.time_min, min(trace.time_max, ns_lo))))
+        if (ns_hi >= trace.time_max - edge_ns
+                and left_ns >= max_left_ns - edge_ns):
+            self._pending_shift_ns_lo = None
+            self._pending_shift_ns_hi = None
+            self._window_shift_timer.stop()
+            self._virt_time_scroll_px = self._clamp_virt_time_scroll_px(
+                self._max_virt_time_scroll_px())
+            pin_local = self._native_scroll_for_ns_lo(float(max_left_ns))
+            self._set_native_time_scroll_local(pin_local)
+            if not self._virt_bar_dragging:
+                self._push_virt_trace_bar()
+            self._after_time_axis_pan(immediate=self._virt_bar_dragging)
+            return
+        if not force and not self._virt_bar_dragging:
+            now_ms = time.monotonic() * 1000.0
+            elapsed = now_ms - self._last_window_shift_ms
+            if elapsed < _WINDOW_SHIFT_MIN_MS:
+                self._pending_shift_ns_lo = float(ns_lo)
+                self._pending_shift_ns_hi = float(ns_hi)
+                self._after_time_axis_pan()
+                if not self._window_shift_timer.isActive():
+                    self._window_shift_timer.start(
+                        max(1, int(_WINDOW_SHIFT_MIN_MS - elapsed)))
+                return
+        self._pending_shift_ns_lo = None
+        self._pending_shift_ns_hi = None
+        self._window_shift_timer.stop()
+        self._last_window_shift_ms = time.monotonic() * 1000.0
+        margin_ns = max(1, int(page_px * tpp * 0.75))
+        sc = self._scene
+        sc._ns_range_hint = (
+            max(trace.time_min, left_ns - margin_ns),
+            min(trace.time_max, int(round(ns_hi)) + margin_ns),
+        )
+        sc._virt_jump_origin_ns = left_ns
+        self._virt_scroll_rebuild = True
+        try:
+            sc.rebuild()
+        finally:
+            self._virt_scroll_rebuild = False
+        self._virt_time_scroll_px = self._virt_px_from_ns_lo(float(left_ns))
+        self._set_native_time_scroll_local(self._native_scroll_for_ns_lo(float(left_ns)))
+        if not self._virt_bar_dragging:
+            self._push_virt_trace_bar()
+        self._pan_timer.stop()
+        self._pan_heartbeat.stop()
+        self._after_time_axis_pan(immediate=self._virt_bar_dragging)
+
+    def _pan_time_axis_px(self, step_px: int) -> None:
+        """Scroll the time axis by *step_px* (positive = forward along time)."""
+        if step_px == 0 or self._scene._trace is None:
+            return
+        if self._virtual_time_scroll_active:
+            self._scroll_time_axis_virt_by(-step_px)
+        else:
+            self._scroll_time_axis_native(-step_px)
+
+    def _navigate_time_to_ns(self, ns: int, orth_scene: Optional[float] = None) -> None:
+        """Center the time axis on *ns*, preserving the orthogonal scroll position."""
+        if self._scene._trace is None:
+            return
+        trace = self._scene._trace
+        ns = max(trace.time_min, min(trace.time_max, int(ns)))
+        if self._should_use_virtual_scroll():
+            if not self._virtual_time_scroll_active:
+                self._set_virtual_scroll_enabled(True)
+            vp_center = self.viewport().rect().center()
+            half_off = self._timeline_offset_px(vp_center)
+            ns_lo = float(ns) - half_off * self._scene._timescale_per_px
+            self._apply_virt_time_scroll_px(self._virt_px_from_ns_lo(ns_lo))
+            return
+        new_coord = self._scene.ns_to_scene_coord(ns)
+        if orth_scene is None:
+            vp_cur = self.mapToScene(self.viewport().rect().center())
+            orth_scene = vp_cur.y() if self._scene._horizontal else vp_cur.x()
+        if self._scene._horizontal:
+            self.centerOn(new_coord, orth_scene)
+        else:
+            self.centerOn(orth_scene, new_coord)
+
+    def _has_scroll_overflow(self) -> bool:
+        """True when the viewport can scroll on either axis."""
+        vbar = self.verticalScrollBar()
+        if self._virtual_time_scroll_active:
+            h_ok = self._virt_trace_bar.maximum() > self._virt_trace_bar.minimum()
+        else:
+            hbar = self._native_time_axis_bar()
+            h_ok = hbar.maximum() > hbar.minimum()
+        return h_ok or vbar.maximum() > vbar.minimum()
+
+    def _navigator_eligible(self) -> bool:
+        """True when the navigator minimap should be shown."""
+        if self._has_scroll_overflow():
+            return True
+        trace = self._scene._trace
+        if trace is None:
+            return False
+        at_fit_limit = (
+            math.isfinite(self._scene._timescale_per_px_fit)
+            and self._scene._timescale_per_px >= self._scene._timescale_per_px_fit * 0.999
+        )
+        return self._fit_mode or at_fit_limit
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -8971,7 +9733,6 @@ class TimelineView(QGraphicsView):
         self._scene.set_trace(trace, self._fit_viewport_size())
         self.zoom_changed.emit(self._scene.timescale_per_px)
         self._update_label_grip_geometry()
-        self._show_nav()
 
     def _update_label_grip_geometry(self) -> None:
         """Position the visible label-column splitter on the viewport."""
@@ -9062,13 +9823,7 @@ class TimelineView(QGraphicsView):
             min(trace.time_max, ns + _half),
         )
         self._scene.rebuild()
-        coord     = self._scene.ns_to_scene_coord(ns)
-        is_horiz  = self._scene._horizontal
-        cur_scene = self.mapToScene(self.viewport().rect().center())
-        if is_horiz:
-            self.centerOn(coord, cur_scene.y())
-        else:
-            self.centerOn(cur_scene.x(), coord)
+        self._navigate_time_to_ns(ns)
         self.viewport().update()
 
     def set_horizontal(self, horizontal: bool) -> None:
@@ -9223,7 +9978,9 @@ class TimelineView(QGraphicsView):
         self.resetTransform()
         self.zoom_changed.emit(self._scene.timescale_per_px)
         new_coord = self._scene.ns_to_scene_coord(center_ns)
-        if self._scene._horizontal:
+        if self._should_use_virtual_scroll():
+            self._navigate_time_to_ns(center_ns, orth_scene=scene_pt.y() if self._scene._horizontal else scene_pt.x())
+        elif self._scene._horizontal:
             self.centerOn(new_coord, scene_pt.y())
         else:
             self.centerOn(scene_pt.x(), new_coord)
@@ -9453,7 +10210,13 @@ class TimelineView(QGraphicsView):
                                     orth_left >= visible_rect.right())
 
         if not time_in_view or orth_out_of_view:
-            if sc._horizontal:
+            if self._should_use_virtual_scroll() and not orth_out_of_view:
+                vp_center_pt = self.viewport().rect().center()
+                vp_scene = self.mapToScene(vp_center_pt)
+                orth_keep = vp_scene.y() if sc._horizontal else vp_scene.x()
+                self._reposition_time_at_viewport(
+                    target_ns, vp_center_pt, orth_scene=orth_keep)
+            elif sc._horizontal:
                 self.centerOn(time_coord, orth_center if orth_out_of_view else vp_center_scene.y())
             else:
                 self.centerOn(orth_center if orth_out_of_view else vp_center_scene.x(),
@@ -9466,6 +10229,21 @@ class TimelineView(QGraphicsView):
             self._cycle_highlighted_task(next)
             return True
         return super().focusNextPrevChild(next)
+
+    def _time_axis_step_px(self) -> int:
+        horiz = self._scene._horizontal
+        return max(1, int(
+            (self.viewport().width() if horiz else self.viewport().height()) * 0.20))
+
+    def _orth_axis_step_px(self) -> int:
+        horiz = self._scene._horizontal
+        return max(1, int(
+            (self.viewport().height() if horiz else self.viewport().width()) * 0.20))
+
+    def _pan_orth_axis_px(self, step_px: int) -> None:
+        if step_px == 0:
+            return
+        self._scroll_orth_axis_by(-step_px)
 
     def keyPressEvent(self, event) -> None:
         """Arrow-key navigation.
@@ -9527,31 +10305,17 @@ class TimelineView(QGraphicsView):
                         idx = bisect_left(all_starts, edge_lo_ns) - 1
                         target = all_starts[max(idx, 0)]
 
-                    new_coord = sc.ns_to_scene_coord(target)
-                    vp_cur = self.mapToScene(self.viewport().rect().center())
-                    if horiz:
-                        self.centerOn(new_coord, vp_cur.y())
-                    else:
-                        self.centerOn(vp_cur.x(), new_coord)
+                    self._navigate_time_to_ns(target)
             else:
-                if horiz:
-                    step_px = max(1, int(self.viewport().width() * 0.20))
-                    sb = self.horizontalScrollBar()
-                else:
-                    step_px = max(1, int(self.viewport().height() * 0.20))
-                    sb = self.verticalScrollBar()
-                sb.setValue(sb.value() + (step_px if key == time_fwd else -step_px))
+                self._pan_time_axis_px(
+                    self._time_axis_step_px() if key == time_fwd
+                    else -self._time_axis_step_px())
             event.accept()
             return
 
         if key in (row_fwd, row_back):
-            if horiz:
-                step_px = max(1, int(self.viewport().height() * 0.20))
-                sb = self.verticalScrollBar()
-            else:
-                step_px = max(1, int(self.viewport().width() * 0.20))
-                sb = self.horizontalScrollBar()
-            sb.setValue(sb.value() + (step_px if key == row_fwd else -step_px))
+            step = self._orth_axis_step_px()
+            self._pan_orth_axis_px(step if key == row_fwd else -step)
             event.accept()
             return
 
@@ -9612,12 +10376,7 @@ class TimelineView(QGraphicsView):
         self._scene.zoom_to_range(ns_lo, ns_hi, max(vp_px, 100))
         self.zoom_changed.emit(self._scene.timescale_per_px)
         center_ns = (seg.start + seg.end) // 2
-        new_coord = self._scene.ns_to_scene_coord(center_ns)
-        vp_cur    = self.mapToScene(vp.center())
-        if self._scene._horizontal:
-            self.centerOn(new_coord, vp_cur.y())
-        else:
-            self.centerOn(vp_cur.x(), new_coord)
+        self._navigate_time_to_ns(center_ns)
 
     def _restore_zoom(self) -> None:
         """Pop the zoom history and restore the previous view."""
@@ -9640,11 +10399,7 @@ class TimelineView(QGraphicsView):
             self._scene.rebuild()
         self.resetTransform()
         self.zoom_changed.emit(self._scene.timescale_per_px)
-        new_coord = self._scene.ns_to_scene_coord(center_ns)
-        if self._scene._horizontal:
-            self.centerOn(new_coord, orth)
-        else:
-            self.centerOn(orth, new_coord)
+        self._navigate_time_to_ns(center_ns, orth_scene=orth)
 
     def mouseDoubleClickEvent(self, event) -> None:
         """Double-click on a segment to zoom the timeline to fit that segment."""
@@ -9748,6 +10503,8 @@ class TimelineView(QGraphicsView):
         return best_ns
 
     def mousePressEvent(self, event) -> None:
+        if self._scene._trace is not None:
+            self.setFocus(Qt.FocusReason.MouseFocusReason)
         self._press_pos = event.position().toPoint()
         self._press_btn = event.button()
 
@@ -10228,6 +10985,18 @@ class TimelineView(QGraphicsView):
             return True
         return super().event(event)
 
+    def _wheel_pan_deltas(self, event: QWheelEvent) -> Tuple[int, int]:
+        """Return (dx, dy) for pan; macOS trackpad prefers pixelDelta."""
+        pd = event.pixelDelta()
+        ad = event.angleDelta()
+        if pd.x() != 0 or pd.y() != 0:
+            # macOS may zero one pixelDelta axis when the time scrollbar has
+            # range; recover that axis from angleDelta so vertical row pans work.
+            dx = pd.x() if pd.x() != 0 else ad.x() // 8
+            dy = pd.y() if pd.y() != 0 else ad.y() // 8
+            return dx, dy
+        return ad.x() // 8, ad.y() // 8
+
     def wheelEvent(self, event: QWheelEvent) -> None:
         if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
             angle  = event.angleDelta().y()
@@ -10242,20 +11011,20 @@ class TimelineView(QGraphicsView):
             self._fit_mode = False
             self._zoom_timer.start()   # restart the debounce window
             event.accept()
+        elif self._should_use_virtual_scroll() and self._scene._trace is not None:
+            if not self._virtual_time_scroll_active:
+                self._set_virtual_scroll_enabled(True)
+            do_time, time_d, do_orth, orth_d = self._wheel_gesture_plan(event)
+            if do_time and time_d != 0:
+                self._scroll_time_axis_virt_by(-time_d)
+            if do_orth and orth_d != 0:
+                self._scroll_orth_axis_by(orth_d)
+                self._pan_timer.start()
+            event.accept()
         else:
-            dy  = event.angleDelta().y()
-            dx  = event.angleDelta().x()
-            hsb = self.horizontalScrollBar()
-            vsb = self.verticalScrollBar()
-            # Shift+scroll -> pan horizontally; plain scroll -> natural direction
-            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
-                if dy != 0:
-                    hsb.setValue(hsb.value() - dy)
-            else:
-                if dx != 0:
-                    hsb.setValue(hsb.value() - dx)
-                if dy != 0:
-                    vsb.setValue(vsb.value() - dy)
+            super().wheelEvent(event)
+            if event.isAccepted():
+                self._pan_timer.start()
 
     def _flush_zoom(self) -> None:
         """Called by the debounce timer: apply all accumulated wheel-zoom at once."""
@@ -10268,6 +11037,9 @@ class TimelineView(QGraphicsView):
 
     def eventFilter(self, obj, e) -> bool:
         """Intercept native pinch-zoom gestures delivered to the viewport."""
+        if obj is self._virt_trace_bar and e.type() == QEvent.Type.Wheel:
+            self.wheelEvent(e)
+            return True
         if obj is self.viewport():
             if e.type() == QEvent.Type.Leave:
                 # Mouse left the viewport - ensure any hover highlight is cleared
@@ -10294,41 +11066,50 @@ class TimelineView(QGraphicsView):
         center_ns = self._scene.scene_to_ns(center_coord)
         # Compute the viewport-center offset from the anchor
         vp_center = self.viewport().rect().center()
-        offset = (vp_center.x() - vp_pos.x()) if is_horiz else (vp_center.y() - vp_pos.y())
 
         prev_timescale_per_px = self._scene.timescale_per_px
         trace = self._scene._trace
+        anchor_ns = center_ns
         if trace is not None:
-            axis_px = self.viewport().width() if is_horiz else self.viewport().height()
-            axis_px = max(1, axis_px)
             target_timescale = prev_timescale_per_px / factor
             target_timescale = max(
                 self._scene._timescale_per_px_default,
                 min(target_timescale, self._scene._timescale_per_px_fit),
             )
-            center_target_ns = center_ns + int(offset * target_timescale)
-            half_span_ns = int((axis_px * target_timescale) / 2)
-            hint_lo = max(trace.time_min, center_target_ns - half_span_ns)
-            hint_hi = min(trace.time_max, center_target_ns + half_span_ns)
-            if hint_hi > hint_lo:
-                # Rebuild uses this range immediately before centerOn() updates
-                # scrollbars, preventing far-right zoom-out from clipping to a
-                # pathological full-trace range.
-                self._scene._ns_range_hint = (hint_lo, hint_hi)
-        self._scene.zoom(factor)
-        if self._scene.timescale_per_px == prev_timescale_per_px:
-            return  # already at zoom limit - nothing changed, skip scroll/emit
-        self.zoom_changed.emit(self._scene.timescale_per_px)
+            if target_timescale != prev_timescale_per_px:
+                anchor_off_px = self._timeline_offset_px(vp_pos)
+                anchor_left_ns = int(anchor_ns - anchor_off_px * target_timescale)
+                anchor_left_ns = max(trace.time_min, min(trace.time_max, anchor_left_ns))
+                vis_ns = max(1, int(self._timeline_viewport_px() * target_timescale))
+                margin_ns = max(vis_ns // 2, (trace.time_max - trace.time_min) // 100)
+                hint_lo = max(trace.time_min, anchor_left_ns - margin_ns)
+                hint_hi = min(trace.time_max, anchor_left_ns + vis_ns + margin_ns)
+                if hint_hi > hint_lo:
+                    self._scene._ns_range_hint = (hint_lo, hint_hi)
+                if target_timescale < self._scene._timescale_per_px_fit * 0.999:
+                    self._scene._virt_jump_origin_ns = anchor_left_ns
+        self._zoom_reanchor_pending = True
+        try:
+            self._scene.zoom(factor)
+            if self._scene.timescale_per_px == prev_timescale_per_px:
+                return  # already at zoom limit - nothing changed, skip scroll/emit
+            if self._should_use_virtual_scroll():
+                self._set_virt_from_time_anchor(anchor_ns, vp_pos)
+            self.zoom_changed.emit(self._scene.timescale_per_px)
 
-        # After rebuild, keep the time-axis anchor fixed without drifting on
-        # the orthogonal axis (prevents left/right drift in vertical mode).
-        new_scene_coord = self._scene.ns_to_scene_coord(center_ns)
-        cur_scene_center = self.mapToScene(vp_center)
-        if is_horiz:
-            self.centerOn(new_scene_coord + offset, cur_scene_center.y())
-        else:
-            self.centerOn(cur_scene_center.x(), new_scene_coord + offset)
-        self._nav_zoom_timer.start()
+            # Keep the zoom anchor fixed on screen (virt scroll or centerOn).
+            cur_scene_center = self.mapToScene(vp_center)
+            if is_horiz:
+                orth = cur_scene_center.y()
+            else:
+                orth = cur_scene_center.x()
+            self._reposition_time_at_viewport(
+                anchor_ns, vp_pos, orth_scene=orth, force_window=True)
+            self._nav_zoom_timer.start()
+        finally:
+            self._zoom_reanchor_pending = False
+            if trace is not None:
+                self._scene._virt_jump_origin_ns = None
 
     # ------------------------------------------------------------------
     # Scroll and viewport sync
@@ -10594,8 +11375,12 @@ class TimelineView(QGraphicsView):
         act_ns_hi = origin + int((hi_coord - lw) * sc._timescale_per_px)
         act_ns_lo = max(tr.time_min, min(tr.time_max, act_ns_lo))
         act_ns_hi = max(tr.time_min, min(tr.time_max, act_ns_hi))
+        page_ns = max(1, int(self._timeline_viewport_px() * sc._timescale_per_px))
         if act_ns_lo >= act_ns_hi:
-            act_ns_lo, act_ns_hi = tr.time_min, tr.time_max
+            act_ns_lo, act_ns_hi = _fix_collapsed_time_ns_range(
+                act_ns_lo, act_ns_hi, lo_coord, hi_coord,
+                tr.time_min, tr.time_max, sc._timescale_per_px,
+                min_span_ns=page_ns)
         vx1 = (act_ns_lo - tr.time_min) / time_span * W
         vx2 = (act_ns_hi - tr.time_min) / time_span * W
 
@@ -10623,32 +11408,17 @@ class TimelineView(QGraphicsView):
 
     def _show_nav(self) -> None:
         """Show the navigator popup if the viewport is scrolled while content overflows."""
-        hbar = self.horizontalScrollBar()
-        vbar = self.verticalScrollBar()
-        h_overflow = hbar.maximum() > hbar.minimum()
-        v_overflow = vbar.maximum() > vbar.minimum()
-        at_fit_limit = (
-            self._scene._trace is not None
-            and math.isfinite(self._scene._timescale_per_px_fit)
-            and self._scene._timescale_per_px >= self._scene._timescale_per_px_fit * 0.999
-        )
-        # In fit/full mode there may be no scrollbar overflow; keep the
-        # navigator eligible to show in both task/core views for consistency.
-        keep_visible_full_view = self._fit_mode or at_fit_limit
-        if not (h_overflow or v_overflow or keep_visible_full_view):
-            self._nav_hide_timer.stop()
-            self._nav_popup.hide()
-            return
-        pix = self._paint_nav_pixmap()
-        self._nav_popup.set_pixmap(pix)
-        self._nav_popup.reposition()
-        self._nav_popup.fade_in()
-        # Always auto-fade after interaction; fit/full mode should not pin
-        # the navigator open permanently.
-        self._nav_hide_timer.start()
+        self._refresh_nav_pan_window(force_show=True)
 
     def scrollContentsBy(self, dx: int, dy: int) -> None:
         """Called by Qt on every scroll - reposition frozen label-column items."""
+        if self._syncing_time_scrollbar:
+            super().scrollContentsBy(dx, dy)
+            if dx != 0:
+                self._reposition_frozen()
+            if dy != 0:
+                self._reposition_frozen_top()
+            return
         super().scrollContentsBy(dx, dy)
         # Frozen label column only depends on scene X, so skip work on pure
         # vertical scroll (common hot path when browsing many task rows).
@@ -10685,17 +11455,56 @@ class TimelineView(QGraphicsView):
                 elif not self._pan_heartbeat.isActive():
                     self._pan_heartbeat.start()
             self._nav_scroll_timer.start()     # debounce minimap repaint
+            if (self._virtual_time_scroll_active and self._scene._trace is not None
+                    and not self._virt_bar_dragging):
+                time_d = dx if self._scene._horizontal else dy
+                if time_d != 0:
+                    if (not self._preserve_virt_scroll
+                            and not self._virt_scroll_at_trace_start()
+                            and not self._virt_scroll_at_trace_end()):
+                        self._sync_virt_trace_bar_from_view()
+                    self._after_time_axis_pan()
+                    return
         if self._nav_popup.isVisible():
             self._nav_popup.reposition()
 
     def _on_scene_rebuilt_scroll(self) -> None:
-        """Reset time-axis scroll after sliding-window scene-origin shift."""
+        """Reset scene-local scroll after sliding-window origin shift."""
         self._frozen_last_scene_left = None
         self._frozen_last_scene_top = None
-        if self._scene._horizontal:
-            self.horizontalScrollBar().setValue(0)
+        if self._fit_mode:
+            return
+        if self._virt_scroll_rebuild:
+            pass
+        elif self._zoom_reanchor_pending:
+            pass
+        elif self._virtual_time_scroll_active:
+            if self._preserve_virt_scroll:
+                prev = self._preserved_virt_scroll_px
+                self._preserve_virt_scroll = False
+                self._virt_time_scroll_px = self._clamp_virt_time_scroll_px(prev)
+                self._sync_native_scene_scrollbar()
+                bar = self._native_time_axis_bar()
+                ideal = self._native_scroll_for_ns_lo(
+                    self._ns_lo_from_virt_px(self._virt_time_scroll_px))
+                target = max(bar.minimum(), min(bar.maximum(), ideal))
+                self._set_native_time_scroll_local(target)
+            else:
+                self._virt_time_scroll_px = self._clamp_virt_time_scroll_px(
+                    self._virt_time_scroll_px)
+                local = self._native_scroll_for_ns_lo(
+                    self._ns_lo_from_virt_px(self._virt_time_scroll_px))
+                self._set_native_time_scroll_local(local)
         else:
-            self.verticalScrollBar().setValue(0)
+            if self._scene._horizontal:
+                self.horizontalScrollBar().setValue(0)
+            else:
+                self.verticalScrollBar().setValue(0)
+        if self._virtual_time_scroll_active:
+            self._sync_native_scene_scrollbar()
+            self._update_virt_trace_bar_range()
+            if not self._zoom_reanchor_pending:
+                self._push_virt_trace_bar()
 
     def _reposition_frozen(self) -> None:
         """Move all frozen label-column scene items so they stay at the left edge."""
@@ -10734,6 +11543,7 @@ class TimelineView(QGraphicsView):
         """Reflow the timeline on every resize to preserve the current zoom ratio."""
         super().resizeEvent(event)
         self._update_label_grip_geometry()
+        self._position_virt_trace_bar()
         self._nav_popup.reposition()
         if self._scene._trace is not None:
             self._resize_timer.start()
@@ -10763,10 +11573,13 @@ class TimelineView(QGraphicsView):
             self.zoom_changed.emit(self._scene.timescale_per_px)
             self._show_nav()
         else:
-            # Zoom mode: preserve zoom level exactly.
+            # Zoom mode: preserve zoom level and canonical scroll position.
             self._scene._timescale_per_px_fit = new_fit
             self._reposition_frozen()
             self._reposition_frozen_top()
+            self._update_virt_trace_bar_range()
+            if self._virtual_time_scroll_active:
+                self._apply_virt_time_scroll_px(self._virt_time_scroll_px)
 
     def _orth_viewport_overflow_px(self) -> float:
         """How far (px) the live viewport extends past the last orth rebuild."""
@@ -10815,10 +11628,13 @@ class TimelineView(QGraphicsView):
         self._pan_heartbeat.stop()
         if self._scene._trace is None or self._zoom_timer.isActive():
             return
+        if self._pending_shift_ns_lo is not None:
+            self._flush_pending_window_shift()
         if self._needs_rebuild_for_scroll(strict=True):
             self._last_pan_rebuild_ms = time.monotonic() * 1000.0
             self._scene.rebuild()
-        self._show_nav()
+        if self._navigator_eligible():
+            self._show_nav()
 
     def _needs_rebuild_for_scroll(self, *, strict: bool = True) -> bool:
         """Return True when current viewport exceeds the last rebuild coverage.
@@ -10869,8 +11685,10 @@ class TimelineView(QGraphicsView):
             orth_slack = -row_stride * 2
 
         # Time-axis coverage exceeded -> need rebuild to repopulate segments.
-        if ns_lo < self._scene._vp_ns_lo - time_slack or ns_hi > self._scene._vp_ns_hi + time_slack:
-            return True
+        # Virtual scroll slides the loaded window explicitly via _shift_time_window_to.
+        if not self._virtual_time_scroll_active:
+            if ns_lo < self._scene._vp_ns_lo - time_slack or ns_hi > self._scene._vp_ns_hi + time_slack:
+                return True
 
         # Orthogonal coverage exceeded -> need rebuild to populate culled rows/cols.
         if orth_lo < self._scene._vp_scene_orth_lo - orth_slack:
@@ -19823,6 +20641,12 @@ class MainWindow(QMainWindow):
         _sc_find_prev.setContext(Qt.ShortcutContext.ApplicationShortcut)
         _sc_find_prev.activated.connect(self._find_prev)
 
+        for _key in (Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down):
+            _sc = QShortcut(QKeySequence(_key), self)
+            _sc.setContext(Qt.ShortcutContext.ApplicationShortcut)
+            _sc.activated.connect(
+                lambda k=_key: self._pan_timeline_arrow(k))
+
         # Restore all persisted settings (geometry, zoom, orientation, ...).
         self._restore_settings()
 
@@ -20137,30 +20961,36 @@ class MainWindow(QMainWindow):
 
     def _load_tab_view_state(self, tab: _TraceTab) -> None:
         """Restore zoom/cursors saved for *tab* in btf_viewer.rc."""
+        view = tab.view
+        sc = view._scene
         raw = self._settings.get("tab_view", self._trace_state_key(tab.path), "")
         if not raw.strip():
-            tab.view.zoom_changed.emit(tab.view._scene.timescale_per_px)
+            view.zoom_changed.emit(sc.timescale_per_px)
+            view._refresh_nav_pan_window(force_show=view._navigator_eligible())
             return
         try:
             payload = json.loads(raw)
         except json.JSONDecodeError:
-            tab.view.zoom_changed.emit(tab.view._scene.timescale_per_px)
+            view.zoom_changed.emit(sc.timescale_per_px)
+            view._refresh_nav_pan_window(force_show=view._navigator_eligible())
             return
-        sc = tab.view._scene
         fit_mode = bool(payload.get("fit_mode", True))
         zoom = float(payload.get("zoom", -1))
-        if not fit_mode and zoom > 0:
+        if fit_mode:
+            view.zoom_fit()
+        elif zoom > 0:
             sc._timescale_per_px = max(sc._timescale_per_px_default, zoom)
-            tab.view._fit_mode = False
+            view._fit_mode = False
             sc.rebuild()
+            view.zoom_changed.emit(sc.timescale_per_px)
         for ns in payload.get("cursors", []):
             try:
                 sc.add_cursor(int(ns))
             except (ValueError, TypeError):
                 pass
         if sc.cursor_times():
-            tab.view.cursors_changed.emit(sc.cursor_times())
-        tab.view.zoom_changed.emit(sc.timescale_per_px)
+            view.cursors_changed.emit(sc.cursor_times())
+        view._refresh_nav_pan_window(force_show=view._navigator_eligible())
 
     def _persist_open_tabs(self) -> None:
         """Write open tab paths and active tab index to btf_viewer.rc."""
@@ -22909,6 +23739,35 @@ class MainWindow(QMainWindow):
                     self._annotation_list.setCurrentItem(item)
                     self._annotation_list.scrollToItem(item)
                     break
+
+    def _typing_focus_active(self) -> bool:
+        fw = QApplication.focusWidget()
+        return fw is not None and isinstance(
+            fw, (QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox))
+
+    def _pan_timeline_arrow(self, key: Qt.Key) -> None:
+        """Application-level arrow pan when focus is not in a text/spin field."""
+        if self._typing_focus_active():
+            return
+        view = self._view
+        sc = view._scene
+        if sc._trace is None:
+            return
+        horiz = sc._horizontal
+        if horiz:
+            time_fwd, time_back = Qt.Key.Key_Right, Qt.Key.Key_Left
+            row_fwd, row_back = Qt.Key.Key_Down, Qt.Key.Key_Up
+        else:
+            time_fwd, time_back = Qt.Key.Key_Down, Qt.Key.Key_Up
+            row_fwd, row_back = Qt.Key.Key_Right, Qt.Key.Key_Left
+        if key in (time_fwd, time_back):
+            view._pan_time_axis_px(
+                view._time_axis_step_px() if key == time_fwd
+                else -view._time_axis_step_px())
+        elif key in (row_fwd, row_back):
+            view._pan_orth_axis_px(
+                view._orth_axis_step_px() if key == row_fwd
+                else -view._orth_axis_step_px())
 
     def _focus_find(self) -> None:
         """Show the Find tab and focus the search field."""

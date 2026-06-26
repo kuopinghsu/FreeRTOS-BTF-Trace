@@ -194,6 +194,12 @@ export class InteractionHandler {
     return (this._opts.getOptions?.()?.orientation ?? 'h') === 'v'
   }
 
+  /** Top header band height inside the canvas (0 when DOM ColumnHeaderRow is shown). */
+  _vertHeaderH() {
+    if (!this._isVertical()) return 0
+    return this._opts.getOptions?.()?.vertHeaderH ?? HEADER_H
+  }
+
   _zoomToRange(t0, t1) {
     const vp = this._opts.getViewport()
     if (!vp) return
@@ -210,10 +216,10 @@ export class InteractionHandler {
     if (!vp) return null
     const { timeStart, timeEnd } = vp
     if (this._isVertical()) {
-      const bodyH = vp.canvasH - HEADER_H
+      const bodyH = vp.canvasH - this._vertHeaderH()
       const pxPerNs = bodyH / (timeEnd - timeStart)
       if (pxPerNs <= 0) return null
-      const y = Math.max(0, cy - HEADER_H)
+      const y = Math.max(0, cy - this._vertHeaderH())
       return timeStart + y / pxPerNs
     }
     const nsPerPx = (timeEnd - timeStart) / vp.canvasW
@@ -228,9 +234,9 @@ export class InteractionHandler {
     if (this._isVertical()) {
       // In vertical mode, Y maps to time
       const { timeStart, timeEnd, canvasH } = vp
-      const pxPerNs = (canvasH - HEADER_H) / (timeEnd - timeStart)
-      if (pxPerNs <= 0 || cy < HEADER_H) return null
-      return timeStart + (cy - HEADER_H) / pxPerNs
+      const pxPerNs = (canvasH - this._vertHeaderH()) / (timeEnd - timeStart)
+      if (pxPerNs <= 0 || cy < this._vertHeaderH()) return null
+      return timeStart + (cy - this._vertHeaderH()) / pxPerNs
     } else {
       // In horizontal mode, X maps to time
       const { timeStart, timeEnd, canvasW } = vp
@@ -289,9 +295,9 @@ export class InteractionHandler {
   /** Zoom around a canvas pivot (vertical mode – pivot on Y axis). */
   _applyZoomAroundV(vp, pivotY, factor) {
     const { timeStart, timeEnd, canvasH } = vp
-    const bodyH   = canvasH - HEADER_H
+    const bodyH   = canvasH - this._vertHeaderH()
     const timeSpan = timeEnd - timeStart
-    const pivotT = timeStart + Math.max(0, pivotY - HEADER_H) / bodyH * timeSpan
+    const pivotT = timeStart + Math.max(0, pivotY - this._vertHeaderH()) / bodyH * timeSpan
 
     let newSpan = timeSpan * factor
     const trace = this._opts.getTrace()
@@ -302,7 +308,7 @@ export class InteractionHandler {
     }
     newSpan = Math.max(this._minTimeSpan, newSpan)
 
-    const relPos = Math.max(0, pivotY - HEADER_H) / bodyH
+    const relPos = Math.max(0, pivotY - this._vertHeaderH()) / bodyH
     const newStart = pivotT - relPos * newSpan
     const { s, e } = this._clampPan(newStart, newStart + newSpan)
     return { ...vp, timeStart: s, timeEnd: e }
@@ -330,7 +336,7 @@ export class InteractionHandler {
 
   _applyPanV(vp, deltaY) {
     const { timeStart, timeEnd, canvasH } = vp
-    const bodyH   = canvasH - HEADER_H
+    const bodyH   = canvasH - this._vertHeaderH()
     const nsPerPx = (timeEnd - timeStart) / bodyH
     const deltaNs = deltaY * nsPerPx
     const { s, e } = this._clampPan(timeStart + deltaNs, timeEnd + deltaNs)
@@ -447,7 +453,7 @@ export class InteractionHandler {
       // Some platforms/browsers are inconsistent about emitting a `dblclick`
       // after an initial ruler press enters pan mode. Treat the 2nd primary
       // press on the ruler as fit-to-window directly for robust behavior.
-      const isRulerClick = vert ? (cx < RULER_W || cy < HEADER_H) : (cy < RULER_H)
+      const isRulerClick = vert ? (cx < RULER_W || cy < this._vertHeaderH()) : (cy < RULER_H)
       if (isRulerClick && e.detail >= 2) {
         this._dragging = false
         this._draggingCursorIdx = -1
@@ -460,7 +466,7 @@ export class InteractionHandler {
       const t = this._canvasToTime(cx, cy)
       if (t !== null) {
         const span = vp.timeEnd - vp.timeStart
-        const pxBase = vert ? Math.max(1, vp.canvasH - HEADER_H) : Math.max(1, vp.canvasW)
+        const pxBase = vert ? Math.max(1, vp.canvasH - this._vertHeaderH()) : Math.max(1, vp.canvasW)
         const nsPerPx = span / pxBase
         const cursorHit = findNearestCursorIndex(this._cursors, t, this._dragCursorPx * nsPerPx)
         if (cursorHit !== -1) {
@@ -482,7 +488,7 @@ export class InteractionHandler {
       }
 
       if (vert) {
-        if (cy >= HEADER_H && cx >= RULER_W) {
+        if (cy >= this._vertHeaderH() && cx >= RULER_W) {
           // First check if a segment bar was clicked; if so highlight it instead
           const traceObj = this._opts.getTrace()
           const ropts    = this._opts.getOptions?.()
@@ -498,7 +504,7 @@ export class InteractionHandler {
           }
         }
         // Click in column header area → core expand/collapse or task highlight
-        if (cy < HEADER_H && cx >= RULER_W) {
+        if (cy < this._vertHeaderH() && cx >= RULER_W) {
           const trace = this._opts.getTrace()
           const ropts = this._opts.getOptions?.()
           if (trace && ropts) {
@@ -592,7 +598,7 @@ export class InteractionHandler {
       const dy = e.clientY - this._dragStartY
       if (vert) {
         this._queueViewport(vp => {
-          const bodyH   = vp.canvasH - HEADER_H
+          const bodyH   = vp.canvasH - this._vertHeaderH()
           const nsPerPx = (vp.timeEnd - vp.timeStart) / bodyH
           const rawStart = this._dragStartTime - dy * nsPerPx
           const { s, e: eT } = this._clampPan(rawStart, rawStart + (vp.timeEnd - vp.timeStart))
@@ -711,7 +717,7 @@ export class InteractionHandler {
     const cy   = e.clientY - rect.top
     const vert = this._isVertical()
     // Double-click on ruler → fit to window (clears zoom history)
-    if (vert ? cx < RULER_W || cy < HEADER_H : cy < RULER_H) {
+    if (vert ? cx < RULER_W || cy < this._vertHeaderH() : cy < RULER_H) {
       this._zoomHistory = []
       this._opts.onFitToWindow?.()
       return
@@ -793,7 +799,7 @@ export class InteractionHandler {
     if (!vp) return 1
     const vert = this._isVertical()
     const span = vp.timeEnd - vp.timeStart
-    const pxBase = vert ? Math.max(1, vp.canvasH - HEADER_H) : Math.max(1, vp.canvasW)
+    const pxBase = vert ? Math.max(1, vp.canvasH - this._vertHeaderH()) : Math.max(1, vp.canvasW)
     return span / pxBase
   }
 
@@ -812,7 +818,7 @@ export class InteractionHandler {
       const vert = this._isVertical()
       let snapNs
       if (vert) {
-        const bodyH = vp.canvasH - HEADER_H
+        const bodyH = vp.canvasH - this._vertHeaderH()
         const nsPerPx = (vp.timeEnd - vp.timeStart) / bodyH
         snapNs = 5 * nsPerPx
       } else {
@@ -865,7 +871,7 @@ export class InteractionHandler {
     }
     const vert = this._isVertical()
     const span = vp.timeEnd - vp.timeStart
-    const pxBase = vert ? Math.max(1, vp.canvasH - HEADER_H) : Math.max(1, vp.canvasW)
+    const pxBase = vert ? Math.max(1, vp.canvasH - this._vertHeaderH()) : Math.max(1, vp.canvasW)
     const nsPerPx = span / pxBase
     const cursorHit = findNearestCursorIndex(this._cursors, t, this._dragCursorPx * nsPerPx)
     const markHit = findNearestMark(this._opts.getMarks?.() || [], t, this._dragMarkPx * nsPerPx)
