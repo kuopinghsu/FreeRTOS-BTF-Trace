@@ -120,6 +120,20 @@ export const INTERVAL_SORT_ACCESSORS = {
   p95: r => r.p95Ns,
 }
 
+export const TAG_SORT_ACCESSORS = {
+  tag: r => {
+    const m = /^tag([0-7])?_event$/i.exec(r.channel || '')
+    if (!m) return r.label.toLowerCase()
+    const digit = m[1]
+    return digit != null ? parseInt(digit, 10) : -1
+  },
+  count: r => r.count,
+  min: r => r.minVal,
+  avg: r => r.avgVal,
+  max: r => r.maxVal,
+  p95: r => r.p95Val,
+}
+
 export const PRIORITY_SORT_ACCESSORS = {
   task: r => r.label.toLowerCase(),
   base: r => r.basePri,

@@ -1,4 +1,4 @@
-/** Persist web viewer layout and view options in localStorage (not open tabs). */
+/** Persist web viewer layout, tabs, and per-trace state in localStorage. */
 
 const SESSION_KEY = 'btf-viewer-session-v1'
 
@@ -19,7 +19,155 @@ export function saveSession(session) {
   }
 }
 
-export function buildSessionSnapshot({ timelineOptions, layout }) {
+/** Per-tab legend/heatmap filter fields. */
+export function snapshotTabFilters(tab) {
+  if (!tab) return null
+  return {
+    taskFilterText: tab.taskFilterText || '',
+    migratedOnlyFilter: !!tab.migratedOnlyFilter,
+    taskFilterKeys: tab.taskFilterKeys?.length ? [...tab.taskFilterKeys] : null,
+    heatmapFilterLabel: tab.heatmapFilterLabel ?? null,
+  }
+}
+
+export function buildTabFiltersByTraceName(tabs) {
+  const out = {}
+  for (const tab of tabs || []) {
+    if (!tab?.name) continue
+    out[tab.name] = snapshotTabFilters(tab)
+  }
+  return out
+}
+
+export function applyTabFilters(tab, filters) {
+  if (!tab || !filters) return
+  tab.taskFilterText = filters.taskFilterText ?? ''
+  tab.migratedOnlyFilter = !!filters.migratedOnlyFilter
+  tab.taskFilterKeys = filters.taskFilterKeys ?? null
+  tab.heatmapFilterLabel = filters.heatmapFilterLabel ?? null
+}
+
+export function sanitizeTabFilters(src) {
+  if (!src || typeof src !== 'object') return null
+  const keys = Array.isArray(src.taskFilterKeys)
+    ? src.taskFilterKeys.filter(k => k != null && String(k).length).map(String)
+    : null
+  return {
+    taskFilterText: typeof src.taskFilterText === 'string' ? src.taskFilterText : '',
+    migratedOnlyFilter: !!src.migratedOnlyFilter,
+    taskFilterKeys: keys?.length ? keys : null,
+    heatmapFilterLabel: src.heatmapFilterLabel != null ? String(src.heatmapFilterLabel) : null,
+  }
+}
+
+function sanitizeCursors(cursors) {
+  if (!Array.isArray(cursors)) return null
+  return cursors.map(c => {
+    if (c == null) return null
+    const n = Number.parseInt(c, 10)
+    return Number.isFinite(n) ? n : null
+  })
+}
+
+function sanitizeMarks(marks) {
+  if (!Array.isArray(marks)) return []
+  const out = []
+  for (const m of marks) {
+    if (!m || typeof m !== 'object') continue
+    const id = Number.parseInt(m.id, 10)
+    const ns = Number.parseInt(m.ns, 10)
+    if (!Number.isFinite(id) || !Number.isFinite(ns)) continue
+    out.push({
+      id,
+      ns,
+      label: String(m.label ?? ''),
+      type: m.type === 'annotation' ? 'annotation' : 'bookmark',
+    })
+  }
+  return out
+}
+
+function sanitizeViewport(vp) {
+  if (!vp || typeof vp !== 'object') return null
+  const t0 = Number(vp.timeStart)
+  const t1 = Number(vp.timeEnd)
+  if (!Number.isFinite(t0) || !Number.isFinite(t1)) return null
+  return {
+    timeStart: t0,
+    timeEnd: t1,
+    scrollY: Number.isFinite(Number(vp.scrollY)) ? Number(vp.scrollY) : 0,
+    scrollX: Number.isFinite(Number(vp.scrollX)) ? Number(vp.scrollX) : 0,
+    canvasW: Math.max(1, Number(vp.canvasW) || 1),
+    canvasH: Math.max(1, Number(vp.canvasH) || 1),
+  }
+}
+
+/** Full per-trace tab state (viewport, cursors, marks, filters, find). */
+export function snapshotTabState(tab) {
+  if (!tab?.trace) return null
+  const filters = snapshotTabFilters(tab)
+  return {
+    timelineViewport: sanitizeViewport(tab.timelineViewport),
+    cursors: sanitizeCursors(tab.cursors),
+    marks: sanitizeMarks(tab.marks),
+    markNextId: tab.markNextId ?? 1,
+    findQuery: tab.findQuery ?? '',
+    findMode: tab.findMode ?? 'contains',
+    pinnedHighlightKey: tab.pinnedHighlightKey ?? null,
+    highlightSegment: tab.highlightSegment
+      ? { ...tab.highlightSegment }
+      : null,
+    cpuLoadExpanded: tab.cpuLoadExpanded !== false,
+    ...filters,
+  }
+}
+
+export function buildTabStateByTraceName(tabs) {
+  const out = {}
+  for (const tab of tabs || []) {
+    if (!tab?.name || !tab.trace) continue
+    const snap = snapshotTabState(tab)
+    if (snap) out[tab.name] = snap
+  }
+  return out
+}
+
+export function applyTabState(tab, state) {
+  if (!tab || !state) return
+  const vp = sanitizeViewport(state.timelineViewport)
+  if (vp) Object.assign(tab.timelineViewport, vp)
+  const curs = sanitizeCursors(state.cursors)
+  if (curs) tab.cursors = curs
+  tab.marks = sanitizeMarks(state.marks)
+  if (state.markNextId != null) {
+    const mid = Number.parseInt(state.markNextId, 10)
+    tab.markNextId = Number.isFinite(mid) ? mid : tab.markNextId
+  }
+  tab.findQuery = typeof state.findQuery === 'string' ? state.findQuery : ''
+  tab.findMode = state.findMode ?? 'contains'
+  tab.pinnedHighlightKey = state.pinnedHighlightKey ?? null
+  tab.highlightSegment = state.highlightSegment ?? null
+  if (state.cpuLoadExpanded != null) tab.cpuLoadExpanded = !!state.cpuLoadExpanded
+  applyTabFilters(tab, sanitizeTabFilters(state))
+}
+
+/** Merge legacy tabFiltersByTraceName into tabStateByTraceName on load. */
+export function mergeLegacyTabFilters(tabStateByTraceName, tabFiltersByTraceName) {
+  const out = { ...(tabStateByTraceName || {}) }
+  if (!tabFiltersByTraceName) return out
+  for (const [name, filters] of Object.entries(tabFiltersByTraceName)) {
+    if (!out[name]) {
+      const f = sanitizeTabFilters(filters)
+      if (f) out[name] = f
+    }
+  }
+  return out
+}
+
+export function buildSessionSnapshot({ timelineOptions, layout, tabs, activeTabId }) {
+  const loaded = (tabs || []).filter(t => t?.trace)
+  const activeTab = loaded.find(t => t.id === activeTabId) ?? loaded[0] ?? null
+  const tabStateByTraceName = buildTabStateByTraceName(loaded)
   return {
     timelineOptions: {
       viewMode: timelineOptions.viewMode,
@@ -28,9 +176,12 @@ export function buildSessionSnapshot({ timelineOptions, layout }) {
       showSti: timelineOptions.showSti,
       showCpuLoad: timelineOptions.showCpuLoad,
       darkMode: timelineOptions.darkMode,
-      migratedOnlyFilter: timelineOptions.migratedOnlyFilter,
     },
     layout: layout ? { ...layout } : null,
+    openTabNames: loaded.map(t => t.name),
+    activeTabName: activeTab?.name ?? null,
+    tabStateByTraceName,
+    tabFiltersByTraceName: buildTabFiltersByTraceName(loaded),
   }
 }
 

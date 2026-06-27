@@ -2,7 +2,7 @@
  * Portable session export/import (cursors, marks, viewport) — Desktop + Web compatible JSON.
  */
 
-import { isRestorableViewport } from './sessionStore.js'
+import { isRestorableViewport, sanitizeTabFilters, snapshotTabFilters } from './sessionStore.js'
 import { MAX_CURSORS } from './settingsStore.js'
 
 export const SESSION_PORTABLE_VERSION = 1
@@ -10,7 +10,7 @@ export const SESSION_MAX_BYTES = 2 * 1024 * 1024
 
 const PORTABLE_FIND_MODES = ['contains', 'exact', 'regex', 'migrations']
 const TIMELINE_OPTION_KEYS = [
-  'viewMode', 'orientation', 'showGrid', 'showSti', 'showCpuLoad', 'darkMode', 'migratedOnlyFilter',
+  'viewMode', 'orientation', 'showGrid', 'showSti', 'showCpuLoad', 'darkMode',
 ]
 
 export function buildPortableSession({
@@ -20,6 +20,7 @@ export function buildPortableSession({
   markNextId,
   timelineViewport,
   timelineOptions,
+  tabFilters,
   findQuery,
   findMode,
   pinnedHighlightKey,
@@ -39,8 +40,8 @@ export function buildPortableSession({
       showSti: timelineOptions.showSti,
       showCpuLoad: timelineOptions.showCpuLoad,
       darkMode: timelineOptions.darkMode,
-      migratedOnlyFilter: timelineOptions.migratedOnlyFilter,
     } : null,
+    tabFilters: tabFilters ? snapshotTabFilters(tabFilters) : null,
     findQuery: findQuery ?? '',
     findMode: findMode ?? 'contains',
     pinnedHighlightKey: pinnedHighlightKey ?? null,
@@ -176,6 +177,20 @@ export function applyPortableSession(tab, data, timelineOptions, trace = null) {
     } else {
       timelineOptions.highlightKey = null
       timelineOptions.lockedTaskKey = null
+    }
+  }
+
+  const filters = sanitizeTabFilters(data.tabFilters)
+  if (filters) {
+    tab.taskFilterText = filters.taskFilterText
+    tab.migratedOnlyFilter = filters.migratedOnlyFilter
+    tab.taskFilterKeys = filters.taskFilterKeys
+    tab.heatmapFilterLabel = filters.heatmapFilterLabel
+    if (timelineOptions) {
+      timelineOptions.taskFilterText = filters.taskFilterText
+      timelineOptions.migratedOnlyFilter = filters.migratedOnlyFilter
+      timelineOptions.taskFilterKeys = filters.taskFilterKeys
+      timelineOptions.heatmapFilterLabel = filters.heatmapFilterLabel
     }
   }
 }

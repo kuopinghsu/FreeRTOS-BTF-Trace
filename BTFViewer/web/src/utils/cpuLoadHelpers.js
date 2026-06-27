@@ -1,6 +1,7 @@
 /** CPU load graph helpers (parity with desktop _CpuLoadGraph). */
 
 import { getTimelineLayout } from './timelineLayout.js'
+import { coreViewTaskFilterActive, filteredCoreViewTasks } from './taskFilter.js'
 
 export const CPU_LOAD_ROW_H = 30
 export const CPU_LOAD_COLLAPSED_H = 20
@@ -34,16 +35,67 @@ export function cpuLoadPaneDefaultH(rowH = getTimelineLayout().cpuLoadRowH) {
 export const CPU_LOAD_PANE_DEFAULT_H =
   CPU_LOAD_PANE_CHROME_H + cpuLoadRowsViewportHeight(CPU_LOAD_MAX_VISIBLE_ROWS) + 2
 
-export function cpuLoadRowCount(trace, viewMode, selectedTask) {
+export function cpuLoadRowCount(trace, viewMode, selectedTask, filterOpts = {}) {
   if (!trace) return 0
+  const {
+    migratedOnlyFilter = false,
+    taskFilterKeys = null,
+    taskFilterText = '',
+  } = filterOpts
+  const filterActive = coreViewTaskFilterActive(migratedOnlyFilter, taskFilterKeys, taskFilterText)
+
+  if (selectedTask) {
+    if (viewMode === 'task') return 1
+    return trace.coreNames?.length ?? 0
+  }
+  if (filterActive && viewMode === 'task') return 1
+  if (filterActive && viewMode === 'core') {
+    const n = filteredCoreViewTasks(trace, migratedOnlyFilter, taskFilterKeys, taskFilterText).length
+    return n > 0 ? n : 0
+  }
   if (viewMode === 'task') return 1
   return trace.coreNames?.length ?? 0
 }
 
+/** Per-bin load on one core from filtered tasks (sum of task-on-core bins, capped at 1). */
+export function aggregateFilteredTaskCoreBins(taskCoreBins, mergeKeys, core, numBins) {
+  if (!mergeKeys?.length || !taskCoreBins || !core) return null
+  const out = new Float64Array(numBins)
+  let any = false
+  for (const mk of mergeKeys) {
+    const bins = taskCoreBins[mk]?.[core]
+    if (!bins) continue
+    any = true
+    for (let i = 0; i < numBins; i++) out[i] += bins[i] || 0
+  }
+  if (!any) return null
+  for (let i = 0; i < numBins; i++) out[i] = Math.min(1, out[i])
+  return out
+}
+
+/** Per-bin system load contributed by *mergeKeys* (sum of task bins / core count). */
+export function aggregateFilteredTaskBins(taskBins, mergeKeys, nCores, numBins) {
+  if (!mergeKeys?.length || !taskBins) return null
+  const out = new Float64Array(numBins)
+  let any = false
+  for (const mk of mergeKeys) {
+    const bins = taskBins[mk]
+    if (!bins) continue
+    any = true
+    for (let i = 0; i < numBins; i++) out[i] += bins[i] || 0
+  }
+  if (!any) return null
+  const div = Math.max(1, nCores)
+  for (let i = 0; i < numBins; i++) out[i] = Math.min(1, out[i] / div)
+  return out
+}
+
 /** Preferred outer pane height — up to 8 visible rows; fewer cores use actual count. */
-export function cpuLoadPreferredPaneHeight(trace, viewMode, selectedTask, allExpanded = true) {
+export function cpuLoadPreferredPaneHeight(
+  trace, viewMode, selectedTask, allExpanded = true, filterOpts = {},
+) {
   const rowH = getTimelineLayout().cpuLoadRowH
-  const n = cpuLoadRowCount(trace, viewMode, selectedTask)
+  const n = cpuLoadRowCount(trace, viewMode, selectedTask, filterOpts)
   if (n === 0) return CPU_LOAD_PANE_MIN_H
   const visibleRows = Math.min(n, CPU_LOAD_MAX_VISIBLE_ROWS)
   const rowsH = cpuLoadRowsViewportHeight(visibleRows, allExpanded, rowH)

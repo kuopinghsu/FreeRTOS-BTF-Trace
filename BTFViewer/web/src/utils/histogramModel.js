@@ -370,14 +370,14 @@ function buildCdfPoints(values, binSpec, plotW, plotH, margin) {
   return { points, ticks }
 }
 
-function buildCaption(scaleMode, summary, binSpec, logY, formatValue) {
+function buildCaption(scaleMode, summary, binSpec, logY, formatValue, valueAsTime = true) {
   const parts = []
   if (scaleMode === 'percentile') {
     parts.push('p5–p95 view')
     if (binSpec.overflow > 0) parts.push(`${binSpec.overflow} above p95`)
     if (binSpec.underflow > 0) parts.push(`${binSpec.underflow} below p5`)
   } else if (scaleMode === 'log') {
-    parts.push('log-scaled duration axis')
+    parts.push(valueAsTime ? 'log-scaled duration axis' : 'log-scaled value axis')
   } else {
     parts.push('linear scale')
   }
@@ -399,6 +399,7 @@ export function buildHistogramModel(values, options = {}) {
   const {
     scaleMode = 'auto',
     formatValue = v => String(v),
+    valueAsTime = true,
     color = '#5B9BD5',
     width = 820,
     height = 240,
@@ -454,7 +455,7 @@ export function buildHistogramModel(values, options = {}) {
       { label: 'p50', x: scaleX(summary.p50), color: '#4CAF50' },
       { label: 'p95', x: scaleX(summary.p95), color: '#FF9800' },
     ].filter(line => line.x >= margin.left && line.x <= width - margin.right),
-    caption: buildCaption(effectiveMode, summary, binSpec, logY, formatValue),
+    caption: buildCaption(effectiveMode, summary, binSpec, logY, formatValue, valueAsTime),
     scaleMode: effectiveMode,
     requestedScaleMode: scaleMode,
     logY,
