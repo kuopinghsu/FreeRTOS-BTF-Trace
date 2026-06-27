@@ -24,6 +24,7 @@ import {
   intervalColor,
   intervalStripeColors,
 } from '../utils/intervalAnalysis.js'
+import { cursorSortedPlaced } from '../utils/cursorAnalysis.js'
 
 function L() {
   return getTimelineLayout()
@@ -469,23 +470,40 @@ export function renderToSvg(trace, viewport, options = {}) {
 
   // ---- Cursor lines ----
   const CURSOR_COLORS = ['#FF4444','#44FF88','#4499FF','#FFAA22','#FF44FF','#44FFFF','#FFFF44','#CC44FF']
-  cursors.forEach((cur, idx) => {
-    if (cur == null) return
-    const rawX = (cur - timeStart) * pxPerNs
-    if (rawX < 0 || rawX > canvasW) return
+  const sortedCursors = cursorSortedPlaced(cursors)
+  for (let order = 0; order < sortedCursors.length; order++) {
+    const { t, slotIndex } = sortedCursors[order]
+    const rawX = (t - timeStart) * pxPerNs
+    if (rawX < 0 || rawX > canvasW) continue
     const x     = OX + rawX
-    const color = CURSOR_COLORS[idx % CURSOR_COLORS.length]
+    const color = CURSOR_COLORS[slotIndex % CURSOR_COLORS.length]
     els.push(
       `<line x1="${x.toFixed(1)}" y1="0" x2="${x.toFixed(1)}" y2="${svgH}" ` +
       `stroke="${color}" stroke-width="1.5" stroke-dasharray="4,3"/>`
     )
-    // Time label badge in ruler
-    const timeLabel = formatTime(cur, trace.timeScale)
+    const timeLabel = `C${slotIndex + 1}: ${formatTime(t, trace.timeScale, 3)}`
     const badgeW = timeLabel.length * 6 + 8
     const lx = Math.min(x + 2, svgW - badgeW - 2)
-    els.push(`<rect x="${lx.toFixed(1)}" y="2" width="${badgeW}" height="14" fill="${color}" rx="2"/>`)
-    els.push(`<text x="${(lx + 4).toFixed(1)}" y="3" dominant-baseline="hanging" fill="#000" font-family="monospace" font-size="10" font-weight="bold">${esc(timeLabel)}</text>`)
-  })
+    const ly = 2 + (slotIndex + 1) * 18
+    els.push(`<rect x="${lx.toFixed(1)}" y="${ly}" width="${badgeW}" height="14" fill="${color}" rx="2"/>`)
+    els.push(`<text x="${(lx + 4).toFixed(1)}" y="${ly + 3}" dominant-baseline="hanging" fill="#000" font-family="monospace" font-size="10" font-weight="bold">${esc(timeLabel)}</text>`)
+
+    if (order > 0) {
+      const prevT = sortedCursors[order - 1].t
+      const delta = Math.abs(t - prevT)
+      const dStr = `Δ ${formatTime(delta, trace.timeScale, 3)}`
+      const midX = OX + ((t + prevT) / 2 - timeStart) * pxPerNs
+      if (midX >= OX && midX <= OX + canvasW) {
+        const dBadgeW = dStr.length * 6 + 6
+        const dBadgeH = 14
+        let dbx = Math.round(midX - dBadgeW / 2)
+        dbx = Math.max(OX + 2, Math.min(dbx, svgW - dBadgeW - 2))
+        const dby = RULER_H + 4
+        els.push(`<rect x="${dbx.toFixed(1)}" y="${dby}" width="${dBadgeW}" height="${dBadgeH}" fill="${color}" rx="2"/>`)
+        els.push(`<text x="${(dbx + 3).toFixed(1)}" y="${dby + 3}" dominant-baseline="hanging" fill="#000" font-family="monospace" font-size="10" font-weight="bold">${esc(dStr)}</text>`)
+      }
+    }
+  }
 
   // ---- Mark lines (mirrors drawMarksHorizontal canvas behavior) ----
   for (const [ns, label, color, type = 'bookmark'] of marks) {

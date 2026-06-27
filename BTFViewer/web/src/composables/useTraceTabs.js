@@ -25,6 +25,10 @@ export function createTraceTab(name) {
     findHitIdx: -1,
     findMarkerNs: null,
     openPlot: null,
+    taskFilterText: '',
+    migratedOnlyFilter: false,
+    taskFilterKeys: null,
+    heatmapFilterLabel: null,
   }
 }
 
@@ -124,6 +128,10 @@ export function useTraceTabs() {
     tab.findHits = []
     tab.findHitIdx = -1
     tab.findMarkerNs = null
+    tab.taskFilterText = ''
+    tab.migratedOnlyFilter = false
+    tab.taskFilterKeys = null
+    tab.heatmapFilterLabel = null
     Object.assign(tab.timelineViewport, _emptyViewport())
   }
 

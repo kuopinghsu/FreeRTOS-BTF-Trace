@@ -13,7 +13,6 @@
  */
 
 import { taskColor, taskDisplayName, taskMergeKey, parseTaskName, coreTint, coreColor, stiNoteColor, lighterColor, complementaryColor } from '../utils/colors.js'
-import { isMigratedTask } from '../utils/migrationAnalysis.js'
 import { bisectLeft, bisectRight } from '../utils/bisect.js'
 import { lodReduce } from '../utils/lod.js'
 import { visibleSegs } from '../parser/btfParser.js'
@@ -24,6 +23,7 @@ import {
   getWasmHandles,
 } from './wasmAccel.js'
 import { formatTime, formatMigrationGapTime } from '../utils/timeFormat.js'
+import { cursorSortedPlaced } from '../utils/cursorAnalysis.js'
 import { getTimelineLayout } from '../utils/timelineLayout.js'
 import { CURSOR_COLORS } from '../utils/cursorColors.js'
 import {
@@ -40,6 +40,22 @@ import {
   BOOST_BAND_COLOR,
   INVERSION_BAND_COLOR,
 } from '../utils/priorityAnalysis.js'
+import {
+  taskPassesRowFilter,
+  coreViewTaskFilterActive,
+  filteredCoreViewTasks,
+  stiChannelMatchesTextFilter,
+  normalizeTaskFilterText,
+} from '../utils/taskFilter.js'
+
+export {
+  taskPassesRowFilter,
+  coreViewTaskFilterActive,
+  filteredCoreViewTasks,
+  filteredTaskViewTasks,
+  stiChannelMatchesTextFilter,
+  normalizeTaskFilterText,
+} from '../utils/taskFilter.js'
 
 export { formatTime, formatMigrationGapTime }
 export { getTimelineLayout } from '../utils/timelineLayout.js'
@@ -212,41 +228,6 @@ function segsForPaint(lodData, timeStart, timeEnd, nsPerPx, lodTpp, ultraTpp) {
 
 const TICK_COLOR = '#E8C84A'
 
-/** Row visibility: heatmap task filter overrides migrated-only filter. */
-export function taskPassesRowFilter(trace, mk, migratedOnlyFilter, taskFilterKeys) {
-  if (taskFilterKeys?.length) {
-    const set = taskFilterKeys instanceof Set ? taskFilterKeys : new Set(taskFilterKeys)
-    return set.has(mk)
-  }
-  if (migratedOnlyFilter) return isMigratedTask(trace, mk)
-  return true
-}
-
-/** True when core view should limit rows/segments (heatmap, migrated-only). */
-export function coreViewTaskFilterActive(migratedOnlyFilter, taskFilterKeys) {
-  return !!(taskFilterKeys?.length || migratedOnlyFilter)
-}
-
-/**
- * Per-core task lists (no TICK). Cores with no matching tasks are omitted when a filter is active.
- * @returns {{ coreName: string, tasks: string[] }[]}
- */
-export function filteredCoreViewTasks(trace, migratedOnlyFilter, taskFilterKeys) {
-  const filterActive = coreViewTaskFilterActive(migratedOnlyFilter, taskFilterKeys)
-  const out = []
-  for (const coreName of trace.coreNames) {
-    const taskOrder = (trace.coreTaskOrder.get(coreName) || [])
-      .filter(t => parseTaskName(t).name !== 'TICK')
-    const tasks = filterActive
-      ? taskOrder.filter(t => taskPassesRowFilter(trace, taskMergeKey(t), migratedOnlyFilter, taskFilterKeys))
-      : taskOrder
-    if (!filterActive || tasks.length > 0) {
-      out.push({ coreName, tasks })
-    }
-  }
-  return out
-}
-
 /**
  * Pick a "nice" ruler step that produces 5–12 tick marks across the viewport.
  */
@@ -272,13 +253,14 @@ function niceStep(span) {
  * @param {number}  yStart     Top Y coordinate of the first row (after ruler).
  * @returns {{ rows: Array, totalHeight: number }}
  */
-export function buildRowLayout(trace, viewMode, expanded, yStart, showSti = true, stiExpanded = new Set(), migratedOnlyFilter = false, taskFilterKeys = null) {
+export function buildRowLayout(trace, viewMode, expanded, yStart, showSti = true, stiExpanded = new Set(), migratedOnlyFilter = false, taskFilterKeys = null, taskFilterText = '') {
   const rows = []
   let y = yStart
+  const stiFilterQ = normalizeTaskFilterText(taskFilterText)
 
   if (viewMode === 'task') {
     for (const mk of trace.tasks) {
-      if (!taskPassesRowFilter(trace, mk, migratedOnlyFilter, taskFilterKeys)) continue
+      if (!taskPassesRowFilter(trace, mk, migratedOnlyFilter, taskFilterKeys, taskFilterText)) continue
       const repr = trace.taskRepr.get(mk)
       const label = taskDisplayName(repr || mk) + taskPriorityLabelSuffix(trace, mk)
       const color = taskColor(mk, repr)
@@ -287,7 +269,7 @@ export function buildRowLayout(trace, viewMode, expanded, yStart, showSti = true
     }
   } else {
     // Core view
-    const cores = filteredCoreViewTasks(trace, migratedOnlyFilter, taskFilterKeys)
+    const cores = filteredCoreViewTasks(trace, migratedOnlyFilter, taskFilterKeys, taskFilterText)
     for (const { coreName, tasks } of cores) {
       const cc = coreColor(coreName)
       rows.push({ type: 'core', key: coreName, label: coreName, color: cc, y })
@@ -308,6 +290,7 @@ export function buildRowLayout(trace, viewMode, expanded, yStart, showSti = true
   if (showSti) {
     for (const ch of trace.stiChannels) {
       if (isIntervalMarkerChannel(ch)) continue
+      if (stiFilterQ && !stiChannelMatchesTextFilter(trace, ch, stiFilterQ)) continue
       const isTag = isStiTagChannel(ch)
       const isExpanded = isTag && stiExpanded.has(ch)
       const rowH = isExpanded ? L().stiWaveformH : L().stiRowH
@@ -455,15 +438,17 @@ export function offsetRowLayout(layout, yStart) {
 /** Cached scroll-independent row list from options, or build on demand. */
 function resolveRows(trace, options, viewMode, expanded, showSti, stiExpanded, migratedOnlyFilter) {
   const taskFilterKeys = options.taskFilterKeys || null
+  const taskFilterText = options.taskFilterText || ''
   if (options.rowLayout?.rows) return options.rowLayout.rows
-  return buildRowLayout(trace, viewMode, expanded, 0, showSti, stiExpanded, migratedOnlyFilter, taskFilterKeys).rows
+  return buildRowLayout(trace, viewMode, expanded, 0, showSti, stiExpanded, migratedOnlyFilter, taskFilterKeys, taskFilterText).rows
 }
 
 /** Cached scroll-independent column list from options, or build on demand. */
 function resolveCols(trace, options, viewMode, expanded, showSti, stiExpanded, migratedOnlyFilter) {
   const taskFilterKeys = options.taskFilterKeys || null
+  const taskFilterText = options.taskFilterText || ''
   if (options.columnLayout?.cols) return options.columnLayout.cols
-  return buildColumnLayout(trace, viewMode, expanded, 0, showSti, stiExpanded, migratedOnlyFilter, taskFilterKeys).cols
+  return buildColumnLayout(trace, viewMode, expanded, 0, showSti, stiExpanded, migratedOnlyFilter, taskFilterKeys, taskFilterText).cols
 }
 
 // ---- Main render function --------------------------------------------------
@@ -496,7 +481,8 @@ export function render(ctx, trace, viewport, options = {}) {
     showHoverHighlight = false,
   } = options
   const highlightSegment = options.highlightSegment ?? null
-  const skipCoreSummarySegs = coreViewTaskFilterActive(migratedOnlyFilter, options.taskFilterKeys)
+  const taskFilterText = options.taskFilterText || ''
+  const skipCoreSummarySegs = coreViewTaskFilterActive(migratedOnlyFilter, options.taskFilterKeys, taskFilterText)
   const gpuBatch = options.gpuBatch ?? null
   const useGpu = !!gpuBatch
 
@@ -523,7 +509,7 @@ export function render(ctx, trace, viewport, options = {}) {
   // ---- Row layout (scroll offset applied inline — no per-frame row copy) ----
   const rowLayoutBase = options.rowLayout
   const rows = rowLayoutBase?.rows
-    ?? buildRowLayout(trace, viewMode, expanded, 0, showSti, stiExpanded, migratedOnlyFilter, options.taskFilterKeys || null).rows
+    ?? buildRowLayout(trace, viewMode, expanded, 0, showSti, stiExpanded, migratedOnlyFilter, options.taskFilterKeys || null, taskFilterText).rows
   const yOff = RULER_H - scrollY
   const nTasks = trace.tasks?.length ?? rows.length
   const rowBuffer = orthRowBuffer(nTasks, paintFast)
@@ -1558,18 +1544,54 @@ function drawStiWaveformRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxP
 
 // ---- Cursors ---------------------------------------------------------------
 
+function _drawCursorDeltaBadgeH(ctx, text, midX, color, canvasW) {
+  ctx.font = '10px monospace'
+  ctx.textBaseline = 'top'
+  const tw = ctx.measureText(text).width
+  const pad = 3
+  const bw = tw + pad * 2
+  const bh = 14
+  let bx = Math.round(midX - bw / 2)
+  bx = Math.max(2, Math.min(bx, canvasW - bw - 2))
+  const by = RULER_H + 4
+  ctx.fillStyle = color
+  ctx.fillRect(bx, by, bw, bh)
+  ctx.fillStyle = '#000'
+  ctx.fillText(text, bx + pad, by + 2)
+}
+
+function _drawCursorDeltaBadgeV(ctx, text, midY, color, canvasH, headerH) {
+  ctx.font = '10px monospace'
+  ctx.textBaseline = 'middle'
+  ctx.textAlign = 'left'
+  const tw = ctx.measureText(text).width
+  const pad = 3
+  const bw = tw + pad * 2
+  const bh = 14
+  const bx = RULER_W + 4
+  let by = Math.round(midY - bh / 2)
+  by = Math.max(headerH + 2, Math.min(by, canvasH - bh - 2))
+  ctx.fillStyle = color
+  ctx.fillRect(bx, by, bw, bh)
+  ctx.fillStyle = '#000'
+  ctx.fillText(text, bx + pad, by + bh / 2)
+}
+
 export function drawCursors(ctx, cursors, trace, timeStart, pxPerNs, canvasW, canvasH, _darkMode) {
-  if (!cursors || cursors.length === 0) return
+  if (!cursors || cursors.length === 0 || !trace) return
+  const sorted = cursorSortedPlaced(cursors)
+  if (!sorted.length) return
+
   ctx.save()
   ctx.font = 'bold 10px monospace'
   ctx.textBaseline = 'top'
 
-  cursors.forEach((cursor, idx) => {
-    if (cursor == null) return
-    const x = Math.round((cursor - timeStart) * pxPerNs)
-    if (x < 0 || x > canvasW) return
+  for (let order = 0; order < sorted.length; order++) {
+    const { t, slotIndex } = sorted[order]
+    const x = Math.round((t - timeStart) * pxPerNs)
+    if (x < -2 || x > canvasW + 2) continue
 
-    const color = CURSOR_COLORS[idx % CURSOR_COLORS.length]
+    const color = CURSOR_COLORS[slotIndex % CURSOR_COLORS.length]
     ctx.strokeStyle = color
     ctx.lineWidth = 1.5
     ctx.setLineDash([4, 3])
@@ -1579,15 +1601,26 @@ export function drawCursors(ctx, cursors, trace, timeStart, pxPerNs, canvasW, ca
     ctx.stroke()
     ctx.setLineDash([])
 
-    // Time label on ruler
-    const label = formatTime(cursor, trace.timeScale)
+    const label = `C${slotIndex + 1}: ${formatTime(t, trace.timeScale, 3)}`
     const tw = ctx.measureText(label).width + 8
+    const th = 16
     const lx = Math.min(x + 3, canvasW - tw - 2)
+    const ly = 2 + (slotIndex + 1) * (th + 2)
     ctx.fillStyle = color
-    ctx.fillRect(lx, 2, tw, 16)
+    ctx.fillRect(lx, ly, tw, th)
     ctx.fillStyle = '#000'
-    ctx.fillText(label, lx + 4, 4)
-  })
+    ctx.fillText(label, lx + 4, ly + 3)
+
+    if (order > 0) {
+      const prevT = sorted[order - 1].t
+      const delta = Math.abs(t - prevT)
+      const dStr = `Δ ${formatTime(delta, trace.timeScale, 3)}`
+      const midX = ((t + prevT) / 2 - timeStart) * pxPerNs
+      if (midX >= 0 && midX <= canvasW) {
+        _drawCursorDeltaBadgeH(ctx, dStr, midX, color, canvasW)
+      }
+    }
+  }
   ctx.restore()
 }
 
@@ -1962,14 +1995,15 @@ export function drawMarksHorizontal(ctx, marks, trace, timeStart, pxPerNs, canva
  * @param {Set}    stiExpanded   Set of expanded STI channel names
  * @returns {{ cols: Array, totalWidth: number }}
  */
-export function buildColumnLayout(trace, viewMode, expanded, scrollX = 0, showSti = true, stiExpanded = new Set(), migratedOnlyFilter = false, taskFilterKeys = null) {
+export function buildColumnLayout(trace, viewMode, expanded, scrollX = 0, showSti = true, stiExpanded = new Set(), migratedOnlyFilter = false, taskFilterKeys = null, taskFilterText = '') {
   const cols = []
   let rawIdx = 0
   let xAcc   = 0  // accumulated pixel offset from RULER_W (before scrollX)
+  const stiFilterQ = normalizeTaskFilterText(taskFilterText)
 
   if (viewMode === 'task') {
     for (const mk of trace.tasks) {
-      if (!taskPassesRowFilter(trace, mk, migratedOnlyFilter, taskFilterKeys)) continue
+      if (!taskPassesRowFilter(trace, mk, migratedOnlyFilter, taskFilterKeys, taskFilterText)) continue
       const repr = trace.taskRepr.get(mk)
       const label = taskDisplayName(repr || mk) + taskPriorityLabelSuffix(trace, mk)
       const color = taskColor(mk, repr)
@@ -1980,7 +2014,7 @@ export function buildColumnLayout(trace, viewMode, expanded, scrollX = 0, showSt
     }
   } else {
     // Core view
-    const cores = filteredCoreViewTasks(trace, migratedOnlyFilter, taskFilterKeys)
+    const cores = filteredCoreViewTasks(trace, migratedOnlyFilter, taskFilterKeys, taskFilterText)
     for (const { coreName, tasks } of cores) {
       const cc = coreColor(coreName)
       const x = RULER_W + xAcc - scrollX
@@ -2008,6 +2042,7 @@ export function buildColumnLayout(trace, viewMode, expanded, scrollX = 0, showSt
   if (showSti) {
     for (const ch of trace.stiChannels) {
       if (isIntervalMarkerChannel(ch)) continue
+      if (stiFilterQ && !stiChannelMatchesTextFilter(trace, ch, stiFilterQ)) continue
       const isExpandable = isStiTagChannel(ch)
       const isExpanded   = isExpandable && stiExpanded.has(ch)
       const cw           = isExpanded ? L().stiWaveformH : COL_W
@@ -2631,36 +2666,48 @@ function drawStiColumnWaveform(ctx, trace, col, colW, timeStart, timeEnd, pxPerN
 // ---- Cursors (vertical mode – horizontal lines) ----------------------------
 
 export function drawCursorsVertical(ctx, cursors, trace, timeStart, pxPerNs, canvasW, canvasH, headerH, _darkMode) {
-  if (!cursors || cursors.length === 0) return
+  if (!cursors || cursors.length === 0 || !trace) return
+  const sorted = cursorSortedPlaced(cursors)
+  if (!sorted.length) return
+
   ctx.save()
   ctx.font = 'bold 10px monospace'
   ctx.textBaseline = 'middle'
   ctx.textAlign = 'right'
 
-  cursors.forEach((cursor, idx) => {
-    if (cursor == null) return
-    const y = Math.round(headerH + (cursor - timeStart) * pxPerNs)
-    if (y < headerH - 2 || y > canvasH + 2) return
+  for (let order = 0; order < sorted.length; order++) {
+    const { t, slotIndex } = sorted[order]
+    const y = Math.round(headerH + (t - timeStart) * pxPerNs)
+    if (y < headerH - 2 || y > canvasH + 2) continue
 
-    const color = CURSOR_COLORS[idx % CURSOR_COLORS.length]
+    const color = CURSOR_COLORS[slotIndex % CURSOR_COLORS.length]
     ctx.strokeStyle = color
     ctx.lineWidth = 1.5
     ctx.setLineDash([4, 3])
     ctx.beginPath()
-    ctx.moveTo(0,       y + 0.5)
+    ctx.moveTo(0, y + 0.5)
     ctx.lineTo(canvasW, y + 0.5)
     ctx.stroke()
     ctx.setLineDash([])
 
-    // Time label on left ruler
-    const label = formatTime(cursor, trace.timeScale)
+    const label = `C${slotIndex + 1}: ${formatTime(t, trace.timeScale, 3)}`
     const tw = ctx.measureText(label).width + 8
     const ty = Math.min(y + 2, canvasH - 14)
     ctx.fillStyle = color
     ctx.fillRect(2, ty, tw, 14)
     ctx.fillStyle = '#000'
     ctx.fillText(label, tw - 2, ty + 7)
-  })
+
+    if (order > 0) {
+      const prevT = sorted[order - 1].t
+      const delta = Math.abs(t - prevT)
+      const dStr = `Δ ${formatTime(delta, trace.timeScale, 3)}`
+      const midY = headerH + ((t + prevT) / 2 - timeStart) * pxPerNs
+      if (midY >= headerH && midY <= canvasH) {
+        _drawCursorDeltaBadgeV(ctx, dStr, midY, color, canvasH, headerH)
+      }
+    }
+  }
   ctx.restore()
 }
 
@@ -2810,7 +2857,8 @@ export function renderVertical(ctx, trace, viewport, options = {}) {
     fastPaint   = false,
   } = options
   const highlightSegment = options.highlightSegment ?? null
-  const skipCoreSummarySegs = coreViewTaskFilterActive(migratedOnlyFilter, options.taskFilterKeys)
+  const taskFilterText = options.taskFilterText || ''
+  const skipCoreSummarySegs = coreViewTaskFilterActive(migratedOnlyFilter, options.taskFilterKeys, taskFilterText)
   const gpuBatch = options.gpuBatch ?? null
   const useGpu = !!gpuBatch
   const headerH = options.labelHeaderH ?? HEADER_H
@@ -2849,7 +2897,7 @@ export function renderVertical(ctx, trace, viewport, options = {}) {
   const colLayoutBase = options.columnLayout
   const { cols } = colLayoutBase
     ? offsetColumnLayout(colLayoutBase, scrollX)
-    : buildColumnLayout(trace, viewMode, expanded, scrollX, showSti, stiExpanded, migratedOnlyFilter, options.taskFilterKeys || null)
+    : buildColumnLayout(trace, viewMode, expanded, scrollX, showSti, stiExpanded, migratedOnlyFilter, options.taskFilterKeys || null, taskFilterText)
 
   // Grid lines (horizontal, optional)
   if (showGrid && !paintFast) {

@@ -28,8 +28,9 @@
     <div
       v-if="orientation === 'h'"
       class="label-resizer"
-      title="Drag to resize label column"
+      title="Drag to resize label column; double-click to auto-fit"
       @mousedown.prevent.stop="onLabelResizeStart"
+      @dblclick.prevent.stop="autoFitLabelWidth"
     />
 
     <!-- Top: column headers (vertical mode — sibling above canvas, not an overlay) -->
@@ -51,8 +52,9 @@
     <div
       v-if="orientation === 'v'"
       class="header-resizer"
-      title="Drag to resize label row"
+      title="Drag to resize label row; double-click to auto-fit"
       @mousedown.prevent.stop="onHeaderResizeStart"
+      @dblclick.prevent.stop="autoFitLabelWidth"
     />
 
     <!-- Timeline canvas -->
@@ -309,6 +311,14 @@ const vertLabelHeaderH = computed(() => props.labelWidth || HEADER_H)
 /** Vertical canvas has no internal header band — the DOM row sits above canvas-wrap. */
 const vertCanvasHeaderH = 0
 
+function layoutFilterArgs() {
+  return [
+    !!props.options.migratedOnlyFilter,
+    props.options.taskFilterKeys || null,
+    props.options.taskFilterText || '',
+  ]
+}
+
 // Cached row/column structure (scroll-independent — offset applied at paint time).
 const cachedRowLayout = computed(() => {
   void props.options.layoutRev
@@ -316,8 +326,7 @@ const cachedRowLayout = computed(() => {
   return buildRowLayout(
     props.trace, props.options.viewMode, expanded, 0,
     props.options.showSti !== false, stiExpanded,
-    !!props.options.migratedOnlyFilter,
-    props.options.taskFilterKeys || null,
+    ...layoutFilterArgs(),
   )
 })
 
@@ -327,8 +336,7 @@ const cachedColumnLayout = computed(() => {
   return buildColumnLayout(
     props.trace, props.options.viewMode, expanded, 0,
     props.options.showSti !== false, stiExpanded,
-    !!props.options.migratedOnlyFilter,
-    props.options.taskFilterKeys || null,
+    ...layoutFilterArgs(),
   )
 })
 
@@ -686,6 +694,7 @@ function paint() {
     darkMode:         props.options.darkMode,
     migratedOnlyFilter: !!props.options.migratedOnlyFilter,
     taskFilterKeys:     props.options.taskFilterKeys || null,
+    taskFilterText:     props.options.taskFilterText || '',
     lockedTaskKey:    props.options.viewMode === 'core' ? (props.options.lockedTaskKey ?? null) : null,
     showHoverHighlight: !!props.options.showHoverHighlight,
     fastPaint:        paintFast(),
@@ -1047,6 +1056,7 @@ function getCaptureSize() {
     props.options.showSti !== false, stiExpanded,
     !!props.options.migratedOnlyFilter,
     props.options.taskFilterKeys || null,
+    props.options.taskFilterText || '',
   )
   const neededH = RULER_H + Math.max(layout().rowH, totalHeight)
   const captureH = Math.max(RULER_H + layout().rowH, Math.min(panelH, Math.ceil(neededH)))
@@ -1336,6 +1346,8 @@ function getCoreAtViewportCenter() {
       expanded,
       viewport.scrollX,
       props.options.showSti !== false,
+      stiExpanded,
+      ...layoutFilterArgs(),
     )
     const coreCols = cols.filter(c => c.type === 'core' || c.type === 'core-task')
     if (coreCols.length === 0) return null
@@ -1365,8 +1377,7 @@ function getCoreAtViewportCenter() {
     0,
     props.options.showSti !== false,
     stiExpanded,
-    !!props.options.migratedOnlyFilter,
-    props.options.taskFilterKeys || null,
+    ...layoutFilterArgs(),
   )
   const coreRows = rows.filter(r => r.type === 'core' || r.type === 'core-task')
   if (coreRows.length === 0) return null
@@ -1429,8 +1440,7 @@ function scrollToTask(mergeKey) {
     const { cols } = buildColumnLayout(
       props.trace, props.options.viewMode, expanded, 0,
       props.options.showSti !== false, stiExpanded,
-      !!props.options.migratedOnlyFilter,
-      props.options.taskFilterKeys || null,
+      ...layoutFilterArgs(),
     )
     const targetCol = findColForTask(cols, mergeKey)
     if (!targetCol) return
@@ -1446,6 +1456,7 @@ function scrollToTask(mergeKey) {
     props.options.showSti !== false, stiExpanded,
     !!props.options.migratedOnlyFilter,
     props.options.taskFilterKeys || null,
+    props.options.taskFilterText || '',
   )
   const targetRow = findRowForTask(rows, mergeKey)
   if (!targetRow) return
@@ -1463,11 +1474,12 @@ function scrollToIntervalRow(intervalId) {
   const showSti = props.options.showSti !== false
   const migrated = !!props.options.migratedOnlyFilter
   const taskFilterKeys = props.options.taskFilterKeys || null
+  const taskFilterText = props.options.taskFilterText || ''
 
   if (orientation.value === 'v') {
     const { cols } = buildColumnLayout(
       props.trace, props.options.viewMode, expanded, 0,
-      showSti, stiExpanded, migrated, taskFilterKeys,
+      showSti, stiExpanded, migrated, taskFilterKeys, taskFilterText,
     )
     const targetCol = cols.find(c => c.type === 'interval' && String(c.key) === String(intervalId))
     if (!targetCol) return
@@ -1476,9 +1488,39 @@ function scrollToIntervalRow(intervalId) {
   } else {
     const { rows } = buildRowLayout(
       props.trace, props.options.viewMode, expanded, 0,
-      showSti, stiExpanded, migrated, taskFilterKeys,
+      showSti, stiExpanded, migrated, taskFilterKeys, taskFilterText,
     )
     const targetRow = rows.find(r => r.type === 'interval' && String(r.key) === String(intervalId))
+    if (!targetRow) return
+    viewport.scrollY = Math.max(0, RULER_H + targetRow.y + layout().rowH / 2 - viewport.canvasH / 2)
+  }
+  clampScrollToContent()
+  scheduleRender()
+}
+
+/** Scroll the viewport so an STI tag/marker channel row/column is centered. */
+function scrollToStiChannel(channel) {
+  if (!props.trace || !channel) return
+  const showSti = props.options.showSti !== false
+  const migrated = !!props.options.migratedOnlyFilter
+  const taskFilterKeys = props.options.taskFilterKeys || null
+  const taskFilterText = props.options.taskFilterText || ''
+
+  if (orientation.value === 'v') {
+    const { cols } = buildColumnLayout(
+      props.trace, props.options.viewMode, expanded, 0,
+      showSti, stiExpanded, migrated, taskFilterKeys, taskFilterText,
+    )
+    const targetCol = cols.find(c => c.type === 'sti' && c.key === channel)
+    if (!targetCol) return
+    const cw = targetCol.colWidth ?? COL_W
+    viewport.scrollX = Math.max(0, targetCol.x + cw / 2 - viewport.canvasW / 2)
+  } else {
+    const { rows } = buildRowLayout(
+      props.trace, props.options.viewMode, expanded, 0,
+      showSti, stiExpanded, migrated, taskFilterKeys, taskFilterText,
+    )
+    const targetRow = rows.find(r => r.type === 'sti' && r.key === channel)
     if (!targetRow) return
     viewport.scrollY = Math.max(0, RULER_H + targetRow.y + layout().rowH / 2 - viewport.canvasH / 2)
   }
@@ -1507,8 +1549,7 @@ function scrollToSegmentIfNeeded(seg) {
     const { rows } = buildRowLayout(
       props.trace, props.options.viewMode, expanded, 0,
       props.options.showSti !== false, stiExpanded,
-      !!props.options.migratedOnlyFilter,
-      props.options.taskFilterKeys || null,
+      ...layoutFilterArgs(),
     )
     if (props.options.viewMode === 'core') {
       targetRow = rows.find(
@@ -1532,8 +1573,7 @@ function scrollToSegmentIfNeeded(seg) {
     const { cols } = buildColumnLayout(
       props.trace, props.options.viewMode, expanded, scrollX,
       props.options.showSti !== false, stiExpanded,
-      !!props.options.migratedOnlyFilter,
-      props.options.taskFilterKeys || null,
+      ...layoutFilterArgs(),
     )
     if (props.options.viewMode === 'core') {
       targetCol = cols.find(
@@ -1581,7 +1621,7 @@ defineExpose({
   zoomCenter, expandAll, collapseAll, expandCoresForMergeKeys, jumpToNs, zoomToTimeRange, zoomToCursorRange, zoom1to1,
   jumpToTraceStart, jumpToTraceEnd, jumpSegmentBoundary, scrollTimeAxis, scrollRowAxis,
   placeCursorAtCenter, placeCursorAtTime, removeNearestCursorAt, clearAllCursorsViaHandler,
-  getViewport, getViewportCenter, getCoreAtViewportCenter, scrollToTask, scrollToIntervalRow, scrollToSegmentIfNeeded,
+  getViewport, getViewportCenter, getCoreAtViewportCenter, scrollToTask, scrollToIntervalRow, scrollToStiChannel, scrollToSegmentIfNeeded,
   captureScreenshotBlob, captureAsSvg, getHoverTime, getLastActiveCursorTime,
 })
 
@@ -1632,8 +1672,50 @@ function expandCoresForMergeKeys(mergeKeys) {
 
 let _labelResizeCleanup = null
 
+const _labelMeasureCanvas = document.createElement('canvas')
+const _labelMeasureCtx = _labelMeasureCanvas.getContext('2d')
+
 function _clampLabelWidth(w) {
   return Math.max(60, Math.min(600, Math.round(w)))
+}
+
+function _measureLabelTextWidth(text) {
+  if (!text) return 0
+  _labelMeasureCtx.font = `${getTimelineLayout().labelFontSize}px monospace`
+  return _labelMeasureCtx.measureText(text).width
+}
+
+function autoFitLabelWidth() {
+  if (!props.trace) return
+  let maxW = 60
+  if (orientation.value === 'h') {
+    const rows = cachedRowLayout.value?.rows
+    if (!rows?.length) return
+    const y0 = viewport.scrollY - RULER_H
+    const y1 = y0 + labelBodyH.value
+    for (const row of rows) {
+      const h = rowBandHeight(row)
+      if (row.y + h <= y0) continue
+      if (row.y >= y1) break
+      const w = _measureLabelTextWidth(row.label) + 24
+      if (w > maxW) maxW = w
+    }
+  } else {
+    const cols = cachedColumnLayout.value?.cols
+    if (!cols?.length) return
+    const x0 = viewport.scrollX
+    const x1 = x0 + viewport.canvasW
+    for (const col of cols) {
+      const w = col.width ?? COL_W
+      if (col.x + w <= x0) continue
+      if (col.x >= x1) break
+      const lw = _measureLabelTextWidth(col.label) + 24
+      if (lw > maxW) maxW = lw
+    }
+  }
+  const newW = _clampLabelWidth(maxW)
+  setTimelineLayout({ labelW: newW })
+  emit('labelWidthChange', newW, true)
 }
 
 function onLabelResizeStart(e) {
@@ -1790,7 +1872,7 @@ watch([() => props.options.orientation, () => props.options.viewMode], () => {
   scheduleRender(true)
 })
 // Other visual options that affect segment rendering → full repaint
-watch([() => props.options.highlightKey, () => props.options.highlightSegment, () => props.options.highlightInterval, () => props.options.showGrid, () => props.options.showSti, () => props.options.stiLogScale, () => props.options.migratedOnlyFilter, () => props.options.taskFilterKeys, () => props.options.lockedTaskKey], () => {
+watch([() => props.options.highlightKey, () => props.options.highlightSegment, () => props.options.highlightInterval, () => props.options.showGrid, () => props.options.showSti, () => props.options.stiLogScale, () => props.options.migratedOnlyFilter, () => props.options.taskFilterKeys, () => props.options.taskFilterText, () => props.options.lockedTaskKey], () => {
   _ovBgCanvas = null
   scheduleRender()
   if (overviewVisible.value) scheduleOverviewPaint()
@@ -2079,6 +2161,7 @@ function paintOverview() {
     [...expanded].sort().join(','),
     props.options.migratedOnlyFilter ? '1' : '0',
     (props.options.taskFilterKeys || []).join(','),
+    props.options.taskFilterText || '',
     props.options.darkMode ? '1' : '0',
     orientation.value,
   ].join('|')
@@ -2154,7 +2237,8 @@ function _paintOverviewBg(bgCanvas, tr, lo, hi, span, W, H, totMainSize) {
   const isVert  = orientation.value === 'v'
   const migratedOnly = !!props.options.migratedOnlyFilter
   const taskFilterKeys = props.options.taskFilterKeys || null
-  const skipCoreHdr = coreViewTaskFilterActive(migratedOnly, taskFilterKeys)
+  const taskFilterText = props.options.taskFilterText || ''
+  const skipCoreHdr = coreViewTaskFilterActive(migratedOnly, taskFilterKeys, taskFilterText)
 
   ctx.fillStyle = dark ? '#1a1a1a' : '#e8e8e8'
   ctx.fillRect(0, 0, W, H)
@@ -2165,14 +2249,14 @@ function _paintOverviewBg(bgCanvas, tr, lo, hi, span, W, H, totMainSize) {
   if (!isVert) {
     if (!isCore) {
       for (const mk of tr.tasks) {
-        if (!taskPassesRowFilter(tr, mk, migratedOnly, taskFilterKeys)) continue
+        if (!taskPassesRowFilter(tr, mk, migratedOnly, taskFilterKeys, taskFilterText)) continue
         const repr = tr.taskRepr.get(mk)
         const segs = tr.segLodUltraByMergeKey.get(mk) || tr.segByMergeKey.get(mk) || []
         if (!segs.length) continue
         stripDefs.push({ segs, color: taskColor(mk, repr), blend: true })
       }
     } else {
-      const cores = filteredCoreViewTasks(tr, migratedOnly, taskFilterKeys)
+      const cores = filteredCoreViewTasks(tr, migratedOnly, taskFilterKeys, taskFilterText)
       for (const { coreName, tasks } of cores) {
         if (!skipCoreHdr) {
           const hdrSegs = tr.coreSegLodUltra.get(coreName) || tr.coreSegs.get(coreName) || []
@@ -2200,7 +2284,7 @@ function _paintOverviewBg(bgCanvas, tr, lo, hi, span, W, H, totMainSize) {
     const layout = buildColumnLayout(
       tr, props.options.viewMode, expanded, 0,
       props.options.showSti !== false, stiExpanded, migratedOnly,
-      taskFilterKeys,
+      taskFilterKeys, taskFilterText,
     )
     for (const col of layout.cols) {
       if (col.type === 'sti') {

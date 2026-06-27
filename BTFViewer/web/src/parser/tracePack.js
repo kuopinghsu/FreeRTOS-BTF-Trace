@@ -5,6 +5,7 @@ import { SegStore, createSegList, finalizeTraceStorage } from './segStore.js'
 import { buildCpuLoadBins } from './cpuLoadBins.js'
 import { computeTaskCpuNs, segIndicesMapFromTrace } from './statsCompute.js'
 import { cullNestedIntervalInstances } from '../utils/intervalAnalysis.js'
+import { buildTagData } from '../utils/tagAnalysis.js'
 
 function packPlainMap(map) {
   return [...map.entries()]
@@ -123,6 +124,8 @@ export function packTrace(trace, progress) {
       intervalInstancesCulledById: packPlainMap(trace.intervalInstancesCulledById),
       intervalMarkerById: packPlainMap(trace.intervalMarkerById),
       intervalUnmatchedStarts: trace.intervalUnmatchedStarts ?? 0,
+      tagChannels: trace.tagChannels,
+      tagSamplesByChannel: packPlainMap(trace.tagSamplesByChannel),
       taskBasePriority: packPlainMap(trace.taskBasePriority),
       priorityEpisodes: trace.priorityEpisodes,
       priorityEpisodesByMk: packPlainMap(trace.priorityEpisodesByMk),
@@ -225,6 +228,8 @@ export function unpackTrace(packed) {
     intervalInstancesCulledById: unpackPlainMap(p.intervalInstancesCulledById || []),
     intervalMarkerById: unpackPlainMap(p.intervalMarkerById || []),
     intervalUnmatchedStarts: p.intervalUnmatchedStarts ?? 0,
+    tagChannels: p.tagChannels || [],
+    tagSamplesByChannel: unpackPlainMap(p.tagSamplesByChannel || []),
     taskBasePriority: unpackPlainMap(p.taskBasePriority || []),
     priorityEpisodes: p.priorityEpisodes || [],
     priorityEpisodesByMk: unpackPlainMap(p.priorityEpisodesByMk || []),
@@ -255,6 +260,11 @@ export function finalizeAndEnrich(trace) {
     for (const [id, list] of trace.intervalInstancesById) {
       trace.intervalInstancesCulledById.set(id, cullNestedIntervalInstances(list))
     }
+  }
+  if (!trace.tagSamplesByChannel?.size && trace.stiEvents?.length) {
+    const { tagChannels, tagSamplesByChannel } = buildTagData(trace.stiEvents)
+    trace.tagChannels = tagChannels
+    trace.tagSamplesByChannel = tagSamplesByChannel
   }
   trace.cpuLoadBins = buildCpuLoadBins(trace.segStore, trace)
   const segIndicesByMk = segIndicesMapFromTrace(trace)

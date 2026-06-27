@@ -146,6 +146,10 @@
           :marks="marks"
           :cpu-load-row-h="appSettings.cpuLoadRowH"
           :layout-rev="timelineOptions.layoutRev"
+          :migrated-only-filter="timelineOptions.migratedOnlyFilter"
+          :task-filter-keys="timelineOptions.taskFilterKeys"
+          :task-filter-text="timelineOptions.taskFilterText"
+          :label-width="appSettings.labelWidth"
           @clear-selection="clearCpuLoadSelection"
           @viewport-change="onCpuLoadViewportChange"
         />
@@ -271,10 +275,13 @@
                 :trace="trace"
                 :highlight-key="timelineOptions.highlightKey"
                 :task-filter-keys="timelineOptions.taskFilterKeys"
+                :task-filter-text="timelineOptions.taskFilterText"
+                :migrated-only-filter="timelineOptions.migratedOnlyFilter"
                 :heatmap-filter-label="timelineOptions.heatmapFilterLabel"
                 @highlight-change="(k) => { timelineOptions.highlightKey = k ?? pinnedHighlightKey; scheduleRender() }"
                 @highlight-click="onHighlightClick"
                 @migrated-filter-change="onMigratedFilterChange"
+                @filter-change="onTaskFilterChange"
                 @clear-task-filter="clearHeatmapTaskFilter"
               />
             </div>
@@ -702,6 +709,21 @@
           {{ formatTime(trace.timeMax - trace.timeMin, trace.timeScale) }} total
         </span>
 
+        <CursorBar
+          class="status-cursor-bar"
+          :cursors="cursors"
+          :time-scale="trace.timeScale"
+          :dark-mode="timelineOptions.darkMode"
+          @jump-to-cursor="timelinePanelRef?.jumpToNs($event)"
+          @delete-cursor="onDeleteCursor"
+        />
+
+        <span
+          v-if="statusRangeLine"
+          class="status-range"
+          :title="statusRangeLine"
+        >{{ statusRangeLine }}</span>
+
         <div class="status-actions">
           <button
             class="status-toggle"
@@ -730,6 +752,7 @@ import Toolbar          from './components/Toolbar.vue'
 import TimelinePanel    from './components/TimelinePanel.vue'
 import CpuLoadPanel     from './components/CpuLoadPanel.vue'
 import CursorPanel      from './components/CursorPanel.vue'
+import CursorBar        from './components/CursorBar.vue'
 import LegendPanel      from './components/LegendPanel.vue'
 import StatisticsPanel  from './components/StatisticsPanel.vue'
 import MarksPanel       from './components/MarksPanel.vue'
@@ -749,7 +772,9 @@ import {
   CPU_LOAD_PANE_MIN_H,
 } from './utils/cpuLoadHelpers.js'
 import { useTraceTabs } from './composables/useTraceTabs.js'
-import { loadSession, saveSession, buildSessionSnapshot, isRestorableViewport, applySavedLayout } from './utils/sessionStore.js'
+import { loadSession, saveSession, buildSessionSnapshot, isRestorableViewport, applySavedLayout, applyTabState, mergeLegacyTabFilters } from './utils/sessionStore.js'
+import { putTrace, getTrace, pruneTraces } from './utils/traceCache.js'
+import { computeCursorRangeStats, formatStatusRangeLine } from './utils/rangeStats.js'
 import { createUndoStack } from './utils/undoStack.js'
 import {
   buildPortableSession, parsePortableSession, applyPortableSession, downloadPortableSession,
@@ -841,6 +866,11 @@ function autofitCpuLoadPaneHeight() {
     timelineOptions.viewMode,
     cpuLoadSelectedTask.value,
     cpuLoadExpanded.value,
+    {
+      migratedOnlyFilter: timelineOptions.migratedOnlyFilter,
+      taskFilterKeys: timelineOptions.taskFilterKeys,
+      taskFilterText: timelineOptions.taskFilterText,
+    },
   )
 }
 
@@ -872,13 +902,18 @@ const timelineOptions = reactive({
   selectedMarkId:  null,
   migratedOnlyFilter: false,
   taskFilterKeys:     null,
+  taskFilterText:     '',
   heatmapFilterLabel: null,
   lockedTaskKey:   null,
   showHoverHighlight: false,
   layoutRev:       0,
 })
 
-const undoStack = createUndoStack()
+function tabUndoStack(tab = activeTab.value) {
+  if (!tab) return null
+  if (!tab._undoStack) tab._undoStack = createUndoStack()
+  return tab._undoStack
+}
 
 function syncTimelineOptionsFromSettings(s = appSettings) {
   timelineOptions.darkMode = s.darkMode
@@ -941,6 +976,24 @@ const cpuLoadSelectedTask = computed(() => {
   if (highlightSegment.value?.task) return taskMergeKey(highlightSegment.value.task)
   return pinnedHighlightKey.value
 })
+
+function saveFiltersToActiveTab(tab = activeTab.value) {
+  if (!tab) return
+  tab.taskFilterText = timelineOptions.taskFilterText || ''
+  tab.migratedOnlyFilter = !!timelineOptions.migratedOnlyFilter
+  tab.taskFilterKeys = timelineOptions.taskFilterKeys ?? null
+  tab.heatmapFilterLabel = timelineOptions.heatmapFilterLabel ?? null
+}
+
+function syncFiltersFromTab(tab) {
+  timelineOptions.taskFilterText = tab?.taskFilterText ?? ''
+  timelineOptions.migratedOnlyFilter = !!tab?.migratedOnlyFilter
+  timelineOptions.taskFilterKeys = tab?.taskFilterKeys ?? null
+  timelineOptions.heatmapFilterLabel = tab?.heatmapFilterLabel ?? null
+}
+
+/** Saved per-trace state from localStorage (restored when trace opens / session reload). */
+let _savedTabStateByTraceName = {}
 
 // ---- Segment navigation cache (built lazily per trace) -------------------
 let _navCache = null   // mirrored to active tab via getNavCache/setNavCache
@@ -1058,28 +1111,44 @@ function onSegmentClick(seg) {
     highlightSegment.value = null
     timelineOptions.highlightSegment = null
     timelineOptions.highlightInterval = null
+    timelineOptions.highlightKey = null
+    timelineOptions.lockedTaskKey = null
+    pinnedHighlightKey.value = null
   } else {
     highlightSegment.value = seg
     timelineOptions.highlightSegment = seg
     timelineOptions.highlightInterval = null
+    const mk = taskMergeKey(seg.task)
+    timelineOptions.highlightKey = mk
+    timelineOptions.lockedTaskKey = mk
+    pinnedHighlightKey.value = null
   }
+  scheduleRender()
+  autofitCpuLoadPaneHeight()
 }
 
 watch(marks, (m) => {
   timelineOptions.marks = m
 }, { deep: true })
 
-watch(activeTabId, () => {
-  undoStack.clear()
+watch(activeTabId, (newId, oldId) => {
+  if (oldId != null) {
+    heatmapOpen.value = false
+    const leaving = tabs.value.find(t => t.id === oldId)
+    if (leaving) saveFiltersToActiveTab(leaving)
+  }
   const tab = activeTab.value
   timelineOptions.highlightKey = tab?.pinnedHighlightKey ?? null
   timelineOptions.highlightSegment = tab?.highlightSegment ?? null
   timelineOptions.highlightInterval = null
   timelineOptions.lockedTaskKey = tab?.pinnedHighlightKey ?? null
+  syncFiltersFromTab(tab)
   _navCache = tab ? getNavCache(tab) : null
   focusStatisticsPanel(true)
   nextTick(() => {
     applyTimelineViewport()
+    timelineOptions.layoutRev += 1
+    scheduleRender()
     autofitCpuLoadPaneHeight()
   })
 })
@@ -1091,7 +1160,11 @@ watch(
     timelineOptions.showCpuLoad,
     cpuLoadExpanded.value,
     cpuLoadSelectedTask.value,
+    highlightSegment.value,
     appSettings.cpuLoadRowH,
+    timelineOptions.migratedOnlyFilter,
+    timelineOptions.taskFilterKeys,
+    timelineOptions.taskFilterText,
   ],
   () => nextTick(() => autofitCpuLoadPaneHeight()),
 )
@@ -1112,6 +1185,9 @@ watch(
     showSti: timelineOptions.showSti,
     showCpuLoad: timelineOptions.showCpuLoad,
     darkMode: timelineOptions.darkMode,
+    taskFilterText: timelineOptions.taskFilterText,
+    taskFilterKeys: timelineOptions.taskFilterKeys,
+    heatmapFilterLabel: timelineOptions.heatmapFilterLabel,
     migratedOnlyFilter: timelineOptions.migratedOnlyFilter,
   }),
   scheduleSessionSave,
@@ -1130,61 +1206,11 @@ const traceInfo = computed(() => {
 
 const heatmapEnabled = computed(() => traceIsMultiCore(trace.value))
 
-const cursorRangeStats = computed(() => {
-  const tr = trace.value
-  if (!tr) return null
+const cursorRangeStats = computed(() =>
+  computeCursorRangeStats(trace.value, cursors.value))
 
-  const placed = cursors.value.filter(c => c !== null)
-  if (placed.length < 2) return null
-
-  const sorted = [...placed].sort((a, b) => a - b)
-  const lo = sorted[0]
-  const hi = sorted[sorted.length - 1]
-  const dt = hi - lo
-  if (dt <= 0) return null
-
-  const taskAcc = new Map()
-  const durations = []
-  let switches = 0
-
-  for (const seg of tr.segments) {
-    if (seg.end <= lo || seg.start >= hi) continue
-    const ov = Math.min(seg.end, hi) - Math.max(seg.start, lo)
-    if (ov <= 0) continue
-    switches++
-    durations.push(seg.end - seg.start)
-    const mk = taskMergeKey(seg.task)
-    const repr = tr.taskRepr.get(mk) || seg.task
-    const disp = taskDisplayName(repr)
-    taskAcc.set(disp, (taskAcc.get(disp) || 0) + ov)
-  }
-
-  let topTask = null
-  let topNs = 0
-  for (const [k, v] of taskAcc) {
-    if (v > topNs) {
-      topNs = v
-      topTask = k
-    }
-  }
-
-  const result = {
-    span: formatTime(dt, tr.timeScale),
-    switches,
-    topTask,
-    topPct: topTask ? (100.0 * topNs / dt).toFixed(1) : null,
-  }
-
-  if (durations.length > 0) {
-    const minD = Math.min(...durations)
-    const maxD = Math.max(...durations)
-    const avgD = Math.round(durations.reduce((a, b) => a + b, 0) / durations.length)
-    result.dMin = formatTime(minD, tr.timeScale)
-    result.dAvg = formatTime(avgD, tr.timeScale)
-    result.dMax = formatTime(maxD, tr.timeScale)
-  }
-  return result
-})
+const statusRangeLine = computed(() =>
+  formatStatusRangeLine(cursorRangeStats.value))
 
 // ---- File loading (via Web Worker; fallback to main-thread for file:// origins) --
 let _parseWorker = null
@@ -1218,7 +1244,7 @@ async function flushLoadingProgress(pct, msg) {
   await new Promise(resolve => requestAnimationFrame(resolve))
 }
 
-async function attachParsedTrace(name, packedOrTrace) {
+async function attachParsedTrace(name, packedOrTrace, { savedState = null, fromSession = false } = {}) {
   paintLoadingProgress(100, 'Opening trace…')
   try {
     const { unpackTrace } = await import('./parser/tracePack.js')
@@ -1226,9 +1252,10 @@ async function attachParsedTrace(name, packedOrTrace) {
     const tab = openTab(name || 'trace.btf')
     resizeTabCursors(tabs.value, appSettings.maxCursors)
     resetTabForLoad(tab)
-    undoStack.clear()
-    timelineOptions.taskFilterKeys = null
-    timelineOptions.heatmapFilterLabel = null
+    tab._undoStack = null
+    const restored = savedState ?? _savedTabStateByTraceName[name]
+    if (restored) applyTabState(tab, restored)
+    syncFiltersFromTab(tab)
     timelineOptions.highlightInterval = null
 
     tab.trace = markRaw(trace)
@@ -1239,11 +1266,14 @@ async function attachParsedTrace(name, packedOrTrace) {
 
     _cpuLoadUserSized = false
     finishTraceLoadTab(tab)
-    focusStatisticsPanel(true)
+    focusStatisticsPanel(!fromSession)
     await nextTick()
     applyTimelineViewport()
     scheduleRender()
     autofitCpuLoadPaneHeight()
+
+    putTrace(name, packedOrTrace).catch(() => {})
+    scheduleSessionSave()
 
     setTimeout(() => {
       import('./utils/statsWorkerClient.js')
@@ -1398,7 +1428,7 @@ function onJumpToTime(ns) {
   syncTimelineViewport()
 }
 
-function onStatsPlotPointActivate({ ns, note, segment, interval, priorityRange, syncIssue }) {
+function onStatsPlotPointActivate({ ns, note, segment, interval, priorityRange, syncIssue, tagSample, tagChannel }) {
   if (syncIssue) {
     pinnedHighlightKey.value = null
     timelineOptions.lockedTaskKey = null
@@ -1432,6 +1462,18 @@ function onStatsPlotPointActivate({ ns, note, segment, interval, priorityRange, 
     timelineOptions.highlightInterval = { ...interval, markNs: ns ?? interval.stopNs }
     timelinePanelRef.value?.zoomToTimeRange(interval.startNs, interval.stopNs)
     timelinePanelRef.value?.scrollToIntervalRow(interval.id)
+  } else if (tagSample && ns != null) {
+    highlightSegment.value = null
+    timelineOptions.highlightSegment = null
+    timelineOptions.highlightInterval = null
+    const tr = trace.value
+    const pad = Math.max(1000, Math.floor((tr.timeMax - tr.timeMin) / 200))
+    timelinePanelRef.value?.zoomToTimeRange(
+      Math.max(tr.timeMin, ns - pad),
+      Math.min(tr.timeMax, ns + pad),
+    )
+    if (tagChannel) timelinePanelRef.value?.scrollToStiChannel(tagChannel)
+    timelinePanelRef.value?.jumpToNs(ns)
   } else if (priorityRange) {
     highlightSegment.value = null
     timelineOptions.highlightSegment = null
@@ -1726,7 +1768,7 @@ function onDeleteCursor(idx) {
 
 function pushUndoSnapshot() {
   if (!activeTab.value) return
-  undoStack.push({
+  tabUndoStack()?.push({
     cursors: cursors.value,
     marks: marks.value,
     markNextId: activeTab.value.markNextId,
@@ -1743,7 +1785,9 @@ function applyUndoSnapshot(snap) {
 }
 
 function onUndo() {
-  const snap = undoStack.undo({
+  const stack = tabUndoStack()
+  if (!stack) return
+  const snap = stack.undo({
     cursors: cursors.value,
     marks: marks.value,
     markNextId: activeTab.value?.markNextId ?? 1,
@@ -1752,7 +1796,9 @@ function onUndo() {
 }
 
 function onRedo() {
-  const snap = undoStack.redo({
+  const stack = tabUndoStack()
+  if (!stack) return
+  const snap = stack.redo({
     cursors: cursors.value,
     marks: marks.value,
     markNextId: activeTab.value?.markNextId ?? 1,
@@ -1779,12 +1825,30 @@ function clearCpuLoadSelection() {
   timelineOptions.highlightInterval = null
   timelineOptions.lockedTaskKey = null
   scheduleRender()
+  autofitCpuLoadPaneHeight()
 }
 
 function onMigratedFilterChange(enabled) {
   timelineOptions.migratedOnlyFilter = !!enabled
   if (enabled) clearHeatmapTaskFilter()
-  else scheduleRender()
+  else {
+    timelineOptions.layoutRev += 1
+    scheduleRender()
+    autofitCpuLoadPaneHeight()
+  }
+  saveFiltersToActiveTab()
+}
+
+let _filterRenderTimer = null
+function onTaskFilterChange(text) {
+  timelineOptions.taskFilterText = text || ''
+  saveFiltersToActiveTab()
+  clearTimeout(_filterRenderTimer)
+  _filterRenderTimer = setTimeout(() => {
+    timelineOptions.layoutRev += 1
+    scheduleRender()
+    autofitCpuLoadPaneHeight()
+  }, 150)
 }
 
 function onOpenHeatmap() {
@@ -1848,6 +1912,7 @@ function clearHeatmapTaskFilter() {
 
   _heatmapRestoreSnapshot = null
 
+  saveFiltersToActiveTab()
   if (hadFilter || restored) showToast('Showing all tasks', 'info')
 }
 
@@ -1856,6 +1921,7 @@ function onHeatmapDrillDown(payload) {
   timelineOptions.migratedOnlyFilter = false
   timelineOptions.taskFilterKeys = payload.mergeKeys
   timelineOptions.heatmapFilterLabel = payload.pairLabel
+  saveFiltersToActiveTab()
 
   const c = Array(appSettings.maxCursors).fill(null)
   c[0] = payload.binLo
@@ -1899,6 +1965,7 @@ function onHighlightClick(key) {
   // Scroll & center the task row in the timeline
   if (nextKey) timelinePanelRef.value?.scrollToTask(nextKey)
   scheduleRender()
+  autofitCpuLoadPaneHeight()
 }
 
 function scheduleRender() {
@@ -2204,9 +2271,40 @@ function onLoadDemo() {
   })
 }
 
-onMounted(() => {
+async function restoreSessionTabs(saved) {
+  const names = saved?.openTabNames
+  if (!Array.isArray(names) || !names.length) return
+
+  loading.value = true
+  loadingMsg.value = 'Restoring session…'
+  try {
+    for (const name of names) {
+      const packed = await getTrace(name)
+      if (!packed) continue
+      const state = _savedTabStateByTraceName[name] ?? null
+      await attachParsedTrace(name, packed, { savedState: state, fromSession: true })
+    }
+    const activeName = saved.activeTabName
+    if (activeName) {
+      const tab = tabs.value.find(t => t.name === activeName)
+      if (tab) activeTabId.value = tab.id
+    }
+  } catch (err) {
+    console.warn('Session restore failed:', err)
+  } finally {
+    loading.value = false
+    loadingPct.value = 0
+    loadingMsg.value = ''
+  }
+}
+
+onMounted(async () => {
   applyAppSettings(loadSettings(), { silent: true })
   const saved = loadSession()
+  _savedTabStateByTraceName = mergeLegacyTabFilters(
+    saved?.tabStateByTraceName,
+    saved?.tabFiltersByTraceName,
+  )
   if (saved?.timelineOptions) {
     Object.assign(timelineOptions, saved.timelineOptions)
     syncTimelineOptionsFromSettings()
@@ -2219,6 +2317,7 @@ onMounted(() => {
   })
   rightPanelTab.value = appSettings.showStats ? 'stats' : 'marks'
   window.addEventListener('keydown', onGlobalKeydown)
+  await restoreSessionTabs(saved)
 })
 
 onBeforeUnmount(() => {
@@ -2313,14 +2412,21 @@ let _sessionSaveTimer = null
 function scheduleSessionSave() {
   clearTimeout(_sessionSaveTimer)
   _sessionSaveTimer = setTimeout(() => {
-    saveSession(buildSessionSnapshot({
+    saveFiltersToActiveTab()
+    const loadedNames = tabs.value.filter(t => t.trace).map(t => t.name)
+    pruneTraces(loadedNames).catch(() => {})
+    const snapshot = buildSessionSnapshot({
       timelineOptions,
       layout: {
         rightPanelWidth: rightPanelWidth.value,
         cpuLoadPaneHeight: cpuLoadPaneHeight.value,
         sectionHeights: { ...statsSectionHeights.value },
       },
-    }))
+      tabs: tabs.value,
+      activeTabId: activeTabId.value,
+    })
+    _savedTabStateByTraceName = snapshot.tabStateByTraceName ?? {}
+    saveSession(snapshot)
   }, 400)
 }
 
@@ -2350,6 +2456,7 @@ function onClearMarks() {
 
 function onExportSession() {
   if (!activeTab.value) return
+  saveFiltersToActiveTab()
   const payload = buildPortableSession({
     traceName: activeTab.value.name,
     cursors: cursors.value,
@@ -2357,6 +2464,7 @@ function onExportSession() {
     markNextId: activeTab.value.markNextId,
     timelineViewport: { ...timelineViewport.value },
     timelineOptions,
+    tabFilters: activeTab.value,
     findQuery: findQuery.value,
     findMode: findMode.value,
     pinnedHighlightKey: pinnedHighlightKey.value,
@@ -2381,17 +2489,33 @@ async function onImportSession(file) {
       saveSettings(appSettings)
     }
     applyPortableSession(activeTab.value, data, timelineOptions, trace.value)
+    syncFiltersFromTab(activeTab.value)
     resizeTabCursors(tabs.value, appSettings.maxCursors)
     nextTick(() => {
       applyTimelineViewport()
+      timelineOptions.layoutRev += 1
       if (findQuery.value) recomputeFind()
       scheduleRender()
+      autofitCpuLoadPaneHeight()
     })
     showToast('Session imported', 'info')
   } catch (err) {
     showToast(err?.message || 'Failed to import session', 'error')
   }
 }
+
+watch(
+  () => ({
+    activeTabId: activeTabId.value,
+    cursors: cursors.value,
+    marks: marks.value,
+    viewport: activeTab.value?.timelineViewport,
+    findQuery: findQuery.value,
+    findMode: findMode.value,
+  }),
+  scheduleSessionSave,
+  { deep: true },
+)
 </script>
 
 <style>
@@ -3072,6 +3196,23 @@ body.col-resizing * {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex-shrink: 1;
+}
+
+.status-range {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-dim);
+  font-size: 10px;
+  max-width: 36%;
+}
+
+.status-cursor-bar {
+  margin-left: auto;
+  max-width: 55%;
 }
 
 .status-actions {

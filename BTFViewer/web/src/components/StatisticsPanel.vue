@@ -1395,6 +1395,117 @@
       </div>
     </template>
 
+    <!-- Tag Analysis -->
+    <div class="stats-sep" />
+    <div
+      class="stats-section-title collapsible"
+      @click="tagsCollapsed = !tagsCollapsed"
+    >
+      <svg
+        class="chevron"
+        :class="{ collapsed: tagsCollapsed }"
+        viewBox="0 0 10 10"
+        width="10"
+        height="10"
+      >
+        <polyline
+          points="2,3 5,7 8,3"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.5"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        />
+      </svg>
+      Tag Analysis{{ scopeSuffixStr }}
+    </div>
+    <template v-if="!tagsCollapsed">
+      <div
+        v-if="tagStats.length === 0"
+        class="range-hint"
+      >
+        {{ statsRange ? 'No tag samples in cursor range' : 'No tag0_event … tag7_event STI samples in trace' }}
+      </div>
+      <div
+        v-else
+        class="stats-table-block"
+      >
+        <div
+          class="stats-table-wrap"
+          :style="{ maxHeight: tableHeight('tags') + 'px' }"
+        >
+          <table class="stats-table">
+            <thead>
+              <tr>
+                <th
+                  :class="thSortClass('tags', 'tag')"
+                  @click="toggleTableSort('tags', 'tag')"
+                >
+                  Tag
+                </th>
+                <th
+                  :class="thSortClass('tags', 'count')"
+                  @click="toggleTableSort('tags', 'count')"
+                >
+                  Count
+                </th>
+                <th
+                  :class="thSortClass('tags', 'min')"
+                  @click="toggleTableSort('tags', 'min')"
+                >
+                  Min
+                </th>
+                <th
+                  :class="thSortClass('tags', 'avg')"
+                  @click="toggleTableSort('tags', 'avg')"
+                >
+                  Avg
+                </th>
+                <th
+                  :class="thSortClass('tags', 'max')"
+                  @click="toggleTableSort('tags', 'max')"
+                >
+                  Max
+                </th>
+                <th
+                  :class="thSortClass('tags', 'p95')"
+                  @click="toggleTableSort('tags', 'p95')"
+                >
+                  P95
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="row in sortedTagStats"
+                :key="row.channel"
+                class="stats-table-row clickable"
+                :title="`Open tag value plot for ${row.label}`"
+                tabindex="0"
+                @click="openTagPlot(row.channel)"
+                @keydown.enter.prevent="openTagPlot(row.channel)"
+                @keydown.space.prevent="openTagPlot(row.channel)"
+              >
+                <td class="task-col">{{ row.label }}</td>
+                <td>{{ row.count }}</td>
+                <td>{{ row.min }}</td>
+                <td>{{ row.avg }}</td>
+                <td>{{ row.max }}</td>
+                <td>{{ row.p95 }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div
+          class="stats-section-resizer"
+          role="separator"
+          aria-label="Resize tag analysis table"
+          aria-orientation="horizontal"
+          @mousedown.prevent="onTableResizeStart('tags', $event)"
+        />
+      </div>
+    </template>
+
     <!-- Export -->
     <div class="stats-export-row">
       <button
@@ -1715,7 +1826,7 @@
                   <option value="auto">Auto</option>
                   <option value="linear">Linear</option>
                   <option value="percentile">p5–p95</option>
-                  <option value="log">Log duration</option>
+                  <option value="log">{{ plotData?.kind === 'tag' ? 'Log scale' : 'Log duration' }}</option>
                 </select>
               </label>
               <span class="plot-histogram-caption">{{ histogramModel.caption }}</span>
@@ -1915,6 +2026,14 @@ import {
   intervalPlotPoints,
   intervalColor,
 } from '../utils/intervalAnalysis.js'
+import {
+  tagStatsRows,
+  tagPlotPoints,
+  tagColor,
+  tagChannelLabel,
+  formatTagValue,
+  tagSampleDetailRows,
+} from '../utils/tagAnalysis.js'
 import { priorityStatsRows, priorityEpisodePlotPoints, priorityEpisodeDetailRows, BOOST_BAND_COLOR, INVERSION_BAND_COLOR } from '../utils/priorityAnalysis.js'
 import {
   syncObjectStatsRows,
@@ -1940,6 +2059,7 @@ import {
   HEALTH_GAP_SORT_ACCESSORS,
   PREEMPTION_SORT_ACCESSORS,
   INTERVAL_SORT_ACCESSORS,
+  TAG_SORT_ACCESSORS,
   PRIORITY_SORT_ACCESSORS,
   SYNC_OBJECT_SORT_ACCESSORS,
   SYNC_ISSUE_SORT_ACCESSORS,
@@ -1969,6 +2089,7 @@ const preemptionCollapsed = ref(false)
 const priorityCollapsed = ref(false)
 const syncCollapsed = ref(false)
 const intervalsCollapsed = ref(false)
+const tagsCollapsed = ref(false)
 const scopeToCursors = ref(true)
 
 const STATS_SECTION_FLAGS = [
@@ -1983,6 +2104,7 @@ const STATS_SECTION_FLAGS = [
   priorityCollapsed,
   syncCollapsed,
   intervalsCollapsed,
+  tagsCollapsed,
 ]
 
 function expandAllSections() {
@@ -2145,6 +2267,7 @@ const sectionHeights = ref({
   sync_issues: STATS_TABLE_MIG_DEFAULT_H,
   health: STATS_TABLE_DEFAULT_H,
   intervals: STATS_TABLE_DEFAULT_H,
+  tags: STATS_TABLE_DEFAULT_H,
 })
 watch(() => props.sectionHeights, (v) => {
   if (v) Object.assign(sectionHeights.value, v)
@@ -2172,6 +2295,7 @@ const tableSort = ref({
   sync: defaultStatsTableSort(),
   sync_issues: defaultStatsTableSort(),
   intervals: defaultStatsTableSort(),
+  tags: defaultStatsTableSort(),
 })
 
 function toggleTableSort(tableId, col) {
@@ -2417,6 +2541,19 @@ const intervalStats = computed(() => {
 
 const sortedIntervalStats = computed(() =>
   sortStatsRows(intervalStats.value, tableSort.value.intervals, INTERVAL_SORT_ACCESSORS))
+
+const tagStats = computed(() => {
+  if (tagsCollapsed.value) return []
+  const tr = props.trace
+  if (!tr?.tagChannels?.length) return []
+  const r = statsRange.value
+  const lo = r?.lo ?? null
+  const hi = r?.hi ?? null
+  return tagStatsRows(tr, lo, hi)
+})
+
+const sortedTagStats = computed(() =>
+  sortStatsRows(tagStats.value, tableSort.value.tags, TAG_SORT_ACCESSORS))
 
 const priorityStats = computed(() => {
   if (priorityCollapsed.value) return []
@@ -2689,6 +2826,28 @@ function _buildIntervalPlot(trace, id, range) {
   }
 }
 
+function _buildTagPlot(trace, channel, range) {
+  const suffix = scopeSuffix(range)
+  const lo = range?.lo ?? null
+  const hi = range?.hi ?? null
+  const label = tagChannelLabel(channel)
+  const rawPoints = tagPlotPoints(trace, channel, lo, hi)
+  const points = rawPoints.map((pt, index) => ({
+    index,
+    xNs: pt.xNs,
+    yValue: pt.yValue,
+    payload: pt.payload,
+    label: `${label}: ${formatTagValue(pt.yValue)} at ${formatTime(pt.xNs, trace.timeScale)}`,
+  }))
+  return {
+    kind: 'tag',
+    tagChannel: channel,
+    title: `${label} — Value${suffix}`,
+    color: tagColor(channel),
+    points,
+  }
+}
+
 function _buildPriorityPlot(trace, mk, range) {
   const suffix = scopeSuffix(range)
   const lo = range?.lo ?? null
@@ -2725,6 +2884,9 @@ const plotData = computed(() => {
   }
   if (open.kind === 'interval') {
     return _buildIntervalPlot(props.trace, open.intervalId, range)
+  }
+  if (open.kind === 'tag') {
+    return _buildTagPlot(props.trace, open.tagChannel, range)
   }
   if (open.kind === 'priority') {
     return _buildPriorityPlot(props.trace, open.mk, range)
@@ -2767,6 +2929,14 @@ function openIntervalPlot(id) {
   selectedPlotPoint.value = -1
 }
 
+function openTagPlot(channel) {
+  const range = statsRange.value
+  const plot = _buildTagPlot(props.trace, channel, range)
+  if (!plot || plot.points.length === 0) return
+  openPlotRef.value = { tagChannel: channel, kind: 'tag' }
+  selectedPlotPoint.value = -1
+}
+
 function openPriorityPlot(mk) {
   const range = statsRange.value
   const plot = _buildPriorityPlot(props.trace, mk, range)
@@ -2797,11 +2967,20 @@ function onPlotPointClick(point) {
     ? point.payload
     : null
   const interval = (kind === 'interval' && point.payload?.startNs != null) ? point.payload : null
+  const tagSample = (kind === 'tag' && point.payload?.timeNs != null) ? point.payload : null
   const priorityRange = (kind === 'priority' && point.payload?.startNs != null)
     ? { startNs: point.payload.startNs, stopNs: point.payload.stopNs, mk: point.payload.mk }
     : null
-  if (ns == null && !segment && !interval && !priorityRange) return
-  emit('plotPointActivate', { ns, note, segment, interval, priorityRange })
+  if (ns == null && !segment && !interval && !priorityRange && !tagSample) return
+  emit('plotPointActivate', {
+    ns,
+    note,
+    segment,
+    interval,
+    priorityRange,
+    tagSample,
+    tagChannel: openPlotRef.value?.tagChannel ?? tagSample?.channel ?? null,
+  })
 }
 
 function annotationNsForPlotPoint(point) {
@@ -2827,6 +3006,9 @@ const scatterModel = computed(() => {
   const plotW = width - margin.left - margin.right
   const plotH = height - margin.top - margin.bottom
   const summary = _summarizeNumericSamples(ys)
+  const yFormat = plot.kind === 'tag'
+    ? (v) => formatTagValue(Math.round(v))
+    : (v) => formatTime(Math.round(v), props.trace.timeScale)
 
   const scaleX = value => margin.left + ((value - x0) / xSpan) * plotW
   const scaleY = value => margin.top + plotH - (value / yMax) * plotH
@@ -2842,7 +3024,7 @@ const scatterModel = computed(() => {
     }),
     yTicks: Array.from({ length: 5 }, (_, index) => {
       const value = yMax * (1 - index / 4)
-      return { index, y: scaleY(value), label: formatTime(Math.round(value), props.trace.timeScale) }
+      return { index, y: scaleY(value), label: yFormat(Math.round(value)) }
     }),
     referenceLines: summary ? [
       { label: 'avg', y: scaleY(summary.avg), color: '#CE93D8' },
@@ -2906,6 +3088,7 @@ function onScatterMouseLeave() {
 
 const scatterCrosshair = computed(() => {
   const model = scatterModel.value
+  const plot = plotData.value
   const idx = plotHoverPointIndex.value
   if (!model || idx < 0) return null
   const point = model.points.find(p => p.index === idx)
@@ -2914,7 +3097,10 @@ const scatterCrosshair = computed(() => {
   const plotRight = model.width - model.margin.right
   const plotTop = model.margin.top
   const plotBottom = model.height - model.margin.bottom
-  const line1 = formatTime(point.yValue, props.trace.timeScale)
+  const yFmt = plot?.kind === 'tag'
+    ? (v) => formatTagValue(v)
+    : (v) => formatTime(v, props.trace.timeScale)
+  const line1 = yFmt(point.yValue)
   const line2 = `@ ${formatTime(point.xNs, props.trace.timeScale)}`
   const tipW = Math.max(line1.length, line2.length) * 6.2 + 12
   const tipH = 30
@@ -2938,9 +3124,14 @@ const histogramModel = computed(() => {
   const plot = plotData.value
   if (!plot || plot.points.length === 0) return null
   const values = plot.points.map(point => point.yValue)
+  const isTagPlot = plot.kind === 'tag'
+  const formatValue = isTagPlot
+    ? (value) => formatTagValue(value)
+    : (value) => formatTime(value, props.trace.timeScale)
   return buildHistogramModel(values, {
     scaleMode: histogramScaleMode.value,
-    formatValue: value => formatTime(value, props.trace.timeScale),
+    formatValue,
+    valueAsTime: !isTagPlot,
     color: plot.color,
   })
 })
@@ -3287,6 +3478,26 @@ function exportCsv() {
     lines.push('No interval data,,,,,,')
   }
 
+  const tagReportRows = tagStatsRows(tr, lo, hi)
+  lines.push('')
+  lines.push(`Tag Analysis${suffix}`)
+  lines.push('Channel,Label,Count,Min,Avg,Max,p95')
+  if (tagReportRows.length) {
+    for (const row of tagReportRows) {
+      lines.push([
+        _csvCell(row.channel),
+        _csvCell(row.label),
+        _csvCell(row.count),
+        _csvCell(row.min),
+        _csvCell(row.avg),
+        _csvCell(row.max),
+        _csvCell(row.p95),
+      ].join(','))
+    }
+  } else {
+    lines.push('No tag data,,,,,,')
+  }
+
   _downloadText(`statistics-${_stamp()}.csv`, `\uFEFF${lines.join('\n')}`, 'text/csv;charset=utf-8')
 }
 
@@ -3581,6 +3792,31 @@ function _renderIntervalReportHtml(tr, lo, hi, suffix) {
     <tbody>${instBody}</tbody></table></section>`
 }
 
+function _renderTagReportHtml(tr, lo, hi, suffix) {
+  const tagHtmlRows = tagStatsRows(tr, lo, hi)
+  const samples = tagSampleDetailRows(tr, lo, hi, 200)
+  const summaryBody = tagHtmlRows.length
+    ? tagHtmlRows.map(row =>
+        `<tr><td>${_htmlCell(row.channel)}</td><td>${_htmlCell(row.label)}</td><td>${row.count}</td><td>${_htmlCell(row.min)}</td><td>${_htmlCell(row.avg)}</td><td>${_htmlCell(row.max)}</td><td>${_htmlCell(row.p95)}</td></tr>`,
+      ).join('')
+    : '<tr><td colspan="7" class="empty">No tag data</td></tr>'
+  const sampleBody = samples.length
+    ? samples.map(s =>
+        `<tr><td>${_htmlCell(s.label)}</td><td>${_htmlCell(s.time)}</td><td>${_htmlCell(s.value)}</td><td>${_htmlCell(s.core || '—')}</td></tr>`,
+      ).join('')
+    : '<tr><td colspan="4" class="empty">No tag samples in scope</td></tr>'
+  const sampleNote = samples.length >= 200
+    ? `<p class="detail-note">Showing highest 200 tag samples in scope.</p>`
+    : ''
+  return `<section class="report-card"><h2>Tag Analysis${_htmlCell(suffix)}</h2>
+    <table><thead><tr><th>Channel</th><th>Label</th><th>Count</th><th>Min</th><th>Avg</th><th>Max</th><th>p95</th></tr></thead>
+    <tbody>${summaryBody}</tbody></table>
+    <h3 class="sub">Tag samples (highest value first)</h3>
+    ${sampleNote}
+    <table><thead><tr><th>Tag</th><th>Time</th><th>Value</th><th>Core</th></tr></thead>
+    <tbody>${sampleBody}</tbody></table></section>`
+}
+
 function exportHtml() {
   const tr = props.trace
   const r = statsRange.value
@@ -3752,6 +3988,7 @@ function exportHtml() {
       <li><strong>Priority Inheritance:</strong> When traces include <code>create pri:N</code> on task create and <code>set_priority</code> STI events, lists tasks boosted above their base priority. <em>L/M/H pattern</em> flags classic priority-inversion geometry (medium-priority task between base and peak).</li>
       <li><strong>Mutex / Semaphore:</strong> Pairs <code>take</code>/<code>give</code> STI events by object pointer (<code>0x........</code> in the note). Reports orphan gives, cross-task gives, unmatched takes, delete-while-held, and multi-mutex hold at trace end (deadlock risk).</li>
       <li><strong>Interval Analysis:</strong> Pairs <code>interval_start</code> / <code>interval_stop</code> STI events by id; shows count, min/avg/max/p95 duration per interval id (Tracealyzer-style interval plot).</li>
+      <li><strong>Tag Analysis:</strong> Numeric samples from <code>tag0_event</code> … <code>tag7_event</code> STI channels (note field); scatter plot shows value over time.</li>
       <li><strong>Context switches:</strong> Count of segment boundaries on all cores whose start time falls inside the statistics scope.</li>
       <li><strong>Min (Minimum):</strong> The fastest execution time recorded. It represents the best-case scenario under zero system load.</li>
       <li><strong>Max (Maximum):</strong> The slowest execution time recorded. It identifies worst-case bottlenecks, spikes, or resource contention.</li>
@@ -3780,6 +4017,7 @@ function exportHtml() {
     ${tr?.hasPriorityInstrumentation ? _renderPriorityReportHtml(tr, lo, hi, suffix) : ''}
     ${tr?.hasSyncObjectInstrumentation ? _renderSyncObjectReportHtml(tr, lo, hi, suffix) : ''}
     ${_renderIntervalReportHtml(tr, lo, hi, suffix)}
+    ${_renderTagReportHtml(tr, lo, hi, suffix)}
     <div class="report-foot">Generated by BTF Viewer</div>
   </div>
 </body>

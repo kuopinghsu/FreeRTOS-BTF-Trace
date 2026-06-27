@@ -22,12 +22,12 @@ A PySide6-based interactive visualiser for FreeRTOS context-switch traces in **B
 - **Default zoom 2 timescale units/px** — the **1:1** toolbar button resets to 2 timescale units per pixel (for `ns` timescale, the UI shows `2 ns/px`; configurable in Settings)
 - **Zoom to cursor range** — `Ctrl+R` or the **⊡ Range** toolbar button fits the viewport exactly between cursor C1 (left/top edge) and the last cursor (right/bottom edge)
 - **Viewport culling** — only visible rows/columns and segments are rendered; no slowdown on large traces
-- **Multi-tab traces** — open several `.btf` files at once (Desktop: closable tabs; Web: tab bar under the toolbar). Desktop restores session tabs, active tab, and per-tab zoom/cursors from `btf_viewer.rc` on launch; Web starts with no tabs until you **Open** or **Demo**
+- **Multi-tab traces** — open several `.btf` files at once (Desktop: closable tabs; Web: tab bar under the toolbar). Both restore open tabs, active tab, and per-tab zoom/cursors/marks/filters on launch (Desktop: `btf_viewer.rc`; Web: `localStorage` + IndexedDB trace cache)
 - **Measurement cursors** — Desktop and Web support 2–8 cursors (default: 4); configurable in Settings
 - **Trace compare** — with 2+ tabs open, **Trace Compare…** in the Statistics panel diffs **Summary**, **Top Tasks**, and **Core Migrations** side-by-side (Desktop + Web). Optional **Limit to each tab's cursor range** compares metrics within C1–Cn when 2+ cursors are placed on each trace
 - **Core migration analysis** — detect tasks that run on multiple cores; **Core Migrations** stats table (ping-pong, STI correlation, gap-after vs other gaps), **clickable migration heatmap** (pair×time for ≤ 16 cores; core×core matrix → outgoing pairs for larger traces → per-task sub-bins → timeline drill-down), **Migrated tasks only** legend filter, toolbar **All tasks** reset, and Find **Migrations** mode (Desktop + Web)
 - **Cursor-scoped statistics** — with 2+ cursors, the Statistics panel can limit all metrics (CPU%, execution slices, blocking time, inter-arrival, **preemption chain**, **priority inheritance**, **mutex / semaphore pairing**, scheduling summary, exports, and charts) to the window from C1 through the last cursor; toggle **Limit to cursor range (C1–Cn)** (Desktop + Web)
-- **Cursor range summary** — with 2+ cursors, Desktop also shows a quick min/max/avg segment summary in the status bar; Web shows range stats in the **Cursors** panel
+- **Cursor range summary** — with 2+ cursors, the status bar shows a quick min/max/avg segment summary (Desktop + Web); full per-task metrics remain in the **Statistics** panel
 - **Task highlight** — hover or click any task label or Legend row to highlight all its segments; optional **Highlight segments on label hover** in Settings dims other tasks while hovering (off by default)
 - **Dockable Legend panel** — colour swatches for every task, with a search box, **Migrated tasks only** filter, a **heatmap filter banner** (when drilled from the heatmap), and the same highlight interaction
 - **Right-side panel** — **Statistics**, **Marks**, and **Find** tabs (Desktop: docked on the right, stacked below Legend; Web: tab bar on the right). Statistics holds metric tables; Marks holds cursors, bookmarks/annotations, and (on Web) Legend; Find searches tasks, annotations, and migrations
@@ -221,7 +221,7 @@ In **Core View**:
 
 Switch orientation using the **↔ Horizontal** / **↕ Vertical** toolbar buttons or **View → Horizontal layout / Vertical layout**. The active orientation button is highlighted.
 
-In **Horizontal** mode (default), drag the visible splitter on the **right edge** of the task-name label column to resize it (60–600 px). Double-click that edge to auto-fit the widest visible label. Width is saved to `btf_viewer.rc` (`[view] label_width` + per-window profile) on Desktop, or `labelWidth` in `btf-viewer-settings-v1` on Web.
+In **Horizontal** mode (default), drag the visible splitter on the **right edge** of the task-name label column to resize it (60–600 px). Double-click that edge to auto-fit the widest visible label. Width is saved to `btf_viewer.rc` (`[view] label_width` + per-window profile) on Desktop, or `labelWidth` in `btf-viewer-settings-v1` on Web. In **Vertical** mode, double-click the bottom edge of the label row for the same auto-fit (Desktop + Web).
 
 In **Vertical** mode:
 - The ruler column (left edge) is frozen and always shows time labels as you scroll horizontally.
@@ -527,23 +527,25 @@ The right side uses three tabs — **Statistics**, **Marks**, and **Find** — w
 
 ### Multi-tab traces (Web)
 
-Same tab bar behaviour as desktop: each `.btf` opens in its own tab with independent cursors, marks, zoom, chart state, and Find queries. Use **Ctrl+Tab** / **Ctrl+Shift+Tab** to cycle tabs. Open tabs are **not** restored after a page reload — use **Open** or **Demo** to load traces again. **Trace Compare…** uses any two loaded tabs — useful for before/after or build-to-build diffs.
+Same tab bar behaviour as desktop: each `.btf` opens in its own tab with independent cursors, marks, zoom, chart state, Find queries, and undo history. Use **Ctrl+Tab** / **Ctrl+Shift+Tab** to cycle tabs. Switching tabs closes an open **Migration heatmap** dialog. **Trace Compare…** uses any two loaded tabs — useful for before/after or build-to-build diffs.
 
 ### Session restore (Web)
 
-The web viewer persists **settings** in browser `localStorage` (key `btf-viewer-settings-v1`: font sizes, label column width, row height, max cursors, theme, etc.) and **layout chrome** in `btf-viewer-session-v1` (view mode, orientation, panel widths, stats table heights). Settings are saved when you accept the Settings dialog or finish a label-column drag; layout state is debounced (~400 ms) when you change view mode, orientation, grid/STI/CPU-load toggles, dark mode, or panel sizes.
+The web viewer persists **settings** in browser `localStorage` (key `btf-viewer-settings-v1`: font sizes, label column width, row height, max cursors, theme, etc.) and **session state** in `btf-viewer-session-v1` (view mode, orientation, panel widths, stats table heights, open tab names, active tab, and per-tab viewport/cursors/marks/filters). Parsed trace payloads for recently opened files are cached in **IndexedDB** (`btf-viewer-traces-v1`, up to 8 traces) so tabs can reopen after refresh without re-selecting files. Settings are saved when you accept the Settings dialog or finish a label-column drag; session state is debounced (~400 ms) when you change tabs, cursors, marks, viewport, filters, or panel sizes.
 
 **On page load:**
 
 - Restores global settings from `btf-viewer-settings-v1` (including **label column width** 60–600 px).
-- Restores global view options from `btf-viewer-session-v1` (task/core mode, orientation, grid, STI, CPU load, dark mode, migrated-only filter).
+- Restores global view options from `btf-viewer-session-v1` (task/core mode, orientation, grid, STI, CPU load, dark mode).
 - Restores right-panel width, CPU-load panel height, and stats table section heights.
+- Reopens cached trace tabs (when IndexedDB still holds the file data), restores the last active tab, and reapplies each tab's zoom, cursors, marks, and legend filters.
 
-**Not persisted:** open tab names, cursors, marks, zoom/pan, or trace data. After refresh, use **Open** or **Demo** to load traces again.
+**Not persisted:** trace files you never opened in this browser, or traces evicted from the IndexedDB cache (LRU cap). Re-open those with **Open** or **Demo**.
 
 **Limitations:**
 
-- `localStorage` may be unavailable in strict private browsing modes.
+- `localStorage` / IndexedDB may be unavailable in strict private browsing modes.
+- SVG timeline export includes cursor Δ badges between time-sorted cursors (same as on-screen ruler).
 
 ### Web performance architecture
 

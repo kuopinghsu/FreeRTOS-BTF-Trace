@@ -40,8 +40,9 @@
           :key="'d' + idx"
           class="delta-row"
         >
-          <span class="delta-label">Δ{{ d.from + 1 }}→{{ d.to + 1 }}</span>
+          <span class="delta-label">Δ{{ d.index }}</span>
           <span class="delta-value">{{ formatTime(d.delta, timeScale) }}</span>
+          <span class="delta-freq">({{ d.freq }})</span>
         </div>
       </template>
     </div>
@@ -103,7 +104,7 @@
 import { computed } from 'vue'
 import { formatTime } from '../utils/timeFormat.js'
 import { CURSOR_COLORS } from '../utils/cursorColors.js'
-import { cursorComparisonRows } from '../utils/cursorAnalysis.js'
+import { cursorComparisonRows, cursorSortedPlaced, cursorDeltaSegments } from '../utils/cursorAnalysis.js'
 
 const props = defineProps({
   cursors:   { type: Array, required: true },
@@ -121,17 +122,8 @@ const comparisonRows = computed(() => {
 })
 
 const deltas = computed(() => {
-  const placed = []
-  props.cursors.forEach((c, i) => { if (c !== null) placed.push({ t: c, idx: i }) })
-  const result = []
-  for (let i = 1; i < placed.length; i++) {
-    result.push({
-      from:  placed[i - 1].idx,
-      to:    placed[i].idx,
-      delta: Math.abs(placed[i].t - placed[i - 1].t),
-    })
-  }
-  return result
+  const sorted = cursorSortedPlaced(props.cursors)
+  return cursorDeltaSegments(sorted, props.timeScale)
 })
 </script>
 
@@ -231,6 +223,11 @@ const deltas = computed(() => {
 .delta-value {
   color: var(--fg);
   font-weight: 500;
+}
+
+.delta-freq {
+  color: var(--fg-dim);
+  font-size: 10px;
 }
 
 .comparison-block {

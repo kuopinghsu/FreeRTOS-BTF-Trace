@@ -30,6 +30,7 @@
           type="button"
           class="cpu-load-label"
           :class="{ clickable: row.kind === 'core' }"
+          :style="{ width: `${labelWidth}px` }"
           :title="row.kind === 'core' ? 'Toggle row collapse' : ''"
           @click="onRowLabelClick(row)"
         >
@@ -42,7 +43,12 @@
           <span
             class="cpu-load-pct"
             :title="row.pctTitle"
-          >{{ row.pctLabel }}</span>
+          >
+            <span class="cpu-load-pct-vis">{{ row.pctVis }}</span><span
+              v-if="row.pctCursor"
+              class="cpu-load-pct-cursor"
+            >{{ row.pctCursor }}</span>
+          </span>
         </button>
 
         <div
@@ -73,14 +79,6 @@
               {{ grid.label }}
             </text>
             <rect
-              v-if="row.cursorRangeShade"
-              :x="row.cursorRangeShade.x"
-              y="0"
-              :width="row.cursorRangeShade.width"
-              :height="row.height"
-              class="cpu-load-range-shade"
-            />
-            <rect
               v-for="rect in row.rects"
               :key="`${row.key}-${rect.index}`"
               :x="rect.x"
@@ -88,6 +86,14 @@
               :width="rect.width"
               :height="rect.height"
               :fill="row.color"
+            />
+            <rect
+              v-if="row.cursorRangeShade"
+              :x="row.cursorRangeShade.x"
+              y="0"
+              :width="row.cursorRangeShade.width"
+              :height="row.height"
+              class="cpu-load-range-shade"
             />
             <line
               v-if="row.hoverCursor"
@@ -147,9 +153,16 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { coreColor, isIdleTaskName, parseTaskName, taskColor, taskDisplayName, taskMergeKey } from '../utils/colors.js'
+import { coreColor, taskColor, taskDisplayName } from '../utils/colors.js'
+import {
+  coreViewTaskFilterActive,
+  filteredCoreViewTasks,
+  filteredTaskViewTasks,
+} from '../utils/taskFilter.js'
 import {
   avgBinsForNsRange,
+  aggregateFilteredTaskBins,
+  aggregateFilteredTaskCoreBins,
   CPU_LOAD_COLLAPSED_H,
   CPU_LOAD_ROW_GAP,
   cursorRangeShade,
@@ -165,7 +178,6 @@ import {
 } from '../utils/viewportWheel.js'
 
 const NUM_BINS = CPU_LOAD_NUM_BINS
-const LABEL_W = 156
 const TITLE_H = 22
 const PLOT_W = 1000
 const CURSOR_COLORS = ['#FF4444', '#44FF88', '#4499FF', '#FFAA22', '#FF44FF', '#44FFFF', '#FFFF44', '#CC44FF']
@@ -185,6 +197,10 @@ const props = defineProps({
   marks: { type: Array, default: () => [] },
   cpuLoadRowH: { type: Number, default: 30 },
   layoutRev: { type: Number, default: 0 },
+  migratedOnlyFilter: { type: Boolean, default: false },
+  taskFilterKeys: { type: Array, default: null },
+  taskFilterText: { type: String, default: '' },
+  labelWidth: { type: Number, default: 160 },
 })
 const emit = defineEmits(['clearSelection', 'viewportChange'])
 
@@ -214,23 +230,87 @@ const binsState = computed(() => {
   }
 })
 
+const filterOpts = computed(() => ({
+  migratedOnlyFilter: props.migratedOnlyFilter,
+  taskFilterKeys: props.taskFilterKeys,
+  taskFilterText: props.taskFilterText,
+}))
+
+const filterActive = computed(() => coreViewTaskFilterActive(
+  filterOpts.value.migratedOnlyFilter,
+  filterOpts.value.taskFilterKeys,
+  filterOpts.value.taskFilterText,
+))
+
+const filteredTaskKeys = computed(() => {
+  if (!props.trace || !filterActive.value) return []
+  return filteredTaskViewTasks(
+    props.trace,
+    filterOpts.value.migratedOnlyFilter,
+    filterOpts.value.taskFilterKeys,
+    filterOpts.value.taskFilterText,
+  )
+})
+
+const filteredBins = computed(() => {
+  void props.layoutRev
+  const trace = props.trace
+  if (!trace || !filteredTaskKeys.value.length) return null
+  return aggregateFilteredTaskBins(
+    binsState.value.taskBins,
+    filteredTaskKeys.value,
+    trace.coreNames?.length ?? 1,
+    NUM_BINS,
+  )
+})
+
 const rows = computed(() => {
   void props.layoutRev
   const trace = props.trace
   if (!trace) return []
   const selectedTask = props.selectedTask
-  if (props.viewMode === 'task') {
-    if (selectedTask && binsState.value.taskBins[selectedTask]) {
-      const raw = trace.taskRepr.get(selectedTask) || selectedTask
-      return [{ kind: 'task', key: selectedTask, label: taskDisplayName(raw), color: taskColor(selectedTask, raw) }]
+
+  // Highlighted task: task view = that task's total load; core view = per-core load for it.
+  if (selectedTask) {
+    if (props.viewMode === 'core') {
+      return (trace.coreNames || []).map(coreName => ({
+        kind: 'core',
+        key: coreName,
+        label: coreName,
+        color: coreColor(coreName),
+      }))
     }
+    const raw = trace.taskRepr.get(selectedTask) || selectedTask
+    return [{ kind: 'task', key: selectedTask, label: 'CPU Load', color: taskColor(selectedTask, raw) }]
+  }
+
+  // Legend filter: task view = combined filtered load; core view = per-core filtered load.
+  if (filterActive.value && filteredTaskKeys.value.length) {
+    if (props.viewMode === 'task') {
+      return [{ kind: 'filtered', key: 'filtered', label: 'CPU Load', color: '#4CAF50' }]
+    }
+    return filteredCoreViewTasks(
+      trace,
+      filterOpts.value.migratedOnlyFilter,
+      filterOpts.value.taskFilterKeys,
+      filterOpts.value.taskFilterText,
+    ).map(({ coreName }) => ({
+      kind: 'core',
+      key: coreName,
+      label: coreName,
+      color: coreColor(coreName),
+    }))
+  }
+
+  if (props.viewMode === 'task') {
     return [{ kind: 'total', key: 'total', label: 'CPU Load', color: '#4CAF50' }]
   }
-  return (trace.coreNames || []).map(core => ({
+
+  return (trace.coreNames || []).map(coreName => ({
     kind: 'core',
-    key: core,
-    label: core,
-    color: coreColor(core),
+    key: coreName,
+    label: coreName,
+    color: coreColor(coreName),
   }))
 })
 
@@ -278,12 +358,13 @@ const rowModels = computed(() => {
     const visAvg = bins
       ? avgBinsForNsRange(bins, trace, binW, visibleStart, visibleEnd, NUM_BINS)
       : 0
-    let pctLabel = `${Math.round(visAvg * 100)}%`
+    const pctVis = `${Math.round(visAvg * 100)}%`
+    let pctCursor = ''
     let pctTitle = `Visible-window average: ${(visAvg * 100).toFixed(1)}%`
     if (cursorRange) {
       const crAvg = avgBinsForNsRange(
         bins, trace, binW, cursorRange.lo, cursorRange.hi, NUM_BINS)
-      pctLabel += ` · C:${Math.round(crAvg * 100)}%`
+      pctCursor = ` · C:${Math.round(crAvg * 100)}%`
       pctTitle += `\nCursor-range average (C1–C${cursorRange.nCursors}): ${(crAvg * 100).toFixed(1)}%`
     }
 
@@ -302,7 +383,8 @@ const rowModels = computed(() => {
         : buildHoverCursor(visibleStart, visibleEnd, visibleSpan, hoverLoad),
       cursors: collapsed ? [] : buildCursorOverlays(visibleStart, visibleEnd, visibleSpan),
       marks: collapsed ? [] : buildMarkOverlays(visibleStart, visibleEnd, visibleSpan),
-      pctLabel,
+      pctVis,
+      pctCursor,
       pctTitle,
       gridLines: collapsed ? [] : [0.25, 0.5, 0.75, 1].map(pct => ({ pct, y: height - pct * height })),
       gridLabels: collapsed ? [] : [0, 25, 50, 75].map(pct => ({ pct, label: `${pct}`, y: height - (pct / 100) * height })),
@@ -312,9 +394,18 @@ const rowModels = computed(() => {
 
 function binsForRow(kind, key) {
   const selectedTask = props.selectedTask
+  if (kind === 'filtered') return filteredBins.value
   if (kind === 'total') return binsState.value.totalBins
   if (kind === 'task') return binsState.value.taskBins[key] || null
   if (selectedTask) return binsState.value.taskCoreBins[selectedTask]?.[key] || null
+  if (kind === 'core' && filterActive.value && filteredTaskKeys.value.length) {
+    return aggregateFilteredTaskCoreBins(
+      binsState.value.taskCoreBins,
+      filteredTaskKeys.value,
+      key,
+      NUM_BINS,
+    )
+  }
   return binsState.value.coreBins[key] || null
 }
 
@@ -361,7 +452,7 @@ function _buildWheelMutator(e) {
   if (!panel) return null
   const rect = panel.getBoundingClientRect()
   const vert = props.orientation === 'v'
-  const plotLeft = vert ? rect.left : rect.left + LABEL_W
+  const plotLeft = vert ? rect.left : rect.left + props.labelWidth
   const plotTop = rect.top + (vert ? TITLE_H : 0)
   const plotWidth = vert ? rect.width : Math.max(1, rect.right - plotLeft)
   const plotHeight = vert ? Math.max(1, rect.bottom - plotTop) : rect.height
@@ -543,7 +634,6 @@ watch(() => props.trace, () => {
   gap: 2px;
   padding: 6px 0 0;
   overflow-y: auto;
-  overflow-x: hidden;
   flex: 1;
   min-height: 0;
 }
@@ -555,11 +645,12 @@ watch(() => props.trace, () => {
 }
 
 .cpu-load-label {
-  width: 156px;
   flex-shrink: 0;
-  display: flex;
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: 10px 9px minmax(0, 1fr) 96px;
+  column-gap: 6px;
   align-items: center;
-  gap: 6px;
   padding: 0 8px;
   border: 0;
   border-right: 1px solid var(--border);
@@ -567,6 +658,7 @@ watch(() => props.trace, () => {
   color: var(--fg);
   font: inherit;
   text-align: left;
+  overflow: hidden;
 }
 
 .cpu-load-label.clickable {
@@ -603,19 +695,23 @@ watch(() => props.trace, () => {
 .cpu-load-pct {
   color: #4CAF50;
   font-size: 10px;
-  min-width: 52px;
   text-align: right;
-  flex-shrink: 0;
+  white-space: nowrap;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
+.cpu-load-pct-vis,
+.cpu-load-pct-cursor {
+  white-space: nowrap;
+}
+
 .cpu-load-range-shade {
-  fill: rgba(68, 153, 255, 0.16);
+  fill: rgba(68, 153, 255, 0.28);
   pointer-events: none;
 }
 
 :global(.app:not(.dark)) .cpu-load-range-shade {
-  fill: rgba(42, 111, 178, 0.14);
+  fill: rgba(42, 111, 178, 0.22);
 }
 
 .cpu-load-plot {
@@ -698,7 +794,7 @@ watch(() => props.trace, () => {
   }
 
   .cpu-load-label {
-    width: 132px;
+    grid-template-columns: 10px 9px minmax(0, 1fr) 88px;
     padding: 0 6px;
   }
 }

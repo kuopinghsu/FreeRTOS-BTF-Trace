@@ -23,6 +23,7 @@ import {
   buildIntervalMarkerIndex,
   isIntervalMarkerChannel,
 } from '../utils/intervalAnalysis.js'
+import { buildTagData } from '../utils/tagAnalysis.js'
 import { buildPriorityData, parseCreatePriority } from '../utils/priorityAnalysis.js'
 import { buildSyncObjectData } from '../utils/syncObjectAnalysis.js'
 
@@ -384,6 +385,10 @@ export async function parseBtf(text, progressCallback) {
   } = buildIntervalData(stiEvents)
   const intervalMarkerById = buildIntervalMarkerIndex(stiEvents)
 
+  progress(59, 'Indexing tag channels…')
+  await yieldToHost()
+  const { tagChannels, tagSamplesByChannel } = buildTagData(stiEvents)
+
   // Core names sorted
   const coreNames = [...cnSet].sort(compareCores)
   const coreSegs = new Map()
@@ -596,6 +601,10 @@ export async function parseBtf(text, progressCallback) {
     intervalInstancesCulledById,
     intervalUnmatchedStarts,
     intervalMarkerById,
+
+    // ---- Tag STI channels (tag0_event … tag7_event) ----
+    tagChannels,
+    tagSamplesByChannel,
 
     // ---- Task-view lookup tables ----
     segByMergeKey:              segsByMk,

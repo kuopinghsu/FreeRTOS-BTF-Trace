@@ -2,7 +2,7 @@
 btf_viewer.py - Single-file RTOS BTF Viewer (PySide6).
 
 Usage:
-    python btf_viewer.py [-h] [trace.btf]              # interactive GUI viewer
+    python btf_viewer.py [-h] [trace.btf ...]         # interactive GUI viewer
     python btf_viewer.py info [-h] trace.btf [--json] [--lo T] [--hi T]
     python btf_viewer.py report [-h] trace.btf -o PATH [--format html|csv|both] [--lo T] [--hi T]
     python btf_viewer.py compare [-h] a.btf b.btf -o PATH [options]
@@ -239,6 +239,8 @@ CPU_LOAD_ROW_H           =  30  # CPU load graph row height (px) - independent o
 CPU_LOAD_ROW_GAP         =   2  # Gap between CPU load rows (px).
 CPU_LOAD_COLLAPSED_H     =  20  # Height of a collapsed CPU load row (px - enough to show label).
 CPU_LOAD_PANE_MAX_H      = 480  # Max CPU load pane height before inner vertical scroll (web parity).
+CPU_LOAD_PCT_COL_MIN     =  72  # Minimum label-column width (px) for visible + cursor % text.
+CPU_LOAD_PCT_COL_PAD     =   6  # Extra padding (px) around measured % text.
 STATS_UTIL_BAR_H         =   8  # Core/task CPU % bar height in Statistics panel (px).
 STATS_UTIL_ROW_H         =  16  # Row height; matches stats-table row size (px).
 STATS_UTIL_ROW_GAP       =   1  # Vertical gap between utilisation rows (px).
@@ -359,6 +361,32 @@ _DEFAULT_MAX_CURSORS = 4  # Default number of simultaneously visible cursors.
 # Portable session JSON (shared with BTFViewer/web sessionPortable.js)
 SESSION_PORTABLE_VERSION = 1
 _PORTABLE_FIND_MODES = ("contains", "exact", "regex", "migrations")
+
+def _snapshot_tab_filters(scene) -> dict:
+    """Per-tab legend/heatmap filter state (portable session + tab_view rc)."""
+    mks = scene._heatmap_filter_mks
+    return {
+        "taskFilterText": scene._task_filter_q or "",
+        "migratedOnlyFilter": bool(scene._migrated_only_filter),
+        "taskFilterKeys": sorted(mks) if mks else None,
+        "heatmapFilterLabel": scene._heatmap_filter_label,
+    }
+
+def _sanitize_tab_filters(src) -> Optional[dict]:
+    if not isinstance(src, dict):
+        return None
+    keys = src.get("taskFilterKeys")
+    if keys is not None:
+        keys = [str(k) for k in keys if k is not None and str(k)]
+        if not keys:
+            keys = None
+    return {
+        "taskFilterText": str(src.get("taskFilterText") or ""),
+        "migratedOnlyFilter": bool(src.get("migratedOnlyFilter")),
+        "taskFilterKeys": keys,
+        "heatmapFilterLabel": (str(src["heatmapFilterLabel"])
+                               if src.get("heatmapFilterLabel") is not None else None),
+    }
 _META_KEY_RE = re.compile(r"^[\w.-]+$")
 _MAX_FIND_REGEX_LEN = 200
 _CURSOR_COLORS = [
@@ -791,6 +819,14 @@ class IntervalInstance:
     task_id: Optional[str] = None
 
 @dataclass
+class TagSample:
+    """Numeric sample from a tag STI channel (tag0_event … tag7_event)."""
+    channel: str
+    time_ns: int
+    value: float
+    core: str = ""
+
+@dataclass
 class PriorityEpisode:
     """Task priority boosted above create pri:N base."""
     mk: str
@@ -828,6 +864,10 @@ _INTERVAL_STOP_CHANNELS  = frozenset({"interval_stop"})
 _INTERVAL_COLORS = (
     "#E74C3C", "#2ECC71", "#F39C12", "#3498DB", "#9B59B6",
     "#1ABC9C", "#E91E63", "#F1C40F", "#00BCD4", "#FF5722",
+)
+_TAG_COLORS = (
+    "#E8C84A", "#3498DB", "#2ECC71", "#E74C3C", "#9B59B6",
+    "#1ABC9C", "#F39C12", "#E91E63",
 )
 
 def _is_interval_marker_channel(channel: str) -> bool:
@@ -1259,6 +1299,133 @@ def _interval_plot_points(
         dur = inst.stop_ns - inst.start_ns
         pts.append((inst.stop_ns, dur, inst))
     return pts
+
+def _parse_tag_value(note: str) -> Optional[float]:
+    raw = (note or "").strip()
+    if not raw:
+        return None
+    try:
+        if raw.lower().startswith("0x"):
+            return float(int(raw, 16))
+        return float(raw)
+    except ValueError:
+        return None
+
+def _tag_channel_label(channel: str) -> str:
+    m = _STI_EXPANDABLE_RE.match(channel or "")
+    if not m:
+        return channel
+    digit = m.group(1)
+    return f"Tag {digit}" if digit is not None else "Tag"
+
+def _tag_color(channel: str) -> str:
+    m = _STI_EXPANDABLE_RE.match(channel or "")
+    idx = int(m.group(1)) % len(_TAG_COLORS) if m and m.group(1) is not None else 0
+    return _TAG_COLORS[idx]
+
+def _format_tag_value(value: float) -> str:
+    if float(value).is_integer():
+        return f"{int(value):,}"
+    return f"{value:g}"
+
+def _build_tag_data(
+    sti_events: List["StiEvent"],
+) -> Tuple[List[str], Dict[str, List[TagSample]]]:
+    by_ch: Dict[str, List[TagSample]] = defaultdict(list)
+    for ev in sti_events:
+        if not _is_tag_sti_channel(ev.target):
+            continue
+        val = _parse_tag_value(ev.note)
+        if val is None:
+            continue
+        by_ch[ev.target].append(TagSample(
+            channel=ev.target,
+            time_ns=ev.time,
+            value=val,
+            core=ev.core or "",
+        ))
+    for lst in by_ch.values():
+        lst.sort(key=lambda s: (s.time_ns, s.value))
+    channels = sorted(by_ch.keys(), key=_sti_channel_sort_key)
+    return channels, dict(by_ch)
+
+def _tag_overlaps_range(sample: TagSample,
+                        lo: Optional[int], hi: Optional[int]) -> bool:
+    if lo is None or hi is None:
+        return True
+    return lo <= sample.time_ns <= hi
+
+def _tag_stats_rows(
+    trace: "BtfTrace",
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> List[tuple]:
+    """Per-tag-channel stats: (channel, label, count, min, avg, max, p95, raw…)."""
+    rows = []
+    for ch in trace.tag_channels:
+        samples = [
+            s.value
+            for s in trace.tag_samples_by_channel.get(ch, [])
+            if _tag_overlaps_range(s, lo, hi)
+        ]
+        if not samples:
+            continue
+        samples.sort()
+        total = sum(samples)
+        count = len(samples)
+        mn = samples[0]
+        mx = samples[-1]
+        avg = total / count
+        p95_idx = min(count - 1, max(0, int(math.ceil(0.95 * count)) - 1))
+        p95 = samples[p95_idx]
+        rows.append((
+            ch,
+            _tag_channel_label(ch),
+            count,
+            _format_tag_value(mn),
+            _format_tag_value(avg),
+            _format_tag_value(mx),
+            _format_tag_value(p95),
+            mn, avg, mx, p95,
+        ))
+    return rows
+
+def _tag_plot_points(
+    trace: "BtfTrace",
+    channel: str,
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> List[Tuple[int, int, TagSample]]:
+    pts: List[Tuple[int, int, TagSample]] = []
+    for sample in trace.tag_samples_by_channel.get(channel, []):
+        if not _tag_overlaps_range(sample, lo, hi):
+            continue
+        pts.append((sample.time_ns, sample.value, sample))
+    return pts
+
+def _tag_sample_detail_rows(
+    trace: "BtfTrace",
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+    limit: int = 200,
+) -> List[dict]:
+    scale = trace.time_scale
+    rows: List[dict] = []
+    for ch in trace.tag_channels:
+        for sample in trace.tag_samples_by_channel.get(ch, []):
+            if not _tag_overlaps_range(sample, lo, hi):
+                continue
+            rows.append({
+                "channel": ch,
+                "label": _tag_channel_label(ch),
+                "time_ns": sample.time_ns,
+                "time": _format_time(sample.time_ns, scale),
+                "value": _format_tag_value(sample.value),
+                "value_num": sample.value,
+                "core": sample.core,
+            })
+    rows.sort(key=lambda r: (-r["value_num"], r["time_ns"]))
+    return rows[:limit] if limit > 0 else rows
 
 def _parse_create_priority(note: str) -> Optional[int]:
     m = _CREATE_PRI_RE.match((note or "").strip())
@@ -1810,6 +1977,8 @@ def _plot_point_mark_ns(payload, x_ns: int) -> int:
     """Timeline position for an annotation created from a metrics plot point."""
     if isinstance(payload, IntervalInstance):
         return payload.stop_ns
+    if isinstance(payload, TagSample):
+        return payload.time_ns
     if isinstance(payload, PriorityEpisode):
         return payload.stop_ns
     if isinstance(payload, SyncIssueRef):
@@ -1833,6 +2002,9 @@ def _format_plot_point_note(
     if isinstance(payload, IntervalInstance):
         return (f"Interval {payload.id}: {fmt(y_ns)} "
                 f"[{fmt(payload.start_ns)} – {fmt(payload.stop_ns)}]")
+    if isinstance(payload, TagSample):
+        return (f"{_tag_channel_label(payload.channel)}: "
+                f"{_format_tag_value(y_ns)} at {fmt(x_ns)}")
     if isinstance(payload, PriorityEpisode):
         tag = " · L/M/H" if payload.inversion_suspect else ""
         return (f"{payload.task_label}: pri {payload.base_pri}→{payload.peak_pri} "
@@ -1997,6 +2169,8 @@ class BtfTrace:
     core_util_pct: Dict[str, float]                                         = field(default_factory=dict)
     interval_marker_by_id: Dict[str, dict]                                  = field(default_factory=dict)
     interval_unmatched_starts: int                                          = 0
+    tag_channels: List[str]                                                 = field(default_factory=list)
+    tag_samples_by_channel: Dict[str, List["TagSample"]]                    = field(default_factory=dict)
     task_base_priority: Dict[str, int]                                     = field(default_factory=dict)
     priority_episodes: List[PriorityEpisode]                                = field(default_factory=list)
     priority_episodes_by_mk: Dict[str, List[PriorityEpisode]]                 = field(default_factory=dict)
@@ -3525,6 +3699,7 @@ def _parse_btf(filepath: str,
         _build_interval_data(sti_events)
     )
     _interval_marker_by_id = _build_interval_marker_index(sti_events)
+    _tag_channels, _tag_by_ch = _build_tag_data(sti_events)
 
     _seg_start_key = _attrgetter('start')
     segs_by_mk: Dict[str, list] = dict(segs_by_mk_build)
@@ -3745,6 +3920,8 @@ def _parse_btf(filepath: str,
         core_util_pct=_core_util_pct,
         interval_marker_by_id=_interval_marker_by_id,
         interval_unmatched_starts=_interval_unmatched,
+        tag_channels=_tag_channels,
+        tag_samples_by_channel=_tag_by_ch,
         task_base_priority=_task_base_pri,
         priority_episodes=_priority_episodes,
         priority_episodes_by_mk=_priority_by_mk,
@@ -4043,6 +4220,16 @@ def _time_label_sort_key(text: str) -> float:
     except ValueError:
         return 0.0
     return val * _TIME_LABEL_TO_NS.get(parts[1], 1.0)
+
+def _tag_value_sort_key(text: str) -> float:
+    """Parse a formatted tag value (e.g. 12,192 or 3.5) for numeric table sorting."""
+    s = str(text).strip().replace(",", "")
+    if not s or s in ("-", "—"):
+        return -1.0
+    try:
+        return float(s)
+    except ValueError:
+        return 0.0
 
 def _format_timescale_per_px(timescale_per_px: float, time_scale: str = "ns") -> str:
     """Format *timescale_per_px* (value per pixel in the trace's native unit)
@@ -4385,6 +4572,7 @@ class TimelineScene(QGraphicsScene):
 
     scene_rebuilt    = Signal()          # emitted after every rebuild()
     highlight_changed = Signal(object, bool) # (task_name_or_None, locked)
+    task_filter_changed = Signal()     # legend / heatmap / migrated filter changed
     hover_changed    = Signal()          # emitted when hover cursor position changes
     marks_changed    = Signal()          # emitted when bookmark/annotation marks change
 
@@ -4422,6 +4610,7 @@ class TimelineScene(QGraphicsScene):
         self._task_filter_q: str = ""
         self._migrated_only_filter: bool = False
         self._heatmap_filter_mks: Optional[set] = None
+        self._heatmap_filter_label: Optional[str] = None
         self._rebuild_suspend: int = 0
         # -- Viewport time bounds (updated at each rebuild for segment clipping) --
         # Set to None initially; _update_viewport_bounds() fills them from the
@@ -4566,6 +4755,9 @@ class TimelineScene(QGraphicsScene):
         self._trace = trace
         self._scene_origin_ns = trace.time_min
         self._heatmap_filter_mks = None
+        self._heatmap_filter_label = None
+        self._task_filter_q = ""
+        self._migrated_only_filter = False
         self._core_expanded.clear()
         if trace.core_names:
             _auto_expand = len(trace.core_names) <= _AUTO_EXPAND_CORES_MAX
@@ -4890,25 +5082,32 @@ class TimelineScene(QGraphicsScene):
             return
         self._task_filter_q = q
         self.rebuild()
+        self.task_filter_changed.emit()
 
     def set_migrated_only_filter(self, enabled: bool) -> None:
         """When enabled, show only tasks that ran on 2+ cores."""
         enabled = bool(enabled)
-        if enabled == self._migrated_only_filter:
+        if enabled == self._migrated_only_filter and not (
+                enabled and self._heatmap_filter_mks):
             return
         self._migrated_only_filter = enabled
         if enabled:
             self._heatmap_filter_mks = None
+            self._heatmap_filter_label = None
         self.rebuild()
+        self.task_filter_changed.emit()
 
-    def set_heatmap_task_filter(self, merge_keys: Optional[set]) -> None:
+    def set_heatmap_task_filter(self, merge_keys: Optional[set],
+                                label: Optional[str] = None) -> None:
         """Show only tasks that migrated in a heatmap drill-down selection."""
         mks = set(merge_keys) if merge_keys else None
-        if mks == self._heatmap_filter_mks:
+        if mks == self._heatmap_filter_mks and label == self._heatmap_filter_label:
             return
         self._heatmap_filter_mks = mks
         if mks:
             self._migrated_only_filter = False
+            if label is not None:
+                self._heatmap_filter_label = label
             # Expand only cores that contain a filtered task so core view
             # draws task sub-rows instead of heavy per-core summary bars.
             tr = self._trace
@@ -4917,7 +5116,36 @@ class TimelineScene(QGraphicsScene):
                     self._core_expanded[core] = any(
                         _task_merge_key(t) in mks
                         for t in tr.core_task_order.get(core, []))
+        else:
+            self._heatmap_filter_label = None
         self.rebuild()
+        self.task_filter_changed.emit()
+
+    def apply_tab_filters(self, filters: dict, *, rebuild: bool = True) -> None:
+        """Restore saved filter fields (single rebuild when *rebuild* is True)."""
+        if not filters:
+            return
+        q = (filters.get("taskFilterText") or "").strip().lower()
+        mks_raw = filters.get("taskFilterKeys")
+        mks = set(mks_raw) if mks_raw else None
+        migrated = bool(filters.get("migratedOnlyFilter")) and mks is None
+        label = filters.get("heatmapFilterLabel") if mks else None
+        if (q == self._task_filter_q and migrated == self._migrated_only_filter
+                and mks == self._heatmap_filter_mks
+                and label == self._heatmap_filter_label):
+            return
+        self._task_filter_q = q
+        self._migrated_only_filter = migrated
+        self._heatmap_filter_mks = mks
+        self._heatmap_filter_label = label
+        if mks and self._trace is not None:
+            for core in self._trace.core_names:
+                self._core_expanded[core] = any(
+                    _task_merge_key(t) in mks
+                    for t in self._trace.core_task_order.get(core, []))
+        if rebuild:
+            self.rebuild()
+            self.task_filter_changed.emit()
 
     def set_timescale_per_px_default(self, v: float) -> None:
         """Change the maximum zoom-in limit (in trace-native time-units/px) and rebuild if needed."""
@@ -5218,6 +5446,37 @@ class TimelineScene(QGraphicsScene):
                   + self._sti_orth_extent(sti, False)
                   + idx * col_w)
         return (x_left, x_left + col_w)
+
+    def sti_channel_orth_scene_span(self, channel: str) -> Optional[Tuple[float, float]]:
+        """Return the visible orthogonal span of an STI channel row/column."""
+        if self._trace is None or not self._show_sti:
+            return None
+        sti = self._filtered_sti_channels()
+        try:
+            idx = sti.index(channel)
+        except ValueError:
+            return None
+        if self._horizontal:
+            row_stride_base = self._row_height + self._row_gap
+            y_top = RULER_HEIGHT + self._primary_orth_count() * row_stride_base
+            for ch in sti[:idx]:
+                h = (self._sti_waveform_h_val if ch in self._sti_expanded
+                     else self._sti_row_h_val)
+                y_top += h + self._row_gap
+            h = (self._sti_waveform_h_val if channel in self._sti_expanded
+                 else self._sti_row_h_val)
+            return (y_top, y_top + h)
+        col_w = max(self._row_height + self._row_gap, 26)
+        x_left = RULER_WIDTH + self._primary_orth_count() * col_w
+        for ch in sti[:idx]:
+            cw = (self._sti_waveform_h_val
+                  if (_is_tag_sti_channel(ch) and ch in self._sti_expanded)
+                  else col_w)
+            x_left += cw
+        cw = (self._sti_waveform_h_val
+              if (_is_tag_sti_channel(channel) and channel in self._sti_expanded)
+              else col_w)
+        return (x_left, x_left + cw)
 
     def add_cursor(self, ns: int) -> None:
         """Add a cursor at timestamp *ns*. Oldest is evicted when > self._max_cursors."""
@@ -9336,6 +9595,7 @@ class TimelineView(QGraphicsView):
 
     zoom_changed         = Signal(float)
     label_width_changed  = Signal(int)
+    label_width_resizing = Signal(int)  # live drag; CPU load repaints without persisting
     cursors_changed      = Signal(list)
     mark_moved           = Signal(str, int, int)  # kind, id, new_ns - final drop
     mark_dragging        = Signal(str, int, int)  # kind, id, new_ns - live during drag
@@ -10251,6 +10511,7 @@ class TimelineView(QGraphicsView):
         else:
             self._reposition_frozen_top()
         self._update_label_grip_geometry()
+        self.label_width_resizing.emit(int(self._scene._label_width))
 
     def _finish_label_width_drag(self) -> None:
         """Commit label-column width after splitter drag."""
@@ -12926,6 +13187,14 @@ class _LegendWidget(QWidget):
         self._migrated_only_cb.setChecked(bool(checked))
         self._migrated_only_cb.blockSignals(False)
 
+    def set_filter_text(self, text: str) -> None:
+        """Set legend search text without notifying the timeline scene."""
+        self._filter_emit_timer.stop()
+        self._search.blockSignals(True)
+        self._search.setText(text or "")
+        self._search.blockSignals(False)
+        self._filter_tasks(self._search.text())
+
     def mousePressEvent(self, event) -> None:
         """Click on the legend background (outside a task row) cancels highlight."""
         self.cancel_highlight.emit()
@@ -13005,7 +13274,7 @@ class _ScatterWidget(QWidget):
     point_clicked = Signal(object)   # payload: TaskSegment (exec) or int ns (inter-arrival)
 
     def __init__(self, points, time_scale: str, color: "QColor",
-                 is_dark: bool, parent=None) -> None:
+                 is_dark: bool, parent=None, *, y_as_time: bool = True) -> None:
         super().__init__(parent)
         # points: List[(x_ns, y_value, payload)]
         # payload is either a TaskSegment (exec) or int (ns, inter-arrival)
@@ -13013,6 +13282,7 @@ class _ScatterWidget(QWidget):
         self._time_scale = time_scale
         self._color      = color
         self._is_dark    = is_dark
+        self._y_as_time  = y_as_time
         self._highlight  = -1   # index of highlighted point (-1 = none)
         self._hover_idx  = -1   # index of hovered point for tooltip
         self._crosshair_idx = -1  # nearest point for crosshair guides
@@ -13110,7 +13380,10 @@ class _ScatterWidget(QWidget):
         for fi in range(5):
             val = y0 + (y1 - y0) * fi / 4
             gy  = MT + ph - int(fi / 4 * ph)
-            lbl = _format_time(int(val), self._time_scale, decimals=1)
+            if self._y_as_time:
+                lbl = _format_time(int(val), self._time_scale, decimals=1)
+            else:
+                lbl = _format_tag_value(val)
             p.drawText(QRect(0, gy - 8, ML - 4, 16), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, lbl)
 
         # X-axis labels (3 ticks)
@@ -13162,7 +13435,10 @@ class _ScatterWidget(QWidget):
         # Hover tooltip
         if self._hover_idx >= 0 and self._hover_idx < len(self._points):
             hpt = self._points[self._hover_idx]
-            line1 = _format_time(int(hpt[1]), self._time_scale)
+            if self._y_as_time:
+                line1 = _format_time(int(hpt[1]), self._time_scale)
+            else:
+                line1 = _format_tag_value(hpt[1])
             line2 = "@ " + _format_time(int(hpt[0]), self._time_scale)
             tf = QFont(); tf.setPointSize(8)
             p.setFont(tf)
@@ -13506,7 +13782,8 @@ def _hist_build_bar_layout(bin_spec: dict, plot_w: int, plot_h: int,
     return bars, max_count, slot_count, slot_w
 
 def _hist_build_caption(scale_mode: str, summary: dict, bin_spec: dict,
-                        log_y: bool, time_scale: str) -> str:
+                        log_y: bool, time_scale: str,
+                        *, value_as_time: bool = True) -> str:
     parts = []
     if scale_mode == "percentile":
         parts.append("p5–p95 view")
@@ -13515,17 +13792,23 @@ def _hist_build_caption(scale_mode: str, summary: dict, bin_spec: dict,
         if bin_spec["underflow"] > 0:
             parts.append(f"{bin_spec['underflow']} below p5")
     elif scale_mode == "log":
-        parts.append("log-scaled duration axis")
+        parts.append("log-scaled duration axis" if value_as_time
+                     else "log-scaled value axis")
     else:
         parts.append("linear scale")
     if log_y:
         parts.append("log-scaled counts")
-    parts.append(
-        f"full range {_format_time(int(summary['min']), time_scale, decimals=1)}–"
-        f"{_format_time(int(summary['max']), time_scale, decimals=1)}")
+    fmt = (lambda v: _format_time(int(v), time_scale, decimals=1)) if value_as_time else _format_tag_value
+    parts.append(f"full range {fmt(summary['min'])}–{fmt(summary['max'])}")
     return " · ".join(parts)
 
-def _hist_build_model(values: list, time_scale: str, scale_mode: str = "auto") -> Optional[dict]:
+def _hist_format_axis_value(val: float, time_scale: str, *, value_as_time: bool) -> str:
+    if value_as_time:
+        return _format_time(int(val), time_scale, decimals=1)
+    return _format_tag_value(val)
+
+def _hist_build_model(values: list, time_scale: str, scale_mode: str = "auto",
+                      *, value_as_time: bool = True) -> Optional[dict]:
     if not values:
         return None
     sorted_vals = sorted(values)
@@ -13559,7 +13842,8 @@ def _hist_build_model(values: list, time_scale: str, scale_mode: str = "auto") -
                     continue
                 t = (math.log10(val) - log_lo) / max(1e-9, log_hi - log_lo)
                 x_ticks.append((region_left + int(t * regular_w),
-                                _format_time(int(val), time_scale, decimals=1)))
+                                _hist_format_axis_value(val, time_scale,
+                                                        value_as_time=value_as_time)))
                 if len(x_ticks) >= 7:
                     break
             if len(x_ticks) >= 7:
@@ -13569,13 +13853,15 @@ def _hist_build_model(values: list, time_scale: str, scale_mode: str = "auto") -
                 log_val = log_lo + (log_hi - log_lo) * fi / 2
                 val = int(round(10 ** log_val))
                 x_ticks.append((region_left + int(fi / 2 * regular_w),
-                                _format_time(val, time_scale, decimals=1)))
+                                _hist_format_axis_value(val, time_scale,
+                                                        value_as_time=value_as_time)))
     else:
         for fi in range(3):
             val = int(round(bin_spec["display_min"] +
                             (bin_spec["display_max"] - bin_spec["display_min"]) * fi / 2))
             x_ticks.append((region_left + int(fi / 2 * regular_w),
-                            _format_time(val, time_scale, decimals=1)))
+                            _hist_format_axis_value(val, time_scale,
+                                                    value_as_time=value_as_time)))
         if bin_spec["has_overflow_bin"]:
             x_ticks.append((margin_left + int((leading + regular_slots + 0.5) * _sw), ">p95"))
 
@@ -13625,7 +13911,8 @@ def _hist_build_model(values: list, time_scale: str, scale_mode: str = "auto") -
     return {
         "summary": summary,
         "effective_mode": effective,
-        "caption": _hist_build_caption(effective, summary, bin_spec, log_y, time_scale),
+        "caption": _hist_build_caption(effective, summary, bin_spec, log_y, time_scale,
+                                       value_as_time=value_as_time),
         "margin_left": margin_left,
         "margin_right": margin_right,
         "margin_top": margin_top,
@@ -13646,13 +13933,14 @@ class _HistogramWidget(QWidget):
     """Histogram of metric values with adaptive scaling, CDF overlay, and markers."""
 
     def __init__(self, values, time_scale: str, color: "QColor",
-                 is_dark: bool, parent=None) -> None:
+                 is_dark: bool, parent=None, *, value_as_time: bool = True) -> None:
         super().__init__(parent)
         self._values      = sorted(values)
         self._time_scale  = time_scale
         self._color       = color
         self._is_dark     = is_dark
         self._scale_mode  = "auto"
+        self._value_as_time = value_as_time
         self.setMinimumHeight(140)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
@@ -13687,7 +13975,8 @@ class _HistogramWidget(QWidget):
             p.end()
             return
 
-        model = _hist_build_model(self._values, self._time_scale, self._scale_mode)
+        model = _hist_build_model(self._values, self._time_scale, self._scale_mode,
+                                  value_as_time=self._value_as_time)
         if not model:
             p.end()
             return
@@ -13798,6 +14087,7 @@ class _MetricsPlotDialog(QDialog):
                  scope_scoped: bool,
                  scope_badge: str,
                  scope_detail: str,
+                 y_as_time: bool = True,
                  parent=None) -> None:
         super().__init__(parent, Qt.WindowType.Window)
         self._title        = title
@@ -13826,15 +14116,19 @@ class _MetricsPlotDialog(QDialog):
         cl.setSpacing(4)
 
         values = [pt[1] for pt in points]
-        self._scatter = _ScatterWidget(points, time_scale, color, is_dark)
-        self._histogram = _HistogramWidget(values, time_scale, color, is_dark)
+        self._y_as_time = y_as_time
+        self._scatter = _ScatterWidget(points, time_scale, color, is_dark,
+                                       y_as_time=y_as_time)
+        self._histogram = _HistogramWidget(values, time_scale, color, is_dark,
+                                           value_as_time=y_as_time)
 
         hist_toolbar = QHBoxLayout()
         hist_toolbar.setContentsMargins(0, 0, 0, 0)
         hist_toolbar.setSpacing(8)
         hist_lbl = QLabel("Histogram scale")
         self._hist_scale = QComboBox()
-        self._hist_scale.addItems(["Auto", "Linear", "p5–p95", "Log duration"])
+        log_label = "Log duration" if y_as_time else "Log scale"
+        self._hist_scale.addItems(["Auto", "Linear", "p5–p95", log_label])
         self._hist_scale.setCurrentIndex(0)
         self._hist_scale.currentIndexChanged.connect(self._on_hist_scale_changed)
         hist_toolbar.addWidget(hist_lbl)
@@ -14306,11 +14600,13 @@ class _StatsSectionGrip(QWidget):
     def paintEvent(self, event) -> None:  # noqa: N802
         super().paintEvent(event)
         p = QPainter(self)
-        c = QColor("#6688CC" if self.underMouse() or self._dragging
-                   else ("#555568" if self._is_dark else "#BBBBBB"))
+        if self.underMouse() or self._dragging:
+            c = QColor("#6688CC")
+        else:
+            c = QColor("#3C3C3C" if self._is_dark else "#DDDDDD")
         y = self.height() // 2
-        p.setPen(QPen(c, 2))
-        p.drawLine(4, y, self.width() - 4, y)
+        p.setPen(QPen(c, 1))
+        p.drawLine(0, y, self.width(), y)
         p.end()
 
 class _TraceCompareDialog(QDialog):
@@ -15363,7 +15659,7 @@ class _StatsPanel(QWidget):
         self._is_dark: bool = True
         self._plot_dlg = None   # keep reference to prevent GC
         self._plot_mk: Optional[str] = None
-        self._plot_kind: Optional[str] = None   # "exec", "block", "inter", "preempt", "interval", "tick"
+        self._plot_kind: Optional[str] = None   # "exec", "block", "inter", "preempt", "interval", "tag", "tick"
         self._plot_preemptor: Optional[str] = None
         self._plot_interval_id: Optional[str] = None
         self._trace: Optional["BtfTrace"] = None
@@ -15650,6 +15946,9 @@ class _StatsPanel(QWidget):
             pal.setColor(QPalette.Base, bg)
             w.setPalette(pal)
             w.setAutoFillBackground(True)
+        for sep in self.findChildren(QFrame):
+            if sep.objectName() == "stats_sep":
+                self._style_stats_sep(sep)
 
     def _refresh_stats_table_themes(self) -> None:
         """Re-apply table colours without rebuilding the whole statistics panel."""
@@ -16123,6 +16422,14 @@ class _StatsPanel(QWidget):
             title = f"Interval {iid} — Duration{scope}"
             color = QColor(_interval_color(iid))
             return title, pts, color
+        if kind == "tag":
+            ch = mk
+            pts = _tag_plot_points(trace, ch, lo, hi)
+            if not pts:
+                return None
+            title = f"{_tag_channel_label(ch)} — Value{scope}"
+            color = QColor(_tag_color(ch))
+            return title, pts, color
         if kind == "priority":
             pts = _priority_plot_points(trace, mk, lo, hi)
             if not pts:
@@ -16196,6 +16503,9 @@ class _StatsPanel(QWidget):
     def _open_interval_plot(self, trace: "BtfTrace", interval_id: str) -> None:
         self._open_plot(trace, interval_id, "interval", interval_id=interval_id)
 
+    def _open_tag_plot(self, trace: "BtfTrace", channel: str) -> None:
+        self._open_plot(trace, channel, "tag")
+
     def _open_priority_plot(self, trace: "BtfTrace", mk: str) -> None:
         self._open_plot(trace, mk, "priority")
 
@@ -16233,6 +16543,9 @@ class _StatsPanel(QWidget):
         if kind == "tick":
             self._open_tick_dist_plot(trace)
             return
+        if kind == "tag" and mk:
+            self._open_tag_plot(trace, mk)
+            return
         if not mk:
             return
         self._open_plot(trace, mk, kind, preemptor=preemptor)
@@ -16267,6 +16580,7 @@ class _StatsPanel(QWidget):
         scoped, badge, detail = self._plot_scope_banner()
         self._plot_mk = mk
         self._plot_kind = kind
+        y_as_time = kind not in ("tag",)
         _on_click = self._on_plot_scatter_click
         if self._plot_dlg is not None:
             try:
@@ -16281,6 +16595,7 @@ class _StatsPanel(QWidget):
             scope_scoped=scoped,
             scope_badge=badge,
             scope_detail=detail,
+            y_as_time=y_as_time,
             parent=self.window(),
         )
         self._plot_dlg.closed.connect(self._on_plot_dialog_closed)
@@ -16298,9 +16613,24 @@ class _StatsPanel(QWidget):
         mark_ns = _plot_point_mark_ns(payload, x_ns)
         self.plot_point_clicked.emit(payload, mark_ns, note)
 
+    def _stats_sep_color(self) -> str:
+        """Match web StatisticsPanel .stats-sep (var(--border))."""
+        return "#3C3C3C" if self._is_dark else "#DDDDDD"
+
+    def _style_stats_sep(self, frame: QFrame) -> None:
+        c = self._stats_sep_color()
+        frame.setStyleSheet(
+            f"QFrame#stats_sep {{ background-color:{c}; border:none; "
+            f"min-height:1px; max-height:1px; }}"
+        )
+
     def _sep(self) -> QFrame:
         f = QFrame()
-        f.setFrameShape(QFrame.HLine)
+        f.setObjectName("stats_sep")
+        f.setFrameShape(QFrame.NoFrame)
+        f.setFixedHeight(1)
+        f.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._style_stats_sep(f)
         return f
 
     def _update_section_header_icon(self, section_id: str) -> None:
@@ -16734,6 +17064,8 @@ class _StatsPanel(QWidget):
         _hovered_row = [-1]
         _interactive = bool(on_row_click or on_min_click or on_max_click)
         _row_tip = "Click to view distribution chart"
+        _metric_key = (_tag_value_sort_key if section_id == "tags"
+                       else _time_label_sort_key)
 
         def _clear_row_hover() -> None:
             row = _hovered_row[0]
@@ -16778,13 +17110,18 @@ class _StatsPanel(QWidget):
                     _time_label_sort_key(mn), _time_label_sort_key(avg),
                     _time_label_sort_key(mx), _time_label_sort_key(p95),
                 ]
+            elif section_id == "tags" and len(row) >= 11:
+                mk_r, name, runs, mn, avg, mx, p95 = row[:7]
+                mn_raw, avg_raw, mx_raw, p95_raw = row[7:11]
+                vals = [name, runs, mn, avg, mx, p95]
+                sort_keys = [name.lower(), runs, mn_raw, avg_raw, mx_raw, p95_raw]
             else:
                 mk_r, name, runs, mn, avg, mx, p95 = row
                 vals = [name, runs, mn, avg, mx, p95]
                 sort_keys = [
                     name.lower(), runs,
-                    _time_label_sort_key(mn), _time_label_sort_key(avg),
-                    _time_label_sort_key(mx), _time_label_sort_key(p95),
+                    _metric_key(mn), _metric_key(avg),
+                    _metric_key(mx), _metric_key(p95),
                 ]
 
             for c, v in enumerate(vals):
@@ -17002,6 +17339,7 @@ class _StatsPanel(QWidget):
         mig_rows = _migration_rows(trace, lo, hi)
         preempt_rows, _ = _preemption_chain_rows(trace, lo, hi)
         interval_rows = _interval_stats_rows(trace, lo, hi)
+        tag_rows = _tag_stats_rows(trace, lo, hi)
         priority_rows = _priority_stats_rows(trace, lo, hi)
         priority_eps = _priority_episode_detail_rows(trace, lo, hi)
         sync_rows = _sync_object_stats_rows(trace, lo, hi)
@@ -17011,6 +17349,7 @@ class _StatsPanel(QWidget):
         ] if trace.has_sync_object_instrumentation else []
         sync_holds = _sync_object_hold_detail_rows(trace, lo, hi)
         interval_inst = _interval_instance_detail_rows(trace, lo, hi)
+        tag_samples = _tag_sample_detail_rows(trace, lo, hi)
         ctx_count, core_gaps = _scheduling_stats(trace, lo, hi)
         tick = _tick_health_report(trace, lo, hi)
 
@@ -17206,6 +17545,26 @@ class _StatsPanel(QWidget):
     <table><thead><tr><th>ID</th><th>Task id</th><th>Start</th><th>Stop</th><th>Duration</th><th>Start core</th><th>Stop core</th></tr></thead>
     <tbody>{inst_body}</tbody></table></section>"""
 
+        tag_body = "".join(
+            f"<tr><td>{_esc(r[0])}</td><td>{_esc(r[1])}</td><td>{r[2]}</td>"
+            f"<td>{_esc(r[3])}</td><td>{_esc(r[4])}</td><td>{_esc(r[5])}</td><td>{_esc(r[6])}</td></tr>"
+            for r in tag_rows
+        ) or '<tr><td colspan="7" class="empty">No tag data</td></tr>'
+        tag_sample_body = "".join(
+            f"<tr><td>{_esc(s['label'])}</td><td>{_esc(s['time'])}</td>"
+            f"<td>{_esc(s['value'])}</td><td>{_esc(s['core'] or '—')}</td></tr>"
+            for s in tag_samples
+        ) or '<tr><td colspan="4" class="empty">No tag samples in scope</td></tr>'
+        tag_note = ('<p class="detail-note">Showing highest 200 tag samples in scope.</p>'
+                    if len(tag_samples) >= 200 else "")
+        tag_html = f"""
+    <section class=\"report-card\"><h2>Tag Analysis{_esc(scope_title)}</h2>
+    <table><thead><tr><th>Channel</th><th>Label</th><th>Count</th><th>Min</th><th>Avg</th><th>Max</th><th>p95</th></tr></thead>
+    <tbody>{tag_body}</tbody></table>
+    <h3 class=\"sub\">Tag samples (highest value first)</h3>{tag_note}
+    <table><thead><tr><th>Tag</th><th>Time</th><th>Value</th><th>Core</th></tr></thead>
+    <tbody>{tag_sample_body}</tbody></table></section>"""
+
         report = f"""<!doctype html>
 <html>
 <head>
@@ -17315,6 +17674,7 @@ class _StatsPanel(QWidget):
       <li><strong>Priority Inheritance:</strong> When traces include <code>create pri:N</code> and priority STI events, lists tasks boosted above base priority. Detail table lists each boost episode.</li>
       <li><strong>Mutex / Semaphore:</strong> Pairs take/give STI by object pointer; detail tables list pairing issues and hold episodes.</li>
       <li><strong>Interval Analysis:</strong> Paired interval_start / interval_stop spans per user-defined id. Detail table lists individual instances.</li>
+      <li><strong>Tag Analysis:</strong> Numeric samples from tag0_event … tag7_event STI channels (note field); scatter plot shows value over time.</li>
             <li><strong>Context switches:</strong> Count of segment boundaries on all cores whose start time falls inside the statistics scope.</li>
             <li><strong>Min (Minimum):</strong> The fastest execution time recorded. It represents the best-case scenario under zero system load.</li>
             <li><strong>Max (Maximum):</strong> The slowest execution time recorded. It identifies worst-case bottlenecks, spikes, or resource contention.</li>
@@ -17346,6 +17706,7 @@ class _StatsPanel(QWidget):
     {priority_html}
     {sync_html}
     {interval_html}
+    {tag_html}
         <div class=\"report-foot\">Generated by BTF Viewer</div>
     </div>
 </body>
@@ -17565,6 +17926,16 @@ class _StatsPanel(QWidget):
                     writer.writerow([iid, label, count, _us(mn), _us(avg), _us(mx), _us(p95)])
             else:
                 writer.writerow(["No interval data", "", "", "", "", "", ""])
+
+            tag_rows_csv = _tag_stats_rows(trace, lo, hi)
+            writer.writerow([])
+            writer.writerow([f"Tag Analysis{scope_suffix}"])
+            writer.writerow(["Channel", "Label", "Count", "Min", "Avg", "Max", "p95"])
+            if tag_rows_csv:
+                for ch, label, count, mn, avg, mx, p95, *_raw in tag_rows_csv:
+                    writer.writerow([ch, label, count, mn, avg, mx, p95])
+            else:
+                writer.writerow(["No tag data", "", "", "", "", "", ""])
 
     def _export_csv(self) -> None:
         if self._trace is None:
@@ -18164,6 +18535,28 @@ class _StatsPanel(QWidget):
             f"Interval Analysis{scope}",
             _fs,
             _populate_intervals,
+        )
+
+        # -- Tag Analysis ---------------------------------------------------
+        _tag_rows = _tag_stats_rows(trace, lo, hi)
+        empty_tag = ("No tag samples in cursor range" if scope
+                     else "No tag0_event … tag7_event STI samples in trace")
+
+        def _populate_tags(blay: QVBoxLayout) -> None:
+            blay.addWidget(self._build_stats_table(
+                _tag_rows,
+                _fs,
+                empty_tag,
+                count_header="Count",
+                section_id="tags",
+                on_row_click=lambda ch: self._open_tag_plot(trace, ch),
+            ))
+
+        self._add_collapsible_section(
+            "tags",
+            f"Tag Analysis{scope}",
+            _fs,
+            _populate_tags,
         )
 
         self._ilay.addStretch()
@@ -20441,10 +20834,6 @@ def _exec_centred(dlg, parent):
 # CPU Load Graph
 # ===========================================================================
 
-# ===========================================================================
-# CPU Load Graph
-# ===========================================================================
-
 class _CpuLoadGraph(QWidget):
     """Synchronised CPU load chart below the main timeline.
 
@@ -20475,7 +20864,6 @@ class _CpuLoadGraph(QWidget):
         self._task_bins:      Dict[str, List[float]]        = {}
         self._task_core_bins: Dict[str, Dict[str, List[float]]] = {}
         self._total_bins:     List[float]                   = []
-        self._avg_load:       Dict[str, float]              = {}
         self._bin_w_ns: float                               = 1.0
         self._font_size: int                                = 8
         self._hover_y: int                                  = -1
@@ -20500,7 +20888,6 @@ class _CpuLoadGraph(QWidget):
         self._task_bins       = {}
         self._task_core_bins  = {}
         self._total_bins      = []
-        self._avg_load        = {}
         if trace is not None:
             self._compute_bins(trace)
         self.updateGeometry()
@@ -20675,19 +21062,58 @@ class _CpuLoadGraph(QWidget):
             for i in range(n)
         ] if cores else []
 
-        # Average load per key (for label percentage display)
-        self._avg_load = {}
-        for core in cores:
-            b = self._core_bins.get(core, [])
-            self._avg_load[core] = sum(b) / len(b) if b else 0.0
-        for mk, b in self._task_bins.items():
-            self._avg_load[mk] = sum(b) / len(b) if b else 0.0
-        if self._total_bins:
-            self._avg_load["total"] = sum(self._total_bins) / len(self._total_bins)
-
     # ------------------------------------------------------------------
     # Row helpers
     # ------------------------------------------------------------------
+
+    def _scene(self):
+        return self._view._scene if self._view else None
+
+    def _filtered_task_merge_keys(self) -> List[str]:
+        sc = self._scene()
+        if sc is None or self._trace is None or not sc._core_view_task_filter_active():
+            return []
+        return [t for t in self._trace.tasks if sc._task_merge_key_matches_filter(t)]
+
+    def _aggregate_filtered_task_bins(self, merge_keys: List[str]) -> Optional[List[float]]:
+        if not merge_keys or self._trace is None:
+            return None
+        n = self._NUM_BINS
+        n_cores = max(1, len(self._trace.core_names or []))
+        out = [0.0] * n
+        any_bins = False
+        for mk in merge_keys:
+            bins = self._task_bins.get(mk)
+            if not bins:
+                continue
+            any_bins = True
+            for i in range(n):
+                out[i] += bins[i]
+        if not any_bins:
+            return None
+        for i in range(n):
+            out[i] = min(1.0, out[i] / n_cores)
+        return out
+
+    def _aggregate_filtered_task_core_bins(self, merge_keys: List[str],
+                                          core: str) -> Optional[List[float]]:
+        if not merge_keys or not core:
+            return None
+        n = self._NUM_BINS
+        out = [0.0] * n
+        any_bins = False
+        for mk in merge_keys:
+            bins = self._task_core_bins.get(mk, {}).get(core)
+            if not bins:
+                continue
+            any_bins = True
+            for i in range(n):
+                out[i] += bins[i]
+        if not any_bins:
+            return None
+        for i in range(n):
+            out[i] = min(1.0, out[i])
+        return out
 
     def _get_rows(self) -> List[tuple]:
         """Return [(kind, key, label, QColor), ...] for currently displayed rows."""
@@ -20695,14 +21121,26 @@ class _CpuLoadGraph(QWidget):
             return []
         task  = self._selected_task
         cores = self._trace.core_names or []
+        filter_keys = self._filtered_task_merge_keys()
+        filter_active = bool(filter_keys)
+
+        if task:
+            if self._view_mode == "task":
+                raw = self._trace.task_repr.get(task, task)
+                return [("task", task, "CPU Load", _task_color(raw))]
+            return [("core", c, c, QColor(_core_color(c))) for c in cores]
+
+        if filter_active:
+            if self._view_mode == "task":
+                return [("filtered", "filtered", "CPU Load", QColor("#4CAF50"))]
+            sc = self._scene()
+            core_names = sc._filtered_core_view_tasks()[0] if sc else cores
+            return [("core", c, c, QColor(_core_color(c))) for c in core_names]
 
         if self._view_mode == "task":
-            if task and task in self._task_bins:
-                raw = self._trace.task_repr.get(task, task)
-                return [("task", task, _task_display_name(raw), _task_color(raw))]
             return [("total", "total", "CPU Load", QColor("#4CAF50"))]
 
-        # Core view - one row per core
+        # Core view - one row per core (all tasks on core)
         return [("core", c, c, QColor(_core_color(c))) for c in cores]
 
     def _row_effective_h(self, kind: str, key: str) -> int:
@@ -20712,13 +21150,18 @@ class _CpuLoadGraph(QWidget):
 
     def _bins_for_row(self, kind: str, key: str):
         task = self._selected_task
+        if kind == "filtered":
+            return self._aggregate_filtered_task_bins(self._filtered_task_merge_keys())
         if kind == "total":
             return self._total_bins or None
         if kind == "task":
             return self._task_bins.get(key)
-        # "core" - show task's load on this core if a task is selected
+        # "core" - selected task on core, or filtered tasks on core, or all tasks
         if task:
             return self._task_core_bins.get(task, {}).get(key)
+        filter_keys = self._filtered_task_merge_keys()
+        if kind == "core" and filter_keys:
+            return self._aggregate_filtered_task_core_bins(filter_keys, key)
         return self._core_bins.get(key)
 
     def _bin_indices_for_ns_range(self, ns_lo: int, ns_hi: int) -> Tuple[int, int]:
@@ -21057,26 +21500,26 @@ class _CpuLoadGraph(QWidget):
 
             # 3. Core name (white)
             name_x = dot_cx + dot_r + 4
+            p.setFont(sf_pct)
+            fm_pct = QFontMetrics(sf_pct)
+            pct_col_w = min(
+                max(CPU_LOAD_PCT_COL_MIN,
+                    fm_pct.horizontalAdvance(pct_text) + CPU_LOAD_PCT_COL_PAD),
+                max(CPU_LOAD_PCT_COL_MIN, lw - name_x - 8),
+            )
+            p.setFont(sf_small if collapsed else sf_norm)
             p.setPen(white_col)
-            p.drawText(QRect(name_x, ry, lw - name_x - 72, effective_h), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, lbl_text)
+            name_w = max(0, lw - name_x - pct_col_w - 6)
+            p.drawText(QRect(name_x, ry, name_w, effective_h),
+                       Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, lbl_text)
 
             # 4. Percentage (green) — visible-window avg; · C:… when 2+ cursors
+            p.setFont(sf_pct)
             p.setPen(green_col)
-            p.drawText(QRect(lw - 72, ry, 68, effective_h), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, pct_text)
+            p.drawText(QRect(lw - pct_col_w - 4, ry, pct_col_w, effective_h),
+                       Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, pct_text)
 
             if not collapsed:
-                # Cursor-range shading (behind bars)
-                if cursor_rng is not None:
-                    cr_lo, cr_hi = cursor_rng
-                    shade_lo = max(vis_ns_lo, cr_lo)
-                    shade_hi = min(vis_ns_hi, cr_hi)
-                    if shade_hi > shade_lo:
-                        sx0 = self._time_overlay_x(shade_lo, scene, vis_ns_lo, vis_ns_hi)
-                        sx1 = self._time_overlay_x(shade_hi, scene, vis_ns_lo, vis_ns_hi)
-                        if sx1 > sx0:
-                            shade = QColor(68, 153, 255, 38) if dark else QColor(42, 111, 178, 42)
-                            p.fillRect(sx0, ry + 1, sx1 - sx0, effective_h - 2, shade)
-
                 # Grid lines at 25 / 50 / 75 / 100 % with labels
                 # "0" at bottom; "100" omitted (would overflow above the row)
                 p.setFont(sf_pct)
@@ -21103,6 +21546,19 @@ class _CpuLoadGraph(QWidget):
                             continue
                         bh = max(1, int(load * effective_h))
                         p.drawRect(sx, ry + effective_h - bh, 1, bh)
+
+                # Cursor-range shading (semi-transparent overlay on C1–Cn window)
+                if cursor_rng is not None:
+                    cr_lo, cr_hi = cursor_rng
+                    shade_lo = max(vis_ns_lo, cr_lo)
+                    shade_hi = min(vis_ns_hi, cr_hi)
+                    if shade_hi > shade_lo:
+                        sx0 = self._time_overlay_x(shade_lo, scene, vis_ns_lo, vis_ns_hi)
+                        sx1 = self._time_overlay_x(shade_hi, scene, vis_ns_lo, vis_ns_hi)
+                        if sx1 > sx0:
+                            shade = (QColor(68, 153, 255, 72) if dark
+                                     else QColor(42, 111, 178, 58))
+                            p.fillRect(sx0, ry + 1, sx1 - sx0, effective_h - 2, shade)
 
             # Row separator
             p.setPen(QPen(sepc, 1))
@@ -21527,10 +21983,25 @@ class MainWindow(QMainWindow):
         view.horizontalScrollBar().valueChanged.connect(_repaint_cpu_graph)
         view.verticalScrollBar().valueChanged.connect(_repaint_cpu_graph)
         view.verticalScrollBar().rangeChanged.connect(_repaint_cpu_graph)
-        view._scene.highlight_changed.connect(graph.set_task)
+        def _on_highlight_changed(task_name, locked) -> None:
+            graph.set_task(task_name, locked)
+            if not self._cpu_splitter_user_sized:
+                self._autofit_cpu_load_height()
+
+        view._scene.highlight_changed.connect(_on_highlight_changed)
         view._scene.hover_changed.connect(_repaint_cpu_graph)
         view._scene.marks_changed.connect(_repaint_cpu_graph)
         view.cursors_changed.connect(lambda _: _repaint_cpu_graph())
+
+        view.label_width_changed.connect(lambda _w: _repaint_cpu_graph())
+        view.label_width_resizing.connect(lambda _w: _repaint_cpu_graph())
+
+        def _on_task_filter_changed() -> None:
+            graph.updateGeometry()
+            graph.update()
+            self._autofit_cpu_load_height()
+
+        view._scene.task_filter_changed.connect(_on_task_filter_changed)
 
         class _CpuGraphViewportSync(QObject):
             def eventFilter(self, obj, event):
@@ -21716,6 +22187,24 @@ class MainWindow(QMainWindow):
             for core in trace.core_names:
                 graph.set_core_expanded(core, sc._core_is_expanded(core))
 
+    def _capture_legend_filters_to_scene(self, scene) -> None:
+        """Copy shared legend UI into *scene* without rebuild (tab switch / persist)."""
+        if scene is None:
+            return
+        self._legend._filter_emit_timer.stop()
+        scene._task_filter_q = self._legend._search.text().strip().lower()
+        scene._migrated_only_filter = bool(
+            self._legend._migrated_only_cb.isChecked()
+            and not scene._heatmap_filter_mks)
+
+    def _sync_legend_filters_from_scene(self, scene) -> None:
+        """Refresh shared legend UI from *scene* filter state."""
+        if scene is None:
+            return
+        self._legend.set_filter_text(scene._task_filter_q)
+        self._legend.set_migrated_only_checked(scene._migrated_only_filter)
+        self._legend.set_heatmap_filter(scene._heatmap_filter_label, scene._heatmap_filter_mks)
+
     def _stash_tab_state(self, tab: _TraceTab) -> None:
         tab.bookmarks = list(self._bookmarks)
         tab.annotations = list(self._annotations)
@@ -21739,6 +22228,7 @@ class MainWindow(QMainWindow):
             "zoom": -1 if tab.view._fit_mode else sc.timescale_per_px,
             "fit_mode": bool(tab.view._fit_mode),
             "cursors": list(sc.cursor_times()),
+            "filters": _snapshot_tab_filters(sc),
         }
         key = self._trace_state_key(tab.path)
         self._settings.set("tab_view", key, json.dumps(payload, ensure_ascii=True), flush=False)
@@ -21774,10 +22264,18 @@ class MainWindow(QMainWindow):
                 pass
         if sc.cursor_times():
             view.cursors_changed.emit(sc.cursor_times())
+        filters = _sanitize_tab_filters(payload.get("filters"))
+        if filters:
+            sc.apply_tab_filters(filters, rebuild=False)
+            sc.rebuild()
+            sc.task_filter_changed.emit()
         view._refresh_nav_pan_window(force_show=view._navigator_eligible())
 
     def _persist_open_tabs(self) -> None:
         """Write open tab paths and active tab index to btf_viewer.rc."""
+        tab = self._active_tab
+        if tab is not None:
+            self._capture_legend_filters_to_scene(tab.view._scene)
         for tab in self._tabs:
             self._persist_tab_view_state(tab)
         paths = [tab.path for tab in self._tabs]
@@ -21854,6 +22352,7 @@ class MainWindow(QMainWindow):
         tab = self._active_tab
         if tab is None:
             return
+        self._capture_legend_filters_to_scene(tab.view._scene)
         self._stash_tab_state(tab)
 
     def _restore_tab_state(self, tab: _TraceTab) -> None:
@@ -21924,9 +22423,8 @@ class MainWindow(QMainWindow):
         if tab is None or trace is None:
             return
         self._legend.rebuild(trace, show_sti=self._show_sti)
-        mks = self._view._scene._heatmap_filter_mks
-        self._legend.set_heatmap_filter(
-            "filtered" if mks else None, mks)
+        sc = tab.view._scene
+        self._sync_legend_filters_from_scene(sc)
         self._sync_show_all_tasks_btn()
         self._stats_panel._ui_font_size = self._ui_font_size_val
         self._stats_panel.set_cursor_times(self._view._scene.cursor_times(), refresh_stats=False)
@@ -22007,7 +22505,9 @@ class MainWindow(QMainWindow):
             return
         prev = self._previous_tab_index
         if 0 <= prev < len(self._tabs) and prev != index:
-            self._stash_tab_state(self._tabs[prev])
+            prev_tab = self._tabs[prev]
+            self._capture_legend_filters_to_scene(prev_tab.view._scene)
+            self._stash_tab_state(prev_tab)
             self._stats_panel.clear_plot_session()
         if 0 <= index < len(self._tabs):
             tab = self._tabs[index]
@@ -23954,10 +24454,9 @@ class MainWindow(QMainWindow):
             self._close_heatmap_dialog()
             return
         dlg.refresh_scope()
-        mks = tab.view._scene._heatmap_filter_mks
-        dlg.set_filter_banner(
-            getattr(self._legend, "_heatmap_filter_label", None),
-            len(mks) if mks else 0)
+        sc = tab.view._scene
+        mks = sc._heatmap_filter_mks
+        dlg.set_filter_banner(sc._heatmap_filter_label, len(mks) if mks else 0)
 
     def _capture_heatmap_view_snapshot(self, tab: _TraceTab) -> None:
         """Remember timeline zoom/pan/cursors before heatmap drill-down."""
@@ -24005,6 +24504,7 @@ class MainWindow(QMainWindow):
 
         with sc.suspend_rebuild():
             sc._heatmap_filter_mks = None
+            sc._heatmap_filter_label = None
             sc._remove_hover_overlay()
             sc._locked_task = None
             sc._locked_core = None
@@ -24093,9 +24593,10 @@ class MainWindow(QMainWindow):
         dlg.finished.connect(self._on_heatmap_dlg_closed)
         self._heatmap_dlg = dlg
         tab = self._active_tab
-        mks = tab.view._scene._heatmap_filter_mks if tab else None
+        sc = tab.view._scene if tab else None
+        mks = sc._heatmap_filter_mks if sc else None
         dlg.set_filter_banner(
-            getattr(self._legend, "_heatmap_filter_label", None),
+            sc._heatmap_filter_label if sc else None,
             len(mks) if mks else 0)
         dlg.show()
 
@@ -24125,7 +24626,7 @@ class MainWindow(QMainWindow):
             return
         self._set_view_mode("task")
         self._legend.set_migrated_only_checked(False)
-        tab.view._scene.set_heatmap_task_filter(set(merge_keys))
+        tab.view._scene.set_heatmap_task_filter(set(merge_keys), label=label)
         self._legend.set_heatmap_filter(label, merge_keys)
         self._sync_show_all_tasks_btn()
         if self._heatmap_dlg is not None:
@@ -24393,6 +24894,33 @@ class MainWindow(QMainWindow):
         self._view.zoom_changed.emit(sc.timescale_per_px)
         self._view.viewport().update()
 
+    def _scroll_to_tag_sample(self, sample: "TagSample", mark_ns: int) -> None:
+        """Zoom to and scroll vertically to a tag STI sample."""
+        if self._trace is None or sample is None:
+            return
+        sc = self._view._scene
+        vp = self._view.viewport().rect()
+        is_horiz = sc._horizontal
+        vp_px = max(vp.width() if is_horiz else vp.height(), 100)
+        center_ns = mark_ns if mark_ns is not None else sample.time_ns
+        span = max(1000, (self._trace.time_max - self._trace.time_min) // 200)
+        ns_lo = max(self._trace.time_min, center_ns - span)
+        ns_hi = min(self._trace.time_max, center_ns + span)
+        self._view._fit_mode = False
+        sc.zoom_to_range(ns_lo, ns_hi, vp_px)
+        time_coord = sc.ns_to_scene_coord(center_ns)
+        orth_span = sc.sti_channel_orth_scene_span(sample.channel)
+        if orth_span is not None:
+            orth = (orth_span[0] + orth_span[1]) / 2
+            if is_horiz:
+                self._view.centerOn(time_coord, orth)
+            else:
+                self._view.centerOn(orth, time_coord)
+        else:
+            self._view.scroll_to_ns(center_ns)
+        self._view.zoom_changed.emit(sc.timescale_per_px)
+        self._view.viewport().update()
+
     def _scroll_to_sync_issue(self, iss: "SyncIssueRef", mark_ns: int) -> None:
         """Zoom to and highlight a mutex/sem pairing issue."""
         if self._trace is None or iss is None:
@@ -24480,6 +25008,8 @@ class MainWindow(QMainWindow):
             self._scroll_to_segment(payload)
         elif isinstance(payload, IntervalInstance):
             self._scroll_to_interval(payload, mark_ns)
+        elif isinstance(payload, TagSample):
+            self._scroll_to_tag_sample(payload, mark_ns)
         elif isinstance(payload, PriorityEpisode):
             self._scroll_to_priority_episode(payload, mark_ns)
         elif isinstance(payload, SyncIssueRef):
@@ -25190,6 +25720,7 @@ class MainWindow(QMainWindow):
         if vals["label_width"] != self._label_width_val:
             self._label_width_val = vals["label_width"]
             self._view._scene.set_label_width(self._label_width_val)
+            self._cpu_load_graph.update()
         if vals["row_height"] != self._row_height_val:
             self._row_height_val = vals["row_height"]
             self._view._scene.set_row_height(self._row_height_val)
@@ -25654,11 +26185,15 @@ class MainWindow(QMainWindow):
             self._scroll_view_to_task(task)
 
     def _on_legend_migrated_filter(self, enabled: bool) -> None:
-        for view in self._iter_tab_views():
-            view._scene.set_migrated_only_filter(enabled)
+        tab = self._active_tab
+        if tab is None:
+            return
+        tab.view._scene.set_migrated_only_filter(enabled)
         if enabled:
             self._legend.set_heatmap_filter(None, None)
             self._sync_show_all_tasks_btn()
+        if not self._cpu_splitter_user_sized:
+            self._autofit_cpu_load_height()
 
     @_dialog_guard
     def _open_trace_compare(self, _checked: bool = False) -> None:
@@ -25836,8 +26371,8 @@ class MainWindow(QMainWindow):
                 "showSti": self._show_sti,
                 "showCpuLoad": self._show_cpu_load,
                 "darkMode": self._is_dark,
-                "migratedOnlyFilter": sc._migrated_only_filter,
             },
+            "tabFilters": _snapshot_tab_filters(sc),
             "findQuery": self._find_input.text().strip(),
             "findMode": find_mode,
             "pinnedHighlightKey": sc._locked_task,
@@ -25885,8 +26420,16 @@ class MainWindow(QMainWindow):
                 self._is_dark = want_dark
                 self._theme_op_id += 1
                 self._apply_theme(want_dark, op=self._theme_op_id)
-        sc.set_migrated_only_filter(bool(opts.get("migratedOnlyFilter", False)))
-        self._legend.set_migrated_only_checked(sc._migrated_only_filter)
+
+        filters = _sanitize_tab_filters(data.get("tabFilters"))
+        if filters is None:
+            filters = _sanitize_tab_filters({
+                "migratedOnlyFilter": opts.get("migratedOnlyFilter", False),
+            })
+        if filters:
+            sc.apply_tab_filters(filters)
+            self._sync_legend_filters_from_scene(sc)
+            self._sync_show_all_tasks_btn()
 
         tvp = data.get("timelineViewport")
         if isinstance(tvp, dict) and self._trace is not None:
@@ -25964,6 +26507,8 @@ class MainWindow(QMainWindow):
     def _export_portable_session(self) -> None:
         """Export portable session JSON (Web-compatible)."""
         try:
+            if tab := self._active_tab:
+                self._capture_legend_filters_to_scene(tab.view._scene)
             payload = self._build_portable_session_payload()
         except ValueError as exc:
             QMessageBox.information(self, "Export Session", str(exc))
@@ -26435,6 +26980,7 @@ def _trace_info_payload(trace: "BtfTrace", path: str,
             "priority": trace.has_priority_instrumentation,
             "sync_objects": trace.has_sync_object_instrumentation,
             "intervals": bool(trace.interval_ids),
+            "tags": bool(trace.tag_channels),
         },
         "tick_health": tick,
     }
@@ -26475,8 +27021,9 @@ Output format (--format, report and compare only):
 
 _CLI_EPILOG_GUI = """\
 GUI examples:
-  %(prog)s                          restore previous session (btf_viewer.rc)
-  %(prog)s tracedata/example.btf    open one trace in the interactive viewer
+  %(prog)s                                    restore previous session (btf_viewer.rc)
+  %(prog)s tracedata/example.btf              open one trace in the interactive viewer
+  %(prog)s run1.btf run2.btf                   open multiple traces (first tab active)
 
 CLI examples:
   %(prog)s info tracedata/example-4cores.btf
@@ -26926,6 +27473,23 @@ _CLI_COMMANDS = {
     "migrations": _cli_migrations_main,
 }
 
+def _cli_gui_trace_paths(argv: List[str]) -> List[str]:
+    """Normalize existing .btf paths from GUI argv (preserves order, dedupes)."""
+    seen: set = set()
+    out: List[str] = []
+    for arg in argv:
+        if arg.startswith("-"):
+            continue
+        path = os.path.abspath(os.path.expanduser(arg))
+        if not os.path.isfile(path):
+            print(f"warning: trace file not found, skipping: {arg}", file=sys.stderr)
+            continue
+        if path in seen:
+            continue
+        seen.add(path)
+        out.append(path)
+    return out
+
 def main() -> None:
     argv = sys.argv[1:]
     parser, _subs = _make_arg_parser()
@@ -26956,12 +27520,13 @@ def main() -> None:
     win.show()
     _process_ui_events_safely()  # ensure the window is painted before any file open
 
-    if len(argv) == 1:
-        path = argv[0]
-        if os.path.isfile(path):
-            QTimer.singleShot(100, lambda: win._open_file(path))
-        else:
-            QTimer.singleShot(100, win._restore_session_tabs)
+    cli_paths = _cli_gui_trace_paths(argv)
+    if cli_paths:
+        win._session_restore_active_idx = 0
+        win._session_restore_queue = cli_paths[1:]
+        QTimer.singleShot(100, lambda: win._open_file(cli_paths[0]))
+    elif argv:
+        QTimer.singleShot(100, win._restore_session_tabs)
     else:
         QTimer.singleShot(100, win._restore_session_tabs)
 

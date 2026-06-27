@@ -3,6 +3,13 @@
     <div class="legend-title">
       Tasks
     </div>
+    <input
+      :value="taskFilterText"
+      class="legend-search"
+      type="search"
+      placeholder="Filter tasks…"
+      @input="onSearchInput"
+    >
     <div
       v-if="taskFilterSet"
       class="heatmap-filter-banner"
@@ -18,8 +25,9 @@
     </div>
     <label class="migrated-filter">
       <input
-        v-model="migratedOnly"
+        :checked="migratedOnlyFilter"
         type="checkbox"
+        @change="onMigratedChange"
       >
       Migrated tasks only
     </label>
@@ -44,20 +52,20 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed } from 'vue'
 import { taskColor, taskDisplayName } from '../utils/colors.js'
 import { isMigratedTask } from '../utils/migrationAnalysis.js'
+import { mergeKeyMatchesTextFilter, normalizeTaskFilterText } from '../utils/taskFilter.js'
 
 const props = defineProps({
   trace:        { type: Object, default: null },
   highlightKey: { type: [String, null], default: null },
-  filterText:   { type: String, default: '' },
   taskFilterKeys:     { type: Array, default: null },
+  taskFilterText:     { type: String, default: '' },
+  migratedOnlyFilter: { type: Boolean, default: false },
   heatmapFilterLabel: { type: String, default: null },
 })
-const emit = defineEmits(['highlightChange', 'highlightClick', 'migratedFilterChange', 'clearTaskFilter'])
-
-const migratedOnly = ref(false)
+const emit = defineEmits(['highlightChange', 'highlightClick', 'migratedFilterChange', 'clearTaskFilter', 'filterChange'])
 
 const taskFilterSet = computed(() => {
   const keys = props.taskFilterKeys
@@ -65,19 +73,22 @@ const taskFilterSet = computed(() => {
   return new Set(keys)
 })
 
-watch(migratedOnly, (v) => emit('migratedFilterChange', v))
+function onSearchInput(e) {
+  emit('filterChange', e.target.value)
+}
+
+function onMigratedChange(e) {
+  emit('migratedFilterChange', e.target.checked)
+}
 
 const visibleTasks = computed(() => {
   const tasks = props.trace?.tasks || []
-  const q = (props.filterText || '').trim().toLowerCase()
+  const q = normalizeTaskFilterText(props.taskFilterText)
   return tasks.filter((mk) => {
     if (taskFilterSet.value && !taskFilterSet.value.has(mk)) return false
-    if (migratedOnly.value && props.trace && !isMigratedTask(props.trace, mk)) return false
+    if (props.migratedOnlyFilter && props.trace && !isMigratedTask(props.trace, mk)) return false
     if (!q) return true
-    const raw = props.trace?.taskRepr?.get(mk) || mk
-    const disp = taskDisplayName(raw)
-    const hay = `${mk} ${raw} ${disp}`.toLowerCase()
-    return hay.includes(q)
+    return mergeKeyMatchesTextFilter(props.trace, mk, q)
   })
 })
 </script>
@@ -98,6 +109,23 @@ const visibleTasks = computed(() => {
   margin-bottom: 6px;
   padding-bottom: 4px;
   border-bottom: 1px solid var(--border);
+}
+
+.legend-search {
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: 8px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--tb-bg);
+  color: var(--fg);
+  font: inherit;
+}
+
+.legend-search:focus {
+  outline: none;
+  border-color: rgba(91, 155, 213, 0.65);
 }
 
 .migrated-filter {
