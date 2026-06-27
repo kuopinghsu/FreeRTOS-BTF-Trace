@@ -9042,6 +9042,45 @@ class _NavigatorPopup(QWidget):
         p.drawPixmap(0, 0, self._pix)
         p.end()
 
+    def _begin_nav_drag(self, grab_x: float, grab_y: float) -> None:
+        """Start dragging the viewport indicator (app-level capture for Wayland)."""
+        self._dragging = True
+        self._grab_x = grab_x
+        self._grab_y = grab_y
+        self.setCursor(Qt.CursorShape.ClosedHandCursor)
+        app = QApplication.instance()
+        if app:
+            app.installEventFilter(self)
+
+    def _end_nav_drag(self) -> None:
+        self._dragging = False
+        app = QApplication.instance()
+        if app:
+            app.removeEventFilter(self)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        view = self.parentWidget()
+        if view is not None and hasattr(view, '_nav_popup_handle_release'):
+            view._nav_popup_handle_release()
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        """App-level mouse capture during nav-indicator drag (Wayland-safe)."""
+        if not self._dragging:
+            return False
+        et = event.type()
+        if et == QEvent.Type.MouseMove:
+            gpos = event.globalPosition()
+            local = self.mapFromGlobal(QPoint(int(gpos.x()), int(gpos.y())))
+            view = self.parentWidget()
+            if view is not None and hasattr(view, '_nav_popup_handle_drag'):
+                view._nav_popup_handle_drag(
+                    local.x(), local.y(), self._grab_x, self._grab_y)
+            return True
+        if (et == QEvent.Type.MouseButtonRelease
+                and event.button() == Qt.MouseButton.LeftButton):
+            self._end_nav_drag()
+            return True
+        return False
+
     def mousePressEvent(self, event) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.LeftButton:
             view = self.parentWidget()
@@ -9065,12 +9104,7 @@ class _NavigatorPopup(QWidget):
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
         if self._dragging and event.button() == Qt.MouseButton.LeftButton:
-            self._dragging = False
-            self.releaseMouse()
-            self.setCursor(Qt.CursorShape.PointingHandCursor)
-            view = self.parentWidget()
-            if view is not None and hasattr(view, '_nav_popup_handle_release'):
-                view._nav_popup_handle_release()
+            self._end_nav_drag()
             event.accept()
             return
         super().mouseReleaseEvent(event)
@@ -9373,6 +9407,32 @@ class _RightDockResizeGuard(QObject):
                 self._win._schedule_stabilize_right_dock_layout()
         return False
 
+class _LabelGripDragCapture(QObject):
+    """App-level mouse capture for label-column resize (Wayland-safe)."""
+
+    def __init__(self, grip: "_LabelColumnGripItem") -> None:
+        super().__init__()
+        self._grip = grip
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        grip = self._grip
+        if not grip._dragging:
+            return False
+        et = event.type()
+        if et == QEvent.Type.MouseMove:
+            _HoverCursor.show(Qt.CursorShape.SizeHorCursor)
+            view = grip._view()
+            if view is not None:
+                view._apply_label_width_drag(
+                    int(grip._start_w + (event.globalPosition().x() - grip._start_global_x)))
+            return True
+        if (et == QEvent.Type.MouseButtonRelease
+                and event.button() == Qt.MouseButton.LeftButton):
+            grip._finish_label_drag()
+            return True
+        return False
+
+
 class _LabelColumnGripItem(QGraphicsItem):
     """Frozen scene-item resize grip (moves with the label column on horizontal pan)."""
 
@@ -9386,6 +9446,7 @@ class _LabelColumnGripItem(QGraphicsItem):
         self._start_global_x = 0.0
         self._start_w = 0
         self._hovered = False
+        self._drag_capture = _LabelGripDragCapture(self)
         self.setAcceptHoverEvents(True)
         self.setCursor(Qt.CursorShape.SizeHorCursor)
         self.setToolTip("Drag to resize label column")
@@ -9416,13 +9477,24 @@ class _LabelColumnGripItem(QGraphicsItem):
         self.update()
         super().hoverLeaveEvent(event)
 
+    def _finish_label_drag(self) -> None:
+        self._dragging = False
+        app = QApplication.instance()
+        if app:
+            app.removeEventFilter(self._drag_capture)
+        view = self._view()
+        if view is not None:
+            view._finish_label_width_drag()
+
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self._dragging = True
-            self._start_global_x = event.screenPosition().x()
+            self._start_global_x = event.globalPosition().x()
             self._start_w = self._scene._label_width
             _HoverCursor.show(Qt.CursorShape.SizeHorCursor)
-            self.grabMouse()
+            app = QApplication.instance()
+            if app:
+                app.installEventFilter(self._drag_capture)
             event.accept()
             return
         super().mousePressEvent(event)
@@ -9433,18 +9505,14 @@ class _LabelColumnGripItem(QGraphicsItem):
             if view is not None:
                 _HoverCursor.show(Qt.CursorShape.SizeHorCursor)
                 view._apply_label_width_drag(
-                    int(self._start_w + (event.screenPosition().x() - self._start_global_x)))
+                    int(self._start_w + (event.globalPosition().x() - self._start_global_x)))
             event.accept()
             return
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
         if self._dragging and event.button() == Qt.MouseButton.LeftButton:
-            self._dragging = False
-            self.ungrabMouse()
-            view = self._view()
-            if view is not None:
-                view._finish_label_width_drag()
+            self._finish_label_drag()
             event.accept()
             return
         super().mouseReleaseEvent(event)
@@ -12247,11 +12315,7 @@ class TimelineView(QGraphicsView):
         m = self._nav_popup_metrics()
         rect = QRectF(m['vx1'], m['vy1'], m['vw'], m['vh'])
         if rect.contains(cx, cy):
-            popup._dragging = True
-            popup._grab_x = cx - m['vx1']
-            popup._grab_y = cy - m['vy1']
-            popup.setCursor(Qt.CursorShape.ClosedHandCursor)
-            popup.grabMouse()
+            popup._begin_nav_drag(cx - m['vx1'], cy - m['vy1'])
             self._nav_hide_timer.stop()
             return True
         self._nav_popup_jump_to(cx, cy)
