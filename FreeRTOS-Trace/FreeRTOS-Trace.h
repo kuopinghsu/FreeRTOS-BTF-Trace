@@ -205,8 +205,7 @@
 #if configINCLUDE_OSTICK_EVENTS
 
 #ifndef traceTASK_INCREMENT_TICK
-/* Kernel hook runs on every timer IRQ (same xTickCount while scheduler suspended).
- * btf_trace_increment_tick() filters duplicates; kernel stays upstream-compatible. */
+/* Kernel hook — one STI TICK per invocation (no dedup by tick number). */
 # define traceTASK_INCREMENT_TICK( xTickCount ) btf_trace_increment_tick( (uint32_t)( xTickCount ) )
 #endif // traceTASK_INCREMENT_TICK
 

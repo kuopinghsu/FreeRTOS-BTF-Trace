@@ -68,8 +68,6 @@
 static volatile uint32_t trace_en;
 static TRACE trace_data;
 static int trace_wrap_warned;
-static uint32_t trace_last_tick;
-static int trace_last_tick_valid;
 
 static uint32_t last_timestamp;
 static uint64_t cyc_to_time_acc;
@@ -94,7 +92,6 @@ void btf_traceSTART(void) {
     last_timestamp = 0;
     cyc_to_time_acc = 0;
     trace_wrap_warned = 0;
-    trace_last_tick_valid = 0;
 }
 
 void btf_traceEND(void) {
@@ -215,24 +212,19 @@ void btf_trace_add_event (
     }
 }
 
-void btf_trace_increment_tick (
-    uint32_t xTickCount)
+void btf_trace_increment_tick( uint32_t xTickCount )
 {
     UBaseType_t uxSavedInterruptStatus;
 
-    if (!trace_en) { return; }
-
-    /* Official FreeRTOS calls traceTASK_INCREMENT_TICK() before xTickCount is
-     * updated.  While the scheduler is suspended, core 0 may still take timer
-     * IRQs; each call passes the same xTickCount.  Drop those duplicates here
-     * so BTF has one STI TICK line per tick-number step. */
-    if (trace_last_tick_valid && trace_last_tick == xTickCount) {
+    if( !trace_en )
+    {
         return;
     }
 
-    trace_last_tick = xTickCount;
-    trace_last_tick_valid = 1;
-
+    /* Record every traceTASK_INCREMENT_TICK hook call.  While the scheduler is
+     * suspended the kernel may invoke the hook several times with the same
+     * xTickCount; keep each one so STI TICK timestamps reflect real timer IRQ
+     * spacing (Trace Health).  param1 may repeat; timestamps do not. */
     uxSavedInterruptStatus = taskENTER_CRITICAL_FROM_ISR();
     btf_trace_add_event(xTickCount, 0, TRACE_EVENT_TASK_INCREMENT_TICK);
     taskEXIT_CRITICAL_FROM_ISR( uxSavedInterruptStatus );
