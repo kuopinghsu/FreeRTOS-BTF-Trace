@@ -35,7 +35,6 @@ SESSION_ATTR_MAP: dict[str, str] = {
     "_load_in_progress": "load_in_progress",
 }
 
-
 class MvvmSettingsMixin:
     """Delegate legacy MainWindow settings/session fields to MainViewModel."""
 

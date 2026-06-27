@@ -127,12 +127,10 @@ DEFAULT_IDLE_PROB       = 0.20
 DEFAULT_MAX_BURST_TICKS = 5
 MUTEX_PTR_BASE          = 0x80010000
 
-
 def _interval_note(interval_id: int, task_id: int | None, *, use_tid: bool) -> str:
     if use_tid and task_id is not None:
         return f"{interval_id} tid:{task_id}"
     return str(interval_id)
-
 
 class _IntervalScenario:
     """Emit paired interval_start / interval_stop STI events per task burst."""
@@ -170,7 +168,6 @@ class _IntervalScenario:
         if not stack:
             del self._open[task]
         return 1
-
 
 class _MutexScenario:
     """Emit firmware-style mutex STI: create / take / give with object pointers."""
@@ -221,7 +218,6 @@ class _MutexScenario:
         del self._held[task]
         return n
 
-
 def parse_args():
     """Parse and return command-line arguments for trace generation."""
     parser = argparse.ArgumentParser(
@@ -262,7 +258,6 @@ def parse_args():
         parser.print_help()
         sys.exit(0)
     return parser.parse_args()
-
 
 def main():
     """Entry point: parse arguments, generate and write synthetic BTF trace."""
@@ -593,7 +588,6 @@ def main():
         f"{mutex_no:>5,} mutex STI  |  "
         f"sim duration ≈ {sim_dur_ms:,.1f} ms  →  {out_path}"
     )
-
 
 if __name__ == "__main__":
     main()

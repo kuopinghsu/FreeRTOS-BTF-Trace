@@ -10,7 +10,6 @@ from .base import ViewModelBase
 from .models import SessionModel
 from .trace_tab_vm import TraceTabViewModel
 
-
 class MainViewModel(ViewModelBase):
     """Root view-model: open traces, session loading, and application settings."""
 

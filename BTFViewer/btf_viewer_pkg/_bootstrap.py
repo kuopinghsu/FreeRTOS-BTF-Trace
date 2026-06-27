@@ -18,6 +18,14 @@ IMPORT_ORDER: tuple[str, ...] = (
     "scene",
     "view",
     "stats",
+    "mvvm.base",
+    "mvvm.models",
+    "mvvm.app_settings",
+    "mvvm.stats_vm",
+    "mvvm.trace_tab_vm",
+    "mvvm.main_vm",
+    "mvvm.bindings",
+    "mvvm",
     "mainwindow",
     "platform",
     "cli",
@@ -25,7 +33,6 @@ IMPORT_ORDER: tuple[str, ...] = (
 
 _PKG = __name__.rsplit(".", 1)[0] if "." in __name__ else "btf_viewer_pkg"
 _installed = False
-
 
 def _flatten(modules: Iterable[object]) -> dict[str, object]:
     out: dict[str, object] = {}
@@ -35,7 +42,6 @@ def _flatten(modules: Iterable[object]) -> dict[str, object]:
                 continue
             out[key] = val
     return out
-
 
 def install() -> None:
     global _installed

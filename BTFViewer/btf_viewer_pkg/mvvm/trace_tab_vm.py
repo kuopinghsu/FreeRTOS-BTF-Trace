@@ -10,7 +10,6 @@ from .base import ViewModelBase
 from .models import PlotSessionState, TraceTabModel
 from .stats_vm import StatsViewModel
 
-
 class TraceTabViewModel(ViewModelBase):
     """ViewModel for one open trace tab."""
 

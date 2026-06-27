@@ -1,31 +1,32 @@
 # BTF Viewer — development and release build
 #
-# Edit btf_viewer_pkg/ then regenerate the single-file release:
-#   make -C BTFViewer          # same as: make -C BTFViewer bundle
-#   make -C BTFViewer check-bundle
+#   make -C BTFViewer              # builds web + desktop → builds/btf_viewer.{html,py}
+#   make -C BTFViewer bundle       # desktop only
+#   make -C BTFViewer web          # web only
+#   make -C BTFViewer check-bundle # desktop parity check (CI)
 
 PYTHON ?= python3
 TRACE ?= ../tracedata/example.btf
 BUILDS := builds
 OUT := $(BUILDS)/btf_viewer.py
 
-.DEFAULT_GOAL := bundle
+.DEFAULT_GOAL := all
 
-.PHONY: bundle extract check-bundle
+.PHONY: all web bundle check-bundle test
 
-bundle: web
+all: web bundle
+
+web:
+	$(MAKE) -C web
+
+bundle:
 	mkdir -p $(BUILDS)
 	$(PYTHON) scripts/bundle_viewer.py -o $(OUT)
 	$(PYTHON) -m py_compile $(OUT)
 	$(PYTHON) $(OUT) info $(TRACE)
 
-web:
-	make -C web
-
-# One-shot migration: split a hand-edited monolith into btf_viewer_pkg/.
-# Input must not be a generated btf_viewer.py — use git history or a backup.
-extract:
-	$(PYTHON) scripts/extract_monolith.py
+test:
+	QT_QPA_PLATFORM=offscreen $(PYTHON) -m unittest discover -s tests -v
 
 # Fail if builds/btf_viewer.py drifts from package sources (CI / pre-commit).
 check-bundle: bundle

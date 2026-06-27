@@ -23,7 +23,6 @@ from btf_viewer_pkg.view import TimelineView  # noqa: E402
 
 EXAMPLE_BTF = Path(__file__).resolve().parents[2] / "tracedata" / "example.btf"
 
-
 class _QtTestBase(unittest.TestCase):
     _app: QApplication | None = None
 
@@ -41,7 +40,6 @@ class _QtTestBase(unittest.TestCase):
         view.load_trace(trace)
         self._app.processEvents()
         return view, view._scene, trace
-
 
 class TestSceneOverlays(_QtTestBase):
     def test_hover_line_restored_after_rebuild(self) -> None:
@@ -89,7 +87,6 @@ class TestSceneOverlays(_QtTestBase):
             any(item in old_frozen for item, _ in scene._frozen_top_items),
             "stale hover labels remain in _frozen_top_items",
         )
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -498,7 +498,7 @@ export function renderToSvg(trace, viewport, options = {}) {
         const dBadgeH = 14
         let dbx = Math.round(midX - dBadgeW / 2)
         dbx = Math.max(OX + 2, Math.min(dbx, svgW - dBadgeW - 2))
-        const dby = RULER_H + 4
+        const dby = ly
         els.push(`<rect x="${dbx.toFixed(1)}" y="${dby}" width="${dBadgeW}" height="${dBadgeH}" fill="${color}" rx="2"/>`)
         els.push(`<text x="${(dbx + 3).toFixed(1)}" y="${dby + 3}" dominant-baseline="hanging" fill="#000" font-family="monospace" font-size="10" font-weight="bold">${esc(dStr)}</text>`)
       }

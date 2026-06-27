@@ -97,7 +97,7 @@ DEFAULT_DOCK_LAYOUT_VERSION = "9"
 # Right-panel tab indices (Statistics / Marks / Find — web parity).
 _PANEL_TAB_STATS = 0
 _PANEL_TAB_MARKS = 1
-_PANEL_TAB_FIND = 2
+_PANEL_TAB_FIND  = 2
 # Keep empty so first run uses code-driven dock sizing/tab defaults instead
 # of a host-dependent serialized Qt dock_state blob.
 DEFAULT_DOCK_STATE_B64 = ""
@@ -130,9 +130,9 @@ LABEL_BOTTOM_MARGIN      =  10  # Gap (px) between bottom edge of a vertical lab
 # ---- Performance / Level-of-Detail ----------------------------------------
 _TIMESCALE_PER_PX_DEFAULT= 2.0    # Initial zoom level (nanoseconds per screen pixel).
 # Qt QScrollBar range is capped near INT_MAX; keep scene timeline width below this.
-_MAX_SCENE_TIMELINE_PX    = 2_000_000_000
+_MAX_SCENE_TIMELINE_PX   = 2_000_000_000
 # Virtual time-axis scrollbar maps the full trace into this range when zoomed in.
-_VIRT_SCROLL_MAX          = 2_000_000_000
+_VIRT_SCROLL_MAX         = 2_000_000_000
 _HOVER_HIGHLIGHT_ENABLED = False  # Highlight task bars when hovering the label (default off).
 # _BatchRowItem.paint() LOD thresholds (Qt levelOfDetail: 1.0 = 100% zoom).
 _PAINT_LOD_COARSE        = 0.45   # Below: merge nearby segments, skip pen outlines.
@@ -172,6 +172,10 @@ _NAV_SCROLL_ACTIVE_MS     = 40    # faster minimap refresh while panning
 _WINDOW_SHIFT_MIN_MS      = 150   # throttle sliding-window rebuilds at trace edges
 # Never draw grid lines closer than this (px); dense lines read as solid gray.
 _MIN_GRID_SPACING_PX      = 12.0
+# Extra scene extent on the task axis so the last row clears scrollbar tracks.
+TIMELINE_SCROLL_GUTTER   = 12
+# Gap between the timeline pane and the CPU-load splitter handle (px).
+TIMELINE_SPLITTER_GAP    = 4
 
 # ---- Cursors --------------------------------------------------------------
 _MAX_CURSORS         = 8  # Hard upper bound - must equal len(_CURSOR_COLORS).

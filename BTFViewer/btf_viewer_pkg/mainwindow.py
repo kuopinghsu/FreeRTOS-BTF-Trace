@@ -9,6 +9,7 @@ from .graphics_items import *  # noqa: F403,F401
 from .scene import *  # noqa: F403,F401
 from .view import *  # noqa: F403,F401
 from .stats import *  # noqa: F403,F401
+from .mvvm import MainViewModel, MvvmSettingsMixin, TraceTabViewModel
 
 class _CpuLoadGraph(QWidget):
     """Synchronised CPU load chart below the main timeline.
@@ -859,32 +860,31 @@ class _LeftAlignedTabBar(QTabBar):
         super().showEvent(event)
         self.setExpanding(False)
 
+class _TimelinePane(QWidget):
+    """Task timeline + dedicated time scrollbar row (below the canvas, above CPU split)."""
+
+    def __init__(self, view: "TimelineView", parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.view = view
+        self.time_scroll = QScrollBar(Qt.Orientation.Horizontal, self)
+        self.time_scroll.hide()
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, TIMELINE_SPLITTER_GAP)
+        lay.setSpacing(0)
+        lay.addWidget(view, 1)
+        lay.addWidget(self.time_scroll, 0)
+        view.attach_time_scroll_bar(self.time_scroll)
+
 class _TraceTab:
-    """One open trace file: timeline, CPU load graph, and per-tab marks/find state."""
+    """One open trace file: timeline widgets + TraceTabViewModel document state."""
 
     __slots__ = (
-        "path", "trace", "view", "cpu_load_graph", "cpu_load_scroll", "cpu_splitter",
-        "bookmarks", "annotations", "mark_next_id",
-        "find_hits", "find_hit_idx", "find_marker_ns",
-        "undo_stack", "redo_stack",
-        "plot_mk", "plot_kind", "plot_preemptor", "plot_open",
+        "vm", "view", "cpu_load_graph", "cpu_load_scroll", "cpu_splitter",
+        "_timeline_pane",
     )
 
     def __init__(self, path: str, trace: "BtfTrace", win: "MainWindow") -> None:
-        self.path = path
-        self.trace = trace
-        self.bookmarks: List[TraceBookmark] = []
-        self.annotations: List[TraceAnnotation] = []
-        self.mark_next_id = 1
-        self.find_hits: List[int] = []
-        self.find_hit_idx = -1
-        self.find_marker_ns: Optional[int] = None
-        self.undo_stack: list = []
-        self.redo_stack: list = []
-        self.plot_mk: Optional[str] = None
-        self.plot_kind: Optional[str] = None
-        self.plot_preemptor: Optional[str] = None
-        self.plot_open: bool = False
+        self.vm = TraceTabViewModel(path, trace, win)
 
         self.view = TimelineView(win)
         win._wire_timeline_view(self.view)
@@ -896,8 +896,9 @@ class _TraceTab:
         self.cpu_load_scroll = QScrollArea()
         win._setup_cpu_load_scroll(self.cpu_load_scroll, self.cpu_load_graph)
 
+        self._timeline_pane = _TimelinePane(self.view)
         self.cpu_splitter = _ResizeSplitter(Qt.Orientation.Vertical)
-        self.cpu_splitter.addWidget(self.view)
+        self.cpu_splitter.addWidget(self._timeline_pane)
         self.cpu_splitter.addWidget(self.cpu_load_scroll)
         self.cpu_splitter.setStretchFactor(0, 1)
         self.cpu_splitter.setStretchFactor(1, 0)
@@ -909,7 +910,111 @@ class _TraceTab:
         if not win._show_cpu_load:
             self.cpu_load_scroll.hide()
 
-class MainWindow(QMainWindow):
+    @property
+    def path(self) -> str:
+        return self.vm.path
+
+    @property
+    def trace(self) -> Optional["BtfTrace"]:
+        return self.vm.trace
+
+    @property
+    def bookmarks(self) -> List[TraceBookmark]:
+        return self.vm.bookmarks
+
+    @bookmarks.setter
+    def bookmarks(self, value: List[TraceBookmark]) -> None:
+        self.vm.bookmarks = value
+
+    @property
+    def annotations(self) -> List[TraceAnnotation]:
+        return self.vm.annotations
+
+    @annotations.setter
+    def annotations(self, value: List[TraceAnnotation]) -> None:
+        self.vm.annotations = value
+
+    @property
+    def mark_next_id(self) -> int:
+        return self.vm.mark_next_id
+
+    @mark_next_id.setter
+    def mark_next_id(self, value: int) -> None:
+        self.vm.mark_next_id = value
+
+    @property
+    def find_hits(self) -> List[int]:
+        return self.vm.find_hits
+
+    @find_hits.setter
+    def find_hits(self, value: List[int]) -> None:
+        self.vm.find_hits = value
+
+    @property
+    def find_hit_idx(self) -> int:
+        return self.vm.find_hit_idx
+
+    @find_hit_idx.setter
+    def find_hit_idx(self, value: int) -> None:
+        self.vm.find_hit_idx = value
+
+    @property
+    def find_marker_ns(self) -> Optional[int]:
+        return self.vm.find_marker_ns
+
+    @find_marker_ns.setter
+    def find_marker_ns(self, value: Optional[int]) -> None:
+        self.vm.find_marker_ns = value
+
+    @property
+    def undo_stack(self) -> list:
+        return self.vm.undo_stack
+
+    @undo_stack.setter
+    def undo_stack(self, value: list) -> None:
+        self.vm.undo_stack = value
+
+    @property
+    def redo_stack(self) -> list:
+        return self.vm.redo_stack
+
+    @redo_stack.setter
+    def redo_stack(self, value: list) -> None:
+        self.vm.redo_stack = value
+
+    @property
+    def plot_mk(self) -> Optional[str]:
+        return self.vm.plot_mk
+
+    @plot_mk.setter
+    def plot_mk(self, value: Optional[str]) -> None:
+        self.vm.plot_mk = value
+
+    @property
+    def plot_kind(self) -> Optional[str]:
+        return self.vm.plot_kind
+
+    @plot_kind.setter
+    def plot_kind(self, value: Optional[str]) -> None:
+        self.vm.plot_kind = value
+
+    @property
+    def plot_preemptor(self) -> Optional[str]:
+        return self.vm.plot_preemptor
+
+    @plot_preemptor.setter
+    def plot_preemptor(self, value: Optional[str]) -> None:
+        self.vm.plot_preemptor = value
+
+    @property
+    def plot_open(self) -> bool:
+        return self.vm.plot_open
+
+    @plot_open.setter
+    def plot_open(self, value: bool) -> None:
+        self.vm.plot_open = value
+
+class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -918,51 +1023,20 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowIcon(app_icon())
+        self._vm = MainViewModel(self)
         self._tabs: List[_TraceTab] = []
         self._previous_tab_index: int = -1
         self._tab_switch_guard: bool = False
         self._bound_scene = None
         self._legend_cancel_fn = None
         self._parse_thread: Optional[_ParseThread] = None
-        self._load_in_progress: bool = False
-        self._progress_dialog: Optional[QProgressDialog] = None
-        self._session_restore_queue: List[str] = []
-        self._session_restore_active_idx: int = -1
         self._settings = _RcSettings()
         self._dock_width_apply_guard: bool = False
         self._dock_width_pending: Optional[float] = None
         self._dock_stabilize_timer: Optional[QTimer] = None
         self._right_dock_custom_drag: bool = False
+        self._progress_dialog: Optional[QProgressDialog] = None
 
-        # -- Runtime state for settings managed via _SettingsDialog ----------
-        self._show_sti:              bool  = True
-        self._show_grid:             bool  = True
-        self._show_legend:           bool  = True
-        self._show_stats:            bool  = True
-        self._show_cpu_load:         bool  = True
-        self._cpu_splitter_user_sized: bool = False
-        self._cpu_splitter_bottom_h: Optional[int] = None
-        self._show_marks:            bool  = True
-        self._show_find:             bool  = True
-        self._font_size_val:         int   = FONT_SIZE
-        self._ui_font_size_val:      int   = UI_FONT_SIZE
-        self._max_cursors_val:       int   = _DEFAULT_MAX_CURSORS
-        self._label_width_val:       int   = LABEL_WIDTH
-        self._row_height_val:        int   = ROW_HEIGHT
-        self._row_gap_val:            int   = ROW_GAP
-        self._sti_row_h_val:          int   = STI_ROW_H
-        self._sti_waveform_h_val:     int   = STI_WAVEFORM_H
-        self._sti_line_style_val:     str   = STI_LINE_STYLE
-        self._timescale_per_px_default_val:  float = _TIMESCALE_PER_PX_DEFAULT
-        self._hover_highlight_val:    bool  = _HOVER_HIGHLIGHT_ENABLED
-        self._cpu_load_row_h_val:     int   = CPU_LOAD_ROW_H
-        self._colorblind_val:         bool  = False
-        self._bookmarks: List[TraceBookmark] = []
-        self._annotations: List[TraceAnnotation] = []
-        self._mark_next_id: int = 1
-        self._find_hits: List[int] = []
-        self._find_hit_idx: int = -1
-        self._find_marker_ns: Optional[int] = None
         self._find_marker_items: List[QGraphicsItem] = []
         self._heatmap_dlg: Optional[_MigrationHeatmapDialog] = None
         self._heatmap_view_snapshot: Optional[dict] = None
@@ -1031,6 +1105,99 @@ class MainWindow(QMainWindow):
         if self._progress_dialog is not None:
             self._progress_dialog.close()
             self._progress_dialog = None
+
+    @property
+    def _active_tab_vm(self) -> Optional[TraceTabViewModel]:
+        tab = self._active_tab
+        return tab.vm if tab is not None else None
+
+    @property
+    def _bookmarks(self) -> List[TraceBookmark]:
+        vm = self._active_tab_vm
+        return vm.bookmarks if vm is not None else []
+
+    @_bookmarks.setter
+    def _bookmarks(self, value: List[TraceBookmark]) -> None:
+        vm = self._active_tab_vm
+        if vm is not None:
+            vm.bookmarks = value
+
+    @property
+    def _annotations(self) -> List[TraceAnnotation]:
+        vm = self._active_tab_vm
+        return vm.annotations if vm is not None else []
+
+    @_annotations.setter
+    def _annotations(self, value: List[TraceAnnotation]) -> None:
+        vm = self._active_tab_vm
+        if vm is not None:
+            vm.annotations = value
+
+    @property
+    def _mark_next_id(self) -> int:
+        vm = self._active_tab_vm
+        return vm.mark_next_id if vm is not None else 1
+
+    @_mark_next_id.setter
+    def _mark_next_id(self, value: int) -> None:
+        vm = self._active_tab_vm
+        if vm is not None:
+            vm.mark_next_id = value
+
+    @property
+    def _find_hits(self) -> List[int]:
+        vm = self._active_tab_vm
+        return vm.find_hits if vm is not None else []
+
+    @_find_hits.setter
+    def _find_hits(self, value: List[int]) -> None:
+        vm = self._active_tab_vm
+        if vm is not None:
+            vm.find_hits = value
+
+    @property
+    def _find_hit_idx(self) -> int:
+        vm = self._active_tab_vm
+        return vm.find_hit_idx if vm is not None else -1
+
+    @_find_hit_idx.setter
+    def _find_hit_idx(self, value: int) -> None:
+        vm = self._active_tab_vm
+        if vm is not None:
+            vm.find_hit_idx = value
+
+    @property
+    def _find_marker_ns(self) -> Optional[int]:
+        vm = self._active_tab_vm
+        return vm.find_marker_ns if vm is not None else None
+
+    @_find_marker_ns.setter
+    def _find_marker_ns(self, value: Optional[int]) -> None:
+        vm = self._active_tab_vm
+        if vm is not None:
+            vm.find_marker_ns = value
+
+    @property
+    def _undo_stack(self) -> list:
+        vm = self._active_tab_vm
+        return vm.undo_stack if vm is not None else []
+
+    @_undo_stack.setter
+    def _undo_stack(self, value: list) -> None:
+        vm = self._active_tab_vm
+        if vm is not None:
+            vm.undo_stack = value
+
+    @property
+    def _redo_stack(self) -> list:
+        vm = self._active_tab_vm
+        return vm.redo_stack if vm is not None else []
+
+    @_redo_stack.setter
+    def _redo_stack(self, value: list) -> None:
+        vm = self._active_tab_vm
+        if vm is not None:
+            vm.redo_stack = value
 
     @property
     def _active_tab(self) -> Optional[_TraceTab]:
@@ -1382,16 +1549,10 @@ class MainWindow(QMainWindow):
         self._legend.set_heatmap_filter(scene._heatmap_filter_label, scene._heatmap_filter_mks)
 
     def _stash_tab_state(self, tab: _TraceTab) -> None:
-        tab.bookmarks = list(self._bookmarks)
-        tab.annotations = list(self._annotations)
-        tab.mark_next_id = self._mark_next_id
-        tab.find_hits = list(self._find_hits)
-        tab.find_hit_idx = self._find_hit_idx
-        tab.find_marker_ns = self._find_marker_ns
-        tab.undo_stack = list(self._undo_stack)
-        tab.redo_stack = list(self._redo_stack)
-        tab.plot_mk, tab.plot_kind, tab.plot_open, tab.plot_preemptor = (
-            self._stats_panel.capture_plot_session())
+        tab.vm.stats.copy_from_panel(self._stats_panel)
+        tab.vm.stats.cursor_times = list(tab.view._scene.cursor_times())
+        mk, kind, open_, preemptor = self._stats_panel.capture_plot_session()
+        tab.vm.set_plot_session(mk, kind, open_, preemptor)
         self._persist_trace_state(tab.path, tab.bookmarks, tab.annotations, tab.mark_next_id)
         self._persist_tab_view_state(tab)
 
@@ -1532,14 +1693,6 @@ class MainWindow(QMainWindow):
         self._stash_tab_state(tab)
 
     def _restore_tab_state(self, tab: _TraceTab) -> None:
-        self._bookmarks = list(tab.bookmarks)
-        self._annotations = list(tab.annotations)
-        self._mark_next_id = tab.mark_next_id
-        self._find_hits = list(tab.find_hits)
-        self._find_hit_idx = tab.find_hit_idx
-        self._find_marker_ns = tab.find_marker_ns
-        self._undo_stack = list(tab.undo_stack)
-        self._redo_stack = list(tab.redo_stack)
         self._rebuild_bookmark_list()
         self._rebuild_annotation_list()
         self._sync_panels_to_active_tab()
@@ -1603,6 +1756,7 @@ class MainWindow(QMainWindow):
         self._sync_legend_filters_from_scene(sc)
         self._sync_show_all_tasks_btn()
         self._stats_panel._ui_font_size = self._ui_font_size_val
+        tab.vm.stats.apply_to_panel(self._stats_panel, refresh_stats=False)
         self._stats_panel.set_cursor_times(self._view._scene.cursor_times(), refresh_stats=False)
         self._stats_panel.rebuild(trace)
         QTimer.singleShot(0, self._stats_panel.sync_util_layout)
@@ -1687,11 +1841,13 @@ class MainWindow(QMainWindow):
             self._stats_panel.clear_plot_session()
         if 0 <= index < len(self._tabs):
             tab = self._tabs[index]
+            self._vm.set_active_index(index)
             self._restore_tab_state(tab)
             self._stats_panel.restore_plot_session(
                 tab.trace, tab.plot_mk, tab.plot_kind, tab.plot_open,
                 preemptor=tab.plot_preemptor)
         else:
+            self._vm.set_active_index(-1)
             self._update_tab_actions()
         self._previous_tab_index = index
 
@@ -1718,18 +1874,12 @@ class MainWindow(QMainWindow):
         finally:
             self._tab_switch_guard = False
         self._tabs.pop(index)
+        self._vm.remove_tab(index)
         tab.cpu_splitter.deleteLater()
         if not self._tabs:
             self._central_stack.setCurrentIndex(0)
             self._unbind_legend_from_scene()
-            self._bookmarks = []
-            self._annotations = []
-            self._mark_next_id = 1
-            self._find_hits = []
-            self._find_hit_idx = -1
-            self._find_marker_ns = None
-            self._undo_stack.clear()
-            self._redo_stack.clear()
+            self._vm.set_active_index(-1)
             self._rebuild_bookmark_list()
             self._rebuild_annotation_list()
             self._previous_tab_index = -1
@@ -1742,6 +1892,7 @@ class MainWindow(QMainWindow):
 
     def _add_trace_tab(self, path: str, trace: BtfTrace) -> _TraceTab:
         tab = _TraceTab(path, trace, self)
+        self._vm.add_tab(tab.vm)
         self._apply_view_settings(tab.view)
         c = self._theme_tokens(self._is_dark)
         win_bg = QColor(c["win_bg"])
@@ -2315,7 +2466,7 @@ class MainWindow(QMainWindow):
             sc._hover_items = []
             sc._hover_line_ns = None
             sc._task_row_rects = {}
-            tab.trace = None
+            tab.vm.trace = None
         self._tabs.clear()
 
     def dragEnterEvent(self, event) -> None:
@@ -2865,9 +3016,7 @@ class MainWindow(QMainWindow):
         self._setup_cpu_load_scroll(self._settings_cpu_scroll, self._settings_cpu_graph)
         self._settings_cpu_scroll.hide()
 
-        # Undo / Redo stacks (cursor + mark state; synced per tab on switch)
-        self._undo_stack: list = []
-        self._redo_stack: list = []
+        # Undo / Redo stacks live in TraceTabViewModel (per tab).
         self._undo_suppress: bool = False
 
         self._welcome_page = QWidget()
@@ -3583,6 +3732,8 @@ class MainWindow(QMainWindow):
         sizes = self._cpu_splitter.sizes()
         if len(sizes) >= 2 and sizes[1] > 0:
             self._cpu_splitter_bottom_h = sizes[1]
+        if tab := self._active_tab:
+            tab.view._position_virt_trace_bar()
 
     def _apply_saved_cpu_splitter(self, tab: Optional[_TraceTab] = None) -> None:
         """Restore a user-resized CPU load pane height on *tab*."""
@@ -4731,13 +4882,7 @@ class MainWindow(QMainWindow):
         self._timescale_per_px_default_val = tab.view._scene._timescale_per_px_default
         self._refresh_zoom_ui_unit()
         self._load_trace_state(path)
-        tab.bookmarks = list(self._bookmarks)
-        tab.annotations = list(self._annotations)
-        tab.mark_next_id = self._mark_next_id
         self._recompute_find_hits()
-        tab.find_hits = list(self._find_hits)
-        tab.find_hit_idx = self._find_hit_idx
-        tab.find_marker_ns = self._find_marker_ns
         self._load_tab_view_state(tab)
 
         progress_dialog.update_progress(100, "Building legend…")
@@ -4746,8 +4891,6 @@ class MainWindow(QMainWindow):
 
         self._undo_stack.clear()
         self._redo_stack.clear()
-        tab.undo_stack = []
-        tab.redo_stack = []
         self._act_undo.setEnabled(False)
         self._act_redo.setEnabled(False)
         self._focus_statistics_panel(force=True)

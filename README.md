@@ -105,7 +105,7 @@ After the simulator exits it writes `trace.bin`; `gentrace` converts it to `trac
 
 ```bash
 pip install -r BTFViewer/requirements.txt
-python BTFViewer/btf_viewer.py tracedata/trace.btf
+python BTFViewer/builds/btf_viewer.py tracedata/trace.btf
 ```
 
 Sample traces: `tracedata/example.btf`, `tracedata/example-4cores.btf` (SMP demos), `tracedata/example-16cores.btf` (large). Full viewer docs: [`BTFViewer/README.md`](BTFViewer/README.md).
@@ -185,7 +185,7 @@ The last field is **bytes allocated** from the heap_4 pool at that tick.
 
 ```bash
 make run
-python BTFViewer/btf_viewer.py tracedata/trace.btf
+python BTFViewer/builds/btf_viewer.py tracedata/trace.btf
 ```
 
 In BTFViewer, locate the **tag0_event** STI row in the label column and expand it to show the heap-usage waveform over time. Tags `1`–`7` (`btf_traceTAG( 1 … 7, value )`) are available for other periodic signals (stack high-water, custom counters, etc.).
@@ -242,7 +242,7 @@ On multi-core traces, BTFViewer detects when the same task runs on different cor
 Open the 4-core sample trace and explore the heatmap:
 
 ```bash
-python BTFViewer/btf_viewer.py tracedata/example-4cores.btf
+python BTFViewer/builds/btf_viewer.py tracedata/example-4cores.btf
 ```
 
 **Level 1 — core-pair overview** (directed pairs × 32 time bins):
@@ -271,9 +271,9 @@ An interactive Gantt-style viewer is included in the `BTFViewer/` directory (des
 
 ```bash
 pip install -r BTFViewer/requirements.txt
-python BTFViewer/btf_viewer.py tracedata/trace.btf
+python BTFViewer/builds/btf_viewer.py tracedata/trace.btf
 # or the 4-core SMP demo trace:
-python BTFViewer/btf_viewer.py tracedata/example-4cores.btf
+python BTFViewer/builds/btf_viewer.py tracedata/example-4cores.btf
 ```
 
 See [`BTFViewer/README.md`](BTFViewer/README.md) for the full feature reference (zoom, cursors, [migration heatmap](BTFViewer/README.md#migration-heatmap), [statistics](BTFViewer/README.md#statistics--metrics), trace compare, headless CLI, session restore, export, etc.).
@@ -384,7 +384,7 @@ Event-to-BTF field mapping is documented in [Binary → BTF dump mapping](#binar
 
 ### 8. Open the trace
 
-- **BTF:** open with `BTFViewer/btf_viewer.py`, the web viewer, or Eclipse Trace Compass.
+- **BTF:** open with `BTFViewer/builds/btf_viewer.py`, the web viewer, or Eclipse Trace Compass.
 - **VCD:** open with GTKWave or any compatible VCD viewer.
 
 ---

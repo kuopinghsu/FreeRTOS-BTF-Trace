@@ -59,13 +59,13 @@ A PySide6-based interactive visualiser for FreeRTOS context-switch traces in **B
 | [Find, marks & menus](#find--jump) | Search, bookmarks, annotations, context menu, recent files |
 | [Session persistence](#session-persistence-btf_viewerrc) | `btf_viewer.rc` and browser `localStorage` |
 | [Keyboard shortcuts](#keyboard-shortcuts) | Desktop and web key bindings |
-| [Reference](#reference) | `gen_trace.py`, BTF format, implementation map |
+| [Reference](#reference) | `scripts/gen_trace.py`, BTF format, implementation map |
 
 ---
 
 ## Installation
 
-### Desktop viewer (`btf_viewer.py`)
+### Desktop viewer (`builds/btf_viewer.py`)
 
 **Requirements:** Python 3.8+ and PySide6 ≥ 6.4.
 
@@ -74,10 +74,46 @@ A PySide6-based interactive visualiser for FreeRTOS context-switch traces in **B
 pip install -r requirements.txt
 
 # Run directly — no build step needed
-python btf_viewer.py [-h] [trace.btf]
+python builds/btf_viewer.py [-h] [trace.btf]
 
 # Headless CLI — see [Headless CLI (desktop only)](#headless-cli-desktop-only) in Desktop viewer
 ```
+
+#### Developing the desktop viewer (source package)
+
+The desktop app is maintained as a multi-module package and merged into the single-file `builds/btf_viewer.py` for release (same model as the web viewer’s committed `builds/btf_viewer.html`).
+
+| Mode | Command |
+|------|---------|
+| **Release / users** | `python builds/btf_viewer.py [trace.btf]` — no build step |
+| **Dev (fast iteration)** | From `BTFViewer/`: `python -m btf_viewer_pkg [trace.btf]` |
+| **Regenerate release builds** | `make -C BTFViewer` → `builds/btf_viewer.html` + `builds/btf_viewer.py` |
+| **Desktop only** | `make -C BTFViewer bundle` |
+| **Web only** | `make -C BTFViewer web` |
+| **CI parity check** | `make -C BTFViewer check-bundle` — fails if `builds/btf_viewer.py` drifts from `btf_viewer_pkg/` |
+
+Edit sources under `BTFViewer/btf_viewer_pkg/` (not the generated `builds/btf_viewer.py`), then run `make -C BTFViewer` and commit the package plus both files in `builds/`.
+
+| Makefile target | Action |
+|-----------------|--------|
+| `make` / `make all` | Web + desktop → `builds/btf_viewer.html` and `builds/btf_viewer.py` |
+| `make web` | Web only → `builds/btf_viewer.html` |
+| `make bundle` | Desktop only → `builds/btf_viewer.py`, `py_compile`, smoke `info` on `tracedata/example.btf` |
+| `make check-bundle` | Same as `bundle`, then `git diff --exit-code builds/btf_viewer.py` |
+
+#### Desktop architecture (MVVM)
+
+The desktop app uses **Model–View–ViewModel** in `btf_viewer_pkg/mvvm/`:
+
+| Layer | Module | Role |
+|-------|--------|------|
+| **Model** | `parser.py` (`BtfTrace`, …), `mvvm/models.py` | Trace data and dataclass state (per-tab document, stats panel, app settings, session) |
+| **ViewModel** | `mvvm/trace_tab_vm.py`, `mvvm/main_vm.py`, `mvvm/app_settings.py`, `mvvm/stats_vm.py` | Qt `QObject` wrappers with change signals; no widgets |
+| **View** | `mainwindow.py`, `view.py`, `stats.py`, … | PySide6 widgets; `MainWindow` mixes in `MvvmSettingsMixin` and owns `MainViewModel` |
+
+Per-tab state (marks, find hits, undo stacks, plot session, statistics panel scope/layout) lives in `TraceTabViewModel` (including `StatsViewModel`). Tab switches stash/restore stats state via the view-model instead of copying through `MainWindow`. Application settings (`_show_sti`, font sizes, theme, …) delegate from `MainWindow` to `AppSettingsViewModel` through `MvvmSettingsMixin`.
+
+Edit `btf_viewer_pkg/`, run `make -C BTFViewer`, commit sources plus `builds/btf_viewer.{py,html}`.
 
 A file can also be opened via **File → Open** (`Ctrl+O`) or dragged onto the window. Each open file appears in its own **tab**; use **File → Close Tab** (`Ctrl+W`) to close the active tab, or **Ctrl+Tab** / **Ctrl+Shift+Tab** to cycle between open tabs. Re-opening the same path switches to the existing tab instead of loading it twice.
 
@@ -94,13 +130,13 @@ It runs entirely in the browser — no server, no Python, and no backend require
 
 #### Standalone single-file build (recommended)
 
-Produces a single self-contained `dist/index.html` that can be opened directly in any browser — no server needed:
+Produces a single self-contained `builds/btf_viewer.html` that can be opened directly in any browser — no server needed:
 
 ```bash
 cd BTFViewer/web
 # Demo trace embedded in the build (required for Demo button and fresh builds):
 ln -sf ../../tracedata/example.btf example.btf   # once, or copy the file
-make          # installs deps and builds dist/index.html
+make          # installs deps and builds builds/btf_viewer.html
 # or manually:
 npm install
 npm run build
@@ -109,10 +145,10 @@ npm run build
 Then open the build:
 
 ```bash
-open BTFViewer/web/dist/index.html   # macOS — double-click also works
+open BTFViewer/builds/btf_viewer.html   # macOS — double-click also works
 ```
 
-The same file is copied to `BTFViewer/web/pre-build/btf_viewer.html` on each `make build` (used by the hosted [demo](https://apps.kuoping.com/btf_viewer.html)).
+The release artifact is `BTFViewer/builds/btf_viewer.html` (used by the hosted [demo](https://apps.kuoping.com/btf_viewer.html)).
 
 Do not open `BTFViewer/web/index.html` directly via `file://`; it is the Vite source entry used by the dev server.
 
@@ -120,7 +156,7 @@ Do not open `BTFViewer/web/index.html` directly via `file://`; it is the Vite so
 
 | Open method | Works? | Notes |
 |-------------|--------|--------|
-| Double-click `dist/index.html` | Yes | Basic use; Chrome may block Web Workers on `file://`, so parsing falls back to the main thread (UI can freeze briefly on very large traces). Use **Open** to pick a `.btf` file. |
+| Double-click `builds/btf_viewer.html` | Yes | Basic use; Chrome may block Web Workers on `file://`, so parsing falls back to the main thread (UI can freeze briefly on very large traces). Use **Open** to pick a `.btf` file. |
 | `make preview` | **Recommended** | Serves the build over HTTP — Web Workers, WASM accel, and the stats worker all work as intended. |
 | `make dev` | Dev | Hot reload at `http://localhost:5173`. |
 | Hosted demo | **Recommended** | [apps.kuoping.com/btf_viewer.html](https://apps.kuoping.com/btf_viewer.html) |
@@ -139,12 +175,12 @@ make dev      # or: npm run dev
 
 | Target | Action |
 |--------|--------|
-| `make` / `make build` | Install deps + produce `dist/index.html` and copy to `pre-build/btf_viewer.html` |
+| `make` / `make build` | Install deps + produce `builds/btf_viewer.html` |
 | `make dev` | Start Vite dev server with hot reload |
 | `make preview` | Serve the production build locally (recommended for large traces) |
 | `make wasm` | Rebuild WASM timeline accelerator from `wasm/timeline_accel.wat` |
-| `make clean` | Remove `dist/` |
-| `make dist-clean` | Remove `dist/` and `node_modules/` |
+| `make clean` | Remove `builds/btf_viewer.html` and any stale `dist/` |
+| `make dist-clean` | Same as `clean`, plus remove `node_modules/` |
 
 #### macOS — install Node.js via Homebrew
 
@@ -171,7 +207,7 @@ Interactive PySide6 GUI and optional **headless CLI** (same statistics engine as
 ## Usage
 
 ```bash
-python btf_viewer.py [-h] [trace.btf]
+python builds/btf_viewer.py [-h] [trace.btf]
 ```
 
 Passing a file on the command line opens that trace in a tab immediately. With no argument, the viewer restores the previous session from `btf_viewer.rc`.
@@ -186,15 +222,15 @@ Passing a file on the command line opens that trace in a tab immediately. With n
 | `migrations` | Core Migrations table as CSV |
 
 ```bash
-python btf_viewer.py info trace.btf [--json] [--lo T] [--hi T]
+python builds/btf_viewer.py info trace.btf [--json] [--lo T] [--hi T]
 
-python btf_viewer.py report trace.btf -o|--output PATH [--format html|csv|both] [--lo T] [--hi T]
+python builds/btf_viewer.py report trace.btf -o|--output PATH [--format html|csv|both] [--lo T] [--hi T]
 
-python btf_viewer.py compare a.btf b.btf -o|--output PATH [--format html|csv|both] \
+python builds/btf_viewer.py compare a.btf b.btf -o|--output PATH [--format html|csv|both] \
   [--name-a LABEL] [--name-b LABEL] \
   [--lo T --hi T | --lo-a T --hi-a T --lo-b T --hi-b T]
 
-python btf_viewer.py migrations trace.btf [-o PATH] [--lo T] [--hi T]   # default: stdout
+python builds/btf_viewer.py migrations trace.btf [-o PATH] [--lo T] [--hi T]   # default: stdout
 ```
 
 Files can also be opened via **File → Open** (`Ctrl+O`), **File → Close Tab** (`Ctrl+W`), **Ctrl+Tab** / **Ctrl+Shift+Tab** (cycle tabs), or drag-and-drop onto the window.
@@ -1586,7 +1622,7 @@ The **Add Bookmark** and **Add Annotation** items are only shown when a trace is
 
 ## Session persistence (`btf_viewer.rc`)
 
-Settings, window layout, bookmarks, and multi-tab state are stored in `btf_viewer.rc` next to `btf_viewer.py`.
+Settings, window layout, bookmarks, and multi-tab state are stored in `btf_viewer.rc` next to `builds/btf_viewer.py`.
 
 | Section / key | Purpose |
 |---------------|---------|
@@ -1641,44 +1677,54 @@ Settings, window layout, bookmarks, and multi-tab state are stored in `btf_viewe
 
 Synthetic trace generation, BTF file format reference, and source code map.
 
-### Generating synthetic traces — `gen_trace.py`
+### Generating synthetic traces — `scripts/gen_trace.py`
 
-`gen_trace.py` generates a synthetic FreeRTOS-style BTF trace file for testing or demo purposes.
+`scripts/gen_trace.py` generates a synthetic FreeRTOS-style BTF trace file for testing or demo purposes.
 Task names are drawn from a realistic embedded-system pool (`CAN_Rx`, `Motor_L`, `PID_Speed`, …).
-The scheduler simulation includes task priorities, IDLE time, TICK ISRs, and optional STI events.
+The scheduler simulation includes task priorities, IDLE time, TICK ISRs, generic STI tags, and
+firmware-style **interval** (`interval_start` / `interval_stop`) and **mutex** (`create` / `take` / `give`) STI scenarios.
 A fast inline **xorshift32 PRNG** is used internally for high-throughput event generation
 (≈ 0.22 s for 100 000 events on typical hardware).
 
 ### Quick start
 
 ```bash
-# defaults: 8 cores, 100 tasks, 1 M events  →  freertos_8c_100t_1m_events.btf
-python3 gen_trace.py
+cd BTFViewer
+
+# defaults: 4 cores, 100 tasks, 8 K events  →  freertos_4c_100t_8k_events.btf
+python3 scripts/gen_trace.py
 
 # 4 cores, 50 tasks, 500 K events
-python3 gen_trace.py -c 4 -t 50 -e 500000 -o my_trace.btf
+python3 scripts/gen_trace.py -c 4 -t 50 -e 500000 -o my_trace.btf
 
 # 16 cores, 200 tasks, 2 M events, 500 Hz tick
-python3 gen_trace.py -c 16 -t 200 -e 2000000 --tick-hz 500
+python3 scripts/gen_trace.py -c 16 -t 200 -e 2000000 --tick-hz 500
 
-# Disable STI events; pin every task to one core
-python3 gen_trace.py --no-sti --no-migration
+# Disable all STI; pin every task to one core
+python3 scripts/gen_trace.py --no-sti --no-migration
+
+# Generic STI only (no interval / mutex channels)
+python3 scripts/gen_trace.py --no-intervals --no-mutex-sti
 ```
 
 ### Options
 
 | Option | Default | Description |
 |---|---|---|
-| `-c` / `--cores` | `8` | Number of CPU cores |
+| `-c` / `--cores` | `4` | Number of CPU cores |
 | `-t` / `--tasks` | `100` | Number of worker tasks |
-| `-e` / `--events` | `1 000 000` | Target non-comment event lines |
+| `-e` / `--events` | `8 000` | Target non-comment event lines |
 | `-o` / `--output` | auto | Output `.btf` file path |
 | `--tick-hz` | `1000` | RTOS tick frequency in Hz (1000 → 1 ms per tick) |
-| `--freq-hz` | `200 000 000` | CPU clock frequency in Hz (written to BTF header) |
-| `--sti-interval-us` | `30 000` | Approximate µs between STI tag events |
+| `--freq-hz` | `100 000 000` | CPU clock frequency in Hz (written to BTF header) |
+| `--sti-interval-us` | `30 000` | Approximate µs between generic STI tag events |
+| `--interval-ids` | `3` | Number of distinct interval IDs (`0` … `N-1`) |
+| `--mutex-count` | `2` | Number of mutex objects (`create` / `take` / `give` STI) |
 | `--idle-prob` | `0.20` | Probability [0–1] that a core picks its IDLE task |
 | `--max-burst-ticks` | `5` | Maximum ticks a task runs before being preempted |
 | `--no-sti` | off | Suppress all STI software-trace events |
+| `--no-intervals` | off | Suppress `interval_start` / `interval_stop` STI |
+| `--no-mutex-sti` | off | Suppress mutex `create` / `take` / `give` STI |
 | `--no-migration` | off | Pin each task to one core (disable migration) |
 
 When `--output` is omitted the file is named automatically, e.g. `freertos_8c_100t_1m_events.btf`.
@@ -1751,7 +1797,7 @@ Regular (worker) tasks carry a structured prefix that encodes the core they were
 | `task_id` | `9` | Unique integer task identifier assigned at task creation |
 | `task_name` | `CAN_Rx` | Human-readable task name |
 
-> **Note:** In traces generated by `gen_trace.py`, worker task IDs start at 9 and the timer-service task ID equals `num_workers + 9`. Task IDs in real FreeRTOS ports depend on the kernel's internal handle allocation.
+> **Note:** In traces generated by `scripts/gen_trace.py`, worker task IDs start at 9 and the timer-service task ID equals `num_workers + 9`. Task IDs in real FreeRTOS ports depend on the kernel's internal handle allocation.
 
 **Examples:**
 
@@ -1856,11 +1902,14 @@ timestamp, Core_N, 0, STI, channel_name, 0, trigger[, note]
 3210000, Core_2, 0, STI, ISR_Exit,      0, trigger, ISR_Exit
 ```
 
-Common STI channel names generated by `gen_trace.py`:
+Common STI channels generated by `scripts/gen_trace.py`:
 
-`ISR_Enter`, `ISR_Exit`, `Sem_Post`, `Sem_Wait`, `Mutex_Lock`, `Mutex_Unlock`,
+**Generic tags:** `ISR_Enter`, `ISR_Exit`, `Sem_Post`, `Sem_Wait`, `Mutex_Lock`, `Mutex_Unlock`,
 `Queue_Send`, `Queue_Recv`, `Buf_Full`, `Buf_Empty`, `DMA_Done`, `DMA_Error`,
 `Overrun`, `Underrun`, `Checkpoint`, `Assert_OK`
+
+**Interval / mutex (firmware-style):** `interval_start`, `interval_stop` (notes like `1` or `1 tid:9`);
+`mutex` with notes `create 0x80010100`, `take 0x80010100`, `give 0x80010100`
 
 The viewer renders each distinct STI channel as a separate coloured row of diamond markers. Well-known notes (`take_mutex`, `give_mutex`, `create_mutex`, `trigger`) have fixed colours; others are assigned deterministically from a palette (same note → same colour every run).
 
@@ -1886,7 +1935,7 @@ Traces from `make run` and `tools/gentrace` use these STI channels (see [Binary 
 
 The viewer pairs lines with the same note key: when `tid` is present, `{id} tid:{task_id}`; otherwise the full note string (legacy).
 
-**Task create** on `T` rows uses note `create pri:N` (priority in `param2`), not `task_create` (synthetic `gen_trace.py` traces still use `task_create`).
+**Task create** on `T` rows uses note `create pri:N` (priority in `param2`), not `task_create` (synthetic `scripts/gen_trace.py` traces still use `task_create`).
 
 ---
 
@@ -1950,7 +1999,8 @@ timestamp, Core_N, 0, C, Core_N, 0, set_frequency, freq_hz
 
 | Component | Location | Notes |
 |-----------|----------|-------|
-| **Desktop viewer** | `btf_viewer.py` (~17k lines) | PySide6 monolith: parser, `TimelineScene` rebuild, stats, trace compare |
+| **Desktop MVVM** | `btf_viewer_pkg/mvvm/` | `TraceTabViewModel` + `StatsViewModel` (per tab), `MainViewModel` (tabs + session), `AppSettingsViewModel` (settings), `MvvmSettingsMixin` (MainWindow delegation) |
+| **Desktop viewer** | `builds/btf_viewer.py` | Bundled single file from `btf_viewer_pkg/` (`make -C BTFViewer bundle`) |
 | **Web parser** | `web/src/parser/btfParser.js` | Mirrors Python parser; runs in Web Worker (`btfWorker.js`) with `file://` main-thread fallback |
 | **Web segment storage** | `web/src/parser/segStore.js`, `tracePack.js` | Flat typed arrays + `SegList` views; pack/unpack for worker → main transfer |
 | **Web CPU / stats prep** | `web/src/parser/cpuLoadBins.js`, `statsCompute.js` | Precomputed at parse time in the worker |
@@ -1966,11 +2016,11 @@ timestamp, Core_N, 0, C, Core_N, 0, set_frequency, freq_hz
 | **Trace compare** | `traceCompare.js` / `_TraceCompareDialog` | Optional per-tab C1–Cn scope (Desktop + Web) |
 | **Migration heatmap** | `migrationAnalysis.js` / `_MigrationHeatmapDialog` | ≤ 16 cores: pair × 32 bins → task × 32 sub-bins → timeline. > 16 cores: core×core matrix → outgoing pairs × 32 bins → tasks; row hover + row click on matrix |
 | **Interval pairing** | `intervalAnalysis.js` / `_build_interval_data` | Parse `{id} tid:{task_id}` notes (`task_id` decimal or `0x` hex); pair by id+task when `tid` present, else legacy note string |
-| **Pre-built HTML** | `web/pre-build/btf_viewer.html` | Copy of `dist/index.html` produced by `make build` |
+| **Pre-built HTML** | `builds/btf_viewer.html` | Single-file release produced by `make -C BTFViewer` or `make -C BTFViewer/web` |
 
 Desktop session persistence uses `btf_viewer.rc` (tab paths, zoom, cursors, label width, docks). Web splits **settings** (`btf-viewer-settings-v1`) and **layout chrome** (`btf-viewer-session-v1`) — see [Session restore (Web)](#session-restore-web).
 
-There is no shared automated test suite; validate parser changes against `tracedata/example.btf`, `tracedata/example-4cores.btf`, `tracedata/example-16cores.btf`, and synthetic traces from `gen_trace.py`.
+There is no shared automated test suite; validate parser changes against `tracedata/example.btf`, `tracedata/example-4cores.btf`, `tracedata/example-16cores.btf`, and synthetic traces from `scripts/gen_trace.py`.
 
 ---
 

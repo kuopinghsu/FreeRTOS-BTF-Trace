@@ -144,6 +144,8 @@ class TimelineScene(QGraphicsScene):
         self._hover_ns: Optional[int] = None
         self._hover_line_ns: Optional[int] = None
         self._hover_items: list = []
+        self._hover_frozen_top_set: set = set()
+        self._hover_frozen_left_set: set = set()
         self._is_dark_ui: bool = True
         self.set_theme(True, rebuild=False)
 
@@ -1082,11 +1084,23 @@ class TimelineScene(QGraphicsScene):
     # Mouse-hover indicator (ghost line)
     # ------------------------------------------------------------------
 
+    def _purge_hover_frozen(self) -> None:
+        """Remove hover label entries from frozen overlay lists."""
+        if self._hover_frozen_top_set:
+            self._frozen_top_items = [e for e in self._frozen_top_items
+                                      if e[0] not in self._hover_frozen_top_set]
+            self._hover_frozen_top_set = set()
+        if self._hover_frozen_left_set:
+            self._frozen_items = [e for e in self._frozen_items
+                                  if e[0] not in self._hover_frozen_left_set]
+            self._hover_frozen_left_set = set()
+
     def _draw_hover_line(self) -> None:
         """Draw a thin dashed ghost line at self._hover_ns with a time label."""
         if self._trace is None or self._hover_ns is None:
             _safe_scene_remove_items(self, self._hover_items)
             self._hover_items.clear()
+            self._purge_hover_frozen()
             if self._hover_line_ns is not None:
                 self._hover_line_ns = None
                 self.hover_changed.emit()
@@ -1095,15 +1109,10 @@ class TimelineScene(QGraphicsScene):
             return
         _safe_scene_remove_items(self, self._hover_items)
         self._hover_items.clear()
+        self._purge_hover_frozen()
         self._hover_line_ns = self._hover_ns
         self.hover_changed.emit()
         scene_r = self.sceneRect()
-        _views  = self.views()
-        try:
-            _scene_top  = _views[0].mapToScene(QPoint(0, 0)).y()  if _views else 0.0
-            _scene_left = _views[0].mapToScene(QPoint(0, 0)).x()  if _views else 0.0
-        except RuntimeError:
-            _scene_top = _scene_left = 0.0
         font = _monospace_font(max(8, self._font_size - 1))
         fm   = QFontMetrics(font)
         t_str = _format_time(self._hover_ns, self._trace.time_scale, decimals=3)
@@ -1126,19 +1135,24 @@ class TimelineScene(QGraphicsScene):
             line.setZValue(25)
             self.addItem(line)
             self._hover_items.append(line)
-            # Time label centred on x, pinned near the bottom of the ruler
+            # Time label centred on x, pinned near the bottom of the ruler band.
             lbl_x = min(x - tw / 2, scene_r.width() - tw - 4)
             lbl_x = max(self._label_width + 2, lbl_x)
-            lbl_y = _scene_top + RULER_HEIGHT - th - 4
+            _orig_y_bg = RULER_HEIGHT - th - 4
+            _orig_y_lbl = _orig_y_bg + 1
             bg = self.addRect(
-                QRectF(lbl_x, lbl_y, tw, th + 2),
+                QRectF(0, 0, tw, th + 2),
                 QPen(Qt.PenStyle.NoPen), QBrush(lbl_bg))
             bg.setZValue(26)
+            bg.setPos(lbl_x, _orig_y_bg)
             lbl = self.addSimpleText(t_str, font)
             lbl.setBrush(QBrush(lbl_txt))
             lbl.setZValue(27)
-            lbl.setPos(lbl_x + 4, lbl_y + 1)
+            lbl.setPos(lbl_x + 4, _orig_y_lbl)
             self._hover_items.extend([bg, lbl])
+            self._frozen_top_items.append((bg, _orig_y_bg))
+            self._frozen_top_items.append((lbl, _orig_y_lbl))
+            self._hover_frozen_top_set.update({bg, lbl})
         else:
             label_row_h = self._label_width
             y = label_row_h + self._ns_to_px(self._hover_ns)
@@ -1147,18 +1161,24 @@ class TimelineScene(QGraphicsScene):
             line.setZValue(25)
             self.addItem(line)
             self._hover_items.append(line)
-            # Time label to the right of the ruler, centred vertically on y
-            lbl_x = _scene_left + RULER_WIDTH + 4
-            lbl_y = y - (th + 2) / 2
+            # Time label to the right of the ruler, centred vertically on y.
+            _left_pad = RULER_WIDTH + 4
+            _lbl_y = y - (th + 2) / 2
             bg = self.addRect(
-                QRectF(lbl_x, lbl_y, tw, th + 2),
+                QRectF(0, 0, tw, th + 2),
                 QPen(Qt.PenStyle.NoPen), QBrush(lbl_bg))
             bg.setZValue(26)
+            bg.setPos(_left_pad, _lbl_y)
             lbl = self.addSimpleText(t_str, font)
             lbl.setBrush(QBrush(lbl_txt))
             lbl.setZValue(27)
-            lbl.setPos(lbl_x + 4, lbl_y + 1)
+            lbl.setPos(_left_pad + 4, _lbl_y + 1)
             self._hover_items.extend([bg, lbl])
+            self._frozen_items.append((bg, _left_pad))
+            self._frozen_items.append((lbl, _left_pad + 4))
+            self._hover_frozen_left_set.update({bg, lbl})
+
+        self._pin_cursor_overlays()
 
     def clear_hover_line(self) -> None:
         """Remove the hover ghost line from the scene."""
@@ -1167,6 +1187,7 @@ class TimelineScene(QGraphicsScene):
             return
         _safe_scene_remove_items(self, self._hover_items)
         self._hover_items.clear()
+        self._purge_hover_frozen()
         self._hover_ns = None
         self._hover_line_ns = None
         self.hover_changed.emit()
@@ -1199,13 +1220,6 @@ class TimelineScene(QGraphicsScene):
         font_big = _monospace_font(self._font_size + 1, QFont.Bold)
         fm_bold  = QFontMetrics(font_big)
 
-        # Get the current scene-top so cursor labels can be registered as
-        # y-frozen items (always visible in the ruler area even when the user
-        # has scrolled the task rows down).
-        _views = self.views()
-        _scene_top = _views[0].mapToScene(QPoint(0, 0)).y() if _views else 0.0
-        _scene_left = _views[0].mapToScene(QPoint(0, 0)).x() if _views else 0.0
-
         sorted_cursors = sorted(enumerate(self._cursor_times), key=lambda x: x[1])
         cursor_palette = _cursor_colors(self._is_dark_ui)
 
@@ -1229,15 +1243,14 @@ class TimelineScene(QGraphicsScene):
                 th = fm_bold.height()
                 lbl_x = min(x + 3, scene_r.width() - tw - 4)
                 _orig_y = 2 + (orig_idx + 1) * (th + 2)
-                lbl_y   = _scene_top + _orig_y
                 bg = self.addRect(
                     QRectF(0, 0, tw + 4, th + 2),
                     QPen(Qt.PenStyle.NoPen),
                     QBrush(color),
                 )
                 bg.setZValue(31)
-                bg.setPos(lbl_x - 2, lbl_y - 1)
-                lbl.setPos(lbl_x, lbl_y)
+                bg.setPos(lbl_x - 2, _orig_y - 1)
+                lbl.setPos(lbl_x, _orig_y)
                 self._cursor_items.extend([bg, lbl])
                 # Register label + background as y-frozen so _reposition_frozen_top
                 # keeps them in the ruler area regardless of vertical scroll.
@@ -1252,17 +1265,24 @@ class TimelineScene(QGraphicsScene):
                     mid_x   = self._label_width + self._ns_to_px((ns + prev_ns) // 2)
                     d_lbl   = self.addSimpleText(d_str, font)
                     d_w     = QFontMetrics(font).horizontalAdvance(d_str)
+                    d_h     = QFontMetrics(font).height()
                     d_lbl.setBrush(QBrush(QColor("#000000")))
                     d_lbl.setZValue(32)
+                    # Align Δ text with the later cursor label row (C2 for C1–C2, etc.).
+                    _delta_orig_y_lbl = _orig_y
+                    _delta_orig_y_bg = _orig_y - 1
                     bg_rect = self.addRect(
-                        QRectF(mid_x - d_w / 2 - 3, RULER_HEIGHT + 4,
-                               d_w + 6, QFontMetrics(font).height() + 4),
+                        QRectF(0, 0, d_w + 6, d_h + 2),
                         QPen(Qt.PenStyle.NoPen),
                         QBrush(color),
                     )
                     bg_rect.setZValue(31)
-                    d_lbl.setPos(mid_x - d_w / 2, RULER_HEIGHT + 6)
+                    bg_rect.setPos(mid_x - d_w / 2 - 3, _delta_orig_y_bg)
+                    d_lbl.setPos(mid_x - d_w / 2, _delta_orig_y_lbl)
                     self._cursor_items.extend([bg_rect, d_lbl])
+                    self._frozen_top_items.append((bg_rect, _delta_orig_y_bg))
+                    self._frozen_top_items.append((d_lbl, _delta_orig_y_lbl))
+                    self._cursor_frozen_top_set.update({bg_rect, d_lbl})
 
             else:  # vertical mode
                 label_row_h = self._label_width
@@ -1276,26 +1296,26 @@ class TimelineScene(QGraphicsScene):
                 t_str = _format_time(ns, self._trace.time_scale, decimals=3)
                 lbl = self.addSimpleText(f"C{orig_idx+1}: {t_str}", font_big)
                 lbl.setBrush(QBrush(QColor("#000000")))
-                lbl.setZValue(32)
+                lbl.setZValue(38)
                 tw = fm_bold.horizontalAdvance(lbl.text())
                 th = fm_bold.height()
-                # Keep vertical labels outside the frozen ruler column
-                # (ruler z=35/36 would otherwise overdraw label z=31/32).
-                _left_pad = RULER_WIDTH + 4
-                lbl_x = _scene_left + _left_pad
-                lbl_y = y + 2
+                # Match web vertical layout: badge in left ruler column at x=2.
+                _pad = 4
+                _badge_h = 14
+                _left_bg_x = 2
+                _left_lbl_x = _left_bg_x + _pad
+                _lbl_y = min(y + 2, scene_r.height() - _badge_h - 2)
                 bg = self.addRect(
-                    QRectF(0, 0, tw + 4, th + 2),
+                    QRectF(0, 0, tw + _pad * 2, _badge_h),
                     QPen(Qt.PenStyle.NoPen),
                     QBrush(color),
                 )
-                bg.setZValue(31)
-                bg.setPos(lbl_x - 2, lbl_y - 1)
-                lbl.setPos(lbl_x, lbl_y)
+                bg.setZValue(37)
+                bg.setPos(_left_bg_x, _lbl_y)
+                lbl.setPos(_left_lbl_x, _lbl_y + (_badge_h - th) / 2)
                 self._cursor_items.extend([bg, lbl])
-                # Keep vertical-mode cursor labels frozen at viewport-left.
-                self._frozen_items.append((bg, _left_pad - 2))
-                self._frozen_items.append((lbl, _left_pad))
+                self._frozen_items.append((bg, _left_bg_x))
+                self._frozen_items.append((lbl, _left_lbl_x))
                 self._cursor_frozen_left_set.update({bg, lbl})
 
                 if order > 0:
@@ -1315,6 +1335,18 @@ class TimelineScene(QGraphicsScene):
                     bg_rect.setZValue(31)
                     d_lbl.setPos(RULER_WIDTH + 7, mid_y - dh / 2)
                     self._cursor_items.extend([bg_rect, d_lbl])
+
+        self._pin_cursor_overlays()
+
+    def _pin_cursor_overlays(self) -> None:
+        """Re-anchor cursor/delta labels after draw (viewport-frozen coordinates)."""
+        view = self.views()[0] if self.views() else None
+        if view is None:
+            return
+        view._frozen_last_scene_top = None
+        view._frozen_last_scene_left = None
+        view._reposition_frozen_top()
+        view._reposition_frozen()
 
     # ------------------------------------------------------------------
     # Build / rebuild
@@ -1430,6 +1462,59 @@ class TimelineScene(QGraphicsScene):
             self._vp_scene_orth_lo = vy_lo - _ORTH_BUF
             self._vp_scene_orth_hi = vy_hi + _ORTH_BUF
 
+    def _viewport_orth_extent(self) -> float:
+        """Task-axis scene extent that matches the current viewport (rows in H-mode)."""
+        view = self.views()[0] if self.views() else None
+        if view is None:
+            return 0.0
+        vp = view.viewport().rect()
+        if vp.width() <= 1 or vp.height() <= 1:
+            return 0.0
+        if self._horizontal:
+            tl = view.mapToScene(vp.topLeft())
+            bl = view.mapToScene(vp.bottomLeft())
+            return max(1.0, bl.y() - tl.y())
+        tl = view.mapToScene(vp.topLeft())
+        tr = view.mapToScene(vp.topRight())
+        return max(1.0, tr.x() - tl.x())
+
+    def _orth_scroll_gutter(self) -> float:
+        view = self.views()[0] if self.views() else None
+        if view is None:
+            return 0.0
+        fn = getattr(view, "orth_scroll_gutter_px", None)
+        return float(fn()) if callable(fn) else 0.0
+
+    def _finalize_orth_size(self, content_orth: float) -> float:
+        """Fill the task axis to the viewport; pad when rows overflow scrollbars."""
+        vp = self._viewport_orth_extent()
+        orth = max(content_orth, vp)
+        if content_orth > vp + 0.5:
+            orth += self._orth_scroll_gutter()
+        return orth
+
+    def _add_orth_filler_horizontal(self, content_h: float, total_h: float,
+                                    total_w: float, lw: float, last_row_idx: int) -> None:
+        if content_h >= total_h - 0.5:
+            return
+        brush = QBrush(self._c_row_even if last_row_idx % 2 == 0 else self._c_row_odd)
+        rect = self.addRect(
+            QRectF(lw, content_h, total_w - lw, total_h - content_h),
+            QPen(Qt.PenStyle.NoPen), brush)
+        rect.setZValue(0)
+        self._track_timeline_bg(rect)
+
+    def _add_orth_filler_vertical(self, content_w: float, total_w: float,
+                                  total_h: float, label_row_h: float,
+                                  last_col_idx: int) -> None:
+        if content_w >= total_w - 0.5:
+            return
+        brush = QBrush(self._c_row_even if last_col_idx % 2 == 0 else self._c_row_odd)
+        rect = self.addRect(
+            QRectF(content_w, label_row_h, total_w - content_w, total_h - label_row_h),
+            QPen(Qt.PenStyle.NoPen), brush)
+        rect.setZValue(0)
+
     def rebuild(self) -> None:
         if self._rebuild_suspend > 0:
             return
@@ -1482,6 +1567,8 @@ class TimelineScene(QGraphicsScene):
         self._cursor_frozen_left_set = set()
         self._mark_frozen_top_set = set()
         self._mark_frozen_left_set = set()
+        self._hover_frozen_top_set = set()
+        self._hover_frozen_left_set = set()
         self._task_row_rects = {}
         self._hover_overlay_items = []   # clear() removed them from the scene
         self._hover_items = []             # clear() removed them from the scene
@@ -1505,6 +1592,8 @@ class TimelineScene(QGraphicsScene):
         self._draw_cursors()
         self._draw_marks()
         self._draw_find_markers()
+        if self._hover_ns is not None:
+            self._draw_hover_line()
         self.scene_rebuilt.emit()
 
     # ------------------------------------------------------------------
@@ -1945,7 +2034,9 @@ class TimelineScene(QGraphicsScene):
             (self._sti_waveform_h_val if c in self._sti_expanded else self._sti_row_h_val) + self._row_gap
             for c in sti_rows)
         _sti_total_h += n_interval * (self._row_height + self._row_gap)
-        total_h = RULER_HEIGHT + n_task * (self._row_height + self._row_gap) + _sti_total_h
+        _row_stride = self._row_height + self._row_gap
+        content_h = RULER_HEIGHT + n_task * _row_stride + _sti_total_h
+        total_h = self._finalize_orth_size(content_h)
         total_w = self._label_width + timeline_w
         self.setSceneRect(0, 0, total_w, total_h)
 
@@ -1991,7 +2082,6 @@ class TimelineScene(QGraphicsScene):
         # --- Task rows ---------------------------------------------------
         # Compute first/last visible row indices from the cached orth bounds.
         # This avoids iterating all n_task rows just to skip ~95 % of them.
-        _row_stride   = self._row_height + self._row_gap
         _first_vis    = max(0, int((self._vp_scene_orth_lo - RULER_HEIGHT) // _row_stride))
         _last_vis     = min(n_task - 1, int((self._vp_scene_orth_hi - RULER_HEIGHT) // _row_stride) + 1)
         _time_min     = vp.time_min
@@ -2145,6 +2235,9 @@ class TimelineScene(QGraphicsScene):
             self.addItem(_stripes)
             self._row_stripe_item = _stripes
 
+        self._add_orth_filler_horizontal(
+            content_h, total_h, total_w, lw, n_task + n_sti + n_interval)
+
         # --- Frozen label column header ----------------------------------
         # Drawn last so it sits on top of all other frozen items (z=38-39).
         _has_tick_h = bool(trace.seg_map_by_merge_key.get(_task_merge_key("TICK"), []))
@@ -2206,8 +2299,9 @@ class TimelineScene(QGraphicsScene):
             for c in sti_cols
         )
         total_sti_w += n_interval * col_w
-        total_w     = RULER_WIDTH + n_task * col_w + total_sti_w
-        total_h     = label_row_h + timeline_h
+        content_w = RULER_WIDTH + n_task * col_w + total_sti_w
+        total_w = self._finalize_orth_size(content_w)
+        total_h = label_row_h + timeline_h
         self.setSceneRect(0, 0, total_w, total_h)
 
         # --- Ruler column (left side): frozen to left edge on X scroll ------
@@ -2394,6 +2488,9 @@ class TimelineScene(QGraphicsScene):
             trace, interval_cols, _sti_x_acc, col_w, label_row_h, timeline_h,
             font, _time_min, _px_per_ns, _vp_ns_lo, _vp_ns_hi)
 
+        self._add_orth_filler_vertical(
+            _sti_x_acc, total_w, total_h, label_row_h, n_task + n_sti + n_interval)
+
         # --- Corner: ruler-column x label-row intersection ---------------
         _vt_corner_rect = self.addRect(QRectF(0, 0, RULER_WIDTH, label_row_h),
                                        QPen(Qt.PenStyle.NoPen), QBrush(self._c_corner_bg))
@@ -2449,8 +2546,10 @@ class TimelineScene(QGraphicsScene):
             (self._sti_waveform_h_val if c in self._sti_expanded else self._sti_row_h_val) + self._row_gap
             for c in sti_rows)
         _sti_total_h += len(interval_rows) * (self._row_height + self._row_gap)
-        total_h    = RULER_HEIGHT + _n_non_sti * (self._row_height + self._row_gap) + _sti_total_h
-        total_w    = self._label_width + timeline_w
+        _row_stride = self._row_height + self._row_gap
+        content_h = RULER_HEIGHT + _n_non_sti * _row_stride + _sti_total_h
+        total_h = self._finalize_orth_size(content_h)
+        total_w = self._label_width + timeline_w
         self.setSceneRect(0, 0, total_w, total_h)
 
         # --- Background & ruler ------------------------------------------
@@ -2762,6 +2861,8 @@ class TimelineScene(QGraphicsScene):
         self._frozen_items.append((hdr_lbl, 4))
         self._frozen_top_items.append((corner, 0))
         self._frozen_top_items.append((hdr_lbl, hdr_lbl.pos().y()))
+        self._add_orth_filler_horizontal(
+            content_h, total_h, total_w, lw, total_rows)
         self._add_frozen_label_grip(lw, total_h)
 
     def _build_vertical_core(self) -> None:
@@ -2805,8 +2906,9 @@ class TimelineScene(QGraphicsScene):
             for c in sti_cols
         )
         total_sti_w += len(interval_cols) * col_w
-        total_w     = RULER_WIDTH + _core_col_count * col_w + total_sti_w
-        total_h     = label_row_h + timeline_h
+        content_w = RULER_WIDTH + _core_col_count * col_w + total_sti_w
+        total_w = self._finalize_orth_size(content_w)
+        total_h = label_row_h + timeline_h
         self.setSceneRect(0, 0, total_w, total_h)
 
         # --- Ruler column (left side): frozen to left edge on X scroll ------
@@ -3057,6 +3159,9 @@ class TimelineScene(QGraphicsScene):
         _sti_x_acc_vc = self._add_interval_vertical_columns(
             trace, interval_cols, _sti_x_acc_vc, col_w, label_row_h, timeline_h,
             font, _time_min, _px_per_ns, _vp_ns_lo, _vp_ns_hi)
+
+        self._add_orth_filler_vertical(
+            _sti_x_acc_vc, total_w, total_h, label_row_h, col_idx)
 
         # --- Corner: ruler-column x label-row intersection ---------------
         _vc_corner = self.addRect(QRectF(0, 0, RULER_WIDTH, label_row_h),

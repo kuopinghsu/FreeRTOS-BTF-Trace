@@ -3,4 +3,5 @@ Demo/Common/printf.h
 FreeRTOS-Kernel/**
 rvsim/elf.h
 rvsim/opcode.h
-web/pre-build/btf-viewer.html
+builds/btf_viewer.html
+builds/btf_viewer.py

@@ -24,7 +24,6 @@ from btf_viewer_pkg.view import TimelineView  # noqa: E402
 
 EXAMPLE_BTF = Path(__file__).resolve().parents[2] / "tracedata" / "example.btf"
 
-
 class _QtTestBase(unittest.TestCase):
     _app: QApplication | None = None
 
@@ -42,7 +41,6 @@ class _QtTestBase(unittest.TestCase):
         view.load_trace(trace)
         self._app.processEvents()
         return view, view._scene, trace
-
 
 class TestViewFrozen(_QtTestBase):
     def test_timeline_view_constructs_without_crash(self) -> None:
@@ -75,7 +73,6 @@ class TestViewFrozen(_QtTestBase):
 
         scene_top = view.mapToScene(QPoint(0, 0)).y()
         self.assertAlmostEqual(lbl_item.y(), scene_top + orig_y, places=1)
-
 
 if __name__ == "__main__":
     unittest.main()

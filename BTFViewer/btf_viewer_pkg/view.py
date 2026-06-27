@@ -484,7 +484,6 @@ class _LabelGripDragCapture(QObject):
             return True
         return False
 
-
 class _LabelColumnGripItem(QGraphicsItem):
     """Frozen scene-item resize grip (moves with the label column on horizontal pan)."""
 
@@ -878,12 +877,15 @@ class TimelineView(QGraphicsView):
         self._virt_scroll_rebuild: bool = False
         self._syncing_virt_bar: bool = False
         self._virt_bar_dragging: bool = False
-        self._virt_trace_bar = QScrollBar(Qt.Orientation.Horizontal, self)
-        self._virt_trace_bar.hide()
-        self._virt_trace_bar.valueChanged.connect(self._on_virt_trace_bar_changed)
-        self._virt_trace_bar.sliderPressed.connect(self._on_virt_trace_bar_pressed)
-        self._virt_trace_bar.sliderReleased.connect(self._on_virt_trace_bar_released)
-        self._virt_trace_bar.installEventFilter(self)
+        self._time_scroll_external: bool = False
+        self._time_scroll_bar: Optional[QScrollBar] = None
+        self._time_scroll_internal = QScrollBar(Qt.Orientation.Horizontal, self)
+        self._bind_time_scroll_bar(self._time_scroll_internal)
+        self._time_scroll_internal.hide()
+        # Belt-and-suspenders: scrollbar-driven pan must re-pin ruler overlays even
+        # when scrollContentsBy is skipped (virtual scroll / batched setValue).
+        self.verticalScrollBar().valueChanged.connect(self._on_vertical_scroll_changed)
+        self.horizontalScrollBar().valueChanged.connect(self._on_horizontal_scroll_changed)
         self._last_window_shift_ms: float = 0.0
         self._pending_shift_ns_lo: Optional[float] = None
         self._pending_shift_ns_hi: Optional[float] = None
@@ -894,6 +896,24 @@ class TimelineView(QGraphicsView):
         self._preserve_virt_scroll: bool = False
         self._preserved_virt_scroll_px: float = 0.0
         self.zoom_changed.connect(self._defer_virt_scroll_sync)
+
+    @property
+    def _virt_trace_bar(self) -> QScrollBar:
+        return self._time_scroll_bar or self._time_scroll_internal
+
+    def attach_time_scroll_bar(self, bar: QScrollBar) -> None:
+        """Use a sibling scrollbar below the canvas (horizontal task layout)."""
+        self._time_scroll_bar = bar
+        self._time_scroll_external = True
+        self._bind_time_scroll_bar(bar)
+        self._time_scroll_internal.hide()
+
+    def _bind_time_scroll_bar(self, bar: QScrollBar) -> None:
+        bar.valueChanged.connect(self._on_virt_trace_bar_changed)
+        bar.sliderPressed.connect(self._on_virt_trace_bar_pressed)
+        bar.sliderReleased.connect(self._on_virt_trace_bar_released)
+        bar.installEventFilter(self)
+        bar.hide()
 
     # ------------------------------------------------------------------
     # Full-trace time scrollbar (overlay when zoomed past fit-to-window)
@@ -995,20 +1015,39 @@ class TimelineView(QGraphicsView):
         return (self.horizontalScrollBar() if self._scene._horizontal
                 else self.verticalScrollBar())
 
+    def _time_axis_track_thickness(self) -> int:
+        bar = self._native_time_axis_bar()
+        if self._scene._horizontal:
+            return max(TIMELINE_SCROLL_GUTTER, bar.sizeHint().height())
+        return max(TIMELINE_SCROLL_GUTTER, bar.sizeHint().width())
+
     def _collapse_native_time_bar(self, collapsed: bool) -> None:
         """Keep native time bar in the tree for macOS wheel routing; hide visually."""
         bar = self._native_time_axis_bar()
+        track = self._time_axis_track_thickness()
         if collapsed:
             if self._scene._horizontal:
                 bar.setStyleSheet(
-                    "QScrollBar:horizontal { height: 1px; max-height: 1px;"
-                    " min-height: 1px; border: none; background: transparent; }")
-                bar.setFixedHeight(1)
+                    f"QScrollBar:horizontal {{ height: {track}px; max-height: {track}px;"
+                    f" min-height: {track}px; border: none; background: transparent; }}"
+                    "QScrollBar::handle:horizontal { min-width: 0; max-width: 0;"
+                    " background: transparent; }"
+                    "QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal"
+                    " { width: 0; }"
+                    "QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal"
+                    " { background: none; }")
+                bar.setFixedHeight(track)
             else:
                 bar.setStyleSheet(
-                    "QScrollBar:vertical { width: 1px; max-width: 1px;"
-                    " min-width: 1px; border: none; background: transparent; }")
-                bar.setFixedWidth(1)
+                    f"QScrollBar:vertical {{ width: {track}px; max-width: {track}px;"
+                    f" min-width: {track}px; border: none; background: transparent; }}"
+                    "QScrollBar::handle:vertical { min-height: 0; max-height: 0;"
+                    " background: transparent; }"
+                    "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical"
+                    " { height: 0; }"
+                    "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical"
+                    " { background: none; }")
+                bar.setFixedWidth(track)
             bar.show()
         else:
             bar.setStyleSheet("")
@@ -1022,12 +1061,59 @@ class TimelineView(QGraphicsView):
                 bar.setFixedWidth(bar.sizeHint().width())
             bar.show()
 
+    def _time_axis_track_rect(self) -> QRect:
+        """Rect for an in-view time scrollbar overlay (vertical layout / settings only)."""
+        vp = self.viewport()
+        vsb = self.verticalScrollBar()
+        hsb = self.horizontalScrollBar()
+        if self._scene._horizontal:
+            track_h = self._time_axis_track_thickness()
+            v_w = vsb.width() if vsb.isVisible() else 0
+            y = vp.y() + vp.height()
+            h = min(track_h, max(1, self.height() - y))
+            if h < 4:
+                corner = vsb.height() if vsb.isVisible() else 0
+                h = min(track_h, max(1, self.height() - corner))
+                y = max(0, self.height() - corner - h)
+            return QRect(0, y, max(1, self.width() - v_w), max(4, h))
+        track_w = self._time_axis_track_thickness()
+        h_h = hsb.height() if hsb.isVisible() else 0
+        x = vp.x() + vp.width()
+        w = min(track_w, max(1, self.width() - x))
+        if w < 4:
+            w = min(track_w, max(1, self.width() - h_h))
+            x = max(0, self.width() - h_h - w)
+        return QRect(x, 0, max(4, w), max(1, self.height() - h_h))
+
+    def orth_scroll_gutter_px(self) -> int:
+        """Scene padding on the task axis so the last row clears scrollbar tracks."""
+        sc = self._scene
+        gutter = TIMELINE_SCROLL_GUTTER
+        if sc._horizontal:
+            if (not self._time_scroll_external
+                    and (self._virtual_time_scroll_active or self._virt_trace_bar.isVisible())):
+                gutter = max(gutter, self._virt_trace_bar.height() or TIMELINE_SCROLL_GUTTER)
+            hbar = self.horizontalScrollBar()
+            if (not self._time_scroll_external
+                    and hbar.isVisible() and hbar.maximum() > hbar.minimum()):
+                gutter = max(gutter, hbar.height())
+        else:
+            if self._virtual_time_scroll_active or self._virt_trace_bar.isVisible():
+                gutter = max(gutter, self._virt_trace_bar.width() or TIMELINE_SCROLL_GUTTER)
+            vbar = self.verticalScrollBar()
+            if vbar.isVisible() and vbar.maximum() > vbar.minimum():
+                gutter = max(gutter, vbar.width())
+        return gutter
+
     def _set_virtual_scroll_enabled(self, enabled: bool) -> None:
         self._virtual_time_scroll_active = bool(enabled)
         native = self._native_time_axis_bar()
         overlay = self._virt_trace_bar
         if enabled and self._scene._trace is not None:
-            self._collapse_native_time_bar(True)
+            if self._time_scroll_external and self._scene._horizontal:
+                self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            else:
+                self._collapse_native_time_bar(True)
             overlay.show()
             self._position_virt_trace_bar()
             self._sync_native_scene_scrollbar()
@@ -1051,23 +1137,22 @@ class TimelineView(QGraphicsView):
                 self._native_time_bar_interaction_connected = False
             native.removeEventFilter(self)
             overlay.hide()
-            self._collapse_native_time_bar(False)
+            if self._time_scroll_external and self._scene._horizontal:
+                self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+            else:
+                self._collapse_native_time_bar(False)
 
     def _position_virt_trace_bar(self) -> None:
         if not self._virt_trace_bar.isVisible():
             return
-        vp = self.viewport()
-        vp_x, vp_y = vp.x(), vp.y()
-        vp_w, vp_h = vp.width(), vp.height()
         bar = self._virt_trace_bar
-        if self._scene._horizontal:
-            bar.setOrientation(Qt.Orientation.Horizontal)
-            h = max(bar.sizeHint().height(), 14)
-            bar.setGeometry(vp_x, vp_y + max(0, vp_h - h), vp_w, h)
-        else:
-            bar.setOrientation(Qt.Orientation.Vertical)
-            w = max(bar.sizeHint().width(), 14)
-            bar.setGeometry(vp_x + max(0, vp_w - w), vp_y, w, vp_h)
+        if self._time_scroll_external and self._scene._horizontal:
+            bar.setFixedHeight(self._time_axis_track_thickness())
+            return
+        bar.setOrientation(
+            Qt.Orientation.Horizontal if self._scene._horizontal
+            else Qt.Orientation.Vertical)
+        bar.setGeometry(self._time_axis_track_rect())
         bar.raise_()
 
     def _sync_native_scene_scrollbar(self) -> None:
@@ -2910,7 +2995,10 @@ class TimelineView(QGraphicsView):
 
     def eventFilter(self, obj, e) -> bool:
         """Intercept native pinch-zoom gestures delivered to the viewport."""
-        if obj is self._virt_trace_bar and e.type() == QEvent.Type.Wheel:
+        virt_bar = getattr(self, "_time_scroll_bar", None)
+        if virt_bar is None:
+            virt_bar = getattr(self, "_time_scroll_internal", None)
+        if virt_bar is not None and obj is virt_bar and e.type() == QEvent.Type.Wheel:
             self.wheelEvent(e)
             return True
         if e.type() == QEvent.Type.Wheel:
@@ -3541,6 +3629,22 @@ class TimelineView(QGraphicsView):
         for item, orig_y in self._scene._frozen_top_items:
             item.setY(scene_top + orig_y)
 
+    def _on_vertical_scroll_changed(self, _value: int) -> None:
+        """Re-pin ruler-band overlays after vertical (row-axis) scroll."""
+        if not self._scene._horizontal:
+            return
+        self._frozen_last_scene_top = None
+        self._reposition_frozen_top()
+
+    def _on_horizontal_scroll_changed(self, _value: int) -> None:
+        """Re-pin overlays after horizontal scroll in vertical-layout mode."""
+        if self._scene._horizontal:
+            return
+        self._frozen_last_scene_left = None
+        self._frozen_last_scene_top = None
+        self._reposition_frozen()
+        self._reposition_frozen_top()
+
     # ------------------------------------------------------------------
     # Resize handling
     # ------------------------------------------------------------------
@@ -3581,11 +3685,25 @@ class TimelineView(QGraphicsView):
         else:
             # Zoom mode: preserve zoom level and canonical scroll position.
             self._scene._timescale_per_px_fit = new_fit
+            if self._needs_orth_fill_rebuild():
+                self._scene.rebuild()
             self._reposition_frozen()
             self._reposition_frozen_top()
             self._update_virt_trace_bar_range()
             if self._virtual_time_scroll_active:
                 self._apply_virt_time_scroll_px(self._virt_time_scroll_px)
+
+    def _needs_orth_fill_rebuild(self) -> bool:
+        """True when the scene should grow/shrink to match viewport fill rules."""
+        sc = self._scene
+        if sc._trace is None:
+            return False
+        vp = sc._viewport_orth_extent()
+        if vp <= 0:
+            return False
+        rect = sc.sceneRect()
+        content = rect.height() if sc._horizontal else rect.width()
+        return abs(sc._finalize_orth_size(content) - content) > 1.0
 
     def _orth_viewport_overflow_px(self) -> float:
         """How far (px) the live viewport extends past the last orth rebuild."""

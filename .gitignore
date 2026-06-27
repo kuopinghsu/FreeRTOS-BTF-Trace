@@ -56,7 +56,7 @@ FreeRTOS-Kernel/
 trace.bin
 build
 
-# Generated trace files (can be very large; regenerate with gen_trace.py)
+# Generated trace files (can be very large; regenerate with BTFViewer/scripts/gen_trace.py)
 # Keep the committed small examples in tracedata/ via negation rules.
 *.btf
 *.vcd
@@ -66,6 +66,7 @@ tracedata/trace.*
 
 # BTF viewer runtime settings (user-local, not shared)
 BTFViewer/btf_viewer.rc
+BTFViewer/builds/btf_viewer.rc
 
 *.bak
 .DS_Store
@@ -76,4 +77,5 @@ __pycache__
 BTFViewer/web/node_modules/
 BTFViewer/web/dist/
 BTFViewer/web/package-lock.json
+BTFViewer/scripts/.monolith_doc_cache.py
 .vite/

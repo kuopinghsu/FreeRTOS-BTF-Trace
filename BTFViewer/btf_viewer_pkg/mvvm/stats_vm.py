@@ -16,7 +16,6 @@ from .models import StatsTabModel
 if TYPE_CHECKING:
     from ..stats import _StatsPanel
 
-
 def _default_section_collapsed() -> Dict[str, bool]:
     return {
         "cores": False,
@@ -32,7 +31,6 @@ def _default_section_collapsed() -> Dict[str, bool]:
         "intervals": False,
     }
 
-
 def _default_section_table_heights() -> Dict[str, int]:
     return {
         "migrations": STATS_TABLE_MIG_DEFAULT_H,
@@ -46,7 +44,6 @@ def _default_section_table_heights() -> Dict[str, int]:
         "sync_issues": STATS_TABLE_MIG_DEFAULT_H,
         "health": STATS_TABLE_DEFAULT_H,
     }
-
 
 class StatsViewModel(ViewModelBase):
     """ViewModel for statistics panel scope and layout state."""

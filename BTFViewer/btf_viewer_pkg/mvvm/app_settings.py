@@ -25,7 +25,6 @@ from .models import AppSettingsModel
 if TYPE_CHECKING:
     from ..stats import _RcSettings
 
-
 class AppSettingsViewModel(ViewModelBase):
     """ViewModel for application-wide UI settings (not per-tab)."""
 

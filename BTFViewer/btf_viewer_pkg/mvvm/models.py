@@ -6,7 +6,6 @@ from typing import Dict, List, Optional, Tuple
 
 from ..parser import BtfTrace, TraceAnnotation, TraceBookmark
 
-
 @dataclass
 class PlotSessionState:
     mk: Optional[str] = None
@@ -14,7 +13,6 @@ class PlotSessionState:
     preemptor: Optional[str] = None
     open: bool = False
     interval_id: Optional[str] = None
-
 
 @dataclass
 class StatsTabModel:
@@ -24,7 +22,6 @@ class StatsTabModel:
     section_collapsed: Dict[str, bool] = field(default_factory=dict)
     section_table_heights: Dict[str, int] = field(default_factory=dict)
     util_label_col_w: int = 0
-
 
 @dataclass
 class TraceTabModel:
@@ -40,7 +37,6 @@ class TraceTabModel:
     redo_stack: list = field(default_factory=list)
     plot: PlotSessionState = field(default_factory=PlotSessionState)
     stats: StatsTabModel = field(default_factory=StatsTabModel)
-
 
 @dataclass
 class AppSettingsModel:
@@ -69,7 +65,6 @@ class AppSettingsModel:
     cpu_load_row_h: int = 0
     colorblind: bool = False
     horizontal: bool = True
-
 
 @dataclass
 class SessionModel:

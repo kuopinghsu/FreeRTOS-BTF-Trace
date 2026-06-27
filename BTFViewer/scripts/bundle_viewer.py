@@ -31,6 +31,14 @@ BUNDLE_MODULES: list[str] = [
     "graphics_items",
     "view",
     "stats",
+    "mvvm/base",
+    "mvvm/models",
+    "mvvm/app_settings",
+    "mvvm/stats_vm",
+    "mvvm/trace_tab_vm",
+    "mvvm/main_vm",
+    "mvvm/bindings",
+    "mvvm/__init__",
     "mainwindow",
     "platform",
     "cli",
@@ -44,6 +52,7 @@ SECTION_MARKERS: dict[str, str] = {
     "graphics_items": "# Custom graphics items",
     "view": "# Navigator Popup",
     "stats": "# Main Window",
+    "mvvm/base": "# MVVM",
     "mainwindow": "# CPU Load Graph",
     "platform": "# Entry point",
     "cli": "# Entry point",
@@ -115,10 +124,11 @@ from PySide6.QtWidgets import (
 
 FUTURE_IMPORT = re.compile(r"^\s*from\s+__future__\s+import\s+.+$")
 RELATIVE_IMPORT = re.compile(
-    r"^\s*from\s+\.(?:_imports|[\w.]+)\s+import\s+.+$"
+    r"^\s*from\s+\.+[\w.]+\s+import\s+.+$"
+    r"|^\s*from\s+\.+[\w.]+\s+import\s+\(.+\)$"
+    r"|^\s*from\s+\.(?:_imports|[\w.]+)\s+import\s+.+$"
     r"|^\s*from\s+\.(?:_imports|[\w.]+)\s+import\s+\(.+\)$"
 )
-
 
 def _is_header_import_line(line: str) -> bool:
     stripped = line.strip()
@@ -130,6 +140,13 @@ def _is_header_import_line(line: str) -> bool:
         return True
     return stripped == "# noqa: F403,F401"
 
+def _import_opens_paren(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped.startswith(("import ", "from ")):
+        return False
+    if "(" not in stripped:
+        return False
+    return not stripped.rstrip().endswith(")")
 
 def _strip_module_preamble(source: str) -> str:
     """Remove module docstring and leading duplicate import block only."""
@@ -148,12 +165,27 @@ def _strip_module_preamble(source: str) -> str:
                     i += 1
                     break
                 i += 1
-    while i < len(lines) and _is_header_import_line(lines[i]):
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+        if stripped.startswith("if TYPE_CHECKING:"):
+            i += 1
+            while i < len(lines) and (not lines[i].strip() or lines[i][0] in " \t"):
+                i += 1
+            continue
+        if not _is_header_import_line(line):
+            break
+        if _import_opens_paren(line):
+            i += 1
+            while i < len(lines) and ")" not in lines[i]:
+                i += 1
+            if i < len(lines):
+                i += 1
+            continue
         i += 1
     while i < len(lines) and not lines[i].strip():
         i += 1
     return "".join(lines[i:])
-
 
 def _git_show_ref(ref: str) -> str | None:
     probe = subprocess.run(
@@ -168,7 +200,6 @@ def _git_show_ref(ref: str) -> str | None:
         cwd=ROOT.parent,
         text=True,
     )
-
 
 def _docstring_source(monolith: Path) -> Path:
     if monolith.is_file():
@@ -187,7 +218,6 @@ def _docstring_source(monolith: Path) -> Path:
         return cache
     return monolith
 
-
 def _read_docstring(monolith: Path) -> str:
     src = _docstring_source(monolith)
     if src.is_file():
@@ -200,15 +230,14 @@ def _read_docstring(monolith: Path) -> str:
             return '"""\n' + doc + '\n"""\n\n'
     return '"""\nbtf_viewer.py - Single-file RTOS BTF Viewer (PySide6).\n"""\n\n'
 
-
 def _section_banner(name: str, body: str) -> str:
     marker = SECTION_MARKERS.get(name, name)
     head = body[:400].lower()
     if marker.lstrip("# ").lower() in head:
         return body
+    label = marker.lstrip("# ")
     sep = "# " + "=" * 75 + "\n"
-    return f"{sep}{marker}\n{sep}\n{body}"
-
+    return f"{sep}# {label}\n{sep}\n{body}"
 
 def _split_platform(body: str) -> tuple[str, str]:
     """Return (macOS stderr block, xcb/CLI startup helpers)."""
@@ -224,6 +253,14 @@ def _split_platform(body: str) -> tuple[str, str]:
         rest += "\n\n"
     return stderr, rest
 
+def _module_path(pkg_dir: Path, name: str) -> Path:
+    if name.endswith("/__init__"):
+        sub = name[: -len("/__init__")]
+        return pkg_dir / sub / "__init__.py"
+    parts = name.split("/")
+    if len(parts) == 1:
+        return pkg_dir / f"{name}.py"
+    return pkg_dir.joinpath(*parts).with_suffix(".py")
 
 def bundle(pkg_dir: Path, out_path: Path, monolith: Path) -> None:
     parts: list[str] = [GENERATED_BANNER, _read_docstring(monolith)]
@@ -244,7 +281,7 @@ def bundle(pkg_dir: Path, out_path: Path, monolith: Path) -> None:
                 continue
             body = _section_banner(name, platform_tail)
         else:
-            mod_path = pkg_dir / f"{name}.py"
+            mod_path = _module_path(pkg_dir, name)
             if not mod_path.is_file():
                 raise SystemExit(f"missing module: {mod_path}")
             raw = mod_path.read_text(encoding="utf-8")
@@ -256,8 +293,7 @@ def bundle(pkg_dir: Path, out_path: Path, monolith: Path) -> None:
 
     parts.append("\nif __name__ == \"__main__\":\n    main()\n")
     out_path.write_text("".join(parts), encoding="utf-8")
-    print(f"Bundled {len(BUNDLE_MODULES)} modules -> {out_path}")
-
+    print(f"Bundled {len(BUNDLE_MODULES)} module sections -> {out_path}")
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
@@ -268,10 +304,8 @@ def main() -> None:
     args = ap.parse_args()
     if not args.pkg.is_dir():
         print(f"error: package not found: {args.pkg}", file=sys.stderr)
-        print("Run: python3 scripts/extract_monolith.py", file=sys.stderr)
         raise SystemExit(1)
     bundle(args.pkg, args.output, args.monolith_doc)
-
 
 if __name__ == "__main__":
     main()

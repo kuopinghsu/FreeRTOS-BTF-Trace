@@ -1,4 +1,6 @@
+# GENERATED — do not edit; edit btf_viewer_pkg/ and run: make -C BTFViewer bundle
 """
+
 btf_viewer.py - Single-file RTOS BTF Viewer (PySide6).
 
 Usage:
@@ -64,6 +66,7 @@ Section index
   Main Window         - _CursorButton, _CursorBarWidget, _LegendWidget,
                         _StatsPanel, _RcSettings, _WheelSpinBox, MainWindow
   Entry point         - main()
+
 """
 
 from __future__ import annotations
@@ -71,6 +74,54 @@ from __future__ import annotations
 import os
 import sys
 import threading
+
+import argparse
+import base64
+import configparser
+import csv
+import datetime
+import functools
+import hashlib
+import html
+import itertools
+import json
+import math
+import time
+import re
+import shutil
+import subprocess
+import tempfile
+import traceback
+import zlib
+from bisect import bisect_left, bisect_right
+from collections import defaultdict
+from operator import attrgetter as _attrgetter
+from dataclasses import dataclass, field
+from typing import Callable, Dict, List, Optional, Tuple
+
+from PySide6.QtCore import (
+    QBuffer, QByteArray, QEasingCurve, QEvent, QEventLoop, QIODevice, QLineF, QMimeData,
+    QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt, QThread, QTimer,
+    QPropertyAnimation, Signal,
+)
+from PySide6.QtGui import (
+    QBrush, QColor, QCursor, QFont, QFontDatabase, QFontMetrics, QFontMetricsF, QIcon, QKeySequence, QLinearGradient, QPainter,
+    QPainterPath, QPalette, QPen, QPixmap, QPolygonF, QShortcut, QTransform, QWheelEvent,
+)
+from PySide6.QtSvg import QSvgGenerator
+from PySide6.QtWidgets import (
+    QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
+    QDockWidget, QFileDialog, QFormLayout, QFrame, QGridLayout, QInputDialog,
+    QGraphicsEllipseItem, QGraphicsItem, QGraphicsLineItem, QGraphicsOpacityEffect,
+    QGraphicsPolygonItem, QGraphicsRectItem, QGraphicsScene, QGraphicsTextItem, QGraphicsView,
+    QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListView, QMainWindow, QMenu, QMessageBox, QProgressBar,
+    QProgressDialog,
+    QListWidget, QListWidgetItem,
+    QPushButton, QScrollArea, QScrollBar, QDoubleSpinBox, QSpinBox, QStackedWidget,
+    QStyle, QStyleFactory, QStyleOptionGraphicsItem, QAbstractItemView,
+    QProxyStyle, QTabBar, QTabWidget, QTableWidget, QTableWidgetItem, QToolButton,
+    QVBoxLayout, QWidget, QSizePolicy, QSplitter, QLayout,
+)
 
 # ---------------------------------------------------------------------------
 # macOS: suppress harmless TSM / HIToolbox stderr noise that macOS prints
@@ -135,54 +186,6 @@ def _install_macos_stderr_filter() -> None:
 
     t = threading.Thread(target=_relay, daemon=True, name="stderr-filter")
     t.start()
-
-import argparse
-import base64
-import configparser
-import csv
-import datetime
-import functools
-import hashlib
-import html
-import itertools
-import json
-import math
-import time
-import re
-import shutil
-import subprocess
-import tempfile
-import traceback
-import zlib
-from bisect import bisect_left, bisect_right
-from collections import defaultdict
-from operator import attrgetter as _attrgetter
-from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Tuple
-
-from PySide6.QtCore import (
-    QBuffer, QByteArray, QEasingCurve, QEvent, QEventLoop, QIODevice, QLineF, QMimeData,
-    QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt, QThread, QTimer,
-    QPropertyAnimation, Signal,
-)
-from PySide6.QtGui import (
-    QBrush, QColor, QCursor, QFont, QFontDatabase, QFontMetrics, QFontMetricsF, QIcon, QKeySequence, QLinearGradient, QPainter,
-    QPainterPath, QPalette, QPen, QPixmap, QPolygonF, QShortcut, QTransform, QWheelEvent,
-)
-from PySide6.QtSvg import QSvgGenerator
-from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
-    QDockWidget, QFileDialog, QFormLayout, QFrame, QGridLayout, QInputDialog,
-    QGraphicsEllipseItem, QGraphicsItem, QGraphicsLineItem, QGraphicsOpacityEffect,
-    QGraphicsPolygonItem, QGraphicsRectItem, QGraphicsScene, QGraphicsTextItem, QGraphicsView,
-    QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListView, QMainWindow, QMenu, QMessageBox, QProgressBar,
-    QProgressDialog,
-    QListWidget, QListWidgetItem,
-    QPushButton, QScrollArea, QScrollBar, QDoubleSpinBox, QSpinBox, QStackedWidget,
-    QStyle, QStyleFactory, QStyleOptionGraphicsItem, QAbstractItemView,
-    QProxyStyle, QTabBar, QTabWidget, QTableWidget, QTableWidgetItem, QToolButton,
-    QVBoxLayout, QWidget, QSizePolicy, QSplitter, QLayout,
-)
 
 # ===========================================================================
 # USER CONFIGURATION
@@ -278,7 +281,7 @@ DEFAULT_DOCK_LAYOUT_VERSION = "9"
 # Right-panel tab indices (Statistics / Marks / Find — web parity).
 _PANEL_TAB_STATS = 0
 _PANEL_TAB_MARKS = 1
-_PANEL_TAB_FIND = 2
+_PANEL_TAB_FIND  = 2
 # Keep empty so first run uses code-driven dock sizing/tab defaults instead
 # of a host-dependent serialized Qt dock_state blob.
 DEFAULT_DOCK_STATE_B64 = ""
@@ -311,9 +314,9 @@ LABEL_BOTTOM_MARGIN      =  10  # Gap (px) between bottom edge of a vertical lab
 # ---- Performance / Level-of-Detail ----------------------------------------
 _TIMESCALE_PER_PX_DEFAULT= 2.0    # Initial zoom level (nanoseconds per screen pixel).
 # Qt QScrollBar range is capped near INT_MAX; keep scene timeline width below this.
-_MAX_SCENE_TIMELINE_PX    = 2_000_000_000
+_MAX_SCENE_TIMELINE_PX   = 2_000_000_000
 # Virtual time-axis scrollbar maps the full trace into this range when zoomed in.
-_VIRT_SCROLL_MAX          = 2_000_000_000
+_VIRT_SCROLL_MAX         = 2_000_000_000
 _HOVER_HIGHLIGHT_ENABLED = False  # Highlight task bars when hovering the label (default off).
 # _BatchRowItem.paint() LOD thresholds (Qt levelOfDetail: 1.0 = 100% zoom).
 _PAINT_LOD_COARSE        = 0.45   # Below: merge nearby segments, skip pen outlines.
@@ -353,6 +356,10 @@ _NAV_SCROLL_ACTIVE_MS     = 40    # faster minimap refresh while panning
 _WINDOW_SHIFT_MIN_MS      = 150   # throttle sliding-window rebuilds at trace edges
 # Never draw grid lines closer than this (px); dense lines read as solid gray.
 _MIN_GRID_SPACING_PX      = 12.0
+# Extra scene extent on the task axis so the last row clears scrollbar tracks.
+TIMELINE_SCROLL_GUTTER   = 12
+# Gap between the timeline pane and the CPU-load splitter handle (px).
+TIMELINE_SPLITTER_GAP    = 4
 
 # ---- Cursors --------------------------------------------------------------
 _MAX_CURSORS         = 8  # Hard upper bound - must equal len(_CURSOR_COLORS).
@@ -3931,7 +3938,10 @@ def _parse_btf(filepath: str,
         has_sync_object_instrumentation=_has_sync,
     )
 
+# ===========================================================================
 # Timeline Widget
+# ===========================================================================
+
 # ===========================================================================
 
 # ---------------------------------------------------------------------------
@@ -4691,6 +4701,8 @@ class TimelineScene(QGraphicsScene):
         self._hover_ns: Optional[int] = None
         self._hover_line_ns: Optional[int] = None
         self._hover_items: list = []
+        self._hover_frozen_top_set: set = set()
+        self._hover_frozen_left_set: set = set()
         self._is_dark_ui: bool = True
         self.set_theme(True, rebuild=False)
 
@@ -5629,11 +5641,23 @@ class TimelineScene(QGraphicsScene):
     # Mouse-hover indicator (ghost line)
     # ------------------------------------------------------------------
 
+    def _purge_hover_frozen(self) -> None:
+        """Remove hover label entries from frozen overlay lists."""
+        if self._hover_frozen_top_set:
+            self._frozen_top_items = [e for e in self._frozen_top_items
+                                      if e[0] not in self._hover_frozen_top_set]
+            self._hover_frozen_top_set = set()
+        if self._hover_frozen_left_set:
+            self._frozen_items = [e for e in self._frozen_items
+                                  if e[0] not in self._hover_frozen_left_set]
+            self._hover_frozen_left_set = set()
+
     def _draw_hover_line(self) -> None:
         """Draw a thin dashed ghost line at self._hover_ns with a time label."""
         if self._trace is None or self._hover_ns is None:
             _safe_scene_remove_items(self, self._hover_items)
             self._hover_items.clear()
+            self._purge_hover_frozen()
             if self._hover_line_ns is not None:
                 self._hover_line_ns = None
                 self.hover_changed.emit()
@@ -5642,15 +5666,10 @@ class TimelineScene(QGraphicsScene):
             return
         _safe_scene_remove_items(self, self._hover_items)
         self._hover_items.clear()
+        self._purge_hover_frozen()
         self._hover_line_ns = self._hover_ns
         self.hover_changed.emit()
         scene_r = self.sceneRect()
-        _views  = self.views()
-        try:
-            _scene_top  = _views[0].mapToScene(QPoint(0, 0)).y()  if _views else 0.0
-            _scene_left = _views[0].mapToScene(QPoint(0, 0)).x()  if _views else 0.0
-        except RuntimeError:
-            _scene_top = _scene_left = 0.0
         font = _monospace_font(max(8, self._font_size - 1))
         fm   = QFontMetrics(font)
         t_str = _format_time(self._hover_ns, self._trace.time_scale, decimals=3)
@@ -5673,19 +5692,24 @@ class TimelineScene(QGraphicsScene):
             line.setZValue(25)
             self.addItem(line)
             self._hover_items.append(line)
-            # Time label centred on x, pinned near the bottom of the ruler
+            # Time label centred on x, pinned near the bottom of the ruler band.
             lbl_x = min(x - tw / 2, scene_r.width() - tw - 4)
             lbl_x = max(self._label_width + 2, lbl_x)
-            lbl_y = _scene_top + RULER_HEIGHT - th - 4
+            _orig_y_bg = RULER_HEIGHT - th - 4
+            _orig_y_lbl = _orig_y_bg + 1
             bg = self.addRect(
-                QRectF(lbl_x, lbl_y, tw, th + 2),
+                QRectF(0, 0, tw, th + 2),
                 QPen(Qt.PenStyle.NoPen), QBrush(lbl_bg))
             bg.setZValue(26)
+            bg.setPos(lbl_x, _orig_y_bg)
             lbl = self.addSimpleText(t_str, font)
             lbl.setBrush(QBrush(lbl_txt))
             lbl.setZValue(27)
-            lbl.setPos(lbl_x + 4, lbl_y + 1)
+            lbl.setPos(lbl_x + 4, _orig_y_lbl)
             self._hover_items.extend([bg, lbl])
+            self._frozen_top_items.append((bg, _orig_y_bg))
+            self._frozen_top_items.append((lbl, _orig_y_lbl))
+            self._hover_frozen_top_set.update({bg, lbl})
         else:
             label_row_h = self._label_width
             y = label_row_h + self._ns_to_px(self._hover_ns)
@@ -5694,18 +5718,24 @@ class TimelineScene(QGraphicsScene):
             line.setZValue(25)
             self.addItem(line)
             self._hover_items.append(line)
-            # Time label to the right of the ruler, centred vertically on y
-            lbl_x = _scene_left + RULER_WIDTH + 4
-            lbl_y = y - (th + 2) / 2
+            # Time label to the right of the ruler, centred vertically on y.
+            _left_pad = RULER_WIDTH + 4
+            _lbl_y = y - (th + 2) / 2
             bg = self.addRect(
-                QRectF(lbl_x, lbl_y, tw, th + 2),
+                QRectF(0, 0, tw, th + 2),
                 QPen(Qt.PenStyle.NoPen), QBrush(lbl_bg))
             bg.setZValue(26)
+            bg.setPos(_left_pad, _lbl_y)
             lbl = self.addSimpleText(t_str, font)
             lbl.setBrush(QBrush(lbl_txt))
             lbl.setZValue(27)
-            lbl.setPos(lbl_x + 4, lbl_y + 1)
+            lbl.setPos(_left_pad + 4, _lbl_y + 1)
             self._hover_items.extend([bg, lbl])
+            self._frozen_items.append((bg, _left_pad))
+            self._frozen_items.append((lbl, _left_pad + 4))
+            self._hover_frozen_left_set.update({bg, lbl})
+
+        self._pin_cursor_overlays()
 
     def clear_hover_line(self) -> None:
         """Remove the hover ghost line from the scene."""
@@ -5714,6 +5744,7 @@ class TimelineScene(QGraphicsScene):
             return
         _safe_scene_remove_items(self, self._hover_items)
         self._hover_items.clear()
+        self._purge_hover_frozen()
         self._hover_ns = None
         self._hover_line_ns = None
         self.hover_changed.emit()
@@ -5746,13 +5777,6 @@ class TimelineScene(QGraphicsScene):
         font_big = _monospace_font(self._font_size + 1, QFont.Bold)
         fm_bold  = QFontMetrics(font_big)
 
-        # Get the current scene-top so cursor labels can be registered as
-        # y-frozen items (always visible in the ruler area even when the user
-        # has scrolled the task rows down).
-        _views = self.views()
-        _scene_top = _views[0].mapToScene(QPoint(0, 0)).y() if _views else 0.0
-        _scene_left = _views[0].mapToScene(QPoint(0, 0)).x() if _views else 0.0
-
         sorted_cursors = sorted(enumerate(self._cursor_times), key=lambda x: x[1])
         cursor_palette = _cursor_colors(self._is_dark_ui)
 
@@ -5776,15 +5800,14 @@ class TimelineScene(QGraphicsScene):
                 th = fm_bold.height()
                 lbl_x = min(x + 3, scene_r.width() - tw - 4)
                 _orig_y = 2 + (orig_idx + 1) * (th + 2)
-                lbl_y   = _scene_top + _orig_y
                 bg = self.addRect(
                     QRectF(0, 0, tw + 4, th + 2),
                     QPen(Qt.PenStyle.NoPen),
                     QBrush(color),
                 )
                 bg.setZValue(31)
-                bg.setPos(lbl_x - 2, lbl_y - 1)
-                lbl.setPos(lbl_x, lbl_y)
+                bg.setPos(lbl_x - 2, _orig_y - 1)
+                lbl.setPos(lbl_x, _orig_y)
                 self._cursor_items.extend([bg, lbl])
                 # Register label + background as y-frozen so _reposition_frozen_top
                 # keeps them in the ruler area regardless of vertical scroll.
@@ -5799,17 +5822,24 @@ class TimelineScene(QGraphicsScene):
                     mid_x   = self._label_width + self._ns_to_px((ns + prev_ns) // 2)
                     d_lbl   = self.addSimpleText(d_str, font)
                     d_w     = QFontMetrics(font).horizontalAdvance(d_str)
+                    d_h     = QFontMetrics(font).height()
                     d_lbl.setBrush(QBrush(QColor("#000000")))
                     d_lbl.setZValue(32)
+                    # Align Δ text with the later cursor label row (C2 for C1–C2, etc.).
+                    _delta_orig_y_lbl = _orig_y
+                    _delta_orig_y_bg = _orig_y - 1
                     bg_rect = self.addRect(
-                        QRectF(mid_x - d_w / 2 - 3, RULER_HEIGHT + 4,
-                               d_w + 6, QFontMetrics(font).height() + 4),
+                        QRectF(0, 0, d_w + 6, d_h + 2),
                         QPen(Qt.PenStyle.NoPen),
                         QBrush(color),
                     )
                     bg_rect.setZValue(31)
-                    d_lbl.setPos(mid_x - d_w / 2, RULER_HEIGHT + 6)
+                    bg_rect.setPos(mid_x - d_w / 2 - 3, _delta_orig_y_bg)
+                    d_lbl.setPos(mid_x - d_w / 2, _delta_orig_y_lbl)
                     self._cursor_items.extend([bg_rect, d_lbl])
+                    self._frozen_top_items.append((bg_rect, _delta_orig_y_bg))
+                    self._frozen_top_items.append((d_lbl, _delta_orig_y_lbl))
+                    self._cursor_frozen_top_set.update({bg_rect, d_lbl})
 
             else:  # vertical mode
                 label_row_h = self._label_width
@@ -5823,26 +5853,26 @@ class TimelineScene(QGraphicsScene):
                 t_str = _format_time(ns, self._trace.time_scale, decimals=3)
                 lbl = self.addSimpleText(f"C{orig_idx+1}: {t_str}", font_big)
                 lbl.setBrush(QBrush(QColor("#000000")))
-                lbl.setZValue(32)
+                lbl.setZValue(38)
                 tw = fm_bold.horizontalAdvance(lbl.text())
                 th = fm_bold.height()
-                # Keep vertical labels outside the frozen ruler column
-                # (ruler z=35/36 would otherwise overdraw label z=31/32).
-                _left_pad = RULER_WIDTH + 4
-                lbl_x = _scene_left + _left_pad
-                lbl_y = y + 2
+                # Match web vertical layout: badge in left ruler column at x=2.
+                _pad = 4
+                _badge_h = 14
+                _left_bg_x = 2
+                _left_lbl_x = _left_bg_x + _pad
+                _lbl_y = min(y + 2, scene_r.height() - _badge_h - 2)
                 bg = self.addRect(
-                    QRectF(0, 0, tw + 4, th + 2),
+                    QRectF(0, 0, tw + _pad * 2, _badge_h),
                     QPen(Qt.PenStyle.NoPen),
                     QBrush(color),
                 )
-                bg.setZValue(31)
-                bg.setPos(lbl_x - 2, lbl_y - 1)
-                lbl.setPos(lbl_x, lbl_y)
+                bg.setZValue(37)
+                bg.setPos(_left_bg_x, _lbl_y)
+                lbl.setPos(_left_lbl_x, _lbl_y + (_badge_h - th) / 2)
                 self._cursor_items.extend([bg, lbl])
-                # Keep vertical-mode cursor labels frozen at viewport-left.
-                self._frozen_items.append((bg, _left_pad - 2))
-                self._frozen_items.append((lbl, _left_pad))
+                self._frozen_items.append((bg, _left_bg_x))
+                self._frozen_items.append((lbl, _left_lbl_x))
                 self._cursor_frozen_left_set.update({bg, lbl})
 
                 if order > 0:
@@ -5862,6 +5892,18 @@ class TimelineScene(QGraphicsScene):
                     bg_rect.setZValue(31)
                     d_lbl.setPos(RULER_WIDTH + 7, mid_y - dh / 2)
                     self._cursor_items.extend([bg_rect, d_lbl])
+
+        self._pin_cursor_overlays()
+
+    def _pin_cursor_overlays(self) -> None:
+        """Re-anchor cursor/delta labels after draw (viewport-frozen coordinates)."""
+        view = self.views()[0] if self.views() else None
+        if view is None:
+            return
+        view._frozen_last_scene_top = None
+        view._frozen_last_scene_left = None
+        view._reposition_frozen_top()
+        view._reposition_frozen()
 
     # ------------------------------------------------------------------
     # Build / rebuild
@@ -5977,6 +6019,59 @@ class TimelineScene(QGraphicsScene):
             self._vp_scene_orth_lo = vy_lo - _ORTH_BUF
             self._vp_scene_orth_hi = vy_hi + _ORTH_BUF
 
+    def _viewport_orth_extent(self) -> float:
+        """Task-axis scene extent that matches the current viewport (rows in H-mode)."""
+        view = self.views()[0] if self.views() else None
+        if view is None:
+            return 0.0
+        vp = view.viewport().rect()
+        if vp.width() <= 1 or vp.height() <= 1:
+            return 0.0
+        if self._horizontal:
+            tl = view.mapToScene(vp.topLeft())
+            bl = view.mapToScene(vp.bottomLeft())
+            return max(1.0, bl.y() - tl.y())
+        tl = view.mapToScene(vp.topLeft())
+        tr = view.mapToScene(vp.topRight())
+        return max(1.0, tr.x() - tl.x())
+
+    def _orth_scroll_gutter(self) -> float:
+        view = self.views()[0] if self.views() else None
+        if view is None:
+            return 0.0
+        fn = getattr(view, "orth_scroll_gutter_px", None)
+        return float(fn()) if callable(fn) else 0.0
+
+    def _finalize_orth_size(self, content_orth: float) -> float:
+        """Fill the task axis to the viewport; pad when rows overflow scrollbars."""
+        vp = self._viewport_orth_extent()
+        orth = max(content_orth, vp)
+        if content_orth > vp + 0.5:
+            orth += self._orth_scroll_gutter()
+        return orth
+
+    def _add_orth_filler_horizontal(self, content_h: float, total_h: float,
+                                    total_w: float, lw: float, last_row_idx: int) -> None:
+        if content_h >= total_h - 0.5:
+            return
+        brush = QBrush(self._c_row_even if last_row_idx % 2 == 0 else self._c_row_odd)
+        rect = self.addRect(
+            QRectF(lw, content_h, total_w - lw, total_h - content_h),
+            QPen(Qt.PenStyle.NoPen), brush)
+        rect.setZValue(0)
+        self._track_timeline_bg(rect)
+
+    def _add_orth_filler_vertical(self, content_w: float, total_w: float,
+                                  total_h: float, label_row_h: float,
+                                  last_col_idx: int) -> None:
+        if content_w >= total_w - 0.5:
+            return
+        brush = QBrush(self._c_row_even if last_col_idx % 2 == 0 else self._c_row_odd)
+        rect = self.addRect(
+            QRectF(content_w, label_row_h, total_w - content_w, total_h - label_row_h),
+            QPen(Qt.PenStyle.NoPen), brush)
+        rect.setZValue(0)
+
     def rebuild(self) -> None:
         if self._rebuild_suspend > 0:
             return
@@ -6029,6 +6124,8 @@ class TimelineScene(QGraphicsScene):
         self._cursor_frozen_left_set = set()
         self._mark_frozen_top_set = set()
         self._mark_frozen_left_set = set()
+        self._hover_frozen_top_set = set()
+        self._hover_frozen_left_set = set()
         self._task_row_rects = {}
         self._hover_overlay_items = []   # clear() removed them from the scene
         self._hover_items = []             # clear() removed them from the scene
@@ -6052,6 +6149,8 @@ class TimelineScene(QGraphicsScene):
         self._draw_cursors()
         self._draw_marks()
         self._draw_find_markers()
+        if self._hover_ns is not None:
+            self._draw_hover_line()
         self.scene_rebuilt.emit()
 
     # ------------------------------------------------------------------
@@ -6492,7 +6591,9 @@ class TimelineScene(QGraphicsScene):
             (self._sti_waveform_h_val if c in self._sti_expanded else self._sti_row_h_val) + self._row_gap
             for c in sti_rows)
         _sti_total_h += n_interval * (self._row_height + self._row_gap)
-        total_h = RULER_HEIGHT + n_task * (self._row_height + self._row_gap) + _sti_total_h
+        _row_stride = self._row_height + self._row_gap
+        content_h = RULER_HEIGHT + n_task * _row_stride + _sti_total_h
+        total_h = self._finalize_orth_size(content_h)
         total_w = self._label_width + timeline_w
         self.setSceneRect(0, 0, total_w, total_h)
 
@@ -6538,7 +6639,6 @@ class TimelineScene(QGraphicsScene):
         # --- Task rows ---------------------------------------------------
         # Compute first/last visible row indices from the cached orth bounds.
         # This avoids iterating all n_task rows just to skip ~95 % of them.
-        _row_stride   = self._row_height + self._row_gap
         _first_vis    = max(0, int((self._vp_scene_orth_lo - RULER_HEIGHT) // _row_stride))
         _last_vis     = min(n_task - 1, int((self._vp_scene_orth_hi - RULER_HEIGHT) // _row_stride) + 1)
         _time_min     = vp.time_min
@@ -6692,6 +6792,9 @@ class TimelineScene(QGraphicsScene):
             self.addItem(_stripes)
             self._row_stripe_item = _stripes
 
+        self._add_orth_filler_horizontal(
+            content_h, total_h, total_w, lw, n_task + n_sti + n_interval)
+
         # --- Frozen label column header ----------------------------------
         # Drawn last so it sits on top of all other frozen items (z=38-39).
         _has_tick_h = bool(trace.seg_map_by_merge_key.get(_task_merge_key("TICK"), []))
@@ -6753,8 +6856,9 @@ class TimelineScene(QGraphicsScene):
             for c in sti_cols
         )
         total_sti_w += n_interval * col_w
-        total_w     = RULER_WIDTH + n_task * col_w + total_sti_w
-        total_h     = label_row_h + timeline_h
+        content_w = RULER_WIDTH + n_task * col_w + total_sti_w
+        total_w = self._finalize_orth_size(content_w)
+        total_h = label_row_h + timeline_h
         self.setSceneRect(0, 0, total_w, total_h)
 
         # --- Ruler column (left side): frozen to left edge on X scroll ------
@@ -6941,6 +7045,9 @@ class TimelineScene(QGraphicsScene):
             trace, interval_cols, _sti_x_acc, col_w, label_row_h, timeline_h,
             font, _time_min, _px_per_ns, _vp_ns_lo, _vp_ns_hi)
 
+        self._add_orth_filler_vertical(
+            _sti_x_acc, total_w, total_h, label_row_h, n_task + n_sti + n_interval)
+
         # --- Corner: ruler-column x label-row intersection ---------------
         _vt_corner_rect = self.addRect(QRectF(0, 0, RULER_WIDTH, label_row_h),
                                        QPen(Qt.PenStyle.NoPen), QBrush(self._c_corner_bg))
@@ -6996,8 +7103,10 @@ class TimelineScene(QGraphicsScene):
             (self._sti_waveform_h_val if c in self._sti_expanded else self._sti_row_h_val) + self._row_gap
             for c in sti_rows)
         _sti_total_h += len(interval_rows) * (self._row_height + self._row_gap)
-        total_h    = RULER_HEIGHT + _n_non_sti * (self._row_height + self._row_gap) + _sti_total_h
-        total_w    = self._label_width + timeline_w
+        _row_stride = self._row_height + self._row_gap
+        content_h = RULER_HEIGHT + _n_non_sti * _row_stride + _sti_total_h
+        total_h = self._finalize_orth_size(content_h)
+        total_w = self._label_width + timeline_w
         self.setSceneRect(0, 0, total_w, total_h)
 
         # --- Background & ruler ------------------------------------------
@@ -7309,6 +7418,8 @@ class TimelineScene(QGraphicsScene):
         self._frozen_items.append((hdr_lbl, 4))
         self._frozen_top_items.append((corner, 0))
         self._frozen_top_items.append((hdr_lbl, hdr_lbl.pos().y()))
+        self._add_orth_filler_horizontal(
+            content_h, total_h, total_w, lw, total_rows)
         self._add_frozen_label_grip(lw, total_h)
 
     def _build_vertical_core(self) -> None:
@@ -7352,8 +7463,9 @@ class TimelineScene(QGraphicsScene):
             for c in sti_cols
         )
         total_sti_w += len(interval_cols) * col_w
-        total_w     = RULER_WIDTH + _core_col_count * col_w + total_sti_w
-        total_h     = label_row_h + timeline_h
+        content_w = RULER_WIDTH + _core_col_count * col_w + total_sti_w
+        total_w = self._finalize_orth_size(content_w)
+        total_h = label_row_h + timeline_h
         self.setSceneRect(0, 0, total_w, total_h)
 
         # --- Ruler column (left side): frozen to left edge on X scroll ------
@@ -7604,6 +7716,9 @@ class TimelineScene(QGraphicsScene):
         _sti_x_acc_vc = self._add_interval_vertical_columns(
             trace, interval_cols, _sti_x_acc_vc, col_w, label_row_h, timeline_h,
             font, _time_min, _px_per_ns, _vp_ns_lo, _vp_ns_hi)
+
+        self._add_orth_filler_vertical(
+            _sti_x_acc_vc, total_w, total_h, label_row_h, col_idx)
 
         # --- Corner: ruler-column x label-row intersection ---------------
         _vc_corner = self.addRect(QRectF(0, 0, RULER_WIDTH, label_row_h),
@@ -8955,7 +9070,6 @@ class _BatchStiWaveformColumnItem(QGraphicsItem):
             painter.drawEllipse(QPointF(x, y), 2.5, 2.5)
 
         painter.restore()
-
 # ===========================================================================
 # Navigator Popup
 # ===========================================================================
@@ -9432,7 +9546,6 @@ class _LabelGripDragCapture(QObject):
             return True
         return False
 
-
 class _LabelColumnGripItem(QGraphicsItem):
     """Frozen scene-item resize grip (moves with the label column on horizontal pan)."""
 
@@ -9826,12 +9939,15 @@ class TimelineView(QGraphicsView):
         self._virt_scroll_rebuild: bool = False
         self._syncing_virt_bar: bool = False
         self._virt_bar_dragging: bool = False
-        self._virt_trace_bar = QScrollBar(Qt.Orientation.Horizontal, self)
-        self._virt_trace_bar.hide()
-        self._virt_trace_bar.valueChanged.connect(self._on_virt_trace_bar_changed)
-        self._virt_trace_bar.sliderPressed.connect(self._on_virt_trace_bar_pressed)
-        self._virt_trace_bar.sliderReleased.connect(self._on_virt_trace_bar_released)
-        self._virt_trace_bar.installEventFilter(self)
+        self._time_scroll_external: bool = False
+        self._time_scroll_bar: Optional[QScrollBar] = None
+        self._time_scroll_internal = QScrollBar(Qt.Orientation.Horizontal, self)
+        self._bind_time_scroll_bar(self._time_scroll_internal)
+        self._time_scroll_internal.hide()
+        # Belt-and-suspenders: scrollbar-driven pan must re-pin ruler overlays even
+        # when scrollContentsBy is skipped (virtual scroll / batched setValue).
+        self.verticalScrollBar().valueChanged.connect(self._on_vertical_scroll_changed)
+        self.horizontalScrollBar().valueChanged.connect(self._on_horizontal_scroll_changed)
         self._last_window_shift_ms: float = 0.0
         self._pending_shift_ns_lo: Optional[float] = None
         self._pending_shift_ns_hi: Optional[float] = None
@@ -9842,6 +9958,24 @@ class TimelineView(QGraphicsView):
         self._preserve_virt_scroll: bool = False
         self._preserved_virt_scroll_px: float = 0.0
         self.zoom_changed.connect(self._defer_virt_scroll_sync)
+
+    @property
+    def _virt_trace_bar(self) -> QScrollBar:
+        return self._time_scroll_bar or self._time_scroll_internal
+
+    def attach_time_scroll_bar(self, bar: QScrollBar) -> None:
+        """Use a sibling scrollbar below the canvas (horizontal task layout)."""
+        self._time_scroll_bar = bar
+        self._time_scroll_external = True
+        self._bind_time_scroll_bar(bar)
+        self._time_scroll_internal.hide()
+
+    def _bind_time_scroll_bar(self, bar: QScrollBar) -> None:
+        bar.valueChanged.connect(self._on_virt_trace_bar_changed)
+        bar.sliderPressed.connect(self._on_virt_trace_bar_pressed)
+        bar.sliderReleased.connect(self._on_virt_trace_bar_released)
+        bar.installEventFilter(self)
+        bar.hide()
 
     # ------------------------------------------------------------------
     # Full-trace time scrollbar (overlay when zoomed past fit-to-window)
@@ -9943,20 +10077,39 @@ class TimelineView(QGraphicsView):
         return (self.horizontalScrollBar() if self._scene._horizontal
                 else self.verticalScrollBar())
 
+    def _time_axis_track_thickness(self) -> int:
+        bar = self._native_time_axis_bar()
+        if self._scene._horizontal:
+            return max(TIMELINE_SCROLL_GUTTER, bar.sizeHint().height())
+        return max(TIMELINE_SCROLL_GUTTER, bar.sizeHint().width())
+
     def _collapse_native_time_bar(self, collapsed: bool) -> None:
         """Keep native time bar in the tree for macOS wheel routing; hide visually."""
         bar = self._native_time_axis_bar()
+        track = self._time_axis_track_thickness()
         if collapsed:
             if self._scene._horizontal:
                 bar.setStyleSheet(
-                    "QScrollBar:horizontal { height: 1px; max-height: 1px;"
-                    " min-height: 1px; border: none; background: transparent; }")
-                bar.setFixedHeight(1)
+                    f"QScrollBar:horizontal {{ height: {track}px; max-height: {track}px;"
+                    f" min-height: {track}px; border: none; background: transparent; }}"
+                    "QScrollBar::handle:horizontal { min-width: 0; max-width: 0;"
+                    " background: transparent; }"
+                    "QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal"
+                    " { width: 0; }"
+                    "QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal"
+                    " { background: none; }")
+                bar.setFixedHeight(track)
             else:
                 bar.setStyleSheet(
-                    "QScrollBar:vertical { width: 1px; max-width: 1px;"
-                    " min-width: 1px; border: none; background: transparent; }")
-                bar.setFixedWidth(1)
+                    f"QScrollBar:vertical {{ width: {track}px; max-width: {track}px;"
+                    f" min-width: {track}px; border: none; background: transparent; }}"
+                    "QScrollBar::handle:vertical { min-height: 0; max-height: 0;"
+                    " background: transparent; }"
+                    "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical"
+                    " { height: 0; }"
+                    "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical"
+                    " { background: none; }")
+                bar.setFixedWidth(track)
             bar.show()
         else:
             bar.setStyleSheet("")
@@ -9970,12 +10123,59 @@ class TimelineView(QGraphicsView):
                 bar.setFixedWidth(bar.sizeHint().width())
             bar.show()
 
+    def _time_axis_track_rect(self) -> QRect:
+        """Rect for an in-view time scrollbar overlay (vertical layout / settings only)."""
+        vp = self.viewport()
+        vsb = self.verticalScrollBar()
+        hsb = self.horizontalScrollBar()
+        if self._scene._horizontal:
+            track_h = self._time_axis_track_thickness()
+            v_w = vsb.width() if vsb.isVisible() else 0
+            y = vp.y() + vp.height()
+            h = min(track_h, max(1, self.height() - y))
+            if h < 4:
+                corner = vsb.height() if vsb.isVisible() else 0
+                h = min(track_h, max(1, self.height() - corner))
+                y = max(0, self.height() - corner - h)
+            return QRect(0, y, max(1, self.width() - v_w), max(4, h))
+        track_w = self._time_axis_track_thickness()
+        h_h = hsb.height() if hsb.isVisible() else 0
+        x = vp.x() + vp.width()
+        w = min(track_w, max(1, self.width() - x))
+        if w < 4:
+            w = min(track_w, max(1, self.width() - h_h))
+            x = max(0, self.width() - h_h - w)
+        return QRect(x, 0, max(4, w), max(1, self.height() - h_h))
+
+    def orth_scroll_gutter_px(self) -> int:
+        """Scene padding on the task axis so the last row clears scrollbar tracks."""
+        sc = self._scene
+        gutter = TIMELINE_SCROLL_GUTTER
+        if sc._horizontal:
+            if (not self._time_scroll_external
+                    and (self._virtual_time_scroll_active or self._virt_trace_bar.isVisible())):
+                gutter = max(gutter, self._virt_trace_bar.height() or TIMELINE_SCROLL_GUTTER)
+            hbar = self.horizontalScrollBar()
+            if (not self._time_scroll_external
+                    and hbar.isVisible() and hbar.maximum() > hbar.minimum()):
+                gutter = max(gutter, hbar.height())
+        else:
+            if self._virtual_time_scroll_active or self._virt_trace_bar.isVisible():
+                gutter = max(gutter, self._virt_trace_bar.width() or TIMELINE_SCROLL_GUTTER)
+            vbar = self.verticalScrollBar()
+            if vbar.isVisible() and vbar.maximum() > vbar.minimum():
+                gutter = max(gutter, vbar.width())
+        return gutter
+
     def _set_virtual_scroll_enabled(self, enabled: bool) -> None:
         self._virtual_time_scroll_active = bool(enabled)
         native = self._native_time_axis_bar()
         overlay = self._virt_trace_bar
         if enabled and self._scene._trace is not None:
-            self._collapse_native_time_bar(True)
+            if self._time_scroll_external and self._scene._horizontal:
+                self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            else:
+                self._collapse_native_time_bar(True)
             overlay.show()
             self._position_virt_trace_bar()
             self._sync_native_scene_scrollbar()
@@ -9999,23 +10199,22 @@ class TimelineView(QGraphicsView):
                 self._native_time_bar_interaction_connected = False
             native.removeEventFilter(self)
             overlay.hide()
-            self._collapse_native_time_bar(False)
+            if self._time_scroll_external and self._scene._horizontal:
+                self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+            else:
+                self._collapse_native_time_bar(False)
 
     def _position_virt_trace_bar(self) -> None:
         if not self._virt_trace_bar.isVisible():
             return
-        vp = self.viewport()
-        vp_x, vp_y = vp.x(), vp.y()
-        vp_w, vp_h = vp.width(), vp.height()
         bar = self._virt_trace_bar
-        if self._scene._horizontal:
-            bar.setOrientation(Qt.Orientation.Horizontal)
-            h = max(bar.sizeHint().height(), 14)
-            bar.setGeometry(vp_x, vp_y + max(0, vp_h - h), vp_w, h)
-        else:
-            bar.setOrientation(Qt.Orientation.Vertical)
-            w = max(bar.sizeHint().width(), 14)
-            bar.setGeometry(vp_x + max(0, vp_w - w), vp_y, w, vp_h)
+        if self._time_scroll_external and self._scene._horizontal:
+            bar.setFixedHeight(self._time_axis_track_thickness())
+            return
+        bar.setOrientation(
+            Qt.Orientation.Horizontal if self._scene._horizontal
+            else Qt.Orientation.Vertical)
+        bar.setGeometry(self._time_axis_track_rect())
         bar.raise_()
 
     def _sync_native_scene_scrollbar(self) -> None:
@@ -11858,7 +12057,10 @@ class TimelineView(QGraphicsView):
 
     def eventFilter(self, obj, e) -> bool:
         """Intercept native pinch-zoom gestures delivered to the viewport."""
-        if obj is self._virt_trace_bar and e.type() == QEvent.Type.Wheel:
+        virt_bar = getattr(self, "_time_scroll_bar", None)
+        if virt_bar is None:
+            virt_bar = getattr(self, "_time_scroll_internal", None)
+        if virt_bar is not None and obj is virt_bar and e.type() == QEvent.Type.Wheel:
             self.wheelEvent(e)
             return True
         if e.type() == QEvent.Type.Wheel:
@@ -12489,6 +12691,22 @@ class TimelineView(QGraphicsView):
         for item, orig_y in self._scene._frozen_top_items:
             item.setY(scene_top + orig_y)
 
+    def _on_vertical_scroll_changed(self, _value: int) -> None:
+        """Re-pin ruler-band overlays after vertical (row-axis) scroll."""
+        if not self._scene._horizontal:
+            return
+        self._frozen_last_scene_top = None
+        self._reposition_frozen_top()
+
+    def _on_horizontal_scroll_changed(self, _value: int) -> None:
+        """Re-pin overlays after horizontal scroll in vertical-layout mode."""
+        if self._scene._horizontal:
+            return
+        self._frozen_last_scene_left = None
+        self._frozen_last_scene_top = None
+        self._reposition_frozen()
+        self._reposition_frozen_top()
+
     # ------------------------------------------------------------------
     # Resize handling
     # ------------------------------------------------------------------
@@ -12529,11 +12747,25 @@ class TimelineView(QGraphicsView):
         else:
             # Zoom mode: preserve zoom level and canonical scroll position.
             self._scene._timescale_per_px_fit = new_fit
+            if self._needs_orth_fill_rebuild():
+                self._scene.rebuild()
             self._reposition_frozen()
             self._reposition_frozen_top()
             self._update_virt_trace_bar_range()
             if self._virtual_time_scroll_active:
                 self._apply_virt_time_scroll_px(self._virt_time_scroll_px)
+
+    def _needs_orth_fill_rebuild(self) -> bool:
+        """True when the scene should grow/shrink to match viewport fill rules."""
+        sc = self._scene
+        if sc._trace is None:
+            return False
+        vp = sc._viewport_orth_extent()
+        if vp <= 0:
+            return False
+        rect = sc.sceneRect()
+        content = rect.height() if sc._horizontal else rect.width()
+        return abs(sc._finalize_orth_size(content) - content) > 1.0
 
     def _orth_viewport_overflow_px(self) -> float:
         """How far (px) the live viewport extends past the last orth rebuild."""
@@ -12657,6 +12889,9 @@ class TimelineView(QGraphicsView):
 # ---------------------------------------------------------------------------
 # Custom progress dialog (more reliable than QProgressDialog on macOS)
 # ---------------------------------------------------------------------------
+# ===========================================================================
+# Main Window
+# ===========================================================================
 
 class _LoadProgressDialog(QWidget):
     """Borderless progress dialog that paints reliably on macOS.
@@ -20897,6 +21132,870 @@ def _exec_centred(dlg, parent):
 # ===========================================================================
 # CPU Load Graph
 # ===========================================================================
+# ===========================================================================
+# MVVM
+# ===========================================================================
+
+class ViewModelBase(QObject):
+    """Base QObject for view-models."""
+
+    changed = Signal()
+# ===========================================================================
+# mvvm/models
+# ===========================================================================
+
+@dataclass
+class PlotSessionState:
+    mk: Optional[str] = None
+    kind: Optional[str] = None
+    preemptor: Optional[str] = None
+    open: bool = False
+    interval_id: Optional[str] = None
+
+@dataclass
+class StatsTabModel:
+    cursor_times: List[int] = field(default_factory=list)
+    scope_to_cursors: bool = True
+    export_scope_override: Optional[Tuple[int, int]] = None
+    section_collapsed: Dict[str, bool] = field(default_factory=dict)
+    section_table_heights: Dict[str, int] = field(default_factory=dict)
+    util_label_col_w: int = 0
+
+@dataclass
+class TraceTabModel:
+    path: str = ""
+    trace: Optional[BtfTrace] = None
+    bookmarks: List[TraceBookmark] = field(default_factory=list)
+    annotations: List[TraceAnnotation] = field(default_factory=list)
+    mark_next_id: int = 1
+    find_hits: List[int] = field(default_factory=list)
+    find_hit_idx: int = -1
+    find_marker_ns: Optional[int] = None
+    undo_stack: list = field(default_factory=list)
+    redo_stack: list = field(default_factory=list)
+    plot: PlotSessionState = field(default_factory=PlotSessionState)
+    stats: StatsTabModel = field(default_factory=StatsTabModel)
+
+@dataclass
+class AppSettingsModel:
+    view_mode: str = "task"
+    is_dark: bool = True
+    show_sti: bool = True
+    show_grid: bool = True
+    show_legend: bool = True
+    show_stats: bool = True
+    show_cpu_load: bool = True
+    show_marks: bool = True
+    show_find: bool = True
+    cpu_splitter_user_sized: bool = False
+    cpu_splitter_bottom_h: Optional[int] = None
+    font_size: int = 0
+    ui_font_size: int = 0
+    max_cursors: int = 0
+    label_width: int = 0
+    row_height: int = 0
+    row_gap: int = 0
+    sti_row_h: int = 0
+    sti_waveform_h: int = 0
+    sti_line_style: str = ""
+    timescale_per_px_default: float = 0.0
+    hover_highlight: bool = False
+    cpu_load_row_h: int = 0
+    colorblind: bool = False
+    horizontal: bool = True
+
+@dataclass
+class SessionModel:
+    restore_queue: List[str] = field(default_factory=list)
+    restore_active_idx: int = -1
+    load_in_progress: bool = False
+# ===========================================================================
+# mvvm/app_settings
+# ===========================================================================
+
+class AppSettingsViewModel(ViewModelBase):
+    """ViewModel for application-wide UI settings (not per-tab)."""
+
+    settings_changed = Signal()
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._model = AppSettingsModel()
+        self.reset_to_config_defaults()
+
+    @property
+    def model(self) -> AppSettingsModel:
+        return self._model
+
+    def reset_to_config_defaults(self) -> None:
+        m = self._model
+        m.view_mode = "task"
+        m.is_dark = True
+        m.show_sti = True
+        m.show_grid = True
+        m.show_legend = True
+        m.show_stats = True
+        m.show_cpu_load = True
+        m.show_marks = True
+        m.show_find = True
+        m.cpu_splitter_user_sized = False
+        m.cpu_splitter_bottom_h = None
+        m.font_size = FONT_SIZE
+        m.ui_font_size = UI_FONT_SIZE
+        m.max_cursors = _DEFAULT_MAX_CURSORS
+        m.label_width = LABEL_WIDTH
+        m.row_height = ROW_HEIGHT
+        m.row_gap = ROW_GAP
+        m.sti_row_h = STI_ROW_H
+        m.sti_waveform_h = STI_WAVEFORM_H
+        m.sti_line_style = STI_LINE_STYLE
+        m.timescale_per_px_default = _TIMESCALE_PER_PX_DEFAULT
+        m.hover_highlight = _HOVER_HIGHLIGHT_ENABLED
+        m.cpu_load_row_h = CPU_LOAD_ROW_H
+        m.colorblind = False
+        m.horizontal = True
+        self.settings_changed.emit()
+        self.changed.emit()
+
+    def _touch(self) -> None:
+        self.settings_changed.emit()
+        self.changed.emit()
+
+    @property
+    def view_mode(self) -> str:
+        return self._model.view_mode
+
+    @view_mode.setter
+    def view_mode(self, value: str) -> None:
+        self._model.view_mode = value
+        self._touch()
+
+    @property
+    def is_dark(self) -> bool:
+        return self._model.is_dark
+
+    @is_dark.setter
+    def is_dark(self, value: bool) -> None:
+        self._model.is_dark = bool(value)
+        self._touch()
+
+    @property
+    def show_sti(self) -> bool:
+        return self._model.show_sti
+
+    @show_sti.setter
+    def show_sti(self, value: bool) -> None:
+        self._model.show_sti = bool(value)
+        self._touch()
+
+    @property
+    def show_grid(self) -> bool:
+        return self._model.show_grid
+
+    @show_grid.setter
+    def show_grid(self, value: bool) -> None:
+        self._model.show_grid = bool(value)
+        self._touch()
+
+    @property
+    def show_legend(self) -> bool:
+        return self._model.show_legend
+
+    @show_legend.setter
+    def show_legend(self, value: bool) -> None:
+        self._model.show_legend = bool(value)
+        self._touch()
+
+    @property
+    def show_stats(self) -> bool:
+        return self._model.show_stats
+
+    @show_stats.setter
+    def show_stats(self, value: bool) -> None:
+        self._model.show_stats = bool(value)
+        self._touch()
+
+    @property
+    def show_cpu_load(self) -> bool:
+        return self._model.show_cpu_load
+
+    @show_cpu_load.setter
+    def show_cpu_load(self, value: bool) -> None:
+        self._model.show_cpu_load = bool(value)
+        self._touch()
+
+    @property
+    def show_marks(self) -> bool:
+        return self._model.show_marks
+
+    @show_marks.setter
+    def show_marks(self, value: bool) -> None:
+        self._model.show_marks = bool(value)
+        self._touch()
+
+    @property
+    def show_find(self) -> bool:
+        return self._model.show_find
+
+    @show_find.setter
+    def show_find(self, value: bool) -> None:
+        self._model.show_find = bool(value)
+        self._touch()
+
+    @property
+    def cpu_splitter_user_sized(self) -> bool:
+        return self._model.cpu_splitter_user_sized
+
+    @cpu_splitter_user_sized.setter
+    def cpu_splitter_user_sized(self, value: bool) -> None:
+        self._model.cpu_splitter_user_sized = bool(value)
+        self._touch()
+
+    @property
+    def cpu_splitter_bottom_h(self) -> int | None:
+        return self._model.cpu_splitter_bottom_h
+
+    @cpu_splitter_bottom_h.setter
+    def cpu_splitter_bottom_h(self, value: int | None) -> None:
+        self._model.cpu_splitter_bottom_h = value
+        self._touch()
+
+    @property
+    def font_size(self) -> int:
+        return self._model.font_size
+
+    @font_size.setter
+    def font_size(self, value: int) -> None:
+        self._model.font_size = int(value)
+        self._touch()
+
+    @property
+    def ui_font_size(self) -> int:
+        return self._model.ui_font_size
+
+    @ui_font_size.setter
+    def ui_font_size(self, value: int) -> None:
+        self._model.ui_font_size = int(value)
+        self._touch()
+
+    @property
+    def max_cursors(self) -> int:
+        return self._model.max_cursors
+
+    @max_cursors.setter
+    def max_cursors(self, value: int) -> None:
+        self._model.max_cursors = int(value)
+        self._touch()
+
+    @property
+    def label_width(self) -> int:
+        return self._model.label_width
+
+    @label_width.setter
+    def label_width(self, value: int) -> None:
+        self._model.label_width = int(value)
+        self._touch()
+
+    @property
+    def row_height(self) -> int:
+        return self._model.row_height
+
+    @row_height.setter
+    def row_height(self, value: int) -> None:
+        self._model.row_height = int(value)
+        self._touch()
+
+    @property
+    def row_gap(self) -> int:
+        return self._model.row_gap
+
+    @row_gap.setter
+    def row_gap(self, value: int) -> None:
+        self._model.row_gap = int(value)
+        self._touch()
+
+    @property
+    def sti_row_h(self) -> int:
+        return self._model.sti_row_h
+
+    @sti_row_h.setter
+    def sti_row_h(self, value: int) -> None:
+        self._model.sti_row_h = int(value)
+        self._touch()
+
+    @property
+    def sti_waveform_h(self) -> int:
+        return self._model.sti_waveform_h
+
+    @sti_waveform_h.setter
+    def sti_waveform_h(self, value: int) -> None:
+        self._model.sti_waveform_h = int(value)
+        self._touch()
+
+    @property
+    def sti_line_style(self) -> str:
+        return self._model.sti_line_style
+
+    @sti_line_style.setter
+    def sti_line_style(self, value: str) -> None:
+        self._model.sti_line_style = str(value)
+        self._touch()
+
+    @property
+    def timescale_per_px_default(self) -> float:
+        return self._model.timescale_per_px_default
+
+    @timescale_per_px_default.setter
+    def timescale_per_px_default(self, value: float) -> None:
+        self._model.timescale_per_px_default = float(value)
+        self._touch()
+
+    @property
+    def hover_highlight(self) -> bool:
+        return self._model.hover_highlight
+
+    @hover_highlight.setter
+    def hover_highlight(self, value: bool) -> None:
+        self._model.hover_highlight = bool(value)
+        self._touch()
+
+    @property
+    def cpu_load_row_h(self) -> int:
+        return self._model.cpu_load_row_h
+
+    @cpu_load_row_h.setter
+    def cpu_load_row_h(self, value: int) -> None:
+        self._model.cpu_load_row_h = int(value)
+        self._touch()
+
+    @property
+    def colorblind(self) -> bool:
+        return self._model.colorblind
+
+    @colorblind.setter
+    def colorblind(self, value: bool) -> None:
+        self._model.colorblind = bool(value)
+        self._touch()
+
+    @property
+    def horizontal(self) -> bool:
+        return self._model.horizontal
+
+    @horizontal.setter
+    def horizontal(self, value: bool) -> None:
+        self._model.horizontal = bool(value)
+        self._touch()
+
+    def load_theme_from_rc(self, rc: "_RcSettings") -> None:
+        self.is_dark = rc.get("view", "theme", "dark") == "dark"
+
+    def load_view_prefs_from_rc(self, rc: "_RcSettings") -> None:
+        """Load persisted view preferences from btf_viewer.rc (not window geometry)."""
+        m = self._model
+        m.font_size = rc.get_int("view", "font_size", FONT_SIZE)
+        m.ui_font_size = rc.get_int("view", "ui_font_size", UI_FONT_SIZE)
+        m.max_cursors = rc.get_int("view", "max_cursors", _DEFAULT_MAX_CURSORS)
+        m.label_width = max(60, min(rc.get_int("view", "label_width", LABEL_WIDTH), 600))
+        m.row_height = rc.get_int("view", "row_height", ROW_HEIGHT)
+        m.row_gap = rc.get_int("view", "row_gap", ROW_GAP)
+        m.timescale_per_px_default = rc.get_float(
+            "view", "timescale_per_px_default", _TIMESCALE_PER_PX_DEFAULT)
+        m.show_cpu_load = rc.get_bool("view", "show_cpu_load", True)
+        m.cpu_load_row_h = rc.get_int("view", "cpu_load_row_h", CPU_LOAD_ROW_H)
+        bottom = rc.get_int("view", "cpu_splitter_bottom_h", 0)
+        m.cpu_splitter_bottom_h = bottom if bottom > 0 else None
+        m.cpu_splitter_user_sized = rc.get_bool("view", "cpu_splitter_user_sized", False)
+        m.sti_row_h = rc.get_int("view", "sti_row_h", STI_ROW_H)
+        m.sti_waveform_h = rc.get_int("view", "sti_waveform_h", STI_WAVEFORM_H)
+        m.sti_line_style = rc.get("view", "sti_line_style", STI_LINE_STYLE)
+        m.hover_highlight = rc.get_bool("view", "hover_highlight", _HOVER_HIGHLIGHT_ENABLED)
+        m.horizontal = rc.get_bool("view", "horizontal", True)
+        m.view_mode = rc.get("view", "view_mode", "task")
+        m.colorblind = rc.get_bool("view", "colorblind_safe", False)
+        self.settings_changed.emit()
+        self.changed.emit()
+# ===========================================================================
+# mvvm/stats_vm
+# ===========================================================================
+
+def _default_section_collapsed() -> Dict[str, bool]:
+    return {
+        "cores": False,
+        "tasks": False,
+        "migrations": False,
+        "exec": False,
+        "block": False,
+        "inter": False,
+        "health": False,
+        "preemption": False,
+        "priority": False,
+        "sync": False,
+        "intervals": False,
+    }
+
+def _default_section_table_heights() -> Dict[str, int]:
+    return {
+        "migrations": STATS_TABLE_MIG_DEFAULT_H,
+        "exec": STATS_TABLE_DEFAULT_H,
+        "block": STATS_TABLE_DEFAULT_H,
+        "inter": STATS_TABLE_DEFAULT_H,
+        "preemption": STATS_TABLE_MIG_DEFAULT_H,
+        "priority": STATS_TABLE_DEFAULT_H,
+        "intervals": STATS_TABLE_DEFAULT_H,
+        "sync": STATS_TABLE_DEFAULT_H,
+        "sync_issues": STATS_TABLE_MIG_DEFAULT_H,
+        "health": STATS_TABLE_DEFAULT_H,
+    }
+
+class StatsViewModel(ViewModelBase):
+    """ViewModel for statistics panel scope and layout state."""
+
+    scope_changed = Signal()
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._model = StatsTabModel(
+            section_collapsed=_default_section_collapsed(),
+            section_table_heights=_default_section_table_heights(),
+            util_label_col_w=STATS_UTIL_LABEL_W,
+        )
+
+    @property
+    def model(self) -> StatsTabModel:
+        return self._model
+
+    @property
+    def cursor_times(self) -> List[int]:
+        return self._model.cursor_times
+
+    @cursor_times.setter
+    def cursor_times(self, value: List[int]) -> None:
+        self._model.cursor_times = list(value)
+        self.scope_changed.emit()
+        self.changed.emit()
+
+    @property
+    def scope_to_cursors(self) -> bool:
+        return self._model.scope_to_cursors
+
+    @scope_to_cursors.setter
+    def scope_to_cursors(self, value: bool) -> None:
+        self._model.scope_to_cursors = bool(value)
+        self.scope_changed.emit()
+        self.changed.emit()
+
+    @property
+    def export_scope_override(self) -> Optional[Tuple[int, int]]:
+        return self._model.export_scope_override
+
+    @export_scope_override.setter
+    def export_scope_override(self, value: Optional[Tuple[int, int]]) -> None:
+        self._model.export_scope_override = value
+        self.scope_changed.emit()
+        self.changed.emit()
+
+    @property
+    def section_collapsed(self) -> Dict[str, bool]:
+        return self._model.section_collapsed
+
+    @property
+    def section_table_heights(self) -> Dict[str, int]:
+        return self._model.section_table_heights
+
+    @property
+    def util_label_col_w(self) -> int:
+        return self._model.util_label_col_w
+
+    @util_label_col_w.setter
+    def util_label_col_w(self, value: int) -> None:
+        self._model.util_label_col_w = int(value)
+        self.changed.emit()
+
+    def copy_from_panel(self, panel: "_StatsPanel") -> None:
+        """Snapshot live panel state into this view-model."""
+        m = self._model
+        m.cursor_times = list(panel._cursor_times)
+        m.scope_to_cursors = bool(panel._scope_to_cursors)
+        m.export_scope_override = panel._export_scope_override
+        m.section_collapsed = dict(panel._section_collapsed)
+        m.section_table_heights = dict(panel._section_table_heights)
+        m.util_label_col_w = int(panel._util_label_col_w)
+        self.changed.emit()
+
+    def apply_to_panel(self, panel: "_StatsPanel", *, refresh_stats: bool = True) -> None:
+        """Push view-model state into the statistics panel widget."""
+        m = self._model
+        panel._section_table_heights.update(m.section_table_heights)
+        panel._util_label_col_w = m.util_label_col_w
+        panel._export_scope_override = m.export_scope_override
+        panel._scope_to_cursors = m.scope_to_cursors
+        if hasattr(panel, "_scope_cb"):
+            panel._scope_cb.blockSignals(True)
+            panel._scope_cb.setChecked(m.scope_to_cursors)
+            panel._scope_cb.blockSignals(False)
+        for section_id, collapsed in m.section_collapsed.items():
+            if section_id in panel._section_headers:
+                panel._set_section_collapsed(section_id, collapsed)
+        panel.set_cursor_times(m.cursor_times, refresh_stats=refresh_stats)
+        panel.apply_section_table_heights(m.section_table_heights)
+# ===========================================================================
+# mvvm/trace_tab_vm
+# ===========================================================================
+
+class TraceTabViewModel(ViewModelBase):
+    """ViewModel for one open trace tab."""
+
+    trace_changed = Signal()
+    marks_changed = Signal()
+    find_changed = Signal()
+    undo_changed = Signal()
+    plot_changed = Signal()
+
+    def __init__(self, path: str, trace: BtfTrace, parent=None) -> None:
+        super().__init__(parent)
+        self._model = TraceTabModel(path=path, trace=trace)
+        self.stats = StatsViewModel(self)
+
+    @property
+    def model(self) -> TraceTabModel:
+        return self._model
+
+    @property
+    def path(self) -> str:
+        return self._model.path
+
+    @property
+    def trace(self) -> Optional[BtfTrace]:
+        return self._model.trace
+
+    @trace.setter
+    def trace(self, value: Optional[BtfTrace]) -> None:
+        if self._model.trace is value:
+            return
+        self._model.trace = value
+        self.trace_changed.emit()
+        self.changed.emit()
+
+    @property
+    def bookmarks(self) -> List[TraceBookmark]:
+        return self._model.bookmarks
+
+    @bookmarks.setter
+    def bookmarks(self, value: List[TraceBookmark]) -> None:
+        self._model.bookmarks = list(value)
+        self.marks_changed.emit()
+        self.changed.emit()
+
+    @property
+    def annotations(self) -> List[TraceAnnotation]:
+        return self._model.annotations
+
+    @annotations.setter
+    def annotations(self, value: List[TraceAnnotation]) -> None:
+        self._model.annotations = list(value)
+        self.marks_changed.emit()
+        self.changed.emit()
+
+    @property
+    def mark_next_id(self) -> int:
+        return self._model.mark_next_id
+
+    @mark_next_id.setter
+    def mark_next_id(self, value: int) -> None:
+        self._model.mark_next_id = int(value)
+        self.marks_changed.emit()
+        self.changed.emit()
+
+    @property
+    def find_hits(self) -> List[int]:
+        return self._model.find_hits
+
+    @find_hits.setter
+    def find_hits(self, value: List[int]) -> None:
+        self._model.find_hits = list(value)
+        self.find_changed.emit()
+        self.changed.emit()
+
+    @property
+    def find_hit_idx(self) -> int:
+        return self._model.find_hit_idx
+
+    @find_hit_idx.setter
+    def find_hit_idx(self, value: int) -> None:
+        self._model.find_hit_idx = int(value)
+        self.find_changed.emit()
+        self.changed.emit()
+
+    @property
+    def find_marker_ns(self) -> Optional[int]:
+        return self._model.find_marker_ns
+
+    @find_marker_ns.setter
+    def find_marker_ns(self, value: Optional[int]) -> None:
+        self._model.find_marker_ns = value
+        self.find_changed.emit()
+        self.changed.emit()
+
+    @property
+    def undo_stack(self) -> list:
+        return self._model.undo_stack
+
+    @undo_stack.setter
+    def undo_stack(self, value: list) -> None:
+        self._model.undo_stack = list(value)
+        self.undo_changed.emit()
+        self.changed.emit()
+
+    @property
+    def redo_stack(self) -> list:
+        return self._model.redo_stack
+
+    @redo_stack.setter
+    def redo_stack(self, value: list) -> None:
+        self._model.redo_stack = list(value)
+        self.undo_changed.emit()
+        self.changed.emit()
+
+    @property
+    def plot_mk(self) -> Optional[str]:
+        return self._model.plot.mk
+
+    @plot_mk.setter
+    def plot_mk(self, value: Optional[str]) -> None:
+        self._model.plot.mk = value
+        self.plot_changed.emit()
+        self.changed.emit()
+
+    @property
+    def plot_kind(self) -> Optional[str]:
+        return self._model.plot.kind
+
+    @plot_kind.setter
+    def plot_kind(self, value: Optional[str]) -> None:
+        self._model.plot.kind = value
+        self.plot_changed.emit()
+        self.changed.emit()
+
+    @property
+    def plot_preemptor(self) -> Optional[str]:
+        return self._model.plot.preemptor
+
+    @plot_preemptor.setter
+    def plot_preemptor(self, value: Optional[str]) -> None:
+        self._model.plot.preemptor = value
+        self.plot_changed.emit()
+        self.changed.emit()
+
+    @property
+    def plot_open(self) -> bool:
+        return self._model.plot.open
+
+    @plot_open.setter
+    def plot_open(self, value: bool) -> None:
+        self._model.plot.open = bool(value)
+        self.plot_changed.emit()
+        self.changed.emit()
+
+    def capture_plot_session(self) -> tuple[Optional[str], Optional[str], bool, Optional[str]]:
+        p = self._model.plot
+        return p.mk, p.kind, p.open, p.preemptor
+
+    def set_plot_session(
+        self,
+        mk: Optional[str],
+        kind: Optional[str],
+        open_: bool,
+        preemptor: Optional[str],
+    ) -> None:
+        self._model.plot = PlotSessionState(mk=mk, kind=kind, open=open_, preemptor=preemptor)
+        self.plot_changed.emit()
+        self.changed.emit()
+# ===========================================================================
+# mvvm/main_vm
+# ===========================================================================
+
+class MainViewModel(ViewModelBase):
+    """Root view-model: open traces, session loading, and application settings."""
+
+    active_tab_changed = Signal(object)
+    tabs_changed = Signal()
+    session_changed = Signal()
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.settings = AppSettingsViewModel(self)
+        self._session = SessionModel()
+        self._tabs: List[TraceTabViewModel] = []
+        self._active_index: int = -1
+
+    @property
+    def session(self) -> SessionModel:
+        return self._session
+
+    @property
+    def tabs(self) -> List[TraceTabViewModel]:
+        return self._tabs
+
+    @property
+    def active_index(self) -> int:
+        return self._active_index
+
+    @property
+    def active_tab(self) -> Optional[TraceTabViewModel]:
+        if 0 <= self._active_index < len(self._tabs):
+            return self._tabs[self._active_index]
+        return None
+
+    @property
+    def session_restore_queue(self) -> List[str]:
+        return self._session.restore_queue
+
+    @session_restore_queue.setter
+    def session_restore_queue(self, value: List[str]) -> None:
+        self._session.restore_queue = list(value)
+        self.session_changed.emit()
+        self.changed.emit()
+
+    @property
+    def session_restore_active_idx(self) -> int:
+        return self._session.restore_active_idx
+
+    @session_restore_active_idx.setter
+    def session_restore_active_idx(self, value: int) -> None:
+        self._session.restore_active_idx = int(value)
+        self.session_changed.emit()
+        self.changed.emit()
+
+    @property
+    def load_in_progress(self) -> bool:
+        return self._session.load_in_progress
+
+    @load_in_progress.setter
+    def load_in_progress(self, value: bool) -> None:
+        self._session.load_in_progress = bool(value)
+        self.session_changed.emit()
+        self.changed.emit()
+
+    def add_tab(self, tab_vm: TraceTabViewModel) -> int:
+        self._tabs.append(tab_vm)
+        idx = len(self._tabs) - 1
+        self.tabs_changed.emit()
+        self.changed.emit()
+        return idx
+
+    def remove_tab(self, index: int) -> None:
+        if not (0 <= index < len(self._tabs)):
+            return
+        self._tabs.pop(index)
+        if not self._tabs:
+            self._active_index = -1
+        elif self._active_index >= len(self._tabs):
+            self._active_index = len(self._tabs) - 1
+        elif index < self._active_index:
+            self._active_index -= 1
+        self.tabs_changed.emit()
+        self.changed.emit()
+
+    def set_active_index(self, index: int) -> None:
+        if index == self._active_index:
+            return
+        if not self._tabs:
+            self._active_index = -1
+        elif 0 <= index < len(self._tabs):
+            self._active_index = index
+        else:
+            return
+        self.active_tab_changed.emit(self.active_tab)
+        self.changed.emit()
+
+    def tab_for_path(self, path: str, *, normalizer: Callable[[str], str]) -> int:
+        norm = normalizer(path)
+        for i, tab in enumerate(self._tabs):
+            if normalizer(tab.path) == norm:
+                return i
+        return -1
+# ===========================================================================
+# mvvm/bindings
+# ===========================================================================
+
+# MainWindow legacy `_foo` attributes → AppSettingsViewModel property names.
+SETTINGS_ATTR_MAP: dict[str, str] = {
+    "_view_mode": "view_mode",
+    "_is_dark": "is_dark",
+    "_show_sti": "show_sti",
+    "_show_grid": "show_grid",
+    "_show_legend": "show_legend",
+    "_show_stats": "show_stats",
+    "_show_cpu_load": "show_cpu_load",
+    "_show_marks": "show_marks",
+    "_show_find": "show_find",
+    "_cpu_splitter_user_sized": "cpu_splitter_user_sized",
+    "_cpu_splitter_bottom_h": "cpu_splitter_bottom_h",
+    "_font_size_val": "font_size",
+    "_ui_font_size_val": "ui_font_size",
+    "_max_cursors_val": "max_cursors",
+    "_label_width_val": "label_width",
+    "_row_height_val": "row_height",
+    "_row_gap_val": "row_gap",
+    "_sti_row_h_val": "sti_row_h",
+    "_sti_waveform_h_val": "sti_waveform_h",
+    "_sti_line_style_val": "sti_line_style",
+    "_timescale_per_px_default_val": "timescale_per_px_default",
+    "_hover_highlight_val": "hover_highlight",
+    "_cpu_load_row_h_val": "cpu_load_row_h",
+    "_colorblind_val": "colorblind",
+}
+
+SESSION_ATTR_MAP: dict[str, str] = {
+    "_session_restore_queue": "session_restore_queue",
+    "_session_restore_active_idx": "session_restore_active_idx",
+    "_load_in_progress": "load_in_progress",
+}
+
+class MvvmSettingsMixin:
+    """Delegate legacy MainWindow settings/session fields to MainViewModel."""
+
+    def __getattr__(self, name: str):
+        key = SETTINGS_ATTR_MAP.get(name)
+        if key is not None and "_vm" in self.__dict__:
+            return getattr(self._vm.settings, key)
+        key = SESSION_ATTR_MAP.get(name)
+        if key is not None and "_vm" in self.__dict__:
+            return getattr(self._vm, key)
+        raise AttributeError(f"{type(self).__name__!r} object has no attribute {name!r}")
+
+    def __setattr__(self, name: str, value) -> None:
+        key = SETTINGS_ATTR_MAP.get(name)
+        if key is not None and "_vm" in self.__dict__:
+            setattr(self._vm.settings, key, value)
+            return
+        key = SESSION_ATTR_MAP.get(name)
+        if key is not None and "_vm" in self.__dict__:
+            setattr(self._vm, key, value)
+            return
+        super().__setattr__(name, value)
+# ===========================================================================
+# mvvm/__init__
+# ===========================================================================
+
+__all__ = [
+    "AppSettingsModel",
+    "AppSettingsViewModel",
+    "MainViewModel",
+    "MvvmSettingsMixin",
+    "PlotSessionState",
+    "SESSION_ATTR_MAP",
+    "SETTINGS_ATTR_MAP",
+    "SessionModel",
+    "StatsTabModel",
+    "StatsViewModel",
+    "TraceTabModel",
+    "TraceTabViewModel",
+    "ViewModelBase",
+]
+# ===========================================================================
+# CPU Load Graph
+# ===========================================================================
 
 class _CpuLoadGraph(QWidget):
     """Synchronised CPU load chart below the main timeline.
@@ -21747,32 +22846,31 @@ class _LeftAlignedTabBar(QTabBar):
         super().showEvent(event)
         self.setExpanding(False)
 
+class _TimelinePane(QWidget):
+    """Task timeline + dedicated time scrollbar row (below the canvas, above CPU split)."""
+
+    def __init__(self, view: "TimelineView", parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.view = view
+        self.time_scroll = QScrollBar(Qt.Orientation.Horizontal, self)
+        self.time_scroll.hide()
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, TIMELINE_SPLITTER_GAP)
+        lay.setSpacing(0)
+        lay.addWidget(view, 1)
+        lay.addWidget(self.time_scroll, 0)
+        view.attach_time_scroll_bar(self.time_scroll)
+
 class _TraceTab:
-    """One open trace file: timeline, CPU load graph, and per-tab marks/find state."""
+    """One open trace file: timeline widgets + TraceTabViewModel document state."""
 
     __slots__ = (
-        "path", "trace", "view", "cpu_load_graph", "cpu_load_scroll", "cpu_splitter",
-        "bookmarks", "annotations", "mark_next_id",
-        "find_hits", "find_hit_idx", "find_marker_ns",
-        "undo_stack", "redo_stack",
-        "plot_mk", "plot_kind", "plot_preemptor", "plot_open",
+        "vm", "view", "cpu_load_graph", "cpu_load_scroll", "cpu_splitter",
+        "_timeline_pane",
     )
 
     def __init__(self, path: str, trace: "BtfTrace", win: "MainWindow") -> None:
-        self.path = path
-        self.trace = trace
-        self.bookmarks: List[TraceBookmark] = []
-        self.annotations: List[TraceAnnotation] = []
-        self.mark_next_id = 1
-        self.find_hits: List[int] = []
-        self.find_hit_idx = -1
-        self.find_marker_ns: Optional[int] = None
-        self.undo_stack: list = []
-        self.redo_stack: list = []
-        self.plot_mk: Optional[str] = None
-        self.plot_kind: Optional[str] = None
-        self.plot_preemptor: Optional[str] = None
-        self.plot_open: bool = False
+        self.vm = TraceTabViewModel(path, trace, win)
 
         self.view = TimelineView(win)
         win._wire_timeline_view(self.view)
@@ -21784,8 +22882,9 @@ class _TraceTab:
         self.cpu_load_scroll = QScrollArea()
         win._setup_cpu_load_scroll(self.cpu_load_scroll, self.cpu_load_graph)
 
+        self._timeline_pane = _TimelinePane(self.view)
         self.cpu_splitter = _ResizeSplitter(Qt.Orientation.Vertical)
-        self.cpu_splitter.addWidget(self.view)
+        self.cpu_splitter.addWidget(self._timeline_pane)
         self.cpu_splitter.addWidget(self.cpu_load_scroll)
         self.cpu_splitter.setStretchFactor(0, 1)
         self.cpu_splitter.setStretchFactor(1, 0)
@@ -21797,7 +22896,111 @@ class _TraceTab:
         if not win._show_cpu_load:
             self.cpu_load_scroll.hide()
 
-class MainWindow(QMainWindow):
+    @property
+    def path(self) -> str:
+        return self.vm.path
+
+    @property
+    def trace(self) -> Optional["BtfTrace"]:
+        return self.vm.trace
+
+    @property
+    def bookmarks(self) -> List[TraceBookmark]:
+        return self.vm.bookmarks
+
+    @bookmarks.setter
+    def bookmarks(self, value: List[TraceBookmark]) -> None:
+        self.vm.bookmarks = value
+
+    @property
+    def annotations(self) -> List[TraceAnnotation]:
+        return self.vm.annotations
+
+    @annotations.setter
+    def annotations(self, value: List[TraceAnnotation]) -> None:
+        self.vm.annotations = value
+
+    @property
+    def mark_next_id(self) -> int:
+        return self.vm.mark_next_id
+
+    @mark_next_id.setter
+    def mark_next_id(self, value: int) -> None:
+        self.vm.mark_next_id = value
+
+    @property
+    def find_hits(self) -> List[int]:
+        return self.vm.find_hits
+
+    @find_hits.setter
+    def find_hits(self, value: List[int]) -> None:
+        self.vm.find_hits = value
+
+    @property
+    def find_hit_idx(self) -> int:
+        return self.vm.find_hit_idx
+
+    @find_hit_idx.setter
+    def find_hit_idx(self, value: int) -> None:
+        self.vm.find_hit_idx = value
+
+    @property
+    def find_marker_ns(self) -> Optional[int]:
+        return self.vm.find_marker_ns
+
+    @find_marker_ns.setter
+    def find_marker_ns(self, value: Optional[int]) -> None:
+        self.vm.find_marker_ns = value
+
+    @property
+    def undo_stack(self) -> list:
+        return self.vm.undo_stack
+
+    @undo_stack.setter
+    def undo_stack(self, value: list) -> None:
+        self.vm.undo_stack = value
+
+    @property
+    def redo_stack(self) -> list:
+        return self.vm.redo_stack
+
+    @redo_stack.setter
+    def redo_stack(self, value: list) -> None:
+        self.vm.redo_stack = value
+
+    @property
+    def plot_mk(self) -> Optional[str]:
+        return self.vm.plot_mk
+
+    @plot_mk.setter
+    def plot_mk(self, value: Optional[str]) -> None:
+        self.vm.plot_mk = value
+
+    @property
+    def plot_kind(self) -> Optional[str]:
+        return self.vm.plot_kind
+
+    @plot_kind.setter
+    def plot_kind(self, value: Optional[str]) -> None:
+        self.vm.plot_kind = value
+
+    @property
+    def plot_preemptor(self) -> Optional[str]:
+        return self.vm.plot_preemptor
+
+    @plot_preemptor.setter
+    def plot_preemptor(self, value: Optional[str]) -> None:
+        self.vm.plot_preemptor = value
+
+    @property
+    def plot_open(self) -> bool:
+        return self.vm.plot_open
+
+    @plot_open.setter
+    def plot_open(self, value: bool) -> None:
+        self.vm.plot_open = value
+
+class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -21806,51 +23009,20 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowIcon(app_icon())
+        self._vm = MainViewModel(self)
         self._tabs: List[_TraceTab] = []
         self._previous_tab_index: int = -1
         self._tab_switch_guard: bool = False
         self._bound_scene = None
         self._legend_cancel_fn = None
         self._parse_thread: Optional[_ParseThread] = None
-        self._load_in_progress: bool = False
-        self._progress_dialog: Optional[QProgressDialog] = None
-        self._session_restore_queue: List[str] = []
-        self._session_restore_active_idx: int = -1
         self._settings = _RcSettings()
         self._dock_width_apply_guard: bool = False
         self._dock_width_pending: Optional[float] = None
         self._dock_stabilize_timer: Optional[QTimer] = None
         self._right_dock_custom_drag: bool = False
+        self._progress_dialog: Optional[QProgressDialog] = None
 
-        # -- Runtime state for settings managed via _SettingsDialog ----------
-        self._show_sti:              bool  = True
-        self._show_grid:             bool  = True
-        self._show_legend:           bool  = True
-        self._show_stats:            bool  = True
-        self._show_cpu_load:         bool  = True
-        self._cpu_splitter_user_sized: bool = False
-        self._cpu_splitter_bottom_h: Optional[int] = None
-        self._show_marks:            bool  = True
-        self._show_find:             bool  = True
-        self._font_size_val:         int   = FONT_SIZE
-        self._ui_font_size_val:      int   = UI_FONT_SIZE
-        self._max_cursors_val:       int   = _DEFAULT_MAX_CURSORS
-        self._label_width_val:       int   = LABEL_WIDTH
-        self._row_height_val:        int   = ROW_HEIGHT
-        self._row_gap_val:            int   = ROW_GAP
-        self._sti_row_h_val:          int   = STI_ROW_H
-        self._sti_waveform_h_val:     int   = STI_WAVEFORM_H
-        self._sti_line_style_val:     str   = STI_LINE_STYLE
-        self._timescale_per_px_default_val:  float = _TIMESCALE_PER_PX_DEFAULT
-        self._hover_highlight_val:    bool  = _HOVER_HIGHLIGHT_ENABLED
-        self._cpu_load_row_h_val:     int   = CPU_LOAD_ROW_H
-        self._colorblind_val:         bool  = False
-        self._bookmarks: List[TraceBookmark] = []
-        self._annotations: List[TraceAnnotation] = []
-        self._mark_next_id: int = 1
-        self._find_hits: List[int] = []
-        self._find_hit_idx: int = -1
-        self._find_marker_ns: Optional[int] = None
         self._find_marker_items: List[QGraphicsItem] = []
         self._heatmap_dlg: Optional[_MigrationHeatmapDialog] = None
         self._heatmap_view_snapshot: Optional[dict] = None
@@ -21919,6 +23091,99 @@ class MainWindow(QMainWindow):
         if self._progress_dialog is not None:
             self._progress_dialog.close()
             self._progress_dialog = None
+
+    @property
+    def _active_tab_vm(self) -> Optional[TraceTabViewModel]:
+        tab = self._active_tab
+        return tab.vm if tab is not None else None
+
+    @property
+    def _bookmarks(self) -> List[TraceBookmark]:
+        vm = self._active_tab_vm
+        return vm.bookmarks if vm is not None else []
+
+    @_bookmarks.setter
+    def _bookmarks(self, value: List[TraceBookmark]) -> None:
+        vm = self._active_tab_vm
+        if vm is not None:
+            vm.bookmarks = value
+
+    @property
+    def _annotations(self) -> List[TraceAnnotation]:
+        vm = self._active_tab_vm
+        return vm.annotations if vm is not None else []
+
+    @_annotations.setter
+    def _annotations(self, value: List[TraceAnnotation]) -> None:
+        vm = self._active_tab_vm
+        if vm is not None:
+            vm.annotations = value
+
+    @property
+    def _mark_next_id(self) -> int:
+        vm = self._active_tab_vm
+        return vm.mark_next_id if vm is not None else 1
+
+    @_mark_next_id.setter
+    def _mark_next_id(self, value: int) -> None:
+        vm = self._active_tab_vm
+        if vm is not None:
+            vm.mark_next_id = value
+
+    @property
+    def _find_hits(self) -> List[int]:
+        vm = self._active_tab_vm
+        return vm.find_hits if vm is not None else []
+
+    @_find_hits.setter
+    def _find_hits(self, value: List[int]) -> None:
+        vm = self._active_tab_vm
+        if vm is not None:
+            vm.find_hits = value
+
+    @property
+    def _find_hit_idx(self) -> int:
+        vm = self._active_tab_vm
+        return vm.find_hit_idx if vm is not None else -1
+
+    @_find_hit_idx.setter
+    def _find_hit_idx(self, value: int) -> None:
+        vm = self._active_tab_vm
+        if vm is not None:
+            vm.find_hit_idx = value
+
+    @property
+    def _find_marker_ns(self) -> Optional[int]:
+        vm = self._active_tab_vm
+        return vm.find_marker_ns if vm is not None else None
+
+    @_find_marker_ns.setter
+    def _find_marker_ns(self, value: Optional[int]) -> None:
+        vm = self._active_tab_vm
+        if vm is not None:
+            vm.find_marker_ns = value
+
+    @property
+    def _undo_stack(self) -> list:
+        vm = self._active_tab_vm
+        return vm.undo_stack if vm is not None else []
+
+    @_undo_stack.setter
+    def _undo_stack(self, value: list) -> None:
+        vm = self._active_tab_vm
+        if vm is not None:
+            vm.undo_stack = value
+
+    @property
+    def _redo_stack(self) -> list:
+        vm = self._active_tab_vm
+        return vm.redo_stack if vm is not None else []
+
+    @_redo_stack.setter
+    def _redo_stack(self, value: list) -> None:
+        vm = self._active_tab_vm
+        if vm is not None:
+            vm.redo_stack = value
 
     @property
     def _active_tab(self) -> Optional[_TraceTab]:
@@ -22270,16 +23535,10 @@ class MainWindow(QMainWindow):
         self._legend.set_heatmap_filter(scene._heatmap_filter_label, scene._heatmap_filter_mks)
 
     def _stash_tab_state(self, tab: _TraceTab) -> None:
-        tab.bookmarks = list(self._bookmarks)
-        tab.annotations = list(self._annotations)
-        tab.mark_next_id = self._mark_next_id
-        tab.find_hits = list(self._find_hits)
-        tab.find_hit_idx = self._find_hit_idx
-        tab.find_marker_ns = self._find_marker_ns
-        tab.undo_stack = list(self._undo_stack)
-        tab.redo_stack = list(self._redo_stack)
-        tab.plot_mk, tab.plot_kind, tab.plot_open, tab.plot_preemptor = (
-            self._stats_panel.capture_plot_session())
+        tab.vm.stats.copy_from_panel(self._stats_panel)
+        tab.vm.stats.cursor_times = list(tab.view._scene.cursor_times())
+        mk, kind, open_, preemptor = self._stats_panel.capture_plot_session()
+        tab.vm.set_plot_session(mk, kind, open_, preemptor)
         self._persist_trace_state(tab.path, tab.bookmarks, tab.annotations, tab.mark_next_id)
         self._persist_tab_view_state(tab)
 
@@ -22420,14 +23679,6 @@ class MainWindow(QMainWindow):
         self._stash_tab_state(tab)
 
     def _restore_tab_state(self, tab: _TraceTab) -> None:
-        self._bookmarks = list(tab.bookmarks)
-        self._annotations = list(tab.annotations)
-        self._mark_next_id = tab.mark_next_id
-        self._find_hits = list(tab.find_hits)
-        self._find_hit_idx = tab.find_hit_idx
-        self._find_marker_ns = tab.find_marker_ns
-        self._undo_stack = list(tab.undo_stack)
-        self._redo_stack = list(tab.redo_stack)
         self._rebuild_bookmark_list()
         self._rebuild_annotation_list()
         self._sync_panels_to_active_tab()
@@ -22491,6 +23742,7 @@ class MainWindow(QMainWindow):
         self._sync_legend_filters_from_scene(sc)
         self._sync_show_all_tasks_btn()
         self._stats_panel._ui_font_size = self._ui_font_size_val
+        tab.vm.stats.apply_to_panel(self._stats_panel, refresh_stats=False)
         self._stats_panel.set_cursor_times(self._view._scene.cursor_times(), refresh_stats=False)
         self._stats_panel.rebuild(trace)
         QTimer.singleShot(0, self._stats_panel.sync_util_layout)
@@ -22575,11 +23827,13 @@ class MainWindow(QMainWindow):
             self._stats_panel.clear_plot_session()
         if 0 <= index < len(self._tabs):
             tab = self._tabs[index]
+            self._vm.set_active_index(index)
             self._restore_tab_state(tab)
             self._stats_panel.restore_plot_session(
                 tab.trace, tab.plot_mk, tab.plot_kind, tab.plot_open,
                 preemptor=tab.plot_preemptor)
         else:
+            self._vm.set_active_index(-1)
             self._update_tab_actions()
         self._previous_tab_index = index
 
@@ -22606,18 +23860,12 @@ class MainWindow(QMainWindow):
         finally:
             self._tab_switch_guard = False
         self._tabs.pop(index)
+        self._vm.remove_tab(index)
         tab.cpu_splitter.deleteLater()
         if not self._tabs:
             self._central_stack.setCurrentIndex(0)
             self._unbind_legend_from_scene()
-            self._bookmarks = []
-            self._annotations = []
-            self._mark_next_id = 1
-            self._find_hits = []
-            self._find_hit_idx = -1
-            self._find_marker_ns = None
-            self._undo_stack.clear()
-            self._redo_stack.clear()
+            self._vm.set_active_index(-1)
             self._rebuild_bookmark_list()
             self._rebuild_annotation_list()
             self._previous_tab_index = -1
@@ -22630,6 +23878,7 @@ class MainWindow(QMainWindow):
 
     def _add_trace_tab(self, path: str, trace: BtfTrace) -> _TraceTab:
         tab = _TraceTab(path, trace, self)
+        self._vm.add_tab(tab.vm)
         self._apply_view_settings(tab.view)
         c = self._theme_tokens(self._is_dark)
         win_bg = QColor(c["win_bg"])
@@ -23203,7 +24452,7 @@ class MainWindow(QMainWindow):
             sc._hover_items = []
             sc._hover_line_ns = None
             sc._task_row_rects = {}
-            tab.trace = None
+            tab.vm.trace = None
         self._tabs.clear()
 
     def dragEnterEvent(self, event) -> None:
@@ -23753,9 +25002,7 @@ class MainWindow(QMainWindow):
         self._setup_cpu_load_scroll(self._settings_cpu_scroll, self._settings_cpu_graph)
         self._settings_cpu_scroll.hide()
 
-        # Undo / Redo stacks (cursor + mark state; synced per tab on switch)
-        self._undo_stack: list = []
-        self._redo_stack: list = []
+        # Undo / Redo stacks live in TraceTabViewModel (per tab).
         self._undo_suppress: bool = False
 
         self._welcome_page = QWidget()
@@ -24471,6 +25718,8 @@ class MainWindow(QMainWindow):
         sizes = self._cpu_splitter.sizes()
         if len(sizes) >= 2 and sizes[1] > 0:
             self._cpu_splitter_bottom_h = sizes[1]
+        if tab := self._active_tab:
+            tab.view._position_virt_trace_bar()
 
     def _apply_saved_cpu_splitter(self, tab: Optional[_TraceTab] = None) -> None:
         """Restore a user-resized CPU load pane height on *tab*."""
@@ -25619,13 +26868,7 @@ class MainWindow(QMainWindow):
         self._timescale_per_px_default_val = tab.view._scene._timescale_per_px_default
         self._refresh_zoom_ui_unit()
         self._load_trace_state(path)
-        tab.bookmarks = list(self._bookmarks)
-        tab.annotations = list(self._annotations)
-        tab.mark_next_id = self._mark_next_id
         self._recompute_find_hits()
-        tab.find_hits = list(self._find_hits)
-        tab.find_hit_idx = self._find_hit_idx
-        tab.find_marker_ns = self._find_marker_ns
         self._load_tab_view_state(tab)
 
         progress_dialog.update_progress(100, "Building legend…")
@@ -25634,8 +26877,6 @@ class MainWindow(QMainWindow):
 
         self._undo_stack.clear()
         self._redo_stack.clear()
-        tab.undo_stack = []
-        tab.redo_stack = []
         self._act_undo.setEnabled(False)
         self._act_redo.setEnabled(False)
         self._focus_statistics_panel(force=True)
@@ -26973,6 +28214,10 @@ def _configure_qt_startup() -> None:
         plat = os.environ.get("QT_QPA_PLATFORM", "").strip().lower()
         if plat in ("offscreen", "minimal", "vnc"):
             del os.environ["QT_QPA_PLATFORM"]
+
+# ===========================================================================
+# Entry point
+# ===========================================================================
 
 def _cli_validate_range_pair(lo: Optional[int], hi: Optional[int], label: str) -> Optional[str]:
     if (lo is None) ^ (hi is None):

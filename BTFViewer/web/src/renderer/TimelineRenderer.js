@@ -1544,23 +1544,27 @@ function drawStiWaveformRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxP
 
 // ---- Cursors ---------------------------------------------------------------
 
-function _drawCursorDeltaBadgeH(ctx, text, midX, color, canvasW) {
+function _drawCursorDeltaBadgeH(ctx, text, midX, color, canvasW, labelY) {
+  ctx.save()
   ctx.font = '10px monospace'
   ctx.textBaseline = 'top'
+  ctx.textAlign = 'left'
   const tw = ctx.measureText(text).width
   const pad = 3
   const bw = tw + pad * 2
   const bh = 14
   let bx = Math.round(midX - bw / 2)
   bx = Math.max(2, Math.min(bx, canvasW - bw - 2))
-  const by = RULER_H + 4
+  const by = labelY
   ctx.fillStyle = color
   ctx.fillRect(bx, by, bw, bh)
   ctx.fillStyle = '#000'
   ctx.fillText(text, bx + pad, by + 2)
+  ctx.restore()
 }
 
 function _drawCursorDeltaBadgeV(ctx, text, midY, color, canvasH, headerH) {
+  ctx.save()
   ctx.font = '10px monospace'
   ctx.textBaseline = 'middle'
   ctx.textAlign = 'left'
@@ -1575,6 +1579,7 @@ function _drawCursorDeltaBadgeV(ctx, text, midY, color, canvasH, headerH) {
   ctx.fillRect(bx, by, bw, bh)
   ctx.fillStyle = '#000'
   ctx.fillText(text, bx + pad, by + bh / 2)
+  ctx.restore()
 }
 
 export function drawCursors(ctx, cursors, trace, timeStart, pxPerNs, canvasW, canvasH, _darkMode) {
@@ -1583,13 +1588,15 @@ export function drawCursors(ctx, cursors, trace, timeStart, pxPerNs, canvasW, ca
   if (!sorted.length) return
 
   ctx.save()
-  ctx.font = 'bold 10px monospace'
-  ctx.textBaseline = 'top'
 
   for (let order = 0; order < sorted.length; order++) {
     const { t, slotIndex } = sorted[order]
     const x = Math.round((t - timeStart) * pxPerNs)
     if (x < -2 || x > canvasW + 2) continue
+
+    ctx.font = 'bold 10px monospace'
+    ctx.textBaseline = 'top'
+    ctx.textAlign = 'left'
 
     const color = CURSOR_COLORS[slotIndex % CURSOR_COLORS.length]
     ctx.strokeStyle = color
@@ -1617,7 +1624,7 @@ export function drawCursors(ctx, cursors, trace, timeStart, pxPerNs, canvasW, ca
       const dStr = `Δ ${formatTime(delta, trace.timeScale, 3)}`
       const midX = ((t + prevT) / 2 - timeStart) * pxPerNs
       if (midX >= 0 && midX <= canvasW) {
-        _drawCursorDeltaBadgeH(ctx, dStr, midX, color, canvasW)
+        _drawCursorDeltaBadgeH(ctx, dStr, midX, color, canvasW, ly)
       }
     }
   }
@@ -2671,14 +2678,15 @@ export function drawCursorsVertical(ctx, cursors, trace, timeStart, pxPerNs, can
   if (!sorted.length) return
 
   ctx.save()
-  ctx.font = 'bold 10px monospace'
-  ctx.textBaseline = 'middle'
-  ctx.textAlign = 'right'
 
   for (let order = 0; order < sorted.length; order++) {
     const { t, slotIndex } = sorted[order]
     const y = Math.round(headerH + (t - timeStart) * pxPerNs)
     if (y < headerH - 2 || y > canvasH + 2) continue
+
+    ctx.font = 'bold 10px monospace'
+    ctx.textBaseline = 'middle'
+    ctx.textAlign = 'left'
 
     const color = CURSOR_COLORS[slotIndex % CURSOR_COLORS.length]
     ctx.strokeStyle = color
@@ -2691,12 +2699,14 @@ export function drawCursorsVertical(ctx, cursors, trace, timeStart, pxPerNs, can
     ctx.setLineDash([])
 
     const label = `C${slotIndex + 1}: ${formatTime(t, trace.timeScale, 3)}`
-    const tw = ctx.measureText(label).width + 8
-    const ty = Math.min(y + 2, canvasH - 14)
+    const pad = 4
+    const th = 14
+    const tw = ctx.measureText(label).width + pad * 2
+    const ty = Math.min(y + 2, canvasH - th - 2)
     ctx.fillStyle = color
-    ctx.fillRect(2, ty, tw, 14)
+    ctx.fillRect(2, ty, tw, th)
     ctx.fillStyle = '#000'
-    ctx.fillText(label, tw - 2, ty + 7)
+    ctx.fillText(label, 2 + pad, ty + th / 2)
 
     if (order > 0) {
       const prevT = sorted[order - 1].t

@@ -1,15 +1,15 @@
 NPM     ?= npm
-OUTDIR  := dist
-OUT     := $(OUTDIR)/index.html
+BUILDS  := ../builds
+RELEASE := $(BUILDS)/btf_viewer.html
 
 .PHONY: all build dev preview clean dist-clean
 
 all: build
 
-## Install dependencies and produce dist/index.html (single self-contained file)
+## Install dependencies and produce builds/btf_viewer.html (single self-contained file)
 build: node_modules wasm
 	$(NPM) run build
-	cp dist/index.html pre-build/btf_viewer.html
+	rm -rf dist
 
 ## Compile WASM timeline accelerator and embed base64 for single-file build
 wasm:
@@ -19,9 +19,10 @@ wasm:
 dev: node_modules
 	$(NPM) run dev
 
-## Preview the production build locally
-preview: $(OUT)
-	$(NPM) run preview
+## Serve builds/btf_viewer.html over HTTP (recommended for large traces)
+preview: $(RELEASE)
+	@echo "→ http://localhost:4173/btf_viewer.html"
+	cd $(BUILDS) && python3 -m http.server 4173
 
 ## Install npm dependencies (runs only when package.json changes)
 node_modules: package.json
@@ -30,7 +31,8 @@ node_modules: package.json
 
 ## Remove build output
 clean:
-	rm -rf $(OUTDIR)
+	rm -rf dist
+	rm -f $(RELEASE)
 
 ## Remove build output and installed dependencies
 dist-clean: clean
