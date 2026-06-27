@@ -88,5 +88,21 @@ class TestSceneOverlays(_QtTestBase):
             "stale hover labels remain in _frozen_top_items",
         )
 
+    def test_remove_cursor_at_index(self) -> None:
+        view, scene, trace = self._make_timeline()
+        t0 = trace.time_min + (trace.time_max - trace.time_min) // 4
+        t1 = trace.time_min + (trace.time_max - trace.time_min) // 2
+        scene.add_cursor(t0)
+        scene.add_cursor(t1)
+        self.assertEqual(len(scene._cursor_times), 2)
+
+        scene.remove_cursor_at_index(0)
+        self.assertEqual(len(scene._cursor_times), 1)
+        self.assertEqual(scene._cursor_times[0], t1)
+
+        scene.remove_cursor_at_index(-1)
+        scene.remove_cursor_at_index(99)
+        self.assertEqual(len(scene._cursor_times), 1)
+
 if __name__ == "__main__":
     unittest.main()

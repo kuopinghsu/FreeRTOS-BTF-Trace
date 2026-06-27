@@ -2,7 +2,7 @@ NPM     ?= npm
 BUILDS  := ../builds
 RELEASE := $(BUILDS)/btf_viewer.html
 
-.PHONY: all build dev preview clean dist-clean
+.PHONY: all build dev preview clean dist-clean test
 
 all: build
 
@@ -37,3 +37,7 @@ clean:
 ## Remove build output and installed dependencies
 dist-clean: clean
 	-rm -rf node_modules package-lock.json
+
+## Overlay draw smoke tests (node --test)
+test: node_modules
+	$(NPM) test

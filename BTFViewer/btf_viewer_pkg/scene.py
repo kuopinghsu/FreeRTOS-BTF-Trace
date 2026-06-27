@@ -948,6 +948,12 @@ class TimelineScene(QGraphicsScene):
         self._cursor_times.remove(nearest)
         self._draw_cursors()
 
+    def remove_cursor_at_index(self, index: int) -> None:
+        """Remove cursor by list index (click-near-remove)."""
+        if 0 <= index < len(self._cursor_times):
+            self._cursor_times.pop(index)
+            self._draw_cursors()
+
     def clear_cursors(self) -> None:
         self._cursor_times.clear()
         self._draw_cursors()
@@ -1156,26 +1162,30 @@ class TimelineScene(QGraphicsScene):
         else:
             label_row_h = self._label_width
             y = label_row_h + self._ns_to_px(self._hover_ns)
-            line = QGraphicsLineItem(0, y, scene_r.width(), y)
+            line = QGraphicsLineItem(RULER_WIDTH, y, scene_r.width(), y)
             line.setPen(hover_pen)
             line.setZValue(25)
             self.addItem(line)
             self._hover_items.append(line)
-            # Time label to the right of the ruler, centred vertically on y.
-            _left_pad = RULER_WIDTH + 4
-            _lbl_y = y - (th + 2) / 2
+            # Match web drawHoverLineVertical: label right-aligned in ruler column.
+            tw_text = fm.horizontalAdvance(t_str)
+            _badge_w = tw_text + 8
+            _badge_h = 14
+            ly = max(label_row_h + 3, min(y - 7, int(scene_r.height()) - 17))
+            _bg_x = RULER_WIDTH - 2 - _badge_w
+            _lbl_x = RULER_WIDTH - 4 - tw_text
             bg = self.addRect(
-                QRectF(0, 0, tw, th + 2),
+                QRectF(0, 0, _badge_w, _badge_h),
                 QPen(Qt.PenStyle.NoPen), QBrush(lbl_bg))
-            bg.setZValue(26)
-            bg.setPos(_left_pad, _lbl_y)
+            bg.setZValue(37)
+            bg.setPos(_bg_x, ly)
             lbl = self.addSimpleText(t_str, font)
             lbl.setBrush(QBrush(lbl_txt))
-            lbl.setZValue(27)
-            lbl.setPos(_left_pad + 4, _lbl_y + 1)
+            lbl.setZValue(38)
+            lbl.setPos(_lbl_x, ly + (_badge_h - th) / 2)
             self._hover_items.extend([bg, lbl])
-            self._frozen_items.append((bg, _left_pad))
-            self._frozen_items.append((lbl, _left_pad + 4))
+            self._frozen_items.append((bg, _bg_x))
+            self._frozen_items.append((lbl, _lbl_x))
             self._hover_frozen_left_set.update({bg, lbl})
 
         self._pin_cursor_overlays()
@@ -1322,19 +1332,24 @@ class TimelineScene(QGraphicsScene):
                     prev_ns = sorted_cursors[order - 1][1]
                     delta   = abs(ns - prev_ns)
                     d_str   = f"Δ {_format_time(delta, self._trace.time_scale, decimals=3)}"
-                    mid_y   = label_row_h + self._ns_to_px((ns + prev_ns) // 2)
                     d_lbl   = self.addSimpleText(d_str, font)
                     dh      = QFontMetrics(font).height()
+                    dw      = QFontMetrics(font).horizontalAdvance(d_str)
                     d_lbl.setBrush(QBrush(QColor("#000000")))
                     d_lbl.setZValue(32)
+                    # Align Δ with the later cursor label row (same Y as C2, C3, …).
+                    _delta_x = RULER_WIDTH + 4
                     bg_rect = self.addRect(
-                        QRectF(RULER_WIDTH + 4, mid_y - dh / 2 - 2,
-                               QFontMetrics(font).horizontalAdvance(d_str) + 6, dh + 4),
+                        QRectF(0, 0, dw + 6, _badge_h),
                         QPen(Qt.PenStyle.NoPen), QBrush(color)
                     )
                     bg_rect.setZValue(31)
-                    d_lbl.setPos(RULER_WIDTH + 7, mid_y - dh / 2)
+                    bg_rect.setPos(_delta_x, _lbl_y)
+                    d_lbl.setPos(_delta_x + 3, _lbl_y + (_badge_h - dh) / 2)
                     self._cursor_items.extend([bg_rect, d_lbl])
+                    self._frozen_items.append((bg_rect, _delta_x))
+                    self._frozen_items.append((d_lbl, _delta_x + 3))
+                    self._cursor_frozen_left_set.update({bg_rect, d_lbl})
 
         self._pin_cursor_overlays()
 

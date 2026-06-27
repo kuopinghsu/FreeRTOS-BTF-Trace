@@ -99,7 +99,25 @@ Edit sources under `BTFViewer/btf_viewer_pkg/` (not the generated `builds/btf_vi
 | `make` / `make all` | Web + desktop → `builds/btf_viewer.html` and `builds/btf_viewer.py` |
 | `make web` | Web only → `builds/btf_viewer.html` |
 | `make bundle` | Desktop only → `builds/btf_viewer.py`, `py_compile`, smoke `info` on `tracedata/example.btf` |
+| `make test` | Desktop characterization tests (`unittest`, offscreen Qt) |
 | `make check-bundle` | Same as `bundle`, then `git diff --exit-code builds/btf_viewer.py` |
+
+#### Desktop / web parity checklist
+
+Timeline overlay and interaction changes must be kept in sync across both viewers:
+
+| Change type | Desktop | Web |
+|-------------|---------|-----|
+| Cursor lines, labels, Δ badges | `btf_viewer_pkg/scene.py` (`_draw_cursors`) | `web/src/renderer/TimelineRenderer.js` (`drawCursors`, `drawCursorsVertical`) |
+| Hover ghost line + time label | `scene.py` (`_draw_hover_line`) | `TimelineRenderer.js` (`drawHoverLine`, `drawHoverLineVertical`) |
+| SVG export overlays | — | `web/src/renderer/SvgExporter.js` |
+| Scroll / frozen overlay reposition | `btf_viewer_pkg/view.py` | `TimelinePanel.vue` overlay canvas + `InteractionHandler.js` |
+| Cursor click UX | Left-click near cursor **removes**; otherwise places (same as web) | `InteractionHandler.js` `_placeCursor` |
+| Portable session format | `mainwindow.py` `_build_portable_session_payload` | `web/src/utils/sessionPortable.js` |
+
+**Δ label alignment:** horizontal mode — midpoint on time axis, **Y** aligned with the later cursor (C2 for C1–C2); vertical mode — **Y** aligned with the later cursor row at `RULER_W + 4`.
+
+**Tests:** `make -C BTFViewer test` (desktop); `make -C BTFViewer/web test` (web overlay draw smoke tests).
 
 #### Desktop architecture (MVVM)
 
@@ -181,6 +199,7 @@ make dev      # or: npm run dev
 | `make wasm` | Rebuild WASM timeline accelerator from `wasm/timeline_accel.wat` |
 | `make clean` | Remove `builds/btf_viewer.html` and any stale `dist/` |
 | `make dist-clean` | Same as `clean`, plus remove `node_modules/` |
+| `make test` | Overlay draw smoke tests (`node --test tests/`) |
 
 #### macOS — install Node.js via Homebrew
 
@@ -302,7 +321,7 @@ Between 2 and 8 cursors can be placed on the timeline (default: 4; adjustable in
 
 | Action | Effect |
 |--------|--------|
-| Left-click on the timeline area | Place a new cursor at that time position |
+| Left-click on the timeline area | Place a cursor, or **remove** one if the click is near an existing cursor line |
 | Drag a cursor line | Move it to a new time position |
 | `C` (keyboard) | Place a cursor at the viewport centre |
 

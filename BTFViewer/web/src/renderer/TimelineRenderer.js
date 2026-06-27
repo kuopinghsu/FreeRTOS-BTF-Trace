@@ -1563,7 +1563,7 @@ function _drawCursorDeltaBadgeH(ctx, text, midX, color, canvasW, labelY) {
   ctx.restore()
 }
 
-function _drawCursorDeltaBadgeV(ctx, text, midY, color, canvasH, headerH) {
+function _drawCursorDeltaBadgeV(ctx, text, labelY, color, canvasH, headerH) {
   ctx.save()
   ctx.font = '10px monospace'
   ctx.textBaseline = 'middle'
@@ -1573,7 +1573,7 @@ function _drawCursorDeltaBadgeV(ctx, text, midY, color, canvasH, headerH) {
   const bw = tw + pad * 2
   const bh = 14
   const bx = RULER_W + 4
-  let by = Math.round(midY - bh / 2)
+  let by = Math.round(labelY)
   by = Math.max(headerH + 2, Math.min(by, canvasH - bh - 2))
   ctx.fillStyle = color
   ctx.fillRect(bx, by, bw, bh)
@@ -2712,9 +2712,8 @@ export function drawCursorsVertical(ctx, cursors, trace, timeStart, pxPerNs, can
       const prevT = sorted[order - 1].t
       const delta = Math.abs(t - prevT)
       const dStr = `Δ ${formatTime(delta, trace.timeScale, 3)}`
-      const midY = headerH + ((t + prevT) / 2 - timeStart) * pxPerNs
-      if (midY >= headerH && midY <= canvasH) {
-        _drawCursorDeltaBadgeV(ctx, dStr, midY, color, canvasH, headerH)
+      if (ty >= headerH && ty <= canvasH) {
+        _drawCursorDeltaBadgeV(ctx, dStr, ty, color, canvasH, headerH)
       }
     }
   }

@@ -2813,15 +2813,27 @@ class TimelineView(QGraphicsView):
                         self._scene.set_highlighted_segment(hit_seg)
                     self._dbl_click_undo_ns = None
                 else:
-                    # Click on ruler or empty area -> place cursor.
+                    # Click on ruler or empty area -> place or remove cursor.
                     if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
                         ns = self._snap_to_boundary(ns)
-                    # Place cursor immediately; mouseDoubleClickEvent will roll it
-                    # back if this click turns out to be the first of a double-click.
-                    self.pre_change.emit()
-                    self._scene.add_cursor(ns)
-                    self.cursors_changed.emit(self._scene.cursor_times())
-                    self._dbl_click_undo_ns = ns
+                    # Click near an existing cursor removes it (matches web viewer).
+                    _removed = False
+                    for _ci, _cns in enumerate(self._scene._cursor_times):
+                        _cc = self._scene.ns_to_scene_coord(_cns)
+                        if abs(_cc - coord) <= self._cursor_drag_threshold:
+                            self.pre_change.emit()
+                            self._scene.remove_cursor_at_index(_ci)
+                            self.cursors_changed.emit(self._scene.cursor_times())
+                            self._dbl_click_undo_ns = None
+                            _removed = True
+                            break
+                    if not _removed:
+                        # Place cursor immediately; mouseDoubleClickEvent will roll it
+                        # back if this click turns out to be the first of a double-click.
+                        self.pre_change.emit()
+                        self._scene.add_cursor(ns)
+                        self.cursors_changed.emit(self._scene.cursor_times())
+                        self._dbl_click_undo_ns = ns
             elif event.button() == Qt.MouseButton.RightButton:
                 self.pre_change.emit()
                 if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:

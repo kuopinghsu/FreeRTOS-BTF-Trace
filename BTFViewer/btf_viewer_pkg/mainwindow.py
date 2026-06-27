@@ -6031,8 +6031,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 ("Shift+Tab",         "Previous task segment"),
             ]),
             ("Cursors", [
-                ("Left-click",             "Place cursor"),
-                ("Shift+Left-click",       "Snap to segment boundary"),
+                ("Left-click (near cursor)", "Remove that cursor"),
+                ("Left-click (elsewhere)",   "Place cursor (Shift = snap to segment boundary)"),
                 ("Right-click",            "Remove nearest cursor"),
                 ("Right-click on segment", "Context menu"),
                 ("Shift+Right-click",      "Clear all cursors"),
