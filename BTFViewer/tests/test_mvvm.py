@@ -9,7 +9,6 @@ from btf_viewer_pkg.mvvm.models import PlotSessionState
 from btf_viewer_pkg.mvvm.trace_tab_vm import TraceTabViewModel
 from btf_viewer_pkg.parser import TraceAnnotation, BtfTrace
 
-
 class _MockRc:
     """Minimal stand-in for _RcSettings (no disk I/O)."""
 
@@ -36,7 +35,6 @@ class _MockRc:
         if not raw:
             return fallback
         return raw in ("1", "true", "yes", "on")
-
 
 class FindLogicTests(unittest.TestCase):
     def test_empty_query_returns_no_hits(self) -> None:
@@ -102,7 +100,6 @@ class FindLogicTests(unittest.TestCase):
         self.assertEqual(hits, [900])
         self.assertIn("migration", status)
 
-
 class PlotSessionTests(unittest.TestCase):
     def test_interval_id_round_trip(self) -> None:
         trace = BtfTrace.__new__(BtfTrace)
@@ -112,7 +109,6 @@ class PlotSessionTests(unittest.TestCase):
         self.assertEqual((mk, kind, open_, preemptor, iid),
                          ("3", "interval", True, None, "3"))
         self.assertEqual(vm.plot_interval_id, "3")
-
 
 class TabViewportTests(unittest.TestCase):
     def test_viewport_json_round_trip(self) -> None:
@@ -163,7 +159,6 @@ class TabViewportTests(unittest.TestCase):
         self.assertIsNone(viewport_from_json("not-json"))
         self.assertIsNone(viewport_from_json("[]"))
 
-
 class AppSettingsTests(unittest.TestCase):
     def test_load_view_prefs_from_rc(self) -> None:
         vm = AppSettingsViewModel()
@@ -195,7 +190,6 @@ class AppSettingsTests(unittest.TestCase):
         rc = _MockRc({"view": {"label_width": "9999"}})
         vm.load_view_prefs_from_rc(rc)
         self.assertEqual(vm.label_width, 600)
-
 
 if __name__ == "__main__":
     unittest.main()

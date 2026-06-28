@@ -19,7 +19,6 @@ from btf_viewer_pkg.config import (  # noqa: E402
     default_section_table_heights,
 )
 
-
 class StiChannelTests(unittest.TestCase):
     def test_tag_event_is_expandable(self) -> None:
         self.assertTrue(_is_tag_sti_channel("tag_event"))
@@ -37,7 +36,6 @@ class StiChannelTests(unittest.TestCase):
             ["tag_event", "tag0_event", "tag2_event", "tick_event"],
         )
         self.assertEqual(ordered[-1], "uart_rx")
-
 
 class TabFilterSanitizeTests(unittest.TestCase):
     def test_non_dict_returns_none(self) -> None:
@@ -66,7 +64,6 @@ class TabFilterSanitizeTests(unittest.TestCase):
         self.assertEqual(out["heatmapFilterLabel"], "Core_0")
         self.assertTrue(out["migratedOnlyFilter"])
 
-
 class ConfigDefaultsTests(unittest.TestCase):
     def test_section_collapsed_keys(self) -> None:
         collapsed = default_section_collapsed()
@@ -85,7 +82,6 @@ class ConfigDefaultsTests(unittest.TestCase):
         self.assertEqual(len(dark), len(light))
         self.assertNotEqual(dark[0], light[0])
 
-
 class FontScalingTests(unittest.TestCase):
     def test_scaled_pixel_size_clamps(self) -> None:
         px = _scaled_font_pixel_size(4)
@@ -94,7 +90,6 @@ class FontScalingTests(unittest.TestCase):
         px_hi = _scaled_font_pixel_size(99)
         if px_hi is not None:
             self.assertLessEqual(px_hi, 24)
-
 
 if __name__ == "__main__":
     unittest.main()

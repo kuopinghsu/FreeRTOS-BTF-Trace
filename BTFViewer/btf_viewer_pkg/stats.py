@@ -487,6 +487,7 @@ class _LegendWidget(QWidget):
         self._sti_rows: List[tuple] = []  # [(channel_or_note_lc, row_widget)]
         self._heatmap_filter_mks: Optional[set] = None
         self._heatmap_filter_label: Optional[str] = None
+        self._locked_task: Optional[str] = None
         self._search = QLineEdit()
         self._search.setPlaceholderText("Filter tasks...")
         self._sync_search_theme()
@@ -577,10 +578,12 @@ class _LegendWidget(QWidget):
 
     def set_locked_task(self, task_name: Optional[str]) -> None:
         """Visually mark *task_name* as click-locked (or clear all locks)."""
+        scroll_to = task_name if task_name != self._locked_task else None
+        self._locked_task = task_name
         for raw, row in self._task_rows.items():
             is_match = (raw == task_name)
             row.set_locked(is_match)
-            if is_match:
+            if is_match and scroll_to is not None:
                 self._scroll.ensureWidgetVisible(row)
 
     def set_heatmap_filter(self, label: Optional[str],
@@ -620,6 +623,7 @@ class _LegendWidget(QWidget):
         self._show_sti_flag  = show_sti
         self._task_rows.clear()
         self._sti_rows = []
+        scroll_pos = self._scroll.verticalScrollBar().value()
 
         while self._list_layout.count():
             _item = self._list_layout.takeAt(0)
@@ -655,6 +659,7 @@ class _LegendWidget(QWidget):
             self._filter_tasks(self._search.text())
         finally:
             self.setUpdatesEnabled(True)
+        self._scroll.verticalScrollBar().setValue(scroll_pos)
 
     def _on_migrated_only_toggled(self, checked: bool) -> None:
         self.migrated_filter_changed.emit(bool(checked))
@@ -716,7 +721,6 @@ class _ScatterWidget(QWidget):
         if self._crosshair_idx >= len(self._points):
             self._crosshair_idx = -1
         self.update()
-
     def set_dark(self, is_dark: bool) -> None:
         self._is_dark = is_dark
         self.update()
@@ -6138,6 +6142,8 @@ class _RcSettings:
             "view_mode":         "task",
             "show_sti":          "true",
             "show_grid":         "true",
+            "show_legend":       "true",
+            "show_stats":        "true",
             "show_marks":        "true",
             "show_find":         "true",
         },

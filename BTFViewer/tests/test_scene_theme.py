@@ -21,11 +21,9 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from btf_viewer_pkg.scene import TimelineScene  # noqa: E402
 
-
 def _luminance(hex_name: str) -> float:
     c = QColor(hex_name)
     return 0.299 * c.redF() + 0.587 * c.greenF() + 0.114 * c.blueF()
-
 
 class TestSceneTheme(unittest.TestCase):
     _app: QApplication | None = None
@@ -53,7 +51,6 @@ class TestSceneTheme(unittest.TestCase):
         dark_lbl = scene._c_label_bg.name()
         scene.set_theme(False, rebuild=False)
         self.assertNotEqual(scene._c_label_bg.name(), dark_lbl)
-
 
 if __name__ == "__main__":
     unittest.main()

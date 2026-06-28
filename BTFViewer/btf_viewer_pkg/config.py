@@ -137,7 +137,7 @@ DEFAULT_WINDOW_WIDTH     = 1916
 DEFAULT_WINDOW_HEIGHT    = 1088
 DEFAULT_WINDOW_X         = 254
 DEFAULT_WINDOW_Y         = 47
-DEFAULT_DOCK_LAYOUT_VERSION = "9"
+DEFAULT_DOCK_LAYOUT_VERSION = "10"
 
 # Right-panel tab indices (Statistics / Marks / Find — web parity).
 _PANEL_TAB_STATS = 0
@@ -347,7 +347,6 @@ def _svg_icon(path_data: str, color: str = "#9E9E9E", size: int = 16) -> "QIcon"
     pm = QPixmap()
     pm.loadFromData(ba, "SVG")
     return QIcon(pm)
-
 
 def _svg_icon_checked(path_data: str, off: str = "#b0b0cc", on: str = "#e3f2fd",
                       size: int = 16) -> "QIcon":

@@ -20,7 +20,6 @@ from btf_viewer_pkg.timeline_util import (  # noqa: E402
     _zoom_debounce_ms,
 )
 
-
 class TimeFormatTests(unittest.TestCase):
     def test_to_ns_from_microseconds(self) -> None:
         self.assertEqual(_to_ns(2.5, "us"), 2500.0)
@@ -39,7 +38,6 @@ class TimeFormatTests(unittest.TestCase):
     def test_tag_value_sort_key_strips_commas(self) -> None:
         self.assertAlmostEqual(_tag_value_sort_key("12,192"), 12192.0)
         self.assertEqual(_tag_value_sort_key("—"), -1.0)
-
 
 class GridAndCullTests(unittest.TestCase):
     def test_nice_grid_step_picks_readable_value(self) -> None:
@@ -60,7 +58,6 @@ class GridAndCullTests(unittest.TestCase):
         small = _zoom_debounce_ms(50)
         large = _zoom_debounce_ms(900)
         self.assertLess(small, large)
-
 
 if __name__ == "__main__":
     unittest.main()
