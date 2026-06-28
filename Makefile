@@ -1,6 +1,27 @@
 FREERTOS_VER ?= V11.3.0
 RISCV_PREFIX ?= /opt/xpack-riscv-none-elf-gcc-15.2.0-1/bin/riscv-none-elf-
 
+.DEFAULT_GOAL := all
+
+.PHONY: all help run check clean distclean
+
+help:
+	@echo "FreeRTOS-BTF-Trace — make targets"
+	@echo ""
+	@echo "  make              Build Demo, tools, and sim (default)"
+	@echo "  make run          Build all, then run the Demo in the simulator"
+	@echo "  make check        Clone FreeRTOS-Kernel if missing"
+	@echo "  make clean        Remove build/ and tracedata/trace.*"
+	@echo "  make distclean    clean + remove FreeRTOS-Kernel/"
+	@echo "  make help         Show this help"
+	@echo ""
+	@echo "Variables:"
+	@echo "  FREERTOS_VER=$(FREERTOS_VER)"
+	@echo "  RISCV_PREFIX=$(RISCV_PREFIX)"
+	@echo ""
+	@echo "BTF Viewer (separate tree):"
+	@echo "  make -C BTFViewer help"
+
 all: check
 	$(MAKE) -C Demo RISCV_PREFIX=$(RISCV_PREFIX)
 	$(MAKE) -C tools BUILD_DIR=$(abspath build/tools)

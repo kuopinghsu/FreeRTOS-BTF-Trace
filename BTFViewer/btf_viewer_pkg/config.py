@@ -18,13 +18,26 @@ UI_FONT_PIXEL_SIZE: int = int(
     os.environ.get("BTF_UI_FONT_PX", "11" if sys.platform == "darwin" else "0")
 )
 
+def _ui_font_pixel_baseline() -> int:
+    """Pixel font baseline when pt sizing is too small (macOS / BTF_UI_FONT_PX)."""
+    raw = os.environ.get("BTF_UI_FONT_PX")
+    if raw is not None and raw.strip():
+        try:
+            return max(0, int(raw))
+        except ValueError:
+            pass
+    if UI_FONT_PIXEL_SIZE > 0:
+        return UI_FONT_PIXEL_SIZE
+    return 11 if sys.platform == "darwin" else 0
+
 def _scaled_font_pixel_size(point_size: int,
                             *, reference_pt: int = UI_FONT_SIZE) -> int | None:
-    """Map a pt setting to a pixel size on macOS HiDPI; None → use pt directly."""
+    """Map a pt setting to a pixel size on HiDPI; None → use pt directly."""
     base = max(6, min(int(point_size), 24))
-    if sys.platform == "darwin" and UI_FONT_PIXEL_SIZE > 0:
+    px_base = _ui_font_pixel_baseline()
+    if px_base > 0:
         scale = base / max(reference_pt, 1)
-        return max(6, int(round(UI_FONT_PIXEL_SIZE * scale)))
+        return max(6, int(round(px_base * scale)))
     return None
 
 def _application_ui_font(point_size: int = UI_FONT_SIZE) -> QFont:

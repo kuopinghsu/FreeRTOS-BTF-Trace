@@ -2,6 +2,7 @@
 """
 
 
+
 btf_viewer.py - Single-file RTOS BTF Viewer (PySide6).
 
 Usage:
@@ -67,6 +68,7 @@ Section index
   Main Window         - _CursorButton, _CursorBarWidget, _LegendWidget,
                         _StatsPanel, _RcSettings, _WheelSpinBox, MainWindow
   Entry point         - main()
+
 
 
 """
@@ -204,13 +206,26 @@ UI_FONT_PIXEL_SIZE: int = int(
     os.environ.get("BTF_UI_FONT_PX", "11" if sys.platform == "darwin" else "0")
 )
 
+def _ui_font_pixel_baseline() -> int:
+    """Pixel font baseline when pt sizing is too small (macOS / BTF_UI_FONT_PX)."""
+    raw = os.environ.get("BTF_UI_FONT_PX")
+    if raw is not None and raw.strip():
+        try:
+            return max(0, int(raw))
+        except ValueError:
+            pass
+    if UI_FONT_PIXEL_SIZE > 0:
+        return UI_FONT_PIXEL_SIZE
+    return 11 if sys.platform == "darwin" else 0
+
 def _scaled_font_pixel_size(point_size: int,
                             *, reference_pt: int = UI_FONT_SIZE) -> int | None:
-    """Map a pt setting to a pixel size on macOS HiDPI; None → use pt directly."""
+    """Map a pt setting to a pixel size on HiDPI; None → use pt directly."""
     base = max(6, min(int(point_size), 24))
-    if sys.platform == "darwin" and UI_FONT_PIXEL_SIZE > 0:
+    px_base = _ui_font_pixel_baseline()
+    if px_base > 0:
         scale = base / max(reference_pt, 1)
-        return max(6, int(round(UI_FONT_PIXEL_SIZE * scale)))
+        return max(6, int(round(px_base * scale)))
     return None
 
 def _application_ui_font(point_size: int = UI_FONT_SIZE) -> QFont:
@@ -4365,7 +4380,7 @@ def _monospace_font(size: int, weight: int = QFont.Normal) -> QFont:
     only once per (size, weight) pair regardless of how many rebuilds happen.
     Uses the same macOS pixel scaling as application UI fonts.
     """
-    key = (size, weight, sys.platform, UI_FONT_PIXEL_SIZE)
+    key = (size, weight, sys.platform, _ui_font_pixel_baseline())
     f = _monospace_font_cache.get(key)
     if f is None:
         f = QFontDatabase.systemFont(QFontDatabase.FixedFont)
@@ -28231,11 +28246,73 @@ def _platform_preflight() -> None:
         file=sys.stderr,
     )
 
+def _is_wsl() -> bool:
+    if os.environ.get("WSL_DISTRO_NAME"):
+        return True
+    try:
+        with open("/proc/version", "r", encoding="utf-8", errors="ignore") as f:
+            return "microsoft" in f.read().lower()
+    except OSError:
+        return False
+
+def _windows_applied_dpi() -> int | None:
+    """Return the Windows user DPI (e.g. 144 @ 150 %, 192 @ 200 %) from WSL."""
+    if not _is_wsl() or not shutil.which("powershell.exe"):
+        return None
+    try:
+        out = subprocess.check_output(
+            [
+                "powershell.exe", "-NoProfile", "-Command",
+                "(Get-ItemProperty 'HKCU:\\Control Panel\\Desktop\\WindowMetrics' "
+                "-ErrorAction SilentlyContinue).AppliedDPI",
+            ],
+            text=True,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        ).strip()
+        dpi = int(out)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    return dpi if dpi >= 96 else None
+
+def _wsl_wayland_force_dpi(applied: int) -> int:
+    """Partial DPI nudge for WSLg — wl_output scale already reflects Windows zoom.
+
+    Using the full Windows AppliedDPI doubles up with native DPR (UI too large).
+    Apply only ~25 % of the gap above 96 DPI (120 @ 200 %, 108 @ 150 %).
+    """
+    if applied <= 96:
+        return 96
+    return 96 + (applied - 96) // 4
+
+def _configure_wsl_wayland_dpi() -> None:
+    """WSLg + Qt Wayland: slight DPI nudge when UI renders too small.
+
+    WSLg exposes wl_output scale matching Windows zoom, but Qt Wayland clients
+    can still look undersized. Do not re-apply the full Windows DPI — that
+    doubles with native scale. Override with QT_WAYLAND_FORCE_DPI; disable
+    auto-tuning with BTF_WSL_DPI=0.
+    """
+    if not _is_wsl() or sys.platform != "linux":
+        return
+    if os.environ.get("BTF_WSL_DPI", "1").strip().lower() in ("0", "false", "no", "off"):
+        return
+    plat = os.environ.get("QT_QPA_PLATFORM", "wayland").strip().lower()
+    if plat not in ("", "wayland", "wayland-egl", "wayland-brcm"):
+        return
+    if os.environ.get("QT_WAYLAND_FORCE_DPI"):
+        return
+    applied = _windows_applied_dpi()
+    if applied:
+        os.environ["QT_WAYLAND_FORCE_DPI"] = str(_wsl_wayland_force_dpi(applied))
+
 def _configure_qt_startup() -> None:
     # QT_FONT_DPI=96 was a PyQt5 workaround. Qt6 applies per-monitor DPI scaling
     # natively; forcing 96 DPI makes application fonts too small on Windows HiDPI.
-    if sys.platform == "win32":
+    if sys.platform in ("win32", "linux"):
         os.environ.pop("QT_FONT_DPI", None)
+
+    _configure_wsl_wayland_dpi()
 
     # macOS aborts inside _RegisterApplication when a headless QPA platform is
     # active (common when QT_QPA_PLATFORM=offscreen leaks from CI/IDE shells).

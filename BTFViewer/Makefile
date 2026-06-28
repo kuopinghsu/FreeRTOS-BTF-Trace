@@ -12,7 +12,19 @@ OUT := $(BUILDS)/btf_viewer.py
 
 .DEFAULT_GOAL := all
 
-.PHONY: all web bundle check-bundle test
+.PHONY: all help web bundle check-bundle test
+
+help:
+	@echo "BTF Viewer — make targets"
+	@echo ""
+	@echo "  make              Build web + desktop (default)"
+	@echo "  make web          Web viewer only → builds/btf_viewer.html"
+	@echo "  make bundle       Desktop bundle only → builds/btf_viewer.py"
+	@echo "  make check-bundle Regenerate bundle; fail if it drifts from sources (CI)"
+	@echo "  make test         Desktop unit tests (QT_QPA_PLATFORM=offscreen)"
+	@echo "  make help         Show this help"
+	@echo ""
+	@echo "Variables: PYTHON=$(PYTHON)  TRACE=$(TRACE)"
 
 all: web bundle
 
@@ -23,7 +35,7 @@ bundle:
 	mkdir -p $(BUILDS)
 	$(PYTHON) scripts/bundle_viewer.py -o $(OUT)
 	$(PYTHON) -m py_compile $(OUT)
-	$(PYTHON) $(OUT) info $(TRACE)
+	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) info $(TRACE)
 
 test:
 	QT_QPA_PLATFORM=offscreen $(PYTHON) -m unittest discover -s tests -v

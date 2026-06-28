@@ -426,7 +426,7 @@ def _monospace_font(size: int, weight: int = QFont.Normal) -> QFont:
     only once per (size, weight) pair regardless of how many rebuilds happen.
     Uses the same macOS pixel scaling as application UI fonts.
     """
-    key = (size, weight, sys.platform, UI_FONT_PIXEL_SIZE)
+    key = (size, weight, sys.platform, _ui_font_pixel_baseline())
     f = _monospace_font_cache.get(key)
     if f is None:
         f = QFontDatabase.systemFont(QFontDatabase.FixedFont)

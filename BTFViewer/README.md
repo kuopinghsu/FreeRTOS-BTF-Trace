@@ -102,6 +102,40 @@ Edit sources under `BTFViewer/btf_viewer_pkg/` (not the generated `builds/btf_vi
 | `make test` | Desktop characterization tests (`unittest`, offscreen Qt) |
 | `make check-bundle` | Same as `bundle`, then `git diff --exit-code builds/btf_viewer.py` |
 
+#### HiDPI / DPI scaling (Desktop)
+
+Qt 6 scales the desktop UI per monitor. Platform-specific tuning runs automatically at startup (`btf_viewer_pkg/platform.py` → `_configure_qt_startup()`).
+
+| Platform | Behaviour |
+|----------|-----------|
+| **Windows (native)** | Uses Qt 6 per-monitor scaling. Stale `QT_FONT_DPI=96` (PyQt5 workaround) is cleared if set. |
+| **macOS (Retina)** | Timeline/UI fonts use an ~11 px pixel baseline (`BTF_UI_FONT_PX`, default on macOS) so 8 pt settings match PyQt5 density on HiDPI. |
+| **WSLg (Wayland)** | Reads Windows **AppliedDPI** (Control Panel → Display → Scale) via PowerShell and sets a **partial** `QT_WAYLAND_FORCE_DPI` nudge — not the full AppliedDPI, because WSLg already exposes matching `wl_output` scale and applying the full value doubles with native DPR (UI too large). Formula: `96 + (AppliedDPI − 96) / 4` (e.g. **120** at 200 %, **108** at 150 %). |
+
+**Environment overrides** (set before launch):
+
+| Variable | Purpose |
+|----------|---------|
+| `BTF_WSL_DPI=0` | Disable WSLg auto DPI nudge (use native WSLg / Qt scaling only). |
+| `QT_WAYLAND_FORCE_DPI=N` | Force Qt Wayland logical DPI (e.g. `108`, `120`, `144`). Overrides WSL auto-tuning. |
+| `BTF_UI_FONT_PX=N` | Pixel baseline for UI and timeline monospace fonts (macOS default **11**). Use on any platform when pt sizing looks wrong. |
+
+Examples:
+
+```bash
+# WSLg — UI too small (try a larger nudge)
+QT_WAYLAND_FORCE_DPI=144 python3 -m btf_viewer_pkg trace.btf
+
+# WSLg — UI too large (disable auto-tuning or use a smaller nudge)
+BTF_WSL_DPI=0 python3 -m btf_viewer_pkg trace.btf
+QT_WAYLAND_FORCE_DPI=108 python3 -m btf_viewer_pkg trace.btf
+
+# macOS / any platform — tweak font density without changing layout
+BTF_UI_FONT_PX=13 python3 -m btf_viewer_pkg trace.btf
+```
+
+On WSLg, if scaling still does not match Windows, see [microsoft/wslg#1335](https://github.com/microsoft/wslg/issues/1335) for optional `.wslgconfig` compositor settings (`WESTON_RDP_HI_DPI_SCALING`, etc.).
+
 #### Desktop / web parity checklist
 
 Timeline overlay and interaction changes must be kept in sync across both viewers:
@@ -220,6 +254,7 @@ Interactive PySide6 GUI and optional **headless CLI** (same statistics engine as
 | Topic | Section |
 |-------|---------|
 | Launch & CLI | [Usage](#usage) · [Headless CLI](#headless-cli-desktop-only) |
+| HiDPI / DPI | [HiDPI / DPI scaling (Desktop)](#hidpi--dpi-scaling-desktop) |
 | Timeline | [View modes](#view-modes) · [Orientation](#orientation) · [Zoom and pan](#zoom-and-pan) |
 | Analysis UI | [Cursors](#cursors) · [Legend](#legend-panel) · [Export](#export) · [Settings](#settings) |
 
@@ -435,6 +470,8 @@ Preferences are restored on the next launch (desktop) or page reload (web).
 | Theme | **Dark** (default) or **Light** |
 | Timeline labels | Font size for task/core labels drawn on the timeline (pt on Desktop, px on Web; default **8**) |
 | UI / menus | Font size for menus, toolbar, and status bar (pt on Desktop, px on Web; default **8**) |
+
+On Desktop, macOS Retina uses pixel-based font sizing by default; override with `BTF_UI_FONT_PX` (see [HiDPI / DPI scaling](#hidpi--dpi-scaling-desktop)).
 
 ### Display
 
