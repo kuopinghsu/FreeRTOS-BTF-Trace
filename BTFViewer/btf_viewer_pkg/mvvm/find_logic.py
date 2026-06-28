@@ -85,3 +85,6 @@ def _haystack_matches(
     if regex_obj is not None:
         return bool(regex_obj.search(haystack))
     return False
+
+# Bundle-safe alias: trace_tab_vm preamble imports are stripped in the monolith.
+FIND_RECOMPUTE = recompute_find_hits

@@ -32,6 +32,7 @@ export class PixiTimelineHost {
         autoDensity: true,
         resolution: Math.min(window.devicePixelRatio || 1, 2),
         preference: 'webgl',
+        preserveDrawingBuffer: true,
       })
       const canvas = app.canvas
       canvas.className = 'pixi-timeline-canvas'

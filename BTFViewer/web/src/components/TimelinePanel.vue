@@ -6,6 +6,7 @@
   >
     <!-- Left: sticky label column (horizontal mode only) -->
     <LabelColumn
+      ref="labelColRef"
       v-if="orientation === 'h'"
       :key="options.layoutRev"
       :trace="trace"
@@ -35,6 +36,7 @@
 
     <!-- Top: column headers (vertical mode — sibling above canvas, not an overlay) -->
     <ColumnHeaderRow
+      ref="headerRowRef"
       v-if="orientation === 'v' && trace"
       :key="options.layoutRev"
       :column-layout="cachedColumnLayout"
@@ -253,6 +255,7 @@ function layout() {
   return getTimelineLayout()
 }
 import { renderToSvg } from '../renderer/SvgExporter.js'
+import { captureLabelColumnBlob, captureColumnHeaderBlob } from '../renderer/labelColumnCapture.js'
 import { InteractionHandler } from '../renderer/InteractionHandler.js'
 import { taskMergeKey, taskColor, coreColor, coreTint, stiNoteColor, parseTaskName, stiChannelColor, taskDisplayName, taskReprGet } from '../utils/colors.js'
 import { segmentTooltipLines as buildSegmentTooltipLines } from '../utils/statsAnalysis.js'
@@ -292,6 +295,8 @@ const emit = defineEmits([
 
 // ---- Template refs -------------------------------------------------------
 const panelEl     = ref(null)
+const labelColRef = ref(null)
+const headerRowRef = ref(null)
 const canvasWrapEl = ref(null)
 const pixiHostEl  = ref(null)
 const canvasEl    = ref(null)
@@ -472,7 +477,7 @@ let _ovBgTrace       = null   // trace identity (object ref)
 let _ovBgMode        = null   // viewMode string
 let _ovBgShowSti     = null   // showSti option value
 let _ovBgExpandedKey = null   // sorted join of expanded STI channels
-let _ovBgMainAreaH   = 0     // task/column strip area height in the thumbnail
+let _ovBgMainAreaH   = 0     // task-only strip height in thumbnail bg (STI below); not used for indicator
 let _ovBgOrientation = null  // 'h' | 'v' when background was built
 
 // WASM row cull cache (rebuilt when layout or trace changes).
@@ -489,6 +494,8 @@ const INTERACT_SETTLE_MS = 250
 let _loadSettling = false
 let _loadSettleTimer = null
 const LOAD_SETTLE_MS = 350
+/** Snapshot export: full-quality paint at CSS pixel ratio (see prepareCanvasForCapture). */
+let _captureForceFull = false
 /** Above this segment count, fit-to-window stays on coarse LOD; full quality only when zoomed in. */
 const LARGE_TRACE_SEGS = 25_000
 
@@ -530,6 +537,7 @@ function isFitToWindowZoom() {
  * Large traces: coarse while panning/zooming/scrolling and at overview zoom when idle.
  */
 function paintCoarse() {
+  if (_captureForceFull) return false
   if (_loadSettling) return true
   if (isLargeTrace() && _interacting) return true
   if (isLargeTrace() && isFitToWindowZoom()) return true
@@ -542,6 +550,7 @@ function paintFast() {
 }
 
 function paintDpr() {
+  if (_captureForceFull) return 1
   if (_loadSettling || (isLargeTrace() && _interacting)) return 1
   if (isLargeTrace()) {
     // Allow retina once zoomed in past overview level.
@@ -549,6 +558,15 @@ function paintDpr() {
     return 1
   }
   return window.devicePixelRatio || 1
+}
+
+/** Full-quality synchronous paint before screenshot (colored segments + crisp labels). */
+async function prepareCanvasForCapture() {
+  _captureForceFull = true
+  paint()
+  if (useWebGLRenderer()) pixiTimelineHost.endFrame()
+  await new Promise((resolve) => requestAnimationFrame(resolve))
+  _captureForceFull = false
 }
 
 function scheduleFullQualityRender() {
@@ -1004,10 +1022,133 @@ function captureAsSvg() {
   return new Blob([svgStr], { type: 'image/svg+xml' })
 }
 
+function captureDomFilter(node) {
+  if (!(node instanceof HTMLElement)) return true
+  return !node.classList.contains('context-menu') && !node.classList.contains('sti-tooltip')
+}
+
+function loadImageFromBlob(blob) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(blob)
+    const img = new Image()
+    img.onload = () => {
+      URL.revokeObjectURL(url)
+      resolve(img)
+    }
+    img.onerror = () => {
+      URL.revokeObjectURL(url)
+      reject(new Error('image load failed'))
+    }
+    img.src = url
+  })
+}
+
+async function captureDomBlob(el, w, h) {
+  if (!el) return null
+  try {
+    return await domToBlob(el, {
+      cacheBust: true,
+      pixelRatio: window.devicePixelRatio || 1,
+      width: w ?? el.clientWidth,
+      height: h ?? el.clientHeight,
+      filter: captureDomFilter,
+    })
+  } catch {
+    return null
+  }
+}
+
+async function stitchImagesHorizontal(leftImg, rightImg) {
+  const out = document.createElement('canvas')
+  out.width = leftImg.naturalWidth + rightImg.naturalWidth
+  out.height = Math.max(leftImg.naturalHeight, rightImg.naturalHeight)
+  const ctx = out.getContext('2d')
+  if (!ctx) return null
+  ctx.drawImage(leftImg, 0, 0)
+  ctx.drawImage(rightImg, leftImg.naturalWidth, 0)
+  return await new Promise((resolve) => out.toBlob(resolve, 'image/png'))
+}
+
+async function stitchImagesVertical(topImg, bottomImg) {
+  const out = document.createElement('canvas')
+  out.width = Math.max(topImg.naturalWidth, bottomImg.naturalWidth)
+  out.height = topImg.naturalHeight + bottomImg.naturalHeight
+  const ctx = out.getContext('2d')
+  if (!ctx) return null
+  ctx.drawImage(topImg, 0, 0)
+  ctx.drawImage(bottomImg, 0, topImg.naturalHeight)
+  return await new Promise((resolve) => out.toBlob(resolve, 'image/png'))
+}
+
+/** Label/header canvas + timeline canvas — html-to-image cannot rasterise WebGL/canvas reliably. */
+async function captureCompositeScreenshotBlob(captureW, _captureH) {
+  const wrap = canvasWrapEl.value
+  if (!wrap) return null
+
+  const timelineW = wrap.clientWidth
+  const stampH = viewport.canvasH || wrap.clientHeight
+  const timelineH = Math.min(stampH, wrap.clientHeight)
+  if (timelineW <= 0 || timelineH <= 0) return null
+
+  const timelineBlob = await captureCanvasViewportBlob(timelineW, timelineH)
+  if (!timelineBlob) return null
+
+  if (orientation.value === 'h') {
+    const labelW = labelColRef.value?.colEl?.clientWidth ?? props.labelWidth
+    const labelBlob = await captureLabelColumnBlob({
+      rowLayout: cachedRowLayout.value,
+      scrollY: viewport.scrollY,
+      width: labelW,
+      height: timelineH,
+      viewMode: props.options.viewMode,
+      darkMode: props.options.darkMode,
+      expanded,
+      stiExpanded,
+      pixelRatio: 1,
+    })
+    if (!labelBlob) return timelineBlob
+    try {
+      const [labelImg, timelineImg] = await Promise.all([
+        loadImageFromBlob(labelBlob),
+        loadImageFromBlob(timelineBlob),
+      ])
+      return await stitchImagesHorizontal(labelImg, timelineImg)
+    } catch {
+      return timelineBlob
+    }
+  }
+
+  const headerH = headerRowRef.value?.rowEl?.clientHeight ?? vertLabelHeaderH.value
+  const headerBlob = await captureColumnHeaderBlob({
+    columnLayout: cachedColumnLayout.value,
+    scrollX: viewport.scrollX,
+    canvasW: captureW,
+    headerH,
+    darkMode: props.options.darkMode,
+    expanded,
+    pixelRatio: 1,
+  })
+  if (!headerBlob) return timelineBlob
+  try {
+    const [headerImg, timelineImg] = await Promise.all([
+      loadImageFromBlob(headerBlob),
+      loadImageFromBlob(timelineBlob),
+    ])
+    return await stitchImagesVertical(headerImg, timelineImg)
+  } catch {
+    return timelineBlob
+  }
+}
+
 async function captureScreenshotBlob() {
   const root = panelEl.value
   const { captureW, captureH } = getCaptureSize()
   if (!captureW || !captureH) return null
+
+  await prepareCanvasForCapture()
+
+  const composite = await captureCompositeScreenshotBlob(captureW, captureH)
+  if (composite) return composite
 
   if (root) {
     try {
@@ -1016,11 +1157,7 @@ async function captureScreenshotBlob() {
         pixelRatio: window.devicePixelRatio || 1,
         width: captureW,
         height: captureH,
-        filter: (node) => {
-          if (!(node instanceof HTMLElement)) return true
-          // Exclude transient overlays from capture output.
-          return !node.classList.contains('context-menu') && !node.classList.contains('sti-tooltip')
-        },
+        filter: captureDomFilter,
       })
       if (blob) return blob
     } catch {
@@ -1069,31 +1206,27 @@ async function captureCanvasViewportBlob(captureW, captureH) {
   const wrap = canvasWrapEl.value
   if (!base || !overlay || !wrap) return null
 
-  const dpr = _interacting ? 1 : (window.devicePixelRatio || 1)
   const w = Math.min(captureW, wrap.clientWidth)
   const h = Math.min(captureH, wrap.clientHeight)
   if (w <= 0 || h <= 0) return null
 
   const out = document.createElement('canvas')
-  out.width = Math.round(w * dpr)
-  out.height = Math.round(h * dpr)
+  out.width = w
+  out.height = h
   const outCtx = out.getContext('2d')
   if (!outCtx) return null
-  outCtx.setTransform(dpr, 0, 0, dpr, 0, 0)
 
   const panelStyle = getComputedStyle(panelEl.value || wrap)
   const bg = panelStyle.getPropertyValue('--bg').trim() || (props.options.darkMode ? '#1E1E1E' : '#FFFFFF')
   outCtx.fillStyle = bg
   outCtx.fillRect(0, 0, w, h)
 
-  const srcW = Math.round(w * dpr)
-  const srcH = Math.round(h * dpr)
   const pixiCanvas = pixiTimelineHost.app?.canvas
   if (pixiCanvas && useWebGLRenderer()) {
-    outCtx.drawImage(pixiCanvas, 0, 0, srcW, srcH, 0, 0, w, h)
+    outCtx.drawImage(pixiCanvas, 0, 0, pixiCanvas.width, pixiCanvas.height, 0, 0, w, h)
   }
-  outCtx.drawImage(base, 0, 0, srcW, srcH, 0, 0, w, h)
-  outCtx.drawImage(overlay, 0, 0, srcW, srcH, 0, 0, w, h)
+  outCtx.drawImage(base, 0, 0, base.width, base.height, 0, 0, w, h)
+  outCtx.drawImage(overlay, 0, 0, overlay.width, overlay.height, 0, 0, w, h)
 
   return await new Promise((resolve) => out.toBlob(resolve, 'image/png'))
 }
@@ -2014,26 +2147,27 @@ function _overviewIndicatorRect() {
   const span = traceBounds.value.hi - lo
   if (span <= 0) return null
   const pxPerNs = W / span
-  const mainAreaH = _ovBgMainAreaH > 0 ? _ovBgMainAreaH : canvas.height
+  // Full thumbnail height (tasks + STI); indicator scrolls over entire minimap.
+  const stripH = canvas.height
 
   if (orientation.value === 'h') {
     const vx = Math.max(0, (viewport.timeStart - lo) * pxPerNs)
     const vw = Math.min(W - vx, (viewport.timeEnd - viewport.timeStart) * pxPerNs)
     const totH = totalRowHeight.value
     const visH = viewport.canvasH - RULER_H
-    const { pos: vy, size: vh } = overviewStripRect(totH, visH, viewport.scrollY, mainAreaH)
-    return { x: vx, y: vy, w: Math.max(2, vw), h: vh, W, mainAreaH, lo, span }
+    const { pos: vy, size: vh } = overviewStripRect(totH, visH, viewport.scrollY, stripH)
+    return { x: vx, y: vy, w: Math.max(2, vw), h: vh, W, stripH, lo, span }
   }
   const vx = Math.max(0, (viewport.timeStart - lo) * pxPerNs)
   const vw = Math.min(W - vx, (viewport.timeEnd - viewport.timeStart) * pxPerNs)
   const totW = totalColumnWidth.value
   const visW = viewport.canvasW
-  const { pos: vy, size: vh } = overviewStripRect(totW, visW, viewport.scrollX || 0, mainAreaH)
-  return { x: vx, y: vy, w: Math.max(2, vw), h: vh, W, mainAreaH, lo, span }
+  const { pos: vy, size: vh } = overviewStripRect(totW, visW, viewport.scrollX || 0, stripH)
+  return { x: vx, y: vy, w: Math.max(2, vw), h: vh, W, stripH, lo, span }
 }
 
 function _overviewApplyIndicatorPos(vx, vy, ind) {
-  const { W, mainAreaH, lo, span } = ind
+  const { W, stripH, lo, span } = ind
   const scrollableW = Math.max(W - ind.w, 1)
   const ratioX = vx / scrollableW
   const visSpan = viewport.timeEnd - viewport.timeStart
@@ -2041,7 +2175,7 @@ function _overviewApplyIndicatorPos(vx, vy, ind) {
   viewport.timeStart = newStart
   viewport.timeEnd = newStart + visSpan
 
-  const scrollableH = Math.max(mainAreaH - ind.h, 1)
+  const scrollableH = Math.max(stripH - ind.h, 1)
   const ratioY = vy / scrollableH
   if (orientation.value === 'h') {
     const visH = viewport.canvasH - RULER_H
@@ -2060,8 +2194,7 @@ function _overviewJumpTo(cx, cy) {
   const W = canvas.width
   const { lo, span } = traceBounds.value
   const ratioX = Math.max(0, Math.min(1, cx / W))
-  const mainAreaH = _ovBgMainAreaH > 0 ? _ovBgMainAreaH : canvas.height
-  const ratioY = Math.max(0, Math.min(1, cy / mainAreaH))
+  const ratioY = Math.max(0, Math.min(1, cy / canvas.height))
 
   if (orientation.value === 'h') {
     const visSpan = viewport.timeEnd - viewport.timeStart
@@ -2117,7 +2250,7 @@ function _ovMouseMove(e) {
   const cy = e.clientY - rect.top
   const { ind, grabX, grabY } = _ovDrag
   const vx = Math.max(0, Math.min(ind.W - ind.w, cx - grabX))
-  const vy = Math.max(0, Math.min(ind.mainAreaH - ind.h, cy - grabY))
+  const vy = Math.max(0, Math.min(ind.stripH - ind.h, cy - grabY))
   _overviewApplyIndicatorPos(vx, vy, ind)
   scheduleOverviewPaint()
 }
@@ -2204,14 +2337,14 @@ function paintOverview() {
   ctx.fillStyle   = dark ? 'rgba(255,160,60,0.18)' : 'rgba(200,70,10,0.12)'
   ctx.lineWidth   = 1.5
 
-  const mainAreaH = _ovBgMainAreaH > 0 ? _ovBgMainAreaH : H
+  const stripH = H
 
   if (orientation.value === 'h') {
     const vx = Math.max(0, (viewport.timeStart - lo) * pxPerNs)
     const vw = Math.min(W - vx, (viewport.timeEnd - viewport.timeStart) * pxPerNs)
     const totH = totalRowHeight.value
     const visH = viewport.canvasH - RULER_H
-    const { pos: vy, size: vh } = overviewStripRect(totH, visH, viewport.scrollY, mainAreaH)
+    const { pos: vy, size: vh } = overviewStripRect(totH, visH, viewport.scrollY, stripH)
     ctx.beginPath()
     ctx.rect(vx, vy, Math.max(2, vw), vh)
     ctx.fill()
@@ -2221,7 +2354,7 @@ function paintOverview() {
     const vw = Math.min(W - vx, (viewport.timeEnd - viewport.timeStart) * pxPerNs)
     const totW = totalColumnWidth.value
     const visW = viewport.canvasW
-    const { pos: vy, size: vh } = overviewStripRect(totW, visW, viewport.scrollX || 0, mainAreaH)
+    const { pos: vy, size: vh } = overviewStripRect(totW, visW, viewport.scrollX || 0, stripH)
     ctx.beginPath()
     ctx.rect(vx, vy, Math.max(2, vw), vh)
     ctx.fill()

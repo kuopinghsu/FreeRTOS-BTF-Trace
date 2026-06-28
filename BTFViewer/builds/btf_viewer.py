@@ -283,6 +283,38 @@ def _stats_table_viewport_height(visible_rows: int = STATS_MAX_VISIBLE_ROWS,
 
 STATS_TABLE_DEFAULT_H    = _stats_table_viewport_height()
 STATS_TABLE_MIG_DEFAULT_H = _stats_table_viewport_height(reserve_h_scroll=True)
+
+def default_section_collapsed() -> Dict[str, bool]:
+    """Default collapsed flags for statistics panel sections (shared with MVVM)."""
+    return {
+        "cores": False,
+        "tasks": False,
+        "migrations": False,
+        "exec": False,
+        "block": False,
+        "inter": False,
+        "health": False,
+        "preemption": False,
+        "priority": False,
+        "sync": False,
+        "intervals": False,
+    }
+
+def default_section_table_heights() -> Dict[str, int]:
+    """Default max heights for collapsible statistics tables (shared with MVVM)."""
+    return {
+        "migrations": STATS_TABLE_MIG_DEFAULT_H,
+        "exec": STATS_TABLE_DEFAULT_H,
+        "block": STATS_TABLE_DEFAULT_H,
+        "inter": STATS_TABLE_DEFAULT_H,
+        "preemption": STATS_TABLE_MIG_DEFAULT_H,
+        "priority": STATS_TABLE_DEFAULT_H,
+        "intervals": STATS_TABLE_DEFAULT_H,
+        "sync": STATS_TABLE_DEFAULT_H,
+        "sync_issues": STATS_TABLE_MIG_DEFAULT_H,
+        "health": STATS_TABLE_DEFAULT_H,
+    }
+
 STATS_UTIL_DEFAULT_H     = ( STATS_MAX_VISIBLE_ROWS * STATS_UTIL_ROW_H
                              + max(0, STATS_MAX_VISIBLE_ROWS - 1) * STATS_UTIL_ROW_GAP + 2 )
 STI_WAVEFORM_H           =  80  # Height of an expanded STI waveform row (px).
@@ -504,6 +536,17 @@ def _svg_icon(path_data: str, color: str = "#9E9E9E", size: int = 16) -> "QIcon"
     pm.loadFromData(ba, "SVG")
     return QIcon(pm)
 
+
+def _svg_icon_checked(path_data: str, off: str = "#b0b0cc", on: str = "#e3f2fd",
+                      size: int = 16) -> "QIcon":
+    """Checkable toolbar icon (normal + checked tints)."""
+    icon = QIcon()
+    icon.addPixmap(_svg_icon(path_data, off, size).pixmap(QSize(size, size)),
+                   QIcon.Mode.Normal, QIcon.State.Off)
+    icon.addPixmap(_svg_icon(path_data, on, size).pixmap(QSize(size, size)),
+                   QIcon.Mode.Normal, QIcon.State.On)
+    return icon
+
 def _svg_pixmap(path_data: str, color: str = "#9E9E9E", size: int = 16) -> QPixmap:
     """Rasterise an SVG path to a pixmap (for QLabel icons)."""
     return _svg_icon(path_data, color, size).pixmap(QSize(size, size))
@@ -555,6 +598,32 @@ _IC_FIT    = "M1.5 1h5v1h-4v4h-1V1.5a.5.5 0 0 1 .5-.5zm13 0a.5.5 0 0 1 .5.5V6h-1
 _IC_CURSOR = "M1 1l5 12 2-4 4 4 1-1-4-4 4-2L1 1z"
 _IC_MARK   = "M3 2a1 1 0 0 1 1-1h8a1 1 0 0 1 1 1v12.5a.5.5 0 0 1-.777.416L8 12.101l-4.223 2.815A.5.5 0 0 1 3 14.5V2z"
 _IC_CLEAR  = "M2 2.5l.5-.5 5.5 5.5 5.5-5.5.5.5L8.5 8 14 13.5l-.5.5L8 8.5 2.5 14l-.5-.5L7.5 8 2 2.5z"
+# Snapshot editor annotation tools (Bootstrap Icons paths — same style as main toolbar)
+_IC_SNAP_ARROW = (
+    "M14 0.5a.5.5 0 0 0-.5-.5h-6a.5.5 0 0 0 0 1h4.793L2.146 13.146a.5.5 0 0 0 .708.708L13 2.707V7.5a.5.5 0 0 0 1 0v-7z"
+)
+_IC_SNAP_DBLARROW = (
+    "M3.854 4.146a.5.5 0 0 1 0 .708L1.707 7H14.5a.5.5 0 0 1 0 1H1.707l2.147 2.146a.5.5 0 0 1-.708.708l-3-3a.5.5 0 0 1 0-.708l3-3a.5.5 0 0 1 .708 0zm8.292 0a.5.5 0 0 0 0 .708L14.293 7H1.5a.5.5 0 0 0 0 1h12.793l-2.147 2.146a.5.5 0 0 0 .708.708l3-3a.5.5 0 0 0 0-.708l-3-3a.5.5 0 0 0-.708 0z"
+)
+_IC_SNAP_LINE = "M13.854 2.146a.5.5 0 0 1 0 .708l-11 11a.5.5 0 0 1-.708-.708l11-11a.5.5 0 0 1 .708 0z"
+_IC_SNAP_RECT = (
+    "M14 1a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1h12z"
+    "M2 0a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V2a2 2 0 0 0-2-2H2z"
+)
+_IC_SNAP_CIRCLE = "M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z"
+_IC_SNAP_TEXT = "M3 2h10v1.5H9.25V13h-2.5V3.5H3V2z"
+_IC_SNAP_UNDO = (
+    "M8 3a5 5 0 1 0 4.546 2.914.5.5 0 0 1 .908-.417A6 6 0 1 1 8 2v1z"
+    "M8 4.466V.534a.25.25 0 0 1 .41-.192l2.36 1.966c.12.1.12.284 0 .384L8.41 4.658A.25.25 0 0 1 8 4.466z"
+)
+_SNAP_TOOL_ICONS = {
+    'arrow':    _IC_SNAP_ARROW,
+    'dblarrow': _IC_SNAP_DBLARROW,
+    'line':     _IC_SNAP_LINE,
+    'rect':     _IC_SNAP_RECT,
+    'circle':   _IC_SNAP_CIRCLE,
+    'text':     _IC_SNAP_TEXT,
+}
 _IC_LEGEND = "M1 2a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V2zm5-1h8v1H6V1zm0 3h8v1H6V4zm-5 3a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V7zm5-1h8v1H6V6zm0 3h8v1H6V9zm-5 3a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1v-2zm5-1h8v1H6v-1zm0 3h8v1H6v-1z"
 _IC_TASK   = "M1 2.5A1.5 1.5 0 0 1 2.5 1h11A1.5 1.5 0 0 1 15 2.5v11a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 13.5v-11zM4 5.5h8v1H4v-1zm0 3h8v1H4v-1zm0 3h5v1H4v-1z"
 _IC_CORE   = "M5 1v2H3a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2v2h1v-2h4v2h1v-2h2a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2h-2V1h-1v2H6V1H5zm-2 4h10v6H3V5zm2 1v4h6V6H5z"
@@ -12442,22 +12511,57 @@ class TimelineView(QGraphicsView):
             p.end()
         return pix
 
+    @staticmethod
+    def _nav_strip_rect(
+        total_main: float, visible_main: float, scroll_pos: float, strip_area_h: float,
+    ) -> Tuple[float, float]:
+        """Map main-view orth scroll to overview strip position/size (web parity)."""
+        area_h = max(1.0, strip_area_h)
+        if total_main <= visible_main or total_main <= 0:
+            return 0.0, area_h
+        size = max(2.0, (visible_main / total_main) * area_h)
+        max_pos = max(0.0, area_h - size)
+        pos = (scroll_pos / (total_main - visible_main)) * max_pos
+        return pos, size
+
+    def _nav_orth_scroll_state(self) -> Tuple[float, float, float]:
+        """Return (scroll_pos, total_main, visible_main) for the orth axis (tasks + STI)."""
+        sc = self._scene
+        vp_rect = self.viewport().rect()
+        scene_rect = sc.sceneRect()
+        if sc._horizontal:
+            orth_scene = self.mapToScene(QPoint(0, RULER_HEIGHT)).y()
+            scroll_pos = max(0.0, orth_scene - RULER_HEIGHT)
+            total_main = max(1.0, float(scene_rect.height()) - RULER_HEIGHT)
+            visible_main = max(1.0, float(vp_rect.height()) - RULER_HEIGHT)
+        else:
+            orth_scene = self.mapToScene(QPoint(RULER_WIDTH, 0)).x()
+            scroll_pos = max(0.0, orth_scene - RULER_WIDTH)
+            total_main = max(1.0, float(scene_rect.width()) - RULER_WIDTH)
+            visible_main = max(1.0, float(vp_rect.width()) - RULER_WIDTH)
+        return scroll_pos, total_main, visible_main
+
+    def _set_nav_orth_scroll_pos(self, target: float) -> None:
+        """Scroll the orth axis to *target* (px below ruler / right of ruler column)."""
+        current, _, _ = self._nav_orth_scroll_state()
+        delta = int(round(target - current))
+        if delta != 0:
+            self._scroll_orth_axis_by(-delta)
+
     def _nav_popup_metrics(self) -> dict:
         """Return navigator minimap geometry for painting and interaction."""
         W = float(_NavigatorPopup.W)
         H = float(_NavigatorPopup.H)
         sc = self._scene
         tr = sc._trace
-        vbar = self.verticalScrollBar() if sc._horizontal else self.horizontalScrollBar()
-        v_range = vbar.maximum() - vbar.minimum()
-        v_total = v_range + vbar.pageStep()
-        content_h = max(1.0, float(v_total) - RULER_HEIGHT)
+        # Full minimap height (task strip + STI); indicator moves over entire thumbnail.
+        strip_h = H
 
         if tr is None:
             return {
-                'W': W, 'H': H, 'time_span': 1, 'vis_span_ns': 1,
-                'vx1': 0.0, 'vy1': 0.0, 'vw': W, 'vh': H,
-                'vbar': vbar, 'v_range': v_range, 'content_h': content_h,
+                'W': W, 'H': H, 'strip_h': strip_h, 'time_span': 1, 'vis_span_ns': 1,
+                'vx1': 0.0, 'vy1': 0.0, 'vw': W, 'vh': strip_h,
+                'scroll_pos': 0.0, 'total_main': 1.0, 'visible_main': 1.0,
             }
 
         time_span = max(tr.time_max - tr.time_min, 1)
@@ -12484,24 +12588,23 @@ class TimelineView(QGraphicsView):
         vx1 = (act_ns_lo - tr.time_min) / time_span * W
         vx2 = (act_ns_hi - tr.time_min) / time_span * W
 
-        if content_h > 0 and v_range > 0:
-            scroll_val = max(0.0, float(vbar.value() - vbar.minimum()) - RULER_HEIGHT)
-            vy1 = scroll_val / content_h * H
-            vy_h = max(1.5, vbar.pageStep() / content_h * H)
-        else:
-            vy1, vy_h = 0.0, float(H)
+        scroll_pos, total_main, visible_main = self._nav_orth_scroll_state()
+        vy1, vy_h = self._nav_strip_rect(
+            total_main, visible_main, scroll_pos, strip_h)
 
         vx1 = max(0.0, min(W, vx1))
         vx2 = max(0.0, min(W, vx2))
-        vy1 = max(0.0, min(H, vy1))
-        vy_h = min(H - vy1, vy_h)
+        vy1 = max(0.0, min(strip_h, vy1))
+        vy_h = min(strip_h - vy1, vy_h)
         vw = max(1.5, vx2 - vx1)
         vh = max(1.5, vy_h)
 
         return {
-            'W': W, 'H': H, 'time_span': time_span, 'vis_span_ns': vis_span_ns,
+            'W': W, 'H': H, 'strip_h': strip_h, 'time_span': time_span,
+            'vis_span_ns': vis_span_ns,
             'vx1': vx1, 'vy1': vy1, 'vw': vw, 'vh': vh,
-            'vbar': vbar, 'v_range': v_range, 'content_h': content_h,
+            'scroll_pos': scroll_pos, 'total_main': total_main,
+            'visible_main': visible_main,
         }
 
     def _nav_popup_apply_from_indicator_pos(self, vx1: float, vy1: float) -> None:
@@ -12511,10 +12614,11 @@ class TimelineView(QGraphicsView):
         if tr is None:
             return
         m = self._nav_popup_metrics()
-        W, H = m['W'], m['H']
+        W = m['W']
         vw, vh = m['vw'], m['vh']
+        strip_h = m['strip_h']
         vx1 = max(0.0, min(W - vw, vx1))
-        vy1 = max(0.0, min(H - vh, vy1))
+        vy1 = max(0.0, min(strip_h - vh, vy1))
 
         scrollable_w = max(W - vw, 1.0)
         ratio_x = vx1 / scrollable_w
@@ -12522,13 +12626,10 @@ class TimelineView(QGraphicsView):
         target_center_ns = target_lo_ns + m['vis_span_ns'] // 2
         self._navigate_time_to_ns(target_center_ns)
 
-        vbar = m['vbar']
-        if m['content_h'] > 0 and m['v_range'] > 0:
-            scrollable_h = max(H - vh, 1.0)
-            ratio_y = vy1 / scrollable_h
-            scroll_val = ratio_y * m['content_h'] + RULER_HEIGHT + vbar.minimum()
-            scroll_val = max(float(vbar.minimum()), min(float(vbar.maximum()), scroll_val))
-            vbar.setValue(int(scroll_val))
+        scrollable_h = max(strip_h - vh, 1.0)
+        ratio_y = vy1 / scrollable_h
+        target_scroll = ratio_y * max(0.0, m['total_main'] - m['visible_main'])
+        self._set_nav_orth_scroll_pos(target_scroll)
 
         self._refresh_nav_pan_window(force_show=True)
 
@@ -12539,19 +12640,17 @@ class TimelineView(QGraphicsView):
         if tr is None:
             return
         m = self._nav_popup_metrics()
-        W, H = m['W'], m['H']
+        W = m['W']
+        strip_h = m['strip_h']
         ratio_x = max(0.0, min(1.0, cx / max(W, 1.0)))
-        ratio_y = max(0.0, min(1.0, cy / max(H, 1.0)))
+        ratio_y = max(0.0, min(1.0, cy / max(strip_h, 1.0)))
 
         target_lo_ns = tr.time_min + int(ratio_x * max(0, m['time_span'] - m['vis_span_ns']))
         target_center_ns = target_lo_ns + m['vis_span_ns'] // 2
         self._navigate_time_to_ns(target_center_ns)
 
-        vbar = m['vbar']
-        if m['content_h'] > 0 and m['v_range'] > 0:
-            scroll_val = ratio_y * m['content_h'] + RULER_HEIGHT + vbar.minimum()
-            scroll_val = max(float(vbar.minimum()), min(float(vbar.maximum()), scroll_val))
-            vbar.setValue(int(scroll_val))
+        target_scroll = ratio_y * max(0.0, m['total_main'] - m['visible_main'])
+        self._set_nav_orth_scroll_pos(target_scroll)
 
         self._refresh_nav_pan_window(force_show=True)
 
@@ -16009,34 +16108,11 @@ class _StatsPanel(QWidget):
         self._export_scope_override: Optional[Tuple[int, int]] = None
         self._cursor_times: List[int] = []
         self._scope_to_cursors: bool = True
-        self._section_collapsed: Dict[str, bool] = {
-            "cores": False,
-            "tasks": False,
-            "migrations": False,
-            "exec": False,
-            "block": False,
-            "inter": False,
-            "health": False,
-            "preemption": False,
-            "priority": False,
-            "sync": False,
-            "intervals": False,
-        }
+        self._section_collapsed: Dict[str, bool] = default_section_collapsed()
         self._section_headers: Dict[str, QPushButton] = {}
         self._section_bodies: Dict[str, QWidget] = {}
         self._section_populate: Dict[str, object] = {}
-        self._section_table_heights: Dict[str, int] = {
-            "migrations": STATS_TABLE_MIG_DEFAULT_H,
-            "exec": STATS_TABLE_DEFAULT_H,
-            "block": STATS_TABLE_DEFAULT_H,
-            "inter": STATS_TABLE_DEFAULT_H,
-            "preemption": STATS_TABLE_MIG_DEFAULT_H,
-            "priority": STATS_TABLE_DEFAULT_H,
-            "intervals": STATS_TABLE_DEFAULT_H,
-            "sync": STATS_TABLE_DEFAULT_H,
-            "sync_issues": STATS_TABLE_MIG_DEFAULT_H,
-            "health": STATS_TABLE_DEFAULT_H,
-        }
+        self._section_table_heights: Dict[str, int] = default_section_table_heights()
         self._table_grips: List[_StatsSectionGrip] = []
         self._util_label_col_natural: int = STATS_UTIL_LABEL_W
         self._util_label_col_w: int = STATS_UTIL_LABEL_W
@@ -16199,6 +16275,35 @@ class _StatsPanel(QWidget):
 
     def section_table_heights(self) -> Dict[str, int]:
         return dict(self._section_table_heights)
+
+    def capture_layout_state(self) -> dict:
+        """Return statistics panel layout/scope state for the MVVM layer."""
+        return {
+            "cursor_times": list(self._cursor_times),
+            "scope_to_cursors": bool(self._scope_to_cursors),
+            "export_scope_override": self._export_scope_override,
+            "section_collapsed": dict(self._section_collapsed),
+            "section_table_heights": dict(self._section_table_heights),
+            "util_label_col_w": int(self._util_label_col_w),
+        }
+
+    def apply_layout_state(
+        self, model, *, refresh_stats: bool = True,
+    ) -> None:
+        """Restore statistics panel layout/scope state from the MVVM layer."""
+        self._section_table_heights.update(model.section_table_heights)
+        self._util_label_col_w = model.util_label_col_w
+        self._export_scope_override = model.export_scope_override
+        self._scope_to_cursors = model.scope_to_cursors
+        if hasattr(self, "_scope_cb"):
+            self._scope_cb.blockSignals(True)
+            self._scope_cb.setChecked(model.scope_to_cursors)
+            self._scope_cb.blockSignals(False)
+        for section_id, collapsed in model.section_collapsed.items():
+            if section_id in self._section_headers:
+                self._set_section_collapsed(section_id, collapsed)
+        self.set_cursor_times(model.cursor_times, refresh_stats=refresh_stats)
+        self.apply_section_table_heights(model.section_table_heights)
 
     def _apply_table_display_height(self, table: QTableWidget, h: int) -> int:
         """Set an explicit pixel height so drag-resize is visible (scroll inside table)."""
@@ -16856,10 +16961,13 @@ class _StatsPanel(QWidget):
         """Open a tick-interval distribution scatter+histogram plot."""
         self._open_plot(trace, "__tick_dist__", "tick")
 
-    def capture_plot_session(self) -> Tuple[Optional[str], Optional[str], bool, Optional[str]]:
-        """Return (mk, kind, visible, preemptor) for the current metrics plot dialog."""
+    def capture_plot_session(
+        self,
+    ) -> Tuple[Optional[str], Optional[str], bool, Optional[str], Optional[str]]:
+        """Return (mk, kind, visible, preemptor, interval_id) for the metrics plot dialog."""
         open_ = self._plot_dlg is not None and self._plot_dlg.isVisible()
-        return self._plot_mk, self._plot_kind, open_, self._plot_preemptor
+        return (self._plot_mk, self._plot_kind, open_, self._plot_preemptor,
+                self._plot_interval_id)
 
     def clear_plot_session(self) -> None:
         """Close the metrics plot and clear tracking (used on tab switch)."""
@@ -16878,7 +16986,8 @@ class _StatsPanel(QWidget):
     def restore_plot_session(self, trace: Optional["BtfTrace"],
                              mk: Optional[str], kind: Optional[str],
                              open_: bool,
-                             preemptor: Optional[str] = None) -> None:
+                             preemptor: Optional[str] = None,
+                             interval_id: Optional[str] = None) -> None:
         """Re-open the metrics plot saved for a trace tab, if it was visible."""
         self.clear_plot_session()
         if not open_ or not kind or trace is None:
@@ -16888,6 +16997,10 @@ class _StatsPanel(QWidget):
             return
         if kind == "tag" and mk:
             self._open_tag_plot(trace, mk)
+            return
+        if kind == "interval" and mk:
+            iid = interval_id or mk
+            self._open_interval_plot(trace, iid)
             return
         if not mk:
             return
@@ -20221,6 +20334,16 @@ class _AnnotationCanvas(QWidget):
         ed._begin_edit_shape_text(idx)
         self.update()
 
+def _widget_available_geometry(widget: QWidget) -> QRect:
+    """Qt6-safe available screen geometry (QApplication.desktop() was removed)."""
+    win = widget.window() if widget is not None else None
+    screen = win.screen() if win is not None else None
+    if screen is None:
+        screen = QApplication.primaryScreen()
+    if screen is not None:
+        return screen.availableGeometry()
+    return QRect(0, 0, 1920, 1080)
+
 class SnapshotEditorDialog(QDialog):
     """Annotation editor dialog opened when the user captures a viewport snapshot.
 
@@ -20240,41 +20363,6 @@ class SnapshotEditorDialog(QDialog):
         'circle': 'Circle / Ellipse  (Shift: circle)',
         'text':   'Add Text (click to place)',
     }
-    # SVG icon data for each tool (mirrors the web app icons)
-    _TOOL_ICONS = {
-        'arrow':  b'<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 14L13 3M13 3H7M13 3V9"/></svg>',
-        'dblarrow': b'<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h8M4 8l2.5-2.5M4 8l2.5 2.5M12 8l-2.5-2.5M12 8l-2.5 2.5"/></svg>',
-        'line':  b'<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><line x1="2" y1="14" x2="14" y2="2"/></svg>',
-        'rect':  b'<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2" y="3" width="12" height="9" rx="1"/></svg>',
-        'circle':b'<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><ellipse cx="8" cy="8" rx="6" ry="5"/></svg>',
-        'text':  b'<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 4h10M8 4v9M5 13h6"/></svg>',
-    }
-
-    @staticmethod
-    def _make_svg_icon(svg_bytes: bytes, color: str = '#b0b0cc', size: int = 16) -> 'QIcon':
-        """Render SVG bytes (with `currentColor`) to a QIcon pair (normal + checked)."""
-        from PySide6.QtSvg import QSvgRenderer
-        from PySide6.QtGui import QIcon, QPixmap
-        from PySide6.QtCore import Qt
-
-        def _render(stroke: str) -> QPixmap:
-            data = svg_bytes.replace(b'currentColor', stroke.encode())
-            renderer = QSvgRenderer(data)
-            pm = QPixmap(size, size)
-            pm.fill(Qt.GlobalColor.transparent)
-            from PySide6.QtGui import QPainter
-            p = QPainter(pm)
-            try:
-                renderer.render(p)
-            finally:
-                p.end()
-            return pm
-
-        icon = QIcon()
-        icon.addPixmap(_render(color),   QIcon.Normal,  QIcon.Off)
-        icon.addPixmap(_render('#e3f2fd'), QIcon.Normal, QIcon.On)
-        return icon
-
     def __init__(self, pixmap: QPixmap, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         # Normalize DPR so draw/edit/export all use one pixel coordinate space.
@@ -20304,7 +20392,7 @@ class SnapshotEditorDialog(QDialog):
         self._text_edit_img_y: float = 0.0
 
         # Compute display scale so the canvas fits the available screen area
-        screen = QApplication.desktop().availableGeometry(self)
+        screen = _widget_available_geometry(parent or self)
         max_w = screen.width() - 120
         max_h = screen.height() - 220
         iw, ih = pixmap.width(), pixmap.height()
@@ -20343,7 +20431,7 @@ class SnapshotEditorDialog(QDialog):
         _ICON_H = 28          # uniform height for every toolbar widget
         for tid in self._TOOLS:
             btn = QPushButton()
-            btn.setIcon(self._make_svg_icon(self._TOOL_ICONS[tid]))
+            btn.setIcon(_svg_icon_checked(_SNAP_TOOL_ICONS[tid]))
             btn.setIconSize(QSize(16, 16))
             btn.setCheckable(True)
             btn.setChecked(tid == self._tool)
@@ -20391,6 +20479,23 @@ class SnapshotEditorDialog(QDialog):
         self._font_spin.setToolTip("Text font size")
         self._font_spin.valueChanged.connect(lambda v: setattr(self, '_font_size', v))
         tb.addWidget(self._font_spin)
+        tb.addSpacing(8)
+        undo_btn = QPushButton()
+        undo_btn.setIcon(_svg_icon(_IC_SNAP_UNDO, '#b0b0cc'))
+        undo_btn.setIconSize(QSize(16, 16))
+        undo_btn.setFixedSize(_ICON_H, _ICON_H)
+        undo_btn.setToolTip("Undo (Ctrl+Z)")
+        undo_btn.clicked.connect(self._undo)
+        tb.addWidget(undo_btn)
+
+        clear_btn = QPushButton()
+        clear_btn.setIcon(_svg_icon(_IC_CLEAR, '#b0b0cc'))
+        clear_btn.setIconSize(QSize(16, 16))
+        clear_btn.setFixedSize(_ICON_H, _ICON_H)
+        clear_btn.setToolTip("Clear all annotations")
+        clear_btn.clicked.connect(self._clear_all)
+        tb.addWidget(clear_btn)
+
         tb.addStretch()
         main.addLayout(tb)
 
@@ -20412,8 +20517,10 @@ class SnapshotEditorDialog(QDialog):
         bot = QHBoxLayout()
         bot.setSpacing(6)
         copy_btn = QPushButton("Copy to Clipboard")
+        copy_btn.setIcon(_svg_icon(_IC_COPY, '#b0b0cc'))
         copy_btn.clicked.connect(self._on_copy)
         save_btn = QPushButton("Save PNG...")
+        save_btn.setIcon(_svg_icon(_IC_SAVE, '#b0b0cc'))
         save_btn.clicked.connect(self._on_save)
         close_btn = QPushButton("Close")
         close_btn.clicked.connect(self.close)
@@ -20688,6 +20795,13 @@ class SnapshotEditorDialog(QDialog):
             if self._selected_idx >= len(self._shapes):
                 self._selected_idx = -1
             self._canvas.update()
+
+    def _clear_all(self) -> None:
+        if self._text_edit_active():
+            self._cancel_text_edit()
+        self._shapes.clear()
+        self._selected_idx = -1
+        self._canvas.update()
 
     # ------------------------------------------------------------------
     # Hit-testing and shape movement
@@ -21189,6 +21303,13 @@ class ViewModelBase(QObject):
 # ===========================================================================
 
 @dataclass
+class TabViewportModel:
+    fit_mode: bool = True
+    zoom_tpp: float = -1.0
+    cursors: List[int] = field(default_factory=list)
+    filters: Dict[str, object] = field(default_factory=dict)
+
+@dataclass
 class PlotSessionState:
     mk: Optional[str] = None
     kind: Optional[str] = None
@@ -21215,10 +21336,13 @@ class TraceTabModel:
     find_hits: List[int] = field(default_factory=list)
     find_hit_idx: int = -1
     find_marker_ns: Optional[int] = None
+    find_query: str = ""
+    find_mode: str = "Contains"
     undo_stack: list = field(default_factory=list)
     redo_stack: list = field(default_factory=list)
     plot: PlotSessionState = field(default_factory=PlotSessionState)
     stats: StatsTabModel = field(default_factory=StatsTabModel)
+    viewport: TabViewportModel = field(default_factory=TabViewportModel)
 
 @dataclass
 class AppSettingsModel:
@@ -21556,40 +21680,17 @@ class AppSettingsViewModel(ViewModelBase):
         m.horizontal = rc.get_bool("view", "horizontal", True)
         m.view_mode = rc.get("view", "view_mode", "task")
         m.colorblind = rc.get_bool("view", "colorblind_safe", False)
+        m.show_sti = rc.get_bool("view", "show_sti", True)
+        m.show_grid = rc.get_bool("view", "show_grid", True)
+        m.show_legend = rc.get_bool("view", "show_legend", True)
+        m.show_stats = rc.get_bool("view", "show_stats", True)
+        m.show_marks = rc.get_bool("view", "show_marks", True)
+        m.show_find = rc.get_bool("view", "show_find", True)
         self.settings_changed.emit()
         self.changed.emit()
 # ===========================================================================
 # mvvm/stats_vm
 # ===========================================================================
-
-def _default_section_collapsed() -> Dict[str, bool]:
-    return {
-        "cores": False,
-        "tasks": False,
-        "migrations": False,
-        "exec": False,
-        "block": False,
-        "inter": False,
-        "health": False,
-        "preemption": False,
-        "priority": False,
-        "sync": False,
-        "intervals": False,
-    }
-
-def _default_section_table_heights() -> Dict[str, int]:
-    return {
-        "migrations": STATS_TABLE_MIG_DEFAULT_H,
-        "exec": STATS_TABLE_DEFAULT_H,
-        "block": STATS_TABLE_DEFAULT_H,
-        "inter": STATS_TABLE_DEFAULT_H,
-        "preemption": STATS_TABLE_MIG_DEFAULT_H,
-        "priority": STATS_TABLE_DEFAULT_H,
-        "intervals": STATS_TABLE_DEFAULT_H,
-        "sync": STATS_TABLE_DEFAULT_H,
-        "sync_issues": STATS_TABLE_MIG_DEFAULT_H,
-        "health": STATS_TABLE_DEFAULT_H,
-    }
 
 class StatsViewModel(ViewModelBase):
     """ViewModel for statistics panel scope and layout state."""
@@ -21599,8 +21700,8 @@ class StatsViewModel(ViewModelBase):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._model = StatsTabModel(
-            section_collapsed=_default_section_collapsed(),
-            section_table_heights=_default_section_table_heights(),
+            section_collapsed=default_section_collapsed(),
+            section_table_heights=default_section_table_heights(),
             util_label_col_w=STATS_UTIL_LABEL_W,
         )
 
@@ -21657,31 +21758,184 @@ class StatsViewModel(ViewModelBase):
 
     def copy_from_panel(self, panel: "_StatsPanel") -> None:
         """Snapshot live panel state into this view-model."""
-        m = self._model
-        m.cursor_times = list(panel._cursor_times)
-        m.scope_to_cursors = bool(panel._scope_to_cursors)
-        m.export_scope_override = panel._export_scope_override
-        m.section_collapsed = dict(panel._section_collapsed)
-        m.section_table_heights = dict(panel._section_table_heights)
-        m.util_label_col_w = int(panel._util_label_col_w)
+        self._model = StatsTabModel(**panel.capture_layout_state())
         self.changed.emit()
 
     def apply_to_panel(self, panel: "_StatsPanel", *, refresh_stats: bool = True) -> None:
         """Push view-model state into the statistics panel widget."""
-        m = self._model
-        panel._section_table_heights.update(m.section_table_heights)
-        panel._util_label_col_w = m.util_label_col_w
-        panel._export_scope_override = m.export_scope_override
-        panel._scope_to_cursors = m.scope_to_cursors
-        if hasattr(panel, "_scope_cb"):
-            panel._scope_cb.blockSignals(True)
-            panel._scope_cb.setChecked(m.scope_to_cursors)
-            panel._scope_cb.blockSignals(False)
-        for section_id, collapsed in m.section_collapsed.items():
-            if section_id in panel._section_headers:
-                panel._set_section_collapsed(section_id, collapsed)
-        panel.set_cursor_times(m.cursor_times, refresh_stats=refresh_stats)
-        panel.apply_section_table_heights(m.section_table_heights)
+        panel.apply_layout_state(self._model, refresh_stats=refresh_stats)
+# ===========================================================================
+# mvvm/find_logic
+# ===========================================================================
+
+def recompute_find_hits(
+    trace: Optional[BtfTrace],
+    query: str,
+    mode: str,
+    annotations: List[TraceAnnotation],
+) -> Tuple[List[int], str]:
+    """Return (sorted unique hit timestamps in ns, status message)."""
+    if trace is None:
+        return [], "0 matches"
+    q = query.strip()
+    if not q:
+        return [], "0 matches"
+
+    mode_key = mode.strip().lower()
+    if mode_key == "migrations":
+        return _find_migrations(trace, q)
+
+    regex_obj = None
+    if mode_key == "regex":
+        if len(q) > _MAX_FIND_REGEX_LEN:
+            return [], "Regex too long"
+        try:
+            regex_obj = re.compile(q, re.IGNORECASE)
+        except re.error:
+            return [], "Regex error"
+
+    hits: List[int] = []
+    for mk, segs in trace.seg_map_by_merge_key.items():
+        raw = trace.task_repr.get(mk, mk)
+        disp = _task_display_name(raw)
+        if mode_key == "exact":
+            matched = (q.lower() == mk.lower()
+                       or q.lower() == raw.lower()
+                       or q.lower() == disp.lower())
+        else:
+            hay = f"{mk} {raw} {disp}"
+            matched = _haystack_matches(q, mode_key, hay, regex_obj)
+        if matched:
+            hits.extend(s.start for s in segs)
+
+    for ann in annotations:
+        if _haystack_matches(q, mode_key, ann.note, regex_obj):
+            hits.append(ann.ns)
+
+    unique = sorted(set(hits))
+    label = f"{len(unique)} matches"
+    return unique, label
+
+
+def _find_migrations(trace: BtfTrace, query: str) -> Tuple[List[int], str]:
+    q_lower = query.lower()
+    hits: List[int] = []
+    for m in getattr(trace, "migrations", ()):
+        raw = trace.task_repr.get(m.merge_key, m.merge_key)
+        disp = _task_display_name(raw)
+        hay = f"{m.merge_key} {raw} {disp} {m.from_core} {m.to_core}"
+        if (not q_lower or q_lower in hay.lower()
+                or q_lower in m.from_core.lower()
+                or q_lower in m.to_core.lower()):
+            hits.append(m.ns)
+    unique = sorted(set(hits))
+    return unique, f"{len(unique)} migration matches"
+
+
+def _haystack_matches(
+    query: str,
+    mode: str,
+    haystack: str,
+    regex_obj: Optional[re.Pattern],
+) -> bool:
+    if mode == "contains":
+        return query.lower() in haystack.lower()
+    if mode == "exact":
+        return query.lower() == haystack.lower()
+    if regex_obj is not None:
+        return bool(regex_obj.search(haystack))
+    return False
+
+# Bundle-safe alias: trace_tab_vm preamble imports are stripped in the monolith.
+FIND_RECOMPUTE = recompute_find_hits
+# ===========================================================================
+# mvvm/tab_viewport
+# ===========================================================================
+
+def capture_viewport(view: "TimelineView") -> TabViewportModel:
+    """Read zoom, cursors, and legend filters from a timeline view."""
+    sc = view._scene
+    fit = bool(view._fit_mode)
+    return TabViewportModel(
+        fit_mode=fit,
+        zoom_tpp=-1.0 if fit else float(sc.timescale_per_px),
+        cursors=list(sc.cursor_times()),
+        filters=_snapshot_tab_filters(sc),
+    )
+
+
+def apply_viewport(view: "TimelineView", vp: TabViewportModel) -> None:
+    """Restore zoom, cursors, and legend filters onto a timeline view."""
+    sc = view._scene
+    if vp.fit_mode:
+        view.zoom_fit()
+    elif vp.zoom_tpp > 0:
+        sc._timescale_per_px = max(sc._timescale_per_px_default, vp.zoom_tpp)
+        view._fit_mode = False
+        sc.rebuild()
+        view.zoom_changed.emit(sc.timescale_per_px)
+    else:
+        view.zoom_changed.emit(sc.timescale_per_px)
+
+    for ns in vp.cursors:
+        try:
+            sc.add_cursor(int(ns))
+        except (ValueError, TypeError):
+            pass
+    if sc.cursor_times():
+        view.cursors_changed.emit(sc.cursor_times())
+
+    filters = _sanitize_tab_filters(vp.filters)
+    if filters:
+        sc.apply_tab_filters(filters, rebuild=False)
+        sc.rebuild()
+        sc.task_filter_changed.emit()
+
+    view._refresh_nav_pan_window(force_show=view._navigator_eligible())
+
+
+def viewport_to_rc_payload(vp: TabViewportModel) -> Dict[str, Any]:
+    return {
+        "fit_mode": vp.fit_mode,
+        "zoom": vp.zoom_tpp,
+        "cursors": list(vp.cursors),
+        "filters": dict(vp.filters),
+    }
+
+
+def viewport_from_rc_payload(payload: Dict[str, Any]) -> TabViewportModel:
+    fit_mode = bool(payload.get("fit_mode", True))
+    zoom = float(payload.get("zoom", -1))
+    cursors: List[int] = []
+    for ns in payload.get("cursors", []):
+        try:
+            cursors.append(int(ns))
+        except (ValueError, TypeError):
+            pass
+    raw_filters = payload.get("filters") or {}
+    filters = _sanitize_tab_filters(raw_filters) or {}
+    return TabViewportModel(
+        fit_mode=fit_mode,
+        zoom_tpp=-1.0 if fit_mode else zoom,
+        cursors=cursors,
+        filters=filters,
+    )
+
+
+def viewport_to_json(vp: TabViewportModel) -> str:
+    return json.dumps(viewport_to_rc_payload(vp), ensure_ascii=True)
+
+
+def viewport_from_json(raw: str) -> Optional[TabViewportModel]:
+    if not raw.strip():
+        return None
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return viewport_from_rc_payload(payload)
 # ===========================================================================
 # mvvm/trace_tab_vm
 # ===========================================================================
@@ -21694,6 +21948,7 @@ class TraceTabViewModel(ViewModelBase):
     find_changed = Signal()
     undo_changed = Signal()
     plot_changed = Signal()
+    viewport_changed = Signal()
 
     def __init__(self, path: str, trace: BtfTrace, parent=None) -> None:
         super().__init__(parent)
@@ -21781,6 +22036,41 @@ class TraceTabViewModel(ViewModelBase):
         self.changed.emit()
 
     @property
+    def find_query(self) -> str:
+        return self._model.find_query
+
+    @find_query.setter
+    def find_query(self, value: str) -> None:
+        self._model.find_query = str(value)
+        self.find_changed.emit()
+        self.changed.emit()
+
+    @property
+    def find_mode(self) -> str:
+        return self._model.find_mode
+
+    @find_mode.setter
+    def find_mode(self, value: str) -> None:
+        self._model.find_mode = str(value) or "Contains"
+        self.find_changed.emit()
+        self.changed.emit()
+
+    def recompute_find_hits(self) -> str:
+        """Update find hits from current query/mode; return status message."""
+        hits, status = FIND_RECOMPUTE(
+            self._model.trace,
+            self._model.find_query,
+            self._model.find_mode,
+            self._model.annotations,
+        )
+        self._model.find_hits = hits
+        self._model.find_hit_idx = -1
+        self._model.find_marker_ns = None
+        self.find_changed.emit()
+        self.changed.emit()
+        return status
+
+    @property
     def undo_stack(self) -> list:
         return self._model.undo_stack
 
@@ -21840,9 +22130,21 @@ class TraceTabViewModel(ViewModelBase):
         self.plot_changed.emit()
         self.changed.emit()
 
-    def capture_plot_session(self) -> tuple[Optional[str], Optional[str], bool, Optional[str]]:
+    @property
+    def plot_interval_id(self) -> Optional[str]:
+        return self._model.plot.interval_id
+
+    @plot_interval_id.setter
+    def plot_interval_id(self, value: Optional[str]) -> None:
+        self._model.plot.interval_id = value
+        self.plot_changed.emit()
+        self.changed.emit()
+
+    def capture_plot_session(
+        self,
+    ) -> tuple[Optional[str], Optional[str], bool, Optional[str], Optional[str]]:
         p = self._model.plot
-        return p.mk, p.kind, p.open, p.preemptor
+        return p.mk, p.kind, p.open, p.preemptor, p.interval_id
 
     def set_plot_session(
         self,
@@ -21850,10 +22152,30 @@ class TraceTabViewModel(ViewModelBase):
         kind: Optional[str],
         open_: bool,
         preemptor: Optional[str],
+        interval_id: Optional[str] = None,
     ) -> None:
-        self._model.plot = PlotSessionState(mk=mk, kind=kind, open=open_, preemptor=preemptor)
+        self._model.plot = PlotSessionState(
+            mk=mk, kind=kind, open=open_, preemptor=preemptor,
+            interval_id=interval_id,
+        )
         self.plot_changed.emit()
         self.changed.emit()
+
+    @property
+    def viewport(self) -> TabViewportModel:
+        return self._model.viewport
+
+    @viewport.setter
+    def viewport(self, value: TabViewportModel) -> None:
+        self._model.viewport = value
+        self.viewport_changed.emit()
+        self.changed.emit()
+
+    def capture_viewport_from_view(self, view) -> None:
+        self.viewport = capture_viewport(view)
+
+    def apply_viewport_to_view(self, view) -> None:
+        apply_viewport(view, self._model.viewport)
 # ===========================================================================
 # mvvm/main_vm
 # ===========================================================================
@@ -22036,6 +22358,7 @@ __all__ = [
     "TraceTabModel",
     "TraceTabViewModel",
     "ViewModelBase",
+    "recompute_find_hits",
 ]
 # ===========================================================================
 # CPU Load Graph
@@ -23044,6 +23367,14 @@ class _TraceTab:
     def plot_open(self, value: bool) -> None:
         self.vm.plot_open = value
 
+    @property
+    def plot_interval_id(self) -> Optional[str]:
+        return self.vm.plot_interval_id
+
+    @plot_interval_id.setter
+    def plot_interval_id(self, value: Optional[str]) -> None:
+        self.vm.plot_interval_id = value
+
 class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     # ------------------------------------------------------------------
@@ -23118,6 +23449,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
         # Restore all persisted settings (geometry, zoom, orientation, ...).
         self._restore_settings()
+        self._vm.settings.settings_changed.connect(self._on_settings_changed)
+        self._wired_tab_vm: Optional[TraceTabViewModel] = None
+        self._vm.active_tab_changed.connect(self._wire_active_tab_vm_signals)
 
         app = QApplication.instance()
         if app is not None:
@@ -23283,11 +23617,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             yield self._settings_view
 
     def _find_tab_index(self, path: str) -> int:
-        norm = os.path.abspath(os.path.expanduser(path))
-        for i, tab in enumerate(self._tabs):
-            if os.path.abspath(tab.path) == norm:
-                return i
-        return -1
+        norm = lambda p: os.path.abspath(os.path.expanduser(p))
+        return self._vm.tab_for_path(path, normalizer=norm)
 
     def _wire_timeline_view(self, view: TimelineView) -> None:
         view.zoom_changed.connect(lambda tpp, v=view: self._on_zoom_changed(tpp, v))
@@ -23542,7 +23873,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         sc.set_hover_highlight(self._hover_highlight_val)
         sc.set_theme(self._is_dark, rebuild=False)
         self._sync_timeline_view_theme(view, self._is_dark)
-        view.set_horizontal(self._act_horiz.isChecked() if hasattr(self, "_act_horiz") else True)
+        view.set_horizontal(self._vm.settings.horizontal)
         view.set_show_sti(self._show_sti)
         view.set_show_grid(self._show_grid)
         view.set_view_mode(self._view_mode if hasattr(self, "_view_mode") else "task")
@@ -23581,62 +23912,72 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
     def _stash_tab_state(self, tab: _TraceTab) -> None:
         tab.vm.stats.copy_from_panel(self._stats_panel)
         tab.vm.stats.cursor_times = list(tab.view._scene.cursor_times())
-        mk, kind, open_, preemptor = self._stats_panel.capture_plot_session()
-        tab.vm.set_plot_session(mk, kind, open_, preemptor)
+        tab.vm.capture_viewport_from_view(tab.view)
+        tab.vm.find_query = self._find_input.text()
+        tab.vm.find_mode = self._find_mode_combo.currentText()
+        mk, kind, open_, preemptor, interval_id = self._stats_panel.capture_plot_session()
+        tab.vm.set_plot_session(mk, kind, open_, preemptor, interval_id)
         self._persist_trace_state(tab.path, tab.bookmarks, tab.annotations, tab.mark_next_id)
         self._persist_tab_view_state(tab)
+
+    def _restore_find_widgets_from_tab(self, tab: _TraceTab) -> None:
+        """Restore Find panel widgets from per-tab view-model (no recompute)."""
+        self._find_input.blockSignals(True)
+        self._find_mode_combo.blockSignals(True)
+        try:
+            self._find_input.setText(tab.vm.find_query)
+            idx = self._find_mode_combo.findText(
+                tab.vm.find_mode, Qt.MatchFlag.MatchFixedString)
+            if idx >= 0:
+                self._find_mode_combo.setCurrentIndex(idx)
+        finally:
+            self._find_input.blockSignals(False)
+            self._find_mode_combo.blockSignals(False)
+
+    def _wire_active_tab_vm_signals(self, _vm=None) -> None:
+        """Connect undo_changed on the active tab VM (MVVM → toolbar)."""
+        vm = self._active_tab_vm
+        if vm is self._wired_tab_vm:
+            self._sync_undo_actions()
+            return
+        if self._wired_tab_vm is not None:
+            try:
+                self._wired_tab_vm.undo_changed.disconnect(self._sync_undo_actions)
+            except TypeError:
+                pass
+        self._wired_tab_vm = vm
+        if vm is not None:
+            vm.undo_changed.connect(self._sync_undo_actions)
+        self._sync_undo_actions()
+
+    def _sync_undo_actions(self) -> None:
+        if not hasattr(self, "_act_undo"):
+            return
+        vm = self._active_tab_vm
+        self._act_undo.setEnabled(bool(vm and vm.undo_stack))
+        self._act_redo.setEnabled(bool(vm and vm.redo_stack))
 
     def _persist_tab_view_state(self, tab: _TraceTab) -> None:
         """Save zoom/cursor layout for one tab (keyed by trace path hash)."""
         if not tab.path or tab.trace is None:
             return
-        sc = tab.view._scene
-        payload = {
-            "zoom": -1 if tab.view._fit_mode else sc.timescale_per_px,
-            "fit_mode": bool(tab.view._fit_mode),
-            "cursors": list(sc.cursor_times()),
-            "filters": _snapshot_tab_filters(sc),
-        }
+        tab.vm.capture_viewport_from_view(tab.view)
         key = self._trace_state_key(tab.path)
-        self._settings.set("tab_view", key, json.dumps(payload, ensure_ascii=True), flush=False)
+        self._settings.set(
+            "tab_view", key, viewport_to_json(tab.vm.viewport), flush=False)
 
     def _load_tab_view_state(self, tab: _TraceTab) -> None:
         """Restore zoom/cursors saved for *tab* in btf_viewer.rc."""
         view = tab.view
         sc = view._scene
         raw = self._settings.get("tab_view", self._trace_state_key(tab.path), "")
-        if not raw.strip():
+        vp = viewport_from_json(raw)
+        if vp is None:
             view.zoom_changed.emit(sc.timescale_per_px)
             view._refresh_nav_pan_window(force_show=view._navigator_eligible())
             return
-        try:
-            payload = json.loads(raw)
-        except json.JSONDecodeError:
-            view.zoom_changed.emit(sc.timescale_per_px)
-            view._refresh_nav_pan_window(force_show=view._navigator_eligible())
-            return
-        fit_mode = bool(payload.get("fit_mode", True))
-        zoom = float(payload.get("zoom", -1))
-        if fit_mode:
-            view.zoom_fit()
-        elif zoom > 0:
-            sc._timescale_per_px = max(sc._timescale_per_px_default, zoom)
-            view._fit_mode = False
-            sc.rebuild()
-            view.zoom_changed.emit(sc.timescale_per_px)
-        for ns in payload.get("cursors", []):
-            try:
-                sc.add_cursor(int(ns))
-            except (ValueError, TypeError):
-                pass
-        if sc.cursor_times():
-            view.cursors_changed.emit(sc.cursor_times())
-        filters = _sanitize_tab_filters(payload.get("filters"))
-        if filters:
-            sc.apply_tab_filters(filters, rebuild=False)
-            sc.rebuild()
-            sc.task_filter_changed.emit()
-        view._refresh_nav_pan_window(force_show=view._navigator_eligible())
+        tab.vm.viewport = vp
+        apply_viewport(view, vp)
 
     def _persist_open_tabs(self) -> None:
         """Write open tab paths and active tab index to btf_viewer.rc."""
@@ -23725,9 +24066,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
     def _restore_tab_state(self, tab: _TraceTab) -> None:
         self._rebuild_bookmark_list()
         self._rebuild_annotation_list()
+        self._restore_find_widgets_from_tab(tab)
         self._sync_panels_to_active_tab()
-        self._act_undo.setEnabled(bool(self._undo_stack))
-        self._act_redo.setEnabled(bool(self._redo_stack))
+        self._wire_active_tab_vm_signals()
 
     def _focus_statistics_panel(self, force: bool = False) -> None:
         """Show and activate the Statistics tab in the right panel."""
@@ -23875,7 +24216,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._restore_tab_state(tab)
             self._stats_panel.restore_plot_session(
                 tab.trace, tab.plot_mk, tab.plot_kind, tab.plot_open,
-                preemptor=tab.plot_preemptor)
+                preemptor=tab.plot_preemptor,
+                interval_id=tab.plot_interval_id)
         else:
             self._vm.set_active_index(-1)
             self._update_tab_actions()
@@ -24122,6 +24464,67 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._relax_right_dock_content_widths()
         _wire_splitter_handle_cursors(self)
 
+    def _apply_view_prefs_from_vm(self) -> None:
+        """Apply AppSettingsViewModel values to timeline widgets (after RC load)."""
+        self._apply_settings_to_all_tabs()
+
+    def _on_settings_changed(self) -> None:
+        """Push AppSettingsViewModel changes to all open tabs and chrome."""
+        self._apply_settings_to_all_tabs()
+
+    def _apply_settings_to_all_tabs(self) -> None:
+        """Apply AppSettingsViewModel values to timeline widgets and docks."""
+        if getattr(self, "_applying_settings", False):
+            return
+        if not hasattr(self, "_view"):
+            return
+        self._applying_settings = True
+        try:
+            self._apply_settings_to_all_tabs_impl()
+        finally:
+            self._applying_settings = False
+
+    def _apply_settings_to_all_tabs_impl(self) -> None:
+        self._view.set_font_size(self._font_size_val)
+        self._apply_theme(self._is_dark)
+        self._view.set_max_cursors(self._max_cursors_val)
+        for view in self._iter_tab_views():
+            self._apply_view_settings(view)
+        for tab in self._tabs:
+            self._sync_cpu_load_graph(tab)
+
+        if not self._show_cpu_load:
+            self._cpu_load_scroll.hide()
+            if hasattr(self, "_tb_cpu_load_btn"):
+                self._tb_cpu_load_btn.setChecked(False)
+        elif hasattr(self, "_tb_cpu_load_btn"):
+            self._tb_cpu_load_btn.setChecked(True)
+
+        self._cpu_load_graph.set_row_h(self._cpu_load_row_h_val)
+        if self._cpu_splitter_bottom_h and self._cpu_splitter_bottom_h > 0:
+            for tab in self._tabs:
+                self._apply_saved_cpu_splitter(tab)
+
+        horizontal = self._vm.settings.horizontal
+        if hasattr(self, "_act_horiz"):
+            self._act_horiz.setChecked(horizontal)
+            self._act_vert.setChecked(not horizontal)
+            self._tb_horiz_btn.setChecked(horizontal)
+            self._tb_vert_btn.setChecked(not horizontal)
+        if self._view_mode == "core":
+            self._set_view_mode("core")
+        if self._vm.settings.colorblind:
+            self._set_colorblind_safe(True)
+
+        self._set_show_sti(self._show_sti, persist=False)
+        self._set_show_grid(self._show_grid, persist=False)
+
+        if not self._show_legend:
+            self._legend_dock.setVisible(False)
+        self._sync_panel_tab_visibility()
+        self._panel_dock.setVisible(
+            self._show_stats or self._show_marks or self._show_find)
+
     def _restore_settings(self) -> None:
         """Apply all values from btf_viewer.rc after the UI has been built."""
         s = self._settings
@@ -24137,68 +24540,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if s.get_bool("window", "maximized", False):
             self.showMaximized()
 
-        # Font size
-        saved_fs = s.get_int("view", "font_size", FONT_SIZE)
-        if saved_fs != FONT_SIZE:
-            self._font_size_val = saved_fs
-            self._view.set_font_size(saved_fs)
-
-        # UI font size
-        saved_ufs = s.get_int("view", "ui_font_size", UI_FONT_SIZE)
-        if saved_ufs != UI_FONT_SIZE:
-            self._ui_font_size_val = saved_ufs
-            self._apply_theme(self._is_dark)
-
-        # Max cursors
-        saved_mc = s.get_int("view", "max_cursors", _DEFAULT_MAX_CURSORS)
-        if saved_mc != _DEFAULT_MAX_CURSORS:
-            self._max_cursors_val = saved_mc
-            self._view.set_max_cursors(saved_mc)
-
-        # Label column width
-        saved_lw = s.get_int("view", "label_width", LABEL_WIDTH)
-        self._label_width_val = max(60, min(saved_lw, 600))
-        self._view._scene.set_label_width(self._label_width_val)
-
-        # Row height
-        saved_rh = s.get_int("view", "row_height", ROW_HEIGHT)
-        if saved_rh != ROW_HEIGHT:
-            self._row_height_val = saved_rh
-            self._view._scene.set_row_height(saved_rh)
-
-        # Row gap
-        saved_rg = s.get_int("view", "row_gap", ROW_GAP)
-        if saved_rg != ROW_GAP:
-            self._row_gap_val = saved_rg
-            self._view._scene.set_row_gap(saved_rg)
-
-        # Max zoom-in level (timescale/px default)
-        saved_nppd = s.get_float("view", "timescale_per_px_default", _TIMESCALE_PER_PX_DEFAULT)
-        if saved_nppd != _TIMESCALE_PER_PX_DEFAULT:
-            self._timescale_per_px_default_val = saved_nppd
-            self._view._scene.set_timescale_per_px_default(saved_nppd)
-
-        # CPU load graph visibility
-        saved_cpl = s.get_bool("view", "show_cpu_load", True)
-        if not saved_cpl:
-            self._show_cpu_load = False
-            self._cpu_load_scroll.hide()
-            if hasattr(self, '_tb_cpu_load_btn'):
-                self._tb_cpu_load_btn.setChecked(False)
-
-        # CPU load graph row height
-        saved_clrh = s.get_int("view", "cpu_load_row_h", CPU_LOAD_ROW_H)
-        if saved_clrh != CPU_LOAD_ROW_H:
-            self._cpu_load_row_h_val = saved_clrh
-            self._cpu_load_graph.set_row_h(saved_clrh)
-
-        saved_cpu_bottom = s.get_int("view", "cpu_splitter_bottom_h", 0)
-        if saved_cpu_bottom > 0:
-            self._cpu_splitter_bottom_h = saved_cpu_bottom
-            self._cpu_splitter_user_sized = s.get_bool(
-                "view", "cpu_splitter_user_sized", False)
-            for tab in self._tabs:
-                self._apply_saved_cpu_splitter(tab)
+        self._vm.settings.load_theme_from_rc(s)
+        self._vm.settings.load_view_prefs_from_rc(s)
+        self._apply_view_prefs_from_vm()
 
         if hasattr(self, "_stats_panel"):
             _stats_heights: Dict[str, int] = {}
@@ -24208,57 +24552,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 _h = s.get_int("stats", f"table_height_{_sid}", _default)
                 _stats_heights[_sid] = _h
             self._stats_panel.apply_section_table_heights(_stats_heights)
-
-        # STI row heights and line style
-        saved_srh = s.get_int("view", "sti_row_h", STI_ROW_H)
-        if saved_srh != STI_ROW_H:
-            self._sti_row_h_val = saved_srh
-            self._view._scene.set_sti_row_h(saved_srh)
-        saved_swh = s.get_int("view", "sti_waveform_h", STI_WAVEFORM_H)
-        if saved_swh != STI_WAVEFORM_H:
-            self._sti_waveform_h_val = saved_swh
-            self._view._scene.set_sti_waveform_h(saved_swh)
-        saved_sls = s.get("view", "sti_line_style", STI_LINE_STYLE)
-        if saved_sls != STI_LINE_STYLE:
-            self._sti_line_style_val = saved_sls
-            self._view._scene.set_sti_line_style(saved_sls)
-
-        # Hover label highlight
-        saved_hh = s.get_bool("view", "hover_highlight", _HOVER_HIGHLIGHT_ENABLED)
-        if saved_hh != _HOVER_HIGHLIGHT_ENABLED:
-            self._hover_highlight_val = saved_hh
-            self._view._scene.set_hover_highlight(saved_hh)
-
-        # Orientation (horizontal is the default)
-        if not s.get_bool("view", "horizontal", True):
-            self._set_orientation(False)
-
-        # View mode
-        if s.get("view", "view_mode", "task") == "core":
-            self._set_view_mode("core")
-
-        # Colorblind-safe task palette
-        saved_cb = s.get_bool("view", "colorblind_safe", False)
-        if saved_cb:
-            self._set_colorblind_safe(True)
-
-        # STI / grid visibility
-        if not s.get_bool("view", "show_sti", True):
-            self._set_show_sti(False, persist=False)
-        if not s.get_bool("view", "show_grid", True):
-            self._set_show_grid(False, persist=False)
-
-        # Legend / statistics panel visibility
-        if not s.get_bool("view", "show_legend", True):
-            self._show_legend = False
-            self._legend_dock.setVisible(False)
-        if not s.get_bool("view", "show_stats", True):
-            self._show_stats = False
-        self._show_marks = s.get_bool("view", "show_marks", True)
-        self._show_find = s.get_bool("view", "show_find", True)
-        self._sync_panel_tab_visibility()
-        self._panel_dock.setVisible(
-            self._show_stats or self._show_marks or self._show_find)
 
         # Dock layout (marks/stats/legend sizes & positions).
         # dock_layout_version gates restoration: if the saved version is older
@@ -25471,8 +25764,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         _ia("Open",     self._on_open,         _IC_OPEN,     "Open BTF trace file  (Ctrl+O)")
         _ia("Save PNG", self._on_save_image,   _IC_SAVE,     "Open snapshot editor  (Ctrl+S)")
         _ia("Save SVG", self._on_save_svg,     _IC_SAVE_SVG, "Save viewport as SVG  (Ctrl+Shift+S)")
-        _ia("Shot",     self._open_snapshot_editor, _IC_SHOT,
-            "Capture viewport snapshot for annotation  (Ctrl+S)")
         tb.addSeparator()
 
         # --- Layout and zoom ---
@@ -25641,6 +25932,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._tb_vert_btn.setChecked(not horizontal)
         for view in self._iter_tab_views():
             view.set_horizontal(horizontal)
+        self._vm.settings.blockSignals(True)
+        try:
+            self._vm.settings.horizontal = horizontal
+        finally:
+            self._vm.settings.blockSignals(False)
         self._refresh_find_marker()
 
     def _set_show_sti(self, show: bool, persist: bool = True) -> None:
@@ -26636,73 +26932,17 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._recompute_find_hits()
 
     def _recompute_find_hits(self) -> None:
-        self._find_hits = []
-        self._find_hit_idx = -1
-        self._set_find_marker_ns(None)
-        if self._trace is None:
+        vm = self._active_tab_vm
+        if vm is None or self._trace is None:
             self._find_status.setText("0 matches")
             self._view._scene.set_find_hits([])
             return
-        query = self._find_input.text().strip()
-        if not query:
-            self._find_status.setText("0 matches")
-            self._view._scene.set_find_hits([])
-            return
-        mode = self._find_mode_combo.currentText().lower()
-        if mode == "migrations":
-            q_lower = query.lower()
-            for m in getattr(self._trace, "migrations", ()):
-                raw = self._trace.task_repr.get(m.merge_key, m.merge_key)
-                disp = _task_display_name(raw)
-                hay = f"{m.merge_key} {raw} {disp} {m.from_core} {m.to_core}"
-                if (not q_lower or q_lower in hay.lower()
-                        or q_lower in m.from_core.lower()
-                        or q_lower in m.to_core.lower()):
-                    self._find_hits.append(m.ns)
-            self._find_hits = sorted(set(self._find_hits))
-            self._find_status.setText(f"{len(self._find_hits)} migration matches")
-            self._view._scene.set_find_hits(self._find_hits)
-            if not self._find_hits:
-                self._set_find_marker_ns(None)
-            return
-        regex_obj = None
-        if mode == "regex":
-            if len(query) > _MAX_FIND_REGEX_LEN:
-                self._find_status.setText("Regex too long")
-                self._view._scene.set_find_hits([])
-                return
-            try:
-                regex_obj = re.compile(query, re.IGNORECASE)
-            except re.error:
-                self._find_status.setText("Regex error")
-                self._set_find_marker_ns(None)
-                return
-        for mk, segs in self._trace.seg_map_by_merge_key.items():
-            raw = self._trace.task_repr.get(mk, mk)
-            disp = _task_display_name(raw)
-            hay = f"{mk} {raw} {disp}"
-            if mode == "contains":
-                matched = query.lower() in hay.lower()
-            elif mode == "exact":
-                matched = query.lower() == mk.lower() or query.lower() == raw.lower() or query.lower() == disp.lower()
-            else:
-                matched = bool(regex_obj.search(hay)) if regex_obj is not None else False
-            if matched:
-                self._find_hits.extend(s.start for s in segs)
-        for ann in self._annotations:
-            hay = ann.note
-            if mode == "contains":
-                matched = query.lower() in hay.lower()
-            elif mode == "exact":
-                matched = query.lower() == hay.lower()
-            else:
-                matched = bool(regex_obj.search(hay)) if regex_obj is not None else False
-            if matched:
-                self._find_hits.append(ann.ns)
-        self._find_hits = sorted(set(self._find_hits))
-        self._find_status.setText(f"{len(self._find_hits)} matches")
-        self._view._scene.set_find_hits(self._find_hits)
-        if not self._find_hits:
+        vm.find_query = self._find_input.text()
+        vm.find_mode = self._find_mode_combo.currentText()
+        status = vm.recompute_find_hits()
+        self._find_status.setText(status)
+        self._view._scene.set_find_hits(vm.find_hits)
+        if not vm.find_hits:
             self._set_find_marker_ns(None)
 
     def _find_next(self) -> None:
@@ -27466,12 +27706,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             [TraceAnnotation(a.id, a.ns, a.note) for a in self._annotations],
             self._mark_next_id,
         )
-        self._undo_stack.append(snap)
-        if len(self._undo_stack) > 50:
-            self._undo_stack.pop(0)
-        self._redo_stack.clear()
-        self._act_undo.setEnabled(True)
-        self._act_redo.setEnabled(False)
+        stack = list(self._undo_stack)
+        stack.append(snap)
+        if len(stack) > 50:
+            stack.pop(0)
+        self._undo_stack = stack
+        self._redo_stack = []
 
     def _restore_snapshot(self, snap: tuple) -> None:
         """Restore cursor + mark state from a snapshot tuple."""
@@ -27502,10 +27742,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             [TraceAnnotation(a.id, a.ns, a.note) for a in self._annotations],
             self._mark_next_id,
         )
-        self._redo_stack.append(snap)
-        self._act_redo.setEnabled(True)
-        snap = self._undo_stack.pop()
-        self._act_undo.setEnabled(bool(self._undo_stack))
+        redo = list(self._redo_stack)
+        redo.append(snap)
+        self._redo_stack = redo
+        undo = list(self._undo_stack)
+        snap = undo.pop()
+        self._undo_stack = undo
         self._restore_snapshot(snap)
 
     def _cmd_redo(self) -> None:
@@ -27518,10 +27760,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             [TraceAnnotation(a.id, a.ns, a.note) for a in self._annotations],
             self._mark_next_id,
         )
-        self._undo_stack.append(snap)
-        self._act_undo.setEnabled(True)
-        snap = self._redo_stack.pop()
-        self._act_redo.setEnabled(bool(self._redo_stack))
+        undo = list(self._undo_stack)
+        undo.append(snap)
+        self._undo_stack = undo
+        redo = list(self._redo_stack)
+        snap = redo.pop()
+        self._redo_stack = redo
         self._restore_snapshot(snap)
 
     def _on_legend_task_clicked(self, task: str) -> None:

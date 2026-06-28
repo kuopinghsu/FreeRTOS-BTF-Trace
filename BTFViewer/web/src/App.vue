@@ -132,6 +132,7 @@
         />
 
         <CpuLoadPanel
+          ref="cpuLoadPanelRef"
           v-if="trace && timelineOptions.showCpuLoad"
           :style="{ height: cpuLoadPaneHeight + 'px', flexShrink: 0 }"
           :trace="trace"
@@ -830,6 +831,7 @@ const timelinePanelRef = ref(null)
 const findPanelRef = ref(null)
 const marksPanelRef = ref(null)
 const leftPaneRef = ref(null)
+const cpuLoadPanelRef = ref(null)
 const loading    = ref(false)
 const loadingPct = ref(0)
 const loadingMsg = ref('')
@@ -1693,20 +1695,68 @@ function captureFilter(node) {
   return !node.classList.contains('context-menu') && !node.classList.contains('sti-tooltip')
 }
 
+function loadImageFromBlob(blob) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(blob)
+    const img = new Image()
+    img.onload = () => {
+      URL.revokeObjectURL(url)
+      resolve(img)
+    }
+    img.onerror = () => {
+      URL.revokeObjectURL(url)
+      reject(new Error('image load failed'))
+    }
+    img.src = url
+  })
+}
+
+async function stitchImagesVertical(topImg, bottomImg, targetW = null) {
+  const w = targetW ?? Math.max(topImg.naturalWidth, bottomImg.naturalWidth)
+  if (w <= 0) return null
+  const topH = Math.max(1, Math.round(topImg.naturalHeight * (w / topImg.naturalWidth)))
+  const botH = Math.max(1, Math.round(bottomImg.naturalHeight * (w / bottomImg.naturalWidth)))
+  const out = document.createElement('canvas')
+  out.width = w
+  out.height = topH + botH
+  const ctx = out.getContext('2d')
+  if (!ctx) return null
+  ctx.drawImage(topImg, 0, 0, w, topH)
+  ctx.drawImage(bottomImg, 0, topH, w, botH)
+  return await new Promise((resolve) => out.toBlob(resolve, 'image/png'))
+}
+
 async function captureLeftPaneBlob() {
-  const root = leftPaneRef.value
-  if (!root) return null
+  const leftPane = leftPaneRef.value
+  const captureW = leftPane?.clientWidth ?? 0
+
+  const timelineBlob = await timelinePanelRef.value?.captureScreenshotBlob?.()
+  if (!timelineBlob) return null
+
+  if (!timelineOptions.showCpuLoad) return timelineBlob
+
+  const cpuEl = cpuLoadPanelRef.value?.panelRef
+  if (!cpuEl) return timelineBlob
+
+  const cpuH = cpuEl.clientHeight
+  if (captureW <= 0 || cpuH <= 0) return timelineBlob
 
   try {
-    return await domToBlob(root, {
+    const cpuBlob = await domToBlob(cpuEl, {
       cacheBust: true,
-      pixelRatio: window.devicePixelRatio || 1,
-      width: root.clientWidth,
-      height: root.clientHeight,
+      pixelRatio: 1,
+      width: captureW,
+      height: cpuH,
       filter: captureFilter,
     })
+    if (!cpuBlob) return timelineBlob
+    const [topImg, bottomImg] = await Promise.all([
+      loadImageFromBlob(timelineBlob),
+      loadImageFromBlob(cpuBlob),
+    ])
+    return await stitchImagesVertical(topImg, bottomImg, captureW)
   } catch {
-    return await timelinePanelRef.value?.captureScreenshotBlob?.()
+    return timelineBlob
   }
 }
 
@@ -2106,11 +2156,15 @@ function onGlobalKeydown(e) {
     } else if (aboutOpen.value) {
       aboutOpen.value = false
       e.preventDefault()
+    } else if (snapshotEditorOpen.value) {
+      onSnapshotEditorClose()
+      e.preventDefault()
     }
     return
   }
 
-  if (helpOpen.value || aboutOpen.value || heatmapOpen.value || settingsOpen.value || jumpDialogOpen.value) return
+  if (helpOpen.value || aboutOpen.value || heatmapOpen.value || settingsOpen.value
+      || jumpDialogOpen.value || snapshotEditorOpen.value) return
 
   if (mod && e.key === ',') {
     e.preventDefault()

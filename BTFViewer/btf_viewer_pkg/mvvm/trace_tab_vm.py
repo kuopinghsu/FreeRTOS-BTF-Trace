@@ -7,8 +7,10 @@ from PySide6.QtCore import Signal
 
 from ..parser import BtfTrace, TraceAnnotation, TraceBookmark
 from .base import ViewModelBase
-from .models import PlotSessionState, TraceTabModel
+from .find_logic import FIND_RECOMPUTE
+from .models import PlotSessionState, TabViewportModel, TraceTabModel
 from .stats_vm import StatsViewModel
+from .tab_viewport import apply_viewport, capture_viewport
 
 class TraceTabViewModel(ViewModelBase):
     """ViewModel for one open trace tab."""
@@ -18,6 +20,7 @@ class TraceTabViewModel(ViewModelBase):
     find_changed = Signal()
     undo_changed = Signal()
     plot_changed = Signal()
+    viewport_changed = Signal()
 
     def __init__(self, path: str, trace: BtfTrace, parent=None) -> None:
         super().__init__(parent)
@@ -105,6 +108,41 @@ class TraceTabViewModel(ViewModelBase):
         self.changed.emit()
 
     @property
+    def find_query(self) -> str:
+        return self._model.find_query
+
+    @find_query.setter
+    def find_query(self, value: str) -> None:
+        self._model.find_query = str(value)
+        self.find_changed.emit()
+        self.changed.emit()
+
+    @property
+    def find_mode(self) -> str:
+        return self._model.find_mode
+
+    @find_mode.setter
+    def find_mode(self, value: str) -> None:
+        self._model.find_mode = str(value) or "Contains"
+        self.find_changed.emit()
+        self.changed.emit()
+
+    def recompute_find_hits(self) -> str:
+        """Update find hits from current query/mode; return status message."""
+        hits, status = FIND_RECOMPUTE(
+            self._model.trace,
+            self._model.find_query,
+            self._model.find_mode,
+            self._model.annotations,
+        )
+        self._model.find_hits = hits
+        self._model.find_hit_idx = -1
+        self._model.find_marker_ns = None
+        self.find_changed.emit()
+        self.changed.emit()
+        return status
+
+    @property
     def undo_stack(self) -> list:
         return self._model.undo_stack
 
@@ -164,9 +202,21 @@ class TraceTabViewModel(ViewModelBase):
         self.plot_changed.emit()
         self.changed.emit()
 
-    def capture_plot_session(self) -> tuple[Optional[str], Optional[str], bool, Optional[str]]:
+    @property
+    def plot_interval_id(self) -> Optional[str]:
+        return self._model.plot.interval_id
+
+    @plot_interval_id.setter
+    def plot_interval_id(self, value: Optional[str]) -> None:
+        self._model.plot.interval_id = value
+        self.plot_changed.emit()
+        self.changed.emit()
+
+    def capture_plot_session(
+        self,
+    ) -> tuple[Optional[str], Optional[str], bool, Optional[str], Optional[str]]:
         p = self._model.plot
-        return p.mk, p.kind, p.open, p.preemptor
+        return p.mk, p.kind, p.open, p.preemptor, p.interval_id
 
     def set_plot_session(
         self,
@@ -174,7 +224,27 @@ class TraceTabViewModel(ViewModelBase):
         kind: Optional[str],
         open_: bool,
         preemptor: Optional[str],
+        interval_id: Optional[str] = None,
     ) -> None:
-        self._model.plot = PlotSessionState(mk=mk, kind=kind, open=open_, preemptor=preemptor)
+        self._model.plot = PlotSessionState(
+            mk=mk, kind=kind, open=open_, preemptor=preemptor,
+            interval_id=interval_id,
+        )
         self.plot_changed.emit()
         self.changed.emit()
+
+    @property
+    def viewport(self) -> TabViewportModel:
+        return self._model.viewport
+
+    @viewport.setter
+    def viewport(self, value: TabViewportModel) -> None:
+        self._model.viewport = value
+        self.viewport_changed.emit()
+        self.changed.emit()
+
+    def capture_viewport_from_view(self, view) -> None:
+        self.viewport = capture_viewport(view)
+
+    def apply_viewport_to_view(self, view) -> None:
+        apply_viewport(view, self._model.viewport)

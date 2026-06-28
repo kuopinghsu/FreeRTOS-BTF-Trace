@@ -35,6 +35,8 @@ BUNDLE_MODULES: list[str] = [
     "mvvm/models",
     "mvvm/app_settings",
     "mvvm/stats_vm",
+    "mvvm/find_logic",
+    "mvvm/tab_viewport",
     "mvvm/trace_tab_vm",
     "mvvm/main_vm",
     "mvvm/bindings",

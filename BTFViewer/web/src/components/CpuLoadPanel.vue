@@ -93,7 +93,9 @@
               y="0"
               :width="row.cursorRangeShade.width"
               :height="row.height"
-              class="cpu-load-range-shade"
+              :fill="rangeShadePaint.fill"
+              :fill-opacity="rangeShadePaint.fillOpacity"
+              pointer-events="none"
             />
             <line
               v-if="row.hoverCursor"
@@ -166,6 +168,7 @@ import {
   CPU_LOAD_COLLAPSED_H,
   CPU_LOAD_ROW_GAP,
   cursorRangeShade,
+  cpuLoadRangeShadePaint,
   getPlacedCursorRange,
   loadAtNs,
 } from '../utils/cpuLoadHelpers.js'
@@ -241,6 +244,8 @@ const filterActive = computed(() => coreViewTaskFilterActive(
   filterOpts.value.taskFilterKeys,
   filterOpts.value.taskFilterText,
 ))
+
+const rangeShadePaint = computed(() => cpuLoadRangeShadePaint(props.darkMode))
 
 const filteredTaskKeys = computed(() => {
   if (!props.trace || !filterActive.value) return []
@@ -581,6 +586,8 @@ watch(() => props.allExpanded, (expanded) => {
 watch(() => props.trace, () => {
   collapsedCores.value = props.allExpanded ? new Set() : new Set(props.trace?.coreNames || [])
 })
+
+defineExpose({ panelRef })
 </script>
 
 <style scoped>

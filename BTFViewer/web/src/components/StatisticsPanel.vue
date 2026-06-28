@@ -217,33 +217,25 @@
         No STI TICK events
       </div>
       <template v-else>
-        <div
-          class="health-banner"
-          :class="'health-' + tickHealth.health"
-        >
-          {{ tickHealth.health.toUpperCase() }}
-          · <span
-            class="tick-mode-badge"
-            :class="tickHealth.isTickless ? 'tick-mode-tickless' : 'tick-mode-tick'"
-            :title="tickHealth.isTickless
-              ? `Tickless mode detected (interval CV=${(tickHealth.tickCv * 100).toFixed(1)}%): tick intervals vary because the scheduler suppresses ticks during idle periods.`
-              : `Tick mode detected (interval CV=${(tickHealth.tickCv * 100).toFixed(1)}%): tick intervals are constant.`"
-          >{{ tickHealth.isTickless ? 'TICKLESS' : 'TICK' }}</span>
-          · {{ tickHealth.tickCount.toLocaleString() }} ticks
-          · avg {{ fmtTime(tickHealth.avgPeriod) }}
-          · max gap {{ fmtTime(tickHealth.maxGap) }}
-        </div>
-        <div
-          v-if="tickHealth.isTickless"
-          class="range-hint"
-        >
-          Tickless mode: tick intervals vary.
-        </div>
-        <div
-          v-if="tickHealth.tickCount >= 2"
-          class="range-hint tick-dist-hint"
-        >
+        <div class="health-banner-row">
+          <div
+            class="health-banner"
+            :class="'health-' + tickHealth.health"
+          >
+            {{ tickHealth.health.toUpperCase() }}
+            · <span
+              class="tick-mode-badge"
+              :class="tickHealth.isTickless ? 'tick-mode-tickless' : 'tick-mode-tick'"
+              :title="tickHealth.isTickless
+                ? `Tickless mode detected (interval CV=${(tickHealth.tickCv * 100).toFixed(1)}%): tick intervals vary because the scheduler suppresses ticks during idle periods.`
+                : `Tick mode detected (interval CV=${(tickHealth.tickCv * 100).toFixed(1)}%): tick intervals are constant.`"
+            >{{ tickHealth.isTickless ? 'TICKLESS' : 'TICK' }}</span>
+            · {{ tickHealth.tickCount.toLocaleString() }} ticks
+            · avg {{ fmtTime(tickHealth.avgPeriod) }}
+            · max gap {{ fmtTime(tickHealth.maxGap) }}
+          </div>
           <button
+            v-if="tickHealth.tickCount >= 2"
             type="button"
             class="tick-dist-btn"
             title="Open tick interval distribution chart"
@@ -263,6 +255,12 @@
             </svg>
             <span>Tick Distribution…</span>
           </button>
+        </div>
+        <div
+          v-if="tickHealth.isTickless"
+          class="range-hint"
+        >
+          Tickless mode: tick intervals vary.
         </div>
         <div
           v-if="tickHealth.largeGaps.length"
@@ -4306,6 +4304,18 @@ watch(plotData, () => {
 .sync-issues-table td.sync-status-error,
 .sync-issues-table td.sync-status-warning { font-weight: 600; }
 
+.health-banner-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0 2px;
+}
+.health-banner-row .health-banner {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+}
 .health-banner {
   font-size: 11px;
   padding: 4px 0 2px;
@@ -4337,8 +4347,8 @@ watch(plotData, () => {
 }
 .tick-dist-hint {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 4px;
 }
 .tick-dist-btn {

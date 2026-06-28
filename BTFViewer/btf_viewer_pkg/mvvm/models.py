@@ -7,6 +7,13 @@ from typing import Dict, List, Optional, Tuple
 from ..parser import BtfTrace, TraceAnnotation, TraceBookmark
 
 @dataclass
+class TabViewportModel:
+    fit_mode: bool = True
+    zoom_tpp: float = -1.0
+    cursors: List[int] = field(default_factory=list)
+    filters: Dict[str, object] = field(default_factory=dict)
+
+@dataclass
 class PlotSessionState:
     mk: Optional[str] = None
     kind: Optional[str] = None
@@ -33,10 +40,13 @@ class TraceTabModel:
     find_hits: List[int] = field(default_factory=list)
     find_hit_idx: int = -1
     find_marker_ns: Optional[int] = None
+    find_query: str = ""
+    find_mode: str = "Contains"
     undo_stack: list = field(default_factory=list)
     redo_stack: list = field(default_factory=list)
     plot: PlotSessionState = field(default_factory=PlotSessionState)
     stats: StatsTabModel = field(default_factory=StatsTabModel)
+    viewport: TabViewportModel = field(default_factory=TabViewportModel)
 
 @dataclass
 class AppSettingsModel:

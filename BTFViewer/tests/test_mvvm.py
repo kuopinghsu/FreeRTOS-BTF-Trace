@@ -43,5 +43,28 @@ class PlotSessionTests(unittest.TestCase):
         self.assertEqual(vm.plot_interval_id, "3")
 
 
+class TabViewportTests(unittest.TestCase):
+    def test_viewport_json_round_trip(self) -> None:
+        from btf_viewer_pkg.mvvm.models import TabViewportModel
+        from btf_viewer_pkg.mvvm.tab_viewport import (
+            viewport_from_json,
+            viewport_to_json,
+        )
+
+        vp = TabViewportModel(
+            fit_mode=False,
+            zoom_tpp=12.5,
+            cursors=[100, 200],
+            filters={"taskFilterText": "idle"},
+        )
+        raw = viewport_to_json(vp)
+        restored = viewport_from_json(raw)
+        self.assertIsNotNone(restored)
+        self.assertEqual(restored.fit_mode, vp.fit_mode)
+        self.assertEqual(restored.zoom_tpp, vp.zoom_tpp)
+        self.assertEqual(restored.cursors, vp.cursors)
+        self.assertEqual(restored.filters.get("taskFilterText"), "idle")
+
+
 if __name__ == "__main__":
     unittest.main()

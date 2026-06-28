@@ -95,6 +95,38 @@ def _stats_table_viewport_height(visible_rows: int = STATS_MAX_VISIBLE_ROWS,
 
 STATS_TABLE_DEFAULT_H    = _stats_table_viewport_height()
 STATS_TABLE_MIG_DEFAULT_H = _stats_table_viewport_height(reserve_h_scroll=True)
+
+def default_section_collapsed() -> Dict[str, bool]:
+    """Default collapsed flags for statistics panel sections (shared with MVVM)."""
+    return {
+        "cores": False,
+        "tasks": False,
+        "migrations": False,
+        "exec": False,
+        "block": False,
+        "inter": False,
+        "health": False,
+        "preemption": False,
+        "priority": False,
+        "sync": False,
+        "intervals": False,
+    }
+
+def default_section_table_heights() -> Dict[str, int]:
+    """Default max heights for collapsible statistics tables (shared with MVVM)."""
+    return {
+        "migrations": STATS_TABLE_MIG_DEFAULT_H,
+        "exec": STATS_TABLE_DEFAULT_H,
+        "block": STATS_TABLE_DEFAULT_H,
+        "inter": STATS_TABLE_DEFAULT_H,
+        "preemption": STATS_TABLE_MIG_DEFAULT_H,
+        "priority": STATS_TABLE_DEFAULT_H,
+        "intervals": STATS_TABLE_DEFAULT_H,
+        "sync": STATS_TABLE_DEFAULT_H,
+        "sync_issues": STATS_TABLE_MIG_DEFAULT_H,
+        "health": STATS_TABLE_DEFAULT_H,
+    }
+
 STATS_UTIL_DEFAULT_H     = ( STATS_MAX_VISIBLE_ROWS * STATS_UTIL_ROW_H
                              + max(0, STATS_MAX_VISIBLE_ROWS - 1) * STATS_UTIL_ROW_GAP + 2 )
 STI_WAVEFORM_H           =  80  # Height of an expanded STI waveform row (px).
@@ -316,6 +348,17 @@ def _svg_icon(path_data: str, color: str = "#9E9E9E", size: int = 16) -> "QIcon"
     pm.loadFromData(ba, "SVG")
     return QIcon(pm)
 
+
+def _svg_icon_checked(path_data: str, off: str = "#b0b0cc", on: str = "#e3f2fd",
+                      size: int = 16) -> "QIcon":
+    """Checkable toolbar icon (normal + checked tints)."""
+    icon = QIcon()
+    icon.addPixmap(_svg_icon(path_data, off, size).pixmap(QSize(size, size)),
+                   QIcon.Mode.Normal, QIcon.State.Off)
+    icon.addPixmap(_svg_icon(path_data, on, size).pixmap(QSize(size, size)),
+                   QIcon.Mode.Normal, QIcon.State.On)
+    return icon
+
 def _svg_pixmap(path_data: str, color: str = "#9E9E9E", size: int = 16) -> QPixmap:
     """Rasterise an SVG path to a pixmap (for QLabel icons)."""
     return _svg_icon(path_data, color, size).pixmap(QSize(size, size))
@@ -367,6 +410,32 @@ _IC_FIT    = "M1.5 1h5v1h-4v4h-1V1.5a.5.5 0 0 1 .5-.5zm13 0a.5.5 0 0 1 .5.5V6h-1
 _IC_CURSOR = "M1 1l5 12 2-4 4 4 1-1-4-4 4-2L1 1z"
 _IC_MARK   = "M3 2a1 1 0 0 1 1-1h8a1 1 0 0 1 1 1v12.5a.5.5 0 0 1-.777.416L8 12.101l-4.223 2.815A.5.5 0 0 1 3 14.5V2z"
 _IC_CLEAR  = "M2 2.5l.5-.5 5.5 5.5 5.5-5.5.5.5L8.5 8 14 13.5l-.5.5L8 8.5 2.5 14l-.5-.5L7.5 8 2 2.5z"
+# Snapshot editor annotation tools (Bootstrap Icons paths — same style as main toolbar)
+_IC_SNAP_ARROW = (
+    "M14 0.5a.5.5 0 0 0-.5-.5h-6a.5.5 0 0 0 0 1h4.793L2.146 13.146a.5.5 0 0 0 .708.708L13 2.707V7.5a.5.5 0 0 0 1 0v-7z"
+)
+_IC_SNAP_DBLARROW = (
+    "M3.854 4.146a.5.5 0 0 1 0 .708L1.707 7H14.5a.5.5 0 0 1 0 1H1.707l2.147 2.146a.5.5 0 0 1-.708.708l-3-3a.5.5 0 0 1 0-.708l3-3a.5.5 0 0 1 .708 0zm8.292 0a.5.5 0 0 0 0 .708L14.293 7H1.5a.5.5 0 0 0 0 1h12.793l-2.147 2.146a.5.5 0 0 0 .708.708l3-3a.5.5 0 0 0 0-.708l-3-3a.5.5 0 0 0-.708 0z"
+)
+_IC_SNAP_LINE = "M13.854 2.146a.5.5 0 0 1 0 .708l-11 11a.5.5 0 0 1-.708-.708l11-11a.5.5 0 0 1 .708 0z"
+_IC_SNAP_RECT = (
+    "M14 1a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1h12z"
+    "M2 0a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V2a2 2 0 0 0-2-2H2z"
+)
+_IC_SNAP_CIRCLE = "M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z"
+_IC_SNAP_TEXT = "M3 2h10v1.5H9.25V13h-2.5V3.5H3V2z"
+_IC_SNAP_UNDO = (
+    "M8 3a5 5 0 1 0 4.546 2.914.5.5 0 0 1 .908-.417A6 6 0 1 1 8 2v1z"
+    "M8 4.466V.534a.25.25 0 0 1 .41-.192l2.36 1.966c.12.1.12.284 0 .384L8.41 4.658A.25.25 0 0 1 8 4.466z"
+)
+_SNAP_TOOL_ICONS = {
+    'arrow':    _IC_SNAP_ARROW,
+    'dblarrow': _IC_SNAP_DBLARROW,
+    'line':     _IC_SNAP_LINE,
+    'rect':     _IC_SNAP_RECT,
+    'circle':   _IC_SNAP_CIRCLE,
+    'text':     _IC_SNAP_TEXT,
+}
 _IC_LEGEND = "M1 2a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V2zm5-1h8v1H6V1zm0 3h8v1H6V4zm-5 3a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V7zm5-1h8v1H6V6zm0 3h8v1H6V9zm-5 3a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1v-2zm5-1h8v1H6v-1zm0 3h8v1H6v-1z"
 _IC_TASK   = "M1 2.5A1.5 1.5 0 0 1 2.5 1h11A1.5 1.5 0 0 1 15 2.5v11a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 13.5v-11zM4 5.5h8v1H4v-1zm0 3h8v1H4v-1zm0 3h5v1H4v-1z"
 _IC_CORE   = "M5 1v2H3a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2v2h1v-2h4v2h1v-2h2a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2h-2V1h-1v2H6V1H5zm-2 4h10v6H3V5zm2 1v4h6V6H5z"

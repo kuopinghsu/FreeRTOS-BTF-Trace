@@ -22,6 +22,8 @@ IMPORT_ORDER: tuple[str, ...] = (
     "mvvm.models",
     "mvvm.app_settings",
     "mvvm.stats_vm",
+    "mvvm.find_logic",
+    "mvvm.tab_viewport",
     "mvvm.trace_tab_vm",
     "mvvm.main_vm",
     "mvvm.bindings",

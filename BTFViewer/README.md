@@ -160,10 +160,10 @@ The desktop app uses **Model–View–ViewModel** in `btf_viewer_pkg/mvvm/`:
 | Layer | Module | Role |
 |-------|--------|------|
 | **Model** | `parser.py` (`BtfTrace`, …), `mvvm/models.py` | Trace data and dataclass state (per-tab document, stats panel, app settings, session) |
-| **ViewModel** | `mvvm/trace_tab_vm.py`, `mvvm/main_vm.py`, `mvvm/app_settings.py`, `mvvm/stats_vm.py` | Qt `QObject` wrappers with change signals; no widgets |
+| **ViewModel** | `mvvm/trace_tab_vm.py`, `mvvm/main_vm.py`, `mvvm/app_settings.py`, `mvvm/stats_vm.py`, `mvvm/find_logic.py`, `mvvm/tab_viewport.py` | Qt `QObject` wrappers with change signals; pure find/plot/viewport helpers |
 | **View** | `mainwindow.py`, `view.py`, `stats.py`, … | PySide6 widgets; `MainWindow` mixes in `MvvmSettingsMixin` and owns `MainViewModel` |
 
-Per-tab state (marks, find hits, undo stacks, plot session, statistics panel scope/layout) lives in `TraceTabViewModel` (including `StatsViewModel`). Tab switches stash/restore stats state via the view-model instead of copying through `MainWindow`. Application settings (`_show_sti`, font sizes, theme, …) delegate from `MainWindow` to `AppSettingsViewModel` through `MvvmSettingsMixin`.
+Per-tab state (marks, find query/mode/hits, undo stacks, plot session including interval plots, timeline viewport zoom/cursors/filters, statistics panel scope/layout) lives in `TraceTabViewModel` (including `StatsViewModel`). Tab switches stash/restore via the view-model; per-tab viewport is serialized through `mvvm/tab_viewport.py`. Settings load from `btf_viewer.rc` through `AppSettingsViewModel.load_*_from_rc()` then `_apply_settings_to_all_tabs()`; runtime setting changes propagate to all tabs via `settings_changed`. Undo/redo toolbar state follows `TraceTabViewModel.undo_changed` signals. `_StatsPanel` exposes `capture_layout_state()` / `apply_layout_state()` for the stats view-model bridge.
 
 Edit `btf_viewer_pkg/`, run `make -C BTFViewer`, commit sources plus `builds/btf_viewer.{py,html}`.
 
@@ -680,7 +680,7 @@ Below the scope checkbox, a **scheduling summary** line shows context-switch cou
 |---------|----------------|
 | **Core Utilisation** | Active (non-IDLE, non-TICK) CPU time per core as a percentage |
 | **Top Tasks by CPU** | Top 10 worker tasks ranked by total CPU time |
-| **Trace Health (TICK)** | STI TICK period regularity, **tick / tickless mode detection**, large gaps, missed-tick estimate, and **Tick Distribution** chart (Web: tickless traces; Desktop: whenever ≥ 2 ticks in scope) |
+| **Trace Health (TICK)** | STI TICK period regularity, **tick / tickless mode detection**, large gaps, missed-tick estimate, and **Tick Distribution** chart (Desktop + Web: whenever ≥ 2 ticks in scope) |
 | **Core Migrations** | Per-task cross-core migration stats (see [Core migration analysis](#core-migration-analysis)) |
 | **Execution Time Per Slice** | Per-task slice duration stats (runs, CPU%, min/avg/max/p95) |
 | **Blocking Time** | Off-CPU gap between consecutive activations of the same task (Tracealyzer **Response Time** — identical definition) |
@@ -708,7 +708,7 @@ Click the **Shot** toolbar button (or press `S` when focus is not in a text fiel
 
 ### Metrics Distribution Charts
 
-In the **Statistics** panel, click any row in **Execution Time**, **Blocking Time**, **Inter-Arrival**, **Preemption Chain**, **Priority Inheritance**, or **Interval Analysis** to open a floating chart popup. In **Trace Health (TICK)**, use the **Tick Distribution…** button (bar-chart icon beside the mode badge on Desktop; below the health summary on Web when tickless mode is detected).
+In the **Statistics** panel, click any row in **Execution Time**, **Blocking Time**, **Inter-Arrival**, **Preemption Chain**, **Priority Inheritance**, or **Interval Analysis** to open a floating chart popup. In **Trace Health (TICK)**, use the **Tick Distribution…** button (bar-chart icon beside the mode badge when ≥ 2 ticks are in scope).
 
 - **Scatter plot** — each event plotted in trace time order so you can spot trends, bursts, or outliers.
 - **Histogram** — adaptive bar chart of the value distribution:
@@ -822,7 +822,7 @@ It shows:
 - **Scheduling summary** — context-switch count and average/max core gap between consecutive slices on each core
 - **Core utilisation** — percentage of active (non-IDLE, non-TICK) CPU time per core (collapsible)
 - **Top tasks by CPU** — ranked list of worker tasks by total CPU time consumed (collapsible)
-- **Trace health (TICK)** — tick period regularity, **tick / tickless mode detection** (coefficient of variation of tick intervals), large gaps, missed-tick estimate, and **Tick Distribution…** chart button (bar-chart icon; Desktop: shown when ≥ 2 ticks; Web: tickless mode only) (collapsible)
+- **Trace health (TICK)** — tick period regularity, **tick / tickless mode detection** (coefficient of variation of tick intervals), large gaps, missed-tick estimate, and **Tick Distribution…** chart button (bar-chart icon beside the mode badge when ≥ 2 ticks in scope) (collapsible)
 - **Core Migrations** — per-task migration count, **migration rate** (normalized per second of active time and per scheduler tick), **average core dwell time**, core count, primary core (% time), ping-pong count, STI events near migrations, and average off-CPU gap after migration vs other gaps; click a row to highlight the task (collapsible)
 - **Execution Time Per Slice** — per-task min/avg/max/p95, run count, and CPU%; click a row for a scatter + histogram popup; click **Min** / **Max** to jump and annotate the BCET / WCET slice
 - **Blocking Time** — off-CPU gap between consecutive activations of the same task (**Response Time** in Tracealyzer; same value, different label); min/avg/max/p95; click a row for a distribution chart; click **Min** / **Max** to jump and annotate the shortest / longest off-CPU gap (collapsible)
@@ -1382,7 +1382,7 @@ $$
 
 In **tick mode** the timer interrupt fires at a constant rate and tick intervals form a tight cluster. In **tickless mode** the scheduler suppresses the tick interrupt during idle periods to save power, so consecutive intervals span one or many nominal tick periods — the distribution widens significantly.
 
-When tick intervals can be charted, a **Tick Distribution…** button (bar-chart icon, theme-aware amber/orange styling) appears beside the **TICK** / **TICKLESS** mode badge (Desktop) or below the health summary (Web, tickless only). Clicking it opens the standard scatter + histogram popup showing:
+When tick intervals can be charted, a **Tick Distribution…** button (bar-chart icon, theme-aware amber/orange styling) appears beside the **TICK** / **TICKLESS** mode badge when **≥ 2 ticks** are in scope (Desktop + Web). Clicking it opens the standard scatter + histogram popup showing:
 - **Scatter plot** — each tick interval over trace time; long idle periods appear as tall spikes.
 - **Histogram** — interval distribution with the same adaptive scaling and [CDF overlay](#cdf-overlay) as other metric charts (auto may choose p5–p95 or log duration when tickless idle stretches the range); clearly multi-modal in tickless mode (one sharp peak at 1 × period, another at 2×, 3×, etc.). The CDF helps quantify what fraction of tick intervals are a single period vs two or more.
 
@@ -1409,7 +1409,7 @@ A **migration** is recorded when consecutive slices of the same task (merge-key)
 | **Priority Inheritance** table + distribution charts | ✓ | ✓ |
 | **Mutex / Semaphore** pairing + issue drill-down | ✓ | ✓ |
 | **Interval Analysis** table + distribution charts | ✓ | ✓ |
-| **Tick Distribution** chart (Trace Health) | ✓ (≥ 2 ticks) | ✓ (tickless) |
+| **Tick Distribution** chart (Trace Health) | ✓ (≥ 2 ticks) | ✓ (≥ 2 ticks) |
 | **Export HTML** detail sub-tables (priority / sync / interval) | ✓ | ✓ |
 | Find **Migrations** mode | ✓ | ✓ |
 | **Find** panel (Contains / Exact / Regex / Migrations) | ✓ | ✓ |

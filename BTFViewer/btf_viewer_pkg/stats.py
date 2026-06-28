@@ -3081,34 +3081,11 @@ class _StatsPanel(QWidget):
         self._export_scope_override: Optional[Tuple[int, int]] = None
         self._cursor_times: List[int] = []
         self._scope_to_cursors: bool = True
-        self._section_collapsed: Dict[str, bool] = {
-            "cores": False,
-            "tasks": False,
-            "migrations": False,
-            "exec": False,
-            "block": False,
-            "inter": False,
-            "health": False,
-            "preemption": False,
-            "priority": False,
-            "sync": False,
-            "intervals": False,
-        }
+        self._section_collapsed: Dict[str, bool] = default_section_collapsed()
         self._section_headers: Dict[str, QPushButton] = {}
         self._section_bodies: Dict[str, QWidget] = {}
         self._section_populate: Dict[str, object] = {}
-        self._section_table_heights: Dict[str, int] = {
-            "migrations": STATS_TABLE_MIG_DEFAULT_H,
-            "exec": STATS_TABLE_DEFAULT_H,
-            "block": STATS_TABLE_DEFAULT_H,
-            "inter": STATS_TABLE_DEFAULT_H,
-            "preemption": STATS_TABLE_MIG_DEFAULT_H,
-            "priority": STATS_TABLE_DEFAULT_H,
-            "intervals": STATS_TABLE_DEFAULT_H,
-            "sync": STATS_TABLE_DEFAULT_H,
-            "sync_issues": STATS_TABLE_MIG_DEFAULT_H,
-            "health": STATS_TABLE_DEFAULT_H,
-        }
+        self._section_table_heights: Dict[str, int] = default_section_table_heights()
         self._table_grips: List[_StatsSectionGrip] = []
         self._util_label_col_natural: int = STATS_UTIL_LABEL_W
         self._util_label_col_w: int = STATS_UTIL_LABEL_W
@@ -3271,6 +3248,35 @@ class _StatsPanel(QWidget):
 
     def section_table_heights(self) -> Dict[str, int]:
         return dict(self._section_table_heights)
+
+    def capture_layout_state(self) -> dict:
+        """Return statistics panel layout/scope state for the MVVM layer."""
+        return {
+            "cursor_times": list(self._cursor_times),
+            "scope_to_cursors": bool(self._scope_to_cursors),
+            "export_scope_override": self._export_scope_override,
+            "section_collapsed": dict(self._section_collapsed),
+            "section_table_heights": dict(self._section_table_heights),
+            "util_label_col_w": int(self._util_label_col_w),
+        }
+
+    def apply_layout_state(
+        self, model, *, refresh_stats: bool = True,
+    ) -> None:
+        """Restore statistics panel layout/scope state from the MVVM layer."""
+        self._section_table_heights.update(model.section_table_heights)
+        self._util_label_col_w = model.util_label_col_w
+        self._export_scope_override = model.export_scope_override
+        self._scope_to_cursors = model.scope_to_cursors
+        if hasattr(self, "_scope_cb"):
+            self._scope_cb.blockSignals(True)
+            self._scope_cb.setChecked(model.scope_to_cursors)
+            self._scope_cb.blockSignals(False)
+        for section_id, collapsed in model.section_collapsed.items():
+            if section_id in self._section_headers:
+                self._set_section_collapsed(section_id, collapsed)
+        self.set_cursor_times(model.cursor_times, refresh_stats=refresh_stats)
+        self.apply_section_table_heights(model.section_table_heights)
 
     def _apply_table_display_height(self, table: QTableWidget, h: int) -> int:
         """Set an explicit pixel height so drag-resize is visible (scroll inside table)."""
@@ -3928,10 +3934,13 @@ class _StatsPanel(QWidget):
         """Open a tick-interval distribution scatter+histogram plot."""
         self._open_plot(trace, "__tick_dist__", "tick")
 
-    def capture_plot_session(self) -> Tuple[Optional[str], Optional[str], bool, Optional[str]]:
-        """Return (mk, kind, visible, preemptor) for the current metrics plot dialog."""
+    def capture_plot_session(
+        self,
+    ) -> Tuple[Optional[str], Optional[str], bool, Optional[str], Optional[str]]:
+        """Return (mk, kind, visible, preemptor, interval_id) for the metrics plot dialog."""
         open_ = self._plot_dlg is not None and self._plot_dlg.isVisible()
-        return self._plot_mk, self._plot_kind, open_, self._plot_preemptor
+        return (self._plot_mk, self._plot_kind, open_, self._plot_preemptor,
+                self._plot_interval_id)
 
     def clear_plot_session(self) -> None:
         """Close the metrics plot and clear tracking (used on tab switch)."""
@@ -3950,7 +3959,8 @@ class _StatsPanel(QWidget):
     def restore_plot_session(self, trace: Optional["BtfTrace"],
                              mk: Optional[str], kind: Optional[str],
                              open_: bool,
-                             preemptor: Optional[str] = None) -> None:
+                             preemptor: Optional[str] = None,
+                             interval_id: Optional[str] = None) -> None:
         """Re-open the metrics plot saved for a trace tab, if it was visible."""
         self.clear_plot_session()
         if not open_ or not kind or trace is None:
@@ -3960,6 +3970,10 @@ class _StatsPanel(QWidget):
             return
         if kind == "tag" and mk:
             self._open_tag_plot(trace, mk)
+            return
+        if kind == "interval" and mk:
+            iid = interval_id or mk
+            self._open_interval_plot(trace, iid)
             return
         if not mk:
             return
@@ -7293,6 +7307,16 @@ class _AnnotationCanvas(QWidget):
         ed._begin_edit_shape_text(idx)
         self.update()
 
+def _widget_available_geometry(widget: QWidget) -> QRect:
+    """Qt6-safe available screen geometry (QApplication.desktop() was removed)."""
+    win = widget.window() if widget is not None else None
+    screen = win.screen() if win is not None else None
+    if screen is None:
+        screen = QApplication.primaryScreen()
+    if screen is not None:
+        return screen.availableGeometry()
+    return QRect(0, 0, 1920, 1080)
+
 class SnapshotEditorDialog(QDialog):
     """Annotation editor dialog opened when the user captures a viewport snapshot.
 
@@ -7312,41 +7336,6 @@ class SnapshotEditorDialog(QDialog):
         'circle': 'Circle / Ellipse  (Shift: circle)',
         'text':   'Add Text (click to place)',
     }
-    # SVG icon data for each tool (mirrors the web app icons)
-    _TOOL_ICONS = {
-        'arrow':  b'<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 14L13 3M13 3H7M13 3V9"/></svg>',
-        'dblarrow': b'<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h8M4 8l2.5-2.5M4 8l2.5 2.5M12 8l-2.5-2.5M12 8l-2.5 2.5"/></svg>',
-        'line':  b'<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><line x1="2" y1="14" x2="14" y2="2"/></svg>',
-        'rect':  b'<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2" y="3" width="12" height="9" rx="1"/></svg>',
-        'circle':b'<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><ellipse cx="8" cy="8" rx="6" ry="5"/></svg>',
-        'text':  b'<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 4h10M8 4v9M5 13h6"/></svg>',
-    }
-
-    @staticmethod
-    def _make_svg_icon(svg_bytes: bytes, color: str = '#b0b0cc', size: int = 16) -> 'QIcon':
-        """Render SVG bytes (with `currentColor`) to a QIcon pair (normal + checked)."""
-        from PySide6.QtSvg import QSvgRenderer
-        from PySide6.QtGui import QIcon, QPixmap
-        from PySide6.QtCore import Qt
-
-        def _render(stroke: str) -> QPixmap:
-            data = svg_bytes.replace(b'currentColor', stroke.encode())
-            renderer = QSvgRenderer(data)
-            pm = QPixmap(size, size)
-            pm.fill(Qt.GlobalColor.transparent)
-            from PySide6.QtGui import QPainter
-            p = QPainter(pm)
-            try:
-                renderer.render(p)
-            finally:
-                p.end()
-            return pm
-
-        icon = QIcon()
-        icon.addPixmap(_render(color),   QIcon.Normal,  QIcon.Off)
-        icon.addPixmap(_render('#e3f2fd'), QIcon.Normal, QIcon.On)
-        return icon
-
     def __init__(self, pixmap: QPixmap, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         # Normalize DPR so draw/edit/export all use one pixel coordinate space.
@@ -7376,7 +7365,7 @@ class SnapshotEditorDialog(QDialog):
         self._text_edit_img_y: float = 0.0
 
         # Compute display scale so the canvas fits the available screen area
-        screen = QApplication.desktop().availableGeometry(self)
+        screen = _widget_available_geometry(parent or self)
         max_w = screen.width() - 120
         max_h = screen.height() - 220
         iw, ih = pixmap.width(), pixmap.height()
@@ -7415,7 +7404,7 @@ class SnapshotEditorDialog(QDialog):
         _ICON_H = 28          # uniform height for every toolbar widget
         for tid in self._TOOLS:
             btn = QPushButton()
-            btn.setIcon(self._make_svg_icon(self._TOOL_ICONS[tid]))
+            btn.setIcon(_svg_icon_checked(_SNAP_TOOL_ICONS[tid]))
             btn.setIconSize(QSize(16, 16))
             btn.setCheckable(True)
             btn.setChecked(tid == self._tool)
@@ -7463,6 +7452,23 @@ class SnapshotEditorDialog(QDialog):
         self._font_spin.setToolTip("Text font size")
         self._font_spin.valueChanged.connect(lambda v: setattr(self, '_font_size', v))
         tb.addWidget(self._font_spin)
+        tb.addSpacing(8)
+        undo_btn = QPushButton()
+        undo_btn.setIcon(_svg_icon(_IC_SNAP_UNDO, '#b0b0cc'))
+        undo_btn.setIconSize(QSize(16, 16))
+        undo_btn.setFixedSize(_ICON_H, _ICON_H)
+        undo_btn.setToolTip("Undo (Ctrl+Z)")
+        undo_btn.clicked.connect(self._undo)
+        tb.addWidget(undo_btn)
+
+        clear_btn = QPushButton()
+        clear_btn.setIcon(_svg_icon(_IC_CLEAR, '#b0b0cc'))
+        clear_btn.setIconSize(QSize(16, 16))
+        clear_btn.setFixedSize(_ICON_H, _ICON_H)
+        clear_btn.setToolTip("Clear all annotations")
+        clear_btn.clicked.connect(self._clear_all)
+        tb.addWidget(clear_btn)
+
         tb.addStretch()
         main.addLayout(tb)
 
@@ -7484,8 +7490,10 @@ class SnapshotEditorDialog(QDialog):
         bot = QHBoxLayout()
         bot.setSpacing(6)
         copy_btn = QPushButton("Copy to Clipboard")
+        copy_btn.setIcon(_svg_icon(_IC_COPY, '#b0b0cc'))
         copy_btn.clicked.connect(self._on_copy)
         save_btn = QPushButton("Save PNG...")
+        save_btn.setIcon(_svg_icon(_IC_SAVE, '#b0b0cc'))
         save_btn.clicked.connect(self._on_save)
         close_btn = QPushButton("Close")
         close_btn.clicked.connect(self.close)
@@ -7760,6 +7768,13 @@ class SnapshotEditorDialog(QDialog):
             if self._selected_idx >= len(self._shapes):
                 self._selected_idx = -1
             self._canvas.update()
+
+    def _clear_all(self) -> None:
+        if self._text_edit_active():
+            self._cancel_text_edit()
+        self._shapes.clear()
+        self._selected_idx = -1
+        self._canvas.update()
 
     # ------------------------------------------------------------------
     # Hit-testing and shape movement

@@ -155,3 +155,10 @@ export function cursorRangeShade(range, visibleStart, visibleEnd, visibleSpan, p
   const x1 = ((hi - visibleStart) / visibleSpan) * plotW
   return { x: x0, width: Math.max(1, x1 - x0) }
 }
+
+/** Inline SVG fill for cursor-range shading (domToBlob ignores scoped CSS). */
+export function cpuLoadRangeShadePaint(darkMode = true) {
+  return darkMode
+    ? { fill: '#4499FF', fillOpacity: 0.28 }
+    : { fill: '#2A6FB2', fillOpacity: 0.22 }
+}

@@ -110,7 +110,7 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { rowBandHeight, visibleRowIndexRange, orthRowBuffer, RULER_H } from '../renderer/TimelineRenderer.js'
 import { getTimelineLayout } from '../utils/timelineLayout.js'
 import { taskMergeKey } from '../utils/colors.js'
@@ -134,6 +134,9 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['expandToggle', 'highlightChange', 'highlightClick', 'stiExpandToggle'])
+
+const colEl = ref(null)
+defineExpose({ colEl })
 
 const totalHeight = computed(() => props.rowLayout?.totalHeight ?? 0)
 

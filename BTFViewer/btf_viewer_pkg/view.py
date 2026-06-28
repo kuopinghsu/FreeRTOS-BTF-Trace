@@ -3348,22 +3348,57 @@ class TimelineView(QGraphicsView):
             p.end()
         return pix
 
+    @staticmethod
+    def _nav_strip_rect(
+        total_main: float, visible_main: float, scroll_pos: float, strip_area_h: float,
+    ) -> Tuple[float, float]:
+        """Map main-view orth scroll to overview strip position/size (web parity)."""
+        area_h = max(1.0, strip_area_h)
+        if total_main <= visible_main or total_main <= 0:
+            return 0.0, area_h
+        size = max(2.0, (visible_main / total_main) * area_h)
+        max_pos = max(0.0, area_h - size)
+        pos = (scroll_pos / (total_main - visible_main)) * max_pos
+        return pos, size
+
+    def _nav_orth_scroll_state(self) -> Tuple[float, float, float]:
+        """Return (scroll_pos, total_main, visible_main) for the orth axis (tasks + STI)."""
+        sc = self._scene
+        vp_rect = self.viewport().rect()
+        scene_rect = sc.sceneRect()
+        if sc._horizontal:
+            orth_scene = self.mapToScene(QPoint(0, RULER_HEIGHT)).y()
+            scroll_pos = max(0.0, orth_scene - RULER_HEIGHT)
+            total_main = max(1.0, float(scene_rect.height()) - RULER_HEIGHT)
+            visible_main = max(1.0, float(vp_rect.height()) - RULER_HEIGHT)
+        else:
+            orth_scene = self.mapToScene(QPoint(RULER_WIDTH, 0)).x()
+            scroll_pos = max(0.0, orth_scene - RULER_WIDTH)
+            total_main = max(1.0, float(scene_rect.width()) - RULER_WIDTH)
+            visible_main = max(1.0, float(vp_rect.width()) - RULER_WIDTH)
+        return scroll_pos, total_main, visible_main
+
+    def _set_nav_orth_scroll_pos(self, target: float) -> None:
+        """Scroll the orth axis to *target* (px below ruler / right of ruler column)."""
+        current, _, _ = self._nav_orth_scroll_state()
+        delta = int(round(target - current))
+        if delta != 0:
+            self._scroll_orth_axis_by(-delta)
+
     def _nav_popup_metrics(self) -> dict:
         """Return navigator minimap geometry for painting and interaction."""
         W = float(_NavigatorPopup.W)
         H = float(_NavigatorPopup.H)
         sc = self._scene
         tr = sc._trace
-        vbar = self.verticalScrollBar() if sc._horizontal else self.horizontalScrollBar()
-        v_range = vbar.maximum() - vbar.minimum()
-        v_total = v_range + vbar.pageStep()
-        content_h = max(1.0, float(v_total) - RULER_HEIGHT)
+        # Full minimap height (task strip + STI); indicator moves over entire thumbnail.
+        strip_h = H
 
         if tr is None:
             return {
-                'W': W, 'H': H, 'time_span': 1, 'vis_span_ns': 1,
-                'vx1': 0.0, 'vy1': 0.0, 'vw': W, 'vh': H,
-                'vbar': vbar, 'v_range': v_range, 'content_h': content_h,
+                'W': W, 'H': H, 'strip_h': strip_h, 'time_span': 1, 'vis_span_ns': 1,
+                'vx1': 0.0, 'vy1': 0.0, 'vw': W, 'vh': strip_h,
+                'scroll_pos': 0.0, 'total_main': 1.0, 'visible_main': 1.0,
             }
 
         time_span = max(tr.time_max - tr.time_min, 1)
@@ -3390,24 +3425,23 @@ class TimelineView(QGraphicsView):
         vx1 = (act_ns_lo - tr.time_min) / time_span * W
         vx2 = (act_ns_hi - tr.time_min) / time_span * W
 
-        if content_h > 0 and v_range > 0:
-            scroll_val = max(0.0, float(vbar.value() - vbar.minimum()) - RULER_HEIGHT)
-            vy1 = scroll_val / content_h * H
-            vy_h = max(1.5, vbar.pageStep() / content_h * H)
-        else:
-            vy1, vy_h = 0.0, float(H)
+        scroll_pos, total_main, visible_main = self._nav_orth_scroll_state()
+        vy1, vy_h = self._nav_strip_rect(
+            total_main, visible_main, scroll_pos, strip_h)
 
         vx1 = max(0.0, min(W, vx1))
         vx2 = max(0.0, min(W, vx2))
-        vy1 = max(0.0, min(H, vy1))
-        vy_h = min(H - vy1, vy_h)
+        vy1 = max(0.0, min(strip_h, vy1))
+        vy_h = min(strip_h - vy1, vy_h)
         vw = max(1.5, vx2 - vx1)
         vh = max(1.5, vy_h)
 
         return {
-            'W': W, 'H': H, 'time_span': time_span, 'vis_span_ns': vis_span_ns,
+            'W': W, 'H': H, 'strip_h': strip_h, 'time_span': time_span,
+            'vis_span_ns': vis_span_ns,
             'vx1': vx1, 'vy1': vy1, 'vw': vw, 'vh': vh,
-            'vbar': vbar, 'v_range': v_range, 'content_h': content_h,
+            'scroll_pos': scroll_pos, 'total_main': total_main,
+            'visible_main': visible_main,
         }
 
     def _nav_popup_apply_from_indicator_pos(self, vx1: float, vy1: float) -> None:
@@ -3417,10 +3451,11 @@ class TimelineView(QGraphicsView):
         if tr is None:
             return
         m = self._nav_popup_metrics()
-        W, H = m['W'], m['H']
+        W = m['W']
         vw, vh = m['vw'], m['vh']
+        strip_h = m['strip_h']
         vx1 = max(0.0, min(W - vw, vx1))
-        vy1 = max(0.0, min(H - vh, vy1))
+        vy1 = max(0.0, min(strip_h - vh, vy1))
 
         scrollable_w = max(W - vw, 1.0)
         ratio_x = vx1 / scrollable_w
@@ -3428,13 +3463,10 @@ class TimelineView(QGraphicsView):
         target_center_ns = target_lo_ns + m['vis_span_ns'] // 2
         self._navigate_time_to_ns(target_center_ns)
 
-        vbar = m['vbar']
-        if m['content_h'] > 0 and m['v_range'] > 0:
-            scrollable_h = max(H - vh, 1.0)
-            ratio_y = vy1 / scrollable_h
-            scroll_val = ratio_y * m['content_h'] + RULER_HEIGHT + vbar.minimum()
-            scroll_val = max(float(vbar.minimum()), min(float(vbar.maximum()), scroll_val))
-            vbar.setValue(int(scroll_val))
+        scrollable_h = max(strip_h - vh, 1.0)
+        ratio_y = vy1 / scrollable_h
+        target_scroll = ratio_y * max(0.0, m['total_main'] - m['visible_main'])
+        self._set_nav_orth_scroll_pos(target_scroll)
 
         self._refresh_nav_pan_window(force_show=True)
 
@@ -3445,19 +3477,17 @@ class TimelineView(QGraphicsView):
         if tr is None:
             return
         m = self._nav_popup_metrics()
-        W, H = m['W'], m['H']
+        W = m['W']
+        strip_h = m['strip_h']
         ratio_x = max(0.0, min(1.0, cx / max(W, 1.0)))
-        ratio_y = max(0.0, min(1.0, cy / max(H, 1.0)))
+        ratio_y = max(0.0, min(1.0, cy / max(strip_h, 1.0)))
 
         target_lo_ns = tr.time_min + int(ratio_x * max(0, m['time_span'] - m['vis_span_ns']))
         target_center_ns = target_lo_ns + m['vis_span_ns'] // 2
         self._navigate_time_to_ns(target_center_ns)
 
-        vbar = m['vbar']
-        if m['content_h'] > 0 and m['v_range'] > 0:
-            scroll_val = ratio_y * m['content_h'] + RULER_HEIGHT + vbar.minimum()
-            scroll_val = max(float(vbar.minimum()), min(float(vbar.maximum()), scroll_val))
-            vbar.setValue(int(scroll_val))
+        target_scroll = ratio_y * max(0.0, m['total_main'] - m['visible_main'])
+        self._set_nav_orth_scroll_pos(target_scroll)
 
         self._refresh_nav_pan_window(force_show=True)
 

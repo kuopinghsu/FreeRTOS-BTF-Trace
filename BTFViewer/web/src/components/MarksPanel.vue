@@ -446,6 +446,7 @@ defineExpose({ focusAnnotation })
 
 .marks-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
   padding: 6px 8px;
   border-top: 1px solid var(--border);
@@ -453,7 +454,8 @@ defineExpose({ focusAnnotation })
 }
 
 .action-btn {
-  flex: 1;
+  flex: 1 1 calc(33.333% - 4px);
+  min-width: 4.5rem;
   padding: 3px 8px;
   background: transparent;
   border: 1px solid var(--border);

@@ -10,6 +10,7 @@ from .scene import *  # noqa: F403,F401
 from .view import *  # noqa: F403,F401
 from .stats import *  # noqa: F403,F401
 from .mvvm import MainViewModel, MvvmSettingsMixin, TraceTabViewModel
+from .mvvm.tab_viewport import apply_viewport, viewport_from_json, viewport_to_json
 
 class _CpuLoadGraph(QWidget):
     """Synchronised CPU load chart below the main timeline.
@@ -1014,6 +1015,14 @@ class _TraceTab:
     def plot_open(self, value: bool) -> None:
         self.vm.plot_open = value
 
+    @property
+    def plot_interval_id(self) -> Optional[str]:
+        return self.vm.plot_interval_id
+
+    @plot_interval_id.setter
+    def plot_interval_id(self, value: Optional[str]) -> None:
+        self.vm.plot_interval_id = value
+
 class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     # ------------------------------------------------------------------
@@ -1088,6 +1097,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
         # Restore all persisted settings (geometry, zoom, orientation, ...).
         self._restore_settings()
+        self._vm.settings.settings_changed.connect(self._on_settings_changed)
+        self._wired_tab_vm: Optional[TraceTabViewModel] = None
+        self._vm.active_tab_changed.connect(self._wire_active_tab_vm_signals)
 
         app = QApplication.instance()
         if app is not None:
@@ -1253,11 +1265,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             yield self._settings_view
 
     def _find_tab_index(self, path: str) -> int:
-        norm = os.path.abspath(os.path.expanduser(path))
-        for i, tab in enumerate(self._tabs):
-            if os.path.abspath(tab.path) == norm:
-                return i
-        return -1
+        norm = lambda p: os.path.abspath(os.path.expanduser(p))
+        return self._vm.tab_for_path(path, normalizer=norm)
 
     def _wire_timeline_view(self, view: TimelineView) -> None:
         view.zoom_changed.connect(lambda tpp, v=view: self._on_zoom_changed(tpp, v))
@@ -1512,7 +1521,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         sc.set_hover_highlight(self._hover_highlight_val)
         sc.set_theme(self._is_dark, rebuild=False)
         self._sync_timeline_view_theme(view, self._is_dark)
-        view.set_horizontal(self._act_horiz.isChecked() if hasattr(self, "_act_horiz") else True)
+        view.set_horizontal(self._vm.settings.horizontal)
         view.set_show_sti(self._show_sti)
         view.set_show_grid(self._show_grid)
         view.set_view_mode(self._view_mode if hasattr(self, "_view_mode") else "task")
@@ -1551,62 +1560,72 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
     def _stash_tab_state(self, tab: _TraceTab) -> None:
         tab.vm.stats.copy_from_panel(self._stats_panel)
         tab.vm.stats.cursor_times = list(tab.view._scene.cursor_times())
-        mk, kind, open_, preemptor = self._stats_panel.capture_plot_session()
-        tab.vm.set_plot_session(mk, kind, open_, preemptor)
+        tab.vm.capture_viewport_from_view(tab.view)
+        tab.vm.find_query = self._find_input.text()
+        tab.vm.find_mode = self._find_mode_combo.currentText()
+        mk, kind, open_, preemptor, interval_id = self._stats_panel.capture_plot_session()
+        tab.vm.set_plot_session(mk, kind, open_, preemptor, interval_id)
         self._persist_trace_state(tab.path, tab.bookmarks, tab.annotations, tab.mark_next_id)
         self._persist_tab_view_state(tab)
+
+    def _restore_find_widgets_from_tab(self, tab: _TraceTab) -> None:
+        """Restore Find panel widgets from per-tab view-model (no recompute)."""
+        self._find_input.blockSignals(True)
+        self._find_mode_combo.blockSignals(True)
+        try:
+            self._find_input.setText(tab.vm.find_query)
+            idx = self._find_mode_combo.findText(
+                tab.vm.find_mode, Qt.MatchFlag.MatchFixedString)
+            if idx >= 0:
+                self._find_mode_combo.setCurrentIndex(idx)
+        finally:
+            self._find_input.blockSignals(False)
+            self._find_mode_combo.blockSignals(False)
+
+    def _wire_active_tab_vm_signals(self, _vm=None) -> None:
+        """Connect undo_changed on the active tab VM (MVVM → toolbar)."""
+        vm = self._active_tab_vm
+        if vm is self._wired_tab_vm:
+            self._sync_undo_actions()
+            return
+        if self._wired_tab_vm is not None:
+            try:
+                self._wired_tab_vm.undo_changed.disconnect(self._sync_undo_actions)
+            except TypeError:
+                pass
+        self._wired_tab_vm = vm
+        if vm is not None:
+            vm.undo_changed.connect(self._sync_undo_actions)
+        self._sync_undo_actions()
+
+    def _sync_undo_actions(self) -> None:
+        if not hasattr(self, "_act_undo"):
+            return
+        vm = self._active_tab_vm
+        self._act_undo.setEnabled(bool(vm and vm.undo_stack))
+        self._act_redo.setEnabled(bool(vm and vm.redo_stack))
 
     def _persist_tab_view_state(self, tab: _TraceTab) -> None:
         """Save zoom/cursor layout for one tab (keyed by trace path hash)."""
         if not tab.path or tab.trace is None:
             return
-        sc = tab.view._scene
-        payload = {
-            "zoom": -1 if tab.view._fit_mode else sc.timescale_per_px,
-            "fit_mode": bool(tab.view._fit_mode),
-            "cursors": list(sc.cursor_times()),
-            "filters": _snapshot_tab_filters(sc),
-        }
+        tab.vm.capture_viewport_from_view(tab.view)
         key = self._trace_state_key(tab.path)
-        self._settings.set("tab_view", key, json.dumps(payload, ensure_ascii=True), flush=False)
+        self._settings.set(
+            "tab_view", key, viewport_to_json(tab.vm.viewport), flush=False)
 
     def _load_tab_view_state(self, tab: _TraceTab) -> None:
         """Restore zoom/cursors saved for *tab* in btf_viewer.rc."""
         view = tab.view
         sc = view._scene
         raw = self._settings.get("tab_view", self._trace_state_key(tab.path), "")
-        if not raw.strip():
+        vp = viewport_from_json(raw)
+        if vp is None:
             view.zoom_changed.emit(sc.timescale_per_px)
             view._refresh_nav_pan_window(force_show=view._navigator_eligible())
             return
-        try:
-            payload = json.loads(raw)
-        except json.JSONDecodeError:
-            view.zoom_changed.emit(sc.timescale_per_px)
-            view._refresh_nav_pan_window(force_show=view._navigator_eligible())
-            return
-        fit_mode = bool(payload.get("fit_mode", True))
-        zoom = float(payload.get("zoom", -1))
-        if fit_mode:
-            view.zoom_fit()
-        elif zoom > 0:
-            sc._timescale_per_px = max(sc._timescale_per_px_default, zoom)
-            view._fit_mode = False
-            sc.rebuild()
-            view.zoom_changed.emit(sc.timescale_per_px)
-        for ns in payload.get("cursors", []):
-            try:
-                sc.add_cursor(int(ns))
-            except (ValueError, TypeError):
-                pass
-        if sc.cursor_times():
-            view.cursors_changed.emit(sc.cursor_times())
-        filters = _sanitize_tab_filters(payload.get("filters"))
-        if filters:
-            sc.apply_tab_filters(filters, rebuild=False)
-            sc.rebuild()
-            sc.task_filter_changed.emit()
-        view._refresh_nav_pan_window(force_show=view._navigator_eligible())
+        tab.vm.viewport = vp
+        apply_viewport(view, vp)
 
     def _persist_open_tabs(self) -> None:
         """Write open tab paths and active tab index to btf_viewer.rc."""
@@ -1695,9 +1714,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
     def _restore_tab_state(self, tab: _TraceTab) -> None:
         self._rebuild_bookmark_list()
         self._rebuild_annotation_list()
+        self._restore_find_widgets_from_tab(tab)
         self._sync_panels_to_active_tab()
-        self._act_undo.setEnabled(bool(self._undo_stack))
-        self._act_redo.setEnabled(bool(self._redo_stack))
+        self._wire_active_tab_vm_signals()
 
     def _focus_statistics_panel(self, force: bool = False) -> None:
         """Show and activate the Statistics tab in the right panel."""
@@ -1845,7 +1864,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._restore_tab_state(tab)
             self._stats_panel.restore_plot_session(
                 tab.trace, tab.plot_mk, tab.plot_kind, tab.plot_open,
-                preemptor=tab.plot_preemptor)
+                preemptor=tab.plot_preemptor,
+                interval_id=tab.plot_interval_id)
         else:
             self._vm.set_active_index(-1)
             self._update_tab_actions()
@@ -2092,6 +2112,67 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._relax_right_dock_content_widths()
         _wire_splitter_handle_cursors(self)
 
+    def _apply_view_prefs_from_vm(self) -> None:
+        """Apply AppSettingsViewModel values to timeline widgets (after RC load)."""
+        self._apply_settings_to_all_tabs()
+
+    def _on_settings_changed(self) -> None:
+        """Push AppSettingsViewModel changes to all open tabs and chrome."""
+        self._apply_settings_to_all_tabs()
+
+    def _apply_settings_to_all_tabs(self) -> None:
+        """Apply AppSettingsViewModel values to timeline widgets and docks."""
+        if getattr(self, "_applying_settings", False):
+            return
+        if not hasattr(self, "_view"):
+            return
+        self._applying_settings = True
+        try:
+            self._apply_settings_to_all_tabs_impl()
+        finally:
+            self._applying_settings = False
+
+    def _apply_settings_to_all_tabs_impl(self) -> None:
+        self._view.set_font_size(self._font_size_val)
+        self._apply_theme(self._is_dark)
+        self._view.set_max_cursors(self._max_cursors_val)
+        for view in self._iter_tab_views():
+            self._apply_view_settings(view)
+        for tab in self._tabs:
+            self._sync_cpu_load_graph(tab)
+
+        if not self._show_cpu_load:
+            self._cpu_load_scroll.hide()
+            if hasattr(self, "_tb_cpu_load_btn"):
+                self._tb_cpu_load_btn.setChecked(False)
+        elif hasattr(self, "_tb_cpu_load_btn"):
+            self._tb_cpu_load_btn.setChecked(True)
+
+        self._cpu_load_graph.set_row_h(self._cpu_load_row_h_val)
+        if self._cpu_splitter_bottom_h and self._cpu_splitter_bottom_h > 0:
+            for tab in self._tabs:
+                self._apply_saved_cpu_splitter(tab)
+
+        horizontal = self._vm.settings.horizontal
+        if hasattr(self, "_act_horiz"):
+            self._act_horiz.setChecked(horizontal)
+            self._act_vert.setChecked(not horizontal)
+            self._tb_horiz_btn.setChecked(horizontal)
+            self._tb_vert_btn.setChecked(not horizontal)
+        if self._view_mode == "core":
+            self._set_view_mode("core")
+        if self._vm.settings.colorblind:
+            self._set_colorblind_safe(True)
+
+        self._set_show_sti(self._show_sti, persist=False)
+        self._set_show_grid(self._show_grid, persist=False)
+
+        if not self._show_legend:
+            self._legend_dock.setVisible(False)
+        self._sync_panel_tab_visibility()
+        self._panel_dock.setVisible(
+            self._show_stats or self._show_marks or self._show_find)
+
     def _restore_settings(self) -> None:
         """Apply all values from btf_viewer.rc after the UI has been built."""
         s = self._settings
@@ -2107,68 +2188,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if s.get_bool("window", "maximized", False):
             self.showMaximized()
 
-        # Font size
-        saved_fs = s.get_int("view", "font_size", FONT_SIZE)
-        if saved_fs != FONT_SIZE:
-            self._font_size_val = saved_fs
-            self._view.set_font_size(saved_fs)
-
-        # UI font size
-        saved_ufs = s.get_int("view", "ui_font_size", UI_FONT_SIZE)
-        if saved_ufs != UI_FONT_SIZE:
-            self._ui_font_size_val = saved_ufs
-            self._apply_theme(self._is_dark)
-
-        # Max cursors
-        saved_mc = s.get_int("view", "max_cursors", _DEFAULT_MAX_CURSORS)
-        if saved_mc != _DEFAULT_MAX_CURSORS:
-            self._max_cursors_val = saved_mc
-            self._view.set_max_cursors(saved_mc)
-
-        # Label column width
-        saved_lw = s.get_int("view", "label_width", LABEL_WIDTH)
-        self._label_width_val = max(60, min(saved_lw, 600))
-        self._view._scene.set_label_width(self._label_width_val)
-
-        # Row height
-        saved_rh = s.get_int("view", "row_height", ROW_HEIGHT)
-        if saved_rh != ROW_HEIGHT:
-            self._row_height_val = saved_rh
-            self._view._scene.set_row_height(saved_rh)
-
-        # Row gap
-        saved_rg = s.get_int("view", "row_gap", ROW_GAP)
-        if saved_rg != ROW_GAP:
-            self._row_gap_val = saved_rg
-            self._view._scene.set_row_gap(saved_rg)
-
-        # Max zoom-in level (timescale/px default)
-        saved_nppd = s.get_float("view", "timescale_per_px_default", _TIMESCALE_PER_PX_DEFAULT)
-        if saved_nppd != _TIMESCALE_PER_PX_DEFAULT:
-            self._timescale_per_px_default_val = saved_nppd
-            self._view._scene.set_timescale_per_px_default(saved_nppd)
-
-        # CPU load graph visibility
-        saved_cpl = s.get_bool("view", "show_cpu_load", True)
-        if not saved_cpl:
-            self._show_cpu_load = False
-            self._cpu_load_scroll.hide()
-            if hasattr(self, '_tb_cpu_load_btn'):
-                self._tb_cpu_load_btn.setChecked(False)
-
-        # CPU load graph row height
-        saved_clrh = s.get_int("view", "cpu_load_row_h", CPU_LOAD_ROW_H)
-        if saved_clrh != CPU_LOAD_ROW_H:
-            self._cpu_load_row_h_val = saved_clrh
-            self._cpu_load_graph.set_row_h(saved_clrh)
-
-        saved_cpu_bottom = s.get_int("view", "cpu_splitter_bottom_h", 0)
-        if saved_cpu_bottom > 0:
-            self._cpu_splitter_bottom_h = saved_cpu_bottom
-            self._cpu_splitter_user_sized = s.get_bool(
-                "view", "cpu_splitter_user_sized", False)
-            for tab in self._tabs:
-                self._apply_saved_cpu_splitter(tab)
+        self._vm.settings.load_theme_from_rc(s)
+        self._vm.settings.load_view_prefs_from_rc(s)
+        self._apply_view_prefs_from_vm()
 
         if hasattr(self, "_stats_panel"):
             _stats_heights: Dict[str, int] = {}
@@ -2178,57 +2200,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 _h = s.get_int("stats", f"table_height_{_sid}", _default)
                 _stats_heights[_sid] = _h
             self._stats_panel.apply_section_table_heights(_stats_heights)
-
-        # STI row heights and line style
-        saved_srh = s.get_int("view", "sti_row_h", STI_ROW_H)
-        if saved_srh != STI_ROW_H:
-            self._sti_row_h_val = saved_srh
-            self._view._scene.set_sti_row_h(saved_srh)
-        saved_swh = s.get_int("view", "sti_waveform_h", STI_WAVEFORM_H)
-        if saved_swh != STI_WAVEFORM_H:
-            self._sti_waveform_h_val = saved_swh
-            self._view._scene.set_sti_waveform_h(saved_swh)
-        saved_sls = s.get("view", "sti_line_style", STI_LINE_STYLE)
-        if saved_sls != STI_LINE_STYLE:
-            self._sti_line_style_val = saved_sls
-            self._view._scene.set_sti_line_style(saved_sls)
-
-        # Hover label highlight
-        saved_hh = s.get_bool("view", "hover_highlight", _HOVER_HIGHLIGHT_ENABLED)
-        if saved_hh != _HOVER_HIGHLIGHT_ENABLED:
-            self._hover_highlight_val = saved_hh
-            self._view._scene.set_hover_highlight(saved_hh)
-
-        # Orientation (horizontal is the default)
-        if not s.get_bool("view", "horizontal", True):
-            self._set_orientation(False)
-
-        # View mode
-        if s.get("view", "view_mode", "task") == "core":
-            self._set_view_mode("core")
-
-        # Colorblind-safe task palette
-        saved_cb = s.get_bool("view", "colorblind_safe", False)
-        if saved_cb:
-            self._set_colorblind_safe(True)
-
-        # STI / grid visibility
-        if not s.get_bool("view", "show_sti", True):
-            self._set_show_sti(False, persist=False)
-        if not s.get_bool("view", "show_grid", True):
-            self._set_show_grid(False, persist=False)
-
-        # Legend / statistics panel visibility
-        if not s.get_bool("view", "show_legend", True):
-            self._show_legend = False
-            self._legend_dock.setVisible(False)
-        if not s.get_bool("view", "show_stats", True):
-            self._show_stats = False
-        self._show_marks = s.get_bool("view", "show_marks", True)
-        self._show_find = s.get_bool("view", "show_find", True)
-        self._sync_panel_tab_visibility()
-        self._panel_dock.setVisible(
-            self._show_stats or self._show_marks or self._show_find)
 
         # Dock layout (marks/stats/legend sizes & positions).
         # dock_layout_version gates restoration: if the saved version is older
@@ -3441,8 +3412,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         _ia("Open",     self._on_open,         _IC_OPEN,     "Open BTF trace file  (Ctrl+O)")
         _ia("Save PNG", self._on_save_image,   _IC_SAVE,     "Open snapshot editor  (Ctrl+S)")
         _ia("Save SVG", self._on_save_svg,     _IC_SAVE_SVG, "Save viewport as SVG  (Ctrl+Shift+S)")
-        _ia("Shot",     self._open_snapshot_editor, _IC_SHOT,
-            "Capture viewport snapshot for annotation  (Ctrl+S)")
         tb.addSeparator()
 
         # --- Layout and zoom ---
@@ -3611,6 +3580,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._tb_vert_btn.setChecked(not horizontal)
         for view in self._iter_tab_views():
             view.set_horizontal(horizontal)
+        self._vm.settings.blockSignals(True)
+        try:
+            self._vm.settings.horizontal = horizontal
+        finally:
+            self._vm.settings.blockSignals(False)
         self._refresh_find_marker()
 
     def _set_show_sti(self, show: bool, persist: bool = True) -> None:
@@ -4606,73 +4580,17 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._recompute_find_hits()
 
     def _recompute_find_hits(self) -> None:
-        self._find_hits = []
-        self._find_hit_idx = -1
-        self._set_find_marker_ns(None)
-        if self._trace is None:
+        vm = self._active_tab_vm
+        if vm is None or self._trace is None:
             self._find_status.setText("0 matches")
             self._view._scene.set_find_hits([])
             return
-        query = self._find_input.text().strip()
-        if not query:
-            self._find_status.setText("0 matches")
-            self._view._scene.set_find_hits([])
-            return
-        mode = self._find_mode_combo.currentText().lower()
-        if mode == "migrations":
-            q_lower = query.lower()
-            for m in getattr(self._trace, "migrations", ()):
-                raw = self._trace.task_repr.get(m.merge_key, m.merge_key)
-                disp = _task_display_name(raw)
-                hay = f"{m.merge_key} {raw} {disp} {m.from_core} {m.to_core}"
-                if (not q_lower or q_lower in hay.lower()
-                        or q_lower in m.from_core.lower()
-                        or q_lower in m.to_core.lower()):
-                    self._find_hits.append(m.ns)
-            self._find_hits = sorted(set(self._find_hits))
-            self._find_status.setText(f"{len(self._find_hits)} migration matches")
-            self._view._scene.set_find_hits(self._find_hits)
-            if not self._find_hits:
-                self._set_find_marker_ns(None)
-            return
-        regex_obj = None
-        if mode == "regex":
-            if len(query) > _MAX_FIND_REGEX_LEN:
-                self._find_status.setText("Regex too long")
-                self._view._scene.set_find_hits([])
-                return
-            try:
-                regex_obj = re.compile(query, re.IGNORECASE)
-            except re.error:
-                self._find_status.setText("Regex error")
-                self._set_find_marker_ns(None)
-                return
-        for mk, segs in self._trace.seg_map_by_merge_key.items():
-            raw = self._trace.task_repr.get(mk, mk)
-            disp = _task_display_name(raw)
-            hay = f"{mk} {raw} {disp}"
-            if mode == "contains":
-                matched = query.lower() in hay.lower()
-            elif mode == "exact":
-                matched = query.lower() == mk.lower() or query.lower() == raw.lower() or query.lower() == disp.lower()
-            else:
-                matched = bool(regex_obj.search(hay)) if regex_obj is not None else False
-            if matched:
-                self._find_hits.extend(s.start for s in segs)
-        for ann in self._annotations:
-            hay = ann.note
-            if mode == "contains":
-                matched = query.lower() in hay.lower()
-            elif mode == "exact":
-                matched = query.lower() == hay.lower()
-            else:
-                matched = bool(regex_obj.search(hay)) if regex_obj is not None else False
-            if matched:
-                self._find_hits.append(ann.ns)
-        self._find_hits = sorted(set(self._find_hits))
-        self._find_status.setText(f"{len(self._find_hits)} matches")
-        self._view._scene.set_find_hits(self._find_hits)
-        if not self._find_hits:
+        vm.find_query = self._find_input.text()
+        vm.find_mode = self._find_mode_combo.currentText()
+        status = vm.recompute_find_hits()
+        self._find_status.setText(status)
+        self._view._scene.set_find_hits(vm.find_hits)
+        if not vm.find_hits:
             self._set_find_marker_ns(None)
 
     def _find_next(self) -> None:
@@ -5436,12 +5354,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             [TraceAnnotation(a.id, a.ns, a.note) for a in self._annotations],
             self._mark_next_id,
         )
-        self._undo_stack.append(snap)
-        if len(self._undo_stack) > 50:
-            self._undo_stack.pop(0)
-        self._redo_stack.clear()
-        self._act_undo.setEnabled(True)
-        self._act_redo.setEnabled(False)
+        stack = list(self._undo_stack)
+        stack.append(snap)
+        if len(stack) > 50:
+            stack.pop(0)
+        self._undo_stack = stack
+        self._redo_stack = []
 
     def _restore_snapshot(self, snap: tuple) -> None:
         """Restore cursor + mark state from a snapshot tuple."""
@@ -5472,10 +5390,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             [TraceAnnotation(a.id, a.ns, a.note) for a in self._annotations],
             self._mark_next_id,
         )
-        self._redo_stack.append(snap)
-        self._act_redo.setEnabled(True)
-        snap = self._undo_stack.pop()
-        self._act_undo.setEnabled(bool(self._undo_stack))
+        redo = list(self._redo_stack)
+        redo.append(snap)
+        self._redo_stack = redo
+        undo = list(self._undo_stack)
+        snap = undo.pop()
+        self._undo_stack = undo
         self._restore_snapshot(snap)
 
     def _cmd_redo(self) -> None:
@@ -5488,10 +5408,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             [TraceAnnotation(a.id, a.ns, a.note) for a in self._annotations],
             self._mark_next_id,
         )
-        self._undo_stack.append(snap)
-        self._act_undo.setEnabled(True)
-        snap = self._redo_stack.pop()
-        self._act_redo.setEnabled(bool(self._redo_stack))
+        undo = list(self._undo_stack)
+        undo.append(snap)
+        self._undo_stack = undo
+        redo = list(self._redo_stack)
+        snap = redo.pop()
+        self._redo_stack = redo
         self._restore_snapshot(snap)
 
     def _on_legend_task_clicked(self, task: str) -> None:

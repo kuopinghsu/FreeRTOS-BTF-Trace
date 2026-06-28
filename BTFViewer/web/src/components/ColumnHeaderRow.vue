@@ -1,5 +1,6 @@
 <template>
   <div
+    ref="rowEl"
     class="column-header-row"
     :style="{ height: headerH + 'px' }"
   >
@@ -52,7 +53,7 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { colBandWidth, visibleColumnIndexRange, RULER_W } from '../renderer/TimelineRenderer.js'
 import { taskMergeKey } from '../utils/colors.js'
 
@@ -146,6 +147,9 @@ function onColHover(col, enter) {
     emit('highlightChange', enter ? taskRowKey(col) : null)
   }
 }
+
+const rowEl = ref(null)
+defineExpose({ rowEl })
 
 </script>
 

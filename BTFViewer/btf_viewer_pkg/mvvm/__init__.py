@@ -22,6 +22,7 @@ from .models import (
 )
 from .stats_vm import StatsViewModel
 from .trace_tab_vm import TraceTabViewModel
+from .find_logic import recompute_find_hits
 
 __all__ = [
     "AppSettingsModel",
@@ -37,4 +38,5 @@ __all__ = [
     "TraceTabModel",
     "TraceTabViewModel",
     "ViewModelBase",
+    "recompute_find_hits",
 ]

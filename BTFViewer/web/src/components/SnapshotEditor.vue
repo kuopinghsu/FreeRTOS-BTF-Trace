@@ -34,10 +34,7 @@
               @click="pickColor(c)"
             />
             <label class="se-color-custom" title="Custom color\u2026">
-              <svg viewBox="0 0 14 14" width="12" height="12" fill="none" stroke="currentColor"
-                   stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="7" cy="7" r="5.5"/><path d="M7 4.5v5M4.5 7h5"/>
-              </svg>
+              <span v-html="ICON_PALETTE" />
               <input type="color" :value="color" @input="e => pickColor(e.target.value)"
                      class="se-color-custom-input" />
             </label>
@@ -70,12 +67,8 @@
           :disabled="!shapes.length && !textEdit.active"
           title="Undo (Ctrl+Z)"
           @click="undo"
-        >
-          <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor"
-               stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M4 3L1 6l3 3M1 6h9a4 4 0 0 1 0 8H7"/>
-          </svg>
-        </button>
+          v-html="ICON_UNDO"
+        />
 
         <!-- Clear all -->
         <button
@@ -83,31 +76,20 @@
           :disabled="!shapes.length"
           title="Clear all annotations"
           @click="clearAll"
-        >
-          <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor"
-               stroke-width="1.5" stroke-linecap="round">
-            <path d="M2 4h12M5.5 4V3a.5.5 0 0 1 .5-.5h2a.5.5 0 0 1 .5.5v1M4 4l.75 9.5h6.5L12 4"/>
-          </svg>
-        </button>
+          v-html="ICON_CLEAR"
+        />
 
         <div class="se-sep" />
 
         <!-- Copy to clipboard -->
         <button class="se-tbtn action-btn" title="Copy annotated image to clipboard" @click="copyToClipboard">
-          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor"
-               stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="5" y="2" width="9" height="9" rx="1"/>
-            <path d="M5 5H3.5A1.5 1.5 0 0 0 2 6.5v7A1.5 1.5 0 0 0 3.5 15h7A1.5 1.5 0 0 0 12 13.5V12"/>
-          </svg>
+          <span v-html="ICON_COPY" />
           Copy
         </button>
 
         <!-- Save PNG -->
         <button class="se-tbtn action-btn" title="Save annotated image as PNG" @click="saveAsPng">
-          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor"
-               stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M8 1v9M4 6l4 4 4-4M2 13h12"/>
-          </svg>
+          <span v-html="ICON_SAVE" />
           Save PNG
         </button>
 
@@ -201,6 +183,14 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import {
+  SNAP_TOOL_ICONS,
+  ICON_UNDO,
+  ICON_CLEAR,
+  ICON_COPY,
+  ICON_SAVE,
+  ICON_PALETTE,
+} from '../utils/snapshotEditorIcons.js'
 
 const props = defineProps({
   imageUrl: { type: String, required: true },
@@ -212,30 +202,12 @@ const emit = defineEmits(['close'])
 // ── Tool definitions ──────────────────────────────────────────────────────────
 
 const TOOLS = [
-  {
-    id: 'arrow', label: 'Arrow',
-    icon: `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 14L13 3M13 3H7M13 3V9"/></svg>`,
-  },
-  {
-    id: 'dblarrow', label: 'Double Arrow',
-    icon: `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h8M4 8l2.5-2.5M4 8l2.5 2.5M12 8l-2.5-2.5M12 8l-2.5 2.5"/></svg>`,
-  },
-  {
-    id: 'line', label: 'Line',
-    icon: `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><line x1="2" y1="14" x2="14" y2="2"/></svg>`,
-  },
-  {
-    id: 'rect', label: 'Rectangle (Shift: square)',
-    icon: `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2" y="3" width="12" height="9" rx="1"/></svg>`,
-  },
-  {
-    id: 'circle', label: 'Circle / Ellipse (Shift: circle)',
-    icon: `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><ellipse cx="8" cy="8" rx="6" ry="5"/></svg>`,
-  },
-  {
-    id: 'text', label: 'Add Text (click to place)',
-    icon: `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 4h10M8 4v9M5 13h6"/></svg>`,
-  },
+  { id: 'arrow', label: 'Arrow', icon: SNAP_TOOL_ICONS.arrow },
+  { id: 'dblarrow', label: 'Double Arrow', icon: SNAP_TOOL_ICONS.dblarrow },
+  { id: 'line', label: 'Line', icon: SNAP_TOOL_ICONS.line },
+  { id: 'rect', label: 'Rectangle (Shift: square)', icon: SNAP_TOOL_ICONS.rect },
+  { id: 'circle', label: 'Circle / Ellipse (Shift: circle)', icon: SNAP_TOOL_ICONS.circle },
+  { id: 'text', label: 'Add Text (click to place)', icon: SNAP_TOOL_ICONS.text },
 ]
 
 const TOOL_CURSORS = {
