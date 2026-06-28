@@ -1,0 +1,64 @@
+name: BTF Viewer CI
+
+on:
+  push:
+    paths:
+      - 'BTFViewer/**'
+      - 'tracedata/**'
+      - '.github/workflows/btf-viewer-ci.yml'
+  pull_request:
+    paths:
+      - 'BTFViewer/**'
+      - 'tracedata/**'
+      - '.github/workflows/btf-viewer-ci.yml'
+
+jobs:
+  desktop:
+    name: Desktop tests + bundle check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install PySide6
+        run: pip install -r BTFViewer/requirements.txt
+
+      - name: Install Qt runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libegl1 \
+            libgl1 \
+            libxcb-cursor0 \
+            libxkbcommon0
+
+      - name: Desktop unit tests
+        run: make -C BTFViewer test
+
+      - name: Verify bundled builds/btf_viewer.py matches package
+        run: make -C BTFViewer check-bundle
+
+  web:
+    name: Web tests + build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: BTFViewer/web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Production build
+        run: npm run build
