@@ -232,3 +232,12 @@ def _configure_qt_startup() -> None:
         if plat in ("offscreen", "minimal", "vnc"):
             del os.environ["QT_QPA_PLATFORM"]
 
+def _bootstrap_qt_app(argv: list[str] | None = None) -> QApplication:
+    """Create or return QApplication with viewer font/bootstrap applied."""
+    _configure_qt_startup()
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication(argv if argv is not None else [])
+    app.setFont(_application_ui_font(UI_FONT_SIZE))
+    return app
+

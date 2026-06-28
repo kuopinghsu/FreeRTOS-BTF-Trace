@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+import tests  # noqa: F401 — applies QT_QPA_PLATFORM / QT_LOGGING_RULES
 
 ROOT = Path(__file__).resolve().parent.parent
 BUNDLE = ROOT / "builds" / "btf_viewer.py"
@@ -71,7 +71,10 @@ class LegendDockRestoreTest(unittest.TestCase):
     def test_legend_visible_after_two_starts(self) -> None:
         from PySide6.QtWidgets import QApplication
 
-        app = QApplication.instance() or QApplication([])
+        app = QApplication.instance()
+        if app is None:
+            app = QApplication([])
+        app.setFont(self.btf._application_ui_font(self.btf.UI_FONT_SIZE))
 
         win1 = self._run_session(app, persist=True)
         self.assertTrue(

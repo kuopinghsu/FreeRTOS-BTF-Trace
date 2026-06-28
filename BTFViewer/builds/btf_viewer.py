@@ -227,8 +227,9 @@ def _scaled_font_pixel_size(point_size: int,
 def _application_ui_font(point_size: int = UI_FONT_SIZE) -> QFont:
     """Application UI font with platform-appropriate sizing (Qt6 HiDPI-safe)."""
     base = max(6, min(int(point_size), 24))
-    app = QApplication.instance()
-    font = QFont(app.font() if app is not None else QFont())
+    # Use the real system UI font — a fresh QApplication defaults to the generic
+    # "Sans Serif" alias, which triggers qt.qpa.fonts warnings on macOS/Qt 6.
+    font = QFont(QFontDatabase.systemFont(QFontDatabase.GeneralFont))
     px = _scaled_font_pixel_size(base)
     if px is not None:
         font.setPixelSize(px)
@@ -28793,6 +28794,15 @@ def _configure_qt_startup() -> None:
         if plat in ("offscreen", "minimal", "vnc"):
             del os.environ["QT_QPA_PLATFORM"]
 
+def _bootstrap_qt_app(argv: list[str] | None = None) -> QApplication:
+    """Create or return QApplication with viewer font/bootstrap applied."""
+    _configure_qt_startup()
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication(argv if argv is not None else [])
+    app.setFont(_application_ui_font(UI_FONT_SIZE))
+    return app
+
 # ===========================================================================
 # Entry point
 # ===========================================================================
@@ -29394,9 +29404,7 @@ def main() -> None:
         raise SystemExit(2)
 
     _platform_preflight()
-    _configure_qt_startup()
-
-    app = QApplication(sys.argv)
+    app = _bootstrap_qt_app(sys.argv)
     _install_macos_stderr_filter()
     app.setApplicationName("RTOS BTF Viewer")
     app.setApplicationDisplayName("RTOS BTF Viewer")

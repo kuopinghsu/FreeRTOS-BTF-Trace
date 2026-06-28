@@ -609,9 +609,7 @@ def main() -> None:
         raise SystemExit(2)
 
     _platform_preflight()
-    _configure_qt_startup()
-
-    app = QApplication(sys.argv)
+    app = _bootstrap_qt_app(sys.argv)
     _install_macos_stderr_filter()
     app.setApplicationName("RTOS BTF Viewer")
     app.setApplicationDisplayName("RTOS BTF Viewer")

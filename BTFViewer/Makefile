@@ -41,7 +41,9 @@ bundle:
 	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) info $(TRACE)
 
 test:
-	QT_QPA_PLATFORM=offscreen $(PYTHON) -m unittest discover -s tests -v
+	QT_QPA_PLATFORM=offscreen \
+	QT_LOGGING_RULES='qt.qpa.fonts.warning=false;qt.qpa.offscreen.warning=false' \
+	$(PYTHON) -m unittest discover -s tests -v
 
 test-web:
 	$(MAKE) -C web test

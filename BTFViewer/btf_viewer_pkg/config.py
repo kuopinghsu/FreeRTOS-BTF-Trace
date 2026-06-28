@@ -43,8 +43,9 @@ def _scaled_font_pixel_size(point_size: int,
 def _application_ui_font(point_size: int = UI_FONT_SIZE) -> QFont:
     """Application UI font with platform-appropriate sizing (Qt6 HiDPI-safe)."""
     base = max(6, min(int(point_size), 24))
-    app = QApplication.instance()
-    font = QFont(app.font() if app is not None else QFont())
+    # Use the real system UI font — a fresh QApplication defaults to the generic
+    # "Sans Serif" alias, which triggers qt.qpa.fonts warnings on macOS/Qt 6.
+    font = QFont(QFontDatabase.systemFont(QFontDatabase.GeneralFont))
     px = _scaled_font_pixel_size(base)
     if px is not None:
         font.setPixelSize(px)
