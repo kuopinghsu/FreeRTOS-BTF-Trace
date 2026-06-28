@@ -316,12 +316,47 @@ def _format_timescale_per_px(timescale_per_px: float, time_scale: str = "ns") ->
             return f"{ns / divisor:.1f} {label}/px"
     return f"{ns:.1f} ns/px"  # unreachable; satisfies type checkers
 
-def _pixmap_to_png_bytes(pixmap: QPixmap) -> Tuple[bytes, QByteArray]:
+def _normalize_grab_pixmap(pixmap: QPixmap) -> Tuple[QPixmap, float]:
+    """Flatten a QWidget.grab() pixmap to 1:1 device pixels (HiDPI-safe).
+
+    Returns ``(pixmap, capture_dpr)`` where *capture_dpr* is the grab ratio
+    (typically 2.0 on macOS Retina). Use it when writing PNG pHYs metadata so
+    viewers display the image at the same physical size as on screen.
+    """
+    if pixmap.isNull():
+        return pixmap, 1.0
+    dpr = float(pixmap.devicePixelRatioF())
+    if dpr <= 1.0 + 1e-6:
+        out = QPixmap(pixmap)
+        out.setDevicePixelRatio(1.0)
+        return out, 1.0
+    image = pixmap.toImage()
+    out = QPixmap.fromImage(image)
+    out.setDevicePixelRatio(1.0)
+    return out, dpr
+
+def _snapshot_png_dpi(capture_dpr: float) -> int:
+    """PNG DPI so 1 device pixel ≈ 1/72 inch at the grab DPR (macOS/Qt convention)."""
+    return max(72, int(round(72.0 * max(1.0, capture_dpr))))
+
+def _apply_snapshot_png_dpi(image: QImage, capture_dpr: float) -> None:
+    dpm = int(round(_snapshot_png_dpi(capture_dpr) / 0.0254))
+    image.setDotsPerMeterX(dpm)
+    image.setDotsPerMeterY(dpm)
+
+def _save_snapshot_png(pixmap: QPixmap, path: str, capture_dpr: float = 1.0) -> bool:
+    img = pixmap.toImage()
+    _apply_snapshot_png_dpi(img, capture_dpr)
+    return img.save(path, "PNG")
+
+def _pixmap_to_png_bytes(pixmap: QPixmap, capture_dpr: float = 1.0) -> Tuple[bytes, QByteArray]:
     """Encode *pixmap* as PNG; return raw bytes and the backing QByteArray."""
     buf = QByteArray()
     buf_dev = QBuffer(buf)
     buf_dev.open(QIODevice.OpenModeFlag.WriteOnly)
-    pixmap.save(buf_dev, 'PNG')
+    img = pixmap.toImage()
+    _apply_snapshot_png_dpi(img, capture_dpr)
+    img.save(buf_dev, 'PNG')
     buf_dev.close()
     return bytes(buf), buf
 
@@ -372,13 +407,13 @@ def _copy_png_to_windows_clipboard(png_bytes: bytes) -> bool:
             except OSError:
                 pass
 
-def _copy_pixmap_to_clipboard(pixmap: QPixmap) -> Optional[str]:
+def _copy_pixmap_to_clipboard(pixmap: QPixmap, capture_dpr: float = 1.0) -> Optional[str]:
     """Copy *pixmap* to the system clipboard as PNG.
 
     Returns the external tool name used ('powershell', 'wl-copy', 'xclip',
     'xsel'), or None when the Qt clipboard fallback was used.
     """
-    png_bytes, buf = _pixmap_to_png_bytes(pixmap)
+    png_bytes, buf = _pixmap_to_png_bytes(pixmap, capture_dpr)
 
     if _is_wsl() and _copy_png_to_windows_clipboard(png_bytes):
         return 'powershell'
@@ -406,9 +441,12 @@ def _copy_pixmap_to_clipboard(pixmap: QPixmap) -> Optional[str]:
 
 def _stack_pixmaps_vertically(top: QPixmap, bottom: QPixmap) -> QPixmap:
     """Return a new pixmap with *bottom* drawn below *top*."""
+    top, _ = _normalize_grab_pixmap(top)
+    bottom, _ = _normalize_grab_pixmap(bottom)
     combined = QPixmap(max(top.width(), bottom.width()),
                        top.height() + bottom.height())
     combined.fill(Qt.GlobalColor.transparent)
+    combined.setDevicePixelRatio(1.0)
     painter = QPainter(combined)
     try:
         painter.drawPixmap(0, 0, top)

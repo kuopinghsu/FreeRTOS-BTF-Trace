@@ -4339,12 +4339,47 @@ def _format_timescale_per_px(timescale_per_px: float, time_scale: str = "ns") ->
             return f"{ns / divisor:.1f} {label}/px"
     return f"{ns:.1f} ns/px"  # unreachable; satisfies type checkers
 
-def _pixmap_to_png_bytes(pixmap: QPixmap) -> Tuple[bytes, QByteArray]:
+def _normalize_grab_pixmap(pixmap: QPixmap) -> Tuple[QPixmap, float]:
+    """Flatten a QWidget.grab() pixmap to 1:1 device pixels (HiDPI-safe).
+
+    Returns ``(pixmap, capture_dpr)`` where *capture_dpr* is the grab ratio
+    (typically 2.0 on macOS Retina). Use it when writing PNG pHYs metadata so
+    viewers display the image at the same physical size as on screen.
+    """
+    if pixmap.isNull():
+        return pixmap, 1.0
+    dpr = float(pixmap.devicePixelRatioF())
+    if dpr <= 1.0 + 1e-6:
+        out = QPixmap(pixmap)
+        out.setDevicePixelRatio(1.0)
+        return out, 1.0
+    image = pixmap.toImage()
+    out = QPixmap.fromImage(image)
+    out.setDevicePixelRatio(1.0)
+    return out, dpr
+
+def _snapshot_png_dpi(capture_dpr: float) -> int:
+    """PNG DPI so 1 device pixel ≈ 1/72 inch at the grab DPR (macOS/Qt convention)."""
+    return max(72, int(round(72.0 * max(1.0, capture_dpr))))
+
+def _apply_snapshot_png_dpi(image: QImage, capture_dpr: float) -> None:
+    dpm = int(round(_snapshot_png_dpi(capture_dpr) / 0.0254))
+    image.setDotsPerMeterX(dpm)
+    image.setDotsPerMeterY(dpm)
+
+def _save_snapshot_png(pixmap: QPixmap, path: str, capture_dpr: float = 1.0) -> bool:
+    img = pixmap.toImage()
+    _apply_snapshot_png_dpi(img, capture_dpr)
+    return img.save(path, "PNG")
+
+def _pixmap_to_png_bytes(pixmap: QPixmap, capture_dpr: float = 1.0) -> Tuple[bytes, QByteArray]:
     """Encode *pixmap* as PNG; return raw bytes and the backing QByteArray."""
     buf = QByteArray()
     buf_dev = QBuffer(buf)
     buf_dev.open(QIODevice.OpenModeFlag.WriteOnly)
-    pixmap.save(buf_dev, 'PNG')
+    img = pixmap.toImage()
+    _apply_snapshot_png_dpi(img, capture_dpr)
+    img.save(buf_dev, 'PNG')
     buf_dev.close()
     return bytes(buf), buf
 
@@ -4395,13 +4430,13 @@ def _copy_png_to_windows_clipboard(png_bytes: bytes) -> bool:
             except OSError:
                 pass
 
-def _copy_pixmap_to_clipboard(pixmap: QPixmap) -> Optional[str]:
+def _copy_pixmap_to_clipboard(pixmap: QPixmap, capture_dpr: float = 1.0) -> Optional[str]:
     """Copy *pixmap* to the system clipboard as PNG.
 
     Returns the external tool name used ('powershell', 'wl-copy', 'xclip',
     'xsel'), or None when the Qt clipboard fallback was used.
     """
-    png_bytes, buf = _pixmap_to_png_bytes(pixmap)
+    png_bytes, buf = _pixmap_to_png_bytes(pixmap, capture_dpr)
 
     if _is_wsl() and _copy_png_to_windows_clipboard(png_bytes):
         return 'powershell'
@@ -4429,9 +4464,12 @@ def _copy_pixmap_to_clipboard(pixmap: QPixmap) -> Optional[str]:
 
 def _stack_pixmaps_vertically(top: QPixmap, bottom: QPixmap) -> QPixmap:
     """Return a new pixmap with *bottom* drawn below *top*."""
+    top, _ = _normalize_grab_pixmap(top)
+    bottom, _ = _normalize_grab_pixmap(bottom)
     combined = QPixmap(max(top.width(), bottom.width()),
                        top.height() + bottom.height())
     combined.fill(Qt.GlobalColor.transparent)
+    combined.setDevicePixelRatio(1.0)
     painter = QPainter(combined)
     try:
         painter.drawPixmap(0, 0, top)
@@ -11106,14 +11144,14 @@ class TimelineView(QGraphicsView):
         else:
             self.centerOn(scene_pt.x(), new_coord)
 
-    def _capture_pixmap(self) -> QPixmap:
+    def _capture_pixmap(self) -> Tuple[QPixmap, float]:
         """Capture the current visible scene content as a QPixmap."""
         vp = self.viewport()
         vp_rect = vp.rect()
         scene_in_vp = self.mapFromScene(self._scene.sceneRect()).boundingRect()
         content_rect = vp_rect.intersected(scene_in_vp)
         capture_rect = content_rect if not content_rect.isEmpty() else vp_rect
-        return vp.grab(capture_rect)
+        return _normalize_grab_pixmap(vp.grab(capture_rect))
 
     def save_image(self, filepath: str) -> None:
         """Capture the current visible scene content as a PNG image.
@@ -11123,13 +11161,14 @@ class TimelineView(QGraphicsView):
         margins; we crop those away by computing the scene rect in viewport
         coordinates so the output contains only real content.
         """
-        pixmap = self._capture_pixmap()
-        if not pixmap.save(filepath, "PNG"):
+        pixmap, dpr = self._capture_pixmap()
+        if not _save_snapshot_png(pixmap, filepath, dpr):
             raise OSError(f"QPixmap.save() failed for path: {filepath}")
 
     def copy_image_to_clipboard(self) -> Optional[str]:
         """Copy the current visible scene content as a PNG image to the clipboard."""
-        return _copy_pixmap_to_clipboard(self._capture_pixmap())
+        pixmap, dpr = self._capture_pixmap()
+        return _copy_pixmap_to_clipboard(pixmap, dpr)
 
     # ------------------------------------------------------------------
     # Mouse interaction
@@ -14673,8 +14712,8 @@ class _MetricsPlotDialog(QDialog):
             self._on_pt_click(pt[0], pt[1], pt[2])
 
     def _export_png(self) -> None:
-        pixmap = self._content.grab()
-        dlg = SnapshotEditorDialog(pixmap, self)
+        pixmap, capture_dpr = _normalize_grab_pixmap(self._content.grab())
+        dlg = SnapshotEditorDialog(pixmap, self, capture_dpr=capture_dpr)
         _exec_centred(dlg, self)
 
     def _export_svg(self) -> None:
@@ -14695,7 +14734,7 @@ class _MetricsPlotDialog(QDialog):
             gen.setDescription("Generated by RTOS BTF Viewer")
             painter = QPainter(gen)
             try:
-                self._content.render(painter)
+                self._content.render(painter, QPoint(0, 0))
             finally:
                 painter.end()
         except (OSError, RuntimeError) as exc:
@@ -20363,15 +20402,12 @@ class SnapshotEditorDialog(QDialog):
         'circle': 'Circle / Ellipse  (Shift: circle)',
         'text':   'Add Text (click to place)',
     }
-    def __init__(self, pixmap: QPixmap, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, pixmap: QPixmap, parent: Optional[QWidget] = None,
+                 capture_dpr: float = 1.0) -> None:
         super().__init__(parent)
-        # Normalize DPR so draw/edit/export all use one pixel coordinate space.
-        # QWidget.grab() can return a high-DPI pixmap (e.g. DPR=2 on macOS),
-        # while annotation geometry is stored in raw pixel units.
-        # Keeping DPR>1 here causes exported objects to be offset/scaled.
-        self._orig_pixmap: QPixmap = QPixmap(pixmap)
-        if abs(self._orig_pixmap.devicePixelRatioF() - 1.0) > 1e-6:
-            self._orig_pixmap.setDevicePixelRatio(1.0)
+        # Flatten HiDPI grab() to 1:1 device pixels; annotation coords match pixels.
+        self._orig_pixmap, detected_dpr = _normalize_grab_pixmap(pixmap)
+        self._capture_dpr = capture_dpr if capture_dpr > 1.0 + 1e-6 else detected_dpr
         self._shapes: list = []
         self._drawing: Optional[dict] = None
         self._drag_idx: int = -1
@@ -20395,7 +20431,7 @@ class SnapshotEditorDialog(QDialog):
         screen = _widget_available_geometry(parent or self)
         max_w = screen.width() - 120
         max_h = screen.height() - 220
-        iw, ih = pixmap.width(), pixmap.height()
+        iw, ih = self._orig_pixmap.width(), self._orig_pixmap.height()
         self._scale: float = max(0.01, min(1.0, max_w / max(iw, 1), max_h / max(ih, 1)))
         self._disp_w: int = max(1, int(iw * self._scale))
         self._disp_h: int = max(1, int(ih * self._scale))
@@ -21247,7 +21283,7 @@ class SnapshotEditorDialog(QDialog):
         return result
 
     def _on_copy(self) -> None:
-        _copy_pixmap_to_clipboard(self._render_final_pixmap())
+        _copy_pixmap_to_clipboard(self._render_final_pixmap(), self._capture_dpr)
         self._show_status("Copied to clipboard!")
 
     def _on_save(self) -> None:
@@ -21258,7 +21294,7 @@ class SnapshotEditorDialog(QDialog):
         if not path:
             return
         pixmap = self._render_final_pixmap()
-        if not pixmap.save(path, "PNG"):
+        if not _save_snapshot_png(pixmap, path, self._capture_dpr):
             QMessageBox.critical(self, "Save Error", f"Could not save image:\n{path}")
             return
         self._show_status(f"Saved: {os.path.basename(path)}")
@@ -27177,23 +27213,24 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self.statusBar().showMessage(warn, 8000)
         self._continue_session_restore()
 
-    def _capture_viewport_pixmap(self) -> QPixmap:
+    def _capture_viewport_pixmap(self) -> Tuple[QPixmap, float]:
         """Capture the active tab's timeline viewport, optionally with CPU load graph."""
-        tl_pix = self._view._capture_pixmap()
+        tl_pix, dpr = self._view._capture_pixmap()
         if self._show_cpu_load and self._cpu_load_scroll.isVisible():
-            return _stack_pixmaps_vertically(tl_pix, self._cpu_load_graph.grab())
-        return tl_pix
+            cpu_pix, cpu_dpr = _normalize_grab_pixmap(self._cpu_load_graph.grab())
+            return _stack_pixmaps_vertically(tl_pix, cpu_pix), max(dpr, cpu_dpr)
+        return tl_pix, dpr
 
     @_dialog_guard
     def _open_snapshot_editor(self) -> None:
         """Capture the viewport and open the annotation editor (web Shot parity)."""
         if self._trace is None:
             return
-        pixmap = self._capture_viewport_pixmap()
+        pixmap, capture_dpr = self._capture_viewport_pixmap()
         if pixmap.isNull():
             QMessageBox.warning(self, "Snapshot", "Unable to capture the viewport.")
             return
-        dlg = SnapshotEditorDialog(pixmap, self)
+        dlg = SnapshotEditorDialog(pixmap, self, capture_dpr=capture_dpr)
         _exec_centred(dlg, self)
 
     def _on_save_image(self) -> None:
@@ -27234,7 +27271,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 scene.render(painter, QRectF(0, 0, w, h), scene_rect)
                 if include_cpu:
                     painter.translate(0, h)
-                    self._cpu_load_graph.render(painter)
+                    self._cpu_load_graph.render(painter, QPoint(0, 0))
                     painter.translate(0, -h)
             finally:
                 painter.end()
@@ -27246,7 +27283,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
     def _on_copy_image(self) -> None:
         if self._trace is None:
             return
-        _copy_pixmap_to_clipboard(self._capture_viewport_pixmap())
+        pixmap, capture_dpr = self._capture_viewport_pixmap()
+        _copy_pixmap_to_clipboard(pixmap, capture_dpr)
         self.statusBar().showMessage("Copied to clipboard!", 4000)
 
     # -- Settings actions -----------------------------------------------

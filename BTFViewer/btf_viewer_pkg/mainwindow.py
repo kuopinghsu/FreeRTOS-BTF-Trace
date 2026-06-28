@@ -4825,23 +4825,24 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self.statusBar().showMessage(warn, 8000)
         self._continue_session_restore()
 
-    def _capture_viewport_pixmap(self) -> QPixmap:
+    def _capture_viewport_pixmap(self) -> Tuple[QPixmap, float]:
         """Capture the active tab's timeline viewport, optionally with CPU load graph."""
-        tl_pix = self._view._capture_pixmap()
+        tl_pix, dpr = self._view._capture_pixmap()
         if self._show_cpu_load and self._cpu_load_scroll.isVisible():
-            return _stack_pixmaps_vertically(tl_pix, self._cpu_load_graph.grab())
-        return tl_pix
+            cpu_pix, cpu_dpr = _normalize_grab_pixmap(self._cpu_load_graph.grab())
+            return _stack_pixmaps_vertically(tl_pix, cpu_pix), max(dpr, cpu_dpr)
+        return tl_pix, dpr
 
     @_dialog_guard
     def _open_snapshot_editor(self) -> None:
         """Capture the viewport and open the annotation editor (web Shot parity)."""
         if self._trace is None:
             return
-        pixmap = self._capture_viewport_pixmap()
+        pixmap, capture_dpr = self._capture_viewport_pixmap()
         if pixmap.isNull():
             QMessageBox.warning(self, "Snapshot", "Unable to capture the viewport.")
             return
-        dlg = SnapshotEditorDialog(pixmap, self)
+        dlg = SnapshotEditorDialog(pixmap, self, capture_dpr=capture_dpr)
         _exec_centred(dlg, self)
 
     def _on_save_image(self) -> None:
@@ -4882,7 +4883,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 scene.render(painter, QRectF(0, 0, w, h), scene_rect)
                 if include_cpu:
                     painter.translate(0, h)
-                    self._cpu_load_graph.render(painter)
+                    self._cpu_load_graph.render(painter, QPoint(0, 0))
                     painter.translate(0, -h)
             finally:
                 painter.end()
@@ -4894,7 +4895,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
     def _on_copy_image(self) -> None:
         if self._trace is None:
             return
-        _copy_pixmap_to_clipboard(self._capture_viewport_pixmap())
+        pixmap, capture_dpr = self._capture_viewport_pixmap()
+        _copy_pixmap_to_clipboard(pixmap, capture_dpr)
         self.statusBar().showMessage("Copied to clipboard!", 4000)
 
     # -- Settings actions -----------------------------------------------

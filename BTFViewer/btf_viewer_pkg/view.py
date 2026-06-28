@@ -1943,14 +1943,14 @@ class TimelineView(QGraphicsView):
         else:
             self.centerOn(scene_pt.x(), new_coord)
 
-    def _capture_pixmap(self) -> QPixmap:
+    def _capture_pixmap(self) -> Tuple[QPixmap, float]:
         """Capture the current visible scene content as a QPixmap."""
         vp = self.viewport()
         vp_rect = vp.rect()
         scene_in_vp = self.mapFromScene(self._scene.sceneRect()).boundingRect()
         content_rect = vp_rect.intersected(scene_in_vp)
         capture_rect = content_rect if not content_rect.isEmpty() else vp_rect
-        return vp.grab(capture_rect)
+        return _normalize_grab_pixmap(vp.grab(capture_rect))
 
     def save_image(self, filepath: str) -> None:
         """Capture the current visible scene content as a PNG image.
@@ -1960,13 +1960,14 @@ class TimelineView(QGraphicsView):
         margins; we crop those away by computing the scene rect in viewport
         coordinates so the output contains only real content.
         """
-        pixmap = self._capture_pixmap()
-        if not pixmap.save(filepath, "PNG"):
+        pixmap, dpr = self._capture_pixmap()
+        if not _save_snapshot_png(pixmap, filepath, dpr):
             raise OSError(f"QPixmap.save() failed for path: {filepath}")
 
     def copy_image_to_clipboard(self) -> Optional[str]:
         """Copy the current visible scene content as a PNG image to the clipboard."""
-        return _copy_pixmap_to_clipboard(self._capture_pixmap())
+        pixmap, dpr = self._capture_pixmap()
+        return _copy_pixmap_to_clipboard(pixmap, dpr)
 
     # ------------------------------------------------------------------
     # Mouse interaction
