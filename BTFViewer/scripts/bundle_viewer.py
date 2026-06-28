@@ -227,7 +227,7 @@ def _read_docstring(monolith: Path) -> str:
         mod = ast.parse(text)
         doc = ast.get_docstring(mod, clean=False)
         if doc:
-            return '"""\n' + doc + '\n"""\n\n'
+            return f'"""{doc}"""\n\n'
     return '"""\nbtf_viewer.py - Single-file RTOS BTF Viewer (PySide6).\n"""\n\n'
 
 def _section_banner(name: str, body: str) -> str:

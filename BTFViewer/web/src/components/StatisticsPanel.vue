@@ -235,9 +235,14 @@
         </div>
         <div
           v-if="tickHealth.isTickless"
-          class="range-hint tick-dist-hint"
+          class="range-hint"
         >
           Tickless mode: tick intervals vary.
+        </div>
+        <div
+          v-if="tickHealth.tickCount >= 2"
+          class="range-hint tick-dist-hint"
+        >
           <button
             type="button"
             class="tick-dist-btn"

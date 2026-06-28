@@ -256,7 +256,8 @@
                 @jump-to="onJumpToMark"
                 @update-label="onUpdateMarkLabel"
                 @import-marks="onImportMarks"
-                @clear-marks="onClearMarks"
+                @clear-bookmarks="onClearBookmarks"
+                @clear-annotations="onClearAnnotations"
                 @export-session="onExportSession"
                 @import-session="onImportSession"
                 @select-mark="timelineOptions.selectedMarkId = $event"
@@ -474,6 +475,27 @@
               <div class="k">
                 D
               </div><div>Toggle dark/light mode</div>
+              <div class="k">
+                Ctrl+S
+              </div><div>Open snapshot editor</div>
+              <div class="k">
+                Ctrl+Shift+S
+              </div><div>Save viewport as SVG</div>
+              <div class="k">
+                Ctrl+0
+              </div><div>Fit timeline to trace</div>
+              <div class="k">
+                Ctrl+B
+              </div><div>Add bookmark at current position</div>
+              <div class="k">
+                Ctrl+Shift+B
+              </div><div>Add annotation at current position</div>
+              <div class="k">
+                Shift+B
+              </div><div>Clear all bookmarks</div>
+              <div class="k">
+                Shift+A
+              </div><div>Clear all annotations</div>
               <div class="k">
                 B
               </div><div>Add bookmark at current position</div>
@@ -2141,6 +2163,41 @@ function onGlobalKeydown(e) {
     if (activeTabId.value) closeTab(activeTabId.value)
     return
   }
+  if (mod && e.shiftKey && e.key.toLowerCase() === 's') {
+    e.preventDefault()
+    onExportSvg()
+    return
+  }
+  if (mod && !e.shiftKey && e.key.toLowerCase() === 's') {
+    e.preventDefault()
+    onCopyScreenshot()
+    return
+  }
+  if (mod && e.key === '0') {
+    e.preventDefault()
+    onFit()
+    return
+  }
+  if (mod && (e.key === '+' || e.key === '=')) {
+    e.preventDefault()
+    onZoom(0.7)
+    return
+  }
+  if (mod && (e.key === '-' || e.key === '_')) {
+    e.preventDefault()
+    onZoom(1.43)
+    return
+  }
+  if (mod && e.shiftKey && e.key.toLowerCase() === 'b') {
+    e.preventDefault()
+    onAddAnnotationAtCenter()
+    return
+  }
+  if (mod && !e.shiftKey && e.key.toLowerCase() === 'b') {
+    e.preventDefault()
+    onAddMark()
+    return
+  }
 
   if (trace.value && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) {
     const horiz = (timelineOptions.orientation || 'h') === 'h'
@@ -2207,12 +2264,22 @@ function onGlobalKeydown(e) {
       e.preventDefault()
       break
     case 'b':
-      onAddMark()
-      e.preventDefault()
+      if (!mod && !e.shiftKey) {
+        onAddMark()
+        e.preventDefault()
+      } else if (!mod && e.shiftKey) {
+        onClearBookmarks()
+        e.preventDefault()
+      }
       break
     case 'a':
-      onAddAnnotationAtCenter()
-      e.preventDefault()
+      if (!mod && !e.shiftKey) {
+        onAddAnnotationAtCenter()
+        e.preventDefault()
+      } else if (!mod && e.shiftKey) {
+        onClearAnnotations()
+        e.preventDefault()
+      }
       break
     case 'f':
       if (!mod) {
@@ -2449,9 +2516,16 @@ function onImportMarks(imported) {
   marks.value.sort((a, b) => a.ns - b.ns)
 }
 
-function onClearMarks() {
+function onClearBookmarks() {
+  if (!marks.value.some(m => m.type !== 'annotation')) return
   pushUndoSnapshot()
-  marks.value = []
+  marks.value = marks.value.filter(m => m.type === 'annotation')
+}
+
+function onClearAnnotations() {
+  if (!marks.value.some(m => m.type === 'annotation')) return
+  pushUndoSnapshot()
+  marks.value = marks.value.filter(m => m.type !== 'annotation')
 }
 
 function onExportSession() {

@@ -91,11 +91,19 @@
       </button>
       <button
         class="action-btn"
-        :disabled="marks.length === 0"
-        title="Clear all marks"
-        @click="emit('clearMarks')"
+        :disabled="!hasBookmarks"
+        title="Clear all bookmarks (Shift+B)"
+        @click="emit('clearBookmarks')"
       >
-        Clear All
+        Clear B
+      </button>
+      <button
+        class="action-btn"
+        :disabled="!hasAnnotations"
+        title="Clear all annotations (Shift+A)"
+        @click="emit('clearAnnotations')"
+      >
+        Clear A
       </button>
       <button
         class="action-btn"
@@ -130,7 +138,7 @@
 </template>
 
 <script setup>
-import { nextTick, ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import { formatTime } from '../renderer/TimelineRenderer.js'
 
 const props = defineProps({
@@ -140,8 +148,12 @@ const props = defineProps({
 
 const emit = defineEmits([
   'addBookmark', 'addAnnotation', 'deleteMark', 'jumpTo', 'updateLabel',
-  'importMarks', 'clearMarks', 'selectMark', 'exportSession', 'importSession',
+  'importMarks', 'clearBookmarks', 'clearAnnotations', 'selectMark',
+  'exportSession', 'importSession',
 ])
+
+const hasBookmarks = computed(() => props.marks.some(m => m.type !== 'annotation'))
+const hasAnnotations = computed(() => props.marks.some(m => m.type === 'annotation'))
 
 const selectedId    = ref(null)
 const listEl          = ref(null)
