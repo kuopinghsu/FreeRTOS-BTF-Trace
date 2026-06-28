@@ -105,7 +105,7 @@ from PySide6.QtCore import (
     QPropertyAnimation, Signal,
 )
 from PySide6.QtGui import (
-    QBrush, QColor, QCursor, QFont, QFontDatabase, QFontMetrics, QFontMetricsF, QIcon, QKeySequence, QLinearGradient, QPainter,
+    QBrush, QColor, QCursor, QFont, QFontDatabase, QFontMetrics, QFontMetricsF, QIcon, QImage, QKeySequence, QLinearGradient, QPainter,
     QPainterPath, QPalette, QPen, QPixmap, QPolygonF, QShortcut, QTransform, QWheelEvent,
 )
 from PySide6.QtSvg import QSvgGenerator

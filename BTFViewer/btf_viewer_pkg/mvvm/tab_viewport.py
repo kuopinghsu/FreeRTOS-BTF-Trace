@@ -22,7 +22,6 @@ def capture_viewport(view: "TimelineView") -> TabViewportModel:
         filters=_snapshot_tab_filters(sc),
     )
 
-
 def apply_viewport(view: "TimelineView", vp: TabViewportModel) -> None:
     """Restore zoom, cursors, and legend filters onto a timeline view."""
     sc = view._scene
@@ -52,7 +51,6 @@ def apply_viewport(view: "TimelineView", vp: TabViewportModel) -> None:
 
     view._refresh_nav_pan_window(force_show=view._navigator_eligible())
 
-
 def viewport_to_rc_payload(vp: TabViewportModel) -> Dict[str, Any]:
     return {
         "fit_mode": vp.fit_mode,
@@ -60,7 +58,6 @@ def viewport_to_rc_payload(vp: TabViewportModel) -> Dict[str, Any]:
         "cursors": list(vp.cursors),
         "filters": dict(vp.filters),
     }
-
 
 def viewport_from_rc_payload(payload: Dict[str, Any]) -> TabViewportModel:
     fit_mode = bool(payload.get("fit_mode", True))
@@ -80,10 +77,8 @@ def viewport_from_rc_payload(payload: Dict[str, Any]) -> TabViewportModel:
         filters=filters,
     )
 
-
 def viewport_to_json(vp: TabViewportModel) -> str:
     return json.dumps(viewport_to_rc_payload(vp), ensure_ascii=True)
-
 
 def viewport_from_json(raw: str) -> Optional[TabViewportModel]:
     if not raw.strip():

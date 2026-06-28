@@ -56,7 +56,6 @@ def recompute_find_hits(
     label = f"{len(unique)} matches"
     return unique, label
 
-
 def _find_migrations(trace: BtfTrace, query: str) -> Tuple[List[int], str]:
     q_lower = query.lower()
     hits: List[int] = []
@@ -70,7 +69,6 @@ def _find_migrations(trace: BtfTrace, query: str) -> Tuple[List[int], str]:
             hits.append(m.ns)
     unique = sorted(set(hits))
     return unique, f"{len(unique)} migration matches"
-
 
 def _haystack_matches(
     query: str,

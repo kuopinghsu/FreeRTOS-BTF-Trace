@@ -721,6 +721,7 @@ class _ScatterWidget(QWidget):
         if self._crosshair_idx >= len(self._points):
             self._crosshair_idx = -1
         self.update()
+
     def set_dark(self, is_dark: bool) -> None:
         self._is_dark = is_dark
         self.update()
