@@ -89,7 +89,11 @@ class FontScalingTests(unittest.TestCase):
             self.assertGreaterEqual(px, 6)
         px_hi = _scaled_font_pixel_size(99)
         if px_hi is not None:
-            self.assertLessEqual(px_hi, 24)
+            px_cap = _scaled_font_pixel_size(24)
+            assert px_cap is not None
+            # pt input is capped at 24; oversized values must not exceed 24pt in px.
+            self.assertLessEqual(px_hi, px_cap)
+            self.assertEqual(px_hi, px_cap)
 
 if __name__ == "__main__":
     unittest.main()
