@@ -97,6 +97,33 @@ def _stats_table_viewport_height(visible_rows: int = STATS_MAX_VISIBLE_ROWS,
 STATS_TABLE_DEFAULT_H    = _stats_table_viewport_height()
 STATS_TABLE_MIG_DEFAULT_H = _stats_table_viewport_height(reserve_h_scroll=True)
 
+# Large-trace load tuning (desktop Statistics / Legend panels).
+STATS_LOAD_DEFER_TASKS       = 256   # defer heavy stats sections above this task count
+STATS_LOAD_DEFER_CORES       = 32    # defer when core count exceeds this
+STATS_LOAD_DEFER_SYNC_ISSUES = 400   # defer when sync-issue rows exceed this
+STATS_TABLE_DISPLAY_ROW_CAP  = 2000  # max rows materialised per stats table on load
+STATS_HEAVY_SECTIONS         = frozenset({
+    "migrations", "exec", "block", "inter", "health",
+    "preemption", "priority", "sync", "intervals", "tags",
+})
+
+def trace_needs_deferred_stats_load(trace: "BtfTrace") -> bool:
+    """True when statistics sections should populate after the first paint."""
+    return (
+        len(trace.tasks) > STATS_LOAD_DEFER_TASKS
+        or len(getattr(trace, "core_names", None) or []) > STATS_LOAD_DEFER_CORES
+        or len(getattr(trace, "sync_issues", None) or []) > STATS_LOAD_DEFER_SYNC_ISSUES
+    )
+
+def cap_stats_table_rows(rows: list, cap: int = STATS_TABLE_DISPLAY_ROW_CAP) -> tuple:
+    """Return (rows[:cap], footnote_or_none) for oversized on-screen tables."""
+    n = len(rows)
+    if n <= cap:
+        return rows, None
+    return rows[:cap], (
+        f"Showing first {cap:,} of {n:,} rows — use Export for the full list."
+    )
+
 def default_section_collapsed() -> Dict[str, bool]:
     """Default collapsed flags for statistics panel sections (shared with MVVM)."""
     return {

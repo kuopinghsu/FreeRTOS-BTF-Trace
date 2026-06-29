@@ -281,6 +281,33 @@ def _stats_table_viewport_height(visible_rows: int = STATS_MAX_VISIBLE_ROWS,
 STATS_TABLE_DEFAULT_H    = _stats_table_viewport_height()
 STATS_TABLE_MIG_DEFAULT_H = _stats_table_viewport_height(reserve_h_scroll=True)
 
+# Large-trace load tuning (desktop Statistics / Legend panels).
+STATS_LOAD_DEFER_TASKS       = 256   # defer heavy stats sections above this task count
+STATS_LOAD_DEFER_CORES       = 32    # defer when core count exceeds this
+STATS_LOAD_DEFER_SYNC_ISSUES = 400   # defer when sync-issue rows exceed this
+STATS_TABLE_DISPLAY_ROW_CAP  = 2000  # max rows materialised per stats table on load
+STATS_HEAVY_SECTIONS         = frozenset({
+    "migrations", "exec", "block", "inter", "health",
+    "preemption", "priority", "sync", "intervals", "tags",
+})
+
+def trace_needs_deferred_stats_load(trace: "BtfTrace") -> bool:
+    """True when statistics sections should populate after the first paint."""
+    return (
+        len(trace.tasks) > STATS_LOAD_DEFER_TASKS
+        or len(getattr(trace, "core_names", None) or []) > STATS_LOAD_DEFER_CORES
+        or len(getattr(trace, "sync_issues", None) or []) > STATS_LOAD_DEFER_SYNC_ISSUES
+    )
+
+def cap_stats_table_rows(rows: list, cap: int = STATS_TABLE_DISPLAY_ROW_CAP) -> tuple:
+    """Return (rows[:cap], footnote_or_none) for oversized on-screen tables."""
+    n = len(rows)
+    if n <= cap:
+        return rows, None
+    return rows[:cap], (
+        f"Showing first {cap:,} of {n:,} rows — use Export for the full list."
+    )
+
 def default_section_collapsed() -> Dict[str, bool]:
     """Default collapsed flags for statistics panel sections (shared with MVVM)."""
     return {
@@ -9558,7 +9585,7 @@ def _in_legend_panel(w: QWidget) -> bool:
     p: Optional[QWidget] = w
     while p is not None:
         if p.objectName() in (
-                "legend_root", "legend_list_host",
+                "legend_root", "legend_list_host", "legend_task_list",
                 "legend_scroll", "legend_scroll_viewport"):
             return True
         p = p.parentWidget()
@@ -13712,6 +13739,19 @@ class _LegendWidget(QWidget):
     migrated_filter_changed = Signal(bool)
     clear_heatmap_filter = Signal()
 
+    @staticmethod
+    def _swatch_icon(color: QColor, is_dark: bool) -> QIcon:
+        pix = QPixmap(14, 14)
+        pix.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pix)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setBrush(QBrush(color))
+        border = QColor("#555555") if is_dark else QColor("#AAAAAA")
+        p.setPen(QPen(border))
+        p.drawRoundedRect(1, 1, 12, 12, 2, 2)
+        p.end()
+        return QIcon(pix)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         outer = QVBoxLayout(self)
@@ -13723,13 +13763,15 @@ class _LegendWidget(QWidget):
         self._trace_ref = None        # cached for update_theme() rebuild
         self._show_sti_flag: bool = True
         palette = self.palette()
-        palette.setColor(QPalette.Window, QColor("#1E1E1E"))
+        palette.setColor(QPalette.ColorRole.Window, QColor("#1E1E1E"))
         self.setPalette(palette)
-        self._task_rows: Dict[str, _LegendTaskRow] = {}   # raw name -> row widget
+        self._task_items: Dict[str, QListWidgetItem] = {}
+        self._task_display: Dict[str, str] = {}
         self._sti_rows: List[tuple] = []  # [(channel_or_note_lc, row_widget)]
         self._heatmap_filter_mks: Optional[set] = None
         self._heatmap_filter_label: Optional[str] = None
         self._locked_task: Optional[str] = None
+        self._locked_bg = QBrush(QColor(255, 215, 0, 45))
         self._search = QLineEdit()
         self._search.setPlaceholderText("Filter tasks...")
         self._sync_search_theme()
@@ -13762,17 +13804,29 @@ class _LegendWidget(QWidget):
         self._heatmap_banner.setVisible(False)
         outer.addWidget(self._heatmap_banner)
 
-        # Sticky-search layout: only the legend rows scroll.
         self._list_host = QWidget()
         self._list_host.setObjectName("legend_list_host")
         self._list_host.setAutoFillBackground(True)
-        self._list_layout = QVBoxLayout(self._list_host)
-        self._list_layout.setContentsMargins(0, 0, 0, 0)
-        self._list_layout.setSpacing(2)
+        list_outer = QVBoxLayout(self._list_host)
+        list_outer.setContentsMargins(0, 0, 0, 0)
+        list_outer.setSpacing(2)
+        self._task_header = QLabel()
+        self._task_header.setTextFormat(Qt.TextFormat.RichText)
+        list_outer.addWidget(self._task_header)
+        self._task_list = QListWidget()
+        self._task_list.setObjectName("legend_task_list")
+        self._task_list.setFrameShape(QFrame.Shape.NoFrame)
+        self._task_list.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._task_list.setSelectionMode(
+            QAbstractItemView.SelectionMode.NoSelection)
+        self._task_list.setUniformItemSizes(True)
+        self._task_list.itemClicked.connect(self._on_task_item_clicked)
+        list_outer.addWidget(self._task_list, 1)
         self._scroll = QScrollArea()
         self._scroll.setObjectName("legend_scroll")
         self._scroll.setWidgetResizable(True)
-        self._scroll.setFrameShape(QFrame.NoFrame)
+        self._scroll.setFrameShape(QFrame.Shape.NoFrame)
         self._scroll.setWidget(self._list_host)
         self._scroll.viewport().setObjectName("legend_scroll_viewport")
         self._scroll.viewport().setAutoFillBackground(True)
@@ -13800,10 +13854,10 @@ class _LegendWidget(QWidget):
         self.setPalette(palette)
         # Keep child surfaces explicitly in sync; otherwise some platforms keep
         # stale dark backgrounds on the scroll viewport when switching theme.
-        for w in (self._list_host, self._scroll.viewport()):
+        for w in (self._list_host, self._scroll.viewport(), self._task_list):
             p = w.palette()
-            p.setColor(QPalette.Window, bg)
-            p.setColor(QPalette.Base, bg)
+            p.setColor(QPalette.ColorRole.Window, bg)
+            p.setColor(QPalette.ColorRole.Base, bg)
             w.setPalette(p)
             w.setAutoFillBackground(True)
         self._sync_search_theme()
@@ -13811,22 +13865,20 @@ class _LegendWidget(QWidget):
             self.rebuild(self._trace_ref, show_sti=self._show_sti_flag)
 
     def restore_row_layout(self) -> None:
-        """Undo dock-shrink relax policies that hid task-name labels."""
-        for row in self._task_rows.values():
-            pol = row._lbl.sizePolicy()
-            pol.setHorizontalPolicy(QSizePolicy.Policy.Preferred)
-            row._lbl.setSizePolicy(pol)
-            row._lbl.setMinimumWidth(0)
+        """Legend list items do not need dock-shrink width repair."""
+        return
 
     def set_locked_task(self, task_name: Optional[str]) -> None:
         """Visually mark *task_name* as click-locked (or clear all locks)."""
         scroll_to = task_name if task_name != self._locked_task else None
         self._locked_task = task_name
-        for raw, row in self._task_rows.items():
-            is_match = (raw == task_name)
-            row.set_locked(is_match)
+        clear = QBrush()
+        for mk, item in self._task_items.items():
+            is_match = (mk == task_name)
+            item.setBackground(self._locked_bg if is_match else clear)
             if is_match and scroll_to is not None:
-                self._scroll.ensureWidgetVisible(row)
+                self._task_list.scrollToItem(
+                    item, QAbstractItemView.ScrollHint.EnsureVisible)
 
     def set_heatmap_filter(self, label: Optional[str],
                            merge_keys: Optional[set]) -> None:
@@ -13860,48 +13912,49 @@ class _LegendWidget(QWidget):
         self.cancel_highlight.emit()
         super().mousePressEvent(event)
 
+    def _on_task_item_clicked(self, item: QListWidgetItem) -> None:
+        mk = item.data(Qt.ItemDataRole.UserRole)
+        if mk:
+            self.task_clicked.emit(str(mk))
+
+    def _item_matches_filter(self, mk: str, q: str) -> bool:
+        if not q:
+            return True
+        disp = self._task_display.get(mk, mk)
+        ql = q.lower()
+        return (ql in mk.lower()) or (ql in disp.lower())
+
     def rebuild(self, trace: BtfTrace, *, show_sti: bool = True) -> None:
         self._trace_ref      = trace
         self._show_sti_flag  = show_sti
-        self._task_rows.clear()
+        self._task_items.clear()
+        self._task_display.clear()
         self._sti_rows = []
-        scroll_pos = self._scroll.verticalScrollBar().value()
+        scroll_pos = self._task_list.verticalScrollBar().value()
 
-        while self._list_layout.count():
-            _item = self._list_layout.takeAt(0)
-            _w = _item.widget()
-            if _w is None:
-                continue
-            _w.deleteLater()
-
-        # Suppress per-addWidget layout recalculations for the whole batch.
-        is_dark       = self._is_dark
-        hdr_color     = "#AAAAAA" if is_dark else "#555555"
-        sep_color     = "#444444" if is_dark else "#CCCCCC"
-        hdr2_color    = "#88AABB" if is_dark else "#005A9E"
-        self.setUpdatesEnabled(False)
+        is_dark = self._is_dark
+        hdr_color = "#AAAAAA" if is_dark else "#555555"
+        self._task_header.setText(f"<b style='color:{hdr_color}'>Tasks</b>")
+        self._task_list.setUpdatesEnabled(False)
         try:
-            header = QLabel(f"<b style='color:{hdr_color}'>Tasks</b>")
-            header.setTextFormat(Qt.TextFormat.RichText)
-            self._list_layout.addWidget(header)
-
-            # trace.tasks contains merge keys; task_repr maps each to its raw name.
-            for _mk in trace.tasks:
+            self._task_list.clear()
+            app = QApplication.instance()
+            for i, _mk in enumerate(trace.tasks):
                 _rep_raw = trace.task_repr.get(_mk, _mk)
                 color = _task_color(_rep_raw)
                 display = _task_display_name(_rep_raw)
-                row = _LegendTaskRow(_mk, display, color, tooltip=_rep_raw, is_dark=is_dark)
-                row.clicked.connect(self.task_clicked)
-                self._task_rows[_mk] = row
-                self._list_layout.addWidget(row)
-
-            # Legend is task-only by design: STI events are not listed here.
-
-            self._list_layout.addStretch()
+                item = QListWidgetItem(self._swatch_icon(color, is_dark), display)
+                item.setData(Qt.ItemDataRole.UserRole, _mk)
+                item.setToolTip(_rep_raw)
+                self._task_list.addItem(item)
+                self._task_items[_mk] = item
+                self._task_display[_mk] = display
+                if app is not None and i > 0 and (i % 256) == 0:
+                    app.processEvents()
             self._filter_tasks(self._search.text())
         finally:
-            self.setUpdatesEnabled(True)
-        self._scroll.verticalScrollBar().setValue(scroll_pos)
+            self._task_list.setUpdatesEnabled(True)
+        self._task_list.verticalScrollBar().setValue(scroll_pos)
 
     def _on_migrated_only_toggled(self, checked: bool) -> None:
         self.migrated_filter_changed.emit(bool(checked))
@@ -13913,16 +13966,16 @@ class _LegendWidget(QWidget):
         self._filter_emit_timer.start()
 
     def _filter_tasks(self, text: str) -> None:
-        """Show / hide task and STI rows in the legend based on the search filter."""
+        """Show / hide task rows in the legend based on the search filter."""
         q = text.strip().lower()
         trace = self._trace_ref
-        for mk, row in self._task_rows.items():
-            visible = row.matches_filter(q)
+        for mk, item in self._task_items.items():
+            visible = self._item_matches_filter(mk, q)
             if visible and self._heatmap_filter_mks is not None:
                 visible = mk in self._heatmap_filter_mks
             if visible and self._migrated_only_cb.isChecked() and trace is not None:
                 visible = _is_migrated_task(trace, mk)
-            row.setVisible(visible)
+            item.setHidden(not visible)
         for key_lc, row_w in self._sti_rows:
             row_w.setVisible((not q) or (q in key_lc))
 
@@ -16362,6 +16415,11 @@ class _StatsPanel(QWidget):
         self._util_label_col_w: int = STATS_UTIL_LABEL_W
         self._util_scroll_areas: List[QScrollArea] = []
         self._util_scroll_filters: List[_UtilScrollResizeFilter] = []
+        self._defer_heavy_sections: bool = False
+        self._deferred_sections: List[str] = []
+        self._defer_populate_timer = QTimer(self)
+        self._defer_populate_timer.setSingleShot(True)
+        self._defer_populate_timer.timeout.connect(self._populate_next_deferred_section)
         self.setMinimumWidth(0)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         outer = QVBoxLayout(self)
@@ -16497,6 +16555,9 @@ class _StatsPanel(QWidget):
         self._btn_stats_collapse.setIcon(_svg_icon(_IC_SECTIONS_COLLAPSE, color))
 
     def _clear(self) -> None:
+        self._defer_populate_timer.stop()
+        self._deferred_sections.clear()
+        self._defer_heavy_sections = False
         self._table_grips.clear()
         self._util_scroll_areas.clear()
         self._util_scroll_filters.clear()
@@ -17358,6 +17419,26 @@ class _StatsPanel(QWidget):
         self._ilay.insertWidget(idx + 1, body)
         self._section_bodies[section_id] = body
 
+    def _schedule_deferred_section_populate(self) -> None:
+        if self._deferred_sections:
+            self._defer_populate_timer.start(0)
+
+    def _populate_next_deferred_section(self) -> None:
+        """Populate one deferred statistics section per event-loop turn."""
+        while self._deferred_sections:
+            section_id = self._deferred_sections.pop(0)
+            if self._section_collapsed.get(section_id, False):
+                continue
+            if section_id in self._section_bodies:
+                continue
+            self._ensure_section_body(section_id)
+            app = QApplication.instance()
+            if app is not None:
+                app.processEvents()
+            break
+        if self._deferred_sections:
+            self._defer_populate_timer.start(0)
+
     def _set_section_collapsed(self, section_id: str, collapsed: bool) -> None:
         self._section_collapsed[section_id] = collapsed
         if collapsed:
@@ -17409,7 +17490,12 @@ class _StatsPanel(QWidget):
         self._section_headers[section_id] = hdr
         self._section_populate[section_id] = populate
         if not collapsed:
-            self._ensure_section_body(section_id)
+            if (self._defer_heavy_sections
+                    and section_id in STATS_HEAVY_SECTIONS):
+                if section_id not in self._deferred_sections:
+                    self._deferred_sections.append(section_id)
+            else:
+                self._ensure_section_body(section_id)
 
     def _core_util_rows(self, trace: "BtfTrace",
                         lo: Optional[int] = None, hi: Optional[int] = None) -> List[Tuple[str, float]]:
@@ -18663,12 +18749,14 @@ class _StatsPanel(QWidget):
 
     def rebuild(self, trace: "BtfTrace") -> None:
         self._trace = trace
+        defer_heavy = trace_needs_deferred_stats_load(trace)
         self._btn_export_csv.setEnabled(True)
         self._btn_export_html.setEnabled(True)
         wnd = self.window()
         self._btn_compare_mig.setEnabled(
             isinstance(wnd, QMainWindow) and len(getattr(wnd, "_tabs", ())) >= 2)
         self._clear()
+        self._defer_heavy_sections = defer_heavy
         self._update_scope_header()
 
         rng = self._stats_range()
@@ -18773,9 +18861,8 @@ class _StatsPanel(QWidget):
         )
 
         # -- Trace health (TICK) ------------------------------------------
-        _tick = _tick_health_report(trace, lo, hi)
-
         def _populate_health(blay: QVBoxLayout) -> None:
+            _tick = _tick_health_report(trace, lo, hi)
             if _tick["tick_count"] == 0:
                 blay.addWidget(self._lbl("No STI TICK events", color="#888888", ui_fs=_fs))
                 return
@@ -18881,7 +18968,6 @@ class _StatsPanel(QWidget):
         )
 
         # -- Core migrations ----------------------------------------------
-        _mig_rows = _migration_rows(trace, lo, hi)
         empty_mig = ("No multi-core tasks in cursor range" if scope
                      else "No tasks ran on more than one core")
 
@@ -18896,6 +18982,7 @@ class _StatsPanel(QWidget):
             self.task_clicked.emit(mk)
 
         def _populate_mig(blay: QVBoxLayout) -> None:
+            _mig_rows = _migration_rows(trace, lo, hi)
             blay.addWidget(self._build_stats_table(
                 _mig_rows, _fs, empty_mig,
                 section_id="migrations", migrations=True,
@@ -18909,11 +18996,11 @@ class _StatsPanel(QWidget):
         )
 
         # -- Execution time per slice -------------------------------------
-        _exec_rows = self._exec_slice_rows(trace, lo, hi)
         empty_exec = ("No slices fully inside cursor range" if scope
                       else "No user-task slices found")
 
         def _populate_exec(blay: QVBoxLayout) -> None:
+            _exec_rows = self._exec_slice_rows(trace, lo, hi)
             blay.addWidget(self._build_stats_table(
                 _exec_rows,
                 _fs,
@@ -18933,11 +19020,11 @@ class _StatsPanel(QWidget):
         )
 
         # -- Blocking time (off-CPU between activations) --------------------
-        _block_rows = self._blocking_time_rows(trace, lo, hi)
         empty_block = ("No off-CPU gaps fully inside cursor range" if scope
                        else "Need at least 2 activations per task")
 
         def _populate_block(blay: QVBoxLayout) -> None:
+            _block_rows = self._blocking_time_rows(trace, lo, hi)
             blay.addWidget(self._build_stats_table(
                 _block_rows,
                 _fs,
@@ -18959,9 +19046,8 @@ class _StatsPanel(QWidget):
         )
 
         # -- Inter-arrival time -------------------------------------------
-        _inter_rows = self._inter_arrival_rows(trace, lo, hi)
-
         def _populate_inter(blay: QVBoxLayout) -> None:
+            _inter_rows = self._inter_arrival_rows(trace, lo, hi)
             blay.addWidget(self._build_stats_table(
                 _inter_rows,
                 _fs,
@@ -18982,11 +19068,11 @@ class _StatsPanel(QWidget):
         )
 
         # -- Preemption Chain Analysis ----------------------------------------
-        _preempt_rows, _preempt_truncated = _preemption_chain_rows(trace, lo, hi)
         empty_preempt = ("No preemption events in cursor range" if scope
                          else "No preemption events found (single-task or idle-only trace)")
 
         def _populate_preempt(blay: QVBoxLayout) -> None:
+            _preempt_rows, _preempt_truncated = _preemption_chain_rows(trace, lo, hi)
             if _preempt_truncated:
                 blay.addWidget(self._lbl(
                     f"Showing top {PREEMPTION_CHAIN_MAX_ROWS:,} pairs by total preemption time.",
@@ -19006,11 +19092,11 @@ class _StatsPanel(QWidget):
 
         # -- Priority inheritance ---------------------------------------------
         if trace.has_priority_instrumentation:
-            _priority_rows = _priority_stats_rows(trace, lo, hi)
             empty_priority = ("No priority boosts in cursor range" if scope
                               else "No priority boosts in trace")
 
             def _populate_priority(blay: QVBoxLayout) -> None:
+                _priority_rows = _priority_stats_rows(trace, lo, hi)
                 blay.addWidget(self._lbl(
                     "Orange/red bands on task rows mark boosted periods. "
                     "L/M/H pattern = medium-priority task between base and peak.",
@@ -19076,15 +19162,15 @@ class _StatsPanel(QWidget):
 
         # -- Mutex / Semaphore pairing ---------------------------------------
         if trace.has_sync_object_instrumentation:
-            _sync_rows = _sync_object_stats_rows(trace, lo, hi)
-            _sync_issues_scoped = [
-                i for i in trace.sync_issues
-                if _sync_in_scope(i["time_ns"], lo, hi)
-            ]
             empty_sync = ("No mutex/sem activity in cursor range" if scope
                           else "No mutex/sem STI events in trace")
 
             def _populate_sync(blay: QVBoxLayout) -> None:
+                _sync_rows = _sync_object_stats_rows(trace, lo, hi)
+                _sync_issues_scoped = [
+                    i for i in trace.sync_issues
+                    if _sync_in_scope(i["time_ns"], lo, hi)
+                ]
                 blay.addWidget(self._lbl(
                     "Pairs take/give STI events by object pointer (0x........). "
                     "Flags orphan gives, unmatched takes, delete-while-held, "
@@ -19133,9 +19219,11 @@ class _StatsPanel(QWidget):
                     table.setSortingEnabled(True)
                     table.resizeRowsToContents()
                     self._wrap_table_with_resizer(play, table, "sync")
-                    if _sync_issues_scoped:
+                    _issues_display, _issues_cap_note = cap_stats_table_rows(
+                        _sync_issues_scoped)
+                    if _issues_display:
                         issue_headers = ["Time", "Object", "Issue", "Detail", "Task", "Core"]
-                        itable = QTableWidget(len(_sync_issues_scoped), len(issue_headers))
+                        itable = QTableWidget(len(_issues_display), len(issue_headers))
                         itable.setHorizontalHeaderLabels(issue_headers)
                         itable.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
                         itable.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
@@ -19170,7 +19258,7 @@ class _StatsPanel(QWidget):
 
                         itable.cellClicked.connect(_on_issue_row)
                         self._wire_stats_table_click_cursor(itable)
-                        for ri, iss in enumerate(_sync_issues_scoped):
+                        for ri, iss in enumerate(_issues_display):
                             vals = [
                                 _format_time(iss["time_ns"], trace.time_scale),
                                 iss.get("obj_key") or "—",
@@ -19206,6 +19294,7 @@ class _StatsPanel(QWidget):
                         itable.setSortingEnabled(True)
                         itable.resizeRowsToContents()
                         self._wrap_table_with_resizer(play, itable, "sync_issues")
+                        self._add_stats_table_cap_note(play, _issues_cap_note, _fs)
                 blay.addWidget(host)
 
             self._add_collapsible_section(
@@ -19216,11 +19305,11 @@ class _StatsPanel(QWidget):
             )
 
         # -- Interval Analysis ------------------------------------------------
-        _interval_rows = _interval_stats_rows(trace, lo, hi)
         empty_interval = ("No interval data in cursor range" if scope
                           else "No paired interval_start / interval_stop events in trace")
 
         def _populate_intervals(blay: QVBoxLayout) -> None:
+            _interval_rows = _interval_stats_rows(trace, lo, hi)
             blay.addWidget(self._build_stats_table(
                 [(r[0], r[1], r[2], r[3], r[4], r[5], r[6]) for r in _interval_rows],
                 _fs,
@@ -19238,11 +19327,11 @@ class _StatsPanel(QWidget):
         )
 
         # -- Tag Analysis ---------------------------------------------------
-        _tag_rows = _tag_stats_rows(trace, lo, hi)
         empty_tag = ("No tag samples in cursor range" if scope
                      else "No tag0_event … tag7_event STI samples in trace")
 
         def _populate_tags(blay: QVBoxLayout) -> None:
+            _tag_rows = _tag_stats_rows(trace, lo, hi)
             blay.addWidget(self._build_stats_table(
                 _tag_rows,
                 _fs,
@@ -19266,6 +19355,12 @@ class _StatsPanel(QWidget):
         for lbl in self.findChildren(_ElidedUtilLabel):
             lbl.set_column_width(self._util_label_col_w)
         QTimer.singleShot(0, self.sync_util_layout)
+        self._schedule_deferred_section_populate()
+
+    def _add_stats_table_cap_note(self, blay: QVBoxLayout, note: Optional[str],
+                                  ui_fs: str) -> None:
+        if note:
+            blay.addWidget(self._lbl(note, color="#888888", ui_fs=ui_fs))
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -22722,10 +22817,11 @@ class _CpuLoadGraph(QWidget):
     Core view + task selected -> 1 row per core showing that task's usage on each core
 
     Rows can be collapsed (core view only): collapsed height = CPU_LOAD_COLLAPSED_H px,
-    label still visible. Click label to toggle. Expand/Collapse All button syncs via
-    set_all_expanded().
+    label still visible. Click label to toggle. The title-bar icon and toolbar
+    Expand/Collapse All button sync via set_all_expanded().
     """
 
+    expand_all_toggled = Signal(bool)
     _NUM_BINS = 1024
 
     def __init__(self, view: "TimelineView", parent: QWidget = None) -> None:
@@ -22744,13 +22840,15 @@ class _CpuLoadGraph(QWidget):
         self._bin_w_ns: float                               = 1.0
         self._font_size: int                                = 8
         self._hover_y: int                                  = -1
+        self._title_icon_rect: Optional[QRect]               = None
         self.setMinimumSize(40, 40)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         self.setMouseTracking(True)
         self._scroll_area: Optional["QScrollArea"] = None
         self.setToolTip(
             "CPU load over time - synchronised with timeline\n"
-            "Core view: click a label to collapse/expand that core row"
+            "Core view: title icon expands/collapses all cores; "
+            "click a label to toggle one core row"
         )
 
     # ------------------------------------------------------------------
@@ -22809,6 +22907,22 @@ class _CpuLoadGraph(QWidget):
                 self._collapsed_cores = set(self._trace.core_names or [])
         self.updateGeometry()
         self.update()
+
+    def _all_cores_expanded(self) -> bool:
+        cores = (self._trace.core_names or []) if self._trace else []
+        if len(cores) <= 1:
+            return True
+        return all(c not in self._collapsed_cores for c in cores)
+
+    def _title_expand_icon_rect(self, fm_title: QFontMetrics) -> QRect:
+        text_w = fm_title.horizontalAdvance("CPU LOAD")
+        icon_x = 4 + text_w + 6
+        return QRect(icon_x, 4, 14, 14)
+
+    def _toggle_title_expand_all(self) -> None:
+        new_expanded = not self._all_cores_expanded()
+        self.set_all_expanded(new_expanded)
+        self.expand_all_toggled.emit(new_expanded)
 
     # ------------------------------------------------------------------
     # Size hint - drives QScrollArea scrollbar
@@ -23171,7 +23285,14 @@ class _CpuLoadGraph(QWidget):
         if not scene or not hasattr(scene, '_label_width'):
             super().mousePressEvent(event)
             return
-        if event.button() == Qt.MouseButton.LeftButton and self._trace and self._view_mode == "core":
+        if (event.button() == Qt.MouseButton.LeftButton
+                and self._trace and self._view_mode == "core"):
+            pt = event.position().toPoint()
+            if (self._title_icon_rect is not None
+                    and self._title_icon_rect.contains(pt)):
+                self._toggle_title_expand_all()
+                event.accept()
+                return
             if event.position().x() < scene._label_width:
                 _TITLE_H = 22
                 ry = _TITLE_H
@@ -23198,6 +23319,12 @@ class _CpuLoadGraph(QWidget):
             scene._hover_ns = hover_ns
             scene._draw_hover_line()
             self.update()
+        pt = event.position().toPoint()
+        if (self._title_icon_rect is not None
+                and self._title_icon_rect.contains(pt)):
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+        elif self.cursor().shape() == Qt.CursorShape.PointingHandCursor:
+            self.unsetCursor()
         super().mouseMoveEvent(event)
 
     def leaveEvent(self, event) -> None:  # noqa: N802
@@ -23338,7 +23465,19 @@ class _CpuLoadGraph(QWidget):
         # -- Title bar (same bg as rows) --------------------------------
         p.setFont(sf_title)
         p.setPen(txtc)
-        p.drawText(QRect(4, 0, lw - 6, _TITLE_H), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, "CPU LOAD")
+        p.drawText(QRect(4, 0, lw - 6, _TITLE_H),
+                   Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, "CPU LOAD")
+        cores = (self._trace.core_names or []) if self._trace else []
+        if self._view_mode == "core" and len(cores) > 1:
+            fm_title = QFontMetrics(sf_title)
+            all_exp = self._all_cores_expanded()
+            path = _IC_SECTIONS_EXPAND if not all_exp else _IC_SECTIONS_COLLAPSE
+            icon_col = "#AAAAAA" if dark else "#666666"
+            ico = _svg_icon(path, icon_col, 12)
+            self._title_icon_rect = self._title_expand_icon_rect(fm_title)
+            ico.paint(p, self._title_icon_rect)
+        else:
+            self._title_icon_rect = None
         p.setPen(QPen(sepc, 1))
         p.drawLine(0, _TITLE_H, w, _TITLE_H)
 
@@ -24123,6 +24262,18 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
         view._scene.task_filter_changed.connect(_on_task_filter_changed)
 
+        def _on_cpu_expand_all_toggled(expanded: bool) -> None:
+            view.set_all_cores_expanded(expanded)
+            if view is self._view:
+                if hasattr(self, "_tb_expand_all_btn") and self._view_mode == "core":
+                    self._tb_expand_all_btn.blockSignals(True)
+                    self._tb_expand_all_btn.setChecked(expanded)
+                    self._tb_expand_all_btn.blockSignals(False)
+                if not self._cpu_splitter_user_sized:
+                    self._autofit_cpu_load_height()
+
+        graph.expand_all_toggled.connect(_on_cpu_expand_all_toggled)
+
         class _CpuGraphViewportSync(QObject):
             def eventFilter(self, obj, event):
                 if event.type() == QEvent.Type.Resize:
@@ -24532,7 +24683,24 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         else:
             self._recompute_find_hits()
 
-    def _sync_panels_to_active_tab(self) -> None:
+    def _dismiss_load_progress(self, progress_dialog: Optional["_LoadProgressDialog"] = None) -> None:
+        """Close the load progress overlay (safe if already dismissed)."""
+        dlg = progress_dialog if progress_dialog is not None else self._progress_dialog
+        if dlg is None:
+            return
+        try:
+            dlg.close()
+            dlg.deleteLater()
+        except RuntimeError:
+            pass
+        if self._progress_dialog is dlg:
+            self._progress_dialog = None
+        self._load_in_progress = False
+        if QApplication.overrideCursor() is not None:
+            QApplication.restoreOverrideCursor()
+
+    def _sync_panels_light(self) -> None:
+        """Legend and bindings without rebuilding the statistics panel."""
         self._sync_heatmap_dialog_to_tab()
         tab = self._active_tab
         trace = self._trace
@@ -24545,12 +24713,20 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._stats_panel._ui_font_size = self._ui_font_size_val
         tab.vm.stats.apply_to_panel(self._stats_panel, refresh_stats=False)
         self._stats_panel.set_cursor_times(self._view._scene.cursor_times(), refresh_stats=False)
+        self._bind_legend_to_scene(sc)
+
+    def _sync_panels_stats_and_chrome(self) -> None:
+        """Statistics panel, CPU graph, and toolbar chrome after trace load."""
+        tab = self._active_tab
+        trace = self._trace
+        if tab is None or trace is None:
+            return
+        self._stats_panel._ui_font_size = self._ui_font_size_val
         self._stats_panel.rebuild(trace)
         QTimer.singleShot(0, self._stats_panel.sync_util_layout)
         self._cpu_load_graph.set_trace(trace)
         self._cpu_load_graph.set_font_size(self._font_size_val)
         self._sync_cpu_load_graph(tab)
-        self._bind_legend_to_scene(self._view._scene)
         self._recompute_find_hits()
         self._refresh_find_marker()
         self._refresh_zoom_ui_unit()
@@ -24563,6 +24739,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 self._apply_saved_cpu_splitter(tab)
             else:
                 self._autofit_cpu_load_height()
+
+    def _sync_panels_to_active_tab(self) -> None:
+        self._sync_panels_light()
+        self._sync_panels_stats_and_chrome()
 
     def _update_status_for_active_tab(self) -> None:
         trace = self._trace
@@ -27651,7 +27831,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                     QMessageBox.critical(self, "Render Error",
                                          f"Failed to display:\n{path}\n\n{exc}")
             finally:
-                _teardown_loading_dialog()   # close after all heavy work is done
+                if self._progress_dialog is progress_dialog:
+                    _teardown_loading_dialog()
                 self._finish_parse_thread()
 
         def _on_error(msg):
@@ -27702,7 +27883,18 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
         progress_dialog.update_progress(100, "Building legend…")
         _process_ui_events_safely()
-        self._sync_panels_to_active_tab()
+        self._sync_panels_light()
+        self._dismiss_load_progress(progress_dialog)
+
+        def _deferred_stats_sync() -> None:
+            if self._trace is not trace:
+                return
+            self.statusBar().showMessage("Building statistics…", 0)
+            _process_ui_events_safely()
+            self._sync_panels_stats_and_chrome()
+            self.statusBar().clearMessage()
+
+        QTimer.singleShot(0, _deferred_stats_sync)
 
         self._undo_stack.clear()
         self._redo_stack.clear()
@@ -29276,7 +29468,7 @@ _CLI_EPILOG_GUI = """\
 GUI examples:
   %(prog)s                                    restore previous session (btf_viewer.rc)
   %(prog)s tracedata/example.btf              open one trace in the interactive viewer
-  %(prog)s run1.btf run2.btf                   open multiple traces (first tab active)
+  %(prog)s run1.btf run2.btf                  open multiple traces (first tab active)
 
 CLI examples:
   %(prog)s info tracedata/example-4cores.btf

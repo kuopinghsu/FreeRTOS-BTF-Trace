@@ -24,10 +24,11 @@ class _CpuLoadGraph(QWidget):
     Core view + task selected -> 1 row per core showing that task's usage on each core
 
     Rows can be collapsed (core view only): collapsed height = CPU_LOAD_COLLAPSED_H px,
-    label still visible. Click label to toggle. Expand/Collapse All button syncs via
-    set_all_expanded().
+    label still visible. Click label to toggle. The title-bar icon and toolbar
+    Expand/Collapse All button sync via set_all_expanded().
     """
 
+    expand_all_toggled = Signal(bool)
     _NUM_BINS = 1024
 
     def __init__(self, view: "TimelineView", parent: QWidget = None) -> None:
@@ -46,13 +47,15 @@ class _CpuLoadGraph(QWidget):
         self._bin_w_ns: float                               = 1.0
         self._font_size: int                                = 8
         self._hover_y: int                                  = -1
+        self._title_icon_rect: Optional[QRect]               = None
         self.setMinimumSize(40, 40)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         self.setMouseTracking(True)
         self._scroll_area: Optional["QScrollArea"] = None
         self.setToolTip(
             "CPU load over time - synchronised with timeline\n"
-            "Core view: click a label to collapse/expand that core row"
+            "Core view: title icon expands/collapses all cores; "
+            "click a label to toggle one core row"
         )
 
     # ------------------------------------------------------------------
@@ -111,6 +114,22 @@ class _CpuLoadGraph(QWidget):
                 self._collapsed_cores = set(self._trace.core_names or [])
         self.updateGeometry()
         self.update()
+
+    def _all_cores_expanded(self) -> bool:
+        cores = (self._trace.core_names or []) if self._trace else []
+        if len(cores) <= 1:
+            return True
+        return all(c not in self._collapsed_cores for c in cores)
+
+    def _title_expand_icon_rect(self, fm_title: QFontMetrics) -> QRect:
+        text_w = fm_title.horizontalAdvance("CPU LOAD")
+        icon_x = 4 + text_w + 6
+        return QRect(icon_x, 4, 14, 14)
+
+    def _toggle_title_expand_all(self) -> None:
+        new_expanded = not self._all_cores_expanded()
+        self.set_all_expanded(new_expanded)
+        self.expand_all_toggled.emit(new_expanded)
 
     # ------------------------------------------------------------------
     # Size hint - drives QScrollArea scrollbar
@@ -473,7 +492,14 @@ class _CpuLoadGraph(QWidget):
         if not scene or not hasattr(scene, '_label_width'):
             super().mousePressEvent(event)
             return
-        if event.button() == Qt.MouseButton.LeftButton and self._trace and self._view_mode == "core":
+        if (event.button() == Qt.MouseButton.LeftButton
+                and self._trace and self._view_mode == "core"):
+            pt = event.position().toPoint()
+            if (self._title_icon_rect is not None
+                    and self._title_icon_rect.contains(pt)):
+                self._toggle_title_expand_all()
+                event.accept()
+                return
             if event.position().x() < scene._label_width:
                 _TITLE_H = 22
                 ry = _TITLE_H
@@ -500,6 +526,12 @@ class _CpuLoadGraph(QWidget):
             scene._hover_ns = hover_ns
             scene._draw_hover_line()
             self.update()
+        pt = event.position().toPoint()
+        if (self._title_icon_rect is not None
+                and self._title_icon_rect.contains(pt)):
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+        elif self.cursor().shape() == Qt.CursorShape.PointingHandCursor:
+            self.unsetCursor()
         super().mouseMoveEvent(event)
 
     def leaveEvent(self, event) -> None:  # noqa: N802
@@ -640,7 +672,19 @@ class _CpuLoadGraph(QWidget):
         # -- Title bar (same bg as rows) --------------------------------
         p.setFont(sf_title)
         p.setPen(txtc)
-        p.drawText(QRect(4, 0, lw - 6, _TITLE_H), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, "CPU LOAD")
+        p.drawText(QRect(4, 0, lw - 6, _TITLE_H),
+                   Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, "CPU LOAD")
+        cores = (self._trace.core_names or []) if self._trace else []
+        if self._view_mode == "core" and len(cores) > 1:
+            fm_title = QFontMetrics(sf_title)
+            all_exp = self._all_cores_expanded()
+            path = _IC_SECTIONS_EXPAND if not all_exp else _IC_SECTIONS_COLLAPSE
+            icon_col = "#AAAAAA" if dark else "#666666"
+            ico = _svg_icon(path, icon_col, 12)
+            self._title_icon_rect = self._title_expand_icon_rect(fm_title)
+            ico.paint(p, self._title_icon_rect)
+        else:
+            self._title_icon_rect = None
         p.setPen(QPen(sepc, 1))
         p.drawLine(0, _TITLE_H, w, _TITLE_H)
 
@@ -1425,6 +1469,18 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
         view._scene.task_filter_changed.connect(_on_task_filter_changed)
 
+        def _on_cpu_expand_all_toggled(expanded: bool) -> None:
+            view.set_all_cores_expanded(expanded)
+            if view is self._view:
+                if hasattr(self, "_tb_expand_all_btn") and self._view_mode == "core":
+                    self._tb_expand_all_btn.blockSignals(True)
+                    self._tb_expand_all_btn.setChecked(expanded)
+                    self._tb_expand_all_btn.blockSignals(False)
+                if not self._cpu_splitter_user_sized:
+                    self._autofit_cpu_load_height()
+
+        graph.expand_all_toggled.connect(_on_cpu_expand_all_toggled)
+
         class _CpuGraphViewportSync(QObject):
             def eventFilter(self, obj, event):
                 if event.type() == QEvent.Type.Resize:
@@ -1834,7 +1890,24 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         else:
             self._recompute_find_hits()
 
-    def _sync_panels_to_active_tab(self) -> None:
+    def _dismiss_load_progress(self, progress_dialog: Optional["_LoadProgressDialog"] = None) -> None:
+        """Close the load progress overlay (safe if already dismissed)."""
+        dlg = progress_dialog if progress_dialog is not None else self._progress_dialog
+        if dlg is None:
+            return
+        try:
+            dlg.close()
+            dlg.deleteLater()
+        except RuntimeError:
+            pass
+        if self._progress_dialog is dlg:
+            self._progress_dialog = None
+        self._load_in_progress = False
+        if QApplication.overrideCursor() is not None:
+            QApplication.restoreOverrideCursor()
+
+    def _sync_panels_light(self) -> None:
+        """Legend and bindings without rebuilding the statistics panel."""
         self._sync_heatmap_dialog_to_tab()
         tab = self._active_tab
         trace = self._trace
@@ -1847,12 +1920,20 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._stats_panel._ui_font_size = self._ui_font_size_val
         tab.vm.stats.apply_to_panel(self._stats_panel, refresh_stats=False)
         self._stats_panel.set_cursor_times(self._view._scene.cursor_times(), refresh_stats=False)
+        self._bind_legend_to_scene(sc)
+
+    def _sync_panels_stats_and_chrome(self) -> None:
+        """Statistics panel, CPU graph, and toolbar chrome after trace load."""
+        tab = self._active_tab
+        trace = self._trace
+        if tab is None or trace is None:
+            return
+        self._stats_panel._ui_font_size = self._ui_font_size_val
         self._stats_panel.rebuild(trace)
         QTimer.singleShot(0, self._stats_panel.sync_util_layout)
         self._cpu_load_graph.set_trace(trace)
         self._cpu_load_graph.set_font_size(self._font_size_val)
         self._sync_cpu_load_graph(tab)
-        self._bind_legend_to_scene(self._view._scene)
         self._recompute_find_hits()
         self._refresh_find_marker()
         self._refresh_zoom_ui_unit()
@@ -1865,6 +1946,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 self._apply_saved_cpu_splitter(tab)
             else:
                 self._autofit_cpu_load_height()
+
+    def _sync_panels_to_active_tab(self) -> None:
+        self._sync_panels_light()
+        self._sync_panels_stats_and_chrome()
 
     def _update_status_for_active_tab(self) -> None:
         trace = self._trace
@@ -4953,7 +5038,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                     QMessageBox.critical(self, "Render Error",
                                          f"Failed to display:\n{path}\n\n{exc}")
             finally:
-                _teardown_loading_dialog()   # close after all heavy work is done
+                if self._progress_dialog is progress_dialog:
+                    _teardown_loading_dialog()
                 self._finish_parse_thread()
 
         def _on_error(msg):
@@ -5004,7 +5090,18 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
         progress_dialog.update_progress(100, "Building legend…")
         _process_ui_events_safely()
-        self._sync_panels_to_active_tab()
+        self._sync_panels_light()
+        self._dismiss_load_progress(progress_dialog)
+
+        def _deferred_stats_sync() -> None:
+            if self._trace is not trace:
+                return
+            self.statusBar().showMessage("Building statistics…", 0)
+            _process_ui_events_safely()
+            self._sync_panels_stats_and_chrome()
+            self.statusBar().clearMessage()
+
+        QTimer.singleShot(0, _deferred_stats_sync)
 
         self._undo_stack.clear()
         self._redo_stack.clear()

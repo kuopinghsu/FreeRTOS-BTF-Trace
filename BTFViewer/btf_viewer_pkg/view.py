@@ -181,7 +181,7 @@ def _in_legend_panel(w: QWidget) -> bool:
     p: Optional[QWidget] = w
     while p is not None:
         if p.objectName() in (
-                "legend_root", "legend_list_host",
+                "legend_root", "legend_list_host", "legend_task_list",
                 "legend_scroll", "legend_scroll_viewport"):
             return True
         p = p.parentWidget()

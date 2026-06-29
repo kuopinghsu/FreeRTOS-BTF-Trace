@@ -125,7 +125,7 @@ _CLI_EPILOG_GUI = """\
 GUI examples:
   %(prog)s                                    restore previous session (btf_viewer.rc)
   %(prog)s tracedata/example.btf              open one trace in the interactive viewer
-  %(prog)s run1.btf run2.btf                   open multiple traces (first tab active)
+  %(prog)s run1.btf run2.btf                  open multiple traces (first tab active)
 
 CLI examples:
   %(prog)s info tracedata/example-4cores.btf

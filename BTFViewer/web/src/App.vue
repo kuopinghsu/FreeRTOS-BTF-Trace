@@ -161,6 +161,7 @@
           :label-width="appSettings.labelWidth"
           @clear-selection="clearCpuLoadSelection"
           @viewport-change="onCpuLoadViewportChange"
+          @toggle-expand-all="onCpuLoadToggleExpandAll"
         />
       </div>
 
@@ -1814,6 +1815,11 @@ function onCollapseAll() {
   timelinePanelRef.value?.collapseAll()
   cpuLoadExpanded.value = false
   autofitCpuLoadPaneHeight()
+}
+
+function onCpuLoadToggleExpandAll() {
+  if (cpuLoadExpanded.value) onCollapseAll()
+  else onExpandAll()
 }
 
 function onTimelineViewportChange(vp) {

@@ -5,7 +5,36 @@
     :class="{ dark: darkMode }"
   >
     <div class="cpu-load-title-row">
-      <div class="cpu-load-title">CPU LOAD</div>
+      <div class="cpu-load-title-group">
+        <div class="cpu-load-title">
+          CPU LOAD
+        </div>
+        <button
+          v-if="showExpandToggle"
+          type="button"
+          class="cpu-load-expand-btn"
+          :title="allExpanded ? 'Collapse all cores' : 'Expand all cores'"
+          :aria-label="allExpanded ? 'Collapse all cores' : 'Expand all cores'"
+          @click="emit('toggleExpandAll')"
+        >
+          <svg
+            viewBox="0 0 16 16"
+            width="12"
+            height="12"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <path
+              v-if="allExpanded"
+              d="M2 7h12v2H2z"
+            />
+            <path
+              v-else
+              d="M8 2v5H3v1h5v5h1V8h5V7H9V2H8z"
+            />
+          </svg>
+        </button>
+      </div>
       <button
         v-if="selectedTask"
         type="button"
@@ -205,7 +234,7 @@ const props = defineProps({
   taskFilterText: { type: String, default: '' },
   labelWidth: { type: Number, default: 160 },
 })
-const emit = defineEmits(['clearSelection', 'viewportChange'])
+const emit = defineEmits(['clearSelection', 'viewportChange', 'toggleExpandAll'])
 
 const panelRef = ref(null)
 const rowsRef = ref(null)
@@ -246,6 +275,9 @@ const filterActive = computed(() => coreViewTaskFilterActive(
 ))
 
 const rangeShadePaint = computed(() => cpuLoadRangeShadePaint(props.darkMode))
+
+const showExpandToggle = computed(() =>
+  props.viewMode === 'core' && (props.trace?.coreNames?.length ?? 0) > 1)
 
 const filteredTaskKeys = computed(() => {
   if (!props.trace || !filterActive.value) return []
@@ -322,7 +354,8 @@ const rows = computed(() => {
 const rowModels = computed(() => {
   void props.cpuLoadRowH
   const trace = props.trace
-  const { timeStart, timeEnd } = props.viewport
+  const timeStart = props.viewport.timeStart
+  const timeEnd = props.viewport.timeEnd
   if (!trace || timeEnd <= timeStart) return []
 
   const visibleStart = Math.max(trace.timeMin, timeStart)
@@ -614,6 +647,36 @@ defineExpose({ panelRef })
   gap: 8px;
   padding: 6px 10px 4px;
   border-bottom: 1px solid var(--border);
+}
+
+.cpu-load-title-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.cpu-load-expand-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--fg-dim);
+  cursor: pointer;
+}
+
+.cpu-load-expand-btn:hover,
+.cpu-load-expand-btn:focus-visible {
+  background: var(--tb-btn-hover);
+  border-color: var(--border);
+  color: var(--fg);
+  outline: none;
 }
 
 .cpu-load-clear-btn {

@@ -12,9 +12,9 @@ Scheduling behaviour
   - After each burst a task blocks for 0–8 ticks before re-entering the
     ready queue, giving every core genuine IDLE time slots.
   - The same task migrates to a different core at each scheduling decision.
-  - TICK fires every TICK_US µs (default 1 ms).
-  - STI software-trace events include generic tags, interval_start/stop pairs,
-    and mutex create/take/give sequences (firmware-style channels).
+  - TICK fires every TICK_US µs (default 1 ms) as STI,TICK on Core_0.
+  - tag0_event STI samples carry numeric payloads (traceTAG-style channels).
+  - Other STI events include interval_start/stop pairs and mutex create/take/give.
 
 Usage examples
 --------------
@@ -35,7 +35,7 @@ Options
   -o / --output           Output file path                   (default: auto)
   --tick-hz               RTOS tick frequency in Hz          (default: DEFAULT_TICK_HZ)
   --freq-hz               CPU clock frequency in Hz          (default: DEFAULT_FREQ_HZ)
-  --sti-interval-us       Approx µs between generic STI tags (default: DEFAULT_STI_INTERVAL_US)
+  --sti-interval-us       Approx µs between extra tag0_event STI samples (default: DEFAULT_STI_INTERVAL_US)
   --interval-ids          Number of distinct interval IDs      (default: DEFAULT_INTERVAL_IDS)
   --mutex-count           Number of mutex objects to create  (default: DEFAULT_MUTEX_COUNT)
   --idle-prob             Probability a core goes IDLE [0–1] (default: DEFAULT_IDLE_PROB)
@@ -99,13 +99,8 @@ _TASK_NAME_POOL = [
     "Svc_5",        "Svc_6",        "Svc_7",        "Svc_8",
 ]
 
-# Generic STI software instrumentation tag names (legacy / ad-hoc channels)
-_STI_TAGS = [
-    "ISR_Enter",    "ISR_Exit",     "Sem_Post",     "Sem_Wait",
-    "Mutex_Lock",   "Mutex_Unlock", "Queue_Send",   "Queue_Recv",
-    "Buf_Full",     "Buf_Empty",    "DMA_Done",     "DMA_Error",
-    "Overrun",      "Underrun",     "Checkpoint",   "Assert_OK",
-]
+# Numeric tag0_event payloads cycle through a small set (firmware-style counters).
+_TAG0_PAYLOADS = (4096, 8192, 12192, 16384, 24576, 32768)
 
 # Keywords that imply a high-priority task
 _HIGH_PRIO_KW = {"CAN", "Safety", "Watchdog", "Brake", "Motor",
@@ -237,7 +232,7 @@ def parse_args():
     parser.add_argument("--freq-hz",       type=int, default=DEFAULT_FREQ_HZ,
                         help="CPU clock frequency in Hz")
     parser.add_argument("--sti-interval-us", type=int, default=DEFAULT_STI_INTERVAL_US,
-                        help="Approximate µs between generic STI tag events")
+                        help="Approximate µs between tag0_event STI samples (in addition to per-tick tag0)")
     parser.add_argument("--interval-ids",  type=int, default=DEFAULT_INTERVAL_IDS,
                         help="Number of distinct interval IDs (0 … N-1)")
     parser.add_argument("--mutex-count",   type=int, default=DEFAULT_MUTEX_COUNT,
@@ -304,7 +299,6 @@ def main():
     worker_set = set(workers)
 
     idle_names = [f"IDLE{c}" for c in range(num_cores)]
-    tick_task  = "TICK"
     timer_service_name = "Tmr Svc"
     worker_id_by_name: dict[str, int] = {n: i + 9 for i, n in enumerate(workers)}
     timer_service_id = num_workers + 9
@@ -469,11 +463,24 @@ def main():
     heapq.heapify(sched_heap)
 
     tick_no      = 0
+    tag0_no      = 0
     next_tick    = sim_start + tick_us
-    sti_no       = 0
     interval_no  = 0
     mutex_no     = 0
     next_sti     = sim_start + _rndi(tick_us, sti_interval_us)
+    tick_core    = core_names[0]
+
+    def _tag0_payload() -> int:
+        base = _TAG0_PAYLOADS[tag0_no % len(_TAG0_PAYLOADS)]
+        return base + _rndi(0, 255)
+
+    def _emit_tag0(t: int, core_name: str) -> None:
+        nonlocal tag0_no, event_count
+        _buf.append(
+            f"{t},{core_name},0,STI,tag0_event,0,trigger,{_tag0_payload()}\n")
+        tag0_no += 1
+        event_count += 1
+
     core_preempt_prob = 0.45
 
     try:
@@ -488,17 +495,17 @@ def main():
                 if not tick_due and not sti_due:
                     break
                 if tick_due and (not sti_due or next_tick <= next_sti):
-                    _buf.append(f"{next_tick},{tick_task},0,T,{tick_task},0,resume,{tick_no}\n")
-                    _buf.append(f"{next_tick + 1},{tick_task},0,T,{tick_task},0,preempt,\n")
-                    event_count += 2
-                    tick_no  += 1
+                    if enable_sti:
+                        _buf.append(
+                            f"{next_tick},{tick_core},0,STI,TICK,0,trigger,{tick_no}\n")
+                        event_count += 1
+                        _emit_tag0(next_tick + _rndi(3, 10), tick_core)
+                    tick_no += 1
                     next_tick += tick_us
                 else:
-                    tag = _rndch(_STI_TAGS)
-                    _buf.append(f"{next_sti},{core_names[core]},0,STI,{tag},0,trigger,{tag}\n")
-                    event_count += 1
-                    sti_no  += 1
-                    next_sti = cur_t + _rndi(sti_interval_us // 2, sti_interval_us * 2)
+                    _emit_tag0(next_sti, core_names[core])
+                    next_sti = cur_t + _rndi(
+                        sti_interval_us // 2, sti_interval_us * 2)
                 if len(_buf) >= _FLUSH_EVERY:
                     _flush_buf()
 
@@ -582,8 +589,8 @@ def main():
     sim_dur_ms = (next_tick - sim_start) / 1_000
     print(
         f"Done: {event_count:>10,} events  |  "
-        f"{tick_no:>6,} ticks ({tick_us} µs/tick)  |  "
-        f"{sti_no:>5,} generic STI  |  "
+        f"{tick_no:>6,} STI TICK  |  "
+        f"{tag0_no:>5,} tag0_event  |  "
         f"{interval_no:>5,} interval STI  |  "
         f"{mutex_no:>5,} mutex STI  |  "
         f"sim duration ≈ {sim_dur_ms:,.1f} ms  →  {out_path}"

@@ -1741,6 +1741,7 @@ function scrollToSegmentIfNeeded(seg) {
     viewport.scrollX = Math.max(0, rawX + cw / 2 - canvasW / 2)
   }
   if (!timeVisible || (isHorizontal && rowOutOfView && targetRow) || (!isHorizontal && colOutOfView && targetCol)) {
+    emitViewportChange()
     scheduleRender()
   }
 }
@@ -2186,6 +2187,7 @@ function _overviewApplyIndicatorPos(vx, vy, ind) {
   }
   markInteracting(true)
   scheduleRender()
+  emitViewportChange()
 }
 
 function _overviewJumpTo(cx, cy) {
@@ -2205,6 +2207,7 @@ function _overviewJumpTo(cx, cy) {
     viewport.scrollY = ratioY * Math.max(0, totalRowHeight.value - visH)
     markInteracting(true)
     scheduleRender()
+    emitViewportChange()
   } else {
     const visSpan = viewport.timeEnd - viewport.timeStart
     const newStart = lo + ratioX * (span - visSpan)
@@ -2214,6 +2217,7 @@ function _overviewJumpTo(cx, cy) {
     viewport.scrollX = ratioY * Math.max(0, totW - viewport.canvasW)
     markInteracting(true)
     scheduleRender()
+    emitViewportChange()
   }
 }
 
@@ -2604,6 +2608,7 @@ function _sbMouseMove(e) {
       markInteracting(false)
     }
     scheduleRender(orientation.value === 'v')
+    emitViewportChange()
   } else {
     const dy   = e.clientY - _sbDrag.startY
     const newT = Math.max(0, Math.min(_sbDrag.usableH, _sbDrag.startT + dy))
@@ -2619,6 +2624,7 @@ function _sbMouseMove(e) {
       markInteracting(true)
       scheduleRender()
     }
+    emitViewportChange()
   }
 }
 
@@ -2709,6 +2715,7 @@ function onHTrackClick(e) {
     viewport.scrollX = Math.max(0, ratio * Math.max(0, totalWidth - viewport.canvasW))
   }
   scheduleRender()
+  emitViewportChange()
   showOverviewPopup()
 }
 
@@ -2733,6 +2740,7 @@ function onVTrackClick(e) {
     viewport.timeEnd   = newStart + visSpan
   }
   scheduleRender()
+  emitViewportChange()
   showOverviewPopup()
 }
 
