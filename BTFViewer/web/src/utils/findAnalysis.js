@@ -1,17 +1,92 @@
 /**
- * Find panel logic (parity with desktop _recompute_find_hits).
+ * Find panel logic (parity with desktop find_logic.py).
  */
 
 import { bisectLeft, bisectRight } from './bisect.js'
 import { taskLabelForMergeKey, taskReprGet } from './colors.js'
+import { parseTaskLifecycleNote } from './lifecycleAnalysis.js'
+import { parseSyncObjectNote } from './syncObjectAnalysis.js'
 
-export const FIND_MODES = ['contains', 'exact', 'regex', 'migrations']
+export const FIND_MODES = [
+  'contains', 'exact', 'regex', 'migrations',
+  'sti', 'intervals', 'lifecycle', 'pointers',
+]
 const MAX_REGEX_LEN = 200
+
+function haystackMatches(query, mode, haystack, regexObj) {
+  const qLower = query.toLowerCase()
+  if (mode === 'exact') return qLower === haystack.toLowerCase()
+  if (mode === 'contains') return haystack.toLowerCase().includes(qLower)
+  if (regexObj) return regexObj.test(haystack)
+  return false
+}
+
+function findStiHits(trace, query, mode, regexObj) {
+  const hits = []
+  const qLower = query.toLowerCase()
+  for (const ev of trace.stiEvents || []) {
+    const hay = `${ev.target} ${ev.event || ''} ${ev.note || ''} ${ev.core || ''}`
+    let matched = false
+    if (mode === 'exact') matched = hay.toLowerCase() === qLower
+    else if (mode === 'contains') matched = hay.toLowerCase().includes(qLower)
+    else if (regexObj) matched = regexObj.test(hay)
+    if (matched) hits.push(ev.time)
+  }
+  return hits
+}
+
+function findIntervalHits(trace, query, mode, regexObj) {
+  const hits = []
+  for (const inst of trace.intervalInstances || []) {
+    const hay = `${inst.id || ''} ${inst.taskId || ''} ${inst.startNs} ${inst.stopNs}`
+    if (haystackMatches(query, mode, hay, regexObj)) {
+      hits.push(inst.startNs, inst.stopNs)
+    }
+  }
+  for (const ev of trace.stiEvents || []) {
+    if (!ev.target?.startsWith?.('interval_')) continue
+    const hay = `${ev.target} ${ev.note || ''}`
+    if (haystackMatches(query, mode, hay, regexObj)) hits.push(ev.time)
+  }
+  return hits
+}
+
+function findLifecycleHits(trace, query, mode, regexObj) {
+  const hits = []
+  for (const ev of trace.stiEvents || []) {
+    if (ev.target !== 'task') continue
+    const parsed = parseTaskLifecycleNote(ev.note)
+    if (!parsed) continue
+    const hay = `${parsed.action} ${parsed.label} ${ev.note || ''}`
+    if (haystackMatches(query, mode, hay, regexObj)) hits.push(ev.time)
+  }
+  return hits
+}
+
+function findPointerHits(trace, query, mode, regexObj) {
+  const hits = []
+  const q = query.trim()
+  for (const ev of trace.stiEvents || []) {
+    const parsed = parseSyncObjectNote(ev.note)
+    const ptr = parsed?.ptr || ''
+    const hay = `${ev.target} ${ev.note || ''} ${ptr}`
+    let matched = false
+    if (mode === 'exact') {
+      matched = ptr.toLowerCase() === q.toLowerCase() || (ev.note || '').toLowerCase() === q.toLowerCase()
+    } else if (mode === 'contains') {
+      matched = hay.toLowerCase().includes(q.toLowerCase())
+    } else if (regexObj) {
+      matched = regexObj.test(hay)
+    }
+    if (matched) hits.push(ev.time)
+  }
+  return hits
+}
 
 /**
  * @param {object} trace
  * @param {string} query
- * @param {'contains'|'exact'|'regex'|'migrations'} mode
+ * @param {string} mode
  * @param {object[]} [annotations]
  * @returns {{ hits: number[], error: string|null }}
  */
@@ -45,6 +120,19 @@ export function computeFindHits(trace, query, mode, annotations = []) {
     } catch {
       return { hits: [], error: 'Regex error' }
     }
+  }
+
+  if (modeKey === 'sti') {
+    return { hits: [...new Set(findStiHits(trace, q, 'contains', regexObj))].sort((a, b) => a - b), error: null }
+  }
+  if (modeKey === 'intervals') {
+    return { hits: [...new Set(findIntervalHits(trace, q, 'contains', regexObj))].sort((a, b) => a - b), error: null }
+  }
+  if (modeKey === 'lifecycle') {
+    return { hits: [...new Set(findLifecycleHits(trace, q, 'contains', regexObj))].sort((a, b) => a - b), error: null }
+  }
+  if (modeKey === 'pointers') {
+    return { hits: [...new Set(findPointerHits(trace, q, 'contains', regexObj))].sort((a, b) => a - b), error: null }
   }
 
   const hits = []

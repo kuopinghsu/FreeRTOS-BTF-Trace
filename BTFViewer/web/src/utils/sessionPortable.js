@@ -5,10 +5,13 @@
 import { isRestorableViewport, sanitizeTabFilters, snapshotTabFilters } from './sessionStore.js'
 import { MAX_CURSORS } from './settingsStore.js'
 
-export const SESSION_PORTABLE_VERSION = 1
+export const SESSION_PORTABLE_VERSION = 2
 export const SESSION_MAX_BYTES = 2 * 1024 * 1024
 
-const PORTABLE_FIND_MODES = ['contains', 'exact', 'regex', 'migrations']
+const PORTABLE_FIND_MODES = [
+  'contains', 'exact', 'regex', 'migrations',
+  'sti', 'intervals', 'lifecycle', 'pointers',
+]
 const TIMELINE_OPTION_KEYS = [
   'viewMode', 'orientation', 'showGrid', 'showSti', 'showCpuLoad', 'darkMode',
 ]
@@ -24,6 +27,10 @@ export function buildPortableSession({
   findQuery,
   findMode,
   pinnedHighlightKey,
+  scopeToCursors,
+  openPlot,
+  statsSectionCollapsed,
+  compareScopeToCursors,
 }) {
   return {
     version: SESSION_PORTABLE_VERSION,
@@ -45,6 +52,10 @@ export function buildPortableSession({
     findQuery: findQuery ?? '',
     findMode: findMode ?? 'contains',
     pinnedHighlightKey: pinnedHighlightKey ?? null,
+    scopeToCursors: scopeToCursors !== false,
+    openPlot: openPlot ? { ...openPlot } : null,
+    statsSectionCollapsed: statsSectionCollapsed ? { ...statsSectionCollapsed } : null,
+    compareScopeToCursors: compareScopeToCursors !== false,
   }
 }
 
@@ -55,8 +66,9 @@ export function parsePortableSession(text) {
   }
   const data = JSON.parse(text)
   if (!data || typeof data !== 'object') throw new Error('Invalid session file')
-  if (data.version !== SESSION_PORTABLE_VERSION) {
-    throw new Error(`Unsupported session version: ${data.version}`)
+  const ver = data.version
+  if (ver !== 1 && ver !== 2) {
+    throw new Error(`Unsupported session version: ${ver}`)
   }
   return data
 }
@@ -164,6 +176,12 @@ export function applyPortableSession(tab, data, timelineOptions, trace = null) {
   tab.pinnedHighlightKey = (data.pinnedHighlightKey != null && data.pinnedHighlightKey !== '')
     ? String(data.pinnedHighlightKey)
     : null
+
+  if (data.scopeToCursors != null) tab.scopeToCursors = !!data.scopeToCursors
+  if (data.openPlot !== undefined) tab.openPlot = data.openPlot || null
+  if (data.statsSectionCollapsed && typeof data.statsSectionCollapsed === 'object') {
+    tab.statsSectionCollapsed = { ...data.statsSectionCollapsed }
+  }
 
   const vp = sanitizeViewport(data.timelineViewport, trace)
   if (vp) Object.assign(tab.timelineViewport, vp)

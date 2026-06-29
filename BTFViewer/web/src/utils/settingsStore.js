@@ -27,6 +27,8 @@ export const DEFAULT_SETTINGS = {
   timescalePerPxDefault: 2,
   maxCursors: 4,
   cpuLoadRowH: 30,
+  cpuBudgetPct: 0,
+  taskDeadlines: {},
 }
 
 function clampInt(v, lo, hi, fallback) {
@@ -66,6 +68,8 @@ export function normalizeSettings(raw) {
       s.timescalePerPxDefault, 0.5, 200, DEFAULT_SETTINGS.timescalePerPxDefault),
     maxCursors: clampInt(s.maxCursors, 4, MAX_CURSORS, DEFAULT_SETTINGS.maxCursors),
     cpuLoadRowH: clampInt(s.cpuLoadRowH, 16, 120, DEFAULT_SETTINGS.cpuLoadRowH),
+    cpuBudgetPct: clampFloat(s.cpuBudgetPct, 0, 100, DEFAULT_SETTINGS.cpuBudgetPct),
+    taskDeadlines: (s.taskDeadlines && typeof s.taskDeadlines === 'object') ? { ...s.taskDeadlines } : {},
   }
 }
 

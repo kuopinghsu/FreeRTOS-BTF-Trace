@@ -1,0 +1,74 @@
+{
+  "trace": "example-4cores.btf",
+  "hasSyncObjectInstrumentation": true,
+  "syncObjectCount": 9,
+  "syncIssueCount": 1,
+  "queueCount": 2,
+  "mutexCount": 2,
+  "semCount": 5,
+  "objects": [
+    {
+      "kind": "mutex",
+      "ptr": "0x80018650",
+      "holds": 1,
+      "issues": 1,
+      "status": "warning"
+    },
+    {
+      "kind": "mutex",
+      "ptr": "0x80018700",
+      "holds": 240,
+      "issues": 0,
+      "status": "ok"
+    },
+    {
+      "kind": "queue",
+      "ptr": "0x80012b10",
+      "holds": 0,
+      "issues": 0,
+      "status": "ok"
+    },
+    {
+      "kind": "queue",
+      "ptr": "0x80018650",
+      "holds": 240,
+      "issues": 0,
+      "status": "ok"
+    },
+    {
+      "kind": "sem",
+      "ptr": "0x80018650",
+      "holds": 1,
+      "issues": 0,
+      "status": "ok"
+    },
+    {
+      "kind": "sem",
+      "ptr": "0x80018700",
+      "holds": 1,
+      "issues": 0,
+      "status": "ok"
+    },
+    {
+      "kind": "sem",
+      "ptr": "0x80018720",
+      "holds": 10,
+      "issues": 0,
+      "status": "ok"
+    },
+    {
+      "kind": "sem",
+      "ptr": "0x800187b0",
+      "holds": 10,
+      "issues": 0,
+      "status": "ok"
+    },
+    {
+      "kind": "sem",
+      "ptr": "0x80018e90",
+      "holds": 1,
+      "issues": 0,
+      "status": "ok"
+    }
+  ]
+}

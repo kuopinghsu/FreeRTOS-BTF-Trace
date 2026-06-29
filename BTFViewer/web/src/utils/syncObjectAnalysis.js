@@ -5,18 +5,20 @@ import { formatTime } from './timeFormat.js'
 import { taskMergeKey, taskLabelForMergeKey } from './colors.js'
 import { bisectLeft } from './bisect.js'
 
-export const SYNC_OBJECT_TARGETS = new Set(['mutex', 'sem'])
+export const SYNC_OBJECT_TARGETS = new Set(['mutex', 'sem', 'queue'])
 
 /** Max time after `create` for the kernel post-create `give` (mutex / binary sem available). */
 export const POST_CREATE_GIVE_MAX_NS = 1000
 
-const SYNC_NOTE_RE = /^(create|take|give|delete)\s+(0x[0-9a-f]+)$/i
+const SYNC_NOTE_RE = /^(create|take|give|delete|send|recv)(?:\s+(0x[0-9a-f]+))?$/i
 
 /** @returns {{ action: string, ptr: string }|null} */
 export function parseSyncObjectNote(note) {
   const m = SYNC_NOTE_RE.exec((note ?? '').trim())
   if (!m) return null
-  return { action: m[1].toLowerCase(), ptr: m[2].toLowerCase() }
+  const action = m[1].toLowerCase()
+  const ptr = (m[2] || '0').toLowerCase()
+  return { action, ptr }
 }
 
 export function syncObjectKey(kind, ptr) {
@@ -132,16 +134,19 @@ export function buildSyncObjectData(stiEvents, coreSegs, taskRepr, timeMax) {
     } else {
       if (!objects.has(key)) objects.set(key, emptyObject(ev.target, parsed.ptr))
       const obj = objects.get(key)
-      if (action === 'take') {
+      if (action === 'take' || action === 'recv') {
         const rec = { timeNs: ev.time, taskMk, taskLabel, core: ev.core || '' }
         if (obj.kind === 'sem' && obj.openGives.length) {
           const give = obj.openGives.shift()
           recordHold(obj, rec, give, false)
+        } else if (obj.kind === 'queue' && obj.openGives.length) {
+          const send = obj.openGives.shift()
+          recordHold(obj, { ...send, timeNs: send.timeNs }, rec, true)
         } else {
           obj.openTakes.push(rec)
         }
-      } else if (action === 'give') {
-        if (isPostCreateKernelGive(obj, ev.time)) {
+      } else if (action === 'give' || action === 'send') {
+        if (action === 'give' && isPostCreateKernelGive(obj, ev.time)) {
           continue
         }
         const giveRec = { timeNs: ev.time, taskMk, taskLabel, core: ev.core || '' }
@@ -171,6 +176,8 @@ export function buildSyncObjectData(stiEvents, coreSegs, taskRepr, timeMax) {
             }
             recordHold(obj, take, giveRec, true)
           }
+        } else if (obj.kind === 'queue') {
+          obj.openGives.push(giveRec)
         } else if (obj.openTakes.length) {
           const take = obj.openTakes.shift()
           recordHold(obj, take, giveRec, true)
@@ -210,13 +217,15 @@ export function buildSyncObjectData(stiEvents, coreSegs, taskRepr, timeMax) {
     }
     for (const give of obj.openGives) {
       pushIssue(obj, {
-        kind: 'unmatched_give',
+        kind: obj.kind === 'queue' ? 'unmatched_send' : 'unmatched_give',
         severity: 'warning',
         timeNs: give.timeNs,
         core: give.core,
         taskMk: give.taskMk,
         taskLabel: give.taskLabel,
-        detail: 'give without matching take before trace end',
+        detail: obj.kind === 'queue'
+          ? 'send without matching recv before trace end'
+          : 'give without matching take before trace end',
       })
     }
     obj.openTakes = []
@@ -274,12 +283,13 @@ function objectStatus(obj, lo, hi) {
   return 'warning'
 }
 
-/** Stats rows: one per mutex/sem object in scope. */
-export function syncObjectStatsRows(trace, lo, hi) {
+/** Stats rows: one per mutex/sem/queue object in scope. */
+export function syncObjectStatsRows(trace, lo, hi, { kindFilter = null } = {}) {
   if (!trace?.hasSyncObjectInstrumentation) return []
   const scale = trace.timeScale
   const rows = []
   for (const obj of trace.syncObjects?.values() || []) {
+    if (kindFilter && obj.kind !== kindFilter) continue
     const holds = (obj.holds || []).filter(h =>
       (lo == null || hi == null) ? true : (h.stopNs > lo && h.startNs < hi),
     )

@@ -5,8 +5,9 @@
 
 import { formatTime, isStiTagChannel } from '../renderer/TimelineRenderer.js'
 import { parseTaskName, taskDisplayName, taskLabelForMergeKey, taskReprGet, isIdleTaskName } from './colors.js'
-import { schedulingStats, maxNs } from './statsAnalysis.js'
+import { schedulingStats, maxNs, blockingTimeSamples, preemptionChainRows } from './statsAnalysis.js'
 import { isMigratedTask, migrationRows } from './migrationAnalysis.js'
+import { syncObjectStatsRows } from './syncObjectAnalysis.js'
 import { getPlacedCursors } from './statsRange.js'
 
 export function cursorRangeForCursors(cursors) {
@@ -245,6 +246,117 @@ export function buildMigrationCompareRows(traceA, traceB, tabA = null, tabB = nu
   })
 }
 
+function blockingSummaryByName(trace, lo, hi) {
+  const map = new Map()
+  if (!trace?.segByMergeKey) return map
+  const scale = trace.timeScale
+  for (const [mk, segs] of trace.segByMergeKey) {
+    const samples = blockingTimeSamples(segs, lo, hi)
+    if (!samples.length) continue
+    const name = taskDisplayName(taskReprGet(trace, mk) ?? mk)
+    const avgNs = Math.round(samples.reduce((a, b) => a + b, 0) / samples.length)
+    map.set(name, { avgNs, gaps: samples.length, avg: formatTime(avgNs, scale) })
+  }
+  return map
+}
+
+export function buildBlockingCompareRows(traceA, traceB, tabA = null, tabB = null, scopeEnabled = false, limit = 15) {
+  const ra = rangeForTab(tabA, scopeEnabled)
+  const rb = rangeForTab(tabB, scopeEnabled)
+  const mapA = blockingSummaryByName(traceA, ra.lo, ra.hi)
+  const mapB = blockingSummaryByName(traceB, rb.lo, rb.hi)
+  const names = [...new Set([...mapA.keys(), ...mapB.keys()])]
+    .sort((a, b) => {
+      const ga = Math.max(mapA.get(a)?.gaps ?? 0, mapB.get(a)?.gaps ?? 0)
+      const gb = Math.max(mapA.get(b)?.gaps ?? 0, mapB.get(b)?.gaps ?? 0)
+      return gb - ga || a.localeCompare(b)
+    })
+    .slice(0, limit)
+  const scale = traceA?.timeScale || traceB?.timeScale || 'ns'
+  return names.map((name) => {
+    const a = mapA.get(name)
+    const b = mapB.get(name)
+    const avgA = a?.avgNs ?? 0
+    const avgB = b?.avgNs ?? 0
+    return {
+      name,
+      gapsA: a?.gaps ?? 0,
+      gapsB: b?.gaps ?? 0,
+      avgA: a?.avg ?? '—',
+      avgB: b?.avg ?? '—',
+      delta: fmtSignedTime(avgA - avgB, scale),
+    }
+  })
+}
+
+function preemptionTotalsByVictim(trace, lo, hi) {
+  const map = new Map()
+  const { rows } = preemptionChainRows(trace, lo, hi)
+  for (const row of rows) {
+    const cur = map.get(row.victim) || { count: 0, totalNs: 0 }
+    cur.count += row.count
+    cur.totalNs += row.totalNs
+    map.set(row.victim, cur)
+  }
+  return map
+}
+
+export function buildPreemptionCompareRows(traceA, traceB, tabA = null, tabB = null, scopeEnabled = false, limit = 15) {
+  const ra = rangeForTab(tabA, scopeEnabled)
+  const rb = rangeForTab(tabB, scopeEnabled)
+  const mapA = preemptionTotalsByVictim(traceA, ra.lo, ra.hi)
+  const mapB = preemptionTotalsByVictim(traceB, rb.lo, rb.hi)
+  const names = [...new Set([...mapA.keys(), ...mapB.keys()])]
+    .sort((a, b) => (mapB.get(b)?.count ?? 0) - (mapA.get(a)?.count ?? 0) || a.localeCompare(b))
+    .slice(0, limit)
+  const scale = traceA?.timeScale || traceB?.timeScale || 'ns'
+  return names.map((name) => {
+    const a = mapA.get(name)
+    const b = mapB.get(name)
+    const ca = a?.count ?? 0
+    const cb = b?.count ?? 0
+    return {
+      name,
+      countA: ca,
+      countB: cb,
+      delta: fmtSignedInt(ca - cb),
+      totalA: a ? formatTime(a.totalNs, scale) : '—',
+      totalB: b ? formatTime(b.totalNs, scale) : '—',
+    }
+  })
+}
+
+function syncSummary(trace, lo, hi) {
+  if (!trace?.hasSyncObjectInstrumentation) {
+    return { objects: 0, holds: 0, issues: 0, queue: 0, mutex: 0, sem: 0 }
+  }
+  const rows = syncObjectStatsRows(trace, lo, hi)
+  const out = { objects: rows.length, holds: 0, issues: 0, queue: 0, mutex: 0, sem: 0 }
+  for (const row of rows) {
+    out.holds += row.holdCount
+    out.issues += row.issueCount
+    if (row.kind === 'queue') out.queue++
+    else if (row.kind === 'mutex') out.mutex++
+    else if (row.kind === 'sem') out.sem++
+  }
+  return out
+}
+
+export function buildSyncCompareRows(traceA, traceB, tabA = null, tabB = null, scopeEnabled = false) {
+  const ra = rangeForTab(tabA, scopeEnabled)
+  const rb = rangeForTab(tabB, scopeEnabled)
+  const a = syncSummary(traceA, ra.lo, ra.hi)
+  const b = syncSummary(traceB, rb.lo, rb.hi)
+  return [
+    { label: 'Sync objects', a: a.objects, b: b.objects, delta: fmtSignedInt(a.objects - b.objects) },
+    { label: 'Holds (paired)', a: a.holds, b: b.holds, delta: fmtSignedInt(a.holds - b.holds) },
+    { label: 'Issues', a: a.issues, b: b.issues, delta: fmtSignedInt(a.issues - b.issues) },
+    { label: 'Mutex objects', a: a.mutex, b: b.mutex, delta: fmtSignedInt(a.mutex - b.mutex) },
+    { label: 'Semaphore objects', a: a.sem, b: b.sem, delta: fmtSignedInt(a.sem - b.sem) },
+    { label: 'Queue objects', a: a.queue, b: b.queue, delta: fmtSignedInt(a.queue - b.queue) },
+  ]
+}
+
 function csvCell(v) {
   const s = String(v ?? '')
   if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`
@@ -259,8 +371,11 @@ function htmlCell(v) {
     .replace(/"/g, '&quot;')
 }
 
-/** Build CSV text for a trace-compare export (all three tabs). */
-export function buildCompareCsv(nameA, nameB, summaryRows, topTaskRows, migrationRows, scopeEnabled) {
+/** Build CSV text for a trace-compare export. */
+export function buildCompareCsv(
+  nameA, nameB, summaryRows, topTaskRows, migrationRows, scopeEnabled,
+  blockingRows = [], preemptionRows = [], syncRows = [],
+) {
   const lines = []
   lines.push(`Trace A,${csvCell(nameA)}`)
   lines.push(`Trace B,${csvCell(nameB)}`)
@@ -300,6 +415,39 @@ export function buildCompareCsv(nameA, nameB, summaryRows, topTaskRows, migratio
     ].join(','))
   }
 
+  if (blockingRows.length) {
+    lines.push('')
+    lines.push('Blocking Time')
+    lines.push('Task,Gaps A,Gaps B,Avg A,Avg B,Δ avg')
+    for (const row of blockingRows) {
+      lines.push([
+        csvCell(row.name), csvCell(row.gapsA), csvCell(row.gapsB),
+        csvCell(row.avgA), csvCell(row.avgB), csvCell(row.delta),
+      ].join(','))
+    }
+  }
+
+  if (preemptionRows.length) {
+    lines.push('')
+    lines.push('Preemption Chains')
+    lines.push('Victim,Count A,Count B,Δ,Total A,Total B')
+    for (const row of preemptionRows) {
+      lines.push([
+        csvCell(row.name), csvCell(row.countA), csvCell(row.countB), csvCell(row.delta),
+        csvCell(row.totalA), csvCell(row.totalB),
+      ].join(','))
+    }
+  }
+
+  if (syncRows.length) {
+    lines.push('')
+    lines.push('Sync Objects')
+    lines.push('Metric,Trace A,Trace B,Δ')
+    for (const row of syncRows) {
+      lines.push([csvCell(row.label), csvCell(row.a), csvCell(row.b), csvCell(row.delta)].join(','))
+    }
+  }
+
   return lines.join('\n')
 }
 
@@ -322,7 +470,10 @@ const _COMPARE_HTML_STYLE = `
 `
 
 /** Build standalone HTML report for trace compare. */
-export function buildCompareHtml(nameA, nameB, summaryRows, topTaskRows, migrationRows, scopeEnabled) {
+export function buildCompareHtml(
+  nameA, nameB, summaryRows, topTaskRows, migrationRows, scopeEnabled,
+  blockingRows = [], preemptionRows = [], syncRows = [],
+) {
   const scopeNote = scopeEnabled
     ? 'Each side uses its own tab cursor range (C1–Cn) when 2+ cursors are placed.'
     : 'Full trace span on each side.'
@@ -345,6 +496,24 @@ export function buildCompareHtml(nameA, nameB, summaryRows, topTaskRows, migrati
     ).join('')
     : '<tr><td colspan="12" class="empty">No migrated tasks in either trace</td></tr>'
 
+  const blockHtml = blockingRows.length
+    ? blockingRows.map(r =>
+      `<tr><td>${htmlCell(r.name)}</td><td>${htmlCell(r.gapsA)}</td><td>${htmlCell(r.gapsB)}</td><td>${htmlCell(r.avgA)}</td><td>${htmlCell(r.avgB)}</td><td>${htmlCell(r.delta)}</td></tr>`,
+    ).join('')
+    : '<tr><td colspan="6" class="empty">No blocking samples in either trace</td></tr>'
+
+  const preHtml = preemptionRows.length
+    ? preemptionRows.map(r =>
+      `<tr><td>${htmlCell(r.name)}</td><td>${htmlCell(r.countA)}</td><td>${htmlCell(r.countB)}</td><td>${htmlCell(r.delta)}</td><td>${htmlCell(r.totalA)}</td><td>${htmlCell(r.totalB)}</td></tr>`,
+    ).join('')
+    : '<tr><td colspan="6" class="empty">No preemption chains in either trace</td></tr>'
+
+  const syncHtml = syncRows.length
+    ? syncRows.map(r =>
+      `<tr><td>${htmlCell(r.label)}</td><td>${htmlCell(r.a)}</td><td>${htmlCell(r.b)}</td><td>${htmlCell(r.delta)}</td></tr>`,
+    ).join('')
+    : '<tr><td colspan="4" class="empty">No sync instrumentation in either trace</td></tr>'
+
   return `<!doctype html>
 <html><head><meta charset="utf-8"/><title>BTF Trace Compare</title><style>${_COMPARE_HTML_STYLE}</style></head>
 <body><div class="report">
@@ -361,17 +530,38 @@ export function buildCompareHtml(nameA, nameB, summaryRows, topTaskRows, migrati
   <section class="report-card"><h2>Core Migrations</h2>
     <table><thead><tr><th>Task</th><th>Migr A</th><th>Migr B</th><th>Δ</th><th>Rate A</th><th>Rate B</th><th>Rate Δ</th><th>Dwell A</th><th>Dwell B</th><th>Dwell Δ</th><th>Ping A</th><th>Ping B</th></tr></thead><tbody>${migHtml}</tbody></table>
   </section>
+  <section class="report-card"><h2>Blocking Time</h2>
+    <table><thead><tr><th>Task</th><th>Gaps A</th><th>Gaps B</th><th>Avg A</th><th>Avg B</th><th>Δ avg</th></tr></thead><tbody>${blockHtml}</tbody></table>
+  </section>
+  <section class="report-card"><h2>Preemption Chains</h2>
+    <table><thead><tr><th>Victim</th><th>Count A</th><th>Count B</th><th>Δ</th><th>Total A</th><th>Total B</th></tr></thead><tbody>${preHtml}</tbody></table>
+  </section>
+  <section class="report-card"><h2>Sync Objects</h2>
+    <table><thead><tr><th>Metric</th><th>Trace A</th><th>Trace B</th><th>Δ</th></tr></thead><tbody>${syncHtml}</tbody></table>
+  </section>
 </div></body></html>`
 }
 
-export function downloadCompareCsv(nameA, nameB, summaryRows, topTaskRows, migrationRows, scopeEnabled) {
-  const text = buildCompareCsv(nameA, nameB, summaryRows, topTaskRows, migrationRows, scopeEnabled)
+export function downloadCompareCsv(
+  nameA, nameB, summaryRows, topTaskRows, migrationRows, scopeEnabled,
+  blockingRows = [], preemptionRows = [], syncRows = [],
+) {
+  const text = buildCompareCsv(
+    nameA, nameB, summaryRows, topTaskRows, migrationRows, scopeEnabled,
+    blockingRows, preemptionRows, syncRows,
+  )
   const blob = new Blob([text], { type: 'text/csv;charset=utf-8' })
   _downloadBlob(`trace-compare-${_timestamp()}.csv`, blob)
 }
 
-export function downloadCompareHtml(nameA, nameB, summaryRows, topTaskRows, migrationRows, scopeEnabled) {
-  const html = buildCompareHtml(nameA, nameB, summaryRows, topTaskRows, migrationRows, scopeEnabled)
+export function downloadCompareHtml(
+  nameA, nameB, summaryRows, topTaskRows, migrationRows, scopeEnabled,
+  blockingRows = [], preemptionRows = [], syncRows = [],
+) {
+  const html = buildCompareHtml(
+    nameA, nameB, summaryRows, topTaskRows, migrationRows, scopeEnabled,
+    blockingRows, preemptionRows, syncRows,
+  )
   const blob = new Blob([html], { type: 'text/html;charset=utf-8' })
   _downloadBlob(`trace-compare-${_timestamp()}.html`, blob)
 }

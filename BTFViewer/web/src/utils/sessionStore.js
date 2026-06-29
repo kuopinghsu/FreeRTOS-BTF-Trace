@@ -1,10 +1,11 @@
 /** Persist web viewer layout, tabs, and per-trace state in localStorage. */
 
-const SESSION_KEY = 'btf-viewer-session-v1'
+const SESSION_KEY = 'btf-viewer-session-v2'
 
 export function loadSession() {
   try {
     const raw = localStorage.getItem(SESSION_KEY)
+      || localStorage.getItem('btf-viewer-session-v1')
     return raw ? JSON.parse(raw) : null
   } catch {
     return null
@@ -102,7 +103,24 @@ function sanitizeViewport(vp) {
   }
 }
 
-/** Full per-trace tab state (viewport, cursors, marks, filters, find). */
+function sanitizeOpenPlot(plot) {
+  if (!plot || typeof plot !== 'object') return null
+  const out = { ...plot }
+  if (out.mk != null) out.mk = String(out.mk)
+  if (out.kind != null) out.kind = String(out.kind)
+  return out
+}
+
+function sanitizeSectionCollapsed(src) {
+  if (!src || typeof src !== 'object') return null
+  const out = {}
+  for (const [k, v] of Object.entries(src)) {
+    if (typeof v === 'boolean') out[k] = v
+  }
+  return Object.keys(out).length ? out : null
+}
+
+/** Full per-trace tab state (viewport, cursors, marks, filters, find, stats). */
 export function snapshotTabState(tab) {
   if (!tab?.trace) return null
   const filters = snapshotTabFilters(tab)
@@ -118,6 +136,9 @@ export function snapshotTabState(tab) {
       ? { ...tab.highlightSegment }
       : null,
     cpuLoadExpanded: tab.cpuLoadExpanded !== false,
+    scopeToCursors: tab.scopeToCursors !== false,
+    openPlot: sanitizeOpenPlot(tab.openPlot),
+    statsSectionCollapsed: sanitizeSectionCollapsed(tab.statsSectionCollapsed),
     ...filters,
   }
 }
@@ -148,6 +169,11 @@ export function applyTabState(tab, state) {
   tab.pinnedHighlightKey = state.pinnedHighlightKey ?? null
   tab.highlightSegment = state.highlightSegment ?? null
   if (state.cpuLoadExpanded != null) tab.cpuLoadExpanded = !!state.cpuLoadExpanded
+  if (state.scopeToCursors != null) tab.scopeToCursors = !!state.scopeToCursors
+  if (state.openPlot !== undefined) tab.openPlot = sanitizeOpenPlot(state.openPlot)
+  if (state.statsSectionCollapsed) {
+    tab.statsSectionCollapsed = sanitizeSectionCollapsed(state.statsSectionCollapsed)
+  }
   applyTabFilters(tab, sanitizeTabFilters(state))
 }
 
@@ -169,6 +195,7 @@ export function buildSessionSnapshot({ timelineOptions, layout, tabs, activeTabI
   const activeTab = loaded.find(t => t.id === activeTabId) ?? loaded[0] ?? null
   const tabStateByTraceName = buildTabStateByTraceName(loaded)
   return {
+    version: 2,
     timelineOptions: {
       viewMode: timelineOptions.viewMode,
       orientation: timelineOptions.orientation,
