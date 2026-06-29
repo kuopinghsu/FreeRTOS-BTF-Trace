@@ -7,6 +7,14 @@ from typing import List, Optional, Tuple
 from ..config import _MAX_FIND_REGEX_LEN
 from ..parser import BtfTrace, TraceAnnotation, _task_display_name
 
+_FIND_MODES = frozenset({
+    "contains", "exact", "regex", "migrations",
+    "sti", "intervals", "lifecycle", "pointers",
+})
+
+_TASK_LIFE_RE = re.compile(r"^(create|delete|suspend|resume)\b", re.IGNORECASE)
+_SYNC_NOTE_RE = re.compile(
+    r"^(create|take|give|delete|send|recv)(?:\s+(0x[0-9a-f]+))?$", re.IGNORECASE)
 
 def recompute_find_hits(
     trace: Optional[BtfTrace],
@@ -22,6 +30,9 @@ def recompute_find_hits(
         return [], "0 matches"
 
     mode_key = mode.strip().lower()
+    if mode_key not in _FIND_MODES:
+        mode_key = "contains"
+
     if mode_key == "migrations":
         return _find_migrations(trace, q)
 
@@ -33,6 +44,23 @@ def recompute_find_hits(
             regex_obj = re.compile(q, re.IGNORECASE)
         except re.error:
             return [], "Regex error"
+
+    if mode_key == "sti":
+        hits = _find_sti_hits(trace, q, regex_obj)
+        unique = sorted(set(hits))
+        return unique, f"{len(unique)} matches"
+    if mode_key == "intervals":
+        hits = _find_interval_hits(trace, q, regex_obj)
+        unique = sorted(set(hits))
+        return unique, f"{len(unique)} matches"
+    if mode_key == "lifecycle":
+        hits = _find_lifecycle_hits(trace, q, regex_obj)
+        unique = sorted(set(hits))
+        return unique, f"{len(unique)} matches"
+    if mode_key == "pointers":
+        hits = _find_pointer_hits(trace, q, regex_obj)
+        unique = sorted(set(hits))
+        return unique, f"{len(unique)} matches"
 
     hits: List[int] = []
     for mk, segs in trace.seg_map_by_merge_key.items():
@@ -69,6 +97,81 @@ def _find_migrations(trace: BtfTrace, query: str) -> Tuple[List[int], str]:
             hits.append(m.ns)
     unique = sorted(set(hits))
     return unique, f"{len(unique)} migration matches"
+
+def _find_sti_hits(trace: BtfTrace, query: str, regex_obj: Optional[re.Pattern]) -> List[int]:
+    hits: List[int] = []
+    q_lower = query.lower()
+    for ev in getattr(trace, "sti_events", ()):
+        hay = f"{ev.target} {ev.event or ''} {ev.note or ''} {ev.core or ''}"
+        if _haystack_matches(query, "contains", hay, regex_obj):
+            hits.append(ev.time)
+        elif not regex_obj and q_lower == hay.lower():
+            hits.append(ev.time)
+    return hits
+
+def _find_interval_hits(trace: BtfTrace, query: str, regex_obj: Optional[re.Pattern]) -> List[int]:
+    hits: List[int] = []
+    for inst in getattr(trace, "interval_instances", ()):
+        hay = f"{inst.interval_id} {inst.task_id or ''} {inst.start_ns} {inst.stop_ns}"
+        if _haystack_matches(query, "contains", hay, regex_obj):
+            hits.extend([inst.start_ns, inst.stop_ns])
+    for ev in getattr(trace, "sti_events", ()):
+        if not str(ev.target).startswith("interval_"):
+            continue
+        hay = f"{ev.target} {ev.note or ''}"
+        if _haystack_matches(query, "contains", hay, regex_obj):
+            hits.append(ev.time)
+    return hits
+
+def _parse_task_lifecycle_note(note: str) -> Optional[Tuple[str, str]]:
+    raw = (note or "").strip()
+    if not raw:
+        return None
+    m = _TASK_LIFE_RE.match(raw)
+    if not m:
+        return None
+    action = m.group(1).lower()
+    label = raw[m.end():].strip() or raw
+    return action, label
+
+def _find_lifecycle_hits(trace: BtfTrace, query: str, regex_obj: Optional[re.Pattern]) -> List[int]:
+    hits: List[int] = []
+    for ev in getattr(trace, "sti_events", ()):
+        if ev.target != "task":
+            continue
+        parsed = _parse_task_lifecycle_note(ev.note)
+        if not parsed:
+            continue
+        action, label = parsed
+        hay = f"{action} {label} {ev.note or ''}"
+        if _haystack_matches(query, "contains", hay, regex_obj):
+            hits.append(ev.time)
+    return hits
+
+def _parse_sync_note(note: str) -> Optional[Tuple[str, str]]:
+    m = _SYNC_NOTE_RE.match((note or "").strip())
+    if not m:
+        return None
+    ptr = (m.group(2) or "0").lower()
+    return m.group(1).lower(), ptr
+
+def _find_pointer_hits(trace: BtfTrace, query: str, regex_obj: Optional[re.Pattern]) -> List[int]:
+    hits: List[int] = []
+    q = query.strip()
+    for ev in getattr(trace, "sti_events", ()):
+        parsed = _parse_sync_note(ev.note)
+        ptr = parsed[1] if parsed else ""
+        hay = f"{ev.target} {ev.note or ''} {ptr}"
+        matched = False
+        if regex_obj is not None:
+            matched = bool(regex_obj.search(hay))
+        elif q.lower() == ptr.lower() or q.lower() == (ev.note or "").lower():
+            matched = True
+        elif q.lower() in hay.lower():
+            matched = True
+        if matched:
+            hits.append(ev.time)
+    return hits
 
 def _haystack_matches(
     query: str,

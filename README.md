@@ -265,7 +265,7 @@ Traces with **more than 16 cores** use a three-level drill-down (core×core matr
 
 ### BTF Viewer (built-in)
 
-An interactive Gantt-style viewer is included in the `BTFViewer/` directory (desktop PySide6 app and browser-based web viewer). Both share the same default settings (dark theme, grid on, hover dimming off, 22 px rows, etc.). They support Task/Core views, measurement cursors (2–8, default 4), CPU load graph, bookmarks, **Statistics** / **Marks** / **Find** right-side panels, **Statistics** (execution time, blocking/response time, tick health with tick-interval distribution, preemption chain, priority inheritance, mutex/semaphore pairing, interval analysis), **adaptive metrics histograms** (auto linear / p5–p95 / log scaling, CDF overlay), **core migration heatmap**, trace compare, and PNG/SVG export.
+An interactive Gantt-style viewer is included in the `BTFViewer/` directory (desktop PySide6 app and browser-based web viewer). Both share the same default settings (dark theme, grid on, hover dimming off, 22 px rows, etc.). They support Task/Core views, measurement cursors (2–8, default 4), CPU load graph, bookmarks, **Statistics** / **Marks** / **Find** right-side panels, **Statistics** (execution time, blocking/response time, tick health with tick-interval distribution, preemption chain, priority inheritance, mutex/semaphore pairing, interval analysis), **adaptive metrics histograms** (auto linear / p5–p95 / log scaling, CDF overlay), **core migration heatmap**, trace compare, a **trace quality** banner when BTF meta reports overflow or truncation, and PNG/SVG export.
 
 **Desktop requirements:** Python 3.8+ and PySide6 ≥ 6.4
 
@@ -380,7 +380,7 @@ tools/gentrace trace.bin trace.btf
 tools/gentrace -v trace.bin trace.vcd
 ```
 
-Event-to-BTF field mapping is documented in [Binary → BTF dump mapping](#binary--btf-dump-mapping). The input file layout is in [`trace.bin` binary format](#tracebin-binary-format).
+Event-to-BTF field mapping is documented in [Binary → BTF dump mapping](#binary--btf-dump-mapping). Optional [BTF quality metadata](#btf-quality-metadata) lines report ring overflow, task-table overflow, or truncation. The input file layout is in [`trace.bin` binary format](#tracebin-binary-format).
 
 ### 8. Open the trace
 
@@ -391,7 +391,7 @@ Event-to-BTF field mapping is documented in [Binary → BTF dump mapping](#binar
 
 ## Reference
 
-On-disk `trace.bin` layout, event encoding, and BTF line generation. For BTF **text** file semantics (task names, STI channels, intervals), see [`BTFViewer/README.md`](BTFViewer/README.md#btf-format).
+On-disk `trace.bin` layout, event encoding, BTF quality metadata, and BTF line generation. For BTF **text** file semantics (task names, STI channels, intervals), see [`BTFViewer/README.md`](BTFViewer/README.md#btf-format).
 
 ### `trace.bin` binary format
 
@@ -436,7 +436,7 @@ At `traceEND()`, the firmware writes a single little-endian blob (`fwrite` of th
 
 - `task_lists[task_id][0 … max_taskname_len-1]` — C string, max `configMAX_TRACE_TASK_NAME_LEN` characters plus NUL.
 - Slot index is the FreeRTOS **task id** (`uxTCBNumber`), not a dense 0…N−1 index.
-- Written by `btf_trace_add_task()` on `traceTASK_CREATE`.
+- Written by `btf_trace_add_task()` on `traceTASK_CREATE`. If `task_id` is `0` or ≥ `configMAX_TRACE_TASKS`, the name is not stored but the event is still recorded and `#taskTableOverflow true` is emitted at export.
 
 #### `EVENT` record (16 bytes)
 
@@ -474,11 +474,37 @@ On single-core builds, the full `types` word is just the `event_t` enum value (c
 
 Events are appended at `current_index` (mod `max_events`). When `event_count == max_events`, the buffer has wrapped: `gentrace` / `btf_dump` replay from `current_index` (oldest) through `current_index - 1` (modulo). When not full, replay starts at index `0`.
 
-After the ring is full, new events **overwrite** the oldest slots; `event_count` stays at `max_events`. Firmware prints a one-time warning: *only last events will be recorded*.
+After the ring is full, new events **overwrite** the oldest slots; `event_count` stays at `max_events`. Firmware prints a one-time warning: *only last events will be recorded*. When the BTF file is exported, `#ringOverflow true` is written — see [BTF quality metadata](#btf-quality-metadata).
 
 #### Timestamps
 
 `timestamp` is a free-running **32-bit** counter (platform-defined via `xGetCycles()` in `btf_port.h`). `gentrace` and `btf_dump()` detect wrap and build monotonic 64-bit times scaled by `core_clock` (microseconds or nanoseconds in the output BTF file).
+
+#### BTF quality metadata
+
+After the standard header lines (`#version`, `#creator`, `#creationDate`, `#timeScale`), `tools/gentrace` and live `btf_dump()` may emit optional integrity flags as `#key value` pairs. Lines are omitted when the condition is false (a clean trace has no quality meta).
+
+| Meta line | Meaning | How it is detected |
+|-----------|---------|---------------------|
+| `#ringOverflow true` | Event ring buffer wrapped; oldest events may be missing | `event_count == max_events`, or firmware saw a wrap while recording |
+| `#taskTableOverflow true` | Task name table could not record a task id | Invalid `task_id` (`0` or ≥ `max_tasks`), or events reference a task id with no stored name |
+| `#truncated true` | Trace did not finish normally | Firmware: `btf_traceEND()` was not called before dump. `gentrace`: input file is smaller than a full `TRACE` blob |
+
+Example (ring overflow on a long capture):
+
+```
+#version 2.2.0
+#creator FreeRTOS trace logger
+#creationDate 2026-06-20T08:33:13Z
+#timeScale us
+#ringOverflow true
+213463,Core_0,0,C,Core_0,0,set_frequency,20000000
+…
+```
+
+These flags are **inferred at BTF export time** from runtime state and buffer contents. They are not stored in the `TRACE_HEADER` binary layout, so existing `trace.bin` files stay compatible.
+
+BTFViewer (desktop and web) reads `#ringOverflow`, `#taskTableOverflow`, and `#truncated` from the parsed meta dict and shows a banner at the top of the timeline when any flag is set.
 
 ---
 
@@ -527,9 +553,11 @@ Default trace buffer size is controlled by `configMAX_TRACE_EVENTS` and `configM
 
 | Area | Notes |
 |------|-------|
-| **Task table overflow** | `btf_trace_add_task()` disables tracing when the task name table is full |
-| **Parser parity** | BTF is parsed independently in Python (`btf_viewer.py`) and JavaScript (`btfParser.js`); no shared automated test vectors yet |
-| **CI / unit tests** | No automated test suite in this repository; validate with `make run` and manual viewer smoke tests |
+| **Ring overflow** | When the event buffer fills, newer events overwrite the oldest; `#ringOverflow true` is written at BTF export |
+| **Task table overflow** | When `task_id` is out of range, the event is still recorded but no name slot is written; `#taskTableOverflow true` is written at BTF export |
+| **Truncation** | A crash or power loss before `btf_traceEND()` leaves `#truncated true` on live dump; `gentrace` also sets it for partial `trace.bin` files |
+| **Parser parity** | BTF is parsed independently in Python (`btf_viewer.py`) and JavaScript (`btfParser.js`); golden parser tests live under `BTFViewer/tests/` |
+| **CI / unit tests** | Run `make test-all` (desktop + web parser/stats tests); validate firmware traces with `make run` and viewer smoke tests |
 | **Web viewer** | Trace files stay client-side; session state is stored in browser `localStorage` keyed by filename. Settings defaults match the desktop viewer (`btf-viewer-settings-v1`); font sizes use px on Web vs pt on Desktop with the same numeric defaults |
 
 ---

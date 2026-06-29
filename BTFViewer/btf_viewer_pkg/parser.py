@@ -97,8 +97,8 @@ _PRIORITY_STI_RE = re.compile(
     re.IGNORECASE,
 )
 _SYNC_OBJECT_NOTE_RE = re.compile(
-    r"^(create|take|give|delete)\s+(0x[0-9a-f]+)$", re.IGNORECASE)
-_SYNC_OBJECT_TARGETS = frozenset({"mutex", "sem"})
+    r"^(create|take|give|delete|send|recv)(?:\s+(0x[0-9a-f]+))?$", re.IGNORECASE)
+_SYNC_OBJECT_TARGETS = frozenset({"mutex", "sem", "queue"})
 _POST_CREATE_GIVE_MAX_NS = 1000
 _INTERVAL_START_CHANNELS = frozenset({"interval_start"})
 _INTERVAL_STOP_CHANNELS  = frozenset({"interval_stop"})
@@ -895,7 +895,8 @@ def _parse_sync_object_note(note: str) -> Optional[Tuple[str, str]]:
     m = _SYNC_OBJECT_NOTE_RE.match((note or "").strip())
     if not m:
         return None
-    return m.group(1).lower(), m.group(2).lower()
+    ptr = (m.group(2) or "0").lower()
+    return m.group(1).lower(), ptr
 
 def _sync_object_key(kind: str, ptr: str) -> str:
     return f"{kind}:{ptr}"
@@ -995,16 +996,19 @@ def _build_sync_object_data(
             if key not in objects:
                 objects[key] = _empty_obj(ev.target, ptr)
             obj = objects[key]
-            if action == "take":
+            if action in ("take", "recv"):
                 rec = {"time_ns": ev.time, "task_mk": task_mk, "task_label": task_label,
                        "core": ev.core or ""}
                 if obj["kind"] == "sem" and obj["open_gives"]:
                     give = obj["open_gives"].pop(0)
                     _record_hold(obj, rec, give, False)
+                elif obj["kind"] == "queue" and obj["open_gives"]:
+                    send = obj["open_gives"].pop(0)
+                    _record_hold(obj, send, rec, True)
                 else:
                     obj["open_takes"].append(rec)
-            elif action == "give":
-                if _is_post_create_kernel_give(obj, ev.time):
+            elif action in ("give", "send"):
+                if action == "give" and _is_post_create_kernel_give(obj, ev.time):
                     continue
                 give_rec = {"time_ns": ev.time, "task_mk": task_mk, "task_label": task_label,
                             "core": ev.core or ""}
@@ -1026,6 +1030,8 @@ def _build_sync_object_data(
                                 "detail": f"give by {task_label}, held by {take['task_label']}",
                             })
                         _record_hold(obj, take, give_rec, True)
+                elif obj["kind"] == "queue":
+                    obj["open_gives"].append(give_rec)
                 elif obj["open_takes"]:
                     take = obj["open_takes"].pop(0)
                     _record_hold(obj, take, give_rec, True)
@@ -1054,11 +1060,15 @@ def _build_sync_object_data(
             if obj["kind"] == "mutex":
                 end_mutex_holds.append((obj, take.get("task_mk"), take.get("task_label", "")))
         for give in obj["open_gives"]:
+            kind = "unmatched_send" if obj["kind"] == "queue" else "unmatched_give"
+            detail = ("send without matching recv before trace end"
+                      if obj["kind"] == "queue"
+                      else "give without matching take before trace end")
             obj["issues"].append({
-                "kind": "unmatched_give", "severity": "warning", "time_ns": give["time_ns"],
+                "kind": kind, "severity": "warning", "time_ns": give["time_ns"],
                 "core": give.get("core", ""), "task_mk": give.get("task_mk"),
                 "task_label": give.get("task_label", ""),
-                "detail": "give without matching take before trace end",
+                "detail": detail,
             })
         obj["open_takes"] = []
         obj["open_gives"] = []
@@ -2332,6 +2342,66 @@ def _top_tasks_cpu_by_name(trace: "BtfTrace", limit: int = 10,
         result[_task_display_name(raw)] = 100.0 * t_ns / total_ns
     return result
 
+def _blocking_compare_by_name(
+    trace: "BtfTrace",
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> Dict[str, dict]:
+    """Blocking-time summary keyed by task display name."""
+    scale = trace.time_scale
+    out: Dict[str, dict] = {}
+    for mk, segs in trace.seg_map_by_merge_key.items():
+        samples = _blocking_time_samples(segs, lo, hi)
+        if not samples:
+            continue
+        raw = trace.task_repr.get(mk, mk)
+        _, _, tname = _parse_task_name(raw)
+        if _is_idle_task_name(tname) or tname == "TICK":
+            continue
+        avg_ns = int(round(sum(samples) / len(samples)))
+        out[_task_display_name(raw)] = {
+            "gaps": len(samples),
+            "avg_ns": avg_ns,
+            "avg": _format_time(avg_ns, scale),
+        }
+    return out
+
+def _preemption_totals_by_victim(
+    trace: "BtfTrace",
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> Dict[str, dict]:
+    """Aggregate preemption events by victim task display name."""
+    totals: Dict[str, dict] = {}
+    for mk, _pre_disp, _t, duration, _seg in _collect_preemption_events(trace, lo, hi):
+        raw = trace.task_repr.get(mk, mk)
+        victim = _task_display_name(raw)
+        cur = totals.setdefault(victim, {"count": 0, "total_ns": 0})
+        cur["count"] += 1
+        cur["total_ns"] += duration
+    return totals
+
+def _sync_compare_summary(
+    trace: "BtfTrace",
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> dict:
+    if not trace.has_sync_object_instrumentation:
+        return {"objects": 0, "holds": 0, "issues": 0, "queue": 0, "mutex": 0, "sem": 0}
+    rows = _sync_object_stats_rows(trace, lo, hi)
+    out = {"objects": len(rows), "holds": 0, "issues": 0, "queue": 0, "mutex": 0, "sem": 0}
+    for row in rows:
+        out["holds"] += row[4]
+        out["issues"] += row[5]
+        kind = row[1]
+        if kind == "queue":
+            out["queue"] += 1
+        elif kind == "mutex":
+            out["mutex"] += 1
+        elif kind == "sem":
+            out["sem"] += 1
+    return out
+
 def _cursor_range_for_tab(win: "MainWindow", tab_idx: int) -> Tuple[Optional[int], Optional[int]]:
     """Return (lo, hi) from a tab's placed cursors, or (None, None) if fewer than 2."""
     if tab_idx < 0 or tab_idx >= len(win._tabs):
@@ -2384,8 +2454,8 @@ def _build_trace_compare_rows(
     hi_a: Optional[int] = None,
     lo_b: Optional[int] = None,
     hi_b: Optional[int] = None,
-) -> Tuple[List[List], List[List], List[List]]:
-    """Summary, top-task, and migration compare tables (Trace Compare dialog / CLI)."""
+) -> Tuple[List[List], List[List], List[List], List[List], List[List], List[List]]:
+    """Summary, top-task, migration, blocking, preemption, and sync compare tables."""
     a = _trace_summary_snapshot(trace_a, lo_a, hi_a)
     b = _trace_summary_snapshot(trace_b, lo_b, hi_b)
     scale = a["time_scale"]
@@ -2459,7 +2529,69 @@ def _build_trace_compare_rows(
             ra_dwell, rb_dwell, _fmt_signed_dwell_delta(ra_dtu, rb_dtu, scale),
             pa, pb,
         ])
-    return summary_rows, top_rows, mig_rows
+
+    block_a = _blocking_compare_by_name(trace_a, lo_a, hi_a)
+    block_b = _blocking_compare_by_name(trace_b, lo_b, hi_b)
+    block_names = sorted(
+        set(block_a) | set(block_b),
+        key=lambda n: (-max(block_a.get(n, {}).get("gaps", 0),
+                            block_b.get(n, {}).get("gaps", 0)), n.lower()),
+    )[:15]
+    block_rows: List[List] = []
+    for name in block_names:
+        ba = block_a.get(name)
+        bb = block_b.get(name)
+        avg_a = ba["avg_ns"] if ba else 0
+        avg_b = bb["avg_ns"] if bb else 0
+        block_rows.append([
+            name,
+            ba["gaps"] if ba else 0,
+            bb["gaps"] if bb else 0,
+            ba["avg"] if ba else "—",
+            bb["avg"] if bb else "—",
+            _fmt_signed_time_delta(avg_a - avg_b, scale),
+        ])
+
+    pre_a = _preemption_totals_by_victim(trace_a, lo_a, hi_a)
+    pre_b = _preemption_totals_by_victim(trace_b, lo_b, hi_b)
+    pre_names = sorted(
+        set(pre_a) | set(pre_b),
+        key=lambda n: (-max(pre_a.get(n, {}).get("count", 0),
+                            pre_b.get(n, {}).get("count", 0)), n.lower()),
+    )[:15]
+    pre_rows: List[List] = []
+    for name in pre_names:
+        pa = pre_a.get(name)
+        pb = pre_b.get(name)
+        ca = pa["count"] if pa else 0
+        cb = pb["count"] if pb else 0
+        pre_rows.append([
+            name,
+            ca,
+            cb,
+            _fmt_signed_int_delta(ca - cb),
+            _format_time(pa["total_ns"], scale) if pa else "—",
+            _format_time(pb["total_ns"], scale) if pb else "—",
+        ])
+
+    sa = _sync_compare_summary(trace_a, lo_a, hi_a)
+    sb = _sync_compare_summary(trace_b, lo_b, hi_b)
+    sync_rows = [
+        ["Sync objects", sa["objects"], sb["objects"],
+         _fmt_signed_int_delta(sa["objects"] - sb["objects"])],
+        ["Holds (paired)", sa["holds"], sb["holds"],
+         _fmt_signed_int_delta(sa["holds"] - sb["holds"])],
+        ["Issues", sa["issues"], sb["issues"],
+         _fmt_signed_int_delta(sa["issues"] - sb["issues"])],
+        ["Mutex objects", sa["mutex"], sb["mutex"],
+         _fmt_signed_int_delta(sa["mutex"] - sb["mutex"])],
+        ["Semaphore objects", sa["sem"], sb["sem"],
+         _fmt_signed_int_delta(sa["sem"] - sb["sem"])],
+        ["Queue objects", sa["queue"], sb["queue"],
+         _fmt_signed_int_delta(sa["queue"] - sb["queue"])],
+    ]
+
+    return summary_rows, top_rows, mig_rows, block_rows, pre_rows, sync_rows
 
 def _compare_csv_cell(v: object) -> str:
     s = str(v)
@@ -2479,7 +2611,10 @@ def _table_widget_rows(table: "QTableWidget") -> List[List[str]]:
 
 def _build_compare_csv(name_a: str, name_b: str, scope_enabled: bool,
                          summary: List[List], top: List[List],
-                         mig: List[List]) -> str:
+                         mig: List[List],
+                         blocking: Optional[List[List]] = None,
+                         preemption: Optional[List[List]] = None,
+                         sync: Optional[List[List]] = None) -> str:
     lines: List[str] = []
     lines.append(f"Trace A,{_compare_csv_cell(name_a)}")
     lines.append(f"Trace B,{_compare_csv_cell(name_b)}")
@@ -2506,6 +2641,30 @@ def _build_compare_csv(name_a: str, name_b: str, scope_enabled: bool,
         if len(row) >= 12:
             lines.append(",".join(_compare_csv_cell(c) for c in row[:12]))
 
+    if blocking:
+        lines.append("")
+        lines.append("Blocking Time")
+        lines.append("Task,Gaps A,Gaps B,Avg A,Avg B,Δ avg")
+        for row in blocking:
+            if len(row) >= 6:
+                lines.append(",".join(_compare_csv_cell(c) for c in row[:6]))
+
+    if preemption:
+        lines.append("")
+        lines.append("Preemption Chains")
+        lines.append("Victim,Count A,Count B,Δ,Total A,Total B")
+        for row in preemption:
+            if len(row) >= 6:
+                lines.append(",".join(_compare_csv_cell(c) for c in row[:6]))
+
+    if sync:
+        lines.append("")
+        lines.append("Sync Objects")
+        lines.append("Metric,Trace A,Trace B,Δ")
+        for row in sync:
+            if len(row) >= 4:
+                lines.append(",".join(_compare_csv_cell(c) for c in row[:4]))
+
     return "\n".join(lines)
 
 _COMPARE_HTML_STYLE = """
@@ -2528,7 +2687,10 @@ _COMPARE_HTML_STYLE = """
 
 def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
                         summary: List[List], top: List[List],
-                        mig: List[List]) -> str:
+                        mig: List[List],
+                        blocking: Optional[List[List]] = None,
+                        preemption: Optional[List[List]] = None,
+                        sync: Optional[List[List]] = None) -> str:
     scope_note = (
         "Each side uses its own tab cursor range (C1–Cn) when 2+ cursors are placed."
         if scope_enabled else "Full trace span on each side.")
@@ -2548,6 +2710,9 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
     summary_body = _rows_html(summary, 4, "No data")
     top_body = _rows_html(top, 4, "No user tasks in either trace")
     mig_body = _rows_html(mig, 12, "No migrated tasks in either trace")
+    block_body = _rows_html(blocking or [], 6, "No blocking samples in either trace")
+    pre_body = _rows_html(preemption or [], 6, "No preemption chains in either trace")
+    sync_body = _rows_html(sync or [], 4, "No sync instrumentation in either trace")
 
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"/><title>BTF Trace Compare</title>
@@ -2568,6 +2733,18 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
   <section class="report-card"><h2>Core Migrations</h2>
     <table><thead><tr><th>Task</th><th>Migr A</th><th>Migr B</th><th>Δ</th><th>Rate A</th><th>Rate B</th><th>Rate Δ</th><th>Dwell A</th><th>Dwell B</th><th>Dwell Δ</th><th>Ping A</th><th>Ping B</th></tr></thead>
     <tbody>{mig_body}</tbody></table>
+  </section>
+  <section class="report-card"><h2>Blocking Time</h2>
+    <table><thead><tr><th>Task</th><th>Gaps A</th><th>Gaps B</th><th>Avg A</th><th>Avg B</th><th>Δ avg</th></tr></thead>
+    <tbody>{block_body}</tbody></table>
+  </section>
+  <section class="report-card"><h2>Preemption Chains</h2>
+    <table><thead><tr><th>Victim</th><th>Count A</th><th>Count B</th><th>Δ</th><th>Total A</th><th>Total B</th></tr></thead>
+    <tbody>{pre_body}</tbody></table>
+  </section>
+  <section class="report-card"><h2>Sync Objects</h2>
+    <table><thead><tr><th>Metric</th><th>Trace A</th><th>Trace B</th><th>Δ</th></tr></thead>
+    <tbody>{sync_body}</tbody></table>
   </section>
 </div></body></html>"""
 

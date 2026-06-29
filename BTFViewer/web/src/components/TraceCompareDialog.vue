@@ -136,7 +136,7 @@
         </table>
 
         <table
-          v-else
+          v-else-if="activePage === 'migrations'"
           class="compare-table"
         >
           <thead>
@@ -180,6 +180,98 @@
               >
                 No migrated tasks in either trace
               </td>
+            </tr>
+          </tbody>
+        </table>
+
+        <table
+          v-else-if="activePage === 'blocking'"
+          class="compare-table"
+        >
+          <thead>
+            <tr>
+              <th>Task</th>
+              <th>Gaps A</th>
+              <th>Gaps B</th>
+              <th>Avg A</th>
+              <th>Avg B</th>
+              <th>Δ avg</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="row in blockingRows"
+              :key="row.name"
+            >
+              <td class="task-col">{{ row.name }}</td>
+              <td>{{ row.gapsA }}</td>
+              <td>{{ row.gapsB }}</td>
+              <td>{{ row.avgA }}</td>
+              <td>{{ row.avgB }}</td>
+              <td>{{ row.delta }}</td>
+            </tr>
+            <tr v-if="blockingRows.length === 0">
+              <td colspan="6" class="compare-empty">No blocking samples in either trace</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <table
+          v-else-if="activePage === 'preemption'"
+          class="compare-table"
+        >
+          <thead>
+            <tr>
+              <th>Victim</th>
+              <th>Count A</th>
+              <th>Count B</th>
+              <th>Δ</th>
+              <th>Total A</th>
+              <th>Total B</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="row in preemptionCompareRows"
+              :key="row.name"
+            >
+              <td class="task-col">{{ row.name }}</td>
+              <td>{{ row.countA }}</td>
+              <td>{{ row.countB }}</td>
+              <td>{{ row.delta }}</td>
+              <td>{{ row.totalA }}</td>
+              <td>{{ row.totalB }}</td>
+            </tr>
+            <tr v-if="preemptionCompareRows.length === 0">
+              <td colspan="6" class="compare-empty">No preemption chains in either trace</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <table
+          v-else-if="activePage === 'sync'"
+          class="compare-table"
+        >
+          <thead>
+            <tr>
+              <th>Metric</th>
+              <th>Trace A</th>
+              <th>Trace B</th>
+              <th>Δ</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="row in syncCompareRows"
+              :key="row.label"
+            >
+              <td class="task-col">{{ row.label }}</td>
+              <td>{{ row.a }}</td>
+              <td>{{ row.b }}</td>
+              <td>{{ row.delta }}</td>
+            </tr>
+            <tr v-if="syncCompareRows.length === 0">
+              <td colspan="4" class="compare-empty">No sync instrumentation in either trace</td>
             </tr>
           </tbody>
         </table>
@@ -246,6 +338,9 @@ import {
   buildSummaryCompareRows,
   buildTopTasksCompareRows,
   buildMigrationCompareRows,
+  buildBlockingCompareRows,
+  buildPreemptionCompareRows,
+  buildSyncCompareRows,
   downloadCompareCsv,
   downloadCompareHtml,
 } from '../utils/traceCompare.js'
@@ -260,10 +355,13 @@ const pageTabs = [
   { id: 'summary', label: 'Summary' },
   { id: 'top', label: 'Top Tasks' },
   { id: 'migrations', label: 'Core Migrations' },
+  { id: 'blocking', label: 'Blocking' },
+  { id: 'preemption', label: 'Preemption' },
+  { id: 'sync', label: 'Sync' },
 ]
 
 const activePage = ref('summary')
-const scopeToCursors = ref(false)
+const scopeToCursors = ref(true)
 const tabAId = ref(props.tabs[0]?.id ?? null)
 const tabBId = ref(props.tabs[Math.min(1, props.tabs.length - 1)]?.id ?? null)
 
@@ -289,6 +387,12 @@ const topTaskRows = computed(() =>
   buildTopTasksCompareRows(traceA.value, traceB.value, tabA.value, tabB.value, scopeToCursors.value))
 const migrationRows = computed(() =>
   buildMigrationCompareRows(traceA.value, traceB.value, tabA.value, tabB.value, scopeToCursors.value))
+const blockingRows = computed(() =>
+  buildBlockingCompareRows(traceA.value, traceB.value, tabA.value, tabB.value, scopeToCursors.value))
+const preemptionCompareRows = computed(() =>
+  buildPreemptionCompareRows(traceA.value, traceB.value, tabA.value, tabB.value, scopeToCursors.value))
+const syncCompareRows = computed(() =>
+  buildSyncCompareRows(traceA.value, traceB.value, tabA.value, tabB.value, scopeToCursors.value))
 
 function onExportCsv() {
   downloadCompareCsv(
@@ -298,6 +402,9 @@ function onExportCsv() {
     topTaskRows.value,
     migrationRows.value,
     scopeToCursors.value,
+    blockingRows.value,
+    preemptionCompareRows.value,
+    syncCompareRows.value,
   )
 }
 
@@ -309,6 +416,9 @@ function onExportHtml() {
     topTaskRows.value,
     migrationRows.value,
     scopeToCursors.value,
+    blockingRows.value,
+    preemptionCompareRows.value,
+    syncCompareRows.value,
   )
 }
 </script>

@@ -3345,7 +3345,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._find_input.returnPressed.connect(self._find_next)
         find_v.addWidget(self._find_input)
         self._find_mode_combo = QComboBox()
-        self._find_mode_combo.addItems(["Contains", "Exact", "Regex", "Migrations"])
+        self._find_mode_combo.addItems([
+            "Contains", "Exact", "Regex", "Migrations",
+            "STI", "Intervals", "Lifecycle", "Pointers",
+        ])
         self._find_mode_combo.setCurrentIndex(0)
         self._find_mode_combo.currentIndexChanged.connect(self._recompute_find_hits)
         find_v.addWidget(self._find_mode_combo)
@@ -5141,6 +5144,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if vals["show_marks"] != self._show_marks:
             self._show_marks = vals["show_marks"]
             self._sync_panel_tab_visibility()
+        if vals.get("show_find", self._show_find) != self._show_find:
+            self._show_find = vals["show_find"]
+            self._act_show_find.setChecked(self._show_find)
+            self._sync_panel_tab_visibility()
         if vals.get("show_cpu_load", self._show_cpu_load) != self._show_cpu_load:
             self._show_cpu_load = vals["show_cpu_load"]
             for tab in self._tabs:
@@ -5200,6 +5207,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             updates["show_stats"] = str(self._show_stats).lower()
         if snap["show_marks"] != self._show_marks:
             updates["show_marks"] = str(self._show_marks).lower()
+        if snap.get("show_find", self._show_find) != self._show_find:
+            updates["show_find"] = str(self._show_find).lower()
         if snap.get("show_cpu_load", self._show_cpu_load) != self._show_cpu_load:
             updates["show_cpu_load"] = str(self._show_cpu_load).lower()
         if snap["show_hover_highlight"] != self._hover_highlight_val:
@@ -5240,6 +5249,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "show_legend":              self._show_legend,
             "show_stats":               self._show_stats,
             "show_marks":               self._show_marks,
+            "show_find":                self._show_find,
             "show_cpu_load":            self._show_cpu_load,
             "show_hover_highlight":     self._hover_highlight_val,
             "colorblind_safe":          self._colorblind_val,
@@ -5262,6 +5272,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             show_legend=self._show_legend,
             show_stats=self._show_stats,
             show_marks=self._show_marks,
+            show_find=self._show_find,
             cpu_load=self._show_cpu_load,
             label_width=self._label_width_val,
             row_height=self._row_height_val,
@@ -5286,6 +5297,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "show_legend":              dlg.show_legend,
             "show_stats":               dlg.show_stats,
             "show_marks":               dlg.show_marks,
+            "show_find":                dlg.show_find,
             "show_cpu_load":            dlg.cpu_load,
             "show_hover_highlight":     dlg.show_hover_highlight,
             "colorblind_safe":          dlg.colorblind_safe,
@@ -5787,6 +5799,15 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         find_idx = self._find_mode_combo.currentIndex()
         find_mode = (_PORTABLE_FIND_MODES[find_idx]
                      if 0 <= find_idx < len(_PORTABLE_FIND_MODES) else "contains")
+        mk, kind, plot_open, preemptor, interval_id = self._stats_panel.capture_plot_session()
+        plot_payload = None
+        if plot_open and kind:
+            plot_payload = {
+                "mk": mk,
+                "kind": kind,
+                "preemptor": preemptor,
+                "intervalId": interval_id,
+            }
         return {
             "version": SESSION_PORTABLE_VERSION,
             "traceName": os.path.basename(tab.path if tab else self._current_file or "trace.btf"),
@@ -5815,13 +5836,16 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "findQuery": self._find_input.text().strip(),
             "findMode": find_mode,
             "pinnedHighlightKey": sc._locked_task,
+            "scopeToCursors": bool(getattr(self._stats_panel, "_scope_to_cursors", True)),
+            "openPlot": plot_payload,
+            "compareScopeToCursors": True,
         }
 
     def _apply_portable_session_payload(self, data: dict) -> None:
         """Restore cursors, marks, viewport, and UI state from portable session JSON."""
         if not isinstance(data, dict):
             raise ValueError("Invalid session file")
-        if data.get("version") != SESSION_PORTABLE_VERSION:
+        if data.get("version") not in (1, SESSION_PORTABLE_VERSION):
             raise ValueError(f"Unsupported session version: {data.get('version')}")
 
         exp_name = data.get("traceName") or ""
@@ -5939,6 +5963,23 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             sc.set_highlighted_task(mk, locked=True)
         else:
             sc.set_highlighted_task(None)
+
+        if "scopeToCursors" in data and hasattr(self._stats_panel, "_scope_cb"):
+            self._stats_panel._scope_cb.blockSignals(True)
+            self._stats_panel._scope_cb.setChecked(bool(data.get("scopeToCursors", True)))
+            self._stats_panel._scope_cb.blockSignals(False)
+            self._stats_panel._on_scope_toggled(bool(data.get("scopeToCursors", True)))
+
+        plot = data.get("openPlot")
+        if isinstance(plot, dict) and self._trace is not None:
+            self._stats_panel.restore_plot_session(
+                self._trace,
+                plot.get("mk"),
+                plot.get("kind"),
+                True,
+                plot.get("preemptor"),
+                plot.get("intervalId"),
+            )
 
         if tab := self._active_tab:
             self._stash_tab_state(tab)

@@ -39,6 +39,14 @@
       @show-settings="openSettingsDialog"
     />
 
+    <div
+      v-if="traceQualityText"
+      class="trace-quality-banner"
+      role="status"
+    >
+      {{ traceQualityText }}
+    </div>
+
     <!-- Trace tabs -->
     <div
       v-if="tabs.length"
@@ -322,8 +330,13 @@
                 :stats-paused="statsPaused"
                 :open-plot="activeTab?.openPlot ?? null"
                 :section-heights="statsSectionHeights"
+                :scope-to-cursors="activeTab?.scopeToCursors !== false"
+                :analysis-settings="appSettings"
+                :section-collapsed-state="activeTab?.statsSectionCollapsed ?? null"
                 @update:open-plot="onOpenPlotChange"
                 @update:section-heights="onSectionHeightsChange"
+                @update:scope-to-cursors="onStatsScopeChange"
+                @update:section-collapsed-state="onStatsSectionCollapsedChange"
                 @highlight-task="onHighlightClick"
                 @plot-point-activate="onStatsPlotPointActivate"
               />
@@ -804,6 +817,7 @@ import {
   sessionCursorsSlotCount,
 } from './utils/sessionPortable.js'
 import { computeFindHits, stepFindHitIndex } from './utils/findAnalysis.js'
+import { traceQualitySummary } from './utils/traceQuality.js'
 import exampleBtfB64   from 'virtual:example-btf'
 
 // ---- State ---------------------------------------------------------------
@@ -861,6 +875,8 @@ const findHits = computed(() => activeTab.value?.findHits ?? [])
 const findHitIdx = computed(() => activeTab.value?.findHitIdx ?? -1)
 const findMarkerNs = computed(() => activeTab.value?.findMarkerNs ?? null)
 const findError = ref('')
+
+const traceQualityText = computed(() => traceQualitySummary(trace.value))
 
 // ---- Snapshot editor -------------------------------------------------------
 const snapshotEditorOpen = ref(false)
@@ -1537,6 +1553,16 @@ function onOpenPlotChange(v) {
 
 function onSectionHeightsChange(v) {
   Object.assign(statsSectionHeights.value, v)
+  scheduleSessionSave()
+}
+
+function onStatsScopeChange(v) {
+  if (activeTab.value) activeTab.value.scopeToCursors = !!v
+  scheduleSessionSave()
+}
+
+function onStatsSectionCollapsedChange(v) {
+  if (activeTab.value) activeTab.value.statsSectionCollapsed = v ? { ...v } : null
   scheduleSessionSave()
 }
 
@@ -2596,6 +2622,9 @@ function onExportSession() {
     findQuery: findQuery.value,
     findMode: findMode.value,
     pinnedHighlightKey: pinnedHighlightKey.value,
+    scopeToCursors: activeTab.value.scopeToCursors !== false,
+    openPlot: activeTab.value.openPlot ?? null,
+    statsSectionCollapsed: activeTab.value.statsSectionCollapsed ?? null,
   })
   const base = (activeTab.value.name || 'trace').replace(/\.btf$/i, '')
   downloadPortableSession(payload, `${base}-session.json`)
@@ -2726,6 +2755,16 @@ body {
   background: var(--bg);
   color: var(--fg);
 }
+
+.trace-quality-banner {
+  flex: 0 0 auto;
+  padding: 6px 12px;
+  font-size: 12px;
+  background: #5c3d00;
+  color: #ffe8a3;
+  border-bottom: 1px solid #8a6200;
+}
+
 .app.drag-over {
   outline: 2px dashed var(--accent);
   outline-offset: -4px;

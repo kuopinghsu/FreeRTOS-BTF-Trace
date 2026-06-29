@@ -413,15 +413,15 @@ export class InteractionHandler {
         this._queueViewport(vp => this._applyPanV(vp, dy))
       }
     } else {
-      // === Horizontal mode ===
+      // === Horizontal mode (desktop parity: plain wheel pans time) ===
       const isHorizInput = Math.abs(e.deltaX) > Math.abs(e.deltaY)
       if (isHorizInput) {
         this._queueViewport(vp => this._applyPanH(vp, e.deltaX))
       } else if (e.shiftKey) {
-        this._queueViewport(vp => this._applyPanH(vp, e.deltaY))
+        this._queueViewport(vp => this._applyScrollY(vp, e.deltaY))
       } else {
-        const deltaY = e.deltaMode === 1 ? e.deltaY * (layout().rowH + layout().rowGap) : e.deltaY
-        this._queueViewport(vp => this._applyScrollY(vp, deltaY))
+        const delta = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY
+        this._queueViewport(vp => this._applyPanH(vp, delta))
       }
     }
   }

@@ -8,7 +8,7 @@
           :title="'When two or more cursors are placed, restrict all statistics to the time window from C1 through the last cursor.'"
         >
           <input
-            v-model="scopeToCursors"
+            v-model="scopeToCursorsModel"
             type="checkbox"
             :disabled="placedCursorCount < 2"
           >
@@ -1287,6 +1287,120 @@
       </template>
     </template>
 
+    <!-- Queue pairing -->
+    <template v-if="trace?.hasSyncObjectInstrumentation">
+      <div class="stats-sep" />
+      <div
+        class="stats-section-title collapsible"
+        @click="queueCollapsed = !queueCollapsed"
+      >
+        <svg class="chevron" :class="{ collapsed: queueCollapsed }" viewBox="0 0 10 10" width="10" height="10">
+          <polyline points="2,3 5,7 8,3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+        Queue{{ scopeSuffixStr }}
+      </div>
+      <template v-if="!queueCollapsed">
+        <p class="range-hint priority-hint">
+          Pairs <code>send</code>/<code>recv</code> STI events by queue pointer.
+        </p>
+        <div v-if="queueStats.length === 0" class="range-hint">
+          {{ statsRange ? 'No queue activity in cursor range' : 'No queue STI events in trace' }}
+        </div>
+        <div v-else class="stats-table-block">
+          <div class="stats-table-wrap" :style="{ maxHeight: tableHeight('sync') + 'px' }">
+            <table class="stats-table">
+              <thead>
+                <tr>
+                  <th>Object</th><th>Holds</th><th>Issues</th><th>Avg hold</th><th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in sortedQueueStats" :key="row.key">
+                  <td>{{ row.label }}</td>
+                  <td>{{ row.holdCount }}</td>
+                  <td>{{ row.issueCount }}</td>
+                  <td>{{ row.avgHold }}</td>
+                  <td :class="syncStatusClass(row.status)">{{ row.statusLabel }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </template>
+    </template>
+
+    <!-- Task lifecycle -->
+    <template v-if="lifecycleStats.length">
+      <div class="stats-sep" />
+      <div class="stats-section-title collapsible" @click="lifecycleCollapsed = !lifecycleCollapsed">
+        <svg class="chevron" :class="{ collapsed: lifecycleCollapsed }" viewBox="0 0 10 10" width="10" height="10">
+          <polyline points="2,3 5,7 8,3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+        Task lifecycle{{ scopeSuffixStr }}
+      </div>
+      <template v-if="!lifecycleCollapsed">
+        <div class="stats-table-block">
+          <div class="stats-table-wrap" :style="{ maxHeight: tableHeight('sync') + 'px' }">
+            <table class="stats-table">
+              <thead>
+                <tr>
+                  <th>Task</th><th>Created</th><th>Deleted</th><th>Susp/Res</th><th>Alive</th><th>Events</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in lifecycleStats" :key="row.mk">
+                  <td>{{ row.label }}</td>
+                  <td>{{ row.createNs != null ? formatTime(row.createNs, trace.timeScale) : '—' }}</td>
+                  <td>{{ row.deleteNs != null ? formatTime(row.deleteNs, trace.timeScale) : '—' }}</td>
+                  <td>{{ row.suspendCount }}/{{ row.resumeCount }}</td>
+                  <td>{{ formatLifecycleSpan(row.aliveSpanNs, trace.timeScale) }}</td>
+                  <td>{{ row.eventCount }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </template>
+    </template>
+
+    <!-- Deadlines / CPU budget -->
+    <template v-if="hasDeadlineConfig">
+      <div class="stats-sep" />
+      <div class="stats-section-title collapsible" @click="deadlineCollapsed = !deadlineCollapsed">
+        <svg class="chevron" :class="{ collapsed: deadlineCollapsed }" viewBox="0 0 10 10" width="10" height="10">
+          <polyline points="2,3 5,7 8,3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+        Deadlines / CPU budget{{ scopeSuffixStr }}
+      </div>
+      <template v-if="!deadlineCollapsed">
+        <div v-if="!deadlineViolations.sliceViolations.length && !deadlineViolations.cpuViolations.length" class="range-hint">
+          No violations in scope
+        </div>
+        <div v-if="deadlineViolations.sliceViolations.length" class="stats-table-block">
+          <div class="stats-section-subtitle">Slice over deadline</div>
+          <table class="stats-table">
+            <thead><tr><th>Task</th><th>Duration</th><th>Limit</th><th>Over by</th></tr></thead>
+            <tbody>
+              <tr v-for="(v, i) in deadlineViolations.sliceViolations.slice(0, 20)" :key="'d'+i">
+                <td>{{ v.label }}</td><td>{{ v.duration }}</td><td>{{ v.limit }}</td><td>{{ v.overBy }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div v-if="deadlineViolations.cpuViolations.length" class="stats-table-block">
+          <div class="stats-section-subtitle">CPU budget exceeded</div>
+          <table class="stats-table">
+            <thead><tr><th>Task</th><th>CPU%</th><th>Budget</th></tr></thead>
+            <tbody>
+              <tr v-for="(v, i) in deadlineViolations.cpuViolations" :key="'c'+i">
+                <td>{{ v.label }}</td><td>{{ v.pct }}%</td><td>{{ v.budgetPct }}%</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </template>
+    </template>
+
     <!-- Interval Analysis -->
     <div class="stats-sep" />
     <div
@@ -2045,6 +2159,8 @@ import {
   segmentAtCoreTime,
   syncIssueAnnotationNote,
 } from '../utils/syncObjectAnalysis.js'
+import { buildTaskLifecycleRows, formatLifecycleSpan } from '../utils/lifecycleAnalysis.js'
+import { computeDeadlineViolations } from '../utils/deadlineAnalysis.js'
 import { intervalInstanceDetailRows } from '../utils/intervalAnalysis.js'
 import { migrationRows } from '../utils/migrationAnalysis.js'
 import { tickHealthReport } from '../utils/tickHealth.js'
@@ -2077,9 +2193,15 @@ const props = defineProps({
   statsPaused: { type: Boolean, default: false },
   openPlot: { type: Object, default: null },
   sectionHeights: { type: Object, default: null },
+  scopeToCursors: { type: Boolean, default: true },
+  analysisSettings: { type: Object, default: () => ({}) },
+  sectionCollapsedState: { type: Object, default: null },
 })
 
-const emit = defineEmits(['highlightTask', 'plotPointActivate', 'update:openPlot', 'update:sectionHeights'])
+const emit = defineEmits([
+  'highlightTask', 'plotPointActivate', 'update:openPlot', 'update:sectionHeights',
+  'update:scopeToCursors', 'update:sectionCollapsedState',
+])
 
 const coresCollapsed = ref(false)
 const tasksCollapsed = ref(false)
@@ -2091,9 +2213,16 @@ const interArrivalCollapsed = ref(false)
 const preemptionCollapsed = ref(false)
 const priorityCollapsed = ref(false)
 const syncCollapsed = ref(false)
+const queueCollapsed = ref(false)
+const lifecycleCollapsed = ref(false)
+const deadlineCollapsed = ref(false)
 const intervalsCollapsed = ref(false)
 const tagsCollapsed = ref(false)
-const scopeToCursors = ref(true)
+
+const scopeToCursorsModel = computed({
+  get: () => props.scopeToCursors,
+  set: (v) => emit('update:scopeToCursors', v),
+})
 
 const STATS_SECTION_FLAGS = [
   coresCollapsed,
@@ -2106,6 +2235,9 @@ const STATS_SECTION_FLAGS = [
   preemptionCollapsed,
   priorityCollapsed,
   syncCollapsed,
+  queueCollapsed,
+  lifecycleCollapsed,
+  deadlineCollapsed,
   intervalsCollapsed,
   tagsCollapsed,
 ]
@@ -2357,7 +2489,7 @@ onBeforeUnmount(() => {
 
 const placedCursorCount = computed(() => getPlacedCursors(props.cursors).length)
 
-const statsRange = computed(() => getStatsRange(props.cursors, scopeToCursors.value))
+const statsRange = computed(() => getStatsRange(props.cursors, scopeToCursorsModel.value))
 
 const scopeSuffixStr = computed(() => scopeSuffix(statsRange.value))
 
@@ -2382,7 +2514,7 @@ const scopeRangeLabel = computed(() => {
 })
 
 watch(placedCursorCount, (n) => {
-  if (n < 2) scopeToCursors.value = false
+  if (n < 2) emit('update:scopeToCursors', false)
 })
 
 const spanStr = computed(() => {
@@ -2590,6 +2722,42 @@ const sortedSyncIssueList = computed(() =>
 
 const sortedSyncStats = computed(() =>
   sortStatsRows(syncStats.value, tableSort.value.sync, SYNC_OBJECT_SORT_ACCESSORS))
+
+const queueStats = computed(() => {
+  const tr = props.trace
+  if (!tr?.hasSyncObjectInstrumentation) return []
+  const r = statsRange.value
+  return syncObjectStatsRows(tr, r?.lo ?? null, r?.hi ?? null, { kindFilter: 'queue' })
+})
+
+const sortedQueueStats = computed(() =>
+  sortStatsRows(queueStats.value, tableSort.value.sync, SYNC_OBJECT_SORT_ACCESSORS))
+
+const lifecycleStats = computed(() => {
+  const tr = props.trace
+  if (!tr?.stiEvents?.length) return []
+  const r = statsRange.value
+  return buildTaskLifecycleRows(tr.stiEvents, tr.taskRepr, r?.lo ?? null, r?.hi ?? null)
+})
+
+const deadlineViolations = computed(() => {
+  const tr = props.trace
+  if (!tr) return { sliceViolations: [], cpuViolations: [] }
+  const r = statsRange.value
+  return computeDeadlineViolations(
+    tr,
+    props.analysisSettings || {},
+    r?.lo ?? null,
+    r?.hi ?? null,
+  )
+})
+
+const hasDeadlineConfig = computed(() => {
+  const s = props.analysisSettings || {}
+  const budget = Number(s.cpuBudgetPct)
+  const deadlines = s.taskDeadlines || {}
+  return (Number.isFinite(budget) && budget > 0) || Object.keys(deadlines).length > 0
+})
 
 function syncStatusClass(status) {
   if (status === 'error') return 'sync-status-error'
@@ -4085,7 +4253,7 @@ function _computeRangeStats(cursors) {
 
 watch(() => props.cursors, (cursors) => {
   clearTimeout(_rangeTimer)
-  if (!scopeToCursors.value) {
+  if (!scopeToCursorsModel.value) {
     rangeStats.value = null
     return
   }
@@ -4105,7 +4273,7 @@ watch(() => props.trace, () => {
 }, { immediate: true })
 
 watch(
-  [statsRange, execSliceCollapsed, blockingCollapsed, interArrivalCollapsed, scopeToCursors, () => props.statsPaused],
+  [statsRange, execSliceCollapsed, blockingCollapsed, interArrivalCollapsed, scopeToCursorsModel, () => props.statsPaused],
   () => {
     if (props.statsPaused) return
     scheduleStatsRefresh()

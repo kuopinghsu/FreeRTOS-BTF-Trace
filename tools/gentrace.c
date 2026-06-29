@@ -104,6 +104,13 @@ static char *get_taskname(
     return (char*)&ptr[n];
 }
 
+static EVENT *get_event(
+    TRACE *trace_data,
+    int index
+) {
+    return &trace_data->d.event_lists[index];
+}
+
 /* VCD $var identifiers must not contain whitespace. */
 static void vcd_sanitize_token(char *dst, size_t dst_size, const char *src)
 {
@@ -206,15 +213,60 @@ static int vcd_task_has_name(
     return get_taskname(trace_data, (int)task_id)[0] != '\0';
 }
 
-static EVENT *get_event(
-    TRACE *trace_data,
-    int index
-) {
-    char *ptr = (char*)&trace_data->d.task_lists;
-    int n = trace_data->h.max_tasks * trace_data->h.max_taskname_len +
-            sizeof(EVENT) * index;
+static int trace_event_ring_overflow(const TRACE_HEADER *h)
+{
+    return h->max_events > 0 && h->event_count >= h->max_events;
+}
 
-    return (EVENT*)&ptr[n];
+static int trace_event_task_table_overflow(const TRACE *trace_data)
+{
+    uint32_t i;
+    int current_index;
+    EVENT *event;
+
+    if (trace_data->h.event_count != trace_data->h.max_events) {
+        current_index = 0;
+    } else {
+        current_index = (int)trace_data->h.current_index;
+    }
+
+    for (i = 0; i < trace_data->h.event_count; i++) {
+        event = get_event((TRACE *)trace_data, current_index);
+        switch (event->types & EVENT_MASK) {
+            case TRACE_EVENT_TASK_SWITCHED_IN:
+            case TRACE_EVENT_TASK_SWITCHED_OUT:
+            case TRACE_EVENT_TASK_CREATE:
+            case TRACE_EVENT_TASK_DELETE:
+            case TRACE_EVENT_TASK_SUSPEND:
+            case TRACE_EVENT_TASK_RESUME:
+            case TRACE_EVENT_TASK_PRIORITY_SET:
+            case TRACE_EVENT_TASK_PRIORITY_INHERIT:
+            case TRACE_EVENT_TASK_PRIORITY_DISINHERIT:
+                if (event->param1 >= trace_data->h.max_tasks) {
+                    return 1;
+                }
+                if (event->param1 > 0 &&
+                    event->param1 < trace_data->h.max_tasks &&
+                    !vcd_task_has_name((TRACE *)trace_data, event->param1)) {
+                    return 1;
+                }
+                break;
+            default:
+                break;
+        }
+        current_index = (current_index + 1) % (int)trace_data->h.max_events;
+    }
+    return 0;
+}
+
+static void write_btf_quality_meta(FILE *fout, const TRACE *trace_data, long file_size)
+{
+    btf_quality_flags_t quality = {
+        .ring_overflow = trace_event_ring_overflow(&trace_data->h),
+        .task_table_overflow = trace_event_task_table_overflow(trace_data),
+        .truncated = file_size > 0 && file_size < (long)sizeof(TRACE),
+    };
+    btf_write_quality_meta(fout, &quality);
 }
 
 int genbtf(
@@ -308,6 +360,8 @@ int genbtf(
         fprintf(fout,"#timeScale us\n");
     else
         fprintf(fout,"#timeScale ns\n");
+
+    write_btf_quality_meta(fout, trace_data, size);
 
     if (trace_data->h.event_count != trace_data->h.max_events) {
         current_index = 0;

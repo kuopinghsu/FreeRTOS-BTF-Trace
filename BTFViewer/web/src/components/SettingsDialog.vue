@@ -128,6 +128,29 @@
               CPU load graph
             </label>
 
+            <h3 class="settings-section">Analysis thresholds</h3>
+            <label class="settings-row">
+              <span class="settings-label">CPU budget</span>
+              <input
+                v-model.number="draft.cpuBudgetPct"
+                class="settings-input"
+                type="number"
+                min="0"
+                max="100"
+                step="0.1"
+              >
+              <span class="settings-unit">% (0 = off)</span>
+            </label>
+            <label class="settings-row col">
+              <span class="settings-label">Task deadlines (ns)</span>
+              <textarea
+                v-model="deadlinesText"
+                class="settings-textarea"
+                rows="4"
+                placeholder="TaskName=1000000&#10;Runner1=500000"
+              />
+            </label>
+
             <h3 class="settings-section">Timeline overlays</h3>
             <label class="settings-check indent">
               <input
@@ -320,13 +343,33 @@ const tabs = [
 
 const activeTab = ref('appearance')
 const draft = reactive(normalizeSettings(props.modelValue))
+const deadlinesText = ref(formatDeadlinesText(draft.taskDeadlines))
 
-const suppressPreview = ref(true)
-let previewTimer = null
+function formatDeadlinesText(map) {
+  if (!map || typeof map !== 'object') return ''
+  return Object.entries(map)
+    .map(([k, v]) => `${k}=${v}`)
+    .join('\n')
+}
+
+function parseDeadlinesText(text) {
+  const out = {}
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const t = line.trim()
+    if (!t || t.startsWith('#')) continue
+    const eq = t.indexOf('=')
+    if (eq <= 0) continue
+    const key = t.slice(0, eq).trim()
+    const val = Number.parseInt(t.slice(eq + 1).trim(), 10)
+    if (key && Number.isFinite(val) && val > 0) out[key] = val
+  }
+  return out
+}
 
 watch(() => props.modelValue, (v) => {
   suppressPreview.value = true
   Object.assign(draft, normalizeSettings(v))
+  deadlinesText.value = formatDeadlinesText(draft.taskDeadlines)
   nextTick(() => { suppressPreview.value = false })
 }, { deep: true })
 
@@ -338,9 +381,22 @@ watch(draft, () => {
   if (suppressPreview.value) return
   clearTimeout(previewTimer)
   previewTimer = setTimeout(() => {
-    emit('preview', normalizeSettings(draft))
+    const next = normalizeSettings({ ...draft, taskDeadlines: parseDeadlinesText(deadlinesText.value) })
+    emit('preview', next)
   }, 50)
 }, { deep: true })
+
+watch(deadlinesText, () => {
+  if (suppressPreview.value) return
+  clearTimeout(previewTimer)
+  previewTimer = setTimeout(() => {
+    const next = normalizeSettings({ ...draft, taskDeadlines: parseDeadlinesText(deadlinesText.value) })
+    emit('preview', next)
+  }, 50)
+})
+
+const suppressPreview = ref(true)
+let previewTimer = null
 
 const zoomUnit = computed(() => {
   const ts = props.timeScale || 'ns'
@@ -349,10 +405,14 @@ const zoomUnit = computed(() => {
 
 function onReset() {
   Object.assign(draft, { ...DEFAULT_SETTINGS })
+  deadlinesText.value = ''
 }
 
 function onSave() {
-  emit('save', normalizeSettings(draft))
+  emit('save', normalizeSettings({
+    ...draft,
+    taskDeadlines: parseDeadlinesText(deadlinesText.value),
+  }))
 }
 </script>
 
@@ -464,6 +524,22 @@ function onSave() {
   align-items: center;
   gap: 10px;
   font-size: var(--ui-font-size, 8px);
+}
+.settings-row.col {
+  flex-direction: column;
+  align-items: stretch;
+}
+.settings-textarea {
+  width: 100%;
+  min-height: 72px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 12px;
+  font-family: monospace;
+  resize: vertical;
 }
 .settings-label {
   color: var(--fg);

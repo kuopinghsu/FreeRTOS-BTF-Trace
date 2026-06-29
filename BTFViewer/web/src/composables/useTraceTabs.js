@@ -25,6 +25,8 @@ export function createTraceTab(name) {
     findHitIdx: -1,
     findMarkerNs: null,
     openPlot: null,
+    scopeToCursors: true,
+    statsSectionCollapsed: null,
     taskFilterText: '',
     migratedOnlyFilter: false,
     taskFilterKeys: null,

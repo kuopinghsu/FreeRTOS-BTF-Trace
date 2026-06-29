@@ -33,7 +33,7 @@ using sim::Simulator;
 void usage(const char *argv0) {
     std::cerr
         << "Usage: " << argv0 << " [options] program.elf [target args...]\n"
-        << "  --cores N                    Number of harts to simulate (1-16)\n"
+        << "  --cores N                    Number of harts to simulate (1-128)\n"
         << "  --memory MB                  RAM size in MiB (default 128)\n"
         << "  --ram-base HEX               RAM base physical address (default 0x80000000)\n"
         << "  --gdb PORT                   Start GDB remote stub on TCP PORT\n"

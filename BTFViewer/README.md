@@ -24,7 +24,7 @@ A PySide6-based interactive visualiser for FreeRTOS context-switch traces in **B
 - **Viewport culling** — only visible rows/columns and segments are rendered; no slowdown on large traces
 - **Multi-tab traces** — open several `.btf` files at once (Desktop: closable tabs; Web: tab bar under the toolbar). Both restore open tabs, active tab, and per-tab zoom/cursors/marks/filters on launch (Desktop: `btf_viewer.rc`; Web: `localStorage` + IndexedDB trace cache)
 - **Measurement cursors** — Desktop and Web support 2–8 cursors (default: 4); configurable in Settings
-- **Trace compare** — with 2+ tabs open, **Trace Compare…** in the Statistics panel diffs **Summary**, **Top Tasks**, and **Core Migrations** side-by-side (Desktop + Web). Optional **Limit to each tab's cursor range** compares metrics within C1–Cn when 2+ cursors are placed on each trace
+- **Trace compare** — with 2+ tabs open, **Trace Compare…** in the Statistics panel diffs **Summary**, **Top Tasks**, **Core Migrations**, **Blocking**, **Preemption**, and **Sync** side-by-side (Desktop + Web). Optional **Limit to each tab's cursor range** compares metrics within C1–Cn when 2+ cursors are placed on each trace
 - **Core migration analysis** — detect tasks that run on multiple cores; **Core Migrations** stats table (ping-pong, STI correlation, gap-after vs other gaps), **clickable migration heatmap** (pair×time for ≤ 16 cores; core×core matrix → outgoing pairs for larger traces → per-task sub-bins → timeline drill-down), **Migrated tasks only** legend filter, toolbar **All tasks** reset, and Find **Migrations** mode (Desktop + Web)
 - **Cursor-scoped statistics** — with 2+ cursors, the Statistics panel can limit all metrics (CPU%, execution slices, blocking time, inter-arrival, **preemption chain**, **priority inheritance**, **mutex / semaphore pairing**, scheduling summary, exports, and charts) to the window from C1 through the last cursor; toggle **Limit to cursor range (C1–Cn)** (Desktop + Web)
 - **Cursor range summary** — with 2+ cursors, the status bar shows a quick min/max/avg segment summary (Desktop + Web); full per-task metrics remain in the **Statistics** panel
@@ -563,8 +563,8 @@ Sample traces in the repo: `tracedata/example.btf` (small), `tracedata/example-4
 | Action | Effect |
 |--------|--------|
 | `Ctrl` + scroll wheel | Zoom in / out centred on mouse pointer |
-| `Shift` + scroll wheel | Pan horizontally |
-| Plain scroll wheel | Scroll rows vertically |
+| `Shift` + scroll wheel | Scroll task/core rows vertically |
+| Plain scroll wheel / trackpad swipe | Pan along the time axis |
 | **+** / **−** toolbar buttons | Zoom in / out around viewport centre |
 | **Fit** toolbar button | Fit the entire trace into the viewport |
 

@@ -412,8 +412,11 @@ _MAX_CURSORS         = 8  # Hard upper bound - must equal len(_CURSOR_COLORS).
 _DEFAULT_MAX_CURSORS = 4  # Default number of simultaneously visible cursors.
 
 # Portable session JSON (shared with BTFViewer/web sessionPortable.js)
-SESSION_PORTABLE_VERSION = 1
-_PORTABLE_FIND_MODES = ("contains", "exact", "regex", "migrations")
+SESSION_PORTABLE_VERSION = 2
+_PORTABLE_FIND_MODES = (
+    "contains", "exact", "regex", "migrations",
+    "sti", "intervals", "lifecycle", "pointers",
+)
 
 def _snapshot_tab_filters(scene) -> dict:
     """Per-tab legend/heatmap filter state (portable session + tab_view rc)."""
@@ -945,8 +948,8 @@ _PRIORITY_STI_RE = re.compile(
     re.IGNORECASE,
 )
 _SYNC_OBJECT_NOTE_RE = re.compile(
-    r"^(create|take|give|delete)\s+(0x[0-9a-f]+)$", re.IGNORECASE)
-_SYNC_OBJECT_TARGETS = frozenset({"mutex", "sem"})
+    r"^(create|take|give|delete|send|recv)(?:\s+(0x[0-9a-f]+))?$", re.IGNORECASE)
+_SYNC_OBJECT_TARGETS = frozenset({"mutex", "sem", "queue"})
 _POST_CREATE_GIVE_MAX_NS = 1000
 _INTERVAL_START_CHANNELS = frozenset({"interval_start"})
 _INTERVAL_STOP_CHANNELS  = frozenset({"interval_stop"})
@@ -1743,7 +1746,8 @@ def _parse_sync_object_note(note: str) -> Optional[Tuple[str, str]]:
     m = _SYNC_OBJECT_NOTE_RE.match((note or "").strip())
     if not m:
         return None
-    return m.group(1).lower(), m.group(2).lower()
+    ptr = (m.group(2) or "0").lower()
+    return m.group(1).lower(), ptr
 
 def _sync_object_key(kind: str, ptr: str) -> str:
     return f"{kind}:{ptr}"
@@ -1843,16 +1847,19 @@ def _build_sync_object_data(
             if key not in objects:
                 objects[key] = _empty_obj(ev.target, ptr)
             obj = objects[key]
-            if action == "take":
+            if action in ("take", "recv"):
                 rec = {"time_ns": ev.time, "task_mk": task_mk, "task_label": task_label,
                        "core": ev.core or ""}
                 if obj["kind"] == "sem" and obj["open_gives"]:
                     give = obj["open_gives"].pop(0)
                     _record_hold(obj, rec, give, False)
+                elif obj["kind"] == "queue" and obj["open_gives"]:
+                    send = obj["open_gives"].pop(0)
+                    _record_hold(obj, send, rec, True)
                 else:
                     obj["open_takes"].append(rec)
-            elif action == "give":
-                if _is_post_create_kernel_give(obj, ev.time):
+            elif action in ("give", "send"):
+                if action == "give" and _is_post_create_kernel_give(obj, ev.time):
                     continue
                 give_rec = {"time_ns": ev.time, "task_mk": task_mk, "task_label": task_label,
                             "core": ev.core or ""}
@@ -1874,6 +1881,8 @@ def _build_sync_object_data(
                                 "detail": f"give by {task_label}, held by {take['task_label']}",
                             })
                         _record_hold(obj, take, give_rec, True)
+                elif obj["kind"] == "queue":
+                    obj["open_gives"].append(give_rec)
                 elif obj["open_takes"]:
                     take = obj["open_takes"].pop(0)
                     _record_hold(obj, take, give_rec, True)
@@ -1902,11 +1911,15 @@ def _build_sync_object_data(
             if obj["kind"] == "mutex":
                 end_mutex_holds.append((obj, take.get("task_mk"), take.get("task_label", "")))
         for give in obj["open_gives"]:
+            kind = "unmatched_send" if obj["kind"] == "queue" else "unmatched_give"
+            detail = ("send without matching recv before trace end"
+                      if obj["kind"] == "queue"
+                      else "give without matching take before trace end")
             obj["issues"].append({
-                "kind": "unmatched_give", "severity": "warning", "time_ns": give["time_ns"],
+                "kind": kind, "severity": "warning", "time_ns": give["time_ns"],
                 "core": give.get("core", ""), "task_mk": give.get("task_mk"),
                 "task_label": give.get("task_label", ""),
-                "detail": "give without matching take before trace end",
+                "detail": detail,
             })
         obj["open_takes"] = []
         obj["open_gives"] = []
@@ -3180,6 +3193,66 @@ def _top_tasks_cpu_by_name(trace: "BtfTrace", limit: int = 10,
         result[_task_display_name(raw)] = 100.0 * t_ns / total_ns
     return result
 
+def _blocking_compare_by_name(
+    trace: "BtfTrace",
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> Dict[str, dict]:
+    """Blocking-time summary keyed by task display name."""
+    scale = trace.time_scale
+    out: Dict[str, dict] = {}
+    for mk, segs in trace.seg_map_by_merge_key.items():
+        samples = _blocking_time_samples(segs, lo, hi)
+        if not samples:
+            continue
+        raw = trace.task_repr.get(mk, mk)
+        _, _, tname = _parse_task_name(raw)
+        if _is_idle_task_name(tname) or tname == "TICK":
+            continue
+        avg_ns = int(round(sum(samples) / len(samples)))
+        out[_task_display_name(raw)] = {
+            "gaps": len(samples),
+            "avg_ns": avg_ns,
+            "avg": _format_time(avg_ns, scale),
+        }
+    return out
+
+def _preemption_totals_by_victim(
+    trace: "BtfTrace",
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> Dict[str, dict]:
+    """Aggregate preemption events by victim task display name."""
+    totals: Dict[str, dict] = {}
+    for mk, _pre_disp, _t, duration, _seg in _collect_preemption_events(trace, lo, hi):
+        raw = trace.task_repr.get(mk, mk)
+        victim = _task_display_name(raw)
+        cur = totals.setdefault(victim, {"count": 0, "total_ns": 0})
+        cur["count"] += 1
+        cur["total_ns"] += duration
+    return totals
+
+def _sync_compare_summary(
+    trace: "BtfTrace",
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> dict:
+    if not trace.has_sync_object_instrumentation:
+        return {"objects": 0, "holds": 0, "issues": 0, "queue": 0, "mutex": 0, "sem": 0}
+    rows = _sync_object_stats_rows(trace, lo, hi)
+    out = {"objects": len(rows), "holds": 0, "issues": 0, "queue": 0, "mutex": 0, "sem": 0}
+    for row in rows:
+        out["holds"] += row[4]
+        out["issues"] += row[5]
+        kind = row[1]
+        if kind == "queue":
+            out["queue"] += 1
+        elif kind == "mutex":
+            out["mutex"] += 1
+        elif kind == "sem":
+            out["sem"] += 1
+    return out
+
 def _cursor_range_for_tab(win: "MainWindow", tab_idx: int) -> Tuple[Optional[int], Optional[int]]:
     """Return (lo, hi) from a tab's placed cursors, or (None, None) if fewer than 2."""
     if tab_idx < 0 or tab_idx >= len(win._tabs):
@@ -3232,8 +3305,8 @@ def _build_trace_compare_rows(
     hi_a: Optional[int] = None,
     lo_b: Optional[int] = None,
     hi_b: Optional[int] = None,
-) -> Tuple[List[List], List[List], List[List]]:
-    """Summary, top-task, and migration compare tables (Trace Compare dialog / CLI)."""
+) -> Tuple[List[List], List[List], List[List], List[List], List[List], List[List]]:
+    """Summary, top-task, migration, blocking, preemption, and sync compare tables."""
     a = _trace_summary_snapshot(trace_a, lo_a, hi_a)
     b = _trace_summary_snapshot(trace_b, lo_b, hi_b)
     scale = a["time_scale"]
@@ -3307,7 +3380,69 @@ def _build_trace_compare_rows(
             ra_dwell, rb_dwell, _fmt_signed_dwell_delta(ra_dtu, rb_dtu, scale),
             pa, pb,
         ])
-    return summary_rows, top_rows, mig_rows
+
+    block_a = _blocking_compare_by_name(trace_a, lo_a, hi_a)
+    block_b = _blocking_compare_by_name(trace_b, lo_b, hi_b)
+    block_names = sorted(
+        set(block_a) | set(block_b),
+        key=lambda n: (-max(block_a.get(n, {}).get("gaps", 0),
+                            block_b.get(n, {}).get("gaps", 0)), n.lower()),
+    )[:15]
+    block_rows: List[List] = []
+    for name in block_names:
+        ba = block_a.get(name)
+        bb = block_b.get(name)
+        avg_a = ba["avg_ns"] if ba else 0
+        avg_b = bb["avg_ns"] if bb else 0
+        block_rows.append([
+            name,
+            ba["gaps"] if ba else 0,
+            bb["gaps"] if bb else 0,
+            ba["avg"] if ba else "—",
+            bb["avg"] if bb else "—",
+            _fmt_signed_time_delta(avg_a - avg_b, scale),
+        ])
+
+    pre_a = _preemption_totals_by_victim(trace_a, lo_a, hi_a)
+    pre_b = _preemption_totals_by_victim(trace_b, lo_b, hi_b)
+    pre_names = sorted(
+        set(pre_a) | set(pre_b),
+        key=lambda n: (-max(pre_a.get(n, {}).get("count", 0),
+                            pre_b.get(n, {}).get("count", 0)), n.lower()),
+    )[:15]
+    pre_rows: List[List] = []
+    for name in pre_names:
+        pa = pre_a.get(name)
+        pb = pre_b.get(name)
+        ca = pa["count"] if pa else 0
+        cb = pb["count"] if pb else 0
+        pre_rows.append([
+            name,
+            ca,
+            cb,
+            _fmt_signed_int_delta(ca - cb),
+            _format_time(pa["total_ns"], scale) if pa else "—",
+            _format_time(pb["total_ns"], scale) if pb else "—",
+        ])
+
+    sa = _sync_compare_summary(trace_a, lo_a, hi_a)
+    sb = _sync_compare_summary(trace_b, lo_b, hi_b)
+    sync_rows = [
+        ["Sync objects", sa["objects"], sb["objects"],
+         _fmt_signed_int_delta(sa["objects"] - sb["objects"])],
+        ["Holds (paired)", sa["holds"], sb["holds"],
+         _fmt_signed_int_delta(sa["holds"] - sb["holds"])],
+        ["Issues", sa["issues"], sb["issues"],
+         _fmt_signed_int_delta(sa["issues"] - sb["issues"])],
+        ["Mutex objects", sa["mutex"], sb["mutex"],
+         _fmt_signed_int_delta(sa["mutex"] - sb["mutex"])],
+        ["Semaphore objects", sa["sem"], sb["sem"],
+         _fmt_signed_int_delta(sa["sem"] - sb["sem"])],
+        ["Queue objects", sa["queue"], sb["queue"],
+         _fmt_signed_int_delta(sa["queue"] - sb["queue"])],
+    ]
+
+    return summary_rows, top_rows, mig_rows, block_rows, pre_rows, sync_rows
 
 def _compare_csv_cell(v: object) -> str:
     s = str(v)
@@ -3327,7 +3462,10 @@ def _table_widget_rows(table: "QTableWidget") -> List[List[str]]:
 
 def _build_compare_csv(name_a: str, name_b: str, scope_enabled: bool,
                          summary: List[List], top: List[List],
-                         mig: List[List]) -> str:
+                         mig: List[List],
+                         blocking: Optional[List[List]] = None,
+                         preemption: Optional[List[List]] = None,
+                         sync: Optional[List[List]] = None) -> str:
     lines: List[str] = []
     lines.append(f"Trace A,{_compare_csv_cell(name_a)}")
     lines.append(f"Trace B,{_compare_csv_cell(name_b)}")
@@ -3354,6 +3492,30 @@ def _build_compare_csv(name_a: str, name_b: str, scope_enabled: bool,
         if len(row) >= 12:
             lines.append(",".join(_compare_csv_cell(c) for c in row[:12]))
 
+    if blocking:
+        lines.append("")
+        lines.append("Blocking Time")
+        lines.append("Task,Gaps A,Gaps B,Avg A,Avg B,Δ avg")
+        for row in blocking:
+            if len(row) >= 6:
+                lines.append(",".join(_compare_csv_cell(c) for c in row[:6]))
+
+    if preemption:
+        lines.append("")
+        lines.append("Preemption Chains")
+        lines.append("Victim,Count A,Count B,Δ,Total A,Total B")
+        for row in preemption:
+            if len(row) >= 6:
+                lines.append(",".join(_compare_csv_cell(c) for c in row[:6]))
+
+    if sync:
+        lines.append("")
+        lines.append("Sync Objects")
+        lines.append("Metric,Trace A,Trace B,Δ")
+        for row in sync:
+            if len(row) >= 4:
+                lines.append(",".join(_compare_csv_cell(c) for c in row[:4]))
+
     return "\n".join(lines)
 
 _COMPARE_HTML_STYLE = """
@@ -3376,7 +3538,10 @@ _COMPARE_HTML_STYLE = """
 
 def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
                         summary: List[List], top: List[List],
-                        mig: List[List]) -> str:
+                        mig: List[List],
+                        blocking: Optional[List[List]] = None,
+                        preemption: Optional[List[List]] = None,
+                        sync: Optional[List[List]] = None) -> str:
     scope_note = (
         "Each side uses its own tab cursor range (C1–Cn) when 2+ cursors are placed."
         if scope_enabled else "Full trace span on each side.")
@@ -3396,6 +3561,9 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
     summary_body = _rows_html(summary, 4, "No data")
     top_body = _rows_html(top, 4, "No user tasks in either trace")
     mig_body = _rows_html(mig, 12, "No migrated tasks in either trace")
+    block_body = _rows_html(blocking or [], 6, "No blocking samples in either trace")
+    pre_body = _rows_html(preemption or [], 6, "No preemption chains in either trace")
+    sync_body = _rows_html(sync or [], 4, "No sync instrumentation in either trace")
 
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"/><title>BTF Trace Compare</title>
@@ -3416,6 +3584,18 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
   <section class="report-card"><h2>Core Migrations</h2>
     <table><thead><tr><th>Task</th><th>Migr A</th><th>Migr B</th><th>Δ</th><th>Rate A</th><th>Rate B</th><th>Rate Δ</th><th>Dwell A</th><th>Dwell B</th><th>Dwell Δ</th><th>Ping A</th><th>Ping B</th></tr></thead>
     <tbody>{mig_body}</tbody></table>
+  </section>
+  <section class="report-card"><h2>Blocking Time</h2>
+    <table><thead><tr><th>Task</th><th>Gaps A</th><th>Gaps B</th><th>Avg A</th><th>Avg B</th><th>Δ avg</th></tr></thead>
+    <tbody>{block_body}</tbody></table>
+  </section>
+  <section class="report-card"><h2>Preemption Chains</h2>
+    <table><thead><tr><th>Victim</th><th>Count A</th><th>Count B</th><th>Δ</th><th>Total A</th><th>Total B</th></tr></thead>
+    <tbody>{pre_body}</tbody></table>
+  </section>
+  <section class="report-card"><h2>Sync Objects</h2>
+    <table><thead><tr><th>Metric</th><th>Trace A</th><th>Trace B</th><th>Δ</th></tr></thead>
+    <tbody>{sync_body}</tbody></table>
   </section>
 </div></body></html>"""
 
@@ -15092,13 +15272,13 @@ class _StatsSectionGrip(QWidget):
         p.end()
 
 class _TraceCompareDialog(QDialog):
-    """Compare summary, top tasks, and core migrations between two open trace tabs."""
+    """Compare summary, top tasks, migrations, blocking, preemption, and sync between two tabs."""
 
     def __init__(self, win: "MainWindow", parent=None) -> None:
         super().__init__(parent or win)
         self.setWindowTitle("Trace Compare")
         self.setModal(True)
-        self.resize(760, 480)
+        self.resize(900, 520)
         lay = QVBoxLayout(self)
         row = QHBoxLayout()
         row.addWidget(QLabel("Trace A:"))
@@ -15111,6 +15291,7 @@ class _TraceCompareDialog(QDialog):
 
         self._scope_cb = QCheckBox(
             "Limit to each tab's cursor range (C1–Cn, when 2+ cursors placed)")
+        self._scope_cb.setChecked(True)
         lay.addWidget(self._scope_cb)
 
         self._pages = QTabWidget()
@@ -15124,13 +15305,26 @@ class _TraceCompareDialog(QDialog):
         self._mig_table.setHorizontalHeaderLabels(
             ["Task", "Migr A", "Migr B", "Δ", "Rate A", "Rate B", "Rate Δ",
              "Dwell A", "Dwell B", "Dwell Δ", "Ping A", "Ping B"])
-        for tbl in (self._summary_table, self._top_table, self._mig_table):
+        self._block_table = QTableWidget(0, 6)
+        self._block_table.setHorizontalHeaderLabels(
+            ["Task", "Gaps A", "Gaps B", "Avg A", "Avg B", "Δ avg"])
+        self._preempt_table = QTableWidget(0, 6)
+        self._preempt_table.setHorizontalHeaderLabels(
+            ["Victim", "Count A", "Count B", "Δ", "Total A", "Total B"])
+        self._sync_table = QTableWidget(0, 4)
+        self._sync_table.setHorizontalHeaderLabels(
+            ["Metric", "Trace A", "Trace B", "Δ"])
+        for tbl in (self._summary_table, self._top_table, self._mig_table,
+                    self._block_table, self._preempt_table, self._sync_table):
             tbl.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
             tbl.verticalHeader().setVisible(False)
             tbl.horizontalHeader().setStretchLastSection(True)
         self._pages.addTab(self._summary_table, "Summary")
         self._pages.addTab(self._top_table, "Top Tasks")
         self._pages.addTab(self._mig_table, "Core Migrations")
+        self._pages.addTab(self._block_table, "Blocking")
+        self._pages.addTab(self._preempt_table, "Preemption")
+        self._pages.addTab(self._sync_table, "Sync")
         lay.addWidget(self._pages, 1)
 
         exp_row = QHBoxLayout()
@@ -15201,16 +15395,20 @@ class _TraceCompareDialog(QDialog):
         ta = self._trace_for_combo(self._combo_a)
         tb = self._trace_for_combo(self._combo_b)
         if ta is None or tb is None:
-            self._summary_table.setRowCount(0)
-            self._top_table.setRowCount(0)
-            self._mig_table.setRowCount(0)
+            for tbl in (self._summary_table, self._top_table, self._mig_table,
+                        self._block_table, self._preempt_table, self._sync_table):
+                tbl.setRowCount(0)
             return
         lo_a, hi_a = self._range_for_trace(self._combo_a)
         lo_b, hi_b = self._range_for_trace(self._combo_b)
-        summary, top, mig = _build_trace_compare_rows(ta, tb, lo_a, hi_a, lo_b, hi_b)
+        (summary, top, mig, blocking, preemption, sync) = _build_trace_compare_rows(
+            ta, tb, lo_a, hi_a, lo_b, hi_b)
         self._fill_table(self._summary_table, summary)
         self._fill_table(self._top_table, top)
         self._fill_table(self._mig_table, mig)
+        self._fill_table(self._block_table, blocking)
+        self._fill_table(self._preempt_table, preemption)
+        self._fill_table(self._sync_table, sync)
 
     def _tab_name(self, combo: QComboBox) -> str:
         return combo.currentText() or "Trace"
@@ -15239,6 +15437,9 @@ class _TraceCompareDialog(QDialog):
             _table_widget_rows(self._summary_table),
             _table_widget_rows(self._top_table),
             _table_widget_rows(self._mig_table),
+            _table_widget_rows(self._block_table),
+            _table_widget_rows(self._preempt_table),
+            _table_widget_rows(self._sync_table),
         )
         try:
             with open(path, "w", newline="", encoding="utf-8-sig") as fh:
@@ -15275,6 +15476,9 @@ class _TraceCompareDialog(QDialog):
             _table_widget_rows(self._summary_table),
             _table_widget_rows(self._top_table),
             _table_widget_rows(self._mig_table),
+            _table_widget_rows(self._block_table),
+            _table_widget_rows(self._preempt_table),
+            _table_widget_rows(self._sync_table),
         )
         try:
             with open(path, "w", encoding="utf-8") as fh:
@@ -19665,6 +19869,7 @@ class _SettingsDialog(QDialog):
                  max_cursors: int,
                  show_sti: bool, show_grid: bool,
                  show_legend: bool, show_stats: bool, show_marks: bool,
+                 show_find: bool = True,
                  show_hover_highlight: bool,
                  zoom_unit: str,
                  label_width: int, row_height: int, row_gap: int,
@@ -19796,9 +20001,12 @@ class _SettingsDialog(QDialog):
         self._stats_cb.setChecked(show_stats)
         self._marks_cb = QCheckBox("Marks panel")
         self._marks_cb.setChecked(show_marks)
+        self._find_cb = QCheckBox("Find panel")
+        self._find_cb.setChecked(show_find)
         v2.addWidget(self._indented(self._legend_cb))
         v2.addWidget(self._indented(self._stats_cb))
         v2.addWidget(self._indented(self._marks_cb))
+        v2.addWidget(self._indented(self._find_cb))
         self._cpu_load_cb = QCheckBox("CPU load graph")
         self._cpu_load_cb.setChecked(cpu_load)
         v2.addWidget(self._indented(self._cpu_load_cb))
@@ -19976,6 +20184,7 @@ class _SettingsDialog(QDialog):
             self._legend_cb.stateChanged,
             self._stats_cb.stateChanged,
             self._marks_cb.stateChanged,
+            self._find_cb.stateChanged,
             self._cpu_load_cb.stateChanged,
             self._hover_hl_cb.stateChanged,
             self._label_width_spin.valueChanged,
@@ -20054,6 +20263,8 @@ class _SettingsDialog(QDialog):
     def is_dark(self) -> bool:            return self._theme_combo.currentIndex() == 0
     @property
     def show_marks(self) -> bool:         return self._marks_cb.isChecked()
+    @property
+    def show_find(self) -> bool:          return self._find_cb.isChecked()
     @property
     def show_hover_highlight(self) -> bool: return self._hover_hl_cb.isChecked()
 # ---------------------------------------------------------------------------
@@ -21807,6 +22018,15 @@ class StatsViewModel(ViewModelBase):
 # mvvm/find_logic
 # ===========================================================================
 
+_FIND_MODES = frozenset({
+    "contains", "exact", "regex", "migrations",
+    "sti", "intervals", "lifecycle", "pointers",
+})
+
+_TASK_LIFE_RE = re.compile(r"^(create|delete|suspend|resume)\b", re.IGNORECASE)
+_SYNC_NOTE_RE = re.compile(
+    r"^(create|take|give|delete|send|recv)(?:\s+(0x[0-9a-f]+))?$", re.IGNORECASE)
+
 def recompute_find_hits(
     trace: Optional[BtfTrace],
     query: str,
@@ -21821,6 +22041,9 @@ def recompute_find_hits(
         return [], "0 matches"
 
     mode_key = mode.strip().lower()
+    if mode_key not in _FIND_MODES:
+        mode_key = "contains"
+
     if mode_key == "migrations":
         return _find_migrations(trace, q)
 
@@ -21832,6 +22055,23 @@ def recompute_find_hits(
             regex_obj = re.compile(q, re.IGNORECASE)
         except re.error:
             return [], "Regex error"
+
+    if mode_key == "sti":
+        hits = _find_sti_hits(trace, q, regex_obj)
+        unique = sorted(set(hits))
+        return unique, f"{len(unique)} matches"
+    if mode_key == "intervals":
+        hits = _find_interval_hits(trace, q, regex_obj)
+        unique = sorted(set(hits))
+        return unique, f"{len(unique)} matches"
+    if mode_key == "lifecycle":
+        hits = _find_lifecycle_hits(trace, q, regex_obj)
+        unique = sorted(set(hits))
+        return unique, f"{len(unique)} matches"
+    if mode_key == "pointers":
+        hits = _find_pointer_hits(trace, q, regex_obj)
+        unique = sorted(set(hits))
+        return unique, f"{len(unique)} matches"
 
     hits: List[int] = []
     for mk, segs in trace.seg_map_by_merge_key.items():
@@ -21868,6 +22108,81 @@ def _find_migrations(trace: BtfTrace, query: str) -> Tuple[List[int], str]:
             hits.append(m.ns)
     unique = sorted(set(hits))
     return unique, f"{len(unique)} migration matches"
+
+def _find_sti_hits(trace: BtfTrace, query: str, regex_obj: Optional[re.Pattern]) -> List[int]:
+    hits: List[int] = []
+    q_lower = query.lower()
+    for ev in getattr(trace, "sti_events", ()):
+        hay = f"{ev.target} {ev.event or ''} {ev.note or ''} {ev.core or ''}"
+        if _haystack_matches(query, "contains", hay, regex_obj):
+            hits.append(ev.time)
+        elif not regex_obj and q_lower == hay.lower():
+            hits.append(ev.time)
+    return hits
+
+def _find_interval_hits(trace: BtfTrace, query: str, regex_obj: Optional[re.Pattern]) -> List[int]:
+    hits: List[int] = []
+    for inst in getattr(trace, "interval_instances", ()):
+        hay = f"{inst.interval_id} {inst.task_id or ''} {inst.start_ns} {inst.stop_ns}"
+        if _haystack_matches(query, "contains", hay, regex_obj):
+            hits.extend([inst.start_ns, inst.stop_ns])
+    for ev in getattr(trace, "sti_events", ()):
+        if not str(ev.target).startswith("interval_"):
+            continue
+        hay = f"{ev.target} {ev.note or ''}"
+        if _haystack_matches(query, "contains", hay, regex_obj):
+            hits.append(ev.time)
+    return hits
+
+def _parse_task_lifecycle_note(note: str) -> Optional[Tuple[str, str]]:
+    raw = (note or "").strip()
+    if not raw:
+        return None
+    m = _TASK_LIFE_RE.match(raw)
+    if not m:
+        return None
+    action = m.group(1).lower()
+    label = raw[m.end():].strip() or raw
+    return action, label
+
+def _find_lifecycle_hits(trace: BtfTrace, query: str, regex_obj: Optional[re.Pattern]) -> List[int]:
+    hits: List[int] = []
+    for ev in getattr(trace, "sti_events", ()):
+        if ev.target != "task":
+            continue
+        parsed = _parse_task_lifecycle_note(ev.note)
+        if not parsed:
+            continue
+        action, label = parsed
+        hay = f"{action} {label} {ev.note or ''}"
+        if _haystack_matches(query, "contains", hay, regex_obj):
+            hits.append(ev.time)
+    return hits
+
+def _parse_sync_note(note: str) -> Optional[Tuple[str, str]]:
+    m = _SYNC_NOTE_RE.match((note or "").strip())
+    if not m:
+        return None
+    ptr = (m.group(2) or "0").lower()
+    return m.group(1).lower(), ptr
+
+def _find_pointer_hits(trace: BtfTrace, query: str, regex_obj: Optional[re.Pattern]) -> List[int]:
+    hits: List[int] = []
+    q = query.strip()
+    for ev in getattr(trace, "sti_events", ()):
+        parsed = _parse_sync_note(ev.note)
+        ptr = parsed[1] if parsed else ""
+        hay = f"{ev.target} {ev.note or ''} {ptr}"
+        matched = False
+        if regex_obj is not None:
+            matched = bool(regex_obj.search(hay))
+        elif q.lower() == ptr.lower() or q.lower() == (ev.note or "").lower():
+            matched = True
+        elif q.lower() in hay.lower():
+            matched = True
+        if matched:
+            hits.append(ev.time)
+    return hits
 
 def _haystack_matches(
     query: str,
@@ -25728,7 +26043,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._find_input.returnPressed.connect(self._find_next)
         find_v.addWidget(self._find_input)
         self._find_mode_combo = QComboBox()
-        self._find_mode_combo.addItems(["Contains", "Exact", "Regex", "Migrations"])
+        self._find_mode_combo.addItems([
+            "Contains", "Exact", "Regex", "Migrations",
+            "STI", "Intervals", "Lifecycle", "Pointers",
+        ])
         self._find_mode_combo.setCurrentIndex(0)
         self._find_mode_combo.currentIndexChanged.connect(self._recompute_find_hits)
         find_v.addWidget(self._find_mode_combo)
@@ -27524,6 +27842,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if vals["show_marks"] != self._show_marks:
             self._show_marks = vals["show_marks"]
             self._sync_panel_tab_visibility()
+        if vals.get("show_find", self._show_find) != self._show_find:
+            self._show_find = vals["show_find"]
+            self._act_show_find.setChecked(self._show_find)
+            self._sync_panel_tab_visibility()
         if vals.get("show_cpu_load", self._show_cpu_load) != self._show_cpu_load:
             self._show_cpu_load = vals["show_cpu_load"]
             for tab in self._tabs:
@@ -27583,6 +27905,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             updates["show_stats"] = str(self._show_stats).lower()
         if snap["show_marks"] != self._show_marks:
             updates["show_marks"] = str(self._show_marks).lower()
+        if snap.get("show_find", self._show_find) != self._show_find:
+            updates["show_find"] = str(self._show_find).lower()
         if snap.get("show_cpu_load", self._show_cpu_load) != self._show_cpu_load:
             updates["show_cpu_load"] = str(self._show_cpu_load).lower()
         if snap["show_hover_highlight"] != self._hover_highlight_val:
@@ -27623,6 +27947,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "show_legend":              self._show_legend,
             "show_stats":               self._show_stats,
             "show_marks":               self._show_marks,
+            "show_find":                self._show_find,
             "show_cpu_load":            self._show_cpu_load,
             "show_hover_highlight":     self._hover_highlight_val,
             "colorblind_safe":          self._colorblind_val,
@@ -27645,6 +27970,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             show_legend=self._show_legend,
             show_stats=self._show_stats,
             show_marks=self._show_marks,
+            show_find=self._show_find,
             cpu_load=self._show_cpu_load,
             label_width=self._label_width_val,
             row_height=self._row_height_val,
@@ -27669,6 +27995,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "show_legend":              dlg.show_legend,
             "show_stats":               dlg.show_stats,
             "show_marks":               dlg.show_marks,
+            "show_find":                dlg.show_find,
             "show_cpu_load":            dlg.cpu_load,
             "show_hover_highlight":     dlg.show_hover_highlight,
             "colorblind_safe":          dlg.colorblind_safe,
@@ -28170,6 +28497,15 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         find_idx = self._find_mode_combo.currentIndex()
         find_mode = (_PORTABLE_FIND_MODES[find_idx]
                      if 0 <= find_idx < len(_PORTABLE_FIND_MODES) else "contains")
+        mk, kind, plot_open, preemptor, interval_id = self._stats_panel.capture_plot_session()
+        plot_payload = None
+        if plot_open and kind:
+            plot_payload = {
+                "mk": mk,
+                "kind": kind,
+                "preemptor": preemptor,
+                "intervalId": interval_id,
+            }
         return {
             "version": SESSION_PORTABLE_VERSION,
             "traceName": os.path.basename(tab.path if tab else self._current_file or "trace.btf"),
@@ -28198,13 +28534,16 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "findQuery": self._find_input.text().strip(),
             "findMode": find_mode,
             "pinnedHighlightKey": sc._locked_task,
+            "scopeToCursors": bool(getattr(self._stats_panel, "_scope_to_cursors", True)),
+            "openPlot": plot_payload,
+            "compareScopeToCursors": True,
         }
 
     def _apply_portable_session_payload(self, data: dict) -> None:
         """Restore cursors, marks, viewport, and UI state from portable session JSON."""
         if not isinstance(data, dict):
             raise ValueError("Invalid session file")
-        if data.get("version") != SESSION_PORTABLE_VERSION:
+        if data.get("version") not in (1, SESSION_PORTABLE_VERSION):
             raise ValueError(f"Unsupported session version: {data.get('version')}")
 
         exp_name = data.get("traceName") or ""
@@ -28322,6 +28661,23 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             sc.set_highlighted_task(mk, locked=True)
         else:
             sc.set_highlighted_task(None)
+
+        if "scopeToCursors" in data and hasattr(self._stats_panel, "_scope_cb"):
+            self._stats_panel._scope_cb.blockSignals(True)
+            self._stats_panel._scope_cb.setChecked(bool(data.get("scopeToCursors", True)))
+            self._stats_panel._scope_cb.blockSignals(False)
+            self._stats_panel._on_scope_toggled(bool(data.get("scopeToCursors", True)))
+
+        plot = data.get("openPlot")
+        if isinstance(plot, dict) and self._trace is not None:
+            self._stats_panel.restore_plot_session(
+                self._trace,
+                plot.get("mk"),
+                plot.get("kind"),
+                True,
+                plot.get("preemptor"),
+                plot.get("intervalId"),
+            )
 
         if tab := self._active_tab:
             self._stash_tab_state(tab)
@@ -29251,7 +29607,7 @@ def _cli_compare_run(args: argparse.Namespace) -> int:
     name_a = args.name_a or os.path.basename(path_a)
     name_b = args.name_b or os.path.basename(path_b)
     scope_enabled = (lo_a is not None) or (lo_b is not None)
-    summary, top, mig = _build_trace_compare_rows(
+    summary, top, mig, blocking, preemption, sync = _build_trace_compare_rows(
         trace_a, trace_b, lo_a, hi_a, lo_b, hi_b)
 
     fmt, html_path, csv_path = _cli_export_output_paths(args.output, args.format)
@@ -29260,10 +29616,13 @@ def _cli_compare_run(args: argparse.Namespace) -> int:
         if fmt in ("html", "both"):
             with open(html_path, "w", encoding="utf-8") as fh:
                 fh.write(_build_compare_html(
-                    name_a, name_b, scope_enabled, summary, top, mig))
+                    name_a, name_b, scope_enabled, summary, top, mig,
+                    blocking, preemption, sync))
             written.append(html_path)
         if fmt in ("csv", "both"):
-            text = _build_compare_csv(name_a, name_b, scope_enabled, summary, top, mig)
+            text = _build_compare_csv(
+                name_a, name_b, scope_enabled, summary, top, mig,
+                blocking, preemption, sync)
             with open(csv_path, "w", newline="", encoding="utf-8-sig") as fh:
                 fh.write(text)
             written.append(csv_path)

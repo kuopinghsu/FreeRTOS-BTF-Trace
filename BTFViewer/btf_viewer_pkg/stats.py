@@ -2030,13 +2030,13 @@ class _StatsSectionGrip(QWidget):
         p.end()
 
 class _TraceCompareDialog(QDialog):
-    """Compare summary, top tasks, and core migrations between two open trace tabs."""
+    """Compare summary, top tasks, migrations, blocking, preemption, and sync between two tabs."""
 
     def __init__(self, win: "MainWindow", parent=None) -> None:
         super().__init__(parent or win)
         self.setWindowTitle("Trace Compare")
         self.setModal(True)
-        self.resize(760, 480)
+        self.resize(900, 520)
         lay = QVBoxLayout(self)
         row = QHBoxLayout()
         row.addWidget(QLabel("Trace A:"))
@@ -2049,6 +2049,7 @@ class _TraceCompareDialog(QDialog):
 
         self._scope_cb = QCheckBox(
             "Limit to each tab's cursor range (C1–Cn, when 2+ cursors placed)")
+        self._scope_cb.setChecked(True)
         lay.addWidget(self._scope_cb)
 
         self._pages = QTabWidget()
@@ -2062,13 +2063,26 @@ class _TraceCompareDialog(QDialog):
         self._mig_table.setHorizontalHeaderLabels(
             ["Task", "Migr A", "Migr B", "Δ", "Rate A", "Rate B", "Rate Δ",
              "Dwell A", "Dwell B", "Dwell Δ", "Ping A", "Ping B"])
-        for tbl in (self._summary_table, self._top_table, self._mig_table):
+        self._block_table = QTableWidget(0, 6)
+        self._block_table.setHorizontalHeaderLabels(
+            ["Task", "Gaps A", "Gaps B", "Avg A", "Avg B", "Δ avg"])
+        self._preempt_table = QTableWidget(0, 6)
+        self._preempt_table.setHorizontalHeaderLabels(
+            ["Victim", "Count A", "Count B", "Δ", "Total A", "Total B"])
+        self._sync_table = QTableWidget(0, 4)
+        self._sync_table.setHorizontalHeaderLabels(
+            ["Metric", "Trace A", "Trace B", "Δ"])
+        for tbl in (self._summary_table, self._top_table, self._mig_table,
+                    self._block_table, self._preempt_table, self._sync_table):
             tbl.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
             tbl.verticalHeader().setVisible(False)
             tbl.horizontalHeader().setStretchLastSection(True)
         self._pages.addTab(self._summary_table, "Summary")
         self._pages.addTab(self._top_table, "Top Tasks")
         self._pages.addTab(self._mig_table, "Core Migrations")
+        self._pages.addTab(self._block_table, "Blocking")
+        self._pages.addTab(self._preempt_table, "Preemption")
+        self._pages.addTab(self._sync_table, "Sync")
         lay.addWidget(self._pages, 1)
 
         exp_row = QHBoxLayout()
@@ -2139,16 +2153,20 @@ class _TraceCompareDialog(QDialog):
         ta = self._trace_for_combo(self._combo_a)
         tb = self._trace_for_combo(self._combo_b)
         if ta is None or tb is None:
-            self._summary_table.setRowCount(0)
-            self._top_table.setRowCount(0)
-            self._mig_table.setRowCount(0)
+            for tbl in (self._summary_table, self._top_table, self._mig_table,
+                        self._block_table, self._preempt_table, self._sync_table):
+                tbl.setRowCount(0)
             return
         lo_a, hi_a = self._range_for_trace(self._combo_a)
         lo_b, hi_b = self._range_for_trace(self._combo_b)
-        summary, top, mig = _build_trace_compare_rows(ta, tb, lo_a, hi_a, lo_b, hi_b)
+        (summary, top, mig, blocking, preemption, sync) = _build_trace_compare_rows(
+            ta, tb, lo_a, hi_a, lo_b, hi_b)
         self._fill_table(self._summary_table, summary)
         self._fill_table(self._top_table, top)
         self._fill_table(self._mig_table, mig)
+        self._fill_table(self._block_table, blocking)
+        self._fill_table(self._preempt_table, preemption)
+        self._fill_table(self._sync_table, sync)
 
     def _tab_name(self, combo: QComboBox) -> str:
         return combo.currentText() or "Trace"
@@ -2177,6 +2195,9 @@ class _TraceCompareDialog(QDialog):
             _table_widget_rows(self._summary_table),
             _table_widget_rows(self._top_table),
             _table_widget_rows(self._mig_table),
+            _table_widget_rows(self._block_table),
+            _table_widget_rows(self._preempt_table),
+            _table_widget_rows(self._sync_table),
         )
         try:
             with open(path, "w", newline="", encoding="utf-8-sig") as fh:
@@ -2213,6 +2234,9 @@ class _TraceCompareDialog(QDialog):
             _table_widget_rows(self._summary_table),
             _table_widget_rows(self._top_table),
             _table_widget_rows(self._mig_table),
+            _table_widget_rows(self._block_table),
+            _table_widget_rows(self._preempt_table),
+            _table_widget_rows(self._sync_table),
         )
         try:
             with open(path, "w", encoding="utf-8") as fh:
@@ -6603,6 +6627,7 @@ class _SettingsDialog(QDialog):
                  max_cursors: int,
                  show_sti: bool, show_grid: bool,
                  show_legend: bool, show_stats: bool, show_marks: bool,
+                 show_find: bool = True,
                  show_hover_highlight: bool,
                  zoom_unit: str,
                  label_width: int, row_height: int, row_gap: int,
@@ -6734,9 +6759,12 @@ class _SettingsDialog(QDialog):
         self._stats_cb.setChecked(show_stats)
         self._marks_cb = QCheckBox("Marks panel")
         self._marks_cb.setChecked(show_marks)
+        self._find_cb = QCheckBox("Find panel")
+        self._find_cb.setChecked(show_find)
         v2.addWidget(self._indented(self._legend_cb))
         v2.addWidget(self._indented(self._stats_cb))
         v2.addWidget(self._indented(self._marks_cb))
+        v2.addWidget(self._indented(self._find_cb))
         self._cpu_load_cb = QCheckBox("CPU load graph")
         self._cpu_load_cb.setChecked(cpu_load)
         v2.addWidget(self._indented(self._cpu_load_cb))
@@ -6914,6 +6942,7 @@ class _SettingsDialog(QDialog):
             self._legend_cb.stateChanged,
             self._stats_cb.stateChanged,
             self._marks_cb.stateChanged,
+            self._find_cb.stateChanged,
             self._cpu_load_cb.stateChanged,
             self._hover_hl_cb.stateChanged,
             self._label_width_spin.valueChanged,
@@ -6992,6 +7021,8 @@ class _SettingsDialog(QDialog):
     def is_dark(self) -> bool:            return self._theme_combo.currentIndex() == 0
     @property
     def show_marks(self) -> bool:         return self._marks_cb.isChecked()
+    @property
+    def show_find(self) -> bool:          return self._find_cb.isChecked()
     @property
     def show_hover_highlight(self) -> bool: return self._hover_hl_cb.isChecked()
 # ---------------------------------------------------------------------------

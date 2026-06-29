@@ -22,6 +22,7 @@
 #define __BTF_TRACE_H__
 
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #define TRACE_VER_MAJOR                 1
@@ -116,6 +117,30 @@ void btf_trace_add_task(uint8_t *task_name, uint32_t task_id, uint32_t priority,
 void btf_trace_add_event(uint32_t param1, uint32_t param2, event_t event);
 void btf_trace_increment_tick(uint32_t xTickCount);
 void btf_dump(void);
+
+/** Quality / integrity flags written as BTF `#key value` meta lines. */
+typedef struct {
+    int ring_overflow;
+    int task_table_overflow;
+    int truncated;
+} btf_quality_flags_t;
+
+/** Emit `#ringOverflow`, `#taskTableOverflow`, `#truncated` when set. */
+static inline void btf_write_quality_meta(FILE *out, const btf_quality_flags_t *q)
+{
+    if (out == NULL || q == NULL) {
+        return;
+    }
+    if (q->ring_overflow) {
+        fprintf(out, "#ringOverflow true\n");
+    }
+    if (q->task_table_overflow) {
+        fprintf(out, "#taskTableOverflow true\n");
+    }
+    if (q->truncated) {
+        fprintf(out, "#truncated true\n");
+    }
+}
 
 #endif // __BTF_TRACE_H__
 

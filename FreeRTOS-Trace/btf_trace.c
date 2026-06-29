@@ -68,6 +68,8 @@
 static volatile uint32_t trace_en;
 static TRACE trace_data;
 static int trace_wrap_warned;
+static volatile uint32_t trace_task_table_overflow;
+static volatile uint32_t trace_stopped_cleanly;
 
 static uint32_t last_timestamp;
 static uint64_t cyc_to_time_acc;
@@ -92,10 +94,13 @@ void btf_traceSTART(void) {
     last_timestamp = 0;
     cyc_to_time_acc = 0;
     trace_wrap_warned = 0;
+    trace_task_table_overflow = 0;
+    trace_stopped_cleanly = 0;
 }
 
 void btf_traceEND(void) {
     trace_en = 0;
+    trace_stopped_cleanly = 1;
 
 #ifdef HAVE_FILE_DUMP
     do {
@@ -145,17 +150,21 @@ void btf_trace_add_task (
     int i;
     if (!trace_en) { return; }
 
-    // task_id is a unique ID, which will increase by 1 each time a TCB is created.
-    // Copy task name with a local loop instead of strncpy() to avoid pulling in
-    // libc string helpers in the FreeRTOS firmware build.
-    i = 0;
-    while( i < ( configMAX_TRACE_TASK_NAME_LEN - 1 ) && task_name[ i ] != 0 )
-    {
-        trace_data.d.task_lists[ task_id ][ i ] = task_name[ i ];
-        i++;
+    if (task_id == 0 || task_id >= configMAX_TRACE_TASKS) {
+        trace_task_table_overflow = 1;
+    } else {
+        // task_id is a unique ID, which will increase by 1 each time a TCB is created.
+        // Copy task name with a local loop instead of strncpy() to avoid pulling in
+        // libc string helpers in the FreeRTOS firmware build.
+        i = 0;
+        while( i < ( configMAX_TRACE_TASK_NAME_LEN - 1 ) && task_name[ i ] != 0 )
+        {
+            trace_data.d.task_lists[ task_id ][ i ] = task_name[ i ];
+            i++;
+        }
+        trace_data.d.task_lists[ task_id ][ i ] = 0;
+        trace_data.h.task_count++;
     }
-    trace_data.d.task_lists[ task_id ][ i ] = 0;
-    trace_data.h.task_count++;
 
     trace_data.d.event_lists[trace_data.h.current_index].timestamp = xGetCycles();
     trace_data.d.event_lists[trace_data.h.current_index].param1 = task_id;
@@ -291,6 +300,17 @@ void btf_dump(
 #else
     printf("#timeScale ns\n");
 #endif
+
+    {
+        btf_quality_flags_t quality = {
+            .ring_overflow = trace_wrap_warned || (
+                trace_data.h.max_events > 0 &&
+                trace_data.h.event_count >= trace_data.h.max_events),
+            .task_table_overflow = (int)trace_task_table_overflow,
+            .truncated = !trace_stopped_cleanly,
+        };
+        btf_write_quality_meta(stdout, &quality);
+    }
 
     if (trace_data.h.event_count != trace_data.h.max_events)
         current_index = 0;

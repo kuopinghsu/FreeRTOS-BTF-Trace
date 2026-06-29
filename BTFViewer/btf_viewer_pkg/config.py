@@ -228,8 +228,11 @@ _MAX_CURSORS         = 8  # Hard upper bound - must equal len(_CURSOR_COLORS).
 _DEFAULT_MAX_CURSORS = 4  # Default number of simultaneously visible cursors.
 
 # Portable session JSON (shared with BTFViewer/web sessionPortable.js)
-SESSION_PORTABLE_VERSION = 1
-_PORTABLE_FIND_MODES = ("contains", "exact", "regex", "migrations")
+SESSION_PORTABLE_VERSION = 2
+_PORTABLE_FIND_MODES = (
+    "contains", "exact", "regex", "migrations",
+    "sti", "intervals", "lifecycle", "pointers",
+)
 
 def _snapshot_tab_filters(scene) -> dict:
     """Per-tab legend/heatmap filter state (portable session + tab_view rc)."""

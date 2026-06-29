@@ -27,6 +27,18 @@
       <option value="migrations">
         Migrations
       </option>
+      <option value="sti">
+        STI events
+      </option>
+      <option value="intervals">
+        Intervals
+      </option>
+      <option value="lifecycle">
+        Lifecycle
+      </option>
+      <option value="pointers">
+        Pointers
+      </option>
     </select>
     <div class="find-btns">
       <button
@@ -78,7 +90,9 @@ watch(() => props.mode, v => { localMode.value = v })
 const statusText = computed(() => {
   if (props.error) return props.error
   if (!localQuery.value.trim()) return '0 matches'
-  const label = localMode.value === 'migrations' ? 'migration matches' : 'matches'
+  const label = ['migrations', 'sti', 'intervals', 'lifecycle', 'pointers'].includes(localMode.value)
+    ? `${localMode.value} matches`
+    : 'matches'
   if (props.hitCount === 0) return `0 ${label}`
   if (props.hitIndex >= 0) return `${props.hitCount} ${label} (at ${props.hitIndex + 1})`
   return `${props.hitCount} ${label}`
