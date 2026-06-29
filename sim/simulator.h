@@ -35,7 +35,7 @@ constexpr uint64_t kClintBase = 0x02000000ull;
 constexpr uint64_t kMtimeBase = kClintBase + 0xBFF8ull;
 constexpr uint64_t kMtimecmpBase = kClintBase + 0x4000ull;
 constexpr uint64_t kPageSize = 4096ull;
-constexpr int kMaxHarts = 128;
+constexpr int kMaxHarts = 16;
 
 struct Options {
     int cores = 1;
