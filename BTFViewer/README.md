@@ -415,11 +415,30 @@ The Legend lists every task with its colour swatch and `Name[id]` label.
 
 ## Zoom and Pan
 
+Wheel and trackpad gestures depend on **orientation** (see [Orientation](#orientation)). `Shift` swaps the time-axis and row/column-axis mappings.
+
+### Horizontal orientation (time left → right)
+
 | Action | Effect |
 |--------|--------|
 | `Ctrl` + Scroll wheel | Zoom in or out centred on the pointer |
 | Two-finger pinch (macOS) | Zoom in or out |
-| Scroll wheel / trackpad swipe | Pan along the time axis |
+| Vertical trackpad swipe / vertical scroll wheel | Scroll task/core rows vertically |
+| Horizontal trackpad swipe | Pan along the time axis |
+| `Shift` + scroll wheel | Swap axes (vertical swipe pans time, horizontal swipe scrolls rows) |
+| `Ctrl+0` | Fit entire trace to window |
+| **1:1** toolbar button | Reset to default zoom (2 timescale units/pixel; for `ns` timescale, UI shows `2 ns/px`; configurable in Settings) |
+| Toolbar zoom+ / zoom− buttons | Zoom in or out by 2× |
+
+### Vertical orientation (time top → bottom)
+
+| Action | Effect |
+|--------|--------|
+| `Ctrl` + Scroll wheel | Zoom in or out centred on the pointer |
+| Two-finger pinch (macOS) | Zoom in or out |
+| Vertical trackpad swipe / vertical scroll wheel | Pan along the time axis |
+| Horizontal trackpad swipe | Scroll task/core columns horizontally |
+| `Shift` + scroll wheel | Swap axes (vertical swipe scrolls columns, horizontal swipe pans time) |
 | `Ctrl+0` | Fit entire trace to window |
 | **1:1** toolbar button | Reset to default zoom (2 timescale units/pixel; for `ns` timescale, UI shows `2 ns/px`; configurable in Settings) |
 | Toolbar zoom+ / zoom− buttons | Zoom in or out by 2× |
@@ -560,11 +579,18 @@ Sample traces in the repo: `tracedata/example.btf` (small), `tracedata/example-4
 
 ### Zoom & pan
 
+Wheel and trackpad gestures depend on **orientation** (`↔ Horizontal` / `↕ Vertical` toolbar buttons). `Shift` swaps the time-axis and row/column-axis mappings. See [Zoom and Pan](#zoom-and-pan) for the full table (Desktop and Web use the same rules).
+
+**Horizontal orientation (default):** vertical swipe scrolls rows; horizontal swipe pans time.
+
+**Vertical orientation:** vertical swipe pans time; horizontal swipe scrolls columns.
+
 | Action | Effect |
 |--------|--------|
 | `Ctrl` + scroll wheel | Zoom in / out centred on mouse pointer |
-| `Shift` + scroll wheel | Scroll task/core rows vertically |
-| Plain scroll wheel / trackpad swipe | Pan along the time axis |
+| Vertical trackpad swipe / vertical scroll wheel | Scroll rows (horizontal layout) or pan time (vertical layout) |
+| Horizontal trackpad swipe | Pan time (horizontal layout) or scroll columns (vertical layout) |
+| `Shift` + scroll wheel | Swap the two axes above |
 | **+** / **−** toolbar buttons | Zoom in / out around viewport centre |
 | **Fit** toolbar button | Fit the entire trace into the viewport |
 

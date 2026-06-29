@@ -207,6 +207,9 @@ import {
   applyPanPlotY,
   applyZoomAroundPlotX,
   applyZoomAroundPlotY,
+  physicalVerticalDominant,
+  wheelGesturePlan,
+  wheelPanDeltas,
 } from '../utils/viewportWheel.js'
 
 const NUM_BINS = CPU_LOAD_NUM_BINS
@@ -503,24 +506,19 @@ function _buildWheelMutator(e) {
       ? applyZoomAroundPlotY(vp, props.trace, plotY, plotHeight, TITLE_H, factor)
       : applyZoomAroundPlotX(vp, props.trace, plotX, plotWidth, factor))
   }
-  if (vert) {
-    const isHorizInput = e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)
-    if (isHorizInput) {
-      const dx = e.shiftKey ? e.deltaY : e.deltaX
-      return vp => ({ ...vp, scrollX: Math.max(0, (vp.scrollX || 0) + dx) })
-    }
-    const dy = e.deltaMode === 1 ? e.deltaY * props.cpuLoadRowH : e.deltaY
-    return vp => applyPanPlotY(vp, props.trace, dy, plotHeight, TITLE_H)
+  const horiz = !vert
+  const plan = wheelGesturePlan(e, horiz)
+  if (plan.doTime && plan.timeDelta !== 0) {
+    return vert
+      ? vp => applyPanPlotY(vp, props.trace, plan.timeDelta, plotHeight, TITLE_H)
+      : vp => applyPanPlotX(vp, props.trace, plan.timeDelta, plotWidth)
   }
-  const isHorizInput = Math.abs(e.deltaX) > Math.abs(e.deltaY)
-  if (isHorizInput) {
-    return vp => applyPanPlotX(vp, props.trace, e.deltaX, plotWidth)
+  if (plan.doOrth && plan.orthDelta !== 0) {
+    return vert
+      ? vp => ({ ...vp, scrollX: Math.max(0, (vp.scrollX || 0) + plan.orthDelta) })
+      : vp => ({ ...vp, scrollY: Math.max(0, (vp.scrollY || 0) + plan.orthDelta) })
   }
-  if (e.shiftKey) {
-    return vp => applyPanPlotX(vp, props.trace, e.deltaY, plotWidth)
-  }
-  const dy = e.deltaMode === 1 ? e.deltaY * props.cpuLoadRowH : e.deltaY
-  return vp => ({ ...vp, scrollY: Math.max(0, (vp.scrollY || 0) + dy) })
+  return null
 }
 
 function onWheel(e) {
@@ -529,13 +527,14 @@ function onWheel(e) {
   e.stopPropagation()
 
   const rowsEl = rowsRef.value
+  const { dx, dy } = wheelPanDeltas(e)
   if (rowsEl
       && rowsEl.scrollHeight > rowsEl.clientHeight + 1
       && !e.ctrlKey && !e.metaKey && !e.shiftKey
-      && Math.abs(e.deltaY) >= Math.abs(e.deltaX)) {
+      && physicalVerticalDominant(e, dx, dy)) {
     _wheelQueue = null
-    const dy = e.deltaMode === 1 ? e.deltaY * props.cpuLoadRowH : e.deltaY
-    _rowsScrollDelta += dy
+    const scrollDy = e.deltaMode === 1 ? e.deltaY * props.cpuLoadRowH : e.deltaY
+    _rowsScrollDelta += scrollDy
     if (!_wheelFlushRaf) {
       _wheelFlushRaf = requestAnimationFrame(_flushWheel)
     }

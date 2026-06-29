@@ -21,11 +21,7 @@ import { hitTestSti, hitTestRow, hitTestStiVertical, hitTestColumn,
          hitTestSegment, hitTestSegmentVertical,
          findNearestCursorIndex, findNearestMark,
          RULER_H, RULER_W, HEADER_H, COL_W } from './TimelineRenderer.js'
-import { getTimelineLayout } from '../utils/timelineLayout.js'
-
-function layout() {
-  return getTimelineLayout()
-}
+import { wheelGesturePlan, applyWheelPlanToViewport } from '../utils/viewportWheel.js'
 import { taskMergeKey } from '../utils/colors.js'
 import { snapToBoundary } from '../utils/snapBoundary.js'
 
@@ -48,9 +44,11 @@ export class InteractionHandler {
    * @param {Function} options.onFitToWindow
    * @param {Function} options.onContextMenu   ({ ns, x, y }) – optional right-click callback
    * @param {Function} options.onClearSelection
+   * @param {HTMLElement} [options.wheelTarget]  wheel listener target (defaults to canvas)
    */
   constructor(canvas, options = {}) {
     this._canvas  = canvas
+    this._wheelEl = options.wheelTarget ?? canvas
     this._opts    = options
     const mc = maxCursorsFrom(options)
     this._cursors = Array.from({ length: mc }, () => null)
@@ -96,7 +94,7 @@ export class InteractionHandler {
     this._hoverCx  = 0
     this._hoverCy  = 0
 
-    canvas.addEventListener('wheel',       this._boundWheel,     { passive: false })
+    this._wheelEl.addEventListener('wheel',       this._boundWheel,     { capture: true, passive: false })
     canvas.addEventListener('mousedown',   this._boundMouseDown)
     canvas.addEventListener('mousemove',   this._boundMouseMove)
     canvas.addEventListener('mouseup',     this._boundMouseUp)
@@ -116,7 +114,7 @@ export class InteractionHandler {
       cancelAnimationFrame(this._hoverRaf)
       this._hoverRaf = null
     }
-    c.removeEventListener('wheel',       this._boundWheel)
+    this._wheelEl.removeEventListener('wheel',       this._boundWheel, { capture: true })
     c.removeEventListener('mousedown',   this._boundMouseDown)
     c.removeEventListener('mousemove',   this._boundMouseMove)
     c.removeEventListener('mouseup',     this._boundMouseUp)
@@ -388,6 +386,38 @@ export class InteractionHandler {
     this._opts.onViewportChange?.(this._applyScrollX(vp, delta))
   }
 
+  /** True when the time viewport is pinned at trace start/end (wheel orth preference). */
+  _traceScrollExtents() {
+    const trace = this._opts.getTrace()
+    const vp = this._opts.getViewport()
+    if (!trace || !vp) return { atStart: false, atEnd: false }
+    const lo = trace.timeMin >= 0 ? Math.max(0, trace.timeMin) : trace.timeMin
+    const hi = trace.timeMax
+    const span = vp.timeEnd - vp.timeStart
+    const eps = Math.max(1, span * 0.001)
+    return {
+      atStart: vp.timeStart <= lo + eps,
+      atEnd: vp.timeEnd >= hi - eps,
+    }
+  }
+
+  _applyWheelGesture(e) {
+    const horiz = !this._isVertical()
+    const { atStart, atEnd } = this._traceScrollExtents()
+    const plan = wheelGesturePlan(e, horiz, { atTraceStart: atStart, atTraceEnd: atEnd })
+    if (!plan.doTime && !plan.doOrth) return
+
+    const headerH = horiz ? RULER_H : this._vertHeaderH()
+    this._queueViewport(vp => {
+      let next = applyWheelPlanToViewport(plan, vp, horiz, headerH)
+      if (plan.doTime && plan.timeDelta !== 0) {
+        const { s, e } = this._clampPan(next.timeStart, next.timeEnd)
+        next = { ...next, timeStart: s, timeEnd: e }
+      }
+      return next
+    })
+  }
+
   // ---- Event handlers -----------------------------------------------------
 
   _onWheel(e) {
@@ -402,27 +432,8 @@ export class InteractionHandler {
       const factor = e.deltaY > 0 ? 1.15 : 0.87
       if (vert) this._queueViewport(vp => this._applyZoomAroundV(vp, cy, factor))
       else       this._queueViewport(vp => this._applyZoomAroundH(vp, cx, factor))
-    } else if (vert) {
-      // === Vertical mode ===
-      const isHorizInput = e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)
-      if (isHorizInput) {
-        const dx = e.shiftKey ? e.deltaY : e.deltaX
-        this._queueViewport(vp => this._applyScrollX(vp, dx))
-      } else {
-        const dy = e.deltaMode === 1 ? e.deltaY * (layout().rowH + layout().rowGap) : e.deltaY
-        this._queueViewport(vp => this._applyPanV(vp, dy))
-      }
     } else {
-      // === Horizontal mode (desktop parity: plain wheel pans time) ===
-      const isHorizInput = Math.abs(e.deltaX) > Math.abs(e.deltaY)
-      if (isHorizInput) {
-        this._queueViewport(vp => this._applyPanH(vp, e.deltaX))
-      } else if (e.shiftKey) {
-        this._queueViewport(vp => this._applyScrollY(vp, e.deltaY))
-      } else {
-        const delta = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY
-        this._queueViewport(vp => this._applyPanH(vp, delta))
-      }
+      this._applyWheelGesture(e)
     }
   }
 

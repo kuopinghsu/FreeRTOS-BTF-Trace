@@ -799,8 +799,10 @@ let _handler = null
 function setupHandler() {
   if (_handler) { _handler.destroy(); _handler = null }
   const target = canvasWrapEl.value || canvasEl.value
+  const wheelTarget = panelEl.value || target
   if (!target) return
   _handler = new InteractionHandler(target, {
+    wheelTarget,
     getTrace:    () => props.trace,
     getViewport: () => ({ ...viewport }),
     getMaxCursors: () => props.maxCursors,
@@ -847,7 +849,7 @@ function setupHandler() {
       const orthChanged = viewport.scrollY !== prevScrollY
         || viewport.scrollX !== prevScrollX
       emit('viewportChange', { ...viewport })
-      markInteracting(timeAxisChanged)
+      markInteracting(timeAxisChanged || orthChanged)
       // Orthogonal scroll: paint immediately — deferring to the next rAF leaves
       // one frame of empty canvas when the wheel queue flushes in this frame.
       scheduleRender(orthChanged && !timeAxisChanged)
@@ -2785,6 +2787,7 @@ onBeforeUnmount(() => {
   flex: 1;
   overflow: hidden;
   position: relative;
+  overscroll-behavior: none;
 }
 
 .timeline-panel.vert-orient {
