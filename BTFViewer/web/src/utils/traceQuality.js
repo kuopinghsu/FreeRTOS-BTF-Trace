@@ -9,6 +9,7 @@ export function collectTraceQualityWarnings(trace) {
   const meta = trace.meta || {}
 
   if (meta._versionWarning) out.push(meta._versionWarning)
+  if (meta._version_warning) out.push(meta._version_warning)
   if (meta._traceQualityWarning) out.push(meta._traceQualityWarning)
 
   const flags = meta.traceQuality || meta.trace_quality

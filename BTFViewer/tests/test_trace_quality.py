@@ -15,10 +15,8 @@ from btf_viewer_pkg.trace_quality import (  # noqa: E402
     trace_quality_summary,
 )
 
-
 def _trace(meta: dict) -> SimpleNamespace:
     return SimpleNamespace(meta=meta)
-
 
 class TraceQualityTests(unittest.TestCase):
     def test_ring_overflow_meta_line(self) -> None:
@@ -52,7 +50,6 @@ class TraceQualityTests(unittest.TestCase):
 
     def test_clean_trace_returns_none(self) -> None:
         self.assertIsNone(trace_quality_summary(_trace({"version": "2.2.0"})))
-
 
 if __name__ == "__main__":
     unittest.main()

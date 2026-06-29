@@ -12,6 +12,7 @@ from .stats import *  # noqa: F403,F401
 from .stats import _RcSettings
 from .mvvm import MainViewModel, MvvmSettingsMixin, TraceTabViewModel
 from .mvvm.tab_viewport import apply_viewport, viewport_from_json, viewport_to_json
+from .trace_quality import trace_quality_summary
 
 class _CpuLoadGraph(QWidget):
     """Synchronised CPU load chart below the main timeline.
@@ -2025,6 +2026,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._vm.set_active_index(-1)
             self._update_tab_actions()
         self._previous_tab_index = index
+        self._update_trace_quality_banner()
 
     def _close_trace_tab(self, index: int) -> None:
         if index < 0 or index >= len(self._tabs):
@@ -2891,6 +2893,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             QStatusBar QLabel#zoomScaleLabel {{ font-size:{_ui_fs}; color:{c['status_text']}; }}
             QStatusBar QCheckBox {{ font-size:{_ui_fs}; color:{c['sub_text']}; padding: 0 4px; }}
             QLabel      {{ font-size:{_ui_fs}; }}
+            QLabel#trace_quality_banner {{
+                background:#5c3d00; color:#ffe8a3; padding:6px 12px; font-size:12px;
+                border-bottom:1px solid #8a6200;
+            }}
             QCheckBox   {{ font-size:{_ui_fs}; }}
             QCheckBox::indicator              {{ width:13px; height:13px; border-radius:2px;
                          border:1.5px solid {c['cb_border']}; background:{c['cb_bg']}; }}
@@ -3288,7 +3294,19 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._central_stack.addWidget(self._welcome_page)
         self._central_stack.addWidget(self._tab_widget)
         self._central_stack.setCurrentIndex(0)
-        self.setCentralWidget(self._central_stack)
+
+        self._trace_quality_banner = QLabel()
+        self._trace_quality_banner.setObjectName("trace_quality_banner")
+        self._trace_quality_banner.setWordWrap(True)
+        self._trace_quality_banner.setVisible(False)
+
+        self._central_host = QWidget()
+        _central_lay = QVBoxLayout(self._central_host)
+        _central_lay.setContentsMargins(0, 0, 0, 0)
+        _central_lay.setSpacing(0)
+        _central_lay.addWidget(self._trace_quality_banner)
+        _central_lay.addWidget(self._central_stack, 1)
+        self.setCentralWidget(self._central_host)
 
         # --- Legend dock (right panel) ---
         self._build_legend_dock()
@@ -3782,6 +3800,21 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
         # --- Settings button ---
         _ia("Settings", self._open_settings, _IC_SETTINGS, "Open Settings  (Ctrl+,)")
+
+    def _update_trace_quality_banner(self, trace: Optional[BtfTrace] = None) -> None:
+        """Show BTF quality / version warnings above the timeline (web parity)."""
+        banner = getattr(self, "_trace_quality_banner", None)
+        if banner is None:
+            return
+        if trace is None:
+            trace = self._trace
+        text = trace_quality_summary(trace)
+        if text:
+            banner.setText(text)
+            banner.setVisible(True)
+        else:
+            banner.clear()
+            banner.setVisible(False)
 
     def _build_status_bar(self) -> None:
         sb = self.statusBar()
@@ -5116,9 +5149,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._rebuild_recent_menu()
         self._settings.flush()
         self._report_settings_io_failure(prefix="Settings save warning")
-        warn = (trace.meta or {}).get("_version_warning")
-        if warn:
-            self.statusBar().showMessage(warn, 8000)
+        self._update_trace_quality_banner(trace)
         self._continue_session_restore()
 
     def _capture_viewport_pixmap(self) -> Tuple[QPixmap, float]:

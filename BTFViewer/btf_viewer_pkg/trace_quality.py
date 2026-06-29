@@ -14,14 +14,12 @@ _MESSAGES = {
     "truncated": "Trace was truncated before normal stop.",
 }
 
-
 def _truthy_meta(value: Any) -> bool:
     if value is True or value == 1:
         return True
     if isinstance(value, str):
         return value.strip().lower() in ("1", "true", "yes")
     return False
-
 
 def collect_trace_quality_warnings(trace: Optional["BtfTrace"]) -> List[str]:
     """Human-readable warning lines from parsed BTF meta."""
@@ -71,7 +69,6 @@ def collect_trace_quality_warnings(trace: Optional["BtfTrace"]) -> List[str]:
             seen.add(line)
             unique.append(line)
     return unique
-
 
 def trace_quality_summary(trace: Optional["BtfTrace"]) -> Optional[str]:
     warnings = collect_trace_quality_warnings(trace)
