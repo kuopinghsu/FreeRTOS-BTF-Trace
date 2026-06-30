@@ -1,4 +1,8 @@
-.equ MAX_HARTS, 16         /* must match MAX_HARTS in linker.ld */
+#ifndef configNUMBER_OF_CORES
+.equ MAX_HARTS, 1
+#else
+.equ MAX_HARTS, configNUMBER_OF_CORES
+#endif
 .equ STACK_STRIDE_LOG2, 14 /* 16K per hart = 2^14; must match STACK_STRIDE in linker.ld */
 .equ CLINT_MSIP_BASE, 0x02000000
 

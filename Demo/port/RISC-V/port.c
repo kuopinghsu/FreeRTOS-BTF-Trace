@@ -116,8 +116,8 @@ BaseType_t xPortStartScheduler( void )
  * ==================================================================== */
 #else /* configNUMBER_OF_CORES > 1 */
 
-#if ( configNUMBER_OF_CORES > 16 )
-    #error "port.c: configNUMBER_OF_CORES must not exceed 16."
+#if ( configNUMBER_OF_CORES > 64 )
+    #error "port.c: configNUMBER_OF_CORES must not exceed 64."
 #endif
 
 #define portISR_STACK_WORDS 512u

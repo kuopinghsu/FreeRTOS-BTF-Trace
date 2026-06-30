@@ -140,6 +140,7 @@ export function packTrace(trace, progress) {
       stiStartsByTarget: packPlainMap(trace.stiStartsByTarget),
       stiValRange: packPlainMap(trace.stiValRange),
       tickStiTimes: trace.tickStiTimes,
+      stiEventTimes: trace.stiEventTimes,
       tickHealth: trace.tickHealth,
       cpuLoadBins: trace.cpuLoadBins,
       taskCpuNs: trace.taskCpuNs,
@@ -244,6 +245,7 @@ export function unpackTrace(packed) {
     stiStartsByTarget: unpackPlainMap(p.stiStartsByTarget),
     stiValRange: unpackPlainMap(p.stiValRange),
     tickStiTimes: p.tickStiTimes,
+    stiEventTimes: p.stiEventTimes,
     tickHealth: p.tickHealth,
     cpuLoadBins: p.cpuLoadBins,
     taskCpuNs: p.taskCpuNs,
@@ -265,6 +267,9 @@ export function finalizeAndEnrich(trace) {
     const { tagChannels, tagSamplesByChannel } = buildTagData(trace.stiEvents)
     trace.tagChannels = tagChannels
     trace.tagSamplesByChannel = tagSamplesByChannel
+  }
+  if (!trace.stiEventTimes?.length && trace.stiEvents?.length) {
+    trace.stiEventTimes = trace.stiEvents.map(e => e.time).sort((a, b) => a - b)
   }
   trace.cpuLoadBins = buildCpuLoadBins(trace.segStore, trace)
   const segIndicesByMk = segIndicesMapFromTrace(trace)

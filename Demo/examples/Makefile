@@ -7,7 +7,8 @@ ARCH_FLAGS := -march=rv64imac_zicsr_zaamo_zalrsc -mabi=lp64 -mcmodel=medany
 CFLAGS  ?= -O2 -g -ffreestanding -ffunction-sections -fdata-sections -Wall -Wextra
 DEPFLAGS = -MMD -MP
 CPPFLAGS +=
-LDFLAGS += $(ARCH_FLAGS) -nostartfiles -Wl,--no-relax -Wl,-T,../Common/linker.ld \
+LDFLAGS += $(ARCH_FLAGS) -nostartfiles -Wl,--no-relax \
+           -Wl,--defsym=MAX_HARTS=$(CORES) -Wl,-T,../Common/linker.ld \
            -Wl,--gc-sections
 LDLIBS  += -lc -lgcc
 
@@ -114,7 +115,7 @@ $(OBJDIR)/freertos_test/main.o: CPPFLAGS += $(FREERTOS_CPPFLAGS)
 # ── Common object rules ────────────────────────────────────────────────────────
 $(OBJDIR)/common/crt0.o: ../Common/crt0.S
 	@mkdir -p $(dir $@)
-	$(CC) $(ARCH_FLAGS) $(CPPFLAGS) $(CFLAGS) $(DEPFLAGS) -c -o $@ $<
+	$(CC) $(ARCH_FLAGS) $(CPPFLAGS) -DconfigNUMBER_OF_CORES=$(CORES) $(CFLAGS) $(DEPFLAGS) -c -o $@ $<
 
 $(OBJDIR)/common/syscall.o: ../Common/syscall.c
 	@mkdir -p $(dir $@)

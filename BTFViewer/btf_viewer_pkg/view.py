@@ -3696,9 +3696,12 @@ class TimelineView(QGraphicsView):
         """Reflow the timeline on every resize to preserve the current zoom ratio."""
         super().resizeEvent(event)
         self._update_label_grip_geometry()
-        self._position_virt_trace_bar()
+        win = self.window()
+        splitting = getattr(win, "_cpu_splitter_resizing", False)
+        if not splitting:
+            self._position_virt_trace_bar()
         self._nav_popup.reposition()
-        if self._scene._trace is not None:
+        if self._scene._trace is not None and not splitting:
             self._resize_timer.start()
 
     def _on_resize_timeout(self) -> None:
@@ -3711,6 +3714,14 @@ class TimelineView(QGraphicsView):
                     reposition the frozen label column items.
         """
         if self._scene._trace is None:
+            return
+        win = self.window()
+        if getattr(win, "_cpu_splitter_resizing", False):
+            self._reposition_frozen()
+            self._reposition_frozen_top()
+            self._update_virt_trace_bar_range()
+            if self._virtual_time_scroll_active:
+                self._push_virt_trace_bar()
             return
         vsize = self._fit_viewport_size()
         time_span = max(

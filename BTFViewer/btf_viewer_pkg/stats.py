@@ -3147,6 +3147,7 @@ class _StatsPanel(QWidget):
         self._util_scroll_areas: List[QScrollArea] = []
         self._util_scroll_filters: List[_UtilScrollResizeFilter] = []
         self._defer_heavy_sections: bool = False
+        self._defer_heavy_collapse_done: bool = False
         self._deferred_sections: List[str] = []
         self._defer_populate_timer = QTimer(self)
         self._defer_populate_timer.setSingleShot(True)
@@ -3289,6 +3290,7 @@ class _StatsPanel(QWidget):
         self._defer_populate_timer.stop()
         self._deferred_sections.clear()
         self._defer_heavy_sections = False
+        self._defer_heavy_collapse_done = False
         self._table_grips.clear()
         self._util_scroll_areas.clear()
         self._util_scroll_filters.clear()
@@ -5488,6 +5490,10 @@ class _StatsPanel(QWidget):
             isinstance(wnd, QMainWindow) and len(getattr(wnd, "_tabs", ())) >= 2)
         self._clear()
         self._defer_heavy_sections = defer_heavy
+        if defer_heavy and not self._defer_heavy_collapse_done:
+            for sid in STATS_HEAVY_SECTIONS:
+                self._section_collapsed[sid] = True
+            self._defer_heavy_collapse_done = True
         self._update_scope_header()
 
         rng = self._stats_range()
@@ -6343,7 +6349,7 @@ class _RcSettings:
         else:
             self._dirty = True
 
-    def prune_section(self, section: str, keep: int) -> None:
+    def prune_section(self, section: str, keep: int, *, flush: bool = True) -> None:
         """Remove the oldest entries from *section*, keeping at most *keep* entries."""
         if not self._cfg.has_section(section):
             return
@@ -6351,7 +6357,10 @@ class _RcSettings:
         if len(keys) > keep:
             for k in keys[:-keep]:
                 self._cfg.remove_option(section, k)
-            self._flush()
+            if flush:
+                self._flush()
+            else:
+                self._dirty = True
 
     def align_section_keys(self, section: str, allowed_keys: set[str]) -> None:
         """Drop keys from *section* that are not in *allowed_keys*."""

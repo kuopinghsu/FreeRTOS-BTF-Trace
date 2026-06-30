@@ -1408,6 +1408,8 @@ class BtfTrace:
     task_create_times: Dict[str, int]                                       = field(default_factory=dict)
     # Sorted timestamps from STI TICK events - rendered as ruler marks.
     tick_sti_times: List[int]                                               = field(default_factory=list)
+    # All STI event times sorted once at parse — used by migration stats.
+    sti_event_times: List[int]                                              = field(default_factory=list)
     # Core migrations: consecutive slices of the same merge-key on different cores.
     migrations: List[MigrationEvent]                                        = field(default_factory=list)
     migrations_by_mk: Dict[str, List[MigrationEvent]]                       = field(default_factory=dict)
@@ -1695,11 +1697,10 @@ def _count_ping_pong(migs: List[MigrationEvent],
             count += 1
     return count
 
-def _migration_sti_near_count(trace: "BtfTrace", migs: List[MigrationEvent],
+def _migration_sti_near_count(sti_times: List[int], migs: List[MigrationEvent],
                               window: int = _MIGRATION_STI_WINDOW) -> int:
-    if not migs or not trace.sti_events:
+    if not migs or not sti_times:
         return 0
-    sti_times = sorted(e.time for e in trace.sti_events)
     count = 0
     for m in migs:
         lo = m.ns - window
@@ -1862,7 +1863,7 @@ def _migration_rows(trace: "BtfTrace",
             primary_pct = 0.0
         tick_count = _tick_count_for_task(segs, tick_times, lo, hi)
         ping = _count_ping_pong(migs)
-        sti_near = _migration_sti_near_count(trace, migs)
+        sti_near = _migration_sti_near_count(trace.sti_event_times, migs)
         gaps_after = [m.gap_ns for m in migs if m.gap_ns > 0]
         all_gaps = _blocking_time_samples(segs, lo, hi)
         avg_after = (sum(gaps_after) / len(gaps_after)) if gaps_after else 0
@@ -3329,6 +3330,7 @@ def _parse_btf(filepath: str,
         core_task_seg_lod_ultra_starts=dict(_core_task_lod_ultra_starts),
         task_create_times=_task_create_times,
         tick_sti_times=sorted(tick_sti_times),
+        sti_event_times=sorted(e.time for e in sti_events),
         migrations=_migrations,
         migrations_by_mk=dict(_migrations_by_mk),
         interval_instances=_interval_instances,

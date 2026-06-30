@@ -1,10 +1,10 @@
 /*
  * freertos_test/main.c
  *
- * Comprehensive FreeRTOS test suite scalable from 1 to 16 cores.
+ * Comprehensive FreeRTOS test suite scalable from 1 to 64 cores.
  *
  * All sizing constants derive from configNUMBER_OF_CORES so the same
- * source compiles and runs correctly for CORES = 1 ... 16.
+ * source compiles and runs correctly for CORES = 1 ... 64.
  *
  * Tests
  * -----

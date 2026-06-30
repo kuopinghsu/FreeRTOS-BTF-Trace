@@ -421,6 +421,11 @@ export async function parseBtf(text, progressCallback) {
     }))
   }
 
+  const coreSegStarts = new Map()
+  for (const c of coreNames) {
+    coreSegStarts.set(c, segmentStartsF64(coreSegs.get(c)))
+  }
+
   // task_create times mapped to merge keys
   const taskCreateTimes = new Map()
   for (const [rawCt, ctTime] of taskCreateRaw) {
@@ -448,7 +453,7 @@ export async function parseBtf(text, progressCallback) {
     syncObjects,
     syncIssues,
     hasSyncObjectInstrumentation,
-  } = buildSyncObjectData(stiEvents, coreSegs, mkRepr, timeMax)
+  } = buildSyncObjectData(stiEvents, coreSegs, mkRepr, timeMax, coreSegStarts)
 
   // -----------------------------------------------------------------------
   // Phase 4 – 1M-event performance pre-processing (LOD + bisect arrays)
@@ -487,8 +492,7 @@ export async function parseBtf(text, progressCallback) {
   progress(80, 'Building core LOD summaries…')
   await yieldToHost()
 
-  // Core-view: start arrays + LODs for core summary rows
-  const coreSegStarts            = new Map()
+  // Core-view: start arrays + LODs for core summary rows (coreSegStarts built above)
   const coreSegLod               = new Map()
   const coreSegLodStarts         = new Map()
   const coreSegLodUltra          = new Map()
@@ -497,7 +501,9 @@ export async function parseBtf(text, progressCallback) {
   for (let ci = 0; ci < coreNames.length; ci++) {
     const c = coreNames[ci]
     const segs = coreSegs.get(c)
-    coreSegStarts.set(c, segmentStartsF64(segs))
+    if (!coreSegStarts.has(c)) {
+      coreSegStarts.set(c, segmentStartsF64(segs))
+    }
     const [lod, lodStarts] = makeLodSummary(segs, LOD_SUMMARY_BINS, lodTimescalePerPx, timeMin)
     coreSegLod.set(c, lod)
     coreSegLodStarts.set(c, lodStarts)
@@ -564,6 +570,7 @@ export async function parseBtf(text, progressCallback) {
   progress(97, 'Finalising…')
   await yieldToHost()
   const sortedTickStiTimes = tickStiTimes.sort((a, b) => a - b)
+  const stiEventTimes = stiEvents.map(e => e.time).sort((a, b) => a - b)
   progress(98, 'Analysing tick health…')
   await yieldToHost()
   const tickHealth = analyzeTickHealth(sortedTickStiTimes)
@@ -592,6 +599,7 @@ export async function parseBtf(text, progressCallback) {
     stiStartsByTarget,
     stiValRange,
     tickStiTimes: sortedTickStiTimes,
+    stiEventTimes,
     tickHealth,
 
     // ---- Interval instrumentation (paired start/stop) ----

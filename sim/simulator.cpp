@@ -246,6 +246,7 @@ Simulator::Simulator(const Options &options)
         harts_[hart].regs[2] = options_.ram_base + options_.ram_size - (hart * 0x10000ull) - 16;
         mtimecmp_[hart] = std::numeric_limits<uint64_t>::max();
     }
+    refresh_mtip_all();
 
     stdin_flags_ = fcntl(STDIN_FILENO, F_GETFL, 0);
     if (stdin_flags_ >= 0) {
@@ -352,6 +353,7 @@ void Simulator::reset() {
         state.priv_mode = 3;  // start in M-mode
         mtimecmp_[hart] = std::numeric_limits<uint64_t>::max();
     }
+    refresh_mtip_all();
     // Note: mainvars are written on-demand when the program issues the
     // kSysGetmainvars (2011) syscall, so no pre-write is needed here.
     // Pre-writing at ram_base+0x1000 would corrupt ELF code loaded there
@@ -393,8 +395,10 @@ RunStats Simulator::run() {
 
     uint64_t retired = 0;
     auto t_start = std::chrono::steady_clock::now();
+    const unsigned sweep_batch = gdb_enabled ? 1u : kRunSweepBatch;
+    bool stop_run = false;
     try {
-        while (!exit_requested_) {
+        while (!exit_requested_ && !stop_run) {
             if (g_sigint_requested != 0) {
                 std::fflush(stdout);
                 std::fflush(stderr);
@@ -405,46 +409,65 @@ RunStats Simulator::run() {
                 break;
             }
 
-            if (gdb_enabled && poll_gdb(&gdb_ctx) < 0) {
-                break;
-            }
+            for (unsigned sweep = 0; sweep < sweep_batch && !exit_requested_ && !stop_run; ++sweep) {
+                if (gdb_enabled && poll_gdb(&gdb_ctx) < 0) {
+                    stop_run = true;
+                    break;
+                }
 
-            bool advanced = false;
-            bool waiting = false;
-            for (int hart = 0; hart < options_.cores; ++hart) {
-                if (step_hart(hart)) {
-                    advanced = true;
-                    ++retired;
-                    if (options_.max_instructions != 0 && retired >= options_.max_instructions) {
-                        throw std::runtime_error("instruction limit reached");
+                collect_runnable_harts(runnable_scratch_);
+                if (runnable_scratch_.empty()) {
+                    if (!fast_forward_wfi()) {
+                        bool any_waiting = false;
+                        for (int hart = 0; hart < options_.cores; ++hart) {
+                            const HartState &hart_state = harts_[static_cast<size_t>(hart)];
+                            if (!hart_state.halted && hart_state.waiting_for_interrupt) {
+                                any_waiting = true;
+                                break;
+                            }
+                        }
+                        if (!any_waiting) {
+                            stop_run = true;
+                            break;
+                        }
+                        continue;
+                    }
+                    continue;
+                }
+
+                bool advanced = false;
+                for (int hart : runnable_scratch_) {
+                    if (step_hart(hart)) {
+                        advanced = true;
+                        ++retired;
+                        if (options_.max_instructions != 0 && retired >= options_.max_instructions) {
+                            throw std::runtime_error("instruction limit reached");
+                        }
                     }
                 }
-                if (harts_[hart].waiting_for_interrupt && !harts_[hart].halted) {
-                    waiting = true;
+
+                advance_mtime_tick();
+                service_htif();
+
+                if (!advanced) {
+                    bool any_waiting = false;
+                    for (int hart = 0; hart < options_.cores; ++hart) {
+                        const HartState &hart_state = harts_[static_cast<size_t>(hart)];
+                        if (!hart_state.halted && hart_state.waiting_for_interrupt) {
+                            any_waiting = true;
+                            break;
+                        }
+                    }
+                    if (!any_waiting) {
+                        stop_run = true;
+                        break;
+                    }
                 }
             }
 
-            /* Advance the global CLINT mtime by one clock tick per simulator
-             * loop iteration.  mtime is a platform timebase (cycle counter at
-             * configCPU_CLOCK_HZ on the guest), not a sum of retired instructions
-             * and not scaled by the number of active harts. */
-            tick();
-
-            service_htif();
-
-            // Flush output streams periodically so that console output appears
-            // promptly when piped or redirected (but not so often that fflush
-            // syscall overhead dominates).
             if ((retired & 0xFFFFull) == 0 && retired != 0) {
                 std::fflush(stdout);
                 std::fflush(stderr);
-            }
-
-            if (!advanced) {
-                if (waiting) {
-                    continue;
-                }
-                break;
             }
         }
     } catch (const ExitRequest &exit_req) {
@@ -852,6 +875,7 @@ bool Simulator::write_mmio(uint64_t addr, uint64_t value, unsigned size) {
         uint64_t shift = (addr - kMtimeBase) * 8;
         uint64_t mask = mask_for_size(size) << shift;
         mtime_ = (mtime_ & ~mask) | ((value & mask_for_size(size)) << shift);
+        refresh_mtip_all();
         return true;
     }
     if (addr >= kMtimecmpBase && addr + size <= kMtimecmpBase + 8ull * options_.cores) {
@@ -859,6 +883,7 @@ bool Simulator::write_mmio(uint64_t addr, uint64_t value, unsigned size) {
         size_t offs = static_cast<size_t>((addr - kMtimecmpBase) % 8);
         uint64_t mask = mask_for_size(size) << (offs * 8);
         mtimecmp_[hart] = (mtimecmp_[hart] & ~mask) | ((value & mask_for_size(size)) << (offs * 8));
+        note_mtimecmp_changed(static_cast<int>(hart));
         return true;
     }
     return false;
@@ -1281,7 +1306,41 @@ void Simulator::write_mainvars(uint64_t addr, uint64_t limit) {
 }
 
 void Simulator::tick() {
-    ++mtime_;
+    advance_mtime_tick();
+}
+
+bool Simulator::hart_steppable(int hart_id) const {
+    const HartState &hart = harts_.at(static_cast<size_t>(hart_id));
+    if (hart.halted) {
+        return false;
+    }
+    if (!hart.waiting_for_interrupt) {
+        return true;
+    }
+    return should_wake_from_wfi(hart);
+}
+
+void Simulator::collect_runnable_harts(std::vector<int> &out) const {
+    out.clear();
+    out.reserve(static_cast<size_t>(options_.cores));
+    for (int hart = 0; hart < options_.cores; ++hart) {
+        if (hart_steppable(hart)) {
+            out.push_back(hart);
+        }
+    }
+}
+
+void Simulator::refresh_next_mtip_deadline() {
+    uint64_t next = std::numeric_limits<uint64_t>::max();
+    for (int hart = 0; hart < options_.cores; ++hart) {
+        if (mtimecmp_[hart] > mtime_ && mtimecmp_[hart] < next) {
+            next = mtimecmp_[hart];
+        }
+    }
+    next_mtip_deadline_ = next;
+}
+
+void Simulator::refresh_mtip_all() {
     for (int hart = 0; hart < options_.cores; ++hart) {
         if (mtime_ >= mtimecmp_[hart]) {
             harts_[hart].mip |= kMipMtip;
@@ -1289,6 +1348,72 @@ void Simulator::tick() {
             harts_[hart].mip &= ~kMipMtip;
         }
     }
+    refresh_next_mtip_deadline();
+}
+
+void Simulator::note_mtimecmp_changed(int hart_id) {
+    HartState &hart = harts_.at(static_cast<size_t>(hart_id));
+    if (mtime_ >= mtimecmp_[hart_id]) {
+        hart.mip |= kMipMtip;
+    } else {
+        hart.mip &= ~kMipMtip;
+    }
+    refresh_next_mtip_deadline();
+}
+
+void Simulator::advance_mtime_tick() {
+    ++mtime_;
+    if (mtime_ >= next_mtip_deadline_) {
+        refresh_mtip_all();
+    }
+}
+
+bool Simulator::fast_forward_wfi() {
+    bool any_wfi = false;
+    for (int hart = 0; hart < options_.cores; ++hart) {
+        const HartState &state = harts_.at(static_cast<size_t>(hart));
+        if (state.halted) {
+            continue;
+        }
+        if (!state.waiting_for_interrupt) {
+            return false;
+        }
+        any_wfi = true;
+        if (hart_steppable(hart)) {
+            return false;
+        }
+    }
+    if (!any_wfi) {
+        return false;
+    }
+
+    uint64_t target = std::numeric_limits<uint64_t>::max();
+    for (int hart = 0; hart < options_.cores; ++hart) {
+        const HartState &state = harts_.at(static_cast<size_t>(hart));
+        if (state.halted || !state.waiting_for_interrupt) {
+            continue;
+        }
+        if ((state.mstatus & kMstatusMie) == 0) {
+            continue;
+        }
+        if ((state.mie & kMieMtip) == 0) {
+            continue;
+        }
+        if ((state.mip & kMipMtip) != 0) {
+            continue;
+        }
+        if (mtimecmp_[hart] < target) {
+            target = mtimecmp_[hart];
+        }
+    }
+
+    if (target == std::numeric_limits<uint64_t>::max() || target <= mtime_) {
+        return false;
+    }
+
+    mtime_ = target;
+    refresh_mtip_all();
+    return true;
 }
 
 void Simulator::step_internal(int hart_id) {

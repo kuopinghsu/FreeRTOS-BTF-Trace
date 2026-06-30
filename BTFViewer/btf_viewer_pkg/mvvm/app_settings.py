@@ -73,14 +73,20 @@ class AppSettingsViewModel(ViewModelBase):
         self.settings_changed.emit()
         self.changed.emit()
 
+    def _assign(self, field: str, value) -> None:
+        """Set a model field and notify only when the value changes."""
+        if getattr(self._model, field) == value:
+            return
+        setattr(self._model, field, value)
+        self._touch()
+
     @property
     def view_mode(self) -> str:
         return self._model.view_mode
 
     @view_mode.setter
     def view_mode(self, value: str) -> None:
-        self._model.view_mode = value
-        self._touch()
+        self._assign("view_mode", value)
 
     @property
     def is_dark(self) -> bool:
@@ -88,8 +94,7 @@ class AppSettingsViewModel(ViewModelBase):
 
     @is_dark.setter
     def is_dark(self, value: bool) -> None:
-        self._model.is_dark = bool(value)
-        self._touch()
+        self._assign("is_dark", bool(value))
 
     @property
     def show_sti(self) -> bool:
@@ -97,8 +102,7 @@ class AppSettingsViewModel(ViewModelBase):
 
     @show_sti.setter
     def show_sti(self, value: bool) -> None:
-        self._model.show_sti = bool(value)
-        self._touch()
+        self._assign("show_sti", bool(value))
 
     @property
     def show_grid(self) -> bool:
@@ -106,8 +110,7 @@ class AppSettingsViewModel(ViewModelBase):
 
     @show_grid.setter
     def show_grid(self, value: bool) -> None:
-        self._model.show_grid = bool(value)
-        self._touch()
+        self._assign("show_grid", bool(value))
 
     @property
     def show_legend(self) -> bool:
@@ -115,8 +118,7 @@ class AppSettingsViewModel(ViewModelBase):
 
     @show_legend.setter
     def show_legend(self, value: bool) -> None:
-        self._model.show_legend = bool(value)
-        self._touch()
+        self._assign("show_legend", bool(value))
 
     @property
     def show_stats(self) -> bool:
@@ -124,8 +126,7 @@ class AppSettingsViewModel(ViewModelBase):
 
     @show_stats.setter
     def show_stats(self, value: bool) -> None:
-        self._model.show_stats = bool(value)
-        self._touch()
+        self._assign("show_stats", bool(value))
 
     @property
     def show_cpu_load(self) -> bool:
@@ -133,8 +134,7 @@ class AppSettingsViewModel(ViewModelBase):
 
     @show_cpu_load.setter
     def show_cpu_load(self, value: bool) -> None:
-        self._model.show_cpu_load = bool(value)
-        self._touch()
+        self._assign("show_cpu_load", bool(value))
 
     @property
     def show_marks(self) -> bool:
@@ -142,8 +142,7 @@ class AppSettingsViewModel(ViewModelBase):
 
     @show_marks.setter
     def show_marks(self, value: bool) -> None:
-        self._model.show_marks = bool(value)
-        self._touch()
+        self._assign("show_marks", bool(value))
 
     @property
     def show_find(self) -> bool:
@@ -151,8 +150,7 @@ class AppSettingsViewModel(ViewModelBase):
 
     @show_find.setter
     def show_find(self, value: bool) -> None:
-        self._model.show_find = bool(value)
-        self._touch()
+        self._assign("show_find", bool(value))
 
     @property
     def cpu_splitter_user_sized(self) -> bool:
@@ -160,8 +158,9 @@ class AppSettingsViewModel(ViewModelBase):
 
     @cpu_splitter_user_sized.setter
     def cpu_splitter_user_sized(self, value: bool) -> None:
+        # Do not emit settings_changed — that re-applies the saved splitter height
+        # and cancels an in-progress drag before the new size is recorded.
         self._model.cpu_splitter_user_sized = bool(value)
-        self._touch()
 
     @property
     def cpu_splitter_bottom_h(self) -> int | None:
@@ -170,7 +169,6 @@ class AppSettingsViewModel(ViewModelBase):
     @cpu_splitter_bottom_h.setter
     def cpu_splitter_bottom_h(self, value: int | None) -> None:
         self._model.cpu_splitter_bottom_h = value
-        self._touch()
 
     @property
     def font_size(self) -> int:
@@ -178,8 +176,7 @@ class AppSettingsViewModel(ViewModelBase):
 
     @font_size.setter
     def font_size(self, value: int) -> None:
-        self._model.font_size = int(value)
-        self._touch()
+        self._assign("font_size", int(value))
 
     @property
     def ui_font_size(self) -> int:
@@ -187,8 +184,7 @@ class AppSettingsViewModel(ViewModelBase):
 
     @ui_font_size.setter
     def ui_font_size(self, value: int) -> None:
-        self._model.ui_font_size = int(value)
-        self._touch()
+        self._assign("ui_font_size", int(value))
 
     @property
     def max_cursors(self) -> int:
@@ -196,8 +192,7 @@ class AppSettingsViewModel(ViewModelBase):
 
     @max_cursors.setter
     def max_cursors(self, value: int) -> None:
-        self._model.max_cursors = int(value)
-        self._touch()
+        self._assign("max_cursors", int(value))
 
     @property
     def label_width(self) -> int:
@@ -205,8 +200,7 @@ class AppSettingsViewModel(ViewModelBase):
 
     @label_width.setter
     def label_width(self, value: int) -> None:
-        self._model.label_width = int(value)
-        self._touch()
+        self._assign("label_width", int(value))
 
     @property
     def row_height(self) -> int:
@@ -214,8 +208,7 @@ class AppSettingsViewModel(ViewModelBase):
 
     @row_height.setter
     def row_height(self, value: int) -> None:
-        self._model.row_height = int(value)
-        self._touch()
+        self._assign("row_height", int(value))
 
     @property
     def row_gap(self) -> int:
@@ -223,8 +216,7 @@ class AppSettingsViewModel(ViewModelBase):
 
     @row_gap.setter
     def row_gap(self, value: int) -> None:
-        self._model.row_gap = int(value)
-        self._touch()
+        self._assign("row_gap", int(value))
 
     @property
     def sti_row_h(self) -> int:
@@ -232,8 +224,7 @@ class AppSettingsViewModel(ViewModelBase):
 
     @sti_row_h.setter
     def sti_row_h(self, value: int) -> None:
-        self._model.sti_row_h = int(value)
-        self._touch()
+        self._assign("sti_row_h", int(value))
 
     @property
     def sti_waveform_h(self) -> int:
@@ -241,8 +232,7 @@ class AppSettingsViewModel(ViewModelBase):
 
     @sti_waveform_h.setter
     def sti_waveform_h(self, value: int) -> None:
-        self._model.sti_waveform_h = int(value)
-        self._touch()
+        self._assign("sti_waveform_h", int(value))
 
     @property
     def sti_line_style(self) -> str:
@@ -250,8 +240,7 @@ class AppSettingsViewModel(ViewModelBase):
 
     @sti_line_style.setter
     def sti_line_style(self, value: str) -> None:
-        self._model.sti_line_style = str(value)
-        self._touch()
+        self._assign("sti_line_style", str(value))
 
     @property
     def timescale_per_px_default(self) -> float:
@@ -259,8 +248,7 @@ class AppSettingsViewModel(ViewModelBase):
 
     @timescale_per_px_default.setter
     def timescale_per_px_default(self, value: float) -> None:
-        self._model.timescale_per_px_default = float(value)
-        self._touch()
+        self._assign("timescale_per_px_default", float(value))
 
     @property
     def hover_highlight(self) -> bool:
@@ -268,8 +256,7 @@ class AppSettingsViewModel(ViewModelBase):
 
     @hover_highlight.setter
     def hover_highlight(self, value: bool) -> None:
-        self._model.hover_highlight = bool(value)
-        self._touch()
+        self._assign("hover_highlight", bool(value))
 
     @property
     def cpu_load_row_h(self) -> int:
@@ -277,8 +264,7 @@ class AppSettingsViewModel(ViewModelBase):
 
     @cpu_load_row_h.setter
     def cpu_load_row_h(self, value: int) -> None:
-        self._model.cpu_load_row_h = int(value)
-        self._touch()
+        self._assign("cpu_load_row_h", int(value))
 
     @property
     def colorblind(self) -> bool:
@@ -286,8 +272,7 @@ class AppSettingsViewModel(ViewModelBase):
 
     @colorblind.setter
     def colorblind(self, value: bool) -> None:
-        self._model.colorblind = bool(value)
-        self._touch()
+        self._assign("colorblind", bool(value))
 
     @property
     def horizontal(self) -> bool:
@@ -295,8 +280,7 @@ class AppSettingsViewModel(ViewModelBase):
 
     @horizontal.setter
     def horizontal(self, value: bool) -> None:
-        self._model.horizontal = bool(value)
-        self._touch()
+        self._assign("horizontal", bool(value))
 
     def load_theme_from_rc(self, rc: "_RcSettings") -> None:
         self.is_dark = rc.get("view", "theme", "dark") == "dark"

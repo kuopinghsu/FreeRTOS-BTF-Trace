@@ -4,6 +4,7 @@
 import { formatTime } from './timeFormat.js'
 import { taskMergeKey, taskLabelForMergeKey } from './colors.js'
 import { bisectLeft } from './bisect.js'
+import { segmentStartsF64 } from './lod.js'
 
 export const SYNC_OBJECT_TARGETS = new Set(['mutex', 'sem', 'queue'])
 
@@ -61,16 +62,16 @@ function recordHold(obj, take, give, takeFirst) {
 }
 
 /** Infer running task merge key on *core* at *timeNs* from core timeline segments. */
-export function runningTaskMk(coreSegs, core, timeNs) {
-  const seg = segmentAtCoreTime(coreSegs, core, timeNs)
+export function runningTaskMk(coreSegs, core, timeNs, coreSegStarts = null) {
+  const seg = segmentAtCoreTime(coreSegs, core, timeNs, coreSegStarts)
   return seg ? taskMergeKey(seg.task) : null
 }
 
 /** Task segment running on *core* at *timeNs*, if any. */
-export function segmentAtCoreTime(coreSegs, core, timeNs) {
+export function segmentAtCoreTime(coreSegs, core, timeNs, coreSegStarts = null) {
   const segs = coreSegs?.get?.(core) || coreSegs?.[core] || []
   if (!segs.length || timeNs == null) return null
-  const starts = segs.map(s => s.start)
+  const starts = coreSegStarts?.get?.(core) ?? segmentStartsF64(segs)
   const lo = Math.max(0, bisectLeft(starts, timeNs) - 1)
   for (let i = lo; i < segs.length; i++) {
     const s = segs[i]
@@ -103,7 +104,7 @@ function inScope(timeNs, lo, hi) {
  * @param {Map<string, string>} taskRepr
  * @param {number} timeMax
  */
-export function buildSyncObjectData(stiEvents, coreSegs, taskRepr, timeMax) {
+export function buildSyncObjectData(stiEvents, coreSegs, taskRepr, timeMax, coreSegStarts = null) {
   const objects = new Map()
   const globalIssues = []
 
@@ -123,7 +124,7 @@ export function buildSyncObjectData(stiEvents, coreSegs, taskRepr, timeMax) {
 
   for (const { ev, parsed } of events) {
     const key = syncObjectKey(ev.target, parsed.ptr)
-    const taskMk = runningTaskMk(coreSegs, ev.core, ev.time)
+    const taskMk = runningTaskMk(coreSegs, ev.core, ev.time, coreSegStarts)
     const taskLabel = taskMk ? taskLabelForMergeKey({ taskRepr }, taskMk) : '?'
     const { action } = parsed
 

@@ -163,8 +163,10 @@ export function countPingPong(migs, window = MIGRATION_PING_PONG_WINDOW) {
 }
 
 export function migrationStiNearCount(trace, migs, window = MIGRATION_STI_WINDOW) {
-  if (!migs?.length || !trace.stiEvents?.length) return 0
-  const stiTimes = trace.stiEvents.map(e => e.time).sort((a, b) => a - b)
+  if (!migs?.length) return 0
+  const stiTimes = trace.stiEventTimes
+    ?? (trace.stiEvents?.length ? trace.stiEvents.map(e => e.time).sort((a, b) => a - b) : [])
+  if (!stiTimes.length) return 0
   let count = 0
   for (const m of migs) {
     const lo = m.ns - window

@@ -1,13 +1,13 @@
 ENTRY(_start)
 
 STACK_STRIDE = 16K;
-MAX_HARTS = 16;
+/* MAX_HARTS: pass -Wl,--defsym=MAX_HARTS=$(CORES) from the Makefile (max 64). */
 STACK_RESERVE = STACK_STRIDE * MAX_HARTS;
 
 MEMORY
 {
-    RAM (rwx)  : ORIGIN = 0x80000000, LENGTH = 16M - 4K
-    HTIF (rw)  : ORIGIN = 0x80000000 + 16M - 4K, LENGTH = 4K
+    RAM (rwx)  : ORIGIN = 0x80000000, LENGTH = 128M - 4K
+    HTIF (rw)  : ORIGIN = 0x80000000 + 128M - 4K, LENGTH = 4K
 }
 
 PHDRS

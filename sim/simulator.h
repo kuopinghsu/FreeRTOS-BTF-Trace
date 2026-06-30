@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <deque>
 #include <cstdio>
+#include <limits>
 #include <map>
 #include <optional>
 #include <sys/stat.h>
@@ -35,7 +36,9 @@ constexpr uint64_t kClintBase = 0x02000000ull;
 constexpr uint64_t kMtimeBase = kClintBase + 0xBFF8ull;
 constexpr uint64_t kMtimecmpBase = kClintBase + 0x4000ull;
 constexpr uint64_t kPageSize = 4096ull;
-constexpr int kMaxHarts = 16;
+constexpr int kMaxHarts = 64;
+/** Sweeps per outer-loop iteration when GDB is off (reduces poll/fflush overhead). */
+constexpr unsigned kRunSweepBatch = 4;
 
 struct Options {
     int cores = 1;
@@ -230,6 +233,8 @@ private:
     uint64_t fromhost_addr_ = 0;
     uint64_t mtime_ = 0;
     std::array<uint64_t, kMaxHarts> mtimecmp_{};
+    uint64_t next_mtip_deadline_ = std::numeric_limits<uint64_t>::max();
+    std::vector<int> runnable_scratch_;
     std::deque<uint64_t> fromhost_queue_;
     int focus_hart_ = 0;
     int stop_hart_ = 0;
@@ -282,7 +287,14 @@ private:
     void write_mainvars(uint64_t addr, uint64_t limit);
     void dump_all_hart_registers(FILE *out) const;
 
-    void tick();  // advance global mtime_ by one clock tick; refresh MTIP on all harts
+    void tick();  // advance global mtime_ by one clock tick; refresh MTIP when due
+    bool hart_steppable(int hart_id) const;
+    void collect_runnable_harts(std::vector<int> &out) const;
+    void refresh_mtip_all();
+    void refresh_next_mtip_deadline();
+    void note_mtimecmp_changed(int hart_id);
+    void advance_mtime_tick();
+    bool fast_forward_wfi();
     void step_internal(int hart_id);
     void execute_trap(int hart_id, const Trap &trap, uint64_t trap_pc, bool advance_pc);
     bool handle_interrupt(int hart_id);

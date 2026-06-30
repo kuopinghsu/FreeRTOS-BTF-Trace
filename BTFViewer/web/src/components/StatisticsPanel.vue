@@ -2163,6 +2163,7 @@ import { buildTaskLifecycleRows, formatLifecycleSpan } from '../utils/lifecycleA
 import { computeDeadlineViolations } from '../utils/deadlineAnalysis.js'
 import { intervalInstanceDetailRows } from '../utils/intervalAnalysis.js'
 import { migrationRows } from '../utils/migrationAnalysis.js'
+import { traceNeedsDeferredStatsLoad } from '../utils/statsLoad.js'
 import { tickHealthReport } from '../utils/tickHealth.js'
 import { requestStatsCompute } from '../utils/statsWorkerClient.js'
 import { computeStatsTables, segIndicesMapFromTrace } from '../parser/statsCompute.js'
@@ -2248,6 +2249,21 @@ function expandAllSections() {
 
 function collapseAllSections() {
   for (const flag of STATS_SECTION_FLAGS) flag.value = true
+}
+
+function applyDeferHeavySectionCollapse(tr) {
+  if (!tr || props.sectionCollapsedState) return
+  if (!traceNeedsDeferredStatsLoad(tr)) return
+  healthCollapsed.value = true
+  migrationCollapsed.value = true
+  execSliceCollapsed.value = true
+  blockingCollapsed.value = true
+  interArrivalCollapsed.value = true
+  preemptionCollapsed.value = true
+  priorityCollapsed.value = true
+  syncCollapsed.value = true
+  intervalsCollapsed.value = true
+  tagsCollapsed.value = true
 }
 
 const workerExecRows = ref([])
@@ -2774,7 +2790,7 @@ function syncIssueSeverityClass(severity) {
 function onSyncIssueClick(issue) {
   if (issue?.timeNs == null) return
   const tr = props.trace
-  const segment = tr ? segmentAtCoreTime(tr.coreSegs, issue.core, issue.timeNs) : null
+  const segment = tr ? segmentAtCoreTime(tr.coreSegs, issue.core, issue.timeNs, tr.coreSegStarts) : null
   emit('plotPointActivate', {
     ns: issue.timeNs,
     note: syncIssueAnnotationNote(issue),
@@ -4268,7 +4284,8 @@ watch(() => props.cursors, (cursors) => {
   }, 200)
 }, { deep: true })
 
-watch(() => props.trace, () => {
+watch(() => props.trace, (tr) => {
+  applyDeferHeavySectionCollapse(tr)
   scheduleStatsRefresh()
 }, { immediate: true })
 

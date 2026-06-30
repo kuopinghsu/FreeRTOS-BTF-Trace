@@ -1807,19 +1807,15 @@ async function captureLeftPaneSvgBlob() {
 
 function onExpandAll() {
   timelinePanelRef.value?.expandAll()
-  cpuLoadExpanded.value = true
-  autofitCpuLoadPaneHeight()
 }
 
 function onCollapseAll() {
   timelinePanelRef.value?.collapseAll()
-  cpuLoadExpanded.value = false
-  autofitCpuLoadPaneHeight()
 }
 
 function onCpuLoadToggleExpandAll() {
-  if (cpuLoadExpanded.value) onCollapseAll()
-  else onExpandAll()
+  cpuLoadExpanded.value = !cpuLoadExpanded.value
+  autofitCpuLoadPaneHeight()
 }
 
 function onTimelineViewportChange(vp) {

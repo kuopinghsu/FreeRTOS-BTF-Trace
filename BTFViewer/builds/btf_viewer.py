@@ -2286,6 +2286,8 @@ class BtfTrace:
     task_create_times: Dict[str, int]                                       = field(default_factory=dict)
     # Sorted timestamps from STI TICK events - rendered as ruler marks.
     tick_sti_times: List[int]                                               = field(default_factory=list)
+    # All STI event times sorted once at parse — used by migration stats.
+    sti_event_times: List[int]                                              = field(default_factory=list)
     # Core migrations: consecutive slices of the same merge-key on different cores.
     migrations: List[MigrationEvent]                                        = field(default_factory=list)
     migrations_by_mk: Dict[str, List[MigrationEvent]]                       = field(default_factory=dict)
@@ -2573,11 +2575,10 @@ def _count_ping_pong(migs: List[MigrationEvent],
             count += 1
     return count
 
-def _migration_sti_near_count(trace: "BtfTrace", migs: List[MigrationEvent],
+def _migration_sti_near_count(sti_times: List[int], migs: List[MigrationEvent],
                               window: int = _MIGRATION_STI_WINDOW) -> int:
-    if not migs or not trace.sti_events:
+    if not migs or not sti_times:
         return 0
-    sti_times = sorted(e.time for e in trace.sti_events)
     count = 0
     for m in migs:
         lo = m.ns - window
@@ -2740,7 +2741,7 @@ def _migration_rows(trace: "BtfTrace",
             primary_pct = 0.0
         tick_count = _tick_count_for_task(segs, tick_times, lo, hi)
         ping = _count_ping_pong(migs)
-        sti_near = _migration_sti_near_count(trace, migs)
+        sti_near = _migration_sti_near_count(trace.sti_event_times, migs)
         gaps_after = [m.gap_ns for m in migs if m.gap_ns > 0]
         all_gaps = _blocking_time_samples(segs, lo, hi)
         avg_after = (sum(gaps_after) / len(gaps_after)) if gaps_after else 0
@@ -4207,6 +4208,7 @@ def _parse_btf(filepath: str,
         core_task_seg_lod_ultra_starts=dict(_core_task_lod_ultra_starts),
         task_create_times=_task_create_times,
         tick_sti_times=sorted(tick_sti_times),
+        sti_event_times=sorted(e.time for e in sti_events),
         migrations=_migrations,
         migrations_by_mk=dict(_migrations_by_mk),
         interval_instances=_interval_instances,
@@ -13100,9 +13102,12 @@ class TimelineView(QGraphicsView):
         """Reflow the timeline on every resize to preserve the current zoom ratio."""
         super().resizeEvent(event)
         self._update_label_grip_geometry()
-        self._position_virt_trace_bar()
+        win = self.window()
+        splitting = getattr(win, "_cpu_splitter_resizing", False)
+        if not splitting:
+            self._position_virt_trace_bar()
         self._nav_popup.reposition()
-        if self._scene._trace is not None:
+        if self._scene._trace is not None and not splitting:
             self._resize_timer.start()
 
     def _on_resize_timeout(self) -> None:
@@ -13115,6 +13120,14 @@ class TimelineView(QGraphicsView):
                     reposition the frozen label column items.
         """
         if self._scene._trace is None:
+            return
+        win = self.window()
+        if getattr(win, "_cpu_splitter_resizing", False):
+            self._reposition_frozen()
+            self._reposition_frozen_top()
+            self._update_virt_trace_bar_range()
+            if self._virtual_time_scroll_active:
+                self._push_virt_trace_bar()
             return
         vsize = self._fit_viewport_size()
         time_span = max(
@@ -16416,6 +16429,7 @@ class _StatsPanel(QWidget):
         self._util_scroll_areas: List[QScrollArea] = []
         self._util_scroll_filters: List[_UtilScrollResizeFilter] = []
         self._defer_heavy_sections: bool = False
+        self._defer_heavy_collapse_done: bool = False
         self._deferred_sections: List[str] = []
         self._defer_populate_timer = QTimer(self)
         self._defer_populate_timer.setSingleShot(True)
@@ -16558,6 +16572,7 @@ class _StatsPanel(QWidget):
         self._defer_populate_timer.stop()
         self._deferred_sections.clear()
         self._defer_heavy_sections = False
+        self._defer_heavy_collapse_done = False
         self._table_grips.clear()
         self._util_scroll_areas.clear()
         self._util_scroll_filters.clear()
@@ -18757,6 +18772,10 @@ class _StatsPanel(QWidget):
             isinstance(wnd, QMainWindow) and len(getattr(wnd, "_tabs", ())) >= 2)
         self._clear()
         self._defer_heavy_sections = defer_heavy
+        if defer_heavy and not self._defer_heavy_collapse_done:
+            for sid in STATS_HEAVY_SECTIONS:
+                self._section_collapsed[sid] = True
+            self._defer_heavy_collapse_done = True
         self._update_scope_header()
 
         rng = self._stats_range()
@@ -19612,7 +19631,7 @@ class _RcSettings:
         else:
             self._dirty = True
 
-    def prune_section(self, section: str, keep: int) -> None:
+    def prune_section(self, section: str, keep: int, *, flush: bool = True) -> None:
         """Remove the oldest entries from *section*, keeping at most *keep* entries."""
         if not self._cfg.has_section(section):
             return
@@ -19620,7 +19639,10 @@ class _RcSettings:
         if len(keys) > keep:
             for k in keys[:-keep]:
                 self._cfg.remove_option(section, k)
-            self._flush()
+            if flush:
+                self._flush()
+            else:
+                self._dirty = True
 
     def align_section_keys(self, section: str, allowed_keys: set[str]) -> None:
         """Drop keys from *section* that are not in *allowed_keys*."""
@@ -21774,14 +21796,20 @@ class AppSettingsViewModel(ViewModelBase):
         self.settings_changed.emit()
         self.changed.emit()
 
+    def _assign(self, field: str, value) -> None:
+        """Set a model field and notify only when the value changes."""
+        if getattr(self._model, field) == value:
+            return
+        setattr(self._model, field, value)
+        self._touch()
+
     @property
     def view_mode(self) -> str:
         return self._model.view_mode
 
     @view_mode.setter
     def view_mode(self, value: str) -> None:
-        self._model.view_mode = value
-        self._touch()
+        self._assign("view_mode", value)
 
     @property
     def is_dark(self) -> bool:
@@ -21789,8 +21817,7 @@ class AppSettingsViewModel(ViewModelBase):
 
     @is_dark.setter
     def is_dark(self, value: bool) -> None:
-        self._model.is_dark = bool(value)
-        self._touch()
+        self._assign("is_dark", bool(value))
 
     @property
     def show_sti(self) -> bool:
@@ -21798,8 +21825,7 @@ class AppSettingsViewModel(ViewModelBase):
 
     @show_sti.setter
     def show_sti(self, value: bool) -> None:
-        self._model.show_sti = bool(value)
-        self._touch()
+        self._assign("show_sti", bool(value))
 
     @property
     def show_grid(self) -> bool:
@@ -21807,8 +21833,7 @@ class AppSettingsViewModel(ViewModelBase):
 
     @show_grid.setter
     def show_grid(self, value: bool) -> None:
-        self._model.show_grid = bool(value)
-        self._touch()
+        self._assign("show_grid", bool(value))
 
     @property
     def show_legend(self) -> bool:
@@ -21816,8 +21841,7 @@ class AppSettingsViewModel(ViewModelBase):
 
     @show_legend.setter
     def show_legend(self, value: bool) -> None:
-        self._model.show_legend = bool(value)
-        self._touch()
+        self._assign("show_legend", bool(value))
 
     @property
     def show_stats(self) -> bool:
@@ -21825,8 +21849,7 @@ class AppSettingsViewModel(ViewModelBase):
 
     @show_stats.setter
     def show_stats(self, value: bool) -> None:
-        self._model.show_stats = bool(value)
-        self._touch()
+        self._assign("show_stats", bool(value))
 
     @property
     def show_cpu_load(self) -> bool:
@@ -21834,8 +21857,7 @@ class AppSettingsViewModel(ViewModelBase):
 
     @show_cpu_load.setter
     def show_cpu_load(self, value: bool) -> None:
-        self._model.show_cpu_load = bool(value)
-        self._touch()
+        self._assign("show_cpu_load", bool(value))
 
     @property
     def show_marks(self) -> bool:
@@ -21843,8 +21865,7 @@ class AppSettingsViewModel(ViewModelBase):
 
     @show_marks.setter
     def show_marks(self, value: bool) -> None:
-        self._model.show_marks = bool(value)
-        self._touch()
+        self._assign("show_marks", bool(value))
 
     @property
     def show_find(self) -> bool:
@@ -21852,8 +21873,7 @@ class AppSettingsViewModel(ViewModelBase):
 
     @show_find.setter
     def show_find(self, value: bool) -> None:
-        self._model.show_find = bool(value)
-        self._touch()
+        self._assign("show_find", bool(value))
 
     @property
     def cpu_splitter_user_sized(self) -> bool:
@@ -21861,8 +21881,9 @@ class AppSettingsViewModel(ViewModelBase):
 
     @cpu_splitter_user_sized.setter
     def cpu_splitter_user_sized(self, value: bool) -> None:
+        # Do not emit settings_changed — that re-applies the saved splitter height
+        # and cancels an in-progress drag before the new size is recorded.
         self._model.cpu_splitter_user_sized = bool(value)
-        self._touch()
 
     @property
     def cpu_splitter_bottom_h(self) -> int | None:
@@ -21871,7 +21892,6 @@ class AppSettingsViewModel(ViewModelBase):
     @cpu_splitter_bottom_h.setter
     def cpu_splitter_bottom_h(self, value: int | None) -> None:
         self._model.cpu_splitter_bottom_h = value
-        self._touch()
 
     @property
     def font_size(self) -> int:
@@ -21879,8 +21899,7 @@ class AppSettingsViewModel(ViewModelBase):
 
     @font_size.setter
     def font_size(self, value: int) -> None:
-        self._model.font_size = int(value)
-        self._touch()
+        self._assign("font_size", int(value))
 
     @property
     def ui_font_size(self) -> int:
@@ -21888,8 +21907,7 @@ class AppSettingsViewModel(ViewModelBase):
 
     @ui_font_size.setter
     def ui_font_size(self, value: int) -> None:
-        self._model.ui_font_size = int(value)
-        self._touch()
+        self._assign("ui_font_size", int(value))
 
     @property
     def max_cursors(self) -> int:
@@ -21897,8 +21915,7 @@ class AppSettingsViewModel(ViewModelBase):
 
     @max_cursors.setter
     def max_cursors(self, value: int) -> None:
-        self._model.max_cursors = int(value)
-        self._touch()
+        self._assign("max_cursors", int(value))
 
     @property
     def label_width(self) -> int:
@@ -21906,8 +21923,7 @@ class AppSettingsViewModel(ViewModelBase):
 
     @label_width.setter
     def label_width(self, value: int) -> None:
-        self._model.label_width = int(value)
-        self._touch()
+        self._assign("label_width", int(value))
 
     @property
     def row_height(self) -> int:
@@ -21915,8 +21931,7 @@ class AppSettingsViewModel(ViewModelBase):
 
     @row_height.setter
     def row_height(self, value: int) -> None:
-        self._model.row_height = int(value)
-        self._touch()
+        self._assign("row_height", int(value))
 
     @property
     def row_gap(self) -> int:
@@ -21924,8 +21939,7 @@ class AppSettingsViewModel(ViewModelBase):
 
     @row_gap.setter
     def row_gap(self, value: int) -> None:
-        self._model.row_gap = int(value)
-        self._touch()
+        self._assign("row_gap", int(value))
 
     @property
     def sti_row_h(self) -> int:
@@ -21933,8 +21947,7 @@ class AppSettingsViewModel(ViewModelBase):
 
     @sti_row_h.setter
     def sti_row_h(self, value: int) -> None:
-        self._model.sti_row_h = int(value)
-        self._touch()
+        self._assign("sti_row_h", int(value))
 
     @property
     def sti_waveform_h(self) -> int:
@@ -21942,8 +21955,7 @@ class AppSettingsViewModel(ViewModelBase):
 
     @sti_waveform_h.setter
     def sti_waveform_h(self, value: int) -> None:
-        self._model.sti_waveform_h = int(value)
-        self._touch()
+        self._assign("sti_waveform_h", int(value))
 
     @property
     def sti_line_style(self) -> str:
@@ -21951,8 +21963,7 @@ class AppSettingsViewModel(ViewModelBase):
 
     @sti_line_style.setter
     def sti_line_style(self, value: str) -> None:
-        self._model.sti_line_style = str(value)
-        self._touch()
+        self._assign("sti_line_style", str(value))
 
     @property
     def timescale_per_px_default(self) -> float:
@@ -21960,8 +21971,7 @@ class AppSettingsViewModel(ViewModelBase):
 
     @timescale_per_px_default.setter
     def timescale_per_px_default(self, value: float) -> None:
-        self._model.timescale_per_px_default = float(value)
-        self._touch()
+        self._assign("timescale_per_px_default", float(value))
 
     @property
     def hover_highlight(self) -> bool:
@@ -21969,8 +21979,7 @@ class AppSettingsViewModel(ViewModelBase):
 
     @hover_highlight.setter
     def hover_highlight(self, value: bool) -> None:
-        self._model.hover_highlight = bool(value)
-        self._touch()
+        self._assign("hover_highlight", bool(value))
 
     @property
     def cpu_load_row_h(self) -> int:
@@ -21978,8 +21987,7 @@ class AppSettingsViewModel(ViewModelBase):
 
     @cpu_load_row_h.setter
     def cpu_load_row_h(self, value: int) -> None:
-        self._model.cpu_load_row_h = int(value)
-        self._touch()
+        self._assign("cpu_load_row_h", int(value))
 
     @property
     def colorblind(self) -> bool:
@@ -21987,8 +21995,7 @@ class AppSettingsViewModel(ViewModelBase):
 
     @colorblind.setter
     def colorblind(self, value: bool) -> None:
-        self._model.colorblind = bool(value)
-        self._touch()
+        self._assign("colorblind", bool(value))
 
     @property
     def horizontal(self) -> bool:
@@ -21996,8 +22003,7 @@ class AppSettingsViewModel(ViewModelBase):
 
     @horizontal.setter
     def horizontal(self, value: bool) -> None:
-        self._model.horizontal = bool(value)
-        self._touch()
+        self._assign("horizontal", bool(value))
 
     def load_theme_from_rc(self, rc: "_RcSettings") -> None:
         self.is_dark = rc.get("view", "theme", "dark") == "dark"
@@ -22875,9 +22881,19 @@ def trace_quality_summary(trace: Optional["BtfTrace"]) -> Optional[str]:
     if not warnings:
         return None
     return " · ".join(warnings)
-# ===========================================================================
-# CPU Load Graph
-# ===========================================================================
+class _CpuLoadScrollArea(QScrollArea):
+    """Scroll host for the CPU load graph — pane height comes from the splitter, not row count."""
+
+    _MIN_PANE_H = 40
+
+    def minimumSize(self) -> "QSize":  # noqa: N802
+        return QSize(200, self._MIN_PANE_H)
+
+    def minimumSizeHint(self) -> "QSize":  # noqa: N802
+        return QSize(200, self._MIN_PANE_H)
+
+    def sizeHint(self) -> "QSize":  # noqa: N802
+        return QSize(200, self._MIN_PANE_H)
 
 class _CpuLoadGraph(QWidget):
     """Synchronised CPU load chart below the main timeline.
@@ -22890,8 +22906,8 @@ class _CpuLoadGraph(QWidget):
     Core view + task selected -> 1 row per core showing that task's usage on each core
 
     Rows can be collapsed (core view only): collapsed height = CPU_LOAD_COLLAPSED_H px,
-    label still visible. Click label to toggle. The title-bar icon and toolbar
-    Expand/Collapse All button sync via set_all_expanded().
+    label still visible. Click label to toggle. The title-bar icon expands/collapses
+    all CPU load core rows independently of the task timeline.
     """
 
     expand_all_toggled = Signal(bool)
@@ -22914,10 +22930,14 @@ class _CpuLoadGraph(QWidget):
         self._font_size: int                                = 8
         self._hover_y: int                                  = -1
         self._title_icon_rect: Optional[QRect]               = None
-        self.setMinimumSize(40, 40)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        self.setMinimumHeight(40)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
         self.setMouseTracking(True)
         self._scroll_area: Optional["QScrollArea"] = None
+        self._sync_scroll_size_guard: bool = False
+        self._sync_scroll_size_timer = QTimer(self)
+        self._sync_scroll_size_timer.setSingleShot(True)
+        self._sync_scroll_size_timer.timeout.connect(self._sync_scroll_size)
         self.setToolTip(
             "CPU load over time - synchronised with timeline\n"
             "Core view: title icon expands/collapses all cores; "
@@ -22969,7 +22989,7 @@ class _CpuLoadGraph(QWidget):
             self._collapsed_cores.discard(core)
         else:
             self._collapsed_cores.add(core)
-        self.updateGeometry()
+        self._schedule_sync_scroll_size()
         self.update()
 
     def set_all_expanded(self, expanded: bool) -> None:
@@ -22978,7 +22998,7 @@ class _CpuLoadGraph(QWidget):
         else:
             if self._trace:
                 self._collapsed_cores = set(self._trace.core_names or [])
-        self.updateGeometry()
+        self._schedule_sync_scroll_size()
         self.update()
 
     def _all_cores_expanded(self) -> bool:
@@ -23001,32 +23021,62 @@ class _CpuLoadGraph(QWidget):
     # Size hint - drives QScrollArea scrollbar
     # ------------------------------------------------------------------
 
+    def preferred_pane_height(self) -> int:
+        """Height for autofit / splitter sizing — not the inner widget geometry."""
+        content = max(40, self._content_height())
+        return min(content + 6, CPU_LOAD_PANE_MAX_H)
+
     def sizeHint(self) -> "QSize":
-        return self.minimumSizeHint()
+        # Viewport-sized — preferred_pane_height() is for autofit / splitter only.
+        h = self.height() if self.height() >= 40 else 40
+        return QSize(max(200, self.width() if self.width() > 0 else 200), h)
+
+    def minimumSize(self) -> "QSize":
+        return QSize(200, 40)
 
     def minimumSizeHint(self) -> "QSize":
+        return QSize(200, 40)
+
+    def _content_height(self) -> int:
         _TITLE_H = 22
-        rows    = self._get_rows()
-        total_h = _TITLE_H + sum(self._row_effective_h(k, key) + CPU_LOAD_ROW_GAP
-                                  for k, key, _, _ in rows)
-        return QSize(200, max(40, total_h))
+        rows = self._get_rows()
+        return _TITLE_H + sum(
+            self._row_effective_h(k, key) + CPU_LOAD_ROW_GAP for k, key, _, _ in rows
+        )
+
+    def _splitter_drag_active(self) -> bool:
+        win = self.window()
+        return bool(getattr(win, "_cpu_splitter_resizing", False))
+
+    def _schedule_sync_scroll_size(self) -> None:
+        """Coalesce scroll-area resize/layout updates (avoids splitter-drag loops)."""
+        if self._splitter_drag_active():
+            return
+        self._sync_scroll_size_timer.start(0)
 
     def _sync_scroll_size(self) -> None:
-        """Resize to full content height so QScrollArea can scroll when cores overflow."""
+        """Size the graph to full row content so QScrollArea shows a vertical bar."""
+        if self._sync_scroll_size_guard or self._splitter_drag_active():
+            return
         scroll = self._scroll_area
         if scroll is None:
             return
         vp = scroll.viewport()
-        w = vp.width()
-        if w <= 0:
+        if vp is None or vp.width() <= 0:
             return
-        h = self.minimumSizeHint().height()
-        if self.width() != w or self.height() != h:
+        w = max(1, vp.width())
+        h = max(40, self._content_height())
+        if self.width() == w and self.height() == h:
+            return
+        self._sync_scroll_size_guard = True
+        try:
             self.resize(w, h)
+        finally:
+            self._sync_scroll_size_guard = False
 
     def updateGeometry(self) -> None:  # noqa: N802
         super().updateGeometry()
-        self._sync_scroll_size()
+        self._schedule_sync_scroll_size()
 
     # ------------------------------------------------------------------
     # Pre-computation  (difference-array trick - O(n_segs + n_bins))
@@ -23787,12 +23837,29 @@ class _TimelinePane(QWidget):
         lay.addWidget(self.time_scroll, 0)
         view.attach_time_scroll_bar(self.time_scroll)
 
+class _CpuSplitterHandleFilter(QObject):
+    """Mark CPU-load splitter drags so layout/rebuild stays deferred until release."""
+
+    def __init__(self, handle: QWidget, win: "MainWindow") -> None:
+        super().__init__(handle)
+        self._win = win
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if event.type() == QEvent.Type.MouseButtonPress:
+            self._win._cpu_splitter_user_drag = True
+            self._win._cpu_splitter_resizing = True
+            self._win._cpu_splitter_drag_timer.stop()
+        elif event.type() == QEvent.Type.MouseButtonRelease:
+            self._win._cpu_splitter_user_drag = False
+            self._win._cpu_splitter_drag_timer.start()
+        return False
+
 class _TraceTab:
     """One open trace file: timeline widgets + TraceTabViewModel document state."""
 
     __slots__ = (
         "vm", "view", "cpu_load_graph", "cpu_load_scroll", "cpu_splitter",
-        "_timeline_pane",
+        "_timeline_pane", "_stats_built",
     )
 
     def __init__(self, path: str, trace: "BtfTrace", win: "MainWindow") -> None:
@@ -23805,7 +23872,7 @@ class _TraceTab:
         self.cpu_load_graph.set_dark(win._is_dark)
         win._wire_cpu_load_graph(self.view, self.cpu_load_graph)
 
-        self.cpu_load_scroll = QScrollArea()
+        self.cpu_load_scroll = _CpuLoadScrollArea()
         win._setup_cpu_load_scroll(self.cpu_load_scroll, self.cpu_load_graph)
 
         self._timeline_pane = _TimelinePane(self.view)
@@ -23819,8 +23886,14 @@ class _TraceTab:
         self.cpu_splitter.setCollapsible(0, False)
         self.cpu_splitter.setCollapsible(1, False)
         self.cpu_splitter.splitterMoved.connect(win._on_cpu_splitter_moved)
+        handle = self.cpu_splitter.handle(1)
+        if handle is not None:
+            filt = _CpuSplitterHandleFilter(handle, win)
+            handle.installEventFilter(filt)
+            win._cpu_splitter_handle_filters.append(filt)
         if not win._show_cpu_load:
             self.cpu_load_scroll.hide()
+        self._stats_built = False
 
     @property
     def path(self) -> str:
@@ -23969,11 +24042,25 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._heatmap_view_snapshot: Optional[dict] = None
         self._defer_stats_refresh: bool = False
         self._shutting_down: bool = False
+        self._persisting_settings: bool = False
         self._applying_theme: bool = False
         self._theme_widgets_pending: bool = False
         self._theme_op_id: int = 0
         self._theme_change_in_flight: bool = False
         self._tb_icon_actions: list = []   # (QAction, icon_path_data) for theme-aware icons
+        self._cpu_splitter_resizing: bool = False
+        self._cpu_splitter_user_drag: bool = False
+        self._cpu_splitter_programmatic: bool = False
+        self._cpu_splitter_handle_filters: List[QObject] = []
+        self._pending_open_paths: List[str] = []
+        self._cpu_splitter_drag_timer = QTimer(self)
+        self._cpu_splitter_drag_timer.setSingleShot(True)
+        self._cpu_splitter_drag_timer.setInterval(120)
+        self._cpu_splitter_drag_timer.timeout.connect(self._on_cpu_splitter_drag_end)
+        self._cpu_load_autofit_timer = QTimer(self)
+        self._cpu_load_autofit_timer.setSingleShot(True)
+        self._cpu_load_autofit_timer.setInterval(80)
+        self._cpu_load_autofit_timer.timeout.connect(self._on_cpu_load_autofit_timeout)
 
         self.setWindowTitle("RTOS BTF Viewer")
         self.resize(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
@@ -24265,10 +24352,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         view.verticalScrollBar().valueChanged.connect(
             lambda _val, v=view: self._on_view_scrolled(v))
 
-    def _setup_cpu_load_scroll(self, scroll: QScrollArea, graph: _CpuLoadGraph) -> None:
+    def _setup_cpu_load_scroll(self, scroll: _CpuLoadScrollArea, graph: _CpuLoadGraph) -> None:
         """Wire CPU load graph into a scroll area with vertical scroll when cores overflow."""
         scroll.setWidget(graph)
         scroll.setWidgetResizable(False)
+        scroll.setMinimumHeight(_CpuLoadScrollArea._MIN_PANE_H)
+        scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         graph._scroll_area = scroll
@@ -24282,7 +24371,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
             def eventFilter(self, obj, event):  # noqa: N802
                 if event.type() == QEvent.Type.Resize:
-                    self._graph._sync_scroll_size()
+                    self._graph._schedule_sync_scroll_size()
                     return False
                 if event.type() == QEvent.Type.Wheel:
                     pos = (event.position().toPoint()
@@ -24304,6 +24393,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         graph._scroll_sync_filter = filt
         scroll.viewport().installEventFilter(filt)
         scroll.installEventFilter(filt)
+        scroll.verticalScrollBar().valueChanged.connect(lambda _v: graph.update())
         graph._sync_scroll_size()
         self._sync_cpu_load_scroll_theme(scroll, graph, self._is_dark)
 
@@ -24335,15 +24425,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
         view._scene.task_filter_changed.connect(_on_task_filter_changed)
 
-        def _on_cpu_expand_all_toggled(expanded: bool) -> None:
-            view.set_all_cores_expanded(expanded)
-            if view is self._view:
-                if hasattr(self, "_tb_expand_all_btn") and self._view_mode == "core":
-                    self._tb_expand_all_btn.blockSignals(True)
-                    self._tb_expand_all_btn.setChecked(expanded)
-                    self._tb_expand_all_btn.blockSignals(False)
-                if not self._cpu_splitter_user_sized:
-                    self._autofit_cpu_load_height()
+        def _on_cpu_expand_all_toggled(_expanded: bool) -> None:
+            if view is self._view and not self._cpu_splitter_user_sized:
+                self._autofit_cpu_load_height()
 
         graph.expand_all_toggled.connect(_on_cpu_expand_all_toggled)
 
@@ -24525,11 +24609,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         mode = self._view_mode if hasattr(self, "_view_mode") else "task"
         graph.set_view_mode(mode)
         graph.set_row_h(self._cpu_load_row_h_val)
-        trace = tab.trace
-        if mode == "core" and trace and trace.core_names:
-            sc = tab.view._scene
-            for core in trace.core_names:
-                graph.set_core_expanded(core, sc._core_is_expanded(core))
 
     def _capture_legend_filters_to_scene(self, scene) -> None:
         """Copy shared legend UI into *scene* without rebuild (tab switch / persist)."""
@@ -24642,7 +24721,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "last_file": last_file,
             "last_dir": last_dir,
         }, flush=False)
-        self._settings.prune_section("tab_view", 16)
+        self._settings.prune_section("tab_view", 16, flush=False)
 
     def _restore_session_tabs(self) -> None:
         """Re-open tabs saved in the previous session (called at startup)."""
@@ -24679,9 +24758,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     def _continue_session_restore(self) -> None:
         """Load the next tab from the startup queue, then focus the saved active tab."""
+        if self._load_in_progress:
+            return
         if self._session_restore_queue:
             path = self._session_restore_queue.pop(0)
-            QTimer.singleShot(50, lambda p=path: self._open_file(p))
+            self._open_file(path)
             return
         if self._session_restore_active_idx >= 0 and self._tabs:
             idx = min(self._session_restore_active_idx, len(self._tabs) - 1)
@@ -24707,7 +24788,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._rebuild_bookmark_list()
         self._rebuild_annotation_list()
         self._restore_find_widgets_from_tab(tab)
-        self._sync_panels_to_active_tab()
+        if self._load_in_progress:
+            self._sync_panels_light()
+        else:
+            self._sync_panels_to_active_tab()
+            tab._stats_built = True
         self._wire_active_tab_vm_signals()
 
     def _focus_statistics_panel(self, force: bool = False) -> None:
@@ -24768,7 +24853,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             pass
         if self._progress_dialog is dlg:
             self._progress_dialog = None
-        self._load_in_progress = False
         if QApplication.overrideCursor() is not None:
             QApplication.restoreOverrideCursor()
 
@@ -24943,12 +25027,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         tab.cpu_splitter.setPalette(tab_pal)
         tab.cpu_splitter.setAutoFillBackground(True)
         self._tabs.append(tab)
-        idx = self._tab_widget.addTab(tab.cpu_splitter, os.path.basename(path))
-        self._tab_widget.setTabToolTip(idx, path)
         self._central_stack.setCurrentIndex(1)
-        QTimer.singleShot(0, lambda t=tab: self._apply_saved_cpu_splitter(t))
         self._tab_switch_guard = True
         try:
+            idx = self._tab_widget.addTab(tab.cpu_splitter, os.path.basename(path))
+            self._tab_widget.setTabToolTip(idx, path)
             self._tab_widget.setCurrentIndex(idx)
         finally:
             self._tab_switch_guard = False
@@ -25152,6 +25235,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     def _on_settings_changed(self) -> None:
         """Push AppSettingsViewModel changes to all open tabs and chrome."""
+        if (self._shutting_down or self._persisting_settings
+                or self._load_in_progress):
+            return
         self._apply_settings_to_all_tabs()
 
     def _apply_settings_to_all_tabs(self) -> None:
@@ -25258,10 +25344,13 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._reload_panel_visibility_prefs_from_rc()
             self._apply_dock_visibility_from_prefs()
 
-    def _sync_panel_visibility_prefs_for_persist(self) -> None:
-        """Write [view] panel flags from live dock state (authoritative on exit)."""
+    def _sync_panel_visibility_prefs_for_persist(self) -> bool:
+        """Read legend visibility for rc persist without emitting settings_changed."""
         if hasattr(self, "_legend_dock") and not self._shutting_down:
-            self._show_legend = self._legend_dock.isVisible()
+            show_legend = self._legend_dock.isVisible()
+            self._vm.settings._model.show_legend = show_legend
+            return show_legend
+        return self._show_legend
 
     def _finalize_dock_layout_from_rc(self) -> None:
         """Apply Layout checkboxes after restoreState / resizeDocks (deferred)."""
@@ -25297,9 +25386,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._tb_cpu_load_btn.setChecked(True)
 
         self._cpu_load_graph.set_row_h(self._cpu_load_row_h_val)
-        if self._cpu_splitter_bottom_h and self._cpu_splitter_bottom_h > 0:
-            for tab in self._tabs:
-                self._apply_saved_cpu_splitter(tab)
 
         horizontal = self._vm.settings.horizontal
         if hasattr(self, "_act_horiz"):
@@ -25386,6 +25472,20 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
         self._refresh_zoom_ui_unit()
 
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        """Re-autofit CPU load pane height when the window grows (stretch factor 0)."""
+        super().resizeEvent(event)
+        if (self._shutting_down or self._cpu_splitter_user_sized
+                or not self._show_cpu_load or self._active_tab is None):
+            return
+        self._cpu_load_autofit_timer.start()
+
+    def _on_cpu_load_autofit_timeout(self) -> None:
+        if (self._shutting_down or self._cpu_splitter_user_sized
+                or not self._show_cpu_load):
+            return
+        self._autofit_cpu_load_height()
+
     def closeEvent(self, event) -> None:
         """Persist runtime state and exit quickly (avoid blocking GC on large traces)."""
         self._shutting_down = True
@@ -25396,6 +25496,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             tab.view._pan_timer.stop()
             tab.view._pan_heartbeat.stop()
             tab.view._resize_timer.stop()
+        self._cpu_load_autofit_timer.stop()
         if hasattr(self, "_settings_view"):
             self._settings_view._zoom_timer.stop()
             self._settings_view._pan_timer.stop()
@@ -25437,93 +25538,102 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         """Write all runtime state to the config file (btf_viewer.rc)."""
         s = self._settings
         _MAX_DOCK_PROFILES = 12
-        # Capture the live scene value so drag-resized label width is persisted.
-        self._label_width_val = int(self._view._scene._label_width)
-        # Window geometry - only save non-maximised size/position so we can
-        # restore the proper normal-state geometry if the user un-maximises.
-        if self.isMaximized():
-            s.set("window", "maximized", "true", flush=False)
-        else:
-            s.set_many("window", {
-                "maximized": "false",
-                "width":     str(self.width()),
-                "height":    str(self.height()),
-                "x":         str(self.x()),
-                "y":         str(self.y()),
-            }, flush=False)
+        self._persisting_settings = True
+        try:
+            # Read live label width without touching AppSettingsViewModel setters
+            # (those emit settings_changed and rebuild the whole UI on large traces).
+            label_width = int(self._view._scene._label_width)
+            self._vm.settings._model.label_width = label_width
 
-        if hasattr(self, "_legend_dock"):
-            self._apply_dock_visibility_respecting_rc()
-            self._sync_panel_visibility_prefs_for_persist()
+            # Window geometry - only save non-maximised size/position so we can
+            # restore the proper normal-state geometry if the user un-maximises.
+            if self.isMaximized():
+                s.set("window", "maximized", "true", flush=False)
+            else:
+                s.set_many("window", {
+                    "maximized": "false",
+                    "width":     str(self.width()),
+                    "height":    str(self.height()),
+                    "x":         str(self.x()),
+                    "y":         str(self.y()),
+                }, flush=False)
 
-        # View settings
-        s.set_many("view", {
-            "theme":         "dark" if self._is_dark else "light",
-            "horizontal":    str(self._view._scene._horizontal).lower(),
-            "view_mode":     self._view_mode,
-            "show_sti":      str(self._show_sti).lower(),
-            "show_grid":     str(self._show_grid).lower(),
-            "show_legend":   str(self._show_legend).lower(),
-            "show_stats":    str(self._show_stats).lower(),
-            "show_marks":    str(self._show_marks).lower(),
-            "show_find":     str(self._show_find).lower(),
-            "font_size":     str(self._font_size_val),
-            "ui_font_size":  str(self._ui_font_size_val),
-            "max_cursors":   str(self._max_cursors_val),
-            "label_width":       str(self._label_width_val),
-            "row_height":        str(self._row_height_val),
-            "row_gap":           str(self._row_gap_val),
-            "timescale_per_px_default": str(self._timescale_per_px_default_val),
-            "hover_highlight":   str(self._hover_highlight_val).lower(),
-        }, flush=False)
+            show_legend = self._show_legend
+            if hasattr(self, "_legend_dock"):
+                if not self._shutting_down:
+                    self._apply_dock_visibility_respecting_rc()
+                    show_legend = self._sync_panel_visibility_prefs_for_persist()
 
-        if self._cpu_splitter_bottom_h is not None and self._cpu_splitter_bottom_h > 0:
+            # View settings
             s.set_many("view", {
-                "cpu_splitter_bottom_h": str(self._cpu_splitter_bottom_h),
-                "cpu_splitter_user_sized": str(self._cpu_splitter_user_sized).lower(),
+                "theme":         "dark" if self._is_dark else "light",
+                "horizontal":    str(self._view._scene._horizontal).lower(),
+                "view_mode":     self._view_mode,
+                "show_sti":      str(self._show_sti).lower(),
+                "show_grid":     str(self._show_grid).lower(),
+                "show_legend":   str(show_legend).lower(),
+                "show_stats":    str(self._show_stats).lower(),
+                "show_marks":    str(self._show_marks).lower(),
+                "show_find":     str(self._show_find).lower(),
+                "font_size":     str(self._font_size_val),
+                "ui_font_size":  str(self._ui_font_size_val),
+                "max_cursors":   str(self._max_cursors_val),
+                "label_width":       str(label_width),
+                "row_height":        str(self._row_height_val),
+                "row_gap":           str(self._row_gap_val),
+                "timescale_per_px_default": str(self._timescale_per_px_default_val),
+                "hover_highlight":   str(self._hover_highlight_val).lower(),
             }, flush=False)
 
-        if hasattr(self, "_stats_panel"):
-            for _sid, _h in self._stats_panel.section_table_heights().items():
-                s.set("stats", f"table_height_{_sid}", str(_h), flush=False)
+            if self._cpu_splitter_bottom_h is not None and self._cpu_splitter_bottom_h > 0:
+                s.set_many("view", {
+                    "cpu_splitter_bottom_h": str(self._cpu_splitter_bottom_h),
+                    "cpu_splitter_user_sized": str(self._cpu_splitter_user_sized).lower(),
+                }, flush=False)
 
-        # Dock layout - serialise dock sizes/positions (visibility is in [view]).
-        _DOCK_LAYOUT_VERSION = DEFAULT_DOCK_LAYOUT_VERSION
-        _dock_bytes: QByteArray = self.saveState()
-        _dock_b64 = bytes(_dock_bytes.toBase64()).decode("ascii")
-        s.set_many("window", {
-            "dock_state":          _dock_b64,
-            "dock_metrics":        self._collect_dock_metrics(),
-            "dock_layout_version": _DOCK_LAYOUT_VERSION,
-        }, flush=False)
+            if hasattr(self, "_stats_panel"):
+                for _sid, _h in self._stats_panel.section_table_heights().items():
+                    s.set("stats", f"table_height_{_sid}", str(_h), flush=False)
 
-        # Per-window-size layout/profile persistence (dock/page geometry + left panel).
-        _profile_key = self._dock_profile_key(self.width(), self.height())
-        s.set("dock_profiles", _profile_key, _dock_b64, flush=False)
-        s.set("dock_profile_label_width", _profile_key, str(self._label_width_val), flush=False)
-        s.set("dock_profile_metrics", _profile_key, self._collect_dock_metrics(), flush=False)
-        # Keep only the newest size profiles and keep both sections aligned.
-        s.prune_section("dock_profiles", _MAX_DOCK_PROFILES)
-        _keys = set(s._cfg.options("dock_profiles")) if s._cfg.has_section("dock_profiles") else set()
-        s.align_section_keys("dock_profile_label_width", _keys)
-        s.align_section_keys("dock_profile_metrics", _keys)
+            # Dock layout - serialise dock sizes/positions (visibility is in [view]).
+            _DOCK_LAYOUT_VERSION = DEFAULT_DOCK_LAYOUT_VERSION
+            _dock_bytes: QByteArray = self.saveState()
+            _dock_b64 = bytes(_dock_bytes.toBase64()).decode("ascii")
+            s.set_many("window", {
+                "dock_state":          _dock_b64,
+                "dock_metrics":        self._collect_dock_metrics(),
+                "dock_layout_version": _DOCK_LAYOUT_VERSION,
+            }, flush=False)
 
-        # Zoom - save current ns/px so we can re-apply it the next time the
-        # same file is opened.  -1 means "use fit-to-width" (no saved zoom).
-        if self._view._scene._trace is not None and not self._view._fit_mode:
-            s.set("zoom", "timescale_per_px", str(self._view._scene.timescale_per_px), flush=False)
-        else:
-            s.set("zoom", "timescale_per_px", "-1", flush=False)
+            # Per-window-size layout/profile persistence (dock/page geometry + left panel).
+            _profile_key = self._dock_profile_key(self.width(), self.height())
+            s.set("dock_profiles", _profile_key, _dock_b64, flush=False)
+            s.set("dock_profile_label_width", _profile_key, str(label_width), flush=False)
+            s.set("dock_profile_metrics", _profile_key, self._collect_dock_metrics(), flush=False)
+            # Keep only the newest size profiles and keep both sections aligned.
+            s.prune_section("dock_profiles", _MAX_DOCK_PROFILES, flush=False)
+            _keys = set(s._cfg.options("dock_profiles")) if s._cfg.has_section("dock_profiles") else set()
+            s.align_section_keys("dock_profile_label_width", _keys)
+            s.align_section_keys("dock_profile_metrics", _keys)
 
-        # Cursor positions - saved as space-separated ns timestamps so they are
-        # restored the next time the same file is opened.
-        _cursor_times = self._view._scene.cursor_times()
-        s.set("cursors", "positions",
-              " ".join(str(t) for t in _cursor_times) if _cursor_times else "",
-              flush=False)
-        self._persist_open_tabs()
-        s.flush()
-        self._report_settings_io_failure(prefix="Settings save warning")
+            # Zoom - save current ns/px so we can re-apply it the next time the
+            # same file is opened.  -1 means "use fit-to-width" (no saved zoom).
+            if self._view._scene._trace is not None and not self._view._fit_mode:
+                s.set("zoom", "timescale_per_px", str(self._view._scene.timescale_per_px), flush=False)
+            else:
+                s.set("zoom", "timescale_per_px", "-1", flush=False)
+
+            # Cursor positions - saved as space-separated ns timestamps so they are
+            # restored the next time the same file is opened.
+            _cursor_times = self._view._scene.cursor_times()
+            s.set("cursors", "positions",
+                  " ".join(str(t) for t in _cursor_times) if _cursor_times else "",
+                  flush=False)
+            self._persist_open_tabs()
+            s.flush()
+            self._report_settings_io_failure(prefix="Settings save warning")
+        finally:
+            self._persisting_settings = False
 
     def _finish_parse_thread(self, wait_ms: int = 30_000) -> bool:
         """Disconnect, join, and schedule deletion of the current parser thread."""
@@ -26882,17 +26992,53 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         else:
             self._autofit_cpu_load_height()
 
+    def _set_cpu_splitter_sizes(self, splitter: QSplitter, sizes: List[int]) -> None:
+        """Apply splitter sizes without treating the move as a user drag."""
+        self._cpu_splitter_programmatic = True
+        try:
+            splitter.setSizes(sizes)
+        finally:
+            self._cpu_splitter_programmatic = False
+
+    def _remember_cpu_splitter_sizes(self, sizes: List[int]) -> None:
+        """Record splitter sizes without triggering settings_changed (see app_settings)."""
+        if len(sizes) < 2 or sizes[1] <= 0:
+            return
+        m = self._vm.settings._model
+        m.cpu_splitter_user_sized = True
+        m.cpu_splitter_bottom_h = sizes[1]
+
+    def _persist_cpu_splitter_prefs(self) -> None:
+        """Write CPU load splitter prefs to rc without re-applying layout."""
+        if self._cpu_splitter_bottom_h is None or self._cpu_splitter_bottom_h <= 0:
+            return
+        self._settings.set_many("view", {
+            "cpu_splitter_bottom_h": str(self._cpu_splitter_bottom_h),
+            "cpu_splitter_user_sized": str(self._cpu_splitter_user_sized).lower(),
+        }, flush=False)
+
     def _on_cpu_splitter_moved(self, pos: int = 0, index: int = 0) -> None:
-        """Remember manual timeline / CPU load split so autofit does not override it."""
-        self._cpu_splitter_user_sized = True
-        sizes = self._cpu_splitter.sizes()
-        if len(sizes) >= 2 and sizes[1] > 0:
-            self._cpu_splitter_bottom_h = sizes[1]
+        """Remember manual timeline / CPU load split; defer layout until drag ends."""
+        if self._cpu_splitter_programmatic or not self._cpu_splitter_user_drag:
+            return
+        self._cpu_splitter_resizing = True
+        self._remember_cpu_splitter_sizes(self._cpu_splitter.sizes())
+        self._cpu_splitter_drag_timer.start()
+
+    def _on_cpu_splitter_drag_end(self) -> None:
+        """Finish CPU load splitter drag — one layout pass, no rebuild storm."""
+        self._cpu_splitter_resizing = False
+        self._cpu_splitter_user_drag = False
+        self._persist_cpu_splitter_prefs()
         if tab := self._active_tab:
+            tab.cpu_load_graph._schedule_sync_scroll_size()
             tab.view._position_virt_trace_bar()
+            tab.view._resize_timer.start()
 
     def _apply_saved_cpu_splitter(self, tab: Optional[_TraceTab] = None) -> None:
         """Restore a user-resized CPU load pane height on *tab*."""
+        if getattr(self, "_cpu_splitter_resizing", False):
+            return
         tab = tab or self._active_tab
         if tab is None or not self._cpu_splitter_user_sized:
             return
@@ -26900,9 +27046,20 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if bottom is None or bottom <= 0:
             return
         splitter = tab.cpu_splitter
-        total = max(splitter.height(), bottom + 120)
-        bottom = min(bottom, total - 100)
-        splitter.setSizes([total - bottom, bottom])
+        total = splitter.height()
+        if total <= 0:
+            return
+        handle = splitter.handleWidth()
+        avail = max(140, total - handle)
+        bottom = max(
+            _CpuLoadScrollArea._MIN_PANE_H,
+            min(bottom, CPU_LOAD_PANE_MAX_H, avail - 100),
+        )
+        top = avail - bottom
+        cur = splitter.sizes()
+        if len(cur) >= 2 and abs(cur[0] - top) <= 1 and abs(cur[1] - bottom) <= 1:
+            return
+        self._set_cpu_splitter_sizes(splitter, [top, bottom])
 
     def _autofit_cpu_load_height(self) -> None:
         """Resize the CPU load splitter pane; cap height so extra cores scroll inside."""
@@ -26910,16 +27067,43 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             return
         if not self._show_cpu_load or not self._cpu_load_scroll.isVisible():
             return
-        preferred = self._cpu_load_graph.sizeHint().height()
-        # Small margin for the scroll-area frame / horizontal scrollbar track.
-        preferred = preferred + 6
-        # Do not grow the pane without bound — match web CPU_LOAD_MAX_H and scroll inside.
-        fit_h = min(preferred, CPU_LOAD_PANE_MAX_H)
+        fit_h = self._cpu_load_graph.preferred_pane_height()
         sizes = self._cpu_splitter.sizes()
         total = sum(sizes)
         new_bottom = max(40, min(fit_h, total - 100))
-        self._cpu_splitter.setSizes([total - new_bottom, new_bottom])
-        self._cpu_load_graph._sync_scroll_size()
+        self._set_cpu_splitter_sizes(
+            self._cpu_splitter, [total - new_bottom, new_bottom])
+        self._cpu_load_graph._schedule_sync_scroll_size()
+
+    def _drain_pending_open_paths(self) -> None:
+        """Open files queued while a previous load was still finishing."""
+        while self._pending_open_paths and not self._load_in_progress:
+            path = self._pending_open_paths.pop(0)
+            self._open_file(path)
+            return
+
+    def _finish_load_pipeline(self) -> None:
+        """Clear the load guard and resume queued opens / session restore."""
+        self._load_in_progress = False
+        self._continue_session_restore()
+        self._drain_pending_open_paths()
+
+    def _finalize_tab_deferred_work(self, tab: _TraceTab) -> None:
+        """Build per-tab CPU bins and statistics after the timeline is shown."""
+        if tab not in self._tabs or tab.trace is None:
+            return
+        if tab is not self._active_tab:
+            tab.cpu_load_graph.set_trace(tab.trace)
+            tab.cpu_load_graph.set_font_size(self._font_size_val)
+            tab._stats_built = False
+            return
+        self.statusBar().showMessage("Building statistics…", 0)
+        _process_ui_events_safely()
+        try:
+            self._sync_panels_stats_and_chrome()
+            tab._stats_built = True
+        finally:
+            self.statusBar().clearMessage()
 
     def _close_heatmap_dialog(self) -> None:
         if self._heatmap_dlg is not None:
@@ -27147,10 +27331,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             trace is not None and _trace_is_multi_core(trace))
 
     def _toggle_expand_all_cores(self) -> None:
-        """Expand or collapse all cores based on the button's checked state."""
+        """Expand or collapse all timeline core rows (CPU load pane is independent)."""
         expanded = self._tb_expand_all_btn.isChecked()
         self._view.set_all_cores_expanded(expanded)
-        self._cpu_load_graph.set_all_expanded(expanded)
 
     def _toggle_cpu_load_graph(self) -> None:
         """Show or hide the CPU load graph panel."""
@@ -27282,7 +27465,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "annotations": [{"id": a.id, "ns": a.ns, "note": a.note} for a in annotations],
         }
         self._settings.set("trace_state", key, json.dumps(payload, ensure_ascii=True), flush=False)
-        self._settings.prune_section("trace_state", 8)
+        self._settings.prune_section("trace_state", 8, flush=False)
         self._settings.flush()
 
     def _load_trace_state(self, path: str) -> None:
@@ -27882,7 +28065,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             return
 
         if self._load_in_progress:
-            self._status_file.setText("  A load is already in progress…")
+            norm = os.path.abspath(os.path.expanduser(path))
+            if norm not in self._pending_open_paths:
+                self._pending_open_paths.append(norm)
+            self._status_file.setText("  Queued — finishing current load…")
             return
         self._load_in_progress = True
 
@@ -27913,7 +28099,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         progress_dialog.show_centered(self.geometry())
         self._progress_dialog = progress_dialog
 
-        def _teardown_loading_dialog() -> None:
+        def _teardown_loading_dialog(*, clear_load_flag: bool = True) -> None:
             try:
                 progress_dialog.close()
                 progress_dialog.deleteLater()
@@ -27921,23 +28107,26 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 pass
             if self._progress_dialog is progress_dialog:
                 self._progress_dialog = None
-            self._load_in_progress = False
+            if clear_load_flag:
+                self._load_in_progress = False
             if QApplication.overrideCursor() is not None:
                 QApplication.restoreOverrideCursor()
 
         def _on_done(trace):
+            load_ok = False
             try:
                 progress_dialog.update_progress(100, "Building scene…")
                 _process_ui_events_safely()   # let the dialog repaint before heavy build
                 try:
                     self._finalize_loaded_trace(trace, path, progress_dialog)
+                    load_ok = True
                 except (ValueError, RuntimeError, KeyError, OSError) as exc:
                     self._status_file.setText("  No file loaded")
                     QMessageBox.critical(self, "Render Error",
                                          f"Failed to display:\n{path}\n\n{exc}")
             finally:
                 if self._progress_dialog is progress_dialog:
-                    _teardown_loading_dialog()
+                    _teardown_loading_dialog(clear_load_flag=not load_ok)
                 self._finish_parse_thread()
 
         def _on_error(msg):
@@ -27992,12 +28181,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._dismiss_load_progress(progress_dialog)
 
         def _deferred_stats_sync() -> None:
-            if self._trace is not trace:
-                return
-            self.statusBar().showMessage("Building statistics…", 0)
-            _process_ui_events_safely()
-            self._sync_panels_stats_and_chrome()
-            self.statusBar().clearMessage()
+            try:
+                self._finalize_tab_deferred_work(tab)
+            finally:
+                self._finish_load_pipeline()
 
         QTimer.singleShot(0, _deferred_stats_sync)
 
@@ -28006,7 +28193,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._act_undo.setEnabled(False)
         self._act_redo.setEnabled(False)
         self._focus_statistics_panel(force=True)
-        QTimer.singleShot(0, lambda: self._focus_statistics_panel(force=True))
         if self._show_cpu_load:
             self._cpu_load_scroll.show()
 
@@ -28015,7 +28201,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._settings.flush()
         self._report_settings_io_failure(prefix="Settings save warning")
         self._update_trace_quality_banner(trace)
-        self._continue_session_restore()
 
     def _capture_viewport_pixmap(self) -> Tuple[QPixmap, float]:
         """Capture the active tab's timeline viewport, optionally with CPU load graph."""
