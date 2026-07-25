@@ -31,6 +31,20 @@
         {{ subtitle }}
       </p>
       <div
+        v-if="traceHasBounces && drillLevel === 0"
+        class="heatmap-bounce-bar"
+      >
+        <button
+          type="button"
+          class="heatmap-bounce-toggle"
+          :class="{ active: bounceOnly }"
+          :title="bounceOnly ? 'Showing only migrations that occurred while a mutex was held across cores' : 'Showing all migrations'"
+          @click="bounceOnly = !bounceOnly"
+        >
+          {{ bounceOnly ? 'Show: Lock-Bounce Only' : 'Show: All Migrations' }}
+        </button>
+      </div>
+      <div
         v-if="!hasData"
         class="heatmap-empty"
       >
@@ -142,6 +156,7 @@ const emit = defineEmits(['close', 'drillDown', 'clearFilter'])
 
 const drillLevel = ref(0)
 const drillCtx = ref(null)
+const bounceOnly = ref(false)
 const scrollRef = ref(null)
 const viewportRef = ref(null)
 const canvasRef = ref(null)
@@ -159,8 +174,10 @@ watch(() => props.taskFilterActive, (active) => {
   if (!active) goLevel0()
 })
 
-watch(() => props.trace, () => {
+watch(() => props.trace, (t) => {
   overviewScopeCache.clear()
+  bounceOnly.value = false
+  if (t) t._lockBounceNs = undefined
 })
 
 const statsRange = computed(() => {
@@ -175,6 +192,16 @@ const scopeSuffix = computed(() => {
   return ` (C1–C${r.nCursors}: ${formatTime(r.lo, props.trace.timeScale)} … ${formatTime(r.hi, props.trace.timeScale)})`
 })
 
+const traceHasBounces = computed(() => {
+  if (!props.trace?.hasSyncObjectInstrumentation) return false
+  for (const obj of props.trace.syncObjects?.values() || []) {
+    for (const h of obj.holds || []) {
+      if (h.takeCore && h.giveCore && h.takeCore !== h.giveCore) return true
+    }
+  }
+  return false
+})
+
 const usesMatrixOverview = computed(() => migrationHeatmapUsesMatrix(props.trace))
 
 const taskDrillLevel = computed(() => (usesMatrixOverview.value ? 2 : 1))
@@ -186,20 +213,20 @@ const scopeLoHi = computed(() => {
 
 const matrixHeatmap = computed(() => {
   const { lo, hi } = scopeLoHi.value
-  const key = `matrix:${overviewScopeKey(lo, hi)}`
+  const key = `matrix:${overviewScopeKey(lo, hi)}:b=${bounceOnly.value}`
   const cached = overviewScopeCache.get(key)
   if (cached) return cached
-  const hm = migrationHeatmapMatrix(props.trace, lo, hi)
+  const hm = migrationHeatmapMatrix(props.trace, lo, hi, bounceOnly.value)
   overviewScopeCache.set(key, hm)
   return hm
 })
 
 const overviewHeatmap = computed(() => {
   const { lo, hi } = scopeLoHi.value
-  const key = `pairs:${overviewScopeKey(lo, hi)}`
+  const key = `pairs:${overviewScopeKey(lo, hi)}:b=${bounceOnly.value}`
   const cached = overviewScopeCache.get(key)
   if (cached) return cached
-  const hm = migrationHeatmapGrid(props.trace, lo, hi)
+  const hm = migrationHeatmapGrid(props.trace, lo, hi, 32, bounceOnly.value)
   overviewScopeCache.set(key, hm)
   return hm
 })
@@ -210,12 +237,13 @@ const coreOutgoingHeatmap = computed(() => {
     return { pairs: [], grid: [], timeBins: 32, tMin: 0, tMax: 0, binW: 0 }
   }
   const { lo, hi } = scopeLoHi.value
-  return migrationCoreOutgoingHeatmap(props.trace, ctx.fromCore, lo, hi)
+  return migrationCoreOutgoingHeatmap(props.trace, ctx.fromCore, lo, hi, 32, bounceOnly.value)
 })
 
 const taskHeatmap = computed(() => {
   const ctx = drillCtx.value
   if (!ctx) return { rows: [], timeBins: 32, tMin: 0, tMax: 0, binW: 0 }
+  const { lo, hi } = scopeLoHi.value
   return migrationTaskHeatmapGrid(
     props.trace,
     ctx.fromCore,
@@ -225,6 +253,8 @@ const taskHeatmap = computed(() => {
     ctx.parentTimeBins ?? 32,
     ctx.parentBinIndex ?? 0,
     ctx.parentTimeBins ?? 32,
+    lo,
+    hi,
   )
 })
 
@@ -1079,5 +1109,31 @@ onBeforeUnmount(() => {
 }
 .heatmap-show-all:hover {
   filter: brightness(1.08);
+}
+.heatmap-bounce-bar {
+  display: flex;
+  align-items: center;
+  margin: 6px 0 2px;
+  flex-shrink: 0;
+}
+.heatmap-bounce-toggle {
+  border: 1px solid var(--border);
+  background: var(--tb-bg);
+  color: var(--fg-dim);
+  border-radius: 4px;
+  padding: 3px 10px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: border-color 0.12s, color 0.12s, background 0.12s;
+}
+.heatmap-bounce-toggle:hover {
+  border-color: var(--accent);
+  color: var(--fg);
+}
+.heatmap-bounce-toggle.active {
+  border-color: #e8a020;
+  background: rgba(232, 160, 32, 0.12);
+  color: #e8a020;
+  font-weight: 600;
 }
 </style>

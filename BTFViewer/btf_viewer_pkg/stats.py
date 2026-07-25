@@ -2614,6 +2614,7 @@ class _MigrationHeatmapDialog(QDialog):
         self._uses_matrix = _migration_heatmap_uses_matrix(trace)
         self._matrix_cores: list = []
         self._matrix_grid: list = []
+        self._bounce_only: bool = False
 
         lo = hi = None
         wnd = parent
@@ -2655,6 +2656,14 @@ class _MigrationHeatmapDialog(QDialog):
         self._back_btn.clicked.connect(self._go_back)
         nav.addWidget(self._back_btn)
         nav.addStretch(1)
+        self._bounce_filter_btn = QPushButton("Show: All Migrations")
+        self._bounce_filter_btn.setCheckable(True)
+        self._bounce_filter_btn.setChecked(False)
+        self._bounce_filter_btn.setToolTip(
+            "Toggle between showing all migrations and only lock-bounce migrations\n"
+            "(migrations that occurred while a mutex was held across different cores).")
+        self._bounce_filter_btn.clicked.connect(self._on_bounce_filter_toggled)
+        nav.addWidget(self._bounce_filter_btn)
         lay.addLayout(nav)
 
         self._sub_label = QLabel()
@@ -2786,6 +2795,31 @@ class _MigrationHeatmapDialog(QDialog):
             self._matrix_grid = ent.get('matrix_grid', [])
         return True
 
+    def _on_bounce_filter_toggled(self, checked: bool) -> None:
+        """Toggle heatmap between all migrations and lock-bounce-only migrations."""
+        self._bounce_only = checked
+        self._bounce_filter_btn.setText(
+            "Show: Bounce Only" if checked else "Show: All Migrations")
+        # Invalidate scope cache so grids are recomputed with the new filter
+        self._scope_cache.clear()
+        lo, hi = self._scope_lo, self._scope_hi
+        pairs, grid, time_bins = _migration_heatmap_data(
+            self._trace, lo, hi, bounce_only=self._bounce_only)
+        self._pairs = pairs
+        self._grid0 = grid
+        if self._uses_matrix:
+            self._matrix_cores, self._matrix_grid = _migration_heatmap_matrix(
+                self._trace, lo, hi, bounce_only=self._bounce_only)
+        t_min = lo if lo is not None else self._trace.time_min
+        t_hi = hi if hi is not None else self._trace.time_max
+        span = max(t_hi - t_min, 1)
+        self._ov_t_min = t_min
+        self._ov_t_max = t_hi
+        self._ov_bin_w = span / time_bins
+        self._ov_time_bins = time_bins
+        self._cache_scope_grid(lo, hi, pairs, grid, time_bins, t_min, t_hi, span)
+        self._go_level0()
+
     def refresh_scope(self) -> None:
         """Rebuild level-0 grid from current cursor scope (full trace if <2 cursors)."""
         lo = hi = None
@@ -2806,12 +2840,12 @@ class _MigrationHeatmapDialog(QDialog):
             self._go_level0()
             return
         pairs, grid, time_bins = _migration_heatmap_data(
-            self._trace, lo, hi)
+            self._trace, lo, hi, bounce_only=self._bounce_only)
         self._pairs = pairs
         self._grid0 = grid
         if self._uses_matrix:
             self._matrix_cores, self._matrix_grid = _migration_heatmap_matrix(
-                self._trace, lo, hi)
+                self._trace, lo, hi, bounce_only=self._bounce_only)
         t_min = lo if lo is not None else self._trace.time_min
         t_hi = hi if hi is not None else self._trace.time_max
         span = max(t_hi - t_min, 1)
@@ -3069,7 +3103,32 @@ class _MigrationHeatmapDialog(QDialog):
         self._set_heatmap_has_data(has_data)
         self._empty_label.setText("No task migrations in this cell.")
         if has_data:
-            self._set_canvas([r[1] for r in rows], grid)
+            # Annotate row labels with ingress (▼) / egress (▲) / balanced (⇄)
+            # indicators by comparing this direction vs. the reverse direction
+            # for each task over the full cursor scope.
+            scope_lo = self._scope_lo
+            scope_hi = self._scope_hi
+            rev_totals: Dict[str, int] = {}
+            for _m in self._trace.migrations:
+                if _m.from_core != tc or _m.to_core != fc:
+                    continue
+                if scope_lo is not None and _m.ns < scope_lo:
+                    continue
+                if scope_hi is not None and _m.ns > scope_hi:
+                    continue
+                rev_totals[_m.merge_key] = rev_totals.get(_m.merge_key, 0) + 1
+            annotated_labels: List[str] = []
+            for (mk, disp), row_counts in zip(rows, grid):
+                fwd = sum(row_counts)
+                rev = rev_totals.get(mk, 0)
+                if fwd > rev * 1.5:
+                    sym = "▲"   # primarily egress from fc
+                elif rev > fwd * 1.5:
+                    sym = "▼"   # primarily ingress back to fc
+                else:
+                    sym = "⇄"   # balanced / symmetric
+                annotated_labels.append(f"{sym} {disp}")
+            self._set_canvas(annotated_labels, grid)
         self._hint_label.setText(
             "Rows: tasks · Columns: sub-bins · "
             "Click a cell to zoom and filter in Task View")
@@ -3115,6 +3174,33 @@ class _MigrationHeatmapDialog(QDialog):
         pair_lbl = f"{self._drill_label} · {disp}"
         self._schedule_drill(self._drill_fc, self._drill_tc, pair_lbl,
                              sub_lo, sub_hi, {mk})
+
+def _gini_coefficient(values: List[float]) -> float:
+    """Gini coefficient of a list of non-negative values (0 = perfect equality, 1 = max inequality)."""
+    n = len(values)
+    if n < 2:
+        return 0.0
+    total = sum(values)
+    if total == 0.0:
+        return 0.0
+    sorted_v = sorted(values)
+    cumsum = 0.0
+    gini_num = 0.0
+    for i, v in enumerate(sorted_v):
+        cumsum += v
+        gini_num += cumsum
+    gini = (2.0 * gini_num) / (n * total) - (n + 1.0) / n
+    return max(0.0, min(1.0, gini))
+
+
+def _core_util_stddev(values: List[float]) -> float:
+    """Population standard deviation of core utilisation percentages."""
+    n = len(values)
+    if n < 2:
+        return 0.0
+    mean = sum(values) / n
+    return math.sqrt(sum((v - mean) ** 2 for v in values) / n)
+
 
 class _StatsPanel(QWidget):
     """Dock panel showing trace statistics (span, core utilisation, top tasks)."""
@@ -3760,8 +3846,9 @@ class _StatsPanel(QWidget):
         blay.addWidget(row)
 
     def _wrap_util_rows_scroll(self, blay: QVBoxLayout, inner: QWidget,
-                              row_count: int) -> None:
-        """Scroll utilisation rows vertically when there are more than 8."""
+                              row_count: int, section_id: str = "") -> None:
+        """Scroll utilisation rows vertically.  When *section_id* is given a
+        resize grip is added so the user can drag the section height."""
         inner.setMinimumWidth(0)
         inner.setMaximumWidth(16777215)
         inner.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
@@ -3770,19 +3857,32 @@ class _StatsPanel(QWidget):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setVerticalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAsNeeded if row_count > STATS_MAX_VISIBLE_ROWS
-            else Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # Always use AsNeeded: badge widgets inside inner can make the content
+        # taller than the height calculated from row_count alone.
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         vis = min(max(row_count, 1), STATS_MAX_VISIBLE_ROWS)
         scroll_h = (vis * STATS_UTIL_ROW_H
                     + max(0, vis - 1) * STATS_UTIL_ROW_GAP + 2)
-        scroll.setFixedHeight(scroll_h)
-        scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        if section_id:
+            h = self._section_table_heights.get(section_id, scroll_h)
+            self._section_table_heights[section_id] = self._apply_table_display_height(
+                scroll, h)
+        else:
+            scroll.setFixedHeight(scroll_h)
+            scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         filt = _UtilScrollResizeFilter(self, scroll, inner)
         scroll.viewport().installEventFilter(filt)
         self._util_scroll_filters.append(filt)
         self._util_scroll_areas.append(scroll)
         blay.addWidget(scroll)
+        if section_id:
+            grip = _StatsSectionGrip(self._is_dark, lambda s=scroll: s.height())
+            self._table_grips.append(grip)
+            def _on_util_height(new_h: int, _scroll=scroll, _sid=section_id) -> None:
+                self._section_table_heights[_sid] = self._apply_table_display_height(
+                    _scroll, new_h)
+            grip.height_changed.connect(_on_util_height)
+            blay.addWidget(grip)
         QTimer.singleShot(0, filt.pin_inner_width)
         QTimer.singleShot(0, self.sync_util_layout)
 
@@ -4914,10 +5014,24 @@ class _StatsPanel(QWidget):
                 f"<tbody>{body}</tbody></table></section>"
             )
 
-        core_util_html = self._html_export_util_section(
-            f"Core Utilisation (excl. IDLE/TICK){scope_title}",
-            [(core, pct) for core, pct in core_rows],
-            "core",
+        _core_util_pcts = [pct for _, pct in core_rows]
+        _lb_badge_html = ""
+        if len(_core_util_pcts) >= 2:
+            _lb_gini = _gini_coefficient(_core_util_pcts)
+            _lb_stddev = _core_util_stddev(_core_util_pcts)
+            _lb_score = max(0.0, 100.0 * (1.0 - _lb_gini))
+            _lb_color = "#b07800" if _lb_stddev > 30.0 else "#1a6a2a"
+            _lb_badge_html = (
+                f'<p style="margin:4px 0 8px; color:{_lb_color}; font-weight:600;">'
+                f"Load Balance: {_lb_score:.0f}%  "
+                f"(σ={_lb_stddev:.1f}%,  G={_lb_gini:.3f})</p>"
+            )
+        core_util_html = (
+            self._html_export_util_section(
+                f"Core Utilisation (excl. IDLE/TICK){scope_title}",
+                [(core, pct) for core, pct in core_rows],
+                "core",
+            ).replace("<div class=\"util-list\">", _lb_badge_html + "<div class=\"util-list\">", 1)
         )
         task_util_html = self._html_export_util_section(
             f"Top Tasks by CPU (excl. IDLE/TICK){scope_title}",
@@ -5009,10 +5123,11 @@ class _StatsPanel(QWidget):
         if trace.has_sync_object_instrumentation:
             sync_body = "".join(
                 f"<tr><td>{_esc(r[3])}</td><td>{_esc(r[1])}</td><td>{r[4]}</td><td>{r[5]}</td>"
+                f"<td class=\"{'sev-warning' if len(r) > 10 and r[10] > 0 else ''}\">{r[10] if len(r) > 10 else 0}</td>"
                 f"<td>{_esc(r[6])}</td><td class=\"{'sev-error' if r[8] == 'error' else 'sev-warning' if r[8] == 'warning' else ''}\">"
                 f"{_esc(r[7])}</td></tr>"
                 for r in sync_rows
-            ) or '<tr><td colspan="6" class="empty">No mutex/sem activity in scope</td></tr>'
+            ) or '<tr><td colspan="7" class="empty">No mutex/sem activity in scope</td></tr>'
             issue_body = "".join(
                 f"<tr><td>{_esc(_format_time(i['time_ns'], trace.time_scale))}</td>"
                 f"<td>{_esc(i.get('obj_key') or '—')}</td>"
@@ -5033,7 +5148,7 @@ class _StatsPanel(QWidget):
                          if len(sync_holds) >= 150 else "")
             sync_html = f"""
     <section class=\"report-card\"><h2>Mutex / Semaphore{_esc(scope_title)}</h2>
-    <table><thead><tr><th>Object</th><th>Kind</th><th>Holds</th><th>Issues</th><th>Avg hold</th><th>Status</th></tr></thead>
+    <table><thead><tr><th>Object</th><th>Kind</th><th>Holds</th><th>Issues</th><th>Bounces</th><th>Avg hold</th><th>Status</th></tr></thead>
     <tbody>{sync_body}</tbody></table>
     <h3 class=\"sub\">Pairing issues</h3>
     <table><thead><tr><th>Time</th><th>Object</th><th>Issue</th><th>Detail</th><th>Task</th><th>Core</th></tr></thead>
@@ -5330,6 +5445,13 @@ class _StatsPanel(QWidget):
             if core_rows:
                 for core, pct in core_rows:
                     writer.writerow([core, f"{pct:.1f}%"])
+                if len(core_rows) >= 2:
+                    _csv_pcts = [p for _, p in core_rows]
+                    _csv_gini = _gini_coefficient(_csv_pcts)
+                    _csv_stddev = _core_util_stddev(_csv_pcts)
+                    writer.writerow(["Load Balance Score", f"{max(0.0, 100.0*(1.0-_csv_gini)):.0f}%"])
+                    writer.writerow(["Core Util Std Dev (σ)", f"{_csv_stddev:.1f}%"])
+                    writer.writerow(["Gini Coefficient (G)", f"{_csv_gini:.4f}"])
             else:
                 writer.writerow(["No data", ""])
 
@@ -5430,12 +5552,25 @@ class _StatsPanel(QWidget):
 
             writer.writerow([])
             writer.writerow([f"Mutex / Semaphore{scope_suffix}"])
-            writer.writerow(["Object", "Kind", "Holds", "Issues", "Avg hold", "Status"])
+            writer.writerow(["Object", "Kind", "Holds", "Issues", "Bounces", "Avg hold", "Status"])
             if sync_rows_csv:
-                for _key, kind, _ptr, label, holds, issues, avg, status_label, *_rest in sync_rows_csv:
-                    writer.writerow([label, kind, holds, issues, _us(avg), status_label])
+                for row_csv in sync_rows_csv:
+                    _key, kind, _ptr, label = row_csv[:4]
+                    holds, issues, avg, status_label = row_csv[4], row_csv[5], row_csv[6], row_csv[7]
+                    bounces = row_csv[10] if len(row_csv) > 10 else 0
+                    writer.writerow([label, kind, holds, issues, bounces, _us(avg), status_label])
+                # Core affinity violations summary
+                total_bounces = sum(r[10] for r in sync_rows_csv if len(r) > 10)
+                if total_bounces > 0:
+                    writer.writerow([])
+                    writer.writerow([f"Core Affinity Violations (lock bounce){scope_suffix}"])
+                    writer.writerow(["Object", "Bounces", "Description"])
+                    for row_csv in sync_rows_csv:
+                        if len(row_csv) > 10 and row_csv[10] > 0:
+                            writer.writerow([row_csv[3], row_csv[10],
+                                             f"{row_csv[10]} hold(s) crossed core boundaries"])
             elif trace.has_sync_object_instrumentation:
-                writer.writerow(["No mutex/sem activity in scope", "", "", "", "", ""])
+                writer.writerow(["No mutex/sem activity in scope", "", "", "", "", "", ""])
 
             writer.writerow([])
             writer.writerow([f"Interval Analysis{scope_suffix}"])
@@ -5558,12 +5693,30 @@ class _StatsPanel(QWidget):
                 ilay = QVBoxLayout(inner)
                 ilay.setContentsMargins(0, 0, 0, 0)
                 ilay.setSpacing(STATS_UTIL_ROW_GAP)
+                # Load balance score badge
+                if len(_core_rows) >= 2:
+                    _pcts = [p for _, p in _core_rows]
+                    _stddev = _core_util_stddev(_pcts)
+                    _gini = _gini_coefficient(_pcts)
+                    _score = max(0.0, 100.0 * (1.0 - _gini))
+                    _badge_color = "#E8C84A" if _stddev > 30.0 else "#5FCF6F"
+                    _badge_lbl = self._lbl(
+                        f"Load Balance: {_score:.0f}%  "
+                        f"(σ={_stddev:.1f}%,  G={_gini:.3f})",
+                        color=_badge_color, ui_fs=_fs,
+                    )
+                    _badge_lbl.setToolTip(
+                        "Load Balance Score = 100% × (1 − Gini coefficient). "
+                        "σ is population standard deviation of core utilisation. "
+                        "Amber when σ > 30%.")
+                    ilay.addWidget(_badge_lbl)
                 for core, pct in _core_rows:
                     self._add_utilisation_row(
                         ilay, _fs, f"  {core}:", pct,
                         chunk_color="#5FCF6F", pct_color="#77BB77",
                     )
-                self._wrap_util_rows_scroll(blay, inner, len(_core_rows))
+                ilay.addStretch(1)
+                self._wrap_util_rows_scroll(blay, inner, len(_core_rows), "cores")
 
             self._add_collapsible_section(
                 "cores",
@@ -5588,7 +5741,8 @@ class _StatsPanel(QWidget):
                     on_click=lambda key=mk: self.task_clicked.emit(key),
                     click_tip=f"Click to highlight \u2018{disp}\u2019 in the timeline",
                 )
-            self._wrap_util_rows_scroll(blay, inner, len(_task_rows))
+            ilay.addStretch(1)
+            self._wrap_util_rows_scroll(blay, inner, len(_task_rows), "tasks")
 
         self._add_collapsible_section(
             "tasks",
@@ -5919,7 +6073,7 @@ class _StatsPanel(QWidget):
                 if not _sync_rows:
                     play.addWidget(self._lbl(empty_sync, color="#888888", ui_fs=_fs))
                 else:
-                    headers = ["Object", "Kind", "Holds", "Issues", "Avg hold", "Status"]
+                    headers = ["Object", "Kind", "Holds", "Issues", "Bounces", "Avg hold", "Status"]
                     table = QTableWidget(len(_sync_rows), len(headers))
                     table.setHorizontalHeaderLabels(headers)
                     table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -5936,10 +6090,10 @@ class _StatsPanel(QWidget):
                     _item_bg = QBrush(self._stats_table_colors()[0])
                     _status_rank = {"error": 0, "warning": 1, "ok": 2}
                     for ri, row in enumerate(_sync_rows):
-                        _key, kind, ptr, label, holds, issues, avg, status_label, status, avg_ns = row[:10]
-                        vals = [label, kind, str(holds), str(issues), avg, status_label]
+                        _key, kind, ptr, label, holds, issues, avg, status_label, status, avg_ns, bounces = row[:11]
+                        vals = [label, kind, str(holds), str(issues), str(bounces), avg, status_label]
                         sort_keys = [
-                            label.lower(), kind.lower(), holds, issues,
+                            label.lower(), kind.lower(), holds, issues, bounces,
                             avg_ns if avg_ns is not None else -1,
                             _status_rank.get(status, 3),
                         ]
@@ -5949,7 +6103,9 @@ class _StatsPanel(QWidget):
                             item.setBackground(_item_bg)
                             if ci == 0:
                                 item.setData(Qt.ItemDataRole.UserRole, _key)
-                            if ci == 5 and status != "ok":
+                            if ci == 4 and bounces > 0:
+                                item.setForeground(QBrush(QColor("#F39C12")))
+                            if ci == 6 and status != "ok":
                                 color = "#E74C3C" if status == "error" else "#F39C12"
                                 item.setForeground(QBrush(QColor(color)))
                             table.setItem(ri, ci, item)

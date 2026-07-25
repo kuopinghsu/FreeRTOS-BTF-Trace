@@ -328,13 +328,14 @@ export function buildPreemptionCompareRows(traceA, traceB, tabA = null, tabB = n
 
 function syncSummary(trace, lo, hi) {
   if (!trace?.hasSyncObjectInstrumentation) {
-    return { objects: 0, holds: 0, issues: 0, queue: 0, mutex: 0, sem: 0 }
+    return { objects: 0, holds: 0, issues: 0, queue: 0, mutex: 0, sem: 0, bounces: 0 }
   }
   const rows = syncObjectStatsRows(trace, lo, hi)
-  const out = { objects: rows.length, holds: 0, issues: 0, queue: 0, mutex: 0, sem: 0 }
+  const out = { objects: rows.length, holds: 0, issues: 0, queue: 0, mutex: 0, sem: 0, bounces: 0 }
   for (const row of rows) {
     out.holds += row.holdCount
     out.issues += row.issueCount
+    out.bounces += row.bounceCount
     if (row.kind === 'queue') out.queue++
     else if (row.kind === 'mutex') out.mutex++
     else if (row.kind === 'sem') out.sem++
@@ -351,6 +352,7 @@ export function buildSyncCompareRows(traceA, traceB, tabA = null, tabB = null, s
     { label: 'Sync objects', a: a.objects, b: b.objects, delta: fmtSignedInt(a.objects - b.objects) },
     { label: 'Holds (paired)', a: a.holds, b: b.holds, delta: fmtSignedInt(a.holds - b.holds) },
     { label: 'Issues', a: a.issues, b: b.issues, delta: fmtSignedInt(a.issues - b.issues) },
+    { label: 'Core Affinity Violations (bounce)', a: a.bounces, b: b.bounces, delta: fmtSignedInt(a.bounces - b.bounces) },
     { label: 'Mutex objects', a: a.mutex, b: b.mutex, delta: fmtSignedInt(a.mutex - b.mutex) },
     { label: 'Semaphore objects', a: a.sem, b: b.sem, delta: fmtSignedInt(a.sem - b.sem) },
     { label: 'Queue objects', a: a.queue, b: b.queue, delta: fmtSignedInt(a.queue - b.queue) },

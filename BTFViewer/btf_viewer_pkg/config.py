@@ -143,6 +143,8 @@ def default_section_collapsed() -> Dict[str, bool]:
 def default_section_table_heights() -> Dict[str, int]:
     """Default max heights for collapsible statistics tables (shared with MVVM)."""
     return {
+        "cores": STATS_UTIL_DEFAULT_H,
+        "tasks": STATS_UTIL_DEFAULT_H,
         "migrations": STATS_TABLE_MIG_DEFAULT_H,
         "exec": STATS_TABLE_DEFAULT_H,
         "block": STATS_TABLE_DEFAULT_H,

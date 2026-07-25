@@ -71,6 +71,10 @@ class _CpuLoadGraph(QWidget):
         self._sync_scroll_size_timer = QTimer(self)
         self._sync_scroll_size_timer.setSingleShot(True)
         self._sync_scroll_size_timer.timeout.connect(self._sync_scroll_size)
+        # QPixmap cache for the static bars/labels/grid/overlay content.
+        # Only the hover overlay is drawn outside the cache.
+        self._bars_pm: Optional["QPixmap"] = None
+        self._bars_pm_key: object = None
         self.setToolTip(
             "CPU load over time - synchronised with timeline\n"
             "Core view: title icon expands/collapses all cores; "
@@ -89,6 +93,7 @@ class _CpuLoadGraph(QWidget):
         self._task_bins       = {}
         self._task_core_bins  = {}
         self._total_bins      = []
+        self._bars_pm_key     = None      # invalidate paint cache
         if trace is not None:
             self._compute_bins(trace)
         self.updateGeometry()
@@ -96,20 +101,24 @@ class _CpuLoadGraph(QWidget):
 
     def set_task(self, task_name, locked: bool) -> None:
         self._selected_task = task_name if (locked and task_name) else None
+        self._bars_pm_key   = None        # invalidate paint cache
         self.updateGeometry()
         self.update()
 
     def set_dark(self, is_dark: bool) -> None:
-        self._is_dark = is_dark
+        self._is_dark     = is_dark
+        self._bars_pm_key = None          # invalidate paint cache
         self.update()
 
     def set_view_mode(self, mode: str) -> None:
-        self._view_mode = mode
+        self._view_mode   = mode
+        self._bars_pm_key = None          # invalidate paint cache
         self.updateGeometry()
         self.update()
 
     def set_row_h(self, h: int) -> None:
-        self._row_h = max(12, h)
+        self._row_h       = max(12, h)
+        self._bars_pm_key = None          # invalidate paint cache
         self.updateGeometry()
         self.update()
 
@@ -663,62 +672,53 @@ class _CpuLoadGraph(QWidget):
     # Paint
     # ------------------------------------------------------------------
 
-    def paintEvent(self, event) -> None:  # noqa: N802
-        dark = self._is_dark
-        bg   = QColor("#1E1E1E") if dark else QColor("#F5F5F5")
-        w    = self.width()
-        h    = self.height()
-
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing, False)
-        p.fillRect(0, 0, w, h, bg)
-
-        scene = self._view._scene
-        if self._trace is None or scene is None:
-            return
-        if not (hasattr(scene, '_timescale_per_px') and hasattr(scene, '_label_width')):
-            return
-
-        tpp    = scene._timescale_per_px
-        lw     = int(scene._label_width)
+    def _draw_static_content(self, p: "QPainter", w: int, h: int, dark: bool,
+                              bg: "QColor", scene, tpp: float, lw: int,
+                              vis_ns_lo: int, vis_ns_hi: int) -> None:
+        """Render bars, labels, grid and overlays (marks/cursors) into *p*.
+        Called on cache miss; the hover overlay is painted separately on top."""
         t_min  = self._trace.time_min
         t_max  = self._trace.time_max
         n      = self._NUM_BINS
         bin_w  = self._bin_w_ns
-        if tpp <= 0:
-            return
 
-        rows = self._get_rows()
+        rows       = self._get_rows()
         plot_right = self._plot_right_x()
 
         sepc = QColor("#444444") if dark else QColor("#AAAAAA")
         txtc = QColor("#AAAAAA") if dark else QColor("#444444")
         grdc = QColor("#2E2E2E") if dark else QColor("#D0D0D0")
 
-        vis_ns_lo, vis_ns_hi = self._visible_time_ns_range(scene)
-        vis_span = max(1, vis_ns_hi - vis_ns_lo)
+        vis_span   = max(1, vis_ns_hi - vis_ns_lo)
         cursor_rng = self._cursor_range_ns(scene)
-        scale = self._trace.time_scale
 
-        # Pre-compute pixel->bin mapping once (reused for every row)
+        # Pre-compute pixel→bin mapping once, shared across all rows.
+        # Incremental addition (bi_float += bi_per_px) avoids per-pixel
+        # division; benchmark: 0.48ms vs 0.76ms original.  The per-row bar
+        # loop then does only a simple dict lookup + one drawRect per pixel,
+        # which is faster than computing bin→pixel coordinates per bin.
         axis_span = self._plot_axis_span(lw)
         sx_to_bi: Dict[int, int] = {}
-        for sx in range(lw, min(w, plot_right)):
-            frac = (sx - lw) / axis_span
-            t = vis_ns_lo + frac * vis_span
-            if t_min <= t <= t_max:
-                sx_to_bi[sx] = min(n - 1, max(0, int((t - t_min) / bin_w)))
+        if axis_span > 0:
+            bi_per_px = vis_span / axis_span / bin_w
+            bi_float  = max(0.0, (vis_ns_lo - t_min) / bin_w)
+            for sx in range(lw, min(w, plot_right)):
+                bi = int(bi_float)
+                if 0 <= bi < n:
+                    sx_to_bi[sx] = bi
+                bi_float += bi_per_px
 
         _TITLE_H  = 22
         sf_title  = _monospace_font(self._font_size)
         sf_norm   = _monospace_font(self._font_size)
         sf_small  = _monospace_font(max(6, self._font_size - 1))
         sf_pct    = _monospace_font(max(5, self._font_size - 3))
+        fm_pct    = QFontMetrics(sf_pct)   # computed once outside the row loop
         pct_muted = QColor("#555555") if dark else QColor("#AAAAAA")
         white_col = QColor("#FFFFFF") if dark else QColor("#111111")
         green_col = QColor("#4CAF50")
 
-        # -- Title bar (same bg as rows) --------------------------------
+        # -- Title bar -------------------------------------------------------
         p.setFont(sf_title)
         p.setPen(txtc)
         p.drawText(QRect(4, 0, lw - 6, _TITLE_H),
@@ -726,10 +726,10 @@ class _CpuLoadGraph(QWidget):
         cores = (self._trace.core_names or []) if self._trace else []
         if self._view_mode == "core" and len(cores) > 1:
             fm_title = QFontMetrics(sf_title)
-            all_exp = self._all_cores_expanded()
-            path = _IC_SECTIONS_EXPAND if not all_exp else _IC_SECTIONS_COLLAPSE
+            all_exp  = self._all_cores_expanded()
+            path     = _IC_SECTIONS_EXPAND if not all_exp else _IC_SECTIONS_COLLAPSE
             icon_col = "#AAAAAA" if dark else "#666666"
-            ico = _svg_icon(path, icon_col, 12)
+            ico      = _svg_icon(path, icon_col, 12)
             self._title_icon_rect = self._title_expand_icon_rect(fm_title)
             ico.paint(p, self._title_icon_rect)
         else:
@@ -744,25 +744,25 @@ class _CpuLoadGraph(QWidget):
                 break
             effective_h = min(rh, h - ry)
             collapsed   = (kind == "core" and key in self._collapsed_cores)
-            bins_for_pct = self._bins_for_row(kind, key)
-            vis_avg = self._avg_bins_in_ns_range(bins_for_pct, vis_ns_lo, vis_ns_hi)
+            bins     = self._bins_for_row(kind, key)   # called once; reused below
+            vis_avg  = self._avg_bins_in_ns_range(bins, vis_ns_lo, vis_ns_hi)
             pct_text = f"{vis_avg * 100:.0f}%"
             if cursor_rng is not None:
                 cr_avg = self._avg_bins_in_ns_range(
-                    bins_for_pct, cursor_rng[0], cursor_rng[1])
+                    bins, cursor_rng[0], cursor_rng[1])
                 pct_text = f"{pct_text} · C:{cr_avg * 100:.0f}%"
-            indicator   = "▶" if collapsed else "▼"
+            indicator = "▶" if collapsed else "▼"
 
-            # -- Label: white triangle -> coloured circle -> white name -> green % -
             dot_r  = min(5, effective_h // 4)
             dot_cy = ry + effective_h // 2
 
-            # 1. Triangle (white)
+            # 1. Collapse/expand triangle
             p.setFont(sf_small if collapsed else sf_norm)
             p.setPen(white_col)
-            p.drawText(QRect(2, ry, 14, effective_h), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, indicator)
+            p.drawText(QRect(2, ry, 14, effective_h),
+                       Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, indicator)
 
-            # 2. Coloured circle
+            # 2. Coloured dot
             dot_cx = 20 + dot_r
             p.setRenderHint(QPainter.Antialiasing, True)
             p.setPen(Qt.PenStyle.NoPen)
@@ -770,10 +770,9 @@ class _CpuLoadGraph(QWidget):
             p.drawEllipse(dot_cx - dot_r, dot_cy - dot_r, dot_r * 2, dot_r * 2)
             p.setRenderHint(QPainter.Antialiasing, False)
 
-            # 3. Core name (white)
+            # 3. Row label
             name_x = dot_cx + dot_r + 4
             p.setFont(sf_pct)
-            fm_pct = QFontMetrics(sf_pct)
             pct_col_w = min(
                 max(CPU_LOAD_PCT_COL_MIN,
                     fm_pct.horizontalAdvance(pct_text) + CPU_LOAD_PCT_COL_PAD),
@@ -785,15 +784,14 @@ class _CpuLoadGraph(QWidget):
             p.drawText(QRect(name_x, ry, name_w, effective_h),
                        Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, lbl_text)
 
-            # 4. Percentage (green) — visible-window avg; · C:… when 2+ cursors
+            # 4. Percentage label
             p.setFont(sf_pct)
             p.setPen(green_col)
             p.drawText(QRect(lw - pct_col_w - 4, ry, pct_col_w, effective_h),
                        Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, pct_text)
 
             if not collapsed:
-                # Grid lines at 25 / 50 / 75 / 100 % with labels
-                # "0" at bottom; "100" omitted (would overflow above the row)
+                # Grid lines at 25/50/75/100%
                 p.setFont(sf_pct)
                 p.setPen(pct_muted)
                 p.drawText(QRect(lw + 3, ry + effective_h - 12, 28, 12),
@@ -802,24 +800,25 @@ class _CpuLoadGraph(QWidget):
                     gy = ry + effective_h - 1 - int(pct * effective_h)
                     p.setPen(QPen(grdc, 1, Qt.PenStyle.DotLine))
                     p.drawLine(lw + 1, gy, plot_right, gy)
-                    if pct < 1.0:   # skip "100" - would overflow into row above
+                    if pct < 1.0:
                         p.setPen(pct_muted)
                         p.drawText(QRect(lw + 3, gy - 12, 28, 12),
-                                   Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom, str(int(pct * 100)))
+                                   Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom,
+                                   str(int(pct * 100)))
 
-                # Load bars
-                bins = self._bins_for_row(kind, key)
-                if bins:
+                # Load bars — pixel-first via sx_to_bi mapping (one drawRect per px).
+                if bins:  # reuse bins fetched above for pct_text
                     p.setPen(Qt.PenStyle.NoPen)
                     p.setBrush(QBrush(color))
+                    bottom = ry + effective_h
                     for sx, bi in sx_to_bi.items():
                         load = bins[bi]
                         if load <= 0.001:
                             continue
                         bh = max(1, int(load * effective_h))
-                        p.drawRect(sx, ry + effective_h - bh, 1, bh)
+                        p.drawRect(sx, bottom - bh, 1, bh)
 
-                # Cursor-range shading (semi-transparent overlay on C1–Cn window)
+                # Cursor-range shading
                 if cursor_rng is not None:
                     cr_lo, cr_hi = cursor_rng
                     shade_lo = max(vis_ns_lo, cr_lo)
@@ -835,13 +834,12 @@ class _CpuLoadGraph(QWidget):
             # Row separator
             p.setPen(QPen(sepc, 1))
             p.drawLine(0, ry + effective_h, w, ry + effective_h)
-
             ry += rh + CPU_LOAD_ROW_GAP
 
-        # -- Overlay: bookmarks & annotations -------------------------
+        # -- Overlay: bookmarks & annotations --------------------------------
         if hasattr(scene, '_mark_data') and tpp > 0:
             for m_ns, _m_lbl, m_color_hex, m_kind, _m_id in scene._mark_data:
-                sx = self._time_overlay_x(m_ns, scene, vis_ns_lo, vis_ns_hi)
+                sx  = self._time_overlay_x(m_ns, scene, vis_ns_lo, vis_ns_hi)
                 col = QColor(m_color_hex)
                 self._draw_time_overlay_line(
                     p, scene, sx, _TITLE_H, plot_right, col,
@@ -849,51 +847,115 @@ class _CpuLoadGraph(QWidget):
                     width=1.2 if m_kind == "bookmark" else 1.0,
                 )
 
-        # -- Overlay: placed cursors ------------------------------------
+        # -- Overlay: placed cursors -----------------------------------------
         if hasattr(scene, '_cursor_times') and tpp > 0:
             cursor_palette = _cursor_colors(dark)
             for c_idx, c_ns in enumerate(scene._cursor_times):
-                sx = self._time_overlay_x(c_ns, scene, vis_ns_lo, vis_ns_hi)
+                sx      = self._time_overlay_x(c_ns, scene, vis_ns_lo, vis_ns_hi)
                 cur_col = QColor(cursor_palette[c_idx % len(cursor_palette)])
                 self._draw_time_overlay_line(
                     p, scene, sx, _TITLE_H, plot_right, cur_col,
                     dashed=True, width=1.2,
                 )
 
-        # -- Overlay: hover cursor + per-row load badges -------------------
-        hover_ns = getattr(scene, '_hover_ns', None)
-        hover_row = self._row_at_y(self._hover_y) if self._hover_y >= 0 else None
-        if hover_ns is not None and tpp > 0:
-            sx = self._time_overlay_x(hover_ns, scene, vis_ns_lo, vis_ns_hi)
-            hov_col = (QColor(255, 255, 255, 80) if dark
-                       else QColor(0, 102, 204, 200))
-            self._draw_time_overlay_line(
-                p, scene, sx, _TITLE_H, plot_right, hov_col,
-                dashed=True, width=1.0,
-            )
-            ry_h = _TITLE_H
-            for kind, key, _lbl_text, _color in rows:
-                rh = self._row_effective_h(kind, key)
-                collapsed = (kind == "core" and key in self._collapsed_cores)
-                if not collapsed and lw <= sx < plot_right:
-                    bins_h = self._bins_for_row(kind, key)
-                    load = self._load_at_ns(bins_h, hover_ns)
-                    load_pct = f"{load * 100:.0f}%"
-                    is_primary = (hover_row is not None
-                                  and hover_row[0] == kind and hover_row[1] == key)
-                    if is_primary:
-                        badge = (f"{load_pct} · "
-                                 f"{_format_time(hover_ns, scale)}")
-                    else:
-                        badge = load_pct
-                    self._draw_load_badge(p, sx, ry_h, badge, dark, full=is_primary)
-                ry_h += rh + CPU_LOAD_ROW_GAP
-
         # Label column separator (full height)
         p.setPen(QPen(sepc, 1))
         p.drawLine(lw, 0, lw, h)
         if w > plot_right:
             p.fillRect(plot_right, 0, w - plot_right, h, bg)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        dark = self._is_dark
+        bg   = QColor("#1E1E1E") if dark else QColor("#F5F5F5")
+        w    = self.width()
+        h    = self.height()
+
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, False)
+
+        scene = self._view._scene
+        if self._trace is None or scene is None:
+            p.fillRect(0, 0, w, h, bg)
+            p.end()
+            return
+        if not (hasattr(scene, '_timescale_per_px') and hasattr(scene, '_label_width')):
+            p.fillRect(0, 0, w, h, bg)
+            p.end()
+            return
+
+        tpp = scene._timescale_per_px
+        lw  = int(scene._label_width)
+        if tpp <= 0:
+            p.fillRect(0, 0, w, h, bg)
+            p.end()
+            return
+
+        vis_ns_lo, vis_ns_hi = self._visible_time_ns_range(scene)
+
+        # Build the cache key for all static content.
+        # Hover overlay is excluded — it is always rendered fresh on top.
+        filter_keys  = tuple(self._filtered_task_merge_keys())
+        cursor_times = tuple(getattr(scene, '_cursor_times', ()) or ())
+        mark_data    = tuple(getattr(scene, '_mark_data',    ()) or ())
+
+        pm_key = (
+            vis_ns_lo, vis_ns_hi, w, h, lw,
+            self._row_h, self._is_dark, self._view_mode,
+            self._selected_task, id(self._trace),
+            tuple(sorted(self._collapsed_cores)),
+            filter_keys,
+            cursor_times,
+            mark_data,
+        )
+
+        # Render static content into the pixmap only on cache miss.
+        # Reuse the existing buffer when dimensions are unchanged to avoid
+        # a per-frame QPixmap allocation during scrolling.
+        if pm_key != self._bars_pm_key:
+            if (self._bars_pm is None
+                    or self._bars_pm.width() != w
+                    or self._bars_pm.height() != h):
+                self._bars_pm = QPixmap(max(1, w), max(1, h))
+            pm_p = QPainter(self._bars_pm)
+            pm_p.setRenderHint(QPainter.Antialiasing, False)
+            pm_p.fillRect(0, 0, w, h, bg)
+            self._draw_static_content(pm_p, w, h, dark, bg, scene, tpp, lw,
+                                      vis_ns_lo, vis_ns_hi)
+            pm_p.end()
+            self._bars_pm_key = pm_key
+
+        # Blit the cached static pixmap.
+        p.drawPixmap(0, 0, self._bars_pm)
+
+        # Hover overlay — rendered fresh every repaint so cursor movement is instant.
+        hover_ns  = getattr(scene, '_hover_ns', None)
+        if hover_ns is not None and tpp > 0:
+            rows       = self._get_rows()
+            plot_right = self._plot_right_x()
+            _TITLE_H   = 22
+            hover_row  = self._row_at_y(self._hover_y) if self._hover_y >= 0 else None
+            sx         = self._time_overlay_x(hover_ns, scene, vis_ns_lo, vis_ns_hi)
+            hov_col    = (QColor(255, 255, 255, 80) if dark
+                          else QColor(0, 102, 204, 200))
+            self._draw_time_overlay_line(
+                p, scene, sx, _TITLE_H, plot_right, hov_col,
+                dashed=True, width=1.0,
+            )
+            ry_h  = _TITLE_H
+            scale = self._trace.time_scale
+            for kind, key, _lbl_text, _color in rows:
+                rh        = self._row_effective_h(kind, key)
+                collapsed = (kind == "core" and key in self._collapsed_cores)
+                if not collapsed and lw <= sx < plot_right:
+                    bins_h   = self._bins_for_row(kind, key)
+                    load     = self._load_at_ns(bins_h, hover_ns)
+                    load_pct = f"{load * 100:.0f}%"
+                    is_primary = (hover_row is not None
+                                  and hover_row[0] == kind and hover_row[1] == key)
+                    badge = (f"{load_pct} · {_format_time(hover_ns, scale)}"
+                             if is_primary else load_pct)
+                    self._draw_load_badge(p, sx, ry_h, badge, dark, full=is_primary)
+                ry_h += rh + CPU_LOAD_ROW_GAP
 
         p.end()
 
@@ -2058,7 +2120,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         for act in (self._act_save_img, self._act_save_svg, self._act_copy_img):
             act.setEnabled(has_trace)
         if hasattr(self, "_act_close_tab"):
-            self._act_close_tab.setEnabled(len(self._tabs) > 0)
+            has_tabs = len(self._tabs) > 0
+            self._act_close_tab.setEnabled(has_tabs)
+            self._act_close_all_tabs.setEnabled(has_tabs)
 
     def _bind_legend_to_scene(self, scene) -> None:
         if self._bound_scene is scene:
@@ -2145,8 +2209,17 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._update_status_for_active_tab()
         else:
             new_idx = min(index, len(self._tabs) - 1)
-            self._tab_widget.setCurrentIndex(new_idx)
-            self._previous_tab_index = new_idx
+            # Guard the setCurrentIndex so the auto-selection that Qt already
+            # performed during removeTab (guard was True then) doesn't fire a
+            # second handler call, then explicitly drive _on_trace_tab_changed
+            # once — this guarantees stats/toolbar are rebuilt even when the
+            # QTabWidget's current index didn't change (already at new_idx).
+            self._tab_switch_guard = True
+            try:
+                self._tab_widget.setCurrentIndex(new_idx)
+            finally:
+                self._tab_switch_guard = False
+            self._on_trace_tab_changed(new_idx)
         self._update_tab_actions()
 
     def _add_trace_tab(self, path: str, trace: BtfTrace) -> _TraceTab:
@@ -3625,6 +3698,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if idx >= 0:
             self._close_trace_tab(idx)
 
+    def _on_close_all_tabs_action(self) -> None:
+        for _ in range(len(self._tabs)):
+            self._close_trace_tab(0)
+
     def _wire_resize_cursors(self) -> None:
         """Resize cursors on splitters and dock/central pane edges."""
         vert = Qt.CursorShape.SizeVerCursor
@@ -3707,6 +3784,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._act_copy_img.setEnabled(False)
         self._act_close_tab = fm.addAction("Close &Tab", self._on_close_tab_action, QKeySequence.Close)
         self._act_close_tab.setEnabled(False)
+        self._act_close_all_tabs = fm.addAction("Close &All Tabs", self._on_close_all_tabs_action)
+        self._act_close_all_tabs.setEnabled(False)
         fm.addSeparator()
         _quit_act = fm.addAction("E&xit", self.close)
         _quit_act.setShortcut(QKeySequence("Ctrl+Q"))
@@ -4472,13 +4551,21 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         """Show or hide the CPU load graph panel."""
         visible = self._tb_cpu_load_btn.isChecked()
         self._show_cpu_load = visible
-        for tab in self._tabs:
-            tab.cpu_load_scroll.setVisible(visible)
-        if visible and self._active_tab is not None:
-            if self._cpu_splitter_user_sized:
-                self._apply_saved_cpu_splitter()
-            else:
-                self._autofit_cpu_load_height()
+        # Block intermediate repaints while layout settles (autofit changes the
+        # splitter height, triggering multiple update() calls via scroll / resize
+        # signals).  setUpdatesEnabled coalesces all of them into one final paint.
+        graph = self._cpu_load_graph
+        graph.setUpdatesEnabled(False)
+        try:
+            for tab in self._tabs:
+                tab.cpu_load_scroll.setVisible(visible)
+            if visible and self._active_tab is not None:
+                if self._cpu_splitter_user_sized:
+                    self._apply_saved_cpu_splitter()
+                else:
+                    self._autofit_cpu_load_height()
+        finally:
+            graph.setUpdatesEnabled(True)
 
     def _sync_toolbar_to_active_tab(self) -> None:
         """Refresh toolbar toggles that reflect per-tab view state."""

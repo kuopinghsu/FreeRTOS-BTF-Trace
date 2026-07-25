@@ -104,8 +104,18 @@
       </div>
       <template v-if="!coresCollapsed">
         <div
+          v-if="loadBalanceScore"
+          class="load-balance-badge"
+          :class="{ 'load-balance-amber': loadBalanceScore.amber }"
+          :title="`Load Balance Score = 100% × (1 − Gini). σ is population std dev of core utilisation. Amber when σ > 30%.`"
+        >
+          Load Balance: {{ loadBalanceScore.score.toFixed(0) }}%
+          &nbsp;(σ={{ loadBalanceScore.stddev.toFixed(1) }}%,
+          G={{ loadBalanceScore.gini.toFixed(3) }})
+        </div>
+        <div
           class="stats-util-scroll"
-          :style="utilScrollStyle(coreStats.length)"
+          :style="utilScrollStyle(coreStats.length, 'cores')"
         >
           <div
             v-for="cs in coreStats"
@@ -122,6 +132,12 @@
             <span class="core-pct">{{ cs.pct.toFixed(1) }}%</span>
           </div>
         </div>
+        <div
+          class="stats-section-resizer"
+          role="separator"
+          aria-label="Resize core utilisation"
+          @mousedown="onTableResizeStart('cores', $event)"
+        />
       </template>
     </template>
 
@@ -159,7 +175,7 @@
       <div
         v-else
         class="stats-util-scroll"
-        :style="utilScrollStyle(topTasks.length)"
+        :style="utilScrollStyle(topTasks.length, 'tasks')"
       >
         <div
           v-for="t in topTasks"
@@ -183,6 +199,13 @@
           <span class="task-stat-pct">{{ t.pct.toFixed(1) }}%</span>
         </div>
       </div>
+      <div
+        v-if="topTasks.length > 0"
+        class="stats-section-resizer"
+        role="separator"
+        aria-label="Resize top tasks"
+        @mousedown="onTableResizeStart('tasks', $event)"
+      />
     </template>
 
     <!-- Trace health (TICK) -->
@@ -1167,6 +1190,13 @@
                     Issues
                   </th>
                   <th
+                    :class="thSortClass('sync', 'bounces')"
+                    @click="toggleTableSort('sync', 'bounces')"
+                    title="Number of holds where the mutex lock crossed core boundaries (cache-line bounce)"
+                  >
+                    Bounces
+                  </th>
+                  <th
                     :class="thSortClass('sync', 'avg')"
                     @click="toggleTableSort('sync', 'avg')"
                   >
@@ -1190,6 +1220,9 @@
                   <td>{{ row.kind }}</td>
                   <td>{{ row.holdCount }}</td>
                   <td>{{ row.issueCount }}</td>
+                  <td :class="row.bounceCount > 0 ? 'sev-warning' : ''">
+                    {{ row.bounceCount }}
+                  </td>
                   <td>{{ row.avgHold }}</td>
                   <td :class="syncStatusClass(row.status)">
                     {{ row.statusLabel }}
@@ -2406,8 +2439,11 @@ function statsTableViewportHeight(visibleRows = STATS_MAX_VISIBLE_ROWS, reserveH
 
 const STATS_TABLE_DEFAULT_H = statsTableViewportHeight()
 const STATS_TABLE_MIG_DEFAULT_H = statsTableViewportHeight(STATS_MAX_VISIBLE_ROWS, true)
+const STATS_UTIL_DEFAULT_H = STATS_MAX_VISIBLE_ROWS * STATS_UTIL_ROW_H + (STATS_MAX_VISIBLE_ROWS - 1) * STATS_UTIL_ROW_GAP + 2
 
 const sectionHeights = ref({
+  cores: STATS_UTIL_DEFAULT_H,
+  tasks: STATS_UTIL_DEFAULT_H,
   migrations: STATS_TABLE_MIG_DEFAULT_H,
   exec: STATS_TABLE_DEFAULT_H,
   block: STATS_TABLE_DEFAULT_H,
@@ -2467,9 +2503,14 @@ function tableHeight(id) {
   return sectionHeights.value[id] ?? fallback
 }
 
-function utilScrollStyle(rowCount) {
-  const vis = Math.min(Math.max(rowCount, 1), STATS_MAX_VISIBLE_ROWS)
-  const h = vis * STATS_UTIL_ROW_H + Math.max(0, vis - 1) * STATS_UTIL_ROW_GAP + 2
+function utilScrollStyle(rowCount, id = null) {
+  let h
+  if (id != null && sectionHeights.value[id] != null) {
+    h = sectionHeights.value[id]
+  } else {
+    const vis = Math.min(Math.max(rowCount, 1), STATS_MAX_VISIBLE_ROWS)
+    h = vis * STATS_UTIL_ROW_H + Math.max(0, vis - 1) * STATS_UTIL_ROW_GAP + 2
+  }
   return { height: `${h}px`, overflowY: 'auto', overflowX: 'hidden', flexShrink: '0' }
 }
 
@@ -2611,6 +2652,31 @@ const coreStats = computed(() => {
     }
     return { core, pct: 100.0 * active / total }
   })
+})
+
+// ---- Load Balance Score (Feature 2) ------------------------------------
+const loadBalanceScore = computed(() => {
+  const cs = coreStats.value
+  if (cs.length < 2) return null
+  const pcts = cs.map(c => c.pct)
+  const n = pcts.length
+  const total = pcts.reduce((a, b) => a + b, 0)
+  if (total === 0) return null
+  // Gini coefficient
+  const sorted = [...pcts].sort((a, b) => a - b)
+  let cumsum = 0
+  let giniNum = 0
+  for (let i = 0; i < n; i++) {
+    cumsum += sorted[i]
+    giniNum += cumsum
+  }
+  const gini = Math.max(0, Math.min(1, (2 * giniNum) / (n * total) - (n + 1) / n))
+  // Population std dev
+  const mean = total / n
+  const variance = pcts.reduce((s, v) => s + (v - mean) ** 2, 0) / n
+  const stddev = Math.sqrt(variance)
+  const score = Math.max(0, 100 * (1 - gini))
+  return { score, gini, stddev, amber: stddev > 30 }
 })
 
 // ---- Top 10 tasks by CPU -----------------------------------------------
@@ -4585,6 +4651,18 @@ watch(plotData, () => {
   max-height: 16px;
   margin-bottom: 0;
   flex-shrink: 0;
+}
+
+.load-balance-badge {
+  font-size: 11px;
+  font-weight: 600;
+  color: #1a8a2a;
+  padding: 2px 6px 4px;
+  margin-bottom: 4px;
+}
+
+.load-balance-amber {
+  color: #b07800;
 }
 
 .core-name {

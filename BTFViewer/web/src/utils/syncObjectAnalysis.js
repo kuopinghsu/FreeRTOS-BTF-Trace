@@ -176,6 +176,17 @@ export function buildSyncObjectData(stiEvents, coreSegs, taskRepr, timeMax, core
               })
             }
             recordHold(obj, take, giveRec, true)
+            if (take.core && giveRec.core && take.core !== giveRec.core) {
+              pushIssue(obj, {
+                kind: 'CORE_MIGRATION_WHILE_HELD',
+                severity: 'warning',
+                timeNs: ev.time,
+                core: ev.core || '',
+                taskMk,
+                taskLabel,
+                detail: `Lock bounced from ${take.core} to ${ev.core}`,
+              })
+            }
           }
         } else if (obj.kind === 'queue') {
           obj.openGives.push(giveRec)
@@ -300,6 +311,9 @@ export function syncObjectStatsRows(trace, lo, hi, { kindFilter = null } = {}) {
       continue
     }
     const status = objectStatus(obj, lo, hi)
+    const bounceCount = holds.filter(
+      h => h.takeCore && h.giveCore && h.takeCore !== h.giveCore,
+    ).length
     rows.push({
       key: obj.key,
       kind: obj.kind,
@@ -307,6 +321,7 @@ export function syncObjectStatsRows(trace, lo, hi, { kindFilter = null } = {}) {
       label: `${obj.kind} ${obj.ptr}`,
       holdCount: holds.length,
       issueCount: issues.length,
+      bounceCount,
       status,
       statusLabel: status === 'ok' ? 'OK' : status === 'error' ? 'Error' : 'Warning',
       issues,

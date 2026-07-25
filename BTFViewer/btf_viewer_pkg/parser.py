@@ -91,6 +91,7 @@ class SyncIssueRef:
     obj_key: Optional[str] = None
     ptr: str = ""
 
+_META_KEY_RE = re.compile(r"^[\w.-]+$")
 _CREATE_PRI_RE = re.compile(r"^create\s+pri:(\d+)\s*$", re.IGNORECASE)
 _PRIORITY_STI_RE = re.compile(
     r"^(set_priority|priority_inherit|priority_disinherit)\s+(.+?)\s+pri:(\d+)\s*$",
@@ -1030,6 +1031,17 @@ def _build_sync_object_data(
                                 "detail": f"give by {task_label}, held by {take['task_label']}",
                             })
                         _record_hold(obj, take, give_rec, True)
+                        if (take.get("core") and give_rec.get("core")
+                                and take["core"] != give_rec["core"]):
+                            obj["issues"].append({
+                                "kind": "CORE_MIGRATION_WHILE_HELD",
+                                "severity": "warning",
+                                "time_ns": ev.time,
+                                "core": ev.core or "",
+                                "task_mk": task_mk,
+                                "task_label": task_label,
+                                "detail": f"Lock bounced from {take['core']} to {ev.core}",
+                            })
                 elif obj["kind"] == "queue":
                     obj["open_gives"].append(give_rec)
                 elif obj["open_takes"]:
@@ -1124,6 +1136,11 @@ def _sync_object_stats_rows(
         status = _sync_object_status(obj, lo, hi)
         status_label = {"ok": "OK", "error": "Error", "warning": "Warning"}[status]
         avg_ns = (sum(h["duration_ns"] for h in holds) // len(holds)) if holds else 0
+        bounces = sum(
+            1 for h in holds
+            if h.get("take_core") and h.get("give_core")
+            and h["take_core"] != h["give_core"]
+        )
         rows.append((
             obj["key"],
             obj["kind"],
@@ -1135,6 +1152,7 @@ def _sync_object_stats_rows(
             status_label,
             status,
             avg_ns,
+            bounces,
         ))
     rows.sort(key=lambda r: (
         0 if r[8] == "error" else 1 if r[8] == "warning" else 2,
@@ -1431,6 +1449,8 @@ class BtfTrace:
     sync_objects: Dict[str, dict]                                           = field(default_factory=dict)
     sync_issues: List[dict]                                                 = field(default_factory=list)
     has_sync_object_instrumentation: bool                                   = False
+    # Timestamps (ns) of migrations that occurred while a mutex was held across cores.
+    lock_bounce_migration_ns: frozenset                                     = field(default_factory=frozenset)
 
 # ---------------------------------------------------------------------------
 # Task-name helpers
@@ -2068,9 +2088,33 @@ def _tick_health_report(trace: "BtfTrace",
         "tick_cv": tick_cv,
     }
 
+def _build_lock_bounce_migration_set(
+    migrations_by_mk: Dict[str, list], sync_objects: Dict[str, dict]
+) -> frozenset:
+    """Return frozenset of migration timestamps (ns) that occurred while a mutex
+    was held across two different cores (cache-line bounce migrations)."""
+    bounce_ns: set = set()
+    for obj in sync_objects.values():
+        if obj["kind"] != "mutex":
+            continue
+        for hold in obj.get("holds", []):
+            if not (hold.get("take_core") and hold.get("give_core")
+                    and hold["take_core"] != hold["give_core"]):
+                continue
+            holder_mk = hold.get("holder_mk")
+            if not holder_mk:
+                continue
+            t0, t1 = hold["start_ns"], hold["stop_ns"]
+            for mig in migrations_by_mk.get(holder_mk, []):
+                if t0 <= mig.ns <= t1:
+                    bounce_ns.add(mig.ns)
+    return frozenset(bounce_ns)
+
+
 def _migration_heatmap_data(trace: "BtfTrace",
                             lo: Optional[int] = None, hi: Optional[int] = None,
-                            time_bins: int = 32) -> Tuple[list, list, int]:
+                            time_bins: int = 32,
+                            bounce_only: bool = False) -> Tuple[list, list, int]:
     """Core-pair rows × time bins grid for migration heatmap."""
     cores = trace.core_names
     pairs = []
@@ -2087,6 +2131,8 @@ def _migration_heatmap_data(trace: "BtfTrace",
     bin_w = span / time_bins
     grid = [[0] * time_bins for _ in pairs]
     for m in trace.migrations:
+        if bounce_only and m.ns not in trace.lock_bounce_migration_ns:
+            continue
         if lo is not None and m.ns < lo:
             continue
         if hi is not None and m.ns > hi:
@@ -2105,14 +2151,16 @@ def _migration_heatmap_uses_matrix(trace: "BtfTrace") -> bool:
     return len(trace.core_names) > _MIGRATION_HEATMAP_MATRIX_CORE_THRESHOLD
 
 def _migration_heatmap_matrix(trace: "BtfTrace",
-                              lo: Optional[int] = None, hi: Optional[int] = None
-                              ) -> Tuple[list, list]:
+                              lo: Optional[int] = None, hi: Optional[int] = None,
+                              bounce_only: bool = False) -> Tuple[list, list]:
     """Source × destination core counts (one row per source core)."""
     cores = trace.core_names
     n = len(cores)
     core_idx = {c: i for i, c in enumerate(cores)}
     grid = [[0] * n for _ in range(n)]
     for m in trace.migrations:
+        if bounce_only and m.ns not in trace.lock_bounce_migration_ns:
+            continue
         if lo is not None and m.ns < lo:
             continue
         if hi is not None and m.ns > hi:
@@ -3349,5 +3397,7 @@ def _parse_btf(filepath: str,
         sync_objects=_sync_objects,
         sync_issues=_sync_issues,
         has_sync_object_instrumentation=_has_sync,
+        lock_bounce_migration_ns=_build_lock_bounce_migration_set(
+            dict(_migrations_by_mk), _sync_objects),
     )
 

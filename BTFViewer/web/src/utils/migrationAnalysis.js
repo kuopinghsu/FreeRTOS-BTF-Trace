@@ -272,16 +272,52 @@ export function migrationHeatmapUsesMatrix(trace) {
   return (trace?.coreNames?.length ?? 0) > MIGRATION_HEATMAP_MATRIX_CORE_THRESHOLD
 }
 
+/**
+ * Build the set of migration ns timestamps that occurred during a mutex hold
+ * that crossed cores (cache-line bounce). Result is cached on the trace object.
+ */
+function buildLockBounceNsSet(trace) {
+  if (!trace) return new Set()
+  if (trace._lockBounceNs) return trace._lockBounceNs
+  const s = new Set()
+  if (trace.hasSyncObjectInstrumentation && trace.syncObjects) {
+    const bounceHolds = []
+    for (const obj of trace.syncObjects.values()) {
+      if (obj.kind !== 'mutex') continue
+      for (const h of obj.holds || []) {
+        if (h.takeCore && h.giveCore && h.takeCore !== h.giveCore) {
+          bounceHolds.push(h)
+        }
+      }
+    }
+    if (bounceHolds.length) {
+      for (const m of trace.migrations || []) {
+        for (const h of bounceHolds) {
+          if (h.holderMk && m.mergeKey !== h.holderMk) continue
+          if (m.ns >= h.startNs && m.ns <= h.stopNs) {
+            s.add(m.ns)
+            break
+          }
+        }
+      }
+    }
+  }
+  trace._lockBounceNs = s
+  return s
+}
+
 /** Source × destination core counts for large traces (one overview row per source core). */
-export function migrationHeatmapMatrix(trace, lo = null, hi = null) {
+export function migrationHeatmapMatrix(trace, lo = null, hi = null, bounceOnly = false) {
   if (!trace) return { cores: [], grid: [] }
   const cores = trace.coreNames || []
   const n = cores.length
   const coreIndex = new Map(cores.map((c, i) => [c, i]))
   const grid = Array.from({ length: n }, () => Array(n).fill(0))
+  const bounceNs = bounceOnly ? buildLockBounceNsSet(trace) : null
   for (const m of trace.migrations || []) {
     if (lo != null && m.ns < lo) continue
     if (hi != null && m.ns > hi) continue
+    if (bounceNs && !bounceNs.has(m.ns)) continue
     const fi = coreIndex.get(m.fromCore)
     const ti = coreIndex.get(m.toCore)
     if (fi == null || ti == null || fi === ti) continue
@@ -291,7 +327,7 @@ export function migrationHeatmapMatrix(trace, lo = null, hi = null) {
 }
 
 /** Time bins for all outgoing pairs from one source core (matrix row drill-down). */
-export function migrationCoreOutgoingHeatmap(trace, fromCore, lo = null, hi = null, timeBins = 32) {
+export function migrationCoreOutgoingHeatmap(trace, fromCore, lo = null, hi = null, timeBins = 32, bounceOnly = false) {
   if (!trace || !fromCore) {
     return { pairs: [], grid: [], timeBins, tMin: 0, tMax: 0, binW: 0 }
   }
@@ -311,10 +347,12 @@ export function migrationCoreOutgoingHeatmap(trace, fromCore, lo = null, hi = nu
   const binW = span / timeBins
   const grid = pairs.map(() => Array(timeBins).fill(0))
   const pairIndex = new Map(pairs.map((p, i) => [`${p.to}`, i]))
+  const bounceNs = bounceOnly ? buildLockBounceNsSet(trace) : null
   for (const m of trace.migrations || []) {
     if (m.fromCore !== fromCore) continue
     if (lo != null && m.ns < lo) continue
     if (hi != null && m.ns > hi) continue
+    if (bounceNs && !bounceNs.has(m.ns)) continue
     const pi = pairIndex.get(m.toCore)
     if (pi == null) continue
     const bi = heatmapBinIndexForNs(tMin, binW, timeBins, tHi, m.ns)
@@ -352,7 +390,7 @@ export function migrationPairTimeBins(trace, fromCore, toCore, lo = null, hi = n
 }
 
 /** Core-pair rows × time bins for migration heatmap popup. */
-export function migrationHeatmapGrid(trace, lo = null, hi = null, timeBins = 32) {
+export function migrationHeatmapGrid(trace, lo = null, hi = null, timeBins = 32, bounceOnly = false) {
   if (!trace) return { pairs: [], grid: [], timeBins, tMin: 0, tMax: 0, binW: 0 }
   const cores = trace.coreNames || []
   const pairs = []
@@ -374,9 +412,11 @@ export function migrationHeatmapGrid(trace, lo = null, hi = null, timeBins = 32)
   const span = Math.max(tHi - tMin, 1)
   const binW = span / timeBins
   const grid = pairs.map(() => Array(timeBins).fill(0))
+  const bounceNs = bounceOnly ? buildLockBounceNsSet(trace) : null
   for (const m of trace.migrations || []) {
     if (lo != null && m.ns < lo) continue
     if (hi != null && m.ns > hi) continue
+    if (bounceNs && !bounceNs.has(m.ns)) continue
     const pi = pairIndex.get(`${m.fromCore}\0${m.toCore}`)
     if (pi == null) continue
     const bi = heatmapBinIndexForNs(tMin, binW, timeBins, tHi, m.ns)
@@ -422,10 +462,12 @@ export function mergeKeysForHeatmapCell(trace, fromCore, toCore, binLo, binHi,
   return [...keys]
 }
 
-/** Task rows × sub-bins for one core-pair / time-bin drill-down. */
+/** Task rows × sub-bins for one core-pair / time-bin drill-down.
+ *  scopeLo/scopeHi are the cursor range used to count reverse-direction
+ *  migrations for the ingress (▼) / egress (▲) / balanced (⇄) annotation. */
 export function migrationTaskHeatmapGrid(trace, fromCore, toCore, binLo, binHi,
                                          timeBins = 32, parentBinIndex = 0,
-                                         parentTimeBins = 32) {
+                                         parentTimeBins = 32, scopeLo = null, scopeHi = null) {
   if (!trace) return { rows: [], timeBins, tMin: binLo, tMax: binHi, binW: 0 }
   const tMin = binLo
   const tHi = binHi
@@ -445,10 +487,21 @@ export function migrationTaskHeatmapGrid(trace, fromCore, toCore, binLo, binHi,
     const sb = b[1].reduce((x, y) => x + y, 0)
     return sb - sa || a[0].localeCompare(b[0])
   })
-  const rows = items.map(([mk, grid]) => ({
-    mk,
-    label: taskLabelForMergeKey(trace, mk),
-    grid,
-  }))
+  // Count reverse-direction migrations per task for ingress/egress annotation.
+  const revTotals = new Map()
+  if (fromCore && toCore) {
+    for (const m of trace.migrations || []) {
+      if (m.fromCore !== toCore || m.toCore !== fromCore) continue
+      if (scopeLo != null && m.ns < scopeLo) continue
+      if (scopeHi != null && m.ns > scopeHi) continue
+      revTotals.set(m.mergeKey, (revTotals.get(m.mergeKey) || 0) + 1)
+    }
+  }
+  const rows = items.map(([mk, grid]) => {
+    const fwd = grid.reduce((s, v) => s + v, 0)
+    const rev = revTotals.get(mk) || 0
+    const sym = fwd > rev * 1.5 ? '▲' : rev > fwd * 1.5 ? '▼' : '⇄'
+    return { mk, label: `${sym} ${taskLabelForMergeKey(trace, mk)}`, grid }
+  })
   return { rows, timeBins, binW, tMin, tMax: tHi }
 }

@@ -2,7 +2,7 @@
   "trace": "example-4cores.btf",
   "hasSyncObjectInstrumentation": true,
   "syncObjectCount": 9,
-  "syncIssueCount": 1,
+  "syncIssueCount": 5,
   "queueCount": 2,
   "mutexCount": 2,
   "semCount": 5,
@@ -11,15 +11,15 @@
       "kind": "mutex",
       "ptr": "0x80018650",
       "holds": 1,
-      "issues": 1,
+      "issues": 2,
       "status": "warning"
     },
     {
       "kind": "mutex",
       "ptr": "0x80018700",
       "holds": 240,
-      "issues": 0,
-      "status": "ok"
+      "issues": 3,
+      "status": "warning"
     },
     {
       "kind": "queue",
