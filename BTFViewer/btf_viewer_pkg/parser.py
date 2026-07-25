@@ -632,6 +632,69 @@ def _tag_stats_rows(
         ))
     return rows
 
+_LIFECYCLE_NOTE_RE = re.compile(r"^(create|delete|suspend|resume)\b", re.IGNORECASE)
+
+def _task_lifecycle_rows(
+    trace: "BtfTrace",
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> List[tuple]:
+    """Per-task lifecycle summary from STI 'task' channel events.
+
+    Returns a list of tuples:
+        (label, create_ns, delete_ns, suspend_count, resume_count, alive_ns, event_count)
+    Only tasks with at least one lifecycle event are included.
+    """
+    by_mk: Dict[str, dict] = {}
+    for ev in trace.sti_events:
+        if ev.target != "task":
+            continue
+        note = (ev.note or "").strip()
+        m = _LIFECYCLE_NOTE_RE.match(note)
+        if not m:
+            continue
+        if lo is not None and hi is not None and (ev.time < lo or ev.time > hi):
+            continue
+        action = m.group(1).lower()
+        task_label = note[m.end():].strip() or note
+        mk = _task_merge_key(task_label)
+        if mk not in by_mk:
+            by_mk[mk] = {
+                "label": _task_display_name(task_label),
+                "create_ns": None,
+                "delete_ns": None,
+                "suspend_count": 0,
+                "resume_count": 0,
+                "event_count": 0,
+            }
+        row = by_mk[mk]
+        row["event_count"] += 1
+        if action == "create" and row["create_ns"] is None:
+            row["create_ns"] = ev.time
+        elif action == "delete":
+            row["delete_ns"] = ev.time
+        elif action == "suspend":
+            row["suspend_count"] += 1
+        elif action == "resume":
+            row["resume_count"] += 1
+
+    rows = []
+    for d in sorted(by_mk.values(), key=lambda r: r["label"]):
+        create_ns = d["create_ns"]
+        delete_ns = d["delete_ns"]
+        alive_ns = (delete_ns - create_ns) if (create_ns is not None and delete_ns is not None) else None
+        rows.append((
+            d["label"],
+            create_ns,
+            delete_ns,
+            d["suspend_count"],
+            d["resume_count"],
+            alive_ns,
+            d["event_count"],
+        ))
+    return rows
+
+
 def _tag_plot_points(
     trace: "BtfTrace",
     channel: str,

@@ -322,6 +322,7 @@ def default_section_collapsed() -> Dict[str, bool]:
         "priority": False,
         "sync": False,
         "intervals": False,
+        "lifecycle": False,
     }
 
 def default_section_table_heights() -> Dict[str, int]:
@@ -336,6 +337,7 @@ def default_section_table_heights() -> Dict[str, int]:
         "preemption": STATS_TABLE_MIG_DEFAULT_H,
         "priority": STATS_TABLE_DEFAULT_H,
         "intervals": STATS_TABLE_DEFAULT_H,
+        "lifecycle": STATS_TABLE_DEFAULT_H,
         "sync": STATS_TABLE_DEFAULT_H,
         "sync_issues": STATS_TABLE_MIG_DEFAULT_H,
         "health": STATS_TABLE_DEFAULT_H,
@@ -1511,6 +1513,69 @@ def _tag_stats_rows(
             mn, avg, mx, p95,
         ))
     return rows
+
+_LIFECYCLE_NOTE_RE = re.compile(r"^(create|delete|suspend|resume)\b", re.IGNORECASE)
+
+def _task_lifecycle_rows(
+    trace: "BtfTrace",
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> List[tuple]:
+    """Per-task lifecycle summary from STI 'task' channel events.
+
+    Returns a list of tuples:
+        (label, create_ns, delete_ns, suspend_count, resume_count, alive_ns, event_count)
+    Only tasks with at least one lifecycle event are included.
+    """
+    by_mk: Dict[str, dict] = {}
+    for ev in trace.sti_events:
+        if ev.target != "task":
+            continue
+        note = (ev.note or "").strip()
+        m = _LIFECYCLE_NOTE_RE.match(note)
+        if not m:
+            continue
+        if lo is not None and hi is not None and (ev.time < lo or ev.time > hi):
+            continue
+        action = m.group(1).lower()
+        task_label = note[m.end():].strip() or note
+        mk = _task_merge_key(task_label)
+        if mk not in by_mk:
+            by_mk[mk] = {
+                "label": _task_display_name(task_label),
+                "create_ns": None,
+                "delete_ns": None,
+                "suspend_count": 0,
+                "resume_count": 0,
+                "event_count": 0,
+            }
+        row = by_mk[mk]
+        row["event_count"] += 1
+        if action == "create" and row["create_ns"] is None:
+            row["create_ns"] = ev.time
+        elif action == "delete":
+            row["delete_ns"] = ev.time
+        elif action == "suspend":
+            row["suspend_count"] += 1
+        elif action == "resume":
+            row["resume_count"] += 1
+
+    rows = []
+    for d in sorted(by_mk.values(), key=lambda r: r["label"]):
+        create_ns = d["create_ns"]
+        delete_ns = d["delete_ns"]
+        alive_ns = (delete_ns - create_ns) if (create_ns is not None and delete_ns is not None) else None
+        rows.append((
+            d["label"],
+            create_ns,
+            delete_ns,
+            d["suspend_count"],
+            d["resume_count"],
+            alive_ns,
+            d["event_count"],
+        ))
+    return rows
+
 
 def _tag_plot_points(
     trace: "BtfTrace",
@@ -19575,6 +19640,51 @@ class _StatsPanel(QWidget):
             _populate_tags,
         )
 
+        # -- Task Lifecycle -------------------------------------------------
+        empty_lifecycle = ("No task lifecycle events in cursor range" if scope
+                           else "No task create/delete/suspend/resume STI events in trace")
+
+        def _populate_lifecycle(blay: QVBoxLayout) -> None:
+            lc_rows = _task_lifecycle_rows(trace, lo, hi)
+            if not lc_rows:
+                blay.addWidget(self._lbl(empty_lifecycle, color="#888888", ui_fs=_fs))
+                return
+            ts = trace.time_scale
+            headers = ["Task", "Created", "Deleted", "Susp", "Res", "Alive", "Events"]
+            table = QTableWidget(len(lc_rows), len(headers))
+            table.setHorizontalHeaderLabels(headers)
+            table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+            table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+            table.setAlternatingRowColors(True)
+            table.verticalHeader().setVisible(False)
+            table.verticalHeader().setDefaultSectionSize(STATS_TABLE_ROW_H)
+            for r, row in enumerate(lc_rows):
+                label, create_ns, delete_ns, susp, res, alive_ns, evt_count = row
+                def _cell(text: str, *, align=Qt.AlignmentFlag.AlignLeft) -> QTableWidgetItem:
+                    it = _StatsSortItem(text)
+                    it.setTextAlignment(align | Qt.AlignmentFlag.AlignVCenter)
+                    it.setFlags(it.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                    return it
+                table.setItem(r, 0, _cell(label))
+                table.setItem(r, 1, _cell(_format_time(create_ns, ts) if create_ns is not None else "—",
+                                          align=Qt.AlignmentFlag.AlignRight))
+                table.setItem(r, 2, _cell(_format_time(delete_ns, ts) if delete_ns is not None else "—",
+                                          align=Qt.AlignmentFlag.AlignRight))
+                table.setItem(r, 3, _cell(str(susp), align=Qt.AlignmentFlag.AlignRight))
+                table.setItem(r, 4, _cell(str(res),  align=Qt.AlignmentFlag.AlignRight))
+                table.setItem(r, 5, _cell(_format_time(alive_ns, ts) if alive_ns is not None else "—",
+                                          align=Qt.AlignmentFlag.AlignRight))
+                table.setItem(r, 6, _cell(str(evt_count), align=Qt.AlignmentFlag.AlignRight))
+            self._wire_stats_table_click_cursor(table)
+            self._wrap_table_with_resizer(blay, table, "lifecycle")
+
+        self._add_collapsible_section(
+            "lifecycle",
+            f"Task Lifecycle{scope}",
+            _fs,
+            _populate_lifecycle,
+        )
+
         self._ilay.addStretch()
         self.relax_content_width()
         self._util_label_col_w = self._resolve_util_label_width(
@@ -23767,21 +23877,31 @@ class _CpuLoadGraph(QWidget):
         vis_span   = max(1, vis_ns_hi - vis_ns_lo)
         cursor_rng = self._cursor_range_ns(scene)
 
-        # Pre-compute pixel→bin mapping once, shared across all rows.
-        # Incremental addition (bi_float += bi_per_px) avoids per-pixel
-        # division; benchmark: 0.48ms vs 0.76ms original.  The per-row bar
-        # loop then does only a simple dict lookup + one drawRect per pixel,
-        # which is faster than computing bin→pixel coordinates per bin.
+        # Pre-compute pixel→bin runs, shared across all rows.
+        # Adjacent pixels that map to the same bin are merged into one run so
+        # bar rendering makes one drawRect per run instead of one per pixel.
+        # At 1:1 zoom (few bins visible) this reduces ~1760 calls to ~24;
+        # at fit zoom the saving is smaller but the loop cost is the same.
+        # Each run: (start_sx, run_width, bin_index)
         axis_span = self._plot_axis_span(lw)
-        sx_to_bi: Dict[int, int] = {}
+        px_runs: List[Tuple[int, int, int]] = []
         if axis_span > 0:
-            bi_per_px = vis_span / axis_span / bin_w
-            bi_float  = max(0.0, (vis_ns_lo - t_min) / bin_w)
-            for sx in range(lw, min(w, plot_right)):
+            bi_per_px  = vis_span / axis_span / bin_w
+            bi_float   = max(0.0, (vis_ns_lo - t_min) / bin_w)
+            run_start  = lw
+            run_bi     = -1
+            sx_limit   = min(w, plot_right)
+            for sx in range(lw, sx_limit):
                 bi = int(bi_float)
-                if 0 <= bi < n:
-                    sx_to_bi[sx] = bi
+                bi = bi if 0 <= bi < n else (0 if bi < 0 else n - 1)
+                if bi != run_bi:
+                    if run_bi >= 0:
+                        px_runs.append((run_start, sx - run_start, run_bi))
+                    run_start = sx
+                    run_bi    = bi
                 bi_float += bi_per_px
+            if run_bi >= 0:
+                px_runs.append((run_start, sx_limit - run_start, run_bi))
 
         _TITLE_H  = 22
         sf_title  = _monospace_font(self._font_size)
@@ -23881,17 +24001,17 @@ class _CpuLoadGraph(QWidget):
                                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom,
                                    str(int(pct * 100)))
 
-                # Load bars — pixel-first via sx_to_bi mapping (one drawRect per px).
+                # Load bars — one drawRect per run of same-bin pixels.
                 if bins:  # reuse bins fetched above for pct_text
                     p.setPen(Qt.PenStyle.NoPen)
                     p.setBrush(QBrush(color))
                     bottom = ry + effective_h
-                    for sx, bi in sx_to_bi.items():
+                    for run_sx, run_w, bi in px_runs:
                         load = bins[bi]
                         if load <= 0.001:
                             continue
                         bh = max(1, int(load * effective_h))
-                        p.drawRect(sx, bottom - bh, 1, bh)
+                        p.drawRect(run_sx, bottom - bh, run_w, bh)
 
                 # Cursor-range shading
                 if cursor_rng is not None:
@@ -26883,7 +27003,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         vm.addSeparator()
         vm.addAction("&Zoom In",        lambda: self._view.zoom_in(),   QKeySequence.ZoomIn)
         vm.addAction("Zoom &Out",       lambda: self._view.zoom_out(),  QKeySequence.ZoomOut)
-        vm.addAction("&Fit to window",  lambda: self._view.zoom_fit(),  "Ctrl+0")
+        _fit_act = vm.addAction("&Fit to window",  lambda: self._view.zoom_fit())
+        _fit_act.setShortcuts([QKeySequence("Ctrl+0"), QKeySequence("F")])
         vm.addSeparator()
         self._act_task_view = vm.addAction("Task &View", lambda: self._set_view_mode("task"))
         self._act_core_view = vm.addAction("&Core View", lambda: self._set_view_mode("core"))
@@ -26892,6 +27013,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._act_task_view.setChecked(True)
         vm.addSeparator()
         self._act_theme = vm.addAction("Switch to &Light Theme", self._toggle_theme)
+        self._act_theme.setShortcut(QKeySequence("D"))
+        _grid_act = vm.addAction("Toggle &Grid lines", lambda: self._set_show_grid(not self._show_grid))
+        _grid_act.setShortcut(QKeySequence("G"))
+        _sti_act  = vm.addAction("Toggle &STI events", lambda: self._set_show_sti(not self._show_sti))
+        _sti_act.setShortcut(QKeySequence("I"))
         vm.addSeparator()
         vm.addAction("⚙ &Settings…", self._open_settings, "Ctrl+,")
         vm.addSeparator()
@@ -27641,6 +27767,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                     self._autofit_cpu_load_height()
         finally:
             graph.setUpdatesEnabled(True)
+        # Cancel the 80 ms debounce timer that setVisible() / autofit arm via
+        # resizeEvent and handle the layout update immediately.  This eliminates
+        # the delayed visual "snap" while keeping the same code path.
+        if tab := self._active_tab:
+            tab.view._resize_timer.stop()
+            tab.view._on_resize_timeout()
 
     def _sync_toolbar_to_active_tab(self) -> None:
         """Refresh toolbar toggles that reflect per-tab view state."""
@@ -29647,9 +29779,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             ("View / Zoom", [
                 ("Ctrl++",               "Zoom in"),
                 ("Ctrl+-",               "Zoom out"),
-                ("Ctrl+0",               "Fit entire trace to window"),
+                ("Ctrl+0 / F",           "Fit entire trace to window"),
                 ("Ctrl+R",               "Zoom to cursor range"),
                 ("Ctrl+,",               "Open Settings"),
+                ("G",                    "Toggle grid lines on/off"),
+                ("I",                    "Toggle STI event rows on/off"),
+                ("D",                    "Toggle dark / light theme"),
                 ("Double-click",         "Zoom to segment under cursor"),
                 ("Dbl-click label edge", "Auto-fit label column width"),
             ]),

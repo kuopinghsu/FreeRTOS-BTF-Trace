@@ -138,6 +138,7 @@ def default_section_collapsed() -> Dict[str, bool]:
         "priority": False,
         "sync": False,
         "intervals": False,
+        "lifecycle": False,
     }
 
 def default_section_table_heights() -> Dict[str, int]:
@@ -152,6 +153,7 @@ def default_section_table_heights() -> Dict[str, int]:
         "preemption": STATS_TABLE_MIG_DEFAULT_H,
         "priority": STATS_TABLE_DEFAULT_H,
         "intervals": STATS_TABLE_DEFAULT_H,
+        "lifecycle": STATS_TABLE_DEFAULT_H,
         "sync": STATS_TABLE_DEFAULT_H,
         "sync_issues": STATS_TABLE_MIG_DEFAULT_H,
         "health": STATS_TABLE_DEFAULT_H,

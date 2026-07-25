@@ -6241,6 +6241,51 @@ class _StatsPanel(QWidget):
             _populate_tags,
         )
 
+        # -- Task Lifecycle -------------------------------------------------
+        empty_lifecycle = ("No task lifecycle events in cursor range" if scope
+                           else "No task create/delete/suspend/resume STI events in trace")
+
+        def _populate_lifecycle(blay: QVBoxLayout) -> None:
+            lc_rows = _task_lifecycle_rows(trace, lo, hi)
+            if not lc_rows:
+                blay.addWidget(self._lbl(empty_lifecycle, color="#888888", ui_fs=_fs))
+                return
+            ts = trace.time_scale
+            headers = ["Task", "Created", "Deleted", "Susp", "Res", "Alive", "Events"]
+            table = QTableWidget(len(lc_rows), len(headers))
+            table.setHorizontalHeaderLabels(headers)
+            table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+            table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+            table.setAlternatingRowColors(True)
+            table.verticalHeader().setVisible(False)
+            table.verticalHeader().setDefaultSectionSize(STATS_TABLE_ROW_H)
+            for r, row in enumerate(lc_rows):
+                label, create_ns, delete_ns, susp, res, alive_ns, evt_count = row
+                def _cell(text: str, *, align=Qt.AlignmentFlag.AlignLeft) -> QTableWidgetItem:
+                    it = _StatsSortItem(text)
+                    it.setTextAlignment(align | Qt.AlignmentFlag.AlignVCenter)
+                    it.setFlags(it.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                    return it
+                table.setItem(r, 0, _cell(label))
+                table.setItem(r, 1, _cell(_format_time(create_ns, ts) if create_ns is not None else "—",
+                                          align=Qt.AlignmentFlag.AlignRight))
+                table.setItem(r, 2, _cell(_format_time(delete_ns, ts) if delete_ns is not None else "—",
+                                          align=Qt.AlignmentFlag.AlignRight))
+                table.setItem(r, 3, _cell(str(susp), align=Qt.AlignmentFlag.AlignRight))
+                table.setItem(r, 4, _cell(str(res),  align=Qt.AlignmentFlag.AlignRight))
+                table.setItem(r, 5, _cell(_format_time(alive_ns, ts) if alive_ns is not None else "—",
+                                          align=Qt.AlignmentFlag.AlignRight))
+                table.setItem(r, 6, _cell(str(evt_count), align=Qt.AlignmentFlag.AlignRight))
+            self._wire_stats_table_click_cursor(table)
+            self._wrap_table_with_resizer(blay, table, "lifecycle")
+
+        self._add_collapsible_section(
+            "lifecycle",
+            f"Task Lifecycle{scope}",
+            _fs,
+            _populate_lifecycle,
+        )
+
         self._ilay.addStretch()
         self.relax_content_width()
         self._util_label_col_w = self._resolve_util_label_width(

@@ -30,9 +30,9 @@ A PySide6-based interactive visualiser for FreeRTOS context-switch traces in **B
 - **Cursor range summary** — with 2+ cursors, the status bar shows a quick min/max/avg segment summary (Desktop + Web); full per-task metrics remain in the **Statistics** panel
 - **Task highlight** — hover or click any task label or Legend row to highlight all its segments; optional **Highlight segments on label hover** in Settings dims other tasks while hovering (off by default)
 - **Dockable Legend panel** — colour swatches for every task, with a search box, **Migrated tasks only** filter, a **heatmap filter banner** (when drilled from the heatmap), and the same highlight interaction
-- **Right-side panel** — **Statistics**, **Marks**, and **Find** tabs (Desktop: docked on the right, stacked below Legend; Web: tab bar on the right). Statistics holds metric tables; Marks holds cursors, bookmarks/annotations, and (on Web) Legend; Find searches tasks, annotations, and migrations
+- **Right-side panel** — **Statistics**, **Marks**, and **Find** tabs (Desktop: docked on the right, stacked below Legend; Web: tab bar on the right). Statistics holds metric tables; Marks holds cursors, bookmarks/annotations, and (on Web) Legend; Find searches tasks, annotations, migrations, STI events, interval spans, task lifecycle events, and object pointers
 - **Tag View** — inspect tag channels/events (`tag_event`, `tag0_event` … `tag7_event`) alongside task/core activity
-- **Metrics tables** — Execution Time Per Slice, **Blocking Time** (same metric as Tracealyzer **Response Time**: off-CPU gap / scheduling latency between activations), **Inter-Arrival**, **Preemption Chain** (which tasks preempted whom), **Priority Inheritance**, **Mutex / Semaphore pairing** (with **Core Bounce** column flagging holds that crossed core boundaries), and **Interval Analysis** (paired `interval_start` / `interval_stop` spans; when the BTF note includes `tid:{task_id}`, pairing is per interval id **and** task); click **Min** / **Max** (dotted underline) to jump and add an annotation at the BCET / WCET slice or shortest / longest gap (Desktop + Web)
+- **Metrics tables** — Execution Time Per Slice, **Blocking Time** (same metric as Tracealyzer **Response Time**: off-CPU gap / scheduling latency between activations), **Inter-Arrival**, **Preemption Chain** (which tasks preempted whom), **Priority Inheritance**, **Mutex / Semaphore pairing** (with **Core Bounce** column flagging holds that crossed core boundaries), **Interval Analysis** (paired `interval_start` / `interval_stop` spans; when the BTF note includes `tid:{task_id}`, pairing is per interval id **and** task), and **Task Lifecycle** (per-task create/delete/suspend/resume event summary from the `task` STI channel); click **Min** / **Max** (dotted underline) to jump and add an annotation at the BCET / WCET slice or shortest / longest gap (Desktop + Web)
 - **Metrics distribution charts** — click any row in Execution Time, Blocking Time, Inter-Arrival, Preemption Chain, **Priority Inheritance**, or **Interval Analysis** tables to open a scatter-plot + histogram popup; histograms use **adaptive scaling** (auto linear / p5–p95 / log duration, overflow buckets, optional log-scaled counts, CDF overlay); charts live-update when cursors move or cursor-range scope is toggled (Desktop + Web). On Desktop, each trace tab remembers its own open chart when you switch tabs
 - **Segment tooltips** — hover any segment bar for duration, slice index on core, previous/next task on that core, and gap before the slice
 - **CPU Load Graph** — bar chart below the timeline showing per-core CPU utilisation; row labels show the **visible-window average** and, with 2+ cursors, a cursor-range average (`· C:xx%`); toggle with the **Load** toolbar button; drag the divider between timeline and CPU load to resize (Desktop + Web)
@@ -357,6 +357,7 @@ Between 2 and 8 cursors can be placed on the timeline (default: 4; adjustable in
 | Action | Effect |
 |--------|--------|
 | Left-click on the timeline area | Place a cursor, or **remove** one if the click is near an existing cursor line |
+| **Shift+left-click** | Snap the new cursor to the nearest segment boundary within 8 px (Desktop + Web) |
 | Drag a cursor line | Move it to a new time position |
 | `C` (keyboard) | Place a cursor at the viewport centre |
 
@@ -486,9 +487,10 @@ Preferences are restored on the next launch (desktop) or page reload (web).
 
 | Setting | Description |
 |---------|-------------|
-| Theme | **Dark** (default) or **Light** |
+| Theme | **Dark** (default) or **Light**; toggle with the `D` shortcut |
 | Timeline labels | Font size for task/core labels drawn on the timeline (pt on Desktop, px on Web; default **8**) |
 | UI / menus | Font size for menus, toolbar, and status bar (pt on Desktop, px on Web; default **8**) |
+| Colorblind-safe palette | Switches the task colour palette to the **Okabe-Ito 8-colour** set, designed to be distinguishable under the most common types of colour-vision deficiency (deuteranopia, protanopia, tritanopia). Off by default. |
 
 On Desktop, macOS Retina uses pixel-based font sizing by default; override with `BTF_UI_FONT_PX` (see [HiDPI / DPI scaling](#hidpi--dpi-scaling-desktop)).
 
@@ -514,6 +516,7 @@ On Desktop, macOS Retina uses pixel-based font sizing by default; override with 
 | CPU load row height | Height of each CPU load graph row (16–120 px; default **30**) |
 | STI row height | Collapsed STI channel row height (12–60 px; default **18**) |
 | STI waveform height | Expanded tag-event waveform row height (40–300 px; default **80**) |
+| STI waveform style | Y-axis scale for expanded tag waveform rows: **Linear** (default) or **Log₂**. Toggle with the **Log₂** toolbar button. |
 
 ### Default values (Desktop + Web)
 
@@ -715,6 +718,7 @@ Below the scope checkbox, a **scheduling summary** line shows context-switch cou
 | **Priority Inheritance** | When traces include `create pri:N` and priority STI events (`priority_inherit` / `priority_disinherit` / `set_priority`): tasks boosted above base priority |
 | **Mutex / Semaphore pairing** | Pairs `take`/`give` STI events by object pointer (`0x........`); flags orphan gives, cross-task gives, unmatched takes, delete-while-held, **core-boundary lock bounces (`CORE_MIGRATION_WHILE_HELD`)**, and multi-mutex hold at trace end |
 | **Interval Analysis** | Paired `interval_start` / `interval_stop` spans per interval id (count, min/avg/max/p95 duration); notes with `tid:{task_id}` pair per task |
+| **Task Lifecycle** | Per-task `create`/`delete`/`suspend`/`resume` event summary from the `task` STI channel: created/deleted timestamps, suspend/resume counts, alive span (create→delete), and total event count |
 
 **Core Migrations** lists tasks that ran on two or more cores, with **Rate** (migrations per second of active time and per tick) and **Dwell** (average on-CPU slice length). For multi-core traces, open the **Migration heatmap** from the toolbar **Heatmap** button — click core-pair cells to drill into per-task sub-bins, then into Task View (see [Migration heatmap](#migration-heatmap)). **Trace Compare…** (footer, next to Export) opens a dialog with **Summary**, **Top Tasks**, and **Core Migrations** tabs to diff two open trace tabs; optional cursor-range scoping compares each tab's C1–Cn window independently.
 
@@ -857,6 +861,7 @@ It shows:
 - **Priority Inheritance** — per-task base/peak priority, boost episodes, boosted time, and pattern (mutex inherit / L/M/H / boost only); click a row for a duration plot; click a scatter point to zoom, highlight, and annotate the episode (collapsible)
 - **Mutex / Semaphore pairing** — per-object hold count, issue count, **core bounce count**, average hold, and status; **Pairing issues** sub-table lists orphan gives, cross-task gives, unmatched takes, teardown warnings, and **`CORE_MIGRATION_WHILE_HELD`** warnings (lock that crossed core boundaries while held); click an issue row to zoom, jump, and annotate (collapsible)
 - **Interval Analysis** — per interval id: count, min/avg/max/p95 duration of paired start→stop spans; pairing uses `tid` in the note when present; click a row for a duration plot; click a scatter point to jump and add an annotation at the interval start (collapsible)
+- **Task Lifecycle** — per-task summary of `create`, `delete`, `suspend`, and `resume` events recorded on the `task` STI channel: created/deleted timestamps, suspend/resume counts, alive span (create→delete), and total lifecycle event count (collapsible; shown only when the trace contains task lifecycle STI events)
 
 **Export CSV** / **Export HTML** respect the current cursor scope. **Export CSV** includes summary tables for every statistics section and a **Core Affinity Violations** sub-table listing every mutex that crossed core boundaries, plus **Load Balance Score**, σ, and Gini coefficient under Core Utilisation. **Export HTML** adds the same summaries plus detail sub-tables for **Priority Inheritance** (boost episodes), **Mutex / Semaphore** (pairing issues with bounce warnings, and hold episodes with take/give core columns), and **Interval Analysis** (individual instances). **Trace Compare…** compares summary, top tasks, and core migrations between two open tabs; enable **Limit to each tab's cursor range** to scope each side to its own C1–Cn window. Open metrics charts update live when cursors move or scope is toggled; each trace tab remembers its own open chart when you switch tabs.
 
@@ -1446,18 +1451,24 @@ A **migration** is recorded when consecutive slices of the same task (merge-key)
 | **Priority Inheritance** table + distribution charts | ✓ | ✓ |
 | **Mutex / Semaphore** pairing + issue drill-down | ✓ | ✓ |
 | **Interval Analysis** table + distribution charts | ✓ | ✓ |
+| **Task Lifecycle** stats section | ✓ | ✓ |
 | **Tick Distribution** chart (Trace Health) | ✓ (≥ 2 ticks) | ✓ (≥ 2 ticks) |
 | **Export HTML** detail sub-tables (priority / sync / interval) | ✓ | ✓ |
 | Find **Migrations** mode | ✓ | ✓ |
-| **Find** panel (Contains / Exact / Regex / Migrations) | ✓ | ✓ |
+| **Find** panel (Contains / Exact / Regex / Migrations / STI / Intervals / Lifecycle / Pointers) | ✓ | ✓ |
 | **Zoom to cursor range** (`Ctrl+R`, **⊡ Range**) | ✓ | ✓ |
 | **1:1** zoom toolbar button | ✓ | ✓ |
-| Jump to time / trace start / end | ✓ | ✓ |
+| Jump to time (`Ctrl+G`) / trace start (`Ctrl+Home`) / end (`Ctrl+End`) | ✓ | ✓ |
+| Jump to prev/next segment boundary (`Shift+←/→` or `Shift+↑/↓`) | ✓ | ✓ |
+| Next / previous segment (`Tab` / `Shift+Tab`) | ✓ | ✓ |
+| Snap cursor to segment boundary (`Shift+left-click`) | ✓ | ✓ |
+| Middle-drag to zoom rectangle (draw time region → zoom in on release) | ✓ | ✓ |
+| Single-key shortcuts (`F`=fit, `G`=grid, `I`=STI, `D`=dark, `B`/`A`=marks) | ✓ | ✓ |
 | Drag-and-drop `.btf` open | ✓ | ✓ |
 | **Open Recent** (8 filenames) | ✓ | — |
 | Segment right-click (copy task, zoom, select in legend) | ✓ | ✓ |
 | Cursor comparison table (task at each cursor) | ✓ | ✓ |
-| Global undo/redo (cursors + marks) | ✓ | ✓ |
+| Global undo/redo (cursors + marks) `Ctrl+Z` / `Ctrl+Y` | ✓ | ✓ |
 | Portable session export/import (JSON) | ✓ | ✓ |
 | Cycle trace tabs (`Ctrl+Tab` / `Ctrl+Shift+Tab`) | ✓ | ✓ |
 | Drag-resize label column | ✓ (`btf_viewer.rc`) | ✓ (`btf-viewer-settings-v1`) |
@@ -1466,6 +1477,9 @@ A **migration** is recorded when consecutive slices of the same task (merge-key)
 | Restore tab names on page load | ✓ | — |
 | **Trace Compare…** (2+ open traces) | ✓ | ✓ |
 | **Trace Compare…** cursor-scoped mode | ✓ | ✓ |
+| Double-click segment to zoom / restore | ✓ | — |
+| Double-click ruler to fit / left-drag ruler to pan | — | ✓ |
+| Keyboard help overlay (`?`) | — | ✓ |
 | Web layout/options restore (`localStorage`) | — | ✓ (`btf-viewer-session-v1` + `btf-viewer-settings-v1`) |
 | Core View: dim other tasks when one is locked | ✓ | ✓ |
 
@@ -1637,7 +1651,7 @@ Use this to compare builds, configurations, or runs of the same workload without
 
 ## Find & Jump
 
-The **Find** tab in the right-side panel (**Statistics** / **Marks** / **Find**) is shared by Desktop and Web. Open it via the toolbar **Find** button, **Navigate → Find** (`Ctrl+F`), or by selecting the **Find** tab. It searches task names, annotations, and (in **Migrations** mode) core-migration boundaries.
+The **Find** tab in the right-side panel (**Statistics** / **Marks** / **Find**) is shared by Desktop and Web. Open it via the toolbar **Find** button, **Navigate → Find** (`Ctrl+F`), or by selecting the **Find** tab.
 
 | Action | Effect |
 |--------|--------|
@@ -1647,6 +1661,21 @@ The **Find** tab in the right-side panel (**Statistics** / **Marks** / **Find**)
 | Clear the search box | Remove search highlights |
 
 The status label shows the total number of matches and the current position (e.g. `12 matches (at 4)`).
+
+### Find modes
+
+Select the search mode from the dropdown next to the search box:
+
+| Mode | Searches |
+|------|----------|
+| **Contains** | Task names, annotation text, and STI notes that contain the query string |
+| **Exact** | Exact full-string match on task names and annotations |
+| **Regex** | Regular expression match across task names, annotations, and STI notes |
+| **Migrations** | Core-migration boundary timestamps (query ignored; jumps to every migration event) |
+| **STI** | STI events whose channel name or note contains the query |
+| **Intervals** | `interval_start` / `interval_stop` events matching the query (channel or note) |
+| **Lifecycle** | Task `create` / `delete` / `suspend` / `resume` events on the `task` STI channel |
+| **Pointers** | Sync object pointer values (`0x…`) in STI notes (mutex / semaphore / queue) |
 
 ---
 
@@ -1735,36 +1764,119 @@ Settings, window layout, bookmarks, and multi-tab state are stored in `btf_viewe
 
 ## Keyboard Shortcuts
 
+Shortcuts marked **(W)** are Web-only. All others work on both Desktop and Web.
+
+### File & Tabs
+
 | Key | Action |
 |-----|--------|
 | `Ctrl+O` | Open `.btf` file (new tab) |
 | `Ctrl+W` | Close active tab |
 | `Ctrl+Tab` | Next trace tab |
 | `Ctrl+Shift+Tab` | Previous trace tab |
-| `Ctrl+S` | Open snapshot editor (capture viewport for annotation) |
-| `Ctrl+Shift+C` | Copy viewport to clipboard (no editor) |
-| `Ctrl+Shift+S` | Save viewport as SVG |
+| `Ctrl+Q` | Quit (Desktop) |
+
+### Edit
+
+| Key | Action |
+|-----|--------|
+| `Ctrl+Z` | Undo last cursor / mark change |
+| `Ctrl+Y` | Redo |
+
+### View / Zoom
+
+| Key | Action |
+|-----|--------|
 | `Ctrl++` | Zoom in |
 | `Ctrl+-` | Zoom out |
-| `Ctrl+0` | Fit to window |
+| `Ctrl+0` / `F` | Fit entire trace to window |
 | `Ctrl+R` | Zoom to cursor range (requires ≥ 2 cursors) |
-| `Ctrl+F` | Open Find panel (Statistics / Marks / Find tab) |
-| `F3` | Find next match |
-| `Shift+F3` | Find previous match |
-| `Ctrl+B` | Add bookmark at viewport centre |
 | `Ctrl+,` | Open Settings |
+| `G` | Toggle grid lines on/off |
+| `I` | Toggle STI event rows on/off |
+| `D` | Toggle dark / light theme |
+| `Double-click segment` | Zoom to that segment; double-click again to restore (Desktop) |
+| `Double-click label edge` | Auto-fit label column width |
+| `Double-click ruler` | Fit timeline to trace **(W)** |
+
+### Navigation
+
+| Key | Action |
+|-----|--------|
+| `Ctrl+G` | Jump to a specific time (dialog) |
+| `Ctrl+Home` | Jump to trace start |
+| `Ctrl+End` | Jump to trace end |
+| `←` / `→` | Scroll along time axis (horizontal) or row axis |
+| `↑` / `↓` | Scroll along row axis or time axis (vertical) |
+| `Shift+←` / `Shift+→` | Jump to previous / next segment boundary (horizontal) |
+| `Shift+↑` / `Shift+↓` | Jump to previous / next segment boundary (vertical) |
+| `Tab` | Next segment / next highlighted-task segment |
+| `Shift+Tab` | Previous segment / previous highlighted-task segment |
+
+### Export & Snapshot
+
+| Key | Action |
+|-----|--------|
+| `Ctrl+S` / `S` **(W)** | Open snapshot editor (capture viewport for annotation) |
+| `Ctrl+Shift+C` | Copy viewport to clipboard (no editor) |
+| `Ctrl+Shift+S` | Save viewport as SVG |
+
+### Cursors
+
+| Key | Action |
+|-----|--------|
 | `C` | Place cursor at viewport centre |
 | `Shift+C` | Clear all cursors |
-| `Ctrl+Q` | Quit |
+
+### Find
+
+| Key | Action |
+|-----|--------|
+| `Ctrl+F` | Open Find panel |
+| `F3` | Find next match |
+| `Shift+F3` | Find previous match |
+
+### Marks
+
+| Key | Action |
+|-----|--------|
+| `Ctrl+B` / `B` / `M` | Add bookmark at current position |
+| `Shift+B` | Clear all bookmarks |
+| `Ctrl+Shift+B` / `A` | Add annotation at current position |
+| `Shift+A` | Clear all annotations |
+
+### Mouse / Trackpad
+
+| Action | Effect |
+|--------|--------|
+| **Scroll wheel** | Pan vertically (rows) in horizontal layout; pan time in vertical |
+| **Shift+scroll** | Swap axes |
+| **Ctrl+scroll** | Zoom in/out around pointer |
+| **Two-finger pinch** (macOS) | Zoom in/out |
+| **Left-drag** (background) | Pan timeline |
+| **Left-drag ruler** | Pan timeline **(W)** |
+| **Middle-drag** | Draw a time-range selection band → zoom in on release |
+| **Left-click** (timeline) | Place cursor |
+| **Shift+left-click** | Snap cursor to nearest segment boundary |
+| **Left-click** (near cursor) | Remove that cursor |
+| **Shift+right-click** | Clear all cursors |
+| **Right-click** (timeline) | Remove nearest cursor / context menu |
+| **Double-click** (segment) | Zoom to that segment; double-click again restores previous zoom (Desktop) |
+| **Double-click** (ruler) | Fit timeline to trace **(W)** |
+| **Double-click** (label edge) | Auto-fit label column width |
+| **Left-drag** (label edge) | Resize label column |
+| **Left-drag** (cursor line) | Move cursor to new position |
+| **Left-drag** (mark flag) | Move bookmark or annotation |
 
 ---
 
 ## Other
 
 - Hover over any segment bar or STI marker for a detailed tooltip (task, core, start/end/duration, slice index on core, previous/next task on that core, gap before the slice).
-- Toggle STI events, grid lines, and hover highlight from **Settings** (`Ctrl+,`).
+- Toggle STI events, grid lines, and hover highlight from **Settings** (`Ctrl+,`) or with the `I`, `G` keyboard shortcuts.
 - Drag and drop a `.btf` file onto the window to open it in a new tab.
 - Open tabs, active tab, zoom level, and cursor positions are saved per trace in `btf_viewer.rc` and restored on the next launch.
+- Press `?` (Web) to open the interactive keyboard shortcut reference panel.
 
 ---
 

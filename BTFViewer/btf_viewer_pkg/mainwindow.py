@@ -692,21 +692,31 @@ class _CpuLoadGraph(QWidget):
         vis_span   = max(1, vis_ns_hi - vis_ns_lo)
         cursor_rng = self._cursor_range_ns(scene)
 
-        # Pre-compute pixel→bin mapping once, shared across all rows.
-        # Incremental addition (bi_float += bi_per_px) avoids per-pixel
-        # division; benchmark: 0.48ms vs 0.76ms original.  The per-row bar
-        # loop then does only a simple dict lookup + one drawRect per pixel,
-        # which is faster than computing bin→pixel coordinates per bin.
+        # Pre-compute pixel→bin runs, shared across all rows.
+        # Adjacent pixels that map to the same bin are merged into one run so
+        # bar rendering makes one drawRect per run instead of one per pixel.
+        # At 1:1 zoom (few bins visible) this reduces ~1760 calls to ~24;
+        # at fit zoom the saving is smaller but the loop cost is the same.
+        # Each run: (start_sx, run_width, bin_index)
         axis_span = self._plot_axis_span(lw)
-        sx_to_bi: Dict[int, int] = {}
+        px_runs: List[Tuple[int, int, int]] = []
         if axis_span > 0:
-            bi_per_px = vis_span / axis_span / bin_w
-            bi_float  = max(0.0, (vis_ns_lo - t_min) / bin_w)
-            for sx in range(lw, min(w, plot_right)):
+            bi_per_px  = vis_span / axis_span / bin_w
+            bi_float   = max(0.0, (vis_ns_lo - t_min) / bin_w)
+            run_start  = lw
+            run_bi     = -1
+            sx_limit   = min(w, plot_right)
+            for sx in range(lw, sx_limit):
                 bi = int(bi_float)
-                if 0 <= bi < n:
-                    sx_to_bi[sx] = bi
+                bi = bi if 0 <= bi < n else (0 if bi < 0 else n - 1)
+                if bi != run_bi:
+                    if run_bi >= 0:
+                        px_runs.append((run_start, sx - run_start, run_bi))
+                    run_start = sx
+                    run_bi    = bi
                 bi_float += bi_per_px
+            if run_bi >= 0:
+                px_runs.append((run_start, sx_limit - run_start, run_bi))
 
         _TITLE_H  = 22
         sf_title  = _monospace_font(self._font_size)
@@ -806,17 +816,17 @@ class _CpuLoadGraph(QWidget):
                                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom,
                                    str(int(pct * 100)))
 
-                # Load bars — pixel-first via sx_to_bi mapping (one drawRect per px).
+                # Load bars — one drawRect per run of same-bin pixels.
                 if bins:  # reuse bins fetched above for pct_text
                     p.setPen(Qt.PenStyle.NoPen)
                     p.setBrush(QBrush(color))
                     bottom = ry + effective_h
-                    for sx, bi in sx_to_bi.items():
+                    for run_sx, run_w, bi in px_runs:
                         load = bins[bi]
                         if load <= 0.001:
                             continue
                         bh = max(1, int(load * effective_h))
-                        p.drawRect(sx, bottom - bh, 1, bh)
+                        p.drawRect(run_sx, bottom - bh, run_w, bh)
 
                 # Cursor-range shading
                 if cursor_rng is not None:
@@ -3808,7 +3818,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         vm.addSeparator()
         vm.addAction("&Zoom In",        lambda: self._view.zoom_in(),   QKeySequence.ZoomIn)
         vm.addAction("Zoom &Out",       lambda: self._view.zoom_out(),  QKeySequence.ZoomOut)
-        vm.addAction("&Fit to window",  lambda: self._view.zoom_fit(),  "Ctrl+0")
+        _fit_act = vm.addAction("&Fit to window",  lambda: self._view.zoom_fit())
+        _fit_act.setShortcuts([QKeySequence("Ctrl+0"), QKeySequence("F")])
         vm.addSeparator()
         self._act_task_view = vm.addAction("Task &View", lambda: self._set_view_mode("task"))
         self._act_core_view = vm.addAction("&Core View", lambda: self._set_view_mode("core"))
@@ -3817,6 +3828,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._act_task_view.setChecked(True)
         vm.addSeparator()
         self._act_theme = vm.addAction("Switch to &Light Theme", self._toggle_theme)
+        self._act_theme.setShortcut(QKeySequence("D"))
+        _grid_act = vm.addAction("Toggle &Grid lines", lambda: self._set_show_grid(not self._show_grid))
+        _grid_act.setShortcut(QKeySequence("G"))
+        _sti_act  = vm.addAction("Toggle &STI events", lambda: self._set_show_sti(not self._show_sti))
+        _sti_act.setShortcut(QKeySequence("I"))
         vm.addSeparator()
         vm.addAction("⚙ &Settings…", self._open_settings, "Ctrl+,")
         vm.addSeparator()
@@ -4566,6 +4582,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                     self._autofit_cpu_load_height()
         finally:
             graph.setUpdatesEnabled(True)
+        # Cancel the 80 ms debounce timer that setVisible() / autofit arm via
+        # resizeEvent and handle the layout update immediately.  This eliminates
+        # the delayed visual "snap" while keeping the same code path.
+        if tab := self._active_tab:
+            tab.view._resize_timer.stop()
+            tab.view._on_resize_timeout()
 
     def _sync_toolbar_to_active_tab(self) -> None:
         """Refresh toolbar toggles that reflect per-tab view state."""
@@ -6572,9 +6594,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             ("View / Zoom", [
                 ("Ctrl++",               "Zoom in"),
                 ("Ctrl+-",               "Zoom out"),
-                ("Ctrl+0",               "Fit entire trace to window"),
+                ("Ctrl+0 / F",           "Fit entire trace to window"),
                 ("Ctrl+R",               "Zoom to cursor range"),
                 ("Ctrl+,",               "Open Settings"),
+                ("G",                    "Toggle grid lines on/off"),
+                ("I",                    "Toggle STI event rows on/off"),
+                ("D",                    "Toggle dark / light theme"),
                 ("Double-click",         "Zoom to segment under cursor"),
                 ("Dbl-click label edge", "Auto-fit label column width"),
             ]),
