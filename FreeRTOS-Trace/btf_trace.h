@@ -61,6 +61,7 @@ typedef enum {
     TRACE_EVENT_TASK_PRIORITY_SET        = 15,
     TRACE_EVENT_TASK_PRIORITY_INHERIT    = 16,
     TRACE_EVENT_TASK_PRIORITY_DISINHERIT = 17,
+    TRACE_EVENT_TASK_SET_AFFINITY        = 18,
     TRACE_EVENT_TAG                      = 90,
     TRACE_EVENT_TAG1                     = 91,
     TRACE_EVENT_TAG2                     = 92,

@@ -370,6 +370,8 @@ All trace hooks in `FreeRTOS-Trace/FreeRTOS-Trace.h` are protected by either `ta
 
 The RISC-V SMP port (`Demo/port/RISC-V/port.c`) implements both the task lock and the ISR lock as **recursive** spinlocks (owner + count).  This allows `traceTASK_SWITCHED_OUT/IN` — which fire inside `vTaskSwitchContext` while the ISR lock is already held — to safely re-enter the same lock without deadlocking.
 
+**Core affinity tracing** — to record `vTaskCoreAffinitySet()` calls so BTFViewer can show the **Core Affinity** statistics table, enable `configINCLUDE_SCHEDULING` = `1` (the default) and include `FreeRTOS-Trace/FreeRTOS-Trace.h`. The `traceTASK_CORE_AFFINITY_SET` hook fires on every `vTaskCoreAffinitySet()` call and records the bitmask as a BTF STI event (`affinity_set Name[id] 0xMASK` on the `task` channel). BTFViewer parses this and cross-checks observed execution cores against the mask to flag violations. No extra source file is required — the hook calls `btf_trace_add_event()` directly.
+
 ### 7. Convert to BTF or VCD
 
 ```bash
@@ -468,6 +470,7 @@ On single-core builds, the full `types` word is just the `event_t` enum value (c
 | 15 | `TASK_PRIORITY_SET` |
 | 16 | `TASK_PRIORITY_INHERIT` |
 | 17 | `TASK_PRIORITY_DISINHERIT` |
+| 18 | `TASK_SET_AFFINITY` |
 | 90–97 | `TAG` … `TAG7` |
 
 #### Ring buffer iteration
@@ -525,9 +528,6 @@ On SMP (`configNUMBER_OF_CORES` > 1), the emitting core is stored in the high bi
 | `TASK_SUSPEND` (5) | `traceTASK_SUSPEND` | task id | 0 | `STI` | `task` | `trigger` | `suspend Name[id]` |
 | `TASK_RESUME` (6) | `traceTASK_RESUME` | task id | 0 | `STI` | `task` | `trigger` | `resume Name[id]` |
 | `TASK_RESUME_FROM_ISR` (7) | `traceTASK_RESUME_FROM_ISR` | task id | 0 | `STI` | `task` | `trigger` | `resume/isr` |
-| `TASK_PRIORITY_SET` (15) | `traceTASK_PRIORITY_SET` | task id | new priority | `STI` | `task` | `trigger` | `set_priority Name[id] pri:N` |
-| `TASK_PRIORITY_INHERIT` (16) | `traceTASK_PRIORITY_INHERIT` | task id (mutex holder) | inherited priority | `STI` | `task` | `trigger` | `priority_inherit Name[id] pri:N` |
-| `TASK_PRIORITY_DISINHERIT` (17) | `traceTASK_PRIORITY_DISINHERIT` | task id (mutex holder) | base priority | `STI` | `task` | `trigger` | `priority_disinherit Name[id] pri:N` |
 | `QUEUE_CREATE` (8) | `traceQUEUE_CREATE` | queue type† | object pointer | `STI` | `queue` / `mutex` / `sem`† | `trigger` | `create 0x........` |
 | `QUEUE_SEND` (9) | `traceQUEUE_SEND` | queue type† | object pointer | `STI` | `queue` / `mutex` / `sem`† | `trigger` | `send` / `give`† `0x........` |
 | `QUEUE_RECEIVE` (10) | `traceQUEUE_RECEIVE` | queue type† | object pointer | `STI` | `queue` / `mutex` / `sem`† | `trigger` | `recv` / `take`† `0x........` |
@@ -535,6 +535,10 @@ On SMP (`configNUMBER_OF_CORES` > 1), the emitting core is stored in the high bi
 | `TASK_INCREMENT_TICK` (12) | `traceTASK_INCREMENT_TICK` | tick count | 0 | `STI` | `TICK` | `trigger` | `N` |
 | `INTERVAL_START` (13) | `traceINTERVAL_START` | interval id | caller task id | `STI` | `interval_start` | `trigger` | `{id} tid:{task_id}` |
 | `INTERVAL_STOP` (14) | `traceINTERVAL_STOP` | interval id | caller task id | `STI` | `interval_stop` | `trigger` | `{id} tid:{task_id}` |
+| `TASK_PRIORITY_SET` (15) | `traceTASK_PRIORITY_SET` | task id | new priority | `STI` | `task` | `trigger` | `set_priority Name[id] pri:N` |
+| `TASK_PRIORITY_INHERIT` (16) | `traceTASK_PRIORITY_INHERIT` | task id (mutex holder) | inherited priority | `STI` | `task` | `trigger` | `priority_inherit Name[id] pri:N` |
+| `TASK_PRIORITY_DISINHERIT` (17) | `traceTASK_PRIORITY_DISINHERIT` | task id (mutex holder) | base priority | `STI` | `task` | `trigger` | `priority_disinherit Name[id] pri:N` |
+| `TASK_SET_AFFINITY` (18) | `traceTASK_CORE_AFFINITY_SET` | task id | core affinity bitmask | `STI` | `task` | `trigger` | `affinity_set Name[id] 0xMASK` |
 | `TAG` … `TAG7` (90–97) | `traceTAG(t, v)` | tag value | 0 | `STI` | `tag0_event` … `tag7_event` | `trigger` | `N` |
 
 † **Queue type** (`param1`): `0` = queue, `1` = mutex, `2` = counting semaphore, `3` = binary semaphore, `4` = recursive mutex (`QUEUE_TYPE_*` in `btf_trace.h`). Mutex/semaphore rows use target `mutex` or `sem`; send/receive use `give`/`take` for mutex/sem and `send`/`recv` for queues.

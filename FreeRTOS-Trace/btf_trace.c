@@ -443,6 +443,16 @@ void btf_dump(
                         (int)event->param1,
                         (int)event->param2);
                 break;
+            case TRACE_EVENT_TASK_SET_AFFINITY:
+                printf( "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,affinity_set %s[%d] 0x%x\n",
+                        current_time,
+                        coreid,
+                        "task",
+                        "trigger",
+                        get_taskname(trace_data, event->param1),
+                        (int)event->param1,
+                        (unsigned int)event->param2);
+                break;
             case TRACE_EVENT_QUEUE_CREATE:
                 switch(event->param1) {
                 case QUEUE_TYPE_MUTEX:

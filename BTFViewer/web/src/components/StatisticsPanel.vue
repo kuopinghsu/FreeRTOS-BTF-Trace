@@ -141,6 +141,46 @@
       </template>
     </template>
 
+    <!-- Core time breakdown -->
+    <template v-if="coreTimeBreakdown.length">
+      <div class="stats-sep" />
+      <div class="stats-section-title collapsible" @click="coreBreakdownCollapsed = !coreBreakdownCollapsed">
+        <svg class="chevron" :class="{ collapsed: coreBreakdownCollapsed }" viewBox="0 0 10 10" width="10" height="10">
+          <polyline points="2,3 5,7 8,3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+        Core Time Breakdown{{ scopeSuffixStr }}
+      </div>
+      <template v-if="!coreBreakdownCollapsed">
+        <div class="stats-table-block">
+          <div class="stats-table-wrap" :style="{ height: tableHeight('core_breakdown') + 'px' }">
+            <table class="stats-table">
+              <thead>
+                <tr>
+                  <th>Core</th><th>Active %</th><th>Idle %</th><th>Tick %</th><th>Gap %</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in coreTimeBreakdown" :key="row.core">
+                  <td>{{ row.core }}</td>
+                  <td>{{ (100 * row.activeNs / row.spanNs).toFixed(1) }}%</td>
+                  <td>{{ (100 * row.idleNs / row.spanNs).toFixed(1) }}%</td>
+                  <td>{{ (100 * row.tickNs / row.spanNs).toFixed(1) }}%</td>
+                  <td>{{ (100 * row.gapNs / row.spanNs).toFixed(1) }}%</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div
+            class="stats-section-resizer"
+            role="separator"
+            aria-label="Resize core time breakdown table"
+            aria-orientation="horizontal"
+            @mousedown.prevent="onTableResizeStart('core_breakdown', $event)"
+          />
+        </div>
+      </template>
+    </template>
+
     <!-- Top tasks -->
     <div class="stats-sep" />
     <div
@@ -492,6 +532,47 @@
           @mousedown.prevent="onTableResizeStart('migrations', $event)"
         />
       </div>
+    </template>
+
+    <!-- Core-pair migration summary -->
+    <template v-if="corePairRows.length">
+      <div class="stats-sep" />
+      <div class="stats-section-title collapsible" @click="corePairsCollapsed = !corePairsCollapsed">
+        <svg class="chevron" :class="{ collapsed: corePairsCollapsed }" viewBox="0 0 10 10" width="10" height="10">
+          <polyline points="2,3 5,7 8,3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+        Core-Pair Migration Summary{{ scopeSuffixStr }}
+      </div>
+      <template v-if="!corePairsCollapsed">
+        <div class="stats-table-block">
+          <div class="stats-table-wrap" :style="{ height: tableHeight('core_pairs') + 'px' }">
+            <table class="stats-table">
+              <thead>
+                <tr>
+                  <th>From</th><th>To</th><th>Count</th><th>Bounces</th><th>Bounce %</th><th>Avg Gap</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in corePairRows" :key="`${row.fromCore}-${row.toCore}`">
+                  <td>{{ row.fromCore }}</td>
+                  <td>{{ row.toCore }}</td>
+                  <td>{{ row.count }}</td>
+                  <td>{{ row.bounces }}</td>
+                  <td>{{ row.bouncePct.toFixed(1) }}%</td>
+                  <td>{{ formatMigGapNs(row.avgGapNs) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div
+            class="stats-section-resizer"
+            role="separator"
+            aria-label="Resize core-pair migration table"
+            aria-orientation="horizontal"
+            @mousedown.prevent="onTableResizeStart('core_pairs', $event)"
+          />
+        </div>
+      </template>
     </template>
 
     <!-- Execution time per slice -->
@@ -1396,16 +1477,58 @@
       </template>
     </template>
 
-    <!-- Deadlines / CPU budget -->
-    <template v-if="hasDeadlineConfig">
+    <!-- Core affinity -->
+    <template v-if="coreAffinityRows.length">
       <div class="stats-sep" />
-      <div class="stats-section-title collapsible" @click="deadlineCollapsed = !deadlineCollapsed">
-        <svg class="chevron" :class="{ collapsed: deadlineCollapsed }" viewBox="0 0 10 10" width="10" height="10">
+      <div class="stats-section-title collapsible" @click="affinityCollapsed = !affinityCollapsed">
+        <svg class="chevron" :class="{ collapsed: affinityCollapsed }" viewBox="0 0 10 10" width="10" height="10">
           <polyline points="2,3 5,7 8,3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
-        Deadlines / CPU budget{{ scopeSuffixStr }}
+        Core Affinity{{ scopeSuffixStr }}
       </div>
-      <template v-if="!deadlineCollapsed">
+      <template v-if="!affinityCollapsed">
+        <div class="stats-table-block">
+          <div class="stats-table-wrap" :style="{ height: tableHeight('affinity') + 'px' }">
+            <table class="stats-table">
+              <thead>
+                <tr>
+                  <th>Task</th><th>Mask</th><th>Observed Cores</th><th>Violations</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in coreAffinityRows" :key="row.label">
+                  <td>{{ row.label }}</td>
+                  <td>{{ row.maskHex }}</td>
+                  <td>{{ row.observedCores }}</td>
+                  <td :class="row.violations !== '—' ? 'sev-error' : ''">{{ row.violations }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div
+            class="stats-section-resizer"
+            role="separator"
+            aria-label="Resize core affinity table"
+            aria-orientation="horizontal"
+            @mousedown.prevent="onTableResizeStart('affinity', $event)"
+          />
+        </div>
+      </template>
+    </template>
+
+    <!-- Deadlines / CPU budget -->
+    <div class="stats-sep" />
+    <div class="stats-section-title collapsible" @click="deadlineCollapsed = !deadlineCollapsed">
+      <svg class="chevron" :class="{ collapsed: deadlineCollapsed }" viewBox="0 0 10 10" width="10" height="10">
+        <polyline points="2,3 5,7 8,3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+      </svg>
+      Deadlines / CPU budget{{ scopeSuffixStr }}
+    </div>
+    <template v-if="!deadlineCollapsed">
+      <div v-if="!hasDeadlineConfig" class="range-hint">
+        Configure deadline thresholds in Settings (⚙ → Display → Analysis thresholds).
+      </div>
+      <template v-else>
         <div v-if="!deadlineViolations.sliceViolations.length && !deadlineViolations.cpuViolations.length" class="range-hint">
           No violations in scope
         </div>
@@ -2193,9 +2316,10 @@ import {
   syncIssueAnnotationNote,
 } from '../utils/syncObjectAnalysis.js'
 import { buildTaskLifecycleRows, formatLifecycleSpan } from '../utils/lifecycleAnalysis.js'
+import { formatMigrationGapTime } from '../utils/timeFormat.js'
 import { computeDeadlineViolations } from '../utils/deadlineAnalysis.js'
 import { intervalInstanceDetailRows } from '../utils/intervalAnalysis.js'
-import { migrationRows } from '../utils/migrationAnalysis.js'
+import { migrationRows, buildCorePairRows, buildCoreTimeBreakdown } from '../utils/migrationAnalysis.js'
 import { traceNeedsDeferredStatsLoad } from '../utils/statsLoad.js'
 import { tickHealthReport } from '../utils/tickHealth.js'
 import { requestStatsCompute } from '../utils/statsWorkerClient.js'
@@ -2252,6 +2376,13 @@ const lifecycleCollapsed = ref(false)
 const deadlineCollapsed = ref(false)
 const intervalsCollapsed = ref(false)
 const tagsCollapsed = ref(false)
+const corePairsCollapsed = ref(false)
+const coreBreakdownCollapsed = ref(false)
+const affinityCollapsed = ref(false)
+
+function formatMigGapNs(ns) {
+  return formatMigrationGapTime(ns, props.trace?.timeScale ?? 'us')
+}
 
 const scopeToCursorsModel = computed({
   get: () => props.scopeToCursors,
@@ -2274,6 +2405,9 @@ const STATS_SECTION_FLAGS = [
   deadlineCollapsed,
   intervalsCollapsed,
   tagsCollapsed,
+  corePairsCollapsed,
+  coreBreakdownCollapsed,
+  affinityCollapsed,
 ]
 
 function expandAllSections() {
@@ -2499,8 +2633,20 @@ const canCompareTabs = computed(() => loadedTabs.value.length >= 2)
 function clampPct(v) { return Math.max(0, Math.min(100, v)).toFixed(1) }
 
 function tableHeight(id) {
-  const fallback = id === 'migrations' ? STATS_TABLE_MIG_DEFAULT_H : STATS_TABLE_DEFAULT_H
-  return sectionHeights.value[id] ?? fallback
+  if (sectionHeights.value[id] != null) return sectionHeights.value[id]
+  // Auto-size small-row sections to exact content height so the resizer is
+  // immediately effective in both directions (maxHeight only constrains from
+  // above, so dragging down does nothing on a table shorter than the cap).
+  if (id === 'core_breakdown') {
+    return statsTableViewportHeight(Math.min(Math.max(coreTimeBreakdown.value.length, 1), STATS_MAX_VISIBLE_ROWS))
+  }
+  if (id === 'core_pairs') {
+    return statsTableViewportHeight(Math.min(Math.max(corePairRows.value.length, 1), STATS_MAX_VISIBLE_ROWS))
+  }
+  if (id === 'affinity') {
+    return statsTableViewportHeight(Math.min(Math.max(coreAffinityRows.value.length, 1), STATS_MAX_VISIBLE_ROWS))
+  }
+  return id === 'migrations' ? STATS_TABLE_MIG_DEFAULT_H : STATS_TABLE_DEFAULT_H
 }
 
 function utilScrollStyle(rowCount, id = null) {
@@ -2820,6 +2966,65 @@ const lifecycleStats = computed(() => {
   if (!tr?.stiEvents?.length) return []
   const r = statsRange.value
   return buildTaskLifecycleRows(tr.stiEvents, tr.taskRepr, r?.lo ?? null, r?.hi ?? null)
+})
+
+const corePairRows = computed(() => {
+  const tr = props.trace
+  if (!tr?.migrations?.length) return []
+  const r = statsRange.value
+  return buildCorePairRows(tr, r?.lo ?? null, r?.hi ?? null)
+})
+
+const coreTimeBreakdown = computed(() => {
+  const tr = props.trace
+  if (!tr?.coreNames?.length) return []
+  const r = statsRange.value
+  return buildCoreTimeBreakdown(tr, r?.lo ?? null, r?.hi ?? null)
+})
+
+const _AFFINITY_NOTE_RE = /^affinity_set\s+(.+?)\s+(0x[0-9a-fA-F]+|\d+)\s*$/i
+const coreAffinityRows = computed(() => {
+  const tr = props.trace
+  if (!tr?.stiEvents?.length) return []
+  const r = statsRange.value
+  const lo = r?.lo ?? null
+  const hi = r?.hi ?? null
+  const masks = new Map()
+  for (const ev of tr.stiEvents) {
+    if (ev.target !== 'task') continue
+    const m = _AFFINITY_NOTE_RE.exec((ev.note ?? '').trim())
+    if (!m) continue
+    const taskLabel = m[1].trim()
+    const raw = m[2]
+    const mask = parseInt(raw, raw.startsWith('0x') || raw.startsWith('0X') ? 16 : 10)
+    const mk = taskMergeKey(taskLabel)
+    masks.set(mk, mask)
+  }
+  if (!masks.size) return []
+  const rows = []
+  for (const [mk, mask] of [...masks.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    const label = taskDisplayName(taskReprGet(tr, mk) || mk)
+    const obs = new Set()
+    for (const seg of (tr.segByMergeKey?.get(mk) ?? [])) {
+      if (lo != null && seg.end < lo) continue
+      if (hi != null && seg.start > hi) continue
+      obs.add(seg.core)
+    }
+    if (!obs.size) continue
+    const allowed = new Set()
+    for (const core of (tr.coreNames ?? [])) {
+      const idx = parseInt(core.split('_').at(-1), 10)
+      if (!isNaN(idx) && (mask & (1 << idx))) allowed.add(core)
+    }
+    const violations = [...obs].filter(c => allowed.size > 0 && !allowed.has(c))
+    rows.push({
+      label,
+      maskHex: `0x${mask.toString(16).toUpperCase()}`,
+      observedCores: [...obs].sort().join(', '),
+      violations: violations.length > 0 ? violations.sort().join(', ') : '—',
+    })
+  }
+  return rows
 })
 
 const deadlineViolations = computed(() => {
@@ -3712,6 +3917,58 @@ function exportCsv() {
     lines.push('No mutex/sem activity in scope,,,,,')
   }
 
+  const queueReportRows = syncObjectStatsRows(tr, lo, hi, { kindFilter: 'queue' })
+  lines.push('')
+  lines.push(`Queue${suffix}`)
+  lines.push('Object,Kind,Holds,Issues,AvgHold,Status')
+  if (queueReportRows.length) {
+    for (const row of queueReportRows) {
+      lines.push([
+        _csvCell(row.label),
+        _csvCell(row.kind),
+        _csvCell(row.holdCount),
+        _csvCell(row.issueCount),
+        _csvCell(row.avgHold),
+        _csvCell(row.statusLabel),
+      ].join(','))
+    }
+  } else if (tr?.hasSyncObjectInstrumentation) {
+    lines.push('No queue activity in scope,,,,,')
+  }
+
+  const scale = tr.timeScale
+  const lcRows = buildTaskLifecycleRows(tr.stiEvents ?? [], tr.taskRepr, lo, hi)
+  lines.push('')
+  lines.push(`Task Lifecycle${suffix}`)
+  lines.push('Task,Created,Deleted,Suspends,Resumes,Alive span,Events')
+  if (lcRows.length) {
+    for (const r of lcRows) {
+      lines.push([
+        _csvCell(r.label),
+        r.createNs != null ? _csvCell(formatTime(r.createNs, scale)) : '',
+        r.deleteNs != null ? _csvCell(formatTime(r.deleteNs, scale)) : '',
+        _csvCell(r.suspendCount),
+        _csvCell(r.resumeCount),
+        r.aliveSpanNs ? _csvCell(formatLifecycleSpan(r.aliveSpanNs, scale)) : '',
+        _csvCell(r.eventCount),
+      ].join(','))
+    }
+  } else {
+    lines.push('No lifecycle events,,,,,,')
+  }
+
+  const affRows = coreAffinityRows.value
+  lines.push('')
+  lines.push(`Core Affinity${suffix}`)
+  lines.push('Task,Mask,Observed Cores,Violations')
+  if (affRows.length) {
+    for (const r of affRows) {
+      lines.push([_csvCell(r.label), _csvCell(r.maskHex), _csvCell(r.observedCores), _csvCell(r.violations)].join(','))
+    }
+  } else {
+    lines.push('No affinity_set events,,,')
+  }
+
   lines.push('')
   lines.push(`Interval Analysis${suffix}`)
   lines.push('ID,Label,Count,Min,Avg,Max,p95')
@@ -3749,6 +4006,44 @@ function exportCsv() {
     }
   } else {
     lines.push('No tag data,,,,,,')
+  }
+
+  const pairRows = buildCorePairRows(tr, lo, hi)
+  lines.push('')
+  lines.push(`Core-Pair Migration Summary${suffix}`)
+  lines.push('From,To,Count,Bounces,Bounce %,Avg Gap')
+  if (pairRows.length) {
+    for (const r of pairRows) {
+      lines.push([
+        _csvCell(r.fromCore),
+        _csvCell(r.toCore),
+        _csvCell(r.count),
+        _csvCell(r.bounces),
+        _csvCell(`${r.bouncePct.toFixed(1)}%`),
+        _csvCell(formatMigrationGapTime(r.avgGapNs, scale)),
+      ].join(','))
+    }
+  } else {
+    lines.push('No migrations in scope,,,,,')
+  }
+
+  const bdRows = buildCoreTimeBreakdown(tr, lo, hi)
+  lines.push('')
+  lines.push(`Core Time Breakdown${suffix}`)
+  lines.push('Core,Active %,Idle %,Tick %,Gap %')
+  if (bdRows.length) {
+    for (const r of bdRows) {
+      const s = Math.max(r.spanNs, 1)
+      lines.push([
+        _csvCell(r.core),
+        _csvCell(`${(100 * r.activeNs / s).toFixed(1)}%`),
+        _csvCell(`${(100 * r.idleNs / s).toFixed(1)}%`),
+        _csvCell(`${(100 * r.tickNs / s).toFixed(1)}%`),
+        _csvCell(`${(100 * r.gapNs / s).toFixed(1)}%`),
+      ].join(','))
+    }
+  } else {
+    lines.push('No core data,,,,')
   }
 
   _downloadText(`statistics-${_stamp()}.csv`, `\uFEFF${lines.join('\n')}`, 'text/csv;charset=utf-8')
@@ -4269,8 +4564,84 @@ function exportHtml() {
     }</tbody></table></section>
     ${tr?.hasPriorityInstrumentation ? _renderPriorityReportHtml(tr, lo, hi, suffix) : ''}
     ${tr?.hasSyncObjectInstrumentation ? _renderSyncObjectReportHtml(tr, lo, hi, suffix) : ''}
+    ${tr?.hasSyncObjectInstrumentation ? (() => {
+      const qRows = syncObjectStatsRows(tr, lo, hi, { kindFilter: 'queue' })
+      if (!qRows.length) return ''
+      const qBody = qRows.map(r =>
+        `<tr><td>${_htmlCell(r.label)}</td><td>${_htmlCell(r.kind)}</td>` +
+        `<td>${r.holdCount}</td><td>${r.issueCount}</td>` +
+        `<td>${_htmlCell(r.avgHold)}</td>` +
+        `<td class="${r.status !== 'ok' ? (r.status === 'error' ? 'sev-error' : 'sev-warning') : ''}">${_htmlCell(r.statusLabel)}</td></tr>`
+      ).join('')
+      return `<section class="report-card"><h2>Queue${_htmlCell(suffix)}</h2>` +
+        `<table><thead><tr><th>Object</th><th>Kind</th><th>Holds</th>` +
+        `<th>Issues</th><th>Avg hold</th><th>Status</th></tr></thead>` +
+        `<tbody>${qBody}</tbody></table></section>`
+    })() : ''}
+    ${(() => {
+      const lcRows = buildTaskLifecycleRows(tr.stiEvents ?? [], tr.taskRepr, lo, hi)
+      const lcBody = lcRows.length
+        ? lcRows.map(r =>
+            `<tr><td>${_htmlCell(r.label)}</td>` +
+            `<td>${r.createNs != null ? _htmlCell(formatTime(r.createNs, tr.timeScale)) : '—'}</td>` +
+            `<td>${r.deleteNs != null ? _htmlCell(formatTime(r.deleteNs, tr.timeScale)) : '—'}</td>` +
+            `<td>${r.suspendCount}</td><td>${r.resumeCount}</td>` +
+            `<td>${r.aliveSpanNs ? _htmlCell(formatLifecycleSpan(r.aliveSpanNs, tr.timeScale)) : '—'}</td>` +
+            `<td>${r.eventCount}</td></tr>`
+          ).join('')
+        : '<tr><td colspan="7" class="empty">No lifecycle events</td></tr>'
+      return `<section class="report-card"><h2>Task Lifecycle${_htmlCell(suffix)}</h2>` +
+        `<table><thead><tr><th>Task</th><th>Created</th><th>Deleted</th>` +
+        `<th>Suspends</th><th>Resumes</th><th>Alive span</th><th>Events</th></tr></thead>` +
+        `<tbody>${lcBody}</tbody></table></section>`
+    })()}
+    ${(() => {
+      const affRows = coreAffinityRows.value
+      const affBody = affRows.length
+        ? affRows.map(r => {
+            const violStyle = r.violations !== '—' ? ' style="color:#c0392b;font-weight:600"' : ''
+            return `<tr><td>${_htmlCell(r.label)}</td><td>${_htmlCell(r.maskHex)}</td>` +
+              `<td>${_htmlCell(r.observedCores)}</td><td${violStyle}>${_htmlCell(r.violations)}</td></tr>`
+          }).join('')
+        : '<tr><td colspan="4" class="empty">No affinity_set events</td></tr>'
+      return `<section class="report-card"><h2>Core Affinity${_htmlCell(suffix)}</h2>` +
+        `<table><thead><tr><th>Task</th><th>Mask</th><th>Observed Cores</th>` +
+        `<th>Violations</th></tr></thead>` +
+        `<tbody>${affBody}</tbody></table></section>`
+    })()}
     ${_renderIntervalReportHtml(tr, lo, hi, suffix)}
     ${_renderTagReportHtml(tr, lo, hi, suffix)}
+    ${(() => {
+      const pairRows = buildCorePairRows(tr, lo, hi)
+      const pairBody = pairRows.length
+        ? pairRows.map(r =>
+            `<tr><td>${_htmlCell(r.fromCore)}</td><td>${_htmlCell(r.toCore)}</td>` +
+            `<td>${r.count}</td><td>${r.bounces}</td><td>${r.bouncePct.toFixed(1)}%</td>` +
+            `<td>${_htmlCell(formatMigrationGapTime(r.avgGapNs, tr.timeScale))}</td></tr>`
+          ).join('')
+        : '<tr><td colspan="6" class="empty">No migrations in scope</td></tr>'
+      return `<section class="report-card"><h2>Core-Pair Migration Summary${_htmlCell(suffix)}</h2>` +
+        `<table><thead><tr><th>From</th><th>To</th><th>Count</th>` +
+        `<th>Bounces</th><th>Bounce %</th><th>Avg Gap</th></tr></thead>` +
+        `<tbody>${pairBody}</tbody></table></section>`
+    })()}
+    ${(() => {
+      const bdRows = buildCoreTimeBreakdown(tr, lo, hi)
+      const bdBody = bdRows.length
+        ? bdRows.map(r => {
+            const s = Math.max(r.spanNs, 1)
+            return `<tr><td>${_htmlCell(r.core)}</td>` +
+              `<td>${(100 * r.activeNs / s).toFixed(1)}%</td>` +
+              `<td>${(100 * r.idleNs / s).toFixed(1)}%</td>` +
+              `<td>${(100 * r.tickNs / s).toFixed(1)}%</td>` +
+              `<td>${(100 * r.gapNs / s).toFixed(1)}%</td></tr>`
+          }).join('')
+        : '<tr><td colspan="5" class="empty">No core data</td></tr>'
+      return `<section class="report-card"><h2>Core Time Breakdown${_htmlCell(suffix)}</h2>` +
+        `<table><thead><tr><th>Core</th><th>Active %</th><th>Idle %</th>` +
+        `<th>Tick %</th><th>Gap %</th></tr></thead>` +
+        `<tbody>${bdBody}</tbody></table></section>`
+    })()}
     <div class="report-foot">Generated by BTF Viewer</div>
   </div>
 </body>

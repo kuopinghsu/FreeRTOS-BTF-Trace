@@ -9,7 +9,7 @@ from .graphics_items import *  # noqa: F403,F401
 from .scene import *  # noqa: F403,F401
 from .view import *  # noqa: F403,F401
 from .stats import *  # noqa: F403,F401
-from .stats import _RcSettings
+from .stats import _RcSettings, _parse_task_deadlines_text
 from .mvvm import MainViewModel, MvvmSettingsMixin, TraceTabViewModel
 from .mvvm.tab_viewport import apply_viewport, viewport_from_json, viewport_to_json
 from .trace_quality import trace_quality_summary
@@ -2085,6 +2085,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             return
         self._stats_panel._ui_font_size = self._ui_font_size_val
         self._stats_panel.rebuild(trace)
+        _budget = self._settings.get_float("analysis", "cpu_budget_pct", 0.0)
+        _dl_text = self._settings.get("analysis", "task_deadlines", "")
+        self._stats_panel.set_analysis_settings(
+            _budget, _parse_task_deadlines_text(_dl_text))
         QTimer.singleShot(0, self._stats_panel.sync_util_layout)
         self._cpu_load_graph.set_trace(trace)
         self._cpu_load_graph.set_font_size(self._font_size_val)
@@ -2452,7 +2456,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
     def _on_settings_changed(self) -> None:
         """Push AppSettingsViewModel changes to all open tabs and chrome."""
         if (self._shutting_down or self._persisting_settings
-                or self._load_in_progress):
+                or self._load_in_progress or self._theme_change_in_flight):
             return
         self._apply_settings_to_all_tabs()
 
@@ -3027,6 +3031,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             return
         self._applying_theme = True
         app = QApplication.instance()
+        _ok = False
         self.setUpdatesEnabled(False)
         try:
             self._is_dark = bool(is_dark)
@@ -3207,12 +3212,18 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             QTabWidget#marks_tab_widget QTabBar#marks_tab_bar {{
                          background:{c['win_bg']}; }}
         """)
+            _ok = True
         finally:
             self.setUpdatesEnabled(True)
             self._applying_theme = False
+            if not _ok and op is not None:
+                self._release_theme_change()
 
         if hasattr(self, '_view'):
             self._schedule_theme_widgets(op)
+        elif op is not None:
+            # No view yet (called before _build_ui); nothing to schedule.
+            self._release_theme_change()
 
     def _schedule_theme_widgets(self, op: int | None = None) -> None:
         """Defer per-widget theme sync until after app QSS has settled."""
@@ -3247,6 +3258,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             return
         win_bg = QColor(c["win_bg"])
         defer_rebuilds = False
+        _ok = False
         self.setUpdatesEnabled(False)
         try:
             for view in self._iter_tab_views():
@@ -3266,8 +3278,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 )
             defer_rebuilds = any(
                 v._scene._trace is not None for v in self._iter_tab_views())
+            _ok = True
         finally:
             self.setUpdatesEnabled(True)
+            if not _ok:
+                self._release_theme_change()
         if defer_rebuilds:
             QTimer.singleShot(0, lambda: self._finish_theme_rebuilds_if_current(op))
         else:
@@ -3289,6 +3304,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         c = self._theme_tokens(is_dark)
         _ui_font_size = getattr(self, '_ui_font_size_val', UI_FONT_SIZE)
         defer_rebuilds = False
+        _ok = False
         self.setUpdatesEnabled(False)
         try:
             if hasattr(self, '_range_stats_label'):
@@ -3330,8 +3346,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 self._stats_panel._sync_stats_panel_chrome_font()
             if hasattr(self, '_cursor_bar'):
                 self._cursor_bar.update_theme(is_dark, _ui_font_size)
+            _ic_color = "#CCCCCC" if is_dark else "#555555"
             if getattr(self, '_tb_icon_actions', None):
-                _ic_color = "#CCCCCC" if is_dark else "#555555"
                 for _act, _ic_path in self._tb_icon_actions:
                     _act.setIcon(_svg_icon(_ic_path, _ic_color))
             if hasattr(self, '_tb_theme_btn'):
@@ -3345,9 +3361,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                     "Switch to &Light Theme" if is_dark else "Switch to &Dark Theme"
                 )
             self._sync_toolbar_theme(c)
+            _ok = True
         finally:
             self.setUpdatesEnabled(True)
             self._applying_theme = False
+            if not _ok:
+                self._release_theme_change()
 
         if defer_rebuilds:
             rebuild_op = op if op is not None else self._theme_op_id
@@ -3388,7 +3407,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                     view.viewport().update()
         finally:
             self.setUpdatesEnabled(True)
-        self._release_theme_change()
+            self._release_theme_change()
 
     def _sync_toolbar_theme(self, c: dict) -> None:
         """Explicit toolbar palette (Windows / Fusion may ignore QSS text colour)."""
@@ -3425,10 +3444,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if self._theme_change_in_flight:
             return
         self._theme_change_in_flight = True
-        self._is_dark = not self._is_dark
-        self._settings.set("view", "theme", "dark" if self._is_dark else "light")
         self._theme_op_id += 1
         op = self._theme_op_id
+        self._is_dark = not self._is_dark
+        self._settings.set("view", "theme", "dark" if self._is_dark else "light")
         QTimer.singleShot(0, lambda: self._apply_theme_if_current(op, self._is_dark))
 
     def _apply_theme_if_current(self, op: int, is_dark: bool) -> None:
@@ -5681,6 +5700,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "sti_line_style":           self._sti_line_style_val,
             "timescale_per_px_default": self._timescale_per_px_default_val,
             "cpu_load_row_h":           self._cpu_load_row_h_val,
+            "cpu_budget_pct":           self._settings.get_float("analysis", "cpu_budget_pct", 0.0),
+            "task_deadlines_text":      self._settings.get("analysis", "task_deadlines", ""),
         }
         dlg = _SettingsDialog(
             self,
@@ -5706,6 +5727,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             colorblind_safe=self._colorblind_val,
             zoom_unit=self._current_time_unit(),
             cpu_load_row_h=self._cpu_load_row_h_val,
+            cpu_budget_pct=_snap["cpu_budget_pct"],
+            task_deadlines_text=_snap["task_deadlines_text"],
         )
         dlg.live_preview.connect(lambda: self._apply_settings_preview({
             "is_dark":                  dlg.is_dark,
@@ -5741,6 +5764,17 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         )
         if _exec_centred(dlg, self) == QDialog.Accepted:
             self._persist_settings_after_dlg(_snap)
+            _new_budget = dlg.cpu_budget_pct
+            _new_dl_text = dlg.task_deadlines_text
+            if (_snap["cpu_budget_pct"] != _new_budget
+                    or _snap["task_deadlines_text"] != _new_dl_text):
+                self._settings.set_many("analysis", {
+                    "cpu_budget_pct": str(_new_budget),
+                    "task_deadlines": _new_dl_text,
+                })
+                if hasattr(self, "_stats_panel"):
+                    self._stats_panel.set_analysis_settings(
+                        _new_budget, _parse_task_deadlines_text(_new_dl_text))
         else:
             self._apply_settings_preview(_snap)
 

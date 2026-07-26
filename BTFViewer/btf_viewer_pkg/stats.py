@@ -1790,6 +1790,11 @@ class _StatsHoverRow(QWidget):
     def _sync_hover(self) -> None:
         self._apply_hover(self.underMouse())
 
+    def update_theme(self, is_dark: bool) -> None:
+        self._hover_bg = QColor("#3A3A50") if is_dark else QColor("#E0E0EC")
+        if self._hovered:
+            self.update()
+
     def paintEvent(self, event) -> None:  # noqa: N802
         if self._hovered:
             p = QPainter(self)
@@ -3202,6 +3207,26 @@ def _core_util_stddev(values: List[float]) -> float:
     return math.sqrt(sum((v - mean) ** 2 for v in values) / n)
 
 
+def _parse_task_deadlines_text(text: str) -> Dict[str, int]:
+    """Parse a newline-separated 'TaskName=nanoseconds' text into a dict."""
+    out: Dict[str, int] = {}
+    for line in text.splitlines():
+        t = line.strip()
+        if not t or t.startswith("#"):
+            continue
+        eq = t.find("=")
+        if eq <= 0:
+            continue
+        key = t[:eq].strip()
+        try:
+            val = int(t[eq + 1:].strip())
+        except ValueError:
+            continue
+        if key and val > 0:
+            out[key] = val
+    return out
+
+
 class _StatsPanel(QWidget):
     """Dock panel showing trace statistics (span, core utilisation, top tasks)."""
 
@@ -3238,6 +3263,8 @@ class _StatsPanel(QWidget):
         self._defer_populate_timer = QTimer(self)
         self._defer_populate_timer.setSingleShot(True)
         self._defer_populate_timer.timeout.connect(self._populate_next_deferred_section)
+        self._cpu_budget_pct: float = 0.0
+        self._task_deadlines_ns: Dict[str, int] = {}
         self.setMinimumWidth(0)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         outer = QVBoxLayout(self)
@@ -3528,6 +3555,8 @@ class _StatsPanel(QWidget):
         for table in self.findChildren(QTableWidget):
             if table.objectName() == "stats_table":
                 self._apply_stats_table_theme(table, ui_fs)
+        for row in self.findChildren(_StatsHoverRow):
+            row.update_theme(self._is_dark)
 
     def _stats_table_colors(self) -> Tuple[QColor, QColor, str, QColor]:
         """Theme colours for stats tables (match MainWindow._theme_tokens)."""
@@ -3891,6 +3920,15 @@ class _StatsPanel(QWidget):
         self._ui_font_size = int(ui_font_size)
         self._sync_stats_panel_chrome_font()
         self.rebuild(trace)
+
+    def set_analysis_settings(self, cpu_budget_pct: float, task_deadlines_ns: Dict[str, int]) -> None:
+        """Update deadline/budget settings; rebuilds the stats panel if a trace is loaded."""
+        changed = (self._cpu_budget_pct != cpu_budget_pct
+                   or self._task_deadlines_ns != task_deadlines_ns)
+        self._cpu_budget_pct = float(cpu_budget_pct)
+        self._task_deadlines_ns = dict(task_deadlines_ns)
+        if changed and self._trace is not None:
+            self.rebuild(self._trace)
 
     def set_dark(self, is_dark: bool, *, refresh_tables: bool = True) -> None:
         self._is_dark = is_dark
@@ -4679,7 +4717,6 @@ class _StatsPanel(QWidget):
         _min_col = 3 if include_cpu else 2
         _max_col = 5 if include_cpu else 4
         _link_color = QBrush(QColor("#88AAFF"))
-        _hover_bg = self._stats_table_hover_bg()
         _hovered_row = [-1]
         _interactive = bool(on_row_click or on_min_click or on_max_click)
         _row_tip = "Click to view distribution chart"
@@ -4690,10 +4727,11 @@ class _StatsPanel(QWidget):
             row = _hovered_row[0]
             if row < 0:
                 return
+            bg = QBrush(self._stats_table_colors()[0])
             for c in range(cols):
                 item = table.item(row, c)
                 if item is not None:
-                    item.setBackground(_default_bg)
+                    item.setBackground(bg)
             _hovered_row[0] = -1
 
         def _set_row_hover(row: int) -> None:
@@ -4703,10 +4741,11 @@ class _StatsPanel(QWidget):
                 return
             _clear_row_hover()
             _hovered_row[0] = row
+            hover = self._stats_table_hover_bg()
             for c in range(cols):
                 item = table.item(row, c)
                 if item is not None:
-                    item.setBackground(_hover_bg)
+                    item.setBackground(hover)
 
         for r, row in enumerate(rows):
             if migrations:
@@ -4856,17 +4895,17 @@ class _StatsPanel(QWidget):
         table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         _default_bg = self._apply_stats_table_theme(table, ui_fs)
-        _hover_bg = self._stats_table_hover_bg()
         _hovered_row = [-1]
 
         def _clear_hover() -> None:
             row = _hovered_row[0]
             if row < 0:
                 return
+            bg = QBrush(self._stats_table_colors()[0])
             for c in range(cols):
                 item = table.item(row, c)
                 if item is not None:
-                    item.setBackground(_default_bg)
+                    item.setBackground(bg)
             _hovered_row[0] = -1
 
         def _set_hover(row: int) -> None:
@@ -4874,10 +4913,11 @@ class _StatsPanel(QWidget):
                 return
             _clear_hover()
             _hovered_row[0] = row
+            hover = self._stats_table_hover_bg()
             for c in range(cols):
                 item = table.item(row, c)
                 if item is not None:
-                    item.setBackground(_hover_bg)
+                    item.setBackground(hover)
 
         for r, row in enumerate(rows):
             mk, victim, preemptor, count, total, avg, mx = row
@@ -5120,7 +5160,59 @@ class _StatsPanel(QWidget):
     <tbody>{ep_body}</tbody></table></section>"""
 
         sync_html = ""
+        queue_html = ""
         if trace.has_sync_object_instrumentation:
+            sync_body = "".join(
+                f"<tr><td>{_esc(r[3])}</td><td>{_esc(r[1])}</td><td>{r[4]}</td><td>{r[5]}</td>"
+                f"<td class=\"{'sev-warning' if len(r) > 10 and r[10] > 0 else ''}\">{r[10] if len(r) > 10 else 0}</td>"
+                f"<td>{_esc(r[6])}</td><td class=\"{'sev-error' if r[8] == 'error' else 'sev-warning' if r[8] == 'warning' else ''}\">"
+                f"{_esc(r[7])}</td></tr>"
+                for r in sync_rows
+            ) or '<tr><td colspan="7" class="empty">No mutex/sem activity in scope</td></tr>'
+            issue_body = "".join(
+                f"<tr><td>{_esc(_format_time(i['time_ns'], trace.time_scale))}</td>"
+                f"<td>{_esc(i.get('obj_key') or '—')}</td>"
+                f"<td class=\"{_sev_class(i.get('severity', ''))}\">{_esc(i.get('kind', ''))}</td>"
+                f"<td>{_esc(i.get('detail', ''))}</td>"
+                f"<td>{_esc(i.get('task_label') or '—')}</td>"
+                f"<td>{_esc(i.get('core') or '')}</td></tr>"
+                for i in sync_issues_scoped
+            ) or '<tr><td colspan="6" class="empty">No pairing issues in scope</td></tr>'
+            hold_body = "".join(
+                f"<tr><td>{_esc(h['object'])}</td><td>{_esc(h['holder'])}</td>"
+                f"<td>{_esc(h['start'])}</td><td>{_esc(h['stop'])}</td>"
+                f"<td>{_esc(h['duration'])}</td><td>{_esc(h['take_core'])}</td>"
+                f"<td>{_esc(h['give_core'])}</td></tr>"
+                for h in sync_holds
+            ) or '<tr><td colspan="7" class="empty">No paired holds in scope</td></tr>'
+            hold_note = ('<p class="detail-note">Showing longest 150 hold episodes in scope.</p>'
+                         if len(sync_holds) >= 150 else "")
+            sync_html = f"""
+    <section class=\"report-card\"><h2>Mutex / Semaphore{_esc(scope_title)}</h2>
+    <table><thead><tr><th>Object</th><th>Kind</th><th>Holds</th><th>Issues</th><th>Bounces</th><th>Avg hold</th><th>Status</th></tr></thead>
+    <tbody>{sync_body}</tbody></table>
+    <h3 class=\"sub\">Pairing issues</h3>
+    <table><thead><tr><th>Time</th><th>Object</th><th>Issue</th><th>Detail</th><th>Task</th><th>Core</th></tr></thead>
+    <tbody>{issue_body}</tbody></table>
+    <h3 class=\"sub\">Hold episodes (longest first)</h3>{hold_note}
+    <table><thead><tr><th>Object</th><th>Holder</th><th>Take</th><th>Give</th><th>Duration</th><th>Take core</th><th>Give core</th></tr></thead>
+    <tbody>{hold_body}</tbody></table></section>"""
+
+            _queue_html_rows = _sync_object_stats_rows(trace, lo, hi, kind_filter="queue")
+            if _queue_html_rows:
+                q_body = "".join(
+                    f"<tr><td>{_esc(r[3])}</td><td>{_esc(r[1])}</td><td>{r[4]}</td><td>{r[5]}</td>"
+                    f"<td class=\"{'sev-warning' if len(r) > 10 and r[10] > 0 else ''}\">{r[10] if len(r) > 10 else 0}</td>"
+                    f"<td>{_esc(r[6])}</td><td class=\"{'sev-error' if r[8] == 'error' else 'sev-warning' if r[8] == 'warning' else ''}\">"
+                    f"{_esc(r[7])}</td></tr>"
+                    for r in _queue_html_rows
+                )
+                queue_html = (
+                    f'<section class="report-card"><h2>Queue{_esc(scope_title)}</h2>'
+                    '<table><thead><tr><th>Object</th><th>Kind</th><th>Holds</th>'
+                    '<th>Issues</th><th>Bounces</th><th>Avg hold</th><th>Status</th></tr></thead>'
+                    f'<tbody>{q_body}</tbody></table></section>'
+                )
             sync_body = "".join(
                 f"<tr><td>{_esc(r[3])}</td><td>{_esc(r[1])}</td><td>{r[4]}</td><td>{r[5]}</td>"
                 f"<td class=\"{'sev-warning' if len(r) > 10 and r[10] > 0 else ''}\">{r[10] if len(r) > 10 else 0}</td>"
@@ -5198,6 +5290,90 @@ class _StatsPanel(QWidget):
     <h3 class=\"sub\">Tag samples (highest value first)</h3>{tag_note}
     <table><thead><tr><th>Tag</th><th>Time</th><th>Value</th><th>Core</th></tr></thead>
     <tbody>{tag_sample_body}</tbody></table></section>"""
+
+        ts = trace.time_scale
+        lc_rows_html = _task_lifecycle_rows(trace, lo, hi)
+        lc_body = "".join(
+            f"<tr><td>{_esc(label)}</td>"
+            f"<td>{_esc(_format_time(cns, ts)) if cns is not None else '—'}</td>"
+            f"<td>{_esc(_format_time(dns, ts)) if dns is not None else '—'}</td>"
+            f"<td>{nsus}</td><td>{nres}</td>"
+            f"<td>{_esc(_format_time(alive, ts)) if alive else '—'}</td>"
+            f"<td>{nev}</td></tr>"
+            for _mk, label, cns, dns, nsus, nres, alive, nev in lc_rows_html
+        ) or '<tr><td colspan="7" class="empty">No lifecycle events</td></tr>'
+        lifecycle_html = (
+            f'<section class="report-card"><h2>Task Lifecycle{_esc(scope_title)}</h2>'
+            '<table><thead><tr><th>Task</th><th>Created</th><th>Deleted</th>'
+            '<th>Suspends</th><th>Resumes</th><th>Alive span</th><th>Events</th></tr></thead>'
+            f'<tbody>{lc_body}</tbody></table></section>'
+        )
+
+        pair_rows_html = _core_pair_rows(trace, lo, hi)
+        pair_body = "".join(
+            f"<tr><td>{_esc(fc)}</td><td>{_esc(tc)}</td><td>{cnt}</td><td>{bnc}</td>"
+            f"<td>{100.0*bnc/cnt:.1f}%</td><td>{_esc(_format_time(avg_gap, ts))}</td></tr>"
+            for fc, tc, cnt, bnc, avg_gap in pair_rows_html
+        ) or '<tr><td colspan="6" class="empty">No migrations in scope</td></tr>'
+        core_pair_html = (
+            f'<section class="report-card"><h2>Core-Pair Migration Summary{_esc(scope_title)}</h2>'
+            '<table><thead><tr><th>From</th><th>To</th><th>Count</th>'
+            '<th>Bounces</th><th>Bounce %</th><th>Avg Gap</th></tr></thead>'
+            f'<tbody>{pair_body}</tbody></table></section>'
+        )
+
+        bd_rows_html = _core_time_breakdown(trace, lo, hi)
+        bd_body = "".join(
+            f"<tr><td>{_esc(core)}</td>"
+            f"<td>{100.0*a/max(sp,1):.1f}%</td><td>{100.0*i_/max(sp,1):.1f}%</td>"
+            f"<td>{100.0*t_/max(sp,1):.1f}%</td><td>{100.0*g/max(sp,1):.1f}%</td></tr>"
+            for core, a, i_, t_, g, sp in bd_rows_html
+        ) or '<tr><td colspan="5" class="empty">No core data</td></tr>'
+        core_breakdown_html = (
+            f'<section class="report-card"><h2>Core Time Breakdown{_esc(scope_title)}</h2>'
+            '<table><thead><tr><th>Core</th><th>Active %</th><th>Idle %</th>'
+            '<th>Tick %</th><th>Gap %</th></tr></thead>'
+            f'<tbody>{bd_body}</tbody></table></section>'
+        )
+
+        aff_rows_html = _task_core_affinity_rows(trace, lo, hi)
+        aff_body = "".join(
+            f"<tr><td>{_esc(label)}</td><td>{_esc(mhex)}</td><td>{_esc(obs)}</td>"
+            f"<td style=\"{'color:#c0392b;font-weight:600' if viol != chr(8212) else ''}\">{_esc(viol)}</td></tr>"
+            for label, mhex, obs, viol in aff_rows_html
+        ) or '<tr><td colspan="4" class="empty">No affinity_set events</td></tr>'
+        affinity_html = (
+            f'<section class="report-card"><h2>Core Affinity{_esc(scope_title)}</h2>'
+            '<table><thead><tr><th>Task</th><th>Mask</th><th>Observed Cores</th>'
+            '<th>Violations</th></tr></thead>'
+            f'<tbody>{aff_body}</tbody></table></section>'
+        )
+
+        # Deadlines / CPU budget
+        _dl_viols = _deadline_violations(trace, self._cpu_budget_pct, self._task_deadlines_ns, lo, hi)
+        _sv = _dl_viols["slice_violations"]
+        _cv = _dl_viols["cpu_violations"]
+        deadline_html = ""
+        if self._cpu_budget_pct > 0 or self._task_deadlines_ns:
+            sv_body = "".join(
+                f"<tr><td>{_esc(lbl)}</td><td>{_esc(dur)}</td><td>{_esc(lim)}</td>"
+                f'<td style="color:#c0392b;font-weight:600">{_esc(over)}</td></tr>'
+                for lbl, dur, lim, over in _sv
+            ) or '<tr><td colspan="4" class="empty">No slice violations</td></tr>'
+            cv_body = "".join(
+                f'<tr><td>{_esc(lbl)}</td><td style="color:#c0392b;font-weight:600">{_esc(pct)}</td>'
+                f"<td>{_esc(bgt)}</td></tr>"
+                for lbl, pct, bgt in _cv
+            ) or '<tr><td colspan="3" class="empty">No CPU budget violations</td></tr>'
+            deadline_html = (
+                f'<section class="report-card"><h2>Deadlines / CPU budget{_esc(scope_title)}</h2>'
+                "<h3>Slice over deadline</h3>"
+                "<table><thead><tr><th>Task</th><th>Duration</th><th>Limit</th><th>Over by</th></tr></thead>"
+                f"<tbody>{sv_body}</tbody></table>"
+                "<h3>CPU budget exceeded</h3>"
+                "<table><thead><tr><th>Task</th><th>CPU %</th><th>Budget</th></tr></thead>"
+                f"<tbody>{cv_body}</tbody></table></section>"
+            )
 
         report = f"""<!doctype html>
 <html>
@@ -5339,8 +5515,14 @@ class _StatsPanel(QWidget):
         for r in preempt_rows) or "<tr><td colspan=\"6\" class=\"empty\">No preemption events found</td></tr>"}</tbody></table></section>
     {priority_html}
     {sync_html}
+    {queue_html}
+    {lifecycle_html}
+    {affinity_html}
+    {deadline_html}
     {interval_html}
     {tag_html}
+    {core_pair_html}
+    {core_breakdown_html}
         <div class=\"report-foot\">Generated by BTF Viewer</div>
     </div>
 </body>
@@ -5572,6 +5754,64 @@ class _StatsPanel(QWidget):
             elif trace.has_sync_object_instrumentation:
                 writer.writerow(["No mutex/sem activity in scope", "", "", "", "", "", ""])
 
+            queue_rows_csv = _sync_object_stats_rows(trace, lo, hi, kind_filter="queue")
+            writer.writerow([])
+            writer.writerow([f"Queue{scope_suffix}"])
+            writer.writerow(["Object", "Kind", "Holds", "Issues", "Bounces", "Avg hold", "Status"])
+            if queue_rows_csv:
+                for row_csv in queue_rows_csv:
+                    _key, kind, _ptr, label = row_csv[:4]
+                    holds, issues, avg, status_label = row_csv[4], row_csv[5], row_csv[6], row_csv[7]
+                    bounces = row_csv[10] if len(row_csv) > 10 else 0
+                    writer.writerow([label, kind, holds, issues, bounces, _us(avg), status_label])
+            else:
+                writer.writerow(["No queue activity in scope", "", "", "", "", "", ""])
+
+            lc_rows_csv = _task_lifecycle_rows(trace, lo, hi)
+            writer.writerow([])
+            writer.writerow([f"Task Lifecycle{scope_suffix}"])
+            writer.writerow(["Task", "Created", "Deleted", "Suspends", "Resumes", "Alive span", "Events"])
+            if lc_rows_csv:
+                for _mk, label, create_ns, delete_ns, n_sus, n_res, alive_ns, n_ev in lc_rows_csv:
+                    created = _us(_format_time(create_ns, trace.time_scale)) if create_ns is not None else ""
+                    deleted = _us(_format_time(delete_ns, trace.time_scale)) if delete_ns is not None else ""
+                    alive   = _us(_format_time(alive_ns, trace.time_scale)) if alive_ns else ""
+                    writer.writerow([label, created, deleted, n_sus, n_res, alive, n_ev])
+            else:
+                writer.writerow(["No lifecycle events", "", "", "", "", "", ""])
+
+            aff_rows_csv = _task_core_affinity_rows(trace, lo, hi)
+            writer.writerow([])
+            writer.writerow([f"Core Affinity{scope_suffix}"])
+            writer.writerow(["Task", "Mask", "Observed Cores", "Violations"])
+            if aff_rows_csv:
+                for label, mask_hex, obs_str, viol_str in aff_rows_csv:
+                    writer.writerow([label, mask_hex, obs_str, viol_str])
+            else:
+                writer.writerow(["No affinity_set events", "", "", ""])
+
+            # Deadlines / CPU budget
+            if self._cpu_budget_pct > 0 or self._task_deadlines_ns:
+                _dl_viols_csv = _deadline_violations(
+                    trace, self._cpu_budget_pct, self._task_deadlines_ns, lo, hi)
+                writer.writerow([])
+                writer.writerow([f"Deadlines / CPU budget{scope_suffix}"])
+                writer.writerow(["Slice Violations"])
+                writer.writerow(["Task", "Duration", "Limit", "Over by"])
+                if _dl_viols_csv["slice_violations"]:
+                    for lbl, dur, lim, over in _dl_viols_csv["slice_violations"]:
+                        writer.writerow([lbl, dur, lim, over])
+                else:
+                    writer.writerow(["No slice violations", "", "", ""])
+                writer.writerow([])
+                writer.writerow(["CPU Budget Violations"])
+                writer.writerow(["Task", "CPU %", "Budget"])
+                if _dl_viols_csv["cpu_violations"]:
+                    for lbl, pct, bgt in _dl_viols_csv["cpu_violations"]:
+                        writer.writerow([lbl, pct, bgt])
+                else:
+                    writer.writerow(["No CPU budget violations", "", ""])
+
             writer.writerow([])
             writer.writerow([f"Interval Analysis{scope_suffix}"])
             writer.writerow(["ID", "Label", "Count", "Min", "Avg", "Max", "p95"])
@@ -5590,6 +5830,30 @@ class _StatsPanel(QWidget):
                     writer.writerow([ch, label, count, mn, avg, mx, p95])
             else:
                 writer.writerow(["No tag data", "", "", "", "", "", ""])
+
+            pair_rows_csv = _core_pair_rows(trace, lo, hi)
+            writer.writerow([])
+            writer.writerow([f"Core-Pair Migration Summary{scope_suffix}"])
+            writer.writerow(["From", "To", "Count", "Bounces", "Bounce %", "Avg Gap"])
+            if pair_rows_csv:
+                for fc, tc, cnt, bnc, avg_gap in pair_rows_csv:
+                    pct_b = 100.0 * bnc / cnt if cnt else 0.0
+                    writer.writerow([fc, tc, cnt, bnc, f"{pct_b:.1f}%",
+                                     _us(_format_time(avg_gap, trace.time_scale))])
+            else:
+                writer.writerow(["No migrations in scope", "", "", "", "", ""])
+
+            bd_rows_csv = _core_time_breakdown(trace, lo, hi)
+            writer.writerow([])
+            writer.writerow([f"Core Time Breakdown{scope_suffix}"])
+            writer.writerow(["Core", "Active %", "Idle %", "Tick %", "Gap %"])
+            if bd_rows_csv:
+                for core, a_ns, i_ns, t_ns, g_ns, span_ns in bd_rows_csv:
+                    s = max(span_ns, 1)
+                    writer.writerow([core, f"{100.0*a_ns/s:.1f}%", f"{100.0*i_ns/s:.1f}%",
+                                     f"{100.0*t_ns/s:.1f}%", f"{100.0*g_ns/s:.1f}%"])
+            else:
+                writer.writerow(["No core data", "", "", "", ""])
 
     def _export_csv(self) -> None:
         if self._trace is None:
@@ -5723,6 +5987,44 @@ class _StatsPanel(QWidget):
                 f"Core Utilisation (excl. IDLE/TICK){scope}",
                 _fs,
                 _populate_cores,
+            )
+
+            # -- Per-core time breakdown ----------------------------------
+            def _populate_core_breakdown(blay: QVBoxLayout) -> None:
+                _bd_rows = _core_time_breakdown(trace, lo, hi)
+                if not _bd_rows:
+                    blay.addWidget(self._lbl("No core segments", color="#888888", ui_fs=_fs))
+                    return
+                headers = ["Core", "Active %", "Idle %", "Tick %", "Gap %"]
+                tbl = QTableWidget(len(_bd_rows), len(headers))
+                tbl.setHorizontalHeaderLabels(headers)
+                tbl.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+                tbl.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+                tbl.verticalHeader().setVisible(False)
+                for r, (core, active_ns, idle_ns, tick_ns, gap_ns, span_ns) in enumerate(_bd_rows):
+                    s = max(span_ns, 1)
+                    pct_a = 100.0 * active_ns / s
+                    pct_i = 100.0 * idle_ns / s
+                    pct_t = 100.0 * tick_ns / s
+                    pct_g = 100.0 * gap_ns / s
+                    for c, (val, key) in enumerate([
+                        (core, core),
+                        (f"{pct_a:.1f}%", pct_a),
+                        (f"{pct_i:.1f}%", pct_i),
+                        (f"{pct_t:.1f}%", pct_t),
+                        (f"{pct_g:.1f}%", pct_g),
+                    ]):
+                        item = _StatsSortItem(val, key)
+                        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                        tbl.setItem(r, c, item)
+                self._wire_stats_table_click_cursor(tbl)
+                self._wrap_table_with_resizer(blay, tbl, "core_breakdown")
+
+            self._add_collapsible_section(
+                "core_breakdown",
+                f"Core Time Breakdown{scope}",
+                _fs,
+                _populate_core_breakdown,
             )
 
         # -- Top tasks by CPU time (excl. IDLE, top 10) -------------------
@@ -5884,6 +6186,42 @@ class _StatsPanel(QWidget):
             f"Core Migrations{scope}",
             _fs,
             _populate_mig,
+        )
+
+        # -- Core-pair migration summary ----------------------------------
+        def _populate_core_pairs(blay: QVBoxLayout) -> None:
+            _pair_rows = _core_pair_rows(trace, lo, hi)
+            if not _pair_rows:
+                blay.addWidget(self._lbl("No migrations in scope", color="#888888", ui_fs=_fs))
+                return
+            ts = trace.time_scale
+            headers = ["From", "To", "Count", "Bounces", "Bounce %", "Avg Gap"]
+            tbl = QTableWidget(len(_pair_rows), len(headers))
+            tbl.setHorizontalHeaderLabels(headers)
+            tbl.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+            tbl.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+            tbl.verticalHeader().setVisible(False)
+            for r, (fc, tc, cnt, bnc, avg_gap) in enumerate(_pair_rows):
+                pct = 100.0 * bnc / cnt if cnt else 0.0
+                for c, (val, sort_key) in enumerate([
+                    (fc, fc),
+                    (tc, tc),
+                    (str(cnt), cnt),
+                    (str(bnc), bnc),
+                    (f"{pct:.1f}%", pct),
+                    (_format_time(avg_gap, ts), avg_gap),
+                ]):
+                    item = _StatsSortItem(val, sort_key)
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    tbl.setItem(r, c, item)
+            self._wire_stats_table_click_cursor(tbl)
+            self._wrap_table_with_resizer(blay, tbl, "core_pairs")
+
+        self._add_collapsible_section(
+            "core_pairs",
+            f"Core-Pair Migration Summary{scope}",
+            _fs,
+            _populate_core_pairs,
         )
 
         # -- Execution time per slice -------------------------------------
@@ -6197,49 +6535,62 @@ class _StatsPanel(QWidget):
                 _populate_sync,
             )
 
-        # -- Interval Analysis ------------------------------------------------
-        empty_interval = ("No interval data in cursor range" if scope
-                          else "No paired interval_start / interval_stop events in trace")
+            # -- Queue (send/recv pairs) ---------------------------------------
+            empty_queue = ("No queue activity in cursor range" if scope
+                           else "No queue send/recv STI events in trace")
 
-        def _populate_intervals(blay: QVBoxLayout) -> None:
-            _interval_rows = _interval_stats_rows(trace, lo, hi)
-            blay.addWidget(self._build_stats_table(
-                [(r[0], r[1], r[2], r[3], r[4], r[5], r[6]) for r in _interval_rows],
+            def _populate_queue(blay: QVBoxLayout) -> None:
+                _queue_rows = _sync_object_stats_rows(trace, lo, hi, kind_filter="queue")
+                blay.addWidget(self._lbl(
+                    "Pairs send/recv STI events by queue pointer (0x........).",
+                    color="#888888", ui_fs=_fs))
+                if not _queue_rows:
+                    blay.addWidget(self._lbl(empty_queue, color="#888888", ui_fs=_fs))
+                    return
+                headers = ["Object", "Kind", "Holds", "Issues", "Bounces", "Avg hold", "Status"]
+                table = QTableWidget(len(_queue_rows), len(headers))
+                table.setHorizontalHeaderLabels(headers)
+                table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+                table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+                table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+                table.verticalHeader().setVisible(False)
+                table.horizontalHeader().setStretchLastSection(True)
+                table.setShowGrid(False)
+                table.setFrameShape(QFrame.NoFrame)
+                table.verticalHeader().setDefaultSectionSize(STATS_TABLE_ROW_H)
+                table.horizontalHeader().setSectionsClickable(True)
+                table.horizontalHeader().setSortIndicatorShown(True)
+                self._apply_stats_table_theme(table, _fs)
+                _item_bg = QBrush(self._stats_table_colors()[0])
+                _status_rank = {"error": 0, "warning": 1, "ok": 2}
+                for ri, row in enumerate(_queue_rows):
+                    _key, kind, ptr, label, holds, issues, avg, status_label, status, avg_ns, bounces = row[:11]
+                    vals = [label, kind, str(holds), str(issues), str(bounces), avg, status_label]
+                    sort_keys = [
+                        label.lower(), kind.lower(), holds, issues, bounces,
+                        avg_ns if avg_ns is not None else -1,
+                        _status_rank.get(status, 3),
+                    ]
+                    for ci, val in enumerate(vals):
+                        item = _StatsSortItem(val, sort_keys[ci])
+                        item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                        item.setBackground(_item_bg)
+                        if ci == 4 and bounces > 0:
+                            item.setForeground(QBrush(QColor("#F39C12")))
+                        if ci == 6 and status != "ok":
+                            color = "#E74C3C" if status == "error" else "#F39C12"
+                            item.setForeground(QBrush(QColor(color)))
+                        table.setItem(ri, ci, item)
+                table.setSortingEnabled(True)
+                table.resizeRowsToContents()
+                self._wrap_table_with_resizer(blay, table, "queue")
+
+            self._add_collapsible_section(
+                "queue",
+                f"Queue{scope}",
                 _fs,
-                empty_interval,
-                count_header="Count",
-                section_id="intervals",
-                on_row_click=lambda iid: self._open_interval_plot(trace, iid),
-            ))
-
-        self._add_collapsible_section(
-            "intervals",
-            f"Interval Analysis{scope}",
-            _fs,
-            _populate_intervals,
-        )
-
-        # -- Tag Analysis ---------------------------------------------------
-        empty_tag = ("No tag samples in cursor range" if scope
-                     else "No tag0_event … tag7_event STI samples in trace")
-
-        def _populate_tags(blay: QVBoxLayout) -> None:
-            _tag_rows = _tag_stats_rows(trace, lo, hi)
-            blay.addWidget(self._build_stats_table(
-                _tag_rows,
-                _fs,
-                empty_tag,
-                count_header="Count",
-                section_id="tags",
-                on_row_click=lambda ch: self._open_tag_plot(trace, ch),
-            ))
-
-        self._add_collapsible_section(
-            "tags",
-            f"Tag Analysis{scope}",
-            _fs,
-            _populate_tags,
-        )
+                _populate_queue,
+            )
 
         # -- Task Lifecycle -------------------------------------------------
         empty_lifecycle = ("No task lifecycle events in cursor range" if scope
@@ -6284,6 +6635,147 @@ class _StatsPanel(QWidget):
             f"Task Lifecycle{scope}",
             _fs,
             _populate_lifecycle,
+        )
+
+        # -- Core affinity ------------------------------------------------
+        def _populate_affinity(blay: QVBoxLayout) -> None:
+            _aff_rows = _task_core_affinity_rows(trace, lo, hi)
+            if not _aff_rows:
+                blay.addWidget(self._lbl(
+                    "No affinity_set events found", color="#888888", ui_fs=_fs))
+                return
+            headers = ["Task", "Mask", "Observed Cores", "Violations"]
+            tbl = QTableWidget(len(_aff_rows), len(headers))
+            tbl.setHorizontalHeaderLabels(headers)
+            tbl.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+            tbl.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+            tbl.verticalHeader().setVisible(False)
+            for r, (label, mask_hex, obs_str, viol_str) in enumerate(_aff_rows):
+                for c, (val, key) in enumerate([
+                    (label, label),
+                    (mask_hex, mask_hex),
+                    (obs_str, obs_str),
+                    (viol_str, viol_str),
+                ]):
+                    item = _StatsSortItem(val, key)
+                    if c > 0:
+                        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    if viol_str != "\u2014" and c == 3:
+                        item.setForeground(QColor("#E85D5D"))
+                    tbl.setItem(r, c, item)
+            self._wire_stats_table_click_cursor(tbl)
+            self._wrap_table_with_resizer(blay, tbl, "affinity")
+
+        self._add_collapsible_section(
+            "affinity",
+            f"Core Affinity{scope}",
+            _fs,
+            _populate_affinity,
+        )
+
+        # -- Deadlines / CPU budget ------------------------------------------
+        def _populate_deadline(blay: QVBoxLayout) -> None:
+            has_config = self._cpu_budget_pct > 0 or bool(self._task_deadlines_ns)
+            if not has_config:
+                hint = QLabel("Configure deadline thresholds in Settings (Ctrl+, \u2192 Display \u2192 Analysis thresholds).")
+                hint.setStyleSheet(f"color:#888888; font-size:{_fs};")
+                hint.setWordWrap(True)
+                blay.addWidget(hint)
+                return
+            viols = _deadline_violations(
+                trace, self._cpu_budget_pct, self._task_deadlines_ns, lo, hi)
+            sv = viols["slice_violations"]
+            cv = viols["cpu_violations"]
+            if not sv and not cv:
+                blay.addWidget(self._lbl("No violations in scope", color="#888888", ui_fs=_fs))
+            if sv:
+                hdr_lbl = QLabel("Slice over deadline")
+                hdr_lbl.setStyleSheet(f"font-weight:600; font-size:{_fs};")
+                blay.addWidget(hdr_lbl)
+                tbl_sv = QTableWidget(min(len(sv), 20), 4)
+                tbl_sv.setHorizontalHeaderLabels(["Task", "Duration", "Limit", "Over by"])
+                tbl_sv.verticalHeader().setVisible(False)
+                tbl_sv.verticalHeader().setDefaultSectionSize(STATS_TABLE_ROW_H)
+                tbl_sv.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+                for r_i, (lbl_v, dur, lim, over) in enumerate(sv[:20]):
+                    for c_i, val in enumerate([lbl_v, dur, lim, over]):
+                        item = QTableWidgetItem(val)
+                        if c_i > 0:
+                            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                        if c_i == 3:
+                            item.setForeground(QColor("#E85D5D"))
+                        tbl_sv.setItem(r_i, c_i, item)
+                tbl_sv.horizontalHeader().setStretchLastSection(True)
+                blay.addWidget(tbl_sv)
+            if cv:
+                hdr_lbl2 = QLabel("CPU budget exceeded")
+                hdr_lbl2.setStyleSheet(f"font-weight:600; font-size:{_fs};")
+                blay.addWidget(hdr_lbl2)
+                tbl_cv = QTableWidget(len(cv), 3)
+                tbl_cv.setHorizontalHeaderLabels(["Task", "CPU %", "Budget"])
+                tbl_cv.verticalHeader().setVisible(False)
+                tbl_cv.verticalHeader().setDefaultSectionSize(STATS_TABLE_ROW_H)
+                tbl_cv.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+                for r_i, (lbl_v, pct, bgt) in enumerate(cv):
+                    for c_i, val in enumerate([lbl_v, pct, bgt]):
+                        item = QTableWidgetItem(val)
+                        if c_i > 0:
+                            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                        if c_i == 1:
+                            item.setForeground(QColor("#E85D5D"))
+                        tbl_cv.setItem(r_i, c_i, item)
+                tbl_cv.horizontalHeader().setStretchLastSection(True)
+                blay.addWidget(tbl_cv)
+
+        self._add_collapsible_section(
+            "deadline",
+            f"Deadlines / CPU budget{scope}",
+            _fs,
+            _populate_deadline,
+        )
+
+        # -- Interval Analysis ------------------------------------------------
+        empty_interval = ("No interval data in cursor range" if scope
+                          else "No paired interval_start / interval_stop events in trace")
+
+        def _populate_intervals(blay: QVBoxLayout) -> None:
+            _interval_rows = _interval_stats_rows(trace, lo, hi)
+            blay.addWidget(self._build_stats_table(
+                [(r[0], r[1], r[2], r[3], r[4], r[5], r[6]) for r in _interval_rows],
+                _fs,
+                empty_interval,
+                count_header="Count",
+                section_id="intervals",
+                on_row_click=lambda iid: self._open_interval_plot(trace, iid),
+            ))
+
+        self._add_collapsible_section(
+            "intervals",
+            f"Interval Analysis{scope}",
+            _fs,
+            _populate_intervals,
+        )
+
+        # -- Tag Analysis ---------------------------------------------------
+        empty_tag = ("No tag samples in cursor range" if scope
+                     else "No tag0_event … tag7_event STI samples in trace")
+
+        def _populate_tags(blay: QVBoxLayout) -> None:
+            _tag_rows = _tag_stats_rows(trace, lo, hi)
+            blay.addWidget(self._build_stats_table(
+                _tag_rows,
+                _fs,
+                empty_tag,
+                count_header="Count",
+                section_id="tags",
+                on_row_click=lambda ch: self._open_tag_plot(trace, ch),
+            ))
+
+        self._add_collapsible_section(
+            "tags",
+            f"Tag Analysis{scope}",
+            _fs,
+            _populate_tags,
         )
 
         self._ilay.addStretch()
@@ -6463,6 +6955,12 @@ class _RcSettings:
             # Optional custom taskbar/dock icon (.png, .ico, .icns, .svg).
             # Relative paths resolve from the btf_viewer.py directory.
             "icon_path": "",
+        },
+        "analysis": {
+            # Global CPU budget threshold (0 = off)
+            "cpu_budget_pct": "0",
+            # Newline-separated "TaskName=nanoseconds" entries for per-task deadlines
+            "task_deadlines": "",
         },
     }
 
@@ -6914,7 +7412,9 @@ class _SettingsDialog(QDialog):
                  is_dark: bool,
                  cpu_load_row_h: int = CPU_LOAD_ROW_H,
                  cpu_load: bool = True,
-                 colorblind_safe: bool = False):
+                 colorblind_safe: bool = False,
+                 cpu_budget_pct: float = 0.0,
+                 task_deadlines_text: str = ""):
         super().__init__(parent, Qt.WindowType.Dialog)
         self.setWindowTitle("Settings")
         self.setModal(True)
@@ -7064,6 +7564,45 @@ class _SettingsDialog(QDialog):
         v2.addWidget(self._indented(self._sti_cb))
         v2.addWidget(self._indented(self._grid_cb))
         v2.addWidget(self._indented(self._hover_hl_cb))
+
+        v2.addSpacing(6)
+        v2.addWidget(self._hline())
+        v2.addSpacing(2)
+
+        v2.addWidget(self._section("Analysis thresholds"))
+
+        _budget_row = QWidget()
+        _budget_h = QHBoxLayout(_budget_row)
+        _budget_h.setContentsMargins(0, 0, 0, 0)
+        _budget_h.setSpacing(8)
+        _budget_h.addWidget(QLabel("CPU budget (0 = off):"))
+        self._cpu_budget_spin = QDoubleSpinBox()
+        self._cpu_budget_spin.setRange(0, 100)
+        self._cpu_budget_spin.setSingleStep(0.1)
+        self._cpu_budget_spin.setDecimals(1)
+        self._cpu_budget_spin.setSuffix("%")
+        self._cpu_budget_spin.setValue(cpu_budget_pct)
+        self._cpu_budget_spin.setFixedWidth(self._INPUT_W)
+        self._cpu_budget_spin.setToolTip(
+            "Global CPU budget threshold: tasks consuming more than this\n"
+            "percentage of CPU time in the current scope will be flagged.\n"
+            "Set to 0 to disable.")
+        _budget_h.addWidget(self._cpu_budget_spin)
+        _budget_h.addStretch()
+        v2.addWidget(self._indented(_budget_row))
+
+        v2.addWidget(self._indented(QLabel("Task deadlines (ns):")))
+        self._task_deadlines_edit = QPlainTextEdit()
+        self._task_deadlines_edit.setPlaceholderText(
+            "One entry per line:\n  TaskName=nanoseconds\n\nExample:\n  Runner1=1000000\n  Worker=500000")
+        self._task_deadlines_edit.setFixedHeight(100)
+        self._task_deadlines_edit.setPlainText(task_deadlines_text)
+        self._task_deadlines_edit.setToolTip(
+            "Per-task execution deadline in nanoseconds.\n"
+            "Any execution slice longer than the limit will be flagged.\n"
+            "Use the task display name (e.g. 'Runner1') or 'TaskName[id]' form.")
+        v2.addWidget(self._indented(self._task_deadlines_edit))
+
         v2.addStretch()
 
         self._content_stack.addWidget(p2)
@@ -7259,6 +7798,8 @@ class _SettingsDialog(QDialog):
         self._timescale_per_px_spin.setValue(_TIMESCALE_PER_PX_DEFAULT)
         self._cursor_spin.setValue(_DEFAULT_MAX_CURSORS)
         self._cpu_row_h_spin.setValue(CPU_LOAD_ROW_H)
+        self._cpu_budget_spin.setValue(0.0)
+        self._task_deadlines_edit.setPlainText("")
 
     # -- result accessors (read after exec_() == Accepted) ------------------
     @property
@@ -7303,6 +7844,10 @@ class _SettingsDialog(QDialog):
     def show_find(self) -> bool:          return self._find_cb.isChecked()
     @property
     def show_hover_highlight(self) -> bool: return self._hover_hl_cb.isChecked()
+    @property
+    def cpu_budget_pct(self) -> float:    return self._cpu_budget_spin.value()
+    @property
+    def task_deadlines_text(self) -> str: return self._task_deadlines_edit.toPlainText()
 # ---------------------------------------------------------------------------
 # Snapshot Annotation Editor
 # ---------------------------------------------------------------------------

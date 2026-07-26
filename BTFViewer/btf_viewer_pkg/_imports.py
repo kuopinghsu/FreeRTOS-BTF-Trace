@@ -53,6 +53,7 @@ from PySide6.QtWidgets import (
     QPushButton, QScrollArea, QScrollBar, QDoubleSpinBox, QSpinBox, QStackedWidget,
     QStyle, QStyleFactory, QStyleOptionGraphicsItem, QAbstractItemView,
     QProxyStyle, QTabBar, QTabWidget, QTableWidget, QTableWidgetItem, QToolButton,
+    QPlainTextEdit,
     QVBoxLayout, QWidget, QSizePolicy, QSplitter, QLayout,
 )
 

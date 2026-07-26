@@ -143,6 +143,17 @@
 } while(0)
 #endif // traceTASK_PRIORITY_DISINHERIT
 
+#ifndef traceTASK_CORE_AFFINITY_SET
+# define traceTASK_CORE_AFFINITY_SET( pxTCB, uxCoreAffinityMask ) do {      \
+    taskENTER_CRITICAL();                                                   \
+    btf_trace_add_event(                                                    \
+        (uint32_t)(pxTCB)->uxTCBNumber,                                     \
+        (uint32_t)(uxCoreAffinityMask),                                     \
+        TRACE_EVENT_TASK_SET_AFFINITY );                                    \
+    taskEXIT_CRITICAL();                                                    \
+} while(0)
+#endif // traceTASK_CORE_AFFINITY_SET
+
 #endif // configINCLUDE_SCHEDULING
 
 #if configINCLUDE_TAGS

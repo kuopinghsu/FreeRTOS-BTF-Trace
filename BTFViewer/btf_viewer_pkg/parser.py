@@ -695,6 +695,188 @@ def _task_lifecycle_rows(
     return rows
 
 
+# ---- Core-pair migration summary ------------------------------------------
+def _core_pair_rows(
+    trace: "BtfTrace",
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> List[tuple]:
+    """Per (from_core, to_core) pair migration summary.
+    Returns: [(from_core, to_core, count, bounce_count, avg_gap_ns), ...]"""
+    pairs: Dict[tuple, dict] = {}
+    for m in trace.migrations:
+        if lo is not None and m.ns < lo:
+            continue
+        if hi is not None and m.ns > hi:
+            continue
+        key = (m.from_core, m.to_core)
+        if key not in pairs:
+            pairs[key] = {"count": 0, "bounces": 0, "gap_sum": 0}
+        d = pairs[key]
+        d["count"] += 1
+        if m.ns in trace.lock_bounce_migration_ns:
+            d["bounces"] += 1
+        d["gap_sum"] += m.gap_ns
+    rows = []
+    for (fc, tc), d in sorted(pairs.items(), key=lambda x: -x[1]["count"]):
+        avg_gap = d["gap_sum"] // max(1, d["count"])
+        rows.append((fc, tc, d["count"], d["bounces"], avg_gap))
+    return rows
+
+
+# ---- Per-core time budget breakdown ---------------------------------------
+def _core_time_breakdown(
+    trace: "BtfTrace",
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> List[tuple]:
+    """Per-core time breakdown into active / idle / tick / gap.
+    Returns: [(core, active_ns, idle_ns, tick_ns, gap_ns, span_ns), ...]"""
+    eff_lo = lo if lo is not None else trace.time_min
+    eff_hi = hi if hi is not None else trace.time_max
+    span = max(eff_hi - eff_lo, 1)
+    result = []
+    for core in trace.core_names:
+        active_ns = idle_ns = tick_ns = seg_total = 0
+        for seg in trace.core_segs.get(core, []):
+            slo = max(seg.start, eff_lo)
+            shi = min(seg.end, eff_hi)
+            if slo >= shi:
+                continue
+            dur = shi - slo
+            _, _, tname = _parse_task_name(seg.task)
+            if _is_idle_task_name(tname):
+                idle_ns += dur
+            elif tname.upper() == "TICK":
+                tick_ns += dur
+            else:
+                active_ns += dur
+            seg_total += dur
+        gap_ns = max(0, span - seg_total)
+        result.append((core, active_ns, idle_ns, tick_ns, gap_ns, span))
+    return result
+
+
+# ---- Task core-affinity rows ---------------------------------------------
+_AFFINITY_NOTE_RE = re.compile(
+    r"^affinity_set\s+(.+?)\s+(0x[0-9a-fA-F]+|\d+)\s*$", re.IGNORECASE)
+
+
+def _task_core_affinity_rows(
+    trace: "BtfTrace",
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> List[tuple]:
+    """Per-task core affinity summary.
+    Returns: [(label, mask_hex, observed_cores_str, violation_cores_str), ...]"""
+    # Collect affinity masks from STI events on the 'task' channel
+    masks: Dict[str, int] = {}
+    for ev in trace.sti_events:
+        if ev.target != "task":
+            continue
+        note = (ev.note or "").strip()
+        m = _AFFINITY_NOTE_RE.match(note)
+        if not m:
+            continue
+        task_label = m.group(1).strip()
+        raw_mask = m.group(2)
+        mask_val = int(raw_mask, 16 if raw_mask.startswith(("0x", "0X")) else 10)
+        mk = _task_merge_key(task_label)
+        masks[mk] = mask_val
+
+    if not masks:
+        return []
+
+    rows = []
+    for mk, mask in sorted(masks.items()):
+        raw_repr = trace.task_repr.get(mk, mk)
+        label = _task_display_name(raw_repr)
+        obs: set = set()
+        for seg in trace.seg_map_by_merge_key.get(mk, []):
+            if lo is not None and seg.end < lo:
+                continue
+            if hi is not None and seg.start > hi:
+                continue
+            obs.add(seg.core)
+        if not obs:
+            continue
+        # Build allowed-core set from bitmask (Core_N → bit N)
+        allowed: set = set()
+        for core in trace.core_names:
+            try:
+                idx = int(core.split("_")[-1])
+                if mask & (1 << idx):
+                    allowed.add(core)
+            except (ValueError, IndexError):
+                pass
+        violations = obs - allowed if allowed else set()
+        mask_hex = f"0x{mask:X}"
+        obs_str = ", ".join(sorted(obs))
+        viol_str = ", ".join(sorted(violations)) if violations else "\u2014"
+        rows.append((label, mask_hex, obs_str, viol_str))
+    return rows
+
+
+def _deadline_violations(
+    trace: "BtfTrace",
+    cpu_budget_pct: float,
+    task_deadlines_ns: Dict[str, int],
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> Dict[str, list]:
+    """Compute per-slice and CPU-budget violations (mirrors web deadlineAnalysis.js)."""
+    slice_violations: List[tuple] = []
+    cpu_violations: List[tuple] = []
+    if not trace.seg_map_by_merge_key:
+        return {"slice_violations": slice_violations, "cpu_violations": cpu_violations}
+    scale = trace.time_scale
+    span = max(1, (hi - lo) if (lo is not None and hi is not None)
+               else (trace.time_max - trace.time_min))
+    for mk, segs in trace.seg_map_by_merge_key.items():
+        raw_repr = trace.task_repr.get(mk, mk)
+        _, _, tname = _parse_task_name(raw_repr)
+        if _is_idle_task_name(tname) or tname == "TICK":
+            continue
+        disp = _task_display_name(raw_repr)
+        # Match deadline by merge key, task name, or display name
+        limit_ns: Optional[int] = None
+        for key in (mk, tname, disp):
+            if key in task_deadlines_ns:
+                limit_ns = task_deadlines_ns[key]
+                break
+        if limit_ns is not None and limit_ns > 0:
+            for seg in segs:
+                if lo is not None and hi is not None and (seg.end <= lo or seg.start >= hi):
+                    continue
+                dur = seg.end - seg.start
+                if dur > limit_ns:
+                    slice_violations.append((
+                        disp,
+                        _format_time(dur, scale),
+                        _format_time(limit_ns, scale),
+                        _format_time(dur - limit_ns, scale),
+                        dur,  # sort key
+                    ))
+        if cpu_budget_pct > 0:
+            active = 0
+            for seg in segs:
+                if lo is not None and hi is not None:
+                    if seg.end <= lo or seg.start >= hi:
+                        continue
+                    active += min(seg.end, hi) - max(seg.start, lo)
+                else:
+                    active += seg.end - seg.start
+            pct = 100.0 * active / span
+            if pct > cpu_budget_pct:
+                cpu_violations.append((disp, f"{pct:.1f}%", f"{cpu_budget_pct:.1f}%", pct))
+    slice_violations.sort(key=lambda r: -r[4])
+    cpu_violations.sort(key=lambda r: -r[3])
+    return {
+        "slice_violations": [(r[0], r[1], r[2], r[3]) for r in slice_violations],
+        "cpu_violations": [(r[0], r[1], r[2]) for r in cpu_violations],
+    }
+
+
 def _tag_plot_points(
     trace: "BtfTrace",
     channel: str,
@@ -1184,12 +1366,15 @@ def _sync_object_stats_rows(
     trace: "BtfTrace",
     lo: Optional[int] = None,
     hi: Optional[int] = None,
+    kind_filter: Optional[str] = None,
 ) -> List[tuple]:
     if not trace.has_sync_object_instrumentation:
         return []
     scale = trace.time_scale
     rows = []
     for obj in trace.sync_objects.values():
+        if kind_filter is not None and obj["kind"] != kind_filter:
+            continue
         holds = [h for h in obj.get("holds", [])
                  if lo is None or hi is None or (h["stop_ns"] > lo and h["start_ns"] < hi)]
         issues = [i for i in obj.get("issues", []) if _sync_in_scope(i["time_ns"], lo, hi)]
@@ -1514,6 +1699,8 @@ class BtfTrace:
     has_sync_object_instrumentation: bool                                   = False
     # Timestamps (ns) of migrations that occurred while a mutex was held across cores.
     lock_bounce_migration_ns: frozenset                                     = field(default_factory=frozenset)
+    # Core affinity masks parsed from affinity_set STI events (merge_key → bitmask).
+    task_affinity_mask: Dict[str, int]                                      = field(default_factory=dict)
 
 # ---------------------------------------------------------------------------
 # Task-name helpers

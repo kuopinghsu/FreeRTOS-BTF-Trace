@@ -3,7 +3,7 @@
  */
 
 import { bisectLeft, bisectRight } from './bisect.js'
-import { parseTaskName, taskLabelForMergeKey, taskReprGet } from './colors.js'
+import { parseTaskName, taskLabelForMergeKey, taskReprGet, isIdleTaskName, taskMergeKey, taskDisplayName } from './colors.js'
 import { computeFindHits } from './findAnalysis.js'
 import { blockingTimeSamples } from './statsAnalysis.js'
 import { segFullyInRange, segOverlapsRange } from './statsRange.js'
@@ -504,4 +504,56 @@ export function migrationTaskHeatmapGrid(trace, fromCore, toCore, binLo, binHi,
     return { mk, label: `${sym} ${taskLabelForMergeKey(trace, mk)}`, grid }
   })
   return { rows, timeBins, binW, tMin, tMax: tHi }
+}
+
+/**
+ * Per (fromCore, toCore) pair migration summary rows.
+ * Returns [{fromCore, toCore, count, bounceCount, bouncePct, avgGapNs}]
+ */
+export function buildCorePairRows(trace, lo = null, hi = null) {
+  const bounceNs = buildLockBounceNsSet(trace)
+  const pairs = new Map()
+  for (const m of trace.migrations ?? []) {
+    if (lo != null && m.ns < lo) continue
+    if (hi != null && m.ns > hi) continue
+    const key = `${m.fromCore}\x00${m.toCore}`
+    const d = pairs.get(key) ?? { fromCore: m.fromCore, toCore: m.toCore, count: 0, bounces: 0, gapSum: 0 }
+    d.count++
+    if (bounceNs.has(m.ns)) d.bounces++
+    d.gapSum += (m.gapNs ?? 0)
+    pairs.set(key, d)
+  }
+  return [...pairs.values()]
+    .sort((a, b) => b.count - a.count)
+    .map(d => ({
+      ...d,
+      bouncePct: d.count > 0 ? 100 * d.bounces / d.count : 0,
+      avgGapNs: d.count > 0 ? Math.round(d.gapSum / d.count) : 0,
+    }))
+}
+
+/**
+ * Per-core time breakdown: active / idle / tick / gap.
+ * Returns [{core, activeNs, idleNs, tickNs, gapNs, spanNs}]
+ */
+export function buildCoreTimeBreakdown(trace, lo = null, hi = null) {
+  const effLo = lo ?? trace.timeMin
+  const effHi = hi ?? trace.timeMax
+  const span = Math.max(effHi - effLo, 1)
+  return (trace.coreNames ?? []).map(core => {
+    const segs = (trace.coreSegs instanceof Map ? trace.coreSegs.get(core) : trace.coreSegs?.[core]) ?? []
+    let activeNs = 0, idleNs = 0, tickNs = 0, segTotal = 0
+    for (const s of segs) {
+      const slo = Math.max(s.start, effLo)
+      const shi = Math.min(s.end, effHi)
+      if (slo >= shi) continue
+      const dur = shi - slo
+      const { name } = parseTaskName(s.task)
+      if (isIdleTaskName(name)) idleNs += dur
+      else if (name === 'TICK') tickNs += dur
+      else activeNs += dur
+      segTotal += dur
+    }
+    return { core, activeNs, idleNs, tickNs, gapNs: Math.max(0, span - segTotal), spanNs: span }
+  })
 }
