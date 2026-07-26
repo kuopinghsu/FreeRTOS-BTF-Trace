@@ -1,6 +1,6 @@
 # BTF Viewer — Application Notes
 
-Practical workflows for using BTFViewer to analyse FreeRTOS scheduler behaviour and diagnose real-time performance issues.  Each section is self-contained — jump to the pattern that matches your problem.
+Practical workflows for using BTFViewer to analyse RTOS scheduler behaviour and diagnose real-time performance issues.  Each section is self-contained — jump to the pattern that matches your problem.
 
 ---
 
@@ -29,14 +29,15 @@ Practical workflows for using BTFViewer to analyse FreeRTOS scheduler behaviour 
 ### Load and orient
 
 ```bash
-python builds/btf_viewer.py tracedata/example-4cores.btf
+python builds/btf_viewer.py your-trace.btf
 ```
 
 Or open via **File → Open** (`Ctrl+O`) / drag-and-drop.
+Replace `your-trace.btf` with the path to your `.btf` trace file.
 
-![BTF Viewer — Core View with CPU Load graph and Execution Time distribution chart (example-8cores.btf)](../images/btfviewer.png)
+![BTF Viewer — Core View with CPU Load graph and Execution Time distribution chart](../images/btfviewer.png)
 
-*BTF Viewer in **Core View** with the CPU Load graph enabled (shown using `example-8cores.btf`).  The right panel shows **Statistics** with Execution Time Per Slice table open; a distribution chart has been opened by clicking the `CS[12]` row.*
+*BTF Viewer in **Core View** with the CPU Load graph enabled.  The right panel shows **Statistics** with Execution Time Per Slice table open; a distribution chart has been opened by clicking a task row.*
 
 ### What to check first
 
@@ -76,18 +77,18 @@ Determine how much CPU time each core and each task consumes, and detect load im
 
 | Symptom | Likely cause | What to investigate next |
 |---------|-------------|--------------------------|
-| One core > 90 %, others idle | Tasks pinned to one core, or poor affinity configuration | **Core Affinity** table; check `traceTASK_CORE_AFFINITY_SET` events |
+| One core > 90 %, others idle | Tasks pinned to one core, or poor affinity configuration | **Core Affinity** table; verify observed execution cores against declared affinity masks |
 | All cores high but one consistently low | A bottleneck serializes work (lock, queue) | **Mutex / Semaphore** and **Preemption Chain** tables |
 | IDLE% unexpectedly high on all cores | Work is not being generated fast enough, or tickless idle is kicking in | **Trace Health (TICK)** section for tickless detection |
 | One task dominates Top Tasks list | It may be consuming its budget; check against deadline/budget thresholds | **Deadlines / CPU budget** section (see §7) |
 
-### Example — 8-core trace
+### Example — multi-core trace
 
 ```bash
-python builds/btf_viewer.py tracedata/example-8cores.btf
+python builds/btf_viewer.py your-trace.btf
 ```
 
-Open the **Statistics** panel → **Core Utilisation**.  In this trace all eight cores run between 61 % and 85 % active time and the **Load Balance Score** badge shows σ < 30 % (green) — indicating an acceptably balanced workload.  **Top Tasks by CPU** immediately shows which task family (e.g. `CS[*]` context-switch stress tasks) accounts for the majority of active time.
+Open the **Statistics** panel → **Core Utilisation**.  Check that each core's active CPU% is within an expected range and the **Load Balance Score** badge shows σ < 30 % (green), indicating a well-balanced workload.  **Top Tasks by CPU** reveals which tasks dominate CPU consumption.
 
 ### Cursor-scoped utilisation
 
@@ -122,17 +123,17 @@ Identify the single longest on-CPU slice for each task, navigate to it on the ti
 
 If the **Max** slice is an isolated spike far above **p95**, suspect an external interrupt or OS overhead rather than a deterministic WCET.  A **p95** value that is already near your deadline budget is the more actionable number for design margins.
 
-### Example — Execution Time for `CS[8]` in `example-4cores.btf`
+### Example — Execution Time distribution chart
 
 ```bash
-python builds/btf_viewer.py tracedata/example-4cores.btf
+python builds/btf_viewer.py your-trace.btf
 ```
 
-Open **Statistics → Execution Time Per Slice**, click the **CS[8]** row to open its distribution chart:
+Open **Statistics → Execution Time Per Slice**, click any task row to open its distribution chart:
 
-![Execution Time distribution chart for CS[8] — scatter plot above, adaptive histogram with CDF overlay below](../images/stats/stats-exec-cs8.svg)
+![Execution Time distribution chart — scatter plot above, adaptive histogram with CDF overlay below](../images/stats/stats-exec-cs8.svg)
 
-*The scatter plot (top) shows 356 slices over the full trace.  The histogram (bottom) uses a **log-scaled duration axis** because the tail spans from ~17 µs to ~988 µs.  The blue **CDF** curve rises steeply on the left — most slices are short — then levels off as the long-tail outliers are counted.  The **p50** (green) and **p95** (orange) dashed lines align with the corresponding percentile ticks on the right axis, making it easy to read off deadline-compliance percentages.*
+*The scatter plot (top) shows all slices over the trace span.  The histogram (bottom) automatically selects a **log-scaled duration axis** when the duration range spans more than an order of magnitude.  The blue **CDF** curve rises steeply on the left when most slices are short, then levels off as longer outliers are counted.  The **p50** (green) and **p95** (orange) dashed lines align with the corresponding percentile ticks on the right axis, making it easy to read off deadline-compliance percentages.*
 
 ---
 
@@ -161,29 +162,29 @@ Find out why a task spends a long time off-CPU between consecutive activations (
 
 *For consecutive activations of `Worker_7[19]`: **Execution Time** = on-CPU slice duration; **Block Time** (Response Time) = off-CPU gap from the end of one slice to the start of the next; **Inter-Arrival Time** = gap between successive slice starts = Execution Time + Block Time.*
 
-### Example — Blocking Time for `CS[8]` in `example-4cores.btf`
+### Example — Blocking Time distribution chart
 
 ```bash
-python builds/btf_viewer.py tracedata/example-4cores.btf
+python builds/btf_viewer.py your-trace.btf
 ```
 
-Open **Statistics → Blocking Time**, click the **CS[8]** row:
+Open **Statistics → Blocking Time**, click any task row:
 
-![Blocking Time distribution chart for CS[8] — scatter and histogram showing off-CPU gaps](../images/stats/stats-block-cs8.svg)
+![Blocking Time distribution chart — scatter and histogram showing off-CPU gaps](../images/stats/stats-block-cs8.svg)
 
-*355 off-CPU gaps for `CS[8]`.  The scatter plot reveals clusters of high blocking at specific points in time — these align with periods when a higher-priority preemptor held the core for a long stretch.  Cross-reference with the **Preemption Chain** table (§4 step 4) to identify the offending task.*
+*The scatter plot reveals clusters of high blocking at specific points in time — these align with periods when a higher-priority preemptor held the core for a long stretch.  Cross-reference with the **Preemption Chain** table (§4 step 4) to identify the offending task.*
 
-### Example — Preemption Chain for `CS[10]` preempted by `CS[11]`
+### Example — Preemption Chain distribution chart
 
-![Preemption Chain distribution chart for CS[10] preempted by CS[11] — 155 overlap events](../images/stats/stats-preempt-cs10-cs11.svg)
+![Preemption Chain distribution chart — victim preempted by a higher-priority task](../images/stats/stats-preempt-cs10-cs11.svg)
 
-*155 overlap events totalling 14.7 ms.  Click any scatter point to jump to the preemptor's segment on the timeline and add an annotation at that moment.*
+*Each point represents one preemption overlap event; the y-axis shows how long the preemptor held the core during the victim's off-CPU gap.  Click any scatter point to jump to the preemptor's segment on the timeline and add an annotation at that moment.*
 
 ### Decision table
 
 | Blocking pattern | Root cause | Fix |
 |-----------------|-----------|-----|
-| Blocking time ≈ tick period | Task is runnable but waiting for the next scheduler tick (tickless or low priority) | Raise priority, or check `configUSE_TICKLESS_IDLE` |
+| Blocking time ≈ tick period | Task is runnable but waiting for the next scheduler tick (tickless or low priority) | Raise priority, or verify the tickless idle mode configuration |
 | Large sporadic spikes correlated with one preemptor | Priority inversion or a high-priority CPU hog | Investigate **Priority Inheritance** and **Preemption Chain** tables |
 | Blocking time ≈ mutex hold time | Lock contention; victim waits while holder runs a critical section | Reduce critical-section length; check **Core Bounce** column in Mutex/Semaphore |
 | Blocking constant across time | Periodic blocking in design — expected for periodic tasks | Use inter-arrival time to verify period; compare to deadline |
@@ -198,12 +199,8 @@ Identify episodes where a low-priority task holds a resource that blocks a high-
 
 ### Prerequisites
 
-Enable in `FreeRTOSConfig.h` and the trace library:
-```c
-#define configUSE_MUTEXES          1
-#define configUSE_TRACE_FACILITY   1
-```
-`FreeRTOS-Trace/FreeRTOS-Trace.h` hooks `traceTASK_PRIORITY_INHERIT` and `traceTASK_PRIORITY_DISINHERIT` automatically.
+Enable mutex support and task-priority tracing in your RTOS configuration.
+The trace library must emit `priority_inherit` and `priority_disinherit` STI events when the kernel raises or restores a task's effective priority during mutex ownership transfers.
 
 ### Procedure
 
@@ -211,7 +208,7 @@ Enable in `FreeRTOSConfig.h` and the trace library:
 2. Look at the **Pattern** column:
    - **Mutex inherit**: kernel raised the holder's priority — expected, correct behaviour.
    - **L/M/H pattern** or **Mutex inherit + L/M/H**: inversion geometry detected — a medium-priority task ran while the high-priority waiter was blocked.
-   - **Boost only**: manual `vTaskPrioritySet()` without kernel inheritance.
+   - **Boost only**: manual priority-set call without kernel inheritance.
 3. Click a task row to open its **boost distribution chart**:
    - Orange scatter points = boost only; red = L/M/H or mutex inherit.
    - Click a point to zoom to that episode on the timeline, highlight the task, and add an annotation.
@@ -226,25 +223,22 @@ Enable in `FreeRTOSConfig.h` and the trace library:
 | **M (Medium)** | Tasks whose base priority falls strictly between L's base and L's boosted peak — listed in the scatter-point tooltip |
 | **H (High waiter)** | Task blocked on the same mutex object pointer — cross-check with **Mutex / Semaphore** pairing |
 
-### Example — Priority Inversion (Test 8) in `example-4cores.btf`
+### Example — Priority Inversion in a multi-core trace
 
-```bash
-python builds/btf_viewer.py tracedata/example-4cores.btf
-```
+Open **Statistics → Priority Inheritance** on any trace that contains priority STI events.
+The screenshots below illustrate a classic L/M/H scenario: the low-priority mutex holder (L) is boosted to the high-priority waiter's (H) priority level so the medium-priority task (M) cannot preempt it while it holds the mutex.
 
-Test 8 deliberately exercises the classic L/M/H geometry using tasks `IL[150]` (Low, pri 2), `IM[152]` (Medium, pri 3), and `IH[151]` (High, pri 4).  The kernel boosts `IL[150]` to priority 4 via `priority_inherit` so it can finish its critical section before `IM[152]` preempts it.
+**Timeline — Core View expanded, zoomed to the boost window:**
 
-**Timeline — Core View expanded, zoomed to ~703–707 ms:**
+![Timeline Core View showing the low-priority mutex holder with a red priority-boost stripe during the mutex inheritance window](../images/stats/tasks-priority-il150.svg)
 
-![Timeline Core View showing IL[150] on Core_3 with a red priority-boost stripe during the mutex inheritance window](../images/stats/tasks-priority-il150.svg)
+*The **red bottom stripe** on the low-priority task's sub-row marks the `priority_inherit` → `priority_disinherit` window.  During this interval the kernel has raised the holder's effective priority, preventing any medium-priority task from preempting it.*
 
-*The **red bottom stripe** on the `IL[150]` sub-row marks the `priority_inherit` → `priority_disinherit` window (703.266–707.222 ms).  During this window the kernel has raised `IL[150]`'s effective priority to 4, preventing `IM[152]` from preempting it.*
+**Priority Inheritance distribution chart (Statistics → Priority Inheritance → click any task row):**
 
-**Priority Inheritance distribution chart (Statistics → Priority Inheritance → click `IL[150]`):**
+![Priority boost distribution chart — mutex-inherit boost episodes plotted by start time and duration](../images/stats/stats-priority-il150.svg)
 
-![Priority boost distribution chart for IL[150] — one red mutex-inherit episode lasting ~3.956 ms](../images/stats/stats-priority-il150.svg)
-
-*One episode (red scatter point), ~3.956 ms boosted from base priority 2 to peak priority 4.  The **Pattern** column shows **Mutex inherit** — this is the expected, correct kernel behaviour.  Compare with task `PS[128]` (Test 7) which shows an **L/M/H pattern** without mutex inheritance (manual `vTaskPrioritySet`).*
+*Red points = mutex-inherit episodes; orange points = manual priority changes without kernel inheritance.  The **Pattern** column classifies each episode: **Mutex inherit**, **L/M/H pattern** (a medium-priority task ran while H waited), or **Boost only** (explicit priority change).*
 
 ---
 
@@ -269,10 +263,10 @@ Identify tasks that move between cores frequently, detect lock-induced core boun
    - **Lock-bounce %** = fraction of migrations where a task held a mutex while crossing core boundaries (`CORE_MIGRATION_WHILE_HELD` warning in Mutex/Semaphore).
    - High lock-bounce % on a specific core pair points to a mutex that is frequently taken on one core and released on another.
 
-### Example — Migration Heatmap for `example-4cores.btf`
+### Example — Migration Heatmap for a multi-core trace
 
 ```bash
-python builds/btf_viewer.py tracedata/example-4cores.btf
+python builds/btf_viewer.py your-trace.btf
 ```
 
 With the trace open, click the **Heatmap** toolbar button to open the migration heatmap.
@@ -293,7 +287,7 @@ With the trace open, click the **Heatmap** toolbar button to open the migration 
 
 | Symptom | Remedy |
 |---------|--------|
-| High ping-pong between two cores | Set core affinity via `vTaskCoreAffinitySet()` to pin the task |
+| High ping-pong between two cores | Pin the task to specific cores using the RTOS core affinity API |
 | High lock-bounce % | Release the mutex on the same core it was taken, or increase the mutex holder's priority to finish the critical section quickly |
 | Migrations clustered in one time bin | A burst of work on one core is pushing tasks off; check if a high-priority task dominates that period (Preemption Chain) |
 
@@ -314,7 +308,7 @@ Open **Settings** (`Ctrl+,`) → **Analysis thresholds**:
 | **CPU budget %** | 0–100 % (0 = off) | `25` flags any task using more than 25 % CPU |
 | **Task deadlines** | nanoseconds, one `Name=ns` per line | `Worker[0]=500000` flags slices > 500 µs |
 
-Task names must match the **display name** shown in the label column (e.g. `Worker[0]`, `CS[8]`).
+Task names must match the **display name** shown in the label column (e.g. `Worker[0]`, `SensorTask[2]`).
 
 ### Reading violations
 
@@ -345,17 +339,17 @@ Restrict all statistics, charts, exports, and metric tables to a specific region
 | Right-click → **Clear all cursors** | Remove all |
 | `Ctrl+R` | Zoom the viewport to fit exactly between C1 and the last cursor |
 
-### Example — three cursors placed on `example.btf`
+### Example — three cursors placed on a trace
 
 ```bash
-python builds/btf_viewer.py tracedata/example.btf
+python builds/btf_viewer.py your-trace.btf
 ```
 
 Left-click three times on the timeline to place **C1**, **C2**, and **C3**:
 
 ![Timeline with three measurement cursors C1, C2, C3 placed, showing Δ time labels between consecutive cursors](../images/example.png)
 
-*The Δ badges between consecutive cursors (Δ 2.009 ms, Δ 1.994 ms) show elapsed time between C1–C2 and C2–C3.  Enable **Limit to cursor range (C1–Cn)** in the Statistics panel to restrict all metrics to the C1–C3 window.*
+*The Δ badges between consecutive cursors show elapsed time between C1–C2 and C2–C3.  Enable **Limit to cursor range (C1–Cn)** in the Statistics panel to restrict all metrics to the C1–C3 window.*
 
 ### Enabling cursor scope
 
@@ -416,12 +410,12 @@ Embed application-level measurements (heap usage, counters, code-region timing) 
 
 ### Tag events — periodic scalar values
 
-Use `traceTAG(channel, value)` from task code (channels 0–7):
+Emit a 32-bit scalar value on any of 8 named STI channels (`tag0_event` … `tag7_event`) from any periodic callback or task.  Consult your RTOS trace library documentation for the exact API; a typical call looks like:
 
 ```c
-/* In vApplicationTickHook() or any task */
-size_t used = configTOTAL_HEAP_SIZE - xPortGetFreeHeapSize();
-btf_traceTAG(0, (int)used);   /* tag0_event channel, value = bytes in use */
+/* In any periodic hook or task */
+uint32_t value = my_get_metric();   /* heap used, stack high-water, custom counter, etc. */
+trace_tag_emit(0, (int)value);      /* channel 0–7, 32-bit payload */
 ```
 
 In BTFViewer:
@@ -429,25 +423,24 @@ In BTFViewer:
 - Expand the row to see the waveform.
 - Open **Statistics → Tag Analysis** for per-channel min/avg/max/p95; click a row for a scatter + histogram chart.
 
-**Example — heap usage waveform from the demo firmware:**
+**Example — heap usage waveform (sample trace):**
 
 ```bash
-make run   # generates tracedata/trace.btf with heap samples on tag0_event
-python builds/btf_viewer.py tracedata/trace.btf
+python builds/btf_viewer.py your-trace.btf
 ```
 
-![tag0_event row expanded as a waveform showing heap bytes in use sampled on every RTOS tick](../images/memusage.png)
+![tag0_event row expanded as a waveform showing a user metric sampled on every RTOS tick](../images/memusage.png)
 
-*The `tag0_event` row (expanded) shows heap bytes in use sampled once per RTOS tick via `vApplicationTickHook()`.  Drops correspond to memory being freed; plateaus show steady-state allocation during each stress test.*
+*The `tag0_event` row (expanded) shows a user-defined scalar metric sampled periodically (e.g. heap bytes in use, stack high-water mark, or any 32-bit counter).  Drops indicate resource release; plateaus show steady-state consumption.*
 
 ### Interval events — bracketing code regions
 
-Use `traceINTERVAL_START(id)` / `traceINTERVAL_STOP(id)` around any code block:
+Bracket any code region with matching `interval_start` / `interval_stop` STI events.  Consult your RTOS trace library documentation for the exact API; a typical pattern is:
 
 ```c
-traceINTERVAL_START(1);
+trace_interval_start(1);   /* start of timed region; id = 1 */
 do_work();
-traceINTERVAL_STOP(1);
+trace_interval_stop(1);    /* end of timed region; id must match */
 ```
 
 In BTFViewer:
@@ -456,21 +449,21 @@ In BTFViewer:
 - Open **Statistics → Interval Analysis** for min/avg/max/p95 per interval ID.
 - Click any row → distribution chart; click a scatter point → jump to that interval start and annotate.
 
-**Example — Interval Analysis distribution chart (`example-4cores.btf`, Interval 1):**
+**Example — Interval Analysis distribution chart:**
 
 ```bash
-python builds/btf_viewer.py tracedata/example-4cores.btf
+python builds/btf_viewer.py your-trace.btf
 ```
 
-Open **Statistics → Interval Analysis**, click the **Interval 1** row:
+Open **Statistics → Interval Analysis**, click any interval row:
 
-![Interval Analysis distribution chart for Interval 1 — scatter of start times vs duration, histogram with CDF](../images/stats/stats-interval-1.svg)
+![Interval Analysis distribution chart — scatter of start times vs duration, histogram with CDF](../images/stats/stats-interval-1.svg)
 
-*Each point in the scatter represents one `interval_start` → `interval_stop` pair.  The histogram shows the duration distribution of all inner loop iterations bracketed by `traceINTERVAL_START(1)` / `traceINTERVAL_STOP(1)` in the demo firmware.  Click any scatter point to jump to that interval's start on the timeline.*
+*Each point in the scatter represents one `interval_start` → `interval_stop` pair.  The histogram shows the duration distribution of all timed code regions in scope.  Click any scatter point to jump to that interval's start on the timeline.*
 
 ### Tip — per-task interval pairing
 
-When the BTF note includes `tid:{task_id}` (generated automatically by the current FreeRTOS trace library), start/stop events pair **per interval ID and per calling task**.  This lets you use the same `id` value in multiple tasks and get separate statistics for each.
+When the BTF note includes `tid:{task_id}` (supported by trace libraries that embed the calling task ID in interval events), start/stop events pair **per interval ID and per calling task**.  This lets you use the same `id` value in multiple tasks and get separate statistics for each.
 
 ---
 
@@ -485,7 +478,7 @@ Verify that the RTOS tick fires at the expected period and detect tickless-idle 
 1. Open **Statistics → Trace Health (TICK)**.
 2. The section shows:
    - **Tick period** (min/avg/max from consecutive TICK STI events).
-   - **Mode badge** — **TICK** (regular) or **TICKLESS** (FreeRTOS low-power tickless mode, detected from high coefficient of variation in tick intervals).
+   - **Mode badge** — **TICK** (regular) or **TICKLESS** (low-power tickless mode detected from a high coefficient of variation in tick intervals).
    - **Large gaps** count and estimated missed-tick count.
 3. Click the **Tick Distribution…** button (bar-chart icon, visible when ≥ 2 ticks are in scope) to open a histogram of tick intervals.
 
@@ -493,10 +486,10 @@ Verify that the RTOS tick fires at the expected period and detect tickless-idle 
 
 | Symptom | Interpretation |
 |---------|---------------|
-| **TICKLESS** badge with large gaps | Tickless idle active — confirm `configUSE_TICKLESS_IDLE` is intentional |
+| **TICKLESS** badge with large gaps | Tickless idle active — verify the tickless idle mode is intentionally enabled |
 | Max tick period >> average | Missed ticks; the tick was delayed by a long critical section or ISR |
 | High CoV (coefficient of variation) of tick intervals | Tick jitter — interrupt latency or scheduler interference |
-| Missed-tick estimate > 0 | Some tick events were dropped by the ring buffer before they could be recorded — increase `configMAX_TRACE_EVENTS` |
+| Missed-tick estimate > 0 | Some tick events were dropped before they could be recorded — increase the ring buffer event capacity |
 
 ### Cursor-scoped tick health
 
@@ -512,15 +505,12 @@ Detect unpaired takes/gives, orphaned mutex holds at trace end, cross-task gives
 
 ### Prerequisites
 
-Enable queue tracing in the trace library configuration:
-```c
-#define configINCLUDE_QUEUE_EVENTS  1
-```
+Enable mutex and semaphore event tracing in your RTOS trace library configuration so that `take`, `give`, `create`, and `delete` STI events are emitted for each synchronization object.
 
 ### Procedure
 
 1. Open **Statistics → Mutex / Semaphore pairing** (shown only when mutex/semaphore STI events are present).
-2. The **main table** shows each sync object (identified by FreeRTOS pointer) with:
+2. The **main table** shows each sync object (identified by its unique object pointer) with:
    - **Hold count** — number of take/give cycles.
    - **Issue count** — number of pairing anomalies.
    - **Core bounce** — number of takes on one core with the corresponding give on a different core.
