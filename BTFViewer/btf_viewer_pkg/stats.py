@@ -3557,6 +3557,13 @@ class _StatsPanel(QWidget):
                 self._apply_stats_table_theme(table, ui_fs)
         for row in self.findChildren(_StatsHoverRow):
             row.update_theme(self._is_dark)
+        # Update utilisation row name labels whose colour was set at creation time.
+        fg = "#D4D4D4" if self._is_dark else "#1E1E1E"
+        lbl_style = f"color:{fg}; background:transparent;"
+        if ui_fs:
+            lbl_style += f" font-size:{ui_fs};"
+        for lbl in self.findChildren(_ElidedUtilLabel):
+            lbl.setStyleSheet(lbl_style)
 
     def _stats_table_colors(self) -> Tuple[QColor, QColor, str, QColor]:
         """Theme colours for stats tables (match MainWindow._theme_tokens)."""
