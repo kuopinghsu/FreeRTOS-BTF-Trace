@@ -29,7 +29,7 @@ Practical workflows for using BTFViewer to analyse RTOS scheduler behaviour and 
 ### Load and orient
 
 ```bash
-python builds/btf_viewer.py your-trace.btf
+python btf_viewer.py your-trace.btf
 ```
 
 Or open via **File → Open** (`Ctrl+O`) / drag-and-drop.
@@ -85,7 +85,7 @@ Determine how much CPU time each core and each task consumes, and detect load im
 ### Example — multi-core trace
 
 ```bash
-python builds/btf_viewer.py your-trace.btf
+python btf_viewer.py your-trace.btf
 ```
 
 Open the **Statistics** panel → **Core Utilisation**.  Check that each core's active CPU% is within an expected range and the **Load Balance Score** badge shows σ < 30 % (green), indicating a well-balanced workload.  **Top Tasks by CPU** reveals which tasks dominate CPU consumption.
@@ -126,7 +126,7 @@ If the **Max** slice is an isolated spike far above **p95**, suspect an external
 ### Example — Execution Time distribution chart
 
 ```bash
-python builds/btf_viewer.py your-trace.btf
+python btf_viewer.py your-trace.btf
 ```
 
 Open **Statistics → Execution Time Per Slice**, click any task row to open its distribution chart:
@@ -165,7 +165,7 @@ Find out why a task spends a long time off-CPU between consecutive activations (
 ### Example — Blocking Time distribution chart
 
 ```bash
-python builds/btf_viewer.py your-trace.btf
+python btf_viewer.py your-trace.btf
 ```
 
 Open **Statistics → Blocking Time**, click any task row:
@@ -266,7 +266,7 @@ Identify tasks that move between cores frequently, detect lock-induced core boun
 ### Example — Migration Heatmap for a multi-core trace
 
 ```bash
-python builds/btf_viewer.py your-trace.btf
+python btf_viewer.py your-trace.btf
 ```
 
 With the trace open, click the **Heatmap** toolbar button to open the migration heatmap.
@@ -342,7 +342,7 @@ Restrict all statistics, charts, exports, and metric tables to a specific region
 ### Example — three cursors placed on a trace
 
 ```bash
-python builds/btf_viewer.py your-trace.btf
+python btf_viewer.py your-trace.btf
 ```
 
 Left-click three times on the timeline to place **C1**, **C2**, and **C3**:
@@ -392,7 +392,7 @@ The **Δ** column in each table is the raw difference B − A for numeric fields
 ### Headless batch comparison
 
 ```bash
-python builds/btf_viewer.py compare a.btf b.btf \
+python btf_viewer.py compare a.btf b.btf \
   --output compare-report \
   --format html \
   --name-a "Before" --name-b "After"
@@ -426,7 +426,7 @@ In BTFViewer:
 **Example — heap usage waveform (sample trace):**
 
 ```bash
-python builds/btf_viewer.py your-trace.btf
+python btf_viewer.py your-trace.btf
 ```
 
 ![tag0_event row expanded as a waveform showing a user metric sampled on every RTOS tick](../images/memusage.png)
@@ -452,7 +452,7 @@ In BTFViewer:
 **Example — Interval Analysis distribution chart:**
 
 ```bash
-python builds/btf_viewer.py your-trace.btf
+python btf_viewer.py your-trace.btf
 ```
 
 Open **Statistics → Interval Analysis**, click any interval row:
@@ -553,27 +553,27 @@ No GUI is opened; output is written directly to a file.
 
 ```bash
 # Trace summary (human-readable)
-python builds/btf_viewer.py info trace.btf
+python btf_viewer.py info trace.btf
 
 # Trace summary (machine-readable JSON)
-python builds/btf_viewer.py info trace.btf --json
+python btf_viewer.py info trace.btf --json
 
 # Full statistics report — HTML
-python builds/btf_viewer.py report trace.btf --output report.html --format html
+python btf_viewer.py report trace.btf --output report.html --format html
 
 # Full statistics report — CSV
-python builds/btf_viewer.py report trace.btf --output report.csv --format csv
+python btf_viewer.py report trace.btf --output report.csv --format csv
 
 # Scoped to a time window (nanoseconds)
-python builds/btf_viewer.py report trace.btf --output report.html --lo 100000 --hi 500000
+python btf_viewer.py report trace.btf --output report.html --lo 100000 --hi 500000
 
 # Two-trace comparison — HTML
-python builds/btf_viewer.py compare before.btf after.btf \
+python btf_viewer.py compare before.btf after.btf \
     --output compare.html --format html \
     --name-a "Before" --name-b "After"
 
 # Core migration table as CSV
-python builds/btf_viewer.py migrations trace.btf -o migrations.csv
+python btf_viewer.py migrations trace.btf -o migrations.csv
 ```
 
 ### Automating reports in CI
@@ -581,12 +581,8 @@ python builds/btf_viewer.py migrations trace.btf -o migrations.csv
 Chain the headless commands in a Makefile or shell script to generate artefacts after every simulation run:
 
 ```bash
-# Example Makefile snippet
-trace.btf: trace.bin
-	tools/gentrace $< $@
-
 report.html: trace.btf
-	python BTFViewer/builds/btf_viewer.py report $< --output $@ --format html
+	python btf_viewer.py report $< --output $@ --format html
 
 .PHONY: report
 report: report.html
