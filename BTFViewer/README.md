@@ -6,7 +6,7 @@ A PySide6-based interactive visualiser for FreeRTOS context-switch traces in **B
 
 ## Screenshot
 
-<img src="../images/btfviewer.png" alt="BTF Viewer screenshot" width=640>
+![BTF Viewer screenshot](../images/btfviewer.png)
 
 [DEMO](https://apps.kuoping.com/btf_viewer.html)
 
@@ -711,7 +711,7 @@ When **2 or more cursors** are placed, check **Limit to cursor range (C1–Cn)**
 | Interval analysis | Paired spans whose start/stop times overlap the range |
 | Core migrations | Migration events and per-core active time with overlap in the range |
 
-<img src="../images/statistics.png" alt="Statistics panel with cursor-scoped metrics">
+![Statistics panel with cursor-scoped metrics](../images/statistics.png)
 
 Uncheck the box to return to full-trace statistics.
 
@@ -919,23 +919,23 @@ These sections appear at the top of the Statistics panel (not sortable tables).
 
 **Scheduling summary** — per core, **context switches** count slice boundaries and **core gap** is idle time between consecutive slices on that core:
 
-$$
+```math
 g_{\text{core}} = t_{\text{start},k+1} - t_{\text{end},k}
-$$
+```
 
 Large **max core gap** on a core that should be busy suggests starvation, tickless idle, or a single long-running task blocking others.
 
 **Core utilisation** — per core, share of non-IDLE, non-TICK active time in scope:
 
-$$
+```math
 U_{\text{core}} = \frac{T_{\text{active,core}}}{T_{\text{scope}}} \times 100
-$$
+```
 
 When two or more cores are present, a **Load Balance Score** badge is shown at the top of the section:
 
-$$
+```math
 \text{Score} = 100\% \times (1 - G), \quad G = \text{Gini coefficient of } \{U_{\text{core}}\}
-$$
+```
 
 The badge also shows the population standard deviation σ across cores. The badge turns **amber** when σ > 30 %, indicating significant load imbalance. **Export CSV** includes the score, σ, and G values under the Core Utilisation section.
 
@@ -949,15 +949,15 @@ Measures how long each **on-CPU slice** lasts for a task — from switch-in unti
 
 **Formula** — for task *i*, each on-CPU slice *k* in scope:
 
-$$
+```math
 d_k = t_{\text{end},k} - t_{\text{start},k}
-$$
+```
 
 Table statistics (Min / Avg / Max / p95) are computed over all slice durations *d*<sub>k</sub> in scope. **CPU%** is the task's share of total active CPU time in scope:
 
-$$
+```math
 \text{CPU}_i = \frac{T_{\text{exec},i}}{\sum_j T_{\text{exec},j}} \times 100
-$$
+```
 
 **What it tells you:** Short, uniform slices suggest periodic or tick-driven scheduling. A long **Max** or heavy **p95** tail marks worst-case execution time (WCET) slices — often critical sections, lock holds, or interrupt-disabled regions. Compare **Min** (BCET) and **Max** (WCET) to judge jitter; a wide spread on a real-time task may violate deadline assumptions even when **Avg** looks acceptable.
 
@@ -976,7 +976,7 @@ $$
 
 In `example-4cores.btf`, task **CS[8]** has 356 slices with a long tail of longer runs (context-switch stress tasks):
 
-<img src="../images/stats/stats-exec-cs8.svg" alt="Execution time distribution for CS[8] in example-4cores.btf" width="820">
+![Execution time distribution for CS[8] in example-4cores.btf](../images/stats/stats-exec-cs8.svg)
 
 The scatter shows periodic bursts of short slices; the histogram uses a **log-scaled duration axis** so short and long slices are both visible. The **CDF** rises steeply on the left (most slices are short) then levels toward 100% as longer runs are included; **p50** and **p95** vertical markers align with the 50% and 95% ticks on the right axis.
 
@@ -988,9 +988,9 @@ Measures the **off-CPU gap** between the end of one slice and the start of the n
 
 **Formula** — for consecutive activations *k* and *k+1* of task *i*:
 
-$$
+```math
 g_k = t_{\text{start},k+1} - t_{\text{end},k}
-$$
+```
 
 Only positive gaps are counted. Min / Avg / Max / p95 are taken over all gaps *g*<sub>k</sub> in scope.
 
@@ -1010,7 +1010,7 @@ Only positive gaps are counted. Min / Avg / Max / p95 are taken over all gaps *g
 
 **CS[8]** in `example-4cores.btf` (355 gaps):
 
-<img src="../images/stats/stats-block-cs8.svg" alt="Blocking time distribution for CS[8] in example-4cores.btf" width="820">
+![Blocking time distribution for CS[8] in example-4cores.btf](../images/stats/stats-block-cs8.svg)
 
 High blocking gaps clustered at certain times often correlate with lock contention or a higher-priority task dominating the core.
 
@@ -1020,9 +1020,9 @@ Measures the gap between **successive activation start times** of the same task 
 
 **Formula** — for consecutive activations *k* and *k+1*:
 
-$$
+```math
 \Delta t_k = t_{\text{start},k+1} - t_{\text{start},k}
-$$
+```
 
 Min / Avg / Max / p95 are taken over all inter-arrival samples Δ*t*<sub>k</sub> in scope.
 
@@ -1042,7 +1042,7 @@ Min / Avg / Max / p95 are taken over all inter-arrival samples Δ*t*<sub>k</sub>
 
 **CS[8]** in `example-4cores.btf`:
 
-<img src="../images/stats/stats-inter-cs8.svg" alt="Inter-arrival time distribution for CS[8] in example-4cores.btf" width="820">
+![Inter-arrival time distribution for CS[8] in example-4cores.btf](../images/stats/stats-inter-cs8.svg)
 
 Compare with Blocking Time (Response Time): inter-arrival includes time the task was **running**, so values are typically larger than off-CPU gaps alone. The histogram auto-selects **log duration** for CS[8] because activation gaps span microseconds to milliseconds.
 
@@ -1052,9 +1052,9 @@ For each **victim** task's off-CPU gap, the analyser finds which **preemptor** t
 
 **Formula** — for victim *v* and preemptor *p* on the same core during gap *g*:
 
-$$
+```math
 \text{overlap}(v,p,g) = \sum_{p \in g} \left[\min(t_{\text{end}}, g_{\text{end}}) - \max(t_{\text{start}}, g_{\text{start}})\right]
-$$
+```
 
 **Count** is the number of such overlap events; **Total** / **Avg** / **Max** summarise overlap durations for each victim←preemptor pair.
 
@@ -1075,7 +1075,7 @@ $$
 
 **CS[10] ← CS[11]** in `example-4cores.btf` (155 overlap events, 14.7 ms total overlap) — two context-switch stress tasks repeatedly preempting each other:
 
-<img src="../images/stats/stats-preempt-cs10-cs11.svg" alt="Preemption chain distribution CS[10] preempted by CS[11] in example-4cores.btf" width="820">
+![Preemption chain distribution CS[10] preempted by CS[11] in example-4cores.btf](../images/stats/stats-preempt-cs10-cs11.svg)
 
 High **Count** with moderate **Avg** overlap suggests frequent short preemptions; a few points with large **y** values are long stretches where CS[11] ran while CS[10] waited. Use this table to answer *who preempted whom* and whether a victim's blocking is dominated by one preemptor or many.
 
@@ -1091,9 +1091,9 @@ Shown when the trace has **`create pri:N`** on task-create `T` rows **and** at l
 
 **Formula** — a **boost episode** is a contiguous interval where the task's effective priority is above its **Base** (from `create pri:N`):
 
-$$
+```math
 T_{\text{boosted}} = \sum_{\text{episodes}} (t_{\text{end}} - t_{\text{start}})
-$$
+```
 
 where *t*<sub>start</sub> is the inherit / set-up STI and *t*<sub>end</sub> is the disinherit / set-back STI for each episode.
 
@@ -1164,7 +1164,7 @@ Zoom the timeline to that window (or click the **IL[150]** stats row / scatter p
 
 **IL[150]** on the timeline in `example-4cores.btf` (Core view, Core_3 expanded, zoomed to test 8 ~703–707 ms). The **red bottom stripe** on the IL sub-row marks the kernel priority-boost window from `priority_inherit` to `priority_disinherit` STI events (703.266–707.222 ms). That window can start slightly before IL runs on Core_3 and end just before its last slice ends, because the stripe follows trace hooks—not the merged execution bar:
 
-<img src="../images/stats/tasks-priority-il150.svg" alt="Timeline core view: IL[150] on Core_3 with red priority-inheritance stripe (example-4cores.btf)" width="820">
+![Timeline core view: IL[150] on Core_3 with red priority-inheritance stripe (example-4cores.btf)](../images/stats/tasks-priority-il150.svg)
 
 Export a timeline SVG from the viewer (**File → Save SVG** or toolbar) after zooming to the episode. Stats distribution plots are regenerated with the command below.
 
@@ -1178,7 +1178,7 @@ Export a timeline SVG from the viewer (**File → Save SVG** or toolbar) after z
 
 **IL[150]** distribution (test 8: one mutex inherit episode, base pri 2 → peak 4, ~3.956 ms boosted):
 
-<img src="../images/stats/stats-priority-il150.svg" alt="Priority boost distribution chart for IL[150] in example-4cores.btf" width="820">
+![Priority boost distribution chart for IL[150] in example-4cores.btf](../images/stats/stats-priority-il150.svg)
 
 **PS[128]** (test 7: manual `vTaskPrioritySet`, **L/M/H pattern**, ~108 µs boosted) contrasts with **IL[150]** above — same base/peak numbers, different mechanism and duration.
 
@@ -1206,9 +1206,9 @@ The viewer pairs **`take`/`give`** (and **`create`/`delete`**) **per pointer** �
 
 **Formula** — for each paired hold span *h* of duration τ<sub>h</sub>:
 
-$$
+```math
 \overline{\tau}_{\text{hold}} = \frac{1}{N_{\text{holds}}} \sum_h \tau_h
-$$
+```
 
 **What it tells you:** **Avg hold** shows typical lock or semaphore residency time — very long holds inflate blocking for waiters. **Issues** > 0 (orphan give, cross-task give, unmatched take, delete while held) mean the trace does not form clean take/give pairs and hold statistics may be incomplete. **Deadlock risk** at trace end flags multiple mutexes still held by different tasks — verify whether that is expected teardown or a real stall.
 
@@ -1247,9 +1247,9 @@ Pairs **`interval_start` / `interval_stop`** STI events into measurable code reg
 
 **Formula** — for each paired instance *j* with start *t*<sub>s</sub> and stop *t*<sub>e</sub>:
 
-$$
+```math
 \tau_j = t_e - t_s
-$$
+```
 
 **Count** is the number of paired spans in scope; Min / Avg / Max / p95 are over all interval durations τ<sub>j</sub>.
 
@@ -1281,7 +1281,7 @@ Recorded by `traceINTERVAL_START(id)` / `traceINTERVAL_STOP(id)` in firmware —
 
 **Interval 1** in `example-4cores.btf` (480 spans from ten `vCtxSwitchWorker` tasks sharing id `1` — each worker pairs via its own `tid` in the note):
 
-<img src="../images/stats/stats-interval-1.svg" alt="Interval duration distribution for interval id 1 in example-4cores.btf" width="820">
+![Interval duration distribution for interval id 1 in example-4cores.btf](../images/stats/stats-interval-1.svg)
 
 Most spans cluster at short durations (tight yield loops); occasional high **y** points mark iterations that waited longer on the shared mutex or area semaphore. Compare ids **4–6** (shorter per-iteration work) vs **1–3** (heavier stress tests) in the same table.
 
@@ -1430,9 +1430,9 @@ Uses STI **TICK** timestamps to estimate scheduler tick regularity and detect wh
 
 **Formula** — for consecutive TICK events at times *t*<sub>n</sub>:
 
-$$
+```math
 \Delta_n = t_n - t_{n-1}, \quad \mu = \text{mean}(\Delta_n), \quad \sigma = \text{stdev}(\Delta_n), \quad \text{CV} = \frac{\sigma}{\mu}
-$$
+```
 
 **Missed ticks (est.)** counts large gaps where Δ<sub>n</sub> ≫ μ (roughly ⌊Δ<sub>n</sub> / μ⌋ − 1).
 
@@ -1519,9 +1519,9 @@ A **migration** is recorded when consecutive slices of the same task (merge-key)
 
 **Migration rate** — normalizes raw migration count against task active time and (when TICK STIs exist) scheduler ticks, so a task that migrates often relative to how much it runs stands out:
 
-$$
+```math
 R_m = \frac{N_{\text{migrations},i}}{T_{\text{exec},i}}
-$$
+```
 
 The **Rate** column shows *R*<sub>m</sub> as migrations per second of on-CPU time (e.g. `1.23/s`). When the trace includes TICK events, it also shows migrations per **on-CPU** scheduler tick for that task (e.g. `2.785/tick`) — TICK STIs that fall inside one of the task's slices in scope, not trace-wide tick count.
 
@@ -1529,9 +1529,9 @@ The **Rate** column shows *R*<sub>m</sub> as migrations per second of on-CPU tim
 
 **Average core dwell time** — mean duration of each on-CPU stay before the task blocks, yields, or migrates:
 
-$$
+```math
 \bar{T}_d = \frac{1}{N_{\text{slices}}} \sum_k d_k = \frac{T_{\text{exec},i}}{N_{\text{slices},i}}
-$$
+```
 
 Each slice *d*<sub>k</sub> is one switch-in episode (equivalent to averaging per-core dwell, *T*<sub>on</sub> / *N*<sub>slices</sub>, on each core the task visited).
 
@@ -1562,13 +1562,13 @@ Visualise **when** migrations happen between core pairs — complementary to the
 
 **Level 1 — core-pair overview** (4 cores · 32 time bins across the trace):
 
-<img src="../images/migration-heatmap-pairs.svg" alt="Migration heatmap Level 1: core-pair rows and time bins for example-4cores.btf" width="410">
+![Migration heatmap Level 1: core-pair rows and time bins for example-4cores.btf](../images/migration-heatmap-pairs.svg)
 
 Each row is a directed core pair (`c0→c1`, `c0→c2`, …). Cell colour intensity is the migration count in that bin (darker blue = more events). Horizontal bands show **when** traffic occurred — e.g. repeated activity on `c0→c2` and `c1→c0` during the context-switch stress phases. Click a non-empty cell to drill into tasks for that pair and time window.
 
 **Level 2 — task grid** (after clicking a cell on the pair overview):
 
-<img src="../images/migration-heatmap-tasks.svg" alt="Migration heatmap Level 2: per-task sub-bins after drilling from example-4cores.btf" width="410">
+![Migration heatmap Level 2: per-task sub-bins after drilling from example-4cores.btf](../images/migration-heatmap-tasks.svg)
 
 Rows are tasks that migrated on the selected core pair within the chosen bin; columns are **32 sub-bins** spanning that bin's time window. Brighter cells mark sub-intervals where that task crossed cores most often. Each row label is prefixed with a directional indicator: **▲** = task primarily migrates in this direction (egress-dominant), **▼** = more migrations on the reverse path (ingress-dominant), **⇄** = roughly symmetric. Click a task cell to zoom the timeline, place **C1** / **C2** at the sub-bin edges, switch to **Task View**, and filter to that task only.
 
