@@ -59,6 +59,7 @@ ci: test-all check-bundle
 doc: $(DOCS)/README.pdf $(DOCS)/APPLICATION.pdf
 
 PANDOC_PDF_FLAGS := --pdf-engine=xelatex \
+    --template=eisvogel \
 	--lua-filter scripts/math-codeblock.lua \
 	-V mainfont="DejaVu Sans" \
 	-V monofont="DejaVu Sans Mono"
@@ -66,7 +67,6 @@ PANDOC_PDF_FLAGS := --pdf-engine=xelatex \
 $(DOCS)/%.pdf: %.md
 	mkdir -p $(DOCS)
 	$(PANDOC) $(PANDOC_PDF_FLAGS) $< -o $@
-	cp $@ docs/.
 
 # Fail if builds/btf_viewer.py drifts from package sources (CI / pre-commit).
 check-bundle: bundle
