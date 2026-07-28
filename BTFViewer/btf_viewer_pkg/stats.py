@@ -3194,7 +3194,7 @@ def _gini_coefficient(values: List[float]) -> float:
     for i, v in enumerate(sorted_v):
         cumsum += v
         gini_num += cumsum
-    gini = (2.0 * gini_num) / (n * total) - (n + 1.0) / n
+    gini = (n + 1.0) / n - (2.0 * gini_num) / (n * total)
     return max(0.0, min(1.0, gini))
 
 

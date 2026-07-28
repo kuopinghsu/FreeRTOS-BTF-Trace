@@ -2816,7 +2816,7 @@ const loadBalanceScore = computed(() => {
     cumsum += sorted[i]
     giniNum += cumsum
   }
-  const gini = Math.max(0, Math.min(1, (2 * giniNum) / (n * total) - (n + 1) / n))
+  const gini = Math.max(0, Math.min(1, (n + 1) / n - (2 * giniNum) / (n * total)))
   // Population std dev
   const mean = total / n
   const variance = pcts.reduce((s, v) => s + (v - mean) ** 2, 0) / n
