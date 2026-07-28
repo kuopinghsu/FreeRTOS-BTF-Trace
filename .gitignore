@@ -65,8 +65,7 @@ build
 tracedata/trace.*
 
 # BTF viewer runtime settings (user-local, not shared)
-BTFViewer/btf_viewer.rc
-BTFViewer/builds/btf_viewer.rc
+btf_viewer.rc
 
 *.bak
 .DS_Store

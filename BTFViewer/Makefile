@@ -24,7 +24,7 @@ help:
 	@echo "  make web          Web viewer only → builds/btf_viewer.html"
 	@echo "  make bundle       Desktop bundle only → builds/btf_viewer.py"
 	@echo "  make check-bundle Regenerate bundle; fail if it drifts from sources (CI)"
-	@echo "  make doc          Convert README.md + APPLICATION.md → builds/*.pdf"
+	@echo "  make doc          Convert README.md + WORKFLOWS.md → builds/*.pdf"
 	@echo "  make test         Desktop unit tests (QT_QPA_PLATFORM=offscreen)"
 	@echo "  make test-web     Web unit tests (node --test)"
 	@echo "  make test-all     Desktop + web unit tests"
@@ -56,7 +56,7 @@ test-all: test test-web
 
 ci: test-all check-bundle
 
-doc: $(DOCS)/README.pdf $(DOCS)/APPLICATION.pdf
+doc: $(DOCS)/README.pdf $(DOCS)/WORKFLOWS.pdf
 
 PANDOC_PDF_FLAGS := --pdf-engine=xelatex \
     --template=eisvogel \
