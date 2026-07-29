@@ -9,8 +9,8 @@ function summarizeNumeric(samples) {
   const values = samples.slice().sort((a, b) => a - b)
   const n = values.length
   const sum = values.reduce((a, b) => a + b, 0)
-  const p50Idx = Math.min(n - 1, Math.floor(n * 0.5))
-  const p95Idx = Math.min(n - 1, Math.floor(n * 0.95))
+  const p50Idx = Math.min(n - 1, Math.ceil(n * 0.5) - 1)
+  const p95Idx = Math.min(n - 1, Math.ceil(n * 0.95) - 1)
   return {
     min: values[0],
     avg: Math.round(sum / n),

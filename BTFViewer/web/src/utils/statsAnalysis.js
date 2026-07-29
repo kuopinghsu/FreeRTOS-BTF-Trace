@@ -361,7 +361,7 @@ export function preemptionChainRows(trace, lo, hi) {
     }
   }
 
-  rows.sort((a, b) => b.totalNs - a.totalNs || a.victim.localeCompare(b.victim))
+  rows.sort((a, b) => b.totalNs - a.totalNs || a.victim.localeCompare(b.victim) || a.preemptor.localeCompare(b.preemptor))
   const truncated = rows.length > PREEMPTION_CHAIN_MAX_ROWS
   const out = truncated ? rows.slice(0, PREEMPTION_CHAIN_MAX_ROWS) : rows
   return { rows: out, truncated }

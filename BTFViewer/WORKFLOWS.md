@@ -131,7 +131,7 @@ python btf_viewer.py your-trace.btf
 
 Open **Statistics → Execution Time Per Slice**, click any task row to open its distribution chart:
 
-![Execution Time distribution chart — scatter plot above, adaptive histogram with CDF overlay below](../images/stats/stats-exec-cs8.svg)
+![Execution Time distribution chart — scatter plot above, adaptive histogram with CDF overlay below](../images/stats/stats-exec-cs11.svg)
 
 *The scatter plot (top) shows all slices over the trace span.  The histogram (bottom) automatically selects a **log-scaled duration axis** when the duration range spans more than an order of magnitude.  The blue **CDF** curve rises steeply on the left when most slices are short, then levels off as longer outliers are counted.  The **p50** (green) and **p95** (orange) dashed lines align with the corresponding percentile ticks on the right axis, making it easy to read off deadline-compliance percentages.*
 
@@ -170,13 +170,13 @@ python btf_viewer.py your-trace.btf
 
 Open **Statistics → Blocking Time**, click any task row:
 
-![Blocking Time distribution chart — scatter and histogram showing off-CPU gaps](../images/stats/stats-block-cs8.svg)
+![Blocking Time distribution chart — scatter and histogram showing off-CPU gaps](../images/stats/stats-block-cs11.svg)
 
 *The scatter plot reveals clusters of high blocking at specific points in time — these align with periods when a higher-priority preemptor held the core for a long stretch.  Cross-reference with the **Preemption Chain** table (§4 step 4) to identify the offending task.*
 
 ### Example — Preemption Chain distribution chart
 
-![Preemption Chain distribution chart — victim preempted by a higher-priority task](../images/stats/stats-preempt-cs10-cs11.svg)
+![Preemption Chain distribution chart — victim preempted by a higher-priority task](../images/stats/stats-preempt-cs24-cs25.svg)
 
 *Each point represents one preemption overlap event; the y-axis shows how long the preemptor held the core during the victim's off-CPU gap.  Click any scatter point to jump to the preemptor's segment on the timeline and add an annotation at that moment.*
 
@@ -230,13 +230,13 @@ The screenshots below illustrate a classic L/M/H scenario: the low-priority mute
 
 **Timeline — Core View expanded, zoomed to the boost window:**
 
-![Timeline Core View showing the low-priority mutex holder with a red priority-boost stripe during the mutex inheritance window](../images/stats/tasks-priority-il150.svg)
+![Timeline Core View showing the low-priority mutex holder with a red priority-boost stripe during the mutex inheritance window](../images/stats/tasks-priority-il266.svg)
 
 *The **red bottom stripe** on the low-priority task's sub-row marks the `priority_inherit` → `priority_disinherit` window.  During this interval the kernel has raised the holder's effective priority, preventing any medium-priority task from preempting it.*
 
 **Priority Inheritance distribution chart (Statistics → Priority Inheritance → click any task row):**
 
-![Priority boost distribution chart — mutex-inherit boost episodes plotted by start time and duration](../images/stats/stats-priority-il150.svg)
+![Priority boost distribution chart — mutex-inherit boost episodes plotted by start time and duration](../images/stats/stats-priority-il266.svg)
 
 *Red points = mutex-inherit episodes; orange points = manual priority changes without kernel inheritance.  The **Pattern** column classifies each episode: **Mutex inherit**, **L/M/H pattern** (a medium-priority task ran while H waited), or **Boost only** (explicit priority change).*
 
@@ -433,6 +433,18 @@ python btf_viewer.py your-trace.btf
 
 *The `tag0_event` row (expanded) shows a user-defined scalar metric sampled periodically (e.g. heap bytes in use, stack high-water mark, or any 32-bit counter).  Drops indicate resource release; plateaus show steady-state consumption.*
 
+**Example — Tag Analysis distribution chart:**
+
+```bash
+python btf_viewer.py example-8cores.btf
+```
+
+Open **Statistics → Tag Analysis**, click the `tag0_event` row:
+
+![Tag value distribution chart for tag0_event in example-8cores.btf](../images/stats/stats-tag0.svg)
+
+*1966 samples on `tag0_event` (min 8,496, avg 37,587.5, max 45,504, p95 43,904). Unlike the other metric charts, the y-axis here is the raw application value, not a duration — clusters and outliers reflect whatever firmware puts in the channel (queue depth, ADC reading, free heap, etc.).*
+
 ### Interval events — bracketing code regions
 
 Bracket any code region with matching `interval_start` / `interval_stop` STI events.  Consult your RTOS trace library documentation for the exact API; a typical pattern is:
@@ -481,6 +493,18 @@ Verify that the RTOS tick fires at the expected period and detect tickless-idle 
    - **Mode badge** — **TICK** (regular) or **TICKLESS** (low-power tickless mode detected from a high coefficient of variation in tick intervals).
    - **Large gaps** count and estimated missed-tick count.
 3. Click the **Tick Distribution…** button (bar-chart icon, visible when ≥ 2 ticks are in scope) to open a histogram of tick intervals.
+
+### Example — Tick Distribution chart
+
+```bash
+python btf_viewer.py example-8cores.btf
+```
+
+Open **Statistics → Trace Health (TICK)**, click the **Tick Distribution…** button:
+
+![Tick interval distribution chart — scatter and histogram of consecutive TICK gaps in example-8cores.btf](../images/stats/stats-tick.svg)
+
+*1966 TICK events at a nominal 1.000 ms period (1000 Hz) — the coefficient of variation (≈ 24.7 %) exceeds the 5 % threshold, so the mode badge reads **TICKLESS**. The histogram's peaks at 1×, 2×, and 3× the nominal period show idle stretches skipping several ticks before the next one fires; the 4 largest gaps (up to 2.340 ms) are flagged as estimated missed ticks.*
 
 ### Interpreting results
 

@@ -49,7 +49,35 @@ export function parseTagValue(note) {
 export function formatTagValue(value) {
   if (!Number.isFinite(value)) return '—'
   if (Number.isInteger(value)) return value.toLocaleString()
-  return String(value)
+  return formatGeneral(value, 6)
+}
+
+/** Mimic Python's `f"{value:g}"` (6 significant digits, switches to
+ * scientific notation outside the fixed-point exponent range), so
+ * non-integer averages/min/max/p95 render the same on desktop and web. */
+function formatGeneral(value, precision) {
+  if (value === 0) return '0'
+  const sign = value < 0 ? '-' : ''
+  const abs = Math.abs(value)
+  let e = Math.floor(Math.log10(abs))
+  if (Math.pow(10, e) > abs) e -= 1
+  else if (Math.pow(10, e + 1) <= abs) e += 1
+  let str
+  if (e < -4 || e >= precision) {
+    const [mantissaRaw, expRaw] = abs.toExponential(precision - 1).split('e')
+    const mantissa = mantissaRaw.includes('.')
+      ? mantissaRaw.replace(/0+$/, '').replace(/\.$/, '')
+      : mantissaRaw
+    const expNum = parseInt(expRaw, 10)
+    const expSign = expNum < 0 ? '-' : '+'
+    const expAbs = String(Math.abs(expNum)).padStart(2, '0')
+    str = `${mantissa}e${expSign}${expAbs}`
+  } else {
+    const decimals = Math.max(0, precision - 1 - e)
+    str = abs.toFixed(decimals)
+    if (str.includes('.')) str = str.replace(/0+$/, '').replace(/\.$/, '')
+  }
+  return sign + str
 }
 
 function percentile(sorted, p) {

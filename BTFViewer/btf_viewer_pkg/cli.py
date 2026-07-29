@@ -109,6 +109,8 @@ Headless analysis commands (desktop only — no GUI, no Qt window):
   report       Full statistics export (Statistics panel → Export CSV/HTML).
   compare      Two-trace diff (Trace Compare dialog → Export).
   migrations   Core Migrations table only (CSV).
+  snapshot     Export a PNG/SVG image (timeline, migration heatmap, or a
+               statistics metric plot) without opening the GUI.
 
 Time range (--lo / --hi):
   Values are raw trace timestamps in the file's time units (see # timeScale
@@ -134,6 +136,8 @@ CLI examples:
   %(prog)s report tracedata/example-4cores.btf -o /tmp/stats --format both
   %(prog)s compare run1.btf run2.btf -o /tmp/compare.html --name-a baseline --name-b tuned
   %(prog)s migrations tracedata/example-4cores.btf -o /tmp/migrations.csv
+  %(prog)s snapshot tracedata/example-4cores.btf -o /tmp/timeline.png --view timeline
+  %(prog)s snapshot tracedata/example-4cores.btf -o /tmp/task.png --view plot --metric exec --task "Producer[1]"
 
 Run "%(prog)s <command> -h" for command-specific help.
 """
@@ -202,6 +206,39 @@ _CLI_LO_HELP = (
 _CLI_HI_HELP = (
     "range end (trace time units; must be greater than --lo)"
 )
+
+_CLI_EPILOG_SNAPSHOT = """\
+Views (--view):
+  timeline   Main task/timeline view (like File -> Save Image / Save SVG).
+             --task centers and highlights that task's row; --lo/--hi zoom
+             to a time range first.
+  heatmap    Migration Heatmap (core-pair x time-bin grid). --task is not
+             supported (the heatmap is inherently cross-task); --lo/--hi
+             scope the grid to a time range.
+  plot       A statistics metric scatter+histogram popup, selected with
+             --metric:
+               tick      tick-interval distribution (trace-wide, no --task)
+               exec      task execution-time distribution   (--task)
+               block     task blocking-time distribution     (--task)
+               inter     task inter-arrival-time distribution (--task)
+               priority  task priority-boost episodes         (--task)
+               preempt   victim vs. one preemptor duration     (--task + --preemptor)
+               interval  interval-id duration distribution     (--interval-id)
+               tag       tag-channel value distribution        (--channel)
+
+Sizing (--width/--height): only used for --view timeline / --view plot; the
+heatmap image size is derived from its data grid.
+
+examples:
+  %(prog)s trace.btf -o timeline.png --view timeline
+  %(prog)s trace.btf -o timeline.svg --view timeline --task "Producer[1]" --lo 0 --hi 500000
+  %(prog)s trace.btf -o heatmap.png --view heatmap
+  %(prog)s trace.btf -o tick.svg --view plot --metric tick
+  %(prog)s trace.btf -o exec.png --view plot --metric exec --task "Producer[1]"
+  %(prog)s trace.btf -o preempt.png --view plot --metric preempt --task "Producer[1]" --preemptor "Consumer[2]"
+  %(prog)s trace.btf -o interval.png --view plot --metric interval --interval-id 0
+  %(prog)s trace.btf -o tag.png --view plot --metric tag --channel tag0_event
+"""
 
 def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.ArgumentParser]]:
     """Return (top-level parser, subcommand parsers keyed by name)."""
@@ -356,11 +393,82 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
     migrations.add_argument("--lo", type=int, default=None, metavar="T", help=_CLI_LO_HELP)
     migrations.add_argument("--hi", type=int, default=None, metavar="T", help=_CLI_HI_HELP)
 
+    snapshot = sub.add_parser(
+        "snapshot",
+        help="export a PNG/SVG image (timeline, migration heatmap, or a metric plot)",
+        description=(
+            "Export a PNG/SVG image without opening the GUI: the main timeline view, "
+            "the Migration Heatmap, or a statistics metric scatter+histogram plot."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=_CLI_EPILOG_SNAPSHOT,
+    )
+    snapshot.add_argument(
+        "trace", metavar="trace.btf",
+        help="path to the .btf trace file to render",
+    )
+    snapshot.add_argument(
+        "-o", "--output", required=True, metavar="PATH",
+        help="output image path (.png or .svg)",
+    )
+    snapshot.add_argument(
+        "--format", choices=("png", "svg"), default=None, metavar="FMT",
+        help="image format (default: infer from -o extension, else png)",
+    )
+    snapshot.add_argument(
+        "--view", choices=("timeline", "heatmap", "plot"), required=True,
+        help="which view to render",
+    )
+    snapshot.add_argument(
+        "--task", default=None, metavar="NAME",
+        help=(
+            "task display name (e.g. 'Producer[1]'), bare name, or merge key; "
+            "required for most --metric values, optional for --view timeline "
+            "(highlights + centers that task), unused for --view heatmap"
+        ),
+    )
+    snapshot.add_argument(
+        "--metric",
+        choices=("tick", "exec", "block", "inter", "priority", "preempt", "interval", "tag"),
+        default=None,
+        help="metric to plot; required when --view plot",
+    )
+    snapshot.add_argument(
+        "--preemptor", default=None, metavar="NAME",
+        help="preemptor task name; required when --metric preempt",
+    )
+    snapshot.add_argument(
+        "--interval-id", default=None, metavar="ID", dest="interval_id",
+        help="interval id (e.g. '0'); required when --metric interval",
+    )
+    snapshot.add_argument(
+        "--channel", default=None, metavar="NAME",
+        help=(
+            "tag channel (e.g. 'tag0_event') or bare index (e.g. '0'); "
+            "required when --metric tag"
+        ),
+    )
+    snapshot.add_argument("--lo", type=int, default=None, metavar="T", help=_CLI_LO_HELP)
+    snapshot.add_argument("--hi", type=int, default=None, metavar="T", help=_CLI_HI_HELP)
+    snapshot.add_argument(
+        "--width", type=int, default=None, metavar="PX",
+        help="image width in pixels (--view timeline default 1600, --view plot default 820)",
+    )
+    snapshot.add_argument(
+        "--height", type=int, default=None, metavar="PX",
+        help="image height in pixels (--view timeline default 900, --view plot default 620)",
+    )
+    snapshot.add_argument(
+        "--theme", choices=("dark", "light"), default="dark",
+        help="colour theme for the rendered image (default: dark)",
+    )
+
     return parser, {
         "report": report,
         "compare": compare,
         "info": info,
         "migrations": migrations,
+        "snapshot": snapshot,
     }
 
 def _cli_export_output_paths(output: str, fmt: Optional[str]) -> Tuple[str, str, str]:
@@ -412,6 +520,8 @@ def _cli_report_run(args: argparse.Namespace) -> int:
     panel._export_scope_override = None
     panel._scope_to_cursors = False
     panel._cursor_times = []
+    panel._cpu_budget_pct = 0.0
+    panel._task_deadlines_ns = {}
     if args.lo is not None and args.hi is not None:
         panel._export_scope_override = (args.lo, args.hi)
 
@@ -571,11 +681,407 @@ def _cli_migrations_main(argv: List[str]) -> int:
     args = _make_arg_parser()[1]["migrations"].parse_args(argv)
     return _cli_migrations_run(args)
 
+# ---------------------------------------------------------------------------
+# snapshot: headless PNG/SVG image export (timeline / heatmap / metric plot)
+# ---------------------------------------------------------------------------
+
+_CLI_SNAPSHOT_TASK_METRICS = ("exec", "block", "inter", "priority", "preempt")
+
+def _cli_resolve_task(trace: "BtfTrace", name: str) -> Tuple[Optional[str], Optional[str]]:
+    """Resolve a --task/--preemptor NAME to a merge key.
+
+    Matches (case-insensitively) against the display name (e.g. 'Producer[1]'),
+    the raw merge key, and the bare name without the '[id]' suffix. Returns
+    (merge_key, None) on a unique match, or (None, error_message) otherwise.
+    """
+    needle = name.strip().lower()
+    exact: List[str] = []
+    bare: List[str] = []
+    for mk in trace.tasks:
+        raw = trace.task_repr.get(mk, mk)
+        disp = _task_display_name(raw)
+        if disp.lower() == needle or mk.lower() == needle or raw.lower() == needle:
+            exact.append(mk)
+            continue
+        if disp.split("[", 1)[0].strip().lower() == needle:
+            bare.append(mk)
+    matches = exact or bare
+    if not matches:
+        sample = ", ".join(
+            _task_display_name(trace.task_repr.get(mk, mk)) for mk in trace.tasks[:20])
+        more = ", ..." if len(trace.tasks) > 20 else ""
+        return None, f"error: no task matches --task {name!r}. Available: {sample}{more}"
+    if len(matches) > 1:
+        names = ", ".join(_task_display_name(trace.task_repr.get(mk, mk)) for mk in matches)
+        return None, f"error: --task {name!r} is ambiguous, matches: {names}"
+    return matches[0], None
+
+def _cli_resolve_interval_id(trace: "BtfTrace", value: str) -> Tuple[Optional[str], Optional[str]]:
+    """Resolve a --interval-id value to a valid trace interval id (exact match)."""
+    needle = value.strip()
+    if needle in trace.interval_ids:
+        return needle, None
+    sample = ", ".join(trace.interval_ids[:20])
+    more = ", ..." if len(trace.interval_ids) > 20 else ""
+    return (None,
+            f"error: no interval matches --interval-id {value!r}. "
+            f"Available: {sample or '(none — trace has no interval markers)'}{more}")
+
+def _cli_resolve_tag_channel(trace: "BtfTrace", value: str) -> Tuple[Optional[str], Optional[str]]:
+    """Resolve a --channel value to a valid tag channel.
+
+    Matches the raw channel name (e.g. 'tag0_event') case-insensitively, or a
+    bare index (e.g. '0') expanded to 'tag{N}_event'.
+    """
+    needle = value.strip().lower()
+    for ch in trace.tag_channels:
+        if ch.lower() == needle:
+            return ch, None
+    candidate = f"tag{needle}_event"
+    if candidate in trace.tag_channels:
+        return candidate, None
+    sample = ", ".join(trace.tag_channels[:20])
+    more = ", ..." if len(trace.tag_channels) > 20 else ""
+    return (None,
+            f"error: no tag channel matches --channel {value!r}. "
+            f"Available: {sample or '(none — trace has no tag channels)'}{more}")
+
+def _cli_snapshot_output_path(output: str, fmt: Optional[str]) -> Tuple[str, str]:
+    """Return (format, path) for the snapshot subcommand (default: png)."""
+    low = output.lower()
+    if fmt is None:
+        fmt = "svg" if low.endswith(".svg") else "png"
+    ext = f".{fmt}"
+    path = output if low.endswith(ext) else f"{output}{ext}"
+    return fmt, path
+
+def _cli_save_widget_png(widget: "QWidget", path: str) -> bool:
+    """Grab *widget* as displayed and save it as a PNG (bypasses SnapshotEditorDialog)."""
+    pixmap, dpr = _normalize_grab_pixmap(widget.grab())
+    return _save_snapshot_png(pixmap, path, dpr)
+
+def _cli_save_widget_svg(widget: "QWidget", path: str, title: str) -> None:
+    """Render *widget* to an SVG file (bypasses QFileDialog)."""
+    sz = widget.size()
+    gen = QSvgGenerator()
+    gen.setFileName(path)
+    gen.setSize(sz)
+    gen.setViewBox(QRectF(0, 0, sz.width(), sz.height()))
+    gen.setTitle(title)
+    gen.setDescription("Generated by RTOS BTF Viewer")
+    painter = QPainter(gen)
+    try:
+        widget.render(painter, QPoint(0, 0))
+    finally:
+        painter.end()
+
+def _cli_save_timeline_svg(view: "TimelineView", path: str) -> None:
+    """Standalone equivalent of MainWindow._on_save_svg (no CPU-load-graph strip)."""
+    scene = view._scene
+    vp_rect = view.viewport().rect()
+    scene_rect = QRectF(
+        view.mapToScene(vp_rect.topLeft()),
+        view.mapToScene(vp_rect.bottomRight()),
+    )
+    w, h = vp_rect.width(), vp_rect.height()
+    gen = QSvgGenerator()
+    gen.setFileName(path)
+    gen.setSize(QSize(int(w), int(h)))
+    gen.setViewBox(QRectF(0, 0, w, h))
+    gen.setTitle("BTF Timeline")
+    gen.setDescription("Generated by RTOS BTF Viewer")
+    painter = QPainter(gen)
+    try:
+        scene.render(painter, QRectF(0, 0, w, h), scene_rect)
+    finally:
+        painter.end()
+
+def _cli_scroll_view_to_task(view: "TimelineView", task_mk: str) -> None:
+    """Standalone equivalent of MainWindow._scroll_view_to_task."""
+    sc = view._scene
+    orth = sc.task_orth_scene_coord(task_mk)
+    if orth is None:
+        return
+    half = (sc._row_height / 2 if sc._horizontal
+            else max(sc._row_height + sc._row_gap, 26) / 2)
+    row_lo, row_hi = orth - half, orth + half
+    vp = view.viewport().rect()
+    if sc._horizontal:
+        vp_lo = view.mapToScene(vp.topLeft()).y()
+        vp_hi = view.mapToScene(vp.bottomLeft()).y()
+        if row_lo >= vp_lo and row_hi <= vp_hi:
+            return
+        cur = view.mapToScene(vp.center())
+        view.centerOn(cur.x(), orth)
+    else:
+        vp_lo = view.mapToScene(vp.topLeft()).x()
+        vp_hi = view.mapToScene(vp.topRight()).x()
+        if row_lo >= vp_lo and row_hi <= vp_hi:
+            return
+        cur = view.mapToScene(vp.center())
+        view.centerOn(orth, cur.y())
+
+def _cli_apply_heatmap_scope(dlg: "_MigrationHeatmapDialog",
+                             lo: Optional[int], hi: Optional[int]) -> None:
+    """Rebuild the level-0 grid for an explicit [lo, hi] scope.
+
+    Standalone equivalent of _MigrationHeatmapDialog.refresh_scope(), which
+    normally derives lo/hi from cursor times on a QMainWindow parent (there
+    is none in headless CLI use).
+    """
+    if lo is None or hi is None:
+        return
+    trace = dlg._trace
+    dlg._scope_lo, dlg._scope_hi = lo, hi
+    dlg._scope_suffix = (
+        f"  ({_format_time(lo, trace.time_scale)} \u2026 {_format_time(hi, trace.time_scale)})")
+    if dlg._apply_scope_cache(lo, hi):
+        dlg._go_level0()
+        return
+    pairs, grid, time_bins = _migration_heatmap_data(trace, lo, hi, bounce_only=dlg._bounce_only)
+    dlg._pairs = pairs
+    dlg._grid0 = grid
+    if dlg._uses_matrix:
+        dlg._matrix_cores, dlg._matrix_grid = _migration_heatmap_matrix(
+            trace, lo, hi, bounce_only=dlg._bounce_only)
+    span = max(hi - lo, 1)
+    dlg._cache_scope_grid(lo, hi, pairs, grid, time_bins, lo, hi, span)
+    dlg._ov_t_min, dlg._ov_t_max = lo, hi
+    dlg._ov_bin_w = span / time_bins
+    dlg._ov_time_bins = time_bins
+    dlg._go_level0()
+
+def _cli_snapshot_timeline(trace: "BtfTrace",
+                          args: argparse.Namespace) -> Tuple[Optional["TimelineView"], Optional[str]]:
+    if args.metric is not None:
+        print("warning: --metric is ignored for --view timeline", file=sys.stderr)
+    mk = None
+    if args.task:
+        mk, err = _cli_resolve_task(trace, args.task)
+        if err:
+            return None, err
+
+    view = TimelineView()
+    view.resize(args.width or 1600, args.height or 900)
+    if args.theme == "light":
+        view._scene.set_theme(False, rebuild=False)
+    view.load_trace(trace)
+    if args.lo is not None and args.hi is not None:
+        view._fit_mode = False  # else the debounced resize-to-fit handler
+                                 # (triggered by view.show() below) discards
+                                 # this explicit zoom and re-fits the whole trace
+        view._scene.zoom_to_range(args.lo, args.hi, view._time_axis_viewport_px())
+        view._navigate_time_to_ns((args.lo + args.hi) // 2)
+    if mk is not None:
+        view._scene.set_highlighted_task(mk, locked=True)
+        _cli_scroll_view_to_task(view, mk)
+    view.show()
+    _process_ui_events_safely()
+    _process_ui_events_safely()
+    return view, None
+
+def _cli_apply_theme_chrome(app: "QApplication", is_dark: bool) -> None:
+    """Apply the dark/light palette + minimal QSS for headless snapshot dialogs.
+
+    ``_MetricsPlotDialog`` and friends paint their scatter/histogram canvases
+    directly (respecting ``is_dark``), but plain Qt chrome around them
+    (QComboBox, QLabel, and the QWidget containers that hold them, e.g. the
+    "Histogram scale" toolbar) relies on the app-wide palette/QSS that
+    ``MainWindow._apply_theme`` normally installs. The CLI's headless
+    bootstrap (``_bootstrap_qt_app``) never runs that path, so without this,
+    that chrome renders with the native/light OS palette even when
+    ``--theme dark`` (the default) was requested — a white bar over an
+    otherwise dark plot.
+    """
+    c = MainWindow._theme_tokens(is_dark)
+    palette = QPalette()
+    palette.setColor(QPalette.Window,          QColor(c['win_bg']))
+    palette.setColor(QPalette.WindowText,      QColor(c['text']))
+    palette.setColor(QPalette.Base,            QColor(c['win_base']))
+    palette.setColor(QPalette.AlternateBase,   QColor(c['mid']))
+    palette.setColor(QPalette.Text,            QColor(c['text']))
+    palette.setColor(QPalette.Button,          QColor(c['mid']))
+    palette.setColor(QPalette.ButtonText,      QColor(c['text']))
+    palette.setColor(QPalette.Highlight,       QColor(c['accent']))
+    palette.setColor(QPalette.HighlightedText, QColor("#FFFFFF"))
+    app.setPalette(palette)
+    app.setStyleSheet(f"""
+        QComboBox {{ background:{c['combo_bg']}; color:{c['text']};
+                     border:1px solid {c['input_border']}; border-radius:3px;
+                     padding:2px 6px; min-height:1.6em; }}
+        QComboBox QAbstractItemView {{ background:{c['combo_view_bg']}; color:{c['text']};
+                     selection-background-color:{c['accent']}; selection-color:#FFFFFF; }}
+        QLabel {{ color:{c['text']}; }}
+    """)
+
+
+def _cli_snapshot_heatmap(trace: "BtfTrace",
+                         args: argparse.Namespace) -> Tuple[Optional["_MigrationHeatmapDialog"], Optional[str]]:
+    if args.metric is not None:
+        print("warning: --metric is ignored for --view heatmap", file=sys.stderr)
+    if args.task:
+        return None, "error: --task is not supported for --view heatmap (cross-task view)"
+    dlg = _MigrationHeatmapDialog(trace, parent=None)
+    if args.lo is not None and args.hi is not None:
+        _cli_apply_heatmap_scope(dlg, args.lo, args.hi)
+    dlg.show()
+    _process_ui_events_safely()
+    return dlg, None
+
+def _cli_snapshot_plot(trace: "BtfTrace",
+                       args: argparse.Namespace) -> Tuple[Optional["_MetricsPlotDialog"], Optional[str]]:
+    metric = args.metric
+    if metric is None:
+        return None, "error: --metric is required for --view plot"
+    if metric == "tick":
+        if args.task:
+            return None, "error: --task is not used with --metric tick (trace-wide)"
+        mk = "__tick_dist__"
+    elif metric == "interval":
+        if not args.interval_id:
+            return None, "error: --interval-id is required for --metric interval"
+        mk, err = _cli_resolve_interval_id(trace, args.interval_id)
+        if err:
+            return None, err
+    elif metric == "tag":
+        if not args.channel:
+            return None, "error: --channel is required for --metric tag"
+        mk, err = _cli_resolve_tag_channel(trace, args.channel)
+        if err:
+            return None, err
+    else:
+        if not args.task:
+            return None, f"error: --task is required for --metric {metric}"
+        mk, err = _cli_resolve_task(trace, args.task)
+        if err:
+            return None, err
+        if args.interval_id:
+            print("warning: --interval-id is only used with --metric interval", file=sys.stderr)
+        if args.channel:
+            print("warning: --channel is only used with --metric tag", file=sys.stderr)
+    if metric == "interval" and args.task:
+        print("warning: --task is not used with --metric interval (use --interval-id)", file=sys.stderr)
+    if metric == "tag" and args.task:
+        print("warning: --task is not used with --metric tag (use --channel)", file=sys.stderr)
+
+    panel = _StatsPanel.__new__(_StatsPanel)
+    panel._trace = trace
+    panel._export_scope_override = None
+    panel._scope_to_cursors = False
+    panel._cursor_times = []
+    panel._cpu_budget_pct = 0.0
+    panel._task_deadlines_ns = {}
+    panel._is_dark = (args.theme != "light")
+    panel._plot_preemptor = None
+    panel._plot_interval_id = None
+    if args.lo is not None and args.hi is not None:
+        panel._export_scope_override = (args.lo, args.hi)
+
+    if metric == "preempt":
+        if not args.preemptor:
+            return None, "error: --preemptor is required for --metric preempt"
+        preemptor_mk, err = _cli_resolve_task(trace, args.preemptor)
+        if err:
+            return None, err
+        raw = trace.task_repr.get(preemptor_mk, preemptor_mk)
+        panel._plot_preemptor = _task_display_name(raw)
+    elif args.preemptor:
+        print("warning: --preemptor is only used with --metric preempt", file=sys.stderr)
+
+    built = panel._build_plot_points(trace, mk, metric)
+    if built is None or not built[1]:
+        return None, f"error: no data to plot for --metric {metric} (--task {args.task or 'n/a'})"
+    title, pts, color = built
+    scoped, badge, detail = panel._plot_scope_banner()
+    y_as_time = metric != "tag"
+    dlg = _MetricsPlotDialog(
+        title, pts, trace.time_scale, color,
+        on_point_click=None,
+        is_dark=panel._is_dark,
+        scope_scoped=scoped,
+        scope_badge=badge,
+        scope_detail=detail,
+        y_as_time=y_as_time,
+        parent=None,
+    )
+    if args.width or args.height:
+        dlg.resize(args.width or dlg.width(), args.height or dlg.height())
+    dlg.show()
+    _process_ui_events_safely()
+    _process_ui_events_safely()
+    return dlg, None
+
+def _cli_snapshot_run(args: argparse.Namespace) -> int:
+    err = _cli_validate_range_pair(args.lo, args.hi, "range")
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+
+    path = os.path.abspath(args.trace)
+    trace, err_load = _cli_load_trace(path)
+    if err_load:
+        print(err_load, file=sys.stderr)
+        return 1
+
+    fmt, out_path = _cli_snapshot_output_path(args.output, args.format)
+
+    _platform_preflight()
+    app = _bootstrap_qt_app()
+    _cli_apply_theme_chrome(app, args.theme != "light")
+
+    if args.view == "timeline":
+        widget, err = _cli_snapshot_timeline(trace, args)
+        title = "BTF Timeline"
+    elif args.view == "heatmap":
+        widget, err = _cli_snapshot_heatmap(trace, args)
+        title = "Migration Heatmap"
+    else:
+        widget, err = _cli_snapshot_plot(trace, args)
+        title = widget.windowTitle() if widget is not None else "Metric Plot"
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+
+    try:
+        if args.view == "timeline":
+            if fmt == "svg":
+                _cli_save_timeline_svg(widget, out_path)
+            else:
+                widget.save_image(out_path)
+        elif args.view == "heatmap":
+            if fmt == "svg":
+                widget._canvas.render_full_svg(out_path, title)
+            elif not widget._canvas.render_full_pixmap().save(out_path):
+                print(f"error: could not save PNG: {out_path}", file=sys.stderr)
+                return 1
+        else:
+            if fmt == "svg":
+                _cli_save_widget_svg(widget._content, out_path, title)
+            elif not _cli_save_widget_png(widget._content, out_path):
+                print(f"error: could not save PNG: {out_path}", file=sys.stderr)
+                return 1
+    except (OSError, ValueError, RuntimeError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        try:
+            widget.close()
+        except Exception:
+            pass
+
+    print(out_path)
+    return 0
+
+def _cli_snapshot_main(argv: List[str]) -> int:
+    args = _make_arg_parser()[1]["snapshot"].parse_args(argv)
+    return _cli_snapshot_run(args)
+
 _CLI_COMMANDS = {
     "report": _cli_report_main,
     "compare": _cli_compare_main,
     "info": _cli_info_main,
     "migrations": _cli_migrations_main,
+    "snapshot": _cli_snapshot_main,
 }
 
 def _cli_gui_trace_paths(argv: List[str]) -> List[str]:

@@ -172,7 +172,7 @@ The distribution chart has two layers:
 
 # Execution Time Distribution
 
-![w:850](../images/stats/stats-exec-cs8.svg)
+![w:850](../images/stats/stats-exec-cs11.svg)
 
 *Scatter (top): all slices over the trace span. Histogram (bottom): log-scaled duration axis when range spans > 1 order of magnitude. **p50** (green) and **p95** (orange) lines align with the right-axis CDF ticks.*
 
@@ -225,9 +225,9 @@ Open **Statistics → Blocking Time**, sort by **Max** or **p95**.
 
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">
 
-![](../images/stats/stats-block-cs8.svg)
+![](../images/stats/stats-block-cs11.svg)
 
-![](../images/stats/stats-preempt-cs10-cs11.svg)
+![](../images/stats/stats-preempt-cs24-cs25.svg)
 
 </div>
 
@@ -265,7 +265,7 @@ Look for the **red bottom stripe** on the holder's task row — it marks the ent
 
 # Priority Inversion — Visual Evidence
 
-![w:860](../images/stats/tasks-priority-il150.svg)
+![w:860](../images/stats/tasks-priority-il266.svg)
 
 *Core View expanded to the boost window. The **red bottom stripe** on the low-priority holder's row marks the `priority_inherit` → `priority_disinherit` interval. During this window the kernel prevents M from preempting L.*
 
@@ -273,7 +273,7 @@ Look for the **red bottom stripe** on the holder's task row — it marks the ent
 
 # Priority Boost Distribution Chart
 
-![w:820](../images/stats/stats-priority-il150.svg)
+![w:820](../images/stats/stats-priority-il266.svg)
 
 *Red points = mutex-inherit episodes (kernel-managed); orange = manual priority boosts. The **Pattern** column classifies each episode. Click any point to zoom the timeline and annotate that exact episode.*
 
@@ -399,6 +399,14 @@ Click any **Max** link in the violation table → jump directly to that slice on
 Click **Tick Distribution…** for a histogram of tick intervals.
 
 > A missed tick distorts *all* derived metrics (CPU%, blocking, inter-arrival). Resolve tick issues before trusting other numbers.
+
+---
+
+# Tick Distribution Chart
+
+![w:820](../images/stats/stats-tick.svg)
+
+*`example-8cores.btf`: 1966 TICK events, nominal 1.000 ms period (1000 Hz), CV ≈ 24.7 % → **TICKLESS**. Histogram peaks at 1×, 2×, 3× the nominal period show idle stretches skipping ticks; the largest gaps (up to 2.340 ms) are the 4 estimated missed ticks.*
 
 ---
 

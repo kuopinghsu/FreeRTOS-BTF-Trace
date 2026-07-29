@@ -72,6 +72,7 @@ export function computeDeadlineViolations(trace, settings = {}, lo = null, hi = 
         cpuViolations.push({
           mk,
           label: disp,
+          pctRaw: pct,
           pct: pct.toFixed(1),
           budgetPct: cpuBudget.toFixed(1),
         })
@@ -80,6 +81,6 @@ export function computeDeadlineViolations(trace, settings = {}, lo = null, hi = 
   }
 
   sliceViolations.sort((a, b) => b.durationNs - a.durationNs)
-  cpuViolations.sort((a, b) => Number(b.pct) - Number(a.pct))
+  cpuViolations.sort((a, b) => b.pctRaw - a.pctRaw)
   return { sliceViolations, cpuViolations }
 }

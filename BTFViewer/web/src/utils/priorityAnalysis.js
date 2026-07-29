@@ -44,7 +44,9 @@ function mediumBlockers(basePri, peakPri, taskBasePriority, holderMk, taskRepr) 
       out.push({ mk, label: taskLabelForMergeKey({ taskRepr }, mk), basePri: pri })
     }
   }
-  out.sort((a, b) => a.basePri - b.basePri || a.label.localeCompare(b.label))
+  // Match desktop's `sorted(out)` over display-name strings (parser.py
+  // `_priority_medium_blockers`): alphabetical by label, not by priority.
+  out.sort((a, b) => (a.label < b.label ? -1 : a.label > b.label ? 1 : 0))
   return out
 }
 

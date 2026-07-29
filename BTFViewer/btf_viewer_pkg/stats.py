@@ -1914,6 +1914,50 @@ class _StatsTableHoverFilter(QObject):
             self._clear_fn()
         return False
 
+class _StatsItemDelegate(QStyledItemDelegate):
+    """Paint stats-table cells (background fill + text) ourselves instead of
+    delegating to `QStyle::drawControl(CE_ItemViewItem, ...)`.
+
+    Some native/desktop QStyle plugins (GTK/Breeze-style integration, some
+    style-sheet-proxy configurations, etc.) do not honour a
+    `QTableWidgetItem`'s `Qt::BackgroundRole` brush when painting item-view
+    cells, which silently defeats per-row hover highlighting set via
+    `item.setBackground(...)` — even though the underlying item data is
+    correct and the exact same code renders fine under Qt's own Fusion/
+    offscreen style. Painting the background and text directly bypasses
+    QStyle/QSS entirely for this one aspect, so the highlight is guaranteed
+    to be visible regardless of the active widget style. Stats-table items
+    are plain text cells (no icons/checkboxes), so a minimal re-implementation
+    is sufficient.
+    """
+
+    def paint(self, painter: QPainter, option, index) -> None:  # noqa: N802
+        painter.save()
+        opt_state = option.state
+        if opt_state & QStyle.StateFlag.State_Selected:
+            painter.fillRect(option.rect, option.palette.color(
+                QPalette.ColorGroup.Active, QPalette.ColorRole.Highlight))
+            pen_color = option.palette.color(
+                QPalette.ColorGroup.Active, QPalette.ColorRole.HighlightedText)
+        else:
+            bg = index.data(Qt.ItemDataRole.BackgroundRole)
+            if isinstance(bg, QBrush) and bg.style() != Qt.BrushStyle.NoBrush:
+                painter.fillRect(option.rect, bg)
+            fg = index.data(Qt.ItemDataRole.ForegroundRole)
+            pen_color = (fg.color() if isinstance(fg, QBrush) and
+                         fg.style() != Qt.BrushStyle.NoBrush else
+                         option.palette.color(QPalette.ColorRole.Text))
+        painter.setPen(pen_color)
+        font = index.data(Qt.ItemDataRole.FontRole)
+        painter.setFont(font if isinstance(font, QFont) else option.font)
+        align = index.data(Qt.ItemDataRole.TextAlignmentRole)
+        align = int(align) if align is not None else int(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        text = index.data(Qt.ItemDataRole.DisplayRole)
+        rect = option.rect.adjusted(3, 0, -3, 0)
+        painter.drawText(rect, align, "" if text is None else str(text))
+        painter.restore()
+
 class _StatsTableBodyCursorFilter(QObject):
     """Pointing-hand cursor over clickable table cells only (not resize grips)."""
 
@@ -3233,11 +3277,13 @@ class _StatsPanel(QWidget):
     task_clicked = Signal(str)   # merge key of the clicked task row
     segment_jump   = Signal(int)    # ns - scroll timeline to this timestamp
     plot_point_clicked = Signal(object, int, str)  # payload, mark_ns, note
+    core_clicked = Signal(str)   # core name of the clicked core row
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._ui_font_size: int = UI_FONT_SIZE
         self._is_dark: bool = True
+        self._stats_item_delegate = _StatsItemDelegate(self)
         self._plot_dlg = None   # keep reference to prevent GC
         self._plot_mk: Optional[str] = None
         self._plot_kind: Optional[str] = None   # "exec", "block", "inter", "preempt", "interval", "tag", "tick"
@@ -3478,6 +3524,47 @@ class _StatsPanel(QWidget):
         vp.installEventFilter(filt)
         table._body_cursor_filter = filt  # prevent GC
 
+    def _wire_stats_table_row_hover(self, table: QTableWidget) -> None:
+        """Highlight every cell in the row under the mouse; restore colours on leave."""
+        state = {"row": -1, "orig": []}
+
+        def _clear_row_hover() -> None:
+            row = state["row"]
+            if row < 0:
+                return
+            for c, bg in enumerate(state["orig"]):
+                item = table.item(row, c)
+                if item is not None:
+                    item.setBackground(bg)
+            state["row"] = -1
+            state["orig"] = []
+
+        def _set_row_hover(row: int) -> None:
+            if row < 0 or row == state["row"]:
+                return
+            _clear_row_hover()
+            state["row"] = row
+            state["orig"] = [
+                table.item(row, c).background() if table.item(row, c) is not None else QBrush()
+                for c in range(table.columnCount())
+            ]
+            # Recomputed on every hover (not captured once at wiring time) so
+            # a theme toggle takes effect immediately without needing a
+            # table rebuild/app restart.
+            hover_bg = self._stats_table_hover_bg()
+            for c in range(table.columnCount()):
+                item = table.item(row, c)
+                if item is not None:
+                    item.setBackground(hover_bg)
+
+        table.setMouseTracking(True)
+        table.viewport().setMouseTracking(True)
+        table.itemEntered.connect(
+            lambda item: _set_row_hover(item.row()) if item is not None else None)
+        hover_filter = _StatsTableHoverFilter(_clear_row_hover)
+        table.viewport().installEventFilter(hover_filter)
+        table._stats_row_hover_filter = hover_filter  # prevent GC
+
     def relax_content_width(self) -> None:
         """Let the dock shrink below a previously expanded content width."""
         _relax_widget_tree(self)
@@ -3578,12 +3665,22 @@ class _StatsPanel(QWidget):
 
     def _stats_table_qss(self, ui_fs: str, bg: str, fg: str, muted: str,
                          hdr_bg: str) -> str:
-        """QSS for stats-panel tables."""
+        """QSS for stats-panel tables.
+
+        Deliberately does NOT set a `background` on `::item` — doing so makes
+        Qt's style paint that flat colour for every cell regardless of the
+        item's `Qt::BackgroundRole` brush, which silently defeats per-row
+        hover highlighting (and any other per-item background, e.g. status
+        colouring) set via `item.setBackground(...)` in Python. The item's
+        own background brush (always set explicitly when cells are built)
+        is what actually paints the base colour; only `color`/border/padding
+        need to come from the stylesheet.
+        """
         return (
             f"font-size:{ui_fs};"
             f"QTableWidget#stats_table{{background:{bg}; color:{fg}; border:none;}}"
             f"QWidget#stats_table_viewport{{background:{bg};}}"
-            f"QTableWidget#stats_table::item{{background:{bg}; color:{fg}; "
+            f"QTableWidget#stats_table::item{{color:{fg}; "
             f"border:none; padding:0px 3px;}}"
             f"QHeaderView#stats_table_header::section{{border:none; "
             f"background:{hdr_bg}; color:{muted}; padding:0px 3px;}}"
@@ -3608,6 +3705,7 @@ class _StatsPanel(QWidget):
         table.viewport().setObjectName("stats_table_viewport")
         table.setStyleSheet(
             self._stats_table_qss(ui_fs, bg_name, fg_name, muted, hdr_name))
+        table.setItemDelegate(self._stats_item_delegate)
         table.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         table.viewport().setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         for w in (table, table.viewport()):
@@ -5307,7 +5405,7 @@ class _StatsPanel(QWidget):
             f"<td>{nsus}</td><td>{nres}</td>"
             f"<td>{_esc(_format_time(alive, ts)) if alive else '—'}</td>"
             f"<td>{nev}</td></tr>"
-            for _mk, label, cns, dns, nsus, nres, alive, nev in lc_rows_html
+            for mk, label, cns, dns, nsus, nres, alive, nev in lc_rows_html
         ) or '<tr><td colspan="7" class="empty">No lifecycle events</td></tr>'
         lifecycle_html = (
             f'<section class="report-card"><h2>Task Lifecycle{_esc(scope_title)}</h2>'
@@ -5779,7 +5877,7 @@ class _StatsPanel(QWidget):
             writer.writerow([f"Task Lifecycle{scope_suffix}"])
             writer.writerow(["Task", "Created", "Deleted", "Suspends", "Resumes", "Alive span", "Events"])
             if lc_rows_csv:
-                for _mk, label, create_ns, delete_ns, n_sus, n_res, alive_ns, n_ev in lc_rows_csv:
+                for mk, label, create_ns, delete_ns, n_sus, n_res, alive_ns, n_ev in lc_rows_csv:
                     created = _us(_format_time(create_ns, trace.time_scale)) if create_ns is not None else ""
                     deleted = _us(_format_time(delete_ns, trace.time_scale)) if delete_ns is not None else ""
                     alive   = _us(_format_time(alive_ns, trace.time_scale)) if alive_ns else ""
@@ -6006,8 +6104,18 @@ class _StatsPanel(QWidget):
                 tbl = QTableWidget(len(_bd_rows), len(headers))
                 tbl.setHorizontalHeaderLabels(headers)
                 tbl.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-                tbl.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+                tbl.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+                tbl.setFocusPolicy(Qt.FocusPolicy.NoFocus)
                 tbl.verticalHeader().setVisible(False)
+                tbl.setShowGrid(False)
+                tbl.setFrameShape(QFrame.NoFrame)
+                tbl.verticalHeader().setDefaultSectionSize(STATS_TABLE_ROW_H)
+                tbl.verticalHeader().setMinimumSectionSize(STATS_TABLE_ROW_H)
+                tbl.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+                tbl.horizontalHeader().setFixedHeight(18)
+                tbl.horizontalHeader().setSectionsClickable(True)
+                tbl.horizontalHeader().setSortIndicatorShown(True)
+                _item_bg = self._apply_stats_table_theme(tbl, _fs)
                 for r, (core, active_ns, idle_ns, tick_ns, gap_ns, span_ns) in enumerate(_bd_rows):
                     s = max(span_ns, 1)
                     pct_a = 100.0 * active_ns / s
@@ -6022,9 +6130,27 @@ class _StatsPanel(QWidget):
                         (f"{pct_g:.1f}%", pct_g),
                     ]):
                         item = _StatsSortItem(val, key)
-                        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                        item.setTextAlignment(
+                            (Qt.AlignmentFlag.AlignLeft if c == 0 else Qt.AlignmentFlag.AlignRight)
+                            | Qt.AlignmentFlag.AlignVCenter)
+                        item.setBackground(_item_bg)
+                        if c == 0:
+                            item.setData(Qt.ItemDataRole.UserRole, core)
+                            item.setToolTip(f"Click to show \u2018{core}\u2019 in Core View")
                         tbl.setItem(r, c, item)
+                tbl.setSortingEnabled(True)
+
+                def _on_core_breakdown_row(row: int, _col: int) -> None:
+                    item = tbl.item(row, 0)
+                    if item is None:
+                        return
+                    core = item.data(Qt.ItemDataRole.UserRole)
+                    if core:
+                        self.core_clicked.emit(core)
+
+                tbl.cellClicked.connect(_on_core_breakdown_row)
                 self._wire_stats_table_click_cursor(tbl)
+                self._wire_stats_table_row_hover(tbl)
                 self._wrap_table_with_resizer(blay, tbl, "core_breakdown")
 
             self._add_collapsible_section(
@@ -6153,6 +6279,7 @@ class _StatsPanel(QWidget):
                 table.resizeColumnsToContents()
                 table.setColumnWidth(3, min(table.columnWidth(3), 76))
                 table.setSortingEnabled(True)
+                self._wire_stats_table_row_hover(table)
                 host = QWidget()
                 hlay = QVBoxLayout(host)
                 hlay.setContentsMargins(0, 0, 0, 0)
@@ -6206,8 +6333,18 @@ class _StatsPanel(QWidget):
             tbl = QTableWidget(len(_pair_rows), len(headers))
             tbl.setHorizontalHeaderLabels(headers)
             tbl.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-            tbl.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+            tbl.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+            tbl.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             tbl.verticalHeader().setVisible(False)
+            tbl.setShowGrid(False)
+            tbl.setFrameShape(QFrame.NoFrame)
+            tbl.verticalHeader().setDefaultSectionSize(STATS_TABLE_ROW_H)
+            tbl.verticalHeader().setMinimumSectionSize(STATS_TABLE_ROW_H)
+            tbl.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+            tbl.horizontalHeader().setFixedHeight(18)
+            tbl.horizontalHeader().setSectionsClickable(True)
+            tbl.horizontalHeader().setSortIndicatorShown(True)
+            _item_bg = self._apply_stats_table_theme(tbl, _fs)
             for r, (fc, tc, cnt, bnc, avg_gap) in enumerate(_pair_rows):
                 pct = 100.0 * bnc / cnt if cnt else 0.0
                 for c, (val, sort_key) in enumerate([
@@ -6219,9 +6356,14 @@ class _StatsPanel(QWidget):
                     (_format_time(avg_gap, ts), avg_gap),
                 ]):
                     item = _StatsSortItem(val, sort_key)
-                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    item.setTextAlignment(
+                        (Qt.AlignmentFlag.AlignLeft if c <= 1 else Qt.AlignmentFlag.AlignRight)
+                        | Qt.AlignmentFlag.AlignVCenter)
+                    item.setBackground(_item_bg)
                     tbl.setItem(r, c, item)
-            self._wire_stats_table_click_cursor(tbl)
+            tbl.setSortingEnabled(True)
+
+            self._wire_stats_table_row_hover(tbl)
             self._wrap_table_with_resizer(blay, tbl, "core_pairs")
 
         self._add_collapsible_section(
@@ -6354,10 +6496,17 @@ class _StatsPanel(QWidget):
                     table.setShowGrid(False)
                     table.setFrameShape(QFrame.NoFrame)
                     table.verticalHeader().setDefaultSectionSize(STATS_TABLE_ROW_H)
+                    table.verticalHeader().setMinimumSectionSize(STATS_TABLE_ROW_H)
+                    table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
                     table.horizontalHeader().setSectionsClickable(True)
                     table.horizontalHeader().setSortIndicatorShown(True)
                     self._apply_stats_table_theme(table, _fs)
                     _item_bg = QBrush(self._stats_table_colors()[0])
+                    _priority_align = [
+                        Qt.AlignmentFlag.AlignLeft, Qt.AlignmentFlag.AlignRight,
+                        Qt.AlignmentFlag.AlignRight, Qt.AlignmentFlag.AlignRight,
+                        Qt.AlignmentFlag.AlignRight, Qt.AlignmentFlag.AlignLeft,
+                    ]
                     for ri, row in enumerate(_priority_rows):
                         mk, label, base, peak, count, total, pattern, total_ns = row
                         vals = [label, str(base), str(peak), str(count), total, pattern]
@@ -6368,6 +6517,7 @@ class _StatsPanel(QWidget):
                             item = _StatsSortItem(val, sort_keys[ci])
                             item.setFlags(Qt.ItemFlag.ItemIsEnabled)
                             item.setBackground(_item_bg)
+                            item.setTextAlignment(_priority_align[ci] | Qt.AlignmentFlag.AlignVCenter)
                             if ci == 0:
                                 item.setData(Qt.ItemDataRole.UserRole, mk)
                             if ci == 5 and "L/M/H" in pattern:
@@ -6385,7 +6535,7 @@ class _StatsPanel(QWidget):
 
                     table.cellClicked.connect(_on_priority_row_clicked)
                     self._wire_stats_table_click_cursor(table)
-                    table.resizeRowsToContents()
+                    self._wire_stats_table_row_hover(table)
                     self._wrap_table_with_resizer(play, table, "priority")
                 blay.addWidget(host)
 
@@ -6429,11 +6579,19 @@ class _StatsPanel(QWidget):
                     table.setShowGrid(False)
                     table.setFrameShape(QFrame.NoFrame)
                     table.verticalHeader().setDefaultSectionSize(STATS_TABLE_ROW_H)
+                    table.verticalHeader().setMinimumSectionSize(STATS_TABLE_ROW_H)
+                    table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
                     table.horizontalHeader().setSectionsClickable(True)
                     table.horizontalHeader().setSortIndicatorShown(True)
                     self._apply_stats_table_theme(table, _fs)
                     _item_bg = QBrush(self._stats_table_colors()[0])
                     _status_rank = {"error": 0, "warning": 1, "ok": 2}
+                    _sync_align = [
+                        Qt.AlignmentFlag.AlignLeft, Qt.AlignmentFlag.AlignLeft,
+                        Qt.AlignmentFlag.AlignRight, Qt.AlignmentFlag.AlignRight,
+                        Qt.AlignmentFlag.AlignRight, Qt.AlignmentFlag.AlignRight,
+                        Qt.AlignmentFlag.AlignLeft,
+                    ]
                     for ri, row in enumerate(_sync_rows):
                         _key, kind, ptr, label, holds, issues, avg, status_label, status, avg_ns, bounces = row[:11]
                         vals = [label, kind, str(holds), str(issues), str(bounces), avg, status_label]
@@ -6446,6 +6604,7 @@ class _StatsPanel(QWidget):
                             item = _StatsSortItem(val, sort_keys[ci])
                             item.setFlags(Qt.ItemFlag.ItemIsEnabled)
                             item.setBackground(_item_bg)
+                            item.setTextAlignment(_sync_align[ci] | Qt.AlignmentFlag.AlignVCenter)
                             if ci == 0:
                                 item.setData(Qt.ItemDataRole.UserRole, _key)
                             if ci == 4 and bounces > 0:
@@ -6455,7 +6614,7 @@ class _StatsPanel(QWidget):
                                 item.setForeground(QBrush(QColor(color)))
                             table.setItem(ri, ci, item)
                     table.setSortingEnabled(True)
-                    table.resizeRowsToContents()
+                    self._wire_stats_table_row_hover(table)
                     self._wrap_table_with_resizer(play, table, "sync")
                     _issues_display, _issues_cap_note = cap_stats_table_rows(
                         _sync_issues_scoped)
@@ -6471,10 +6630,17 @@ class _StatsPanel(QWidget):
                         itable.setShowGrid(False)
                         itable.setFrameShape(QFrame.NoFrame)
                         itable.verticalHeader().setDefaultSectionSize(STATS_TABLE_ROW_H)
+                        itable.verticalHeader().setMinimumSectionSize(STATS_TABLE_ROW_H)
+                        itable.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
                         itable.horizontalHeader().setSectionsClickable(True)
                         itable.horizontalHeader().setSortIndicatorShown(True)
                         self._apply_stats_table_theme(itable, _fs)
                         _item_bg = QBrush(self._stats_table_colors()[0])
+                        _issue_align = [
+                            Qt.AlignmentFlag.AlignRight, Qt.AlignmentFlag.AlignLeft,
+                            Qt.AlignmentFlag.AlignLeft, Qt.AlignmentFlag.AlignLeft,
+                            Qt.AlignmentFlag.AlignLeft, Qt.AlignmentFlag.AlignLeft,
+                        ]
 
                         def _on_issue_row(row: int, _col: int) -> None:
                             item = itable.item(row, 0)
@@ -6496,6 +6662,7 @@ class _StatsPanel(QWidget):
 
                         itable.cellClicked.connect(_on_issue_row)
                         self._wire_stats_table_click_cursor(itable)
+                        self._wire_stats_table_row_hover(itable)
                         for ri, iss in enumerate(_issues_display):
                             vals = [
                                 _format_time(iss["time_ns"], trace.time_scale),
@@ -6519,6 +6686,7 @@ class _StatsPanel(QWidget):
                                 item = _StatsSortItem(val, sort_keys[ci])
                                 item.setFlags(Qt.ItemFlag.ItemIsEnabled)
                                 item.setBackground(_item_bg)
+                                item.setTextAlignment(_issue_align[ci] | Qt.AlignmentFlag.AlignVCenter)
                                 item.setToolTip(tip)
                                 if ci == 0:
                                     item.setData(Qt.ItemDataRole.UserRole, iss)
@@ -6530,7 +6698,6 @@ class _StatsPanel(QWidget):
                                         item.setForeground(QBrush(QColor("#F39C12")))
                                 itable.setItem(ri, ci, item)
                         itable.setSortingEnabled(True)
-                        itable.resizeRowsToContents()
                         self._wrap_table_with_resizer(play, itable, "sync_issues")
                         self._add_stats_table_cap_note(play, _issues_cap_note, _fs)
                 blay.addWidget(host)
@@ -6565,11 +6732,19 @@ class _StatsPanel(QWidget):
                 table.setShowGrid(False)
                 table.setFrameShape(QFrame.NoFrame)
                 table.verticalHeader().setDefaultSectionSize(STATS_TABLE_ROW_H)
+                table.verticalHeader().setMinimumSectionSize(STATS_TABLE_ROW_H)
+                table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
                 table.horizontalHeader().setSectionsClickable(True)
                 table.horizontalHeader().setSortIndicatorShown(True)
                 self._apply_stats_table_theme(table, _fs)
                 _item_bg = QBrush(self._stats_table_colors()[0])
                 _status_rank = {"error": 0, "warning": 1, "ok": 2}
+                _queue_align = [
+                    Qt.AlignmentFlag.AlignLeft, Qt.AlignmentFlag.AlignLeft,
+                    Qt.AlignmentFlag.AlignRight, Qt.AlignmentFlag.AlignRight,
+                    Qt.AlignmentFlag.AlignRight, Qt.AlignmentFlag.AlignRight,
+                    Qt.AlignmentFlag.AlignLeft,
+                ]
                 for ri, row in enumerate(_queue_rows):
                     _key, kind, ptr, label, holds, issues, avg, status_label, status, avg_ns, bounces = row[:11]
                     vals = [label, kind, str(holds), str(issues), str(bounces), avg, status_label]
@@ -6582,6 +6757,7 @@ class _StatsPanel(QWidget):
                         item = _StatsSortItem(val, sort_keys[ci])
                         item.setFlags(Qt.ItemFlag.ItemIsEnabled)
                         item.setBackground(_item_bg)
+                        item.setTextAlignment(_queue_align[ci] | Qt.AlignmentFlag.AlignVCenter)
                         if ci == 4 and bounces > 0:
                             item.setForeground(QBrush(QColor("#F39C12")))
                         if ci == 6 and status != "ok":
@@ -6589,7 +6765,7 @@ class _StatsPanel(QWidget):
                             item.setForeground(QBrush(QColor(color)))
                         table.setItem(ri, ci, item)
                 table.setSortingEnabled(True)
-                table.resizeRowsToContents()
+                self._wire_stats_table_row_hover(table)
                 self._wrap_table_with_resizer(blay, table, "queue")
 
             self._add_collapsible_section(
@@ -6613,18 +6789,32 @@ class _StatsPanel(QWidget):
             table = QTableWidget(len(lc_rows), len(headers))
             table.setHorizontalHeaderLabels(headers)
             table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-            table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-            table.setAlternatingRowColors(True)
+            table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+            table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             table.verticalHeader().setVisible(False)
+            table.setShowGrid(False)
+            table.setFrameShape(QFrame.NoFrame)
             table.verticalHeader().setDefaultSectionSize(STATS_TABLE_ROW_H)
+            table.verticalHeader().setMinimumSectionSize(STATS_TABLE_ROW_H)
+            table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+            table.horizontalHeader().setFixedHeight(18)
+            table.horizontalHeader().setSectionsClickable(True)
+            table.horizontalHeader().setSortIndicatorShown(True)
+            _item_bg = self._apply_stats_table_theme(table, _fs)
+            _lc_create_ns: Dict[str, Optional[int]] = {}
             for r, row in enumerate(lc_rows):
-                label, create_ns, delete_ns, susp, res, alive_ns, evt_count = row
+                mk, label, create_ns, delete_ns, susp, res, alive_ns, evt_count = row
+                _lc_create_ns[mk] = create_ns
                 def _cell(text: str, *, align=Qt.AlignmentFlag.AlignLeft) -> QTableWidgetItem:
                     it = _StatsSortItem(text)
                     it.setTextAlignment(align | Qt.AlignmentFlag.AlignVCenter)
                     it.setFlags(it.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                    it.setBackground(_item_bg)
                     return it
-                table.setItem(r, 0, _cell(label))
+                _name_item = _cell(label)
+                _name_item.setData(Qt.ItemDataRole.UserRole, mk)
+                _name_item.setToolTip(f"Click to highlight \u2018{label}\u2019 in the timeline")
+                table.setItem(r, 0, _name_item)
                 table.setItem(r, 1, _cell(_format_time(create_ns, ts) if create_ns is not None else "—",
                                           align=Qt.AlignmentFlag.AlignRight))
                 table.setItem(r, 2, _cell(_format_time(delete_ns, ts) if delete_ns is not None else "—",
@@ -6634,7 +6824,23 @@ class _StatsPanel(QWidget):
                 table.setItem(r, 5, _cell(_format_time(alive_ns, ts) if alive_ns is not None else "—",
                                           align=Qt.AlignmentFlag.AlignRight))
                 table.setItem(r, 6, _cell(str(evt_count), align=Qt.AlignmentFlag.AlignRight))
+            table.setSortingEnabled(True)
+
+            def _on_lifecycle_row(row: int, _col: int) -> None:
+                item = table.item(row, 0)
+                if item is None:
+                    return
+                mk = item.data(Qt.ItemDataRole.UserRole)
+                if not mk:
+                    return
+                create_ns = _lc_create_ns.get(mk)
+                if create_ns is not None:
+                    self.segment_jump.emit(create_ns)
+                self.task_clicked.emit(mk)
+
+            table.cellClicked.connect(_on_lifecycle_row)
             self._wire_stats_table_click_cursor(table)
+            self._wire_stats_table_row_hover(table)
             self._wrap_table_with_resizer(blay, table, "lifecycle")
 
         self._add_collapsible_section(
@@ -6657,6 +6863,9 @@ class _StatsPanel(QWidget):
             tbl.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
             tbl.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
             tbl.verticalHeader().setVisible(False)
+            tbl.verticalHeader().setDefaultSectionSize(STATS_TABLE_ROW_H)
+            tbl.verticalHeader().setMinimumSectionSize(STATS_TABLE_ROW_H)
+            tbl.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
             for r, (label, mask_hex, obs_str, viol_str) in enumerate(_aff_rows):
                 for c, (val, key) in enumerate([
                     (label, label),
@@ -6665,12 +6874,15 @@ class _StatsPanel(QWidget):
                     (viol_str, viol_str),
                 ]):
                     item = _StatsSortItem(val, key)
-                    if c > 0:
-                        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    item.setTextAlignment(
+                        (Qt.AlignmentFlag.AlignRight if c == 3 else Qt.AlignmentFlag.AlignLeft)
+                        | Qt.AlignmentFlag.AlignVCenter)
                     if viol_str != "\u2014" and c == 3:
                         item.setForeground(QColor("#E85D5D"))
                     tbl.setItem(r, c, item)
+            self._apply_stats_table_theme(tbl, _fs)
             self._wire_stats_table_click_cursor(tbl)
+            self._wire_stats_table_row_hover(tbl)
             self._wrap_table_with_resizer(blay, tbl, "affinity")
 
         self._add_collapsible_section(
@@ -6703,16 +6915,21 @@ class _StatsPanel(QWidget):
                 tbl_sv.setHorizontalHeaderLabels(["Task", "Duration", "Limit", "Over by"])
                 tbl_sv.verticalHeader().setVisible(False)
                 tbl_sv.verticalHeader().setDefaultSectionSize(STATS_TABLE_ROW_H)
+                tbl_sv.verticalHeader().setMinimumSectionSize(STATS_TABLE_ROW_H)
+                tbl_sv.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
                 tbl_sv.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
                 for r_i, (lbl_v, dur, lim, over) in enumerate(sv[:20]):
                     for c_i, val in enumerate([lbl_v, dur, lim, over]):
                         item = QTableWidgetItem(val)
-                        if c_i > 0:
-                            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                        item.setTextAlignment(
+                            (Qt.AlignmentFlag.AlignLeft if c_i == 0 else Qt.AlignmentFlag.AlignRight)
+                            | Qt.AlignmentFlag.AlignVCenter)
                         if c_i == 3:
                             item.setForeground(QColor("#E85D5D"))
                         tbl_sv.setItem(r_i, c_i, item)
                 tbl_sv.horizontalHeader().setStretchLastSection(True)
+                self._apply_stats_table_theme(tbl_sv, _fs)
+                self._wire_stats_table_row_hover(tbl_sv)
                 blay.addWidget(tbl_sv)
             if cv:
                 hdr_lbl2 = QLabel("CPU budget exceeded")
@@ -6722,16 +6939,21 @@ class _StatsPanel(QWidget):
                 tbl_cv.setHorizontalHeaderLabels(["Task", "CPU %", "Budget"])
                 tbl_cv.verticalHeader().setVisible(False)
                 tbl_cv.verticalHeader().setDefaultSectionSize(STATS_TABLE_ROW_H)
+                tbl_cv.verticalHeader().setMinimumSectionSize(STATS_TABLE_ROW_H)
+                tbl_cv.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
                 tbl_cv.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
                 for r_i, (lbl_v, pct, bgt) in enumerate(cv):
                     for c_i, val in enumerate([lbl_v, pct, bgt]):
                         item = QTableWidgetItem(val)
-                        if c_i > 0:
-                            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                        item.setTextAlignment(
+                            (Qt.AlignmentFlag.AlignLeft if c_i == 0 else Qt.AlignmentFlag.AlignRight)
+                            | Qt.AlignmentFlag.AlignVCenter)
                         if c_i == 1:
                             item.setForeground(QColor("#E85D5D"))
                         tbl_cv.setItem(r_i, c_i, item)
                 tbl_cv.horizontalHeader().setStretchLastSection(True)
+                self._apply_stats_table_theme(tbl_cv, _fs)
+                self._wire_stats_table_row_hover(tbl_cv)
                 blay.addWidget(tbl_cv)
 
         self._add_collapsible_section(

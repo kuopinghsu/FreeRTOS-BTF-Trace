@@ -642,7 +642,7 @@ def _task_lifecycle_rows(
     """Per-task lifecycle summary from STI 'task' channel events.
 
     Returns a list of tuples:
-        (label, create_ns, delete_ns, suspend_count, resume_count, alive_ns, event_count)
+        (mk, label, create_ns, delete_ns, suspend_count, resume_count, alive_ns, event_count)
     Only tasks with at least one lifecycle event are included.
     """
     by_mk: Dict[str, dict] = {}
@@ -660,6 +660,7 @@ def _task_lifecycle_rows(
         mk = _task_merge_key(task_label)
         if mk not in by_mk:
             by_mk[mk] = {
+                "mk": mk,
                 "label": _task_display_name(task_label),
                 "create_ns": None,
                 "delete_ns": None,
@@ -684,6 +685,7 @@ def _task_lifecycle_rows(
         delete_ns = d["delete_ns"]
         alive_ns = (delete_ns - create_ns) if (create_ns is not None and delete_ns is not None) else None
         rows.append((
+            d["mk"],
             d["label"],
             create_ns,
             delete_ns,
@@ -1426,13 +1428,16 @@ def _sync_object_hold_detail_rows(
                 "object": f"{obj['kind']} {obj['ptr']}",
                 "holder": h.get("holder_label") or "—",
                 "start": _format_time(h["start_ns"], scale),
+                "start_ns": h["start_ns"],
                 "stop": _format_time(h["stop_ns"], scale),
                 "duration": _format_time(h["duration_ns"], scale),
                 "duration_ns": h["duration_ns"],
                 "take_core": h.get("take_core") or "",
                 "give_core": h.get("give_core") or "",
             })
-    rows.sort(key=lambda r: (-r["duration_ns"], r.get("start", "")))
+    # Tie-break by the raw start timestamp (not the formatted label) so equal
+    # durations sort chronologically rather than lexicographically.
+    rows.sort(key=lambda r: (-r["duration_ns"], r.get("start_ns", 0)))
     return rows[:limit] if limit > 0 else rows
 
 def _priority_episode_detail_rows(
@@ -1477,13 +1482,16 @@ def _interval_instance_detail_rows(
                 "id": iid,
                 "task_id": inst.task_id or "—",
                 "start": _format_time(inst.start_ns, scale),
+                "start_ns": inst.start_ns,
                 "stop": _format_time(inst.stop_ns, scale),
                 "duration": _format_time(inst.stop_ns - inst.start_ns, scale),
                 "duration_ns": inst.stop_ns - inst.start_ns,
                 "start_core": inst.start_core or "",
                 "stop_core": inst.stop_core or "",
             })
-    rows.sort(key=lambda r: (-r["duration_ns"], r.get("start", "")))
+    # Tie-break by the raw start timestamp (not the formatted label) so equal
+    # durations sort chronologically rather than lexicographically.
+    rows.sort(key=lambda r: (-r["duration_ns"], r.get("start_ns", 0)))
     return rows[:limit] if limit > 0 else rows
 
 def _task_priority_label_suffix(trace: "BtfTrace", mk: str) -> str:
@@ -2241,7 +2249,7 @@ def _preemption_chain_rows(
     for mk, pre_disp, _t, duration, _seg in _collect_preemption_events(trace, lo, hi):
         data.setdefault(mk, {}).setdefault(pre_disp, []).append(duration)
 
-    rows = []
+    rows_raw = []
     for mk, preemptors in data.items():
         raw = trace.task_repr.get(mk, mk)
         victim_disp = _task_display_name(raw)
@@ -2249,17 +2257,18 @@ def _preemption_chain_rows(
             total = sum(durations)
             avg = int(round(total / len(durations)))
             mx = max(durations)
-            rows.append((
-                mk,
-                victim_disp,
-                pre_disp,
-                len(durations),
-                _format_time(total, scale),
-                _format_time(avg, scale),
-                _format_time(mx, scale),
-            ))
+            rows_raw.append((mk, victim_disp, pre_disp, len(durations), total, avg, mx))
 
-    rows.sort(key=lambda r: (-_time_label_sort_key(r[4]), r[1].lower(), r[2].lower()))
+    # Sort by the exact raw total (not a formatted/rounded label) so rows whose
+    # labels happen to display the same text still order by true magnitude.
+    rows_raw.sort(key=lambda r: (-r[4], r[1].lower(), r[2].lower()))
+    rows = [
+        (
+            mk, victim_disp, pre_disp, cnt,
+            _format_time(total, scale), _format_time(avg, scale), _format_time(mx, scale),
+        )
+        for mk, victim_disp, pre_disp, cnt, total, avg, mx in rows_raw
+    ]
     truncated = len(rows) > PREEMPTION_CHAIN_MAX_ROWS
     if truncated:
         rows = rows[:PREEMPTION_CHAIN_MAX_ROWS]

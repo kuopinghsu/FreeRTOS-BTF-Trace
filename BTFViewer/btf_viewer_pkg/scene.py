@@ -260,6 +260,13 @@ class TimelineScene(QGraphicsScene):
         self._core_expanded[core_name] = not self._core_is_expanded(core_name)
         self.rebuild()
 
+    def set_core_expanded(self, core_name: str, expanded: bool) -> None:
+        """Expand or collapse a single core's task sub-rows in the core view."""
+        if self._core_expanded.get(core_name) == expanded:
+            return
+        self._core_expanded[core_name] = expanded
+        self.rebuild()
+
     def set_all_cores_expanded(self, expanded: bool) -> None:
         """Expand or collapse every core at once in the core view."""
         if self._trace is None:

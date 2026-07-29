@@ -22,7 +22,8 @@ describe('formatMigrationGapTime', () => {
     assert.equal(formatMigrationGapTime(NaN, 'ns'), '-')
   })
 
-  it('rounds microsecond gaps', () => {
-    assert.equal(formatMigrationGapTime(4.6, 'us'), '5 us')
+  it('truncates (does not round) native-unit gaps, matching desktop parity', () => {
+    // Desktop: `_format_time(int(avg), scale)` truncates before formatting.
+    assert.equal(formatMigrationGapTime(4.6, 'us'), '4 µs')
   })
 })

@@ -327,10 +327,10 @@ export function syncObjectStatsRows(trace, lo, hi, { kindFilter = null } = {}) {
       issues,
       holds,
       avgHoldNs: holds.length
-        ? Math.round(holds.reduce((s, h) => s + h.durationNs, 0) / holds.length)
+        ? Math.floor(holds.reduce((s, h) => s + h.durationNs, 0) / holds.length)
         : 0,
       avgHold: holds.length
-        ? formatTime(Math.round(holds.reduce((s, h) => s + h.durationNs, 0) / holds.length), scale)
+        ? formatTime(Math.floor(holds.reduce((s, h) => s + h.durationNs, 0) / holds.length), scale)
         : '—',
     })
   }

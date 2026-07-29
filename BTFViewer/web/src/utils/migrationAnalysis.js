@@ -528,7 +528,7 @@ export function buildCorePairRows(trace, lo = null, hi = null) {
     .map(d => ({
       ...d,
       bouncePct: d.count > 0 ? 100 * d.bounces / d.count : 0,
-      avgGapNs: d.count > 0 ? Math.round(d.gapSum / d.count) : 0,
+      avgGapNs: d.count > 0 ? Math.floor(d.gapSum / d.count) : 0,
     }))
 }
 

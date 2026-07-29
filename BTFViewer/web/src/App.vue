@@ -340,6 +340,7 @@
                 @update:section-collapsed-state="onStatsSectionCollapsedChange"
                 @highlight-task="onHighlightClick"
                 @plot-point-activate="onStatsPlotPointActivate"
+                @segment-jump="onStatsSegmentJump"
               />
             </div>
           </div>
@@ -1545,6 +1546,15 @@ function onStatsPlotPointActivate({ ns, note, segment, interval, priorityRange, 
   }
   syncTimelineViewport()
   scheduleSessionSave()
+}
+
+function onStatsSegmentJump(ns) {
+  // Matches desktop's _on_segment_jump: scroll the timeline to ns without
+  // zooming or adding an annotation (e.g. Task Lifecycle / Core-Pair rows).
+  if (ns == null) return
+  timelinePanelRef.value?.jumpToNs(ns)
+  syncTimelineViewport()
+  scheduleRender()
 }
 
 function onOpenPlotChange(v) {

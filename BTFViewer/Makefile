@@ -10,12 +10,16 @@ TRACE ?= ../tracedata/example.btf
 BUILDS := builds
 OUT := $(BUILDS)/btf_viewer.py
 
+# Source trace + output dir for `make update-stats-images` (docs/*.md illustrations).
+STATS_TRACE ?= ../tracedata/example-8cores.btf
+STATS_IMG_DIR := ../images/stats
+
 .DEFAULT_GOAL := all
 
 PANDOC ?= pandoc
 DOCS := $(BUILDS)
 
-.PHONY: all help web bundle check-bundle test test-web test-all ci doc
+.PHONY: all help web bundle check-bundle test test-web test-all ci doc update-stats-images
 
 help:
 	@echo "BTF Viewer — make targets"
@@ -25,13 +29,15 @@ help:
 	@echo "  make bundle       Desktop bundle only → builds/btf_viewer.py"
 	@echo "  make check-bundle Regenerate bundle; fail if it drifts from sources (CI)"
 	@echo "  make doc          Convert README.md + WORKFLOWS.md → builds/*.pdf"
+	@echo "  make update-stats-images  Regenerate ../images/stats/*.svg via the desktop CLI"
 	@echo "  make test         Desktop unit tests (QT_QPA_PLATFORM=offscreen)"
 	@echo "  make test-web     Web unit tests (node --test)"
 	@echo "  make test-all     Desktop + web unit tests"
 	@echo "  make ci           test-all + check-bundle (local CI parity)"
 	@echo "  make help         Show this help"
 	@echo ""
-	@echo "Variables: PYTHON=$(PYTHON)  TRACE=$(TRACE)  PANDOC=$(PANDOC)"
+	@echo "Variables: PYTHON=$(PYTHON)  TRACE=$(TRACE)  PANDOC=$(PANDOC)  STATS_TRACE=$(STATS_TRACE)"
+
 
 all: web bundle
 
@@ -71,3 +77,31 @@ $(DOCS)/%.pdf: %.md
 # Fail if builds/btf_viewer.py drifts from package sources (CI / pre-commit).
 check-bundle: bundle
 	git diff --exit-code $(OUT)
+
+# Regenerate the statistics distribution plots + task-priority timeline crop
+# used as illustrations in README.md / WORKFLOWS.md / btf-viewer-slides.md,
+# headlessly via the desktop CLI `snapshot` command (Statistics -> click row
+# equivalents), sourced from STATS_TRACE (default: example-8cores.btf).
+update-stats-images: bundle
+	mkdir -p $(STATS_IMG_DIR)
+	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(STATS_TRACE) \
+		-o $(STATS_IMG_DIR)/stats-tick.svg --view plot --metric tick
+	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(STATS_TRACE) \
+		-o $(STATS_IMG_DIR)/stats-exec-cs11.svg --view plot --metric exec --task "CS[11]"
+	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(STATS_TRACE) \
+		-o $(STATS_IMG_DIR)/stats-block-cs11.svg --view plot --metric block --task "CS[11]"
+	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(STATS_TRACE) \
+		-o $(STATS_IMG_DIR)/stats-inter-cs11.svg --view plot --metric inter --task "CS[11]"
+	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(STATS_TRACE) \
+		-o $(STATS_IMG_DIR)/stats-preempt-cs24-cs25.svg --view plot --metric preempt \
+		--task "CS[24]" --preemptor "CS[25]"
+	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(STATS_TRACE) \
+		-o $(STATS_IMG_DIR)/stats-priority-il266.svg --view plot --metric priority --task "IL[266]"
+	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(STATS_TRACE) \
+		-o $(STATS_IMG_DIR)/stats-interval-1.svg --view plot --metric interval --interval-id 1
+	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(STATS_TRACE) \
+		-o $(STATS_IMG_DIR)/stats-tag0.svg --view plot --metric tag --channel tag0_event
+	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(STATS_TRACE) \
+		-o $(STATS_IMG_DIR)/tasks-priority-il266.svg --view timeline --task "IL[266]" \
+		--lo 2171700 --hi 2180200
+	@echo "Updated $(STATS_IMG_DIR) from $(STATS_TRACE)"

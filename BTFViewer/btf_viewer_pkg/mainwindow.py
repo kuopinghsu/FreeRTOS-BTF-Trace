@@ -3128,7 +3128,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                          gridline-color:{c['sep']}; }}
             QTableWidget#stats_table {{ background:{c['win_base']}; color:{c['text']};
                          border:none; gridline-color:transparent; }}
-            QTableWidget#stats_table::item {{ background:{c['win_base']}; color:{c['text']};
+            QTableWidget#stats_table::item {{ color:{c['text']};
                          border:none; padding:0px 3px; }}
             QHeaderView#stats_table_header::section {{ background:{c['mid']};
                          color:{c['muted_text']}; border:none; padding:0px 3px; }}
@@ -3793,6 +3793,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._stats_panel.task_clicked.connect(self._on_legend_task_clicked)
         self._stats_panel.segment_jump.connect(self._on_segment_jump)
         self._stats_panel.plot_point_clicked.connect(self._on_stats_plot_point_clicked)
+        self._stats_panel.core_clicked.connect(self._on_stats_core_clicked)
         self._stats_panel._btn_compare_mig.clicked.connect(self._open_trace_compare)
         self.setAcceptDrops(True)
 
@@ -4926,6 +4927,16 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if self._trace is None:
             return
         self._view.scroll_to_ns(ns)
+
+    def _on_stats_core_clicked(self, core: str) -> None:
+        """Core Time Breakdown row click: switch to Core View and expand *core*."""
+        if self._trace is None:
+            return
+        if self._view_mode != "core":
+            self._set_view_mode("core")
+        sc = self._view._scene
+        sc.set_core_expanded(core, True)
+        self._cpu_load_graph.set_core_expanded(core, True)
 
     def _on_stats_plot_point_clicked(self, payload, mark_ns: int, note: str) -> None:
         """Metrics plot point: jump/highlight and add an annotation with *note*."""

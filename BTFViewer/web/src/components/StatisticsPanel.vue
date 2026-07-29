@@ -152,7 +152,7 @@
       </div>
       <template v-if="!coreBreakdownCollapsed">
         <div class="stats-table-block">
-          <div class="stats-table-wrap" :style="{ height: tableHeight('core_breakdown') + 'px' }">
+          <div class="stats-table-wrap" :style="{ maxHeight: tableHeight('core_breakdown') + 'px' }">
             <table class="stats-table">
               <thead>
                 <tr>
@@ -161,7 +161,7 @@
               </thead>
               <tbody>
                 <tr v-for="row in coreTimeBreakdown" :key="row.core">
-                  <td>{{ row.core }}</td>
+                  <td class="task-col">{{ row.core }}</td>
                   <td>{{ (100 * row.activeNs / row.spanNs).toFixed(1) }}%</td>
                   <td>{{ (100 * row.idleNs / row.spanNs).toFixed(1) }}%</td>
                   <td>{{ (100 * row.tickNs / row.spanNs).toFixed(1) }}%</td>
@@ -545,7 +545,7 @@
       </div>
       <template v-if="!corePairsCollapsed">
         <div class="stats-table-block">
-          <div class="stats-table-wrap" :style="{ height: tableHeight('core_pairs') + 'px' }">
+          <div class="stats-table-wrap" :style="{ maxHeight: tableHeight('core_pairs') + 'px' }">
             <table class="stats-table">
               <thead>
                 <tr>
@@ -553,9 +553,13 @@
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="row in corePairRows" :key="`${row.fromCore}-${row.toCore}`">
-                  <td>{{ row.fromCore }}</td>
-                  <td>{{ row.toCore }}</td>
+                <tr
+                  v-for="row in corePairRows"
+                  :key="`${row.fromCore}-${row.toCore}`"
+                  class="stats-table-row"
+                >
+                  <td class="task-col">{{ row.fromCore }}</td>
+                  <td class="task-col">{{ row.toCore }}</td>
                   <td>{{ row.count }}</td>
                   <td>{{ row.bounces }}</td>
                   <td>{{ row.bouncePct.toFixed(1) }}%</td>
@@ -1297,7 +1301,7 @@
                   :key="row.key"
                   :class="{ 'sync-issue-row': row.status !== 'ok' }"
                 >
-                  <td>{{ row.label }}</td>
+                  <td class="task-col">{{ row.label }}</td>
                   <td>{{ row.kind }}</td>
                   <td>{{ row.holdCount }}</td>
                   <td>{{ row.issueCount }}</td>
@@ -1421,7 +1425,7 @@
           {{ statsRange ? 'No queue activity in cursor range' : 'No queue STI events in trace' }}
         </div>
         <div v-else class="stats-table-block">
-          <div class="stats-table-wrap" :style="{ maxHeight: tableHeight('sync') + 'px' }">
+          <div class="stats-table-wrap" :style="{ maxHeight: tableHeight('queue') + 'px' }">
             <table class="stats-table">
               <thead>
                 <tr>
@@ -1430,7 +1434,7 @@
               </thead>
               <tbody>
                 <tr v-for="row in sortedQueueStats" :key="row.key">
-                  <td>{{ row.label }}</td>
+                  <td class="task-col">{{ row.label }}</td>
                   <td>{{ row.holdCount }}</td>
                   <td>{{ row.issueCount }}</td>
                   <td>{{ row.avgHold }}</td>
@@ -1439,6 +1443,13 @@
               </tbody>
             </table>
           </div>
+          <div
+            class="stats-section-resizer"
+            role="separator"
+            aria-label="Resize queue table"
+            aria-orientation="horizontal"
+            @mousedown.prevent="onTableResizeStart('queue', $event)"
+          />
         </div>
       </template>
     </template>
@@ -1454,7 +1465,7 @@
       </div>
       <template v-if="!lifecycleCollapsed">
         <div class="stats-table-block">
-          <div class="stats-table-wrap" :style="{ maxHeight: tableHeight('sync') + 'px' }">
+          <div class="stats-table-wrap" :style="{ maxHeight: tableHeight('lifecycle') + 'px' }">
             <table class="stats-table">
               <thead>
                 <tr>
@@ -1462,8 +1473,17 @@
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="row in lifecycleStats" :key="row.mk">
-                  <td>{{ row.label }}</td>
+                <tr
+                  v-for="row in lifecycleStats"
+                  :key="row.mk"
+                  class="stats-table-row clickable"
+                  :title="`Click to highlight '${row.label}' in the timeline`"
+                  tabindex="0"
+                  @click="onLifecycleRowClick(row)"
+                  @keydown.enter.prevent="onLifecycleRowClick(row)"
+                  @keydown.space.prevent="onLifecycleRowClick(row)"
+                >
+                  <td class="task-col">{{ row.label }}</td>
                   <td>{{ row.createNs != null ? formatTime(row.createNs, trace.timeScale) : '—' }}</td>
                   <td>{{ row.deleteNs != null ? formatTime(row.deleteNs, trace.timeScale) : '—' }}</td>
                   <td>{{ row.suspendCount }}/{{ row.resumeCount }}</td>
@@ -1473,6 +1493,13 @@
               </tbody>
             </table>
           </div>
+          <div
+            class="stats-section-resizer"
+            role="separator"
+            aria-label="Resize task lifecycle table"
+            aria-orientation="horizontal"
+            @mousedown.prevent="onTableResizeStart('lifecycle', $event)"
+          />
         </div>
       </template>
     </template>
@@ -1488,7 +1515,7 @@
       </div>
       <template v-if="!affinityCollapsed">
         <div class="stats-table-block">
-          <div class="stats-table-wrap" :style="{ height: tableHeight('affinity') + 'px' }">
+          <div class="stats-table-wrap" :style="{ maxHeight: tableHeight('affinity') + 'px' }">
             <table class="stats-table">
               <thead>
                 <tr>
@@ -1497,7 +1524,7 @@
               </thead>
               <tbody>
                 <tr v-for="row in coreAffinityRows" :key="row.label">
-                  <td>{{ row.label }}</td>
+                  <td class="task-col">{{ row.label }}</td>
                   <td>{{ row.maskHex }}</td>
                   <td>{{ row.observedCores }}</td>
                   <td :class="row.violations !== '—' ? 'sev-error' : ''">{{ row.violations }}</td>
@@ -2357,7 +2384,7 @@ const props = defineProps({
 })
 
 const emit = defineEmits([
-  'highlightTask', 'plotPointActivate', 'update:openPlot', 'update:sectionHeights',
+  'highlightTask', 'plotPointActivate', 'segmentJump', 'update:openPlot', 'update:sectionHeights',
   'update:scopeToCursors', 'update:sectionCollapsedState',
 ])
 
@@ -2586,6 +2613,8 @@ const sectionHeights = ref({
   priority: STATS_TABLE_DEFAULT_H,
   sync: STATS_TABLE_DEFAULT_H,
   sync_issues: STATS_TABLE_MIG_DEFAULT_H,
+  queue: STATS_TABLE_DEFAULT_H,
+  lifecycle: STATS_TABLE_DEFAULT_H,
   health: STATS_TABLE_DEFAULT_H,
   intervals: STATS_TABLE_DEFAULT_H,
   tags: STATS_TABLE_DEFAULT_H,
@@ -2634,9 +2663,8 @@ function clampPct(v) { return Math.max(0, Math.min(100, v)).toFixed(1) }
 
 function tableHeight(id) {
   if (sectionHeights.value[id] != null) return sectionHeights.value[id]
-  // Auto-size small-row sections to exact content height so the resizer is
-  // immediately effective in both directions (maxHeight only constrains from
-  // above, so dragging down does nothing on a table shorter than the cap).
+  // Auto-size small-row sections to exact content height (all wraps use
+  // max-height, so this only matters for the initial/default size).
   if (id === 'core_breakdown') {
     return statsTableViewportHeight(Math.min(Math.max(coreTimeBreakdown.value.length, 1), STATS_MAX_VISIBLE_ROWS))
   }
@@ -2660,6 +2688,24 @@ function utilScrollStyle(rowCount, id = null) {
   return { height: `${h}px`, overflowY: 'auto', overflowX: 'hidden', flexShrink: '0' }
 }
 
+// Snap a dragged section height to the nearest whole-row increment so the
+// last visible row is never partially clipped (which made it look like the
+// row height "changes" while resizing).
+function quantizeSectionHeight(id, rawH) {
+  if (id === 'cores' || id === 'tasks') {
+    const unit = STATS_UTIL_ROW_H + STATS_UTIL_ROW_GAP
+    const minRows = Math.max(1, Math.ceil((TABLE_MIN_H + STATS_UTIL_ROW_GAP - 2) / unit))
+    const maxRows = Math.max(minRows, Math.floor((TABLE_MAX_H + STATS_UTIL_ROW_GAP - 2) / unit))
+    const rows = Math.min(maxRows, Math.max(minRows, Math.round((rawH + STATS_UTIL_ROW_GAP - 2) / unit)))
+    return rows * STATS_UTIL_ROW_H + (rows - 1) * STATS_UTIL_ROW_GAP + 2
+  }
+  const base = STATS_TABLE_HEADER_H + STATS_TABLE_WRAP_BORDER
+  const minRows = Math.max(1, Math.ceil((TABLE_MIN_H - base) / STATS_TABLE_ROW_H))
+  const maxRows = Math.max(minRows, Math.floor((TABLE_MAX_H - base) / STATS_TABLE_ROW_H))
+  const rows = Math.min(maxRows, Math.max(minRows, Math.round((rawH - base) / STATS_TABLE_ROW_H)))
+  return base + rows * STATS_TABLE_ROW_H
+}
+
 function onTableResizeStart(id, e) {
   _tableResize = { id, startY: e.clientY, startH: tableHeight(id) }
   document.body.classList.add('row-resizing')
@@ -2670,10 +2716,7 @@ function onTableResizeStart(id, e) {
 function onTableResizeMove(e) {
   if (!_tableResize) return
   const delta = e.clientY - _tableResize.startY
-  sectionHeights.value[_tableResize.id] = Math.max(
-    TABLE_MIN_H,
-    Math.min(TABLE_MAX_H, _tableResize.startH + delta),
-  )
+  sectionHeights.value[_tableResize.id] = quantizeSectionHeight(_tableResize.id, _tableResize.startH + delta)
 }
 
 function onTableResizeEnd() {
@@ -3002,7 +3045,9 @@ const coreAffinityRows = computed(() => {
   }
   if (!masks.size) return []
   const rows = []
-  for (const [mk, mask] of [...masks.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+  // Ordinal (codepoint) compare on the merge key, matching Python's default
+  // `sorted(masks.items())` string ordering (not locale-aware).
+  for (const [mk, mask] of [...masks.entries()].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))) {
     const label = taskDisplayName(taskReprGet(tr, mk) || mk)
     const obs = new Set()
     for (const seg of (tr.segByMergeKey?.get(mk) ?? [])) {
@@ -3068,6 +3113,13 @@ function onSyncIssueClick(issue) {
     segment,
     syncIssue: true,
   })
+}
+
+function onLifecycleRowClick(row) {
+  // Matches desktop's _on_lifecycle_row: jump to the task's creation time,
+  // then highlight the task (no annotation is added for this camera-only jump).
+  if (row.createNs != null) emit('segmentJump', row.createNs)
+  emit('highlightTask', row.mk)
 }
 
 function priorityRowTitle(row) {
