@@ -10,7 +10,7 @@ Trace output is produced in two industry-standard formats:
 
 <img src="images/btfviewer.png" alt="BTF Viewer screenshot" width=640>
 
-[DEMO](https://apps.kuoping.com/btf-viewer.html)
+[DEMO](https://apps.kuoping.com/btf_viewer.html)
 
 ---
 
