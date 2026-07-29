@@ -304,9 +304,9 @@ Tasks that move between cores introduce cache-cold penalties and can cause lock-
 
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">
 
-![](../images/migration-heatmap-pairs.svg)
+![](../images/heatmap-pairs.svg)
 
-![](../images/migration-heatmap-tasks.svg)
+![](../images/heatmap-tasks.svg)
 
 </div>
 

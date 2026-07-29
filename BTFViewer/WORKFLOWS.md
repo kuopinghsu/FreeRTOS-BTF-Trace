@@ -273,13 +273,13 @@ With the trace open, click the **Heatmap** toolbar button to open the migration 
 
 **Level 1 — core-pair overview (directed pairs × 32 time bins):**
 
-![Migration heatmap Level 1: directed core-pair rows and time bins](../images/migration-heatmap-pairs.svg)
+![Migration heatmap Level 1: directed core-pair rows and time bins](../images/heatmap-pairs.svg)
 
 *Each row is a directed pair (e.g. `c0→c1`).  Darker cells = more migrations in that bin.  Click any dark cell to drill into Level 2.*
 
 **Level 2 — per-task sub-bins (after clicking a hot cell):**
 
-![Migration heatmap Level 2: per-task sub-bins within the selected time window](../images/migration-heatmap-tasks.svg)
+![Migration heatmap Level 2: per-task sub-bins within the selected time window](../images/heatmap-tasks.svg)
 
 *Rows are tasks that migrated on the selected pair within the chosen bin; columns are 32 sub-bins inside that bin.  Click a task cell to zoom the timeline, place cursors, switch to Task View, and filter to that task.*
 

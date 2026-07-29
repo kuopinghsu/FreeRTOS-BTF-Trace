@@ -923,7 +923,7 @@ The example plots below were generated from **`tracedata/example-8cores.btf`** (
 make -C BTFViewer update-stats-images
 ```
 
-This invokes the desktop CLI `snapshot` command (`--view plot` / `--view timeline`) directly — see `make -C BTFViewer help`. Timeline screenshots (e.g. `images/stats/tasks-priority-il266.svg`) use `--view timeline --task ... --lo ... --hi ...` to zoom to the region of interest. Migration heatmap screenshots (`images/migration-heatmap-pairs.svg`, `images/migration-heatmap-tasks.svg`) are exported from the heatmap dialog (**Export SVG** or **Export PNG**) after opening **Heatmap** on a multi-core trace — see [Migration heatmap](#migration-heatmap).
+This invokes the desktop CLI `snapshot` command (`--view plot` / `--view timeline`) directly — see `make -C BTFViewer help`. Timeline screenshots (e.g. `images/stats/tasks-priority-il266.svg`) use `--view timeline --task ... --lo ... --hi ...` to zoom to the region of interest. Migration heatmap screenshots (`images/heatmap-pairs.svg`, `images/heatmap-tasks.svg`) are exported from the heatmap dialog (**Export SVG** or **Export PNG**) after opening **Heatmap** on a multi-core trace — see [Migration heatmap](#migration-heatmap).
 
 #### Summary, scheduling, and core utilisation
 
@@ -1607,17 +1607,17 @@ Visualise **when** migrations happen between core pairs — complementary to the
 
 **Level 1 — core-pair overview** (4 cores · 32 time bins across the trace):
 
-![Migration heatmap Level 1: core-pair rows and time bins for example-4cores.btf](../images/migration-heatmap-pairs.svg)
+![Migration heatmap Level 1: core-pair rows and time bins for example-4cores.btf](../images/heatmap-pairs.svg)
 
 Each row is a directed core pair (`c0→c1`, `c0→c2`, …). Cell colour intensity is the migration count in that bin (darker blue = more events). Horizontal bands show **when** traffic occurred — e.g. repeated activity on `c0→c2` and `c1→c0` during the context-switch stress phases. Click a non-empty cell to drill into tasks for that pair and time window.
 
 **Level 2 — task grid** (after clicking a cell on the pair overview):
 
-![Migration heatmap Level 2: per-task sub-bins after drilling from example-4cores.btf](../images/migration-heatmap-tasks.svg)
+![Migration heatmap Level 2: per-task sub-bins after drilling from example-4cores.btf](../images/heatmap-tasks.svg)
 
 Rows are tasks that migrated on the selected core pair within the chosen bin; columns are **32 sub-bins** spanning that bin's time window. Brighter cells mark sub-intervals where that task crossed cores most often. Each row label is prefixed with a directional indicator: **▲** = task primarily migrates in this direction (egress-dominant), **▼** = more migrations on the reverse path (ingress-dominant), **⇄** = roughly symmetric. Click a task cell to zoom the timeline, place **C1** / **C2** at the sub-bin edges, switch to **Task View**, and filter to that task only.
 
-Regenerate from the viewer: open `tracedata/example-4cores.btf`, toolbar **Heatmap** → drill to the desired level → **Export SVG** (or **Export PNG**). Save under `images/` as `migration-heatmap-pairs.svg` / `migration-heatmap-tasks.svg`.
+Regenerate from the viewer: open `tracedata/example-4cores.btf`, toolbar **Heatmap** → drill to the desired level → **Export SVG** (or **Export PNG**). Save under `images/` as `heatmap-pairs.svg` / `heatmap-tasks.svg`.
 
 **Typical workflow (≤ 16 cores)**
 
@@ -1647,7 +1647,7 @@ Regenerate from the viewer: open `tracedata/example-4cores.btf`, toolbar **Heatm
 | **Click row** | > 16 cores only: matrix Level 1 → outgoing pairs for that source core. |
 | **All tasks** (toolbar) | Shown next to **Heatmap** while a heatmap task filter is active. Same reset as **Show all tasks** below. |
 | **Show all tasks** | Clears the task filter and **restores the timeline state captured when the heatmap was opened** (viewport, cursors, highlights, view mode). The heatmap returns to **Level 1**; heatmap time scope follows the restored cursors (full trace if fewer than two cursors were saved). Available from: toolbar **All tasks**, heatmap dialog **Show all tasks**, Legend **Clear** (Web: Marks page; Desktop: legend dock), or enabling **Migrated tasks only**. Loading a new trace or switching tabs also clears the filter (Desktop closes the heatmap dialog on tab switch). |
-| **Export PNG / SVG** | Footer buttons export the **full current drill level** (all rows/columns, no hover highlight). Filenames: `migration-heatmap-{level}-{timestamp}.png` or `.svg` (e.g. `pairs`, `matrix`, `outgoing`, `tasks`). Desktop: file save dialog + status bar confirmation. Web: direct download. |
+| **Export PNG / SVG** | Footer buttons export the **full current drill level** (all rows/columns, no hover highlight). Filenames: `heatmap-{level}-{timestamp}.png` or `.svg` (e.g. `pairs`, `matrix`, `outgoing`, `tasks`). Desktop: file save dialog + status bar confirmation. Web: direct download. |
 | **Scope** | **Full trace** by default. With **2 or more cursors** placed, Level 1 uses the time window from **C1** through the last cursor (subtitle shows the range). Independent of the Statistics panel **Limit to cursor range** toggle. **Show all tasks** restores pre-heatmap cursors, so heatmap scope matches that saved window. |
 | **Empty state** | *No migrations in scope.* (Level 1) or *No task migrations in this cell.* (Level 2) when no events fall in the current window. |
 
