@@ -2,7 +2,7 @@
  * Portable session export/import (cursors, marks, viewport) — Desktop + Web compatible JSON.
  */
 
-import { isRestorableViewport, sanitizeTabFilters, snapshotTabFilters } from './sessionStore.js'
+import { isRestorableViewport, sanitizeTabFilters, snapshotTabFilters, sanitizeOpenPlot, sanitizeSectionCollapsed } from './sessionStore.js'
 import { MAX_CURSORS } from './settingsStore.js'
 
 export const SESSION_PORTABLE_VERSION = 2
@@ -178,9 +178,9 @@ export function applyPortableSession(tab, data, timelineOptions, trace = null) {
     : null
 
   if (data.scopeToCursors != null) tab.scopeToCursors = !!data.scopeToCursors
-  if (data.openPlot !== undefined) tab.openPlot = data.openPlot || null
-  if (data.statsSectionCollapsed && typeof data.statsSectionCollapsed === 'object') {
-    tab.statsSectionCollapsed = { ...data.statsSectionCollapsed }
+  if (data.openPlot !== undefined) tab.openPlot = sanitizeOpenPlot(data.openPlot)
+  if (data.statsSectionCollapsed !== undefined) {
+    tab.statsSectionCollapsed = sanitizeSectionCollapsed(data.statsSectionCollapsed)
   }
 
   const vp = sanitizeViewport(data.timelineViewport, trace)

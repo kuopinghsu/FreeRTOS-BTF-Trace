@@ -214,7 +214,9 @@ Views (--view):
              to a time range first.
   heatmap    Migration Heatmap (core-pair x time-bin grid). --task is not
              supported (the heatmap is inherently cross-task); --lo/--hi
-             scope the grid to a time range.
+             scope the grid to a time range. --drill-row/--drill-bin drill
+             into the per-task grid for one core-pair row and time bin
+             (matrix-mode heatmaps, >16 cores, are not drillable headlessly).
   plot       A statistics metric scatter+histogram popup, selected with
              --metric:
                tick      tick-interval distribution (trace-wide, no --task)
@@ -233,6 +235,7 @@ examples:
   %(prog)s trace.btf -o timeline.png --view timeline
   %(prog)s trace.btf -o timeline.svg --view timeline --task "Producer[1]" --lo 0 --hi 500000
   %(prog)s trace.btf -o heatmap.png --view heatmap
+  %(prog)s trace.btf -o heatmap-tasks.svg --view heatmap --drill-row 0 --drill-bin 3
   %(prog)s trace.btf -o tick.svg --view plot --metric tick
   %(prog)s trace.btf -o exec.png --view plot --metric exec --task "Producer[1]"
   %(prog)s trace.btf -o preempt.png --view plot --metric preempt --task "Producer[1]" --preemptor "Consumer[2]"
@@ -450,6 +453,20 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
     )
     snapshot.add_argument("--lo", type=int, default=None, metavar="T", help=_CLI_LO_HELP)
     snapshot.add_argument("--hi", type=int, default=None, metavar="T", help=_CLI_HI_HELP)
+    snapshot.add_argument(
+        "--drill-row", type=int, default=None, metavar="N", dest="drill_row",
+        help=(
+            "core-pair row index (0-based, top row = 0) to drill into the "
+            "per-task grid; requires --drill-bin (--view heatmap only)"
+        ),
+    )
+    snapshot.add_argument(
+        "--drill-bin", type=int, default=None, metavar="N", dest="drill_bin",
+        help=(
+            "time-bin column index (0-based, leftmost = 0) to drill into the "
+            "per-task grid; requires --drill-row (--view heatmap only)"
+        ),
+    )
     snapshot.add_argument(
         "--width", type=int, default=None, metavar="PX",
         help="image width in pixels (--view timeline default 1600, --view plot default 820)",
@@ -921,9 +938,27 @@ def _cli_snapshot_heatmap(trace: "BtfTrace",
         print("warning: --metric is ignored for --view heatmap", file=sys.stderr)
     if args.task:
         return None, "error: --task is not supported for --view heatmap (cross-task view)"
+    if (args.drill_row is None) != (args.drill_bin is None):
+        return None, "error: --drill-row requires --drill-bin (and vice versa)"
     dlg = _MigrationHeatmapDialog(trace, parent=None)
     if args.lo is not None and args.hi is not None:
         _cli_apply_heatmap_scope(dlg, args.lo, args.hi)
+    if args.drill_row is not None:
+        if dlg._uses_matrix:
+            return None, (
+                "error: --drill-row/--drill-bin is not supported for matrix-mode "
+                "heatmaps (>16 cores); drill interactively in the GUI instead")
+        row, bi = args.drill_row, args.drill_bin
+        if row < 0 or row >= len(dlg._pairs):
+            return None, f"error: --drill-row {row} out of range (0..{len(dlg._pairs) - 1})"
+        if bi < 0 or bi >= dlg._time_bins:
+            return None, f"error: --drill-bin {bi} out of range (0..{dlg._time_bins - 1})"
+        if not dlg._grid0 or dlg._grid0[row][bi] <= 0:
+            return None, f"error: no migrations at --drill-row {row} --drill-bin {bi}"
+        fc, tc, label = dlg._pairs[row]
+        bin_lo, bin_hi = _heatmap_bin_range(
+            dlg._t_min, dlg._bin_w, dlg._time_bins, dlg._t_max, bi)
+        dlg._go_level1(fc, tc, label, bin_lo, bin_hi, bi)
     dlg.show()
     _process_ui_events_safely()
     return dlg, None

@@ -256,13 +256,14 @@ python builds/btf_viewer.py migrations trace.btf [-o PATH] [--lo T] [--hi T]   #
 
 python builds/btf_viewer.py snapshot trace.btf -o|--output PATH --view timeline|heatmap|plot \
   [--format png|svg] [--task NAME] [--metric tick|exec|block|inter|priority|preempt] \
-  [--preemptor NAME] [--lo T --hi T] [--width PX] [--height PX] [--theme dark|light]
+  [--preemptor NAME] [--lo T --hi T] [--drill-row N --drill-bin N] \
+  [--width PX] [--height PX] [--theme dark|light]
 ```
 
 The `snapshot` `--view`:
 
 - `timeline` — the main task/core view (like **File → Save Image / Save SVG**); `--task` highlights and centers that task's row, `--lo`/`--hi` zoom to a time range first.
-- `heatmap` — the Migration Heatmap (core-pair × time-bin grid); `--lo`/`--hi` scope the grid; `--task` is not supported (the heatmap is inherently cross-task).
+- `heatmap` — the Migration Heatmap (core-pair × time-bin grid); `--lo`/`--hi` scope the grid; `--task` is not supported (the heatmap is inherently cross-task). `--drill-row`/`--drill-bin` (0-based, together) drill into the per-task grid for one core-pair row and time bin, matching a click in the GUI dialog — not supported for matrix-mode heatmaps (> 16 cores).
 - `plot` — a statistics metric scatter + histogram popup, selected with `--metric`: `tick` (trace-wide tick-interval distribution, no `--task`), `exec` / `block` / `inter` / `priority` (require `--task`), or `preempt` (requires `--task` **and** `--preemptor`).
 
 `--width`/`--height` only apply to `--view timeline` and `--view plot` (the heatmap image size is derived from its data grid). `--task` accepts the display name (e.g. `Producer[1]`), the bare name without `[id]`, or the raw merge key, matched case-insensitively.
@@ -709,7 +710,7 @@ Below the scope checkbox, a **scheduling summary** line shows context-switch cou
 | **Priority Inheritance** | When traces include `create pri:N` and priority STI events (`priority_inherit` / `priority_disinherit` / `set_priority`): tasks boosted above base priority |
 | **Mutex / Semaphore pairing** | Pairs `take`/`give` STI events by object pointer (`0x........`); flags orphan gives, cross-task gives, unmatched takes, delete-while-held, **core-boundary lock bounces (`CORE_MIGRATION_WHILE_HELD`)**, and multi-mutex hold at trace end |
 | **Interval Analysis** | Paired `interval_start` / `interval_stop` spans per interval id (count, min/avg/max/p95 duration); notes with `tid:{task_id}` pair per task |
-| **Task Lifecycle** | Per-task `create`/`delete`/`suspend`/`resume` event summary from the `task` STI channel: created/deleted timestamps, suspend/resume counts, alive span (create→delete), and total event count |
+| **Task Lifecycle** | Per-task `create`/`delete`/`suspend`/`resume` event summary from the `task` STI channel: created/deleted timestamps, suspend/resume counts, alive span (create→delete), total event count, and **Runs** (scheduler dispatch / context-switch-in count — distinct from Susp/Res, which only counts explicit `vTaskSuspend()`/`vTaskResume()` calls) |
 | **Core-Pair Migration Summary** | Per directed core-pair migration count, lock-bounce count and percentage, and average off-CPU gap after migration; visible only on multi-core traces with migrations |
 | **Core Time Breakdown** | Per-core split of span into **Active** (user tasks), **Idle** (IDLE task), **Tick** (TICK handler), and **Gap** (unaccounted time between segments) |
 | **Core Affinity** | Per-task affinity mask (`traceTASK_CORE_AFFINITY_SET`) vs. observed execution cores; **Violations** column flags cores outside the mask in red (shown only when `affinity_set` STI events are present) |
@@ -860,7 +861,7 @@ It shows (in panel order):
 - **Priority Inheritance** — per-task base/peak priority, boost episodes, boosted time, and pattern (mutex inherit / L/M/H / boost only); click a row for a duration plot; click a scatter point to zoom, highlight, and annotate the episode (collapsible; shown only when the trace contains priority-inheritance STI events)
 - **Mutex / Semaphore pairing** — per-object hold count, issue count, **core bounce count**, average hold, and status; **Pairing issues** sub-table lists orphan gives, cross-task gives, unmatched takes, teardown warnings, and **`CORE_MIGRATION_WHILE_HELD`** warnings (lock that crossed core boundaries while held); click an issue row to zoom, jump, and annotate (collapsible; shown only when the trace contains sync-object STI events)
 - **Queue** — per-queue `send`/`recv` pairing by object pointer: hold count, issue count, average hold, and status (collapsible; shown only when the trace contains `queue` STI events)
-- **Task Lifecycle** — per-task summary of `create`, `delete`, `suspend`, and `resume` events recorded on the `task` STI channel: created/deleted timestamps, suspend/resume counts, alive span (create→delete), and total lifecycle event count (collapsible; shown only when the trace contains task lifecycle STI events)
+- **Task Lifecycle** — per-task summary of `create`, `delete`, `suspend`, and `resume` events recorded on the `task` STI channel: created/deleted timestamps, suspend/resume counts, alive span (create→delete), total lifecycle event count, and **Runs** — the number of times the task was actually dispatched onto a core (context-switch-in / segment count). Runs is a scheduler-level metric and is normally much larger than Susp/Res, which only counts explicit `vTaskSuspend()`/`vTaskResume()` API calls — a task can run (and be preempted/resumed by the scheduler) many times without ever being suspended (collapsible; shown only when the trace contains task lifecycle STI events)
 - **Core Affinity** — per-task affinity mask recorded by `traceTASK_CORE_AFFINITY_SET` vs. observed execution cores; the **Violations** column lists any cores the task ran on that are outside the declared mask (collapsible; shown only when `affinity_set` STI events are present in the trace)
 - **Deadlines / CPU budget** — configurable per-task execution deadline (nanoseconds) and global CPU budget threshold (%); shows **Slice over deadline** violations (task execution slices longer than the per-task limit, sorted by excess) and **CPU budget exceeded** violations (tasks whose CPU% in the current scope exceeds the budget); configure via **Settings → Display → Analysis thresholds** (`Ctrl+,`) — the section is always visible and displays a prompt to open Settings when no thresholds are configured (collapsible)
 - **Interval Analysis** — per interval id: count, min/avg/max/p95 duration of paired start→stop spans; pairing uses `tid` in the note when present; click a row for a duration plot; click a scatter point to jump and add an annotation at the interval start (collapsible)
@@ -885,10 +886,10 @@ The Statistics panel (Desktop **Statistics** tab + Web **Statistics** tab) organ
 The example plots below were generated from **`tracedata/example-8cores.btf`** (8 cores, 141 tasks, ~29 000 segments, time scale `us`). Regenerate them with:
 
 ```bash
-make -C BTFViewer update-stats-images
+make -C BTFViewer update-images
 ```
 
-This invokes the desktop CLI `snapshot` command (`--view plot` / `--view timeline`) directly — see `make -C BTFViewer help`. Timeline screenshots (e.g. `images/stats/tasks-priority-il266.svg`) use `--view timeline --task ... --lo ... --hi ...` to zoom to the region of interest. Migration heatmap screenshots (`images/heatmap-pairs.svg`, `images/heatmap-tasks.svg`) are exported from the heatmap dialog (**Export SVG** or **Export PNG**) after opening **Heatmap** on a multi-core trace — see [Migration heatmap](#migration-heatmap).
+This invokes the desktop CLI `snapshot` command (`--view plot` / `--view timeline`) directly — see `make -C BTFViewer help`. Timeline screenshots (e.g. `images/stats/tasks-priority-il266.svg`) use `--view timeline --task ... --lo ... --hi ...` to zoom to the region of interest. Migration heatmap screenshots (`images/heatmap-pairs.svg`, `images/heatmap-tasks.svg`) are regenerated the same way with `make -C BTFViewer update-images` (`snapshot --view heatmap`, with `--drill-row`/`--drill-bin` for the task-level image) — see [Migration heatmap](#migration-heatmap).
 
 #### Summary, scheduling, and core utilisation
 
@@ -1145,7 +1146,7 @@ Zoom the timeline to that window (or click the **IL[266]** stats row / scatter p
 
 ![Timeline view: IL[266] with red priority-inheritance stripe (example-8cores.btf)](../images/stats/tasks-priority-il266.svg)
 
-Export a timeline SVG from the viewer (**File → Save SVG** or toolbar) after zooming to the episode, or regenerate it headlessly via `make -C BTFViewer update-stats-images` (desktop CLI `snapshot --view timeline --task ... --lo ... --hi ...`).
+Export a timeline SVG from the viewer (**File → Save SVG** or toolbar) after zooming to the episode, or regenerate it headlessly via `make -C BTFViewer update-images` (desktop CLI `snapshot --view timeline --task ... --lo ... --hi ...`).
 
 **Distribution chart** — click any Priority Inheritance table row:
 
@@ -1517,23 +1518,21 @@ Visualise **when** migrations happen between core pairs — complementary to the
 
 **Example (`example-4cores.btf`)** — screenshots exported with **Export SVG** from the heatmap dialog (full current drill level, no hover highlight):
 
-**Level 1 — core-pair overview** (4 cores · 32 time bins across the trace):
+**Level 1 — core-pair overview** (4 cores · 12 time bins across the trace):
 
-![Migration heatmap Level 1: core-pair rows and time bins for example-4cores.btf](../images/heatmap-pairs.svg)
+![Migration heatmap Level 1: core-pair rows and time bins for example-8cores.btf](../images/heatmap-pairs.svg)
 
 Each row is a directed core pair (`c0→c1`, `c0→c2`, …). Cell colour intensity is the migration count in that bin (darker blue = more events). Horizontal bands show **when** traffic occurred — e.g. repeated activity on `c0→c2` and `c1→c0` during the context-switch stress phases. Click a non-empty cell to drill into tasks for that pair and time window.
 
 **Level 2 — task grid** (after clicking a cell on the pair overview):
 
-![Migration heatmap Level 2: per-task sub-bins after drilling from example-4cores.btf](../images/heatmap-tasks.svg)
+![Migration heatmap Level 2: per-task sub-bins after drilling from example-8cores.btf](../images/heatmap-tasks.svg)
 
-Rows are tasks that migrated on the selected core pair within the chosen bin; columns are **32 sub-bins** spanning that bin's time window. Brighter cells mark sub-intervals where that task crossed cores most often. Each row label is prefixed with a directional indicator: **▲** = task primarily migrates in this direction (egress-dominant), **▼** = more migrations on the reverse path (ingress-dominant), **⇄** = roughly symmetric. Click a task cell to zoom the timeline, place **C1** / **C2** at the sub-bin edges, switch to **Task View**, and filter to that task only.
-
-Regenerate from the viewer: open `tracedata/example-4cores.btf`, toolbar **Heatmap** → drill to the desired level → **Export SVG** (or **Export PNG**). Save under `images/` as `heatmap-pairs.svg` / `heatmap-tasks.svg`.
+Rows are tasks that migrated on the selected core pair within the chosen bin; columns are **12 sub-bins** spanning that bin's time window. Brighter cells mark sub-intervals where that task crossed cores most often. Each row label is prefixed with a directional indicator: **▲** = task primarily migrates in this direction (egress-dominant), **▼** = more migrations on the reverse path (ingress-dominant), **⇄** = roughly symmetric. Click a task cell to zoom the timeline, place **C1** / **C2** at the sub-bin edges, switch to **Task View**, and filter to that task only.
 
 **Typical workflow (≤ 16 cores)**
 
-1. Open **Heatmap** from the toolbar (`tracedata/example-4cores.btf` or `example-16cores.btf` are good demos).
+1. Open **Heatmap** from the toolbar (`tracedata/example-8cores.btf` or `example-16cores.btf` are good demos).
 2. **Level 1** — click a hot cell on a core-pair row to open the task grid for that bin.
 3. **Level 2** — click a task cell to zoom the timeline, place **C1** / **C2**, switch to **Task View**, and show only that task.
 4. **Show all tasks** — when done, clear the task filter and restore the timeline viewport, cursors, and highlights from before the heatmap was opened; the heatmap returns to the core-pair overview.

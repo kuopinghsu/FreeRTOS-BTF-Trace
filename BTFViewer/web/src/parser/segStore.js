@@ -83,6 +83,15 @@ export class SegStore {
     }
     const { table: taskStrings, id: taskId } = internStrings(taskTmp)
     const { table: coreStrings, id: coreId } = internStrings(coreTmp)
+    // taskIds/coreIds are Uint16Array/Uint8Array for memory efficiency; reject
+    // traces that would silently wrap (alias distinct tasks/cores onto the same
+    // id) instead of corrupting rendering.
+    if (taskStrings.length > 0xFFFF) {
+      throw new Error(`Trace has too many distinct tasks (${taskStrings.length}); max supported is 65536`)
+    }
+    if (coreStrings.length > 0xFF) {
+      throw new Error(`Trace has too many distinct cores (${coreStrings.length}); max supported is 256`)
+    }
     const taskIds = new Uint16Array(n)
     const coreIds = new Uint8Array(n)
     for (let i = 0; i < n; i++) {

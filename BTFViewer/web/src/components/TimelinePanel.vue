@@ -248,7 +248,7 @@ import LabelColumn from './LabelColumn.vue'
 import ColumnHeaderRow from './ColumnHeaderRow.vue'
 import StiTooltip  from './StiTooltip.vue'
 import SegmentTooltip from './SegmentTooltip.vue'
-import { render as renderTimeline, renderVertical, buildRowLayout, buildColumnLayout, drawHoverLine, drawHoverLineVertical, drawRangeSelect, drawRangeSelectVertical, drawCursors, drawCursorsVertical, drawMarksHorizontal, drawMarksVertical, drawFindHits, drawFindHitsVertical, RULER_H, isStiTagChannel, RULER_W, COL_W, HEADER_H, formatTime, rowBandHeight, visibleRowIndexRange, orthRowBuffer, taskPassesRowFilter, filteredCoreViewTasks, coreViewTaskFilterActive } from '../renderer/TimelineRenderer.js'
+import { render as renderTimeline, renderVertical, buildRowLayout, buildColumnLayout, drawHoverLine, drawHoverLineVertical, drawRangeSelect, drawRangeSelectVertical, drawCursors, drawCursorsVertical, drawMarksHorizontal, drawMarksVertical, drawFindHits, drawFindHitsVertical, RULER_H, isStiTagChannel, RULER_W, COL_W, HEADER_H, formatTime, rowBandHeight, visibleRowIndexRange, taskPassesRowFilter, filteredCoreViewTasks, coreViewTaskFilterActive } from '../renderer/TimelineRenderer.js'
 import { getTimelineLayout, setTimelineLayout } from '../utils/timelineLayout.js'
 
 function layout() {
@@ -257,10 +257,9 @@ function layout() {
 import { renderToSvg } from '../renderer/SvgExporter.js'
 import { captureLabelColumnBlob, captureColumnHeaderBlob } from '../renderer/labelColumnCapture.js'
 import { InteractionHandler } from '../renderer/InteractionHandler.js'
-import { taskMergeKey, taskColor, coreColor, coreTint, stiNoteColor, parseTaskName, stiChannelColor, taskDisplayName, taskReprGet } from '../utils/colors.js'
+import { taskMergeKey, taskColor, coreTint, stiNoteColor, stiChannelColor, taskDisplayName, taskReprGet } from '../utils/colors.js'
 import { segmentTooltipLines as buildSegmentTooltipLines } from '../utils/statsAnalysis.js'
 import { isRestorableViewport } from '../utils/sessionStore.js'
-import { isMigratedTask } from '../utils/migrationAnalysis.js'
 import { lodReduce } from '../utils/lod.js'
 import { collectSegmentStarts } from '../utils/snapBoundary.js'
 import { bisectLeft, bisectRight } from '../utils/bisect.js'
@@ -477,7 +476,6 @@ let _ovBgTrace       = null   // trace identity (object ref)
 let _ovBgMode        = null   // viewMode string
 let _ovBgShowSti     = null   // showSti option value
 let _ovBgExpandedKey = null   // sorted join of expanded STI channels
-let _ovBgMainAreaH   = 0     // task-only strip height in thumbnail bg (STI below); not used for indicator
 let _ovBgOrientation = null  // 'h' | 'v' when background was built
 
 // WASM row cull cache (rebuilt when layout or trace changes).
@@ -486,7 +484,6 @@ let _mainCtx = null
 
 // ---- Interaction fast-paint (coarse LOD while panning/zooming) ------------
 let _interacting = false
-let _interactTimeAxis = false
 let _interactEndTimer = null
 const INTERACT_SETTLE_MS = 250
 
@@ -602,13 +599,11 @@ function endLoadSettle() {
   _loadSettleTimer = null
 }
 
-function markInteracting(timeAxisChanged = false) {
+function markInteracting(_timeAxisChanged = false) {
   _interacting = true
-  if (timeAxisChanged) _interactTimeAxis = true
   clearTimeout(_interactEndTimer)
   _interactEndTimer = setTimeout(() => {
     _interacting = false
-    _interactTimeAxis = false
     scheduleRender()
     if (overviewVisible.value) scheduleOverviewPaint()
   }, INTERACT_SETTLE_MS)
@@ -1045,21 +1040,6 @@ function loadImageFromBlob(blob) {
   })
 }
 
-async function captureDomBlob(el, w, h) {
-  if (!el) return null
-  try {
-    return await domToBlob(el, {
-      cacheBust: true,
-      pixelRatio: window.devicePixelRatio || 1,
-      width: w ?? el.clientWidth,
-      height: h ?? el.clientHeight,
-      filter: captureDomFilter,
-    })
-  } catch {
-    return null
-  }
-}
-
 async function stitchImagesHorizontal(leftImg, rightImg) {
   const out = document.createElement('canvas')
   out.width = leftImg.naturalWidth + rightImg.naturalWidth
@@ -1404,7 +1384,6 @@ function jumpSegmentBoundary(forward) {
   }
   const allStarts = _segStartsCache
   if (!allStarts?.length) return
-  const horiz = orientation.value === 'h'
   const edgeLo = viewport.timeStart
   const edgeHi = viewport.timeEnd
   let target
@@ -2471,7 +2450,6 @@ function _paintOverviewBg(bgCanvas, tr, lo, hi, span, W, H, totMainSize) {
     ? 0  // vertical: STI strips share the same Y stack as task columns
     : (stiMainSize / totSafe) * H
   const mainAreaH = isVert ? H : (H - stiAreaH)
-  _ovBgMainAreaH = mainAreaH
   const nsPerPxThumb = span / W
 
   if (stripDefs.length) {

@@ -53,6 +53,12 @@
  *                               must boost the low task to high while
  *                               the high task waits (t8_inherit_ok).
  *
+ *  9. Task suspend/resume     - subject task blocks on a semaphore;
+ *                               runner suspends it (vTaskSuspend), then
+ *                               satisfies the wait condition and confirms
+ *                               it does NOT run until vTaskResume() is
+ *                               called (traceTASK_SUSPEND / traceTASK_RESUME).
+ *
  * Tests run back-to-back with only taskYIELD() handoffs between phases
  * (no vTaskDelay gaps) so all cores stay busy under SMP load.
  */
@@ -800,6 +806,117 @@ static int run_test8( void )
 }
 
 /* ==================================================================
+ * TEST 9 - Task suspend / resume (vTaskSuspend / vTaskResume)
+ *
+ * The subject task increments t9_ctr to 1, signals t9_started, then
+ * blocks on t9_go.  The runner:
+ *   (a) waits for t9_started so the subject is known to be blocked;
+ *   (b) calls vTaskSuspend() on the already-blocked subject;
+ *   (c) gives t9_go - the subject's wait condition is now satisfied,
+ *       but it must stay suspended and NOT run;
+ *   (d) yields with NUM_WORKERS fillers ready on every core - t9_ctr
+ *       must stay at 1;
+ *   (e) calls vTaskResume() - the subject must now wake, set t9_ctr to
+ *       2, and signal t9_done.
+ *
+ * The subject runs at BOOST_PRIORITY (strictly above the WORKER_PRIORITY
+ * fillers), same as test 7's boosted subject - this guarantees the SMP
+ * scheduler immediately preempts a filler-busy core on resume instead of
+ * waiting for same-priority round-robin, which is what made this test
+ * slow when subject and fillers shared WORKER_PRIORITY.
+ *
+ * Correctness: t9_ctr == 1 right after suspend (unchanged while
+ * suspended) and t9_ctr == 2 after resume + completion.
+ * ================================================================== */
+
+static SemaphoreHandle_t  t9_started, t9_go, t9_done;
+static volatile uint32_t  t9_ctr;
+
+static void vSuspResSubject( void *pvArg )
+{
+    (void)pvArg;
+
+    t9_ctr = 1;
+    xSemaphoreGive( t9_started );
+    xSemaphoreTake( t9_go, portMAX_DELAY );
+    t9_ctr = 2;
+    xSemaphoreGive( t9_done );
+    vTaskDelete( NULL );
+}
+
+static void vSuspResFiller( void *pvArg )
+{
+    int i;
+    (void)pvArg;
+
+    for( i = 0; i < ITER_SLOW; ++i )
+        taskYIELD();
+
+    vTaskDelete( NULL );
+}
+
+static int run_test9( void )
+{
+    TaskHandle_t subject;
+    int i, fail = 0;
+
+    t9_ctr     = 0;
+    t9_started = xSemaphoreCreateBinary();
+    t9_go      = xSemaphoreCreateBinary();
+    t9_done    = xSemaphoreCreateBinary();
+    configASSERT( t9_started && t9_go && t9_done );
+
+    configASSERT( xTaskCreate( vSuspResSubject, "SR",
+                               TASK_STACK_WORDS, NULL,
+                               BOOST_PRIORITY, &subject ) == pdPASS );
+
+    for( i = 0; i < NUM_WORKERS; ++i )
+        configASSERT( xTaskCreate( vSuspResFiller, "SF",
+                                   TASK_STACK_WORDS, NULL,
+                                   WORKER_PRIORITY, NULL ) == pdPASS );
+
+    /* Wait for the subject to run once and block on t9_go. */
+    xSemaphoreTake( t9_started, portMAX_DELAY );
+
+#if configUSE_TRACE_FACILITY
+    traceINTERVAL_START(9);
+#endif
+    vTaskSuspend( subject );
+
+    /* Satisfy the subject's wait condition while it is suspended - it
+     * must NOT run even though t9_go is now available. */
+    xSemaphoreGive( t9_go );
+
+    for( i = 0; i < (int)configNUMBER_OF_CORES; ++i )
+        taskYIELD();
+
+    if( t9_ctr != 1 )
+    {
+        printf( "  FAIL: subject ran while suspended (ctr=%u want 1)\n",
+                (unsigned)t9_ctr );
+        ++fail;
+    }
+
+    vTaskResume( subject );
+    xSemaphoreTake( t9_done, portMAX_DELAY );
+#if configUSE_TRACE_FACILITY
+    traceINTERVAL_STOP(9);
+#endif
+
+    vSemaphoreDelete( t9_started );
+    vSemaphoreDelete( t9_go );
+    vSemaphoreDelete( t9_done );
+
+    if( t9_ctr != 2 )
+    {
+        printf( "  FAIL: subject did not resume/complete (ctr=%u want 2)\n",
+                (unsigned)t9_ctr );
+        ++fail;
+    }
+    return fail;
+}
+
+/* ==================================================================
  * Test-runner task
  * ================================================================== */
 
@@ -821,6 +938,7 @@ static const test_entry_t tests[] =
     { "6: queue stress",           run_test6 },
     { "7: task priority set",      run_test7 },
     { "8: priority inversion",     run_test8 },
+    { "9: task suspend/resume",    run_test9 },
 };
 
 #define N_TESTS  ( (int)( sizeof( tests ) / sizeof( tests[ 0 ] ) ) )

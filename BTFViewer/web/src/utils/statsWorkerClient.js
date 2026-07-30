@@ -38,6 +38,8 @@ function wireWorker(worker) {
     _ready = false
     _pendingRegister?.reject(new Error('Stats worker error'))
     _pendingRegister = null
+    for (const cb of _callbacks.values()) cb({ type: 'error' })
+    _callbacks.clear()
   }
 }
 
@@ -74,6 +76,9 @@ export async function registerTraceWithStatsWorker(trace) {
   if (!worker || !trace?.segStore) return false
 
   _ready = false
+  // A new registration supersedes any still-pending one - reject it now so its
+  // caller doesn't hang forever instead of silently losing its promise.
+  _pendingRegister?.reject(new Error('Superseded by a newer registration'))
   const store = trace.segStore
   const segIndicesByMk = [...segIndicesMapFromTrace(trace).entries()].map(([mk, idx]) => [
     mk, idx.buffer,

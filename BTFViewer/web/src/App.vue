@@ -1342,6 +1342,16 @@ async function parseTraceOnMainThread(text, name) {
 }
 
 async function onTraceLoaded({ text, name }) {
+  // Guard against exhausting tab memory on a huge/adversarial file; real
+  // traces are typically tens of MB, this leaves generous headroom.
+  const MAX_TRACE_FILE_BYTES = 500 * 1024 * 1024
+  if (typeof text === 'string' && text.length > MAX_TRACE_FILE_BYTES) {
+    showToast(
+      `Trace file too large (${(text.length / (1024 * 1024)).toFixed(0)} MB, max ${MAX_TRACE_FILE_BYTES / (1024 * 1024)} MB)`,
+      'error',
+    )
+    return
+  }
   // Terminate any in-progress parse
   if (_parseWorker) { _parseWorker.terminate(); _parseWorker = null }
 

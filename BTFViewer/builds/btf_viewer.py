@@ -983,6 +983,8 @@ class SyncIssueRef:
     obj_key: Optional[str] = None
     ptr: str = ""
 
+_MAX_TRACE_FILE_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB guard vs. memory exhaustion on a huge/adversarial file
+
 _META_KEY_RE = re.compile(r"^[\w.-]+$")
 _CREATE_PRI_RE = re.compile(r"^create\s+pri:(\d+)\s*$", re.IGNORECASE)
 _PRIORITY_STI_RE = re.compile(
@@ -1454,7 +1456,7 @@ def _tag_channel_label(channel: str) -> str:
 
 def _tag_color(channel: str) -> str:
     m = _STI_EXPANDABLE_RE.match(channel or "")
-    idx = int(m.group(1)) % len(_TAG_COLORS) if m and m.group(1) is not None else 0
+    idx = _safe_int(m.group(1)) % len(_TAG_COLORS) if m and m.group(1) is not None else 0
     return _TAG_COLORS[idx]
 
 def _format_tag_value(value: float) -> str:
@@ -1531,13 +1533,55 @@ def _task_lifecycle_rows(
     lo: Optional[int] = None,
     hi: Optional[int] = None,
 ) -> List[tuple]:
-    """Per-task lifecycle summary from STI 'task' channel events.
+    """Per-task lifecycle summary.
+
+    Creation timestamps come from `trace.task_create_times` — task creation is
+    recorded as a dedicated 'T' event, never as an STI 'task' channel note (the
+    `task` channel only ever emits delete/suspend/resume/set_priority/…), so a
+    row's create_ns would otherwise always be None. Delete/suspend/resume come
+    from STI 'task' channel events as before.
+
+    `run_count` is the number of times the task was dispatched onto a core
+    (context-switch-in / segment count) — a scheduler-level metric, distinct
+    from `suspend_count`/`resume_count` which only reflect explicit
+    vTaskSuspend()/vTaskResume() API calls.
 
     Returns a list of tuples:
-        (mk, label, create_ns, delete_ns, suspend_count, resume_count, alive_ns, event_count)
-    Only tasks with at least one lifecycle event are included.
+        (mk, label, create_ns, delete_ns, suspend_count, resume_count, alive_ns, event_count, run_count)
+    Tasks are included if created in scope or with at least one STI lifecycle event.
     """
+    def _in_scope(t: int) -> bool:
+        return lo is None or hi is None or (lo <= t <= hi)
+
     by_mk: Dict[str, dict] = {}
+
+    def _row(mk: str, label_hint: str) -> dict:
+        if mk not in by_mk:
+            # `task_repr` only covers tasks seen in a context-switch segment; a task
+            # that is created but never scheduled (e.g. deleted/suspended before its
+            # first run) falls back to `task_create_repr` (the raw name recorded at
+            # creation time) rather than the internal merge-key string, which would
+            # otherwise leak through as a garbled label (e.g. "289SF" instead of
+            # "SF[289]").
+            raw_repr = trace.task_repr.get(mk) or trace.task_create_repr.get(mk) or label_hint
+            by_mk[mk] = {
+                "mk": mk,
+                "label": _task_display_name(raw_repr),
+                "create_ns": None,
+                "delete_ns": None,
+                "suspend_count": 0,
+                "resume_count": 0,
+                "event_count": 0,
+            }
+        return by_mk[mk]
+
+    for mk, create_ns in trace.task_create_times.items():
+        if not _in_scope(create_ns):
+            continue
+        row = _row(mk, mk)
+        row["create_ns"] = create_ns
+        row["event_count"] += 1
+
     for ev in trace.sti_events:
         if ev.target != "task":
             continue
@@ -1545,22 +1589,12 @@ def _task_lifecycle_rows(
         m = _LIFECYCLE_NOTE_RE.match(note)
         if not m:
             continue
-        if lo is not None and hi is not None and (ev.time < lo or ev.time > hi):
+        if not _in_scope(ev.time):
             continue
         action = m.group(1).lower()
         task_label = note[m.end():].strip() or note
         mk = _task_merge_key(task_label)
-        if mk not in by_mk:
-            by_mk[mk] = {
-                "mk": mk,
-                "label": _task_display_name(task_label),
-                "create_ns": None,
-                "delete_ns": None,
-                "suspend_count": 0,
-                "resume_count": 0,
-                "event_count": 0,
-            }
-        row = by_mk[mk]
+        row = _row(mk, task_label)
         row["event_count"] += 1
         if action == "create" and row["create_ns"] is None:
             row["create_ns"] = ev.time
@@ -1576,8 +1610,14 @@ def _task_lifecycle_rows(
         create_ns = d["create_ns"]
         delete_ns = d["delete_ns"]
         alive_ns = (delete_ns - create_ns) if (create_ns is not None and delete_ns is not None) else None
+        mk = d["mk"]
+        segs = trace.seg_map_by_merge_key.get(mk, ())
+        if lo is not None and hi is not None:
+            run_count = sum(1 for s in segs if _seg_overlaps_range(s, lo, hi))
+        else:
+            run_count = len(segs)
         rows.append((
-            d["mk"],
+            mk,
             d["label"],
             create_ns,
             delete_ns,
@@ -1585,6 +1625,7 @@ def _task_lifecycle_rows(
             d["resume_count"],
             alive_ns,
             d["event_count"],
+            run_count,
         ))
     return rows
 
@@ -1674,7 +1715,7 @@ def _task_core_affinity_rows(
             continue
         task_label = m.group(1).strip()
         raw_mask = m.group(2)
-        mask_val = int(raw_mask, 16 if raw_mask.startswith(("0x", "0X")) else 10)
+        mask_val = _safe_int(raw_mask, 16 if raw_mask.startswith(("0x", "0X")) else 10)
         mk = _task_merge_key(task_label)
         masks[mk] = mask_val
 
@@ -1694,15 +1735,14 @@ def _task_core_affinity_rows(
             obs.add(seg.core)
         if not obs:
             continue
-        # Build allowed-core set from bitmask (Core_N → bit N)
+        # Build allowed-core set from bitmask (Core_N → bit N). idx is bounded to
+        # avoid an astronomically large left-shift if a crafted trace names a core
+        # with a huge numeric suffix.
         allowed: set = set()
         for core in trace.core_names:
-            try:
-                idx = int(core.split("_")[-1])
-                if mask & (1 << idx):
-                    allowed.add(core)
-            except (ValueError, IndexError):
-                pass
+            idx = _safe_int(core.split("_")[-1], default=-1)
+            if 0 <= idx < 4096 and (mask & (1 << idx)):
+                allowed.add(core)
         violations = obs - allowed if allowed else set()
         mask_hex = f"0x{mask:X}"
         obs_str = ", ".join(sorted(obs))
@@ -1810,13 +1850,13 @@ def _tag_sample_detail_rows(
 
 def _parse_create_priority(note: str) -> Optional[int]:
     m = _CREATE_PRI_RE.match((note or "").strip())
-    return int(m.group(1)) if m else None
+    return _safe_int(m.group(1)) if m else None
 
 def _parse_priority_sti_note(note: str) -> Optional[Tuple[str, str, int]]:
     m = _PRIORITY_STI_RE.match((note or "").strip())
     if not m:
         return None
-    return m.group(1).lower(), m.group(2).strip(), int(m.group(3))
+    return m.group(1).lower(), m.group(2).strip(), _safe_int(m.group(3))
 
 def _merge_key_from_priority_ref(task_ref: str) -> str:
     return _task_merge_key((task_ref or "").strip())
@@ -2572,6 +2612,10 @@ class BtfTrace:
     core_task_seg_lod_ultra_starts: Dict[str, Dict[str, List[int]]]         = field(default_factory=dict)
     # Map from merge-key -> timestamp of the task_create event (first occurrence).
     task_create_times: Dict[str, int]                                       = field(default_factory=dict)
+    # Map from merge-key -> raw task representation seen at creation time. Used as a
+    # fallback label source for tasks that are created but never scheduled (so they
+    # never appear in `task_repr`, which is only populated from context-switch segments).
+    task_create_repr: Dict[str, str]                                        = field(default_factory=dict)
     # Sorted timestamps from STI TICK events - rendered as ruler marks.
     tick_sti_times: List[int]                                               = field(default_factory=list)
     # All STI event times sorted once at parse — used by migration stats.
@@ -2620,11 +2664,28 @@ _IDLE_RE = re.compile(
     re.IGNORECASE,
 )
 
+_MAX_SAFE_INT_DIGITS = 18  # generous headroom over any realistic task/core id, priority, or tag index
+
+def _safe_int(s: str, base: int = 10, default: int = 0) -> int:
+    """Parse an int token defensively.
+
+    Returns `default` for invalid input or an absurdly long digit string from an
+    adversarial trace file, instead of raising (Python's int-string-conversion
+    limit) or succeeding with an astronomically large value that later blows up
+    a bit-shift/format operation.
+    """
+    if not s or len(s) > _MAX_SAFE_INT_DIGITS:
+        return default
+    try:
+        return int(s, base)
+    except ValueError:
+        return default
+
 def _parse_int_token(s: str) -> int:
     """Parse an integer token that may be hex (0x...) or decimal (with optional leading zeros)."""
     if s.startswith(("0x", "0X")):
-        return int(s, 16)
-    return int(s, 10)
+        return _safe_int(s, 16)
+    return _safe_int(s, 10)
 
 def _format_int_token_display(token: str, value: int) -> str:
     """Format a parsed task-id token for Name[id] labels."""
@@ -2690,6 +2751,21 @@ def _normalize_idle_name(name: str) -> str:
 @functools.lru_cache(maxsize=16384)
 def _task_display_name(raw: str) -> str:
     """Short display name: 'Name[id]' for regular tasks; bare name for IDLE/TICK."""
+    if raw.startswith("\x00"):
+        # `raw` is itself an internal merge-key string (e.g. '\x00271\x00SR'),
+        # not an actual raw trace repr — this happens when no trace repr was
+        # ever recorded for the task (see `_task_merge_key`). Decode it directly
+        # instead of falling through to the raw-name parsers below, which
+        # would otherwise return it unparsed and produce a garbled label like
+        # "289SF" (task_id and name glued together with invisible NUL bytes).
+        sep = raw.find("\x00", 1)
+        if sep > 0:
+            task_id_str, name = raw[1:sep], raw[sep + 1:]
+            if name == "TICK":
+                return name
+            if _is_idle_task_name(name):
+                return _normalize_idle_name(name)
+            return f"{name}[{task_id_str}]"
     if _IDLE_RE.match(raw):
         return _normalize_idle_name(raw)
     _, task_id, name = _parse_task_name(raw)
@@ -3793,8 +3869,36 @@ def _build_trace_compare_rows(
 
     return summary_rows, top_rows, mig_rows, block_rows, pre_rows, sync_rows
 
+_CSV_FORMULA_LEAD_CHARS = ("=", "+", "-", "@", "\t", "\r")
+
+def _csv_sanitize_cell(v: object) -> object:
+    """Neutralize CSV/spreadsheet formula injection (CWE-1236).
+
+    Trace-derived strings (task/object names, labels) are attacker-controllable;
+    if a value begins with =, +, -, @ (or a tab/CR) and the exported CSV is later
+    opened in Excel/Sheets, it can be interpreted as a formula. Prefix with a
+    leading apostrophe to force text interpretation; non-strings pass through.
+    """
+    if isinstance(v, str) and v.startswith(_CSV_FORMULA_LEAD_CHARS):
+        return "'" + v
+    return v
+
+
+class _SafeCsvWriter:
+    """csv.writer wrapper that sanitizes every cell against formula injection (CWE-1236)."""
+    def __init__(self, fh, **kwargs):
+        self._writer = csv.writer(fh, **kwargs)
+
+    def writerow(self, row):
+        self._writer.writerow(_csv_sanitize_cell(c) for c in row)
+
+    def writerows(self, rows):
+        for row in rows:
+            self.writerow(row)
+
+
 def _compare_csv_cell(v: object) -> str:
-    s = str(v)
+    s = str(_csv_sanitize_cell(v))
     if any(c in s for c in '",\n\r'):
         return '"' + s.replace('"', '""') + '"'
     return s
@@ -4054,6 +4158,15 @@ def _parse_btf(filepath: str,
     ``progress_callback(pct, message)``
     where *pct* is an integer 0-100 and *message* is a short status string.
     """
+    try:
+        file_size = os.path.getsize(filepath)
+    except OSError:
+        file_size = 0
+    if file_size > _MAX_TRACE_FILE_BYTES:
+        raise ValueError(
+            f"Trace file is too large ({file_size / (1024 * 1024):.0f} MB, "
+            f"max {_MAX_TRACE_FILE_BYTES // (1024 * 1024)} MB)"
+        )
 
     meta: Dict[str, str] = {}
     time_scale = "ns"
@@ -4356,10 +4469,13 @@ def _parse_btf(filepath: str,
 
     # Map raw task_create names to merge keys.
     _task_create_times: Dict[str, int] = {}
+    _task_create_repr: Dict[str, str] = {}
     for _raw_ct, _ct_time in _task_create_raw.items():
         _mk_ct = _mk_cache.get(_raw_ct) or _task_merge_key(_raw_ct)
         if _mk_ct not in _task_create_times or _ct_time < _task_create_times[_mk_ct]:
             _task_create_times[_mk_ct] = _ct_time
+        if _mk_ct not in _task_create_repr:
+            _task_create_repr[_mk_ct] = _raw_ct
 
     _task_base_pri, _priority_episodes, _priority_by_mk, _has_priority = (
         _build_priority_data(
@@ -4528,6 +4644,7 @@ def _parse_btf(filepath: str,
         core_task_seg_lod_ultra=dict(_core_task_lod_ultra),
         core_task_seg_lod_ultra_starts=dict(_core_task_lod_ultra_starts),
         task_create_times=_task_create_times,
+        task_create_repr=_task_create_repr,
         tick_sti_times=sorted(tick_sti_times),
         sti_event_times=sorted(e.time for e in sti_events),
         migrations=_migrations,
@@ -14432,9 +14549,9 @@ class _ScatterWidget(QWidget):
         p.setPen(txt)
         vals_sorted = sorted(ys)
         n = len(vals_sorted)
-        p50_val = vals_sorted[min(n - 1, int(n * 0.50))]
+        p50_val = vals_sorted[min(n - 1, math.ceil(n * 0.50) - 1)]
         avg_val = sum(ys) / len(ys) if ys else 0
-        p95_val = vals_sorted[min(n - 1, int(n * 0.95))]
+        p95_val = vals_sorted[min(n - 1, math.ceil(n * 0.95) - 1)]
         for fi in range(5):
             val = y0 + (y1 - y0) * fi / 4
             gy  = MT + ph - int(fi / 4 * ph)
@@ -18978,41 +19095,6 @@ class _StatsPanel(QWidget):
                     '<th>Issues</th><th>Bounces</th><th>Avg hold</th><th>Status</th></tr></thead>'
                     f'<tbody>{q_body}</tbody></table></section>'
                 )
-            sync_body = "".join(
-                f"<tr><td>{_esc(r[3])}</td><td>{_esc(r[1])}</td><td>{r[4]}</td><td>{r[5]}</td>"
-                f"<td class=\"{'sev-warning' if len(r) > 10 and r[10] > 0 else ''}\">{r[10] if len(r) > 10 else 0}</td>"
-                f"<td>{_esc(r[6])}</td><td class=\"{'sev-error' if r[8] == 'error' else 'sev-warning' if r[8] == 'warning' else ''}\">"
-                f"{_esc(r[7])}</td></tr>"
-                for r in sync_rows
-            ) or '<tr><td colspan="7" class="empty">No mutex/sem activity in scope</td></tr>'
-            issue_body = "".join(
-                f"<tr><td>{_esc(_format_time(i['time_ns'], trace.time_scale))}</td>"
-                f"<td>{_esc(i.get('obj_key') or '—')}</td>"
-                f"<td class=\"{_sev_class(i.get('severity', ''))}\">{_esc(i.get('kind', ''))}</td>"
-                f"<td>{_esc(i.get('detail', ''))}</td>"
-                f"<td>{_esc(i.get('task_label') or '—')}</td>"
-                f"<td>{_esc(i.get('core') or '')}</td></tr>"
-                for i in sync_issues_scoped
-            ) or '<tr><td colspan="6" class="empty">No pairing issues in scope</td></tr>'
-            hold_body = "".join(
-                f"<tr><td>{_esc(h['object'])}</td><td>{_esc(h['holder'])}</td>"
-                f"<td>{_esc(h['start'])}</td><td>{_esc(h['stop'])}</td>"
-                f"<td>{_esc(h['duration'])}</td><td>{_esc(h['take_core'])}</td>"
-                f"<td>{_esc(h['give_core'])}</td></tr>"
-                for h in sync_holds
-            ) or '<tr><td colspan="7" class="empty">No paired holds in scope</td></tr>'
-            hold_note = ('<p class="detail-note">Showing longest 150 hold episodes in scope.</p>'
-                         if len(sync_holds) >= 150 else "")
-            sync_html = f"""
-    <section class=\"report-card\"><h2>Mutex / Semaphore{_esc(scope_title)}</h2>
-    <table><thead><tr><th>Object</th><th>Kind</th><th>Holds</th><th>Issues</th><th>Bounces</th><th>Avg hold</th><th>Status</th></tr></thead>
-    <tbody>{sync_body}</tbody></table>
-    <h3 class=\"sub\">Pairing issues</h3>
-    <table><thead><tr><th>Time</th><th>Object</th><th>Issue</th><th>Detail</th><th>Task</th><th>Core</th></tr></thead>
-    <tbody>{issue_body}</tbody></table>
-    <h3 class=\"sub\">Hold episodes (longest first)</h3>{hold_note}
-    <table><thead><tr><th>Object</th><th>Holder</th><th>Take</th><th>Give</th><th>Duration</th><th>Take core</th><th>Give core</th></tr></thead>
-    <tbody>{hold_body}</tbody></table></section>"""
 
         interval_body = "".join(
             f"<tr><td>{_esc(r[0])}</td><td>{_esc(r[1])}</td><td>{r[2]}</td>"
@@ -19062,15 +19144,15 @@ class _StatsPanel(QWidget):
             f"<tr><td>{_esc(label)}</td>"
             f"<td>{_esc(_format_time(cns, ts)) if cns is not None else '—'}</td>"
             f"<td>{_esc(_format_time(dns, ts)) if dns is not None else '—'}</td>"
-            f"<td>{nsus}</td><td>{nres}</td>"
+            f"<td>{nsus}/{nres}</td>"
             f"<td>{_esc(_format_time(alive, ts)) if alive else '—'}</td>"
-            f"<td>{nev}</td></tr>"
-            for mk, label, cns, dns, nsus, nres, alive, nev in lc_rows_html
+            f"<td>{nev}</td><td>{nruns}</td></tr>"
+            for mk, label, cns, dns, nsus, nres, alive, nev, nruns in lc_rows_html
         ) or '<tr><td colspan="7" class="empty">No lifecycle events</td></tr>'
         lifecycle_html = (
             f'<section class="report-card"><h2>Task Lifecycle{_esc(scope_title)}</h2>'
             '<table><thead><tr><th>Task</th><th>Created</th><th>Deleted</th>'
-            '<th>Suspends</th><th>Resumes</th><th>Alive span</th><th>Events</th></tr></thead>'
+            '<th>Susp/Res</th><th>Alive span</th><th>Events</th><th>Runs</th></tr></thead>'
             f'<tbody>{lc_body}</tbody></table></section>'
         )
 
@@ -19318,6 +19400,19 @@ class _StatsPanel(QWidget):
     {core_breakdown_html}
         <div class=\"report-foot\">Generated by BTF Viewer</div>
     </div>
+    <script>
+    (function () {{
+      function openTarget(id) {{
+        var el = document.getElementById(id)
+        if (el && el.tagName === 'DETAILS') el.open = true
+      }}
+      document.querySelectorAll('.report-toc a[href^="#"]').forEach(function (a) {{
+        a.addEventListener('click', function () {{ openTarget(a.getAttribute('href').slice(1)) }})
+      }})
+      window.addEventListener('hashchange', function () {{ openTarget(location.hash.slice(1)) }})
+      if (location.hash) openTarget(location.hash.slice(1))
+    }})()
+    </script>
 </body>
 </html>
 """
@@ -19399,7 +19494,7 @@ class _StatsPanel(QWidget):
             return str(v).replace("µs", "us").replace("μs", "us")
 
         with open(path, "w", newline="", encoding="utf-8-sig") as fh:
-            writer = csv.writer(fh, quoting=csv.QUOTE_MINIMAL)
+            writer = _SafeCsvWriter(fh, quoting=csv.QUOTE_MINIMAL)
 
             writer.writerow(["Summary"])
             writer.writerow(["Metric", "Value"])
@@ -19564,13 +19659,13 @@ class _StatsPanel(QWidget):
             lc_rows_csv = _task_lifecycle_rows(trace, lo, hi)
             writer.writerow([])
             writer.writerow([f"Task Lifecycle{scope_suffix}"])
-            writer.writerow(["Task", "Created", "Deleted", "Suspends", "Resumes", "Alive span", "Events"])
+            writer.writerow(["Task", "Created", "Deleted", "Susp/Res", "Alive span", "Events", "Runs"])
             if lc_rows_csv:
-                for mk, label, create_ns, delete_ns, n_sus, n_res, alive_ns, n_ev in lc_rows_csv:
+                for mk, label, create_ns, delete_ns, n_sus, n_res, alive_ns, n_ev, n_runs in lc_rows_csv:
                     created = _us(_format_time(create_ns, trace.time_scale)) if create_ns is not None else ""
                     deleted = _us(_format_time(delete_ns, trace.time_scale)) if delete_ns is not None else ""
                     alive   = _us(_format_time(alive_ns, trace.time_scale)) if alive_ns else ""
-                    writer.writerow([label, created, deleted, n_sus, n_res, alive, n_ev])
+                    writer.writerow([label, created, deleted, f"{n_sus}/{n_res}", alive, n_ev, n_runs])
             else:
                 writer.writerow(["No lifecycle events", "", "", "", "", "", ""])
 
@@ -20474,7 +20569,7 @@ class _StatsPanel(QWidget):
                 blay.addWidget(self._lbl(empty_lifecycle, color="#888888", ui_fs=_fs))
                 return
             ts = trace.time_scale
-            headers = ["Task", "Created", "Deleted", "Susp", "Res", "Alive", "Events"]
+            headers = ["Task", "Created", "Deleted", "Susp/Res", "Alive", "Events", "Runs"]
             table = QTableWidget(len(lc_rows), len(headers))
             table.setHorizontalHeaderLabels(headers)
             table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -20492,7 +20587,7 @@ class _StatsPanel(QWidget):
             _item_bg = self._apply_stats_table_theme(table, _fs)
             _lc_create_ns: Dict[str, Optional[int]] = {}
             for r, row in enumerate(lc_rows):
-                mk, label, create_ns, delete_ns, susp, res, alive_ns, evt_count = row
+                mk, label, create_ns, delete_ns, susp, res, alive_ns, evt_count, run_count = row
                 _lc_create_ns[mk] = create_ns
                 def _cell(text: str, *, align=Qt.AlignmentFlag.AlignLeft) -> QTableWidgetItem:
                     it = _StatsSortItem(text)
@@ -20508,11 +20603,13 @@ class _StatsPanel(QWidget):
                                           align=Qt.AlignmentFlag.AlignRight))
                 table.setItem(r, 2, _cell(_format_time(delete_ns, ts) if delete_ns is not None else "—",
                                           align=Qt.AlignmentFlag.AlignRight))
-                table.setItem(r, 3, _cell(str(susp), align=Qt.AlignmentFlag.AlignRight))
-                table.setItem(r, 4, _cell(str(res),  align=Qt.AlignmentFlag.AlignRight))
-                table.setItem(r, 5, _cell(_format_time(alive_ns, ts) if alive_ns is not None else "—",
+                _susres_item = _cell(f"{susp}/{res}", align=Qt.AlignmentFlag.AlignRight)
+                _susres_item._sort_key = susp + res
+                table.setItem(r, 3, _susres_item)
+                table.setItem(r, 4, _cell(_format_time(alive_ns, ts) if alive_ns is not None else "—",
                                           align=Qt.AlignmentFlag.AlignRight))
-                table.setItem(r, 6, _cell(str(evt_count), align=Qt.AlignmentFlag.AlignRight))
+                table.setItem(r, 5, _cell(str(evt_count), align=Qt.AlignmentFlag.AlignRight))
+                table.setItem(r, 6, _cell(str(run_count), align=Qt.AlignmentFlag.AlignRight))
             table.setSortingEnabled(True)
 
             def _on_lifecycle_row(row: int, _col: int) -> None:
@@ -22002,7 +22099,8 @@ class _AnnotationCanvas(QWidget):
 
         from PySide6.QtWidgets import QColorDialog, QMenu
         ed = self._editor
-        x, y = ed._to_img(event.position().x(), event.position().y())
+        # QContextMenuEvent uses .pos() - NOT .position() (QMouseEvent only)
+        x, y = ed._to_img(event.pos().x(), event.pos().y())
         idx = ed._hit_test(x, y)
         if idx < 0:
             return
@@ -25477,6 +25575,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._bound_scene = None
         self._legend_cancel_fn = None
         self._parse_thread: Optional[_ParseThread] = None
+        self._orphaned_parse_threads: List[_ParseThread] = []
         self._settings = _RcSettings()
         self._dock_width_apply_guard: bool = False
         self._applying_dock_prefs: bool = False
@@ -27114,6 +27213,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if thread.isRunning():
             thread.wait(wait_ms)
         if thread.isRunning():
+            # Still running after the wait budget: destroying the Python wrapper
+            # now while the underlying QThread is alive risks a crash, so keep a
+            # reference and let Qt delete it once the thread actually finishes.
+            thread.finished.connect(thread.deleteLater)
+            self._orphaned_parse_threads.append(thread)
             return False
         thread.deleteLater()
         return True
@@ -30777,7 +30881,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             import csv
             # utf-8-sig prepends BOM for Excel compatibility on non-UTF8 locales.
             with open(path, "w", newline="", encoding="utf-8-sig") as fh:
-                writer = csv.writer(fh, quoting=csv.QUOTE_ALL)
+                writer = _SafeCsvWriter(fh, quoting=csv.QUOTE_ALL)
                 writer.writerow(["type", "time", time_scale, "label"])
                 writer.writerows(rows)
             self.statusBar().showMessage(f"Marks exported → {os.path.basename(path)}", 4000)
@@ -31384,7 +31488,9 @@ Views (--view):
              to a time range first.
   heatmap    Migration Heatmap (core-pair x time-bin grid). --task is not
              supported (the heatmap is inherently cross-task); --lo/--hi
-             scope the grid to a time range.
+             scope the grid to a time range. --drill-row/--drill-bin drill
+             into the per-task grid for one core-pair row and time bin
+             (matrix-mode heatmaps, >16 cores, are not drillable headlessly).
   plot       A statistics metric scatter+histogram popup, selected with
              --metric:
                tick      tick-interval distribution (trace-wide, no --task)
@@ -31403,6 +31509,7 @@ examples:
   %(prog)s trace.btf -o timeline.png --view timeline
   %(prog)s trace.btf -o timeline.svg --view timeline --task "Producer[1]" --lo 0 --hi 500000
   %(prog)s trace.btf -o heatmap.png --view heatmap
+  %(prog)s trace.btf -o heatmap-tasks.svg --view heatmap --drill-row 0 --drill-bin 3
   %(prog)s trace.btf -o tick.svg --view plot --metric tick
   %(prog)s trace.btf -o exec.png --view plot --metric exec --task "Producer[1]"
   %(prog)s trace.btf -o preempt.png --view plot --metric preempt --task "Producer[1]" --preemptor "Consumer[2]"
@@ -31620,6 +31727,20 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
     )
     snapshot.add_argument("--lo", type=int, default=None, metavar="T", help=_CLI_LO_HELP)
     snapshot.add_argument("--hi", type=int, default=None, metavar="T", help=_CLI_HI_HELP)
+    snapshot.add_argument(
+        "--drill-row", type=int, default=None, metavar="N", dest="drill_row",
+        help=(
+            "core-pair row index (0-based, top row = 0) to drill into the "
+            "per-task grid; requires --drill-bin (--view heatmap only)"
+        ),
+    )
+    snapshot.add_argument(
+        "--drill-bin", type=int, default=None, metavar="N", dest="drill_bin",
+        help=(
+            "time-bin column index (0-based, leftmost = 0) to drill into the "
+            "per-task grid; requires --drill-row (--view heatmap only)"
+        ),
+    )
     snapshot.add_argument(
         "--width", type=int, default=None, metavar="PX",
         help="image width in pixels (--view timeline default 1600, --view plot default 820)",
@@ -32091,9 +32212,27 @@ def _cli_snapshot_heatmap(trace: "BtfTrace",
         print("warning: --metric is ignored for --view heatmap", file=sys.stderr)
     if args.task:
         return None, "error: --task is not supported for --view heatmap (cross-task view)"
+    if (args.drill_row is None) != (args.drill_bin is None):
+        return None, "error: --drill-row requires --drill-bin (and vice versa)"
     dlg = _MigrationHeatmapDialog(trace, parent=None)
     if args.lo is not None and args.hi is not None:
         _cli_apply_heatmap_scope(dlg, args.lo, args.hi)
+    if args.drill_row is not None:
+        if dlg._uses_matrix:
+            return None, (
+                "error: --drill-row/--drill-bin is not supported for matrix-mode "
+                "heatmaps (>16 cores); drill interactively in the GUI instead")
+        row, bi = args.drill_row, args.drill_bin
+        if row < 0 or row >= len(dlg._pairs):
+            return None, f"error: --drill-row {row} out of range (0..{len(dlg._pairs) - 1})"
+        if bi < 0 or bi >= dlg._time_bins:
+            return None, f"error: --drill-bin {bi} out of range (0..{dlg._time_bins - 1})"
+        if not dlg._grid0 or dlg._grid0[row][bi] <= 0:
+            return None, f"error: no migrations at --drill-row {row} --drill-bin {bi}"
+        fc, tc, label = dlg._pairs[row]
+        bin_lo, bin_hi = _heatmap_bin_range(
+            dlg._t_min, dlg._bin_w, dlg._time_bins, dlg._t_max, bi)
+        dlg._go_level1(fc, tc, label, bin_lo, bin_hi, bi)
     dlg.show()
     _process_ui_events_safely()
     return dlg, None

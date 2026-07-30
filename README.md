@@ -8,7 +8,7 @@ Trace output is produced in two industry-standard formats:
 
 ## Screenshot
 
-<img src="images/btfviewer.png" alt="BTF Viewer screenshot" width=640>
+![BTF Viewer screenshot](images/btfviewer.png)
 
 [DEMO](https://apps.kuoping.com/btf_viewer.html?demo)
 
@@ -114,7 +114,7 @@ Sample traces: `tracedata/example.btf`, `tracedata/example-4cores.btf` (SMP demo
 
 ## Demo
 
-The demo (`Demo/examples/freertos_test/`) runs eight SMP stress tests:
+The demo (`Demo/examples/freertos_test/`) runs nine SMP stress tests:
 
 | # | Test | What it exercises |
 |---|------|-------------------|
@@ -126,6 +126,7 @@ The demo (`Demo/examples/freertos_test/`) runs eight SMP stress tests:
 | 6 | Queue stress | Producer/consumer queues at speed |
 | 7 | Task priority set | `vTaskPrioritySet()` and `traceTASK_PRIORITY_SET` |
 | 8 | Priority inversion | Classic L/M/H mutex inheritance (`uxTaskPriorityGet`) |
+| 9 | Task suspend/resume | `vTaskSuspend()` / `vTaskResume()` (`traceTASK_SUSPEND` / `traceTASK_RESUME`) |
 
 Expected output (CORES=2 example):
 
@@ -140,6 +141,7 @@ test 5: event group                 ... pass
 test 6: queue stress                ... pass
 test 7: task priority set           ... pass
 test 8: priority inversion          ... pass
+test 9: task suspend/resume         ... pass
 5034 events generated.
 freertos_test: all tests passed
 ```
@@ -190,7 +192,7 @@ python BTFViewer/builds/btf_viewer.py tracedata/trace.btf
 
 In BTFViewer, locate the **tag0_event** STI row in the label column and expand it to show the heap-usage waveform over time. Tags `1`–`7` (`btf_traceTAG( 1 … 7, value )`) are available for other periodic signals (stack high-water, custom counters, etc.).
 
-<img src="images/memusage.png">
+![Memory Usage](images/memusage.png)
 
 ### Use case: measure code execution intervals
 
@@ -231,7 +233,7 @@ The logger records the **calling task id** automatically (`param2` in the binary
 217432,Core_1,0,STI,interval_stop,0,trigger,1 tid:7
 ```
 
-In the demo (`Demo/examples/freertos_test/main.c`), `id` **0** brackets an entire test function; **1**–**8** bracket the inner loop of tests 1–8 respectively.
+In the demo (`Demo/examples/freertos_test/main.c`), `id` **0** brackets an entire test function; **1**–**9** bracket the inner loop of tests 1–9 respectively.
 
 **In BTFViewer:** paired spans appear as **Interval N** rows at the bottom of the timeline (horizontal task view). When the BTF note includes `tid:{task_id}`, start/stop events pair by **interval id + task id**; legacy traces without `tid` pair by the note string alone. Open **Statistics → Interval Analysis** for min/avg/max/p95 duration and a duration plot. See [`BTFViewer/README.md`](BTFViewer/README.md#interval-analysis) for pairing rules and SMP limitations.
 
@@ -245,17 +247,17 @@ Open the 4-core sample trace and explore the heatmap:
 python BTFViewer/builds/btf_viewer.py tracedata/example-4cores.btf
 ```
 
-**Level 1 — core-pair overview** (directed pairs × 32 time bins):
+**Level 1 — core-pair overview** (directed pairs × 12 time bins):
 
-<img src="images/heatmap-pairs.svg" alt="Migration heatmap Level 1: core-pair rows and time bins for example-4cores.btf" width="410">
+![Migration heatmap Level 1: core-pair rows and time bins](images/heatmap-pairs.svg)
 
 Each row is a directed core pair (`c0→c1`, `c0→c2`, …). Darker cells mean more migrations in that time bin. Click a non-empty cell to drill into the tasks that contributed.
 
 **Level 2 — task grid** (after clicking a hot cell):
 
-<img src="images/heatmap-tasks.svg" alt="Migration heatmap Level 2: per-task sub-bins after drilling from example-4cores.btf" width="410">
+![Migration heatmap Level 2: per-task sub-bins after drilling](images/heatmap-tasks.svg)
 
-Rows are tasks that migrated on the selected pair within the chosen bin; columns are **32 sub-bins** inside that bin. Click a task cell to zoom the timeline, place cursors, switch to **Task View**, and filter to that task.
+Rows are tasks that migrated on the selected pair within the chosen bin; columns are **12 sub-bins** inside that bin. Click a task cell to zoom the timeline, place cursors, switch to **Task View**, and filter to that task.
 
 Traces with **more than 16 cores** use a three-level drill-down (core×core matrix → outgoing pairs → tasks). **Export PNG / SVG** from the heatmap dialog captures the full current level. See [`BTFViewer/README.md`](BTFViewer/README.md#migration-heatmap) for workflow, cursor scoping, and **Trace Compare…** integration.
 
@@ -282,11 +284,15 @@ See [`BTFViewer/README.md`](BTFViewer/README.md) for the full feature reference 
 
 Open `tracedata/trace.btf` directly in [Trace Compass](https://www.eclipse.org/tracecompass/).
 
+![Trace Compass](images/trace-compass.png)
+
 ### GTKWave / VCD Viewer
 
 ```bash
 gtkwave tracedata/trace.vcd
 ```
+
+![VCD](images/vcd.png)
 
 ---
 

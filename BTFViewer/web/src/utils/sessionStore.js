@@ -103,7 +103,7 @@ function sanitizeViewport(vp) {
   }
 }
 
-function sanitizeOpenPlot(plot) {
+export function sanitizeOpenPlot(plot) {
   if (!plot || typeof plot !== 'object') return null
   const out = { ...plot }
   if (out.mk != null) out.mk = String(out.mk)
@@ -111,7 +111,7 @@ function sanitizeOpenPlot(plot) {
   return out
 }
 
-function sanitizeSectionCollapsed(src) {
+export function sanitizeSectionCollapsed(src) {
   if (!src || typeof src !== 'object') return null
   const out = {}
   for (const [k, v] of Object.entries(src)) {

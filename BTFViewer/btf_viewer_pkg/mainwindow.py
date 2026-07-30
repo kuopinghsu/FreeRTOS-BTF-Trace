@@ -1228,6 +1228,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._bound_scene = None
         self._legend_cancel_fn = None
         self._parse_thread: Optional[_ParseThread] = None
+        self._orphaned_parse_threads: List[_ParseThread] = []
         self._settings = _RcSettings()
         self._dock_width_apply_guard: bool = False
         self._applying_dock_prefs: bool = False
@@ -2865,6 +2866,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if thread.isRunning():
             thread.wait(wait_ms)
         if thread.isRunning():
+            # Still running after the wait budget: destroying the Python wrapper
+            # now while the underlying QThread is alive risks a crash, so keep a
+            # reference and let Qt delete it once the thread actually finishes.
+            thread.finished.connect(thread.deleteLater)
+            self._orphaned_parse_threads.append(thread)
             return False
         thread.deleteLater()
         return True
@@ -6528,7 +6534,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             import csv
             # utf-8-sig prepends BOM for Excel compatibility on non-UTF8 locales.
             with open(path, "w", newline="", encoding="utf-8-sig") as fh:
-                writer = csv.writer(fh, quoting=csv.QUOTE_ALL)
+                writer = _SafeCsvWriter(fh, quoting=csv.QUOTE_ALL)
                 writer.writerow(["type", "time", time_scale, "label"])
                 writer.writerows(rows)
             self.statusBar().showMessage(f"Marks exported → {os.path.basename(path)}", 4000)

@@ -10,16 +10,21 @@ TRACE ?= ../tracedata/example.btf
 BUILDS := builds
 OUT := $(BUILDS)/btf_viewer.py
 
-# Source trace + output dir for `make update-stats-images` (docs/*.md illustrations).
+# Source trace + output dir for `make update-images` (docs/*.md illustrations).
 STATS_TRACE ?= ../tracedata/example-8cores.btf
 STATS_IMG_DIR := ../images/stats
+
+# Source trace + output dir for `make update-images` (Migration Heatmap
+# illustrations in README.md).
+HEATMAP_TRACE ?= ../tracedata/example-4cores.btf
+HEATMAP_IMG_DIR := ../images
 
 .DEFAULT_GOAL := all
 
 PANDOC ?= pandoc
 DOCS := $(BUILDS)
 
-.PHONY: all help web bundle check-bundle test test-web test-all ci doc update-stats-images
+.PHONY: all help web bundle check-bundle test test-web test-all ci doc update-images
 
 help:
 	@echo "BTF Viewer — make targets"
@@ -29,14 +34,14 @@ help:
 	@echo "  make bundle       Desktop bundle only → builds/btf_viewer.py"
 	@echo "  make check-bundle Regenerate bundle; fail if it drifts from sources (CI)"
 	@echo "  make doc          Convert README.md + WORKFLOWS.md → builds/*.pdf"
-	@echo "  make update-stats-images  Regenerate ../images/stats/*.svg via the desktop CLI"
+	@echo "  make update-images  Regenerate ../images/stats/*.svg via the desktop CLI"
 	@echo "  make test         Desktop unit tests (QT_QPA_PLATFORM=offscreen)"
 	@echo "  make test-web     Web unit tests (node --test)"
 	@echo "  make test-all     Desktop + web unit tests"
 	@echo "  make ci           test-all + check-bundle (local CI parity)"
 	@echo "  make help         Show this help"
 	@echo ""
-	@echo "Variables: PYTHON=$(PYTHON)  TRACE=$(TRACE)  PANDOC=$(PANDOC)  STATS_TRACE=$(STATS_TRACE)"
+	@echo "Variables: PYTHON=$(PYTHON)  TRACE=$(TRACE)  PANDOC=$(PANDOC)  STATS_TRACE=$(STATS_TRACE)  HEATMAP_TRACE=$(HEATMAP_TRACE)"
 
 
 all: web bundle
@@ -82,7 +87,7 @@ check-bundle: bundle
 # used as illustrations in README.md / WORKFLOWS.md / btf-viewer-slides.md,
 # headlessly via the desktop CLI `snapshot` command (Statistics -> click row
 # equivalents), sourced from STATS_TRACE (default: example-8cores.btf).
-update-stats-images: bundle
+update-images: bundle
 	mkdir -p $(STATS_IMG_DIR)
 	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(STATS_TRACE) \
 		-o $(STATS_IMG_DIR)/stats-tick.svg --view plot --metric tick
@@ -105,3 +110,9 @@ update-stats-images: bundle
 		-o $(STATS_IMG_DIR)/tasks-priority-il266.svg --view timeline --task "IL[266]" \
 		--lo 2171700 --hi 2180200
 	@echo "Updated $(STATS_IMG_DIR) from $(STATS_TRACE)"
+	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(HEATMAP_TRACE) \
+		-o $(HEATMAP_IMG_DIR)/heatmap-pairs.svg --view heatmap
+	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(HEATMAP_TRACE) \
+		-o $(HEATMAP_IMG_DIR)/heatmap-tasks.svg --view heatmap --drill-row 0 --drill-bin 0
+	@echo "Updated $(HEATMAP_IMG_DIR)/heatmap-{pairs,tasks}.svg from $(HEATMAP_TRACE)"
+

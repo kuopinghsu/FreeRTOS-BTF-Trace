@@ -672,9 +672,9 @@
               class="stats-table-row clickable"
               :title="`Open execution-time plot for ${row.name}`"
               tabindex="0"
-              @click="openPlot(row.mk, 'exec')"
-              @keydown.enter.prevent="openPlot(row.mk, 'exec')"
-              @keydown.space.prevent="openPlot(row.mk, 'exec')"
+              @click="openTaskPlot(row.mk, 'exec')"
+              @keydown.enter.prevent="openTaskPlot(row.mk, 'exec')"
+              @keydown.space.prevent="openTaskPlot(row.mk, 'exec')"
             >
               <td class="task-col">{{ row.name }}</td>
               <td>{{ row.runs }}</td>
@@ -796,9 +796,9 @@
               class="stats-table-row clickable"
               :title="`Open blocking-time plot for ${row.name}`"
               tabindex="0"
-              @click="openPlot(row.mk, 'block')"
-              @keydown.enter.prevent="openPlot(row.mk, 'block')"
-              @keydown.space.prevent="openPlot(row.mk, 'block')"
+              @click="openTaskPlot(row.mk, 'block')"
+              @keydown.enter.prevent="openTaskPlot(row.mk, 'block')"
+              @keydown.space.prevent="openTaskPlot(row.mk, 'block')"
             >
               <td class="task-col">{{ row.name }}</td>
               <td>{{ row.gaps }}</td>
@@ -919,9 +919,9 @@
               class="stats-table-row clickable"
               :title="`Open inter-arrival plot for ${row.name}`"
               tabindex="0"
-              @click="openPlot(row.mk, 'inter')"
-              @keydown.enter.prevent="openPlot(row.mk, 'inter')"
-              @keydown.space.prevent="openPlot(row.mk, 'inter')"
+              @click="openTaskPlot(row.mk, 'inter')"
+              @keydown.enter.prevent="openTaskPlot(row.mk, 'inter')"
+              @keydown.space.prevent="openTaskPlot(row.mk, 'inter')"
             >
               <td class="task-col">{{ row.name }}</td>
               <td>{{ row.runs }}</td>
@@ -1469,7 +1469,7 @@
             <table class="stats-table">
               <thead>
                 <tr>
-                  <th>Task</th><th>Created</th><th>Deleted</th><th>Susp/Res</th><th>Alive</th><th>Events</th>
+                  <th>Task</th><th>Created</th><th>Deleted</th><th>Susp/Res</th><th>Alive</th><th>Events</th><th>Runs</th>
                 </tr>
               </thead>
               <tbody>
@@ -1489,6 +1489,7 @@
                   <td>{{ row.suspendCount }}/{{ row.resumeCount }}</td>
                   <td>{{ formatLifecycleSpan(row.aliveSpanNs, trace.timeScale) }}</td>
                   <td>{{ row.eventCount }}</td>
+                  <td>{{ row.runCount }}</td>
                 </tr>
               </tbody>
             </table>
@@ -2602,7 +2603,7 @@ const STATS_TABLE_DEFAULT_H = statsTableViewportHeight()
 const STATS_TABLE_MIG_DEFAULT_H = statsTableViewportHeight(STATS_MAX_VISIBLE_ROWS, true)
 const STATS_UTIL_DEFAULT_H = STATS_MAX_VISIBLE_ROWS * STATS_UTIL_ROW_H + (STATS_MAX_VISIBLE_ROWS - 1) * STATS_UTIL_ROW_GAP + 2
 
-const sectionHeights = ref({
+const localSectionHeights = ref({
   cores: STATS_UTIL_DEFAULT_H,
   tasks: STATS_UTIL_DEFAULT_H,
   migrations: STATS_TABLE_MIG_DEFAULT_H,
@@ -2620,7 +2621,7 @@ const sectionHeights = ref({
   tags: STATS_TABLE_DEFAULT_H,
 })
 watch(() => props.sectionHeights, (v) => {
-  if (v) Object.assign(sectionHeights.value, v)
+  if (v) Object.assign(localSectionHeights.value, v)
 }, { immediate: true, deep: true })
 let _tableResize = null
 const openPlotRef = computed({
@@ -2662,7 +2663,7 @@ const canCompareTabs = computed(() => loadedTabs.value.length >= 2)
 function clampPct(v) { return Math.max(0, Math.min(100, v)).toFixed(1) }
 
 function tableHeight(id) {
-  if (sectionHeights.value[id] != null) return sectionHeights.value[id]
+  if (localSectionHeights.value[id] != null) return localSectionHeights.value[id]
   // Auto-size small-row sections to exact content height (all wraps use
   // max-height, so this only matters for the initial/default size).
   if (id === 'core_breakdown') {
@@ -2679,8 +2680,8 @@ function tableHeight(id) {
 
 function utilScrollStyle(rowCount, id = null) {
   let h
-  if (id != null && sectionHeights.value[id] != null) {
-    h = sectionHeights.value[id]
+  if (id != null && localSectionHeights.value[id] != null) {
+    h = localSectionHeights.value[id]
   } else {
     const vis = Math.min(Math.max(rowCount, 1), STATS_MAX_VISIBLE_ROWS)
     h = vis * STATS_UTIL_ROW_H + Math.max(0, vis - 1) * STATS_UTIL_ROW_GAP + 2
@@ -2716,7 +2717,7 @@ function onTableResizeStart(id, e) {
 function onTableResizeMove(e) {
   if (!_tableResize) return
   const delta = e.clientY - _tableResize.startY
-  sectionHeights.value[_tableResize.id] = quantizeSectionHeight(_tableResize.id, _tableResize.startH + delta)
+  localSectionHeights.value[_tableResize.id] = quantizeSectionHeight(_tableResize.id, _tableResize.startH + delta)
 }
 
 function onTableResizeEnd() {
@@ -2724,7 +2725,7 @@ function onTableResizeEnd() {
   document.body.classList.remove('row-resizing')
   document.removeEventListener('mousemove', onTableResizeMove)
   document.removeEventListener('mouseup', onTableResizeEnd)
-  emit('update:sectionHeights', { ...sectionHeights.value })
+  emit('update:sectionHeights', { ...localSectionHeights.value })
 }
 
 onBeforeUnmount(() => {
@@ -2883,20 +2884,6 @@ const topTasks = computed(() => {
   }))
 })
 
-function _summarizeSamples(samples, scale) {
-  if (!samples || samples.length === 0) return null
-  const sorted = [...samples].sort((a, b) => a - b)
-  const n = sorted.length
-  const sum = sorted.reduce((a, b) => a + b, 0)
-  const p95Idx = Math.min(n - 1, Math.ceil(n * 0.95) - 1)
-  return {
-    min: formatTime(sorted[0], scale),
-    avg: formatTime(Math.round(sum / n), scale),
-    max: formatTime(sorted[n - 1], scale),
-    p95: formatTime(sorted[p95Idx], scale),
-  }
-}
-
 const execSliceStats = computed(() => workerExecRows.value)
 
 const blockingStats = computed(() => workerBlockRows.value)
@@ -3008,7 +2995,7 @@ const lifecycleStats = computed(() => {
   const tr = props.trace
   if (!tr?.stiEvents?.length) return []
   const r = statsRange.value
-  return buildTaskLifecycleRows(tr.stiEvents, tr.taskRepr, r?.lo ?? null, r?.hi ?? null)
+  return buildTaskLifecycleRows(tr.stiEvents, tr.taskRepr, r?.lo ?? null, r?.hi ?? null, tr.taskCreateTimes, tr.segByMergeKey)
 })
 
 const corePairRows = computed(() => {
@@ -3412,7 +3399,7 @@ const plotScopeInfo = computed(() => {
   return plotScopeBanner(statsRange.value, props.trace.timeScale, formatTime)
 })
 
-function openPlot(mk, kind) {
+function openTaskPlot(mk, kind) {
   const range = statsRange.value
   let plot
   if (kind === 'exec') plot = _buildExecPlot(props.trace, mk, range)
@@ -4012,20 +3999,20 @@ function exportCsv() {
   }
 
   const scale = tr.timeScale
-  const lcRows = buildTaskLifecycleRows(tr.stiEvents ?? [], tr.taskRepr, lo, hi)
+  const lcRows = buildTaskLifecycleRows(tr.stiEvents ?? [], tr.taskRepr, lo, hi, tr.taskCreateTimes, tr.segByMergeKey)
   lines.push('')
   lines.push(`Task Lifecycle${suffix}`)
-  lines.push('Task,Created,Deleted,Suspends,Resumes,Alive span,Events')
+  lines.push('Task,Created,Deleted,Susp/Res,Alive span,Events,Runs')
   if (lcRows.length) {
     for (const r of lcRows) {
       lines.push([
         _csvCell(r.label),
         r.createNs != null ? _csvCell(formatTime(r.createNs, scale)) : '',
         r.deleteNs != null ? _csvCell(formatTime(r.deleteNs, scale)) : '',
-        _csvCell(r.suspendCount),
-        _csvCell(r.resumeCount),
+        _csvCell(`${r.suspendCount}/${r.resumeCount}`),
         r.aliveSpanNs ? _csvCell(formatLifecycleSpan(r.aliveSpanNs, scale)) : '',
         _csvCell(r.eventCount),
+        _csvCell(r.runCount),
       ].join(','))
     }
   } else {
@@ -4256,19 +4243,6 @@ function _blockingRowsForReport(tr, range) {
   return rows.sort((a, b) => b.runs - a.runs || a.name.localeCompare(b.name))
 }
 
-function _renderHtmlTable(title, rows, includeCpu = false) {
-  const head = includeCpu
-    ? '<tr><th>Task</th><th>Runs</th><th>CPU%</th><th>Min</th><th>Avg</th><th>Max</th><th>p95</th></tr>'
-    : '<tr><th>Task</th><th>Runs</th><th>Min</th><th>Avg</th><th>Max</th><th>p95</th></tr>'
-  const body = rows.length
-    ? rows.map(r => includeCpu
-      ? `<tr><td>${_htmlCell(r.name)}</td><td>${_htmlCell(r.runs)}</td><td>${_htmlCell(r.cpuPct.toFixed(1))}%</td><td>${_htmlCell(r.min)}</td><td>${_htmlCell(r.avg)}</td><td>${_htmlCell(r.max)}</td><td>${_htmlCell(r.p95)}</td></tr>`
-      : `<tr><td>${_htmlCell(r.name)}</td><td>${_htmlCell(r.runs)}</td><td>${_htmlCell(r.min)}</td><td>${_htmlCell(r.avg)}</td><td>${_htmlCell(r.max)}</td><td>${_htmlCell(r.p95)}</td></tr>`,
-    ).join('')
-    : `<tr><td colspan="${includeCpu ? 7 : 6}" class="empty">No data</td></tr>`
-  return `<section class="report-card"><h2>${_htmlCell(title)}</h2><table><thead>${head}</thead><tbody>${body}</tbody></table></section>`
-}
-
 function _renderHtmlTableReport(title, rows, includeCpu = false) {
   const head = includeCpu
     ? '<tr><th>Task</th><th>Runs</th><th>CPU%</th><th>Min</th><th>Avg</th><th>TrimMean(5%)</th><th>Max</th><th>p50</th><th>p95</th></tr>'
@@ -4351,7 +4325,7 @@ function _renderSyncObjectReportHtml(tr, lo, hi, suffix) {
       ).join('')
     : '<tr><td colspan="7" class="empty">No paired holds in scope</td></tr>'
   const holdNote = holds.length >= 150
-    ? `<p class="detail-note">Showing longest 150 hold episodes in scope.</p>`
+    ? '<p class="detail-note">Showing longest 150 hold episodes in scope.</p>'
     : ''
   return `<section class="report-card"><h2>Mutex / Semaphore${_htmlCell(suffix)}</h2>
     <table><thead><tr><th>Object</th><th>Kind</th><th>Holds</th><th>Issues</th><th>Avg hold</th><th>Status</th></tr></thead>
@@ -4379,7 +4353,7 @@ function _renderPriorityReportHtml(tr, lo, hi, suffix) {
       ).join('')
     : '<tr><td colspan="6" class="empty">No boost episodes in scope</td></tr>'
   const epNote = episodes.length >= 200
-    ? `<p class="detail-note">Showing first 200 boost episodes in scope (by start time).</p>`
+    ? '<p class="detail-note">Showing first 200 boost episodes in scope (by start time).</p>'
     : ''
   return `<section class="report-card"><h2>Priority Inheritance${_htmlCell(suffix)}</h2>
     <table><thead><tr><th>Task</th><th>Base</th><th>Peak</th><th>Boosts</th><th>Boosted</th><th>Pattern</th></tr></thead>
@@ -4404,7 +4378,7 @@ function _renderIntervalReportHtml(tr, lo, hi, suffix) {
       ).join('')
     : '<tr><td colspan="7" class="empty">No interval instances in scope</td></tr>'
   const instNote = instances.length >= 200
-    ? `<p class="detail-note">Showing longest 200 interval instances in scope.</p>`
+    ? '<p class="detail-note">Showing longest 200 interval instances in scope.</p>'
     : ''
   return `<section class="report-card"><h2>Interval Analysis${_htmlCell(suffix)}</h2>
     <table><thead><tr><th>ID</th><th>Label</th><th>Count</th><th>Min</th><th>Avg</th><th>Max</th><th>p95</th></tr></thead>
@@ -4429,7 +4403,7 @@ function _renderTagReportHtml(tr, lo, hi, suffix) {
       ).join('')
     : '<tr><td colspan="4" class="empty">No tag samples in scope</td></tr>'
   const sampleNote = samples.length >= 200
-    ? `<p class="detail-note">Showing highest 200 tag samples in scope.</p>`
+    ? '<p class="detail-note">Showing highest 200 tag samples in scope.</p>'
     : ''
   return `<section class="report-card"><h2>Tag Analysis${_htmlCell(suffix)}</h2>
     <table><thead><tr><th>Channel</th><th>Label</th><th>Count</th><th>Min</th><th>Avg</th><th>Max</th><th>p95</th></tr></thead>
@@ -4477,7 +4451,6 @@ function exportHtml() {
   const hi = r?.hi ?? null
   const migReportRows = migrationRows(tr, lo, hi)
   const { rows: preemptHtmlRows } = preemptionChainRows(tr, lo, hi)
-  const { contextSwitches, coreGaps } = schedulingStats(tr, lo, hi)
   const schedKpi = schedulingSummary.value
   const range = !r ? rangeStats.value : null
   const rangeHtml = range
@@ -4700,25 +4673,25 @@ function exportHtml() {
         `<td class="${r.status !== 'ok' ? (r.status === 'error' ? 'sev-error' : 'sev-warning') : ''}">${_htmlCell(r.statusLabel)}</td></tr>`
       ).join('')
       return `<section class="report-card"><h2>Queue${_htmlCell(suffix)}</h2>` +
-        `<table><thead><tr><th>Object</th><th>Kind</th><th>Holds</th>` +
-        `<th>Issues</th><th>Avg hold</th><th>Status</th></tr></thead>` +
+        '<table><thead><tr><th>Object</th><th>Kind</th><th>Holds</th>' +
+        '<th>Issues</th><th>Avg hold</th><th>Status</th></tr></thead>' +
         `<tbody>${qBody}</tbody></table></section>`
     })() : ''}
     ${(() => {
-      const lcRows = buildTaskLifecycleRows(tr.stiEvents ?? [], tr.taskRepr, lo, hi)
+      const lcRows = buildTaskLifecycleRows(tr.stiEvents ?? [], tr.taskRepr, lo, hi, tr.taskCreateTimes, tr.segByMergeKey)
       const lcBody = lcRows.length
         ? lcRows.map(r =>
             `<tr><td>${_htmlCell(r.label)}</td>` +
             `<td>${r.createNs != null ? _htmlCell(formatTime(r.createNs, tr.timeScale)) : '—'}</td>` +
             `<td>${r.deleteNs != null ? _htmlCell(formatTime(r.deleteNs, tr.timeScale)) : '—'}</td>` +
-            `<td>${r.suspendCount}</td><td>${r.resumeCount}</td>` +
+            `<td>${r.suspendCount}/${r.resumeCount}</td>` +
             `<td>${r.aliveSpanNs ? _htmlCell(formatLifecycleSpan(r.aliveSpanNs, tr.timeScale)) : '—'}</td>` +
-            `<td>${r.eventCount}</td></tr>`
+            `<td>${r.eventCount}</td><td>${r.runCount}</td></tr>`
           ).join('')
         : '<tr><td colspan="7" class="empty">No lifecycle events</td></tr>'
       return `<section class="report-card"><h2>Task Lifecycle${_htmlCell(suffix)}</h2>` +
-        `<table><thead><tr><th>Task</th><th>Created</th><th>Deleted</th>` +
-        `<th>Suspends</th><th>Resumes</th><th>Alive span</th><th>Events</th></tr></thead>` +
+        '<table><thead><tr><th>Task</th><th>Created</th><th>Deleted</th>' +
+        '<th>Susp/Res</th><th>Alive span</th><th>Events</th><th>Runs</th></tr></thead>' +
         `<tbody>${lcBody}</tbody></table></section>`
     })()}
     ${(() => {
@@ -4731,8 +4704,8 @@ function exportHtml() {
           }).join('')
         : '<tr><td colspan="4" class="empty">No affinity_set events</td></tr>'
       return `<section class="report-card"><h2>Core Affinity${_htmlCell(suffix)}</h2>` +
-        `<table><thead><tr><th>Task</th><th>Mask</th><th>Observed Cores</th>` +
-        `<th>Violations</th></tr></thead>` +
+        '<table><thead><tr><th>Task</th><th>Mask</th><th>Observed Cores</th>' +
+        '<th>Violations</th></tr></thead>' +
         `<tbody>${affBody}</tbody></table></section>`
     })()}
     ${_renderDeadlineReportHtml(suffix)}
@@ -4748,8 +4721,8 @@ function exportHtml() {
           ).join('')
         : '<tr><td colspan="6" class="empty">No migrations in scope</td></tr>'
       return `<section class="report-card"><h2>Core-Pair Migration Summary${_htmlCell(suffix)}</h2>` +
-        `<table><thead><tr><th>From</th><th>To</th><th>Count</th>` +
-        `<th>Bounces</th><th>Bounce %</th><th>Avg Gap</th></tr></thead>` +
+        '<table><thead><tr><th>From</th><th>To</th><th>Count</th>' +
+        '<th>Bounces</th><th>Bounce %</th><th>Avg Gap</th></tr></thead>' +
         `<tbody>${pairBody}</tbody></table></section>`
     })()}
     ${(() => {
@@ -4765,12 +4738,25 @@ function exportHtml() {
           }).join('')
         : '<tr><td colspan="5" class="empty">No core data</td></tr>'
       return `<section class="report-card"><h2>Core Time Breakdown${_htmlCell(suffix)}</h2>` +
-        `<table><thead><tr><th>Core</th><th>Active %</th><th>Idle %</th>` +
-        `<th>Tick %</th><th>Gap %</th></tr></thead>` +
+        '<table><thead><tr><th>Core</th><th>Active %</th><th>Idle %</th>' +
+        '<th>Tick %</th><th>Gap %</th></tr></thead>' +
         `<tbody>${bdBody}</tbody></table></section>`
     })()}
     <div class="report-foot">Generated by BTF Viewer</div>
   </div>
+  <script>
+    (function () {
+      function openTarget(id) {
+        var el = document.getElementById(id)
+        if (el && el.tagName === 'DETAILS') el.open = true
+      }
+      document.querySelectorAll('.report-toc a[href^="#"]').forEach(function (a) {
+        a.addEventListener('click', function () { openTarget(a.getAttribute('href').slice(1)) })
+      })
+      window.addEventListener('hashchange', function () { openTarget(location.hash.slice(1)) })
+      if (location.hash) openTarget(location.hash.slice(1))
+    })()
+  </` + `script>
 </body>
 </html>`
 

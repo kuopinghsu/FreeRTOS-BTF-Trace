@@ -91,6 +91,8 @@ class SyncIssueRef:
     obj_key: Optional[str] = None
     ptr: str = ""
 
+_MAX_TRACE_FILE_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB guard vs. memory exhaustion on a huge/adversarial file
+
 _META_KEY_RE = re.compile(r"^[\w.-]+$")
 _CREATE_PRI_RE = re.compile(r"^create\s+pri:(\d+)\s*$", re.IGNORECASE)
 _PRIORITY_STI_RE = re.compile(
@@ -562,7 +564,7 @@ def _tag_channel_label(channel: str) -> str:
 
 def _tag_color(channel: str) -> str:
     m = _STI_EXPANDABLE_RE.match(channel or "")
-    idx = int(m.group(1)) % len(_TAG_COLORS) if m and m.group(1) is not None else 0
+    idx = _safe_int(m.group(1)) % len(_TAG_COLORS) if m and m.group(1) is not None else 0
     return _TAG_COLORS[idx]
 
 def _format_tag_value(value: float) -> str:
@@ -639,13 +641,55 @@ def _task_lifecycle_rows(
     lo: Optional[int] = None,
     hi: Optional[int] = None,
 ) -> List[tuple]:
-    """Per-task lifecycle summary from STI 'task' channel events.
+    """Per-task lifecycle summary.
+
+    Creation timestamps come from `trace.task_create_times` — task creation is
+    recorded as a dedicated 'T' event, never as an STI 'task' channel note (the
+    `task` channel only ever emits delete/suspend/resume/set_priority/…), so a
+    row's create_ns would otherwise always be None. Delete/suspend/resume come
+    from STI 'task' channel events as before.
+
+    `run_count` is the number of times the task was dispatched onto a core
+    (context-switch-in / segment count) — a scheduler-level metric, distinct
+    from `suspend_count`/`resume_count` which only reflect explicit
+    vTaskSuspend()/vTaskResume() API calls.
 
     Returns a list of tuples:
-        (mk, label, create_ns, delete_ns, suspend_count, resume_count, alive_ns, event_count)
-    Only tasks with at least one lifecycle event are included.
+        (mk, label, create_ns, delete_ns, suspend_count, resume_count, alive_ns, event_count, run_count)
+    Tasks are included if created in scope or with at least one STI lifecycle event.
     """
+    def _in_scope(t: int) -> bool:
+        return lo is None or hi is None or (lo <= t <= hi)
+
     by_mk: Dict[str, dict] = {}
+
+    def _row(mk: str, label_hint: str) -> dict:
+        if mk not in by_mk:
+            # `task_repr` only covers tasks seen in a context-switch segment; a task
+            # that is created but never scheduled (e.g. deleted/suspended before its
+            # first run) falls back to `task_create_repr` (the raw name recorded at
+            # creation time) rather than the internal merge-key string, which would
+            # otherwise leak through as a garbled label (e.g. "289SF" instead of
+            # "SF[289]").
+            raw_repr = trace.task_repr.get(mk) or trace.task_create_repr.get(mk) or label_hint
+            by_mk[mk] = {
+                "mk": mk,
+                "label": _task_display_name(raw_repr),
+                "create_ns": None,
+                "delete_ns": None,
+                "suspend_count": 0,
+                "resume_count": 0,
+                "event_count": 0,
+            }
+        return by_mk[mk]
+
+    for mk, create_ns in trace.task_create_times.items():
+        if not _in_scope(create_ns):
+            continue
+        row = _row(mk, mk)
+        row["create_ns"] = create_ns
+        row["event_count"] += 1
+
     for ev in trace.sti_events:
         if ev.target != "task":
             continue
@@ -653,22 +697,12 @@ def _task_lifecycle_rows(
         m = _LIFECYCLE_NOTE_RE.match(note)
         if not m:
             continue
-        if lo is not None and hi is not None and (ev.time < lo or ev.time > hi):
+        if not _in_scope(ev.time):
             continue
         action = m.group(1).lower()
         task_label = note[m.end():].strip() or note
         mk = _task_merge_key(task_label)
-        if mk not in by_mk:
-            by_mk[mk] = {
-                "mk": mk,
-                "label": _task_display_name(task_label),
-                "create_ns": None,
-                "delete_ns": None,
-                "suspend_count": 0,
-                "resume_count": 0,
-                "event_count": 0,
-            }
-        row = by_mk[mk]
+        row = _row(mk, task_label)
         row["event_count"] += 1
         if action == "create" and row["create_ns"] is None:
             row["create_ns"] = ev.time
@@ -684,8 +718,14 @@ def _task_lifecycle_rows(
         create_ns = d["create_ns"]
         delete_ns = d["delete_ns"]
         alive_ns = (delete_ns - create_ns) if (create_ns is not None and delete_ns is not None) else None
+        mk = d["mk"]
+        segs = trace.seg_map_by_merge_key.get(mk, ())
+        if lo is not None and hi is not None:
+            run_count = sum(1 for s in segs if _seg_overlaps_range(s, lo, hi))
+        else:
+            run_count = len(segs)
         rows.append((
-            d["mk"],
+            mk,
             d["label"],
             create_ns,
             delete_ns,
@@ -693,6 +733,7 @@ def _task_lifecycle_rows(
             d["resume_count"],
             alive_ns,
             d["event_count"],
+            run_count,
         ))
     return rows
 
@@ -782,7 +823,7 @@ def _task_core_affinity_rows(
             continue
         task_label = m.group(1).strip()
         raw_mask = m.group(2)
-        mask_val = int(raw_mask, 16 if raw_mask.startswith(("0x", "0X")) else 10)
+        mask_val = _safe_int(raw_mask, 16 if raw_mask.startswith(("0x", "0X")) else 10)
         mk = _task_merge_key(task_label)
         masks[mk] = mask_val
 
@@ -802,15 +843,14 @@ def _task_core_affinity_rows(
             obs.add(seg.core)
         if not obs:
             continue
-        # Build allowed-core set from bitmask (Core_N → bit N)
+        # Build allowed-core set from bitmask (Core_N → bit N). idx is bounded to
+        # avoid an astronomically large left-shift if a crafted trace names a core
+        # with a huge numeric suffix.
         allowed: set = set()
         for core in trace.core_names:
-            try:
-                idx = int(core.split("_")[-1])
-                if mask & (1 << idx):
-                    allowed.add(core)
-            except (ValueError, IndexError):
-                pass
+            idx = _safe_int(core.split("_")[-1], default=-1)
+            if 0 <= idx < 4096 and (mask & (1 << idx)):
+                allowed.add(core)
         violations = obs - allowed if allowed else set()
         mask_hex = f"0x{mask:X}"
         obs_str = ", ".join(sorted(obs))
@@ -918,13 +958,13 @@ def _tag_sample_detail_rows(
 
 def _parse_create_priority(note: str) -> Optional[int]:
     m = _CREATE_PRI_RE.match((note or "").strip())
-    return int(m.group(1)) if m else None
+    return _safe_int(m.group(1)) if m else None
 
 def _parse_priority_sti_note(note: str) -> Optional[Tuple[str, str, int]]:
     m = _PRIORITY_STI_RE.match((note or "").strip())
     if not m:
         return None
-    return m.group(1).lower(), m.group(2).strip(), int(m.group(3))
+    return m.group(1).lower(), m.group(2).strip(), _safe_int(m.group(3))
 
 def _merge_key_from_priority_ref(task_ref: str) -> str:
     return _task_merge_key((task_ref or "").strip())
@@ -1680,6 +1720,10 @@ class BtfTrace:
     core_task_seg_lod_ultra_starts: Dict[str, Dict[str, List[int]]]         = field(default_factory=dict)
     # Map from merge-key -> timestamp of the task_create event (first occurrence).
     task_create_times: Dict[str, int]                                       = field(default_factory=dict)
+    # Map from merge-key -> raw task representation seen at creation time. Used as a
+    # fallback label source for tasks that are created but never scheduled (so they
+    # never appear in `task_repr`, which is only populated from context-switch segments).
+    task_create_repr: Dict[str, str]                                        = field(default_factory=dict)
     # Sorted timestamps from STI TICK events - rendered as ruler marks.
     tick_sti_times: List[int]                                               = field(default_factory=list)
     # All STI event times sorted once at parse — used by migration stats.
@@ -1728,11 +1772,28 @@ _IDLE_RE = re.compile(
     re.IGNORECASE,
 )
 
+_MAX_SAFE_INT_DIGITS = 18  # generous headroom over any realistic task/core id, priority, or tag index
+
+def _safe_int(s: str, base: int = 10, default: int = 0) -> int:
+    """Parse an int token defensively.
+
+    Returns `default` for invalid input or an absurdly long digit string from an
+    adversarial trace file, instead of raising (Python's int-string-conversion
+    limit) or succeeding with an astronomically large value that later blows up
+    a bit-shift/format operation.
+    """
+    if not s or len(s) > _MAX_SAFE_INT_DIGITS:
+        return default
+    try:
+        return int(s, base)
+    except ValueError:
+        return default
+
 def _parse_int_token(s: str) -> int:
     """Parse an integer token that may be hex (0x...) or decimal (with optional leading zeros)."""
     if s.startswith(("0x", "0X")):
-        return int(s, 16)
-    return int(s, 10)
+        return _safe_int(s, 16)
+    return _safe_int(s, 10)
 
 def _format_int_token_display(token: str, value: int) -> str:
     """Format a parsed task-id token for Name[id] labels."""
@@ -1798,6 +1859,21 @@ def _normalize_idle_name(name: str) -> str:
 @functools.lru_cache(maxsize=16384)
 def _task_display_name(raw: str) -> str:
     """Short display name: 'Name[id]' for regular tasks; bare name for IDLE/TICK."""
+    if raw.startswith("\x00"):
+        # `raw` is itself an internal merge-key string (e.g. '\x00271\x00SR'),
+        # not an actual raw trace repr — this happens when no trace repr was
+        # ever recorded for the task (see `_task_merge_key`). Decode it directly
+        # instead of falling through to the raw-name parsers below, which
+        # would otherwise return it unparsed and produce a garbled label like
+        # "289SF" (task_id and name glued together with invisible NUL bytes).
+        sep = raw.find("\x00", 1)
+        if sep > 0:
+            task_id_str, name = raw[1:sep], raw[sep + 1:]
+            if name == "TICK":
+                return name
+            if _is_idle_task_name(name):
+                return _normalize_idle_name(name)
+            return f"{name}[{task_id_str}]"
     if _IDLE_RE.match(raw):
         return _normalize_idle_name(raw)
     _, task_id, name = _parse_task_name(raw)
@@ -2901,8 +2977,36 @@ def _build_trace_compare_rows(
 
     return summary_rows, top_rows, mig_rows, block_rows, pre_rows, sync_rows
 
+_CSV_FORMULA_LEAD_CHARS = ("=", "+", "-", "@", "\t", "\r")
+
+def _csv_sanitize_cell(v: object) -> object:
+    """Neutralize CSV/spreadsheet formula injection (CWE-1236).
+
+    Trace-derived strings (task/object names, labels) are attacker-controllable;
+    if a value begins with =, +, -, @ (or a tab/CR) and the exported CSV is later
+    opened in Excel/Sheets, it can be interpreted as a formula. Prefix with a
+    leading apostrophe to force text interpretation; non-strings pass through.
+    """
+    if isinstance(v, str) and v.startswith(_CSV_FORMULA_LEAD_CHARS):
+        return "'" + v
+    return v
+
+
+class _SafeCsvWriter:
+    """csv.writer wrapper that sanitizes every cell against formula injection (CWE-1236)."""
+    def __init__(self, fh, **kwargs):
+        self._writer = csv.writer(fh, **kwargs)
+
+    def writerow(self, row):
+        self._writer.writerow(_csv_sanitize_cell(c) for c in row)
+
+    def writerows(self, rows):
+        for row in rows:
+            self.writerow(row)
+
+
 def _compare_csv_cell(v: object) -> str:
-    s = str(v)
+    s = str(_csv_sanitize_cell(v))
     if any(c in s for c in '",\n\r'):
         return '"' + s.replace('"', '""') + '"'
     return s
@@ -3162,6 +3266,15 @@ def _parse_btf(filepath: str,
     ``progress_callback(pct, message)``
     where *pct* is an integer 0-100 and *message* is a short status string.
     """
+    try:
+        file_size = os.path.getsize(filepath)
+    except OSError:
+        file_size = 0
+    if file_size > _MAX_TRACE_FILE_BYTES:
+        raise ValueError(
+            f"Trace file is too large ({file_size / (1024 * 1024):.0f} MB, "
+            f"max {_MAX_TRACE_FILE_BYTES // (1024 * 1024)} MB)"
+        )
 
     meta: Dict[str, str] = {}
     time_scale = "ns"
@@ -3464,10 +3577,13 @@ def _parse_btf(filepath: str,
 
     # Map raw task_create names to merge keys.
     _task_create_times: Dict[str, int] = {}
+    _task_create_repr: Dict[str, str] = {}
     for _raw_ct, _ct_time in _task_create_raw.items():
         _mk_ct = _mk_cache.get(_raw_ct) or _task_merge_key(_raw_ct)
         if _mk_ct not in _task_create_times or _ct_time < _task_create_times[_mk_ct]:
             _task_create_times[_mk_ct] = _ct_time
+        if _mk_ct not in _task_create_repr:
+            _task_create_repr[_mk_ct] = _raw_ct
 
     _task_base_pri, _priority_episodes, _priority_by_mk, _has_priority = (
         _build_priority_data(
@@ -3636,6 +3752,7 @@ def _parse_btf(filepath: str,
         core_task_seg_lod_ultra=dict(_core_task_lod_ultra),
         core_task_seg_lod_ultra_starts=dict(_core_task_lod_ultra_starts),
         task_create_times=_task_create_times,
+        task_create_repr=_task_create_repr,
         tick_sti_times=sorted(tick_sti_times),
         sti_event_times=sorted(e.time for e in sti_events),
         migrations=_migrations,
