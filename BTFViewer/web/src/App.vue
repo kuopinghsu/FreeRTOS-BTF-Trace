@@ -2477,6 +2477,10 @@ onMounted(async () => {
   rightPanelTab.value = appSettings.showStats ? 'stats' : 'marks'
   window.addEventListener('keydown', onGlobalKeydown)
   await restoreSessionTabs(saved)
+  // Auto-load the demo trace only when explicitly requested via ?demo in the URL.
+  if (new URLSearchParams(window.location.search).has('demo')) {
+    onLoadDemo()
+  }
 })
 
 onBeforeUnmount(() => {

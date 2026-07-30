@@ -8,7 +8,7 @@ A PySide6-based interactive visualiser for FreeRTOS context-switch traces in **B
 
 ![BTF Viewer screenshot](../images/btfviewer.png)
 
-[DEMO](https://apps.kuoping.com/btf_viewer.html)
+[DEMO](https://apps.kuoping.com/btf_viewer.html?demo)
 
 ## Features
 

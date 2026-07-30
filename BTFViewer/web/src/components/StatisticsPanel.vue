@@ -3669,6 +3669,29 @@ function _htmlCell(v) {
     .replace(/"/g, '&quot;')
 }
 
+// Wraps every <section class="report-card ..."> block in <details> so it can be
+// collapsed/expanded, and builds a table-of-contents nav linking to each one.
+const _DEFAULT_EXPANDED_TITLES = ['Statistics Notes', 'Core Utilisation (excl. IDLE/TICK)', 'Top Tasks by CPU (excl. IDLE/TICK)', 'Trace Health (TICK)']
+function _makeCollapsibleSections(docHtml) {
+  const toc = []
+  let counter = 0
+  const newDoc = docHtml.replace(/<section class="(report-card[^"]*)">([\s\S]*?)<\/section>/g, (_match, classes, inner) => {
+    const h2Match = inner.match(/<h2[^>]*>[\s\S]*?<\/h2>/)
+    const titleHtml = h2Match ? h2Match[0] : '<h2>Section</h2>'
+    const titleText = titleHtml.replace(/<[^>]+>/g, '')
+    const rest = h2Match ? inner.slice(h2Match.index + h2Match[0].length) : inner
+    counter++
+    const id = `sec-${counter}`
+    toc.push({ id, title: titleText })
+    const openAttr = _DEFAULT_EXPANDED_TITLES.some(t => titleText.startsWith(t)) ? ' open' : ''
+    return `<details class="${classes}" id="${id}"${openAttr}><summary>${titleHtml}</summary>${rest}</details>`
+  })
+  if (!toc.length) return { nav: '', html: newDoc }
+  const items = toc.map(t => `<li><a href="#${t.id}">${t.title}</a></li>`).join('')
+  const nav = `<nav class="report-toc"><h2>Table of Contents</h2><ul>${items}</ul></nav>`
+  return { nav, html: newDoc }
+}
+
 const _HTML_EXPORT_UTIL_CSS = `
     .util-list { display: flex; flex-direction: column; gap: 4px; }
     .util-row {
@@ -4417,6 +4440,30 @@ function _renderTagReportHtml(tr, lo, hi, suffix) {
     <tbody>${sampleBody}</tbody></table></section>`
 }
 
+function _renderDeadlineReportHtml(suffix) {
+  if (!hasDeadlineConfig.value) return ''
+  const { sliceViolations, cpuViolations } = deadlineViolations.value
+  const svBody = sliceViolations.length
+    ? sliceViolations.map(v =>
+        `<tr><td>${_htmlCell(v.label)}</td><td>${_htmlCell(v.duration)}</td><td>${_htmlCell(v.limit)}</td>` +
+        `<td style="color:#c0392b;font-weight:600">${_htmlCell(v.overBy)}</td></tr>`,
+      ).join('')
+    : '<tr><td colspan="4" class="empty">No slice violations</td></tr>'
+  const cvBody = cpuViolations.length
+    ? cpuViolations.map(v =>
+        `<tr><td>${_htmlCell(v.label)}</td><td style="color:#c0392b;font-weight:600">${_htmlCell(v.pct)}%</td>` +
+        `<td>${_htmlCell(v.budgetPct)}%</td></tr>`,
+      ).join('')
+    : '<tr><td colspan="3" class="empty">No CPU budget violations</td></tr>'
+  return `<section class="report-card"><h2>Deadlines / CPU budget${_htmlCell(suffix)}</h2>
+    <h3 class="sub">Slice over deadline</h3>
+    <table><thead><tr><th>Task</th><th>Duration</th><th>Limit</th><th>Over by</th></tr></thead>
+    <tbody>${svBody}</tbody></table>
+    <h3 class="sub">CPU budget exceeded</h3>
+    <table><thead><tr><th>Task</th><th>CPU %</th><th>Budget</th></tr></thead>
+    <tbody>${cvBody}</tbody></table></section>`
+}
+
 function exportHtml() {
   const tr = props.trace
   const r = statsRange.value
@@ -4559,6 +4606,32 @@ function exportHtml() {
     .sev-warning, .sync-status-warning { color: #d68910; font-weight: 600; }
     .sync-status-ok { color: #1e8449; }
     .report-foot { margin-top: 14px; color: var(--muted); font-size: 12px; text-align: right; }
+    .report-toc {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 12px 14px;
+      margin: 14px 0;
+      box-shadow: 0 2px 10px rgba(30, 60, 90, 0.06);
+    }
+    .report-toc h2 { margin: 0 0 8px 0; }
+    .report-toc ul { margin: 0; padding: 0 0 0 18px; columns: 2; column-gap: 24px; }
+    .report-toc li { margin: 4px 0; }
+    .report-toc a { color: var(--accent); text-decoration: none; }
+    .report-toc a:hover { text-decoration: underline; }
+    details.report-card { scroll-margin-top: 12px; }
+    details.report-card > summary { cursor: pointer; list-style: none; }
+    details.report-card > summary::-webkit-details-marker { display: none; }
+    details.report-card > summary h2 { display: inline-block; margin: 0; }
+    details.report-card > summary::before {
+      content: "\\25B8";
+      display: inline-block;
+      width: 14px;
+      margin-right: 6px;
+      color: var(--accent);
+      transition: transform 0.15s ease;
+    }
+    details.report-card[open] > summary::before { transform: rotate(90deg); }
     ${_HTML_EXPORT_UTIL_CSS}
   </style>
 </head>
@@ -4577,6 +4650,7 @@ function exportHtml() {
       ${schedKpi?.gapAvg ? `<article class="kpi"><div class="k">Core gap avg${_htmlCell(suffix)}</div><div class="v">${_htmlCell(schedKpi.gapAvg)}</div></article>` : ''}
       ${schedKpi?.gapMax ? `<article class="kpi"><div class="k">Core gap max${_htmlCell(suffix)}</div><div class="v">${_htmlCell(schedKpi.gapMax)}</div></article>` : ''}
     </section>
+    <!--TOC-->
     <section class="report-card notes">
     <h2>Statistics Notes</h2>
     <ul>
@@ -4602,8 +4676,8 @@ function exportHtml() {
     ${coreHtml}
     ${taskHtml}
     ${tickHealthHtml}
-    ${migHtml}
     ${_renderHtmlTableReport(`Execution Time Per Slice${suffix}`, execReportRows, true)}
+    ${migHtml}
     ${_renderHtmlTableReport(`Blocking Time (off-CPU gap)${suffix}`, blockReportRows)}
     ${_renderHtmlTableReport(`Inter-Arrival Time${suffix}`, interReportRows)}
     <section class="report-card"><h2>Preemption Chain Analysis${_htmlCell(suffix)}</h2>
@@ -4661,6 +4735,7 @@ function exportHtml() {
         `<th>Violations</th></tr></thead>` +
         `<tbody>${affBody}</tbody></table></section>`
     })()}
+    ${_renderDeadlineReportHtml(suffix)}
     ${_renderIntervalReportHtml(tr, lo, hi, suffix)}
     ${_renderTagReportHtml(tr, lo, hi, suffix)}
     ${(() => {
@@ -4699,7 +4774,9 @@ function exportHtml() {
 </body>
 </html>`
 
-  _downloadText(`statistics-${_stamp()}.html`, html, 'text/html;charset=utf-8')
+  const { nav, html: collapsibleHtml } = _makeCollapsibleSections(html)
+  const finalHtml = collapsibleHtml.replace('<!--TOC-->', nav)
+  _downloadText(`statistics-${_stamp()}.html`, finalHtml, 'text/html;charset=utf-8')
 }
 
 // ---- Range statistics (from 2+ cursor positions) -----------------------

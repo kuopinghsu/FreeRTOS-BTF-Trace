@@ -17531,6 +17531,54 @@ class _StatsPanel(QWidget):
             body = f'<div class="util-list">{items}</div>'
         return f'<section class="report-card"><h2>{esc_title}</h2>{body}</section>'
 
+    @staticmethod
+    def _html_make_collapsible_sections(doc_html: str) -> Tuple[str, str]:
+        """Wrap every ``<section class="report-card ...">`` block in ``<details>``
+        so it can be collapsed/expanded, and build a table-of-contents nav
+        linking to each one. Returns ``(nav_html, transformed_doc_html)``.
+        """
+        # Titles (prefix match, ignoring any appended scope suffix) expanded by default.
+        default_expanded = (
+            "Statistics Notes",
+            "Core Utilisation (excl. IDLE/TICK)",
+            "Top Tasks by CPU (excl. IDLE/TICK)",
+            "Trace Health (TICK)",
+        )
+        toc_entries: List[Tuple[str, str]] = []
+        counter = 0
+
+        def _wrap(m: "re.Match") -> str:
+            nonlocal counter
+            classes, inner = m.group(1), m.group(2)
+            h2_m = re.search(r"<h2[^>]*>.*?</h2>", inner, re.S)
+            if h2_m:
+                title_html = h2_m.group(0)
+                title_text = re.sub(r"<[^>]+>", "", title_html)
+                rest = inner[h2_m.end():]
+            else:
+                title_html, title_text, rest = "<h2>Section</h2>", "Section", inner
+            counter += 1
+            sec_id = f"sec-{counter}"
+            toc_entries.append((sec_id, title_text))
+            open_attr = " open" if title_text.startswith(default_expanded) else ""
+            return (
+                f'<details class="{classes}" id="{sec_id}"{open_attr}>'
+                f"<summary>{title_html}</summary>{rest}</details>"
+            )
+
+        new_doc = re.sub(
+            r'<section class="(report-card[^"]*)">(.*?)</section>',
+            _wrap, doc_html, flags=re.S,
+        )
+        if not toc_entries:
+            return "", new_doc
+        items = "".join(
+            f'<li><a href="#{sec_id}">{title}</a></li>'
+            for sec_id, title in toc_entries
+        )
+        nav = f'<nav class="report-toc"><h2>Table of Contents</h2><ul>{items}</ul></nav>'
+        return nav, new_doc
+
     def _add_utilisation_row(self, blay: QVBoxLayout, ui_fs: str,
                              label: str, pct: float, *,
                              chunk_color: str, pct_color: str,
@@ -19172,6 +19220,32 @@ class _StatsPanel(QWidget):
         .sev-error {{ color: #c0392b; font-weight: 600; }}
         .sev-warning {{ color: #d68910; font-weight: 600; }}
         .report-foot {{ margin-top: 14px; color: var(--muted); font-size: 12px; text-align: right; }}
+        .report-toc {{
+            background: var(--paper);
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            padding: 12px 14px;
+            margin: 14px 0;
+            box-shadow: 0 2px 10px rgba(30, 60, 90, 0.06);
+        }}
+        .report-toc h2 {{ margin: 0 0 8px 0; }}
+        .report-toc ul {{ margin: 0; padding: 0 0 0 18px; columns: 2; column-gap: 24px; }}
+        .report-toc li {{ margin: 4px 0; }}
+        .report-toc a {{ color: var(--accent); text-decoration: none; }}
+        .report-toc a:hover {{ text-decoration: underline; }}
+        details.report-card {{ scroll-margin-top: 12px; }}
+        details.report-card > summary {{ cursor: pointer; list-style: none; }}
+        details.report-card > summary::-webkit-details-marker {{ display: none; }}
+        details.report-card > summary h2 {{ display: inline-block; margin: 0; }}
+        details.report-card > summary::before {{
+            content: \"\\25B8\";
+            display: inline-block;
+            width: 14px;
+            margin-right: 6px;
+            color: var(--accent);
+            transition: transform 0.15s ease;
+        }}
+        details.report-card[open] > summary::before {{ transform: rotate(90deg); }}
         {self._html_export_util_css()}
   </style>
 </head>
@@ -19189,6 +19263,8 @@ class _StatsPanel(QWidget):
             <article class=\"kpi\"><div class=\"k\">STI Events</div><div class=\"v\">{sti_count:,}</div></article>
             {sched_kpi}
         </section>
+
+        <!--TOC-->
 
         <section class=\"report-card notes\">
         <h2>Statistics Notes</h2>
@@ -19247,7 +19323,8 @@ class _StatsPanel(QWidget):
 """
 
         with open(path, "w", encoding="utf-8") as f:
-            f.write(report)
+            nav_html, report = self._html_make_collapsible_sections(report)
+            f.write(report.replace("<!--TOC-->", nav_html))
 
     def _export_html(self) -> None:
         if self._trace is None:
