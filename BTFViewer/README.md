@@ -138,41 +138,6 @@ BTF_UI_FONT_PX=13 python3 -m btf_viewer_pkg trace.btf
 
 On WSLg, if scaling still does not match Windows, see [microsoft/wslg#1335](https://github.com/microsoft/wslg/issues/1335) for optional `.wslgconfig` compositor settings (`WESTON_RDP_HI_DPI_SCALING`, etc.).
 
-#### Desktop / web parity checklist
-
-Timeline overlay and interaction changes must be kept in sync across both viewers:
-
-| Change type | Desktop | Web |
-|-------------|---------|-----|
-| Cursor lines, labels, Δ badges | `btf_viewer_pkg/scene.py` (`_draw_cursors`) | `web/src/renderer/TimelineRenderer.js` (`drawCursors`, `drawCursorsVertical`) |
-| Hover ghost line + time label | `scene.py` (`_draw_hover_line`) | `TimelineRenderer.js` (`drawHoverLine`, `drawHoverLineVertical`) |
-| SVG export overlays | — | `web/src/renderer/SvgExporter.js` |
-| Scroll / frozen overlay reposition | `btf_viewer_pkg/view.py` | `TimelinePanel.vue` overlay canvas + `InteractionHandler.js` |
-| Cursor click UX | Left-click near cursor **removes**; otherwise places (same as web) | `InteractionHandler.js` `_placeCursor` |
-| Portable session format | `mainwindow.py` `_build_portable_session_payload` | `web/src/utils/sessionPortable.js` |
-
-**Δ label alignment:** horizontal mode — midpoint on time axis, **Y** aligned with the later cursor (C2 for C1–C2); vertical mode — **Y** aligned with the later cursor row at `RULER_W + 4`.
-
-**Tests:** `make -C BTFViewer test` (desktop); `make -C BTFViewer/web test` (web overlay draw smoke tests).
-
-#### Desktop architecture (MVVM)
-
-The desktop app uses **Model–View–ViewModel** in `btf_viewer_pkg/mvvm/`:
-
-| Layer | Module | Role |
-|-------|--------|------|
-| **Model** | `parser.py` (`BtfTrace`, …), `mvvm/models.py` | Trace data and dataclass state (per-tab document, stats panel, app settings, session) |
-| **ViewModel** | `mvvm/trace_tab_vm.py`, `mvvm/main_vm.py`, `mvvm/app_settings.py`, `mvvm/stats_vm.py`, `mvvm/find_logic.py`, `mvvm/tab_viewport.py` | Qt `QObject` wrappers with change signals; pure find/plot/viewport helpers |
-| **View** | `mainwindow.py`, `view.py`, `stats.py`, … | PySide6 widgets; `MainWindow` mixes in `MvvmSettingsMixin` and owns `MainViewModel` |
-
-Per-tab state (marks, find query/mode/hits, undo stacks, plot session including interval plots, timeline viewport zoom/cursors/filters, statistics panel scope/layout) lives in `TraceTabViewModel` (including `StatsViewModel`). Tab switches stash/restore via the view-model; per-tab viewport is serialized through `mvvm/tab_viewport.py`. Settings load from `btf_viewer.rc` through `AppSettingsViewModel.load_*_from_rc()` then `_apply_settings_to_all_tabs()`; runtime setting changes propagate to all tabs via `settings_changed`. Undo/redo toolbar state follows `TraceTabViewModel.undo_changed` signals. `_StatsPanel` exposes `capture_layout_state()` / `apply_layout_state()` for the stats view-model bridge.
-
-Edit `btf_viewer_pkg/`, run `make -C BTFViewer`, commit sources plus `builds/btf_viewer.{py,html}`.
-
-A file can also be opened via **File → Open** (`Ctrl+O`) or dragged onto the window. Each open file appears in its own **tab**; use **File → Close Tab** (`Ctrl+W`) to close the active tab, or **Ctrl+Tab** / **Ctrl+Shift+Tab** to cycle between open tabs. Re-opening the same path switches to the existing tab instead of loading it twice.
-
-On launch (with no command-line file), the viewer restores the previous session: all tabs listed in `btf_viewer.rc`, the last active tab, and each tab’s saved zoom level and cursor positions.
-
 ---
 
 ### Web viewer (`web/`)
@@ -1505,59 +1470,6 @@ Shown only when the trace contains `tag0_event` … `tag7_event` (or `tag_event`
 
 A **migration** is recorded when consecutive slices of the same task (merge-key) run on different cores. Migrations are detected at parse time from the segment timeline — there are no separate markers drawn on the timeline; use the **Core Migrations** table, **Migration heatmap**, **Trace Compare…**, or Find **Migrations** mode to inspect them.
 
-| Feature | Desktop | Web |
-|---------|---------|-----|
-| Core tint + **Migrated tasks only** filter | ✓ | ✓ |
-| **Core Migrations** stats table | ✓ | ✓ |
-| **Migration heatmap** | ✓ | ✓ |
-| **Migration heatmap export (PNG / SVG)** | ✓ | ✓ |
-| Cursor-scoped migration stats | ✓ | ✓ |
-| Resizable metric table height (drag handle below table) | ✓ | ✓ |
-| Resizable timeline / CPU load divider | ✓ | ✓ |
-| Resizable right panel / dock width | ✓ (docks) | ✓ |
-| **Min** / **Max** slice links (execution / blocking / inter-arrival) | ✓ | ✓ |
-| **Preemption chain** table + distribution charts | ✓ | ✓ |
-| **Priority Inheritance** table + distribution charts | ✓ | ✓ |
-| **Mutex / Semaphore** pairing + issue drill-down | ✓ | ✓ |
-| **Interval Analysis** table + distribution charts | ✓ | ✓ |
-| **Task Lifecycle** stats section | ✓ | ✓ |
-| **Core-Pair Migration Summary** stats section | ✓ | ✓ |
-| **Core Time Breakdown** stats section | ✓ | ✓ |
-| **Core Affinity** stats section | ✓ | ✓ |
-| **Queue** stats section | ✓ | ✓ |
-| **Tag Analysis** stats section | ✓ | ✓ |
-| **Deadlines / CPU budget** stats section | ✓ (Settings → Display) | ✓ (Settings → Display) |
-| **Tick Distribution** chart (Trace Health) | ✓ (≥ 2 ticks) | ✓ (≥ 2 ticks) |
-| **Export HTML** detail sub-tables (priority / sync / interval) | ✓ | ✓ |
-| Find **Migrations** mode | ✓ | ✓ |
-| **Find** panel (Contains / Exact / Regex / Migrations / STI / Intervals / Lifecycle / Pointers) | ✓ | ✓ |
-| **Zoom to cursor range** (`Ctrl+R`, **⊡ Range**) | ✓ | ✓ |
-| **1:1** zoom toolbar button | ✓ | ✓ |
-| Jump to time (`Ctrl+G`) / trace start (`Ctrl+Home`) / end (`Ctrl+End`) | ✓ | ✓ |
-| Jump to prev/next segment boundary (`Shift+←/→` or `Shift+↑/↓`) | ✓ | ✓ |
-| Next / previous segment (`Tab` / `Shift+Tab`) | ✓ | ✓ |
-| Snap cursor to segment boundary (`Shift+left-click`) | ✓ | ✓ |
-| Middle-drag to zoom rectangle (draw time region → zoom in on release) | ✓ | ✓ |
-| Single-key shortcuts (`F`=fit, `G`=grid, `I`=STI, `D`=dark, `B`/`A`=marks) | ✓ | ✓ |
-| Drag-and-drop `.btf` open | ✓ | ✓ |
-| **Open Recent** (8 filenames) | ✓ | — |
-| Segment right-click (copy task, zoom, select in legend) | ✓ | ✓ |
-| Cursor comparison table (task at each cursor) | ✓ | ✓ |
-| Global undo/redo (cursors + marks) `Ctrl+Z` / `Ctrl+Y` | ✓ | ✓ |
-| Portable session export/import (JSON) | ✓ | ✓ |
-| Cycle trace tabs (`Ctrl+Tab` / `Ctrl+Shift+Tab`) | ✓ | ✓ |
-| Drag-resize label column | ✓ (`btf_viewer.rc`) | ✓ (`btf-viewer-settings-v1`) |
-| Direct clipboard copy (`Ctrl+Shift+C`) | ✓ | ✓ |
-| Persist panel widths / stats table heights | ✓ | ✓ |
-| Restore tab names on page load | ✓ | — |
-| **Trace Compare…** (2+ open traces) | ✓ | ✓ |
-| **Trace Compare…** cursor-scoped mode | ✓ | ✓ |
-| Double-click segment to zoom / restore | ✓ | — |
-| Double-click ruler to fit / left-drag ruler to pan | — | ✓ |
-| Keyboard help overlay (`?`) | — | ✓ |
-| Web layout/options restore (`localStorage`) | — | ✓ (`btf-viewer-session-v1` + `btf-viewer-settings-v1`) |
-| Core View: dim other tasks when one is locked | ✓ | ✓ |
-
 **Legend panel:** check **Migrated tasks only** to hide tasks that never left their first core.
 
 **Statistics → Core Migrations** (collapsible section) — tasks that ran on two or more cores:
@@ -2274,35 +2186,6 @@ timestamp, Core_N, 0, C, Core_N, 0, set_frequency, freq_hz
 1050000, Core_0, 0, STI, Mutex_Lock,   0, trigger, Mutex_Lock
 1120000, Core_1, 0, STI, Queue_Send,   0, trigger, Queue_Send
 ```
-
----
-
-### Implementation notes
-
-| Component | Location | Notes |
-|-----------|----------|-------|
-| **Desktop MVVM** | `btf_viewer_pkg/mvvm/` | `TraceTabViewModel` + `StatsViewModel` (per tab), `MainViewModel` (tabs + session), `AppSettingsViewModel` (settings), `MvvmSettingsMixin` (MainWindow delegation) |
-| **Desktop viewer** | `builds/btf_viewer.py` | Bundled single file from `btf_viewer_pkg/` (`make -C BTFViewer bundle`) |
-| **Web parser** | `web/src/parser/btfParser.js` | Mirrors Python parser; runs in Web Worker (`btfWorker.js`) with `file://` main-thread fallback |
-| **Web segment storage** | `web/src/parser/segStore.js`, `tracePack.js` | Flat typed arrays + `SegList` views; pack/unpack for worker → main transfer |
-| **Web CPU / stats prep** | `web/src/parser/cpuLoadBins.js`, `statsCompute.js` | Precomputed at parse time in the worker |
-| **Web stats worker** | `web/src/parser/statsWorker.js` | Debounced expanded metric tables (120 ms); falls back to main thread if worker unavailable |
-| **Web renderer** | `web/src/renderer/TimelineRenderer.js` + `web/src/renderer/pixi/` | Hybrid PixiJS WebGL segment batching + Canvas 2D chrome; viewport culling, LOD binning, GPU paint budget (~120k segs/frame) for 5M+ event traces |
-| **Web WASM accel** | `web/src/renderer/wasmAccel.js`, `wasm/timeline_accel.wat` | Timeline bisect/row-cull/LOD reduce; parse-time LOD summary + start gather for large BTF loads |
-| **Find analysis** | `findAnalysis.js` / Find tab | Contains, Exact, Regex, Migrations modes; `Ctrl+F` + F3 navigation (Desktop + Web) |
-| **Task name parsing** | `_parse_task_name` in `btf_viewer.py` | `parseTaskName` in `web/src/utils/colors.js` — `[core/id]name`, `name[id]`, `name(0x…)` / `name(dec)` |
-| **Settings store** | `btf_viewer.py` `USER CONFIGURATION` + `btf_viewer.rc` `[view]` | `web/src/utils/settingsStore.js` — `DEFAULT_SETTINGS` / `localStorage` key `btf-viewer-settings-v1` (shared defaults with desktop) |
-| **Session store** | `btf_viewer.rc` (tabs, zoom, cursors, docks) | `web/src/utils/sessionStore.js` — `localStorage` key `btf-viewer-session-v1` (layout chrome only) |
-| **Portable session** | `web/src/utils/sessionPortable.js`, Desktop Marks tab | Shared JSON v1: cursors, marks, viewport, view options, Find, highlight |
-| **File open (web)** | `web/src/utils/fileOpen.js` | FSA on `http://localhost`; `<input type="file">` on `file://` |
-| **Trace compare** | `traceCompare.js` / `_TraceCompareDialog` | Optional per-tab C1–Cn scope (Desktop + Web) |
-| **Migration heatmap** | `migrationAnalysis.js` / `_MigrationHeatmapDialog` | ≤ 16 cores: pair × 32 bins → task × 32 sub-bins → timeline. > 16 cores: core×core matrix → outgoing pairs × 32 bins → tasks; row hover + row click on matrix |
-| **Interval pairing** | `intervalAnalysis.js` / `_build_interval_data` | Parse `{id} tid:{task_id}` notes (`task_id` decimal or `0x` hex); pair by id+task when `tid` present, else legacy note string |
-| **Pre-built HTML** | `builds/btf_viewer.html` | Single-file release produced by `make -C BTFViewer` or `make -C BTFViewer/web` |
-
-Desktop session persistence uses `btf_viewer.rc` (tab paths, zoom, cursors, label width, docks). Web splits **settings** (`btf-viewer-settings-v1`) and **layout chrome** (`btf-viewer-session-v1`) — see [Session restore (Web)](#session-restore-web).
-
-There is no shared automated test suite; validate parser changes against `tracedata/example.btf`, `tracedata/example-4cores.btf`, `tracedata/example-16cores.btf`, and synthetic traces from `scripts/gen_trace.py`.
 
 ---
 
