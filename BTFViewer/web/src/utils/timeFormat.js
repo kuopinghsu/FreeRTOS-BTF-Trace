@@ -9,20 +9,24 @@
  * @returns {string}
  */
 export function formatTime(t, scale, decimals = 3) {
+  // Base unit (no auto-scaling needed): print whole values as-is, but round
+  // fractional ones to `decimals` places — otherwise raw floats (e.g. hover-time
+  // pixel-to-time conversions) leak binary-fp noise like "0.30000000000000004".
+  const base = (v, unit) => `${Number.isInteger(v) ? v : v.toFixed(decimals)} ${unit}`
   if (scale === 'ns') {
     if (t >= 1e9) return `${(t / 1e9).toFixed(decimals)} s`
     if (t >= 1e6) return `${(t / 1e6).toFixed(decimals)} ms`
     if (t >= 1e3) return `${(t / 1e3).toFixed(decimals)} µs`
-    return `${t} ns`
+    return base(t, 'ns')
   }
   if (scale === 'us') {
     if (t >= 1e6) return `${(t / 1e6).toFixed(decimals)} s`
     if (t >= 1e3) return `${(t / 1e3).toFixed(decimals)} ms`
-    return `${t} µs`
+    return base(t, 'µs')
   }
   if (scale === 'ms') {
     if (t >= 1e3) return `${(t / 1e3).toFixed(decimals)} s`
-    return `${t} ms`
+    return base(t, 'ms')
   }
   return `${t} ${scale}`
 }

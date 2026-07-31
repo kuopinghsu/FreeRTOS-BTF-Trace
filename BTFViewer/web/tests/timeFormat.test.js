@@ -15,6 +15,15 @@ describe('formatTime', () => {
   it('formats microsecond trace scale', () => {
     assert.match(formatTime(2500, 'us'), /ms/)
   })
+
+  it('rounds fractional base-unit values instead of leaking float noise (desktop parity)', () => {
+    // Desktop `_format_time` always formats via a fixed-decimals string, so a
+    // fractional native-unit value (e.g. from a pixel-to-time hover conversion)
+    // never shows raw binary-fp residue like JS's default `0.1 + 0.2` would.
+    assert.equal(formatTime(0.1 + 0.2, 'us'), '0.300 µs')
+    assert.equal(formatTime(500.7, 'us'), '500.700 µs')
+    assert.equal(formatTime(42.5, 'ns', 1), '42.5 ns')
+  })
 })
 
 describe('formatMigrationGapTime', () => {
