@@ -249,6 +249,51 @@ export function migrationRows(trace, lo, hi) {
   return rows
 }
 
+/** Plot points: one per on-core run (clipped to scope). x = run start, y = duration. */
+export function migrationDwellPlotPoints(trace, mk, lo, hi) {
+  const segs = trace.segByMergeKey?.get(mk) || []
+  const points = []
+  for (const s of segs) {
+    let ovLo
+    let ovHi
+    if (lo != null && hi != null) {
+      if (!segOverlapsRange(s, lo, hi)) continue
+      ovLo = Math.max(s.start, lo)
+      ovHi = Math.min(s.end, hi)
+    } else {
+      ovLo = s.start
+      ovHi = s.end
+    }
+    const dur = Math.max(0, ovHi - ovLo)
+    if (dur > 0) points.push({ xNs: ovLo, yValue: dur, payload: s })
+  }
+  return points
+}
+
+/** Plot points: one per consecutive migration-event pair. x = event time, y = gap since the previous migration. */
+export function migrationRatePlotPoints(trace, mk, lo, hi) {
+  const migs = [...(trace.migrationsByMk?.get(mk) || [])].sort((a, b) => a.ns - b.ns)
+  const points = []
+  for (let i = 1; i < migs.length; i++) {
+    const cur = migs[i]
+    if (lo != null && hi != null && (cur.ns < lo || cur.ns > hi)) continue
+    const gap = cur.ns - migs[i - 1].ns
+    if (gap > 0) points.push({ xNs: cur.ns, yValue: gap, payload: cur })
+  }
+  return points
+}
+
+/** Plot points: one per migration event with a positive post-migration blocking gap. */
+export function migrationGapPlotPoints(trace, mk, lo, hi) {
+  const migs = trace.migrationsByMk?.get(mk) || []
+  const points = []
+  for (const m of migs) {
+    if (lo != null && hi != null && (m.ns < lo || m.ns > hi)) continue
+    if (m.gapNs > 0) points.push({ xNs: m.ns, yValue: m.gapNs, payload: m })
+  }
+  return points
+}
+
 export function migrationFindHits(trace, query) {
   return computeFindHits(trace, query, 'migrations').hits
 }

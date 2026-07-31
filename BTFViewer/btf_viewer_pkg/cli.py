@@ -223,14 +223,17 @@ Views (--view):
              a time range. Requires a multi-core trace (2+ cores).
   plot       A statistics metric scatter+histogram popup, selected with
              --metric:
-               tick      tick-interval distribution (trace-wide, no --task)
-               exec      task execution-time distribution   (--task)
-               block     task blocking-time distribution     (--task)
-               inter     task inter-arrival-time distribution (--task)
-               priority  task priority-boost episodes         (--task)
-               preempt   victim vs. one preemptor duration     (--task + --preemptor)
-               interval  interval-id duration distribution     (--interval-id)
-               tag       tag-channel value distribution        (--channel)
+               tick       tick-interval distribution (trace-wide, no --task)
+               exec       task execution-time distribution   (--task)
+               block      task blocking-time distribution     (--task)
+               inter      task inter-arrival-time distribution (--task)
+               priority   task priority-boost episodes         (--task)
+               preempt    victim vs. one preemptor duration     (--task + --preemptor)
+               interval   interval-id duration distribution     (--interval-id)
+               tag        tag-channel value distribution        (--channel)
+               mig_dwell  on-core dwell time per migrated run    (--task)
+               mig_rate   time between consecutive migrations    (--task)
+               mig_gap    post-migration blocking-gap distribution (--task)
 
 Sizing (--width/--height): only used for --view timeline / --view plot; the
 heatmap and chord diagram image sizes are derived from their data (grid /
@@ -248,6 +251,9 @@ examples:
   %(prog)s trace.btf -o preempt.png --view plot --metric preempt --task "Producer[1]" --preemptor "Consumer[2]"
   %(prog)s trace.btf -o interval.png --view plot --metric interval --interval-id 0
   %(prog)s trace.btf -o tag.png --view plot --metric tag --channel tag0_event
+  %(prog)s trace.btf -o mig-dwell.svg --view plot --metric mig_dwell --task "CS[22]"
+  %(prog)s trace.btf -o mig-rate.svg --view plot --metric mig_rate --task "CS[22]"
+  %(prog)s trace.btf -o mig-gap.svg --view plot --metric mig_gap --task "CS[22]"
 """
 
 def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.ArgumentParser]]:
@@ -439,7 +445,8 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
     )
     snapshot.add_argument(
         "--metric",
-        choices=("tick", "exec", "block", "inter", "priority", "preempt", "interval", "tag"),
+        choices=("tick", "exec", "block", "inter", "priority", "preempt", "interval", "tag",
+                "mig_dwell", "mig_rate", "mig_gap"),
         default=None,
         help="metric to plot; required when --view plot",
     )

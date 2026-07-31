@@ -508,11 +508,11 @@
               v-for="row in sortedMigrationStats"
               :key="row.mk"
               class="stats-table-row clickable"
-              :title="`Highlight ${row.name}`"
+              :title="`Click to view migration dwell/rate/gap distribution for ${row.name}`"
               tabindex="0"
-              @click="emit('highlightTask', row.mk)"
-              @keydown.enter.prevent="emit('highlightTask', row.mk)"
-              @keydown.space.prevent="emit('highlightTask', row.mk)"
+              @click="openTaskPlot(row.mk, 'mig_dwell')"
+              @keydown.enter.prevent="openTaskPlot(row.mk, 'mig_dwell')"
+              @keydown.space.prevent="openTaskPlot(row.mk, 'mig_dwell')"
             >
               <td class="task-col">{{ row.name }}</td>
               <td>{{ row.migrations }}</td>
@@ -1925,6 +1925,22 @@
       </div>
 
       <div
+        v-if="openPlotRef?.kind?.startsWith('mig_')"
+        class="plot-tab-row"
+      >
+        <button
+          v-for="tab in MIG_PLOT_TABS"
+          :key="tab.kind"
+          type="button"
+          class="plot-tab-btn"
+          :class="{ active: openPlotRef.kind === tab.kind }"
+          @click="switchPlotTab(tab.kind)"
+        >
+          {{ tab.label }}
+        </button>
+      </div>
+
+      <div
         v-if="plotScopeInfo"
         class="plot-scope-banner"
         :class="plotScopeInfo.scoped ? 'plot-scope-cursor' : 'plot-scope-full'"
@@ -2369,7 +2385,7 @@ import { buildTaskLifecycleRows, formatLifecycleSpan } from '../utils/lifecycleA
 import { formatMigrationGapTime } from '../utils/timeFormat.js'
 import { computeDeadlineViolations } from '../utils/deadlineAnalysis.js'
 import { intervalInstanceDetailRows } from '../utils/intervalAnalysis.js'
-import { migrationRows, buildCorePairRows, buildCoreTimeBreakdown } from '../utils/migrationAnalysis.js'
+import { migrationRows, buildCorePairRows, buildCoreTimeBreakdown, migrationDwellPlotPoints, migrationRatePlotPoints, migrationGapPlotPoints } from '../utils/migrationAnalysis.js'
 import { traceNeedsDeferredStatsLoad } from '../utils/statsLoad.js'
 import { tickHealthReport } from '../utils/tickHealth.js'
 import { requestStatsCompute } from '../utils/statsWorkerClient.js'
@@ -3309,6 +3325,75 @@ function _buildBlockPlot(trace, mk, range) {
   }
 }
 
+function _buildMigDwellPlot(trace, mk, range) {
+  const lo = range?.lo ?? null
+  const hi = range?.hi ?? null
+  const repr = trace.taskRepr.get(mk) || mk
+  const suffix = scopeSuffix(range)
+  const name = taskDisplayName(repr)
+  const rawPoints = migrationDwellPlotPoints(trace, mk, lo, hi)
+  const points = rawPoints.map((pt, index) => ({
+    index,
+    xNs: pt.xNs,
+    yValue: pt.yValue,
+    payload: pt.payload,
+    label: `${name}: ${formatTime(pt.yValue, trace.timeScale)} dwell on ${pt.payload.core} at ${formatTime(pt.xNs, trace.timeScale)}`,
+  }))
+  return {
+    kind: 'mig_dwell',
+    mk,
+    title: `${name} — On-Core Dwell Time${suffix}`,
+    color: taskColor(mk, repr),
+    points,
+  }
+}
+
+function _buildMigRatePlot(trace, mk, range) {
+  const lo = range?.lo ?? null
+  const hi = range?.hi ?? null
+  const repr = trace.taskRepr.get(mk) || mk
+  const suffix = scopeSuffix(range)
+  const name = taskDisplayName(repr)
+  const rawPoints = migrationRatePlotPoints(trace, mk, lo, hi)
+  const points = rawPoints.map((pt, index) => ({
+    index,
+    xNs: pt.xNs,
+    yValue: pt.yValue,
+    payload: pt.payload,
+    label: `${name}: ${formatTime(pt.yValue, trace.timeScale)} since previous migration at ${formatTime(pt.xNs, trace.timeScale)}`,
+  }))
+  return {
+    kind: 'mig_rate',
+    mk,
+    title: `${name} — Time Between Migrations${suffix}`,
+    color: taskColor(mk, repr),
+    points,
+  }
+}
+
+function _buildMigGapPlot(trace, mk, range) {
+  const lo = range?.lo ?? null
+  const hi = range?.hi ?? null
+  const repr = trace.taskRepr.get(mk) || mk
+  const suffix = scopeSuffix(range)
+  const name = taskDisplayName(repr)
+  const rawPoints = migrationGapPlotPoints(trace, mk, lo, hi)
+  const points = rawPoints.map((pt, index) => ({
+    index,
+    xNs: pt.xNs,
+    yValue: pt.yValue,
+    payload: pt.payload,
+    label: `${name}: ${formatTime(pt.yValue, trace.timeScale)} blocked after ${pt.payload.fromCore}→${pt.payload.toCore} at ${formatTime(pt.xNs, trace.timeScale)}`,
+  }))
+  return {
+    kind: 'mig_gap',
+    mk,
+    title: `${name} — Post-Migration Gap${suffix}`,
+    color: taskColor(mk, repr),
+    points,
+  }
+}
+
 function _buildPreemptPlot(trace, victimMk, preemptor, range) {
   const repr = trace?.taskRepr?.get(victimMk) || victimMk
   const suffix = scopeSuffix(range)
@@ -3432,6 +3517,9 @@ const plotData = computed(() => {
   const range = statsRange.value
   if (open.kind === 'exec') return _buildExecPlot(props.trace, open.mk, range)
   if (open.kind === 'block') return _buildBlockPlot(props.trace, open.mk, range)
+  if (open.kind === 'mig_dwell') return _buildMigDwellPlot(props.trace, open.mk, range)
+  if (open.kind === 'mig_rate') return _buildMigRatePlot(props.trace, open.mk, range)
+  if (open.kind === 'mig_gap') return _buildMigGapPlot(props.trace, open.mk, range)
   if (open.kind === 'preempt') {
     return _buildPreemptPlot(props.trace, open.mk, open.preemptor, range)
   }
@@ -3455,11 +3543,27 @@ const plotScopeInfo = computed(() => {
   return plotScopeBanner(statsRange.value, props.trace.timeScale, formatTime)
 })
 
+const MIG_PLOT_TABS = [
+  { kind: 'mig_dwell', label: 'Dwell' },
+  { kind: 'mig_rate', label: 'Rate' },
+  { kind: 'mig_gap', label: 'Gap' },
+]
+
+function switchPlotTab(kind) {
+  const open = openPlotRef.value
+  if (!open || open.kind === kind) return
+  openPlotRef.value = { ...open, kind }
+  selectedPlotPoint.value = -1
+}
+
 function openTaskPlot(mk, kind) {
   const range = statsRange.value
   let plot
   if (kind === 'exec') plot = _buildExecPlot(props.trace, mk, range)
   else if (kind === 'block') plot = _buildBlockPlot(props.trace, mk, range)
+  else if (kind === 'mig_dwell') plot = _buildMigDwellPlot(props.trace, mk, range)
+  else if (kind === 'mig_rate') plot = _buildMigRatePlot(props.trace, mk, range)
+  else if (kind === 'mig_gap') plot = _buildMigGapPlot(props.trace, mk, range)
   else plot = _buildInterPlot(props.trace, mk, range)
   if (!plot || plot.points.length === 0) return
   openPlotRef.value = { mk, kind }
@@ -5496,6 +5600,34 @@ watch(plotData, () => {
 
 .plot-close-btn:hover {
   background: var(--tb-btn-hover);
+}
+
+.plot-tab-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 14px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.plot-tab-btn {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg);
+  border-radius: 6px;
+  padding: 4px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.plot-tab-btn:hover {
+  background: var(--tb-btn-hover);
+}
+
+.plot-tab-btn.active {
+  background: var(--accent, #1976d2);
+  border-color: var(--accent, #1976d2);
+  color: #fff;
 }
 
 .plot-scope-banner {

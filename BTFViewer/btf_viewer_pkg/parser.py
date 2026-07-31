@@ -1548,6 +1548,8 @@ def _plot_point_mark_ns(payload, x_ns: int) -> int:
         return payload.stop_ns
     if isinstance(payload, SyncIssueRef):
         return payload.time_ns
+    if isinstance(payload, MigrationEvent):
+        return payload.ns
     if isinstance(payload, TaskSegment):
         return payload.start
     return x_ns
@@ -1586,6 +1588,16 @@ def _format_plot_point_note(
         if kind == "preempt":
             pre = preemptor or "?"
             return f"{name} ← {pre}: {fmt(y_ns)} at {fmt(x_ns)}"
+        if kind == "mig_dwell":
+            return f"{name}: {fmt(y_ns)} dwell on {payload.core} at {fmt(x_ns)}"
+    if isinstance(payload, MigrationEvent):
+        raw = trace.task_repr.get(mk, mk) if mk else payload.merge_key
+        name = _task_display_name(raw)
+        if kind == "mig_rate":
+            return f"{name}: {fmt(y_ns)} since previous migration at {fmt(x_ns)}"
+        if kind == "mig_gap":
+            return (f"{name}: {fmt(y_ns)} blocked after {payload.from_core}→"
+                    f"{payload.to_core} at {fmt(x_ns)}")
     if kind == "tick":
         return f"Tick interval {fmt(y_ns)} at {fmt(x_ns)}"
     return f"{fmt(y_ns)} at {fmt(x_ns)}"
@@ -2238,6 +2250,55 @@ def _migration_rows(trace: "BtfTrace",
         ))
     rows.sort(key=lambda r: (-r[2], r[1].lower()))
     return rows
+
+def _migration_dwell_plot_points(
+    trace: "BtfTrace", mk: str,
+    lo: Optional[int] = None, hi: Optional[int] = None,
+) -> List[Tuple[int, int, "TaskSegment"]]:
+    """One point per on-core run (clipped to scope): x = run start, y = duration."""
+    segs = trace.seg_map_by_merge_key.get(mk, [])
+    pts: List[Tuple[int, int, TaskSegment]] = []
+    for s in segs:
+        if lo is not None and hi is not None:
+            if not _seg_overlaps_range(s, lo, hi):
+                continue
+            ov_lo, ov_hi = max(s.start, lo), min(s.end, hi)
+        else:
+            ov_lo, ov_hi = s.start, s.end
+        dur = max(0, ov_hi - ov_lo)
+        if dur > 0:
+            pts.append((ov_lo, dur, s))
+    return pts
+
+def _migration_rate_plot_points(
+    trace: "BtfTrace", mk: str,
+    lo: Optional[int] = None, hi: Optional[int] = None,
+) -> List[Tuple[int, int, "MigrationEvent"]]:
+    """One point per consecutive migration-event pair: x = event time, y = gap since the previous migration."""
+    migs = sorted(trace.migrations_by_mk.get(mk, ()), key=lambda m: m.ns)
+    pts: List[Tuple[int, int, MigrationEvent]] = []
+    for i in range(1, len(migs)):
+        cur = migs[i]
+        if lo is not None and hi is not None and (cur.ns < lo or cur.ns > hi):
+            continue
+        gap = cur.ns - migs[i - 1].ns
+        if gap > 0:
+            pts.append((cur.ns, gap, cur))
+    return pts
+
+def _migration_gap_plot_points(
+    trace: "BtfTrace", mk: str,
+    lo: Optional[int] = None, hi: Optional[int] = None,
+) -> List[Tuple[int, int, "MigrationEvent"]]:
+    """One point per migration event with a positive post-migration blocking gap."""
+    migs = trace.migrations_by_mk.get(mk, ())
+    pts: List[Tuple[int, int, MigrationEvent]] = []
+    for m in migs:
+        if lo is not None and hi is not None and (m.ns < lo or m.ns > hi):
+            continue
+        if m.gap_ns > 0:
+            pts.append((m.ns, m.gap_ns, m))
+    return pts
 
 _TICK_HEALTH_PERIOD = 1000   # expected tick period in trace units (1 ms @ us scale)
 _TICK_HEALTH_GAP_FACTOR = 2.0

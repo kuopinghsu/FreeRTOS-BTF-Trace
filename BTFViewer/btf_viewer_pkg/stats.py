@@ -1517,6 +1517,8 @@ class _HistogramWidget(QWidget):
 
         p.end()
 
+_MIG_PLOT_TABS = (("mig_dwell", "Dwell"), ("mig_rate", "Rate"), ("mig_gap", "Gap"))
+
 class _MetricsPlotDialog(QDialog):
     """Modeless popup: scatter plot + histogram for one task metric.
 
@@ -1537,11 +1539,15 @@ class _MetricsPlotDialog(QDialog):
                  scope_badge: str,
                  scope_detail: str,
                  y_as_time: bool = True,
+                 tabs: Optional[Sequence[Tuple[str, str]]] = None,
+                 active_tab: Optional[str] = None,
+                 on_tab_change=None,
                  parent=None) -> None:
         super().__init__(parent, Qt.WindowType.Window)
         self._title        = title
         self._is_dark      = is_dark
         self._on_pt_click  = on_point_click
+        self._on_tab_change = on_tab_change
         self.setWindowTitle(title)
         self.resize(820, 620)
         self.setMinimumSize(500, 400)
@@ -1549,6 +1555,22 @@ class _MetricsPlotDialog(QDialog):
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
         root.setSpacing(4)
+
+        if tabs:
+            tab_row = QHBoxLayout()
+            tab_row.setContentsMargins(0, 0, 0, 0)
+            tab_row.setSpacing(4)
+            self._tab_group = QButtonGroup(self)
+            self._tab_group.setExclusive(True)
+            for kind, label in tabs:
+                btn = QPushButton(label)
+                btn.setCheckable(True)
+                btn.setChecked(kind == active_tab)
+                btn.clicked.connect(lambda _checked, k=kind: self._on_tab_clicked(k))
+                self._tab_group.addButton(btn)
+                tab_row.addWidget(btn)
+            tab_row.addStretch(1)
+            root.addLayout(tab_row)
 
         self._scope_banner = QLabel()
         self._scope_banner.setWordWrap(True)
@@ -1615,6 +1637,10 @@ class _MetricsPlotDialog(QDialog):
         btn_row.addStretch()
         btn_row.addWidget(btn_cls)
         root.addLayout(btn_row)
+
+    def _on_tab_clicked(self, kind: str) -> None:
+        if self._on_tab_change is not None:
+            self._on_tab_change(kind)
 
     def _set_scope_banner(self, scoped: bool, badge: str, detail: str) -> None:
         """Show a high-contrast banner indicating cursor-range vs full-trace scope."""
@@ -4713,6 +4739,20 @@ class _StatsPanel(QWidget):
                 for x, y, ep in pts
             ]
             return title, pts, color
+        if kind in ("mig_dwell", "mig_rate", "mig_gap"):
+            raw = trace.task_repr.get(mk, mk)
+            name = _task_display_name(raw)
+            color = _task_color(raw)
+            if kind == "mig_dwell":
+                pts = _migration_dwell_plot_points(trace, mk, lo, hi)
+                title = f"{name} — On-Core Dwell Time{scope}"
+            elif kind == "mig_rate":
+                pts = _migration_rate_plot_points(trace, mk, lo, hi)
+                title = f"{name} — Time Between Migrations{scope}"
+            else:
+                pts = _migration_gap_plot_points(trace, mk, lo, hi)
+                title = f"{name} — Post-Migration Gap{scope}"
+            return title, pts, color
         segs = trace.seg_map_by_merge_key.get(mk, [])
         if not segs:
             return None
@@ -4863,6 +4903,7 @@ class _StatsPanel(QWidget):
             except TypeError:
                 pass
             self._plot_dlg.close()
+        tabs = _MIG_PLOT_TABS if kind.startswith("mig_") else None
         self._plot_dlg = _MetricsPlotDialog(
             title, pts, trace.time_scale, color,
             on_point_click=_on_click,
@@ -4871,10 +4912,28 @@ class _StatsPanel(QWidget):
             scope_badge=badge,
             scope_detail=detail,
             y_as_time=y_as_time,
+            tabs=tabs,
+            active_tab=kind if tabs else None,
+            on_tab_change=self._on_plot_tab_changed if tabs else None,
             parent=self.window(),
         )
         self._plot_dlg.closed.connect(self._on_plot_dialog_closed)
         self._plot_dlg.show()
+
+    def _on_plot_tab_changed(self, new_kind: str) -> None:
+        """Switch the open migration plot dialog to a different metric tab in place."""
+        if (self._plot_dlg is None or self._trace is None
+                or self._plot_mk is None or new_kind == self._plot_kind):
+            return
+        built = self._build_plot_points(self._trace, self._plot_mk, new_kind)
+        if built is None:
+            return
+        title, pts, _color = built
+        self._plot_kind = new_kind
+        scoped, badge, detail = self._plot_scope_banner()
+        self._plot_dlg.update_data(title, pts, scope_scoped=scoped,
+                                   scope_badge=badge, scope_detail=detail)
+
 
     def _on_plot_scatter_click(self, x_ns: int, y_ns: int, payload) -> None:
         """Scatter plot point: jump timeline and add an annotation (not a cursor)."""
@@ -5431,6 +5490,9 @@ class _StatsPanel(QWidget):
                 if migrations:
                     if c == 0:
                         item.setData(Qt.ItemDataRole.UserRole, mk)
+                        if on_row_click is not None:
+                            item.setToolTip(
+                                f"Click to view migration dwell/rate/gap distribution for {name}")
                 elif c == 0:
                     item.setData(Qt.ItemDataRole.UserRole, mk_r)
                     tip = (f"{_row_tip} for {name}"
@@ -6844,14 +6906,7 @@ class _StatsPanel(QWidget):
                      else "No tasks ran on more than one core")
 
         def _on_mig_row(mk: str) -> None:
-            migs = trace.migrations_by_mk.get(mk, [])
-            if lo is not None and hi is not None:
-                scoped = [m for m in migs if lo <= m.ns <= hi]
-            else:
-                scoped = migs
-            if scoped:
-                self.segment_jump.emit(scoped[0].ns)
-            self.task_clicked.emit(mk)
+            self._open_plot(trace, mk, "mig_dwell")
 
         def _populate_mig(blay: QVBoxLayout) -> None:
             _mig_rows = _migration_rows(trace, lo, hi)

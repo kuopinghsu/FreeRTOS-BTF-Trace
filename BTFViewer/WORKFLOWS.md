@@ -254,14 +254,38 @@ Identify tasks that move between cores frequently, detect lock-induced core boun
    - **Rate** = migrations per second of active time (and per scheduler tick) — a high rate relative to the task's execution frequency suggests unnecessary migration.
    - **Dwell** = average on-CPU slice before migrating — short dwell + high rate = ping-pong.
    - **Ping-pong** count = migrations that immediately reverse direction (A→B followed by B→A) — a strong indicator of lock-bounce or affinity issues.
-2. Open the **Migration Heatmap** (toolbar **Heatmap** button, visible on multi-core traces):
+2. Click a task row to open its **distribution chart**, which has three in-dialog tabs (click a tab to switch without closing the popup):
+   - **Dwell**: x = on-core run start time, y = run duration.  A cluster of very short runs confirms ping-pong behaviour; a long tail shows occasional longer stays.
+   - **Rate**: x = migration time, y = time since the previous migration.  Tightly packed low points mean bursts of rapid migration; sparse high points mean isolated one-off migrations.
+   - **Gap**: x = migration time, y = the off-CPU gap immediately following that migration.  Large gaps suggest the task waited a while on the destination core before it actually resumed.
+3. Open the **Migration Heatmap** (toolbar **Heatmap** button, visible on multi-core traces):
    - **Level 1**: directed core-pair rows × time bins.  Dark cells = many migrations in that period.  Migrations clustered in time indicate a periodic workload pattern or a contention event.
    - **Click a hot cell** → drill into **Level 2**: per-task sub-bins within that pair/time window.
    - **Click a task cell** → zoom the timeline, place cursors, switch to Task View, and filter to that task.
-3. Enable **Migrated tasks only** in the Legend filter to hide single-core tasks and focus on migrators.
-4. Check **Core-Pair Migration Summary** in Statistics:
+4. Enable **Migrated tasks only** in the Legend filter to hide single-core tasks and focus on migrators.
+5. Check **Core-Pair Migration Summary** in Statistics:
    - **Lock-bounce %** = fraction of migrations where a task held a mutex while crossing core boundaries (`CORE_MIGRATION_WHILE_HELD` warning in Mutex/Semaphore).
    - High lock-bounce % on a specific core pair points to a mutex that is frequently taken on one core and released on another.
+
+### Example — Core Migrations distribution chart
+
+```bash
+python btf_viewer.py your-trace.btf
+```
+
+Open **Statistics → Core Migrations**, click a task row to open the tabbed distribution chart (**CS[22]** in `example-8cores.btf`, a context-switch stress task that migrates often):
+
+![On-core dwell time distribution for CS[22] in example-8cores.btf — Dwell tab](../images/stats/stats-mig-dwell-cs22.svg)
+
+*The **Dwell** tab (default) plots one point per on-core run — how long the task stayed on a core before migrating, blocking, or yielding.*
+
+![Time between migrations for CS[22] in example-8cores.btf — Rate tab](../images/stats/stats-mig-rate-cs22.svg)
+
+*The **Rate** tab plots the time since the previous migration for each migration event — a scatter that clusters near zero indicates bursts of rapid core-hopping.*
+
+![Post-migration gap distribution for CS[22] in example-8cores.btf — Gap tab](../images/stats/stats-mig-gap-cs22.svg)
+
+*The **Gap** tab plots the off-CPU gap immediately after each migration — large values mean the task sat idle on the destination core before actually resuming.*
 
 ### Example — Migration Heatmap for a multi-core trace
 

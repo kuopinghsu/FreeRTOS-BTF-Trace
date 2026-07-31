@@ -97,7 +97,7 @@ from bisect import bisect_left, bisect_right
 from collections import defaultdict
 from operator import attrgetter as _attrgetter
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from PySide6.QtCore import (
     QBuffer, QByteArray, QEasingCurve, QEvent, QEventLoop, QIODevice, QLineF, QMimeData,
@@ -110,7 +110,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtSvg import QSvgGenerator
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
+    QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QDockWidget, QFileDialog, QFormLayout, QFrame, QGridLayout, QInputDialog,
     QGraphicsEllipseItem, QGraphicsItem, QGraphicsLineItem, QGraphicsOpacityEffect,
     QGraphicsPolygonItem, QGraphicsRectItem, QGraphicsScene, QGraphicsTextItem, QGraphicsView,
@@ -2445,6 +2445,8 @@ def _plot_point_mark_ns(payload, x_ns: int) -> int:
         return payload.stop_ns
     if isinstance(payload, SyncIssueRef):
         return payload.time_ns
+    if isinstance(payload, MigrationEvent):
+        return payload.ns
     if isinstance(payload, TaskSegment):
         return payload.start
     return x_ns
@@ -2483,6 +2485,16 @@ def _format_plot_point_note(
         if kind == "preempt":
             pre = preemptor or "?"
             return f"{name} ← {pre}: {fmt(y_ns)} at {fmt(x_ns)}"
+        if kind == "mig_dwell":
+            return f"{name}: {fmt(y_ns)} dwell on {payload.core} at {fmt(x_ns)}"
+    if isinstance(payload, MigrationEvent):
+        raw = trace.task_repr.get(mk, mk) if mk else payload.merge_key
+        name = _task_display_name(raw)
+        if kind == "mig_rate":
+            return f"{name}: {fmt(y_ns)} since previous migration at {fmt(x_ns)}"
+        if kind == "mig_gap":
+            return (f"{name}: {fmt(y_ns)} blocked after {payload.from_core}→"
+                    f"{payload.to_core} at {fmt(x_ns)}")
     if kind == "tick":
         return f"Tick interval {fmt(y_ns)} at {fmt(x_ns)}"
     return f"{fmt(y_ns)} at {fmt(x_ns)}"
@@ -3135,6 +3147,55 @@ def _migration_rows(trace: "BtfTrace",
         ))
     rows.sort(key=lambda r: (-r[2], r[1].lower()))
     return rows
+
+def _migration_dwell_plot_points(
+    trace: "BtfTrace", mk: str,
+    lo: Optional[int] = None, hi: Optional[int] = None,
+) -> List[Tuple[int, int, "TaskSegment"]]:
+    """One point per on-core run (clipped to scope): x = run start, y = duration."""
+    segs = trace.seg_map_by_merge_key.get(mk, [])
+    pts: List[Tuple[int, int, TaskSegment]] = []
+    for s in segs:
+        if lo is not None and hi is not None:
+            if not _seg_overlaps_range(s, lo, hi):
+                continue
+            ov_lo, ov_hi = max(s.start, lo), min(s.end, hi)
+        else:
+            ov_lo, ov_hi = s.start, s.end
+        dur = max(0, ov_hi - ov_lo)
+        if dur > 0:
+            pts.append((ov_lo, dur, s))
+    return pts
+
+def _migration_rate_plot_points(
+    trace: "BtfTrace", mk: str,
+    lo: Optional[int] = None, hi: Optional[int] = None,
+) -> List[Tuple[int, int, "MigrationEvent"]]:
+    """One point per consecutive migration-event pair: x = event time, y = gap since the previous migration."""
+    migs = sorted(trace.migrations_by_mk.get(mk, ()), key=lambda m: m.ns)
+    pts: List[Tuple[int, int, MigrationEvent]] = []
+    for i in range(1, len(migs)):
+        cur = migs[i]
+        if lo is not None and hi is not None and (cur.ns < lo or cur.ns > hi):
+            continue
+        gap = cur.ns - migs[i - 1].ns
+        if gap > 0:
+            pts.append((cur.ns, gap, cur))
+    return pts
+
+def _migration_gap_plot_points(
+    trace: "BtfTrace", mk: str,
+    lo: Optional[int] = None, hi: Optional[int] = None,
+) -> List[Tuple[int, int, "MigrationEvent"]]:
+    """One point per migration event with a positive post-migration blocking gap."""
+    migs = trace.migrations_by_mk.get(mk, ())
+    pts: List[Tuple[int, int, MigrationEvent]] = []
+    for m in migs:
+        if lo is not None and hi is not None and (m.ns < lo or m.ns > hi):
+            continue
+        if m.gap_ns > 0:
+            pts.append((m.ns, m.gap_ns, m))
+    return pts
 
 _TICK_HEALTH_PERIOD = 1000   # expected tick period in trace units (1 ms @ us scale)
 _TICK_HEALTH_GAP_FACTOR = 2.0
@@ -15350,6 +15411,8 @@ class _HistogramWidget(QWidget):
 
         p.end()
 
+_MIG_PLOT_TABS = (("mig_dwell", "Dwell"), ("mig_rate", "Rate"), ("mig_gap", "Gap"))
+
 class _MetricsPlotDialog(QDialog):
     """Modeless popup: scatter plot + histogram for one task metric.
 
@@ -15370,11 +15433,15 @@ class _MetricsPlotDialog(QDialog):
                  scope_badge: str,
                  scope_detail: str,
                  y_as_time: bool = True,
+                 tabs: Optional[Sequence[Tuple[str, str]]] = None,
+                 active_tab: Optional[str] = None,
+                 on_tab_change=None,
                  parent=None) -> None:
         super().__init__(parent, Qt.WindowType.Window)
         self._title        = title
         self._is_dark      = is_dark
         self._on_pt_click  = on_point_click
+        self._on_tab_change = on_tab_change
         self.setWindowTitle(title)
         self.resize(820, 620)
         self.setMinimumSize(500, 400)
@@ -15382,6 +15449,22 @@ class _MetricsPlotDialog(QDialog):
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
         root.setSpacing(4)
+
+        if tabs:
+            tab_row = QHBoxLayout()
+            tab_row.setContentsMargins(0, 0, 0, 0)
+            tab_row.setSpacing(4)
+            self._tab_group = QButtonGroup(self)
+            self._tab_group.setExclusive(True)
+            for kind, label in tabs:
+                btn = QPushButton(label)
+                btn.setCheckable(True)
+                btn.setChecked(kind == active_tab)
+                btn.clicked.connect(lambda _checked, k=kind: self._on_tab_clicked(k))
+                self._tab_group.addButton(btn)
+                tab_row.addWidget(btn)
+            tab_row.addStretch(1)
+            root.addLayout(tab_row)
 
         self._scope_banner = QLabel()
         self._scope_banner.setWordWrap(True)
@@ -15448,6 +15531,10 @@ class _MetricsPlotDialog(QDialog):
         btn_row.addStretch()
         btn_row.addWidget(btn_cls)
         root.addLayout(btn_row)
+
+    def _on_tab_clicked(self, kind: str) -> None:
+        if self._on_tab_change is not None:
+            self._on_tab_change(kind)
 
     def _set_scope_banner(self, scoped: bool, badge: str, detail: str) -> None:
         """Show a high-contrast banner indicating cursor-range vs full-trace scope."""
@@ -18546,6 +18633,20 @@ class _StatsPanel(QWidget):
                 for x, y, ep in pts
             ]
             return title, pts, color
+        if kind in ("mig_dwell", "mig_rate", "mig_gap"):
+            raw = trace.task_repr.get(mk, mk)
+            name = _task_display_name(raw)
+            color = _task_color(raw)
+            if kind == "mig_dwell":
+                pts = _migration_dwell_plot_points(trace, mk, lo, hi)
+                title = f"{name} — On-Core Dwell Time{scope}"
+            elif kind == "mig_rate":
+                pts = _migration_rate_plot_points(trace, mk, lo, hi)
+                title = f"{name} — Time Between Migrations{scope}"
+            else:
+                pts = _migration_gap_plot_points(trace, mk, lo, hi)
+                title = f"{name} — Post-Migration Gap{scope}"
+            return title, pts, color
         segs = trace.seg_map_by_merge_key.get(mk, [])
         if not segs:
             return None
@@ -18696,6 +18797,7 @@ class _StatsPanel(QWidget):
             except TypeError:
                 pass
             self._plot_dlg.close()
+        tabs = _MIG_PLOT_TABS if kind.startswith("mig_") else None
         self._plot_dlg = _MetricsPlotDialog(
             title, pts, trace.time_scale, color,
             on_point_click=_on_click,
@@ -18704,10 +18806,28 @@ class _StatsPanel(QWidget):
             scope_badge=badge,
             scope_detail=detail,
             y_as_time=y_as_time,
+            tabs=tabs,
+            active_tab=kind if tabs else None,
+            on_tab_change=self._on_plot_tab_changed if tabs else None,
             parent=self.window(),
         )
         self._plot_dlg.closed.connect(self._on_plot_dialog_closed)
         self._plot_dlg.show()
+
+    def _on_plot_tab_changed(self, new_kind: str) -> None:
+        """Switch the open migration plot dialog to a different metric tab in place."""
+        if (self._plot_dlg is None or self._trace is None
+                or self._plot_mk is None or new_kind == self._plot_kind):
+            return
+        built = self._build_plot_points(self._trace, self._plot_mk, new_kind)
+        if built is None:
+            return
+        title, pts, _color = built
+        self._plot_kind = new_kind
+        scoped, badge, detail = self._plot_scope_banner()
+        self._plot_dlg.update_data(title, pts, scope_scoped=scoped,
+                                   scope_badge=badge, scope_detail=detail)
+
 
     def _on_plot_scatter_click(self, x_ns: int, y_ns: int, payload) -> None:
         """Scatter plot point: jump timeline and add an annotation (not a cursor)."""
@@ -19264,6 +19384,9 @@ class _StatsPanel(QWidget):
                 if migrations:
                     if c == 0:
                         item.setData(Qt.ItemDataRole.UserRole, mk)
+                        if on_row_click is not None:
+                            item.setToolTip(
+                                f"Click to view migration dwell/rate/gap distribution for {name}")
                 elif c == 0:
                     item.setData(Qt.ItemDataRole.UserRole, mk_r)
                     tip = (f"{_row_tip} for {name}"
@@ -20677,14 +20800,7 @@ class _StatsPanel(QWidget):
                      else "No tasks ran on more than one core")
 
         def _on_mig_row(mk: str) -> None:
-            migs = trace.migrations_by_mk.get(mk, [])
-            if lo is not None and hi is not None:
-                scoped = [m for m in migs if lo <= m.ns <= hi]
-            else:
-                scoped = migs
-            if scoped:
-                self.segment_jump.emit(scoped[0].ns)
-            self.task_clicked.emit(mk)
+            self._open_plot(trace, mk, "mig_dwell")
 
         def _populate_mig(blay: QVBoxLayout) -> None:
             _mig_rows = _migration_rows(trace, lo, hi)
@@ -32191,14 +32307,17 @@ Views (--view):
              a time range. Requires a multi-core trace (2+ cores).
   plot       A statistics metric scatter+histogram popup, selected with
              --metric:
-               tick      tick-interval distribution (trace-wide, no --task)
-               exec      task execution-time distribution   (--task)
-               block     task blocking-time distribution     (--task)
-               inter     task inter-arrival-time distribution (--task)
-               priority  task priority-boost episodes         (--task)
-               preempt   victim vs. one preemptor duration     (--task + --preemptor)
-               interval  interval-id duration distribution     (--interval-id)
-               tag       tag-channel value distribution        (--channel)
+               tick       tick-interval distribution (trace-wide, no --task)
+               exec       task execution-time distribution   (--task)
+               block      task blocking-time distribution     (--task)
+               inter      task inter-arrival-time distribution (--task)
+               priority   task priority-boost episodes         (--task)
+               preempt    victim vs. one preemptor duration     (--task + --preemptor)
+               interval   interval-id duration distribution     (--interval-id)
+               tag        tag-channel value distribution        (--channel)
+               mig_dwell  on-core dwell time per migrated run    (--task)
+               mig_rate   time between consecutive migrations    (--task)
+               mig_gap    post-migration blocking-gap distribution (--task)
 
 Sizing (--width/--height): only used for --view timeline / --view plot; the
 heatmap and chord diagram image sizes are derived from their data (grid /
@@ -32216,6 +32335,9 @@ examples:
   %(prog)s trace.btf -o preempt.png --view plot --metric preempt --task "Producer[1]" --preemptor "Consumer[2]"
   %(prog)s trace.btf -o interval.png --view plot --metric interval --interval-id 0
   %(prog)s trace.btf -o tag.png --view plot --metric tag --channel tag0_event
+  %(prog)s trace.btf -o mig-dwell.svg --view plot --metric mig_dwell --task "CS[22]"
+  %(prog)s trace.btf -o mig-rate.svg --view plot --metric mig_rate --task "CS[22]"
+  %(prog)s trace.btf -o mig-gap.svg --view plot --metric mig_gap --task "CS[22]"
 """
 
 def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.ArgumentParser]]:
@@ -32407,7 +32529,8 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
     )
     snapshot.add_argument(
         "--metric",
-        choices=("tick", "exec", "block", "inter", "priority", "preempt", "interval", "tag"),
+        choices=("tick", "exec", "block", "inter", "priority", "preempt", "interval", "tag",
+                "mig_dwell", "mig_rate", "mig_gap"),
         default=None,
         help="metric to plot; required when --view plot",
     )
