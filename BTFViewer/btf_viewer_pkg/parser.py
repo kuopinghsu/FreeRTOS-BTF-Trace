@@ -2507,6 +2507,93 @@ def _migration_heatmap_matrix(trace: "BtfTrace",
         grid[fi][ti] += 1
     return cores, grid
 
+# Gap between adjacent core arcs and floor arc size in the chord diagram, in radians.
+_CHORD_GAP_RAD = 0.03
+_CHORD_MIN_ARC_RAD = 0.05
+
+@dataclass
+class ChordArc:
+    """One core's arc segment in the migration chord diagram."""
+    core: str
+    index: int
+    start_angle: float
+    end_angle: float
+    total: float
+
+@dataclass
+class ChordLayout:
+    """Circular layout for the migration chord diagram (see _build_chord_layout)."""
+    arcs: List[ChordArc]
+    # tick_angles[i][j] = angle (radians) on core i's arc pointing toward core j.
+    tick_angles: List[Dict[int, float]]
+
+    def tick_angle(self, i: int, j: int) -> float:
+        if 0 <= i < len(self.tick_angles) and j in self.tick_angles[i]:
+            return self.tick_angles[i][j]
+        if 0 <= i < len(self.arcs):
+            arc = self.arcs[i]
+            return (arc.start_angle + arc.end_angle) / 2
+        return 0.0
+
+def _build_chord_layout(cores: List[str], grid: List[List[float]]) -> ChordLayout:
+    """Pure circular layout for the migration chord diagram — parity with the
+    web app's buildChordLayout() in migrationAnalysis.js. Each core gets an arc
+    sized proportionally to its total in+out migration volume (with a minimum
+    sliver so zero-flow cores still appear as nodes), separated by a fixed gap.
+    Each connected core-pair also gets a tick position within its two arcs,
+    used as chord endpoints so parallel migrations fan out rather than
+    overlapping."""
+    n = len(cores)
+    totals = [0.0] * n
+    for i in range(n):
+        for j in range(n):
+            if i == j:
+                continue
+            gij = grid[i][j] if i < len(grid) and j < len(grid[i]) else 0
+            gji = grid[j][i] if j < len(grid) and i < len(grid[j]) else 0
+            totals[i] += gij + gji
+    grand_total = sum(totals)
+    gap = min(_CHORD_GAP_RAD, (math.pi * 1.5) / n) if n > 0 else 0.0
+    available = max(0.0, 2 * math.pi - gap * n)
+    min_arc = min(_CHORD_MIN_ARC_RAD, available / n) if n > 0 else 0.0
+
+    floor_total = min_arc * n
+    remaining = max(0.0, available - floor_total)
+    if grand_total > 0:
+        arc_sizes = [min_arc + remaining * (t / grand_total) for t in totals]
+    else:
+        arc_sizes = [min_arc + remaining / n for _ in totals] if n > 0 else []
+
+    arcs: List[ChordArc] = []
+    angle = -math.pi / 2
+    for i in range(n):
+        start_angle = angle
+        end_angle = start_angle + arc_sizes[i]
+        arcs.append(ChordArc(cores[i], i, start_angle, end_angle, totals[i]))
+        angle = end_angle + gap
+
+    tick_angles: List[Dict[int, float]] = [dict() for _ in range(n)]
+    for i in range(n):
+        arc = arcs[i]
+        links = []
+        for j in range(n):
+            if j == i:
+                continue
+            gij = grid[i][j] if i < len(grid) and j < len(grid[i]) else 0
+            gji = grid[j][i] if j < len(grid) and i < len(grid[j]) else 0
+            mag = gij + gji
+            if mag > 0:
+                links.append((j, mag))
+        link_total = sum(m for _, m in links)
+        span = arc.end_angle - arc.start_angle
+        cursor = arc.start_angle
+        for j, mag in links:
+            sl = span * (mag / link_total) if link_total > 0 else span / len(links)
+            tick_angles[i][j] = cursor + sl / 2
+            cursor += sl
+
+    return ChordLayout(arcs=arcs, tick_angles=tick_angles)
+
 def _migration_core_outgoing_heatmap(trace: "BtfTrace", from_core: str,
                                      lo: Optional[int] = None, hi: Optional[int] = None,
                                      time_bins: int = 32) -> Tuple[list, list, int, int, int, float]:

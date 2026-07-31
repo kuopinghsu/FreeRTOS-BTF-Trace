@@ -1251,6 +1251,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._find_marker_items: List[QGraphicsItem] = []
         self._heatmap_dlg: Optional[_MigrationHeatmapDialog] = None
         self._heatmap_view_snapshot: Optional[dict] = None
+        self._chord_dlg: Optional[_ChordDiagramDialog] = None
         self._defer_stats_refresh: bool = False
         self._shutting_down: bool = False
         self._persisting_settings: bool = False
@@ -1392,6 +1393,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if hasattr(self, "_stats_panel"):
             self._stats_panel.clear_plot_session()
         self._close_heatmap_dialog()
+        self._close_chord_dialog()
         if self._progress_dialog is not None:
             self._progress_dialog.close()
             self._progress_dialog = None
@@ -2072,6 +2074,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
     def _sync_panels_light(self) -> None:
         """Legend and bindings without rebuilding the statistics panel."""
         self._sync_heatmap_dialog_to_tab()
+        self._sync_chord_dialog_to_tab()
         tab = self._active_tab
         trace = self._trace
         if tab is None or trace is None:
@@ -4010,6 +4013,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "Heatmap", self._open_migration_heatmap, _IC_HEATMAP,
             "Migration heatmap — core-pair counts over time (multi-core traces only)")
         self._tb_heatmap_btn.setEnabled(False)
+        self._tb_chord_btn = _ia(
+            "Chord", self._open_chord_diagram, _IC_CHORD,
+            "Migration chord diagram — directional core-to-core migration volume "
+            "(multi-core traces only)")
+        self._tb_chord_btn.setEnabled(False)
         self._tb_show_all_tasks_btn = _ia(
             "All tasks", self._clear_heatmap_task_filter, _IC_TASK,
             "Clear heatmap task filter and show all tasks")
@@ -4388,6 +4396,48 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         mks = sc._heatmap_filter_mks
         dlg.set_filter_banner(sc._heatmap_filter_label, len(mks) if mks else 0)
 
+    def _close_chord_dialog(self) -> None:
+        if self._chord_dlg is not None:
+            self._chord_dlg.close()
+            self._chord_dlg = None
+
+    def _sync_chord_dialog_to_tab(self) -> None:
+        dlg = self._chord_dlg
+        if dlg is None:
+            return
+        tab = self._active_tab
+        owner = getattr(dlg, "_owner_tab_path", None)
+        cur = tab.path if tab else None
+        if tab is None or cur != owner:
+            self._close_chord_dialog()
+            return
+        dlg.refresh_scope()
+
+    def _open_chord_diagram(self) -> None:
+        trace = self._trace
+        if trace is None or not _trace_is_multi_core(trace):
+            return
+        if self._chord_dlg is not None:
+            self._chord_dlg.raise_()
+            self._chord_dlg.activateWindow()
+            return
+        dlg = _ChordDiagramDialog(trace, parent=self)
+        dlg._owner_tab_path = (
+            self._active_tab.path if self._active_tab else None)
+        dlg.finished.connect(self._on_chord_dlg_closed)
+        self._chord_dlg = dlg
+        dlg.show()
+
+    def _on_chord_dlg_closed(self, _result: int = 0) -> None:
+        self._chord_dlg = None
+
+    def _sync_chord_toolbar(self) -> None:
+        if not hasattr(self, "_tb_chord_btn"):
+            return
+        trace = self._trace
+        self._tb_chord_btn.setEnabled(
+            trace is not None and _trace_is_multi_core(trace))
+
     def _capture_heatmap_view_snapshot(self, tab: _TraceTab) -> None:
         """Remember timeline zoom/pan/cursors before heatmap drill-down."""
         view = tab.view
@@ -4627,6 +4677,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
     def _sync_toolbar_to_active_tab(self) -> None:
         """Refresh toolbar toggles that reflect per-tab view state."""
         self._sync_heatmap_toolbar()
+        self._sync_chord_toolbar()
         if hasattr(self, "_tb_cpu_load_btn"):
             self._tb_cpu_load_btn.blockSignals(True)
             self._tb_cpu_load_btn.setChecked(self._show_cpu_load)

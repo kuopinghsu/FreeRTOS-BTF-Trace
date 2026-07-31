@@ -532,6 +532,89 @@ export function buildCorePairRows(trace, lo = null, hi = null) {
     }))
 }
 
+/** True if any sync-object hold crossed cores (cache-line "lock bounce"). */
+export function traceHasCoreBounceHolds(trace) {
+  if (!trace?.hasSyncObjectInstrumentation) return false
+  for (const obj of trace.syncObjects?.values() || []) {
+    for (const h of obj.holds || []) {
+      if (h.takeCore && h.giveCore && h.takeCore !== h.giveCore) return true
+    }
+  }
+  return false
+}
+
+const CHORD_GAP_RAD = 0.03
+const CHORD_MIN_ARC_RAD = 0.05
+
+/**
+ * Pure circular layout for a chord diagram from a core×core matrix
+ * (as returned by migrationHeatmapMatrix): each core gets an arc sized
+ * proportionally to its total in+out migration volume (with a minimum
+ * sliver so zero-flow cores still appear as nodes), and each connected
+ * core-pair gets a tick position within its two arcs used as chord endpoints.
+ *
+ * Returns {
+ *   arcs: [{ core, index, startAngle, endAngle, total }],
+ *   tickAngle(i, j): angle on core i's arc for its connection to core j,
+ * }
+ */
+export function buildChordLayout(cores, grid) {
+  const n = cores.length
+  const totals = Array(n).fill(0)
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < n; j++) {
+      if (i === j) continue
+      totals[i] += (grid[i]?.[j] || 0) + (grid[j]?.[i] || 0)
+    }
+  }
+  const grandTotal = totals.reduce((a, b) => a + b, 0)
+  const gap = n > 0 ? Math.min(CHORD_GAP_RAD, (Math.PI * 1.5) / n) : 0
+  const available = Math.max(0, 2 * Math.PI - gap * n)
+  const minArc = n > 0 ? Math.min(CHORD_MIN_ARC_RAD, available / n) : 0
+
+  // First pass: minimum-floor sizes; remaining angle split proportionally to volume.
+  const floorTotal = minArc * n
+  const remaining = Math.max(0, available - floorTotal)
+  const arcSizes = totals.map(t => minArc + (grandTotal > 0 ? remaining * (t / grandTotal) : remaining / Math.max(n, 1)))
+
+  const arcs = []
+  let angle = -Math.PI / 2
+  for (let i = 0; i < n; i++) {
+    const startAngle = angle
+    const endAngle = startAngle + arcSizes[i]
+    arcs.push({ core: cores[i], index: i, startAngle, endAngle, total: totals[i] })
+    angle = endAngle + gap
+  }
+
+  // Sub-divide each core's arc among the other cores it connects to,
+  // proportional to the combined (in+out) magnitude of that specific pair.
+  const tickAngles = arcs.map(() => new Map())
+  for (let i = 0; i < n; i++) {
+    const arc = arcs[i]
+    const links = []
+    for (let j = 0; j < n; j++) {
+      if (j === i) continue
+      const mag = (grid[i]?.[j] || 0) + (grid[j]?.[i] || 0)
+      if (mag > 0) links.push({ j, mag })
+    }
+    const linkTotal = links.reduce((s, l) => s + l.mag, 0)
+    const span = arc.endAngle - arc.startAngle
+    let cursor = arc.startAngle
+    for (const l of links) {
+      const slice = linkTotal > 0 ? span * (l.mag / linkTotal) : span / links.length
+      tickAngles[i].set(l.j, cursor + slice / 2)
+      cursor += slice
+    }
+  }
+
+  return {
+    arcs,
+    tickAngle(i, j) {
+      return tickAngles[i]?.get(j) ?? (arcs[i] ? (arcs[i].startAngle + arcs[i].endAngle) / 2 : 0)
+    },
+  }
+}
+
 /**
  * Per-core time breakdown: active / idle / tick / gap.
  * Returns [{core, activeNs, idleNs, tickNs, gapNs, spanNs}]

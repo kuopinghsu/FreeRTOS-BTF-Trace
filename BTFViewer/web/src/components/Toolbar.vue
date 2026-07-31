@@ -265,6 +265,43 @@
         </button>
 
         <button
+          class="tb-btn"
+          :class="{ disabled: !heatmapEnabled }"
+          :disabled="!heatmapEnabled"
+          title="Migration chord diagram — directional core-to-core migration volume (multi-core traces only)"
+          @click="heatmapEnabled && emit('showChord')"
+        >
+          <svg
+            viewBox="0 0 16 16"
+            width="16"
+            height="16"
+            fill="currentColor"
+          >
+            <circle
+              cx="8"
+              cy="8"
+              r="6.5"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.4"
+            />
+            <path
+              d="M2.3 5.6 C 6 8, 10 8, 13.7 5.6"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.4"
+            />
+            <path
+              d="M2.3 10.4 C 6 8, 10 8, 13.7 10.4"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.4"
+            />
+          </svg>
+          Chord
+        </button>
+
+        <button
           v-if="taskFilterActive"
           class="tb-btn active"
           title="Clear heatmap task filter and show all tasks"
@@ -635,7 +672,7 @@ const emit = defineEmits([
   'update:modelValue', 'trace-reading', 'trace-loaded', 'loadDemo', 'zoom', 'fit',
   'zoom1to1', 'zoomRange', 'showFind',
   'expandAll', 'collapseAll', 'addMark', 'copyScreenshot', 'exportSvg',
-  'showHelp', 'showAbout', 'showSettings', 'showHeatmap', 'clearTaskFilter', 'file-error',
+  'showHelp', 'showAbout', 'showSettings', 'showHeatmap', 'showChord', 'clearTaskFilter', 'file-error',
 ])
 
 const useFsaOpen = supportsFileHandles()

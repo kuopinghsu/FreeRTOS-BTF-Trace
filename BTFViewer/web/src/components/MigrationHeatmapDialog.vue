@@ -132,6 +132,7 @@ import {
   migrationCoreOutgoingHeatmap,
   migrationTaskHeatmapGrid,
   heatmapBinRange,
+  traceHasCoreBounceHolds,
 } from '../utils/migrationAnalysis.js'
 import { getPlacedCursors, getStatsRange } from '../utils/statsRange.js'
 
@@ -192,15 +193,7 @@ const scopeSuffix = computed(() => {
   return ` (C1–C${r.nCursors}: ${formatTime(r.lo, props.trace.timeScale)} … ${formatTime(r.hi, props.trace.timeScale)})`
 })
 
-const traceHasBounces = computed(() => {
-  if (!props.trace?.hasSyncObjectInstrumentation) return false
-  for (const obj of props.trace.syncObjects?.values() || []) {
-    for (const h of obj.holds || []) {
-      if (h.takeCore && h.giveCore && h.takeCore !== h.giveCore) return true
-    }
-  }
-  return false
-})
+const traceHasBounces = computed(() => traceHasCoreBounceHolds(props.trace))
 
 const usesMatrixOverview = computed(() => migrationHeatmapUsesMatrix(props.trace))
 

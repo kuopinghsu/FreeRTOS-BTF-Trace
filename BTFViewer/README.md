@@ -25,7 +25,7 @@ A PySide6-based interactive visualiser for FreeRTOS context-switch traces in **B
 - **Multi-tab traces** — open several `.btf` files at once (Desktop: closable tabs; Web: tab bar under the toolbar). Both restore open tabs, active tab, and per-tab zoom/cursors/marks/filters on launch (Desktop: `btf_viewer.rc`; Web: `localStorage` + IndexedDB trace cache)
 - **Measurement cursors** — Desktop and Web support 2–8 cursors (default: 4); configurable in Settings
 - **Trace compare** — with 2+ tabs open, **Trace Compare…** in the Statistics panel diffs **Summary**, **Top Tasks**, **Core Migrations**, **Blocking**, **Preemption**, and **Sync** side-by-side (Desktop + Web). Optional **Limit to each tab's cursor range** compares metrics within C1–Cn when 2+ cursors are placed on each trace
-- **Core migration analysis** — detect tasks that run on multiple cores; **Core Migrations** stats table (ping-pong, STI correlation, gap-after vs other gaps), **Core-Pair Migration Summary** (per directed pair: count, bounces, avg gap), **Core Time Breakdown** (active/idle/tick/gap per core), **clickable migration heatmap** (pair×time for ≤ 16 cores; core×core matrix → outgoing pairs for larger traces → per-task sub-bins → timeline drill-down), **Migrated tasks only** legend filter, toolbar **All tasks** reset, **bounce-only filter** (Show: Bounce Only toggle restricts the heatmap to lock-bounce migrations), and Find **Migrations** mode (Desktop + Web)
+- **Core migration analysis** — detect tasks that run on multiple cores; **Core Migrations** stats table (ping-pong, STI correlation, gap-after vs other gaps), **Core-Pair Migration Summary** (per directed pair: count, bounces, avg gap), **Core Time Breakdown** (active/idle/tick/gap per core), **clickable migration heatmap** (pair×time for ≤ 16 cores; core×core matrix → outgoing pairs for larger traces → per-task sub-bins → timeline drill-down), **migration chord diagram** (directional core-to-core migration volume as a circular chord diagram; hover a core arc to highlight its migrations), **Migrated tasks only** legend filter, toolbar **All tasks** reset, **bounce-only filter** (Show: Bounce Only toggle restricts the heatmap and chord diagram to lock-bounce migrations), and Find **Migrations** mode (Desktop + Web)
 - **Core Affinity** — when traces include `traceTASK_CORE_AFFINITY_SET` events, the **Core Affinity** statistics table shows each task's declared affinity mask, observed execution cores, and flags violations (cores outside the mask) in red (Desktop + Web)
 - **Cursor-scoped statistics** — with 2+ cursors, the Statistics panel can limit all metrics (CPU%, execution slices, blocking time, inter-arrival, **preemption chain**, **priority inheritance**, **mutex / semaphore pairing**, **queue pairing**, **deadline violations**, scheduling summary, exports, and charts) to the window from C1 through the last cursor; toggle **Limit to cursor range (C1–Cn)** (Desktop + Web)
 - **Cursor range summary** — with 2+ cursors, the status bar shows a quick min/max/avg segment summary (Desktop + Web); full per-task metrics remain in the **Statistics** panel
@@ -639,10 +639,11 @@ The right side uses three tabs — **Statistics**, **Marks**, and **Find** — w
 - **Legend (Desktop)** — separate dock above the Statistics/Marks/Find panel; toggle via **Settings → Display → Legend panel**.
 - **Legend (Web)** — section inside the **Marks** tab when **Legend panel** is enabled in Settings.
 - **Migration heatmap** — toolbar **Heatmap** button (multi-core traces only). ≤ 16 cores: pair grid → task grid → timeline zoom/filter. > 16 cores: core×core matrix (row click) → outgoing pairs → tasks. **Export PNG / SVG** of the current drill level from the heatmap dialog. Toolbar **All tasks** appears while filtered. See [Migration heatmap](#migration-heatmap).
+- **Migration chord diagram** — toolbar **Chord** button (multi-core traces only). Circular diagram with one arc per core; hover an arc to highlight its migrations and dim the rest. **Show: All Migrations / Show: Bounce Only** toggle restricts it to lock-bounce migrations. **Export PNG** of the current view. See [Migration chord diagram](#migration-chord-diagram).
 
 ### Multi-tab traces (Web)
 
-Same tab bar behaviour as desktop: each `.btf` opens in its own tab with independent cursors, marks, zoom, chart state, Find queries, and undo history. Use **Ctrl+Tab** / **Ctrl+Shift+Tab** to cycle tabs. Switching tabs closes an open **Migration heatmap** dialog. **Trace Compare…** uses any two loaded tabs — useful for before/after or build-to-build diffs.
+Same tab bar behaviour as desktop: each `.btf` opens in its own tab with independent cursors, marks, zoom, chart state, Find queries, and undo history. Use **Ctrl+Tab** / **Ctrl+Shift+Tab** to cycle tabs. Switching tabs closes an open **Migration heatmap** or **Migration chord diagram** dialog. **Trace Compare…** uses any two loaded tabs — useful for before/after or build-to-build diffs.
 
 ### Session restore (Web)
 
@@ -720,7 +721,7 @@ Below the scope checkbox, a **scheduling summary** line shows context-switch cou
 | **Tag Analysis** | Per `tag0_event`…`tag7_event` channel: sample count, min/avg/max/p95 of the tag value; click a row to open a scatter + histogram plot (shown only when tag STI samples are present) |
 | **Deadlines / CPU budget** | Per-task slice violations (execution exceeding a configured nanosecond deadline) and CPU budget violations (task CPU% exceeding a global threshold); configure via **Settings → Display → Analysis thresholds** (`Ctrl+,`) |
 
-**Core Migrations** lists tasks that ran on two or more cores, with **Rate** (migrations per second of active time and per tick) and **Dwell** (average on-CPU slice length). For multi-core traces, open the **Migration heatmap** from the toolbar **Heatmap** button — click core-pair cells to drill into per-task sub-bins, then into Task View (see [Migration heatmap](#migration-heatmap)). **Trace Compare…** (footer, next to Export) opens a dialog with **Summary**, **Top Tasks**, and **Core Migrations** tabs to diff two open trace tabs; optional cursor-range scoping compares each tab's C1–Cn window independently.
+**Core Migrations** lists tasks that ran on two or more cores, with **Rate** (migrations per second of active time and per tick) and **Dwell** (average on-CPU slice length). For multi-core traces, open the **Migration heatmap** from the toolbar **Heatmap** button — click core-pair cells to drill into per-task sub-bins, then into Task View (see [Migration heatmap](#migration-heatmap)); or open the **Migration chord diagram** from the toolbar **Chord** button for a directional overview of core-to-core migration volume (see [Migration chord diagram](#migration-chord-diagram)). **Trace Compare…** (footer, next to Export) opens a dialog with **Summary**, **Top Tasks**, and **Core Migrations** tabs to diff two open trace tabs; optional cursor-range scoping compares each tab's C1–Cn window independently.
 
 See [Statistics metric tables](#statistics-metric-tables) for column definitions, distribution-chart usage, [CDF overlay](#cdf-overlay), and example plots from `tracedata/example-4cores.btf`.
 
@@ -891,7 +892,7 @@ The example plots below were generated from **`tracedata/example-8cores.btf`** (
 make -C BTFViewer update-images
 ```
 
-This invokes the desktop CLI `snapshot` command (`--view plot` / `--view timeline`) directly — see `make -C BTFViewer help`. Timeline screenshots (e.g. `images/stats/tasks-priority-il266.svg`) use `--view timeline --task ... --lo ... --hi ...` to zoom to the region of interest. Migration heatmap screenshots (`images/heatmap-pairs.svg`, `images/heatmap-tasks.svg`) are regenerated the same way with `make -C BTFViewer update-images` (`snapshot --view heatmap`, with `--drill-row`/`--drill-bin` for the task-level image) — see [Migration heatmap](#migration-heatmap).
+This invokes the desktop CLI `snapshot` command (`--view plot` / `--view timeline`) directly — see `make -C BTFViewer help`. Timeline screenshots (e.g. `images/stats/tasks-priority-il266.svg`) use `--view timeline --task ... --lo ... --hi ...` to zoom to the region of interest. Migration heatmap screenshots (`images/heatmap-pairs.svg`, `images/heatmap-tasks.svg`) are regenerated the same way with `make -C BTFViewer update-images` (`snapshot --view heatmap`, with `--drill-row`/`--drill-bin` for the task-level image) — see [Migration heatmap](#migration-heatmap). The migration chord diagram screenshot (`images/migration-chord.png`) is regenerated with the same target (`snapshot --view chord`; PNG only, no SVG export) — see [Migration chord diagram](#migration-chord-diagram).
 
 #### Summary, scheduling, and core utilisation
 
@@ -1471,7 +1472,7 @@ Shown only when the trace contains `tag0_event` … `tag7_event` (or `tag_event`
 
 ### Core migration analysis
 
-A **migration** is recorded when consecutive slices of the same task (merge-key) run on different cores. Migrations are detected at parse time from the segment timeline — there are no separate markers drawn on the timeline; use the **Core Migrations** table, **Migration heatmap**, **Trace Compare…**, or Find **Migrations** mode to inspect them.
+A **migration** is recorded when consecutive slices of the same task (merge-key) run on different cores. Migrations are detected at parse time from the segment timeline — there are no separate markers drawn on the timeline; use the **Core Migrations** table, **Migration heatmap**, **Migration chord diagram**, **Trace Compare…**, or Find **Migrations** mode to inspect them.
 
 **Legend panel:** check **Migrated tasks only** to hide tasks that never left their first core.
 
@@ -1591,6 +1592,27 @@ Only cells with at least one migration (count > 0) are clickable.
 6. Clears the task filter, restores the viewport/cursors/highlights saved when the heatmap was opened, returns the heatmap to **Level 1** (matrix or pair overview), and shows every task row again.
 
 Use the heatmap to spot bursts of cross-core traffic, drill into the contributing tasks, then jump to Task View for slice-level inspection. For aggregate per-task migration statistics (ping-pong, STI correlation, gap-after), use **Core Migrations** in the Statistics panel.
+
+#### Migration chord diagram
+
+Visualise **how much** migration traffic flows between each pair of cores, as directional chords around a circle — one arc per core. Complementary to the **Migration heatmap** (which shows *when* migrations happen): the chord diagram gives a single, at-a-glance summary of *volume and direction* across the whole scoped window, with no drill-down levels.
+
+- **Chords** — a curved band between two core arcs for each directed pair with at least one migration; chord width is proportional to migration count and its colour fades from the source core's colour to the destination core's colour. Pairs that migrate in both directions are drawn as two offset chords.
+- **Hover a core arc** — highlights that core's arcs and fades all other chords/arcs; the fixed-height line below the diagram shows a breakdown (`out` / `in` totals, then each non-zero directed pair count for that core).
+- **Bounce-only filter** — the same **Show: All Migrations / Show: Bounce Only** toggle as the heatmap, restricting chords to lock-bounce migrations (held across a core boundary).
+- **Scope** — same as the heatmap: full trace by default, or **C1** through the last cursor when 2 or more cursors are placed.
+
+| | |
+|--|--|
+| **Open** | Toolbar **Chord** button (Desktop + Web). Enabled only when the trace has **2 or more cores**. Desktop: non-modal dialog (timeline stays interactive; closes if you switch to a different trace tab). Web: semi-transparent overlay (closes on tab switch). |
+| **Export PNG** | Footer button exports the diagram exactly as rendered (no hover highlight). Filename: `migration-chord-{timestamp}.png`. Desktop: file save dialog. Web: direct download. |
+| **Empty state** | *No migrations in scope.* when no migrations fall in the current window. |
+
+**Example (`example-8cores.btf`)** — screenshot exported with **Export PNG** from the chord dialog (full trace scope, no hover highlight):
+
+![Migration chord diagram: directional core-to-core migration volume for example-8cores.btf](../images/migration-chord.png)
+
+Each arc around the circle is one core (`c0`…`c7`); a chord between two arcs is a directed migration flow, coloured as a gradient from its source core to its destination core, with width proportional to migration count. Thicker chords between adjacent-looking core pairs (e.g. `c0`↔`c2`, `c1`↔`c6`) stand out immediately as the busiest migration paths, without needing to drill through a heatmap grid first.
 
 #### Trace Compare…
 

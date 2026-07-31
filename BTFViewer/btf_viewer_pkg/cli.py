@@ -217,6 +217,11 @@ Views (--view):
              scope the grid to a time range. --drill-row/--drill-bin drill
              into the per-task grid for one core-pair row and time bin
              (matrix-mode heatmaps, >16 cores, are not drillable headlessly).
+  chord      Migration Chord Diagram (directional core-to-core migration
+             volume as a circular chord diagram). --task/--drill-row/
+             --drill-bin are not supported; --lo/--hi scope the diagram to
+             a time range. Requires a multi-core trace (2+ cores). PNG only
+             (like the GUI's Export PNG button; no SVG export).
   plot       A statistics metric scatter+histogram popup, selected with
              --metric:
                tick      tick-interval distribution (trace-wide, no --task)
@@ -229,13 +234,15 @@ Views (--view):
                tag       tag-channel value distribution        (--channel)
 
 Sizing (--width/--height): only used for --view timeline / --view plot; the
-heatmap image size is derived from its data grid.
+heatmap and chord diagram image sizes are derived from their data (grid /
+default dialog size respectively).
 
 examples:
   %(prog)s trace.btf -o timeline.png --view timeline
   %(prog)s trace.btf -o timeline.svg --view timeline --task "Producer[1]" --lo 0 --hi 500000
   %(prog)s trace.btf -o heatmap.png --view heatmap
   %(prog)s trace.btf -o heatmap-tasks.svg --view heatmap --drill-row 0 --drill-bin 3
+  %(prog)s trace.btf -o chord.png --view chord
   %(prog)s trace.btf -o tick.svg --view plot --metric tick
   %(prog)s trace.btf -o exec.png --view plot --metric exec --task "Producer[1]"
   %(prog)s trace.btf -o preempt.png --view plot --metric preempt --task "Producer[1]" --preemptor "Consumer[2]"
@@ -419,7 +426,7 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
         help="image format (default: infer from -o extension, else png)",
     )
     snapshot.add_argument(
-        "--view", choices=("timeline", "heatmap", "plot"), required=True,
+        "--view", choices=("timeline", "heatmap", "chord", "plot"), required=True,
         help="which view to render",
     )
     snapshot.add_argument(
@@ -427,7 +434,7 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
         help=(
             "task display name (e.g. 'Producer[1]'), bare name, or merge key; "
             "required for most --metric values, optional for --view timeline "
-            "(highlights + centers that task), unused for --view heatmap"
+            "(highlights + centers that task), unused for --view heatmap/chord"
         ),
     )
     snapshot.add_argument(
@@ -457,7 +464,7 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
         "--drill-row", type=int, default=None, metavar="N", dest="drill_row",
         help=(
             "core-pair row index (0-based, top row = 0) to drill into the "
-            "per-task grid; requires --drill-bin (--view heatmap only)"
+            "per-task grid; requires --drill-bin (--view heatmap only, not chord)"
         ),
     )
     snapshot.add_argument(
@@ -963,6 +970,30 @@ def _cli_snapshot_heatmap(trace: "BtfTrace",
     _process_ui_events_safely()
     return dlg, None
 
+def _cli_snapshot_chord(trace: "BtfTrace",
+                        args: argparse.Namespace) -> Tuple[Optional["_ChordDiagramDialog"], Optional[str]]:
+    if args.metric is not None:
+        print("warning: --metric is ignored for --view chord", file=sys.stderr)
+    if args.task:
+        return None, "error: --task is not supported for --view chord (cross-task view)"
+    if args.drill_row is not None or args.drill_bin is not None:
+        return None, "error: --drill-row/--drill-bin are not supported for --view chord"
+    if not _trace_is_multi_core(trace):
+        return None, "error: --view chord requires a multi-core trace (2+ cores)"
+    dlg = _ChordDiagramDialog(trace, parent=None)
+    if args.lo is not None and args.hi is not None:
+        dlg._scope_lo, dlg._scope_hi = args.lo, args.hi
+        dlg._scope_suffix = (
+            f"  ({_format_time(args.lo, trace.time_scale)} \u2026 "
+            f"{_format_time(args.hi, trace.time_scale)})")
+        dlg._reload_data()
+        dlg._rebuild()
+    if not dlg._has_data():
+        return None, "error: no migrations in scope for --view chord"
+    dlg.show()
+    _process_ui_events_safely()
+    return dlg, None
+
 def _cli_snapshot_plot(trace: "BtfTrace",
                        args: argparse.Namespace) -> Tuple[Optional["_MetricsPlotDialog"], Optional[str]]:
     metric = args.metric
@@ -1059,6 +1090,13 @@ def _cli_snapshot_run(args: argparse.Namespace) -> int:
         return 1
 
     fmt, out_path = _cli_snapshot_output_path(args.output, args.format)
+    if args.view == "chord" and fmt == "svg":
+        print(
+            "error: --view chord does not support --format svg "
+            "(chord gradients render incorrectly via QSvgGenerator); use png",
+            file=sys.stderr,
+        )
+        return 1
 
     _platform_preflight()
     app = _bootstrap_qt_app()
@@ -1070,6 +1108,9 @@ def _cli_snapshot_run(args: argparse.Namespace) -> int:
     elif args.view == "heatmap":
         widget, err = _cli_snapshot_heatmap(trace, args)
         title = "Migration Heatmap"
+    elif args.view == "chord":
+        widget, err = _cli_snapshot_chord(trace, args)
+        title = "Migration Chord Diagram"
     else:
         widget, err = _cli_snapshot_plot(trace, args)
         title = widget.windowTitle() if widget is not None else "Metric Plot"
@@ -1087,6 +1128,12 @@ def _cli_snapshot_run(args: argparse.Namespace) -> int:
             if fmt == "svg":
                 widget._canvas.render_full_svg(out_path, title)
             elif not widget._canvas.render_full_pixmap().save(out_path):
+                print(f"error: could not save PNG: {out_path}", file=sys.stderr)
+                return 1
+        elif args.view == "chord":
+            if fmt == "svg":
+                _cli_save_widget_svg(widget._canvas, out_path, title)
+            elif not _cli_save_widget_png(widget._canvas, out_path):
                 print(f"error: could not save PNG: {out_path}", file=sys.stderr)
                 return 1
         else:

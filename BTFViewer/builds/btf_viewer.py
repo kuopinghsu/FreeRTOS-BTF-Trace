@@ -686,6 +686,10 @@ _IC_CPU_LOAD = ("M1 11a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1H2a1 1 0 0 1
 _IC_HEATMAP = ("M1 1h4v4H1V1zm5 0h4v4H6V1zm5 0h4v4h-4V1z"
                "M1 6h4v4H1V6zm5 0h4v4H6V6zm5 0h4v4h-4V6z"
                "M1 11h4v4H1v-4zm5 0h4v4H6v-4zm5 0h4v4h-4v-4z")
+_IC_CHORD = ("M8 1 A7 7 0 1 0 8 15 A7 7 0 1 0 8 1 Z"
+             "M8 3.5 A4.5 4.5 0 1 0 8 12.5 A4.5 4.5 0 1 0 8 3.5 Z"
+             "M4 6 L5 5 L12 10 L11 11 Z"
+             "M11 5 L12 6 L5 11 L4 10 Z")
 _IC_EXPORT_CSV = ("M2 1h12a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1zm0 1v12h12V2H2zm2 2h8v1H4V4zm0 2h8v1H4V6zm0 2h5v1H4V8z")
 _IC_TICK_DIST = ("M1.5 12.5h2.5V8H1.5v4.5zm3.5 0H7.5V5H5v7.5zm3.5 0h2.5V2H8.5v10.5zm3.5 0H14v-5h-2.5v5.5z")
 _IC_THEME_DARK = ("M8 1.2a.5.5 0 0 1 .47.66A5.8 5.8 0 1 0 14.14 9a.5.5 0 0 1 .66.47"
@@ -3399,6 +3403,93 @@ def _migration_heatmap_matrix(trace: "BtfTrace",
             continue
         grid[fi][ti] += 1
     return cores, grid
+
+# Gap between adjacent core arcs and floor arc size in the chord diagram, in radians.
+_CHORD_GAP_RAD = 0.03
+_CHORD_MIN_ARC_RAD = 0.05
+
+@dataclass
+class ChordArc:
+    """One core's arc segment in the migration chord diagram."""
+    core: str
+    index: int
+    start_angle: float
+    end_angle: float
+    total: float
+
+@dataclass
+class ChordLayout:
+    """Circular layout for the migration chord diagram (see _build_chord_layout)."""
+    arcs: List[ChordArc]
+    # tick_angles[i][j] = angle (radians) on core i's arc pointing toward core j.
+    tick_angles: List[Dict[int, float]]
+
+    def tick_angle(self, i: int, j: int) -> float:
+        if 0 <= i < len(self.tick_angles) and j in self.tick_angles[i]:
+            return self.tick_angles[i][j]
+        if 0 <= i < len(self.arcs):
+            arc = self.arcs[i]
+            return (arc.start_angle + arc.end_angle) / 2
+        return 0.0
+
+def _build_chord_layout(cores: List[str], grid: List[List[float]]) -> ChordLayout:
+    """Pure circular layout for the migration chord diagram — parity with the
+    web app's buildChordLayout() in migrationAnalysis.js. Each core gets an arc
+    sized proportionally to its total in+out migration volume (with a minimum
+    sliver so zero-flow cores still appear as nodes), separated by a fixed gap.
+    Each connected core-pair also gets a tick position within its two arcs,
+    used as chord endpoints so parallel migrations fan out rather than
+    overlapping."""
+    n = len(cores)
+    totals = [0.0] * n
+    for i in range(n):
+        for j in range(n):
+            if i == j:
+                continue
+            gij = grid[i][j] if i < len(grid) and j < len(grid[i]) else 0
+            gji = grid[j][i] if j < len(grid) and i < len(grid[j]) else 0
+            totals[i] += gij + gji
+    grand_total = sum(totals)
+    gap = min(_CHORD_GAP_RAD, (math.pi * 1.5) / n) if n > 0 else 0.0
+    available = max(0.0, 2 * math.pi - gap * n)
+    min_arc = min(_CHORD_MIN_ARC_RAD, available / n) if n > 0 else 0.0
+
+    floor_total = min_arc * n
+    remaining = max(0.0, available - floor_total)
+    if grand_total > 0:
+        arc_sizes = [min_arc + remaining * (t / grand_total) for t in totals]
+    else:
+        arc_sizes = [min_arc + remaining / n for _ in totals] if n > 0 else []
+
+    arcs: List[ChordArc] = []
+    angle = -math.pi / 2
+    for i in range(n):
+        start_angle = angle
+        end_angle = start_angle + arc_sizes[i]
+        arcs.append(ChordArc(cores[i], i, start_angle, end_angle, totals[i]))
+        angle = end_angle + gap
+
+    tick_angles: List[Dict[int, float]] = [dict() for _ in range(n)]
+    for i in range(n):
+        arc = arcs[i]
+        links = []
+        for j in range(n):
+            if j == i:
+                continue
+            gij = grid[i][j] if i < len(grid) and j < len(grid[i]) else 0
+            gji = grid[j][i] if j < len(grid) and i < len(grid[j]) else 0
+            mag = gij + gji
+            if mag > 0:
+                links.append((j, mag))
+        link_total = sum(m for _, m in links)
+        span = arc.end_angle - arc.start_angle
+        cursor = arc.start_angle
+        for j, mag in links:
+            sl = span * (mag / link_total) if link_total > 0 else span / len(links)
+            tick_angles[i][j] = cursor + sl / 2
+            cursor += sl
+
+    return ChordLayout(arcs=arcs, tick_angles=tick_angles)
 
 def _migration_core_outgoing_heatmap(trace: "BtfTrace", from_core: str,
                                      lo: Optional[int] = None, hi: Optional[int] = None,
@@ -16969,6 +17060,387 @@ class _MigrationHeatmapDialog(QDialog):
         self._schedule_drill(self._drill_fc, self._drill_tc, pair_lbl,
                              sub_lo, sub_hi, {mk})
 
+class _ChordDiagramWidget(QWidget):
+    """Paint core-to-core migration volume as a circular chord diagram —
+    parity with the web app's ChordDiagramDialog.vue canvas rendering.
+    Chords are quadratic bezier curves between per-core-pair tick positions
+    (see _build_chord_layout in parser.py); arcs are thick circular bands,
+    one per core, sized proportionally to their in+out migration volume."""
+
+    hover_changed = Signal(object)  # emits int core index, or None
+
+    _ARC_THICKNESS = 14
+    _OUTER_PAD = 48
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._cores: List[str] = []
+        self._grid: list = [[]]
+        self._layout: Optional[ChordLayout] = None
+        self._max_count = 0
+        self._hover_index: Optional[int] = None
+        self.setMouseTracking(True)
+        self.setMinimumSize(200, 200)
+
+    def set_data(self, cores: List[str], grid: list) -> None:
+        self._cores = list(cores)
+        self._grid = grid if grid else [[]]
+        self._layout = _build_chord_layout(self._cores, self._grid)
+        m = 0
+        for i in range(len(self._cores)):
+            row = self._grid[i] if i < len(self._grid) else []
+            for j in range(len(self._cores)):
+                if i == j:
+                    continue
+                v = row[j] if j < len(row) else 0
+                if v > m:
+                    m = v
+        self._max_count = m
+        if self._hover_index is not None:
+            self._hover_index = None
+            self.hover_changed.emit(None)
+        self.update()
+
+    def clear_hover(self) -> None:
+        if self._hover_index is not None:
+            self._hover_index = None
+            self.hover_changed.emit(None)
+            self.update()
+
+    def leaveEvent(self, event) -> None:
+        self.clear_hover()
+        return super().leaveEvent(event)
+
+    @staticmethod
+    def _point_at(cx: float, cy: float, angle: float, r: float) -> QPointF:
+        return QPointF(cx + r * math.cos(angle), cy + r * math.sin(angle))
+
+    def _geometry(self, w: Optional[int] = None,
+                 h: Optional[int] = None) -> Tuple[float, float, float]:
+        w = w if w is not None else self.width()
+        h = h if h is not None else self.height()
+        cx, cy = w / 2.0, h / 2.0
+        radius = max(20.0, min(w, h) / 2.0 - self._OUTER_PAD)
+        return cx, cy, radius
+
+    def mouseMoveEvent(self, event) -> None:
+        pos = event.position() if hasattr(event, "position") else event.pos()
+        self._update_hover(pos.x(), pos.y())
+        return super().mouseMoveEvent(event)
+
+    def _update_hover(self, mx: float, my: float) -> None:
+        layout = self._layout
+        if layout is None or not layout.arcs:
+            self.clear_hover()
+            return
+        cx, cy, R = self._geometry()
+        dx, dy = mx - cx, my - cy
+        dist = math.hypot(dx, dy)
+        half_t = self._ARC_THICKNESS / 2 + 4
+        if dist < R - half_t or dist > R + half_t:
+            self.clear_hover()
+            return
+        angle = math.atan2(dy, dx)
+        found = None
+        for arc in layout.arcs:
+            a = angle
+            while a < arc.start_angle:
+                a += 2 * math.pi
+            while a > arc.start_angle + 2 * math.pi:
+                a -= 2 * math.pi
+            if a <= arc.end_angle:
+                found = arc.index
+                break
+        if found != self._hover_index:
+            self._hover_index = found
+            self.hover_changed.emit(found)
+            self.update()
+
+    def _arc_path(self, cx: float, cy: float, r: float,
+                 a0: float, a1: float) -> QPainterPath:
+        span = a1 - a0
+        steps = max(2, int(abs(span) / (math.pi / 90)) + 1)
+        path = QPainterPath()
+        for k in range(steps + 1):
+            a = a0 + span * k / steps
+            pt = self._point_at(cx, cy, a, r)
+            if k == 0:
+                path.moveTo(pt)
+            else:
+                path.lineTo(pt)
+        return path
+
+    def paintEvent(self, event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        try:
+            self._paint(p, self.width(), self.height())
+        finally:
+            p.end()
+
+    def _paint(self, p: QPainter, w: int, h: int) -> None:
+        cores = self._cores
+        layout = self._layout
+        if not cores or layout is None or not layout.arcs:
+            return
+        cx, cy, R = self._geometry(w, h)
+        inner = R - self._ARC_THICKNESS / 2 - 2
+        max_count = self._max_count or 1
+        hovered = self._hover_index
+        grid = self._grid
+
+        for i in range(len(cores)):
+            row = grid[i] if i < len(grid) else []
+            for j in range(len(cores)):
+                if i == j:
+                    continue
+                count = row[j] if j < len(row) else 0
+                if not count:
+                    continue
+                bidir = (grid[j][i] if j < len(grid) and i < len(grid[j]) else 0) > 0
+                p1 = self._point_at(cx, cy, layout.tick_angle(i, j), inner)
+                p2 = self._point_at(cx, cy, layout.tick_angle(j, i), inner)
+                mx, my = (p1.x() + p2.x()) / 2, (p1.y() + p2.y()) / 2
+                vx, vy = mx - cx, my - cy
+                vlen = math.hypot(vx, vy) or 1.0
+                vx, vy = vx / vlen, vy / vlen
+                perp_x, perp_y = -vy, vx
+                sign = 1 if i < j else -1
+                bidir_offset = 6 * sign if bidir else 0
+                pull = 0.18
+                ctrl_x = cx + vx * inner * pull + perp_x * bidir_offset
+                ctrl_y = cy + vy * inner * pull + perp_y * bidir_offset
+
+                is_dim = hovered is not None and hovered != i and hovered != j
+                width = max(1.0, min(12.0, 1 + 10 * (count / max_count)))
+                grad = QLinearGradient(p1, p2)
+                grad.setColorAt(0.0, QColor(_core_color(cores[i])))
+                grad.setColorAt(1.0, QColor(_core_color(cores[j])))
+                pen = QPen(QBrush(grad), width)
+                pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+
+                path = QPainterPath()
+                path.moveTo(p1)
+                path.quadTo(QPointF(ctrl_x, ctrl_y), p2)
+                p.setOpacity(0.08 if is_dim else 0.75)
+                p.strokePath(path, pen)
+        p.setOpacity(1.0)
+
+        label_color = QColor("#888888")
+        normal_font = QFont(self.font())
+        normal_font.setPointSize(max(7, normal_font.pointSize() - 1))
+        bold_font = QFont(normal_font)
+        bold_font.setBold(True)
+
+        for arc in layout.arcs:
+            is_hover = hovered == arc.index
+            pen = QPen(QColor(_core_color(arc.core)))
+            pen.setWidthF(self._ARC_THICKNESS)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            p.setOpacity(1.0 if hovered is None or is_hover else 0.35)
+            p.strokePath(
+                self._arc_path(cx, cy, R, arc.start_angle, arc.end_angle), pen)
+
+            mid = (arc.start_angle + arc.end_angle) / 2
+            lp = self._point_at(cx, cy, mid, R + self._ARC_THICKNESS / 2 + 14)
+            p.setFont(bold_font if is_hover else normal_font)
+            p.setOpacity(1.0)
+            p.setPen(label_color)
+            fm = QFontMetricsF(p.font())
+            text = _core_short_name(arc.core)
+            text_w = fm.horizontalAdvance(text)
+            cos_mid = math.cos(mid)
+            if cos_mid > 0.15:
+                tx = lp.x()
+            elif cos_mid < -0.15:
+                tx = lp.x() - text_w
+            else:
+                tx = lp.x() - text_w / 2
+            ty = lp.y() + (fm.ascent() - fm.descent()) / 2
+            p.drawText(QPointF(tx, ty), text)
+        p.setOpacity(1.0)
+
+    def grab_full_pixmap(self) -> QPixmap:
+        """Snapshot the current diagram as-rendered (fixed-size, unlike the
+        heatmap's scrollable full-content export — the chord diagram always
+        fits its viewport)."""
+        return self.grab()
+
+class _ChordDiagramDialog(QDialog):
+    """Popup: core-to-core migration volume as a directional chord diagram."""
+
+    def __init__(self, trace: "BtfTrace", parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Migration Chord Diagram")
+        self.setMinimumSize(420, 420)
+        self.resize(520, 560)
+        self.setModal(False)
+        self._trace = trace
+        self._bounce_only = False
+        self._scope_lo: Optional[int] = None
+        self._scope_hi: Optional[int] = None
+        self._scope_suffix = ""
+        self._owner_tab_path: Optional[str] = None
+        self._cores: list = []
+        self._grid: list = []
+
+        lay = QVBoxLayout(self)
+
+        nav = QHBoxLayout()
+        nav.addStretch(1)
+        self._bounce_filter_btn = QPushButton("Show: All Migrations")
+        self._bounce_filter_btn.setCheckable(True)
+        self._bounce_filter_btn.setChecked(False)
+        self._bounce_filter_btn.setToolTip(
+            "Toggle between showing all migrations and only lock-bounce migrations\n"
+            "(migrations that occurred while a mutex was held across different cores).")
+        self._bounce_filter_btn.clicked.connect(self._on_bounce_filter_toggled)
+        nav.addWidget(self._bounce_filter_btn)
+        lay.addLayout(nav)
+
+        self._sub_label = QLabel()
+        lay.addWidget(self._sub_label)
+
+        self._empty_label = QLabel("No migrations in scope.")
+        self._empty_label.setVisible(False)
+        lay.addWidget(self._empty_label)
+
+        self._canvas = _ChordDiagramWidget()
+        self._canvas.hover_changed.connect(self._on_hover_changed)
+        lay.addWidget(self._canvas, 1)
+
+        # Fixed-height hover label (never conditionally hidden) so its
+        # reserved space never shifts the canvas's available height — the
+        # chord diagram's radius derives from the canvas's own size, so any
+        # layout jump here would visibly resize the diagram on hover.
+        self._hover_label = QLabel(" ")
+        self._hover_label.setFixedHeight(
+            QFontMetrics(self._hover_label.font()).height() + 2)
+        lay.addWidget(self._hover_label)
+
+        self._hint_label = QLabel(
+            "Hover a core arc to highlight its migrations · chord width = "
+            "migration count · color fades from source to destination core")
+        self._hint_label.setStyleSheet("color:#888888;")
+        self._hint_label.setWordWrap(True)
+        lay.addWidget(self._hint_label)
+
+        export_row = QHBoxLayout()
+        export_row.setContentsMargins(0, 4, 0, 0)
+        self._btn_export_png = QPushButton("Export PNG")
+        self._btn_export_png.clicked.connect(self._export_png)
+        export_row.addWidget(self._btn_export_png)
+        export_row.addStretch(1)
+        lay.addLayout(export_row)
+
+        btns = QDialogButtonBox(QDialogButtonBox.Close)
+        btns.rejected.connect(self.reject)
+        btns.accepted.connect(self.accept)
+        lay.addWidget(btns)
+
+        self.refresh_scope()
+
+    def _on_hover_changed(self, index) -> None:
+        self._hover_label.setText(self._hover_title(index))
+
+    def _hover_title(self, index) -> str:
+        if index is None:
+            return " "
+        cores = self._cores
+        grid = self._grid
+        if index < 0 or index >= len(cores):
+            return " "
+        core = cores[index]
+        out_total = 0
+        in_total = 0
+        parts = []
+        for j in range(len(cores)):
+            if j == index:
+                continue
+            o = grid[index][j] if index < len(grid) and j < len(grid[index]) else 0
+            i_ = grid[j][index] if j < len(grid) and index < len(grid[j]) else 0
+            out_total += o
+            in_total += i_
+            if o:
+                parts.append(
+                    f"{_core_short_name(core)}→{_core_short_name(cores[j])}: {o}")
+            if i_:
+                parts.append(
+                    f"{_core_short_name(cores[j])}→{_core_short_name(core)}: {i_}")
+        summary = f"{_core_short_name(core)} · {out_total} out / {in_total} in"
+        return f"{summary} · {' · '.join(parts)}" if parts else summary
+
+    def _has_data(self) -> bool:
+        cores = self._cores
+        grid = self._grid
+        for i in range(len(cores)):
+            row = grid[i] if i < len(grid) else []
+            for j in range(len(cores)):
+                if i != j and (row[j] if j < len(row) else 0) > 0:
+                    return True
+        return False
+
+    def _rebuild(self) -> None:
+        n = len(self._cores)
+        self._sub_label.setText(
+            f"Core-to-core migration volume as directional chords ({n} cores)"
+            f"{self._scope_suffix}")
+        has_data = self._has_data()
+        self._empty_label.setVisible(not has_data)
+        self._canvas.setVisible(has_data)
+        self._btn_export_png.setEnabled(has_data)
+        if has_data:
+            self._canvas.set_data(self._cores, self._grid)
+        self._hover_label.setText(" ")
+
+    def _on_bounce_filter_toggled(self, checked: bool) -> None:
+        self._bounce_only = checked
+        self._bounce_filter_btn.setText(
+            "Show: Lock-Bounce Only" if checked else "Show: All Migrations")
+        self._reload_data()
+        self._rebuild()
+
+    def _reload_data(self) -> None:
+        cores, grid = _migration_heatmap_matrix(
+            self._trace, self._scope_lo, self._scope_hi,
+            bounce_only=self._bounce_only)
+        self._cores = cores
+        self._grid = grid
+
+    def refresh_scope(self) -> None:
+        """Rebuild from current cursor scope (full trace if <2 cursors)."""
+        lo = hi = None
+        suffix = ""
+        wnd = self.parent()
+        if isinstance(wnd, QMainWindow):
+            tab = wnd._active_tab
+            if tab is not None:
+                times = sorted(tab.view._scene.cursor_times())
+                if len(times) >= 2:
+                    lo, hi = times[0], times[-1]
+                    suffix = (
+                        f"  (C1–C{len(times)}: "
+                        f"{_format_time(lo, self._trace.time_scale)} … "
+                        f"{_format_time(hi, self._trace.time_scale)})")
+        self._scope_lo, self._scope_hi = lo, hi
+        self._scope_suffix = suffix
+        self._reload_data()
+        self._rebuild()
+
+    def _export_base_name(self) -> str:
+        stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        return f"migration-chord-{stamp}"
+
+    def _export_png(self) -> None:
+        if not self._has_data():
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Chord Diagram PNG",
+            self._export_base_name() + ".png", "PNG Image (*.png)")
+        if not path:
+            return
+        self._canvas.grab_full_pixmap().save(path, "PNG")
+
 def _gini_coefficient(values: List[float]) -> float:
     """Gini coefficient of a list of non-negative values (0 = perfect equality, 1 = max inequality)."""
     n = len(values)
@@ -25639,6 +26111,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._find_marker_items: List[QGraphicsItem] = []
         self._heatmap_dlg: Optional[_MigrationHeatmapDialog] = None
         self._heatmap_view_snapshot: Optional[dict] = None
+        self._chord_dlg: Optional[_ChordDiagramDialog] = None
         self._defer_stats_refresh: bool = False
         self._shutting_down: bool = False
         self._persisting_settings: bool = False
@@ -25780,6 +26253,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if hasattr(self, "_stats_panel"):
             self._stats_panel.clear_plot_session()
         self._close_heatmap_dialog()
+        self._close_chord_dialog()
         if self._progress_dialog is not None:
             self._progress_dialog.close()
             self._progress_dialog = None
@@ -26460,6 +26934,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
     def _sync_panels_light(self) -> None:
         """Legend and bindings without rebuilding the statistics panel."""
         self._sync_heatmap_dialog_to_tab()
+        self._sync_chord_dialog_to_tab()
         tab = self._active_tab
         trace = self._trace
         if tab is None or trace is None:
@@ -28398,6 +28873,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "Heatmap", self._open_migration_heatmap, _IC_HEATMAP,
             "Migration heatmap — core-pair counts over time (multi-core traces only)")
         self._tb_heatmap_btn.setEnabled(False)
+        self._tb_chord_btn = _ia(
+            "Chord", self._open_chord_diagram, _IC_CHORD,
+            "Migration chord diagram — directional core-to-core migration volume "
+            "(multi-core traces only)")
+        self._tb_chord_btn.setEnabled(False)
         self._tb_show_all_tasks_btn = _ia(
             "All tasks", self._clear_heatmap_task_filter, _IC_TASK,
             "Clear heatmap task filter and show all tasks")
@@ -28776,6 +29256,48 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         mks = sc._heatmap_filter_mks
         dlg.set_filter_banner(sc._heatmap_filter_label, len(mks) if mks else 0)
 
+    def _close_chord_dialog(self) -> None:
+        if self._chord_dlg is not None:
+            self._chord_dlg.close()
+            self._chord_dlg = None
+
+    def _sync_chord_dialog_to_tab(self) -> None:
+        dlg = self._chord_dlg
+        if dlg is None:
+            return
+        tab = self._active_tab
+        owner = getattr(dlg, "_owner_tab_path", None)
+        cur = tab.path if tab else None
+        if tab is None or cur != owner:
+            self._close_chord_dialog()
+            return
+        dlg.refresh_scope()
+
+    def _open_chord_diagram(self) -> None:
+        trace = self._trace
+        if trace is None or not _trace_is_multi_core(trace):
+            return
+        if self._chord_dlg is not None:
+            self._chord_dlg.raise_()
+            self._chord_dlg.activateWindow()
+            return
+        dlg = _ChordDiagramDialog(trace, parent=self)
+        dlg._owner_tab_path = (
+            self._active_tab.path if self._active_tab else None)
+        dlg.finished.connect(self._on_chord_dlg_closed)
+        self._chord_dlg = dlg
+        dlg.show()
+
+    def _on_chord_dlg_closed(self, _result: int = 0) -> None:
+        self._chord_dlg = None
+
+    def _sync_chord_toolbar(self) -> None:
+        if not hasattr(self, "_tb_chord_btn"):
+            return
+        trace = self._trace
+        self._tb_chord_btn.setEnabled(
+            trace is not None and _trace_is_multi_core(trace))
+
     def _capture_heatmap_view_snapshot(self, tab: _TraceTab) -> None:
         """Remember timeline zoom/pan/cursors before heatmap drill-down."""
         view = tab.view
@@ -29015,6 +29537,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
     def _sync_toolbar_to_active_tab(self) -> None:
         """Refresh toolbar toggles that reflect per-tab view state."""
         self._sync_heatmap_toolbar()
+        self._sync_chord_toolbar()
         if hasattr(self, "_tb_cpu_load_btn"):
             self._tb_cpu_load_btn.blockSignals(True)
             self._tb_cpu_load_btn.setChecked(self._show_cpu_load)
@@ -31556,6 +32079,11 @@ Views (--view):
              scope the grid to a time range. --drill-row/--drill-bin drill
              into the per-task grid for one core-pair row and time bin
              (matrix-mode heatmaps, >16 cores, are not drillable headlessly).
+  chord      Migration Chord Diagram (directional core-to-core migration
+             volume as a circular chord diagram). --task/--drill-row/
+             --drill-bin are not supported; --lo/--hi scope the diagram to
+             a time range. Requires a multi-core trace (2+ cores). PNG only
+             (like the GUI's Export PNG button; no SVG export).
   plot       A statistics metric scatter+histogram popup, selected with
              --metric:
                tick      tick-interval distribution (trace-wide, no --task)
@@ -31568,13 +32096,15 @@ Views (--view):
                tag       tag-channel value distribution        (--channel)
 
 Sizing (--width/--height): only used for --view timeline / --view plot; the
-heatmap image size is derived from its data grid.
+heatmap and chord diagram image sizes are derived from their data (grid /
+default dialog size respectively).
 
 examples:
   %(prog)s trace.btf -o timeline.png --view timeline
   %(prog)s trace.btf -o timeline.svg --view timeline --task "Producer[1]" --lo 0 --hi 500000
   %(prog)s trace.btf -o heatmap.png --view heatmap
   %(prog)s trace.btf -o heatmap-tasks.svg --view heatmap --drill-row 0 --drill-bin 3
+  %(prog)s trace.btf -o chord.png --view chord
   %(prog)s trace.btf -o tick.svg --view plot --metric tick
   %(prog)s trace.btf -o exec.png --view plot --metric exec --task "Producer[1]"
   %(prog)s trace.btf -o preempt.png --view plot --metric preempt --task "Producer[1]" --preemptor "Consumer[2]"
@@ -31758,7 +32288,7 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
         help="image format (default: infer from -o extension, else png)",
     )
     snapshot.add_argument(
-        "--view", choices=("timeline", "heatmap", "plot"), required=True,
+        "--view", choices=("timeline", "heatmap", "chord", "plot"), required=True,
         help="which view to render",
     )
     snapshot.add_argument(
@@ -31766,7 +32296,7 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
         help=(
             "task display name (e.g. 'Producer[1]'), bare name, or merge key; "
             "required for most --metric values, optional for --view timeline "
-            "(highlights + centers that task), unused for --view heatmap"
+            "(highlights + centers that task), unused for --view heatmap/chord"
         ),
     )
     snapshot.add_argument(
@@ -31796,7 +32326,7 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
         "--drill-row", type=int, default=None, metavar="N", dest="drill_row",
         help=(
             "core-pair row index (0-based, top row = 0) to drill into the "
-            "per-task grid; requires --drill-bin (--view heatmap only)"
+            "per-task grid; requires --drill-bin (--view heatmap only, not chord)"
         ),
     )
     snapshot.add_argument(
@@ -32302,6 +32832,30 @@ def _cli_snapshot_heatmap(trace: "BtfTrace",
     _process_ui_events_safely()
     return dlg, None
 
+def _cli_snapshot_chord(trace: "BtfTrace",
+                        args: argparse.Namespace) -> Tuple[Optional["_ChordDiagramDialog"], Optional[str]]:
+    if args.metric is not None:
+        print("warning: --metric is ignored for --view chord", file=sys.stderr)
+    if args.task:
+        return None, "error: --task is not supported for --view chord (cross-task view)"
+    if args.drill_row is not None or args.drill_bin is not None:
+        return None, "error: --drill-row/--drill-bin are not supported for --view chord"
+    if not _trace_is_multi_core(trace):
+        return None, "error: --view chord requires a multi-core trace (2+ cores)"
+    dlg = _ChordDiagramDialog(trace, parent=None)
+    if args.lo is not None and args.hi is not None:
+        dlg._scope_lo, dlg._scope_hi = args.lo, args.hi
+        dlg._scope_suffix = (
+            f"  ({_format_time(args.lo, trace.time_scale)} \u2026 "
+            f"{_format_time(args.hi, trace.time_scale)})")
+        dlg._reload_data()
+        dlg._rebuild()
+    if not dlg._has_data():
+        return None, "error: no migrations in scope for --view chord"
+    dlg.show()
+    _process_ui_events_safely()
+    return dlg, None
+
 def _cli_snapshot_plot(trace: "BtfTrace",
                        args: argparse.Namespace) -> Tuple[Optional["_MetricsPlotDialog"], Optional[str]]:
     metric = args.metric
@@ -32398,6 +32952,13 @@ def _cli_snapshot_run(args: argparse.Namespace) -> int:
         return 1
 
     fmt, out_path = _cli_snapshot_output_path(args.output, args.format)
+    if args.view == "chord" and fmt == "svg":
+        print(
+            "error: --view chord does not support --format svg "
+            "(chord gradients render incorrectly via QSvgGenerator); use png",
+            file=sys.stderr,
+        )
+        return 1
 
     _platform_preflight()
     app = _bootstrap_qt_app()
@@ -32409,6 +32970,9 @@ def _cli_snapshot_run(args: argparse.Namespace) -> int:
     elif args.view == "heatmap":
         widget, err = _cli_snapshot_heatmap(trace, args)
         title = "Migration Heatmap"
+    elif args.view == "chord":
+        widget, err = _cli_snapshot_chord(trace, args)
+        title = "Migration Chord Diagram"
     else:
         widget, err = _cli_snapshot_plot(trace, args)
         title = widget.windowTitle() if widget is not None else "Metric Plot"
@@ -32426,6 +32990,12 @@ def _cli_snapshot_run(args: argparse.Namespace) -> int:
             if fmt == "svg":
                 widget._canvas.render_full_svg(out_path, title)
             elif not widget._canvas.render_full_pixmap().save(out_path):
+                print(f"error: could not save PNG: {out_path}", file=sys.stderr)
+                return 1
+        elif args.view == "chord":
+            if fmt == "svg":
+                _cli_save_widget_svg(widget._canvas, out_path, title)
+            elif not _cli_save_widget_png(widget._canvas, out_path):
                 print(f"error: could not save PNG: {out_path}", file=sys.stderr)
                 return 1
         else:

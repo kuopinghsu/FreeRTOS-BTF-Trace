@@ -19,6 +19,10 @@ STATS_IMG_DIR := ../images/stats
 HEATMAP_TRACE ?= ../tracedata/example-4cores.btf
 HEATMAP_IMG_DIR := ../images
 
+# Source trace for `make update-images` (Migration Chord Diagram
+# illustration in README.md); more cores makes for a more illustrative diagram.
+CHORD_TRACE ?= ../tracedata/example-8cores.btf
+
 .DEFAULT_GOAL := all
 
 PANDOC ?= pandoc
@@ -41,7 +45,7 @@ help:
 	@echo "  make ci           test-all + check-bundle (local CI parity)"
 	@echo "  make help         Show this help"
 	@echo ""
-	@echo "Variables: PYTHON=$(PYTHON)  TRACE=$(TRACE)  PANDOC=$(PANDOC)  STATS_TRACE=$(STATS_TRACE)  HEATMAP_TRACE=$(HEATMAP_TRACE)"
+	@echo "Variables: PYTHON=$(PYTHON)  TRACE=$(TRACE)  PANDOC=$(PANDOC)  STATS_TRACE=$(STATS_TRACE)  HEATMAP_TRACE=$(HEATMAP_TRACE)  CHORD_TRACE=$(CHORD_TRACE)"
 
 
 all: web bundle
@@ -115,4 +119,7 @@ update-images: bundle
 	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(HEATMAP_TRACE) \
 		-o $(HEATMAP_IMG_DIR)/heatmap-tasks.svg --view heatmap --drill-row 0 --drill-bin 0
 	@echo "Updated $(HEATMAP_IMG_DIR)/heatmap-{pairs,tasks}.svg from $(HEATMAP_TRACE)"
+	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(CHORD_TRACE) \
+		-o $(HEATMAP_IMG_DIR)/migration-chord.png --view chord
+	@echo "Updated $(HEATMAP_IMG_DIR)/migration-chord.png from $(CHORD_TRACE)"
 

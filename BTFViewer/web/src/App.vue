@@ -33,6 +33,7 @@
       @copy-screenshot="onCopyScreenshot"
       @export-svg="onExportSvg"
       @show-heatmap="onOpenHeatmap"
+      @show-chord="chordOpen = true"
       @clear-task-filter="clearHeatmapTaskFilter"
       @show-help="openHelpDialog"
       @show-about="openAboutDialog"
@@ -720,6 +721,13 @@
       @clear-filter="clearHeatmapTaskFilter"
     />
 
+    <ChordDiagramDialog
+      v-if="chordOpen && trace"
+      :trace="trace"
+      :cursors="cursors"
+      @close="chordOpen = false"
+    />
+
     <!-- Snapshot editor -->
     <SnapshotEditor
       v-if="snapshotEditorOpen"
@@ -799,6 +807,7 @@ import StatisticsPanel  from './components/StatisticsPanel.vue'
 import MarksPanel       from './components/MarksPanel.vue'
 import SnapshotEditor   from './components/SnapshotEditor.vue'
 import MigrationHeatmapDialog from './components/MigrationHeatmapDialog.vue'
+import ChordDiagramDialog from './components/ChordDiagramDialog.vue'
 import FindPanel from './components/FindPanel.vue'
 import JumpToTimeDialog from './components/JumpToTimeDialog.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
@@ -859,6 +868,7 @@ const helpOpen   = ref(false)
 const aboutOpen  = ref(false)
 const settingsOpen = ref(false)
 const heatmapOpen = ref(false)
+const chordOpen = ref(false)
 /** Viewport/cursors saved when migration heatmap opens; restored by Show all tasks. */
 let _heatmapRestoreSnapshot = null
 const statsPaused = ref(false)
@@ -1179,6 +1189,7 @@ watch(marks, (m) => {
 watch(activeTabId, (newId, oldId) => {
   if (oldId != null) {
     heatmapOpen.value = false
+    chordOpen.value = false
     const leaving = tabs.value.find(t => t.id === oldId)
     if (leaving) saveFiltersToActiveTab(leaving)
   }
@@ -2198,6 +2209,9 @@ function onGlobalKeydown(e) {
     } else if (heatmapOpen.value) {
       onHeatmapClose()
       e.preventDefault()
+    } else if (chordOpen.value) {
+      chordOpen.value = false
+      e.preventDefault()
     } else if (settingsOpen.value) {
       onSettingsCancel()
       e.preventDefault()
@@ -2214,7 +2228,7 @@ function onGlobalKeydown(e) {
     return
   }
 
-  if (helpOpen.value || aboutOpen.value || heatmapOpen.value || settingsOpen.value
+  if (helpOpen.value || aboutOpen.value || heatmapOpen.value || chordOpen.value || settingsOpen.value
       || jumpDialogOpen.value || snapshotEditorOpen.value) return
 
   if (mod && e.key === ',') {
