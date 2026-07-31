@@ -220,8 +220,7 @@ Views (--view):
   chord      Migration Chord Diagram (directional core-to-core migration
              volume as a circular chord diagram). --task/--drill-row/
              --drill-bin are not supported; --lo/--hi scope the diagram to
-             a time range. Requires a multi-core trace (2+ cores). PNG only
-             (like the GUI's Export PNG button; no SVG export).
+             a time range. Requires a multi-core trace (2+ cores).
   plot       A statistics metric scatter+histogram popup, selected with
              --metric:
                tick      tick-interval distribution (trace-wide, no --task)
@@ -243,6 +242,7 @@ examples:
   %(prog)s trace.btf -o heatmap.png --view heatmap
   %(prog)s trace.btf -o heatmap-tasks.svg --view heatmap --drill-row 0 --drill-bin 3
   %(prog)s trace.btf -o chord.png --view chord
+  %(prog)s trace.btf -o chord.svg --view chord
   %(prog)s trace.btf -o tick.svg --view plot --metric tick
   %(prog)s trace.btf -o exec.png --view plot --metric exec --task "Producer[1]"
   %(prog)s trace.btf -o preempt.png --view plot --metric preempt --task "Producer[1]" --preemptor "Consumer[2]"
@@ -1090,13 +1090,6 @@ def _cli_snapshot_run(args: argparse.Namespace) -> int:
         return 1
 
     fmt, out_path = _cli_snapshot_output_path(args.output, args.format)
-    if args.view == "chord" and fmt == "svg":
-        print(
-            "error: --view chord does not support --format svg "
-            "(chord gradients render incorrectly via QSvgGenerator); use png",
-            file=sys.stderr,
-        )
-        return 1
 
     _platform_preflight()
     app = _bootstrap_qt_app()
@@ -1132,7 +1125,7 @@ def _cli_snapshot_run(args: argparse.Namespace) -> int:
                 return 1
         elif args.view == "chord":
             if fmt == "svg":
-                _cli_save_widget_svg(widget._canvas, out_path, title)
+                widget._canvas.render_full_svg(out_path, title)
             elif not _cli_save_widget_png(widget._canvas, out_path):
                 print(f"error: could not save PNG: {out_path}", file=sys.stderr)
                 return 1

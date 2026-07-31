@@ -3380,6 +3380,8 @@ class _ChordDiagramWidget(QWidget):
 
                 is_dim = hovered is not None and hovered != i and hovered != j
                 width = max(1.0, min(12.0, 1 + 10 * (count / max_count)))
+                p.setOpacity(0.08 if is_dim else 0.75)
+
                 grad = QLinearGradient(p1, p2)
                 grad.setColorAt(0.0, QColor(_core_color(cores[i])))
                 grad.setColorAt(1.0, QColor(_core_color(cores[j])))
@@ -3389,7 +3391,6 @@ class _ChordDiagramWidget(QWidget):
                 path = QPainterPath()
                 path.moveTo(p1)
                 path.quadTo(QPointF(ctrl_x, ctrl_y), p2)
-                p.setOpacity(0.08 if is_dim else 0.75)
                 p.strokePath(path, pen)
         p.setOpacity(1.0)
 
@@ -3432,6 +3433,97 @@ class _ChordDiagramWidget(QWidget):
         heatmap's scrollable full-content export — the chord diagram always
         fits its viewport)."""
         return self.grab()
+
+    def render_full_svg(self, path: str, title: str) -> None:
+        """Hand-build the SVG markup (mirrors the web app's exportChordSvg)
+        instead of replaying _paint() onto a QSvgGenerator: Qt's SVG backend
+        does not preserve QLinearGradient-brushed QPen strokes (they
+        serialize as solid black), so the gradient chords must be emitted as
+        real <linearGradient> defs referenced by each chord's <path>."""
+        def esc(v) -> str:
+            return (str(v).replace("&", "&amp;").replace("<", "&lt;")
+                    .replace(">", "&gt;").replace('"', "&quot;"))
+
+        cores = self._cores
+        layout = self._layout
+        w, h = self.width(), self.height()
+        if not cores or layout is None or not layout.arcs:
+            return
+        cx, cy, R = self._geometry(w, h)
+        inner = R - self._ARC_THICKNESS / 2 - 2
+        max_count = self._max_count or 1
+        grid = self._grid
+        bg = self.palette().color(QPalette.Window).name()
+
+        defs = []
+        chord_paths = []
+        for i in range(len(cores)):
+            row = grid[i] if i < len(grid) else []
+            for j in range(len(cores)):
+                if i == j:
+                    continue
+                count = row[j] if j < len(row) else 0
+                if not count:
+                    continue
+                bidir = (grid[j][i] if j < len(grid) and i < len(grid[j]) else 0) > 0
+                p1 = self._point_at(cx, cy, layout.tick_angle(i, j), inner)
+                p2 = self._point_at(cx, cy, layout.tick_angle(j, i), inner)
+                mx, my = (p1.x() + p2.x()) / 2, (p1.y() + p2.y()) / 2
+                vx, vy = mx - cx, my - cy
+                vlen = math.hypot(vx, vy) or 1.0
+                vx, vy = vx / vlen, vy / vlen
+                perp_x, perp_y = -vy, vx
+                sign = 1 if i < j else -1
+                bidir_offset = 6 * sign if bidir else 0
+                pull = 0.18
+                ctrl_x = cx + vx * inner * pull + perp_x * bidir_offset
+                ctrl_y = cy + vy * inner * pull + perp_y * bidir_offset
+                width = max(1.0, min(12.0, 1 + 10 * (count / max_count)))
+                gid = f"chord-grad-{i}-{j}"
+                defs.append(
+                    f'<linearGradient id="{gid}" gradientUnits="userSpaceOnUse" '
+                    f'x1="{p1.x():.2f}" y1="{p1.y():.2f}" x2="{p2.x():.2f}" y2="{p2.y():.2f}">'
+                    f'<stop offset="0" stop-color="{esc(_core_color(cores[i]))}"/>'
+                    f'<stop offset="1" stop-color="{esc(_core_color(cores[j]))}"/>'
+                    '</linearGradient>')
+                chord_paths.append(
+                    f'<path d="M {p1.x():.2f} {p1.y():.2f} Q {ctrl_x:.2f} {ctrl_y:.2f} '
+                    f'{p2.x():.2f} {p2.y():.2f}" stroke="url(#{gid})" '
+                    f'stroke-width="{width:.2f}" stroke-opacity="0.75" fill="none" '
+                    'stroke-linecap="round"/>')
+
+        arc_parts = []
+        for arc in layout.arcs:
+            p1 = self._point_at(cx, cy, arc.start_angle, R)
+            p2 = self._point_at(cx, cy, arc.end_angle, R)
+            large_arc = 1 if (arc.end_angle - arc.start_angle) > math.pi else 0
+            arc_parts.append(
+                f'<path d="M {p1.x():.2f} {p1.y():.2f} A {R:.2f} {R:.2f} 0 '
+                f'{large_arc} 1 {p2.x():.2f} {p2.y():.2f}" '
+                f'stroke="{esc(_core_color(arc.core))}" stroke-width="{self._ARC_THICKNESS}" '
+                'stroke-opacity="1" fill="none" stroke-linecap="round"/>')
+            mid = (arc.start_angle + arc.end_angle) / 2
+            lp = self._point_at(cx, cy, mid, R + self._ARC_THICKNESS / 2 + 14)
+            cos_mid = math.cos(mid)
+            anchor = "start" if cos_mid > 0.15 else "end" if cos_mid < -0.15 else "middle"
+            arc_parts.append(
+                f'<text x="{lp.x():.2f}" y="{lp.y():.2f}" fill="#888888" '
+                f'font-family="monospace" font-size="11" text-anchor="{anchor}" '
+                f'dominant-baseline="middle">{esc(_core_short_name(arc.core))}</text>')
+
+        parts = [
+            '<?xml version="1.0" encoding="UTF-8" standalone="no"?>',
+            f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" '
+            f'viewBox="0 0 {w} {h}">',
+            f'<title>{esc(title)}</title>',
+            f'<rect width="100%" height="100%" fill="{bg}"/>',
+            '<defs>', *defs, '</defs>',
+            *chord_paths,
+            *arc_parts,
+            '</svg>',
+        ]
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("\n".join(parts))
 
 class _ChordDiagramDialog(QDialog):
     """Popup: core-to-core migration volume as a directional chord diagram."""
@@ -3497,6 +3589,9 @@ class _ChordDiagramDialog(QDialog):
         self._btn_export_png = QPushButton("Export PNG")
         self._btn_export_png.clicked.connect(self._export_png)
         export_row.addWidget(self._btn_export_png)
+        self._btn_export_svg = QPushButton("Export SVG")
+        self._btn_export_svg.clicked.connect(self._export_svg)
+        export_row.addWidget(self._btn_export_svg)
         export_row.addStretch(1)
         lay.addLayout(export_row)
 
@@ -3556,6 +3651,7 @@ class _ChordDiagramDialog(QDialog):
         self._empty_label.setVisible(not has_data)
         self._canvas.setVisible(has_data)
         self._btn_export_png.setEnabled(has_data)
+        self._btn_export_svg.setEnabled(has_data)
         if has_data:
             self._canvas.set_data(self._cores, self._grid)
         self._hover_label.setText(" ")
@@ -3607,6 +3703,16 @@ class _ChordDiagramDialog(QDialog):
         if not path:
             return
         self._canvas.grab_full_pixmap().save(path, "PNG")
+
+    def _export_svg(self) -> None:
+        if not self._has_data():
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Chord Diagram SVG",
+            self._export_base_name() + ".svg", "SVG Image (*.svg)")
+        if not path:
+            return
+        self._canvas.render_full_svg(path, "Migration Chord Diagram")
 
 def _gini_coefficient(values: List[float]) -> float:
     """Gini coefficient of a list of non-negative values (0 = perfect equality, 1 = max inequality)."""

@@ -120,6 +120,6 @@ update-images: bundle
 		-o $(HEATMAP_IMG_DIR)/heatmap-tasks.svg --view heatmap --drill-row 0 --drill-bin 0
 	@echo "Updated $(HEATMAP_IMG_DIR)/heatmap-{pairs,tasks}.svg from $(HEATMAP_TRACE)"
 	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(CHORD_TRACE) \
-		-o $(HEATMAP_IMG_DIR)/migration-chord.png --view chord
-	@echo "Updated $(HEATMAP_IMG_DIR)/migration-chord.png from $(CHORD_TRACE)"
+		-o $(HEATMAP_IMG_DIR)/migration-chord.svg --view chord
+	@echo "Updated $(HEATMAP_IMG_DIR)/migration-chord.svg from $(CHORD_TRACE)"
 

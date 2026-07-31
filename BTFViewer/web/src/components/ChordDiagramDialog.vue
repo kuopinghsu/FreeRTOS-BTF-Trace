@@ -74,6 +74,13 @@
         >
           Export PNG
         </button>
+        <button
+          type="button"
+          class="chord-export-btn"
+          @click="exportChordSvg"
+        >
+          Export SVG
+        </button>
       </div>
     </div>
   </div>
@@ -328,21 +335,128 @@ function onCanvasMove(ev) {
   hoverCoreIndex.value = found
 }
 
+function _exportStamp() {
+  const d = new Date()
+  const pad = n => String(n).padStart(2, '0')
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
+}
+
+function _xmlEsc(v) {
+  return String(v ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+function _downloadBlob(filename, blob) {
+  if (!blob) return
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+function _downloadText(filename, text, mime) {
+  const blob = new Blob([text], { type: mime })
+  _downloadBlob(filename, blob)
+}
+
 function exportChordPng() {
   const canvas = canvasRef.value
   if (!canvas || !hasData.value) return
   canvas.toBlob(blob => {
-    if (!blob) return
-    const d = new Date()
-    const pad = n => String(n).padStart(2, '0')
-    const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `migration-chord-${stamp}.png`
-    a.click()
-    URL.revokeObjectURL(url)
+    _downloadBlob(`migration-chord-${_exportStamp()}.png`, blob)
   }, 'image/png')
+}
+
+function exportChordSvg() {
+  const viewport = viewportRef.value
+  if (!viewport || !hasData.value) return
+  const viewW = viewport.clientWidth
+  const viewH = viewport.clientHeight
+  if (viewW < 1 || viewH < 1) return
+
+  const { cores, grid } = matrix.value
+  const layout = chordLayout.value
+  const { cx, cy, radius: R } = geometry(viewW, viewH)
+  const inner = R - ARC_THICKNESS / 2 - 2
+  const maxCount = maxChordCount.value || 1
+  const bg = getComputedStyle(viewport).getPropertyValue('--bg').trim() || '#1e1e1e'
+  const labelColor = getComputedStyle(viewport).getPropertyValue('--fg-dim').trim() || '#888888'
+
+  const defs = []
+  const chordPaths = []
+  for (let i = 0; i < cores.length; i++) {
+    for (let j = 0; j < cores.length; j++) {
+      if (i === j) continue
+      const count = grid[i]?.[j] || 0
+      if (!count) continue
+      const bidir = (grid[j]?.[i] || 0) > 0
+      const p1 = pointAt(cx, cy, layout.tickAngle(i, j), inner)
+      const p2 = pointAt(cx, cy, layout.tickAngle(j, i), inner)
+      const mx = (p1.x + p2.x) / 2
+      const my = (p1.y + p2.y) / 2
+      let vx = mx - cx
+      let vy = my - cy
+      const vlen = Math.hypot(vx, vy) || 1
+      vx /= vlen
+      vy /= vlen
+      const perpX = -vy
+      const perpY = vx
+      const sign = i < j ? 1 : -1
+      const bidirOffset = bidir ? 6 * sign : 0
+      const pull = 0.18
+      const ctrlX = cx + vx * inner * pull + perpX * bidirOffset
+      const ctrlY = cy + vy * inner * pull + perpY * bidirOffset
+      const width = Math.max(1, Math.min(12, 1 + 10 * (count / maxCount)))
+      const gid = `chord-grad-${i}-${j}`
+      defs.push(
+        `<linearGradient id="${gid}" gradientUnits="userSpaceOnUse" x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}">`
+        + `<stop offset="0" stop-color="${_xmlEsc(coreColor(cores[i]))}"/>`
+        + `<stop offset="1" stop-color="${_xmlEsc(coreColor(cores[j]))}"/>`
+        + '</linearGradient>',
+      )
+      chordPaths.push(
+        `<path d="M ${p1.x} ${p1.y} Q ${ctrlX} ${ctrlY} ${p2.x} ${p2.y}" `
+        + `stroke="url(#${gid})" stroke-width="${width}" stroke-opacity="0.75" `
+        + 'fill="none" stroke-linecap="round"/>',
+      )
+    }
+  }
+
+  const arcParts = []
+  for (const arc of layout.arcs) {
+    const p1 = pointAt(cx, cy, arc.startAngle, R)
+    const p2 = pointAt(cx, cy, arc.endAngle, R)
+    const largeArc = (arc.endAngle - arc.startAngle) > Math.PI ? 1 : 0
+    arcParts.push(
+      `<path d="M ${p1.x} ${p1.y} A ${R} ${R} 0 ${largeArc} 1 ${p2.x} ${p2.y}" `
+      + `stroke="${_xmlEsc(coreColor(arc.core))}" stroke-width="${ARC_THICKNESS}" `
+      + 'stroke-opacity="1" fill="none" stroke-linecap="round"/>',
+    )
+    const mid = (arc.startAngle + arc.endAngle) / 2
+    const lp = pointAt(cx, cy, mid, R + ARC_THICKNESS / 2 + 14)
+    const cosMid = Math.cos(mid)
+    const anchor = cosMid > 0.15 ? 'start' : cosMid < -0.15 ? 'end' : 'middle'
+    arcParts.push(
+      `<text x="${lp.x}" y="${lp.y}" fill="${_xmlEsc(labelColor)}" font-family="monospace" `
+      + `font-size="11" text-anchor="${anchor}" dominant-baseline="middle">${_xmlEsc(coreShortName(arc.core))}</text>`,
+    )
+  }
+
+  const parts = [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${viewW}" height="${viewH}" viewBox="0 0 ${viewW} ${viewH}">`,
+    `<title>${_xmlEsc(subtitle.value)}</title>`,
+    `<rect width="100%" height="100%" fill="${_xmlEsc(bg)}"/>`,
+    '<defs>', ...defs, '</defs>',
+    ...chordPaths,
+    ...arcParts,
+    '</svg>',
+  ]
+  _downloadText(`migration-chord-${_exportStamp()}.svg`, parts.join('\n'), 'image/svg+xml;charset=utf-8')
 }
 
 watch([matrix, hoverCoreIndex], () => {

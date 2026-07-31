@@ -639,7 +639,7 @@ The right side uses three tabs — **Statistics**, **Marks**, and **Find** — w
 - **Legend (Desktop)** — separate dock above the Statistics/Marks/Find panel; toggle via **Settings → Display → Legend panel**.
 - **Legend (Web)** — section inside the **Marks** tab when **Legend panel** is enabled in Settings.
 - **Migration heatmap** — toolbar **Heatmap** button (multi-core traces only). ≤ 16 cores: pair grid → task grid → timeline zoom/filter. > 16 cores: core×core matrix (row click) → outgoing pairs → tasks. **Export PNG / SVG** of the current drill level from the heatmap dialog. Toolbar **All tasks** appears while filtered. See [Migration heatmap](#migration-heatmap).
-- **Migration chord diagram** — toolbar **Chord** button (multi-core traces only). Circular diagram with one arc per core; hover an arc to highlight its migrations and dim the rest. **Show: All Migrations / Show: Bounce Only** toggle restricts it to lock-bounce migrations. **Export PNG** of the current view. See [Migration chord diagram](#migration-chord-diagram).
+- **Migration chord diagram** — toolbar **Chord** button (multi-core traces only). Circular diagram with one arc per core; hover an arc to highlight its migrations and dim the rest. **Show: All Migrations / Show: Bounce Only** toggle restricts it to lock-bounce migrations. **Export PNG / SVG** of the current view. See [Migration chord diagram](#migration-chord-diagram).
 
 ### Multi-tab traces (Web)
 
@@ -892,7 +892,7 @@ The example plots below were generated from **`tracedata/example-8cores.btf`** (
 make -C BTFViewer update-images
 ```
 
-This invokes the desktop CLI `snapshot` command (`--view plot` / `--view timeline`) directly — see `make -C BTFViewer help`. Timeline screenshots (e.g. `images/stats/tasks-priority-il266.svg`) use `--view timeline --task ... --lo ... --hi ...` to zoom to the region of interest. Migration heatmap screenshots (`images/heatmap-pairs.svg`, `images/heatmap-tasks.svg`) are regenerated the same way with `make -C BTFViewer update-images` (`snapshot --view heatmap`, with `--drill-row`/`--drill-bin` for the task-level image) — see [Migration heatmap](#migration-heatmap). The migration chord diagram screenshot (`images/migration-chord.png`) is regenerated with the same target (`snapshot --view chord`; PNG only, no SVG export) — see [Migration chord diagram](#migration-chord-diagram).
+This invokes the desktop CLI `snapshot` command (`--view plot` / `--view timeline`) directly — see `make -C BTFViewer help`. Timeline screenshots (e.g. `images/stats/tasks-priority-il266.svg`) use `--view timeline --task ... --lo ... --hi ...` to zoom to the region of interest. Migration heatmap screenshots (`images/heatmap-pairs.svg`, `images/heatmap-tasks.svg`) are regenerated the same way with `make -C BTFViewer update-images` (`snapshot --view heatmap`, with `--drill-row`/`--drill-bin` for the task-level image) — see [Migration heatmap](#migration-heatmap). The migration chord diagram screenshot (`images/migration-chord.svg`) is regenerated with the same target (`snapshot --view chord`) — see [Migration chord diagram](#migration-chord-diagram).
 
 #### Summary, scheduling, and core utilisation
 
@@ -1606,11 +1606,12 @@ Visualise **how much** migration traffic flows between each pair of cores, as di
 |--|--|
 | **Open** | Toolbar **Chord** button (Desktop + Web). Enabled only when the trace has **2 or more cores**. Desktop: non-modal dialog (timeline stays interactive; closes if you switch to a different trace tab). Web: semi-transparent overlay (closes on tab switch). |
 | **Export PNG** | Footer button exports the diagram exactly as rendered (no hover highlight). Filename: `migration-chord-{timestamp}.png`. Desktop: file save dialog. Web: direct download. |
+| **Export SVG** | Footer button next to Export PNG; same content, vector format. Filename: `migration-chord-{timestamp}.svg`. Desktop: file save dialog. Web: direct download. |
 | **Empty state** | *No migrations in scope.* when no migrations fall in the current window. |
 
-**Example (`example-8cores.btf`)** — screenshot exported with **Export PNG** from the chord dialog (full trace scope, no hover highlight):
+**Example (`example-8cores.btf`)** — screenshot exported with **Export SVG** from the chord dialog (full trace scope, no hover highlight):
 
-![Migration chord diagram: directional core-to-core migration volume for example-8cores.btf](../images/migration-chord.png)
+![Migration chord diagram: directional core-to-core migration volume for example-8cores.btf](../images/migration-chord.svg)
 
 Each arc around the circle is one core (`c0`…`c7`); a chord between two arcs is a directed migration flow, coloured as a gradient from its source core to its destination core, with width proportional to migration count. Thicker chords between adjacent-looking core pairs (e.g. `c0`↔`c2`, `c1`↔`c6`) stand out immediately as the busiest migration paths, without needing to drill through a heatmap grid first.
 
