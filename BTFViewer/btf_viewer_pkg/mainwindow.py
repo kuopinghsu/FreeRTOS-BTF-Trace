@@ -61,6 +61,7 @@ class _CpuLoadGraph(QWidget):
         self._total_bins:     List[float]                   = []
         self._bin_w_ns: float                               = 1.0
         self._font_size: int                                = 8
+        self._time_decimals: int                             = 3
         self._hover_y: int                                  = -1
         self._title_icon_rect: Optional[QRect]               = None
         self.setMinimumHeight(40)
@@ -124,6 +125,10 @@ class _CpuLoadGraph(QWidget):
 
     def set_font_size(self, size: int) -> None:
         self._font_size = max(6, size)
+        self.update()
+
+    def set_time_decimals(self, n: int) -> None:
+        self._time_decimals = max(0, min(int(n), 9))
         self.update()
 
     def set_core_expanded(self, core: str, expanded: bool) -> None:
@@ -962,7 +967,7 @@ class _CpuLoadGraph(QWidget):
                     load_pct = f"{load * 100:.0f}%"
                     is_primary = (hover_row is not None
                                   and hover_row[0] == kind and hover_row[1] == key)
-                    badge = (f"{load_pct} · {_format_time(hover_ns, scale)}"
+                    badge = (f"{load_pct} · {_format_time(hover_ns, scale, decimals=self._time_decimals)}"
                              if is_primary else load_pct)
                     self._draw_load_badge(p, sx, ry_h, badge, dark, full=is_primary)
                 ry_h += rh + CPU_LOAD_ROW_GAP
@@ -1801,6 +1806,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         sc.set_sti_waveform_h(self._sti_waveform_h_val)
         sc.set_sti_line_style(self._sti_line_style_val)
         sc.set_hover_highlight(self._hover_highlight_val)
+        sc.set_time_decimals(self._time_decimals_val)
+        self._cpu_load_graph.set_time_decimals(self._time_decimals_val)
         sc.set_theme(self._is_dark, rebuild=False)
         self._sync_timeline_view_theme(view, self._is_dark)
         view.set_horizontal(self._vm.settings.horizontal)
@@ -2119,7 +2126,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self.setWindowTitle("RTOS BTF Viewer")
             return
         fname = os.path.basename(self._current_file)
-        ts = _format_time(trace.time_max - trace.time_min, trace.time_scale)
+        ts = _format_time(trace.time_max - trace.time_min, trace.time_scale,
+                          decimals=self._time_decimals_val)
         n_seg = len(trace.segments)
         n_sti = len(trace.sti_events)
         self.setWindowTitle(f"RTOS BTF Viewer – {fname}")
@@ -2804,6 +2812,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 "row_gap":           str(self._row_gap_val),
                 "timescale_per_px_default": str(self._timescale_per_px_default_val),
                 "hover_highlight":   str(self._hover_highlight_val).lower(),
+                "time_decimals":     str(self._time_decimals_val),
             }, flush=False)
 
             if self._cpu_splitter_bottom_h is not None and self._cpu_splitter_bottom_h > 0:
@@ -4982,7 +4991,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
               else cursor_times[0] if cursor_times
               else self._view.view_center_ns())
         unit = self._current_time_unit()
-        label = f"Bookmark @{_format_time(ns, unit, decimals=3)}"
+        label = f"Bookmark @{_format_time(ns, unit, decimals=self._time_decimals_val)}"
         self._bookmarks.append(TraceBookmark(id=self._mark_next_id, ns=ns, label=label))
         self._mark_next_id += 1
         self._bookmarks.sort(key=lambda b: b.ns)
@@ -5016,11 +5025,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             return
         unit = self._current_time_unit()
         for b in sorted(self._bookmarks, key=lambda x: x.ns):
-            txt = b.label or f"Bookmark @{_format_time(b.ns, unit, decimals=3)}"
+            txt = b.label or f"Bookmark @{_format_time(b.ns, unit, decimals=self._time_decimals_val)}"
             item = QListWidgetItem(txt)
             item.setData(Qt.ItemDataRole.UserRole, int(b.id))
             item.setData(Qt.ItemDataRole.UserRole + 1, int(b.ns))
-            item.setToolTip(f"{_format_time(b.ns, unit, decimals=3)}")
+            item.setToolTip(f"{_format_time(b.ns, unit, decimals=self._time_decimals_val)}")
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
             self._bookmark_list.addItem(item)
         self._bookmark_list.blockSignals(False)
@@ -5036,7 +5045,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             if b.id == bid:
                 # Empty label -> revert to the default timestamp label so the
                 # bookmark keeps useful identity information.
-                b.label = new_label or f"Bookmark @{_format_time(b.ns, self._current_time_unit(), decimals=3)}"
+                b.label = new_label or f"Bookmark @{_format_time(b.ns, self._current_time_unit(), decimals=self._time_decimals_val)}"
                 break
         self._save_current_trace_state()
 
@@ -5061,7 +5070,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             return
         self._push_undo_snapshot()
         unit = self._current_time_unit()
-        label = f"Bookmark @{_format_time(ns, unit, decimals=3)}"
+        label = f"Bookmark @{_format_time(ns, unit, decimals=self._time_decimals_val)}"
         self._bookmarks.append(TraceBookmark(id=self._mark_next_id, ns=ns, label=label))
         self._mark_next_id += 1
         self._bookmarks.sort(key=lambda b: b.ns)
@@ -5159,11 +5168,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             return
         unit = self._current_time_unit()
         for a in sorted(self._annotations, key=lambda x: x.ns):
-            txt = f"{_format_time(a.ns, unit, decimals=3)}  {a.note}"
+            txt = f"{_format_time(a.ns, unit, decimals=self._time_decimals_val)}  {a.note}"
             item = QListWidgetItem(txt)
             item.setData(Qt.ItemDataRole.UserRole, int(a.id))
             item.setData(Qt.ItemDataRole.UserRole + 1, int(a.ns))
-            item.setToolTip(f"@ {_format_time(a.ns, unit, decimals=3)}\n{a.note}")
+            item.setToolTip(f"@ {_format_time(a.ns, unit, decimals=self._time_decimals_val)}\n{a.note}")
             self._annotation_list.addItem(item)
         self._annotation_list.blockSignals(False)
         self._view._scene.set_marks(self._bookmarks, self._annotations)
@@ -5612,6 +5621,16 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if vals["show_hover_highlight"] != self._hover_highlight_val:
             self._hover_highlight_val = vals["show_hover_highlight"]
             self._view._scene.set_hover_highlight(self._hover_highlight_val)
+        if vals.get("time_decimals", self._time_decimals_val) != self._time_decimals_val:
+            self._time_decimals_val = vals["time_decimals"]
+            self._view._scene.set_time_decimals(self._time_decimals_val)
+            self._cpu_load_graph.set_time_decimals(self._time_decimals_val)
+            self._cursor_bar.rebuild(self._view._scene.cursor_times(), self._trace,
+                                     time_decimals=self._time_decimals_val)
+            self._update_status_for_active_tab()
+            self._rebuild_bookmark_list()
+            self._rebuild_annotation_list()
+            self._rebuild_cursor_table()
         if vals["colorblind_safe"] != self._colorblind_val:
             self._colorblind_val = vals["colorblind_safe"]
             self._set_colorblind_safe(self._colorblind_val)
@@ -5669,6 +5688,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             updates["show_cpu_load"] = str(self._show_cpu_load).lower()
         if snap["show_hover_highlight"] != self._hover_highlight_val:
             updates["hover_highlight"] = str(self._hover_highlight_val).lower()
+        if snap.get("time_decimals", self._time_decimals_val) != self._time_decimals_val:
+            updates["time_decimals"] = str(self._time_decimals_val)
         if snap["colorblind_safe"] != self._colorblind_val:
             updates["colorblind_safe"] = str(self._colorblind_val).lower()
         if snap["label_width"] != self._label_width_val:
@@ -5719,6 +5740,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "cpu_load_row_h":           self._cpu_load_row_h_val,
             "cpu_budget_pct":           self._settings.get_float("analysis", "cpu_budget_pct", 0.0),
             "task_deadlines_text":      self._settings.get("analysis", "task_deadlines", ""),
+            "time_decimals":            self._time_decimals_val,
         }
         dlg = _SettingsDialog(
             self,
@@ -5746,6 +5768,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             cpu_load_row_h=self._cpu_load_row_h_val,
             cpu_budget_pct=_snap["cpu_budget_pct"],
             task_deadlines_text=_snap["task_deadlines_text"],
+            time_decimals=self._time_decimals_val,
         )
         dlg.live_preview.connect(lambda: self._apply_settings_preview({
             "is_dark":                  dlg.is_dark,
@@ -5769,6 +5792,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "sti_line_style":           dlg.sti_line_style,
             "timescale_per_px_default": dlg.timescale_per_px_default,
             "cpu_load_row_h":           dlg.cpu_load_row_h,
+            "time_decimals":            dlg.time_decimals,
         }))
         # The dialog carries its own scoped stylesheet (set at construction
         # time).  Re-apply it on every live_preview so that switching the
@@ -5898,7 +5922,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._placed_cursor_count = placed_n
         if hasattr(self, "_stats_panel"):
             self._stats_panel.set_cursor_times(times, refresh_stats=refresh_stats)
-        self._cursor_bar.rebuild(times, self._trace)
+        self._cursor_bar.rebuild(times, self._trace, time_decimals=self._time_decimals_val)
         has_range = len(times) >= 2
         self._act_zoom_range.setEnabled(has_range)
         self._tb_zoom_range_btn.setEnabled(has_range)
@@ -5947,7 +5971,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 if b.id == mark_id:
                     b.ns = new_ns
                     if b.label.startswith("Bookmark @"):
-                        b.label = f"Bookmark @{_format_time(new_ns, unit, decimals=3)}"
+                        b.label = f"Bookmark @{_format_time(new_ns, unit, decimals=self._time_decimals_val)}"
                     break
             self._rebuild_bookmark_list()
         else:
@@ -5997,14 +6021,14 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         for row, ns in enumerate(sorted_times):
             ci = QTableWidgetItem(f"C{row + 1}")
             ci.setData(Qt.ItemDataRole.UserRole, ns)
-            ti = QTableWidgetItem(_format_time(ns, unit, decimals=3))
+            ti = QTableWidgetItem(_format_time(ns, unit, decimals=self._time_decimals_val))
             task_item = QTableWidgetItem(self._task_at_time(ns))
             if row == 0:
                 delta_item = QTableWidgetItem("—")
             else:
                 dt = ns - c1
                 sign = "+" if dt >= 0 else ""
-                delta_item = QTableWidgetItem(f"{sign}{_format_time(abs(dt), unit, decimals=3)}")
+                delta_item = QTableWidgetItem(f"{sign}{_format_time(abs(dt), unit, decimals=self._time_decimals_val)}")
             for it in (ci, ti, task_item, delta_item):
                 it.setFlags(it.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self._cursor_table.setItem(row, 0, ci)

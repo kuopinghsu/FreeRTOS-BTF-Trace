@@ -278,6 +278,18 @@
                 step="1"
               >
             </label>
+            <label class="settings-row">
+              <span class="settings-label">Time display precision</span>
+              <input
+                v-model.number="draft.timeDecimals"
+                class="settings-input"
+                type="number"
+                min="0"
+                max="9"
+                step="1"
+              >
+              <span class="settings-unit">digits</span>
+            </label>
 
             <h3 class="settings-section">CPU load graph</h3>
             <label class="settings-row">
@@ -520,7 +532,7 @@ function onSave() {
 }
 .settings-row {
   display: grid;
-  grid-template-columns: 1fr 110px auto;
+  grid-template-columns: 1fr 110px 36px;
   align-items: center;
   gap: 10px;
   font-size: var(--ui-font-size, 8px);

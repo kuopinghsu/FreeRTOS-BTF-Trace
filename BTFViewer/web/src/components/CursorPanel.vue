@@ -18,7 +18,7 @@
             class="cursor-time clickable"
             title="Jump to cursor"
             @click="emit('jumpToCursor', cur)"
-          >{{ formatTime(cur, timeScale) }}</span>
+          >{{ formatTime(cur, timeScale, timeDecimals) }}</span>
           <button
             class="cursor-del"
             title="Remove cursor"
@@ -41,7 +41,7 @@
           class="delta-row"
         >
           <span class="delta-label">Δ{{ d.index }}</span>
-          <span class="delta-value">{{ formatTime(d.delta, timeScale) }}</span>
+          <span class="delta-value">{{ formatTime(d.delta, timeScale, timeDecimals) }}</span>
           <span class="delta-freq">({{ d.freq }})</span>
         </div>
       </template>
@@ -107,9 +107,10 @@ import { CURSOR_COLORS } from '../utils/cursorColors.js'
 import { cursorComparisonRows, cursorSortedPlaced, cursorDeltaSegments } from '../utils/cursorAnalysis.js'
 
 const props = defineProps({
-  cursors:   { type: Array, required: true },
-  trace:     { type: Object, default: null },
-  timeScale: { type: String, default: 'ns' },
+  cursors:      { type: Array, required: true },
+  trace:        { type: Object, default: null },
+  timeScale:    { type: String, default: 'ns' },
+  timeDecimals: { type: Number, default: 3 },
 })
 
 const emit = defineEmits(['deleteCursor', 'jumpToCursor', 'clearAll'])
@@ -123,7 +124,7 @@ const comparisonRows = computed(() => {
 
 const deltas = computed(() => {
   const sorted = cursorSortedPlaced(props.cursors)
-  return cursorDeltaSegments(sorted, props.timeScale)
+  return cursorDeltaSegments(sorted, props.timeScale, props.timeDecimals)
 })
 </script>
 

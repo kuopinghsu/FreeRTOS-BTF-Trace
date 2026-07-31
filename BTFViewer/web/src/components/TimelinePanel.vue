@@ -285,6 +285,8 @@ const props = defineProps({
   persistedViewport: { type: Object, default: null },
   /** Force WebGL segment renderer on/off; auto when unset (traces with 5k+ segments). */
   useWebGL: { type: Boolean, default: null },
+  /** Decimal-digit precision for times shown in the segment-hover tooltip. */
+  timeDecimals: { type: Number, default: 3 },
 })
 const emit = defineEmits([
   'viewportChange', 'cursorsChange', 'hoverTimeChange', 'highlightChange', 'highlightClick',
@@ -444,7 +446,7 @@ const segmentHover = ref(null)
 const segmentHoverPos = reactive({ x: 0, y: 0 })
 const segmentTooltipLines = computed(() => {
   if (!segmentHover.value || !props.trace) return []
-  return buildSegmentTooltipLines(props.trace, segmentHover.value, formatTime, taskDisplayName)
+  return buildSegmentTooltipLines(props.trace, segmentHover.value, formatTime, taskDisplayName, props.timeDecimals)
 })
 const hoverTime   = ref(null)
 const rangeSelect = ref(null)  // { t0, t1 } while middle-dragging a zoom region
@@ -759,21 +761,21 @@ function paintHoverOverlay() {
     const bodyH   = canvasH
     const pxPerNs = bodyH / (timeEnd - timeStart)
     drawMarksVertical(ctx, marks, props.trace, timeStart, pxPerNs, canvasW, canvasH, hh, darkMode, props.options.selectedMarkId ?? null)
-    drawCursorsVertical(ctx, props.cursors, props.trace, timeStart, pxPerNs, canvasW, canvasH, hh, darkMode)
+    drawCursorsVertical(ctx, props.cursors, props.trace, timeStart, pxPerNs, canvasW, canvasH, hh, darkMode, props.timeDecimals)
     drawFindHitsVertical(ctx, props.findHits, props.findMarkerNs, props.trace, timeStart, pxPerNs, canvasW, canvasH, hh, darkMode)
     if (rangeSelect.value)
       drawRangeSelectVertical(ctx, rangeSelect.value.t0, rangeSelect.value.t1, timeStart, pxPerNs, canvasW, canvasH, hh, darkMode)
     if (hoverTime.value !== null)
-      drawHoverLineVertical(ctx, hoverTime.value, props.trace, timeStart, pxPerNs, canvasW, canvasH, hh, darkMode)
+      drawHoverLineVertical(ctx, hoverTime.value, props.trace, timeStart, pxPerNs, canvasW, canvasH, hh, darkMode, props.timeDecimals)
   } else {
     const pxPerNs = canvasW / (timeEnd - timeStart)
     drawMarksHorizontal(ctx, marks, props.trace, timeStart, pxPerNs, canvasW, canvasH, darkMode, props.options.selectedMarkId ?? null)
-    drawCursors(ctx, props.cursors, props.trace, timeStart, pxPerNs, canvasW, canvasH, darkMode)
+    drawCursors(ctx, props.cursors, props.trace, timeStart, pxPerNs, canvasW, canvasH, darkMode, props.timeDecimals)
     drawFindHits(ctx, props.findHits, props.findMarkerNs, props.trace, timeStart, pxPerNs, canvasW, canvasH, darkMode)
     if (rangeSelect.value)
       drawRangeSelect(ctx, rangeSelect.value.t0, rangeSelect.value.t1, timeStart, pxPerNs, canvasW, canvasH, darkMode)
     if (hoverTime.value !== null)
-      drawHoverLine(ctx, hoverTime.value, props.trace, timeStart, pxPerNs, canvasW, canvasH, darkMode)
+      drawHoverLine(ctx, hoverTime.value, props.trace, timeStart, pxPerNs, canvasW, canvasH, darkMode, props.timeDecimals)
   }
 }
 
@@ -961,7 +963,7 @@ function onAddAnnotation() {
 function onCopyCursorTime() {
   contextMenu.visible = false
   if (!props.trace) return
-  const label = formatTime(contextMenu.ns, props.trace.timeScale)
+  const label = formatTime(contextMenu.ns, props.trace.timeScale, props.timeDecimals)
   navigator.clipboard?.writeText(label).catch(() => {})
 }
 

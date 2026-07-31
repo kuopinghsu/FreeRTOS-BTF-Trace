@@ -216,16 +216,16 @@ export function extremeSegmentNote(trace, mk, kind, seg, findMax) {
 }
 
 /** Build multi-line tooltip text for a segment hover. */
-export function segmentTooltipLines(trace, seg, formatTimeFn, taskDisplayNameFn) {
+export function segmentTooltipLines(trace, seg, formatTimeFn, taskDisplayNameFn, decimals = 3) {
   if (!seg) return []
   const scale = trace?.timeScale || 'ns'
   const dur = seg.end - seg.start
   const lines = [
     { key: 'Task', val: seg.task, bold: true },
     { key: 'Core', val: seg.core },
-    { key: 'Start', val: formatTimeFn(seg.start, scale) },
-    { key: 'End', val: formatTimeFn(seg.end, scale) },
-    { key: 'Duration', val: formatTimeFn(dur, scale) },
+    { key: 'Start', val: formatTimeFn(seg.start, scale, decimals) },
+    { key: 'End', val: formatTimeFn(seg.end, scale, decimals) },
+    { key: 'Duration', val: formatTimeFn(dur, scale, decimals) },
   ]
   if (trace) {
     const { prev, next, index, total } = segCoreNeighbors(trace, seg)
@@ -233,18 +233,18 @@ export function segmentTooltipLines(trace, seg, formatTimeFn, taskDisplayNameFn)
     if (prev) {
       lines.push({
         key: '← Prev',
-        val: `${taskDisplayNameFn(prev.task)} (${formatTimeFn(prev.end, scale)})`,
+        val: `${taskDisplayNameFn(prev.task)} (${formatTimeFn(prev.end, scale, decimals)})`,
       })
     }
     if (next) {
       lines.push({
         key: '→ Next',
-        val: `${taskDisplayNameFn(next.task)} (${formatTimeFn(next.start, scale)})`,
+        val: `${taskDisplayNameFn(next.task)} (${formatTimeFn(next.start, scale, decimals)})`,
       })
     }
     if (prev) {
       const gap = seg.start - prev.end
-      if (gap > 0) lines.push({ key: 'Gap before', val: formatTimeFn(gap, scale) })
+      if (gap > 0) lines.push({ key: 'Gap before', val: formatTimeFn(gap, scale, decimals) })
     }
   }
   return lines

@@ -5,7 +5,7 @@
 import { taskDisplayName, taskMergeKey } from './colors.js'
 import { formatTime } from './timeFormat.js'
 
-export function computeCursorRangeStats(trace, cursors) {
+export function computeCursorRangeStats(trace, cursors, decimals = 3) {
   if (!trace) return null
   const placed = (cursors || []).filter(c => c !== null)
   if (placed.length < 2) return null
@@ -43,7 +43,7 @@ export function computeCursorRangeStats(trace, cursors) {
   }
 
   const result = {
-    span: formatTime(dt, scale),
+    span: formatTime(dt, scale, decimals),
     switches,
     topTask,
     topPct: topTask ? (100.0 * topNs / dt).toFixed(1) : null,
@@ -53,9 +53,9 @@ export function computeCursorRangeStats(trace, cursors) {
     const minD = Math.min(...durations)
     const maxD = Math.max(...durations)
     const avgD = Math.round(durations.reduce((a, b) => a + b, 0) / durations.length)
-    result.dMin = formatTime(minD, scale)
-    result.dMax = formatTime(maxD, scale)
-    result.dAvg = formatTime(avgD, scale)
+    result.dMin = formatTime(minD, scale, decimals)
+    result.dMax = formatTime(maxD, scale, decimals)
+    result.dAvg = formatTime(avgD, scale, decimals)
   }
   return result
 }

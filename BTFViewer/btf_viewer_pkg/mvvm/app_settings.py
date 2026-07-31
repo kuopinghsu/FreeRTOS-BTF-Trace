@@ -16,6 +16,7 @@ from ..config import (
     STI_WAVEFORM_H,
     UI_FONT_SIZE,
     _DEFAULT_MAX_CURSORS,
+    _DEFAULT_TIME_DECIMALS,
     _HOVER_HIGHLIGHT_ENABLED,
     _TIMESCALE_PER_PX_DEFAULT,
 )
@@ -66,6 +67,7 @@ class AppSettingsViewModel(ViewModelBase):
         m.cpu_load_row_h = CPU_LOAD_ROW_H
         m.colorblind = False
         m.horizontal = True
+        m.time_decimals = _DEFAULT_TIME_DECIMALS
         self.settings_changed.emit()
         self.changed.emit()
 
@@ -282,6 +284,14 @@ class AppSettingsViewModel(ViewModelBase):
     def horizontal(self, value: bool) -> None:
         self._assign("horizontal", bool(value))
 
+    @property
+    def time_decimals(self) -> int:
+        return self._model.time_decimals
+
+    @time_decimals.setter
+    def time_decimals(self, value: int) -> None:
+        self._assign("time_decimals", max(0, min(int(value), 9)))
+
     def load_theme_from_rc(self, rc: "_RcSettings") -> None:
         self.is_dark = rc.get("view", "theme", "dark") == "dark"
 
@@ -314,5 +324,6 @@ class AppSettingsViewModel(ViewModelBase):
         m.show_stats = rc.get_bool("view", "show_stats", True)
         m.show_marks = rc.get_bool("view", "show_marks", True)
         m.show_find = rc.get_bool("view", "show_find", True)
+        m.time_decimals = rc.get_int("view", "time_decimals", _DEFAULT_TIME_DECIMALS)
         self.settings_changed.emit()
         self.changed.emit()

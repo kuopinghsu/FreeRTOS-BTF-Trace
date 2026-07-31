@@ -60,6 +60,7 @@ class TimelineScene(QGraphicsScene):
         self._row_height: int = ROW_HEIGHT              # row height (px)
         self._row_gap:    int = ROW_GAP                 # gap between rows (px)
         self._hover_highlight: bool = _HOVER_HIGHLIGHT_ENABLED
+        self._time_decimals: int = _DEFAULT_TIME_DECIMALS  # UI time-display decimal precision
         self._task_filter_q: str = ""
         self._migrated_only_filter: bool = False
         self._heatmap_filter_mks: Optional[set] = None
@@ -498,6 +499,11 @@ class TimelineScene(QGraphicsScene):
         self._hover_highlight = enabled
         if not enabled:
             self.clear_hover()
+
+    def set_time_decimals(self, n: int) -> None:
+        """Change the decimal-digit precision of UI time displays and rebuild."""
+        self._time_decimals = max(0, min(int(n), 9))
+        self.rebuild()
 
     def set_find_hits(self, ns_list: list) -> None:
         """Update the find-hit overlay with a new list of ns timestamps."""
@@ -1128,7 +1134,7 @@ class TimelineScene(QGraphicsScene):
         scene_r = self.sceneRect()
         font = _monospace_font(max(8, self._font_size - 1))
         fm   = QFontMetrics(font)
-        t_str = _format_time(self._hover_ns, self._trace.time_scale, decimals=3)
+        t_str = _format_time(self._hover_ns, self._trace.time_scale, decimals=self._time_decimals)
         tw = fm.horizontalAdvance(t_str) + 8
         th = fm.height()
         if self._is_dark_ui:
@@ -1252,7 +1258,7 @@ class TimelineScene(QGraphicsScene):
                 self.addItem(line)
                 self._cursor_items.append(line)
 
-                t_str = _format_time(ns, self._trace.time_scale, decimals=3)
+                t_str = _format_time(ns, self._trace.time_scale, decimals=self._time_decimals)
                 lbl = self.addSimpleText(f"C{orig_idx+1}: {t_str}", font_big)
                 lbl.setBrush(QBrush(QColor("#000000")))
                 lbl.setZValue(32)
@@ -1278,7 +1284,7 @@ class TimelineScene(QGraphicsScene):
                 if order > 0:
                     prev_ns = sorted_cursors[order - 1][1]
                     delta   = abs(ns - prev_ns)
-                    d_str   = f"Δ {_format_time(delta, self._trace.time_scale, decimals=3)}"
+                    d_str   = f"Δ {_format_time(delta, self._trace.time_scale, decimals=self._time_decimals)}"
                     mid_x   = self._label_width + self._ns_to_px((ns + prev_ns) // 2)
                     d_lbl   = self.addSimpleText(d_str, font)
                     d_w     = QFontMetrics(font).horizontalAdvance(d_str)
@@ -1310,7 +1316,7 @@ class TimelineScene(QGraphicsScene):
                 self.addItem(line)
                 self._cursor_items.append(line)
 
-                t_str = _format_time(ns, self._trace.time_scale, decimals=3)
+                t_str = _format_time(ns, self._trace.time_scale, decimals=self._time_decimals)
                 lbl = self.addSimpleText(f"C{orig_idx+1}: {t_str}", font_big)
                 lbl.setBrush(QBrush(QColor("#000000")))
                 lbl.setZValue(38)
@@ -1338,7 +1344,7 @@ class TimelineScene(QGraphicsScene):
                 if order > 0:
                     prev_ns = sorted_cursors[order - 1][1]
                     delta   = abs(ns - prev_ns)
-                    d_str   = f"Δ {_format_time(delta, self._trace.time_scale, decimals=3)}"
+                    d_str   = f"Δ {_format_time(delta, self._trace.time_scale, decimals=self._time_decimals)}"
                     d_lbl   = self.addSimpleText(d_str, font)
                     dh      = QFontMetrics(font).height()
                     dw      = QFontMetrics(font).horizontalAdvance(d_str)
@@ -1811,7 +1817,7 @@ class TimelineScene(QGraphicsScene):
 
         batch = _BatchRowItem(
             band_rect, seg_data, trace.time_scale, xs=xs,
-            time_min=vp.time_min)
+            time_min=vp.time_min, time_decimals=self._time_decimals)
         batch.setZValue(batch_z)
         self.addItem(batch)
         if freeze_top:
@@ -2431,7 +2437,8 @@ class TimelineScene(QGraphicsScene):
                 label_fm=fm_inline if _inline_labels else None,
                 label_text=disp if _inline_labels else "",
                 trace=trace,
-                xs=xs, time_min=vp.time_min, timescale_per_px=self._timescale_per_px)
+                xs=xs, time_min=vp.time_min, timescale_per_px=self._timescale_per_px,
+                time_decimals=self._time_decimals)
             batch.setZValue(1)
             self.addItem(batch)
 
@@ -2704,7 +2711,7 @@ class TimelineScene(QGraphicsScene):
                         QRectF(lw, y_top, timeline_w, self._row_height),
                         seg_data, trace.time_scale,
                         trace=trace,
-                        xs=xs, time_min=vp.time_min)
+                        xs=xs, time_min=vp.time_min, time_decimals=self._time_decimals)
                     batch.setZValue(1)
                     self.addItem(batch)
 
@@ -2805,7 +2812,8 @@ class TimelineScene(QGraphicsScene):
                     seg_data, trace.time_scale,
                     label_font=font_sm, label_fm=fm_sm, label_text=disp,
                     trace=trace,
-                    xs=xs, time_min=vp.time_min, timescale_per_px=self._timescale_per_px)
+                    xs=xs, time_min=vp.time_min, timescale_per_px=self._timescale_per_px,
+                    time_decimals=self._time_decimals)
                 batch.setZValue(1)
                 self.addItem(batch)
 
@@ -3023,7 +3031,7 @@ class TimelineScene(QGraphicsScene):
                         QRectF(x_left, label_row_h, col_w, timeline_h),
                         seg_data, trace.time_scale,
                         trace=trace,
-                        xs=xs, time_min=vp.time_min)
+                        xs=xs, time_min=vp.time_min, time_decimals=self._time_decimals)
                     batch.setZValue(1)
                     self.addItem(batch)
 
@@ -3110,7 +3118,8 @@ class TimelineScene(QGraphicsScene):
                     seg_data, trace.time_scale,
                     label_font=font_sm, label_fm=fm_sm, label_text=disp,
                     trace=trace,
-                    xs=xs, time_min=vp.time_min, timescale_per_px=self._timescale_per_px)
+                    xs=xs, time_min=vp.time_min, timescale_per_px=self._timescale_per_px,
+                    time_decimals=self._time_decimals)
                 batch.setZValue(1)
                 self.addItem(batch)
 

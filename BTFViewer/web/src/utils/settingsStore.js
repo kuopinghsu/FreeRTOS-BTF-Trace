@@ -29,6 +29,7 @@ export const DEFAULT_SETTINGS = {
   cpuLoadRowH: 30,
   cpuBudgetPct: 0,
   taskDeadlines: {},
+  timeDecimals: 3,
 }
 
 function clampInt(v, lo, hi, fallback) {
@@ -70,6 +71,7 @@ export function normalizeSettings(raw) {
     cpuLoadRowH: clampInt(s.cpuLoadRowH, 16, 120, DEFAULT_SETTINGS.cpuLoadRowH),
     cpuBudgetPct: clampFloat(s.cpuBudgetPct, 0, 100, DEFAULT_SETTINGS.cpuBudgetPct),
     taskDeadlines: (s.taskDeadlines && typeof s.taskDeadlines === 'object') ? { ...s.taskDeadlines } : {},
+    timeDecimals: clampInt(s.timeDecimals, 0, 9, DEFAULT_SETTINGS.timeDecimals),
   }
 }
 

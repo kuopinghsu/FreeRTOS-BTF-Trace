@@ -220,6 +220,7 @@ _MAX_SCENE_TIMELINE_PX   = 2_000_000_000
 # Virtual time-axis scrollbar maps the full trace into this range when zoomed in.
 _VIRT_SCROLL_MAX         = 2_000_000_000
 _HOVER_HIGHLIGHT_ENABLED = False  # Highlight task bars when hovering the label (default off).
+_DEFAULT_TIME_DECIMALS  = 3       # Decimal digits shown in UI time displays (tooltips, cursors, etc.) (0-9).
 # _BatchRowItem.paint() LOD thresholds (Qt levelOfDetail: 1.0 = 100% zoom).
 _PAINT_LOD_COARSE        = 0.45   # Below: merge nearby segments, skip pen outlines.
 _PAINT_LOD_MICRO         = 0.12   # Below: draw one tinted activity bar per row.

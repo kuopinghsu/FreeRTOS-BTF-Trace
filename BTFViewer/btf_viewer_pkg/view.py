@@ -2887,7 +2887,7 @@ class TimelineView(QGraphicsView):
         # Place cursor
         menu.addAction(
             _svg_icon(_IC_CURSOR, _icon_color),
-            f"Place cursor here  ({_format_time(ns, self._scene._trace.time_scale, decimals=3) if self._scene._trace else ''})",
+            f"Place cursor here  ({_format_time(ns, self._scene._trace.time_scale, decimals=self._scene._time_decimals) if self._scene._trace else ''})",
             lambda: (self.pre_change.emit(), self._scene.add_cursor(ns),
                      self.cursors_changed.emit(self._scene.cursor_times()))
         )
@@ -2910,13 +2910,13 @@ class TimelineView(QGraphicsView):
             # Bookmark icon - flag/ribbon shape
             menu.addAction(
                 _svg_icon("M2 2a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v13.5a.5.5 0 0 1-.74.439L8 13.069l-5.26 2.87A.5.5 0 0 1 2 15.5V2zm2-1a1 1 0 0 0-1 1v12.566l4.74-2.586a.5.5 0 0 1 .48 0L13 14.566V2a1 1 0 0 0-1-1H4z", _icon_color),
-                f"Add Bookmark here  ({_format_time(ns, self._scene._trace.time_scale, decimals=3)})",
+                f"Add Bookmark here  ({_format_time(ns, self._scene._trace.time_scale, decimals=self._scene._time_decimals)})",
                 lambda: self.bookmark_requested.emit(ns)
             )
             # Annotation icon - pencil/note shape
             menu.addAction(
                 _svg_icon("M12.854 0.146a.5.5 0 0 0-.707 0L10.5 1.793 14.207 5.5l1.647-1.646a.5.5 0 0 0 0-.708l-3-3zm.646 6.061L9.793 2.5 3.293 9H3.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.207l6.5-6.5zm-7.468 7.468A.5.5 0 0 1 6 13.5V13h-.5a.5.5 0 0 1-.5-.5V12h-.5a.5.5 0 0 1-.5-.5V11h-.5a.5.5 0 0 1-.5-.5V10h-.5a.499.499 0 0 1-.175-.032l-.179.178a.5.5 0 0 0-.11.168l-2 5a.5.5 0 0 0 .65.65l5-2a.5.5 0 0 0 .168-.11l.178-.178z", _icon_color),
-                f"Add Annotation here  ({_format_time(ns, self._scene._trace.time_scale, decimals=3)})",
+                f"Add Annotation here  ({_format_time(ns, self._scene._trace.time_scale, decimals=self._scene._time_decimals)})",
                 lambda: self.annotation_requested.emit(ns)
             )
             _has_bm = getattr(self, '_has_bookmarks', False)

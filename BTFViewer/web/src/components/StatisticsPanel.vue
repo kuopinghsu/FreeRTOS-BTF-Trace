@@ -136,7 +136,7 @@
           class="stats-section-resizer"
           role="separator"
           aria-label="Resize core utilisation"
-          @mousedown="onTableResizeStart('cores', $event)"
+          @mousedown="onTableResizeStart('cores', $event, coreStats.length)"
         />
       </template>
     </template>
@@ -156,11 +156,15 @@
             <table class="stats-table">
               <thead>
                 <tr>
-                  <th>Core</th><th>Active %</th><th>Idle %</th><th>Tick %</th><th>Gap %</th>
+                  <th :class="thSortClass('core_breakdown', 'core')" @click="toggleTableSort('core_breakdown', 'core')">Core</th>
+                  <th :class="thSortClass('core_breakdown', 'active')" @click="toggleTableSort('core_breakdown', 'active')">Active %</th>
+                  <th :class="thSortClass('core_breakdown', 'idle')" @click="toggleTableSort('core_breakdown', 'idle')">Idle %</th>
+                  <th :class="thSortClass('core_breakdown', 'tick')" @click="toggleTableSort('core_breakdown', 'tick')">Tick %</th>
+                  <th :class="thSortClass('core_breakdown', 'gap')" @click="toggleTableSort('core_breakdown', 'gap')">Gap %</th>
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="row in coreTimeBreakdown" :key="row.core">
+                <tr v-for="row in sortedCoreTimeBreakdown" :key="row.core">
                   <td class="task-col">{{ row.core }}</td>
                   <td>{{ (100 * row.activeNs / row.spanNs).toFixed(1) }}%</td>
                   <td>{{ (100 * row.idleNs / row.spanNs).toFixed(1) }}%</td>
@@ -244,7 +248,7 @@
         class="stats-section-resizer"
         role="separator"
         aria-label="Resize top tasks"
-        @mousedown="onTableResizeStart('tasks', $event)"
+        @mousedown="onTableResizeStart('tasks', $event, topTasks.length)"
       />
     </template>
 
@@ -549,12 +553,17 @@
             <table class="stats-table">
               <thead>
                 <tr>
-                  <th>From</th><th>To</th><th>Count</th><th>Bounces</th><th>Bounce %</th><th>Avg Gap</th>
+                  <th :class="thSortClass('core_pairs', 'from')" @click="toggleTableSort('core_pairs', 'from')">From</th>
+                  <th :class="thSortClass('core_pairs', 'to')" @click="toggleTableSort('core_pairs', 'to')">To</th>
+                  <th :class="thSortClass('core_pairs', 'count')" @click="toggleTableSort('core_pairs', 'count')">Count</th>
+                  <th :class="thSortClass('core_pairs', 'bounces')" @click="toggleTableSort('core_pairs', 'bounces')">Bounces</th>
+                  <th :class="thSortClass('core_pairs', 'bouncePct')" @click="toggleTableSort('core_pairs', 'bouncePct')">Bounce %</th>
+                  <th :class="thSortClass('core_pairs', 'avgGap')" @click="toggleTableSort('core_pairs', 'avgGap')">Avg Gap</th>
                 </tr>
               </thead>
               <tbody>
                 <tr
-                  v-for="row in corePairRows"
+                  v-for="row in sortedCorePairRows"
                   :key="`${row.fromCore}-${row.toCore}`"
                   class="stats-table-row"
                 >
@@ -1429,7 +1438,11 @@
             <table class="stats-table">
               <thead>
                 <tr>
-                  <th>Object</th><th>Holds</th><th>Issues</th><th>Avg hold</th><th>Status</th>
+                  <th :class="thSortClass('queue', 'object')" @click="toggleTableSort('queue', 'object')">Object</th>
+                  <th :class="thSortClass('queue', 'holds')" @click="toggleTableSort('queue', 'holds')">Holds</th>
+                  <th :class="thSortClass('queue', 'issues')" @click="toggleTableSort('queue', 'issues')">Issues</th>
+                  <th :class="thSortClass('queue', 'avg')" @click="toggleTableSort('queue', 'avg')">Avg hold</th>
+                  <th :class="thSortClass('queue', 'status')" @click="toggleTableSort('queue', 'status')">Status</th>
                 </tr>
               </thead>
               <tbody>
@@ -1469,12 +1482,18 @@
             <table class="stats-table">
               <thead>
                 <tr>
-                  <th>Task</th><th>Created</th><th>Deleted</th><th>Susp/Res</th><th>Alive</th><th>Events</th><th>Runs</th>
+                  <th :class="thSortClass('lifecycle', 'task')" @click="toggleTableSort('lifecycle', 'task')">Task</th>
+                  <th :class="thSortClass('lifecycle', 'created')" @click="toggleTableSort('lifecycle', 'created')">Created</th>
+                  <th :class="thSortClass('lifecycle', 'deleted')" @click="toggleTableSort('lifecycle', 'deleted')">Deleted</th>
+                  <th :class="thSortClass('lifecycle', 'suspRes')" @click="toggleTableSort('lifecycle', 'suspRes')">Susp/Res</th>
+                  <th :class="thSortClass('lifecycle', 'alive')" @click="toggleTableSort('lifecycle', 'alive')">Alive</th>
+                  <th :class="thSortClass('lifecycle', 'events')" @click="toggleTableSort('lifecycle', 'events')">Events</th>
+                  <th :class="thSortClass('lifecycle', 'runs')" @click="toggleTableSort('lifecycle', 'runs')">Runs</th>
                 </tr>
               </thead>
               <tbody>
                 <tr
-                  v-for="row in lifecycleStats"
+                  v-for="row in sortedLifecycleStats"
                   :key="row.mk"
                   class="stats-table-row clickable"
                   :title="`Click to highlight '${row.label}' in the timeline`"
@@ -1520,11 +1539,14 @@
             <table class="stats-table">
               <thead>
                 <tr>
-                  <th>Task</th><th>Mask</th><th>Observed Cores</th><th>Violations</th>
+                  <th :class="thSortClass('affinity', 'task')" @click="toggleTableSort('affinity', 'task')">Task</th>
+                  <th :class="thSortClass('affinity', 'mask')" @click="toggleTableSort('affinity', 'mask')">Mask</th>
+                  <th :class="thSortClass('affinity', 'observed')" @click="toggleTableSort('affinity', 'observed')">Observed Cores</th>
+                  <th :class="thSortClass('affinity', 'violations')" @click="toggleTableSort('affinity', 'violations')">Violations</th>
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="row in coreAffinityRows" :key="row.label">
+                <tr v-for="row in sortedAffinityRows" :key="row.label">
                   <td class="task-col">{{ row.label }}</td>
                   <td>{{ row.maskHex }}</td>
                   <td>{{ row.observedCores }}</td>
@@ -2368,6 +2390,10 @@ import {
   PRIORITY_SORT_ACCESSORS,
   SYNC_OBJECT_SORT_ACCESSORS,
   SYNC_ISSUE_SORT_ACCESSORS,
+  CORE_BREAKDOWN_SORT_ACCESSORS,
+  CORE_PAIR_SORT_ACCESSORS,
+  LIFECYCLE_SORT_ACCESSORS,
+  AFFINITY_SORT_ACCESSORS,
 } from '../utils/statsTableSort.js'
 import TraceCompareDialog from './TraceCompareDialog.vue'
 import { buildHistogramModel } from '../utils/histogramModel.js'
@@ -2585,6 +2611,9 @@ function scheduleStatsRefresh() {
 const TABLE_MIN_H = 80
 const TABLE_MAX_H = 480
 const STATS_MAX_VISIBLE_ROWS = 8
+// Core Utilisation auto-fits to the actual core count on load, capped at 4
+// rows (more cores scroll instead of growing the section further).
+const STATS_CORES_MAX_VISIBLE_ROWS = 4
 const STATS_UTIL_ROW_H = 16
 const STATS_UTIL_ROW_GAP = 3
 // Match .stats-table cell metrics: padding 3+3, border 1, line-height 14.
@@ -2599,12 +2628,15 @@ function statsTableViewportHeight(visibleRows = STATS_MAX_VISIBLE_ROWS, reserveH
   return h
 }
 
+function utilRowsHeight(visibleRows) {
+  return visibleRows * STATS_UTIL_ROW_H + Math.max(0, visibleRows - 1) * STATS_UTIL_ROW_GAP + 2
+}
+
 const STATS_TABLE_DEFAULT_H = statsTableViewportHeight()
 const STATS_TABLE_MIG_DEFAULT_H = statsTableViewportHeight(STATS_MAX_VISIBLE_ROWS, true)
-const STATS_UTIL_DEFAULT_H = STATS_MAX_VISIBLE_ROWS * STATS_UTIL_ROW_H + (STATS_MAX_VISIBLE_ROWS - 1) * STATS_UTIL_ROW_GAP + 2
+const STATS_UTIL_DEFAULT_H = utilRowsHeight(STATS_MAX_VISIBLE_ROWS)
 
 const localSectionHeights = ref({
-  cores: STATS_UTIL_DEFAULT_H,
   tasks: STATS_UTIL_DEFAULT_H,
   migrations: STATS_TABLE_MIG_DEFAULT_H,
   exec: STATS_TABLE_DEFAULT_H,
@@ -2647,6 +2679,11 @@ const tableSort = ref({
   sync_issues: defaultStatsTableSort(),
   intervals: defaultStatsTableSort(),
   tags: defaultStatsTableSort(),
+  core_breakdown: defaultStatsTableSort(),
+  core_pairs: defaultStatsTableSort(),
+  queue: defaultStatsTableSort(),
+  lifecycle: defaultStatsTableSort(),
+  affinity: defaultStatsTableSort(),
 })
 
 function toggleTableSort(tableId, col) {
@@ -2675,6 +2712,9 @@ function tableHeight(id) {
   if (id === 'affinity') {
     return statsTableViewportHeight(Math.min(Math.max(coreAffinityRows.value.length, 1), STATS_MAX_VISIBLE_ROWS))
   }
+  if (id === 'cores') {
+    return utilRowsHeight(Math.min(Math.max(coreStats.value.length, 1), STATS_CORES_MAX_VISIBLE_ROWS))
+  }
   return id === 'migrations' ? STATS_TABLE_MIG_DEFAULT_H : STATS_TABLE_DEFAULT_H
 }
 
@@ -2683,8 +2723,9 @@ function utilScrollStyle(rowCount, id = null) {
   if (id != null && localSectionHeights.value[id] != null) {
     h = localSectionHeights.value[id]
   } else {
-    const vis = Math.min(Math.max(rowCount, 1), STATS_MAX_VISIBLE_ROWS)
-    h = vis * STATS_UTIL_ROW_H + Math.max(0, vis - 1) * STATS_UTIL_ROW_GAP + 2
+    const maxRows = id === 'cores' ? STATS_CORES_MAX_VISIBLE_ROWS : STATS_MAX_VISIBLE_ROWS
+    const vis = Math.min(Math.max(rowCount, 1), maxRows)
+    h = utilRowsHeight(vis)
   }
   return { height: `${h}px`, overflowY: 'auto', overflowX: 'hidden', flexShrink: '0' }
 }
@@ -2692,10 +2733,13 @@ function utilScrollStyle(rowCount, id = null) {
 // Snap a dragged section height to the nearest whole-row increment so the
 // last visible row is never partially clipped (which made it look like the
 // row height "changes" while resizing).
-function quantizeSectionHeight(id, rawH) {
+function quantizeSectionHeight(id, rawH, rowCount = null) {
   if (id === 'cores' || id === 'tasks') {
     const unit = STATS_UTIL_ROW_H + STATS_UTIL_ROW_GAP
-    const minRows = Math.max(1, Math.ceil((TABLE_MIN_H + STATS_UTIL_ROW_GAP - 2) / unit))
+    let minRows = Math.max(1, Math.ceil((TABLE_MIN_H + STATS_UTIL_ROW_GAP - 2) / unit))
+    // Don't force space for more rows than actually exist (e.g. a 2-core
+    // trace should be shrinkable down to 2 rows, not stuck at the 5-row min).
+    if (rowCount != null) minRows = Math.min(minRows, Math.max(1, rowCount))
     const maxRows = Math.max(minRows, Math.floor((TABLE_MAX_H + STATS_UTIL_ROW_GAP - 2) / unit))
     const rows = Math.min(maxRows, Math.max(minRows, Math.round((rawH + STATS_UTIL_ROW_GAP - 2) / unit)))
     return rows * STATS_UTIL_ROW_H + (rows - 1) * STATS_UTIL_ROW_GAP + 2
@@ -2707,8 +2751,8 @@ function quantizeSectionHeight(id, rawH) {
   return base + rows * STATS_TABLE_ROW_H
 }
 
-function onTableResizeStart(id, e) {
-  _tableResize = { id, startY: e.clientY, startH: tableHeight(id) }
+function onTableResizeStart(id, e, rowCount = null) {
+  _tableResize = { id, startY: e.clientY, startH: tableHeight(id), rowCount }
   document.body.classList.add('row-resizing')
   document.addEventListener('mousemove', onTableResizeMove)
   document.addEventListener('mouseup', onTableResizeEnd)
@@ -2717,7 +2761,7 @@ function onTableResizeStart(id, e) {
 function onTableResizeMove(e) {
   if (!_tableResize) return
   const delta = e.clientY - _tableResize.startY
-  localSectionHeights.value[_tableResize.id] = quantizeSectionHeight(_tableResize.id, _tableResize.startH + delta)
+  localSectionHeights.value[_tableResize.id] = quantizeSectionHeight(_tableResize.id, _tableResize.startH + delta, _tableResize.rowCount)
 }
 
 function onTableResizeEnd() {
@@ -2989,7 +3033,7 @@ const queueStats = computed(() => {
 })
 
 const sortedQueueStats = computed(() =>
-  sortStatsRows(queueStats.value, tableSort.value.sync, SYNC_OBJECT_SORT_ACCESSORS))
+  sortStatsRows(queueStats.value, tableSort.value.queue, SYNC_OBJECT_SORT_ACCESSORS))
 
 const lifecycleStats = computed(() => {
   const tr = props.trace
@@ -2998,6 +3042,9 @@ const lifecycleStats = computed(() => {
   return buildTaskLifecycleRows(tr.stiEvents, tr.taskRepr, r?.lo ?? null, r?.hi ?? null, tr.taskCreateTimes, tr.segByMergeKey)
 })
 
+const sortedLifecycleStats = computed(() =>
+  sortStatsRows(lifecycleStats.value, tableSort.value.lifecycle, LIFECYCLE_SORT_ACCESSORS))
+
 const corePairRows = computed(() => {
   const tr = props.trace
   if (!tr?.migrations?.length) return []
@@ -3005,12 +3052,18 @@ const corePairRows = computed(() => {
   return buildCorePairRows(tr, r?.lo ?? null, r?.hi ?? null)
 })
 
+const sortedCorePairRows = computed(() =>
+  sortStatsRows(corePairRows.value, tableSort.value.core_pairs, CORE_PAIR_SORT_ACCESSORS))
+
 const coreTimeBreakdown = computed(() => {
   const tr = props.trace
   if (!tr?.coreNames?.length) return []
   const r = statsRange.value
   return buildCoreTimeBreakdown(tr, r?.lo ?? null, r?.hi ?? null)
 })
+
+const sortedCoreTimeBreakdown = computed(() =>
+  sortStatsRows(coreTimeBreakdown.value, tableSort.value.core_breakdown, CORE_BREAKDOWN_SORT_ACCESSORS))
 
 const _AFFINITY_NOTE_RE = /^affinity_set\s+(.+?)\s+(0x[0-9a-fA-F]+|\d+)\s*$/i
 const coreAffinityRows = computed(() => {
@@ -3058,6 +3111,9 @@ const coreAffinityRows = computed(() => {
   }
   return rows
 })
+
+const sortedAffinityRows = computed(() =>
+  sortStatsRows(coreAffinityRows.value, tableSort.value.affinity, AFFINITY_SORT_ACCESSORS))
 
 const deadlineViolations = computed(() => {
   const tr = props.trace

@@ -50,14 +50,15 @@ import { CURSOR_COLORS } from '../utils/cursorColors.js'
 import { cursorBarModel } from '../utils/cursorAnalysis.js'
 
 const props = defineProps({
-  cursors:   { type: Array, required: true },
-  timeScale: { type: String, default: 'ns' },
-  darkMode:  { type: Boolean, default: true },
+  cursors:      { type: Array, required: true },
+  timeScale:    { type: String, default: 'ns' },
+  darkMode:     { type: Boolean, default: true },
+  timeDecimals: { type: Number, default: 3 },
 })
 
 const emit = defineEmits(['jumpToCursor', 'deleteCursor'])
 
-const model = computed(() => cursorBarModel(props.cursors, props.timeScale))
+const model = computed(() => cursorBarModel(props.cursors, props.timeScale, props.timeDecimals))
 
 function pillStyle(slotIndex) {
   const color = CURSOR_COLORS[slotIndex % CURSOR_COLORS.length]

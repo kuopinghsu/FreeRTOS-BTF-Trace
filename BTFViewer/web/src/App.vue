@@ -109,6 +109,7 @@
             :cursors="cursors"
             :max-cursors="appSettings.maxCursors"
             :label-width="appSettings.labelWidth"
+            :time-decimals="appSettings.timeDecimals"
             :find-hits="findHits"
             :find-marker-ns="findMarkerNs"
             :persisted-viewport="timelineViewport"
@@ -260,6 +261,7 @@
                 ref="marksPanelRef"
                 :marks="marks"
                 :time-scale="trace.timeScale"
+                :time-decimals="appSettings.timeDecimals"
                 @add-bookmark="onAddMark"
                 @add-annotation="onAddAnnotationAtCenter"
                 @delete-mark="onDeleteMark"
@@ -742,9 +744,9 @@
     <div class="status-bar">
       <template v-if="trace">
         <span class="status-summary">
-          {{ trace.tasks.length }} tasks · {{ trace.segments.length.toLocaleString() }} segments ·
+          <template v-if="trace.meta?.creator">{{ trace.meta.creator }} · </template>{{ trace.tasks.length }} tasks · {{ trace.segments.length.toLocaleString() }} segments ·
           {{ trace.stiEvents.length.toLocaleString() }} STI events ·
-          {{ formatTime(trace.timeMax - trace.timeMin, trace.timeScale) }} total
+          {{ formatTime(trace.timeMax - trace.timeMin, trace.timeScale, appSettings.timeDecimals) }} total
         </span>
 
         <CursorBar
@@ -752,6 +754,7 @@
           :cursors="cursors"
           :time-scale="trace.timeScale"
           :dark-mode="timelineOptions.darkMode"
+          :time-decimals="appSettings.timeDecimals"
           @jump-to-cursor="timelinePanelRef?.jumpToNs($event)"
           @delete-cursor="onDeleteCursor"
         />
@@ -1249,7 +1252,7 @@ const traceInfo = computed(() => {
 const heatmapEnabled = computed(() => traceIsMultiCore(trace.value))
 
 const cursorRangeStats = computed(() =>
-  computeCursorRangeStats(trace.value, cursors.value))
+  computeCursorRangeStats(trace.value, cursors.value, appSettings.timeDecimals))
 
 const statusRangeLine = computed(() =>
   formatStatusRangeLine(cursorRangeStats.value))

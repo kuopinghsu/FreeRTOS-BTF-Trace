@@ -161,3 +161,37 @@ export const SYNC_ISSUE_SORT_ACCESSORS = {
   task: i => (i.taskLabel || '').toLowerCase(),
   core: i => (i.core || '').toLowerCase(),
 }
+
+export const CORE_BREAKDOWN_SORT_ACCESSORS = {
+  core: r => r.core,
+  active: r => r.activeNs / r.spanNs,
+  idle: r => r.idleNs / r.spanNs,
+  tick: r => r.tickNs / r.spanNs,
+  gap: r => r.gapNs / r.spanNs,
+}
+
+export const CORE_PAIR_SORT_ACCESSORS = {
+  from: r => r.fromCore,
+  to: r => r.toCore,
+  count: r => r.count,
+  bounces: r => r.bounces,
+  bouncePct: r => r.bouncePct,
+  avgGap: r => r.avgGapNs,
+}
+
+export const LIFECYCLE_SORT_ACCESSORS = {
+  task: r => r.label.toLowerCase(),
+  created: r => r.createNs ?? -Infinity,
+  deleted: r => r.deleteNs ?? -Infinity,
+  suspRes: r => r.suspendCount + r.resumeCount,
+  alive: r => r.aliveSpanNs,
+  events: r => r.eventCount,
+  runs: r => r.runCount,
+}
+
+export const AFFINITY_SORT_ACCESSORS = {
+  task: r => r.label.toLowerCase(),
+  mask: r => parseInt(r.maskHex, 16),
+  observed: r => r.observedCores.toLowerCase(),
+  violations: r => (r.violations === '—' ? '' : r.violations.toLowerCase()),
+}

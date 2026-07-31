@@ -263,6 +263,7 @@ class _CursorBarWidget(QWidget):
         self._delta_label: Optional[QLabel] = None
         self._is_dark: bool = True
         self._ui_font_size: int = UI_FONT_SIZE
+        self._time_decimals: int = 3
 
     def _delta_label_style(self) -> str:
         return (
@@ -313,7 +314,9 @@ class _CursorBarWidget(QWidget):
 
     # ------------------------------------------------------------------
 
-    def rebuild(self, times: list, trace) -> None:
+    def rebuild(self, times: list, trace, time_decimals: int | None = None) -> None:
+        if time_decimals is not None:
+            self._time_decimals = time_decimals
         if not times or trace is None:
             if self._pills or self._delta_label is not None:
                 self._clear_layout()
@@ -329,7 +332,7 @@ class _CursorBarWidget(QWidget):
             for i, (orig_idx, t) in enumerate(sorted_pairs):
                 color = colors[orig_idx % len(colors)]
                 badge = _CursorButton(
-                    f"C{orig_idx + 1}: {_format_time(t, ts, decimals=3)}", color,
+                    f"C{orig_idx + 1}: {_format_time(t, ts, decimals=self._time_decimals)}", color,
                     is_dark=self._is_dark, ui_font_size=self._ui_font_size)
                 badge.setToolTip(f"C{orig_idx + 1}: click to jump to this cursor")
                 del_btn = _CursorDeleteButton(color, is_dark=self._is_dark,
@@ -352,7 +355,7 @@ class _CursorBarWidget(QWidget):
                 for i in range(1, len(sorted_pairs)):
                     d = sorted_pairs[i][1] - sorted_pairs[i - 1][1]
                     freq_str = f"{1e9 / d:.1f} Hz" if d > 0 else "\u221e Hz"
-                    delta_parts.append(f"\u0394{i}={_format_time(d, ts, decimals=3)} ({freq_str})")
+                    delta_parts.append(f"\u0394{i}={_format_time(d, ts, decimals=self._time_decimals)} ({freq_str})")
                 dlbl = QLabel("   " + "   ".join(delta_parts))
                 dlbl.setStyleSheet(self._delta_label_style())
                 self._layout.addWidget(dlbl)
@@ -361,7 +364,7 @@ class _CursorBarWidget(QWidget):
             # Same count - update text in-place (no widget churn).
             for order, (orig_idx, t) in enumerate(sorted_pairs):
                 badge, del_btn = self._pills[order]
-                badge.setText(f"C{orig_idx + 1}: {_format_time(t, ts, decimals=3)}")
+                badge.setText(f"C{orig_idx + 1}: {_format_time(t, ts, decimals=self._time_decimals)}")
                 badge.setToolTip(f"C{orig_idx + 1}: click to jump to this cursor")
                 try:
                     badge.clicked.disconnect()
@@ -379,7 +382,7 @@ class _CursorBarWidget(QWidget):
                 for i in range(1, len(sorted_pairs)):
                     d = sorted_pairs[i][1] - sorted_pairs[i - 1][1]
                     freq_str = f"{1e9 / d:.1f} Hz" if d > 0 else "\u221e Hz"
-                    delta_parts.append(f"\u0394{i}={_format_time(d, ts, decimals=3)} ({freq_str})")
+                    delta_parts.append(f"\u0394{i}={_format_time(d, ts, decimals=self._time_decimals)} ({freq_str})")
                 self._delta_label.setText("   " + "   ".join(delta_parts))
 
 # ---------------------------------------------------------------------------
@@ -7700,7 +7703,8 @@ class _SettingsDialog(QDialog):
                  cpu_load: bool = True,
                  colorblind_safe: bool = False,
                  cpu_budget_pct: float = 0.0,
-                 task_deadlines_text: str = ""):
+                 task_deadlines_text: str = "",
+                 time_decimals: int = 3):
         super().__init__(parent, Qt.WindowType.Dialog)
         self.setWindowTitle("Settings")
         self.setModal(True)
@@ -7968,6 +7972,14 @@ class _SettingsDialog(QDialog):
         self._cursor_spin.setToolTip(f"Maximum number of simultaneous cursors (4\u2013{_MAX_CURSORS})")
         f3.addRow("Max cursors:", _inp(self._cursor_spin))
 
+        self._time_decimals_spin = QSpinBox()
+        self._time_decimals_spin.setRange(0, 9)
+        self._time_decimals_spin.setValue(time_decimals)
+        self._time_decimals_spin.setToolTip(
+            "Decimal-digit precision for times shown throughout the UI "
+            "(tooltips, cursors, bookmarks, status bar, etc.) (0\u20139)")
+        f3.addRow("Time display precision:", _inp(self._time_decimals_spin))
+
         f3.addRow(self._hline())
         f3.addRow("", self._section("CPU Load Graph"))
 
@@ -8056,6 +8068,7 @@ class _SettingsDialog(QDialog):
             self._sti_line_style_combo.currentIndexChanged,
             self._timescale_per_px_spin.valueChanged,
             self._cpu_row_h_spin.valueChanged,
+            self._time_decimals_spin.valueChanged,
         ):
             _sig.connect(self._schedule_live_preview)
 
@@ -8086,6 +8099,7 @@ class _SettingsDialog(QDialog):
         self._cpu_row_h_spin.setValue(CPU_LOAD_ROW_H)
         self._cpu_budget_spin.setValue(0.0)
         self._task_deadlines_edit.setPlainText("")
+        self._time_decimals_spin.setValue(_DEFAULT_TIME_DECIMALS)
 
     # -- result accessors (read after exec_() == Accepted) ------------------
     @property
@@ -8096,6 +8110,8 @@ class _SettingsDialog(QDialog):
     def ui_font_size(self) -> int:        return self._ui_font_spin.value()
     @property
     def max_cursors(self) -> int:         return self._cursor_spin.value()
+    @property
+    def time_decimals(self) -> int:       return self._time_decimals_spin.value()
     @property
     def show_sti(self) -> bool:           return self._sti_cb.isChecked()
     @property

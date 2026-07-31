@@ -1582,7 +1582,7 @@ function _drawCursorDeltaBadgeV(ctx, text, labelY, color, canvasH, headerH) {
   ctx.restore()
 }
 
-export function drawCursors(ctx, cursors, trace, timeStart, pxPerNs, canvasW, canvasH, _darkMode) {
+export function drawCursors(ctx, cursors, trace, timeStart, pxPerNs, canvasW, canvasH, _darkMode, decimals = 3) {
   if (!cursors || cursors.length === 0 || !trace) return
   const sorted = cursorSortedPlaced(cursors)
   if (!sorted.length) return
@@ -1608,7 +1608,7 @@ export function drawCursors(ctx, cursors, trace, timeStart, pxPerNs, canvasW, ca
     ctx.stroke()
     ctx.setLineDash([])
 
-    const label = `C${slotIndex + 1}: ${formatTime(t, trace.timeScale, 3)}`
+    const label = `C${slotIndex + 1}: ${formatTime(t, trace.timeScale, decimals)}`
     const tw = ctx.measureText(label).width + 8
     const th = 16
     const lx = Math.min(x + 3, canvasW - tw - 2)
@@ -1621,7 +1621,7 @@ export function drawCursors(ctx, cursors, trace, timeStart, pxPerNs, canvasW, ca
     if (order > 0) {
       const prevT = sorted[order - 1].t
       const delta = Math.abs(t - prevT)
-      const dStr = `Δ ${formatTime(delta, trace.timeScale, 3)}`
+      const dStr = `Δ ${formatTime(delta, trace.timeScale, decimals)}`
       const midX = ((t + prevT) / 2 - timeStart) * pxPerNs
       if (midX >= 0 && midX <= canvasW) {
         _drawCursorDeltaBadgeH(ctx, dStr, midX, color, canvasW, ly)
@@ -1676,7 +1676,7 @@ export function drawFindHitsVertical(ctx, hitNsList, activeNs, trace, timeStart,
 
 // ---- Hover line (mouse position indicator) ---------------------------------
 
-export function drawHoverLine(ctx, t, trace, timeStart, pxPerNs, canvasW, canvasH, darkMode) {
+export function drawHoverLine(ctx, t, trace, timeStart, pxPerNs, canvasW, canvasH, darkMode, decimals = 3) {
   const x = Math.round((t - timeStart) * pxPerNs)
   if (x < -1 || x > canvasW + 1) return
 
@@ -1693,7 +1693,7 @@ export function drawHoverLine(ctx, t, trace, timeStart, pxPerNs, canvasW, canvas
   ctx.setLineDash([])
 
   // Floating time label at the bottom of the ruler
-  const label = formatTime(t, trace.timeScale)
+  const label = formatTime(t, trace.timeScale, decimals)
   ctx.font = '10px monospace'
   ctx.textAlign = 'left'
   ctx.textBaseline = 'middle'
@@ -2672,7 +2672,7 @@ function drawStiColumnWaveform(ctx, trace, col, colW, timeStart, timeEnd, pxPerN
 
 // ---- Cursors (vertical mode – horizontal lines) ----------------------------
 
-export function drawCursorsVertical(ctx, cursors, trace, timeStart, pxPerNs, canvasW, canvasH, headerH, _darkMode) {
+export function drawCursorsVertical(ctx, cursors, trace, timeStart, pxPerNs, canvasW, canvasH, headerH, _darkMode, decimals = 3) {
   if (!cursors || cursors.length === 0 || !trace) return
   const sorted = cursorSortedPlaced(cursors)
   if (!sorted.length) return
@@ -2698,7 +2698,7 @@ export function drawCursorsVertical(ctx, cursors, trace, timeStart, pxPerNs, can
     ctx.stroke()
     ctx.setLineDash([])
 
-    const label = `C${slotIndex + 1}: ${formatTime(t, trace.timeScale, 3)}`
+    const label = `C${slotIndex + 1}: ${formatTime(t, trace.timeScale, decimals)}`
     const pad = 4
     const th = 14
     const tw = ctx.measureText(label).width + pad * 2
@@ -2711,7 +2711,7 @@ export function drawCursorsVertical(ctx, cursors, trace, timeStart, pxPerNs, can
     if (order > 0) {
       const prevT = sorted[order - 1].t
       const delta = Math.abs(t - prevT)
-      const dStr = `Δ ${formatTime(delta, trace.timeScale, 3)}`
+      const dStr = `Δ ${formatTime(delta, trace.timeScale, decimals)}`
       if (ty >= headerH && ty <= canvasH) {
         _drawCursorDeltaBadgeV(ctx, dStr, ty, color, canvasH, headerH)
       }
@@ -2722,7 +2722,7 @@ export function drawCursorsVertical(ctx, cursors, trace, timeStart, pxPerNs, can
 
 // ---- Hover line (vertical mode – horizontal dashed line) -------------------
 
-export function drawHoverLineVertical(ctx, t, trace, timeStart, pxPerNs, canvasW, canvasH, headerH, darkMode) {
+export function drawHoverLineVertical(ctx, t, trace, timeStart, pxPerNs, canvasW, canvasH, headerH, darkMode, decimals = 3) {
   const y = Math.round(headerH + (t - timeStart) * pxPerNs)
   if (y < headerH - 2 || y > canvasH + 2) return
 
@@ -2737,7 +2737,7 @@ export function drawHoverLineVertical(ctx, t, trace, timeStart, pxPerNs, canvasW
   ctx.setLineDash([])
 
   // Time label on ruler
-  const label = formatTime(t, trace.timeScale)
+  const label = formatTime(t, trace.timeScale, decimals)
   ctx.font = '10px monospace'
   ctx.textAlign = 'right'
   ctx.textBaseline = 'middle'

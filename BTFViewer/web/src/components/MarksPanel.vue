@@ -142,8 +142,9 @@ import { computed, nextTick, ref } from 'vue'
 import { formatTime } from '../renderer/TimelineRenderer.js'
 
 const props = defineProps({
-  marks: { type: Array, default: () => [] },
-  timeScale: { type: String, default: 'ns' },
+  marks:        { type: Array, default: () => [] },
+  timeScale:    { type: String, default: 'ns' },
+  timeDecimals: { type: Number, default: 3 },
 })
 
 const emit = defineEmits([
@@ -208,7 +209,7 @@ function markColor(mark) {
 }
 
 function fmt(ns) {
-  return formatTime(ns, props.timeScale, 2)
+  return formatTime(ns, props.timeScale, props.timeDecimals)
 }
 
 function exportCsv() {

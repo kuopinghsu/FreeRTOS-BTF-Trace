@@ -405,6 +405,7 @@ _MAX_SCENE_TIMELINE_PX   = 2_000_000_000
 # Virtual time-axis scrollbar maps the full trace into this range when zoomed in.
 _VIRT_SCROLL_MAX         = 2_000_000_000
 _HOVER_HIGHLIGHT_ENABLED = False  # Highlight task bars when hovering the label (default off).
+_DEFAULT_TIME_DECIMALS  = 3       # Decimal digits shown in UI time displays (tooltips, cursors, etc.) (0-9).
 # _BatchRowItem.paint() LOD thresholds (Qt levelOfDetail: 1.0 = 100% zoom).
 _PAINT_LOD_COARSE        = 0.45   # Below: merge nearby segments, skip pen outlines.
 _PAINT_LOD_MICRO         = 0.12   # Below: draw one tinted activity bar per row.
@@ -5386,6 +5387,7 @@ class TimelineScene(QGraphicsScene):
         self._row_height: int = ROW_HEIGHT              # row height (px)
         self._row_gap:    int = ROW_GAP                 # gap between rows (px)
         self._hover_highlight: bool = _HOVER_HIGHLIGHT_ENABLED
+        self._time_decimals: int = _DEFAULT_TIME_DECIMALS  # UI time-display decimal precision
         self._task_filter_q: str = ""
         self._migrated_only_filter: bool = False
         self._heatmap_filter_mks: Optional[set] = None
@@ -5824,6 +5826,11 @@ class TimelineScene(QGraphicsScene):
         self._hover_highlight = enabled
         if not enabled:
             self.clear_hover()
+
+    def set_time_decimals(self, n: int) -> None:
+        """Change the decimal-digit precision of UI time displays and rebuild."""
+        self._time_decimals = max(0, min(int(n), 9))
+        self.rebuild()
 
     def set_find_hits(self, ns_list: list) -> None:
         """Update the find-hit overlay with a new list of ns timestamps."""
@@ -6454,7 +6461,7 @@ class TimelineScene(QGraphicsScene):
         scene_r = self.sceneRect()
         font = _monospace_font(max(8, self._font_size - 1))
         fm   = QFontMetrics(font)
-        t_str = _format_time(self._hover_ns, self._trace.time_scale, decimals=3)
+        t_str = _format_time(self._hover_ns, self._trace.time_scale, decimals=self._time_decimals)
         tw = fm.horizontalAdvance(t_str) + 8
         th = fm.height()
         if self._is_dark_ui:
@@ -6578,7 +6585,7 @@ class TimelineScene(QGraphicsScene):
                 self.addItem(line)
                 self._cursor_items.append(line)
 
-                t_str = _format_time(ns, self._trace.time_scale, decimals=3)
+                t_str = _format_time(ns, self._trace.time_scale, decimals=self._time_decimals)
                 lbl = self.addSimpleText(f"C{orig_idx+1}: {t_str}", font_big)
                 lbl.setBrush(QBrush(QColor("#000000")))
                 lbl.setZValue(32)
@@ -6604,7 +6611,7 @@ class TimelineScene(QGraphicsScene):
                 if order > 0:
                     prev_ns = sorted_cursors[order - 1][1]
                     delta   = abs(ns - prev_ns)
-                    d_str   = f"Δ {_format_time(delta, self._trace.time_scale, decimals=3)}"
+                    d_str   = f"Δ {_format_time(delta, self._trace.time_scale, decimals=self._time_decimals)}"
                     mid_x   = self._label_width + self._ns_to_px((ns + prev_ns) // 2)
                     d_lbl   = self.addSimpleText(d_str, font)
                     d_w     = QFontMetrics(font).horizontalAdvance(d_str)
@@ -6636,7 +6643,7 @@ class TimelineScene(QGraphicsScene):
                 self.addItem(line)
                 self._cursor_items.append(line)
 
-                t_str = _format_time(ns, self._trace.time_scale, decimals=3)
+                t_str = _format_time(ns, self._trace.time_scale, decimals=self._time_decimals)
                 lbl = self.addSimpleText(f"C{orig_idx+1}: {t_str}", font_big)
                 lbl.setBrush(QBrush(QColor("#000000")))
                 lbl.setZValue(38)
@@ -6664,7 +6671,7 @@ class TimelineScene(QGraphicsScene):
                 if order > 0:
                     prev_ns = sorted_cursors[order - 1][1]
                     delta   = abs(ns - prev_ns)
-                    d_str   = f"Δ {_format_time(delta, self._trace.time_scale, decimals=3)}"
+                    d_str   = f"Δ {_format_time(delta, self._trace.time_scale, decimals=self._time_decimals)}"
                     d_lbl   = self.addSimpleText(d_str, font)
                     dh      = QFontMetrics(font).height()
                     dw      = QFontMetrics(font).horizontalAdvance(d_str)
@@ -7137,7 +7144,7 @@ class TimelineScene(QGraphicsScene):
 
         batch = _BatchRowItem(
             band_rect, seg_data, trace.time_scale, xs=xs,
-            time_min=vp.time_min)
+            time_min=vp.time_min, time_decimals=self._time_decimals)
         batch.setZValue(batch_z)
         self.addItem(batch)
         if freeze_top:
@@ -7757,7 +7764,8 @@ class TimelineScene(QGraphicsScene):
                 label_fm=fm_inline if _inline_labels else None,
                 label_text=disp if _inline_labels else "",
                 trace=trace,
-                xs=xs, time_min=vp.time_min, timescale_per_px=self._timescale_per_px)
+                xs=xs, time_min=vp.time_min, timescale_per_px=self._timescale_per_px,
+                time_decimals=self._time_decimals)
             batch.setZValue(1)
             self.addItem(batch)
 
@@ -8030,7 +8038,7 @@ class TimelineScene(QGraphicsScene):
                         QRectF(lw, y_top, timeline_w, self._row_height),
                         seg_data, trace.time_scale,
                         trace=trace,
-                        xs=xs, time_min=vp.time_min)
+                        xs=xs, time_min=vp.time_min, time_decimals=self._time_decimals)
                     batch.setZValue(1)
                     self.addItem(batch)
 
@@ -8131,7 +8139,8 @@ class TimelineScene(QGraphicsScene):
                     seg_data, trace.time_scale,
                     label_font=font_sm, label_fm=fm_sm, label_text=disp,
                     trace=trace,
-                    xs=xs, time_min=vp.time_min, timescale_per_px=self._timescale_per_px)
+                    xs=xs, time_min=vp.time_min, timescale_per_px=self._timescale_per_px,
+                    time_decimals=self._time_decimals)
                 batch.setZValue(1)
                 self.addItem(batch)
 
@@ -8349,7 +8358,7 @@ class TimelineScene(QGraphicsScene):
                         QRectF(x_left, label_row_h, col_w, timeline_h),
                         seg_data, trace.time_scale,
                         trace=trace,
-                        xs=xs, time_min=vp.time_min)
+                        xs=xs, time_min=vp.time_min, time_decimals=self._time_decimals)
                     batch.setZValue(1)
                     self.addItem(batch)
 
@@ -8436,7 +8445,8 @@ class TimelineScene(QGraphicsScene):
                     seg_data, trace.time_scale,
                     label_font=font_sm, label_fm=fm_sm, label_text=disp,
                     trace=trace,
-                    xs=xs, time_min=vp.time_min, timescale_per_px=self._timescale_per_px)
+                    xs=xs, time_min=vp.time_min, timescale_per_px=self._timescale_per_px,
+                    time_decimals=self._time_decimals)
                 batch.setZValue(1)
                 self.addItem(batch)
 
@@ -8966,13 +8976,15 @@ class _BatchRowItem(QGraphicsItem):
         Pre-computed coordinate pairs (start, end) and index into seg_data for
         O(log n) binary-search hit-testing and viewport clipping.  If not
         supplied, xs is derived from seg_data.x() at construction time.
+    time_decimals : int
+        Decimal-digit precision used when formatting times in this segment's tooltip.
     """
 
     def __init__(self, bounding_rect: QRectF, seg_data: list, time_scale: str,
                  label_font=None, label_fm=None, label_text: str = "",
                  presorted: bool = False, xs: Optional[list] = None,
                  time_min: int = 0, timescale_per_px: float = 0.0,
-                 trace: Optional["BtfTrace"] = None):
+                 trace: Optional["BtfTrace"] = None, time_decimals: int = 3):
         super().__init__()
         self._bounding_rect = bounding_rect
         self._seg_data      = seg_data      # [(QRectF, QBrush, QPen, seg|None)]
@@ -8980,6 +8992,7 @@ class _BatchRowItem(QGraphicsItem):
         self._time_min      = time_min
         self._timescale_per_px     = timescale_per_px
         self._trace         = trace
+        self._time_decimals = time_decimals
         self._label_font    = label_font
         self._label_fm      = label_fm
         self._label_text    = label_text
@@ -9307,9 +9320,9 @@ class _BatchRowItem(QGraphicsItem):
                     dur = seg.end - seg.start
                     tip = (f"<b>{seg.task}</b><br>"
                            f"Core: {seg.core}<br>"
-                           f"Start: {_format_time(seg.start, self._time_scale)}<br>"
-                           f"End:   {_format_time(seg.end,   self._time_scale)}<br>"
-                           f"Duration: {_format_time(dur, self._time_scale)}")
+                           f"Start: {_format_time(seg.start, self._time_scale, decimals=self._time_decimals)}<br>"
+                           f"End:   {_format_time(seg.end,   self._time_scale, decimals=self._time_decimals)}<br>"
+                           f"Duration: {_format_time(dur, self._time_scale, decimals=self._time_decimals)}")
                     tr = self._trace
                     if tr is not None:
                         prev, nxt, seg_idx, total = _seg_core_neighbors(tr, seg)
@@ -9318,14 +9331,14 @@ class _BatchRowItem(QGraphicsItem):
                         if prev is not None:
                             _, _, pnm = _parse_task_name(prev.task)
                             tip += (f"<br>← Prev on core: {_task_display_name(prev.task)} "
-                                    f"({_format_time(prev.end, self._time_scale)})")
+                                    f"({_format_time(prev.end, self._time_scale, decimals=self._time_decimals)})")
                         if nxt is not None:
                             tip += (f"<br>→ Next on core: {_task_display_name(nxt.task)} "
-                                    f"({_format_time(nxt.start, self._time_scale)})")
+                                    f"({_format_time(nxt.start, self._time_scale, decimals=self._time_decimals)})")
                         if prev is not None:
                             gap = seg.start - prev.end
                             if gap > 0:
-                                tip += f"<br>Gap before: {_format_time(gap, self._time_scale)}"
+                                tip += f"<br>Gap before: {_format_time(gap, self._time_scale, decimals=self._time_decimals)}"
                     _get_popup().show_at(event.screenPos(), tip)
                     super().hoverMoveEvent(event)
                     return
@@ -12740,7 +12753,7 @@ class TimelineView(QGraphicsView):
         # Place cursor
         menu.addAction(
             _svg_icon(_IC_CURSOR, _icon_color),
-            f"Place cursor here  ({_format_time(ns, self._scene._trace.time_scale, decimals=3) if self._scene._trace else ''})",
+            f"Place cursor here  ({_format_time(ns, self._scene._trace.time_scale, decimals=self._scene._time_decimals) if self._scene._trace else ''})",
             lambda: (self.pre_change.emit(), self._scene.add_cursor(ns),
                      self.cursors_changed.emit(self._scene.cursor_times()))
         )
@@ -12763,13 +12776,13 @@ class TimelineView(QGraphicsView):
             # Bookmark icon - flag/ribbon shape
             menu.addAction(
                 _svg_icon("M2 2a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v13.5a.5.5 0 0 1-.74.439L8 13.069l-5.26 2.87A.5.5 0 0 1 2 15.5V2zm2-1a1 1 0 0 0-1 1v12.566l4.74-2.586a.5.5 0 0 1 .48 0L13 14.566V2a1 1 0 0 0-1-1H4z", _icon_color),
-                f"Add Bookmark here  ({_format_time(ns, self._scene._trace.time_scale, decimals=3)})",
+                f"Add Bookmark here  ({_format_time(ns, self._scene._trace.time_scale, decimals=self._scene._time_decimals)})",
                 lambda: self.bookmark_requested.emit(ns)
             )
             # Annotation icon - pencil/note shape
             menu.addAction(
                 _svg_icon("M12.854 0.146a.5.5 0 0 0-.707 0L10.5 1.793 14.207 5.5l1.647-1.646a.5.5 0 0 0 0-.708l-3-3zm.646 6.061L9.793 2.5 3.293 9H3.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.207l6.5-6.5zm-7.468 7.468A.5.5 0 0 1 6 13.5V13h-.5a.5.5 0 0 1-.5-.5V12h-.5a.5.5 0 0 1-.5-.5V11h-.5a.5.5 0 0 1-.5-.5V10h-.5a.499.499 0 0 1-.175-.032l-.179.178a.5.5 0 0 0-.11.168l-2 5a.5.5 0 0 0 .65.65l5-2a.5.5 0 0 0 .168-.11l.178-.178z", _icon_color),
-                f"Add Annotation here  ({_format_time(ns, self._scene._trace.time_scale, decimals=3)})",
+                f"Add Annotation here  ({_format_time(ns, self._scene._trace.time_scale, decimals=self._scene._time_decimals)})",
                 lambda: self.annotation_requested.emit(ns)
             )
             _has_bm = getattr(self, '_has_bookmarks', False)
@@ -13992,6 +14005,7 @@ class _CursorBarWidget(QWidget):
         self._delta_label: Optional[QLabel] = None
         self._is_dark: bool = True
         self._ui_font_size: int = UI_FONT_SIZE
+        self._time_decimals: int = 3
 
     def _delta_label_style(self) -> str:
         return (
@@ -14042,7 +14056,9 @@ class _CursorBarWidget(QWidget):
 
     # ------------------------------------------------------------------
 
-    def rebuild(self, times: list, trace) -> None:
+    def rebuild(self, times: list, trace, time_decimals: int | None = None) -> None:
+        if time_decimals is not None:
+            self._time_decimals = time_decimals
         if not times or trace is None:
             if self._pills or self._delta_label is not None:
                 self._clear_layout()
@@ -14058,7 +14074,7 @@ class _CursorBarWidget(QWidget):
             for i, (orig_idx, t) in enumerate(sorted_pairs):
                 color = colors[orig_idx % len(colors)]
                 badge = _CursorButton(
-                    f"C{orig_idx + 1}: {_format_time(t, ts, decimals=3)}", color,
+                    f"C{orig_idx + 1}: {_format_time(t, ts, decimals=self._time_decimals)}", color,
                     is_dark=self._is_dark, ui_font_size=self._ui_font_size)
                 badge.setToolTip(f"C{orig_idx + 1}: click to jump to this cursor")
                 del_btn = _CursorDeleteButton(color, is_dark=self._is_dark,
@@ -14081,7 +14097,7 @@ class _CursorBarWidget(QWidget):
                 for i in range(1, len(sorted_pairs)):
                     d = sorted_pairs[i][1] - sorted_pairs[i - 1][1]
                     freq_str = f"{1e9 / d:.1f} Hz" if d > 0 else "\u221e Hz"
-                    delta_parts.append(f"\u0394{i}={_format_time(d, ts, decimals=3)} ({freq_str})")
+                    delta_parts.append(f"\u0394{i}={_format_time(d, ts, decimals=self._time_decimals)} ({freq_str})")
                 dlbl = QLabel("   " + "   ".join(delta_parts))
                 dlbl.setStyleSheet(self._delta_label_style())
                 self._layout.addWidget(dlbl)
@@ -14090,7 +14106,7 @@ class _CursorBarWidget(QWidget):
             # Same count - update text in-place (no widget churn).
             for order, (orig_idx, t) in enumerate(sorted_pairs):
                 badge, del_btn = self._pills[order]
-                badge.setText(f"C{orig_idx + 1}: {_format_time(t, ts, decimals=3)}")
+                badge.setText(f"C{orig_idx + 1}: {_format_time(t, ts, decimals=self._time_decimals)}")
                 badge.setToolTip(f"C{orig_idx + 1}: click to jump to this cursor")
                 try:
                     badge.clicked.disconnect()
@@ -14108,7 +14124,7 @@ class _CursorBarWidget(QWidget):
                 for i in range(1, len(sorted_pairs)):
                     d = sorted_pairs[i][1] - sorted_pairs[i - 1][1]
                     freq_str = f"{1e9 / d:.1f} Hz" if d > 0 else "\u221e Hz"
-                    delta_parts.append(f"\u0394{i}={_format_time(d, ts, decimals=3)} ({freq_str})")
+                    delta_parts.append(f"\u0394{i}={_format_time(d, ts, decimals=self._time_decimals)} ({freq_str})")
                 self._delta_label.setText("   " + "   ".join(delta_parts))
 
 # ---------------------------------------------------------------------------
@@ -21429,7 +21445,8 @@ class _SettingsDialog(QDialog):
                  cpu_load: bool = True,
                  colorblind_safe: bool = False,
                  cpu_budget_pct: float = 0.0,
-                 task_deadlines_text: str = ""):
+                 task_deadlines_text: str = "",
+                 time_decimals: int = 3):
         super().__init__(parent, Qt.WindowType.Dialog)
         self.setWindowTitle("Settings")
         self.setModal(True)
@@ -21697,6 +21714,14 @@ class _SettingsDialog(QDialog):
         self._cursor_spin.setToolTip(f"Maximum number of simultaneous cursors (4\u2013{_MAX_CURSORS})")
         f3.addRow("Max cursors:", _inp(self._cursor_spin))
 
+        self._time_decimals_spin = QSpinBox()
+        self._time_decimals_spin.setRange(0, 9)
+        self._time_decimals_spin.setValue(time_decimals)
+        self._time_decimals_spin.setToolTip(
+            "Decimal-digit precision for times shown throughout the UI "
+            "(tooltips, cursors, bookmarks, status bar, etc.) (0\u20139)")
+        f3.addRow("Time display precision:", _inp(self._time_decimals_spin))
+
         f3.addRow(self._hline())
         f3.addRow("", self._section("CPU Load Graph"))
 
@@ -21785,6 +21810,7 @@ class _SettingsDialog(QDialog):
             self._sti_line_style_combo.currentIndexChanged,
             self._timescale_per_px_spin.valueChanged,
             self._cpu_row_h_spin.valueChanged,
+            self._time_decimals_spin.valueChanged,
         ):
             _sig.connect(self._schedule_live_preview)
 
@@ -21815,6 +21841,7 @@ class _SettingsDialog(QDialog):
         self._cpu_row_h_spin.setValue(CPU_LOAD_ROW_H)
         self._cpu_budget_spin.setValue(0.0)
         self._task_deadlines_edit.setPlainText("")
+        self._time_decimals_spin.setValue(_DEFAULT_TIME_DECIMALS)
 
     # -- result accessors (read after exec_() == Accepted) ------------------
     @property
@@ -21825,6 +21852,8 @@ class _SettingsDialog(QDialog):
     def ui_font_size(self) -> int:        return self._ui_font_spin.value()
     @property
     def max_cursors(self) -> int:         return self._cursor_spin.value()
+    @property
+    def time_decimals(self) -> int:       return self._time_decimals_spin.value()
     @property
     def show_sti(self) -> bool:           return self._sti_cb.isChecked()
     @property
@@ -23218,6 +23247,7 @@ class AppSettingsModel:
     cpu_load_row_h: int = 0
     colorblind: bool = False
     horizontal: bool = True
+    time_decimals: int = 3
 
 @dataclass
 class SessionModel:
@@ -23269,6 +23299,7 @@ class AppSettingsViewModel(ViewModelBase):
         m.cpu_load_row_h = CPU_LOAD_ROW_H
         m.colorblind = False
         m.horizontal = True
+        m.time_decimals = _DEFAULT_TIME_DECIMALS
         self.settings_changed.emit()
         self.changed.emit()
 
@@ -23485,6 +23516,14 @@ class AppSettingsViewModel(ViewModelBase):
     def horizontal(self, value: bool) -> None:
         self._assign("horizontal", bool(value))
 
+    @property
+    def time_decimals(self) -> int:
+        return self._model.time_decimals
+
+    @time_decimals.setter
+    def time_decimals(self, value: int) -> None:
+        self._assign("time_decimals", max(0, min(int(value), 9)))
+
     def load_theme_from_rc(self, rc: "_RcSettings") -> None:
         self.is_dark = rc.get("view", "theme", "dark") == "dark"
 
@@ -23517,6 +23556,7 @@ class AppSettingsViewModel(ViewModelBase):
         m.show_stats = rc.get_bool("view", "show_stats", True)
         m.show_marks = rc.get_bool("view", "show_marks", True)
         m.show_find = rc.get_bool("view", "show_find", True)
+        m.time_decimals = rc.get_int("view", "time_decimals", _DEFAULT_TIME_DECIMALS)
         self.settings_changed.emit()
         self.changed.emit()
 # ===========================================================================
@@ -24238,6 +24278,7 @@ SETTINGS_ATTR_MAP: dict[str, str] = {
     "_hover_highlight_val": "hover_highlight",
     "_cpu_load_row_h_val": "cpu_load_row_h",
     "_colorblind_val": "colorblind",
+    "_time_decimals_val": "time_decimals",
 }
 
 SESSION_ATTR_MAP: dict[str, str] = {
@@ -24408,6 +24449,7 @@ class _CpuLoadGraph(QWidget):
         self._total_bins:     List[float]                   = []
         self._bin_w_ns: float                               = 1.0
         self._font_size: int                                = 8
+        self._time_decimals: int                             = 3
         self._hover_y: int                                  = -1
         self._title_icon_rect: Optional[QRect]               = None
         self.setMinimumHeight(40)
@@ -24471,6 +24513,10 @@ class _CpuLoadGraph(QWidget):
 
     def set_font_size(self, size: int) -> None:
         self._font_size = max(6, size)
+        self.update()
+
+    def set_time_decimals(self, n: int) -> None:
+        self._time_decimals = max(0, min(int(n), 9))
         self.update()
 
     def set_core_expanded(self, core: str, expanded: bool) -> None:
@@ -25309,7 +25355,7 @@ class _CpuLoadGraph(QWidget):
                     load_pct = f"{load * 100:.0f}%"
                     is_primary = (hover_row is not None
                                   and hover_row[0] == kind and hover_row[1] == key)
-                    badge = (f"{load_pct} · {_format_time(hover_ns, scale)}"
+                    badge = (f"{load_pct} · {_format_time(hover_ns, scale, decimals=self._time_decimals)}"
                              if is_primary else load_pct)
                     self._draw_load_badge(p, sx, ry_h, badge, dark, full=is_primary)
                 ry_h += rh + CPU_LOAD_ROW_GAP
@@ -26148,6 +26194,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         sc.set_sti_waveform_h(self._sti_waveform_h_val)
         sc.set_sti_line_style(self._sti_line_style_val)
         sc.set_hover_highlight(self._hover_highlight_val)
+        sc.set_time_decimals(self._time_decimals_val)
+        self._cpu_load_graph.set_time_decimals(self._time_decimals_val)
         sc.set_theme(self._is_dark, rebuild=False)
         self._sync_timeline_view_theme(view, self._is_dark)
         view.set_horizontal(self._vm.settings.horizontal)
@@ -26466,7 +26514,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self.setWindowTitle("RTOS BTF Viewer")
             return
         fname = os.path.basename(self._current_file)
-        ts = _format_time(trace.time_max - trace.time_min, trace.time_scale)
+        ts = _format_time(trace.time_max - trace.time_min, trace.time_scale,
+                          decimals=self._time_decimals_val)
         n_seg = len(trace.segments)
         n_sti = len(trace.sti_events)
         self.setWindowTitle(f"RTOS BTF Viewer – {fname}")
@@ -27151,6 +27200,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 "row_gap":           str(self._row_gap_val),
                 "timescale_per_px_default": str(self._timescale_per_px_default_val),
                 "hover_highlight":   str(self._hover_highlight_val).lower(),
+                "time_decimals":     str(self._time_decimals_val),
             }, flush=False)
 
             if self._cpu_splitter_bottom_h is not None and self._cpu_splitter_bottom_h > 0:
@@ -29329,7 +29379,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
               else cursor_times[0] if cursor_times
               else self._view.view_center_ns())
         unit = self._current_time_unit()
-        label = f"Bookmark @{_format_time(ns, unit, decimals=3)}"
+        label = f"Bookmark @{_format_time(ns, unit, decimals=self._time_decimals_val)}"
         self._bookmarks.append(TraceBookmark(id=self._mark_next_id, ns=ns, label=label))
         self._mark_next_id += 1
         self._bookmarks.sort(key=lambda b: b.ns)
@@ -29363,11 +29413,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             return
         unit = self._current_time_unit()
         for b in sorted(self._bookmarks, key=lambda x: x.ns):
-            txt = b.label or f"Bookmark @{_format_time(b.ns, unit, decimals=3)}"
+            txt = b.label or f"Bookmark @{_format_time(b.ns, unit, decimals=self._time_decimals_val)}"
             item = QListWidgetItem(txt)
             item.setData(Qt.ItemDataRole.UserRole, int(b.id))
             item.setData(Qt.ItemDataRole.UserRole + 1, int(b.ns))
-            item.setToolTip(f"{_format_time(b.ns, unit, decimals=3)}")
+            item.setToolTip(f"{_format_time(b.ns, unit, decimals=self._time_decimals_val)}")
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
             self._bookmark_list.addItem(item)
         self._bookmark_list.blockSignals(False)
@@ -29383,7 +29433,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             if b.id == bid:
                 # Empty label -> revert to the default timestamp label so the
                 # bookmark keeps useful identity information.
-                b.label = new_label or f"Bookmark @{_format_time(b.ns, self._current_time_unit(), decimals=3)}"
+                b.label = new_label or f"Bookmark @{_format_time(b.ns, self._current_time_unit(), decimals=self._time_decimals_val)}"
                 break
         self._save_current_trace_state()
 
@@ -29408,7 +29458,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             return
         self._push_undo_snapshot()
         unit = self._current_time_unit()
-        label = f"Bookmark @{_format_time(ns, unit, decimals=3)}"
+        label = f"Bookmark @{_format_time(ns, unit, decimals=self._time_decimals_val)}"
         self._bookmarks.append(TraceBookmark(id=self._mark_next_id, ns=ns, label=label))
         self._mark_next_id += 1
         self._bookmarks.sort(key=lambda b: b.ns)
@@ -29506,11 +29556,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             return
         unit = self._current_time_unit()
         for a in sorted(self._annotations, key=lambda x: x.ns):
-            txt = f"{_format_time(a.ns, unit, decimals=3)}  {a.note}"
+            txt = f"{_format_time(a.ns, unit, decimals=self._time_decimals_val)}  {a.note}"
             item = QListWidgetItem(txt)
             item.setData(Qt.ItemDataRole.UserRole, int(a.id))
             item.setData(Qt.ItemDataRole.UserRole + 1, int(a.ns))
-            item.setToolTip(f"@ {_format_time(a.ns, unit, decimals=3)}\n{a.note}")
+            item.setToolTip(f"@ {_format_time(a.ns, unit, decimals=self._time_decimals_val)}\n{a.note}")
             self._annotation_list.addItem(item)
         self._annotation_list.blockSignals(False)
         self._view._scene.set_marks(self._bookmarks, self._annotations)
@@ -29959,6 +30009,16 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if vals["show_hover_highlight"] != self._hover_highlight_val:
             self._hover_highlight_val = vals["show_hover_highlight"]
             self._view._scene.set_hover_highlight(self._hover_highlight_val)
+        if vals.get("time_decimals", self._time_decimals_val) != self._time_decimals_val:
+            self._time_decimals_val = vals["time_decimals"]
+            self._view._scene.set_time_decimals(self._time_decimals_val)
+            self._cpu_load_graph.set_time_decimals(self._time_decimals_val)
+            self._cursor_bar.rebuild(self._view._scene.cursor_times(), self._trace,
+                                     time_decimals=self._time_decimals_val)
+            self._update_status_for_active_tab()
+            self._rebuild_bookmark_list()
+            self._rebuild_annotation_list()
+            self._rebuild_cursor_table()
         if vals["colorblind_safe"] != self._colorblind_val:
             self._colorblind_val = vals["colorblind_safe"]
             self._set_colorblind_safe(self._colorblind_val)
@@ -30016,6 +30076,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             updates["show_cpu_load"] = str(self._show_cpu_load).lower()
         if snap["show_hover_highlight"] != self._hover_highlight_val:
             updates["hover_highlight"] = str(self._hover_highlight_val).lower()
+        if snap.get("time_decimals", self._time_decimals_val) != self._time_decimals_val:
+            updates["time_decimals"] = str(self._time_decimals_val)
         if snap["colorblind_safe"] != self._colorblind_val:
             updates["colorblind_safe"] = str(self._colorblind_val).lower()
         if snap["label_width"] != self._label_width_val:
@@ -30066,6 +30128,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "cpu_load_row_h":           self._cpu_load_row_h_val,
             "cpu_budget_pct":           self._settings.get_float("analysis", "cpu_budget_pct", 0.0),
             "task_deadlines_text":      self._settings.get("analysis", "task_deadlines", ""),
+            "time_decimals":            self._time_decimals_val,
         }
         dlg = _SettingsDialog(
             self,
@@ -30093,6 +30156,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             cpu_load_row_h=self._cpu_load_row_h_val,
             cpu_budget_pct=_snap["cpu_budget_pct"],
             task_deadlines_text=_snap["task_deadlines_text"],
+            time_decimals=self._time_decimals_val,
         )
         dlg.live_preview.connect(lambda: self._apply_settings_preview({
             "is_dark":                  dlg.is_dark,
@@ -30116,6 +30180,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "sti_line_style":           dlg.sti_line_style,
             "timescale_per_px_default": dlg.timescale_per_px_default,
             "cpu_load_row_h":           dlg.cpu_load_row_h,
+            "time_decimals":            dlg.time_decimals,
         }))
         # The dialog carries its own scoped stylesheet (set at construction
         # time).  Re-apply it on every live_preview so that switching the
@@ -30245,7 +30310,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._placed_cursor_count = placed_n
         if hasattr(self, "_stats_panel"):
             self._stats_panel.set_cursor_times(times, refresh_stats=refresh_stats)
-        self._cursor_bar.rebuild(times, self._trace)
+        self._cursor_bar.rebuild(times, self._trace, time_decimals=self._time_decimals_val)
         has_range = len(times) >= 2
         self._act_zoom_range.setEnabled(has_range)
         self._tb_zoom_range_btn.setEnabled(has_range)
@@ -30294,7 +30359,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 if b.id == mark_id:
                     b.ns = new_ns
                     if b.label.startswith("Bookmark @"):
-                        b.label = f"Bookmark @{_format_time(new_ns, unit, decimals=3)}"
+                        b.label = f"Bookmark @{_format_time(new_ns, unit, decimals=self._time_decimals_val)}"
                     break
             self._rebuild_bookmark_list()
         else:
@@ -30344,14 +30409,14 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         for row, ns in enumerate(sorted_times):
             ci = QTableWidgetItem(f"C{row + 1}")
             ci.setData(Qt.ItemDataRole.UserRole, ns)
-            ti = QTableWidgetItem(_format_time(ns, unit, decimals=3))
+            ti = QTableWidgetItem(_format_time(ns, unit, decimals=self._time_decimals_val))
             task_item = QTableWidgetItem(self._task_at_time(ns))
             if row == 0:
                 delta_item = QTableWidgetItem("—")
             else:
                 dt = ns - c1
                 sign = "+" if dt >= 0 else ""
-                delta_item = QTableWidgetItem(f"{sign}{_format_time(abs(dt), unit, decimals=3)}")
+                delta_item = QTableWidgetItem(f"{sign}{_format_time(abs(dt), unit, decimals=self._time_decimals_val)}")
             for it in (ci, ti, task_item, delta_item):
                 it.setFlags(it.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self._cursor_table.setItem(row, 0, ci)

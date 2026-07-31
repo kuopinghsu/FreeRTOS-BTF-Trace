@@ -27,6 +27,7 @@ SETTINGS_ATTR_MAP: dict[str, str] = {
     "_hover_highlight_val": "hover_highlight",
     "_cpu_load_row_h_val": "cpu_load_row_h",
     "_colorblind_val": "colorblind",
+    "_time_decimals_val": "time_decimals",
 }
 
 SESSION_ATTR_MAP: dict[str, str] = {

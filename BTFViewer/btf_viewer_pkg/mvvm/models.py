@@ -75,6 +75,7 @@ class AppSettingsModel:
     cpu_load_row_h: int = 0
     colorblind: bool = False
     horizontal: bool = True
+    time_decimals: int = 3
 
 @dataclass
 class SessionModel:

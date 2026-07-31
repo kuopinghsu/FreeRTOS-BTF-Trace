@@ -454,13 +454,15 @@ class _BatchRowItem(QGraphicsItem):
         Pre-computed coordinate pairs (start, end) and index into seg_data for
         O(log n) binary-search hit-testing and viewport clipping.  If not
         supplied, xs is derived from seg_data.x() at construction time.
+    time_decimals : int
+        Decimal-digit precision used when formatting times in this segment's tooltip.
     """
 
     def __init__(self, bounding_rect: QRectF, seg_data: list, time_scale: str,
                  label_font=None, label_fm=None, label_text: str = "",
                  presorted: bool = False, xs: Optional[list] = None,
                  time_min: int = 0, timescale_per_px: float = 0.0,
-                 trace: Optional["BtfTrace"] = None):
+                 trace: Optional["BtfTrace"] = None, time_decimals: int = 3):
         super().__init__()
         self._bounding_rect = bounding_rect
         self._seg_data      = seg_data      # [(QRectF, QBrush, QPen, seg|None)]
@@ -468,6 +470,7 @@ class _BatchRowItem(QGraphicsItem):
         self._time_min      = time_min
         self._timescale_per_px     = timescale_per_px
         self._trace         = trace
+        self._time_decimals = time_decimals
         self._label_font    = label_font
         self._label_fm      = label_fm
         self._label_text    = label_text
@@ -795,9 +798,9 @@ class _BatchRowItem(QGraphicsItem):
                     dur = seg.end - seg.start
                     tip = (f"<b>{seg.task}</b><br>"
                            f"Core: {seg.core}<br>"
-                           f"Start: {_format_time(seg.start, self._time_scale)}<br>"
-                           f"End:   {_format_time(seg.end,   self._time_scale)}<br>"
-                           f"Duration: {_format_time(dur, self._time_scale)}")
+                           f"Start: {_format_time(seg.start, self._time_scale, decimals=self._time_decimals)}<br>"
+                           f"End:   {_format_time(seg.end,   self._time_scale, decimals=self._time_decimals)}<br>"
+                           f"Duration: {_format_time(dur, self._time_scale, decimals=self._time_decimals)}")
                     tr = self._trace
                     if tr is not None:
                         prev, nxt, seg_idx, total = _seg_core_neighbors(tr, seg)
@@ -806,14 +809,14 @@ class _BatchRowItem(QGraphicsItem):
                         if prev is not None:
                             _, _, pnm = _parse_task_name(prev.task)
                             tip += (f"<br>← Prev on core: {_task_display_name(prev.task)} "
-                                    f"({_format_time(prev.end, self._time_scale)})")
+                                    f"({_format_time(prev.end, self._time_scale, decimals=self._time_decimals)})")
                         if nxt is not None:
                             tip += (f"<br>→ Next on core: {_task_display_name(nxt.task)} "
-                                    f"({_format_time(nxt.start, self._time_scale)})")
+                                    f"({_format_time(nxt.start, self._time_scale, decimals=self._time_decimals)})")
                         if prev is not None:
                             gap = seg.start - prev.end
                             if gap > 0:
-                                tip += f"<br>Gap before: {_format_time(gap, self._time_scale)}"
+                                tip += f"<br>Gap before: {_format_time(gap, self._time_scale, decimals=self._time_decimals)}"
                     _get_popup().show_at(event.screenPos(), tip)
                     super().hoverMoveEvent(event)
                     return
