@@ -452,6 +452,23 @@
           SVG
         </button>
 
+        <button
+          v-if="traceInfo"
+          class="tb-btn"
+          title="Export Perfetto (Chrome Trace JSON for ui.perfetto.dev)"
+          @click="emit('exportPerfetto')"
+        >
+          <svg
+            viewBox="0 0 16 16"
+            width="16"
+            height="16"
+            fill="currentColor"
+          >
+            <path d="M2.5 2A1.5 1.5 0 0 0 1 3.5v9A1.5 1.5 0 0 0 2.5 14h11a1.5 1.5 0 0 0 1.5-1.5v-9A1.5 1.5 0 0 0 13.5 2h-11zm0 1h11a.5.5 0 0 1 .5.5V5H2V3.5a.5.5 0 0 1 .5-.5zM2 6h12v6.5a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5V6zm2 1.5v1h2v-1H4zm3 0v1h2v-1H7zm3 0v1h2v-1h-2zM4 10v1h5v-1H4z" />
+          </svg>
+          Perfetto
+        </button>
+
         <div class="tb-sep" />
       </div>
     </Teleport>
@@ -671,7 +688,7 @@ const props = defineProps({
 const emit = defineEmits([
   'update:modelValue', 'trace-reading', 'trace-loaded', 'loadDemo', 'zoom', 'fit',
   'zoom1to1', 'zoomRange', 'showFind',
-  'expandAll', 'collapseAll', 'addMark', 'copyScreenshot', 'exportSvg',
+  'expandAll', 'collapseAll', 'addMark', 'copyScreenshot', 'exportSvg', 'exportPerfetto',
   'showHelp', 'showAbout', 'showSettings', 'showHeatmap', 'showChord', 'clearTaskFilter', 'file-error',
 ])
 

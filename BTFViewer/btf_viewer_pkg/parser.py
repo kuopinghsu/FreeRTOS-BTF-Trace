@@ -19,7 +19,10 @@ class RawEvent:
     event:      str   # event verb: 'resume', 'preempt', 'trigger', ...
     note:       str   # optional annotation (e.g. 'task_create', mutex name)
 
-@dataclass
+# slots=True needs Python 3.10+; project supports 3.8+ so gate it.
+_DC_SLOTS = {"slots": True} if sys.version_info >= (3, 10) else {}
+
+@dataclass(**_DC_SLOTS)
 class TaskSegment:
     """One contiguous execution slice of a task on a core."""
     task: str
@@ -27,7 +30,7 @@ class TaskSegment:
     end: int            # ns
     core: str           # e.g. "Core_0"
 
-@dataclass
+@dataclass(**_DC_SLOTS)
 class MigrationEvent:
     """Core change between consecutive slices of the same logical task."""
     ns: int
@@ -40,7 +43,7 @@ class MigrationEvent:
 _MIGRATION_PING_PONG_WINDOW = 1000
 _MIGRATION_STI_WINDOW         = 500
 
-@dataclass
+@dataclass(**_DC_SLOTS)
 class StiEvent:
     """An RTOS software trace item (mutex/semaphore/queue event, etc.)."""
     time: int
@@ -49,7 +52,7 @@ class StiEvent:
     event: str          # event name (e.g. "trigger")
     note: str           # detail (e.g. "take_mutex")
 
-@dataclass
+@dataclass(**_DC_SLOTS)
 class IntervalInstance:
     """Paired interval_start / interval_stop span."""
     id: str
@@ -592,6 +595,129 @@ def _build_tag_data(
         lst.sort(key=lambda s: (s.time_ns, s.value))
     channels = sorted(by_ch.keys(), key=_sti_channel_sort_key)
     return channels, dict(by_ch)
+
+def _build_sti_derived(
+    sti_events: List["StiEvent"],
+) -> Tuple[
+    List[str],
+    Dict[str, List[StiEvent]],
+    List[IntervalInstance],
+    List[str],
+    Dict[str, List[IntervalInstance]],
+    int,
+    Dict[str, dict],
+    List[str],
+    Dict[str, List[TagSample]],
+]:
+    """Single-pass STI post-processing: channels, intervals, markers, tags.
+
+    Replaces separate walks via ``sti_by_target`` / ``_build_interval_data`` /
+    ``_build_interval_marker_index`` / ``_build_tag_data``.
+    """
+    sti_by_target: Dict[str, List[StiEvent]] = defaultdict(list)
+    channel_set: set = set()
+    # (time, is_start_ord, is_start, ev, display_id, task_id, pair_key)
+    markers: list = []
+    by_ch: Dict[str, List[TagSample]] = defaultdict(list)
+    _is_tag = _is_tag_sti_channel
+    _parse_note = _parse_interval_note
+    _parse_tag = _parse_tag_value
+    _start_ch = _INTERVAL_START_CHANNELS
+    _stop_ch = _INTERVAL_STOP_CHANNELS
+
+    for ev in sti_events:
+        tgt = ev.target
+        sti_by_target[tgt].append(ev)
+        if tgt in _start_ch:
+            iid, task_id, pair_key = _parse_note(ev.note)
+            display_id = iid if task_id is not None else pair_key
+            markers.append((ev.time, 0, True, ev, display_id, task_id, pair_key))
+        elif tgt in _stop_ch:
+            iid, task_id, pair_key = _parse_note(ev.note)
+            display_id = iid if task_id is not None else pair_key
+            markers.append((ev.time, 1, False, ev, display_id, task_id, pair_key))
+        else:
+            channel_set.add(tgt)
+            if _is_tag(tgt):
+                val = _parse_tag(ev.note)
+                if val is not None:
+                    by_ch[tgt].append(TagSample(
+                        channel=tgt,
+                        time_ns=ev.time,
+                        value=val,
+                        core=ev.core or "",
+                    ))
+
+    sti_channels = sorted(channel_set, key=_sti_channel_sort_key)
+
+    # --- Interval pairing + marker index from one sorted marker list ------
+    markers.sort(key=lambda m: (m[0], m[1]))
+    open_stacks: Dict[str, list] = {}
+    instances: List[IntervalInstance] = []
+    unmatched = 0
+    marker_by_id: Dict[str, dict] = {}
+
+    for _t, _ord, is_start, ev, display_id, task_id, pair_key in markers:
+        row = marker_by_id.get(display_id)
+        if row is None:
+            row = {"events": [], "times": []}
+            marker_by_id[display_id] = row
+        row["events"].append((ev.time, is_start))
+
+        if is_start:
+            open_stacks.setdefault(pair_key, []).append(ev)
+        else:
+            stack = open_stacks.get(pair_key)
+            if not stack:
+                continue
+            start_ev = stack.pop()
+            if ev.time > start_ev.time:
+                instances.append(IntervalInstance(
+                    id=display_id,
+                    start_ns=start_ev.time,
+                    stop_ns=ev.time,
+                    start_core=start_ev.core,
+                    stop_core=ev.core,
+                    task_id=task_id,
+                ))
+
+    for stack in open_stacks.values():
+        unmatched += len(stack)
+
+    # Markers were appended in global time order (starts before stops at equal
+    # time), so per-id event lists are already sorted — only build times[].
+    for row in marker_by_id.values():
+        row["times"] = [t[0] for t in row["events"]]
+
+    by_id: Dict[str, List[IntervalInstance]] = defaultdict(list)
+    for inst in instances:
+        by_id[inst.id].append(inst)
+    for lst in by_id.values():
+        lst.sort(key=lambda inst: (inst.start_ns, inst.stop_ns))
+
+    def _id_sort_key(s: str):
+        try:
+            return (0, int(s))
+        except ValueError:
+            return (1, s)
+
+    interval_ids = sorted(by_id.keys(), key=_id_sort_key)
+
+    for lst in by_ch.values():
+        lst.sort(key=lambda s: (s.time_ns, s.value))
+    tag_channels = sorted(by_ch.keys(), key=_sti_channel_sort_key)
+
+    return (
+        sti_channels,
+        dict(sti_by_target),
+        instances,
+        interval_ids,
+        dict(by_id),
+        unmatched,
+        marker_by_id,
+        tag_channels,
+        dict(by_ch),
+    )
 
 def _tag_overlaps_range(sample: TagSample,
                         lo: Optional[int], hi: Optional[int]) -> bool:
@@ -1190,9 +1316,19 @@ def _sync_object_key(kind: str, ptr: str) -> str:
     return f"{kind}:{ptr}"
 
 def _running_task_mk(core_segs: Dict[str, list], core: str, time_ns: int,
-                     seg_starts: Optional[Dict[str, list]] = None) -> Optional[str]:
+                     seg_starts: Optional[Dict[str, list]] = None,
+                     mk_cache: Optional[Dict[str, str]] = None) -> Optional[str]:
     seg = _segment_at_core_time(core_segs, core, time_ns, seg_starts=seg_starts)
-    return _task_merge_key(seg.task) if seg is not None else None
+    if seg is None:
+        return None
+    raw = seg.task
+    if mk_cache is None:
+        return _task_merge_key(raw)
+    mk = mk_cache.get(raw)
+    if mk is None:
+        mk = _task_merge_key(raw)
+        mk_cache[raw] = mk
+    return mk
 
 def _segment_at_core_time(core_segs: Dict[str, list], core: str, time_ns: int,
                           seg_starts: Optional[Dict[str, list]] = None
@@ -1227,6 +1363,7 @@ def _build_sync_object_data(
     task_repr: Dict[str, str],
     time_max: int,
     core_seg_starts: Optional[Dict[str, list]] = None,
+    mk_cache: Optional[Dict[str, str]] = None,
 ) -> Tuple[Dict[str, dict], List[dict], bool]:
     objects: Dict[str, dict] = {}
     global_issues: List[dict] = []
@@ -1270,9 +1407,40 @@ def _build_sync_object_data(
             "signal": not take_first,
         })
 
+    # Sync STI events are time-sorted: advance a per-core segment cursor instead
+    # of bisecting on every event (O(S_core) total vs O(Z · log S) per core).
+    _core_cursor: Dict[str, int] = {}
+
+    def _task_mk_at(core: str, time_ns: int) -> Optional[str]:
+        segs = core_segs.get(core) or []
+        if not segs:
+            return None
+        i = _core_cursor.get(core, 0)
+        n = len(segs)
+        # Advance past segments that ended before time_ns.
+        while i < n and segs[i].end < time_ns:
+            i += 1
+        _core_cursor[core] = i
+        if i >= n:
+            return None
+        s = segs[i]
+        if s.start > time_ns:
+            return None
+        # Covering segment (start <= time_ns <= end) after the advance loop.
+        if s.end < time_ns:
+            return None
+        raw = s.task
+        if mk_cache is None:
+            return _task_merge_key(raw)
+        mk = mk_cache.get(raw)
+        if mk is None:
+            mk = _task_merge_key(raw)
+            mk_cache[raw] = mk
+        return mk
+
     for ev, (action, ptr) in events:
         key = _sync_object_key(ev.target, ptr)
-        task_mk = _running_task_mk(core_segs, ev.core, ev.time, core_seg_starts)
+        task_mk = _task_mk_at(ev.core, ev.time)
         raw = task_repr.get(task_mk, task_mk) if task_mk else "?"
         task_label = _task_display_name(raw) if task_mk else "?"
 
@@ -3448,6 +3616,8 @@ def _parse_btf(filepath: str,
     # ------------------------------------------------------------------
     if progress_callback:
         progress_callback(2, "Reading file…")
+    _int = int
+    _meta_re_match = _META_KEY_RE.match
     with open(filepath, encoding="utf-8", errors="replace") as fh:
         for line_index, line in enumerate(fh, start=1):
             if cancel_check and line_index % 2048 == 0 and cancel_check():
@@ -3455,14 +3625,15 @@ def _parse_btf(filepath: str,
             line = line.strip()
             if not line:
                 continue
-            if line.startswith("#"):
-                stripped = line[1:].strip()
+            if line[0] == "#":
+                stripped = line[1:].lstrip()
                 if " " in stripped:
                     key, _, value = stripped.partition(" ")
-                    if _META_KEY_RE.match(key):
-                        meta[key] = value.strip()
+                    if _meta_re_match(key):
+                        value = value.strip()
+                        meta[key] = value
                         if key == "timeScale":
-                            time_scale = value.strip()
+                            time_scale = value
                 continue
 
             parts = line.split(",", 8)
@@ -3470,12 +3641,14 @@ def _parse_btf(filepath: str,
                 continue
 
             try:
-                t = int(parts[0])
+                t = _int(parts[0])
             except ValueError:
                 _skipped_lines += 1
                 continue
 
-            ev_type = parts[3].strip()
+            ev_type = parts[3]
+            if ev_type and (ev_type[0] == " " or ev_type[-1] == " "):
+                ev_type = ev_type.strip()
             # Update time bounds only for non-C (non-set_frequency) events so
             # that the trace start is anchored to the first scheduling event.
             if ev_type != "C":
@@ -3489,13 +3662,12 @@ def _parse_btf(filepath: str,
                         time_max = t
             if ev_type == "T":
                 _note = parts[7].strip() if len(parts) > 7 else ""
+                _tgt_raw = parts[4].strip()
                 if _note == "task_create":
-                    _tgt_raw = parts[4].strip()
                     if _tgt_raw not in _task_create_raw:
                         _task_create_raw[_tgt_raw] = t
                 _create_pri = _parse_create_priority(_note)
                 if _create_pri is not None:
-                    _tgt_raw = parts[4].strip()
                     if _tgt_raw not in _task_create_raw:
                         _task_create_raw[_tgt_raw] = t
                     if _tgt_raw not in _task_create_pri_raw:
@@ -3504,7 +3676,7 @@ def _parse_btf(filepath: str,
                     t,
                     parts[1].strip(),   # source
                     parts[6].strip(),   # event
-                    parts[4].strip(),   # target
+                    _tgt_raw,           # target
                     _note,              # note
                 ))
             elif ev_type == "STI":
@@ -3674,19 +3846,9 @@ def _parse_btf(filepath: str,
         (mk for mk in task_set if mk != _tick_mk_excl),
         key=lambda mk: _task_sort_key(_mk_repr[mk]))
 
-    sti_channels = sorted(
-        {e.target for e in sti_events if not _is_interval_marker_channel(e.target)},
-        key=_sti_channel_sort_key,
-    )
-    sti_by_target: Dict[str, List[StiEvent]] = defaultdict(list)
-    for _ev in sti_events:
-        sti_by_target[_ev.target].append(_ev)
-
-    _interval_instances, _interval_ids, _interval_by_id, _interval_unmatched = (
-        _build_interval_data(sti_events)
-    )
-    _interval_marker_by_id = _build_interval_marker_index(sti_events)
-    _tag_channels, _tag_by_ch = _build_tag_data(sti_events)
+    sti_channels, sti_by_target, _interval_instances, _interval_ids, \
+        _interval_by_id, _interval_unmatched, _interval_marker_by_id, \
+        _tag_channels, _tag_by_ch = _build_sti_derived(sti_events)
 
     _seg_start_key = _attrgetter('start')
     segs_by_mk: Dict[str, list] = dict(segs_by_mk_build)
@@ -3738,7 +3900,8 @@ def _parse_btf(filepath: str,
             sti_events, _task_create_pri_raw, time_max, _mk_cache, _mk_repr)
     )
     _sync_objects, _sync_issues, _has_sync = _build_sync_object_data(
-        sti_events, _core_segs, _mk_repr, time_max, _core_seg_starts)
+        sti_events, _core_segs, _mk_repr, time_max, _core_seg_starts,
+        mk_cache=_mk_cache)
 
     # ------------------------------------------------------------------
     # Phase 4 : 1M-event performance pre-processing
@@ -3870,7 +4033,7 @@ def _parse_btf(filepath: str,
         segments=segments,
         sti_events=sti_events,
         sti_channels=sti_channels,
-        sti_events_by_target=dict(sti_by_target),
+        sti_events_by_target=sti_by_target,
         time_min=time_min,
         time_max=time_max,
         meta=meta,

@@ -916,7 +916,10 @@ class RawEvent:
     event:      str   # event verb: 'resume', 'preempt', 'trigger', ...
     note:       str   # optional annotation (e.g. 'task_create', mutex name)
 
-@dataclass
+# slots=True needs Python 3.10+; project supports 3.8+ so gate it.
+_DC_SLOTS = {"slots": True} if sys.version_info >= (3, 10) else {}
+
+@dataclass(**_DC_SLOTS)
 class TaskSegment:
     """One contiguous execution slice of a task on a core."""
     task: str
@@ -924,7 +927,7 @@ class TaskSegment:
     end: int            # ns
     core: str           # e.g. "Core_0"
 
-@dataclass
+@dataclass(**_DC_SLOTS)
 class MigrationEvent:
     """Core change between consecutive slices of the same logical task."""
     ns: int
@@ -937,7 +940,7 @@ class MigrationEvent:
 _MIGRATION_PING_PONG_WINDOW = 1000
 _MIGRATION_STI_WINDOW         = 500
 
-@dataclass
+@dataclass(**_DC_SLOTS)
 class StiEvent:
     """An RTOS software trace item (mutex/semaphore/queue event, etc.)."""
     time: int
@@ -946,7 +949,7 @@ class StiEvent:
     event: str          # event name (e.g. "trigger")
     note: str           # detail (e.g. "take_mutex")
 
-@dataclass
+@dataclass(**_DC_SLOTS)
 class IntervalInstance:
     """Paired interval_start / interval_stop span."""
     id: str
@@ -1489,6 +1492,129 @@ def _build_tag_data(
         lst.sort(key=lambda s: (s.time_ns, s.value))
     channels = sorted(by_ch.keys(), key=_sti_channel_sort_key)
     return channels, dict(by_ch)
+
+def _build_sti_derived(
+    sti_events: List["StiEvent"],
+) -> Tuple[
+    List[str],
+    Dict[str, List[StiEvent]],
+    List[IntervalInstance],
+    List[str],
+    Dict[str, List[IntervalInstance]],
+    int,
+    Dict[str, dict],
+    List[str],
+    Dict[str, List[TagSample]],
+]:
+    """Single-pass STI post-processing: channels, intervals, markers, tags.
+
+    Replaces separate walks via ``sti_by_target`` / ``_build_interval_data`` /
+    ``_build_interval_marker_index`` / ``_build_tag_data``.
+    """
+    sti_by_target: Dict[str, List[StiEvent]] = defaultdict(list)
+    channel_set: set = set()
+    # (time, is_start_ord, is_start, ev, display_id, task_id, pair_key)
+    markers: list = []
+    by_ch: Dict[str, List[TagSample]] = defaultdict(list)
+    _is_tag = _is_tag_sti_channel
+    _parse_note = _parse_interval_note
+    _parse_tag = _parse_tag_value
+    _start_ch = _INTERVAL_START_CHANNELS
+    _stop_ch = _INTERVAL_STOP_CHANNELS
+
+    for ev in sti_events:
+        tgt = ev.target
+        sti_by_target[tgt].append(ev)
+        if tgt in _start_ch:
+            iid, task_id, pair_key = _parse_note(ev.note)
+            display_id = iid if task_id is not None else pair_key
+            markers.append((ev.time, 0, True, ev, display_id, task_id, pair_key))
+        elif tgt in _stop_ch:
+            iid, task_id, pair_key = _parse_note(ev.note)
+            display_id = iid if task_id is not None else pair_key
+            markers.append((ev.time, 1, False, ev, display_id, task_id, pair_key))
+        else:
+            channel_set.add(tgt)
+            if _is_tag(tgt):
+                val = _parse_tag(ev.note)
+                if val is not None:
+                    by_ch[tgt].append(TagSample(
+                        channel=tgt,
+                        time_ns=ev.time,
+                        value=val,
+                        core=ev.core or "",
+                    ))
+
+    sti_channels = sorted(channel_set, key=_sti_channel_sort_key)
+
+    # --- Interval pairing + marker index from one sorted marker list ------
+    markers.sort(key=lambda m: (m[0], m[1]))
+    open_stacks: Dict[str, list] = {}
+    instances: List[IntervalInstance] = []
+    unmatched = 0
+    marker_by_id: Dict[str, dict] = {}
+
+    for _t, _ord, is_start, ev, display_id, task_id, pair_key in markers:
+        row = marker_by_id.get(display_id)
+        if row is None:
+            row = {"events": [], "times": []}
+            marker_by_id[display_id] = row
+        row["events"].append((ev.time, is_start))
+
+        if is_start:
+            open_stacks.setdefault(pair_key, []).append(ev)
+        else:
+            stack = open_stacks.get(pair_key)
+            if not stack:
+                continue
+            start_ev = stack.pop()
+            if ev.time > start_ev.time:
+                instances.append(IntervalInstance(
+                    id=display_id,
+                    start_ns=start_ev.time,
+                    stop_ns=ev.time,
+                    start_core=start_ev.core,
+                    stop_core=ev.core,
+                    task_id=task_id,
+                ))
+
+    for stack in open_stacks.values():
+        unmatched += len(stack)
+
+    # Markers were appended in global time order (starts before stops at equal
+    # time), so per-id event lists are already sorted — only build times[].
+    for row in marker_by_id.values():
+        row["times"] = [t[0] for t in row["events"]]
+
+    by_id: Dict[str, List[IntervalInstance]] = defaultdict(list)
+    for inst in instances:
+        by_id[inst.id].append(inst)
+    for lst in by_id.values():
+        lst.sort(key=lambda inst: (inst.start_ns, inst.stop_ns))
+
+    def _id_sort_key(s: str):
+        try:
+            return (0, int(s))
+        except ValueError:
+            return (1, s)
+
+    interval_ids = sorted(by_id.keys(), key=_id_sort_key)
+
+    for lst in by_ch.values():
+        lst.sort(key=lambda s: (s.time_ns, s.value))
+    tag_channels = sorted(by_ch.keys(), key=_sti_channel_sort_key)
+
+    return (
+        sti_channels,
+        dict(sti_by_target),
+        instances,
+        interval_ids,
+        dict(by_id),
+        unmatched,
+        marker_by_id,
+        tag_channels,
+        dict(by_ch),
+    )
 
 def _tag_overlaps_range(sample: TagSample,
                         lo: Optional[int], hi: Optional[int]) -> bool:
@@ -2087,9 +2213,19 @@ def _sync_object_key(kind: str, ptr: str) -> str:
     return f"{kind}:{ptr}"
 
 def _running_task_mk(core_segs: Dict[str, list], core: str, time_ns: int,
-                     seg_starts: Optional[Dict[str, list]] = None) -> Optional[str]:
+                     seg_starts: Optional[Dict[str, list]] = None,
+                     mk_cache: Optional[Dict[str, str]] = None) -> Optional[str]:
     seg = _segment_at_core_time(core_segs, core, time_ns, seg_starts=seg_starts)
-    return _task_merge_key(seg.task) if seg is not None else None
+    if seg is None:
+        return None
+    raw = seg.task
+    if mk_cache is None:
+        return _task_merge_key(raw)
+    mk = mk_cache.get(raw)
+    if mk is None:
+        mk = _task_merge_key(raw)
+        mk_cache[raw] = mk
+    return mk
 
 def _segment_at_core_time(core_segs: Dict[str, list], core: str, time_ns: int,
                           seg_starts: Optional[Dict[str, list]] = None
@@ -2124,6 +2260,7 @@ def _build_sync_object_data(
     task_repr: Dict[str, str],
     time_max: int,
     core_seg_starts: Optional[Dict[str, list]] = None,
+    mk_cache: Optional[Dict[str, str]] = None,
 ) -> Tuple[Dict[str, dict], List[dict], bool]:
     objects: Dict[str, dict] = {}
     global_issues: List[dict] = []
@@ -2167,9 +2304,40 @@ def _build_sync_object_data(
             "signal": not take_first,
         })
 
+    # Sync STI events are time-sorted: advance a per-core segment cursor instead
+    # of bisecting on every event (O(S_core) total vs O(Z · log S) per core).
+    _core_cursor: Dict[str, int] = {}
+
+    def _task_mk_at(core: str, time_ns: int) -> Optional[str]:
+        segs = core_segs.get(core) or []
+        if not segs:
+            return None
+        i = _core_cursor.get(core, 0)
+        n = len(segs)
+        # Advance past segments that ended before time_ns.
+        while i < n and segs[i].end < time_ns:
+            i += 1
+        _core_cursor[core] = i
+        if i >= n:
+            return None
+        s = segs[i]
+        if s.start > time_ns:
+            return None
+        # Covering segment (start <= time_ns <= end) after the advance loop.
+        if s.end < time_ns:
+            return None
+        raw = s.task
+        if mk_cache is None:
+            return _task_merge_key(raw)
+        mk = mk_cache.get(raw)
+        if mk is None:
+            mk = _task_merge_key(raw)
+            mk_cache[raw] = mk
+        return mk
+
     for ev, (action, ptr) in events:
         key = _sync_object_key(ev.target, ptr)
-        task_mk = _running_task_mk(core_segs, ev.core, ev.time, core_seg_starts)
+        task_mk = _task_mk_at(ev.core, ev.time)
         raw = task_repr.get(task_mk, task_mk) if task_mk else "?"
         task_label = _task_display_name(raw) if task_mk else "?"
 
@@ -4345,6 +4513,8 @@ def _parse_btf(filepath: str,
     # ------------------------------------------------------------------
     if progress_callback:
         progress_callback(2, "Reading file…")
+    _int = int
+    _meta_re_match = _META_KEY_RE.match
     with open(filepath, encoding="utf-8", errors="replace") as fh:
         for line_index, line in enumerate(fh, start=1):
             if cancel_check and line_index % 2048 == 0 and cancel_check():
@@ -4352,14 +4522,15 @@ def _parse_btf(filepath: str,
             line = line.strip()
             if not line:
                 continue
-            if line.startswith("#"):
-                stripped = line[1:].strip()
+            if line[0] == "#":
+                stripped = line[1:].lstrip()
                 if " " in stripped:
                     key, _, value = stripped.partition(" ")
-                    if _META_KEY_RE.match(key):
-                        meta[key] = value.strip()
+                    if _meta_re_match(key):
+                        value = value.strip()
+                        meta[key] = value
                         if key == "timeScale":
-                            time_scale = value.strip()
+                            time_scale = value
                 continue
 
             parts = line.split(",", 8)
@@ -4367,12 +4538,14 @@ def _parse_btf(filepath: str,
                 continue
 
             try:
-                t = int(parts[0])
+                t = _int(parts[0])
             except ValueError:
                 _skipped_lines += 1
                 continue
 
-            ev_type = parts[3].strip()
+            ev_type = parts[3]
+            if ev_type and (ev_type[0] == " " or ev_type[-1] == " "):
+                ev_type = ev_type.strip()
             # Update time bounds only for non-C (non-set_frequency) events so
             # that the trace start is anchored to the first scheduling event.
             if ev_type != "C":
@@ -4386,13 +4559,12 @@ def _parse_btf(filepath: str,
                         time_max = t
             if ev_type == "T":
                 _note = parts[7].strip() if len(parts) > 7 else ""
+                _tgt_raw = parts[4].strip()
                 if _note == "task_create":
-                    _tgt_raw = parts[4].strip()
                     if _tgt_raw not in _task_create_raw:
                         _task_create_raw[_tgt_raw] = t
                 _create_pri = _parse_create_priority(_note)
                 if _create_pri is not None:
-                    _tgt_raw = parts[4].strip()
                     if _tgt_raw not in _task_create_raw:
                         _task_create_raw[_tgt_raw] = t
                     if _tgt_raw not in _task_create_pri_raw:
@@ -4401,7 +4573,7 @@ def _parse_btf(filepath: str,
                     t,
                     parts[1].strip(),   # source
                     parts[6].strip(),   # event
-                    parts[4].strip(),   # target
+                    _tgt_raw,           # target
                     _note,              # note
                 ))
             elif ev_type == "STI":
@@ -4571,19 +4743,9 @@ def _parse_btf(filepath: str,
         (mk for mk in task_set if mk != _tick_mk_excl),
         key=lambda mk: _task_sort_key(_mk_repr[mk]))
 
-    sti_channels = sorted(
-        {e.target for e in sti_events if not _is_interval_marker_channel(e.target)},
-        key=_sti_channel_sort_key,
-    )
-    sti_by_target: Dict[str, List[StiEvent]] = defaultdict(list)
-    for _ev in sti_events:
-        sti_by_target[_ev.target].append(_ev)
-
-    _interval_instances, _interval_ids, _interval_by_id, _interval_unmatched = (
-        _build_interval_data(sti_events)
-    )
-    _interval_marker_by_id = _build_interval_marker_index(sti_events)
-    _tag_channels, _tag_by_ch = _build_tag_data(sti_events)
+    sti_channels, sti_by_target, _interval_instances, _interval_ids, \
+        _interval_by_id, _interval_unmatched, _interval_marker_by_id, \
+        _tag_channels, _tag_by_ch = _build_sti_derived(sti_events)
 
     _seg_start_key = _attrgetter('start')
     segs_by_mk: Dict[str, list] = dict(segs_by_mk_build)
@@ -4635,7 +4797,8 @@ def _parse_btf(filepath: str,
             sti_events, _task_create_pri_raw, time_max, _mk_cache, _mk_repr)
     )
     _sync_objects, _sync_issues, _has_sync = _build_sync_object_data(
-        sti_events, _core_segs, _mk_repr, time_max, _core_seg_starts)
+        sti_events, _core_segs, _mk_repr, time_max, _core_seg_starts,
+        mk_cache=_mk_cache)
 
     # ------------------------------------------------------------------
     # Phase 4 : 1M-event performance pre-processing
@@ -4767,7 +4930,7 @@ def _parse_btf(filepath: str,
         segments=segments,
         sti_events=sti_events,
         sti_channels=sti_channels,
-        sti_events_by_target=dict(sti_by_target),
+        sti_events_by_target=sti_by_target,
         time_min=time_min,
         time_max=time_max,
         meta=meta,
@@ -13722,6 +13885,42 @@ class TimelineView(QGraphicsView):
         if self._scene._trace is not None and not splitting:
             self._resize_timer.start()
 
+    def _on_cpu_load_pane_toggled(self) -> None:
+        """Layout-only update after CPU-load show/hide (web ``v-if`` parity).
+
+        Horizontal layout: time-axis width is unchanged, so never rebuild the
+        QGraphicsScene here.  Vertical layout uses the normal fit/zoom path.
+        """
+        if self._scene._trace is None:
+            return
+        if not self._scene._horizontal:
+            self._on_resize_timeout()
+            return
+        self._apply_orth_only_resize_chrome()
+
+    def _apply_orth_only_resize_chrome(self) -> None:
+        """Reposition frozen chrome after a height-only viewport change.
+
+        Does not call ``rebuild()`` and does not force ``viewport().update()`` —
+        a forced full paint here made CPU-load toggle slower than letting Qt
+        expose only the damaged region.
+        """
+        if self._scene._trace is None:
+            return
+        vsize = self._fit_viewport_size()
+        time_span = max(
+            self._scene._trace.time_max - self._scene._trace.time_min, 1)
+        avail = max(vsize - self._scene._label_width, 100)
+        self._scene._timescale_per_px_fit = time_span / avail
+        self._reposition_frozen()
+        self._reposition_frozen_top()
+        self._update_virt_trace_bar_range()
+        if self._virtual_time_scroll_active:
+            if self._fit_mode:
+                self._push_virt_trace_bar()
+            else:
+                self._apply_virt_time_scroll_px(self._virt_time_scroll_px)
+
     def _on_resize_timeout(self) -> None:
         """Debounced resize handler.
 
@@ -13730,6 +13929,10 @@ class TimelineView(QGraphicsView):
         Zoom mode -> timescale_per_px is NEVER touched.  Only update _timescale_per_px_fit
                     so the zoom-out clamp reflects the new viewport size, and
                     reposition the frozen label column items.
+
+        Orthogonal-only resizes (CPU-load show/hide in horizontal layout) leave
+        the time-axis pixel size unchanged, so fit mode must NOT force a full
+        scene rebuild.
         """
         if self._scene._trace is None:
             return
@@ -13748,16 +13951,25 @@ class TimelineView(QGraphicsView):
         new_fit = time_span / avail
 
         if self._fit_mode:
+            old_tsp = self._scene._timescale_per_px
             self._scene._timescale_per_px_fit = new_fit
             self._scene._timescale_per_px     = new_fit
-            self._scene.rebuild()
-            self.resetTransform()
-            self.zoom_changed.emit(self._scene.timescale_per_px)
-            self._show_nav()
+            timescale_changed = (
+                abs(old_tsp - new_fit) > max(1e-12, abs(new_fit) * 1e-9))
+            if timescale_changed:
+                self._scene.rebuild()
+                self.resetTransform()
+                self.zoom_changed.emit(self._scene.timescale_per_px)
+                self._show_nav()
+            else:
+                # Height-only (or otherwise time-axis-unchanged) resize.
+                self._apply_orth_only_resize_chrome()
         else:
             # Zoom mode: preserve zoom level and canonical scroll position.
             self._scene._timescale_per_px_fit = new_fit
-            if self._needs_orth_fill_rebuild():
+            # Horizontal: height-only changes are chrome-only.  Vertical: the
+            # time axis is height, so orth-fill / coverage rebuilds still apply.
+            if (not self._scene._horizontal) and self._needs_orth_fill_rebuild():
                 self._scene.rebuild()
             self._reposition_frozen()
             self._reposition_frozen_top()
@@ -25096,6 +25308,201 @@ def trace_quality_summary(trace: Optional["BtfTrace"]) -> Optional[str]:
     if not warnings:
         return None
     return " · ".join(warnings)
+# ===========================================================================
+# Perfetto export
+# ===========================================================================
+
+# Process IDs in the exported trace (stable layout for Perfetto UI).
+_PID_CORES = 1
+_PID_TASKS = 2
+_PID_STI = 3
+_PID_INTERVALS = 4
+
+
+def _trace_us(value: float, time_scale: str) -> float:
+    """Convert a native-scale timestamp to Chrome Trace microseconds."""
+    return _to_ns(value, time_scale) / 1000.0
+
+
+def _meta_process(pid: int, name: str) -> dict:
+    return {"name": "process_name", "ph": "M", "pid": pid, "args": {"name": name}}
+
+
+def _meta_thread(pid: int, tid: int, name: str) -> dict:
+    return {
+        "name": "thread_name", "ph": "M", "pid": pid, "tid": tid,
+        "args": {"name": name},
+    }
+
+
+def build_perfetto_chrome_events(trace: "BtfTrace") -> List[dict]:
+    """Build Chrome Trace Event list from a parsed *trace*."""
+    scale = trace.time_scale or "ns"
+    events: List[dict] = []
+
+    # --- Cores / Tasks metadata ----------------------------------------
+    events.append(_meta_process(_PID_CORES, "Cores"))
+    core_tid: Dict[str, int] = {}
+    for i, core in enumerate(trace.core_names or [], start=1):
+        core_tid[core] = i
+        events.append(_meta_thread(_PID_CORES, i, core))
+
+    events.append(_meta_process(_PID_TASKS, "Tasks"))
+    task_tid: Dict[str, int] = {}
+    for i, mk in enumerate(trace.tasks or [], start=1):
+        raw = trace.task_repr.get(mk, mk)
+        label = _task_display_name(raw)
+        task_tid[mk] = i
+        events.append(_meta_thread(_PID_TASKS, i, label))
+
+    # --- Segments: discover missing tracks + emit run slices (one pass) -
+    for seg in trace.segments:
+        if seg.core and seg.core not in core_tid:
+            tid = len(core_tid) + 1
+            core_tid[seg.core] = tid
+            events.append(_meta_thread(_PID_CORES, tid, seg.core))
+
+        mk = _task_merge_key(seg.task)
+        raw = trace.task_repr.get(mk, seg.task)
+        label = _task_display_name(raw)
+        if mk not in task_tid:
+            tid = len(task_tid) + 1
+            task_tid[mk] = tid
+            events.append(_meta_thread(_PID_TASKS, tid, label))
+
+        ts = _trace_us(seg.start, scale)
+        dur = _trace_us(seg.end - seg.start, scale)
+        if dur < 0:
+            dur = 0.0
+        args = {"core": seg.core, "task": label}
+        ctid = core_tid.get(seg.core)
+        if ctid is not None:
+            events.append({
+                "name": label, "cat": "sched", "ph": "X",
+                "ts": ts, "dur": dur,
+                "pid": _PID_CORES, "tid": ctid, "args": args,
+            })
+        events.append({
+            "name": "run", "cat": "sched", "ph": "X",
+            "ts": ts, "dur": dur,
+            "pid": _PID_TASKS, "tid": task_tid[mk], "args": args,
+        })
+
+    # --- Migrations as instant markers on the task track -----------------
+    for mig in getattr(trace, "migrations", None) or []:
+        tid = task_tid.get(mig.merge_key)
+        if tid is None:
+            continue
+        events.append({
+            "name": "migrate", "cat": "sched", "ph": "i", "s": "t",
+            "ts": _trace_us(mig.ns, scale),
+            "pid": _PID_TASKS, "tid": tid,
+            "args": {
+                "from_core": mig.from_core,
+                "to_core": mig.to_core,
+                "gap_ns": mig.gap_ns,
+            },
+        })
+
+    # --- STI channels (skip interval_start/stop — those become Intervals) -
+    sti_channels = [
+        ch for ch in (trace.sti_channels or [])
+        if not _is_interval_marker_channel(ch)
+    ]
+    tick_times = getattr(trace, "tick_sti_times", None) or []
+    sti_events = [
+        ev for ev in (trace.sti_events or [])
+        if not _is_interval_marker_channel(ev.target)
+    ]
+    if sti_channels or tick_times or sti_events:
+        events.append(_meta_process(_PID_STI, "STI"))
+    sti_tid: Dict[str, int] = {}
+    for i, ch in enumerate(sti_channels, start=1):
+        sti_tid[ch] = i
+        events.append(_meta_thread(_PID_STI, i, ch))
+
+    for ev in sti_events:
+        tid = sti_tid.get(ev.target)
+        if tid is None:
+            tid = len(sti_tid) + 1
+            sti_tid[ev.target] = tid
+            events.append(_meta_thread(_PID_STI, tid, ev.target))
+        name = ev.note or ev.event or ev.target
+        events.append({
+            "name": name, "cat": "sti", "ph": "i", "s": "t",
+            "ts": _trace_us(ev.time, scale),
+            "pid": _PID_STI, "tid": tid,
+            "args": {
+                "channel": ev.target,
+                "event": ev.event,
+                "note": ev.note,
+                "core": ev.core,
+            },
+        })
+
+    if tick_times:
+        tick_tid = len(sti_tid) + 1
+        events.append(_meta_thread(_PID_STI, tick_tid, "TICK"))
+        for t in tick_times:
+            events.append({
+                "name": "TICK", "cat": "sti", "ph": "i", "s": "t",
+                "ts": _trace_us(t, scale),
+                "pid": _PID_STI, "tid": tick_tid,
+            })
+
+    # --- Paired intervals ------------------------------------------------
+    intervals = getattr(trace, "interval_instances", None) or []
+    if intervals:
+        events.append(_meta_process(_PID_INTERVALS, "Intervals"))
+        id_tid: Dict[str, int] = {}
+        for i, iid in enumerate(getattr(trace, "interval_ids", None) or [], start=1):
+            id_tid[iid] = i
+            events.append(_meta_thread(_PID_INTERVALS, i, iid))
+        for inst in intervals:
+            tid = id_tid.get(inst.id)
+            if tid is None:
+                tid = len(id_tid) + 1
+                id_tid[inst.id] = tid
+                events.append(_meta_thread(_PID_INTERVALS, tid, inst.id))
+            ts = _trace_us(inst.start_ns, scale)
+            dur = _trace_us(inst.stop_ns - inst.start_ns, scale)
+            if dur < 0:
+                dur = 0.0
+            events.append({
+                "name": inst.id, "cat": "interval", "ph": "X",
+                "ts": ts, "dur": dur,
+                "pid": _PID_INTERVALS, "tid": tid,
+                "args": {
+                    "start_core": inst.start_core,
+                    "stop_core": inst.stop_core,
+                    "task_id": inst.task_id or "",
+                },
+            })
+
+    return events
+
+
+def build_perfetto_chrome_trace(trace: "BtfTrace") -> dict:
+    """Return a Chrome Trace JSON object for *trace*."""
+    meta = dict(trace.meta or {})
+    return {
+        "traceEvents": build_perfetto_chrome_events(trace),
+        "displayTimeUnit": "ns",
+        "otherData": {
+            "source": "RTOS BTF Viewer",
+            "timeScale": trace.time_scale,
+            "time_min": trace.time_min,
+            "time_max": trace.time_max,
+            "btf_meta": meta,
+        },
+    }
+
+
+def export_perfetto(trace: "BtfTrace", path: str) -> None:
+    """Write a Perfetto-compatible Chrome Trace JSON file to *path*."""
+    payload = build_perfetto_chrome_trace(trace)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, separators=(",", ":"), ensure_ascii=False)
 class _CpuLoadScrollArea(QScrollArea):
     """Scroll host for the CPU load graph — pane height comes from the splitter, not row count."""
 
@@ -26129,6 +26536,121 @@ class _TimelinePane(QWidget):
         lay.addWidget(self.time_scroll, 0)
         view.attach_time_scroll_bar(self.time_scroll)
 
+class _CpuLoadStack(QWidget):
+    """Timeline fills the pane; CPU load overlays the bottom.
+
+    Show/hide never changes the timeline widget geometry, so QGraphicsView does
+    not rebuild or repaint on Load toggle (the desktop cost vs the web ``v-if``).
+    """
+
+    splitterMoved = Signal(int, int)  # pos, index — QSplitter-compatible
+
+    def __init__(
+        self,
+        timeline_pane: QWidget,
+        cpu_scroll: QWidget,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._timeline = timeline_pane
+        self._cpu = cpu_scroll
+        self._handle = QWidget(self)
+        self._handle.setObjectName("cpu_load_handle")
+        self._handle.setCursor(Qt.CursorShape.SplitVCursor)
+        self._handle_h = 6
+        self._cpu_h = CPU_LOAD_ROW_H
+        self._cpu_visible = True
+        self._dragging = False
+        self._drag_global_y = 0
+        self._drag_h0 = 0
+        self._timeline.setParent(self)
+        self._cpu.setParent(self)
+        self._handle.setParent(self)
+        self._handle.installEventFilter(self)
+        self._handle.setAutoFillBackground(True)
+
+    def handle(self, index: int = 1) -> QWidget:  # noqa: ARG002
+        return self._handle
+
+    def handleWidth(self) -> int:
+        return self._handle_h
+
+    def setSizes(self, sizes: List[int]) -> None:
+        if len(sizes) >= 2 and sizes[1] > 0:
+            self._cpu_h = int(sizes[1])
+        self._reposition()
+
+    def sizes(self) -> List[int]:
+        h = max(self.height(), 0)
+        if not self._cpu_visible:
+            return [h, 0]
+        cpu_h = self._cpu.height() if self._cpu.isVisible() else max(self._cpu_h, 0)
+        return [max(0, h - cpu_h - self._handle_h), cpu_h]
+
+    def set_cpu_visible(self, visible: bool) -> None:
+        """Show or hide the CPU overlay without resizing the timeline."""
+        visible = bool(visible)
+        if self._cpu_visible == visible:
+            if visible:
+                self._reposition()
+            return
+        self._cpu_visible = visible
+        self._reposition()
+
+    def cpu_visible(self) -> bool:
+        return self._cpu_visible
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._reposition()
+
+    def _reposition(self) -> None:
+        w = max(self.width(), 0)
+        h = max(self.height(), 0)
+        # Timeline always fills the stack — toggle must not change this geometry.
+        self._timeline.setGeometry(0, 0, w, h)
+        if not self._cpu_visible or h <= 0 or w <= 0:
+            self._handle.hide()
+            self._cpu.hide()
+            return
+        max_cpu = max(40, h - 100 - self._handle_h)
+        cpu_h = max(
+            _CpuLoadScrollArea._MIN_PANE_H,
+            min(int(self._cpu_h), CPU_LOAD_PANE_MAX_H, max_cpu),
+        )
+        self._cpu_h = cpu_h
+        y_handle = h - cpu_h - self._handle_h
+        self._handle.setGeometry(0, y_handle, w, self._handle_h)
+        self._cpu.setGeometry(0, y_handle + self._handle_h, w, cpu_h)
+        self._handle.show()
+        self._cpu.show()
+        self._handle.raise_()
+        self._cpu.raise_()
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if obj is not self._handle:
+            return super().eventFilter(obj, event)
+        et = event.type()
+        if et == QEvent.Type.MouseButtonPress:
+            if event.button() == Qt.MouseButton.LeftButton:
+                self._dragging = True
+                gp = event.globalPosition().toPoint()
+                self._drag_global_y = gp.y()
+                self._drag_h0 = self.sizes()[1] if self._cpu_visible else self._cpu_h
+            return False
+        if et == QEvent.Type.MouseMove and self._dragging:
+            gp = event.globalPosition().toPoint()
+            dy = gp.y() - self._drag_global_y
+            # Handle sits above the CPU pane: drag up → taller CPU, down → shorter.
+            self._cpu_h = self._drag_h0 - dy
+            self._reposition()
+            self.splitterMoved.emit(self._handle.y(), 1)
+            return False
+        if et == QEvent.Type.MouseButtonRelease:
+            self._dragging = False
+            return False
+        return False
+
 class _CpuSplitterHandleFilter(QObject):
     """Mark CPU-load splitter drags so layout/rebuild stays deferred until release."""
 
@@ -26168,15 +26690,8 @@ class _TraceTab:
         win._setup_cpu_load_scroll(self.cpu_load_scroll, self.cpu_load_graph)
 
         self._timeline_pane = _TimelinePane(self.view)
-        self.cpu_splitter = _ResizeSplitter(Qt.Orientation.Vertical)
-        self.cpu_splitter.addWidget(self._timeline_pane)
-        self.cpu_splitter.addWidget(self.cpu_load_scroll)
-        self.cpu_splitter.setStretchFactor(0, 1)
-        self.cpu_splitter.setStretchFactor(1, 0)
+        self.cpu_splitter = _CpuLoadStack(self._timeline_pane, self.cpu_load_scroll)
         self.cpu_splitter.setSizes([600, CPU_LOAD_ROW_H])
-        self.cpu_splitter.setHandleWidth(6)
-        self.cpu_splitter.setCollapsible(0, False)
-        self.cpu_splitter.setCollapsible(1, False)
         self.cpu_splitter.splitterMoved.connect(win._on_cpu_splitter_moved)
         handle = self.cpu_splitter.handle(1)
         if handle is not None:
@@ -26184,7 +26699,7 @@ class _TraceTab:
             handle.installEventFilter(filt)
             win._cpu_splitter_handle_filters.append(filt)
         if not win._show_cpu_load:
-            self.cpu_load_scroll.hide()
+            self.cpu_splitter.set_cpu_visible(False)
         self._stats_built = False
 
     @property
@@ -26614,7 +27129,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         return self._settings_cpu_scroll
 
     @property
-    def _cpu_splitter(self) -> QSplitter:
+    def _cpu_splitter(self) -> "_CpuLoadStack":
         tab = self._active_tab
         if tab is not None:
             return tab.cpu_splitter
@@ -27225,7 +27740,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     def _update_tab_actions(self) -> None:
         has_trace = self._trace is not None
-        for act in (self._act_save_img, self._act_save_svg, self._act_copy_img):
+        for act in (
+            self._act_save_img, self._act_save_svg, self._act_copy_img,
+            self._act_export_perfetto,
+        ):
             act.setEnabled(has_trace)
         if hasattr(self, "_act_close_tab"):
             has_tabs = len(self._tabs) > 0
@@ -27693,11 +28211,14 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._sync_cpu_load_graph(tab)
 
         if not self._show_cpu_load:
-            self._cpu_load_scroll.hide()
+            for tab in self._tabs:
+                tab.cpu_splitter.set_cpu_visible(False)
             if hasattr(self, "_tb_cpu_load_btn"):
                 self._tb_cpu_load_btn.setChecked(False)
         elif hasattr(self, "_tb_cpu_load_btn"):
             self._tb_cpu_load_btn.setChecked(True)
+            for tab in self._tabs:
+                tab.cpu_splitter.set_cpu_visible(True)
 
         self._cpu_load_graph.set_row_h(self._cpu_load_row_h_val)
 
@@ -28271,6 +28792,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             }}
             QSplitter::handle:vertical {{
                 height:6px;
+            }}
+            QWidget#cpu_load_handle {{
+                background:{c['sep']};
+            }}
+            QWidget#cpu_load_handle:hover {{
+                background:{c['accent']};
             }}
             QSplitter::handle:horizontal {{
                 width:6px;
@@ -28912,6 +29439,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._act_save_svg.setEnabled(False)
         self._act_copy_img = fm.addAction("&Copy Image to Clipboard", self._on_copy_image, "Ctrl+Shift+C")
         self._act_copy_img.setEnabled(False)
+        self._act_export_perfetto = fm.addAction(
+            "Export &Perfetto…", self._on_export_perfetto, "Ctrl+Shift+E")
+        self._act_export_perfetto.setEnabled(False)
         self._act_close_tab = fm.addAction("Close &Tab", self._on_close_tab_action, QKeySequence.Close)
         self._act_close_tab.setEnabled(False)
         self._act_close_all_tabs = fm.addAction("Close &All Tabs", self._on_close_all_tabs_action)
@@ -29345,8 +29875,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         else:
             self._autofit_cpu_load_height()
 
-    def _set_cpu_splitter_sizes(self, splitter: QSplitter, sizes: List[int]) -> None:
-        """Apply splitter sizes without treating the move as a user drag."""
+    def _set_cpu_splitter_sizes(self, splitter: "_CpuLoadStack", sizes: List[int]) -> None:
+        """Apply CPU pane height without treating the move as a user drag."""
         self._cpu_splitter_programmatic = True
         try:
             splitter.setSizes(sizes)
@@ -29371,7 +29901,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         }, flush=False)
 
     def _on_cpu_splitter_moved(self, pos: int = 0, index: int = 0) -> None:
-        """Remember manual timeline / CPU load split; defer layout until drag ends."""
+        """Remember manual timeline / CPU load split; defer layout until release."""
         if self._cpu_splitter_programmatic or not self._cpu_splitter_user_drag:
             return
         self._cpu_splitter_resizing = True
@@ -29379,18 +29909,18 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._cpu_splitter_drag_timer.start()
 
     def _on_cpu_splitter_drag_end(self) -> None:
-        """Finish CPU load splitter drag — one layout pass, no rebuild storm."""
+        """Finish CPU load pane drag — overlay height only, no timeline resize."""
         self._cpu_splitter_resizing = False
         self._cpu_splitter_user_drag = False
         self._persist_cpu_splitter_prefs()
         if tab := self._active_tab:
             tab.cpu_load_graph._schedule_sync_scroll_size()
-            tab.view._position_virt_trace_bar()
-            tab.view._resize_timer.start()
 
-    def _apply_saved_cpu_splitter(self, tab: Optional[_TraceTab] = None) -> None:
+    def _apply_saved_cpu_splitter(
+        self, tab: Optional[_TraceTab] = None, *, force: bool = False,
+    ) -> None:
         """Restore a user-resized CPU load pane height on *tab*."""
-        if getattr(self, "_cpu_splitter_resizing", False):
+        if not force and getattr(self, "_cpu_splitter_resizing", False):
             return
         tab = tab or self._active_tab
         if tab is None or not self._cpu_splitter_user_sized:
@@ -29398,34 +29928,39 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         bottom = self._cpu_splitter_bottom_h
         if bottom is None or bottom <= 0:
             return
-        splitter = tab.cpu_splitter
-        total = splitter.height()
+        stack = tab.cpu_splitter
+        total = stack.height()
         if total <= 0:
             return
-        handle = splitter.handleWidth()
+        handle = stack.handleWidth()
         avail = max(140, total - handle)
         bottom = max(
             _CpuLoadScrollArea._MIN_PANE_H,
             min(bottom, CPU_LOAD_PANE_MAX_H, avail - 100),
         )
         top = avail - bottom
-        cur = splitter.sizes()
+        cur = stack.sizes()
         if len(cur) >= 2 and abs(cur[0] - top) <= 1 and abs(cur[1] - bottom) <= 1:
             return
-        self._set_cpu_splitter_sizes(splitter, [top, bottom])
+        self._set_cpu_splitter_sizes(stack, [top, bottom])
 
     def _autofit_cpu_load_height(self) -> None:
-        """Resize the CPU load splitter pane; cap height so extra cores scroll inside."""
+        """Resize the CPU load overlay; cap height so extra cores scroll inside."""
         if self._cpu_splitter_user_sized:
             return
-        if not self._show_cpu_load or not self._cpu_load_scroll.isVisible():
+        if not self._show_cpu_load:
+            return
+        tab = self._active_tab
+        if tab is None or not tab.cpu_splitter.cpu_visible():
             return
         fit_h = self._cpu_load_graph.preferred_pane_height()
-        sizes = self._cpu_splitter.sizes()
-        total = sum(sizes)
+        sizes = tab.cpu_splitter.sizes()
+        total = sum(sizes) if sizes else tab.cpu_splitter.height()
+        if total <= 0:
+            total = tab.cpu_splitter.height()
         new_bottom = max(40, min(fit_h, total - 100))
         self._set_cpu_splitter_sizes(
-            self._cpu_splitter, [total - new_bottom, new_bottom])
+            tab.cpu_splitter, [max(0, total - new_bottom), new_bottom])
         self._cpu_load_graph._schedule_sync_scroll_size()
 
     def _drain_pending_open_paths(self) -> None:
@@ -29731,30 +30266,25 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._view.set_all_cores_expanded(expanded)
 
     def _toggle_cpu_load_graph(self) -> None:
-        """Show or hide the CPU load graph panel."""
+        """Show or hide the CPU load graph panel.
+
+        Overlay layout: the timeline widget is never resized.  Update the
+        settings model quietly — assigning ``_show_cpu_load`` emits
+        ``settings_changed`` and re-applies every view setting (a dozen scene
+        rebuilds), which is what made Load feel slower than the web.
+        """
         visible = self._tb_cpu_load_btn.isChecked()
-        self._show_cpu_load = visible
-        # Block intermediate repaints while layout settles (autofit changes the
-        # splitter height, triggering multiple update() calls via scroll / resize
-        # signals).  setUpdatesEnabled coalesces all of them into one final paint.
-        graph = self._cpu_load_graph
-        graph.setUpdatesEnabled(False)
-        try:
-            for tab in self._tabs:
-                tab.cpu_load_scroll.setVisible(visible)
-            if visible and self._active_tab is not None:
-                if self._cpu_splitter_user_sized:
-                    self._apply_saved_cpu_splitter()
-                else:
-                    self._autofit_cpu_load_height()
-        finally:
-            graph.setUpdatesEnabled(True)
-        # Cancel the 80 ms debounce timer that setVisible() / autofit arm via
-        # resizeEvent and handle the layout update immediately.  This eliminates
-        # the delayed visual "snap" while keeping the same code path.
-        if tab := self._active_tab:
-            tab.view._resize_timer.stop()
-            tab.view._on_resize_timeout()
+        if self._vm.settings._model.show_cpu_load != visible:
+            self._vm.settings._model.show_cpu_load = visible
+            self._settings.set(
+                "view", "show_cpu_load", str(visible).lower(), flush=False)
+        for tab in self._tabs:
+            tab.cpu_splitter.set_cpu_visible(visible)
+        if visible and self._active_tab is not None:
+            if self._cpu_splitter_user_sized:
+                self._apply_saved_cpu_splitter(self._active_tab, force=True)
+            else:
+                self._autofit_cpu_load_height()
 
     def _sync_toolbar_to_active_tab(self) -> None:
         """Refresh toolbar toggles that reflect per-tab view state."""
@@ -30613,8 +31143,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._act_undo.setEnabled(False)
         self._act_redo.setEnabled(False)
         self._focus_statistics_panel(force=True)
-        if self._show_cpu_load:
-            self._cpu_load_scroll.show()
+        if self._show_cpu_load and self._active_tab is not None:
+            self._active_tab.cpu_splitter.set_cpu_visible(True)
+            if self._cpu_splitter_user_sized:
+                self._apply_saved_cpu_splitter(self._active_tab, force=True)
+            else:
+                self._autofit_cpu_load_height()
 
         self._save_recent_files(path)
         self._rebuild_recent_menu()
@@ -30696,6 +31230,27 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         _copy_pixmap_to_clipboard(pixmap, capture_dpr)
         self.statusBar().showMessage("Copied to clipboard!", 4000)
 
+    @_dialog_guard
+    def _on_export_perfetto(self) -> None:
+        """Export the loaded trace as Chrome Trace JSON for ui.perfetto.dev."""
+        if self._trace is None:
+            return
+        base = os.path.splitext(self._current_file)[0] if self._current_file else "trace"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Perfetto",
+            base + ".json",
+            "Perfetto / Chrome Trace (*.json);;All files (*)",
+        )
+        if not path:
+            return
+        try:
+            export_perfetto(self._trace, path)
+            self.statusBar().showMessage(
+                f"Perfetto exported → {os.path.basename(path)}", 4000)
+        except (OSError, TypeError, ValueError, AttributeError, RuntimeError) as exc:
+            QMessageBox.critical(
+                self, "Export Error", f"Could not export Perfetto file:\n{exc}")
+
     # -- Settings actions -----------------------------------------------
 
     def _apply_settings_preview(self, vals: dict) -> None:
@@ -30747,10 +31302,16 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._act_show_find.setChecked(self._show_find)
             self._sync_panel_tab_visibility()
         if vals.get("show_cpu_load", self._show_cpu_load) != self._show_cpu_load:
-            self._show_cpu_load = vals["show_cpu_load"]
+            # Quiet model update — avoid settings_changed → full view rebuild.
+            self._vm.settings._model.show_cpu_load = bool(vals["show_cpu_load"])
             for tab in self._tabs:
-                tab.cpu_load_scroll.setVisible(self._show_cpu_load)
+                tab.cpu_splitter.set_cpu_visible(self._show_cpu_load)
             self._tb_cpu_load_btn.setChecked(self._show_cpu_load)
+            if self._show_cpu_load and self._active_tab is not None:
+                if self._cpu_splitter_user_sized:
+                    self._apply_saved_cpu_splitter(self._active_tab, force=True)
+                else:
+                    self._autofit_cpu_load_height()
         if vals["show_hover_highlight"] != self._hover_highlight_val:
             self._hover_highlight_val = vals["show_hover_highlight"]
             self._view._scene.set_hover_highlight(self._hover_highlight_val)
@@ -31498,13 +32059,19 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._set_show_sti(bool(opts["showSti"]), persist=False)
         if "showCpuLoad" in opts:
             want_cpu = bool(opts["showCpuLoad"])
-            self._show_cpu_load = want_cpu
+            # Quiet model update — avoid settings_changed → full view rebuild.
+            self._vm.settings._model.show_cpu_load = want_cpu
             for tab in self._tabs:
-                tab.cpu_load_scroll.setVisible(want_cpu)
+                tab.cpu_splitter.set_cpu_visible(want_cpu)
             if hasattr(self, "_tb_cpu_load_btn"):
                 self._tb_cpu_load_btn.blockSignals(True)
                 self._tb_cpu_load_btn.setChecked(want_cpu)
                 self._tb_cpu_load_btn.blockSignals(False)
+            if want_cpu and self._active_tab is not None:
+                if self._cpu_splitter_user_sized:
+                    self._apply_saved_cpu_splitter(self._active_tab, force=True)
+                else:
+                    self._autofit_cpu_load_height()
         if "darkMode" in opts:
             want_dark = bool(opts["darkMode"])
             if self._is_dark != want_dark:
@@ -31792,7 +32359,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 ("Ctrl+Tab",     "Next trace tab"),
                 ("Ctrl+Shift+Tab", "Previous trace tab"),
                 ("Ctrl+S",       "Open snapshot editor"),
+                ("Ctrl+Shift+S", "Save viewport as SVG"),
                 ("Ctrl+Shift+C", "Copy viewport to clipboard"),
+                ("Ctrl+Shift+E", "Export Perfetto (Chrome Trace JSON)"),
                 ("Ctrl+Q",       "Quit  (Alt+F4 also works on Windows)"),
             ]),
             ("Edit", [
@@ -32195,6 +32764,8 @@ Headless analysis commands (desktop only — no GUI, no Qt window):
   migrations   Core Migrations table only (CSV).
   snapshot     Export a PNG/SVG image (timeline, migration heatmap, or a
                statistics metric plot) without opening the GUI.
+  perfetto     Export Chrome Trace JSON for https://ui.perfetto.dev
+               (same as File → Export Perfetto…).
 
 Time range (--lo / --hi):
   Values are raw trace timestamps in the file's time units (see # timeScale
@@ -32222,6 +32793,7 @@ CLI examples:
   %(prog)s migrations tracedata/example-4cores.btf -o /tmp/migrations.csv
   %(prog)s snapshot tracedata/example-4cores.btf -o /tmp/timeline.png --view timeline
   %(prog)s snapshot tracedata/example-4cores.btf -o /tmp/task.png --view plot --metric exec --task "Producer[1]"
+  %(prog)s perfetto tracedata/example-4cores.btf -o /tmp/example.json
 
 Run "%(prog)s <command> -h" for command-specific help.
 """
@@ -32281,6 +32853,19 @@ examples:
   %(prog)s trace.btf -o migrations.csv
   %(prog)s trace.btf -o -               # explicit stdout
   %(prog)s trace.btf -o out.csv --lo T --hi T
+"""
+
+_CLI_EPILOG_PERFETTO = """\
+Writes Chrome Trace Event Format JSON (no protobuf). Tracks:
+
+  Cores       one row per core; slices named by the running task
+  Tasks       one row per task; on-CPU run slices (core in args)
+  STI         instant events per software-trace channel (+ TICK)
+  Intervals   paired interval_start / interval_stop spans (when present)
+
+examples:
+  %(prog)s trace.btf -o trace.json
+  %(prog)s tracedata/example-4cores.btf -o /tmp/example.json
 """
 
 _CLI_LO_HELP = (
@@ -32578,12 +33163,33 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
         help="colour theme for the rendered image (default: dark)",
     )
 
+    perfetto = sub.add_parser(
+        "perfetto",
+        help="export Chrome Trace JSON for ui.perfetto.dev (File → Export Perfetto…)",
+        description=(
+            "Export a Perfetto-compatible Chrome Trace Event JSON file.\n\n"
+            "Open the result in https://ui.perfetto.dev (Open trace file).\n"
+            "Matches File → Export Perfetto… in the GUI."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=_CLI_EPILOG_PERFETTO,
+    )
+    perfetto.add_argument(
+        "trace", metavar="trace.btf",
+        help="path to the .btf trace file to export",
+    )
+    perfetto.add_argument(
+        "-o", "--output", required=True, metavar="PATH",
+        help="output Chrome Trace JSON path (e.g. trace.json)",
+    )
+
     return parser, {
         "report": report,
         "compare": compare,
         "info": info,
         "migrations": migrations,
         "snapshot": snapshot,
+        "perfetto": perfetto,
     }
 
 def _cli_export_output_paths(output: str, fmt: Optional[str]) -> Tuple[str, str, str]:
@@ -33242,12 +33848,32 @@ def _cli_snapshot_main(argv: List[str]) -> int:
     args = _make_arg_parser()[1]["snapshot"].parse_args(argv)
     return _cli_snapshot_run(args)
 
+def _cli_perfetto_run(args: argparse.Namespace) -> int:
+    path = os.path.abspath(args.trace)
+    trace, err_load = _cli_load_trace(path)
+    if err_load:
+        print(err_load, file=sys.stderr)
+        return 1
+    out = os.path.abspath(args.output)
+    try:
+        export_perfetto(trace, out)
+    except (OSError, TypeError, ValueError, AttributeError, RuntimeError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(out)
+    return 0
+
+def _cli_perfetto_main(argv: List[str]) -> int:
+    args = _make_arg_parser()[1]["perfetto"].parse_args(argv)
+    return _cli_perfetto_run(args)
+
 _CLI_COMMANDS = {
     "report": _cli_report_main,
     "compare": _cli_compare_main,
     "info": _cli_info_main,
     "migrations": _cli_migrations_main,
     "snapshot": _cli_snapshot_main,
+    "perfetto": _cli_perfetto_main,
 }
 
 def _cli_gui_trace_paths(argv: List[str]) -> List[str]:

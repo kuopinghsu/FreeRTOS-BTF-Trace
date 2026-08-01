@@ -32,6 +32,7 @@
       @add-mark="onAddMark"
       @copy-screenshot="onCopyScreenshot"
       @export-svg="onExportSvg"
+      @export-perfetto="onExportPerfetto"
       @show-heatmap="onOpenHeatmap"
       @show-chord="chordOpen = true"
       @clear-task-filter="clearHeatmapTaskFilter"
@@ -630,6 +631,9 @@
                 Export SVG
               </div><div>Exports the current view; includes CPU load when Load is on</div>
               <div class="k">
+                Perfetto / Ctrl+Shift+E
+              </div><div>Download Chrome Trace JSON for ui.perfetto.dev (full loaded trace)</div>
+              <div class="k">
                 File names
               </div><div>Exports use timeline-with-load.* when CPU load is included</div>
             </div>
@@ -830,6 +834,7 @@ import {
   buildPortableSession, parsePortableSession, applyPortableSession, downloadPortableSession,
   sessionCursorsSlotCount,
 } from './utils/sessionPortable.js'
+import { downloadPerfetto } from './utils/perfettoExport.js'
 import { computeFindHits, stepFindHitIndex } from './utils/findAnalysis.js'
 import { traceQualitySummary } from './utils/traceQuality.js'
 import exampleBtfB64   from 'virtual:example-btf'
@@ -1751,6 +1756,20 @@ async function onExportSvg() {
   URL.revokeObjectURL(url)
 }
 
+function onExportPerfetto() {
+  if (!trace.value) {
+    showToast('Open a trace before exporting Perfetto.', 'error')
+    return
+  }
+  const base = (activeTab.value?.name || 'trace').replace(/\.btf$/i, '')
+  try {
+    downloadPerfetto(trace.value, `${base}.json`)
+    showToast('Perfetto exported', 'info')
+  } catch (err) {
+    showToast(`Perfetto export failed: ${err?.message || err}`, 'error')
+  }
+}
+
 function captureFilter(node) {
   if (!(node instanceof HTMLElement)) return true
   return !node.classList.contains('context-menu') && !node.classList.contains('sti-tooltip')
@@ -2285,6 +2304,11 @@ function onGlobalKeydown(e) {
   if (mod && e.shiftKey && e.key.toLowerCase() === 's') {
     e.preventDefault()
     onExportSvg()
+    return
+  }
+  if (mod && e.shiftKey && e.key.toLowerCase() === 'e') {
+    e.preventDefault()
+    onExportPerfetto()
     return
   }
   if (mod && !e.shiftKey && e.key.toLowerCase() === 's') {

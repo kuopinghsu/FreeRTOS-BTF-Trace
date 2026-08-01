@@ -13,6 +13,7 @@ from .stats import _RcSettings, _parse_task_deadlines_text
 from .mvvm import MainViewModel, MvvmSettingsMixin, TraceTabViewModel
 from .mvvm.tab_viewport import apply_viewport, viewport_from_json, viewport_to_json
 from .trace_quality import trace_quality_summary
+from .perfetto_export import export_perfetto
 
 class _CpuLoadScrollArea(QScrollArea):
     """Scroll host for the CPU load graph — pane height comes from the splitter, not row count."""
@@ -1047,6 +1048,121 @@ class _TimelinePane(QWidget):
         lay.addWidget(self.time_scroll, 0)
         view.attach_time_scroll_bar(self.time_scroll)
 
+class _CpuLoadStack(QWidget):
+    """Timeline fills the pane; CPU load overlays the bottom.
+
+    Show/hide never changes the timeline widget geometry, so QGraphicsView does
+    not rebuild or repaint on Load toggle (the desktop cost vs the web ``v-if``).
+    """
+
+    splitterMoved = Signal(int, int)  # pos, index — QSplitter-compatible
+
+    def __init__(
+        self,
+        timeline_pane: QWidget,
+        cpu_scroll: QWidget,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._timeline = timeline_pane
+        self._cpu = cpu_scroll
+        self._handle = QWidget(self)
+        self._handle.setObjectName("cpu_load_handle")
+        self._handle.setCursor(Qt.CursorShape.SplitVCursor)
+        self._handle_h = 6
+        self._cpu_h = CPU_LOAD_ROW_H
+        self._cpu_visible = True
+        self._dragging = False
+        self._drag_global_y = 0
+        self._drag_h0 = 0
+        self._timeline.setParent(self)
+        self._cpu.setParent(self)
+        self._handle.setParent(self)
+        self._handle.installEventFilter(self)
+        self._handle.setAutoFillBackground(True)
+
+    def handle(self, index: int = 1) -> QWidget:  # noqa: ARG002
+        return self._handle
+
+    def handleWidth(self) -> int:
+        return self._handle_h
+
+    def setSizes(self, sizes: List[int]) -> None:
+        if len(sizes) >= 2 and sizes[1] > 0:
+            self._cpu_h = int(sizes[1])
+        self._reposition()
+
+    def sizes(self) -> List[int]:
+        h = max(self.height(), 0)
+        if not self._cpu_visible:
+            return [h, 0]
+        cpu_h = self._cpu.height() if self._cpu.isVisible() else max(self._cpu_h, 0)
+        return [max(0, h - cpu_h - self._handle_h), cpu_h]
+
+    def set_cpu_visible(self, visible: bool) -> None:
+        """Show or hide the CPU overlay without resizing the timeline."""
+        visible = bool(visible)
+        if self._cpu_visible == visible:
+            if visible:
+                self._reposition()
+            return
+        self._cpu_visible = visible
+        self._reposition()
+
+    def cpu_visible(self) -> bool:
+        return self._cpu_visible
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._reposition()
+
+    def _reposition(self) -> None:
+        w = max(self.width(), 0)
+        h = max(self.height(), 0)
+        # Timeline always fills the stack — toggle must not change this geometry.
+        self._timeline.setGeometry(0, 0, w, h)
+        if not self._cpu_visible or h <= 0 or w <= 0:
+            self._handle.hide()
+            self._cpu.hide()
+            return
+        max_cpu = max(40, h - 100 - self._handle_h)
+        cpu_h = max(
+            _CpuLoadScrollArea._MIN_PANE_H,
+            min(int(self._cpu_h), CPU_LOAD_PANE_MAX_H, max_cpu),
+        )
+        self._cpu_h = cpu_h
+        y_handle = h - cpu_h - self._handle_h
+        self._handle.setGeometry(0, y_handle, w, self._handle_h)
+        self._cpu.setGeometry(0, y_handle + self._handle_h, w, cpu_h)
+        self._handle.show()
+        self._cpu.show()
+        self._handle.raise_()
+        self._cpu.raise_()
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if obj is not self._handle:
+            return super().eventFilter(obj, event)
+        et = event.type()
+        if et == QEvent.Type.MouseButtonPress:
+            if event.button() == Qt.MouseButton.LeftButton:
+                self._dragging = True
+                gp = event.globalPosition().toPoint()
+                self._drag_global_y = gp.y()
+                self._drag_h0 = self.sizes()[1] if self._cpu_visible else self._cpu_h
+            return False
+        if et == QEvent.Type.MouseMove and self._dragging:
+            gp = event.globalPosition().toPoint()
+            dy = gp.y() - self._drag_global_y
+            # Handle sits above the CPU pane: drag up → taller CPU, down → shorter.
+            self._cpu_h = self._drag_h0 - dy
+            self._reposition()
+            self.splitterMoved.emit(self._handle.y(), 1)
+            return False
+        if et == QEvent.Type.MouseButtonRelease:
+            self._dragging = False
+            return False
+        return False
+
 class _CpuSplitterHandleFilter(QObject):
     """Mark CPU-load splitter drags so layout/rebuild stays deferred until release."""
 
@@ -1086,15 +1202,8 @@ class _TraceTab:
         win._setup_cpu_load_scroll(self.cpu_load_scroll, self.cpu_load_graph)
 
         self._timeline_pane = _TimelinePane(self.view)
-        self.cpu_splitter = _ResizeSplitter(Qt.Orientation.Vertical)
-        self.cpu_splitter.addWidget(self._timeline_pane)
-        self.cpu_splitter.addWidget(self.cpu_load_scroll)
-        self.cpu_splitter.setStretchFactor(0, 1)
-        self.cpu_splitter.setStretchFactor(1, 0)
+        self.cpu_splitter = _CpuLoadStack(self._timeline_pane, self.cpu_load_scroll)
         self.cpu_splitter.setSizes([600, CPU_LOAD_ROW_H])
-        self.cpu_splitter.setHandleWidth(6)
-        self.cpu_splitter.setCollapsible(0, False)
-        self.cpu_splitter.setCollapsible(1, False)
         self.cpu_splitter.splitterMoved.connect(win._on_cpu_splitter_moved)
         handle = self.cpu_splitter.handle(1)
         if handle is not None:
@@ -1102,7 +1211,7 @@ class _TraceTab:
             handle.installEventFilter(filt)
             win._cpu_splitter_handle_filters.append(filt)
         if not win._show_cpu_load:
-            self.cpu_load_scroll.hide()
+            self.cpu_splitter.set_cpu_visible(False)
         self._stats_built = False
 
     @property
@@ -1532,7 +1641,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         return self._settings_cpu_scroll
 
     @property
-    def _cpu_splitter(self) -> QSplitter:
+    def _cpu_splitter(self) -> "_CpuLoadStack":
         tab = self._active_tab
         if tab is not None:
             return tab.cpu_splitter
@@ -2143,7 +2252,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     def _update_tab_actions(self) -> None:
         has_trace = self._trace is not None
-        for act in (self._act_save_img, self._act_save_svg, self._act_copy_img):
+        for act in (
+            self._act_save_img, self._act_save_svg, self._act_copy_img,
+            self._act_export_perfetto,
+        ):
             act.setEnabled(has_trace)
         if hasattr(self, "_act_close_tab"):
             has_tabs = len(self._tabs) > 0
@@ -2611,11 +2723,14 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._sync_cpu_load_graph(tab)
 
         if not self._show_cpu_load:
-            self._cpu_load_scroll.hide()
+            for tab in self._tabs:
+                tab.cpu_splitter.set_cpu_visible(False)
             if hasattr(self, "_tb_cpu_load_btn"):
                 self._tb_cpu_load_btn.setChecked(False)
         elif hasattr(self, "_tb_cpu_load_btn"):
             self._tb_cpu_load_btn.setChecked(True)
+            for tab in self._tabs:
+                tab.cpu_splitter.set_cpu_visible(True)
 
         self._cpu_load_graph.set_row_h(self._cpu_load_row_h_val)
 
@@ -3189,6 +3304,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             }}
             QSplitter::handle:vertical {{
                 height:6px;
+            }}
+            QWidget#cpu_load_handle {{
+                background:{c['sep']};
+            }}
+            QWidget#cpu_load_handle:hover {{
+                background:{c['accent']};
             }}
             QSplitter::handle:horizontal {{
                 width:6px;
@@ -3830,6 +3951,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._act_save_svg.setEnabled(False)
         self._act_copy_img = fm.addAction("&Copy Image to Clipboard", self._on_copy_image, "Ctrl+Shift+C")
         self._act_copy_img.setEnabled(False)
+        self._act_export_perfetto = fm.addAction(
+            "Export &Perfetto…", self._on_export_perfetto, "Ctrl+Shift+E")
+        self._act_export_perfetto.setEnabled(False)
         self._act_close_tab = fm.addAction("Close &Tab", self._on_close_tab_action, QKeySequence.Close)
         self._act_close_tab.setEnabled(False)
         self._act_close_all_tabs = fm.addAction("Close &All Tabs", self._on_close_all_tabs_action)
@@ -4263,8 +4387,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         else:
             self._autofit_cpu_load_height()
 
-    def _set_cpu_splitter_sizes(self, splitter: QSplitter, sizes: List[int]) -> None:
-        """Apply splitter sizes without treating the move as a user drag."""
+    def _set_cpu_splitter_sizes(self, splitter: "_CpuLoadStack", sizes: List[int]) -> None:
+        """Apply CPU pane height without treating the move as a user drag."""
         self._cpu_splitter_programmatic = True
         try:
             splitter.setSizes(sizes)
@@ -4289,7 +4413,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         }, flush=False)
 
     def _on_cpu_splitter_moved(self, pos: int = 0, index: int = 0) -> None:
-        """Remember manual timeline / CPU load split; defer layout until drag ends."""
+        """Remember manual timeline / CPU load split; defer layout until release."""
         if self._cpu_splitter_programmatic or not self._cpu_splitter_user_drag:
             return
         self._cpu_splitter_resizing = True
@@ -4297,18 +4421,18 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._cpu_splitter_drag_timer.start()
 
     def _on_cpu_splitter_drag_end(self) -> None:
-        """Finish CPU load splitter drag — one layout pass, no rebuild storm."""
+        """Finish CPU load pane drag — overlay height only, no timeline resize."""
         self._cpu_splitter_resizing = False
         self._cpu_splitter_user_drag = False
         self._persist_cpu_splitter_prefs()
         if tab := self._active_tab:
             tab.cpu_load_graph._schedule_sync_scroll_size()
-            tab.view._position_virt_trace_bar()
-            tab.view._resize_timer.start()
 
-    def _apply_saved_cpu_splitter(self, tab: Optional[_TraceTab] = None) -> None:
+    def _apply_saved_cpu_splitter(
+        self, tab: Optional[_TraceTab] = None, *, force: bool = False,
+    ) -> None:
         """Restore a user-resized CPU load pane height on *tab*."""
-        if getattr(self, "_cpu_splitter_resizing", False):
+        if not force and getattr(self, "_cpu_splitter_resizing", False):
             return
         tab = tab or self._active_tab
         if tab is None or not self._cpu_splitter_user_sized:
@@ -4316,34 +4440,39 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         bottom = self._cpu_splitter_bottom_h
         if bottom is None or bottom <= 0:
             return
-        splitter = tab.cpu_splitter
-        total = splitter.height()
+        stack = tab.cpu_splitter
+        total = stack.height()
         if total <= 0:
             return
-        handle = splitter.handleWidth()
+        handle = stack.handleWidth()
         avail = max(140, total - handle)
         bottom = max(
             _CpuLoadScrollArea._MIN_PANE_H,
             min(bottom, CPU_LOAD_PANE_MAX_H, avail - 100),
         )
         top = avail - bottom
-        cur = splitter.sizes()
+        cur = stack.sizes()
         if len(cur) >= 2 and abs(cur[0] - top) <= 1 and abs(cur[1] - bottom) <= 1:
             return
-        self._set_cpu_splitter_sizes(splitter, [top, bottom])
+        self._set_cpu_splitter_sizes(stack, [top, bottom])
 
     def _autofit_cpu_load_height(self) -> None:
-        """Resize the CPU load splitter pane; cap height so extra cores scroll inside."""
+        """Resize the CPU load overlay; cap height so extra cores scroll inside."""
         if self._cpu_splitter_user_sized:
             return
-        if not self._show_cpu_load or not self._cpu_load_scroll.isVisible():
+        if not self._show_cpu_load:
+            return
+        tab = self._active_tab
+        if tab is None or not tab.cpu_splitter.cpu_visible():
             return
         fit_h = self._cpu_load_graph.preferred_pane_height()
-        sizes = self._cpu_splitter.sizes()
-        total = sum(sizes)
+        sizes = tab.cpu_splitter.sizes()
+        total = sum(sizes) if sizes else tab.cpu_splitter.height()
+        if total <= 0:
+            total = tab.cpu_splitter.height()
         new_bottom = max(40, min(fit_h, total - 100))
         self._set_cpu_splitter_sizes(
-            self._cpu_splitter, [total - new_bottom, new_bottom])
+            tab.cpu_splitter, [max(0, total - new_bottom), new_bottom])
         self._cpu_load_graph._schedule_sync_scroll_size()
 
     def _drain_pending_open_paths(self) -> None:
@@ -4649,30 +4778,25 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._view.set_all_cores_expanded(expanded)
 
     def _toggle_cpu_load_graph(self) -> None:
-        """Show or hide the CPU load graph panel."""
+        """Show or hide the CPU load graph panel.
+
+        Overlay layout: the timeline widget is never resized.  Update the
+        settings model quietly — assigning ``_show_cpu_load`` emits
+        ``settings_changed`` and re-applies every view setting (a dozen scene
+        rebuilds), which is what made Load feel slower than the web.
+        """
         visible = self._tb_cpu_load_btn.isChecked()
-        self._show_cpu_load = visible
-        # Block intermediate repaints while layout settles (autofit changes the
-        # splitter height, triggering multiple update() calls via scroll / resize
-        # signals).  setUpdatesEnabled coalesces all of them into one final paint.
-        graph = self._cpu_load_graph
-        graph.setUpdatesEnabled(False)
-        try:
-            for tab in self._tabs:
-                tab.cpu_load_scroll.setVisible(visible)
-            if visible and self._active_tab is not None:
-                if self._cpu_splitter_user_sized:
-                    self._apply_saved_cpu_splitter()
-                else:
-                    self._autofit_cpu_load_height()
-        finally:
-            graph.setUpdatesEnabled(True)
-        # Cancel the 80 ms debounce timer that setVisible() / autofit arm via
-        # resizeEvent and handle the layout update immediately.  This eliminates
-        # the delayed visual "snap" while keeping the same code path.
-        if tab := self._active_tab:
-            tab.view._resize_timer.stop()
-            tab.view._on_resize_timeout()
+        if self._vm.settings._model.show_cpu_load != visible:
+            self._vm.settings._model.show_cpu_load = visible
+            self._settings.set(
+                "view", "show_cpu_load", str(visible).lower(), flush=False)
+        for tab in self._tabs:
+            tab.cpu_splitter.set_cpu_visible(visible)
+        if visible and self._active_tab is not None:
+            if self._cpu_splitter_user_sized:
+                self._apply_saved_cpu_splitter(self._active_tab, force=True)
+            else:
+                self._autofit_cpu_load_height()
 
     def _sync_toolbar_to_active_tab(self) -> None:
         """Refresh toolbar toggles that reflect per-tab view state."""
@@ -5531,8 +5655,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._act_undo.setEnabled(False)
         self._act_redo.setEnabled(False)
         self._focus_statistics_panel(force=True)
-        if self._show_cpu_load:
-            self._cpu_load_scroll.show()
+        if self._show_cpu_load and self._active_tab is not None:
+            self._active_tab.cpu_splitter.set_cpu_visible(True)
+            if self._cpu_splitter_user_sized:
+                self._apply_saved_cpu_splitter(self._active_tab, force=True)
+            else:
+                self._autofit_cpu_load_height()
 
         self._save_recent_files(path)
         self._rebuild_recent_menu()
@@ -5614,6 +5742,27 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         _copy_pixmap_to_clipboard(pixmap, capture_dpr)
         self.statusBar().showMessage("Copied to clipboard!", 4000)
 
+    @_dialog_guard
+    def _on_export_perfetto(self) -> None:
+        """Export the loaded trace as Chrome Trace JSON for ui.perfetto.dev."""
+        if self._trace is None:
+            return
+        base = os.path.splitext(self._current_file)[0] if self._current_file else "trace"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Perfetto",
+            base + ".json",
+            "Perfetto / Chrome Trace (*.json);;All files (*)",
+        )
+        if not path:
+            return
+        try:
+            export_perfetto(self._trace, path)
+            self.statusBar().showMessage(
+                f"Perfetto exported → {os.path.basename(path)}", 4000)
+        except (OSError, TypeError, ValueError, AttributeError, RuntimeError) as exc:
+            QMessageBox.critical(
+                self, "Export Error", f"Could not export Perfetto file:\n{exc}")
+
     # -- Settings actions -----------------------------------------------
 
     def _apply_settings_preview(self, vals: dict) -> None:
@@ -5665,10 +5814,16 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._act_show_find.setChecked(self._show_find)
             self._sync_panel_tab_visibility()
         if vals.get("show_cpu_load", self._show_cpu_load) != self._show_cpu_load:
-            self._show_cpu_load = vals["show_cpu_load"]
+            # Quiet model update — avoid settings_changed → full view rebuild.
+            self._vm.settings._model.show_cpu_load = bool(vals["show_cpu_load"])
             for tab in self._tabs:
-                tab.cpu_load_scroll.setVisible(self._show_cpu_load)
+                tab.cpu_splitter.set_cpu_visible(self._show_cpu_load)
             self._tb_cpu_load_btn.setChecked(self._show_cpu_load)
+            if self._show_cpu_load and self._active_tab is not None:
+                if self._cpu_splitter_user_sized:
+                    self._apply_saved_cpu_splitter(self._active_tab, force=True)
+                else:
+                    self._autofit_cpu_load_height()
         if vals["show_hover_highlight"] != self._hover_highlight_val:
             self._hover_highlight_val = vals["show_hover_highlight"]
             self._view._scene.set_hover_highlight(self._hover_highlight_val)
@@ -6416,13 +6571,19 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._set_show_sti(bool(opts["showSti"]), persist=False)
         if "showCpuLoad" in opts:
             want_cpu = bool(opts["showCpuLoad"])
-            self._show_cpu_load = want_cpu
+            # Quiet model update — avoid settings_changed → full view rebuild.
+            self._vm.settings._model.show_cpu_load = want_cpu
             for tab in self._tabs:
-                tab.cpu_load_scroll.setVisible(want_cpu)
+                tab.cpu_splitter.set_cpu_visible(want_cpu)
             if hasattr(self, "_tb_cpu_load_btn"):
                 self._tb_cpu_load_btn.blockSignals(True)
                 self._tb_cpu_load_btn.setChecked(want_cpu)
                 self._tb_cpu_load_btn.blockSignals(False)
+            if want_cpu and self._active_tab is not None:
+                if self._cpu_splitter_user_sized:
+                    self._apply_saved_cpu_splitter(self._active_tab, force=True)
+                else:
+                    self._autofit_cpu_load_height()
         if "darkMode" in opts:
             want_dark = bool(opts["darkMode"])
             if self._is_dark != want_dark:
@@ -6710,7 +6871,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 ("Ctrl+Tab",     "Next trace tab"),
                 ("Ctrl+Shift+Tab", "Previous trace tab"),
                 ("Ctrl+S",       "Open snapshot editor"),
+                ("Ctrl+Shift+S", "Save viewport as SVG"),
                 ("Ctrl+Shift+C", "Copy viewport to clipboard"),
+                ("Ctrl+Shift+E", "Export Perfetto (Chrome Trace JSON)"),
                 ("Ctrl+Q",       "Quit  (Alt+F4 also works on Windows)"),
             ]),
             ("Edit", [

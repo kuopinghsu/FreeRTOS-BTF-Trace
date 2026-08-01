@@ -3704,6 +3704,42 @@ class TimelineView(QGraphicsView):
         if self._scene._trace is not None and not splitting:
             self._resize_timer.start()
 
+    def _on_cpu_load_pane_toggled(self) -> None:
+        """Layout-only update after CPU-load show/hide (web ``v-if`` parity).
+
+        Horizontal layout: time-axis width is unchanged, so never rebuild the
+        QGraphicsScene here.  Vertical layout uses the normal fit/zoom path.
+        """
+        if self._scene._trace is None:
+            return
+        if not self._scene._horizontal:
+            self._on_resize_timeout()
+            return
+        self._apply_orth_only_resize_chrome()
+
+    def _apply_orth_only_resize_chrome(self) -> None:
+        """Reposition frozen chrome after a height-only viewport change.
+
+        Does not call ``rebuild()`` and does not force ``viewport().update()`` —
+        a forced full paint here made CPU-load toggle slower than letting Qt
+        expose only the damaged region.
+        """
+        if self._scene._trace is None:
+            return
+        vsize = self._fit_viewport_size()
+        time_span = max(
+            self._scene._trace.time_max - self._scene._trace.time_min, 1)
+        avail = max(vsize - self._scene._label_width, 100)
+        self._scene._timescale_per_px_fit = time_span / avail
+        self._reposition_frozen()
+        self._reposition_frozen_top()
+        self._update_virt_trace_bar_range()
+        if self._virtual_time_scroll_active:
+            if self._fit_mode:
+                self._push_virt_trace_bar()
+            else:
+                self._apply_virt_time_scroll_px(self._virt_time_scroll_px)
+
     def _on_resize_timeout(self) -> None:
         """Debounced resize handler.
 
@@ -3712,6 +3748,10 @@ class TimelineView(QGraphicsView):
         Zoom mode -> timescale_per_px is NEVER touched.  Only update _timescale_per_px_fit
                     so the zoom-out clamp reflects the new viewport size, and
                     reposition the frozen label column items.
+
+        Orthogonal-only resizes (CPU-load show/hide in horizontal layout) leave
+        the time-axis pixel size unchanged, so fit mode must NOT force a full
+        scene rebuild.
         """
         if self._scene._trace is None:
             return
@@ -3730,16 +3770,25 @@ class TimelineView(QGraphicsView):
         new_fit = time_span / avail
 
         if self._fit_mode:
+            old_tsp = self._scene._timescale_per_px
             self._scene._timescale_per_px_fit = new_fit
             self._scene._timescale_per_px     = new_fit
-            self._scene.rebuild()
-            self.resetTransform()
-            self.zoom_changed.emit(self._scene.timescale_per_px)
-            self._show_nav()
+            timescale_changed = (
+                abs(old_tsp - new_fit) > max(1e-12, abs(new_fit) * 1e-9))
+            if timescale_changed:
+                self._scene.rebuild()
+                self.resetTransform()
+                self.zoom_changed.emit(self._scene.timescale_per_px)
+                self._show_nav()
+            else:
+                # Height-only (or otherwise time-axis-unchanged) resize.
+                self._apply_orth_only_resize_chrome()
         else:
             # Zoom mode: preserve zoom level and canonical scroll position.
             self._scene._timescale_per_px_fit = new_fit
-            if self._needs_orth_fill_rebuild():
+            # Horizontal: height-only changes are chrome-only.  Vertical: the
+            # time axis is height, so orth-fill / coverage rebuilds still apply.
+            if (not self._scene._horizontal) and self._needs_orth_fill_rebuild():
                 self._scene.rebuild()
             self._reposition_frozen()
             self._reposition_frozen_top()

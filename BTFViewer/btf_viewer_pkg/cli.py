@@ -10,6 +10,7 @@ from .scene import *  # noqa: F403,F401
 from .view import *  # noqa: F403,F401
 from .stats import *  # noqa: F403,F401
 from .mainwindow import *  # noqa: F403,F401
+from .perfetto_export import export_perfetto
 from .platform import *  # noqa: F403,F401
 
 def _cli_validate_range_pair(lo: Optional[int], hi: Optional[int], label: str) -> Optional[str]:
@@ -111,6 +112,8 @@ Headless analysis commands (desktop only — no GUI, no Qt window):
   migrations   Core Migrations table only (CSV).
   snapshot     Export a PNG/SVG image (timeline, migration heatmap, or a
                statistics metric plot) without opening the GUI.
+  perfetto     Export Chrome Trace JSON for https://ui.perfetto.dev
+               (same as File → Export Perfetto…).
 
 Time range (--lo / --hi):
   Values are raw trace timestamps in the file's time units (see # timeScale
@@ -138,6 +141,7 @@ CLI examples:
   %(prog)s migrations tracedata/example-4cores.btf -o /tmp/migrations.csv
   %(prog)s snapshot tracedata/example-4cores.btf -o /tmp/timeline.png --view timeline
   %(prog)s snapshot tracedata/example-4cores.btf -o /tmp/task.png --view plot --metric exec --task "Producer[1]"
+  %(prog)s perfetto tracedata/example-4cores.btf -o /tmp/example.json
 
 Run "%(prog)s <command> -h" for command-specific help.
 """
@@ -197,6 +201,19 @@ examples:
   %(prog)s trace.btf -o migrations.csv
   %(prog)s trace.btf -o -               # explicit stdout
   %(prog)s trace.btf -o out.csv --lo T --hi T
+"""
+
+_CLI_EPILOG_PERFETTO = """\
+Writes Chrome Trace Event Format JSON (no protobuf). Tracks:
+
+  Cores       one row per core; slices named by the running task
+  Tasks       one row per task; on-CPU run slices (core in args)
+  STI         instant events per software-trace channel (+ TICK)
+  Intervals   paired interval_start / interval_stop spans (when present)
+
+examples:
+  %(prog)s trace.btf -o trace.json
+  %(prog)s tracedata/example-4cores.btf -o /tmp/example.json
 """
 
 _CLI_LO_HELP = (
@@ -494,12 +511,33 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
         help="colour theme for the rendered image (default: dark)",
     )
 
+    perfetto = sub.add_parser(
+        "perfetto",
+        help="export Chrome Trace JSON for ui.perfetto.dev (File → Export Perfetto…)",
+        description=(
+            "Export a Perfetto-compatible Chrome Trace Event JSON file.\n\n"
+            "Open the result in https://ui.perfetto.dev (Open trace file).\n"
+            "Matches File → Export Perfetto… in the GUI."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=_CLI_EPILOG_PERFETTO,
+    )
+    perfetto.add_argument(
+        "trace", metavar="trace.btf",
+        help="path to the .btf trace file to export",
+    )
+    perfetto.add_argument(
+        "-o", "--output", required=True, metavar="PATH",
+        help="output Chrome Trace JSON path (e.g. trace.json)",
+    )
+
     return parser, {
         "report": report,
         "compare": compare,
         "info": info,
         "migrations": migrations,
         "snapshot": snapshot,
+        "perfetto": perfetto,
     }
 
 def _cli_export_output_paths(output: str, fmt: Optional[str]) -> Tuple[str, str, str]:
@@ -1158,12 +1196,32 @@ def _cli_snapshot_main(argv: List[str]) -> int:
     args = _make_arg_parser()[1]["snapshot"].parse_args(argv)
     return _cli_snapshot_run(args)
 
+def _cli_perfetto_run(args: argparse.Namespace) -> int:
+    path = os.path.abspath(args.trace)
+    trace, err_load = _cli_load_trace(path)
+    if err_load:
+        print(err_load, file=sys.stderr)
+        return 1
+    out = os.path.abspath(args.output)
+    try:
+        export_perfetto(trace, out)
+    except (OSError, TypeError, ValueError, AttributeError, RuntimeError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(out)
+    return 0
+
+def _cli_perfetto_main(argv: List[str]) -> int:
+    args = _make_arg_parser()[1]["perfetto"].parse_args(argv)
+    return _cli_perfetto_run(args)
+
 _CLI_COMMANDS = {
     "report": _cli_report_main,
     "compare": _cli_compare_main,
     "info": _cli_info_main,
     "migrations": _cli_migrations_main,
     "snapshot": _cli_snapshot_main,
+    "perfetto": _cli_perfetto_main,
 }
 
 def _cli_gui_trace_paths(argv: List[str]) -> List[str]:

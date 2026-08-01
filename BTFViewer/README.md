@@ -45,6 +45,7 @@ A PySide6-based interactive visualiser for FreeRTOS context-switch traces in **B
 - **Recent files (Desktop)** — **File → Open Recent** lists the 8 most recently opened traces for one-click reopening
 - **Dark / Light theme** — switch from **View → Switch to Light/Dark Theme** or **Settings → Appearance**
 - **Export to PNG / SVG / clipboard** — capture the viewport in the **Snapshot Editor** (annotate with arrows, shapes, and text, then save or copy); direct clipboard copy also available from the menu
+- **Export Perfetto** — **File → Export Perfetto…** (Desktop) or toolbar **Perfetto** (Web) writes Chrome Trace JSON openable in [ui.perfetto.dev](https://ui.perfetto.dev); also available via headless `perfetto` CLI
 - **Headless image export (Desktop CLI)** — `snapshot` command renders the timeline, Migration Heatmap, or a statistics metric plot straight to PNG/SVG with no GUI, for scripting and CI (see [Headless CLI](#headless-cli-desktop-only))
 - **Persistent settings** — all preferences stored in `btf_viewer.rc` alongside the script
 - **Drag-and-drop** — drop a `.btf` file directly onto the window
@@ -242,6 +243,7 @@ Passing a file on the command line opens that trace in a tab immediately. With n
 | `compare` | Two-trace diff (same as Trace Compare → Export) |
 | `migrations` | Core Migrations table as CSV |
 | `snapshot` | Export a PNG/SVG image — timeline, Migration Heatmap, or a statistics metric plot — without opening the GUI |
+| `perfetto` | Export Chrome Trace JSON for [ui.perfetto.dev](https://ui.perfetto.dev) (same as **File → Export Perfetto…**) |
 
 ```bash
 python builds/btf_viewer.py info trace.btf [--json] [--lo T] [--hi T]
@@ -258,6 +260,8 @@ python builds/btf_viewer.py snapshot trace.btf -o|--output PATH --view timeline|
   [--format png|svg] [--task NAME] [--metric tick|exec|block|inter|priority|preempt|mig_dwell|mig_rate|mig_gap] \
   [--preemptor NAME] [--lo T --hi T] [--drill-row N --drill-bin N] \
   [--width PX] [--height PX] [--theme dark|light]
+
+python builds/btf_viewer.py perfetto trace.btf -o|--output PATH.json
 ```
 
 The `snapshot` `--view`:
@@ -449,6 +453,21 @@ In the editor you can draw annotation shapes (arrow, double arrow, line, rectang
 ### SVG
 
 **File → Save as SVG…** (`Ctrl+Shift+S`) or the toolbar **Save SVG** button exports the current viewport as vector SVG (includes CPU load when visible).
+
+### Perfetto (Chrome Trace JSON)
+
+**File → Export Perfetto…** (`Ctrl+Shift+E`, Desktop) or the toolbar **Perfetto** button (`Ctrl+Shift+E`, Web) writes a [Chrome Trace Event Format](https://docs.google.com/document/d/1CvAClvFfyA5R-PhYUmn5OOQtYMH4h6I0nSsKchNAySU/preview) `.json` file for the loaded trace. Open it in [ui.perfetto.dev](https://ui.perfetto.dev) (**Open trace file**).
+
+The export includes:
+
+| Process | Tracks |
+|---------|--------|
+| **Cores** | One row per core; duration slices named by the running task |
+| **Tasks** | One row per task; on-CPU run slices (core in args); migration markers |
+| **STI** | Instant events per software-trace channel, plus TICK marks |
+| **Intervals** | Paired `interval_start` / `interval_stop` spans (when present) |
+
+Headless (Desktop): `python3 builds/btf_viewer.py perfetto trace.btf -o trace.json`
 
 ---
 
@@ -1847,6 +1866,7 @@ Shortcuts marked **(W)** are Web-only. All others work on both Desktop and Web.
 | `Ctrl+S` / `S` **(W)** | Open snapshot editor (capture viewport for annotation) |
 | `Ctrl+Shift+C` | Copy viewport to clipboard (no editor) |
 | `Ctrl+Shift+S` | Save viewport as SVG |
+| `Ctrl+Shift+E` | Export Perfetto (Chrome Trace JSON) |
 
 ### Cursors
 
