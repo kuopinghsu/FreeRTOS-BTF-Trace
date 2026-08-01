@@ -690,6 +690,11 @@ _IC_CHORD = ("M8 1 A7 7 0 1 0 8 15 A7 7 0 1 0 8 1 Z"
              "M8 3.5 A4.5 4.5 0 1 0 8 12.5 A4.5 4.5 0 1 0 8 3.5 Z"
              "M4 6 L5 5 L12 10 L11 11 Z"
              "M11 5 L12 6 L5 11 L4 10 Z")
+_IC_ANALYSIS = (
+    "M2 1.5A.5.5 0 0 1 2.5 1h9A1.5 1.5 0 0 1 13 2.5v11a1.5 1.5 0 0 1-1.5 1.5h-9"
+    "A.5.5 0 0 1 2 14.5v-13zM3 2v12h8.5a.5.5 0 0 0 .5-.5v-11a.5.5 0 0 0-.5-.5H3z"
+    "M4.5 4h6v1h-6V4zm0 2.5h6v1h-6v-1zm0 2.5h4v1h-4V9z"
+)
 _IC_EXPORT_CSV = ("M2 1h12a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1zm0 1v12h12V2H2zm2 2h8v1H4V4zm0 2h8v1H4V6zm0 2h5v1H4V8z")
 _IC_TICK_DIST = ("M1.5 12.5h2.5V8H1.5v4.5zm3.5 0H7.5V5H5v7.5zm3.5 0h2.5V2H8.5v10.5zm3.5 0H14v-5h-2.5v5.5z")
 _IC_THEME_DARK = ("M8 1.2a.5.5 0 0 1 .47.66A5.8 5.8 0 1 0 14.14 9a.5.5 0 0 1 .66.47"
@@ -17873,6 +17878,382 @@ def _core_util_stddev(values: List[float]) -> float:
     return math.sqrt(sum((v - mean) ** 2 for v in values) / n)
 
 
+# ---------------------------------------------------------------------------
+# Analysis Findings (Statistics HTML report heuristics)
+# ---------------------------------------------------------------------------
+
+_WF_FINDING_CAP = 5
+_WF_LOAD_SIGMA_WARN = 30.0
+# Load Balance Score = 100×(1−Gini). Warn below this; only call "balanced" above OK.
+_WF_LOAD_SCORE_WARN = 70.0
+_WF_LOAD_SCORE_OK = 85.0
+_WF_THRASH_PING_MIN = 3
+_WF_THRASH_RATE_PER_S = 1.0
+_WF_THRASH_MIG_MIN = 10
+_WF_PAIR_BOUNCE_PCT = 25.0
+_WF_PAIR_COUNT_MIN = 5
+_WF_WCET_MAX_AVG_RATIO = 5.0
+
+
+def _build_workflow_analysis_findings(
+    *,
+    core_rows: List[Tuple[str, float]],
+    exec_rows: list,
+    block_rows: list,
+    mig_rows: list,
+    pair_rows: list,
+    priority_rows: list,
+    sync_rows: list,
+    sync_issues: list,
+    tick: dict,
+    deadline_viols: Optional[dict] = None,
+    time_scale: str = "ns",
+) -> List[dict]:
+    """Return interpretive findings for the Statistics HTML report.
+
+    Each finding is ``{severity, title, text}`` where *severity* is
+    ``info`` / ``warning`` / ``error``.
+    """
+    findings: List[dict] = []
+
+    # Load balance
+    pcts = [pct for _, pct in core_rows]
+    if len(pcts) >= 2:
+        gini = _gini_coefficient(pcts)
+        sigma = _core_util_stddev(pcts)
+        score = max(0.0, 100.0 * (1.0 - gini))
+        metrics = f"Load Balance Score {score:.0f}% (σ={sigma:.1f}%, G={gini:.3f})"
+        if score < _WF_LOAD_SCORE_WARN or sigma > _WF_LOAD_SIGMA_WARN:
+            findings.append({
+                "severity": "warning",
+                "title": "Load imbalance across cores",
+                "text": (
+                    f"{metrics}. Uneven core placement — "
+                    "check Core Affinity and Core Migrations."
+                ),
+            })
+        elif score >= _WF_LOAD_SCORE_OK:
+            findings.append({
+                "severity": "info",
+                "title": "Core utilisation balance",
+                "text": f"{metrics} — cores look reasonably balanced.",
+            })
+        else:
+            findings.append({
+                "severity": "info",
+                "title": "Core utilisation balance",
+                "text": (
+                    f"{metrics} — moderate spread; review Core Utilisation "
+                    "if the workload is expected to be even."
+                ),
+            })
+
+    # WCET / high CPU tasks
+    if exec_rows:
+        top = exec_rows[:_WF_FINDING_CAP]
+        names = ", ".join(f"{r[1]} ({r[3]:.1f}%, Max {r[7]})" for r in top)
+        findings.append({
+            "severity": "info",
+            "title": "Top tasks by CPU (WCET candidates)",
+            "text": (
+                f"Highest CPU% tasks: {names}. "
+                "Open Execution Time and click Max to jump to the worst-case slice."
+            ),
+        })
+
+    # Blocking
+    if block_rows:
+        top_b = sorted(block_rows, key=lambda r: (-r[2], r[1].lower()))[:_WF_FINDING_CAP]
+        names = ", ".join(f"{r[1]} (n={r[2]}, Max {r[6]})" for r in top_b)
+        findings.append({
+            "severity": "warning" if top_b and top_b[0][2] >= 20 else "info",
+            "title": "Blocking / response-time candidates",
+            "text": (
+                f"Tasks with the most off-CPU gaps: {names}. "
+                "Cross-check Preemption Chain and Mutex/Semaphore."
+            ),
+        })
+
+    # Priority inversion — row: (mk, label, base, peak, n, total_str, pattern, total_ns)
+    inv_rows = [
+        r for r in (priority_rows or [])
+        if len(r) > 6 and "L/M/H" in str(r[6])
+    ]
+    if inv_rows:
+        names = ", ".join(str(r[1]) for r in inv_rows[:_WF_FINDING_CAP])
+        findings.append({
+            "severity": "warning",
+            "title": "Priority inversion (L/M/H) suspected",
+            "text": (
+                f"Tasks with L/M/H pattern: {names}. "
+                "Inspect Priority Inheritance boost episodes and the holding mutex."
+            ),
+        })
+
+    # Core thrashing / excessive bouncing
+    thrash: List[str] = []
+    for r in (mig_rows or []):
+        (_mk, name, n_mig, _nc, _cs, _pri, primary_pct,
+         ping, _sti, _ga, _go, _rate_lbl, rate_per_s, _dwell_lbl, dwell_tu) = r
+        hot = (
+            ping >= _WF_THRASH_PING_MIN
+            or (isinstance(rate_per_s, (int, float))
+                and rate_per_s >= _WF_THRASH_RATE_PER_S and n_mig >= _WF_THRASH_MIG_MIN)
+            or (n_mig >= _WF_THRASH_MIG_MIN and dwell_tu > 0
+                and primary_pct < 55.0 and _nc >= 2)
+        )
+        if hot:
+            thrash.append(
+                f"{name} (Migr={n_mig}, Rate={_rate_lbl}, Dwell={_dwell_lbl}, Ping={ping})"
+            )
+    if thrash:
+        findings.append({
+            "severity": "warning",
+            "title": "Excessive bouncing / core thrashing",
+            "text": (
+                "High migration rate, short dwell, and/or ping-pong detected: "
+                + "; ".join(thrash[:_WF_FINDING_CAP])
+                + ". See Core-Pair Migration Summary and the Migration Heatmap."
+            ),
+        })
+
+    hot_pairs: List[str] = []
+    for fc, tc, cnt, bnc, avg_gap in (pair_rows or []):
+        bounce_pct = (100.0 * bnc / cnt) if cnt else 0.0
+        if cnt >= _WF_PAIR_COUNT_MIN and bounce_pct >= _WF_PAIR_BOUNCE_PCT:
+            hot_pairs.append(
+                f"{fc}→{tc} (Count={cnt}, Bounce={bounce_pct:.0f}%, "
+                f"AvgGap={_format_time(int(avg_gap), time_scale) if avg_gap else '—'})"
+            )
+        elif cnt >= max(_WF_PAIR_COUNT_MIN * 2, 20) and not thrash:
+            hot_pairs.append(f"{fc}→{tc} (Count={cnt})")
+    if hot_pairs:
+        findings.append({
+            "severity": "warning",
+            "title": "Hot core-pair migration traffic",
+            "text": (
+                "Directed pairs with heavy traffic and/or lock-bounce share: "
+                + "; ".join(hot_pairs[:_WF_FINDING_CAP])
+                + "."
+            ),
+        })
+
+    # Deadlines / CPU budget
+    if deadline_viols:
+        sv = deadline_viols.get("slice_violations") or []
+        cv = deadline_viols.get("cpu_violations") or []
+        if sv or cv:
+            parts = []
+            if sv:
+                parts.append(f"{len(sv)} slice deadline violation(s)")
+            if cv:
+                parts.append(f"{len(cv)} CPU budget violation(s)")
+            findings.append({
+                "severity": "error",
+                "title": "Deadline / CPU budget breaches",
+                "text": (
+                    ", ".join(parts) + " in scope. "
+                    "See Deadlines / CPU budget tables below."
+                ),
+            })
+
+    # Tick health
+    if tick and tick.get("tick_count"):
+        health = str(tick.get("health", "")).lower()
+        missed = int(tick.get("missed_estimate") or 0)
+        if health and health != "good":
+            findings.append({
+                "severity": "warning" if health != "bad" else "error",
+                "title": f"Trace Health (TICK) = {health.upper()}",
+                "text": (
+                    f"Mode={'TICKLESS' if tick.get('is_tickless') else 'TICK'}, "
+                    f"CV={float(tick.get('tick_cv') or 0) * 100:.2f}%, "
+                    f"missed≈{missed}. Investigate large TICK gaps and long slices."
+                ),
+            })
+        elif missed > 0:
+            findings.append({
+                "severity": "warning",
+                "title": "Estimated missed ticks",
+                "text": (
+                    f"About {missed} missed tick(s) estimated from large gaps. "
+                    "See Trace Health (TICK) large-gap table."
+                ),
+            })
+
+    # Sync / mutex bounces
+    bounce_objs = 0
+    for r in (sync_rows or []):
+        if len(r) > 10 and r[10] > 0:
+            bounce_objs += 1
+    issue_n = len(sync_issues or [])
+    bounce_issues = sum(
+        1 for i in (sync_issues or [])
+        if "BOUNCE" in str(i.get("kind", "")).upper()
+        or "MIGRATION_WHILE_HELD" in str(i.get("kind", "")).upper()
+        or "bounc" in str(i.get("detail", "")).lower()
+    )
+    if bounce_objs or bounce_issues:
+        findings.append({
+            "severity": "warning",
+            "title": "Mutex / semaphore core-boundary bounces",
+            "text": (
+                f"{bounce_objs} sync object(s) with Core bounce > 0"
+                + (f"; {bounce_issues} CORE_MIGRATION_WHILE_HELD-style issue(s)"
+                   if bounce_issues else "")
+                + ". Cross-check Core-Pair Migration Summary Bounce %."
+            ),
+        })
+    elif issue_n > 0:
+        findings.append({
+            "severity": "warning",
+            "title": "Sync pairing issues",
+            "text": (
+                f"{issue_n} mutex/semaphore pairing issue(s) in scope "
+                "(orphan give, unmatched take, etc.)."
+            ),
+        })
+
+    actionable = [f for f in findings if f["severity"] in ("warning", "error")]
+    if not actionable and not any(f["title"].startswith("Top tasks") for f in findings):
+        findings.append({
+            "severity": "info",
+            "title": "No analysis heuristics flagged",
+            "text": (
+                "No load-imbalance, thrashing, deadline, tick, or sync warnings "
+                "in the current scope. Review the tables below for detail."
+            ),
+        })
+
+    return findings
+
+
+def _format_analysis_findings_text(
+    findings: List[dict], scope_title: str = "",
+) -> str:
+    """Plain-text export of Analysis Findings."""
+    lines = [f"Analysis Findings{scope_title}".rstrip(), ""]
+    lines.append(
+        "Heuristic summary of load balance, WCET, blocking, thrashing, "
+        "deadlines, tick health, and sync."
+    )
+    lines.append("")
+    if not findings:
+        lines.append("No findings for the current scope")
+    else:
+        for i, f in enumerate(findings, 1):
+            sev = str(f.get("severity", "info")).upper()
+            title = str(f.get("title", "Finding"))
+            text = str(f.get("text", ""))
+            lines.append(f"{i}. [{sev}] {title}")
+            lines.append(f"   {text}")
+            lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _render_workflow_analysis_html(
+    findings: List[dict], scope_title: str = "",
+) -> str:
+    """Render Analysis Findings as an HTML report-card section."""
+    if not findings:
+        return ""
+
+    def _esc(v: object) -> str:
+        return html.escape(str(v), quote=True)
+
+    items = []
+    for f in findings:
+        sev = f.get("severity", "info")
+        cls = {
+            "error": "sev-error",
+            "warning": "sev-warning",
+            "info": "finding-info",
+        }.get(sev, "finding-info")
+        items.append(
+            f'<li class="{cls}">'
+            f'<strong>{_esc(f.get("title", "Finding"))}</strong>'
+            f' — {_esc(f.get("text", ""))}'
+            f"</li>"
+        )
+    body = "".join(items)
+    return (
+        f'<section class="report-card notes analysis-findings">'
+        f"<h2>Analysis Findings{_esc(scope_title)}</h2>"
+        f"<p class=\"detail-note\">Heuristic summary of load balance, WCET, "
+        f"blocking, thrashing, deadlines, tick health, and sync.</p>"
+        f"<ul class=\"findings-list\">{body}</ul></section>"
+    )
+
+
+class _AnalysisFindingsDialog(QDialog):
+    """Toolbar Analysis dialog — lists heuristic findings for the current scope."""
+
+    def __init__(self, findings: List[dict], scope_title: str = "", parent=None):
+        super().__init__(parent)
+        self._findings = findings or []
+        self._scope_title = scope_title or ""
+        self.setWindowTitle(f"Analysis Findings{self._scope_title}")
+        self.setModal(True)
+        self.setMinimumSize(520, 360)
+        self.resize(640, 480)
+
+        note = QLabel(
+            "Heuristic summary of load balance, WCET, blocking, thrashing, "
+            "deadlines, tick health, and sync."
+        )
+        note.setWordWrap(True)
+        note.setObjectName("analysisNote")
+
+        list_w = QListWidget()
+        list_w.setWordWrap(True)
+        list_w.setSpacing(4)
+        list_w.setUniformItemSizes(False)
+        if self._findings:
+            for f in self._findings:
+                sev = f.get("severity", "info")
+                title = str(f.get("title", "Finding"))
+                text = str(f.get("text", ""))
+                item = QListWidgetItem(f"{title} — {text}")
+                if sev == "error":
+                    item.setForeground(QBrush(QColor("#c0392b")))
+                elif sev == "warning":
+                    item.setForeground(QBrush(QColor("#d68910")))
+                list_w.addItem(item)
+        else:
+            list_w.addItem(QListWidgetItem("No findings for the current scope"))
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        save_btn = buttons.addButton(
+            "Save as Text…", QDialogButtonBox.ButtonRole.ActionRole)
+        save_btn.clicked.connect(self._save_as_text)
+        buttons.rejected.connect(self.reject)
+        buttons.accepted.connect(self.accept)
+
+        lay = QVBoxLayout(self)
+        lay.addWidget(note)
+        lay.addWidget(list_w, 1)
+        lay.addWidget(buttons)
+
+    def _save_as_text(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Analysis Findings",
+            "analysis-findings.txt",
+            "Text files (*.txt);;All files (*)",
+        )
+        if not path:
+            return
+        if not path.lower().endswith(".txt"):
+            path += ".txt"
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(_format_analysis_findings_text(
+                    self._findings, self._scope_title))
+        except OSError as exc:
+            QMessageBox.warning(
+                self, "Save failed", f"Could not write file:\n{exc}")
+
+
 def _parse_task_deadlines_text(text: str) -> Dict[str, int]:
     """Parse a newline-separated 'TaskName=nanoseconds' text into a dict."""
     out: Dict[str, int] = {}
@@ -18549,6 +18930,7 @@ class _StatsPanel(QWidget):
         """
         # Titles (prefix match, ignoring any appended scope suffix) expanded by default.
         default_expanded = (
+            "Analysis Findings",
             "Statistics Notes",
             "Core Utilisation (excl. IDLE/TICK)",
             "Top Tasks by CPU (excl. IDLE/TICK)",
@@ -19778,6 +20160,49 @@ class _StatsPanel(QWidget):
         self._wrap_table_with_resizer(lay, table, "preemption")
         return host
 
+    def build_analysis_findings(self) -> Tuple[List[dict], str]:
+        """Return (findings, scope_title) for the toolbar Analysis dialog."""
+        trace = self._trace
+        if trace is None:
+            return [], ""
+        rng = self._stats_range()
+        lo = hi = None
+        if rng is not None:
+            lo, hi, _n_cur = rng
+            scope_title = f" (cursor range C1–C{_n_cur})"
+        else:
+            scope_title = ""
+        core_rows = self._core_util_rows(trace, lo, hi)
+        exec_rows = self._exec_slice_rows_export(trace, lo, hi)
+        block_rows = self._blocking_time_rows_export(trace, lo, hi)
+        mig_rows = _migration_rows(trace, lo, hi)
+        pair_rows = _core_pair_rows(trace, lo, hi)
+        priority_rows = _priority_stats_rows(trace, lo, hi)
+        sync_rows = _sync_object_stats_rows(trace, lo, hi)
+        sync_issues = [
+            i for i in trace.sync_issues
+            if _sync_in_scope(i["time_ns"], lo, hi)
+        ] if trace.has_sync_object_instrumentation else []
+        tick = _tick_health_report(trace, lo, hi)
+        dl_viols = None
+        if self._cpu_budget_pct > 0 or self._task_deadlines_ns:
+            dl_viols = _deadline_violations(
+                trace, self._cpu_budget_pct, self._task_deadlines_ns, lo, hi)
+        findings = _build_workflow_analysis_findings(
+            core_rows=core_rows,
+            exec_rows=exec_rows,
+            block_rows=block_rows,
+            mig_rows=mig_rows,
+            pair_rows=pair_rows,
+            priority_rows=priority_rows,
+            sync_rows=sync_rows,
+            sync_issues=sync_issues,
+            tick=tick,
+            deadline_viols=dl_viols,
+            time_scale=trace.time_scale,
+        )
+        return findings, scope_title
+
     def write_statistics_html_report(self, path: str) -> None:
         trace = self._trace
         if trace is None:
@@ -20151,6 +20576,21 @@ class _StatsPanel(QWidget):
                 f"<tbody>{cv_body}</tbody></table></section>"
             )
 
+        analysis_findings = _build_workflow_analysis_findings(
+            core_rows=core_rows,
+            exec_rows=exec_rows,
+            block_rows=block_rows,
+            mig_rows=mig_rows,
+            pair_rows=pair_rows_html,
+            priority_rows=priority_rows,
+            sync_rows=sync_rows,
+            sync_issues=sync_issues_scoped,
+            tick=tick,
+            deadline_viols=_dl_viols if (self._cpu_budget_pct > 0 or self._task_deadlines_ns) else None,
+            time_scale=trace.time_scale,
+        )
+        analysis_html = _render_workflow_analysis_html(analysis_findings, scope_title)
+
         report = f"""<!doctype html>
 <html>
 <head>
@@ -20230,6 +20670,14 @@ class _StatsPanel(QWidget):
         h3.sub {{ margin: 14px 0 8px; font-size: 14px; color: #284563; font-weight: 600; }}
         .sev-error {{ color: #c0392b; font-weight: 600; }}
         .sev-warning {{ color: #d68910; font-weight: 600; }}
+        .finding-info {{ color: var(--ink); }}
+        .findings-list {{ margin: 8px 0 0 18px; padding: 0; }}
+        .findings-list li {{ margin: 8px 0; line-height: 1.45; }}
+        .finding-wf {{
+            color: var(--muted); font-size: 11px; font-weight: 600;
+            text-transform: uppercase; letter-spacing: 0.4px;
+        }}
+        .analysis-findings {{ border-left: 4px solid #c0392b; }}
         .report-foot {{ margin-top: 14px; color: var(--muted); font-size: 12px; text-align: right; }}
         .report-toc {{
             background: var(--paper);
@@ -20276,6 +20724,8 @@ class _StatsPanel(QWidget):
         </section>
 
         <!--TOC-->
+
+        {analysis_html}
 
         <section class=\"report-card notes\">
         <h2>Statistics Notes</h2>
@@ -29630,6 +30080,14 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "Migration chord diagram — directional core-to-core migration volume "
             "(multi-core traces only)")
         self._tb_chord_btn.setEnabled(False)
+        self._tb_analysis_btn = _ia(
+            "Analysis", self._open_analysis_findings, _IC_ANALYSIS,
+            "Analysis Findings — heuristic load balance, WCET, blocking, "
+            "thrashing, deadlines, tick, sync")
+        self._tb_analysis_btn.setEnabled(False)
+        _aw = tb.widgetForAction(self._tb_analysis_btn)
+        if _aw:
+            _aw.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self._tb_show_all_tasks_btn = _ia(
             "All tasks", self._clear_heatmap_task_filter, _IC_TASK,
             "Clear heatmap task filter and show all tasks")
@@ -30055,6 +30513,14 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._tb_chord_btn.setEnabled(
             trace is not None and _trace_is_multi_core(trace))
 
+    def _open_analysis_findings(self) -> None:
+        """Show Analysis Findings dialog for the active tab / cursor scope."""
+        if self._trace is None or self._stats_panel is None:
+            return
+        findings, scope_title = self._stats_panel.build_analysis_findings()
+        dlg = _AnalysisFindingsDialog(findings, scope_title, parent=self)
+        dlg.exec()
+
     def _capture_heatmap_view_snapshot(self, tab: _TraceTab) -> None:
         """Remember timeline zoom/pan/cursors before heatmap drill-down."""
         view = tab.view
@@ -30290,6 +30756,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         """Refresh toolbar toggles that reflect per-tab view state."""
         self._sync_heatmap_toolbar()
         self._sync_chord_toolbar()
+        if hasattr(self, "_tb_analysis_btn"):
+            self._tb_analysis_btn.setEnabled(self._trace is not None)
         if hasattr(self, "_tb_cpu_load_btn"):
             self._tb_cpu_load_btn.blockSignals(True)
             self._tb_cpu_load_btn.setChecked(self._show_cpu_load)

@@ -27,7 +27,8 @@ A PySide6-based interactive visualiser for FreeRTOS context-switch traces in **B
 - **Trace compare** — with 2+ tabs open, **Trace Compare…** in the Statistics panel diffs **Summary**, **Top Tasks**, **Core Migrations**, **Blocking**, **Preemption**, and **Sync** side-by-side (Desktop + Web). Optional **Limit to each tab's cursor range** compares metrics within C1–Cn when 2+ cursors are placed on each trace
 - **Core migration analysis** — detect tasks that run on multiple cores; **Core Migrations** stats table (ping-pong, STI correlation, gap-after vs other gaps), **Core-Pair Migration Summary** (per directed pair: count, bounces, avg gap), **Core Time Breakdown** (active/idle/tick/gap per core), **clickable migration heatmap** (pair×time for ≤ 16 cores; core×core matrix → outgoing pairs for larger traces → per-task sub-bins → timeline drill-down), **migration chord diagram** (directional core-to-core migration volume as a circular chord diagram; hover a core arc to highlight its migrations), **Migrated tasks only** legend filter, toolbar **All tasks** reset, **bounce-only filter** (Show: Bounce Only toggle restricts the heatmap and chord diagram to lock-bounce migrations), and Find **Migrations** mode (Desktop + Web)
 - **Core Affinity** — when traces include `traceTASK_CORE_AFFINITY_SET` events, the **Core Affinity** statistics table shows each task's declared affinity mask, observed execution cores, and flags violations (cores outside the mask) in red (Desktop + Web)
-- **Cursor-scoped statistics** — with 2+ cursors, the Statistics panel can limit all metrics (CPU%, execution slices, blocking time, inter-arrival, **preemption chain**, **priority inheritance**, **mutex / semaphore pairing**, **queue pairing**, **deadline violations**, scheduling summary, exports, and charts) to the window from C1 through the last cursor; toggle **Limit to cursor range (C1–Cn)** (Desktop + Web)
+- **Analysis Findings** — toolbar **Analysis** opens a severity-tagged dialog (load imbalance, WCET/CPU hotspots, blocking, L/M/H priority inversion, core thrashing / hot pairs, deadline breaches, tick health, sync/mutex bounces) for the current Statistics scope; **Save as text…** writes a `.txt` copy. The same card is embedded in **Statistics → Export HTML** / headless `report --format html` (Desktop + Web)
+- **Cursor-scoped statistics** — with 2+ cursors, the Statistics panel can limit all metrics (CPU%, execution slices, blocking time, inter-arrival, **preemption chain**, **priority inheritance**, **mutex / semaphore pairing**, **queue pairing**, **deadline violations**, scheduling summary, **Analysis Findings**, exports, and charts) to the window from C1 through the last cursor; toggle **Limit to cursor range (C1–Cn)** (Desktop + Web)
 - **Cursor range summary** — with 2+ cursors, the status bar shows a quick min/max/avg segment summary (Desktop + Web); full per-task metrics remain in the **Statistics** panel
 - **Task highlight** — hover or click any task label or Legend row to highlight all its segments; optional **Highlight segments on label hover** in Settings dims other tasks while hovering (off by default)
 - **Dockable Legend panel** — colour swatches for every task, with a search box, **Migrated tasks only** filter, a **heatmap filter banner** (when drilled from the heatmap), and the same highlight interaction
@@ -58,11 +59,12 @@ A PySide6-based interactive visualiser for FreeRTOS context-switch traces in **B
 | [Installation](#installation) | Desktop (Python) and web (Node.js) setup |
 | [Desktop viewer](#desktop-viewer) | GUI usage, headless CLI, view modes, cursors, export, settings |
 | [Web viewer](#web-viewer) | Build, open traces, web-specific UI and performance |
-| [Statistics & metrics](#statistics--metrics) | Panel overview, metric tables, migrations, trace compare, charts |
+| [Statistics & metrics](#statistics--metrics) | Panel overview, Analysis Findings, metric tables, migrations, trace compare, charts |
 | [Find, marks & menus](#find--jump) | Search, bookmarks, annotations, context menu, recent files |
 | [Session persistence](#session-persistence-btf_viewerrc) | `btf_viewer.rc` and browser `localStorage` |
 | [Keyboard shortcuts](#keyboard-shortcuts) | Desktop and web key bindings |
 | [Reference](#reference) | `scripts/gen_trace.py`, BTF format, implementation map |
+| [WORKFLOWS.md](WORKFLOWS.md) | Practical diagnosis workflows (load balance, WCET, thrashing, exports, …) |
 
 ---
 
@@ -224,7 +226,7 @@ Interactive PySide6 GUI and optional **headless CLI** (same statistics engine as
 | Launch & CLI | [Usage](#usage) · [Headless CLI](#headless-cli-desktop-only) |
 | HiDPI / DPI | [HiDPI / DPI scaling (Desktop)](#hidpi--dpi-scaling-desktop) |
 | Timeline | [View modes](#view-modes) · [Orientation](#orientation) · [Zoom and pan](#zoom-and-pan) |
-| Analysis UI | [Cursors](#cursors) · [Legend](#legend-panel) · [Export](#export) · [Settings](#settings) |
+| Analysis UI | [Cursors](#cursors) · [Legend](#legend-panel) · [Export](#export) · [Statistics & metrics](#statistics--metrics) · [Settings](#settings) |
 
 ## Usage
 
@@ -239,7 +241,7 @@ Passing a file on the command line opens that trace in a tab immediately. With n
 | Command | Description |
 |---------|-------------|
 | `info` | Trace summary on stdout (`--json` for machine-readable output) |
-| `report` | Full statistics export (same as Statistics → Export CSV/HTML) |
+| `report` | Full statistics export (same as Statistics → Export CSV/HTML; HTML includes the Analysis Findings card) |
 | `compare` | Two-trace diff (same as Trace Compare → Export) |
 | `migrations` | Core Migrations table as CSV |
 | `snapshot` | Export a PNG/SVG image — timeline, Migration Heatmap, or a statistics metric plot — without opening the GUI |
@@ -469,6 +471,23 @@ The export includes:
 
 Headless (Desktop): `python3 builds/btf_viewer.py perfetto trace.btf -o trace.json`
 
+### Analysis Findings
+
+Toolbar **Analysis** (Desktop + Web) opens a dialog of heuristic findings for the current Statistics scope (full trace, or **Limit to cursor range** when enabled). Severity is `info` / `warning` / `error`; lists are capped (top ~5). **Save as text…** writes a plain-text `.txt` copy.
+
+| Theme | Typical trigger |
+|-------|-----------------|
+| Load imbalance | Score < 70 % or σ > 30 % (warn); Score ≥ 85 % and σ ≤ 30 % → “reasonably balanced” |
+| WCET / CPU hotspots | Highest CPU% tasks |
+| Blocking | Tasks with many off-CPU gaps |
+| Priority inversion | `L/M/H` pattern in Priority Inheritance |
+| Thrashing / hot pairs | High Migr Rate, Ping, short Dwell; high Bounce % pairs |
+| Deadlines / CPU budget | Configured thresholds breached |
+| Tick health | Status not GOOD, or missed-tick estimate > 0 |
+| Sync / mutex bounces | Core bounce > 0 or pairing issues |
+
+Findings are **not** a Statistics panel section. The same card is embedded near the top of **Statistics → Export HTML** and headless `report … --format html`. Practical walkthroughs: [WORKFLOWS.md](WORKFLOWS.md).
+
 ---
 
 ## Settings
@@ -659,6 +678,7 @@ The right side uses three tabs — **Statistics**, **Marks**, and **Find** — w
 - **Legend (Web)** — section inside the **Marks** tab when **Legend panel** is enabled in Settings.
 - **Migration heatmap** — toolbar **Heatmap** button (multi-core traces only). ≤ 16 cores: pair grid → task grid → timeline zoom/filter. > 16 cores: core×core matrix (row click) → outgoing pairs → tasks. **Export PNG / SVG** of the current drill level from the heatmap dialog. Toolbar **All tasks** appears while filtered. See [Migration heatmap](#migration-heatmap).
 - **Migration chord diagram** — toolbar **Chord** button (multi-core traces only). Circular diagram with one arc per core; hover an arc to highlight its migrations and dim the rest. **Show: All Migrations / Show: Bounce Only** toggle restricts it to lock-bounce migrations. **Export PNG / SVG** of the current view. See [Migration chord diagram](#migration-chord-diagram).
+- **Analysis Findings** — toolbar **Analysis** button opens heuristic findings for the current Statistics scope; **Save as text…** exports a `.txt` copy. See [Analysis Findings](#analysis-findings).
 
 ### Multi-tab traces (Web)
 
@@ -700,7 +720,7 @@ Chrome DevTools may log `[Violation] 'requestAnimationFrame' handler took …ms`
 
 ### Statistics panel — cursor-scoped metrics
 
-When **2 or more cursors** are placed, check **Limit to cursor range (C1–Cn)** at the top of the Statistics panel (enabled by default). All summary counts, CPU tables, execution/blocking/inter-arrival metrics, CSV/HTML export, and distribution charts then use only data inside the cursor window:
+When **2 or more cursors** are placed, check **Limit to cursor range (C1–Cn)** at the top of the Statistics panel (enabled by default). All summary counts, CPU tables, execution/blocking/inter-arrival metrics, Analysis Findings, CSV/HTML export, and distribution charts then use only data inside the cursor window:
 
 | Metric | Scoping rule |
 |--------|----------------|
@@ -740,7 +760,7 @@ Below the scope checkbox, a **scheduling summary** line shows context-switch cou
 | **Tag Analysis** | Per `tag0_event`…`tag7_event` channel: sample count, min/avg/max/p95 of the tag value; click a row to open a scatter + histogram plot (shown only when tag STI samples are present) |
 | **Deadlines / CPU budget** | Per-task slice violations (execution exceeding a configured nanosecond deadline) and CPU budget violations (task CPU% exceeding a global threshold); configure via **Settings → Display → Analysis thresholds** (`Ctrl+,`) |
 
-**Core Migrations** lists tasks that ran on two or more cores, with **Rate** (migrations per second of active time and per tick) and **Dwell** (average on-CPU slice length). For multi-core traces, open the **Migration heatmap** from the toolbar **Heatmap** button — click core-pair cells to drill into per-task sub-bins, then into Task View (see [Migration heatmap](#migration-heatmap)); or open the **Migration chord diagram** from the toolbar **Chord** button for a directional overview of core-to-core migration volume (see [Migration chord diagram](#migration-chord-diagram)). **Trace Compare…** (footer, next to Export) opens a dialog with **Summary**, **Top Tasks**, and **Core Migrations** tabs to diff two open trace tabs; optional cursor-range scoping compares each tab's C1–Cn window independently.
+**Core Migrations** lists tasks that ran on two or more cores, with **Rate** (migrations per second of active time and per tick) and **Dwell** (average on-CPU slice length). For multi-core traces, open the **Migration heatmap** from the toolbar **Heatmap** button — click core-pair cells to drill into per-task sub-bins, then into Task View (see [Migration heatmap](#migration-heatmap)); or open the **Migration chord diagram** from the toolbar **Chord** button for a directional overview of core-to-core migration volume (see [Migration chord diagram](#migration-chord-diagram)). Toolbar **Analysis** flags thrashing / hot-pair candidates from the same stats. **Trace Compare…** (footer, next to Export) opens a dialog with **Summary**, **Top Tasks**, and **Core Migrations** tabs to diff two open trace tabs; optional cursor-range scoping compares each tab's C1–Cn window independently.
 
 See [Statistics metric tables](#statistics-metric-tables) for column definitions, distribution-chart usage, [CDF overlay](#cdf-overlay), and example plots from `tracedata/example-4cores.btf`.
 
@@ -860,9 +880,9 @@ Shows the number of tasks, segments, STI events, and total trace duration once a
 
 Shared by the Desktop **Statistics** tab and the Web **Statistics** panel.
 
-The **Statistics** tab in the right-side panel (Desktop dock + Web tab) shows per-core CPU utilisation, top tasks, scheduling summary, trace health, and collapsible metric tables. Toggle visibility from **Settings → Display → Statistics panel**.
+The **Statistics** tab in the right-side panel (Desktop dock + Web tab) shows per-core CPU utilisation, top tasks, scheduling summary, trace health, and collapsible metric tables. Toggle visibility from **Settings → Display → Statistics panel**. For a quick triage of the same scope, use toolbar **Analysis** (see [Analysis Findings](#analysis-findings)) — findings are **not** listed as a panel section.
 
-At the top, **Limit to cursor range (C1–Cn)** restricts all statistics to the time window from the first placed cursor through the last (requires 2+ cursors). Section titles show **(cursor range)** when scoped. Clearing all cursors returns to full-trace statistics immediately.
+At the top, **Limit to cursor range (C1–Cn)** restricts all statistics (and Analysis Findings) to the time window from the first placed cursor through the last (requires 2+ cursors). Section titles show **(cursor range)** when scoped. Clearing all cursors returns to full-trace statistics immediately.
 
 **Layout:** metric tables are **collapsible** (click a section title) and **resizable** (drag the thin handle below each table). On Desktop, drag the splitter between the timeline and CPU load graph to resize that pane; sizes are saved in `btf_viewer.rc`. On Web, right-panel width and stats table heights persist in `localStorage`.
 
@@ -889,21 +909,22 @@ It shows (in panel order):
 - **Interval Analysis** — per interval id: count, min/avg/max/p95 duration of paired start→stop spans; pairing uses `tid` in the note when present; click a row for a duration plot; click a scatter point to jump and add an annotation at the interval start (collapsible)
 - **Tag Analysis** — per `tag0_event`…`tag7_event` STI channel: sample count, min/avg/max/p95 of the tag value; click a row to open a scatter + histogram plot (collapsible; shown only when the trace contains tag STI samples)
 
-**Export CSV** / **Export HTML** respect the current cursor scope. **Export CSV** includes summary tables for every statistics section and a **Core Affinity Violations** sub-table listing every mutex that crossed core boundaries, plus **Load Balance Score**, σ, and Gini coefficient under Core Utilisation. **Export HTML** adds the same summaries plus detail sub-tables for **Priority Inheritance** (boost episodes), **Mutex / Semaphore** (pairing issues with bounce warnings, and hold episodes with take/give core columns), and **Interval Analysis** (individual instances). **Trace Compare…** compares summary, top tasks, and core migrations between two open tabs; enable **Limit to each tab's cursor range** to scope each side to its own C1–Cn window. Open metrics charts update live when cursors move or scope is toggled; each trace tab remembers its own open chart when you switch tabs.
+**Export CSV** / **Export HTML** respect the current cursor scope. **Export CSV** includes summary tables for every statistics section and a **Core Affinity Violations** sub-table listing every mutex that crossed core boundaries, plus **Load Balance Score**, σ, and Gini coefficient under Core Utilisation. **Export HTML** adds the same summaries plus an **Analysis Findings** card near the top (same heuristics as toolbar **Analysis** — load imbalance, WCET/CPU hotspots, blocking, L/M/H priority inversion, core thrashing / hot pairs, deadline breaches, tick health, sync/mutex bounces), and detail sub-tables for **Priority Inheritance** (boost episodes), **Mutex / Semaphore** (pairing issues with bounce warnings, and hold episodes with take/give core columns), and **Interval Analysis** (individual instances). **Trace Compare…** compares summary, top tasks, and core migrations between two open tabs; enable **Limit to each tab's cursor range** to scope each side to its own C1–Cn window. Open metrics charts update live when cursors move or scope is toggled; each trace tab remembers its own open chart when you switch tabs.
 
 Full column definitions, chart axis meanings, and example plots: [Statistics metric tables](#statistics-metric-tables).
 
 ### Statistics metric tables
 
-The Statistics panel (Desktop **Statistics** tab + Web **Statistics** tab) organises metrics into collapsible sections. Tables are **sortable** — click a column header to sort ascending/descending. **Export CSV** and **Export HTML** at the panel footer honour the current cursor scope and include every section's summary table. **Export HTML** additionally adds detail sub-tables under Priority Inheritance, Mutex / Semaphore, and Interval Analysis (longest instances / hold episodes first, capped at 150–200 rows per sub-table).
+The Statistics panel (Desktop **Statistics** tab + Web **Statistics** tab) organises metrics into collapsible sections. Tables are **sortable** — click a column header to sort ascending/descending. **Export CSV** and **Export HTML** at the panel footer honour the current cursor scope and include every section's summary table. **Export HTML** starts with an **Analysis Findings** card (same content as toolbar **Analysis** — load balance, WCET, blocking, thrashing, deadlines, tick health, and sync); use the toolbar dialog for interactive triage and **Save as text…**. HTML also adds detail sub-tables under Priority Inheritance, Mutex / Semaphore, and Interval Analysis (longest instances / hold episodes first, capped at 150–200 rows per sub-table).
 
 **How to use the panel**
 
 1. Open a trace (e.g. `tracedata/example-4cores.btf` for a 4-core SMP workload, or `tracedata/example.btf` for a smaller single-core demo).
-2. Expand the sections you care about (or use the **+** / **−** icons at the top to expand/collapse all).
-3. Optionally place **2+ cursors** and enable **Limit to cursor range (C1–Cn)** to restrict every metric to a time window.
-4. Click a **table row** to open a distribution chart (where supported), click **Min** / **Max** to jump and add an annotation at an extreme slice on the timeline, or click a **Mutex / Semaphore** issue row to zoom, jump, and annotate at that STI event.
-5. Use **Trace Compare…** when two traces are open to diff summary and migration stats.
+2. Optionally click toolbar **Analysis** for a severity-tagged triage of the current scope.
+3. Expand the sections you care about (or use the **+** / **−** icons at the top to expand/collapse all).
+4. Optionally place **2+ cursors** and enable **Limit to cursor range (C1–Cn)** to restrict every metric (and Analysis Findings) to a time window.
+5. Click a **table row** to open a distribution chart (where supported), click **Min** / **Max** to jump and add an annotation at an extreme slice on the timeline, or click a **Mutex / Semaphore** issue row to zoom, jump, and annotate at that STI event.
+6. Use **Trace Compare…** when two traces are open to diff summary and migration stats.
 
 The example plots below were generated from **`tracedata/example-8cores.btf`** (8 cores, 141 tasks, ~29 000 segments, time scale `us`). Regenerate them with:
 
@@ -939,9 +960,9 @@ When two or more cores are present, a **Load Balance Score** badge is shown at t
 \text{Score} = 100\% \times (1 - G), \quad G = \text{Gini coefficient of } \{U_{\text{core}}\}
 ```
 
-The badge also shows the population standard deviation σ across cores. The badge turns **amber** when σ > 30 %, indicating significant load imbalance. **Export CSV** includes the score, σ, and G values under the Core Utilisation section.
+The badge also shows the population standard deviation σ across cores. The badge turns **amber** when σ > 30 %, indicating significant load imbalance. **Export CSV** includes the score, σ, and G values under the Core Utilisation section. Toolbar **Analysis** additionally warns when Score < 70 % *or* σ > 30 %, and only describes cores as “reasonably balanced” when Score ≥ 85 % and σ ≤ 30 %.
 
-**What it tells you:** Imbalanced utilisation across cores may indicate poor affinity, lock pinning, or workload placement issues — cross-check with **Core Migrations** and the migration heatmap.
+**What it tells you:** Imbalanced utilisation across cores may indicate poor affinity, lock pinning, or workload placement issues — cross-check with **Core Migrations**, the migration heatmap, and toolbar **Analysis**.
 
 **Top tasks by CPU** — ranks tasks by *T*<sub>exec,i</sub> (same denominator as **CPU%** in Execution Time Per Slice).
 
@@ -1929,7 +1950,7 @@ Shortcuts marked **(W)** are Web-only. All others work on both Desktop and Web.
 
 ## Reference
 
-Synthetic trace generation, BTF file format reference, and source code map.
+Synthetic trace generation, BTF file format reference, and source code map. For practical diagnosis workflows (first look, load balance, WCET, thrashing, deadlines, exports, Perfetto, …) see **[WORKFLOWS.md](WORKFLOWS.md)**.
 
 ### Generating synthetic traces — `scripts/gen_trace.py`
 

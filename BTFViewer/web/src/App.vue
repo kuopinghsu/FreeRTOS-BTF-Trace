@@ -12,6 +12,7 @@
       :model-value="timelineOptions"
       :trace-info="traceInfo"
       :heatmap-enabled="heatmapEnabled"
+      :analysis-enabled="!!trace"
       :task-filter-active="!!timelineOptions.taskFilterKeys?.length"
       :loading="loading"
       :loading-pct="loadingPct"
@@ -35,6 +36,7 @@
       @export-perfetto="onExportPerfetto"
       @show-heatmap="onOpenHeatmap"
       @show-chord="chordOpen = true"
+      @show-analysis="analysisOpen = true"
       @clear-task-filter="clearHeatmapTaskFilter"
       @show-help="openHelpDialog"
       @show-about="openAboutDialog"
@@ -732,6 +734,13 @@
       @close="chordOpen = false"
     />
 
+    <AnalysisFindingsDialog
+      v-if="analysisOpen && trace"
+      :findings="analysisFindings"
+      :scope-label="analysisScopeLabel"
+      @close="analysisOpen = false"
+    />
+
     <!-- Snapshot editor -->
     <SnapshotEditor
       v-if="snapshotEditorOpen"
@@ -812,6 +821,7 @@ import MarksPanel       from './components/MarksPanel.vue'
 import SnapshotEditor   from './components/SnapshotEditor.vue'
 import MigrationHeatmapDialog from './components/MigrationHeatmapDialog.vue'
 import ChordDiagramDialog from './components/ChordDiagramDialog.vue'
+import AnalysisFindingsDialog from './components/AnalysisFindingsDialog.vue'
 import FindPanel from './components/FindPanel.vue'
 import JumpToTimeDialog from './components/JumpToTimeDialog.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
@@ -821,6 +831,8 @@ import { loadSettings, saveSettings, applySettingsToRuntime, resizeTabCursors, n
 } from './utils/settingsStore.js'
 import { setTimelineLayout } from './utils/timelineLayout.js'
 import { traceIsMultiCore } from './utils/migrationAnalysis.js'
+import { collectTraceAnalysisFindings } from './utils/workflowAnalysis.js'
+import { getStatsRange, scopeSuffix } from './utils/statsRange.js'
 import {
   cpuLoadPreferredPaneHeight, cpuLoadPaneDefaultH, cpuLoadPaneMaxH,
   CPU_LOAD_PANE_MIN_H,
@@ -874,6 +886,7 @@ const aboutOpen  = ref(false)
 const settingsOpen = ref(false)
 const heatmapOpen = ref(false)
 const chordOpen = ref(false)
+const analysisOpen = ref(false)
 /** Viewport/cursors saved when migration heatmap opens; restored by Show all tasks. */
 let _heatmapRestoreSnapshot = null
 const statsPaused = ref(false)
@@ -1195,6 +1208,7 @@ watch(activeTabId, (newId, oldId) => {
   if (oldId != null) {
     heatmapOpen.value = false
     chordOpen.value = false
+    analysisOpen.value = false
     const leaving = tabs.value.find(t => t.id === oldId)
     if (leaving) saveFiltersToActiveTab(leaving)
   }
@@ -1266,6 +1280,25 @@ const traceInfo = computed(() => {
 })
 
 const heatmapEnabled = computed(() => traceIsMultiCore(trace.value))
+
+const analysisFindings = computed(() => {
+  const tr = trace.value
+  if (!tr) return []
+  const scopeOn = activeTab.value?.scopeToCursors !== false
+  const range = getStatsRange(cursors.value, scopeOn)
+  return collectTraceAnalysisFindings(
+    tr,
+    range?.lo ?? null,
+    range?.hi ?? null,
+    appSettings,
+  )
+})
+
+const analysisScopeLabel = computed(() => {
+  const scopeOn = activeTab.value?.scopeToCursors !== false
+  const range = getStatsRange(cursors.value, scopeOn)
+  return scopeSuffix(range) || ''
+})
 
 const cursorRangeStats = computed(() =>
   computeCursorRangeStats(trace.value, cursors.value, appSettings.timeDecimals))
@@ -2231,6 +2264,9 @@ function onGlobalKeydown(e) {
     } else if (chordOpen.value) {
       chordOpen.value = false
       e.preventDefault()
+    } else if (analysisOpen.value) {
+      analysisOpen.value = false
+      e.preventDefault()
     } else if (settingsOpen.value) {
       onSettingsCancel()
       e.preventDefault()
@@ -2247,7 +2283,7 @@ function onGlobalKeydown(e) {
     return
   }
 
-  if (helpOpen.value || aboutOpen.value || heatmapOpen.value || chordOpen.value || settingsOpen.value
+  if (helpOpen.value || aboutOpen.value || heatmapOpen.value || chordOpen.value || analysisOpen.value || settingsOpen.value
       || jumpDialogOpen.value || snapshotEditorOpen.value) return
 
   if (mod && e.key === ',') {

@@ -148,7 +148,7 @@ freertos_test: all tests passed
 
 ## Use cases
 
-Worked examples from the demo firmware and BTFViewer. Detailed viewer workflows: [`BTFViewer/README.md`](BTFViewer/README.md).
+Worked examples from the demo firmware and BTFViewer. Detailed viewer workflows: [`BTFViewer/WORKFLOWS.md`](BTFViewer/WORKFLOWS.md) · feature reference: [`BTFViewer/README.md`](BTFViewer/README.md).
 
 ### Use case: monitor heap usage with the tick hook
 
@@ -267,7 +267,7 @@ Traces with **more than 16 cores** use a three-level drill-down (core×core matr
 
 ### BTF Viewer (built-in)
 
-An interactive Gantt-style viewer is included in the `BTFViewer/` directory (desktop PySide6 app and browser-based web viewer). Both share the same default settings (dark theme, grid on, hover dimming off, 22 px rows, etc.). They support Task/Core views, measurement cursors (2–8, default 4), CPU load graph, bookmarks, **Statistics** / **Marks** / **Find** right-side panels, **Statistics** (execution time, blocking/response time, tick health with tick-interval distribution, preemption chain, priority inheritance, mutex/semaphore pairing, interval analysis), **adaptive metrics histograms** (auto linear / p5–p95 / log scaling, CDF overlay), **core migration heatmap**, trace compare, a **trace quality** banner when BTF meta reports overflow or truncation, and PNG/SVG export.
+An interactive Gantt-style viewer is included in the `BTFViewer/` directory (desktop PySide6 app and browser-based web viewer). Both share the same default settings (dark theme, grid on, hover dimming off, 22 px rows, etc.). They support Task/Core views, measurement cursors (2–8, default 4), CPU load graph, bookmarks, **Statistics** / **Marks** / **Find** right-side panels, **Statistics** (execution time, blocking/response time, tick health with tick-interval distribution, preemption chain, priority inheritance, mutex/semaphore pairing, interval analysis), toolbar **Analysis** findings, **adaptive metrics histograms** (auto linear / p5–p95 / log scaling, CDF overlay), **core migration heatmap**, **Export Perfetto**, trace compare, a **trace quality** banner when BTF meta reports overflow or truncation, and PNG/SVG export.
 
 **Desktop requirements:** Python 3.8+ and PySide6 ≥ 6.4
 
@@ -278,7 +278,7 @@ python BTFViewer/builds/btf_viewer.py tracedata/trace.btf
 python BTFViewer/builds/btf_viewer.py tracedata/example-4cores.btf
 ```
 
-See [`BTFViewer/README.md`](BTFViewer/README.md) for the full feature reference (zoom, cursors, [migration heatmap](BTFViewer/README.md#migration-heatmap), [statistics](BTFViewer/README.md#statistics--metrics), trace compare, headless CLI, session restore, export, etc.).
+See [`BTFViewer/README.md`](BTFViewer/README.md) for the full feature reference (zoom, cursors, [migration heatmap](BTFViewer/README.md#migration-heatmap), [statistics](BTFViewer/README.md#statistics--metrics), [Analysis Findings](BTFViewer/README.md#analysis-findings), trace compare, headless CLI, session restore, export, etc.). Practical diagnosis walkthroughs: [`BTFViewer/WORKFLOWS.md`](BTFViewer/WORKFLOWS.md).
 
 ### Eclipse Trace Compass
 

@@ -2386,6 +2386,7 @@ import { formatMigrationGapTime } from '../utils/timeFormat.js'
 import { computeDeadlineViolations } from '../utils/deadlineAnalysis.js'
 import { intervalInstanceDetailRows } from '../utils/intervalAnalysis.js'
 import { migrationRows, buildCorePairRows, buildCoreTimeBreakdown, migrationDwellPlotPoints, migrationRatePlotPoints, migrationGapPlotPoints } from '../utils/migrationAnalysis.js'
+import { renderWorkflowAnalysisHtml, collectTraceAnalysisFindings } from '../utils/workflowAnalysis.js'
 import { traceNeedsDeferredStatsLoad } from '../utils/statsLoad.js'
 import { tickHealthReport } from '../utils/tickHealth.js'
 import { requestStatsCompute } from '../utils/statsWorkerClient.js'
@@ -2927,6 +2928,19 @@ const loadBalanceScore = computed(() => {
   const stddev = Math.sqrt(variance)
   const score = Math.max(0, 100 * (1 - gini))
   return { score, gini, stddev, amber: stddev > 30 }
+})
+
+// ---- Analysis Findings (Export HTML) -----------------------------------
+const analysisFindings = computed(() => {
+  const tr = props.trace
+  if (!tr) return []
+  const r = statsRange.value
+  return collectTraceAnalysisFindings(
+    tr,
+    r?.lo ?? null,
+    r?.hi ?? null,
+    props.analysisSettings || {},
+  )
 })
 
 // ---- Top 10 tasks by CPU -----------------------------------------------
@@ -3818,7 +3832,7 @@ function _htmlCell(v) {
 
 // Wraps every <section class="report-card ..."> block in <details> so it can be
 // collapsed/expanded, and builds a table-of-contents nav linking to each one.
-const _DEFAULT_EXPANDED_TITLES = ['Statistics Notes', 'Core Utilisation (excl. IDLE/TICK)', 'Top Tasks by CPU (excl. IDLE/TICK)', 'Trace Health (TICK)']
+const _DEFAULT_EXPANDED_TITLES = ['Analysis Findings', 'Statistics Notes', 'Core Utilisation (excl. IDLE/TICK)', 'Top Tasks by CPU (excl. IDLE/TICK)', 'Trace Health (TICK)']
 function _makeCollapsibleSections(docHtml) {
   const toc = []
   let counter = 0
@@ -4658,6 +4672,8 @@ function exportHtml() {
     : '<tr><td colspan="10" class="empty">No migrated tasks</td></tr>'
   }</tbody></table></section>`
 
+  const analysisHtml = renderWorkflowAnalysisHtml(analysisFindings.value, suffix)
+
   const html = `<!doctype html>
 <html>
 <head>
@@ -4737,6 +4753,14 @@ function exportHtml() {
     h3.sub { margin: 14px 0 8px; font-size: 14px; color: #284563; font-weight: 600; }
     .sev-error, .sync-status-error { color: #c0392b; font-weight: 600; }
     .sev-warning, .sync-status-warning { color: #d68910; font-weight: 600; }
+    .finding-info { color: var(--ink); }
+    .findings-list { margin: 8px 0 0 18px; padding: 0; }
+    .findings-list li { margin: 8px 0; line-height: 1.45; }
+    .finding-wf {
+      color: var(--muted); font-size: 11px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.4px;
+    }
+    .analysis-findings { border-left: 4px solid #c0392b; }
     .sync-status-ok { color: #1e8449; }
     .report-foot { margin-top: 14px; color: var(--muted); font-size: 12px; text-align: right; }
     .report-toc {
@@ -4784,6 +4808,7 @@ function exportHtml() {
       ${schedKpi?.gapMax ? `<article class="kpi"><div class="k">Core gap max${_htmlCell(suffix)}</div><div class="v">${_htmlCell(schedKpi.gapMax)}</div></article>` : ''}
     </section>
     <!--TOC-->
+    ${analysisHtml}
     <section class="report-card notes">
     <h2>Statistics Notes</h2>
     <ul>

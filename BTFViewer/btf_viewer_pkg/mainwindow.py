@@ -9,7 +9,7 @@ from .graphics_items import *  # noqa: F403,F401
 from .scene import *  # noqa: F403,F401
 from .view import *  # noqa: F403,F401
 from .stats import *  # noqa: F403,F401
-from .stats import _RcSettings, _parse_task_deadlines_text
+from .stats import _RcSettings, _parse_task_deadlines_text, _AnalysisFindingsDialog
 from .mvvm import MainViewModel, MvvmSettingsMixin, TraceTabViewModel
 from .mvvm.tab_viewport import apply_viewport, viewport_from_json, viewport_to_json
 from .trace_quality import trace_quality_summary
@@ -4142,6 +4142,14 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "Migration chord diagram — directional core-to-core migration volume "
             "(multi-core traces only)")
         self._tb_chord_btn.setEnabled(False)
+        self._tb_analysis_btn = _ia(
+            "Analysis", self._open_analysis_findings, _IC_ANALYSIS,
+            "Analysis Findings — heuristic load balance, WCET, blocking, "
+            "thrashing, deadlines, tick, sync")
+        self._tb_analysis_btn.setEnabled(False)
+        _aw = tb.widgetForAction(self._tb_analysis_btn)
+        if _aw:
+            _aw.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self._tb_show_all_tasks_btn = _ia(
             "All tasks", self._clear_heatmap_task_filter, _IC_TASK,
             "Clear heatmap task filter and show all tasks")
@@ -4567,6 +4575,14 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._tb_chord_btn.setEnabled(
             trace is not None and _trace_is_multi_core(trace))
 
+    def _open_analysis_findings(self) -> None:
+        """Show Analysis Findings dialog for the active tab / cursor scope."""
+        if self._trace is None or self._stats_panel is None:
+            return
+        findings, scope_title = self._stats_panel.build_analysis_findings()
+        dlg = _AnalysisFindingsDialog(findings, scope_title, parent=self)
+        dlg.exec()
+
     def _capture_heatmap_view_snapshot(self, tab: _TraceTab) -> None:
         """Remember timeline zoom/pan/cursors before heatmap drill-down."""
         view = tab.view
@@ -4802,6 +4818,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         """Refresh toolbar toggles that reflect per-tab view state."""
         self._sync_heatmap_toolbar()
         self._sync_chord_toolbar()
+        if hasattr(self, "_tb_analysis_btn"):
+            self._tb_analysis_btn.setEnabled(self._trace is not None)
         if hasattr(self, "_tb_cpu_load_btn"):
             self._tb_cpu_load_btn.blockSignals(True)
             self._tb_cpu_load_btn.setChecked(self._show_cpu_load)

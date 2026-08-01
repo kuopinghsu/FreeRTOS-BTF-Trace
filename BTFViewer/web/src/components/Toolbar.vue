@@ -302,6 +302,24 @@
         </button>
 
         <button
+          class="tb-btn"
+          :class="{ disabled: !analysisEnabled }"
+          :disabled="!analysisEnabled"
+          title="Analysis Findings — heuristic load balance, WCET, blocking, thrashing, deadlines, tick, sync"
+          @click="analysisEnabled && emit('showAnalysis')"
+        >
+          <svg
+            viewBox="0 0 16 16"
+            width="16"
+            height="16"
+            fill="currentColor"
+          >
+            <path d="M2 1.5A.5.5 0 0 1 2.5 1h9A1.5 1.5 0 0 1 13 2.5v11a1.5 1.5 0 0 1-1.5 1.5h-9A.5.5 0 0 1 2 14.5v-13zM3 2v12h8.5a.5.5 0 0 0 .5-.5v-11a.5.5 0 0 0-.5-.5H3zm1.5 2h6v1h-6V4zm0 2.5h6v1h-6v-1zm0 2.5h4v1h-4V9z" />
+          </svg>
+          Analysis
+        </button>
+
+        <button
           v-if="taskFilterActive"
           class="tb-btn active"
           title="Clear heatmap task filter and show all tasks"
@@ -678,6 +696,7 @@ const props = defineProps({
   modelValue:  { type: Object,  required: true },
   traceInfo:   { type: String,  default: '' },
   heatmapEnabled: { type: Boolean, default: false },
+  analysisEnabled: { type: Boolean, default: false },
   taskFilterActive: { type: Boolean, default: false },
   loading:     { type: Boolean, default: false },
   loadingPct:  { type: Number,  default: 0 },
@@ -689,7 +708,8 @@ const emit = defineEmits([
   'update:modelValue', 'trace-reading', 'trace-loaded', 'loadDemo', 'zoom', 'fit',
   'zoom1to1', 'zoomRange', 'showFind',
   'expandAll', 'collapseAll', 'addMark', 'copyScreenshot', 'exportSvg', 'exportPerfetto',
-  'showHelp', 'showAbout', 'showSettings', 'showHeatmap', 'showChord', 'clearTaskFilter', 'file-error',
+  'showHelp', 'showAbout', 'showSettings', 'showHeatmap', 'showChord', 'showAnalysis',
+  'clearTaskFilter', 'file-error',
 ])
 
 const useFsaOpen = supportsFileHandles()
