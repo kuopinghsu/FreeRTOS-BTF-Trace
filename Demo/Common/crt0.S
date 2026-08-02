@@ -46,9 +46,12 @@ _start:
     /* Ensure all .bss stores are globally visible before waking secondary harts. */
 .Lrelease_secondaries:
     fence rw, rw
+    /* With MAX_HARTS==1, (MAX_HARTS-1)==0; a do-while style loop would
+     * decrement to -1 and spin forever. Skip the release entirely. */
+    li t2, MAX_HARTS - 1        /* number of secondary harts to release */
+    beqz t2, .Lenter_main
     li t0, CLINT_MSIP_BASE + 4  /* start at hart 1 MSIP (hart n at base + n*4) */
     li t1, 1
-    li t2, MAX_HARTS - 1        /* release harts 1 .. MAX_HARTS-1 */
 .Lrelease_loop:
     sw t1, 0(t0)
     addi t0, t0, 4

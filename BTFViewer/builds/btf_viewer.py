@@ -15967,7 +15967,9 @@ class _StatsHoverRow(QWidget):
         if et in (QEvent.Type.Enter, QEvent.Type.HoverEnter):
             self._apply_hover(True)
         elif et in (QEvent.Type.Leave, QEvent.Type.HoverLeave):
-            QTimer.singleShot(0, self._sync_hover)
+            # Context-bound singleShot: cancelled if this row is deleteLater()'d
+            # before the timer fires (e.g. statistics panel rebuild while hovering).
+            QTimer.singleShot(0, self, self._sync_hover)
         elif (et == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton
               and self._on_click is not None):
             self._on_click()
@@ -15975,7 +15977,13 @@ class _StatsHoverRow(QWidget):
         return False
 
     def _sync_hover(self) -> None:
-        self._apply_hover(self.underMouse())
+        # Belt-and-suspenders: context-bound timers should not fire after delete,
+        # but a stale Python wrapper must not call into a destroyed C++ object.
+        try:
+            hovered = self.underMouse()
+        except RuntimeError:
+            return
+        self._apply_hover(hovered)
 
     def update_theme(self, is_dark: bool) -> None:
         self._hover_bg = QColor("#3A3A50") if is_dark else QColor("#E0E0EC")
