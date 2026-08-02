@@ -931,15 +931,61 @@ _AFFINITY_NOTE_RE = re.compile(
     r"^affinity_set\s+(.+?)\s+(0x[0-9a-fA-F]+|\d+)\s*$", re.IGNORECASE)
 
 
+def _affinity_mask_at_time(
+    history: List[tuple],
+    t: int,
+) -> Optional[int]:
+    """Return the affinity mask in effect at time *t*.
+
+    *history* is a time-sorted list of ``(timestamp, mask)`` pairs from
+    ``affinity_set`` STI events.  Before the first set the scheduler treats
+    the task as unrestricted (``tskNO_AFFINITY``), so this returns ``None``.
+    """
+    active: Optional[int] = None
+    for ts, mask in history:
+        if ts > t:
+            break
+        active = mask
+    return active
+
+
+def _cores_allowed_by_mask(mask: int, core_names: List[str]) -> set:
+    """Cores whose bit is set in *mask* (Core_N → bit N)."""
+    allowed: set = set()
+    for core in core_names:
+        # Bound idx to avoid an astronomically large left-shift if a crafted
+        # trace names a core with a huge numeric suffix.
+        idx = _safe_int(core.split("_")[-1], default=-1)
+        if 0 <= idx < 4096 and (mask & (1 << idx)):
+            allowed.add(core)
+    return allowed
+
+
+def _format_affinity_mask_history(history: List[tuple]) -> str:
+    """Compact mask column: ``0x1`` or ``0x1 → 0x8`` when the mask changes."""
+    parts: List[str] = []
+    for _, mask in history:
+        hx = f"0x{mask:X}"
+        if not parts or parts[-1] != hx:
+            parts.append(hx)
+    return " \u2192 ".join(parts) if parts else ""
+
+
 def _task_core_affinity_rows(
     trace: "BtfTrace",
     lo: Optional[int] = None,
     hi: Optional[int] = None,
 ) -> List[tuple]:
     """Per-task core affinity summary.
-    Returns: [(label, mask_hex, observed_cores_str, violation_cores_str), ...]"""
-    # Collect affinity masks from STI events on the 'task' channel
-    masks: Dict[str, int] = {}
+
+    Returns: ``[(label, mask_hex, observed_cores_str, violation_cores_str), ...]``.
+
+    Violations are evaluated per execution slice against the mask in effect at
+    the slice start.  Slices before the first ``affinity_set`` are unrestricted
+    and do not count as violations (tasks may migrate freely until pinned).
+    """
+    # Collect time-ordered affinity history per task (merge key).
+    histories: Dict[str, List[tuple]] = {}
     for ev in trace.sti_events:
         if ev.target != "task":
             continue
@@ -951,34 +997,35 @@ def _task_core_affinity_rows(
         raw_mask = m.group(2)
         mask_val = _safe_int(raw_mask, 16 if raw_mask.startswith(("0x", "0X")) else 10)
         mk = _task_merge_key(task_label)
-        masks[mk] = mask_val
+        histories.setdefault(mk, []).append((ev.time, mask_val))
 
-    if not masks:
+    if not histories:
         return []
 
+    for hist in histories.values():
+        hist.sort(key=lambda item: item[0])
+
     rows = []
-    for mk, mask in sorted(masks.items()):
+    for mk, history in sorted(histories.items()):
         raw_repr = trace.task_repr.get(mk, mk)
         label = _task_display_name(raw_repr)
         obs: set = set()
+        violations: set = set()
         for seg in trace.seg_map_by_merge_key.get(mk, []):
             if lo is not None and seg.end < lo:
                 continue
             if hi is not None and seg.start > hi:
                 continue
             obs.add(seg.core)
+            mask = _affinity_mask_at_time(history, seg.start)
+            if mask is None:
+                continue
+            allowed = _cores_allowed_by_mask(mask, trace.core_names)
+            if allowed and seg.core not in allowed:
+                violations.add(seg.core)
         if not obs:
             continue
-        # Build allowed-core set from bitmask (Core_N → bit N). idx is bounded to
-        # avoid an astronomically large left-shift if a crafted trace names a core
-        # with a huge numeric suffix.
-        allowed: set = set()
-        for core in trace.core_names:
-            idx = _safe_int(core.split("_")[-1], default=-1)
-            if 0 <= idx < 4096 and (mask & (1 << idx)):
-                allowed.add(core)
-        violations = obs - allowed if allowed else set()
-        mask_hex = f"0x{mask:X}"
+        mask_hex = _format_affinity_mask_history(history)
         obs_str = ", ".join(sorted(obs))
         viol_str = ", ".join(sorted(violations)) if violations else "\u2014"
         rows.append((label, mask_hex, obs_str, viol_str))

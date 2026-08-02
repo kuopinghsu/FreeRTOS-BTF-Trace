@@ -59,6 +59,12 @@
  *                               it does NOT run until vTaskResume() is
  *                               called (traceTASK_SUSPEND / traceTASK_RESUME).
  *
+ * 10. Core affinity           - SMP only (no-op pass on 1 core): pin one
+ *                               task per core via xTaskCreateAffinitySet /
+ *                               vTaskCoreAffinitySet; verify portGET_CORE_ID
+ *                               stays on-mask; migrate one task from core 0
+ *                               to the last core (affinity STI for BTFViewer).
+ *
  * Tests run back-to-back with only taskYIELD() handoffs between phases
  * (no vTaskDelay gaps) so all cores stay busy under SMP load.
  */
@@ -917,6 +923,160 @@ static int run_test9( void )
 }
 
 /* ==================================================================
+ * TEST 10 - Core affinity (vTaskCoreAffinitySet / Get)
+ *
+ * Requires configUSE_CORE_AFFINITY=1 and configNUMBER_OF_CORES>1.
+ * On a single-core build the test is a no-op pass.
+ *
+ * A. Pin — one BOOST_PRIORITY task per core (mask = 1<<core), created with
+ *    xTaskCreateAffinitySet then reinforced by vTaskCoreAffinitySet(NULL)
+ *    so the BTF ENTER hook records affinity_set STI.  Each task samples
+ *    portGET_CORE_ID() for a short yield loop; every sample must match.
+ *
+ * B. Migrate — one task pinned to core 0, then re-pinned to the last core;
+ *    after a few yields it must only observe the new core.
+ * ================================================================== */
+
+#if ( configNUMBER_OF_CORES > 1 ) && ( configUSE_CORE_AFFINITY == 1 )
+
+#define T10_PIN_ITERS      ( 6 )
+#define T10_MIG_ITERS      ( 4 )
+
+static SemaphoreHandle_t  t10_done;
+static volatile uint32_t  t10_pin_fail;
+static volatile uint32_t  t10_get_fail;
+static volatile uint32_t  t10_mig_fail;
+
+static void vAffPinned( void *pvArg )
+{
+    int core = (int)(intptr_t)pvArg;
+    UBaseType_t mask = ( UBaseType_t )( 1u << core );
+    int i;
+
+    /* Emit affinity STI (create-time mask is not traced by FreeRTOS V11). */
+    vTaskCoreAffinitySet( NULL, mask );
+
+    if( vTaskCoreAffinityGet( NULL ) != mask )
+        t10_get_fail++;
+
+    for( i = 0; i < T10_PIN_ITERS; ++i )
+    {
+        if( portGET_CORE_ID() != ( BaseType_t )core )
+            t10_pin_fail++;
+        taskYIELD();
+    }
+
+    xSemaphoreGive( t10_done );
+    vTaskDelete( NULL );
+}
+
+static void vAffMigrate( void *pvArg )
+{
+    const int last = (int)configNUMBER_OF_CORES - 1;
+    UBaseType_t mask0 = ( UBaseType_t )( 1u << 0 );
+    UBaseType_t maskN = ( UBaseType_t )( 1u << last );
+    int i;
+    (void)pvArg;
+
+    vTaskCoreAffinitySet( NULL, mask0 );
+    if( vTaskCoreAffinityGet( NULL ) != mask0 )
+        t10_get_fail++;
+
+    for( i = 0; i < T10_MIG_ITERS; ++i )
+    {
+        if( portGET_CORE_ID() != ( BaseType_t )0 )
+            t10_mig_fail++;
+        taskYIELD();
+    }
+
+    vTaskCoreAffinitySet( NULL, maskN );
+    if( vTaskCoreAffinityGet( NULL ) != maskN )
+        t10_get_fail++;
+
+    /* Allow the scheduler to migrate us off core 0. */
+    for( i = 0; i < (int)configNUMBER_OF_CORES + 2; ++i )
+        taskYIELD();
+
+    for( i = 0; i < T10_MIG_ITERS; ++i )
+    {
+        if( portGET_CORE_ID() != ( BaseType_t )last )
+            t10_mig_fail++;
+        taskYIELD();
+    }
+
+    xSemaphoreGive( t10_done );
+    vTaskDelete( NULL );
+}
+
+static int run_test10( void )
+{
+    int c, fail = 0;
+    const int n_pin = (int)configNUMBER_OF_CORES;
+
+    t10_pin_fail = 0;
+    t10_get_fail = 0;
+    t10_mig_fail = 0;
+    t10_done     = xSemaphoreCreateCounting( ( UBaseType_t )( n_pin + 1 ), 0 );
+    configASSERT( t10_done );
+
+#if configUSE_TRACE_FACILITY
+    traceINTERVAL_START( 10 );
+#endif
+
+    for( c = 0; c < n_pin; ++c )
+    {
+        UBaseType_t mask = ( UBaseType_t )( 1u << c );
+        configASSERT( xTaskCreateAffinitySet(
+                          vAffPinned, "Aff",
+                          TASK_STACK_WORDS, (void *)(intptr_t)c,
+                          BOOST_PRIORITY, mask, NULL ) == pdPASS );
+    }
+
+    configASSERT( xTaskCreate( vAffMigrate, "AffM",
+                               TASK_STACK_WORDS, NULL,
+                               BOOST_PRIORITY, NULL ) == pdPASS );
+
+    for( c = 0; c < n_pin + 1; ++c )
+        xSemaphoreTake( t10_done, portMAX_DELAY );
+
+#if configUSE_TRACE_FACILITY
+    traceINTERVAL_STOP( 10 );
+#endif
+
+    vSemaphoreDelete( t10_done );
+
+    if( t10_get_fail != 0 )
+    {
+        printf( "  FAIL: vTaskCoreAffinityGet mismatches (%u)\n",
+                (unsigned)t10_get_fail );
+        ++fail;
+    }
+    if( t10_pin_fail != 0 )
+    {
+        printf( "  FAIL: pinned task ran off-mask (%u samples)\n",
+                (unsigned)t10_pin_fail );
+        ++fail;
+    }
+    if( t10_mig_fail != 0 )
+    {
+        printf( "  FAIL: migrate task off expected core (%u samples)\n",
+                (unsigned)t10_mig_fail );
+        ++fail;
+    }
+    return fail;
+}
+
+#else /* !SMP affinity */
+
+static int run_test10( void )
+{
+    /* Core affinity APIs require configNUMBER_OF_CORES > 1. */
+    return 0;
+}
+
+#endif /* configNUMBER_OF_CORES > 1 && configUSE_CORE_AFFINITY */
+
+/* ==================================================================
  * Test-runner task
  * ================================================================== */
 
@@ -939,6 +1099,7 @@ static const test_entry_t tests[] =
     { "7: task priority set",      run_test7 },
     { "8: priority inversion",     run_test8 },
     { "9: task suspend/resume",    run_test9 },
+    { "10: core affinity",         run_test10 },
 };
 
 #define N_TESTS  ( (int)( sizeof( tests ) / sizeof( tests[ 0 ] ) ) )

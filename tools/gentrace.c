@@ -242,6 +242,7 @@ static int trace_event_task_table_overflow(const TRACE *trace_data)
             case TRACE_EVENT_TASK_PRIORITY_SET:
             case TRACE_EVENT_TASK_PRIORITY_INHERIT:
             case TRACE_EVENT_TASK_PRIORITY_DISINHERIT:
+            case TRACE_EVENT_TASK_SET_AFFINITY:
                 if (event->param1 >= trace_data->h.max_tasks) {
                     return 1;
                 }
@@ -489,6 +490,19 @@ int genbtf(
                         display_taskname(trace_data, (int)event->param1),
                         event->param1,
                         (int)event->param2);
+                break;
+            case TRACE_EVENT_TASK_SET_AFFINITY:
+                /* Keep note format aligned with FreeRTOS-Trace/btf_trace.c
+                 * btf_dump() (BTFViewer: affinity_set Name[id] 0xMASK). */
+                fprintf(fout, "%" PRIu64 ",Core_%d,0,STI,%s,0,%s,%s %s[%d] 0x%x\n",
+                        current_time,
+                        coreid,
+                        "task",
+                        "trigger",
+                        "affinity_set",
+                        display_taskname(trace_data, (int)event->param1),
+                        event->param1,
+                        (unsigned)event->param2);
                 break;
             case TRACE_EVENT_QUEUE_CREATE:
                 switch(event->param1) {

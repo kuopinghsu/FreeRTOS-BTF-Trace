@@ -143,16 +143,35 @@
 } while(0)
 #endif // traceTASK_PRIORITY_DISINHERIT
 
-#ifndef traceTASK_CORE_AFFINITY_SET
-# define traceTASK_CORE_AFFINITY_SET( pxTCB, uxCoreAffinityMask ) do {      \
-    taskENTER_CRITICAL();                                                   \
-    btf_trace_add_event(                                                    \
-        (uint32_t)(pxTCB)->uxTCBNumber,                                     \
-        (uint32_t)(uxCoreAffinityMask),                                     \
-        TRACE_EVENT_TASK_SET_AFFINITY );                                    \
-    taskEXIT_CRITICAL();                                                    \
-} while(0)
-#endif // traceTASK_CORE_AFFINITY_SET
+/*
+ * vTaskCoreAffinitySet() invokes traceENTER_vTaskCoreAffinitySet(xTask, mask)
+ * instead (see FreeRTOS-Kernel/tasks.c).  Bridge that ENTER hook to the BTF
+ * TASK_SET_AFFINITY STI event.
+ *
+ * xTask is a TaskHandle_t; NULL means the calling task.
+ */
+#if ( configNUMBER_OF_CORES > 1 ) && ( configUSE_CORE_AFFINITY == 1 )
+#ifndef traceENTER_vTaskCoreAffinitySet
+/* Expanded only from FreeRTOS-Kernel/tasks.c (TCB_t is in scope there).
+ * Record uxTCBNumber — same id used by CREATE / SWITCHED_IN / SUSPEND. */
+# define traceENTER_vTaskCoreAffinitySet( xTask, uxCoreAffinityMask ) do {  \
+    TaskHandle_t _aff_h = ( TaskHandle_t )( xTask );                        \
+    if( _aff_h == NULL )                                                    \
+    {                                                                       \
+        _aff_h = xTaskGetCurrentTaskHandle();                             \
+    }                                                                       \
+    if( _aff_h != NULL )                                                    \
+    {                                                                       \
+        taskENTER_CRITICAL();                                               \
+        btf_trace_add_event(                                                \
+            (uint32_t)( ( TCB_t * )_aff_h )->uxTCBNumber,                   \
+            (uint32_t)( uxCoreAffinityMask ),                               \
+            TRACE_EVENT_TASK_SET_AFFINITY );                                \
+        taskEXIT_CRITICAL();                                                \
+    }                                                                       \
+} while( 0 )
+#endif /* traceENTER_vTaskCoreAffinitySet */
+#endif /* SMP + configUSE_CORE_AFFINITY */
 
 #endif // configINCLUDE_SCHEDULING
 

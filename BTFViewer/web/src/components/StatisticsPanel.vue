@@ -2382,6 +2382,7 @@ import {
   syncIssueAnnotationNote,
 } from '../utils/syncObjectAnalysis.js'
 import { buildTaskLifecycleRows, formatLifecycleSpan } from '../utils/lifecycleAnalysis.js'
+import { buildCoreAffinityRows } from '../utils/coreAffinityAnalysis.js'
 import { formatMigrationGapTime } from '../utils/timeFormat.js'
 import { computeDeadlineViolations } from '../utils/deadlineAnalysis.js'
 import { intervalInstanceDetailRows } from '../utils/intervalAnalysis.js'
@@ -3095,51 +3096,11 @@ const coreTimeBreakdown = computed(() => {
 const sortedCoreTimeBreakdown = computed(() =>
   sortStatsRows(coreTimeBreakdown.value, tableSort.value.core_breakdown, CORE_BREAKDOWN_SORT_ACCESSORS))
 
-const _AFFINITY_NOTE_RE = /^affinity_set\s+(.+?)\s+(0x[0-9a-fA-F]+|\d+)\s*$/i
 const coreAffinityRows = computed(() => {
   const tr = props.trace
   if (!tr?.stiEvents?.length) return []
   const r = statsRange.value
-  const lo = r?.lo ?? null
-  const hi = r?.hi ?? null
-  const masks = new Map()
-  for (const ev of tr.stiEvents) {
-    if (ev.target !== 'task') continue
-    const m = _AFFINITY_NOTE_RE.exec((ev.note ?? '').trim())
-    if (!m) continue
-    const taskLabel = m[1].trim()
-    const raw = m[2]
-    const mask = parseInt(raw, raw.startsWith('0x') || raw.startsWith('0X') ? 16 : 10)
-    const mk = taskMergeKey(taskLabel)
-    masks.set(mk, mask)
-  }
-  if (!masks.size) return []
-  const rows = []
-  // Ordinal (codepoint) compare on the merge key, matching Python's default
-  // `sorted(masks.items())` string ordering (not locale-aware).
-  for (const [mk, mask] of [...masks.entries()].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))) {
-    const label = taskDisplayName(taskReprGet(tr, mk) || mk)
-    const obs = new Set()
-    for (const seg of (tr.segByMergeKey?.get(mk) ?? [])) {
-      if (lo != null && seg.end < lo) continue
-      if (hi != null && seg.start > hi) continue
-      obs.add(seg.core)
-    }
-    if (!obs.size) continue
-    const allowed = new Set()
-    for (const core of (tr.coreNames ?? [])) {
-      const idx = parseInt(core.split('_').at(-1), 10)
-      if (!isNaN(idx) && (mask & (1 << idx))) allowed.add(core)
-    }
-    const violations = [...obs].filter(c => allowed.size > 0 && !allowed.has(c))
-    rows.push({
-      label,
-      maskHex: `0x${mask.toString(16).toUpperCase()}`,
-      observedCores: [...obs].sort().join(', '),
-      violations: violations.length > 0 ? violations.sort().join(', ') : '—',
-    })
-  }
-  return rows
+  return buildCoreAffinityRows(tr, r?.lo ?? null, r?.hi ?? null)
 })
 
 const sortedAffinityRows = computed(() =>

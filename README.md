@@ -376,7 +376,7 @@ All trace hooks in `FreeRTOS-Trace/FreeRTOS-Trace.h` are protected by either `ta
 
 The RISC-V SMP port (`Demo/port/RISC-V/port.c`) implements both the task lock and the ISR lock as **recursive** spinlocks (owner + count).  This allows `traceTASK_SWITCHED_OUT/IN` — which fire inside `vTaskSwitchContext` while the ISR lock is already held — to safely re-enter the same lock without deadlocking.
 
-**Core affinity tracing** — to record `vTaskCoreAffinitySet()` calls so BTFViewer can show the **Core Affinity** statistics table, enable `configINCLUDE_SCHEDULING` = `1` (the default) and include `FreeRTOS-Trace/FreeRTOS-Trace.h`. The `traceTASK_CORE_AFFINITY_SET` hook fires on every `vTaskCoreAffinitySet()` call and records the bitmask as a BTF STI event (`affinity_set Name[id] 0xMASK` on the `task` channel). BTFViewer parses this and cross-checks observed execution cores against the mask to flag violations. No extra source file is required — the hook calls `btf_trace_add_event()` directly.
+**Core affinity tracing** — to record `vTaskCoreAffinitySet()` calls so BTFViewer can show the **Core Affinity** statistics table, enable `configUSE_CORE_AFFINITY` = `1` (SMP builds), `configINCLUDE_SCHEDULING` = `1` (the default), and include `FreeRTOS-Trace/FreeRTOS-Trace.h`. FreeRTOS V11 fires `traceENTER_vTaskCoreAffinitySet` (not a `traceTASK_CORE_AFFINITY_SET` macro); the BTF layer hooks that ENTER point and records the bitmask as an STI event (`affinity_set Name[id] 0xMASK` on the `task` channel). BTFViewer parses this and cross-checks observed execution cores against the mask to flag violations.
 
 ### 7. Convert to BTF or VCD
 
@@ -544,7 +544,7 @@ On SMP (`configNUMBER_OF_CORES` > 1), the emitting core is stored in the high bi
 | `TASK_PRIORITY_SET` (15) | `traceTASK_PRIORITY_SET` | task id | new priority | `STI` | `task` | `trigger` | `set_priority Name[id] pri:N` |
 | `TASK_PRIORITY_INHERIT` (16) | `traceTASK_PRIORITY_INHERIT` | task id (mutex holder) | inherited priority | `STI` | `task` | `trigger` | `priority_inherit Name[id] pri:N` |
 | `TASK_PRIORITY_DISINHERIT` (17) | `traceTASK_PRIORITY_DISINHERIT` | task id (mutex holder) | base priority | `STI` | `task` | `trigger` | `priority_disinherit Name[id] pri:N` |
-| `TASK_SET_AFFINITY` (18) | `traceTASK_CORE_AFFINITY_SET` | task id | core affinity bitmask | `STI` | `task` | `trigger` | `affinity_set Name[id] 0xMASK` |
+| `TASK_SET_AFFINITY` (18) | `traceENTER_vTaskCoreAffinitySet` | task id | core affinity bitmask | `STI` | `task` | `trigger` | `affinity_set Name[id] 0xMASK` |
 | `TAG` … `TAG7` (90–97) | `traceTAG(t, v)` | tag value | 0 | `STI` | `tag0_event` … `tag7_event` | `trigger` | `N` |
 
 † **Queue type** (`param1`): `0` = queue, `1` = mutex, `2` = counting semaphore, `3` = binary semaphore, `4` = recursive mutex (`QUEUE_TYPE_*` in `btf_trace.h`). Mutex/semaphore rows use target `mutex` or `sem`; send/receive use `give`/`take` for mutex/sem and `send`/`recv` for queues.
