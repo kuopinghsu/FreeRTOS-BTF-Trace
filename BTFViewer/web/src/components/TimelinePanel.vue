@@ -710,7 +710,7 @@ function paint() {
     migratedOnlyFilter: !!props.options.migratedOnlyFilter,
     taskFilterKeys:     props.options.taskFilterKeys || null,
     taskFilterText:     props.options.taskFilterText || '',
-    lockedTaskKey:    props.options.viewMode === 'core' ? (props.options.lockedTaskKey ?? null) : null,
+    lockedTaskKey:    props.options.lockedTaskKey ?? null,
     showHoverHighlight: !!props.options.showHoverHighlight,
     fastPaint:        paintFast(),
     rowLayout:        cachedRowLayout.value,

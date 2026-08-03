@@ -184,7 +184,7 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { coreColor, taskColor, taskDisplayName } from '../utils/colors.js'
+import { coreColor } from '../utils/colors.js'
 import {
   coreViewTaskFilterActive,
   filteredCoreViewTasks,
@@ -310,18 +310,14 @@ const rows = computed(() => {
   if (!trace) return []
   const selectedTask = props.selectedTask
 
-  // Highlighted task: task view = that task's total load; core view = per-core load for it.
+  // Highlighted / locked task → always show that task's usage per core.
   if (selectedTask) {
-    if (props.viewMode === 'core') {
-      return (trace.coreNames || []).map(coreName => ({
-        kind: 'core',
-        key: coreName,
-        label: coreName,
-        color: coreColor(coreName),
-      }))
-    }
-    const raw = trace.taskRepr.get(selectedTask) || selectedTask
-    return [{ kind: 'task', key: selectedTask, label: 'CPU Load', color: taskColor(selectedTask, raw) }]
+    return (trace.coreNames || []).map(coreName => ({
+      kind: 'core',
+      key: coreName,
+      label: coreName,
+      color: coreColor(coreName),
+    }))
   }
 
   // Legend filter: task view = combined filtered load; core view = per-core filtered load.

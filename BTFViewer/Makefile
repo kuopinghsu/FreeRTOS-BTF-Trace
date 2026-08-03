@@ -120,10 +120,7 @@ update-images: bundle
 		-o $(STATS_IMG_DIR)/tasks-priority-low.svg --view timeline --task "Low[266]" \
 		--lo 3042000 --hi 3359000
 	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(STATS_TRACE) \
-		-o $(STATS_IMG_DIR)/tasks-migrate-cs22.svg --view timeline --view-mode core \
-		--task "CS[22]" --lo 1805000 --hi 1865000
-	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(STATS_TRACE) \
-		-o $(STATS_IMG_DIR)/tasks-cpu-load-cs22.svg --view timeline --view-mode core \
+		-o $(STATS_IMG_DIR)/tasks-cpu-load-cs22.svg --view timeline --view-mode task \
 		--task "CS[22]" --cpu-load --height 900
 	@echo "Updated $(STATS_IMG_DIR) from $(STATS_TRACE)"
 	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(HEATMAP_TRACE) \

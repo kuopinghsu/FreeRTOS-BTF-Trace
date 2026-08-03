@@ -532,9 +532,8 @@ class TimelineScene(QGraphicsScene):
             self._find_hit_items.append(line)
 
     def _dim_brush_if_follow(self, brush: QBrush, merge_key: str) -> QBrush:
-        """Dim segments of other tasks when one task is locked in core view."""
-        if (self._view_mode != "core" or not self._locked_task
-                or self._locked_task == merge_key):
+        """Dim segments of other tasks when one task is lock-highlighted."""
+        if not self._locked_task or self._locked_task == merge_key:
             return brush
         c = brush.color()
         return QBrush(QColor(c.red(), c.green(), c.blue(), 45))
@@ -2172,7 +2171,8 @@ class TimelineScene(QGraphicsScene):
                 x2 = lw + (seg.end   - _time_min) * _px_per_ns
                 w  = x2 - x1 if x2 - x1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
                 _seg_locked = self._is_segment_locked(seg)
-                _seg_br     = _blended_brush(seg.task, seg.core)
+                _seg_br     = self._dim_brush_if_follow(
+                    _blended_brush(seg.task, seg.core), task)
                 _seg_rect   = QRectF(x1, y_top + 1, w, self._row_height - 2)
                 seg_data.append((
                     _seg_rect,
@@ -2429,7 +2429,8 @@ class TimelineScene(QGraphicsScene):
                 y2 = label_row_h + (seg.end   - _time_min) * _px_per_ns
                 h  = y2 - y1 if y2 - y1 >= MIN_SEG_WIDTH else MIN_SEG_WIDTH
                 _seg_locked = self._is_segment_locked(seg)
-                _seg_br     = _blended_brush(seg.task, seg.core)
+                _seg_br     = self._dim_brush_if_follow(
+                    _blended_brush(seg.task, seg.core), task)
                 _seg_rect   = QRectF(x_left + 1, y1, col_w - 2, h)
                 seg_data.append((
                     _seg_rect,

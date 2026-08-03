@@ -45,7 +45,6 @@ export function cpuLoadRowCount(trace, viewMode, selectedTask, filterOpts = {}) 
   const filterActive = coreViewTaskFilterActive(migratedOnlyFilter, taskFilterKeys, taskFilterText)
 
   if (selectedTask) {
-    if (viewMode === 'task') return 1
     return trace.coreNames?.length ?? 0
   }
   if (filterActive && viewMode === 'task') return 1

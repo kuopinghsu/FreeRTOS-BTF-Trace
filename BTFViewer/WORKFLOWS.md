@@ -39,28 +39,18 @@ python builds/btf_viewer.py ../tracedata/example-2cores.btf.gz
 
 Or **File → Open** (`Ctrl+O`) / drag-and-drop.  Plain `.btf` and compressed `.btf.gz` / `.bz2` / `.zip` all work.  Web: open `builds/btf_viewer.html` (or **Demo** for the embedded `example-2cores.btf.gz`).
 
-![BTF Viewer — Core View with CPU Load graph and Statistics](../images/btfviewer.png)
+![BTF Viewer — timeline with CPU Load graph and Statistics](../images/btfviewer.png)
 
-*Core View + CPU Load + Statistics.  Prefer Core View on first open of an SMP trace.*
+*Timeline + CPU Load + Statistics on first open.*
 
 | Step | Action | What to look for |
 |------|--------|------------------|
 | 1 | Status bar + `Ctrl+0` | Span, task/segment counts; **Fit to Window** |
-| 2 | Toolbar **Core** + **Load** | Core View; CPU Load strip (one row per core) |
-| 3 | Click a task label (lock-highlight) | Task hops across core rows; **CPU Load** shows **that task’s** usage **per core** |
-| 4 | **Statistics** + **Analysis** | Summary + heuristic triage |
-| 5 | **Trace Health (TICK)** | Timer health before trusting derived metrics |
+| 2 | Toolbar **Core** or **Task** + **Load** | Orient on cores or tasks; CPU Load strip |
+| 3 | **Statistics** + **Analysis** | Summary + heuristic triage |
+| 4 | **Trace Health (TICK)** | Timer health before trusting derived metrics |
 
-```bash
-# Fit + Core View + highlight + per-core CPU Load (headless)
-python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
-    -o ../images/stats/tasks-cpu-load-cs22.svg \
-    --view timeline --view-mode core --task "CS[22]" --cpu-load --height 900
-```
-
-![CS[22] in Core View with per-core CPU Load at Fit to Window](../images/stats/tasks-cpu-load-cs22.svg)
-
-*`CS[22]` locked in Core View.  Timeline shows the task on each core it ran; **CPU Load** has eight sparklines (that task’s load on Core_0…Core_7).*
+For **task-level** migration analysis (lock-highlight a CS task and read per-core CPU Load), see [§3.5 Core migrations](#core-migrations-thrashing) and [§4.5](#45-core-migrations).
 
 ---
 
@@ -221,24 +211,78 @@ Trace-wide: **18 992** migrations.  Hottest pairs (Core-Pair Summary): `Core_5
 
 **Reading:** Expected outcome of test 1 (equal-priority CS storm on all cores).  Cache-cold penalties and run-queue churn would dominate a real product with this pattern.
 
-**See it on the timeline** — Core View + task filter + lock-highlight (same window as the doc image):
+##### Ping-pong (per task)
+
+**Statistics → Core Migrations → Ping** counts *ping-pong* migrations: three consecutive hops **A→B→A** within **1 µs** (same definition as the table tooltip).
+
+| Signal | How to read it |
+|--------|----------------|
+| High **Ping** with high **Rate** / short **Dwell** | True thrashing — the task is bouncing between a pair of cores, not just visiting many cores once |
+| High **Migr** but low **Ping** | Spreads across cores without rapid A↔B oscillation (still costly, different pattern) |
+| **STI±** elevated with **Ping** | Scheduler / sync STI near the bounce — cross-check Mutex/Semaphore |
+
+On this sample the top CS tasks show **Ping ≈ 19–24** with Rate ~1.6k/s and Dwell ~0.5 ms — classic equal-priority storm.
+
+**How to analyse**
+
+1. Sort **Core Migrations** by **Ping** (or Rate).
+2. Click the row → chart tabs **Rate** (gaps between migrations) and **Dwell** (on-core run lengths).
+3. Lock-highlight the task on the timeline (§ below) to confirm the bounce visually.
+4. Toolbar **Analysis** also flags thrashing when Rate / Ping / short Dwell trip the heuristics.
+
+##### Lock-bounce (per core pair + sync objects)
+
+**Lock-bounce** = a migration that occurs while a mutex/semaphore/queue hold is still active (task moves cores *during* the hold).
+
+| Where | What you get |
+|-------|----------------|
+| **Core-Pair Migration Summary** | Per directed pair (`From→To`): **Count**, **Bounces**, **Bounce %**, **Avg Gap** |
+| **Mutex / Semaphore** | Per object: **Bounces** (holds that crossed a core boundary) |
+| Heatmap / Chord | **Show: Bounce Only** — restrict the diagram to lock-bounce migrations |
+
+On this sample the *hottest* CS pairs are mostly **0 % Bounce** (pure scheduling thrash).  By contrast the queue `0x80021990` shows **858** sync-object bounces — lock traffic riding migrations (see Mutex section below).
+
+**How to analyse**
+
+1. Open **Core-Pair Migration Summary**; sort by **Bounce %** or **Bounces**.
+2. Pairs with high Count *and* Bounce % ≥ ~25 % (Analysis threshold) → pin sharers or move the lock owner.
+3. Toggle Heatmap/Chord to **Bounce Only** to see *when* lock-bounces cluster in time.
+4. Cross-check **Mutex / Semaphore** **Bounces** column for the offending object.
+
+**Task-level view on the timeline** — use Task View + lock-highlight (no legend filter) so you see one hot task in context, then read **where** it burned CPU across cores:
+
+1. Toolbar **Task** + **Load**.
+2. Click a thrashing task label (e.g. `CS[22]`) — other tasks stay visible but gray out.
+3. **CPU Load** switches to **one sparkline per core** for **that task only** (its share of each core’s utilisation).
+4. Optionally zoom a CS burst with cursors / `--lo`/`--hi`, then open **Core Migrations** (Rate / Dwell / **Ping**) and **Core-Pair** / **Heatmap** / **Chord** (including **Bounce Only**).
+
+```bash
+# Fit + Task View + lock-highlight + per-core CPU Load for one task
+python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
+    -o ../images/stats/tasks-cpu-load-cs22.svg \
+    --view timeline --view-mode task --task "CS[22]" --cpu-load --height 900
+```
+
+![CS[22] highlighted in Task View with per-core CPU Load](../images/stats/tasks-cpu-load-cs22.svg)
+
+*`CS[22]` locked in Task View (Fit to Window).  Neighbouring tasks remain but are grayed; **CPU Load** has eight sparklines — that task’s load on Core_0…Core_7 (~1–3 % while it runs in the CS phase; flat after ~1.8 s).*
+
+Short burst window (optional):
 
 ```bash
 python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
-    -o ../images/stats/tasks-migrate-cs22.svg \
-    --view timeline --view-mode core --task "CS[22]" \
+    -o /tmp/cs22-burst.svg \
+    --view timeline --view-mode task --task "CS[22]" \
     --lo 1805000 --hi 1865000
 ```
-
-![CS[22] highlighted across Core_0…Core_7](../images/stats/tasks-migrate-cs22.svg)
-
-*`CS[22]` hopping all eight cores in ~60 ms.  Then open **Core Migrations** for that task, **Core-Pair Migration Summary** for pairs involving its **Primary** core, and toolbar **Heatmap** / **Chord** to inspect traffic on a specific core.*
 
 **Recommendations**
 
 - Pin latency-critical tasks to a core mask; leave only best-effort work fully migratable.
 - Prefer fewer runnable equals over more workers “for throughput.”
+- Re-measure **Ping** and **Migr rate** after affinity changes — Ping should drop if A↔B thrash was the problem.
 - Use toolbar **Heatmap** (32 time bins) to confirm migrations concentrate in the CS phase, then scope Statistics to that window.
+- For lock-bounce: affinity-pin tasks that share a hot mutex/queue; use **Bounce Only** on Heatmap/Chord to verify the fix.
 - For a single core’s fan-in/fan-out: Chord hover on that core’s arc, or Heatmap rows where the core is From/To.
 
 #### Mutex / semaphore / queue
@@ -370,10 +414,15 @@ Use these when Analysis or the ladder points at a specific metric.  Examples bel
 
 ### 4.5 Core migrations
 
-1. **Core Migrations** — **Rate**, **Dwell**, **Ping-pong**, **Lock-bounce %**.
-2. **Core View** + filter + lock-highlight the hot task — watch it hop core rows (`snapshot … --view-mode core --task …`).
-3. **Core-Pair Migration Summary** + toolbar **Heatmap** (32 bins) / **Chord** — for a *specific core*, scan pairs / hover the chord arc where that core is an endpoint.
-4. Red flags: high rate + short dwell; any lock-bounce on latency paths.
+1. **Core Migrations** (per task) — sort by **Rate**, **Dwell**, **Ping**:
+   - **Ping** = A→B→A within 1 µs (ping-pong).
+   - High Rate + short Dwell + high Ping → thrashing; click the row for **Rate** / **Dwell** / **Gap** charts.
+2. **Core-Pair Migration Summary** (per `From→To`) — **Bounces** / **Bounce %** = lock held across the hop.
+   - High Bounce % on a busy pair → affinity-pin sharers or redesign lock ownership.
+3. **Task View** + lock-highlight the hot task (no filter) — others gray out; enable **Load** for **per-core CPU Load of that task** (`snapshot … --view-mode task --task … --cpu-load`; see §3.5 / `tasks-cpu-load-cs22.svg`).
+4. Toolbar **Heatmap** / **Chord** — use **Show: Bounce Only** when investigating lock-bounce; otherwise All Migrations for thrash timing.
+5. **Mutex / Semaphore → Bounces** — object-level confirmation of core-boundary holds.
+6. Red flags: high Rate + short Dwell + high Ping; Bounce % elevated on latency paths; one task’s load spread thinly across many cores.
 
 ### 4.6 Tick health
 
@@ -466,9 +515,10 @@ Toolbar **Analysis** (or HTML report card).  Typical triggers:
 | WCET candidates | Highest CPU% tasks |
 | Blocking | Many / long off-CPU gaps |
 | Priority inversion | L/M/H pattern |
-| Thrashing | High Migr rate / Ping / short dwell |
+| Thrashing | High Migr rate / **Ping** / short dwell |
+| Hot lock-bounce pairs | Core-Pair **Bounce %** high (Analysis ≈ ≥ 25 % on busy pairs) |
 | Tick | Not GOOD, or missed > 0 |
-| Sync bounces | Core bounce > 0 |
+| Sync bounces | Mutex/Semaphore **Bounces** / Core bounce > 0 |
 
 ### GUI and CLI
 
@@ -507,7 +557,8 @@ python builds/btf_viewer.py perfetto ../tracedata/example-8cores.btf.gz -o trace
 | Task too slow on CPU | Execution Time (Max / p95) | Preemption Chain, Mutex |
 | Task waits too long | Blocking Time | Preemption Chain, Mutex, Inter-Arrival |
 | Priority inversion | Priority Inheritance | Mutex pairing, Blocking |
-| Core thrashing | Core Migrations (Rate, Ping) | Core View highlight (`--view-mode core`); Core-Pair / Heatmap / Chord; Bounce %; Affinity |
+| Core thrashing | Core Migrations (**Rate**, **Ping**, Dwell) | Task View lock-highlight + per-core Load; Core-Pair / Heatmap / Chord |
+| Lock-bounce migrations | Core-Pair (**Bounces**, **Bounce %**) | Heatmap/Chord **Bounce Only**; Mutex/Semaphore **Bounces**; Affinity |
 | Lock / queue issues | Mutex/Semaphore / Queue | Blocking, Migrations |
 | Suspend/resume | Task Lifecycle (Susp/Res) | Timeline STI; demo test 9 |
 | Affinity wrong | Core Affinity | Lock-bounce table |

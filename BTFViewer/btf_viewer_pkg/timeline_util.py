@@ -636,6 +636,54 @@ def _nice_grid_step(timescale_per_px: float, target_px: float = 100.0) -> int:
             return max(step, 1)
     return max(int(round(mag * 10)), 1)
 
+@contextmanager
+def _svg_safe_app_style():
+    """Temporarily force Fusion so ``QWidget.render`` into ``QSvgGenerator`` works.
+
+    macOS ``QMacStyle`` draws via CoreGraphics and fails with::
+
+        QMacCGContext:: Unsupported paint engine type 8
+
+    (SVG is paint-engine type 8) plus ``qt.widgets.styles.macos`` nullptr
+    graphics-context warnings for combo boxes, frames, and splitters.
+    Fusion paints with plain ``QPainter`` primitives that SVG accepts.
+    No-op when not on Darwin or when Fusion is already active.
+    """
+    app = QApplication.instance()
+    if app is None or sys.platform != "darwin":
+        yield
+        return
+    prev = app.style()
+    prev_name = (prev.objectName() if prev is not None else "").strip()
+    if prev_name.lower() == "fusion":
+        yield
+        return
+    fusion = QStyleFactory.create("Fusion")
+    if fusion is None:
+        yield
+        return
+    app.setStyle(fusion)
+    try:
+        yield
+    finally:
+        restored = QStyleFactory.create(prev_name) if prev_name else None
+        if restored is not None:
+            app.setStyle(restored)
+
+
+def _force_fusion_style(app: Optional[QApplication] = None) -> None:
+    """Force Fusion for a short-lived headless QApplication (CLI snapshot)."""
+    app = app or QApplication.instance()
+    if app is None:
+        return
+    cur = app.style()
+    if cur is not None and cur.objectName().lower() == "fusion":
+        return
+    fusion = QStyleFactory.create("Fusion")
+    if fusion is not None:
+        app.setStyle(fusion)
+
+
 def _process_ui_events_safely() -> None:
     """Pump paint/progress updates without allowing user-input re-entrancy."""
     app = QApplication.instance()

@@ -108,19 +108,19 @@ python builds/btf_viewer.py ../tracedata/example-8cores.btf.gz
 | # | Action | Why |
 |---|--------|-----|
 | 1 | Status bar + `Ctrl+0` | Span, counts; **Fit to Window** |
-| 2 | Toolbar **Core** + **Load** | Core View; CPU Load one row per core |
-| 3 | Click a task label | Lock-highlight → Load shows **that task’s** usage **on each core** |
+| 2 | Toolbar **Task** + **Load** | Task View; CPU Load strip |
+| 3 | Click a task label | Lock-highlight → others gray out; Load shows **that task’s** usage **on each core** |
 | 4 | **Statistics** + **Analysis** | Summary + heuristic triage |
 | 5 | **Trace Health (TICK)** | Timer health before trusting derived metrics |
 
 ```bash
-snapshot … --view timeline --view-mode core --task "CS[22]" --cpu-load
+snapshot … --view timeline --view-mode task --task "CS[22]" --cpu-load
 # omit --lo/--hi → Fit to Window
 ```
 
 ![w:820](../images/stats/tasks-cpu-load-cs22.svg)
 
-*`CS[22]` in Core View at Fit to Window; CPU Load strip = per-core sparklines for that task only.*
+*`CS[22]` locked in Task View at Fit to Window; other tasks grayed; CPU Load = per-core sparklines for that task.*
 
 ---
 
@@ -285,16 +285,14 @@ Which one is inflated tells you where to drill next.
 
 ## See hops on the timeline
 
-**Core View** → filter `CS[22]` → Expand All → lock-highlight.  Headless:
+**Task View** → click `CS[22]` to lock-highlight (others gray out; no filter).  See also `tasks-cpu-load-cs22.svg`.  Headless burst window:
 
 ```bash
-snapshot … --view timeline --view-mode core --task "CS[22]" \
+snapshot … --view timeline --view-mode task --task "CS[22]" \
     --lo 1805000 --hi 1865000
 ```
 
-![w:820](../images/stats/tasks-migrate-cs22.svg)
-
-*`CS[22]` on all 8 cores in ~60 ms.  Then **Core Migrations** (Primary / Rate / Ping) → **Core-Pair** / **Heatmap** / **Chord** for traffic on a specific core.*
+*`CS[22]` locked in the CS burst (~60 ms).  Then **Core Migrations** (Primary / Rate / Ping) → **Core-Pair** / **Heatmap** / **Chord** for traffic on a specific core.*
 
 **Recommendation (product):** Affinity-pin latency-critical / lock-sharing tasks; fewer equal-priority runnables.
 

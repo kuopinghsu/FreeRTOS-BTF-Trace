@@ -645,9 +645,9 @@ Between **2 and 8** cursors can be placed (default: **4**; adjustable in **Setti
 
 ### Task highlight
 
-Hover any task label (left column) or **Legend** swatch to highlight all segments for that task. Click to lock the highlight; click again to release.
+Hover any task label (left column) or **Legend** swatch to highlight all segments for that task. Click to lock the highlight; click again to release. While locked, **other tasks stay visible but gray out**, and the **CPU Load** strip (if shown) switches to that task’s usage **per core**.
 
-By default, hovering does **not** dim other tasks — enable **Settings → Display → Highlight segments on label hover** for that behaviour (better performance on large traces when left off).
+By default, hovering does **not** dim other tasks — enable **Settings → Display → Highlight segments on label hover** for that behaviour (better performance on large traces when left off). Locked highlight always dims other tasks.
 
 ### Grid lines & dark/light theme
 
@@ -661,18 +661,18 @@ A bar chart below the timeline shows per-core (or total) CPU utilisation over th
 
 - **Toggle** — click the **Load** toolbar button to show or hide the graph.
 - **View modes** — in **Task View** a single *CPU Load* row shows aggregate utilisation; in **Core View** each core gets its own row.
-- **Task highlight** — lock-highlight a task (click its label): **Task View** switches the strip to **that task’s** total utilisation; **Core View** shows **one row per core** with that task’s usage on each core.  Clear the highlight to return to aggregate / all-tasks load.
-- **Fit + Core View + highlight workflow** — `Ctrl+0` (Fit to Window) → toolbar **Core** → click a task → enable **Load**.  Headless:
+- **Task highlight** — lock-highlight a task (click its label): other tasks stay visible but gray out, and the CPU Load strip switches to **one row per core** with that task’s usage on each core.  Clear the highlight to return to aggregate / all-tasks load.
+- **Fit + Task View + highlight workflow** — `Ctrl+0` (Fit to Window) → toolbar **Task** → click a task label → enable **Load**.  Headless:
 
 ```bash
 python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
     -o ../images/stats/tasks-cpu-load-cs22.svg \
-    --view timeline --view-mode core --task "CS[22]" --cpu-load --height 900
+    --view timeline --view-mode task --task "CS[22]" --cpu-load --height 900
 ```
 
-![Core View: CS[22] highlighted, Fit to Window, per-core CPU Load for that task](../images/stats/tasks-cpu-load-cs22.svg)
+![Task View: CS[22] highlighted (others grayed), Fit to Window, per-core CPU Load for that task](../images/stats/tasks-cpu-load-cs22.svg)
 
-*`CS[22]` locked in Core View (Fit to Window).  Timeline: task hops across Core_0…Core_7.  **CPU Load** strip: one sparkline per core for **that task only** (~1–3 % each while it runs in the CS phase; flat after ~1.8 s).*
+*`CS[22]` locked in Task View (Fit to Window).  Timeline: all tasks remain; non-`CS[22]` rows are grayed.  **CPU Load** strip: one sparkline per core for **that task only** (~1–3 % each while it runs in the CS phase; flat after ~1.8 s).*
 
 - **Row labels** — each row shows average load over the **currently visible** time window; with 2+ cursors placed, labels also show the average over the cursor range (`· C:xx%`), and the graph shades the C1–Cn window in blue.
 - **Expand / Collapse** — in Core View click a core row header to collapse it to a compact bar.
@@ -889,7 +889,7 @@ Coloured diamond markers are shown on dedicated STI rows. Hover a marker for a t
 
 ### Status bar
 
-Shows the number of tasks, segments, STI events, and total trace duration once a file is loaded.
+Once a file is loaded, shows the BTF **creator** (when present), task / segment / STI counts, and total trace duration (Desktop also prefixes the filename; Web shows the same summary without the filename).
 
 ---
 
@@ -949,7 +949,7 @@ The example plots below were generated from **`tracedata/example-8cores.btf.gz`*
 make -C BTFViewer update-images
 ```
 
-This invokes the desktop CLI `snapshot` command (`--view plot` / `--view timeline`) directly — see `make -C BTFViewer help`. Timeline screenshots (e.g. `images/stats/tasks-priority-low.svg`) use `--view timeline --task ... --lo ... --hi ...` to zoom to the region of interest (the range is applied **after** the offscreen view is laid out so the exported image fills that window). Multi-core migration illustrations (e.g. `images/stats/tasks-migrate-cs22.svg`) add `--view-mode core` so the highlighted task is shown hopping across expanded core rows. Fit-to-window + per-core task CPU Load illustrations (e.g. `images/stats/tasks-cpu-load-cs22.svg`) use `--view-mode core --task ... --cpu-load` with no `--lo`/`--hi`. Migration heatmap screenshots (`images/heatmap-pairs.svg`, `images/heatmap-tasks.svg`) are regenerated the same way with `make -C BTFViewer update-images` (`snapshot --view heatmap`, with `--drill-row`/`--drill-bin` for the task-level image) — see [Migration heatmap](#migration-heatmap). The migration chord diagram screenshot (`images/migration-chord.svg`) is regenerated with the same target (`snapshot --view chord`) — see [Migration chord diagram](#migration-chord-diagram).
+This invokes the desktop CLI `snapshot` command (`--view plot` / `--view timeline`) directly — see `make -C BTFViewer help`. Timeline screenshots (e.g. `images/stats/tasks-priority-low.svg`) use `--view timeline --task ... --lo ... --hi ...` to zoom to the region of interest (the range is applied **after** the offscreen view is laid out so the exported image fills that window). Task-highlight + per-core CPU Load illustrations (e.g. `images/stats/tasks-cpu-load-cs22.svg`) use `--view-mode task --task ... --cpu-load` so the named task is lock-highlighted while other tasks remain visible but grayed out (no filter; omit `--lo`/`--hi` for Fit to Window). Migration heatmap screenshots (`images/heatmap-pairs.svg`, `images/heatmap-tasks.svg`) are regenerated the same way with `make -C BTFViewer update-images` (`snapshot --view heatmap`, with `--drill-row`/`--drill-bin` for the task-level image) — see [Migration heatmap](#migration-heatmap). The migration chord diagram screenshot (`images/migration-chord.svg`) is regenerated with the same target (`snapshot --view chord`) — see [Migration chord diagram](#migration-chord-diagram).
 
 #### Summary, scheduling, and core utilisation
 
@@ -1542,28 +1542,21 @@ A **migration** is recorded when consecutive slices of the same task (merge-key)
 
 #### Highlight a migrating task on the timeline
 
-To *see* a task hop cores (not only read rates in a table):
+To *see* a hot migrating task in context (not only read rates in a table):
 
-1. Switch to **Core View** (toolbar **Core**).
-2. Type the task name in the legend **filter** (e.g. `CS[22]`) so only that task’s sub-rows remain.
-3. **⊞ Expand All** (or expand each core the task visited).
-4. Click the task label (or a segment) to **lock-highlight** it — other tasks dim; the highlighted bars jump from core row to core row at each migration.
-5. Optionally place cursors around the burst and enable **Limit to cursor range** so **Statistics → Core Migrations** and the heatmap recompute for that window only.
+1. Stay in **Task View** (toolbar **Task**).
+2. Click the task label (e.g. `CS[22]`) to **lock-highlight** it — other tasks stay on the timeline but gray out; do **not** use the legend filter.
+3. Optionally enable **Load** to see that task’s CPU usage **per core** under the timeline (same workflow as [CPU Load Graph](#cpu-load-graph) / `tasks-cpu-load-cs22.svg`).
+4. Optionally place cursors around the burst and enable **Limit to cursor range** so **Statistics → Core Migrations** and the heatmap recompute for that window only.
 
-**Headless equivalent** (`example-8cores.btf.gz`, CS stress burst where `CS[22]` visits all 8 cores):
+**Headless example** (zoomed CS burst; write any path you like):
 
 ```bash
 python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
-    -o ../images/stats/tasks-migrate-cs22.svg \
-    --view timeline --view-mode core --task "CS[22]" \
+    -o /tmp/cs22-burst.svg \
+    --view timeline --view-mode task --task "CS[22]" \
     --lo 1805000 --hi 1865000
 ```
-
-Or regenerate with `make -C BTFViewer update-images`.
-
-![Core View: CS[22] highlighted hopping across Core_0…Core_7 (example-8cores.btf.gz)](../images/stats/tasks-migrate-cs22.svg)
-
-*~60 ms window (`--lo 1805000 --hi 1865000`). Cyan outline = locked highlight; each core row shows only `CS[22]` after the task filter — gaps between bars are off-CPU / other cores.*
 
 #### Inspect migrations involving a specific core
 

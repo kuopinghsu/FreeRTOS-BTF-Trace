@@ -549,7 +549,7 @@ export function render(ctx, trace, viewport, options = {}) {
     const rowBudget = { n: 0, max: budgetSpec.max, fast: budgetSpec.fast }
 
     if (row.type === 'task') {
-      drawTaskRow(ctx, trace, row, rowY, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, canvasW, darkMode, highlightSegment, rowBudget, showHoverHighlight, gpuBatch)
+      drawTaskRow(ctx, trace, row, rowY, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, canvasW, darkMode, highlightSegment, rowBudget, showHoverHighlight, gpuBatch, lockedTaskKey)
     } else if (row.type === 'core') {
       drawCoreRow(ctx, trace, row, rowY, timeStart, timeEnd, pxPerNs, nsPerPx, canvasW, darkMode, rowBudget, skipCoreSummarySegs, gpuBatch)
     } else if (row.type === 'core-task') {
@@ -1013,7 +1013,7 @@ function drawLockedSegmentVert(ctx, trace, cols, hlSeg, timeStart, timeEnd, pxPe
   }
 }
 
-function drawTaskRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, canvasW, darkMode, hlSeg, budget, showHoverHighlight = false, gpuBatch = null) {
+function drawTaskRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, canvasW, darkMode, hlSeg, budget, showHoverHighlight = false, gpuBatch = null, lockedTaskKey = null) {
   const mk = row.key
   const ld = taskLodData(trace, mk)
   const fast = budget.fast
@@ -1025,7 +1025,9 @@ function drawTaskRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, n
 
   const rowY = canvasRowY + 1
   const rowH = L().rowH - 2
-  const dim = showHoverHighlight && highlightKey && mk !== highlightKey && !hlSeg
+  const dimLocked = lockedTaskKey && mk !== lockedTaskKey
+  const dimHover = showHoverHighlight && highlightKey && mk !== highlightKey && !hlSeg && !lockedTaskKey
+  const dim = dimLocked || dimHover
   if (dim) ctx.save()
   if (dim) ctx.globalAlpha = 45 / 255
   const fillAlpha = dim ? 45 / 255 : 1
@@ -2368,7 +2370,7 @@ function paintVertColumnBand(ctx, col, headerH, canvasH, darkMode, gpuBatch, fas
 
 // ---- Column drawing functions ----------------------------------------------
 
-function drawTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, canvasH, darkMode, hlSeg, budget, gpuBatch = null) {
+function drawTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, canvasH, darkMode, hlSeg, budget, gpuBatch = null, lockedTaskKey = null) {
   const headerH = vertHeaderBand()
   const mk = col.key
   const ld = taskLodData(trace, mk)
@@ -2381,9 +2383,14 @@ function drawTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, h
 
   paintVertColumnBand(ctx, col, headerH, canvasH, darkMode, gpuBatch, fast)
 
+  const dim = lockedTaskKey && mk !== lockedTaskKey
+  if (dim) ctx.save()
+  if (dim) ctx.globalAlpha = 45 / 255
+  const fillAlpha = dim ? 45 / 255 : 1
   paintSegmentsVertical(ctx, segs, timeStart, timeEnd, pxPerNs, nsPerPx,
     col.x, COL_W, headerH, col.color, trace, true, highlightKey, mk, darkMode, col.label, hlSeg, canvasH, budget,
-    indices, gpuBatch)
+    indices, gpuBatch, fillAlpha)
+  if (dim) ctx.restore()
 
   if (!fast) {
     paintPriorityBoostBandsVertical(
@@ -2945,7 +2952,7 @@ export function renderVertical(ctx, trace, viewport, options = {}) {
     if (col.x + cw < RULER_W || col.x >= canvasW) continue
     const colBudget = { n: 0, max: colBudgetSpec.max, fast: colBudgetSpec.fast }
     if (col.type === 'task') {
-      drawTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, canvasH, darkMode, highlightSegment, colBudget, gpuBatch)
+      drawTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, canvasH, darkMode, highlightSegment, colBudget, gpuBatch, lockedTaskKey)
     } else if (col.type === 'core') {
       drawCoreColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, canvasH, darkMode, colBudget, skipCoreSummarySegs, gpuBatch)
     } else if (col.type === 'core-task') {
