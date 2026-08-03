@@ -1010,17 +1010,52 @@ _BTF_OPEN_FILTER = (
 )
 _BTF_NAME_EXTS = (".btf", ".btf.gz", ".btf.bz2", ".btf.zip", ".gz", ".bz2", ".zip")
 
+# Virtual path for a BTF member inside a zip: ``/path/archive.zip::subdir/a.btf``
+_ZIP_MEMBER_SEP = "::"
+
 
 def is_btf_open_path(path: str) -> bool:
     """True if *path* looks like a BTF trace or a gz/bz2/zip container of one."""
     lower = (path or "").lower()
+    # Strip zip-member suffix before extension checks.
+    if _ZIP_MEMBER_SEP in lower:
+        lower = lower.split(_ZIP_MEMBER_SEP, 1)[0]
     return any(lower.endswith(ext) for ext in _BTF_NAME_EXTS)
+
+
+def _split_zip_member_path(filepath: str) -> Tuple[str, Optional[str]]:
+    """Split ``archive.zip::member.btf`` into ``(archive.zip, member.btf)``.
+
+    Plain paths return ``(filepath, None)``.
+    """
+    idx = (filepath or "").find(_ZIP_MEMBER_SEP)
+    if idx <= 0:
+        return filepath, None
+    return filepath[:idx], filepath[idx + len(_ZIP_MEMBER_SEP):]
+
+
+def _normalize_open_path(path: str) -> str:
+    """Absolute-normalize a load path, preserving an optional ``::member`` suffix."""
+    zip_path, member = _split_zip_member_path(path)
+    norm = os.path.abspath(os.path.expanduser(zip_path))
+    if member:
+        return f"{norm}{_ZIP_MEMBER_SEP}{member}"
+    return norm
+
+
+def _trace_display_name(path: str) -> str:
+    """Tab / status label for a load path (zip member → bare ``.btf`` name)."""
+    _zip_path, member = _split_zip_member_path(path)
+    if member:
+        return os.path.basename(member.replace("\\", "/")) or member
+    return os.path.basename(path)
 
 
 def _sniff_compression(filepath: str) -> str:
     """Return 'gzip', 'bz2', 'zip', or '' from magic bytes (fallback: extension)."""
+    zip_path, _member = _split_zip_member_path(filepath)
     try:
-        with open(filepath, "rb") as fh:
+        with open(zip_path, "rb") as fh:
             magic = fh.read(4)
     except OSError:
         magic = b""
@@ -1030,7 +1065,7 @@ def _sniff_compression(filepath: str) -> str:
         return "bz2"
     if magic.startswith(b"PK"):
         return "zip"
-    lower = filepath.lower()
+    lower = zip_path.lower()
     if lower.endswith((".gz", ".btf.gz")):
         return "gzip"
     if lower.endswith((".bz2", ".btf.bz2")):
@@ -1040,51 +1075,97 @@ def _sniff_compression(filepath: str) -> str:
     return ""
 
 
-def _pick_zip_btf_member(names: List[str]) -> str:
-    """Choose the BTF member inside a zip archive."""
-    files = [n for n in names if n and not n.endswith("/") and not n.endswith("\\")]
-    if not files:
-        raise ValueError("ZIP archive contains no files")
+def _zip_file_entries(names: List[str]) -> List[str]:
+    """Non-directory entry names from a zip namelist."""
+    return [n for n in names if n and not n.endswith("/") and not n.endswith("\\")]
+
+
+def _list_zip_btf_members(names: List[str]) -> List[str]:
+    """Return ``.btf`` members (plain, not ``.btf.gz`` / ``.btf.bz2``), sorted.
+
+    Top-level members sort before nested paths; otherwise lexicographic.
+    """
     btf_members = [
-        n for n in files
+        n for n in _zip_file_entries(names)
         if n.lower().endswith(".btf") and not n.lower().endswith((".btf.gz", ".btf.bz2"))
     ]
+
+    def sort_key(n: str) -> Tuple[int, str]:
+        depth = n.count("/") + n.count("\\")
+        return (depth, n.lower())
+
+    return sorted(btf_members, key=sort_key)
+
+
+def _zip_no_btf_message(names: List[str]) -> str:
+    files = _zip_file_entries(names)
+    if not files:
+        return "ZIP archive contains no files"
+    sample = ", ".join(sorted(files)[:8])
+    more = "…" if len(files) > 8 else ""
+    return f"ZIP archive has no .btf member (found: {sample}{more})"
+
+
+def _pick_zip_btf_member(names: List[str]) -> str:
+    """Choose a single BTF member inside a zip archive (legacy single-open)."""
+    btf_members = _list_zip_btf_members(names)
     if len(btf_members) == 1:
         return btf_members[0]
     if len(btf_members) > 1:
-        # Prefer a top-level .btf (no path separators) when several exist.
         top = [n for n in btf_members if "/" not in n and "\\" not in n]
         return sorted(top or btf_members)[0]
-    if len(files) == 1:
-        return files[0]
-    raise ValueError(
-        "ZIP archive has no .btf member (found: "
-        + ", ".join(sorted(files)[:8])
-        + ("…" if len(files) > 8 else "")
-        + ")"
-    )
+    raise ValueError(_zip_no_btf_message(names))
+
+
+def _expand_open_paths(filepath: str) -> List[str]:
+    """Expand a user path into one or more loadable paths.
+
+    A zip with multiple ``.btf`` members becomes one ``archive.zip::member``
+    path per member. A zip with none raises ``ValueError`` with a clear message.
+    """
+    path, member = _split_zip_member_path(filepath)
+    if member:
+        return [_normalize_open_path(filepath)]
+    path = os.path.abspath(os.path.expanduser(path))
+    if _sniff_compression(path) != "zip":
+        return [path]
+    with zipfile.ZipFile(path, "r") as zf:
+        names = zf.namelist()
+    members = _list_zip_btf_members(names)
+    if not members:
+        raise ValueError(_zip_no_btf_message(names))
+    if len(members) == 1:
+        return [path]
+    return [f"{path}{_ZIP_MEMBER_SEP}{m}" for m in members]
 
 
 @contextmanager
 def _open_btf_text(filepath: str):
     """Yield a text stream for a plain or compressed BTF file."""
-    kind = _sniff_compression(filepath)
-    if kind == "gzip":
-        with gzip.open(filepath, "rt", encoding="utf-8", errors="replace") as fh:
-            yield fh
-        return
-    if kind == "bz2":
-        with bz2.open(filepath, "rt", encoding="utf-8", errors="replace") as fh:
-            yield fh
-        return
-    if kind == "zip":
-        with zipfile.ZipFile(filepath, "r") as zf:
-            member = _pick_zip_btf_member(zf.namelist())
+    zip_path, member = _split_zip_member_path(filepath)
+    if member:
+        with zipfile.ZipFile(zip_path, "r") as zf:
             with zf.open(member, "r") as raw:
                 with io.TextIOWrapper(raw, encoding="utf-8", errors="replace") as fh:
                     yield fh
         return
-    with open(filepath, encoding="utf-8", errors="replace") as fh:
+    kind = _sniff_compression(zip_path)
+    if kind == "gzip":
+        with gzip.open(zip_path, "rt", encoding="utf-8", errors="replace") as fh:
+            yield fh
+        return
+    if kind == "bz2":
+        with bz2.open(zip_path, "rt", encoding="utf-8", errors="replace") as fh:
+            yield fh
+        return
+    if kind == "zip":
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            picked = _pick_zip_btf_member(zf.namelist())
+            with zf.open(picked, "r") as raw:
+                with io.TextIOWrapper(raw, encoding="utf-8", errors="replace") as fh:
+                    yield fh
+        return
+    with open(zip_path, encoding="utf-8", errors="replace") as fh:
         yield fh
 
 
@@ -4622,7 +4703,8 @@ def _parse_btf(filepath: str,
     where *pct* is an integer 0-100 and *message* is a short status string.
     """
     try:
-        file_size = os.path.getsize(filepath)
+        size_path, _member = _split_zip_member_path(filepath)
+        file_size = os.path.getsize(size_path)
     except OSError:
         file_size = 0
     if file_size > _MAX_TRACE_FILE_BYTES:
@@ -28262,8 +28344,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             yield self._settings_view
 
     def _find_tab_index(self, path: str) -> int:
-        norm = lambda p: os.path.abspath(os.path.expanduser(p))
-        return self._vm.tab_for_path(path, normalizer=norm)
+        return self._vm.tab_for_path(path, normalizer=_normalize_open_path)
 
     def _wire_timeline_view(self, view: TimelineView) -> None:
         view.zoom_changed.connect(lambda tpp, v=view: self._on_zoom_changed(tpp, v))
@@ -28845,7 +28926,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._status_file.setToolTip("")
             self.setWindowTitle("RTOS BTF Viewer")
             return
-        fname = os.path.basename(self._current_file)
+        fname = _trace_display_name(self._current_file)
         ts = _format_time(trace.time_max - trace.time_min, trace.time_scale,
                           decimals=self._time_decimals_val)
         n_tasks = len(trace.tasks)
@@ -28990,7 +29071,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._central_stack.setCurrentIndex(1)
         self._tab_switch_guard = True
         try:
-            idx = self._tab_widget.addTab(tab.cpu_splitter, os.path.basename(path))
+            idx = self._tab_widget.addTab(tab.cpu_splitter, _trace_display_name(path))
             self._tab_widget.setTabToolTip(idx, path)
             self._tab_widget.setCurrentIndex(idx)
         finally:
@@ -31468,7 +31549,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._open_file(path)
 
     def _save_recent_files(self, path: str) -> None:
-        norm = os.path.abspath(path)
+        norm = _normalize_open_path(path)
         # Load existing JSON list
         raw_json = self._settings.get("files", "recent_json", "")
         try:
@@ -31477,10 +31558,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             entries = []
         # Remove any existing entry for this path
         entries = [e for e in entries if e.get("path") != norm]
-        # Build new entry with metadata
+        # Build new entry with metadata (zip::member → size the archive)
         try:
-            size  = os.path.getsize(norm)
-            mtime = int(os.path.getmtime(norm))
+            size_path, _member = _split_zip_member_path(norm)
+            size  = os.path.getsize(size_path)
+            mtime = int(os.path.getmtime(size_path))
         except OSError:
             size, mtime = 0, 0
         entries.insert(0, {"path": norm, "size": size, "mtime": mtime})
@@ -32149,7 +32231,24 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 pass
 
     def _open_file(self, path: str) -> None:
-        path = os.path.abspath(os.path.expanduser(path))
+        path = _normalize_open_path(path)
+
+        try:
+            expanded = _expand_open_paths(path)
+        except (OSError, ValueError, zipfile.BadZipFile) as exc:
+            QMessageBox.warning(self, "Open Error", str(exc))
+            if self._session_restore_queue or self._session_restore_active_idx >= 0:
+                self._continue_session_restore()
+            return
+
+        if len(expanded) > 1:
+            # Multi-BTF zip: open the first member, queue the rest as tabs.
+            path = expanded[0]
+            for extra in expanded[1:]:
+                if extra not in self._pending_open_paths:
+                    self._pending_open_paths.append(extra)
+            self.statusBar().showMessage(
+                f"Opening {len(expanded)} traces from ZIP…", 4000)
 
         existing = self._find_tab_index(path)
         if existing >= 0:
@@ -32158,12 +32257,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             QTimer.singleShot(0, lambda: self._focus_statistics_panel(force=True))
             if self._session_restore_queue or self._session_restore_active_idx >= 0:
                 self._continue_session_restore()
+            self._drain_pending_open_paths()
             return
 
         if self._load_in_progress:
-            norm = os.path.abspath(os.path.expanduser(path))
-            if norm not in self._pending_open_paths:
-                self._pending_open_paths.append(norm)
+            if path not in self._pending_open_paths:
+                self._pending_open_paths.append(path)
             self._status_file.setText("  Queued — finishing current load…")
             return
         self._load_in_progress = True
@@ -32184,14 +32283,15 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         # Show a wait cursor and status message while parsing
         _HoverCursor.hide()
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        self._status_file.setText(f"  Loading {os.path.basename(path)}…")
+        load_label = _trace_display_name(path)
+        self._status_file.setText(f"  Loading {load_label}…")
         # Reset dynamic render state so new traces never inherit stale colors.
         _reset_render_state_for_new_trace()
         _process_ui_events_safely()
 
         # Progress dialog - created before closures so progress_dialog is defined.
         progress_dialog = _LoadProgressDialog(
-            f"Loading {os.path.basename(path)}…", self)
+            f"Loading {load_label}…", self)
         progress_dialog.show_centered(self.geometry())
         self._progress_dialog = progress_dialog
 
@@ -32260,7 +32360,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
     def _finalize_loaded_trace(self, trace: BtfTrace, path: str,
                                progress_dialog: _LoadProgressDialog) -> None:
         """Complete all post-parse UI/state updates for a successful load."""
-        self._settings.set("files", "last_dir", os.path.dirname(path), flush=False)
+        self._settings.set(
+            "files", "last_dir",
+            os.path.dirname(_split_zip_member_path(path)[0]),
+            flush=False)
 
         tab = self._add_trace_tab(path, trace)
         _process_ui_events_safely()

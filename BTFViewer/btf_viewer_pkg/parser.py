@@ -103,17 +103,52 @@ _BTF_OPEN_FILTER = (
 )
 _BTF_NAME_EXTS = (".btf", ".btf.gz", ".btf.bz2", ".btf.zip", ".gz", ".bz2", ".zip")
 
+# Virtual path for a BTF member inside a zip: ``/path/archive.zip::subdir/a.btf``
+_ZIP_MEMBER_SEP = "::"
+
 
 def is_btf_open_path(path: str) -> bool:
     """True if *path* looks like a BTF trace or a gz/bz2/zip container of one."""
     lower = (path or "").lower()
+    # Strip zip-member suffix before extension checks.
+    if _ZIP_MEMBER_SEP in lower:
+        lower = lower.split(_ZIP_MEMBER_SEP, 1)[0]
     return any(lower.endswith(ext) for ext in _BTF_NAME_EXTS)
+
+
+def _split_zip_member_path(filepath: str) -> Tuple[str, Optional[str]]:
+    """Split ``archive.zip::member.btf`` into ``(archive.zip, member.btf)``.
+
+    Plain paths return ``(filepath, None)``.
+    """
+    idx = (filepath or "").find(_ZIP_MEMBER_SEP)
+    if idx <= 0:
+        return filepath, None
+    return filepath[:idx], filepath[idx + len(_ZIP_MEMBER_SEP):]
+
+
+def _normalize_open_path(path: str) -> str:
+    """Absolute-normalize a load path, preserving an optional ``::member`` suffix."""
+    zip_path, member = _split_zip_member_path(path)
+    norm = os.path.abspath(os.path.expanduser(zip_path))
+    if member:
+        return f"{norm}{_ZIP_MEMBER_SEP}{member}"
+    return norm
+
+
+def _trace_display_name(path: str) -> str:
+    """Tab / status label for a load path (zip member → bare ``.btf`` name)."""
+    _zip_path, member = _split_zip_member_path(path)
+    if member:
+        return os.path.basename(member.replace("\\", "/")) or member
+    return os.path.basename(path)
 
 
 def _sniff_compression(filepath: str) -> str:
     """Return 'gzip', 'bz2', 'zip', or '' from magic bytes (fallback: extension)."""
+    zip_path, _member = _split_zip_member_path(filepath)
     try:
-        with open(filepath, "rb") as fh:
+        with open(zip_path, "rb") as fh:
             magic = fh.read(4)
     except OSError:
         magic = b""
@@ -123,7 +158,7 @@ def _sniff_compression(filepath: str) -> str:
         return "bz2"
     if magic.startswith(b"PK"):
         return "zip"
-    lower = filepath.lower()
+    lower = zip_path.lower()
     if lower.endswith((".gz", ".btf.gz")):
         return "gzip"
     if lower.endswith((".bz2", ".btf.bz2")):
@@ -133,51 +168,97 @@ def _sniff_compression(filepath: str) -> str:
     return ""
 
 
-def _pick_zip_btf_member(names: List[str]) -> str:
-    """Choose the BTF member inside a zip archive."""
-    files = [n for n in names if n and not n.endswith("/") and not n.endswith("\\")]
-    if not files:
-        raise ValueError("ZIP archive contains no files")
+def _zip_file_entries(names: List[str]) -> List[str]:
+    """Non-directory entry names from a zip namelist."""
+    return [n for n in names if n and not n.endswith("/") and not n.endswith("\\")]
+
+
+def _list_zip_btf_members(names: List[str]) -> List[str]:
+    """Return ``.btf`` members (plain, not ``.btf.gz`` / ``.btf.bz2``), sorted.
+
+    Top-level members sort before nested paths; otherwise lexicographic.
+    """
     btf_members = [
-        n for n in files
+        n for n in _zip_file_entries(names)
         if n.lower().endswith(".btf") and not n.lower().endswith((".btf.gz", ".btf.bz2"))
     ]
+
+    def sort_key(n: str) -> Tuple[int, str]:
+        depth = n.count("/") + n.count("\\")
+        return (depth, n.lower())
+
+    return sorted(btf_members, key=sort_key)
+
+
+def _zip_no_btf_message(names: List[str]) -> str:
+    files = _zip_file_entries(names)
+    if not files:
+        return "ZIP archive contains no files"
+    sample = ", ".join(sorted(files)[:8])
+    more = "…" if len(files) > 8 else ""
+    return f"ZIP archive has no .btf member (found: {sample}{more})"
+
+
+def _pick_zip_btf_member(names: List[str]) -> str:
+    """Choose a single BTF member inside a zip archive (legacy single-open)."""
+    btf_members = _list_zip_btf_members(names)
     if len(btf_members) == 1:
         return btf_members[0]
     if len(btf_members) > 1:
-        # Prefer a top-level .btf (no path separators) when several exist.
         top = [n for n in btf_members if "/" not in n and "\\" not in n]
         return sorted(top or btf_members)[0]
-    if len(files) == 1:
-        return files[0]
-    raise ValueError(
-        "ZIP archive has no .btf member (found: "
-        + ", ".join(sorted(files)[:8])
-        + ("…" if len(files) > 8 else "")
-        + ")"
-    )
+    raise ValueError(_zip_no_btf_message(names))
+
+
+def _expand_open_paths(filepath: str) -> List[str]:
+    """Expand a user path into one or more loadable paths.
+
+    A zip with multiple ``.btf`` members becomes one ``archive.zip::member``
+    path per member. A zip with none raises ``ValueError`` with a clear message.
+    """
+    path, member = _split_zip_member_path(filepath)
+    if member:
+        return [_normalize_open_path(filepath)]
+    path = os.path.abspath(os.path.expanduser(path))
+    if _sniff_compression(path) != "zip":
+        return [path]
+    with zipfile.ZipFile(path, "r") as zf:
+        names = zf.namelist()
+    members = _list_zip_btf_members(names)
+    if not members:
+        raise ValueError(_zip_no_btf_message(names))
+    if len(members) == 1:
+        return [path]
+    return [f"{path}{_ZIP_MEMBER_SEP}{m}" for m in members]
 
 
 @contextmanager
 def _open_btf_text(filepath: str):
     """Yield a text stream for a plain or compressed BTF file."""
-    kind = _sniff_compression(filepath)
-    if kind == "gzip":
-        with gzip.open(filepath, "rt", encoding="utf-8", errors="replace") as fh:
-            yield fh
-        return
-    if kind == "bz2":
-        with bz2.open(filepath, "rt", encoding="utf-8", errors="replace") as fh:
-            yield fh
-        return
-    if kind == "zip":
-        with zipfile.ZipFile(filepath, "r") as zf:
-            member = _pick_zip_btf_member(zf.namelist())
+    zip_path, member = _split_zip_member_path(filepath)
+    if member:
+        with zipfile.ZipFile(zip_path, "r") as zf:
             with zf.open(member, "r") as raw:
                 with io.TextIOWrapper(raw, encoding="utf-8", errors="replace") as fh:
                     yield fh
         return
-    with open(filepath, encoding="utf-8", errors="replace") as fh:
+    kind = _sniff_compression(zip_path)
+    if kind == "gzip":
+        with gzip.open(zip_path, "rt", encoding="utf-8", errors="replace") as fh:
+            yield fh
+        return
+    if kind == "bz2":
+        with bz2.open(zip_path, "rt", encoding="utf-8", errors="replace") as fh:
+            yield fh
+        return
+    if kind == "zip":
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            picked = _pick_zip_btf_member(zf.namelist())
+            with zf.open(picked, "r") as raw:
+                with io.TextIOWrapper(raw, encoding="utf-8", errors="replace") as fh:
+                    yield fh
+        return
+    with open(zip_path, encoding="utf-8", errors="replace") as fh:
         yield fh
 
 
@@ -3715,7 +3796,8 @@ def _parse_btf(filepath: str,
     where *pct* is an integer 0-100 and *message* is a short status string.
     """
     try:
-        file_size = os.path.getsize(filepath)
+        size_path, _member = _split_zip_member_path(filepath)
+        file_size = os.path.getsize(size_path)
     except OSError:
         file_size = 0
     if file_size > _MAX_TRACE_FILE_BYTES:

@@ -2,7 +2,7 @@
 
 Current version: **1.3.2** (Desktop Python app + Web app)
 
-A PySide6-based interactive visualiser for FreeRTOS context-switch traces in **Best Trace Format** (`.btf`). Plain `.btf` files and compressed containers (`.btf.gz` / `.gz`, `.btf.bz2` / `.bz2`, `.btf.zip` / `.zip`) open the same way on Desktop and Web.
+A PySide6-based interactive visualiser for FreeRTOS context-switch traces in **Best Trace Format** (`.btf`). Plain `.btf` files and compressed containers (`.btf.gz` / `.gz`, `.btf.bz2` / `.bz2`, `.btf.zip` / `.zip`) open the same way on Desktop and Web. A zip with **no** `.btf` members shows an error; a zip with **multiple** `.btf` files opens each in its own tab.
 
 ## Screenshot
 
@@ -49,7 +49,7 @@ A PySide6-based interactive visualiser for FreeRTOS context-switch traces in **B
 - **Export Perfetto** — **File → Export Perfetto…** (Desktop) or toolbar **Perfetto** (Web) writes Chrome Trace JSON openable in [ui.perfetto.dev](https://ui.perfetto.dev); also available via headless `perfetto` CLI
 - **Headless image export (Desktop CLI)** — `snapshot` command renders the timeline, Migration Heatmap, or a statistics metric plot straight to PNG/SVG with no GUI, for scripting and CI (see [Headless CLI](#headless-cli-desktop-only))
 - **Persistent settings** — all preferences stored in `btf_viewer.rc` alongside the script
-- **Drag-and-drop** — drop a `.btf` (or `.gz` / `.bz2` / `.zip` containing a `.btf`) file directly onto the window
+- **Drag-and-drop** — drop a `.btf` (or `.gz` / `.bz2` / `.zip` containing `.btf` file(s)) directly onto the window; multi-BTF zips open one tab per member
 - **Optimised for large traces** — tested with up to **128 cores, 1 024 tasks, and 5 M+ events** (desktop). Web viewer: flat segment storage, parse worker, precomputed CPU-load bins, WASM-accelerated bisect/LOD, and debounced stats worker for 100k+ segment traces
 
 ## Table of contents
@@ -606,7 +606,7 @@ Toggle with the **Task** / **Core** toolbar icons (hover for the label).
 
 ### Opening a file
 
-Click the **Open** toolbar icon and select any `.btf` file (or a compressed container: `.btf.gz` / `.gz`, `.btf.bz2` / `.bz2`, `.btf.zip` / `.zip`).
+Click the **Open** toolbar icon and select any `.btf` file (or a compressed container: `.btf.gz` / `.gz`, `.btf.bz2` / `.bz2`, `.btf.zip` / `.zip`). Zips with no `.btf` members report an error; zips with several `.btf` files open each member in a separate tab.
 Each file opens in a new **tab** in the bar below the toolbar; click a tab to switch traces, or **×** to close one.
 Opening the same filename again focuses the existing tab. On the Web build, the **Demo** icon loads the embedded `example-2cores.btf.gz`.
 
@@ -667,7 +667,8 @@ A bar chart below the timeline shows per-core (or total) CPU utilisation over th
 ```bash
 python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
     -o ../images/stats/tasks-cpu-load-cs22.svg \
-    --view timeline --view-mode task --task "CS[22]" --cpu-load --height 900
+    --view timeline --view-mode task --task "CS[22]" --cpu-load --height 900 \
+    --lo 1464000 --hi 1764000
 ```
 
 ![Task View: CS[22] highlighted (others grayed), Fit to Window, per-core CPU Load for that task](../images/stats/tasks-cpu-load-cs22.svg)

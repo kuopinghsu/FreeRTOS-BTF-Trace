@@ -688,7 +688,7 @@
 import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import { getTimelineLayout } from '../utils/timelineLayout.js'
 import { supportsFileHandles, pickAndReadBtf } from '../utils/fileOpen.js'
-import { BTF_FILE_ACCEPT, loadBtfTextFromFile } from '../utils/btfLoad.js'
+import { BTF_FILE_ACCEPT, loadBtfEntriesFromFile } from '../utils/btfLoad.js'
 
 const props = defineProps({
   modelValue:  { type: Object,  required: true },
@@ -703,7 +703,7 @@ const props = defineProps({
 })
 
 const emit = defineEmits([
-  'update:modelValue', 'trace-reading', 'trace-loaded', 'loadDemo', 'zoom', 'fit',
+  'update:modelValue', 'trace-reading', 'trace-loaded', 'traces-loaded', 'loadDemo', 'zoom', 'fit',
   'zoom1to1', 'zoomRange', 'showFind',
   'expandAll', 'collapseAll', 'addMark', 'copyScreenshot', 'exportSvg', 'exportPerfetto',
   'showHelp', 'showAbout', 'showSettings', 'showHeatmap', 'showChord', 'showAnalysis',
@@ -718,28 +718,26 @@ const zoom1to1Title = computed(() => {
   return `Zoom to 1:1 scale (${tspx} ${u}/px)`
 })
 
-async function onOpenClick() {
-  const file = await pickAndReadBtf()
-  if (!file) return
+async function emitLoadedEntries(file) {
   emit('trace-reading', { name: file.name })
   try {
-    const text = await loadBtfTextFromFile(file)
-    emit('trace-loaded', { text, name: file.name })
+    const entries = await loadBtfEntriesFromFile(file)
+    emit('traces-loaded', { entries, sourceName: file.name })
   } catch (err) {
     emit('file-error', `Failed to read "${file.name}"${err?.message ? `: ${err.message}` : ''}`)
   }
 }
 
+async function onOpenClick() {
+  const file = await pickAndReadBtf()
+  if (!file) return
+  await emitLoadedEntries(file)
+}
+
 async function onFileChange(e) {
   const file = e.target.files[0]
   if (!file) return
-  emit('trace-reading', { name: file.name })
-  try {
-    const text = await loadBtfTextFromFile(file)
-    emit('trace-loaded', { text, name: file.name })
-  } catch (err) {
-    emit('file-error', `Failed to read "${file.name}"${err?.message ? `: ${err.message}` : ''}`)
-  }
+  await emitLoadedEntries(file)
   e.target.value = ''
 }
 

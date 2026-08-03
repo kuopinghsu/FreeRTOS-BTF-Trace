@@ -1670,8 +1670,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             yield self._settings_view
 
     def _find_tab_index(self, path: str) -> int:
-        norm = lambda p: os.path.abspath(os.path.expanduser(p))
-        return self._vm.tab_for_path(path, normalizer=norm)
+        return self._vm.tab_for_path(path, normalizer=_normalize_open_path)
 
     def _wire_timeline_view(self, view: TimelineView) -> None:
         view.zoom_changed.connect(lambda tpp, v=view: self._on_zoom_changed(tpp, v))
@@ -2253,7 +2252,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._status_file.setToolTip("")
             self.setWindowTitle("RTOS BTF Viewer")
             return
-        fname = os.path.basename(self._current_file)
+        fname = _trace_display_name(self._current_file)
         ts = _format_time(trace.time_max - trace.time_min, trace.time_scale,
                           decimals=self._time_decimals_val)
         n_tasks = len(trace.tasks)
@@ -2398,7 +2397,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._central_stack.setCurrentIndex(1)
         self._tab_switch_guard = True
         try:
-            idx = self._tab_widget.addTab(tab.cpu_splitter, os.path.basename(path))
+            idx = self._tab_widget.addTab(tab.cpu_splitter, _trace_display_name(path))
             self._tab_widget.setTabToolTip(idx, path)
             self._tab_widget.setCurrentIndex(idx)
         finally:
@@ -4876,7 +4875,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._open_file(path)
 
     def _save_recent_files(self, path: str) -> None:
-        norm = os.path.abspath(path)
+        norm = _normalize_open_path(path)
         # Load existing JSON list
         raw_json = self._settings.get("files", "recent_json", "")
         try:
@@ -4885,10 +4884,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             entries = []
         # Remove any existing entry for this path
         entries = [e for e in entries if e.get("path") != norm]
-        # Build new entry with metadata
+        # Build new entry with metadata (zip::member → size the archive)
         try:
-            size  = os.path.getsize(norm)
-            mtime = int(os.path.getmtime(norm))
+            size_path, _member = _split_zip_member_path(norm)
+            size  = os.path.getsize(size_path)
+            mtime = int(os.path.getmtime(size_path))
         except OSError:
             size, mtime = 0, 0
         entries.insert(0, {"path": norm, "size": size, "mtime": mtime})
@@ -5557,7 +5557,24 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 pass
 
     def _open_file(self, path: str) -> None:
-        path = os.path.abspath(os.path.expanduser(path))
+        path = _normalize_open_path(path)
+
+        try:
+            expanded = _expand_open_paths(path)
+        except (OSError, ValueError, zipfile.BadZipFile) as exc:
+            QMessageBox.warning(self, "Open Error", str(exc))
+            if self._session_restore_queue or self._session_restore_active_idx >= 0:
+                self._continue_session_restore()
+            return
+
+        if len(expanded) > 1:
+            # Multi-BTF zip: open the first member, queue the rest as tabs.
+            path = expanded[0]
+            for extra in expanded[1:]:
+                if extra not in self._pending_open_paths:
+                    self._pending_open_paths.append(extra)
+            self.statusBar().showMessage(
+                f"Opening {len(expanded)} traces from ZIP…", 4000)
 
         existing = self._find_tab_index(path)
         if existing >= 0:
@@ -5566,12 +5583,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             QTimer.singleShot(0, lambda: self._focus_statistics_panel(force=True))
             if self._session_restore_queue or self._session_restore_active_idx >= 0:
                 self._continue_session_restore()
+            self._drain_pending_open_paths()
             return
 
         if self._load_in_progress:
-            norm = os.path.abspath(os.path.expanduser(path))
-            if norm not in self._pending_open_paths:
-                self._pending_open_paths.append(norm)
+            if path not in self._pending_open_paths:
+                self._pending_open_paths.append(path)
             self._status_file.setText("  Queued — finishing current load…")
             return
         self._load_in_progress = True
@@ -5592,14 +5609,15 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         # Show a wait cursor and status message while parsing
         _HoverCursor.hide()
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        self._status_file.setText(f"  Loading {os.path.basename(path)}…")
+        load_label = _trace_display_name(path)
+        self._status_file.setText(f"  Loading {load_label}…")
         # Reset dynamic render state so new traces never inherit stale colors.
         _reset_render_state_for_new_trace()
         _process_ui_events_safely()
 
         # Progress dialog - created before closures so progress_dialog is defined.
         progress_dialog = _LoadProgressDialog(
-            f"Loading {os.path.basename(path)}…", self)
+            f"Loading {load_label}…", self)
         progress_dialog.show_centered(self.geometry())
         self._progress_dialog = progress_dialog
 
@@ -5668,7 +5686,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
     def _finalize_loaded_trace(self, trace: BtfTrace, path: str,
                                progress_dialog: _LoadProgressDialog) -> None:
         """Complete all post-parse UI/state updates for a successful load."""
-        self._settings.set("files", "last_dir", os.path.dirname(path), flush=False)
+        self._settings.set(
+            "files", "last_dir",
+            os.path.dirname(_split_zip_member_path(path)[0]),
+            flush=False)
 
         tab = self._add_trace_tab(path, trace)
         _process_ui_events_safely()

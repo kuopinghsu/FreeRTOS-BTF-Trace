@@ -19,9 +19,10 @@
       :loading-msg="loadingMsg"
       :time-scale="trace?.timeScale || 'ns'"
       @update:model-value="v => Object.assign(timelineOptions, v)"
-      @file-error="showToast($event, 'error')"
+      @file-error="onFileError"
       @trace-reading="onTraceReading"
       @trace-loaded="onTraceLoaded"
+      @traces-loaded="onTracesLoaded"
       @load-demo="onLoadDemo"
       @zoom="onZoom"
       @fit="onFit"
@@ -849,7 +850,7 @@ import {
 import { downloadPerfetto } from './utils/perfettoExport.js'
 import { computeFindHits, stepFindHitIndex } from './utils/findAnalysis.js'
 import { traceQualitySummary } from './utils/traceQuality.js'
-import { isBtfOpenName, loadBtfTextFromFile } from './utils/btfLoad.js'
+import { isBtfOpenName, loadBtfEntriesFromFile } from './utils/btfLoad.js'
 import exampleBtfB64   from 'virtual:example-btf'
 
 // ---- State ---------------------------------------------------------------
@@ -1309,6 +1310,10 @@ const statusRangeLine = computed(() =>
 
 // ---- File loading (via Web Worker; fallback to main-thread for file:// origins) --
 let _parseWorker = null
+/** @type {{ text: string, name: string }[]} */
+const _pendingTraceLoads = []
+/** @type {Promise<void>|null} */
+let _drainPromise = null
 
 function onTraceReading({ name }) {
   // Show the loading overlay immediately while FileReader is still reading the file
@@ -1317,6 +1322,19 @@ function onTraceReading({ name }) {
   loadingPct.value      = 1
   loadingMsg.value      = 'Reading file…'
   loadingFileName.value = name || 'trace.btf'
+}
+
+/** Clear the load overlay after a read/decompress failure (empty ZIP, etc.). */
+function dismissLoadingOverlay() {
+  if (_parseWorker) { _parseWorker.terminate(); _parseWorker = null }
+  loading.value    = false
+  loadingPct.value = 0
+  loadingMsg.value = ''
+}
+
+function onFileError(message) {
+  dismissLoadingOverlay()
+  showToast(message, 'error')
 }
 
 function finishTraceLoadTab(tab) {
@@ -1394,7 +1412,45 @@ async function parseTraceOnMainThread(text, name) {
   await attachParsedTrace(name, result)
 }
 
+async function onTracesLoaded({ entries, sourceName }) {
+  if (!entries?.length) {
+    onFileError(
+      `Failed to read "${sourceName || 'archive'}": ZIP archive has no .btf member`,
+    )
+    return
+  }
+  if (entries.length > 1) {
+    showToast(`Opening ${entries.length} traces from ZIP…`, 'info')
+  }
+  for (const entry of entries) {
+    _pendingTraceLoads.push({ text: entry.text, name: entry.name })
+  }
+  await drainPendingTraceLoads()
+}
+
 async function onTraceLoaded({ text, name }) {
+  _pendingTraceLoads.push({ text, name })
+  await drainPendingTraceLoads()
+}
+
+async function drainPendingTraceLoads() {
+  if (_drainPromise) return _drainPromise
+  _drainPromise = (async () => {
+    try {
+      while (_pendingTraceLoads.length) {
+        const next = _pendingTraceLoads.shift()
+        await loadOneTrace(next)
+      }
+    } finally {
+      _drainPromise = null
+      // Items may have been queued while we were clearing the promise.
+      if (_pendingTraceLoads.length) await drainPendingTraceLoads()
+    }
+  })()
+  return _drainPromise
+}
+
+async function loadOneTrace({ text, name }) {
   // Guard against exhausting tab memory on a huge/adversarial file; real
   // traces are typically tens of MB, this leaves generous headroom.
   const MAX_TRACE_FILE_BYTES = 500 * 1024 * 1024
@@ -1447,46 +1503,51 @@ async function onTraceLoaded({ text, name }) {
   const worker = new Worker()
   _parseWorker = worker
 
-  worker.onmessage = ({ data }) => {
-    if (data.type === 'progress') {
-      loadingPct.value = data.pct
-      loadingMsg.value = data.msg || ''
-    } else if (data.type === 'done') {
-      _parseWorker = null
-      worker.terminate()
-      attachParsedTrace(name, data.packed).catch((err) => {
-        console.error('Failed to open trace:', err)
-        showToast('Failed to open trace: ' + (err?.message || String(err)), 'error')
-        loading.value = false
-      })
-    } else if (data.type === 'error') {
-      console.error('BTF parse error:', data.message)
+  await new Promise((resolve) => {
+    worker.onmessage = ({ data }) => {
+      if (data.type === 'progress') {
+        loadingPct.value = data.pct
+        loadingMsg.value = data.msg || ''
+      } else if (data.type === 'done') {
+        _parseWorker = null
+        worker.terminate()
+        attachParsedTrace(name, data.packed).then(() => resolve()).catch((err) => {
+          console.error('Failed to open trace:', err)
+          showToast('Failed to open trace: ' + (err?.message || String(err)), 'error')
+          loading.value = false
+          resolve()
+        })
+      } else if (data.type === 'error') {
+        console.error('BTF parse error:', data.message)
+        _parseWorker = null
+        worker.terminate()
+        loadingPct.value = 1
+        loadingMsg.value = 'Parsing on main thread…'
+        parseTraceOnMainThread(text, name).then(() => resolve()).catch((err) => {
+          console.error('BTF main-thread fallback failed:', err)
+          showToast('Failed to parse BTF file: ' + (err?.message || data.message), 'error')
+          loading.value = false
+          resolve()
+        })
+      }
+    }
+
+    worker.onerror = (e) => {
+      console.error('Worker error:', e)
       _parseWorker = null
       worker.terminate()
       loadingPct.value = 1
       loadingMsg.value = 'Parsing on main thread…'
-      parseTraceOnMainThread(text, name).catch((err) => {
+      parseTraceOnMainThread(text, name).then(() => resolve()).catch((err) => {
         console.error('BTF main-thread fallback failed:', err)
-        showToast('Failed to parse BTF file: ' + (err?.message || data.message), 'error')
+        showToast('Failed to parse BTF file: ' + (err?.message || e.message), 'error')
         loading.value = false
+        resolve()
       })
     }
-  }
 
-  worker.onerror = (e) => {
-    console.error('Worker error:', e)
-    _parseWorker = null
-    worker.terminate()
-    loadingPct.value = 1
-    loadingMsg.value = 'Parsing on main thread…'
-    parseTraceOnMainThread(text, name).catch((err) => {
-      console.error('BTF main-thread fallback failed:', err)
-      showToast('Failed to parse BTF file: ' + (err?.message || e.message), 'error')
-      loading.value = false
-    })
-  }
-
-  worker.postMessage({ text })
+    worker.postMessage({ text })
+  })
 }
 
 // ---- Zoom ----------------------------------------------------------------
@@ -1723,10 +1784,10 @@ async function onFileDrop(e) {
   }
   onTraceReading({ name: file.name })
   try {
-    const text = await loadBtfTextFromFile(file)
-    onTraceLoaded({ text, name: file.name })
+    const entries = await loadBtfEntriesFromFile(file)
+    await onTracesLoaded({ entries, sourceName: file.name })
   } catch (err) {
-    showToast(`Failed to read "${file.name}"${err?.message ? `: ${err.message}` : ''}`, 'error')
+    onFileError(`Failed to read "${file.name}"${err?.message ? `: ${err.message}` : ''}`)
   }
 }
 

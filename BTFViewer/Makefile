@@ -121,7 +121,8 @@ update-images: bundle
 		--lo 3042000 --hi 3359000
 	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(STATS_TRACE) \
 		-o $(STATS_IMG_DIR)/tasks-cpu-load-cs22.svg --view timeline --view-mode task \
-		--task "CS[22]" --cpu-load --height 900
+		--task "CS[22]" --cpu-load --height 900 \
+		--lo 1464000 --hi 1764000
 	@echo "Updated $(STATS_IMG_DIR) from $(STATS_TRACE)"
 	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(HEATMAP_TRACE) \
 		-o $(HEATMAP_IMG_DIR)/heatmap-pairs.svg --view heatmap

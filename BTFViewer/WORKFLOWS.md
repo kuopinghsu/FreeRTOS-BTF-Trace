@@ -260,7 +260,8 @@ On this sample the *hottest* CS pairs are mostly **0 % Bounce** (pure scheduling
 # Fit + Task View + lock-highlight + per-core CPU Load for one task
 python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
     -o ../images/stats/tasks-cpu-load-cs22.svg \
-    --view timeline --view-mode task --task "CS[22]" --cpu-load --height 900
+    --view timeline --view-mode task --task "CS[22]" --cpu-load --height 900 \
+    --lo 1464000 --hi 1764000
 ```
 
 ![CS[22] highlighted in Task View with per-core CPU Load](../images/stats/tasks-cpu-load-cs22.svg)
