@@ -143,7 +143,7 @@ Open **Statistics**, then **Analysis**.  The HTML report’s Analysis card summa
 |------|-------------------------|
 | Core_0 … Core_7 | 68.7, 59.9, 62.7, 65.1, 71.6, 74.0, 76.1, **77.3** |
 | **Load Balance Score** | **95 %** (G = 0.049) |
-| **σ** | **6.0 %** (badge stays green; amber only if σ > 30 %) |
+| **σ** | **6.0 %** (gauge green / OK; amber only if σ > 30 %; red if Score &lt; 70 %) |
 
 **Analysis finding:** *cores look reasonably balanced* (Score ≥ 85 % and σ ≤ 30 %).
 

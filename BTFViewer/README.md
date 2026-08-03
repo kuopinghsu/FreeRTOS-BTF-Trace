@@ -538,7 +538,7 @@ On Desktop, macOS Retina uses pixel-based font sizing by default; override with 
 | CPU load row height | Height of each CPU load graph row (16–120 px; default **30**) |
 | STI row height | Collapsed STI channel row height (12–60 px; default **18**) |
 | STI waveform height | Expanded tag-event waveform row height (40–300 px; default **80**) |
-| STI waveform style | Y-axis scale for expanded tag waveform rows: **Linear** (default) or **Log₂**. Toggle with the **Log₂** toolbar button. |
+| STI waveform style | Y-axis scale for expanded tag waveform rows: **Linear** (default) or **Log₂**. Toggle with the **Log₂** toolbar icon (Web: icon-only; hover for the label). |
 
 ### Analysis
 
@@ -583,6 +583,8 @@ Existing saved settings (`btf_viewer.rc` or browser `localStorage`) are not over
 
 Browser-based viewer (Vue 3 + Vite). Feature parity with the desktop app for timeline, statistics, and trace compare; rendering uses Web Workers, PixiJS, and optional WASM acceleration.
 
+**Toolbar:** icon-only controls (hover for tooltips) so the bar fits narrow windows; overflow **⋯** holds controls that still do not fit.
+
 **No CLI** — scripted export uses desktop `btf_viewer.py` (`report`, `compare`, `migrations`, `snapshot`, …).
 
 | Topic | Section |
@@ -600,13 +602,13 @@ Same two modes as the desktop viewer:
 | **Task View** | One row per task, coloured by task identity |
 | **Core View** | One row per CPU core; bars coloured by running task. Click the `▶` arrow in the label column to expand a core into per-task sub-rows |
 
-Toggle with the **Task** / **Core** buttons in the toolbar.
+Toggle with the **Task** / **Core** toolbar icons (hover for the label).
 
 ### Opening a file
 
-Click **Open** in the toolbar and select any `.btf` file (or a compressed container: `.btf.gz` / `.gz`, `.btf.bz2` / `.bz2`, `.btf.zip` / `.zip`).
+Click the **Open** toolbar icon and select any `.btf` file (or a compressed container: `.btf.gz` / `.gz`, `.btf.bz2` / `.bz2`, `.btf.zip` / `.zip`).
 Each file opens in a new **tab** in the bar below the toolbar; click a tab to switch traces, or **×** to close one.
-Opening the same filename again focuses the existing tab. On the Web build, **Demo** loads the embedded `example-2cores.btf.gz`.
+Opening the same filename again focuses the existing tab. On the Web build, the **Demo** icon loads the embedded `example-2cores.btf.gz`.
 
 **Parsing:** traces are parsed in a **Web Worker** when the page is served over HTTP (`make dev`, `make preview`, or the hosted demo). On `file://` URLs some browsers block workers, so parsing may run on the main thread instead. A progress overlay (`Reading…` / `Parsing…` / `Opening trace…`) is shown until the timeline is ready.
 
@@ -756,7 +758,7 @@ Below the scope checkbox, a **scheduling summary** line shows context-switch cou
 
 | Section | What it shows |
 |---------|----------------|
-| **Core Utilisation** | Active (non-IDLE, non-TICK) CPU time per core as a percentage; **Load Balance Score** gauge shows Gini-based score and σ (amber when σ > 30 %) |
+| **Core Utilisation** | Active (non-IDLE, non-TICK) CPU time per core as a percentage; **Load Balance Score** gauge (green / amber / red zones) |
 | **Top Tasks by CPU** | Top 10 worker tasks ranked by total CPU time |
 | **Trace Health (TICK)** | STI TICK period regularity, **tick / tickless mode detection**, large gaps, missed-tick estimate, and **Tick Distribution** chart (Desktop + Web: whenever ≥ 2 ticks in scope) |
 | **Core Migrations** | Per-task cross-core migration stats (see [Core migration analysis](#core-migration-analysis)) |
@@ -905,7 +907,7 @@ It shows (in panel order):
 
 - **Summary** — span, task/segment/STI counts (scoped when the checkbox is on)
 - **Scheduling summary** — context-switch count and average/max core gap between consecutive slices on each core
-- **Core utilisation** — percentage of active (non-IDLE, non-TICK) CPU time per core; **Load Balance Score** gauge at the top shows Gini-based score and σ (amber when σ > 30 %) (collapsible)
+- **Core utilisation** — percentage of active (non-IDLE, non-TICK) CPU time per core; **Load Balance Score** gauge at the top (score, σ, Gini; red / amber / green zones) (collapsible)
 - **Core Time Breakdown** — per-core time budget split into **Active** (non-IDLE, non-TICK tasks), **Idle** (IDLE task), **Tick** (TICK handler), and **Gap** (unaccounted span between segments — scheduler latency / ISR overhead) expressed as percentages (collapsible)
 - **Top tasks by CPU** — ranked list of worker tasks by total CPU time consumed (collapsible)
 - **Trace health (TICK)** — tick period regularity, **tick / tickless mode detection** (coefficient of variation of tick intervals), large gaps, missed-tick estimate, and **Tick Distribution…** chart button (bar-chart icon beside the mode badge when ≥ 2 ticks in scope) (collapsible)
@@ -924,13 +926,13 @@ It shows (in panel order):
 - **Interval Analysis** — per interval id: count, min/avg/max/p95 duration of paired start→stop spans; pairing uses `tid` in the note when present; click a row for a duration plot; click a scatter point to jump and add an annotation at the interval start (collapsible)
 - **Tag Analysis** — per `tag0_event`…`tag7_event` STI channel: sample count, min/avg/max/p95 of the tag value; click a row to open a scatter + histogram plot (collapsible; shown only when the trace contains tag STI samples)
 
-**Export CSV** / **Export HTML** respect the current cursor scope. **Export CSV** includes summary tables for every statistics section and a **Core Affinity Violations** sub-table listing every mutex that crossed core boundaries, plus **Load Balance Score**, σ, and Gini coefficient under Core Utilisation. **Export HTML** adds the same summaries plus an **Analysis Findings** card near the top (same heuristics as toolbar **Analysis** — load imbalance, WCET/CPU hotspots, blocking, L/M/H priority inversion, core thrashing / hot pairs, deadline breaches, tick health, sync/mutex bounces), and detail sub-tables for **Priority Inheritance** (boost episodes), **Mutex / Semaphore** (pairing issues with bounce warnings, and hold episodes with take/give core columns), and **Interval Analysis** (individual instances). **Trace Compare…** compares summary, top tasks, and core migrations between two open tabs; enable **Limit to each tab's cursor range** to scope each side to its own C1–Cn window. Open metrics charts update live when cursors move or scope is toggled; each trace tab remembers its own open chart when you switch tabs.
+**Export CSV** / **Export HTML** respect the current cursor scope. **Export CSV** includes summary tables for every statistics section and a **Core Affinity Violations** sub-table listing every mutex that crossed core boundaries, plus **Load Balance Score**, σ, and Gini coefficient under Core Utilisation. **Export HTML** adds the same summaries plus an **Analysis Findings** card near the top (same heuristics as toolbar **Analysis** — load imbalance, WCET/CPU hotspots, blocking, L/M/H priority inversion, core thrashing / hot pairs, deadline breaches, tick health, sync/mutex bounces), embeds the **Load Balance Score** gauge as a self-contained SVG `<img>` (data URI) under Core Utilisation, and detail sub-tables for **Priority Inheritance** (boost episodes), **Mutex / Semaphore** (pairing issues with bounce warnings, and hold episodes with take/give core columns), and **Interval Analysis** (individual instances). **Trace Compare…** compares summary, top tasks, and core migrations between two open tabs; enable **Limit to each tab's cursor range** to scope each side to its own C1–Cn window. Open metrics charts update live when cursors move or scope is toggled; each trace tab remembers its own open chart when you switch tabs.
 
 Full column definitions, chart axis meanings, and example plots: [Statistics metric tables](#statistics-metric-tables).
 
 ### Statistics metric tables
 
-The Statistics panel (Desktop **Statistics** tab + Web **Statistics** tab) organises metrics into collapsible sections. Tables are **sortable** — click a column header to sort ascending/descending. **Export CSV** and **Export HTML** at the panel footer honour the current cursor scope and include every section's summary table. **Export HTML** starts with an **Analysis Findings** card (same content as toolbar **Analysis** — load balance, WCET, blocking, thrashing, deadlines, tick health, and sync); use the toolbar dialog for interactive triage and **Save as text…**. HTML also adds detail sub-tables under Priority Inheritance, Mutex / Semaphore, and Interval Analysis (longest instances / hold episodes first, capped at 150–200 rows per sub-table).
+The Statistics panel (Desktop **Statistics** tab + Web **Statistics** tab) organises metrics into collapsible sections. Tables are **sortable** — click a column header to sort ascending/descending. **Export CSV** and **Export HTML** at the panel footer honour the current cursor scope and include every section's summary table. **Export HTML** starts with an **Analysis Findings** card (same content as toolbar **Analysis** — load balance, WCET, blocking, thrashing, deadlines, tick health, and sync) and embeds the **Load Balance Score** gauge as an SVG image under Core Utilisation; use the toolbar dialog for interactive triage and **Save as text…**. HTML also adds detail sub-tables under Priority Inheritance, Mutex / Semaphore, and Interval Analysis (longest instances / hold episodes first, capped at 150–200 rows per sub-table).
 
 **How to use the panel**
 
@@ -975,7 +977,15 @@ When two or more cores are present, a **Load Balance Score** gauge is shown at t
 \text{Score} = 100\% \times (1 - G), \quad G = \text{Gini coefficient of } \{U_{\text{core}}\}
 ```
 
-The gauge needle shows the score (100 = perfect balance, 0 = single-core overload). A **σ > 30%** chip lights amber when the population standard deviation of core utilisation exceeds 30 %, indicating significant load imbalance. **Export HTML** embeds the same gauge; **Export CSV** includes the score, σ, and G values under Core Utilisation. Toolbar **Analysis** additionally warns when Score < 70 % *or* σ > 30 %, and only describes cores as “reasonably balanced” when Score ≥ 85 % and σ ≤ 30 %.
+The gauge needle shows the score (100 = perfect balance, 0 = single-core overload). Zones match toolbar **Analysis**:
+
+| Zone | Condition | UI |
+|------|-----------|-----|
+| **Red** | Score &lt; 70 % | **Unbalanced** chip + alert (red zone) |
+| **Amber** | Score ≥ 70 % and σ &gt; 30 % | **σ &gt; 30%** chip |
+| **OK** (green) | Score ≥ 70 % and σ ≤ 30 % | Green score |
+
+Toolbar **Analysis** also warns when Score &lt; 70 % *or* σ &gt; 30 %, and only describes cores as “reasonably balanced” when Score ≥ 85 % and σ ≤ 30 %. **Export HTML** embeds the gauge as a self-contained SVG `<img>` (data URI) under Core Utilisation; **Export CSV** includes the score, σ, and G values.
 
 **What it tells you:** Imbalanced utilisation across cores may indicate poor affinity, lock pinning, or workload placement issues — cross-check with **Core Migrations**, the migration heatmap, and toolbar **Analysis**.
 

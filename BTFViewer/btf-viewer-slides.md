@@ -153,8 +153,9 @@ $$\text{Load Balance Score} = 100 \times (1 - \text{Gini})$$
 
 | Signal | Meaning |
 |--------|---------|
-| Badge **amber** | Population σ **> 30 %** |
-| **Analysis** warning | Score **< 70 %** *or* σ **> 30 %** |
+| Gauge **red** / **Unbalanced** | Score **&lt; 70 %** (red zone) |
+| Gauge **amber** | Score ≥ 70 % and population σ **&gt; 30 %** |
+| **Analysis** warning | Score **&lt; 70 %** *or* σ **&gt; 30 %** |
 | “Reasonably balanced” | Score **≥ 85 %** and σ **≤ 30 %** |
 
 ## `example-8cores` result
