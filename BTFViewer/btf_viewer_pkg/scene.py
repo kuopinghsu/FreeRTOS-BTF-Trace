@@ -1925,6 +1925,15 @@ class TimelineScene(QGraphicsScene):
             row_h = self._row_height
             y_top = y_cursor
             y_ctr = y_top + row_h / 2
+            # Always paint an opaque row background (not only via stripe_rows).
+            # Core-view builders call this without stripe_rows; without a fill the
+            # row is transparent and shows as white on light page backgrounds
+            # (e.g. GitHub README light mode).
+            _bg = self.addRect(
+                QRectF(lw, y_top, timeline_w, row_h),
+                QPen(Qt.PenStyle.NoPen), _sti_bg)
+            _bg.setZValue(0)
+            self._track_timeline_bg(_bg)
             if stripe_rows is not None:
                 stripe_rows.append((y_top, row_h, self._row_gap, _sti_bg, None))
             lbl_bg = _StiLabelItem(QRectF(0, y_top, lw, row_h), f"interval:{interval_id}", self,
