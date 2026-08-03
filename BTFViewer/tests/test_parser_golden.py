@@ -17,7 +17,7 @@ install()
 from btf_viewer_pkg.parser import _parse_btf, _sync_object_stats_rows  # noqa: E402
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "example-4cores-sync-golden.json"
-TRACE = Path(__file__).resolve().parents[2] / "tracedata" / "example-4cores.btf"
+TRACE = Path(__file__).resolve().parents[2] / "tracedata" / "example-4cores.btf.gz"
 
 class TestParserGolden(unittest.TestCase):
     def test_sync_object_golden_example_4cores(self) -> None:

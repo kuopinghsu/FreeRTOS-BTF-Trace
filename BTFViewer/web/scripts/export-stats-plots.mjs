@@ -3,10 +3,11 @@
  * Usage: node scripts/export-stats-plots.mjs [path/to/trace.btf] [output-dir]
  */
 import { readFileSync, mkdirSync, writeFileSync } from 'fs'
-import { dirname, join, resolve } from 'path'
+import { dirname, join, resolve, basename } from 'path'
 import { fileURLToPath } from 'url'
 import { parseBtf } from '../src/parser/btfParser.js'
 import { finalizeAndEnrich } from '../src/parser/tracePack.js'
+import { decompressBtfBytes } from '../src/utils/btfLoad.js'
 import {
   blockingTimePlotPoints,
   preemptionChainPlotPoints,
@@ -23,7 +24,7 @@ import { formatTime } from '../src/utils/timeFormat.js'
 import { buildHistogramModel } from '../src/utils/histogramModel.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
-const defaultBtf = resolve(__dirname, '../../../tracedata/example-4cores.btf')
+const defaultBtf = resolve(__dirname, '../../../tracedata/example-4cores.btf.gz')
 const defaultOut = resolve(__dirname, '../../../images/stats')
 
 const btfPath = resolve(process.argv[2] || defaultBtf)
@@ -315,7 +316,7 @@ function findMkByDisplay(trace, display) {
   return null
 }
 
-const text = readFileSync(btfPath, 'utf8')
+const text = decompressBtfBytes(new Uint8Array(readFileSync(btfPath)), basename(btfPath))
 const trace = finalizeAndEnrich(await parseBtf(text))
 mkdirSync(outDir, { recursive: true })
 
