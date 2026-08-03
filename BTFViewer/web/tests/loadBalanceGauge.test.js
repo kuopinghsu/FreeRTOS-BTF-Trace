@@ -4,6 +4,7 @@ import { describe, it } from 'node:test'
 import {
   LB_GAUGE,
   classifyLoadBalance,
+  loadBalanceGaugeImgHtml,
   loadBalanceGaugeSvg,
   needleTipPoint,
   scoreArcPath,
@@ -59,5 +60,18 @@ describe('loadBalanceGauge', () => {
     })
     assert.match(svg, /σ &gt; 30%/)
     assert.doesNotMatch(svg, /Unbalanced/)
+  })
+
+  it('embeds gauge as SVG data-URI img for HTML export', () => {
+    const html = loadBalanceGaugeImgHtml({
+      score: 82,
+      gini: 0.18,
+      stddev: 12,
+      zone: 'ok',
+    }, { width: 280 })
+    assert.match(html, /<img /)
+    assert.match(html, /src="data:image\/svg\+xml/)
+    assert.match(html, /alt="Load Balance Score 82%/)
+    assert.doesNotMatch(html, /<svg /)
   })
 })

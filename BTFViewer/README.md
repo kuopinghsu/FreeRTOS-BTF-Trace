@@ -756,7 +756,7 @@ Below the scope checkbox, a **scheduling summary** line shows context-switch cou
 
 | Section | What it shows |
 |---------|----------------|
-| **Core Utilisation** | Active (non-IDLE, non-TICK) CPU time per core as a percentage; **Load Balance Score** badge shows Gini coefficient and σ (amber when σ > 30 %) |
+| **Core Utilisation** | Active (non-IDLE, non-TICK) CPU time per core as a percentage; **Load Balance Score** gauge shows Gini-based score and σ (amber when σ > 30 %) |
 | **Top Tasks by CPU** | Top 10 worker tasks ranked by total CPU time |
 | **Trace Health (TICK)** | STI TICK period regularity, **tick / tickless mode detection**, large gaps, missed-tick estimate, and **Tick Distribution** chart (Desktop + Web: whenever ≥ 2 ticks in scope) |
 | **Core Migrations** | Per-task cross-core migration stats (see [Core migration analysis](#core-migration-analysis)) |
@@ -905,7 +905,7 @@ It shows (in panel order):
 
 - **Summary** — span, task/segment/STI counts (scoped when the checkbox is on)
 - **Scheduling summary** — context-switch count and average/max core gap between consecutive slices on each core
-- **Core utilisation** — percentage of active (non-IDLE, non-TICK) CPU time per core; **Load Balance Score** badge at the top shows Gini coefficient and σ in green (amber when σ > 30 %) (collapsible)
+- **Core utilisation** — percentage of active (non-IDLE, non-TICK) CPU time per core; **Load Balance Score** gauge at the top shows Gini-based score and σ (amber when σ > 30 %) (collapsible)
 - **Core Time Breakdown** — per-core time budget split into **Active** (non-IDLE, non-TICK tasks), **Idle** (IDLE task), **Tick** (TICK handler), and **Gap** (unaccounted span between segments — scheduler latency / ISR overhead) expressed as percentages (collapsible)
 - **Top tasks by CPU** — ranked list of worker tasks by total CPU time consumed (collapsible)
 - **Trace health (TICK)** — tick period regularity, **tick / tickless mode detection** (coefficient of variation of tick intervals), large gaps, missed-tick estimate, and **Tick Distribution…** chart button (bar-chart icon beside the mode badge when ≥ 2 ticks in scope) (collapsible)
@@ -969,13 +969,13 @@ Large **max core gap** on a core that should be busy suggests starvation, tickle
 U_{\text{core}} = \frac{T_{\text{active,core}}}{T_{\text{scope}}} \times 100
 ```
 
-When two or more cores are present, a **Load Balance Score** badge is shown at the top of the section:
+When two or more cores are present, a **Load Balance Score** gauge is shown at the top of the section:
 
 ```math
 \text{Score} = 100\% \times (1 - G), \quad G = \text{Gini coefficient of } \{U_{\text{core}}\}
 ```
 
-The badge also shows the population standard deviation σ across cores. The badge turns **amber** when σ > 30 %, indicating significant load imbalance. **Export CSV** includes the score, σ, and G values under the Core Utilisation section. Toolbar **Analysis** additionally warns when Score < 70 % *or* σ > 30 %, and only describes cores as “reasonably balanced” when Score ≥ 85 % and σ ≤ 30 %.
+The gauge needle shows the score (100 = perfect balance, 0 = single-core overload). A **σ > 30%** chip lights amber when the population standard deviation of core utilisation exceeds 30 %, indicating significant load imbalance. **Export HTML** embeds the same gauge; **Export CSV** includes the score, σ, and G values under Core Utilisation. Toolbar **Analysis** additionally warns when Score < 70 % *or* σ > 30 %, and only describes cores as “reasonably balanced” when Score ≥ 85 % and σ ≤ 30 %.
 
 **What it tells you:** Imbalanced utilisation across cores may indicate poor affinity, lock pinning, or workload placement issues — cross-check with **Core Migrations**, the migration heatmap, and toolbar **Analysis**.
 

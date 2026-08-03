@@ -103,16 +103,14 @@
         Core Utilisation (excl. IDLE/TICK){{ scopeSuffixStr }}
       </div>
       <template v-if="!coresCollapsed">
-        <div
+        <LoadBalanceGauge
           v-if="loadBalanceScore"
-          class="load-balance-badge"
-          :class="{ 'load-balance-amber': loadBalanceScore.amber }"
-          :title="`Load Balance Score = 100% × (1 − Gini). σ is population std dev of core utilisation. Amber when σ > 30%.`"
-        >
-          Load Balance: {{ loadBalanceScore.score.toFixed(0) }}%
-          &nbsp;(σ={{ loadBalanceScore.stddev.toFixed(1) }}%,
-          G={{ loadBalanceScore.gini.toFixed(3) }})
-        </div>
+          :score="loadBalanceScore.score"
+          :gini="loadBalanceScore.gini"
+          :stddev="loadBalanceScore.stddev"
+          :amber="loadBalanceScore.amber"
+          :zone="loadBalanceScore.zone"
+        />
         <div
           class="stats-util-scroll"
           :style="utilScrollStyle(coreStats.length, 'cores')"
@@ -2414,7 +2412,9 @@ import {
   AFFINITY_SORT_ACCESSORS,
 } from '../utils/statsTableSort.js'
 import TraceCompareDialog from './TraceCompareDialog.vue'
+import LoadBalanceGauge from './LoadBalanceGauge.vue'
 import { buildHistogramModel } from '../utils/histogramModel.js'
+import { classifyLoadBalance, loadBalanceGaugeImgHtml } from '../utils/loadBalanceGauge.js'
 
 const props = defineProps({
   trace:   { type: Object, default: null },
@@ -2928,7 +2928,15 @@ const loadBalanceScore = computed(() => {
   const variance = pcts.reduce((s, v) => s + (v - mean) ** 2, 0) / n
   const stddev = Math.sqrt(variance)
   const score = Math.max(0, 100 * (1 - gini))
-  return { score, gini, stddev, amber: stddev > 30 }
+  const zone = classifyLoadBalance(score, stddev)
+  return {
+    score,
+    gini,
+    stddev,
+    zone,
+    amber: zone === 'amber' || zone === 'red',
+    red: zone === 'red',
+  }
 })
 
 // ---- Analysis Findings (Export HTML) -----------------------------------
@@ -3938,6 +3946,12 @@ function exportCsv() {
 
   lines.push('')
   lines.push(`Core Utilisation (excl. IDLE/TICK)${suffix}`)
+  const lbCsv = loadBalanceScore.value
+  if (lbCsv) {
+    lines.push(`Load Balance Score,${_csvCell(`${lbCsv.score.toFixed(0)}%`)}`)
+    lines.push(`Core util σ,${_csvCell(`${lbCsv.stddev.toFixed(1)}%`)}`)
+    lines.push(`Gini Coefficient (G),${_csvCell(lbCsv.gini.toFixed(4))}`)
+  }
   lines.push('Core,CPU %')
   if (coreRows.length > 0) {
     for (const r of coreRows) {
@@ -4601,11 +4615,17 @@ function exportHtml() {
   const scopeNote = r
     ? `<li><strong>Cursor range:</strong> ${_htmlCell(scopeRangeLabel.value)}. CPU% uses overlapping active time; slice metrics use segments fully inside the range.</li>`
     : ''
-  const coreHtml = _htmlUtilSection(
-    `Core Utilisation (excl. IDLE/TICK)${suffix}`,
-    coreRows.map(r => ({ label: r.core, pct: r.pct })),
-    'core',
-  )
+  const coreHtml = (() => {
+    const section = _htmlUtilSection(
+      `Core Utilisation (excl. IDLE/TICK)${suffix}`,
+      coreRows.map(r => ({ label: r.core, pct: r.pct })),
+      'core',
+    )
+    const lb = loadBalanceScore.value
+    if (!lb) return section
+    const gauge = loadBalanceGaugeImgHtml(lb, { width: 280 })
+    return section.replace('</h2>', `</h2>${gauge}`)
+  })()
   const taskHtml = _htmlUtilSection(
     `Top Tasks by CPU (excl. IDLE/TICK)${suffix}`,
     taskRows.map(r => ({ label: r.name, pct: r.pct })),
@@ -5283,18 +5303,6 @@ watch(plotData, () => {
   max-height: 16px;
   margin-bottom: 0;
   flex-shrink: 0;
-}
-
-.load-balance-badge {
-  font-size: 11px;
-  font-weight: 600;
-  color: #1a8a2a;
-  padding: 2px 6px 4px;
-  margin-bottom: 4px;
-}
-
-.load-balance-amber {
-  color: #b07800;
 }
 
 .core-name {

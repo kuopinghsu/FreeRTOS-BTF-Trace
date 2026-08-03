@@ -3776,6 +3776,349 @@ def _core_util_stddev(values: List[float]) -> float:
     return math.sqrt(sum((v - mean) ** 2 for v in values) / n)
 
 
+def _load_balance_metrics(pcts: List[float]) -> Optional[dict]:
+    """Return {score, gini, stddev, zone, amber, red} for ≥2 core util %, else None."""
+    if len(pcts) < 2:
+        return None
+    if sum(pcts) <= 0.0:
+        return None
+    gini = _gini_coefficient(pcts)
+    stddev = _core_util_stddev(pcts)
+    score = max(0.0, 100.0 * (1.0 - gini))
+    # Align with Analysis Findings: red when score < 70%; amber when σ > 30%.
+    if score < 70.0:
+        zone = "red"
+    elif stddev > 30.0:
+        zone = "amber"
+    else:
+        zone = "ok"
+    return {
+        "score": score,
+        "gini": gini,
+        "stddev": stddev,
+        "zone": zone,
+        "amber": zone in ("amber", "red"),
+        "red": zone == "red",
+    }
+
+
+def _lb_polar(cx: float, cy: float, r: float, deg: float) -> Tuple[float, float]:
+    rad = math.radians(deg)
+    return cx + math.cos(rad) * r, cy - math.sin(rad) * r
+
+
+def _lb_semicircle(cx: float, cy: float, r: float) -> str:
+    sx, sy = _lb_polar(cx, cy, r, 180.0)
+    ex, ey = _lb_polar(cx, cy, r, 0.0)
+    return f"M {sx:.2f} {sy:.2f} A {r} {r} 0 0 1 {ex:.2f} {ey:.2f}"
+
+
+def _lb_score_arc(score: float, cx: float, cy: float, r: float) -> str:
+    s = max(0.0, min(100.0, score))
+    end_deg = 180.0 - s * 1.8
+    sx, sy = _lb_polar(cx, cy, r, 180.0)
+    ex, ey = _lb_polar(cx, cy, r, end_deg)
+    sweep = 180.0 - end_deg
+    if sweep < 0.5:
+        return f"M {sx:.2f} {sy:.2f}"
+    return f"M {sx:.2f} {sy:.2f} A {r} {r} 0 0 1 {ex:.2f} {ey:.2f}"
+
+
+def _load_balance_gauge_svg(metrics: dict, *, width: int = 280, dark: bool = False) -> str:
+    """Clean semicircle SVG for HTML export (parity with web loadBalanceGaugeSvg)."""
+    del dark  # export is always light/print-friendly
+    score = max(0.0, min(100.0, float(metrics.get("score", 0.0))))
+    gini = float(metrics.get("gini", 0.0))
+    stddev = float(metrics.get("stddev", 0.0))
+    zone = str(metrics.get("zone") or "")
+    if zone not in ("ok", "amber", "red"):
+        if score < 70.0:
+            zone = "red"
+        elif stddev > 30.0:
+            zone = "amber"
+        else:
+            zone = "ok"
+    view_w, view_h = 280, 168
+    cx, cy, r = 140.0, 118.0, 78.0
+    needle_len = 52.0
+    end_deg = 180.0 - score * 1.8
+    rad = math.radians(end_deg)
+    tip_x = cx + math.cos(rad) * needle_len
+    tip_y = cy - math.sin(rad) * needle_len
+    bg = _lb_semicircle(cx, cy, r)
+    fill = _lb_score_arc(score, cx, cy, r)
+    if zone == "red":
+        accent, end_color = "#C62828", "#E53935"
+        grad0, grad1 = "#EF5350", "#E53935"
+        card_stroke = "#E57373"
+    elif zone == "amber":
+        accent, end_color = "#C47F00", "#E0A020"
+        grad0, grad1 = "#3B82F6", "#14B8A6"
+        card_stroke = "#E2E5EC"
+    else:
+        accent, end_color = "#2A8F4E", "#22C55E"
+        grad0, grad1 = "#3B82F6", "#14B8A6"
+        card_stroke = "#E2E5EC"
+    uid = f"lb{abs(int(score * 17 + stddev * 13))}"
+    h = int(round(width * view_h / view_w))
+    times = "\u00d7"
+    minus = "\u2212"
+    chip = ""
+    if zone == "red":
+        chip = (
+            '<rect x="188" y="16" width="80" height="22" rx="6" fill="#FDECEA" stroke="#E57373"/>'
+            '<text x="228" y="31" text-anchor="middle" fill="#C62828" '
+            'font-family="system-ui,sans-serif" font-size="11" font-weight="700">'
+            "Unbalanced</text>"
+        )
+    elif zone == "amber":
+        chip = (
+            '<rect x="210" y="16" width="58" height="22" rx="6" fill="#FFF6E5" stroke="#E0A020"/>'
+            '<text x="239" y="31" text-anchor="middle" fill="#C47F00" '
+            'font-family="system-ui,sans-serif" font-size="11" font-weight="700">'
+            "σ &gt; 30%</text>"
+        )
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {view_w} {view_h}" '
+        f'width="{width}" height="{h}" role="img" '
+        f'aria-label="Load Balance Score {score:.0f} percent, {zone}">'
+        "<defs>"
+        f'<linearGradient id="{uid}Grad" x1="0%" y1="0%" x2="100%" y2="0%">'
+        f'<stop offset="0%" stop-color="{grad0}"/>'
+        f'<stop offset="55%" stop-color="{grad1}"/>'
+        f'<stop offset="100%" stop-color="{end_color}"/>'
+        "</linearGradient></defs>"
+        f'<rect width="100%" height="100%" rx="8" fill="#F7F8FA" stroke="{card_stroke}"/>'
+        f'<path d="{bg}" fill="none" stroke="#D8DCE4" stroke-width="12" stroke-linecap="round"/>'
+        f'<path d="{fill}" fill="none" stroke="url(#{uid}Grad)" stroke-width="12" '
+        f'stroke-linecap="round"/>'
+        f'<line x1="{cx}" y1="{cy}" x2="{tip_x:.2f}" y2="{tip_y:.2f}" '
+        f'stroke="#1A2030" stroke-width="2.25" stroke-linecap="round"/>'
+        f'<circle cx="{cx}" cy="{cy}" r="5" fill="#FFFFFF" stroke="#1A2030" stroke-width="2"/>'
+        f'<text x="{cx}" y="78" text-anchor="middle" fill="{accent}" '
+        f'font-family="system-ui,sans-serif" font-size="28" font-weight="700">'
+        f"{score:.0f}%</text>"
+        f'<text x="{cx}" y="96" text-anchor="middle" fill="#6A7388" '
+        f'font-family="system-ui,sans-serif" font-size="11">Load Balance Score</text>'
+        f'<text x="{cx}" y="142" text-anchor="middle" fill="#6A7388" '
+        f'font-family="ui-monospace,monospace" font-size="10">'
+        f"100 {times} (1 {minus} Gini) · σ={stddev:.1f}% · G={gini:.3f}</text>"
+        f'<text x="{cx}" y="158" text-anchor="middle" fill="#6A7388" '
+        f'font-family="system-ui,sans-serif" font-size="10">'
+        "100 = perfect balance · 0 = single-core overload</text>"
+        f"{chip}</svg>"
+    )
+
+
+def _load_balance_gauge_img_html(metrics: dict, *, width: int = 280) -> str:
+    """HTML snippet with gauge as an embedded SVG data-URI <img> (Export HTML)."""
+    svg = _load_balance_gauge_svg(metrics, width=width)
+    score = max(0.0, min(100.0, float(metrics.get("score", 0.0))))
+    zone = str(metrics.get("zone") or "ok")
+    b64 = base64.b64encode(svg.encode("utf-8")).decode("ascii")
+    data_uri = f"data:image/svg+xml;base64,{b64}"
+    h = int(round(width * 168 / 280))
+    return (
+        f'<div class="lb-gauge-embed" style="margin:8px 0 12px;">'
+        f'<img src="{data_uri}" width="{width}" height="{h}" '
+        f'alt="Load Balance Score {score:.0f}% ({zone})" '
+        f'style="display:block;max-width:100%;height:auto;border:0;"/>'
+        f"</div>"
+    )
+
+
+class _LoadBalanceGaugeWidget(QWidget):
+    """Clean Load Balance Score gauge for the Statistics panel."""
+
+    _VW, _VH = 280, 220
+
+    def __init__(self, metrics: dict, parent: QWidget = None) -> None:
+        super().__init__(parent)
+        self._metrics = dict(metrics)
+        self.setMinimumHeight(180)
+        self.setMaximumHeight(240)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setToolTip(
+            "Load Balance Score = 100% × (1 − Gini coefficient). "
+            "Red zone (Unbalanced) when score < 70%. "
+            "Amber when σ > 30%."
+        )
+
+    def set_metrics(self, metrics: dict) -> None:
+        self._metrics = dict(metrics)
+        self.update()
+
+    def sizeHint(self):  # noqa: N802
+        return QSize(self._VW, self._VH)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        score = max(0.0, min(100.0, float(self._metrics.get("score", 0.0))))
+        gini = float(self._metrics.get("gini", 0.0))
+        stddev = float(self._metrics.get("stddev", 0.0))
+        zone = str(self._metrics.get("zone") or "")
+        if zone not in ("ok", "amber", "red"):
+            if score < 70.0:
+                zone = "red"
+            elif stddev > 30.0:
+                zone = "amber"
+            else:
+                zone = "ok"
+
+        bg = self.palette().color(QPalette.ColorRole.Window)
+        fg = self.palette().color(QPalette.ColorRole.WindowText)
+        muted = QColor(fg)
+        muted.setAlpha(150)
+        border = self.palette().color(QPalette.ColorRole.Mid)
+        if not border.isValid() or border.alpha() == 0:
+            border = QColor(fg)
+            border.setAlpha(45)
+
+        card_bg = QColor(bg)
+        if zone == "red":
+            border = QColor("#E57373")
+            card_bg = QColor(bg)
+            # slight red tint
+            card_bg = QColor(
+                min(255, int(bg.red() * 0.94 + 198 * 0.06)),
+                min(255, int(bg.green() * 0.94 + 40 * 0.06)),
+                min(255, int(bg.blue() * 0.94 + 40 * 0.06)),
+            )
+        elif zone == "amber":
+            border = QColor("#E0A020")
+
+        p.setPen(QPen(border, 1.0))
+        p.setBrush(card_bg)
+        p.drawRoundedRect(QRectF(0.5, 0.5, self.width() - 1.0, self.height() - 1.0), 8, 8)
+
+        header = QFont(self.font())
+        header.setPointSizeF(max(9.0, self.font().pointSizeF()))
+        header.setBold(True)
+        p.setFont(header)
+        p.setPen(fg)
+        p.drawText(
+            QRectF(10, 6, self.width() - 100, 18),
+            int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+            "Load Balance Score",
+        )
+        if zone == "red":
+            chip = QRectF(self.width() - 92, 6, 82, 18)
+            p.setPen(QPen(QColor("#E57373"), 1.0))
+            p.setBrush(QColor("#FDECEA"))
+            p.drawRoundedRect(chip, 9, 9)
+            chip_font = QFont(self.font())
+            chip_font.setPointSizeF(8.5)
+            chip_font.setBold(True)
+            p.setFont(chip_font)
+            p.setPen(QColor("#C62828"))
+            p.drawText(chip, int(Qt.AlignmentFlag.AlignCenter), "Unbalanced")
+        elif zone == "amber":
+            chip = QRectF(self.width() - 72, 6, 62, 18)
+            p.setPen(QPen(QColor("#E0A020"), 1.0))
+            p.setBrush(QColor("#FFF6E5"))
+            p.drawRoundedRect(chip, 9, 9)
+            chip_font = QFont(self.font())
+            chip_font.setPointSizeF(8.5)
+            chip_font.setBold(True)
+            p.setFont(chip_font)
+            p.setPen(QColor("#C47F00"))
+            p.drawText(chip, int(Qt.AlignmentFlag.AlignCenter), "σ > 30%")
+
+        footer_h = 58 if zone == "red" else 44
+        gauge = QRectF(10, 28, self.width() - 20, self.height() - footer_h - 30)
+        cx = gauge.center().x()
+        cy = gauge.bottom() - 8
+        r = min(gauge.width() * 0.42, max(36.0, gauge.height() - 8))
+        needle_len = r * 0.68
+
+        track_c = QColor(border)
+        track_c.setAlpha(max(70, border.alpha()))
+        p.setPen(QPen(track_c, 10.0, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawArc(QRectF(cx - r, cy - r, 2 * r, 2 * r), 180 * 16, -180 * 16)
+
+        grad = QLinearGradient(cx - r, cy, cx + r, cy)
+        if zone == "red":
+            grad.setColorAt(0.0, QColor("#EF5350"))
+            grad.setColorAt(0.55, QColor("#E53935"))
+            grad.setColorAt(1.0, QColor("#C62828"))
+        else:
+            grad.setColorAt(0.0, QColor("#3B82F6"))
+            grad.setColorAt(0.55, QColor("#14B8A6"))
+            grad.setColorAt(1.0, QColor("#E0A020" if zone == "amber" else "#22C55E"))
+        span = -int(score * 1.8 * 16)
+        p.setPen(QPen(QBrush(grad), 10.0, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        p.drawArc(QRectF(cx - r, cy - r, 2 * r, 2 * r), 180 * 16, span)
+
+        end_deg = 180.0 - score * 1.8
+        rad = math.radians(end_deg)
+        nx = cx + math.cos(rad) * needle_len
+        ny = cy - math.sin(rad) * needle_len
+        p.setPen(QPen(fg, 2.0, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        p.drawLine(QPointF(cx, cy), QPointF(nx, ny))
+        p.setBrush(card_bg)
+        p.setPen(QPen(fg, 2.0))
+        p.drawEllipse(QPointF(cx, cy), 4.5, 4.5)
+
+        score_font = QFont(self.font())
+        score_font.setPointSizeF(18.0)
+        score_font.setBold(True)
+        p.setFont(score_font)
+        if zone == "red":
+            p.setPen(QColor("#C62828"))
+        elif zone == "amber":
+            p.setPen(QColor("#C47F00"))
+        else:
+            p.setPen(QColor("#1a8a2a"))
+        p.drawText(
+            QRectF(cx - 50, cy - r * 0.72, 100, 28),
+            int(Qt.AlignmentFlag.AlignCenter),
+            f"{score:.0f}%",
+        )
+
+        y = self.height() - footer_h
+        if zone == "red":
+            alert = QRectF(10, y, self.width() - 20, 16)
+            p.setPen(QPen(QColor("#E57373"), 1.0))
+            p.setBrush(QColor("#FDECEA"))
+            p.drawRoundedRect(alert, 5, 5)
+            alert_font = QFont(self.font())
+            alert_font.setPointSizeF(8.0)
+            alert_font.setBold(True)
+            p.setFont(alert_font)
+            p.setPen(QColor("#C62828"))
+            p.drawText(
+                alert,
+                int(Qt.AlignmentFlag.AlignCenter),
+                "Red zone: score < 70% — load is unbalanced",
+            )
+            y += 18
+
+        meta_font = QFont("Menlo" if sys.platform == "darwin" else "monospace")
+        meta_font.setPointSizeF(8.0)
+        p.setFont(meta_font)
+        p.setPen(muted)
+        p.drawText(
+            QRectF(8, y, self.width() - 16, 14),
+            int(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter),
+            "100 × (1 − Gini coefficient)",
+        )
+        p.drawText(
+            QRectF(8, y + 14, self.width() - 16, 14),
+            int(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter),
+            f"σ={stddev:.1f}% · G={gini:.3f}",
+        )
+        leg = QFont(self.font())
+        leg.setPointSizeF(8.0)
+        p.setFont(leg)
+        p.drawText(
+            QRectF(8, y + 28, self.width() - 16, 14),
+            int(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter),
+            "100 = perfect balance · 0 = single-core overload",
+        )
+
+
 # ---------------------------------------------------------------------------
 # Analysis Findings (Statistics HTML report heuristics)
 # ---------------------------------------------------------------------------
@@ -6190,16 +6533,9 @@ class _StatsPanel(QWidget):
 
         _core_util_pcts = [pct for _, pct in core_rows]
         _lb_badge_html = ""
-        if len(_core_util_pcts) >= 2:
-            _lb_gini = _gini_coefficient(_core_util_pcts)
-            _lb_stddev = _core_util_stddev(_core_util_pcts)
-            _lb_score = max(0.0, 100.0 * (1.0 - _lb_gini))
-            _lb_color = "#b07800" if _lb_stddev > 30.0 else "#1a6a2a"
-            _lb_badge_html = (
-                f'<p style="margin:4px 0 8px; color:{_lb_color}; font-weight:600;">'
-                f"Load Balance: {_lb_score:.0f}%  "
-                f"(σ={_lb_stddev:.1f}%,  G={_lb_gini:.3f})</p>"
-            )
+        _lb = _load_balance_metrics(_core_util_pcts)
+        if _lb is not None:
+            _lb_badge_html = _load_balance_gauge_img_html(_lb, width=280)
         core_util_html = (
             self._html_export_util_section(
                 f"Core Utilisation (excl. IDLE/TICK){scope_title}",
@@ -7123,23 +7459,12 @@ class _StatsPanel(QWidget):
                 ilay = QVBoxLayout(inner)
                 ilay.setContentsMargins(0, 0, 0, 0)
                 ilay.setSpacing(STATS_UTIL_ROW_GAP)
-                # Load balance score badge
+                # Load balance score gauge
                 if len(_core_rows) >= 2:
                     _pcts = [p for _, p in _core_rows]
-                    _stddev = _core_util_stddev(_pcts)
-                    _gini = _gini_coefficient(_pcts)
-                    _score = max(0.0, 100.0 * (1.0 - _gini))
-                    _badge_color = "#E8C84A" if _stddev > 30.0 else "#5FCF6F"
-                    _badge_lbl = self._lbl(
-                        f"Load Balance: {_score:.0f}%  "
-                        f"(σ={_stddev:.1f}%,  G={_gini:.3f})",
-                        color=_badge_color, ui_fs=_fs,
-                    )
-                    _badge_lbl.setToolTip(
-                        "Load Balance Score = 100% × (1 − Gini coefficient). "
-                        "σ is population standard deviation of core utilisation. "
-                        "Amber when σ > 30%.")
-                    ilay.addWidget(_badge_lbl)
+                    _lb = _load_balance_metrics(_pcts)
+                    if _lb is not None:
+                        ilay.addWidget(_LoadBalanceGaugeWidget(_lb))
                 for core, pct in _core_rows:
                     self._add_utilisation_row(
                         ilay, _fs, f"  {core}:", pct,

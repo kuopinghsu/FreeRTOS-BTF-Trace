@@ -132,3 +132,28 @@ export function loadBalanceGaugeSvg(metrics, opts = {}) {
   ${chip}
 </svg>`
 }
+
+/**
+ * HTML snippet with the gauge as an embedded SVG data-URI &lt;img&gt;.
+ * Prefer this for Export HTML so the chart is a self-contained image.
+ *
+ * @param {{ score: number, gini: number, stddev: number, amber?: boolean, zone?: string }} metrics
+ * @param {{ width?: number }} [opts]
+ * @returns {string}
+ */
+export function loadBalanceGaugeImgHtml(metrics, opts = {}) {
+  const width = Math.max(200, Number(opts.width) || 280)
+  const svg = loadBalanceGaugeSvg(metrics, { width })
+  const score = Math.max(0, Math.min(100, Number(metrics?.score) || 0))
+  const zone = metrics?.zone || classifyLoadBalance(score, Number(metrics?.stddev) || 0)
+  // encodeURIComponent keeps the SVG readable in View Source; browsers accept it for img src.
+  const dataUri = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
+  const h = Math.round(width * LB_GAUGE.viewH / LB_GAUGE.viewW)
+  return (
+    `<div class="lb-gauge-embed" style="margin:8px 0 12px;">`
+    + `<img src="${dataUri}" width="${width}" height="${h}" `
+    + `alt="Load Balance Score ${score.toFixed(0)}% (${zone})" `
+    + `style="display:block;max-width:100%;height:auto;border:0;"/>`
+    + `</div>`
+  )
+}

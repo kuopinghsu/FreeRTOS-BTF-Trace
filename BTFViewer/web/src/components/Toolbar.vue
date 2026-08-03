@@ -7,6 +7,7 @@
     <button
       class="app-name-btn"
       title="About RTOS BTF Viewer"
+      aria-label="About RTOS BTF Viewer"
       @click="emit('showAbout')"
     >
       <svg
@@ -14,7 +15,7 @@
         height="16"
         viewBox="0 0 72 72"
         xmlns="http://www.w3.org/2000/svg"
-        style="display:inline-block;vertical-align:middle;margin-right:5px"
+        style="display:inline-block;vertical-align:middle"
       >
         <rect
           x="3"
@@ -68,7 +69,7 @@
           points="41.5,8 38,16 45,16"
           fill="#ffc107"
         />
-      </svg>BTF Viewer
+      </svg>
     </button>
 
     <div class="tb-sep" />
@@ -95,7 +96,6 @@
           >
             <path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h2.764c.958 0 1.76.56 2.311 1.184C7.985 3.648 8.48 4 9 4h4.5A1.5 1.5 0 0 1 15 5.5v7a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5v-9z" />
           </svg>
-          Open
           <input
             type="file"
             :accept="BTF_FILE_ACCEPT"
@@ -117,7 +117,6 @@
           >
             <path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h2.764c.958 0 1.76.56 2.311 1.184C7.985 3.648 8.48 4 9 4h4.5A1.5 1.5 0 0 1 15 5.5v7a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5v-9z" />
           </svg>
-          Open
         </button>
 
         <button
@@ -133,7 +132,6 @@
           >
             <path d="M3 2.5A1.5 1.5 0 0 1 4.5 1h7A1.5 1.5 0 0 1 13 2.5v11a1.5 1.5 0 0 1-1.5 1.5h-7A1.5 1.5 0 0 1 3 13.5v-11zm3 2.354v6.292L11 8 6 4.854z" />
           </svg>
-          Demo
         </button>
 
         <div class="tb-sep" />
@@ -163,7 +161,6 @@
           >
             <path d="M1 2.5A1.5 1.5 0 0 1 2.5 1h11A1.5 1.5 0 0 1 15 2.5v11a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 13.5v-11zM4 5.5h8v1H4v-1zm0 3h8v1H4v-1zm0 3h5v1H4v-1z" />
           </svg>
-          Task
         </label>
         <label
           class="tb-btn"
@@ -179,7 +176,6 @@
           >
             <path d="M5 1v2H3a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2v2h1v-2h4v2h1v-2h2a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2h-2V1h-1v2H6V1H5zm-2 4h10v6H3V5zm2 1v4h6V6H5z" />
           </svg>
-          Core
         </label>
 
         <!-- Expand / Collapse all cores (core mode only) -->
@@ -198,7 +194,6 @@
             >
               <path d="M8 2v5H3v1h5v5h1V8h5V7H9V2H8z" />
             </svg>
-            Expand
           </button>
           <button
             class="tb-btn"
@@ -213,7 +208,6 @@
             >
               <path d="M2 7h12v2H2z" />
             </svg>
-            Collapse
           </button>
         </template>
 
@@ -243,7 +237,6 @@
           >
             <path d="M1 11a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v3H1v-3zm5-4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v7H6V7zm5-3a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v10h-4V4z" />
           </svg>
-          Load
         </label>
 
         <button
@@ -261,7 +254,6 @@
           >
             <path d="M1 1h4v4H1V1zm5 0h4v4H6V1zm5 0h4v4h-4V1zM1 6h4v4H1V6zm5 0h4v4H6V6zm5 0h4v4h-4V6zM1 11h4v4H1v-4zm5 0h4v4H6v-4zm5 0h4v4h-4v-4z" />
           </svg>
-          Heatmap
         </button>
 
         <button
@@ -298,7 +290,6 @@
               stroke-width="1.4"
             />
           </svg>
-          Chord
         </button>
 
         <button
@@ -316,7 +307,6 @@
           >
             <path d="M2 1.5A.5.5 0 0 1 2.5 1h9A1.5 1.5 0 0 1 13 2.5v11a1.5 1.5 0 0 1-1.5 1.5h-9A.5.5 0 0 1 2 14.5v-13zM3 2v12h8.5a.5.5 0 0 0 .5-.5v-11a.5.5 0 0 0-.5-.5H3zm1.5 2h6v1h-6V4zm0 2.5h6v1h-6v-1zm0 2.5h4v1h-4V9z" />
           </svg>
-          Analysis
         </button>
 
         <button
@@ -333,7 +323,6 @@
           >
             <path d="M2 3h12v1H2V3zm0 4h12v1H2V7zm0 4h12v1H2v-1zm0 4h8v1H2v-1z" />
           </svg>
-          All tasks
         </button>
 
         <div class="tb-sep" />
@@ -405,7 +394,14 @@
           title="Zoom to cursor range (Ctrl+R)"
           @click="emit('zoomRange')"
         >
-          ⊡ Range
+          <svg
+            viewBox="0 0 16 16"
+            width="16"
+            height="16"
+            fill="currentColor"
+          >
+            <path d="M2 2h4v1H3v3H2V2zm8 0h4v4h-1V3h-3V2zM2 10h1v3h3v1H2v-4zm11 0h1v4h-4v-1h3v-3zM5 5h6v6H5V5zm1 1v4h4V6H6z" />
+          </svg>
         </button>
         <button
           v-if="traceInfo"
@@ -421,7 +417,6 @@
           >
             <path d="M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398h-.001l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.85-3.85zm-5.242 1.1a5.5 5.5 0 1 1 0-11 5.5 5.5 0 0 1 0 11z" />
           </svg>
-          Find
         </button>
 
         <div class="tb-sep" />
@@ -450,7 +445,6 @@
           >
             <path d="M3 3.5A1.5 1.5 0 0 1 4.5 2h7A1.5 1.5 0 0 1 13 3.5V5h1a1 1 0 0 1 1 1v6.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5V6a1 1 0 0 1 1-1h1V3.5zm1 0V5h8V3.5a.5.5 0 0 0-.5-.5h-7a.5.5 0 0 0-.5.5zM8 7a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z" />
           </svg>
-          Shot
         </button>
 
         <button
@@ -467,7 +461,6 @@
           >
             <path d="M7.5 1a.5.5 0 0 1 .5.5v8.793l2.146-2.147a.5.5 0 0 1 .708.708l-3 3a.5.5 0 0 1-.708 0l-3-3a.5.5 0 0 1 .708-.708L7 10.293V1.5a.5.5 0 0 1 .5-.5zM2.5 13a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5z" />
           </svg>
-          SVG
         </button>
 
         <button
@@ -484,7 +477,6 @@
           >
             <path d="M2.5 2A1.5 1.5 0 0 0 1 3.5v9A1.5 1.5 0 0 0 2.5 14h11a1.5 1.5 0 0 0 1.5-1.5v-9A1.5 1.5 0 0 0 13.5 2h-11zm0 1h11a.5.5 0 0 1 .5.5V5H2V3.5a.5.5 0 0 1 .5-.5zM2 6h12v6.5a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5V6zm2 1.5v1h2v-1H4zm3 0v1h2v-1H7zm3 0v1h2v-1h-2zM4 10v1h5v-1H4z" />
           </svg>
-          Perfetto
         </button>
 
         <div class="tb-sep" />
@@ -520,7 +512,6 @@
               stroke-linecap="round"
             />
           </svg>
-          H
         </label>
         <label
           class="tb-btn"
@@ -542,7 +533,6 @@
               stroke-linecap="round"
             />
           </svg>
-          V
         </label>
 
         <div class="tb-sep" />
@@ -580,7 +570,14 @@
           title="Show or hide STI channels"
           @click="emit('update:modelValue', { ...modelValue, showSti: modelValue.showSti === false })"
         >
-          STI
+          <svg
+            viewBox="0 0 16 16"
+            width="16"
+            height="16"
+            fill="currentColor"
+          >
+            <path d="M1 8h2l1.5-4L7 12l2-6 1.5 3H15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
         </label>
 
         <label
@@ -589,7 +586,14 @@
           title="Toggle STI waveform scale: Linear / Log₂"
           @click="emit('update:modelValue', { ...modelValue, stiLogScale: !modelValue.stiLogScale })"
         >
-          Log&#8322;
+          <svg
+            viewBox="0 0 16 16"
+            width="16"
+            height="16"
+            fill="currentColor"
+          >
+            <path d="M2 13V3h1.2v8.5H14V13H2zm3.2-2.2c0-2.4 1.5-4.2 3.8-4.2 1.3 0 2.3.5 3 1.4l-.9.7c-.5-.6-1.1-.9-1.9-.9-1.4 0-2.5 1.2-2.5 3s1.1 3 2.5 3c.8 0 1.4-.3 1.9-.9l.9.7c-.7.9-1.7 1.4-3 1.4-2.3 0-3.8-1.8-3.8-4.2z"/>
+          </svg>
         </label>
 
         <!-- Dark mode toggle -->
@@ -645,7 +649,6 @@
         <path d="M8 4.754a3.246 3.246 0 1 0 0 6.492 3.246 3.246 0 0 0 0-6.492zM5.754 8a2.246 2.246 0 1 1 4.492 0 2.246 2.246 0 0 1-4.492 0z" />
         <path d="M9.796 1.343c-.527-1.79-3.065-1.79-3.592 0l-.094.319a.873.873 0 0 1-1.255.52l-.292-.16c-1.64-.892-3.433.902-2.54 2.541l.159.292a.873.873 0 0 1-.52 1.255l-.319.094c-1.79.527-1.79 3.065 0 3.592l.319.094a.873.873 0 0 1 .52 1.255l-.16.292c-.892 1.64.901 3.434 2.541 2.54l.292-.159a.873.873 0 0 1 1.255.52l.094.319c.527 1.79 3.065 1.79 3.592 0l.094-.319a.873.873 0 0 1 1.255-.52l.292.16c1.64.893 3.434-.902 2.54-2.541l-.159-.292a.873.873 0 0 1 .52-1.255l.319-.094c1.79-.527 1.79-3.065 0-3.592l-.319-.094a.873.873 0 0 1-.52-1.255l.16-.292c.893-1.64-.902-3.433-2.541-2.54l-.292.159a.873.873 0 0 1-1.255-.52l-.094-.319z" />
       </svg>
-      Settings
     </button>
 
     <button
@@ -661,7 +664,6 @@
       >
         <path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 13A6 6 0 1 1 8 2a6 6 0 0 1 0 12zm0-3.1a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zM8.2 4.2c-1.2 0-2 .8-2.1 1.9h1c.1-.6.5-1 1.1-1 .7 0 1.1.4 1.1 1 0 .4-.2.7-.8 1.1-.8.5-1.3 1-1.3 2v.3h1v-.2c0-.6.3-.9.9-1.3.7-.5 1.2-1 1.2-1.9 0-1.1-.9-1.9-2.1-1.9z" />
       </svg>
-      Help
     </button>
 
     <div class="spacer" />
@@ -837,8 +839,11 @@ watch(
 .tb-btn {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 3px 8px;
+  justify-content: center;
+  gap: 0;
+  padding: 4px 6px;
+  min-width: 28px;
+  min-height: 28px;
   border: 1px solid transparent;
   border-radius: 4px;
   background: transparent;
@@ -868,7 +873,7 @@ watch(
   width: 1px;
   height: 20px;
   background: var(--border);
-  margin: 0 4px;
+  margin: 0 2px;
   flex-shrink: 0;
 }
 .tb-group {
@@ -970,12 +975,14 @@ watch(
   font-weight: 700;
   font-family: inherit;
   cursor: pointer;
-  padding: 4px 8px;
+  padding: 4px 6px;
+  min-width: 28px;
+  min-height: 28px;
   border-radius: 4px;
   white-space: nowrap;
-  letter-spacing: 0.3px;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   transition: background 0.15s;
 }
 .app-name-btn:hover {
