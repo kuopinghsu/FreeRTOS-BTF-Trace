@@ -4623,7 +4623,7 @@ function exportHtml() {
     )
     const lb = loadBalanceScore.value
     if (!lb) return section
-    const gauge = loadBalanceGaugeImgHtml(lb, { width: 280 })
+    const gauge = loadBalanceGaugeImgHtml(lb, { width: 300 })
     return section.replace('</h2>', `</h2>${gauge}`)
   })()
   const taskHtml = _htmlUtilSection(

@@ -1,28 +1,46 @@
 /**
- * Load Balance Score gauge — clean geometry + zone alerts + SVG export.
- * Score = 100 × (1 − Gini).
+ * Load Balance gauges — Score and σ side by side (parity with desktop QPainter widget).
+ * Score = 100 × (1 − Gini); σ = population stddev of core utilisation %.
  *
  * Zones (aligned with Analysis Findings):
- *   red   — score < 70%  (unbalanced / red zone)
- *   amber — score ≥ 70% but σ > 30%
- *   ok    — score ≥ 70% and σ ≤ 30%
+ *   Score red   — score < 70%
+ *   Overall amber — score ≥ 70% but σ > 30%
+ *   σ amber/red — σ > 30% (amber), σ > 50% (red)
  */
 
 export const LB_SCORE_WARN = 70
 export const LB_SIGMA_WARN = 30
+export const LB_SIGMA_RED = 50
+/** σ gauge full-scale (needle at right). */
+export const LB_SIGMA_SCALE = 60
 
+/** Per-gauge SVG geometry — mirrors desktop stroke 8 / hollow % placement. */
 export const LB_GAUGE = Object.freeze({
-  viewW: 280,
-  viewH: 168,
-  cx: 140,
-  cy: 118,
-  rTrack: 78,
-  rBg: 78,
-  needleLen: 52,
+  viewW: 140,
+  viewH: 100,
+  cx: 70,
+  cy: 78,
+  rTrack: 48,
+  rBg: 48,
+  needleLen: Math.round(48 * 0.68), // ≈ 33 — desktop: r * 0.68
+  hubR: 3.5,
+  strokeW: 8,
   startDeg: 180,
   sweepDeg: 180,
-  scoreY: 78,
-  labelY: 96,
+  /** Value % in the upper hollow of the arc (above needle mid). */
+  scoreY: 78 - Math.round(48 * 0.52),
+})
+
+/** Combined dual-gauge SVG canvas (HTML export). */
+export const LB_DUAL = Object.freeze({
+  viewW: 300,
+  viewH: 148,
+  leftCx: 70,
+  rightCx: 230,
+  cy: 88,
+  r: 48,
+  needleLen: Math.round(48 * 0.68),
+  strokeW: 8,
 })
 
 export const LB_ZONE_COLORS = Object.freeze({
@@ -44,17 +62,32 @@ export function classifyLoadBalance(score, stddev) {
   return 'ok'
 }
 
-/** Map score 0–100 → degrees (180° left → 0° right). */
-export function scoreToNeedleDeg(score) {
-  const s = Math.max(0, Math.min(100, Number(score) || 0))
-  return LB_GAUGE.startDeg - (s / 100) * LB_GAUGE.sweepDeg
+/** Zone for the σ gauge alone. */
+export function classifySigma(stddev) {
+  const sigma = Number(stddev) || 0
+  if (sigma > LB_SIGMA_RED) return 'red'
+  if (sigma > LB_SIGMA_WARN) return 'amber'
+  return 'ok'
 }
 
-export function needleTipPoint(score, g = LB_GAUGE) {
-  const rad = (scoreToNeedleDeg(score) * Math.PI) / 180
+/** Map value 0…max → degrees (180° left → 0° right). */
+export function valueToNeedleDeg(value, max = 100) {
+  const m = Math.max(1e-9, Number(max) || 100)
+  const s = Math.max(0, Math.min(m, Number(value) || 0))
+  return 180 - (s / m) * 180
+}
+
+export function needleTipPoint(
+  value,
+  max = 100,
+  cx = LB_GAUGE.cx,
+  cy = LB_GAUGE.cy,
+  needleLen = LB_GAUGE.needleLen,
+) {
+  const rad = (valueToNeedleDeg(value, max) * Math.PI) / 180
   return {
-    x: g.cx + Math.cos(rad) * g.needleLen,
-    y: g.cy - Math.sin(rad) * g.needleLen,
+    x: cx + Math.cos(rad) * needleLen,
+    y: cy - Math.sin(rad) * needleLen,
   }
 }
 
@@ -63,96 +96,139 @@ function polar(cx, cy, r, deg) {
   return { x: cx + Math.cos(rad) * r, y: cy - Math.sin(rad) * r }
 }
 
-/** Semicircle path left → right through the top. */
 export function semicirclePath(cx, cy, r) {
   const s = polar(cx, cy, r, 180)
   const e = polar(cx, cy, r, 0)
   return `M ${s.x.toFixed(2)} ${s.y.toFixed(2)} A ${r} ${r} 0 0 1 ${e.x.toFixed(2)} ${e.y.toFixed(2)}`
 }
 
-/** Arc from 180° to the score angle (progress fill). */
-export function scoreArcPath(score, cx = LB_GAUGE.cx, cy = LB_GAUGE.cy, r = LB_GAUGE.rTrack) {
+export function valueArcPath(value, max = 100, cx = LB_GAUGE.cx, cy = LB_GAUGE.cy, r = LB_GAUGE.rTrack) {
   const s = polar(cx, cy, r, 180)
-  const endDeg = scoreToNeedleDeg(score)
+  const endDeg = valueToNeedleDeg(value, max)
   const e = polar(cx, cy, r, endDeg)
   const sweep = 180 - endDeg
   if (sweep < 0.5) return `M ${s.x.toFixed(2)} ${s.y.toFixed(2)}`
-  const large = sweep > 180 ? 1 : 0
-  return `M ${s.x.toFixed(2)} ${s.y.toFixed(2)} A ${r} ${r} 0 ${large} 1 ${e.x.toFixed(2)} ${e.y.toFixed(2)}`
+  return `M ${s.x.toFixed(2)} ${s.y.toFixed(2)} A ${r} ${r} 0 0 1 ${e.x.toFixed(2)} ${e.y.toFixed(2)}`
+}
+
+/** @deprecated use valueArcPath */
+export function scoreArcPath(score, cx = LB_GAUGE.cx, cy = LB_GAUGE.cy, r = LB_GAUGE.rTrack) {
+  return valueArcPath(score, 100, cx, cy, r)
+}
+
+/** @deprecated use valueToNeedleDeg(score, 100) */
+export function scoreToNeedleDeg(score) {
+  return valueToNeedleDeg(score, 100)
+}
+
+function _gaugeSvgBody({
+  uid, cx, cy, value, max, zone, title, valueLabel, legend,
+  r = LB_DUAL.r, needleLen = LB_DUAL.needleLen, strokeW = LB_DUAL.strokeW,
+}) {
+  const colors = LB_ZONE_COLORS[zone] || LB_ZONE_COLORS.ok
+  const bg = semicirclePath(cx, cy, r)
+  const fill = valueArcPath(value, max, cx, cy, r)
+  const tip = needleTipPoint(value, max, cx, cy, needleLen)
+  const track = '#D8DCE4'
+  const fg = '#1A2030'
+  const muted = '#6A7388'
+  const redFill = zone === 'red'
+  const valueY = cy - Math.round(r * 0.28)
+  return `
+  <defs>
+    <linearGradient id="${uid}" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="${redFill ? '#EF5350' : '#3B82F6'}"/>
+      <stop offset="55%" stop-color="${redFill ? '#E53935' : '#14B8A6'}"/>
+      <stop offset="100%" stop-color="${colors.fillEnd}"/>
+    </linearGradient>
+  </defs>
+  <text x="${cx}" y="18" text-anchor="middle" fill="${fg}" font-family="system-ui,sans-serif" font-size="10" font-weight="600">${title}</text>
+  <path d="${bg}" fill="none" stroke="${track}" stroke-width="${strokeW}" stroke-linecap="round"/>
+  <path d="${fill}" fill="none" stroke="url(#${uid})" stroke-width="${strokeW}" stroke-linecap="round"/>
+  <line x1="${cx}" y1="${cy}" x2="${tip.x.toFixed(2)}" y2="${tip.y.toFixed(2)}" stroke="${fg}" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="${cx}" cy="${cy}" r="3.5" fill="#FFFFFF" stroke="${fg}" stroke-width="1.75"/>
+  <text x="${cx}" y="${valueY}" text-anchor="middle" fill="${colors.accent}" font-family="system-ui,sans-serif" font-size="12" font-weight="700">${valueLabel}</text>
+  <text x="${cx}" y="${cy + 16}" text-anchor="middle" fill="${muted}" font-family="system-ui,sans-serif" font-size="9">${legend}</text>`
 }
 
 /**
- * Compact SVG for HTML export (light, print-friendly).
- * @param {{ score: number, gini: number, stddev: number, amber?: boolean, zone?: string }} metrics
+ * Dual Score + σ gauges in one SVG (panel export / HTML).
+ * @param {{ score: number, gini: number, stddev: number, zone?: string }} metrics
  * @param {{ width?: number }} [opts]
  */
 export function loadBalanceGaugeSvg(metrics, opts = {}) {
   const score = Math.max(0, Math.min(100, Number(metrics?.score) || 0))
   const gini = Number(metrics?.gini) || 0
   const stddev = Number(metrics?.stddev) || 0
-  const zone = metrics?.zone || classifyLoadBalance(score, stddev)
-  const colors = LB_ZONE_COLORS[zone] || LB_ZONE_COLORS.ok
-  const width = Math.max(200, Number(opts.width) || 280)
-  const g = LB_GAUGE
-  const h = Math.round(width * g.viewH / g.viewW)
+  const scoreZone = score < LB_SCORE_WARN ? 'red' : 'ok'
+  const sigmaZone = classifySigma(stddev)
+  const overall = metrics?.zone || classifyLoadBalance(score, stddev)
+  const width = Math.max(220, Number(opts.width) || 300)
+  const d = LB_DUAL
+  const h = Math.round(width * d.viewH / d.viewW)
   const uid = `lb${Math.abs(Math.round(score * 17 + stddev * 13))}`
-  const bg = semicirclePath(g.cx, g.cy, g.rBg)
-  const fill = scoreArcPath(score)
-  const tip = needleTipPoint(score)
-  const track = '#D8DCE4'
-  const fg = '#1A2030'
-  const muted = '#6A7388'
+  const sigmaMax = LB_SIGMA_SCALE
+  const border = overall === 'red' ? LB_ZONE_COLORS.red.chipBd
+    : (overall === 'amber' ? LB_ZONE_COLORS.amber.chipBd : '#E2E5EC')
+
+  const left = _gaugeSvgBody({
+    uid: `${uid}S`,
+    cx: d.leftCx,
+    cy: d.cy,
+    value: score,
+    max: 100,
+    zone: scoreZone,
+    title: 'Load Balance Score',
+    valueLabel: `${score.toFixed(0)}%`,
+    legend: '100 = balanced · 0 = overload',
+  })
+  const right = _gaugeSvgBody({
+    uid: `${uid}D`,
+    cx: d.rightCx,
+    cy: d.cy,
+    value: Math.min(stddev, sigmaMax),
+    max: sigmaMax,
+    zone: sigmaZone,
+    title: 'Std Deviation (σ)',
+    valueLabel: `${stddev.toFixed(1)}%`,
+    legend: `0–${sigmaMax}% · warn &gt; ${LB_SIGMA_WARN}%`,
+  })
 
   let chip = ''
-  if (zone === 'red') {
-    chip = `<rect x="188" y="16" width="80" height="22" rx="6" fill="${colors.chipBg}" stroke="${colors.chipBd}"/>
-  <text x="228" y="31" text-anchor="middle" fill="${colors.chipFg}" font-family="system-ui,sans-serif" font-size="11" font-weight="700">Unbalanced</text>`
-  } else if (zone === 'amber') {
-    chip = `<rect x="210" y="16" width="58" height="22" rx="6" fill="${colors.chipBg}" stroke="${colors.chipBd}"/>
-  <text x="239" y="31" text-anchor="middle" fill="${colors.chipFg}" font-family="system-ui,sans-serif" font-size="11" font-weight="700">σ &gt; 30%</text>`
+  if (overall === 'red') {
+    chip = `<rect x="210" y="6" width="80" height="16" rx="8" fill="${LB_ZONE_COLORS.red.chipBg}" stroke="${LB_ZONE_COLORS.red.chipBd}"/>
+  <text x="250" y="17" text-anchor="middle" fill="${LB_ZONE_COLORS.red.chipFg}" font-family="system-ui,sans-serif" font-size="9" font-weight="700">Unbalanced</text>`
+  } else if (overall === 'amber') {
+    chip = `<rect x="228" y="6" width="62" height="16" rx="8" fill="${LB_ZONE_COLORS.amber.chipBg}" stroke="${LB_ZONE_COLORS.amber.chipBd}"/>
+  <text x="259" y="17" text-anchor="middle" fill="${LB_ZONE_COLORS.amber.chipFg}" font-family="system-ui,sans-serif" font-size="9" font-weight="700">σ &gt; 30%</text>`
   }
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${g.viewW} ${g.viewH}" width="${width}" height="${h}" role="img" aria-label="Load Balance Score ${score.toFixed(0)} percent, ${zone}">
-  <defs>
-    <linearGradient id="${uid}Grad" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="${zone === 'red' ? '#EF5350' : '#3B82F6'}"/>
-      <stop offset="55%" stop-color="${zone === 'red' ? '#E53935' : '#14B8A6'}"/>
-      <stop offset="100%" stop-color="${colors.fillEnd}"/>
-    </linearGradient>
-  </defs>
-  <rect width="100%" height="100%" rx="8" fill="#F7F8FA" stroke="${zone === 'red' ? colors.chipBd : '#E2E5EC'}"/>
-  <path d="${bg}" fill="none" stroke="${track}" stroke-width="12" stroke-linecap="round"/>
-  <path d="${fill}" fill="none" stroke="url(#${uid}Grad)" stroke-width="12" stroke-linecap="round"/>
-  <line x1="${g.cx}" y1="${g.cy}" x2="${tip.x.toFixed(2)}" y2="${tip.y.toFixed(2)}" stroke="${fg}" stroke-width="2.25" stroke-linecap="round"/>
-  <circle cx="${g.cx}" cy="${g.cy}" r="5" fill="#FFFFFF" stroke="${fg}" stroke-width="2"/>
-  <text x="${g.cx}" y="${g.scoreY}" text-anchor="middle" fill="${colors.accent}" font-family="system-ui,sans-serif" font-size="28" font-weight="700">${score.toFixed(0)}%</text>
-  <text x="${g.cx}" y="${g.labelY}" text-anchor="middle" fill="${muted}" font-family="system-ui,sans-serif" font-size="11">Load Balance Score</text>
-  <text x="${g.cx}" y="142" text-anchor="middle" fill="${muted}" font-family="ui-monospace,monospace" font-size="10">100 × (1 − Gini) · σ=${stddev.toFixed(1)}% · G=${gini.toFixed(3)}</text>
-  <text x="${g.cx}" y="158" text-anchor="middle" fill="${muted}" font-family="system-ui,sans-serif" font-size="10">100 = perfect balance · 0 = single-core overload</text>
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${d.viewW} ${d.viewH}" width="${width}" height="${h}" role="img" aria-label="Load Balance Score ${score.toFixed(0)} percent, sigma ${stddev.toFixed(1)} percent">
+  <rect width="100%" height="100%" rx="8" fill="#F7F8FA" stroke="${border}"/>
+  ${left}
+  ${right}
+  <text x="${d.viewW / 2}" y="${d.viewH - 8}" text-anchor="middle" fill="#6A7388" font-family="ui-monospace,monospace" font-size="9">G=${gini.toFixed(3)} · Score = 100 × (1 − Gini)</text>
   ${chip}
 </svg>`
 }
 
 /**
- * HTML snippet with the gauge as an embedded SVG data-URI &lt;img&gt;.
- * Prefer this for Export HTML so the chart is a self-contained image.
- *
- * @param {{ score: number, gini: number, stddev: number, amber?: boolean, zone?: string }} metrics
+ * HTML snippet with dual gauges as an embedded SVG data-URI &lt;img&gt;.
+ * @param {{ score: number, gini: number, stddev: number, zone?: string }} metrics
  * @param {{ width?: number }} [opts]
- * @returns {string}
  */
 export function loadBalanceGaugeImgHtml(metrics, opts = {}) {
-  const width = Math.max(200, Number(opts.width) || 280)
+  const width = Math.max(220, Number(opts.width) || 300)
   const svg = loadBalanceGaugeSvg(metrics, { width })
   const score = Math.max(0, Math.min(100, Number(metrics?.score) || 0))
-  const zone = metrics?.zone || classifyLoadBalance(score, Number(metrics?.stddev) || 0)
-  // encodeURIComponent keeps the SVG readable in View Source; browsers accept it for img src.
+  const stddev = Number(metrics?.stddev) || 0
+  const zone = metrics?.zone || classifyLoadBalance(score, stddev)
   const dataUri = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
-  const h = Math.round(width * LB_GAUGE.viewH / LB_GAUGE.viewW)
+  const h = Math.round(width * LB_DUAL.viewH / LB_DUAL.viewW)
   return (
     `<div class="lb-gauge-embed" style="margin:8px 0 12px;">`
     + `<img src="${dataUri}" width="${width}" height="${h}" `
-    + `alt="Load Balance Score ${score.toFixed(0)}% (${zone})" `
+    + `alt="Load Balance Score ${score.toFixed(0)}%, σ=${stddev.toFixed(1)}% (${zone})" `
     + `style="display:block;max-width:100%;height:auto;border:0;"/>`
     + `</div>`
   )

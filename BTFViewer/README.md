@@ -538,7 +538,7 @@ On Desktop, macOS Retina uses pixel-based font sizing by default; override with 
 | CPU load row height | Height of each CPU load graph row (16–120 px; default **30**) |
 | STI row height | Collapsed STI channel row height (12–60 px; default **18**) |
 | STI waveform height | Expanded tag-event waveform row height (40–300 px; default **80**) |
-| STI waveform style | Y-axis scale for expanded tag waveform rows: **Linear** (default) or **Log₂**. Toggle with the **Log₂** toolbar icon (Web: icon-only; hover for the label). |
+| STI waveform style | Y-axis scale for expanded tag waveform rows: **Linear** (default) or **Log₂**. Toggle with the **Log₂** toolbar icon (hover for the label). |
 
 ### Analysis
 
@@ -583,7 +583,7 @@ Existing saved settings (`btf_viewer.rc` or browser `localStorage`) are not over
 
 Browser-based viewer (Vue 3 + Vite). Feature parity with the desktop app for timeline, statistics, and trace compare; rendering uses Web Workers, PixiJS, and optional WASM acceleration.
 
-**Toolbar:** icon-only controls (hover for tooltips) so the bar fits narrow windows; overflow **⋯** holds controls that still do not fit.
+**Toolbar (Web):** hybrid controls — most actions stay as icons; ambiguous pairs use short labels / segmented controls (**Task | Core**, **→ | ↓** orientation, **Open** / **Demo** / **Analysis** labels on wide bars). Labels hide under ~980px; overflow **⋯** holds groups that still do not fit. Desktop keeps its existing chrome.
 
 **No CLI** — scripted export uses desktop `btf_viewer.py` (`report`, `compare`, `migrations`, `snapshot`, …).
 
@@ -693,7 +693,7 @@ The right side uses three tabs — **Statistics**, **Marks**, and **Find** — w
 - **Resize** — drag the vertical bar between the timeline and the right panel to change panel width.
 - **Legend (Desktop)** — separate dock above the Statistics/Marks/Find panel; toggle via **Settings → Display → Legend panel**.
 - **Legend (Web)** — section inside the **Marks** tab when **Legend panel** is enabled in Settings.
-- **Migration heatmap** — toolbar **Heatmap** button (multi-core traces only). ≤ 16 cores: pair grid → task grid → timeline zoom/filter. > 16 cores: core×core matrix (row click) → outgoing pairs → tasks. **Export PNG / SVG** of the current drill level from the heatmap dialog. Toolbar **All tasks** appears while filtered. See [Migration heatmap](#migration-heatmap).
+- **Migration heatmap** — toolbar **Heatmap** button (multi-core traces only). ≤ 16 cores: pair grid → task grid → timeline zoom/filter. > 16 cores: core×core matrix (row click) → outgoing pairs → tasks. **Export PNG / SVG** of the current drill level from the heatmap dialog. Toolbar **All** appears while filtered. See [Migration heatmap](#migration-heatmap).
 - **Migration chord diagram** — toolbar **Chord** button (multi-core traces only). Circular diagram with one arc per core; hover an arc to highlight its migrations and dim the rest. **Show: All Migrations / Show: Bounce Only** toggle restricts it to lock-bounce migrations. **Export PNG / SVG** of the current view. See [Migration chord diagram](#migration-chord-diagram).
 - **Analysis Findings** — toolbar **Analysis** button opens heuristic findings for the current Statistics scope; **Save as text…** exports a `.txt` copy. See [Analysis Findings](#analysis-findings).
 
@@ -758,7 +758,7 @@ Below the scope checkbox, a **scheduling summary** line shows context-switch cou
 
 | Section | What it shows |
 |---------|----------------|
-| **Core Utilisation** | Active (non-IDLE, non-TICK) CPU time per core as a percentage; **Load Balance Score** gauge (green / amber / red zones) |
+| **Core Utilisation** | Active (non-IDLE, non-TICK) CPU time per core as a percentage; side-by-side **Load Balance Score** + **σ** gauges (green / amber / red zones) |
 | **Top Tasks by CPU** | Top 10 worker tasks ranked by total CPU time |
 | **Trace Health (TICK)** | STI TICK period regularity, **tick / tickless mode detection**, large gaps, missed-tick estimate, and **Tick Distribution** chart (Desktop + Web: whenever ≥ 2 ticks in scope) |
 | **Core Migrations** | Per-task cross-core migration stats (see [Core migration analysis](#core-migration-analysis)) |
@@ -907,7 +907,7 @@ It shows (in panel order):
 
 - **Summary** — span, task/segment/STI counts (scoped when the checkbox is on)
 - **Scheduling summary** — context-switch count and average/max core gap between consecutive slices on each core
-- **Core utilisation** — percentage of active (non-IDLE, non-TICK) CPU time per core; **Load Balance Score** gauge at the top (score, σ, Gini; red / amber / green zones) (collapsible)
+- **Core utilisation** — percentage of active (non-IDLE, non-TICK) CPU time per core; side-by-side **Load Balance Score** and **σ** gauges at the top (Gini; red / amber / green zones) (collapsible)
 - **Core Time Breakdown** — per-core time budget split into **Active** (non-IDLE, non-TICK tasks), **Idle** (IDLE task), **Tick** (TICK handler), and **Gap** (unaccounted span between segments — scheduler latency / ISR overhead) expressed as percentages (collapsible)
 - **Top tasks by CPU** — ranked list of worker tasks by total CPU time consumed (collapsible)
 - **Trace health (TICK)** — tick period regularity, **tick / tickless mode detection** (coefficient of variation of tick intervals), large gaps, missed-tick estimate, and **Tick Distribution…** chart button (bar-chart icon beside the mode badge when ≥ 2 ticks in scope) (collapsible)
@@ -971,21 +971,21 @@ Large **max core gap** on a core that should be busy suggests starvation, tickle
 U_{\text{core}} = \frac{T_{\text{active,core}}}{T_{\text{scope}}} \times 100
 ```
 
-When two or more cores are present, a **Load Balance Score** gauge is shown at the top of the section:
+When two or more cores are present, two gauges are shown side by side at the top of the section — **Load Balance Score** and **Std Deviation (σ)**:
 
 ```math
 \text{Score} = 100\% \times (1 - G), \quad G = \text{Gini coefficient of } \{U_{\text{core}}\}
 ```
 
-The gauge needle shows the score (100 = perfect balance, 0 = single-core overload). Zones match toolbar **Analysis**:
+σ is the population standard deviation of `{U_core}`. The Score needle uses a 0–100 % scale (100 = perfect balance, 0 = single-core overload); the σ needle uses a 0–60 % scale with the warn threshold at mid-scale. Zones match toolbar **Analysis**:
 
 | Zone | Condition | UI |
 |------|-----------|-----|
-| **Red** | Score &lt; 70 % | **Unbalanced** chip + alert (red zone) |
-| **Amber** | Score ≥ 70 % and σ &gt; 30 % | **σ &gt; 30%** chip |
-| **OK** (green) | Score ≥ 70 % and σ ≤ 30 % | Green score |
+| **Red** | Score &lt; 70 % | **Unbalanced** chip + alert (red zone); Score gauge red |
+| **Amber** | Score ≥ 70 % and σ &gt; 30 % | **σ &gt; 30%** chip; σ gauge amber (red if σ &gt; 50 %) |
+| **OK** (green) | Score ≥ 70 % and σ ≤ 30 % | Green needles |
 
-Toolbar **Analysis** also warns when Score &lt; 70 % *or* σ &gt; 30 %, and only describes cores as “reasonably balanced” when Score ≥ 85 % and σ ≤ 30 %. **Export HTML** embeds the gauge as a self-contained SVG `<img>` (data URI) under Core Utilisation; **Export CSV** includes the score, σ, and G values.
+Toolbar **Analysis** also warns when Score &lt; 70 % *or* σ &gt; 30 %, and only describes cores as “reasonably balanced” when Score ≥ 85 % and σ ≤ 30 %. **Export HTML** embeds both gauges as a self-contained SVG `<img>` (data URI) under Core Utilisation; **Export CSV** includes the score, σ, and G values.
 
 **What it tells you:** Imbalanced utilisation across cores may indicate poor affinity, lock pinning, or workload placement issues — cross-check with **Core Migrations**, the migration heatmap, and toolbar **Analysis**.
 

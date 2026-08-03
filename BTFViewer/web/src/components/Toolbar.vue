@@ -3,7 +3,7 @@
     ref="toolbarEl"
     class="toolbar"
   >
-    <!-- App name / About trigger -->
+    <!-- Brand / About -->
     <button
       class="app-name-btn"
       title="About RTOS BTF Viewer"
@@ -15,7 +15,7 @@
         height="16"
         viewBox="0 0 72 72"
         xmlns="http://www.w3.org/2000/svg"
-        style="display:inline-block;vertical-align:middle"
+        aria-hidden="true"
       >
         <rect
           x="3"
@@ -82,7 +82,6 @@
         :ref="el => setGroupRef('g1', el)"
         class="tb-group"
       >
-        <!-- File open: label+input on file:// (last folder); FSA on http(s)/localhost -->
         <label
           v-if="!useFsaOpen"
           class="tb-btn file-btn"
@@ -93,9 +92,11 @@
             width="16"
             height="16"
             fill="currentColor"
+            aria-hidden="true"
           >
             <path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h2.764c.958 0 1.76.56 2.311 1.184C7.985 3.648 8.48 4 9 4h4.5A1.5 1.5 0 0 1 15 5.5v7a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5v-9z" />
           </svg>
+          <span class="tb-label">Open</span>
           <input
             type="file"
             :accept="BTF_FILE_ACCEPT"
@@ -105,7 +106,7 @@
         </label>
         <button
           v-else
-          class="tb-btn file-btn"
+          class="tb-btn"
           title="Open BTF file"
           @click="onOpenClick"
         >
@@ -114,11 +115,12 @@
             width="16"
             height="16"
             fill="currentColor"
+            aria-hidden="true"
           >
             <path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h2.764c.958 0 1.76.56 2.311 1.184C7.985 3.648 8.48 4 9 4h4.5A1.5 1.5 0 0 1 15 5.5v7a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5v-9z" />
           </svg>
+          <span class="tb-label">Open</span>
         </button>
-
         <button
           class="tb-btn"
           title="Load the bundled demo trace"
@@ -129,11 +131,12 @@
             width="16"
             height="16"
             fill="currentColor"
+            aria-hidden="true"
           >
             <path d="M3 2.5A1.5 1.5 0 0 1 4.5 1h7A1.5 1.5 0 0 1 13 2.5v11a1.5 1.5 0 0 1-1.5 1.5h-7A1.5 1.5 0 0 1 3 13.5v-11zm3 2.354v6.292L11 8 6 4.854z" />
           </svg>
+          <span class="tb-label">Demo</span>
         </button>
-
         <div class="tb-sep" />
       </div>
     </Teleport>
@@ -146,41 +149,32 @@
         :ref="el => setGroupRef('g2', el)"
         class="tb-group"
       >
-        <!-- View mode -->
-        <label
-          class="tb-btn"
-          :class="{ active: modelValue.viewMode === 'task' }"
-          title="Task view"
-          @click="emit('update:modelValue', { ...modelValue, viewMode: 'task' })"
+        <div
+          class="tb-segment"
+          role="group"
+          aria-label="View mode"
         >
-          <svg
-            viewBox="0 0 16 16"
-            width="16"
-            height="16"
-            fill="currentColor"
+          <button
+            type="button"
+            class="tb-seg"
+            :class="{ active: modelValue.viewMode === 'task' }"
+            title="Task view"
+            @click="emit('update:modelValue', { ...modelValue, viewMode: 'task' })"
           >
-            <path d="M1 2.5A1.5 1.5 0 0 1 2.5 1h11A1.5 1.5 0 0 1 15 2.5v11a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 13.5v-11zM4 5.5h8v1H4v-1zm0 3h8v1H4v-1zm0 3h5v1H4v-1z" />
-          </svg>
-        </label>
-        <label
-          class="tb-btn"
-          :class="{ active: modelValue.viewMode === 'core' }"
-          title="Core view"
-          @click="emit('update:modelValue', { ...modelValue, viewMode: 'core' })"
-        >
-          <svg
-            viewBox="0 0 16 16"
-            width="16"
-            height="16"
-            fill="currentColor"
+            Task
+          </button>
+          <button
+            type="button"
+            class="tb-seg"
+            :class="{ active: modelValue.viewMode === 'core' }"
+            title="Core view"
+            @click="emit('update:modelValue', { ...modelValue, viewMode: 'core' })"
           >
-            <path d="M5 1v2H3a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2v2h1v-2h4v2h1v-2h2a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2h-2V1h-1v2H6V1H5zm-2 4h10v6H3V5zm2 1v4h6V6H5z" />
-          </svg>
-        </label>
+            Core
+          </button>
+        </div>
 
-        <!-- Expand / Collapse all cores (core mode only) -->
         <template v-if="modelValue.viewMode === 'core'">
-          <div class="tb-sep" />
           <button
             class="tb-btn"
             title="Expand all cores"
@@ -191,6 +185,7 @@
               width="16"
               height="16"
               fill="currentColor"
+              aria-hidden="true"
             >
               <path d="M8 2v5H3v1h5v5h1V8h5V7H9V2H8z" />
             </svg>
@@ -205,12 +200,12 @@
               width="16"
               height="16"
               fill="currentColor"
+              aria-hidden="true"
             >
               <path d="M2 7h12v2H2z" />
             </svg>
           </button>
         </template>
-
         <div class="tb-sep" />
       </div>
     </Teleport>
@@ -234,6 +229,7 @@
             width="16"
             height="16"
             fill="currentColor"
+            aria-hidden="true"
           >
             <path d="M1 11a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v3H1v-3zm5-4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v7H6V7zm5-3a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v10h-4V4z" />
           </svg>
@@ -251,6 +247,7 @@
             width="16"
             height="16"
             fill="currentColor"
+            aria-hidden="true"
           >
             <path d="M1 1h4v4H1V1zm5 0h4v4H6V1zm5 0h4v4h-4V1zM1 6h4v4H1V6zm5 0h4v4H6V6zm5 0h4v4h-4V6zM1 11h4v4H1v-4zm5 0h4v4H6v-4zm5 0h4v4h-4v-4z" />
           </svg>
@@ -268,6 +265,7 @@
             width="16"
             height="16"
             fill="currentColor"
+            aria-hidden="true"
           >
             <circle
               cx="8"
@@ -304,9 +302,11 @@
             width="16"
             height="16"
             fill="currentColor"
+            aria-hidden="true"
           >
             <path d="M2 1.5A.5.5 0 0 1 2.5 1h9A1.5 1.5 0 0 1 13 2.5v11a1.5 1.5 0 0 1-1.5 1.5h-9A.5.5 0 0 1 2 14.5v-13zM3 2v12h8.5a.5.5 0 0 0 .5-.5v-11a.5.5 0 0 0-.5-.5H3zm1.5 2h6v1h-6V4zm0 2.5h6v1h-6v-1zm0 2.5h4v1h-4V9z" />
           </svg>
+          <span class="tb-label">Analysis</span>
         </button>
 
         <button
@@ -320,11 +320,12 @@
             width="16"
             height="16"
             fill="currentColor"
+            aria-hidden="true"
           >
             <path d="M2 3h12v1H2V3zm0 4h12v1H2V7zm0 4h12v1H2v-1zm0 4h8v1H2v-1z" />
           </svg>
+          <span class="tb-label">All</span>
         </button>
-
         <div class="tb-sep" />
       </div>
     </Teleport>
@@ -337,21 +338,6 @@
         :ref="el => setGroupRef('g4', el)"
         class="tb-group"
       >
-        <!-- Zoom controls -->
-        <button
-          class="tb-btn"
-          title="Zoom in (Ctrl+scroll)"
-          @click="emit('zoom', 0.7)"
-        >
-          <svg
-            viewBox="0 0 16 16"
-            width="16"
-            height="16"
-            fill="currentColor"
-          >
-            <path d="M6.5 1a5.5 5.5 0 1 0 3.89 9.4l3.4 3.4.7-.7-3.4-3.4A5.5 5.5 0 0 0 6.5 1zm0 1a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9zM6 5v1.5H4.5v1H6V9h1V7.5h1.5v-1H7V5H6z" />
-          </svg>
-        </button>
         <button
           class="tb-btn"
           title="Zoom out (Ctrl+scroll)"
@@ -362,6 +348,7 @@
             width="16"
             height="16"
             fill="currentColor"
+            aria-hidden="true"
           >
             <path d="M6.5 1a5.5 5.5 0 1 0 3.89 9.4l3.4 3.4.7-.7-3.4-3.4A5.5 5.5 0 0 0 6.5 1zm0 1a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9zM4 6h5v1H4V6z" />
           </svg>
@@ -376,13 +363,29 @@
             width="16"
             height="16"
             fill="currentColor"
+            aria-hidden="true"
           >
             <path d="M1.5 1h5v1h-4v4h-1V1.5a.5.5 0 0 1 .5-.5zm13 0a.5.5 0 0 1 .5.5V6h-1V2h-4V1h4.5zM1 10h1v4h4v1H1.5a.5.5 0 0 1-.5-.5V10zm14 0v4.5a.5.5 0 0 1-.5.5H10v-1h4v-4h1z" />
           </svg>
         </button>
         <button
-          v-if="traceInfo"
           class="tb-btn"
+          title="Zoom in (Ctrl+scroll)"
+          @click="emit('zoom', 0.7)"
+        >
+          <svg
+            viewBox="0 0 16 16"
+            width="16"
+            height="16"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <path d="M6.5 1a5.5 5.5 0 1 0 3.89 9.4l3.4 3.4.7-.7-3.4-3.4A5.5 5.5 0 0 0 6.5 1zm0 1a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9zM6 5v1.5H4.5v1H6V9h1V7.5h1.5v-1H7V5H6z" />
+          </svg>
+        </button>
+        <button
+          v-if="traceInfo"
+          class="tb-btn tb-btn-text"
           :title="zoom1to1Title"
           @click="emit('zoom1to1')"
         >
@@ -399,6 +402,7 @@
             width="16"
             height="16"
             fill="currentColor"
+            aria-hidden="true"
           >
             <path d="M2 2h4v1H3v3H2V2zm8 0h4v4h-1V3h-3V2zM2 10h1v3h3v1H2v-4zm11 0h1v4h-4v-1h3v-3zM5 5h6v6H5V5zm1 1v4h4V6H6z" />
           </svg>
@@ -414,11 +418,11 @@
             width="16"
             height="16"
             fill="currentColor"
+            aria-hidden="true"
           >
             <path d="M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398h-.001l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.85-3.85zm-5.242 1.1a5.5 5.5 0 1 1 0-11 5.5 5.5 0 0 1 0 11z" />
           </svg>
         </button>
-
         <div class="tb-sep" />
       </div>
     </Teleport>
@@ -442,11 +446,11 @@
             width="16"
             height="16"
             fill="currentColor"
+            aria-hidden="true"
           >
             <path d="M3 3.5A1.5 1.5 0 0 1 4.5 2h7A1.5 1.5 0 0 1 13 3.5V5h1a1 1 0 0 1 1 1v6.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5V6a1 1 0 0 1 1-1h1V3.5zm1 0V5h8V3.5a.5.5 0 0 0-.5-.5h-7a.5.5 0 0 0-.5.5zM8 7a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z" />
           </svg>
         </button>
-
         <button
           v-if="traceInfo"
           class="tb-btn"
@@ -458,11 +462,11 @@
             width="16"
             height="16"
             fill="currentColor"
+            aria-hidden="true"
           >
             <path d="M7.5 1a.5.5 0 0 1 .5.5v8.793l2.146-2.147a.5.5 0 0 1 .708.708l-3 3a.5.5 0 0 1-.708 0l-3-3a.5.5 0 0 1 .708-.708L7 10.293V1.5a.5.5 0 0 1 .5-.5zM2.5 13a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5z" />
           </svg>
         </button>
-
         <button
           v-if="traceInfo"
           class="tb-btn"
@@ -474,12 +478,15 @@
             width="16"
             height="16"
             fill="currentColor"
+            aria-hidden="true"
           >
             <path d="M2.5 2A1.5 1.5 0 0 0 1 3.5v9A1.5 1.5 0 0 0 2.5 14h11a1.5 1.5 0 0 0 1.5-1.5v-9A1.5 1.5 0 0 0 13.5 2h-11zm0 1h11a.5.5 0 0 1 .5.5V5H2V3.5a.5.5 0 0 1 .5-.5zM2 6h12v6.5a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5V6zm2 1.5v1h2v-1H4zm3 0v1h2v-1H7zm3 0v1h2v-1h-2zM4 10v1h5v-1H4z" />
           </svg>
         </button>
-
-        <div class="tb-sep" />
+        <div
+          v-if="traceInfo"
+          class="tb-sep"
+        />
       </div>
     </Teleport>
 
@@ -491,50 +498,30 @@
         :ref="el => setGroupRef('g6', el)"
         class="tb-group"
       >
-        <!-- Orientation toggle -->
-        <label
-          class="tb-btn"
-          :class="{ active: (modelValue.orientation || 'h') === 'h' }"
-          title="Horizontal timeline (time → right)"
-          @click="emit('update:modelValue', { ...modelValue, orientation: 'h' })"
+        <div
+          class="tb-segment tb-segment-orient"
+          role="group"
+          aria-label="Timeline orientation"
         >
-          <svg
-            viewBox="0 0 16 16"
-            width="16"
-            height="16"
-            fill="currentColor"
+          <button
+            type="button"
+            class="tb-seg"
+            :class="{ active: (modelValue.orientation || 'h') === 'h' }"
+            title="Horizontal timeline (time → right)"
+            @click="emit('update:modelValue', { ...modelValue, orientation: 'h' })"
           >
-            <path
-              d="M1 8h14M11 5l3 3-3 3"
-              stroke="currentColor"
-              stroke-width="1.5"
-              fill="none"
-              stroke-linecap="round"
-            />
-          </svg>
-        </label>
-        <label
-          class="tb-btn"
-          :class="{ active: (modelValue.orientation || 'h') === 'v' }"
-          title="Vertical timeline (time ↓ down)"
-          @click="emit('update:modelValue', { ...modelValue, orientation: 'v' })"
-        >
-          <svg
-            viewBox="0 0 16 16"
-            width="16"
-            height="16"
-            fill="currentColor"
+            →
+          </button>
+          <button
+            type="button"
+            class="tb-seg"
+            :class="{ active: (modelValue.orientation || 'h') === 'v' }"
+            title="Vertical timeline (time ↓ down)"
+            @click="emit('update:modelValue', { ...modelValue, orientation: 'v' })"
           >
-            <path
-              d="M8 1v14M5 11l3 3 3-3"
-              stroke="currentColor"
-              stroke-width="1.5"
-              fill="none"
-              stroke-linecap="round"
-            />
-          </svg>
-        </label>
-
+            ↓
+          </button>
+        </div>
         <div class="tb-sep" />
       </div>
     </Teleport>
@@ -547,7 +534,6 @@
         :ref="el => setGroupRef('g7', el)"
         class="tb-group"
       >
-        <!-- Grid toggle -->
         <label
           class="tb-btn"
           :class="{ active: modelValue.showGrid }"
@@ -559,11 +545,11 @@
             width="16"
             height="16"
             fill="currentColor"
+            aria-hidden="true"
           >
             <path d="M1 4h14v1H1zm0 4h14v1H1zm0 4h14v1H1zM4 1v14H5V1zm4 0v14H9V1zm4 0v14h1V1z" />
           </svg>
         </label>
-
         <label
           class="tb-btn"
           :class="{ active: modelValue.showSti !== false }"
@@ -575,11 +561,18 @@
             width="16"
             height="16"
             fill="currentColor"
+            aria-hidden="true"
           >
-            <path d="M1 8h2l1.5-4L7 12l2-6 1.5 3H15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+            <path
+              d="M1 8h2l1.5-4L7 12l2-6 1.5 3H15"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.4"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
           </svg>
         </label>
-
         <label
           class="tb-btn"
           :class="{ active: modelValue.stiLogScale }"
@@ -591,12 +584,11 @@
             width="16"
             height="16"
             fill="currentColor"
+            aria-hidden="true"
           >
-            <path d="M2 13V3h1.2v8.5H14V13H2zm3.2-2.2c0-2.4 1.5-4.2 3.8-4.2 1.3 0 2.3.5 3 1.4l-.9.7c-.5-.6-1.1-.9-1.9-.9-1.4 0-2.5 1.2-2.5 3s1.1 3 2.5 3c.8 0 1.4-.3 1.9-.9l.9.7c-.7.9-1.7 1.4-3 1.4-2.3 0-3.8-1.8-3.8-4.2z"/>
+            <path d="M2 13V3h1.2v8.5H14V13H2zm3.2-2.2c0-2.4 1.5-4.2 3.8-4.2 1.3 0 2.3.5 3 1.4l-.9.7c-.5-.6-1.1-.9-1.9-.9-1.4 0-2.5 1.2-2.5 3s1.1 3 2.5 3c.8 0 1.4-.3 1.9-.9l.9.7c-.7.9-1.7 1.4-3 1.4-2.3 0-3.8-1.8-3.8-4.2z" />
           </svg>
         </label>
-
-        <!-- Dark mode toggle -->
         <label
           class="tb-btn"
           :class="{ active: modelValue.darkMode }"
@@ -608,6 +600,7 @@
             width="16"
             height="16"
             fill="currentColor"
+            aria-hidden="true"
           >
             <path d="M6 .278a.768.768 0 0 1 .08.858 7.208 7.208 0 0 0-.878 3.46c0 4.021 3.278 7.277 7.318 7.277.527 0 1.04-.055 1.533-.16a.787.787 0 0 1 .81.316.733.733 0 0 1-.031.893A8.349 8.349 0 0 1 8.344 16C3.734 16 0 12.286 0 7.71 0 4.266 2.114 1.312 5.124.06A.752.752 0 0 1 6 .278z" />
           </svg>
@@ -635,37 +628,6 @@
       />
     </div>
 
-    <button
-      class="tb-btn"
-      title="Settings (Ctrl+,)"
-      @click="emit('showSettings')"
-    >
-      <svg
-        viewBox="0 0 16 16"
-        width="16"
-        height="16"
-        fill="currentColor"
-      >
-        <path d="M8 4.754a3.246 3.246 0 1 0 0 6.492 3.246 3.246 0 0 0 0-6.492zM5.754 8a2.246 2.246 0 1 1 4.492 0 2.246 2.246 0 0 1-4.492 0z" />
-        <path d="M9.796 1.343c-.527-1.79-3.065-1.79-3.592 0l-.094.319a.873.873 0 0 1-1.255.52l-.292-.16c-1.64-.892-3.433.902-2.54 2.541l.159.292a.873.873 0 0 1-.52 1.255l-.319.094c-1.79.527-1.79 3.065 0 3.592l.319.094a.873.873 0 0 1 .52 1.255l-.16.292c-.892 1.64.901 3.434 2.541 2.54l.292-.159a.873.873 0 0 1 1.255.52l.094.319c.527 1.79 3.065 1.79 3.592 0l.094-.319a.873.873 0 0 1 1.255-.52l.292.16c1.64.893 3.434-.902 2.54-2.541l-.159-.292a.873.873 0 0 1 .52-1.255l.319-.094c1.79-.527 1.79-3.065 0-3.592l-.319-.094a.873.873 0 0 1-.52-1.255l.16-.292c.893-1.64-.902-3.433-2.541-2.54l-.292.159a.873.873 0 0 1-1.255-.52l-.094-.319z" />
-      </svg>
-    </button>
-
-    <button
-      class="tb-btn"
-      title="Help & keyboard shortcuts (?)"
-      @click="emit('showHelp')"
-    >
-      <svg
-        viewBox="0 0 16 16"
-        width="16"
-        height="16"
-        fill="currentColor"
-      >
-        <path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 13A6 6 0 1 1 8 2a6 6 0 0 1 0 12zm0-3.1a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zM8.2 4.2c-1.2 0-2 .8-2.1 1.9h1c.1-.6.5-1 1.1-1 .7 0 1.1.4 1.1 1 0 .4-.2.7-.8 1.1-.8.5-1.3 1-1.3 2v.3h1v-.2c0-.6.3-.9.9-1.3.7-.5 1.2-1 1.2-1.9 0-1.1-.9-1.9-2.1-1.9z" />
-      </svg>
-    </button>
-
     <div class="spacer" />
 
     <span
@@ -686,6 +648,39 @@
         />
       </span>
     </span>
+
+    <button
+      class="tb-btn"
+      title="Settings (Ctrl+,)"
+      @click="emit('showSettings')"
+    >
+      <svg
+        viewBox="0 0 16 16"
+        width="16"
+        height="16"
+        fill="currentColor"
+        aria-hidden="true"
+      >
+        <path d="M8 4.754a3.246 3.246 0 1 0 0 6.492 3.246 3.246 0 0 0 0-6.492zM5.754 8a2.246 2.246 0 1 1 4.492 0 2.246 2.246 0 0 1-4.492 0z" />
+        <path d="M9.796 1.343c-.527-1.79-3.065-1.79-3.592 0l-.094.319a.873.873 0 0 1-1.255.52l-.292-.16c-1.64-.892-3.433.902-2.54 2.541l.159.292a.873.873 0 0 1-.52 1.255l-.319.094c-1.79.527-1.79 3.065 0 3.592l.319.094a.873.873 0 0 1 .52 1.255l-.16.292c-.892 1.64.901 3.434 2.541 2.54l.292-.159a.873.873 0 0 1 1.255.52l.094.319c.527 1.79 3.065 1.79 3.592 0l.094-.319a.873.873 0 0 1 1.255-.52l.292.16c1.64.893 3.434-.902 2.54-2.541l-.159-.292a.873.873 0 0 1 .52-1.255l.319-.094c1.79-.527 1.79-3.065 0-3.592l-.319-.094a.873.873 0 0 1-.52-1.255l.16-.292c.893-1.64-.902-3.433-2.541-2.54l-.292.159a.873.873 0 0 1-1.255-.52l-.094-.319z" />
+      </svg>
+    </button>
+
+    <button
+      class="tb-btn"
+      title="Help & keyboard shortcuts (?)"
+      @click="emit('showHelp')"
+    >
+      <svg
+        viewBox="0 0 16 16"
+        width="16"
+        height="16"
+        fill="currentColor"
+        aria-hidden="true"
+      >
+        <path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 13A6 6 0 1 1 8 2a6 6 0 0 1 0 12zm0-3.1a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zM8.2 4.2c-1.2 0-2 .8-2.1 1.9h1c.1-.6.5-1 1.1-1 .7 0 1.1.4 1.1 1 0 .4-.2.7-.8 1.1-.8.5-1.3 1-1.3 2v.3h1v-.2c0-.6.3-.9.9-1.3.7-.5 1.2-1 1.2-1.9 0-1.1-.9-1.9-2.1-1.9z" />
+      </svg>
+    </button>
   </div>
 </template>
 
@@ -748,10 +743,7 @@ async function onFileChange(e) {
   e.target.value = ''
 }
 
-// ---- Responsive overflow menu ---------------------------------------------
-// When the window is too narrow to fit every button group, groups are hidden
-// from the right (via Teleport into the dropdown panel) until the remaining
-// content fits, leaving the "More" (⋯) button on the right to reveal them.
+// ---- Responsive overflow (groups → ⋯) -------------------------------------
 const toolbarEl = ref(null)
 const overflowBtnEl = ref(null)
 const overflowPanelEl = ref(null)
@@ -770,14 +762,12 @@ async function recomputeOverflow() {
   const toolbar = toolbarEl.value
   if (!toolbar) return
 
-  // Un-hide everything first so group widths reflect their natural (unclipped) size.
   let resetAny = false
   for (const k of GROUP_ORDER) {
     if (overflow[k]) { overflow[k] = false; resetAny = true }
   }
   if (resetAny) await nextTick()
 
-  // Hide groups from the right, one at a time, until the rest fits.
   for (let i = GROUP_ORDER.length - 1; i >= 0; i--) {
     if (toolbar.scrollWidth <= toolbar.clientWidth + 1) break
     overflow[GROUP_ORDER[i]] = true
@@ -816,8 +806,6 @@ onBeforeUnmount(() => {
   document.removeEventListener('click', onDocumentClick, true)
 })
 
-// Content that changes which buttons are rendered (and thus toolbar width)
-// but isn't itself a resize of the toolbar element.
 watch(
   () => [props.modelValue.viewMode, !!props.traceInfo, props.taskFilterActive],
   queueRecompute,
@@ -834,21 +822,24 @@ watch(
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
   user-select: none;
+  container-type: inline-size;
+  container-name: toolbar;
 }
 
 .tb-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 0;
-  padding: 4px 6px;
-  min-width: 28px;
-  min-height: 28px;
+  gap: 5px;
+  padding: 4px 7px;
+  min-width: 30px;
+  min-height: 30px;
   border: 1px solid transparent;
   border-radius: 4px;
   background: transparent;
   color: var(--fg);
   font-size: 12px;
+  font-family: inherit;
   cursor: pointer;
   white-space: nowrap;
   flex-shrink: 0;
@@ -869,6 +860,24 @@ watch(
   cursor: not-allowed;
   pointer-events: none;
 }
+.tb-btn-text {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  min-width: 34px;
+}
+.tb-label {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+/* Hybrid: drop short labels when the bar is tight */
+@container toolbar (max-width: 980px) {
+  .tb-label {
+    display: none;
+  }
+}
+
 .tb-sep {
   width: 1px;
   height: 20px;
@@ -882,6 +891,47 @@ watch(
   gap: 2px;
   flex-shrink: 0;
 }
+
+.tb-segment {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  flex-shrink: 0;
+  background: color-mix(in srgb, var(--tb-bg) 88%, var(--fg));
+}
+.tb-segment-orient .tb-seg {
+  min-width: 28px;
+  padding-inline: 8px;
+  font-size: 13px;
+}
+.tb-seg {
+  appearance: none;
+  border: none;
+  margin: 0;
+  padding: 4px 10px;
+  min-height: 28px;
+  background: transparent;
+  color: var(--fg-dim, var(--fg));
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  line-height: 1.2;
+}
+.tb-seg + .tb-seg {
+  border-left: 1px solid var(--border);
+}
+.tb-seg:hover {
+  background: var(--tb-btn-hover);
+  color: var(--fg);
+}
+.tb-seg.active {
+  background: var(--tb-btn-active);
+  color: var(--accent);
+}
+
 .tb-overflow {
   position: relative;
   flex-shrink: 0;
@@ -898,7 +948,7 @@ watch(
   display: flex;
   flex-direction: column;
   gap: 4px;
-  min-width: 180px;
+  min-width: 200px;
   max-height: 70vh;
   overflow-y: auto;
   padding: 6px;
@@ -913,11 +963,15 @@ watch(
 .tb-overflow-panel .tb-group + .tb-group {
   border-top: 1px solid var(--border);
   padding-top: 4px;
-  margin-top: 0;
 }
 .tb-overflow-panel .tb-sep {
   display: none;
 }
+/* Always show hybrid labels inside the overflow panel */
+.tb-overflow-panel .tb-label {
+  display: inline;
+}
+
 .spacer {
   flex: 1;
 }
@@ -933,7 +987,6 @@ watch(
   border-radius: 6px;
   min-width: 110px;
 }
-
 .loading-badge-text {
   display: flex;
   justify-content: space-between;
@@ -943,19 +996,16 @@ watch(
   overflow: hidden;
   text-overflow: ellipsis;
 }
-
 .loading-badge-pct {
   opacity: 0.7;
   flex-shrink: 0;
 }
-
 .loading-badge-bar {
   height: 3px;
   border-radius: 2px;
   background: rgba(0,0,0,0.2);
   overflow: hidden;
 }
-
 .loading-badge-fill {
   display: block;
   height: 100%;
@@ -976,8 +1026,8 @@ watch(
   font-family: inherit;
   cursor: pointer;
   padding: 4px 6px;
-  min-width: 28px;
-  min-height: 28px;
+  min-width: 30px;
+  min-height: 30px;
   border-radius: 4px;
   white-space: nowrap;
   display: inline-flex;

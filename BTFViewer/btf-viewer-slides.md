@@ -143,11 +143,13 @@ snapshot … --view timeline --view-mode core --task "CS[22]" --cpu-load
 <!-- _class: section-header -->
 
 # ② Core Balance
-## CPU Utilisation & Load Balance Score
+## CPU Utilisation — Score + σ Gauges
 
 ---
 
 # Is the Workload Distributed?
+
+Side-by-side gauges: **Load Balance Score** and **Std Deviation (σ)**.
 
 $$\text{Load Balance Score} = 100 \times (1 - \text{Gini})$$
 
