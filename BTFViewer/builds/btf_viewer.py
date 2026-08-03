@@ -93,6 +93,11 @@ import subprocess
 import tempfile
 import traceback
 import zlib
+import gzip
+import bz2
+import zipfile
+import io
+from contextlib import contextmanager
 from bisect import bisect_left, bisect_right
 from collections import defaultdict
 from operator import attrgetter as _attrgetter
@@ -997,6 +1002,91 @@ class SyncIssueRef:
     ptr: str = ""
 
 _MAX_TRACE_FILE_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB guard vs. memory exhaustion on a huge/adversarial file
+
+# Open dialog / drag-drop accept list (plain + compressed BTF).
+_BTF_OPEN_FILTER = (
+    "BTF traces (*.btf *.btf.gz *.btf.bz2 *.btf.zip *.gz *.bz2 *.zip);;"
+    "All files (*)"
+)
+_BTF_NAME_EXTS = (".btf", ".btf.gz", ".btf.bz2", ".btf.zip", ".gz", ".bz2", ".zip")
+
+
+def is_btf_open_path(path: str) -> bool:
+    """True if *path* looks like a BTF trace or a gz/bz2/zip container of one."""
+    lower = (path or "").lower()
+    return any(lower.endswith(ext) for ext in _BTF_NAME_EXTS)
+
+
+def _sniff_compression(filepath: str) -> str:
+    """Return 'gzip', 'bz2', 'zip', or '' from magic bytes (fallback: extension)."""
+    try:
+        with open(filepath, "rb") as fh:
+            magic = fh.read(4)
+    except OSError:
+        magic = b""
+    if magic.startswith(b"\x1f\x8b"):
+        return "gzip"
+    if magic.startswith(b"BZh"):
+        return "bz2"
+    if magic.startswith(b"PK"):
+        return "zip"
+    lower = filepath.lower()
+    if lower.endswith((".gz", ".btf.gz")):
+        return "gzip"
+    if lower.endswith((".bz2", ".btf.bz2")):
+        return "bz2"
+    if lower.endswith((".zip", ".btf.zip")):
+        return "zip"
+    return ""
+
+
+def _pick_zip_btf_member(names: List[str]) -> str:
+    """Choose the BTF member inside a zip archive."""
+    files = [n for n in names if n and not n.endswith("/") and not n.endswith("\\")]
+    if not files:
+        raise ValueError("ZIP archive contains no files")
+    btf_members = [
+        n for n in files
+        if n.lower().endswith(".btf") and not n.lower().endswith((".btf.gz", ".btf.bz2"))
+    ]
+    if len(btf_members) == 1:
+        return btf_members[0]
+    if len(btf_members) > 1:
+        # Prefer a top-level .btf (no path separators) when several exist.
+        top = [n for n in btf_members if "/" not in n and "\\" not in n]
+        return sorted(top or btf_members)[0]
+    if len(files) == 1:
+        return files[0]
+    raise ValueError(
+        "ZIP archive has no .btf member (found: "
+        + ", ".join(sorted(files)[:8])
+        + ("…" if len(files) > 8 else "")
+        + ")"
+    )
+
+
+@contextmanager
+def _open_btf_text(filepath: str):
+    """Yield a text stream for a plain or compressed BTF file."""
+    kind = _sniff_compression(filepath)
+    if kind == "gzip":
+        with gzip.open(filepath, "rt", encoding="utf-8", errors="replace") as fh:
+            yield fh
+        return
+    if kind == "bz2":
+        with bz2.open(filepath, "rt", encoding="utf-8", errors="replace") as fh:
+            yield fh
+        return
+    if kind == "zip":
+        with zipfile.ZipFile(filepath, "r") as zf:
+            member = _pick_zip_btf_member(zf.namelist())
+            with zf.open(member, "r") as raw:
+                with io.TextIOWrapper(raw, encoding="utf-8", errors="replace") as fh:
+                    yield fh
+        return
+    with open(filepath, encoding="utf-8", errors="replace") as fh:
+        yield fh
+
 
 _META_KEY_RE = re.compile(r"^[\w.-]+$")
 _CREATE_PRI_RE = re.compile(r"^create\s+pri:(\d+)\s*$", re.IGNORECASE)
@@ -4567,7 +4657,7 @@ def _parse_btf(filepath: str,
         progress_callback(2, "Reading file…")
     _int = int
     _meta_re_match = _META_KEY_RE.match
-    with open(filepath, encoding="utf-8", errors="replace") as fh:
+    with _open_btf_text(filepath) as fh:
         for line_index, line in enumerate(fh, start=1):
             if cancel_check and line_index % 2048 == 0 and cancel_check():
                 raise _ParseCancelledError()
@@ -10312,8 +10402,11 @@ class _NavigatorPopup(QWidget):
         # Child of QGraphicsView, not its viewport: map through viewport
         # geometry so the popup stays fixed when the scene scrolls.
         vp = view.viewport() if hasattr(view, "viewport") else view
+        # Keep above CPU-load overlay (and any other bottom chrome) so the
+        # pan window is not covered by a raised sibling of the timeline pane.
+        inset = int(getattr(view, "_nav_bottom_inset", 0) or 0)
         x = vp.x() + vp.width()  - self.W - self.MARGIN
-        y = vp.y() + vp.height() - self.H - self.MARGIN
+        y = vp.y() + vp.height() - self.H - self.MARGIN - inset
         self.move(max(vp.x(), x), max(vp.y(), y))
 
     def set_pixmap(self, pix: QPixmap) -> None:
@@ -11094,6 +11187,9 @@ class TimelineView(QGraphicsView):
         self._nav_hide_timer.setSingleShot(True)
         self._nav_hide_timer.setInterval(1800)  # ms - fade-out after idle
         self._nav_hide_timer.timeout.connect(self._nav_popup.fade_out)
+        # Extra bottom margin so the popup clears the CPU-load overlay that
+        # _CpuLoadStack paints on top of the full-height timeline pane.
+        self._nav_bottom_inset: int = 0
         # Background pixmap cache for the nav popup.  Rebuilt only when the
         # trace, view-mode, STI visibility or expansion state changes.
         # On every scroll we just copy the cached bg and overlay the viewport rect.
@@ -11542,6 +11638,15 @@ class TimelineView(QGraphicsView):
             return
         self._capture_virt_time_scroll_px()
         self._push_virt_trace_bar()
+
+    def set_nav_bottom_inset(self, px: int) -> None:
+        """Reserve bottom pixels so the navigator clears an overlay (CPU load)."""
+        inset = max(0, int(px))
+        if inset == self._nav_bottom_inset:
+            return
+        self._nav_bottom_inset = inset
+        if self._nav_popup.isVisible():
+            self._nav_popup.reposition()
 
     def _refresh_nav_pan_window(self, *, force_show: bool = False) -> None:
         """Repaint and show the navigator minimap (orange viewport box)."""
@@ -27117,6 +27222,7 @@ class _CpuLoadStack(QWidget):
         if not self._cpu_visible or h <= 0 or w <= 0:
             self._handle.hide()
             self._cpu.hide()
+            self._sync_nav_bottom_inset(0)
             return
         max_cpu = max(40, h - 100 - self._handle_h)
         cpu_h = max(
@@ -27131,6 +27237,23 @@ class _CpuLoadStack(QWidget):
         self._cpu.show()
         self._handle.raise_()
         self._cpu.raise_()
+        # Navigator is a child of TimelineView; lift it above this overlay.
+        self._sync_nav_bottom_inset_from_handle(y_handle)
+
+    def _sync_nav_bottom_inset(self, inset: int) -> None:
+        view = getattr(self._timeline, "view", None)
+        if view is not None and hasattr(view, "set_nav_bottom_inset"):
+            view.set_nav_bottom_inset(inset)
+
+    def _sync_nav_bottom_inset_from_handle(self, y_handle: int) -> None:
+        """Pixels of TimelineView covered by the CPU overlay / splitter handle."""
+        view = getattr(self._timeline, "view", None)
+        if view is None or not hasattr(view, "set_nav_bottom_inset"):
+            return
+        view_bottom = view.mapTo(self, QPoint(0, view.height())).y()
+        # Keep a small gap so the popup sits clearly above the handle.
+        inset = max(0, view_bottom - y_handle)
+        view.set_nav_bottom_inset(inset)
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
         if obj is not self._handle:
@@ -29032,13 +29155,13 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     def dragEnterEvent(self, event) -> None:
         if event.mimeData().hasUrls():
-            if any(u.toLocalFile().endswith(".btf") for u in event.mimeData().urls()):
+            if any(is_btf_open_path(u.toLocalFile()) for u in event.mimeData().urls()):
                 event.acceptProposedAction()
 
     def dropEvent(self, event) -> None:
         for url in event.mimeData().urls():
             path = url.toLocalFile()
-            if path.endswith(".btf"):
+            if is_btf_open_path(path):
                 self._open_file(path)
                 break
 
@@ -30839,7 +30962,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         last_dir = self._settings.get("files", "last_dir", os.path.expanduser("~"))
         path, _ = QFileDialog.getOpenFileName(
             self, "Open BTF trace", last_dir,
-            "BTF files (*.btf);;All files (*)"
+            _BTF_OPEN_FILTER
         )
         if path:
             self._open_file(path)
@@ -33403,7 +33526,14 @@ _CLI_EPILOG_SNAPSHOT = """\
 Views (--view):
   timeline   Main task/timeline view (like File -> Save Image / Save SVG).
              --task centers and highlights that task's row; --lo/--hi zoom
-             to a time range first.
+             to a time range first.  --view-mode core|task selects Core View
+             or Task View (default: task).  In Core View with --task, the
+             task filter isolates that task on every core it ran so
+             migrations are visible as hops across core rows.
+             --cpu-load appends the synchronised CPU Load strip (with a
+             locked --task, Task View shows that task's usage; Core View
+             shows per-core usage of that task).  Without --lo/--hi the
+             timeline fits the full trace (Fit to Window).
   heatmap    Migration Heatmap (core-pair x time-bin grid). --task is not
              supported (the heatmap is inherently cross-task); --lo/--hi
              scope the grid to a time range. --drill-row/--drill-bin drill
@@ -33434,6 +33564,8 @@ default dialog size respectively).
 examples:
   %(prog)s trace.btf -o timeline.png --view timeline
   %(prog)s trace.btf -o timeline.svg --view timeline --task "Producer[1]" --lo 0 --hi 500000
+  %(prog)s trace.btf -o migrate.svg --view timeline --view-mode core --task "CS[22]" --lo 1805000 --hi 1865000
+  %(prog)s trace.btf -o cpu-load.svg --view timeline --view-mode core --task "CS[22]" --cpu-load
   %(prog)s trace.btf -o heatmap.png --view heatmap
   %(prog)s trace.btf -o heatmap-tasks.svg --view heatmap --drill-row 0 --drill-bin 3
   %(prog)s trace.btf -o chord.png --view chord
@@ -33633,6 +33765,26 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
             "task display name (e.g. 'Producer[1]'), bare name, or merge key; "
             "required for most --metric values, optional for --view timeline "
             "(highlights + centers that task), unused for --view heatmap/chord"
+        ),
+    )
+    snapshot.add_argument(
+        "--view-mode", choices=("task", "core"), default="task",
+        dest="view_mode",
+        help=(
+            "timeline layout: task (one row per task, default) or core "
+            "(one expandable row per CPU core).  With --view-mode core and "
+            "--task, filters to that task and expands cores so migrations "
+            "appear as the same task hopping across core rows "
+            "(--view timeline only)"
+        ),
+    )
+    snapshot.add_argument(
+        "--cpu-load", action="store_true", dest="cpu_load",
+        help=(
+            "include the synchronised CPU Load strip under the timeline "
+            "(--view timeline only).  With a locked --task: Task View shows "
+            "that task's total CPU usage; Core View (--view-mode core) shows "
+            "one row per core for that task (toolbar Core + Load + highlight)"
         ),
     )
     snapshot.add_argument(
@@ -34019,8 +34171,9 @@ def _cli_save_widget_svg(widget: "QWidget", path: str, title: str) -> None:
     finally:
         painter.end()
 
-def _cli_save_timeline_svg(view: "TimelineView", path: str) -> None:
-    """Standalone equivalent of MainWindow._on_save_svg (no CPU-load-graph strip)."""
+def _cli_save_timeline_svg(view: "TimelineView", path: str,
+                           cpu_graph: Optional["_CpuLoadGraph"] = None) -> None:
+    """Standalone equivalent of MainWindow._on_save_svg (optional CPU-load strip)."""
     scene = view._scene
     vp_rect = view.viewport().rect()
     scene_rect = QRectF(
@@ -34028,17 +34181,46 @@ def _cli_save_timeline_svg(view: "TimelineView", path: str) -> None:
         view.mapToScene(vp_rect.bottomRight()),
     )
     w, h = vp_rect.width(), vp_rect.height()
+    cpu_h = cpu_graph.height() if cpu_graph is not None else 0
+    total_h = h + cpu_h
     gen = QSvgGenerator()
     gen.setFileName(path)
-    gen.setSize(QSize(int(w), int(h)))
-    gen.setViewBox(QRectF(0, 0, w, h))
+    gen.setSize(QSize(int(w), int(total_h)))
+    gen.setViewBox(QRectF(0, 0, w, total_h))
     gen.setTitle("BTF Timeline")
     gen.setDescription("Generated by RTOS BTF Viewer")
     painter = QPainter(gen)
     try:
         scene.render(painter, QRectF(0, 0, w, h), scene_rect)
+        if cpu_graph is not None and cpu_h > 0:
+            painter.translate(0, h)
+            cpu_graph.render(painter, QPoint(0, 0))
+            painter.translate(0, -h)
     finally:
         painter.end()
+
+
+def _cli_save_timeline_png(view: "TimelineView", path: str,
+                           cpu_graph: Optional["_CpuLoadGraph"] = None) -> None:
+    """Capture timeline viewport (+ optional CPU Load strip) as PNG."""
+    tl_pm, dpr = view._capture_pixmap()
+    if cpu_graph is None:
+        if not _save_snapshot_png(tl_pm, path, dpr):
+            raise OSError(f"QPixmap.save() failed for path: {path}")
+        return
+    cpu_pm, _ = _normalize_grab_pixmap(cpu_graph.grab())
+    w = max(tl_pm.width(), cpu_pm.width())
+    out = QPixmap(w, tl_pm.height() + cpu_pm.height())
+    out.setDevicePixelRatio(tl_pm.devicePixelRatio())
+    out.fill(Qt.GlobalColor.transparent)
+    p = QPainter(out)
+    try:
+        p.drawPixmap(0, 0, tl_pm)
+        p.drawPixmap(0, tl_pm.height(), cpu_pm)
+    finally:
+        p.end()
+    if not _save_snapshot_png(out, path, dpr):
+        raise OSError(f"QPixmap.save() failed for path: {path}")
 
 def _cli_scroll_view_to_task(view: "TimelineView", task_mk: str) -> None:
     """Standalone equivalent of MainWindow._scroll_view_to_task."""
@@ -34096,33 +34278,83 @@ def _cli_apply_heatmap_scope(dlg: "_MigrationHeatmapDialog",
     dlg._go_level0()
 
 def _cli_snapshot_timeline(trace: "BtfTrace",
-                          args: argparse.Namespace) -> Tuple[Optional["TimelineView"], Optional[str]]:
+                          args: argparse.Namespace
+                          ) -> Tuple[Optional["TimelineView"], Optional[str],
+                                     Optional["_CpuLoadGraph"]]:
     if args.metric is not None:
         print("warning: --metric is ignored for --view timeline", file=sys.stderr)
+    view_mode = getattr(args, "view_mode", "task") or "task"
+    if view_mode not in ("task", "core"):
+        return None, f"error: invalid --view-mode {view_mode!r} (use task or core)", None
+    want_cpu = bool(getattr(args, "cpu_load", False))
     mk = None
     if args.task:
         mk, err = _cli_resolve_task(trace, args.task)
         if err:
-            return None, err
+            return None, err, None
 
     view = TimelineView()
-    view.resize(args.width or 1600, args.height or 900)
+    # Core View with a filtered task needs vertical room for one sub-row per core.
+    default_h = 1100 if view_mode == "core" else 900
+    view.resize(args.width or 1600, args.height or default_h)
     if args.theme == "light":
         view._scene.set_theme(False, rebuild=False)
     view.load_trace(trace)
+    # Keep fit_mode off before show() so the debounced resize-to-fit handler
+    # (triggered by show) cannot discard an upcoming --lo/--hi zoom.
     if args.lo is not None and args.hi is not None:
-        view._fit_mode = False  # else the debounced resize-to-fit handler
-                                 # (triggered by view.show() below) discards
-                                 # this explicit zoom and re-fits the whole trace
-        view._scene.zoom_to_range(args.lo, args.hi, view._time_axis_viewport_px())
-        view._navigate_time_to_ns((args.lo + args.hi) // 2)
+        view._fit_mode = False
+
+    sc = view._scene
+    if view_mode == "core":
+        sc.set_view_mode("core")
+        if mk is not None:
+            # Isolate the highlighted task on every core it ran so migrations
+            # read as hops across core rows (same as GUI task filter + Expand All).
+            filt = (args.task or "").strip() or mk
+            sc.set_task_filter(filt)
+            for core in sc._filtered_core_view_tasks()[0]:
+                sc._core_expanded[core] = True
+            sc.rebuild()
+        else:
+            sc.set_all_cores_expanded(True)
+
     if mk is not None:
-        view._scene.set_highlighted_task(mk, locked=True)
-        _cli_scroll_view_to_task(view, mk)
+        sc.set_highlighted_task(mk, locked=True)
     view.show()
     _process_ui_events_safely()
+    # Zoom *after* show/layout.  Pre-show viewport is only ~640×480 even after
+    # resize(1600,900), so zoom_to_range would compute a too-coarse timescale
+    # and the exported image would show ~3× more time than --lo/--hi.
+    if args.lo is not None and args.hi is not None:
+        view._scene.zoom_to_range(args.lo, args.hi, view._time_axis_viewport_px())
+        view._navigate_time_to_ns((args.lo + args.hi) // 2)
+        _process_ui_events_safely()
+    else:
+        # Fit to Window (Ctrl+0) — full trace span in the viewport.
+        view.zoom_fit()
+        _process_ui_events_safely()
+    if mk is not None:
+        _cli_scroll_view_to_task(view, mk)
     _process_ui_events_safely()
-    return view, None
+
+    cpu_graph = None
+    if want_cpu:
+        cpu_graph = _CpuLoadGraph(view)
+        cpu_graph.set_dark(args.theme != "light")
+        cpu_graph.set_view_mode(view_mode)
+        cpu_graph.set_trace(trace)
+        if mk is not None:
+            cpu_graph.set_task(mk, True)
+        cpu_h = max(cpu_graph.preferred_pane_height(), CPU_LOAD_ROW_H + 22)
+        cpu_graph.setFixedSize(view.width(), cpu_h)
+        cpu_graph.show()
+        _process_ui_events_safely()
+        # Keep bars in sync with the fitted/zoomed viewport.
+        cpu_graph.update()
+        _process_ui_events_safely()
+
+    return view, None, cpu_graph
 
 def _cli_apply_theme_chrome(app: "QApplication", is_dark: bool) -> None:
     """Apply the dark/light palette + minimal QSS for headless snapshot dialogs.
@@ -34315,16 +34547,29 @@ def _cli_snapshot_run(args: argparse.Namespace) -> int:
     app = _bootstrap_qt_app()
     _cli_apply_theme_chrome(app, args.theme != "light")
 
+    cpu_graph = None
     if args.view == "timeline":
-        widget, err = _cli_snapshot_timeline(trace, args)
+        widget, err, cpu_graph = _cli_snapshot_timeline(trace, args)
         title = "BTF Timeline"
     elif args.view == "heatmap":
+        if getattr(args, "view_mode", "task") != "task":
+            print("warning: --view-mode is ignored for --view heatmap", file=sys.stderr)
+        if getattr(args, "cpu_load", False):
+            print("warning: --cpu-load is ignored for --view heatmap", file=sys.stderr)
         widget, err = _cli_snapshot_heatmap(trace, args)
         title = "Migration Heatmap"
     elif args.view == "chord":
+        if getattr(args, "view_mode", "task") != "task":
+            print("warning: --view-mode is ignored for --view chord", file=sys.stderr)
+        if getattr(args, "cpu_load", False):
+            print("warning: --cpu-load is ignored for --view chord", file=sys.stderr)
         widget, err = _cli_snapshot_chord(trace, args)
         title = "Migration Chord Diagram"
     else:
+        if getattr(args, "view_mode", "task") != "task":
+            print("warning: --view-mode is ignored for --view plot", file=sys.stderr)
+        if getattr(args, "cpu_load", False):
+            print("warning: --cpu-load is ignored for --view plot", file=sys.stderr)
         widget, err = _cli_snapshot_plot(trace, args)
         title = widget.windowTitle() if widget is not None else "Metric Plot"
     if err:
@@ -34334,9 +34579,9 @@ def _cli_snapshot_run(args: argparse.Namespace) -> int:
     try:
         if args.view == "timeline":
             if fmt == "svg":
-                _cli_save_timeline_svg(widget, out_path)
+                _cli_save_timeline_svg(widget, out_path, cpu_graph)
             else:
-                widget.save_image(out_path)
+                _cli_save_timeline_png(widget, out_path, cpu_graph)
         elif args.view == "heatmap":
             if fmt == "svg":
                 widget._canvas.render_full_svg(out_path, title)
@@ -34360,6 +34605,8 @@ def _cli_snapshot_run(args: argparse.Namespace) -> int:
         return 1
     finally:
         try:
+            if cpu_graph is not None:
+                cpu_graph.close()
             widget.close()
         except Exception:
             pass

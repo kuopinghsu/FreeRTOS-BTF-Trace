@@ -1124,6 +1124,7 @@ class _CpuLoadStack(QWidget):
         if not self._cpu_visible or h <= 0 or w <= 0:
             self._handle.hide()
             self._cpu.hide()
+            self._sync_nav_bottom_inset(0)
             return
         max_cpu = max(40, h - 100 - self._handle_h)
         cpu_h = max(
@@ -1138,6 +1139,23 @@ class _CpuLoadStack(QWidget):
         self._cpu.show()
         self._handle.raise_()
         self._cpu.raise_()
+        # Navigator is a child of TimelineView; lift it above this overlay.
+        self._sync_nav_bottom_inset_from_handle(y_handle)
+
+    def _sync_nav_bottom_inset(self, inset: int) -> None:
+        view = getattr(self._timeline, "view", None)
+        if view is not None and hasattr(view, "set_nav_bottom_inset"):
+            view.set_nav_bottom_inset(inset)
+
+    def _sync_nav_bottom_inset_from_handle(self, y_handle: int) -> None:
+        """Pixels of TimelineView covered by the CPU overlay / splitter handle."""
+        view = getattr(self._timeline, "view", None)
+        if view is None or not hasattr(view, "set_nav_bottom_inset"):
+            return
+        view_bottom = view.mapTo(self, QPoint(0, view.height())).y()
+        # Keep a small gap so the popup sits clearly above the handle.
+        inset = max(0, view_bottom - y_handle)
+        view.set_nav_bottom_inset(inset)
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
         if obj is not self._handle:
@@ -3039,13 +3057,13 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     def dragEnterEvent(self, event) -> None:
         if event.mimeData().hasUrls():
-            if any(u.toLocalFile().endswith(".btf") for u in event.mimeData().urls()):
+            if any(is_btf_open_path(u.toLocalFile()) for u in event.mimeData().urls()):
                 event.acceptProposedAction()
 
     def dropEvent(self, event) -> None:
         for url in event.mimeData().urls():
             path = url.toLocalFile()
-            if path.endswith(".btf"):
+            if is_btf_open_path(path):
                 self._open_file(path)
                 break
 
@@ -4846,7 +4864,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         last_dir = self._settings.get("files", "last_dir", os.path.expanduser("~"))
         path, _ = QFileDialog.getOpenFileName(
             self, "Open BTF trace", last_dir,
-            "BTF files (*.btf);;All files (*)"
+            _BTF_OPEN_FILTER
         )
         if path:
             self._open_file(path)

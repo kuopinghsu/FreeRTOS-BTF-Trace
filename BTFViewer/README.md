@@ -2,7 +2,7 @@
 
 Current version: **1.3.2** (Desktop Python app + Web app)
 
-A PySide6-based interactive visualiser for FreeRTOS context-switch traces in **Best Trace Format** (`.btf`).
+A PySide6-based interactive visualiser for FreeRTOS context-switch traces in **Best Trace Format** (`.btf`). Plain `.btf` files and compressed containers (`.btf.gz` / `.gz`, `.btf.bz2` / `.bz2`, `.btf.zip` / `.zip`) open the same way on Desktop and Web.
 
 ## Screenshot
 
@@ -49,7 +49,7 @@ A PySide6-based interactive visualiser for FreeRTOS context-switch traces in **B
 - **Export Perfetto** — **File → Export Perfetto…** (Desktop) or toolbar **Perfetto** (Web) writes Chrome Trace JSON openable in [ui.perfetto.dev](https://ui.perfetto.dev); also available via headless `perfetto` CLI
 - **Headless image export (Desktop CLI)** — `snapshot` command renders the timeline, Migration Heatmap, or a statistics metric plot straight to PNG/SVG with no GUI, for scripting and CI (see [Headless CLI](#headless-cli-desktop-only))
 - **Persistent settings** — all preferences stored in `btf_viewer.rc` alongside the script
-- **Drag-and-drop** — drop a `.btf` file directly onto the window
+- **Drag-and-drop** — drop a `.btf` (or `.gz` / `.bz2` / `.zip` containing a `.btf`) file directly onto the window
 - **Optimised for large traces** — tested with up to **128 cores, 1 024 tasks, and 5 M+ events** (desktop). Web viewer: flat segment storage, parse worker, precomputed CPU-load bins, WASM-accelerated bisect/LOD, and debounced stats worker for 100k+ segment traces
 
 ## Table of contents
@@ -103,7 +103,7 @@ Edit sources under `BTFViewer/btf_viewer_pkg/` (not the generated `builds/btf_vi
 |-----------------|--------|
 | `make` / `make all` | Web + desktop → `builds/btf_viewer.html` and `builds/btf_viewer.py` |
 | `make web` | Web only → `builds/btf_viewer.html` |
-| `make bundle` | Desktop only → `builds/btf_viewer.py`, `py_compile`, smoke `info` on `tracedata/example.btf` |
+| `make bundle` | Desktop only → `builds/btf_viewer.py`, `py_compile`, smoke `info` on `tracedata/example-2cores.btf.gz` |
 | `make test` | Desktop characterization tests (`unittest`, offscreen Qt) |
 | `make check-bundle` | Same as `bundle`, then `git diff --exit-code builds/btf_viewer.py` |
 
@@ -157,7 +157,8 @@ Produces a single self-contained `builds/btf_viewer.html` that can be opened dir
 ```bash
 cd BTFViewer/web
 # Demo trace embedded in the build (required for Demo button and fresh builds):
-ln -sf ../../tracedata/example.btf example.btf   # once, or copy the file
+# web/example-2cores.btf.gz is committed; refresh from tracedata if needed:
+#   cp ../../tracedata/example-2cores.btf.gz example-2cores.btf.gz
 make          # installs deps and builds builds/btf_viewer.html
 # or manually:
 npm install
@@ -183,7 +184,7 @@ Do not open `BTFViewer/web/index.html` directly via `file://`; it is the Vite so
 | `make dev` | Dev | Hot reload at `http://localhost:5173`. |
 | Hosted demo | **Recommended** | [apps.kuoping.com/btf_viewer.html](https://apps.kuoping.com/btf_viewer.html) |
 
-For large traces (e.g. `tracedata/example-16cores.btf` — 16 cores, 100k+ segments), prefer **`make preview`** or the hosted demo rather than `file://`.
+For large traces (e.g. `tracedata/example-16cores.btf.gz` — 16 cores, 100k+ segments), prefer **`make preview`** or the hosted demo rather than `file://`.
 
 #### Development server (with hot reload)
 
@@ -259,7 +260,8 @@ python builds/btf_viewer.py compare a.btf b.btf -o|--output PATH [--format html|
 python builds/btf_viewer.py migrations trace.btf [-o PATH] [--lo T] [--hi T]   # default: stdout
 
 python builds/btf_viewer.py snapshot trace.btf -o|--output PATH --view timeline|heatmap|plot \
-  [--format png|svg] [--task NAME] [--metric tick|exec|block|inter|priority|preempt|mig_dwell|mig_rate|mig_gap] \
+  [--format png|svg] [--task NAME] [--view-mode task|core] [--cpu-load] \
+  [--metric tick|exec|block|inter|priority|preempt|mig_dwell|mig_rate|mig_gap] \
   [--preemptor NAME] [--lo T --hi T] [--drill-row N --drill-bin N] \
   [--width PX] [--height PX] [--theme dark|light]
 
@@ -268,7 +270,7 @@ python builds/btf_viewer.py perfetto trace.btf -o|--output PATH.json
 
 The `snapshot` `--view`:
 
-- `timeline` — the main task/core view (like **File → Save Image / Save SVG**); `--task` highlights and centers that task's row, `--lo`/`--hi` zoom to a time range first.
+- `timeline` — the main task/core view (like **File → Save Image / Save SVG**); `--task` highlights and centers that task's row; omit `--lo`/`--hi` to **Fit to Window** (full span), or pass `--lo`/`--hi` to zoom a range.  `--view-mode core` switches to **Core View** (default `task`); with `--task`, the CLI also filters to that task and expands every core it ran on so migrations appear as the same task hopping across core rows (see [Highlight a migrating task](#highlight-a-migrating-task-on-the-timeline)).  `--cpu-load` appends the synchronised **CPU Load** strip — with a locked `--task`, **Task View** shows that task’s total utilisation; **Core View** shows **one sparkline per core** for that task (same as toolbar **Core** + **Load** + click-to-highlight).
 - `heatmap` — the Migration Heatmap (core-pair × time-bin grid); `--lo`/`--hi` scope the grid; `--task` is not supported (the heatmap is inherently cross-task). `--drill-row`/`--drill-bin` (0-based, together) drill into the per-task grid for one core-pair row and time bin, matching a click in the GUI dialog — not supported for matrix-mode heatmaps (> 16 cores).
 - `plot` — a statistics metric scatter + histogram popup, selected with `--metric`: `tick` (trace-wide tick-interval distribution, no `--task`), `exec` / `block` / `inter` / `priority` (require `--task`), `preempt` (requires `--task` **and** `--preemptor`), or `mig_dwell` / `mig_rate` / `mig_gap` (Core Migrations dwell/rate/gap distributions, require `--task`).
 
@@ -602,15 +604,15 @@ Toggle with the **Task** / **Core** buttons in the toolbar.
 
 ### Opening a file
 
-Click **Open** in the toolbar and select any `.btf` file.
+Click **Open** in the toolbar and select any `.btf` file (or a compressed container: `.btf.gz` / `.gz`, `.btf.bz2` / `.bz2`, `.btf.zip` / `.zip`).
 Each file opens in a new **tab** in the bar below the toolbar; click a tab to switch traces, or **×** to close one.
-Opening the same filename again focuses the existing tab.
+Opening the same filename again focuses the existing tab. On the Web build, **Demo** loads the embedded `example-2cores.btf.gz`.
 
 **Parsing:** traces are parsed in a **Web Worker** when the page is served over HTTP (`make dev`, `make preview`, or the hosted demo). On `file://` URLs some browsers block workers, so parsing may run on the main thread instead. A progress overlay (`Reading…` / `Parsing…` / `Opening trace…`) is shown until the timeline is ready.
 
-**Large traces:** the web viewer is optimised for high segment counts (flat segment storage, precomputed CPU-load bins, WASM-accelerated bisect/LOD, debounced stats worker). On first paint after load it briefly uses a coarse LOD (like pan/zoom) and upgrades to full quality within a few hundred milliseconds — this keeps the UI responsive on traces such as `tracedata/example-16cores.btf` (16 cores, 100k+ segments).
+**Large traces:** the web viewer is optimised for high segment counts (flat segment storage, precomputed CPU-load bins, WASM-accelerated bisect/LOD, debounced stats worker). On first paint after load it briefly uses a coarse LOD (like pan/zoom) and upgrades to full quality within a few hundred milliseconds — this keeps the UI responsive on traces such as `tracedata/example-16cores.btf.gz` (16 cores, 100k+ segments).
 
-Sample traces in the repo: `tracedata/example.btf` (small), `tracedata/example-4cores.btf` (4-core SMP, good for statistics demos), and `tracedata/example-16cores.btf` (large SMP).
+Sample traces in the repo: `tracedata/example-2cores.btf.gz` (small 2-core demo, also embedded in the web build), `tracedata/example-4cores.btf.gz` (4-core SMP, good for statistics demos), and `tracedata/example-16cores.btf.gz` (large SMP).
 
 ### Zoom & pan
 
@@ -657,6 +659,19 @@ A bar chart below the timeline shows per-core (or total) CPU utilisation over th
 
 - **Toggle** — click the **Load** toolbar button to show or hide the graph.
 - **View modes** — in **Task View** a single *CPU Load* row shows aggregate utilisation; in **Core View** each core gets its own row.
+- **Task highlight** — lock-highlight a task (click its label): **Task View** switches the strip to **that task’s** total utilisation; **Core View** shows **one row per core** with that task’s usage on each core.  Clear the highlight to return to aggregate / all-tasks load.
+- **Fit + Core View + highlight workflow** — `Ctrl+0` (Fit to Window) → toolbar **Core** → click a task → enable **Load**.  Headless:
+
+```bash
+python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
+    -o ../images/stats/tasks-cpu-load-cs22.svg \
+    --view timeline --view-mode core --task "CS[22]" --cpu-load --height 900
+```
+
+![Core View: CS[22] highlighted, Fit to Window, per-core CPU Load for that task](../images/stats/tasks-cpu-load-cs22.svg)
+
+*`CS[22]` locked in Core View (Fit to Window).  Timeline: task hops across Core_0…Core_7.  **CPU Load** strip: one sparkline per core for **that task only** (~1–3 % each while it runs in the CS phase; flat after ~1.8 s).*
+
 - **Row labels** — each row shows average load over the **currently visible** time window; with 2+ cursors placed, labels also show the average over the cursor range (`· C:xx%`), and the graph shades the C1–Cn window in blue.
 - **Expand / Collapse** — in Core View click a core row header to collapse it to a compact bar.
 - **Hover** — moving the pointer over the timeline projects a live cursor onto the load graph; each row shows a load % badge at the hover time (no timestamp on the graph).
@@ -762,7 +777,7 @@ Below the scope checkbox, a **scheduling summary** line shows context-switch cou
 
 **Core Migrations** lists tasks that ran on two or more cores, with **Rate** (migrations per second of active time and per tick) and **Dwell** (average on-CPU slice length). For multi-core traces, open the **Migration heatmap** from the toolbar **Heatmap** button — click core-pair cells to drill into per-task sub-bins, then into Task View (see [Migration heatmap](#migration-heatmap)); or open the **Migration chord diagram** from the toolbar **Chord** button for a directional overview of core-to-core migration volume (see [Migration chord diagram](#migration-chord-diagram)). Toolbar **Analysis** flags thrashing / hot-pair candidates from the same stats. **Trace Compare…** (footer, next to Export) opens a dialog with **Summary**, **Top Tasks**, and **Core Migrations** tabs to diff two open trace tabs; optional cursor-range scoping compares each tab's C1–Cn window independently.
 
-See [Statistics metric tables](#statistics-metric-tables) for column definitions, distribution-chart usage, [CDF overlay](#cdf-overlay), and example plots from `tracedata/example-4cores.btf`.
+See [Statistics metric tables](#statistics-metric-tables) for column definitions, distribution-chart usage, [CDF overlay](#cdf-overlay), and example plots from `tracedata/example-4cores.btf.gz`.
 
 ### Snapshot Editor
 
@@ -862,7 +877,7 @@ The CDF is included in **Export PNG / SVG** from the plot dialog. It is not inte
 
 **Jump links:** in Execution Time, Blocking Time, and Inter-Arrival tables, click **Min** or **Max** (dotted underline) to jump to the slice at the shortest or longest value and add an **annotation** with a descriptive note. Click any **distribution-chart** point to jump to that event, add an annotation, and switch to the **Marks** tab with the new annotation selected (segment start for task metrics; tick timestamp for **Tick Distribution**; zoom + highlight for **Priority Inheritance** episodes; interval start for **Interval Analysis**). In Preemption Chain, the annotation is placed at the **preemptor segment** start. In **Mutex / Semaphore**, click any **Pairing issues** row to zoom to the running task segment on that core, jump to the issue time, and add an annotation.
 
-Example plots from `tracedata/example-4cores.btf` (4-core SMP trace, 67 tasks) are in [Statistics metric tables](#statistics-metric-tables).
+Example plots from `tracedata/example-4cores.btf.gz` (4-core SMP trace, 67 tasks) are in [Statistics metric tables](#statistics-metric-tables).
 
 ### STI events
 
@@ -903,7 +918,7 @@ It shows (in panel order):
 - **Priority Inheritance** — per-task base/peak priority, boost episodes, boosted time, and pattern (mutex inherit / L/M/H / boost only); click a row for a duration plot; click a scatter point to zoom, highlight, and annotate the episode (collapsible; shown only when the trace contains priority-inheritance STI events)
 - **Mutex / Semaphore pairing** — per-object hold count, issue count, **core bounce count**, average hold, and status; **Pairing issues** sub-table lists orphan gives, cross-task gives, unmatched takes, teardown warnings, and **`CORE_MIGRATION_WHILE_HELD`** warnings (lock that crossed core boundaries while held); click an issue row to zoom, jump, and annotate (collapsible; shown only when the trace contains sync-object STI events)
 - **Queue** — per-queue `send`/`recv` pairing by object pointer: hold count, issue count, average hold, and status (collapsible; shown only when the trace contains `queue` STI events)
-- **Task Lifecycle** — per-task summary of `create`, `delete`, `suspend`, and `resume` events recorded on the `task` STI channel: created/deleted timestamps, suspend/resume counts, alive span (create→delete), total lifecycle event count, and **Runs** — the number of times the task was actually dispatched onto a core (context-switch-in / segment count). Runs is a scheduler-level metric and is normally much larger than Susp/Res, which only counts explicit `vTaskSuspend()`/`vTaskResume()` API calls — a task can run (and be preempted/resumed by the scheduler) many times without ever being suspended (collapsible; shown only when the trace contains task lifecycle STI events)
+- **Task Lifecycle** — per-task summary of `create`, `delete`, `suspend`, and `resume` events recorded on the `task` STI channel: created/deleted timestamps, suspend/resume counts, alive span (create→delete), total lifecycle event count, and **Runs** — the number of times the task was actually dispatched onto a core (context-switch-in / segment count). Runs is a scheduler-level metric and is normally much larger than Susp/Res, which only counts explicit `vTaskSuspend()`/`vTaskResume()` API calls — a task can run (and be preempted/resumed by the scheduler) many times without ever being suspended. In `example-8cores.btf.gz`, test 9 creates **SR0–SR3** (pinned across cores) with overlapping suspend-while-blocked and suspend-while-running rounds — use this section to confirm Susp/Res counts match the STI pairs (collapsible; shown only when the trace contains task lifecycle STI events)
 - **Core Affinity** — per-task affinity mask history from `affinity_set` STI (`vTaskCoreAffinitySet`) vs. observed execution cores; **Violations** lists cores used while outside the mask then in effect (slices before the first set are unrestricted; mask changes are shown as `0x1 → 0x8`) (collapsible; shown only when those STI events are present)
 - **Deadlines / CPU budget** — configurable per-task execution deadline (nanoseconds) and global CPU budget threshold (%); shows **Slice over deadline** violations (task execution slices longer than the per-task limit, sorted by excess) and **CPU budget exceeded** violations (tasks whose CPU% in the current scope exceeds the budget); configure via **Settings → Display → Analysis thresholds** (`Ctrl+,`) — the section is always visible and displays a prompt to open Settings when no thresholds are configured (collapsible)
 - **Interval Analysis** — per interval id: count, min/avg/max/p95 duration of paired start→stop spans; pairing uses `tid` in the note when present; click a row for a duration plot; click a scatter point to jump and add an annotation at the interval start (collapsible)
@@ -919,20 +934,20 @@ The Statistics panel (Desktop **Statistics** tab + Web **Statistics** tab) organ
 
 **How to use the panel**
 
-1. Open a trace (e.g. `tracedata/example-4cores.btf` for a 4-core SMP workload, or `tracedata/example.btf` for a smaller single-core demo).
+1. Open a trace (e.g. `tracedata/example-4cores.btf.gz` for a 4-core SMP workload, or `tracedata/example-2cores.btf.gz` for a smaller 2-core demo).
 2. Optionally click toolbar **Analysis** for a severity-tagged triage of the current scope.
 3. Expand the sections you care about (or use the **+** / **−** icons at the top to expand/collapse all).
 4. Optionally place **2+ cursors** and enable **Limit to cursor range (C1–Cn)** to restrict every metric (and Analysis Findings) to a time window.
 5. Click a **table row** to open a distribution chart (where supported), click **Min** / **Max** to jump and add an annotation at an extreme slice on the timeline, or click a **Mutex / Semaphore** issue row to zoom, jump, and annotate at that STI event.
 6. Use **Trace Compare…** when two traces are open to diff summary and migration stats.
 
-The example plots below were generated from **`tracedata/example-8cores.btf`** (8 cores, 141 tasks, ~29 000 segments, time scale `us`). Regenerate them with:
+The example plots below were generated from **`tracedata/example-8cores.btf.gz`** (8 cores, 154 tasks, ~31 100 segments, time scale `us`). Regenerate them with:
 
 ```bash
 make -C BTFViewer update-images
 ```
 
-This invokes the desktop CLI `snapshot` command (`--view plot` / `--view timeline`) directly — see `make -C BTFViewer help`. Timeline screenshots (e.g. `images/stats/tasks-priority-il266.svg`) use `--view timeline --task ... --lo ... --hi ...` to zoom to the region of interest. Migration heatmap screenshots (`images/heatmap-pairs.svg`, `images/heatmap-tasks.svg`) are regenerated the same way with `make -C BTFViewer update-images` (`snapshot --view heatmap`, with `--drill-row`/`--drill-bin` for the task-level image) — see [Migration heatmap](#migration-heatmap). The migration chord diagram screenshot (`images/migration-chord.svg`) is regenerated with the same target (`snapshot --view chord`) — see [Migration chord diagram](#migration-chord-diagram).
+This invokes the desktop CLI `snapshot` command (`--view plot` / `--view timeline`) directly — see `make -C BTFViewer help`. Timeline screenshots (e.g. `images/stats/tasks-priority-low.svg`) use `--view timeline --task ... --lo ... --hi ...` to zoom to the region of interest (the range is applied **after** the offscreen view is laid out so the exported image fills that window). Multi-core migration illustrations (e.g. `images/stats/tasks-migrate-cs22.svg`) add `--view-mode core` so the highlighted task is shown hopping across expanded core rows. Fit-to-window + per-core task CPU Load illustrations (e.g. `images/stats/tasks-cpu-load-cs22.svg`) use `--view-mode core --task ... --cpu-load` with no `--lo`/`--hi`. Migration heatmap screenshots (`images/heatmap-pairs.svg`, `images/heatmap-tasks.svg`) are regenerated the same way with `make -C BTFViewer update-images` (`snapshot --view heatmap`, with `--drill-row`/`--drill-bin` for the task-level image) — see [Migration heatmap](#migration-heatmap). The migration chord diagram screenshot (`images/migration-chord.svg`) is regenerated with the same target (`snapshot --view chord`) — see [Migration chord diagram](#migration-chord-diagram).
 
 #### Summary, scheduling, and core utilisation
 
@@ -997,9 +1012,9 @@ Table statistics (Min / Avg / Max / p95) are computed over all slice durations *
 - **Scatter:** x = slice start time, y = slice duration.
 - **Histogram:** distribution of slice durations (auto log scale when the tail is wide; see [CDF overlay](#cdf-overlay) for reading the blue cumulative curve).
 
-In `example-8cores.btf`, task **CS[11]** has 730 slices with a long tail of longer runs (context-switch stress tasks):
+In `example-8cores.btf.gz`, task **CS[11]** has 730 slices with a long tail of longer runs (context-switch stress tasks):
 
-![Execution time distribution for CS[11] in example-8cores.btf](../images/stats/stats-exec-cs11.svg)
+![Execution time distribution for CS[11] in example-8cores.btf.gz](../images/stats/stats-exec-cs11.svg)
 
 The scatter shows periodic bursts of short slices; the histogram uses a **log-scaled duration axis** so short and long slices are both visible. The **CDF** rises steeply on the left (most slices are short) then levels toward 100% as longer runs are included; **p50** and **p95** vertical markers align with the 50% and 95% ticks on the right axis.
 
@@ -1031,9 +1046,9 @@ Only positive gaps are counted. Min / Avg / Max / p95 are taken over all gaps *g
 - **Scatter:** x = resume time, y = off-CPU gap.
 - **Histogram:** distribution of blocking gaps.
 
-**CS[11]** in `example-8cores.btf` (729 gaps):
+**CS[11]** in `example-8cores.btf.gz` (729 gaps):
 
-![Blocking time distribution for CS[11] in example-8cores.btf](../images/stats/stats-block-cs11.svg)
+![Blocking time distribution for CS[11] in example-8cores.btf.gz](../images/stats/stats-block-cs11.svg)
 
 High blocking gaps clustered at certain times often correlate with lock contention or a higher-priority task dominating the core.
 
@@ -1063,9 +1078,9 @@ Min / Avg / Max / p95 are taken over all inter-arrival samples Δ*t*<sub>k</sub>
 - **Scatter:** x = activation time, y = gap since previous activation.
 - **Histogram:** distribution of inter-arrival gaps.
 
-**CS[11]** in `example-8cores.btf`:
+**CS[11]** in `example-8cores.btf.gz`:
 
-![Inter-arrival time distribution for CS[11] in example-8cores.btf](../images/stats/stats-inter-cs11.svg)
+![Inter-arrival time distribution for CS[11] in example-8cores.btf.gz](../images/stats/stats-inter-cs11.svg)
 
 Compare with Blocking Time (Response Time): inter-arrival includes time the task was **running**, so values are typically larger than off-CPU gaps alone. The histogram auto-selects **log duration** for CS[11] because activation gaps span microseconds to milliseconds.
 
@@ -1096,9 +1111,9 @@ For each **victim** task's off-CPU gap, the analyser finds which **preemptor** t
 - **Histogram:** how long that preemptor typically held the CPU during gaps.
 - **Click a point** to jump to the **preemptor's segment** and add an annotation with duration/time notes.
 
-**CS[24] ← CS[25]** in `example-8cores.btf` (55 overlap events, 14.936 ms total overlap) — two context-switch stress tasks repeatedly preempting each other:
+**CS[24] ← CS[25]** in `example-8cores.btf.gz` (55 overlap events, 14.936 ms total overlap) — two context-switch stress tasks repeatedly preempting each other:
 
-![Preemption chain distribution CS[24] preempted by CS[25] in example-8cores.btf](../images/stats/stats-preempt-cs24-cs25.svg)
+![Preemption chain distribution CS[24] preempted by CS[25] in example-8cores.btf.gz](../images/stats/stats-preempt-cs24-cs25.svg)
 
 High **Count** with moderate **Avg** overlap suggests frequent short preemptions; a few points with large **y** values are long stretches where CS[25] ran while CS[24] waited. Use this table to answer *who preempted whom* and whether a victim's blocking is dominated by one preemptor or many.
 
@@ -1144,22 +1159,23 @@ Per-episode detail (distribution chart tooltips, **Export HTML → Boost episode
 
 ##### L/M/H pattern (priority inversion geometry)
 
-**L/M/H** names the textbook **priority-inversion** layout on three priority levels:
+**L/M/H** names the textbook **priority-inversion** layout on three priority levels. In the demo firmware (`Demo/examples/freertos_test/main.c` test 8) the tasks are named **Low**, **Med**, and **High**, pinned to **Core_0** on SMP, and the scenario is repeated **`T8_ROUNDS` (3) times** so the timeline shows multiple red boost stripes and the Priority Inheritance chart has several inherit points:
 
-| Role | Meaning | In `example-8cores.btf` test 8 |
+| Role | Meaning | In `example-8cores.btf.gz` test 8 |
 |------|---------|--------------------------------|
-| **L** (Low) | Mutex holder at the lowest priority of the three | **IL[266]** — `create pri:2`, holds `0x8001da10` |
-| **M** (Medium) | Runnable work at a priority **between** L and H; can preempt L while H waits | **IM[268]** — `create pri:3`, CPU loop after L takes the mutex |
-| **H** (High) | Blocked on the mutex L holds; triggers inheritance | **IH[267]** — `create pri:4`, blocks on `0x8001da10` |
+| **L** (Low) | Mutex holder at the lowest priority of the three | **Low[266]** — `create pri:2`, holds the test mutex |
+| **M** (Medium) | Runnable work at a priority **between** L and H; can preempt L while H waits | **Med[267]** — `create pri:3`, CPU work after Low takes the mutex |
+| **H** (High) | Blocked on the mutex L holds; triggers inheritance | **High[268]** — `create pri:4`, blocks on the same mutex |
 
-Without mutex priority inheritance, **M** would run while **H** waited on **L** — unbounded inversion. FreeRTOS boosts **L** to **H**'s priority (`priority_inherit IL[266] pri:4` at 2172227 µs in the trace) so **L** finishes its critical section before **M** can starve **H**.
+Without mutex priority inheritance, **M** would run while **H** waited on **L** — unbounded inversion. FreeRTOS boosts **L** to **H**'s priority (e.g. first `priority_inherit Low[266] pri:4` near ~3099 ms) so **L** finishes its critical section before **M** can starve **H**.
 
 ```text
-  pri 4  ─── H (IH) ───────── blocks on mutex ────┐
-  pri 3  ─── M (IM) ─── runs while L held lock ─┤  classic inversion
-  pri 2  ─── L (IL) ─── holds mutex, yields ────┘
+  pri 4  ─── High ───────── blocks on mutex ────────┐
+  pri 3  ─── Med  ─── runs while Low held lock ────┤  classic inversion
+  pri 2  ─── Low  ─── holds mutex ─────────────────┘
               │
-              └── kernel boosts L → pri 4 (priority_inherit)
+              └── kernel boosts Low → pri 4 (priority_inherit)
+                    (×3 rounds in example-8cores.btf.gz)
 ```
 
 **How the viewer detects L/M/H:** at the end of each boost episode, it scans every task with a known `create pri:N`. Any task whose **base priority** satisfies **Base** &lt; *p* &lt; **Peak** (strictly between the boosted task's base and peak) is a **medium blocker**. If at least one exists, the episode is an **inversion suspect** and contributes to the **L/M/H** pattern.
@@ -1167,43 +1183,43 @@ Without mutex priority inheritance, **M** would run while **H** waited on **L** 
 - **Episode** level: `inversionSuspect` when the episode was mutex-inherited **or** medium blockers exist; episode **Pattern** may list medium task names.
 - **Summary** level (table **Pattern** column): aggregates episodes — `Mutex inherit`, `L/M/H pattern`, `Mutex inherit + L/M/H`, or `Boost only`.
 
-**Important:** medium-blocker detection uses **all** tasks in the trace with recorded create priorities, not only tasks active in that instant. On a busy SMP trace (many workers at `pri:3` from earlier tests), the episode label may show several medium names (e.g. `Mutex inherit L/M/H (CS[11], CS[12] +126)`). For test 8, **IM[268]** is the semantically relevant **M**; cross-check with the timeline around the boost window (~2172–2180 ms) and `Demo/examples/freertos_test/main.c` test 8 (`vInvLow` / `vInvMed` / `vInvHigh`).
+**Important:** medium-blocker detection uses **all** tasks in the trace with recorded create priorities, not only tasks active in that instant. On a busy SMP trace (many workers at `pri:3` from earlier tests), the episode label may show several medium names (e.g. `Mutex inherit L/M/H (CS[11], CS[12] +126)`). For test 8, **Med[267]** is the semantically relevant **M**; cross-check with the timeline around test 8 (~3042–3359 ms absolute, `--lo 3042000 --hi 3359000`) and `Demo/examples/freertos_test/main.c` test 8 (`vInvLow` / `vInvMed` / `vInvHigh`).
 
-**Example — test 8 in `example-8cores.btf` (`IL[266]`):**
+**Example — test 8 in `example-8cores.btf.gz` (`Low[266]`):**
 
 | Field | Value |
 |-------|--------|
 | **Base / Peak** | 2 → 4 |
-| **Boosts / Boosted** | 1 episode, ~7.847 ms |
+| **Boosts / Boosted** | **3** mutex-inherit episodes, ~34.4 ms each (~103 ms total) |
 | **Summary Pattern** | **Mutex inherit** |
-| **Episode Pattern** | **Mutex inherit L/M/H** (medium tasks include **IM[268]** at pri 3) |
-| **STI window** | `priority_inherit` 2172227 µs → `priority_disinherit` 2180074 µs |
+| **Episode Pattern** | **Mutex inherit L/M/H** (medium tasks include **Med[267]** at pri 3) |
+| **STI windows** | `3099448→3133873`, `3187403→3221850`, `3275380→3309826` µs |
 
-Zoom the timeline to that window (or click the **IL[266]** stats row / scatter point) to see the **red** boost stripe on the IL row and **IH** blocked on the mutex.
+Zoom the timeline to that window (or click a **Low[266]** scatter point) to see the **three red** boost stripes on the Low row and **High** blocking on the mutex between them.
 
-**Contrast — test 7 (`PS[228]`, manual boost):** the runner calls `vTaskPrioritySet(subject, BOOST_PRIORITY)` — trace shows `set_priority` STI events, not `priority_inherit`. **PS[228]** has the same numeric geometry (base 2, peak 4, medium fillers at pri 3) so the summary **Pattern** is **L/M/H pattern** (not **Mutex inherit**). Boost duration is much shorter (~113 µs) because no mutex hold loop is involved. Use **PS[228]** vs **IL[266]** to separate kernel inheritance from application-driven priority changes.
+**Contrast — test 7 (`PS[228]`, manual boost):** the runner calls `vTaskPrioritySet(subject, BOOST_PRIORITY)` — trace shows `set_priority` STI events, not `priority_inherit`. **PS[228]** has the same numeric geometry (base 2, peak 4, medium fillers at pri 3) so the summary **Pattern** is **L/M/H pattern** (not **Mutex inherit**). Boost duration is much shorter (~119 µs) because no mutex hold loop is involved. Use **PS[228]** vs **Low[266]** to separate kernel inheritance from application-driven priority changes.
 
 **Timeline UX** — boosted periods appear as a **bottom stripe** on the task row (horizontal) or a **right-edge stripe** (vertical): **orange** = boost only (`Boost only` / manual `set_priority` without L/M/H geometry); **red** = mutex inherit or any L/M/H-related pattern. Task labels show **`· pri N`** when create priority is known.
 
-**IL[266]** on the timeline in `example-8cores.btf` (zoomed to test 8 ~2172–2180 ms). The **red bottom stripe** on the IL row marks the kernel priority-boost window from `priority_inherit` to `priority_disinherit` STI events (2172.227–2180.074 ms). That window can start slightly before IL's slice begins and end just before its last slice ends, because the stripe follows trace hooks—not the merged execution bar:
+**Low[266]** on the timeline in `example-8cores.btf.gz` (zoomed to test 8, `--lo 3042000 --hi 3359000`). Three **red bottom stripes** on the Low row mark the `priority_inherit` → `priority_disinherit` windows (~34.4 ms each). **Med[267]** runs on the same core before each inherit; during each boost window Med stays off-CPU:
 
-![Timeline view: IL[266] with red priority-inheritance stripe (example-8cores.btf)](../images/stats/tasks-priority-il266.svg)
+![Timeline view: Low[266] with three red priority-inheritance stripes (example-8cores.btf.gz)](../images/stats/tasks-priority-low.svg)
 
 Export a timeline SVG from the viewer (**File → Save SVG** or toolbar) after zooming to the episode, or regenerate it headlessly via `make -C BTFViewer update-images` (desktop CLI `snapshot --view timeline --task ... --lo ... --hi ...`).
 
 **Distribution chart** — click any Priority Inheritance table row:
 
-- **Scatter:** x = boost episode end time, y = boosted duration. Orange points = boost only; red = L/M/H / mutex inherit.
+- **Scatter:** x = boost episode end time, y = boosted duration. Orange points = boost only; red = L/M/H / mutex inherit. Test 8 contributes **three** clustered red points near ~34 ms.
 - **Histogram:** distribution of boost durations.
 - **Click a point** to zoom to that episode, scroll to the task row, highlight it, and add an annotation (re-click skips duplicate annotations).
 
 **Export HTML** includes a **Boost episodes** detail sub-table (up to 200 rows by start time).
 
-**IL[266]** distribution (test 8: one mutex inherit episode, base pri 2 → peak 4, ~7.847 ms boosted):
+**Low[266]** distribution (test 8: three mutex inherit episodes, base pri 2 → peak 4, ~34.4 ms each):
 
-![Priority boost distribution chart for IL[266] in example-8cores.btf](../images/stats/stats-priority-il266.svg)
+![Priority boost distribution chart for Low[266] in example-8cores.btf.gz](../images/stats/stats-priority-low.svg)
 
-**PS[228]** (test 7: manual `vTaskPrioritySet`, **L/M/H pattern**, ~113 µs boosted) contrasts with **IL[266]** above — same base/peak numbers, different mechanism and duration.
+**PS[228]** (test 7: manual `vTaskPrioritySet`, **L/M/H pattern**, ~119 µs boosted) contrasts with **Low[266]** above — same base/peak numbers, different mechanism and duration.
 
 **Note:** `traceTASK_PRIORITY_INHERIT` / `traceTASK_PRIORITY_DISINHERIT` are invoked by the FreeRTOS kernel inside `xTaskPriorityInherit()` / `xTaskPriorityDisinherit()` when `configUSE_MUTEXES` is enabled.
 
@@ -1262,7 +1278,7 @@ Below the summary table, a **Pairing issues** sub-table lists every problem in s
 
 **Export CSV** includes a **Core Affinity Violations** sub-section listing each mutex that had at least one bounced hold, with the bounce count and a description.
 
-`example-4cores.btf` (tests 1–3) exercises `0x80018700` (mutex) and `0x80018650` (counting sem) with clean hold pairing. The full trace shows `CORE_MIGRATION_WHILE_HELD` warnings on `0x80018700` (3 bounces) and `0x80018650` (1 bounce) — the Statistics **Mutex / Semaphore** summary table will show **Warning** for these mutexes and non-zero values in the **Bounces** column. Coordination sems pair in **signal** direction. **Test 8** also produces a `delete_while_held` warning at teardown.
+`example-4cores.btf.gz` (tests 1–3) exercises `0x80018700` (mutex) and `0x80018650` (counting sem) with clean hold pairing. The full trace shows `CORE_MIGRATION_WHILE_HELD` warnings on `0x80018700` (3 bounces) and `0x80018650` (1 bounce) — the Statistics **Mutex / Semaphore** summary table will show **Warning** for these mutexes and non-zero values in the **Bounces** column. Coordination sems pair in **signal** direction.
 
 #### Interval Analysis
 
@@ -1302,9 +1318,9 @@ Recorded by `traceINTERVAL_START(id)` / `traceINTERVAL_STOP(id)` in firmware —
 
 **Export HTML** includes an **Interval instances** detail sub-table (longest first, up to 200 rows).
 
-**Interval 1** in `example-8cores.btf` (1728 spans from eighteen `vCtxSwitchWorker` tasks — CS[11]–CS[28] — sharing id `1` — each worker pairs via its own `tid` in the note):
+**Interval 1** in `example-8cores.btf.gz` (1728 spans from eighteen `vCtxSwitchWorker` tasks — CS[11]–CS[28] — sharing id `1` — each worker pairs via its own `tid` in the note):
 
-![Interval duration distribution for interval id 1 in example-8cores.btf](../images/stats/stats-interval-1.svg)
+![Interval duration distribution for interval id 1 in example-8cores.btf.gz](../images/stats/stats-interval-1.svg)
 
 Most spans cluster at short durations (tight yield loops); occasional high **y** points mark iterations that waited longer on the shared mutex or area semaphore. Compare ids **4–6** (shorter per-iteration work) vs **1–3** (heavier stress tests) in the same table.
 
@@ -1374,7 +1390,7 @@ When starts and stops interleave across cores, the viewer can pair one task's **
 - **Count** — still the number of stop events that found a start on the stack (often equals the number of loop iterations).
 - **Min / Avg / Max / p95** — can be **wrong**: bogus **very long** spans inflate max and avg; the distribution chart shows outlier points far above the real iteration time.
 
-`example-4cores.btf` is recorded **with** `tid` in each interval note, so ids **1–4** pair correctly across parallel workers. **Legacy** traces that omit `tid` may still cross-pair when several tasks share one id:
+`example-4cores.btf.gz` is recorded **with** `tid` in each interval note, so ids **1–4** pair correctly across parallel workers. **Legacy** traces that omit `tid` may still cross-pair when several tasks share one id:
 
 | Interval id | Test (see `Demo/examples/freertos_test/main.c`) | Without `tid` — typical symptom |
 |-------------|--------------------------------------------------|--------------------------------|
@@ -1422,7 +1438,7 @@ The statistics table and distribution charts use **every** paired instance in sc
 | **Distribution chart** | One point per paired span (same set as Count) |
 | **Timeline → Interval N row** | Non-nested spans only (fully contained children hidden) |
 
-Typical timeline bar counts for the full `example-4cores.btf` trace:
+Typical timeline bar counts for the full `example-4cores.btf.gz` trace:
 
 | Interval id | Statistics **Count** | Timeline bars (top-level) |
 |-------------|----------------------|---------------------------|
@@ -1477,9 +1493,9 @@ When tick intervals can be charted, a **Tick Distribution…** button (bar-chart
 
 Click any scatter point to jump to that tick time, add an **annotation**, and open the **Marks** tab with the annotation selected (same behaviour as other metric distribution charts).
 
-**Tick Distribution** in `example-8cores.btf` (1966 TICK events, avg period 1.000 ms → nominal 1000 Hz, CV ≈ 24.7 % → **TICKLESS**, max gap 2.340 ms, 4 estimated missed ticks):
+**Tick Distribution** in `example-8cores.btf.gz` (~2496 TICK events, CV ≈ 35.9 % → **TICKLESS**):
 
-![Tick interval distribution chart — scatter and histogram of consecutive TICK gaps in example-8cores.btf](../images/stats/stats-tick.svg)
+![Tick interval distribution chart — scatter and histogram of consecutive TICK gaps in example-8cores.btf.gz](../images/stats/stats-tick.svg)
 
 The histogram's multiple peaks (1×, 2×, 3× the nominal period) confirm tickless idle: most gaps are a single tick, but idle stretches skip several nominal periods before the next TICK fires.
 
@@ -1504,15 +1520,56 @@ Aggregates numeric samples from the 8 general-purpose STI **tag** channels (`tag
 - **Scatter:** x = sample time, y = tag value.
 - **Histogram:** distribution of tag values.
 
-**tag0_event** in `example-8cores.btf` (1966 samples, min 8,496, avg 37,587.5, max 45,504, p95 43,904):
+**tag0_event** in `example-8cores.btf.gz` (2330 samples, min 8,144, avg ≈ 36,845, max 71,904, p95 41,936):
 
-![Tag value distribution chart for tag0_event in example-8cores.btf](../images/stats/stats-tag0.svg)
+![Tag value distribution chart for tag0_event in example-8cores.btf.gz](../images/stats/stats-tag0.svg)
 
 Shown only when the trace contains `tag0_event` … `tag7_event` (or `tag_event`) STI samples.
 
 ### Core migration analysis
 
 A **migration** is recorded when consecutive slices of the same task (merge-key) run on different cores. Migrations are detected at parse time from the segment timeline — there are no separate markers drawn on the timeline; use the **Core Migrations** table, **Migration heatmap**, **Migration chord diagram**, **Trace Compare…**, or Find **Migrations** mode to inspect them.
+
+#### Highlight a migrating task on the timeline
+
+To *see* a task hop cores (not only read rates in a table):
+
+1. Switch to **Core View** (toolbar **Core**).
+2. Type the task name in the legend **filter** (e.g. `CS[22]`) so only that task’s sub-rows remain.
+3. **⊞ Expand All** (or expand each core the task visited).
+4. Click the task label (or a segment) to **lock-highlight** it — other tasks dim; the highlighted bars jump from core row to core row at each migration.
+5. Optionally place cursors around the burst and enable **Limit to cursor range** so **Statistics → Core Migrations** and the heatmap recompute for that window only.
+
+**Headless equivalent** (`example-8cores.btf.gz`, CS stress burst where `CS[22]` visits all 8 cores):
+
+```bash
+python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
+    -o ../images/stats/tasks-migrate-cs22.svg \
+    --view timeline --view-mode core --task "CS[22]" \
+    --lo 1805000 --hi 1865000
+```
+
+Or regenerate with `make -C BTFViewer update-images`.
+
+![Core View: CS[22] highlighted hopping across Core_0…Core_7 (example-8cores.btf.gz)](../images/stats/tasks-migrate-cs22.svg)
+
+*~60 ms window (`--lo 1805000 --hi 1865000`). Cyan outline = locked highlight; each core row shows only `CS[22]` after the task filter — gaps between bars are off-CPU / other cores.*
+
+#### Inspect migrations involving a specific core
+
+After highlighting a hot task:
+
+1. **Statistics → Core Migrations** — note **Primary** core, **Rate**, **Dwell**, **Ping** for that task.  Click the row → **Dwell** / **Rate** / **Gap** charts.
+2. **Core-Pair Migration Summary** — sort or scan pairs where that core is **From** or **To** (e.g. `Core_5→Core_7`) to see which neighbour absorbs the traffic and whether **Bounce %** is elevated.
+3. Toolbar **Heatmap** — find the dark cells on rows that include the core of interest; click to drill to the per-task grid, then click the task cell to zoom/filter the timeline to that pair/window.
+4. Toolbar **Chord** — hover the core’s arc to highlight only its ingress/egress chords.
+5. **Core Time Breakdown** — click a core row to jump Core View focused on that core.
+6. Headless CSV for a scoped window:
+
+```bash
+python builds/btf_viewer.py migrations ../tracedata/example-8cores.btf.gz \
+    --lo 1805000 --hi 1865000 -o - | head
+```
 
 **Legend panel:** check **Migrated tasks only** to hide tasks that never left their first core.
 
@@ -1559,13 +1616,13 @@ Click a row to open a **distribution chart** with three in-dialog tabs (switches
 
 Each tab's scatter + histogram uses the same **adaptive scaling** as other metrics charts (see [Metrics Distribution Charts](#metrics-distribution-charts)).
 
-**CS[22]** in `example-8cores.btf` (a context-switch stress task that migrates often):
+**CS[22]** in `example-8cores.btf.gz` (a context-switch stress task that migrates often):
 
-![On-core dwell time distribution for CS[22] in example-8cores.btf](../images/stats/stats-mig-dwell-cs22.svg)
+![On-core dwell time distribution for CS[22] in example-8cores.btf.gz](../images/stats/stats-mig-dwell-cs22.svg)
 
-![Time between migrations for CS[22] in example-8cores.btf](../images/stats/stats-mig-rate-cs22.svg)
+![Time between migrations for CS[22] in example-8cores.btf.gz](../images/stats/stats-mig-rate-cs22.svg)
 
-![Post-migration gap distribution for CS[22] in example-8cores.btf](../images/stats/stats-mig-gap-cs22.svg)
+![Post-migration gap distribution for CS[22] in example-8cores.btf.gz](../images/stats/stats-mig-gap-cs22.svg)
 
 Drag the resize handle below the table to show more or fewer rows.
 
@@ -1575,23 +1632,23 @@ Visualise **when** migrations happen between core pairs — complementary to the
 
 **Bounce-only filter** — the **Show: All Migrations / Show: Bounce Only** toggle button in the heatmap dialog restricts the visualisation to migrations that occurred while a mutex was held across two different cores (lock-bounce migrations, tracked via `lock_bounce_migration_ns`). Use this to identify which core pairs and time windows are dominated by cache-line bouncing rather than normal scheduling migrations.
 
-**Example (`example-4cores.btf`)** — screenshots exported with **Export SVG** from the heatmap dialog (full current drill level, no hover highlight):
+**Example (`example-4cores.btf.gz`)** — screenshots exported with **Export SVG** from the heatmap dialog (full current drill level, no hover highlight):
 
 **Level 1 — core-pair overview** (4 cores · 12 time bins across the trace):
 
-![Migration heatmap Level 1: core-pair rows and time bins for example-8cores.btf](../images/heatmap-pairs.svg)
+![Migration heatmap Level 1: core-pair rows and time bins for example-8cores.btf.gz](../images/heatmap-pairs.svg)
 
 Each row is a directed core pair (`c0→c1`, `c0→c2`, …). Cell colour intensity is the migration count in that bin (darker blue = more events). Horizontal bands show **when** traffic occurred — e.g. repeated activity on `c0→c2` and `c1→c0` during the context-switch stress phases. Click a non-empty cell to drill into tasks for that pair and time window.
 
 **Level 2 — task grid** (after clicking a cell on the pair overview):
 
-![Migration heatmap Level 2: per-task sub-bins after drilling from example-8cores.btf](../images/heatmap-tasks.svg)
+![Migration heatmap Level 2: per-task sub-bins after drilling from example-8cores.btf.gz](../images/heatmap-tasks.svg)
 
 Rows are tasks that migrated on the selected core pair within the chosen bin; columns are **12 sub-bins** spanning that bin's time window. Brighter cells mark sub-intervals where that task crossed cores most often. Each row label is prefixed with a directional indicator: **▲** = task primarily migrates in this direction (egress-dominant), **▼** = more migrations on the reverse path (ingress-dominant), **⇄** = roughly symmetric. Click a task cell to zoom the timeline, place **C1** / **C2** at the sub-bin edges, switch to **Task View**, and filter to that task only.
 
 **Typical workflow (≤ 16 cores)**
 
-1. Open **Heatmap** from the toolbar (`tracedata/example-8cores.btf` or `example-16cores.btf` are good demos).
+1. Open **Heatmap** from the toolbar (`tracedata/example-8cores.btf.gz` or `example-16cores.btf.gz` are good demos).
 2. **Level 1** — click a hot cell on a core-pair row to open the task grid for that bin.
 3. **Level 2** — click a task cell to zoom the timeline, place **C1** / **C2**, switch to **Task View**, and show only that task.
 4. **Show all tasks** — when done, clear the task filter and restore the timeline viewport, cursors, and highlights from before the heatmap was opened; the heatmap returns to the core-pair overview.
@@ -1605,7 +1662,7 @@ Rows are tasks that migrated on the selected core pair within the chosen bin; co
 
 | | |
 |--|--|
-| **Open** | Toolbar **Heatmap** (Desktop + Web). Enabled only when the trace has **2 or more cores** (single-core traces such as `example.btf` disable the button). Desktop: non-modal dialog (timeline stays interactive). Web: semi-transparent overlay. |
+| **Open** | Toolbar **Heatmap** (Desktop + Web). Enabled only when the trace has **2 or more cores** (single-core traces disable the button). Desktop: non-modal dialog (timeline stays interactive). Web: semi-transparent overlay. |
 | **Level 1 (≤ 16 cores)** | One row per directed core pair (`c0→c1`, `c1→c0`, …). Core names are shortened in the labels (e.g. `Core_0` → `c0`). |
 | **Level 1 (> 16 cores)** | **Core×core matrix** — row = source core, column = destination core. Hover highlights the row; **click a row** (not a single cell) to open outgoing pairs. |
 | **Level 2 (> 16 cores)** | Outgoing pairs from the selected source core (`c3→c1`, `c3→c2`, …) × 32 time bins. Row hover highlight; click a cell for tasks. |
@@ -1665,9 +1722,9 @@ Visualise **how much** migration traffic flows between each pair of cores, as di
 | **Export SVG** | Footer button next to Export PNG; same content, vector format. Filename: `migration-chord-{timestamp}.svg`. Desktop: file save dialog. Web: direct download. |
 | **Empty state** | *No migrations in scope.* when no migrations fall in the current window. |
 
-**Example (`example-8cores.btf`)** — screenshot exported with **Export SVG** from the chord dialog (full trace scope, no hover highlight):
+**Example (`example-8cores.btf.gz`)** — screenshot exported with **Export SVG** from the chord dialog (full trace scope, no hover highlight):
 
-![Migration chord diagram: directional core-to-core migration volume for example-8cores.btf](../images/migration-chord.svg)
+![Migration chord diagram: directional core-to-core migration volume for example-8cores.btf.gz](../images/migration-chord.svg)
 
 Each arc around the circle is one core (`c0`…`c7`); a chord between two arcs is a directed migration flow, coloured as a gradient from its source core to its destination core, with width proportional to migration count. Thicker chords between adjacent-looking core pairs (e.g. `c0`↔`c2`, `c1`↔`c6`) stand out immediately as the busiest migration paths, without needing to drill through a heatmap grid first.
 
@@ -2201,7 +2258,7 @@ Traces from `make run` and `tools/gentrace` use these STI channels (see [Binary 
 | `task` | `suspend Name[id]`, `resume Name[id]`, `delete …`, `set_priority Name[id] pri:N`, `priority_inherit …`, `priority_disinherit …`, `resume/isr` | Task lifecycle / priority |
 | `queue` / `mutex` / `sem` | `create` / `send` / `recv` / `give` / `take` / `delete` + `0x........` | Queue and synchronisation objects |
 
-**Interval example** (from `tracedata/example-4cores.btf`):
+**Interval example** (from `tracedata/example-4cores.btf.gz`):
 
 ```
 214276,Core_0,0,STI,interval_start,0,trigger,0 tid:1

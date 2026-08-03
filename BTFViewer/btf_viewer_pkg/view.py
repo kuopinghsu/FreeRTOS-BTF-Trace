@@ -79,8 +79,11 @@ class _NavigatorPopup(QWidget):
         # Child of QGraphicsView, not its viewport: map through viewport
         # geometry so the popup stays fixed when the scene scrolls.
         vp = view.viewport() if hasattr(view, "viewport") else view
+        # Keep above CPU-load overlay (and any other bottom chrome) so the
+        # pan window is not covered by a raised sibling of the timeline pane.
+        inset = int(getattr(view, "_nav_bottom_inset", 0) or 0)
         x = vp.x() + vp.width()  - self.W - self.MARGIN
-        y = vp.y() + vp.height() - self.H - self.MARGIN
+        y = vp.y() + vp.height() - self.H - self.MARGIN - inset
         self.move(max(vp.x(), x), max(vp.y(), y))
 
     def set_pixmap(self, pix: QPixmap) -> None:
@@ -861,6 +864,9 @@ class TimelineView(QGraphicsView):
         self._nav_hide_timer.setSingleShot(True)
         self._nav_hide_timer.setInterval(1800)  # ms - fade-out after idle
         self._nav_hide_timer.timeout.connect(self._nav_popup.fade_out)
+        # Extra bottom margin so the popup clears the CPU-load overlay that
+        # _CpuLoadStack paints on top of the full-height timeline pane.
+        self._nav_bottom_inset: int = 0
         # Background pixmap cache for the nav popup.  Rebuilt only when the
         # trace, view-mode, STI visibility or expansion state changes.
         # On every scroll we just copy the cached bg and overlay the viewport rect.
@@ -1309,6 +1315,15 @@ class TimelineView(QGraphicsView):
             return
         self._capture_virt_time_scroll_px()
         self._push_virt_trace_bar()
+
+    def set_nav_bottom_inset(self, px: int) -> None:
+        """Reserve bottom pixels so the navigator clears an overlay (CPU load)."""
+        inset = max(0, int(px))
+        if inset == self._nav_bottom_inset:
+            return
+        self._nav_bottom_inset = inset
+        if self._nav_popup.isVisible():
+            self._nav_popup.reposition()
 
     def _refresh_nav_pan_window(self, *, force_show: bool = False) -> None:
         """Repaint and show the navigator minimap (orange viewport box)."""

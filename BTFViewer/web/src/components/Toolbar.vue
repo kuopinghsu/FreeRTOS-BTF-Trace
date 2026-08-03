@@ -98,7 +98,7 @@
           Open
           <input
             type="file"
-            accept=".btf"
+            :accept="BTF_FILE_ACCEPT"
             style="display:none"
             @change="onFileChange"
           >
@@ -691,6 +691,7 @@
 import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import { getTimelineLayout } from '../utils/timelineLayout.js'
 import { supportsFileHandles, pickAndReadBtf } from '../utils/fileOpen.js'
+import { BTF_FILE_ACCEPT, loadBtfTextFromFile } from '../utils/btfLoad.js'
 
 const props = defineProps({
   modelValue:  { type: Object,  required: true },
@@ -725,25 +726,23 @@ async function onOpenClick() {
   if (!file) return
   emit('trace-reading', { name: file.name })
   try {
-    const text = await file.text()
+    const text = await loadBtfTextFromFile(file)
     emit('trace-loaded', { text, name: file.name })
-  } catch {
-    emit('file-error', `Failed to read "${file.name}"`)
+  } catch (err) {
+    emit('file-error', `Failed to read "${file.name}"${err?.message ? `: ${err.message}` : ''}`)
   }
 }
 
-function onFileChange(e) {
+async function onFileChange(e) {
   const file = e.target.files[0]
   if (!file) return
   emit('trace-reading', { name: file.name })
-  const reader = new FileReader()
-  reader.onload = (ev) => {
-    emit('trace-loaded', { text: ev.target.result, name: file.name })
+  try {
+    const text = await loadBtfTextFromFile(file)
+    emit('trace-loaded', { text, name: file.name })
+  } catch (err) {
+    emit('file-error', `Failed to read "${file.name}"${err?.message ? `: ${err.message}` : ''}`)
   }
-  reader.onerror = () => {
-    emit('file-error', `Failed to read "${file.name}": ${reader.error?.message ?? 'unknown error'}`)
-  }
-  reader.readAsText(file)
   e.target.value = ''
 }
 

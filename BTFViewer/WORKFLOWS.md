@@ -1,708 +1,515 @@
 # BTF Viewer — Application Notes
 
-Practical workflows for using BTFViewer to analyse RTOS scheduler behaviour and diagnose real-time performance issues.  Each section is self-contained — jump to the pattern that matches your problem.
+Practical, **top-down** workflows for analysing RTOS scheduler behaviour with BTFViewer.  Start at the system level, follow the Analysis findings, and only then open the deep metric tables.
 
-Shell examples below assume the current directory is `BTFViewer/` (Desktop: `python builds/btf_viewer.py …`, or `python -m btf_viewer_pkg …`).  The Web viewer is `builds/btf_viewer.html`.
+Shell examples assume the current directory is `BTFViewer/` (Desktop: `python builds/btf_viewer.py …`).  The Web viewer is `builds/btf_viewer.html`.
+
+The worked example throughout uses the committed sample:
+
+```bash
+python builds/btf_viewer.py ../tracedata/example-8cores.btf.gz
+# Headless report (numbers cited below come from this):
+python builds/btf_viewer.py report ../tracedata/example-8cores.btf.gz \
+    --output /tmp/ex8-report.html --format html
+```
 
 ---
 
 ## Table of Contents
 
-| Workflow | When to use it |
-|----------|----------------|
-| [1. First look at a new trace](#1-first-look-at-a-new-trace) | Orient yourself after loading a trace for the first time |
-| [2. Measure CPU utilisation and load balance](#2-measure-cpu-utilisation-and-load-balance) | Find overloaded / idle cores on SMP systems |
-| [3. Find the worst-case execution time (WCET)](#3-find-the-worst-case-execution-time-wcet) | Identify the longest task slice and its context |
-| [4. Diagnose high blocking / response time](#4-diagnose-high-blocking--response-time) | Understand why a task waits longer than expected |
-| [5. Detect priority inversion](#5-detect-priority-inversion) | Spot mutex-induced priority inversion and L/M/H geometry |
-| [6. Analyse core migrations on SMP](#6-analyse-core-migrations-on-smp) | Spot excessive bouncing / core thrashing, ping-pong, and lock-boundary bounces |
-| [7. Verify task deadlines and CPU budgets](#7-verify-task-deadlines-and-cpu-budgets) | Flag executions that breach real-time requirements |
-| [8. Scope analysis to a time window](#8-scope-analysis-to-a-time-window) | Restrict every metric to a specific region of interest |
-| [9. Compare two builds or configurations](#9-compare-two-builds-or-configurations) | Before/after diffing with Trace Compare |
-| [10. Monitor custom signals and code regions](#10-monitor-custom-signals-and-code-regions) | Heap usage, periodic counters, interval timing |
-| [11. Detect tick jitter and tickless modes](#11-detect-tick-jitter-and-tickless-modes) | Evaluate scheduler timer health |
-| [12. Check mutex and semaphore correctness](#12-check-mutex-and-semaphore-correctness) | Find unpaired takes/gives and core-boundary bounces |
-| [13. Export results for reports](#13-export-results-for-reports) | Analysis Findings, CSV/HTML, Perfetto, PNG/SVG, headless CLI |
+| Section | Purpose |
+|---------|---------|
+| [1. Load a trace](#1-load-a-trace) | Open `.btf` / `.btf.gz` and orient |
+| [2. Top-down analysis ladder](#2-top-down-analysis-ladder) | The order to inspect any new trace |
+| [3. Worked example — `example-8cores`](#3-worked-example--example-8cores) | Full walkthrough with measured stats and recommendations |
+| [4. Deep-dive playbooks](#4-deep-dive-playbooks) | Procedures once a finding points at a metric |
+| [5. Scope, compare, and custom signals](#5-scope-compare-and-custom-signals) | Cursor windows, Trace Compare, tags/intervals |
+| [6. Export results](#6-export-results) | Analysis Findings, CSV/HTML, Perfetto, CLI |
+| [Quick-reference](#quick-reference-metric-to-root-cause) | Symptom → metric map |
 
 ---
 
-## 1. First Look at a New Trace
-
-### Load and orient
+## 1. Load a Trace
 
 ```bash
-python builds/btf_viewer.py your-trace.btf
+python builds/btf_viewer.py ../tracedata/example-8cores.btf.gz
+# Smaller smoke sample:
+python builds/btf_viewer.py ../tracedata/example-2cores.btf.gz
 ```
 
-Or open via **File → Open** (`Ctrl+O`) / drag-and-drop.  For the Web viewer, open `builds/btf_viewer.html` in a browser and load the same `.btf` file.
-Replace `your-trace.btf` with the path to your `.btf` trace file.
+Or **File → Open** (`Ctrl+O`) / drag-and-drop.  Plain `.btf` and compressed `.btf.gz` / `.bz2` / `.zip` all work.  Web: open `builds/btf_viewer.html` (or **Demo** for the embedded `example-2cores.btf.gz`).
 
-![BTF Viewer — Core View with CPU Load graph and Execution Time distribution chart](../images/btfviewer.png)
+![BTF Viewer — Core View with CPU Load graph and Statistics](../images/btfviewer.png)
 
-*BTF Viewer in **Core View** with the CPU Load graph enabled.  The right panel shows **Statistics** with Execution Time Per Slice table open; a distribution chart has been opened by clicking a task row.*
-
-### What to check first
+*Core View + CPU Load + Statistics.  Prefer Core View on first open of an SMP trace.*
 
 | Step | Action | What to look for |
 |------|--------|------------------|
-| 1 | Read the **status bar** | Task count, segment count, total trace span |
-| 2 | Press `Ctrl+0` | Fit the entire trace on screen |
-| 3 | Switch **Task View ↔ Core View** | Task View: one row per task; Core View: one row per core, expandable |
-| 4 | Hover a segment | Tooltip shows duration, slice index, previous/next task on that core, and the gap before this slice |
-| 5 | Open **Statistics panel** | Summary, core utilisation, and top tasks appear immediately without placing cursors |
-| 6 | Click toolbar **Analysis** | Heuristic findings (load imbalance, thrashing, tick, sync, …) for a quick triage |
-| 7 | Check **Trace Health (TICK)** section | Verify tick regularity; a warning badge signals jitter or a missed-tick estimate |
-
-### Tips
-
-- **Core View** is usually better for a first look on SMP traces: you can see which cores are busy and which are idle without needing to identify individual tasks.
-- Click any core label in Core View to expand/collapse that core's per-task sub-rows.  Use **⊞ Expand All** / **⊟ Collapse All** to toggle all at once.
-- The **CPU Load Graph** (toolbar **Load** button) shows per-core utilisation as a bar chart below the timeline — enable it immediately on any multi-core trace.
-- Toolbar **Analysis** opens a dialog with severity-tagged findings for the current Statistics scope (full trace, or **Limit to cursor range** when 2+ cursors are active).  Use **Save as text…** to keep a copy for notes or CI artefacts.
-
----
-
-## 2. Measure CPU Utilisation and Load Balance
-
-### Goal
-
-Determine how much CPU time each core and each task consumes, and detect load imbalance across cores on SMP systems.
-
-### Procedure
-
-1. Open the **Statistics** panel.
-2. Expand **Core Utilisation** — one bar per core, showing active (non-IDLE, non-TICK) CPU%.
-3. Read the **Load Balance Score** badge at the top of the section.
-   - Score = 100 × (1 − Gini coefficient): **100** = perfect balance, **0** = one core does everything.
-   - The badge turns **amber** when the population standard deviation σ > 30 %, signalling significant imbalance.
-4. Optionally open toolbar **Analysis** — it flags **Load imbalance** when Score < 70 % *or* σ > 30 %, and only describes cores as “reasonably balanced” when Score ≥ 85 % and σ ≤ 30 %.
-5. Expand **Top Tasks by CPU** to see which 10 tasks consume the most CPU time.
-
-### Interpreting results
-
-| Symptom | Likely cause | What to investigate next |
-|---------|-------------|--------------------------|
-| One core > 90 %, others idle | Tasks pinned to one core, or poor affinity configuration | **Core Affinity** table; verify observed execution cores against declared affinity masks |
-| All cores high but one consistently low | A bottleneck serializes work (lock, queue) | **Mutex / Semaphore** and **Preemption Chain** tables |
-| IDLE% unexpectedly high on all cores | Work is not being generated fast enough, or tickless idle is kicking in | **Trace Health (TICK)** section for tickless detection |
-| One task dominates Top Tasks list | It may be consuming its budget; check against deadline/budget thresholds | **Deadlines / CPU budget** section (see §7) |
-| Score mid-range (e.g. ~60 %) but σ < 30 % | Spread across many cores is still uneven | Treat as imbalance; check **Analysis** and **Core Migrations** |
-
-### Example — multi-core trace
+| 1 | Status bar + `Ctrl+0` | Span, task/segment counts; **Fit to Window** |
+| 2 | Toolbar **Core** + **Load** | Core View; CPU Load strip (one row per core) |
+| 3 | Click a task label (lock-highlight) | Task hops across core rows; **CPU Load** shows **that task’s** usage **per core** |
+| 4 | **Statistics** + **Analysis** | Summary + heuristic triage |
+| 5 | **Trace Health (TICK)** | Timer health before trusting derived metrics |
 
 ```bash
-python builds/btf_viewer.py your-trace.btf
+# Fit + Core View + highlight + per-core CPU Load (headless)
+python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
+    -o ../images/stats/tasks-cpu-load-cs22.svg \
+    --view timeline --view-mode core --task "CS[22]" --cpu-load --height 900
 ```
 
-Open the **Statistics** panel → **Core Utilisation**.  Check that each core's active CPU% is within an expected range and the **Load Balance Score** badge is not amber (σ ≤ 30 %).  Confirm with toolbar **Analysis** if Score is below ~70 %.  **Top Tasks by CPU** reveals which tasks dominate CPU consumption.
+![CS[22] in Core View with per-core CPU Load at Fit to Window](../images/stats/tasks-cpu-load-cs22.svg)
 
-### Cursor-scoped utilisation
-
-Place two cursors (`C`) around a region of interest and enable **Limit to cursor range (C1–Cn)**.  Core utilisation percentages (and Analysis Findings) are re-computed for that window only — useful for comparing a load spike against the baseline.
+*`CS[22]` locked in Core View.  Timeline shows the task on each core it ran; **CPU Load** has eight sparklines (that task’s load on Core_0…Core_7).*
 
 ---
 
-## 3. Find the Worst-Case Execution Time (WCET)
+## 2. Top-Down Analysis Ladder
 
-### Goal
+Work **down** this hierarchy.  Stop drilling when the evidence explains the symptom; do not open every Statistics section by default.
 
-Identify the single longest on-CPU slice for each task, navigate to it on the timeline, and understand what preceded it.
+```text
+① System health     Trace Health (TICK), span, instrumentation flags
+② Core balance      Core Utilisation + Load Balance Score
+③ Task CPU / WCET   Top Tasks → Execution Time Per Slice (Max)
+④ Latency           Blocking Time → Preemption Chain
+⑤ Concurrency       Core Migrations → Mutex/Semaphore → Priority Inheritance
+⑥ Compliance        Deadlines / Affinity / Task Lifecycle / Tags / Intervals
+```
 
-### Procedure
+**How to drive it in the UI**
 
-1. Open **Statistics → Execution Time Per Slice**.
-2. Click the **Max** column header to sort descending.
-3. The **Max** cell for each task row is a link (dotted underline) — click it to:
-   - Scroll and zoom the timeline to that slice.
-   - Place a bookmark annotation with the duration.
-4. Open the **distribution chart** for that task (click its row) to see the full slice-duration spread:
-   - **Scatter plot**: each point is one slice; x = start time, y = duration.  A single outlier far above the cluster is a WCET candidate for investigation.
-   - **Histogram**: the **CDF overlay** (blue curve) shows what fraction of slices finish within a given duration — useful for checking whether the WCET is a rare tail event or part of a regular pattern.
+1. Toolbar **Analysis** — read every finding (info and warning).
+2. For each finding, open the named Statistics section.
+3. Click **Max** / scatter points / heatmap cells to jump the timeline.
+4. Place cursors (`C`) around the interesting phase and enable **Limit to cursor range** so metrics are not polluted by unrelated tests in the same file.
 
-### Reading the scatter plot for WCET context
+**Interpretation rule for demo traces:** `example-8cores.btf.gz` concatenates intentional stress tests (context-switch thrash, mutex/queue storms, priority inversion, suspend/resume, affinity).  A “warning” finding may be **expected for that test phase**.  Scope to the phase before treating it as a product defect.
 
-- Click any scatter point → the viewer jumps to that exact slice and adds an annotation.
-- Hover the segment on the timeline to read the **gap before this slice** (scheduling latency).
-- Switch to **Core View**, expand the core, to see which other tasks ran on the same core immediately before and after.
+---
 
-### Tip — `p95` vs `Max`
+## 3. Worked Example — `example-8cores`
 
-If the **Max** slice is an isolated spike far above **p95**, suspect an external interrupt or OS overhead rather than a deterministic WCET.  A **p95** value that is already near your deadline budget is the more actionable number for design margins.
+### 3.0 Trace snapshot
 
-### Example — Execution Time distribution chart
+| Field | Value |
+|-------|-------|
+| File | `../tracedata/example-8cores.btf.gz` |
+| Span | **2.358 s** (`#timeScale us`) |
+| Cores | **8** |
+| Tasks / segments / STI | **154** / **31 141** / **33 495** |
+| Context switches / migrations | **31 133** / **18 992** (138 migrated tasks) |
+| Instrumentation | priority + sync + intervals |
+| TICK | **WARNING / TICKLESS** — 2496 ticks, CV **35.9 %**, missed ≈ **8** |
 
 ```bash
-python builds/btf_viewer.py your-trace.btf
+python builds/btf_viewer.py info ../tracedata/example-8cores.btf.gz
 ```
 
-Open **Statistics → Execution Time Per Slice**, click any task row to open its distribution chart:
-
-![Execution Time distribution chart — scatter plot above, adaptive histogram with CDF overlay below](../images/stats/stats-exec-cs11.svg)
-
-*The scatter plot (top) shows all slices over the trace span.  The histogram (bottom) automatically selects a **log-scaled duration axis** when the duration range spans more than an order of magnitude.  The blue **CDF** curve rises steeply on the left when most slices are short, then levels off as longer outliers are counted.  The **p50** (green) and **p95** (orange) dashed lines align with the corresponding percentile ticks on the right axis, making it easy to read off deadline-compliance percentages.*
+Open **Statistics**, then **Analysis**.  The HTML report’s Analysis card summarises the same triage used below.
 
 ---
 
-## 4. Diagnose High Blocking / Response Time
+### 3.1 System health (TICK)
 
-### Goal
+**Statistics → Trace Health (TICK)**
 
-Find out why a task spends a long time off-CPU between consecutive activations (scheduled-to-run but waiting).
+| Metric | Measured |
+|--------|----------|
+| Mode | **TICKLESS** (CV 35.9 % ≫ 5 % threshold) |
+| Avg period | 944 µs (nominal 1.000 ms) |
+| Max gap | 2.481 ms |
+| Missed ticks (est.) | 8 large gaps |
 
-> **Note:** BTFViewer's **Blocking Time** is identical to Tracealyzer's **Response Time** — the off-CPU gap between the end of one task activation and the start of the next.
+![Tick interval distribution — example-8cores](../images/stats/stats-tick.svg)
 
-### Procedure
+*2496 TICK events; multi-tick gaps dominate while cores idle between suite phases.*
 
-1. Open **Statistics → Blocking Time**.  Sort by **Max** or **p95** to identify tasks with long waits.
-2. Click a task row to open its **blocking-time distribution chart**:
-   - **Scatter**: x = when the task resumed, y = how long it waited.  Clusters at certain x positions often correspond to a specific preemptor or lock contention period.
-3. Click the **Max** link to jump to the worst off-CPU gap.
-4. While that region is visible on the timeline, open **Statistics → Preemption Chain Analysis**:
-   - Find the victim task in the list to see which preemptors ran on the same core during its gaps.
-   - Sort by **Count** or **Total** for the victim to identify the dominant preemptor.
-5. If a single preemptor dominates, investigate whether it holds a mutex during that window — open **Mutex / Semaphore** pairing to correlate object pointers.
+**Reading:** Tickless idle is active.  Absolute wall-clock gaps between ticks are **not** proof of a lost interrupt during busy work — many gaps sit in idle stretches between tests.
 
-### Metric relationships
+**Recommendations**
 
-![Diagram showing the relationship between Execution Time, Block Time, and Inter-Arrival Time for consecutive task activations](../images/statistics.png)
+- For timing conclusions, **Limit to cursor range** on a busy phase (e.g. CS stress) and re-check CV / large gaps.
+- If the product must run tickful, disable tickless in the board config and re-capture; expect CV ≪ 5 %.
+- Keep TICK STI enabled so Trace Health remains trustworthy.
 
-*For consecutive activations of `Worker_7[19]`: **Execution Time** = on-CPU slice duration; **Block Time** (Response Time) = off-CPU gap from the end of one slice to the start of the next; **Inter-Arrival Time** = gap between successive slice starts = Execution Time + Block Time.*
+---
 
-### Example — Blocking Time distribution chart
+### 3.2 Core balance
+
+**Statistics → Core Utilisation**
+
+| Core | CPU % (excl. IDLE/TICK) |
+|------|-------------------------|
+| Core_0 … Core_7 | 68.7, 59.9, 62.7, 65.1, 71.6, 74.0, 76.1, **77.3** |
+| **Load Balance Score** | **95 %** (G = 0.049) |
+| **σ** | **6.0 %** (badge stays green; amber only if σ > 30 %) |
+
+**Analysis finding:** *cores look reasonably balanced* (Score ≥ 85 % and σ ≤ 30 %).
+
+**Reading:** SMP placement is healthy at the system level.  Imbalance is **not** the primary problem on this trace.
+
+**Recommendations**
+
+- No affinity rebalance needed for overall util.
+- Still inspect migrations (next) — balance can coexist with expensive bouncing.
+
+---
+
+### 3.3 Task CPU and WCET
+
+**Top Tasks by CPU** (excl. IDLE/TICK) are the equal-priority context-switch workers `CS[11]`…`CS[28]`:
+
+| Task | CPU % | Runs | Max slice | p95 |
+|------|-------|------|-----------|-----|
+| CS[28] | 15.9 % | 728 | **3.623 ms** | 1.631 ms |
+| CS[11] | 15.3 % | 730 | 2.486 ms | 1.628 ms |
+| CS[24] | 15.3 % | 727 | 3.283 ms | 1.644 ms |
+| … | ~14–15 % each | ~700+ | ~2.5–3.5 ms | ~1.5 ms |
+
+Also notable: `Med[267]` 6.0 % CPU (priority-inversion medium task), `SM[*]` / `MX[*]` mutex/semaphore workers ~5–6 %.
+
+**Procedure:** **Execution Time Per Slice** → sort by **Max** → click **Max** to zoom and annotate the WCET slice.
+
+**Reading:** CPU is dominated by the intentional CS stress cohort.  Worst slices (~3–4 ms) are long relative to a 1 ms tick — they contribute to tick stretching when those tasks run.
+
+**Recommendations**
+
+- **Production:** do not ship unbounded equal-priority worker storms; cap concurrency, or pin workers with `vTaskCoreAffinitySet` so the scheduler does less cross-core juggling.
+- Set **Settings → Analysis thresholds** deadlines (e.g. `CS[28]=2000000` for 2 ms) and re-run Statistics → Deadlines to turn WCET into pass/fail.
+- Click Max on `CS[28]` and check whether the long slice coincides with a lock hold or a migration (Preemption Chain / Mutex).
+
+---
+
+### 3.4 Latency (blocking / response time)
+
+**Statistics → Blocking Time** (off-CPU gap = Tracealyzer-style response-time gap)
+
+| Task | Gaps | Max block | Notes |
+|------|------|-----------|-------|
+| Med[267] | 1160 | **35.305 ms** | Busy medium task around inversion test |
+| Low[266] | 725 | **39.718 ms** | Low holder; long waits around boost windows |
+| High[268] | 6 | **52.865 ms** | High waiter blocked during inversion demo |
+| CS[*] | ~700+ | ~5–6 ms | Contended equal-priority cohort |
+| Runner[1] | 335 | 737 ms | Orchestrator sleeping between tests (ignore) |
+
+**Analysis finding:** warning on blocking candidates (`Med[267]`, `CS[19]`, …).
+
+**Reading:** The extreme High/Low/Med gaps are **features of test 8** (priority inversion), not random glitches.  CS blocking ~5 ms is contention + migration among peers.
+
+**Recommendations**
+
+- Scope cursors to the inversion window (`Low`/`Med`/`High` alive ~3.085–3.310 s) when studying PI; ignore Runner’s multi-hundred-ms sleeps.
+- For product tasks with High-like latency, require mutex priority inheritance (see §3.5) and measure Max block under load.
+- Cross-check **Preemption Chain**: top pairs are `CS[*]` preempting `CS[*]` (peer interference), e.g. `CS[25]←CS[19]` 44× / 14 ms total.
+
+---
+
+### 3.5 Concurrency — migrations, locks, priority inheritance
+
+#### Core migrations (thrashing)
+
+**Analysis finding:** *Excessive bouncing / core thrashing* on CS tasks.
+
+| Task | Migrations | Rate | Avg dwell | Ping-pong | Cores |
+|------|------------|------|-----------|-----------|-------|
+| CS[18] | 586 | **1692 /s** · 1.41/tick | 476 µs | 24 | 8 |
+| CS[21] | 580 | 1648 /s | 494 µs | 19 | 8 |
+| CS[12] | 579 | 1615 /s | 494 µs | 23 | 8 |
+
+Trace-wide: **18 992** migrations.  Hottest pairs (Core-Pair Summary): `Core_5→Core_7` (599), `Core_4→Core_6` (560), … — mostly **0 % lock-bounce** on those pairs.
+
+**Reading:** Expected outcome of test 1 (equal-priority CS storm on all cores).  Cache-cold penalties and run-queue churn would dominate a real product with this pattern.
+
+**See it on the timeline** — Core View + task filter + lock-highlight (same window as the doc image):
 
 ```bash
-python builds/btf_viewer.py your-trace.btf
+python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
+    -o ../images/stats/tasks-migrate-cs22.svg \
+    --view timeline --view-mode core --task "CS[22]" \
+    --lo 1805000 --hi 1865000
 ```
 
-Open **Statistics → Blocking Time**, click any task row:
+![CS[22] highlighted across Core_0…Core_7](../images/stats/tasks-migrate-cs22.svg)
 
-![Blocking Time distribution chart — scatter and histogram showing off-CPU gaps](../images/stats/stats-block-cs11.svg)
+*`CS[22]` hopping all eight cores in ~60 ms.  Then open **Core Migrations** for that task, **Core-Pair Migration Summary** for pairs involving its **Primary** core, and toolbar **Heatmap** / **Chord** to inspect traffic on a specific core.*
 
-*The scatter plot reveals clusters of high blocking at specific points in time — these align with periods when a higher-priority preemptor held the core for a long stretch.  Cross-reference with the **Preemption Chain** table (§4 step 4) to identify the offending task.*
+**Recommendations**
 
-### Example — Preemption Chain distribution chart
+- Pin latency-critical tasks to a core mask; leave only best-effort work fully migratable.
+- Prefer fewer runnable equals over more workers “for throughput.”
+- Use toolbar **Heatmap** (32 time bins) to confirm migrations concentrate in the CS phase, then scope Statistics to that window.
+- For a single core’s fan-in/fan-out: Chord hover on that core’s arc, or Heatmap rows where the core is From/To.
 
-![Preemption Chain distribution chart — victim preempted by a higher-priority task](../images/stats/stats-preempt-cs24-cs25.svg)
+#### Mutex / semaphore / queue
 
-*Each point represents one preemption overlap event; the y-axis shows how long the preemptor held the core during the victim's off-CPU gap.  Click any scatter point to jump to the preemptor's segment on the timeline and add an annotation at that moment.*
+| Object | Holds | Issues | Core bounces | Status |
+|--------|-------|--------|--------------|--------|
+| mutex `0x80021920` | 864 | 6 | 6 | Warning |
+| queue `0x80021990` | 864 | 0 | **858** | OK status, but extreme bounce |
+| several sems | few | 1 each | 2–5 | Warning (unmatched / bounce) |
 
-### Decision table
+**Analysis finding:** 19 sync objects with Core bounce > 0; 6 migration-while-held style issues.
 
-| Blocking pattern | Root cause | Fix |
-|-----------------|-----------|-----|
-| Blocking time ≈ tick period | Task is runnable but waiting for the next scheduler tick (tickless or low priority) | Raise priority, or verify the tickless idle mode configuration |
-| Large sporadic spikes correlated with one preemptor | Priority inversion or a high-priority CPU hog | Investigate **Priority Inheritance** and **Preemption Chain** tables |
-| Blocking time ≈ mutex hold time | Lock contention; victim waits while holder runs a critical section | Reduce critical-section length; check **Core Bounce** column in Mutex/Semaphore |
-| Blocking constant across time | Periodic blocking in design — expected for periodic tasks | Use inter-arrival time to verify period; compare to deadline |
+**Recommendations**
 
----
+- Tasks that share a hot mutex/queue should share an **affinity mask** so holds do not ride migrations (queue with 858 bounces is the smoking gun).
+- Investigate Warning rows (unmatched take/delete) on the timeline; demo teardown can leave unpaired STI — confirm against firmware if the same pattern appears outside the suite.
 
-## 5. Detect Priority Inversion
+#### Priority inheritance
 
-### Goal
+| Task | Base→Peak | Boosts | Boosted time | Pattern |
+|------|-----------|--------|--------------|---------|
+| Low[266] | 2→4 | 3 | **103.318 ms** | **Mutex inherit** |
+| PS[228] | 2→4 | 1 | 119 µs | **L/M/H pattern** |
 
-Identify episodes where a low-priority task holds a resource that blocks a high-priority waiter while medium-priority tasks run unimpeded — the classic L/M/H priority inversion geometry.
+![Priority inversion — red inherit stripes on Low](../images/stats/tasks-priority-low.svg)
 
-### Prerequisites
+*Three red bottom stripes on `Low[266]` during test 8 (`priority_inherit` → `priority_disinherit`).*
 
-Enable mutex support and task-priority tracing in your RTOS configuration.
-The trace library must emit `priority_inherit` and `priority_disinherit` STI events when the kernel raises or restores a task's effective priority during mutex ownership transfers.
+![Priority boost distribution](../images/stats/stats-priority-low.svg)
 
-### Procedure
+**Reading:** Kernel inheritance on `Low[266]` is working (correct mitigation).  `PS[228]` still shows L/M/H geometry — open that episode (click the chart point) and confirm whether a medium task ran while a higher waiter blocked.
 
-1. Open **Statistics → Priority Inheritance** (shown only when the trace contains priority STI events).
-2. Look at the **Pattern** column:
-   - **Mutex inherit**: kernel raised the holder's priority — expected, correct behaviour.
-   - **L/M/H pattern** or **Mutex inherit + L/M/H**: inversion geometry detected — a medium-priority task ran while the high-priority waiter was blocked.
-   - **Boost only**: manual priority-set call without kernel inheritance.
-3. Click a task row to open its **boost distribution chart**:
-   - Orange scatter points = boost only; red = L/M/H or mutex inherit.
-   - Click a point to zoom to that episode on the timeline, highlight the task, and add an annotation.
-4. On the timeline, look for the **red bottom stripe** on the task row — it marks the priority-boost window from `priority_inherit` to `priority_disinherit`.
-5. Expand the core in **Core View** around the episode to see L (holder, boosted), M (medium preemptor), and H (blocked waiter) running simultaneously.
+**Recommendations**
 
-### Identifying the L/M/H actors
-
-| Role | How to find it |
-|------|---------------|
-| **L (Low holder)** | Task with a **Mutex inherit** pattern and the lowest base priority in the episode |
-| **M (Medium)** | Tasks whose base priority falls strictly between L's base and L's boosted peak — listed in the scatter-point tooltip |
-| **H (High waiter)** | Task blocked on the same mutex object pointer — cross-check with **Mutex / Semaphore** pairing |
-
-### Example — Priority Inversion in a multi-core trace
-
-Open **Statistics → Priority Inheritance** on any trace that contains priority STI events.
-The screenshots below illustrate a classic L/M/H scenario: the low-priority mutex holder (L) is boosted to the high-priority waiter's (H) priority level so the medium-priority task (M) cannot preempt it while it holds the mutex.
-
-**Timeline — Core View expanded, zoomed to the boost window:**
-
-![Timeline Core View showing the low-priority mutex holder with a red priority-boost stripe during the mutex inheritance window](../images/stats/tasks-priority-il266.svg)
-
-*The **red bottom stripe** on the low-priority task's sub-row marks the `priority_inherit` → `priority_disinherit` window.  During this interval the kernel has raised the holder's effective priority, preventing any medium-priority task from preempting it.*
-
-**Priority Inheritance distribution chart (Statistics → Priority Inheritance → click any task row):**
-
-![Priority boost distribution chart — mutex-inherit boost episodes plotted by start time and duration](../images/stats/stats-priority-il266.svg)
-
-*Red points = mutex-inherit episodes; orange points = manual priority changes without kernel inheritance.  The **Pattern** column classifies each episode: **Mutex inherit**, **L/M/H pattern** (a medium-priority task ran while H waited), or **Boost only** (explicit priority change).*
+- Keep priority inheritance enabled for mutexes that can block higher priorities.
+- Treat any **L/M/H** row as a design review item (shorten critical sections, raise holder base priority, or split locks).
+- Snapshot window used in docs: `--lo 3042000 --hi 3359000` (µs) around the inherit stripes.
 
 ---
 
-## 6. Analyse Core Migrations on SMP
+### 3.6 Compliance — affinity, suspend/resume, tags
 
-### Goal
+#### Core affinity (test 10)
 
-Spot **excessive bouncing (core thrashing)** — tasks that migrate too frequently between core pairs, causing cache misses and IPC overhead — and separate that from lock-held (cache-line) bounces.  Use the migration heatmap / chord diagram to see *when* and *between which cores* the traffic clusters.
+**Statistics → Core Affinity** — `Aff[287]`…`Aff[298]` masks `0x1`…`0x80` observed only on the matching core; `AffM[299]` mask changes `0x1 → 0x80` and is seen on Core_0/3/7.  **No violations.**
 
-### Excessive bouncing (core thrashing) — metrics to use
+**Recommendation:** Use the same pattern in product code for IO-bound or lock-sharing tasks; re-check this table after every affinity change.
 
-| Where | Metric | What thrashing looks like |
-|-------|--------|---------------------------|
-| **Statistics → Core Migrations** | **Migr** | High raw cross-core migration count for the task |
-| | **Rate** | High migrations per second of on-CPU time (and `/tick` when TICKs exist) — the primary thrashing signal |
-| | **Dwell** | Very short average on-CPU slice before leave/migrate — scheduler moves the task instead of letting it run |
-| | **Cores** | Task visits many cores in the scoped window |
-| | **Primary** | Low share (%) on the main core — work is not sticky |
-| | **Ping** | High ping-pong count (A→B→A within 1 µs) — classic thrash between a pair |
-| | **STI±** | Migrations near an STI (±500 ns) — often sync-related |
-| | **Gap after** / **Gap other** | Large **Gap after** vs other blocking gaps — extra cost right after a hop |
-| **Statistics → Core-Pair Migration Summary** | **Count** | Hot directed pair (`From → To`) carrying most of the traffic |
-| | **Bounces** / **Bounce %** | Migrations while a mutex was held across cores (cache-line bounce), not the same as scheduler thrashing |
-| | **Avg Gap** | Average off-CPU gap after migrations on that pair |
-| **Mutex / Semaphore pairing** | **Bounces** / `CORE_MIGRATION_WHILE_HELD` | Lock taken on one core, given on another — IPC / cache-line cost |
-| Toolbar **Heatmap** / **Chord** | Pair×time cells; **Bounce Only** filter | *When* thrashing bursts; restrict views to lock-bounce migrations |
+#### Suspend / resume (test 9)
 
-**Rule of thumb:** thrashing ⇒ high **Rate**, low **Dwell**, high **Ping**, busy core-pair **Count**.  Lock-boundary cost ⇒ high pair **Bounce %** and Mutex **Bounces**.
+**Statistics → Task Lifecycle**
 
-### Procedure
+| Task | Susp/Res | Runs | Alive span |
+|------|----------|------|------------|
+| SR0[271] … SR3[274] | **4/4** each | 32–50 | ~13–15 ms |
 
-1. Open **Statistics → Core Migrations**.
-   - Sort or scan for high **Rate** and low **Dwell** — those tasks are the thrashing candidates.
-   - **Ping** confirms immediate A↔B reversal; **Cores** / **Primary** show how sticky the task is.
-2. Click a candidate row to open its **distribution chart** (three in-dialog tabs):
-   - **Dwell**: x = on-core run start time, y = run duration.  A cluster of very short runs confirms thrashing; a long tail shows occasional longer stays.
-   - **Rate**: x = migration time, y = time since the previous migration.  Tightly packed low points mean bursts of rapid hopping; sparse high points mean isolated one-off migrations.
-   - **Gap**: x = migration time, y = the off-CPU gap immediately following that migration.  Large gaps suggest the task waited on the destination core before it actually resumed.
-3. Open **Statistics → Core-Pair Migration Summary** to see which directed pairs carry the volume and what fraction are lock-bounces (**Bounce %**).
-4. Open the **Migration Heatmap** (toolbar **Heatmap**) or **Chord** diagram:
-   - Heatmap **Level 1**: directed core-pair rows × time bins.  Dark cells = many migrations in that period.
-   - **Click a hot cell** → **Level 2**: per-task sub-bins within that pair/time window.
-   - **Click a task cell** → zoom the timeline, place cursors, switch to Task View, and filter to that task.
-   - Use **Show: Bounce Only** on heatmap/chord to isolate lock-held migrations from general thrashing.
-5. Enable **Migrated tasks only** in the Legend filter to hide single-core tasks.
-6. Cross-check **Mutex / Semaphore** for **`CORE_MIGRATION_WHILE_HELD`** / **Core bounce** when pair **Bounce %** is high.
+**Recommendation:** Equal Susp/Res confirms STI lifecycle hooks.  On the timeline, confirm suspended subjects do not run between `suspend` and `resume` (including after a semaphore give while still suspended).
 
-### Example — Core Migrations distribution chart
+#### Tags / intervals
+
+**Tag Analysis → `tag0_event`:** 2357 samples (min 8 144, avg ≈ 34 631, max 45 392, p95 41 936).
+
+![tag0_event distribution](../images/stats/stats-tag0.svg)
+
+**Recommendation:** Bind tag channels to real budgets (heap high-water, queue depth).  Rising max/p95 across builds → Trace Compare on Tag Analysis / Interval Analysis.
+
+---
+
+### 3.7 Performance verdict and improvement plan
+
+| Priority | Finding | Verdict on this sample | Product-oriented action |
+|----------|---------|------------------------|-------------------------|
+| P0 | CS migration thrash (~1.6k/s, dwell ~0.5 ms) | Expected stress artefact | Affinity-pin hot tasks; reduce equal-priority fan-out; re-measure Migr rate / Ping |
+| P0 | Queue/mutex core bounces (queue **858**) | Stress + shared objects across cores | Co-locate producers/consumers; shorten holds; consider core-local queues |
+| P1 | Priority L/M/H on `PS[228]`; long High block ~53 ms | Demo inversion geometry | Keep inheritance; audit critical sections; add deadline thresholds |
+| P1 | WCET CS Max ~3.6 ms vs 1 ms tick | Stress length | Budget slices; break work; verify under tickful config |
+| P2 | TICKLESS CV 35.9 %, missed ≈ 8 | Idle between tests | Scope busy windows; only then chase missed ticks |
+| P2 | Load Balance 95 %, σ 6 % | Healthy | No balance change |
+| OK | Affinity + SR Susp/Res 4/4 | Hooks correct | Keep as regression checks in CI (`report` HTML) |
+
+**Suggested next capture (after code changes)**
 
 ```bash
-python builds/btf_viewer.py your-trace.btf
+# Before/after the same suite
+python builds/btf_viewer.py compare before.btf.gz after.btf.gz \
+    --output compare.html --format html \
+    --name-a "Before" --name-b "After"
 ```
 
-Open **Statistics → Core Migrations**, click a task row to open the tabbed distribution chart (**CS[22]** in `example-8cores.btf`, a context-switch stress task that migrates often):
-
-![On-core dwell time distribution for CS[22] in example-8cores.btf — Dwell tab](../images/stats/stats-mig-dwell-cs22.svg)
-
-*The **Dwell** tab (default) plots one point per on-core run — how long the task stayed on a core before migrating, blocking, or yielding.*
-
-![Time between migrations for CS[22] in example-8cores.btf — Rate tab](../images/stats/stats-mig-rate-cs22.svg)
-
-*The **Rate** tab plots the time since the previous migration for each migration event — a scatter that clusters near zero indicates bursts of rapid core-hopping.*
-
-![Post-migration gap distribution for CS[22] in example-8cores.btf — Gap tab](../images/stats/stats-mig-gap-cs22.svg)
-
-*The **Gap** tab plots the off-CPU gap immediately after each migration — large values mean the task sat idle on the destination core before actually resuming.*
-
-### Example — Migration Heatmap for a multi-core trace
-
-```bash
-python builds/btf_viewer.py your-trace.btf
-```
-
-With the trace open, click the **Heatmap** toolbar button to open the migration heatmap.
-
-**Level 1 — core-pair overview (directed pairs × 32 time bins):**
-
-![Migration heatmap Level 1: directed core-pair rows and time bins](../images/heatmap-pairs.svg)
-
-*Each row is a directed pair (e.g. `c0→c1`).  Darker cells = more migrations in that bin.  Click any dark cell to drill into Level 2.*
-
-**Level 2 — per-task sub-bins (after clicking a hot cell):**
-
-![Migration heatmap Level 2: per-task sub-bins within the selected time window](../images/heatmap-tasks.svg)
-
-*Rows are tasks that migrated on the selected pair within the chosen bin; columns are 32 sub-bins inside that bin.  Click a task cell to zoom the timeline, place cursors, switch to Task View, and filter to that task.*
-
-### Reducing migration / thrashing overhead
-
-| Symptom | Remedy |
-|---------|--------|
-| High **Rate**, low **Dwell**, high **Ping** between two cores | Pin the task (or related set) with the RTOS core affinity API; reduce unnecessary load balancing for latency-sensitive tasks |
-| High pair **Bounce %** / Mutex **Core bounce** | Release the mutex on the same core it was taken, or raise the holder's priority so the critical section finishes before a migration |
-| Migrations clustered in one heatmap time bin | A burst of work is pushing tasks off-core; check **Preemption Chain** and **Core Utilisation** for that window |
-| Many cores visited, low **Primary** % | Review affinity masks in **Core Affinity**; avoid global queues that bounce workers across the whole SMP set |
+Success criteria worth watching in Δ: lower CS **Migr rate** / **Ping**, lower queue **Bounces**, stable or improved High **Max block**, Load Balance Score still ≥ 85 % with σ ≤ 30 %.
 
 ---
 
-## 7. Verify Task Deadlines and CPU Budgets
+## 4. Deep-Dive Playbooks
 
-### Goal
+Use these when Analysis or the ladder points at a specific metric.  Examples below assume `example-8cores` unless noted.
 
-Automatically flag every task execution slice that exceeds a configured per-task deadline, and every task whose CPU% exceeds a global budget threshold.
+### 4.1 Core utilisation and load balance
 
-### Configure thresholds
+1. **Statistics → Core Utilisation** — bars are active (non-IDLE, non-TICK) CPU%.
+2. Badge **amber** when population σ > 30 %.
+3. **Analysis** warns when Score < 70 % **or** σ > 30 %; “reasonably balanced” when Score ≥ 85 % and σ ≤ 30 %.
+4. **Top Tasks by CPU** — who consumes the budget.
 
-Open **Settings** (`Ctrl+,`) → **Analysis thresholds**:
+| Symptom | Next |
+|---------|------|
+| One core > 90 %, others idle | **Core Affinity** |
+| All high, one low | **Mutex/Semaphore**, **Preemption Chain** |
+| Score mid (~60 %) but σ ≤ 30 % | Still uneven — **Core Migrations** |
 
-| Threshold | Unit | Example |
-|-----------|------|---------|
-| **CPU budget %** | 0–100 % (0 = off) | `25` flags any task using more than 25 % CPU |
-| **Task deadlines** | nanoseconds, one `Name=ns` per line | `Worker[0]=500000` flags slices > 500 µs |
+### 4.2 WCET (execution time per slice)
 
-Task names must match the **display name** shown in the label column (e.g. `Worker[0]`, `SensorTask[2]`).
+1. **Execution Time Per Slice** → sort **Max**.
+2. Click **Max** — zoom + annotate.
+3. Check neighbours on the core (tooltip) and **Preemption Chain** for that victim.
 
-### Reading violations
+### 4.3 Blocking / response time
 
-Open **Statistics → Deadlines / CPU budget**:
+1. **Blocking Time** → sort **Max** / **p95**.
+2. Long gap → **Preemption Chain** (who ran instead) and **Mutex/Semaphore** (who held the lock).
+3. Scope away from orchestrator sleeps (`Runner`).
 
-- **Slice over deadline** table — every slice that exceeded its per-task threshold, sorted by excess.  Click any row's **Max** link to jump to that slice on the timeline.
-- **CPU budget exceeded** table — tasks whose CPU% in the current scope is above the global budget.
+### 4.4 Priority inversion
 
-### Workflow tip — cursor-scoped deadline checking
+1. **Priority Inheritance** (needs `priority_inherit` / `priority_disinherit` STI).
+2. Patterns: **Mutex inherit** (kernel boost), **L/M/H**, **Boost only**.
+3. Timeline: red bottom stripe on the holder for the full boost window.
+4. Distribution chart → click a point to jump.
 
-Place cursors around a specific test phase and enable **Limit to cursor range**.  The violation tables update to show only slices and CPU% within that window, letting you verify deadline compliance phase by phase without noise from the rest of the trace.
+### 4.5 Core migrations
+
+1. **Core Migrations** — **Rate**, **Dwell**, **Ping-pong**, **Lock-bounce %**.
+2. **Core View** + filter + lock-highlight the hot task — watch it hop core rows (`snapshot … --view-mode core --task …`).
+3. **Core-Pair Migration Summary** + toolbar **Heatmap** (32 bins) / **Chord** — for a *specific core*, scan pairs / hover the chord arc where that core is an endpoint.
+4. Red flags: high rate + short dwell; any lock-bounce on latency paths.
+
+### 4.6 Tick health
+
+1. **Trace Health (TICK)** — mode badge, CV, large gaps, missed estimate.
+2. **Tick Distribution…** for scatter/histogram.
+3. Always re-evaluate inside a **cursor-scoped busy** window on tickless systems.
+
+### 4.7 Mutex / semaphore correctness
+
+1. **Mutex / Semaphore** — Issues, Bounces, Status.
+2. Warning rows → timeline STI `take`/`give`; check delete-while-held.
+3. High **Core bounce** → pin sharers or redesign ownership.
+
+### 4.8 Task suspend / resume
+
+1. **Task Lifecycle** — Susp/Res must match per subject (`SR*` → 4/4 on this sample).
+2. Timeline: no run between `suspend` and `resume`.
+3. Desktop: navigator minimap sits above the CPU Load overlay while zoomed.
+
+### 4.9 Deadlines and CPU budgets
+
+**Settings** (`Ctrl+,`) → **Analysis thresholds**:
+
+| Threshold | Example |
+|-----------|---------|
+| CPU budget % | `25` |
+| Task deadlines | `CS[28]=2000000` (ns) — slices > 2 ms |
+
+Then **Statistics → Deadlines / CPU budget**.  Use cursor scope per test phase.
 
 ---
 
-## 8. Scope Analysis to a Time Window
+## 5. Scope, Compare, and Custom Signals
 
-### Goal
-
-Restrict all statistics, charts, exports, and metric tables to a specific region of the trace — for example, a single test run, a load spike, or the period around a known anomaly.
-
-### Placing cursors
+### 5.1 Cursor-scoped analysis
 
 | Action | Effect |
 |--------|--------|
-| Left-click on the timeline | Place a cursor (removes one if near an existing line) |
-| `Shift` + left-click | Snap to the nearest segment boundary |
-| `C` | Place a cursor at the viewport centre |
-| Right-click → **Clear all cursors** | Remove all |
-| `Ctrl+R` | Zoom the viewport to fit exactly between C1 and the last cursor |
+| Left-click | Place / remove cursor |
+| `Shift`+click | Snap to segment edge |
+| `C` | Cursor at viewport centre |
+| `Ctrl+R` | Zoom to C1…Cn |
+| **Limit to cursor range** | All Statistics + Analysis recompute for C1–Cn |
 
-### Example — three cursors placed on a trace
+![Cursors C1–C3 with Δ badges](../images/example.png)
 
-```bash
-python builds/btf_viewer.py your-trace.btf
-```
+| Metric | Cursor rule |
+|--------|-------------|
+| CPU % | Overlap ÷ range width |
+| Execution slices | Fully inside range |
+| Blocking | Both slices inside |
+| Migrations | Overlapping events |
 
-Left-click three times on the timeline to place **C1**, **C2**, and **C3**:
+### 5.2 Compare two builds
 
-![Timeline with three measurement cursors C1, C2, C3 placed, showing Δ time labels between consecutive cursors](../images/example.png)
-
-*The Δ badges between consecutive cursors show elapsed time between C1–C2 and C2–C3.  Enable **Limit to cursor range (C1–Cn)** in the Statistics panel to restrict all metrics to the C1–C3 window.*
-
-### Enabling cursor scope
-
-In the **Statistics** panel, check **Limit to cursor range (C1–Cn)**.  All metric tables, core utilisation, top tasks, charts, toolbar **Analysis** findings, and exports immediately re-compute for the C1–Cn window.
-
-The **status bar** shows a quick min/max/avg summary of segment durations that start and end within the cursor range — useful for a fast sanity check before diving into the full statistics.
-
-### Scoping rule summary
-
-| Metric | Included in cursor range |
-|--------|-------------------------|
-| Core & task CPU% | Overlapping active time ÷ range width |
-| Execution time per slice | Only slices **fully inside** the range |
-| Blocking time | Pairs where **both** slices are fully inside the range |
-| Inter-arrival | Activations whose **start** time falls inside the range |
-| Preemption chain | Overlaps counted only when the victim's gap and the preemptor are inside the range |
-| Core migrations | Events and per-core active time with any overlap in the range |
-
----
-
-## 9. Compare Two Builds or Configurations
-
-### Goal
-
-Quantitatively diff CPU%, top tasks, core migrations, blocking, preemption, and sync between two trace files — for before/after comparison or A/B configuration testing.
-
-### Procedure
-
-1. Open both traces in separate tabs (**File → Open** twice, or drag-and-drop two files).
-2. In the **Statistics** panel footer, click **Trace Compare…**.
-3. Select **Trace A** and **Trace B** from the dropdowns.
-4. Optionally enable **Limit to each tab's cursor range** to compare each trace's C1–Cn window independently (requires cursors placed in each tab before opening the dialog).
-5. Browse the tabs: **Summary**, **Top Tasks**, **Core Migrations**, **Blocking**, **Preemption**, **Sync**.
-6. Export with **Export CSV** or **Export HTML** for offline reporting.
-
-### What the Δ column shows
-
-The **Δ** column in each table is the raw difference B − A for numeric fields.  Positive Δ in CPU% means a task uses more CPU in build B; negative Δ in blocking time means the task waits less in build B — an improvement.
-
-### Headless batch comparison
+1. Open two tabs → Statistics footer **Trace Compare…**.
+2. Tabs: Summary, Top Tasks, Migrations, Blocking, Preemption, Sync.
+3. **Δ** = B − A.  Export CSV/HTML.
 
 ```bash
-python builds/btf_viewer.py compare a.btf b.btf \
-  --output compare-report \
-  --format html \
-  --name-a "Before" --name-b "After"
-```
-
-Produces `compare-report.html` (and/or `.csv`) without opening the GUI — suitable for CI pipelines or automated regression reports.
-
----
-
-## 10. Monitor Custom Signals and Code Regions
-
-### Goal
-
-Embed application-level measurements (heap usage, counters, code-region timing) into the trace without modifying the scheduler hooks.
-
-### Tag events — periodic scalar values
-
-Emit a 32-bit scalar value on any of 8 named STI channels (`tag0_event` … `tag7_event`) from any periodic callback or task.  Consult your RTOS trace library documentation for the exact API; a typical call looks like:
-
-```c
-/* In any periodic hook or task */
-uint32_t value = my_get_metric();   /* heap used, stack high-water, custom counter, etc. */
-trace_tag_emit(0, (int)value);      /* channel 0–7, 32-bit payload */
-```
-
-In BTFViewer:
-- The **tag0_event** (through **tag7_event**) row appears in the label column as a waveform row.
-- Expand the row to see the waveform.
-- Open **Statistics → Tag Analysis** for per-channel min/avg/max/p95; click a row for a scatter + histogram chart.
-
-**Example — heap usage waveform (sample trace):**
-
-```bash
-python builds/btf_viewer.py your-trace.btf
-```
-
-![tag0_event row expanded as a waveform showing a user metric sampled on every RTOS tick](../images/memusage.png)
-
-*The `tag0_event` row (expanded) shows a user-defined scalar metric sampled periodically (e.g. heap bytes in use, stack high-water mark, or any 32-bit counter).  Drops indicate resource release; plateaus show steady-state consumption.*
-
-**Example — Tag Analysis distribution chart:**
-
-```bash
-python builds/btf_viewer.py example-8cores.btf
-```
-
-Open **Statistics → Tag Analysis**, click the `tag0_event` row:
-
-![Tag value distribution chart for tag0_event in example-8cores.btf](../images/stats/stats-tag0.svg)
-
-*1966 samples on `tag0_event` (min 8,496, avg 37,587.5, max 45,504, p95 43,904). Unlike the other metric charts, the y-axis here is the raw application value, not a duration — clusters and outliers reflect whatever firmware puts in the channel (queue depth, ADC reading, free heap, etc.).*
-
-### Interval events — bracketing code regions
-
-Bracket any code region with matching `interval_start` / `interval_stop` STI events.  Consult your RTOS trace library documentation for the exact API; a typical pattern is:
-
-```c
-trace_interval_start(1);   /* start of timed region; id = 1 */
-do_work();
-trace_interval_stop(1);    /* end of timed region; id must match */
-```
-
-In BTFViewer:
-- Paired spans appear as **Interval N** rows at the bottom of the timeline (horizontal task view).
-- Hover a bar for duration; click to add an annotation.
-- Open **Statistics → Interval Analysis** for min/avg/max/p95 per interval ID.
-- Click any row → distribution chart; click a scatter point → jump to that interval start and annotate.
-
-**Example — Interval Analysis distribution chart:**
-
-```bash
-python builds/btf_viewer.py your-trace.btf
-```
-
-Open **Statistics → Interval Analysis**, click any interval row:
-
-![Interval Analysis distribution chart — scatter of start times vs duration, histogram with CDF](../images/stats/stats-interval-1.svg)
-
-*Each point in the scatter represents one `interval_start` → `interval_stop` pair.  The histogram shows the duration distribution of all timed code regions in scope.  Click any scatter point to jump to that interval's start on the timeline.*
-
-### Tip — per-task interval pairing
-
-When the BTF note includes `tid:{task_id}` (supported by trace libraries that embed the calling task ID in interval events), start/stop events pair **per interval ID and per calling task**.  This lets you use the same `id` value in multiple tasks and get separate statistics for each.
-
----
-
-## 11. Detect Tick Jitter and Tickless Modes
-
-### Goal
-
-Verify that the RTOS tick fires at the expected period and detect tickless-idle operation.
-
-### Procedure
-
-1. Open **Statistics → Trace Health (TICK)**.
-2. The section shows:
-   - **Tick period** (min/avg/max from consecutive TICK STI events).
-   - **Mode badge** — **TICK** (regular) or **TICKLESS** (low-power tickless mode detected from a high coefficient of variation in tick intervals).
-   - **Large gaps** count and estimated missed-tick count.
-3. Click the **Tick Distribution…** button (bar-chart icon, visible when ≥ 2 ticks are in scope) to open a histogram of tick intervals.
-
-### Example — Tick Distribution chart
-
-```bash
-python builds/btf_viewer.py example-8cores.btf
-```
-
-Open **Statistics → Trace Health (TICK)**, click the **Tick Distribution…** button:
-
-![Tick interval distribution chart — scatter and histogram of consecutive TICK gaps in example-8cores.btf](../images/stats/stats-tick.svg)
-
-*1966 TICK events at a nominal 1.000 ms period (1000 Hz) — the coefficient of variation (≈ 24.7 %) exceeds the 5 % threshold, so the mode badge reads **TICKLESS**. The histogram's peaks at 1×, 2×, and 3× the nominal period show idle stretches skipping several ticks before the next one fires; the 4 largest gaps (up to 2.340 ms) are flagged as estimated missed ticks.*
-
-### Interpreting results
-
-| Symptom | Interpretation |
-|---------|---------------|
-| **TICKLESS** badge with large gaps | Tickless idle active — verify the tickless idle mode is intentionally enabled |
-| Max tick period >> average | Missed ticks; the tick was delayed by a long critical section or ISR |
-| High CoV (coefficient of variation) of tick intervals | Tick jitter — interrupt latency or scheduler interference |
-| Missed-tick estimate > 0 | Some tick events were dropped before they could be recorded — increase the ring buffer event capacity |
-
-### Cursor-scoped tick health
-
-Place cursors around a suspect region and enable **Limit to cursor range** to restrict the tick analysis to that interval — helpful when tickless periods should be confined to specific application phases.
-
----
-
-## 12. Check Mutex and Semaphore Correctness
-
-### Goal
-
-Detect unpaired takes/gives, orphaned mutex holds at trace end, cross-task gives, and lock-boundary core bounces.
-
-### Prerequisites
-
-Enable mutex and semaphore event tracing in your RTOS trace library configuration so that `take`, `give`, `create`, and `delete` STI events are emitted for each synchronization object.
-
-### Procedure
-
-1. Open **Statistics → Mutex / Semaphore pairing** (shown only when mutex/semaphore STI events are present).
-2. The **main table** shows each sync object (identified by its unique object pointer) with:
-   - **Hold count** — number of take/give cycles.
-   - **Issue count** — number of pairing anomalies.
-   - **Core bounce** — number of takes on one core with the corresponding give on a different core.
-   - **Avg hold** — average time between take and give.
-3. Expand **Pairing issues** sub-table to see individual anomalies:
-
-   | Issue type | Meaning |
-   |-----------|---------|
-   | **Orphan give** | `give` with no matching `take` — double-release or give from wrong task |
-   | **Cross-task give** | `give` by a different task than the `take` — valid for binary semaphores but a bug for mutexes |
-   | **Unmatched take** | `take` with no matching `give` — mutex held at trace end or leaked lock |
-   | **CORE_MIGRATION_WHILE_HELD** | Task crossed core boundary while holding the lock — source of race conditions on SMP without proper locking |
-
-4. Click any **Pairing issues** row to zoom the timeline to that event, jump to the relevant segment, and add an annotation.
-
-### Core bounce investigation
-
-A high **Core bounce** count on a mutex indicates the lock holder frequently migrates while the mutex is taken.  Cross-reference with **Core-Pair Migration Summary** to find the specific pair and then zoom to that window in the timeline to see whether a scheduling policy or affinity change would help.
-
----
-
-## 13. Export Results for Reports
-
-### Analysis Findings (Desktop + Web)
-
-Toolbar **Analysis** opens a dialog with heuristic findings for the current Statistics scope (full trace, or cursor range when **Limit to cursor range** is on).
-
-| Finding theme | Typical trigger |
-|---------------|-----------------|
-| Load imbalance (warning) | Score < 70 % or σ > 30 % |
-| Moderate / balanced load (info) | Score 70–85 % (moderate); Score ≥ 85 % and σ ≤ 30 % (balanced) |
-| Top CPU / WCET candidates | Highest CPU% tasks (info) |
-| Blocking / response time | Tasks with many off-CPU gaps |
-| Priority inversion | `L/M/H` pattern in Priority Inheritance |
-| Core thrashing / hot pairs | High Migr Rate, Ping, short Dwell; high Bounce % pairs |
-| Deadline / CPU budget | Configured thresholds breached |
-| Tick health | Status not GOOD, or missed-tick estimate > 0 |
-| Sync / mutex bounces | Core bounce > 0 or pairing issues |
-
-Severity is `info` / `warning` / `error`.  Lists are capped (top ~5).  Findings are **not** shown as a Statistics panel section — use the toolbar dialog or HTML export.  **Save as text…** writes a `.txt` copy.
-
-The same findings card is embedded near the top of **Statistics → Export HTML** (and headless `report … --format html`).
-
-### GUI exports
-
-| Output | How to trigger | What is included |
-|--------|---------------|-----------------|
-| **Analysis Findings text** | Toolbar **Analysis** → **Save as text…** | Plain-text findings for the current scope |
-| **Statistics CSV** | Statistics panel → **Export CSV** | All metric tables for the current cursor scope |
-| **Statistics HTML** | Statistics panel → **Export HTML** | Same tables plus an **Analysis Findings** card, Priority Inheritance boost episodes, Mutex/Semaphore hold episodes, and Interval Analysis instances |
-| **Trace Compare CSV/HTML** | Trace Compare dialog → **Export CSV / Export HTML** | Summary, Top Tasks, Core Migrations, Blocking, Preemption, Sync diff between two traces |
-| **Perfetto JSON** | **File → Export Perfetto…** (`Ctrl+Shift+E`; Web: toolbar **Perfetto**) | Full loaded trace as Chrome Trace JSON for [ui.perfetto.dev](https://ui.perfetto.dev) |
-| **Timeline PNG** | Toolbar **Shot** → Snapshot Editor → **Save PNG** | Current timeline viewport with optional arrow/shape annotations |
-| **Timeline SVG** | **File → Save as SVG** (`Ctrl+Shift+S`) | Vector SVG of current viewport |
-| **Clipboard** | **File → Copy Image to Clipboard** (`Ctrl+Shift+C`) | Raw viewport image (no editor) |
-| **Distribution chart PNG/SVG** | Plot dialog → **Export PNG** / **Export SVG** | Scatter + histogram for that metric |
-| **Migration heatmap PNG/SVG** | Heatmap dialog → **Export PNG** / **Export SVG** | Current heatmap drill level |
-
-### Headless CLI exports (Desktop only)
-
-No GUI is opened; output is written directly to a file.  Run from `BTFViewer/`.
-
-```bash
-# Trace summary (human-readable)
-python builds/btf_viewer.py info trace.btf
-
-# Trace summary (machine-readable JSON)
-python builds/btf_viewer.py info trace.btf --json
-
-# Full statistics report — HTML (includes Analysis Findings card)
-python builds/btf_viewer.py report trace.btf --output report.html --format html
-
-# Full statistics report — CSV
-python builds/btf_viewer.py report trace.btf --output report.csv --format csv
-
-# Scoped to a time window (nanoseconds)
-python builds/btf_viewer.py report trace.btf --output report.html --lo 100000 --hi 500000
-
-# Two-trace comparison — HTML
-python builds/btf_viewer.py compare before.btf after.btf \
+python builds/btf_viewer.py compare before.btf.gz after.btf.gz \
     --output compare.html --format html \
     --name-a "Before" --name-b "After"
-
-# Core migration table as CSV
-python builds/btf_viewer.py migrations trace.btf -o migrations.csv
-
-# Chrome Trace JSON for ui.perfetto.dev
-python builds/btf_viewer.py perfetto trace.btf -o trace.json
 ```
 
-### Automating reports in CI
+### 5.3 Tags and intervals
 
-Chain the headless commands in a Makefile or shell script to generate artefacts after every simulation run:
+```c
+trace_tag_emit(0, (int)value);          /* tag0_event … tag7_event */
+trace_interval_start(1); /* … */ trace_interval_stop(1);
+```
+
+- Waveform rows + **Tag Analysis** / **Interval Analysis** charts.
+- Notes with `tid:{task_id}` pair intervals per task.
+
+![tag0_event waveform](../images/memusage.png)
+
+---
+
+## 6. Export Results
+
+### Analysis Findings
+
+Toolbar **Analysis** (or HTML report card).  Typical triggers:
+
+| Finding | Trigger |
+|---------|---------|
+| Load imbalance | Score < 70 % or σ > 30 % |
+| Balanced (info) | Score ≥ 85 % and σ ≤ 30 % |
+| WCET candidates | Highest CPU% tasks |
+| Blocking | Many / long off-CPU gaps |
+| Priority inversion | L/M/H pattern |
+| Thrashing | High Migr rate / Ping / short dwell |
+| Tick | Not GOOD, or missed > 0 |
+| Sync bounces | Core bounce > 0 |
+
+### GUI and CLI
+
+| Output | How |
+|--------|-----|
+| Findings text | Analysis → **Save as text…** |
+| Statistics CSV/HTML | Statistics → Export |
+| Perfetto JSON | **File → Export Perfetto…** / `perfetto` CLI |
+| Timeline PNG/SVG | Shot / Save as SVG |
+| Headless report | `report trace.btf --output out.html --format html` |
 
 ```bash
-report.html: trace.btf
-	python builds/btf_viewer.py report $< --output $@ --format html
-
-.PHONY: report
-report: report.html
+python builds/btf_viewer.py info ../tracedata/example-8cores.btf.gz
+python builds/btf_viewer.py report ../tracedata/example-8cores.btf.gz \
+    --output report.html --format html
+# --lo/--hi are raw #timeScale units (us for this sample), not nanoseconds
+python builds/btf_viewer.py report ../tracedata/example-8cores.btf.gz \
+    --output pi.html --format html --lo 3042000 --hi 3359000
+python builds/btf_viewer.py migrations ../tracedata/example-8cores.btf.gz -o mig.csv
+# Core View: highlight a task hopping cores
+python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
+    -o migrate.svg --view timeline --view-mode core --task "CS[22]" \
+    --lo 1805000 --hi 1865000
+python builds/btf_viewer.py perfetto ../tracedata/example-8cores.btf.gz -o trace.json
 ```
-
-The headless commands exit with code 0 on success and non-zero on parse error — suitable for CI pass/fail gates.
 
 ---
 
 ## Quick-Reference: Metric to Root Cause
 
-| Observed symptom | Primary metric | Secondary metrics to check |
-|-----------------|---------------|---------------------------|
-| Quick triage of many issues at once | Toolbar **Analysis** Findings | Drill into the Statistics tables named in each finding |
-| Task misses its deadline | Execution Time Per Slice (WCET) | Preemption Chain, Blocking Time, Priority Inheritance |
-| Task waits too long between runs | Blocking Time (Max / p95) | Preemption Chain, Mutex/Semaphore, Inter-Arrival |
-| SMP cores unevenly loaded | Core Utilisation (Load Balance Score) / **Analysis** | Core Migrations, Core Affinity, Preemption Chain |
-| Lock-related slowdown | Mutex/Semaphore (Issue count, Core bounce) | Blocking Time, Preemption Chain, Core Migrations |
-| Priority inversion suspected | Priority Inheritance (L/M/H pattern) | Mutex/Semaphore pairing, Blocking Time |
-| Tasks migrating excessively / core thrashing | Core Migrations (**Rate**, **Dwell**, **Ping**) | Core-Pair Migration Summary, Migration Heatmap/Chord, Mutex **Bounces**, Core Affinity |
-| Tick irregularity or missed ticks | Trace Health (TICK) | Execution Time Per Slice (long slices blocking the tick) |
-| Memory or counter regression | Tag Analysis | Interval Analysis for the code path owning that tag |
-| Code region too slow | Interval Analysis (WCET, p95) | Execution Time Per Slice for the owning task |
-| Need external timeline UI (Perfetto) | **File → Export Perfetto…** / `perfetto` CLI | Open the `.json` in ui.perfetto.dev |
+| Observed symptom | Start here | Then check |
+|-----------------|------------|------------|
+| Unknown — triage first | Toolbar **Analysis** | Named Statistics sections in each finding |
+| Tick jitter / tickless | Trace Health (TICK) | Scope busy window; Execution Max slices |
+| SMP uneven load | Core Utilisation (Score / σ) | Migrations, Affinity |
+| Task too slow on CPU | Execution Time (Max / p95) | Preemption Chain, Mutex |
+| Task waits too long | Blocking Time | Preemption Chain, Mutex, Inter-Arrival |
+| Priority inversion | Priority Inheritance | Mutex pairing, Blocking |
+| Core thrashing | Core Migrations (Rate, Ping) | Core View highlight (`--view-mode core`); Core-Pair / Heatmap / Chord; Bounce %; Affinity |
+| Lock / queue issues | Mutex/Semaphore / Queue | Blocking, Migrations |
+| Suspend/resume | Task Lifecycle (Susp/Res) | Timeline STI; demo test 9 |
+| Affinity wrong | Core Affinity | Lock-bounce table |
+| Custom metric / region | Tag / Interval Analysis | Owning task Execution Time |
+| Before/after change | Trace Compare | Same cursor phases on both tabs |

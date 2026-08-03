@@ -17,11 +17,14 @@ from btf_viewer_pkg._bootstrap import install  # noqa: E402
 install()
 
 from PySide6.QtCore import QEventLoop, QPoint, QRect, QTimer  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QLabel, QWidget  # noqa: E402
 
-from btf_viewer_pkg.mainwindow import MainWindow  # noqa: E402
+from btf_viewer_pkg.config import CPU_LOAD_ROW_H  # noqa: E402
+from btf_viewer_pkg.mainwindow import _CpuLoadStack, _TimelinePane  # noqa: E402
+from btf_viewer_pkg.parser import _parse_btf  # noqa: E402
+from btf_viewer_pkg.view import TimelineView  # noqa: E402
 
-EXAMPLE_BTF = Path(__file__).resolve().parents[2] / "tracedata" / "example.btf.gz"
+EXAMPLE_BTF = Path(__file__).resolve().parents[2] / "tracedata" / "example-2cores.btf.gz"
 
 
 class TestNavCpuOverlay(unittest.TestCase):
@@ -32,34 +35,34 @@ class TestNavCpuOverlay(unittest.TestCase):
         cls._app = QApplication.instance() or QApplication([])
 
     def test_navigator_clears_cpu_overlay_after_zoom(self) -> None:
+        """CPU-load overlay must not cover the navigator minimap after zoom."""
         if not EXAMPLE_BTF.is_file():
             self.skipTest(f"missing trace fixture: {EXAMPLE_BTF}")
 
-        win = MainWindow()
-        win.resize(1400, 900)
-        win.show()
+        # Build the same stack hierarchy as a tab, without MainWindow (avoids
+        # session-restore races that leave _active_tab unset in CI/discover).
+        host = QWidget()
+        view = TimelineView()
+        pane = _TimelinePane(view)
+        cpu = QLabel("cpu")
+        cpu.setMinimumHeight(CPU_LOAD_ROW_H)
+        stack = _CpuLoadStack(pane, cpu, host)
+        stack.set_cpu_visible(True)
+        stack.setSizes([600, CPU_LOAD_ROW_H])
+        host.resize(1400, 900)
+        stack.setGeometry(0, 0, 1400, 900)
+        host.show()
+        stack.show()
         self._app.processEvents()
-        win._open_file(str(EXAMPLE_BTF.resolve()))
+        stack._reposition()
 
-        loop = QEventLoop()
+        trace = _parse_btf(str(EXAMPLE_BTF))
+        view.load_trace(trace)
+        self._app.processEvents()
+        stack._reposition()
 
-        def _poll() -> None:
-            tab = win._active_tab
-            if tab is not None and tab.view._scene._trace is not None:
-                loop.quit()
-            else:
-                QTimer.singleShot(100, _poll)
-
-        QTimer.singleShot(100, _poll)
-        QTimer.singleShot(15_000, loop.quit)
-        loop.exec()
-
-        tab = win._active_tab
-        self.assertIsNotNone(tab)
-        assert tab is not None
-        view = tab.view
-        stack = tab.cpu_splitter
         self.assertTrue(stack.cpu_visible())
+        self.assertGreater(view._nav_bottom_inset, 0)
 
         view._do_zoom(4.0, QPoint(500, 350))
         self._app.processEvents()
@@ -85,7 +88,7 @@ class TestNavCpuOverlay(unittest.TestCase):
             f"nav {nav_rect} overlaps handle {stack._handle.geometry()}",
         )
 
-        win.close()
+        host.close()
         self._app.processEvents()
 
 

@@ -34,19 +34,25 @@ update:
 	$(MAKE) -f Makefile CORES=1 clean run
 	@mv tracedata/trace.btf tracedata/example.btf
 	@mv tracedata/trace.vcd tracedata/example.vcd
+	@gzip -f tracedata/example.btf
+	$(MAKE) -f Makefile CORES=2 clean run
+	@mv tracedata/trace.btf tracedata/example-2cores.btf
+	@gzip -f tracedata/example-2cores.btf
 	$(MAKE) -f Makefile CORES=4 clean run
 	@mv tracedata/trace.btf tracedata/example-4cores.btf
-	@mv tracedata/trace.vcd tracedata/example-4cores.vcd
+	@gzip -f tracedata/example-4cores.btf
 	$(MAKE) -f Makefile CORES=8 clean run
 	@mv tracedata/trace.btf tracedata/example-8cores.btf
-	@mv tracedata/trace.vcd tracedata/example-8cores.vcd
+	@gzip -f tracedata/example-8cores.btf
 	$(MAKE) -f Makefile CORES=16 clean run
 	@mv tracedata/trace.btf tracedata/example-16cores.btf
-	@mv tracedata/trace.vcd tracedata/example-16cores.vcd
+	@gzip -f tracedata/example-16cores.btf
 	$(MAKE) -f Makefile CORES=32 clean run
 	@mv tracedata/trace.btf tracedata/example-32cores.btf
-	@mv tracedata/trace.vcd tracedata/example-32cores.vcd
+	@gzip -f tracedata/example-32cores.btf
+	@$(RM) tracedata/trace.vcd
 	$(MAKE) -C BTFViewer update-images
+	$(MAKE) -C BTFViewer test
 
 check:
 	[ -d FreeRTOS-Kernel ] || git clone -b ${FREERTOS_VER} https://github.com/FreeRTOS/FreeRTOS-Kernel.git FreeRTOS-Kernel

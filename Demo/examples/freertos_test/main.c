@@ -47,17 +47,23 @@
  *                               lowers its own priority before exit
  *                               (exercises traceTASK_PRIORITY_SET).
  *
- *  8. Priority inversion      - low task holds a mutex while medium-
- *                               priority work runs; high task blocks on
- *                               the mutex.  Mutex priority inheritance
- *                               must boost the low task to high while
- *                               the high task waits (t8_inherit_ok).
+ *  8. Priority inversion      - textbook L/M/H on one core, repeated
+ *                               T8_ROUNDS times: each round Low holds a
+ *                               mutex, Med runs mid-priority work, High
+ *                               blocks, and inheritance boosts Low→High
+ *                               (multiple red stripes on Low in BTFViewer).
+ *                               Tasks named Low/Med/High, pinned to core 0
+ *                               on SMP so the geometry is unambiguous.
  *
- *  9. Task suspend/resume     - subject task blocks on a semaphore;
- *                               runner suspends it (vTaskSuspend), then
- *                               satisfies the wait condition and confirms
- *                               it does NOT run until vTaskResume() is
- *                               called (traceTASK_SUSPEND / traceTASK_RESUME).
+ *  9. Task suspend/resume     - several subjects (up to 4, pinned across
+ *                               cores on SMP) each run T9_ROUNDS of:
+ *                               (a) suspend-while-blocked — wait satisfied
+ *                               under suspend must not run; then resume;
+ *                               (b) suspend-while-running — busy subject
+ *                               frozen mid-spin, then resume.  Short sync
+ *                               only (no long delays) so 8-core sims stay
+ *                               fast while Task Lifecycle shows many
+ *                               suspend/resume STI pairs.
  *
  * 10. Core affinity           - SMP only (no-op pass on 1 core): pin one
  *                               task per core via xTaskCreateAffinitySet /
@@ -130,10 +136,34 @@
 #define LOW_PRIORITY       ( ( WORKER_PRIORITY > 0 ) ? ( WORKER_PRIORITY - 1 ) : 0 )
 #define BOOST_PRIORITY     ( WORKER_PRIORITY + 1 )
 
-/* Test 8 — L < M < H (mutex priority inheritance). */
+/* Test 8 — L < M < H (mutex priority inheritance), repeated rounds. */
 #define INV_LOW_PRIORITY   LOW_PRIORITY
 #define INV_MED_PRIORITY   WORKER_PRIORITY
 #define INV_HIGH_PRIORITY  BOOST_PRIORITY
+
+/* Several inherit episodes so Priority Inheritance charts / timeline
+ * stripes are obvious (not a single one-shot boost). */
+#define T8_ROUNDS          3
+
+/* Per-round work: long enough for a clear Med preemption + boost window. */
+#define T8_LOW_HOLD_ITERS  ( ITER_SLOW * 5 )
+#define T8_MED_WORK_ITERS  ( ITER_FAST * 4 )
+#define T8_BUSY_SPIN       400
+#define T8_MED_SEEN_AT     ( T8_MED_WORK_ITERS / 4 )
+
+/* Test 9 — multi-subject suspend/resume for a rich STI timeline.
+ * Cap subjects at 4 so CORES=8 stays quick (sync + few yields only). */
+#if ( configNUMBER_OF_CORES > 1 )
+#  if ( configNUMBER_OF_CORES < 4 )
+#    define T9_SUBJECTS    configNUMBER_OF_CORES
+#  else
+#    define T9_SUBJECTS    4
+#  endif
+#else
+#  define T9_SUBJECTS      1
+#endif
+#define T9_ROUNDS          2
+#define T9_FILLERS         ( configNUMBER_OF_CORES )
 
 /* ==================================================================
  * Application hooks
@@ -711,100 +741,203 @@ static int run_test7( void )
 /* ==================================================================
  * TEST 8 - Priority inversion (mutex priority inheritance)
  *
- * Classic L/M/H scenario on a mutex with inheritance enabled:
- *   L (low)  takes the mutex and spins with taskYIELD().
- *   M (med)  runs CPU work once the mutex is held (would block H in a
- *            non-inheritance inversion).
- *   H (high) blocks on the mutex; the kernel must boost L to H.
+ * Textbook single-core L / M / H geometry (pinned to Core_0 on SMP),
+ * repeated T8_ROUNDS times so BTFViewer shows multiple red boost stripes
+ * and several Priority Inheritance scatter points:
  *
- * L records t8_inherit_ok when uxTaskPriorityGet() == INV_HIGH_PRIORITY
- * during the hold loop.  H signals t8_h_done after it acquires the mutex.
+ *   pri H  High  ─── waits for mutex ────────────────────────────┐
+ *   pri M  Med   ─── CPU work while Low held the lock ──────────┤
+ *   pri L  Low   ─── holds mutex ──► boosted to H (inherit) ────┘
  *
- * Correctness: t8_inherit_ok == 1 and high task completes.
+ * Each round:
+ *   1. Low takes the mutex (signals lock-held).
+ *   2. Runner releases Med → Med preempts Low on the same core.
+ *   3. Runner releases High → High blocks → priority_inherit on Low.
+ *   4. Low finishes the critical section, gives the mutex.
+ *   5. High acquires, signals done, gives back; runner arms the next round.
+ *
+ * Correctness: every round observes inheritance (t8_inherit_rounds ==
+ * T8_ROUNDS) and High completes each round.
  * ================================================================== */
 
-static SemaphoreHandle_t  t8_mtx, t8_l_ready, t8_h_done;
+static SemaphoreHandle_t  t8_mtx, t8_lock_held, t8_med_go, t8_med_seen,
+                          t8_med_done, t8_high_go, t8_h_done, t8_next_round;
 static volatile uint32_t  t8_inherit_ok;
+static volatile uint32_t  t8_inherit_rounds;
+static volatile uint32_t  t8_med_iters;
+
+/* Small busy+yield chunk so each scheduling quantum leaves a solid bar. */
+static void prvT8BusyYield( void )
+{
+    int j;
+    volatile uint32_t sink = 0;
+
+    for( j = 0; j < T8_BUSY_SPIN; ++j )
+        sink += ( uint32_t )j;
+    taskYIELD();
+}
+
+static BaseType_t prvT8Create( TaskFunction_t fn, const char *name,
+                               UBaseType_t pri )
+{
+    /* Pin L/M/H onto core 0 so Med actually preempts Low on the same
+     * timeline row geometry viewers expect for classic inversion. */
+#if ( configNUMBER_OF_CORES > 1 ) && ( configUSE_CORE_AFFINITY == 1 )
+    return xTaskCreateAffinitySet( fn, name, TASK_STACK_WORDS, NULL, pri,
+                                   ( UBaseType_t )( 1u << 0 ), NULL );
+#else
+    return xTaskCreate( fn, name, TASK_STACK_WORDS, NULL, pri, NULL );
+#endif
+}
 
 static void vInvLow( void *pvArg )
 {
-    int i;
+    int round, i;
     (void)pvArg;
 
-    xSemaphoreTake( t8_mtx, portMAX_DELAY );
-    xSemaphoreGive( t8_l_ready );
-    xSemaphoreGive( t8_l_ready );
-
-    for( i = 0; i < ITER_SLOW * 4; ++i )
+    for( round = 0; round < T8_ROUNDS; ++round )
     {
-        if( uxTaskPriorityGet( NULL ) == (UBaseType_t)INV_HIGH_PRIORITY )
-            t8_inherit_ok = 1;
+        uint32_t saw_boost = 0;
 
-        taskYIELD();
+        xSemaphoreTake( t8_mtx, portMAX_DELAY );
+        xSemaphoreGive( t8_lock_held );
+
+        for( i = 0; i < T8_LOW_HOLD_ITERS; ++i )
+        {
+            if( uxTaskPriorityGet( NULL ) == ( UBaseType_t )INV_HIGH_PRIORITY )
+            {
+                if( saw_boost == 0 )
+                {
+                    saw_boost = 1;
+                    t8_inherit_rounds++;
+                }
+                t8_inherit_ok = 1;
+            }
+            prvT8BusyYield();
+        }
+
+        xSemaphoreGive( t8_mtx );
+
+        /* Wait for High to finish this round before retaking the mutex. */
+        if( round + 1 < T8_ROUNDS )
+            xSemaphoreTake( t8_next_round, portMAX_DELAY );
     }
 
-    xSemaphoreGive( t8_mtx );
-    vTaskDelete( NULL );
-}
-
-static void vInvHigh( void *pvArg )
-{
-    (void)pvArg;
-
-    xSemaphoreTake( t8_l_ready, portMAX_DELAY );
-    xSemaphoreTake( t8_mtx, portMAX_DELAY );
-    xSemaphoreGive( t8_h_done );
     vTaskDelete( NULL );
 }
 
 static void vInvMed( void *pvArg )
 {
-    int i;
+    int round, i;
     (void)pvArg;
 
-    xSemaphoreTake( t8_l_ready, portMAX_DELAY );
+    for( round = 0; round < T8_ROUNDS; ++round )
+    {
+        xSemaphoreTake( t8_med_go, portMAX_DELAY );
+        t8_med_iters = 0;
 
-    for( i = 0; i < ITER_FAST * 4; ++i )
-        taskYIELD();
+        for( i = 0; i < T8_MED_WORK_ITERS; ++i )
+        {
+            t8_med_iters++;
+            if( t8_med_iters == ( uint32_t )T8_MED_SEEN_AT )
+                xSemaphoreGive( t8_med_seen );
+            prvT8BusyYield();
+        }
+
+        /* Let the runner (and Low) proceed to the next round without Med
+         * monopolising the core after the inherit window ends. */
+        xSemaphoreGive( t8_med_done );
+    }
+
+    vTaskDelete( NULL );
+}
+
+static void vInvHigh( void *pvArg )
+{
+    int round;
+    (void)pvArg;
+
+    for( round = 0; round < T8_ROUNDS; ++round )
+    {
+        xSemaphoreTake( t8_high_go, portMAX_DELAY );
+        /* Blocks here → kernel priority-inherits Low up to INV_HIGH_PRIORITY. */
+        xSemaphoreTake( t8_mtx, portMAX_DELAY );
+        xSemaphoreGive( t8_h_done );
+        xSemaphoreGive( t8_mtx );
+    }
 
     vTaskDelete( NULL );
 }
 
 static int run_test8( void )
 {
-    int fail = 0;
+    int round, fail = 0;
 
-    t8_inherit_ok = 0;
-    t8_mtx        = xSemaphoreCreateMutex();
-    t8_l_ready    = xSemaphoreCreateCounting( 2, 0 );
-    t8_h_done     = xSemaphoreCreateBinary();
-    configASSERT( t8_mtx && t8_l_ready && t8_h_done );
+    t8_inherit_ok     = 0;
+    t8_inherit_rounds = 0;
+    t8_med_iters      = 0;
+    t8_mtx            = xSemaphoreCreateMutex();
+    t8_lock_held      = xSemaphoreCreateBinary();
+    t8_med_go         = xSemaphoreCreateBinary();
+    t8_med_seen       = xSemaphoreCreateBinary();
+    t8_med_done       = xSemaphoreCreateBinary();
+    t8_high_go        = xSemaphoreCreateBinary();
+    t8_h_done         = xSemaphoreCreateBinary();
+    t8_next_round     = xSemaphoreCreateBinary();
+    configASSERT( t8_mtx && t8_lock_held && t8_med_go && t8_med_seen &&
+                  t8_med_done && t8_high_go && t8_h_done && t8_next_round );
 
-    configASSERT( xTaskCreate( vInvLow, "IL",
-                               TASK_STACK_WORDS, NULL,
-                               INV_LOW_PRIORITY, NULL ) == pdPASS );
-    configASSERT( xTaskCreate( vInvHigh, "IH",
-                               TASK_STACK_WORDS, NULL,
-                               INV_HIGH_PRIORITY, NULL ) == pdPASS );
-    configASSERT( xTaskCreate( vInvMed, "IM",
-                               TASK_STACK_WORDS, NULL,
-                               INV_MED_PRIORITY, NULL ) == pdPASS );
+    configASSERT( prvT8Create( vInvLow,  "Low",  INV_LOW_PRIORITY  ) == pdPASS );
+    configASSERT( prvT8Create( vInvMed,  "Med",  INV_MED_PRIORITY  ) == pdPASS );
+    configASSERT( prvT8Create( vInvHigh, "High", INV_HIGH_PRIORITY ) == pdPASS );
 
 #if configUSE_TRACE_FACILITY
     traceINTERVAL_START( 8 );
 #endif
-    xSemaphoreTake( t8_h_done, portMAX_DELAY );
+
+    for( round = 0; round < T8_ROUNDS; ++round )
+    {
+        /* Phase 1 — Low owns the mutex. */
+        xSemaphoreTake( t8_lock_held, portMAX_DELAY );
+
+        /* Phase 2 — Med runs while Low still holds (runner blocks so Med
+         * can run despite the runner's higher priority). */
+        xSemaphoreGive( t8_med_go );
+        xSemaphoreTake( t8_med_seen, portMAX_DELAY );
+
+        /* Phase 3 — High blocks → inheritance boosts Low. */
+        xSemaphoreGive( t8_high_go );
+        xSemaphoreTake( t8_h_done, portMAX_DELAY );
+
+        /* Drain Med's leftover work so it cannot starve Low next round. */
+        xSemaphoreTake( t8_med_done, portMAX_DELAY );
+
+        if( round + 1 < T8_ROUNDS )
+            xSemaphoreGive( t8_next_round );
+    }
+
 #if configUSE_TRACE_FACILITY
     traceINTERVAL_STOP( 8 );
 #endif
 
     vSemaphoreDelete( t8_mtx );
-    vSemaphoreDelete( t8_l_ready );
+    vSemaphoreDelete( t8_lock_held );
+    vSemaphoreDelete( t8_med_go );
+    vSemaphoreDelete( t8_med_seen );
+    vSemaphoreDelete( t8_med_done );
+    vSemaphoreDelete( t8_high_go );
     vSemaphoreDelete( t8_h_done );
+    vSemaphoreDelete( t8_next_round );
 
+    if( t8_inherit_rounds != ( uint32_t )T8_ROUNDS )
+    {
+        printf( "  FAIL: expected %d inherit rounds, got %u\n",
+                T8_ROUNDS, (unsigned)t8_inherit_rounds );
+        ++fail;
+    }
     if( t8_inherit_ok != 1 )
     {
-        printf( "  FAIL: mutex holder was not boosted to priority %d\n",
+        printf( "  FAIL: Low was not boosted to priority %d while holding\n",
                 (int)INV_HIGH_PRIORITY );
         ++fail;
     }
@@ -814,110 +947,318 @@ static int run_test8( void )
 /* ==================================================================
  * TEST 9 - Task suspend / resume (vTaskSuspend / vTaskResume)
  *
- * The subject task increments t9_ctr to 1, signals t9_started, then
- * blocks on t9_go.  The runner:
- *   (a) waits for t9_started so the subject is known to be blocked;
- *   (b) calls vTaskSuspend() on the already-blocked subject;
- *   (c) gives t9_go - the subject's wait condition is now satisfied,
- *       but it must stay suspended and NOT run;
- *   (d) yields with NUM_WORKERS fillers ready on every core - t9_ctr
- *       must stay at 1;
- *   (e) calls vTaskResume() - the subject must now wake, set t9_ctr to
- *       2, and signal t9_done.
+ * T9_SUBJECTS tasks (SR0..SRN-1), pinned across cores on SMP, each run
+ * T9_ROUNDS of two patterns so BTFViewer Task Lifecycle / timeline show
+ * many suspend+resume STI pairs without long busy-waits:
  *
- * The subject runs at BOOST_PRIORITY (strictly above the WORKER_PRIORITY
- * fillers), same as test 7's boosted subject - this guarantees the SMP
- * scheduler immediately preempts a filler-busy core on resume instead of
- * waiting for same-priority round-robin, which is what made this test
- * slow when subject and fillers shared WORKER_PRIORITY.
+ *   A. Suspend-while-blocked
+ *      Subject signals ready and blocks on go.  Runner suspends, gives
+ *      go (wait satisfied but must stay frozen), yields, then resumes.
  *
- * Correctness: t9_ctr == 1 right after suspend (unchanged while
- * suspended) and t9_ctr == 2 after resume + completion.
+ *   B. Suspend-while-running
+ *      Subject signals ready and busy-spins on a per-subject gate.
+ *      Runner suspends mid-spin, checks the busy counter is frozen,
+ *      opens the gate, resumes — subject exits and signals done.
+ *
+ * Within a round the runner suspends *all* subjects before resuming any,
+ * so the trace shows overlapping suspended windows across cores.
+ *
+ * Correctness: t9_ok_blocked == T9_SUBJECTS*T9_ROUNDS and
+ * t9_ok_running == T9_SUBJECTS*T9_ROUNDS.
  * ================================================================== */
 
-static SemaphoreHandle_t  t9_started, t9_go, t9_done;
-static volatile uint32_t  t9_ctr;
+#define T9_PHASE_BLK_WAIT   1u
+#define T9_PHASE_BLK_DONE   2u
+#define T9_PHASE_RUN_BUSY   3u
+#define T9_PHASE_RUN_DONE   4u
+
+typedef struct
+{
+    SemaphoreHandle_t     ready;
+    SemaphoreHandle_t     go;
+    SemaphoreHandle_t     done;
+    SemaphoreHandle_t     next;
+    TaskHandle_t          handle;
+    volatile uint32_t     phase;
+    volatile uint32_t     busy_ctr;
+    volatile uint32_t     run_gate;
+} t9_subj_t;
+
+static t9_subj_t          t9_subj[ T9_SUBJECTS ];
+static volatile uint32_t  t9_ok_blocked;
+static volatile uint32_t  t9_ok_running;
+static volatile uint32_t  t9_fillers_stop;
+
+static BaseType_t prvT9CreateSubject( TaskFunction_t fn, const char *name,
+                                      void *arg, TaskHandle_t *out,
+                                      UBaseType_t core_idx )
+{
+#if ( configNUMBER_OF_CORES > 1 ) && ( configUSE_CORE_AFFINITY == 1 )
+    UBaseType_t mask = ( UBaseType_t )( 1u << ( core_idx % configNUMBER_OF_CORES ) );
+    return xTaskCreateAffinitySet( fn, name, TASK_STACK_WORDS, arg,
+                                   BOOST_PRIORITY, mask, out );
+#else
+    (void)core_idx;
+    return xTaskCreate( fn, name, TASK_STACK_WORDS, arg,
+                        BOOST_PRIORITY, out );
+#endif
+}
 
 static void vSuspResSubject( void *pvArg )
 {
-    (void)pvArg;
+    t9_subj_t *s = &t9_subj[ ( intptr_t )pvArg ];
+    int round;
 
-    t9_ctr = 1;
-    xSemaphoreGive( t9_started );
-    xSemaphoreTake( t9_go, portMAX_DELAY );
-    t9_ctr = 2;
-    xSemaphoreGive( t9_done );
+    for( round = 0; round < T9_ROUNDS; ++round )
+    {
+        /* ---- A: block, then continue only after resume ---- */
+        s->phase = T9_PHASE_BLK_WAIT;
+        xSemaphoreGive( s->ready );
+        xSemaphoreTake( s->go, portMAX_DELAY );
+        s->phase = T9_PHASE_BLK_DONE;
+        xSemaphoreGive( s->done );
+        xSemaphoreTake( s->next, portMAX_DELAY );
+
+        /* ---- B: busy-spin until runner opens run_gate after resume ---- */
+        s->run_gate = 0;
+        s->phase    = T9_PHASE_RUN_BUSY;
+        xSemaphoreGive( s->ready );
+        while( s->run_gate == 0 )
+        {
+            s->busy_ctr++;
+            /* Occasional yield so fillers / other subjects stay schedulable
+             * on single-core; on SMP the pin keeps this core hot. */
+            if( ( s->busy_ctr & 0x0Fu ) == 0u )
+                taskYIELD();
+        }
+        s->phase = T9_PHASE_RUN_DONE;
+        xSemaphoreGive( s->done );
+
+        if( round + 1 < T9_ROUNDS )
+            xSemaphoreTake( s->next, portMAX_DELAY );
+    }
+
     vTaskDelete( NULL );
 }
 
 static void vSuspResFiller( void *pvArg )
 {
-    int i;
     (void)pvArg;
 
-    for( i = 0; i < ITER_SLOW; ++i )
+    while( t9_fillers_stop == 0 )
         taskYIELD();
 
     vTaskDelete( NULL );
 }
 
+static void prvT9YieldBurst( void )
+{
+    int i;
+
+    for( i = 0; i < ( int )configNUMBER_OF_CORES; ++i )
+        taskYIELD();
+}
+
 static int run_test9( void )
 {
-    TaskHandle_t subject;
-    int i, fail = 0;
+    int i, round, fail = 0;
+    char name[ 8 ];
 
-    t9_ctr     = 0;
-    t9_started = xSemaphoreCreateBinary();
-    t9_go      = xSemaphoreCreateBinary();
-    t9_done    = xSemaphoreCreateBinary();
-    configASSERT( t9_started && t9_go && t9_done );
+    t9_ok_blocked   = 0;
+    t9_ok_running   = 0;
+    t9_fillers_stop = 0;
 
-    configASSERT( xTaskCreate( vSuspResSubject, "SR",
-                               TASK_STACK_WORDS, NULL,
-                               BOOST_PRIORITY, &subject ) == pdPASS );
+    for( i = 0; i < T9_SUBJECTS; ++i )
+    {
+        t9_subj[ i ].phase    = 0;
+        t9_subj[ i ].busy_ctr = 0;
+        t9_subj[ i ].run_gate = 0;
+        t9_subj[ i ].handle   = NULL;
+        t9_subj[ i ].ready    = xSemaphoreCreateBinary();
+        t9_subj[ i ].go       = xSemaphoreCreateBinary();
+        t9_subj[ i ].done     = xSemaphoreCreateBinary();
+        t9_subj[ i ].next     = xSemaphoreCreateBinary();
+        configASSERT( t9_subj[ i ].ready && t9_subj[ i ].go &&
+                      t9_subj[ i ].done && t9_subj[ i ].next );
 
-    for( i = 0; i < NUM_WORKERS; ++i )
+        snprintf( name, sizeof( name ), "SR%d", i );
+        configASSERT( prvT9CreateSubject( vSuspResSubject, name,
+                                          ( void * )( intptr_t )i,
+                                          &t9_subj[ i ].handle,
+                                          ( UBaseType_t )i ) == pdPASS );
+    }
+
+    for( i = 0; i < T9_FILLERS; ++i )
         configASSERT( xTaskCreate( vSuspResFiller, "SF",
                                    TASK_STACK_WORDS, NULL,
                                    WORKER_PRIORITY, NULL ) == pdPASS );
 
-    /* Wait for the subject to run once and block on t9_go. */
-    xSemaphoreTake( t9_started, portMAX_DELAY );
-
 #if configUSE_TRACE_FACILITY
-    traceINTERVAL_START(9);
+    traceINTERVAL_START( 9 );
 #endif
-    vTaskSuspend( subject );
 
-    /* Satisfy the subject's wait condition while it is suspended - it
-     * must NOT run even though t9_go is now available. */
-    xSemaphoreGive( t9_go );
-
-    for( i = 0; i < (int)configNUMBER_OF_CORES; ++i )
-        taskYIELD();
-
-    if( t9_ctr != 1 )
+    for( round = 0; round < T9_ROUNDS; ++round )
     {
-        printf( "  FAIL: subject ran while suspended (ctr=%u want 1)\n",
-                (unsigned)t9_ctr );
-        ++fail;
+        /* ---- A: suspend-while-blocked (all subjects overlapping) ---- */
+        for( i = 0; i < T9_SUBJECTS; ++i )
+            xSemaphoreTake( t9_subj[ i ].ready, portMAX_DELAY );
+
+        for( i = 0; i < T9_SUBJECTS; ++i )
+            vTaskSuspend( t9_subj[ i ].handle );
+
+        for( i = 0; i < T9_SUBJECTS; ++i )
+            xSemaphoreGive( t9_subj[ i ].go );
+
+        prvT9YieldBurst();
+
+        for( i = 0; i < T9_SUBJECTS; ++i )
+        {
+            if( t9_subj[ i ].phase != T9_PHASE_BLK_WAIT )
+            {
+                printf( "  FAIL: SR%d round %d ran while suspended-blocked"
+                        " (phase=%u)\n",
+                        i, round, (unsigned)t9_subj[ i ].phase );
+                ++fail;
+            }
+        }
+
+        for( i = 0; i < T9_SUBJECTS; ++i )
+            vTaskResume( t9_subj[ i ].handle );
+
+        for( i = 0; i < T9_SUBJECTS; ++i )
+        {
+            xSemaphoreTake( t9_subj[ i ].done, portMAX_DELAY );
+            if( t9_subj[ i ].phase != T9_PHASE_BLK_DONE )
+            {
+                printf( "  FAIL: SR%d round %d blocked-resume phase=%u\n",
+                        i, round, (unsigned)t9_subj[ i ].phase );
+                ++fail;
+            }
+            else
+                t9_ok_blocked++;
+            xSemaphoreGive( t9_subj[ i ].next );
+        }
+
+        /* ---- B: suspend-while-running (overlapping across subjects) ---- */
+        for( i = 0; i < T9_SUBJECTS; ++i )
+            xSemaphoreTake( t9_subj[ i ].ready, portMAX_DELAY );
+
+        /* Let subjects enter the busy loop before suspending. */
+        prvT9YieldBurst();
+
+        {
+            uint32_t snap[ T9_SUBJECTS ];
+
+            for( i = 0; i < T9_SUBJECTS; ++i )
+                vTaskSuspend( t9_subj[ i ].handle );
+
+            /* Remote cores may still retire a few instructions after
+             * vTaskSuspend returns — settle, then sample. */
+            prvT9YieldBurst();
+            for( i = 0; i < T9_SUBJECTS; ++i )
+                snap[ i ] = t9_subj[ i ].busy_ctr;
+            prvT9YieldBurst();
+
+            for( i = 0; i < T9_SUBJECTS; ++i )
+            {
+                if( t9_subj[ i ].phase != T9_PHASE_RUN_BUSY )
+                {
+                    printf( "  FAIL: SR%d round %d not busy when suspended"
+                            " (phase=%u)\n",
+                            i, round, (unsigned)t9_subj[ i ].phase );
+                    ++fail;
+                }
+                if( t9_subj[ i ].busy_ctr == 0u )
+                {
+                    printf( "  FAIL: SR%d round %d never ran before suspend\n",
+                            i, round );
+                    ++fail;
+                }
+                if( t9_subj[ i ].busy_ctr != snap[ i ] )
+                {
+                    printf( "  FAIL: SR%d round %d advanced while"
+                            " suspended-running (%u -> %u)\n",
+                            i, round,
+                            (unsigned)snap[ i ],
+                            (unsigned)t9_subj[ i ].busy_ctr );
+                    ++fail;
+                }
+                /* Open the gate while still suspended — must not observe. */
+                t9_subj[ i ].run_gate = 1;
+            }
+
+            prvT9YieldBurst();
+
+            for( i = 0; i < T9_SUBJECTS; ++i )
+            {
+                if( t9_subj[ i ].phase != T9_PHASE_RUN_BUSY ||
+                    t9_subj[ i ].busy_ctr != snap[ i ] )
+                {
+                    printf( "  FAIL: SR%d round %d ran on gated suspend"
+                            " (phase=%u ctr=%u)\n",
+                            i, round,
+                            (unsigned)t9_subj[ i ].phase,
+                            (unsigned)t9_subj[ i ].busy_ctr );
+                    ++fail;
+                }
+            }
+
+            /* Resume in reverse order so the STI timeline is not uniform. */
+            for( i = T9_SUBJECTS - 1; i >= 0; --i )
+                vTaskResume( t9_subj[ i ].handle );
+
+            for( i = 0; i < T9_SUBJECTS; ++i )
+            {
+                xSemaphoreTake( t9_subj[ i ].done, portMAX_DELAY );
+                if( t9_subj[ i ].phase != T9_PHASE_RUN_DONE )
+                {
+                    printf( "  FAIL: SR%d round %d running-resume phase=%u\n",
+                            i, round, (unsigned)t9_subj[ i ].phase );
+                    ++fail;
+                }
+                else
+                    t9_ok_running++;
+            }
+        }
+
+        if( round + 1 < T9_ROUNDS )
+        {
+            for( i = 0; i < T9_SUBJECTS; ++i )
+                xSemaphoreGive( t9_subj[ i ].next );
+        }
     }
 
-    vTaskResume( subject );
-    xSemaphoreTake( t9_done, portMAX_DELAY );
 #if configUSE_TRACE_FACILITY
-    traceINTERVAL_STOP(9);
+    traceINTERVAL_STOP( 9 );
 #endif
 
-    vSemaphoreDelete( t9_started );
-    vSemaphoreDelete( t9_go );
-    vSemaphoreDelete( t9_done );
+    t9_fillers_stop = 1;
+    prvT9YieldBurst();
+    prvT9YieldBurst();
 
-    if( t9_ctr != 2 )
+    for( i = 0; i < T9_SUBJECTS; ++i )
     {
-        printf( "  FAIL: subject did not resume/complete (ctr=%u want 2)\n",
-                (unsigned)t9_ctr );
-        ++fail;
+        vSemaphoreDelete( t9_subj[ i ].ready );
+        vSemaphoreDelete( t9_subj[ i ].go );
+        vSemaphoreDelete( t9_subj[ i ].done );
+        vSemaphoreDelete( t9_subj[ i ].next );
+    }
+
+    {
+        const uint32_t want = ( uint32_t )( T9_SUBJECTS * T9_ROUNDS );
+
+        if( t9_ok_blocked != want )
+        {
+            printf( "  FAIL: blocked-suspend oks %u want %u\n",
+                    (unsigned)t9_ok_blocked, (unsigned)want );
+            ++fail;
+        }
+        if( t9_ok_running != want )
+        {
+            printf( "  FAIL: running-suspend oks %u want %u\n",
+                    (unsigned)t9_ok_running, (unsigned)want );
+            ++fail;
+        }
     }
     return fail;
 }

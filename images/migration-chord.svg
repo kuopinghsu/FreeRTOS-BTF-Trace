@@ -3,133 +3,133 @@
 <title>Migration Chord Diagram</title>
 <rect width="100%" height="100%" fill="#1e1e1e"/>
 <defs>
-<linearGradient id="chord-grad-0-1" gradientUnits="userSpaceOnUse" x1="243.88" y1="57.08" x2="297.00" y2="76.65"><stop offset="0" stop-color="#FF9933"/><stop offset="1" stop-color="#33BBFF"/></linearGradient>
-<linearGradient id="chord-grad-0-2" gradientUnits="userSpaceOnUse" x1="251.58" y1="57.73" x2="330.87" y2="132.21"><stop offset="0" stop-color="#FF9933"/><stop offset="1" stop-color="#66FF88"/></linearGradient>
-<linearGradient id="chord-grad-0-3" gradientUnits="userSpaceOnUse" x1="259.29" y1="59.03" x2="321.51" y2="193.23"><stop offset="0" stop-color="#FF9933"/><stop offset="1" stop-color="#FF66AA"/></linearGradient>
-<linearGradient id="chord-grad-0-4" gradientUnits="userSpaceOnUse" x1="266.80" y1="60.97" x2="266.09" y2="238.24"><stop offset="0" stop-color="#FF9933"/><stop offset="1" stop-color="#FFEE44"/></linearGradient>
-<linearGradient id="chord-grad-0-5" gradientUnits="userSpaceOnUse" x1="273.48" y1="63.27" x2="191.02" y2="227.97"><stop offset="0" stop-color="#FF9933"/><stop offset="1" stop-color="#BB77FF"/></linearGradient>
-<linearGradient id="chord-grad-0-6" gradientUnits="userSpaceOnUse" x1="280.41" y1="66.29" x2="148.59" y2="163.65"><stop offset="0" stop-color="#FF9933"/><stop offset="1" stop-color="#44FFEE"/></linearGradient>
-<linearGradient id="chord-grad-0-7" gradientUnits="userSpaceOnUse" x1="288.00" y1="70.43" x2="170.53" y2="88.42"><stop offset="0" stop-color="#FF9933"/><stop offset="1" stop-color="#FF5555"/></linearGradient>
-<linearGradient id="chord-grad-1-0" gradientUnits="userSpaceOnUse" x1="297.00" y1="76.65" x2="243.88" y2="57.08"><stop offset="0" stop-color="#33BBFF"/><stop offset="1" stop-color="#FF9933"/></linearGradient>
-<linearGradient id="chord-grad-1-2" gradientUnits="userSpaceOnUse" x1="303.24" y1="82.00" x2="332.05" y2="140.37"><stop offset="0" stop-color="#33BBFF"/><stop offset="1" stop-color="#66FF88"/></linearGradient>
-<linearGradient id="chord-grad-1-3" gradientUnits="userSpaceOnUse" x1="309.63" y1="88.61" x2="317.08" y2="200.64"><stop offset="0" stop-color="#33BBFF"/><stop offset="1" stop-color="#FF66AA"/></linearGradient>
-<linearGradient id="chord-grad-1-4" gradientUnits="userSpaceOnUse" x1="315.40" y1="95.92" x2="258.16" y2="240.20"><stop offset="0" stop-color="#33BBFF"/><stop offset="1" stop-color="#FFEE44"/></linearGradient>
-<linearGradient id="chord-grad-1-5" gradientUnits="userSpaceOnUse" x1="320.24" y1="103.47" x2="184.76" y2="223.69"><stop offset="0" stop-color="#33BBFF"/><stop offset="1" stop-color="#BB77FF"/></linearGradient>
-<linearGradient id="chord-grad-1-6" gradientUnits="userSpaceOnUse" x1="324.45" y1="111.75" x2="147.65" y2="154.74"><stop offset="0" stop-color="#33BBFF"/><stop offset="1" stop-color="#44FFEE"/></linearGradient>
-<linearGradient id="chord-grad-1-7" gradientUnits="userSpaceOnUse" x1="327.98" y1="120.95" x2="176.92" y2="81.85"><stop offset="0" stop-color="#33BBFF"/><stop offset="1" stop-color="#FF5555"/></linearGradient>
-<linearGradient id="chord-grad-2-0" gradientUnits="userSpaceOnUse" x1="330.87" y1="132.21" x2="251.58" y2="57.73"><stop offset="0" stop-color="#66FF88"/><stop offset="1" stop-color="#FF9933"/></linearGradient>
-<linearGradient id="chord-grad-2-1" gradientUnits="userSpaceOnUse" x1="332.05" y1="140.37" x2="303.24" y2="82.00"><stop offset="0" stop-color="#66FF88"/><stop offset="1" stop-color="#33BBFF"/></linearGradient>
-<linearGradient id="chord-grad-2-3" gradientUnits="userSpaceOnUse" x1="332.50" y1="149.22" x2="311.65" y2="208.01"><stop offset="0" stop-color="#66FF88"/><stop offset="1" stop-color="#FF66AA"/></linearGradient>
-<linearGradient id="chord-grad-2-4" gradientUnits="userSpaceOnUse" x1="332.05" y1="158.56" x2="248.98" y2="241.56"><stop offset="0" stop-color="#66FF88"/><stop offset="1" stop-color="#FFEE44"/></linearGradient>
-<linearGradient id="chord-grad-2-5" gradientUnits="userSpaceOnUse" x1="330.77" y1="167.29" x2="178.37" y2="218.48"><stop offset="0" stop-color="#66FF88"/><stop offset="1" stop-color="#BB77FF"/></linearGradient>
-<linearGradient id="chord-grad-2-6" gradientUnits="userSpaceOnUse" x1="328.85" y1="175.24" x2="147.57" y2="145.79"><stop offset="0" stop-color="#66FF88"/><stop offset="1" stop-color="#44FFEE"/></linearGradient>
-<linearGradient id="chord-grad-2-7" gradientUnits="userSpaceOnUse" x1="326.10" y1="183.32" x2="183.89" y2="75.97"><stop offset="0" stop-color="#66FF88"/><stop offset="1" stop-color="#FF5555"/></linearGradient>
-<linearGradient id="chord-grad-3-0" gradientUnits="userSpaceOnUse" x1="321.51" y1="193.23" x2="259.29" y2="59.03"><stop offset="0" stop-color="#FF66AA"/><stop offset="1" stop-color="#FF9933"/></linearGradient>
-<linearGradient id="chord-grad-3-1" gradientUnits="userSpaceOnUse" x1="317.08" y1="200.64" x2="309.63" y2="88.61"><stop offset="0" stop-color="#FF66AA"/><stop offset="1" stop-color="#33BBFF"/></linearGradient>
-<linearGradient id="chord-grad-3-2" gradientUnits="userSpaceOnUse" x1="311.65" y1="208.01" x2="332.50" y2="149.22"><stop offset="0" stop-color="#FF66AA"/><stop offset="1" stop-color="#66FF88"/></linearGradient>
-<linearGradient id="chord-grad-3-4" gradientUnits="userSpaceOnUse" x1="304.98" y1="215.34" x2="238.67" y2="241.99"><stop offset="0" stop-color="#FF66AA"/><stop offset="1" stop-color="#FFEE44"/></linearGradient>
-<linearGradient id="chord-grad-3-5" gradientUnits="userSpaceOnUse" x1="296.31" y1="222.88" x2="171.43" y2="211.58"><stop offset="0" stop-color="#FF66AA"/><stop offset="1" stop-color="#BB77FF"/></linearGradient>
-<linearGradient id="chord-grad-3-6" gradientUnits="userSpaceOnUse" x1="287.02" y1="229.16" x2="148.43" y2="136.44"><stop offset="0" stop-color="#FF66AA"/><stop offset="1" stop-color="#44FFEE"/></linearGradient>
-<linearGradient id="chord-grad-3-7" gradientUnits="userSpaceOnUse" x1="277.41" y1="234.10" x2="191.90" y2="70.49"><stop offset="0" stop-color="#FF66AA"/><stop offset="1" stop-color="#FF5555"/></linearGradient>
-<linearGradient id="chord-grad-4-0" gradientUnits="userSpaceOnUse" x1="266.09" y1="238.24" x2="266.80" y2="60.97"><stop offset="0" stop-color="#FFEE44"/><stop offset="1" stop-color="#FF9933"/></linearGradient>
-<linearGradient id="chord-grad-4-1" gradientUnits="userSpaceOnUse" x1="258.16" y1="240.20" x2="315.40" y2="95.92"><stop offset="0" stop-color="#FFEE44"/><stop offset="1" stop-color="#33BBFF"/></linearGradient>
-<linearGradient id="chord-grad-4-2" gradientUnits="userSpaceOnUse" x1="248.98" y1="241.56" x2="332.05" y2="158.56"><stop offset="0" stop-color="#FFEE44"/><stop offset="1" stop-color="#66FF88"/></linearGradient>
-<linearGradient id="chord-grad-4-3" gradientUnits="userSpaceOnUse" x1="238.67" y1="241.99" x2="304.98" y2="215.34"><stop offset="0" stop-color="#FFEE44"/><stop offset="1" stop-color="#FF66AA"/></linearGradient>
-<linearGradient id="chord-grad-4-5" gradientUnits="userSpaceOnUse" x1="227.12" y1="241.10" x2="163.95" y2="202.15"><stop offset="0" stop-color="#FFEE44"/><stop offset="1" stop-color="#BB77FF"/></linearGradient>
-<linearGradient id="chord-grad-4-6" gradientUnits="userSpaceOnUse" x1="214.42" y1="238.39" x2="150.91" y2="124.61"><stop offset="0" stop-color="#FFEE44"/><stop offset="1" stop-color="#44FFEE"/></linearGradient>
-<linearGradient id="chord-grad-4-7" gradientUnits="userSpaceOnUse" x1="201.92" y1="233.80" x2="202.47" y2="64.96"><stop offset="0" stop-color="#FFEE44"/><stop offset="1" stop-color="#FF5555"/></linearGradient>
-<linearGradient id="chord-grad-5-0" gradientUnits="userSpaceOnUse" x1="191.02" y1="227.97" x2="273.48" y2="63.27"><stop offset="0" stop-color="#BB77FF"/><stop offset="1" stop-color="#FF9933"/></linearGradient>
-<linearGradient id="chord-grad-5-1" gradientUnits="userSpaceOnUse" x1="184.76" y1="223.69" x2="320.24" y2="103.47"><stop offset="0" stop-color="#BB77FF"/><stop offset="1" stop-color="#33BBFF"/></linearGradient>
-<linearGradient id="chord-grad-5-2" gradientUnits="userSpaceOnUse" x1="178.37" y1="218.48" x2="330.77" y2="167.29"><stop offset="0" stop-color="#BB77FF"/><stop offset="1" stop-color="#66FF88"/></linearGradient>
-<linearGradient id="chord-grad-5-3" gradientUnits="userSpaceOnUse" x1="171.43" y1="211.58" x2="296.31" y2="222.88"><stop offset="0" stop-color="#BB77FF"/><stop offset="1" stop-color="#FF66AA"/></linearGradient>
-<linearGradient id="chord-grad-5-4" gradientUnits="userSpaceOnUse" x1="163.95" y1="202.15" x2="227.12" y2="241.10"><stop offset="0" stop-color="#BB77FF"/><stop offset="1" stop-color="#FFEE44"/></linearGradient>
-<linearGradient id="chord-grad-5-6" gradientUnits="userSpaceOnUse" x1="157.41" y1="191.15" x2="155.52" y2="111.83"><stop offset="0" stop-color="#BB77FF"/><stop offset="1" stop-color="#44FFEE"/></linearGradient>
-<linearGradient id="chord-grad-5-7" gradientUnits="userSpaceOnUse" x1="151.96" y1="177.87" x2="215.67" y2="60.26"><stop offset="0" stop-color="#BB77FF"/><stop offset="1" stop-color="#FF5555"/></linearGradient>
-<linearGradient id="chord-grad-6-0" gradientUnits="userSpaceOnUse" x1="148.59" y1="163.65" x2="280.41" y2="66.29"><stop offset="0" stop-color="#44FFEE"/><stop offset="1" stop-color="#FF9933"/></linearGradient>
-<linearGradient id="chord-grad-6-1" gradientUnits="userSpaceOnUse" x1="147.65" y1="154.74" x2="324.45" y2="111.75"><stop offset="0" stop-color="#44FFEE"/><stop offset="1" stop-color="#33BBFF"/></linearGradient>
-<linearGradient id="chord-grad-6-2" gradientUnits="userSpaceOnUse" x1="147.57" y1="145.79" x2="328.85" y2="175.24"><stop offset="0" stop-color="#44FFEE"/><stop offset="1" stop-color="#66FF88"/></linearGradient>
-<linearGradient id="chord-grad-6-3" gradientUnits="userSpaceOnUse" x1="148.43" y1="136.44" x2="287.02" y2="229.16"><stop offset="0" stop-color="#44FFEE"/><stop offset="1" stop-color="#FF66AA"/></linearGradient>
-<linearGradient id="chord-grad-6-4" gradientUnits="userSpaceOnUse" x1="150.91" y1="124.61" x2="214.42" y2="238.39"><stop offset="0" stop-color="#44FFEE"/><stop offset="1" stop-color="#FFEE44"/></linearGradient>
-<linearGradient id="chord-grad-6-5" gradientUnits="userSpaceOnUse" x1="155.52" y1="111.83" x2="157.41" y2="191.15"><stop offset="0" stop-color="#44FFEE"/><stop offset="1" stop-color="#BB77FF"/></linearGradient>
-<linearGradient id="chord-grad-6-7" gradientUnits="userSpaceOnUse" x1="162.06" y1="99.68" x2="230.14" y2="57.53"><stop offset="0" stop-color="#44FFEE"/><stop offset="1" stop-color="#FF5555"/></linearGradient>
-<linearGradient id="chord-grad-7-0" gradientUnits="userSpaceOnUse" x1="170.53" y1="88.42" x2="288.00" y2="70.43"><stop offset="0" stop-color="#FF5555"/><stop offset="1" stop-color="#FF9933"/></linearGradient>
-<linearGradient id="chord-grad-7-1" gradientUnits="userSpaceOnUse" x1="176.92" y1="81.85" x2="327.98" y2="120.95"><stop offset="0" stop-color="#FF5555"/><stop offset="1" stop-color="#33BBFF"/></linearGradient>
-<linearGradient id="chord-grad-7-2" gradientUnits="userSpaceOnUse" x1="183.89" y1="75.97" x2="326.10" y2="183.32"><stop offset="0" stop-color="#FF5555"/><stop offset="1" stop-color="#66FF88"/></linearGradient>
-<linearGradient id="chord-grad-7-3" gradientUnits="userSpaceOnUse" x1="191.90" y1="70.49" x2="277.41" y2="234.10"><stop offset="0" stop-color="#FF5555"/><stop offset="1" stop-color="#FF66AA"/></linearGradient>
-<linearGradient id="chord-grad-7-4" gradientUnits="userSpaceOnUse" x1="202.47" y1="64.96" x2="201.92" y2="233.80"><stop offset="0" stop-color="#FF5555"/><stop offset="1" stop-color="#FFEE44"/></linearGradient>
-<linearGradient id="chord-grad-7-5" gradientUnits="userSpaceOnUse" x1="215.67" y1="60.26" x2="151.96" y2="177.87"><stop offset="0" stop-color="#FF5555"/><stop offset="1" stop-color="#BB77FF"/></linearGradient>
-<linearGradient id="chord-grad-7-6" gradientUnits="userSpaceOnUse" x1="230.14" y1="57.53" x2="162.06" y2="99.68"><stop offset="0" stop-color="#FF5555"/><stop offset="1" stop-color="#44FFEE"/></linearGradient>
+<linearGradient id="chord-grad-0-1" gradientUnits="userSpaceOnUse" x1="243.89" y1="57.08" x2="297.11" y2="76.73"><stop offset="0" stop-color="#FF9933"/><stop offset="1" stop-color="#33BBFF"/></linearGradient>
+<linearGradient id="chord-grad-0-2" gradientUnits="userSpaceOnUse" x1="251.60" y1="57.73" x2="330.89" y2="132.33"><stop offset="0" stop-color="#FF9933"/><stop offset="1" stop-color="#66FF88"/></linearGradient>
+<linearGradient id="chord-grad-0-3" gradientUnits="userSpaceOnUse" x1="259.31" y1="59.04" x2="321.44" y2="193.35"><stop offset="0" stop-color="#FF9933"/><stop offset="1" stop-color="#FF66AA"/></linearGradient>
+<linearGradient id="chord-grad-0-4" gradientUnits="userSpaceOnUse" x1="266.83" y1="60.98" x2="265.93" y2="238.29"><stop offset="0" stop-color="#FF9933"/><stop offset="1" stop-color="#FFEE44"/></linearGradient>
+<linearGradient id="chord-grad-0-5" gradientUnits="userSpaceOnUse" x1="273.49" y1="63.28" x2="190.94" y2="227.92"><stop offset="0" stop-color="#FF9933"/><stop offset="1" stop-color="#BB77FF"/></linearGradient>
+<linearGradient id="chord-grad-0-6" gradientUnits="userSpaceOnUse" x1="280.42" y1="66.30" x2="148.59" y2="163.63"><stop offset="0" stop-color="#FF9933"/><stop offset="1" stop-color="#44FFEE"/></linearGradient>
+<linearGradient id="chord-grad-0-7" gradientUnits="userSpaceOnUse" x1="288.06" y1="70.46" x2="170.52" y2="88.44"><stop offset="0" stop-color="#FF9933"/><stop offset="1" stop-color="#FF5555"/></linearGradient>
+<linearGradient id="chord-grad-1-0" gradientUnits="userSpaceOnUse" x1="297.11" y1="76.73" x2="243.89" y2="57.08"><stop offset="0" stop-color="#33BBFF"/><stop offset="1" stop-color="#FF9933"/></linearGradient>
+<linearGradient id="chord-grad-1-2" gradientUnits="userSpaceOnUse" x1="303.36" y1="82.11" x2="332.06" y2="140.50"><stop offset="0" stop-color="#33BBFF"/><stop offset="1" stop-color="#66FF88"/></linearGradient>
+<linearGradient id="chord-grad-1-3" gradientUnits="userSpaceOnUse" x1="309.75" y1="88.74" x2="316.99" y2="200.77"><stop offset="0" stop-color="#33BBFF"/><stop offset="1" stop-color="#FF66AA"/></linearGradient>
+<linearGradient id="chord-grad-1-4" gradientUnits="userSpaceOnUse" x1="315.51" y1="96.07" x2="258.01" y2="240.23"><stop offset="0" stop-color="#33BBFF"/><stop offset="1" stop-color="#FFEE44"/></linearGradient>
+<linearGradient id="chord-grad-1-5" gradientUnits="userSpaceOnUse" x1="320.32" y1="103.62" x2="184.69" y2="223.64"><stop offset="0" stop-color="#33BBFF"/><stop offset="1" stop-color="#BB77FF"/></linearGradient>
+<linearGradient id="chord-grad-1-6" gradientUnits="userSpaceOnUse" x1="324.51" y1="111.89" x2="147.65" y2="154.75"><stop offset="0" stop-color="#33BBFF"/><stop offset="1" stop-color="#44FFEE"/></linearGradient>
+<linearGradient id="chord-grad-1-7" gradientUnits="userSpaceOnUse" x1="328.02" y1="121.07" x2="176.94" y2="81.82"><stop offset="0" stop-color="#33BBFF"/><stop offset="1" stop-color="#FF5555"/></linearGradient>
+<linearGradient id="chord-grad-2-0" gradientUnits="userSpaceOnUse" x1="330.89" y1="132.33" x2="251.60" y2="57.73"><stop offset="0" stop-color="#66FF88"/><stop offset="1" stop-color="#FF9933"/></linearGradient>
+<linearGradient id="chord-grad-2-1" gradientUnits="userSpaceOnUse" x1="332.06" y1="140.50" x2="303.36" y2="82.11"><stop offset="0" stop-color="#66FF88"/><stop offset="1" stop-color="#33BBFF"/></linearGradient>
+<linearGradient id="chord-grad-2-3" gradientUnits="userSpaceOnUse" x1="332.50" y1="149.37" x2="311.53" y2="208.15"><stop offset="0" stop-color="#66FF88"/><stop offset="1" stop-color="#FF66AA"/></linearGradient>
+<linearGradient id="chord-grad-2-4" gradientUnits="userSpaceOnUse" x1="332.04" y1="158.72" x2="248.83" y2="241.58"><stop offset="0" stop-color="#66FF88"/><stop offset="1" stop-color="#FFEE44"/></linearGradient>
+<linearGradient id="chord-grad-2-5" gradientUnits="userSpaceOnUse" x1="330.74" y1="167.44" x2="178.32" y2="218.43"><stop offset="0" stop-color="#66FF88"/><stop offset="1" stop-color="#BB77FF"/></linearGradient>
+<linearGradient id="chord-grad-2-6" gradientUnits="userSpaceOnUse" x1="328.81" y1="175.38" x2="147.57" y2="145.82"><stop offset="0" stop-color="#66FF88"/><stop offset="1" stop-color="#44FFEE"/></linearGradient>
+<linearGradient id="chord-grad-2-7" gradientUnits="userSpaceOnUse" x1="326.05" y1="183.44" x2="183.91" y2="75.94"><stop offset="0" stop-color="#66FF88"/><stop offset="1" stop-color="#FF5555"/></linearGradient>
+<linearGradient id="chord-grad-3-0" gradientUnits="userSpaceOnUse" x1="321.44" y1="193.35" x2="259.31" y2="59.04"><stop offset="0" stop-color="#FF66AA"/><stop offset="1" stop-color="#FF9933"/></linearGradient>
+<linearGradient id="chord-grad-3-1" gradientUnits="userSpaceOnUse" x1="316.99" y1="200.77" x2="309.75" y2="88.74"><stop offset="0" stop-color="#FF66AA"/><stop offset="1" stop-color="#33BBFF"/></linearGradient>
+<linearGradient id="chord-grad-3-2" gradientUnits="userSpaceOnUse" x1="311.53" y1="208.15" x2="332.50" y2="149.37"><stop offset="0" stop-color="#FF66AA"/><stop offset="1" stop-color="#66FF88"/></linearGradient>
+<linearGradient id="chord-grad-3-4" gradientUnits="userSpaceOnUse" x1="304.85" y1="215.46" x2="238.53" y2="241.99"><stop offset="0" stop-color="#FF66AA"/><stop offset="1" stop-color="#FFEE44"/></linearGradient>
+<linearGradient id="chord-grad-3-5" gradientUnits="userSpaceOnUse" x1="296.18" y1="222.99" x2="171.38" y2="211.53"><stop offset="0" stop-color="#FF66AA"/><stop offset="1" stop-color="#BB77FF"/></linearGradient>
+<linearGradient id="chord-grad-3-6" gradientUnits="userSpaceOnUse" x1="286.89" y1="229.24" x2="148.42" y2="136.48"><stop offset="0" stop-color="#FF66AA"/><stop offset="1" stop-color="#44FFEE"/></linearGradient>
+<linearGradient id="chord-grad-3-7" gradientUnits="userSpaceOnUse" x1="277.26" y1="234.16" x2="191.94" y2="70.47"><stop offset="0" stop-color="#FF66AA"/><stop offset="1" stop-color="#FF5555"/></linearGradient>
+<linearGradient id="chord-grad-4-0" gradientUnits="userSpaceOnUse" x1="265.93" y1="238.29" x2="266.83" y2="60.98"><stop offset="0" stop-color="#FFEE44"/><stop offset="1" stop-color="#FF9933"/></linearGradient>
+<linearGradient id="chord-grad-4-1" gradientUnits="userSpaceOnUse" x1="258.01" y1="240.23" x2="315.51" y2="96.07"><stop offset="0" stop-color="#FFEE44"/><stop offset="1" stop-color="#33BBFF"/></linearGradient>
+<linearGradient id="chord-grad-4-2" gradientUnits="userSpaceOnUse" x1="248.83" y1="241.58" x2="332.04" y2="158.72"><stop offset="0" stop-color="#FFEE44"/><stop offset="1" stop-color="#66FF88"/></linearGradient>
+<linearGradient id="chord-grad-4-3" gradientUnits="userSpaceOnUse" x1="238.53" y1="241.99" x2="304.85" y2="215.46"><stop offset="0" stop-color="#FFEE44"/><stop offset="1" stop-color="#FF66AA"/></linearGradient>
+<linearGradient id="chord-grad-4-5" gradientUnits="userSpaceOnUse" x1="227.00" y1="241.08" x2="163.92" y2="202.11"><stop offset="0" stop-color="#FFEE44"/><stop offset="1" stop-color="#BB77FF"/></linearGradient>
+<linearGradient id="chord-grad-4-6" gradientUnits="userSpaceOnUse" x1="214.31" y1="238.36" x2="150.90" y2="124.66"><stop offset="0" stop-color="#FFEE44"/><stop offset="1" stop-color="#44FFEE"/></linearGradient>
+<linearGradient id="chord-grad-4-7" gradientUnits="userSpaceOnUse" x1="201.83" y1="233.76" x2="202.50" y2="64.94"><stop offset="0" stop-color="#FFEE44"/><stop offset="1" stop-color="#FF5555"/></linearGradient>
+<linearGradient id="chord-grad-5-0" gradientUnits="userSpaceOnUse" x1="190.94" y1="227.92" x2="273.49" y2="63.28"><stop offset="0" stop-color="#BB77FF"/><stop offset="1" stop-color="#FF9933"/></linearGradient>
+<linearGradient id="chord-grad-5-1" gradientUnits="userSpaceOnUse" x1="184.69" y1="223.64" x2="320.32" y2="103.62"><stop offset="0" stop-color="#BB77FF"/><stop offset="1" stop-color="#33BBFF"/></linearGradient>
+<linearGradient id="chord-grad-5-2" gradientUnits="userSpaceOnUse" x1="178.32" y1="218.43" x2="330.74" y2="167.44"><stop offset="0" stop-color="#BB77FF"/><stop offset="1" stop-color="#66FF88"/></linearGradient>
+<linearGradient id="chord-grad-5-3" gradientUnits="userSpaceOnUse" x1="171.38" y1="211.53" x2="296.18" y2="222.99"><stop offset="0" stop-color="#BB77FF"/><stop offset="1" stop-color="#FF66AA"/></linearGradient>
+<linearGradient id="chord-grad-5-4" gradientUnits="userSpaceOnUse" x1="163.92" y1="202.11" x2="227.00" y2="241.08"><stop offset="0" stop-color="#BB77FF"/><stop offset="1" stop-color="#FFEE44"/></linearGradient>
+<linearGradient id="chord-grad-5-6" gradientUnits="userSpaceOnUse" x1="157.39" y1="191.11" x2="155.49" y2="111.89"><stop offset="0" stop-color="#BB77FF"/><stop offset="1" stop-color="#44FFEE"/></linearGradient>
+<linearGradient id="chord-grad-5-7" gradientUnits="userSpaceOnUse" x1="151.95" y1="177.84" x2="215.70" y2="60.25"><stop offset="0" stop-color="#BB77FF"/><stop offset="1" stop-color="#FF5555"/></linearGradient>
+<linearGradient id="chord-grad-6-0" gradientUnits="userSpaceOnUse" x1="148.59" y1="163.63" x2="280.42" y2="66.30"><stop offset="0" stop-color="#44FFEE"/><stop offset="1" stop-color="#FF9933"/></linearGradient>
+<linearGradient id="chord-grad-6-1" gradientUnits="userSpaceOnUse" x1="147.65" y1="154.75" x2="324.51" y2="111.89"><stop offset="0" stop-color="#44FFEE"/><stop offset="1" stop-color="#33BBFF"/></linearGradient>
+<linearGradient id="chord-grad-6-2" gradientUnits="userSpaceOnUse" x1="147.57" y1="145.82" x2="328.81" y2="175.38"><stop offset="0" stop-color="#44FFEE"/><stop offset="1" stop-color="#66FF88"/></linearGradient>
+<linearGradient id="chord-grad-6-3" gradientUnits="userSpaceOnUse" x1="148.42" y1="136.48" x2="286.89" y2="229.24"><stop offset="0" stop-color="#44FFEE"/><stop offset="1" stop-color="#FF66AA"/></linearGradient>
+<linearGradient id="chord-grad-6-4" gradientUnits="userSpaceOnUse" x1="150.90" y1="124.66" x2="214.31" y2="238.36"><stop offset="0" stop-color="#44FFEE"/><stop offset="1" stop-color="#FFEE44"/></linearGradient>
+<linearGradient id="chord-grad-6-5" gradientUnits="userSpaceOnUse" x1="155.49" y1="111.89" x2="157.39" y2="191.11"><stop offset="0" stop-color="#44FFEE"/><stop offset="1" stop-color="#BB77FF"/></linearGradient>
+<linearGradient id="chord-grad-6-7" gradientUnits="userSpaceOnUse" x1="162.02" y1="99.75" x2="230.15" y2="57.53"><stop offset="0" stop-color="#44FFEE"/><stop offset="1" stop-color="#FF5555"/></linearGradient>
+<linearGradient id="chord-grad-7-0" gradientUnits="userSpaceOnUse" x1="170.52" y1="88.44" x2="288.06" y2="70.46"><stop offset="0" stop-color="#FF5555"/><stop offset="1" stop-color="#FF9933"/></linearGradient>
+<linearGradient id="chord-grad-7-1" gradientUnits="userSpaceOnUse" x1="176.94" y1="81.82" x2="328.02" y2="121.07"><stop offset="0" stop-color="#FF5555"/><stop offset="1" stop-color="#33BBFF"/></linearGradient>
+<linearGradient id="chord-grad-7-2" gradientUnits="userSpaceOnUse" x1="183.91" y1="75.94" x2="326.05" y2="183.44"><stop offset="0" stop-color="#FF5555"/><stop offset="1" stop-color="#66FF88"/></linearGradient>
+<linearGradient id="chord-grad-7-3" gradientUnits="userSpaceOnUse" x1="191.94" y1="70.47" x2="277.26" y2="234.16"><stop offset="0" stop-color="#FF5555"/><stop offset="1" stop-color="#FF66AA"/></linearGradient>
+<linearGradient id="chord-grad-7-4" gradientUnits="userSpaceOnUse" x1="202.50" y1="64.94" x2="201.83" y2="233.76"><stop offset="0" stop-color="#FF5555"/><stop offset="1" stop-color="#FFEE44"/></linearGradient>
+<linearGradient id="chord-grad-7-5" gradientUnits="userSpaceOnUse" x1="215.70" y1="60.25" x2="151.95" y2="177.84"><stop offset="0" stop-color="#FF5555"/><stop offset="1" stop-color="#BB77FF"/></linearGradient>
+<linearGradient id="chord-grad-7-6" gradientUnits="userSpaceOnUse" x1="230.15" y1="57.53" x2="162.02" y2="99.75"><stop offset="0" stop-color="#FF5555"/><stop offset="1" stop-color="#44FFEE"/></linearGradient>
 </defs>
-<path d="M 243.88 57.08 Q 251.39 135.95 297.00 76.65" stroke="url(#chord-grad-0-1)" stroke-width="5.82" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 251.58 57.73 Q 255.77 141.47 330.87 132.21" stroke="url(#chord-grad-0-2)" stroke-width="6.48" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 259.29 59.03 Q 257.63 147.94 321.51 193.23" stroke="url(#chord-grad-0-3)" stroke-width="5.62" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 266.80 60.97 Q 256.63 155.57 266.09 238.24" stroke="url(#chord-grad-0-4)" stroke-width="5.29" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 273.48 63.27 Q 227.80 136.68 191.02 227.97" stroke="url(#chord-grad-0-5)" stroke-width="4.37" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 280.41 66.29 Q 234.94 132.54 148.59 163.65" stroke="url(#chord-grad-0-6)" stroke-width="4.89" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 288.00 70.43 Q 243.41 132.13 170.53 88.42" stroke="url(#chord-grad-0-7)" stroke-width="4.94" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 297.00 76.65 Q 240.12 131.80 243.88 57.08" stroke="url(#chord-grad-1-0)" stroke-width="4.79" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 303.24 82.00 Q 257.59 147.51 332.05 140.37" stroke="url(#chord-grad-1-2)" stroke-width="6.71" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 309.63 88.61 Q 257.01 154.38 317.08 200.64" stroke="url(#chord-grad-1-3)" stroke-width="7.66" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 315.40 95.92 Q 253.26 161.22 258.16 240.20" stroke="url(#chord-grad-1-4)" stroke-width="6.33" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 320.24 103.47 Q 246.56 165.94 184.76 223.69" stroke="url(#chord-grad-1-5)" stroke-width="5.91" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 324.45 111.75 Q 241.90 131.90 147.65 154.74" stroke="url(#chord-grad-1-6)" stroke-width="5.76" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 327.98 120.95 Q 249.98 134.88 176.92 81.85" stroke="url(#chord-grad-1-7)" stroke-width="5.71" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 330.87 132.21 Q 247.03 133.26 251.58 57.73" stroke="url(#chord-grad-2-0)" stroke-width="4.11" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 332.05 140.37 Q 252.28 136.75 303.24 82.00" stroke="url(#chord-grad-2-1)" stroke-width="5.19" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 332.50 149.22 Q 253.69 160.72 311.65 208.01" stroke="url(#chord-grad-2-3)" stroke-width="6.43" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 332.05 158.56 Q 247.52 165.52 248.98 241.56" stroke="url(#chord-grad-2-4)" stroke-width="7.98" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 330.77 167.29 Q 239.61 167.19 178.37 218.48" stroke="url(#chord-grad-2-5)" stroke-width="5.51" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 328.85 175.24 Q 231.41 164.97 147.57 145.79" stroke="url(#chord-grad-2-6)" stroke-width="5.66" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 326.10 183.32 Q 254.82 139.83 183.89 75.97" stroke="url(#chord-grad-2-7)" stroke-width="5.87" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 321.51 193.23 Q 252.58 137.05 259.29 59.03" stroke="url(#chord-grad-3-0)" stroke-width="5.17" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 317.08 200.64 Q 256.22 142.41 309.63 88.61" stroke="url(#chord-grad-3-1)" stroke-width="5.14" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 311.65 208.01 Q 257.70 149.41 332.50 149.22" stroke="url(#chord-grad-3-2)" stroke-width="5.54" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 304.98 215.34 Q 240.64 167.19 238.67 241.99" stroke="url(#chord-grad-3-4)" stroke-width="8.01" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 296.31 222.88 Q 232.52 165.54 171.43 211.58" stroke="url(#chord-grad-3-5)" stroke-width="9.00" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 287.02 229.16 Q 225.76 160.00 148.43 136.44" stroke="url(#chord-grad-3-6)" stroke-width="6.99" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 277.41 234.10 Q 222.46 151.89 191.90 70.49" stroke="url(#chord-grad-3-7)" stroke-width="7.29" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 266.09 238.24 Q 256.67 143.57 266.80 60.97" stroke="url(#chord-grad-4-0)" stroke-width="5.16" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 258.16 240.20 Q 257.69 150.06 315.40 95.92" stroke="url(#chord-grad-4-1)" stroke-width="5.84" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 248.98 241.56 Q 256.01 157.04 332.05 158.56" stroke="url(#chord-grad-4-2)" stroke-width="5.02" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 238.67 241.99 Q 251.78 162.71 304.98 215.34" stroke="url(#chord-grad-4-3)" stroke-width="6.51" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 227.12 241.10 Q 226.15 160.52 163.95 202.15" stroke="url(#chord-grad-4-5)" stroke-width="8.88" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 214.42 238.39 Q 222.54 152.38 150.91 124.61" stroke="url(#chord-grad-4-6)" stroke-width="10.35" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 201.92 233.80 Q 223.37 143.45 202.47 64.96" stroke="url(#chord-grad-4-7)" stroke-width="8.46" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 191.02 227.97 Q 222.43 147.41 273.48 63.27" stroke="url(#chord-grad-5-0)" stroke-width="4.87" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 184.76 223.69 Q 255.54 157.97 320.24 103.47" stroke="url(#chord-grad-5-1)" stroke-width="6.13" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 178.37 218.48 Q 250.99 163.37 330.77 167.29" stroke="url(#chord-grad-5-2)" stroke-width="5.26" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 171.43 211.58 Q 244.47 166.62 296.31 222.88" stroke="url(#chord-grad-5-3)" stroke-width="6.56" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 163.95 202.15 Q 236.37 166.82 227.12 241.10" stroke="url(#chord-grad-5-4)" stroke-width="7.01" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 157.41 191.15 Q 223.21 143.90 155.52 111.83" stroke="url(#chord-grad-5-6)" stroke-width="9.28" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 151.96 177.87 Q 228.22 136.29 215.67 60.26" stroke="url(#chord-grad-5-7)" stroke-width="11.00" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 148.59 163.65 Q 225.28 139.67 280.41 66.29" stroke="url(#chord-grad-6-0)" stroke-width="6.68" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 147.65 154.74 Q 230.24 134.74 324.45 111.75" stroke="url(#chord-grad-6-1)" stroke-width="7.13" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 147.57 145.79 Q 243.25 166.90 328.85 175.24" stroke="url(#chord-grad-6-2)" stroke-width="5.91" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 148.43 136.44 Q 235.73 166.68 287.02 229.16" stroke="url(#chord-grad-6-3)" stroke-width="6.89" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 150.91 124.61 Q 228.39 162.85 214.42 238.39" stroke="url(#chord-grad-6-4)" stroke-width="7.39" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 155.52 111.83 Q 223.50 155.90 157.41 191.15" stroke="url(#chord-grad-6-5)" stroke-width="8.01" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 162.06 99.68 Q 236.34 132.19 230.14 57.53" stroke="url(#chord-grad-6-7)" stroke-width="9.55" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 170.53 88.42 Q 231.55 133.95 288.00 70.43" stroke="url(#chord-grad-7-0)" stroke-width="6.71" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 176.92 81.85 Q 238.36 131.88 327.98 120.95" stroke="url(#chord-grad-7-1)" stroke-width="7.59" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 183.89 75.97 Q 245.24 132.60 326.10 183.32" stroke="url(#chord-grad-7-2)" stroke-width="5.69" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 191.90 70.49 Q 228.02 162.53 277.41 234.10" stroke="url(#chord-grad-7-3)" stroke-width="7.36" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 202.47 64.96 Q 223.33 155.45 201.92 233.80" stroke="url(#chord-grad-7-4)" stroke-width="8.16" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 215.67 60.26 Q 222.50 146.84 151.96 177.87" stroke="url(#chord-grad-7-5)" stroke-width="8.46" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 230.14 57.53 Q 226.13 138.50 162.06 99.68" stroke="url(#chord-grad-7-6)" stroke-width="8.70" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
-<path d="M 240.00 48.00 A 101.50 101.50 0 0 1 296.69 65.30" stroke="#FF9933" stroke-width="14" stroke-opacity="1" fill="none" stroke-linecap="round"/>
-<text x="275.76" y="32.34" fill="#888888" font-family="monospace" font-size="11" text-anchor="start" dominant-baseline="middle">c0</text>
-<path d="M 299.19 67.04 A 101.50 101.50 0 0 1 338.10 123.46" stroke="#33BBFF" stroke-width="14" stroke-opacity="1" fill="none" stroke-linecap="round"/>
-<text x="340.84" y="79.94" fill="#888888" font-family="monospace" font-size="11" text-anchor="start" dominant-baseline="middle">c1</text>
-<path d="M 338.84 126.41 A 101.50 101.50 0 0 1 332.66 190.93" stroke="#66FF88" stroke-width="14" stroke-opacity="1" fill="none" stroke-linecap="round"/>
-<text x="361.94" y="161.18" fill="#888888" font-family="monospace" font-size="11" text-anchor="start" dominant-baseline="middle">c2</text>
-<path d="M 331.37 193.69 A 101.50 101.50 0 0 1 275.38 244.64" stroke="#FF66AA" stroke-width="14" stroke-opacity="1" fill="none" stroke-linecap="round"/>
-<text x="322.43" y="240.11" fill="#888888" font-family="monospace" font-size="11" text-anchor="start" dominant-baseline="middle">c3</text>
-<path d="M 272.51 245.65 A 101.50 101.50 0 0 1 191.91 238.88" stroke="#FFEE44" stroke-width="14" stroke-opacity="1" fill="none" stroke-linecap="round"/>
-<text x="229.74" y="271.57" fill="#888888" font-family="monospace" font-size="11" text-anchor="middle" dominant-baseline="middle">c4</text>
-<path d="M 189.25 237.40 A 101.50 101.50 0 0 1 141.15 172.53" stroke="#BB77FF" stroke-width="14" stroke-opacity="1" fill="none" stroke-linecap="round"/>
-<text x="141.60" y="222.46" fill="#888888" font-family="monospace" font-size="11" text-anchor="end" dominant-baseline="middle">c5</text>
-<path d="M 140.50 169.55 A 101.50 101.50 0 0 1 158.93 88.43" stroke="#44FFEE" stroke-width="14" stroke-opacity="1" fill="none" stroke-linecap="round"/>
-<text x="120.54" y="122.36" fill="#888888" font-family="monospace" font-size="11" text-anchor="end" dominant-baseline="middle">c6</text>
-<path d="M 160.80 86.02 A 101.50 101.50 0 0 1 236.96 48.05" stroke="#FF5555" stroke-width="14" stroke-opacity="1" fill="none" stroke-linecap="round"/>
-<text x="185.33" y="39.87" fill="#888888" font-family="monospace" font-size="11" text-anchor="end" dominant-baseline="middle">c7</text>
+<path d="M 243.89 57.08 Q 251.40 135.96 297.11 76.73" stroke="url(#chord-grad-0-1)" stroke-width="5.86" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 251.60 57.73 Q 255.78 141.48 330.89 132.33" stroke="url(#chord-grad-0-2)" stroke-width="6.48" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 259.31 59.04 Q 257.63 147.96 321.44 193.35" stroke="url(#chord-grad-0-3)" stroke-width="5.62" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 266.83 60.98 Q 256.62 155.58 265.93 238.29" stroke="url(#chord-grad-0-4)" stroke-width="5.29" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 273.49 63.28 Q 227.81 136.67 190.94 227.92" stroke="url(#chord-grad-0-5)" stroke-width="4.37" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 280.42 66.30 Q 234.94 132.54 148.59 163.63" stroke="url(#chord-grad-0-6)" stroke-width="4.89" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 288.06 70.46 Q 243.41 132.13 170.52 88.44" stroke="url(#chord-grad-0-7)" stroke-width="5.01" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 297.11 76.73 Q 240.14 131.80 243.89 57.08" stroke="url(#chord-grad-1-0)" stroke-width="4.79" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 303.36 82.11 Q 257.59 147.54 332.06 140.50" stroke="url(#chord-grad-1-2)" stroke-width="6.74" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 309.75 88.74 Q 257.00 154.41 316.99 200.77" stroke="url(#chord-grad-1-3)" stroke-width="7.69" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 315.51 96.07 Q 253.24 161.24 258.01 240.23" stroke="url(#chord-grad-1-4)" stroke-width="6.33" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 320.32 103.62 Q 246.54 165.95 184.69 223.64" stroke="url(#chord-grad-1-5)" stroke-width="5.91" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 324.51 111.89 Q 241.91 131.91 147.65 154.75" stroke="url(#chord-grad-1-6)" stroke-width="5.74" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 328.02 121.07 Q 249.99 134.89 176.94 81.82" stroke="url(#chord-grad-1-7)" stroke-width="5.69" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 330.89 132.33 Q 247.04 133.26 251.60 57.73" stroke="url(#chord-grad-2-0)" stroke-width="4.11" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 332.06 140.50 Q 252.30 136.77 303.36 82.11" stroke="url(#chord-grad-2-1)" stroke-width="5.19" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 332.50 149.37 Q 253.67 160.75 311.53 208.15" stroke="url(#chord-grad-2-3)" stroke-width="6.46" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 332.04 158.72 Q 247.50 165.53 248.83 241.58" stroke="url(#chord-grad-2-4)" stroke-width="7.98" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 330.74 167.44 Q 239.59 167.19 178.32 218.43" stroke="url(#chord-grad-2-5)" stroke-width="5.51" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 328.81 175.38 Q 231.40 164.97 147.57 145.82" stroke="url(#chord-grad-2-6)" stroke-width="5.66" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 326.05 183.44 Q 254.83 139.84 183.91 75.94" stroke="url(#chord-grad-2-7)" stroke-width="5.87" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 321.44 193.35 Q 252.59 137.06 259.31 59.04" stroke="url(#chord-grad-3-0)" stroke-width="5.21" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 316.99 200.77 Q 256.23 142.44 309.75 88.74" stroke="url(#chord-grad-3-1)" stroke-width="5.14" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 311.53 208.15 Q 257.70 149.44 332.50 149.37" stroke="url(#chord-grad-3-2)" stroke-width="5.54" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 304.85 215.46 Q 240.61 167.19 238.53 241.99" stroke="url(#chord-grad-3-4)" stroke-width="8.01" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 296.18 222.99 Q 232.50 165.53 171.38 211.53" stroke="url(#chord-grad-3-5)" stroke-width="9.00" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 286.89 229.24 Q 225.75 159.99 148.42 136.48" stroke="url(#chord-grad-3-6)" stroke-width="6.99" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 277.26 234.16 Q 222.46 151.87 191.94 70.47" stroke="url(#chord-grad-3-7)" stroke-width="7.33" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 265.93 238.29 Q 256.68 143.58 266.83 60.98" stroke="url(#chord-grad-4-0)" stroke-width="5.16" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 258.01 240.23 Q 257.69 150.10 315.51 96.07" stroke="url(#chord-grad-4-1)" stroke-width="5.84" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 248.83 241.58 Q 256.00 157.06 332.04 158.72" stroke="url(#chord-grad-4-2)" stroke-width="5.02" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 238.53 241.99 Q 251.75 162.73 304.85 215.46" stroke="url(#chord-grad-4-3)" stroke-width="6.51" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 227.00 241.08 Q 226.14 160.51 163.92 202.11" stroke="url(#chord-grad-4-5)" stroke-width="8.88" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 214.31 238.36 Q 222.54 152.37 150.90 124.66" stroke="url(#chord-grad-4-6)" stroke-width="10.35" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 201.83 233.76 Q 223.37 143.43 202.50 64.94" stroke="url(#chord-grad-4-7)" stroke-width="8.46" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 190.94 227.92 Q 222.43 147.40 273.49 63.28" stroke="url(#chord-grad-5-0)" stroke-width="4.87" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 184.69 223.64 Q 255.53 157.99 320.32 103.62" stroke="url(#chord-grad-5-1)" stroke-width="6.13" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 178.32 218.43 Q 250.97 163.39 330.74 167.44" stroke="url(#chord-grad-5-2)" stroke-width="5.26" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 171.38 211.53 Q 244.45 166.63 296.18 222.99" stroke="url(#chord-grad-5-3)" stroke-width="6.56" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 163.92 202.11 Q 236.35 166.82 227.00 241.08" stroke="url(#chord-grad-5-4)" stroke-width="7.01" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 157.39 191.11 Q 223.21 143.90 155.49 111.89" stroke="url(#chord-grad-5-6)" stroke-width="9.28" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 151.95 177.84 Q 228.22 136.29 215.70 60.25" stroke="url(#chord-grad-5-7)" stroke-width="11.00" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 148.59 163.63 Q 225.28 139.67 280.42 66.30" stroke="url(#chord-grad-6-0)" stroke-width="6.68" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 147.65 154.75 Q 230.25 134.73 324.51 111.89" stroke="url(#chord-grad-6-1)" stroke-width="7.11" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 147.57 145.82 Q 243.24 166.90 328.81 175.38" stroke="url(#chord-grad-6-2)" stroke-width="5.91" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 148.42 136.48 Q 235.72 166.67 286.89 229.24" stroke="url(#chord-grad-6-3)" stroke-width="6.89" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 150.90 124.66 Q 228.38 162.85 214.31 238.36" stroke="url(#chord-grad-6-4)" stroke-width="7.39" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 155.49 111.89 Q 223.50 155.90 157.39 191.11" stroke="url(#chord-grad-6-5)" stroke-width="8.01" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 162.02 99.75 Q 236.33 132.19 230.15 57.53" stroke="url(#chord-grad-6-7)" stroke-width="9.55" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 170.52 88.44 Q 231.55 133.95 288.06 70.46" stroke="url(#chord-grad-7-0)" stroke-width="6.79" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 176.94 81.82 Q 238.38 131.88 328.02 121.07" stroke="url(#chord-grad-7-1)" stroke-width="7.63" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 183.91 75.94 Q 245.26 132.60 326.05 183.44" stroke="url(#chord-grad-7-2)" stroke-width="5.69" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 191.94 70.47 Q 228.01 162.52 277.26 234.16" stroke="url(#chord-grad-7-3)" stroke-width="7.36" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 202.50 64.94 Q 223.33 155.43 201.83 233.76" stroke="url(#chord-grad-7-4)" stroke-width="8.16" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 215.70 60.25 Q 222.50 146.84 151.95 177.84" stroke="url(#chord-grad-7-5)" stroke-width="8.46" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 230.15 57.53 Q 226.13 138.51 162.02 99.75" stroke="url(#chord-grad-7-6)" stroke-width="8.70" stroke-opacity="0.75" fill="none" stroke-linecap="round"/>
+<path d="M 240.00 48.00 A 101.50 101.50 0 0 1 296.80 65.38" stroke="#FF9933" stroke-width="14" stroke-opacity="1" fill="none" stroke-linecap="round"/>
+<text x="275.84" y="32.36" fill="#888888" font-family="monospace" font-size="11" text-anchor="start" dominant-baseline="middle">c0</text>
+<path d="M 299.30 67.12 A 101.50 101.50 0 0 1 338.14 123.60" stroke="#33BBFF" stroke-width="14" stroke-opacity="1" fill="none" stroke-linecap="round"/>
+<text x="340.93" y="80.08" fill="#888888" font-family="monospace" font-size="11" text-anchor="start" dominant-baseline="middle">c1</text>
+<path d="M 338.87 126.55 A 101.50 101.50 0 0 1 332.60 191.06" stroke="#66FF88" stroke-width="14" stroke-opacity="1" fill="none" stroke-linecap="round"/>
+<text x="361.93" y="161.35" fill="#888888" font-family="monospace" font-size="11" text-anchor="start" dominant-baseline="middle">c2</text>
+<path d="M 331.31 193.82 A 101.50 101.50 0 0 1 275.20 244.70" stroke="#FF66AA" stroke-width="14" stroke-opacity="1" fill="none" stroke-linecap="round"/>
+<text x="322.29" y="240.25" fill="#888888" font-family="monospace" font-size="11" text-anchor="start" dominant-baseline="middle">c3</text>
+<path d="M 272.33 245.71 A 101.50 101.50 0 0 1 191.81 238.83" stroke="#FFEE44" stroke-width="14" stroke-opacity="1" fill="none" stroke-linecap="round"/>
+<text x="229.57" y="271.56" fill="#888888" font-family="monospace" font-size="11" text-anchor="middle" dominant-baseline="middle">c4</text>
+<path d="M 189.16 237.35 A 101.50 101.50 0 0 1 141.14 172.50" stroke="#BB77FF" stroke-width="14" stroke-opacity="1" fill="none" stroke-linecap="round"/>
+<text x="141.55" y="222.40" fill="#888888" font-family="monospace" font-size="11" text-anchor="end" dominant-baseline="middle">c5</text>
+<path d="M 140.50 169.53 A 101.50 101.50 0 0 1 158.87 88.50" stroke="#44FFEE" stroke-width="14" stroke-opacity="1" fill="none" stroke-linecap="round"/>
+<text x="120.53" y="122.40" fill="#888888" font-family="monospace" font-size="11" text-anchor="end" dominant-baseline="middle">c6</text>
+<path d="M 160.74 86.10 A 101.50 101.50 0 0 1 236.96 48.05" stroke="#FF5555" stroke-width="14" stroke-opacity="1" fill="none" stroke-linecap="round"/>
+<text x="185.28" y="39.90" fill="#888888" font-family="monospace" font-size="11" text-anchor="end" dominant-baseline="middle">c7</text>
 </svg>

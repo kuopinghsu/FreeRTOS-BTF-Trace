@@ -849,6 +849,7 @@ import {
 import { downloadPerfetto } from './utils/perfettoExport.js'
 import { computeFindHits, stepFindHitIndex } from './utils/findAnalysis.js'
 import { traceQualitySummary } from './utils/traceQuality.js'
+import { isBtfOpenName, loadBtfTextFromFile } from './utils/btfLoad.js'
 import exampleBtfB64   from 'virtual:example-btf'
 
 // ---- State ---------------------------------------------------------------
@@ -1716,15 +1717,17 @@ async function onFileDrop(e) {
   dragOver.value = false
   const file = e.dataTransfer?.files?.[0]
   if (!file) return
-  if (!file.name.toLowerCase().endsWith('.btf')) {
-    showToast('Only .btf files are supported', 'error')
+  if (!isBtfOpenName(file.name)) {
+    showToast('Drop a .btf file (or .gz / .bz2 / .zip)', 'error')
     return
   }
   onTraceReading({ name: file.name })
-  const reader = new FileReader()
-  reader.onload = (ev) => onTraceLoaded({ text: ev.target.result, name: file.name })
-  reader.onerror = () => showToast(`Failed to read "${file.name}"`, 'error')
-  reader.readAsText(file)
+  try {
+    const text = await loadBtfTextFromFile(file)
+    onTraceLoaded({ text, name: file.name })
+  } catch (err) {
+    showToast(`Failed to read "${file.name}"${err?.message ? `: ${err.message}` : ''}`, 'error')
+  }
 }
 
 async function onCopyClipboardDirect() {
@@ -2495,7 +2498,7 @@ async function loadExampleBtf() {
   loading.value = true
   loadingPct.value = 1
   loadingMsg.value = 'Loading demo trace…'
-  loadingFileName.value = 'example.btf'
+  loadingFileName.value = 'example-2cores.btf.gz'
   await new Promise(r => requestAnimationFrame(r))
 
   // Decode base64 → gzip bytes → UTF-8 text.
@@ -2506,7 +2509,7 @@ async function loadExampleBtf() {
   const compressed = new Blob([bytes], { type: 'application/gzip' })
   const decompressedStream = compressed.stream().pipeThrough(new DecompressionStream('gzip'))
   const text = await new Response(decompressedStream).text()
-  await onTraceLoaded({ text, name: 'example.btf' })
+  await onTraceLoaded({ text, name: 'example-2cores.btf.gz' })
 }
 
 function onLoadDemo() {

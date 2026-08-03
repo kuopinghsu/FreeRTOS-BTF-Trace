@@ -3,6 +3,8 @@
  * <input type="file"> on file://.
  */
 
+import { BTF_FILE_PICKER_ACCEPT } from './btfLoad.js'
+
 const PICKER_ID = 'btf-trace-open'
 
 function isHttpOrigin() {
@@ -27,7 +29,7 @@ export async function pickAndReadBtf() {
     const [handle] = await window.showOpenFilePicker({
       types: [{
         description: 'BTF trace',
-        accept: { 'text/plain': ['.btf'] },
+        accept: BTF_FILE_PICKER_ACCEPT,
       }],
       multiple: false,
       id: PICKER_ID,

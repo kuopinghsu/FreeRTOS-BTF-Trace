@@ -241,16 +241,16 @@ font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="nor
 <text fill="#aaaaaa" fill-opacity="1" stroke="none" xml:space="preserve" x="148.531" y="14.5469" font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
  >·</text>
 <text fill="#aaaaaa" fill-opacity="1" stroke="none" xml:space="preserve" x="151.891" y="14.5469" font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
- > full range 76.0 µs–14.7 ms</text>
+ > full range 75.0 µs–14.7 ms</text>
 </g>
 
 <g fill="none" stroke="#2e2e2e" stroke-opacity="1" stroke-dasharray="1,2" stroke-dashoffset="0" stroke-width="1" stroke-linecap="square" stroke-linejoin="bevel" transform="matrix(1,0,0,1,0,392)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
 <polyline fill="none" vector-effect="none" points="56,28 780,28 " />
-<polyline fill="none" vector-effect="none" points="56,47 780,47 " />
+<polyline fill="none" vector-effect="none" points="56,46 780,46 " />
 <polyline fill="none" vector-effect="none" points="56,66 780,66 " />
-<polyline fill="none" vector-effect="none" points="56,85 780,85 " />
+<polyline fill="none" vector-effect="none" points="56,86 780,86 " />
 <polyline fill="none" vector-effect="none" points="56,104 780,104 " />
 </g>
 
@@ -270,14 +270,14 @@ font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="nor
 <g fill="none" stroke="#aaaaaa" stroke-opacity="1" stroke-width="1" stroke-linecap="square" stroke-linejoin="bevel" transform="matrix(1,0,0,1,0,392)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<text fill="#aaaaaa" fill-opacity="1" stroke="none" xml:space="preserve" x="42.25" y="30.6406" font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
- >36</text>
-<text fill="#aaaaaa" fill-opacity="1" stroke="none" xml:space="preserve" x="42.875" y="49.6406" font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
- >27</text>
-<text fill="#aaaaaa" fill-opacity="1" stroke="none" xml:space="preserve" x="43.375" y="68.6406" font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
- >18</text>
-<text fill="#aaaaaa" fill-opacity="1" stroke="none" xml:space="preserve" x="47.0938" y="87.6406" font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
- >9</text>
+<text fill="#aaaaaa" fill-opacity="1" stroke="none" xml:space="preserve" x="42.2031" y="30.6406" font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
+ >34</text>
+<text fill="#aaaaaa" fill-opacity="1" stroke="none" xml:space="preserve" x="42.4063" y="48.6406" font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
+ >26</text>
+<text fill="#aaaaaa" fill-opacity="1" stroke="none" xml:space="preserve" x="43.8594" y="68.6406" font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
+ >17</text>
+<text fill="#aaaaaa" fill-opacity="1" stroke="none" xml:space="preserve" x="47.0781" y="88.6406" font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
+ >8</text>
 <text fill="#aaaaaa" fill-opacity="1" stroke="none" xml:space="preserve" x="47.1406" y="106.641" font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
  >0</text>
 <text fill="#aaaaaa" fill-opacity="1" stroke="none" xml:space="preserve" x="784" y="106.641" font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
@@ -296,62 +296,62 @@ font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="nor
 <g fill="none" stroke="#aaaaaa" stroke-opacity="1" stroke-width="1" stroke-linecap="square" stroke-linejoin="bevel" transform="matrix(1,0,0,1,0,392)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<text fill="#aaaaaa" fill-opacity="1" stroke="none" xml:space="preserve" x="77.0156" y="114.766" font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
+<text fill="#aaaaaa" fill-opacity="1" stroke="none" xml:space="preserve" x="79.0156" y="114.766" font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
  >100.0 µs</text>
-<text fill="#aaaaaa" fill-opacity="1" stroke="none" xml:space="preserve" x="171.516" y="114.766" font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
+<text fill="#aaaaaa" fill-opacity="1" stroke="none" xml:space="preserve" x="172.516" y="114.766" font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
  >200.0 µs</text>
-<text fill="#aaaaaa" fill-opacity="1" stroke="none" xml:space="preserve" x="297.469" y="114.766" font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
+<text fill="#aaaaaa" fill-opacity="1" stroke="none" xml:space="preserve" x="298.469" y="114.766" font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
  >500.0 µs</text>
-<text fill="#aaaaaa" fill-opacity="1" stroke="none" xml:space="preserve" x="396.984" y="114.766" font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
+<text fill="#aaaaaa" fill-opacity="1" stroke="none" xml:space="preserve" x="397.984" y="114.766" font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
  >1.0 ms</text>
-<text fill="#aaaaaa" fill-opacity="1" stroke="none" xml:space="preserve" x="491.406" y="114.766" font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
+<text fill="#aaaaaa" fill-opacity="1" stroke="none" xml:space="preserve" x="492.406" y="114.766" font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
  >2.0 ms</text>
 <text fill="#aaaaaa" fill-opacity="1" stroke="none" xml:space="preserve" x="618.359" y="114.766" font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
  >5.0 ms</text>
-<text fill="#aaaaaa" fill-opacity="1" stroke="none" xml:space="preserve" x="710.547" y="114.766" font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
+<text fill="#aaaaaa" fill-opacity="1" stroke="none" xml:space="preserve" x="711.547" y="114.766" font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
  >10.0 ms</text>
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.705882" stroke="none" transform="matrix(1,0,0,1,0,392)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<rect x="56" y="100" width="17" height="3"/>
+<rect x="56" y="99" width="17" height="4"/>
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.705882" stroke="none" transform="matrix(1,0,0,1,0,392)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<rect x="74" y="100" width="17" height="3"/>
+<rect x="74" y="99" width="17" height="4"/>
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.705882" stroke="none" transform="matrix(1,0,0,1,0,392)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<rect x="92" y="95" width="17" height="8"/>
+<rect x="92" y="97" width="17" height="6"/>
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.705882" stroke="none" transform="matrix(1,0,0,1,0,392)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<rect x="110" y="95" width="17" height="8"/>
+<rect x="110" y="93" width="17" height="10"/>
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.705882" stroke="none" transform="matrix(1,0,0,1,0,392)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<rect x="128" y="85" width="17" height="19"/>
+<rect x="128" y="86" width="17" height="17"/>
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.705882" stroke="none" transform="matrix(1,0,0,1,0,392)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<rect x="146" y="85" width="17" height="19"/>
+<rect x="146" y="81" width="17" height="22"/>
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.705882" stroke="none" transform="matrix(1,0,0,1,0,392)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<rect x="164" y="95" width="17" height="8"/>
+<rect x="164" y="97" width="17" height="6"/>
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.705882" stroke="none" transform="matrix(1,0,0,1,0,392)"
@@ -363,37 +363,37 @@ font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="nor
 <g fill="#f14e4e" fill-opacity="0.705882" stroke="none" transform="matrix(1,0,0,1,0,392)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<rect x="200" y="74" width="17" height="29"/>
+<rect x="200" y="75" width="17" height="28"/>
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.705882" stroke="none" transform="matrix(1,0,0,1,0,392)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<rect x="218" y="66" width="17" height="38"/>
+<rect x="218" y="57" width="17" height="46"/>
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.705882" stroke="none" transform="matrix(1,0,0,1,0,392)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<rect x="237" y="62" width="17" height="41"/>
+<rect x="237" y="63" width="17" height="40"/>
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.705882" stroke="none" transform="matrix(1,0,0,1,0,392)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<rect x="255" y="45" width="17" height="58"/>
+<rect x="255" y="46" width="17" height="57"/>
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.705882" stroke="none" transform="matrix(1,0,0,1,0,392)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<rect x="273" y="43" width="17" height="60"/>
+<rect x="273" y="30" width="17" height="73"/>
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.705882" stroke="none" transform="matrix(1,0,0,1,0,392)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<rect x="291" y="64" width="17" height="39"/>
+<rect x="291" y="63" width="17" height="40"/>
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.705882" stroke="none" transform="matrix(1,0,0,1,0,392)"
@@ -405,25 +405,25 @@ font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="nor
 <g fill="#f14e4e" fill-opacity="0.705882" stroke="none" transform="matrix(1,0,0,1,0,392)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<rect x="327" y="51" width="17" height="52"/>
+<rect x="327" y="41" width="17" height="62"/>
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.705882" stroke="none" transform="matrix(1,0,0,1,0,392)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<rect x="345" y="74" width="17" height="29"/>
+<rect x="345" y="77" width="17" height="26"/>
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.705882" stroke="none" transform="matrix(1,0,0,1,0,392)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<rect x="363" y="36" width="17" height="67"/>
+<rect x="363" y="34" width="17" height="69"/>
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.705882" stroke="none" transform="matrix(1,0,0,1,0,392)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<rect x="381" y="45" width="17" height="58"/>
+<rect x="381" y="34" width="17" height="69"/>
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.705882" stroke="none" transform="matrix(1,0,0,1,0,392)"
@@ -435,25 +435,25 @@ font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="nor
 <g fill="#f14e4e" fill-opacity="0.705882" stroke="none" transform="matrix(1,0,0,1,0,392)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<rect x="418" y="55" width="17" height="48"/>
+<rect x="418" y="50" width="17" height="53"/>
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.705882" stroke="none" transform="matrix(1,0,0,1,0,392)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<rect x="436" y="62" width="17" height="41"/>
+<rect x="436" y="57" width="17" height="46"/>
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.705882" stroke="none" transform="matrix(1,0,0,1,0,392)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<rect x="454" y="45" width="17" height="58"/>
+<rect x="454" y="43" width="17" height="60"/>
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.705882" stroke="none" transform="matrix(1,0,0,1,0,392)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<rect x="472" y="36" width="17" height="67"/>
+<rect x="472" y="30" width="17" height="73"/>
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.705882" stroke="none" transform="matrix(1,0,0,1,0,392)"
@@ -465,49 +465,49 @@ font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="nor
 <g fill="#f14e4e" fill-opacity="0.705882" stroke="none" transform="matrix(1,0,0,1,0,392)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<rect x="508" y="76" width="17" height="27"/>
+<rect x="508" y="72" width="17" height="31"/>
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.705882" stroke="none" transform="matrix(1,0,0,1,0,392)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<rect x="526" y="81" width="17" height="22"/>
+<rect x="526" y="79" width="17" height="24"/>
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.705882" stroke="none" transform="matrix(1,0,0,1,0,392)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<rect x="544" y="91" width="17" height="12"/>
+<rect x="544" y="90" width="17" height="13"/>
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.705882" stroke="none" transform="matrix(1,0,0,1,0,392)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<rect x="562" y="78" width="17" height="25"/>
+<rect x="562" y="77" width="17" height="26"/>
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.705882" stroke="none" transform="matrix(1,0,0,1,0,392)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<rect x="580" y="68" width="17" height="35"/>
+<rect x="580" y="66" width="17" height="38"/>
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.705882" stroke="none" transform="matrix(1,0,0,1,0,392)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<rect x="599" y="68" width="17" height="35"/>
+<rect x="599" y="66" width="17" height="38"/>
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.705882" stroke="none" transform="matrix(1,0,0,1,0,392)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<rect x="617" y="72" width="17" height="31"/>
+<rect x="617" y="70" width="17" height="33"/>
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.705882" stroke="none" transform="matrix(1,0,0,1,0,392)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<rect x="635" y="87" width="17" height="16"/>
+<rect x="635" y="86" width="17" height="17"/>
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.705882" stroke="none" transform="matrix(1,0,0,1,0,392)"
@@ -525,13 +525,13 @@ font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="nor
 <g fill="#f14e4e" fill-opacity="0.705882" stroke="none" transform="matrix(1,0,0,1,0,392)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<rect x="689" y="100" width="17" height="3"/>
+<rect x="689" y="99" width="17" height="4"/>
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.705882" stroke="none" transform="matrix(1,0,0,1,0,392)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<rect x="707" y="100" width="17" height="3"/>
+<rect x="707" y="99" width="17" height="4"/>
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.705882" stroke="none" transform="matrix(1,0,0,1,0,392)"
@@ -543,86 +543,86 @@ font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="nor
 <g fill="#f14e4e" fill-opacity="0.705882" stroke="none" transform="matrix(1,0,0,1,0,392)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<rect x="743" y="102" width="17" height="1"/>
+<rect x="743" y="101" width="17" height="2"/>
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.705882" stroke="none" transform="matrix(1,0,0,1,0,392)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<rect x="761" y="100" width="17" height="3"/>
+<rect x="761" y="99" width="17" height="4"/>
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.705882" stroke="#90caf9" stroke-opacity="1" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="bevel" transform="matrix(1,0,0,1,0,392)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
 <polyline fill="none" vector-effect="none" points="56,104 96,103 " />
-<polyline fill="none" vector-effect="none" points="96,103 130,102 " />
-<polyline fill="none" vector-effect="none" points="130,102 144,101 " />
-<polyline fill="none" vector-effect="none" points="144,101 150,100 " />
-<polyline fill="none" vector-effect="none" points="150,100 173,100 " />
-<polyline fill="none" vector-effect="none" points="173,100 184,99 " />
-<polyline fill="none" vector-effect="none" points="184,99 192,97 " />
-<polyline fill="none" vector-effect="none" points="192,97 204,97 " />
-<polyline fill="none" vector-effect="none" points="204,97 210,96 " />
-<polyline fill="none" vector-effect="none" points="210,96 219,94 " />
-<polyline fill="none" vector-effect="none" points="219,94 228,94 " />
-<polyline fill="none" vector-effect="none" points="228,94 240,93 " />
-<polyline fill="none" vector-effect="none" points="240,93 246,92 " />
-<polyline fill="none" vector-effect="none" points="246,92 253,91 " />
-<polyline fill="none" vector-effect="none" points="253,91 259,90 " />
-<polyline fill="none" vector-effect="none" points="259,90 264,88 " />
-<polyline fill="none" vector-effect="none" points="264,88 271,87 " />
-<polyline fill="none" vector-effect="none" points="271,87 277,85 " />
-<polyline fill="none" vector-effect="none" points="277,85 283,84 " />
-<polyline fill="none" vector-effect="none" points="283,84 293,82 " />
-<polyline fill="none" vector-effect="none" points="293,82 299,81 " />
-<polyline fill="none" vector-effect="none" points="299,81 306,80 " />
-<polyline fill="none" vector-effect="none" points="306,80 312,79 " />
-<polyline fill="none" vector-effect="none" points="312,79 318,78 " />
-<polyline fill="none" vector-effect="none" points="318,78 323,76 " />
-<polyline fill="none" vector-effect="none" points="323,76 330,75 " />
-<polyline fill="none" vector-effect="none" points="330,75 335,73 " />
-<polyline fill="none" vector-effect="none" points="335,73 342,72 " />
-<polyline fill="none" vector-effect="none" points="342,72 352,72 " />
-<polyline fill="none" vector-effect="none" points="352,72 360,70 " />
-<polyline fill="none" vector-effect="none" points="360,70 367,69 " />
-<polyline fill="none" vector-effect="none" points="367,69 374,67 " />
-<polyline fill="none" vector-effect="none" points="374,67 380,66 " />
-<polyline fill="none" vector-effect="none" points="380,66 385,65 " />
+<polyline fill="none" vector-effect="none" points="96,103 125,102 " />
+<polyline fill="none" vector-effect="none" points="125,102 145,101 " />
+<polyline fill="none" vector-effect="none" points="145,101 154,100 " />
+<polyline fill="none" vector-effect="none" points="154,100 179,100 " />
+<polyline fill="none" vector-effect="none" points="179,100 186,99 " />
+<polyline fill="none" vector-effect="none" points="186,99 194,97 " />
+<polyline fill="none" vector-effect="none" points="194,97 205,97 " />
+<polyline fill="none" vector-effect="none" points="205,97 212,96 " />
+<polyline fill="none" vector-effect="none" points="212,96 220,95 " />
+<polyline fill="none" vector-effect="none" points="220,95 228,94 " />
+<polyline fill="none" vector-effect="none" points="228,94 235,93 " />
+<polyline fill="none" vector-effect="none" points="235,93 248,91 " />
+<polyline fill="none" vector-effect="none" points="248,91 255,90 " />
+<polyline fill="none" vector-effect="none" points="255,90 261,89 " />
+<polyline fill="none" vector-effect="none" points="261,89 267,88 " />
+<polyline fill="none" vector-effect="none" points="267,88 272,87 " />
+<polyline fill="none" vector-effect="none" points="272,87 278,85 " />
+<polyline fill="none" vector-effect="none" points="278,85 285,84 " />
+<polyline fill="none" vector-effect="none" points="285,84 290,83 " />
+<polyline fill="none" vector-effect="none" points="290,83 300,81 " />
+<polyline fill="none" vector-effect="none" points="300,81 309,80 " />
+<polyline fill="none" vector-effect="none" points="309,80 314,79 " />
+<polyline fill="none" vector-effect="none" points="314,79 320,77 " />
+<polyline fill="none" vector-effect="none" points="320,77 325,76 " />
+<polyline fill="none" vector-effect="none" points="325,76 332,75 " />
+<polyline fill="none" vector-effect="none" points="332,75 337,73 " />
+<polyline fill="none" vector-effect="none" points="337,73 343,72 " />
+<polyline fill="none" vector-effect="none" points="343,72 353,72 " />
+<polyline fill="none" vector-effect="none" points="353,72 361,70 " />
+<polyline fill="none" vector-effect="none" points="361,70 368,69 " />
+<polyline fill="none" vector-effect="none" points="368,69 374,68 " />
+<polyline fill="none" vector-effect="none" points="374,68 379,66 " />
+<polyline fill="none" vector-effect="none" points="379,66 385,65 " />
 <polyline fill="none" vector-effect="none" points="385,65 392,63 " />
-<polyline fill="none" vector-effect="none" points="392,63 397,62 " />
-<polyline fill="none" vector-effect="none" points="397,62 404,61 " />
+<polyline fill="none" vector-effect="none" points="392,63 398,62 " />
+<polyline fill="none" vector-effect="none" points="398,62 404,61 " />
 <polyline fill="none" vector-effect="none" points="404,61 410,60 " />
-<polyline fill="none" vector-effect="none" points="410,60 415,59 " />
-<polyline fill="none" vector-effect="none" points="415,59 421,58 " />
-<polyline fill="none" vector-effect="none" points="421,58 426,57 " />
-<polyline fill="none" vector-effect="none" points="426,57 432,56 " />
-<polyline fill="none" vector-effect="none" points="432,56 438,55 " />
-<polyline fill="none" vector-effect="none" points="438,55 446,54 " />
-<polyline fill="none" vector-effect="none" points="446,54 451,53 " />
-<polyline fill="none" vector-effect="none" points="451,53 458,51 " />
-<polyline fill="none" vector-effect="none" points="458,51 464,51 " />
-<polyline fill="none" vector-effect="none" points="464,51 469,49 " />
-<polyline fill="none" vector-effect="none" points="469,49 475,48 " />
-<polyline fill="none" vector-effect="none" points="475,48 480,47 " />
-<polyline fill="none" vector-effect="none" points="480,47 485,45 " />
-<polyline fill="none" vector-effect="none" points="485,45 493,44 " />
+<polyline fill="none" vector-effect="none" points="410,60 416,59 " />
+<polyline fill="none" vector-effect="none" points="416,59 422,58 " />
+<polyline fill="none" vector-effect="none" points="422,58 427,57 " />
+<polyline fill="none" vector-effect="none" points="427,57 433,56 " />
+<polyline fill="none" vector-effect="none" points="433,56 439,55 " />
+<polyline fill="none" vector-effect="none" points="439,55 447,54 " />
+<polyline fill="none" vector-effect="none" points="447,54 453,53 " />
+<polyline fill="none" vector-effect="none" points="453,53 460,51 " />
+<polyline fill="none" vector-effect="none" points="460,51 466,50 " />
+<polyline fill="none" vector-effect="none" points="466,50 471,49 " />
+<polyline fill="none" vector-effect="none" points="471,49 477,48 " />
+<polyline fill="none" vector-effect="none" points="477,48 482,47 " />
+<polyline fill="none" vector-effect="none" points="482,47 487,45 " />
+<polyline fill="none" vector-effect="none" points="487,45 493,44 " />
 <polyline fill="none" vector-effect="none" points="493,44 505,43 " />
-<polyline fill="none" vector-effect="none" points="505,43 516,41 " />
-<polyline fill="none" vector-effect="none" points="516,41 531,41 " />
-<polyline fill="none" vector-effect="none" points="531,41 539,40 " />
-<polyline fill="none" vector-effect="none" points="539,40 550,39 " />
-<polyline fill="none" vector-effect="none" points="550,39 570,38 " />
-<polyline fill="none" vector-effect="none" points="570,38 580,37 " />
-<polyline fill="none" vector-effect="none" points="580,37 587,36 " />
-<polyline fill="none" vector-effect="none" points="587,36 595,35 " />
-<polyline fill="none" vector-effect="none" points="595,35 605,34 " />
-<polyline fill="none" vector-effect="none" points="605,34 612,33 " />
-<polyline fill="none" vector-effect="none" points="612,33 620,32 " />
-<polyline fill="none" vector-effect="none" points="620,32 627,31 " />
-<polyline fill="none" vector-effect="none" points="627,31 640,30 " />
-<polyline fill="none" vector-effect="none" points="640,30 650,30 " />
-<polyline fill="none" vector-effect="none" points="650,30 675,29 " />
+<polyline fill="none" vector-effect="none" points="505,43 513,42 " />
+<polyline fill="none" vector-effect="none" points="513,42 521,41 " />
+<polyline fill="none" vector-effect="none" points="521,41 534,40 " />
+<polyline fill="none" vector-effect="none" points="534,40 543,40 " />
+<polyline fill="none" vector-effect="none" points="543,40 555,39 " />
+<polyline fill="none" vector-effect="none" points="555,39 572,38 " />
+<polyline fill="none" vector-effect="none" points="572,38 581,37 " />
+<polyline fill="none" vector-effect="none" points="581,37 586,36 " />
+<polyline fill="none" vector-effect="none" points="586,36 595,35 " />
+<polyline fill="none" vector-effect="none" points="595,35 607,34 " />
+<polyline fill="none" vector-effect="none" points="607,34 614,33 " />
+<polyline fill="none" vector-effect="none" points="614,33 623,31 " />
+<polyline fill="none" vector-effect="none" points="623,31 640,31 " />
+<polyline fill="none" vector-effect="none" points="640,31 649,30 " />
+<polyline fill="none" vector-effect="none" points="649,30 675,29 " />
 <polyline fill="none" vector-effect="none" points="675,29 712,28 " />
 <polyline fill="none" vector-effect="none" points="712,28 780,28 " />
 </g>
@@ -630,26 +630,26 @@ font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="nor
 <g fill="#f14e4e" fill-opacity="0.705882" stroke="#ce93d8" stroke-opacity="1" stroke-dasharray="8,4" stroke-dashoffset="0" stroke-width="2" stroke-linecap="square" stroke-linejoin="bevel" transform="matrix(1,0,0,1,0,392)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<polyline fill="none" vector-effect="none" points="460,28 460,104 " />
+<polyline fill="none" vector-effect="none" points="461,28 461,104 " />
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.705882" stroke="#ce93d8" stroke-opacity="1" stroke-width="1" stroke-linecap="square" stroke-linejoin="bevel" transform="matrix(1,0,0,1,0,392)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<text fill="#ce93d8" fill-opacity="1" stroke="none" xml:space="preserve" x="463" y="40" font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
+<text fill="#ce93d8" fill-opacity="1" stroke="none" xml:space="preserve" x="464" y="40" font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
  >avg</text>
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.705882" stroke="#4caf50" stroke-opacity="1" stroke-dasharray="8,4" stroke-dashoffset="0" stroke-width="2" stroke-linecap="square" stroke-linejoin="bevel" transform="matrix(1,0,0,1,0,392)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<polyline fill="none" vector-effect="none" points="382,28 382,104 " />
+<polyline fill="none" vector-effect="none" points="383,28 383,104 " />
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.705882" stroke="#4caf50" stroke-opacity="1" stroke-width="1" stroke-linecap="square" stroke-linejoin="bevel" transform="matrix(1,0,0,1,0,392)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<text fill="#4caf50" fill-opacity="1" stroke="none" xml:space="preserve" x="385" y="40" font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
+<text fill="#4caf50" fill-opacity="1" stroke="none" xml:space="preserve" x="386" y="40" font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
  >p50</text>
 </g>
 
@@ -829,7 +829,7 @@ font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="nor
 <g fill="#f14e4e" fill-opacity="0.784314" stroke="none" transform="matrix(1,0,0,1,0,0)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<circle cx="62" cy="309" r="3"/>
+<circle cx="62" cy="310" r="3"/>
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.784314" stroke="none" transform="matrix(1,0,0,1,0,0)"
@@ -2071,7 +2071,7 @@ font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="nor
 <g fill="#f14e4e" fill-opacity="0.784314" stroke="none" transform="matrix(1,0,0,1,0,0)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<circle cx="359" cy="298" r="3"/>
+<circle cx="359" cy="297" r="3"/>
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.784314" stroke="none" transform="matrix(1,0,0,1,0,0)"
@@ -2083,7 +2083,7 @@ font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="nor
 <g fill="#f14e4e" fill-opacity="0.784314" stroke="none" transform="matrix(1,0,0,1,0,0)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<circle cx="360" cy="315" r="3"/>
+<circle cx="360" cy="314" r="3"/>
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.784314" stroke="none" transform="matrix(1,0,0,1,0,0)"
@@ -2263,7 +2263,7 @@ font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="nor
 <g fill="#f14e4e" fill-opacity="0.784314" stroke="none" transform="matrix(1,0,0,1,0,0)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<circle cx="400" cy="284" r="3"/>
+<circle cx="400" cy="285" r="3"/>
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.784314" stroke="none" transform="matrix(1,0,0,1,0,0)"
@@ -2743,7 +2743,7 @@ font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="nor
 <g fill="#f14e4e" fill-opacity="0.784314" stroke="none" transform="matrix(1,0,0,1,0,0)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<circle cx="499" cy="309" r="3"/>
+<circle cx="499" cy="308" r="3"/>
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.784314" stroke="none" transform="matrix(1,0,0,1,0,0)"
@@ -2941,7 +2941,7 @@ font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="nor
 <g fill="#f14e4e" fill-opacity="0.784314" stroke="none" transform="matrix(1,0,0,1,0,0)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<circle cx="539" cy="302" r="3"/>
+<circle cx="539" cy="301" r="3"/>
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.784314" stroke="none" transform="matrix(1,0,0,1,0,0)"
@@ -3115,7 +3115,7 @@ font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="nor
 <g fill="#f14e4e" fill-opacity="0.784314" stroke="none" transform="matrix(1,0,0,1,0,0)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<circle cx="575" cy="283" r="3"/>
+<circle cx="575" cy="284" r="3"/>
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.784314" stroke="none" transform="matrix(1,0,0,1,0,0)"
@@ -3151,7 +3151,7 @@ font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="nor
 <g fill="#f14e4e" fill-opacity="0.784314" stroke="none" transform="matrix(1,0,0,1,0,0)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<circle cx="580" cy="317" r="3"/>
+<circle cx="581" cy="317" r="3"/>
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.784314" stroke="none" transform="matrix(1,0,0,1,0,0)"
@@ -3673,7 +3673,7 @@ font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="nor
 <g fill="#f14e4e" fill-opacity="0.784314" stroke="none" transform="matrix(1,0,0,1,0,0)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<circle cx="688" cy="312" r="3"/>
+<circle cx="688" cy="311" r="3"/>
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.784314" stroke="none" transform="matrix(1,0,0,1,0,0)"
@@ -4075,7 +4075,7 @@ font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="nor
 <g fill="#f14e4e" fill-opacity="0.784314" stroke="none" transform="matrix(1,0,0,1,0,0)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<circle cx="753" cy="314" r="3"/>
+<circle cx="753" cy="313" r="3"/>
 </g>
 
 <g fill="#f14e4e" fill-opacity="0.784314" stroke="none" transform="matrix(1,0,0,1,0,0)"

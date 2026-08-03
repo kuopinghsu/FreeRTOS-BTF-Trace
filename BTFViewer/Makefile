@@ -6,22 +6,22 @@
 #   make -C BTFViewer check-bundle # desktop parity check (CI)
 
 PYTHON ?= python3
-TRACE ?= ../tracedata/example.btf
+TRACE ?= ../tracedata/example-2cores.btf.gz
 BUILDS := builds
 OUT := $(BUILDS)/btf_viewer.py
 
 # Source trace + output dir for `make update-images` (docs/*.md illustrations).
-STATS_TRACE ?= ../tracedata/example-8cores.btf
+STATS_TRACE ?= ../tracedata/example-8cores.btf.gz
 STATS_IMG_DIR := ../images/stats
 
 # Source trace + output dir for `make update-images` (Migration Heatmap
 # illustrations in README.md).
-HEATMAP_TRACE ?= ../tracedata/example-4cores.btf
+HEATMAP_TRACE ?= ../tracedata/example-4cores.btf.gz
 HEATMAP_IMG_DIR := ../images
 
 # Source trace for `make update-images` (Migration Chord Diagram
 # illustration in README.md); more cores makes for a more illustrative diagram.
-CHORD_TRACE ?= ../tracedata/example-8cores.btf
+CHORD_TRACE ?= ../tracedata/example-8cores.btf.gz
 
 .DEFAULT_GOAL := all
 
@@ -111,14 +111,20 @@ update-images: bundle
 		-o $(STATS_IMG_DIR)/stats-preempt-cs24-cs25.svg --view plot --metric preempt \
 		--task "CS[24]" --preemptor "CS[25]"
 	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(STATS_TRACE) \
-		-o $(STATS_IMG_DIR)/stats-priority-il266.svg --view plot --metric priority --task "IL[266]"
+		-o $(STATS_IMG_DIR)/stats-priority-low.svg --view plot --metric priority --task "Low[266]"
 	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(STATS_TRACE) \
 		-o $(STATS_IMG_DIR)/stats-interval-1.svg --view plot --metric interval --interval-id 1
 	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(STATS_TRACE) \
 		-o $(STATS_IMG_DIR)/stats-tag0.svg --view plot --metric tag --channel tag0_event
 	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(STATS_TRACE) \
-		-o $(STATS_IMG_DIR)/tasks-priority-il266.svg --view timeline --task "IL[266]" \
-		--lo 2171700 --hi 2180200
+		-o $(STATS_IMG_DIR)/tasks-priority-low.svg --view timeline --task "Low[266]" \
+		--lo 3042000 --hi 3359000
+	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(STATS_TRACE) \
+		-o $(STATS_IMG_DIR)/tasks-migrate-cs22.svg --view timeline --view-mode core \
+		--task "CS[22]" --lo 1805000 --hi 1865000
+	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(STATS_TRACE) \
+		-o $(STATS_IMG_DIR)/tasks-cpu-load-cs22.svg --view timeline --view-mode core \
+		--task "CS[22]" --cpu-load --height 900
 	@echo "Updated $(STATS_IMG_DIR) from $(STATS_TRACE)"
 	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(HEATMAP_TRACE) \
 		-o $(HEATMAP_IMG_DIR)/heatmap-pairs.svg --view heatmap

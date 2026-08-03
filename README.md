@@ -55,7 +55,7 @@ tools/            gentrace — binary dump → BTF or VCD
 sim/              RV64 SMP instruction-set simulator (C++, supports --cores N)
 Demo/             FreeRTOS SMP demo built for RV64, run under sim/
 BTFViewer/        Interactive BTF viewer (PySide6 desktop + Vue 3 web app)
-tracedata/        Sample outputs (example.btf, example-4cores.btf, example.vcd)
+tracedata/        Sample outputs (example*.btf.gz, example.vcd)
 images/           Documentation screenshots (timeline, stats plots, migration heatmaps)
 ```
 
@@ -108,13 +108,13 @@ pip install -r BTFViewer/requirements.txt
 python BTFViewer/builds/btf_viewer.py tracedata/trace.btf
 ```
 
-Sample traces: `tracedata/example.btf`, `tracedata/example-4cores.btf` (SMP demos), `tracedata/example-16cores.btf` (large). Full viewer docs: [`BTFViewer/README.md`](BTFViewer/README.md).
+Sample traces (gzipped BTF; Desktop and Web open `.btf` / `.btf.gz` / `.bz2` / `.zip` the same way): `tracedata/example.btf.gz`, `tracedata/example-2cores.btf.gz`, `tracedata/example-4cores.btf.gz` (SMP demos), `tracedata/example-8cores.btf.gz`, `tracedata/example-16cores.btf.gz` (large). Full viewer docs: [`BTFViewer/README.md`](BTFViewer/README.md).
 
 ---
 
 ## Demo
 
-The demo (`Demo/examples/freertos_test/`) runs nine SMP stress tests:
+The demo (`Demo/examples/freertos_test/`) runs ten SMP stress tests:
 
 | # | Test | What it exercises |
 |---|------|-------------------|
@@ -125,14 +125,15 @@ The demo (`Demo/examples/freertos_test/`) runs nine SMP stress tests:
 | 5 | Event groups | Multi-bit event synchronisation |
 | 6 | Queue stress | Producer/consumer queues at speed |
 | 7 | Task priority set | `vTaskPrioritySet()` and `traceTASK_PRIORITY_SET` |
-| 8 | Priority inversion | Classic L/M/H mutex inheritance (`uxTaskPriorityGet`) |
-| 9 | Task suspend/resume | `vTaskSuspend()` / `vTaskResume()` (`traceTASK_SUSPEND` / `traceTASK_RESUME`) |
+| 8 | Priority inversion | Classic L/M/H on one core (`Low` / `Med` / `High`), repeated 3× (`T8_ROUNDS`) |
+| 9 | Task suspend/resume | Multi-subject `vTaskSuspend()` / `vTaskResume()`: suspend-while-blocked + suspend-while-running, overlapping across up to 4 cores (`T9_SUBJECTS`×`T9_ROUNDS`) |
+| 10 | Core affinity | SMP only: pin / migrate with `vTaskCoreAffinitySet` (no-op pass on 1 core) |
 
 Expected output (CORES=2 example):
 
 ```
 freertos_test: starting
-  cores=2   workers=6    sem_slots=2   iter_fast=50   iter_slow=20
+  cores=2   workers=6    sem_slots=2   iter_fast=24   iter_slow=12  t1_yields=3
 test 1: context-switch stress       ... pass
 test 2: mutex contention            ... pass
 test 3: counting-sem + mutex        ... pass
@@ -142,7 +143,8 @@ test 6: queue stress                ... pass
 test 7: task priority set           ... pass
 test 8: priority inversion          ... pass
 test 9: task suspend/resume         ... pass
-5034 events generated.
+test 10: core affinity              ... pass
+…
 freertos_test: all tests passed
 ```
 
@@ -244,7 +246,7 @@ On multi-core traces, BTFViewer detects when the same task runs on different cor
 Open the 4-core sample trace and explore the heatmap:
 
 ```bash
-python BTFViewer/builds/btf_viewer.py tracedata/example-4cores.btf
+python BTFViewer/builds/btf_viewer.py tracedata/example-4cores.btf.gz
 ```
 
 **Level 1 — core-pair overview** (directed pairs × 12 time bins):
@@ -274,8 +276,8 @@ An interactive Gantt-style viewer is included in the `BTFViewer/` directory (des
 ```bash
 pip install -r BTFViewer/requirements.txt
 python BTFViewer/builds/btf_viewer.py tracedata/trace.btf
-# or the 4-core SMP demo trace:
-python BTFViewer/builds/btf_viewer.py tracedata/example-4cores.btf
+# or a compressed sample (Desktop + Web open .btf.gz the same way):
+python BTFViewer/builds/btf_viewer.py tracedata/example-4cores.btf.gz
 ```
 
 See [`BTFViewer/README.md`](BTFViewer/README.md) for the full feature reference (zoom, cursors, [migration heatmap](BTFViewer/README.md#migration-heatmap), [statistics](BTFViewer/README.md#statistics--metrics), [Analysis Findings](BTFViewer/README.md#analysis-findings), trace compare, headless CLI, session restore, export, etc.). Practical diagnosis walkthroughs: [`BTFViewer/WORKFLOWS.md`](BTFViewer/WORKFLOWS.md).

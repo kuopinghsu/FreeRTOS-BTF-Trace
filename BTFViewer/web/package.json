@@ -11,6 +11,8 @@
     "test": "node --test tests/*.test.js"
   },
   "dependencies": {
+    "bz2": "^1.0.1",
+    "fflate": "^0.8.3",
     "html-to-image": "^1.11.13",
     "pixi.js": "^8.19.0",
     "vue": "^3.4.0"

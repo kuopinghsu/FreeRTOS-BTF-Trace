@@ -42,9 +42,10 @@ class TestSnapshotTimelineRange(unittest.TestCase):
         hi = lo + max(span // 20, 1000)
         args = argparse.Namespace(
             metric=None, task=None, lo=lo, hi=hi,
-            theme="dark", width=1600, height=900,
+            theme="dark", width=1600, height=900, view_mode="task",
+            cpu_load=False,
         )
-        view, err = _cli_snapshot_timeline(trace, args)
+        view, err = _cli_snapshot_timeline(trace, args)[:2]
         self.assertIsNone(err)
         self.assertIsNotNone(view)
         assert view is not None

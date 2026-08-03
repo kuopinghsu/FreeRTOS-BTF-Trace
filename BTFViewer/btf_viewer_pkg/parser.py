@@ -96,6 +96,91 @@ class SyncIssueRef:
 
 _MAX_TRACE_FILE_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB guard vs. memory exhaustion on a huge/adversarial file
 
+# Open dialog / drag-drop accept list (plain + compressed BTF).
+_BTF_OPEN_FILTER = (
+    "BTF traces (*.btf *.btf.gz *.btf.bz2 *.btf.zip *.gz *.bz2 *.zip);;"
+    "All files (*)"
+)
+_BTF_NAME_EXTS = (".btf", ".btf.gz", ".btf.bz2", ".btf.zip", ".gz", ".bz2", ".zip")
+
+
+def is_btf_open_path(path: str) -> bool:
+    """True if *path* looks like a BTF trace or a gz/bz2/zip container of one."""
+    lower = (path or "").lower()
+    return any(lower.endswith(ext) for ext in _BTF_NAME_EXTS)
+
+
+def _sniff_compression(filepath: str) -> str:
+    """Return 'gzip', 'bz2', 'zip', or '' from magic bytes (fallback: extension)."""
+    try:
+        with open(filepath, "rb") as fh:
+            magic = fh.read(4)
+    except OSError:
+        magic = b""
+    if magic.startswith(b"\x1f\x8b"):
+        return "gzip"
+    if magic.startswith(b"BZh"):
+        return "bz2"
+    if magic.startswith(b"PK"):
+        return "zip"
+    lower = filepath.lower()
+    if lower.endswith((".gz", ".btf.gz")):
+        return "gzip"
+    if lower.endswith((".bz2", ".btf.bz2")):
+        return "bz2"
+    if lower.endswith((".zip", ".btf.zip")):
+        return "zip"
+    return ""
+
+
+def _pick_zip_btf_member(names: List[str]) -> str:
+    """Choose the BTF member inside a zip archive."""
+    files = [n for n in names if n and not n.endswith("/") and not n.endswith("\\")]
+    if not files:
+        raise ValueError("ZIP archive contains no files")
+    btf_members = [
+        n for n in files
+        if n.lower().endswith(".btf") and not n.lower().endswith((".btf.gz", ".btf.bz2"))
+    ]
+    if len(btf_members) == 1:
+        return btf_members[0]
+    if len(btf_members) > 1:
+        # Prefer a top-level .btf (no path separators) when several exist.
+        top = [n for n in btf_members if "/" not in n and "\\" not in n]
+        return sorted(top or btf_members)[0]
+    if len(files) == 1:
+        return files[0]
+    raise ValueError(
+        "ZIP archive has no .btf member (found: "
+        + ", ".join(sorted(files)[:8])
+        + ("…" if len(files) > 8 else "")
+        + ")"
+    )
+
+
+@contextmanager
+def _open_btf_text(filepath: str):
+    """Yield a text stream for a plain or compressed BTF file."""
+    kind = _sniff_compression(filepath)
+    if kind == "gzip":
+        with gzip.open(filepath, "rt", encoding="utf-8", errors="replace") as fh:
+            yield fh
+        return
+    if kind == "bz2":
+        with bz2.open(filepath, "rt", encoding="utf-8", errors="replace") as fh:
+            yield fh
+        return
+    if kind == "zip":
+        with zipfile.ZipFile(filepath, "r") as zf:
+            member = _pick_zip_btf_member(zf.namelist())
+            with zf.open(member, "r") as raw:
+                with io.TextIOWrapper(raw, encoding="utf-8", errors="replace") as fh:
+                    yield fh
+        return
+    with open(filepath, encoding="utf-8", errors="replace") as fh:
+        yield fh
+
+
 _META_KEY_RE = re.compile(r"^[\w.-]+$")
 _CREATE_PRI_RE = re.compile(r"^create\s+pri:(\d+)\s*$", re.IGNORECASE)
 _PRIORITY_STI_RE = re.compile(
@@ -3665,7 +3750,7 @@ def _parse_btf(filepath: str,
         progress_callback(2, "Reading file…")
     _int = int
     _meta_re_match = _META_KEY_RE.match
-    with open(filepath, encoding="utf-8", errors="replace") as fh:
+    with _open_btf_text(filepath) as fh:
         for line_index, line in enumerate(fh, start=1):
             if cancel_check and line_index % 2048 == 0 and cancel_check():
                 raise _ParseCancelledError()

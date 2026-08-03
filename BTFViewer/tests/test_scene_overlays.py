@@ -21,7 +21,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 from btf_viewer_pkg.parser import _parse_btf  # noqa: E402
 from btf_viewer_pkg.view import TimelineView  # noqa: E402
 
-EXAMPLE_BTF = Path(__file__).resolve().parents[2] / "tracedata" / "example.btf"
+EXAMPLE_BTF = Path(__file__).resolve().parents[2] / "tracedata" / "example.btf.gz"
 
 class _QtTestBase(unittest.TestCase):
     _app: QApplication | None = None

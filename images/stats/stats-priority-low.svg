@@ -519,13 +519,13 @@ font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="nor
 <g fill="#e74c3c" fill-opacity="0.784314" stroke="none" transform="matrix(1,0,0,1,0,0)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<circle cx="417" cy="15" r="3"/>
+<circle cx="417" cy="14" r="3"/>
 </g>
 
 <g fill="#e74c3c" fill-opacity="0.784314" stroke="none" transform="matrix(1,0,0,1,0,0)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<circle cx="778" cy="14" r="3"/>
+<circle cx="778" cy="15" r="3"/>
 </g>
 
 <g fill="none" stroke="#000000" stroke-opacity="1" stroke-width="1" stroke-linecap="square" stroke-linejoin="bevel" transform="matrix(1,0,0,1,0,0)"
