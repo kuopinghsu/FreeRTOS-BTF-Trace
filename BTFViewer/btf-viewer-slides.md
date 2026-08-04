@@ -136,7 +136,7 @@ snapshot … --view timeline --view-mode task --task "CS[22]" --cpu-load
 
 ![w:720](../images/stats/stats-tick.svg)
 
-**Recommendation:** Scope a **busy** CS window before chasing missed ticks — many gaps sit in idle stretches between suite phases. Product hard-RT builds should capture with tickless off and expect CV ≪ 5 %.
+**Recommendation:** Scope a **busy** CS window before chasing missed ticks — many gaps sit in idle stretches between suite phases. Product hard-RT builds should capture with tickless off and expect CV ≪ 5 %. Quantify tickless vs tickful with **Trace Compare** (see later slide).
 
 ---
 
@@ -283,18 +283,22 @@ Which one is inflated tells you where to drill next.
 | CS[21] | 580 | ~1648 /s | 494 µs | 19 |
 | Trace-wide | **18 992** migrations | | | |
 
+| Signal | Meaning |
+|--------|---------|
+| High **Ping** + Rate / short **Dwell** | A→B→A thrash (within 1 µs) |
+| High Migr, low Ping | Spreads across cores without rapid oscillation |
+| Core-Pair **Bounce %** | Migration while a lock/queue hold is active |
+
 ## See hops on the timeline
 
-**Task View** → click `CS[22]` to lock-highlight (others gray out; no filter).  See also `tasks-cpu-load-cs22.svg`.  Headless burst window:
+**Task View** → click `CS[22]` to lock-highlight (others gray out). Then **Core Migrations** (Rate / Dwell / **Ping**) → **Core-Pair** / **Heatmap** / **Chord** (**Bounce Only** for lock-bounce).
 
 ```bash
 snapshot … --view timeline --view-mode task --task "CS[22]" \
     --lo 1805000 --hi 1865000
 ```
 
-*`CS[22]` locked in the CS burst (~60 ms).  Then **Core Migrations** (Primary / Rate / Ping) → **Core-Pair** / **Heatmap** / **Chord** for traffic on a specific core.*
-
-**Recommendation (product):** Affinity-pin latency-critical / lock-sharing tasks; fewer equal-priority runnables.
+**Recommendation (product):** Affinity-pin latency-critical / lock-sharing tasks; fewer equal-priority runnables; re-measure **Ping** and Migr rate after affinity changes.
 
 ---
 
@@ -312,8 +316,9 @@ snapshot … --view timeline --view-mode task --task "CS[22]" \
 
 | Metric | Red flag |
 |--------|----------|
-| Rate + short dwell | Ping-pong thrash |
-| Lock-bounce % | > ~5 % on latency paths |
+| Rate + short dwell + high **Ping** | Ping-pong thrash |
+| Lock-bounce % | ≥ ~25 % on busy pairs (Analysis); latency paths even lower |
+| Heatmap / Chord | **Show: Bounce Only** to isolate lock-held hops |
 
 ---
 
@@ -411,7 +416,7 @@ trace_interval_start(1); /* … */ trace_interval_stop(1);
 <!-- _class: section-header -->
 
 # Verdict & Next Steps
-## Recommendations · Compare · Export
+## Recommendations · Trace Compare · Export
 
 ---
 
@@ -455,20 +460,53 @@ python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
 
 ---
 
+# Use Case: Tickless vs Tickful
+
+Capture the **same workload** twice — tickless on (`configUSE_TICKLESS_IDLE`) vs fixed tick — then **Trace Compare**.
+
+| Compare focus | Why |
+|---------------|-----|
+| Summary → **Tick mode** / health / count | Confirm TICKLESS vs TICK (tickful → CV ≪ 5 %) |
+| Summary → **Context switches** | Scheduler wake-up cost |
+| Core gap · Load Balance · Migrations | Idle/busy structure and SMP side effects |
+| **Execution** / **Blocking** / **Preemption** | Latency and WCET under each policy |
+| Top Tasks · Core Util | Who absorbs tick / wake-up overhead |
+
+```bash
+python builds/btf_viewer.py compare tickless.btf.gz tickful.btf.gz \
+    --output tick-policy-compare.html --format html \
+    --name-a "Tickless" --name-b "Tickful"
+# Same busy phase (optional):
+#   … --lo 1464000 --hi 1764000
+```
+
+| Observation | Reading |
+|-------------|---------|
+| Fewer context switches on tickless (idle-heavy) | Expected — suppressed idle ticks |
+| Similar switches on a fully busy phase | Tick policy barely matters when cores never idle |
+| Blocking / Execution Max worse on one side | Keep that policy only if Δ fits latency budgets |
+
+> Prefer **tickless** for idle power when scoped busy metrics stay in budget. Prefer **tickful** when Trace Health must stay GOOD or soft-RT slices cannot tolerate tick stretch.
+
+---
+
 # Symptom → Root Cause Map
 
 | Symptom | Start here | Then |
 |---------|------------|------|
 | Unknown — triage | Toolbar **Analysis** | Named Statistics sections |
 | Tick / tickless | Trace Health | Scope busy window; Execution Max |
+| Tickless vs tickful | Trace Compare | Context switches · Execution · Blocking |
 | Uneven SMP load | Core Utilisation | Migrations · Affinity |
 | Slice too long | Execution Max/p95 | Preemption · Mutex |
 | Waits too long | Blocking | Preemption · Mutex · Inter-Arrival |
 | Priority inversion | Priority Inheritance | Mutex · Blocking |
-| Core thrashing | Migrations (Rate, Ping) | Core View highlight · Heatmap · Bounce % · Affinity |
+| Core thrashing | Migrations (Rate, Ping) | Task View + Load · Heatmap · Affinity |
+| Lock-bounce | Core-Pair Bounce % | Bounce Only · Mutex Bounces · Affinity |
 | Lock / queue issues | Mutex/Semaphore | Blocking · Migrations |
 | Suspend/resume | Task Lifecycle | Timeline STI · test 9 |
 | Custom metric | Tag / Interval | Owning task Execution |
+| Before / after change | Trace Compare | Same cursor phases on both tabs |
 
 ---
 
@@ -499,6 +537,6 @@ python builds/btf_viewer.py ../tracedata/example-8cores.btf.gz
 ```
 
 1. **Analysis** findings  
-2. Core util (Score 95 %) → CS Top Tasks → Migrations  
+2. Core util (Score 95 %) → CS Top Tasks → Migrations (Ping / Bounce)  
 3. Cursor-scope test 8 for PI stripes · test 9 for SR* 4/4  
-4. Export HTML report for the improvement plan
+4. Export HTML report · optional **Trace Compare** tickless vs tickful

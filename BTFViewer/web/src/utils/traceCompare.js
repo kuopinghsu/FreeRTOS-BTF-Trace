@@ -5,16 +5,155 @@
 
 import { formatTime, isStiTagChannel } from '../renderer/TimelineRenderer.js'
 import { parseTaskName, taskDisplayName, taskLabelForMergeKey, taskReprGet, isIdleTaskName } from './colors.js'
-import { schedulingStats, maxNs, blockingTimeSamples, preemptionChainRows } from './statsAnalysis.js'
+import { schedulingStats, blockingTimeSamples, preemptionChainRows } from './statsAnalysis.js'
 import { isMigratedTask, migrationRows } from './migrationAnalysis.js'
 import { syncObjectStatsRows } from './syncObjectAnalysis.js'
-import { getPlacedCursors } from './statsRange.js'
+import { getPlacedCursors, segFullyInRange, segOverlapNs, traceMapGet } from './statsRange.js'
+import { tickHealthReport } from './tickHealth.js'
 
 export function cursorRangeForCursors(cursors) {
   const placed = getPlacedCursors(cursors || [])
   if (placed.length < 2) return { lo: null, hi: null }
   const sorted = [...placed].sort((a, b) => a - b)
   return { lo: sorted[0], hi: sorted[sorted.length - 1] }
+}
+
+function giniCoefficient(values) {
+  const n = values.length
+  if (n < 2) return 0
+  const total = values.reduce((a, b) => a + b, 0)
+  if (total === 0) return 0
+  const sorted = [...values].sort((a, b) => a - b)
+  let cumsum = 0
+  let giniNum = 0
+  for (let i = 0; i < n; i++) {
+    cumsum += sorted[i]
+    giniNum += cumsum
+  }
+  return Math.max(0, Math.min(1, (n + 1) / n - (2 * giniNum) / (n * total)))
+}
+
+function coreUtilStddev(values) {
+  const n = values.length
+  if (n < 2) return 0
+  const mean = values.reduce((a, b) => a + b, 0) / n
+  return Math.sqrt(values.reduce((s, v) => s + (v - mean) ** 2, 0) / n)
+}
+
+/** Per-core active util % excluding IDLE/TICK (same as StatisticsPanel._coreUtilRows). */
+export function coreUtilPctRows(trace, lo = null, hi = null) {
+  if (!trace?.coreNames?.length) return []
+  const total = (lo != null && hi != null)
+    ? (hi - lo)
+    : (trace.timeMax - trace.timeMin)
+  if (total <= 0) return []
+  return trace.coreNames.map((core) => {
+    const segs = traceMapGet(trace.coreSegs, core) || []
+    let active = 0
+    for (const s of segs) {
+      const { name } = parseTaskName(s.task)
+      if (name === 'TICK' || isIdleTaskName(name)) continue
+      active += (lo != null && hi != null)
+        ? segOverlapNs(s, lo, hi)
+        : (s.end - s.start)
+    }
+    return { core, pct: 100.0 * active / total }
+  })
+}
+
+function loadBalanceFromCoreRows(coreRows) {
+  const pcts = (coreRows || []).map(r => r.pct).filter(v => v != null)
+  if (pcts.length < 2) return null
+  const total = pcts.reduce((a, b) => a + b, 0)
+  if (total === 0) return null
+  const gini = giniCoefficient(pcts)
+  const sigma = coreUtilStddev(pcts)
+  const score = Math.max(0, 100 * (1 - gini))
+  return { score, sigma, gini }
+}
+
+/** Slice durations fully inside [lo, hi] (or all when unscoped). */
+export function execSliceSamples(segs, lo = null, hi = null) {
+  const samples = []
+  for (const s of segs || []) {
+    const d = s.end - s.start
+    if (d <= 0) continue
+    if (lo != null && hi != null && !segFullyInRange(s, lo, hi)) continue
+    samples.push(d)
+  }
+  return samples
+}
+
+/** Gaps between consecutive starts; next start must fall in range when scoped. */
+export function interArrivalSamples(segs, lo = null, hi = null) {
+  if (!segs || segs.length < 2) return []
+  const starts = segs.map(s => s.start).sort((a, b) => a - b)
+  const samples = []
+  for (let i = 1; i < starts.length; i++) {
+    if (lo != null && hi != null && (starts[i] < lo || starts[i] > hi)) continue
+    const d = starts[i] - starts[i - 1]
+    if (d > 0) samples.push(d)
+  }
+  return samples
+}
+
+/** Sample summary: min/avg/max/p95 with formatTime strings + ns values. */
+export function summarizeTimeSamples(samples, scale) {
+  if (!samples?.length) return null
+  const sorted = [...samples].sort((a, b) => a - b)
+  const n = sorted.length
+  const sum = sorted.reduce((a, b) => a + b, 0)
+  const avgNs = Math.round(sum / n)
+  const p95Idx = Math.min(n - 1, Math.ceil(n * 0.95) - 1)
+  const minNs = sorted[0]
+  const maxNs = sorted[n - 1]
+  const p95Ns = sorted[p95Idx]
+  return {
+    count: n,
+    minNs,
+    avgNs,
+    maxNs,
+    p95Ns,
+    min: formatTime(minNs, scale),
+    avg: formatTime(avgNs, scale),
+    max: formatTime(maxNs, scale),
+    p95: formatTime(p95Ns, scale),
+  }
+}
+
+function taskMetricCompareByName(trace, sampleFn, lo, hi, {
+  includeCpu = false,
+  runsFromStarts = false,
+} = {}) {
+  const map = new Map()
+  if (!trace?.segByMergeKey) return map
+  const scale = trace.timeScale
+  const span = (lo != null && hi != null)
+    ? Math.max(1, hi - lo)
+    : Math.max(1, trace.timeMax - trace.timeMin)
+  for (const [mk, segs] of trace.segByMergeKey) {
+    if (!segs?.length) continue
+    const repr = taskReprGet(trace, mk) ?? mk
+    const { name: tname } = parseTaskName(repr)
+    if (isIdleTaskName(tname) || tname === 'TICK') continue
+    const samples = sampleFn(segs, lo, hi)
+    const summary = summarizeTimeSamples(samples, scale)
+    if (!summary) continue
+    const name = taskDisplayName(repr)
+    let runs = summary.count
+    if (runsFromStarts) {
+      runs = (lo != null && hi != null)
+        ? segs.filter(s => s.start >= lo && s.start <= hi).length
+        : segs.length
+    }
+    const entry = { ...summary, runs }
+    if (includeCpu) {
+      const taskTotal = samples.reduce((a, b) => a + b, 0)
+      entry.cpuPct = 100.0 * taskTotal / span
+    }
+    map.set(name, entry)
+  }
+  return map
 }
 
 export function traceSummarySnapshot(trace, lo = null, hi = null) {
@@ -37,6 +176,13 @@ export function traceSummarySnapshot(trace, lo = null, hi = null) {
     migrations = (trace.migrations || []).filter(m => m.ns >= lo && m.ns <= hi).length
     migratedTasks = migrationRows(trace, lo, hi).length
   }
+
+  const coreRows = coreUtilPctRows(trace, lo, hi)
+  const lb = loadBalanceFromCoreRows(coreRows)
+  const tick = tickHealthReport(trace, lo, hi)
+  let tickMode = '—'
+  if (tick.tickCount > 0) tickMode = tick.isTickless ? 'TICKLESS' : 'TICK'
+
   return {
     spanNs,
     tasks: trace.tasks?.length ?? 0,
@@ -50,6 +196,12 @@ export function traceSummarySnapshot(trace, lo = null, hi = null) {
     migrations,
     migratedTasks,
     timeScale: trace.timeScale,
+    loadBalanceScore: lb?.score ?? null,
+    loadBalanceSigma: lb?.sigma ?? null,
+    tickHealth: tick.tickCount ? tick.health : 'unknown',
+    tickMode,
+    tickCount: tick.tickCount,
+    missedTicks: tick.missedTicksEstimate,
   }
 }
 
@@ -106,6 +258,14 @@ function rangeForTab(tab, scopeEnabled) {
   return cursorRangeForCursors(tab.cursors)
 }
 
+function fmtLbScore(v) {
+  return v == null ? '—' : `${Math.round(v)}%`
+}
+
+function fmtLbSigma(v) {
+  return v == null ? '—' : `${v.toFixed(1)}%`
+}
+
 export function buildSummaryCompareRows(traceA, traceB, tabA = null, tabB = null, scopeEnabled = false) {
   const ra = rangeForTab(tabA, scopeEnabled)
   const rb = rangeForTab(tabB, scopeEnabled)
@@ -113,6 +273,12 @@ export function buildSummaryCompareRows(traceA, traceB, tabA = null, tabB = null
   const b = traceSummarySnapshot(traceB, rb.lo, rb.hi)
   if (!a || !b) return []
   const scale = a.timeScale || b.timeScale || 'ns'
+  const scoreDelta = (a.loadBalanceScore != null && b.loadBalanceScore != null)
+    ? fmtSignedPct(a.loadBalanceScore - b.loadBalanceScore)
+    : '—'
+  const sigmaDelta = (a.loadBalanceSigma != null && b.loadBalanceSigma != null)
+    ? fmtSignedPct(a.loadBalanceSigma - b.loadBalanceSigma)
+    : '—'
   return [
     {
       label: scopeEnabled ? 'Span (cursor range)' : 'Span',
@@ -153,6 +319,42 @@ export function buildSummaryCompareRows(traceA, traceB, tabA = null, tabB = null
       b: b.migratedTasks,
       delta: fmtSignedInt(a.migratedTasks - b.migratedTasks),
     },
+    {
+      label: 'Load Balance Score',
+      a: fmtLbScore(a.loadBalanceScore),
+      b: fmtLbScore(b.loadBalanceScore),
+      delta: scoreDelta,
+    },
+    {
+      label: 'Load Balance σ',
+      a: fmtLbSigma(a.loadBalanceSigma),
+      b: fmtLbSigma(b.loadBalanceSigma),
+      delta: sigmaDelta,
+    },
+    {
+      label: 'Tick health',
+      a: String(a.tickHealth || 'unknown').toUpperCase(),
+      b: String(b.tickHealth || 'unknown').toUpperCase(),
+      delta: '—',
+    },
+    {
+      label: 'Tick mode',
+      a: a.tickMode,
+      b: b.tickMode,
+      delta: '—',
+    },
+    {
+      label: 'Tick count',
+      a: a.tickCount,
+      b: b.tickCount,
+      delta: fmtSignedInt(a.tickCount - b.tickCount),
+    },
+    {
+      label: 'Missed ticks (est.)',
+      a: a.missedTicks,
+      b: b.missedTicks,
+      delta: fmtSignedInt(a.missedTicks - b.missedTicks),
+    },
   ]
 }
 
@@ -182,6 +384,32 @@ export function buildTopTasksCompareRows(traceA, traceB, tabA = null, tabB = nul
     })
 }
 
+export function buildCoreUtilCompareRows(traceA, traceB, tabA = null, tabB = null, scopeEnabled = false) {
+  const ra = rangeForTab(tabA, scopeEnabled)
+  const rb = rangeForTab(tabB, scopeEnabled)
+  const mapA = new Map(coreUtilPctRows(traceA, ra.lo, ra.hi).map(r => [r.core, r.pct]))
+  const mapB = new Map(coreUtilPctRows(traceB, rb.lo, rb.hi).map(r => [r.core, r.pct]))
+  const cores = [...new Set([...mapA.keys(), ...mapB.keys()])]
+  cores.sort((a, b) => {
+    const na = a.startsWith('Core_') ? parseInt(a.slice(5), 10) : NaN
+    const nb = b.startsWith('Core_') ? parseInt(b.slice(5), 10) : NaN
+    if (!Number.isNaN(na) && !Number.isNaN(nb)) return na - nb
+    return a.localeCompare(b)
+  })
+  return cores.map((core) => {
+    const pa = mapA.has(core) ? mapA.get(core) : null
+    const pb = mapB.has(core) ? mapB.get(core) : null
+    const aVal = pa ?? 0
+    const bVal = pb ?? 0
+    return {
+      core,
+      utilA: pa != null ? pa.toFixed(1) : '—',
+      utilB: pb != null ? pb.toFixed(1) : '—',
+      delta: (pa != null || pb != null) ? fmtSignedPct(aVal - bVal) : '—',
+    }
+  })
+}
+
 function signedRateDelta(rateA, rateB) {
   if (rateA < 0 || rateB < 0) return '—'
   const d = rateA - rateB
@@ -195,6 +423,12 @@ function signedDwellDelta(dwellA, dwellB, timeScale) {
   if (d === 0) return '0'
   const sign = d > 0 ? '+' : '−'
   return sign + formatTime(Math.abs(d), timeScale)
+}
+
+function fmtPrimary(row) {
+  if (!row || row.primary == null) return '—'
+  const pct = row.primaryPct != null ? ` ${Math.round(row.primaryPct)}%` : ''
+  return `${row.primary}${pct}`
 }
 
 export function buildMigrationCompareRows(traceA, traceB, tabA = null, tabB = null, scopeEnabled = false) {
@@ -242,6 +476,10 @@ export function buildMigrationCompareRows(traceA, traceB, tabA = null, tabB = nu
       dwellDelta: signedDwellDelta(dwellA, dwellB, timeScale),
       pingA: raRow?.pingPong ?? 0,
       pingB: rbRow?.pingPong ?? 0,
+      coresA: raRow?.coreCount ?? '—',
+      coresB: rbRow?.coreCount ?? '—',
+      primaryA: fmtPrimary(raRow),
+      primaryB: fmtPrimary(rbRow),
     }
   })
 }
@@ -251,11 +489,20 @@ function blockingSummaryByName(trace, lo, hi) {
   if (!trace?.segByMergeKey) return map
   const scale = trace.timeScale
   for (const [mk, segs] of trace.segByMergeKey) {
+    const repr = taskReprGet(trace, mk) ?? mk
+    const { name: tname } = parseTaskName(repr)
+    if (isIdleTaskName(tname) || tname === 'TICK') continue
     const samples = blockingTimeSamples(segs, lo, hi)
-    if (!samples.length) continue
-    const name = taskDisplayName(taskReprGet(trace, mk) ?? mk)
-    const avgNs = Math.round(samples.reduce((a, b) => a + b, 0) / samples.length)
-    map.set(name, { avgNs, gaps: samples.length, avg: formatTime(avgNs, scale) })
+    const summary = summarizeTimeSamples(samples, scale)
+    if (!summary) continue
+    const name = taskDisplayName(repr)
+    map.set(name, {
+      avgNs: summary.avgNs,
+      maxNs: summary.maxNs,
+      gaps: summary.count,
+      avg: summary.avg,
+      max: summary.max,
+    })
   }
   return map
 }
@@ -268,7 +515,7 @@ export function buildBlockingCompareRows(traceA, traceB, tabA = null, tabB = nul
   const names = [...new Set([...mapA.keys(), ...mapB.keys()])]
     .sort((a, b) => {
       const ga = Math.max(mapA.get(a)?.gaps ?? 0, mapB.get(a)?.gaps ?? 0)
-      const gb = Math.max(mapA.get(b)?.gaps ?? 0, mapB.get(b)?.gaps ?? 0)
+      const gb = Math.max(mapB.get(b)?.gaps ?? 0, mapA.get(b)?.gaps ?? 0)
       return gb - ga || a.localeCompare(b)
     })
     .slice(0, limit)
@@ -284,8 +531,75 @@ export function buildBlockingCompareRows(traceA, traceB, tabA = null, tabB = nul
       gapsB: b?.gaps ?? 0,
       avgA: a?.avg ?? '—',
       avgB: b?.avg ?? '—',
+      maxA: a?.max ?? '—',
+      maxB: b?.max ?? '—',
       delta: fmtSignedTime(avgA - avgB, scale),
     }
+  })
+}
+
+function buildNamedMetricCompareRows(mapA, mapB, scale, limit, {
+  sortKey = 'runs',
+  deltaField = 'avgNs',
+  deltaLabel = 'delta',
+} = {}) {
+  const names = [...new Set([...mapA.keys(), ...mapB.keys()])]
+    .sort((a, b) => {
+      const va = Math.max(mapA.get(a)?.[sortKey] ?? 0, mapB.get(a)?.[sortKey] ?? 0)
+      const vb = Math.max(mapB.get(b)?.[sortKey] ?? 0, mapA.get(b)?.[sortKey] ?? 0)
+      return vb - va || a.localeCompare(b)
+    })
+    .slice(0, limit)
+  return names.map((name) => {
+    const a = mapA.get(name)
+    const b = mapB.get(name)
+    const dA = a?.[deltaField] ?? 0
+    const dB = b?.[deltaField] ?? 0
+    return {
+      name,
+      runsA: a?.runs ?? 0,
+      runsB: b?.runs ?? 0,
+      avgA: a?.avg ?? '—',
+      avgB: b?.avg ?? '—',
+      maxA: a?.max ?? '—',
+      maxB: b?.max ?? '—',
+      [deltaLabel]: fmtSignedTime(dA - dB, scale),
+    }
+  })
+}
+
+export function buildExecutionCompareRows(traceA, traceB, tabA = null, tabB = null, scopeEnabled = false, limit = 15) {
+  const ra = rangeForTab(tabA, scopeEnabled)
+  const rb = rangeForTab(tabB, scopeEnabled)
+  const mapA = taskMetricCompareByName(traceA, execSliceSamples, ra.lo, ra.hi)
+  const mapB = taskMetricCompareByName(traceB, execSliceSamples, rb.lo, rb.hi)
+  const scale = traceA?.timeScale || traceB?.timeScale || 'ns'
+  return buildNamedMetricCompareRows(mapA, mapB, scale, limit, {
+    sortKey: 'runs',
+    deltaField: 'maxNs',
+    deltaLabel: 'deltaMax',
+  }).map(row => ({
+    name: row.name,
+    runsA: row.runsA,
+    runsB: row.runsB,
+    avgA: row.avgA,
+    avgB: row.avgB,
+    maxA: row.maxA,
+    maxB: row.maxB,
+    deltaMax: row.deltaMax,
+  }))
+}
+
+export function buildInterArrivalCompareRows(traceA, traceB, tabA = null, tabB = null, scopeEnabled = false, limit = 15) {
+  const ra = rangeForTab(tabA, scopeEnabled)
+  const rb = rangeForTab(tabB, scopeEnabled)
+  const mapA = taskMetricCompareByName(traceA, interArrivalSamples, ra.lo, ra.hi, { runsFromStarts: true })
+  const mapB = taskMetricCompareByName(traceB, interArrivalSamples, rb.lo, rb.hi, { runsFromStarts: true })
+  const scale = traceA?.timeScale || traceB?.timeScale || 'ns'
+  return buildNamedMetricCompareRows(mapA, mapB, scale, limit, {
+    sortKey: 'runs',
+    deltaField: 'avgNs',
+    deltaLabel: 'delta',
   })
 }
 
@@ -373,11 +687,23 @@ function htmlCell(v) {
     .replace(/"/g, '&quot;')
 }
 
+function normalizeCompareTables(tables = {}) {
+  return {
+    summary: tables.summary || [],
+    top: tables.top || tables.topTasks || [],
+    coreUtil: tables.coreUtil || [],
+    migrations: tables.migrations || [],
+    execution: tables.execution || [],
+    blocking: tables.blocking || [],
+    interArrival: tables.interArrival || [],
+    preemption: tables.preemption || [],
+    sync: tables.sync || [],
+  }
+}
+
 /** Build CSV text for a trace-compare export. */
-export function buildCompareCsv(
-  nameA, nameB, summaryRows, topTaskRows, migrationRows, scopeEnabled,
-  blockingRows = [], preemptionRows = [], syncRows = [],
-) {
+export function buildCompareCsv(nameA, nameB, scopeEnabled, tables = {}) {
+  const t = normalizeCompareTables(tables)
   const lines = []
   lines.push(`Trace A,${csvCell(nameA)}`)
   lines.push(`Trace B,${csvCell(nameB)}`)
@@ -386,21 +712,28 @@ export function buildCompareCsv(
 
   lines.push('Summary')
   lines.push('Metric,Trace A,Trace B,Δ')
-  for (const row of summaryRows) {
+  for (const row of t.summary) {
     lines.push([csvCell(row.label), csvCell(row.a), csvCell(row.b), csvCell(row.delta)].join(','))
   }
 
   lines.push('')
   lines.push('Top Tasks')
   lines.push('Task,CPU% A,CPU% B,Δ')
-  for (const row of topTaskRows) {
+  for (const row of t.top) {
     lines.push([csvCell(row.name), csvCell(row.cpuA), csvCell(row.cpuB), csvCell(row.delta)].join(','))
   }
 
   lines.push('')
+  lines.push('Core Util')
+  lines.push('Core,Util% A,Util% B,Δ')
+  for (const row of t.coreUtil) {
+    lines.push([csvCell(row.core), csvCell(row.utilA), csvCell(row.utilB), csvCell(row.delta)].join(','))
+  }
+
+  lines.push('')
   lines.push('Core Migrations')
-  lines.push('Task,Migrations A,Migrations B,Δ,Rate A,Rate B,Rate Δ,Dwell A,Dwell B,Dwell Δ,Ping-pong A,Ping-pong B')
-  for (const row of migrationRows) {
+  lines.push('Task,Migrations A,Migrations B,Δ,Rate A,Rate B,Rate Δ,Dwell A,Dwell B,Dwell Δ,Ping-pong A,Ping-pong B,Cores A,Cores B,Primary A,Primary B')
+  for (const row of t.migrations) {
     lines.push([
       csvCell(row.name),
       csvCell(row.migrationsA),
@@ -414,40 +747,61 @@ export function buildCompareCsv(
       csvCell(row.dwellDelta),
       csvCell(row.pingA),
       csvCell(row.pingB),
+      csvCell(row.coresA),
+      csvCell(row.coresB),
+      csvCell(row.primaryA),
+      csvCell(row.primaryB),
     ].join(','))
   }
 
-  if (blockingRows.length) {
-    lines.push('')
-    lines.push('Blocking Time')
-    lines.push('Task,Gaps A,Gaps B,Avg A,Avg B,Δ avg')
-    for (const row of blockingRows) {
-      lines.push([
-        csvCell(row.name), csvCell(row.gapsA), csvCell(row.gapsB),
-        csvCell(row.avgA), csvCell(row.avgB), csvCell(row.delta),
-      ].join(','))
-    }
+  lines.push('')
+  lines.push('Execution Time')
+  lines.push('Task,Runs A,Runs B,Avg A,Avg B,Max A,Max B,Δ max')
+  for (const row of t.execution) {
+    lines.push([
+      csvCell(row.name), csvCell(row.runsA), csvCell(row.runsB),
+      csvCell(row.avgA), csvCell(row.avgB), csvCell(row.maxA), csvCell(row.maxB),
+      csvCell(row.deltaMax),
+    ].join(','))
   }
 
-  if (preemptionRows.length) {
-    lines.push('')
-    lines.push('Preemption Chains')
-    lines.push('Victim,Count A,Count B,Δ,Total A,Total B')
-    for (const row of preemptionRows) {
-      lines.push([
-        csvCell(row.name), csvCell(row.countA), csvCell(row.countB), csvCell(row.delta),
-        csvCell(row.totalA), csvCell(row.totalB),
-      ].join(','))
-    }
+  lines.push('')
+  lines.push('Blocking Time')
+  lines.push('Task,Gaps A,Gaps B,Avg A,Avg B,Max A,Max B,Δ avg')
+  for (const row of t.blocking) {
+    lines.push([
+      csvCell(row.name), csvCell(row.gapsA), csvCell(row.gapsB),
+      csvCell(row.avgA), csvCell(row.avgB), csvCell(row.maxA), csvCell(row.maxB),
+      csvCell(row.delta),
+    ].join(','))
   }
 
-  if (syncRows.length) {
-    lines.push('')
-    lines.push('Sync Objects')
-    lines.push('Metric,Trace A,Trace B,Δ')
-    for (const row of syncRows) {
-      lines.push([csvCell(row.label), csvCell(row.a), csvCell(row.b), csvCell(row.delta)].join(','))
-    }
+  lines.push('')
+  lines.push('Inter-Arrival Time')
+  lines.push('Task,Runs A,Runs B,Avg A,Avg B,Max A,Max B,Δ avg')
+  for (const row of t.interArrival) {
+    lines.push([
+      csvCell(row.name), csvCell(row.runsA), csvCell(row.runsB),
+      csvCell(row.avgA), csvCell(row.avgB), csvCell(row.maxA), csvCell(row.maxB),
+      csvCell(row.delta),
+    ].join(','))
+  }
+
+  lines.push('')
+  lines.push('Preemption Chains')
+  lines.push('Victim,Count A,Count B,Δ,Total A,Total B')
+  for (const row of t.preemption) {
+    lines.push([
+      csvCell(row.name), csvCell(row.countA), csvCell(row.countB), csvCell(row.delta),
+      csvCell(row.totalA), csvCell(row.totalB),
+    ].join(','))
+  }
+
+  lines.push('')
+  lines.push('Sync Objects')
+  lines.push('Metric,Trace A,Trace B,Δ')
+  for (const row of t.sync) {
+    lines.push([csvCell(row.label), csvCell(row.a), csvCell(row.b), csvCell(row.delta)].join(','))
   }
 
   return lines.join('\n')
@@ -457,64 +811,77 @@ const _COMPARE_HTML_STYLE = `
   :root { --bg:#e9edf3; --paper:#fff; --ink:#182230; --muted:#5f6f82; --line:#d9e0ea; --header:#16324f; }
   * { box-sizing:border-box; }
   body { margin:0; padding:28px; font-family:"Segoe UI",Arial,sans-serif; color:var(--ink); background:var(--bg); }
-  .report { max-width:960px; margin:0 auto; }
+  .report { max-width:min(1280px, 100%); margin:0 auto; }
   .report-head { background:linear-gradient(135deg,var(--header),#21496f); color:#f3f7fd; border-radius:14px; padding:20px 24px; margin-bottom:18px; }
   h1 { margin:0; font-size:26px; }
   .sub { margin-top:6px; color:#cfe1f7; font-size:13px; }
-  .report-card { margin:14px 0; background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:12px 14px; }
+  .report-card { margin:14px 0; background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:12px 14px; overflow:hidden; }
   h2 { margin:0 0 10px; color:#123355; font-size:17px; }
-  table { border-collapse:collapse; width:100%; }
-  th,td { border-bottom:1px solid var(--line); padding:8px 10px; font-size:13px; text-align:right; }
+  .table-scroll { overflow-x:auto; -webkit-overflow-scrolling:touch; max-width:100%; }
+  table { border-collapse:collapse; width:max-content; min-width:100%; }
+  th,td { border-bottom:1px solid var(--line); padding:6px 8px; font-size:12px; text-align:right; white-space:nowrap; }
   th:first-child,td:first-child { text-align:left; }
   thead th { background:#f1f5fb; font-weight:600; }
+  thead th:first-child, tbody td:first-child { position:sticky; left:0; background:#f1f5fb; z-index:1; }
+  tbody td:first-child { background:#fff; }
   tbody tr:nth-child(even) td { background:#f7f9fc; }
-  .empty { text-align:center; color:var(--muted); }
+  tbody tr:nth-child(even) td:first-child { background:#f7f9fc; }
+  .empty { text-align:center; color:var(--muted); white-space:normal; }
 `
 
+function _rowsOrEmpty(rows, cols, mapFn, empty) {
+  if (!rows.length) return `<tr><td colspan="${cols}" class="empty">${htmlCell(empty)}</td></tr>`
+  return rows.map(mapFn).join('')
+}
+
+function _cardHtml(title, thead, tbody) {
+  return `<section class="report-card"><h2>${htmlCell(title)}</h2>`
+    + `<div class="table-scroll"><table><thead><tr>${thead}</tr></thead>`
+    + `<tbody>${tbody}</tbody></table></div></section>`
+}
+
 /** Build standalone HTML report for trace compare. */
-export function buildCompareHtml(
-  nameA, nameB, summaryRows, topTaskRows, migrationRows, scopeEnabled,
-  blockingRows = [], preemptionRows = [], syncRows = [],
-) {
+export function buildCompareHtml(nameA, nameB, scopeEnabled, tables = {}) {
+  const t = normalizeCompareTables(tables)
   const scopeNote = scopeEnabled
     ? 'Each side uses its own tab cursor range (C1–Cn) when 2+ cursors are placed.'
     : 'Full trace span on each side.'
 
-  const summaryHtml = summaryRows.length
-    ? summaryRows.map(r =>
-      `<tr><td>${htmlCell(r.label)}</td><td>${htmlCell(r.a)}</td><td>${htmlCell(r.b)}</td><td>${htmlCell(r.delta)}</td></tr>`,
-    ).join('')
-    : '<tr><td colspan="4" class="empty">No data</td></tr>'
+  const summaryHtml = _rowsOrEmpty(t.summary, 4,
+    r => `<tr><td>${htmlCell(r.label)}</td><td>${htmlCell(r.a)}</td><td>${htmlCell(r.b)}</td><td>${htmlCell(r.delta)}</td></tr>`,
+    'No data')
 
-  const topHtml = topTaskRows.length
-    ? topTaskRows.map(r =>
-      `<tr><td>${htmlCell(r.name)}</td><td>${htmlCell(r.cpuA)}</td><td>${htmlCell(r.cpuB)}</td><td>${htmlCell(r.delta)}</td></tr>`,
-    ).join('')
-    : '<tr><td colspan="4" class="empty">No user tasks in either trace</td></tr>'
+  const topHtml = _rowsOrEmpty(t.top, 4,
+    r => `<tr><td>${htmlCell(r.name)}</td><td>${htmlCell(r.cpuA)}</td><td>${htmlCell(r.cpuB)}</td><td>${htmlCell(r.delta)}</td></tr>`,
+    'No user tasks in either trace')
 
-  const migHtml = migrationRows.length
-    ? migrationRows.map(r =>
-      `<tr><td>${htmlCell(r.name)}</td><td>${htmlCell(r.migrationsA)}</td><td>${htmlCell(r.migrationsB)}</td><td>${htmlCell(r.delta)}</td><td>${htmlCell(r.rateA)}</td><td>${htmlCell(r.rateB)}</td><td>${htmlCell(r.rateDelta)}</td><td>${htmlCell(r.dwellA)}</td><td>${htmlCell(r.dwellB)}</td><td>${htmlCell(r.dwellDelta)}</td><td>${htmlCell(r.pingA)}</td><td>${htmlCell(r.pingB)}</td></tr>`,
-    ).join('')
-    : '<tr><td colspan="12" class="empty">No migrated tasks in either trace</td></tr>'
+  const coreHtml = _rowsOrEmpty(t.coreUtil, 4,
+    r => `<tr><td>${htmlCell(r.core)}</td><td>${htmlCell(r.utilA)}</td><td>${htmlCell(r.utilB)}</td><td>${htmlCell(r.delta)}</td></tr>`,
+    'No core utilisation data')
 
-  const blockHtml = blockingRows.length
-    ? blockingRows.map(r =>
-      `<tr><td>${htmlCell(r.name)}</td><td>${htmlCell(r.gapsA)}</td><td>${htmlCell(r.gapsB)}</td><td>${htmlCell(r.avgA)}</td><td>${htmlCell(r.avgB)}</td><td>${htmlCell(r.delta)}</td></tr>`,
-    ).join('')
-    : '<tr><td colspan="6" class="empty">No blocking samples in either trace</td></tr>'
+  const migHtml = _rowsOrEmpty(t.migrations, 16,
+    r => `<tr><td>${htmlCell(r.name)}</td><td>${htmlCell(r.migrationsA)}</td><td>${htmlCell(r.migrationsB)}</td><td>${htmlCell(r.delta)}</td><td>${htmlCell(r.rateA)}</td><td>${htmlCell(r.rateB)}</td><td>${htmlCell(r.rateDelta)}</td><td>${htmlCell(r.dwellA)}</td><td>${htmlCell(r.dwellB)}</td><td>${htmlCell(r.dwellDelta)}</td><td>${htmlCell(r.pingA)}</td><td>${htmlCell(r.pingB)}</td><td>${htmlCell(r.coresA)}</td><td>${htmlCell(r.coresB)}</td><td>${htmlCell(r.primaryA)}</td><td>${htmlCell(r.primaryB)}</td></tr>`,
+    'No migrated tasks in either trace')
 
-  const preHtml = preemptionRows.length
-    ? preemptionRows.map(r =>
-      `<tr><td>${htmlCell(r.name)}</td><td>${htmlCell(r.countA)}</td><td>${htmlCell(r.countB)}</td><td>${htmlCell(r.delta)}</td><td>${htmlCell(r.totalA)}</td><td>${htmlCell(r.totalB)}</td></tr>`,
-    ).join('')
-    : '<tr><td colspan="6" class="empty">No preemption chains in either trace</td></tr>'
+  const execHtml = _rowsOrEmpty(t.execution, 8,
+    r => `<tr><td>${htmlCell(r.name)}</td><td>${htmlCell(r.runsA)}</td><td>${htmlCell(r.runsB)}</td><td>${htmlCell(r.avgA)}</td><td>${htmlCell(r.avgB)}</td><td>${htmlCell(r.maxA)}</td><td>${htmlCell(r.maxB)}</td><td>${htmlCell(r.deltaMax)}</td></tr>`,
+    'No execution samples in either trace')
 
-  const syncHtml = syncRows.length
-    ? syncRows.map(r =>
-      `<tr><td>${htmlCell(r.label)}</td><td>${htmlCell(r.a)}</td><td>${htmlCell(r.b)}</td><td>${htmlCell(r.delta)}</td></tr>`,
-    ).join('')
-    : '<tr><td colspan="4" class="empty">No sync instrumentation in either trace</td></tr>'
+  const blockHtml = _rowsOrEmpty(t.blocking, 8,
+    r => `<tr><td>${htmlCell(r.name)}</td><td>${htmlCell(r.gapsA)}</td><td>${htmlCell(r.gapsB)}</td><td>${htmlCell(r.avgA)}</td><td>${htmlCell(r.avgB)}</td><td>${htmlCell(r.maxA)}</td><td>${htmlCell(r.maxB)}</td><td>${htmlCell(r.delta)}</td></tr>`,
+    'No blocking samples in either trace')
+
+  const interHtml = _rowsOrEmpty(t.interArrival, 8,
+    r => `<tr><td>${htmlCell(r.name)}</td><td>${htmlCell(r.runsA)}</td><td>${htmlCell(r.runsB)}</td><td>${htmlCell(r.avgA)}</td><td>${htmlCell(r.avgB)}</td><td>${htmlCell(r.maxA)}</td><td>${htmlCell(r.maxB)}</td><td>${htmlCell(r.delta)}</td></tr>`,
+    'No inter-arrival samples in either trace')
+
+  const preHtml = _rowsOrEmpty(t.preemption, 6,
+    r => `<tr><td>${htmlCell(r.name)}</td><td>${htmlCell(r.countA)}</td><td>${htmlCell(r.countB)}</td><td>${htmlCell(r.delta)}</td><td>${htmlCell(r.totalA)}</td><td>${htmlCell(r.totalB)}</td></tr>`,
+    'No preemption chains in either trace')
+
+  const syncHtml = _rowsOrEmpty(t.sync, 4,
+    r => `<tr><td>${htmlCell(r.label)}</td><td>${htmlCell(r.a)}</td><td>${htmlCell(r.b)}</td><td>${htmlCell(r.delta)}</td></tr>`,
+    'No sync instrumentation in either trace')
 
   return `<!doctype html>
 <html><head><meta charset="utf-8"/><title>BTF Trace Compare</title><style>${_COMPARE_HTML_STYLE}</style></head>
@@ -523,47 +890,36 @@ export function buildCompareHtml(
     <h1>Trace Compare</h1>
     <div class="sub">${htmlCell(nameA)} vs ${htmlCell(nameB)} · ${htmlCell(scopeNote)}</div>
   </header>
-  <section class="report-card"><h2>Summary</h2>
-    <table><thead><tr><th>Metric</th><th>Trace A</th><th>Trace B</th><th>Δ</th></tr></thead><tbody>${summaryHtml}</tbody></table>
-  </section>
-  <section class="report-card"><h2>Top Tasks</h2>
-    <table><thead><tr><th>Task</th><th>CPU% A</th><th>CPU% B</th><th>Δ</th></tr></thead><tbody>${topHtml}</tbody></table>
-  </section>
-  <section class="report-card"><h2>Core Migrations</h2>
-    <table><thead><tr><th>Task</th><th>Migr A</th><th>Migr B</th><th>Δ</th><th>Rate A</th><th>Rate B</th><th>Rate Δ</th><th>Dwell A</th><th>Dwell B</th><th>Dwell Δ</th><th>Ping A</th><th>Ping B</th></tr></thead><tbody>${migHtml}</tbody></table>
-  </section>
-  <section class="report-card"><h2>Blocking Time</h2>
-    <table><thead><tr><th>Task</th><th>Gaps A</th><th>Gaps B</th><th>Avg A</th><th>Avg B</th><th>Δ avg</th></tr></thead><tbody>${blockHtml}</tbody></table>
-  </section>
-  <section class="report-card"><h2>Preemption Chains</h2>
-    <table><thead><tr><th>Victim</th><th>Count A</th><th>Count B</th><th>Δ</th><th>Total A</th><th>Total B</th></tr></thead><tbody>${preHtml}</tbody></table>
-  </section>
-  <section class="report-card"><h2>Sync Objects</h2>
-    <table><thead><tr><th>Metric</th><th>Trace A</th><th>Trace B</th><th>Δ</th></tr></thead><tbody>${syncHtml}</tbody></table>
-  </section>
+  ${_cardHtml('Summary', '<th>Metric</th><th>Trace A</th><th>Trace B</th><th>Δ</th>', summaryHtml)}
+  ${_cardHtml('Top Tasks', '<th>Task</th><th>CPU% A</th><th>CPU% B</th><th>Δ</th>', topHtml)}
+  ${_cardHtml('Core Util', '<th>Core</th><th>Util% A</th><th>Util% B</th><th>Δ</th>', coreHtml)}
+  ${_cardHtml('Core Migrations',
+    '<th>Task</th><th>Migr A</th><th>Migr B</th><th>Δ</th><th>Rate A</th><th>Rate B</th><th>Rate Δ</th><th>Dwell A</th><th>Dwell B</th><th>Dwell Δ</th><th>Ping A</th><th>Ping B</th><th>Cores A</th><th>Cores B</th><th>Primary A</th><th>Primary B</th>',
+    migHtml)}
+  ${_cardHtml('Execution Time',
+    '<th>Task</th><th>Runs A</th><th>Runs B</th><th>Avg A</th><th>Avg B</th><th>Max A</th><th>Max B</th><th>Δ max</th>',
+    execHtml)}
+  ${_cardHtml('Blocking Time',
+    '<th>Task</th><th>Gaps A</th><th>Gaps B</th><th>Avg A</th><th>Avg B</th><th>Max A</th><th>Max B</th><th>Δ avg</th>',
+    blockHtml)}
+  ${_cardHtml('Inter-Arrival Time',
+    '<th>Task</th><th>Runs A</th><th>Runs B</th><th>Avg A</th><th>Avg B</th><th>Max A</th><th>Max B</th><th>Δ avg</th>',
+    interHtml)}
+  ${_cardHtml('Preemption Chains',
+    '<th>Victim</th><th>Count A</th><th>Count B</th><th>Δ</th><th>Total A</th><th>Total B</th>',
+    preHtml)}
+  ${_cardHtml('Sync Objects', '<th>Metric</th><th>Trace A</th><th>Trace B</th><th>Δ</th>', syncHtml)}
 </div></body></html>`
 }
 
-export function downloadCompareCsv(
-  nameA, nameB, summaryRows, topTaskRows, migrationRows, scopeEnabled,
-  blockingRows = [], preemptionRows = [], syncRows = [],
-) {
-  const text = buildCompareCsv(
-    nameA, nameB, summaryRows, topTaskRows, migrationRows, scopeEnabled,
-    blockingRows, preemptionRows, syncRows,
-  )
+export function downloadCompareCsv(nameA, nameB, scopeEnabled, tables = {}) {
+  const text = buildCompareCsv(nameA, nameB, scopeEnabled, tables)
   const blob = new Blob([text], { type: 'text/csv;charset=utf-8' })
   _downloadBlob(`trace-compare-${_timestamp()}.csv`, blob)
 }
 
-export function downloadCompareHtml(
-  nameA, nameB, summaryRows, topTaskRows, migrationRows, scopeEnabled,
-  blockingRows = [], preemptionRows = [], syncRows = [],
-) {
-  const html = buildCompareHtml(
-    nameA, nameB, summaryRows, topTaskRows, migrationRows, scopeEnabled,
-    blockingRows, preemptionRows, syncRows,
-  )
+export function downloadCompareHtml(nameA, nameB, scopeEnabled, tables = {}) {
+  const html = buildCompareHtml(nameA, nameB, scopeEnabled, tables)
   const blob = new Blob([html], { type: 'text/html;charset=utf-8' })
   _downloadBlob(`trace-compare-${_timestamp()}.html`, blob)
 }

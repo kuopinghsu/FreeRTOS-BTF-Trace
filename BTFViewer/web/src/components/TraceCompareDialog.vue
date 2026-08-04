@@ -136,6 +136,34 @@
         </table>
 
         <table
+          v-else-if="activePage === 'coreUtil'"
+          class="compare-table"
+        >
+          <thead>
+            <tr>
+              <th>Core</th>
+              <th>Util% A</th>
+              <th>Util% B</th>
+              <th>Δ</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="row in coreUtilRows"
+              :key="row.core"
+            >
+              <td class="task-col">{{ row.core }}</td>
+              <td>{{ row.utilA }}</td>
+              <td>{{ row.utilB }}</td>
+              <td>{{ row.delta }}</td>
+            </tr>
+            <tr v-if="coreUtilRows.length === 0">
+              <td colspan="4" class="compare-empty">No core utilisation data</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <table
           v-else-if="activePage === 'migrations'"
           class="compare-table"
         >
@@ -153,6 +181,10 @@
               <th>Dwell Δ</th>
               <th>Ping A</th>
               <th>Ping B</th>
+              <th>Cores A</th>
+              <th>Cores B</th>
+              <th>Primary A</th>
+              <th>Primary B</th>
             </tr>
           </thead>
           <tbody>
@@ -172,14 +204,54 @@
               <td>{{ row.dwellDelta }}</td>
               <td>{{ row.pingA }}</td>
               <td>{{ row.pingB }}</td>
+              <td>{{ row.coresA }}</td>
+              <td>{{ row.coresB }}</td>
+              <td>{{ row.primaryA }}</td>
+              <td>{{ row.primaryB }}</td>
             </tr>
             <tr v-if="migrationRows.length === 0">
               <td
-                colspan="12"
+                colspan="16"
                 class="compare-empty"
               >
                 No migrated tasks in either trace
               </td>
+            </tr>
+          </tbody>
+        </table>
+
+        <table
+          v-else-if="activePage === 'execution'"
+          class="compare-table"
+        >
+          <thead>
+            <tr>
+              <th>Task</th>
+              <th>Runs A</th>
+              <th>Runs B</th>
+              <th>Avg A</th>
+              <th>Avg B</th>
+              <th>Max A</th>
+              <th>Max B</th>
+              <th>Δ max</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="row in executionRows"
+              :key="row.name"
+            >
+              <td class="task-col">{{ row.name }}</td>
+              <td>{{ row.runsA }}</td>
+              <td>{{ row.runsB }}</td>
+              <td>{{ row.avgA }}</td>
+              <td>{{ row.avgB }}</td>
+              <td>{{ row.maxA }}</td>
+              <td>{{ row.maxB }}</td>
+              <td>{{ row.deltaMax }}</td>
+            </tr>
+            <tr v-if="executionRows.length === 0">
+              <td colspan="8" class="compare-empty">No execution samples in either trace</td>
             </tr>
           </tbody>
         </table>
@@ -195,6 +267,8 @@
               <th>Gaps B</th>
               <th>Avg A</th>
               <th>Avg B</th>
+              <th>Max A</th>
+              <th>Max B</th>
               <th>Δ avg</th>
             </tr>
           </thead>
@@ -208,10 +282,48 @@
               <td>{{ row.gapsB }}</td>
               <td>{{ row.avgA }}</td>
               <td>{{ row.avgB }}</td>
+              <td>{{ row.maxA }}</td>
+              <td>{{ row.maxB }}</td>
               <td>{{ row.delta }}</td>
             </tr>
             <tr v-if="blockingRows.length === 0">
-              <td colspan="6" class="compare-empty">No blocking samples in either trace</td>
+              <td colspan="8" class="compare-empty">No blocking samples in either trace</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <table
+          v-else-if="activePage === 'interArrival'"
+          class="compare-table"
+        >
+          <thead>
+            <tr>
+              <th>Task</th>
+              <th>Runs A</th>
+              <th>Runs B</th>
+              <th>Avg A</th>
+              <th>Avg B</th>
+              <th>Max A</th>
+              <th>Max B</th>
+              <th>Δ avg</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="row in interArrivalRows"
+              :key="row.name"
+            >
+              <td class="task-col">{{ row.name }}</td>
+              <td>{{ row.runsA }}</td>
+              <td>{{ row.runsB }}</td>
+              <td>{{ row.avgA }}</td>
+              <td>{{ row.avgB }}</td>
+              <td>{{ row.maxA }}</td>
+              <td>{{ row.maxB }}</td>
+              <td>{{ row.delta }}</td>
+            </tr>
+            <tr v-if="interArrivalRows.length === 0">
+              <td colspan="8" class="compare-empty">No inter-arrival samples in either trace</td>
             </tr>
           </tbody>
         </table>
@@ -337,8 +449,11 @@ import { ref, computed, watch } from 'vue'
 import {
   buildSummaryCompareRows,
   buildTopTasksCompareRows,
+  buildCoreUtilCompareRows,
   buildMigrationCompareRows,
+  buildExecutionCompareRows,
   buildBlockingCompareRows,
+  buildInterArrivalCompareRows,
   buildPreemptionCompareRows,
   buildSyncCompareRows,
   downloadCompareCsv,
@@ -354,8 +469,11 @@ const emit = defineEmits(['close'])
 const pageTabs = [
   { id: 'summary', label: 'Summary' },
   { id: 'top', label: 'Top Tasks' },
+  { id: 'coreUtil', label: 'Core Util' },
   { id: 'migrations', label: 'Core Migrations' },
+  { id: 'execution', label: 'Execution' },
   { id: 'blocking', label: 'Blocking' },
+  { id: 'interArrival', label: 'Inter-Arrival' },
   { id: 'preemption', label: 'Preemption' },
   { id: 'sync', label: 'Sync' },
 ]
@@ -385,26 +503,41 @@ const summaryRows = computed(() =>
   buildSummaryCompareRows(traceA.value, traceB.value, tabA.value, tabB.value, scopeToCursors.value))
 const topTaskRows = computed(() =>
   buildTopTasksCompareRows(traceA.value, traceB.value, tabA.value, tabB.value, scopeToCursors.value))
+const coreUtilRows = computed(() =>
+  buildCoreUtilCompareRows(traceA.value, traceB.value, tabA.value, tabB.value, scopeToCursors.value))
 const migrationRows = computed(() =>
   buildMigrationCompareRows(traceA.value, traceB.value, tabA.value, tabB.value, scopeToCursors.value))
+const executionRows = computed(() =>
+  buildExecutionCompareRows(traceA.value, traceB.value, tabA.value, tabB.value, scopeToCursors.value))
 const blockingRows = computed(() =>
   buildBlockingCompareRows(traceA.value, traceB.value, tabA.value, tabB.value, scopeToCursors.value))
+const interArrivalRows = computed(() =>
+  buildInterArrivalCompareRows(traceA.value, traceB.value, tabA.value, tabB.value, scopeToCursors.value))
 const preemptionCompareRows = computed(() =>
   buildPreemptionCompareRows(traceA.value, traceB.value, tabA.value, tabB.value, scopeToCursors.value))
 const syncCompareRows = computed(() =>
   buildSyncCompareRows(traceA.value, traceB.value, tabA.value, tabB.value, scopeToCursors.value))
 
+function exportTables() {
+  return {
+    summary: summaryRows.value,
+    top: topTaskRows.value,
+    coreUtil: coreUtilRows.value,
+    migrations: migrationRows.value,
+    execution: executionRows.value,
+    blocking: blockingRows.value,
+    interArrival: interArrivalRows.value,
+    preemption: preemptionCompareRows.value,
+    sync: syncCompareRows.value,
+  }
+}
+
 function onExportCsv() {
   downloadCompareCsv(
     tabA.value?.name ?? 'Trace A',
     tabB.value?.name ?? 'Trace B',
-    summaryRows.value,
-    topTaskRows.value,
-    migrationRows.value,
     scopeToCursors.value,
-    blockingRows.value,
-    preemptionCompareRows.value,
-    syncCompareRows.value,
+    exportTables(),
   )
 }
 
@@ -412,13 +545,8 @@ function onExportHtml() {
   downloadCompareHtml(
     tabA.value?.name ?? 'Trace A',
     tabB.value?.name ?? 'Trace B',
-    summaryRows.value,
-    topTaskRows.value,
-    migrationRows.value,
     scopeToCursors.value,
-    blockingRows.value,
-    preemptionCompareRows.value,
-    syncCompareRows.value,
+    exportTables(),
   )
 }
 </script>
@@ -437,7 +565,7 @@ function onExportHtml() {
 
 .compare-dialog {
   width: min(1080px, 98vw);
-  max-height: min(82vh, 540px);
+  height: min(88vh, 640px);
   background: var(--panel-bg);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -454,6 +582,7 @@ function onExportHtml() {
   gap: 12px;
   padding: 12px 14px;
   border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
 }
 
 .compare-dialog-title {
@@ -485,6 +614,7 @@ function onExportHtml() {
   font-size: 12px;
   color: var(--fg-dim);
   cursor: pointer;
+  flex-shrink: 0;
 }
 
 .compare-select-row {
@@ -493,6 +623,7 @@ function onExportHtml() {
   gap: 12px;
   padding: 12px 14px;
   border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
 }
 
 .compare-select-label {
@@ -518,9 +649,11 @@ function onExportHtml() {
 
 .compare-tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 2px;
   padding: 8px 14px 0;
   border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
 }
 
 .compare-tab {
@@ -547,7 +680,8 @@ function onExportHtml() {
 }
 
 .compare-table-wrap {
-  flex: 1;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
   padding: 0 14px 14px;
 }
@@ -592,6 +726,7 @@ function onExportHtml() {
   gap: 8px;
   padding: 10px 14px;
   border-top: 1px solid var(--border);
+  flex-shrink: 0;
 }
 
 .compare-export-btn {

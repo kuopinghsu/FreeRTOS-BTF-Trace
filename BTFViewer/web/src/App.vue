@@ -186,6 +186,37 @@
         class="right-panel"
         :style="{ width: rightPanelWidth + 'px' }"
       >
+        <div class="panel-tabs" role="tablist" aria-label="Right panel tabs">
+          <button
+            v-if="appSettings.showStats"
+            class="panel-tab"
+            :class="{ active: rightPanelTab === 'stats' }"
+            role="tab"
+            :aria-selected="rightPanelTab === 'stats'"
+            @click="rightPanelTab = 'stats'"
+          >
+            Statistics
+          </button>
+          <button
+            class="panel-tab"
+            :class="{ active: rightPanelTab === 'marks' }"
+            role="tab"
+            :aria-selected="rightPanelTab === 'marks'"
+            @click="rightPanelTab = 'marks'"
+          >
+            Cursor / Bookmark
+          </button>
+          <button
+            class="panel-tab"
+            :class="{ active: rightPanelTab === 'find' }"
+            role="tab"
+            :aria-selected="rightPanelTab === 'find'"
+            @click="rightPanelTab = 'find'"
+          >
+            Find
+          </button>
+        </div>
+
         <div class="panel-page-wrap">
           <div v-if="rightPanelTab === 'marks'" class="panel-page panel-page-marks">
             <div class="panel-section">
@@ -307,9 +338,6 @@
 
           <div v-else-if="rightPanelTab === 'find'" class="panel-page panel-page-find">
             <div class="panel-section flex-fill">
-              <div class="panel-header">
-                Find
-              </div>
               <FindPanel
                 ref="findPanelRef"
                 :query="findQuery"
@@ -328,9 +356,6 @@
 
           <div v-else class="panel-page panel-page-stats">
             <div class="panel-section flex-fill">
-              <div class="panel-header">
-                Statistics
-              </div>
               <StatisticsPanel
                 :trace="trace"
                 :cursors="cursors"
@@ -351,37 +376,6 @@
               />
             </div>
           </div>
-        </div>
-
-        <div class="panel-tabs" role="tablist" aria-label="Right panel tabs">
-          <button
-            v-if="appSettings.showStats"
-            class="panel-tab"
-            :class="{ active: rightPanelTab === 'stats' }"
-            role="tab"
-            :aria-selected="rightPanelTab === 'stats'"
-            @click="rightPanelTab = 'stats'"
-          >
-            Statistics
-          </button>
-          <button
-            class="panel-tab"
-            :class="{ active: rightPanelTab === 'marks' }"
-            role="tab"
-            :aria-selected="rightPanelTab === 'marks'"
-            @click="rightPanelTab = 'marks'"
-          >
-            Cursor / Bookmark
-          </button>
-          <button
-            class="panel-tab"
-            :class="{ active: rightPanelTab === 'find' }"
-            role="tab"
-            :aria-selected="rightPanelTab === 'find'"
-            @click="rightPanelTab = 'find'"
-          >
-            Find
-          </button>
         </div>
       </div>
     </div>
@@ -3370,7 +3364,7 @@ body.row-resizing * {
 
 .panel-tabs {
   display: flex;
-  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
   background: color-mix(in srgb, var(--panel-bg) 86%, var(--tb-bg));
   flex-shrink: 0;
 }
@@ -3401,7 +3395,7 @@ body.row-resizing * {
 .panel-tab.active {
   color: var(--fg);
   background: var(--panel-bg);
-  box-shadow: inset 0 2px 0 var(--accent);
+  box-shadow: inset 0 -2px 0 var(--accent);
 }
 
 .panel-page-wrap {

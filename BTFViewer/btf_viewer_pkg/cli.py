@@ -660,7 +660,7 @@ def _cli_compare_run(args: argparse.Namespace) -> int:
     name_a = args.name_a or os.path.basename(path_a)
     name_b = args.name_b or os.path.basename(path_b)
     scope_enabled = (lo_a is not None) or (lo_b is not None)
-    summary, top, mig, blocking, preemption, sync = _build_trace_compare_rows(
+    tables = _build_trace_compare_rows(
         trace_a, trace_b, lo_a, hi_a, lo_b, hi_b)
 
     fmt, html_path, csv_path = _cli_export_output_paths(args.output, args.format)
@@ -669,13 +669,11 @@ def _cli_compare_run(args: argparse.Namespace) -> int:
         if fmt in ("html", "both"):
             with open(html_path, "w", encoding="utf-8") as fh:
                 fh.write(_build_compare_html(
-                    name_a, name_b, scope_enabled, summary, top, mig,
-                    blocking, preemption, sync))
+                    name_a, name_b, scope_enabled, tables))
             written.append(html_path)
         if fmt in ("csv", "both"):
             text = _build_compare_csv(
-                name_a, name_b, scope_enabled, summary, top, mig,
-                blocking, preemption, sync)
+                name_a, name_b, scope_enabled, tables)
             with open(csv_path, "w", newline="", encoding="utf-8-sig") as fh:
                 fh.write(text)
             written.append(csv_path)

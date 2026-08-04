@@ -122,6 +122,8 @@ defineExpose({ focusInput })
   flex-direction: column;
   gap: 6px;
   padding: 8px;
+  flex: 1;
+  min-height: 0;
 }
 .find-input {
   width: 100%;

@@ -24,7 +24,7 @@ A PySide6-based interactive visualiser for FreeRTOS context-switch traces in **B
 - **Viewport culling** — only visible rows/columns and segments are rendered; no slowdown on large traces
 - **Multi-tab traces** — open several `.btf` files at once (Desktop: closable tabs; Web: tab bar under the toolbar). Both restore open tabs, active tab, and per-tab zoom/cursors/marks/filters on launch (Desktop: `btf_viewer.rc`; Web: `localStorage` + IndexedDB trace cache)
 - **Measurement cursors** — Desktop and Web support 2–8 cursors (default: 4); configurable in Settings
-- **Trace compare** — with 2+ tabs open, **Trace Compare…** in the Statistics panel diffs **Summary**, **Top Tasks**, **Core Migrations**, **Blocking**, **Preemption**, and **Sync** side-by-side (Desktop + Web). Optional **Limit to each tab's cursor range** compares metrics within C1–Cn when 2+ cursors are placed on each trace
+- **Trace compare** — with 2+ tabs open, **Trace Compare…** in the Statistics panel diffs **Summary** (incl. load balance + tick health), **Top Tasks**, **Core Util**, **Core Migrations**, **Execution**, **Blocking**, **Inter-Arrival**, **Preemption**, and **Sync** side-by-side (Desktop + Web). Optional **Limit to each tab's cursor range** compares metrics within C1–Cn when 2+ cursors are placed on each trace
 - **Core migration analysis** — detect tasks that run on multiple cores; **Core Migrations** stats table (ping-pong, STI correlation, gap-after vs other gaps), **Core-Pair Migration Summary** (per directed pair: count, bounces, avg gap), **Core Time Breakdown** (active/idle/tick/gap per core), **clickable migration heatmap** (pair×time for ≤ 16 cores; core×core matrix → outgoing pairs for larger traces → per-task sub-bins → timeline drill-down), **migration chord diagram** (directional core-to-core migration volume as a circular chord diagram; hover a core arc to highlight its migrations), **Migrated tasks only** legend filter, toolbar **All tasks** reset, **bounce-only filter** (Show: Bounce Only toggle restricts the heatmap and chord diagram to lock-bounce migrations), and Find **Migrations** mode (Desktop + Web)
 - **Core Affinity** — when traces include `affinity_set` STI events (from `vTaskCoreAffinitySet` / `traceENTER_vTaskCoreAffinitySet`), the **Core Affinity** statistics table shows each task's affinity mask history, observed execution cores, and flags violations in red — checked per slice against the mask in effect at that slice (before the first set the task is unrestricted) (Desktop + Web)
 - **Analysis Findings** — toolbar **Analysis** opens a severity-tagged dialog (load imbalance, WCET/CPU hotspots, blocking, L/M/H priority inversion, core thrashing / hot pairs, deadline breaches, tick health, sync/mutex bounces) for the current Statistics scope; **Save as text…** writes a `.txt` copy. The same card is embedded in **Statistics → Export HTML** / headless `report --format html` (Desktop + Web)
@@ -778,7 +778,7 @@ Below the scope checkbox, a **scheduling summary** line shows context-switch cou
 | **Tag Analysis** | Per `tag0_event`…`tag7_event` channel: sample count, min/avg/max/p95 of the tag value; click a row to open a scatter + histogram plot (shown only when tag STI samples are present) |
 | **Deadlines / CPU budget** | Per-task slice violations (execution exceeding a configured nanosecond deadline) and CPU budget violations (task CPU% exceeding a global threshold); configure via **Settings → Display → Analysis thresholds** (`Ctrl+,`) |
 
-**Core Migrations** lists tasks that ran on two or more cores, with **Rate** (migrations per second of active time and per tick) and **Dwell** (average on-CPU slice length). For multi-core traces, open the **Migration heatmap** from the toolbar **Heatmap** button — click core-pair cells to drill into per-task sub-bins, then into Task View (see [Migration heatmap](#migration-heatmap)); or open the **Migration chord diagram** from the toolbar **Chord** button for a directional overview of core-to-core migration volume (see [Migration chord diagram](#migration-chord-diagram)). Toolbar **Analysis** flags thrashing / hot-pair candidates from the same stats. **Trace Compare…** (footer, next to Export) opens a dialog with **Summary**, **Top Tasks**, and **Core Migrations** tabs to diff two open trace tabs; optional cursor-range scoping compares each tab's C1–Cn window independently.
+**Core Migrations** lists tasks that ran on two or more cores, with **Rate** (migrations per second of active time and per tick) and **Dwell** (average on-CPU slice length). For multi-core traces, open the **Migration heatmap** from the toolbar **Heatmap** button — click core-pair cells to drill into per-task sub-bins, then into Task View (see [Migration heatmap](#migration-heatmap)); or open the **Migration chord diagram** from the toolbar **Chord** button for a directional overview of core-to-core migration volume (see [Migration chord diagram](#migration-chord-diagram)). Toolbar **Analysis** flags thrashing / hot-pair candidates from the same stats. **Trace Compare…** (footer, next to Export) opens a dialog covering Summary (incl. load balance + tick health), Top Tasks, Core Util, Migrations, Execution, Blocking, Inter-Arrival, Preemption, and Sync; optional cursor-range scoping compares each tab's C1–Cn window independently.
 
 See [Statistics metric tables](#statistics-metric-tables) for column definitions, distribution-chart usage, [CDF overlay](#cdf-overlay), and example plots from `tracedata/example-4cores.btf.gz`.
 
@@ -927,7 +927,7 @@ It shows (in panel order):
 - **Interval Analysis** — per interval id: count, min/avg/max/p95 duration of paired start→stop spans; pairing uses `tid` in the note when present; click a row for a duration plot; click a scatter point to jump and add an annotation at the interval start (collapsible)
 - **Tag Analysis** — per `tag0_event`…`tag7_event` STI channel: sample count, min/avg/max/p95 of the tag value; click a row to open a scatter + histogram plot (collapsible; shown only when the trace contains tag STI samples)
 
-**Export CSV** / **Export HTML** respect the current cursor scope. **Export CSV** includes summary tables for every statistics section and a **Core Affinity Violations** sub-table listing every mutex that crossed core boundaries, plus **Load Balance Score**, σ, and Gini coefficient under Core Utilisation. **Export HTML** adds the same summaries plus an **Analysis Findings** card near the top (same heuristics as toolbar **Analysis** — load imbalance, WCET/CPU hotspots, blocking, L/M/H priority inversion, core thrashing / hot pairs, deadline breaches, tick health, sync/mutex bounces), embeds the **Load Balance Score** gauge as a self-contained SVG `<img>` (data URI) under Core Utilisation, and detail sub-tables for **Priority Inheritance** (boost episodes), **Mutex / Semaphore** (pairing issues with bounce warnings, and hold episodes with take/give core columns), and **Interval Analysis** (individual instances). **Trace Compare…** compares summary, top tasks, and core migrations between two open tabs; enable **Limit to each tab's cursor range** to scope each side to its own C1–Cn window. Open metrics charts update live when cursors move or scope is toggled; each trace tab remembers its own open chart when you switch tabs.
+**Export CSV** / **Export HTML** respect the current cursor scope. **Export CSV** includes summary tables for every statistics section and a **Core Affinity Violations** sub-table listing every mutex that crossed core boundaries, plus **Load Balance Score**, σ, and Gini coefficient under Core Utilisation. **Export HTML** adds the same summaries plus an **Analysis Findings** card near the top (same heuristics as toolbar **Analysis** — load imbalance, WCET/CPU hotspots, blocking, L/M/H priority inversion, core thrashing / hot pairs, deadline breaches, tick health, sync/mutex bounces), embeds the **Load Balance Score** gauge as a self-contained SVG `<img>` (data URI) under Core Utilisation, and detail sub-tables for **Priority Inheritance** (boost episodes), **Mutex / Semaphore** (pairing issues with bounce warnings, and hold episodes with take/give core columns), and **Interval Analysis** (individual instances). **Trace Compare…** diffs Summary (incl. load balance + tick health), Top Tasks, Core Util, Migrations, Execution, Blocking, Inter-Arrival, Preemption, and Sync between two open tabs; enable **Limit to each tab's cursor range** to scope each side to its own C1–Cn window. Open metrics charts update live when cursors move or scope is toggled; each trace tab remembers its own open chart when you switch tabs.
 
 Full column definitions, chart axis meanings, and example plots: [Statistics metric tables](#statistics-metric-tables).
 
@@ -1740,7 +1740,7 @@ Compare two traces you already have open side-by-side:
 2. In the **Statistics** panel footer, click **Trace Compare…** (enabled when two or more tabs are loaded).
 3. Choose **Trace A** and **Trace B** from the dropdowns.
 4. Optionally check **Limit to each tab's cursor range** to compare metrics within C1–Cn on each trace (requires 2+ cursors per tab).
-5. Switch between **Summary**, **Top Tasks**, and **Core Migrations** tabs.
+5. Switch between **Summary**, **Top Tasks**, **Core Util**, **Core Migrations**, **Execution**, **Blocking**, **Inter-Arrival**, **Preemption**, and **Sync** tabs.
 
 By default, compare views use the **full trace**. With the cursor-range checkbox enabled, each side uses that tab's own cursor window independently.
 
@@ -1753,10 +1753,16 @@ By default, compare views use the **full trace**. With the cursor-range checkbox
 | Context switches | Total across all cores |
 | Core gap avg / max | Idle time between consecutive slices on each core |
 | Migrations (total) / Migrated tasks | Core-migration counts |
+| Load Balance Score / σ | Same Gini-based score and util stddev as Statistics Core Utilisation |
+| Tick health / mode / count / missed | Same Trace Health (TICK) summary as Statistics |
 
 Each row shows Trace A, Trace B, and **Δ** (signed difference).
 
 **Top Tasks** — top 10 user tasks by CPU% from each trace, unioned by display name (`Name[id]`). Tasks present in only one trace show **—** for the missing side.
+
+**Core Util** — per-core utilisation % (IDLE/TICK excluded), A vs B with Δ.
+
+**Execution** / **Blocking** / **Inter-Arrival** — top tasks by sample count with Runs/Gaps, Avg, Max, and Δ (aligned with the Statistics metric tables).
 
 **Core Migrations** — same columns as the Statistics panel, compared side-by-side:
 
@@ -1770,6 +1776,10 @@ Each row shows Trace A, Trace B, and **Δ** (signed difference).
 | **Dwell A** / **B** | Average on-CPU slice duration per trace |
 | **Dwell Δ** | Signed difference of average dwell time (A − B) |
 | **Ping A** / **B** | Ping-pong count in each trace |
+| **Cores A** / **B** | Distinct cores used in scope |
+| **Primary A** / **B** | Primary core and % of on-CPU time |
+
+**Preemption** / **Sync** — victim totals and sync-object aggregates (holds, issues, lock-bounce / affinity violations, mutex/sem/queue counts).
 
 Use this to compare builds, configurations, or runs of the same workload without merging traces manually.
 

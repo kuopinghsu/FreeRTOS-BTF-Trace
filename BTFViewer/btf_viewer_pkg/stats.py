@@ -2144,13 +2144,13 @@ class _StatsSectionGrip(QWidget):
         p.end()
 
 class _TraceCompareDialog(QDialog):
-    """Compare summary, top tasks, migrations, blocking, preemption, and sync between two tabs."""
+    """Compare summary and Statistics-aligned metrics between two tabs."""
 
     def __init__(self, win: "MainWindow", parent=None) -> None:
         super().__init__(parent or win)
         self.setWindowTitle("Trace Compare")
         self.setModal(True)
-        self.resize(900, 520)
+        self.resize(980, 560)
         lay = QVBoxLayout(self)
         row = QHBoxLayout()
         row.addWidget(QLabel("Trace A:"))
@@ -2173,28 +2173,45 @@ class _TraceCompareDialog(QDialog):
         self._top_table = QTableWidget(0, 4)
         self._top_table.setHorizontalHeaderLabels(
             ["Task", "CPU% A", "CPU% B", "Δ"])
-        self._mig_table = QTableWidget(0, 12)
+        self._core_util_table = QTableWidget(0, 4)
+        self._core_util_table.setHorizontalHeaderLabels(
+            ["Core", "Util% A", "Util% B", "Δ"])
+        self._mig_table = QTableWidget(0, 16)
         self._mig_table.setHorizontalHeaderLabels(
             ["Task", "Migr A", "Migr B", "Δ", "Rate A", "Rate B", "Rate Δ",
-             "Dwell A", "Dwell B", "Dwell Δ", "Ping A", "Ping B"])
-        self._block_table = QTableWidget(0, 6)
+             "Dwell A", "Dwell B", "Dwell Δ", "Ping A", "Ping B",
+             "Cores A", "Cores B", "Primary A", "Primary B"])
+        self._exec_table = QTableWidget(0, 8)
+        self._exec_table.setHorizontalHeaderLabels(
+            ["Task", "Runs A", "Runs B", "Avg A", "Avg B", "Max A", "Max B", "Δ max"])
+        self._block_table = QTableWidget(0, 8)
         self._block_table.setHorizontalHeaderLabels(
-            ["Task", "Gaps A", "Gaps B", "Avg A", "Avg B", "Δ avg"])
+            ["Task", "Gaps A", "Gaps B", "Avg A", "Avg B", "Max A", "Max B", "Δ avg"])
+        self._inter_table = QTableWidget(0, 8)
+        self._inter_table.setHorizontalHeaderLabels(
+            ["Task", "Runs A", "Runs B", "Avg A", "Avg B", "Max A", "Max B", "Δ avg"])
         self._preempt_table = QTableWidget(0, 6)
         self._preempt_table.setHorizontalHeaderLabels(
             ["Victim", "Count A", "Count B", "Δ", "Total A", "Total B"])
         self._sync_table = QTableWidget(0, 4)
         self._sync_table.setHorizontalHeaderLabels(
             ["Metric", "Trace A", "Trace B", "Δ"])
-        for tbl in (self._summary_table, self._top_table, self._mig_table,
-                    self._block_table, self._preempt_table, self._sync_table):
+        self._all_tables = (
+            self._summary_table, self._top_table, self._core_util_table,
+            self._mig_table, self._exec_table, self._block_table,
+            self._inter_table, self._preempt_table, self._sync_table,
+        )
+        for tbl in self._all_tables:
             tbl.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
             tbl.verticalHeader().setVisible(False)
             tbl.horizontalHeader().setStretchLastSection(True)
         self._pages.addTab(self._summary_table, "Summary")
         self._pages.addTab(self._top_table, "Top Tasks")
+        self._pages.addTab(self._core_util_table, "Core Util")
         self._pages.addTab(self._mig_table, "Core Migrations")
+        self._pages.addTab(self._exec_table, "Execution")
         self._pages.addTab(self._block_table, "Blocking")
+        self._pages.addTab(self._inter_table, "Inter-Arrival")
         self._pages.addTab(self._preempt_table, "Preemption")
         self._pages.addTab(self._sync_table, "Sync")
         lay.addWidget(self._pages, 1)
@@ -2251,6 +2268,15 @@ class _TraceCompareDialog(QDialog):
             return None
         return self._win._tabs[idx].trace
 
+    def _compare_args(self):
+        ta = self._trace_for_combo(self._combo_a)
+        tb = self._trace_for_combo(self._combo_b)
+        if ta is None or tb is None:
+            return None
+        lo_a, hi_a = self._range_for_trace(self._combo_a)
+        lo_b, hi_b = self._range_for_trace(self._combo_b)
+        return ta, tb, lo_a, hi_a, lo_b, hi_b
+
     @staticmethod
     def _fill_table(table: QTableWidget, rows: List[List], left_cols: int = 1) -> None:
         table.setRowCount(len(rows))
@@ -2264,31 +2290,28 @@ class _TraceCompareDialog(QDialog):
                 table.setItem(ri, ci, item)
 
     def _refresh(self) -> None:
-        ta = self._trace_for_combo(self._combo_a)
-        tb = self._trace_for_combo(self._combo_b)
-        if ta is None or tb is None:
-            for tbl in (self._summary_table, self._top_table, self._mig_table,
-                        self._block_table, self._preempt_table, self._sync_table):
+        args = self._compare_args()
+        if args is None:
+            for tbl in self._all_tables:
                 tbl.setRowCount(0)
             return
-        lo_a, hi_a = self._range_for_trace(self._combo_a)
-        lo_b, hi_b = self._range_for_trace(self._combo_b)
-        (summary, top, mig, blocking, preemption, sync) = _build_trace_compare_rows(
-            ta, tb, lo_a, hi_a, lo_b, hi_b)
-        self._fill_table(self._summary_table, summary)
-        self._fill_table(self._top_table, top)
-        self._fill_table(self._mig_table, mig)
-        self._fill_table(self._block_table, blocking)
-        self._fill_table(self._preempt_table, preemption)
-        self._fill_table(self._sync_table, sync)
+        tables = _build_trace_compare_rows(*args)
+        self._fill_table(self._summary_table, tables.get("summary", []))
+        self._fill_table(self._top_table, tables.get("top", []))
+        self._fill_table(self._core_util_table, tables.get("core_util", []))
+        self._fill_table(self._mig_table, tables.get("migrations", []))
+        self._fill_table(self._exec_table, tables.get("execution", []))
+        self._fill_table(self._block_table, tables.get("blocking", []))
+        self._fill_table(self._inter_table, tables.get("inter_arrival", []))
+        self._fill_table(self._preempt_table, tables.get("preemption", []))
+        self._fill_table(self._sync_table, tables.get("sync", []))
 
     def _tab_name(self, combo: QComboBox) -> str:
         return combo.currentText() or "Trace"
 
     def _export_csv(self) -> None:
-        ta = self._trace_for_combo(self._combo_a)
-        tb = self._trace_for_combo(self._combo_b)
-        if ta is None or tb is None:
+        args = self._compare_args()
+        if args is None:
             QMessageBox.warning(self, "Export CSV", "Select two loaded traces to export.")
             return
 
@@ -2302,16 +2325,12 @@ class _TraceCompareDialog(QDialog):
         if not path:
             return
 
+        tables = _build_trace_compare_rows(*args)
         text = _build_compare_csv(
             self._tab_name(self._combo_a),
             self._tab_name(self._combo_b),
             self._scope_cb.isChecked(),
-            _table_widget_rows(self._summary_table),
-            _table_widget_rows(self._top_table),
-            _table_widget_rows(self._mig_table),
-            _table_widget_rows(self._block_table),
-            _table_widget_rows(self._preempt_table),
-            _table_widget_rows(self._sync_table),
+            tables,
         )
         try:
             with open(path, "w", newline="", encoding="utf-8-sig") as fh:
@@ -2325,9 +2344,8 @@ class _TraceCompareDialog(QDialog):
             wnd.statusBar().showMessage(f"Exported trace compare: {path}", 4000)
 
     def _export_html(self) -> None:
-        ta = self._trace_for_combo(self._combo_a)
-        tb = self._trace_for_combo(self._combo_b)
-        if ta is None or tb is None:
+        args = self._compare_args()
+        if args is None:
             QMessageBox.warning(self, "Export HTML", "Select two loaded traces to export.")
             return
 
@@ -2341,16 +2359,12 @@ class _TraceCompareDialog(QDialog):
         if not path:
             return
 
+        tables = _build_trace_compare_rows(*args)
         report = _build_compare_html(
             self._tab_name(self._combo_a),
             self._tab_name(self._combo_b),
             self._scope_cb.isChecked(),
-            _table_widget_rows(self._summary_table),
-            _table_widget_rows(self._top_table),
-            _table_widget_rows(self._mig_table),
-            _table_widget_rows(self._block_table),
-            _table_widget_rows(self._preempt_table),
-            _table_widget_rows(self._sync_table),
+            tables,
         )
         try:
             with open(path, "w", encoding="utf-8") as fh:
@@ -2362,6 +2376,7 @@ class _TraceCompareDialog(QDialog):
         wnd = self.window()
         if isinstance(wnd, QMainWindow):
             wnd.statusBar().showMessage(f"Exported trace compare: {path}", 4000)
+
 
 class _MigrationHeatmapWidget(QWidget):
     """Paint labelled rows × time-bin migration counts (pairs or core×core matrix)."""

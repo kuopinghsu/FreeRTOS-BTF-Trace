@@ -42,6 +42,7 @@
       <span class="stats-scope-label">{{ scopeRangeLabel }}</span>
     </div>
 
+    <div class="stats-body">
     <!-- Summary and sections (require loaded trace) -->
     <template v-if="trace">
     <div class="stats-summary">
@@ -1827,10 +1828,20 @@
       </div>
     </template>
 
-    <!-- Export -->
+    </template>
+    <div
+      v-else
+      class="range-hint stats-empty-hint"
+    >
+      Open a trace file to view statistics.
+    </div>
+    </div>
+
+    <!-- Export (pinned footer, matches desktop stats panel) -->
     <div class="stats-export-row">
       <button
         class="action-btn"
+        :disabled="!trace"
         title="Export statistics as CSV"
         @click="exportCsv"
       >
@@ -1848,6 +1859,7 @@
       </button>
       <button
         class="action-btn"
+        :disabled="!trace"
         title="Export statistics as HTML report"
         @click="exportHtml"
       >
@@ -1884,13 +1896,6 @@
       >
         Trace Compare…
       </button>
-    </div>
-    </template>
-    <div
-      v-else
-      class="range-hint stats-empty-hint"
-    >
-      Open a trace file to view statistics.
     </div>
   </div>
 
@@ -5033,10 +5038,10 @@ watch(plotData, () => {
 .stats-panel {
   display: flex;
   flex-direction: column;
-  padding: 8px 10px;
+  padding: 0;
   font-size: 11px;
   font-family: monospace;
-  overflow-y: auto;
+  overflow: hidden;
   flex: 1;
   min-height: 0;
   gap: 0;
@@ -5046,9 +5051,17 @@ watch(plotData, () => {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  margin-bottom: 8px;
-  padding-bottom: 6px;
+  margin: 0;
+  padding: 8px 10px 6px;
   border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.stats-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 10px;
 }
 
 .stats-scope-top {
@@ -5511,9 +5524,11 @@ watch(plotData, () => {
 
 .stats-export-row {
   display: flex;
+  flex-direction: column;
   gap: 4px;
-  padding: 6px 8px;
+  padding: 6px 10px 8px;
   border-top: 1px solid var(--border);
+  flex-shrink: 0;
 }
 
 .action-btn {
@@ -5531,12 +5546,17 @@ watch(plotData, () => {
   cursor: pointer;
 }
 
+.action-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .action-btn .export-icon {
   flex-shrink: 0;
   opacity: 0.9;
 }
 
-.action-btn:hover {
+.action-btn:hover:not(:disabled) {
   background: var(--tb-btn-hover);
   color: var(--fg);
 }

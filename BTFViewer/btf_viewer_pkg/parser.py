@@ -3189,6 +3189,146 @@ def _migration_task_heatmap_data(trace: "BtfTrace", from_core: str, to_core: str
         grid.append(counts)
     return rows, grid, time_bins, t_min, t_hi, bin_w
 
+def _gini_coefficient(values: List[float]) -> float:
+    """Gini coefficient of non-negative values (0 = equality, 1 = max inequality)."""
+    n = len(values)
+    if n < 2:
+        return 0.0
+    total = sum(values)
+    if total == 0.0:
+        return 0.0
+    sorted_v = sorted(values)
+    cumsum = 0.0
+    gini_num = 0.0
+    for i, v in enumerate(sorted_v):
+        cumsum += v
+        gini_num += cumsum
+    gini = (n + 1.0) / n - (2.0 * gini_num) / (n * total)
+    return max(0.0, min(1.0, gini))
+
+
+def _core_util_stddev(values: List[float]) -> float:
+    """Population standard deviation of core utilisation percentages."""
+    n = len(values)
+    if n < 2:
+        return 0.0
+    mean = sum(values) / n
+    return math.sqrt(sum((v - mean) ** 2 for v in values) / n)
+
+
+def _core_util_pct_rows(
+    trace: "BtfTrace",
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> List[Tuple[str, float]]:
+    """Per-core util % excluding IDLE/TICK (same logic as StatsPanel._core_util_rows)."""
+    if lo is not None and hi is not None:
+        total_ns = hi - lo
+    else:
+        total_ns = trace.time_max - trace.time_min
+    if total_ns <= 0:
+        return []
+    rows: List[Tuple[str, float]] = []
+    for core in trace.core_names:
+        segs = trace.core_segs.get(core, [])
+        if lo is not None and hi is not None:
+            active_ns = sum(
+                _seg_overlap_ns(s, lo, hi) for s in segs
+                if (_tn := _parse_task_name(s.task)[2]) != "TICK"
+                and not _is_idle_task_name(_tn)
+            )
+        else:
+            active_ns = sum(
+                s.end - s.start for s in segs
+                if (_tn := _parse_task_name(s.task)[2]) != "TICK"
+                and not _is_idle_task_name(_tn)
+            )
+        rows.append((core, 100.0 * active_ns / total_ns))
+    return rows
+
+
+def _exec_slice_samples(
+    segs: list,
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> List[int]:
+    if lo is not None and hi is not None:
+        return [s.end - s.start for s in segs
+                if (s.end - s.start) > 0 and _seg_fully_in_range(s, lo, hi)]
+    return [s.end - s.start for s in segs if (s.end - s.start) > 0]
+
+
+def _inter_arrival_samples(
+    segs: list,
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> List[int]:
+    starts = sorted(s.start for s in segs)
+    samples: List[int] = []
+    for i in range(1, len(starts)):
+        gap = starts[i] - starts[i - 1]
+        if gap <= 0:
+            continue
+        if lo is not None and hi is not None and (starts[i] < lo or starts[i] > hi):
+            continue
+        samples.append(gap)
+    return samples
+
+
+def _summarize_time_samples(samples: List[int], scale: str) -> Optional[dict]:
+    if not samples:
+        return None
+    vals = sorted(samples)
+    n = len(vals)
+    p95_idx = min(n - 1, math.ceil(n * 0.95) - 1)
+    avg_ns = int(round(sum(vals) / n))
+    min_ns = vals[0]
+    max_ns = vals[-1]
+    p95_ns = vals[p95_idx]
+    return {
+        "count": n,
+        "min_ns": min_ns,
+        "avg_ns": avg_ns,
+        "max_ns": max_ns,
+        "p95_ns": p95_ns,
+        "min": _format_time(min_ns, scale),
+        "avg": _format_time(avg_ns, scale),
+        "max": _format_time(max_ns, scale),
+        "p95": _format_time(p95_ns, scale),
+    }
+
+
+def _task_metric_compare_by_name(
+    trace: "BtfTrace",
+    sample_fn,
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+    *,
+    include_cpu: bool = False,
+) -> Dict[str, dict]:
+    """Per-task time-sample summary keyed by display name (excludes IDLE/TICK)."""
+    scale = trace.time_scale
+    if lo is not None and hi is not None:
+        span_ns = max(1, hi - lo)
+    else:
+        span_ns = max(1, trace.time_max - trace.time_min)
+    out: Dict[str, dict] = {}
+    for mk, segs in trace.seg_map_by_merge_key.items():
+        raw = trace.task_repr.get(mk, mk)
+        _, _, tname = _parse_task_name(raw)
+        if _is_idle_task_name(tname) or tname == "TICK":
+            continue
+        samples = sample_fn(segs, lo, hi)
+        summary = _summarize_time_samples(samples, scale)
+        if summary is None:
+            continue
+        entry = dict(summary)
+        if include_cpu:
+            entry["cpu"] = 100.0 * sum(samples) / span_ns
+        out[_task_display_name(raw)] = entry
+    return out
+
+
 def _trace_summary_snapshot(trace: "BtfTrace",
                             lo: Optional[int] = None, hi: Optional[int] = None) -> dict:
     """Summary metrics for trace compare (optional cursor scope)."""
@@ -3211,6 +3351,23 @@ def _trace_summary_snapshot(trace: "BtfTrace",
         migrations = len(trace.migrations)
         mig_tasks = sum(1 for mk in trace.tasks if _is_migrated_task(trace, mk))
         segments = len(trace.segments)
+
+    util_rows = _core_util_pct_rows(trace, lo, hi)
+    pcts = [pct for _, pct in util_rows]
+    load_balance_score = None
+    load_balance_sigma = None
+    if len(pcts) >= 2 and sum(pcts) > 0.0:
+        gini = _gini_coefficient(pcts)
+        load_balance_score = max(0.0, 100.0 * (1.0 - gini))
+        load_balance_sigma = _core_util_stddev(pcts)
+
+    tick = _tick_health_report(trace, lo, hi)
+    tick_count = tick.get("tick_count", 0)
+    if tick_count:
+        tick_mode = "TICKLESS" if tick.get("is_tickless") else "TICK"
+    else:
+        tick_mode = "—"
+
     return {
         "span_ns": span,
         "tasks": len(trace.tasks),
@@ -3222,6 +3379,12 @@ def _trace_summary_snapshot(trace: "BtfTrace",
         "migrations": migrations,
         "migrated_tasks": mig_tasks,
         "time_scale": trace.time_scale,
+        "load_balance_score": load_balance_score,
+        "load_balance_sigma": load_balance_sigma,
+        "tick_health": tick.get("health", "unknown"),
+        "tick_mode": tick_mode,
+        "tick_count": tick_count,
+        "missed_ticks": tick.get("missed_estimate", 0),
     }
 
 def _top_tasks_cpu_by_name(trace: "BtfTrace", limit: int = 10,
@@ -3265,17 +3428,23 @@ def _blocking_compare_by_name(
     out: Dict[str, dict] = {}
     for mk, segs in trace.seg_map_by_merge_key.items():
         samples = _blocking_time_samples(segs, lo, hi)
-        if not samples:
+        summary = _summarize_time_samples(samples, scale)
+        if summary is None:
             continue
         raw = trace.task_repr.get(mk, mk)
         _, _, tname = _parse_task_name(raw)
         if _is_idle_task_name(tname) or tname == "TICK":
             continue
-        avg_ns = int(round(sum(samples) / len(samples)))
         out[_task_display_name(raw)] = {
-            "gaps": len(samples),
-            "avg_ns": avg_ns,
-            "avg": _format_time(avg_ns, scale),
+            "gaps": summary["count"],
+            "avg_ns": summary["avg_ns"],
+            "avg": summary["avg"],
+            "min_ns": summary["min_ns"],
+            "min": summary["min"],
+            "max_ns": summary["max_ns"],
+            "max": summary["max"],
+            "p95_ns": summary["p95_ns"],
+            "p95": summary["p95"],
         }
     return out
 
@@ -3300,12 +3469,19 @@ def _sync_compare_summary(
     hi: Optional[int] = None,
 ) -> dict:
     if not trace.has_sync_object_instrumentation:
-        return {"objects": 0, "holds": 0, "issues": 0, "queue": 0, "mutex": 0, "sem": 0}
+        return {
+            "objects": 0, "holds": 0, "issues": 0, "queue": 0, "mutex": 0, "sem": 0,
+            "bounces": 0, "lock_bounce_migrations": 0,
+        }
     rows = _sync_object_stats_rows(trace, lo, hi)
-    out = {"objects": len(rows), "holds": 0, "issues": 0, "queue": 0, "mutex": 0, "sem": 0}
+    out = {
+        "objects": len(rows), "holds": 0, "issues": 0, "queue": 0, "mutex": 0, "sem": 0,
+        "bounces": 0, "lock_bounce_migrations": 0,
+    }
     for row in rows:
         out["holds"] += row[4]
         out["issues"] += row[5]
+        out["bounces"] += row[10]
         kind = row[1]
         if kind == "queue":
             out["queue"] += 1
@@ -3313,6 +3489,11 @@ def _sync_compare_summary(
             out["mutex"] += 1
         elif kind == "sem":
             out["sem"] += 1
+    bounce_ns = trace.lock_bounce_migration_ns
+    if lo is not None and hi is not None:
+        out["lock_bounce_migrations"] = sum(1 for ns in bounce_ns if lo <= ns <= hi)
+    else:
+        out["lock_bounce_migrations"] = len(bounce_ns)
     return out
 
 def _cursor_range_for_tab(win: "MainWindow", tab_idx: int) -> Tuple[Optional[int], Optional[int]]:
@@ -3367,11 +3548,21 @@ def _build_trace_compare_rows(
     hi_a: Optional[int] = None,
     lo_b: Optional[int] = None,
     hi_b: Optional[int] = None,
-) -> Tuple[List[List], List[List], List[List], List[List], List[List], List[List]]:
-    """Summary, top-task, migration, blocking, preemption, and sync compare tables."""
+) -> Dict[str, List[List]]:
+    """Build all Trace Compare tables as a dict of row lists."""
     a = _trace_summary_snapshot(trace_a, lo_a, hi_a)
     b = _trace_summary_snapshot(trace_b, lo_b, hi_b)
     scale = a["time_scale"]
+
+    def _lb_score(v) -> str:
+        return f"{v:.0f}%" if v is not None else "—"
+
+    def _lb_sigma(v) -> str:
+        return f"{v:.1f}%" if v is not None else "—"
+
+    def _tick_health_label(v: str) -> str:
+        return (v or "unknown").upper() if v != "unknown" else "unknown"
+
     summary_rows = [
         ["Span",
          _format_time(a["span_ns"], scale),
@@ -3396,6 +3587,29 @@ def _build_trace_compare_rows(
          _fmt_signed_int_delta(a["migrations"] - b["migrations"])],
         ["Migrated tasks", a["migrated_tasks"], b["migrated_tasks"],
          _fmt_signed_int_delta(a["migrated_tasks"] - b["migrated_tasks"])],
+        ["Load Balance Score",
+         _lb_score(a["load_balance_score"]),
+         _lb_score(b["load_balance_score"]),
+         _fmt_signed_pct_delta(
+             (a["load_balance_score"] or 0.0) - (b["load_balance_score"] or 0.0))
+         if a["load_balance_score"] is not None and b["load_balance_score"] is not None
+         else "—"],
+        ["Load Balance σ",
+         _lb_sigma(a["load_balance_sigma"]),
+         _lb_sigma(b["load_balance_sigma"]),
+         _fmt_signed_pct_delta(
+             (a["load_balance_sigma"] or 0.0) - (b["load_balance_sigma"] or 0.0))
+         if a["load_balance_sigma"] is not None and b["load_balance_sigma"] is not None
+         else "—"],
+        ["Tick health",
+         _tick_health_label(a["tick_health"]),
+         _tick_health_label(b["tick_health"]),
+         "—"],
+        ["Tick mode", a["tick_mode"], b["tick_mode"], "—"],
+        ["Tick count", a["tick_count"], b["tick_count"],
+         _fmt_signed_int_delta(a["tick_count"] - b["tick_count"])],
+        ["Missed ticks (est.)", a["missed_ticks"], b["missed_ticks"],
+         _fmt_signed_int_delta(a["missed_ticks"] - b["missed_ticks"])],
     ]
 
     map_a = _top_tasks_cpu_by_name(trace_a, lo=lo_a, hi=hi_a)
@@ -3410,6 +3624,22 @@ def _build_trace_compare_rows(
         b_val = pb if pb is not None else 0.0
         top_rows.append([
             name,
+            f"{pa:.1f}" if pa is not None else "—",
+            f"{pb:.1f}" if pb is not None else "—",
+            _fmt_signed_pct_delta(a_val - b_val),
+        ])
+
+    util_a = {c: p for c, p in _core_util_pct_rows(trace_a, lo_a, hi_a)}
+    util_b = {c: p for c, p in _core_util_pct_rows(trace_b, lo_b, hi_b)}
+    core_names = sorted(set(util_a) | set(util_b), key=_core_sort_key_tuple)
+    core_util_rows: List[List] = []
+    for core in core_names:
+        pa = util_a.get(core)
+        pb = util_b.get(core)
+        a_val = pa if pa is not None else 0.0
+        b_val = pb if pb is not None else 0.0
+        core_util_rows.append([
+            core,
             f"{pa:.1f}" if pa is not None else "—",
             f"{pb:.1f}" if pb is not None else "—",
             _fmt_signed_pct_delta(a_val - b_val),
@@ -3436,11 +3666,41 @@ def _build_trace_compare_rows(
         rb_dtu = rb[14] if rb else -1
         pa = ra[7] if ra else 0
         pb = rb[7] if rb else 0
+        cores_a = ra[3] if ra else "—"
+        cores_b = rb[3] if rb else "—"
+        primary_a = (f"{ra[5]} {ra[6]:.0f}%" if ra else "—")
+        primary_b = (f"{rb[5]} {rb[6]:.0f}%" if rb else "—")
         mig_rows.append([
             name, ma, mb, ma - mb, ra_rate, rb_rate,
             _fmt_signed_rate_delta(ra_rps, rb_rps),
             ra_dwell, rb_dwell, _fmt_signed_dwell_delta(ra_dtu, rb_dtu, scale),
-            pa, pb,
+            pa, pb, cores_a, cores_b, primary_a, primary_b,
+        ])
+
+    exec_a = _task_metric_compare_by_name(
+        trace_a, _exec_slice_samples, lo_a, hi_a, include_cpu=True)
+    exec_b = _task_metric_compare_by_name(
+        trace_b, _exec_slice_samples, lo_b, hi_b, include_cpu=True)
+    exec_names = sorted(
+        set(exec_a) | set(exec_b),
+        key=lambda n: (-max(exec_a.get(n, {}).get("count", 0),
+                            exec_b.get(n, {}).get("count", 0)), n.lower()),
+    )[:15]
+    exec_rows: List[List] = []
+    for name in exec_names:
+        ea = exec_a.get(name)
+        eb = exec_b.get(name)
+        max_a = ea["max_ns"] if ea else 0
+        max_b = eb["max_ns"] if eb else 0
+        exec_rows.append([
+            name,
+            ea["count"] if ea else 0,
+            eb["count"] if eb else 0,
+            ea["avg"] if ea else "—",
+            eb["avg"] if eb else "—",
+            ea["max"] if ea else "—",
+            eb["max"] if eb else "—",
+            _fmt_signed_time_delta(max_a - max_b, scale),
         ])
 
     block_a = _blocking_compare_by_name(trace_a, lo_a, hi_a)
@@ -3462,6 +3722,34 @@ def _build_trace_compare_rows(
             bb["gaps"] if bb else 0,
             ba["avg"] if ba else "—",
             bb["avg"] if bb else "—",
+            ba["max"] if ba else "—",
+            bb["max"] if bb else "—",
+            _fmt_signed_time_delta(avg_a - avg_b, scale),
+        ])
+
+    ia_a = _task_metric_compare_by_name(
+        trace_a, _inter_arrival_samples, lo_a, hi_a)
+    ia_b = _task_metric_compare_by_name(
+        trace_b, _inter_arrival_samples, lo_b, hi_b)
+    ia_names = sorted(
+        set(ia_a) | set(ia_b),
+        key=lambda n: (-max(ia_a.get(n, {}).get("count", 0),
+                            ia_b.get(n, {}).get("count", 0)), n.lower()),
+    )[:15]
+    inter_rows: List[List] = []
+    for name in ia_names:
+        xa = ia_a.get(name)
+        xb = ia_b.get(name)
+        avg_a = xa["avg_ns"] if xa else 0
+        avg_b = xb["avg_ns"] if xb else 0
+        inter_rows.append([
+            name,
+            xa["count"] if xa else 0,
+            xb["count"] if xb else 0,
+            xa["avg"] if xa else "—",
+            xb["avg"] if xb else "—",
+            xa["max"] if xa else "—",
+            xb["max"] if xb else "—",
             _fmt_signed_time_delta(avg_a - avg_b, scale),
         ])
 
@@ -3496,6 +3784,10 @@ def _build_trace_compare_rows(
          _fmt_signed_int_delta(sa["holds"] - sb["holds"])],
         ["Issues", sa["issues"], sb["issues"],
          _fmt_signed_int_delta(sa["issues"] - sb["issues"])],
+        ["Lock-bounce migrations", sa["lock_bounce_migrations"], sb["lock_bounce_migrations"],
+         _fmt_signed_int_delta(sa["lock_bounce_migrations"] - sb["lock_bounce_migrations"])],
+        ["Core Affinity Violations (bounce)", sa["bounces"], sb["bounces"],
+         _fmt_signed_int_delta(sa["bounces"] - sb["bounces"])],
         ["Mutex objects", sa["mutex"], sb["mutex"],
          _fmt_signed_int_delta(sa["mutex"] - sb["mutex"])],
         ["Semaphore objects", sa["sem"], sb["sem"],
@@ -3504,7 +3796,17 @@ def _build_trace_compare_rows(
          _fmt_signed_int_delta(sa["queue"] - sb["queue"])],
     ]
 
-    return summary_rows, top_rows, mig_rows, block_rows, pre_rows, sync_rows
+    return {
+        "summary": summary_rows,
+        "top": top_rows,
+        "core_util": core_util_rows,
+        "migrations": mig_rows,
+        "execution": exec_rows,
+        "blocking": block_rows,
+        "inter_arrival": inter_rows,
+        "preemption": pre_rows,
+        "sync": sync_rows,
+    }
 
 _CSV_FORMULA_LEAD_CHARS = ("=", "+", "-", "@", "\t", "\r")
 
@@ -3551,87 +3853,76 @@ def _table_widget_rows(table: "QTableWidget") -> List[List[str]]:
     return rows
 
 def _build_compare_csv(name_a: str, name_b: str, scope_enabled: bool,
-                         summary: List[List], top: List[List],
-                         mig: List[List],
-                         blocking: Optional[List[List]] = None,
-                         preemption: Optional[List[List]] = None,
-                         sync: Optional[List[List]] = None) -> str:
+                       tables: Dict[str, List[List]]) -> str:
     lines: List[str] = []
     lines.append(f"Trace A,{_compare_csv_cell(name_a)}")
     lines.append(f"Trace B,{_compare_csv_cell(name_b)}")
     lines.append(f"Cursor scope per tab,{'yes' if scope_enabled else 'no'}")
     lines.append("")
 
-    lines.append("Summary")
-    lines.append("Metric,Trace A,Trace B,Δ")
-    for row in summary:
-        if len(row) >= 4:
-            lines.append(",".join(_compare_csv_cell(c) for c in row[:4]))
-
-    lines.append("")
-    lines.append("Top Tasks")
-    lines.append("Task,CPU% A,CPU% B,Δ")
-    for row in top:
-        if len(row) >= 4:
-            lines.append(",".join(_compare_csv_cell(c) for c in row[:4]))
-
-    lines.append("")
-    lines.append("Core Migrations")
-    lines.append("Task,Migrations A,Migrations B,Δ,Rate A,Rate B,Rate Δ,Dwell A,Dwell B,Dwell Δ,Ping-pong A,Ping-pong B")
-    for row in mig:
-        if len(row) >= 12:
-            lines.append(",".join(_compare_csv_cell(c) for c in row[:12]))
-
-    if blocking:
+    def _section(title: str, header: str, rows: List[List], ncols: int) -> None:
+        lines.append(title)
+        lines.append(header)
+        for row in rows or []:
+            if len(row) >= ncols:
+                lines.append(",".join(_compare_csv_cell(c) for c in row[:ncols]))
         lines.append("")
-        lines.append("Blocking Time")
-        lines.append("Task,Gaps A,Gaps B,Avg A,Avg B,Δ avg")
-        for row in blocking:
-            if len(row) >= 6:
-                lines.append(",".join(_compare_csv_cell(c) for c in row[:6]))
 
-    if preemption:
-        lines.append("")
-        lines.append("Preemption Chains")
-        lines.append("Victim,Count A,Count B,Δ,Total A,Total B")
-        for row in preemption:
-            if len(row) >= 6:
-                lines.append(",".join(_compare_csv_cell(c) for c in row[:6]))
+    _section("Summary", "Metric,Trace A,Trace B,Δ", tables.get("summary", []), 4)
+    _section("Top Tasks", "Task,CPU% A,CPU% B,Δ", tables.get("top", []), 4)
+    _section("Core Utilisation", "Core,Util% A,Util% B,Δ", tables.get("core_util", []), 4)
+    _section(
+        "Core Migrations",
+        "Task,Migrations A,Migrations B,Δ,Rate A,Rate B,Rate Δ,"
+        "Dwell A,Dwell B,Dwell Δ,Ping-pong A,Ping-pong B,Cores A,Cores B,Primary A,Primary B",
+        tables.get("migrations", []), 16)
+    _section(
+        "Execution Time",
+        "Task,Runs A,Runs B,Avg A,Avg B,Max A,Max B,Δ max",
+        tables.get("execution", []), 8)
+    _section(
+        "Blocking Time",
+        "Task,Gaps A,Gaps B,Avg A,Avg B,Max A,Max B,Δ avg",
+        tables.get("blocking", []), 8)
+    _section(
+        "Inter-Arrival",
+        "Task,Runs A,Runs B,Avg A,Avg B,Max A,Max B,Δ avg",
+        tables.get("inter_arrival", []), 8)
+    _section(
+        "Preemption Chains",
+        "Victim,Count A,Count B,Δ,Total A,Total B",
+        tables.get("preemption", []), 6)
+    _section("Sync Objects", "Metric,Trace A,Trace B,Δ", tables.get("sync", []), 4)
 
-    if sync:
-        lines.append("")
-        lines.append("Sync Objects")
-        lines.append("Metric,Trace A,Trace B,Δ")
-        for row in sync:
-            if len(row) >= 4:
-                lines.append(",".join(_compare_csv_cell(c) for c in row[:4]))
-
+    while lines and lines[-1] == "":
+        lines.pop()
     return "\n".join(lines)
 
 _COMPARE_HTML_STYLE = """
   :root { --bg:#e9edf3; --paper:#fff; --ink:#182230; --muted:#5f6f82; --line:#d9e0ea; --header:#16324f; }
   * { box-sizing:border-box; }
   body { margin:0; padding:28px; font-family:"Segoe UI",Arial,sans-serif; color:var(--ink); background:var(--bg); }
-  .report { max-width:960px; margin:0 auto; }
+  .report { max-width:min(1280px, 100%); margin:0 auto; }
   .report-head { background:linear-gradient(135deg,var(--header),#21496f); color:#f3f7fd; border-radius:14px; padding:20px 24px; margin-bottom:18px; }
   h1 { margin:0; font-size:26px; }
   .sub { margin-top:6px; color:#cfe1f7; font-size:13px; }
-  .report-card { margin:14px 0; background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:12px 14px; }
+  .report-card { margin:14px 0; background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:12px 14px; overflow:hidden; }
   h2 { margin:0 0 10px; color:#123355; font-size:17px; }
-  table { border-collapse:collapse; width:100%; }
-  th,td { border-bottom:1px solid var(--line); padding:8px 10px; font-size:13px; text-align:right; }
+  .table-scroll { overflow-x:auto; -webkit-overflow-scrolling:touch; max-width:100%; }
+  table { border-collapse:collapse; width:max-content; min-width:100%; }
+  th,td { border-bottom:1px solid var(--line); padding:6px 8px; font-size:12px; text-align:right; white-space:nowrap; }
   th:first-child,td:first-child { text-align:left; }
   thead th { background:#f1f5fb; font-weight:600; }
+  thead th:first-child, tbody td:first-child { position:sticky; left:0; z-index:1; }
+  thead th:first-child { background:#f1f5fb; }
+  tbody td:first-child { background:#fff; }
   tbody tr:nth-child(even) td { background:#f7f9fc; }
-  .empty { text-align:center; color:var(--muted); }
+  tbody tr:nth-child(even) td:first-child { background:#f7f9fc; }
+  .empty { text-align:center; color:var(--muted); white-space:normal; }
 """
 
 def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
-                        summary: List[List], top: List[List],
-                        mig: List[List],
-                        blocking: Optional[List[List]] = None,
-                        preemption: Optional[List[List]] = None,
-                        sync: Optional[List[List]] = None) -> str:
+                        tables: Dict[str, List[List]]) -> str:
     scope_note = (
         "Each side uses its own tab cursor range (C1–Cn) when 2+ cursors are placed."
         if scope_enabled else "Full trace span on each side.")
@@ -3648,12 +3939,48 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
             parts.append(f"<tr>{cells}</tr>")
         return "".join(parts)
 
-    summary_body = _rows_html(summary, 4, "No data")
-    top_body = _rows_html(top, 4, "No user tasks in either trace")
-    mig_body = _rows_html(mig, 12, "No migrated tasks in either trace")
-    block_body = _rows_html(blocking or [], 6, "No blocking samples in either trace")
-    pre_body = _rows_html(preemption or [], 6, "No preemption chains in either trace")
-    sync_body = _rows_html(sync or [], 4, "No sync instrumentation in either trace")
+    def _card(title: str, headers: List[str], rows: List[List], empty: str) -> str:
+        cols = len(headers)
+        th = "".join(f"<th>{_esc(h)}</th>" for h in headers)
+        return (
+            f'<section class="report-card"><h2>{_esc(title)}</h2>'
+            f'<div class="table-scroll">'
+            f'<table><thead><tr>{th}</tr></thead>'
+            f'<tbody>{_rows_html(rows, cols, empty)}</tbody></table>'
+            f'</div></section>'
+        )
+
+    sections = [
+        _card("Summary",
+              ["Metric", "Trace A", "Trace B", "Δ"],
+              tables.get("summary", []), "No data"),
+        _card("Top Tasks",
+              ["Task", "CPU% A", "CPU% B", "Δ"],
+              tables.get("top", []), "No user tasks in either trace"),
+        _card("Core Utilisation",
+              ["Core", "Util% A", "Util% B", "Δ"],
+              tables.get("core_util", []), "No core util data"),
+        _card("Core Migrations",
+              ["Task", "Migr A", "Migr B", "Δ", "Rate A", "Rate B", "Rate Δ",
+               "Dwell A", "Dwell B", "Dwell Δ", "Ping A", "Ping B",
+               "Cores A", "Cores B", "Primary A", "Primary B"],
+              tables.get("migrations", []), "No migrated tasks in either trace"),
+        _card("Execution Time",
+              ["Task", "Runs A", "Runs B", "Avg A", "Avg B", "Max A", "Max B", "Δ max"],
+              tables.get("execution", []), "No execution samples in either trace"),
+        _card("Blocking Time",
+              ["Task", "Gaps A", "Gaps B", "Avg A", "Avg B", "Max A", "Max B", "Δ avg"],
+              tables.get("blocking", []), "No blocking samples in either trace"),
+        _card("Inter-Arrival",
+              ["Task", "Runs A", "Runs B", "Avg A", "Avg B", "Max A", "Max B", "Δ avg"],
+              tables.get("inter_arrival", []), "No inter-arrival samples in either trace"),
+        _card("Preemption Chains",
+              ["Victim", "Count A", "Count B", "Δ", "Total A", "Total B"],
+              tables.get("preemption", []), "No preemption chains in either trace"),
+        _card("Sync Objects",
+              ["Metric", "Trace A", "Trace B", "Δ"],
+              tables.get("sync", []), "No sync instrumentation in either trace"),
+    ]
 
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"/><title>BTF Trace Compare</title>
@@ -3663,30 +3990,7 @@ def _build_compare_html(name_a: str, name_b: str, scope_enabled: bool,
     <h1>Trace Compare</h1>
     <div class="sub">{_esc(name_a)} vs {_esc(name_b)} · {_esc(scope_note)}</div>
   </header>
-  <section class="report-card"><h2>Summary</h2>
-    <table><thead><tr><th>Metric</th><th>Trace A</th><th>Trace B</th><th>Δ</th></tr></thead>
-    <tbody>{summary_body}</tbody></table>
-  </section>
-  <section class="report-card"><h2>Top Tasks</h2>
-    <table><thead><tr><th>Task</th><th>CPU% A</th><th>CPU% B</th><th>Δ</th></tr></thead>
-    <tbody>{top_body}</tbody></table>
-  </section>
-  <section class="report-card"><h2>Core Migrations</h2>
-    <table><thead><tr><th>Task</th><th>Migr A</th><th>Migr B</th><th>Δ</th><th>Rate A</th><th>Rate B</th><th>Rate Δ</th><th>Dwell A</th><th>Dwell B</th><th>Dwell Δ</th><th>Ping A</th><th>Ping B</th></tr></thead>
-    <tbody>{mig_body}</tbody></table>
-  </section>
-  <section class="report-card"><h2>Blocking Time</h2>
-    <table><thead><tr><th>Task</th><th>Gaps A</th><th>Gaps B</th><th>Avg A</th><th>Avg B</th><th>Δ avg</th></tr></thead>
-    <tbody>{block_body}</tbody></table>
-  </section>
-  <section class="report-card"><h2>Preemption Chains</h2>
-    <table><thead><tr><th>Victim</th><th>Count A</th><th>Count B</th><th>Δ</th><th>Total A</th><th>Total B</th></tr></thead>
-    <tbody>{pre_body}</tbody></table>
-  </section>
-  <section class="report-card"><h2>Sync Objects</h2>
-    <table><thead><tr><th>Metric</th><th>Trace A</th><th>Trace B</th><th>Δ</th></tr></thead>
-    <tbody>{sync_body}</tbody></table>
-  </section>
+  {"".join(sections)}
 </div></body></html>"""
 
 def _core_sort_key_tuple(c: str) -> tuple:
