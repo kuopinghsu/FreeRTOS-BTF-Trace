@@ -2106,30 +2106,6 @@
                 r="4"
                 class="plot-crosshair-ring"
               />
-              <g v-if="scatterCrosshair.tooltip">
-                <rect
-                  :x="scatterCrosshair.tooltip.x"
-                  :y="scatterCrosshair.tooltip.y"
-                  :width="scatterCrosshair.tooltip.width"
-                  :height="scatterCrosshair.tooltip.height"
-                  rx="4"
-                  class="plot-crosshair-tip-bg"
-                />
-                <text
-                  :x="scatterCrosshair.tooltip.x + 6"
-                  :y="scatterCrosshair.tooltip.y + 12"
-                  class="plot-crosshair-tip-text"
-                >
-                  {{ scatterCrosshair.tooltip.line1 }}
-                </text>
-                <text
-                  :x="scatterCrosshair.tooltip.x + 6"
-                  :y="scatterCrosshair.tooltip.y + 24"
-                  class="plot-crosshair-tip-sub"
-                >
-                  {{ scatterCrosshair.tooltip.line2 }}
-                </text>
-              </g>
             </g>
 
             <g>
@@ -2146,6 +2122,32 @@
               >
                 <title>{{ point.label }}</title>
               </circle>
+            </g>
+
+            <!-- Tooltip drawn last so it always renders above the scatter dots -->
+            <g v-if="scatterCrosshair && scatterCrosshair.tooltip">
+              <rect
+                :x="scatterCrosshair.tooltip.x"
+                :y="scatterCrosshair.tooltip.y"
+                :width="scatterCrosshair.tooltip.width"
+                :height="scatterCrosshair.tooltip.height"
+                rx="4"
+                class="plot-crosshair-tip-bg"
+              />
+              <text
+                :x="scatterCrosshair.tooltip.x + 6"
+                :y="scatterCrosshair.tooltip.y + 12"
+                class="plot-crosshair-tip-text"
+              >
+                {{ scatterCrosshair.tooltip.line1 }}
+              </text>
+              <text
+                :x="scatterCrosshair.tooltip.x + 6"
+                :y="scatterCrosshair.tooltip.y + 24"
+                class="plot-crosshair-tip-sub"
+              >
+                {{ scatterCrosshair.tooltip.line2 }}
+              </text>
             </g>
           </svg>
         </div>
@@ -5820,7 +5822,9 @@ watch(plotData, () => {
 }
 
 .plot-crosshair-tip-bg {
-  fill: color-mix(in srgb, var(--panel-bg) 82%, var(--bg));
+  /* Semi-transparent so the chart underneath blends through, matching the desktop app's alpha-blended tooltip. */
+  fill: var(--panel-bg);
+  fill-opacity: 0.9;
   stroke: var(--border);
   stroke-width: 1;
 }
