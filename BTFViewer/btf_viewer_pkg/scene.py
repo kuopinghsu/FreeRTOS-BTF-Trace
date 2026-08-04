@@ -93,6 +93,8 @@ class TimelineScene(QGraphicsScene):
         # first rebuild before a live view is attached.
         self._vp_scene_orth_lo: float = -1e18
         self._vp_scene_orth_hi: float = +1e18
+        # Unpadded task-axis extent from the last rebuild (rows only, no gutters).
+        self._orth_content_px: Optional[float] = None
         # Half-width of the orthogonal culling margin (px), set in rebuild().
         self._vp_orth_buf: float = 0.0
         # -- Frozen label-column items -----------------------------------
@@ -1513,11 +1515,18 @@ class TimelineScene(QGraphicsScene):
         return float(fn()) if callable(fn) else 0.0
 
     def _finalize_orth_size(self, content_orth: float) -> float:
-        """Fill the task axis to the viewport; pad when rows overflow scrollbars."""
+        """Fill the task axis to the viewport; pad so rows clear overlays/chrome.
+
+        Padding (scrollbar track + CPU-load overlay inset) is applied whenever
+        content exceeds the *usable* viewport (full viewport minus gutters), so
+        the last task row can scroll out from under the CPU-load overlay.
+        """
         vp = self._viewport_orth_extent()
+        gutter = self._orth_scroll_gutter()
+        usable = max(1.0, vp - gutter)
         orth = max(content_orth, vp)
-        if content_orth > vp + 0.5:
-            orth += self._orth_scroll_gutter()
+        if content_orth > usable + 0.5:
+            orth = max(orth, content_orth + gutter)
         return orth
 
     def _add_orth_filler_horizontal(self, content_h: float, total_h: float,
@@ -2072,6 +2081,7 @@ class TimelineScene(QGraphicsScene):
         _sti_total_h += n_interval * (self._row_height + self._row_gap)
         _row_stride = self._row_height + self._row_gap
         content_h = RULER_HEIGHT + n_task * _row_stride + _sti_total_h
+        self._orth_content_px = float(content_h)
         total_h = self._finalize_orth_size(content_h)
         total_w = self._label_width + timeline_w
         self.setSceneRect(0, 0, total_w, total_h)
@@ -2337,6 +2347,7 @@ class TimelineScene(QGraphicsScene):
         )
         total_sti_w += n_interval * col_w
         content_w = RULER_WIDTH + n_task * col_w + total_sti_w
+        self._orth_content_px = float(content_w)
         total_w = self._finalize_orth_size(content_w)
         total_h = label_row_h + timeline_h
         self.setSceneRect(0, 0, total_w, total_h)
@@ -2587,6 +2598,7 @@ class TimelineScene(QGraphicsScene):
         _sti_total_h += len(interval_rows) * (self._row_height + self._row_gap)
         _row_stride = self._row_height + self._row_gap
         content_h = RULER_HEIGHT + _n_non_sti * _row_stride + _sti_total_h
+        self._orth_content_px = float(content_h)
         total_h = self._finalize_orth_size(content_h)
         total_w = self._label_width + timeline_w
         self.setSceneRect(0, 0, total_w, total_h)
@@ -2947,6 +2959,7 @@ class TimelineScene(QGraphicsScene):
         )
         total_sti_w += len(interval_cols) * col_w
         content_w = RULER_WIDTH + _core_col_count * col_w + total_sti_w
+        self._orth_content_px = float(content_w)
         total_w = self._finalize_orth_size(content_w)
         total_h = label_row_h + timeline_h
         self.setSceneRect(0, 0, total_w, total_h)

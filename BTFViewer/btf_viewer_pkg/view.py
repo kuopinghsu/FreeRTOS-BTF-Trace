@@ -1092,7 +1092,12 @@ class TimelineView(QGraphicsView):
         return QRect(x, 0, max(4, w), max(1, self.height() - h_h))
 
     def orth_scroll_gutter_px(self) -> int:
-        """Scene padding on the task axis so the last row clears scrollbar tracks."""
+        """Scene padding on the task axis so the last row clears chrome overlays.
+
+        Includes native/virtual scrollbar tracks and, in horizontal layout, the
+        CPU-load overlay height (``_nav_bottom_inset``) so tasks can scroll out
+        from under the overlay.  Hiding the CPU load clears that inset.
+        """
         sc = self._scene
         gutter = TIMELINE_SCROLL_GUTTER
         if sc._horizontal:
@@ -1103,6 +1108,8 @@ class TimelineView(QGraphicsView):
             if (not self._time_scroll_external
                     and hbar.isVisible() and hbar.maximum() > hbar.minimum()):
                 gutter = max(gutter, hbar.height())
+            # CPU-load overlay covers the bottom of the full-height timeline.
+            gutter = max(gutter, int(self._nav_bottom_inset or 0))
         else:
             if self._virtual_time_scroll_active or self._virt_trace_bar.isVisible():
                 gutter = max(gutter, self._virt_trace_bar.width() or TIMELINE_SCROLL_GUTTER)
@@ -1317,13 +1324,42 @@ class TimelineView(QGraphicsView):
         self._push_virt_trace_bar()
 
     def set_nav_bottom_inset(self, px: int) -> None:
-        """Reserve bottom pixels so the navigator clears an overlay (CPU load)."""
+        """Reserve bottom pixels so the navigator clears an overlay (CPU load).
+
+        Also refreshes the task-axis scene extent so the vertical scrollbar
+        range grows/shrinks with the CPU-load overlay (without a full rebuild).
+        """
         inset = max(0, int(px))
         if inset == self._nav_bottom_inset:
             return
         self._nav_bottom_inset = inset
         if self._nav_popup.isVisible():
             self._nav_popup.reposition()
+        self._sync_orth_scene_extent()
+
+    def _sync_orth_scene_extent(self) -> None:
+        """Resize scene orth axis to content + current overlay/scrollbar gutters."""
+        sc = self._scene
+        if sc._trace is None:
+            return
+        content = getattr(sc, "_orth_content_px", None)
+        if content is None:
+            return
+        new_orth = sc._finalize_orth_size(float(content))
+        rect = sc.sceneRect()
+        if sc._horizontal:
+            if abs(rect.height() - new_orth) < 1.0:
+                return
+            sc.setSceneRect(0, 0, rect.width(), new_orth)
+            bar = self.verticalScrollBar()
+        else:
+            if abs(rect.width() - new_orth) < 1.0:
+                return
+            sc.setSceneRect(0, 0, new_orth, rect.height())
+            bar = self.horizontalScrollBar()
+        bar.setValue(min(bar.value(), bar.maximum()))
+        self._reposition_frozen()
+        self._reposition_frozen_top()
 
     def _refresh_nav_pan_window(self, *, force_show: bool = False) -> None:
         """Repaint and show the navigator minimap (orange viewport box)."""
@@ -3819,9 +3855,14 @@ class TimelineView(QGraphicsView):
         vp = sc._viewport_orth_extent()
         if vp <= 0:
             return False
+        content = getattr(sc, "_orth_content_px", None)
+        if content is None:
+            rect = sc.sceneRect()
+            content = rect.height() if sc._horizontal else rect.width()
+        desired = sc._finalize_orth_size(float(content))
         rect = sc.sceneRect()
-        content = rect.height() if sc._horizontal else rect.width()
-        return abs(sc._finalize_orth_size(content) - content) > 1.0
+        current = rect.height() if sc._horizontal else rect.width()
+        return abs(desired - current) > 1.0
 
     def _orth_viewport_overflow_px(self) -> float:
         """How far (px) the live viewport extends past the last orth rebuild."""

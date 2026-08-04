@@ -91,6 +91,60 @@ class TestNavCpuOverlay(unittest.TestCase):
         host.close()
         self._app.processEvents()
 
+    def test_orth_scroll_grows_and_shrinks_with_cpu_overlay(self) -> None:
+        """Vertical scroll range must clear the CPU overlay; hide restores it."""
+        if not EXAMPLE_BTF.is_file():
+            self.skipTest(f"missing trace fixture: {EXAMPLE_BTF}")
+
+        host = QWidget()
+        view = TimelineView()
+        pane = _TimelinePane(view)
+        cpu = QLabel("cpu")
+        cpu.setMinimumHeight(CPU_LOAD_ROW_H)
+        stack = _CpuLoadStack(pane, cpu, host)
+        stack.set_cpu_visible(False)
+        stack.setSizes([600, 180])
+        host.resize(1200, 700)
+        stack.setGeometry(0, 0, 1200, 700)
+        host.show()
+        stack.show()
+        self._app.processEvents()
+
+        trace = _parse_btf(str(EXAMPLE_BTF))
+        view.load_trace(trace)
+        self._app.processEvents()
+        stack._reposition()
+        self._app.processEvents()
+
+        self.assertEqual(view._nav_bottom_inset, 0)
+        h_hidden = view._scene.sceneRect().height()
+        content = view._scene._orth_content_px
+        self.assertIsNotNone(content)
+
+        stack.set_cpu_visible(True)
+        stack._reposition()
+        self._app.processEvents()
+
+        inset = view._nav_bottom_inset
+        self.assertGreater(inset, 0)
+        self.assertGreaterEqual(view.orth_scroll_gutter_px(), inset)
+        h_shown = view._scene.sceneRect().height()
+        # Scene must grow so the last task row can scroll above the overlay.
+        self.assertGreaterEqual(h_shown, content + inset - 1.0)
+        self.assertGreater(h_shown, h_hidden)
+
+        stack.set_cpu_visible(False)
+        stack._reposition()
+        self._app.processEvents()
+
+        self.assertEqual(view._nav_bottom_inset, 0)
+        h_again = view._scene.sceneRect().height()
+        self.assertLess(h_again, h_shown)
+        self.assertAlmostEqual(h_again, h_hidden, delta=2.0)
+
+        host.close()
+        self._app.processEvents()
+
 
 if __name__ == "__main__":
     unittest.main()
