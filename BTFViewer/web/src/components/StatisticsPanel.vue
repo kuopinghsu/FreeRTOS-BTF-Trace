@@ -1928,11 +1928,11 @@
       </div>
 
       <div
-        v-if="openPlotRef?.kind?.startsWith('mig_')"
+        v-if="activePlotTabs"
         class="plot-tab-row"
       >
         <button
-          v-for="tab in MIG_PLOT_TABS"
+          v-for="tab in activePlotTabs"
           :key="tab.kind"
           type="button"
           class="plot-tab-btn"
@@ -2371,6 +2371,7 @@ import {
 import {
   tagStatsRows,
   tagPlotPoints,
+  tagIntervalPlotPoints,
   tagColor,
   tagChannelLabel,
   formatTagValue,
@@ -3474,6 +3475,28 @@ function _buildTagPlot(trace, channel, range) {
   }
 }
 
+function _buildTagIntervalPlot(trace, channel, range) {
+  const suffix = scopeSuffix(range)
+  const lo = range?.lo ?? null
+  const hi = range?.hi ?? null
+  const label = tagChannelLabel(channel)
+  const rawPoints = tagIntervalPlotPoints(trace, channel, lo, hi)
+  const points = rawPoints.map((pt, index) => ({
+    index,
+    xNs: pt.xNs,
+    yValue: pt.yValue,
+    payload: pt.payload,
+    label: `${label}: ${formatTime(pt.yValue, trace.timeScale)} since previous sample at ${formatTime(pt.xNs, trace.timeScale)}`,
+  }))
+  return {
+    kind: 'tag_interval',
+    tagChannel: channel,
+    title: `${label} — Interval${suffix}`,
+    color: tagColor(channel),
+    points,
+  }
+}
+
 function _buildPriorityPlot(trace, mk, range) {
   const suffix = scopeSuffix(range)
   const lo = range?.lo ?? null
@@ -3517,6 +3540,9 @@ const plotData = computed(() => {
   if (open.kind === 'tag') {
     return _buildTagPlot(props.trace, open.tagChannel, range)
   }
+  if (open.kind === 'tag_interval') {
+    return _buildTagIntervalPlot(props.trace, open.tagChannel, range)
+  }
   if (open.kind === 'priority') {
     return _buildPriorityPlot(props.trace, open.mk, range)
   }
@@ -3536,6 +3562,19 @@ const MIG_PLOT_TABS = [
   { kind: 'mig_rate', label: 'Rate' },
   { kind: 'mig_gap', label: 'Gap' },
 ]
+
+const TAG_PLOT_TABS = [
+  { kind: 'tag', label: 'Value' },
+  { kind: 'tag_interval', label: 'Interval' },
+]
+
+const activePlotTabs = computed(() => {
+  const kind = openPlotRef.value?.kind
+  if (!kind) return null
+  if (kind.startsWith('mig_')) return MIG_PLOT_TABS
+  if (kind === 'tag' || kind === 'tag_interval') return TAG_PLOT_TABS
+  return null
+})
 
 function switchPlotTab(kind) {
   const open = openPlotRef.value
@@ -3612,7 +3651,7 @@ function onPlotPointClick(point) {
     ? point.payload
     : null
   const interval = (kind === 'interval' && point.payload?.startNs != null) ? point.payload : null
-  const tagSample = (kind === 'tag' && point.payload?.timeNs != null) ? point.payload : null
+  const tagSample = ((kind === 'tag' || kind === 'tag_interval') && point.payload?.timeNs != null) ? point.payload : null
   const priorityRange = (kind === 'priority' && point.payload?.startNs != null)
     ? { startNs: point.payload.startNs, stopNs: point.payload.stopNs, mk: point.payload.mk }
     : null

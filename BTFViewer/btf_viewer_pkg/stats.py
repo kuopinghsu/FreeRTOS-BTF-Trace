@@ -1519,6 +1519,7 @@ class _HistogramWidget(QWidget):
         p.end()
 
 _MIG_PLOT_TABS = (("mig_dwell", "Dwell"), ("mig_rate", "Rate"), ("mig_gap", "Gap"))
+_TAG_PLOT_TABS = (("tag", "Value"), ("tag_interval", "Interval"))
 
 class _MetricsPlotDialog(QDialog):
     """Modeless popup: scatter plot + histogram for one task metric.
@@ -5570,12 +5571,18 @@ class _StatsPanel(QWidget):
             title = f"Interval {iid} — Duration{scope}"
             color = QColor(_interval_color(iid))
             return title, pts, color
-        if kind == "tag":
+        if kind in ("tag", "tag_interval"):
             ch = mk
-            pts = _tag_plot_points(trace, ch, lo, hi)
-            if not pts:
-                return None
-            title = f"{_tag_channel_label(ch)} — Value{scope}"
+            if kind == "tag_interval":
+                pts = _tag_interval_plot_points(trace, ch, lo, hi)
+                if not pts:
+                    return None
+                title = f"{_tag_channel_label(ch)} — Interval{scope}"
+            else:
+                pts = _tag_plot_points(trace, ch, lo, hi)
+                if not pts:
+                    return None
+                title = f"{_tag_channel_label(ch)} — Value{scope}"
             color = QColor(_tag_color(ch))
             return title, pts, color
         if kind == "priority":
@@ -5709,8 +5716,8 @@ class _StatsPanel(QWidget):
         if kind == "tick":
             self._open_tick_dist_plot(trace)
             return
-        if kind == "tag" and mk:
-            self._open_tag_plot(trace, mk)
+        if kind in ("tag", "tag_interval") and mk:
+            self._open_plot(trace, mk, kind)
             return
         if kind == "interval" and mk:
             iid = interval_id or mk
@@ -5758,7 +5765,9 @@ class _StatsPanel(QWidget):
             except TypeError:
                 pass
             self._plot_dlg.close()
-        tabs = _MIG_PLOT_TABS if kind.startswith("mig_") else None
+        tabs = (_MIG_PLOT_TABS if kind.startswith("mig_")
+                else _TAG_PLOT_TABS if kind in ("tag", "tag_interval")
+                else None)
         self._plot_dlg = _MetricsPlotDialog(
             title, pts, trace.time_scale, color,
             on_point_click=_on_click,

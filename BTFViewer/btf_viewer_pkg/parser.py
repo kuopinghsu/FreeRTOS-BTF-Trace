@@ -1271,6 +1271,30 @@ def _tag_plot_points(
         pts.append((sample.time_ns, sample.value, sample))
     return pts
 
+def _tag_interval_plot_points(
+    trace: "BtfTrace",
+    channel: str,
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> List[Tuple[int, int, TagSample]]:
+    """Elapsed time between consecutive samples on one tag channel.
+
+    Unlike interval_start/stop (paired per task id), tag samples carry no
+    task pairing — consecutive samples on the same channel measure elapsed
+    time regardless of which task/core emitted them, which makes tags the
+    recommended way to measure an interval that spans two different tasks.
+    """
+    samples = [
+        s for s in trace.tag_samples_by_channel.get(channel, [])
+        if _tag_overlaps_range(s, lo, hi)
+    ]
+    pts: List[Tuple[int, int, TagSample]] = []
+    for i in range(1, len(samples)):
+        gap = samples[i].time_ns - samples[i - 1].time_ns
+        if gap > 0:
+            pts.append((samples[i].time_ns, gap, samples[i]))
+    return pts
+
 def _tag_sample_detail_rows(
     trace: "BtfTrace",
     lo: Optional[int] = None,
@@ -1951,6 +1975,9 @@ def _format_plot_point_note(
         return (f"Interval {payload.id}: {fmt(y_ns)} "
                 f"[{fmt(payload.start_ns)} – {fmt(payload.stop_ns)}]")
     if isinstance(payload, TagSample):
+        if kind == "tag_interval":
+            return (f"{_tag_channel_label(payload.channel)}: {fmt(y_ns)} "
+                    f"since previous sample at {fmt(x_ns)}")
         return (f"{_tag_channel_label(payload.channel)}: "
                 f"{_format_tag_value(y_ns)} at {fmt(x_ns)}")
     if isinstance(payload, PriorityEpisode):

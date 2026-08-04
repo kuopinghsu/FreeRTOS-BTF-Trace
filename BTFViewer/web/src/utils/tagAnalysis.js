@@ -201,3 +201,24 @@ export function tagPlotPoints(trace, channel, lo, hi) {
       payload: s,
     }))
 }
+
+/**
+ * Elapsed time between consecutive samples on one tag channel.
+ *
+ * Unlike interval_start/stop (paired per task id), tag samples carry no
+ * task pairing — consecutive samples on the same channel measure elapsed
+ * time regardless of which task/core emitted them, which makes tags the
+ * recommended way to measure an interval that spans two different tasks.
+ *
+ * Plot points: x = later sample time, y = elapsed time since previous sample.
+ */
+export function tagIntervalPlotPoints(trace, channel, lo, hi) {
+  const samples = (trace?.tagSamplesByChannel?.get(channel) || [])
+    .filter(s => tagOverlapsRange(s, lo, hi))
+  const pts = []
+  for (let i = 1; i < samples.length; i++) {
+    const gap = samples[i].timeNs - samples[i - 1].timeNs
+    if (gap > 0) pts.push({ xNs: samples[i].timeNs, yValue: gap, payload: samples[i] })
+  }
+  return pts
+}

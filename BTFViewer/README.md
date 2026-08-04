@@ -265,9 +265,9 @@ python builds/btf_viewer.py migrations trace.btf [-o PATH] [--lo T] [--hi T]   #
 
 python builds/btf_viewer.py snapshot trace.btf -o|--output PATH --view timeline|heatmap|plot \
   [--format png|svg] [--task NAME] [--view-mode task|core] [--cpu-load] \
-  [--metric tick|exec|block|inter|priority|preempt|mig_dwell|mig_rate|mig_gap] \
-  [--preemptor NAME] [--lo T --hi T] [--drill-row N --drill-bin N] \
-  [--width PX] [--height PX] [--theme dark|light]
+  [--metric tick|exec|block|inter|priority|preempt|interval|tag|tag_interval|mig_dwell|mig_rate|mig_gap] \
+  [--preemptor NAME] [--interval-id ID] [--channel NAME] [--lo T --hi T] \
+  [--drill-row N --drill-bin N] [--width PX] [--height PX] [--theme dark|light]
 
 python builds/btf_viewer.py perfetto trace.btf -o|--output PATH.json
 ```
@@ -276,7 +276,7 @@ The `snapshot` `--view`:
 
 - `timeline` — the main task/core view (like **File → Save Image / Save SVG**); `--task` highlights and centers that task's row; omit `--lo`/`--hi` to **Fit to Window** (full span), or pass `--lo`/`--hi` to zoom a range.  `--view-mode core` switches to **Core View** (default `task`); with `--task`, the CLI also filters to that task and expands every core it ran on so migrations appear as the same task hopping across core rows (see [Highlight a migrating task](#highlight-a-migrating-task-on-the-timeline)).  `--cpu-load` appends the synchronised **CPU Load** strip — with a locked `--task`, **Task View** shows that task’s total utilisation; **Core View** shows **one sparkline per core** for that task (same as toolbar **Core** + **Load** + click-to-highlight).
 - `heatmap` — the Migration Heatmap (core-pair × time-bin grid); `--lo`/`--hi` scope the grid; `--task` is not supported (the heatmap is inherently cross-task). `--drill-row`/`--drill-bin` (0-based, together) drill into the per-task grid for one core-pair row and time bin, matching a click in the GUI dialog — not supported for matrix-mode heatmaps (> 16 cores).
-- `plot` — a statistics metric scatter + histogram popup, selected with `--metric`: `tick` (trace-wide tick-interval distribution, no `--task`), `exec` / `block` / `inter` / `priority` (require `--task`), `preempt` (requires `--task` **and** `--preemptor`), or `mig_dwell` / `mig_rate` / `mig_gap` (Core Migrations dwell/rate/gap distributions, require `--task`).
+- `plot` — a statistics metric scatter + histogram popup, selected with `--metric`: `tick` (trace-wide tick-interval distribution, no `--task`), `exec` / `block` / `inter` / `priority` (require `--task`), `preempt` (requires `--task` **and** `--preemptor`), `interval` (interval-id duration distribution, requires `--interval-id`), `tag` / `tag_interval` (tag-channel value / time-between-samples distribution, require `--channel`), or `mig_dwell` / `mig_rate` / `mig_gap` (Core Migrations dwell/rate/gap distributions, require `--task`).
 
 `--width`/`--height` only apply to `--view timeline` and `--view plot` (the heatmap image size is derived from its data grid). `--task` accepts the display name (e.g. `Producer[1]`), the bare name without `[id]`, or the raw merge key, matched case-insensitively.
 
@@ -800,7 +800,7 @@ Click the **Shot** toolbar button (or press `S` when focus is not in a text fiel
 
 ### Metrics Distribution Charts
 
-In the **Statistics** panel, click any row in **Execution Time**, **Blocking Time**, **Inter-Arrival**, **Core Migrations**, **Preemption Chain**, **Priority Inheritance**, **Interval Analysis**, or **Tag Analysis** to open a floating chart popup. In **Trace Health (TICK)**, use the **Tick Distribution…** button (bar-chart icon beside the mode badge when ≥ 2 ticks are in scope). **Core Migrations** popups additionally show in-dialog tabs (**Dwell** / **Rate** / **Gap**) to switch metrics without closing the chart.
+In the **Statistics** panel, click any row in **Execution Time**, **Blocking Time**, **Inter-Arrival**, **Core Migrations**, **Preemption Chain**, **Priority Inheritance**, **Interval Analysis**, or **Tag Analysis** to open a floating chart popup. In **Trace Health (TICK)**, use the **Tick Distribution…** button (bar-chart icon beside the mode badge when ≥ 2 ticks are in scope). **Core Migrations** popups additionally show in-dialog tabs (**Dwell** / **Rate** / **Gap**) and **Tag Analysis** popups show tabs (**Value** / **Interval**) to switch metrics without closing the chart.
 
 - **Scatter plot** — each event plotted in trace time order so you can spot trends, bursts, or outliers.
 - **Histogram** — adaptive bar chart of the value distribution:
@@ -1309,6 +1309,8 @@ Pairs **`interval_start` / `interval_stop`** STI events into measurable code reg
 
 **What it tells you:** Interval metrics measure **how long instrumented code regions take** — loop iterations, critical sections, or end-to-end handlers. Tight clusters in the distribution chart mean stable iteration time; outliers or a high **Max** often mark contention, preemption inside the region, or pairing artefacts (see **Limitations** under Interval Analysis below). Compare interval ids to separate workloads (e.g. mutex stress vs lighter loops in the same trace).
 
+> **Cross-task timing tip:** `interval_start` / `interval_stop` pairing is scoped **per task id** (see [Pairing algorithm](#pairing-algorithm) below) — it measures elapsed time **within the same task**. To measure elapsed time **between two different tasks or ISRs** (e.g. a producer marks a tag on one task/core and a consumer picks it up on another), pairing by task id doesn't apply. Use a **tag channel** (`btf_traceTAG(id, value)`) instead: tag samples carry no task/id pairing, so consecutive samples on the same channel — regardless of which task emitted them — measure the cross-task interval directly. See [Tag Analysis → Interval tab](#tag-analysis).
+
 **BTF note field** (last CSV column on each interval line):
 
 | Format | Example | Viewer pairing |
@@ -1534,6 +1536,20 @@ Aggregates numeric samples from the 8 general-purpose STI **tag** channels (`tag
 
 - **Scatter:** x = sample time, y = tag value.
 - **Histogram:** distribution of tag values.
+
+##### Interval tab (time between samples)
+
+The distribution popup has two in-dialog tabs — **Value** (above) and **Interval** — mirroring the **Core Migrations** Dwell/Rate/Gap tabs. Click **Interval** to switch the same scatter + histogram widgets to show the **elapsed time between consecutive samples** on that channel, regardless of which task or core emitted them.
+
+**Formula** — for consecutive samples (sorted by time) *k* and *k−1* on one channel:
+
+```math
+\delta_k = t_k - t_{k-1}
+```
+
+**Scatter:** x = the later sample's time, y = δ<sub>k</sub> (rendered as a duration, using the same adaptive time units as other metric charts). **Histogram:** distribution of δ<sub>k</sub> with the usual min/avg/max/p95 reference lines and [CDF overlay](#cdf-overlay). Clicking a scatter point jumps to and annotates the later sample's time.
+
+This is the **recommended way to measure elapsed time across two different tasks or ISRs**: emit `btf_traceTAG(id, marker)` from each side of the cross-task event (e.g. once when a producer task hands off, once when the consumer task/ISR observes it) and read the interval distribution's min/avg/max/p95 as the cross-task latency — no `tid` pairing is needed since tag samples are unpaired, timestamp-ordered markers.
 
 **tag0_event** in `example-8cores.btf.gz` (2330 samples, min 8,144, avg ≈ 36,845, max 71,904, p95 41,936):
 
@@ -1857,6 +1873,8 @@ python builds/btf_viewer.py compare \
 | Span | 2.421 s | 2.444 s | −23 ms |
 
 On a **full** stress-suite capture (high core util), context-switch and tick counts can stay close — tick policy matters most in **idle-heavy** windows. Scope cursors (or `--lo`/`--hi`) around an idle phase (e.g. demo test 11) when measuring power-oriented tickless gains; keep a busy CS window when checking that latency budgets still hold.
+
+> **Known limitation — SMP tickless idle:** on the bundled `tickless-8cores.zip` sample, test 11's TICK STI still fires every ~1 ms in *both* builds (no widened gaps in the tickless capture). Root cause is upstream in `FreeRTOS-Kernel/tasks.c`'s `prvGetExpectedIdleTime()`, which forces the expected idle time to 0 whenever more than one task is ready at idle priority. Under SMP, a *running* task stays in its ready list (only `xTaskRunState` changes), so with `configNUMBER_OF_CORES = 8` all 8 per-core IDLE tasks are simultaneously "ready", and tickless idle never actually engages. This is a vanilla-kernel heuristic gap, not a capture or viewer bug — expect tickless vs. tickful tick counts to stay close on SMP builds until the kernel's idle-ready-list check is made SMP-aware.
 
 **Interpretation**
 

@@ -342,6 +342,7 @@ Views (--view):
                preempt    victim vs. one preemptor duration     (--task + --preemptor)
                interval   interval-id duration distribution     (--interval-id)
                tag        tag-channel value distribution        (--channel)
+               tag_interval  time between consecutive samples on a tag channel (--channel)
                mig_dwell  on-core dwell time per migrated run    (--task)
                mig_rate   time between consecutive migrations    (--task)
                mig_gap    post-migration blocking-gap distribution (--task)
@@ -364,6 +365,7 @@ examples:
   %(prog)s trace.btf -o preempt.png --view plot --metric preempt --task "Producer[1]" --preemptor "Consumer[2]"
   %(prog)s trace.btf -o interval.png --view plot --metric interval --interval-id 0
   %(prog)s trace.btf -o tag.png --view plot --metric tag --channel tag0_event
+  %(prog)s trace.btf -o tag-interval.png --view plot --metric tag_interval --channel tag0_event
   %(prog)s trace.btf -o mig-dwell.svg --view plot --metric mig_dwell --task "CS[22]"
   %(prog)s trace.btf -o mig-rate.svg --view plot --metric mig_rate --task "CS[22]"
   %(prog)s trace.btf -o mig-gap.svg --view plot --metric mig_gap --task "CS[22]"
@@ -578,7 +580,7 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
     snapshot.add_argument(
         "--metric",
         choices=("tick", "exec", "block", "inter", "priority", "preempt", "interval", "tag",
-                "mig_dwell", "mig_rate", "mig_gap"),
+                "tag_interval", "mig_dwell", "mig_rate", "mig_gap"),
         default=None,
         help="metric to plot; required when --view plot",
     )
@@ -594,7 +596,7 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
         "--channel", default=None, metavar="NAME",
         help=(
             "tag channel (e.g. 'tag0_event') or bare index (e.g. '0'); "
-            "required when --metric tag"
+            "required when --metric tag or tag_interval"
         ),
     )
     snapshot.add_argument("--lo", type=int, default=None, metavar="T", help=_CLI_LO_HELP)
@@ -1257,9 +1259,9 @@ def _cli_snapshot_plot(trace: "BtfTrace",
         mk, err = _cli_resolve_interval_id(trace, args.interval_id)
         if err:
             return None, err
-    elif metric == "tag":
+    elif metric in ("tag", "tag_interval"):
         if not args.channel:
-            return None, "error: --channel is required for --metric tag"
+            return None, f"error: --channel is required for --metric {metric}"
         mk, err = _cli_resolve_tag_channel(trace, args.channel)
         if err:
             return None, err
@@ -1272,11 +1274,11 @@ def _cli_snapshot_plot(trace: "BtfTrace",
         if args.interval_id:
             print("warning: --interval-id is only used with --metric interval", file=sys.stderr)
         if args.channel:
-            print("warning: --channel is only used with --metric tag", file=sys.stderr)
+            print("warning: --channel is only used with --metric tag/tag_interval", file=sys.stderr)
     if metric == "interval" and args.task:
         print("warning: --task is not used with --metric interval (use --interval-id)", file=sys.stderr)
-    if metric == "tag" and args.task:
-        print("warning: --task is not used with --metric tag (use --channel)", file=sys.stderr)
+    if metric in ("tag", "tag_interval") and args.task:
+        print("warning: --task is not used with --metric tag/tag_interval (use --channel)", file=sys.stderr)
 
     panel = _StatsPanel.__new__(_StatsPanel)
     panel._trace = trace
@@ -1307,7 +1309,7 @@ def _cli_snapshot_plot(trace: "BtfTrace",
         return None, f"error: no data to plot for --metric {metric} (--task {args.task or 'n/a'})"
     title, pts, color = built
     scoped, badge, detail = panel._plot_scope_banner()
-    y_as_time = metric != "tag"
+    y_as_time = metric not in ("tag",)
     dlg = _MetricsPlotDialog(
         title, pts, trace.time_scale, color,
         on_point_click=None,

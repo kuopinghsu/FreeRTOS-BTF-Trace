@@ -2178,6 +2178,30 @@ def _tag_plot_points(
         pts.append((sample.time_ns, sample.value, sample))
     return pts
 
+def _tag_interval_plot_points(
+    trace: "BtfTrace",
+    channel: str,
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> List[Tuple[int, int, TagSample]]:
+    """Elapsed time between consecutive samples on one tag channel.
+
+    Unlike interval_start/stop (paired per task id), tag samples carry no
+    task pairing — consecutive samples on the same channel measure elapsed
+    time regardless of which task/core emitted them, which makes tags the
+    recommended way to measure an interval that spans two different tasks.
+    """
+    samples = [
+        s for s in trace.tag_samples_by_channel.get(channel, [])
+        if _tag_overlaps_range(s, lo, hi)
+    ]
+    pts: List[Tuple[int, int, TagSample]] = []
+    for i in range(1, len(samples)):
+        gap = samples[i].time_ns - samples[i - 1].time_ns
+        if gap > 0:
+            pts.append((samples[i].time_ns, gap, samples[i]))
+    return pts
+
 def _tag_sample_detail_rows(
     trace: "BtfTrace",
     lo: Optional[int] = None,
@@ -2858,6 +2882,9 @@ def _format_plot_point_note(
         return (f"Interval {payload.id}: {fmt(y_ns)} "
                 f"[{fmt(payload.start_ns)} – {fmt(payload.stop_ns)}]")
     if isinstance(payload, TagSample):
+        if kind == "tag_interval":
+            return (f"{_tag_channel_label(payload.channel)}: {fmt(y_ns)} "
+                    f"since previous sample at {fmt(x_ns)}")
         return (f"{_tag_channel_label(payload.channel)}: "
                 f"{_format_tag_value(y_ns)} at {fmt(x_ns)}")
     if isinstance(payload, PriorityEpisode):
@@ -16225,6 +16252,7 @@ class _HistogramWidget(QWidget):
         p.end()
 
 _MIG_PLOT_TABS = (("mig_dwell", "Dwell"), ("mig_rate", "Rate"), ("mig_gap", "Gap"))
+_TAG_PLOT_TABS = (("tag", "Value"), ("tag_interval", "Interval"))
 
 class _MetricsPlotDialog(QDialog):
     """Modeless popup: scatter plot + histogram for one task metric.
@@ -20276,12 +20304,18 @@ class _StatsPanel(QWidget):
             title = f"Interval {iid} — Duration{scope}"
             color = QColor(_interval_color(iid))
             return title, pts, color
-        if kind == "tag":
+        if kind in ("tag", "tag_interval"):
             ch = mk
-            pts = _tag_plot_points(trace, ch, lo, hi)
-            if not pts:
-                return None
-            title = f"{_tag_channel_label(ch)} — Value{scope}"
+            if kind == "tag_interval":
+                pts = _tag_interval_plot_points(trace, ch, lo, hi)
+                if not pts:
+                    return None
+                title = f"{_tag_channel_label(ch)} — Interval{scope}"
+            else:
+                pts = _tag_plot_points(trace, ch, lo, hi)
+                if not pts:
+                    return None
+                title = f"{_tag_channel_label(ch)} — Value{scope}"
             color = QColor(_tag_color(ch))
             return title, pts, color
         if kind == "priority":
@@ -20415,8 +20449,8 @@ class _StatsPanel(QWidget):
         if kind == "tick":
             self._open_tick_dist_plot(trace)
             return
-        if kind == "tag" and mk:
-            self._open_tag_plot(trace, mk)
+        if kind in ("tag", "tag_interval") and mk:
+            self._open_plot(trace, mk, kind)
             return
         if kind == "interval" and mk:
             iid = interval_id or mk
@@ -20464,7 +20498,9 @@ class _StatsPanel(QWidget):
             except TypeError:
                 pass
             self._plot_dlg.close()
-        tabs = _MIG_PLOT_TABS if kind.startswith("mig_") else None
+        tabs = (_MIG_PLOT_TABS if kind.startswith("mig_")
+                else _TAG_PLOT_TABS if kind in ("tag", "tag_interval")
+                else None)
         self._plot_dlg = _MetricsPlotDialog(
             title, pts, trace.time_scale, color,
             on_point_click=_on_click,
@@ -34563,6 +34599,7 @@ Views (--view):
                preempt    victim vs. one preemptor duration     (--task + --preemptor)
                interval   interval-id duration distribution     (--interval-id)
                tag        tag-channel value distribution        (--channel)
+               tag_interval  time between consecutive samples on a tag channel (--channel)
                mig_dwell  on-core dwell time per migrated run    (--task)
                mig_rate   time between consecutive migrations    (--task)
                mig_gap    post-migration blocking-gap distribution (--task)
@@ -34585,6 +34622,7 @@ examples:
   %(prog)s trace.btf -o preempt.png --view plot --metric preempt --task "Producer[1]" --preemptor "Consumer[2]"
   %(prog)s trace.btf -o interval.png --view plot --metric interval --interval-id 0
   %(prog)s trace.btf -o tag.png --view plot --metric tag --channel tag0_event
+  %(prog)s trace.btf -o tag-interval.png --view plot --metric tag_interval --channel tag0_event
   %(prog)s trace.btf -o mig-dwell.svg --view plot --metric mig_dwell --task "CS[22]"
   %(prog)s trace.btf -o mig-rate.svg --view plot --metric mig_rate --task "CS[22]"
   %(prog)s trace.btf -o mig-gap.svg --view plot --metric mig_gap --task "CS[22]"
@@ -34799,7 +34837,7 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
     snapshot.add_argument(
         "--metric",
         choices=("tick", "exec", "block", "inter", "priority", "preempt", "interval", "tag",
-                "mig_dwell", "mig_rate", "mig_gap"),
+                "tag_interval", "mig_dwell", "mig_rate", "mig_gap"),
         default=None,
         help="metric to plot; required when --view plot",
     )
@@ -34815,7 +34853,7 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
         "--channel", default=None, metavar="NAME",
         help=(
             "tag channel (e.g. 'tag0_event') or bare index (e.g. '0'); "
-            "required when --metric tag"
+            "required when --metric tag or tag_interval"
         ),
     )
     snapshot.add_argument("--lo", type=int, default=None, metavar="T", help=_CLI_LO_HELP)
@@ -35478,9 +35516,9 @@ def _cli_snapshot_plot(trace: "BtfTrace",
         mk, err = _cli_resolve_interval_id(trace, args.interval_id)
         if err:
             return None, err
-    elif metric == "tag":
+    elif metric in ("tag", "tag_interval"):
         if not args.channel:
-            return None, "error: --channel is required for --metric tag"
+            return None, f"error: --channel is required for --metric {metric}"
         mk, err = _cli_resolve_tag_channel(trace, args.channel)
         if err:
             return None, err
@@ -35493,11 +35531,11 @@ def _cli_snapshot_plot(trace: "BtfTrace",
         if args.interval_id:
             print("warning: --interval-id is only used with --metric interval", file=sys.stderr)
         if args.channel:
-            print("warning: --channel is only used with --metric tag", file=sys.stderr)
+            print("warning: --channel is only used with --metric tag/tag_interval", file=sys.stderr)
     if metric == "interval" and args.task:
         print("warning: --task is not used with --metric interval (use --interval-id)", file=sys.stderr)
-    if metric == "tag" and args.task:
-        print("warning: --task is not used with --metric tag (use --channel)", file=sys.stderr)
+    if metric in ("tag", "tag_interval") and args.task:
+        print("warning: --task is not used with --metric tag/tag_interval (use --channel)", file=sys.stderr)
 
     panel = _StatsPanel.__new__(_StatsPanel)
     panel._trace = trace
@@ -35528,7 +35566,7 @@ def _cli_snapshot_plot(trace: "BtfTrace",
         return None, f"error: no data to plot for --metric {metric} (--task {args.task or 'n/a'})"
     title, pts, color = built
     scoped, badge, detail = panel._plot_scope_banner()
-    y_as_time = metric != "tag"
+    y_as_time = metric not in ("tag",)
     dlg = _MetricsPlotDialog(
         title, pts, trace.time_scale, color,
         on_point_click=None,
