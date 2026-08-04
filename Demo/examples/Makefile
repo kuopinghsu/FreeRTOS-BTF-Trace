@@ -13,6 +13,10 @@ LDFLAGS += $(ARCH_FLAGS) -nostartfiles -Wl,--no-relax \
 LDLIBS  += -lc -lgcc
 
 CORES ?= 1
+# FreeRTOS V11.3.0 affinity masking uses (1U << CORES); N >= 32 is undefined.
+ifeq ($(shell [ "$(CORES)" -ge 1 ] 2>/dev/null && [ "$(CORES)" -le 31 ] 2>/dev/null && echo ok),)
+$(error CORES must be an integer in 1 .. 31 (got '$(CORES)'))
+endif
 SIM   ?= ../../build/sim/riscv64-sim
 
 # Optional: `make CORES=N TICKLESS=0|1 …` overrides configUSE_TICKLESS_IDLE in

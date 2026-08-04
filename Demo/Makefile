@@ -3,7 +3,7 @@ TICKLESS     ?= 0
 SIM          ?= ../build/sim/riscv64-sim
 RISCV_PREFIX ?= /opt/xpack-riscv-none-elf-gcc-15.2.0-1/bin/riscv-none-elf-
 
-# Max events for large SMP examples (raise for CORES=64 long runs)
+# Max events for large SMP examples (raise for CORES=16 long runs)
 MAX_TRACE_EVENTS ?= 2400000
 
 .PHONY: all clean list run

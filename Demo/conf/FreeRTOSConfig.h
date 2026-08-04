@@ -420,6 +420,12 @@
 #define configNUMBER_OF_CORES                     1
 #endif
 
+/* FreeRTOS V11.3.0 tasks.c builds core masks with (1U << configNUMBER_OF_CORES),
+ * which is undefined for N >= 32 (1U is typically a 32-bit unsigned int). */
+#if ( configNUMBER_OF_CORES < 1 ) || ( configNUMBER_OF_CORES >= 32 )
+#error "configNUMBER_OF_CORES must be in the range 1 .. 31"
+#endif
+
 /* When using SMP (i.e. configNUMBER_OF_CORES is greater than one), set
  * configRUN_MULTIPLE_PRIORITIES to 0 to allow multiple tasks to run
  * simultaneously only if they do not have equal priority, thereby maintaining

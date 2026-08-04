@@ -3,7 +3,7 @@ RISCV_PREFIX ?= /opt/xpack-riscv-none-elf-gcc-15.2.0-1/bin/riscv-none-elf-
 
 .DEFAULT_GOAL := all
 
-.PHONY: all help run check clean distclean
+.PHONY: all help run check clean distclean update
 
 help:
 	@echo "FreeRTOS-BTF-Trace — make targets"
@@ -65,4 +65,3 @@ clean:
 
 distclean:
 	-rm -rf FreeRTOS-Kernel
-

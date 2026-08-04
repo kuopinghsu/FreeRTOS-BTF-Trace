@@ -195,8 +195,8 @@ void vPortSuppressTicksAndSleep( TickType_t xExpectedIdleTime )
  * ==================================================================== */
 #else /* configNUMBER_OF_CORES > 1 */
 
-#if ( configNUMBER_OF_CORES > 64 )
-    #error "port.c: configNUMBER_OF_CORES must not exceed 64."
+#if ( configNUMBER_OF_CORES >= 32 )
+    #error "port.c: configNUMBER_OF_CORES must be less than 32 (FreeRTOS affinity mask uses 1U << N)."
 #endif
 
 #define portISR_STACK_WORDS 512u

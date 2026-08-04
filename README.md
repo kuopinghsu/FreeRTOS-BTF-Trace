@@ -565,6 +565,7 @@ Default trace buffer size is controlled by `configMAX_TRACE_EVENTS` and `configM
 
 | Area | Notes |
 |------|-------|
+| **SMP core limit** | `configNUMBER_OF_CORES` / `CORES` must be **1…31**. FreeRTOS V11.3.0 uses `(1U << configNUMBER_OF_CORES)` for affinity masks; that shift is undefined for N ≥ 32 |
 | **Ring overflow** | When the event buffer fills, newer events overwrite the oldest; `#ringOverflow true` is written at BTF export |
 | **Task table overflow** | When `task_id` is out of range, the event is still recorded but no name slot is written; `#taskTableOverflow true` is written at BTF export |
 | **Truncation** | A crash or power loss before `btf_traceEND()` leaves `#truncated true` on live dump; `gentrace` also sets it for partial `trace.bin` files |
