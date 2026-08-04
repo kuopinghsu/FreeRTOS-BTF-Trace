@@ -87,8 +87,14 @@
  * 0 to keep the tick interrupt running at all times.  Not all FreeRTOS ports
  * support tickless mode. See
  * https://www.freertos.org/low-power-tickless-rtos.html Defaults to 0 if left
- * undefined. */
+ * undefined.
+ *
+ * Override from the demo Makefile without editing this file:
+ *   make CORES=N TICKLESS=0|1 …
+ * (passes -DconfigUSE_TICKLESS_IDLE=$(TICKLESS)). */
+#ifndef configUSE_TICKLESS_IDLE
 #define configUSE_TICKLESS_IDLE                    0
+#endif
 
 /* configMAX_PRIORITIES Sets the number of available task priorities.  Tasks can
  * be assigned priorities of 0 to (configMAX_PRIORITIES - 1).  Zero is the

@@ -354,46 +354,45 @@ font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="nor
 <g fill="#f39c12" fill-opacity="0.705882" stroke="#90caf9" stroke-opacity="1" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="bevel" transform="matrix(1,0,0,1,0,396)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<polyline fill="none" vector-effect="none" points="56,78 746,53 " />
-<polyline fill="none" vector-effect="none" points="746,53 780,28 " />
+<polyline fill="none" vector-effect="none" points="56,78 780,28 " />
 </g>
 
 <g fill="#f39c12" fill-opacity="0.705882" stroke="#ce93d8" stroke-opacity="1" stroke-dasharray="8,4" stroke-dashoffset="0" stroke-width="2" stroke-linecap="square" stroke-linejoin="bevel" transform="matrix(1,0,0,1,0,396)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<polyline fill="none" vector-effect="none" points="527,28 527,104 " />
+<polyline fill="none" vector-effect="none" points="537,28 537,104 " />
 </g>
 
 <g fill="#f39c12" fill-opacity="0.705882" stroke="#ce93d8" stroke-opacity="1" stroke-width="1" stroke-linecap="square" stroke-linejoin="bevel" transform="matrix(1,0,0,1,0,396)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<text fill="#ce93d8" fill-opacity="1" stroke="none" xml:space="preserve" x="530" y="40" font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
+<text fill="#ce93d8" fill-opacity="1" stroke="none" xml:space="preserve" x="540" y="40" font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
  >avg</text>
 </g>
 
 <g fill="#f39c12" fill-opacity="0.705882" stroke="#4caf50" stroke-opacity="1" stroke-dasharray="8,4" stroke-dashoffset="0" stroke-width="2" stroke-linecap="square" stroke-linejoin="bevel" transform="matrix(1,0,0,1,0,396)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<polyline fill="none" vector-effect="none" points="746,28 746,104 " />
+<polyline fill="none" vector-effect="none" points="780,28 780,104 " />
 </g>
 
 <g fill="#f39c12" fill-opacity="0.705882" stroke="#4caf50" stroke-opacity="1" stroke-width="1" stroke-linecap="square" stroke-linejoin="bevel" transform="matrix(1,0,0,1,0,396)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<text fill="#4caf50" fill-opacity="1" stroke="none" xml:space="preserve" x="749" y="40" font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
+<text fill="#4caf50" fill-opacity="1" stroke="none" xml:space="preserve" x="783" y="40" font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
  >p50</text>
 </g>
 
 <g fill="#f39c12" fill-opacity="0.705882" stroke="#ff9800" stroke-opacity="1" stroke-dasharray="8,4" stroke-dashoffset="0" stroke-width="2" stroke-linecap="square" stroke-linejoin="bevel" transform="matrix(1,0,0,1,0,396)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<polyline fill="none" vector-effect="none" points="746,28 746,104 " />
+<polyline fill="none" vector-effect="none" points="780,28 780,104 " />
 </g>
 
 <g fill="#f39c12" fill-opacity="0.705882" stroke="#ff9800" stroke-opacity="1" stroke-width="1" stroke-linecap="square" stroke-linejoin="bevel" transform="matrix(1,0,0,1,0,396)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<text fill="#ff9800" fill-opacity="1" stroke="none" xml:space="preserve" x="749" y="40" font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
+<text fill="#ff9800" fill-opacity="1" stroke="none" xml:space="preserve" x="783" y="40" font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
  >p95</text>
 </g>
 
@@ -462,13 +461,13 @@ font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="nor
 <g fill="none" stroke="#4caf50" stroke-opacity="1" stroke-dasharray="4,2" stroke-dashoffset="0" stroke-width="1" stroke-linecap="square" stroke-linejoin="bevel" transform="matrix(1,0,0,1,0,0)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<polyline fill="none" vector-effect="none" points="56,15 778,15 " />
+<polyline fill="none" vector-effect="none" points="56,14 778,14 " />
 </g>
 
 <g fill="none" stroke="#4caf50" stroke-opacity="1" stroke-width="1" stroke-linecap="square" stroke-linejoin="bevel" transform="matrix(1,0,0,1,0,0)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<text fill="#4caf50" fill-opacity="1" stroke="none" xml:space="preserve" x="780" y="19" font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
+<text fill="#4caf50" fill-opacity="1" stroke="none" xml:space="preserve" x="780" y="18" font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
  >p50</text>
 </g>
 
@@ -500,7 +499,7 @@ font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="nor
 <g fill="#e74c3c" fill-opacity="0.784314" stroke="none" transform="matrix(1,0,0,1,0,0)"
 font-family=".AppleSystemUIFont" font-size="7" font-weight="400" font-style="normal" 
 >
-<circle cx="778" cy="15" r="3"/>
+<circle cx="778" cy="14" r="3"/>
 </g>
 
 <g fill="none" stroke="#000000" stroke-opacity="1" stroke-width="1" stroke-linecap="square" stroke-linejoin="bevel" transform="matrix(1,0,0,1,0,0)"

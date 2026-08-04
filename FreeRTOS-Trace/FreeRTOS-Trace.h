@@ -188,7 +188,7 @@
 #ifndef traceINTERVAL_START
 # define traceINTERVAL_START(id) do {                                       \
     taskENTER_CRITICAL();                                                   \
-    btf_traceINTERVAL_START(id);                                            \
+    (btf_traceINTERVAL_START)(id);                                            \
     taskEXIT_CRITICAL();                                                    \
 } while(0)
 #endif // traceINTERVAL_START
@@ -196,7 +196,7 @@
 #ifndef traceINTERVAL_STOP
 # define traceINTERVAL_STOP(id) do {                                        \
     taskENTER_CRITICAL();                                                   \
-    btf_traceINTERVAL_STOP(id);                                             \
+    (btf_traceINTERVAL_STOP)(id);                                             \
     taskEXIT_CRITICAL();                                                    \
 } while(0)
 #endif // traceINTERVAL_STOP

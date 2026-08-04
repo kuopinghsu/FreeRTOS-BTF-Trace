@@ -477,13 +477,17 @@ Capture the **same workload** twice—once with FreeRTOS tickless idle enabled, 
 **CLI**
 
 ```bash
+# Pair zip (two .btf members) or two separate paths:
+python builds/btf_viewer.py compare tracedata/tickless-8cores.zip \
+    --output tick-policy-compare.html --format html \
+    --name-a "Tickful" --name-b "Tickless"
 python builds/btf_viewer.py compare tickless.btf.gz tickful.btf.gz \
     --output tick-policy-compare.html --format html \
     --name-a "Tickless" --name-b "Tickful"
 # Optional: same busy phase in #timeScale units (us on example-8cores)
-python builds/btf_viewer.py compare tickless.btf.gz tickful.btf.gz \
+python builds/btf_viewer.py compare tracedata/tickless-8cores.zip \
     --output tick-policy-busy.html --format html \
-    --name-a "Tickless" --name-b "Tickful" \
+    --name-a "Tickful" --name-b "Tickless" \
     --lo 1464000 --hi 1764000
 ```
 

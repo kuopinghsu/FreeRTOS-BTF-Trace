@@ -319,6 +319,15 @@ void vPortSecondaryHartEntry( void );
 
 #endif /* configNUMBER_OF_CORES > 1 */
 
+/* ================================================================
+ * Tickless idle (configUSE_TICKLESS_IDLE != 0)
+ * ================================================================ */
+#if ( configUSE_TICKLESS_IDLE != 0 )
+void vPortSuppressTicksAndSleep( TickType_t xExpectedIdleTime );
+#define portSUPPRESS_TICKS_AND_SLEEP( xExpectedIdleTime ) \
+    vPortSuppressTicksAndSleep( xExpectedIdleTime )
+#endif
+
 /* *INDENT-OFF* */
 #ifdef __cplusplus
     }

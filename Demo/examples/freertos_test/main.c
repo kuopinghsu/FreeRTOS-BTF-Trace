@@ -71,8 +71,17 @@
  *                               stays on-mask; migrate one task from core 0
  *                               to the last core (affinity STI for BTFViewer).
  *
- * Tests run back-to-back with only taskYIELD() handoffs between phases
- * (no vTaskDelay gaps) so all cores stay busy under SMP load.
+ * 11. Tickless idle           - intentional vTaskDelay idle windows so Trace
+ *                               Health can classify TICK vs TICKLESS.  With
+ *                               TICKLESS=1 (make … TICKLESS=1) the port
+ *                               suppresses the tick IRQ during sleep
+ *                               (multi-tick STI gaps).  Correctness: each
+ *                               delay advances xTaskGetTickCount by ≈ the
+ *                               requested ticks.
+ *
+ * Tests 1–10 run back-to-back with only taskYIELD() handoffs between phases
+ * (no vTaskDelay gaps) so cores stay busy under SMP load.  Test 11 alone
+ * uses vTaskDelay to create idle windows for tickless analysis.
  */
 
 #include <stdio.h>
@@ -164,6 +173,13 @@
 #endif
 #define T9_ROUNDS          2
 #define T9_FILLERS         ( configNUMBER_OF_CORES )
+
+/* Test 11 — tickless / fixed-tick idle windows (vTaskDelay).
+ * Sleep long enough for configEXPECTED_IDLE_TIME_BEFORE_SLEEP (default 2). */
+#define T11_ROUNDS         3
+#define T11_SLEEP_TICKS    20
+#define T11_BUSY_ITERS     ( ITER_FAST )
+#define T11_TOLERANCE      2
 
 /* ==================================================================
  * Application hooks
@@ -1418,6 +1434,113 @@ static int run_test10( void )
 #endif /* configNUMBER_OF_CORES > 1 && configUSE_CORE_AFFINITY */
 
 /* ==================================================================
+ * TEST 11 - Tickless idle (vTaskDelay windows)
+ *
+ * Creates deliberate idle periods for BTFViewer Trace Health:
+ *   • configUSE_TICKLESS_IDLE=0 → regular TICK STI during sleep (TICK mode)
+ *   • configUSE_TICKLESS_IDLE=1 → port suppresses the tick IRQ; STI shows
+ *     multi-tick gaps (TICKLESS).  Rebuild with:
+ *       make CORES=N TICKLESS=0|1 …
+ *
+ * Correctness (either mode): each vTaskDelay(T11_SLEEP_TICKS) advances
+ * xTaskGetTickCount by T11_SLEEP_TICKS ± T11_TOLERANCE.  When tickless is
+ * on, the tick hook should fire far fewer times than the slept ticks
+ * (suppressed periods do not call the hook).
+ * ================================================================== */
+
+static SemaphoreHandle_t  t11_done;
+static volatile uint32_t  t11_hook_count;
+static volatile BaseType_t t11_count_hooks;
+static volatile uint32_t  t11_elapsed_fail;
+static volatile uint32_t  t11_hook_fail;
+
+static void vTicklessSubject( void *pvArg )
+{
+    int round, i;
+    TickType_t t0, t1, elapsed;
+    (void)pvArg;
+
+    /* Short busy phase so the timeline has a non-idle stretch before sleep. */
+    for( i = 0; i < T11_BUSY_ITERS; ++i )
+        taskYIELD();
+
+    for( round = 0; round < T11_ROUNDS; ++round )
+    {
+        t11_hook_count = 0;
+        t11_count_hooks = pdTRUE;
+
+        t0 = xTaskGetTickCount();
+        vTaskDelay( ( TickType_t )T11_SLEEP_TICKS );
+        t1 = xTaskGetTickCount();
+
+        t11_count_hooks = pdFALSE;
+        elapsed = t1 - t0;
+
+        if( ( elapsed + ( TickType_t )T11_TOLERANCE ) < ( TickType_t )T11_SLEEP_TICKS ||
+            elapsed > ( TickType_t )( T11_SLEEP_TICKS + T11_TOLERANCE ) )
+        {
+            t11_elapsed_fail++;
+        }
+
+#if ( configUSE_TICKLESS_IDLE != 0 ) && ( configNUMBER_OF_CORES == 1 )
+        /* Single-core: suppressed ticks skip vApplicationTickHook.  On SMP the
+         * tick owner (hart 0) may still see wakeups from other cores' activity. */
+        if( t11_hook_count > ( uint32_t )( T11_SLEEP_TICKS / 2 ) )
+            t11_hook_fail++;
+#endif
+    }
+
+    xSemaphoreGive( t11_done );
+    vTaskDelete( NULL );
+}
+
+static int run_test11( void )
+{
+    int fail = 0;
+
+    t11_elapsed_fail = 0;
+    t11_hook_fail = 0;
+    t11_hook_count = 0;
+    t11_count_hooks = pdFALSE;
+    t11_done = xSemaphoreCreateBinary();
+    configASSERT( t11_done );
+
+#if configUSE_TRACE_FACILITY
+    traceINTERVAL_START( 11 );
+#endif
+
+    configASSERT( xTaskCreate( vTicklessSubject, "TL",
+                               TASK_STACK_WORDS, NULL,
+                               WORKER_PRIORITY, NULL ) == pdPASS );
+
+    xSemaphoreTake( t11_done, portMAX_DELAY );
+
+#if configUSE_TRACE_FACILITY
+    traceINTERVAL_STOP( 11 );
+#endif
+
+    vSemaphoreDelete( t11_done );
+    t11_count_hooks = pdFALSE;
+
+    if( t11_elapsed_fail != 0 )
+    {
+        printf( "  FAIL: delay tick delta out of range (%u rounds)\n",
+                (unsigned)t11_elapsed_fail );
+        ++fail;
+    }
+#if ( configUSE_TICKLESS_IDLE != 0 )
+    if( t11_hook_fail != 0 )
+    {
+        printf( "  FAIL: tick hook fired too often during sleep "
+                "(%u rounds) — tick IRQ not suppressed?\n",
+                (unsigned)t11_hook_fail );
+        ++fail;
+    }
+#endif
+    return fail;
+}
+
+/* ==================================================================
  * Test-runner task
  * ================================================================== */
 
@@ -1441,6 +1564,7 @@ static const test_entry_t tests[] =
     { "8: priority inversion",     run_test8 },
     { "9: task suspend/resume",    run_test9 },
     { "10: core affinity",         run_test10 },
+    { "11: tickless idle",         run_test11 },
 };
 
 #define N_TESTS  ( (int)( sizeof( tests ) / sizeof( tests[ 0 ] ) ) )
@@ -1517,6 +1641,9 @@ static void vTestRunner( void *pvArg )
  */
 void vApplicationTickHook( void )
 {
+    if( t11_count_hooks != pdFALSE )
+        t11_hook_count++;
+
 #if configUSE_TRACE_FACILITY
     size_t total_heap = configTOTAL_HEAP_SIZE;
     size_t free_heap  = xPortGetFreeHeapSize();

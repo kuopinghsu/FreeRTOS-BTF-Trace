@@ -1,198 +1,184 @@
 {
   "trace": "example-4cores.btf.gz",
   "hasSyncObjectInstrumentation": true,
-  "syncObjectCount": 27,
-  "syncIssueCount": 8,
+  "syncObjectCount": 25,
+  "syncIssueCount": 5,
   "queueCount": 2,
   "mutexCount": 2,
-  "semCount": 23,
+  "semCount": 21,
   "objects": [
     {
       "kind": "mutex",
-      "ptr": "0x8001c490",
+      "ptr": "0x8001c7f0",
       "holds": 6,
       "issues": 0,
       "status": "ok"
     },
     {
       "kind": "mutex",
-      "ptr": "0x8001c540",
+      "ptr": "0x8001c8a0",
       "holds": 240,
-      "issues": 4,
+      "issues": 2,
       "status": "warning"
     },
     {
       "kind": "queue",
-      "ptr": "0x80016948",
+      "ptr": "0x80016ca8",
       "holds": 0,
       "issues": 0,
       "status": "ok"
     },
     {
       "kind": "queue",
-      "ptr": "0x800210c0",
+      "ptr": "0x8001c7f0",
       "holds": 240,
       "issues": 0,
       "status": "ok"
     },
     {
       "kind": "sem",
-      "ptr": "0x8001c490",
-      "holds": 4,
-      "issues": 1,
-      "status": "warning"
+      "ptr": "0x8001c7f0",
+      "holds": 1,
+      "issues": 0,
+      "status": "ok"
     },
     {
       "kind": "sem",
-      "ptr": "0x8001c540",
+      "ptr": "0x8001c8a0",
       "holds": 2,
       "issues": 0,
       "status": "ok"
     },
     {
       "kind": "sem",
-      "ptr": "0x8001c5f0",
-      "holds": 4,
-      "issues": 0,
-      "status": "ok"
-    },
-    {
-      "kind": "sem",
-      "ptr": "0x8001c6a0",
-      "holds": 3,
-      "issues": 0,
-      "status": "ok"
-    },
-    {
-      "kind": "sem",
-      "ptr": "0x8001ccd0",
-      "holds": 2,
-      "issues": 0,
-      "status": "ok"
-    },
-    {
-      "kind": "sem",
-      "ptr": "0x8001dc30",
-      "holds": 3,
-      "issues": 1,
-      "status": "warning"
-    },
-    {
-      "kind": "sem",
-      "ptr": "0x8001dce0",
-      "holds": 2,
-      "issues": 0,
-      "status": "ok"
-    },
-    {
-      "kind": "sem",
-      "ptr": "0x8001dd90",
-      "holds": 4,
-      "issues": 0,
-      "status": "ok"
-    },
-    {
-      "kind": "sem",
-      "ptr": "0x8001de40",
-      "holds": 3,
-      "issues": 0,
-      "status": "ok"
-    },
-    {
-      "kind": "sem",
-      "ptr": "0x8001e5d0",
-      "holds": 3,
-      "issues": 1,
-      "status": "warning"
-    },
-    {
-      "kind": "sem",
-      "ptr": "0x8001e680",
-      "holds": 2,
-      "issues": 0,
-      "status": "ok"
-    },
-    {
-      "kind": "sem",
-      "ptr": "0x8001e730",
-      "holds": 4,
-      "issues": 0,
-      "status": "ok"
-    },
-    {
-      "kind": "sem",
-      "ptr": "0x8001e7e0",
-      "holds": 3,
-      "issues": 0,
-      "status": "ok"
-    },
-    {
-      "kind": "sem",
-      "ptr": "0x8001ef70",
-      "holds": 3,
-      "issues": 1,
-      "status": "warning"
-    },
-    {
-      "kind": "sem",
-      "ptr": "0x8001f020",
-      "holds": 2,
-      "issues": 0,
-      "status": "ok"
-    },
-    {
-      "kind": "sem",
-      "ptr": "0x8001f0d0",
-      "holds": 4,
-      "issues": 0,
-      "status": "ok"
-    },
-    {
-      "kind": "sem",
-      "ptr": "0x8001f180",
-      "holds": 3,
-      "issues": 0,
-      "status": "ok"
-    },
-    {
-      "kind": "sem",
-      "ptr": "0x8001fc20",
-      "holds": 3,
-      "issues": 0,
-      "status": "ok"
-    },
-    {
-      "kind": "sem",
-      "ptr": "0x8001fcd0",
-      "holds": 3,
-      "issues": 0,
-      "status": "ok"
-    },
-    {
-      "kind": "sem",
-      "ptr": "0x8001fd80",
-      "holds": 3,
-      "issues": 0,
-      "status": "ok"
-    },
-    {
-      "kind": "sem",
-      "ptr": "0x8001fe30",
-      "holds": 3,
-      "issues": 0,
-      "status": "ok"
-    },
-    {
-      "kind": "sem",
-      "ptr": "0x8001fee0",
-      "holds": 3,
-      "issues": 0,
-      "status": "ok"
-    },
-    {
-      "kind": "sem",
-      "ptr": "0x80021190",
+      "ptr": "0x8001c8c0",
       "holds": 10,
+      "issues": 0,
+      "status": "ok"
+    },
+    {
+      "kind": "sem",
+      "ptr": "0x8001c950",
+      "holds": 4,
+      "issues": 0,
+      "status": "ok"
+    },
+    {
+      "kind": "sem",
+      "ptr": "0x8001ca00",
+      "holds": 3,
+      "issues": 0,
+      "status": "ok"
+    },
+    {
+      "kind": "sem",
+      "ptr": "0x8001cab0",
+      "holds": 3,
+      "issues": 0,
+      "status": "ok"
+    },
+    {
+      "kind": "sem",
+      "ptr": "0x8001cb60",
+      "holds": 3,
+      "issues": 0,
+      "status": "ok"
+    },
+    {
+      "kind": "sem",
+      "ptr": "0x8001cb80",
+      "holds": 3,
+      "issues": 1,
+      "status": "warning"
+    },
+    {
+      "kind": "sem",
+      "ptr": "0x8001cc10",
+      "holds": 3,
+      "issues": 0,
+      "status": "ok"
+    },
+    {
+      "kind": "sem",
+      "ptr": "0x8001cc30",
+      "holds": 2,
+      "issues": 0,
+      "status": "ok"
+    },
+    {
+      "kind": "sem",
+      "ptr": "0x8001ccc0",
+      "holds": 2,
+      "issues": 0,
+      "status": "ok"
+    },
+    {
+      "kind": "sem",
+      "ptr": "0x8001d520",
+      "holds": 4,
+      "issues": 0,
+      "status": "ok"
+    },
+    {
+      "kind": "sem",
+      "ptr": "0x8001d5d0",
+      "holds": 3,
+      "issues": 0,
+      "status": "ok"
+    },
+    {
+      "kind": "sem",
+      "ptr": "0x8001d680",
+      "holds": 3,
+      "issues": 1,
+      "status": "warning"
+    },
+    {
+      "kind": "sem",
+      "ptr": "0x8001ea30",
+      "holds": 2,
+      "issues": 0,
+      "status": "ok"
+    },
+    {
+      "kind": "sem",
+      "ptr": "0x8001eae0",
+      "holds": 4,
+      "issues": 0,
+      "status": "ok"
+    },
+    {
+      "kind": "sem",
+      "ptr": "0x8001eb90",
+      "holds": 3,
+      "issues": 0,
+      "status": "ok"
+    },
+    {
+      "kind": "sem",
+      "ptr": "0x8001f320",
+      "holds": 3,
+      "issues": 1,
+      "status": "warning"
+    },
+    {
+      "kind": "sem",
+      "ptr": "0x8001f3d0",
+      "holds": 2,
+      "issues": 0,
+      "status": "ok"
+    },
+    {
+      "kind": "sem",
+      "ptr": "0x8001f480",
+      "holds": 4,
+      "issues": 0,
+      "status": "ok"
+    },
+    {
+      "kind": "sem",
+      "ptr": "0x8001f530",
+      "holds": 3,
       "issues": 0,
       "status": "ok"
     }

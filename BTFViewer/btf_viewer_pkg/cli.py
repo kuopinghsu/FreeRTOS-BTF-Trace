@@ -21,13 +21,91 @@ def _cli_validate_range_pair(lo: Optional[int], hi: Optional[int], label: str) -
     return None
 
 def _cli_load_trace(path: str) -> Tuple[Optional["BtfTrace"], Optional[str]]:
-    trace_path = os.path.abspath(path)
-    if not os.path.isfile(trace_path):
-        return None, f"error: trace file not found: {trace_path}"
+    """Load a .btf path, including ``archive.zip::member.btf`` zip members."""
+    load_path = _normalize_open_path(path)
+    zip_path, _member = _split_zip_member_path(load_path)
+    if not os.path.isfile(zip_path):
+        return None, f"error: trace file not found: {zip_path}"
     try:
-        return _parse_btf(trace_path), None
+        return _parse_btf(load_path), None
     except Exception as exc:
-        return None, f"error: failed to parse {trace_path}: {exc}"
+        return None, f"error: failed to parse {load_path}: {exc}"
+
+
+def _cli_compare_pair_members(members: List[str]) -> Optional[List[str]]:
+    """Pick exactly two ``.btf`` zip members for Trace Compare.
+
+    Prefers two top-level members when present (ignores nested duplicates);
+    otherwise requires the archive to contain exactly two ``.btf`` files.
+    """
+    if len(members) == 2:
+        return list(members)
+    top = [n for n in members if "/" not in n and "\\" not in n]
+    if len(top) == 2:
+        return top
+    return None
+
+
+def _cli_resolve_compare_traces(
+    traces: List[str],
+) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """Resolve compare inputs to two load paths.
+
+    Accepts either two ``.btf`` / ``zip::member`` paths, or one ``.zip`` that
+    contains exactly two ``.btf`` members (or exactly two at the archive root).
+    """
+    if len(traces) == 2:
+        return (
+            _normalize_open_path(traces[0]),
+            _normalize_open_path(traces[1]),
+            None,
+        )
+    if len(traces) != 1:
+        return None, None, (
+            "error: compare expects two .btf paths, or one .zip with two .btf members"
+        )
+
+    path = _normalize_open_path(traces[0])
+    zip_path, member = _split_zip_member_path(path)
+    if member:
+        return None, None, (
+            "error: a single zip::member path is not enough; "
+            "pass two members (a.zip::a.btf a.zip::b.btf) or the zip alone"
+        )
+    if not os.path.isfile(zip_path):
+        return None, None, f"error: trace file not found: {zip_path}"
+
+    if _sniff_compression(zip_path) != "zip":
+        return None, None, (
+            "error: compare needs two traces; pass a second .btf or a .zip "
+            "with two .btf members"
+        )
+
+    try:
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            names = zf.namelist()
+            members = _list_zip_btf_members(names)
+    except (OSError, zipfile.BadZipFile) as exc:
+        return None, None, f"error: failed to read zip: {exc}"
+
+    if not members:
+        return None, None, f"error: {_zip_no_btf_message(names)}"
+
+    picked = _cli_compare_pair_members(members)
+    if picked is None:
+        listing = ", ".join(members[:12])
+        more = "…" if len(members) > 12 else ""
+        return None, None, (
+            f"error: zip has {len(members)} .btf members "
+            f"(need exactly two, or exactly two at the archive root); "
+            f"found: {listing}{more}. "
+            f"Pass two paths as archive.zip::member.btf …"
+        )
+    return (
+        f"{zip_path}{_ZIP_MEMBER_SEP}{picked[0]}",
+        f"{zip_path}{_ZIP_MEMBER_SEP}{picked[1]}",
+        None,
+    )
 
 def _cli_dual_ranges(args: argparse.Namespace) -> Tuple[Optional[int], Optional[int],
                                                         Optional[int], Optional[int],
@@ -138,6 +216,7 @@ CLI examples:
   %(prog)s report tracedata/example-4cores.btf -o /tmp/stats.html
   %(prog)s report tracedata/example-4cores.btf -o /tmp/stats --format both
   %(prog)s compare run1.btf run2.btf -o /tmp/compare.html --name-a baseline --name-b tuned
+  %(prog)s compare tracedata/tickless-8cores.zip -o /tmp/tick-policy.html
   %(prog)s migrations tracedata/example-4cores.btf -o /tmp/migrations.csv
   %(prog)s snapshot tracedata/example-4cores.btf -o /tmp/timeline.png --view timeline
   %(prog)s snapshot tracedata/example-4cores.btf -o /tmp/task.png --view plot --metric exec --task "Producer[1]"
@@ -178,6 +257,12 @@ Same tables as Trace Compare → Export:
   Top Tasks      CPU%% per display name (union of both traces).
   Core Migrations  per-task migr count, rate, dwell, ping-pong (A vs B + Δ).
 
+Inputs:
+  Two paths     Trace A then Trace B (.btf, .btf.gz, .btf.bz2, or zip::member).
+  One .zip      Archive with exactly two .btf members (or exactly two at the
+                archive root — nested duplicates are ignored). Members are
+                ordered top-level first, then lexicographically → Trace A, B.
+
 Scope:
   Omit range flags for the full trace on each side.
   --lo/--hi        apply the same window to both traces.
@@ -190,6 +275,10 @@ examples:
   %(prog)s a.btf b.btf -o diff.csv --format csv
   %(prog)s a.btf b.btf -o cmp --format both
   %(prog)s a.btf b.btf -o cmp.html --lo-a 0 --hi-a 100000 --lo-b 0 --hi-b 100000
+  %(prog)s pair.zip -o compare.html
+  %(prog)s tracedata/tickless-8cores.zip -o tick-policy.html \\
+      --name-a Tickful --name-b Tickless
+  %(prog)s pair.zip::a.btf pair.zip::b.btf -o cmp.csv --format csv
 """
 
 _CLI_EPILOG_MIGRATIONS = """\
@@ -336,18 +425,19 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
         description=(
             "Compare two .btf traces: summary metrics, top tasks by CPU%%, and "
             "core migration tables with A/B deltas.\n\n"
+            "Pass two .btf paths, or one .zip / .btf.zip that contains two "
+            ".btf members (same multi-BTF zip the GUI opens as two tabs).\n\n"
             "Matches Trace Compare → Export CSV / Export HTML in the GUI."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=_CLI_EPILOG_COMPARE,
     )
     compare.add_argument(
-        "trace_a", metavar="trace_a.btf",
-        help="first trace (.btf); shown as Trace A in the report",
-    )
-    compare.add_argument(
-        "trace_b", metavar="trace_b.btf",
-        help="second trace (.btf); shown as Trace B in the report",
+        "traces", nargs="+", metavar="TRACE",
+        help=(
+            "two .btf paths (Trace A then Trace B), or one .zip containing "
+            "exactly two .btf members"
+        ),
     )
     compare.add_argument(
         "-o", "--output", required=True, metavar="PATH",
@@ -360,11 +450,11 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
     )
     compare.add_argument(
         "--name-a", default=None, metavar="LABEL",
-        help="display label for trace A (default: basename of trace_a.btf)",
+        help="display label for trace A (default: basename of Trace A)",
     )
     compare.add_argument(
         "--name-b", default=None, metavar="LABEL",
-        help="display label for trace B (default: basename of trace_b.btf)",
+        help="display label for trace B (default: basename of Trace B)",
     )
     compare.add_argument(
         "--lo", type=int, default=None, metavar="T",
@@ -646,8 +736,12 @@ def _cli_compare_run(args: argparse.Namespace) -> int:
         print(err, file=sys.stderr)
         return 1
 
-    path_a = os.path.abspath(args.trace_a)
-    path_b = os.path.abspath(args.trace_b)
+    path_a, path_b, err_paths = _cli_resolve_compare_traces(list(args.traces))
+    if err_paths:
+        print(err_paths, file=sys.stderr)
+        return 1
+    assert path_a is not None and path_b is not None
+
     trace_a, err_a = _cli_load_trace(path_a)
     if err_a:
         print(err_a, file=sys.stderr)
@@ -657,8 +751,8 @@ def _cli_compare_run(args: argparse.Namespace) -> int:
         print(err_b, file=sys.stderr)
         return 1
 
-    name_a = args.name_a or os.path.basename(path_a)
-    name_b = args.name_b or os.path.basename(path_b)
+    name_a = args.name_a or _trace_display_name(path_a)
+    name_b = args.name_b or _trace_display_name(path_b)
     scope_enabled = (lo_a is not None) or (lo_b is not None)
     tables = _build_trace_compare_rows(
         trace_a, trace_b, lo_a, hi_a, lo_b, hi_b)

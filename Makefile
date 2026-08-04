@@ -47,9 +47,12 @@ update:
 	$(MAKE) -f Makefile CORES=16 clean run
 	@mv tracedata/trace.btf tracedata/example-16cores.btf
 	@gzip -f tracedata/example-16cores.btf
-	$(MAKE) -f Makefile CORES=32 clean run
-	@mv tracedata/trace.btf tracedata/example-32cores.btf
-	@gzip -f tracedata/example-32cores.btf
+	$(MAKE) -f Makefile CORES=8 TICKLESS=0 clean run
+	@mv tracedata/trace.btf tracedata/tickful-8cores.btf
+	$(MAKE) -f Makefile CORES=8 TICKLESS=1 clean run
+	@mv tracedata/trace.btf tracedata/tickless-8cores.btf
+	@zip tracedata/tickless-8cores.zip tracedata/tickful-8cores.btf tracedata/tickless-8cores.btf
+	@$(RM) tracedata/tickful-8cores.btf tracedata/tickless-8cores.btf
 	@$(RM) tracedata/trace.vcd
 	$(MAKE) -C BTFViewer update-images
 	$(MAKE) -C BTFViewer test

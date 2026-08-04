@@ -15,10 +15,20 @@ LDLIBS  += -lc -lgcc
 CORES ?= 1
 SIM   ?= ../../build/sim/riscv64-sim
 
-# Use a per-CORES output directory so switching CORES always triggers a full
-# rebuild: both object files and the linked ELF are keyed on $(CORES).
-OUTDIR := ../../build/demo/examples/cores$(CORES)
-OBJDIR := ../../build/demo/obj/cores$(CORES)
+# Optional: `make CORES=N TICKLESS=0|1 …` overrides configUSE_TICKLESS_IDLE in
+# FreeRTOSConfig.h (via -D).  Default 0.  Build output is keyed on TICKLESS so
+# toggling 0↔1 does not require a manual clean.
+TICKLESS ?= 0
+ifeq ($(filter $(TICKLESS),0 1),)
+$(error TICKLESS must be 0 or 1 (got '$(TICKLESS)'))
+endif
+FREERTOS_CPPFLAGS_TICKLESS := -DconfigUSE_TICKLESS_IDLE=$(TICKLESS)
+
+# Use a per-CORES / per-TICKLESS output directory so switching either flag
+# always triggers a full rebuild: both object files and the linked ELF are
+# keyed on $(CORES) and $(TICKLESS).
+OUTDIR := ../../build/demo/examples/cores$(CORES)-tickless$(TICKLESS)
+OBJDIR := ../../build/demo/obj/cores$(CORES)-tickless$(TICKLESS)
 
 # ── Common sources ─────────────────────────────────────────────────────────────
 # Common/port.c only holds vApplicationGet*TaskMemory(); with
@@ -53,7 +63,8 @@ FREERTOS_CPPFLAGS := \
     -I$(FREERTOS_CONF) \
     -I$(FREERTOS_TRACE) \
     -DconfigNUMBER_OF_CORES=$(CORES) \
-    -DconfigMAX_TRACE_EVENTS=$(MAX_TRACE_EVENTS)
+    -DconfigMAX_TRACE_EVENTS=$(MAX_TRACE_EVENTS) \
+    $(FREERTOS_CPPFLAGS_TICKLESS)
 
 # ── Port source selection ──────────────────────────────────────────────────────
 FREERTOS_PORT_C    := $(FREERTOS_CHIPS)/port.c

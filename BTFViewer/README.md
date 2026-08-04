@@ -243,7 +243,7 @@ Passing a file on the command line opens that trace in a tab immediately. With n
 |---------|-------------|
 | `info` | Trace summary on stdout (`--json` for machine-readable output) |
 | `report` | Full statistics export (same as Statistics → Export CSV/HTML; HTML includes the Analysis Findings card) |
-| `compare` | Two-trace diff (same as Trace Compare → Export) |
+| `compare` | Two-trace diff (same as Trace Compare → Export); two `.btf` paths or one multi-BTF `.zip` |
 | `migrations` | Core Migrations table as CSV |
 | `snapshot` | Export a PNG/SVG image — timeline, Migration Heatmap, or a statistics metric plot — without opening the GUI |
 | `perfetto` | Export Chrome Trace JSON for [ui.perfetto.dev](https://ui.perfetto.dev) (same as **File → Export Perfetto…**) |
@@ -256,6 +256,10 @@ python builds/btf_viewer.py report trace.btf -o|--output PATH [--format html|csv
 python builds/btf_viewer.py compare a.btf b.btf -o|--output PATH [--format html|csv|both] \
   [--name-a LABEL] [--name-b LABEL] \
   [--lo T --hi T | --lo-a T --hi-a T --lo-b T --hi-b T]
+# or one zip with two .btf members (GUI opens the same zip as two tabs):
+python builds/btf_viewer.py compare pair.zip -o compare.html
+python builds/btf_viewer.py compare tracedata/tickless-8cores.zip -o tick-policy.html \
+  --name-a Tickful --name-b Tickless
 
 python builds/btf_viewer.py migrations trace.btf [-o PATH] [--lo T] [--hi T]   # default: stdout
 
@@ -1782,6 +1786,89 @@ Each row shows Trace A, Trace B, and **Δ** (signed difference).
 **Preemption** / **Sync** — victim totals and sync-object aggregates (holds, issues, lock-bounce / affinity violations, mutex/sem/queue counts).
 
 Use this to compare builds, configurations, or runs of the same workload without merging traces manually.
+
+##### Use case: tickful vs tickless (performance and context switches)
+
+Capture the **same workload** twice — once with a fixed tick (`configUSE_TICKLESS_IDLE = 0`) and once with FreeRTOS **tickless idle** (`= 1`) — then use **Trace Compare…** to quantify scheduler cost and application latency.
+
+**Sample pair:** [`tracedata/tickless-8cores.zip`](../tracedata/tickless-8cores.zip) (8-core demo; members `tickful-8cores.btf` + `tickless-8cores.btf`). Opening the zip in the GUI loads both as tabs; the headless CLI accepts the zip as a single compare input.
+
+**Capture (demo firmware)**
+
+```bash
+# Fixed tick
+make CORES=8 TICKLESS=0 run
+cp tracedata/trace.btf tracedata/tickful-8cores.btf
+
+# Tickless idle
+make CORES=8 TICKLESS=1 run
+cp tracedata/trace.btf tracedata/tickless-8cores.btf
+
+# Optional: pack for GUI multi-tab open / CLI compare
+zip -j tracedata/tickless-8cores.zip \
+    tracedata/tickful-8cores.btf tracedata/tickless-8cores.btf
+```
+
+Keep STI **TICK** enabled on both builds and use the same suite / duration so Δ is meaningful.
+
+**Compare in the UI**
+
+1. Open the pair: `python builds/btf_viewer.py ../tracedata/tickless-8cores.zip` (two tabs), or open the two `.btf` files separately.
+2. Optionally place matching cursor windows on the same busy (or idle) phase in each tab and enable **Limit to each tab's cursor range**.
+3. Statistics footer → **Trace Compare…** → set Trace A / B labels (e.g. Tickful / Tickless).
+
+**What to read for performance and context switches**
+
+| Compare tab / row | Why it matters |
+|-------------------|----------------|
+| Summary → **Context switches** | Primary scheduler-activity cost between tick policies |
+| Summary → **Tick mode** / **Tick count** / **Tick health** | Confirms config; tickful should favour lower CV when idle stretches dominate |
+| Summary → **Core gap avg/max**, **Load Balance Score** / **σ** | Idle/busy structure and SMP balance |
+| Summary → **Migrations** | Whether tick wake pattern changes cross-core bouncing |
+| **Execution** (Max / p95) | Slice WCET and CPU-share shifts |
+| **Blocking** (Max / p95) | Response-time impact under each policy |
+| **Preemption** | Peer interference / tick-driven preemption differences |
+| **Top Tasks** / **Core Util** | Who absorbs tick or wake-up overhead |
+
+**CLI**
+
+```bash
+# Zip with two .btf members (archive-root order → Trace A, Trace B)
+python builds/btf_viewer.py compare ../tracedata/tickless-8cores.zip \
+    -o /tmp/tick-policy.html --format html \
+    --name-a Tickful --name-b Tickless
+
+# Or two paths; optional shared busy/idle window (# timeScale units)
+python builds/btf_viewer.py compare \
+    ../tracedata/tickful-8cores.btf ../tracedata/tickless-8cores.btf \
+    -o /tmp/tick-policy-busy.html \
+    --name-a Tickful --name-b Tickless \
+    --lo 1464000 --hi 1764000
+```
+
+**Example Summary** (`tickless-8cores.zip`, full-trace scope, A = Tickful, B = Tickless, Δ = A − B):
+
+| Metric | Tickful | Tickless | Δ |
+|--------|--------:|---------:|--:|
+| Context switches | 31,414 | 31,620 | −206 |
+| Migrations (total) | 19,018 | 18,440 | +578 |
+| Tick count | 2,561 | 2,611 | −50 |
+| Load Balance Score | 95 % | 95 % | ≈0 |
+| Span | 2.421 s | 2.444 s | −23 ms |
+
+On a **full** stress-suite capture (high core util), context-switch and tick counts can stay close — tick policy matters most in **idle-heavy** windows. Scope cursors (or `--lo`/`--hi`) around an idle phase (e.g. demo test 11) when measuring power-oriented tickless gains; keep a busy CS window when checking that latency budgets still hold.
+
+**Interpretation**
+
+| Observation | Typical reading |
+|-------------|-----------------|
+| Tickless: **TICKLESS** mode / higher CV; tickful: **TICK**, CV ≪ 5 % (often clearer in idle-scoped windows) | Configurations captured correctly |
+| Context switches ↓ on tickless in idle-heavy windows | Expected — suppressed idle ticks reduce scheduler wake-ups |
+| Context switches similar on a fully busy CS phase | Tick policy has little effect when cores never idle |
+| Blocking / Execution Max worse on one side | Prefer that policy only if the Δ fits latency budgets |
+| Migrations ↑ with one policy | Re-check affinity; tick wake pattern can change placement |
+
+Prefer **tickless** when idle power matters and scoped busy-window metrics stay within budget. Prefer **tickful** when Trace Health must stay GOOD or soft real-time slices cannot tolerate tick stretching. Longer walkthrough: [WORKFLOWS.md §5.2](WORKFLOWS.md#52-compare-two-builds).
 
 **Find → Migrations**: lists migration boundary times; `F3` / `Shift+F3` jump between them (Desktop + Web).
 

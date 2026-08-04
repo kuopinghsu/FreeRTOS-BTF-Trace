@@ -111,6 +111,85 @@ BaseType_t xPortStartScheduler( void )
     return pdFALSE; /* never reached */
 }
 
+#if ( configUSE_TICKLESS_IDLE != 0 )
+
+static uint64_t prvReadMtime( void )
+{
+    volatile uint32_t *pulTimeHigh =
+        ( volatile uint32_t * )( configMTIME_BASE_ADDRESS + 4UL );
+    volatile uint32_t *pulTimeLow =
+        ( volatile uint32_t * )configMTIME_BASE_ADDRESS;
+    uint32_t ulHigh, ulLow;
+
+    do
+    {
+        ulHigh = *pulTimeHigh;
+        ulLow  = *pulTimeLow;
+    } while( ulHigh != *pulTimeHigh );
+
+    return ( ( ( uint64_t )ulHigh ) << 32ULL ) | ( uint64_t )ulLow;
+}
+
+void vPortSuppressTicksAndSleep( TickType_t xExpectedIdleTime )
+{
+    const uint64_t ullOneTick = ( uint64_t )uxTimerIncrementsForOneTick;
+    const TickType_t xMaxSuppress =
+        ( TickType_t )( UINT32_MAX / ( uint32_t )uxTimerIncrementsForOneTick );
+    uint64_t ullStart, ullEnd, ullWake, ullElapsed, ullComplete;
+    eSleepModeStatus eSleep;
+
+    if( xExpectedIdleTime > xMaxSuppress )
+        xExpectedIdleTime = xMaxSuppress;
+    if( xExpectedIdleTime < ( TickType_t )2 )
+        return;
+
+    portDISABLE_INTERRUPTS();
+    eSleep = eTaskConfirmSleepModeStatus();
+    if( eSleep == eAbortSleep )
+    {
+        portENABLE_INTERRUPTS();
+        return;
+    }
+
+    /* Stop periodic ticks: clear MTIE, program a single wake compare, keep
+     * ullNextTime coherent so the first ISR after wake does not immediately
+     * re-arm a short period. */
+    __asm volatile( "csrc mie, %0" :: "r"( 0x80u ) : "memory" ); /* MTIE */
+
+    ullStart = prvReadMtime();
+    ullWake  = ullStart + ( ullOneTick * ( uint64_t )xExpectedIdleTime );
+    *pullMachineTimerCompareRegister = ullWake;
+    ullNextTime = ullWake + ullOneTick;
+
+    __asm volatile( "csrs mie, %0" :: "r"( 0x80u ) : "memory" ); /* MTIE */
+    portENABLE_INTERRUPTS();
+    __asm volatile( "wfi" ::: "memory" );
+    portDISABLE_INTERRUPTS();
+    __asm volatile( "csrc mie, %0" :: "r"( 0x80u ) : "memory" );
+
+    ullEnd = prvReadMtime();
+    ullElapsed = ullEnd - ullStart;
+    ullComplete = ullElapsed / ullOneTick;
+    if( ullComplete == 0ULL )
+        ullComplete = 1ULL;
+    if( ullComplete > ( uint64_t )xExpectedIdleTime )
+        ullComplete = ( uint64_t )xExpectedIdleTime;
+
+    /* One tick is accounted when the wake MTIP is handled after we re-enable
+     * MTIE below; step the rest. */
+    if( ullComplete > 1ULL )
+        vTaskStepTick( ( TickType_t )( ullComplete - 1ULL ) );
+
+    ullNextTime = ullEnd + ullOneTick;
+    *pullMachineTimerCompareRegister = ullNextTime;
+    ullNextTime += ullOneTick;
+
+    __asm volatile( "csrs mie, %0" :: "r"( 0x80u ) : "memory" );
+    portENABLE_INTERRUPTS();
+}
+
+#endif /* configUSE_TICKLESS_IDLE */
+
 /* ====================================================================
  * SMP  (configNUMBER_OF_CORES > 1)
  * ==================================================================== */
@@ -395,5 +474,94 @@ void vPortSecondaryHartEntry( void )
     xPortStartFirstTask();
     /* never reached */
 }
+
+#if ( configUSE_TICKLESS_IDLE != 0 )
+
+static uint64_t prvReadMtimeSmp( void )
+{
+    volatile uint32_t *pulTimeHigh =
+        ( volatile uint32_t * )( configMTIME_BASE_ADDRESS + 4UL );
+    volatile uint32_t *pulTimeLow =
+        ( volatile uint32_t * )configMTIME_BASE_ADDRESS;
+    uint32_t ulHigh, ulLow;
+
+    do
+    {
+        ulHigh = *pulTimeHigh;
+        ulLow  = *pulTimeLow;
+    } while( ulHigh != *pulTimeHigh );
+
+    return ( ( ( uint64_t )ulHigh ) << 32ULL ) | ( uint64_t )ulLow;
+}
+
+void vPortSuppressTicksAndSleep( TickType_t xExpectedIdleTime )
+{
+    const uint64_t ullOneTick = ( uint64_t )uxTimerIncrementsForOneTick;
+    const TickType_t xMaxSuppress =
+        ( TickType_t )( UINT32_MAX / ( uint32_t )uxTimerIncrementsForOneTick );
+    uint64_t ullStart, ullEnd, ullWake, ullElapsed, ullComplete;
+    eSleepModeStatus eSleep;
+    BaseType_t xCore = portGET_CORE_ID();
+
+    /* Only hart 0 owns the FreeRTOS tick timer. */
+    if( xCore != 0 )
+    {
+        portDISABLE_INTERRUPTS();
+        if( eTaskConfirmSleepModeStatus() == eAbortSleep )
+        {
+            portENABLE_INTERRUPTS();
+            return;
+        }
+        portENABLE_INTERRUPTS();
+        __asm volatile( "wfi" ::: "memory" );
+        return;
+    }
+
+    if( xExpectedIdleTime > xMaxSuppress )
+        xExpectedIdleTime = xMaxSuppress;
+    if( xExpectedIdleTime < ( TickType_t )2 )
+        return;
+
+    portDISABLE_INTERRUPTS();
+    eSleep = eTaskConfirmSleepModeStatus();
+    if( eSleep == eAbortSleep )
+    {
+        portENABLE_INTERRUPTS();
+        return;
+    }
+
+    __asm volatile( "csrc mie, %0" :: "r"( 0x80u ) : "memory" );
+
+    ullStart = prvReadMtimeSmp();
+    ullWake  = ullStart + ( ullOneTick * ( uint64_t )xExpectedIdleTime );
+    *pullMachineTimerCompareRegisters[ 0 ] = ullWake;
+    ullNextTimes[ 0 ] = ullWake + ullOneTick;
+
+    __asm volatile( "csrs mie, %0" :: "r"( 0x80u ) : "memory" );
+    portENABLE_INTERRUPTS();
+    __asm volatile( "wfi" ::: "memory" );
+    portDISABLE_INTERRUPTS();
+    __asm volatile( "csrc mie, %0" :: "r"( 0x80u ) : "memory" );
+
+    ullEnd = prvReadMtimeSmp();
+    ullElapsed = ullEnd - ullStart;
+    ullComplete = ullElapsed / ullOneTick;
+    if( ullComplete == 0ULL )
+        ullComplete = 1ULL;
+    if( ullComplete > ( uint64_t )xExpectedIdleTime )
+        ullComplete = ( uint64_t )xExpectedIdleTime;
+
+    if( ullComplete > 1ULL )
+        vTaskStepTick( ( TickType_t )( ullComplete - 1ULL ) );
+
+    ullNextTimes[ 0 ] = ullEnd + ullOneTick;
+    *pullMachineTimerCompareRegisters[ 0 ] = ullNextTimes[ 0 ];
+    ullNextTimes[ 0 ] += ullOneTick;
+
+    __asm volatile( "csrs mie, %0" :: "r"( 0x80u ) : "memory" );
+    portENABLE_INTERRUPTS();
+}
+
+#endif /* configUSE_TICKLESS_IDLE */
 
 #endif /* configNUMBER_OF_CORES */
