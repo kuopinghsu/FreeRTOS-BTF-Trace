@@ -25,7 +25,7 @@ A PySide6-based interactive visualiser for FreeRTOS context-switch traces in **B
 - **Multi-tab traces** — open several `.btf` files at once (Desktop: closable tabs; Web: tab bar under the toolbar). Both restore open tabs, active tab, and per-tab zoom/cursors/marks/filters on launch (Desktop: `btf_viewer.rc`; Web: `localStorage` + IndexedDB trace cache)
 - **Measurement cursors** — Desktop and Web support 2–8 cursors (default: 4); configurable in Settings
 - **Trace compare** — with 2+ tabs open, **Trace Compare…** in the Statistics panel diffs **Summary** (incl. load balance + tick health), **Top Tasks**, **Core Util**, **Core Migrations**, **Execution**, **Blocking**, **Inter-Arrival**, **Preemption**, and **Sync** side-by-side (Desktop + Web). Optional **Limit to each tab's cursor range** compares metrics within C1–Cn when 2+ cursors are placed on each trace
-- **Core migration analysis** — detect tasks that run on multiple cores; **Core Migrations** stats table (ping-pong, STI correlation, gap-after vs other gaps), **Core-Pair Migration Summary** (per directed pair: count, bounces, avg gap), **Core Time Breakdown** (active/idle/tick/gap per core), **clickable migration heatmap** (pair×time for ≤ 16 cores; core×core matrix → outgoing pairs for larger traces → per-task sub-bins → timeline drill-down), **migration chord diagram** (directional core-to-core migration volume as a circular chord diagram; hover a core arc to highlight its migrations), **Migrated tasks only** legend filter, toolbar **All tasks** reset, **bounce-only filter** (Show: Bounce Only toggle restricts the heatmap and chord diagram to lock-bounce migrations), and Find **Migrations** mode (Desktop + Web)
+- **Core migration analysis** — detect tasks that run on multiple cores; **Core Migrations** stats table (ping-pong, STI correlation, gap-after vs other gaps), **Core-Pair Migration Summary** (per directed pair: count, bounces, avg gap; click a row for Gap/Rate distribution charts with bounce-colored points, plus Open Heatmap / Open Chord), **Core Time Breakdown** (active/idle/tick/gap per core), **clickable migration heatmap** (pair×time for ≤ 16 cores; core×core matrix → outgoing pairs for larger traces → per-task sub-bins → timeline drill-down), **migration chord diagram** (directional core-to-core migration volume as a circular chord diagram; hover a core arc to highlight its migrations), **Migrated tasks only** legend filter, toolbar **All tasks** reset, **bounce-only filter** (Show: Bounce Only toggle restricts the heatmap and chord diagram to lock-bounce migrations), and Find **Migrations** mode (Desktop + Web)
 - **Core Affinity** — when traces include `affinity_set` STI events (from `vTaskCoreAffinitySet` / `traceENTER_vTaskCoreAffinitySet`), the **Core Affinity** statistics table shows each task's affinity mask history, observed execution cores, and flags violations in red — checked per slice against the mask in effect at that slice (before the first set the task is unrestricted) (Desktop + Web)
 - **Analysis Findings** — toolbar **Analysis** opens a severity-tagged dialog (load imbalance, WCET/CPU hotspots, blocking, L/M/H priority inversion, core thrashing / hot pairs, deadline breaches, tick health, sync/mutex bounces) for the current Statistics scope; **Save as text…** writes a `.txt` copy. The same card is embedded in **Statistics → Export HTML** / headless `report --format html` (Desktop + Web)
 - **Cursor-scoped statistics** — with 2+ cursors, the Statistics panel can limit all metrics (CPU%, execution slices, blocking time, inter-arrival, **preemption chain**, **priority inheritance**, **mutex / semaphore pairing**, **queue pairing**, **deadline violations**, scheduling summary, **Analysis Findings**, exports, and charts) to the window from C1 through the last cursor; toggle **Limit to cursor range (C1–Cn)** (Desktop + Web)
@@ -34,8 +34,8 @@ A PySide6-based interactive visualiser for FreeRTOS context-switch traces in **B
 - **Dockable Legend panel** — colour swatches for every task, with a search box, **Migrated tasks only** filter, a **heatmap filter banner** (when drilled from the heatmap), and the same highlight interaction
 - **Right-side panel** — **Statistics**, **Marks**, and **Find** tabs (Desktop: docked on the right, stacked below Legend; Web: tab bar on the right). Statistics holds metric tables; Marks holds cursors, bookmarks/annotations, and (on Web) Legend; Find searches tasks, annotations, migrations, STI events, interval spans, task lifecycle events, and object pointers
 - **Tag View** — inspect tag channels/events (`tag_event`, `tag0_event` … `tag7_event`) alongside task/core activity
-- **Metrics tables** — Execution Time Per Slice, **Blocking Time** (same metric as Tracealyzer **Response Time**: off-CPU gap / scheduling latency between activations), **Inter-Arrival**, **Preemption Chain** (which tasks preempted whom), **Priority Inheritance**, **Mutex / Semaphore pairing** (with **Core Bounce** column flagging holds that crossed core boundaries), **Queue pairing** (`send`/`recv` by queue pointer), **Interval Analysis** (paired `interval_start` / `interval_stop` spans; when the BTF note includes `tid:{task_id}`, pairing is per interval id **and** task), **Tag Analysis** (per-channel min/avg/max/p95 for `tag0_event`…`tag7_event` samples), **Task Lifecycle** (per-task create/delete/suspend/resume event summary), **Core-Pair Migration Summary**, **Core Time Breakdown**, **Core Affinity** (affinity mask vs. observed cores), and **Deadlines / CPU budget** (per-slice deadline violations and global CPU budget threshold); click **Min** / **Max** (dotted underline) to jump and add an annotation at the BCET / WCET slice or shortest / longest gap (Desktop + Web)
-- **Metrics distribution charts** — click any row in Execution Time, Blocking Time, Inter-Arrival, **Core Migrations** (in-dialog tabs to switch between **Dwell**, **Rate**, and **Gap**), Preemption Chain, **Priority Inheritance**, **Interval Analysis**, or **Tag Analysis** tables to open a scatter-plot + histogram popup; histograms use **adaptive scaling** (auto linear / p5–p95 / log duration, overflow buckets, optional log-scaled counts, CDF overlay); charts live-update when cursors move or cursor-range scope is toggled (Desktop + Web). On Desktop, each trace tab remembers its own open chart when you switch tabs
+- **Metrics tables** — Execution Time Per Slice, **Blocking Time** (off-CPU gap / scheduling latency between activations), **Inter-Arrival**, **Preemption Chain** (which tasks preempted whom), **Priority Inheritance**, **Mutex / Semaphore pairing** (with **Core Bounce** column flagging holds that crossed core boundaries), **Queue pairing** (`send`/`recv` by queue pointer), **Interval Analysis** (paired `interval_start` / `interval_stop` spans; when the BTF note includes `tid:{task_id}`, pairing is per interval id **and** task), **Tag Analysis** (per-channel min/avg/max/p95 for `tag0_event`…`tag7_event` samples), **Task Lifecycle** (per-task create/delete/suspend/resume event summary), **Core-Pair Migration Summary**, **Core Time Breakdown**, **Core Affinity** (affinity mask vs. observed cores), and **Deadlines / CPU budget** (per-slice deadline violations and global CPU budget threshold); click **Min** / **Max** (dotted underline) to jump and add an annotation at the BCET / WCET slice or shortest / longest gap (Desktop + Web)
+- **Metrics distribution charts** — click any row in Execution Time, Blocking Time, Inter-Arrival, **Core Migrations** (in-dialog tabs to switch between **Dwell**, **Rate**, and **Gap**), **Core-Pair Migration Summary** (**Gap** / **Rate** tabs; orange bounce points; Open Heatmap / Open Chord), Preemption Chain, **Priority Inheritance**, **Interval Analysis**, or **Tag Analysis** tables to open a scatter-plot + histogram popup; Execution/Blocking/Inter-Arrival charts shade **average ± one population σ**; histograms use **adaptive scaling** (auto linear / p5–p95 / log duration, overflow buckets, optional log-scaled counts, CDF overlay); charts live-update when cursors move or cursor-range scope is toggled (Desktop + Web). On Desktop, each trace tab remembers its own open chart when you switch tabs
 - **Segment tooltips** — hover any segment bar for duration, slice index on core, previous/next task on that core, and gap before the slice; time precision (decimal digits) is configurable in **Settings → Layout** and also applies to the hover-line badge, cursor labels, bookmarks/annotations, and the status bar
 - **CPU Load Graph** — bar chart below the timeline showing per-core CPU utilisation; row labels show the **visible-window average** and, with 2+ cursors, a cursor-range average (`· C:xx%`); toggle with the **Load** toolbar button; drag the divider between timeline and CPU load to resize (Desktop + Web)
 - **Resizable panels** — drag dividers between timeline and CPU load, the right-side panel (Statistics / Marks / Find) and Legend dock (Desktop), the **label column** (task names), and metric table sections in Statistics (Desktop + Web); splitter, label width, and table heights persist in `btf_viewer.rc` (Desktop) or browser `localStorage` (Web)
@@ -140,6 +140,17 @@ BTF_UI_FONT_PX=13 python3 -m btf_viewer_pkg trace.btf
 ```
 
 On WSLg, if scaling still does not match Windows, see [microsoft/wslg#1335](https://github.com/microsoft/wslg/issues/1335) for optional `.wslgconfig` compositor settings (`WESTON_RDP_HI_DPI_SCALING`, etc.).
+
+#### Headless rendering
+
+CLI subcommands (`snapshot`, `report`, `compare`, `info`, `migrations`, `perfetto`) honour `QT_QPA_PLATFORM=offscreen`, so image and report generation works over SSH, in CI, and inside sandboxes:
+
+```bash
+QT_QPA_PLATFORM=offscreen python3 -m btf_viewer_pkg snapshot trace.btf \
+    -o exec.svg --view plot --metric exec --task "CS[11]"
+```
+
+Launching the GUI itself with a headless platform would show no window, so `offscreen` / `minimal` / `vnc` is ignored (with a warning) on macOS when no subcommand is given.
 
 ---
 
@@ -767,15 +778,15 @@ Below the scope checkbox, a **scheduling summary** line shows context-switch cou
 | **Top Tasks by CPU** | Top 10 worker tasks ranked by total CPU time |
 | **Trace Health (TICK)** | STI TICK period regularity, **tick / tickless mode detection**, large gaps, missed-tick estimate, and **Tick Distribution** chart (Desktop + Web: whenever ≥ 2 ticks in scope) |
 | **Core Migrations** | Per-task cross-core migration stats (see [Core migration analysis](#core-migration-analysis)) |
-| **Execution Time Per Slice** | Per-task slice duration stats (runs, CPU%, min/avg/max/p95) |
-| **Blocking Time** | Off-CPU gap between consecutive activations of the same task (Tracealyzer **Response Time** — identical definition) |
-| **Inter-Arrival Time** | Gap between successive activation start times |
+| **Execution Time Per Slice** | Per-task slice duration stats (runs, CPU%, min/avg/max/jitter/σ/p95) |
+| **Blocking Time** | Off-CPU gap between consecutive activations; not release-to-completion response time |
+| **Inter-Arrival Time** | Gap between successive activation starts, including jitter and σ |
 | **Preemption Chain Analysis** | For each victim task, which preemptors ran during its off-CPU gaps |
 | **Priority Inheritance** | When traces include `create pri:N` and priority STI events (`priority_inherit` / `priority_disinherit` / `set_priority`): tasks boosted above base priority |
 | **Mutex / Semaphore pairing** | Pairs `take`/`give` STI events by object pointer (`0x........`); flags orphan gives, cross-task gives, unmatched takes, delete-while-held, **core-boundary lock bounces (`CORE_MIGRATION_WHILE_HELD`)**, and multi-mutex hold at trace end |
 | **Interval Analysis** | Paired `interval_start` / `interval_stop` spans per interval id (count, min/avg/max/p95 duration); notes with `tid:{task_id}` pair per task |
 | **Task Lifecycle** | Per-task `create`/`delete`/`suspend`/`resume` event summary from the `task` STI channel: created/deleted timestamps, suspend/resume counts, alive span (create→delete), total event count, and **Runs** (scheduler dispatch / context-switch-in count — distinct from Susp/Res, which only counts explicit `vTaskSuspend()`/`vTaskResume()` calls) |
-| **Core-Pair Migration Summary** | Per directed core-pair migration count, lock-bounce count and percentage, and average off-CPU gap after migration; visible only on multi-core traces with migrations |
+| **Core-Pair Migration Summary** | Per directed core-pair migration count, lock-bounce count and percentage, and average off-CPU gap after migration; click a row for Gap/Rate charts; visible only on multi-core traces with migrations |
 | **Core Time Breakdown** | Per-core split of span into **Active** (user tasks), **Idle** (IDLE task), **Tick** (TICK handler), and **Gap** (unaccounted time between segments) |
 | **Core Affinity** | Per-task affinity mask history (`affinity_set` STI from `vTaskCoreAffinitySet`) vs. observed execution cores; **Violations** flags cores used while a restrictive mask was active (time-aware; shown only when those STI events are present) |
 | **Queue** | Per-queue `send`/`recv` pairing by object pointer: hold count, issue count, average hold, and status (shown only when `queue` STI events are present) |
@@ -917,10 +928,10 @@ It shows (in panel order):
 - **Top tasks by CPU** — ranked list of worker tasks by total CPU time consumed (collapsible)
 - **Trace health (TICK)** — tick period regularity, **tick / tickless mode detection** (coefficient of variation of tick intervals), large gaps, missed-tick estimate, and **Tick Distribution…** chart button (bar-chart icon beside the mode badge when ≥ 2 ticks in scope) (collapsible)
 - **Core Migrations** — per-task migration count, **migration rate** (normalized per second of active time and per scheduler tick), **average core dwell time**, core count, primary core (% time), ping-pong count, STI events near migrations, and average off-CPU gap after migration vs other gaps; click a row for a distribution chart with **Dwell** / **Rate** / **Gap** tabs (collapsible)
-- **Core-Pair Migration Summary** — per directed core-pair (e.g. `Core_0 → Core_1`): total migration count, lock-bounce count and percentage, and average off-CPU gap after migration (collapsible; shown only on multi-core traces with migrations)
-- **Execution Time Per Slice** — per-task min/avg/max/p95, run count, and CPU%; click a row for a scatter + histogram popup; click **Min** / **Max** to jump and annotate the BCET / WCET slice
-- **Blocking Time** — off-CPU gap between consecutive activations of the same task (**Response Time** in Tracealyzer; same value, different label); min/avg/max/p95; click a row for a distribution chart; click **Min** / **Max** to jump and annotate the shortest / longest off-CPU gap (collapsible)
-- **Inter-Arrival Time** — same statistics for gaps between task activations; click **Min** / **Max** to jump and annotate the shortest / longest inter-arrival gap (collapsible)
+- **Core-Pair Migration Summary** — per directed core-pair (e.g. `Core_0 → Core_1`): total migration count, lock-bounce count and percentage, and average off-CPU gap after migration; **click a row** for Gap / Rate distribution charts (bounce samples in orange) with **Open Heatmap** / **Open Chord** deep-links (collapsible; shown only on multi-core traces with migrations)
+- **Execution Time Per Slice** — per-task min/avg/max/jitter/σ/p95, run count, and CPU%; click a row for a scatter + histogram popup; click **Min** / **Max** to jump and annotate the BCET / WCET slice
+- **Blocking Time** — off-CPU gap between consecutive activations of the same task (not end-to-end response time); min/avg/max/jitter/σ/p95; click a row for a distribution chart; click **Min** / **Max** to jump and annotate the shortest / longest off-CPU gap (collapsible)
+- **Inter-Arrival Time** — the same variability statistics for gaps between task activation starts; click **Min** / **Max** to jump and annotate the shortest / longest inter-arrival gap (collapsible)
 - **Preemption Chain Analysis** — for each victim/preemptor pair: count, total/average/max preemption overlap; click a row for a distribution chart; click a scatter point to jump and add an annotation at the preemptor segment (collapsible)
 - **Priority Inheritance** — per-task base/peak priority, boost episodes, boosted time, and pattern (mutex inherit / L/M/H / boost only); click a row for a duration plot; click a scatter point to zoom, highlight, and annotate the episode (collapsible; shown only when the trace contains priority-inheritance STI events)
 - **Mutex / Semaphore pairing** — per-object hold count, issue count, **core bounce count**, average hold, and status; **Pairing issues** sub-table lists orphan gives, cross-task gives, unmatched takes, teardown warnings, and **`CORE_MIGRATION_WHILE_HELD`** warnings (lock that crossed core boundaries while held); click an issue row to zoom, jump, and annotate (collapsible; shown only when the trace contains sync-object STI events)
@@ -1006,7 +1017,7 @@ Measures how long each **on-CPU slice** lasts for a task — from switch-in unti
 d_k = t_{\text{end},k} - t_{\text{start},k}
 ```
 
-Table statistics (Min / Avg / Max / p95) are computed over all slice durations *d*<sub>k</sub> in scope. **CPU%** is the task's share of total active CPU time in scope:
+Table statistics are computed over all slice durations *d*<sub>k</sub> in scope. **Jitter** is the observed range, `Max − Min`; **σ** is the population standard deviation (the observed slices are treated as the complete population in scope). **CPU%** is the task's share of total active CPU time in scope:
 
 ```math
 \text{CPU}_i = \frac{T_{\text{exec},i}}{\sum_j T_{\text{exec},j}} \times 100
@@ -1020,12 +1031,15 @@ Table statistics (Min / Avg / Max / p95) are computed over all slice durations *
 | **Runs** | Number of slices in scope |
 | **CPU%** | Share of total trace (or cursor-range) active time |
 | **Min / Avg / Max / p95** | Slice duration statistics |
+| **Jitter** | Observed duration range (`Max − Min`) |
+| **σ** | Population standard deviation of slice durations |
 | **Min / Max** links | Jump and annotate BCET / WCET slice |
 
 **Distribution chart** — click any row:
 
 - **Scatter:** x = slice start time, y = slice duration.
 - **Histogram:** distribution of slice durations (auto log scale when the tail is wide; see [CDF overlay](#cdf-overlay) for reading the blue cumulative curve).
+- **Variability overlay:** the translucent purple band is average ± one population σ. Jitter (`Max − Min`) is the full extent of the plotted data, so it needs no marker lines.
 
 In `example-8cores.btf.gz`, task **CS[11]** has 730 slices with a long tail of longer runs (context-switch stress tasks):
 
@@ -1037,7 +1051,7 @@ The scatter shows periodic bursts of short slices; the histogram uses a **log-sc
 
 Measures the **off-CPU gap** between the end of one slice and the start of the next for the same task — time spent waiting to run again (preempted, blocked on a resource, or delayed by the scheduler).
 
-> **Name alias — Response Time:** Percepio Tracealyzer and similar tools call this metric **Response Time** (time from the end of one task activation to the start of the next). BTFViewer labels it **Blocking Time** only; the statistic, formula, and charts are the same — there is no separate Response Time row in the UI.
+> **Not end-to-end response time:** BTFViewer's **Blocking Time** is only the off-CPU gap until the task next resumes. True response time is normally measured from an explicit release event to completion and cannot be derived reliably from context-switch slices alone. It requires matching release/completion instrumentation (for example, paired interval events).
 
 **Formula** — for consecutive activations *k* and *k+1* of task *i*:
 
@@ -1054,6 +1068,8 @@ Only positive gaps are counted. Min / Avg / Max / p95 are taken over all gaps *g
 | **Task** | Display name |
 | **Gaps** | Number of positive off-CPU gaps |
 | **Min / Avg / Max / p95** | Gap duration statistics |
+| **Jitter** | Observed gap range (`Max − Min`) |
+| **σ** | Population standard deviation of off-CPU gaps |
 | **Min / Max** links | Jump and annotate resume slice at shortest / longest gap |
 
 **Distribution chart** — click any row:
@@ -1086,6 +1102,8 @@ Min / Avg / Max / p95 are taken over all inter-arrival samples Δ*t*<sub>k</sub>
 | **Task** | Display name |
 | **Runs** | Number of inter-arrival samples |
 | **Min / Avg / Max / p95** | Gap between activation starts |
+| **Jitter** | Observed inter-arrival range (`Max − Min`) |
+| **σ** | Population standard deviation of inter-arrival times |
 | **Min / Max** links | Jump and annotate activation at shortest / longest inter-arrival |
 
 **Distribution chart** — click any row:
@@ -1097,7 +1115,7 @@ Min / Avg / Max / p95 are taken over all inter-arrival samples Δ*t*<sub>k</sub>
 
 ![Inter-arrival time distribution for CS[11] in example-8cores.btf.gz](../images/stats/stats-inter-cs11.svg)
 
-Compare with Blocking Time (Response Time): inter-arrival includes time the task was **running**, so values are typically larger than off-CPU gaps alone. The histogram auto-selects **log duration** for CS[11] because activation gaps span microseconds to milliseconds.
+Compare with Blocking Time: inter-arrival includes time the task was **running**, so values are typically larger than off-CPU gaps alone. The histogram auto-selects **log duration** for CS[11] because activation gaps span microseconds to milliseconds.
 
 #### Preemption Chain Analysis
 
@@ -1584,7 +1602,7 @@ python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
 After highlighting a hot task:
 
 1. **Statistics → Core Migrations** — note **Primary** core, **Rate**, **Dwell**, **Ping** for that task.  Click the row → **Dwell** / **Rate** / **Gap** charts.
-2. **Core-Pair Migration Summary** — sort or scan pairs where that core is **From** or **To** (e.g. `Core_5→Core_7`) to see which neighbour absorbs the traffic and whether **Bounce %** is elevated.
+2. **Core-Pair Migration Summary** — sort or scan pairs where that core is **From** or **To** (e.g. `Core_5→Core_7`) to see which neighbour absorbs the traffic and whether **Bounce %** is elevated. Click the row for Gap / Rate charts; use **Open Heatmap** / **Open Chord** from the dialog footer when you need time-bin density or topology.
 3. Toolbar **Heatmap** — find the dark cells on rows that include the core of interest; click to drill to the per-task grid, then click the task cell to zoom/filter the timeline to that pair/window.
 4. Toolbar **Chord** — hover the core’s arc to highlight only its ingress/egress chords.
 5. **Core Time Breakdown** — click a core row to jump Core View focused on that core.
@@ -1649,6 +1667,34 @@ Each tab's scatter + histogram uses the same **adaptive scaling** as other metri
 ![Post-migration gap distribution for CS[22] in example-8cores.btf.gz](../images/stats/stats-mig-gap-cs22.svg)
 
 Drag the resize handle below the table to show more or fewer rows.
+
+#### Core-Pair Migration Summary
+
+Directed corridors (`From → To`) aggregated across all tasks. Complements per-task **Core Migrations** (which task thrashing?) with pair-level volume and lock-bounce share.
+
+| Column | Meaning |
+|--------|---------|
+| **From / To** | Source and destination cores |
+| **Count** | Directed migrations in scope |
+| **Bounces** | Subset that occurred while a mutex was held across cores |
+| **Bounce %** | `100 × Bounces / Count` |
+| **Avg Gap** | Mean post-migration off-CPU gap for that corridor |
+
+Click a row to open a **distribution chart** with two tabs:
+
+- **Gap** (default) — one point per directed migration with a positive gap: x = migration time, y = post-migration gap (the samples behind **Avg Gap**). Lock-bounce events are drawn in **orange**; others use the source-core colour.
+- **Rate** — one point per consecutive migration on the *same* directed pair: x = migration time, y = time since the previous hop on this corridor. Tight vertical bands mean bursty corridor traffic.
+
+Dialog footer:
+
+- **Open Heatmap** — jump to the Migration Heatmap focused on that pair (prefers **Bounce Only** when Bounce % is elevated).
+- **Open Chord** — open the chord diagram with the source core highlighted.
+
+**`Core_5 → Core_7`** in `example-8cores.btf.gz` (hottest corridor by Count):
+
+![Post-migration gap for Core_5→Core_7](../images/stats/stats-pair-gap-c5-c7.svg)
+
+![Time between pair migrations for Core_5→Core_7](../images/stats/stats-pair-rate-c5-c7.svg)
 
 #### Migration heatmap
 

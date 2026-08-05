@@ -736,7 +736,8 @@ class _ScatterWidget(QWidget):
     point_clicked = Signal(object)   # payload: TaskSegment (exec) or int ns (inter-arrival)
 
     def __init__(self, points, time_scale: str, color: "QColor",
-                 is_dark: bool, parent=None, *, y_as_time: bool = True) -> None:
+                 is_dark: bool, parent=None, *, y_as_time: bool = True,
+                 show_variability: bool = False) -> None:
         super().__init__(parent)
         # points: List[(x_ns, y_value, payload)]
         # payload is either a TaskSegment (exec) or int (ns, inter-arrival)
@@ -745,6 +746,7 @@ class _ScatterWidget(QWidget):
         self._color      = color
         self._is_dark    = is_dark
         self._y_as_time  = y_as_time
+        self._show_variability = bool(show_variability)
         self._highlight  = -1   # index of highlighted point (-1 = none)
         self._hover_idx  = -1   # index of hovered point for tooltip
         self._crosshair_idx = -1  # nearest point for crosshair guides
@@ -786,7 +788,8 @@ class _ScatterWidget(QWidget):
 
     @staticmethod
     def _marker_right_margin(fm) -> int:
-        return max(14, max(fm.horizontalAdvance(lbl) for lbl in ("avg", "p50", "p95")) + 12)
+        labels = ("min", "avg", "p50", "p95", "max")
+        return max(14, max(fm.horizontalAdvance(lbl) for lbl in labels) + 12)
 
     def paintEvent(self, event) -> None:  # noqa: N802
         w, h = self.width(), self.height()
@@ -838,6 +841,9 @@ class _ScatterWidget(QWidget):
         n = len(vals_sorted)
         p50_val = vals_sorted[min(n - 1, math.ceil(n * 0.50) - 1)]
         avg_val = sum(ys) / len(ys) if ys else 0
+        stddev_val = math.sqrt(
+            sum((value - avg_val) ** 2 for value in ys) / n
+        )
         p95_val = vals_sorted[min(n - 1, math.ceil(n * 0.95) - 1)]
         for fi in range(5):
             val = y0 + (y1 - y0) * fi / 4
@@ -856,12 +862,26 @@ class _ScatterWidget(QWidget):
             p.drawText(QRect(gx - 40, MT + ph + 4, 80, 16),
                        Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, lbl)
 
-        # avg / p50 / p95 horizontal reference lines
-        for val, lbl_text, ref_color in [
+        if self._show_variability:
+            # Average ± one population standard deviation. Clamp to the visible
+            # duration axis; the band is descriptive, not a confidence interval.
+            sigma_lo = max(y0, avg_val - stddev_val)
+            sigma_hi = min(y1, avg_val + stddev_val)
+            band_top = sy(sigma_hi)
+            band_bottom = sy(sigma_lo)
+            sigma_color = QColor("#CE93D8")
+            sigma_color.setAlpha(38 if dark else 30)
+            p.fillRect(
+                QRect(ML, band_top, pw, max(1, band_bottom - band_top)),
+                sigma_color,
+            )
+
+        ref_lines = [
             (avg_val, "avg", QColor("#CE93D8")),
             (p50_val, "p50", QColor("#4CAF50")),
             (p95_val, "p95", QColor("#FF9800")),
-        ]:
+        ]
+        for val, lbl_text, ref_color in ref_lines:
             gy = sy(val)
             p.setPen(QPen(ref_color, 1, Qt.PenStyle.DashLine))
             p.drawLine(ML, gy, ML + pw, gy)
@@ -1053,10 +1073,12 @@ def _hist_summarize(values: list) -> dict:
     n = len(vals)
     if n == 0:
         return {}
+    avg = sum(vals) / n
     return {
         "min": float(vals[0]),
         "max": float(vals[-1]),
-        "avg": sum(vals) / n,
+        "avg": avg,
+        "stddev": math.sqrt(sum((value - avg) ** 2 for value in vals) / n),
         "p5": _hist_percentile(vals, 0.05),
         "p50": _hist_percentile(vals, 0.50),
         "p95": _hist_percentile(vals, 0.95),
@@ -1270,7 +1292,8 @@ def _hist_format_axis_value(val: float, time_scale: str, *, value_as_time: bool)
     return _format_tag_value(val)
 
 def _hist_build_model(values: list, time_scale: str, scale_mode: str = "auto",
-                      *, value_as_time: bool = True) -> Optional[dict]:
+                      *, value_as_time: bool = True,
+                      show_variability: bool = False) -> Optional[dict]:
     if not values:
         return None
     sorted_vals = sorted(values)
@@ -1360,15 +1383,29 @@ def _hist_build_model(values: list, time_scale: str, scale_mode: str = "auto",
             cdf_points = sampled
     cdf_ticks = [(margin_top + plot_h - int(p / 100 * plot_h), f"{p}%") for p in (0, 50, 100)]
 
-    ref_lines = []
-    for val, lbl, color in [
+    refs = [
         (summary["avg"], "avg", QColor("#CE93D8")),
         (summary["p50"], "p50", QColor("#4CAF50")),
         (summary["p95"], "p95", QColor("#FF9800")),
-    ]:
+    ]
+    ref_lines = []
+    for val, lbl, color in refs:
         gx = scale_x(val)
         if margin_left <= gx <= margin_left + plot_w:
             ref_lines.append((gx, lbl, color))
+
+    sigma_band = None
+    if show_variability:
+        sigma_lo = max(summary["min"], summary["avg"] - summary["stddev"])
+        sigma_hi = min(summary["max"], summary["avg"] + summary["stddev"])
+        x0 = scale_x(sigma_lo)
+        x1 = scale_x(sigma_hi)
+        plot_right = margin_left + plot_w
+        if x1 >= margin_left and x0 <= plot_right:
+            sigma_band = (
+                max(margin_left, min(x0, x1)),
+                min(plot_right, max(x0, x1)),
+            )
 
     return {
         "summary": summary,
@@ -1387,6 +1424,7 @@ def _hist_build_model(values: list, time_scale: str, scale_mode: str = "auto",
         "cdf_points": cdf_points,
         "cdf_ticks": cdf_ticks,
         "ref_lines": ref_lines,
+        "sigma_band": sigma_band,
         "log_y": log_y,
         "max_count": max_count,
     }
@@ -1395,7 +1433,8 @@ class _HistogramWidget(QWidget):
     """Histogram of metric values with adaptive scaling, CDF overlay, and markers."""
 
     def __init__(self, values, time_scale: str, color: "QColor",
-                 is_dark: bool, parent=None, *, value_as_time: bool = True) -> None:
+                 is_dark: bool, parent=None, *, value_as_time: bool = True,
+                 show_variability: bool = False) -> None:
         super().__init__(parent)
         self._values      = sorted(values)
         self._time_scale  = time_scale
@@ -1403,6 +1442,7 @@ class _HistogramWidget(QWidget):
         self._is_dark     = is_dark
         self._scale_mode  = "auto"
         self._value_as_time = value_as_time
+        self._show_variability = bool(show_variability)
         self.setMinimumHeight(140)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
@@ -1438,7 +1478,8 @@ class _HistogramWidget(QWidget):
             return
 
         model = _hist_build_model(self._values, self._time_scale, self._scale_mode,
-                                  value_as_time=self._value_as_time)
+                                  value_as_time=self._value_as_time,
+                                  show_variability=self._show_variability)
         if not model:
             p.end()
             return
@@ -1454,7 +1495,7 @@ class _HistogramWidget(QWidget):
         sf = QFont(); sf.setPointSize(7)
         p.setFont(sf)
         fm = p.fontMetrics()
-        marker_labels = ("avg", "p50", "p95")
+        marker_labels = ("min", "avg", "p50", "p95", "max")
         MR_labels = max(14, max(fm.horizontalAdvance(lbl) for lbl in marker_labels) + 10)
         pw = w - ML - MR_labels
         ph = h - MT - MB
@@ -1495,6 +1536,16 @@ class _HistogramWidget(QWidget):
             p.drawText(QRect(x - 40, MT + ph + 4, 80, 16),
                        Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, lbl)
 
+        # Average ± one population standard deviation, behind the bars.
+        sigma_band = model.get("sigma_band")
+        if sigma_band is not None:
+            bx0, bx1 = sigma_band
+            x0 = int(ML + (bx0 - model["margin_left"]) * scale)
+            x1 = int(ML + (bx1 - model["margin_left"]) * scale)
+            sigma_color = QColor("#CE93D8")
+            sigma_color.setAlpha(38 if dark else 30)
+            p.fillRect(QRect(x0, MT, max(1, x1 - x0), ph), sigma_color)
+
         # Bars
         bar_color = QColor(self._color); bar_color.setAlpha(180)
         overflow_color = QColor(self._color); overflow_color.setAlpha(100)
@@ -1518,7 +1569,6 @@ class _HistogramWidget(QWidget):
             for i in range(1, len(path_pts)):
                 p.drawLine(path_pts[i - 1], path_pts[i])
 
-        # avg / p50 / p95 vertical lines
         p.setRenderHint(QPainter.Antialiasing, True)
         for gx, lbl_text, lcolor in model["ref_lines"]:
             x = int(ML + (gx - model["margin_left"]) * scale)
@@ -1531,6 +1581,7 @@ class _HistogramWidget(QWidget):
         p.end()
 
 _MIG_PLOT_TABS = (("mig_dwell", "Dwell"), ("mig_rate", "Rate"), ("mig_gap", "Gap"))
+_PAIR_PLOT_TABS = (("pair_gap", "Gap"), ("pair_rate", "Rate"))
 _TAG_PLOT_TABS = (("tag", "Value"), ("tag_interval", "Interval"))
 
 class _MetricsPlotDialog(QDialog):
@@ -1553,15 +1604,22 @@ class _MetricsPlotDialog(QDialog):
                  scope_badge: str,
                  scope_detail: str,
                  y_as_time: bool = True,
+                 show_variability: bool = False,
                  tabs: Optional[Sequence[Tuple[str, str]]] = None,
                  active_tab: Optional[str] = None,
                  on_tab_change=None,
+                 on_open_heatmap=None,
+                 on_open_chord=None,
                  parent=None) -> None:
         super().__init__(parent, Qt.WindowType.Window)
         self._title        = title
         self._is_dark      = is_dark
         self._on_pt_click  = on_point_click
         self._on_tab_change = on_tab_change
+        self._on_open_heatmap = on_open_heatmap
+        self._on_open_chord = on_open_chord
+        self._btn_open_heatmap: Optional[QPushButton] = None
+        self._btn_open_chord: Optional[QPushButton] = None
         self.setWindowTitle(title)
         self.resize(820, 620)
         self.setMinimumSize(500, 400)
@@ -1603,9 +1661,11 @@ class _MetricsPlotDialog(QDialog):
         values = [pt[1] for pt in points]
         self._y_as_time = y_as_time
         self._scatter = _ScatterWidget(points, time_scale, color, is_dark,
-                                       y_as_time=y_as_time)
+                                       y_as_time=y_as_time,
+                                       show_variability=show_variability)
         self._histogram = _HistogramWidget(values, time_scale, color, is_dark,
-                                           value_as_time=y_as_time)
+                                           value_as_time=y_as_time,
+                                           show_variability=show_variability)
 
         hist_toolbar = QHBoxLayout()
         hist_toolbar.setContentsMargins(0, 0, 0, 0)
@@ -1648,6 +1708,22 @@ class _MetricsPlotDialog(QDialog):
         btn_cls.clicked.connect(self.close)
         btn_row.addWidget(btn_png)
         btn_row.addWidget(btn_svg)
+        # clicked(bool) would bind `checked` to the callbacks' first default
+        # parameter, so swallow it here.
+        if on_open_heatmap is not None:
+            btn_hm = QPushButton("Open Heatmap")
+            btn_hm.setToolTip(
+                "Open the Migration Heatmap focused on this core pair")
+            btn_hm.clicked.connect(lambda _checked=False: on_open_heatmap())
+            btn_row.addWidget(btn_hm)
+            self._btn_open_heatmap = btn_hm
+        if on_open_chord is not None:
+            btn_ch = QPushButton("Open Chord")
+            btn_ch.setToolTip(
+                "Open the Migration Chord Diagram with this pair highlighted")
+            btn_ch.clicked.connect(lambda _checked=False: on_open_chord())
+            btn_row.addWidget(btn_ch)
+            self._btn_open_chord = btn_ch
         btn_row.addStretch()
         btn_row.addWidget(btn_cls)
         root.addLayout(btn_row)
@@ -2517,6 +2593,13 @@ class _MigrationHeatmapWidget(QWidget):
             self._hover_ri = hover_ri
             self.update()
 
+    def set_hover_row(self, ri: Optional[int]) -> None:
+        """Programmatically highlight a row (e.g. Core-Pair focus)."""
+        hover_ri = ri if ri is not None and 0 <= ri < len(self._row_labels) else None
+        if hover_ri != self._hover_ri:
+            self._hover_ri = hover_ri
+            self.update()
+
     def clear_hover(self) -> None:
         if self._hover_ri is not None:
             self._hover_ri = None
@@ -2845,6 +2928,47 @@ class _MigrationHeatmapDialog(QDialog):
 
         self._go_level0()
 
+    def focus_pair(self, from_core: str, to_core: str,
+                   bounce_only: bool = False) -> bool:
+        """Open (or re-filter) the heatmap focused on a directed core pair.
+
+        Prefer Bounce Only when *bounce_only* is true. Returns False if the
+        pair has no migrations under the current scope/filter.
+        """
+        if bool(self._bounce_only) != bool(bounce_only):
+            self._bounce_filter_btn.setChecked(bool(bounce_only))
+            self._on_bounce_filter_toggled(bool(bounce_only))
+        else:
+            self._go_level0()
+        label = f"{_core_short_name(from_core)}→{_core_short_name(to_core)}"
+        if self._uses_matrix:
+            if from_core not in self._matrix_cores:
+                return False
+            self._show_outgoing_level(from_core)
+            found = next(
+                ((fc, tc, lbl) for fc, tc, lbl in self._pairs
+                 if fc == from_core and tc == to_core),
+                None,
+            )
+            if found is None:
+                return False
+            self._show_pair_time_level(found[0], found[1], found[2])
+            return True
+        # Non-matrix: top level is already pair × time — scroll to the row.
+        ri = next(
+            (i for i, (fc, tc, _lbl) in enumerate(self._pairs)
+             if fc == from_core and tc == to_core),
+            -1,
+        )
+        if ri < 0:
+            return False
+        self._canvas.set_hover_row(ri)
+        self._scroll_heatmap_to_row(ri)
+        self._sub_label.setText(
+            f"Core-pair migrations over time bins · focused {label}"
+            f"{self._scope_suffix}")
+        return True
+
     def eventFilter(self, watched, event) -> bool:
         if watched is self._scroll.viewport():
             et = event.type()
@@ -3063,6 +3187,16 @@ class _MigrationHeatmapDialog(QDialog):
             self._canvas._sync_widget_size()
             self._scroll.updateGeometry()
             self._scroll.verticalScrollBar().setValue(0)
+            self._scroll.horizontalScrollBar().setValue(0)
+        QTimer.singleShot(0, _do)
+
+    def _scroll_heatmap_to_row(self, ri: int) -> None:
+        """Scroll so *ri* is near the top of the viewport."""
+        def _do() -> None:
+            self._canvas._sync_widget_size()
+            self._scroll.updateGeometry()
+            y = max(0, ri * self._canvas._ROW_H)
+            self._scroll.verticalScrollBar().setValue(y)
             self._scroll.horizontalScrollBar().setValue(0)
         QTimer.singleShot(0, _do)
 
@@ -3310,6 +3444,7 @@ class _ChordDiagramWidget(QWidget):
         self._layout: Optional[ChordLayout] = None
         self._max_count = 0
         self._hover_index: Optional[int] = None
+        self._pinned_hover = False
         self.setMouseTracking(True)
         self.setMinimumSize(200, 200)
 
@@ -3330,9 +3465,24 @@ class _ChordDiagramWidget(QWidget):
         if self._hover_index is not None:
             self._hover_index = None
             self.hover_changed.emit(None)
+        self._pinned_hover = False
         self.update()
 
+    def set_hover_index(self, index: Optional[int], *, pinned: bool = False) -> None:
+        """Programmatically highlight a core arc (and its chords)."""
+        if index is not None and not (0 <= index < len(self._cores)):
+            index = None
+        self._pinned_hover = bool(pinned) and index is not None
+        if index != self._hover_index:
+            self._hover_index = index
+            self.hover_changed.emit(index)
+            self.update()
+        elif pinned:
+            self.update()
+
     def clear_hover(self) -> None:
+        if self._pinned_hover:
+            return
         if self._hover_index is not None:
             self._hover_index = None
             self.hover_changed.emit(None)
@@ -3719,6 +3869,29 @@ class _ChordDiagramDialog(QDialog):
         if has_data:
             self._canvas.set_data(self._cores, self._grid)
         self._hover_label.setText(" ")
+
+    def focus_pair(self, from_core: str, to_core: str,
+                   bounce_only: bool = False) -> bool:
+        """Re-filter and pin-highlight the source core of a directed pair."""
+        if bool(self._bounce_only) != bool(bounce_only):
+            self._bounce_filter_btn.setChecked(bool(bounce_only))
+            self._on_bounce_filter_toggled(bool(bounce_only))
+        else:
+            self._reload_data()
+            self._rebuild()
+        try:
+            fi = self._cores.index(from_core)
+        except ValueError:
+            return False
+        if to_core not in self._cores:
+            return False
+        self._canvas.set_hover_index(fi, pinned=True)
+        label = f"{_core_short_name(from_core)}→{_core_short_name(to_core)}"
+        self._sub_label.setText(
+            f"Core-to-core migration volume · focused {label}"
+            f"{self._scope_suffix}")
+        self._hover_label.setText(self._hover_title(fi) or " ")
+        return True
 
     def _on_bounce_filter_toggled(self, checked: bool) -> None:
         self._bounce_only = checked
@@ -4320,7 +4493,7 @@ def _build_workflow_analysis_findings(
         names = ", ".join(f"{r[1]} (n={r[2]}, Max {r[6]})" for r in top_b)
         findings.append({
             "severity": "warning" if top_b and top_b[0][2] >= 20 else "info",
-            "title": "Blocking / response-time candidates",
+            "title": "Blocking / scheduling-delay candidates",
             "text": (
                 f"Tasks with the most off-CPU gaps: {names}. "
                 "Cross-check Preemption Chain and Mutex/Semaphore."
@@ -4634,6 +4807,9 @@ class _StatsPanel(QWidget):
     segment_jump   = Signal(int)    # ns - scroll timeline to this timestamp
     plot_point_clicked = Signal(object, int, str)  # payload, mark_ns, note
     core_clicked = Signal(str)   # core name of the clicked core row
+    # Core-Pair chart footer → open heatmap/chord focused on (from, to, bounce_only)
+    open_pair_heatmap = Signal(str, str, bool)
+    open_pair_chord = Signal(str, str, bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -5621,6 +5797,32 @@ class _StatsPanel(QWidget):
                 pts = _migration_gap_plot_points(trace, mk, lo, hi)
                 title = f"{name} — Post-Migration Gap{scope}"
             return title, pts, color
+        if kind in ("pair_gap", "pair_rate"):
+            pair = _parse_pair_plot_key(mk)
+            if pair is None:
+                return None
+            fc, tc = pair
+            migs = _pair_migrations(trace, fc, tc, lo, hi)
+            if not migs:
+                return None
+            bounce_ns = trace.lock_bounce_migration_ns
+            bounces = sum(1 for m in migs if m.ns in bounce_ns)
+            bounce_pct = 100.0 * bounces / len(migs)
+            avg_gap = sum(m.gap_ns for m in migs) // len(migs)
+            hdr = (
+                f"{fc} → {tc} · {len(migs)} migr · Bounce {bounce_pct:.1f}% · "
+                f"Avg Gap {_format_time(avg_gap, trace.time_scale)}"
+            )
+            color = QColor(_core_color(fc))
+            if kind == "pair_gap":
+                pts = _pair_gap_plot_points(trace, fc, tc, lo, hi)
+                title = f"{hdr} — Post-Migration Gap{scope}"
+            else:
+                pts = _pair_rate_plot_points(trace, fc, tc, lo, hi)
+                title = f"{hdr} — Time Between Pair Migrations{scope}"
+            if not pts:
+                return None
+            return title, pts, color
         segs = trace.seg_map_by_merge_key.get(mk, [])
         if not segs:
             return None
@@ -5764,6 +5966,7 @@ class _StatsPanel(QWidget):
         self._plot_mk = mk
         self._plot_kind = kind
         y_as_time = kind not in ("tag",)
+        show_variability = kind in ("exec", "block", "inter")
         _on_click = self._on_plot_scatter_click
         if self._plot_dlg is not None:
             try:
@@ -5772,8 +5975,19 @@ class _StatsPanel(QWidget):
                 pass
             self._plot_dlg.close()
         tabs = (_MIG_PLOT_TABS if kind.startswith("mig_")
+                else _PAIR_PLOT_TABS if kind.startswith("pair_")
                 else _TAG_PLOT_TABS if kind in ("tag", "tag_interval")
                 else None)
+        on_hm = on_ch = None
+        if kind.startswith("pair_"):
+            pair = _parse_pair_plot_key(mk)
+            if pair is not None:
+                fc, tc = pair
+                prefer_bounce = self._pair_bounce_prefer(trace, fc, tc)
+                on_hm = (lambda f=fc, t=tc, b=prefer_bounce:
+                         self.open_pair_heatmap.emit(f, t, b))
+                on_ch = (lambda f=fc, t=tc, b=prefer_bounce:
+                         self.open_pair_chord.emit(f, t, b))
         self._plot_dlg = _MetricsPlotDialog(
             title, pts, trace.time_scale, color,
             on_point_click=_on_click,
@@ -5782,9 +5996,12 @@ class _StatsPanel(QWidget):
             scope_badge=badge,
             scope_detail=detail,
             y_as_time=y_as_time,
+            show_variability=show_variability,
             tabs=tabs,
             active_tab=kind if tabs else None,
             on_tab_change=self._on_plot_tab_changed if tabs else None,
+            on_open_heatmap=on_hm,
+            on_open_chord=on_ch,
             parent=self.window(),
         )
         self._plot_dlg.closed.connect(self._on_plot_dialog_closed)
@@ -5804,6 +6021,24 @@ class _StatsPanel(QWidget):
         self._plot_dlg.update_data(title, pts, scope_scoped=scoped,
                                    scope_badge=badge, scope_detail=detail)
 
+    def _pair_bounce_prefer(self, trace: "BtfTrace",
+                            from_core: str, to_core: str) -> bool:
+        """True when Bounce % is high enough to default Bounce Only on Heatmap/Chord."""
+        rng = self._stats_range()
+        lo = hi = None
+        if rng is not None:
+            lo, hi, _ = rng
+        migs = _pair_migrations(trace, from_core, to_core, lo, hi)
+        if len(migs) < _WF_PAIR_COUNT_MIN:
+            return False
+        bounce_ns = trace.lock_bounce_migration_ns
+        pct = 100.0 * sum(1 for m in migs if m.ns in bounce_ns) / len(migs)
+        return pct >= _WF_PAIR_BOUNCE_PCT
+
+    def _open_pair_plot(self, trace: "BtfTrace",
+                        from_core: str, to_core: str) -> None:
+        """Open Gap/Rate distribution for a directed core pair."""
+        self._open_plot(trace, _pair_plot_key(from_core, to_core), "pair_gap")
 
     def _on_plot_scatter_click(self, x_ns: int, y_ns: int, payload) -> None:
         """Scatter plot point: jump timeline and add an annotation (not a cursor)."""
@@ -5993,36 +6228,50 @@ class _StatsPanel(QWidget):
             rows.append((mk, _task_display_name(raw), 100.0 * t_ns / total_ns))
         return rows
 
-    def _summarize_samples(self, samples: List[int], scale: str) -> Optional[Tuple[str, str, str, str]]:
+    def _summarize_samples(
+        self, samples: List[int], scale: str
+    ) -> Optional[Tuple[str, str, str, str, str, str]]:
         if not samples:
             return None
         vals = sorted(samples)
         n = len(vals)
         p95_idx = min(n - 1, math.ceil(n * 0.95) - 1)
-        avg = int(round(sum(vals) / n))
+        mean = sum(vals) / n
+        avg = int(round(mean))
+        jitter = vals[-1] - vals[0]
+        stddev = int(round(math.sqrt(sum((v - mean) ** 2 for v in vals) / n)))
         return (
             _format_time(vals[0], scale),
             _format_time(avg, scale),
             _format_time(vals[-1], scale),
+            _format_time(jitter, scale),
+            _format_time(stddev, scale),
             _format_time(vals[p95_idx], scale),
         )
 
-    def _summarize_samples_export(self, samples: List[int], scale: str) -> Optional[Tuple[str, str, str, str, str, str]]:
+    def _summarize_samples_export(
+        self, samples: List[int], scale: str
+    ) -> Optional[Tuple[str, str, str, str, str, str, str, str]]:
         if not samples:
             return None
         vals = sorted(samples)
         n = len(vals)
         p50_idx = min(n - 1, math.ceil(n * 0.50) - 1)
         p95_idx = min(n - 1, math.ceil(n * 0.95) - 1)
-        avg = int(round(sum(vals) / n))
+        mean = sum(vals) / n
+        avg = int(round(mean))
         trim_n = int(math.floor(n * 0.05))
         trim_vals = vals[trim_n:n - trim_n] if (2 * trim_n) < n else vals
         trim_avg = int(round(sum(trim_vals) / len(trim_vals)))
+        jitter = vals[-1] - vals[0]
+        stddev = int(round(math.sqrt(sum((v - mean) ** 2 for v in vals) / n)))
         return (
             _format_time(vals[0], scale),
             _format_time(avg, scale),
             _format_time(trim_avg, scale),
             _format_time(vals[-1], scale),
+            _format_time(jitter, scale),
+            _format_time(stddev, scale),
             _format_time(vals[p50_idx], scale),
             _format_time(vals[p95_idx], scale),
         )
@@ -6048,8 +6297,9 @@ class _StatsPanel(QWidget):
         return samples
 
     def _exec_slice_rows(self, trace: "BtfTrace",
-                         lo: Optional[int] = None, hi: Optional[int] = None) -> List[Tuple[str, int, float, str, str, str, str]]:
-        rows: List[Tuple[str, int, float, str, str, str, str]] = []
+                         lo: Optional[int] = None,
+                         hi: Optional[int] = None) -> List[tuple]:
+        rows: List[tuple] = []
         if lo is not None and hi is not None:
             total_ns = hi - lo
         else:
@@ -6067,15 +6317,19 @@ class _StatsPanel(QWidget):
             summary = self._summarize_samples(samples, trace.time_scale)
             if summary is None:
                 continue
-            mn, avg, mx, p95 = summary
+            mn, avg, mx, jitter, stddev, p95 = summary
             cpu_pct = 100.0 * sum(samples) / total_ns
-            rows.append((mk, _task_display_name(raw), len(samples), cpu_pct, mn, avg, mx, p95))
+            rows.append((
+                mk, _task_display_name(raw), len(samples), cpu_pct,
+                mn, avg, mx, jitter, stddev, p95,
+            ))
         rows.sort(key=lambda r: (-r[3], -r[2], r[1].lower()))
         return rows
 
     def _inter_arrival_rows(self, trace: "BtfTrace",
-                            lo: Optional[int] = None, hi: Optional[int] = None) -> List[Tuple[str, int, str, str, str, str]]:
-        rows: List[Tuple[str, int, str, str, str, str]] = []
+                            lo: Optional[int] = None,
+                            hi: Optional[int] = None) -> List[tuple]:
+        rows: List[tuple] = []
         for mk, segs in trace.seg_map_by_merge_key.items():
             if len(segs) < 2:
                 continue
@@ -6087,19 +6341,22 @@ class _StatsPanel(QWidget):
             summary = self._summarize_samples(samples, trace.time_scale)
             if summary is None:
                 continue
-            mn, avg, mx, p95 = summary
+            mn, avg, mx, jitter, stddev, p95 = summary
             if lo is not None and hi is not None:
                 n_runs = sum(1 for s in segs if lo <= s.start <= hi)
             else:
                 n_runs = len(segs)
-            rows.append((mk, _task_display_name(raw), n_runs, mn, avg, mx, p95))
+            rows.append((
+                mk, _task_display_name(raw), n_runs,
+                mn, avg, mx, jitter, stddev, p95,
+            ))
         rows.sort(key=lambda r: (-r[2], r[1].lower()))
         return rows
 
     def _blocking_time_rows(self, trace: "BtfTrace",
                             lo: Optional[int] = None, hi: Optional[int] = None
-                            ) -> List[Tuple[str, int, str, str, str, str]]:
-        rows: List[Tuple[str, int, str, str, str, str]] = []
+                            ) -> List[tuple]:
+        rows: List[tuple] = []
         for mk, segs in trace.seg_map_by_merge_key.items():
             if len(segs) < 2:
                 continue
@@ -6111,15 +6368,18 @@ class _StatsPanel(QWidget):
             summary = self._summarize_samples(samples, trace.time_scale)
             if summary is None:
                 continue
-            mn, avg, mx, p95 = summary
-            rows.append((mk, _task_display_name(raw), len(samples), mn, avg, mx, p95))
+            mn, avg, mx, jitter, stddev, p95 = summary
+            rows.append((
+                mk, _task_display_name(raw), len(samples),
+                mn, avg, mx, jitter, stddev, p95,
+            ))
         rows.sort(key=lambda r: (-r[2], r[1].lower()))
         return rows
 
     def _blocking_time_rows_export(self, trace: "BtfTrace",
                                    lo: Optional[int] = None, hi: Optional[int] = None
-                                   ) -> List[Tuple[str, int, str, str, str, str, str, str]]:
-        rows: List[Tuple[str, int, str, str, str, str, str, str]] = []
+                                   ) -> List[tuple]:
+        rows: List[tuple] = []
         for mk, segs in trace.seg_map_by_merge_key.items():
             if len(segs) < 2:
                 continue
@@ -6131,8 +6391,11 @@ class _StatsPanel(QWidget):
             summary = self._summarize_samples_export(samples, trace.time_scale)
             if summary is None:
                 continue
-            mn, avg, tmean, mx, p50, p95 = summary
-            rows.append((mk, _task_display_name(raw), len(samples), mn, avg, tmean, mx, p50, p95))
+            mn, avg, tmean, mx, jitter, stddev, p50, p95 = summary
+            rows.append((
+                mk, _task_display_name(raw), len(samples),
+                mn, avg, tmean, mx, jitter, stddev, p50, p95,
+            ))
         rows.sort(key=lambda r: (-r[2], r[1].lower()))
         return rows
 
@@ -6174,8 +6437,9 @@ class _StatsPanel(QWidget):
             find_max)
 
     def _exec_slice_rows_export(self, trace: "BtfTrace",
-                                lo: Optional[int] = None, hi: Optional[int] = None) -> List[Tuple[str, int, float, str, str, str, str, str, str]]:
-        rows: List[Tuple[str, int, float, str, str, str, str, str, str]] = []
+                                lo: Optional[int] = None,
+                                hi: Optional[int] = None) -> List[tuple]:
+        rows: List[tuple] = []
         if lo is not None and hi is not None:
             total_ns = hi - lo
         else:
@@ -6193,15 +6457,19 @@ class _StatsPanel(QWidget):
             summary = self._summarize_samples_export(samples, trace.time_scale)
             if summary is None:
                 continue
-            mn, avg, tmean, mx, p50, p95 = summary
+            mn, avg, tmean, mx, jitter, stddev, p50, p95 = summary
             cpu_pct = 100.0 * sum(samples) / total_ns
-            rows.append((mk, _task_display_name(raw), len(samples), cpu_pct, mn, avg, tmean, mx, p50, p95))
+            rows.append((
+                mk, _task_display_name(raw), len(samples), cpu_pct,
+                mn, avg, tmean, mx, jitter, stddev, p50, p95,
+            ))
         rows.sort(key=lambda r: (-r[3], -r[2], r[1].lower()))
         return rows
 
     def _inter_arrival_rows_export(self, trace: "BtfTrace",
-                                   lo: Optional[int] = None, hi: Optional[int] = None) -> List[Tuple[str, int, str, str, str, str, str, str]]:
-        rows: List[Tuple[str, int, str, str, str, str, str, str]] = []
+                                   lo: Optional[int] = None,
+                                   hi: Optional[int] = None) -> List[tuple]:
+        rows: List[tuple] = []
         for mk, segs in trace.seg_map_by_merge_key.items():
             if len(segs) < 2:
                 continue
@@ -6213,12 +6481,15 @@ class _StatsPanel(QWidget):
             summary = self._summarize_samples_export(samples, trace.time_scale)
             if summary is None:
                 continue
-            mn, avg, tmean, mx, p50, p95 = summary
+            mn, avg, tmean, mx, jitter, stddev, p50, p95 = summary
             if lo is not None and hi is not None:
                 n_runs = sum(1 for s in segs if lo <= s.start <= hi)
             else:
                 n_runs = len(segs)
-            rows.append((mk, _task_display_name(raw), n_runs, mn, avg, tmean, mx, p50, p95))
+            rows.append((
+                mk, _task_display_name(raw), n_runs,
+                mn, avg, tmean, mx, jitter, stddev, p50, p95,
+            ))
         rows.sort(key=lambda r: (-r[2], r[1].lower()))
         return rows
 
@@ -6226,6 +6497,7 @@ class _StatsPanel(QWidget):
                            include_cpu: bool = False,
                            count_header: str = "Runs",
                            section_id: str = "exec",
+                           include_variability: bool = False,
                            migrations: bool = False,
                            on_row_click=None, on_min_click=None,
                            on_max_click=None) -> QWidget:
@@ -6241,6 +6513,15 @@ class _StatsPanel(QWidget):
         if migrations:
             headers = ["Task", "Migr", "Rate", "Dwell", "Cores", "Primary", "Ping", "STI±",
                        "Gap after", "Gap other"]
+            cols = len(headers)
+        elif include_variability:
+            headers = (
+                ["Task", count_header, "CPU%", "Min", "Avg", "Max",
+                 "Jitter", "σ", "p95"]
+                if include_cpu
+                else ["Task", count_header, "Min", "Avg", "Max",
+                      "Jitter", "σ", "p95"]
+            )
             cols = len(headers)
         else:
             cols = 7 if include_cpu else 6
@@ -6264,6 +6545,17 @@ class _StatsPanel(QWidget):
             for ci, (hdr, tip) in enumerate(zip(headers, _mig_header_tips)):
                 item = QTableWidgetItem(hdr)
                 item.setToolTip(tip)
+                table.setHorizontalHeaderItem(ci, item)
+        elif include_variability:
+            _metric_header_tips = {
+                "Jitter": "Observed range: maximum minus minimum sample duration",
+                "σ": "Population standard deviation of sample durations in scope",
+            }
+            for ci, hdr in enumerate(headers):
+                item = QTableWidgetItem(hdr)
+                tip = _metric_header_tips.get(hdr)
+                if tip:
+                    item.setToolTip(tip)
                 table.setHorizontalHeaderItem(ci, item)
         else:
             table.setHorizontalHeaderLabels(headers)
@@ -6332,6 +6624,18 @@ class _StatsPanel(QWidget):
                     ping, sti,
                     _time_label_sort_key(g_after), _time_label_sort_key(g_other),
                 ]
+            elif include_cpu and include_variability:
+                mk_r, name, runs, cpu, mn, avg, mx, jitter, stddev, p95 = row
+                vals = [
+                    name, runs, f"{cpu:.1f}%", mn, avg, mx,
+                    jitter, stddev, p95,
+                ]
+                sort_keys = [
+                    name.lower(), runs, cpu,
+                    _time_label_sort_key(mn), _time_label_sort_key(avg),
+                    _time_label_sort_key(mx), _time_label_sort_key(jitter),
+                    _time_label_sort_key(stddev), _time_label_sort_key(p95),
+                ]
             elif include_cpu:
                 mk_r, name, runs, cpu, mn, avg, mx, p95 = row
                 vals = [name, runs, f"{cpu:.1f}%", mn, avg, mx, p95]
@@ -6345,6 +6649,14 @@ class _StatsPanel(QWidget):
                 mn_raw, avg_raw, mx_raw, p95_raw = row[7:11]
                 vals = [name, runs, mn, avg, mx, p95]
                 sort_keys = [name.lower(), runs, mn_raw, avg_raw, mx_raw, p95_raw]
+            elif include_variability:
+                mk_r, name, runs, mn, avg, mx, jitter, stddev, p95 = row
+                vals = [name, runs, mn, avg, mx, jitter, stddev, p95]
+                sort_keys = [
+                    name.lower(), runs,
+                    _metric_key(mn), _metric_key(avg), _metric_key(mx),
+                    _metric_key(jitter), _metric_key(stddev), _metric_key(p95),
+                ]
             else:
                 mk_r, name, runs, mn, avg, mx, p95 = row
                 vals = [name, runs, mn, avg, mx, p95]
@@ -6373,13 +6685,27 @@ class _StatsPanel(QWidget):
                     item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 if not migrations:
                     if c == _min_col and on_min_click is not None:
-                        item.setToolTip(f"Click to jump to shortest slice for {name}")
+                        tip_kind = ("slice" if include_cpu
+                                    else "sample" if section_id == "tags"
+                                    else "gap" if section_id == "block"
+                                    else "inter-arrival" if section_id == "inter"
+                                    else "sample")
+                        item.setToolTip(
+                            f"Click to jump to shortest {tip_kind} for {name}")
                         item.setForeground(_link_color)
                     elif c == _max_col and on_max_click is not None:
-                        item.setToolTip(
-                            f"Click to jump to longest slice (WCET) for {name}"
-                            if include_cpu else
-                            f"Click to jump to longest sample for {name}")
+                        if include_cpu:
+                            item.setToolTip(
+                                f"Click to jump to longest slice (WCET) for {name}")
+                        elif section_id == "block":
+                            item.setToolTip(
+                                f"Click to jump to longest off-CPU gap for {name}")
+                        elif section_id == "inter":
+                            item.setToolTip(
+                                f"Click to jump to longest inter-arrival for {name}")
+                        else:
+                            item.setToolTip(
+                                f"Click to jump to longest sample for {name}")
                         item.setForeground(_link_color)
                     elif on_row_click is not None:
                         item.setToolTip(f"{_row_tip} for {name}")
@@ -6388,7 +6714,7 @@ class _StatsPanel(QWidget):
         if not migrations:
             table.resizeColumnsToContents()
             table.horizontalHeader().setStretchLastSection(False)
-            p95_col = 6 if include_cpu else 5
+            p95_col = cols - 1
             table.setColumnWidth(p95_col, min(table.columnWidth(p95_col), 76))
             table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
             table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
@@ -6650,25 +6976,37 @@ class _StatsPanel(QWidget):
                 )
 
         def _render_stats_table(title: str,
-                                rows: List[Tuple[str, int, str, str, str, str, str, str]]) -> str:
+                                rows: List[tuple]) -> str:
             body = "".join(
-                f"<tr><td>{_esc(name)}</td><td>{runs}</td><td>{_esc(mn)}</td><td>{_esc(avg)}</td><td>{_esc(tmean)}</td><td>{_esc(mx)}</td><td>{_esc(p50)}</td><td>{_esc(p95)}</td></tr>"
-                for mk_r, name, runs, mn, avg, tmean, mx, p50, p95 in rows
-            ) or '<tr><td colspan="8" class="empty">No data</td></tr>'
+                f"<tr><td>{_esc(name)}</td><td>{runs}</td><td>{_esc(mn)}</td>"
+                f"<td>{_esc(avg)}</td><td>{_esc(tmean)}</td><td>{_esc(mx)}</td>"
+                f"<td>{_esc(jitter)}</td><td>{_esc(stddev)}</td>"
+                f"<td>{_esc(p50)}</td><td>{_esc(p95)}</td></tr>"
+                for (mk_r, name, runs, mn, avg, tmean, mx,
+                     jitter, stddev, p50, p95) in rows
+            ) or '<tr><td colspan="10" class="empty">No data</td></tr>'
             return (
                 f"<section class=\"report-card\"><h2>{_esc(title)}</h2>"
-                "<table><thead><tr><th>Task</th><th>Runs</th><th>Min</th><th>Avg</th><th>TrimMean(5%)</th><th>Max</th><th>p50</th><th>p95</th></tr></thead>"
+                "<table><thead><tr><th>Task</th><th>Runs</th><th>Min</th>"
+                "<th>Avg</th><th>TrimMean(5%)</th><th>Max</th>"
+                "<th>Jitter</th><th>σ</th><th>p50</th><th>p95</th></tr></thead>"
                 f"<tbody>{body}</tbody></table></section>"
             )
 
-        def _render_exec_table(rows: List[Tuple[str, int, float, str, str, str, str, str, str]]) -> str:
+        def _render_exec_table(rows: List[tuple]) -> str:
             body = "".join(
-                f"<tr><td>{_esc(name)}</td><td>{runs}</td><td>{cpu:.1f}%</td><td>{_esc(mn)}</td><td>{_esc(avg)}</td><td>{_esc(tmean)}</td><td>{_esc(mx)}</td><td>{_esc(p50)}</td><td>{_esc(p95)}</td></tr>"
-                for mk_r, name, runs, cpu, mn, avg, tmean, mx, p50, p95 in rows
-            ) or '<tr><td colspan="9" class="empty">No data</td></tr>'
+                f"<tr><td>{_esc(name)}</td><td>{runs}</td><td>{cpu:.1f}%</td>"
+                f"<td>{_esc(mn)}</td><td>{_esc(avg)}</td><td>{_esc(tmean)}</td>"
+                f"<td>{_esc(mx)}</td><td>{_esc(jitter)}</td><td>{_esc(stddev)}</td>"
+                f"<td>{_esc(p50)}</td><td>{_esc(p95)}</td></tr>"
+                for (mk_r, name, runs, cpu, mn, avg, tmean, mx,
+                     jitter, stddev, p50, p95) in rows
+            ) or '<tr><td colspan="11" class="empty">No data</td></tr>'
             return (
                 f"<section class=\"report-card\"><h2>Execution Time Per Slice{_esc(scope_title)}</h2>"
-                "<table><thead><tr><th>Task</th><th>Runs</th><th>CPU%</th><th>Min</th><th>Avg</th><th>TrimMean(5%)</th><th>Max</th><th>p50</th><th>p95</th></tr></thead>"
+                "<table><thead><tr><th>Task</th><th>Runs</th><th>CPU%</th>"
+                "<th>Min</th><th>Avg</th><th>TrimMean(5%)</th><th>Max</th>"
+                "<th>Jitter</th><th>σ</th><th>p50</th><th>p95</th></tr></thead>"
                 f"<tbody>{body}</tbody></table></section>"
             )
 
@@ -7108,7 +7446,7 @@ class _StatsPanel(QWidget):
             {range_note}
             <li><strong>Execution Time Per Slice:</strong> Duration of each continuous task run between two context switches. Lower and tighter values indicate more predictable execution.</li>
             <li><strong>Inter-Arrival Time:</strong> Time between consecutive activations of the same task (slice start to next slice start). It reflects activation cadence and jitter.</li>
-            <li><strong>Blocking Time:</strong> Off-CPU gap between the end of one slice and the start of the next for the same task. High values may indicate preemption, blocking on a resource, or long scheduling delays.</li>
+            <li><strong>Blocking Time:</strong> Off-CPU gap between the end of one slice and the start of the next for the same task. It is not end-to-end response time, which requires explicit release and completion events.</li>
       <li><strong>Preemption Chain Analysis:</strong> For each blocking gap of a victim task, identifies which task ran on the same core during that gap. High counts or long totals point to recurring preemption bottlenecks.</li>
       <li><strong>Priority Inheritance:</strong> When traces include <code>create pri:N</code> and priority STI events, lists tasks boosted above base priority. Detail table lists each boost episode.</li>
       <li><strong>Mutex / Semaphore:</strong> Pairs take/give STI by object pointer; detail tables list pairing issues and hold episodes.</li>
@@ -7119,6 +7457,8 @@ class _StatsPanel(QWidget):
             <li><strong>Max (Maximum):</strong> The slowest execution time recorded. It identifies worst-case bottlenecks, spikes, or resource contention.</li>
             <li><strong>Average (Mean):</strong> Total execution time divided by the number of slices. It shows general performance but is heavily skewed by extreme outliers.</li>
             <li><strong>TrimMean(5%):</strong> Average after removing the fastest 5% and slowest 5% slices. It reflects typical performance while reducing outlier impact.</li>
+            <li><strong>Jitter:</strong> Observed spread, calculated as Max − Min for samples in scope.</li>
+            <li><strong>σ (Population Standard Deviation):</strong> Typical dispersion of all observed samples around their arithmetic mean.</li>
             <li><strong>P50 (Median):</strong> The midpoint latency where half of slices are faster and half are slower. It captures typical-case behaviour.</li>
             <li><strong>P95 (95th Percentile):</strong> The threshold under which 95% of all slices execute. It is the best metric for user experience because it ignores rare anomalies while capturing real-world slowdowns.</li>
         </ul>
@@ -7317,12 +7657,20 @@ class _StatsPanel(QWidget):
 
             writer.writerow([])
             writer.writerow([f"Execution Time Per Slice{scope_suffix}"])
-            writer.writerow(["Task", "Runs", "CPU%", "Min", "Avg", "TrimMean(5%)", "Max", "p50", "p95"])
+            writer.writerow([
+                "Task", "Runs", "CPU%", "Min", "Avg", "TrimMean(5%)",
+                "Max", "Jitter", "StdDev (population)", "p50", "p95",
+            ])
             if exec_rows:
-                for mk_r, name, runs, cpu, mn, avg, tmean, mx, p50, p95 in exec_rows:
-                    writer.writerow([name, runs, f"{cpu:.1f}%", _us(mn), _us(avg), _us(tmean), _us(mx), _us(p50), _us(p95)])
+                for (mk_r, name, runs, cpu, mn, avg, tmean, mx,
+                     jitter, stddev, p50, p95) in exec_rows:
+                    writer.writerow([
+                        name, runs, f"{cpu:.1f}%", _us(mn), _us(avg),
+                        _us(tmean), _us(mx), _us(jitter), _us(stddev),
+                        _us(p50), _us(p95),
+                    ])
             else:
-                writer.writerow(["No data", "", "", "", "", "", "", "", ""])
+                writer.writerow(["No data"] + [""] * 10)
 
             writer.writerow([])
             writer.writerow([f"Core Migrations{scope_suffix}"])
@@ -7341,21 +7689,35 @@ class _StatsPanel(QWidget):
 
             writer.writerow([])
             writer.writerow([f"Blocking Time (off-CPU gap){scope_suffix}"])
-            writer.writerow(["Task", "Gaps", "Min", "Avg", "TrimMean(5%)", "Max", "p50", "p95"])
+            writer.writerow([
+                "Task", "Gaps", "Min", "Avg", "TrimMean(5%)", "Max",
+                "Jitter", "StdDev (population)", "p50", "p95",
+            ])
             if block_rows:
-                for mk_r, name, runs, mn, avg, tmean, mx, p50, p95 in block_rows:
-                    writer.writerow([name, runs, _us(mn), _us(avg), _us(tmean), _us(mx), _us(p50), _us(p95)])
+                for (mk_r, name, runs, mn, avg, tmean, mx,
+                     jitter, stddev, p50, p95) in block_rows:
+                    writer.writerow([
+                        name, runs, _us(mn), _us(avg), _us(tmean), _us(mx),
+                        _us(jitter), _us(stddev), _us(p50), _us(p95),
+                    ])
             else:
-                writer.writerow(["No data", "", "", "", "", "", "", ""])
+                writer.writerow(["No data"] + [""] * 9)
 
             writer.writerow([])
             writer.writerow([f"Inter-Arrival Time{scope_suffix}"])
-            writer.writerow(["Task", "Runs", "Min", "Avg", "TrimMean(5%)", "Max", "p50", "p95"])
+            writer.writerow([
+                "Task", "Runs", "Min", "Avg", "TrimMean(5%)", "Max",
+                "Jitter", "StdDev (population)", "p50", "p95",
+            ])
             if inter_rows:
-                for mk_r, name, runs, mn, avg, tmean, mx, p50, p95 in inter_rows:
-                    writer.writerow([name, runs, _us(mn), _us(avg), _us(tmean), _us(mx), _us(p50), _us(p95)])
+                for (mk_r, name, runs, mn, avg, tmean, mx,
+                     jitter, stddev, p50, p95) in inter_rows:
+                    writer.writerow([
+                        name, runs, _us(mn), _us(avg), _us(tmean), _us(mx),
+                        _us(jitter), _us(stddev), _us(p50), _us(p95),
+                    ])
             else:
-                writer.writerow(["No data", "", "", "", "", "", "", ""])
+                writer.writerow(["No data"] + [""] * 9)
 
             writer.writerow([])
             writer.writerow([f"Preemption Chain Analysis{scope_suffix}"])
@@ -7853,8 +8215,9 @@ class _StatsPanel(QWidget):
             tbl = QTableWidget(len(_pair_rows), len(headers))
             tbl.setHorizontalHeaderLabels(headers)
             tbl.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-            tbl.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
-            tbl.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            tbl.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+            tbl.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+            tbl.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
             tbl.verticalHeader().setVisible(False)
             tbl.setShowGrid(False)
             tbl.setFrameShape(QFrame.NoFrame)
@@ -7864,6 +8227,8 @@ class _StatsPanel(QWidget):
             tbl.horizontalHeader().setFixedHeight(18)
             tbl.horizontalHeader().setSectionsClickable(True)
             tbl.horizontalHeader().setSortIndicatorShown(True)
+            tbl.setToolTip(
+                "Click a row to view Gap/Rate distribution for that core pair")
             _item_bg = self._apply_stats_table_theme(tbl, _fs)
             for r, (fc, tc, cnt, bnc, avg_gap) in enumerate(_pair_rows):
                 pct = 100.0 * bnc / cnt if cnt else 0.0
@@ -7880,9 +8245,20 @@ class _StatsPanel(QWidget):
                         (Qt.AlignmentFlag.AlignLeft if c <= 1 else Qt.AlignmentFlag.AlignRight)
                         | Qt.AlignmentFlag.AlignVCenter)
                     item.setBackground(_item_bg)
+                    if c == 0:
+                        item.setData(Qt.ItemDataRole.UserRole, (fc, tc))
                     tbl.setItem(r, c, item)
             tbl.setSortingEnabled(True)
 
+            def _on_pair_row(row: int, _col: int) -> None:
+                item = tbl.item(row, 0)
+                if item is None:
+                    return
+                pair = item.data(Qt.ItemDataRole.UserRole)
+                if isinstance(pair, tuple) and len(pair) == 2:
+                    self._open_pair_plot(trace, pair[0], pair[1])
+
+            tbl.cellClicked.connect(_on_pair_row)
             self._wire_stats_table_row_hover(tbl)
             self._wrap_table_with_resizer(blay, tbl, "core_pairs")
 
@@ -7905,6 +8281,7 @@ class _StatsPanel(QWidget):
                 empty_exec,
                 include_cpu=True,
                 section_id="exec",
+                include_variability=True,
                 on_row_click=lambda mk: self._open_plot(trace, mk, "exec"),
                 on_min_click=lambda mk: self._on_bcet_click(trace, mk, lo, hi),
                 on_max_click=lambda mk: self._on_wcet_click(trace, mk, lo, hi),
@@ -7929,6 +8306,7 @@ class _StatsPanel(QWidget):
                 empty_block,
                 count_header="Gaps",
                 section_id="block",
+                include_variability=True,
                 on_row_click=lambda mk: self._open_plot(trace, mk, "block"),
                 on_min_click=lambda mk: self._on_blocking_extreme_click(
                     trace, mk, lo, hi, False),
@@ -7951,6 +8329,7 @@ class _StatsPanel(QWidget):
                 _fs,
                 "Need at least 2 activations per task",
                 section_id="inter",
+                include_variability=True,
                 on_row_click=lambda mk: self._open_plot(trace, mk, "inter"),
                 on_min_click=lambda mk: self._on_inter_extreme_click(
                     trace, mk, lo, hi, False),

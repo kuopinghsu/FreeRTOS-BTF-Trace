@@ -346,6 +346,8 @@ Views (--view):
                mig_dwell  on-core dwell time per migrated run    (--task)
                mig_rate   time between consecutive migrations    (--task)
                mig_gap    post-migration blocking-gap distribution (--task)
+               pair_gap   post-migration gap for a core pair     (--from-core + --to-core)
+               pair_rate  time between migrations on a core pair (--from-core + --to-core)
 
 Sizing (--width/--height): only used for --view timeline / --view plot; the
 heatmap and chord diagram image sizes are derived from their data (grid /
@@ -369,6 +371,8 @@ examples:
   %(prog)s trace.btf -o mig-dwell.svg --view plot --metric mig_dwell --task "CS[22]"
   %(prog)s trace.btf -o mig-rate.svg --view plot --metric mig_rate --task "CS[22]"
   %(prog)s trace.btf -o mig-gap.svg --view plot --metric mig_gap --task "CS[22]"
+  %(prog)s trace.btf -o pair-gap.svg --view plot --metric pair_gap --from-core Core_0 --to-core Core_1
+  %(prog)s trace.btf -o pair-rate.svg --view plot --metric pair_rate --from-core Core_5 --to-core Core_7
 """
 
 def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.ArgumentParser]]:
@@ -580,7 +584,7 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
     snapshot.add_argument(
         "--metric",
         choices=("tick", "exec", "block", "inter", "priority", "preempt", "interval", "tag",
-                "tag_interval", "mig_dwell", "mig_rate", "mig_gap"),
+                "tag_interval", "mig_dwell", "mig_rate", "mig_gap", "pair_gap", "pair_rate"),
         default=None,
         help="metric to plot; required when --view plot",
     )
@@ -598,6 +602,14 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
             "tag channel (e.g. 'tag0_event') or bare index (e.g. '0'); "
             "required when --metric tag or tag_interval"
         ),
+    )
+    snapshot.add_argument(
+        "--from-core", default=None, metavar="CORE", dest="from_core",
+        help="source core (e.g. 'Core_0' or '0'); required for --metric pair_gap/pair_rate",
+    )
+    snapshot.add_argument(
+        "--to-core", default=None, metavar="CORE", dest="to_core",
+        help="destination core; required for --metric pair_gap/pair_rate",
     )
     snapshot.add_argument("--lo", type=int, default=None, metavar="T", help=_CLI_LO_HELP)
     snapshot.add_argument("--hi", type=int, default=None, metavar="T", help=_CLI_HI_HELP)
@@ -934,6 +946,24 @@ def _cli_resolve_tag_channel(trace: "BtfTrace", value: str) -> Tuple[Optional[st
             f"error: no tag channel matches --channel {value!r}. "
             f"Available: {sample or '(none — trace has no tag channels)'}{more}")
 
+def _cli_resolve_core(trace: "BtfTrace", value: str) -> Tuple[Optional[str], Optional[str]]:
+    """Resolve a --from-core/--to-core value to a core name in the trace."""
+    needle = value.strip()
+    if needle in trace.core_names:
+        return needle, None
+    if needle.isdigit():
+        candidate = f"Core_{needle}"
+        if candidate in trace.core_names:
+            return candidate, None
+    low = needle.lower()
+    matches = [c for c in trace.core_names if c.lower() == low]
+    if len(matches) == 1:
+        return matches[0], None
+    sample = ", ".join(trace.core_names[:20])
+    more = ", ..." if len(trace.core_names) > 20 else ""
+    return (None,
+            f"error: no core matches {value!r}. Available: {sample or '(none)'}{more}")
+
 def _cli_snapshot_output_path(output: str, fmt: Optional[str]) -> Tuple[str, str]:
     """Return (format, path) for the snapshot subcommand (default: png)."""
     low = output.lower()
@@ -1265,6 +1295,20 @@ def _cli_snapshot_plot(trace: "BtfTrace",
         mk, err = _cli_resolve_tag_channel(trace, args.channel)
         if err:
             return None, err
+    elif metric in ("pair_gap", "pair_rate"):
+        if not args.from_core or not args.to_core:
+            return None, (
+                f"error: --from-core and --to-core are required for --metric {metric}")
+        fc, err = _cli_resolve_core(trace, args.from_core)
+        if err:
+            return None, err.replace("matches", "matches --from-core", 1)
+        tc, err = _cli_resolve_core(trace, args.to_core)
+        if err:
+            return None, err.replace("matches", "matches --to-core", 1)
+        mk = _pair_plot_key(fc, tc)
+        if args.task:
+            print("warning: --task is not used with --metric pair_gap/pair_rate",
+                  file=sys.stderr)
     else:
         if not args.task:
             return None, f"error: --task is required for --metric {metric}"
@@ -1279,6 +1323,10 @@ def _cli_snapshot_plot(trace: "BtfTrace",
         print("warning: --task is not used with --metric interval (use --interval-id)", file=sys.stderr)
     if metric in ("tag", "tag_interval") and args.task:
         print("warning: --task is not used with --metric tag/tag_interval (use --channel)", file=sys.stderr)
+    if metric not in ("pair_gap", "pair_rate"):
+        if args.from_core or args.to_core:
+            print("warning: --from-core/--to-core are only used with "
+                  "--metric pair_gap/pair_rate", file=sys.stderr)
 
     panel = _StatsPanel.__new__(_StatsPanel)
     panel._trace = trace
@@ -1306,7 +1354,9 @@ def _cli_snapshot_plot(trace: "BtfTrace",
 
     built = panel._build_plot_points(trace, mk, metric)
     if built is None or not built[1]:
-        return None, f"error: no data to plot for --metric {metric} (--task {args.task or 'n/a'})"
+        detail = args.task or (
+            f"{args.from_core}→{args.to_core}" if metric.startswith("pair_") else "n/a")
+        return None, f"error: no data to plot for --metric {metric} ({detail})"
     title, pts, color = built
     scoped, badge, detail = panel._plot_scope_banner()
     y_as_time = metric not in ("tag",)
@@ -1318,6 +1368,7 @@ def _cli_snapshot_plot(trace: "BtfTrace",
         scope_badge=badge,
         scope_detail=detail,
         y_as_time=y_as_time,
+        show_variability=metric in ("exec", "block", "inter"),
         parent=None,
     )
     if args.width or args.height:

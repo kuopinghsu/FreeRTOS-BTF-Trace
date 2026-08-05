@@ -564,7 +564,12 @@
                 <tr
                   v-for="row in sortedCorePairRows"
                   :key="`${row.fromCore}-${row.toCore}`"
-                  class="stats-table-row"
+                  class="stats-table-row clickable"
+                  :title="`Click to view Gap/Rate distribution for ${row.fromCore} → ${row.toCore}`"
+                  tabindex="0"
+                  @click="openPairPlot(row.fromCore, row.toCore)"
+                  @keydown.enter.prevent="openPairPlot(row.fromCore, row.toCore)"
+                  @keydown.space.prevent="openPairPlot(row.fromCore, row.toCore)"
                 >
                   <td class="task-col">{{ row.fromCore }}</td>
                   <td class="task-col">{{ row.toCore }}</td>
@@ -666,6 +671,20 @@
                 Max
               </th>
               <th
+                :class="thSortClass('exec', 'jitter')"
+                title="Observed range: maximum minus minimum slice duration"
+                @click="toggleTableSort('exec', 'jitter')"
+              >
+                Jitter
+              </th>
+              <th
+                :class="thSortClass('exec', 'stddev')"
+                title="Population standard deviation of slice durations"
+                @click="toggleTableSort('exec', 'stddev')"
+              >
+                σ
+              </th>
+              <th
                 :class="thSortClass('exec', 'p95')"
                 @click="toggleTableSort('exec', 'p95')"
               >
@@ -702,6 +721,8 @@
               >
                 {{ row.max }}
               </td>
+              <td>{{ row.jitter }}</td>
+              <td>{{ row.stddev }}</td>
               <td>{{ row.p95 }}</td>
             </tr>
           </tbody>
@@ -790,6 +811,20 @@
                 Max
               </th>
               <th
+                :class="thSortClass('block', 'jitter')"
+                title="Observed range: maximum minus minimum off-CPU gap"
+                @click="toggleTableSort('block', 'jitter')"
+              >
+                Jitter
+              </th>
+              <th
+                :class="thSortClass('block', 'stddev')"
+                title="Population standard deviation of off-CPU gaps"
+                @click="toggleTableSort('block', 'stddev')"
+              >
+                σ
+              </th>
+              <th
                 :class="thSortClass('block', 'p95')"
                 @click="toggleTableSort('block', 'p95')"
               >
@@ -825,6 +860,8 @@
               >
                 {{ row.max }}
               </td>
+              <td>{{ row.jitter }}</td>
+              <td>{{ row.stddev }}</td>
               <td>{{ row.p95 }}</td>
             </tr>
           </tbody>
@@ -913,6 +950,20 @@
                 Max
               </th>
               <th
+                :class="thSortClass('inter', 'jitter')"
+                title="Observed range: maximum minus minimum inter-arrival time"
+                @click="toggleTableSort('inter', 'jitter')"
+              >
+                Jitter
+              </th>
+              <th
+                :class="thSortClass('inter', 'stddev')"
+                title="Population standard deviation of inter-arrival times"
+                @click="toggleTableSort('inter', 'stddev')"
+              >
+                σ
+              </th>
+              <th
                 :class="thSortClass('inter', 'p95')"
                 @click="toggleTableSort('inter', 'p95')"
               >
@@ -948,6 +999,8 @@
               >
                 {{ row.max }}
               </td>
+              <td>{{ row.jitter }}</td>
+              <td>{{ row.stddev }}</td>
               <td>{{ row.p95 }}</td>
             </tr>
           </tbody>
@@ -2004,6 +2057,17 @@
               :height="scatterModel.height"
               fill="var(--bg)"
             />
+            <rect
+              v-if="scatterModel.sigmaBand"
+              :x="scatterModel.margin.left"
+              :y="scatterModel.sigmaBand.y"
+              :width="scatterModel.width - scatterModel.margin.left - scatterModel.margin.right"
+              :height="scatterModel.sigmaBand.height"
+              fill="#CE93D8"
+              fill-opacity="0.14"
+            >
+              <title>Average ± one population standard deviation</title>
+            </rect>
 
             <line
               v-for="grid in scatterModel.yTicks"
@@ -2186,6 +2250,17 @@
                 :height="histogramModel.height"
                 fill="var(--bg)"
               />
+              <rect
+                v-if="histogramModel.sigmaBand"
+                :x="histogramModel.sigmaBand.x"
+                :y="histogramModel.margin.top"
+                :width="histogramModel.sigmaBand.width"
+                :height="histogramModel.height - histogramModel.margin.top - histogramModel.margin.bottom"
+                fill="#CE93D8"
+                fill-opacity="0.14"
+              >
+                <title>Average ± one population standard deviation</title>
+              </rect>
 
               <line
                 v-for="tick in histogramModel.yTicks"
@@ -2329,6 +2404,24 @@
         >
           Export SVG
         </button>
+        <template v-if="pairPlotFocus">
+          <button
+            type="button"
+            class="action-btn"
+            title="Open the Migration Heatmap focused on this core pair"
+            @click="openPairHeatmap"
+          >
+            Open Heatmap
+          </button>
+          <button
+            type="button"
+            class="action-btn"
+            title="Open the Migration Chord Diagram with this pair highlighted"
+            @click="openPairChord"
+          >
+            Open Chord
+          </button>
+        </template>
       </div>
     </div>
   </div>
@@ -2338,7 +2431,7 @@
 import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { toBlob as domToBlob, toSvg as domToSvg } from 'html-to-image'
 import { formatTime, isStiTagChannel } from '../renderer/TimelineRenderer.js'
-import { taskDisplayName, parseTaskName, taskMergeKey, isIdleTaskName, taskColor, taskReprGet, taskLabelForMergeKey } from '../utils/colors.js'
+import { taskDisplayName, parseTaskName, taskMergeKey, isIdleTaskName, taskColor, taskReprGet, taskLabelForMergeKey, coreColor } from '../utils/colors.js'
 import {
   getPlacedCursors,
   getStatsRange,
@@ -2392,7 +2485,7 @@ import { buildCoreAffinityRows } from '../utils/coreAffinityAnalysis.js'
 import { formatMigrationGapTime } from '../utils/timeFormat.js'
 import { computeDeadlineViolations } from '../utils/deadlineAnalysis.js'
 import { intervalInstanceDetailRows } from '../utils/intervalAnalysis.js'
-import { migrationRows, buildCorePairRows, buildCoreTimeBreakdown, migrationDwellPlotPoints, migrationRatePlotPoints, migrationGapPlotPoints } from '../utils/migrationAnalysis.js'
+import { migrationRows, buildCorePairRows, buildCoreTimeBreakdown, migrationDwellPlotPoints, migrationRatePlotPoints, migrationGapPlotPoints, pairGapPlotPoints, pairRatePlotPoints, pairPlotKey, pairMigrations, pairBouncePrefer, buildLockBounceNsSet } from '../utils/migrationAnalysis.js'
 import { renderWorkflowAnalysisHtml, collectTraceAnalysisFindings } from '../utils/workflowAnalysis.js'
 import { traceNeedsDeferredStatsLoad } from '../utils/statsLoad.js'
 import { tickHealthReport } from '../utils/tickHealth.js'
@@ -2439,6 +2532,7 @@ const props = defineProps({
 const emit = defineEmits([
   'highlightTask', 'plotPointActivate', 'segmentJump', 'update:openPlot', 'update:sectionHeights',
   'update:scopeToCursors', 'update:sectionCollapsedState',
+  'openPairHeatmap', 'openPairChord',
 ])
 
 const coresCollapsed = ref(false)
@@ -2529,10 +2623,14 @@ function formatStatsRow(row, scale) {
     minNs: row.min,
     avgNs: row.avg,
     maxNs: row.max,
+    jitterNs: row.jitter,
+    stddevNs: row.stddev,
     p95Ns: row.p95,
     min: formatTime(row.min, scale),
     avg: formatTime(row.avg, scale),
     max: formatTime(row.max, scale),
+    jitter: formatTime(row.jitter, scale),
+    stddev: formatTime(row.stddev, scale),
     p95: formatTime(row.p95, scale),
   }
 }
@@ -3195,8 +3293,12 @@ function _summarizeNumericSamples(samples) {
   if (!samples || samples.length === 0) return null
   const values = [...samples].sort((a, b) => a - b)
   const n = values.length
+  const avg = values.reduce((sum, value) => sum + value, 0) / n
   return {
-    avg: values.reduce((sum, value) => sum + value, 0) / n,
+    avg,
+    stddev: Math.sqrt(
+      values.reduce((sum, value) => sum + ((value - avg) ** 2), 0) / n,
+    ),
     p50: values[Math.min(n - 1, Math.floor(n * 0.5))],
     p95: values[Math.min(n - 1, Math.floor(n * 0.95))],
   }
@@ -3371,6 +3473,79 @@ function _buildMigGapPlot(trace, mk, range) {
   }
 }
 
+function _pairHeader(trace, fromCore, toCore, range) {
+  const lo = range?.lo ?? null
+  const hi = range?.hi ?? null
+  const migs = pairMigrations(trace, fromCore, toCore, lo, hi)
+  if (!migs.length) return null
+  const bounceNs = buildLockBounceNsSet(trace)
+  const bounces = migs.filter(m => bounceNs.has(m.ns)).length
+  const bouncePct = 100 * bounces / migs.length
+  const avgGap = Math.floor(migs.reduce((s, m) => s + (m.gapNs || 0), 0) / migs.length)
+  return (
+    `${fromCore} → ${toCore} · ${migs.length} migr · Bounce ${bouncePct.toFixed(1)}% · ` +
+    `Avg Gap ${formatMigrationGapTime(avgGap, trace.timeScale)}`
+  )
+}
+
+function _buildPairGapPlot(trace, fromCore, toCore, range) {
+  const lo = range?.lo ?? null
+  const hi = range?.hi ?? null
+  const suffix = scopeSuffix(range)
+  const hdr = _pairHeader(trace, fromCore, toCore, range)
+  if (!hdr) return null
+  const rawPoints = pairGapPlotPoints(trace, fromCore, toCore, lo, hi)
+  if (!rawPoints.length) return null
+  const bounceNs = buildLockBounceNsSet(trace)
+  const points = rawPoints.map((pt, index) => {
+    const bounce = bounceNs.has(pt.payload.ns) ? ' · bounce' : ''
+    return {
+      index,
+      xNs: pt.xNs,
+      yValue: pt.yValue,
+      payload: pt.payload,
+      fillColor: pt.fillColor,
+      label: `${fromCore}→${toCore}: ${formatTime(pt.yValue, trace.timeScale)} blocked after migration at ${formatTime(pt.xNs, trace.timeScale)}${bounce}`,
+    }
+  })
+  return {
+    kind: 'pair_gap',
+    fromCore,
+    toCore,
+    pairKey: pairPlotKey(fromCore, toCore),
+    title: `${hdr} — Post-Migration Gap${suffix}`,
+    color: coreColor(fromCore),
+    points,
+  }
+}
+
+function _buildPairRatePlot(trace, fromCore, toCore, range) {
+  const lo = range?.lo ?? null
+  const hi = range?.hi ?? null
+  const suffix = scopeSuffix(range)
+  const hdr = _pairHeader(trace, fromCore, toCore, range)
+  if (!hdr) return null
+  const rawPoints = pairRatePlotPoints(trace, fromCore, toCore, lo, hi)
+  if (!rawPoints.length) return null
+  const points = rawPoints.map((pt, index) => ({
+    index,
+    xNs: pt.xNs,
+    yValue: pt.yValue,
+    payload: pt.payload,
+    fillColor: pt.fillColor,
+    label: `${fromCore}→${toCore}: ${formatTime(pt.yValue, trace.timeScale)} since previous pair migration at ${formatTime(pt.xNs, trace.timeScale)}`,
+  }))
+  return {
+    kind: 'pair_rate',
+    fromCore,
+    toCore,
+    pairKey: pairPlotKey(fromCore, toCore),
+    title: `${hdr} — Time Between Pair Migrations${suffix}`,
+    color: coreColor(fromCore),
+    points,
+  }
+}
+
 function _buildPreemptPlot(trace, victimMk, preemptor, range) {
   const repr = trace?.taskRepr?.get(victimMk) || victimMk
   const suffix = scopeSuffix(range)
@@ -3519,6 +3694,12 @@ const plotData = computed(() => {
   if (open.kind === 'mig_dwell') return _buildMigDwellPlot(props.trace, open.mk, range)
   if (open.kind === 'mig_rate') return _buildMigRatePlot(props.trace, open.mk, range)
   if (open.kind === 'mig_gap') return _buildMigGapPlot(props.trace, open.mk, range)
+  if (open.kind === 'pair_gap') {
+    return _buildPairGapPlot(props.trace, open.fromCore, open.toCore, range)
+  }
+  if (open.kind === 'pair_rate') {
+    return _buildPairRatePlot(props.trace, open.fromCore, open.toCore, range)
+  }
   if (open.kind === 'preempt') {
     return _buildPreemptPlot(props.trace, open.mk, open.preemptor, range)
   }
@@ -3551,6 +3732,11 @@ const MIG_PLOT_TABS = [
   { kind: 'mig_gap', label: 'Gap' },
 ]
 
+const PAIR_PLOT_TABS = [
+  { kind: 'pair_gap', label: 'Gap' },
+  { kind: 'pair_rate', label: 'Rate' },
+]
+
 const TAG_PLOT_TABS = [
   { kind: 'tag', label: 'Value' },
   { kind: 'tag_interval', label: 'Interval' },
@@ -3560,8 +3746,21 @@ const activePlotTabs = computed(() => {
   const kind = openPlotRef.value?.kind
   if (!kind) return null
   if (kind.startsWith('mig_')) return MIG_PLOT_TABS
+  if (kind.startsWith('pair_')) return PAIR_PLOT_TABS
   if (kind === 'tag' || kind === 'tag_interval') return TAG_PLOT_TABS
   return null
+})
+
+const pairPlotFocus = computed(() => {
+  const open = openPlotRef.value
+  if (!open || !open.kind?.startsWith('pair_')) return null
+  const fromCore = open.fromCore
+  const toCore = open.toCore
+  if (!fromCore || !toCore) return null
+  const range = statsRange.value
+  const bounceOnly = pairBouncePrefer(
+    props.trace, fromCore, toCore, range?.lo ?? null, range?.hi ?? null)
+  return { fromCore, toCore, bounceOnly }
 })
 
 function switchPlotTab(kind) {
@@ -3583,6 +3782,26 @@ function openTaskPlot(mk, kind) {
   if (!plot || plot.points.length === 0) return
   openPlotRef.value = { mk, kind }
   selectedPlotPoint.value = -1
+}
+
+function openPairPlot(fromCore, toCore) {
+  const range = statsRange.value
+  const plot = _buildPairGapPlot(props.trace, fromCore, toCore, range)
+  if (!plot || plot.points.length === 0) return
+  openPlotRef.value = { kind: 'pair_gap', fromCore, toCore, pairKey: pairPlotKey(fromCore, toCore) }
+  selectedPlotPoint.value = -1
+}
+
+function openPairHeatmap() {
+  const focus = pairPlotFocus.value
+  if (!focus) return
+  emit('openPairHeatmap', focus)
+}
+
+function openPairChord() {
+  const focus = pairPlotFocus.value
+  if (!focus) return
+  emit('openPairChord', focus)
 }
 
 function openPreemptPlot(victimMk, preemptor) {
@@ -3678,12 +3897,25 @@ const scatterModel = computed(() => {
   const plotW = width - margin.left - margin.right
   const plotH = height - margin.top - margin.bottom
   const summary = _summarizeNumericSamples(ys)
+  const showVariability = ['exec', 'block', 'inter'].includes(plot.kind)
   const yFormat = plot.kind === 'tag'
     ? (v) => formatTagValue(Math.round(v))
     : (v) => formatTime(Math.round(v), props.trace.timeScale)
 
   const scaleX = value => margin.left + ((value - x0) / xSpan) * plotW
   const scaleY = value => margin.top + plotH - (value / yMax) * plotH
+
+  const sigmaLo = summary
+    ? Math.max(0, summary.avg - summary.stddev)
+    : 0
+  const sigmaHi = summary
+    ? Math.min(yMax, summary.avg + summary.stddev)
+    : 0
+  const refs = summary ? [
+    { label: 'avg', y: scaleY(summary.avg), color: '#CE93D8' },
+    { label: 'p50', y: scaleY(summary.p50), color: '#4CAF50' },
+    { label: 'p95', y: scaleY(summary.p95), color: '#FF9800' },
+  ] : []
 
   return {
     width,
@@ -3698,11 +3930,11 @@ const scatterModel = computed(() => {
       const value = yMax * (1 - index / 4)
       return { index, y: scaleY(value), label: yFormat(Math.round(value)) }
     }),
-    referenceLines: summary ? [
-      { label: 'avg', y: scaleY(summary.avg), color: '#CE93D8' },
-      { label: 'p50', y: scaleY(summary.p50), color: '#4CAF50' },
-      { label: 'p95', y: scaleY(summary.p95), color: '#FF9800' },
-    ] : [],
+    sigmaBand: (summary && showVariability) ? {
+      y: scaleY(sigmaHi),
+      height: Math.max(1, scaleY(sigmaLo) - scaleY(sigmaHi)),
+    } : null,
+    referenceLines: refs,
     points: plot.points.map((point, index) => ({
       ...point,
       index,
@@ -3805,6 +4037,7 @@ const histogramModel = computed(() => {
     formatValue,
     valueAsTime: !isTagPlot,
     color: plot.color,
+    showVariability: ['exec', 'block', 'inter'].includes(plot.kind),
   })
 })
 
@@ -4056,7 +4289,7 @@ function exportCsv() {
 
   lines.push('')
   lines.push(`Execution Time Per Slice${suffix}`)
-  lines.push('Task,Runs,CPU%,Min,Avg,TrimMean(5%),Max,p50,p95')
+  lines.push('Task,Runs,CPU%,Min,Avg,TrimMean(5%),Max,Jitter,StdDev (population),p50,p95')
   for (const r of execReportRows) {
     lines.push([
       _csvCell(r.name),
@@ -4066,6 +4299,8 @@ function exportCsv() {
       _csvCell(r.avg),
       _csvCell(r.trimMean),
       _csvCell(r.max),
+      _csvCell(r.jitter),
+      _csvCell(r.stddev),
       _csvCell(r.p50),
       _csvCell(r.p95),
     ].join(','))
@@ -4073,7 +4308,7 @@ function exportCsv() {
 
   lines.push('')
   lines.push(`Blocking Time (off-CPU gap)${suffix}`)
-  lines.push('Task,Gaps,Min,Avg,TrimMean(5%),Max,p50,p95')
+  lines.push('Task,Gaps,Min,Avg,TrimMean(5%),Max,Jitter,StdDev (population),p50,p95')
   for (const r of blockReportRows) {
     lines.push([
       _csvCell(r.name),
@@ -4082,6 +4317,8 @@ function exportCsv() {
       _csvCell(r.avg),
       _csvCell(r.trimMean),
       _csvCell(r.max),
+      _csvCell(r.jitter),
+      _csvCell(r.stddev),
       _csvCell(r.p50),
       _csvCell(r.p95),
     ].join(','))
@@ -4089,7 +4326,7 @@ function exportCsv() {
 
   lines.push('')
   lines.push(`Inter-Arrival Time${suffix}`)
-  lines.push('Task,Runs,Min,Avg,TrimMean(5%),Max,p50,p95')
+  lines.push('Task,Runs,Min,Avg,TrimMean(5%),Max,Jitter,StdDev (population),p50,p95')
   for (const r of interReportRows) {
     lines.push([
       _csvCell(r.name),
@@ -4098,6 +4335,8 @@ function exportCsv() {
       _csvCell(r.avg),
       _csvCell(r.trimMean),
       _csvCell(r.max),
+      _csvCell(r.jitter),
+      _csvCell(r.stddev),
       _csvCell(r.p50),
       _csvCell(r.p95),
     ].join(','))
@@ -4299,14 +4538,21 @@ function _summarizeSamplesReport(samples, scale) {
   const p50Idx = Math.min(n - 1, Math.ceil(n * 0.50) - 1)
   const p95Idx = Math.min(n - 1, Math.ceil(n * 0.95) - 1)
   const sum = sorted.reduce((a, b) => a + b, 0)
+  const mean = sum / n
   const trimCount = Math.floor(n * 0.05)
   const trimVals = (trimCount * 2) < n ? sorted.slice(trimCount, n - trimCount) : sorted
   const trimSum = trimVals.reduce((a, b) => a + b, 0)
+  const jitter = sorted[n - 1] - sorted[0]
+  const stddev = Math.sqrt(
+    sorted.reduce((acc, value) => acc + ((value - mean) ** 2), 0) / n,
+  )
   return {
     min: formatTime(sorted[0], scale),
-    avg: formatTime(Math.round(sum / n), scale),
+    avg: formatTime(Math.round(mean), scale),
     trimMean: formatTime(Math.round(trimSum / trimVals.length), scale),
     max: formatTime(sorted[n - 1], scale),
+    jitter: formatTime(jitter, scale),
+    stddev: formatTime(Math.round(stddev), scale),
     p50: formatTime(sorted[p50Idx], scale),
     p95: formatTime(sorted[p95Idx], scale),
   }
@@ -4344,6 +4590,8 @@ function _execSliceRowsForReport(tr, range) {
       avg: summary.avg,
       trimMean: summary.trimMean,
       max: summary.max,
+      jitter: summary.jitter,
+      stddev: summary.stddev,
       p50: summary.p50,
       p95: summary.p95,
     })
@@ -4385,6 +4633,8 @@ function _interArrivalRowsForReport(tr, range) {
       avg: summary.avg,
       trimMean: summary.trimMean,
       max: summary.max,
+      jitter: summary.jitter,
+      stddev: summary.stddev,
       p50: summary.p50,
       p95: summary.p95,
     })
@@ -4416,6 +4666,8 @@ function _blockingRowsForReport(tr, range) {
       avg: summary.avg,
       trimMean: summary.trimMean,
       max: summary.max,
+      jitter: summary.jitter,
+      stddev: summary.stddev,
       p50: summary.p50,
       p95: summary.p95,
     })
@@ -4426,14 +4678,14 @@ function _blockingRowsForReport(tr, range) {
 
 function _renderHtmlTableReport(title, rows, includeCpu = false) {
   const head = includeCpu
-    ? '<tr><th>Task</th><th>Runs</th><th>CPU%</th><th>Min</th><th>Avg</th><th>TrimMean(5%)</th><th>Max</th><th>p50</th><th>p95</th></tr>'
-    : '<tr><th>Task</th><th>Runs</th><th>Min</th><th>Avg</th><th>TrimMean(5%)</th><th>Max</th><th>p50</th><th>p95</th></tr>'
+    ? '<tr><th>Task</th><th>Runs</th><th>CPU%</th><th>Min</th><th>Avg</th><th>TrimMean(5%)</th><th>Max</th><th>Jitter</th><th>σ</th><th>p50</th><th>p95</th></tr>'
+    : '<tr><th>Task</th><th>Runs</th><th>Min</th><th>Avg</th><th>TrimMean(5%)</th><th>Max</th><th>Jitter</th><th>σ</th><th>p50</th><th>p95</th></tr>'
   const body = rows.length
     ? rows.map(r => includeCpu
-      ? `<tr><td>${_htmlCell(r.name)}</td><td>${_htmlCell(r.runs)}</td><td>${_htmlCell(r.cpuPct.toFixed(1))}%</td><td>${_htmlCell(r.min)}</td><td>${_htmlCell(r.avg)}</td><td>${_htmlCell(r.trimMean)}</td><td>${_htmlCell(r.max)}</td><td>${_htmlCell(r.p50)}</td><td>${_htmlCell(r.p95)}</td></tr>`
-      : `<tr><td>${_htmlCell(r.name)}</td><td>${_htmlCell(r.runs)}</td><td>${_htmlCell(r.min)}</td><td>${_htmlCell(r.avg)}</td><td>${_htmlCell(r.trimMean)}</td><td>${_htmlCell(r.max)}</td><td>${_htmlCell(r.p50)}</td><td>${_htmlCell(r.p95)}</td></tr>`,
+      ? `<tr><td>${_htmlCell(r.name)}</td><td>${_htmlCell(r.runs)}</td><td>${_htmlCell(r.cpuPct.toFixed(1))}%</td><td>${_htmlCell(r.min)}</td><td>${_htmlCell(r.avg)}</td><td>${_htmlCell(r.trimMean)}</td><td>${_htmlCell(r.max)}</td><td>${_htmlCell(r.jitter)}</td><td>${_htmlCell(r.stddev)}</td><td>${_htmlCell(r.p50)}</td><td>${_htmlCell(r.p95)}</td></tr>`
+      : `<tr><td>${_htmlCell(r.name)}</td><td>${_htmlCell(r.runs)}</td><td>${_htmlCell(r.min)}</td><td>${_htmlCell(r.avg)}</td><td>${_htmlCell(r.trimMean)}</td><td>${_htmlCell(r.max)}</td><td>${_htmlCell(r.jitter)}</td><td>${_htmlCell(r.stddev)}</td><td>${_htmlCell(r.p50)}</td><td>${_htmlCell(r.p95)}</td></tr>`,
     ).join('')
-    : `<tr><td colspan="${includeCpu ? 9 : 8}" class="empty">No data</td></tr>`
+    : `<tr><td colspan="${includeCpu ? 11 : 10}" class="empty">No data</td></tr>`
   return `<section class="report-card"><h2>${_htmlCell(title)}</h2><table><thead>${head}</thead><tbody>${body}</tbody></table></section>`
 }
 
@@ -4828,7 +5080,7 @@ function exportHtml() {
       ${scopeNote}
       <li><strong>Execution Time Per Slice:</strong> Duration of each continuous task run between two context switches. Lower and tighter values indicate more predictable execution.</li>
       <li><strong>Inter-Arrival Time:</strong> Time between consecutive activations of the same task (slice start to next slice start). It reflects activation cadence and jitter.</li>
-      <li><strong>Blocking Time:</strong> Off-CPU gap between the end of one slice and the start of the next for the same task (scheduling latency until resume). High values may indicate preemption, resource blocking, or long scheduler delays.</li>
+      <li><strong>Blocking Time:</strong> Off-CPU gap between the end of one slice and the start of the next for the same task (scheduling latency until resume). It is not end-to-end response time, which requires explicit release and completion events.</li>
       <li><strong>Preemption Chain Analysis:</strong> For each blocking gap of a victim task, identifies which task ran on the same core during that gap. High counts or long totals point to recurring preemption bottlenecks.</li>
       <li><strong>Priority Inheritance:</strong> When traces include <code>create pri:N</code> on task create and <code>set_priority</code> STI events, lists tasks boosted above their base priority. <em>L/M/H pattern</em> flags classic priority-inversion geometry (medium-priority task between base and peak).</li>
       <li><strong>Mutex / Semaphore:</strong> Pairs <code>take</code>/<code>give</code> STI events by object pointer (<code>0x........</code> in the note). Reports orphan gives, cross-task gives, unmatched takes, delete-while-held, and multi-mutex hold at trace end (deadlock risk).</li>
@@ -4839,6 +5091,8 @@ function exportHtml() {
       <li><strong>Max (Maximum):</strong> The slowest execution time recorded. It identifies worst-case bottlenecks, spikes, or resource contention.</li>
       <li><strong>Average (Mean):</strong> Total execution time divided by the number of slices. It shows general performance but is heavily skewed by extreme outliers.</li>
       <li><strong>TrimMean(5%):</strong> Average after removing the fastest 5% and slowest 5% slices. It reflects typical performance while reducing outlier impact.</li>
+      <li><strong>Jitter:</strong> Observed spread, calculated as Max − Min for samples in scope.</li>
+      <li><strong>σ (Population Standard Deviation):</strong> Typical dispersion of all observed samples around their arithmetic mean.</li>
       <li><strong>P50 (Median):</strong> The midpoint latency where half of slices are faster and half are slower. It captures typical-case behaviour.</li>
       <li><strong>P95 (95th Percentile):</strong> The threshold under which 95% of all slices execute. It is the best metric for user experience because it ignores rare anomalies while capturing real-world slowdowns.</li>
     </ul>

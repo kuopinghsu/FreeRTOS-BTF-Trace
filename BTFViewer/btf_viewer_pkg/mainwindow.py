@@ -3987,6 +3987,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._stats_panel.segment_jump.connect(self._on_segment_jump)
         self._stats_panel.plot_point_clicked.connect(self._on_stats_plot_point_clicked)
         self._stats_panel.core_clicked.connect(self._on_stats_core_clicked)
+        self._stats_panel.open_pair_heatmap.connect(self._on_open_pair_heatmap)
+        self._stats_panel.open_pair_chord.connect(self._on_open_pair_chord)
         self._stats_panel._btn_compare_mig.clicked.connect(self._open_trace_compare)
         self.setAcceptDrops(True)
 
@@ -4778,6 +4780,34 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             sc._heatmap_filter_label if sc else None,
             len(mks) if mks else 0)
         dlg.show()
+
+    def _on_open_pair_heatmap(self, from_core: str, to_core: str,
+                              bounce_only: bool = False) -> None:
+        """Core-Pair chart footer: open heatmap focused on From→To."""
+        self._open_migration_heatmap()
+        dlg = self._heatmap_dlg
+        if dlg is None:
+            return
+        if not dlg.focus_pair(from_core, to_core, bounce_only=bounce_only):
+            self.statusBar().showMessage(
+                f"No heatmap data for {from_core}→{to_core} in scope", 4000)
+        else:
+            dlg.raise_()
+            dlg.activateWindow()
+
+    def _on_open_pair_chord(self, from_core: str, to_core: str,
+                            bounce_only: bool = False) -> None:
+        """Core-Pair chart footer: open chord with source core highlighted."""
+        self._open_chord_diagram()
+        dlg = self._chord_dlg
+        if dlg is None:
+            return
+        if not dlg.focus_pair(from_core, to_core, bounce_only=bounce_only):
+            self.statusBar().showMessage(
+                f"No chord data for {from_core}→{to_core} in scope", 4000)
+        else:
+            dlg.raise_()
+            dlg.activateWindow()
 
     def _on_heatmap_dlg_closed(self, _result: int = 0) -> None:
         self._heatmap_dlg = None

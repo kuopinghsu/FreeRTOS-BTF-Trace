@@ -24,7 +24,9 @@ class WorkflowAnalysisFindingsTest(unittest.TestCase):
         findings = _build_workflow_analysis_findings(
             core_rows=[("Core_0", 80.0), ("Core_1", 10.0), ("Core_2", 5.0), ("Core_3", 5.0)],
             exec_rows=[
-                ("mk1", "Worker", 100, 40.0, "1us", "2us", "2us", "10us", "2us", "8us"),
+                # mk, name, runs, cpu, min, avg, tmean, max, jitter, σ, p50, p95
+                ("mk1", "Worker", 100, 40.0, "1us", "2us", "2us", "10us",
+                 "9us", "3us", "2us", "8us"),
             ],
             block_rows=[],
             mig_rows=[

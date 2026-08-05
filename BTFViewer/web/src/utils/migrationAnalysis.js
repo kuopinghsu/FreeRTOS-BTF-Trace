@@ -294,6 +294,77 @@ export function migrationGapPlotPoints(trace, mk, lo, hi) {
   return points
 }
 
+export const PAIR_BOUNCE_POINT_COLOR = '#FF9800'
+export const PAIR_PLOT_KEY_SEP = '\x00'
+
+export function pairPlotKey(fromCore, toCore) {
+  return `${fromCore}${PAIR_PLOT_KEY_SEP}${toCore}`
+}
+
+export function parsePairPlotKey(key) {
+  if (!key || !key.includes(PAIR_PLOT_KEY_SEP)) return null
+  const [fromCore, toCore] = key.split(PAIR_PLOT_KEY_SEP)
+  if (!fromCore || !toCore) return null
+  return { fromCore, toCore }
+}
+
+/** Directed From→To migrations in scope, time-sorted. */
+export function pairMigrations(trace, fromCore, toCore, lo = null, hi = null) {
+  const out = []
+  for (const m of trace.migrations ?? []) {
+    if (m.fromCore !== fromCore || m.toCore !== toCore) continue
+    if (lo != null && m.ns < lo) continue
+    if (hi != null && m.ns > hi) continue
+    out.push(m)
+  }
+  out.sort((a, b) => a.ns - b.ns)
+  return out
+}
+
+/**
+ * Core-pair Gap plot points. Bounce migrations carry fillColor accent.
+ * Returns [{ xNs, yValue, payload, fillColor? }]
+ */
+export function pairGapPlotPoints(trace, fromCore, toCore, lo = null, hi = null) {
+  const bounceNs = buildLockBounceNsSet(trace)
+  const points = []
+  for (const m of pairMigrations(trace, fromCore, toCore, lo, hi)) {
+    if ((m.gapNs ?? 0) <= 0) continue
+    const pt = { xNs: m.ns, yValue: m.gapNs, payload: m }
+    if (bounceNs.has(m.ns)) pt.fillColor = PAIR_BOUNCE_POINT_COLOR
+    points.push(pt)
+  }
+  return points
+}
+
+/**
+ * Core-pair Rate plot points: y = time since previous migration on this corridor.
+ */
+export function pairRatePlotPoints(trace, fromCore, toCore, lo = null, hi = null) {
+  const migs = pairMigrations(trace, fromCore, toCore)
+  const bounceNs = buildLockBounceNsSet(trace)
+  const points = []
+  for (let i = 1; i < migs.length; i++) {
+    const cur = migs[i]
+    if (lo != null && hi != null && (cur.ns < lo || cur.ns > hi)) continue
+    const gap = cur.ns - migs[i - 1].ns
+    if (gap <= 0) continue
+    const pt = { xNs: cur.ns, yValue: gap, payload: cur }
+    if (bounceNs.has(cur.ns)) pt.fillColor = PAIR_BOUNCE_POINT_COLOR
+    points.push(pt)
+  }
+  return points
+}
+
+/** Prefer Bounce Only when Bounce % is elevated (≥25% with ≥5 migrations). */
+export function pairBouncePrefer(trace, fromCore, toCore, lo = null, hi = null) {
+  const migs = pairMigrations(trace, fromCore, toCore, lo, hi)
+  if (migs.length < 5) return false
+  const bounceNs = buildLockBounceNsSet(trace)
+  const pct = 100 * migs.filter(m => bounceNs.has(m.ns)).length / migs.length
+  return pct >= 25
+}
+
 export function migrationFindHits(trace, query) {
   return computeFindHits(trace, query, 'migrations').hits
 }
@@ -321,7 +392,7 @@ export function migrationHeatmapUsesMatrix(trace) {
  * Build the set of migration ns timestamps that occurred during a mutex hold
  * that crossed cores (cache-line bounce). Result is cached on the trace object.
  */
-function buildLockBounceNsSet(trace) {
+export function buildLockBounceNsSet(trace) {
   if (!trace) return new Set()
   if (trace._lockBounceNs) return trace._lockBounceNs
   const s = new Set()

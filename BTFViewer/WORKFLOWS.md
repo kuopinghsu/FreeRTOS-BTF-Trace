@@ -224,9 +224,10 @@ On this sample, hottest CS pairs are mostly **0 % Bounce** (scheduling thrash). 
 **Procedure**
 
 1. Open **Core-Pair Migration Summary**; sort by **Bounce %** or **Bounces**.
-2. Busy pairs with Bounce % ≥ ~25 % → pin sharers or redesign lock ownership.
-3. Use Heatmap/Chord **Bounce Only** to see when lock-bounces cluster.
-4. Confirm the object in **Mutex / Semaphore → Bounces**.
+2. Click a busy pair → **Gap** chart (orange = lock-bounce samples) / **Rate** for burst timing.
+3. Busy pairs with Bounce % ≥ ~25 % → pin sharers or redesign lock ownership.
+4. Use dialog **Open Heatmap** / **Open Chord** (or toolbar **Bounce Only**) to see when lock-bounces cluster.
+5. Confirm the object in **Mutex / Semaphore → Bounces**.
 
 ##### Task View + per-core CPU Load
 
@@ -358,11 +359,14 @@ Use when Analysis or the ladder points at a specific metric. Examples assume `ex
 2. Click **Max** — zoom and annotate.
 3. Check neighbours on the core and **Preemption Chain** for that victim.
 
-### 4.3 Blocking / response time
+### 4.3 Blocking / scheduling delay
 
 1. **Blocking Time** → sort **Max** / **p95**.
 2. Long gap → **Preemption Chain** and **Mutex/Semaphore**.
 3. Scope away from orchestrator sleeps (`Runner`).
+
+This is the off-CPU gap until the next resume, not release-to-completion
+response time. True response time requires explicit release/completion events.
 
 ### 4.4 Priority inversion
 
@@ -573,7 +577,7 @@ python builds/btf_viewer.py perfetto ../tracedata/example-8cores.btf.gz -o trace
 | Task waits too long | Blocking Time | Preemption Chain, Mutex, Inter-Arrival |
 | Priority inversion | Priority Inheritance | Mutex pairing, Blocking |
 | Core thrashing | Core Migrations (**Rate**, **Ping**, Dwell) | Task View lock-highlight + per-core Load; Core-Pair / Heatmap / Chord |
-| Lock-bounce migrations | Core-Pair (**Bounces**, **Bounce %**) | Heatmap/Chord **Bounce Only**; Mutex/Semaphore **Bounces**; Affinity |
+| Lock-bounce migrations | Core-Pair (**Bounces**, **Bounce %**) → Gap/Rate chart | Heatmap/Chord **Bounce Only**; Mutex/Semaphore **Bounces**; Affinity |
 | Lock / queue issues | Mutex/Semaphore / Queue | Blocking, Migrations |
 | Suspend/resume | Task Lifecycle (Susp/Res) | Timeline STI; demo test 9 |
 | Affinity wrong | Core Affinity | Lock-bounce table |

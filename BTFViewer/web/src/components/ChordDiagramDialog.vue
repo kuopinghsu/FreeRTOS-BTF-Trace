@@ -51,7 +51,7 @@
           ref="canvasRef"
           class="chord-canvas"
           @mousemove="onCanvasMove"
-          @mouseleave="hoverCoreIndex = null"
+          @mouseleave="onCanvasLeave"
         />
       </div>
       <!-- Always mounted (not v-if) so its reserved height never shifts the
@@ -104,6 +104,8 @@ const OUTER_PAD = 48
 const props = defineProps({
   trace:   { type: Object, required: true },
   cursors: { type: Array, default: () => [] },
+  /** Optional { fromCore, toCore, bounceOnly } from Core-Pair chart footer. */
+  focusPair: { type: Object, default: null },
 })
 
 const emit = defineEmits(['close'])
@@ -112,11 +114,15 @@ const bounceOnly = ref(false)
 const viewportRef = ref(null)
 const canvasRef = ref(null)
 const hoverCoreIndex = ref(null)
+const pinnedHover = ref(false)
+const focusLabel = ref('')
 let _drawRaf = 0
 let _resizeObserver = null
 
 watch(() => props.trace, (t) => {
   bounceOnly.value = false
+  pinnedHover.value = false
+  focusLabel.value = ''
   if (t) t._lockBounceNs = undefined
 })
 
@@ -142,6 +148,21 @@ const traceHasBounces = computed(() => traceHasCoreBounceHolds(props.trace))
 const matrix = computed(() => {
   const { lo, hi } = scopeLoHi.value
   return migrationHeatmapMatrix(props.trace, lo, hi, bounceOnly.value)
+})
+
+function applyFocusPair(focus) {
+  if (!focus?.fromCore || !focus?.toCore) return
+  bounceOnly.value = !!focus.bounceOnly
+  focusLabel.value = `${coreShortName(focus.fromCore)}→${coreShortName(focus.toCore)}`
+  const cores = matrix.value?.cores || []
+  const fi = cores.indexOf(focus.fromCore)
+  if (fi < 0) return
+  pinnedHover.value = true
+  hoverCoreIndex.value = fi
+}
+
+watch(() => props.focusPair, (focus) => {
+  if (focus) applyFocusPair(focus)
 })
 
 const chordLayout = computed(() => buildChordLayout(matrix.value.cores, matrix.value.grid))
@@ -170,7 +191,8 @@ const hasData = computed(() => {
 
 const subtitle = computed(() => {
   const n = matrix.value.cores.length
-  return `Core-to-core migration volume as directional chords (${n} cores)${scopeSuffix.value}`
+  const focus = focusLabel.value ? ` · focused ${focusLabel.value}` : ''
+  return `Core-to-core migration volume as directional chords (${n} cores)${focus}${scopeSuffix.value}`
 })
 
 const hoverTitle = computed(() => {
@@ -318,7 +340,7 @@ function onCanvasMove(ev) {
   const dy = my - cy
   const dist = Math.hypot(dx, dy)
   if (dist < R - ARC_THICKNESS / 2 - 4 || dist > R + ARC_THICKNESS / 2 + 4) {
-    hoverCoreIndex.value = null
+    if (!pinnedHover.value) hoverCoreIndex.value = null
     return
   }
   const angle = Math.atan2(dy, dx)
@@ -333,6 +355,11 @@ function onCanvasMove(ev) {
     }
   }
   hoverCoreIndex.value = found
+  if (found != null) pinnedHover.value = false
+}
+
+function onCanvasLeave() {
+  if (!pinnedHover.value) hoverCoreIndex.value = null
 }
 
 function _exportStamp() {
@@ -468,6 +495,7 @@ watch(hasData, (ready) => {
 })
 
 onMounted(() => {
+  if (props.focusPair) applyFocusPair(props.focusPair)
   nextTick(() => {
     scheduleDraw()
     const el = viewportRef.value

@@ -9,12 +9,17 @@ function summarizeNumeric(samples) {
   const values = samples.slice().sort((a, b) => a - b)
   const n = values.length
   const sum = values.reduce((a, b) => a + b, 0)
+  const mean = sum / n
   const p50Idx = Math.min(n - 1, Math.ceil(n * 0.5) - 1)
   const p95Idx = Math.min(n - 1, Math.ceil(n * 0.95) - 1)
   return {
     min: values[0],
-    avg: Math.round(sum / n),
+    avg: Math.round(mean),
     max: values[n - 1],
+    jitter: values[n - 1] - values[0],
+    stddev: Math.round(Math.sqrt(
+      values.reduce((acc, value) => acc + ((value - mean) ** 2), 0) / n,
+    )),
     p50: values[p50Idx],
     p95: values[p95Idx],
   }

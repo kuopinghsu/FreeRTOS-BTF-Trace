@@ -71,6 +71,8 @@ export const EXEC_SORT_ACCESSORS = {
   min: r => r.minNs,
   avg: r => r.avgNs,
   max: r => r.maxNs,
+  jitter: r => r.jitterNs,
+  stddev: r => r.stddevNs,
   p95: r => r.p95Ns,
 }
 
@@ -80,6 +82,8 @@ export const BLOCK_SORT_ACCESSORS = {
   min: r => r.minNs,
   avg: r => r.avgNs,
   max: r => r.maxNs,
+  jitter: r => r.jitterNs,
+  stddev: r => r.stddevNs,
   p95: r => r.p95Ns,
 }
 
@@ -89,6 +93,8 @@ export const INTER_SORT_ACCESSORS = {
   min: r => r.minNs,
   avg: r => r.avgNs,
   max: r => r.maxNs,
+  jitter: r => r.jitterNs,
+  stddev: r => r.stddevNs,
   p95: r => r.p95Ns,
 }
 

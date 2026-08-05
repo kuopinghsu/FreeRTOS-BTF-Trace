@@ -17,10 +17,14 @@ export function summarizeNumericSamples(samples) {
   if (!samples || samples.length === 0) return null
   const values = [...samples].sort((a, b) => a - b)
   const n = values.length
+  const avg = values.reduce((sum, value) => sum + value, 0) / n
   return {
     min: values[0],
     max: values[n - 1],
-    avg: values.reduce((sum, value) => sum + value, 0) / n,
+    avg,
+    stddev: Math.sqrt(
+      values.reduce((sum, value) => sum + ((value - avg) ** 2), 0) / n,
+    ),
     p5: percentile(values, 0.05),
     p50: percentile(values, 0.5),
     p95: percentile(values, 0.95),
@@ -392,6 +396,7 @@ function buildCaption(scaleMode, summary, binSpec, logY, formatValue, valueAsTim
  * @param {'auto'|'linear'|'percentile'|'log'} [options.scaleMode='auto']
  * @param {(ns:number)=>string} options.formatValue
  * @param {string} [options.color]
+ * @param {boolean} [options.showVariability=false]
  * @param {number} [options.width=820]
  * @param {number} [options.height=240]
  */
@@ -401,6 +406,7 @@ export function buildHistogramModel(values, options = {}) {
     formatValue = v => String(v),
     valueAsTime = true,
     color = '#5B9BD5',
+    showVariability = false,
     width = 820,
     height = 240,
   } = options
@@ -439,6 +445,27 @@ export function buildHistogramModel(values, options = {}) {
   })
 
   const cdf = buildCdfPoints(sorted, binSpec, plotW, plotH, margin)
+  const refs = [
+    { label: 'avg', value: summary.avg, color: '#CE93D8' },
+    { label: 'p50', value: summary.p50, color: '#4CAF50' },
+    { label: 'p95', value: summary.p95, color: '#FF9800' },
+  ]
+
+  let sigmaBand = null
+  if (showVariability) {
+    const lo = Math.max(summary.min, summary.avg - summary.stddev)
+    const hi = Math.min(summary.max, summary.avg + summary.stddev)
+    const x0 = scaleX(lo)
+    const x1 = scaleX(hi)
+    const plotRight = width - margin.right
+    if (x1 >= margin.left && x0 <= plotRight) {
+      sigmaBand = {
+        x: Math.max(margin.left, Math.min(x0, x1)),
+        width: Math.max(1, Math.min(plotRight, Math.max(x0, x1))
+          - Math.max(margin.left, Math.min(x0, x1))),
+      }
+    }
+  }
 
   return {
     width,
@@ -450,11 +477,10 @@ export function buildHistogramModel(values, options = {}) {
     yTicks,
     cdfPoints: cdf.points,
     cdfTicks: cdf.ticks,
-    referenceLines: [
-      { label: 'avg', x: scaleX(summary.avg), color: '#CE93D8' },
-      { label: 'p50', x: scaleX(summary.p50), color: '#4CAF50' },
-      { label: 'p95', x: scaleX(summary.p95), color: '#FF9800' },
-    ].filter(line => line.x >= margin.left && line.x <= width - margin.right),
+    referenceLines: refs
+      .map(ref => ({ label: ref.label, x: scaleX(ref.value), color: ref.color }))
+      .filter(line => line.x >= margin.left && line.x <= width - margin.right),
+    sigmaBand,
     caption: buildCaption(effectiveMode, summary, binSpec, logY, formatValue, valueAsTime),
     scaleMode: effectiveMode,
     requestedScaleMode: scaleMode,

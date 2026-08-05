@@ -89,7 +89,7 @@ export function buildWorkflowAnalysisFindings({
     const names = topB.map(r => `${r.name} (n=${r.runs}, Max ${r.max})`).join(', ')
     findings.push({
       severity: topB[0]?.runs >= 20 ? 'warning' : 'info',
-      title: 'Blocking / response-time candidates',
+      title: 'Blocking / scheduling-delay candidates',
       text: `Tasks with the most off-CPU gaps: ${names}. Cross-check Preemption Chain and Mutex/Semaphore.`,
     })
   }

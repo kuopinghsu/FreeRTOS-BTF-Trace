@@ -373,6 +373,8 @@
                 @highlight-task="onHighlightClick"
                 @plot-point-activate="onStatsPlotPointActivate"
                 @segment-jump="onStatsSegmentJump"
+                @open-pair-heatmap="onOpenPairHeatmap"
+                @open-pair-chord="onOpenPairChord"
               />
             </div>
           </div>
@@ -717,6 +719,7 @@
       :task-filter-active="!!timelineOptions.taskFilterKeys?.length"
       :task-filter-label="timelineOptions.heatmapFilterLabel"
       :task-filter-count="timelineOptions.taskFilterKeys?.length ?? 0"
+      :focus-pair="heatmapFocusPair"
       @close="onHeatmapClose"
       @drill-down="onHeatmapDrillDown"
       @clear-filter="clearHeatmapTaskFilter"
@@ -726,7 +729,8 @@
       v-if="chordOpen && trace"
       :trace="trace"
       :cursors="cursors"
-      @close="chordOpen = false"
+      :focus-pair="chordFocusPair"
+      @close="onChordClose"
     />
 
     <AnalysisFindingsDialog
@@ -892,6 +896,8 @@ const aboutOpen  = ref(false)
 const settingsOpen = ref(false)
 const heatmapOpen = ref(false)
 const chordOpen = ref(false)
+const heatmapFocusPair = ref(null)
+const chordFocusPair = ref(null)
 const analysisOpen = ref(false)
 /** Viewport/cursors saved when migration heatmap opens; restored by Show all tasks. */
 let _heatmapRestoreSnapshot = null
@@ -1214,6 +1220,8 @@ watch(activeTabId, (newId, oldId) => {
   if (oldId != null) {
     heatmapOpen.value = false
     chordOpen.value = false
+    heatmapFocusPair.value = null
+    chordFocusPair.value = null
     analysisOpen.value = false
     const leaving = tabs.value.find(t => t.id === oldId)
     if (leaving) saveFiltersToActiveTab(leaving)
@@ -2122,8 +2130,24 @@ function onOpenHeatmap() {
   heatmapOpen.value = true
 }
 
+function onOpenPairHeatmap(focus) {
+  heatmapFocusPair.value = focus || null
+  heatmapOpen.value = true
+}
+
+function onOpenPairChord(focus) {
+  chordFocusPair.value = focus || null
+  chordOpen.value = true
+}
+
 function onHeatmapClose() {
   heatmapOpen.value = false
+  heatmapFocusPair.value = null
+}
+
+function onChordClose() {
+  chordOpen.value = false
+  chordFocusPair.value = null
 }
 
 function clearHeatmapTaskFilter() {
@@ -2330,7 +2354,7 @@ function onGlobalKeydown(e) {
       onHeatmapClose()
       e.preventDefault()
     } else if (chordOpen.value) {
-      chordOpen.value = false
+      onChordClose()
       e.preventDefault()
     } else if (analysisOpen.value) {
       analysisOpen.value = false

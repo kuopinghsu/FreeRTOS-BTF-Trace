@@ -215,7 +215,7 @@ $$\text{Load Balance Score} = 100 \times (1 - \text{Gini})$$
 | Metric | Meaning |
 |--------|---------|
 | **Execution** | On-CPU slice |
-| **Blocking** | Off-CPU gap (≡ Tracealyzer *Response Time*) |
+| **Blocking** | Off-CPU gap / scheduling delay |
 | **Inter-Arrival** | Execution + Blocking |
 
 Which one is inflated tells you where to drill next.
@@ -291,7 +291,7 @@ Which one is inflated tells you where to drill next.
 
 ## See hops on the timeline
 
-**Task View** → click `CS[22]` to lock-highlight (others gray out). Then **Core Migrations** (Rate / Dwell / **Ping**) → **Core-Pair** / **Heatmap** / **Chord** (**Bounce Only** for lock-bounce).
+**Task View** → click `CS[22]` to lock-highlight (others gray out). Then **Core Migrations** (Rate / Dwell / **Ping**) → **Core-Pair** (click row → Gap/Rate) / **Heatmap** / **Chord** (**Bounce Only** for lock-bounce).
 
 ```bash
 snapshot … --view timeline --view-mode task --task "CS[22]" \
@@ -502,7 +502,7 @@ python builds/btf_viewer.py compare tickless.btf.gz tickful.btf.gz \
 | Waits too long | Blocking | Preemption · Mutex · Inter-Arrival |
 | Priority inversion | Priority Inheritance | Mutex · Blocking |
 | Core thrashing | Migrations (Rate, Ping) | Task View + Load · Heatmap · Affinity |
-| Lock-bounce | Core-Pair Bounce % | Bounce Only · Mutex Bounces · Affinity |
+| Lock-bounce | Core-Pair Bounce % → Gap chart | Bounce Only · Mutex Bounces · Affinity |
 | Lock / queue issues | Mutex/Semaphore | Blocking · Migrations |
 | Suspend/resume | Task Lifecycle | Timeline STI · test 9 |
 | Custom metric | Tag / Interval | Owning task Execution |

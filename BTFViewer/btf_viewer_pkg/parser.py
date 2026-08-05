@@ -2006,6 +2006,13 @@ def _format_plot_point_note(
         if kind == "mig_gap":
             return (f"{name}: {fmt(y_ns)} blocked after {payload.from_core}→"
                     f"{payload.to_core} at {fmt(x_ns)}")
+        if kind == "pair_rate":
+            return (f"{payload.from_core}→{payload.to_core}: {fmt(y_ns)} since "
+                    f"previous pair migration at {fmt(x_ns)}")
+        if kind == "pair_gap":
+            bounce = " · bounce" if payload.ns in trace.lock_bounce_migration_ns else ""
+            return (f"{payload.from_core}→{payload.to_core}: {fmt(y_ns)} blocked "
+                    f"after migration at {fmt(x_ns)}{bounce}")
     if kind == "tick":
         return f"Tick interval {fmt(y_ns)} at {fmt(x_ns)}"
     return f"{fmt(y_ns)} at {fmt(x_ns)}"
@@ -2706,6 +2713,76 @@ def _migration_gap_plot_points(
             continue
         if m.gap_ns > 0:
             pts.append((m.ns, m.gap_ns, m))
+    return pts
+
+# Encode/decode directed core-pair keys for Core-Pair Gap/Rate plot sessions.
+_PAIR_PLOT_KEY_SEP = "\x00"
+# Accent for lock-bounce migration samples on pair charts (matches Bounce %).
+_PAIR_BOUNCE_POINT_COLOR = "#FF9800"
+
+def _pair_plot_key(from_core: str, to_core: str) -> str:
+    return f"{from_core}{_PAIR_PLOT_KEY_SEP}{to_core}"
+
+def _parse_pair_plot_key(key: str) -> Optional[Tuple[str, str]]:
+    if not key or _PAIR_PLOT_KEY_SEP not in key:
+        return None
+    fc, tc = key.split(_PAIR_PLOT_KEY_SEP, 1)
+    if not fc or not tc:
+        return None
+    return fc, tc
+
+def _pair_migrations(
+    trace: "BtfTrace", from_core: str, to_core: str,
+    lo: Optional[int] = None, hi: Optional[int] = None,
+) -> List["MigrationEvent"]:
+    """Directed From→To migrations in scope, time-sorted."""
+    out: List[MigrationEvent] = []
+    for m in trace.migrations:
+        if m.from_core != from_core or m.to_core != to_core:
+            continue
+        if lo is not None and m.ns < lo:
+            continue
+        if hi is not None and m.ns > hi:
+            continue
+        out.append(m)
+    out.sort(key=lambda m: m.ns)
+    return out
+
+def _pair_gap_plot_points(
+    trace: "BtfTrace", from_core: str, to_core: str,
+    lo: Optional[int] = None, hi: Optional[int] = None,
+) -> List[Tuple]:
+    """One point per pair migration with positive gap; bounce events carry accent color."""
+    bounce_ns = trace.lock_bounce_migration_ns
+    pts: List[Tuple] = []
+    for m in _pair_migrations(trace, from_core, to_core, lo, hi):
+        if m.gap_ns <= 0:
+            continue
+        if m.ns in bounce_ns:
+            pts.append((m.ns, m.gap_ns, m, _PAIR_BOUNCE_POINT_COLOR))
+        else:
+            pts.append((m.ns, m.gap_ns, m))
+    return pts
+
+def _pair_rate_plot_points(
+    trace: "BtfTrace", from_core: str, to_core: str,
+    lo: Optional[int] = None, hi: Optional[int] = None,
+) -> List[Tuple]:
+    """One point per consecutive pair-migration: y = time since previous on this corridor."""
+    migs = _pair_migrations(trace, from_core, to_core, lo=None, hi=None)
+    bounce_ns = trace.lock_bounce_migration_ns
+    pts: List[Tuple] = []
+    for i in range(1, len(migs)):
+        cur = migs[i]
+        if lo is not None and hi is not None and (cur.ns < lo or cur.ns > hi):
+            continue
+        gap = cur.ns - migs[i - 1].ns
+        if gap <= 0:
+            continue
+        if cur.ns in bounce_ns:
+            pts.append((cur.ns, gap, cur, _PAIR_BOUNCE_POINT_COLOR))
+        else:
+            pts.append((cur.ns, gap, cur))
     return pts
 
 _TICK_HEALTH_PERIOD = 1000   # expected tick period in trace units (1 ms @ us scale)

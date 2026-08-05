@@ -151,6 +151,8 @@ const props = defineProps({
   taskFilterActive: { type: Boolean, default: false },
   taskFilterLabel:  { type: String, default: null },
   taskFilterCount:  { type: Number, default: 0 },
+  /** Optional { fromCore, toCore, bounceOnly } from Core-Pair chart footer. */
+  focusPair: { type: Object, default: null },
 })
 
 const emit = defineEmits(['close', 'drillDown', 'clearFilter'])
@@ -163,6 +165,7 @@ const viewportRef = ref(null)
 const canvasRef = ref(null)
 const hoverCell = ref(null)
 const hoverRow = ref(null)
+const focusLabel = ref('')
 const overviewScopeCache = new Map()
 let _drawRaf = 0
 let _scrollResizeObserver = null
@@ -178,6 +181,7 @@ watch(() => props.taskFilterActive, (active) => {
 watch(() => props.trace, (t) => {
   overviewScopeCache.clear()
   bounceOnly.value = false
+  focusLabel.value = ''
   if (t) t._lockBounceNs = undefined
 })
 
@@ -384,7 +388,8 @@ const subtitle = computed(() => {
     const scale = props.trace.timeScale
     return `Tasks · ${ctx.pairLabel} · ${formatTime(ctx.binLo, scale)} … ${formatTime(ctx.binHi, scale)}`
   }
-  return `Core-pair migrations over time bins${scopeSuffix.value}`
+  const focus = focusLabel.value ? ` · focused ${focusLabel.value}` : ''
+  return `Core-pair migrations over time bins${focus}${scopeSuffix.value}`
 })
 
 const emptyText = computed(() => {
@@ -848,6 +853,54 @@ function scrollHeatmapToTop() {
   })
 }
 
+function scrollHeatmapToRow(ri) {
+  nextTick(() => {
+    const el = scrollRef.value
+    if (el) {
+      el.scrollTop = Math.max(0, ri * ROW_H)
+      el.scrollLeft = 0
+    }
+    scheduleDraw()
+  })
+}
+
+function applyFocusPair(focus) {
+  if (!focus?.fromCore || !focus?.toCore) return
+  bounceOnly.value = !!focus.bounceOnly
+  overviewScopeCache.clear()
+  goLevel0()
+  const label = `${coreShortName(focus.fromCore)}→${coreShortName(focus.toCore)}`
+  focusLabel.value = label
+  nextTick(() => {
+    if (usesMatrixOverview.value) {
+      const cores = matrixHeatmap.value?.cores || []
+      const ri = cores.indexOf(focus.fromCore)
+      if (ri < 0) return
+      onMatrixRowClick(ri)
+      nextTick(() => {
+        const rows = displayRows.value
+        const oi = rows.findIndex(
+          r => r.fromCore === focus.fromCore && r.toCore === focus.toCore)
+        if (oi >= 0) {
+          hoverRow.value = oi
+          scrollHeatmapToRow(oi)
+        }
+      })
+      return
+    }
+    const rows = displayRows.value
+    const ri = rows.findIndex(
+      r => r.fromCore === focus.fromCore && r.toCore === focus.toCore)
+    if (ri < 0) return
+    hoverRow.value = ri
+    scrollHeatmapToRow(ri)
+  })
+}
+
+watch(() => props.focusPair, (focus) => {
+  if (focus) applyFocusPair(focus)
+})
+
 function goBack() {
   if (drillLevel.value <= 0) return
   drillLevel.value -= 1
@@ -931,6 +984,7 @@ watch(hasData, (ready) => {
 })
 
 onMounted(() => {
+  if (props.focusPair) applyFocusPair(props.focusPair)
   nextTick(() => {
     scheduleDraw()
     const el = viewportRef.value || scrollRef.value

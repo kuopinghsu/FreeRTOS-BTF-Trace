@@ -217,7 +217,19 @@ def _configure_wsl_wayland_dpi() -> None:
     if applied:
         os.environ["QT_WAYLAND_FORCE_DPI"] = str(_wsl_wayland_force_dpi(applied))
 
-def _configure_qt_startup() -> None:
+_HEADLESS_QPA_PLATFORMS = ("offscreen", "minimal", "vnc")
+
+# Subcommands that render without a window server. Kept in sync with
+# cli._CLI_COMMANDS by tests.
+_HEADLESS_CLI_COMMANDS = frozenset({
+    "report", "compare", "info", "migrations", "snapshot", "perfetto",
+})
+
+def _headless_cli_invocation(argv: list[str] | None = None) -> bool:
+    args = (sys.argv if argv is None else argv)[1:]
+    return bool(args) and args[0] in _HEADLESS_CLI_COMMANDS
+
+def _configure_qt_startup(argv: list[str] | None = None) -> None:
     # QT_FONT_DPI=96 was a PyQt5 workaround. Qt6 applies per-monitor DPI scaling
     # natively; forcing 96 DPI makes application fonts too small on Windows HiDPI.
     if sys.platform in ("win32", "linux"):
@@ -225,12 +237,19 @@ def _configure_qt_startup() -> None:
 
     _configure_wsl_wayland_dpi()
 
-    # macOS aborts inside _RegisterApplication when a headless QPA platform is
-    # active (common when QT_QPA_PLATFORM=offscreen leaks from CI/IDE shells).
-    if sys.platform == "darwin":
+    # A QT_QPA_PLATFORM=offscreen leaked from a CI/IDE shell would start the
+    # macOS GUI with no visible window, so drop it there. CLI subcommands render
+    # headless on purpose and must keep it: the cocoa plugin aborts inside
+    # _RegisterApplication when LaunchServices is unreachable (sandbox, SSH).
+    if sys.platform == "darwin" and not _headless_cli_invocation(argv):
         plat = os.environ.get("QT_QPA_PLATFORM", "").strip().lower()
-        if plat in ("offscreen", "minimal", "vnc"):
+        if plat in _HEADLESS_QPA_PLATFORMS:
             del os.environ["QT_QPA_PLATFORM"]
+            print(
+                f"warning: ignoring QT_QPA_PLATFORM={plat} so the window can be"
+                " shown; use a CLI subcommand for headless rendering",
+                file=sys.stderr,
+            )
 
 def _bootstrap_qt_app(argv: list[str] | None = None) -> QApplication:
     """Create or return QApplication with viewer font/bootstrap applied."""

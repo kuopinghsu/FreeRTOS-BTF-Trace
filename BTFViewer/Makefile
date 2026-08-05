@@ -108,6 +108,12 @@ update-images: bundle
 	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(STATS_TRACE) \
 		-o $(STATS_IMG_DIR)/stats-mig-gap-cs22.svg --view plot --metric mig_gap --task "CS[22]"
 	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(STATS_TRACE) \
+		-o $(STATS_IMG_DIR)/stats-pair-gap-c5-c7.svg --view plot --metric pair_gap \
+		--from-core Core_5 --to-core Core_7
+	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(STATS_TRACE) \
+		-o $(STATS_IMG_DIR)/stats-pair-rate-c5-c7.svg --view plot --metric pair_rate \
+		--from-core Core_5 --to-core Core_7
+	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(STATS_TRACE) \
 		-o $(STATS_IMG_DIR)/stats-preempt-cs24-cs25.svg --view plot --metric preempt \
 		--task "CS[24]" --preemptor "CS[25]"
 	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(STATS_TRACE) \
