@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 # GENERATED — do not edit; edit btf_viewer_pkg/ and run: make -C BTFViewer bundle
 """
 

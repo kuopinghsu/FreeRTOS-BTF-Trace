@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import ast
 import re
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -18,6 +19,7 @@ PKG = ROOT / "btf_viewer_pkg"
 DEFAULT_OUT = ROOT / "builds" / "btf_viewer.py"
 MONOLITH = ROOT / "builds" / "btf_viewer.py"
 
+SHEBANG = "#!/usr/bin/env python\n"
 GENERATED_BANNER = (
     "# GENERATED — do not edit; edit btf_viewer_pkg/ and run: make -C BTFViewer bundle\n"
 )
@@ -215,8 +217,9 @@ def _git_show_ref(ref: str) -> str | None:
 
 def _docstring_source(monolith: Path) -> Path:
     if monolith.is_file():
-        head = monolith.read_text(encoding="utf-8")[:80]
-        if not head.startswith("# GENERATED"):
+        head = monolith.read_text(encoding="utf-8")[:120]
+        rest = head.split("\n", 1)[1] if head.startswith("#!") and "\n" in head else head
+        if not rest.startswith("# GENERATED"):
             return monolith
     for ref in (
         "HEAD:BTFViewer/builds/btf_viewer.py",
@@ -230,12 +233,20 @@ def _docstring_source(monolith: Path) -> Path:
         return cache
     return monolith
 
+def _strip_bundle_preamble(text: str) -> str:
+    """Drop shebang + GENERATED banner so the module docstring can be parsed."""
+    lines = text.splitlines(keepends=True)
+    i = 0
+    if i < len(lines) and lines[i].startswith("#!"):
+        i += 1
+    if i < len(lines) and lines[i].startswith("# GENERATED"):
+        i += 1
+    return "".join(lines[i:])
+
 def _read_docstring(monolith: Path) -> str:
     src = _docstring_source(monolith)
     if src.is_file():
-        text = src.read_text(encoding="utf-8")
-        if text.startswith("# GENERATED"):
-            text = text.split("\n", 1)[1]
+        text = _strip_bundle_preamble(src.read_text(encoding="utf-8"))
         mod = ast.parse(text)
         doc = ast.get_docstring(mod, clean=False)
         if doc:
@@ -275,7 +286,7 @@ def _module_path(pkg_dir: Path, name: str) -> Path:
     return pkg_dir.joinpath(*parts).with_suffix(".py")
 
 def bundle(pkg_dir: Path, out_path: Path, monolith: Path) -> None:
-    parts: list[str] = [GENERATED_BANNER, _read_docstring(monolith)]
+    parts: list[str] = [SHEBANG, GENERATED_BANNER, _read_docstring(monolith)]
     parts.append("from __future__ import annotations\n\n")
     parts.append(SHARED_IMPORTS)
     parts.append("\n")
@@ -304,7 +315,10 @@ def bundle(pkg_dir: Path, out_path: Path, monolith: Path) -> None:
             parts.append("\n")
 
     parts.append("\nif __name__ == \"__main__\":\n    main()\n")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text("".join(parts), encoding="utf-8")
+    mode = out_path.stat().st_mode
+    out_path.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     print(f"Bundled {len(BUNDLE_MODULES)} module sections -> {out_path}")
 
 def main() -> None:
