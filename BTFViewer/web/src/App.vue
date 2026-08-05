@@ -606,7 +606,7 @@
               </div><div>Shows global load by default, or task-specific load when a task is selected</div>
               <div class="k">
                 Load toggle
-              </div><div>Use the toolbar or bottom status bar to show/hide the CPU load panel</div>
+              </div><div>Use the toolbar <b>Load</b> button to show/hide the CPU load panel</div>
               <div class="k">
                 CPU overlay
               </div><div>Cursors, bookmarks, and annotations appear as vertical lines; hover shows load % on each row</div>
@@ -784,11 +784,21 @@
         <div class="status-actions">
           <button
             class="status-toggle"
-            :class="{ active: timelineOptions.showCpuLoad }"
+            :class="{ active: timelineOptions.showSti !== false }"
             type="button"
-            @click="timelineOptions.showCpuLoad = !timelineOptions.showCpuLoad"
+            title="Show or hide STI event markers"
+            @click="timelineOptions.showSti = timelineOptions.showSti === false"
           >
-            Load
+            STI
+          </button>
+          <button
+            class="status-toggle"
+            :class="{ active: timelineOptions.showGrid }"
+            type="button"
+            title="Show or hide the time grid"
+            @click="timelineOptions.showGrid = !timelineOptions.showGrid"
+          >
+            Grid
           </button>
         </div>
       </template>

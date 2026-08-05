@@ -587,7 +587,7 @@ Existing saved settings (`btf_viewer.rc` or browser `localStorage`) are not over
 
 Browser-based viewer (Vue 3 + Vite). Feature parity with the desktop app for timeline, statistics, and trace compare; rendering uses Web Workers, PixiJS, and optional WASM acceleration.
 
-**Toolbar (Web):** hybrid controls — most actions stay as icons; ambiguous pairs use short labels / segmented controls (**Task | Core**, **→ | ↓** orientation, **Open** / **Demo** / **Analysis** labels on wide bars). Labels hide under ~980px; overflow **⋯** holds groups that still do not fit. Desktop keeps its existing chrome.
+**Toolbar (Web):** same action order as Desktop — File (Open / Demo / PNG / SVG / Perfetto) → Orientation → Zoom (In / Out / 1:1 / Fit / Range / Find) → View (Task / Core / Expand All / Load / Heatmap / Chord / Analysis) → Log₂ → Theme → Settings. Ambiguous buttons keep short labels (**Task**, **Core**, **Load**, **Analysis**); labels hide under ~1100px. **STI** / **Grid** live in the status bar (Desktop parity). Overflow **⋯** holds groups that still do not fit.
 
 **No CLI** — scripted export uses desktop `btf_viewer.py` (`report`, `compare`, `migrations`, `snapshot`, …).
 
