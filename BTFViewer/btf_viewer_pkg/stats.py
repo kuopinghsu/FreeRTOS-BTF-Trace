@@ -556,6 +556,15 @@ class _LegendWidget(QWidget):
         self._task_list.setSelectionMode(
             QAbstractItemView.SelectionMode.NoSelection)
         self._task_list.setUniformItemSizes(True)
+        # Compact rows: Windows applies large default item padding once any
+        # QListWidget::item QSS is set app-wide; pin icon size + padding here.
+        self._task_list.setIconSize(QSize(14, 14))
+        self._task_list.setSpacing(0)
+        self._task_list.setStyleSheet(
+            "QListWidget#legend_task_list{border:none;outline:none;}"
+            "QListWidget#legend_task_list::item{"
+            "padding:1px 2px;margin:0px;min-height:14px;}"
+        )
         self._task_list.itemClicked.connect(self._on_task_item_clicked)
         list_outer.addWidget(self._task_list, 1)
         self._scroll = QScrollArea()
@@ -674,6 +683,8 @@ class _LegendWidget(QWidget):
         try:
             self._task_list.clear()
             app = QApplication.instance()
+            fm = self._task_list.fontMetrics()
+            row_h = max(16, fm.height() + 4)
             for i, _mk in enumerate(trace.tasks):
                 _rep_raw = trace.task_repr.get(_mk, _mk)
                 color = _task_color(_rep_raw)
@@ -681,6 +692,7 @@ class _LegendWidget(QWidget):
                 item = QListWidgetItem(self._swatch_icon(color, is_dark), display)
                 item.setData(Qt.ItemDataRole.UserRole, _mk)
                 item.setToolTip(_rep_raw)
+                item.setSizeHint(QSize(0, row_h))
                 self._task_list.addItem(item)
                 self._task_items[_mk] = item
                 self._task_display[_mk] = display
@@ -5068,9 +5080,30 @@ class _StatsPanel(QWidget):
         hp.setColor(QPalette.WindowText, QColor(muted))
         hdr.setPalette(hp)
         hdr.setAutoFillBackground(True)
+        self._enforce_stats_table_row_geometry(table)
         default_bg = QBrush(bg)
         self._sync_stats_table_item_backgrounds(table, default_bg)
         return default_bg
+
+    @staticmethod
+    def _enforce_stats_table_row_geometry(table: QTableWidget) -> None:
+        """Force compact header/body row heights on every stats table.
+
+        ``QTableWidget(n, cols)`` allocates rows at the platform default height
+        before ``setDefaultSectionSize`` runs; that API only affects *new*
+        sections, so Windows ends up with taller rows in tables that never call
+        ``setRowHeight``. Centralise the fix here for all themed stats tables.
+        """
+        vh = table.verticalHeader()
+        # Minimum first: Qt clamps defaultSectionSize to the current minimum
+        # (often ~19px from the style), which leaves Windows rows tall if
+        # default is set while the style minimum is still in force.
+        vh.setMinimumSectionSize(STATS_TABLE_ROW_H)
+        vh.setDefaultSectionSize(STATS_TABLE_ROW_H)
+        vh.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+        table.horizontalHeader().setFixedHeight(STATS_TABLE_HEADER_H)
+        for r in range(table.rowCount()):
+            table.setRowHeight(r, STATS_TABLE_ROW_H)
 
     def _compute_util_label_col_width(self, labels: List[str]) -> int:
         """Widest util label (capped); shared by core and task rows for bar alignment."""
