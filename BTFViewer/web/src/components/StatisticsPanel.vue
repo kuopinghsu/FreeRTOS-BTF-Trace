@@ -2422,7 +2422,7 @@ import {
 import TraceCompareDialog from './TraceCompareDialog.vue'
 import LoadBalanceGauge from './LoadBalanceGauge.vue'
 import { buildHistogramModel } from '../utils/histogramModel.js'
-import { classifyLoadBalance, loadBalanceGaugeImgHtml } from '../utils/loadBalanceGauge.js'
+import { classifyLoadBalance, loadBalanceGaugeImgHtml, loadBalanceMetrics } from '../utils/loadBalanceGauge.js'
 
 const props = defineProps({
   trace:   { type: Object, default: null },
@@ -2917,25 +2917,11 @@ const coreStats = computed(() => {
 // ---- Load Balance Score (Feature 2) ------------------------------------
 const loadBalanceScore = computed(() => {
   const cs = coreStats.value
-  if (cs.length < 2) return null
-  const pcts = cs.map(c => c.pct)
-  const n = pcts.length
-  const total = pcts.reduce((a, b) => a + b, 0)
-  if (total === 0) return null
-  // Gini coefficient
-  const sorted = [...pcts].sort((a, b) => a - b)
-  let cumsum = 0
-  let giniNum = 0
-  for (let i = 0; i < n; i++) {
-    cumsum += sorted[i]
-    giniNum += cumsum
-  }
-  const gini = Math.max(0, Math.min(1, (n + 1) / n - (2 * giniNum) / (n * total)))
-  // Population std dev
-  const mean = total / n
-  const variance = pcts.reduce((s, v) => s + (v - mean) ** 2, 0) / n
-  const stddev = Math.sqrt(variance)
-  const score = Math.max(0, 100 * (1 - gini))
+  const lb = loadBalanceMetrics(cs.map(c => c.pct))
+  if (!lb) return null
+  const score = lb.score
+  const gini = lb.gini
+  const stddev = lb.stddev
   const zone = classifyLoadBalance(score, stddev)
   return {
     score,

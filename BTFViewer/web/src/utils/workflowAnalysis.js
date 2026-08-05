@@ -12,6 +12,7 @@ import { priorityStatsRows } from './priorityAnalysis.js'
 import { syncObjectStatsRows } from './syncObjectAnalysis.js'
 import { tickHealthReport } from './tickHealth.js'
 import { computeDeadlineViolations } from './deadlineAnalysis.js'
+import loadBalanceMetrics from './loadBalanceGauge.js'
 
 const FINDING_CAP = 5
 const LOAD_SIGMA_WARN = 30.0
@@ -22,28 +23,6 @@ const THRASH_RATE_PER_S = 1.0
 const THRASH_MIG_MIN = 10
 const PAIR_BOUNCE_PCT = 25.0
 const PAIR_COUNT_MIN = 5
-
-function giniCoefficient(values) {
-  const n = values.length
-  if (n < 2) return 0
-  const total = values.reduce((a, b) => a + b, 0)
-  if (total === 0) return 0
-  const sorted = [...values].sort((a, b) => a - b)
-  let cumsum = 0
-  let giniNum = 0
-  for (let i = 0; i < n; i++) {
-    cumsum += sorted[i]
-    giniNum += cumsum
-  }
-  return Math.max(0, Math.min(1, (n + 1) / n - (2 * giniNum) / (n * total)))
-}
-
-function coreUtilStddev(values) {
-  const n = values.length
-  if (n < 2) return 0
-  const mean = values.reduce((a, b) => a + b, 0) / n
-  return Math.sqrt(values.reduce((s, v) => s + (v - mean) ** 2, 0) / n)
-}
 
 /**
  * @returns {{severity: string, title: string, text: string}[]}
@@ -64,10 +43,11 @@ export function buildWorkflowAnalysisFindings({
   const findings = []
 
   const pcts = coreRows.map(r => (typeof r === 'object' ? r.pct : r[1])).filter(v => v != null)
-  if (pcts.length >= 2) {
-    const gini = giniCoefficient(pcts)
-    const sigma = coreUtilStddev(pcts)
-    const score = Math.max(0, 100 * (1 - gini))
+  const lb = loadBalanceMetrics(pcts)
+  if (lb) {
+    const score = lb.score
+    const gini = lb.gini
+    const sigma = lb.stddev
     const metrics = `Load Balance Score ${score.toFixed(0)}% (σ=${sigma.toFixed(1)}%, G=${gini.toFixed(3)})`
     if (score < LOAD_SCORE_WARN || sigma > LOAD_SIGMA_WARN) {
       findings.push({

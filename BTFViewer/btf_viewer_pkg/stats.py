@@ -3766,33 +3766,6 @@ class _ChordDiagramDialog(QDialog):
             return
         self._canvas.render_full_svg(path, "Migration Chord Diagram")
 
-def _gini_coefficient(values: List[float]) -> float:
-    """Gini coefficient of a list of non-negative values (0 = perfect equality, 1 = max inequality)."""
-    n = len(values)
-    if n < 2:
-        return 0.0
-    total = sum(values)
-    if total == 0.0:
-        return 0.0
-    sorted_v = sorted(values)
-    cumsum = 0.0
-    gini_num = 0.0
-    for i, v in enumerate(sorted_v):
-        cumsum += v
-        gini_num += cumsum
-    gini = (n + 1.0) / n - (2.0 * gini_num) / (n * total)
-    return max(0.0, min(1.0, gini))
-
-
-def _core_util_stddev(values: List[float]) -> float:
-    """Population standard deviation of core utilisation percentages."""
-    n = len(values)
-    if n < 2:
-        return 0.0
-    mean = sum(values) / n
-    return math.sqrt(sum((v - mean) ** 2 for v in values) / n)
-
-
 def _load_balance_metrics(pcts: List[float]) -> Optional[dict]:
     """Return {score, gini, stddev, zone, amber, red} for ≥2 core util %, else None."""
     if len(pcts) < 2:

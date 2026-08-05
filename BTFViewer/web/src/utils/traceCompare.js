@@ -10,34 +10,13 @@ import { isMigratedTask, migrationRows } from './migrationAnalysis.js'
 import { syncObjectStatsRows } from './syncObjectAnalysis.js'
 import { getPlacedCursors, segFullyInRange, segOverlapNs, traceMapGet } from './statsRange.js'
 import { tickHealthReport } from './tickHealth.js'
+import loadBalanceMetrics from './loadBalanceGauge.js'
 
 export function cursorRangeForCursors(cursors) {
   const placed = getPlacedCursors(cursors || [])
   if (placed.length < 2) return { lo: null, hi: null }
   const sorted = [...placed].sort((a, b) => a - b)
   return { lo: sorted[0], hi: sorted[sorted.length - 1] }
-}
-
-function giniCoefficient(values) {
-  const n = values.length
-  if (n < 2) return 0
-  const total = values.reduce((a, b) => a + b, 0)
-  if (total === 0) return 0
-  const sorted = [...values].sort((a, b) => a - b)
-  let cumsum = 0
-  let giniNum = 0
-  for (let i = 0; i < n; i++) {
-    cumsum += sorted[i]
-    giniNum += cumsum
-  }
-  return Math.max(0, Math.min(1, (n + 1) / n - (2 * giniNum) / (n * total)))
-}
-
-function coreUtilStddev(values) {
-  const n = values.length
-  if (n < 2) return 0
-  const mean = values.reduce((a, b) => a + b, 0) / n
-  return Math.sqrt(values.reduce((s, v) => s + (v - mean) ** 2, 0) / n)
 }
 
 /** Per-core active util % excluding IDLE/TICK (same as StatisticsPanel._coreUtilRows). */
@@ -63,13 +42,9 @@ export function coreUtilPctRows(trace, lo = null, hi = null) {
 
 function loadBalanceFromCoreRows(coreRows) {
   const pcts = (coreRows || []).map(r => r.pct).filter(v => v != null)
-  if (pcts.length < 2) return null
-  const total = pcts.reduce((a, b) => a + b, 0)
-  if (total === 0) return null
-  const gini = giniCoefficient(pcts)
-  const sigma = coreUtilStddev(pcts)
-  const score = Math.max(0, 100 * (1 - gini))
-  return { score, sigma, gini }
+  const lb = loadBalanceMetrics(pcts)
+  if (!lb) return null
+  return { score: lb.score, sigma: lb.stddev, gini: lb.gini }
 }
 
 /** Slice durations fully inside [lo, hi] (or all when unscoped). */
