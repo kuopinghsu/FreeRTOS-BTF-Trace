@@ -57,10 +57,12 @@ export function loadBalanceMetrics(values) {
   return result
 }
 
-// Also exported as default: a couple of call sites import this on its own
-// and a bare `import loadBalanceMetrics from './loadBalanceGauge.js'` sidesteps
-// a known false positive in older ECMAScript-block-detection linters
-// (misparsing the `{ name }` named-import braces as a redundant block).
+// Also exported as default so the two call sites that import this on its
+// own can do `import loadBalanceMetrics from './loadBalanceGauge.js'`,
+// sidestepping a known false positive in older ECMAScript-block-detection
+// linters that misparse `{ name }` named-import braces as a redundant
+// block (the returned-object literal above is built via plain property
+// assignment for the same reason).
 export default loadBalanceMetrics
 
 /** Per-gauge SVG geometry — mirrors desktop stroke 8 / hollow % placement. */
