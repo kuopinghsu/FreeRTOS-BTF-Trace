@@ -50,7 +50,11 @@ export function loadBalanceMetrics(values) {
   const gini = giniCoefficient(values)
   const stddev = coreUtilStddev(values)
   const score = Math.max(0, 100 * (1 - gini))
-  return { score: score, gini: gini, stddev: stddev }
+  const result = {}
+  result.score = score
+  result.gini = gini
+  result.stddev = stddev
+  return result
 }
 
 // Also exported as default: a couple of call sites import this on its own
