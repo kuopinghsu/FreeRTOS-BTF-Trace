@@ -7112,5 +7112,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     @_dialog_guard
     def _on_about(self) -> None:
-        _exec_centred(_AboutDialog(self, is_dark=self._is_dark), self)
+        _exec_centred(
+            _AboutDialog(
+                self, is_dark=self._is_dark,
+                ui_font_size=getattr(self, "_ui_font_size_val", UI_FONT_SIZE)),
+            self)
 

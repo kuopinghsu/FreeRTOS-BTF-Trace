@@ -24075,11 +24075,32 @@ class _RcSettings:
 class _AboutDialog(QDialog):
     """Modern About dialog - app icon header, theme-aware, quick-reference table."""
 
-    def __init__(self, parent, *, is_dark: bool):
+    # Label sizes as multiples of the application UI font, so the dialog tracks
+    # Settings → Appearance → UI / menus instead of hard-coded points.
+    _TITLE_SCALE = 1.75
+    _SECT_SCALE  = 0.85
+
+    def __init__(self, parent, *, is_dark: bool,
+                 ui_font_size: int = UI_FONT_SIZE):
         super().__init__(parent, Qt.WindowType.Dialog)
         self.setWindowTitle("About RTOS BTF Viewer")
         self.setModal(True)
-        self.setMinimumWidth(380)
+
+        ui_font_size = max(6, min(int(ui_font_size), 24))
+        self.setFont(_application_ui_font(ui_font_size))
+        fm = QFontMetrics(self.font())
+
+        def _fs(scale: float) -> str:
+            return _ui_font_stylesheet_size(
+                max(6, int(round(ui_font_size * scale))))
+
+        body_fs  = _fs(1.0)
+        title_fs = _fs(self._TITLE_SCALE)
+        sect_fs  = _fs(self._SECT_SCALE)
+        # Font-relative geometry so nothing clips when the UI font grows.
+        font_scale = ui_font_size / UI_FONT_SIZE
+        key_w = fm.horizontalAdvance("Tab / Shift+Tab") + 8
+        self.setMinimumWidth(int(round(380 * font_scale)))
 
         # Theme palette
         if is_dark:
@@ -24200,7 +24221,8 @@ class _AboutDialog(QDialog):
         fh.addStretch()
         btn = QPushButton("Close")
         btn.setObjectName("about_btn")
-        btn.setFixedSize(88, 30)
+        btn.setFixedSize(max(88, fm.horizontalAdvance("Close") + 44),
+                         max(24, fm.height() + 14))
         btn.setDefault(True)
         btn.clicked.connect(self.accept)
         fh.addWidget(btn)
@@ -24210,22 +24232,22 @@ class _AboutDialog(QDialog):
         self.setStyleSheet(f"""
             QDialog                     {{ background:{bg}; }}
             QWidget#about_hdr           {{ background:{hdr_bg}; }}
-            QLabel#about_title          {{ color:{title_c}; font-size:17pt;
+            QLabel#about_title          {{ color:{title_c}; font-size:{title_fs};
                                            font-weight:700; }}
-            QLabel#about_sub            {{ color:{sub_c}; font-size:10pt; }}
-            QLabel#about_sect           {{ color:{sect_c}; font-size:8pt;
+            QLabel#about_sub            {{ color:{sub_c}; font-size:{body_fs}; }}
+            QLabel#about_sect           {{ color:{sect_c}; font-size:{sect_fs};
                                            font-weight:700; letter-spacing:1px;
                                            margin-bottom:2px; }}
-            QLabel#about_key            {{ color:{key_c}; font-size:10pt;
-                                           font-weight:600; min-width:82px; }}
-            QLabel#about_body           {{ color:{body_c}; font-size:10pt; }}
+            QLabel#about_key            {{ color:{key_c}; font-size:{body_fs};
+                                           font-weight:600; min-width:{key_w}px; }}
+            QLabel#about_body           {{ color:{body_c}; font-size:{body_fs}; }}
             QFrame#about_block          {{ background:{blk_bg}; border:1px solid {blk_bd};
                                            border-radius:8px; }}
             QFrame#about_sep            {{ border:none; background:{sep_c};
                                            max-height:1px; }}
             QPushButton#about_btn       {{ background:{btn_bg}; color:{btn_txt};
                                            border:none; border-radius:5px;
-                                           font-size:10pt; font-weight:600;
+                                           font-size:{body_fs}; font-weight:600;
                                            padding:0px 22px; }}
             QPushButton#about_btn:hover {{ background:{btn_hov}; }}
         """)
@@ -24235,7 +24257,8 @@ class _AboutDialog(QDialog):
         # Match the web app's visual proportion: slightly wider, less tall.
         # Target ratio is width / height ~= 1.28.
         _target_ratio = 1.28
-        _w = max(520, min(640, self.sizeHint().width()))
+        _w = max(int(round(520 * font_scale)),
+                 min(int(round(640 * font_scale)), self.sizeHint().width()))
         _h_need = self.sizeHint().height()
         _h_target = int(round(_w / _target_ratio))
         if _h_target < _h_need:
@@ -34658,7 +34681,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     @_dialog_guard
     def _on_about(self) -> None:
-        _exec_centred(_AboutDialog(self, is_dark=self._is_dark), self)
+        _exec_centred(
+            _AboutDialog(
+                self, is_dark=self._is_dark,
+                ui_font_size=getattr(self, "_ui_font_size_val", UI_FONT_SIZE)),
+            self)
 
 # ===========================================================================
 # Entry point
