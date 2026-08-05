@@ -28107,6 +28107,11 @@ class _CpuLoadStack(QWidget):
 
     Show/hide never changes the timeline widget geometry, so QGraphicsView does
     not rebuild or repaint on Load toggle (the desktop cost vs the web ``v-if``).
+
+    The overlay stops short of the task-axis scrollbar (right edge in the default
+    horizontal layout) so the thumb stays visible when scrolled into the overlay
+    band. Scene orth padding (``_nav_bottom_inset``) still lets last rows clear
+    the strip.
     """
 
     splitterMoved = Signal(int, int)  # pos, index — QSplitter-compatible
@@ -28170,6 +28175,30 @@ class _CpuLoadStack(QWidget):
         super().resizeEvent(event)
         self._reposition()
 
+    def _orth_vbar_gutter_px(self) -> int:
+        """Right inset so the task-axis vertical scrollbar is not covered.
+
+        Default (horizontal) layout scrolls tasks with the view's vertical bar.
+        Leave that strip clear; the timeline keeps full width underneath.
+        """
+        view = getattr(self._timeline, "view", None)
+        if view is None:
+            return 0
+        scene = getattr(view, "_scene", None)
+        if scene is not None and not getattr(scene, "_horizontal", True):
+            # Vertical time axis: orth scroll is the bottom horizontal bar —
+            # a right inset would not help; keep full-width overlay.
+            return 0
+        bar = view.verticalScrollBar()
+        if bar is None:
+            return 0
+        # Prefer geometry in stack coords (includes view frame / layout offsets).
+        if bar.isVisible() and bar.width() > 0 and self.width() > 0:
+            bar_left = bar.mapTo(self, QPoint(0, 0)).x()
+            return max(0, self.width() - bar_left)
+        hint = bar.sizeHint().width()
+        return max(0, int(hint))
+
     def _reposition(self) -> None:
         w = max(self.width(), 0)
         h = max(self.height(), 0)
@@ -28187,8 +28216,10 @@ class _CpuLoadStack(QWidget):
         )
         self._cpu_h = cpu_h
         y_handle = h - cpu_h - self._handle_h
-        self._handle.setGeometry(0, y_handle, w, self._handle_h)
-        self._cpu.setGeometry(0, y_handle + self._handle_h, w, cpu_h)
+        # Keep the orth vertical scrollbar track clear of the overlay.
+        overlay_w = max(0, w - self._orth_vbar_gutter_px())
+        self._handle.setGeometry(0, y_handle, overlay_w, self._handle_h)
+        self._cpu.setGeometry(0, y_handle + self._handle_h, overlay_w, cpu_h)
         self._handle.show()
         self._cpu.show()
         self._handle.raise_()

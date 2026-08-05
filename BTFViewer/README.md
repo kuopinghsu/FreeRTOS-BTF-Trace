@@ -682,7 +682,7 @@ python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
 - **Row labels** — each row shows average load over the **currently visible** time window; with 2+ cursors placed, labels also show the average over the cursor range (`· C:xx%`), and the graph shades the C1–Cn window in blue.
 - **Expand / Collapse** — in Core View click a core row header to collapse it to a compact bar.
 - **Hover** — moving the pointer over the timeline projects a live cursor onto the load graph; each row shows a load % badge at the hover time (no timestamp on the graph).
-- **Resize** — drag the horizontal bar between the timeline and CPU load panel to change the CPU load height. On Desktop the load strip overlays the bottom of the timeline (no layout reflow on toggle); the task scrollbar range grows so the last rows can scroll clear of the overlay, and shrinks again when **Load** is hidden.
+- **Resize** — drag the horizontal bar between the timeline and CPU load panel to change the CPU load height. On Desktop the load strip overlays the bottom of the timeline (no layout reflow on toggle); the task scrollbar range grows so the last rows can scroll clear of the overlay, and shrinks again when **Load** is hidden. The overlay leaves the task scrollbar track uncovered so the thumb stays usable while scrolled into that band.
 - **Cursors, bookmarks & annotations** appear as vertical lines in the load graph (no text labels on the graph itself).
 
 ### Right panel & layout

@@ -145,6 +145,54 @@ class TestNavCpuOverlay(unittest.TestCase):
         host.close()
         self._app.processEvents()
 
+    def test_cpu_overlay_clears_vertical_scrollbar(self) -> None:
+        """CPU overlay must not cover the task-axis vertical scrollbar track."""
+        if not EXAMPLE_BTF.is_file():
+            self.skipTest(f"missing trace fixture: {EXAMPLE_BTF}")
+
+        host = QWidget()
+        view = TimelineView()
+        pane = _TimelinePane(view)
+        cpu = QLabel("cpu")
+        cpu.setMinimumHeight(CPU_LOAD_ROW_H)
+        stack = _CpuLoadStack(pane, cpu, host)
+        stack.set_cpu_visible(True)
+        stack.setSizes([600, 180])
+        host.resize(1200, 700)
+        stack.setGeometry(0, 0, 1200, 700)
+        host.show()
+        stack.show()
+        self._app.processEvents()
+
+        trace = _parse_btf(str(EXAMPLE_BTF))
+        view.load_trace(trace)
+        self._app.processEvents()
+        stack._reposition()
+        self._app.processEvents()
+
+        vbar = view.verticalScrollBar()
+        self.assertIsNotNone(vbar)
+        self.assertTrue(vbar.isVisible())
+        self.assertGreater(vbar.width(), 0)
+
+        vbar_rect = QRect(
+            vbar.mapTo(stack, QPoint(0, 0)),
+            vbar.mapTo(stack, QPoint(vbar.width(), vbar.height())),
+        )
+        self.assertFalse(
+            stack._cpu.geometry().intersects(vbar_rect),
+            f"cpu {stack._cpu.geometry()} overlaps vbar {vbar_rect}",
+        )
+        self.assertFalse(
+            stack._handle.geometry().intersects(vbar_rect),
+            f"handle {stack._handle.geometry()} overlaps vbar {vbar_rect}",
+        )
+        self.assertLess(stack._cpu.width(), stack.width())
+        self.assertEqual(stack._cpu.width() + stack._orth_vbar_gutter_px(), stack.width())
+
+        host.close()
+        self._app.processEvents()
+
 
 if __name__ == "__main__":
     unittest.main()
