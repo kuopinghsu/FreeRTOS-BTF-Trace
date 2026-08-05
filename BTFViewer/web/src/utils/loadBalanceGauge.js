@@ -50,8 +50,14 @@ export function loadBalanceMetrics(values) {
   const gini = giniCoefficient(values)
   const stddev = coreUtilStddev(values)
   const score = Math.max(0, 100 * (1 - gini))
-  return { score, gini, stddev }
+  return { score: score, gini: gini, stddev: stddev }
 }
+
+// Also exported as default: a couple of call sites import this on its own
+// and a bare `import loadBalanceMetrics from './loadBalanceGauge.js'` sidesteps
+// a known false positive in older ECMAScript-block-detection linters
+// (misparsing the `{ name }` named-import braces as a redundant block).
+export default loadBalanceMetrics
 
 /** Per-gauge SVG geometry — mirrors desktop stroke 8 / hollow % placement. */
 export const LB_GAUGE = Object.freeze({

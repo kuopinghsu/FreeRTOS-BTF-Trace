@@ -12,7 +12,7 @@ import { priorityStatsRows } from './priorityAnalysis.js'
 import { syncObjectStatsRows } from './syncObjectAnalysis.js'
 import { tickHealthReport } from './tickHealth.js'
 import { computeDeadlineViolations } from './deadlineAnalysis.js'
-import { loadBalanceMetrics } from './loadBalanceGauge.js'
+import loadBalanceMetrics from './loadBalanceGauge.js'
 
 const FINDING_CAP = 5
 const LOAD_SIGMA_WARN = 30.0
@@ -45,7 +45,9 @@ export function buildWorkflowAnalysisFindings({
   const pcts = coreRows.map(r => (typeof r === 'object' ? r.pct : r[1])).filter(v => v != null)
   const lb = loadBalanceMetrics(pcts)
   if (lb) {
-    const { score, gini, stddev: sigma } = lb
+    const score = lb.score
+    const gini = lb.gini
+    const sigma = lb.stddev
     const metrics = `Load Balance Score ${score.toFixed(0)}% (σ=${sigma.toFixed(1)}%, G=${gini.toFixed(3)})`
     if (score < LOAD_SCORE_WARN || sigma > LOAD_SIGMA_WARN) {
       findings.push({

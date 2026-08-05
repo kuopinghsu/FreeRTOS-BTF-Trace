@@ -10,7 +10,7 @@ import { isMigratedTask, migrationRows } from './migrationAnalysis.js'
 import { syncObjectStatsRows } from './syncObjectAnalysis.js'
 import { getPlacedCursors, segFullyInRange, segOverlapNs, traceMapGet } from './statsRange.js'
 import { tickHealthReport } from './tickHealth.js'
-import { loadBalanceMetrics } from './loadBalanceGauge.js'
+import loadBalanceMetrics from './loadBalanceGauge.js'
 
 export function cursorRangeForCursors(cursors) {
   const placed = getPlacedCursors(cursors || [])

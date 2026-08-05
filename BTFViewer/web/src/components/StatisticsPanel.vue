@@ -2919,7 +2919,9 @@ const loadBalanceScore = computed(() => {
   const cs = coreStats.value
   const lb = loadBalanceMetrics(cs.map(c => c.pct))
   if (!lb) return null
-  const { score, gini, stddev } = lb
+  const score = lb.score
+  const gini = lb.gini
+  const stddev = lb.stddev
   const zone = classifyLoadBalance(score, stddev)
   return {
     score,
