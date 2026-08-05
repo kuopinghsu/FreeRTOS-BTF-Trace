@@ -1141,10 +1141,14 @@ def _task_core_affinity_rows(
     trace: "BtfTrace",
     lo: Optional[int] = None,
     hi: Optional[int] = None,
+    *,
+    include_merge_key: bool = False,
 ) -> List[tuple]:
     """Per-task core affinity summary.
 
-    Returns: ``[(label, mask_hex, observed_cores_str, violation_cores_str), ...]``.
+    Returns ``[(label, mask_hex, observed_cores_str, violation_cores_str), ...]``.
+    With ``include_merge_key=True``, prepends the task merge key to each row
+    for interactive UI consumers.
 
     Violations are evaluated per execution slice against the mask in effect at
     the slice start.  Slices before the first ``affinity_set`` are unrestricted
@@ -1194,7 +1198,8 @@ def _task_core_affinity_rows(
         mask_hex = _format_affinity_mask_history(history)
         obs_str = ", ".join(sorted(obs))
         viol_str = ", ".join(sorted(violations)) if violations else "\u2014"
-        rows.append((label, mask_hex, obs_str, viol_str))
+        row = (label, mask_hex, obs_str, viol_str)
+        rows.append((mk, *row) if include_merge_key else row)
     return rows
 
 

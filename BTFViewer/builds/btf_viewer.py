@@ -2049,10 +2049,14 @@ def _task_core_affinity_rows(
     trace: "BtfTrace",
     lo: Optional[int] = None,
     hi: Optional[int] = None,
+    *,
+    include_merge_key: bool = False,
 ) -> List[tuple]:
     """Per-task core affinity summary.
 
-    Returns: ``[(label, mask_hex, observed_cores_str, violation_cores_str), ...]``.
+    Returns ``[(label, mask_hex, observed_cores_str, violation_cores_str), ...]``.
+    With ``include_merge_key=True``, prepends the task merge key to each row
+    for interactive UI consumers.
 
     Violations are evaluated per execution slice against the mask in effect at
     the slice start.  Slices before the first ``affinity_set`` are unrestricted
@@ -2102,7 +2106,8 @@ def _task_core_affinity_rows(
         mask_hex = _format_affinity_mask_history(history)
         obs_str = ", ".join(sorted(obs))
         viol_str = ", ".join(sorted(violations)) if violations else "\u2014"
-        rows.append((label, mask_hex, obs_str, viol_str))
+        row = (label, mask_hex, obs_str, viol_str)
+        rows.append((mk, *row) if include_merge_key else row)
     return rows
 
 
@@ -16493,19 +16498,27 @@ class _MetricsPlotDialog(QDialog):
         root.setContentsMargins(8, 8, 8, 8)
         root.setSpacing(4)
 
+        self._tab_buttons: Dict[str, QPushButton] = {}
+        self._active_tab = active_tab
         if tabs:
             tab_row = QHBoxLayout()
             tab_row.setContentsMargins(0, 0, 0, 0)
             tab_row.setSpacing(4)
             self._tab_group = QButtonGroup(self)
             self._tab_group.setExclusive(True)
+            tab_ss = self._tab_button_stylesheet(is_dark)
             for kind, label in tabs:
                 btn = QPushButton(label)
+                btn.setObjectName("plot_tab")
                 btn.setCheckable(True)
                 btn.setChecked(kind == active_tab)
+                btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                btn.setToolTip(f"Show the {label} distribution")
+                btn.setStyleSheet(tab_ss)
                 btn.clicked.connect(lambda _checked, k=kind: self._on_tab_clicked(k))
                 self._tab_group.addButton(btn)
                 tab_row.addWidget(btn)
+                self._tab_buttons[kind] = btn
             tab_row.addStretch(1)
             root.addLayout(tab_row)
 
@@ -16593,9 +16606,44 @@ class _MetricsPlotDialog(QDialog):
         btn_row.addWidget(btn_cls)
         root.addLayout(btn_row)
 
+    @staticmethod
+    def _tab_button_stylesheet(is_dark: bool) -> str:
+        """Segmented tabs: the active metric gets an accent fill + bottom edge.
+
+        Mirrors the web .plot-tab-btn.active accent so the current view type is
+        obvious; a plain checkable QPushButton reads as unselected on macOS.
+        """
+        # Unchecked tabs inherit the palette text colour so they stay legible
+        # under both the light and dark application stylesheets.
+        border, hover = ("#5A5A5A", "#3A3A3A") if is_dark else ("#C0C0C0", "#E8E8E8")
+        return (
+            "QPushButton#plot_tab {"
+            f"  border: 1px solid {border}; border-bottom: 2px solid {border};"
+            "  border-radius: 5px; padding: 3px 12px; font-weight: 600;"
+            "  background: transparent;"
+            "}"
+            f"QPushButton#plot_tab:hover:!checked {{ background: {hover}; }}"
+            "QPushButton#plot_tab:checked {"
+            "  background: #1976D2; border: 1px solid #1976D2;"
+            "  border-bottom: 2px solid #0D47A1; color: #FFFFFF;"
+            "}"
+        )
+
     def _on_tab_clicked(self, kind: str) -> None:
         if self._on_tab_change is not None:
             self._on_tab_change(kind)
+
+    def active_tab(self) -> Optional[str]:
+        return self._active_tab
+
+    def set_active_tab(self, kind: str) -> None:
+        """Sync the highlighted tab, e.g. after a switch was rejected."""
+        btn = self._tab_buttons.get(kind)
+        if btn is None:
+            return
+        self._active_tab = kind
+        if not btn.isChecked():
+            btn.setChecked(True)
 
     def _set_scope_banner(self, scoped: bool, badge: str, detail: str) -> None:
         """Show a high-contrast banner indicating cursor-range vs full-trace scope."""
@@ -20878,10 +20926,14 @@ class _StatsPanel(QWidget):
                 or self._plot_mk is None or new_kind == self._plot_kind):
             return
         built = self._build_plot_points(self._trace, self._plot_mk, new_kind)
-        if built is None:
+        if built is None or not built[1]:
+            # Nothing to show: keep the previous tab highlighted.
+            if self._plot_kind is not None:
+                self._plot_dlg.set_active_tab(self._plot_kind)
             return
         title, pts, _color = built
         self._plot_kind = new_kind
+        self._plot_dlg.set_active_tab(new_kind)
         scoped, badge, detail = self._plot_scope_banner()
         self._plot_dlg.update_data(title, pts, scope_scoped=scoped,
                                    scope_badge=badge, scope_detail=detail)
@@ -23618,7 +23670,8 @@ class _StatsPanel(QWidget):
 
         # -- Core affinity ------------------------------------------------
         def _populate_affinity(blay: QVBoxLayout) -> None:
-            _aff_rows = _task_core_affinity_rows(trace, lo, hi)
+            _aff_rows = _task_core_affinity_rows(
+                trace, lo, hi, include_merge_key=True)
             if not _aff_rows:
                 blay.addWidget(self._lbl(
                     "No affinity_set events found", color="#888888", ui_fs=_fs))
@@ -23627,12 +23680,13 @@ class _StatsPanel(QWidget):
             tbl = QTableWidget(len(_aff_rows), len(headers))
             tbl.setHorizontalHeaderLabels(headers)
             tbl.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-            tbl.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+            tbl.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+            tbl.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             tbl.verticalHeader().setVisible(False)
             tbl.verticalHeader().setDefaultSectionSize(STATS_TABLE_ROW_H)
             tbl.verticalHeader().setMinimumSectionSize(STATS_TABLE_ROW_H)
             tbl.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
-            for r, (label, mask_hex, obs_str, viol_str) in enumerate(_aff_rows):
+            for r, (mk, label, mask_hex, obs_str, viol_str) in enumerate(_aff_rows):
                 for c, (val, key) in enumerate([
                     (label, label),
                     (mask_hex, mask_hex),
@@ -23645,8 +23699,22 @@ class _StatsPanel(QWidget):
                         | Qt.AlignmentFlag.AlignVCenter)
                     if viol_str != "\u2014" and c == 3:
                         item.setForeground(QColor("#E85D5D"))
+                    if c == 0:
+                        item.setData(Qt.ItemDataRole.UserRole, mk)
+                        item.setToolTip(
+                            f"Click to highlight \u2018{label}\u2019 in the timeline")
                     tbl.setItem(r, c, item)
             self._apply_stats_table_theme(tbl, _fs)
+
+            def _on_affinity_row(row: int, _col: int) -> None:
+                item = tbl.item(row, 0)
+                if item is None:
+                    return
+                mk = item.data(Qt.ItemDataRole.UserRole)
+                if mk:
+                    self.task_clicked.emit(str(mk))
+
+            tbl.cellClicked.connect(_on_affinity_row)
             self._wire_stats_table_click_cursor(tbl)
             self._wire_stats_table_row_hover(tbl)
             self._wrap_table_with_resizer(blay, tbl, "affinity")

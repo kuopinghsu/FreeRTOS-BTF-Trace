@@ -1598,7 +1598,16 @@
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="row in sortedAffinityRows" :key="row.label">
+                <tr
+                  v-for="row in sortedAffinityRows"
+                  :key="row.mk"
+                  class="stats-table-row clickable"
+                  :title="`Click to highlight '${row.label}' in the timeline`"
+                  tabindex="0"
+                  @click="emit('highlightTask', row.mk)"
+                  @keydown.enter.prevent="emit('highlightTask', row.mk)"
+                  @keydown.space.prevent="emit('highlightTask', row.mk)"
+                >
                   <td class="task-col">{{ row.label }}</td>
                   <td>{{ row.maskHex }}</td>
                   <td>{{ row.observedCores }}</td>
@@ -1983,13 +1992,18 @@
       <div
         v-if="activePlotTabs"
         class="plot-tab-row"
+        role="tablist"
+        aria-label="Distribution metric"
       >
         <button
           v-for="tab in activePlotTabs"
           :key="tab.kind"
           type="button"
           class="plot-tab-btn"
+          role="tab"
           :class="{ active: openPlotRef.kind === tab.kind }"
+          :aria-selected="openPlotRef.kind === tab.kind"
+          :title="`Show the ${tab.label} distribution`"
           @click="switchPlotTab(tab.kind)"
         >
           {{ tab.label }}
@@ -2515,6 +2529,7 @@ import {
 import TraceCompareDialog from './TraceCompareDialog.vue'
 import LoadBalanceGauge from './LoadBalanceGauge.vue'
 import { buildHistogramModel } from '../utils/histogramModel.js'
+import { plotTabsForKind, resolvePlotTabSwitch } from '../utils/plotTabs.js'
 import { classifyLoadBalance, loadBalanceGaugeImgHtml, loadBalanceMetrics } from '../utils/loadBalanceGauge.js'
 
 const props = defineProps({
@@ -3726,30 +3741,7 @@ const plotScopeInfo = computed(() => {
   return plotScopeBanner(statsRange.value, props.trace.timeScale, formatTime)
 })
 
-const MIG_PLOT_TABS = [
-  { kind: 'mig_dwell', label: 'Dwell' },
-  { kind: 'mig_rate', label: 'Rate' },
-  { kind: 'mig_gap', label: 'Gap' },
-]
-
-const PAIR_PLOT_TABS = [
-  { kind: 'pair_gap', label: 'Gap' },
-  { kind: 'pair_rate', label: 'Rate' },
-]
-
-const TAG_PLOT_TABS = [
-  { kind: 'tag', label: 'Value' },
-  { kind: 'tag_interval', label: 'Interval' },
-]
-
-const activePlotTabs = computed(() => {
-  const kind = openPlotRef.value?.kind
-  if (!kind) return null
-  if (kind.startsWith('mig_')) return MIG_PLOT_TABS
-  if (kind.startsWith('pair_')) return PAIR_PLOT_TABS
-  if (kind === 'tag' || kind === 'tag_interval') return TAG_PLOT_TABS
-  return null
-})
+const activePlotTabs = computed(() => plotTabsForKind(openPlotRef.value?.kind))
 
 const pairPlotFocus = computed(() => {
   const open = openPlotRef.value
@@ -3764,9 +3756,9 @@ const pairPlotFocus = computed(() => {
 })
 
 function switchPlotTab(kind) {
-  const open = openPlotRef.value
-  if (!open || open.kind === kind) return
-  openPlotRef.value = { ...open, kind }
+  const next = resolvePlotTabSwitch(openPlotRef.value, kind)
+  if (!next) return
+  openPlotRef.value = next
   selectedPlotPoint.value = -1
 }
 
@@ -5907,21 +5899,24 @@ watch(plotData, () => {
 
 .plot-tab-btn {
   border: 1px solid var(--border);
+  border-bottom: 2px solid var(--border);
   background: transparent;
   color: var(--fg);
   border-radius: 6px;
-  padding: 4px 12px;
+  padding: 4px 12px 3px;
   font-size: 12px;
+  font-weight: 600;
   cursor: pointer;
 }
 
-.plot-tab-btn:hover {
+.plot-tab-btn:hover:not(.active) {
   background: var(--tb-btn-hover);
 }
 
 .plot-tab-btn.active {
   background: var(--accent, #1976d2);
   border-color: var(--accent, #1976d2);
+  border-bottom-color: #0d47a1;
   color: #fff;
 }
 

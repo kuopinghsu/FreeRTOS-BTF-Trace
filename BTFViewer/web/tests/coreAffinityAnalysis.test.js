@@ -55,6 +55,7 @@ describe('buildCoreAffinityRows', () => {
     )
     const rows = buildCoreAffinityRows(tr)
     assert.equal(rows.length, 1)
+    assert.equal(rows[0].mk, taskMergeKey('Pin[1]'))
     assert.equal(rows[0].maskHex, '0x1')
     assert.equal(rows[0].violations, 'Core_2')
   })

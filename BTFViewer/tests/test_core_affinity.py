@@ -1,6 +1,7 @@
 """Time-aware core-affinity statistics (_task_core_affinity_rows)."""
 from __future__ import annotations
 
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -9,9 +10,14 @@ BTF_ROOT = Path(__file__).resolve().parents[1]
 if str(BTF_ROOT) not in sys.path:
     sys.path.insert(0, str(BTF_ROOT))
 
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
 from btf_viewer_pkg._bootstrap import install  # noqa: E402
 
 install()
+
+from PySide6.QtCore import Qt  # noqa: E402
+from PySide6.QtWidgets import QApplication, QTableWidget  # noqa: E402
 
 from btf_viewer_pkg.parser import (  # noqa: E402
     BtfTrace,
@@ -22,6 +28,7 @@ from btf_viewer_pkg.parser import (  # noqa: E402
     _task_core_affinity_rows,
     _task_merge_key,
 )
+from btf_viewer_pkg.stats import _StatsPanel  # noqa: E402
 
 
 def _trace(sti, segs_by_label, cores=("Core_0", "Core_1", "Core_2", "Core_3")):
@@ -80,6 +87,17 @@ class CoreAffinityRowsTests(unittest.TestCase):
         self.assertIn("Core_2", obs)
         self.assertEqual(viol, "Core_2")
 
+    def test_interactive_rows_include_task_merge_key_on_request(self):
+        sti = [
+            StiEvent(50, "Core_0", "task", "trigger", "affinity_set Pin[1] 0x1"),
+        ]
+        tr = _trace(sti, {
+            "Pin[1]": [(100, 200, "Core_0")],
+        })
+        rows = _task_core_affinity_rows(tr, include_merge_key=True)
+        self.assertEqual(rows[0][0], _task_merge_key("Pin[1]"))
+        self.assertEqual(rows[0][1:], ("Pin[1]", "0x1", "Core_0", "\u2014"))
+
     def test_pre_set_and_mask_change_not_false_violations(self):
         """AffM-style: free run, pin to core 0, then migrate to last core."""
         sti = [
@@ -115,6 +133,47 @@ class CoreAffinityRowsTests(unittest.TestCase):
         })
         rows = _task_core_affinity_rows(tr)
         self.assertEqual(rows[0][3], "Core_1")
+
+
+class CoreAffinityInteractionTests(unittest.TestCase):
+    _app: QApplication | None = None
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._app = QApplication.instance() or QApplication([])
+
+    def test_row_hover_and_click_highlight_task(self):
+        tr = _trace(
+            [StiEvent(
+                50, "Core_0", "task", "trigger",
+                "affinity_set Pin[1] 0x1")],
+            {"Pin[1]": [(100, 200, "Core_0")]},
+        )
+        panel = _StatsPanel()
+        self.addCleanup(panel.deleteLater)
+        panel._section_collapsed["affinity"] = False
+        clicked = []
+        panel.task_clicked.connect(clicked.append)
+        panel.rebuild(tr)
+
+        affinity = next(
+            table for table in panel.findChildren(QTableWidget)
+            if table.columnCount() == 4
+            and table.horizontalHeaderItem(0) is not None
+            and table.horizontalHeaderItem(0).text() == "Task"
+            and table.horizontalHeaderItem(1).text() == "Mask"
+        )
+        self.assertTrue(hasattr(affinity, "_stats_row_hover_filter"))
+        self.assertEqual(
+            affinity.selectionMode(),
+            QTableWidget.SelectionMode.NoSelection)
+        self.assertEqual(affinity.focusPolicy(), Qt.FocusPolicy.NoFocus)
+        self.assertEqual(
+            affinity.item(0, 0).data(Qt.ItemDataRole.UserRole),
+            _task_merge_key("Pin[1]"))
+
+        affinity.cellClicked.emit(0, 2)
+        self.assertEqual(clicked, [_task_merge_key("Pin[1]")])
 
 
 if __name__ == "__main__":

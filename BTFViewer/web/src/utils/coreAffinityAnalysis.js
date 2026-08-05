@@ -57,7 +57,7 @@ export function formatAffinityMaskHistory(history) {
  * @param {object} trace
  * @param {number|null} [lo]
  * @param {number|null} [hi]
- * @returns {{ label: string, maskHex: string, observedCores: string, violations: string }[]}
+ * @returns {{ mk: string, label: string, maskHex: string, observedCores: string, violations: string }[]}
  */
 export function buildCoreAffinityRows(trace, lo = null, hi = null) {
   if (!trace?.stiEvents?.length) return []
@@ -101,6 +101,7 @@ export function buildCoreAffinityRows(trace, lo = null, hi = null) {
     }
     if (!obs.size) continue
     rows.push({
+      mk,
       label,
       maskHex: formatAffinityMaskHistory(history),
       observedCores: [...obs].sort().join(', '),
