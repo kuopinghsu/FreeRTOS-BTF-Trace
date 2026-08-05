@@ -14,6 +14,45 @@ export const LB_SIGMA_RED = 50
 /** σ gauge full-scale (needle at right). */
 export const LB_SIGMA_SCALE = 60
 
+/** Gini coefficient of non-negative values (0 = equality, 1 = max inequality). */
+export function giniCoefficient(values) {
+  const n = (values || []).length
+  if (n < 2) return 0
+  const total = values.reduce((a, b) => a + b, 0)
+  if (total === 0) return 0
+  const sorted = [...values].sort((a, b) => a - b)
+  let cumsum = 0
+  let giniNum = 0
+  for (let i = 0; i < n; i++) {
+    cumsum += sorted[i]
+    giniNum += cumsum
+  }
+  return Math.max(0, Math.min(1, (n + 1) / n - (2 * giniNum) / (n * total)))
+}
+
+/** Population standard deviation of core utilisation %. */
+export function coreUtilStddev(values) {
+  const n = (values || []).length
+  if (n < 2) return 0
+  const mean = values.reduce((a, b) => a + b, 0) / n
+  return Math.sqrt(values.reduce((s, v) => s + (v - mean) ** 2, 0) / n)
+}
+
+/**
+ * Load Balance {score, gini, stddev} for ≥2 non-negative values with a
+ * positive total (e.g. per-core utilisation %), else null.
+ */
+export function loadBalanceMetrics(values) {
+  const n = (values || []).length
+  if (n < 2) return null
+  const total = values.reduce((a, b) => a + b, 0)
+  if (total === 0) return null
+  const gini = giniCoefficient(values)
+  const stddev = coreUtilStddev(values)
+  const score = Math.max(0, 100 * (1 - gini))
+  return { score, gini, stddev }
+}
+
 /** Per-gauge SVG geometry — mirrors desktop stroke 8 / hollow % placement. */
 export const LB_GAUGE = Object.freeze({
   viewW: 140,
