@@ -8813,9 +8813,14 @@ class _StatsPanel(QWidget):
             tbl.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
             tbl.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             tbl.verticalHeader().setVisible(False)
+            tbl.setShowGrid(False)
+            tbl.setFrameShape(QFrame.NoFrame)
             tbl.verticalHeader().setDefaultSectionSize(STATS_TABLE_ROW_H)
             tbl.verticalHeader().setMinimumSectionSize(STATS_TABLE_ROW_H)
             tbl.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+            tbl.horizontalHeader().setFixedHeight(18)
+            tbl.horizontalHeader().setSectionsClickable(True)
+            tbl.horizontalHeader().setSortIndicatorShown(True)
             for r, (mk, label, mask_hex, obs_str, viol_str) in enumerate(_aff_rows):
                 for c, (val, key) in enumerate([
                     (label, label),
@@ -8834,6 +8839,7 @@ class _StatsPanel(QWidget):
                         item.setToolTip(
                             f"Click to highlight \u2018{label}\u2019 in the timeline")
                     tbl.setItem(r, c, item)
+            tbl.setSortingEnabled(True)
             self._apply_stats_table_theme(tbl, _fs)
 
             def _on_affinity_row(row: int, _col: int) -> None:

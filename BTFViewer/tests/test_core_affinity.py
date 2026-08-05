@@ -164,6 +164,8 @@ class CoreAffinityInteractionTests(unittest.TestCase):
             and table.horizontalHeaderItem(1).text() == "Mask"
         )
         self.assertTrue(hasattr(affinity, "_stats_row_hover_filter"))
+        self.assertTrue(affinity.isSortingEnabled())
+        self.assertTrue(affinity.horizontalHeader().sectionsClickable())
         self.assertEqual(
             affinity.selectionMode(),
             QTableWidget.SelectionMode.NoSelection)

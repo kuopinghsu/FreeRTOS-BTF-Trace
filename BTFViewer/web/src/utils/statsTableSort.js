@@ -197,7 +197,9 @@ export const LIFECYCLE_SORT_ACCESSORS = {
 
 export const AFFINITY_SORT_ACCESSORS = {
   task: r => r.label.toLowerCase(),
-  mask: r => parseInt(r.maskHex, 16),
+  // Display-string order (matches desktop _StatsSortItem), including
+  // multi-mask histories like "0x1 → 0x8" that parseInt would truncate.
+  mask: r => (r.maskHex || '').toLowerCase(),
   observed: r => r.observedCores.toLowerCase(),
   violations: r => (r.violations === '—' ? '' : r.violations.toLowerCase()),
 }

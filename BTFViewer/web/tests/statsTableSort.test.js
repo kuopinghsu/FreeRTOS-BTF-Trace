@@ -116,11 +116,12 @@ describe('AFFINITY_SORT_ACCESSORS', () => {
   const rows = [
     { label: 'Runner[1]', maskHex: '0x1', observedCores: 'Core_0', violations: '\u2014' },
     { label: 'CS[6]', maskHex: '0x3', observedCores: 'Core_0, Core_1', violations: 'Core_1' },
+    { label: 'AffM[5]', maskHex: '0x1 → 0x8', observedCores: 'Core_0, Core_3', violations: '\u2014' },
   ]
 
-  it('sorts by mask value numerically (hex-parsed)', () => {
+  it('sorts by mask display string (desktop parity, incl. multi-mask)', () => {
     const sorted = sortStatsRows(rows, { col: 'mask', dir: 1 }, AFFINITY_SORT_ACCESSORS)
-    assert.deepEqual(sorted.map(r => r.label), ['Runner[1]', 'CS[6]'])
+    assert.deepEqual(sorted.map(r => r.label), ['Runner[1]', 'AffM[5]', 'CS[6]'])
   })
 })
 
