@@ -1210,7 +1210,13 @@ def _deadline_violations(
     lo: Optional[int] = None,
     hi: Optional[int] = None,
 ) -> Dict[str, list]:
-    """Compute per-slice and CPU-budget violations (mirrors web deadlineAnalysis.js)."""
+    """Compute per-slice and CPU-budget violations (mirrors web deadlineAnalysis.js).
+
+    slice_violations entries:
+      (label, duration, limit, over_by, mk, start_ns, seg, dur_tu, limit_tu)
+    cpu_violations entries:
+      (label, cpu_pct, budget, mk, pct_raw, budget_pct)
+    """
     slice_violations: List[tuple] = []
     cpu_violations: List[tuple] = []
     if not trace.seg_map_by_merge_key:
@@ -1231,17 +1237,23 @@ def _deadline_violations(
                 limit_ns = task_deadlines_ns[key]
                 break
         if limit_ns is not None and limit_ns > 0:
+            # Settings store true nanoseconds; segment times are trace-native.
+            limit_tu = _from_ns(limit_ns, scale)
             for seg in segs:
                 if lo is not None and hi is not None and (seg.end <= lo or seg.start >= hi):
                     continue
                 dur = seg.end - seg.start
-                if dur > limit_ns:
+                if dur > limit_tu:
                     slice_violations.append((
                         disp,
                         _format_time(dur, scale),
-                        _format_time(limit_ns, scale),
-                        _format_time(dur - limit_ns, scale),
-                        dur,  # sort key
+                        _format_time(limit_tu, scale),
+                        _format_time(dur - limit_tu, scale),
+                        dur,  # sort key (trace units)
+                        mk,
+                        seg.start,
+                        seg,
+                        limit_tu,
                     ))
         if cpu_budget_pct > 0:
             active = 0
@@ -1254,13 +1266,40 @@ def _deadline_violations(
                     active += seg.end - seg.start
             pct = 100.0 * active / span
             if pct > cpu_budget_pct:
-                cpu_violations.append((disp, f"{pct:.1f}%", f"{cpu_budget_pct:.1f}%", pct))
+                cpu_violations.append((
+                    disp, f"{pct:.1f}%", f"{cpu_budget_pct:.1f}%",
+                    pct, mk, float(cpu_budget_pct),
+                ))
     slice_violations.sort(key=lambda r: -r[4])
     cpu_violations.sort(key=lambda r: -r[3])
     return {
-        "slice_violations": [(r[0], r[1], r[2], r[3]) for r in slice_violations],
-        "cpu_violations": [(r[0], r[1], r[2]) for r in cpu_violations],
+        # label, duration, limit, over_by, mk, start_ns, seg, dur_tu, limit_tu
+        "slice_violations": [
+            (r[0], r[1], r[2], r[3], r[5], r[6], r[7], r[4], r[8])
+            for r in slice_violations
+        ],
+        # label, cpu_pct, budget, mk, pct_raw, budget_pct
+        "cpu_violations": [
+            (r[0], r[1], r[2], r[4], r[3], r[5]) for r in cpu_violations
+        ],
     }
+
+
+def _format_deadline_slice_note(
+    trace: "BtfTrace",
+    mk: str,
+    seg: "TaskSegment",
+    limit_label: str,
+) -> str:
+    """Annotation note for a Slice-over-deadline stats row click."""
+    raw = trace.task_repr.get(mk, mk)
+    name = _task_display_name(raw)
+    scale = trace.time_scale
+    dur = seg.end - seg.start
+    return (
+        f"{name} over deadline: {_format_time(dur, scale)} > {limit_label} "
+        f"at {_format_time(seg.start, scale)}"
+    )
 
 
 def _tag_plot_points(

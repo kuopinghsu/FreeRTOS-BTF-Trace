@@ -145,7 +145,7 @@ Also notable: `Med[267]` 6.0 % (priority-inversion medium task); `SM[*]` / `MX[*
 **Actions**
 
 - Cap concurrency of equal-priority workers, or pin them with `vTaskCoreAffinitySet`.
-- Set **Settings → Analysis thresholds** deadlines (for example `CS[28]=2000000` for 2 ms) and use **Deadlines**.
+- Set **Settings → Display → Analysis thresholds** deadlines (for example `CS[28]=2000000` for 2 ms — values are **nanoseconds**) and use **Statistics → Deadlines / CPU budget** (or click the section's **Settings → Display** link). Click a violating slice to annotate it on the timeline.
 - On a long Max slice, check Preemption Chain and Mutex for lock hold or migration.
 
 ---
@@ -318,7 +318,7 @@ Bind tag channels to real budgets (heap high-water, queue depth). Rising max/p95
 |----------|---------|----------------|----------------|
 | P0 | CS migration thrash (~1.6k/s, dwell ~0.5 ms) | Expected stress | Affinity-pin hot tasks; reduce equal-priority fan-out; re-measure Migr rate / Ping |
 | P0 | Queue/mutex core bounces (queue **858**) | Stress + shared objects | Co-locate producers/consumers; shorten holds; consider core-local queues |
-| P1 | Priority L/M/H on `PS[228]`; High Max block ~53 ms | Demo inversion | Keep inheritance; audit critical sections; add deadline thresholds |
+| P1 | Priority L/M/H on `PS[228]`; High Max block ~53 ms | Demo inversion | Keep inheritance; audit critical sections; set **Display → Analysis thresholds** |
 | P1 | WCET CS Max ~3.6 ms vs 1 ms tick | Stress length | Budget slices; break work; verify under tickful config |
 | P2 | TICKLESS CV 35.9 %, missed ≈ 8 | Idle between tests | Scope busy windows before chasing missed ticks |
 | P2 | Load Balance 95 %, σ 6 % | Healthy | No balance change |
@@ -404,14 +404,20 @@ response time. True response time requires explicit release/completion events.
 
 ### 4.9 Deadlines and CPU budgets
 
-**Settings** (`Ctrl+,`) → **Analysis thresholds**:
+**Settings** (`Ctrl+,`) → **Display → Analysis thresholds**, or click **Settings → Display** inside **Statistics → Deadlines / CPU budget**:
 
 | Threshold | Example |
 |-----------|---------|
 | CPU budget % | `25` |
-| Task deadlines | `CS[28]=2000000` (ns) — slices > 2 ms |
+| Task deadlines | `CS[28]=2000000` (**ns**) — slices longer than **2 ms** after conversion to the trace time unit |
 
-Then **Statistics → Deadlines / CPU budget**. Scope per test phase with cursors.
+Then expand **Deadlines / CPU budget**:
+
+- **Slice over deadline** — top 20 by duration; click a header to sort; click a row to jump and annotate the over-limit slice.
+- **CPU budget exceeded** — click a row to highlight the task; click headers to sort.
+- Scope per test phase with cursors + **Limit to cursor range**.
+
+Exports (**CSV** / **HTML**) include both violation tables when thresholds are configured.
 
 ---
 

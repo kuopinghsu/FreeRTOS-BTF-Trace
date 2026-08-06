@@ -375,6 +375,7 @@
                 @segment-jump="onStatsSegmentJump"
                 @open-pair-heatmap="onOpenPairHeatmap"
                 @open-pair-chord="onOpenPairChord"
+                @open-settings="openSettingsDialog"
               />
             </div>
           </div>
@@ -387,6 +388,7 @@
       v-if="settingsOpen"
       :model-value="appSettings"
       :time-scale="trace?.timeScale || 'ns'"
+      :initial-tab="settingsInitialTab"
       @close="onSettingsCancel"
       @preview="onSettingsPreview"
       @save="onSettingsSave"
@@ -1030,10 +1032,12 @@ function applyAppSettings(next, { silent = false, persist = true } = {}) {
 }
 
 let settingsRevertSnapshot = null
+const settingsInitialTab = ref('appearance')
 
-function openSettingsDialog() {
+function openSettingsDialog(tab = 'appearance') {
   helpOpen.value = false
   aboutOpen.value = false
+  settingsInitialTab.value = (typeof tab === 'string' && tab) ? tab : 'appearance'
   settingsRevertSnapshot = normalizeSettings(appSettings)
   settingsOpen.value = true
 }

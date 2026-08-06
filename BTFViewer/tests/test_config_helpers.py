@@ -76,6 +76,23 @@ class ConfigDefaultsTests(unittest.TestCase):
         for key, h in heights.items():
             self.assertGreater(h, 0, msg=key)
 
+    def test_cores_default_shows_gauge_and_two_util_rows(self) -> None:
+        from btf_viewer_pkg.config import (
+            STATS_CORES_DEFAULT_VISIBLE_ROWS,
+            STATS_CORES_UTIL_DEFAULT_H,
+            STATS_LB_GAUGE_H,
+            STATS_UTIL_DEFAULT_H,
+            _stats_util_viewport_height,
+        )
+        self.assertEqual(STATS_CORES_DEFAULT_VISIBLE_ROWS, 2)
+        self.assertEqual(
+            STATS_CORES_UTIL_DEFAULT_H,
+            STATS_LB_GAUGE_H + _stats_util_viewport_height(2))
+        self.assertGreater(STATS_CORES_UTIL_DEFAULT_H, STATS_UTIL_DEFAULT_H)
+        self.assertEqual(
+            default_section_table_heights()["cores"],
+            STATS_CORES_UTIL_DEFAULT_H)
+
     def test_cursor_palette_differs_by_theme(self) -> None:
         dark = _cursor_colors(True)
         light = _cursor_colors(False)

@@ -104,18 +104,18 @@
         Core Utilisation (excl. IDLE/TICK){{ scopeSuffixStr }}
       </div>
       <template v-if="!coresCollapsed">
-        <LoadBalanceGauge
-          v-if="loadBalanceScore"
-          :score="loadBalanceScore.score"
-          :gini="loadBalanceScore.gini"
-          :stddev="loadBalanceScore.stddev"
-          :amber="loadBalanceScore.amber"
-          :zone="loadBalanceScore.zone"
-        />
         <div
           class="stats-util-scroll"
           :style="utilScrollStyle(coreStats.length, 'cores')"
         >
+          <LoadBalanceGauge
+            v-if="loadBalanceScore"
+            :score="loadBalanceScore.score"
+            :gini="loadBalanceScore.gini"
+            :stddev="loadBalanceScore.stddev"
+            :amber="loadBalanceScore.amber"
+            :zone="loadBalanceScore.zone"
+          />
           <div
             v-for="cs in coreStats"
             :key="cs.core"
@@ -1636,20 +1636,47 @@
       Deadlines / CPU budget{{ scopeSuffixStr }}
     </div>
     <template v-if="!deadlineCollapsed">
-      <div v-if="!hasDeadlineConfig" class="range-hint">
-        Configure deadline thresholds in Settings (⚙ → Display → Analysis thresholds).
+      <div class="deadline-settings-hint">
+        <template v-if="!hasDeadlineConfig">Configure deadline / CPU budget thresholds in </template>
+        <template v-else>Edit thresholds in </template>
+        <button
+          type="button"
+          class="stats-settings-link"
+          title="Open Settings → Display → Analysis thresholds"
+          @click="emit('openSettings', 'display')"
+        >Settings → Display</button>
+        <span> (Analysis thresholds)</span>
       </div>
-      <template v-else>
+      <template v-if="hasDeadlineConfig">
         <div v-if="!deadlineViolations.sliceViolations.length && !deadlineViolations.cpuViolations.length" class="range-hint">
           No violations in scope
         </div>
         <div v-if="deadlineViolations.sliceViolations.length" class="stats-table-block">
           <div class="stats-section-subtitle">Slice over deadline</div>
           <table class="stats-table">
-            <thead><tr><th>Task</th><th>Duration</th><th>Limit</th><th>Over by</th></tr></thead>
+            <thead>
+              <tr>
+                <th :class="thSortClass('deadline_slice', 'task')" @click="toggleTableSort('deadline_slice', 'task')">Task</th>
+                <th :class="thSortClass('deadline_slice', 'duration')" @click="toggleTableSort('deadline_slice', 'duration')">Duration</th>
+                <th :class="thSortClass('deadline_slice', 'limit')" @click="toggleTableSort('deadline_slice', 'limit')">Limit</th>
+                <th :class="thSortClass('deadline_slice', 'over')" @click="toggleTableSort('deadline_slice', 'over')">Over by</th>
+              </tr>
+            </thead>
             <tbody>
-              <tr v-for="(v, i) in deadlineViolations.sliceViolations.slice(0, 20)" :key="'d'+i">
-                <td>{{ v.label }}</td><td>{{ v.duration }}</td><td>{{ v.limit }}</td><td>{{ v.overBy }}</td>
+              <tr
+                v-for="(v, i) in sortedDeadlineSliceRows"
+                :key="'d'+i"
+                class="stats-table-row clickable"
+                :title="deadlineSliceRowTitle(v)"
+                tabindex="0"
+                @click="onDeadlineSliceClick(v)"
+                @keydown.enter.prevent="onDeadlineSliceClick(v)"
+                @keydown.space.prevent="onDeadlineSliceClick(v)"
+              >
+                <td class="task-col">{{ v.label }}</td>
+                <td>{{ v.duration }}</td>
+                <td>{{ v.limit }}</td>
+                <td class="sev-error">{{ v.overBy }}</td>
               </tr>
             </tbody>
           </table>
@@ -1657,10 +1684,27 @@
         <div v-if="deadlineViolations.cpuViolations.length" class="stats-table-block">
           <div class="stats-section-subtitle">CPU budget exceeded</div>
           <table class="stats-table">
-            <thead><tr><th>Task</th><th>CPU%</th><th>Budget</th></tr></thead>
+            <thead>
+              <tr>
+                <th :class="thSortClass('deadline_cpu', 'task')" @click="toggleTableSort('deadline_cpu', 'task')">Task</th>
+                <th :class="thSortClass('deadline_cpu', 'cpu')" @click="toggleTableSort('deadline_cpu', 'cpu')">CPU %</th>
+                <th :class="thSortClass('deadline_cpu', 'budget')" @click="toggleTableSort('deadline_cpu', 'budget')">Budget</th>
+              </tr>
+            </thead>
             <tbody>
-              <tr v-for="(v, i) in deadlineViolations.cpuViolations" :key="'c'+i">
-                <td>{{ v.label }}</td><td>{{ v.pct }}%</td><td>{{ v.budgetPct }}%</td>
+              <tr
+                v-for="(v, i) in sortedDeadlineCpuRows"
+                :key="'c'+i"
+                class="stats-table-row clickable"
+                :title="`Click to highlight '${v.label}' in the timeline`"
+                tabindex="0"
+                @click="emit('highlightTask', v.mk)"
+                @keydown.enter.prevent="emit('highlightTask', v.mk)"
+                @keydown.space.prevent="emit('highlightTask', v.mk)"
+              >
+                <td class="task-col">{{ v.label }}</td>
+                <td class="sev-error">{{ v.pct }}%</td>
+                <td>{{ v.budgetPct }}%</td>
               </tr>
             </tbody>
           </table>
@@ -2445,6 +2489,7 @@
 import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { toBlob as domToBlob, toSvg as domToSvg } from 'html-to-image'
 import { formatTime, isStiTagChannel } from '../renderer/TimelineRenderer.js'
+import { formatTimeFixed } from '../utils/timeFormat.js'
 import { taskDisplayName, parseTaskName, taskMergeKey, isIdleTaskName, taskColor, taskReprGet, taskLabelForMergeKey, coreColor } from '../utils/colors.js'
 import {
   getPlacedCursors,
@@ -2497,7 +2542,7 @@ import {
 import { buildTaskLifecycleRows, formatLifecycleSpan } from '../utils/lifecycleAnalysis.js'
 import { buildCoreAffinityRows } from '../utils/coreAffinityAnalysis.js'
 import { formatMigrationGapTime } from '../utils/timeFormat.js'
-import { computeDeadlineViolations } from '../utils/deadlineAnalysis.js'
+import { computeDeadlineViolations, deadlineSliceAnnotationNote } from '../utils/deadlineAnalysis.js'
 import { intervalInstanceDetailRows } from '../utils/intervalAnalysis.js'
 import { migrationRows, buildCorePairRows, buildCoreTimeBreakdown, migrationDwellPlotPoints, migrationRatePlotPoints, migrationGapPlotPoints, pairGapPlotPoints, pairRatePlotPoints, pairPlotKey, pairMigrations, pairBouncePrefer, buildLockBounceNsSet } from '../utils/migrationAnalysis.js'
 import { renderWorkflowAnalysisHtml, collectTraceAnalysisFindings } from '../utils/workflowAnalysis.js'
@@ -2525,6 +2570,8 @@ import {
   CORE_PAIR_SORT_ACCESSORS,
   LIFECYCLE_SORT_ACCESSORS,
   AFFINITY_SORT_ACCESSORS,
+  DEADLINE_SLICE_SORT_ACCESSORS,
+  DEADLINE_CPU_SORT_ACCESSORS,
 } from '../utils/statsTableSort.js'
 import TraceCompareDialog from './TraceCompareDialog.vue'
 import LoadBalanceGauge from './LoadBalanceGauge.vue'
@@ -2547,7 +2594,7 @@ const props = defineProps({
 const emit = defineEmits([
   'highlightTask', 'plotPointActivate', 'segmentJump', 'update:openPlot', 'update:sectionHeights',
   'update:scopeToCursors', 'update:sectionCollapsedState',
-  'openPairHeatmap', 'openPairChord',
+  'openPairHeatmap', 'openPairChord', 'openSettings',
 ])
 
 const coresCollapsed = ref(false)
@@ -2750,9 +2797,13 @@ function scheduleStatsRefresh() {
 const TABLE_MIN_H = 80
 const TABLE_MAX_H = 480
 const STATS_MAX_VISIBLE_ROWS = 8
-// Core Utilisation auto-fits to the actual core count on load, capped at 4
-// rows (more cores scroll instead of growing the section further).
-const STATS_CORES_MAX_VISIBLE_ROWS = 4
+// Core Utilisation scroll includes Load Balance gauges; default viewport shows
+// gauges + two core bars (more cores scroll). Matches desktop
+// STATS_CORES_DEFAULT_VISIBLE_ROWS / STATS_LB_GAUGE_H.
+const STATS_CORES_DEFAULT_VISIBLE_ROWS = 2
+// Approximate .lb-cluster block height (SVG ~100 + chrome); keep in sync with
+// desktop STATS_LB_GAUGE_H for default viewport sizing.
+const STATS_LB_GAUGE_H = 200
 const STATS_UTIL_ROW_H = 16
 const STATS_UTIL_ROW_GAP = 3
 // Match .stats-table cell metrics: padding 3+3, border 1, line-height 14.
@@ -2771,9 +2822,16 @@ function utilRowsHeight(visibleRows) {
   return visibleRows * STATS_UTIL_ROW_H + Math.max(0, visibleRows - 1) * STATS_UTIL_ROW_GAP + 2
 }
 
+function coresUtilViewportHeight(visibleRows, includeGauge) {
+  return utilRowsHeight(visibleRows) + (includeGauge ? STATS_LB_GAUGE_H : 0)
+}
+
 const STATS_TABLE_DEFAULT_H = statsTableViewportHeight()
 const STATS_TABLE_MIG_DEFAULT_H = statsTableViewportHeight(STATS_MAX_VISIBLE_ROWS, true)
 const STATS_UTIL_DEFAULT_H = utilRowsHeight(STATS_MAX_VISIBLE_ROWS)
+const STATS_CORES_UTIL_DEFAULT_H = coresUtilViewportHeight(
+  STATS_CORES_DEFAULT_VISIBLE_ROWS, true)
+const STATS_UTIL_MIN_H = utilRowsHeight(1)
 
 const localSectionHeights = ref({
   tasks: STATS_UTIL_DEFAULT_H,
@@ -2792,7 +2850,14 @@ const localSectionHeights = ref({
   tags: STATS_TABLE_DEFAULT_H,
 })
 watch(() => props.sectionHeights, (v) => {
-  if (v) Object.assign(localSectionHeights.value, v)
+  if (!v) return
+  const next = { ...v }
+  // Older sessions stored cores height as util-rows only (gauges were outside
+  // the scroll). Bump those so the default viewport still shows gauges + 2 cores.
+  if (next.cores != null && next.cores < STATS_LB_GAUGE_H) {
+    next.cores = STATS_CORES_UTIL_DEFAULT_H
+  }
+  Object.assign(localSectionHeights.value, next)
 }, { immediate: true, deep: true })
 let _tableResize = null
 const openPlotRef = computed({
@@ -2823,6 +2888,8 @@ const tableSort = ref({
   queue: defaultStatsTableSort(),
   lifecycle: defaultStatsTableSort(),
   affinity: defaultStatsTableSort(),
+  deadline_slice: defaultStatsTableSort(),
+  deadline_cpu: defaultStatsTableSort(),
 })
 
 function toggleTableSort(tableId, col) {
@@ -2852,7 +2919,8 @@ function tableHeight(id) {
     return statsTableViewportHeight(Math.min(Math.max(coreAffinityRows.value.length, 1), STATS_MAX_VISIBLE_ROWS))
   }
   if (id === 'cores') {
-    return utilRowsHeight(Math.min(Math.max(coreStats.value.length, 1), STATS_CORES_MAX_VISIBLE_ROWS))
+    const rows = Math.min(Math.max(coreStats.value.length, 1), STATS_CORES_DEFAULT_VISIBLE_ROWS)
+    return coresUtilViewportHeight(rows, !!loadBalanceScore.value)
   }
   return id === 'migrations' ? STATS_TABLE_MIG_DEFAULT_H : STATS_TABLE_DEFAULT_H
 }
@@ -2861,8 +2929,11 @@ function utilScrollStyle(rowCount, id = null) {
   let h
   if (id != null && localSectionHeights.value[id] != null) {
     h = localSectionHeights.value[id]
+  } else if (id === 'cores') {
+    const vis = Math.min(Math.max(rowCount, 1), STATS_CORES_DEFAULT_VISIBLE_ROWS)
+    h = coresUtilViewportHeight(vis, !!loadBalanceScore.value)
   } else {
-    const maxRows = id === 'cores' ? STATS_CORES_MAX_VISIBLE_ROWS : STATS_MAX_VISIBLE_ROWS
+    const maxRows = STATS_MAX_VISIBLE_ROWS
     const vis = Math.min(Math.max(rowCount, 1), maxRows)
     h = utilRowsHeight(vis)
   }
@@ -2875,13 +2946,15 @@ function utilScrollStyle(rowCount, id = null) {
 function quantizeSectionHeight(id, rawH, rowCount = null) {
   if (id === 'cores' || id === 'tasks') {
     const unit = STATS_UTIL_ROW_H + STATS_UTIL_ROW_GAP
-    let minRows = Math.max(1, Math.ceil((TABLE_MIN_H + STATS_UTIL_ROW_GAP - 2) / unit))
+    const gaugeH = (id === 'cores' && loadBalanceScore.value) ? STATS_LB_GAUGE_H : 0
+    const bodyH = Math.max(0, rawH - gaugeH)
+    let minRows = Math.max(1, Math.ceil((STATS_UTIL_MIN_H + STATS_UTIL_ROW_GAP - 2) / unit))
     // Don't force space for more rows than actually exist (e.g. a 2-core
     // trace should be shrinkable down to 2 rows, not stuck at the 5-row min).
     if (rowCount != null) minRows = Math.min(minRows, Math.max(1, rowCount))
-    const maxRows = Math.max(minRows, Math.floor((TABLE_MAX_H + STATS_UTIL_ROW_GAP - 2) / unit))
-    const rows = Math.min(maxRows, Math.max(minRows, Math.round((rawH + STATS_UTIL_ROW_GAP - 2) / unit)))
-    return rows * STATS_UTIL_ROW_H + (rows - 1) * STATS_UTIL_ROW_GAP + 2
+    const maxRows = Math.max(minRows, Math.floor((TABLE_MAX_H - gaugeH + STATS_UTIL_ROW_GAP - 2) / unit))
+    const rows = Math.min(maxRows, Math.max(minRows, Math.round((bodyH + STATS_UTIL_ROW_GAP - 2) / unit)))
+    return gaugeH + rows * STATS_UTIL_ROW_H + (rows - 1) * STATS_UTIL_ROW_GAP + 2
   }
   const base = STATS_TABLE_HEADER_H + STATS_TABLE_WRAP_BORDER
   const minRows = Math.max(1, Math.ceil((TABLE_MIN_H - base) / STATS_TABLE_ROW_H))
@@ -3233,6 +3306,27 @@ const deadlineViolations = computed(() => {
   )
 })
 
+const sortedDeadlineSliceRows = computed(() =>
+  // Cap to the top 20 by duration first (desktop populates sv[:20]), then
+  // let header clicks reorder that fixed set — not re-pick from the full list.
+  sortStatsRows(
+    deadlineViolations.value.sliceViolations.slice(0, 20),
+    tableSort.value.deadline_slice,
+    DEADLINE_SLICE_SORT_ACCESSORS,
+  ))
+
+const sortedDeadlineCpuRows = computed(() =>
+  sortStatsRows(
+    deadlineViolations.value.cpuViolations,
+    tableSort.value.deadline_cpu,
+    DEADLINE_CPU_SORT_ACCESSORS,
+  ))
+
+function deadlineSliceRowTitle(v) {
+  const scale = props.trace?.timeScale || 'ns'
+  return `Click to annotate '${v.label}' deadline slice at ${formatTimeFixed(v.startNs, scale)}`
+}
+
 const hasDeadlineConfig = computed(() => {
   const s = props.analysisSettings || {}
   const budget = Number(s.cpuBudgetPct)
@@ -3269,6 +3363,15 @@ function onLifecycleRowClick(row) {
   // then highlight the task (no annotation is added for this camera-only jump).
   if (row.createNs != null) emit('segmentJump', row.createNs)
   emit('highlightTask', row.mk)
+}
+
+function onDeadlineSliceClick(v) {
+  if (!v || v.startNs == null) return
+  emit('plotPointActivate', {
+    ns: v.startNs,
+    note: deadlineSliceAnnotationNote(props.trace, v),
+    segment: v.segment || null,
+  })
 }
 
 function priorityRowTitle(row) {
@@ -4443,6 +4546,40 @@ function exportCsv() {
     lines.push('No affinity_set events,,,')
   }
 
+  if (hasDeadlineConfig.value) {
+    const { sliceViolations, cpuViolations } = deadlineViolations.value
+    lines.push('')
+    lines.push(`Deadlines / CPU budget${suffix}`)
+    lines.push('Slice Violations')
+    lines.push('Task,Duration,Limit,Over by')
+    if (sliceViolations.length) {
+      for (const v of sliceViolations) {
+        lines.push([
+          _csvCell(v.label),
+          _csvCell(v.duration),
+          _csvCell(v.limit),
+          _csvCell(v.overBy),
+        ].join(','))
+      }
+    } else {
+      lines.push('No slice violations,,,')
+    }
+    lines.push('')
+    lines.push('CPU Budget Violations')
+    lines.push('Task,CPU %,Budget')
+    if (cpuViolations.length) {
+      for (const v of cpuViolations) {
+        lines.push([
+          _csvCell(v.label),
+          _csvCell(`${v.pct}%`),
+          _csvCell(`${v.budgetPct}%`),
+        ].join(','))
+      }
+    } else {
+      lines.push('No CPU budget violations,,')
+    }
+  }
+
   lines.push('')
   lines.push(`Interval Analysis${suffix}`)
   lines.push('ID,Label,Count,Min,Avg,Max,p95')
@@ -5462,6 +5599,32 @@ watch(plotData, () => {
   font-style: italic;
 }
 
+.deadline-settings-hint {
+  color: var(--fg-dim);
+  font-size: 10px;
+  font-style: italic;
+  line-height: 1.4;
+  margin: 0 0 4px;
+}
+
+.stats-settings-link {
+  display: inline;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  color: #5B9BD5;
+  font: inherit;
+  font-style: italic;
+  font-size: 10px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.stats-settings-link:hover {
+  color: #88AAFF;
+}
+
 .priority-hint {
   margin: 0 0 6px;
   line-height: 1.35;
@@ -5488,6 +5651,10 @@ watch(plotData, () => {
 .sync-status-ok { color: #5FCF6F; }
 .sync-status-warning { color: #F39C12; font-weight: 600; }
 .sync-status-error { color: #E74C3C; font-weight: 600; }
+
+.stats-table td.sev-error {
+  color: #E85D5D;
+}
 .sync-issue-row td { color: #E8C84A; }
 .sync-issues-wrap { margin-top: 6px; }
 .sync-issues-table td.sync-status-error,

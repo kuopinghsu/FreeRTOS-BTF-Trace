@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { formatMigrationGapTime, formatTime } from '../src/utils/timeFormat.js'
+import { formatMigrationGapTime, formatTime, formatTimeFixed } from '../src/utils/timeFormat.js'
 
 describe('formatTime', () => {
   it('scales nanoseconds to milliseconds', () => {
@@ -23,6 +23,14 @@ describe('formatTime', () => {
     assert.equal(formatTime(0.1 + 0.2, 'us'), '0.300 µs')
     assert.equal(formatTime(500.7, 'us'), '500.700 µs')
     assert.equal(formatTime(42.5, 'ns', 1), '42.5 ns')
+  })
+})
+
+describe('formatTimeFixed', () => {
+  it('always uses fixed decimals like desktop _format_time', () => {
+    assert.equal(formatTimeFixed(2, 'us'), '2.000 µs')
+    assert.equal(formatTimeFixed(42, 'ns'), '42.000 ns')
+    assert.equal(formatTimeFixed(1000, 'ns'), '1.000 µs')
   })
 })
 

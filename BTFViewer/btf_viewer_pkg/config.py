@@ -85,6 +85,11 @@ STATS_TABLE_HEADER_H     =  18  # QTableWidget header row height (px).
 STATS_TABLE_ROW_H        =  16  # QTableWidget body row height (px).
 STATS_TABLE_HSCROLL_H    =  14  # Horizontal scrollbar strip inside wide tables (px).
 STATS_MAX_VISIBLE_ROWS   =   8  # Default viewport shows this many rows before v-scroll.
+# Core Utilisation scroll content includes the Load Balance gauges; default
+# viewport shows gauges + this many core bars (more cores scroll). Matches web.
+STATS_CORES_DEFAULT_VISIBLE_ROWS = 2
+# Desktop _LoadBalanceGaugeWidget sizeHint height (must match stats.py _VH).
+STATS_LB_GAUGE_H         = 200
 
 def _stats_table_viewport_height(visible_rows: int = STATS_MAX_VISIBLE_ROWS,
                                  *, reserve_h_scroll: bool = False) -> int:
@@ -96,6 +101,21 @@ def _stats_table_viewport_height(visible_rows: int = STATS_MAX_VISIBLE_ROWS,
 
 STATS_TABLE_DEFAULT_H    = _stats_table_viewport_height()
 STATS_TABLE_MIG_DEFAULT_H = _stats_table_viewport_height(reserve_h_scroll=True)
+
+def _stats_util_viewport_height(visible_rows: int = STATS_MAX_VISIBLE_ROWS) -> int:
+    """Pixel height for a util-bar list showing *visible_rows* rows."""
+    return (visible_rows * STATS_UTIL_ROW_H
+            + max(0, visible_rows - 1) * STATS_UTIL_ROW_GAP + 2)
+
+STATS_UTIL_DEFAULT_H     = _stats_util_viewport_height()
+# Default Core Utilisation viewport: gauges + two core rows (no scroll needed).
+STATS_CORES_UTIL_DEFAULT_H = (
+    STATS_LB_GAUGE_H + _stats_util_viewport_height(STATS_CORES_DEFAULT_VISIBLE_ROWS))
+# Util lists (core/task bars) may shrink to a single row; metric tables keep
+# the taller _StatsSectionGrip._MIN_H floor so a header + a few rows remain.
+STATS_UTIL_MIN_H         = _stats_util_viewport_height(1)
+# Cores share the util min so the grip can shrink below the gauge if needed.
+STATS_CORES_UTIL_MIN_H   = STATS_UTIL_MIN_H
 
 # Large-trace load tuning (desktop Statistics / Legend panels).
 STATS_LOAD_DEFER_TASKS       = 256   # defer heavy stats sections above this task count
@@ -149,7 +169,7 @@ def default_section_collapsed() -> Dict[str, bool]:
 def default_section_table_heights() -> Dict[str, int]:
     """Default max heights for collapsible statistics tables (shared with MVVM)."""
     return {
-        "cores": STATS_UTIL_DEFAULT_H,
+        "cores": STATS_CORES_UTIL_DEFAULT_H,
         "tasks": STATS_UTIL_DEFAULT_H,
         "migrations": STATS_TABLE_MIG_DEFAULT_H,
         "exec": STATS_TABLE_DEFAULT_H,
@@ -168,8 +188,6 @@ def default_section_table_heights() -> Dict[str, int]:
         "health": STATS_TABLE_DEFAULT_H,
     }
 
-STATS_UTIL_DEFAULT_H     = ( STATS_MAX_VISIBLE_ROWS * STATS_UTIL_ROW_H
-                             + max(0, STATS_MAX_VISIBLE_ROWS - 1) * STATS_UTIL_ROW_GAP + 2 )
 STI_WAVEFORM_H           =  80  # Height of an expanded STI waveform row (px).
 STI_LINE_STYLE           = "linear"  # Default STI waveform draw style: "step" or "linear".
 

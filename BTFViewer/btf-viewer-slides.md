@@ -196,7 +196,7 @@ $$\text{Load Balance Score} = 100 \times (1 - \text{Gini})$$
 2. If Max ≫ p95 → rare spike; use **p95** for design margin
 3. Check neighbours / **Preemption Chain** at that instant
 
-**Recommendation:** Cap equal-priority fan-out or affinity-pin workers; set deadline thresholds (e.g. `CS[28]=2000000` ns) for pass/fail.
+**Recommendation:** Cap equal-priority fan-out or affinity-pin workers; set **Settings → Display → Analysis thresholds** (e.g. `CS[28]=2000000` **ns** = 2 ms) and use **Deadlines / CPU budget** for pass/fail.
 
 ---
 
@@ -388,7 +388,12 @@ Blocked + running suspend patterns; staggered `resume` STI across cores. Navigat
 
 # Deadlines, Scope, Tags
 
-**Settings → Analysis thresholds** — e.g. CPU budget `25` %, `CS[28]=2000000` (ns).
+**Settings → Display → Analysis thresholds** (or click **Settings → Display** in **Deadlines / CPU budget**) — e.g. CPU budget `25` %, `CS[28]=2000000` (**ns** = 2 ms on a `us` trace).
+
+| Table | Interaction |
+|-------|-------------|
+| Slice over deadline | Top 20; sort by header; click row → jump + annotate |
+| CPU budget exceeded | Sort by header; click row → highlight task |
 
 **Cursors:** place C1…Cn → **Limit to cursor range** → Analysis + all tables recompute.
 
@@ -426,7 +431,7 @@ trace_interval_start(1); /* … */ trace_interval_stop(1);
 |-----|---------|---------|--------|
 | P0 | CS Migr ~1.6k/s, dwell ~0.5 ms | Stress artefact | Affinity-pin; cut equal-priority fan-out |
 | P0 | Queue **858** core bounces | Shared objects across cores | Co-locate; shorten holds |
-| P1 | L/M/H on PS[228]; High block ~53 ms | Demo inversion | Keep inherit; audit critical sections; deadlines |
+| P1 | L/M/H on PS[228]; High block ~53 ms | Demo inversion | Keep inherit; audit critical sections; set Display → Analysis thresholds |
 | P1 | CS WCET ~3.6 ms vs 1 ms tick | Stress length | Budget slices; tickful re-capture |
 | P2 | TICKLESS CV 35.9 % | Idle between tests | Scope busy windows |
 | OK | Score 95 %, σ 6 %; Affinity; SR 4/4 | Healthy / correct | Keep as CI regression checks |

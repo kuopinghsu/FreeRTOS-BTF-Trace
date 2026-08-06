@@ -203,3 +203,16 @@ export const AFFINITY_SORT_ACCESSORS = {
   observed: r => r.observedCores.toLowerCase(),
   violations: r => (r.violations === '—' ? '' : r.violations.toLowerCase()),
 }
+
+export const DEADLINE_SLICE_SORT_ACCESSORS = {
+  task: r => r.label.toLowerCase(),
+  duration: r => r.durationNs,
+  limit: r => r.limitTu ?? 0,
+  over: r => r.overTu ?? (r.durationNs - (r.limitTu ?? 0)),
+}
+
+export const DEADLINE_CPU_SORT_ACCESSORS = {
+  task: r => r.label.toLowerCase(),
+  cpu: r => r.pctRaw,
+  budget: r => r.budgetRaw ?? 0,
+}

@@ -255,6 +255,11 @@ def _to_ns(value: float, time_scale: str) -> float:
     """Convert *value* from the trace's native *time_scale* unit to nanoseconds."""
     return value * _NS_MULTIPLIERS.get(time_scale, 1)
 
+def _from_ns(ns: float, time_scale: str) -> float:
+    """Convert nanoseconds to the trace's native *time_scale* unit."""
+    mult = _NS_MULTIPLIERS.get(time_scale, 1) or 1
+    return float(ns) / mult
+
 def _format_time(value: float, time_scale: str = "ns", decimals: int = 3) -> str:
     """Format a timestamp (in the trace's native *time_scale* unit) into a
     human-readable string with automatic unit scaling (ns -> us -> ms -> s).

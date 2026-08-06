@@ -2,6 +2,21 @@
  * Trace timestamp formatting (shared by renderer, stats, and analysis helpers).
  */
 
+/** Nanoseconds per one unit of the given trace timeScale. */
+export const NS_PER_UNIT = Object.freeze({ ns: 1, us: 1e3, ms: 1e6, s: 1e9 })
+
+/** Convert a value in trace-native units to nanoseconds. */
+export function traceUnitsToNs(value, scale = 'ns') {
+  const per = NS_PER_UNIT[scale] ?? 1
+  return Number(value) * per
+}
+
+/** Convert nanoseconds to the trace's native timeScale unit. */
+export function nsToTraceUnits(ns, scale = 'ns') {
+  const per = NS_PER_UNIT[scale] ?? 1
+  return Number(ns) / per
+}
+
 /**
  * @param {number} t       Timestamp in trace time-scale units.
  * @param {string} scale   Trace timeScale string (e.g. 'ns', 'us', 'ms').
@@ -29,6 +44,19 @@ export function formatTime(t, scale, decimals = 3) {
     return base(t, 'ms')
   }
   return `${t} ${scale}`
+}
+
+/**
+ * Desktop `_format_time` parity: always use fixed decimals (e.g. "2.000 µs").
+ * Prefer this for deadline / budget displays that must match the desktop tables.
+ */
+export function formatTimeFixed(t, scale, decimals = 3) {
+  const ns = traceUnitsToNs(t, scale)
+  const fmt = (v) => Number(v).toFixed(decimals)
+  if (ns >= 1e9) return `${fmt(ns / 1e9)} s`
+  if (ns >= 1e6) return `${fmt(ns / 1e6)} ms`
+  if (ns >= 1e3) return `${fmt(ns / 1e3)} µs`
+  return `${fmt(ns)} ns`
 }
 
 /** Format migration gap columns in native trace units (Core Migrations table).

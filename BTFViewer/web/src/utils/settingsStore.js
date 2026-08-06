@@ -101,6 +101,44 @@ export function applySettingsToRuntime(settings) {
   return s
 }
 
+/** Format taskDeadlines map for the Settings Display textarea. */
+export function formatDeadlinesText(map) {
+  if (!map || typeof map !== 'object') return ''
+  return Object.entries(map)
+    .map(([k, v]) => `${k}=${v}`)
+    .join('\n')
+}
+
+/**
+ * Parse "TaskName=ns" lines from the Settings Display textarea.
+ * Incomplete lines (no `=value` yet) are ignored so live preview can run
+ * without wiping in-progress edits.
+ */
+export function parseDeadlinesText(text) {
+  const out = {}
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const t = line.trim()
+    if (!t || t.startsWith('#')) continue
+    const eq = t.indexOf('=')
+    if (eq <= 0) continue
+    const key = t.slice(0, eq).trim()
+    const val = Number.parseInt(t.slice(eq + 1).trim(), 10)
+    if (key && Number.isFinite(val) && val > 0) out[key] = val
+  }
+  return out
+}
+
+/**
+ * Whether the deadlines textarea should be replaced from props.
+ * Returns false when the only change is a live-preview round-trip of the
+ * same parsed map — so typing incomplete lines is not wiped.
+ */
+export function shouldReplaceDeadlinesText(currentText, incomingMap) {
+  const incoming = formatDeadlinesText(incomingMap)
+  const currentParsed = formatDeadlinesText(parseDeadlinesText(currentText))
+  return incoming !== currentParsed
+}
+
 /** Resize every tab's cursor array to match maxCursors. */
 export function resizeTabCursors(tabs, maxCursors) {
   const max = clampInt(maxCursors, 4, MAX_CURSORS, DEFAULT_SETTINGS.maxCursors)

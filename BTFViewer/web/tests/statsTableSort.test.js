@@ -10,6 +10,8 @@ import {
   CORE_PAIR_SORT_ACCESSORS,
   LIFECYCLE_SORT_ACCESSORS,
   AFFINITY_SORT_ACCESSORS,
+  DEADLINE_SLICE_SORT_ACCESSORS,
+  DEADLINE_CPU_SORT_ACCESSORS,
   SYNC_OBJECT_SORT_ACCESSORS,
 } from '../src/utils/statsTableSort.js'
 
@@ -122,6 +124,42 @@ describe('AFFINITY_SORT_ACCESSORS', () => {
   it('sorts by mask display string (desktop parity, incl. multi-mask)', () => {
     const sorted = sortStatsRows(rows, { col: 'mask', dir: 1 }, AFFINITY_SORT_ACCESSORS)
     assert.deepEqual(sorted.map(r => r.label), ['Runner[1]', 'AffM[5]', 'CS[6]'])
+  })
+})
+
+describe('DEADLINE_SLICE_SORT_ACCESSORS', () => {
+  const rows = [
+    { label: 'B', durationNs: 30, limitTu: 10, overTu: 20 },
+    { label: 'A', durationNs: 15, limitTu: 5, overTu: 10 },
+  ]
+
+  it('sorts by over-by ascending', () => {
+    const sorted = sortStatsRows(rows, { col: 'over', dir: 1 }, DEADLINE_SLICE_SORT_ACCESSORS)
+    assert.deepEqual(sorted.map(r => r.label), ['A', 'B'])
+  })
+
+  it('caps then sorts like desktop (fixed top-N set)', () => {
+    const many = [
+      { label: 'long', durationNs: 100, limitTu: 1, overTu: 99 },
+      { label: 'mid', durationNs: 50, limitTu: 1, overTu: 49 },
+      { label: 'short', durationNs: 10, limitTu: 1, overTu: 9 },
+    ]
+    // Simulate duration-desc list capped to 2 before user sort by task.
+    const capped = many.slice(0, 2)
+    const sorted = sortStatsRows(capped, { col: 'task', dir: 1 }, DEADLINE_SLICE_SORT_ACCESSORS)
+    assert.deepEqual(sorted.map(r => r.label), ['long', 'mid'])
+  })
+})
+
+describe('DEADLINE_CPU_SORT_ACCESSORS', () => {
+  const rows = [
+    { label: 'B', pctRaw: 40, budgetRaw: 20 },
+    { label: 'A', pctRaw: 25, budgetRaw: 20 },
+  ]
+
+  it('sorts by cpu pct descending', () => {
+    const sorted = sortStatsRows(rows, { col: 'cpu', dir: -1 }, DEADLINE_CPU_SORT_ACCESSORS)
+    assert.deepEqual(sorted.map(r => r.label), ['B', 'A'])
   })
 })
 

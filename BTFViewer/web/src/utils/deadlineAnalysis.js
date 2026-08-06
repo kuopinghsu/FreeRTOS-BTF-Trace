@@ -2,12 +2,13 @@
  * User-defined task deadlines and CPU budget checks.
  */
 
-import { formatTime } from './timeFormat.js'
-import { parseTaskName, taskDisplayName, taskMergeKey, taskReprGet, isIdleTaskName } from './colors.js'
+import { formatTimeFixed, nsToTraceUnits } from './timeFormat.js'
+import { parseTaskName, taskDisplayName, taskReprGet, isIdleTaskName } from './colors.js'
 
 /**
  * @param {object} trace
  * @param {object} settings { taskDeadlines?: Record<string, number>, cpuBudgetPct?: number }
+ *   taskDeadlines values are nanoseconds (Settings → Display label).
  * @param {number|null} lo cursor range lo
  * @param {number|null} hi cursor range hi
  */
@@ -35,10 +36,12 @@ export function computeDeadlineViolations(trace, settings = {}, lo = null, hi = 
       }
     }
     if (limitNs != null && Number.isFinite(limitNs) && limitNs > 0) {
+      // Settings store true nanoseconds; segment times are trace-native units.
+      const limitTu = nsToTraceUnits(limitNs, scale)
       for (const seg of segs) {
         if (lo != null && hi != null && (seg.end <= lo || seg.start >= hi)) continue
         const dur = seg.end - seg.start
-        if (dur > limitNs) {
+        if (dur > limitTu) {
           sliceViolations.push({
             mk,
             label: disp,
@@ -46,9 +49,12 @@ export function computeDeadlineViolations(trace, settings = {}, lo = null, hi = 
             endNs: seg.end,
             durationNs: dur,
             limitNs,
-            duration: formatTime(dur, scale),
-            limit: formatTime(limitNs, scale),
-            overBy: formatTime(dur - limitNs, scale),
+            limitTu,
+            overTu: dur - limitTu,
+            duration: formatTimeFixed(dur, scale),
+            limit: formatTimeFixed(limitTu, scale),
+            overBy: formatTimeFixed(dur - limitTu, scale),
+            segment: seg,
           })
         }
       }
@@ -73,6 +79,7 @@ export function computeDeadlineViolations(trace, settings = {}, lo = null, hi = 
           mk,
           label: disp,
           pctRaw: pct,
+          budgetRaw: cpuBudget,
           pct: pct.toFixed(1),
           budgetPct: cpuBudget.toFixed(1),
         })
@@ -83,4 +90,12 @@ export function computeDeadlineViolations(trace, settings = {}, lo = null, hi = 
   sliceViolations.sort((a, b) => b.durationNs - a.durationNs)
   cpuViolations.sort((a, b) => b.pctRaw - a.pctRaw)
   return { sliceViolations, cpuViolations }
+}
+
+/** Annotation note for a Slice-over-deadline stats row click (desktop parity). */
+export function deadlineSliceAnnotationNote(trace, v) {
+  if (!v) return ''
+  const scale = trace?.timeScale || 'ns'
+  const at = formatTimeFixed(v.startNs, scale)
+  return `${v.label} over deadline: ${v.duration} > ${v.limit} at ${at}`
 }

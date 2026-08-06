@@ -2175,10 +2175,12 @@ class _StatsSectionGrip(QWidget):
     _MIN_H = 80
     _MAX_H = 480
 
-    def __init__(self, is_dark: bool, get_height_fn, parent=None) -> None:
+    def __init__(self, is_dark: bool, get_height_fn, parent=None,
+                 *, min_h: Optional[int] = None) -> None:
         super().__init__(parent)
         self._is_dark = is_dark
         self._get_height = get_height_fn
+        self._min_h = self._MIN_H if min_h is None else int(min_h)
         self._dragging = False
         self._start_y = 0
         self._start_h = STATS_TABLE_DEFAULT_H
@@ -2208,7 +2210,7 @@ class _StatsSectionGrip(QWidget):
         _HoverCursor.show(Qt.CursorShape.SizeVerCursor)
         delta = global_y - self._start_y
         self.height_changed.emit(
-            max(self._MIN_H, min(self._MAX_H, self._start_h + delta)))
+            max(self._min_h, min(self._MAX_H, self._start_h + delta)))
 
     def _drag_end(self) -> None:
         self._dragging = False
@@ -4853,6 +4855,8 @@ class _StatsPanel(QWidget):
     # Core-Pair chart footer → open heatmap/chord focused on (from, to, bounce_only)
     open_pair_heatmap = Signal(str, str, bool)
     open_pair_chord = Signal(str, str, bool)
+    # Open Settings dialog on a named sidebar page (e.g. "Display")
+    open_settings_requested = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -5040,10 +5044,14 @@ class _StatsPanel(QWidget):
         """Apply persisted max heights for collapsible stats tables."""
         for key, val in heights.items():
             if key in self._section_table_heights:
-                self._section_table_heights[key] = max(
-                    _StatsSectionGrip._MIN_H,
-                    min(_StatsSectionGrip._MAX_H, int(val)),
-                )
+                h = int(val)
+                # Older sessions saved cores height as util-rows only (gauges
+                # lived outside the scroll). Bump those up so the default
+                # viewport still shows gauges + two cores.
+                if key == "cores" and h < STATS_LB_GAUGE_H:
+                    h = STATS_CORES_UTIL_DEFAULT_H
+                lo, hi = self._section_height_bounds(key)
+                self._section_table_heights[key] = max(lo, min(hi, h))
 
     def section_table_heights(self) -> Dict[str, int]:
         return dict(self._section_table_heights)
@@ -5077,9 +5085,20 @@ class _StatsPanel(QWidget):
         self.set_cursor_times(model.cursor_times, refresh_stats=refresh_stats)
         self.apply_section_table_heights(model.section_table_heights)
 
-    def _apply_table_display_height(self, table: QTableWidget, h: int) -> int:
-        """Set an explicit pixel height so drag-resize is visible (scroll inside table)."""
-        h = max(_StatsSectionGrip._MIN_H, min(_StatsSectionGrip._MAX_H, int(h)))
+    @staticmethod
+    def _section_height_bounds(section_id: str = "") -> Tuple[int, int]:
+        """Return (min_h, max_h) for a stats section viewport."""
+        if section_id == "cores":
+            return STATS_CORES_UTIL_MIN_H, _StatsSectionGrip._MAX_H
+        if section_id == "tasks":
+            return STATS_UTIL_MIN_H, _StatsSectionGrip._MAX_H
+        return _StatsSectionGrip._MIN_H, _StatsSectionGrip._MAX_H
+
+    def _apply_table_display_height(self, table, h: int,
+                                    *, section_id: str = "") -> int:
+        """Set an explicit pixel height so drag-resize is visible (scroll inside)."""
+        lo, hi = self._section_height_bounds(section_id)
+        h = max(lo, min(hi, int(h)))
         table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         table.setMinimumHeight(h)
         table.setMaximumHeight(h)
@@ -5175,7 +5194,7 @@ class _StatsPanel(QWidget):
         default_h = (STATS_TABLE_MIG_DEFAULT_H if section_id == "migrations"
                      else STATS_TABLE_DEFAULT_H)
         h = self._section_table_heights.get(section_id, default_h)
-        h = self._apply_table_display_height(table, h)
+        h = self._apply_table_display_height(table, h, section_id=section_id)
         self._section_table_heights[section_id] = h
 
         grip = _StatsSectionGrip(self._is_dark, lambda: table.height())
@@ -5183,7 +5202,7 @@ class _StatsPanel(QWidget):
 
         def _on_height(new_h: int) -> None:
             self._section_table_heights[section_id] = self._apply_table_display_height(
-                table, new_h)
+                table, new_h, section_id=section_id)
 
         grip.height_changed.connect(_on_height)
         lay.addWidget(table)
@@ -5257,8 +5276,10 @@ class _StatsPanel(QWidget):
             f"QWidget#stats_table_viewport{{background:{bg};}}"
             f"QTableWidget#stats_table::item{{color:{fg}; "
             f"border:none; padding:0px 3px;}}"
+            # Extra trailing padding so the sort arrow sits beside the label
+            # instead of over it (Qt draws the indicator on the section edge).
             f"QHeaderView#stats_table_header::section{{border:none; "
-            f"background:{hdr_bg}; color:{muted}; padding:0px 3px;}}"
+            f"background:{hdr_bg}; color:{muted}; padding:0px 10px 0px 3px;}}"
         )
 
     def _sync_stats_table_item_backgrounds(self, table: QTableWidget,
@@ -5293,6 +5314,8 @@ class _StatsPanel(QWidget):
         hdr = table.horizontalHeader()
         hdr.setObjectName("stats_table_header")
         hdr.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        hdr.setDefaultAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         hp = hdr.palette()
         hp.setColor(QPalette.Window, hdr_bg)
         hp.setColor(QPalette.Button, hdr_bg)
@@ -5408,6 +5431,27 @@ class _StatsPanel(QWidget):
             parts.append(f"font-size:{ui_fs};")
         w.setStyleSheet(" ".join(parts))
         return w
+
+    def _deadline_settings_link(self, ui_fs: str, *, configured: bool) -> QLabel:
+        """Clickable Settings → Display link for deadline / CPU budget config."""
+        lead = ("Edit thresholds in" if configured
+                else "Configure deadline / CPU budget thresholds in")
+        lbl = QLabel(
+            f'<span style="color:#888888;">{lead} </span>'
+            f'<a href="settings:display" style="color:#5B9BD5; text-decoration:none;">'
+            f'Settings \u2192 Display</a>'
+            f'<span style="color:#888888;"> (Analysis thresholds)</span>'
+        )
+        lbl.setTextFormat(Qt.TextFormat.RichText)
+        lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+        lbl.setOpenExternalLinks(False)
+        lbl.setWordWrap(True)
+        lbl.setCursor(Qt.CursorShape.PointingHandCursor)
+        if ui_fs:
+            lbl.setStyleSheet(f"font-size:{ui_fs}; background:transparent;")
+        lbl.linkActivated.connect(
+            lambda _href: self.open_settings_requested.emit("Display"))
+        return lbl
 
     @staticmethod
     def _tick_mode_badge_style(is_dark: bool, is_tickless: bool, ui_fs: str) -> str:
@@ -5636,16 +5680,22 @@ class _StatsPanel(QWidget):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        # Always use AsNeeded: badge widgets inside inner can make the content
-        # taller than the height calculated from row_count alone.
+        # Always use AsNeeded: Load Balance gauges inside the cores scroll make
+        # content taller than row_count alone; extra cores scroll beneath.
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        vis = min(max(row_count, 1), STATS_MAX_VISIBLE_ROWS)
+        max_vis = (STATS_CORES_DEFAULT_VISIBLE_ROWS if section_id == "cores"
+                   else STATS_MAX_VISIBLE_ROWS)
+        vis = min(max(row_count, 1), max_vis)
         scroll_h = (vis * STATS_UTIL_ROW_H
                     + max(0, vis - 1) * STATS_UTIL_ROW_GAP + 2)
+        if section_id == "cores" and any(
+                isinstance(ch, _LoadBalanceGaugeWidget)
+                for ch in inner.findChildren(_LoadBalanceGaugeWidget)):
+            scroll_h += STATS_LB_GAUGE_H
         if section_id:
             h = self._section_table_heights.get(section_id, scroll_h)
             self._section_table_heights[section_id] = self._apply_table_display_height(
-                scroll, h)
+                scroll, h, section_id=section_id)
         else:
             scroll.setFixedHeight(scroll_h)
             scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -5655,11 +5705,13 @@ class _StatsPanel(QWidget):
         self._util_scroll_areas.append(scroll)
         blay.addWidget(scroll)
         if section_id:
-            grip = _StatsSectionGrip(self._is_dark, lambda s=scroll: s.height())
+            lo, _hi = self._section_height_bounds(section_id)
+            grip = _StatsSectionGrip(
+                self._is_dark, lambda s=scroll: s.height(), min_h=lo)
             self._table_grips.append(grip)
             def _on_util_height(new_h: int, _scroll=scroll, _sid=section_id) -> None:
                 self._section_table_heights[_sid] = self._apply_table_display_height(
-                    _scroll, new_h)
+                    _scroll, new_h, section_id=_sid)
             grip.height_changed.connect(_on_util_height)
             blay.addWidget(grip)
         QTimer.singleShot(0, filt.pin_inner_width)
@@ -7319,12 +7371,12 @@ class _StatsPanel(QWidget):
             sv_body = "".join(
                 f"<tr><td>{_esc(lbl)}</td><td>{_esc(dur)}</td><td>{_esc(lim)}</td>"
                 f'<td style="color:#c0392b;font-weight:600">{_esc(over)}</td></tr>'
-                for lbl, dur, lim, over in _sv
+                for lbl, dur, lim, over, *_rest in _sv
             ) or '<tr><td colspan="4" class="empty">No slice violations</td></tr>'
             cv_body = "".join(
                 f'<tr><td>{_esc(lbl)}</td><td style="color:#c0392b;font-weight:600">{_esc(pct)}</td>'
                 f"<td>{_esc(bgt)}</td></tr>"
-                for lbl, pct, bgt in _cv
+                for lbl, pct, bgt, *_rest in _cv
             ) or '<tr><td colspan="3" class="empty">No CPU budget violations</td></tr>'
             deadline_html = (
                 f'<section class="report-card"><h2>Deadlines / CPU budget{_esc(scope_title)}</h2>'
@@ -7851,7 +7903,7 @@ class _StatsPanel(QWidget):
                 writer.writerow(["Slice Violations"])
                 writer.writerow(["Task", "Duration", "Limit", "Over by"])
                 if _dl_viols_csv["slice_violations"]:
-                    for lbl, dur, lim, over in _dl_viols_csv["slice_violations"]:
+                    for lbl, dur, lim, over, *_rest in _dl_viols_csv["slice_violations"]:
                         writer.writerow([lbl, dur, lim, over])
                 else:
                     writer.writerow(["No slice violations", "", "", ""])
@@ -7859,7 +7911,7 @@ class _StatsPanel(QWidget):
                 writer.writerow(["CPU Budget Violations"])
                 writer.writerow(["Task", "CPU %", "Budget"])
                 if _dl_viols_csv["cpu_violations"]:
-                    for lbl, pct, bgt in _dl_viols_csv["cpu_violations"]:
+                    for lbl, pct, bgt, *_rest in _dl_viols_csv["cpu_violations"]:
                         writer.writerow([lbl, pct, bgt])
                 else:
                     writer.writerow(["No CPU budget violations", "", ""])
@@ -8005,11 +8057,13 @@ class _StatsPanel(QWidget):
         # -- Core utilisation (excl. IDLE) ---------------------------------
         if trace.core_names:
             def _populate_cores(blay: QVBoxLayout) -> None:
+                # Gauges live inside the util scroll so the default viewport
+                # (STATS_CORES_UTIL_DEFAULT_H) shows gauges + two core rows;
+                # further cores scroll within the same area.
                 inner = QWidget()
                 ilay = QVBoxLayout(inner)
                 ilay.setContentsMargins(0, 0, 0, 0)
                 ilay.setSpacing(STATS_UTIL_ROW_GAP)
-                # Load balance score gauge
                 if len(_core_rows) >= 2:
                     _pcts = [p for _, p in _core_rows]
                     _lb = _load_balance_metrics(_pcts)
@@ -8865,11 +8919,8 @@ class _StatsPanel(QWidget):
         # -- Deadlines / CPU budget ------------------------------------------
         def _populate_deadline(blay: QVBoxLayout) -> None:
             has_config = self._cpu_budget_pct > 0 or bool(self._task_deadlines_ns)
+            blay.addWidget(self._deadline_settings_link(_fs, configured=has_config))
             if not has_config:
-                hint = QLabel("Configure deadline thresholds in Settings (Ctrl+, \u2192 Display \u2192 Analysis thresholds).")
-                hint.setStyleSheet(f"color:#888888; font-size:{_fs};")
-                hint.setWordWrap(True)
-                blay.addWidget(hint)
                 return
             viols = _deadline_violations(
                 trace, self._cpu_budget_pct, self._task_deadlines_ns, lo, hi)
@@ -8888,17 +8939,45 @@ class _StatsPanel(QWidget):
                 tbl_sv.verticalHeader().setMinimumSectionSize(STATS_TABLE_ROW_H)
                 tbl_sv.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
                 tbl_sv.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-                for r_i, (lbl_v, dur, lim, over) in enumerate(sv[:20]):
-                    for c_i, val in enumerate([lbl_v, dur, lim, over]):
-                        item = QTableWidgetItem(val)
+                tbl_sv.setShowGrid(False)
+                tbl_sv.setFrameShape(QFrame.NoFrame)
+                tbl_sv.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+                tbl_sv.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+                tbl_sv.horizontalHeader().setFixedHeight(18)
+                tbl_sv.horizontalHeader().setSectionsClickable(True)
+                tbl_sv.horizontalHeader().setSortIndicatorShown(True)
+                for r_i, (lbl_v, dur, lim, over, mk, start_ns, seg, dur_tu, limit_tu) in enumerate(sv[:20]):
+                    sort_keys = [lbl_v.lower(), dur_tu, limit_tu, dur_tu - limit_tu]
+                    for c_i, (val, key) in enumerate(zip([lbl_v, dur, lim, over], sort_keys)):
+                        item = _StatsSortItem(val, key)
                         item.setTextAlignment(
                             (Qt.AlignmentFlag.AlignLeft if c_i == 0 else Qt.AlignmentFlag.AlignRight)
                             | Qt.AlignmentFlag.AlignVCenter)
                         if c_i == 3:
                             item.setForeground(QColor("#E85D5D"))
+                        if c_i == 0:
+                            item.setData(Qt.ItemDataRole.UserRole, (mk, start_ns, seg, lim))
+                            item.setToolTip(
+                                f"Click to annotate \u2018{lbl_v}\u2019 deadline slice at "
+                                f"{_format_time(start_ns, trace.time_scale)}")
                         tbl_sv.setItem(r_i, c_i, item)
                 tbl_sv.horizontalHeader().setStretchLastSection(True)
+                tbl_sv.setSortingEnabled(True)
                 self._apply_stats_table_theme(tbl_sv, _fs)
+
+                def _on_deadline_slice_row(row: int, _col: int) -> None:
+                    item = tbl_sv.item(row, 0)
+                    if item is None:
+                        return
+                    data = item.data(Qt.ItemDataRole.UserRole)
+                    if not data:
+                        return
+                    mk, start_ns, seg, lim = data
+                    note = _format_deadline_slice_note(trace, mk, seg, lim)
+                    self.plot_point_clicked.emit(seg, int(start_ns), note)
+
+                tbl_sv.cellClicked.connect(_on_deadline_slice_row)
+                self._wire_stats_table_click_cursor(tbl_sv)
                 self._wire_stats_table_row_hover(tbl_sv)
                 blay.addWidget(tbl_sv)
             if cv:
@@ -8912,17 +8991,41 @@ class _StatsPanel(QWidget):
                 tbl_cv.verticalHeader().setMinimumSectionSize(STATS_TABLE_ROW_H)
                 tbl_cv.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
                 tbl_cv.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-                for r_i, (lbl_v, pct, bgt) in enumerate(cv):
-                    for c_i, val in enumerate([lbl_v, pct, bgt]):
-                        item = QTableWidgetItem(val)
+                tbl_cv.setShowGrid(False)
+                tbl_cv.setFrameShape(QFrame.NoFrame)
+                tbl_cv.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+                tbl_cv.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+                tbl_cv.horizontalHeader().setFixedHeight(18)
+                tbl_cv.horizontalHeader().setSectionsClickable(True)
+                tbl_cv.horizontalHeader().setSortIndicatorShown(True)
+                for r_i, (lbl_v, pct, bgt, mk, pct_raw, budget_raw) in enumerate(cv):
+                    sort_keys = [lbl_v.lower(), float(pct_raw), float(budget_raw)]
+                    for c_i, (val, key) in enumerate(zip([lbl_v, pct, bgt], sort_keys)):
+                        item = _StatsSortItem(val, key)
                         item.setTextAlignment(
                             (Qt.AlignmentFlag.AlignLeft if c_i == 0 else Qt.AlignmentFlag.AlignRight)
                             | Qt.AlignmentFlag.AlignVCenter)
                         if c_i == 1:
                             item.setForeground(QColor("#E85D5D"))
+                        if c_i == 0:
+                            item.setData(Qt.ItemDataRole.UserRole, mk)
+                            item.setToolTip(
+                                f"Click to highlight \u2018{lbl_v}\u2019 in the timeline")
                         tbl_cv.setItem(r_i, c_i, item)
                 tbl_cv.horizontalHeader().setStretchLastSection(True)
+                tbl_cv.setSortingEnabled(True)
                 self._apply_stats_table_theme(tbl_cv, _fs)
+
+                def _on_cpu_budget_row(row: int, _col: int) -> None:
+                    item = tbl_cv.item(row, 0)
+                    if item is None:
+                        return
+                    mk = item.data(Qt.ItemDataRole.UserRole)
+                    if mk:
+                        self.task_clicked.emit(str(mk))
+
+                tbl_cv.cellClicked.connect(_on_cpu_budget_row)
+                self._wire_stats_table_click_cursor(tbl_cv)
                 self._wire_stats_table_row_hover(tbl_cv)
                 blay.addWidget(tbl_cv)
 
@@ -9637,7 +9740,8 @@ class _SettingsDialog(QDialog):
                  colorblind_safe: bool = False,
                  cpu_budget_pct: float = 0.0,
                  task_deadlines_text: str = "",
-                 time_decimals: int = 3):
+                 time_decimals: int = 3,
+                 initial_page: str = "Appearance"):
         super().__init__(parent, Qt.WindowType.Dialog)
         self.setWindowTitle("Settings")
         self.setModal(True)
@@ -9927,6 +10031,9 @@ class _SettingsDialog(QDialog):
 
         # -- Sidebar <-> stack sync ---------------------------------------------
         self._sidebar.currentRowChanged.connect(self._content_stack.setCurrentIndex)
+        _page_idx = {"Appearance": 0, "Display": 1, "Layout": 2}.get(initial_page, 0)
+        self._sidebar.setCurrentRow(_page_idx)
+        self._content_stack.setCurrentIndex(_page_idx)
 
         # -- Footer separator -------------------------------------------------
         footer_sep = QFrame()

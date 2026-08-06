@@ -12,6 +12,7 @@ if str(BTF_ROOT) not in sys.path:
 from btf_viewer_pkg.timeline_util import (  # noqa: E402
     _format_time,
     _format_timescale_per_px,
+    _from_ns,
     _nice_grid_step,
     _orth_cull_params,
     _tag_value_sort_key,
@@ -23,6 +24,11 @@ from btf_viewer_pkg.timeline_util import (  # noqa: E402
 class TimeFormatTests(unittest.TestCase):
     def test_to_ns_from_microseconds(self) -> None:
         self.assertEqual(_to_ns(2.5, "us"), 2500.0)
+
+    def test_from_ns_to_microseconds(self) -> None:
+        self.assertEqual(_from_ns(1000, "us"), 1.0)
+        self.assertIn("µs", _format_time(_from_ns(1000, "us"), "us"))
+        self.assertNotIn("ms", _format_time(_from_ns(1000, "us"), "us"))
 
     def test_format_time_scales_to_milliseconds(self) -> None:
         self.assertIn("ms", _format_time(1_500_000, "ns"))

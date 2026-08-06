@@ -338,11 +338,18 @@
 
 <script setup>
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
-import { DEFAULT_SETTINGS, normalizeSettings } from '../utils/settingsStore.js'
+import {
+  DEFAULT_SETTINGS,
+  formatDeadlinesText,
+  normalizeSettings,
+  parseDeadlinesText,
+  shouldReplaceDeadlinesText,
+} from '../utils/settingsStore.js'
 
 const props = defineProps({
   modelValue: { type: Object, required: true },
   timeScale:  { type: String, default: 'ns' },
+  initialTab: { type: String, default: 'appearance' },
 })
 
 const emit = defineEmits(['close', 'save', 'preview'])
@@ -353,35 +360,20 @@ const tabs = [
   { id: 'layout', label: 'Layout' },
 ]
 
-const activeTab = ref('appearance')
+const _tabIds = new Set(tabs.map(t => t.id))
+const activeTab = ref(_tabIds.has(props.initialTab) ? props.initialTab : 'appearance')
 const draft = reactive(normalizeSettings(props.modelValue))
 const deadlinesText = ref(formatDeadlinesText(draft.taskDeadlines))
-
-function formatDeadlinesText(map) {
-  if (!map || typeof map !== 'object') return ''
-  return Object.entries(map)
-    .map(([k, v]) => `${k}=${v}`)
-    .join('\n')
-}
-
-function parseDeadlinesText(text) {
-  const out = {}
-  for (const line of String(text || '').split(/\r?\n/)) {
-    const t = line.trim()
-    if (!t || t.startsWith('#')) continue
-    const eq = t.indexOf('=')
-    if (eq <= 0) continue
-    const key = t.slice(0, eq).trim()
-    const val = Number.parseInt(t.slice(eq + 1).trim(), 10)
-    if (key && Number.isFinite(val) && val > 0) out[key] = val
-  }
-  return out
-}
 
 watch(() => props.modelValue, (v) => {
   suppressPreview.value = true
   Object.assign(draft, normalizeSettings(v))
-  deadlinesText.value = formatDeadlinesText(draft.taskDeadlines)
+  // Live preview round-trips parse incomplete lines to {}. Replacing the
+  // textarea with that empty result made typing impossible — only sync when
+  // the parsed deadlines actually changed (Reset / external load).
+  if (shouldReplaceDeadlinesText(deadlinesText.value, draft.taskDeadlines)) {
+    deadlinesText.value = formatDeadlinesText(draft.taskDeadlines)
+  }
   nextTick(() => { suppressPreview.value = false })
 }, { deep: true })
 

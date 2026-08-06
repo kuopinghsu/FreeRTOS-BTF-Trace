@@ -3318,7 +3318,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             QTableWidget#stats_table::item {{ color:{c['text']};
                          border:none; padding:0px 3px; }}
             QHeaderView#stats_table_header::section {{ background:{c['mid']};
-                         color:{c['muted_text']}; border:none; padding:0px 3px; }}
+                         color:{c['muted_text']}; border:none; padding:0px 10px 0px 3px; }}
             QTableWidget::item {{ font-size:{_ui_fs}; padding:2px 4px; }}
             QTableWidget::item:selected {{ background:{c['accent']}; color:#FFFFFF; }}
             QHeaderView::section {{ background:{c['mid']}; color:{c['text']};
@@ -3989,6 +3989,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._stats_panel.core_clicked.connect(self._on_stats_core_clicked)
         self._stats_panel.open_pair_heatmap.connect(self._on_open_pair_heatmap)
         self._stats_panel.open_pair_chord.connect(self._on_open_pair_chord)
+        self._stats_panel.open_settings_requested.connect(self._open_settings)
         self._stats_panel._btn_compare_mig.clicked.connect(self._open_trace_compare)
         self.setAcceptDrops(True)
 
@@ -6045,8 +6046,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._report_settings_io_failure(prefix="Settings save warning")
 
     @_dialog_guard
-    def _open_settings(self) -> None:
-        """Open the Settings dialog with live preview; reverts on Cancel."""
+    def _open_settings(self, page: str = "Appearance") -> None:
+        """Open the Settings dialog with live preview; reverts on Cancel.
+
+        *page* selects the sidebar page: ``Appearance``, ``Display``, or ``Layout``.
+        """
         _snap = {
             "is_dark":                  self._is_dark,
             "font_size":                self._font_size_val,
@@ -6100,6 +6104,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             cpu_budget_pct=_snap["cpu_budget_pct"],
             task_deadlines_text=_snap["task_deadlines_text"],
             time_decimals=self._time_decimals_val,
+            initial_page=page if isinstance(page, str) else "Appearance",
         )
         dlg.live_preview.connect(lambda: self._apply_settings_preview({
             "is_dark":                  dlg.is_dark,

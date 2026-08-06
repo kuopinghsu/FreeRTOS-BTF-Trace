@@ -2,17 +2,17 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
 import { computeDeadlineViolations, deadlineSliceAnnotationNote } from '../src/utils/deadlineAnalysis.js'
-import { formatTime, nsToTraceUnits } from '../src/utils/timeFormat.js'
+import { formatTimeFixed, nsToTraceUnits } from '../src/utils/timeFormat.js'
 
 describe('nsToTraceUnits', () => {
   it('maps 1000 ns to 1 µs on us-scale traces', () => {
     assert.equal(nsToTraceUnits(1000, 'us'), 1)
-    assert.equal(formatTime(nsToTraceUnits(1000, 'us'), 'us'), '1 µs')
+    assert.equal(formatTimeFixed(nsToTraceUnits(1000, 'us'), 'us'), '1.000 µs')
   })
 
   it('keeps nanoseconds unchanged on ns-scale traces', () => {
     assert.equal(nsToTraceUnits(1000, 'ns'), 1000)
-    assert.equal(formatTime(nsToTraceUnits(1000, 'ns'), 'ns'), '1.000 µs')
+    assert.equal(formatTimeFixed(nsToTraceUnits(1000, 'ns'), 'ns'), '1.000 µs')
   })
 })
 
@@ -39,8 +39,8 @@ describe('computeDeadlineViolations ns deadlines', () => {
       taskDeadlines: { 'CS[16]': 1000 },
     })
     assert.equal(sliceViolations.length, 1)
-    assert.equal(sliceViolations[0].limit, '1 µs')
-    assert.equal(sliceViolations[0].duration, '2 µs')
+    assert.equal(sliceViolations[0].limit, '1.000 µs')
+    assert.equal(sliceViolations[0].duration, '2.000 µs')
     // Must not treat 1000 as 1000 µs (= 1 ms).
     assert.notEqual(sliceViolations[0].limit, '1.000 ms')
     assert.equal(sliceViolations[0].mk, 'CS[16]')
@@ -48,7 +48,7 @@ describe('computeDeadlineViolations ns deadlines', () => {
     assert.ok(sliceViolations[0].segment)
     assert.match(
       deadlineSliceAnnotationNote(trace, sliceViolations[0]),
-      /over deadline: 2 µs > 1 µs at/,
+      /over deadline: 2\.000 µs > 1\.000 µs at/,
     )
   })
 })
