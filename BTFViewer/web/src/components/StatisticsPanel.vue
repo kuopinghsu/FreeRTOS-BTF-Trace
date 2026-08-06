@@ -5935,16 +5935,23 @@ watch(plotData, () => {
   border-bottom: none;
 }
 
-.stats-table-row.clickable {
-  cursor: pointer;
-}
-
-.stats-table-row.clickable:hover td,
-.stats-table-row.clickable:focus-visible td {
+/* Row hover for every stats table (clickable and read-only). */
+.stats-table tbody tr:hover td {
   background: var(--tb-btn-hover);
 }
 
-.stats-table-row.clickable:focus-visible {
+.stats-table-row.clickable,
+.stats-table tbody tr.clickable-row {
+  cursor: pointer;
+}
+
+.stats-table-row.clickable:focus-visible td,
+.stats-table tbody tr.clickable-row:focus-visible td {
+  background: var(--tb-btn-hover);
+}
+
+.stats-table-row.clickable:focus-visible,
+.stats-table tbody tr.clickable-row:focus-visible {
   outline: none;
 }
 

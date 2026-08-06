@@ -21630,7 +21630,7 @@ class _StatsPanel(QWidget):
             _hovered_row[0] = -1
 
         def _set_row_hover(row: int) -> None:
-            if not _interactive or row < 0:
+            if row < 0:
                 return
             if row == _hovered_row[0]:
                 return
@@ -21752,6 +21752,18 @@ class _StatsPanel(QWidget):
         table.setAlternatingRowColors(False)
         table.setShowGrid(False)
 
+        # Row hover for every stats table (click handlers stay interactive-only).
+        table.setMouseTracking(True)
+        table.viewport().setMouseTracking(True)
+        if migrations:
+            table.cellEntered.connect(_set_row_hover)
+        else:
+            table.itemEntered.connect(
+                lambda item: _set_row_hover(item.row()) if item is not None else None)
+        _hover_filter = _StatsTableHoverFilter(_clear_row_hover)
+        table.viewport().installEventFilter(_hover_filter)
+        host._stats_hover_filter = _hover_filter  # prevent GC
+
         if _interactive:
             if migrations:
                 def _cell_clicked_mig(_row: int, _col: int) -> None:
@@ -21775,17 +21787,8 @@ class _StatsPanel(QWidget):
                         on_row_click(mk)
                 table.cellClicked.connect(_cell_clicked)
             self._wire_stats_table_click_cursor(table)
-            if migrations:
-                table.cellEntered.connect(_set_row_hover)
-            else:
-                table.itemEntered.connect(
-                    lambda item: _set_row_hover(item.row()) if item is not None else None)
-            _hover_filter = _StatsTableHoverFilter(_clear_row_hover)
-            table.viewport().installEventFilter(_hover_filter)
-            host._stats_hover_filter = _hover_filter  # prevent GC
 
         table.setWordWrap(False)
-
         for r in range(table.rowCount()):
             table.setRowHeight(r, STATS_TABLE_ROW_H)
 
@@ -21881,6 +21884,13 @@ class _StatsPanel(QWidget):
             table.setRowHeight(r, STATS_TABLE_ROW_H)
         table.setSortingEnabled(True)
 
+        table.setMouseTracking(True)
+        table.viewport().setMouseTracking(True)
+        table.cellEntered.connect(_set_hover)
+        _hover_filter = _StatsTableHoverFilter(_clear_hover)
+        table.viewport().installEventFilter(_hover_filter)
+        host._preempt_hover_filter = _hover_filter
+
         if on_row_click is not None:
             def _cell_clicked(row: int, _col: int) -> None:
                 mk_item = table.item(row, 0)
@@ -21891,10 +21901,6 @@ class _StatsPanel(QWidget):
                         on_row_click(mk_item.data(Qt.ItemDataRole.UserRole), preemptor)
             table.cellClicked.connect(_cell_clicked)
             self._wire_stats_table_click_cursor(table)
-            table.cellEntered.connect(_set_hover)
-            _hover_filter = _StatsTableHoverFilter(_clear_hover)
-            table.viewport().installEventFilter(_hover_filter)
-            host._preempt_hover_filter = _hover_filter
 
         self._wrap_table_with_resizer(lay, table, "preemption")
         return host
