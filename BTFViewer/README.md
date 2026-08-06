@@ -280,7 +280,7 @@ python builds/btf_viewer.py snapshot trace.btf -o|--output PATH --view timeline|
   [--preemptor NAME] [--interval-id ID] [--channel NAME] [--lo T --hi T] \
   [--drill-row N --drill-bin N] [--width PX] [--height PX] [--theme dark|light]
 
-python builds/btf_viewer.py perfetto trace.btf -o|--output PATH.json
+python builds/btf_viewer.py perfetto trace.btf -o|--output PATH.json [--lo T --hi T]
 ```
 
 The `snapshot` `--view`:
@@ -477,16 +477,25 @@ In the editor you can draw annotation shapes (arrow, double arrow, line, rectang
 
 **File → Export Perfetto…** (`Ctrl+Shift+E`, Desktop) or the toolbar **Perfetto** button (`Ctrl+Shift+E`, Web) writes a [Chrome Trace Event Format](https://docs.google.com/document/d/1CvAClvFfyA5R-PhYUmn5OOQtYMH4h6I0nSsKchNAySU/preview) `.json` file for the loaded trace. Open it in [ui.perfetto.dev](https://ui.perfetto.dev) (**Open trace file**).
 
+Both Desktop and Web prompt for **Full trace** vs **Current viewport** before saving. Headless CLI can clip with `--lo` / `--hi` (native BTF time units).
+
 The export includes:
 
 | Process | Tracks |
 |---------|--------|
 | **Cores** | One row per core; duration slices named by the running task |
 | **Tasks** | One row per task; on-CPU run slices (core in args); migration markers |
-| **STI** | Instant events per software-trace channel, plus TICK marks |
+| **STI** | Instant events per software-trace channel, plus TICK marks (tags and mutex/sem/queue are promoted below when present) |
 | **Intervals** | Paired `interval_start` / `interval_stop` spans (when present) |
+| **Tags** | Counter tracks (`ph: C`) for `tag0_event` … `tag7_event` numeric samples |
+| **Sync** | Mutex/sem/queue hold slices (take→give / send→recv) when sync STI is present |
 
-Headless (Desktop): `python3 builds/btf_viewer.py perfetto trace.btf -o trace.json`
+Headless (Desktop):
+
+```bash
+python3 builds/btf_viewer.py perfetto trace.btf -o trace.json
+python3 builds/btf_viewer.py perfetto trace.btf -o scoped.json --lo 100000 --hi 500000
+```
 
 ### Analysis Findings
 

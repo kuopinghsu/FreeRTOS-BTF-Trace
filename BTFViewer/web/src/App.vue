@@ -633,7 +633,7 @@
               </div><div>Exports the current view; includes CPU load when Load is on</div>
               <div class="k">
                 Perfetto / Ctrl+Shift+E
-              </div><div>Download Chrome Trace JSON for ui.perfetto.dev (full loaded trace)</div>
+              </div><div>Download Chrome Trace JSON for ui.perfetto.dev (full trace or current viewport)</div>
               <div class="k">
                 File names
               </div><div>Exports use timeline-with-load.* when CPU load is included</div>
@@ -1874,10 +1874,31 @@ function onExportPerfetto() {
     showToast('Open a trace before exporting Perfetto.', 'error')
     return
   }
+  const useViewport = window.confirm(
+    'Export the current timeline viewport?\n\n'
+    + 'OK — viewport only\n'
+    + 'Cancel — full loaded trace',
+  )
+  let range = {}
+  if (useViewport) {
+    const vp = timelineViewport.value
+    const lo = Math.floor(Number(vp?.timeStart))
+    const hi = Math.ceil(Number(vp?.timeEnd))
+    if (!(Number.isFinite(lo) && Number.isFinite(hi) && hi > lo)) {
+      showToast('Current viewport is empty; export cancelled.', 'error')
+      return
+    }
+    range = { lo, hi }
+  }
   const base = (activeTab.value?.name || 'trace').replace(/\.btf$/i, '')
   try {
-    downloadPerfetto(trace.value, `${base}.json`)
-    showToast('Perfetto exported', 'info')
+    downloadPerfetto(trace.value, `${base}.json`, range)
+    showToast(
+      useViewport
+        ? `Perfetto exported (viewport [${range.lo}, ${range.hi}))`
+        : 'Perfetto exported (full trace)',
+      'info',
+    )
   } catch (err) {
     showToast(`Perfetto export failed: ${err?.message || err}`, 'error')
   }

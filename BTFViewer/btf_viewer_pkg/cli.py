@@ -297,12 +297,18 @@ Writes Chrome Trace Event Format JSON (no protobuf). Tracks:
 
   Cores       one row per core; slices named by the running task
   Tasks       one row per task; on-CPU run slices (core in args)
-  STI         instant events per software-trace channel (+ TICK)
+  STI         instant events per software-trace channel (+ TICK);
+              tag and mutex/sem/queue channels are omitted when promoted below
   Intervals   paired interval_start / interval_stop spans (when present)
+  Tags        counter tracks (ph:C) for tag0_event … tag7_event samples
+  Sync        take/give (or send/recv) hold slices per mutex/sem/queue object
+
+Optional --lo / --hi clip the export to a time window (native trace units).
 
 examples:
   %(prog)s trace.btf -o trace.json
   %(prog)s tracedata/example-4cores.btf -o /tmp/example.json
+  %(prog)s trace.btf -o scoped.json --lo 100000 --hi 500000
 """
 
 _CLI_LO_HELP = (
@@ -659,6 +665,8 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
         "-o", "--output", required=True, metavar="PATH",
         help="output Chrome Trace JSON path (e.g. trace.json)",
     )
+    perfetto.add_argument("--lo", type=int, default=None, metavar="T", help=_CLI_LO_HELP)
+    perfetto.add_argument("--hi", type=int, default=None, metavar="T", help=_CLI_HI_HELP)
 
     return parser, {
         "report": report,
@@ -1469,13 +1477,19 @@ def _cli_snapshot_main(argv: List[str]) -> int:
 
 def _cli_perfetto_run(args: argparse.Namespace) -> int:
     path = os.path.abspath(args.trace)
+    if (args.lo is None) ^ (args.hi is None):
+        print("error: --lo and --hi must be given together", file=sys.stderr)
+        return 1
+    if args.lo is not None and args.hi is not None and args.hi <= args.lo:
+        print("error: --hi must be greater than --lo", file=sys.stderr)
+        return 1
     trace, err_load = _cli_load_trace(path)
     if err_load:
         print(err_load, file=sys.stderr)
         return 1
     out = os.path.abspath(args.output)
     try:
-        export_perfetto(trace, out)
+        export_perfetto(trace, out, lo=args.lo, hi=args.hi)
     except (OSError, TypeError, ValueError, AttributeError, RuntimeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

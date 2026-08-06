@@ -5873,6 +5873,36 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         """Export the loaded trace as Chrome Trace JSON for ui.perfetto.dev."""
         if self._trace is None:
             return
+        box = QMessageBox(self)
+        box.setWindowTitle("Export Perfetto")
+        box.setIcon(QMessageBox.Question)
+        box.setText("Choose the time range to export.")
+        box.setInformativeText(
+            "Full trace exports every event. Current viewport clips to the "
+            "visible timeline window (same units as the BTF timeScale)."
+        )
+        full_btn = box.addButton("Full trace", QMessageBox.AcceptRole)
+        vp_btn = box.addButton("Current viewport", QMessageBox.ActionRole)
+        box.addButton(QMessageBox.Cancel)
+        box.setDefaultButton(full_btn)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is None or clicked not in (full_btn, vp_btn):
+            return
+        lo = hi = None
+        if clicked is vp_btn:
+            scene = getattr(self._view, "_scene", None)
+            if scene is None:
+                QMessageBox.warning(
+                    self, "Export Perfetto",
+                    "Timeline is not ready; cannot read the current viewport.")
+                return
+            lo, hi = self._visible_time_ns_range(scene)
+            if hi <= lo:
+                QMessageBox.warning(
+                    self, "Export Perfetto",
+                    "Current viewport is empty; choose Full trace instead.")
+                return
         base = os.path.splitext(self._current_file)[0] if self._current_file else "trace"
         path, _ = QFileDialog.getSaveFileName(
             self, "Export Perfetto",
@@ -5882,9 +5912,13 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if not path:
             return
         try:
-            export_perfetto(self._trace, path)
+            export_perfetto(self._trace, path, lo=lo, hi=hi)
+            scope = (
+                f"viewport [{lo}, {hi})" if lo is not None
+                else "full trace"
+            )
             self.statusBar().showMessage(
-                f"Perfetto exported → {os.path.basename(path)}", 4000)
+                f"Perfetto exported ({scope}) → {os.path.basename(path)}", 4000)
         except (OSError, TypeError, ValueError, AttributeError, RuntimeError) as exc:
             QMessageBox.critical(
                 self, "Export Error", f"Could not export Perfetto file:\n{exc}")
