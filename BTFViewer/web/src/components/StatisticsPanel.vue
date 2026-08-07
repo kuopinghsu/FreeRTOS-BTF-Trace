@@ -81,28 +81,14 @@
     <!-- Core utilization -->
     <template v-if="trace?.coreNames?.length > 0">
       <div class="stats-sep" />
-      <div
-        class="stats-section-title collapsible"
-        @click="coresCollapsed = !coresCollapsed"
+      <StatsSectionHeader
+        :collapsed="coresCollapsed"
+        :pinned="isSectionPinned('cores')"
+        @toggle="toggleSectionCollapse('cores')"
+        @toggle-pin="toggleSectionPin('cores')"
       >
-        <svg
-          class="chevron"
-          :class="{ collapsed: coresCollapsed }"
-          viewBox="0 0 10 10"
-          width="10"
-          height="10"
-        >
-          <polyline
-            points="2,3 5,7 8,3"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.5"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          />
-        </svg>
         Core Utilisation (excl. IDLE/TICK){{ scopeSuffixStr }}
-      </div>
+      </StatsSectionHeader>
       <template v-if="!coresCollapsed">
         <div
           class="stats-util-scroll"
@@ -143,12 +129,14 @@
     <!-- Core time breakdown -->
     <template v-if="coreTimeBreakdown.length">
       <div class="stats-sep" />
-      <div class="stats-section-title collapsible" @click="coreBreakdownCollapsed = !coreBreakdownCollapsed">
-        <svg class="chevron" :class="{ collapsed: coreBreakdownCollapsed }" viewBox="0 0 10 10" width="10" height="10">
-          <polyline points="2,3 5,7 8,3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
+      <StatsSectionHeader
+        :collapsed="coreBreakdownCollapsed"
+        :pinned="isSectionPinned('core_breakdown')"
+        @toggle="toggleSectionCollapse('core_breakdown')"
+        @toggle-pin="toggleSectionPin('core_breakdown')"
+      >
         Core Time Breakdown{{ scopeSuffixStr }}
-      </div>
+      </StatsSectionHeader>
       <template v-if="!coreBreakdownCollapsed">
         <div class="stats-table-block">
           <div class="stats-table-wrap" :style="{ maxHeight: tableHeight('core_breakdown') + 'px' }">
@@ -186,28 +174,14 @@
 
     <!-- Top tasks -->
     <div class="stats-sep" />
-    <div
-      class="stats-section-title collapsible"
-      @click="tasksCollapsed = !tasksCollapsed"
+    <StatsSectionHeader
+      :collapsed="tasksCollapsed"
+      :pinned="isSectionPinned('tasks')"
+      @toggle="toggleSectionCollapse('tasks')"
+      @toggle-pin="toggleSectionPin('tasks')"
     >
-      <svg
-        class="chevron"
-        :class="{ collapsed: tasksCollapsed }"
-        viewBox="0 0 10 10"
-        width="10"
-        height="10"
-      >
-        <polyline
-          points="2,3 5,7 8,3"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.5"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        />
-      </svg>
       Top Tasks by CPU (excl. IDLE/TICK){{ scopeSuffixStr }}
-    </div>
+    </StatsSectionHeader>
     <template v-if="!tasksCollapsed">
       <div
         v-if="topTasks.length === 0"
@@ -253,28 +227,14 @@
 
     <!-- Trace health (TICK) -->
     <div class="stats-sep" />
-    <div
-      class="stats-section-title collapsible"
-      @click="healthCollapsed = !healthCollapsed"
+    <StatsSectionHeader
+      :collapsed="healthCollapsed"
+      :pinned="isSectionPinned('health')"
+      @toggle="toggleSectionCollapse('health')"
+      @toggle-pin="toggleSectionPin('health')"
     >
-      <svg
-        class="chevron"
-        :class="{ collapsed: healthCollapsed }"
-        viewBox="0 0 10 10"
-        width="10"
-        height="10"
-      >
-        <polyline
-          points="2,3 5,7 8,3"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.5"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        />
-      </svg>
       Trace Health (TICK){{ scopeSuffixStr }}
-    </div>
+    </StatsSectionHeader>
     <template v-if="!healthCollapsed">
       <div
         v-if="!tickHealth.tickCount"
@@ -398,28 +358,14 @@
 
     <!-- Core migrations -->
     <div class="stats-sep" />
-    <div
-      class="stats-section-title collapsible"
-      @click="migrationCollapsed = !migrationCollapsed"
+    <StatsSectionHeader
+      :collapsed="migrationCollapsed"
+      :pinned="isSectionPinned('migrations')"
+      @toggle="toggleSectionCollapse('migrations')"
+      @toggle-pin="toggleSectionPin('migrations')"
     >
-      <svg
-        class="chevron"
-        :class="{ collapsed: migrationCollapsed }"
-        viewBox="0 0 10 10"
-        width="10"
-        height="10"
-      >
-        <polyline
-          points="2,3 5,7 8,3"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.5"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        />
-      </svg>
       Core Migrations{{ scopeSuffixStr }}
-    </div>
+    </StatsSectionHeader>
     <template v-if="!migrationCollapsed">
       <div
         v-if="migrationStats.length === 0"
@@ -540,12 +486,14 @@
     <!-- Core-pair migration summary -->
     <template v-if="corePairRows.length">
       <div class="stats-sep" />
-      <div class="stats-section-title collapsible" @click="corePairsCollapsed = !corePairsCollapsed">
-        <svg class="chevron" :class="{ collapsed: corePairsCollapsed }" viewBox="0 0 10 10" width="10" height="10">
-          <polyline points="2,3 5,7 8,3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
+      <StatsSectionHeader
+        :collapsed="corePairsCollapsed"
+        :pinned="isSectionPinned('core_pairs')"
+        @toggle="toggleSectionCollapse('core_pairs')"
+        @toggle-pin="toggleSectionPin('core_pairs')"
+      >
         Core-Pair Migration Summary{{ scopeSuffixStr }}
-      </div>
+      </StatsSectionHeader>
       <template v-if="!corePairsCollapsed">
         <div class="stats-table-block">
           <div class="stats-table-wrap" :style="{ maxHeight: tableHeight('core_pairs') + 'px' }">
@@ -594,28 +542,14 @@
 
     <!-- Execution time per slice -->
     <div class="stats-sep" />
-    <div
-      class="stats-section-title collapsible"
-      @click="execSliceCollapsed = !execSliceCollapsed"
+    <StatsSectionHeader
+      :collapsed="execSliceCollapsed"
+      :pinned="isSectionPinned('exec')"
+      @toggle="toggleSectionCollapse('exec')"
+      @toggle-pin="toggleSectionPin('exec')"
     >
-      <svg
-        class="chevron"
-        :class="{ collapsed: execSliceCollapsed }"
-        viewBox="0 0 10 10"
-        width="10"
-        height="10"
-      >
-        <polyline
-          points="2,3 5,7 8,3"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.5"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        />
-      </svg>
       Execution Time Per Slice{{ scopeSuffixStr }}
-    </div>
+    </StatsSectionHeader>
     <template v-if="!execSliceCollapsed">
       <div
         v-if="execSliceStats.length === 0"
@@ -740,28 +674,14 @@
 
     <!-- Blocking time -->
     <div class="stats-sep" />
-    <div
-      class="stats-section-title collapsible"
-      @click="blockingCollapsed = !blockingCollapsed"
+    <StatsSectionHeader
+      :collapsed="blockingCollapsed"
+      :pinned="isSectionPinned('block')"
+      @toggle="toggleSectionCollapse('block')"
+      @toggle-pin="toggleSectionPin('block')"
     >
-      <svg
-        class="chevron"
-        :class="{ collapsed: blockingCollapsed }"
-        viewBox="0 0 10 10"
-        width="10"
-        height="10"
-      >
-        <polyline
-          points="2,3 5,7 8,3"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.5"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        />
-      </svg>
       Blocking Time (off-CPU gap){{ scopeSuffixStr }}
-    </div>
+    </StatsSectionHeader>
     <template v-if="!blockingCollapsed">
       <div
         v-if="blockingStats.length === 0"
@@ -879,28 +799,14 @@
 
     <!-- Inter-arrival time -->
     <div class="stats-sep" />
-    <div
-      class="stats-section-title collapsible"
-      @click="interArrivalCollapsed = !interArrivalCollapsed"
+    <StatsSectionHeader
+      :collapsed="interArrivalCollapsed"
+      :pinned="isSectionPinned('inter')"
+      @toggle="toggleSectionCollapse('inter')"
+      @toggle-pin="toggleSectionPin('inter')"
     >
-      <svg
-        class="chevron"
-        :class="{ collapsed: interArrivalCollapsed }"
-        viewBox="0 0 10 10"
-        width="10"
-        height="10"
-      >
-        <polyline
-          points="2,3 5,7 8,3"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.5"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        />
-      </svg>
       Inter-Arrival Time{{ scopeSuffixStr }}
-    </div>
+    </StatsSectionHeader>
     <template v-if="!interArrivalCollapsed">
       <div
         v-if="interArrivalStats.length === 0"
@@ -1018,28 +924,14 @@
 
     <!-- Preemption Chain Analysis -->
     <div class="stats-sep" />
-    <div
-      class="stats-section-title collapsible"
-      @click="preemptionCollapsed = !preemptionCollapsed"
+    <StatsSectionHeader
+      :collapsed="preemptionCollapsed"
+      :pinned="isSectionPinned('preemption')"
+      @toggle="toggleSectionCollapse('preemption')"
+      @toggle-pin="toggleSectionPin('preemption')"
     >
-      <svg
-        class="chevron"
-        :class="{ collapsed: preemptionCollapsed }"
-        viewBox="0 0 10 10"
-        width="10"
-        height="10"
-      >
-        <polyline
-          points="2,3 5,7 8,3"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.5"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        />
-      </svg>
       Preemption Chain Analysis{{ scopeSuffixStr }}
-    </div>
+    </StatsSectionHeader>
     <template v-if="!preemptionCollapsed">
       <div
         v-if="preemptionComputing"
@@ -1142,28 +1034,14 @@
     <!-- Priority inheritance -->
     <template v-if="trace?.hasPriorityInstrumentation">
       <div class="stats-sep" />
-      <div
-        class="stats-section-title collapsible"
-        @click="priorityCollapsed = !priorityCollapsed"
+      <StatsSectionHeader
+        :collapsed="priorityCollapsed"
+        :pinned="isSectionPinned('priority')"
+        @toggle="toggleSectionCollapse('priority')"
+        @toggle-pin="toggleSectionPin('priority')"
       >
-        <svg
-          class="chevron"
-          :class="{ collapsed: priorityCollapsed }"
-          viewBox="0 0 10 10"
-          width="10"
-          height="10"
-        >
-          <polyline
-            points="2,3 5,7 8,3"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.5"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          />
-        </svg>
         Priority Inheritance{{ scopeSuffixStr }}
-      </div>
+      </StatsSectionHeader>
       <template v-if="!priorityCollapsed">
         <p class="range-hint priority-hint">
           Detects tasks boosted above their <code>create pri</code> by
@@ -1266,28 +1144,14 @@
     <!-- Mutex / Semaphore pairing -->
     <template v-if="trace?.hasSyncObjectInstrumentation">
       <div class="stats-sep" />
-      <div
-        class="stats-section-title collapsible"
-        @click="syncCollapsed = !syncCollapsed"
+      <StatsSectionHeader
+        :collapsed="syncCollapsed"
+        :pinned="isSectionPinned('sync')"
+        @toggle="toggleSectionCollapse('sync')"
+        @toggle-pin="toggleSectionPin('sync')"
       >
-        <svg
-          class="chevron"
-          :class="{ collapsed: syncCollapsed }"
-          viewBox="0 0 10 10"
-          width="10"
-          height="10"
-        >
-          <polyline
-            points="2,3 5,7 8,3"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.5"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          />
-        </svg>
         Mutex / Semaphore{{ scopeSuffixStr }}
-      </div>
+      </StatsSectionHeader>
       <template v-if="!syncCollapsed">
         <p class="range-hint priority-hint">
           Pairs <code>take</code>/<code>give</code> STI events by object pointer
@@ -1469,15 +1333,14 @@
     <!-- Queue pairing -->
     <template v-if="trace?.hasSyncObjectInstrumentation">
       <div class="stats-sep" />
-      <div
-        class="stats-section-title collapsible"
-        @click="queueCollapsed = !queueCollapsed"
+      <StatsSectionHeader
+        :collapsed="queueCollapsed"
+        :pinned="isSectionPinned('queue')"
+        @toggle="toggleSectionCollapse('queue')"
+        @toggle-pin="toggleSectionPin('queue')"
       >
-        <svg class="chevron" :class="{ collapsed: queueCollapsed }" viewBox="0 0 10 10" width="10" height="10">
-          <polyline points="2,3 5,7 8,3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
         Queue{{ scopeSuffixStr }}
-      </div>
+      </StatsSectionHeader>
       <template v-if="!queueCollapsed">
         <p class="range-hint priority-hint">
           Pairs <code>send</code>/<code>recv</code> STI events by queue pointer.
@@ -1522,12 +1385,14 @@
     <!-- Task lifecycle -->
     <template v-if="lifecycleStats.length">
       <div class="stats-sep" />
-      <div class="stats-section-title collapsible" @click="lifecycleCollapsed = !lifecycleCollapsed">
-        <svg class="chevron" :class="{ collapsed: lifecycleCollapsed }" viewBox="0 0 10 10" width="10" height="10">
-          <polyline points="2,3 5,7 8,3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
+      <StatsSectionHeader
+        :collapsed="lifecycleCollapsed"
+        :pinned="isSectionPinned('lifecycle')"
+        @toggle="toggleSectionCollapse('lifecycle')"
+        @toggle-pin="toggleSectionPin('lifecycle')"
+      >
         Task lifecycle{{ scopeSuffixStr }}
-      </div>
+      </StatsSectionHeader>
       <template v-if="!lifecycleCollapsed">
         <div class="stats-table-block">
           <div class="stats-table-wrap" :style="{ maxHeight: tableHeight('lifecycle') + 'px' }">
@@ -1579,12 +1444,14 @@
     <!-- Core affinity -->
     <template v-if="coreAffinityRows.length">
       <div class="stats-sep" />
-      <div class="stats-section-title collapsible" @click="affinityCollapsed = !affinityCollapsed">
-        <svg class="chevron" :class="{ collapsed: affinityCollapsed }" viewBox="0 0 10 10" width="10" height="10">
-          <polyline points="2,3 5,7 8,3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
+      <StatsSectionHeader
+        :collapsed="affinityCollapsed"
+        :pinned="isSectionPinned('affinity')"
+        @toggle="toggleSectionCollapse('affinity')"
+        @toggle-pin="toggleSectionPin('affinity')"
+      >
         Core Affinity{{ scopeSuffixStr }}
-      </div>
+      </StatsSectionHeader>
       <template v-if="!affinityCollapsed">
         <div class="stats-table-block">
           <div class="stats-table-wrap" :style="{ maxHeight: tableHeight('affinity') + 'px' }">
@@ -1629,12 +1496,14 @@
 
     <!-- Deadlines / CPU budget -->
     <div class="stats-sep" />
-    <div class="stats-section-title collapsible" @click="deadlineCollapsed = !deadlineCollapsed">
-      <svg class="chevron" :class="{ collapsed: deadlineCollapsed }" viewBox="0 0 10 10" width="10" height="10">
-        <polyline points="2,3 5,7 8,3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
-      </svg>
+    <StatsSectionHeader
+      :collapsed="deadlineCollapsed"
+      :pinned="isSectionPinned('deadline')"
+      @toggle="toggleSectionCollapse('deadline')"
+      @toggle-pin="toggleSectionPin('deadline')"
+    >
       Deadlines / CPU budget{{ scopeSuffixStr }}
-    </div>
+    </StatsSectionHeader>
     <template v-if="!deadlineCollapsed">
       <div class="deadline-settings-hint">
         <template v-if="!hasDeadlineConfig">Configure deadline / CPU budget thresholds in </template>
@@ -1714,28 +1583,14 @@
 
     <!-- Interval Analysis -->
     <div class="stats-sep" />
-    <div
-      class="stats-section-title collapsible"
-      @click="intervalsCollapsed = !intervalsCollapsed"
+    <StatsSectionHeader
+      :collapsed="intervalsCollapsed"
+      :pinned="isSectionPinned('intervals')"
+      @toggle="toggleSectionCollapse('intervals')"
+      @toggle-pin="toggleSectionPin('intervals')"
     >
-      <svg
-        class="chevron"
-        :class="{ collapsed: intervalsCollapsed }"
-        viewBox="0 0 10 10"
-        width="10"
-        height="10"
-      >
-        <polyline
-          points="2,3 5,7 8,3"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.5"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        />
-      </svg>
       Interval Analysis{{ scopeSuffixStr }}
-    </div>
+    </StatsSectionHeader>
     <template v-if="!intervalsCollapsed">
       <div
         v-if="intervalStats.length === 0"
@@ -1825,28 +1680,14 @@
 
     <!-- Tag Analysis -->
     <div class="stats-sep" />
-    <div
-      class="stats-section-title collapsible"
-      @click="tagsCollapsed = !tagsCollapsed"
+    <StatsSectionHeader
+      :collapsed="tagsCollapsed"
+      :pinned="isSectionPinned('tags')"
+      @toggle="toggleSectionCollapse('tags')"
+      @toggle-pin="toggleSectionPin('tags')"
     >
-      <svg
-        class="chevron"
-        :class="{ collapsed: tagsCollapsed }"
-        viewBox="0 0 10 10"
-        width="10"
-        height="10"
-      >
-        <polyline
-          points="2,3 5,7 8,3"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.5"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        />
-      </svg>
       Tag Analysis{{ scopeSuffixStr }}
-    </div>
+    </StatsSectionHeader>
     <template v-if="!tagsCollapsed">
       <div
         v-if="tagStats.length === 0"
@@ -2575,6 +2416,8 @@ import {
 } from '../utils/statsTableSort.js'
 import TraceCompareDialog from './TraceCompareDialog.vue'
 import LoadBalanceGauge from './LoadBalanceGauge.vue'
+import StatsSectionHeader from './StatsSectionHeader.vue'
+import { normalizeStatsPins, toggleStatsPin } from '../utils/statsPins.js'
 import { buildHistogramModel } from '../utils/histogramModel.js'
 import { plotTabsForKind, resolvePlotTabSwitch } from '../utils/plotTabs.js'
 import { classifyLoadBalance, loadBalanceGaugeImgHtml, loadBalanceMetrics } from '../utils/loadBalanceGauge.js'
@@ -2589,11 +2432,12 @@ const props = defineProps({
   scopeToCursors: { type: Boolean, default: true },
   analysisSettings: { type: Object, default: () => ({}) },
   sectionCollapsedState: { type: Object, default: null },
+  sectionPins: { type: Array, default: () => [] },
 })
 
 const emit = defineEmits([
   'highlightTask', 'plotPointActivate', 'segmentJump', 'update:openPlot', 'update:sectionHeights',
-  'update:scopeToCursors', 'update:sectionCollapsedState',
+  'update:scopeToCursors', 'update:sectionCollapsedState', 'update:sectionPins',
   'openPairHeatmap', 'openPairChord', 'openSettings',
 ])
 
@@ -2625,49 +2469,80 @@ const scopeToCursorsModel = computed({
   set: (v) => emit('update:scopeToCursors', v),
 })
 
-const STATS_SECTION_FLAGS = [
-  coresCollapsed,
-  tasksCollapsed,
-  healthCollapsed,
-  migrationCollapsed,
-  execSliceCollapsed,
-  blockingCollapsed,
-  interArrivalCollapsed,
-  preemptionCollapsed,
-  priorityCollapsed,
-  syncCollapsed,
-  queueCollapsed,
-  lifecycleCollapsed,
-  deadlineCollapsed,
-  intervalsCollapsed,
-  tagsCollapsed,
-  corePairsCollapsed,
-  coreBreakdownCollapsed,
-  affinityCollapsed,
-]
+const SECTION_COLLAPSE_REFS = {
+  cores: coresCollapsed,
+  core_breakdown: coreBreakdownCollapsed,
+  tasks: tasksCollapsed,
+  health: healthCollapsed,
+  migrations: migrationCollapsed,
+  core_pairs: corePairsCollapsed,
+  exec: execSliceCollapsed,
+  block: blockingCollapsed,
+  inter: interArrivalCollapsed,
+  preemption: preemptionCollapsed,
+  priority: priorityCollapsed,
+  sync: syncCollapsed,
+  queue: queueCollapsed,
+  lifecycle: lifecycleCollapsed,
+  affinity: affinityCollapsed,
+  deadline: deadlineCollapsed,
+  intervals: intervalsCollapsed,
+  tags: tagsCollapsed,
+}
+
+const STATS_SECTION_FLAGS = Object.values(SECTION_COLLAPSE_REFS)
+
+const pinnedSet = computed(() => new Set(normalizeStatsPins(props.sectionPins)))
+
+function isSectionPinned(id) {
+  return pinnedSet.value.has(id)
+}
+
+function toggleSectionPin(id) {
+  emit('update:sectionPins', toggleStatsPin(props.sectionPins, id))
+  const flag = SECTION_COLLAPSE_REFS[id]
+  if (flag) flag.value = false
+}
+
+function toggleSectionCollapse(id) {
+  if (isSectionPinned(id)) return
+  const flag = SECTION_COLLAPSE_REFS[id]
+  if (flag) flag.value = !flag.value
+}
 
 function expandAllSections() {
   for (const flag of STATS_SECTION_FLAGS) flag.value = false
 }
 
 function collapseAllSections() {
-  for (const flag of STATS_SECTION_FLAGS) flag.value = true
+  for (const [id, flag] of Object.entries(SECTION_COLLAPSE_REFS)) {
+    if (pinnedSet.value.has(id)) continue
+    flag.value = true
+  }
 }
 
 function applyDeferHeavySectionCollapse(tr) {
   if (!tr || props.sectionCollapsedState) return
   if (!traceNeedsDeferredStatsLoad(tr)) return
-  healthCollapsed.value = true
-  migrationCollapsed.value = true
-  execSliceCollapsed.value = true
-  blockingCollapsed.value = true
-  interArrivalCollapsed.value = true
-  preemptionCollapsed.value = true
-  priorityCollapsed.value = true
-  syncCollapsed.value = true
-  intervalsCollapsed.value = true
-  tagsCollapsed.value = true
+  const skip = pinnedSet.value
+  if (!skip.has('health')) healthCollapsed.value = true
+  if (!skip.has('migrations')) migrationCollapsed.value = true
+  if (!skip.has('exec')) execSliceCollapsed.value = true
+  if (!skip.has('block')) blockingCollapsed.value = true
+  if (!skip.has('inter')) interArrivalCollapsed.value = true
+  if (!skip.has('preemption')) preemptionCollapsed.value = true
+  if (!skip.has('priority')) priorityCollapsed.value = true
+  if (!skip.has('sync')) syncCollapsed.value = true
+  if (!skip.has('intervals')) intervalsCollapsed.value = true
+  if (!skip.has('tags')) tagsCollapsed.value = true
 }
+
+watch(pinnedSet, (pins) => {
+  for (const id of pins) {
+    const flag = SECTION_COLLAPSE_REFS[id]
+    if (flag) flag.value = false
+  }
+}, { immediate: true })
 
 const workerExecRows = ref([])
 const workerBlockRows = ref([])

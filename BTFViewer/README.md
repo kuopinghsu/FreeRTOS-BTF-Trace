@@ -934,7 +934,7 @@ The **Statistics** tab in the right-side panel (Desktop dock + Web tab) shows pe
 
 At the top, **Limit to cursor range (C1–Cn)** restricts all statistics (and Analysis Findings) to the time window from the first placed cursor through the last (requires 2+ cursors). Section titles show **(cursor range)** when scoped. Clearing all cursors returns to full-trace statistics immediately.
 
-**Layout:** metric tables are **collapsible** (click a section title) and **resizable** (drag the thin handle below each table). On Desktop, drag the splitter between the timeline and CPU load graph to resize that pane; sizes are saved in `btf_viewer.rc`. On Web, right-panel width and stats table heights persist in `localStorage`.
+**Layout:** metric tables are **collapsible** (click a section title) and **resizable** (drag the thin handle below each table). Use the **pin** icon on a section header to keep that table expanded (pin survives **Collapse all**). Pins are saved to `btf_viewer.rc` (`[stats] pinned_sections=…`, Desktop) or `localStorage` settings (`statsPinnedSections`, Web). On Desktop, drag the splitter between the timeline and CPU load graph to resize that pane; sizes are saved in `btf_viewer.rc`. On Web, right-panel width and stats table heights persist in `localStorage`.
 
 It shows (in panel order):
 

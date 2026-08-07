@@ -118,5 +118,35 @@ class LegendDockRestoreTest(unittest.TestCase):
         win2.close()
         win2.close()
 
+    def test_spurious_visibility_false_does_not_poison_rc(self) -> None:
+        """Legend is not Closable — Qt hide signals must not write show_legend=false."""
+        from PySide6.QtWidgets import QApplication
+
+        app = QApplication.instance()
+        if app is None:
+            app = QApplication([])
+        app.setFont(self.btf._application_ui_font(self.btf.UI_FONT_SIZE))
+
+        win = self.btf.MainWindow()
+        win.show()
+        _wait_ms(app, 500)
+        self.assertTrue(win._show_legend)
+        self.assertTrue(_read_rc_bool(self.rc_path, "show_legend"))
+
+        # Simulate a spurious sibling-raise hide after startup has settled.
+        win._legend_dock.visibilityChanged.emit(False)
+        app.processEvents()
+        _wait_ms(app, 100)
+
+        self.assertTrue(
+            win._show_legend,
+            "spurious visibilityChanged(False) cleared show_legend preference",
+        )
+        self.assertTrue(
+            _read_rc_bool(self.rc_path, "show_legend"),
+            f"RC poisoned by spurious hide:\n{Path(self.rc_path).read_text()}",
+        )
+        win.close()
+
 if __name__ == "__main__":
     unittest.main()

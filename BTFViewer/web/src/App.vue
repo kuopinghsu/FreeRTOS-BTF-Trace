@@ -18,7 +18,7 @@
       :loading-pct="loadingPct"
       :loading-msg="loadingMsg"
       :time-scale="trace?.timeScale || 'ns'"
-      @update:model-value="v => Object.assign(timelineOptions, v)"
+      @update:model-value="onToolbarOptionsUpdate"
       @file-error="onFileError"
       @trace-reading="onTraceReading"
       @trace-loaded="onTraceLoaded"
@@ -366,10 +366,12 @@
                 :scope-to-cursors="activeTab?.scopeToCursors !== false"
                 :analysis-settings="appSettings"
                 :section-collapsed-state="activeTab?.statsSectionCollapsed ?? null"
+                :section-pins="appSettings.statsPinnedSections || []"
                 @update:open-plot="onOpenPlotChange"
                 @update:section-heights="onSectionHeightsChange"
                 @update:scope-to-cursors="onStatsScopeChange"
                 @update:section-collapsed-state="onStatsSectionCollapsedChange"
+                @update:section-pins="onStatsSectionPinsChange"
                 @highlight-task="onHighlightClick"
                 @plot-point-activate="onStatsPlotPointActivate"
                 @segment-jump="onStatsSegmentJump"
@@ -793,7 +795,7 @@
             :class="{ active: timelineOptions.showSti !== false }"
             type="button"
             title="Show or hide STI event markers"
-            @click="timelineOptions.showSti = timelineOptions.showSti === false"
+            @click="timelineOptions.showSti = timelineOptions.showSti === false; persistTimelineViewPrefs()"
           >
             STI
           </button>
@@ -802,7 +804,7 @@
             :class="{ active: timelineOptions.showGrid }"
             type="button"
             title="Show or hide the time grid"
-            @click="timelineOptions.showGrid = !timelineOptions.showGrid"
+            @click="timelineOptions.showGrid = !timelineOptions.showGrid; persistTimelineViewPrefs()"
           >
             Grid
           </button>
@@ -858,6 +860,7 @@ import {
   sessionCursorsSlotCount,
 } from './utils/sessionPortable.js'
 import { downloadPerfetto } from './utils/perfettoExport.js'
+import { normalizeStatsPins } from './utils/statsPins.js'
 import { computeFindHits, stepFindHitIndex } from './utils/findAnalysis.js'
 import { traceQualitySummary } from './utils/traceQuality.js'
 import { isBtfOpenName, loadBtfEntriesFromFile } from './utils/btfLoad.js'
@@ -1008,10 +1011,58 @@ function syncTimelineOptionsFromSettings(s = appSettings) {
   timelineOptions.showSti = s.showSti
   timelineOptions.showCpuLoad = s.showCpuLoad
   timelineOptions.showHoverHighlight = s.hoverHighlight
+  timelineOptions.viewMode = s.viewMode === 'core' ? 'core' : 'task'
+  timelineOptions.orientation = s.orientation === 'v' ? 'v' : 'h'
+  timelineOptions.stiLogScale = !!s.stiLogScale
   timelineOptions.layoutRev += 1
   if (!s.showStats && rightPanelTab.value === 'stats') {
     rightPanelTab.value = 'marks'
   }
+}
+
+/** Persist toolbar/hotkey view prefs that live in appSettings. */
+function persistTimelineViewPrefs() {
+  let dirty = false
+  if (appSettings.darkMode !== !!timelineOptions.darkMode) {
+    appSettings.darkMode = !!timelineOptions.darkMode
+    dirty = true
+  }
+  if (appSettings.showGrid !== !!timelineOptions.showGrid) {
+    appSettings.showGrid = !!timelineOptions.showGrid
+    dirty = true
+  }
+  if (appSettings.showSti !== (timelineOptions.showSti !== false)) {
+    appSettings.showSti = timelineOptions.showSti !== false
+    dirty = true
+  }
+  if (appSettings.showCpuLoad !== !!timelineOptions.showCpuLoad) {
+    appSettings.showCpuLoad = !!timelineOptions.showCpuLoad
+    dirty = true
+  }
+  if (appSettings.hoverHighlight !== !!timelineOptions.showHoverHighlight) {
+    appSettings.hoverHighlight = !!timelineOptions.showHoverHighlight
+    dirty = true
+  }
+  const viewMode = timelineOptions.viewMode === 'core' ? 'core' : 'task'
+  if (appSettings.viewMode !== viewMode) {
+    appSettings.viewMode = viewMode
+    dirty = true
+  }
+  const orientation = timelineOptions.orientation === 'v' ? 'v' : 'h'
+  if (appSettings.orientation !== orientation) {
+    appSettings.orientation = orientation
+    dirty = true
+  }
+  if (appSettings.stiLogScale !== !!timelineOptions.stiLogScale) {
+    appSettings.stiLogScale = !!timelineOptions.stiLogScale
+    dirty = true
+  }
+  if (dirty) saveSettings(appSettings)
+}
+
+function onToolbarOptionsUpdate(v) {
+  Object.assign(timelineOptions, v || {})
+  persistTimelineViewPrefs()
 }
 
 /** Show Statistics tab when opening or re-selecting a trace (mirrors desktop force=True). */
@@ -1715,6 +1766,11 @@ function onStatsScopeChange(v) {
 function onStatsSectionCollapsedChange(v) {
   if (activeTab.value) activeTab.value.statsSectionCollapsed = v ? { ...v } : null
   scheduleSessionSave()
+}
+
+function onStatsSectionPinsChange(v) {
+  appSettings.statsPinnedSections = normalizeStatsPins(v)
+  saveSettings(appSettings)
 }
 
 function onFindQueryChange(v) {
@@ -2529,34 +2585,41 @@ function onGlobalKeydown(e) {
   switch (key) {
     case '1':
       timelineOptions.viewMode = 'task'
+      persistTimelineViewPrefs()
       e.preventDefault()
       break
     case '2':
       timelineOptions.viewMode = 'core'
+      persistTimelineViewPrefs()
       e.preventDefault()
       break
     case 'h':
       if (!mod) {
         timelineOptions.orientation = 'h'
+        persistTimelineViewPrefs()
         e.preventDefault()
       }
       break
     case 'v':
       timelineOptions.orientation = 'v'
+      persistTimelineViewPrefs()
       e.preventDefault()
       break
     case 'g':
       if (!mod) {
         timelineOptions.showGrid = !timelineOptions.showGrid
+        persistTimelineViewPrefs()
         e.preventDefault()
       }
       break
     case 'i':
       timelineOptions.showSti = !timelineOptions.showSti
+      persistTimelineViewPrefs()
       e.preventDefault()
       break
     case 'd':
       timelineOptions.darkMode = !timelineOptions.darkMode
+      persistTimelineViewPrefs()
       e.preventDefault()
       break
     case 'b':

@@ -1513,6 +1513,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._apply_dock_visibility_respecting_rc()
             if self._show_stats:
                 self._focus_statistics_panel()
+            # panel raise_() can hide the legend split sibling — restore last.
+            if self._show_legend:
+                self._legend_dock.raise_()
         finally:
             self._dock_layout_settling = False
             self._restoring_settings = False
@@ -2754,18 +2757,37 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         """Apply Layout checkboxes after restoreState / resizeDocks (deferred)."""
         self._complete_startup_dock_layout()
 
+    def _restore_legend_if_preferred(self) -> None:
+        """Re-show the legend when prefs say it should be on but Qt hid it."""
+        if (self._shutting_down or self._applying_dock_prefs
+                or self._restoring_settings or self._dock_layout_settling
+                or not hasattr(self, "_legend_dock")):
+            return
+        if self._vm.settings._model.show_legend and not self._legend_dock.isVisible():
+            self._apply_dock_visibility_from_prefs()
+
     def _on_legend_dock_visibility_changed(self, visible: bool) -> None:
-        """Sync show_legend when the user closes/opens the dock via its title bar."""
+        """Keep show_legend in sync — but never poison .rc from Qt quirks.
+
+        The Legend dock is not Closable (no title-bar X). Intentional hide goes
+        through Settings → Layout. Qt may still emit visibilityChanged(False)
+        when the Statistics panel is raised; writing that to btf_viewer.rc made
+        the legend disappear on the next launch.
+        """
         if (self._shutting_down
                 or self._applying_dock_prefs
                 or self._restoring_settings
                 or self._dock_layout_settling
                 or not self._startup_dock_layout_done):
             return
+        if not visible:
+            if self._vm.settings._model.show_legend:
+                QTimer.singleShot(0, self._restore_legend_if_preferred)
+            return
         # Update the model directly — the show_legend setter emits settings_changed
         # which would call _apply_dock_visibility_from_prefs() and fight the user.
-        self._vm.settings._model.show_legend = bool(visible)
-        self._settings.set("view", "show_legend", str(visible).lower(), flush=False)
+        self._vm.settings._model.show_legend = True
+        self._settings.set("view", "show_legend", "true", flush=False)
 
     def _apply_settings_to_all_tabs_impl(self) -> None:
         self._view.set_font_size(self._font_size_val)
@@ -2834,6 +2856,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 _h = s.get_int("stats", f"table_height_{_sid}", _default)
                 _stats_heights[_sid] = _h
             self._stats_panel.apply_section_table_heights(_stats_heights)
+            self._stats_panel.set_section_pins(
+                s.get("stats", "pinned_sections", ""), emit=False)
 
         # Dock layout: sizes from dock_metrics; visibility from [view] show_* keys.
         # Qt saveState/restoreState embeds dock visibility and fights show_legend,
@@ -2996,6 +3020,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             if hasattr(self, "_stats_panel"):
                 for _sid, _h in self._stats_panel.section_table_heights().items():
                     s.set("stats", f"table_height_{_sid}", str(_h), flush=False)
+                s.set(
+                    "stats", "pinned_sections",
+                    stats_pins_to_rc(self._stats_panel.section_pins()),
+                    flush=False,
+                )
 
             # Dock layout - serialise dock sizes/positions (visibility is in [view]).
             _DOCK_LAYOUT_VERSION = DEFAULT_DOCK_LAYOUT_VERSION
@@ -3990,8 +4019,22 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._stats_panel.open_pair_heatmap.connect(self._on_open_pair_heatmap)
         self._stats_panel.open_pair_chord.connect(self._on_open_pair_chord)
         self._stats_panel.open_settings_requested.connect(self._open_settings)
+        self._stats_panel.section_pins_changed.connect(self._on_section_pins_changed)
         self._stats_panel._btn_compare_mig.clicked.connect(self._open_trace_compare)
         self.setAcceptDrops(True)
+
+    def _on_section_pins_changed(self, _pins: list) -> None:
+        """Persist pinned statistics sections to btf_viewer.rc immediately."""
+        if self._restoring_settings or self._shutting_down:
+            return
+        try:
+            self._settings.set(
+                "stats", "pinned_sections",
+                stats_pins_to_rc(self._stats_panel.section_pins()),
+                flush=True,
+            )
+        except Exception:
+            pass
 
     def _build_menus(self) -> None:
         mb = self.menuBar()

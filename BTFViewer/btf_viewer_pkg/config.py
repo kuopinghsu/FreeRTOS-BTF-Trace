@@ -164,7 +164,56 @@ def default_section_collapsed() -> Dict[str, bool]:
         "core_breakdown": False,
         "affinity": False,
         "deadline": False,
+        "tags": False,
     }
+
+# Statistics sections that can be pinned open (stay expanded). Keep in sync with
+# web/src/utils/statsPins.js.
+STATS_PINNABLE_SECTIONS: Tuple[str, ...] = (
+    "cores",
+    "core_breakdown",
+    "tasks",
+    "health",
+    "migrations",
+    "core_pairs",
+    "exec",
+    "block",
+    "inter",
+    "preemption",
+    "priority",
+    "sync",
+    "queue",
+    "lifecycle",
+    "affinity",
+    "deadline",
+    "intervals",
+    "tags",
+)
+
+def normalize_stats_pins(raw) -> List[str]:
+    """Return a de-duplicated, ordered list of valid pinned section IDs."""
+    allowed = set(STATS_PINNABLE_SECTIONS)
+    out: List[str] = []
+    seen: set = set()
+    if raw is None:
+        return out
+    if isinstance(raw, str):
+        items = [p.strip() for p in raw.replace(";", ",").split(",")]
+    elif isinstance(raw, (list, tuple)):
+        items = list(raw)
+    else:
+        return out
+    for item in items:
+        sid = str(item or "").strip()
+        if not sid or sid in seen or sid not in allowed:
+            continue
+        seen.add(sid)
+        out.append(sid)
+    return out
+
+def stats_pins_to_rc(pins: List[str]) -> str:
+    """Serialize pin list for btf_viewer.rc ``[stats] pinned_sections``."""
+    return ",".join(normalize_stats_pins(pins))
 
 def default_section_table_heights() -> Dict[str, int]:
     """Default max heights for collapsible statistics tables (shared with MVVM)."""
@@ -505,6 +554,17 @@ _IC_EXPAND     = "M3 1h1v14H3zM12 1h1v14h-1zM4 5l3 3-3 3zM12 5l-3 3 3 3z"
 _IC_EXPAND_ALL = "M8 1l2.5 3h-2v3h-1V4H5.5zM8 15l-2.5-3h2v-3h1V12h2.5zM2 7.5h12v1H2z"
 _IC_SECTIONS_EXPAND = "M8 2v5H3v1h5v5h1V8h5V7H9V2H8z"
 _IC_SECTIONS_COLLAPSE = "M2 7h12v2H2z"
+# Thumbtack: outline (unpinned) and filled (pinned).
+_IC_PIN = (
+    "M8 1.25A2.75 2.75 0 0 1 10.75 4c0 .95-.48 1.78-1.2 2.27V13.5L8 11.8 6.45 13.5"
+    "V6.27A2.75 2.75 0 0 1 5.25 4 2.75 2.75 0 0 1 8 1.25zm0 1.5A1.25 1.25 0 0 0 6.75 4"
+    "c0 .5.28.93.7 1.15l.3.14v6.1l.25-.27.25.27V5.29l.3-.14c.42-.22.7-.65.7-1.15"
+    "A1.25 1.25 0 0 0 8 2.75z"
+)
+_IC_PIN_FILLED = (
+    "M8 1.25A2.75 2.75 0 0 1 10.75 4c0 .95-.48 1.78-1.2 2.27V13.5L8 11.8 6.45 13.5"
+    "V6.27A2.75 2.75 0 0 1 5.25 4 2.75 2.75 0 0 1 8 1.25z"
+)
 _IC_1TO1     = ("M6.5 1a5.5 5.5 0 1 0 3.89 9.4l3.4 3.4.7-.7-3.4-3.4A5.5 5.5 0 0 0 6.5 1"
                "zm0 1a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9z"
                "M3.5 4h1.5v5h-1.5z"        # left  "1" bar

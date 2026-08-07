@@ -1,5 +1,6 @@
 /** Persistent web viewer settings (localStorage). Parity with desktop btf_viewer.rc / btf_viewer.py USER CONFIGURATION. */
 import { syncTimelineLayoutFromSettings } from './timelineLayout.js'
+import { normalizeStatsPins } from './statsPins.js'
 
 const SETTINGS_KEY = 'btf-viewer-settings-v1'
 
@@ -18,6 +19,10 @@ export const DEFAULT_SETTINGS = {
   showSti: true,
   showGrid: true,
   hoverHighlight: false,
+  // Desktop rc parity: [view] view_mode / horizontal
+  viewMode: 'task',
+  orientation: 'h',
+  stiLogScale: false,
   labelWidth: 160,
   rowHeight: 22,
   rowGap: 4,
@@ -30,6 +35,7 @@ export const DEFAULT_SETTINGS = {
   cpuBudgetPct: 0,
   taskDeadlines: {},
   timeDecimals: 3,
+  statsPinnedSections: [],
 }
 
 function clampInt(v, lo, hi, fallback) {
@@ -59,6 +65,9 @@ export function normalizeSettings(raw) {
     showSti: s.showSti !== false,
     showGrid: !!s.showGrid,
     hoverHighlight: !!s.hoverHighlight,
+    viewMode: s.viewMode === 'core' ? 'core' : 'task',
+    orientation: s.orientation === 'v' ? 'v' : 'h',
+    stiLogScale: !!s.stiLogScale,
     labelWidth: clampInt(s.labelWidth, 60, 600, DEFAULT_SETTINGS.labelWidth),
     rowHeight: clampInt(s.rowHeight, 12, 60, DEFAULT_SETTINGS.rowHeight),
     rowGap: clampInt(s.rowGap, 0, 20, DEFAULT_SETTINGS.rowGap),
@@ -72,6 +81,7 @@ export function normalizeSettings(raw) {
     cpuBudgetPct: clampFloat(s.cpuBudgetPct, 0, 100, DEFAULT_SETTINGS.cpuBudgetPct),
     taskDeadlines: (s.taskDeadlines && typeof s.taskDeadlines === 'object') ? { ...s.taskDeadlines } : {},
     timeDecimals: clampInt(s.timeDecimals, 0, 9, DEFAULT_SETTINGS.timeDecimals),
+    statsPinnedSections: normalizeStatsPins(s.statsPinnedSections),
   }
 }
 

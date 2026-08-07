@@ -3,6 +3,16 @@ from __future__ import annotations
 
 from ._imports import *  # noqa: F403,F401
 from .config import *  # noqa: F403,F401
+from .config import (  # private symbols are not pulled in by import *
+    _IC_PIN,
+    _IC_PIN_FILLED,
+    _IC_SECTIONS_COLLAPSE,
+    _IC_SECTIONS_EXPAND,
+    _stats_chevron_icon,
+    _svg_icon,
+    _svg_pixmap,
+    normalize_stats_pins,
+)
 from .parser import *  # noqa: F403,F401
 from .timeline_util import *  # noqa: F403,F401
 from .timeline_util import _format_time  # noqa: F401 — star-import skips leading _
@@ -2029,6 +2039,66 @@ class _IconTextButton(QWidget):
         p.setPen(QPen(QColor(self._border)))
         p.setBrush(QBrush(QColor(bg)))
         p.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 4, 4)
+        super().paintEvent(event)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+
+class _StatsPinButton(QLabel):
+    """Section pin toggle.
+
+    Uses a QLabel pixmap instead of QToolButton/QPushButton.setIcon — macOS
+    application stylesheets routinely suppress tool-button icons.
+    """
+
+    clicked = Signal()
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setObjectName("stats_section_pin")
+        self.setFixedSize(22, 22)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self._pinned = False
+        self._hovered = False
+
+    def set_pinned(self, pinned: bool, *, dark: bool = True) -> None:
+        self._pinned = bool(pinned)
+        muted = "#D0D0D0" if dark else "#555555"
+        accent = "#7EC8E3" if dark else "#2A6FB2"
+        path = _IC_PIN_FILLED if self._pinned else _IC_PIN
+        color = accent if self._pinned else muted
+        self.setPixmap(_svg_pixmap(path, color, 14))
+        self.setToolTip(
+            "Unpin — allow this section to collapse"
+            if self._pinned else
+            "Pin — keep this section expanded")
+        self.update()
+
+    def enterEvent(self, event) -> None:  # noqa: N802
+        self._hovered = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802
+        self._hovered = False
+        self.update()
+        super().leaveEvent(event)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        if self._hovered:
+            p = QPainter(self)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QBrush(QColor(128, 128, 128, 70)))
+            p.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 3, 3)
+            p.end()
         super().paintEvent(event)
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
@@ -4857,6 +4927,8 @@ class _StatsPanel(QWidget):
     open_pair_chord = Signal(str, str, bool)
     # Open Settings dialog on a named sidebar page (e.g. "Display")
     open_settings_requested = Signal(str)
+    # Pinned section IDs (stay expanded); persist to btf_viewer.rc
+    section_pins_changed = Signal(list)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -4873,7 +4945,10 @@ class _StatsPanel(QWidget):
         self._cursor_times: List[int] = []
         self._scope_to_cursors: bool = True
         self._section_collapsed: Dict[str, bool] = default_section_collapsed()
+        self._section_pins: List[str] = []
         self._section_headers: Dict[str, QPushButton] = {}
+        self._section_header_rows: Dict[str, QWidget] = {}
+        self._section_pin_btns: Dict[str, _StatsPinButton] = {}
         self._section_bodies: Dict[str, QWidget] = {}
         self._section_populate: Dict[str, object] = {}
         self._section_table_heights: Dict[str, int] = default_section_table_heights()
@@ -5023,6 +5098,7 @@ class _StatsPanel(QWidget):
         color = self._scope_action_icon_color()
         self._btn_stats_expand.setIcon(_svg_icon(_IC_SECTIONS_EXPAND, color))
         self._btn_stats_collapse.setIcon(_svg_icon(_IC_SECTIONS_COLLAPSE, color))
+        self._sync_pin_buttons()
 
     def _clear(self) -> None:
         self._defer_populate_timer.stop()
@@ -5033,6 +5109,8 @@ class _StatsPanel(QWidget):
         self._util_scroll_areas.clear()
         self._util_scroll_filters.clear()
         self._section_headers.clear()
+        self._section_header_rows.clear()
+        self._section_pin_btns.clear()
         self._section_bodies.clear()
         self._section_populate.clear()
         while self._ilay.count():
@@ -5055,6 +5133,27 @@ class _StatsPanel(QWidget):
 
     def section_table_heights(self) -> Dict[str, int]:
         return dict(self._section_table_heights)
+
+    def section_pins(self) -> List[str]:
+        return list(self._section_pins)
+
+    def set_section_pins(self, pins, *, emit: bool = False) -> None:
+        """Apply persisted pin list; pinned sections stay expanded."""
+        self._section_pins = normalize_stats_pins(pins)
+        pinned = set(self._section_pins)
+        for sid in pinned:
+            self._section_collapsed[sid] = False
+            if sid in self._section_headers:
+                self._set_section_collapsed(sid, False)
+        self._sync_pin_buttons()
+        if emit:
+            self.section_pins_changed.emit(list(self._section_pins))
+
+    def _sync_pin_buttons(self) -> None:
+        pinned = set(self._section_pins)
+        for sid, btn in self._section_pin_btns.items():
+            btn.set_pinned(sid in pinned, dark=self._is_dark)
+
 
     def capture_layout_state(self) -> dict:
         """Return statistics panel layout/scope state for the MVVM layer."""
@@ -6184,15 +6283,15 @@ class _StatsPanel(QWidget):
             body.setVisible(True)
             return
         populate = self._section_populate.get(section_id)
-        hdr = self._section_headers.get(section_id)
-        if populate is None or hdr is None:
+        hdr_row = self._section_header_rows.get(section_id)
+        if populate is None or hdr_row is None:
             return
         body = QWidget()
         blay = QVBoxLayout(body)
         blay.setContentsMargins(0, 0, 0, 0)
         blay.setSpacing(2)
         populate(blay)
-        idx = self._ilay.indexOf(hdr)
+        idx = self._ilay.indexOf(hdr_row)
         self._ilay.insertWidget(idx + 1, body)
         self._section_bodies[section_id] = body
 
@@ -6217,6 +6316,8 @@ class _StatsPanel(QWidget):
             self._defer_populate_timer.start(0)
 
     def _set_section_collapsed(self, section_id: str, collapsed: bool) -> None:
+        if collapsed and section_id in self._section_pins:
+            collapsed = False
         self._section_collapsed[section_id] = collapsed
         if collapsed:
             body = self._section_bodies.get(section_id)
@@ -6227,8 +6328,21 @@ class _StatsPanel(QWidget):
         self._update_section_header_icon(section_id)
 
     def _toggle_section(self, section_id: str) -> None:
+        if section_id in self._section_pins:
+            return
         self._set_section_collapsed(
             section_id, not self._section_collapsed.get(section_id, False))
+
+    def _toggle_section_pin(self, section_id: str) -> None:
+        pins = list(self._section_pins)
+        if section_id in pins:
+            pins = [p for p in pins if p != section_id]
+        else:
+            pins.append(section_id)
+            self._set_section_collapsed(section_id, False)
+        self._section_pins = normalize_stats_pins(pins)
+        self._sync_pin_buttons()
+        self.section_pins_changed.emit(list(self._section_pins))
 
     def _expand_all_sections(self) -> None:
         self._inner.setUpdatesEnabled(False)
@@ -6241,7 +6355,10 @@ class _StatsPanel(QWidget):
     def _collapse_all_sections(self) -> None:
         self._inner.setUpdatesEnabled(False)
         try:
+            pinned = set(self._section_pins)
             for key in self._section_headers:
+                if key in pinned:
+                    continue
                 self._set_section_collapsed(key, True)
         finally:
             self._inner.setUpdatesEnabled(True)
@@ -6250,8 +6367,14 @@ class _StatsPanel(QWidget):
                                populate) -> None:
         """Add a collapsible statistics section (parity with web StatisticsPanel)."""
         self._section_collapsed.setdefault(section_id, False)
+        if section_id in self._section_pins:
+            self._section_collapsed[section_id] = False
         self._ilay.addWidget(self._sep())
         collapsed = self._section_collapsed.get(section_id, False)
+        row = QWidget()
+        row_lay = QHBoxLayout(row)
+        row_lay.setContentsMargins(0, 0, 0, 0)
+        row_lay.setSpacing(2)
         hdr = QPushButton(title)
         hdr.setFlat(True)
         hdr.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -6263,9 +6386,17 @@ class _StatsPanel(QWidget):
         )
         hdr.clicked.connect(
             lambda _checked=False, sid=section_id: self._toggle_section(sid))
-        self._ilay.addWidget(hdr)
+        pin = _StatsPinButton()
+        pin.clicked.connect(
+            lambda sid=section_id: self._toggle_section_pin(sid))
+        row_lay.addWidget(hdr, 1)
+        row_lay.addWidget(pin, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self._ilay.addWidget(row)
         self._section_headers[section_id] = hdr
+        self._section_header_rows[section_id] = row
+        self._section_pin_btns[section_id] = pin
         self._section_populate[section_id] = populate
+        self._sync_pin_buttons()
         if not collapsed:
             if (self._defer_heavy_sections
                     and section_id in STATS_HEAVY_SECTIONS):
@@ -8000,7 +8131,10 @@ class _StatsPanel(QWidget):
         self._clear()
         self._defer_heavy_sections = defer_heavy
         if defer_heavy and not self._defer_heavy_collapse_done:
+            pinned = set(self._section_pins)
             for sid in STATS_HEAVY_SECTIONS:
+                if sid in pinned:
+                    continue
                 self._section_collapsed[sid] = True
             self._defer_heavy_collapse_done = True
         self._update_scope_header()

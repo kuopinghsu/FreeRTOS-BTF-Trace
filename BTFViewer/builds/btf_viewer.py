@@ -355,7 +355,56 @@ def default_section_collapsed() -> Dict[str, bool]:
         "core_breakdown": False,
         "affinity": False,
         "deadline": False,
+        "tags": False,
     }
+
+# Statistics sections that can be pinned open (stay expanded). Keep in sync with
+# web/src/utils/statsPins.js.
+STATS_PINNABLE_SECTIONS: Tuple[str, ...] = (
+    "cores",
+    "core_breakdown",
+    "tasks",
+    "health",
+    "migrations",
+    "core_pairs",
+    "exec",
+    "block",
+    "inter",
+    "preemption",
+    "priority",
+    "sync",
+    "queue",
+    "lifecycle",
+    "affinity",
+    "deadline",
+    "intervals",
+    "tags",
+)
+
+def normalize_stats_pins(raw) -> List[str]:
+    """Return a de-duplicated, ordered list of valid pinned section IDs."""
+    allowed = set(STATS_PINNABLE_SECTIONS)
+    out: List[str] = []
+    seen: set = set()
+    if raw is None:
+        return out
+    if isinstance(raw, str):
+        items = [p.strip() for p in raw.replace(";", ",").split(",")]
+    elif isinstance(raw, (list, tuple)):
+        items = list(raw)
+    else:
+        return out
+    for item in items:
+        sid = str(item or "").strip()
+        if not sid or sid in seen or sid not in allowed:
+            continue
+        seen.add(sid)
+        out.append(sid)
+    return out
+
+def stats_pins_to_rc(pins: List[str]) -> str:
+    """Serialize pin list for btf_viewer.rc ``[stats] pinned_sections``."""
+    return ",".join(normalize_stats_pins(pins))
 
 def default_section_table_heights() -> Dict[str, int]:
     """Default max heights for collapsible statistics tables (shared with MVVM)."""
@@ -696,6 +745,17 @@ _IC_EXPAND     = "M3 1h1v14H3zM12 1h1v14h-1zM4 5l3 3-3 3zM12 5l-3 3 3 3z"
 _IC_EXPAND_ALL = "M8 1l2.5 3h-2v3h-1V4H5.5zM8 15l-2.5-3h2v-3h1V12h2.5zM2 7.5h12v1H2z"
 _IC_SECTIONS_EXPAND = "M8 2v5H3v1h5v5h1V8h5V7H9V2H8z"
 _IC_SECTIONS_COLLAPSE = "M2 7h12v2H2z"
+# Thumbtack: outline (unpinned) and filled (pinned).
+_IC_PIN = (
+    "M8 1.25A2.75 2.75 0 0 1 10.75 4c0 .95-.48 1.78-1.2 2.27V13.5L8 11.8 6.45 13.5"
+    "V6.27A2.75 2.75 0 0 1 5.25 4 2.75 2.75 0 0 1 8 1.25zm0 1.5A1.25 1.25 0 0 0 6.75 4"
+    "c0 .5.28.93.7 1.15l.3.14v6.1l.25-.27.25.27V5.29l.3-.14c.42-.22.7-.65.7-1.15"
+    "A1.25 1.25 0 0 0 8 2.75z"
+)
+_IC_PIN_FILLED = (
+    "M8 1.25A2.75 2.75 0 0 1 10.75 4c0 .95-.48 1.78-1.2 2.27V13.5L8 11.8 6.45 13.5"
+    "V6.27A2.75 2.75 0 0 1 5.25 4 2.75 2.75 0 0 1 8 1.25z"
+)
 _IC_1TO1     = ("M6.5 1a5.5 5.5 0 1 0 3.89 9.4l3.4 3.4.7-.7-3.4-3.4A5.5 5.5 0 0 0 6.5 1"
                "zm0 1a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9z"
                "M3.5 4h1.5v5h-1.5z"        # left  "1" bar
@@ -16970,6 +17030,66 @@ class _IconTextButton(QWidget):
             return
         super().mousePressEvent(event)
 
+
+class _StatsPinButton(QLabel):
+    """Section pin toggle.
+
+    Uses a QLabel pixmap instead of QToolButton/QPushButton.setIcon — macOS
+    application stylesheets routinely suppress tool-button icons.
+    """
+
+    clicked = Signal()
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setObjectName("stats_section_pin")
+        self.setFixedSize(22, 22)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self._pinned = False
+        self._hovered = False
+
+    def set_pinned(self, pinned: bool, *, dark: bool = True) -> None:
+        self._pinned = bool(pinned)
+        muted = "#D0D0D0" if dark else "#555555"
+        accent = "#7EC8E3" if dark else "#2A6FB2"
+        path = _IC_PIN_FILLED if self._pinned else _IC_PIN
+        color = accent if self._pinned else muted
+        self.setPixmap(_svg_pixmap(path, color, 14))
+        self.setToolTip(
+            "Unpin — allow this section to collapse"
+            if self._pinned else
+            "Pin — keep this section expanded")
+        self.update()
+
+    def enterEvent(self, event) -> None:  # noqa: N802
+        self._hovered = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802
+        self._hovered = False
+        self.update()
+        super().leaveEvent(event)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        if self._hovered:
+            p = QPainter(self)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QBrush(QColor(128, 128, 128, 70)))
+            p.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 3, 3)
+            p.end()
+        super().paintEvent(event)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
 class _UtilScrollResizeFilter(QObject):
     """Keep util rows inside the scroll viewport when the panel is resized."""
 
@@ -19789,6 +19909,8 @@ class _StatsPanel(QWidget):
     open_pair_chord = Signal(str, str, bool)
     # Open Settings dialog on a named sidebar page (e.g. "Display")
     open_settings_requested = Signal(str)
+    # Pinned section IDs (stay expanded); persist to btf_viewer.rc
+    section_pins_changed = Signal(list)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -19805,7 +19927,10 @@ class _StatsPanel(QWidget):
         self._cursor_times: List[int] = []
         self._scope_to_cursors: bool = True
         self._section_collapsed: Dict[str, bool] = default_section_collapsed()
+        self._section_pins: List[str] = []
         self._section_headers: Dict[str, QPushButton] = {}
+        self._section_header_rows: Dict[str, QWidget] = {}
+        self._section_pin_btns: Dict[str, _StatsPinButton] = {}
         self._section_bodies: Dict[str, QWidget] = {}
         self._section_populate: Dict[str, object] = {}
         self._section_table_heights: Dict[str, int] = default_section_table_heights()
@@ -19955,6 +20080,7 @@ class _StatsPanel(QWidget):
         color = self._scope_action_icon_color()
         self._btn_stats_expand.setIcon(_svg_icon(_IC_SECTIONS_EXPAND, color))
         self._btn_stats_collapse.setIcon(_svg_icon(_IC_SECTIONS_COLLAPSE, color))
+        self._sync_pin_buttons()
 
     def _clear(self) -> None:
         self._defer_populate_timer.stop()
@@ -19965,6 +20091,8 @@ class _StatsPanel(QWidget):
         self._util_scroll_areas.clear()
         self._util_scroll_filters.clear()
         self._section_headers.clear()
+        self._section_header_rows.clear()
+        self._section_pin_btns.clear()
         self._section_bodies.clear()
         self._section_populate.clear()
         while self._ilay.count():
@@ -19987,6 +20115,27 @@ class _StatsPanel(QWidget):
 
     def section_table_heights(self) -> Dict[str, int]:
         return dict(self._section_table_heights)
+
+    def section_pins(self) -> List[str]:
+        return list(self._section_pins)
+
+    def set_section_pins(self, pins, *, emit: bool = False) -> None:
+        """Apply persisted pin list; pinned sections stay expanded."""
+        self._section_pins = normalize_stats_pins(pins)
+        pinned = set(self._section_pins)
+        for sid in pinned:
+            self._section_collapsed[sid] = False
+            if sid in self._section_headers:
+                self._set_section_collapsed(sid, False)
+        self._sync_pin_buttons()
+        if emit:
+            self.section_pins_changed.emit(list(self._section_pins))
+
+    def _sync_pin_buttons(self) -> None:
+        pinned = set(self._section_pins)
+        for sid, btn in self._section_pin_btns.items():
+            btn.set_pinned(sid in pinned, dark=self._is_dark)
+
 
     def capture_layout_state(self) -> dict:
         """Return statistics panel layout/scope state for the MVVM layer."""
@@ -21116,15 +21265,15 @@ class _StatsPanel(QWidget):
             body.setVisible(True)
             return
         populate = self._section_populate.get(section_id)
-        hdr = self._section_headers.get(section_id)
-        if populate is None or hdr is None:
+        hdr_row = self._section_header_rows.get(section_id)
+        if populate is None or hdr_row is None:
             return
         body = QWidget()
         blay = QVBoxLayout(body)
         blay.setContentsMargins(0, 0, 0, 0)
         blay.setSpacing(2)
         populate(blay)
-        idx = self._ilay.indexOf(hdr)
+        idx = self._ilay.indexOf(hdr_row)
         self._ilay.insertWidget(idx + 1, body)
         self._section_bodies[section_id] = body
 
@@ -21149,6 +21298,8 @@ class _StatsPanel(QWidget):
             self._defer_populate_timer.start(0)
 
     def _set_section_collapsed(self, section_id: str, collapsed: bool) -> None:
+        if collapsed and section_id in self._section_pins:
+            collapsed = False
         self._section_collapsed[section_id] = collapsed
         if collapsed:
             body = self._section_bodies.get(section_id)
@@ -21159,8 +21310,21 @@ class _StatsPanel(QWidget):
         self._update_section_header_icon(section_id)
 
     def _toggle_section(self, section_id: str) -> None:
+        if section_id in self._section_pins:
+            return
         self._set_section_collapsed(
             section_id, not self._section_collapsed.get(section_id, False))
+
+    def _toggle_section_pin(self, section_id: str) -> None:
+        pins = list(self._section_pins)
+        if section_id in pins:
+            pins = [p for p in pins if p != section_id]
+        else:
+            pins.append(section_id)
+            self._set_section_collapsed(section_id, False)
+        self._section_pins = normalize_stats_pins(pins)
+        self._sync_pin_buttons()
+        self.section_pins_changed.emit(list(self._section_pins))
 
     def _expand_all_sections(self) -> None:
         self._inner.setUpdatesEnabled(False)
@@ -21173,7 +21337,10 @@ class _StatsPanel(QWidget):
     def _collapse_all_sections(self) -> None:
         self._inner.setUpdatesEnabled(False)
         try:
+            pinned = set(self._section_pins)
             for key in self._section_headers:
+                if key in pinned:
+                    continue
                 self._set_section_collapsed(key, True)
         finally:
             self._inner.setUpdatesEnabled(True)
@@ -21182,8 +21349,14 @@ class _StatsPanel(QWidget):
                                populate) -> None:
         """Add a collapsible statistics section (parity with web StatisticsPanel)."""
         self._section_collapsed.setdefault(section_id, False)
+        if section_id in self._section_pins:
+            self._section_collapsed[section_id] = False
         self._ilay.addWidget(self._sep())
         collapsed = self._section_collapsed.get(section_id, False)
+        row = QWidget()
+        row_lay = QHBoxLayout(row)
+        row_lay.setContentsMargins(0, 0, 0, 0)
+        row_lay.setSpacing(2)
         hdr = QPushButton(title)
         hdr.setFlat(True)
         hdr.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -21195,9 +21368,17 @@ class _StatsPanel(QWidget):
         )
         hdr.clicked.connect(
             lambda _checked=False, sid=section_id: self._toggle_section(sid))
-        self._ilay.addWidget(hdr)
+        pin = _StatsPinButton()
+        pin.clicked.connect(
+            lambda sid=section_id: self._toggle_section_pin(sid))
+        row_lay.addWidget(hdr, 1)
+        row_lay.addWidget(pin, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self._ilay.addWidget(row)
         self._section_headers[section_id] = hdr
+        self._section_header_rows[section_id] = row
+        self._section_pin_btns[section_id] = pin
         self._section_populate[section_id] = populate
+        self._sync_pin_buttons()
         if not collapsed:
             if (self._defer_heavy_sections
                     and section_id in STATS_HEAVY_SECTIONS):
@@ -22932,7 +23113,10 @@ class _StatsPanel(QWidget):
         self._clear()
         self._defer_heavy_sections = defer_heavy
         if defer_heavy and not self._defer_heavy_collapse_done:
+            pinned = set(self._section_pins)
             for sid in STATS_HEAVY_SECTIONS:
+                if sid in pinned:
+                    continue
                 self._section_collapsed[sid] = True
             self._defer_heavy_collapse_done = True
         self._update_scope_header()
@@ -29536,6 +29720,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._apply_dock_visibility_respecting_rc()
             if self._show_stats:
                 self._focus_statistics_panel()
+            # panel raise_() can hide the legend split sibling — restore last.
+            if self._show_legend:
+                self._legend_dock.raise_()
         finally:
             self._dock_layout_settling = False
             self._restoring_settings = False
@@ -30777,18 +30964,37 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         """Apply Layout checkboxes after restoreState / resizeDocks (deferred)."""
         self._complete_startup_dock_layout()
 
+    def _restore_legend_if_preferred(self) -> None:
+        """Re-show the legend when prefs say it should be on but Qt hid it."""
+        if (self._shutting_down or self._applying_dock_prefs
+                or self._restoring_settings or self._dock_layout_settling
+                or not hasattr(self, "_legend_dock")):
+            return
+        if self._vm.settings._model.show_legend and not self._legend_dock.isVisible():
+            self._apply_dock_visibility_from_prefs()
+
     def _on_legend_dock_visibility_changed(self, visible: bool) -> None:
-        """Sync show_legend when the user closes/opens the dock via its title bar."""
+        """Keep show_legend in sync — but never poison .rc from Qt quirks.
+
+        The Legend dock is not Closable (no title-bar X). Intentional hide goes
+        through Settings → Layout. Qt may still emit visibilityChanged(False)
+        when the Statistics panel is raised; writing that to btf_viewer.rc made
+        the legend disappear on the next launch.
+        """
         if (self._shutting_down
                 or self._applying_dock_prefs
                 or self._restoring_settings
                 or self._dock_layout_settling
                 or not self._startup_dock_layout_done):
             return
+        if not visible:
+            if self._vm.settings._model.show_legend:
+                QTimer.singleShot(0, self._restore_legend_if_preferred)
+            return
         # Update the model directly — the show_legend setter emits settings_changed
         # which would call _apply_dock_visibility_from_prefs() and fight the user.
-        self._vm.settings._model.show_legend = bool(visible)
-        self._settings.set("view", "show_legend", str(visible).lower(), flush=False)
+        self._vm.settings._model.show_legend = True
+        self._settings.set("view", "show_legend", "true", flush=False)
 
     def _apply_settings_to_all_tabs_impl(self) -> None:
         self._view.set_font_size(self._font_size_val)
@@ -30857,6 +31063,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 _h = s.get_int("stats", f"table_height_{_sid}", _default)
                 _stats_heights[_sid] = _h
             self._stats_panel.apply_section_table_heights(_stats_heights)
+            self._stats_panel.set_section_pins(
+                s.get("stats", "pinned_sections", ""), emit=False)
 
         # Dock layout: sizes from dock_metrics; visibility from [view] show_* keys.
         # Qt saveState/restoreState embeds dock visibility and fights show_legend,
@@ -31019,6 +31227,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             if hasattr(self, "_stats_panel"):
                 for _sid, _h in self._stats_panel.section_table_heights().items():
                     s.set("stats", f"table_height_{_sid}", str(_h), flush=False)
+                s.set(
+                    "stats", "pinned_sections",
+                    stats_pins_to_rc(self._stats_panel.section_pins()),
+                    flush=False,
+                )
 
             # Dock layout - serialise dock sizes/positions (visibility is in [view]).
             _DOCK_LAYOUT_VERSION = DEFAULT_DOCK_LAYOUT_VERSION
@@ -32013,8 +32226,22 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._stats_panel.open_pair_heatmap.connect(self._on_open_pair_heatmap)
         self._stats_panel.open_pair_chord.connect(self._on_open_pair_chord)
         self._stats_panel.open_settings_requested.connect(self._open_settings)
+        self._stats_panel.section_pins_changed.connect(self._on_section_pins_changed)
         self._stats_panel._btn_compare_mig.clicked.connect(self._open_trace_compare)
         self.setAcceptDrops(True)
+
+    def _on_section_pins_changed(self, _pins: list) -> None:
+        """Persist pinned statistics sections to btf_viewer.rc immediately."""
+        if self._restoring_settings or self._shutting_down:
+            return
+        try:
+            self._settings.set(
+                "stats", "pinned_sections",
+                stats_pins_to_rc(self._stats_panel.section_pins()),
+                flush=True,
+            )
+        except Exception:
+            pass
 
     def _build_menus(self) -> None:
         mb = self.menuBar()
