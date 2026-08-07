@@ -34,6 +34,49 @@ from .timeline_util import _format_time  # noqa: F401 — star-import skips lead
 from .graphics_items import *  # noqa: F403,F401
 from .scene import *  # noqa: F403,F401
 from .view import *  # noqa: F403,F401
+from .ai_assistant import (  # noqa: F401
+    AI_RESPONSE_LANGUAGES,
+    DEFAULT_AI_RESPONSE_LANGUAGE,
+    DEFAULT_OLLAMA_MODEL,
+    DEFAULT_OLLAMA_URL,
+    ollama_test_connection,
+)
+
+
+class _OllamaTestWorker(QObject):
+    """Background worker for Settings → AI → Test connection.
+
+    Lives on the GUI thread; HTTP work runs in a plain Python thread so we
+    never hit QThread/moveToThread/deleteLater affinity crashes.
+    """
+
+    progress = Signal(str)
+    finished = Signal(str)
+    failed = Signal(str)
+
+    def __init__(
+        self, parent: QObject, base_url: str, model_name: str, api_key: str = ""
+    ) -> None:
+        super().__init__(parent)
+        self._base_url = base_url
+        self._model = model_name
+        self._api_key = api_key
+
+    def start(self) -> None:
+        threading.Thread(target=self._run, name="ollama-test", daemon=True).start()
+
+    def _run(self) -> None:
+        try:
+            msg = ollama_test_connection(
+                self._base_url,
+                self._model,
+                api_key=self._api_key,
+                on_progress=lambda s: self.progress.emit(s),
+            )
+            self.finished.emit(msg)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
 
 class _LoadProgressDialog(QWidget):
     """Borderless progress dialog that paints reliably on macOS.
@@ -10033,6 +10076,7 @@ class _RcSettings:
             "show_stats":        "true",
             "show_marks":        "true",
             "show_find":         "true",
+            "show_ai":           "true",
         },
         "zoom": {
             "timescale_per_px": "-1",
@@ -10056,6 +10100,13 @@ class _RcSettings:
             "cpu_budget_pct": "0",
             # Newline-separated "TaskName=nanoseconds" entries for per-task deadlines
             "task_deadlines": "",
+        },
+        "ai": {
+            "enabled": "true",
+            "ollama_url": DEFAULT_OLLAMA_URL,
+            "ollama_model": DEFAULT_OLLAMA_MODEL,
+            "ollama_api_key": "",
+            "response_language": DEFAULT_AI_RESPONSE_LANGUAGE,
         },
     }
 
@@ -10522,6 +10573,7 @@ class _SettingsDialog(QDialog):
                  show_sti: bool, show_grid: bool,
                  show_legend: bool, show_stats: bool, show_marks: bool,
                  show_find: bool = True,
+                 show_ai: bool = True,
                  show_hover_highlight: bool,
                  zoom_unit: str,
                  label_width: int, row_height: int, row_gap: int,
@@ -10534,6 +10586,11 @@ class _SettingsDialog(QDialog):
                  cpu_budget_pct: float = 0.0,
                  task_deadlines_text: str = "",
                  time_decimals: int = 3,
+                 ai_enabled: bool = True,
+                 ollama_url: str = DEFAULT_OLLAMA_URL,
+                 ollama_model: str = DEFAULT_OLLAMA_MODEL,
+                 ollama_api_key: str = "",
+                 response_language: str = DEFAULT_AI_RESPONSE_LANGUAGE,
                  initial_page: str = "Appearance"):
         super().__init__(parent, Qt.WindowType.Dialog)
         self.setWindowTitle("Settings")
@@ -10574,7 +10631,7 @@ class _SettingsDialog(QDialog):
         self._sidebar.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._sidebar.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         _item_h = max(36, int(ui_font_size * 2.6))   # scale row height with font
-        for _name in ("Appearance", "Display", "Layout"):
+        for _name in ("Appearance", "Display", "Layout", "AI"):
             _item = QListWidgetItem(_name)
             _item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             _item.setSizeHint(QSize(140, _item_h))
@@ -10659,10 +10716,13 @@ class _SettingsDialog(QDialog):
         self._marks_cb.setChecked(show_marks)
         self._find_cb = QCheckBox("Find panel")
         self._find_cb.setChecked(show_find)
+        self._ai_cb = QCheckBox("AI Assistant panel")
+        self._ai_cb.setChecked(show_ai)
         v2.addWidget(self._indented(self._legend_cb))
         v2.addWidget(self._indented(self._stats_cb))
         v2.addWidget(self._indented(self._marks_cb))
         v2.addWidget(self._indented(self._find_cb))
+        v2.addWidget(self._indented(self._ai_cb))
         self._cpu_load_cb = QCheckBox("CPU load graph")
         self._cpu_load_cb.setChecked(cpu_load)
         v2.addWidget(self._indented(self._cpu_load_cb))
@@ -10822,9 +10882,104 @@ class _SettingsDialog(QDialog):
 
         self._content_stack.addWidget(p3)
 
+        # -- Page 4: AI (Ollama) -----------------------------------------------
+        p4 = QWidget()
+        f4 = _form(p4)
+        self._ai_enabled_cb = QCheckBox("Enable AI Assistant (Ollama)")
+        self._ai_enabled_cb.setChecked(ai_enabled)
+        self._ai_enabled_cb.setToolTip(
+            "When off, hides the AI tab. When on, the AI panel "
+            "can send Analysis Findings to a local or cloud Ollama server.")
+        f4.addRow("", self._ai_enabled_cb)
+
+        self._ollama_url_edit = QLineEdit()
+        self._ollama_url_edit.setText(ollama_url or DEFAULT_OLLAMA_URL)
+        self._ollama_url_edit.setPlaceholderText(DEFAULT_OLLAMA_URL)
+        self._ollama_url_edit.setToolTip(
+            "Local Ollama (http://localhost:11434) or cloud API (https://ollama.com)")
+        f4.addRow("Ollama URL:", self._ollama_url_edit)
+
+        self._ollama_model_edit = QLineEdit()
+        self._ollama_model_edit.setText(ollama_model or DEFAULT_OLLAMA_MODEL)
+        self._ollama_model_edit.setPlaceholderText(
+            f"{DEFAULT_OLLAMA_MODEL} or minimax-m3:cloud")
+        self._ollama_model_edit.setToolTip(
+            "Local: name from `ollama list`. Cloud via local proxy: "
+            "`minimax-m3:cloud` (requires `ollama signin`). "
+            "Direct https://ollama.com: use `minimax-m3` (no :cloud) + API key.")
+        f4.addRow("Model:", self._ollama_model_edit)
+
+        self._response_lang_combo = QComboBox()
+        self._response_lang_combo.addItems(list(AI_RESPONSE_LANGUAGES))
+        _lang = (response_language or DEFAULT_AI_RESPONSE_LANGUAGE).strip()
+        _idx = self._response_lang_combo.findText(_lang)
+        if _idx < 0:
+            self._response_lang_combo.addItem(_lang)
+            _idx = self._response_lang_combo.findText(_lang)
+        self._response_lang_combo.setCurrentIndex(max(0, _idx))
+        self._response_lang_combo.setToolTip(
+            "Language for AI Assistant replies (also available via Language… in the AI panel).")
+        # Long labels (e.g. Traditional Chinese) need more than _INPUT_W (110).
+        self._response_lang_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToContents)
+        _fm = self._response_lang_combo.fontMetrics()
+        _lang_w = max((_fm.horizontalAdvance(s) for s in AI_RESPONSE_LANGUAGES), default=120) + 48
+        self._response_lang_combo.setMinimumWidth(max(_lang_w, 240))
+        self._response_lang_combo.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        f4.addRow("Reply language:", self._response_lang_combo)
+
+        self._ollama_api_key_edit = QLineEdit()
+        self._ollama_api_key_edit.setText(ollama_api_key or "")
+        self._ollama_api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self._ollama_api_key_edit.setPlaceholderText("Optional — for https://ollama.com")
+        self._ollama_api_key_edit.setToolTip(
+            "API key from https://ollama.com/settings/keys. "
+            "Needed for direct cloud API. Local cloud models use `ollama signin` instead "
+            "(or set OLLAMA_API_KEY in the environment). Stored in btf_viewer.rc.")
+        f4.addRow("API key:", self._ollama_api_key_edit)
+
+        _test_row = QWidget()
+        _test_h = QHBoxLayout(_test_row)
+        _test_h.setContentsMargins(0, 0, 0, 0)
+        _test_h.setSpacing(8)
+        self._ollama_test_btn = QPushButton("Test connection")
+        self._ollama_test_btn.setToolTip(
+            "Reach Ollama, confirm the model is installed, and run a tiny chat probe. "
+            "Status updates appear below — the chat probe can take a minute on first load.")
+        self._ollama_test_btn.clicked.connect(self._test_ollama_connection)
+        _test_h.addWidget(self._ollama_test_btn)
+        _test_h.addStretch()
+        f4.addRow("", _test_row)
+
+        self._ollama_test_status = QLabel(
+            "Click Test connection to verify Ollama and the model.")
+        self._ollama_test_status.setWordWrap(True)
+        self._ollama_test_status.setMinimumHeight(40)
+        self._ollama_test_status.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self._ollama_test_status.setStyleSheet(
+            "color:#888; padding:4px 0; min-height:40px;")
+        f4.addRow(self._ollama_test_status)
+
+        _ai_hint = QLabel(
+            f"Install Ollama, pull a model (`ollama pull {DEFAULT_OLLAMA_MODEL}`), then ask "
+            "template questions from the AI panel. For cloud models "
+            "(`minimax-m3:cloud`): run `ollama signin` (and optionally "
+            "`ollama pull minimax-m3:cloud`), or use URL https://ollama.com "
+            "with model `minimax-m3` and an API key. Context is Analysis Findings "
+            "for the current Statistics scope — not the raw BTF.")
+        _ai_hint.setWordWrap(True)
+        _ai_hint.setStyleSheet("color:#888;")
+        f4.addRow(_ai_hint)
+
+        self._ollama_test_worker = None
+
+        self._content_stack.addWidget(p4)
+
         # -- Sidebar <-> stack sync ---------------------------------------------
         self._sidebar.currentRowChanged.connect(self._content_stack.setCurrentIndex)
-        _page_idx = {"Appearance": 0, "Display": 1, "Layout": 2}.get(initial_page, 0)
+        _page_idx = {"Appearance": 0, "Display": 1, "Layout": 2, "AI": 3}.get(initial_page, 0)
         self._sidebar.setCurrentRow(_page_idx)
         self._content_stack.setCurrentIndex(_page_idx)
 
@@ -10891,6 +11046,7 @@ class _SettingsDialog(QDialog):
             self._stats_cb.stateChanged,
             self._marks_cb.stateChanged,
             self._find_cb.stateChanged,
+            self._ai_cb.stateChanged,
             self._cpu_load_cb.stateChanged,
             self._hover_hl_cb.stateChanged,
             self._label_width_spin.valueChanged,
@@ -10908,6 +11064,62 @@ class _SettingsDialog(QDialog):
         self.adjustSize()
 
     # -- Reset all controls to built-in defaults ---------------------------
+    def _test_ollama_connection(self) -> None:
+        """Reach Ollama with the URL/model currently typed in the AI page."""
+        if self._ollama_test_worker is not None:
+            return
+        url = self._ollama_url_edit.text().strip() or DEFAULT_OLLAMA_URL
+        model = self._ollama_model_edit.text().strip() or DEFAULT_OLLAMA_MODEL
+        api_key = self._ollama_api_key_edit.text().strip()
+        self._ollama_test_btn.setEnabled(False)
+        self._ollama_test_btn.setText("Testing…")
+        self._ollama_test_status.setStyleSheet(
+            "color:#888; padding:4px 0; min-height:40px;")
+        self._ollama_test_status.setText(
+            f"Starting test for {url} / {model}…")
+
+        worker = _OllamaTestWorker(self, url, model, api_key)
+        # QueuedConnection: signals are emitted from a plain Python thread.
+        worker.progress.connect(
+            self._on_ollama_test_progress, Qt.ConnectionType.QueuedConnection)
+        worker.finished.connect(
+            self._on_ollama_test_ok, Qt.ConnectionType.QueuedConnection)
+        worker.failed.connect(
+            self._on_ollama_test_err, Qt.ConnectionType.QueuedConnection)
+        self._ollama_test_worker = worker
+        worker.start()
+
+    def _on_ollama_test_progress(self, msg: str) -> None:
+        self._ollama_test_status.setStyleSheet(
+            "color:#888; padding:4px 0; min-height:40px;")
+        self._ollama_test_status.setText(msg)
+
+    def _on_ollama_test_ok(self, msg: str) -> None:
+        self._ollama_test_status.setStyleSheet(
+            "color:#1e8449; padding:4px 0; min-height:40px;")
+        self._ollama_test_status.setText(msg)
+        self._cleanup_ollama_test()
+
+    def _on_ollama_test_err(self, msg: str) -> None:
+        self._ollama_test_status.setStyleSheet(
+            "color:#c0392b; padding:4px 0; min-height:40px;")
+        self._ollama_test_status.setText(msg or "Connection test failed.")
+        self._cleanup_ollama_test()
+
+    def _cleanup_ollama_test(self) -> None:
+        self._ollama_test_btn.setEnabled(True)
+        self._ollama_test_btn.setText("Test connection")
+        worker = self._ollama_test_worker
+        self._ollama_test_worker = None
+        if worker is not None:
+            try:
+                worker.progress.disconnect(self._on_ollama_test_progress)
+                worker.finished.disconnect(self._on_ollama_test_ok)
+                worker.failed.disconnect(self._on_ollama_test_err)
+            except (TypeError, RuntimeError):
+                pass
+            worker.deleteLater()
+
     def _reset_to_defaults(self) -> None:
         """Restore every control to its module-level default value."""
         self._theme_combo.setCurrentIndex(0)           # Dark
@@ -10919,6 +11131,8 @@ class _SettingsDialog(QDialog):
         self._legend_cb.setChecked(True)
         self._stats_cb.setChecked(True)
         self._marks_cb.setChecked(True)
+        self._find_cb.setChecked(True)
+        self._ai_cb.setChecked(True)
         self._cpu_load_cb.setChecked(True)
         self._hover_hl_cb.setChecked(_HOVER_HIGHLIGHT_ENABLED)
         self._label_width_spin.setValue(LABEL_WIDTH)
@@ -10933,6 +11147,12 @@ class _SettingsDialog(QDialog):
         self._cpu_budget_spin.setValue(0.0)
         self._task_deadlines_edit.setPlainText("")
         self._time_decimals_spin.setValue(_DEFAULT_TIME_DECIMALS)
+        self._ai_enabled_cb.setChecked(True)
+        self._ollama_url_edit.setText(DEFAULT_OLLAMA_URL)
+        self._ollama_model_edit.setText(DEFAULT_OLLAMA_MODEL)
+        self._response_lang_combo.setCurrentIndex(
+            max(0, self._response_lang_combo.findText(DEFAULT_AI_RESPONSE_LANGUAGE)))
+        self._ollama_api_key_edit.setText("")
 
     # -- result accessors (read after exec_() == Accepted) ------------------
     @property
@@ -10978,11 +11198,27 @@ class _SettingsDialog(QDialog):
     @property
     def show_find(self) -> bool:          return self._find_cb.isChecked()
     @property
+    def show_ai(self) -> bool:            return self._ai_cb.isChecked()
+    @property
     def show_hover_highlight(self) -> bool: return self._hover_hl_cb.isChecked()
     @property
     def cpu_budget_pct(self) -> float:    return self._cpu_budget_spin.value()
     @property
     def task_deadlines_text(self) -> str: return self._task_deadlines_edit.toPlainText()
+    @property
+    def ai_enabled(self) -> bool:         return self._ai_enabled_cb.isChecked()
+    @property
+    def ollama_url(self) -> str:          return self._ollama_url_edit.text().strip()
+    @property
+    def ollama_model(self) -> str:        return self._ollama_model_edit.text().strip()
+    @property
+    def ollama_api_key(self) -> str:      return self._ollama_api_key_edit.text().strip()
+    @property
+    def response_language(self) -> str:
+        return (
+            self._response_lang_combo.currentText().strip()
+            or DEFAULT_AI_RESPONSE_LANGUAGE
+        )
 # ---------------------------------------------------------------------------
 # Snapshot Annotation Editor
 # ---------------------------------------------------------------------------

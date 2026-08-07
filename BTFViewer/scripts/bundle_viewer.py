@@ -32,6 +32,7 @@ BUNDLE_MODULES: list[str] = [
     "scene",
     "graphics_items",
     "view",
+    "ai_assistant",
     "stats",
     "mvvm/base",
     "mvvm/models",
@@ -57,6 +58,7 @@ SECTION_MARKERS: dict[str, str] = {
     "scene": "# Scene",
     "graphics_items": "# Custom graphics items",
     "view": "# Navigator Popup",
+    "ai_assistant": "# AI Assistant (Ollama)",
     "stats": "# Main Window",
     "mvvm/base": "# MVVM",
     "trace_quality": "# Trace quality metadata",
@@ -98,6 +100,8 @@ import shutil
 import subprocess
 import tempfile
 import traceback
+import urllib.error
+import urllib.request
 import zlib
 import gzip
 import bz2
@@ -108,11 +112,11 @@ from bisect import bisect_left, bisect_right
 from collections import defaultdict
 from operator import attrgetter as _attrgetter
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from PySide6.QtCore import (
     QBuffer, QByteArray, QEasingCurve, QEvent, QEventLoop, QIODevice, QLineF, QMimeData,
-    QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt, QThread, QTimer,
+    QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt, QThread, QTimer, QUrl,
     QPropertyAnimation, Signal,
 )
 from PySide6.QtGui import (
@@ -131,7 +135,7 @@ from PySide6.QtWidgets import (
     QPushButton, QScrollArea, QScrollBar, QDoubleSpinBox, QSpinBox, QStackedWidget,
     QStyle, QStyleFactory, QStyleOptionGraphicsItem, QAbstractItemView,
     QProxyStyle, QStyledItemDelegate, QTabBar, QTabWidget, QTableWidget, QTableWidgetItem, QToolButton,
-    QPlainTextEdit,
+    QPlainTextEdit, QTextBrowser,
     QVBoxLayout, QWidget, QSizePolicy, QSplitter, QLayout,
 )
 """

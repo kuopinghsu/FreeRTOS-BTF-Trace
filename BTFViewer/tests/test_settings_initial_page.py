@@ -63,6 +63,16 @@ class SettingsInitialPageTests(unittest.TestCase):
         self.assertEqual(dlg._sidebar.currentRow(), 1)
         self.assertEqual(dlg._content_stack.currentIndex(), 1)
 
+    def test_ai_page_selected(self) -> None:
+        dlg = self._dlg("AI")
+        self.addCleanup(dlg.deleteLater)
+        self.assertEqual(dlg._sidebar.currentRow(), 3)
+        self.assertEqual(dlg._content_stack.currentIndex(), 3)
+        self.assertTrue(dlg.ai_enabled)
+        self.assertIn("11434", dlg.ollama_url)
+        self.assertTrue(hasattr(dlg, "_ollama_test_btn"))
+        self.assertEqual(dlg._ollama_test_btn.text(), "Test connection")
+
     def test_default_appearance(self) -> None:
         dlg = self._dlg("Appearance")
         self.addCleanup(dlg.deleteLater)

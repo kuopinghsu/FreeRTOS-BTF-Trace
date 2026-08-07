@@ -1,6 +1,6 @@
 # BTF Trace Viewer
 
-Current version: **1.3.2** (Desktop Python app + Web app)
+Current version: **1.4.0** (Desktop Python app + Web app)
 
 A PySide6-based interactive visualiser for FreeRTOS context-switch traces in **Best Trace Format** (`.btf`). Plain `.btf` files and compressed containers (`.btf.gz` / `.gz`, `.btf.bz2` / `.bz2`, `.btf.zip` / `.zip`) open the same way on Desktop and Web. A zip with **no** `.btf` members shows an error; a zip with **multiple** `.btf` files opens each in its own tab.
 
@@ -28,11 +28,12 @@ A PySide6-based interactive visualiser for FreeRTOS context-switch traces in **B
 - **Core migration analysis** — detect tasks that run on multiple cores; **Core Migrations** stats table (ping-pong, STI correlation, gap-after vs other gaps), **Core-Pair Migration Summary** (per directed pair: count, bounces, avg gap; click a row for Gap/Rate distribution charts with bounce-colored points, plus Open Heatmap / Open Chord), **Core Time Breakdown** (active/idle/tick/gap per core), **clickable migration heatmap** (pair×time for ≤ 16 cores; core×core matrix → outgoing pairs for larger traces → per-task sub-bins → timeline drill-down), **migration chord diagram** (directional core-to-core migration volume as a circular chord diagram; hover a core arc to highlight its migrations), **Migrated tasks only** legend filter, toolbar **All tasks** reset, **bounce-only filter** (Show: Bounce Only toggle restricts the heatmap and chord diagram to lock-bounce migrations), and Find **Migrations** mode (Desktop + Web)
 - **Core Affinity** — when traces include `affinity_set` STI events (from `vTaskCoreAffinitySet` / `traceENTER_vTaskCoreAffinitySet`), the **Core Affinity** statistics table shows each task's affinity mask history, observed execution cores, and flags violations in red — checked per slice against the mask in effect at that slice (before the first set the task is unrestricted) (Desktop + Web)
 - **Analysis Findings** — toolbar **Analysis** opens a severity-tagged dialog (load imbalance, WCET/CPU hotspots, blocking, L/M/H priority inversion, core thrashing / hot pairs, deadline breaches, tick health, sync/mutex bounces) for the current Statistics scope; **Save as text…** writes a `.txt` copy. The same card is embedded in **Statistics → Export HTML** / headless `report --format html` (Desktop + Web)
+- **AI Assistant (Ollama)** — right-panel **AI** tab with template questions; sends Analysis Findings to a local Ollama model (`Settings → AI`). See [AI Assistant (Ollama)](#ai-assistant-ollama) (Desktop + Web)
 - **Cursor-scoped statistics** — with 2+ cursors, the Statistics panel can limit all metrics (CPU%, execution slices, blocking time, inter-arrival, **preemption chain**, **priority inheritance**, **mutex / semaphore pairing**, **queue pairing**, **deadline violations**, scheduling summary, **Analysis Findings**, exports, and charts) to the window from C1 through the last cursor; toggle **Limit to cursor range (C1–Cn)** (Desktop + Web)
 - **Cursor range summary** — with 2+ cursors, the status bar shows a quick min/max/avg segment summary (Desktop + Web); full per-task metrics remain in the **Statistics** panel
 - **Task highlight** — hover or click any task label or Legend row to highlight all its segments; optional **Highlight segments on label hover** in Settings dims other tasks while hovering (off by default)
 - **Dockable Legend panel** — colour swatches for every task, with a search box, **Migrated tasks only** filter, a **heatmap filter banner** (when drilled from the heatmap), and the same highlight interaction
-- **Right-side panel** — **Statistics**, **Marks**, and **Find** tabs (Desktop: docked on the right, stacked below Legend; Web: tab bar on the right). Statistics holds metric tables (collapsible, resizable, **reorderable**, and **pinnable**); Marks holds cursors, bookmarks/annotations, and (on Web) Legend; Find searches tasks, annotations, migrations, STI events, interval spans, task lifecycle events, and object pointers
+- **Right-side panel** — **Statistics**, **Marks**, **Find**, and **AI** tabs (Desktop: docked on the right, stacked below Legend; Web: tab bar on the right). Statistics holds metric tables (collapsible, resizable, **reorderable**, and **pinnable**); Marks holds cursors, bookmarks/annotations, and (on Web) Legend; Find searches tasks, annotations, migrations, STI events, interval spans, task lifecycle events, and object pointers; AI asks a local Ollama model about Analysis Findings
 - **Tag View** — inspect tag channels/events (`tag_event`, `tag0_event` … `tag7_event`) alongside task/core activity
 - **Advanced scheduler / SMP metrics** — **Concurrent Core Active Distribution**, **Kernel Switch Overhead** (per-core switch gaps), and **Dispatch / Scheduling Latency** (STI resume / create → switch-in; sync wakes not attributed yet); row click opens distribution charts; CLI `snapshot --view plot --metric concurrency|switch_overhead|dispatch` (Desktop + Web)
 - **Metrics tables** — **Core Time Breakdown**, **Concurrent Core Active Distribution**, **Kernel Switch Overhead**, **Top Tasks**, **Core Migrations**, **Core-Pair Migration Summary**, **Core Affinity**, **Task Lifecycle**, **Deadlines / CPU budget**, **Execution Time Per Slice**, **Blocking Time** (off-CPU gap), **Dispatch / Scheduling Latency**, **Inter-Arrival**, **Preemption Chain**, **Priority Inheritance**, **Mutex / Semaphore pairing** (with **Core Bounce**), **Queue pairing**, **Interval Analysis**, and **Tag Analysis**; click **Min** / **Max** (dotted underline) where offered to jump and annotate extremes (Desktop + Web)
@@ -62,6 +63,7 @@ A PySide6-based interactive visualiser for FreeRTOS context-switch traces in **B
 | [Desktop viewer](#desktop-viewer) | GUI usage, headless CLI, view modes, cursors, export, settings |
 | [Web viewer](#web-viewer) | Build, open traces, web-specific UI and performance |
 | [Statistics & metrics](#statistics--metrics) | Panel overview, Analysis Findings, metric tables, migrations, trace compare, charts |
+| [AI Assistant (Ollama)](#ai-assistant-ollama) | Local Ollama chat from Analysis Findings (templates, settings, troubleshooting) |
 | [Find, marks & menus](#find--jump) | Search, bookmarks, annotations, context menu, recent files |
 | [Session persistence](#session-persistence-btf_viewerrc) | `btf_viewer.rc` and browser `localStorage` |
 | [Keyboard shortcuts](#keyboard-shortcuts) | Desktop and web key bindings |
@@ -523,7 +525,112 @@ Toolbar **Analysis** (Desktop + Web) opens a dialog of heuristic findings for th
 | Tick health | Status not GOOD, or missed-tick estimate > 0 |
 | Sync / mutex bounces | Core bounce > 0 or pairing issues |
 
-Findings are **not** a Statistics panel section. The same card is embedded near the top of **Statistics → Export HTML** and headless `report … --format html`. Practical walkthroughs: [WORKFLOWS.md](WORKFLOWS.md).
+Findings are **not** a Statistics panel section. The same card is embedded near the top of **Statistics → Export HTML** and headless `report … --format html`. Practical walkthroughs: [WORKFLOWS.md](WORKFLOWS.md). Use the [AI Assistant](#ai-assistant-ollama) to ask a local Ollama model about the same findings.
+
+---
+
+## AI Assistant (Ollama)
+
+Local diagnostic chat for BTF Viewer. Sends **Analysis Findings** (and optional scoped metrics) to a local [Ollama](https://ollama.com) model — never the raw BTF event stream.
+
+```text
+User question / template
+        │
+        ▼
+Context = Analysis Findings for current Statistics scope
+        │  (+ span, core count; cursor range if Limit to cursors is on)
+        ▼
+System prompt + context + question  →  Ollama /api/chat
+        │
+        ▼
+AI panel reply  (optional jump:TIME links → timeline)
+```
+
+### Setup
+
+1. Install Ollama and pull a model, e.g. `ollama pull phi4-mini:3.8b` (also good: `qwen2.5:14b`, `deepseek-r1:14b`).
+2. **Settings → AI**
+   - Enable AI Assistant
+   - Ollama URL (default `http://localhost:11434`)
+   - Model name (local: must match `ollama list`; cloud: see below)
+3. Open the **AI** right-panel tab (or **View → Show AI Assistant** on Desktop).
+
+**Cloud models** (e.g. `minimax-m3:cloud`):
+
+| Mode | URL | Model | Auth |
+|------|-----|-------|------|
+| Local Ollama as proxy | `http://localhost:11434` | `minimax-m3:cloud` | `ollama signin` (optional `ollama pull minimax-m3:cloud`) |
+| Direct Ollama Cloud API | `https://ollama.com` | `minimax-m3` (no `:cloud`) | API key in Settings → AI (or `OLLAMA_API_KEY`) |
+
+Cloud models often do **not** appear in `ollama list` / `/api/tags` until pulled; Test connection still probes chat for `*:cloud` names.
+
+### Troubleshooting
+
+#### Web: `Failed to fetch` / cannot list models at `…/api/tags`
+
+Browsers block cross-origin calls to `http://localhost:11434`. For the **web** viewer, start Ollama with CORS allowed:
+
+```bash
+OLLAMA_ORIGINS="*" ollama serve
+```
+
+Then pull a model if needed (`ollama pull phi4-mini:3.8b`) and use **Settings → AI → Test connection**.
+
+| Situation | What to do |
+|-----------|------------|
+| Opening `builds/btf_viewer.html` (`file://` or a plain static server) | Required: `OLLAMA_ORIGINS="*" ollama serve` |
+| `npm run dev` / `npm run preview` | Vite proxies `/ollama` → local Ollama (CORS often not needed); if Test connection still fails, use the `OLLAMA_ORIGINS` command above |
+| Ollama already running without origins | Stop it, then restart with `OLLAMA_ORIGINS="*" ollama serve` |
+| Desktop viewer | No CORS; plain `ollama serve` is enough |
+
+#### Connection / model errors (Desktop + Web)
+
+| Symptom | Check |
+|---------|--------|
+| Test connection times out | Is Ollama running? `curl http://localhost:11434/api/tags` |
+| Model not installed | `ollama list` then `ollama pull <model>` (default: `phi4-mini:3.8b`) |
+| Cloud model 401 / 403 | Local proxy: `ollama signin`. Direct `https://ollama.com`: set API key in Settings → AI |
+| Cloud model 404 | Use `minimax-m3:cloud` with local Ollama, or `minimax-m3` (no `:cloud`) with `https://ollama.com` + API key |
+| AI tab missing | Enable AI in **Settings → AI**, and show the panel in **Settings → Display** |
+
+### UI
+
+| Surface | Behaviour |
+|---------|-----------|
+| Right panel **AI** tab | Templates, free-form Ask, conversation log; **Clear** / **Stop** / **Ask** / **Language…** / **Settings…** |
+| Settings → **AI** | URL, model, reply language, API key, enable, Test connection |
+| Settings → Display | Show / hide AI panel |
+| View → Show AI Assistant (Desktop) | Toggle AI tab visibility |
+
+### Template questions
+
+| Template | Asks about |
+|----------|------------|
+| Analysis Findings | Walk through each finding (severity, meaning, next check) |
+| Triage findings | Top issues + which Statistics section to open |
+| Highest latency | Blocking / dispatch / preemption |
+| WCET / hot CPU | Top Tasks + Execution Max |
+| Migration thrash | Rate, Ping, lock-bounce |
+| Core balance | Score / σ, Concurrent Active, Switch Overhead |
+| Tick health | TICKLESS vs busy-window gaps |
+| Priority inversion | L/M/H / inherit |
+| Deadline / budget | Threshold violations |
+
+### Prompt notes
+
+- Prefer concrete task names, cores, and durations.
+- Times may be written as `jump:1805120` (trace `#timeScale` units). Both Desktop and Web turn these into clickable timeline links.
+- Cursor scope on Statistics/Analysis is respected automatically when building context.
+- **Language…** (or Settings → AI → Reply language) sets the preferred language for assistant replies.
+
+### Implementation map
+
+| Piece | Desktop | Web |
+|-------|---------|-----|
+| Client + templates | `btf_viewer_pkg/ai_assistant.py` | `web/src/utils/ollamaClient.js` |
+| Panel | `create_ai_assistant_panel()` | `AiAssistantPanel.vue` |
+| Settings | `_SettingsDialog` page **AI** + `[ai]` in `btf_viewer.rc` | Settings → AI + `settingsStore.js` |
+| Context | `_format_analysis_findings_text` via `_StatsPanel.build_analysis_findings` | `collectTraceAnalysisFindings` + `formatAnalysisFindingsText` |
 
 ---
 
@@ -555,7 +662,10 @@ On Desktop, macOS Retina uses pixel-based font sizing by default; override with 
 | Setting | Description |
 |---------|-------------|
 | Legend panel | Show or hide the dockable Legend panel |
-| Statistics panel | Show or hide the dockable Statistics panel |
+| Statistics panel | Show or hide the Statistics tab in the right panel |
+| Marks panel | Show or hide the Marks tab |
+| Find panel | Show or hide the Find tab (Desktop) |
+| AI Assistant panel | Show or hide the AI tab |
 | STI events | Show or hide software-trace item marker rows |
 | Grid lines | Overlay vertical grid lines on the timeline (**on** by default) |
 | Highlight on label hover | Dim all other segments when hovering a task label (**off** by default; enable for emphasis, disable for better performance on large traces) |
@@ -594,6 +704,19 @@ Changes take effect when the Settings dialog is accepted (Desktop) or **Save**d 
 - Task column is left-aligned; **Over by** / **CPU %** values are shown in red.
 - Both tables are included in **Export CSV** and **Export HTML**.
 
+### AI
+
+Available under **Settings → AI** on both Desktop and Web. See [AI Assistant (Ollama)](#ai-assistant-ollama) for setup, templates, and [troubleshooting](#troubleshooting) (web CORS: `OLLAMA_ORIGINS="*" ollama serve`).
+
+| Setting | Description |
+|---------|-------------|
+| Enable AI Assistant | When off, hides the AI tab and refuses to send requests |
+| Ollama URL | Local `http://localhost:11434` or cloud `https://ollama.com` |
+| Model | Local name from `ollama list`, or cloud e.g. `minimax-m3:cloud` (local proxy) / `minimax-m3` (direct cloud) |
+| Reply language | Preferred language for assistant replies (also **Language…** in the AI panel) |
+| API key | Optional; required for `https://ollama.com` (also accepts env `OLLAMA_API_KEY`) |
+| **Test connection** | Reach Ollama and run a tiny chat probe (cloud models need not be in `/api/tags`) |
+
 ### Default values (Desktop + Web)
 
 These match the compiled defaults in `btf_viewer.py` (`USER CONFIGURATION`) and `web/src/utils/settingsStore.js` (`DEFAULT_SETTINGS`). Desktop stores font sizes in **pt**; the web viewer uses the same numeric values in **px**.
@@ -603,7 +726,11 @@ These match the compiled defaults in `btf_viewer.py` (`USER CONFIGURATION`) and 
 | Theme | Dark |
 | Timeline label font | 8 |
 | UI / menus font | 8 |
-| Show Legend / Statistics / Marks / STI / CPU load | On |
+| Show Legend / Statistics / Marks / STI / CPU load / AI panel | On |
+| AI Assistant enabled | On |
+| Ollama URL | `http://localhost:11434` |
+| Ollama model | `phi4-mini:3.8b` |
+| AI reply language | `English` |
 | Grid lines | **On** |
 | Highlight segments on label hover | **Off** |
 | Colorblind-safe palette | Off |
@@ -733,13 +860,15 @@ The right side uses three tabs — **Statistics**, **Marks**, and **Find** — w
 | **Statistics** | Collapsible / reorderable / pinnable metric tables, exports, **Trace Compare…** |
 | **Marks** | **Web:** Cursors, cursor-range summary, unified bookmarks/annotations list, Legend. **Desktop:** **Curs.** / **Bookm.** / **Anno.** sub-tabs, cursor-range label, Legend in a separate dock above this panel |
 | **Find** | Search (Contains / Exact / Regex / Migrations); `Ctrl+F` focuses this tab |
+| **AI** | Ollama chat over Analysis Findings; template questions; see [AI Assistant (Ollama)](#ai-assistant-ollama) |
 
 - **Resize** — drag the vertical bar between the timeline and the right panel to change panel width.
-- **Legend (Desktop)** — separate dock above the Statistics/Marks/Find panel; toggle via **Settings → Display → Legend panel**.
+- **Legend (Desktop)** — separate dock above the Statistics/Marks/Find/AI panel; toggle via **Settings → Display → Legend panel**.
 - **Legend (Web)** — section inside the **Marks** tab when **Legend panel** is enabled in Settings.
 - **Migration heatmap** — toolbar **Heatmap** button (multi-core traces only). ≤ 16 cores: pair grid → task grid → timeline zoom/filter. > 16 cores: core×core matrix (row click) → outgoing pairs → tasks. **Export PNG / SVG** of the current drill level from the heatmap dialog. Toolbar **All** appears while filtered. See [Migration heatmap](#migration-heatmap).
 - **Migration chord diagram** — toolbar **Chord** button (multi-core traces only). Circular diagram with one arc per core; hover an arc to highlight its migrations and dim the rest. **Show: All Migrations / Show: Bounce Only** toggle restricts it to lock-bounce migrations. **Export PNG / SVG** of the current view. See [Migration chord diagram](#migration-chord-diagram).
 - **Analysis Findings** — toolbar **Analysis** button opens heuristic findings for the current Statistics scope; **Save as text…** exports a `.txt` copy. See [Analysis Findings](#analysis-findings).
+- **AI Assistant** — open the right-panel **AI** tab; configure Ollama under **Settings → AI**. See [AI Assistant (Ollama)](#ai-assistant-ollama).
 
 ### Multi-tab traces (Web)
 
@@ -2220,6 +2349,8 @@ Settings, window layout, bookmarks, and multi-tab state are stored in `btf_viewe
 | `[stats]` `table_height_<section>` | Per-section metric table heights in Statistics (Desktop) |
 | `[stats]` `pinned_sections` | Comma-separated Statistics section IDs kept expanded (Desktop) |
 | `[stats]` `section_order` | Comma-separated Statistics section IDs in display order (Desktop; omitted IDs append in catalogue order) |
+| `[ai]` `enabled` / `ollama_url` / `ollama_model` / `ollama_api_key` / `response_language` | Ollama AI Assistant (Desktop; Web mirrors in `btf-viewer-settings-v1`) |
+| `[view]` `show_ai` | Show the AI right-panel tab |
 | `[zoom]` / `[cursors]` | Zoom and cursors for the last active tab (legacy compatibility) |
 
 ---

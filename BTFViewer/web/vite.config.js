@@ -10,6 +10,15 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const BUILDS_DIR = resolve(__dirname, '../builds')
 const RELEASE_HTML = 'btf_viewer.html'
 
+/** Same-origin proxy so the browser can reach local Ollama without CORS. */
+const ollamaProxy = {
+  '/ollama': {
+    target: process.env.OLLAMA_PROXY_TARGET || 'http://127.0.0.1:11434',
+    changeOrigin: true,
+    rewrite: (path) => path.replace(/^\/ollama/, ''),
+  },
+}
+
 function inlineExampleBtfPlugin() {
   const virtualId = 'virtual:example-btf'
   const resolvedId = '\0virtual:example-btf'
@@ -53,6 +62,12 @@ export default defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
     __BUILD_DATE__: JSON.stringify(new Date().toISOString().slice(0, 10)),
+  },
+  server: {
+    proxy: ollamaProxy,
+  },
+  preview: {
+    proxy: ollamaProxy,
   },
   build: {
     outDir: BUILDS_DIR,

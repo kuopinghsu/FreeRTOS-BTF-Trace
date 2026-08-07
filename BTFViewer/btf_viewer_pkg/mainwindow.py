@@ -9,7 +9,13 @@ from .graphics_items import *  # noqa: F403,F401
 from .scene import *  # noqa: F403,F401
 from .view import *  # noqa: F403,F401
 from .stats import *  # noqa: F403,F401
-from .stats import _RcSettings, _parse_task_deadlines_text, _AnalysisFindingsDialog
+from .stats import _RcSettings, _parse_task_deadlines_text, _AnalysisFindingsDialog, _format_analysis_findings_text
+from .ai_assistant import (
+    create_ai_assistant_panel,
+    DEFAULT_AI_RESPONSE_LANGUAGE,
+    DEFAULT_OLLAMA_URL,
+    DEFAULT_OLLAMA_MODEL,
+)
 from .mvvm import MainViewModel, MvvmSettingsMixin, TraceTabViewModel
 from .mvvm.tab_viewport import apply_viewport, viewport_from_json, viewport_to_json
 from .trace_quality import trace_quality_summary
@@ -1532,7 +1538,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if self._shutting_down or not hasattr(self, "_legend_dock"):
             return
         self._reload_panel_visibility_prefs_from_rc()
-        panel_on = bool(self._show_stats or self._show_marks or self._show_find)
+        panel_on = self._right_panel_wanted()
         legend_bad = self._show_legend and not self._legend_dock.isVisible()
         panel_bad = panel_on and not self._panel_dock.isVisible()
         if not legend_bad and not panel_bad:
@@ -2185,19 +2191,38 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._panel_tabs.setCurrentIndex(tab_index)
 
     def _sync_panel_tab_visibility(self) -> None:
-        """Apply show_stats / show_marks / show_find to panel tab visibility."""
+        """Apply show_stats / show_marks / show_find / show_ai to panel tab visibility."""
         if not hasattr(self, "_panel_tabs"):
             return
         self._panel_tabs.setTabVisible(_PANEL_TAB_STATS, self._show_stats)
         self._panel_tabs.setTabVisible(_PANEL_TAB_MARKS, self._show_marks)
         self._panel_tabs.setTabVisible(_PANEL_TAB_FIND, self._show_find)
+        self._panel_tabs.setTabVisible(_PANEL_TAB_AI, self._ai_panel_wanted())
         visible = [
-            i for i in (_PANEL_TAB_STATS, _PANEL_TAB_MARKS, _PANEL_TAB_FIND)
+            i for i in (_PANEL_TAB_STATS, _PANEL_TAB_MARKS, _PANEL_TAB_FIND, _PANEL_TAB_AI)
             if self._panel_tabs.isTabVisible(i)
         ]
         if visible and self._panel_tabs.currentIndex() not in visible:
             self._panel_tabs.setCurrentIndex(visible[0])
 
+    def _ai_feature_enabled(self) -> bool:
+        """Settings → AI → Enable AI Assistant."""
+        s = getattr(self, "_settings", None)
+        if s is None:
+            return True
+        return s.get_bool("ai", "enabled", True)
+
+    def _ai_panel_wanted(self) -> bool:
+        """AI tab is shown only when the feature is enabled and Display shows it."""
+        return bool(getattr(self, "_show_ai", True)) and self._ai_feature_enabled()
+
+    def _right_panel_wanted(self) -> bool:
+        return bool(
+            self._show_stats
+            or self._show_marks
+            or self._show_find
+            or self._ai_panel_wanted()
+        )
     def _toggle_show_marks_panel(self) -> None:
         self._show_marks = not self._show_marks
         self._act_show_marks.setChecked(self._show_marks)
@@ -2660,6 +2685,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._show_stats = s.get_bool("view", "show_stats", True)
         self._show_marks = s.get_bool("view", "show_marks", True)
         self._show_find = s.get_bool("view", "show_find", True)
+        self._show_ai = s.get_bool("view", "show_ai", True)
 
     def _ensure_right_docks_layout(self) -> None:
         """Legend above tabbed panel on the right (re-attach after float/close)."""
@@ -2719,7 +2745,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             else:
                 self._set_dock_visible(self._legend_dock, False)
             self._sync_panel_tab_visibility()
-            panel_on = bool(self._show_stats or self._show_marks or self._show_find)
+            panel_on = self._right_panel_wanted()
             if panel_on:
                 self._set_dock_visible(self._panel_dock, True)
             else:
@@ -2738,7 +2764,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._apply_dock_visibility_from_prefs()
         if not hasattr(self, "_legend_dock"):
             return
-        panel_on = bool(self._show_stats or self._show_marks or self._show_find)
+        panel_on = self._right_panel_wanted()
         legend_bad = self._show_legend and not self._legend_dock.isVisible()
         panel_bad = panel_on and not self._panel_dock.isVisible()
         if legend_bad or panel_bad:
@@ -3002,6 +3028,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 "show_stats":    str(self._show_stats).lower(),
                 "show_marks":    str(self._show_marks).lower(),
                 "show_find":     str(self._show_find).lower(),
+                "show_ai":       str(getattr(self, "_show_ai", True)).lower(),
                 "font_size":     str(self._font_size_val),
                 "ui_font_size":  str(self._ui_font_size_val),
                 "max_cursors":   str(self._max_cursors_val),
@@ -3909,7 +3936,17 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._find_status.setStyleSheet("color:#999;")
         find_v.addWidget(self._find_status)
 
-        # --- Right panel: Statistics / Marks / Find tabs (web parity) ---
+        # --- AI Assistant panel (tab content) ---
+        self._ai_panel = create_ai_assistant_panel(
+            self,
+            get_context=self._ai_build_context,
+            get_settings=self._ai_read_settings,
+            on_open_settings=lambda: self._open_settings("AI"),
+            on_save_settings=self._ai_save_settings_patch,
+            on_jump=self._ai_jump_time_unit,
+        )
+
+        # --- Right panel: Statistics / Marks / Find / AI tabs (web parity) ---
         self._panel_tabs = QTabWidget()
         if sys.platform == "darwin":
             self._panel_tabs.setTabBar(_LeftAlignedTabBar(self._panel_tabs))
@@ -3917,6 +3954,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._panel_tabs.addTab(self._stats_panel, "Statistics")
         self._panel_tabs.addTab(marks_host, "Marks")
         self._panel_tabs.addTab(find_host, "Find")
+        self._panel_tabs.addTab(self._ai_panel, "AI")
 
         panel_dock = QDockWidget("", self)
         panel_dock.setObjectName("dock_panel")
@@ -4125,6 +4163,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._act_show_find = vm.addAction("Show &Find Panel", self._toggle_show_find_panel)
         self._act_show_find.setCheckable(True)
         self._act_show_find.setChecked(True)
+        self._act_show_ai = vm.addAction("Show &AI Assistant", self._toggle_show_ai_panel)
+        self._act_show_ai.setCheckable(True)
+        self._act_show_ai.setChecked(getattr(self, "_show_ai", True))
+        self._sync_ai_menu()
 
         # --- Cursors menu ---
         cm = mb.addMenu("&Cursors")
@@ -4695,6 +4737,77 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         trace = self._trace
         self._tb_chord_btn.setEnabled(
             trace is not None and _trace_is_multi_core(trace))
+
+    def _toggle_show_ai_panel(self) -> None:
+        self._show_ai = not getattr(self, "_show_ai", True)
+        if hasattr(self, "_act_show_ai"):
+            self._act_show_ai.setChecked(self._show_ai)
+        self._sync_panel_tab_visibility()
+        self._apply_dock_visibility_from_prefs()
+        if self._show_ai and self._ai_feature_enabled():
+            self._focus_ai_panel()
+
+    def _focus_ai_panel(self) -> None:
+        if not self._ai_feature_enabled():
+            self._open_settings("AI")
+            return
+        self._show_ai = True
+        if hasattr(self, "_act_show_ai"):
+            self._act_show_ai.setChecked(True)
+        self._sync_panel_tab_visibility()
+        self._apply_dock_visibility_from_prefs()
+        self._focus_panel_tab(_PANEL_TAB_AI)
+        if hasattr(self, "_panel_dock"):
+            self._panel_dock.show()
+            self._panel_dock.raise_()
+
+    def _sync_ai_menu(self) -> None:
+        """Show/hide View → Show AI Assistant when the feature is enabled."""
+        if hasattr(self, "_act_show_ai"):
+            enabled_feat = self._ai_feature_enabled()
+            self._act_show_ai.setVisible(enabled_feat)
+            self._act_show_ai.setEnabled(enabled_feat)
+
+    def _ai_read_settings(self) -> dict:
+        s = self._settings
+        return {
+            "enabled": s.get("ai", "enabled", "true"),
+            "ollama_url": s.get("ai", "ollama_url", DEFAULT_OLLAMA_URL),
+            "ollama_model": s.get("ai", "ollama_model", DEFAULT_OLLAMA_MODEL),
+            "ollama_api_key": s.get("ai", "ollama_api_key", ""),
+            "response_language": s.get(
+                "ai", "response_language", DEFAULT_AI_RESPONSE_LANGUAGE
+            ),
+        }
+
+    def _ai_save_settings_patch(self, patch: dict) -> None:
+        """Persist a subset of AI settings (e.g. Language… dialog)."""
+        if not patch:
+            return
+        clean = {str(k): str(v) for k, v in patch.items() if v is not None}
+        if not clean:
+            return
+        self._settings.set_many("ai", clean)
+
+    def _ai_build_context(self) -> dict:
+        if not hasattr(self, "_stats_panel") or self._trace is None:
+            return {"findings_text": "No trace loaded.", "scope": "", "span": "", "cores": ""}
+        findings, scope_title = self._stats_panel.build_analysis_findings()
+        text = _format_analysis_findings_text(findings, scope_title)
+        tr = self._trace
+        span = _format_time(tr.time_max - tr.time_min, tr.time_scale)
+        return {
+            "findings_text": text,
+            "scope": scope_title or "full trace",
+            "span": span,
+            "cores": len(tr.core_names or []),
+        }
+
+    def _ai_jump_time_unit(self, value: float) -> None:
+        """Jump timeline; *value* is in the trace #timeScale unit (same as segment times)."""
+        if self._trace is None:
+            return
+        self._jump_to_ns(int(float(value)))
 
     def _open_analysis_findings(self) -> None:
         """Show Analysis Findings dialog for the active tab / cursor scope."""
@@ -6037,6 +6150,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._show_find = vals["show_find"]
             self._act_show_find.setChecked(self._show_find)
             self._sync_panel_tab_visibility()
+        if vals.get("show_ai", getattr(self, "_show_ai", True)) != getattr(self, "_show_ai", True):
+            self._show_ai = vals["show_ai"]
+            if hasattr(self, "_act_show_ai"):
+                self._act_show_ai.setChecked(self._show_ai)
+            self._sync_panel_tab_visibility()
         if vals.get("show_cpu_load", self._show_cpu_load) != self._show_cpu_load:
             # Quiet model update — avoid settings_changed → full view rebuild.
             self._vm.settings._model.show_cpu_load = bool(vals["show_cpu_load"])
@@ -6114,6 +6232,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             updates["show_marks"] = str(self._show_marks).lower()
         if snap.get("show_find", self._show_find) != self._show_find:
             updates["show_find"] = str(self._show_find).lower()
+        if snap.get("show_ai", getattr(self, "_show_ai", True)) != getattr(self, "_show_ai", True):
+            updates["show_ai"] = str(self._show_ai).lower()
         if snap.get("show_cpu_load", self._show_cpu_load) != self._show_cpu_load:
             updates["show_cpu_load"] = str(self._show_cpu_load).lower()
         if snap["show_hover_highlight"] != self._hover_highlight_val:
@@ -6147,7 +6267,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
     def _open_settings(self, page: str = "Appearance") -> None:
         """Open the Settings dialog with live preview; reverts on Cancel.
 
-        *page* selects the sidebar page: ``Appearance``, ``Display``, or ``Layout``.
+        *page* selects the sidebar page: ``Appearance``, ``Display``, ``Layout``, or ``AI``.
         """
         _snap = {
             "is_dark":                  self._is_dark,
@@ -6160,6 +6280,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "show_stats":               self._show_stats,
             "show_marks":               self._show_marks,
             "show_find":                self._show_find,
+            "show_ai":                  getattr(self, "_show_ai", True),
             "show_cpu_load":            self._show_cpu_load,
             "show_hover_highlight":     self._hover_highlight_val,
             "colorblind_safe":          self._colorblind_val,
@@ -6186,6 +6307,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             show_stats=self._show_stats,
             show_marks=self._show_marks,
             show_find=self._show_find,
+            show_ai=getattr(self, "_show_ai", True),
             cpu_load=self._show_cpu_load,
             label_width=self._label_width_val,
             row_height=self._row_height_val,
@@ -6202,6 +6324,13 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             cpu_budget_pct=_snap["cpu_budget_pct"],
             task_deadlines_text=_snap["task_deadlines_text"],
             time_decimals=self._time_decimals_val,
+            ai_enabled=self._settings.get_bool("ai", "enabled", True),
+            ollama_url=self._settings.get("ai", "ollama_url", DEFAULT_OLLAMA_URL),
+            ollama_model=self._settings.get("ai", "ollama_model", DEFAULT_OLLAMA_MODEL),
+            ollama_api_key=self._settings.get("ai", "ollama_api_key", ""),
+            response_language=self._settings.get(
+                "ai", "response_language", DEFAULT_AI_RESPONSE_LANGUAGE
+            ),
             initial_page=page if isinstance(page, str) else "Appearance",
         )
         dlg.live_preview.connect(lambda: self._apply_settings_preview({
@@ -6215,6 +6344,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "show_stats":               dlg.show_stats,
             "show_marks":               dlg.show_marks,
             "show_find":                dlg.show_find,
+            "show_ai":                  dlg.show_ai,
             "show_cpu_load":            dlg.cpu_load,
             "show_hover_highlight":     dlg.show_hover_highlight,
             "colorblind_safe":          dlg.colorblind_safe,
@@ -6250,6 +6380,28 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 if hasattr(self, "_stats_panel"):
                     self._stats_panel.set_analysis_settings(
                         _new_budget, _parse_task_deadlines_text(_new_dl_text))
+            _ai_upd = {
+                "enabled": str(dlg.ai_enabled).lower(),
+                "ollama_url": dlg.ollama_url or DEFAULT_OLLAMA_URL,
+                "ollama_model": dlg.ollama_model or DEFAULT_OLLAMA_MODEL,
+                "ollama_api_key": dlg.ollama_api_key or "",
+                "response_language": dlg.response_language or DEFAULT_AI_RESPONSE_LANGUAGE,
+            }
+            _ai_changed = (
+                self._settings.get("ai", "enabled", "true").lower() != _ai_upd["enabled"]
+                or self._settings.get("ai", "ollama_url", DEFAULT_OLLAMA_URL) != _ai_upd["ollama_url"]
+                or self._settings.get("ai", "ollama_model", DEFAULT_OLLAMA_MODEL) != _ai_upd["ollama_model"]
+                or self._settings.get("ai", "ollama_api_key", "") != _ai_upd["ollama_api_key"]
+                or self._settings.get(
+                    "ai", "response_language", DEFAULT_AI_RESPONSE_LANGUAGE
+                ) != _ai_upd["response_language"]
+            )
+            if _ai_changed:
+                self._settings.set_many("ai", _ai_upd)
+            # Tab visibility follows Enable AI even when only that flag changed.
+            self._sync_panel_tab_visibility()
+            self._apply_dock_visibility_from_prefs()
+            self._sync_ai_menu()
         else:
             self._apply_settings_preview(_snap)
 

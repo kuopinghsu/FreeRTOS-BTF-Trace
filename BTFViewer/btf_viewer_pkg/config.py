@@ -291,10 +291,11 @@ DEFAULT_WINDOW_X         = 254
 DEFAULT_WINDOW_Y         = 47
 DEFAULT_DOCK_LAYOUT_VERSION = "10"
 
-# Right-panel tab indices (Statistics / Marks / Find — web parity).
+# Right-panel tab indices (Statistics / Marks / Find / AI — web parity).
 _PANEL_TAB_STATS = 0
 _PANEL_TAB_MARKS = 1
 _PANEL_TAB_FIND  = 2
+_PANEL_TAB_AI    = 3
 # Keep empty so first run uses code-driven dock sizing/tab defaults instead
 # of a host-dependent serialized Qt dock_state blob.
 DEFAULT_DOCK_STATE_B64 = ""
@@ -660,7 +661,7 @@ _IC_SETTINGS = ("M9.405 1.05c-.413-1.4-2.397-1.4-2.81 0l-.1.34a1.464 1.464 0 0 1
                 "M8 10.93a2.929 2.929 0 1 1 0-5.86 2.929 2.929 0 0 1 0 5.858z")
 
 # App icon - multi-colour 72x72 SVG rendered in the About dialog header.
-_APP_VERSION = "1.3.2"
+_APP_VERSION = "1.4.0"
 _APP_ICON_SVG = (
     '<svg xmlns="http://www.w3.org/2000/svg" width="72" height="72" viewBox="0 0 72 72">'
     '<rect x="3" y="3" width="66" height="66" rx="14" fill="#1C3A6E"/>'

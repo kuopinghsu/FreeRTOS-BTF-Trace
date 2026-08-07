@@ -215,6 +215,16 @@
           >
             Find
           </button>
+          <button
+            v-if="appSettings.showAi !== false && appSettings.aiEnabled !== false"
+            class="panel-tab"
+            :class="{ active: rightPanelTab === 'ai' }"
+            role="tab"
+            :aria-selected="rightPanelTab === 'ai'"
+            @click="rightPanelTab = 'ai'"
+          >
+            AI
+          </button>
         </div>
 
         <div class="panel-page-wrap">
@@ -350,6 +360,22 @@
                 @recompute="recomputeFind"
                 @next="() => stepFind(true)"
                 @prev="() => stepFind(false)"
+              />
+            </div>
+          </div>
+
+          <div v-else-if="rightPanelTab === 'ai'" class="panel-page panel-page-ai">
+            <div class="panel-section flex-fill">
+              <AiAssistantPanel
+                :ai-enabled="appSettings.aiEnabled !== false"
+                :ollama-url="appSettings.ollamaUrl"
+                :ollama-model="appSettings.ollamaModel"
+                :ollama-api-key="appSettings.ollamaApiKey"
+                :response-language="appSettings.aiResponseLanguage"
+                :get-context="buildAiContext"
+                @open-settings="openSettingsDialog('ai')"
+                @update:response-language="onAiResponseLanguage"
+                @jump="onAiJump"
               />
             </div>
           </div>
@@ -838,6 +864,7 @@ import MigrationHeatmapDialog from './components/MigrationHeatmapDialog.vue'
 import ChordDiagramDialog from './components/ChordDiagramDialog.vue'
 import AnalysisFindingsDialog from './components/AnalysisFindingsDialog.vue'
 import FindPanel from './components/FindPanel.vue'
+import AiAssistantPanel from './components/AiAssistantPanel.vue'
 import JumpToTimeDialog from './components/JumpToTimeDialog.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
 import { formatTime }   from './renderer/TimelineRenderer.js'
@@ -846,7 +873,7 @@ import { loadSettings, saveSettings, applySettingsToRuntime, resizeTabCursors, n
 } from './utils/settingsStore.js'
 import { setTimelineLayout } from './utils/timelineLayout.js'
 import { traceIsMultiCore } from './utils/migrationAnalysis.js'
-import { collectTraceAnalysisFindings } from './utils/workflowAnalysis.js'
+import { collectTraceAnalysisFindings, formatAnalysisFindingsText } from './utils/workflowAnalysis.js'
 import { getStatsRange, scopeSuffix } from './utils/statsRange.js'
 import {
   cpuLoadPreferredPaneHeight, cpuLoadPaneDefaultH, cpuLoadPaneMaxH,
@@ -1019,6 +1046,9 @@ function syncTimelineOptionsFromSettings(s = appSettings) {
   timelineOptions.layoutRev += 1
   if (!s.showStats && rightPanelTab.value === 'stats') {
     rightPanelTab.value = 'marks'
+  }
+  if ((s.showAi === false || s.aiEnabled === false) && rightPanelTab.value === 'ai') {
+    rightPanelTab.value = s.showStats ? 'stats' : 'marks'
   }
 }
 
@@ -1831,6 +1861,42 @@ function stepFind(forward) {
 function focusFindPanel() {
   rightPanelTab.value = 'find'
   nextTick(() => findPanelRef.value?.focusInput())
+}
+
+function buildAiContext() {
+  const tr = trace.value
+  if (!tr) {
+    return { findingsText: 'No trace loaded.', scope: '', span: '', cores: '' }
+  }
+  const scopeOn = activeTab.value?.scopeToCursors !== false
+  const range = getStatsRange(cursors.value, scopeOn)
+  const findings = collectTraceAnalysisFindings(
+    tr,
+    range?.lo ?? null,
+    range?.hi ?? null,
+    appSettings,
+  )
+  const scopeLabel = scopeSuffix(range) || ''
+  const span = formatTime(tr.timeMax - tr.timeMin, tr.timeScale, appSettings.timeDecimals)
+  return {
+    findingsText: formatAnalysisFindingsText(findings, scopeLabel),
+    scope: scopeLabel || 'full trace',
+    span,
+    cores: tr.coreNames?.length ?? tr.cores?.length ?? 0,
+  }
+}
+
+function onAiJump(t) {
+  if (t == null || !Number.isFinite(Number(t))) return
+  timelinePanelRef.value?.jumpToNs(Number(t))
+  syncTimelineViewport()
+}
+
+function onAiResponseLanguage(lang) {
+  const next = String(lang || '').trim()
+  if (!next || appSettings.aiResponseLanguage === next) return
+  appSettings.aiResponseLanguage = next
+  saveSettings(appSettings)
 }
 
 function onDragEnter(e) {

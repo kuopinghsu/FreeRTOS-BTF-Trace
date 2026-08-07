@@ -1,6 +1,7 @@
 /** Persistent web viewer settings (localStorage). Parity with desktop btf_viewer.rc / btf_viewer.py USER CONFIGURATION. */
 import { syncTimelineLayoutFromSettings } from './timelineLayout.js'
 import { normalizeStatsPins, normalizeStatsSectionOrder } from './statsPins.js'
+import { DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL, DEFAULT_AI_RESPONSE_LANGUAGE } from './ollamaClient.js'
 
 const SETTINGS_KEY = 'btf-viewer-settings-v1'
 
@@ -37,6 +38,12 @@ export const DEFAULT_SETTINGS = {
   timeDecimals: 3,
   statsPinnedSections: [],
   statsSectionOrder: [],
+  showAi: true,
+  aiEnabled: true,
+  ollamaUrl: DEFAULT_OLLAMA_URL,
+  ollamaModel: DEFAULT_OLLAMA_MODEL,
+  ollamaApiKey: '',
+  aiResponseLanguage: DEFAULT_AI_RESPONSE_LANGUAGE,
 }
 
 function clampInt(v, lo, hi, fallback) {
@@ -84,6 +91,15 @@ export function normalizeSettings(raw) {
     timeDecimals: clampInt(s.timeDecimals, 0, 9, DEFAULT_SETTINGS.timeDecimals),
     statsPinnedSections: normalizeStatsPins(s.statsPinnedSections),
     statsSectionOrder: normalizeStatsSectionOrder(s.statsSectionOrder),
+    showAi: s.showAi !== false,
+    aiEnabled: s.aiEnabled !== false,
+    ollamaUrl: String(s.ollamaUrl || DEFAULT_SETTINGS.ollamaUrl).trim().replace(/\/+$/, '')
+      || DEFAULT_SETTINGS.ollamaUrl,
+    ollamaModel: String(s.ollamaModel || DEFAULT_SETTINGS.ollamaModel).trim()
+      || DEFAULT_SETTINGS.ollamaModel,
+    ollamaApiKey: String(s.ollamaApiKey || '').trim(),
+    aiResponseLanguage: String(s.aiResponseLanguage || DEFAULT_SETTINGS.aiResponseLanguage).trim()
+      || DEFAULT_SETTINGS.aiResponseLanguage,
   }
 }
 

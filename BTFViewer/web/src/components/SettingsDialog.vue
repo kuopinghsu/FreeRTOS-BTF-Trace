@@ -122,6 +122,13 @@
             </label>
             <label class="settings-check indent">
               <input
+                v-model="draft.showAi"
+                type="checkbox"
+              >
+              AI Assistant panel
+            </label>
+            <label class="settings-check indent">
+              <input
                 v-model="draft.showCpuLoad"
                 type="checkbox"
               >
@@ -305,6 +312,95 @@
               <span class="settings-unit">px</span>
             </label>
           </div>
+
+          <!-- AI / Ollama -->
+          <div
+            v-show="activeTab === 'ai'"
+            class="settings-page"
+          >
+            <h3 class="settings-section">Ollama connection</h3>
+            <label class="settings-check">
+              <input
+                v-model="draft.aiEnabled"
+                type="checkbox"
+              >
+              Enable AI Assistant
+            </label>
+            <p class="settings-help">
+              When off, the AI tab is hidden.
+            </p>
+            <label class="settings-row col">
+              <span class="settings-label">Ollama URL</span>
+              <input
+                v-model="draft.ollamaUrl"
+                class="settings-input wide"
+                type="url"
+                placeholder="http://localhost:11434"
+              >
+            </label>
+            <label class="settings-row col">
+              <span class="settings-label">Model</span>
+              <input
+                v-model="draft.ollamaModel"
+                class="settings-input wide"
+                type="text"
+                placeholder="phi4-mini:3.8b or minimax-m3:cloud"
+              >
+            </label>
+            <label class="settings-row col">
+              <span class="settings-label">Reply language</span>
+              <select
+                v-model="draft.aiResponseLanguage"
+                class="settings-input wide"
+              >
+                <option
+                  v-for="lang in aiLanguageOptions"
+                  :key="lang"
+                  :value="lang"
+                >
+                  {{ lang }}
+                </option>
+              </select>
+            </label>
+            <label class="settings-row col">
+              <span class="settings-label">API key</span>
+              <input
+                v-model="draft.ollamaApiKey"
+                class="settings-input wide"
+                type="password"
+                autocomplete="off"
+                placeholder="Optional — for https://ollama.com"
+              >
+            </label>
+            <div class="settings-ai-test">
+              <button
+                type="button"
+                class="settings-btn secondary"
+                :disabled="ollamaTesting"
+                title="Reach Ollama, confirm the model, and run a tiny chat probe. Status updates below — first model load can take a minute."
+                @click="onTestOllama"
+              >
+                {{ ollamaTesting ? 'Testing…' : 'Test connection' }}
+              </button>
+              <p
+                class="settings-test-status"
+                :class="ollamaTestClass"
+                role="status"
+                aria-live="polite"
+              >
+                {{ ollamaTestStatus || 'Click Test connection to verify Ollama and the model.' }}
+              </p>
+            </div>
+            <p class="settings-help">
+              Local: <code>ollama pull phi4-mini:3.8b</code>.
+              Cloud via local Ollama: <code>ollama signin</code> then model
+              <code>minimax-m3:cloud</code> (optional <code>ollama pull</code>).
+              Or URL <code>https://ollama.com</code>, model <code>minimax-m3</code>, and an API key.
+              Context is Analysis Findings — not the raw BTF.
+              Prefer <code>npm run dev</code> / <code>preview</code> (proxies local Ollama).
+              For <code>file://</code> opens: <code>OLLAMA_ORIGINS="*" ollama serve</code>.
+            </p>
+          </div>
         </div>
       </div>
 
@@ -345,6 +441,7 @@ import {
   parseDeadlinesText,
   shouldReplaceDeadlinesText,
 } from '../utils/settingsStore.js'
+import { ollamaTestConnection, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL, AI_RESPONSE_LANGUAGES } from '../utils/ollamaClient.js'
 
 const props = defineProps({
   modelValue: { type: Object, required: true },
@@ -358,12 +455,30 @@ const tabs = [
   { id: 'appearance', label: 'Appearance' },
   { id: 'display', label: 'Display' },
   { id: 'layout', label: 'Layout' },
+  { id: 'ai', label: 'AI' },
 ]
 
 const _tabIds = new Set(tabs.map(t => t.id))
 const activeTab = ref(_tabIds.has(props.initialTab) ? props.initialTab : 'appearance')
 const draft = reactive(normalizeSettings(props.modelValue))
 const deadlinesText = ref(formatDeadlinesText(draft.taskDeadlines))
+const aiLanguageOptions = computed(() => {
+  const cur = String(draft.aiResponseLanguage || '').trim()
+  if (cur && !AI_RESPONSE_LANGUAGES.includes(cur)) {
+    return [...AI_RESPONSE_LANGUAGES, cur]
+  }
+  return AI_RESPONSE_LANGUAGES
+})
+const ollamaTesting = ref(false)
+const ollamaTestStatus = ref('')
+const ollamaTestOk = ref(null)
+let ollamaAbort = null
+
+const ollamaTestClass = computed(() => {
+  if (ollamaTestOk.value === true) return 'ok'
+  if (ollamaTestOk.value === false) return 'error'
+  return ''
+})
 
 watch(() => props.modelValue, (v) => {
   suppressPreview.value = true
@@ -410,6 +525,44 @@ const zoomUnit = computed(() => {
 function onReset() {
   Object.assign(draft, { ...DEFAULT_SETTINGS })
   deadlinesText.value = ''
+  ollamaTestStatus.value = ''
+  ollamaTestOk.value = null
+}
+
+async function onTestOllama() {
+  if (ollamaTesting.value) return
+  ollamaTesting.value = true
+  ollamaTestOk.value = null
+  const url = draft.ollamaUrl || DEFAULT_OLLAMA_URL
+  const model = draft.ollamaModel || DEFAULT_OLLAMA_MODEL
+  ollamaTestStatus.value = `Starting test for ${url} / ${model}…`
+  if (ollamaAbort) ollamaAbort.abort()
+  ollamaAbort = new AbortController()
+  try {
+    const msg = await ollamaTestConnection({
+      baseUrl: draft.ollamaUrl,
+      model: draft.ollamaModel,
+      apiKey: draft.ollamaApiKey,
+      signal: ollamaAbort.signal,
+      onProgress: (s) => {
+        ollamaTestOk.value = null
+        ollamaTestStatus.value = s
+      },
+    })
+    ollamaTestOk.value = true
+    ollamaTestStatus.value = msg
+  } catch (err) {
+    if (err?.name === 'AbortError') {
+      ollamaTestStatus.value = 'Cancelled'
+      ollamaTestOk.value = null
+    } else {
+      ollamaTestOk.value = false
+      ollamaTestStatus.value = err?.message || String(err)
+    }
+  } finally {
+    ollamaTesting.value = false
+    ollamaAbort = null
+  }
 }
 
 function onSave() {
@@ -522,6 +675,35 @@ function onSave() {
 .settings-section:first-child {
   margin-top: 0;
 }
+.settings-help {
+  margin: 4px 0 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--fg-dim);
+}
+.settings-help code {
+  font-size: 10px;
+  background: rgba(127, 127, 127, 0.15);
+  padding: 0 3px;
+  border-radius: 3px;
+}
+.settings-ai-test {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 4px;
+}
+.settings-test-status {
+  margin: 0;
+  min-height: 2.8em;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--fg-dim);
+  word-break: break-word;
+}
+.settings-test-status.ok { color: #1e8449; }
+.settings-test-status.error { color: #c0392b; }
 .settings-row {
   display: grid;
   grid-template-columns: 1fr 110px 36px;

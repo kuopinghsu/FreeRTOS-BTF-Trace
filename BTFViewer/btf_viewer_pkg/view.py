@@ -190,12 +190,26 @@ def _in_legend_panel(w: QWidget) -> bool:
         p = p.parentWidget()
     return False
 
+
+def _in_ai_actions_bar(w: QWidget) -> bool:
+    """True when *w* is in the AI panel Clear/Stop/Ask bar (must keep width)."""
+    p: Optional[QWidget] = w
+    while p is not None:
+        if p.objectName() == "aiActions":
+            return True
+        p = p.parentWidget()
+    return False
+
 def _relax_widget_tree(root: QWidget) -> None:
     """Clear horizontal minimum-size hints so a dock column can narrow."""
     for w in (root, *root.findChildren(QWidget)):
         if isinstance(w, _StatsSectionGrip) or _in_legend_panel(w):
             continue
         if w.objectName() == "stats_scope_action":
+            continue
+        # AI header actions: Ignored + row stretch collapses them to 0 width.
+        if _in_ai_actions_bar(w):
+            w.setMinimumWidth(0)
             continue
         w.setMinimumWidth(0)
         # Only relax push/tool buttons — QLabel and other controls need real width.

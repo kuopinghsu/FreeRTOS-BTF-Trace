@@ -39,7 +39,7 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from PySide6.QtCore import (
     QBuffer, QByteArray, QEasingCurve, QEvent, QEventLoop, QIODevice, QLineF, QMimeData,
-    QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt, QThread, QTimer,
+    QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt, QThread, QTimer, QUrl,
     QPropertyAnimation, Signal,
 )
 from PySide6.QtGui import (
@@ -58,7 +58,7 @@ from PySide6.QtWidgets import (
     QPushButton, QScrollArea, QScrollBar, QDoubleSpinBox, QSpinBox, QStackedWidget,
     QStyle, QStyleFactory, QStyleOptionGraphicsItem, QAbstractItemView,
     QProxyStyle, QStyledItemDelegate, QTabBar, QTabWidget, QTableWidget, QTableWidgetItem, QToolButton,
-    QPlainTextEdit,
+    QPlainTextEdit, QTextBrowser,
     QVBoxLayout, QWidget, QSizePolicy, QSplitter, QLayout,
 )
 

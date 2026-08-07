@@ -14,6 +14,7 @@ Top-down workflows for analysing RTOS scheduler behaviour with BTFViewer. Start 
 | [4. Deep-dive playbooks](#4-deep-dive-playbooks) | Short procedures per metric |
 | [5. Scope, compare, and custom signals](#5-scope-compare-and-custom-signals) | Cursors, Trace Compare, tags |
 | [6. Export results](#6-export-results) | Findings, CSV/HTML, Perfetto, CLI |
+| [7. AI Assistant flow](#7-ai-assistant-flow) | Ollama chat over Analysis Findings |
 | [Quick-reference](#quick-reference-metric-to-root-cause) | Symptom → metric map |
 
 ---
@@ -63,6 +64,7 @@ Default Statistics order matches this ladder (after Summary): utilisation → he
 2. Open the Statistics section named by the finding.
 3. Click **Max**, scatter points, or heatmap cells to jump the timeline.
 4. Place cursors (`C`) around the phase of interest and enable **Limit to cursor range**.
+5. Optionally open the **AI** tab and ask Ollama to triage the same findings ([§7](#7-ai-assistant-flow)).
 
 **Demo traces:** `example-8cores.btf.gz` concatenates intentional stress tests. Scope to a phase before treating a warning as a product defect.
 
@@ -426,11 +428,75 @@ python builds/btf_viewer.py perfetto ../tracedata/example-8cores.btf.gz -o trace
 
 ---
 
+## 7. AI Assistant Flow
+
+Use the right-panel **AI** tab after Analysis Findings exist. The assistant receives **structured findings for the current Statistics scope** (plus span / core count) — never the raw BTF stream. Full setup and troubleshooting: [README.md § AI Assistant](README.md#ai-assistant-ollama).
+
+```text
+① Load trace + open Statistics
+② (Optional) Place cursors → Limit to cursor range
+③ Toolbar Analysis / Statistics findings for that scope
+④ AI tab → template or free-form Ask
+⑤ Context = Analysis Findings (+ span, cores, scope)
+⑥ Ollama /api/chat  →  reply (jump:TIME links → timeline)
+⑦ Open the Statistics section the reply names; verify on the timeline
+```
+
+### 7.1 One-time setup
+
+| Step | Desktop | Web |
+|------|---------|-----|
+| Install Ollama + model | `ollama serve` then `ollama pull phi4-mini:3.8b` | Same; for browser CORS use `OLLAMA_ORIGINS="*" ollama serve` |
+| Configure | **Settings → AI** (URL, model, reply language, optional API key) | Same |
+| Verify | **Test connection** | Same |
+| Show panel | **View → Show AI Assistant** / Display settings | Display → AI Assistant panel |
+
+Cloud models: local proxy (`minimax-m3:cloud` + `ollama signin`) or `https://ollama.com` + API key (model without `:cloud`).
+
+### 7.2 Recommended ask order
+
+Match the [top-down ladder](#2-top-down-analysis-ladder). Prefer templates first, then free-form follow-ups.
+
+| Order | Template / ask | Then verify in UI |
+|------:|----------------|-------------------|
+| 1 | **Analysis Findings** or **Triage findings** | Open each named Statistics section |
+| 2 | **Tick health** | Trace Health (TICK); scope a busy window if TICKLESS |
+| 3 | **Core balance** | Core Utilisation → Concurrent Active / Switch Overhead |
+| 4 | **WCET / hot CPU** | Top Tasks → Execution Max; click Max to jump |
+| 5 | **Highest latency** | Blocking → Dispatch → Preemption Chain |
+| 6 | **Migration thrash** | Migrations Rate/Ping; Core-Pair Bounce % |
+| 7 | **Priority inversion** | Priority Inheritance L/M/H |
+| 8 | **Deadline / budget** | After thresholds are set in Settings → Analysis |
+
+**Reply language:** **Language…** on the AI bar (or Settings → AI → Reply language).
+
+**Times in replies:** `jump:1805120` (trace `#timeScale` units). Click the link (Desktop + Web) to seek the timeline, then confirm with Statistics / cursors.
+
+### 7.3 Scope the question
+
+| Goal | Before Ask |
+|------|------------|
+| Full-trace triage | Leave **Limit to cursor range** off |
+| One suite phase (e.g. thrash window) | Place two cursors, enable **Limit to cursor range**, re-open Analysis if needed, then Ask |
+| Compare builds | Run Trace Compare first ([§5.2](#52-compare-two-builds)); AI still sees the *active* tab’s findings only |
+
+Clear the log between unrelated questions (**Clear**). Use **Stop** if a probe hangs on first model load.
+
+### 7.4 When not to trust the reply
+
+- Findings are empty or scope is wrong — fix Statistics/cursors first.
+- Demo / concatenated stress traces — scope to one phase before acting on advice.
+- Tick not GOOD / TICKLESS — ask about tick health, then re-check derived latency in a busy window.
+- Always open the Statistics section and timeline evidence; treat AI as a triage aid, not ground truth.
+
+---
+
 ## Quick-Reference: Metric to Root Cause
 
 | Observed symptom | Start here | Then check |
 |-----------------|------------|------------|
 | Unknown — triage first | Toolbar **Analysis** | Named Statistics sections in each finding |
+| Need a narrative triage | Right-panel **AI** ([§7](#7-ai-assistant-flow)) | Templates → open named sections; click `jump:TIME` |
 | Tick jitter / tickless | Trace Health (TICK) | Scope busy window; Execution Max |
 | Tickless vs tickful trade-off | Trace Compare (Tick mode, Context switches) | Execution / Blocking on the same busy phase |
 | SMP uneven load | Core Utilisation (Score / σ) | Concurrent Core Active; Migrations, Affinity |
