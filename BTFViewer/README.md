@@ -288,11 +288,11 @@ Large **max core gap** on a core that should be busy suggests starvation, tickle
 
 **Core utilisation** — per core, share of non-IDLE, non-TICK active time in scope:
 
-> **Formula:** U<sub>core</sub> = frac{T<sub>active,core</sub>}{T<sub>scope</sub>} × 100
+> **Formula:** U<sub>core</sub> = (T<sub>active,core</sub> / T<sub>scope</sub>) × 100
 
 When two or more cores are present, two gauges are shown side by side at the top of the section — **Load Balance Score** and **Std Deviation (σ)**:
 
-> **Formula:** Score = 100% × (1 - G),    G = Gini coefficient of  {U<sub>core</sub>}
+> **Formula:** Score = 100% × (1 − G), where G is the Gini coefficient of {U<sub>core</sub>}
 
 σ is the population standard deviation of `{U_core}`. The Score needle uses a 0–100 % scale (100 = perfect balance, 0 = single-core overload); the σ needle uses a 0–60 % scale with the warn threshold at mid-scale. Zones match toolbar **Analysis**:
 
@@ -312,7 +312,7 @@ Uses STI **TICK** timestamps to estimate scheduler tick regularity and detect wh
 
 **Formula** — for consecutive TICK events at times *t*<sub>n</sub>:
 
-> **Formula:** Δ<sub>n</sub> = t<sub>n</sub> - t<sub>n-1</sub>,    μ = mean(Δ<sub>n</sub>),    σ = stdev(Δ<sub>n</sub>),    CV = (σ) / (μ)
+> **Formula:** Δ<sub>n</sub> = t<sub>n</sub> − t<sub>n−1</sub>, μ = mean(Δ<sub>n</sub>), σ = stdev(Δ<sub>n</sub>), CV = σ / μ
 
 **Missed ticks (est.)** counts large gaps where Δ<sub>n</sub> ≫ μ (roughly ⌊Δ<sub>n</sub> / μ⌋ − 1).
 
@@ -439,7 +439,7 @@ Measures how long each **on-CPU slice** lasts for a task — from switch-in unti
 
 Table statistics are computed over all slice durations *d*<sub>k</sub> in scope. **Jitter** is the observed range, `Max − Min`; **σ** is the population standard deviation (the observed slices are treated as the complete population in scope). **CPU%** is the task's share of total active CPU time in scope:
 
-> **Formula:** CPU<sub>i</sub> = frac{T<sub>exec,i</sub>}{Σ<sub>j</sub> T<sub>exec,j</sub>} × 100
+> **Formula:** CPU<sub>i</sub> = (T<sub>exec,i</sub> / Σ<sub>j</sub> T<sub>exec,j</sub>) × 100
 
 **What it tells you:** Short, uniform slices suggest periodic or tick-driven scheduling. A long **Max** or heavy **p95** tail marks worst-case execution time (WCET) slices — often critical sections, lock holds, or interrupt-disabled regions. Compare **Min** (BCET) and **Max** (WCET) to judge jitter; a wide spread on a real-time task may violate deadline assumptions even when **Avg** looks acceptable.
 
@@ -532,7 +532,7 @@ Measures the gap between **successive activation start times** of the same task 
 
 **Formula** — for consecutive activations *k* and *k+1*:
 
-> **Formula:** Δ t<sub>k</sub> = t<sub>start,k+1</sub> - t<sub>start,k</sub>
+> **Formula:** Δt<sub>k</sub> = t<sub>start,k+1</sub> - t<sub>start,k</sub>
 
 Min / Avg / Max / p95 are taken over all inter-arrival samples Δ*t*<sub>k</sub> in scope.
 
@@ -715,7 +715,7 @@ The viewer pairs **`take`/`give`** (and **`create`/`delete`**) **per pointer** �
 
 **Formula** — for each paired hold span *h* of duration τ<sub>h</sub>:
 
-> **Formula:** τ̄<sub>hold</sub> = frac{1}{N<sub>holds</sub>} Σ<sub>h</sub> tau<sub>h</sub>
+> **Formula:** τ̄<sub>hold</sub> = (1 / N<sub>holds</sub>) × Σ<sub>h</sub> τ<sub>h</sub>
 
 **What it tells you:** **Avg hold** shows typical lock or semaphore residency time — very long holds inflate blocking for waiters. **Issues** > 0 (orphan give, cross-task give, unmatched take, delete while held) mean the trace does not form clean take/give pairs and hold statistics may be incomplete. **Deadlock risk** at trace end flags multiple mutexes still held by different tasks — verify whether that is expected teardown or a real stall.
 
@@ -768,7 +768,7 @@ Pairs **`interval_start` / `interval_stop`** STI events into measurable code reg
 
 **Formula** — for each paired instance *j* with start *t*<sub>s</sub> and stop *t*<sub>e</sub>:
 
-> **Formula:** tau<sub>j</sub> = t<sub>e</sub> - t<sub>s</sub>
+> **Formula:** τ<sub>j</sub> = t<sub>e</sub> - t<sub>s</sub>
 
 **Count** is the number of paired spans in scope; Min / Avg / Max / p95 are over all interval durations τ<sub>j</sub>.
 
@@ -970,7 +970,7 @@ The distribution popup has two in-dialog tabs — **Value** (above) and **Interv
 
 **Formula** — for consecutive samples (sorted by time) *k* and *k−1* on one channel:
 
-> **Formula:** delta<sub>k</sub> = t<sub>k</sub> - t<sub>k-1</sub>
+> **Formula:** δ<sub>k</sub> = t<sub>k</sub> - t<sub>k-1</sub>
 
 **Scatter:** x = the later sample's time, y = δ<sub>k</sub> (rendered as a duration, using the same adaptive time units as other metric charts). **Histogram:** distribution of δ<sub>k</sub> with the usual min/avg/max/p95 reference lines and [CDF overlay](#cdf-overlay). Clicking a scatter point jumps to and annotates the later sample's time.
 
@@ -1040,7 +1040,7 @@ python builds/btf_viewer.py migrations ../tracedata/example-8cores.btf.gz \
 
 **Migration rate** — normalizes raw migration count against task active time and (when TICK STIs exist) scheduler ticks, so a task that migrates often relative to how much it runs stands out:
 
-> **Formula:** R<sub>m</sub> = frac{N<sub>migrations,i</sub>}{T<sub>exec,i</sub>}
+> **Formula:** R<sub>m</sub> = N<sub>migrations,i</sub> / T<sub>exec,i</sub>
 
 The **Rate** column shows *R*<sub>m</sub> as migrations per second of on-CPU time (e.g. `1.23/s`). When the trace includes TICK events, it also shows migrations per **on-CPU** scheduler tick for that task (e.g. `2.785/tick`) — TICK STIs that fall inside one of the task's slices in scope, not trace-wide tick count.
 
@@ -1048,7 +1048,7 @@ The **Rate** column shows *R*<sub>m</sub> as migrations per second of on-CPU tim
 
 **Average core dwell time** — mean duration of each on-CPU stay before the task blocks, yields, or migrates:
 
-> **Formula:** T̄<sub>d</sub> = frac{1}{N<sub>slices</sub>} Σ<sub>k</sub> d<sub>k</sub> = frac{T<sub>exec,i</sub>}{N<sub>slices,i</sub>}
+> **Formula:** T̄<sub>d</sub> = (1 / N<sub>slices</sub>) × Σ<sub>k</sub> d<sub>k</sub> = T<sub>exec,i</sub> / N<sub>slices,i</sub>
 
 Each slice *d*<sub>k</sub> is one switch-in episode (equivalent to averaging per-core dwell, *T*<sub>on</sub> / *N*<sub>slices</sub>, on each core the task visited).
 
