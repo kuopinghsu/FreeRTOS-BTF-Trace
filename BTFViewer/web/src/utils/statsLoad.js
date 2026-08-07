@@ -7,6 +7,7 @@ export const STATS_LOAD_DEFER_SYNC_ISSUES = 400
 export const STATS_HEAVY_SECTIONS = [
   'migrations', 'exec', 'block', 'inter', 'health',
   'preemption', 'priority', 'sync', 'intervals', 'tags',
+  'dispatch', 'switch_overhead', 'concurrency',
 ]
 
 export function traceNeedsDeferredStatsLoad(trace) {

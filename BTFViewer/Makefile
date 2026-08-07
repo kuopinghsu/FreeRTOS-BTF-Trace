@@ -102,6 +102,12 @@ update-images: bundle
 	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(STATS_TRACE) \
 		-o $(STATS_IMG_DIR)/stats-inter-cs11.svg --view plot --metric inter --task "CS[11]"
 	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(STATS_TRACE) \
+		-o $(STATS_IMG_DIR)/stats-dispatch-sr0.svg --view plot --metric dispatch --task "SR0[271]"
+	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(STATS_TRACE) \
+		-o $(STATS_IMG_DIR)/stats-switch-core0.svg --view plot --metric switch_overhead --core Core_0
+	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(STATS_TRACE) \
+		-o $(STATS_IMG_DIR)/stats-concurrency-4.svg --view plot --metric concurrency --active-cores 4
+	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(STATS_TRACE) \
 		-o $(STATS_IMG_DIR)/stats-mig-dwell-cs22.svg --view plot --metric mig_dwell --task "CS[22]"
 	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(STATS_TRACE) \
 		-o $(STATS_IMG_DIR)/stats-mig-rate-cs22.svg --view plot --metric mig_rate --task "CS[22]"

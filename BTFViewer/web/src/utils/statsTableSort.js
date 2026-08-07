@@ -176,6 +176,33 @@ export const CORE_BREAKDOWN_SORT_ACCESSORS = {
   gap: r => r.gapNs / r.spanNs,
 }
 
+export const CONCURRENCY_SORT_ACCESSORS = {
+  activeCores: r => r.activeCores,
+  duration: r => r.durationNs,
+  pct: r => r.pctOfSpan,
+}
+
+export const SWITCH_OVERHEAD_SORT_ACCESSORS = {
+  core: r => r.core,
+  switches: r => r.switches,
+  min: r => r.minNs,
+  avg: r => r.avgNs,
+  max: r => r.maxNs,
+  total: r => r.totalNs,
+  pct: r => r.pctOfCore,
+}
+
+export const DISPATCH_SORT_ACCESSORS = {
+  task: r => r.label.toLowerCase(),
+  activations: r => r.activations,
+  min: r => r.minNs,
+  avg: r => r.avgNs,
+  max: r => r.maxNs,
+  jitter: r => r.jitterNs,
+  stddev: r => r.stddevNs,
+  p95: r => r.p95Ns,
+}
+
 export const CORE_PAIR_SORT_ACCESSORS = {
   from: r => r.fromCore,
   to: r => r.toCore,

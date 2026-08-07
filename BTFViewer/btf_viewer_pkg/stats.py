@@ -19,6 +19,16 @@ from .config import (  # private symbols are not pulled in by import *
     normalize_stats_section_order,
 )
 from .parser import *  # noqa: F403,F401
+from .parser import (  # private symbols are not pulled in by import *
+    _concurrency_level_plot_points,
+    _concurrent_core_active_rows,
+    _dispatch_latency_by_mk,
+    _dispatch_latency_plot_points,
+    _format_plot_point_note,
+    _plot_point_mark_ns,
+    _switch_overhead_plot_points,
+    _switch_overhead_rows,
+)
 from .timeline_util import *  # noqa: F403,F401
 from .timeline_util import _format_time  # noqa: F401 — star-import skips leading _
 from .graphics_items import *  # noqa: F403,F401
@@ -6134,6 +6144,34 @@ class _StatsPanel(QWidget):
             if not pts:
                 return None
             return title, pts, color
+        if kind == "dispatch":
+            segs = trace.seg_map_by_merge_key.get(mk, [])
+            if not segs:
+                return None
+            raw = trace.task_repr.get(mk, mk)
+            name = _task_display_name(raw)
+            color = _task_color(raw)
+            pts = _dispatch_latency_plot_points(trace, mk, lo, hi)
+            if not pts:
+                return None
+            title = f"{name} — Dispatch Latency{scope}"
+            return title, pts, color
+        if kind == "switch_overhead":
+            pts = _switch_overhead_plot_points(trace, mk, lo, hi)
+            if not pts:
+                return None
+            title = f"{mk} — Kernel Switch Overhead{scope}"
+            return title, pts, QColor(_core_color(mk))
+        if kind == "concurrency":
+            try:
+                n_active = int(mk)
+            except (TypeError, ValueError):
+                return None
+            pts = _concurrency_level_plot_points(trace, n_active, lo, hi)
+            if not pts:
+                return None
+            title = f"{n_active} Active Cores — Interval Duration{scope}"
+            return title, pts, QColor("#64B5F6")
         segs = trace.seg_map_by_merge_key.get(mk, [])
         if not segs:
             return None
@@ -6277,7 +6315,7 @@ class _StatsPanel(QWidget):
         self._plot_mk = mk
         self._plot_kind = kind
         y_as_time = kind not in ("tag",)
-        show_variability = kind in ("exec", "block", "inter")
+        show_variability = kind in ("exec", "block", "inter", "dispatch", "switch_overhead")
         _on_click = self._on_plot_scatter_click
         if self._plot_dlg is not None:
             try:
@@ -6359,7 +6397,8 @@ class _StatsPanel(QWidget):
         """Scatter plot point: jump timeline and add an annotation (not a cursor)."""
         if self._trace is None:
             return
-        if payload is None and self._plot_kind != "tick":
+        if payload is None and self._plot_kind not in (
+                "tick", "switch_overhead", "concurrency"):
             return
         note = _format_plot_point_note(
             self._trace, self._plot_kind or "", self._plot_mk,
@@ -6891,6 +6930,46 @@ class _StatsPanel(QWidget):
             ))
         rows.sort(key=lambda r: (-r[2], r[1].lower()))
         return rows
+
+    def _dispatch_latency_rows(self, trace: "BtfTrace",
+                               lo: Optional[int] = None, hi: Optional[int] = None
+                               ) -> List[tuple]:
+        """Per-task dispatch latency (STI resume / create → next switch-in)."""
+        rows: List[tuple] = []
+        by_mk = _dispatch_latency_by_mk(trace, lo, hi)
+        for mk, data in by_mk.items():
+            raw = trace.task_repr.get(mk, mk)
+            _, _, tname = _parse_task_name(raw)
+            if _is_idle_task_name(tname) or tname == "TICK":
+                continue
+            summary = self._summarize_samples(data["samples"], trace.time_scale)
+            if summary is None:
+                continue
+            mn, avg, mx, jitter, stddev, p95 = summary
+            rows.append((
+                mk, _task_display_name(raw), len(data["samples"]),
+                mn, avg, mx, jitter, stddev, p95,
+                data.get("min_seg"), data.get("max_seg"),
+            ))
+        rows.sort(key=lambda r: (-r[2], r[1].lower()))
+        return rows
+
+    def _on_dispatch_extreme_click(self, trace: "BtfTrace", mk: str,
+                                   lo, hi, find_max: bool) -> None:
+        by_mk = _dispatch_latency_by_mk(trace, lo, hi)
+        data = by_mk.get(mk)
+        if not data:
+            return
+        seg = data["max_seg"] if find_max else data["min_seg"]
+        lat_ns = data["max_ns"] if find_max else data["min_ns"]
+        if seg is None or lat_ns is None:
+            return
+        kind = "max dispatch latency" if find_max else "min dispatch latency"
+        note = (
+            f"{_task_display_name(trace.task_repr.get(mk, mk))} — {kind} "
+            f"({_format_time(lat_ns, trace.time_scale)} ready→run)"
+        )
+        self.plot_point_clicked.emit(seg, seg.start, note)
 
     def _blocking_time_rows_export(self, trace: "BtfTrace",
                                    lo: Optional[int] = None, hi: Optional[int] = None
@@ -7772,6 +7851,53 @@ class _StatsPanel(QWidget):
             f'<tbody>{bd_body}</tbody></table></section>'
         )
 
+        cc_rows_html = _concurrent_core_active_rows(trace, lo, hi)
+        cc_body = "".join(
+            f"<tr><td>{n}</td><td>{_esc(_format_time(dur, ts))}</td>"
+            f"<td>{pct:.1f}%</td></tr>"
+            for n, dur, pct in cc_rows_html
+        ) or '<tr><td colspan="3" class="empty">No data</td></tr>'
+        concurrency_html = (
+            f'<section class="report-card"><h2>Concurrent Core Active Distribution{_esc(scope_title)}</h2>'
+            '<table><thead><tr><th>Active Cores</th><th>Duration</th>'
+            '<th>% of Span</th></tr></thead>'
+            f'<tbody>{cc_body}</tbody></table></section>'
+        )
+
+        sw_rows_html = _switch_overhead_rows(trace, lo, hi)
+        sw_body = "".join(
+            f"<tr><td>{_esc(core)}</td><td>{n_sw}</td>"
+            f"<td>{_esc(_format_time(mn, ts))}</td><td>{_esc(_format_time(avg, ts))}</td>"
+            f"<td>{_esc(_format_time(mx, ts))}</td><td>{_esc(_format_time(total, ts))}</td>"
+            f"<td>{pct:.2f}%</td></tr>"
+            for core, n_sw, mn, avg, mx, total, pct in sw_rows_html
+        ) or '<tr><td colspan="7" class="empty">No data</td></tr>'
+        switch_overhead_html = (
+            f'<section class="report-card"><h2>Kernel Switch Overhead{_esc(scope_title)}</h2>'
+            '<table><thead><tr><th>Core</th><th>Switches</th><th>Min</th><th>Avg</th>'
+            '<th>Max</th><th>Total Overhead</th><th>% of Core</th></tr></thead>'
+            f'<tbody>{sw_body}</tbody></table></section>'
+        )
+
+        disp_rows_html = self._dispatch_latency_rows(trace, lo, hi)
+        disp_body = "".join(
+            f"<tr><td>{_esc(label)}</td><td>{n}</td>"
+            f"<td>{_esc(mn)}</td><td>{_esc(avg)}</td><td>{_esc(mx)}</td>"
+            f"<td>{_esc(jitter)}</td><td>{_esc(stddev)}</td><td>{_esc(p95)}</td></tr>"
+            for (_mk, label, n, mn, avg, mx, jitter, stddev, p95,
+                 _a, _b) in disp_rows_html
+        ) or (
+            '<tr><td colspan="8" class="empty">No dispatch samples '
+            '(needs STI resume Name[id] or create→first-run)</td></tr>'
+        )
+        dispatch_html = (
+            f'<section class="report-card"><h2>Dispatch / Scheduling Latency{_esc(scope_title)}</h2>'
+            '<p class="detail-note">Ready from STI resume / create; sync wakes not attributed.</p>'
+            '<table><thead><tr><th>Task</th><th>Activations</th><th>Min</th><th>Avg</th>'
+            '<th>Max</th><th>Jitter</th><th>σ</th><th>p95</th></tr></thead>'
+            f'<tbody>{disp_body}</tbody></table></section>'
+        )
+
         aff_rows_html = _task_core_affinity_rows(trace, lo, hi)
         aff_body = "".join(
             f"<tr><td>{_esc(label)}</td><td>{_esc(mhex)}</td><td>{_esc(obs)}</td>"
@@ -7987,9 +8113,11 @@ class _StatsPanel(QWidget):
     </section>
 
     {core_util_html}
-    {task_util_html}
     {tick_health_html}
-    {_render_exec_table(exec_rows)}
+    {core_breakdown_html}
+    {concurrency_html}
+    {switch_overhead_html}
+    {task_util_html}
     <section class=\"report-card\">
     <h2>Core Migrations{_esc(scope_title)}</h2>
     <table>
@@ -7997,7 +8125,13 @@ class _StatsPanel(QWidget):
       <tbody>{"".join(_migration_row_html(r) for r in mig_rows) or '<tr><td colspan="10" class="empty">No data</td></tr>'}</tbody>
     </table>
   </section>
+    {core_pair_html}
+    {affinity_html}
+    {lifecycle_html}
+    {deadline_html}
+    {_render_exec_table(exec_rows)}
     {_render_stats_table(f'Blocking Time (off-CPU gap){scope_title}', block_rows)}
+    {dispatch_html}
     {_render_stats_table(f'Inter-Arrival Time{scope_title}', inter_rows)}
     <section class=\"report-card\"><h2>Preemption Chain Analysis{_esc(scope_title)}</h2>
     <table><thead><tr><th>Victim</th><th>Preemptor</th><th>Count</th><th>Total</th><th>Avg</th><th>Max</th></tr></thead>
@@ -8007,13 +8141,8 @@ class _StatsPanel(QWidget):
     {priority_html}
     {sync_html}
     {queue_html}
-    {lifecycle_html}
-    {affinity_html}
-    {deadline_html}
     {interval_html}
     {tag_html}
-    {core_pair_html}
-    {core_breakdown_html}
         <div class=\"report-foot\">Generated by BTF Viewer</div>
     </div>
     <script>
@@ -8143,15 +8272,6 @@ class _StatsPanel(QWidget):
                 writer.writerow(["No data", ""])
 
             writer.writerow([])
-            writer.writerow([f"Top Tasks by CPU (excl. IDLE/TICK){scope_suffix}"])
-            writer.writerow(["Task", "CPU %"])
-            if task_rows:
-                for _, name, pct in task_rows:
-                    writer.writerow([name, f"{pct:.1f}%"])
-            else:
-                writer.writerow(["No data", ""])
-
-            writer.writerow([])
             writer.writerow([f"Trace Health (TICK){scope_suffix}"])
             if tick["tick_count"]:
                 writer.writerow(["Status", tick["health"].upper()])
@@ -8178,21 +8298,56 @@ class _StatsPanel(QWidget):
                 writer.writerow(["No STI TICK events", ""])
 
             writer.writerow([])
-            writer.writerow([f"Execution Time Per Slice{scope_suffix}"])
-            writer.writerow([
-                "Task", "Runs", "CPU%", "Min", "Avg", "TrimMean(5%)",
-                "Max", "Jitter", "StdDev (population)", "p50", "p95",
-            ])
-            if exec_rows:
-                for (mk_r, name, runs, cpu, mn, avg, tmean, mx,
-                     jitter, stddev, p50, p95) in exec_rows:
+            writer.writerow([f"Core Time Breakdown{scope_suffix}"])
+            writer.writerow(["Core", "Active %", "Idle %", "Tick %", "Gap %"])
+            if bd_rows_csv:
+                for core, a_ns, i_ns, t_ns, g_ns, span_ns in bd_rows_csv:
+                    s = max(span_ns, 1)
+                    writer.writerow([core, f"{100.0*a_ns/s:.1f}%", f"{100.0*i_ns/s:.1f}%",
+                                     f"{100.0*t_ns/s:.1f}%", f"{100.0*g_ns/s:.1f}%"])
+            else:
+                writer.writerow(["No core data", "", "", "", ""])
+            writer.writerow([])
+            writer.writerow([f"Concurrent Core Active Distribution{scope_suffix}"])
+            writer.writerow(["Active Cores", "Duration", "% of Span"])
+            _cc_csv = _concurrent_core_active_rows(trace, lo, hi)
+            if _cc_csv:
+                for n_active, dur_ns, pct in _cc_csv:
                     writer.writerow([
-                        name, runs, f"{cpu:.1f}%", _us(mn), _us(avg),
-                        _us(tmean), _us(mx), _us(jitter), _us(stddev),
-                        _us(p50), _us(p95),
+                        n_active,
+                        _us(_format_time(dur_ns, trace.time_scale)),
+                        f"{pct:.1f}%",
                     ])
             else:
-                writer.writerow(["No data"] + [""] * 10)
+                writer.writerow(["No data", "", ""])
+
+            writer.writerow([])
+            writer.writerow([f"Kernel Switch Overhead{scope_suffix}"])
+            writer.writerow([
+                "Core", "Switches", "Min", "Avg", "Max", "Total Overhead", "% of Core",
+            ])
+            _sw_csv = _switch_overhead_rows(trace, lo, hi)
+            if _sw_csv:
+                for core, n_sw, mn, avg, mx, total, pct in _sw_csv:
+                    writer.writerow([
+                        core, n_sw,
+                        _us(_format_time(mn, trace.time_scale)),
+                        _us(_format_time(avg, trace.time_scale)),
+                        _us(_format_time(mx, trace.time_scale)),
+                        _us(_format_time(total, trace.time_scale)),
+                        f"{pct:.2f}%",
+                    ])
+            else:
+                writer.writerow(["No data"] + [""] * 6)
+
+            writer.writerow([])
+            writer.writerow([f"Top Tasks by CPU (excl. IDLE/TICK){scope_suffix}"])
+            writer.writerow(["Task", "CPU %"])
+            if task_rows:
+                for _, name, pct in task_rows:
+                    writer.writerow([name, f"{pct:.1f}%"])
+            else:
+                writer.writerow(["No data", ""])
 
             writer.writerow([])
             writer.writerow([f"Core Migrations{scope_suffix}"])
@@ -8210,6 +8365,79 @@ class _StatsPanel(QWidget):
                 writer.writerow(["No data", "", "", "", "", "", "", "", "", "", ""])
 
             writer.writerow([])
+            writer.writerow([f"Core-Pair Migration Summary{scope_suffix}"])
+            writer.writerow(["From", "To", "Count", "Bounces", "Bounce %", "Avg Gap"])
+            if pair_rows_csv:
+                for fc, tc, cnt, bnc, avg_gap in pair_rows_csv:
+                    pct_b = 100.0 * bnc / cnt if cnt else 0.0
+                    writer.writerow([fc, tc, cnt, bnc, f"{pct_b:.1f}%",
+                                     _us(_format_time(avg_gap, trace.time_scale))])
+            else:
+                writer.writerow(["No migrations in scope", "", "", "", "", ""])
+
+            bd_rows_csv = _core_time_breakdown(trace, lo, hi)
+            writer.writerow([])
+            writer.writerow([f"Core Affinity{scope_suffix}"])
+            writer.writerow(["Task", "Mask", "Observed Cores", "Violations"])
+            if aff_rows_csv:
+                for label, mask_hex, obs_str, viol_str in aff_rows_csv:
+                    writer.writerow([label, mask_hex, obs_str, viol_str])
+            else:
+                writer.writerow(["No affinity_set events", "", "", ""])
+
+            writer.writerow([])
+            writer.writerow([f"Task Lifecycle{scope_suffix}"])
+            writer.writerow(["Task", "Created", "Deleted", "Susp/Res", "Alive span", "Events", "Runs"])
+            if lc_rows_csv:
+                for mk, label, create_ns, delete_ns, n_sus, n_res, alive_ns, n_ev, n_runs in lc_rows_csv:
+                    created = _us(_format_time(create_ns, trace.time_scale)) if create_ns is not None else ""
+                    deleted = _us(_format_time(delete_ns, trace.time_scale)) if delete_ns is not None else ""
+                    alive   = _us(_format_time(alive_ns, trace.time_scale)) if alive_ns else ""
+                    writer.writerow([label, created, deleted, f"{n_sus}/{n_res}", alive, n_ev, n_runs])
+            else:
+                writer.writerow(["No lifecycle events", "", "", "", "", "", ""])
+
+            aff_rows_csv = _task_core_affinity_rows(trace, lo, hi)
+            # Deadlines / CPU budget
+            if self._cpu_budget_pct > 0 or self._task_deadlines_ns:
+                _dl_viols_csv = _deadline_violations(
+                    trace, self._cpu_budget_pct, self._task_deadlines_ns, lo, hi)
+                writer.writerow([])
+                writer.writerow([f"Deadlines / CPU budget{scope_suffix}"])
+                writer.writerow(["Slice Violations"])
+                writer.writerow(["Task", "Duration", "Limit", "Over by"])
+                if _dl_viols_csv["slice_violations"]:
+                    for lbl, dur, lim, over, *_rest in _dl_viols_csv["slice_violations"]:
+                        writer.writerow([lbl, dur, lim, over])
+                else:
+                    writer.writerow(["No slice violations", "", "", ""])
+                writer.writerow([])
+                writer.writerow(["CPU Budget Violations"])
+                writer.writerow(["Task", "CPU %", "Budget"])
+                if _dl_viols_csv["cpu_violations"]:
+                    for lbl, pct, bgt, *_rest in _dl_viols_csv["cpu_violations"]:
+                        writer.writerow([lbl, pct, bgt])
+                else:
+                    writer.writerow(["No CPU budget violations", "", ""])
+
+            writer.writerow([])
+            writer.writerow([f"Execution Time Per Slice{scope_suffix}"])
+            writer.writerow([
+                "Task", "Runs", "CPU%", "Min", "Avg", "TrimMean(5%)",
+                "Max", "Jitter", "StdDev (population)", "p50", "p95",
+            ])
+            if exec_rows:
+                for (mk_r, name, runs, cpu, mn, avg, tmean, mx,
+                     jitter, stddev, p50, p95) in exec_rows:
+                    writer.writerow([
+                        name, runs, f"{cpu:.1f}%", _us(mn), _us(avg),
+                        _us(tmean), _us(mx), _us(jitter), _us(stddev),
+                        _us(p50), _us(p95),
+                    ])
+            else:
+                writer.writerow(["No data"] + [""] * 10)
+
+            writer.writerow([])
             writer.writerow([f"Blocking Time (off-CPU gap){scope_suffix}"])
             writer.writerow([
                 "Task", "Gaps", "Min", "Avg", "TrimMean(5%)", "Max",
@@ -8224,6 +8452,35 @@ class _StatsPanel(QWidget):
                     ])
             else:
                 writer.writerow(["No data"] + [""] * 9)
+
+            writer.writerow([])
+            writer.writerow([f"Dispatch / Scheduling Latency{scope_suffix}"])
+            writer.writerow([
+                "Task", "Activations", "Min", "Avg", "Max", "Jitter",
+                "StdDev (population)", "p95",
+            ])
+            _disp_by = _dispatch_latency_by_mk(trace, lo, hi)
+            _disp_any = False
+            for mk_r, data in sorted(
+                    _disp_by.items(),
+                    key=lambda kv: (-len(kv[1]["samples"]),
+                                    _task_display_name(
+                                        trace.task_repr.get(kv[0], kv[0])).lower())):
+                raw = trace.task_repr.get(mk_r, mk_r)
+                _, _, tname = _parse_task_name(raw)
+                if _is_idle_task_name(tname) or tname == "TICK":
+                    continue
+                summary = self._summarize_samples(data["samples"], trace.time_scale)
+                if summary is None:
+                    continue
+                _disp_any = True
+                mn, avg, mx, jitter, stddev, p95 = summary
+                writer.writerow([
+                    _task_display_name(raw), len(data["samples"]),
+                    _us(mn), _us(avg), _us(mx), _us(jitter), _us(stddev), _us(p95),
+                ])
+            if not _disp_any:
+                writer.writerow(["No data"] + [""] * 7)
 
             writer.writerow([])
             writer.writerow([f"Inter-Arrival Time{scope_suffix}"])
@@ -8296,50 +8553,6 @@ class _StatsPanel(QWidget):
 
             lc_rows_csv = _task_lifecycle_rows(trace, lo, hi)
             writer.writerow([])
-            writer.writerow([f"Task Lifecycle{scope_suffix}"])
-            writer.writerow(["Task", "Created", "Deleted", "Susp/Res", "Alive span", "Events", "Runs"])
-            if lc_rows_csv:
-                for mk, label, create_ns, delete_ns, n_sus, n_res, alive_ns, n_ev, n_runs in lc_rows_csv:
-                    created = _us(_format_time(create_ns, trace.time_scale)) if create_ns is not None else ""
-                    deleted = _us(_format_time(delete_ns, trace.time_scale)) if delete_ns is not None else ""
-                    alive   = _us(_format_time(alive_ns, trace.time_scale)) if alive_ns else ""
-                    writer.writerow([label, created, deleted, f"{n_sus}/{n_res}", alive, n_ev, n_runs])
-            else:
-                writer.writerow(["No lifecycle events", "", "", "", "", "", ""])
-
-            aff_rows_csv = _task_core_affinity_rows(trace, lo, hi)
-            writer.writerow([])
-            writer.writerow([f"Core Affinity{scope_suffix}"])
-            writer.writerow(["Task", "Mask", "Observed Cores", "Violations"])
-            if aff_rows_csv:
-                for label, mask_hex, obs_str, viol_str in aff_rows_csv:
-                    writer.writerow([label, mask_hex, obs_str, viol_str])
-            else:
-                writer.writerow(["No affinity_set events", "", "", ""])
-
-            # Deadlines / CPU budget
-            if self._cpu_budget_pct > 0 or self._task_deadlines_ns:
-                _dl_viols_csv = _deadline_violations(
-                    trace, self._cpu_budget_pct, self._task_deadlines_ns, lo, hi)
-                writer.writerow([])
-                writer.writerow([f"Deadlines / CPU budget{scope_suffix}"])
-                writer.writerow(["Slice Violations"])
-                writer.writerow(["Task", "Duration", "Limit", "Over by"])
-                if _dl_viols_csv["slice_violations"]:
-                    for lbl, dur, lim, over, *_rest in _dl_viols_csv["slice_violations"]:
-                        writer.writerow([lbl, dur, lim, over])
-                else:
-                    writer.writerow(["No slice violations", "", "", ""])
-                writer.writerow([])
-                writer.writerow(["CPU Budget Violations"])
-                writer.writerow(["Task", "CPU %", "Budget"])
-                if _dl_viols_csv["cpu_violations"]:
-                    for lbl, pct, bgt, *_rest in _dl_viols_csv["cpu_violations"]:
-                        writer.writerow([lbl, pct, bgt])
-                else:
-                    writer.writerow(["No CPU budget violations", "", ""])
-
-            writer.writerow([])
             writer.writerow([f"Interval Analysis{scope_suffix}"])
             writer.writerow(["ID", "Label", "Count", "Min", "Avg", "Max", "p95"])
             if interval_rows_csv:
@@ -8359,28 +8572,6 @@ class _StatsPanel(QWidget):
                 writer.writerow(["No tag data", "", "", "", "", "", ""])
 
             pair_rows_csv = _core_pair_rows(trace, lo, hi)
-            writer.writerow([])
-            writer.writerow([f"Core-Pair Migration Summary{scope_suffix}"])
-            writer.writerow(["From", "To", "Count", "Bounces", "Bounce %", "Avg Gap"])
-            if pair_rows_csv:
-                for fc, tc, cnt, bnc, avg_gap in pair_rows_csv:
-                    pct_b = 100.0 * bnc / cnt if cnt else 0.0
-                    writer.writerow([fc, tc, cnt, bnc, f"{pct_b:.1f}%",
-                                     _us(_format_time(avg_gap, trace.time_scale))])
-            else:
-                writer.writerow(["No migrations in scope", "", "", "", "", ""])
-
-            bd_rows_csv = _core_time_breakdown(trace, lo, hi)
-            writer.writerow([])
-            writer.writerow([f"Core Time Breakdown{scope_suffix}"])
-            writer.writerow(["Core", "Active %", "Idle %", "Tick %", "Gap %"])
-            if bd_rows_csv:
-                for core, a_ns, i_ns, t_ns, g_ns, span_ns in bd_rows_csv:
-                    s = max(span_ns, 1)
-                    writer.writerow([core, f"{100.0*a_ns/s:.1f}%", f"{100.0*i_ns/s:.1f}%",
-                                     f"{100.0*t_ns/s:.1f}%", f"{100.0*g_ns/s:.1f}%"])
-            else:
-                writer.writerow(["No core data", "", "", "", ""])
 
     def _export_csv(self) -> None:
         if self._trace is None:
@@ -8574,6 +8765,140 @@ class _StatsPanel(QWidget):
                 f"Core Time Breakdown{scope}",
                 _fs,
                 _populate_core_breakdown,
+            )
+
+            # -- Concurrent core active distribution ----------------------
+            def _populate_concurrency(blay: QVBoxLayout) -> None:
+                _cc_rows = _concurrent_core_active_rows(trace, lo, hi)
+                if not _cc_rows:
+                    blay.addWidget(self._lbl(
+                        "No active core intervals", color="#888888", ui_fs=_fs))
+                    return
+                headers = ["Active Cores", "Duration", "% of Span"]
+                tbl = QTableWidget(len(_cc_rows), len(headers))
+                tbl.setHorizontalHeaderLabels(headers)
+                tbl.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+                tbl.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+                tbl.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+                tbl.verticalHeader().setVisible(False)
+                tbl.setShowGrid(False)
+                tbl.setFrameShape(QFrame.NoFrame)
+                tbl.verticalHeader().setDefaultSectionSize(STATS_TABLE_ROW_H)
+                tbl.verticalHeader().setMinimumSectionSize(STATS_TABLE_ROW_H)
+                tbl.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+                tbl.horizontalHeader().setFixedHeight(18)
+                tbl.horizontalHeader().setSectionsClickable(True)
+                tbl.horizontalHeader().setSortIndicatorShown(True)
+                _item_bg = self._apply_stats_table_theme(tbl, _fs)
+                for r, (n_active, dur_ns, pct) in enumerate(_cc_rows):
+                    vals = [
+                        str(n_active),
+                        _format_time(dur_ns, trace.time_scale),
+                        f"{pct:.1f}%",
+                    ]
+                    keys = [n_active, dur_ns, pct]
+                    for c, (val, key) in enumerate(zip(vals, keys)):
+                        item = _StatsSortItem(val, key)
+                        item.setTextAlignment(
+                            (Qt.AlignmentFlag.AlignLeft if c == 0
+                             else Qt.AlignmentFlag.AlignRight)
+                            | Qt.AlignmentFlag.AlignVCenter)
+                        item.setBackground(_item_bg)
+                        if c == 0:
+                            item.setData(Qt.ItemDataRole.UserRole, n_active)
+                            item.setToolTip(
+                                f"Click to open interval-duration plot for "
+                                f"{n_active} active core(s)")
+                        tbl.setItem(r, c, item)
+                tbl.setSortingEnabled(True)
+
+                def _on_concurrency_row(row: int, _col: int) -> None:
+                    item = tbl.item(row, 0)
+                    if item is None:
+                        return
+                    n = item.data(Qt.ItemDataRole.UserRole)
+                    if n is not None:
+                        self._open_plot(trace, str(int(n)), "concurrency")
+
+                tbl.cellClicked.connect(_on_concurrency_row)
+                self._wire_stats_table_click_cursor(tbl)
+                self._wire_stats_table_row_hover(tbl)
+                self._wrap_table_with_resizer(blay, tbl, "concurrency")
+
+            self._add_collapsible_section(
+                "concurrency",
+                f"Concurrent Core Active Distribution{scope}",
+                _fs,
+                _populate_concurrency,
+            )
+
+            # -- Kernel switch overhead -----------------------------------
+            def _populate_switch_overhead(blay: QVBoxLayout) -> None:
+                _sw_rows = _switch_overhead_rows(trace, lo, hi)
+                if not _sw_rows:
+                    blay.addWidget(self._lbl(
+                        "No context switches", color="#888888", ui_fs=_fs))
+                    return
+                headers = ["Core", "Switches", "Min", "Avg", "Max",
+                           "Total Overhead", "% of Core"]
+                tbl = QTableWidget(len(_sw_rows), len(headers))
+                tbl.setHorizontalHeaderLabels(headers)
+                tbl.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+                tbl.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+                tbl.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+                tbl.verticalHeader().setVisible(False)
+                tbl.setShowGrid(False)
+                tbl.setFrameShape(QFrame.NoFrame)
+                tbl.verticalHeader().setDefaultSectionSize(STATS_TABLE_ROW_H)
+                tbl.verticalHeader().setMinimumSectionSize(STATS_TABLE_ROW_H)
+                tbl.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+                tbl.horizontalHeader().setFixedHeight(18)
+                tbl.horizontalHeader().setSectionsClickable(True)
+                tbl.horizontalHeader().setSortIndicatorShown(True)
+                _item_bg = self._apply_stats_table_theme(tbl, _fs)
+                scale = trace.time_scale
+                for r, (core, n_sw, mn, avg, mx, total, pct) in enumerate(_sw_rows):
+                    cells = [
+                        (core, core),
+                        (str(n_sw), n_sw),
+                        (_format_time(mn, scale), mn),
+                        (_format_time(avg, scale), avg),
+                        (_format_time(mx, scale), mx),
+                        (_format_time(total, scale), total),
+                        (f"{pct:.2f}%", pct),
+                    ]
+                    for c, (val, key) in enumerate(cells):
+                        item = _StatsSortItem(val, key)
+                        item.setTextAlignment(
+                            (Qt.AlignmentFlag.AlignLeft if c == 0
+                             else Qt.AlignmentFlag.AlignRight)
+                            | Qt.AlignmentFlag.AlignVCenter)
+                        item.setBackground(_item_bg)
+                        if c == 0:
+                            item.setData(Qt.ItemDataRole.UserRole, core)
+                            item.setToolTip(
+                                f"Click to open switch-overhead plot for {core}")
+                        tbl.setItem(r, c, item)
+                tbl.setSortingEnabled(True)
+
+                def _on_switch_row(row: int, _col: int) -> None:
+                    item = tbl.item(row, 0)
+                    if item is None:
+                        return
+                    core = item.data(Qt.ItemDataRole.UserRole)
+                    if core:
+                        self._open_plot(trace, core, "switch_overhead")
+
+                tbl.cellClicked.connect(_on_switch_row)
+                self._wire_stats_table_click_cursor(tbl)
+                self._wire_stats_table_row_hover(tbl)
+                self._wrap_table_with_resizer(blay, tbl, "switch_overhead")
+
+            self._add_collapsible_section(
+                "switch_overhead",
+                f"Kernel Switch Overhead{scope}",
+                _fs,
+                _populate_switch_overhead,
             )
 
         # -- Top tasks by CPU time (excl. IDLE, top 10) -------------------
@@ -8846,6 +9171,47 @@ class _StatsPanel(QWidget):
             f"Blocking Time (off-CPU gap){scope}",
             _fs,
             _populate_block,
+        )
+
+        # -- Dispatch / scheduling latency (STI resume / create → run) ----
+        empty_dispatch = (
+            "No dispatch samples in cursor range (needs STI resume Name[id] "
+            "or task create → first run)"
+            if scope else
+            "No dispatch samples — needs STI task resume Name[id] "
+            "(vTaskResume) or create→first-run pairs"
+        )
+
+        def _populate_dispatch(blay: QVBoxLayout) -> None:
+            _disp_rows_raw = self._dispatch_latency_rows(trace, lo, hi)
+            _disp_rows = [
+                (mk, label, n, mn, avg, mx, jitter, stddev, p95)
+                for (mk, label, n, mn, avg, mx, jitter, stddev, p95,
+                     _min_seg, _max_seg) in _disp_rows_raw
+            ]
+            blay.addWidget(self._lbl(
+                "Ready time from STI resume / create; dispatch = next switch-in. "
+                "Sync-object wakes are not attributed (no woken-task id in BTF).",
+                color="#888888", ui_fs=_fs))
+            blay.addWidget(self._build_stats_table(
+                _disp_rows,
+                _fs,
+                empty_dispatch,
+                count_header="Activations",
+                section_id="dispatch",
+                include_variability=True,
+                on_row_click=lambda mk: self._open_plot(trace, mk, "dispatch"),
+                on_min_click=lambda mk: self._on_dispatch_extreme_click(
+                    trace, mk, lo, hi, False),
+                on_max_click=lambda mk: self._on_dispatch_extreme_click(
+                    trace, mk, lo, hi, True),
+            ))
+
+        self._add_collapsible_section(
+            "dispatch",
+            f"Dispatch / Scheduling Latency{scope}",
+            _fs,
+            _populate_dispatch,
         )
 
         # -- Inter-arrival time -------------------------------------------

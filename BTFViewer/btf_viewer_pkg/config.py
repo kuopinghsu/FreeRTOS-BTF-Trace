@@ -125,6 +125,7 @@ STATS_TABLE_DISPLAY_ROW_CAP  = 2000  # max rows materialised per stats table on 
 STATS_HEAVY_SECTIONS         = frozenset({
     "migrations", "exec", "block", "inter", "health",
     "preemption", "priority", "sync", "intervals", "tags",
+    "dispatch", "switch_overhead", "concurrency",
 })
 
 def trace_needs_deferred_stats_load(trace: "BtfTrace") -> bool:
@@ -165,6 +166,9 @@ def default_section_collapsed() -> Dict[str, bool]:
         "affinity": False,
         "deadline": False,
         "tags": False,
+        "dispatch": False,
+        "switch_overhead": False,
+        "concurrency": False,
     }
 
 # Statistics sections that can be pinned open (stay expanded) and the default
@@ -173,6 +177,8 @@ STATS_PINNABLE_SECTIONS: Tuple[str, ...] = (
     "cores",
     "health",
     "core_breakdown",
+    "concurrency",
+    "switch_overhead",
     "tasks",
     "migrations",
     "core_pairs",
@@ -181,6 +187,7 @@ STATS_PINNABLE_SECTIONS: Tuple[str, ...] = (
     "deadline",
     "exec",
     "block",
+    "dispatch",
     "inter",
     "preemption",
     "priority",
@@ -269,6 +276,9 @@ def default_section_table_heights() -> Dict[str, int]:
         "queue": STATS_TABLE_DEFAULT_H,
         "sync_issues": STATS_TABLE_MIG_DEFAULT_H,
         "health": STATS_TABLE_DEFAULT_H,
+        "dispatch": STATS_TABLE_DEFAULT_H,
+        "switch_overhead": STATS_TABLE_DEFAULT_H,
+        "concurrency": STATS_TABLE_DEFAULT_H,
     }
 
 STI_WAVEFORM_H           =  80  # Height of an expanded STI waveform row (px).

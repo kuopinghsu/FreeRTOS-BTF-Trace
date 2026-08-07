@@ -2037,6 +2037,8 @@ def _format_plot_point_note(
             return f"{name}: {fmt(y_ns)} blocked before {fmt(x_ns)}"
         if kind == "inter":
             return f"{name}: {fmt(y_ns)} inter-arrival at {fmt(x_ns)}"
+        if kind == "dispatch":
+            return f"{name}: {fmt(y_ns)} dispatch latency at {fmt(x_ns)}"
         if kind == "preempt":
             pre = preemptor or "?"
             return f"{name} ← {pre}: {fmt(y_ns)} at {fmt(x_ns)}"
@@ -2059,6 +2061,12 @@ def _format_plot_point_note(
                     f"after migration at {fmt(x_ns)}{bounce}")
     if kind == "tick":
         return f"Tick interval {fmt(y_ns)} at {fmt(x_ns)}"
+    if kind == "switch_overhead":
+        core = mk or "core"
+        return f"{core}: switch overhead {fmt(y_ns)} at {fmt(x_ns)}"
+    if kind == "concurrency":
+        n = mk if mk is not None else "?"
+        return f"{n} active cores: dwell {fmt(y_ns)} starting {fmt(x_ns)}"
     return f"{fmt(y_ns)} at {fmt(x_ns)}"
 
 def _gap_before_segment(segs: list, seg: "TaskSegment", kind: str) -> Optional[int]:
@@ -2471,6 +2479,259 @@ def _scheduling_stats(trace: "BtfTrace",
             gap = curr.start - prev.end
             gaps.append(gap if gap > 0 else 0)
     return ctx_switches, gaps
+
+
+def _dispatch_latency_by_mk(
+    trace: "BtfTrace",
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> Dict[str, dict]:
+    """Map merge-key → {samples, min_seg, max_seg} for dispatch latency.
+
+    ``t_ready`` comes from STI ``resume Name[id]`` (vTaskResume) or task create
+    time; ``t_resume`` is the next switch-in (segment start) for that task.
+    ISR resumes without a task name are skipped. Sync-object wakes are not
+    attributed (BTF notes carry the object pointer, not the woken task).
+    """
+    by_mk: Dict[str, dict] = {}
+
+    def _ensure(mk: str) -> dict:
+        if mk not in by_mk:
+            by_mk[mk] = {
+                "samples": [],
+                "points": [],  # (dispatch_ns, latency_ns, seg)
+                "min_seg": None,
+                "max_seg": None,
+                "min_ns": None,
+                "max_ns": None,
+            }
+        return by_mk[mk]
+
+    def _add(mk: str, ready_ns: int) -> None:
+        segs = trace.seg_map_by_merge_key.get(mk, ())
+        if not segs:
+            return
+        if lo is not None and hi is not None and not (lo <= ready_ns <= hi):
+            return
+        best = None
+        for s in segs:
+            if s.start < ready_ns:
+                continue
+            if lo is not None and hi is not None and not (lo <= s.start <= hi):
+                continue
+            if best is None or s.start < best.start:
+                best = s
+        if best is None:
+            return
+        lat = best.start - ready_ns
+        if lat < 0:
+            return
+        e = _ensure(mk)
+        e["samples"].append(lat)
+        e["points"].append((best.start, lat, best))
+        if e["min_ns"] is None or lat < e["min_ns"]:
+            e["min_ns"] = lat
+            e["min_seg"] = best
+        if e["max_ns"] is None or lat > e["max_ns"]:
+            e["max_ns"] = lat
+            e["max_seg"] = best
+
+    for mk, create_ns in getattr(trace, "task_create_times", {}).items():
+        _add(mk, create_ns)
+
+    for ev in trace.sti_events:
+        if ev.target != "task":
+            continue
+        note = (ev.note or "").strip()
+        m = _LIFECYCLE_NOTE_RE.match(note)
+        if not m or m.group(1).lower() != "resume":
+            continue
+        task_label = note[m.end():].strip()
+        if not task_label:
+            continue
+        _add(_task_merge_key(task_label), ev.time)
+    return by_mk
+
+
+def _switch_overhead_rows(
+    trace: "BtfTrace",
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> List[tuple]:
+    """Per-core kernel switch overhead rows.
+
+    Returns list of
+    ``(core, switches, min_ns, avg_ns, max_ns, total_ns, pct_of_span)``.
+    """
+    if lo is not None and hi is not None:
+        span_ns = max(1, hi - lo)
+    else:
+        span_ns = max(1, trace.time_max - trace.time_min)
+    rows: List[tuple] = []
+    for core in trace.core_names:
+        segs = trace.core_segs.get(core, [])
+        samples: List[int] = []
+        for i in range(1, len(segs)):
+            prev, curr = segs[i - 1], segs[i]
+            if lo is not None and hi is not None and not (lo <= curr.start <= hi):
+                continue
+            gap = curr.start - prev.end
+            samples.append(gap if gap > 0 else 0)
+        if not samples:
+            continue
+        total = sum(samples)
+        avg = int(round(total / len(samples)))
+        rows.append((
+            core,
+            len(samples),
+            min(samples),
+            avg,
+            max(samples),
+            total,
+            100.0 * total / span_ns,
+        ))
+    return rows
+
+
+def _concurrent_core_active_rows(
+    trace: "BtfTrace",
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> List[tuple]:
+    """Time spent with N cores concurrently active (non-IDLE, non-TICK).
+
+    Returns ``(active_cores, duration_ns, pct_of_span)`` rows for N with
+    non-zero duration.
+    """
+    t0 = lo if lo is not None else trace.time_min
+    t1 = hi if hi is not None else trace.time_max
+    span_ns = max(1, t1 - t0)
+    n_cores = len(trace.core_names)
+    if n_cores <= 0 or t1 <= t0:
+        return []
+
+    events: List[Tuple[int, int]] = []
+    for core in trace.core_names:
+        for s in trace.core_segs.get(core, ()):
+            _cid, _tid, tname = _parse_task_name(s.task)
+            if _is_idle_task_name(tname) or tname == "TICK":
+                continue
+            a, b = s.start, s.end
+            if b <= t0 or a >= t1:
+                continue
+            if a < t0:
+                a = t0
+            if b > t1:
+                b = t1
+            if b <= a:
+                continue
+            events.append((a, 1))
+            events.append((b, -1))
+    events.sort(key=lambda e: (e[0], e[1]))
+
+    dur = [0] * (n_cores + 1)
+    active = 0
+    prev_t = t0
+    for t, delta in events:
+        if t > prev_t:
+            level = max(0, min(n_cores, active))
+            dur[level] += t - prev_t
+            prev_t = t
+        active += delta
+    if t1 > prev_t:
+        level = max(0, min(n_cores, active))
+        dur[level] += t1 - prev_t
+
+    rows: List[tuple] = []
+    for n, d in enumerate(dur):
+        if d <= 0:
+            continue
+        rows.append((n, d, 100.0 * d / span_ns))
+    return rows
+
+
+def _dispatch_latency_plot_points(
+    trace: "BtfTrace",
+    merge_key: str,
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> List[tuple]:
+    """``(dispatch_ns, latency_ns, seg)`` for one task's dispatch samples."""
+    data = _dispatch_latency_by_mk(trace, lo, hi).get(merge_key)
+    if not data:
+        return []
+    return list(data.get("points") or ())
+
+
+def _switch_overhead_plot_points(
+    trace: "BtfTrace",
+    core: str,
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> List[tuple]:
+    """``(switch_ns, gap_ns, None)`` per consecutive core_segs gap on *core*."""
+    segs = list(trace.core_segs.get(core, ()))
+    if len(segs) < 2:
+        return []
+    points: List[tuple] = []
+    for i in range(1, len(segs)):
+        prev, curr = segs[i - 1], segs[i]
+        if lo is not None and hi is not None and not (lo <= curr.start <= hi):
+            continue
+        gap = curr.start - prev.end
+        points.append((curr.start, gap if gap > 0 else 0, None))
+    return points
+
+
+def _concurrency_level_plot_points(
+    trace: "BtfTrace",
+    active_cores: int,
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> List[tuple]:
+    """``(interval_start_ns, duration_ns, None)`` while N cores are active."""
+    t0 = lo if lo is not None else trace.time_min
+    t1 = hi if hi is not None else trace.time_max
+    n_cores = len(trace.core_names)
+    if n_cores <= 0 or t1 <= t0:
+        return []
+    target = max(0, min(n_cores, int(active_cores)))
+
+    events: List[Tuple[int, int]] = []
+    for core in trace.core_names:
+        for s in trace.core_segs.get(core, ()):
+            _cid, _tid, tname = _parse_task_name(s.task)
+            if _is_idle_task_name(tname) or tname == "TICK":
+                continue
+            a, b = s.start, s.end
+            if b <= t0 or a >= t1:
+                continue
+            if a < t0:
+                a = t0
+            if b > t1:
+                b = t1
+            if b <= a:
+                continue
+            events.append((a, 1))
+            events.append((b, -1))
+    events.sort(key=lambda e: (e[0], e[1]))
+
+    points: List[tuple] = []
+    active = 0
+    prev_t = t0
+    for t, delta in events:
+        if t > prev_t:
+            level = max(0, min(n_cores, active))
+            if level == target:
+                points.append((prev_t, t - prev_t, None))
+            prev_t = t
+        active += delta
+    if t1 > prev_t:
+        level = max(0, min(n_cores, active))
+        if level == target:
+            points.append((prev_t, t1 - prev_t, None))
+    return points
+
 
 def _task_cores_used(trace: "BtfTrace", merge_key: str) -> set:
     return {s.core for s in trace.seg_map_by_merge_key.get(merge_key, ())}

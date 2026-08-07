@@ -196,6 +196,153 @@
 
     </StatsSectionBlock>
     <StatsSectionBlock
+      v-if="(trace?.coreNames?.length > 0) || concurrentCoreStats.length"
+      :section-id="'concurrency'"
+      :order="sectionOrderIndex('concurrency')"
+      @reorder="onSectionReorder"
+    >
+      <!-- Concurrent core active distribution -->
+      <StatsSectionHeader
+        :section-id="'concurrency'"
+        :collapsed="concurrencyCollapsed"
+        :pinned="isSectionPinned('concurrency')"
+        @toggle="toggleSectionCollapse('concurrency')"
+        @toggle-pin="toggleSectionPin('concurrency')"
+      >
+        Concurrent Core Active Distribution{{ scopeSuffixStr }}
+      </StatsSectionHeader>
+      <template v-if="!concurrencyCollapsed">
+        <div
+          v-if="concurrentCoreStats.length === 0"
+          class="range-hint"
+        >
+          No active core intervals
+        </div>
+        <div
+          v-else
+          class="stats-table-block"
+        >
+          <div class="stats-table-wrap" :style="{ maxHeight: tableHeight('concurrency') + 'px' }">
+            <table class="stats-table">
+              <thead>
+                <tr>
+                  <th :class="thSortClass('concurrency', 'activeCores')" @click="toggleTableSort('concurrency', 'activeCores')">Active Cores</th>
+                  <th :class="thSortClass('concurrency', 'duration')" @click="toggleTableSort('concurrency', 'duration')">Duration</th>
+                  <th :class="thSortClass('concurrency', 'pct')" @click="toggleTableSort('concurrency', 'pct')">% of Span</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="row in sortedConcurrentCoreStats"
+                  :key="row.activeCores"
+                  class="stats-table-row clickable"
+                  :title="`Open interval-duration plot for ${row.activeCores} active core(s)`"
+                  tabindex="0"
+                  @click="openConcurrencyPlot(row.activeCores)"
+                  @keydown.enter.prevent="openConcurrencyPlot(row.activeCores)"
+                  @keydown.space.prevent="openConcurrencyPlot(row.activeCores)"
+                >
+                  <td class="task-col">{{ row.activeCores }}</td>
+                  <td>{{ row.duration }}</td>
+                  <td>{{ row.pctOfSpan.toFixed(1) }}%</td>
+                  <td>
+                    <div class="prog-bar">
+                      <div
+                        class="prog-fill"
+                        :style="{ width: clampPct(row.pctOfSpan) + '%' }"
+                      />
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div
+            class="stats-section-resizer"
+            role="separator"
+            aria-label="Resize concurrent core active table"
+            aria-orientation="horizontal"
+            @mousedown.prevent="onTableResizeStart('concurrency', $event)"
+          />
+        </div>
+      </template>
+
+    </StatsSectionBlock>
+    <StatsSectionBlock
+      v-if="(trace?.coreNames?.length > 0) || switchOverheadStats.length"
+      :section-id="'switch_overhead'"
+      :order="sectionOrderIndex('switch_overhead')"
+      @reorder="onSectionReorder"
+    >
+      <!-- Kernel switch overhead -->
+      <StatsSectionHeader
+        :section-id="'switch_overhead'"
+        :collapsed="switchOverheadCollapsed"
+        :pinned="isSectionPinned('switch_overhead')"
+        @toggle="toggleSectionCollapse('switch_overhead')"
+        @toggle-pin="toggleSectionPin('switch_overhead')"
+      >
+        Kernel Switch Overhead{{ scopeSuffixStr }}
+      </StatsSectionHeader>
+      <template v-if="!switchOverheadCollapsed">
+        <div
+          v-if="switchOverheadStats.length === 0"
+          class="range-hint"
+        >
+          No context switches
+        </div>
+        <div
+          v-else
+          class="stats-table-block"
+        >
+          <div class="stats-table-wrap" :style="{ maxHeight: tableHeight('switch_overhead') + 'px' }">
+            <table class="stats-table">
+              <thead>
+                <tr>
+                  <th :class="thSortClass('switch_overhead', 'core')" @click="toggleTableSort('switch_overhead', 'core')">Core</th>
+                  <th :class="thSortClass('switch_overhead', 'switches')" @click="toggleTableSort('switch_overhead', 'switches')">Switches</th>
+                  <th :class="thSortClass('switch_overhead', 'min')" @click="toggleTableSort('switch_overhead', 'min')">Min</th>
+                  <th :class="thSortClass('switch_overhead', 'avg')" @click="toggleTableSort('switch_overhead', 'avg')">Avg</th>
+                  <th :class="thSortClass('switch_overhead', 'max')" @click="toggleTableSort('switch_overhead', 'max')">Max</th>
+                  <th :class="thSortClass('switch_overhead', 'total')" @click="toggleTableSort('switch_overhead', 'total')">Total Overhead</th>
+                  <th :class="thSortClass('switch_overhead', 'pct')" @click="toggleTableSort('switch_overhead', 'pct')">% of Core</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="row in sortedSwitchOverheadStats"
+                  :key="row.core"
+                  class="stats-table-row clickable"
+                  :title="`Open switch-overhead plot for ${row.core}`"
+                  tabindex="0"
+                  @click="openSwitchOverheadPlot(row.core)"
+                  @keydown.enter.prevent="openSwitchOverheadPlot(row.core)"
+                  @keydown.space.prevent="openSwitchOverheadPlot(row.core)"
+                >
+                  <td class="task-col">{{ row.core }}</td>
+                  <td>{{ row.switches }}</td>
+                  <td>{{ row.min }}</td>
+                  <td>{{ row.avg }}</td>
+                  <td>{{ row.max }}</td>
+                  <td>{{ row.total }}</td>
+                  <td>{{ row.pctOfCore.toFixed(2) }}%</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div
+            class="stats-section-resizer"
+            role="separator"
+            aria-label="Resize kernel switch overhead table"
+            aria-orientation="horizontal"
+            @mousedown.prevent="onTableResizeStart('switch_overhead', $event)"
+          />
+        </div>
+      </template>
+
+    </StatsSectionBlock>
+    <StatsSectionBlock
       :section-id="'tasks'"
       :order="sectionOrderIndex('tasks')"
       @reorder="onSectionReorder"
@@ -850,6 +997,142 @@
             aria-label="Resize blocking time table"
             aria-orientation="horizontal"
             @mousedown.prevent="onTableResizeStart('block', $event)"
+          />
+        </div>
+      </template>
+
+    </StatsSectionBlock>
+    <StatsSectionBlock
+      :section-id="'dispatch'"
+      :order="sectionOrderIndex('dispatch')"
+      @reorder="onSectionReorder"
+    >
+      <!-- Dispatch / scheduling latency -->
+      <StatsSectionHeader
+        :section-id="'dispatch'"
+        :collapsed="dispatchCollapsed"
+        :pinned="isSectionPinned('dispatch')"
+        @toggle="toggleSectionCollapse('dispatch')"
+        @toggle-pin="toggleSectionPin('dispatch')"
+      >
+        Dispatch / Scheduling Latency{{ scopeSuffixStr }}
+      </StatsSectionHeader>
+      <template v-if="!dispatchCollapsed">
+        <div class="range-hint">
+          Ready from STI resume / create; sync wakes not attributed.
+        </div>
+        <div
+          v-if="dispatchLatencyStats.length === 0"
+          class="range-hint"
+        >
+          {{ statsRange
+            ? 'No dispatch samples in cursor range (needs STI resume Name[id] or task create → first run)'
+            : 'No dispatch samples — needs STI task resume Name[id] (vTaskResume) or create→first-run pairs' }}
+        </div>
+        <div
+          v-else
+          class="stats-table-block"
+        >
+          <div
+            class="stats-table-wrap"
+            :style="{ maxHeight: tableHeight('dispatch') + 'px' }"
+          >
+            <table class="stats-table">
+              <thead>
+                <tr>
+                  <th
+                    :class="thSortClass('dispatch', 'task')"
+                    @click="toggleTableSort('dispatch', 'task')"
+                  >
+                    Task
+                  </th>
+                  <th
+                    :class="thSortClass('dispatch', 'activations')"
+                    @click="toggleTableSort('dispatch', 'activations')"
+                  >
+                    Activations
+                  </th>
+                  <th
+                    :class="thSortClass('dispatch', 'min')"
+                    @click="toggleTableSort('dispatch', 'min')"
+                  >
+                    Min
+                  </th>
+                  <th
+                    :class="thSortClass('dispatch', 'avg')"
+                    @click="toggleTableSort('dispatch', 'avg')"
+                  >
+                    Avg
+                  </th>
+                  <th
+                    :class="thSortClass('dispatch', 'max')"
+                    @click="toggleTableSort('dispatch', 'max')"
+                  >
+                    Max
+                  </th>
+                  <th
+                    :class="thSortClass('dispatch', 'jitter')"
+                    title="Observed range: maximum minus minimum dispatch latency"
+                    @click="toggleTableSort('dispatch', 'jitter')"
+                  >
+                    Jitter
+                  </th>
+                  <th
+                    :class="thSortClass('dispatch', 'stddev')"
+                    title="Population standard deviation of dispatch latency"
+                    @click="toggleTableSort('dispatch', 'stddev')"
+                  >
+                    σ
+                  </th>
+                  <th
+                    :class="thSortClass('dispatch', 'p95')"
+                    @click="toggleTableSort('dispatch', 'p95')"
+                  >
+                    p95
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="row in sortedDispatchLatencyStats"
+                  :key="row.mk"
+                  class="stats-table-row clickable"
+                  :title="`Open dispatch-latency plot for ${row.label}`"
+                  tabindex="0"
+                  @click="openTaskPlot(row.mk, 'dispatch')"
+                  @keydown.enter.prevent="openTaskPlot(row.mk, 'dispatch')"
+                  @keydown.space.prevent="openTaskPlot(row.mk, 'dispatch')"
+                >
+                  <td class="task-col">{{ row.label }}</td>
+                  <td>{{ row.activations }}</td>
+                  <td
+                    class="extreme-col"
+                    :title="`Jump to shortest dispatch latency for ${row.label}`"
+                    @click.stop="jumpToDispatchExtreme(row, false)"
+                  >
+                    {{ row.min }}
+                  </td>
+                  <td>{{ row.avg }}</td>
+                  <td
+                    class="extreme-col"
+                    :title="`Jump to longest dispatch latency for ${row.label}`"
+                    @click.stop="jumpToDispatchExtreme(row, true)"
+                  >
+                    {{ row.max }}
+                  </td>
+                  <td>{{ row.jitter }}</td>
+                  <td>{{ row.stddev }}</td>
+                  <td>{{ row.p95 }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div
+            class="stats-section-resizer"
+            role="separator"
+            aria-label="Resize dispatch latency table"
+            aria-orientation="horizontal"
+            @mousedown.prevent="onTableResizeStart('dispatch', $event)"
           />
         </div>
       </template>
@@ -2500,6 +2783,7 @@ import { formatMigrationGapTime } from '../utils/timeFormat.js'
 import { computeDeadlineViolations, deadlineSliceAnnotationNote } from '../utils/deadlineAnalysis.js'
 import { intervalInstanceDetailRows } from '../utils/intervalAnalysis.js'
 import { migrationRows, buildCorePairRows, buildCoreTimeBreakdown, migrationDwellPlotPoints, migrationRatePlotPoints, migrationGapPlotPoints, pairGapPlotPoints, pairRatePlotPoints, pairPlotKey, pairMigrations, pairBouncePrefer, buildLockBounceNsSet } from '../utils/migrationAnalysis.js'
+import { dispatchLatencyRows, switchOverheadRows, concurrentCoreActiveRows, dispatchLatencyPlotPoints, switchOverheadPlotPoints, concurrencyLevelPlotPoints } from '../utils/schedulerSmpMetrics.js'
 import { renderWorkflowAnalysisHtml, collectTraceAnalysisFindings } from '../utils/workflowAnalysis.js'
 import { traceNeedsDeferredStatsLoad } from '../utils/statsLoad.js'
 import { tickHealthReport } from '../utils/tickHealth.js'
@@ -2522,6 +2806,9 @@ import {
   SYNC_OBJECT_SORT_ACCESSORS,
   SYNC_ISSUE_SORT_ACCESSORS,
   CORE_BREAKDOWN_SORT_ACCESSORS,
+  CONCURRENCY_SORT_ACCESSORS,
+  SWITCH_OVERHEAD_SORT_ACCESSORS,
+  DISPATCH_SORT_ACCESSORS,
   CORE_PAIR_SORT_ACCESSORS,
   LIFECYCLE_SORT_ACCESSORS,
   AFFINITY_SORT_ACCESSORS,
@@ -2575,6 +2862,9 @@ const intervalsCollapsed = ref(false)
 const tagsCollapsed = ref(false)
 const corePairsCollapsed = ref(false)
 const coreBreakdownCollapsed = ref(false)
+const concurrencyCollapsed = ref(false)
+const switchOverheadCollapsed = ref(false)
+const dispatchCollapsed = ref(false)
 const affinityCollapsed = ref(false)
 
 function formatMigGapNs(ns) {
@@ -2589,12 +2879,15 @@ const scopeToCursorsModel = computed({
 const SECTION_COLLAPSE_REFS = {
   cores: coresCollapsed,
   core_breakdown: coreBreakdownCollapsed,
+  concurrency: concurrencyCollapsed,
+  switch_overhead: switchOverheadCollapsed,
   tasks: tasksCollapsed,
   health: healthCollapsed,
   migrations: migrationCollapsed,
   core_pairs: corePairsCollapsed,
   exec: execSliceCollapsed,
   block: blockingCollapsed,
+  dispatch: dispatchCollapsed,
   inter: interArrivalCollapsed,
   preemption: preemptionCollapsed,
   priority: priorityCollapsed,
@@ -2849,6 +3142,7 @@ const localSectionHeights = ref({
   migrations: STATS_TABLE_MIG_DEFAULT_H,
   exec: STATS_TABLE_DEFAULT_H,
   block: STATS_TABLE_DEFAULT_H,
+  dispatch: STATS_TABLE_DEFAULT_H,
   inter: STATS_TABLE_DEFAULT_H,
   preemption: STATS_TABLE_MIG_DEFAULT_H,
   priority: STATS_TABLE_DEFAULT_H,
@@ -2859,6 +3153,8 @@ const localSectionHeights = ref({
   health: STATS_TABLE_DEFAULT_H,
   intervals: STATS_TABLE_DEFAULT_H,
   tags: STATS_TABLE_DEFAULT_H,
+  concurrency: STATS_TABLE_DEFAULT_H,
+  switch_overhead: STATS_TABLE_DEFAULT_H,
 })
 watch(() => props.sectionHeights, (v) => {
   if (!v) return
@@ -2886,6 +3182,7 @@ const tableSort = ref({
   migrations: defaultStatsTableSort(),
   exec: defaultStatsTableSort(),
   block: defaultStatsTableSort(),
+  dispatch: defaultStatsTableSort(),
   inter: defaultStatsTableSort(),
   health: defaultStatsTableSort(),
   preemption: defaultStatsTableSort(),
@@ -2895,6 +3192,8 @@ const tableSort = ref({
   intervals: defaultStatsTableSort(),
   tags: defaultStatsTableSort(),
   core_breakdown: defaultStatsTableSort(),
+  concurrency: defaultStatsTableSort(),
+  switch_overhead: defaultStatsTableSort(),
   core_pairs: defaultStatsTableSort(),
   queue: defaultStatsTableSort(),
   lifecycle: defaultStatsTableSort(),
@@ -2922,6 +3221,12 @@ function tableHeight(id) {
   // max-height, so this only matters for the initial/default size).
   if (id === 'core_breakdown') {
     return statsTableViewportHeight(Math.min(Math.max(coreTimeBreakdown.value.length, 1), STATS_MAX_VISIBLE_ROWS))
+  }
+  if (id === 'concurrency') {
+    return statsTableViewportHeight(Math.min(Math.max(concurrentCoreStats.value.length, 1), STATS_MAX_VISIBLE_ROWS))
+  }
+  if (id === 'switch_overhead') {
+    return statsTableViewportHeight(Math.min(Math.max(switchOverheadStats.value.length, 1), STATS_MAX_VISIBLE_ROWS))
   }
   if (id === 'core_pairs') {
     return statsTableViewportHeight(Math.min(Math.max(corePairRows.value.length, 1), STATS_MAX_VISIBLE_ROWS))
@@ -3295,6 +3600,36 @@ const coreTimeBreakdown = computed(() => {
 const sortedCoreTimeBreakdown = computed(() =>
   sortStatsRows(coreTimeBreakdown.value, tableSort.value.core_breakdown, CORE_BREAKDOWN_SORT_ACCESSORS))
 
+const concurrentCoreStats = computed(() => {
+  const tr = props.trace
+  if (!tr) return []
+  const r = statsRange.value
+  return concurrentCoreActiveRows(tr, r?.lo ?? null, r?.hi ?? null)
+})
+
+const sortedConcurrentCoreStats = computed(() =>
+  sortStatsRows(concurrentCoreStats.value, tableSort.value.concurrency, CONCURRENCY_SORT_ACCESSORS))
+
+const switchOverheadStats = computed(() => {
+  const tr = props.trace
+  if (!tr) return []
+  const r = statsRange.value
+  return switchOverheadRows(tr, r?.lo ?? null, r?.hi ?? null)
+})
+
+const sortedSwitchOverheadStats = computed(() =>
+  sortStatsRows(switchOverheadStats.value, tableSort.value.switch_overhead, SWITCH_OVERHEAD_SORT_ACCESSORS))
+
+const dispatchLatencyStats = computed(() => {
+  const tr = props.trace
+  if (!tr) return []
+  const r = statsRange.value
+  return dispatchLatencyRows(tr, r?.lo ?? null, r?.hi ?? null)
+})
+
+const sortedDispatchLatencyStats = computed(() =>
+  sortStatsRows(dispatchLatencyStats.value, tableSort.value.dispatch, DISPATCH_SORT_ACCESSORS))
+
 const coreAffinityRows = computed(() => {
   const tr = props.trace
   if (!tr?.stiEvents?.length) return []
@@ -3416,6 +3751,15 @@ function jumpToSegment(mk, kind, findMax) {
     seg = findExtremeInterArrivalSegment(segs, lo, hi, findMax)
   }
   if (seg) activateExtremeSegment(mk, kind, seg, findMax)
+}
+
+function jumpToDispatchExtreme(row, findMax) {
+  const seg = findMax ? row.maxSeg : row.minSeg
+  if (!seg || !props.trace) return
+  const latNs = findMax ? row.maxNs : row.minNs
+  const tag = findMax ? 'max' : 'min'
+  const note = `${row.label} — ${tag} dispatch latency (${formatTime(latNs, props.trace.timeScale)} ready→run)`
+  emit('plotPointActivate', { ns: seg.start, note, segment: seg })
 }
 
 function _summarizeNumericSamples(samples) {
@@ -3724,6 +4068,79 @@ function _buildTickDistPlot(trace, range) {
   }
 }
 
+function _buildDispatchPlot(trace, mk, range) {
+  const segs = trace?.segByMergeKey?.get(mk) || []
+  if (segs.length === 0) return null
+  const repr = trace.taskRepr.get(mk) || mk
+  const name = taskDisplayName(repr)
+  const suffix = scopeSuffix(range)
+  const lo = range?.lo ?? null
+  const hi = range?.hi ?? null
+  const rawPoints = dispatchLatencyPlotPoints(trace, mk, lo, hi)
+  if (!rawPoints.length) return null
+  const points = rawPoints.map((pt, index) => ({
+    index,
+    xNs: pt.xNs,
+    yValue: pt.yValue,
+    payload: pt.payload,
+    label: `${name}: ${formatTime(pt.yValue, trace.timeScale)} dispatch latency at ${formatTime(pt.xNs, trace.timeScale)}`,
+  }))
+  return {
+    kind: 'dispatch',
+    mk,
+    title: `${name} — Dispatch Latency${suffix}`,
+    color: taskColor(mk, repr),
+    points,
+  }
+}
+
+function _buildSwitchOverheadPlot(trace, core, range) {
+  const suffix = scopeSuffix(range)
+  const lo = range?.lo ?? null
+  const hi = range?.hi ?? null
+  const rawPoints = switchOverheadPlotPoints(trace, core, lo, hi)
+  if (!rawPoints.length) return null
+  const points = rawPoints.map((pt, index) => ({
+    index,
+    xNs: pt.xNs,
+    yValue: pt.yValue,
+    payload: null,
+    label: `${core}: switch overhead ${formatTime(pt.yValue, trace.timeScale)} at ${formatTime(pt.xNs, trace.timeScale)}`,
+  }))
+  return {
+    kind: 'switch_overhead',
+    mk: core,
+    core,
+    title: `${core} — Kernel Switch Overhead${suffix}`,
+    color: coreColor(core),
+    points,
+  }
+}
+
+function _buildConcurrencyPlot(trace, activeCores, range) {
+  const suffix = scopeSuffix(range)
+  const lo = range?.lo ?? null
+  const hi = range?.hi ?? null
+  const n = Number(activeCores)
+  const rawPoints = concurrencyLevelPlotPoints(trace, n, lo, hi)
+  if (!rawPoints.length) return null
+  const points = rawPoints.map((pt, index) => ({
+    index,
+    xNs: pt.xNs,
+    yValue: pt.yValue,
+    payload: null,
+    label: `${n} active cores: dwell ${formatTime(pt.yValue, trace.timeScale)} starting ${formatTime(pt.xNs, trace.timeScale)}`,
+  }))
+  return {
+    kind: 'concurrency',
+    mk: String(n),
+    activeCores: n,
+    title: `${n} Active Cores — Interval Duration${suffix}`,
+    color: '#64B5F6',
+    points,
+  }
+}
+
 function _buildIntervalPlot(trace, id, range) {
   const suffix = scopeSuffix(range)
   const lo = range?.lo ?? null
@@ -3847,6 +4264,15 @@ const plotData = computed(() => {
   if (open.kind === 'tick') {
     return _buildTickDistPlot(props.trace, range)
   }
+  if (open.kind === 'dispatch') {
+    return _buildDispatchPlot(props.trace, open.mk, range)
+  }
+  if (open.kind === 'switch_overhead') {
+    return _buildSwitchOverheadPlot(props.trace, open.core || open.mk, range)
+  }
+  if (open.kind === 'concurrency') {
+    return _buildConcurrencyPlot(props.trace, open.activeCores ?? open.mk, range)
+  }
   return _buildInterPlot(props.trace, open.mk, range)
 })
 
@@ -3884,9 +4310,26 @@ function openTaskPlot(mk, kind) {
   else if (kind === 'mig_dwell') plot = _buildMigDwellPlot(props.trace, mk, range)
   else if (kind === 'mig_rate') plot = _buildMigRatePlot(props.trace, mk, range)
   else if (kind === 'mig_gap') plot = _buildMigGapPlot(props.trace, mk, range)
+  else if (kind === 'dispatch') plot = _buildDispatchPlot(props.trace, mk, range)
   else plot = _buildInterPlot(props.trace, mk, range)
   if (!plot || plot.points.length === 0) return
   openPlotRef.value = { mk, kind }
+  selectedPlotPoint.value = -1
+}
+
+function openSwitchOverheadPlot(core) {
+  const range = statsRange.value
+  const plot = _buildSwitchOverheadPlot(props.trace, core, range)
+  if (!plot || plot.points.length === 0) return
+  openPlotRef.value = { mk: core, core, kind: 'switch_overhead' }
+  selectedPlotPoint.value = -1
+}
+
+function openConcurrencyPlot(activeCores) {
+  const range = statsRange.value
+  const plot = _buildConcurrencyPlot(props.trace, activeCores, range)
+  if (!plot || plot.points.length === 0) return
+  openPlotRef.value = { mk: String(activeCores), activeCores, kind: 'concurrency' }
   selectedPlotPoint.value = -1
 }
 
@@ -4003,7 +4446,7 @@ const scatterModel = computed(() => {
   const plotW = width - margin.left - margin.right
   const plotH = height - margin.top - margin.bottom
   const summary = _summarizeNumericSamples(ys)
-  const showVariability = ['exec', 'block', 'inter'].includes(plot.kind)
+  const showVariability = ['exec', 'block', 'inter', 'dispatch', 'switch_overhead'].includes(plot.kind)
   const yFormat = plot.kind === 'tag'
     ? (v) => formatTagValue(Math.round(v))
     : (v) => formatTime(Math.round(v), props.trace.timeScale)
@@ -4143,7 +4586,7 @@ const histogramModel = computed(() => {
     formatValue,
     valueAsTime: !isTagPlot,
     color: plot.color,
-    showVariability: ['exec', 'block', 'inter'].includes(plot.kind),
+    showVariability: ['exec', 'block', 'inter', 'dispatch', 'switch_overhead'].includes(plot.kind),
   })
 })
 
@@ -4332,17 +4775,6 @@ function exportCsv() {
     lines.push('No data,')
   }
 
-  lines.push('')
-  lines.push(`Top Tasks by CPU (excl. IDLE/TICK)${suffix}`)
-  lines.push('Task,CPU %')
-  if (taskRows.length > 0) {
-    for (const r of taskRows) {
-      lines.push(`${_csvCell(r.name)},${_csvCell(`${r.pct}%`)}`)
-    }
-  } else {
-    lines.push('No data,')
-  }
-
   const tick = tickHealthReport(tr, lo, hi)
   lines.push('')
   lines.push(`Trace Health (TICK)${suffix}`)
@@ -4373,6 +4805,71 @@ function exportCsv() {
     lines.push('No STI TICK events,')
   }
 
+  const bdRows = buildCoreTimeBreakdown(tr, lo, hi)
+  lines.push('')
+  lines.push(`Core Time Breakdown${suffix}`)
+  lines.push('Core,Active %,Idle %,Tick %,Gap %')
+  if (bdRows.length) {
+    for (const r of bdRows) {
+      const s = Math.max(r.spanNs, 1)
+      lines.push([
+        _csvCell(r.core),
+        _csvCell(`${(100 * r.activeNs / s).toFixed(1)}%`),
+        _csvCell(`${(100 * r.idleNs / s).toFixed(1)}%`),
+        _csvCell(`${(100 * r.tickNs / s).toFixed(1)}%`),
+        _csvCell(`${(100 * r.gapNs / s).toFixed(1)}%`),
+      ].join(','))
+    }
+  } else {
+    lines.push('No core data,,,,')
+  }
+  lines.push('')
+  lines.push(`Concurrent Core Active Distribution${suffix}`)
+  lines.push('Active Cores,Duration,% of Span')
+  const ccCsvRows = concurrentCoreActiveRows(tr, lo, hi)
+  if (ccCsvRows.length) {
+    for (const r of ccCsvRows) {
+      lines.push([
+        _csvCell(r.activeCores),
+        _csvCell(r.duration),
+        _csvCell(`${r.pctOfSpan.toFixed(1)}%`),
+      ].join(','))
+    }
+  } else {
+    lines.push('No data,,')
+  }
+
+  lines.push('')
+  lines.push(`Kernel Switch Overhead${suffix}`)
+  lines.push('Core,Switches,Min,Avg,Max,Total Overhead,% of Core')
+  const swCsvRows = switchOverheadRows(tr, lo, hi)
+  if (swCsvRows.length) {
+    for (const r of swCsvRows) {
+      lines.push([
+        _csvCell(r.core),
+        _csvCell(r.switches),
+        _csvCell(r.min),
+        _csvCell(r.avg),
+        _csvCell(r.max),
+        _csvCell(r.total),
+        _csvCell(`${r.pctOfCore.toFixed(2)}%`),
+      ].join(','))
+    }
+  } else {
+    lines.push('No data,,,,,,')
+  }
+
+  lines.push('')
+  lines.push(`Top Tasks by CPU (excl. IDLE/TICK)${suffix}`)
+  lines.push('Task,CPU %')
+  if (taskRows.length > 0) {
+    for (const r of taskRows) {
+      lines.push(`${_csvCell(r.name)},${_csvCell(`${r.pct}%`)}`)
+    }
+  } else {
+    lines.push('No data,')
+  }
+
   lines.push('')
   lines.push(`Core Migrations${suffix}`)
   lines.push('Task,Migrations,Migr rate,Avg dwell,Core count,Primary core,Primary %,Ping-pong,STI near,Gap after avg,Gap other avg')
@@ -4391,6 +4888,92 @@ function exportCsv() {
       _csvCell(r.gapAfter),
       _csvCell(r.gapOther),
     ].join(','))
+  }
+
+  const scale = tr.timeScale
+  const pairRows = buildCorePairRows(tr, lo, hi)
+  lines.push('')
+  lines.push(`Core-Pair Migration Summary${suffix}`)
+  lines.push('From,To,Count,Bounces,Bounce %,Avg Gap')
+  if (pairRows.length) {
+    for (const r of pairRows) {
+      lines.push([
+        _csvCell(r.fromCore),
+        _csvCell(r.toCore),
+        _csvCell(r.count),
+        _csvCell(r.bounces),
+        _csvCell(`${r.bouncePct.toFixed(1)}%`),
+        _csvCell(formatMigrationGapTime(r.avgGapNs, scale)),
+      ].join(','))
+    }
+  } else {
+    lines.push('No migrations in scope,,,,,')
+  }
+
+  const affRows = coreAffinityRows.value
+  lines.push('')
+  lines.push(`Core Affinity${suffix}`)
+  lines.push('Task,Mask,Observed Cores,Violations')
+  if (affRows.length) {
+    for (const r of affRows) {
+      lines.push([_csvCell(r.label), _csvCell(r.maskHex), _csvCell(r.observedCores), _csvCell(r.violations)].join(','))
+    }
+  } else {
+    lines.push('No affinity_set events,,,')
+  }
+
+  const lcRows = buildTaskLifecycleRows(tr.stiEvents ?? [], tr.taskRepr, lo, hi, tr.taskCreateTimes, tr.segByMergeKey)
+  lines.push('')
+  lines.push(`Task Lifecycle${suffix}`)
+  lines.push('Task,Created,Deleted,Susp/Res,Alive span,Events,Runs')
+  if (lcRows.length) {
+    for (const r of lcRows) {
+      lines.push([
+        _csvCell(r.label),
+        r.createNs != null ? _csvCell(formatTime(r.createNs, scale)) : '',
+        r.deleteNs != null ? _csvCell(formatTime(r.deleteNs, scale)) : '',
+        _csvCell(`${r.suspendCount}/${r.resumeCount}`),
+        r.aliveSpanNs ? _csvCell(formatLifecycleSpan(r.aliveSpanNs, scale)) : '',
+        _csvCell(r.eventCount),
+        _csvCell(r.runCount),
+      ].join(','))
+    }
+  } else {
+    lines.push('No lifecycle events,,,,,,')
+  }
+
+  if (hasDeadlineConfig.value) {
+    const { sliceViolations, cpuViolations } = deadlineViolations.value
+    lines.push('')
+    lines.push(`Deadlines / CPU budget${suffix}`)
+    lines.push('Slice Violations')
+    lines.push('Task,Duration,Limit,Over by')
+    if (sliceViolations.length) {
+      for (const v of sliceViolations) {
+        lines.push([
+          _csvCell(v.label),
+          _csvCell(v.duration),
+          _csvCell(v.limit),
+          _csvCell(v.overBy),
+        ].join(','))
+      }
+    } else {
+      lines.push('No slice violations,,,')
+    }
+    lines.push('')
+    lines.push('CPU Budget Violations')
+    lines.push('Task,CPU %,Budget')
+    if (cpuViolations.length) {
+      for (const v of cpuViolations) {
+        lines.push([
+          _csvCell(v.label),
+          _csvCell(`${v.pct}%`),
+          _csvCell(`${v.budgetPct}%`),
+        ].join(','))
+      }
+    } else {
+      lines.push('No CPU budget violations,,')
+    }
   }
 
   lines.push('')
@@ -4431,6 +5014,27 @@ function exportCsv() {
   }
 
   lines.push('')
+  lines.push(`Dispatch / Scheduling Latency${suffix}`)
+  lines.push('Task,Activations,Min,Avg,Max,Jitter,StdDev (population),p95')
+  const dispCsvRows = dispatchLatencyRows(tr, lo, hi)
+  if (dispCsvRows.length) {
+    for (const r of dispCsvRows) {
+      lines.push([
+        _csvCell(r.label),
+        _csvCell(r.activations),
+        _csvCell(r.min),
+        _csvCell(r.avg),
+        _csvCell(r.max),
+        _csvCell(r.jitter),
+        _csvCell(r.stddev),
+        _csvCell(r.p95),
+      ].join(','))
+    }
+  } else {
+    lines.push('No data,,,,,,,')
+  }
+
+  lines.push('')
   lines.push(`Inter-Arrival Time${suffix}`)
   lines.push('Task,Runs,Min,Avg,TrimMean(5%),Max,Jitter,StdDev (population),p50,p95')
   for (const r of interReportRows) {
@@ -4466,7 +5070,6 @@ function exportCsv() {
     lines.push('No preemption events found,,,,,')
   }
 
-  const intervalReportRows = intervalStatsRows(tr, lo, hi)
   lines.push('')
   lines.push(`Priority Inheritance${suffix}`)
   lines.push('Task,Base,Peak,Boosts,Boosted,Pattern')
@@ -4524,73 +5127,7 @@ function exportCsv() {
     lines.push('No queue activity in scope,,,,,')
   }
 
-  const scale = tr.timeScale
-  const lcRows = buildTaskLifecycleRows(tr.stiEvents ?? [], tr.taskRepr, lo, hi, tr.taskCreateTimes, tr.segByMergeKey)
-  lines.push('')
-  lines.push(`Task Lifecycle${suffix}`)
-  lines.push('Task,Created,Deleted,Susp/Res,Alive span,Events,Runs')
-  if (lcRows.length) {
-    for (const r of lcRows) {
-      lines.push([
-        _csvCell(r.label),
-        r.createNs != null ? _csvCell(formatTime(r.createNs, scale)) : '',
-        r.deleteNs != null ? _csvCell(formatTime(r.deleteNs, scale)) : '',
-        _csvCell(`${r.suspendCount}/${r.resumeCount}`),
-        r.aliveSpanNs ? _csvCell(formatLifecycleSpan(r.aliveSpanNs, scale)) : '',
-        _csvCell(r.eventCount),
-        _csvCell(r.runCount),
-      ].join(','))
-    }
-  } else {
-    lines.push('No lifecycle events,,,,,,')
-  }
-
-  const affRows = coreAffinityRows.value
-  lines.push('')
-  lines.push(`Core Affinity${suffix}`)
-  lines.push('Task,Mask,Observed Cores,Violations')
-  if (affRows.length) {
-    for (const r of affRows) {
-      lines.push([_csvCell(r.label), _csvCell(r.maskHex), _csvCell(r.observedCores), _csvCell(r.violations)].join(','))
-    }
-  } else {
-    lines.push('No affinity_set events,,,')
-  }
-
-  if (hasDeadlineConfig.value) {
-    const { sliceViolations, cpuViolations } = deadlineViolations.value
-    lines.push('')
-    lines.push(`Deadlines / CPU budget${suffix}`)
-    lines.push('Slice Violations')
-    lines.push('Task,Duration,Limit,Over by')
-    if (sliceViolations.length) {
-      for (const v of sliceViolations) {
-        lines.push([
-          _csvCell(v.label),
-          _csvCell(v.duration),
-          _csvCell(v.limit),
-          _csvCell(v.overBy),
-        ].join(','))
-      }
-    } else {
-      lines.push('No slice violations,,,')
-    }
-    lines.push('')
-    lines.push('CPU Budget Violations')
-    lines.push('Task,CPU %,Budget')
-    if (cpuViolations.length) {
-      for (const v of cpuViolations) {
-        lines.push([
-          _csvCell(v.label),
-          _csvCell(`${v.pct}%`),
-          _csvCell(`${v.budgetPct}%`),
-        ].join(','))
-      }
-    } else {
-      lines.push('No CPU budget violations,,')
-    }
-  }
-
+  const intervalReportRows = intervalStatsRows(tr, lo, hi)
   lines.push('')
   lines.push(`Interval Analysis${suffix}`)
   lines.push('ID,Label,Count,Min,Avg,Max,p95')
@@ -4630,43 +5167,6 @@ function exportCsv() {
     lines.push('No tag data,,,,,,')
   }
 
-  const pairRows = buildCorePairRows(tr, lo, hi)
-  lines.push('')
-  lines.push(`Core-Pair Migration Summary${suffix}`)
-  lines.push('From,To,Count,Bounces,Bounce %,Avg Gap')
-  if (pairRows.length) {
-    for (const r of pairRows) {
-      lines.push([
-        _csvCell(r.fromCore),
-        _csvCell(r.toCore),
-        _csvCell(r.count),
-        _csvCell(r.bounces),
-        _csvCell(`${r.bouncePct.toFixed(1)}%`),
-        _csvCell(formatMigrationGapTime(r.avgGapNs, scale)),
-      ].join(','))
-    }
-  } else {
-    lines.push('No migrations in scope,,,,,')
-  }
-
-  const bdRows = buildCoreTimeBreakdown(tr, lo, hi)
-  lines.push('')
-  lines.push(`Core Time Breakdown${suffix}`)
-  lines.push('Core,Active %,Idle %,Tick %,Gap %')
-  if (bdRows.length) {
-    for (const r of bdRows) {
-      const s = Math.max(r.spanNs, 1)
-      lines.push([
-        _csvCell(r.core),
-        _csvCell(`${(100 * r.activeNs / s).toFixed(1)}%`),
-        _csvCell(`${(100 * r.idleNs / s).toFixed(1)}%`),
-        _csvCell(`${(100 * r.tickNs / s).toFixed(1)}%`),
-        _csvCell(`${(100 * r.gapNs / s).toFixed(1)}%`),
-      ].join(','))
-    }
-  } else {
-    lines.push('No core data,,,,')
-  }
 
   _downloadText(`statistics-${_stamp()}.csv`, `\uFEFF${lines.join('\n')}`, 'text/csv;charset=utf-8')
 }
@@ -5239,11 +5739,114 @@ function exportHtml() {
     </section>
     ${rangeHtml}
     ${coreHtml}
-    ${taskHtml}
     ${tickHealthHtml}
-    ${_renderHtmlTableReport(`Execution Time Per Slice${suffix}`, execReportRows, true)}
+    ${(() => {
+      const bdRows = buildCoreTimeBreakdown(tr, lo, hi)
+      const bdBody = bdRows.length
+        ? bdRows.map(r => {
+            const s = Math.max(r.spanNs, 1)
+            return `<tr><td>${_htmlCell(r.core)}</td>` +
+              `<td>${(100 * r.activeNs / s).toFixed(1)}%</td>` +
+              `<td>${(100 * r.idleNs / s).toFixed(1)}%</td>` +
+              `<td>${(100 * r.tickNs / s).toFixed(1)}%</td>` +
+              `<td>${(100 * r.gapNs / s).toFixed(1)}%</td></tr>`
+          }).join('')
+        : '<tr><td colspan="5" class="empty">No core data</td></tr>'
+      return `<section class="report-card"><h2>Core Time Breakdown${_htmlCell(suffix)}</h2>` +
+        '<table><thead><tr><th>Core</th><th>Active %</th><th>Idle %</th>' +
+        '<th>Tick %</th><th>Gap %</th></tr></thead>' +
+        `<tbody>${bdBody}</tbody></table></section>`
+    })()}
+    ${(() => {
+      const ccRows = concurrentCoreActiveRows(tr, lo, hi)
+      const body = ccRows.length
+        ? ccRows.map(r =>
+            `<tr><td>${r.activeCores}</td><td>${_htmlCell(r.duration)}</td>` +
+            `<td>${r.pctOfSpan.toFixed(1)}%</td></tr>`
+          ).join('')
+        : '<tr><td colspan="3" class="empty">No data</td></tr>'
+      return `<section class="report-card"><h2>Concurrent Core Active Distribution${_htmlCell(suffix)}</h2>` +
+        '<table><thead><tr><th>Active Cores</th><th>Duration</th><th>% of Span</th></tr></thead>' +
+        `<tbody>${body}</tbody></table></section>`
+    })()}
+    ${(() => {
+      const swRows = switchOverheadRows(tr, lo, hi)
+      const body = swRows.length
+        ? swRows.map(r =>
+            `<tr><td>${_htmlCell(r.core)}</td><td>${r.switches}</td>` +
+            `<td>${_htmlCell(r.min)}</td><td>${_htmlCell(r.avg)}</td><td>${_htmlCell(r.max)}</td>` +
+            `<td>${_htmlCell(r.total)}</td><td>${r.pctOfCore.toFixed(2)}%</td></tr>`
+          ).join('')
+        : '<tr><td colspan="7" class="empty">No data</td></tr>'
+      return `<section class="report-card"><h2>Kernel Switch Overhead${_htmlCell(suffix)}</h2>` +
+        '<table><thead><tr><th>Core</th><th>Switches</th><th>Min</th><th>Avg</th>' +
+        '<th>Max</th><th>Total Overhead</th><th>% of Core</th></tr></thead>' +
+        `<tbody>${body}</tbody></table></section>`
+    })()}
+    ${taskHtml}
     ${migHtml}
+    ${(() => {
+      const pairRows = buildCorePairRows(tr, lo, hi)
+      const pairBody = pairRows.length
+        ? pairRows.map(r =>
+            `<tr><td>${_htmlCell(r.fromCore)}</td><td>${_htmlCell(r.toCore)}</td>` +
+            `<td>${r.count}</td><td>${r.bounces}</td><td>${r.bouncePct.toFixed(1)}%</td>` +
+            `<td>${_htmlCell(formatMigrationGapTime(r.avgGapNs, tr.timeScale))}</td></tr>`
+          ).join('')
+        : '<tr><td colspan="6" class="empty">No migrations in scope</td></tr>'
+      return `<section class="report-card"><h2>Core-Pair Migration Summary${_htmlCell(suffix)}</h2>` +
+        '<table><thead><tr><th>From</th><th>To</th><th>Count</th>' +
+        '<th>Bounces</th><th>Bounce %</th><th>Avg Gap</th></tr></thead>' +
+        `<tbody>${pairBody}</tbody></table></section>`
+    })()}
+    ${(() => {
+      const affRows = coreAffinityRows.value
+      const affBody = affRows.length
+        ? affRows.map(r => {
+            const violStyle = r.violations !== '—' ? ' style="color:#c0392b;font-weight:600"' : ''
+            return `<tr><td>${_htmlCell(r.label)}</td><td>${_htmlCell(r.maskHex)}</td>` +
+              `<td>${_htmlCell(r.observedCores)}</td><td${violStyle}>${_htmlCell(r.violations)}</td></tr>`
+          }).join('')
+        : '<tr><td colspan="4" class="empty">No affinity_set events</td></tr>'
+      return `<section class="report-card"><h2>Core Affinity${_htmlCell(suffix)}</h2>` +
+        '<table><thead><tr><th>Task</th><th>Mask</th><th>Observed Cores</th>' +
+        '<th>Violations</th></tr></thead>' +
+        `<tbody>${affBody}</tbody></table></section>`
+    })()}
+    ${(() => {
+      const lcRows = buildTaskLifecycleRows(tr.stiEvents ?? [], tr.taskRepr, lo, hi, tr.taskCreateTimes, tr.segByMergeKey)
+      const lcBody = lcRows.length
+        ? lcRows.map(r =>
+            `<tr><td>${_htmlCell(r.label)}</td>` +
+            `<td>${r.createNs != null ? _htmlCell(formatTime(r.createNs, tr.timeScale)) : '—'}</td>` +
+            `<td>${r.deleteNs != null ? _htmlCell(formatTime(r.deleteNs, tr.timeScale)) : '—'}</td>` +
+            `<td>${r.suspendCount}/${r.resumeCount}</td>` +
+            `<td>${r.aliveSpanNs ? _htmlCell(formatLifecycleSpan(r.aliveSpanNs, tr.timeScale)) : '—'}</td>` +
+            `<td>${r.eventCount}</td><td>${r.runCount}</td></tr>`
+          ).join('')
+        : '<tr><td colspan="7" class="empty">No lifecycle events</td></tr>'
+      return `<section class="report-card"><h2>Task Lifecycle${_htmlCell(suffix)}</h2>` +
+        '<table><thead><tr><th>Task</th><th>Created</th><th>Deleted</th>' +
+        '<th>Susp/Res</th><th>Alive span</th><th>Events</th><th>Runs</th></tr></thead>' +
+        `<tbody>${lcBody}</tbody></table></section>`
+    })()}
+    ${_renderDeadlineReportHtml(suffix)}
+    ${_renderHtmlTableReport(`Execution Time Per Slice${suffix}`, execReportRows, true)}
     ${_renderHtmlTableReport(`Blocking Time (off-CPU gap)${suffix}`, blockReportRows)}
+    ${(() => {
+      const dispRows = dispatchLatencyRows(tr, lo, hi)
+      const body = dispRows.length
+        ? dispRows.map(r =>
+            `<tr><td>${_htmlCell(r.label)}</td><td>${r.activations}</td>` +
+            `<td>${_htmlCell(r.min)}</td><td>${_htmlCell(r.avg)}</td><td>${_htmlCell(r.max)}</td>` +
+            `<td>${_htmlCell(r.jitter)}</td><td>${_htmlCell(r.stddev)}</td><td>${_htmlCell(r.p95)}</td></tr>`
+          ).join('')
+        : '<tr><td colspan="8" class="empty">No data</td></tr>'
+      return `<section class="report-card"><h2>Dispatch / Scheduling Latency${_htmlCell(suffix)}</h2>` +
+        '<table><thead><tr><th>Task</th><th>Activations</th><th>Min</th><th>Avg</th>' +
+        '<th>Max</th><th>Jitter</th><th>σ</th><th>p95</th></tr></thead>' +
+        `<tbody>${body}</tbody></table></section>`
+    })()}
     ${_renderHtmlTableReport(`Inter-Arrival Time${suffix}`, interReportRows)}
     <section class="report-card"><h2>Preemption Chain Analysis${_htmlCell(suffix)}</h2>
     <table><thead><tr><th>Victim</th><th>Preemptor</th><th>Count</th><th>Total</th><th>Avg</th><th>Max</th></tr></thead>
@@ -5269,71 +5872,8 @@ function exportHtml() {
         '<th>Issues</th><th>Avg hold</th><th>Status</th></tr></thead>' +
         `<tbody>${qBody}</tbody></table></section>`
     })() : ''}
-    ${(() => {
-      const lcRows = buildTaskLifecycleRows(tr.stiEvents ?? [], tr.taskRepr, lo, hi, tr.taskCreateTimes, tr.segByMergeKey)
-      const lcBody = lcRows.length
-        ? lcRows.map(r =>
-            `<tr><td>${_htmlCell(r.label)}</td>` +
-            `<td>${r.createNs != null ? _htmlCell(formatTime(r.createNs, tr.timeScale)) : '—'}</td>` +
-            `<td>${r.deleteNs != null ? _htmlCell(formatTime(r.deleteNs, tr.timeScale)) : '—'}</td>` +
-            `<td>${r.suspendCount}/${r.resumeCount}</td>` +
-            `<td>${r.aliveSpanNs ? _htmlCell(formatLifecycleSpan(r.aliveSpanNs, tr.timeScale)) : '—'}</td>` +
-            `<td>${r.eventCount}</td><td>${r.runCount}</td></tr>`
-          ).join('')
-        : '<tr><td colspan="7" class="empty">No lifecycle events</td></tr>'
-      return `<section class="report-card"><h2>Task Lifecycle${_htmlCell(suffix)}</h2>` +
-        '<table><thead><tr><th>Task</th><th>Created</th><th>Deleted</th>' +
-        '<th>Susp/Res</th><th>Alive span</th><th>Events</th><th>Runs</th></tr></thead>' +
-        `<tbody>${lcBody}</tbody></table></section>`
-    })()}
-    ${(() => {
-      const affRows = coreAffinityRows.value
-      const affBody = affRows.length
-        ? affRows.map(r => {
-            const violStyle = r.violations !== '—' ? ' style="color:#c0392b;font-weight:600"' : ''
-            return `<tr><td>${_htmlCell(r.label)}</td><td>${_htmlCell(r.maskHex)}</td>` +
-              `<td>${_htmlCell(r.observedCores)}</td><td${violStyle}>${_htmlCell(r.violations)}</td></tr>`
-          }).join('')
-        : '<tr><td colspan="4" class="empty">No affinity_set events</td></tr>'
-      return `<section class="report-card"><h2>Core Affinity${_htmlCell(suffix)}</h2>` +
-        '<table><thead><tr><th>Task</th><th>Mask</th><th>Observed Cores</th>' +
-        '<th>Violations</th></tr></thead>' +
-        `<tbody>${affBody}</tbody></table></section>`
-    })()}
-    ${_renderDeadlineReportHtml(suffix)}
     ${_renderIntervalReportHtml(tr, lo, hi, suffix)}
     ${_renderTagReportHtml(tr, lo, hi, suffix)}
-    ${(() => {
-      const pairRows = buildCorePairRows(tr, lo, hi)
-      const pairBody = pairRows.length
-        ? pairRows.map(r =>
-            `<tr><td>${_htmlCell(r.fromCore)}</td><td>${_htmlCell(r.toCore)}</td>` +
-            `<td>${r.count}</td><td>${r.bounces}</td><td>${r.bouncePct.toFixed(1)}%</td>` +
-            `<td>${_htmlCell(formatMigrationGapTime(r.avgGapNs, tr.timeScale))}</td></tr>`
-          ).join('')
-        : '<tr><td colspan="6" class="empty">No migrations in scope</td></tr>'
-      return `<section class="report-card"><h2>Core-Pair Migration Summary${_htmlCell(suffix)}</h2>` +
-        '<table><thead><tr><th>From</th><th>To</th><th>Count</th>' +
-        '<th>Bounces</th><th>Bounce %</th><th>Avg Gap</th></tr></thead>' +
-        `<tbody>${pairBody}</tbody></table></section>`
-    })()}
-    ${(() => {
-      const bdRows = buildCoreTimeBreakdown(tr, lo, hi)
-      const bdBody = bdRows.length
-        ? bdRows.map(r => {
-            const s = Math.max(r.spanNs, 1)
-            return `<tr><td>${_htmlCell(r.core)}</td>` +
-              `<td>${(100 * r.activeNs / s).toFixed(1)}%</td>` +
-              `<td>${(100 * r.idleNs / s).toFixed(1)}%</td>` +
-              `<td>${(100 * r.tickNs / s).toFixed(1)}%</td>` +
-              `<td>${(100 * r.gapNs / s).toFixed(1)}%</td></tr>`
-          }).join('')
-        : '<tr><td colspan="5" class="empty">No core data</td></tr>'
-      return `<section class="report-card"><h2>Core Time Breakdown${_htmlCell(suffix)}</h2>` +
-        '<table><thead><tr><th>Core</th><th>Active %</th><th>Idle %</th>' +
-        '<th>Tick %</th><th>Gap %</th></tr></thead>' +
-        `<tbody>${bdBody}</tbody></table></section>`
-    })()}
     <div class="report-foot">Generated by BTF Viewer</div>
   </div>
   <script>
