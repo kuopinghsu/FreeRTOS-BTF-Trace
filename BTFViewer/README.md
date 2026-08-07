@@ -32,12 +32,13 @@ A PySide6-based interactive visualiser for FreeRTOS context-switch traces in **B
 - **Cursor range summary** — with 2+ cursors, the status bar shows a quick min/max/avg segment summary (Desktop + Web); full per-task metrics remain in the **Statistics** panel
 - **Task highlight** — hover or click any task label or Legend row to highlight all its segments; optional **Highlight segments on label hover** in Settings dims other tasks while hovering (off by default)
 - **Dockable Legend panel** — colour swatches for every task, with a search box, **Migrated tasks only** filter, a **heatmap filter banner** (when drilled from the heatmap), and the same highlight interaction
-- **Right-side panel** — **Statistics**, **Marks**, and **Find** tabs (Desktop: docked on the right, stacked below Legend; Web: tab bar on the right). Statistics holds metric tables; Marks holds cursors, bookmarks/annotations, and (on Web) Legend; Find searches tasks, annotations, migrations, STI events, interval spans, task lifecycle events, and object pointers
+- **Right-side panel** — **Statistics**, **Marks**, and **Find** tabs (Desktop: docked on the right, stacked below Legend; Web: tab bar on the right). Statistics holds metric tables (collapsible, resizable, **reorderable**, and **pinnable**); Marks holds cursors, bookmarks/annotations, and (on Web) Legend; Find searches tasks, annotations, migrations, STI events, interval spans, task lifecycle events, and object pointers
 - **Tag View** — inspect tag channels/events (`tag_event`, `tag0_event` … `tag7_event`) alongside task/core activity
 - **Metrics tables** — Execution Time Per Slice, **Blocking Time** (off-CPU gap / scheduling latency between activations), **Inter-Arrival**, **Preemption Chain** (which tasks preempted whom), **Priority Inheritance**, **Mutex / Semaphore pairing** (with **Core Bounce** column flagging holds that crossed core boundaries), **Queue pairing** (`send`/`recv` by queue pointer), **Interval Analysis** (paired `interval_start` / `interval_stop` spans; when the BTF note includes `tid:{task_id}`, pairing is per interval id **and** task), **Tag Analysis** (per-channel min/avg/max/p95 for `tag0_event`…`tag7_event` samples), **Task Lifecycle** (per-task create/delete/suspend/resume event summary), **Core-Pair Migration Summary**, **Core Time Breakdown**, **Core Affinity** (affinity mask vs. observed cores), and **Deadlines / CPU budget** (ns deadlines + CPU budget %; Settings → Display link, sortable tables, click slice to annotate / CPU row to highlight); click **Min** / **Max** (dotted underline) to jump and add an annotation at the BCET / WCET slice or shortest / longest gap (Desktop + Web)
 - **Metrics distribution charts** — click any row in Execution Time, Blocking Time, Inter-Arrival, **Core Migrations** (in-dialog tabs to switch between **Dwell**, **Rate**, and **Gap**), **Core-Pair Migration Summary** (**Gap** / **Rate** tabs; orange bounce points; Open Heatmap / Open Chord), Preemption Chain, **Priority Inheritance**, **Interval Analysis**, or **Tag Analysis** tables to open a scatter-plot + histogram popup; Execution/Blocking/Inter-Arrival charts shade **average ± one population σ**; histograms use **adaptive scaling** (auto linear / p5–p95 / log duration, overflow buckets, optional log-scaled counts, CDF overlay); charts live-update when cursors move or cursor-range scope is toggled (Desktop + Web). On Desktop, each trace tab remembers its own open chart when you switch tabs
 - **Segment tooltips** — hover any segment bar for duration, slice index on core, previous/next task on that core, and gap before the slice; time precision (decimal digits) is configurable in **Settings → Layout** and also applies to the hover-line badge, cursor labels, bookmarks/annotations, and the status bar
 - **CPU Load Graph** — bar chart below the timeline showing per-core CPU utilisation; row labels show the **visible-window average** and, with 2+ cursors, a cursor-range average (`· C:xx%`); toggle with the **Load** toolbar button; drag the divider between timeline and CPU load to resize (Desktop + Web)
+- **Customizable Statistics layout** — drag the **⠿** grip on a section header to reorder metric tables; pin a section so it stays expanded through **Collapse all**; reset to the built-in order with the panel header control (grayed out when already default). Order and pins persist across launches (Desktop + Web)
 - **Resizable panels** — drag dividers between timeline and CPU load, the right-side panel (Statistics / Marks / Find) and Legend dock (Desktop), the **label column** (task names), and metric table sections in Statistics (Desktop + Web); splitter, label width, and table heights persist in `btf_viewer.rc` (Desktop) or browser `localStorage` (Web)
 - **STI event markers** — software trace items rendered as coloured diamond markers
 - **Find & Jump** — search tasks, annotations, or migrations; **Find** tab in the right panel (same as web); toolbar button and `Ctrl+F`; `F3` / `Shift+F3` steps through matches
@@ -719,7 +720,7 @@ The right side uses three tabs — **Statistics**, **Marks**, and **Find** — w
 
 | Tab | Contents |
 |-----|----------|
-| **Statistics** | Collapsible metric tables, exports, **Trace Compare…** |
+| **Statistics** | Collapsible / reorderable / pinnable metric tables, exports, **Trace Compare…** |
 | **Marks** | **Web:** Cursors, cursor-range summary, unified bookmarks/annotations list, Legend. **Desktop:** **Curs.** / **Bookm.** / **Anno.** sub-tabs, cursor-range label, Legend in a separate dock above this panel |
 | **Find** | Search (Contains / Exact / Regex / Migrations); `Ctrl+F` focuses this tab |
 
@@ -736,11 +737,11 @@ Same tab bar behaviour as desktop: each `.btf` opens in its own tab with indepen
 
 ### Session restore (Web)
 
-The web viewer persists **settings** in browser `localStorage` (key `btf-viewer-settings-v1`: font sizes, label column width, row height, max cursors, theme, etc.) and **session state** in `btf-viewer-session-v1` (view mode, orientation, panel widths, stats table heights, open tab names, active tab, and per-tab viewport/cursors/marks/filters). Parsed trace payloads for recently opened files are cached in **IndexedDB** (`btf-viewer-traces-v1`, up to 8 traces) so tabs can reopen after refresh without re-selecting files. Settings are saved when you accept the Settings dialog or finish a label-column drag; session state is debounced (~400 ms) when you change tabs, cursors, marks, viewport, filters, or panel sizes.
+The web viewer persists **settings** in browser `localStorage` (key `btf-viewer-settings-v1`: font sizes, label column width, row height, max cursors, theme, **Statistics pins** (`statsPinnedSections`) and **section order** (`statsSectionOrder`), etc.) and **session state** in `btf-viewer-session-v1` (view mode, orientation, panel widths, stats table heights, open tab names, active tab, and per-tab viewport/cursors/marks/filters). Parsed trace payloads for recently opened files are cached in **IndexedDB** (`btf-viewer-traces-v1`, up to 8 traces) so tabs can reopen after refresh without re-selecting files. Settings are saved when you accept the Settings dialog, finish a label-column drag, or change Statistics pins/order; session state is debounced (~400 ms) when you change tabs, cursors, marks, viewport, filters, or panel sizes.
 
 **On page load:**
 
-- Restores global settings from `btf-viewer-settings-v1` (including **label column width** 60–600 px).
+- Restores global settings from `btf-viewer-settings-v1` (including **label column width** 60–600 px, Statistics **pins** and **section order**).
 - Restores global view options from `btf-viewer-session-v1` (task/core mode, orientation, grid, STI, CPU load, dark mode).
 - Restores right-panel width, CPU-load panel height, and stats table section heights.
 - Reopens cached trace tabs (when IndexedDB still holds the file data), restores the last active tab, and reapplies each tab's zoom, cursors, marks, and legend filters.
@@ -934,18 +935,37 @@ The **Statistics** tab in the right-side panel (Desktop dock + Web tab) shows pe
 
 At the top, **Limit to cursor range (C1–Cn)** restricts all statistics (and Analysis Findings) to the time window from the first placed cursor through the last (requires 2+ cursors). Section titles show **(cursor range)** when scoped. Clearing all cursors returns to full-trace statistics immediately.
 
-**Layout:** metric tables are **collapsible** (click a section title) and **resizable** (drag the thin handle below each table). Use the **pin** icon on a section header to keep that table expanded (pin survives **Collapse all**). Pins are saved to `btf_viewer.rc` (`[stats] pinned_sections=…`, Desktop) or `localStorage` settings (`statsPinnedSections`, Web). On Desktop, drag the splitter between the timeline and CPU load graph to resize that pane; sizes are saved in `btf_viewer.rc`. On Web, right-panel width and stats table heights persist in `localStorage`.
+**Panel header controls** (next to the cursor-range checkbox):
 
-It shows (in panel order):
+| Control | Action |
+|---------|--------|
+| **+** | Expand all sections |
+| **−** | Collapse all sections (pinned sections stay open) |
+| Reset-order (circular arrow) | Restore the built-in section sequence; **disabled / grayed out** when order is already default |
+
+**Section header controls** (each metric table):
+
+| Control | Action |
+|---------|--------|
+| Section title / chevron | Expand or collapse that section (no-op while pinned) |
+| **⠿** grip | Drag onto another section to reorder (destination shows a dashed highlight) |
+| Pin (thumbtack) | Keep the section expanded; survives **Collapse all** and heavy-trace deferral |
+
+Pins and section order persist across launches: Desktop `btf_viewer.rc` (`[stats] pinned_sections=…`, `section_order=…`); Web `localStorage` settings (`statsPinnedSections`, `statsSectionOrder`). Table heights are also resizable (drag the thin handle below each table). On Desktop, drag the splitter between the timeline and CPU load graph to resize that pane. On Web, right-panel width and stats table heights persist in `localStorage`.
+
+Default section sequence (customize via drag-reorder):
 
 - **Summary** — span, task/segment/STI counts (scoped when the checkbox is on)
 - **Scheduling summary** — context-switch count and average/max core gap between consecutive slices on each core
 - **Core utilisation** — percentage of active (non-IDLE, non-TICK) CPU time per core; side-by-side **Load Balance Score** and **σ** gauges at the top (Gini; red / amber / green zones) (collapsible)
+- **Trace health (TICK)** — tick period regularity, **tick / tickless mode detection** (coefficient of variation of tick intervals), large gaps, missed-tick estimate, and **Tick Distribution…** chart button (bar-chart icon beside the mode badge when ≥ 2 ticks in scope) (collapsible)
 - **Core Time Breakdown** — per-core time budget split into **Active** (non-IDLE, non-TICK tasks), **Idle** (IDLE task), **Tick** (TICK handler), and **Gap** (unaccounted span between segments — scheduler latency / ISR overhead) expressed as percentages (collapsible)
 - **Top tasks by CPU** — ranked list of worker tasks by total CPU time consumed (collapsible)
-- **Trace health (TICK)** — tick period regularity, **tick / tickless mode detection** (coefficient of variation of tick intervals), large gaps, missed-tick estimate, and **Tick Distribution…** chart button (bar-chart icon beside the mode badge when ≥ 2 ticks in scope) (collapsible)
 - **Core Migrations** — per-task migration count, **migration rate** (normalized per second of active time and per scheduler tick), **average core dwell time**, core count, primary core (% time), ping-pong count, STI events near migrations, and average off-CPU gap after migration vs other gaps; click a row for a distribution chart with **Dwell** / **Rate** / **Gap** tabs (collapsible)
 - **Core-Pair Migration Summary** — per directed core-pair (e.g. `Core_0 → Core_1`): total migration count, lock-bounce count and percentage, and average off-CPU gap after migration; **click a row** for Gap / Rate distribution charts (bounce samples in orange) with **Open Heatmap** / **Open Chord** deep-links (collapsible; shown only on multi-core traces with migrations)
+- **Core Affinity** — per-task affinity mask history from `affinity_set` STI (`vTaskCoreAffinitySet`) vs. observed execution cores; **Violations** lists cores used while outside the mask then in effect (slices before the first set are unrestricted; mask changes are shown as `0x1 → 0x8`) (collapsible; shown only when those STI events are present)
+- **Task Lifecycle** — per-task summary of `create`, `delete`, `suspend`, and `resume` events recorded on the `task` STI channel: created/deleted timestamps, suspend/resume counts, alive span (create→delete), total lifecycle event count, and **Runs** — the number of times the task was actually dispatched onto a core (context-switch-in / segment count). Runs is a scheduler-level metric and is normally much larger than Susp/Res, which only counts explicit `vTaskSuspend()`/`vTaskResume()` API calls — a task can run (and be preempted/resumed by the scheduler) many times without ever being suspended. In `example-8cores.btf.gz`, test 9 creates **SR0–SR3** (pinned across cores) with overlapping suspend-while-blocked and suspend-while-running rounds — use this section to confirm Susp/Res counts match the STI pairs (collapsible; shown only when the trace contains task lifecycle STI events)
+- **Deadlines / CPU budget** — configurable per-task execution deadline (**nanoseconds**, converted to the trace `#timeScale` before compare) and global CPU budget threshold (%); shows **Slice over deadline** (top 20 by duration; click a row to jump + annotate) and **CPU budget exceeded** (click a row to highlight the task); click column headers to sort; click **Settings → Display** in the section to open Analysis thresholds (`Ctrl+,`) — always visible, with a configure prompt when no thresholds are set (collapsible)
 - **Execution Time Per Slice** — per-task min/avg/max/jitter/σ/p95, run count, and CPU%; click a row for a scatter + histogram popup; click **Min** / **Max** to jump and annotate the BCET / WCET slice
 - **Blocking Time** — off-CPU gap between consecutive activations of the same task (not end-to-end response time); min/avg/max/jitter/σ/p95; click a row for a distribution chart; click **Min** / **Max** to jump and annotate the shortest / longest off-CPU gap (collapsible)
 - **Inter-Arrival Time** — the same variability statistics for gaps between task activation starts; click **Min** / **Max** to jump and annotate the shortest / longest inter-arrival gap (collapsible)
@@ -953,9 +973,6 @@ It shows (in panel order):
 - **Priority Inheritance** — per-task base/peak priority, boost episodes, boosted time, and pattern (mutex inherit / L/M/H / boost only); click a row for a duration plot; click a scatter point to zoom, highlight, and annotate the episode (collapsible; shown only when the trace contains priority-inheritance STI events)
 - **Mutex / Semaphore pairing** — per-object hold count, issue count, **core bounce count**, average hold, and status; **Pairing issues** sub-table lists orphan gives, cross-task gives, unmatched takes, teardown warnings, and **`CORE_MIGRATION_WHILE_HELD`** warnings (lock that crossed core boundaries while held); click an issue row to zoom, jump, and annotate (collapsible; shown only when the trace contains sync-object STI events)
 - **Queue** — per-queue `send`/`recv` pairing by object pointer: hold count, issue count, average hold, and status (collapsible; shown only when the trace contains `queue` STI events)
-- **Task Lifecycle** — per-task summary of `create`, `delete`, `suspend`, and `resume` events recorded on the `task` STI channel: created/deleted timestamps, suspend/resume counts, alive span (create→delete), total lifecycle event count, and **Runs** — the number of times the task was actually dispatched onto a core (context-switch-in / segment count). Runs is a scheduler-level metric and is normally much larger than Susp/Res, which only counts explicit `vTaskSuspend()`/`vTaskResume()` API calls — a task can run (and be preempted/resumed by the scheduler) many times without ever being suspended. In `example-8cores.btf.gz`, test 9 creates **SR0–SR3** (pinned across cores) with overlapping suspend-while-blocked and suspend-while-running rounds — use this section to confirm Susp/Res counts match the STI pairs (collapsible; shown only when the trace contains task lifecycle STI events)
-- **Core Affinity** — per-task affinity mask history from `affinity_set` STI (`vTaskCoreAffinitySet`) vs. observed execution cores; **Violations** lists cores used while outside the mask then in effect (slices before the first set are unrestricted; mask changes are shown as `0x1 → 0x8`) (collapsible; shown only when those STI events are present)
-- **Deadlines / CPU budget** — configurable per-task execution deadline (**nanoseconds**, converted to the trace `#timeScale` before compare) and global CPU budget threshold (%); shows **Slice over deadline** (top 20 by duration; click a row to jump + annotate) and **CPU budget exceeded** (click a row to highlight the task); click column headers to sort; click **Settings → Display** in the section to open Analysis thresholds (`Ctrl+,`) — always visible, with a configure prompt when no thresholds are set (collapsible)
 - **Interval Analysis** — per interval id: count, min/avg/max/p95 duration of paired start→stop spans; pairing uses `tid` in the note when present; click a row for a duration plot; click a scatter point to jump and add an annotation at the interval start (collapsible)
 - **Tag Analysis** — per `tag0_event`…`tag7_event` STI channel: sample count, min/avg/max/p95 of the tag value; click a row to open a scatter + histogram plot (collapsible; shown only when the trace contains tag STI samples)
 
@@ -971,10 +988,11 @@ The Statistics panel (Desktop **Statistics** tab + Web **Statistics** tab) organ
 
 1. Open a trace (e.g. `tracedata/example-4cores.btf.gz` for a 4-core SMP workload, or `tracedata/example-2cores.btf.gz` for a smaller 2-core demo).
 2. Optionally click toolbar **Analysis** for a severity-tagged triage of the current scope.
-3. Expand the sections you care about (or use the **+** / **−** icons at the top to expand/collapse all).
-4. Optionally place **2+ cursors** and enable **Limit to cursor range (C1–Cn)** to restrict every metric (and Analysis Findings) to a time window.
-5. Click a **table row** to open a distribution chart (where supported), click **Min** / **Max** to jump and add an annotation at an extreme slice on the timeline, click a **Mutex / Semaphore** issue row to zoom, jump, and annotate at that STI event, or in **Deadlines / CPU budget** click a slice row to annotate / a CPU-budget row to highlight the task (or use the **Settings → Display** link to edit thresholds).
-6. Use **Trace Compare…** when two traces are open to diff summary and migration stats.
+3. Expand the sections you care about (or use the **+** / **−** icons at the top to expand/collapse all). Pin frequently used sections so they stay open.
+4. Optionally drag **⠿** grips to reorder sections for your workflow; use the reset-order icon when you want the built-in sequence back.
+5. Optionally place **2+ cursors** and enable **Limit to cursor range (C1–Cn)** to restrict every metric (and Analysis Findings) to a time window.
+6. Click a **table row** to open a distribution chart (where supported), click **Min** / **Max** to jump and add an annotation at an extreme slice on the timeline, click a **Mutex / Semaphore** issue row to zoom, jump, and annotate at that STI event, or in **Deadlines / CPU budget** click a slice row to annotate / a CPU-budget row to highlight the task (or use the **Settings → Display** link to edit thresholds).
+7. Use **Trace Compare…** when two traces are open to diff summary and migration stats.
 
 The example plots below were generated from **`tracedata/example-8cores.btf.gz`** (8 cores, 154 tasks, ~31 100 segments, time scale `us`). Regenerate them with:
 
@@ -986,7 +1004,7 @@ This invokes the desktop CLI `snapshot` command (`--view plot` / `--view timelin
 
 #### Summary, scheduling, and core utilisation
 
-These sections appear at the top of the Statistics panel (not sortable tables).
+These sections appear near the top of the Statistics panel in the **default** order (not sortable tables). Drag-reorder may place them elsewhere.
 
 **Summary** — scope-wide counts: trace span, tasks, segments, STI events. Span is *t*<sub>max</sub> − *t*<sub>min</sub> in the active scope (full trace or cursor range).
 
@@ -2064,6 +2082,8 @@ Settings, window layout, bookmarks, and multi-tab state are stored in `btf_viewe
 | `[view]` `label_width` | Task/core label column width in px (60–600); also saved per window size in `dock_profile_label_width` |
 | `[view]` `cpu_splitter_bottom_h` / `cpu_splitter_user_sized` | Timeline vs CPU load splitter height (Desktop) |
 | `[stats]` `table_height_<section>` | Per-section metric table heights in Statistics (Desktop) |
+| `[stats]` `pinned_sections` | Comma-separated Statistics section IDs kept expanded (Desktop) |
+| `[stats]` `section_order` | Comma-separated Statistics section IDs in display order (Desktop; omitted IDs append in catalogue order) |
 | `[zoom]` / `[cursors]` | Zoom and cursors for the last active tab (legacy compatibility) |
 
 ---

@@ -2858,6 +2858,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._stats_panel.apply_section_table_heights(_stats_heights)
             self._stats_panel.set_section_pins(
                 s.get("stats", "pinned_sections", ""), emit=False)
+            self._stats_panel.set_section_order(
+                s.get("stats", "section_order", ""), emit=False)
 
         # Dock layout: sizes from dock_metrics; visibility from [view] show_* keys.
         # Qt saveState/restoreState embeds dock visibility and fights show_legend,
@@ -3023,6 +3025,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 s.set(
                     "stats", "pinned_sections",
                     stats_pins_to_rc(self._stats_panel.section_pins()),
+                    flush=False,
+                )
+                s.set(
+                    "stats", "section_order",
+                    stats_section_order_to_rc(self._stats_panel.section_order()),
                     flush=False,
                 )
 
@@ -4020,6 +4027,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._stats_panel.open_pair_chord.connect(self._on_open_pair_chord)
         self._stats_panel.open_settings_requested.connect(self._open_settings)
         self._stats_panel.section_pins_changed.connect(self._on_section_pins_changed)
+        self._stats_panel.section_order_changed.connect(self._on_section_order_changed)
         self._stats_panel._btn_compare_mig.clicked.connect(self._open_trace_compare)
         self.setAcceptDrops(True)
 
@@ -4031,6 +4039,19 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._settings.set(
                 "stats", "pinned_sections",
                 stats_pins_to_rc(self._stats_panel.section_pins()),
+                flush=True,
+            )
+        except Exception:
+            pass
+
+    def _on_section_order_changed(self, _order: list) -> None:
+        """Persist statistics section order to btf_viewer.rc immediately."""
+        if self._restoring_settings or self._shutting_down:
+            return
+        try:
+            self._settings.set(
+                "stats", "section_order",
+                stats_section_order_to_rc(self._stats_panel.section_order()),
                 flush=True,
             )
         except Exception:

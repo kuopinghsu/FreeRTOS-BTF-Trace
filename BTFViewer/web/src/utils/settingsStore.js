@@ -1,6 +1,6 @@
 /** Persistent web viewer settings (localStorage). Parity with desktop btf_viewer.rc / btf_viewer.py USER CONFIGURATION. */
 import { syncTimelineLayoutFromSettings } from './timelineLayout.js'
-import { normalizeStatsPins } from './statsPins.js'
+import { normalizeStatsPins, normalizeStatsSectionOrder } from './statsPins.js'
 
 const SETTINGS_KEY = 'btf-viewer-settings-v1'
 
@@ -36,6 +36,7 @@ export const DEFAULT_SETTINGS = {
   taskDeadlines: {},
   timeDecimals: 3,
   statsPinnedSections: [],
+  statsSectionOrder: [],
 }
 
 function clampInt(v, lo, hi, fallback) {
@@ -82,6 +83,7 @@ export function normalizeSettings(raw) {
     taskDeadlines: (s.taskDeadlines && typeof s.taskDeadlines === 'object') ? { ...s.taskDeadlines } : {},
     timeDecimals: clampInt(s.timeDecimals, 0, 9, DEFAULT_SETTINGS.timeDecimals),
     statsPinnedSections: normalizeStatsPins(s.statsPinnedSections),
+    statsSectionOrder: normalizeStatsSectionOrder(s.statsSectionOrder),
   }
 }
 

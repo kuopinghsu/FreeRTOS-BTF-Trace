@@ -37,6 +37,18 @@
               <path d="M2 7h12v2H2z" />
             </svg>
           </button>
+          <button
+            type="button"
+            class="stats-icon-btn"
+            :disabled="!sectionOrderIsCustom"
+            :title="sectionOrderIsCustom ? 'Reset statistics section order to default' : 'Section order is already the default'"
+            aria-label="Reset statistics section order to default"
+            @click="resetSectionOrder"
+          >
+            <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true">
+              <path d="M8 1.25A6.75 6.75 0 1 0 14.75 8h-1.5A5.25 5.25 0 1 1 8 2.75V5.5L12 3 8 .5v.75z" />
+            </svg>
+          </button>
         </div>
       </div>
       <span class="stats-scope-label">{{ scopeRangeLabel }}</span>
@@ -78,10 +90,16 @@
       </template>
     </div>
 
-    <!-- Core utilization -->
-    <template v-if="trace?.coreNames?.length > 0">
-      <div class="stats-sep" />
+    <div class="stats-sections-stack">
+    <StatsSectionBlock
+      v-if="trace?.coreNames?.length > 0"
+      :section-id="'cores'"
+      :order="sectionOrderIndex('cores')"
+      @reorder="onSectionReorder"
+    >
+      <!-- Core utilization -->
       <StatsSectionHeader
+        :section-id="'cores'"
         :collapsed="coresCollapsed"
         :pinned="isSectionPinned('cores')"
         @toggle="toggleSectionCollapse('cores')"
@@ -124,12 +142,17 @@
           @mousedown="onTableResizeStart('cores', $event, coreStats.length)"
         />
       </template>
-    </template>
 
-    <!-- Core time breakdown -->
-    <template v-if="coreTimeBreakdown.length">
-      <div class="stats-sep" />
+    </StatsSectionBlock>
+    <StatsSectionBlock
+      v-if="coreTimeBreakdown.length"
+      :section-id="'core_breakdown'"
+      :order="sectionOrderIndex('core_breakdown')"
+      @reorder="onSectionReorder"
+    >
+      <!-- Core time breakdown -->
       <StatsSectionHeader
+        :section-id="'core_breakdown'"
         :collapsed="coreBreakdownCollapsed"
         :pinned="isSectionPinned('core_breakdown')"
         @toggle="toggleSectionCollapse('core_breakdown')"
@@ -170,323 +193,346 @@
           />
         </div>
       </template>
-    </template>
 
-    <!-- Top tasks -->
-    <div class="stats-sep" />
-    <StatsSectionHeader
-      :collapsed="tasksCollapsed"
-      :pinned="isSectionPinned('tasks')"
-      @toggle="toggleSectionCollapse('tasks')"
-      @toggle-pin="toggleSectionPin('tasks')"
+    </StatsSectionBlock>
+    <StatsSectionBlock
+      :section-id="'tasks'"
+      :order="sectionOrderIndex('tasks')"
+      @reorder="onSectionReorder"
     >
-      Top Tasks by CPU (excl. IDLE/TICK){{ scopeSuffixStr }}
-    </StatsSectionHeader>
-    <template v-if="!tasksCollapsed">
-      <div
-        v-if="topTasks.length === 0"
-        class="range-hint"
+      <!-- Top tasks -->
+      <StatsSectionHeader
+        :section-id="'tasks'"
+        :collapsed="tasksCollapsed"
+        :pinned="isSectionPinned('tasks')"
+        @toggle="toggleSectionCollapse('tasks')"
+        @toggle-pin="toggleSectionPin('tasks')"
       >
-        No user tasks found
-      </div>
-      <div
-        v-else
-        class="stats-util-scroll"
-        :style="utilScrollStyle(topTasks.length, 'tasks')"
-      >
+        Top Tasks by CPU (excl. IDLE/TICK){{ scopeSuffixStr }}
+      </StatsSectionHeader>
+      <template v-if="!tasksCollapsed">
         <div
-          v-for="t in topTasks"
-          :key="t.mk"
-          class="task-stat-row"
+          v-if="topTasks.length === 0"
+          class="range-hint"
         >
-          <button
-            class="task-stat-name task-link"
-            type="button"
-            :title="`Highlight ${t.name} in the timeline`"
-            @click="emit('highlightTask', t.mk)"
+          No user tasks found
+        </div>
+        <div
+          v-else
+          class="stats-util-scroll"
+          :style="utilScrollStyle(topTasks.length, 'tasks')"
+        >
+          <div
+            v-for="t in topTasks"
+            :key="t.mk"
+            class="task-stat-row"
           >
-            {{ t.name }}
-          </button>
-          <div class="prog-bar">
+            <button
+              class="task-stat-name task-link"
+              type="button"
+              :title="`Highlight ${t.name} in the timeline`"
+              @click="emit('highlightTask', t.mk)"
+            >
+              {{ t.name }}
+            </button>
+            <div class="prog-bar">
+              <div
+                class="prog-fill task-fill"
+                :style="{ width: clampPct(t.pct) + '%' }"
+              />
+            </div>
+            <span class="task-stat-pct">{{ t.pct.toFixed(1) }}%</span>
+          </div>
+        </div>
+        <div
+          v-if="topTasks.length > 0"
+          class="stats-section-resizer"
+          role="separator"
+          aria-label="Resize top tasks"
+          @mousedown="onTableResizeStart('tasks', $event, topTasks.length)"
+        />
+      </template>
+
+    </StatsSectionBlock>
+    <StatsSectionBlock
+      :section-id="'health'"
+      :order="sectionOrderIndex('health')"
+      @reorder="onSectionReorder"
+    >
+      <!-- Trace health (TICK) -->
+      <StatsSectionHeader
+        :section-id="'health'"
+        :collapsed="healthCollapsed"
+        :pinned="isSectionPinned('health')"
+        @toggle="toggleSectionCollapse('health')"
+        @toggle-pin="toggleSectionPin('health')"
+      >
+        Trace Health (TICK){{ scopeSuffixStr }}
+      </StatsSectionHeader>
+      <template v-if="!healthCollapsed">
+        <div
+          v-if="!tickHealth.tickCount"
+          class="range-hint"
+        >
+          No STI TICK events
+        </div>
+        <template v-else>
+          <div class="health-banner-row">
             <div
-              class="prog-fill task-fill"
-              :style="{ width: clampPct(t.pct) + '%' }"
+              class="health-banner"
+              :class="'health-' + tickHealth.health"
+            >
+              {{ tickHealth.health.toUpperCase() }}
+              · <span
+                class="tick-mode-badge"
+                :class="tickHealth.isTickless ? 'tick-mode-tickless' : 'tick-mode-tick'"
+                :title="tickHealth.isTickless
+                  ? `Tickless mode detected (interval CV=${(tickHealth.tickCv * 100).toFixed(1)}%): tick intervals vary because the scheduler suppresses ticks during idle periods.`
+                  : `Tick mode detected (interval CV=${(tickHealth.tickCv * 100).toFixed(1)}%): tick intervals are constant.`"
+              >{{ tickHealth.isTickless ? 'TICKLESS' : 'TICK' }}</span>
+              · {{ tickHealth.tickCount.toLocaleString() }} ticks
+              · avg {{ fmtTime(tickHealth.avgPeriod) }}
+              · max gap {{ fmtTime(tickHealth.maxGap) }}
+            </div>
+            <button
+              v-if="tickHealth.tickCount >= 2"
+              type="button"
+              class="tick-dist-btn"
+              title="Open tick interval distribution chart"
+              @click="openTickDistPlot"
+            >
+              <svg
+                class="tick-dist-icon"
+                viewBox="0 0 16 16"
+                width="14"
+                height="14"
+                aria-hidden="true"
+              >
+                <path
+                  fill="currentColor"
+                  d="M1.5 12.5h2.5V8H1.5v4.5zm3.5 0H7.5V5H5v7.5zm3.5 0h2.5V2H8.5v10.5zm3.5 0H14v-5h-2.5v5.5z"
+                />
+              </svg>
+              <span>Tick Distribution…</span>
+            </button>
+          </div>
+          <div
+            v-if="tickHealth.isTickless"
+            class="range-hint"
+          >
+            Tickless mode: tick intervals vary.
+          </div>
+          <div
+            v-if="tickHealth.largeGaps.length"
+            class="range-hint"
+          >
+            {{ tickHealth.largeGaps.length }} large gap(s)
+            · ~{{ tickHealth.missedTicksEstimate }} missed ticks
+          </div>
+          <div
+            v-if="tickHealth.largeGaps.length"
+            class="stats-table-block"
+          >
+            <div
+              class="stats-table-wrap"
+              :style="{ maxHeight: tableHeight('health') + 'px' }"
+            >
+              <table class="stats-table compact">
+                <thead>
+                  <tr>
+                    <th
+                      :class="thSortClass('health', 'start')"
+                      @click="toggleTableSort('health', 'start')"
+                    >
+                      Start
+                    </th>
+                    <th
+                      :class="thSortClass('health', 'end')"
+                      @click="toggleTableSort('health', 'end')"
+                    >
+                      End
+                    </th>
+                    <th
+                      :class="thSortClass('health', 'gap')"
+                      @click="toggleTableSort('health', 'gap')"
+                    >
+                      Gap
+                    </th>
+                    <th
+                      :class="thSortClass('health', 'missed')"
+                      @click="toggleTableSort('health', 'missed')"
+                    >
+                      Missed
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr
+                    v-for="(g, i) in sortedTickHealthGaps"
+                    :key="i"
+                  >
+                    <td>{{ fmtTime(g.start) }}</td>
+                    <td>{{ fmtTime(g.end) }}</td>
+                    <td>{{ fmtTime(g.duration) }}</td>
+                    <td>{{ g.missedTicks }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div
+              class="stats-section-resizer"
+              role="separator"
+              aria-label="Resize trace health gap table"
+              aria-orientation="horizontal"
+              @mousedown.prevent="onTableResizeStart('health', $event)"
             />
           </div>
-          <span class="task-stat-pct">{{ t.pct.toFixed(1) }}%</span>
-        </div>
-      </div>
-      <div
-        v-if="topTasks.length > 0"
-        class="stats-section-resizer"
-        role="separator"
-        aria-label="Resize top tasks"
-        @mousedown="onTableResizeStart('tasks', $event, topTasks.length)"
-      />
-    </template>
+        </template>
+      </template>
 
-    <!-- Trace health (TICK) -->
-    <div class="stats-sep" />
-    <StatsSectionHeader
-      :collapsed="healthCollapsed"
-      :pinned="isSectionPinned('health')"
-      @toggle="toggleSectionCollapse('health')"
-      @toggle-pin="toggleSectionPin('health')"
+    </StatsSectionBlock>
+    <StatsSectionBlock
+      :section-id="'migrations'"
+      :order="sectionOrderIndex('migrations')"
+      @reorder="onSectionReorder"
     >
-      Trace Health (TICK){{ scopeSuffixStr }}
-    </StatsSectionHeader>
-    <template v-if="!healthCollapsed">
-      <div
-        v-if="!tickHealth.tickCount"
-        class="range-hint"
+      <!-- Core migrations -->
+      <StatsSectionHeader
+        :section-id="'migrations'"
+        :collapsed="migrationCollapsed"
+        :pinned="isSectionPinned('migrations')"
+        @toggle="toggleSectionCollapse('migrations')"
+        @toggle-pin="toggleSectionPin('migrations')"
       >
-        No STI TICK events
-      </div>
-      <template v-else>
-        <div class="health-banner-row">
-          <div
-            class="health-banner"
-            :class="'health-' + tickHealth.health"
-          >
-            {{ tickHealth.health.toUpperCase() }}
-            · <span
-              class="tick-mode-badge"
-              :class="tickHealth.isTickless ? 'tick-mode-tickless' : 'tick-mode-tick'"
-              :title="tickHealth.isTickless
-                ? `Tickless mode detected (interval CV=${(tickHealth.tickCv * 100).toFixed(1)}%): tick intervals vary because the scheduler suppresses ticks during idle periods.`
-                : `Tick mode detected (interval CV=${(tickHealth.tickCv * 100).toFixed(1)}%): tick intervals are constant.`"
-            >{{ tickHealth.isTickless ? 'TICKLESS' : 'TICK' }}</span>
-            · {{ tickHealth.tickCount.toLocaleString() }} ticks
-            · avg {{ fmtTime(tickHealth.avgPeriod) }}
-            · max gap {{ fmtTime(tickHealth.maxGap) }}
-          </div>
-          <button
-            v-if="tickHealth.tickCount >= 2"
-            type="button"
-            class="tick-dist-btn"
-            title="Open tick interval distribution chart"
-            @click="openTickDistPlot"
-          >
-            <svg
-              class="tick-dist-icon"
-              viewBox="0 0 16 16"
-              width="14"
-              height="14"
-              aria-hidden="true"
-            >
-              <path
-                fill="currentColor"
-                d="M1.5 12.5h2.5V8H1.5v4.5zm3.5 0H7.5V5H5v7.5zm3.5 0h2.5V2H8.5v10.5zm3.5 0H14v-5h-2.5v5.5z"
-              />
-            </svg>
-            <span>Tick Distribution…</span>
-          </button>
-        </div>
+        Core Migrations{{ scopeSuffixStr }}
+      </StatsSectionHeader>
+      <template v-if="!migrationCollapsed">
         <div
-          v-if="tickHealth.isTickless"
+          v-if="migrationStats.length === 0"
           class="range-hint"
         >
-          Tickless mode: tick intervals vary.
+          {{ statsRange ? 'No migrated tasks in cursor range' : 'No tasks ran on multiple cores' }}
         </div>
         <div
-          v-if="tickHealth.largeGaps.length"
-          class="range-hint"
-        >
-          {{ tickHealth.largeGaps.length }} large gap(s)
-          · ~{{ tickHealth.missedTicksEstimate }} missed ticks
-        </div>
-        <div
-          v-if="tickHealth.largeGaps.length"
+          v-else
           class="stats-table-block"
         >
           <div
             class="stats-table-wrap"
-            :style="{ maxHeight: tableHeight('health') + 'px' }"
+            :style="{ maxHeight: tableHeight('migrations') + 'px' }"
           >
-            <table class="stats-table compact">
-              <thead>
-                <tr>
-                  <th
-                    :class="thSortClass('health', 'start')"
-                    @click="toggleTableSort('health', 'start')"
-                  >
-                    Start
-                  </th>
-                  <th
-                    :class="thSortClass('health', 'end')"
-                    @click="toggleTableSort('health', 'end')"
-                  >
-                    End
-                  </th>
-                  <th
-                    :class="thSortClass('health', 'gap')"
-                    @click="toggleTableSort('health', 'gap')"
-                  >
-                    Gap
-                  </th>
-                  <th
-                    :class="thSortClass('health', 'missed')"
-                    @click="toggleTableSort('health', 'missed')"
-                  >
-                    Missed
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr
-                  v-for="(g, i) in sortedTickHealthGaps"
-                  :key="i"
+            <table class="stats-table stats-table-migration">
+            <thead>
+              <tr>
+                <th
+                  :class="thSortClass('migrations', 'task')"
+                  @click="toggleTableSort('migrations', 'task')"
                 >
-                  <td>{{ fmtTime(g.start) }}</td>
-                  <td>{{ fmtTime(g.end) }}</td>
-                  <td>{{ fmtTime(g.duration) }}</td>
-                  <td>{{ g.missedTicks }}</td>
-                </tr>
-              </tbody>
-            </table>
+                  Task
+                </th>
+                <th
+                  :class="thSortClass('migrations', 'migr')"
+                  @click="toggleTableSort('migrations', 'migr')"
+                >
+                  Migr
+                </th>
+                <th
+                  :class="thSortClass('migrations', 'rate')"
+                  @click="toggleTableSort('migrations', 'rate')"
+                  title="Migrations per second of on-CPU time (and per on-CPU tick when TICK events exist)"
+                >
+                  Rate
+                </th>
+                <th
+                  :class="thSortClass('migrations', 'dwell')"
+                  @click="toggleTableSort('migrations', 'dwell')"
+                  title="Average on-core run time before block, yield, or migration"
+                >
+                  Dwell
+                </th>
+                <th
+                  :class="thSortClass('migrations', 'cores')"
+                  @click="toggleTableSort('migrations', 'cores')"
+                >
+                  Cores
+                </th>
+                <th
+                  :class="thSortClass('migrations', 'primary')"
+                  @click="toggleTableSort('migrations', 'primary')"
+                >
+                  Primary
+                </th>
+                <th
+                  :class="thSortClass('migrations', 'ping')"
+                  @click="toggleTableSort('migrations', 'ping')"
+                >
+                  Ping
+                </th>
+                <th
+                  :class="thSortClass('migrations', 'sti')"
+                  @click="toggleTableSort('migrations', 'sti')"
+                >
+                  STI±
+                </th>
+                <th
+                  :class="thSortClass('migrations', 'gapAfter')"
+                  @click="toggleTableSort('migrations', 'gapAfter')"
+                >
+                  Gap after
+                </th>
+                <th
+                  :class="thSortClass('migrations', 'gapOther')"
+                  @click="toggleTableSort('migrations', 'gapOther')"
+                >
+                  Gap other
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="row in sortedMigrationStats"
+                :key="row.mk"
+                class="stats-table-row clickable"
+                :title="`Click to view migration dwell/rate/gap distribution for ${row.name}`"
+                tabindex="0"
+                @click="openTaskPlot(row.mk, 'mig_dwell')"
+                @keydown.enter.prevent="openTaskPlot(row.mk, 'mig_dwell')"
+                @keydown.space.prevent="openTaskPlot(row.mk, 'mig_dwell')"
+              >
+                <td class="task-col">{{ row.name }}</td>
+                <td>{{ row.migrations }}</td>
+                <td>{{ row.migrRate }}</td>
+                <td>{{ row.avgDwell }}</td>
+                <td>{{ row.coreCount }}</td>
+                <td>{{ row.primary }} ({{ row.primaryPct.toFixed(0) }}%)</td>
+                <td>{{ row.pingPong }}</td>
+                <td>{{ row.stiNear }}</td>
+                <td>{{ row.gapAfter }}</td>
+                <td>{{ row.gapOther }}</td>
+              </tr>
+            </tbody>
+          </table>
           </div>
           <div
             class="stats-section-resizer"
             role="separator"
-            aria-label="Resize trace health gap table"
+            aria-label="Resize core migrations table"
             aria-orientation="horizontal"
-            @mousedown.prevent="onTableResizeStart('health', $event)"
+            @mousedown.prevent="onTableResizeStart('migrations', $event)"
           />
         </div>
       </template>
-    </template>
 
-    <!-- Core migrations -->
-    <div class="stats-sep" />
-    <StatsSectionHeader
-      :collapsed="migrationCollapsed"
-      :pinned="isSectionPinned('migrations')"
-      @toggle="toggleSectionCollapse('migrations')"
-      @toggle-pin="toggleSectionPin('migrations')"
+    </StatsSectionBlock>
+    <StatsSectionBlock
+      v-if="corePairRows.length"
+      :section-id="'core_pairs'"
+      :order="sectionOrderIndex('core_pairs')"
+      @reorder="onSectionReorder"
     >
-      Core Migrations{{ scopeSuffixStr }}
-    </StatsSectionHeader>
-    <template v-if="!migrationCollapsed">
-      <div
-        v-if="migrationStats.length === 0"
-        class="range-hint"
-      >
-        {{ statsRange ? 'No migrated tasks in cursor range' : 'No tasks ran on multiple cores' }}
-      </div>
-      <div
-        v-else
-        class="stats-table-block"
-      >
-        <div
-          class="stats-table-wrap"
-          :style="{ maxHeight: tableHeight('migrations') + 'px' }"
-        >
-          <table class="stats-table stats-table-migration">
-          <thead>
-            <tr>
-              <th
-                :class="thSortClass('migrations', 'task')"
-                @click="toggleTableSort('migrations', 'task')"
-              >
-                Task
-              </th>
-              <th
-                :class="thSortClass('migrations', 'migr')"
-                @click="toggleTableSort('migrations', 'migr')"
-              >
-                Migr
-              </th>
-              <th
-                :class="thSortClass('migrations', 'rate')"
-                @click="toggleTableSort('migrations', 'rate')"
-                title="Migrations per second of on-CPU time (and per on-CPU tick when TICK events exist)"
-              >
-                Rate
-              </th>
-              <th
-                :class="thSortClass('migrations', 'dwell')"
-                @click="toggleTableSort('migrations', 'dwell')"
-                title="Average on-core run time before block, yield, or migration"
-              >
-                Dwell
-              </th>
-              <th
-                :class="thSortClass('migrations', 'cores')"
-                @click="toggleTableSort('migrations', 'cores')"
-              >
-                Cores
-              </th>
-              <th
-                :class="thSortClass('migrations', 'primary')"
-                @click="toggleTableSort('migrations', 'primary')"
-              >
-                Primary
-              </th>
-              <th
-                :class="thSortClass('migrations', 'ping')"
-                @click="toggleTableSort('migrations', 'ping')"
-              >
-                Ping
-              </th>
-              <th
-                :class="thSortClass('migrations', 'sti')"
-                @click="toggleTableSort('migrations', 'sti')"
-              >
-                STI±
-              </th>
-              <th
-                :class="thSortClass('migrations', 'gapAfter')"
-                @click="toggleTableSort('migrations', 'gapAfter')"
-              >
-                Gap after
-              </th>
-              <th
-                :class="thSortClass('migrations', 'gapOther')"
-                @click="toggleTableSort('migrations', 'gapOther')"
-              >
-                Gap other
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="row in sortedMigrationStats"
-              :key="row.mk"
-              class="stats-table-row clickable"
-              :title="`Click to view migration dwell/rate/gap distribution for ${row.name}`"
-              tabindex="0"
-              @click="openTaskPlot(row.mk, 'mig_dwell')"
-              @keydown.enter.prevent="openTaskPlot(row.mk, 'mig_dwell')"
-              @keydown.space.prevent="openTaskPlot(row.mk, 'mig_dwell')"
-            >
-              <td class="task-col">{{ row.name }}</td>
-              <td>{{ row.migrations }}</td>
-              <td>{{ row.migrRate }}</td>
-              <td>{{ row.avgDwell }}</td>
-              <td>{{ row.coreCount }}</td>
-              <td>{{ row.primary }} ({{ row.primaryPct.toFixed(0) }}%)</td>
-              <td>{{ row.pingPong }}</td>
-              <td>{{ row.stiNear }}</td>
-              <td>{{ row.gapAfter }}</td>
-              <td>{{ row.gapOther }}</td>
-            </tr>
-          </tbody>
-        </table>
-        </div>
-        <div
-          class="stats-section-resizer"
-          role="separator"
-          aria-label="Resize core migrations table"
-          aria-orientation="horizontal"
-          @mousedown.prevent="onTableResizeStart('migrations', $event)"
-        />
-      </div>
-    </template>
-
-    <!-- Core-pair migration summary -->
-    <template v-if="corePairRows.length">
-      <div class="stats-sep" />
+      <!-- Core-pair migration summary -->
       <StatsSectionHeader
+        :section-id="'core_pairs'"
         :collapsed="corePairsCollapsed"
         :pinned="isSectionPinned('core_pairs')"
         @toggle="toggleSectionCollapse('core_pairs')"
@@ -538,503 +584,532 @@
           />
         </div>
       </template>
-    </template>
 
-    <!-- Execution time per slice -->
-    <div class="stats-sep" />
-    <StatsSectionHeader
-      :collapsed="execSliceCollapsed"
-      :pinned="isSectionPinned('exec')"
-      @toggle="toggleSectionCollapse('exec')"
-      @toggle-pin="toggleSectionPin('exec')"
+    </StatsSectionBlock>
+    <StatsSectionBlock
+      :section-id="'exec'"
+      :order="sectionOrderIndex('exec')"
+      @reorder="onSectionReorder"
     >
-      Execution Time Per Slice{{ scopeSuffixStr }}
-    </StatsSectionHeader>
-    <template v-if="!execSliceCollapsed">
-      <div
-        v-if="execSliceStats.length === 0"
-        class="range-hint"
+      <!-- Execution time per slice -->
+      <StatsSectionHeader
+        :section-id="'exec'"
+        :collapsed="execSliceCollapsed"
+        :pinned="isSectionPinned('exec')"
+        @toggle="toggleSectionCollapse('exec')"
+        @toggle-pin="toggleSectionPin('exec')"
       >
-        {{ statsRange ? 'No slices fully inside cursor range' : 'No user-task slices found' }}
-      </div>
-      <div
-        v-else
-        class="stats-table-block"
-      >
+        Execution Time Per Slice{{ scopeSuffixStr }}
+      </StatsSectionHeader>
+      <template v-if="!execSliceCollapsed">
         <div
-          class="stats-table-wrap"
-          :style="{ maxHeight: tableHeight('exec') + 'px' }"
-        >
-        <table class="stats-table">
-          <thead>
-            <tr>
-              <th
-                :class="thSortClass('exec', 'task')"
-                @click="toggleTableSort('exec', 'task')"
-              >
-                Task
-              </th>
-              <th
-                :class="thSortClass('exec', 'runs')"
-                @click="toggleTableSort('exec', 'runs')"
-              >
-                Runs
-              </th>
-              <th
-                :class="thSortClass('exec', 'cpu')"
-                @click="toggleTableSort('exec', 'cpu')"
-              >
-                CPU%
-              </th>
-              <th
-                :class="thSortClass('exec', 'min')"
-                @click="toggleTableSort('exec', 'min')"
-              >
-                Min
-              </th>
-              <th
-                :class="thSortClass('exec', 'avg')"
-                @click="toggleTableSort('exec', 'avg')"
-              >
-                Avg
-              </th>
-              <th
-                :class="thSortClass('exec', 'max')"
-                @click="toggleTableSort('exec', 'max')"
-              >
-                Max
-              </th>
-              <th
-                :class="thSortClass('exec', 'jitter')"
-                title="Observed range: maximum minus minimum slice duration"
-                @click="toggleTableSort('exec', 'jitter')"
-              >
-                Jitter
-              </th>
-              <th
-                :class="thSortClass('exec', 'stddev')"
-                title="Population standard deviation of slice durations"
-                @click="toggleTableSort('exec', 'stddev')"
-              >
-                σ
-              </th>
-              <th
-                :class="thSortClass('exec', 'p95')"
-                @click="toggleTableSort('exec', 'p95')"
-              >
-                p95
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="row in sortedExecSliceStats"
-              :key="row.mk"
-              class="stats-table-row clickable"
-              :title="`Open execution-time plot for ${row.name}`"
-              tabindex="0"
-              @click="openTaskPlot(row.mk, 'exec')"
-              @keydown.enter.prevent="openTaskPlot(row.mk, 'exec')"
-              @keydown.space.prevent="openTaskPlot(row.mk, 'exec')"
-            >
-              <td class="task-col">{{ row.name }}</td>
-              <td>{{ row.runs }}</td>
-              <td>{{ row.cpuPct.toFixed(1) }}%</td>
-              <td
-                class="extreme-col"
-                :title="`Jump to shortest slice for ${row.name}`"
-                @click.stop="jumpToSegment(row.mk, 'exec', false)"
-              >
-                {{ row.min }}
-              </td>
-              <td>{{ row.avg }}</td>
-              <td
-                class="extreme-col"
-                :title="`Jump to longest slice for ${row.name}`"
-                @click.stop="jumpToSegment(row.mk, 'exec', true)"
-              >
-                {{ row.max }}
-              </td>
-              <td>{{ row.jitter }}</td>
-              <td>{{ row.stddev }}</td>
-              <td>{{ row.p95 }}</td>
-            </tr>
-          </tbody>
-        </table>
-        </div>
-        <div
-          class="stats-section-resizer"
-          role="separator"
-          aria-label="Resize execution time table"
-          aria-orientation="horizontal"
-          @mousedown.prevent="onTableResizeStart('exec', $event)"
-        />
-      </div>
-    </template>
-
-    <!-- Blocking time -->
-    <div class="stats-sep" />
-    <StatsSectionHeader
-      :collapsed="blockingCollapsed"
-      :pinned="isSectionPinned('block')"
-      @toggle="toggleSectionCollapse('block')"
-      @toggle-pin="toggleSectionPin('block')"
-    >
-      Blocking Time (off-CPU gap){{ scopeSuffixStr }}
-    </StatsSectionHeader>
-    <template v-if="!blockingCollapsed">
-      <div
-        v-if="blockingStats.length === 0"
-        class="range-hint"
-      >
-        {{ statsRange ? 'No off-CPU gaps fully inside cursor range' : 'Need at least 2 activations per task' }}
-      </div>
-      <div
-        v-else
-        class="stats-table-block"
-      >
-        <div
-          class="stats-table-wrap"
-          :style="{ maxHeight: tableHeight('block') + 'px' }"
-        >
-        <table class="stats-table">
-          <thead>
-            <tr>
-              <th
-                :class="thSortClass('block', 'task')"
-                @click="toggleTableSort('block', 'task')"
-              >
-                Task
-              </th>
-              <th
-                :class="thSortClass('block', 'gaps')"
-                @click="toggleTableSort('block', 'gaps')"
-              >
-                Gaps
-              </th>
-              <th
-                :class="thSortClass('block', 'min')"
-                @click="toggleTableSort('block', 'min')"
-              >
-                Min
-              </th>
-              <th
-                :class="thSortClass('block', 'avg')"
-                @click="toggleTableSort('block', 'avg')"
-              >
-                Avg
-              </th>
-              <th
-                :class="thSortClass('block', 'max')"
-                @click="toggleTableSort('block', 'max')"
-              >
-                Max
-              </th>
-              <th
-                :class="thSortClass('block', 'jitter')"
-                title="Observed range: maximum minus minimum off-CPU gap"
-                @click="toggleTableSort('block', 'jitter')"
-              >
-                Jitter
-              </th>
-              <th
-                :class="thSortClass('block', 'stddev')"
-                title="Population standard deviation of off-CPU gaps"
-                @click="toggleTableSort('block', 'stddev')"
-              >
-                σ
-              </th>
-              <th
-                :class="thSortClass('block', 'p95')"
-                @click="toggleTableSort('block', 'p95')"
-              >
-                p95
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="row in sortedBlockingStats"
-              :key="row.mk"
-              class="stats-table-row clickable"
-              :title="`Open blocking-time plot for ${row.name}`"
-              tabindex="0"
-              @click="openTaskPlot(row.mk, 'block')"
-              @keydown.enter.prevent="openTaskPlot(row.mk, 'block')"
-              @keydown.space.prevent="openTaskPlot(row.mk, 'block')"
-            >
-              <td class="task-col">{{ row.name }}</td>
-              <td>{{ row.gaps }}</td>
-              <td
-                class="extreme-col"
-                :title="`Jump to shortest blocking gap for ${row.name}`"
-                @click.stop="jumpToSegment(row.mk, 'block', false)"
-              >
-                {{ row.min }}
-              </td>
-              <td>{{ row.avg }}</td>
-              <td
-                class="extreme-col"
-                :title="`Jump to longest blocking gap for ${row.name}`"
-                @click.stop="jumpToSegment(row.mk, 'block', true)"
-              >
-                {{ row.max }}
-              </td>
-              <td>{{ row.jitter }}</td>
-              <td>{{ row.stddev }}</td>
-              <td>{{ row.p95 }}</td>
-            </tr>
-          </tbody>
-        </table>
-        </div>
-        <div
-          class="stats-section-resizer"
-          role="separator"
-          aria-label="Resize blocking time table"
-          aria-orientation="horizontal"
-          @mousedown.prevent="onTableResizeStart('block', $event)"
-        />
-      </div>
-    </template>
-
-    <!-- Inter-arrival time -->
-    <div class="stats-sep" />
-    <StatsSectionHeader
-      :collapsed="interArrivalCollapsed"
-      :pinned="isSectionPinned('inter')"
-      @toggle="toggleSectionCollapse('inter')"
-      @toggle-pin="toggleSectionPin('inter')"
-    >
-      Inter-Arrival Time{{ scopeSuffixStr }}
-    </StatsSectionHeader>
-    <template v-if="!interArrivalCollapsed">
-      <div
-        v-if="interArrivalStats.length === 0"
-        class="range-hint"
-      >
-        Need at least 2 activations per task
-      </div>
-      <div
-        v-else
-        class="stats-table-block"
-      >
-        <div
-          class="stats-table-wrap"
-          :style="{ maxHeight: tableHeight('inter') + 'px' }"
-        >
-        <table class="stats-table">
-          <thead>
-            <tr>
-              <th
-                :class="thSortClass('inter', 'task')"
-                @click="toggleTableSort('inter', 'task')"
-              >
-                Task
-              </th>
-              <th
-                :class="thSortClass('inter', 'runs')"
-                @click="toggleTableSort('inter', 'runs')"
-              >
-                Runs
-              </th>
-              <th
-                :class="thSortClass('inter', 'min')"
-                @click="toggleTableSort('inter', 'min')"
-              >
-                Min
-              </th>
-              <th
-                :class="thSortClass('inter', 'avg')"
-                @click="toggleTableSort('inter', 'avg')"
-              >
-                Avg
-              </th>
-              <th
-                :class="thSortClass('inter', 'max')"
-                @click="toggleTableSort('inter', 'max')"
-              >
-                Max
-              </th>
-              <th
-                :class="thSortClass('inter', 'jitter')"
-                title="Observed range: maximum minus minimum inter-arrival time"
-                @click="toggleTableSort('inter', 'jitter')"
-              >
-                Jitter
-              </th>
-              <th
-                :class="thSortClass('inter', 'stddev')"
-                title="Population standard deviation of inter-arrival times"
-                @click="toggleTableSort('inter', 'stddev')"
-              >
-                σ
-              </th>
-              <th
-                :class="thSortClass('inter', 'p95')"
-                @click="toggleTableSort('inter', 'p95')"
-              >
-                p95
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="row in sortedInterArrivalStats"
-              :key="row.mk"
-              class="stats-table-row clickable"
-              :title="`Open inter-arrival plot for ${row.name}`"
-              tabindex="0"
-              @click="openTaskPlot(row.mk, 'inter')"
-              @keydown.enter.prevent="openTaskPlot(row.mk, 'inter')"
-              @keydown.space.prevent="openTaskPlot(row.mk, 'inter')"
-            >
-              <td class="task-col">{{ row.name }}</td>
-              <td>{{ row.runs }}</td>
-              <td
-                class="extreme-col"
-                :title="`Jump to shortest inter-arrival for ${row.name}`"
-                @click.stop="jumpToSegment(row.mk, 'inter', false)"
-              >
-                {{ row.min }}
-              </td>
-              <td>{{ row.avg }}</td>
-              <td
-                class="extreme-col"
-                :title="`Jump to longest inter-arrival for ${row.name}`"
-                @click.stop="jumpToSegment(row.mk, 'inter', true)"
-              >
-                {{ row.max }}
-              </td>
-              <td>{{ row.jitter }}</td>
-              <td>{{ row.stddev }}</td>
-              <td>{{ row.p95 }}</td>
-            </tr>
-          </tbody>
-        </table>
-        </div>
-        <div
-          class="stats-section-resizer"
-          role="separator"
-          aria-label="Resize inter-arrival table"
-          aria-orientation="horizontal"
-          @mousedown.prevent="onTableResizeStart('inter', $event)"
-        />
-      </div>
-    </template>
-
-    <!-- Preemption Chain Analysis -->
-    <div class="stats-sep" />
-    <StatsSectionHeader
-      :collapsed="preemptionCollapsed"
-      :pinned="isSectionPinned('preemption')"
-      @toggle="toggleSectionCollapse('preemption')"
-      @toggle-pin="toggleSectionPin('preemption')"
-    >
-      Preemption Chain Analysis{{ scopeSuffixStr }}
-    </StatsSectionHeader>
-    <template v-if="!preemptionCollapsed">
-      <div
-        v-if="preemptionComputing"
-        class="range-hint"
-      >
-        Computing preemption chain…
-      </div>
-      <div
-        v-else-if="preemptionRows.length === 0"
-        class="range-hint"
-      >
-        {{ statsRange ? 'No preemption events in cursor range' : 'No preemption events found' }}
-      </div>
-      <div
-        v-else
-        class="stats-table-block"
-      >
-        <div
-          v-if="preemptionTruncated"
+          v-if="execSliceStats.length === 0"
           class="range-hint"
         >
-          Showing top {{ PREEMPTION_CHAIN_MAX_ROWS.toLocaleString() }} pairs by total preemption time.
+          {{ statsRange ? 'No slices fully inside cursor range' : 'No user-task slices found' }}
         </div>
         <div
-          class="stats-table-wrap"
-          :style="{ maxHeight: tableHeight('preemption') + 'px' }"
+          v-else
+          class="stats-table-block"
         >
-          <table class="stats-table stats-table-preemption">
+          <div
+            class="stats-table-wrap"
+            :style="{ maxHeight: tableHeight('exec') + 'px' }"
+          >
+          <table class="stats-table">
             <thead>
               <tr>
                 <th
-                  :class="thSortClass('preemption', 'victim')"
-                  @click="toggleTableSort('preemption', 'victim')"
+                  :class="thSortClass('exec', 'task')"
+                  @click="toggleTableSort('exec', 'task')"
                 >
-                  Victim
+                  Task
                 </th>
                 <th
-                  :class="thSortClass('preemption', 'preemptor')"
-                  @click="toggleTableSort('preemption', 'preemptor')"
+                  :class="thSortClass('exec', 'runs')"
+                  @click="toggleTableSort('exec', 'runs')"
                 >
-                  Preemptor
+                  Runs
                 </th>
                 <th
-                  :class="thSortClass('preemption', 'count')"
-                  @click="toggleTableSort('preemption', 'count')"
+                  :class="thSortClass('exec', 'cpu')"
+                  @click="toggleTableSort('exec', 'cpu')"
                 >
-                  Count
+                  CPU%
                 </th>
                 <th
-                  :class="thSortClass('preemption', 'total')"
-                  @click="toggleTableSort('preemption', 'total')"
+                  :class="thSortClass('exec', 'min')"
+                  @click="toggleTableSort('exec', 'min')"
                 >
-                  Total
+                  Min
                 </th>
                 <th
-                  :class="thSortClass('preemption', 'avg')"
-                  @click="toggleTableSort('preemption', 'avg')"
+                  :class="thSortClass('exec', 'avg')"
+                  @click="toggleTableSort('exec', 'avg')"
                 >
                   Avg
                 </th>
                 <th
-                  :class="thSortClass('preemption', 'max')"
-                  @click="toggleTableSort('preemption', 'max')"
+                  :class="thSortClass('exec', 'max')"
+                  @click="toggleTableSort('exec', 'max')"
                 >
                   Max
+                </th>
+                <th
+                  :class="thSortClass('exec', 'jitter')"
+                  title="Observed range: maximum minus minimum slice duration"
+                  @click="toggleTableSort('exec', 'jitter')"
+                >
+                  Jitter
+                </th>
+                <th
+                  :class="thSortClass('exec', 'stddev')"
+                  title="Population standard deviation of slice durations"
+                  @click="toggleTableSort('exec', 'stddev')"
+                >
+                  σ
+                </th>
+                <th
+                  :class="thSortClass('exec', 'p95')"
+                  @click="toggleTableSort('exec', 'p95')"
+                >
+                  p95
                 </th>
               </tr>
             </thead>
             <tbody>
               <tr
-                v-for="row in sortedPreemptionStats"
-                :key="`${row.mk}-${row.preemptor}`"
+                v-for="row in sortedExecSliceStats"
+                :key="row.mk"
                 class="stats-table-row clickable"
-                :title="`Open preemption plot for ${row.victim} ← ${row.preemptor}`"
+                :title="`Open execution-time plot for ${row.name}`"
                 tabindex="0"
-                @click="openPreemptPlot(row.mk, row.preemptor)"
-                @keydown.enter.prevent="openPreemptPlot(row.mk, row.preemptor)"
-                @keydown.space.prevent="openPreemptPlot(row.mk, row.preemptor)"
+                @click="openTaskPlot(row.mk, 'exec')"
+                @keydown.enter.prevent="openTaskPlot(row.mk, 'exec')"
+                @keydown.space.prevent="openTaskPlot(row.mk, 'exec')"
               >
-                <td class="task-col">{{ row.victim }}</td>
-                <td class="task-col">{{ row.preemptor }}</td>
-                <td>{{ row.count }}</td>
-                <td>{{ row.total }}</td>
+                <td class="task-col">{{ row.name }}</td>
+                <td>{{ row.runs }}</td>
+                <td>{{ row.cpuPct.toFixed(1) }}%</td>
+                <td
+                  class="extreme-col"
+                  :title="`Jump to shortest slice for ${row.name}`"
+                  @click.stop="jumpToSegment(row.mk, 'exec', false)"
+                >
+                  {{ row.min }}
+                </td>
                 <td>{{ row.avg }}</td>
-                <td>{{ row.max }}</td>
+                <td
+                  class="extreme-col"
+                  :title="`Jump to longest slice for ${row.name}`"
+                  @click.stop="jumpToSegment(row.mk, 'exec', true)"
+                >
+                  {{ row.max }}
+                </td>
+                <td>{{ row.jitter }}</td>
+                <td>{{ row.stddev }}</td>
+                <td>{{ row.p95 }}</td>
               </tr>
             </tbody>
           </table>
+          </div>
+          <div
+            class="stats-section-resizer"
+            role="separator"
+            aria-label="Resize execution time table"
+            aria-orientation="horizontal"
+            @mousedown.prevent="onTableResizeStart('exec', $event)"
+          />
+        </div>
+      </template>
+
+    </StatsSectionBlock>
+    <StatsSectionBlock
+      :section-id="'block'"
+      :order="sectionOrderIndex('block')"
+      @reorder="onSectionReorder"
+    >
+      <!-- Blocking time -->
+      <StatsSectionHeader
+        :section-id="'block'"
+        :collapsed="blockingCollapsed"
+        :pinned="isSectionPinned('block')"
+        @toggle="toggleSectionCollapse('block')"
+        @toggle-pin="toggleSectionPin('block')"
+      >
+        Blocking Time (off-CPU gap){{ scopeSuffixStr }}
+      </StatsSectionHeader>
+      <template v-if="!blockingCollapsed">
+        <div
+          v-if="blockingStats.length === 0"
+          class="range-hint"
+        >
+          {{ statsRange ? 'No off-CPU gaps fully inside cursor range' : 'Need at least 2 activations per task' }}
         </div>
         <div
-          class="stats-section-resizer"
-          role="separator"
-          aria-label="Resize preemption chain table"
-          aria-orientation="horizontal"
-          @mousedown.prevent="onTableResizeStart('preemption', $event)"
-        />
-      </div>
-    </template>
+          v-else
+          class="stats-table-block"
+        >
+          <div
+            class="stats-table-wrap"
+            :style="{ maxHeight: tableHeight('block') + 'px' }"
+          >
+          <table class="stats-table">
+            <thead>
+              <tr>
+                <th
+                  :class="thSortClass('block', 'task')"
+                  @click="toggleTableSort('block', 'task')"
+                >
+                  Task
+                </th>
+                <th
+                  :class="thSortClass('block', 'gaps')"
+                  @click="toggleTableSort('block', 'gaps')"
+                >
+                  Gaps
+                </th>
+                <th
+                  :class="thSortClass('block', 'min')"
+                  @click="toggleTableSort('block', 'min')"
+                >
+                  Min
+                </th>
+                <th
+                  :class="thSortClass('block', 'avg')"
+                  @click="toggleTableSort('block', 'avg')"
+                >
+                  Avg
+                </th>
+                <th
+                  :class="thSortClass('block', 'max')"
+                  @click="toggleTableSort('block', 'max')"
+                >
+                  Max
+                </th>
+                <th
+                  :class="thSortClass('block', 'jitter')"
+                  title="Observed range: maximum minus minimum off-CPU gap"
+                  @click="toggleTableSort('block', 'jitter')"
+                >
+                  Jitter
+                </th>
+                <th
+                  :class="thSortClass('block', 'stddev')"
+                  title="Population standard deviation of off-CPU gaps"
+                  @click="toggleTableSort('block', 'stddev')"
+                >
+                  σ
+                </th>
+                <th
+                  :class="thSortClass('block', 'p95')"
+                  @click="toggleTableSort('block', 'p95')"
+                >
+                  p95
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="row in sortedBlockingStats"
+                :key="row.mk"
+                class="stats-table-row clickable"
+                :title="`Open blocking-time plot for ${row.name}`"
+                tabindex="0"
+                @click="openTaskPlot(row.mk, 'block')"
+                @keydown.enter.prevent="openTaskPlot(row.mk, 'block')"
+                @keydown.space.prevent="openTaskPlot(row.mk, 'block')"
+              >
+                <td class="task-col">{{ row.name }}</td>
+                <td>{{ row.gaps }}</td>
+                <td
+                  class="extreme-col"
+                  :title="`Jump to shortest blocking gap for ${row.name}`"
+                  @click.stop="jumpToSegment(row.mk, 'block', false)"
+                >
+                  {{ row.min }}
+                </td>
+                <td>{{ row.avg }}</td>
+                <td
+                  class="extreme-col"
+                  :title="`Jump to longest blocking gap for ${row.name}`"
+                  @click.stop="jumpToSegment(row.mk, 'block', true)"
+                >
+                  {{ row.max }}
+                </td>
+                <td>{{ row.jitter }}</td>
+                <td>{{ row.stddev }}</td>
+                <td>{{ row.p95 }}</td>
+              </tr>
+            </tbody>
+          </table>
+          </div>
+          <div
+            class="stats-section-resizer"
+            role="separator"
+            aria-label="Resize blocking time table"
+            aria-orientation="horizontal"
+            @mousedown.prevent="onTableResizeStart('block', $event)"
+          />
+        </div>
+      </template>
 
-    <!-- Priority inheritance -->
-    <template v-if="trace?.hasPriorityInstrumentation">
-      <div class="stats-sep" />
+    </StatsSectionBlock>
+    <StatsSectionBlock
+      :section-id="'inter'"
+      :order="sectionOrderIndex('inter')"
+      @reorder="onSectionReorder"
+    >
+      <!-- Inter-arrival time -->
       <StatsSectionHeader
+        :section-id="'inter'"
+        :collapsed="interArrivalCollapsed"
+        :pinned="isSectionPinned('inter')"
+        @toggle="toggleSectionCollapse('inter')"
+        @toggle-pin="toggleSectionPin('inter')"
+      >
+        Inter-Arrival Time{{ scopeSuffixStr }}
+      </StatsSectionHeader>
+      <template v-if="!interArrivalCollapsed">
+        <div
+          v-if="interArrivalStats.length === 0"
+          class="range-hint"
+        >
+          Need at least 2 activations per task
+        </div>
+        <div
+          v-else
+          class="stats-table-block"
+        >
+          <div
+            class="stats-table-wrap"
+            :style="{ maxHeight: tableHeight('inter') + 'px' }"
+          >
+          <table class="stats-table">
+            <thead>
+              <tr>
+                <th
+                  :class="thSortClass('inter', 'task')"
+                  @click="toggleTableSort('inter', 'task')"
+                >
+                  Task
+                </th>
+                <th
+                  :class="thSortClass('inter', 'runs')"
+                  @click="toggleTableSort('inter', 'runs')"
+                >
+                  Runs
+                </th>
+                <th
+                  :class="thSortClass('inter', 'min')"
+                  @click="toggleTableSort('inter', 'min')"
+                >
+                  Min
+                </th>
+                <th
+                  :class="thSortClass('inter', 'avg')"
+                  @click="toggleTableSort('inter', 'avg')"
+                >
+                  Avg
+                </th>
+                <th
+                  :class="thSortClass('inter', 'max')"
+                  @click="toggleTableSort('inter', 'max')"
+                >
+                  Max
+                </th>
+                <th
+                  :class="thSortClass('inter', 'jitter')"
+                  title="Observed range: maximum minus minimum inter-arrival time"
+                  @click="toggleTableSort('inter', 'jitter')"
+                >
+                  Jitter
+                </th>
+                <th
+                  :class="thSortClass('inter', 'stddev')"
+                  title="Population standard deviation of inter-arrival times"
+                  @click="toggleTableSort('inter', 'stddev')"
+                >
+                  σ
+                </th>
+                <th
+                  :class="thSortClass('inter', 'p95')"
+                  @click="toggleTableSort('inter', 'p95')"
+                >
+                  p95
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="row in sortedInterArrivalStats"
+                :key="row.mk"
+                class="stats-table-row clickable"
+                :title="`Open inter-arrival plot for ${row.name}`"
+                tabindex="0"
+                @click="openTaskPlot(row.mk, 'inter')"
+                @keydown.enter.prevent="openTaskPlot(row.mk, 'inter')"
+                @keydown.space.prevent="openTaskPlot(row.mk, 'inter')"
+              >
+                <td class="task-col">{{ row.name }}</td>
+                <td>{{ row.runs }}</td>
+                <td
+                  class="extreme-col"
+                  :title="`Jump to shortest inter-arrival for ${row.name}`"
+                  @click.stop="jumpToSegment(row.mk, 'inter', false)"
+                >
+                  {{ row.min }}
+                </td>
+                <td>{{ row.avg }}</td>
+                <td
+                  class="extreme-col"
+                  :title="`Jump to longest inter-arrival for ${row.name}`"
+                  @click.stop="jumpToSegment(row.mk, 'inter', true)"
+                >
+                  {{ row.max }}
+                </td>
+                <td>{{ row.jitter }}</td>
+                <td>{{ row.stddev }}</td>
+                <td>{{ row.p95 }}</td>
+              </tr>
+            </tbody>
+          </table>
+          </div>
+          <div
+            class="stats-section-resizer"
+            role="separator"
+            aria-label="Resize inter-arrival table"
+            aria-orientation="horizontal"
+            @mousedown.prevent="onTableResizeStart('inter', $event)"
+          />
+        </div>
+      </template>
+
+    </StatsSectionBlock>
+    <StatsSectionBlock
+      :section-id="'preemption'"
+      :order="sectionOrderIndex('preemption')"
+      @reorder="onSectionReorder"
+    >
+      <!-- Preemption Chain Analysis -->
+      <StatsSectionHeader
+        :section-id="'preemption'"
+        :collapsed="preemptionCollapsed"
+        :pinned="isSectionPinned('preemption')"
+        @toggle="toggleSectionCollapse('preemption')"
+        @toggle-pin="toggleSectionPin('preemption')"
+      >
+        Preemption Chain Analysis{{ scopeSuffixStr }}
+      </StatsSectionHeader>
+      <template v-if="!preemptionCollapsed">
+        <div
+          v-if="preemptionComputing"
+          class="range-hint"
+        >
+          Computing preemption chain…
+        </div>
+        <div
+          v-else-if="preemptionRows.length === 0"
+          class="range-hint"
+        >
+          {{ statsRange ? 'No preemption events in cursor range' : 'No preemption events found' }}
+        </div>
+        <div
+          v-else
+          class="stats-table-block"
+        >
+          <div
+            v-if="preemptionTruncated"
+            class="range-hint"
+          >
+            Showing top {{ PREEMPTION_CHAIN_MAX_ROWS.toLocaleString() }} pairs by total preemption time.
+          </div>
+          <div
+            class="stats-table-wrap"
+            :style="{ maxHeight: tableHeight('preemption') + 'px' }"
+          >
+            <table class="stats-table stats-table-preemption">
+              <thead>
+                <tr>
+                  <th
+                    :class="thSortClass('preemption', 'victim')"
+                    @click="toggleTableSort('preemption', 'victim')"
+                  >
+                    Victim
+                  </th>
+                  <th
+                    :class="thSortClass('preemption', 'preemptor')"
+                    @click="toggleTableSort('preemption', 'preemptor')"
+                  >
+                    Preemptor
+                  </th>
+                  <th
+                    :class="thSortClass('preemption', 'count')"
+                    @click="toggleTableSort('preemption', 'count')"
+                  >
+                    Count
+                  </th>
+                  <th
+                    :class="thSortClass('preemption', 'total')"
+                    @click="toggleTableSort('preemption', 'total')"
+                  >
+                    Total
+                  </th>
+                  <th
+                    :class="thSortClass('preemption', 'avg')"
+                    @click="toggleTableSort('preemption', 'avg')"
+                  >
+                    Avg
+                  </th>
+                  <th
+                    :class="thSortClass('preemption', 'max')"
+                    @click="toggleTableSort('preemption', 'max')"
+                  >
+                    Max
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="row in sortedPreemptionStats"
+                  :key="`${row.mk}-${row.preemptor}`"
+                  class="stats-table-row clickable"
+                  :title="`Open preemption plot for ${row.victim} ← ${row.preemptor}`"
+                  tabindex="0"
+                  @click="openPreemptPlot(row.mk, row.preemptor)"
+                  @keydown.enter.prevent="openPreemptPlot(row.mk, row.preemptor)"
+                  @keydown.space.prevent="openPreemptPlot(row.mk, row.preemptor)"
+                >
+                  <td class="task-col">{{ row.victim }}</td>
+                  <td class="task-col">{{ row.preemptor }}</td>
+                  <td>{{ row.count }}</td>
+                  <td>{{ row.total }}</td>
+                  <td>{{ row.avg }}</td>
+                  <td>{{ row.max }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div
+            class="stats-section-resizer"
+            role="separator"
+            aria-label="Resize preemption chain table"
+            aria-orientation="horizontal"
+            @mousedown.prevent="onTableResizeStart('preemption', $event)"
+          />
+        </div>
+      </template>
+
+    </StatsSectionBlock>
+    <StatsSectionBlock
+      v-if="trace?.hasPriorityInstrumentation"
+      :section-id="'priority'"
+      :order="sectionOrderIndex('priority')"
+      @reorder="onSectionReorder"
+    >
+      <!-- Priority inheritance -->
+      <StatsSectionHeader
+        :section-id="'priority'"
         :collapsed="priorityCollapsed"
         :pinned="isSectionPinned('priority')"
         @toggle="toggleSectionCollapse('priority')"
@@ -1139,12 +1214,17 @@
           />
         </div>
       </template>
-    </template>
 
-    <!-- Mutex / Semaphore pairing -->
-    <template v-if="trace?.hasSyncObjectInstrumentation">
-      <div class="stats-sep" />
+    </StatsSectionBlock>
+    <StatsSectionBlock
+      v-if="trace?.hasSyncObjectInstrumentation"
+      :section-id="'sync'"
+      :order="sectionOrderIndex('sync')"
+      @reorder="onSectionReorder"
+    >
+      <!-- Mutex / Semaphore pairing -->
       <StatsSectionHeader
+        :section-id="'sync'"
         :collapsed="syncCollapsed"
         :pinned="isSectionPinned('sync')"
         @toggle="toggleSectionCollapse('sync')"
@@ -1328,12 +1408,17 @@
           />
         </div>
       </template>
-    </template>
 
-    <!-- Queue pairing -->
-    <template v-if="trace?.hasSyncObjectInstrumentation">
-      <div class="stats-sep" />
+    </StatsSectionBlock>
+    <StatsSectionBlock
+      v-if="trace?.hasSyncObjectInstrumentation"
+      :section-id="'queue'"
+      :order="sectionOrderIndex('queue')"
+      @reorder="onSectionReorder"
+    >
+      <!-- Queue pairing -->
       <StatsSectionHeader
+        :section-id="'queue'"
         :collapsed="queueCollapsed"
         :pinned="isSectionPinned('queue')"
         @toggle="toggleSectionCollapse('queue')"
@@ -1380,12 +1465,17 @@
           />
         </div>
       </template>
-    </template>
 
-    <!-- Task lifecycle -->
-    <template v-if="lifecycleStats.length">
-      <div class="stats-sep" />
+    </StatsSectionBlock>
+    <StatsSectionBlock
+      v-if="lifecycleStats.length"
+      :section-id="'lifecycle'"
+      :order="sectionOrderIndex('lifecycle')"
+      @reorder="onSectionReorder"
+    >
+      <!-- Task lifecycle -->
       <StatsSectionHeader
+        :section-id="'lifecycle'"
         :collapsed="lifecycleCollapsed"
         :pinned="isSectionPinned('lifecycle')"
         @toggle="toggleSectionCollapse('lifecycle')"
@@ -1439,12 +1529,17 @@
           />
         </div>
       </template>
-    </template>
 
-    <!-- Core affinity -->
-    <template v-if="coreAffinityRows.length">
-      <div class="stats-sep" />
+    </StatsSectionBlock>
+    <StatsSectionBlock
+      v-if="coreAffinityRows.length"
+      :section-id="'affinity'"
+      :order="sectionOrderIndex('affinity')"
+      @reorder="onSectionReorder"
+    >
+      <!-- Core affinity -->
       <StatsSectionHeader
+        :section-id="'affinity'"
         :collapsed="affinityCollapsed"
         :pinned="isSectionPinned('affinity')"
         @toggle="toggleSectionCollapse('affinity')"
@@ -1492,289 +1587,308 @@
           />
         </div>
       </template>
-    </template>
 
-    <!-- Deadlines / CPU budget -->
-    <div class="stats-sep" />
-    <StatsSectionHeader
-      :collapsed="deadlineCollapsed"
-      :pinned="isSectionPinned('deadline')"
-      @toggle="toggleSectionCollapse('deadline')"
-      @toggle-pin="toggleSectionPin('deadline')"
+    </StatsSectionBlock>
+    <StatsSectionBlock
+      :section-id="'deadline'"
+      :order="sectionOrderIndex('deadline')"
+      @reorder="onSectionReorder"
     >
-      Deadlines / CPU budget{{ scopeSuffixStr }}
-    </StatsSectionHeader>
-    <template v-if="!deadlineCollapsed">
-      <div class="deadline-settings-hint">
-        <template v-if="!hasDeadlineConfig">Configure deadline / CPU budget thresholds in </template>
-        <template v-else>Edit thresholds in </template>
-        <button
-          type="button"
-          class="stats-settings-link"
-          title="Open Settings → Display → Analysis thresholds"
-          @click="emit('openSettings', 'display')"
-        >Settings → Display</button>
-        <span> (Analysis thresholds)</span>
-      </div>
-      <template v-if="hasDeadlineConfig">
-        <div v-if="!deadlineViolations.sliceViolations.length && !deadlineViolations.cpuViolations.length" class="range-hint">
-          No violations in scope
+      <!-- Deadlines / CPU budget -->
+      <StatsSectionHeader
+        :section-id="'deadline'"
+        :collapsed="deadlineCollapsed"
+        :pinned="isSectionPinned('deadline')"
+        @toggle="toggleSectionCollapse('deadline')"
+        @toggle-pin="toggleSectionPin('deadline')"
+      >
+        Deadlines / CPU budget{{ scopeSuffixStr }}
+      </StatsSectionHeader>
+      <template v-if="!deadlineCollapsed">
+        <div class="deadline-settings-hint">
+          <template v-if="!hasDeadlineConfig">Configure deadline / CPU budget thresholds in </template>
+          <template v-else>Edit thresholds in </template>
+          <button
+            type="button"
+            class="stats-settings-link"
+            title="Open Settings → Display → Analysis thresholds"
+            @click="emit('openSettings', 'display')"
+          >Settings → Display</button>
+          <span> (Analysis thresholds)</span>
         </div>
-        <div v-if="deadlineViolations.sliceViolations.length" class="stats-table-block">
-          <div class="stats-section-subtitle">Slice over deadline</div>
-          <table class="stats-table">
-            <thead>
-              <tr>
-                <th :class="thSortClass('deadline_slice', 'task')" @click="toggleTableSort('deadline_slice', 'task')">Task</th>
-                <th :class="thSortClass('deadline_slice', 'duration')" @click="toggleTableSort('deadline_slice', 'duration')">Duration</th>
-                <th :class="thSortClass('deadline_slice', 'limit')" @click="toggleTableSort('deadline_slice', 'limit')">Limit</th>
-                <th :class="thSortClass('deadline_slice', 'over')" @click="toggleTableSort('deadline_slice', 'over')">Over by</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr
-                v-for="(v, i) in sortedDeadlineSliceRows"
-                :key="'d'+i"
-                class="stats-table-row clickable"
-                :title="deadlineSliceRowTitle(v)"
-                tabindex="0"
-                @click="onDeadlineSliceClick(v)"
-                @keydown.enter.prevent="onDeadlineSliceClick(v)"
-                @keydown.space.prevent="onDeadlineSliceClick(v)"
-              >
-                <td class="task-col">{{ v.label }}</td>
-                <td>{{ v.duration }}</td>
-                <td>{{ v.limit }}</td>
-                <td class="sev-error">{{ v.overBy }}</td>
-              </tr>
-            </tbody>
-          </table>
+        <template v-if="hasDeadlineConfig">
+          <div v-if="!deadlineViolations.sliceViolations.length && !deadlineViolations.cpuViolations.length" class="range-hint">
+            No violations in scope
+          </div>
+          <div v-if="deadlineViolations.sliceViolations.length" class="stats-table-block">
+            <div class="stats-section-subtitle">Slice over deadline</div>
+            <table class="stats-table">
+              <thead>
+                <tr>
+                  <th :class="thSortClass('deadline_slice', 'task')" @click="toggleTableSort('deadline_slice', 'task')">Task</th>
+                  <th :class="thSortClass('deadline_slice', 'duration')" @click="toggleTableSort('deadline_slice', 'duration')">Duration</th>
+                  <th :class="thSortClass('deadline_slice', 'limit')" @click="toggleTableSort('deadline_slice', 'limit')">Limit</th>
+                  <th :class="thSortClass('deadline_slice', 'over')" @click="toggleTableSort('deadline_slice', 'over')">Over by</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="(v, i) in sortedDeadlineSliceRows"
+                  :key="'d'+i"
+                  class="stats-table-row clickable"
+                  :title="deadlineSliceRowTitle(v)"
+                  tabindex="0"
+                  @click="onDeadlineSliceClick(v)"
+                  @keydown.enter.prevent="onDeadlineSliceClick(v)"
+                  @keydown.space.prevent="onDeadlineSliceClick(v)"
+                >
+                  <td class="task-col">{{ v.label }}</td>
+                  <td>{{ v.duration }}</td>
+                  <td>{{ v.limit }}</td>
+                  <td class="sev-error">{{ v.overBy }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div v-if="deadlineViolations.cpuViolations.length" class="stats-table-block">
+            <div class="stats-section-subtitle">CPU budget exceeded</div>
+            <table class="stats-table">
+              <thead>
+                <tr>
+                  <th :class="thSortClass('deadline_cpu', 'task')" @click="toggleTableSort('deadline_cpu', 'task')">Task</th>
+                  <th :class="thSortClass('deadline_cpu', 'cpu')" @click="toggleTableSort('deadline_cpu', 'cpu')">CPU %</th>
+                  <th :class="thSortClass('deadline_cpu', 'budget')" @click="toggleTableSort('deadline_cpu', 'budget')">Budget</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="(v, i) in sortedDeadlineCpuRows"
+                  :key="'c'+i"
+                  class="stats-table-row clickable"
+                  :title="`Click to highlight '${v.label}' in the timeline`"
+                  tabindex="0"
+                  @click="emit('highlightTask', v.mk)"
+                  @keydown.enter.prevent="emit('highlightTask', v.mk)"
+                  @keydown.space.prevent="emit('highlightTask', v.mk)"
+                >
+                  <td class="task-col">{{ v.label }}</td>
+                  <td class="sev-error">{{ v.pct }}%</td>
+                  <td>{{ v.budgetPct }}%</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </template>
+      </template>
+
+    </StatsSectionBlock>
+    <StatsSectionBlock
+      :section-id="'intervals'"
+      :order="sectionOrderIndex('intervals')"
+      @reorder="onSectionReorder"
+    >
+      <!-- Interval Analysis -->
+      <StatsSectionHeader
+        :section-id="'intervals'"
+        :collapsed="intervalsCollapsed"
+        :pinned="isSectionPinned('intervals')"
+        @toggle="toggleSectionCollapse('intervals')"
+        @toggle-pin="toggleSectionPin('intervals')"
+      >
+        Interval Analysis{{ scopeSuffixStr }}
+      </StatsSectionHeader>
+      <template v-if="!intervalsCollapsed">
+        <div
+          v-if="intervalStats.length === 0"
+          class="range-hint"
+        >
+          {{ statsRange ? 'No interval data in cursor range' : 'No paired interval_start / interval_stop events in trace' }}
         </div>
-        <div v-if="deadlineViolations.cpuViolations.length" class="stats-table-block">
-          <div class="stats-section-subtitle">CPU budget exceeded</div>
-          <table class="stats-table">
-            <thead>
-              <tr>
-                <th :class="thSortClass('deadline_cpu', 'task')" @click="toggleTableSort('deadline_cpu', 'task')">Task</th>
-                <th :class="thSortClass('deadline_cpu', 'cpu')" @click="toggleTableSort('deadline_cpu', 'cpu')">CPU %</th>
-                <th :class="thSortClass('deadline_cpu', 'budget')" @click="toggleTableSort('deadline_cpu', 'budget')">Budget</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr
-                v-for="(v, i) in sortedDeadlineCpuRows"
-                :key="'c'+i"
-                class="stats-table-row clickable"
-                :title="`Click to highlight '${v.label}' in the timeline`"
-                tabindex="0"
-                @click="emit('highlightTask', v.mk)"
-                @keydown.enter.prevent="emit('highlightTask', v.mk)"
-                @keydown.space.prevent="emit('highlightTask', v.mk)"
-              >
-                <td class="task-col">{{ v.label }}</td>
-                <td class="sev-error">{{ v.pct }}%</td>
-                <td>{{ v.budgetPct }}%</td>
-              </tr>
-            </tbody>
-          </table>
+        <div
+          v-else
+          class="stats-table-block"
+        >
+          <div
+            class="stats-table-wrap"
+            :style="{ maxHeight: tableHeight('intervals') + 'px' }"
+          >
+            <table class="stats-table">
+              <thead>
+                <tr>
+                  <th
+                    :class="thSortClass('intervals', 'id')"
+                    @click="toggleTableSort('intervals', 'id')"
+                  >
+                    ID
+                  </th>
+                  <th
+                    :class="thSortClass('intervals', 'count')"
+                    @click="toggleTableSort('intervals', 'count')"
+                  >
+                    Count
+                  </th>
+                  <th
+                    :class="thSortClass('intervals', 'min')"
+                    @click="toggleTableSort('intervals', 'min')"
+                  >
+                    Min
+                  </th>
+                  <th
+                    :class="thSortClass('intervals', 'avg')"
+                    @click="toggleTableSort('intervals', 'avg')"
+                  >
+                    Avg
+                  </th>
+                  <th
+                    :class="thSortClass('intervals', 'max')"
+                    @click="toggleTableSort('intervals', 'max')"
+                  >
+                    Max
+                  </th>
+                  <th
+                    :class="thSortClass('intervals', 'p95')"
+                    @click="toggleTableSort('intervals', 'p95')"
+                  >
+                    P95
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="row in sortedIntervalStats"
+                  :key="row.id"
+                  class="stats-table-row clickable"
+                  :title="`Open interval duration plot for ID ${row.id}`"
+                  tabindex="0"
+                  @click="openIntervalPlot(row.id)"
+                  @keydown.enter.prevent="openIntervalPlot(row.id)"
+                  @keydown.space.prevent="openIntervalPlot(row.id)"
+                >
+                  <td class="task-col">{{ row.label }}</td>
+                  <td>{{ row.count }}</td>
+                  <td>{{ row.min }}</td>
+                  <td>{{ row.avg }}</td>
+                  <td>{{ row.max }}</td>
+                  <td>{{ row.p95 }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div
+            class="stats-section-resizer"
+            role="separator"
+            aria-label="Resize interval analysis table"
+            aria-orientation="horizontal"
+            @mousedown.prevent="onTableResizeStart('intervals', $event)"
+          />
         </div>
       </template>
-    </template>
 
-    <!-- Interval Analysis -->
-    <div class="stats-sep" />
-    <StatsSectionHeader
-      :collapsed="intervalsCollapsed"
-      :pinned="isSectionPinned('intervals')"
-      @toggle="toggleSectionCollapse('intervals')"
-      @toggle-pin="toggleSectionPin('intervals')"
+    </StatsSectionBlock>
+    <StatsSectionBlock
+      :section-id="'tags'"
+      :order="sectionOrderIndex('tags')"
+      @reorder="onSectionReorder"
     >
-      Interval Analysis{{ scopeSuffixStr }}
-    </StatsSectionHeader>
-    <template v-if="!intervalsCollapsed">
-      <div
-        v-if="intervalStats.length === 0"
-        class="range-hint"
+      <!-- Tag Analysis -->
+      <StatsSectionHeader
+        :section-id="'tags'"
+        :collapsed="tagsCollapsed"
+        :pinned="isSectionPinned('tags')"
+        @toggle="toggleSectionCollapse('tags')"
+        @toggle-pin="toggleSectionPin('tags')"
       >
-        {{ statsRange ? 'No interval data in cursor range' : 'No paired interval_start / interval_stop events in trace' }}
-      </div>
-      <div
-        v-else
-        class="stats-table-block"
-      >
+        Tag Analysis{{ scopeSuffixStr }}
+      </StatsSectionHeader>
+      <template v-if="!tagsCollapsed">
         <div
-          class="stats-table-wrap"
-          :style="{ maxHeight: tableHeight('intervals') + 'px' }"
+          v-if="tagStats.length === 0"
+          class="range-hint"
         >
-          <table class="stats-table">
-            <thead>
-              <tr>
-                <th
-                  :class="thSortClass('intervals', 'id')"
-                  @click="toggleTableSort('intervals', 'id')"
-                >
-                  ID
-                </th>
-                <th
-                  :class="thSortClass('intervals', 'count')"
-                  @click="toggleTableSort('intervals', 'count')"
-                >
-                  Count
-                </th>
-                <th
-                  :class="thSortClass('intervals', 'min')"
-                  @click="toggleTableSort('intervals', 'min')"
-                >
-                  Min
-                </th>
-                <th
-                  :class="thSortClass('intervals', 'avg')"
-                  @click="toggleTableSort('intervals', 'avg')"
-                >
-                  Avg
-                </th>
-                <th
-                  :class="thSortClass('intervals', 'max')"
-                  @click="toggleTableSort('intervals', 'max')"
-                >
-                  Max
-                </th>
-                <th
-                  :class="thSortClass('intervals', 'p95')"
-                  @click="toggleTableSort('intervals', 'p95')"
-                >
-                  P95
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr
-                v-for="row in sortedIntervalStats"
-                :key="row.id"
-                class="stats-table-row clickable"
-                :title="`Open interval duration plot for ID ${row.id}`"
-                tabindex="0"
-                @click="openIntervalPlot(row.id)"
-                @keydown.enter.prevent="openIntervalPlot(row.id)"
-                @keydown.space.prevent="openIntervalPlot(row.id)"
-              >
-                <td class="task-col">{{ row.label }}</td>
-                <td>{{ row.count }}</td>
-                <td>{{ row.min }}</td>
-                <td>{{ row.avg }}</td>
-                <td>{{ row.max }}</td>
-                <td>{{ row.p95 }}</td>
-              </tr>
-            </tbody>
-          </table>
+          {{ statsRange ? 'No tag samples in cursor range' : 'No tag0_event … tag7_event STI samples in trace' }}
         </div>
         <div
-          class="stats-section-resizer"
-          role="separator"
-          aria-label="Resize interval analysis table"
-          aria-orientation="horizontal"
-          @mousedown.prevent="onTableResizeStart('intervals', $event)"
-        />
-      </div>
-    </template>
-
-    <!-- Tag Analysis -->
-    <div class="stats-sep" />
-    <StatsSectionHeader
-      :collapsed="tagsCollapsed"
-      :pinned="isSectionPinned('tags')"
-      @toggle="toggleSectionCollapse('tags')"
-      @toggle-pin="toggleSectionPin('tags')"
-    >
-      Tag Analysis{{ scopeSuffixStr }}
-    </StatsSectionHeader>
-    <template v-if="!tagsCollapsed">
-      <div
-        v-if="tagStats.length === 0"
-        class="range-hint"
-      >
-        {{ statsRange ? 'No tag samples in cursor range' : 'No tag0_event … tag7_event STI samples in trace' }}
-      </div>
-      <div
-        v-else
-        class="stats-table-block"
-      >
-        <div
-          class="stats-table-wrap"
-          :style="{ maxHeight: tableHeight('tags') + 'px' }"
+          v-else
+          class="stats-table-block"
         >
-          <table class="stats-table">
-            <thead>
-              <tr>
-                <th
-                  :class="thSortClass('tags', 'tag')"
-                  @click="toggleTableSort('tags', 'tag')"
+          <div
+            class="stats-table-wrap"
+            :style="{ maxHeight: tableHeight('tags') + 'px' }"
+          >
+            <table class="stats-table">
+              <thead>
+                <tr>
+                  <th
+                    :class="thSortClass('tags', 'tag')"
+                    @click="toggleTableSort('tags', 'tag')"
+                  >
+                    Tag
+                  </th>
+                  <th
+                    :class="thSortClass('tags', 'count')"
+                    @click="toggleTableSort('tags', 'count')"
+                  >
+                    Count
+                  </th>
+                  <th
+                    :class="thSortClass('tags', 'min')"
+                    @click="toggleTableSort('tags', 'min')"
+                  >
+                    Min
+                  </th>
+                  <th
+                    :class="thSortClass('tags', 'avg')"
+                    @click="toggleTableSort('tags', 'avg')"
+                  >
+                    Avg
+                  </th>
+                  <th
+                    :class="thSortClass('tags', 'max')"
+                    @click="toggleTableSort('tags', 'max')"
+                  >
+                    Max
+                  </th>
+                  <th
+                    :class="thSortClass('tags', 'p95')"
+                    @click="toggleTableSort('tags', 'p95')"
+                  >
+                    P95
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="row in sortedTagStats"
+                  :key="row.channel"
+                  class="stats-table-row clickable"
+                  :title="`Open tag value plot for ${row.label}`"
+                  tabindex="0"
+                  @click="openTagPlot(row.channel)"
+                  @keydown.enter.prevent="openTagPlot(row.channel)"
+                  @keydown.space.prevent="openTagPlot(row.channel)"
                 >
-                  Tag
-                </th>
-                <th
-                  :class="thSortClass('tags', 'count')"
-                  @click="toggleTableSort('tags', 'count')"
-                >
-                  Count
-                </th>
-                <th
-                  :class="thSortClass('tags', 'min')"
-                  @click="toggleTableSort('tags', 'min')"
-                >
-                  Min
-                </th>
-                <th
-                  :class="thSortClass('tags', 'avg')"
-                  @click="toggleTableSort('tags', 'avg')"
-                >
-                  Avg
-                </th>
-                <th
-                  :class="thSortClass('tags', 'max')"
-                  @click="toggleTableSort('tags', 'max')"
-                >
-                  Max
-                </th>
-                <th
-                  :class="thSortClass('tags', 'p95')"
-                  @click="toggleTableSort('tags', 'p95')"
-                >
-                  P95
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr
-                v-for="row in sortedTagStats"
-                :key="row.channel"
-                class="stats-table-row clickable"
-                :title="`Open tag value plot for ${row.label}`"
-                tabindex="0"
-                @click="openTagPlot(row.channel)"
-                @keydown.enter.prevent="openTagPlot(row.channel)"
-                @keydown.space.prevent="openTagPlot(row.channel)"
-              >
-                <td class="task-col">{{ row.label }}</td>
-                <td>{{ row.count }}</td>
-                <td>{{ row.min }}</td>
-                <td>{{ row.avg }}</td>
-                <td>{{ row.max }}</td>
-                <td>{{ row.p95 }}</td>
-              </tr>
-            </tbody>
-          </table>
+                  <td class="task-col">{{ row.label }}</td>
+                  <td>{{ row.count }}</td>
+                  <td>{{ row.min }}</td>
+                  <td>{{ row.avg }}</td>
+                  <td>{{ row.max }}</td>
+                  <td>{{ row.p95 }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div
+            class="stats-section-resizer"
+            role="separator"
+            aria-label="Resize tag analysis table"
+            aria-orientation="horizontal"
+            @mousedown.prevent="onTableResizeStart('tags', $event)"
+          />
         </div>
-        <div
-          class="stats-section-resizer"
-          role="separator"
-          aria-label="Resize tag analysis table"
-          aria-orientation="horizontal"
-          @mousedown.prevent="onTableResizeStart('tags', $event)"
-        />
-      </div>
-    </template>
+      </template>
 
+    </StatsSectionBlock>
+    </div>
     </template>
     <div
       v-else
@@ -2417,7 +2531,8 @@ import {
 import TraceCompareDialog from './TraceCompareDialog.vue'
 import LoadBalanceGauge from './LoadBalanceGauge.vue'
 import StatsSectionHeader from './StatsSectionHeader.vue'
-import { normalizeStatsPins, toggleStatsPin } from '../utils/statsPins.js'
+import StatsSectionBlock from './StatsSectionBlock.vue'
+import { normalizeStatsPins, normalizeStatsSectionOrder, moveStatsSection, toggleStatsPin, isDefaultStatsSectionOrder, defaultStatsSectionOrder } from '../utils/statsPins.js'
 import { buildHistogramModel } from '../utils/histogramModel.js'
 import { plotTabsForKind, resolvePlotTabSwitch } from '../utils/plotTabs.js'
 import { classifyLoadBalance, loadBalanceGaugeImgHtml, loadBalanceMetrics } from '../utils/loadBalanceGauge.js'
@@ -2433,11 +2548,13 @@ const props = defineProps({
   analysisSettings: { type: Object, default: () => ({}) },
   sectionCollapsedState: { type: Object, default: null },
   sectionPins: { type: Array, default: () => [] },
+  sectionOrder: { type: Array, default: () => [] },
 })
 
 const emit = defineEmits([
   'highlightTask', 'plotPointActivate', 'segmentJump', 'update:openPlot', 'update:sectionHeights',
   'update:scopeToCursors', 'update:sectionCollapsedState', 'update:sectionPins',
+  'update:sectionOrder',
   'openPairHeatmap', 'openPairChord', 'openSettings',
 ])
 
@@ -2502,6 +2619,25 @@ function toggleSectionPin(id) {
   emit('update:sectionPins', toggleStatsPin(props.sectionPins, id))
   const flag = SECTION_COLLAPSE_REFS[id]
   if (flag) flag.value = false
+}
+
+const orderedSectionIds = computed(() => normalizeStatsSectionOrder(props.sectionOrder))
+
+const sectionOrderIsCustom = computed(
+  () => !isDefaultStatsSectionOrder(props.sectionOrder))
+
+function sectionOrderIndex(id) {
+  const idx = orderedSectionIds.value.indexOf(id)
+  return idx < 0 ? 999 : idx
+}
+
+function onSectionReorder(src, dst) {
+  emit('update:sectionOrder', moveStatsSection(props.sectionOrder, src, dst))
+}
+
+function resetSectionOrder() {
+  if (!sectionOrderIsCustom.value) return
+  emit('update:sectionOrder', defaultStatsSectionOrder())
 }
 
 function toggleSectionCollapse(id) {
@@ -5349,6 +5485,12 @@ watch(plotData, () => {
   padding: 8px 10px;
 }
 
+.stats-sections-stack {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
 .stats-scope-top {
   display: flex;
   align-items: center;
@@ -5380,6 +5522,18 @@ watch(plotData, () => {
   background: var(--tb-btn-hover);
   color: var(--fg);
   outline: none;
+}
+
+.stats-icon-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+  color: var(--fg-dim, #9e9e9e);
+}
+
+.stats-icon-btn:disabled:hover,
+.stats-icon-btn:disabled:focus-visible {
+  background: transparent;
+  color: var(--fg-dim, #9e9e9e);
 }
 
 .stats-scope-check {

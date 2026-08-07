@@ -167,15 +167,18 @@ def default_section_collapsed() -> Dict[str, bool]:
         "tags": False,
     }
 
-# Statistics sections that can be pinned open (stay expanded). Keep in sync with
-# web/src/utils/statsPins.js.
+# Statistics sections that can be pinned open (stay expanded) and the default
+# display order. Keep in sync with web/src/utils/statsPins.js.
 STATS_PINNABLE_SECTIONS: Tuple[str, ...] = (
     "cores",
+    "health",
     "core_breakdown",
     "tasks",
-    "health",
     "migrations",
     "core_pairs",
+    "affinity",
+    "lifecycle",
+    "deadline",
     "exec",
     "block",
     "inter",
@@ -183,9 +186,6 @@ STATS_PINNABLE_SECTIONS: Tuple[str, ...] = (
     "priority",
     "sync",
     "queue",
-    "lifecycle",
-    "affinity",
-    "deadline",
     "intervals",
     "tags",
 )
@@ -214,6 +214,40 @@ def normalize_stats_pins(raw) -> List[str]:
 def stats_pins_to_rc(pins: List[str]) -> str:
     """Serialize pin list for btf_viewer.rc ``[stats] pinned_sections``."""
     return ",".join(normalize_stats_pins(pins))
+
+def normalize_stats_section_order(raw) -> List[str]:
+    """Full statistics section order: preferred IDs first, then catalogue defaults."""
+    preferred = normalize_stats_pins(raw)
+    seen = set(preferred)
+    out = list(preferred)
+    for sid in STATS_PINNABLE_SECTIONS:
+        if sid not in seen:
+            out.append(sid)
+    return out
+
+def stats_section_order_to_rc(order: List[str]) -> str:
+    """Serialize section order for btf_viewer.rc ``[stats] section_order``."""
+    return ",".join(normalize_stats_section_order(order))
+
+def move_stats_section(order, src: str, dst: str) -> List[str]:
+    """Move ``src`` to the catalogue position of ``dst`` (insert before ``dst``)."""
+    cur = normalize_stats_section_order(order)
+    src_s = str(src or "").strip()
+    dst_s = str(dst or "").strip()
+    if (not src_s or not dst_s or src_s == dst_s
+            or src_s not in cur or dst_s not in cur):
+        return cur
+    cur = [x for x in cur if x != src_s]
+    cur.insert(cur.index(dst_s), src_s)
+    return cur
+
+def default_stats_section_order() -> List[str]:
+    """Built-in statistics section order (catalogue order)."""
+    return list(STATS_PINNABLE_SECTIONS)
+
+def is_default_stats_section_order(order) -> bool:
+    """True when ``order`` matches the built-in catalogue sequence."""
+    return normalize_stats_section_order(order) == default_stats_section_order()
 
 def default_section_table_heights() -> Dict[str, int]:
     """Default max heights for collapsible statistics tables (shared with MVVM)."""
@@ -554,6 +588,10 @@ _IC_EXPAND     = "M3 1h1v14H3zM12 1h1v14h-1zM4 5l3 3-3 3zM12 5l-3 3 3 3z"
 _IC_EXPAND_ALL = "M8 1l2.5 3h-2v3h-1V4H5.5zM8 15l-2.5-3h2v-3h1V12h2.5zM2 7.5h12v1H2z"
 _IC_SECTIONS_EXPAND = "M8 2v5H3v1h5v5h1V8h5V7H9V2H8z"
 _IC_SECTIONS_COLLAPSE = "M2 7h12v2H2z"
+# Counter-clockwise arrow: reset statistics section order to catalogue default.
+_IC_SECTIONS_RESET_ORDER = (
+    "M8 1.25A6.75 6.75 0 1 0 14.75 8h-1.5A5.25 5.25 0 1 1 8 2.75V5.5L12 3 8 .5v.75z"
+)
 # Thumbtack: outline (unpinned) and filled (pinned).
 _IC_PIN = (
     "M8 1.25A2.75 2.75 0 0 1 10.75 4c0 .95-.48 1.78-1.2 2.27V13.5L8 11.8 6.45 13.5"

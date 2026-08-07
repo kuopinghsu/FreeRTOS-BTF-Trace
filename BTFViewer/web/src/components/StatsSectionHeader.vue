@@ -4,6 +4,15 @@
     :class="{ pinned }"
     @click="$emit('toggle')"
   >
+    <span
+      class="stats-drag-handle"
+      draggable="true"
+      title="Drag to reorder"
+      aria-label="Drag to reorder section"
+      @click.stop
+      @dragstart.stop="onDragStart"
+      @dragend.stop="onDragEnd"
+    >⠿</span>
     <svg
       class="chevron"
       :class="{ collapsed }"
@@ -63,11 +72,28 @@
 </template>
 
 <script setup>
-defineProps({
+const MIME = 'application/x-btf-stats-section'
+
+const props = defineProps({
   collapsed: { type: Boolean, default: false },
   pinned: { type: Boolean, default: false },
+  sectionId: { type: String, default: '' },
 })
-defineEmits(['toggle', 'togglePin'])
+
+const emit = defineEmits(['toggle', 'togglePin', 'dragStart', 'dragEnd'])
+
+function onDragStart(e) {
+  const sid = String(props.sectionId || '').trim()
+  if (!sid || !e.dataTransfer) return
+  e.dataTransfer.effectAllowed = 'move'
+  e.dataTransfer.setData(MIME, sid)
+  e.dataTransfer.setData('text/plain', sid)
+  emit('dragStart', sid)
+}
+
+function onDragEnd() {
+  emit('dragEnd')
+}
 </script>
 
 <style scoped>
@@ -93,6 +119,29 @@ defineEmits(['toggle', 'togglePin'])
 
 .stats-section-title.collapsible:hover {
   color: var(--fg, #e0e0e0);
+}
+
+.stats-drag-handle {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  color: var(--fg-dim, #9e9e9e);
+  cursor: grab;
+  opacity: 0.7;
+  font-size: 12px;
+  line-height: 1;
+  user-select: none;
+}
+
+.stats-drag-handle:hover {
+  opacity: 1;
+  color: var(--fg, #e0e0e0);
+}
+
+.stats-drag-handle:active {
+  cursor: grabbing;
 }
 
 .stats-section-label {

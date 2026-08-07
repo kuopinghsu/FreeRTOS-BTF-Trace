@@ -21,8 +21,12 @@ describe('statsPins', () => {
   })
 
   it('catalogue includes common sections', () => {
-    for (const sid of ['cores', 'tasks', 'tags', 'migrations']) {
+    for (const sid of ['cores', 'tasks', 'tags', 'migrations', 'affinity']) {
       assert.ok(STATS_PINNABLE_SECTIONS.includes(sid), sid)
     }
+    assert.deepEqual(STATS_PINNABLE_SECTIONS.slice(0, 9), [
+      'cores', 'health', 'core_breakdown', 'tasks', 'migrations',
+      'core_pairs', 'affinity', 'lifecycle', 'deadline',
+    ])
   })
 })

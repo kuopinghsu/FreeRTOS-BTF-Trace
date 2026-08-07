@@ -367,11 +367,13 @@
                 :analysis-settings="appSettings"
                 :section-collapsed-state="activeTab?.statsSectionCollapsed ?? null"
                 :section-pins="appSettings.statsPinnedSections || []"
+                :section-order="appSettings.statsSectionOrder || []"
                 @update:open-plot="onOpenPlotChange"
                 @update:section-heights="onSectionHeightsChange"
                 @update:scope-to-cursors="onStatsScopeChange"
                 @update:section-collapsed-state="onStatsSectionCollapsedChange"
                 @update:section-pins="onStatsSectionPinsChange"
+                @update:section-order="onStatsSectionOrderChange"
                 @highlight-task="onHighlightClick"
                 @plot-point-activate="onStatsPlotPointActivate"
                 @segment-jump="onStatsSegmentJump"
@@ -860,7 +862,7 @@ import {
   sessionCursorsSlotCount,
 } from './utils/sessionPortable.js'
 import { downloadPerfetto } from './utils/perfettoExport.js'
-import { normalizeStatsPins } from './utils/statsPins.js'
+import { normalizeStatsPins, normalizeStatsSectionOrder } from './utils/statsPins.js'
 import { computeFindHits, stepFindHitIndex } from './utils/findAnalysis.js'
 import { traceQualitySummary } from './utils/traceQuality.js'
 import { isBtfOpenName, loadBtfEntriesFromFile } from './utils/btfLoad.js'
@@ -1770,6 +1772,11 @@ function onStatsSectionCollapsedChange(v) {
 
 function onStatsSectionPinsChange(v) {
   appSettings.statsPinnedSections = normalizeStatsPins(v)
+  saveSettings(appSettings)
+}
+
+function onStatsSectionOrderChange(v) {
+  appSettings.statsSectionOrder = normalizeStatsSectionOrder(v)
   saveSettings(appSettings)
 }
 

@@ -8,10 +8,15 @@ from .config import (  # private symbols are not pulled in by import *
     _IC_PIN_FILLED,
     _IC_SECTIONS_COLLAPSE,
     _IC_SECTIONS_EXPAND,
+    _IC_SECTIONS_RESET_ORDER,
     _stats_chevron_icon,
     _svg_icon,
     _svg_pixmap,
+    default_stats_section_order,
+    is_default_stats_section_order,
+    move_stats_section,
     normalize_stats_pins,
+    normalize_stats_section_order,
 )
 from .parser import *  # noqa: F403,F401
 from .timeline_util import *  # noqa: F403,F401
@@ -2107,6 +2112,70 @@ class _StatsPinButton(QLabel):
             event.accept()
             return
         super().mousePressEvent(event)
+
+
+_STATS_SECTION_MIME = "application/x-btf-stats-section"
+
+
+class _StatsSectionDragFilter(QObject):
+    """Drag a statistics section header to reorder sections in the panel."""
+
+    def __init__(self, panel: "_StatsPanel", section_id: str,
+                 grip: QWidget) -> None:
+        super().__init__(panel)
+        self._panel = panel
+        self._section_id = section_id
+        self._grip = grip
+        self._press_pos: Optional[QPoint] = None
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        et = event.type()
+        if obj is self._grip:
+            if et == QEvent.Type.MouseButtonPress:
+                if event.button() == Qt.MouseButton.LeftButton:
+                    self._press_pos = event.position().toPoint()
+            elif et == QEvent.Type.MouseButtonRelease:
+                self._press_pos = None
+            elif et == QEvent.Type.MouseMove:
+                if (self._press_pos is not None
+                    and event.buttons() & Qt.MouseButton.LeftButton):
+                    delta = event.position().toPoint() - self._press_pos
+                    if delta.manhattanLength() >= QApplication.startDragDistance():
+                        self._press_pos = None
+                        drag = QDrag(obj)
+                        mime = QMimeData()
+                        mime.setData(
+                            _STATS_SECTION_MIME,
+                            self._section_id.encode("utf-8"))
+                        mime.setText(self._section_id)
+                        drag.setMimeData(mime)
+                        self._panel._begin_section_drag(self._section_id)
+                        try:
+                            drag.exec(Qt.DropAction.MoveAction)
+                        finally:
+                            self._panel._end_section_drag()
+                        return True
+        if et == QEvent.Type.DragEnter:
+            if event.mimeData().hasFormat(_STATS_SECTION_MIME):
+                event.acceptProposedAction()
+                self._panel._set_section_drop_target(self._section_id)
+                return True
+        elif et == QEvent.Type.DragMove:
+            if event.mimeData().hasFormat(_STATS_SECTION_MIME):
+                event.acceptProposedAction()
+                self._panel._set_section_drop_target(self._section_id)
+                return True
+        elif et == QEvent.Type.Drop:
+            if event.mimeData().hasFormat(_STATS_SECTION_MIME):
+                raw = bytes(event.mimeData().data(_STATS_SECTION_MIME))
+                src = raw.decode("utf-8", errors="ignore").strip()
+                self._panel._set_section_drop_target(None)
+                if src:
+                    self._panel._on_section_drop(src, self._section_id)
+                event.acceptProposedAction()
+                return True
+        return False
+
 
 class _UtilScrollResizeFilter(QObject):
     """Keep util rows inside the scroll viewport when the panel is resized."""
@@ -4929,6 +4998,8 @@ class _StatsPanel(QWidget):
     open_settings_requested = Signal(str)
     # Pinned section IDs (stay expanded); persist to btf_viewer.rc
     section_pins_changed = Signal(list)
+    # Section display order; persist to btf_viewer.rc
+    section_order_changed = Signal(list)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -4946,11 +5017,18 @@ class _StatsPanel(QWidget):
         self._scope_to_cursors: bool = True
         self._section_collapsed: Dict[str, bool] = default_section_collapsed()
         self._section_pins: List[str] = []
+        self._section_order: List[str] = normalize_stats_section_order(None)
+        self._pending_sections: List[Tuple[str, str, str, object]] = []
+        self._drop_target_sid: Optional[str] = None
+        self._dragging_sid: Optional[str] = None
         self._section_headers: Dict[str, QPushButton] = {}
         self._section_header_rows: Dict[str, QWidget] = {}
+        self._section_seps: Dict[str, QWidget] = {}
         self._section_pin_btns: Dict[str, _StatsPinButton] = {}
         self._section_bodies: Dict[str, QWidget] = {}
         self._section_populate: Dict[str, object] = {}
+        self._section_drag_filters: List[_StatsSectionDragFilter] = []
+        self._section_drag_filter_by_id: Dict[str, _StatsSectionDragFilter] = {}
         self._section_table_heights: Dict[str, int] = default_section_table_heights()
         self._table_grips: List[_StatsSectionGrip] = []
         self._util_label_col_natural: int = STATS_UTIL_LABEL_W
@@ -4993,6 +5071,12 @@ class _StatsPanel(QWidget):
             _IC_SECTIONS_COLLAPSE, "Collapse all statistics sections",
             self._collapse_all_sections)
         scope_top.addWidget(self._btn_stats_collapse, 0)
+        self._btn_stats_reset_order = self._make_scope_action_button(
+            _IC_SECTIONS_RESET_ORDER,
+            "Reset statistics section order to default",
+            self._reset_section_order)
+        scope_top.addWidget(self._btn_stats_reset_order, 0)
+        self._update_reset_order_button()
         scope_block.addLayout(scope_top)
         self._scope_label = QLabel("")
         self._scope_label.setStyleSheet("color:#888888;")
@@ -5053,6 +5137,7 @@ class _StatsPanel(QWidget):
         self._scope_label.setStyleSheet(f"color:#888888; font-size:{ui_fs};")
         for btn in (
             self._btn_stats_expand, self._btn_stats_collapse,
+            self._btn_stats_reset_order,
             self._btn_export_csv, self._btn_export_html, self._btn_compare_mig,
         ):
             btn.setFont(font)
@@ -5087,7 +5172,8 @@ class _StatsPanel(QWidget):
         return btn
 
     def _pin_scope_action_buttons(self) -> None:
-        for btn in (self._btn_stats_expand, self._btn_stats_collapse):
+        for btn in (self._btn_stats_expand, self._btn_stats_collapse,
+                    self._btn_stats_reset_order):
             btn.setFixedSize(26, 26)
             pol = btn.sizePolicy()
             pol.setHorizontalPolicy(QSizePolicy.Policy.Fixed)
@@ -5098,7 +5184,20 @@ class _StatsPanel(QWidget):
         color = self._scope_action_icon_color()
         self._btn_stats_expand.setIcon(_svg_icon(_IC_SECTIONS_EXPAND, color))
         self._btn_stats_collapse.setIcon(_svg_icon(_IC_SECTIONS_COLLAPSE, color))
+        self._update_reset_order_button()
         self._sync_pin_buttons()
+
+    def _update_reset_order_button(self) -> None:
+        custom = not is_default_stats_section_order(self._section_order)
+        self._btn_stats_reset_order.setEnabled(custom)
+        color = self._scope_action_icon_color() if custom else (
+            "#555555" if self._is_dark else "#B0B0B0")
+        self._btn_stats_reset_order.setIcon(
+            _svg_icon(_IC_SECTIONS_RESET_ORDER, color))
+        self._btn_stats_reset_order.setToolTip(
+            "Reset statistics section order to default"
+            if custom else
+            "Section order is already the default")
 
     def _clear(self) -> None:
         self._defer_populate_timer.stop()
@@ -5110,9 +5209,15 @@ class _StatsPanel(QWidget):
         self._util_scroll_filters.clear()
         self._section_headers.clear()
         self._section_header_rows.clear()
+        self._section_seps.clear()
         self._section_pin_btns.clear()
         self._section_bodies.clear()
         self._section_populate.clear()
+        self._section_drag_filters.clear()
+        self._section_drag_filter_by_id.clear()
+        self._pending_sections.clear()
+        self._drop_target_sid = None
+        self._dragging_sid = None
         while self._ilay.count():
             item = self._ilay.takeAt(0)
             if item.widget():
@@ -5148,6 +5253,18 @@ class _StatsPanel(QWidget):
         self._sync_pin_buttons()
         if emit:
             self.section_pins_changed.emit(list(self._section_pins))
+
+    def section_order(self) -> List[str]:
+        return list(self._section_order)
+
+    def set_section_order(self, order, *, emit: bool = False) -> None:
+        """Apply persisted statistics section order."""
+        self._section_order = normalize_stats_section_order(order)
+        if self._section_header_rows:
+            self._apply_section_layout_order()
+        self._update_reset_order_button()
+        if emit:
+            self.section_order_changed.emit(list(self._section_order))
 
     def _sync_pin_buttons(self) -> None:
         pinned = set(self._section_pins)
@@ -6294,6 +6411,11 @@ class _StatsPanel(QWidget):
         idx = self._ilay.indexOf(hdr_row)
         self._ilay.insertWidget(idx + 1, body)
         self._section_bodies[section_id] = body
+        filt = self._section_drag_filter_by_id.get(section_id)
+        if filt is not None:
+            body.setAcceptDrops(True)
+            body.installEventFilter(filt)
+        self._refresh_section_drag_chrome(section_id)
 
     def _schedule_deferred_section_populate(self) -> None:
         if self._deferred_sections:
@@ -6365,16 +6487,53 @@ class _StatsPanel(QWidget):
 
     def _add_collapsible_section(self, section_id: str, title: str, ui_fs: str,
                                populate) -> None:
+        """Queue a collapsible section; flushed in persisted order at rebuild end."""
+        self._pending_sections.append((section_id, title, ui_fs, populate))
+
+    def _flush_pending_sections(self) -> None:
+        if not self._pending_sections:
+            return
+        pending = {
+            sid: (title, ui_fs, pop)
+            for sid, title, ui_fs, pop in self._pending_sections
+        }
+        order = [
+            sid for sid in normalize_stats_section_order(self._section_order)
+            if sid in pending
+        ]
+        for sid, _title, _ui_fs, _pop in self._pending_sections:
+            if sid not in order:
+                order.append(sid)
+        self._pending_sections.clear()
+        for sid in order:
+            title, ui_fs, populate = pending[sid]
+            self._mount_collapsible_section(sid, title, ui_fs, populate)
+
+    def _mount_collapsible_section(self, section_id: str, title: str, ui_fs: str,
+                                   populate) -> None:
         """Add a collapsible statistics section (parity with web StatisticsPanel)."""
         self._section_collapsed.setdefault(section_id, False)
         if section_id in self._section_pins:
             self._section_collapsed[section_id] = False
-        self._ilay.addWidget(self._sep())
+        sep = self._sep()
+        self._ilay.addWidget(sep)
+        self._section_seps[section_id] = sep
         collapsed = self._section_collapsed.get(section_id, False)
         row = QWidget()
+        row.setObjectName("stats_section_header_row")
+        row.setAcceptDrops(True)
         row_lay = QHBoxLayout(row)
-        row_lay.setContentsMargins(0, 0, 0, 0)
+        row_lay.setContentsMargins(2, 2, 2, 2)
         row_lay.setSpacing(2)
+        grip = QLabel("⠿")
+        grip.setObjectName("stats_section_grip")
+        grip.setFixedWidth(14)
+        grip.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        grip.setToolTip("Drag to reorder this section")
+        grip.setStyleSheet(
+            f"color:#888888; font-size:{ui_fs}; padding:0; border:none;"
+            " background:transparent;")
+        grip.setCursor(Qt.CursorShape.OpenHandCursor)
         hdr = QPushButton(title)
         hdr.setFlat(True)
         hdr.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -6389,6 +6548,7 @@ class _StatsPanel(QWidget):
         pin = _StatsPinButton()
         pin.clicked.connect(
             lambda sid=section_id: self._toggle_section_pin(sid))
+        row_lay.addWidget(grip, 0)
         row_lay.addWidget(hdr, 1)
         row_lay.addWidget(pin, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self._ilay.addWidget(row)
@@ -6396,6 +6556,12 @@ class _StatsPanel(QWidget):
         self._section_header_rows[section_id] = row
         self._section_pin_btns[section_id] = pin
         self._section_populate[section_id] = populate
+        filt = _StatsSectionDragFilter(self, section_id, grip)
+        self._section_drag_filters.append(filt)
+        self._section_drag_filter_by_id[section_id] = filt
+        for w in (row, grip, hdr, pin):
+            w.setAcceptDrops(True)
+            w.installEventFilter(filt)
         self._sync_pin_buttons()
         if not collapsed:
             if (self._defer_heavy_sections
@@ -6404,6 +6570,126 @@ class _StatsPanel(QWidget):
                     self._deferred_sections.append(section_id)
             else:
                 self._ensure_section_body(section_id)
+
+    def _begin_section_drag(self, section_id: str) -> None:
+        self._dragging_sid = section_id
+        self._set_section_drop_target(None)
+        self._refresh_section_drag_chrome(section_id)
+
+    def _end_section_drag(self) -> None:
+        src = self._dragging_sid
+        self._dragging_sid = None
+        self._set_section_drop_target(None)
+        if src:
+            self._refresh_section_drag_chrome(src)
+
+    def _set_section_drop_target(self, section_id: Optional[str]) -> None:
+        """Highlight the drop destination (parity with web ``.drag-over``)."""
+        if section_id and section_id == self._dragging_sid:
+            section_id = None
+        if self._drop_target_sid == section_id:
+            return
+        prev = self._drop_target_sid
+        self._drop_target_sid = section_id
+        if prev:
+            self._refresh_section_drag_chrome(prev)
+        if section_id:
+            self._refresh_section_drag_chrome(section_id)
+
+    def _refresh_section_drag_chrome(self, section_id: str) -> None:
+        row = self._section_header_rows.get(section_id)
+        body = self._section_bodies.get(section_id)
+        if row is None and body is None:
+            return
+        is_src = section_id == self._dragging_sid
+        is_dst = (section_id == self._drop_target_sid
+                  and section_id != self._dragging_sid)
+        accent = "#7EC8E3" if self._is_dark else "#2A6FB2"
+        fill = ("rgba(126, 200, 227, 40)" if self._is_dark
+                else "rgba(42, 111, 178, 35)")
+        for w in (row, body):
+            if w is None:
+                continue
+            if is_src:
+                effect = QGraphicsOpacityEffect(w)
+                effect.setOpacity(0.55)
+                w.setGraphicsEffect(effect)
+            else:
+                w.setGraphicsEffect(None)
+        if row is not None:
+            if is_dst:
+                row.setStyleSheet(
+                    f"QWidget#stats_section_header_row {{"
+                    f" border: 1px dashed {accent};"
+                    f" border-radius: 4px;"
+                    f" background-color: {fill};"
+                    f" }}")
+            else:
+                row.setStyleSheet("")
+        if body is not None:
+            if is_dst:
+                body.setStyleSheet(
+                    f"QWidget {{"
+                    f" border: 1px dashed {accent};"
+                    f" border-radius: 4px;"
+                    f" background-color: {fill};"
+                    f" }}")
+            else:
+                body.setStyleSheet("")
+
+    def _on_section_drop(self, src: str, dst: str) -> None:
+        self._set_section_drop_target(None)
+        if not src or not dst or src == dst:
+            return
+        new_order = move_stats_section(self._section_order, src, dst)
+        if new_order == self._section_order:
+            return
+        self._section_order = new_order
+        self._apply_section_layout_order()
+        self._update_reset_order_button()
+        self.section_order_changed.emit(list(self._section_order))
+
+    def _reset_section_order(self) -> None:
+        """Restore the built-in catalogue section order."""
+        default = default_stats_section_order()
+        if self._section_order == default:
+            self._update_reset_order_button()
+            return
+        self._section_order = default
+        self._apply_section_layout_order()
+        self._update_reset_order_button()
+        self.section_order_changed.emit(list(self._section_order))
+
+    def _apply_section_layout_order(self) -> None:
+        """Re-insert mounted section widgets (sep + header + body) in order."""
+        mounted = [
+            sid for sid in normalize_stats_section_order(self._section_order)
+            if sid in self._section_header_rows
+        ]
+        for sid in self._section_header_rows:
+            if sid not in mounted:
+                mounted.append(sid)
+        if not mounted:
+            return
+        widgets: List[QWidget] = []
+        for sid in mounted:
+            for w in (
+                self._section_seps.get(sid),
+                self._section_header_rows.get(sid),
+                self._section_bodies.get(sid),
+            ):
+                if w is None:
+                    continue
+                self._ilay.removeWidget(w)
+                widgets.append(w)
+        stretch_idx = self._ilay.count()
+        for i in range(self._ilay.count()):
+            item = self._ilay.itemAt(i)
+            if item is not None and item.spacerItem() is not None:
+                stretch_idx = i
+                break
+        for i, w in enumerate(widgets):
+            self._ilay.insertWidget(stretch_idx + i, w)
 
     def _core_util_rows(self, trace: "BtfTrace",
                         lo: Optional[int] = None, hi: Optional[int] = None) -> List[Tuple[str, float]]:
@@ -9220,6 +9506,7 @@ class _StatsPanel(QWidget):
             _populate_tags,
         )
 
+        self._flush_pending_sections()
         self._ilay.addStretch()
         self.relax_content_width()
         self._util_label_col_w = self._resolve_util_label_width(
