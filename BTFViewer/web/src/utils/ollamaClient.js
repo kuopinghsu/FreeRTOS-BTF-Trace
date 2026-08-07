@@ -24,6 +24,7 @@ export const AI_RESPONSE_LANGUAGES = [
   'German',
   'French',
   'Spanish',
+  'Klingon (tlhIngan Hol)',
 ]
 
 export function buildAiSystemPrompt(responseLanguage = DEFAULT_AI_RESPONSE_LANGUAGE) {
@@ -31,6 +32,8 @@ export function buildAiSystemPrompt(responseLanguage = DEFAULT_AI_RESPONSE_LANGU
     || DEFAULT_AI_RESPONSE_LANGUAGE
   return `${AI_SYSTEM_PROMPT} Always write your entire reply in ${lang}.`
 }
+
+export const AI_COMPARE_TEMPLATE_ID = 'compare'
 
 /** @type {{ id: string, label: string, prompt: string }[]} */
 export const AI_TEMPLATE_QUESTIONS = [
@@ -42,6 +45,15 @@ export const AI_TEMPLATE_QUESTIONS = [
       'state its severity, what it means for this RTOS/SMP system, and which ' +
       'Statistics section or timeline check to open next. If there are no ' +
       'findings, say so and suggest a default top-down inspection order.',
+  },
+  {
+    id: AI_COMPARE_TEMPLATE_ID,
+    label: 'Trace Compare',
+    prompt:
+      'Compare Trace A vs Trace B using the Trace Compare tables in the ' +
+      'context. Highlight the largest deltas (CPU, migrations, latency, ' +
+      'tick health, sync). Say which side is worse for each concern and ' +
+      'which Statistics section or Trace Compare page to open next.',
   },
   {
     id: 'triage',
@@ -107,6 +119,78 @@ export const AI_TEMPLATE_QUESTIONS = [
 export const DEFAULT_OLLAMA_URL = 'http://localhost:11434'
 export const DEFAULT_OLLAMA_MODEL = 'phi4-mini:3.8b'
 
+export const AI_PROVIDER_OLLAMA = 'ollama'
+export const AI_PROVIDER_OPENAI = 'openai_compatible'
+export const DEFAULT_AI_PROVIDER = AI_PROVIDER_OLLAMA
+
+export const AI_PROVIDER_CHOICES = [
+  { id: AI_PROVIDER_OLLAMA, label: 'Ollama' },
+  { id: AI_PROVIDER_OPENAI, label: 'OpenAI-compatible' },
+]
+
+export const AI_OPENAI_PRESET_CUSTOM = 'custom'
+/** @type {{ id: string, label: string, baseUrl: string, model: string }[]} */
+export const AI_OPENAI_PRESETS = [
+  { id: AI_OPENAI_PRESET_CUSTOM, label: 'Custom', baseUrl: '', model: '' },
+  {
+    id: 'openai',
+    label: 'OpenAI (ChatGPT)',
+    baseUrl: 'https://api.openai.com/v1',
+    model: 'gpt-4o-mini',
+  },
+  {
+    id: 'xai',
+    label: 'xAI (Grok)',
+    baseUrl: 'https://api.x.ai/v1',
+    model: 'grok-3-mini',
+  },
+  {
+    id: 'gemini',
+    label: 'Google Gemini',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    model: 'gemini-3.1-flash-lite',
+  },
+  {
+    id: 'deepseek',
+    label: 'DeepSeek',
+    baseUrl: 'https://api.deepseek.com/v1',
+    model: 'deepseek-chat',
+  },
+]
+
+export const DEFAULT_OPENAI_PRESET = 'openai'
+export const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1'
+export const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini'
+
+/** Vite same-origin proxy path per OpenAI-compatible preset. */
+export const AI_OPENAI_PROXY_PATHS = {
+  openai: '/proxy/openai',
+  xai: '/proxy/xai',
+  gemini: '/proxy/gemini',
+  deepseek: '/proxy/deepseek',
+}
+
+export function normalizeAiProvider(provider) {
+  const p = String(provider || DEFAULT_AI_PROVIDER).trim().toLowerCase().replace(/-/g, '_')
+  if (p === 'openai' || p === 'openai_compat' || p === 'openai_compatible' || p === 'chatgpt') {
+    return AI_PROVIDER_OPENAI
+  }
+  return AI_PROVIDER_OLLAMA
+}
+
+export function openaiPresetInfo(presetId) {
+  const want = String(presetId || AI_OPENAI_PRESET_CUSTOM).trim().toLowerCase()
+  return AI_OPENAI_PRESETS.find((p) => p.id === want) || AI_OPENAI_PRESETS[0]
+}
+
+export function applyOpenaiPreset(presetId) {
+  const p = openaiPresetInfo(presetId)
+  const out = { openaiPreset: p.id }
+  if (p.baseUrl) out.openaiBaseUrl = p.baseUrl
+  if (p.model) out.openaiModel = p.model
+  return out
+}
+
 /** Vite server/preview proxies this path to local Ollama (avoids browser CORS). */
 export const OLLAMA_SAME_ORIGIN_PROXY = '/ollama'
 
@@ -114,6 +198,137 @@ export function normalizeOllamaUrl(url) {
   let u = String(url || DEFAULT_OLLAMA_URL).trim().replace(/\/+$/, '')
   if (u.toLowerCase().endsWith('/api')) u = u.slice(0, -4).replace(/\/+$/, '')
   return u || DEFAULT_OLLAMA_URL
+}
+
+export function normalizeOpenaiBaseUrl(url) {
+  let u = String(url || DEFAULT_OPENAI_BASE_URL).trim().replace(/\/+$/, '')
+  if (!u) return DEFAULT_OPENAI_BASE_URL
+  let low = u.toLowerCase()
+  for (const suffix of ['/chat/completions', '/completions']) {
+    if (low.endsWith(suffix)) {
+      u = u.slice(0, -suffix.length).replace(/\/+$/, '')
+      low = u.toLowerCase()
+      break
+    }
+  }
+  if (low === 'https://api.openai.com' || low === 'http://api.openai.com') u += '/v1'
+  else if (low === 'https://api.x.ai' || low === 'http://api.x.ai') u += '/v1'
+  else if (low === 'https://api.deepseek.com' || low === 'http://api.deepseek.com') u += '/v1'
+  return u
+}
+
+export function normalizeApiKey(apiKey = '') {
+  let key = String(apiKey || '').trim()
+  if (!key) return ''
+  for (const ch of ['\ufeff', '\u200b', '\u200c', '\u200d', '\u00a0']) {
+    key = key.split(ch).join('')
+  }
+  key = key.trim().replace(/^["']|["']$/g, '').trim()
+  // fetch() headers must be ISO-8859-1; API keys are ASCII. Drop CJK / smart quotes.
+  key = Array.from(key).filter((ch) => {
+    const c = ch.codePointAt(0)
+    return c >= 0x20 && c <= 0x7e
+  }).join('')
+  key = key.trim().replace(/^["']|["']$/g, '').trim()
+  if (key.toLowerCase().startsWith('bearer ')) {
+    key = key.slice(7).trim().replace(/^["']|["']$/g, '').trim()
+  }
+  const placeholders = new Set([
+    'gemini_api_key', 'your-api-key', 'your_api_key', 'api_key',
+    'openai_api_key', '<api-key>', 'xxx',
+  ])
+  if (placeholders.has(key.toLowerCase())) return ''
+  return key
+}
+
+/** Read optional Vite / runtime env keys (parity with Desktop os.environ). */
+export function readAiEnvKey(names = []) {
+  let env = {}
+  try {
+    if (typeof import.meta !== 'undefined' && import.meta.env) {
+      env = { ...import.meta.env }
+    }
+  } catch {
+    /* ignore */
+  }
+  try {
+    if (typeof window !== 'undefined' && window.__BTF_AI_ENV__) {
+      env = { ...env, ...window.__BTF_AI_ENV__ }
+    }
+  } catch {
+    /* ignore */
+  }
+  for (const name of names) {
+    const raw = env[name] ?? env[`VITE_${name}`] ?? ''
+    const key = normalizeApiKey(raw)
+    if (key) return key
+  }
+  return ''
+}
+
+/** Settings key, else OPENAI_API_KEY / GEMINI_API_KEY / OLLAMA_API_KEY (VITE_*). */
+export function resolveOpenaiApiKey(apiKey = '') {
+  const key = normalizeApiKey(apiKey)
+  if (key) return key
+  return readAiEnvKey(['OPENAI_API_KEY', 'GEMINI_API_KEY', 'OLLAMA_API_KEY'])
+}
+
+/** Settings key, else OLLAMA_API_KEY (VITE_*). */
+export function resolveOllamaApiKey(apiKey = '') {
+  const key = normalizeApiKey(apiKey)
+  if (key) return key
+  return readAiEnvKey(['OLLAMA_API_KEY'])
+}
+
+/**
+ * Accept Desktop snake_case or Web camelCase context objects.
+ * @param {object} ctx
+ */
+export function normalizeAiContext(ctx = {}) {
+  const c = ctx && typeof ctx === 'object' ? ctx : {}
+  return {
+    findingsText: String(c.findingsText ?? c.findings_text ?? ''),
+    span: String(c.span ?? ''),
+    cores: c.cores ?? '',
+    scope: String(c.scope ?? ''),
+    metrics: c.metrics ?? null,
+  }
+}
+
+export function openaiRequestHeaders(apiKey = '', baseUrl = '') {
+  // baseUrl kept for call-site parity; Gemini OpenAI-compat must use Bearer only
+  // (also sending x-goog-api-key causes HTTP 400).
+  void baseUrl
+  const headers = { 'Content-Type': 'application/json' }
+  const key = resolveOpenaiApiKey(apiKey)
+  if (key) {
+    headers.Authorization = `Bearer ${key}`
+  }
+  return headers
+}
+
+/**
+ * Same-origin proxy base for known OpenAI-compatible presets under Vite.
+ * Returns null for Custom / file:// / non-localhost hosts.
+ */
+export function openaiSameOriginProxyBase(presetId, configuredUrl) {
+  if (typeof window === 'undefined') return null
+  const preset = String(presetId || '').trim().toLowerCase()
+  const proxyPath = AI_OPENAI_PROXY_PATHS[preset]
+  if (!proxyPath) return null
+  const { protocol, hostname, origin } = window.location
+  if (protocol !== 'http:' && protocol !== 'https:') return null
+  if (hostname !== 'localhost' && hostname !== '127.0.0.1') return null
+  // Map configured upstream root onto the proxy: strip scheme+host, keep /v1…
+  const configured = normalizeOpenaiBaseUrl(configuredUrl)
+  let pathSuffix = ''
+  try {
+    const u = new URL(configured)
+    pathSuffix = u.pathname.replace(/\/+$/, '') || ''
+  } catch {
+    pathSuffix = ''
+  }
+  return `${origin}${proxyPath}${pathSuffix}`
 }
 
 export function isLocalOllamaUrl(url) {
@@ -218,7 +433,7 @@ export function resolveOllamaChatModel(baseUrl, model) {
 
 export function ollamaRequestHeaders(apiKey = '') {
   const headers = { 'Content-Type': 'application/json' }
-  const key = String(apiKey || '').trim()
+  const key = resolveOllamaApiKey(apiKey)
   if (key) headers.Authorization = `Bearer ${key}`
   return headers
 }
@@ -318,6 +533,294 @@ export async function ollamaChat({
   const content = data?.message?.content ?? data?.response
   if (!content) throw new Error('Unexpected Ollama response')
   return String(content).trim()
+}
+
+function openaiHttpErrorTip(status, detail = '', baseUrl = '') {
+  const low = String(detail || '').toLowerCase()
+  const host = String(baseUrl || '').toLowerCase()
+  if (status === 401 || status === 403) {
+    return ' Check API key (Settings → AI, or OPENAI_API_KEY / GEMINI_API_KEY / VITE_*).'
+  }
+  if (
+    status === 400
+    && (
+      low.includes('valid api key')
+      || (low.includes('api key') && low.includes('invalid'))
+      || low.includes('multiple authentication')
+    )
+  ) {
+    let tip = (
+      ' Paste a Gemini key from https://aistudio.google.com/apikey into '
+      + 'Settings → AI → API key (OpenAI-compatible), without a Bearer prefix. '
+      + 'Save settings, then Test again.'
+    )
+    if (host.includes('generativelanguage') || host.includes('gemini')) {
+      tip += (
+        ' Use Bearer-only auth (AI Studio key). If the key starts with AQ., '
+        + 'create a new key in AI Studio (non-AQ format) — Google\'s '
+        + 'OpenAI-compat endpoint still rejects some AQ. keys. '
+        + 'Do not use an OpenAI sk- key.'
+      )
+    }
+    return tip
+  }
+  if (status === 429) {
+    let tip = (
+      ' Rate/quota limit (RESOURCE_EXHAUSTED). Wait and retry, check '
+      + 'https://aistudio.google.com/rate-limit (Gemini) or your provider dashboard.'
+    )
+    if (host.includes('gemini') || host.includes('generativelanguage') || low.includes('gemini')) {
+      tip += (
+        ' Try model gemini-3.1-flash-lite (or gemini-3.6-flash). '
+        + 'Older gemini-2.0-* / gemini-2.5-* free quota is often 0 or '
+        + 'closed to new users — enable billing or switch model/project.'
+      )
+    }
+    return tip
+  }
+  if (status === 404) {
+    let tip = ' Check Base URL and model name for this provider.'
+    if (low.includes('no longer available') || low.includes('not found')) {
+      tip += (
+        ' For Gemini, try gemini-3.1-flash-lite or gemini-3.6-flash '
+        + '(gemini-2.5-* is closed to many new accounts).'
+      )
+    }
+    return tip
+  }
+  return ''
+}
+
+function openaiFetchReachError(urlBase, lastErr) {
+  const msg = String(lastErr?.message || lastErr || 'Failed to fetch')
+  if (/ISO-8859-1|non ISO-8859-1|code point/i.test(msg)) {
+    return new Error(
+      'API key contains non-ASCII characters that browsers reject in HTTP headers. '
+      + 'Re-paste the raw key from AI Studio (AIza… / ASCII only), Save, then Test again. '
+      + `(${msg})`,
+    )
+  }
+  const tip = typeof window !== 'undefined' && window.location.protocol === 'file:'
+    ? ' Use Desktop, or `npm run preview` with a provider preset (Vite proxies).'
+    : ' Prefer a known preset under `npm run dev` / `preview` (CORS).'
+  return new Error(`Cannot reach OpenAI-compatible API at ${urlBase}.${tip} (${msg})`)
+}
+
+/**
+ * OpenAI-compatible chat. Known presets use Vite `/proxy/*` when available.
+ * @param {object} opts
+ * @returns {Promise<string>}
+ */
+export async function openaiCompatibleChat({
+  query,
+  findingsText = '',
+  metrics = null,
+  span = '',
+  cores = '',
+  scope = '',
+  baseUrl = DEFAULT_OPENAI_BASE_URL,
+  model = DEFAULT_OPENAI_MODEL,
+  apiKey = '',
+  responseLanguage = DEFAULT_AI_RESPONSE_LANGUAGE,
+  preset = DEFAULT_OPENAI_PRESET,
+  signal,
+} = {}) {
+  const urlBase = normalizeOpenaiBaseUrl(baseUrl)
+  const chatModel = String(model || DEFAULT_OPENAI_MODEL).trim() || DEFAULT_OPENAI_MODEL
+  const key = resolveOpenaiApiKey(apiKey)
+  if (!key) {
+    throw new Error(
+      'API key required for OpenAI-compatible providers '
+      + '(Settings → AI, or VITE_OPENAI_API_KEY / VITE_GEMINI_API_KEY). '
+      + 'Paste the raw key only — no Bearer prefix.',
+    )
+  }
+  const body = {
+    model: chatModel,
+    stream: false,
+    messages: [
+      { role: 'system', content: buildAiSystemPrompt(responseLanguage) },
+      {
+        role: 'user',
+        content: buildAiUserMessage(query, {
+          findingsText,
+          metrics,
+          span,
+          cores,
+          scope,
+        }),
+      },
+    ],
+  }
+
+  const proxyBase = openaiSameOriginProxyBase(preset, urlBase)
+  const bases = proxyBase ? [proxyBase, urlBase] : [urlBase]
+  const headers = openaiRequestHeaders(key, urlBase)
+  let lastErr = null
+  let resp = null
+  let fetchBase = urlBase
+  for (const base of bases) {
+    try {
+      const r = await fetch(`${base}/chat/completions`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        signal,
+      })
+      if (
+        proxyBase
+        && base === proxyBase
+        && r.status === 404
+        && (r.headers.get('content-type') || '').includes('text/html')
+      ) {
+        continue
+      }
+      resp = r
+      fetchBase = base
+      break
+    } catch (err) {
+      if (err?.name === 'AbortError') throw err
+      lastErr = err
+    }
+  }
+  if (!resp) {
+    throw openaiFetchReachError(urlBase, lastErr)
+  }
+  if (!resp.ok) {
+    const detail = (await resp.text().catch(() => '')).slice(0, 400)
+    const tip = openaiHttpErrorTip(resp.status, detail, urlBase)
+    throw new Error(
+      `OpenAI-compatible HTTP ${resp.status} at ${fetchBase}/chat/completions: `
+      + `${detail || resp.statusText}.${tip}`,
+    )
+  }
+  const data = await resp.json()
+  const content = data?.choices?.[0]?.message?.content
+  if (!content) throw new Error('Unexpected OpenAI-compatible response')
+  return String(content).trim()
+}
+
+/**
+ * Dispatch to Ollama or OpenAI-compatible chat.
+ * @param {object} opts
+ * @returns {Promise<string>}
+ */
+export async function aiChat(opts = {}) {
+  const provider = normalizeAiProvider(opts.provider)
+  if (provider === AI_PROVIDER_OPENAI) {
+    return openaiCompatibleChat(opts)
+  }
+  return ollamaChat(opts)
+}
+
+export async function openaiCompatibleTestConnection({
+  baseUrl = DEFAULT_OPENAI_BASE_URL,
+  model = DEFAULT_OPENAI_MODEL,
+  apiKey = '',
+  preset = DEFAULT_OPENAI_PRESET,
+  signal,
+  timeoutMs = 60000,
+  onProgress,
+} = {}) {
+  const progress = (msg) => {
+    try {
+      onProgress?.(msg)
+    } catch {
+      /* ignore */
+    }
+  }
+  const urlBase = normalizeOpenaiBaseUrl(baseUrl)
+  const modelName = String(model || DEFAULT_OPENAI_MODEL).trim() || DEFAULT_OPENAI_MODEL
+  const key = resolveOpenaiApiKey(apiKey)
+  if (!key) {
+    throw new Error(
+      'API key required for OpenAI-compatible providers '
+      + '(Settings → AI, or VITE_OPENAI_API_KEY / VITE_GEMINI_API_KEY). '
+      + 'Paste the raw key only — no Bearer prefix.',
+    )
+  }
+  progress(`1/2 Contacting ${urlBase}…`)
+  progress(`2/2 Chat probe with ${modelName} (API key length ${key.length})…`)
+
+  const proxyBase = openaiSameOriginProxyBase(preset, urlBase)
+  const bases = proxyBase ? [proxyBase, urlBase] : [urlBase]
+  const headers = openaiRequestHeaders(key, urlBase)
+  const chatCtrl = new AbortController()
+  const onAbort = () => chatCtrl.abort()
+  if (signal) {
+    if (signal.aborted) chatCtrl.abort()
+    else signal.addEventListener('abort', onAbort, { once: true })
+  }
+  const timer = setTimeout(() => chatCtrl.abort(), timeoutMs)
+  let resp = null
+  let fetchBase = urlBase
+  let lastErr = null
+  try {
+    for (const base of bases) {
+      try {
+        const r = await fetch(`${base}/chat/completions`, {
+          method: 'POST',
+          headers,
+          signal: chatCtrl.signal,
+          body: JSON.stringify({
+            model: modelName,
+            stream: false,
+            messages: [{ role: 'user', content: 'Reply with exactly: OK' }],
+            max_tokens: 8,
+          }),
+        })
+        if (
+          proxyBase
+          && base === proxyBase
+          && r.status === 404
+          && (r.headers.get('content-type') || '').includes('text/html')
+        ) {
+          continue
+        }
+        resp = r
+        fetchBase = base
+        break
+      } catch (err) {
+        if (err?.name === 'AbortError') throw err
+        lastErr = err
+      }
+    }
+  } finally {
+    clearTimeout(timer)
+    if (signal) signal.removeEventListener('abort', onAbort)
+  }
+  if (!resp) {
+    if (lastErr?.name === 'AbortError') {
+      throw new Error(
+        `OpenAI-compatible chat probe timed out after ${Math.round(timeoutMs / 1000)}s.`,
+      )
+    }
+    throw openaiFetchReachError(urlBase, lastErr)
+  }
+  if (!resp.ok) {
+    const detail = (await resp.text().catch(() => '')).slice(0, 300)
+    const tip = openaiHttpErrorTip(resp.status, detail, urlBase)
+    throw new Error(
+      `OpenAI-compatible HTTP ${resp.status} at ${fetchBase}/chat/completions: `
+      + `${detail || resp.statusText}.${tip}`,
+    )
+  }
+  const data = await resp.json()
+  const reply = String(data?.choices?.[0]?.message?.content ?? '').trim()
+  const note = reply ? ` Probe reply: ${JSON.stringify(reply.slice(0, 40))}.` : ''
+  return `Connected to ${urlBase}. Model ${modelName} ready.${note}`
+}
+
+/**
+ * Verify the active AI provider.
+ * @param {object} opts
+ * @returns {Promise<string>}
+ */
+export async function aiTestConnection(opts = {}) {
+  if (normalizeAiProvider(opts.provider) === AI_PROVIDER_OPENAI) {
+    return openaiCompatibleTestConnection(opts)
+  }
+  return ollamaTestConnection(opts)
 }
 
 export async function ollamaListModels(baseUrl = DEFAULT_OLLAMA_URL, {

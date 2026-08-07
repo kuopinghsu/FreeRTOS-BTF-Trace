@@ -437,21 +437,23 @@ Use the right-panel **AI** tab after Analysis Findings exist. The assistant rece
 ② (Optional) Place cursors → Limit to cursor range
 ③ Toolbar Analysis / Statistics findings for that scope
 ④ AI tab → template or free-form Ask
-⑤ Context = Analysis Findings (+ span, cores, scope)
-⑥ Ollama /api/chat  →  reply (jump:TIME links → timeline)
-⑦ Open the Statistics section the reply names; verify on the timeline
+⑤ Context = Analysis Findings (+ span, cores, scope), or Trace Compare CSV for that template
+⑥ Provider: Ollama /api/chat  or  OpenAI-compatible /v1/chat/completions
+⑦ Reply (jump:TIME links → timeline)
+⑧ Open the Statistics section the reply names; verify on the timeline
 ```
 
 ### 7.1 One-time setup
 
 | Step | Desktop | Web |
 |------|---------|-----|
-| Install Ollama + model | `ollama serve` then `ollama pull phi4-mini:3.8b` | Same; for browser CORS use `OLLAMA_ORIGINS="*" ollama serve` |
-| Configure | **Settings → AI** (URL, model, reply language, optional API key) | Same |
+| Choose provider | **Settings → AI → Provider** (Ollama or OpenAI-compatible) | Same |
+| Ollama | `ollama serve` then `ollama pull phi4-mini:3.8b` | Same; CORS: `OLLAMA_ORIGINS="*" ollama serve` or use Vite |
+| OpenAI-compatible | Preset + API key + model | Same; use a known **Preset** under `npm run dev` / `preview` (Vite `/proxy/*`) |
 | Verify | **Test connection** | Same |
 | Show panel | **View → Show AI Assistant** / Display settings | Display → AI Assistant panel |
 
-Cloud models: local proxy (`minimax-m3:cloud` + `ollama signin`) or `https://ollama.com` + API key (model without `:cloud`).
+Ollama cloud: local proxy (`minimax-m3:cloud` + `ollama signin`) or `https://ollama.com` + API key (model without `:cloud`).
 
 ### 7.2 Recommended ask order
 
@@ -460,6 +462,7 @@ Match the [top-down ladder](#2-top-down-analysis-ladder). Prefer templates first
 | Order | Template / ask | Then verify in UI |
 |------:|----------------|-------------------|
 | 1 | **Analysis Findings** or **Triage findings** | Open each named Statistics section |
+| — | **Trace Compare** (2+ tabs; pick if 3+) | Trace Compare pages / Statistics on both builds |
 | 2 | **Tick health** | Trace Health (TICK); scope a busy window if TICKLESS |
 | 3 | **Core balance** | Core Utilisation → Concurrent Active / Switch Overhead |
 | 4 | **WCET / hot CPU** | Top Tasks → Execution Max; click Max to jump |
@@ -478,7 +481,7 @@ Match the [top-down ladder](#2-top-down-analysis-ladder). Prefer templates first
 |------|------------|
 | Full-trace triage | Leave **Limit to cursor range** off |
 | One suite phase (e.g. thrash window) | Place two cursors, enable **Limit to cursor range**, re-open Analysis if needed, then Ask |
-| Compare builds | Run Trace Compare first ([§5.2](#52-compare-two-builds)); AI still sees the *active* tab’s findings only |
+| Compare builds | **Trace Compare** template (2 tabs auto; 3+ pick dialog), or open Trace Compare UI ([§5.2](#52-compare-two-builds)) |
 
 Clear the log between unrelated questions (**Clear**). Use **Stop** if a probe hangs on first model load.
 
@@ -488,6 +491,27 @@ Clear the log between unrelated questions (**Clear**). Use **Stop** if a probe h
 - Demo / concatenated stress traces — scope to one phase before acting on advice.
 - Tick not GOOD / TICKLESS — ask about tick health, then re-check derived latency in a busy window.
 - Always open the Statistics section and timeline evidence; treat AI as a triage aid, not ground truth.
+
+### 7.5 Multi-source recommendation
+
+Use **Settings → AI → Provider** to switch in-app backends. Cross-check hard cases across providers (or paste findings into an external chat).
+
+| Role | Source | Use when |
+|------|--------|----------|
+| **Default in-app** | Local Ollama (`phi4-mini:3.8b` or larger) | Fast, private triage; iterate templates + `jump:TIME` |
+| **Stronger in-app** | OpenAI-compatible preset (ChatGPT / Grok / Gemini / DeepSeek) or Ollama Cloud | Better reasoning while keeping Ask + jump links |
+| **Second opinion** | Switch Provider/Preset and Ask the same template again | Where replies diverge — verify on the timeline |
+| **External paste** | Any other chat (Claude, etc.) | Export HTML / copy findings when the vendor is not OpenAI-compatible |
+| **Code / firmware angle** | Coding model + FreeRTOS sources | After BTFViewer names a task/ISR/lock; respect IP policy for cloud |
+
+**Practical loop**
+
+1. Scope findings → Ask with Ollama (**Triage findings** / ladder templates).
+2. Switch to an OpenAI-compatible preset (or another Ollama model) and Ask again.
+3. Where models agree → verify first on the timeline. Where they diverge → treat as open questions.
+4. Never accept a `jump:TIME` or WCET claim until you click it inside BTFViewer.
+
+**Privacy:** Prefer local Ollama for confidential traces. Cloud providers only if findings text is cleared to leave the machine — the viewer never sends the raw BTF stream, but finding text can still name tasks and timings.
 
 ---
 

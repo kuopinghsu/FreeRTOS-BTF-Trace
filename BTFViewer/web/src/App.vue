@@ -367,12 +367,20 @@
           <div v-else-if="rightPanelTab === 'ai'" class="panel-page panel-page-ai">
             <div class="panel-section flex-fill">
               <AiAssistantPanel
+                ref="aiPanelRef"
                 :ai-enabled="appSettings.aiEnabled !== false"
+                :ai-provider="appSettings.aiProvider"
                 :ollama-url="appSettings.ollamaUrl"
                 :ollama-model="appSettings.ollamaModel"
                 :ollama-api-key="appSettings.ollamaApiKey"
+                :openai-preset="appSettings.openaiPreset"
+                :openai-base-url="appSettings.openaiBaseUrl"
+                :openai-model="appSettings.openaiModel"
+                :openai-api-key="appSettings.openaiApiKey"
                 :response-language="appSettings.aiResponseLanguage"
                 :get-context="buildAiContext"
+                :get-loaded-tabs="listAiLoadedTabs"
+                :build-compare-context="buildAiCompareContext"
                 @open-settings="openSettingsDialog('ai')"
                 @update:response-language="onAiResponseLanguage"
                 @jump="onAiJump"
@@ -875,6 +883,7 @@ import { setTimelineLayout } from './utils/timelineLayout.js'
 import { traceIsMultiCore } from './utils/migrationAnalysis.js'
 import { collectTraceAnalysisFindings, formatAnalysisFindingsText } from './utils/workflowAnalysis.js'
 import { getStatsRange, scopeSuffix } from './utils/statsRange.js'
+import { buildAllCompareTables, buildCompareCsv } from './utils/traceCompare.js'
 import {
   cpuLoadPreferredPaneHeight, cpuLoadPaneDefaultH, cpuLoadPaneMaxH,
   CPU_LOAD_PANE_MIN_H,
@@ -918,6 +927,7 @@ const {
 } = useTraceTabs()
 const timelinePanelRef = ref(null)
 const findPanelRef = ref(null)
+const aiPanelRef = ref(null)
 const marksPanelRef = ref(null)
 const leftPaneRef = ref(null)
 const cpuLoadPanelRef = ref(null)
@@ -1885,6 +1895,43 @@ function buildAiContext() {
     cores: tr.coreNames?.length ?? tr.cores?.length ?? 0,
   }
 }
+
+function listAiLoadedTabs() {
+  return tabs.value
+    .filter(t => t?.trace)
+    .map(t => ({ id: t.id, name: t.name || `Tab ${t.id}` }))
+}
+
+function buildAiCompareContext(idA, idB) {
+  const tabA = tabs.value.find(t => t.id === idA)
+  const tabB = tabs.value.find(t => t.id === idB)
+  if (!tabA?.trace || !tabB?.trace) {
+    throw new Error('Both tabs must have a loaded trace')
+  }
+  const nameA = tabA.name || 'Trace A'
+  const nameB = tabB.name || 'Trace B'
+  const scopeEnabled = true
+  const tables = buildAllCompareTables(tabA.trace, tabB.trace, tabA, tabB, scopeEnabled)
+  let csvText = buildCompareCsv(nameA, nameB, scopeEnabled, tables)
+  if (csvText.length > 60000) {
+    csvText = `${csvText.slice(0, 60000)}\n… (truncated for AI context)`
+  }
+  return {
+    findingsText: (
+      `Trace Compare tables (CSV) for ${nameA} vs ${nameB}.\n` +
+      'Cursor scope per tab: yes (when 2+ cursors placed).\n\n' +
+      csvText
+    ),
+    scope: `Trace Compare: ${nameA} vs ${nameB}`,
+    span: '',
+    cores: '',
+  }
+}
+
+watch(
+  () => tabs.value.filter(t => t?.trace).map(t => t.id).join('|'),
+  () => { aiPanelRef.value?.refreshLoadedTabs?.() },
+)
 
 function onAiJump(t) {
   if (t == null || !Number.isFinite(Number(t))) return

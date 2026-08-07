@@ -10,12 +10,32 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const BUILDS_DIR = resolve(__dirname, '../builds')
 const RELEASE_HTML = 'btf_viewer.html'
 
-/** Same-origin proxy so the browser can reach local Ollama without CORS. */
-const ollamaProxy = {
+/** Same-origin proxies so the browser can reach local Ollama / cloud LLM APIs without CORS. */
+const llmProxies = {
   '/ollama': {
     target: process.env.OLLAMA_PROXY_TARGET || 'http://127.0.0.1:11434',
     changeOrigin: true,
     rewrite: (path) => path.replace(/^\/ollama/, ''),
+  },
+  '/proxy/openai': {
+    target: 'https://api.openai.com',
+    changeOrigin: true,
+    rewrite: (path) => path.replace(/^\/proxy\/openai/, ''),
+  },
+  '/proxy/xai': {
+    target: 'https://api.x.ai',
+    changeOrigin: true,
+    rewrite: (path) => path.replace(/^\/proxy\/xai/, ''),
+  },
+  '/proxy/gemini': {
+    target: 'https://generativelanguage.googleapis.com',
+    changeOrigin: true,
+    rewrite: (path) => path.replace(/^\/proxy\/gemini/, ''),
+  },
+  '/proxy/deepseek': {
+    target: 'https://api.deepseek.com',
+    changeOrigin: true,
+    rewrite: (path) => path.replace(/^\/proxy\/deepseek/, ''),
   },
 }
 
@@ -64,10 +84,10 @@ export default defineConfig({
     __BUILD_DATE__: JSON.stringify(new Date().toISOString().slice(0, 10)),
   },
   server: {
-    proxy: ollamaProxy,
+    proxy: llmProxies,
   },
   preview: {
-    proxy: ollamaProxy,
+    proxy: llmProxies,
   },
   build: {
     outDir: BUILDS_DIR,

@@ -15329,8 +15329,11 @@ class TimelineView(QGraphicsView):
 # ===========================================================================
 
 class OllamaCancelled(Exception):
-    """User stopped an in-flight Ollama request."""
+    """User stopped an in-flight AI request."""
 
+
+# Alias used by newer call sites; same exception.
+AiCancelled = OllamaCancelled
 AI_SYSTEM_PROMPT = (
     "You are an expert Real-Time Operating System (RTOS) and SMP trace analysis "
     "assistant for FreeRTOS BTF traces. Analyse the provided structured metrics "
@@ -15352,6 +15355,7 @@ AI_RESPONSE_LANGUAGES: Tuple[str, ...] = (
     "German",
     "French",
     "Spanish",
+    "Klingon (tlhIngan Hol)",
 )
 
 
@@ -15365,6 +15369,8 @@ def build_ai_system_prompt(
     )
 
 # (id, label, prompt) — keep in sync with web/src/utils/ollamaClient.js
+AI_COMPARE_TEMPLATE_ID = "compare"
+
 AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
     (
         "findings",
@@ -15373,6 +15379,14 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "state its severity, what it means for this RTOS/SMP system, and which "
         "Statistics section or timeline check to open next. If there are no "
         "findings, say so and suggest a default top-down inspection order.",
+    ),
+    (
+        AI_COMPARE_TEMPLATE_ID,
+        "Trace Compare",
+        "Compare Trace A vs Trace B using the Trace Compare tables in the "
+        "context. Highlight the largest deltas (CPU, migrations, latency, "
+        "tick health, sync). Say which side is worse for each concern and "
+        "which Statistics section or Trace Compare page to open next.",
     ),
     (
         "triage",
@@ -15430,6 +15444,70 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
 DEFAULT_OLLAMA_MODEL = "phi4-mini:3.8b"
 
+# Providers: ollama | openai_compatible
+AI_PROVIDER_OLLAMA = "ollama"
+AI_PROVIDER_OPENAI = "openai_compatible"
+DEFAULT_AI_PROVIDER = AI_PROVIDER_OLLAMA
+
+AI_PROVIDER_CHOICES: Tuple[Tuple[str, str], ...] = (
+    (AI_PROVIDER_OLLAMA, "Ollama"),
+    (AI_PROVIDER_OPENAI, "OpenAI-compatible"),
+)
+
+# OpenAI-compatible presets (id, label, base_url, example_model)
+AI_OPENAI_PRESET_CUSTOM = "custom"
+AI_OPENAI_PRESETS: Tuple[Tuple[str, str, str, str], ...] = (
+    (AI_OPENAI_PRESET_CUSTOM, "Custom", "", ""),
+    ("openai", "OpenAI (ChatGPT)", "https://api.openai.com/v1", "gpt-4o-mini"),
+    ("xai", "xAI (Grok)", "https://api.x.ai/v1", "grok-3-mini"),
+    (
+        "gemini",
+        "Google Gemini",
+        "https://generativelanguage.googleapis.com/v1beta/openai",
+        "gemini-3.1-flash-lite",
+    ),
+    ("deepseek", "DeepSeek", "https://api.deepseek.com/v1", "deepseek-chat"),
+)
+
+DEFAULT_OPENAI_PRESET = "openai"
+DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
+DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
+
+# Web Vite same-origin proxy path prefix per preset (Desktop ignores these).
+AI_OPENAI_PROXY_PATHS: Dict[str, str] = {
+    "openai": "/proxy/openai",
+    "xai": "/proxy/xai",
+    "gemini": "/proxy/gemini",
+    "deepseek": "/proxy/deepseek",
+}
+
+
+def normalize_ai_provider(provider: Optional[str]) -> str:
+    p = (provider or DEFAULT_AI_PROVIDER).strip().lower().replace("-", "_")
+    if p in ("openai", "openai_compat", "openai_compatible", "chatgpt"):
+        return AI_PROVIDER_OPENAI
+    return AI_PROVIDER_OLLAMA
+
+
+def openai_preset_info(preset_id: str) -> Tuple[str, str, str, str]:
+    """Return (id, label, base_url, example_model) for *preset_id*."""
+    want = (preset_id or AI_OPENAI_PRESET_CUSTOM).strip().lower()
+    for row in AI_OPENAI_PRESETS:
+        if row[0] == want:
+            return row
+    return AI_OPENAI_PRESETS[0]
+
+
+def apply_openai_preset(preset_id: str) -> Dict[str, str]:
+    """Defaults to apply when the user picks an OpenAI-compatible preset."""
+    _id, _label, base, model = openai_preset_info(preset_id)
+    out: Dict[str, str] = {"openai_preset": _id}
+    if base:
+        out["openai_base_url"] = base
+    if model:
+        out["openai_model"] = model
+    return out
+
 
 def normalize_ollama_url(url: str) -> str:
     u = (url or DEFAULT_OLLAMA_URL).strip().rstrip("/")
@@ -15437,6 +15515,85 @@ def normalize_ollama_url(url: str) -> str:
     if u.lower().endswith("/api"):
         u = u[:-4].rstrip("/")
     return u or DEFAULT_OLLAMA_URL
+
+
+def normalize_api_key(api_key: Optional[str] = None) -> str:
+    """Strip paste noise from an API key (quotes, Bearer prefix, non-ASCII junk).
+
+    Browser ``fetch()`` rejects header values with non-ISO-8859-1 code points, so
+    keep only printable ASCII (API keys are ASCII).
+    """
+    key = (api_key or "").strip()
+    if not key:
+        return ""
+    # Zero-width / BOM / NBSP from rich-text paste.
+    for ch in ("\ufeff", "\u200b", "\u200c", "\u200d", "\u00a0"):
+        key = key.replace(ch, "")
+    key = key.strip().strip("\"'").strip()
+    # Unicode smart quotes / CJK punctuation often sneak in from paste.
+    key = "".join(ch for ch in key if 0x20 <= ord(ch) <= 0x7E)
+    key = key.strip().strip("\"'").strip()
+    low = key.lower()
+    if low.startswith("bearer "):
+        key = key[7:].strip().strip("\"'").strip()
+    # Common placeholders left in the field by mistake.
+    if key.lower() in (
+        "gemini_api_key",
+        "your-api-key",
+        "your_api_key",
+        "api_key",
+        "openai_api_key",
+        "<api-key>",
+        "xxx",
+    ):
+        return ""
+    return key
+
+
+def normalize_openai_base_url(url: str) -> str:
+    """Normalize an OpenAI-compatible API root (…/v1 or vendor equivalent)."""
+    u = (url or DEFAULT_OPENAI_BASE_URL).strip().rstrip("/")
+    if not u:
+        return DEFAULT_OPENAI_BASE_URL
+    low = u.lower()
+    # Allow pasting the full chat completions URL.
+    for suffix in ("/chat/completions", "/completions"):
+        if low.endswith(suffix):
+            u = u[: -len(suffix)].rstrip("/")
+            low = u.lower()
+            break
+    # Bare api.openai.com → add /v1
+    if low in ("https://api.openai.com", "http://api.openai.com"):
+        u = u + "/v1"
+    elif low in ("https://api.x.ai", "http://api.x.ai"):
+        u = u + "/v1"
+    elif low in ("https://api.deepseek.com", "http://api.deepseek.com"):
+        u = u + "/v1"
+    return u
+
+
+def openai_request_headers(
+    api_key: Optional[str] = None,
+    *,
+    base_url: str = "",
+) -> Dict[str, str]:
+    """JSON + Bearer from *api_key*, ``OPENAI_API_KEY``, ``GEMINI_API_KEY``, or ``OLLAMA_API_KEY``.
+
+    Gemini OpenAI-compat (``…/v1beta/openai``) must use **only**
+    ``Authorization: Bearer`` — also sending ``x-goog-api-key`` causes HTTP 400
+    ("Please pass a valid API key" / "Multiple authentication credentials").
+    """
+    headers = {"Content-Type": "application/json"}
+    key = normalize_api_key(api_key)
+    if not key:
+        key = normalize_api_key(os.environ.get("OPENAI_API_KEY", ""))
+    if not key:
+        key = normalize_api_key(os.environ.get("GEMINI_API_KEY", ""))
+    if not key:
+        key = normalize_api_key(os.environ.get("OLLAMA_API_KEY", ""))
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    return headers
 
 
 def is_ollama_cloud_model(name: str) -> bool:
@@ -15474,13 +15631,34 @@ def resolve_ollama_chat_model(base_url: str, model: str) -> str:
 def ollama_request_headers(api_key: Optional[str] = None) -> Dict[str, str]:
     """JSON headers; add Bearer token from *api_key* or ``OLLAMA_API_KEY``."""
     headers = {"Content-Type": "application/json"}
-    key = (api_key or "").strip() or os.environ.get("OLLAMA_API_KEY", "").strip()
+    key = normalize_api_key(api_key)
+    if not key:
+        key = normalize_api_key(os.environ.get("OLLAMA_API_KEY", ""))
     if key:
         headers["Authorization"] = f"Bearer {key}"
     return headers
 
 
+def normalize_ai_context(ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Accept snake_case or camelCase context keys (Desktop / Web parity)."""
+    c = dict(ctx or {})
+    findings = c.get("findings_text")
+    if findings is None or findings == "":
+        findings = c.get("findingsText", "")
+    return {
+        "findings_text": findings or "",
+        "span": c.get("span", "") or "",
+        "cores": c.get("cores", ""),
+        "scope": c.get("scope", "") or "",
+        "metrics": c.get("metrics"),
+    }
+
+
 _JUMP_RE = re.compile(r"jump:([0-9]+(?:\.[0-9]+)?)")
+_MD_INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
+_MD_BOLD_RE = re.compile(r"(\*\*|__)(.+?)\1")
+_MD_ITALIC_RE = re.compile(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)|(?<!_)_(?!_)(.+?)(?<!_)_(?!_)")
+_MD_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 
 
 def extract_jump_times(text: str) -> List[float]:
@@ -15494,12 +15672,181 @@ def extract_jump_times(text: str) -> List[float]:
     return out
 
 
+def _md_inline_to_html_escaped(text: str) -> str:
+    """Escape text and apply inline markdown (code, bold, italic, links, jump:N)."""
+    placeholders: List[str] = []
+
+    def _stash(frag: str) -> str:
+        placeholders.append(frag)
+        return f"\x00MD{len(placeholders) - 1}\x00"
+
+    parts: List[Tuple[str, str]] = []
+    last = 0
+    src = text or ""
+    for m in _MD_INLINE_CODE_RE.finditer(src):
+        parts.append(("t", src[last:m.start()]))
+        parts.append(("c", m.group(1)))
+        last = m.end()
+    parts.append(("t", src[last:]))
+
+    out_chunks: List[str] = []
+    for kind, val in parts:
+        if kind == "c":
+            out_chunks.append(_stash(f"<code>{html.escape(val)}</code>"))
+            continue
+        seg = val
+        seglast = 0
+        buf: List[str] = []
+        for lm in _MD_LINK_RE.finditer(seg):
+            buf.append(html.escape(seg[seglast:lm.start()]))
+            label = html.escape(lm.group(1))
+            href = lm.group(2).strip()
+            low = href.lower()
+            if (
+                low.startswith("http://")
+                or low.startswith("https://")
+                or low.startswith("btfjump:")
+                or low.startswith("mailto:")
+            ):
+                buf.append(
+                    _stash(f'<a href="{html.escape(href, quote=True)}">{label}</a>')
+                )
+            else:
+                buf.append(html.escape(lm.group(0)))
+            seglast = lm.end()
+        buf.append(html.escape(seg[seglast:]))
+        chunk = "".join(buf)
+        chunk = _MD_BOLD_RE.sub(lambda m: f"<strong>{m.group(2)}</strong>", chunk)
+
+        def _ital(m: re.Match) -> str:
+            body = m.group(1) if m.group(1) is not None else m.group(2)
+            return f"<em>{body}</em>"
+
+        chunk = _MD_ITALIC_RE.sub(_ital, chunk)
+        chunk = _JUMP_RE.sub(
+            lambda m: _stash(
+                f'<a href="btfjump:{m.group(1)}" class="ai-jump">'
+                f"jump:{m.group(1)}</a>"
+            ),
+            chunk,
+        )
+        out_chunks.append(chunk)
+
+    result = "".join(out_chunks)
+    for i, frag in enumerate(placeholders):
+        result = result.replace(f"\x00MD{i}\x00", frag)
+    return result
+
+
+def markdown_to_safe_html(text: str) -> str:
+    """Convert a subset of Markdown to safe HTML (AI reply preview)."""
+    raw = (text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not raw:
+        return ""
+    lines = raw.split("\n")
+    out: List[str] = []
+    i = 0
+    n = len(lines)
+
+    def _flush_para(buf: List[str]) -> None:
+        if not buf:
+            return
+        body = "<br>".join(_md_inline_to_html_escaped(s.strip()) for s in buf)
+        out.append(f"<p>{body}</p>")
+        buf.clear()
+
+    para: List[str] = []
+    while i < n:
+        line = lines[i]
+        stripped = line.strip()
+
+        if stripped.startswith("```"):
+            _flush_para(para)
+            lang = stripped[3:].strip()
+            i += 1
+            code_lines: List[str] = []
+            while i < n and not lines[i].strip().startswith("```"):
+                code_lines.append(lines[i])
+                i += 1
+            if i < n:
+                i += 1
+            code_html = html.escape("\n".join(code_lines))
+            cls = f' class="language-{html.escape(lang)}"' if lang else ""
+            out.append(f"<pre><code{cls}>{code_html}</code></pre>")
+            continue
+
+        if not stripped:
+            _flush_para(para)
+            i += 1
+            continue
+
+        if re.fullmatch(r"(-{3,}|\*{3,}|_{3,})", stripped):
+            _flush_para(para)
+            out.append("<hr>")
+            i += 1
+            continue
+
+        hm = re.match(r"^(#{1,4})\s+(.+)$", stripped)
+        if hm:
+            _flush_para(para)
+            level = len(hm.group(1))
+            out.append(
+                f"<h{level}>{_md_inline_to_html_escaped(hm.group(2).strip())}</h{level}>"
+            )
+            i += 1
+            continue
+
+        if stripped.startswith(">"):
+            _flush_para(para)
+            qlines: List[str] = []
+            while i < n and lines[i].strip().startswith(">"):
+                qlines.append(re.sub(r"^>\s?", "", lines[i].strip()))
+                i += 1
+            out.append(
+                f"<blockquote>{_md_inline_to_html_escaped(' '.join(qlines))}</blockquote>"
+            )
+            continue
+
+        if re.match(r"^[-*+]\s+", stripped) or re.match(r"^\d+\.\s+", stripped):
+            _flush_para(para)
+            ordered = bool(re.match(r"^\d+\.\s+", stripped))
+            tag = "ol" if ordered else "ul"
+            items: List[str] = []
+            while i < n:
+                s = lines[i].strip()
+                if ordered:
+                    m = re.match(r"^\d+\.\s+(.*)$", s)
+                else:
+                    m = re.match(r"^[-*+]\s+(.*)$", s)
+                if not m:
+                    break
+                items.append(f"<li>{_md_inline_to_html_escaped(m.group(1))}</li>")
+                i += 1
+            out.append(f"<{tag}>{''.join(items)}</{tag}>")
+            continue
+
+        para.append(stripped)
+        i += 1
+
+    _flush_para(para)
+    return "".join(out)
+
+
 def _format_ai_log_html(role: str, text: str) -> str:
-    """HTML for the conversation log; ``jump:N`` becomes clickable ``btfjump:`` links."""
+    """HTML for the conversation log; assistant replies render as Markdown."""
     prefix = "You" if role == "user" else "Assistant"
-    esc = html.escape((text or "").strip())
+    body_text = (text or "").strip()
+    if role == "assistant":
+        body = markdown_to_safe_html(body_text)
+        if not body:
+            body = "<p></p>"
+        return f"<div class='ai-msg'><p><b>{prefix}:</b></p>{body}</div>"
+    esc = html.escape(body_text)
     linked = _JUMP_RE.sub(
-        lambda m: f'<a href="btfjump:{m.group(1)}">jump:{m.group(1)}</a>',
+        lambda m: (
+            f'<a href="btfjump:{m.group(1)}" class="ai-jump">'
+            f"jump:{m.group(1)}</a>"
+        ),
         esc,
     )
     body = linked.replace("\n", "<br>")
@@ -15687,6 +16034,367 @@ def ollama_chat(
     if isinstance(body, dict) and body.get("response"):
         return str(body["response"]).strip()
     raise RuntimeError(f"Unexpected Ollama response: {body!r}"[:500])
+
+
+def _build_chat_messages(
+    query: str,
+    *,
+    findings_text: str = "",
+    metrics: Optional[Dict[str, Any]] = None,
+    span: str = "",
+    cores: Any = "",
+    scope: str = "",
+    response_language: str = DEFAULT_AI_RESPONSE_LANGUAGE,
+    history: Optional[Sequence[Dict[str, str]]] = None,
+) -> List[Dict[str, str]]:
+    messages: List[Dict[str, str]] = [
+        {"role": "system", "content": build_ai_system_prompt(response_language)},
+    ]
+    if history:
+        for m in history:
+            role = m.get("role")
+            content = m.get("content")
+            if role in ("user", "assistant") and content:
+                messages.append({"role": role, "content": str(content)})
+    messages.append({
+        "role": "user",
+        "content": build_ai_user_message(
+            query,
+            findings_text=findings_text,
+            metrics=metrics,
+            span=span,
+            cores=cores,
+            scope=scope,
+        ),
+    })
+    return messages
+
+
+def _read_http_body(
+    resp: Any,
+    *,
+    cancel_event: Optional[threading.Event] = None,
+) -> bytes:
+    chunks: List[bytes] = []
+    while True:
+        if cancel_event is not None and cancel_event.is_set():
+            raise OllamaCancelled("Stopped")
+        try:
+            chunk = resp.read(16384)
+        except Exception as exc:
+            if cancel_event is not None and cancel_event.is_set():
+                raise OllamaCancelled("Stopped") from exc
+            raise
+        if not chunk:
+            break
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _openai_http_error_tip(code: int, detail: str = "", *, base_url: str = "") -> str:
+    """Short remediation hint for OpenAI-compatible HTTP errors."""
+    low = (detail or "").lower()
+    host = (base_url or "").lower()
+    if code in (401, 403):
+        return " Check API key (Settings → AI, or OPENAI_API_KEY / GEMINI_API_KEY)."
+    if code == 400 and (
+        "valid api key" in low or "api key" in low and "invalid" in low
+        or "multiple authentication" in low
+    ):
+        tip = (
+            " Paste a Gemini key from https://aistudio.google.com/apikey into "
+            "Settings → AI → API key (OpenAI-compatible), without a Bearer prefix. "
+            "Click OK to save, then Test again."
+        )
+        if "generativelanguage" in host or "gemini" in host:
+            tip += (
+                " Use Bearer-only auth (AI Studio key). If the key starts with "
+                "AQ., create a new key in AI Studio (non-AQ format) — Google's "
+                "OpenAI-compat endpoint still rejects some AQ. keys. "
+                "Do not use an OpenAI sk- key."
+            )
+        return tip
+    if code == 429:
+        tip = (
+            " Rate/quota limit (RESOURCE_EXHAUSTED). Wait and retry, check "
+            "https://aistudio.google.com/rate-limit (Gemini) or your provider dashboard."
+        )
+        if "gemini" in host or "generativelanguage" in host or "gemini" in low:
+            tip += (
+                " Try model gemini-3.1-flash-lite (or gemini-3.6-flash). "
+                "Older gemini-2.0-* / gemini-2.5-* free quota is often 0 or "
+                "closed to new users — enable billing or switch model/project."
+            )
+        return tip
+    if code == 404:
+        tip = " Check Base URL and model name for this provider."
+        if "no longer available" in low or "not found" in low:
+            tip += (
+                " For Gemini, try gemini-3.1-flash-lite or gemini-3.6-flash "
+                "(gemini-2.5-* is closed to many new accounts)."
+            )
+        return tip
+    return ""
+
+
+def openai_compatible_chat(
+    query: str,
+    *,
+    findings_text: str = "",
+    metrics: Optional[Dict[str, Any]] = None,
+    span: str = "",
+    cores: Any = "",
+    scope: str = "",
+    base_url: str = DEFAULT_OPENAI_BASE_URL,
+    model: str = DEFAULT_OPENAI_MODEL,
+    api_key: str = "",
+    response_language: str = DEFAULT_AI_RESPONSE_LANGUAGE,
+    timeout_s: float = 120.0,
+    history: Optional[Sequence[Dict[str, str]]] = None,
+    cancel_event: Optional[threading.Event] = None,
+    on_response: Optional[Callable[[Any], None]] = None,
+) -> str:
+    """Call OpenAI-compatible ``/chat/completions`` (non-streaming)."""
+    url_base = normalize_openai_base_url(base_url)
+    url = url_base + "/chat/completions"
+    chat_model = (model or DEFAULT_OPENAI_MODEL).strip() or DEFAULT_OPENAI_MODEL
+    if cancel_event is not None and cancel_event.is_set():
+        raise OllamaCancelled("Stopped")
+    messages = _build_chat_messages(
+        query,
+        findings_text=findings_text,
+        metrics=metrics,
+        span=span,
+        cores=cores,
+        scope=scope,
+        response_language=response_language,
+        history=history,
+    )
+    payload = json.dumps({
+        "model": chat_model,
+        "messages": messages,
+        "stream": False,
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers=openai_request_headers(api_key, base_url=url_base),
+        method="POST",
+    )
+    try:
+        resp = urllib.request.urlopen(req, timeout=timeout_s)
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.read().decode("utf-8", errors="replace")[:400]
+        except Exception:
+            pass
+        tip = _openai_http_error_tip(exc.code, detail, base_url=url_base)
+        raise RuntimeError(
+            f"OpenAI-compatible HTTP {exc.code} at {url}: "
+            f"{detail or exc.reason}.{tip}"
+        ) from exc
+    except urllib.error.URLError as exc:
+        if cancel_event is not None and cancel_event.is_set():
+            raise OllamaCancelled("Stopped") from exc
+        raise RuntimeError(
+            f"Cannot reach OpenAI-compatible API at {url}.\n{exc.reason}"
+        ) from exc
+    except TimeoutError as exc:
+        raise RuntimeError(
+            f"OpenAI-compatible request timed out after {timeout_s:.0f}s ({url})"
+        ) from exc
+
+    if on_response is not None:
+        try:
+            on_response(resp)
+        except Exception:
+            pass
+    try:
+        if cancel_event is not None and cancel_event.is_set():
+            raise OllamaCancelled("Stopped")
+        raw = _read_http_body(resp, cancel_event=cancel_event).decode("utf-8")
+        body = json.loads(raw)
+    finally:
+        try:
+            resp.close()
+        except Exception:
+            pass
+        if on_response is not None:
+            try:
+                on_response(None)
+            except Exception:
+                pass
+
+    choices = body.get("choices") if isinstance(body, dict) else None
+    if isinstance(choices, list) and choices:
+        msg = choices[0].get("message") if isinstance(choices[0], dict) else None
+        if isinstance(msg, dict) and msg.get("content"):
+            return str(msg["content"]).strip()
+    raise RuntimeError(f"Unexpected OpenAI-compatible response: {body!r}"[:500])
+
+
+def ai_chat(
+    query: str,
+    *,
+    provider: str = DEFAULT_AI_PROVIDER,
+    findings_text: str = "",
+    metrics: Optional[Dict[str, Any]] = None,
+    span: str = "",
+    cores: Any = "",
+    scope: str = "",
+    base_url: str = "",
+    model: str = "",
+    api_key: str = "",
+    response_language: str = DEFAULT_AI_RESPONSE_LANGUAGE,
+    timeout_s: float = 120.0,
+    history: Optional[Sequence[Dict[str, str]]] = None,
+    cancel_event: Optional[threading.Event] = None,
+    on_response: Optional[Callable[[Any], None]] = None,
+) -> str:
+    """Dispatch to Ollama or OpenAI-compatible chat."""
+    prov = normalize_ai_provider(provider)
+    if prov == AI_PROVIDER_OPENAI:
+        return openai_compatible_chat(
+            query,
+            findings_text=findings_text,
+            metrics=metrics,
+            span=span,
+            cores=cores,
+            scope=scope,
+            base_url=base_url or DEFAULT_OPENAI_BASE_URL,
+            model=model or DEFAULT_OPENAI_MODEL,
+            api_key=api_key,
+            response_language=response_language,
+            timeout_s=timeout_s,
+            history=history,
+            cancel_event=cancel_event,
+            on_response=on_response,
+        )
+    return ollama_chat(
+        query,
+        findings_text=findings_text,
+        metrics=metrics,
+        span=span,
+        cores=cores,
+        scope=scope,
+        base_url=base_url or DEFAULT_OLLAMA_URL,
+        model=model or DEFAULT_OLLAMA_MODEL,
+        api_key=api_key,
+        response_language=response_language,
+        timeout_s=timeout_s,
+        history=history,
+        cancel_event=cancel_event,
+        on_response=on_response,
+    )
+
+
+def openai_compatible_test_connection(
+    base_url: str = DEFAULT_OPENAI_BASE_URL,
+    model: str = DEFAULT_OPENAI_MODEL,
+    *,
+    api_key: str = "",
+    timeout_s: float = 60.0,
+    on_progress: Optional[Callable[[str], None]] = None,
+) -> str:
+    """Tiny chat probe against an OpenAI-compatible endpoint."""
+    def _progress(msg: str) -> None:
+        if on_progress is not None:
+            try:
+                on_progress(msg)
+            except Exception:
+                pass
+
+    url_base = normalize_openai_base_url(base_url)
+    model_name = (model or DEFAULT_OPENAI_MODEL).strip() or DEFAULT_OPENAI_MODEL
+    key = normalize_api_key(api_key)
+    if not key:
+        key = normalize_api_key(os.environ.get("OPENAI_API_KEY", ""))
+    if not key:
+        key = normalize_api_key(os.environ.get("GEMINI_API_KEY", ""))
+    if not key:
+        key = normalize_api_key(os.environ.get("OLLAMA_API_KEY", ""))
+    if not key:
+        raise RuntimeError(
+            "API key required for OpenAI-compatible providers "
+            "(Settings → AI → API key, or OPENAI_API_KEY / GEMINI_API_KEY). "
+            "Paste the raw key only — no Bearer prefix."
+        )
+    chat_url = url_base + "/chat/completions"
+    _progress(f"1/2 Contacting {url_base}…")
+    _progress(
+        f"2/2 Chat probe with {model_name} "
+        f"(API key length {len(key)})…"
+    )
+    payload = json.dumps({
+        "model": model_name,
+        "stream": False,
+        "messages": [{"role": "user", "content": "Reply with exactly: OK"}],
+        "max_tokens": 8,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        chat_url,
+        data=payload,
+        headers=openai_request_headers(key, base_url=url_base),
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.read().decode("utf-8", errors="replace")[:300]
+        except Exception:
+            pass
+        tip = _openai_http_error_tip(exc.code, detail, base_url=url_base)
+        raise RuntimeError(
+            f"OpenAI-compatible HTTP {exc.code} at {chat_url}: "
+            f"{detail or exc.reason}.{tip}"
+        ) from exc
+    except Exception as exc:
+        raise RuntimeError(
+            f"OpenAI-compatible chat probe failed at {chat_url}: {exc}"
+        ) from exc
+
+    reply = ""
+    choices = body.get("choices") if isinstance(body, dict) else None
+    if isinstance(choices, list) and choices:
+        msg = choices[0].get("message") if isinstance(choices[0], dict) else None
+        if isinstance(msg, dict):
+            reply = str(msg.get("content") or "").strip()
+    note = f" Probe reply: {reply[:40]!r}." if reply else ""
+    return f"Connected to {url_base}. Model {model_name} ready.{note}"
+
+
+def ai_test_connection(
+    *,
+    provider: str = DEFAULT_AI_PROVIDER,
+    base_url: str = "",
+    model: str = "",
+    api_key: str = "",
+    timeout_s: float = 60.0,
+    probe_chat: bool = True,
+    on_progress: Optional[Callable[[str], None]] = None,
+) -> str:
+    """Verify the active AI provider (Ollama or OpenAI-compatible)."""
+    if normalize_ai_provider(provider) == AI_PROVIDER_OPENAI:
+        return openai_compatible_test_connection(
+            base_url or DEFAULT_OPENAI_BASE_URL,
+            model or DEFAULT_OPENAI_MODEL,
+            api_key=api_key,
+            timeout_s=timeout_s,
+            on_progress=on_progress,
+        )
+    return ollama_test_connection(
+        base_url or DEFAULT_OLLAMA_URL,
+        model or DEFAULT_OLLAMA_MODEL,
+        api_key=api_key,
+        timeout_s=timeout_s,
+        probe_chat=probe_chat,
+        on_progress=on_progress,
+    )
 
 
 def ollama_list_models(
@@ -15884,8 +16592,17 @@ def create_ai_assistant_panel(
     on_open_settings: Optional[Callable[[], None]] = None,
     on_save_settings: Optional[Callable[[Dict[str, str]], None]] = None,
     on_jump: Optional[Callable[[float], None]] = None,
+    get_loaded_tabs: Optional[Callable[[], List[Dict[str, Any]]]] = None,
+    build_compare_context: Optional[
+        Callable[[int, int], Dict[str, Any]]
+    ] = None,
 ):
-    """Build the right-panel AI chat widget (requires Qt bindings)."""
+    """Build the right-panel AI chat widget (requires Qt bindings).
+
+    *get_loaded_tabs*: ``[{"index": int, "name": str}, ...]`` for Trace Compare.
+    *build_compare_context*: ``(idx_a, idx_b) ->`` context dict like *get_context*
+    with Trace Compare CSV in ``findings_text``.
+    """
 
     class _AiLanguageDialog(QDialog):
         def __init__(self, current: str, parent_w=None) -> None:
@@ -15919,8 +16636,46 @@ def create_ai_assistant_panel(
         def selected_language(self) -> str:
             return self._combo.currentText().strip() or DEFAULT_AI_RESPONSE_LANGUAGE
 
+    class _AiComparePickDialog(QDialog):
+        """Choose two loaded tabs for the Trace Compare AI template."""
+
+        def __init__(self, tabs: List[Dict[str, Any]], parent_w=None) -> None:
+            super().__init__(parent_w)
+            self.setWindowTitle("AI Trace Compare")
+            self.setModal(True)
+            self.setMinimumWidth(420)
+            lay = QVBoxLayout(self)
+            lay.addWidget(QLabel("Choose two open traces to compare:"))
+            row = QHBoxLayout()
+            row.addWidget(QLabel("Trace A:"))
+            self._combo_a = QComboBox()
+            row.addWidget(self._combo_a, 1)
+            row.addWidget(QLabel("Trace B:"))
+            self._combo_b = QComboBox()
+            row.addWidget(self._combo_b, 1)
+            lay.addLayout(row)
+            for t in tabs:
+                label = str(t.get("name") or f"Tab {t.get('index', '?')}")
+                idx = int(t.get("index", 0))
+                self._combo_a.addItem(label, idx)
+                self._combo_b.addItem(label, idx)
+            if len(tabs) >= 2:
+                self._combo_b.setCurrentIndex(min(1, len(tabs) - 1))
+            buttons = QDialogButtonBox(
+                QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+            )
+            buttons.accepted.connect(self.accept)
+            buttons.rejected.connect(self.reject)
+            lay.addWidget(buttons)
+
+        def selected_indices(self) -> Tuple[int, int]:
+            return (
+                int(self._combo_a.currentData()),
+                int(self._combo_b.currentData()),
+            )
+
     class _OllamaWorker(QObject):
-        """Runs ollama_chat on a plain Python thread; emits to the GUI thread.
+        """Runs ai_chat on a plain Python thread; emits to the GUI thread.
 
         Avoids QThread + moveToThread + deleteLater, which can SIGSEGV in
         PySide when DeferredDelete runs on the worker thread.
@@ -15952,11 +16707,11 @@ def create_ai_assistant_panel(
                 self._resp = resp
 
         def start(self) -> None:
-            threading.Thread(target=self._run, name="ollama-chat", daemon=True).start()
+            threading.Thread(target=self._run, name="ai-chat", daemon=True).start()
 
         def _run(self) -> None:
             try:
-                text = ollama_chat(
+                text = ai_chat(
                     **self._kwargs,
                     cancel_event=self._cancel,
                     on_response=self._set_resp,
@@ -16057,8 +16812,9 @@ def create_ai_assistant_panel(
             mid_lay.setSpacing(6)
 
             hint = QLabel(
-                "Uses Analysis Findings for the current Statistics scope. "
-                "Local or cloud Ollama."
+                "Uses Analysis Findings for the current Statistics scope "
+                "(Trace Compare template uses compare CSV). "
+                "Configure provider in Settings → AI."
             )
             hint.setWordWrap(True)
             hint.setStyleSheet("color:#999;font-size:11px;")
@@ -16069,13 +16825,20 @@ def create_ai_assistant_panel(
             mid_lay.addWidget(tpl_label)
 
             self._template_btns: List[QPushButton] = []
+            self._compare_btn: Optional[QPushButton] = None
             for _tid, label, prompt in AI_TEMPLATE_QUESTIONS:
                 btn = QPushButton(label)
                 btn.setToolTip(prompt)
                 btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-                btn.clicked.connect(lambda _=False, p=prompt: self._use_template(p))
+                btn.clicked.connect(
+                    lambda _=False, t=_tid, p=prompt: self._use_template(t, p)
+                )
                 mid_lay.addWidget(btn)
                 self._template_btns.append(btn)
+                if _tid == AI_COMPARE_TEMPLATE_ID:
+                    self._compare_btn = btn
+
+            self.refresh_template_availability()
 
             self._log = QTextBrowser()
             self._log.setReadOnly(True)
@@ -16083,6 +16846,21 @@ def create_ai_assistant_panel(
             self._log.setOpenLinks(False)
             self._log.setPlaceholderText("Conversation appears here…")
             self._log.setMinimumHeight(100)
+            self._log.document().setDefaultStyleSheet(
+                "h1,h2,h3,h4{margin:8px 0 4px;font-size:13px;}"
+                "h1{font-size:15px;}h2{font-size:14px;}"
+                "p{margin:4px 0;}"
+                "ul,ol{margin:4px 0 4px 18px;padding:0;}"
+                "li{margin:2px 0;}"
+                "pre{background:#1a2230;border:1px solid #3a4658;border-radius:4px;"
+                "padding:8px;margin:6px 0;white-space:pre-wrap;}"
+                "code{font-family:Menlo,Consolas,Monaco,'Courier New',monospace;font-size:11px;}"
+                "p code,li code{background:rgba(127,127,127,0.18);padding:1px 4px;border-radius:3px;}"
+                "blockquote{margin:6px 0;padding:4px 10px;border-left:3px solid #5b9bd5;"
+                "color:#a8b4c4;}"
+                "hr{border:none;border-top:1px solid #3a4658;margin:8px 0;}"
+                "a{color:#5b9bd5;}"
+            )
             self._log.anchorClicked.connect(self._on_jump_link)
             mid_lay.addWidget(self._log, 1)
 
@@ -16149,7 +16927,7 @@ def create_ai_assistant_panel(
             self._status.setText("")
 
         def stop_query(self) -> None:
-            """Abort the current Ollama request if one is running."""
+            """Abort the current AI request if one is running."""
             if not self._busy:
                 return
             self._status.setText("Stopping…")
@@ -16157,28 +16935,123 @@ def create_ai_assistant_panel(
             if worker is not None:
                 worker.cancel()
 
+        def _ai_is_enabled(self) -> bool:
+            cfg = self._settings_dict()
+            return str(cfg.get("enabled", "true")).lower() not in (
+                "0", "false", "no", "off",
+            )
+
         def _set_busy(self, busy: bool) -> None:
             self._busy = busy
-            self._send_btn.setEnabled(not busy)
+            enabled = self._ai_is_enabled()
+            self._send_btn.setEnabled((not busy) and enabled)
             self._stop_btn.setEnabled(busy)
-            self._input.setReadOnly(busy)
+            self._input.setReadOnly(busy or (not enabled))
             for btn in self._template_btns:
-                btn.setEnabled(not busy)
+                btn.setEnabled((not busy) and enabled)
+            self.refresh_template_availability()
+            if (not enabled) and (not busy):
+                self._status.setText("AI is disabled in Settings → AI.")
 
-        def _use_template(self, prompt: str) -> None:
+        def refresh_enabled_state(self) -> None:
+            """Re-apply enable/disable after Settings → AI changes."""
+            self._set_busy(self._busy)
+
+        def _loaded_tabs(self) -> List[Dict[str, Any]]:
+            if not get_loaded_tabs:
+                return []
+            try:
+                tabs = list(get_loaded_tabs() or [])
+            except Exception:
+                return []
+            out: List[Dict[str, Any]] = []
+            for t in tabs:
+                if not isinstance(t, dict):
+                    continue
+                if t.get("index") is None:
+                    continue
+                out.append(t)
+            return out
+
+        def refresh_template_availability(self) -> None:
+            """Enable Trace Compare only when 2+ loaded tabs exist."""
+            if self._compare_btn is None:
+                return
+            n = len(self._loaded_tabs())
+            prompt = next(
+                (p for tid, _lab, p in AI_TEMPLATE_QUESTIONS if tid == AI_COMPARE_TEMPLATE_ID),
+                "Trace Compare",
+            )
+            if self._busy or not self._ai_is_enabled():
+                self._compare_btn.setEnabled(False)
+                return
+            if n < 2:
+                self._compare_btn.setEnabled(False)
+                self._compare_btn.setToolTip(
+                    "Open at least two BTF tabs to use Trace Compare."
+                )
+            else:
+                self._compare_btn.setEnabled(True)
+                self._compare_btn.setToolTip(prompt)
+
+        def showEvent(self, event) -> None:  # noqa: N802
+            super().showEvent(event)
+            self.refresh_enabled_state()
+
+        def _use_template(self, template_id: str, prompt: str) -> None:
             if self._busy:
+                return
+            if template_id == AI_COMPARE_TEMPLATE_ID:
+                self._run_compare_template(prompt)
                 return
             self._input.setPlainText(prompt)
             self.send_current()
+
+        def _run_compare_template(self, prompt: str) -> None:
+            tabs = self._loaded_tabs()
+            if len(tabs) < 2:
+                self._status.setText("Open at least two BTF tabs to compare.")
+                self.refresh_template_availability()
+                return
+            if len(tabs) == 2:
+                idx_a = int(tabs[0]["index"])
+                idx_b = int(tabs[1]["index"])
+            else:
+                dlg = _AiComparePickDialog(tabs, self)
+                if dlg.exec() != QDialog.DialogCode.Accepted:
+                    return
+                idx_a, idx_b = dlg.selected_indices()
+                if idx_a == idx_b:
+                    self._status.setText("Choose two different traces.")
+                    return
+            if not build_compare_context:
+                self._status.setText("Trace Compare is not available.")
+                return
+            try:
+                ctx = dict(build_compare_context(idx_a, idx_b) or {})
+            except Exception as exc:
+                self._status.setText(f"Compare context error: {exc}")
+                return
+            ctx = normalize_ai_context(ctx)
+            if not (ctx.get("findings_text") or "").strip():
+                self._status.setText("Could not build Trace Compare tables.")
+                return
+            self._input.clear()
+            self._send_query(prompt, ctx)
 
         def _settings_dict(self) -> Dict[str, str]:
             if get_settings:
                 return dict(get_settings() or {})
             return {
                 "enabled": "true",
+                "provider": DEFAULT_AI_PROVIDER,
                 "ollama_url": DEFAULT_OLLAMA_URL,
                 "ollama_model": DEFAULT_OLLAMA_MODEL,
                 "ollama_api_key": "",
+                "openai_preset": DEFAULT_OPENAI_PRESET,
+                "openai_base_url": DEFAULT_OPENAI_BASE_URL,
+                "openai_model": DEFAULT_OPENAI_MODEL,
+                "openai_api_key": "",
                 "response_language": DEFAULT_AI_RESPONSE_LANGUAGE,
             }
 
@@ -16219,26 +17092,51 @@ def create_ai_assistant_panel(
             ctx: Dict[str, Any] = {}
             if get_context:
                 try:
-                    ctx = dict(get_context() or {})
+                    ctx = normalize_ai_context(dict(get_context() or {}))
                 except Exception as exc:
                     self._status.setText(f"Context error: {exc}")
                     return
 
-            self._append("user", query)
             self._input.clear()
+            self._send_query(query, ctx)
+
+        def _send_query(self, query: str, ctx: Dict[str, Any]) -> None:
+            cfg = self._settings_dict()
+            if str(cfg.get("enabled", "true")).lower() in ("0", "false", "no", "off"):
+                self._status.setText("AI is disabled in Settings → AI.")
+                return
+
+            ctx = normalize_ai_context(ctx)
+            self._append("user", query)
             self._set_busy(True)
-            self._status.setText("Waiting for Ollama…")
+            provider = normalize_ai_provider(cfg.get("provider", DEFAULT_AI_PROVIDER))
+            waiting = (
+                "Waiting for OpenAI-compatible API…"
+                if provider == AI_PROVIDER_OPENAI
+                else "Waiting for Ollama…"
+            )
+            self._status.setText(waiting)
+
+            if provider == AI_PROVIDER_OPENAI:
+                base_url = cfg.get("openai_base_url", DEFAULT_OPENAI_BASE_URL)
+                model = cfg.get("openai_model", DEFAULT_OPENAI_MODEL)
+                api_key = cfg.get("openai_api_key", "")
+            else:
+                base_url = cfg.get("ollama_url", DEFAULT_OLLAMA_URL)
+                model = cfg.get("ollama_model", DEFAULT_OLLAMA_MODEL)
+                api_key = cfg.get("ollama_api_key", "")
 
             kwargs = {
                 "query": query,
+                "provider": provider,
                 "findings_text": ctx.get("findings_text", ""),
                 "metrics": ctx.get("metrics"),
                 "span": ctx.get("span", ""),
                 "cores": ctx.get("cores", ""),
                 "scope": ctx.get("scope", ""),
-                "base_url": cfg.get("ollama_url", DEFAULT_OLLAMA_URL),
-                "model": cfg.get("ollama_model", DEFAULT_OLLAMA_MODEL),
-                "api_key": cfg.get("ollama_api_key", ""),
+                "base_url": base_url,
+                "model": model,
+                "api_key": api_key,
                 "response_language": cfg.get(
                     "response_language", DEFAULT_AI_RESPONSE_LANGUAGE
                 ),
@@ -16269,7 +17167,7 @@ def create_ai_assistant_panel(
 # Main Window
 # ===========================================================================
 
-class _OllamaTestWorker(QObject):
+class _AiTestWorker(QObject):
     """Background worker for Settings → AI → Test connection.
 
     Lives on the GUI thread; HTTP work runs in a plain Python thread so we
@@ -16281,21 +17179,29 @@ class _OllamaTestWorker(QObject):
     failed = Signal(str)
 
     def __init__(
-        self, parent: QObject, base_url: str, model_name: str, api_key: str = ""
+        self,
+        parent: QObject,
+        *,
+        provider: str,
+        base_url: str,
+        model_name: str,
+        api_key: str = "",
     ) -> None:
         super().__init__(parent)
+        self._provider = provider
         self._base_url = base_url
         self._model = model_name
         self._api_key = api_key
 
     def start(self) -> None:
-        threading.Thread(target=self._run, name="ollama-test", daemon=True).start()
+        threading.Thread(target=self._run, name="ai-test", daemon=True).start()
 
     def _run(self) -> None:
         try:
-            msg = ollama_test_connection(
-                self._base_url,
-                self._model,
+            msg = ai_test_connection(
+                provider=self._provider,
+                base_url=self._base_url,
+                model=self._model,
                 api_key=self._api_key,
                 on_progress=lambda s: self.progress.emit(s),
             )
@@ -20604,7 +21510,7 @@ def _load_balance_gauge_svg(metrics: dict, *, width: int = 300, dark: bool = Fal
         f'<rect width="100%" height="100%" rx="8" fill="#F7F8FA" stroke="{card_stroke}"/>'
         f"{left}{right}"
         f'<text x="{view_w / 2}" y="{view_h - 8}" text-anchor="middle" fill="#6A7388" '
-        f'font-family="ui-monospace,monospace" font-size="9">'
+        f'font-family="Menlo,Consolas,Monaco,monospace" font-size="9">'
         f"G={gini:.3f} · Score=100{times}(1{minus}Gini)</text>"
         f"{chip}</svg>"
     )
@@ -26329,15 +27235,20 @@ class _RcSettings:
         },
         "ai": {
             "enabled": "true",
+            "provider": DEFAULT_AI_PROVIDER,
             "ollama_url": DEFAULT_OLLAMA_URL,
             "ollama_model": DEFAULT_OLLAMA_MODEL,
             "ollama_api_key": "",
+            "openai_preset": DEFAULT_OPENAI_PRESET,
+            "openai_base_url": DEFAULT_OPENAI_BASE_URL,
+            "openai_model": DEFAULT_OPENAI_MODEL,
+            "openai_api_key": "",
             "response_language": DEFAULT_AI_RESPONSE_LANGUAGE,
         },
     }
 
     def __init__(self) -> None:
-        self._cfg = configparser.ConfigParser()
+        self._cfg = configparser.ConfigParser(interpolation=None)
         self._dirty = False
         self._last_error: str = ""
         # Seed every section/key with the compiled defaults so callers always
@@ -26813,15 +27724,20 @@ class _SettingsDialog(QDialog):
                  task_deadlines_text: str = "",
                  time_decimals: int = 3,
                  ai_enabled: bool = True,
+                 ai_provider: str = DEFAULT_AI_PROVIDER,
                  ollama_url: str = DEFAULT_OLLAMA_URL,
                  ollama_model: str = DEFAULT_OLLAMA_MODEL,
                  ollama_api_key: str = "",
+                 openai_preset: str = DEFAULT_OPENAI_PRESET,
+                 openai_base_url: str = DEFAULT_OPENAI_BASE_URL,
+                 openai_model: str = DEFAULT_OPENAI_MODEL,
+                 openai_api_key: str = "",
                  response_language: str = DEFAULT_AI_RESPONSE_LANGUAGE,
                  initial_page: str = "Appearance"):
         super().__init__(parent, Qt.WindowType.Dialog)
         self.setWindowTitle("Settings")
         self.setModal(True)
-        self.setMinimumSize(580, 360)
+        self.setMinimumSize(640, 400)
 
         # Defer heavy live-preview work until the current widget event
         # (e.g. combo popup close) has finished to keep selection responsive.
@@ -26880,6 +27796,22 @@ class _SettingsDialog(QDialog):
         def _inp(widget: QWidget) -> QWidget:
             widget.setFixedWidth(self._INPUT_W)
             return widget
+
+        def _wide_combo(combo: QComboBox, labels, *, min_w: int = 240) -> QComboBox:
+            """Combo wide enough for long AI labels (not _INPUT_W=110)."""
+            combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+            fm = combo.fontMetrics()
+            texts = [str(s) for s in labels if s]
+            w = max((fm.horizontalAdvance(s) for s in texts), default=120) + 56
+            w = max(w, min_w)
+            combo.setMinimumWidth(w)
+            combo.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            try:
+                combo.view().setMinimumWidth(w)
+            except Exception:
+                pass
+            return combo
 
         def _form(page: QWidget) -> QFormLayout:
             f = QFormLayout(page)
@@ -27108,22 +28040,70 @@ class _SettingsDialog(QDialog):
 
         self._content_stack.addWidget(p3)
 
-        # -- Page 4: AI (Ollama) -----------------------------------------------
+        # -- Page 4: AI --------------------------------------------------------
         p4 = QWidget()
         f4 = _form(p4)
-        self._ai_enabled_cb = QCheckBox("Enable AI Assistant (Ollama)")
+        # URLs / long combo labels need room; fixed-width spins on other pages
+        # stay narrow via _inp().
+        f4.setFieldGrowthPolicy(
+            QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        self._ai_enabled_cb = QCheckBox("Enable AI Assistant")
         self._ai_enabled_cb.setChecked(ai_enabled)
         self._ai_enabled_cb.setToolTip(
-            "When off, hides the AI tab. When on, the AI panel "
-            "can send Analysis Findings to a local or cloud Ollama server.")
+            "When off, hides the AI tab. When on, the AI panel can send "
+            "Analysis Findings to Ollama or an OpenAI-compatible API.")
         f4.addRow("", self._ai_enabled_cb)
+
+        self._ai_provider_combo = QComboBox()
+        for _pid, _plabel in AI_PROVIDER_CHOICES:
+            self._ai_provider_combo.addItem(_plabel, _pid)
+        _prov = normalize_ai_provider(ai_provider)
+        _pidx = self._ai_provider_combo.findData(_prov)
+        self._ai_provider_combo.setCurrentIndex(max(0, _pidx))
+        self._ai_provider_combo.setToolTip(
+            "Ollama (local/cloud) or OpenAI-compatible (ChatGPT, Grok, Gemini, DeepSeek, Custom).")
+        _wide_combo(
+            self._ai_provider_combo,
+            [lab for _pid, lab in AI_PROVIDER_CHOICES],
+            min_w=220,
+        )
+        f4.addRow("Provider:", self._ai_provider_combo)
+
+        self._openai_preset_combo = QComboBox()
+        for _sid, _slabel, _surl, _smodel in AI_OPENAI_PRESETS:
+            self._openai_preset_combo.addItem(_slabel, _sid)
+        _preset = (openai_preset or DEFAULT_OPENAI_PRESET).strip() or DEFAULT_OPENAI_PRESET
+        _sidx = self._openai_preset_combo.findData(_preset)
+        if _sidx < 0:
+            _sidx = self._openai_preset_combo.findData(DEFAULT_OPENAI_PRESET)
+        self._openai_preset_combo.setCurrentIndex(max(0, _sidx))
+        self._openai_preset_combo.setToolTip(
+            "Fills Base URL and a suggested model; you can still edit both.")
+        _wide_combo(
+            self._openai_preset_combo,
+            [lab for _sid, lab, _u, _m in AI_OPENAI_PRESETS],
+            min_w=240,
+        )
+        self._openai_preset_label = QLabel("Preset:")
+        f4.addRow(self._openai_preset_label, self._openai_preset_combo)
 
         self._ollama_url_edit = QLineEdit()
         self._ollama_url_edit.setText(ollama_url or DEFAULT_OLLAMA_URL)
         self._ollama_url_edit.setPlaceholderText(DEFAULT_OLLAMA_URL)
         self._ollama_url_edit.setToolTip(
             "Local Ollama (http://localhost:11434) or cloud API (https://ollama.com)")
-        f4.addRow("Ollama URL:", self._ollama_url_edit)
+        self._ollama_url_edit.setMinimumWidth(280)
+        self._ollama_url_label = QLabel("Ollama URL:")
+        f4.addRow(self._ollama_url_label, self._ollama_url_edit)
+
+        self._openai_url_edit = QLineEdit()
+        self._openai_url_edit.setText(openai_base_url or DEFAULT_OPENAI_BASE_URL)
+        self._openai_url_edit.setPlaceholderText(DEFAULT_OPENAI_BASE_URL)
+        self._openai_url_edit.setToolTip(
+            "OpenAI-compatible API root ending in /v1 (or Gemini …/openai).")
+        self._openai_url_edit.setMinimumWidth(280)
+        self._openai_url_label = QLabel("Base URL:")
+        f4.addRow(self._openai_url_label, self._openai_url_edit)
 
         self._ollama_model_edit = QLineEdit()
         self._ollama_model_edit.setText(ollama_model or DEFAULT_OLLAMA_MODEL)
@@ -27133,7 +28113,18 @@ class _SettingsDialog(QDialog):
             "Local: name from `ollama list`. Cloud via local proxy: "
             "`minimax-m3:cloud` (requires `ollama signin`). "
             "Direct https://ollama.com: use `minimax-m3` (no :cloud) + API key.")
-        f4.addRow("Model:", self._ollama_model_edit)
+        self._ollama_model_edit.setMinimumWidth(240)
+        self._ollama_model_label = QLabel("Model:")
+        f4.addRow(self._ollama_model_label, self._ollama_model_edit)
+
+        self._openai_model_edit = QLineEdit()
+        self._openai_model_edit.setText(openai_model or DEFAULT_OPENAI_MODEL)
+        self._openai_model_edit.setPlaceholderText(DEFAULT_OPENAI_MODEL)
+        self._openai_model_edit.setToolTip(
+            "Model id for the selected provider (e.g. gpt-4o-mini, grok-3-mini).")
+        self._openai_model_edit.setMinimumWidth(240)
+        self._openai_model_label = QLabel("Model:")
+        f4.addRow(self._openai_model_label, self._openai_model_edit)
 
         self._response_lang_combo = QComboBox()
         self._response_lang_combo.addItems(list(AI_RESPONSE_LANGUAGES))
@@ -27145,14 +28136,11 @@ class _SettingsDialog(QDialog):
         self._response_lang_combo.setCurrentIndex(max(0, _idx))
         self._response_lang_combo.setToolTip(
             "Language for AI Assistant replies (also available via Language… in the AI panel).")
-        # Long labels (e.g. Traditional Chinese) need more than _INPUT_W (110).
-        self._response_lang_combo.setSizeAdjustPolicy(
-            QComboBox.SizeAdjustPolicy.AdjustToContents)
-        _fm = self._response_lang_combo.fontMetrics()
-        _lang_w = max((_fm.horizontalAdvance(s) for s in AI_RESPONSE_LANGUAGES), default=120) + 48
-        self._response_lang_combo.setMinimumWidth(max(_lang_w, 240))
-        self._response_lang_combo.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        _wide_combo(
+            self._response_lang_combo,
+            list(AI_RESPONSE_LANGUAGES) + ([_lang] if _lang else []),
+            min_w=280,
+        )
         f4.addRow("Reply language:", self._response_lang_combo)
 
         self._ollama_api_key_edit = QLineEdit()
@@ -27163,7 +28151,18 @@ class _SettingsDialog(QDialog):
             "API key from https://ollama.com/settings/keys. "
             "Needed for direct cloud API. Local cloud models use `ollama signin` instead "
             "(or set OLLAMA_API_KEY in the environment). Stored in btf_viewer.rc.")
-        f4.addRow("API key:", self._ollama_api_key_edit)
+        self._ollama_api_key_label = QLabel("API key:")
+        f4.addRow(self._ollama_api_key_label, self._ollama_api_key_edit)
+
+        self._openai_api_key_edit = QLineEdit()
+        self._openai_api_key_edit.setText(openai_api_key or "")
+        self._openai_api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self._openai_api_key_edit.setPlaceholderText("Required — provider API key")
+        self._openai_api_key_edit.setToolTip(
+            "API key for OpenAI / xAI / Gemini / DeepSeek (or OPENAI_API_KEY env). "
+            "Stored in btf_viewer.rc.")
+        self._openai_api_key_label = QLabel("API key:")
+        f4.addRow(self._openai_api_key_label, self._openai_api_key_edit)
 
         _test_row = QWidget()
         _test_h = QHBoxLayout(_test_row)
@@ -27171,15 +28170,15 @@ class _SettingsDialog(QDialog):
         _test_h.setSpacing(8)
         self._ollama_test_btn = QPushButton("Test connection")
         self._ollama_test_btn.setToolTip(
-            "Reach Ollama, confirm the model is installed, and run a tiny chat probe. "
-            "Status updates appear below — the chat probe can take a minute on first load.")
+            "Verify the selected provider and model with a tiny chat probe. "
+            "Status updates appear below — first model load can take a minute.")
         self._ollama_test_btn.clicked.connect(self._test_ollama_connection)
         _test_h.addWidget(self._ollama_test_btn)
         _test_h.addStretch()
         f4.addRow("", _test_row)
 
         self._ollama_test_status = QLabel(
-            "Click Test connection to verify Ollama and the model.")
+            "Click Test connection to verify the provider and model.")
         self._ollama_test_status.setWordWrap(True)
         self._ollama_test_status.setMinimumHeight(40)
         self._ollama_test_status.setAlignment(
@@ -27188,16 +28187,14 @@ class _SettingsDialog(QDialog):
             "color:#888; padding:4px 0; min-height:40px;")
         f4.addRow(self._ollama_test_status)
 
-        _ai_hint = QLabel(
-            f"Install Ollama, pull a model (`ollama pull {DEFAULT_OLLAMA_MODEL}`), then ask "
-            "template questions from the AI panel. For cloud models "
-            "(`minimax-m3:cloud`): run `ollama signin` (and optionally "
-            "`ollama pull minimax-m3:cloud`), or use URL https://ollama.com "
-            "with model `minimax-m3` and an API key. Context is Analysis Findings "
-            "for the current Statistics scope — not the raw BTF.")
-        _ai_hint.setWordWrap(True)
-        _ai_hint.setStyleSheet("color:#888;")
-        f4.addRow(_ai_hint)
+        self._ai_hint = QLabel("")
+        self._ai_hint.setWordWrap(True)
+        self._ai_hint.setStyleSheet("color:#888;")
+        f4.addRow(self._ai_hint)
+
+        self._ai_provider_combo.currentIndexChanged.connect(self._sync_ai_provider_fields)
+        self._openai_preset_combo.currentIndexChanged.connect(self._on_openai_preset_changed)
+        self._sync_ai_provider_fields()
 
         self._ollama_test_worker = None
 
@@ -27290,13 +28287,62 @@ class _SettingsDialog(QDialog):
         self.adjustSize()
 
     # -- Reset all controls to built-in defaults ---------------------------
+    def _sync_ai_provider_fields(self, *_args) -> None:
+        """Show Ollama or OpenAI-compatible fields based on Provider."""
+        is_openai = (
+            normalize_ai_provider(self._ai_provider_combo.currentData())
+            == AI_PROVIDER_OPENAI
+        )
+        for w in (
+            self._openai_preset_label, self._openai_preset_combo,
+            self._openai_url_label, self._openai_url_edit,
+            self._openai_model_label, self._openai_model_edit,
+            self._openai_api_key_label, self._openai_api_key_edit,
+        ):
+            w.setVisible(is_openai)
+        for w in (
+            self._ollama_url_label, self._ollama_url_edit,
+            self._ollama_model_label, self._ollama_model_edit,
+            self._ollama_api_key_label, self._ollama_api_key_edit,
+        ):
+            w.setVisible(not is_openai)
+        if is_openai:
+            self._ai_hint.setText(
+                "OpenAI-compatible covers ChatGPT, Grok (xAI), Gemini, DeepSeek, "
+                "and Custom base URLs. Use a Preset to fill URL/model, then set an "
+                "API key. Context is Analysis Findings for the current Statistics "
+                "scope — not the raw BTF."
+            )
+        else:
+            self._ai_hint.setText(
+                f"Install Ollama, pull a model (`ollama pull {DEFAULT_OLLAMA_MODEL}`), "
+                "then ask template questions from the AI panel. For cloud models "
+                "(`minimax-m3:cloud`): run `ollama signin`, or use URL https://ollama.com "
+                "with model `minimax-m3` and an API key. Context is Analysis Findings "
+                "— not the raw BTF."
+            )
+
+    def _on_openai_preset_changed(self, *_args) -> None:
+        preset = self._openai_preset_combo.currentData() or DEFAULT_OPENAI_PRESET
+        applied = apply_openai_preset(str(preset))
+        if applied.get("openai_base_url"):
+            self._openai_url_edit.setText(applied["openai_base_url"])
+        if applied.get("openai_model"):
+            self._openai_model_edit.setText(applied["openai_model"])
+
     def _test_ollama_connection(self) -> None:
-        """Reach Ollama with the URL/model currently typed in the AI page."""
+        """Test the currently selected AI provider with typed Settings fields."""
         if self._ollama_test_worker is not None:
             return
-        url = self._ollama_url_edit.text().strip() or DEFAULT_OLLAMA_URL
-        model = self._ollama_model_edit.text().strip() or DEFAULT_OLLAMA_MODEL
-        api_key = self._ollama_api_key_edit.text().strip()
+        provider = normalize_ai_provider(self._ai_provider_combo.currentData())
+        if provider == AI_PROVIDER_OPENAI:
+            url = self._openai_url_edit.text().strip() or DEFAULT_OPENAI_BASE_URL
+            model = self._openai_model_edit.text().strip() or DEFAULT_OPENAI_MODEL
+            api_key = self._openai_api_key_edit.text().strip()
+        else:
+            url = self._ollama_url_edit.text().strip() or DEFAULT_OLLAMA_URL
+            model = self._ollama_model_edit.text().strip() or DEFAULT_OLLAMA_MODEL
+            api_key = self._ollama_api_key_edit.text().strip()
         self._ollama_test_btn.setEnabled(False)
         self._ollama_test_btn.setText("Testing…")
         self._ollama_test_status.setStyleSheet(
@@ -27304,7 +28350,13 @@ class _SettingsDialog(QDialog):
         self._ollama_test_status.setText(
             f"Starting test for {url} / {model}…")
 
-        worker = _OllamaTestWorker(self, url, model, api_key)
+        worker = _AiTestWorker(
+            self,
+            provider=provider,
+            base_url=url,
+            model_name=model,
+            api_key=api_key,
+        )
         # QueuedConnection: signals are emitted from a plain Python thread.
         worker.progress.connect(
             self._on_ollama_test_progress, Qt.ConnectionType.QueuedConnection)
@@ -27374,11 +28426,19 @@ class _SettingsDialog(QDialog):
         self._task_deadlines_edit.setPlainText("")
         self._time_decimals_spin.setValue(_DEFAULT_TIME_DECIMALS)
         self._ai_enabled_cb.setChecked(True)
+        _pidx = self._ai_provider_combo.findData(DEFAULT_AI_PROVIDER)
+        self._ai_provider_combo.setCurrentIndex(max(0, _pidx))
+        _sidx = self._openai_preset_combo.findData(DEFAULT_OPENAI_PRESET)
+        self._openai_preset_combo.setCurrentIndex(max(0, _sidx))
         self._ollama_url_edit.setText(DEFAULT_OLLAMA_URL)
         self._ollama_model_edit.setText(DEFAULT_OLLAMA_MODEL)
+        self._ollama_api_key_edit.setText("")
+        self._openai_url_edit.setText(DEFAULT_OPENAI_BASE_URL)
+        self._openai_model_edit.setText(DEFAULT_OPENAI_MODEL)
+        self._openai_api_key_edit.setText("")
         self._response_lang_combo.setCurrentIndex(
             max(0, self._response_lang_combo.findText(DEFAULT_AI_RESPONSE_LANGUAGE)))
-        self._ollama_api_key_edit.setText("")
+        self._sync_ai_provider_fields()
 
     # -- result accessors (read after exec_() == Accepted) ------------------
     @property
@@ -27434,11 +28494,23 @@ class _SettingsDialog(QDialog):
     @property
     def ai_enabled(self) -> bool:         return self._ai_enabled_cb.isChecked()
     @property
+    def ai_provider(self) -> str:
+        return normalize_ai_provider(self._ai_provider_combo.currentData())
+    @property
     def ollama_url(self) -> str:          return self._ollama_url_edit.text().strip()
     @property
     def ollama_model(self) -> str:        return self._ollama_model_edit.text().strip()
     @property
     def ollama_api_key(self) -> str:      return self._ollama_api_key_edit.text().strip()
+    @property
+    def openai_preset(self) -> str:
+        return str(self._openai_preset_combo.currentData() or DEFAULT_OPENAI_PRESET)
+    @property
+    def openai_base_url(self) -> str:     return self._openai_url_edit.text().strip()
+    @property
+    def openai_model(self) -> str:        return self._openai_model_edit.text().strip()
+    @property
+    def openai_api_key(self) -> str:      return self._openai_api_key_edit.text().strip()
     @property
     def response_language(self) -> str:
         return (
@@ -32775,6 +33847,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 self._tab_switch_guard = False
             self._on_trace_tab_changed(new_idx)
         self._update_tab_actions()
+        self._sync_ai_compare_template()
 
     def _add_trace_tab(self, path: str, trace: BtfTrace) -> _TraceTab:
         tab = _TraceTab(path, trace, self)
@@ -32796,6 +33869,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         finally:
             self._tab_switch_guard = False
         self._previous_tab_index = idx
+        self._sync_ai_compare_template()
         return tab
 
     # ------------------------------------------------------------------
@@ -34278,6 +35352,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             on_open_settings=lambda: self._open_settings("AI"),
             on_save_settings=self._ai_save_settings_patch,
             on_jump=self._ai_jump_time_unit,
+            get_loaded_tabs=self._ai_list_loaded_tabs,
+            build_compare_context=self._ai_build_compare_context,
         )
 
         # --- Right panel: Statistics / Marks / Find / AI tabs (web parity) ---
@@ -35106,9 +36182,14 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         s = self._settings
         return {
             "enabled": s.get("ai", "enabled", "true"),
+            "provider": s.get("ai", "provider", DEFAULT_AI_PROVIDER),
             "ollama_url": s.get("ai", "ollama_url", DEFAULT_OLLAMA_URL),
             "ollama_model": s.get("ai", "ollama_model", DEFAULT_OLLAMA_MODEL),
             "ollama_api_key": s.get("ai", "ollama_api_key", ""),
+            "openai_preset": s.get("ai", "openai_preset", DEFAULT_OPENAI_PRESET),
+            "openai_base_url": s.get("ai", "openai_base_url", DEFAULT_OPENAI_BASE_URL),
+            "openai_model": s.get("ai", "openai_model", DEFAULT_OPENAI_MODEL),
+            "openai_api_key": s.get("ai", "openai_api_key", ""),
             "response_language": s.get(
                 "ai", "response_language", DEFAULT_AI_RESPONSE_LANGUAGE
             ),
@@ -35136,6 +36217,58 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "span": span,
             "cores": len(tr.core_names or []),
         }
+
+    def _ai_list_loaded_tabs(self) -> list:
+        """Loaded BTF tabs for the Trace Compare AI template."""
+        out = []
+        for i, tab in enumerate(self._tabs):
+            if getattr(tab, "trace", None) is None:
+                continue
+            path = getattr(tab, "path", "") or ""
+            name = _trace_display_name(path) if path else f"Tab {i + 1}"
+            out.append({"index": i, "name": name})
+        return out
+
+    def _ai_build_compare_context(self, idx_a: int, idx_b: int) -> dict:
+        """Build Trace Compare CSV context for AI (cursor scope on, like the dialog)."""
+        tabs = self._tabs
+        if not (0 <= idx_a < len(tabs) and 0 <= idx_b < len(tabs)):
+            raise ValueError("Invalid tab index for Trace Compare")
+        tab_a, tab_b = tabs[idx_a], tabs[idx_b]
+        tr_a, tr_b = tab_a.trace, tab_b.trace
+        if tr_a is None or tr_b is None:
+            raise ValueError("Both tabs must have a loaded trace")
+        name_a = _trace_display_name(tab_a.path) if tab_a.path else f"Tab {idx_a + 1}"
+        name_b = _trace_display_name(tab_b.path) if tab_b.path else f"Tab {idx_b + 1}"
+        scope_enabled = True
+        lo_a, hi_a = _cursor_range_for_tab(self, idx_a)
+        lo_b, hi_b = _cursor_range_for_tab(self, idx_b)
+        if not scope_enabled:
+            lo_a = hi_a = lo_b = hi_b = None
+        tables = _build_trace_compare_rows(tr_a, tr_b, lo_a, hi_a, lo_b, hi_b)
+        csv_text = _build_compare_csv(name_a, name_b, scope_enabled, tables)
+        if len(csv_text) > 60000:
+            csv_text = csv_text[:60000] + "\n… (truncated for AI context)"
+        findings = (
+            f"Trace Compare tables (CSV) for {name_a} vs {name_b}.\n"
+            f"Cursor scope per tab: yes (when 2+ cursors placed).\n\n"
+            f"{csv_text}"
+        )
+        return {
+            "findings_text": findings,
+            "scope": f"Trace Compare: {name_a} vs {name_b}",
+            "span": "",
+            "cores": "",
+        }
+
+    def _sync_ai_compare_template(self) -> None:
+        panel = getattr(self, "_ai_panel", None)
+        if panel is None:
+            return
+        if hasattr(panel, "refresh_enabled_state"):
+            panel.refresh_enabled_state()
+        elif hasattr(panel, "refresh_template_availability"):
+            panel.refresh_template_availability()
 
     def _ai_jump_time_unit(self, value: float) -> None:
         """Jump timeline; *value* is in the trace #timeScale unit (same as segment times)."""
@@ -36659,9 +37792,16 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             task_deadlines_text=_snap["task_deadlines_text"],
             time_decimals=self._time_decimals_val,
             ai_enabled=self._settings.get_bool("ai", "enabled", True),
+            ai_provider=self._settings.get("ai", "provider", DEFAULT_AI_PROVIDER),
             ollama_url=self._settings.get("ai", "ollama_url", DEFAULT_OLLAMA_URL),
             ollama_model=self._settings.get("ai", "ollama_model", DEFAULT_OLLAMA_MODEL),
             ollama_api_key=self._settings.get("ai", "ollama_api_key", ""),
+            openai_preset=self._settings.get("ai", "openai_preset", DEFAULT_OPENAI_PRESET),
+            openai_base_url=self._settings.get(
+                "ai", "openai_base_url", DEFAULT_OPENAI_BASE_URL
+            ),
+            openai_model=self._settings.get("ai", "openai_model", DEFAULT_OPENAI_MODEL),
+            openai_api_key=self._settings.get("ai", "openai_api_key", ""),
             response_language=self._settings.get(
                 "ai", "response_language", DEFAULT_AI_RESPONSE_LANGUAGE
             ),
@@ -36716,16 +37856,26 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                         _new_budget, _parse_task_deadlines_text(_new_dl_text))
             _ai_upd = {
                 "enabled": str(dlg.ai_enabled).lower(),
+                "provider": dlg.ai_provider or DEFAULT_AI_PROVIDER,
                 "ollama_url": dlg.ollama_url or DEFAULT_OLLAMA_URL,
                 "ollama_model": dlg.ollama_model or DEFAULT_OLLAMA_MODEL,
                 "ollama_api_key": dlg.ollama_api_key or "",
+                "openai_preset": dlg.openai_preset or DEFAULT_OPENAI_PRESET,
+                "openai_base_url": dlg.openai_base_url or DEFAULT_OPENAI_BASE_URL,
+                "openai_model": dlg.openai_model or DEFAULT_OPENAI_MODEL,
+                "openai_api_key": dlg.openai_api_key or "",
                 "response_language": dlg.response_language or DEFAULT_AI_RESPONSE_LANGUAGE,
             }
             _ai_changed = (
                 self._settings.get("ai", "enabled", "true").lower() != _ai_upd["enabled"]
+                or self._settings.get("ai", "provider", DEFAULT_AI_PROVIDER) != _ai_upd["provider"]
                 or self._settings.get("ai", "ollama_url", DEFAULT_OLLAMA_URL) != _ai_upd["ollama_url"]
                 or self._settings.get("ai", "ollama_model", DEFAULT_OLLAMA_MODEL) != _ai_upd["ollama_model"]
                 or self._settings.get("ai", "ollama_api_key", "") != _ai_upd["ollama_api_key"]
+                or self._settings.get("ai", "openai_preset", DEFAULT_OPENAI_PRESET) != _ai_upd["openai_preset"]
+                or self._settings.get("ai", "openai_base_url", DEFAULT_OPENAI_BASE_URL) != _ai_upd["openai_base_url"]
+                or self._settings.get("ai", "openai_model", DEFAULT_OPENAI_MODEL) != _ai_upd["openai_model"]
+                or self._settings.get("ai", "openai_api_key", "") != _ai_upd["openai_api_key"]
                 or self._settings.get(
                     "ai", "response_language", DEFAULT_AI_RESPONSE_LANGUAGE
                 ) != _ai_upd["response_language"]
@@ -36736,6 +37886,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._sync_panel_tab_visibility()
             self._apply_dock_visibility_from_prefs()
             self._sync_ai_menu()
+            self._sync_ai_compare_template()
         else:
             self._apply_settings_preview(_snap)
 

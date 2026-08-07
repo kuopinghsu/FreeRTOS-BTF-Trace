@@ -1,7 +1,16 @@
 /** Persistent web viewer settings (localStorage). Parity with desktop btf_viewer.rc / btf_viewer.py USER CONFIGURATION. */
 import { syncTimelineLayoutFromSettings } from './timelineLayout.js'
 import { normalizeStatsPins, normalizeStatsSectionOrder } from './statsPins.js'
-import { DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL, DEFAULT_AI_RESPONSE_LANGUAGE } from './ollamaClient.js'
+import {
+  DEFAULT_AI_PROVIDER,
+  DEFAULT_AI_RESPONSE_LANGUAGE,
+  DEFAULT_OLLAMA_MODEL,
+  DEFAULT_OLLAMA_URL,
+  DEFAULT_OPENAI_BASE_URL,
+  DEFAULT_OPENAI_MODEL,
+  DEFAULT_OPENAI_PRESET,
+  normalizeAiProvider,
+} from './ollamaClient.js'
 
 const SETTINGS_KEY = 'btf-viewer-settings-v1'
 
@@ -40,9 +49,14 @@ export const DEFAULT_SETTINGS = {
   statsSectionOrder: [],
   showAi: true,
   aiEnabled: true,
+  aiProvider: DEFAULT_AI_PROVIDER,
   ollamaUrl: DEFAULT_OLLAMA_URL,
   ollamaModel: DEFAULT_OLLAMA_MODEL,
   ollamaApiKey: '',
+  openaiPreset: DEFAULT_OPENAI_PRESET,
+  openaiBaseUrl: DEFAULT_OPENAI_BASE_URL,
+  openaiModel: DEFAULT_OPENAI_MODEL,
+  openaiApiKey: '',
   aiResponseLanguage: DEFAULT_AI_RESPONSE_LANGUAGE,
 }
 
@@ -93,11 +107,19 @@ export function normalizeSettings(raw) {
     statsSectionOrder: normalizeStatsSectionOrder(s.statsSectionOrder),
     showAi: s.showAi !== false,
     aiEnabled: s.aiEnabled !== false,
+    aiProvider: normalizeAiProvider(s.aiProvider),
     ollamaUrl: String(s.ollamaUrl || DEFAULT_SETTINGS.ollamaUrl).trim().replace(/\/+$/, '')
       || DEFAULT_SETTINGS.ollamaUrl,
     ollamaModel: String(s.ollamaModel || DEFAULT_SETTINGS.ollamaModel).trim()
       || DEFAULT_SETTINGS.ollamaModel,
     ollamaApiKey: String(s.ollamaApiKey || '').trim(),
+    openaiPreset: String(s.openaiPreset || DEFAULT_SETTINGS.openaiPreset).trim()
+      || DEFAULT_SETTINGS.openaiPreset,
+    openaiBaseUrl: String(s.openaiBaseUrl || DEFAULT_SETTINGS.openaiBaseUrl).trim().replace(/\/+$/, '')
+      || DEFAULT_SETTINGS.openaiBaseUrl,
+    openaiModel: String(s.openaiModel || DEFAULT_SETTINGS.openaiModel).trim()
+      || DEFAULT_SETTINGS.openaiModel,
+    openaiApiKey: String(s.openaiApiKey || '').trim(),
     aiResponseLanguage: String(s.aiResponseLanguage || DEFAULT_SETTINGS.aiResponseLanguage).trim()
       || DEFAULT_SETTINGS.aiResponseLanguage,
   }

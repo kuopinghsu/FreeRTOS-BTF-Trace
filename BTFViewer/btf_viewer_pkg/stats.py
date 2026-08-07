@@ -35,15 +35,24 @@ from .graphics_items import *  # noqa: F403,F401
 from .scene import *  # noqa: F403,F401
 from .view import *  # noqa: F403,F401
 from .ai_assistant import (  # noqa: F401
+    AI_OPENAI_PRESETS,
+    AI_PROVIDER_CHOICES,
+    AI_PROVIDER_OPENAI,
     AI_RESPONSE_LANGUAGES,
+    DEFAULT_AI_PROVIDER,
     DEFAULT_AI_RESPONSE_LANGUAGE,
     DEFAULT_OLLAMA_MODEL,
     DEFAULT_OLLAMA_URL,
-    ollama_test_connection,
+    DEFAULT_OPENAI_BASE_URL,
+    DEFAULT_OPENAI_MODEL,
+    DEFAULT_OPENAI_PRESET,
+    ai_test_connection,
+    apply_openai_preset,
+    normalize_ai_provider,
 )
 
 
-class _OllamaTestWorker(QObject):
+class _AiTestWorker(QObject):
     """Background worker for Settings → AI → Test connection.
 
     Lives on the GUI thread; HTTP work runs in a plain Python thread so we
@@ -55,21 +64,29 @@ class _OllamaTestWorker(QObject):
     failed = Signal(str)
 
     def __init__(
-        self, parent: QObject, base_url: str, model_name: str, api_key: str = ""
+        self,
+        parent: QObject,
+        *,
+        provider: str,
+        base_url: str,
+        model_name: str,
+        api_key: str = "",
     ) -> None:
         super().__init__(parent)
+        self._provider = provider
         self._base_url = base_url
         self._model = model_name
         self._api_key = api_key
 
     def start(self) -> None:
-        threading.Thread(target=self._run, name="ollama-test", daemon=True).start()
+        threading.Thread(target=self._run, name="ai-test", daemon=True).start()
 
     def _run(self) -> None:
         try:
-            msg = ollama_test_connection(
-                self._base_url,
-                self._model,
+            msg = ai_test_connection(
+                provider=self._provider,
+                base_url=self._base_url,
+                model=self._model,
                 api_key=self._api_key,
                 on_progress=lambda s: self.progress.emit(s),
             )
@@ -4378,7 +4395,7 @@ def _load_balance_gauge_svg(metrics: dict, *, width: int = 300, dark: bool = Fal
         f'<rect width="100%" height="100%" rx="8" fill="#F7F8FA" stroke="{card_stroke}"/>'
         f"{left}{right}"
         f'<text x="{view_w / 2}" y="{view_h - 8}" text-anchor="middle" fill="#6A7388" '
-        f'font-family="ui-monospace,monospace" font-size="9">'
+        f'font-family="Menlo,Consolas,Monaco,monospace" font-size="9">'
         f"G={gini:.3f} · Score=100{times}(1{minus}Gini)</text>"
         f"{chip}</svg>"
     )
@@ -10103,15 +10120,20 @@ class _RcSettings:
         },
         "ai": {
             "enabled": "true",
+            "provider": DEFAULT_AI_PROVIDER,
             "ollama_url": DEFAULT_OLLAMA_URL,
             "ollama_model": DEFAULT_OLLAMA_MODEL,
             "ollama_api_key": "",
+            "openai_preset": DEFAULT_OPENAI_PRESET,
+            "openai_base_url": DEFAULT_OPENAI_BASE_URL,
+            "openai_model": DEFAULT_OPENAI_MODEL,
+            "openai_api_key": "",
             "response_language": DEFAULT_AI_RESPONSE_LANGUAGE,
         },
     }
 
     def __init__(self) -> None:
-        self._cfg = configparser.ConfigParser()
+        self._cfg = configparser.ConfigParser(interpolation=None)
         self._dirty = False
         self._last_error: str = ""
         # Seed every section/key with the compiled defaults so callers always
@@ -10587,15 +10609,20 @@ class _SettingsDialog(QDialog):
                  task_deadlines_text: str = "",
                  time_decimals: int = 3,
                  ai_enabled: bool = True,
+                 ai_provider: str = DEFAULT_AI_PROVIDER,
                  ollama_url: str = DEFAULT_OLLAMA_URL,
                  ollama_model: str = DEFAULT_OLLAMA_MODEL,
                  ollama_api_key: str = "",
+                 openai_preset: str = DEFAULT_OPENAI_PRESET,
+                 openai_base_url: str = DEFAULT_OPENAI_BASE_URL,
+                 openai_model: str = DEFAULT_OPENAI_MODEL,
+                 openai_api_key: str = "",
                  response_language: str = DEFAULT_AI_RESPONSE_LANGUAGE,
                  initial_page: str = "Appearance"):
         super().__init__(parent, Qt.WindowType.Dialog)
         self.setWindowTitle("Settings")
         self.setModal(True)
-        self.setMinimumSize(580, 360)
+        self.setMinimumSize(640, 400)
 
         # Defer heavy live-preview work until the current widget event
         # (e.g. combo popup close) has finished to keep selection responsive.
@@ -10654,6 +10681,22 @@ class _SettingsDialog(QDialog):
         def _inp(widget: QWidget) -> QWidget:
             widget.setFixedWidth(self._INPUT_W)
             return widget
+
+        def _wide_combo(combo: QComboBox, labels, *, min_w: int = 240) -> QComboBox:
+            """Combo wide enough for long AI labels (not _INPUT_W=110)."""
+            combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+            fm = combo.fontMetrics()
+            texts = [str(s) for s in labels if s]
+            w = max((fm.horizontalAdvance(s) for s in texts), default=120) + 56
+            w = max(w, min_w)
+            combo.setMinimumWidth(w)
+            combo.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            try:
+                combo.view().setMinimumWidth(w)
+            except Exception:
+                pass
+            return combo
 
         def _form(page: QWidget) -> QFormLayout:
             f = QFormLayout(page)
@@ -10882,22 +10925,70 @@ class _SettingsDialog(QDialog):
 
         self._content_stack.addWidget(p3)
 
-        # -- Page 4: AI (Ollama) -----------------------------------------------
+        # -- Page 4: AI --------------------------------------------------------
         p4 = QWidget()
         f4 = _form(p4)
-        self._ai_enabled_cb = QCheckBox("Enable AI Assistant (Ollama)")
+        # URLs / long combo labels need room; fixed-width spins on other pages
+        # stay narrow via _inp().
+        f4.setFieldGrowthPolicy(
+            QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        self._ai_enabled_cb = QCheckBox("Enable AI Assistant")
         self._ai_enabled_cb.setChecked(ai_enabled)
         self._ai_enabled_cb.setToolTip(
-            "When off, hides the AI tab. When on, the AI panel "
-            "can send Analysis Findings to a local or cloud Ollama server.")
+            "When off, hides the AI tab. When on, the AI panel can send "
+            "Analysis Findings to Ollama or an OpenAI-compatible API.")
         f4.addRow("", self._ai_enabled_cb)
+
+        self._ai_provider_combo = QComboBox()
+        for _pid, _plabel in AI_PROVIDER_CHOICES:
+            self._ai_provider_combo.addItem(_plabel, _pid)
+        _prov = normalize_ai_provider(ai_provider)
+        _pidx = self._ai_provider_combo.findData(_prov)
+        self._ai_provider_combo.setCurrentIndex(max(0, _pidx))
+        self._ai_provider_combo.setToolTip(
+            "Ollama (local/cloud) or OpenAI-compatible (ChatGPT, Grok, Gemini, DeepSeek, Custom).")
+        _wide_combo(
+            self._ai_provider_combo,
+            [lab for _pid, lab in AI_PROVIDER_CHOICES],
+            min_w=220,
+        )
+        f4.addRow("Provider:", self._ai_provider_combo)
+
+        self._openai_preset_combo = QComboBox()
+        for _sid, _slabel, _surl, _smodel in AI_OPENAI_PRESETS:
+            self._openai_preset_combo.addItem(_slabel, _sid)
+        _preset = (openai_preset or DEFAULT_OPENAI_PRESET).strip() or DEFAULT_OPENAI_PRESET
+        _sidx = self._openai_preset_combo.findData(_preset)
+        if _sidx < 0:
+            _sidx = self._openai_preset_combo.findData(DEFAULT_OPENAI_PRESET)
+        self._openai_preset_combo.setCurrentIndex(max(0, _sidx))
+        self._openai_preset_combo.setToolTip(
+            "Fills Base URL and a suggested model; you can still edit both.")
+        _wide_combo(
+            self._openai_preset_combo,
+            [lab for _sid, lab, _u, _m in AI_OPENAI_PRESETS],
+            min_w=240,
+        )
+        self._openai_preset_label = QLabel("Preset:")
+        f4.addRow(self._openai_preset_label, self._openai_preset_combo)
 
         self._ollama_url_edit = QLineEdit()
         self._ollama_url_edit.setText(ollama_url or DEFAULT_OLLAMA_URL)
         self._ollama_url_edit.setPlaceholderText(DEFAULT_OLLAMA_URL)
         self._ollama_url_edit.setToolTip(
             "Local Ollama (http://localhost:11434) or cloud API (https://ollama.com)")
-        f4.addRow("Ollama URL:", self._ollama_url_edit)
+        self._ollama_url_edit.setMinimumWidth(280)
+        self._ollama_url_label = QLabel("Ollama URL:")
+        f4.addRow(self._ollama_url_label, self._ollama_url_edit)
+
+        self._openai_url_edit = QLineEdit()
+        self._openai_url_edit.setText(openai_base_url or DEFAULT_OPENAI_BASE_URL)
+        self._openai_url_edit.setPlaceholderText(DEFAULT_OPENAI_BASE_URL)
+        self._openai_url_edit.setToolTip(
+            "OpenAI-compatible API root ending in /v1 (or Gemini …/openai).")
+        self._openai_url_edit.setMinimumWidth(280)
+        self._openai_url_label = QLabel("Base URL:")
+        f4.addRow(self._openai_url_label, self._openai_url_edit)
 
         self._ollama_model_edit = QLineEdit()
         self._ollama_model_edit.setText(ollama_model or DEFAULT_OLLAMA_MODEL)
@@ -10907,7 +10998,18 @@ class _SettingsDialog(QDialog):
             "Local: name from `ollama list`. Cloud via local proxy: "
             "`minimax-m3:cloud` (requires `ollama signin`). "
             "Direct https://ollama.com: use `minimax-m3` (no :cloud) + API key.")
-        f4.addRow("Model:", self._ollama_model_edit)
+        self._ollama_model_edit.setMinimumWidth(240)
+        self._ollama_model_label = QLabel("Model:")
+        f4.addRow(self._ollama_model_label, self._ollama_model_edit)
+
+        self._openai_model_edit = QLineEdit()
+        self._openai_model_edit.setText(openai_model or DEFAULT_OPENAI_MODEL)
+        self._openai_model_edit.setPlaceholderText(DEFAULT_OPENAI_MODEL)
+        self._openai_model_edit.setToolTip(
+            "Model id for the selected provider (e.g. gpt-4o-mini, grok-3-mini).")
+        self._openai_model_edit.setMinimumWidth(240)
+        self._openai_model_label = QLabel("Model:")
+        f4.addRow(self._openai_model_label, self._openai_model_edit)
 
         self._response_lang_combo = QComboBox()
         self._response_lang_combo.addItems(list(AI_RESPONSE_LANGUAGES))
@@ -10919,14 +11021,11 @@ class _SettingsDialog(QDialog):
         self._response_lang_combo.setCurrentIndex(max(0, _idx))
         self._response_lang_combo.setToolTip(
             "Language for AI Assistant replies (also available via Language… in the AI panel).")
-        # Long labels (e.g. Traditional Chinese) need more than _INPUT_W (110).
-        self._response_lang_combo.setSizeAdjustPolicy(
-            QComboBox.SizeAdjustPolicy.AdjustToContents)
-        _fm = self._response_lang_combo.fontMetrics()
-        _lang_w = max((_fm.horizontalAdvance(s) for s in AI_RESPONSE_LANGUAGES), default=120) + 48
-        self._response_lang_combo.setMinimumWidth(max(_lang_w, 240))
-        self._response_lang_combo.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        _wide_combo(
+            self._response_lang_combo,
+            list(AI_RESPONSE_LANGUAGES) + ([_lang] if _lang else []),
+            min_w=280,
+        )
         f4.addRow("Reply language:", self._response_lang_combo)
 
         self._ollama_api_key_edit = QLineEdit()
@@ -10937,7 +11036,18 @@ class _SettingsDialog(QDialog):
             "API key from https://ollama.com/settings/keys. "
             "Needed for direct cloud API. Local cloud models use `ollama signin` instead "
             "(or set OLLAMA_API_KEY in the environment). Stored in btf_viewer.rc.")
-        f4.addRow("API key:", self._ollama_api_key_edit)
+        self._ollama_api_key_label = QLabel("API key:")
+        f4.addRow(self._ollama_api_key_label, self._ollama_api_key_edit)
+
+        self._openai_api_key_edit = QLineEdit()
+        self._openai_api_key_edit.setText(openai_api_key or "")
+        self._openai_api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self._openai_api_key_edit.setPlaceholderText("Required — provider API key")
+        self._openai_api_key_edit.setToolTip(
+            "API key for OpenAI / xAI / Gemini / DeepSeek (or OPENAI_API_KEY env). "
+            "Stored in btf_viewer.rc.")
+        self._openai_api_key_label = QLabel("API key:")
+        f4.addRow(self._openai_api_key_label, self._openai_api_key_edit)
 
         _test_row = QWidget()
         _test_h = QHBoxLayout(_test_row)
@@ -10945,15 +11055,15 @@ class _SettingsDialog(QDialog):
         _test_h.setSpacing(8)
         self._ollama_test_btn = QPushButton("Test connection")
         self._ollama_test_btn.setToolTip(
-            "Reach Ollama, confirm the model is installed, and run a tiny chat probe. "
-            "Status updates appear below — the chat probe can take a minute on first load.")
+            "Verify the selected provider and model with a tiny chat probe. "
+            "Status updates appear below — first model load can take a minute.")
         self._ollama_test_btn.clicked.connect(self._test_ollama_connection)
         _test_h.addWidget(self._ollama_test_btn)
         _test_h.addStretch()
         f4.addRow("", _test_row)
 
         self._ollama_test_status = QLabel(
-            "Click Test connection to verify Ollama and the model.")
+            "Click Test connection to verify the provider and model.")
         self._ollama_test_status.setWordWrap(True)
         self._ollama_test_status.setMinimumHeight(40)
         self._ollama_test_status.setAlignment(
@@ -10962,16 +11072,14 @@ class _SettingsDialog(QDialog):
             "color:#888; padding:4px 0; min-height:40px;")
         f4.addRow(self._ollama_test_status)
 
-        _ai_hint = QLabel(
-            f"Install Ollama, pull a model (`ollama pull {DEFAULT_OLLAMA_MODEL}`), then ask "
-            "template questions from the AI panel. For cloud models "
-            "(`minimax-m3:cloud`): run `ollama signin` (and optionally "
-            "`ollama pull minimax-m3:cloud`), or use URL https://ollama.com "
-            "with model `minimax-m3` and an API key. Context is Analysis Findings "
-            "for the current Statistics scope — not the raw BTF.")
-        _ai_hint.setWordWrap(True)
-        _ai_hint.setStyleSheet("color:#888;")
-        f4.addRow(_ai_hint)
+        self._ai_hint = QLabel("")
+        self._ai_hint.setWordWrap(True)
+        self._ai_hint.setStyleSheet("color:#888;")
+        f4.addRow(self._ai_hint)
+
+        self._ai_provider_combo.currentIndexChanged.connect(self._sync_ai_provider_fields)
+        self._openai_preset_combo.currentIndexChanged.connect(self._on_openai_preset_changed)
+        self._sync_ai_provider_fields()
 
         self._ollama_test_worker = None
 
@@ -11064,13 +11172,62 @@ class _SettingsDialog(QDialog):
         self.adjustSize()
 
     # -- Reset all controls to built-in defaults ---------------------------
+    def _sync_ai_provider_fields(self, *_args) -> None:
+        """Show Ollama or OpenAI-compatible fields based on Provider."""
+        is_openai = (
+            normalize_ai_provider(self._ai_provider_combo.currentData())
+            == AI_PROVIDER_OPENAI
+        )
+        for w in (
+            self._openai_preset_label, self._openai_preset_combo,
+            self._openai_url_label, self._openai_url_edit,
+            self._openai_model_label, self._openai_model_edit,
+            self._openai_api_key_label, self._openai_api_key_edit,
+        ):
+            w.setVisible(is_openai)
+        for w in (
+            self._ollama_url_label, self._ollama_url_edit,
+            self._ollama_model_label, self._ollama_model_edit,
+            self._ollama_api_key_label, self._ollama_api_key_edit,
+        ):
+            w.setVisible(not is_openai)
+        if is_openai:
+            self._ai_hint.setText(
+                "OpenAI-compatible covers ChatGPT, Grok (xAI), Gemini, DeepSeek, "
+                "and Custom base URLs. Use a Preset to fill URL/model, then set an "
+                "API key. Context is Analysis Findings for the current Statistics "
+                "scope — not the raw BTF."
+            )
+        else:
+            self._ai_hint.setText(
+                f"Install Ollama, pull a model (`ollama pull {DEFAULT_OLLAMA_MODEL}`), "
+                "then ask template questions from the AI panel. For cloud models "
+                "(`minimax-m3:cloud`): run `ollama signin`, or use URL https://ollama.com "
+                "with model `minimax-m3` and an API key. Context is Analysis Findings "
+                "— not the raw BTF."
+            )
+
+    def _on_openai_preset_changed(self, *_args) -> None:
+        preset = self._openai_preset_combo.currentData() or DEFAULT_OPENAI_PRESET
+        applied = apply_openai_preset(str(preset))
+        if applied.get("openai_base_url"):
+            self._openai_url_edit.setText(applied["openai_base_url"])
+        if applied.get("openai_model"):
+            self._openai_model_edit.setText(applied["openai_model"])
+
     def _test_ollama_connection(self) -> None:
-        """Reach Ollama with the URL/model currently typed in the AI page."""
+        """Test the currently selected AI provider with typed Settings fields."""
         if self._ollama_test_worker is not None:
             return
-        url = self._ollama_url_edit.text().strip() or DEFAULT_OLLAMA_URL
-        model = self._ollama_model_edit.text().strip() or DEFAULT_OLLAMA_MODEL
-        api_key = self._ollama_api_key_edit.text().strip()
+        provider = normalize_ai_provider(self._ai_provider_combo.currentData())
+        if provider == AI_PROVIDER_OPENAI:
+            url = self._openai_url_edit.text().strip() or DEFAULT_OPENAI_BASE_URL
+            model = self._openai_model_edit.text().strip() or DEFAULT_OPENAI_MODEL
+            api_key = self._openai_api_key_edit.text().strip()
+        else:
+            url = self._ollama_url_edit.text().strip() or DEFAULT_OLLAMA_URL
+            model = self._ollama_model_edit.text().strip() or DEFAULT_OLLAMA_MODEL
+            api_key = self._ollama_api_key_edit.text().strip()
         self._ollama_test_btn.setEnabled(False)
         self._ollama_test_btn.setText("Testing…")
         self._ollama_test_status.setStyleSheet(
@@ -11078,7 +11235,13 @@ class _SettingsDialog(QDialog):
         self._ollama_test_status.setText(
             f"Starting test for {url} / {model}…")
 
-        worker = _OllamaTestWorker(self, url, model, api_key)
+        worker = _AiTestWorker(
+            self,
+            provider=provider,
+            base_url=url,
+            model_name=model,
+            api_key=api_key,
+        )
         # QueuedConnection: signals are emitted from a plain Python thread.
         worker.progress.connect(
             self._on_ollama_test_progress, Qt.ConnectionType.QueuedConnection)
@@ -11148,11 +11311,19 @@ class _SettingsDialog(QDialog):
         self._task_deadlines_edit.setPlainText("")
         self._time_decimals_spin.setValue(_DEFAULT_TIME_DECIMALS)
         self._ai_enabled_cb.setChecked(True)
+        _pidx = self._ai_provider_combo.findData(DEFAULT_AI_PROVIDER)
+        self._ai_provider_combo.setCurrentIndex(max(0, _pidx))
+        _sidx = self._openai_preset_combo.findData(DEFAULT_OPENAI_PRESET)
+        self._openai_preset_combo.setCurrentIndex(max(0, _sidx))
         self._ollama_url_edit.setText(DEFAULT_OLLAMA_URL)
         self._ollama_model_edit.setText(DEFAULT_OLLAMA_MODEL)
+        self._ollama_api_key_edit.setText("")
+        self._openai_url_edit.setText(DEFAULT_OPENAI_BASE_URL)
+        self._openai_model_edit.setText(DEFAULT_OPENAI_MODEL)
+        self._openai_api_key_edit.setText("")
         self._response_lang_combo.setCurrentIndex(
             max(0, self._response_lang_combo.findText(DEFAULT_AI_RESPONSE_LANGUAGE)))
-        self._ollama_api_key_edit.setText("")
+        self._sync_ai_provider_fields()
 
     # -- result accessors (read after exec_() == Accepted) ------------------
     @property
@@ -11208,11 +11379,23 @@ class _SettingsDialog(QDialog):
     @property
     def ai_enabled(self) -> bool:         return self._ai_enabled_cb.isChecked()
     @property
+    def ai_provider(self) -> str:
+        return normalize_ai_provider(self._ai_provider_combo.currentData())
+    @property
     def ollama_url(self) -> str:          return self._ollama_url_edit.text().strip()
     @property
     def ollama_model(self) -> str:        return self._ollama_model_edit.text().strip()
     @property
     def ollama_api_key(self) -> str:      return self._ollama_api_key_edit.text().strip()
+    @property
+    def openai_preset(self) -> str:
+        return str(self._openai_preset_combo.currentData() or DEFAULT_OPENAI_PRESET)
+    @property
+    def openai_base_url(self) -> str:     return self._openai_url_edit.text().strip()
+    @property
+    def openai_model(self) -> str:        return self._openai_model_edit.text().strip()
+    @property
+    def openai_api_key(self) -> str:      return self._openai_api_key_edit.text().strip()
     @property
     def response_language(self) -> str:
         return (

@@ -69,9 +69,20 @@ class SettingsInitialPageTests(unittest.TestCase):
         self.assertEqual(dlg._sidebar.currentRow(), 3)
         self.assertEqual(dlg._content_stack.currentIndex(), 3)
         self.assertTrue(dlg.ai_enabled)
+        self.assertEqual(dlg.ai_provider, "ollama")
         self.assertIn("11434", dlg.ollama_url)
+        self.assertIn("openai.com", dlg.openai_base_url)
         self.assertTrue(hasattr(dlg, "_ollama_test_btn"))
         self.assertEqual(dlg._ollama_test_btn.text(), "Test connection")
+        # Long provider / preset labels must not be crushed to _INPUT_W (110).
+        self.assertGreaterEqual(dlg._ai_provider_combo.minimumWidth(), 180)
+        self.assertGreaterEqual(dlg._openai_preset_combo.minimumWidth(), 180)
+        self.assertGreaterEqual(dlg._response_lang_combo.minimumWidth(), 240)
+        # Closed-state text for current items must fit (not ellided to empty).
+        self.assertEqual(dlg._ai_provider_combo.currentText(), "Ollama")
+        dlg._ai_provider_combo.setCurrentIndex(
+            dlg._ai_provider_combo.findData("openai_compatible"))
+        self.assertIn("OpenAI", dlg._ai_provider_combo.currentText())
 
     def test_default_appearance(self) -> None:
         dlg = self._dlg("Appearance")

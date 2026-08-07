@@ -676,6 +676,21 @@ function normalizeCompareTables(tables = {}) {
   }
 }
 
+/** Build all Trace Compare table sets (same as TraceCompareDialog export). */
+export function buildAllCompareTables(traceA, traceB, tabA = null, tabB = null, scopeEnabled = false) {
+  return {
+    summary: buildSummaryCompareRows(traceA, traceB, tabA, tabB, scopeEnabled),
+    top: buildTopTasksCompareRows(traceA, traceB, tabA, tabB, scopeEnabled),
+    coreUtil: buildCoreUtilCompareRows(traceA, traceB, tabA, tabB, scopeEnabled),
+    migrations: buildMigrationCompareRows(traceA, traceB, tabA, tabB, scopeEnabled),
+    execution: buildExecutionCompareRows(traceA, traceB, tabA, tabB, scopeEnabled),
+    blocking: buildBlockingCompareRows(traceA, traceB, tabA, tabB, scopeEnabled),
+    interArrival: buildInterArrivalCompareRows(traceA, traceB, tabA, tabB, scopeEnabled),
+    preemption: buildPreemptionCompareRows(traceA, traceB, tabA, tabB, scopeEnabled),
+    sync: buildSyncCompareRows(traceA, traceB, tabA, tabB, scopeEnabled),
+  }
+}
+
 /** Build CSV text for a trace-compare export. */
 export function buildCompareCsv(nameA, nameB, scopeEnabled, tables = {}) {
   const t = normalizeCompareTables(tables)

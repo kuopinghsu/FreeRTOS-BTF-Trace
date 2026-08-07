@@ -12,9 +12,13 @@ from .stats import *  # noqa: F403,F401
 from .stats import _RcSettings, _parse_task_deadlines_text, _AnalysisFindingsDialog, _format_analysis_findings_text
 from .ai_assistant import (
     create_ai_assistant_panel,
+    DEFAULT_AI_PROVIDER,
     DEFAULT_AI_RESPONSE_LANGUAGE,
     DEFAULT_OLLAMA_URL,
     DEFAULT_OLLAMA_MODEL,
+    DEFAULT_OPENAI_BASE_URL,
+    DEFAULT_OPENAI_MODEL,
+    DEFAULT_OPENAI_PRESET,
 )
 from .mvvm import MainViewModel, MvvmSettingsMixin, TraceTabViewModel
 from .mvvm.tab_viewport import apply_viewport, viewport_from_json, viewport_to_json
@@ -2441,6 +2445,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 self._tab_switch_guard = False
             self._on_trace_tab_changed(new_idx)
         self._update_tab_actions()
+        self._sync_ai_compare_template()
 
     def _add_trace_tab(self, path: str, trace: BtfTrace) -> _TraceTab:
         tab = _TraceTab(path, trace, self)
@@ -2462,6 +2467,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         finally:
             self._tab_switch_guard = False
         self._previous_tab_index = idx
+        self._sync_ai_compare_template()
         return tab
 
     # ------------------------------------------------------------------
@@ -3944,6 +3950,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             on_open_settings=lambda: self._open_settings("AI"),
             on_save_settings=self._ai_save_settings_patch,
             on_jump=self._ai_jump_time_unit,
+            get_loaded_tabs=self._ai_list_loaded_tabs,
+            build_compare_context=self._ai_build_compare_context,
         )
 
         # --- Right panel: Statistics / Marks / Find / AI tabs (web parity) ---
@@ -4772,9 +4780,14 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         s = self._settings
         return {
             "enabled": s.get("ai", "enabled", "true"),
+            "provider": s.get("ai", "provider", DEFAULT_AI_PROVIDER),
             "ollama_url": s.get("ai", "ollama_url", DEFAULT_OLLAMA_URL),
             "ollama_model": s.get("ai", "ollama_model", DEFAULT_OLLAMA_MODEL),
             "ollama_api_key": s.get("ai", "ollama_api_key", ""),
+            "openai_preset": s.get("ai", "openai_preset", DEFAULT_OPENAI_PRESET),
+            "openai_base_url": s.get("ai", "openai_base_url", DEFAULT_OPENAI_BASE_URL),
+            "openai_model": s.get("ai", "openai_model", DEFAULT_OPENAI_MODEL),
+            "openai_api_key": s.get("ai", "openai_api_key", ""),
             "response_language": s.get(
                 "ai", "response_language", DEFAULT_AI_RESPONSE_LANGUAGE
             ),
@@ -4802,6 +4815,58 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "span": span,
             "cores": len(tr.core_names or []),
         }
+
+    def _ai_list_loaded_tabs(self) -> list:
+        """Loaded BTF tabs for the Trace Compare AI template."""
+        out = []
+        for i, tab in enumerate(self._tabs):
+            if getattr(tab, "trace", None) is None:
+                continue
+            path = getattr(tab, "path", "") or ""
+            name = _trace_display_name(path) if path else f"Tab {i + 1}"
+            out.append({"index": i, "name": name})
+        return out
+
+    def _ai_build_compare_context(self, idx_a: int, idx_b: int) -> dict:
+        """Build Trace Compare CSV context for AI (cursor scope on, like the dialog)."""
+        tabs = self._tabs
+        if not (0 <= idx_a < len(tabs) and 0 <= idx_b < len(tabs)):
+            raise ValueError("Invalid tab index for Trace Compare")
+        tab_a, tab_b = tabs[idx_a], tabs[idx_b]
+        tr_a, tr_b = tab_a.trace, tab_b.trace
+        if tr_a is None or tr_b is None:
+            raise ValueError("Both tabs must have a loaded trace")
+        name_a = _trace_display_name(tab_a.path) if tab_a.path else f"Tab {idx_a + 1}"
+        name_b = _trace_display_name(tab_b.path) if tab_b.path else f"Tab {idx_b + 1}"
+        scope_enabled = True
+        lo_a, hi_a = _cursor_range_for_tab(self, idx_a)
+        lo_b, hi_b = _cursor_range_for_tab(self, idx_b)
+        if not scope_enabled:
+            lo_a = hi_a = lo_b = hi_b = None
+        tables = _build_trace_compare_rows(tr_a, tr_b, lo_a, hi_a, lo_b, hi_b)
+        csv_text = _build_compare_csv(name_a, name_b, scope_enabled, tables)
+        if len(csv_text) > 60000:
+            csv_text = csv_text[:60000] + "\n… (truncated for AI context)"
+        findings = (
+            f"Trace Compare tables (CSV) for {name_a} vs {name_b}.\n"
+            f"Cursor scope per tab: yes (when 2+ cursors placed).\n\n"
+            f"{csv_text}"
+        )
+        return {
+            "findings_text": findings,
+            "scope": f"Trace Compare: {name_a} vs {name_b}",
+            "span": "",
+            "cores": "",
+        }
+
+    def _sync_ai_compare_template(self) -> None:
+        panel = getattr(self, "_ai_panel", None)
+        if panel is None:
+            return
+        if hasattr(panel, "refresh_enabled_state"):
+            panel.refresh_enabled_state()
+        elif hasattr(panel, "refresh_template_availability"):
+            panel.refresh_template_availability()
 
     def _ai_jump_time_unit(self, value: float) -> None:
         """Jump timeline; *value* is in the trace #timeScale unit (same as segment times)."""
@@ -6325,9 +6390,16 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             task_deadlines_text=_snap["task_deadlines_text"],
             time_decimals=self._time_decimals_val,
             ai_enabled=self._settings.get_bool("ai", "enabled", True),
+            ai_provider=self._settings.get("ai", "provider", DEFAULT_AI_PROVIDER),
             ollama_url=self._settings.get("ai", "ollama_url", DEFAULT_OLLAMA_URL),
             ollama_model=self._settings.get("ai", "ollama_model", DEFAULT_OLLAMA_MODEL),
             ollama_api_key=self._settings.get("ai", "ollama_api_key", ""),
+            openai_preset=self._settings.get("ai", "openai_preset", DEFAULT_OPENAI_PRESET),
+            openai_base_url=self._settings.get(
+                "ai", "openai_base_url", DEFAULT_OPENAI_BASE_URL
+            ),
+            openai_model=self._settings.get("ai", "openai_model", DEFAULT_OPENAI_MODEL),
+            openai_api_key=self._settings.get("ai", "openai_api_key", ""),
             response_language=self._settings.get(
                 "ai", "response_language", DEFAULT_AI_RESPONSE_LANGUAGE
             ),
@@ -6382,16 +6454,26 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                         _new_budget, _parse_task_deadlines_text(_new_dl_text))
             _ai_upd = {
                 "enabled": str(dlg.ai_enabled).lower(),
+                "provider": dlg.ai_provider or DEFAULT_AI_PROVIDER,
                 "ollama_url": dlg.ollama_url or DEFAULT_OLLAMA_URL,
                 "ollama_model": dlg.ollama_model or DEFAULT_OLLAMA_MODEL,
                 "ollama_api_key": dlg.ollama_api_key or "",
+                "openai_preset": dlg.openai_preset or DEFAULT_OPENAI_PRESET,
+                "openai_base_url": dlg.openai_base_url or DEFAULT_OPENAI_BASE_URL,
+                "openai_model": dlg.openai_model or DEFAULT_OPENAI_MODEL,
+                "openai_api_key": dlg.openai_api_key or "",
                 "response_language": dlg.response_language or DEFAULT_AI_RESPONSE_LANGUAGE,
             }
             _ai_changed = (
                 self._settings.get("ai", "enabled", "true").lower() != _ai_upd["enabled"]
+                or self._settings.get("ai", "provider", DEFAULT_AI_PROVIDER) != _ai_upd["provider"]
                 or self._settings.get("ai", "ollama_url", DEFAULT_OLLAMA_URL) != _ai_upd["ollama_url"]
                 or self._settings.get("ai", "ollama_model", DEFAULT_OLLAMA_MODEL) != _ai_upd["ollama_model"]
                 or self._settings.get("ai", "ollama_api_key", "") != _ai_upd["ollama_api_key"]
+                or self._settings.get("ai", "openai_preset", DEFAULT_OPENAI_PRESET) != _ai_upd["openai_preset"]
+                or self._settings.get("ai", "openai_base_url", DEFAULT_OPENAI_BASE_URL) != _ai_upd["openai_base_url"]
+                or self._settings.get("ai", "openai_model", DEFAULT_OPENAI_MODEL) != _ai_upd["openai_model"]
+                or self._settings.get("ai", "openai_api_key", "") != _ai_upd["openai_api_key"]
                 or self._settings.get(
                     "ai", "response_language", DEFAULT_AI_RESPONSE_LANGUAGE
                 ) != _ai_upd["response_language"]
@@ -6402,6 +6484,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._sync_panel_tab_visibility()
             self._apply_dock_visibility_from_prefs()
             self._sync_ai_menu()
+            self._sync_ai_compare_template()
         else:
             self._apply_settings_preview(_snap)
 

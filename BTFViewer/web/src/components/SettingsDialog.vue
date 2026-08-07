@@ -313,12 +313,12 @@
             </label>
           </div>
 
-          <!-- AI / Ollama -->
+          <!-- AI -->
           <div
             v-show="activeTab === 'ai'"
             class="settings-page"
           >
-            <h3 class="settings-section">Ollama connection</h3>
+            <h3 class="settings-section">AI connection</h3>
             <label class="settings-check">
               <input
                 v-model="draft.aiEnabled"
@@ -330,23 +330,101 @@
               When off, the AI tab is hidden.
             </p>
             <label class="settings-row col">
-              <span class="settings-label">Ollama URL</span>
-              <input
-                v-model="draft.ollamaUrl"
+              <span class="settings-label">Provider</span>
+              <select
+                v-model="draft.aiProvider"
                 class="settings-input wide"
-                type="url"
-                placeholder="http://localhost:11434"
               >
+                <option
+                  v-for="p in providerChoices"
+                  :key="p.id"
+                  :value="p.id"
+                >
+                  {{ p.label }}
+                </option>
+              </select>
             </label>
-            <label class="settings-row col">
-              <span class="settings-label">Model</span>
-              <input
-                v-model="draft.ollamaModel"
-                class="settings-input wide"
-                type="text"
-                placeholder="phi4-mini:3.8b or minimax-m3:cloud"
-              >
-            </label>
+
+            <template v-if="isOpenaiProvider">
+              <label class="settings-row col">
+                <span class="settings-label">Preset</span>
+                <select
+                  v-model="draft.openaiPreset"
+                  class="settings-input wide"
+                  @change="onOpenaiPresetChange"
+                >
+                  <option
+                    v-for="p in openaiPresets"
+                    :key="p.id"
+                    :value="p.id"
+                  >
+                    {{ p.label }}
+                  </option>
+                </select>
+              </label>
+              <label class="settings-row col">
+                <span class="settings-label">Base URL</span>
+                <input
+                  v-model="draft.openaiBaseUrl"
+                  class="settings-input wide"
+                  type="url"
+                  placeholder="https://api.openai.com/v1"
+                >
+              </label>
+              <label class="settings-row col">
+                <span class="settings-label">Model</span>
+                <input
+                  v-model="draft.openaiModel"
+                  class="settings-input wide"
+                  type="text"
+                  placeholder="gpt-4o-mini"
+                >
+              </label>
+              <label class="settings-row col">
+                <span class="settings-label">API key</span>
+                <input
+                  v-model="draft.openaiApiKey"
+                  class="settings-input wide"
+                  type="password"
+                  autocomplete="off"
+                  title="OpenAI / xAI / Gemini / DeepSeek key, or set VITE_OPENAI_API_KEY / VITE_GEMINI_API_KEY"
+                  placeholder="Required — or VITE_OPENAI_API_KEY / VITE_GEMINI_API_KEY"
+                >
+              </label>
+            </template>
+
+            <template v-else>
+              <label class="settings-row col">
+                <span class="settings-label">Ollama URL</span>
+                <input
+                  v-model="draft.ollamaUrl"
+                  class="settings-input wide"
+                  type="url"
+                  placeholder="http://localhost:11434"
+                >
+              </label>
+              <label class="settings-row col">
+                <span class="settings-label">Model</span>
+                <input
+                  v-model="draft.ollamaModel"
+                  class="settings-input wide"
+                  type="text"
+                  placeholder="phi4-mini:3.8b or minimax-m3:cloud"
+                >
+              </label>
+              <label class="settings-row col">
+                <span class="settings-label">API key</span>
+                <input
+                  v-model="draft.ollamaApiKey"
+                  class="settings-input wide"
+                  type="password"
+                  autocomplete="off"
+                  title="Optional for https://ollama.com — or set VITE_OLLAMA_API_KEY"
+                  placeholder="Optional — or VITE_OLLAMA_API_KEY"
+                >
+              </label>
+            </template>
+
             <label class="settings-row col">
               <span class="settings-label">Reply language</span>
               <select
@@ -362,43 +440,45 @@
                 </option>
               </select>
             </label>
-            <label class="settings-row col">
-              <span class="settings-label">API key</span>
-              <input
-                v-model="draft.ollamaApiKey"
-                class="settings-input wide"
-                type="password"
-                autocomplete="off"
-                placeholder="Optional — for https://ollama.com"
-              >
-            </label>
             <div class="settings-ai-test">
               <button
                 type="button"
                 class="settings-btn secondary"
-                :disabled="ollamaTesting"
-                title="Reach Ollama, confirm the model, and run a tiny chat probe. Status updates below — first model load can take a minute."
-                @click="onTestOllama"
+                :disabled="aiTesting"
+                title="Verify the provider/model with a tiny chat probe. Status updates below."
+                @click="onTestAi"
               >
-                {{ ollamaTesting ? 'Testing…' : 'Test connection' }}
+                {{ aiTesting ? 'Testing…' : 'Test connection' }}
               </button>
               <p
                 class="settings-test-status"
-                :class="ollamaTestClass"
+                :class="aiTestClass"
                 role="status"
                 aria-live="polite"
               >
-                {{ ollamaTestStatus || 'Click Test connection to verify Ollama and the model.' }}
+                {{ aiTestStatus || 'Click Test connection to verify the provider and model.' }}
               </p>
             </div>
-            <p class="settings-help">
+            <p
+              v-if="isOpenaiProvider"
+              class="settings-help"
+            >
+              OpenAI-compatible: ChatGPT, Grok, Gemini, DeepSeek, or Custom base URL.
+              Prefer a known <strong>Preset</strong> under <code>npm run dev</code> /
+              <code>preview</code> (Vite proxies avoid CORS).
+              Custom / <code>file://</code>: use Desktop, or expect CORS failures.
+              Context is Analysis Findings — not the raw BTF.
+            </p>
+            <p
+              v-else
+              class="settings-help"
+            >
               Local: <code>ollama pull phi4-mini:3.8b</code>.
               Cloud via local Ollama: <code>ollama signin</code> then model
-              <code>minimax-m3:cloud</code> (optional <code>ollama pull</code>).
+              <code>minimax-m3:cloud</code>.
               Or URL <code>https://ollama.com</code>, model <code>minimax-m3</code>, and an API key.
-              Context is Analysis Findings — not the raw BTF.
               Prefer <code>npm run dev</code> / <code>preview</code> (proxies local Ollama).
-              For <code>file://</code> opens: <code>OLLAMA_ORIGINS="*" ollama serve</code>.
+              For <code>file://</code>: <code>OLLAMA_ORIGINS="*" ollama serve</code>.
             </p>
           </div>
         </div>
@@ -441,7 +521,19 @@ import {
   parseDeadlinesText,
   shouldReplaceDeadlinesText,
 } from '../utils/settingsStore.js'
-import { ollamaTestConnection, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL, AI_RESPONSE_LANGUAGES } from '../utils/ollamaClient.js'
+import {
+  AI_OPENAI_PRESETS,
+  AI_PROVIDER_CHOICES,
+  AI_PROVIDER_OPENAI,
+  AI_RESPONSE_LANGUAGES,
+  DEFAULT_OLLAMA_MODEL,
+  DEFAULT_OLLAMA_URL,
+  DEFAULT_OPENAI_BASE_URL,
+  DEFAULT_OPENAI_MODEL,
+  applyOpenaiPreset,
+  aiTestConnection,
+  normalizeAiProvider,
+} from '../utils/ollamaClient.js'
 
 const props = defineProps({
   modelValue: { type: Object, required: true },
@@ -462,6 +554,11 @@ const _tabIds = new Set(tabs.map(t => t.id))
 const activeTab = ref(_tabIds.has(props.initialTab) ? props.initialTab : 'appearance')
 const draft = reactive(normalizeSettings(props.modelValue))
 const deadlinesText = ref(formatDeadlinesText(draft.taskDeadlines))
+const providerChoices = AI_PROVIDER_CHOICES
+const openaiPresets = AI_OPENAI_PRESETS
+const isOpenaiProvider = computed(
+  () => normalizeAiProvider(draft.aiProvider) === AI_PROVIDER_OPENAI,
+)
 const aiLanguageOptions = computed(() => {
   const cur = String(draft.aiResponseLanguage || '').trim()
   if (cur && !AI_RESPONSE_LANGUAGES.includes(cur)) {
@@ -469,14 +566,14 @@ const aiLanguageOptions = computed(() => {
   }
   return AI_RESPONSE_LANGUAGES
 })
-const ollamaTesting = ref(false)
-const ollamaTestStatus = ref('')
-const ollamaTestOk = ref(null)
-let ollamaAbort = null
+const aiTesting = ref(false)
+const aiTestStatus = ref('')
+const aiTestOk = ref(null)
+let aiAbort = null
 
-const ollamaTestClass = computed(() => {
-  if (ollamaTestOk.value === true) return 'ok'
-  if (ollamaTestOk.value === false) return 'error'
+const aiTestClass = computed(() => {
+  if (aiTestOk.value === true) return 'ok'
+  if (aiTestOk.value === false) return 'error'
   return ''
 })
 
@@ -525,43 +622,57 @@ const zoomUnit = computed(() => {
 function onReset() {
   Object.assign(draft, { ...DEFAULT_SETTINGS })
   deadlinesText.value = ''
-  ollamaTestStatus.value = ''
-  ollamaTestOk.value = null
+  aiTestStatus.value = ''
+  aiTestOk.value = null
 }
 
-async function onTestOllama() {
-  if (ollamaTesting.value) return
-  ollamaTesting.value = true
-  ollamaTestOk.value = null
-  const url = draft.ollamaUrl || DEFAULT_OLLAMA_URL
-  const model = draft.ollamaModel || DEFAULT_OLLAMA_MODEL
-  ollamaTestStatus.value = `Starting test for ${url} / ${model}…`
-  if (ollamaAbort) ollamaAbort.abort()
-  ollamaAbort = new AbortController()
+function onOpenaiPresetChange() {
+  const applied = applyOpenaiPreset(draft.openaiPreset)
+  if (applied.openaiBaseUrl) draft.openaiBaseUrl = applied.openaiBaseUrl
+  if (applied.openaiModel) draft.openaiModel = applied.openaiModel
+}
+
+async function onTestAi() {
+  if (aiTesting.value) return
+  aiTesting.value = true
+  aiTestOk.value = null
+  const provider = normalizeAiProvider(draft.aiProvider)
+  const isOpenai = provider === AI_PROVIDER_OPENAI
+  const url = isOpenai
+    ? (draft.openaiBaseUrl || DEFAULT_OPENAI_BASE_URL)
+    : (draft.ollamaUrl || DEFAULT_OLLAMA_URL)
+  const model = isOpenai
+    ? (draft.openaiModel || DEFAULT_OPENAI_MODEL)
+    : (draft.ollamaModel || DEFAULT_OLLAMA_MODEL)
+  aiTestStatus.value = `Starting test for ${url} / ${model}…`
+  if (aiAbort) aiAbort.abort()
+  aiAbort = new AbortController()
   try {
-    const msg = await ollamaTestConnection({
-      baseUrl: draft.ollamaUrl,
-      model: draft.ollamaModel,
-      apiKey: draft.ollamaApiKey,
-      signal: ollamaAbort.signal,
+    const msg = await aiTestConnection({
+      provider,
+      baseUrl: url,
+      model,
+      apiKey: isOpenai ? draft.openaiApiKey : draft.ollamaApiKey,
+      preset: draft.openaiPreset,
+      signal: aiAbort.signal,
       onProgress: (s) => {
-        ollamaTestOk.value = null
-        ollamaTestStatus.value = s
+        aiTestOk.value = null
+        aiTestStatus.value = s
       },
     })
-    ollamaTestOk.value = true
-    ollamaTestStatus.value = msg
+    aiTestOk.value = true
+    aiTestStatus.value = msg
   } catch (err) {
     if (err?.name === 'AbortError') {
-      ollamaTestStatus.value = 'Cancelled'
-      ollamaTestOk.value = null
+      aiTestStatus.value = 'Cancelled'
+      aiTestOk.value = null
     } else {
-      ollamaTestOk.value = false
-      ollamaTestStatus.value = err?.message || String(err)
+      aiTestOk.value = false
+      aiTestStatus.value = err?.message || String(err)
     }
   } finally {
-    ollamaTesting.value = false
-    ollamaAbort = null
+    aiTesting.value = false
+    aiAbort = null
   }
 }
 
