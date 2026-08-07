@@ -150,7 +150,7 @@ freertos_test: all tests passed
 
 ## Use cases
 
-Worked examples from the demo firmware and BTFViewer. Detailed viewer workflows: [`BTFViewer/WORKFLOWS.md`](BTFViewer/WORKFLOWS.md) · feature reference: [`BTFViewer/README.md`](BTFViewer/README.md).
+Worked examples from the demo firmware and BTFViewer. Detailed viewer workflows: [`BTFViewer/WORKFLOWS.md`](BTFViewer/WORKFLOWS.md) · user guide: [`BTFViewer/README.md`](BTFViewer/README.md).
 
 ### Use case: monitor heap usage with the tick hook
 
@@ -237,7 +237,7 @@ The logger records the **calling task id** automatically (`param2` in the binary
 
 In the demo (`Demo/examples/freertos_test/main.c`), `id` **0** brackets an entire test function; **1**–**9** bracket the inner loop of tests 1–9 respectively.
 
-**In BTFViewer:** paired spans appear as **Interval N** rows at the bottom of the timeline (horizontal task view). When the BTF note includes `tid:{task_id}`, start/stop events pair by **interval id + task id**; legacy traces without `tid` pair by the note string alone. Open **Statistics → Interval Analysis** for min/avg/max/p95 duration and a duration plot. See [`BTFViewer/README.md`](BTFViewer/README.md#interval-analysis) for pairing rules and SMP limitations.
+**In BTFViewer:** paired spans appear as **Interval N** rows at the bottom of the timeline (horizontal task view). When the BTF note includes `tid:{task_id}`, start/stop events pair by **interval id + task id**; legacy traces without `tid` pair by the note string alone. Open **Statistics → Interval Analysis** for duration summaries and charts. See the [BTFViewer user guide](BTFViewer/README.md#analysis) and [WORKFLOWS.md](BTFViewer/WORKFLOWS.md).
 
 ### Use case: SMP core migration heatmap
 
@@ -261,7 +261,7 @@ Each row is a directed core pair (`c0→c1`, `c0→c2`, …). Darker cells mean 
 
 Rows are tasks that migrated on the selected pair within the chosen bin; columns are **12 sub-bins** inside that bin. Click a task cell to zoom the timeline, place cursors, switch to **Task View**, and filter to that task.
 
-Traces with **more than 16 cores** use a three-level drill-down (core×core matrix → outgoing pairs → tasks). **Export PNG / SVG** from the heatmap dialog captures the full current level. See [`BTFViewer/README.md`](BTFViewer/README.md#migration-heatmap) for workflow, cursor scoping, and **Trace Compare…** integration.
+Traces with **more than 16 cores** use a three-level drill-down (core×core matrix → outgoing pairs → tasks). **Export PNG / SVG** from the heatmap dialog captures the full current level. See [Migration heatmap](BTFViewer/README.md#migration-heatmap) and [WORKFLOWS.md](BTFViewer/WORKFLOWS.md).
 
 ---
 
@@ -269,7 +269,7 @@ Traces with **more than 16 cores** use a three-level drill-down (core×core matr
 
 ### BTF Viewer (built-in)
 
-An interactive Gantt-style viewer is included in the `BTFViewer/` directory (desktop PySide6 app and browser-based web viewer). Both share the same default settings (dark theme, grid on, hover dimming off, 22 px rows, etc.). They support Task/Core views, measurement cursors (2–8, default 4), CPU load graph, bookmarks, **Statistics** / **Marks** / **Find** right-side panels, **Statistics** (execution time, blocking/response time, tick health with tick-interval distribution, preemption chain, priority inheritance, mutex/semaphore pairing, interval analysis), toolbar **Analysis** findings, **adaptive metrics histograms** (auto linear / p5–p95 / log scaling, CDF overlay), **core migration heatmap**, **Export Perfetto**, trace compare, a **trace quality** banner when BTF meta reports overflow or truncation, and PNG/SVG export.
+An interactive Gantt-style viewer is included in the `BTFViewer/` directory (desktop app and browser build). Both support task/core timelines, cursors, statistics, Analysis Findings, migration tools, Trace Compare, AI Assistant, and export (PNG/SVG, Perfetto, CSV/HTML).
 
 **Desktop requirements:** Python 3.8+ and PySide6 ≥ 6.4
 
@@ -280,7 +280,7 @@ python BTFViewer/builds/btf_viewer.py tracedata/trace.btf
 python BTFViewer/builds/btf_viewer.py tracedata/example-4cores.btf.gz
 ```
 
-See [`BTFViewer/README.md`](BTFViewer/README.md) for the full feature reference (zoom, cursors, [migration heatmap](BTFViewer/README.md#migration-heatmap), [statistics](BTFViewer/README.md#statistics--metrics), [Analysis Findings](BTFViewer/README.md#analysis-findings), trace compare, headless CLI, session restore, export, etc.). Practical diagnosis walkthroughs: [`BTFViewer/WORKFLOWS.md`](BTFViewer/WORKFLOWS.md).
+User guide: [`BTFViewer/README.md`](BTFViewer/README.md) · diagnosis walkthroughs: [`BTFViewer/WORKFLOWS.md`](BTFViewer/WORKFLOWS.md).
 
 ### Eclipse Trace Compass
 
@@ -401,7 +401,7 @@ Event-to-BTF field mapping is documented in [Binary → BTF dump mapping](#binar
 
 ## Reference
 
-On-disk `trace.bin` layout, event encoding, BTF quality metadata, and BTF line generation. For BTF **text** file semantics (task names, STI channels, intervals), see [`BTFViewer/README.md`](BTFViewer/README.md#btf-format).
+On-disk `trace.bin` layout, event encoding, BTF quality metadata, and BTF line generation. For viewer usage (task labels, STI, intervals on the timeline), see the [BTFViewer user guide](BTFViewer/README.md).
 
 ### `trace.bin` binary format
 

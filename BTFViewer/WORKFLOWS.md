@@ -430,7 +430,7 @@ python builds/btf_viewer.py perfetto ../tracedata/example-8cores.btf.gz -o trace
 
 ## 7. AI Assistant Flow
 
-Use the right-panel **AI** tab after Analysis Findings exist. The assistant receives **structured findings for the current Statistics scope** (plus span / core count) — never the raw BTF stream. Full setup and troubleshooting: [README.md § AI Assistant](README.md#ai-assistant-ollama).
+Use the right-panel **AI** tab after Analysis Findings exist. The assistant receives **structured findings for the current Statistics scope** (plus span / core count) — never the raw BTF stream. Full setup and troubleshooting: [README.md → AI Assistant](README.md#ai-assistant).
 
 ```text
 ① Load trace + open Statistics
