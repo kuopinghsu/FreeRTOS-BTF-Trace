@@ -22,20 +22,10 @@ const llmProxies = {
     changeOrigin: true,
     rewrite: (path) => path.replace(/^\/proxy\/openai/, ''),
   },
-  '/proxy/xai': {
-    target: 'https://api.x.ai',
-    changeOrigin: true,
-    rewrite: (path) => path.replace(/^\/proxy\/xai/, ''),
-  },
   '/proxy/gemini': {
     target: 'https://generativelanguage.googleapis.com',
     changeOrigin: true,
     rewrite: (path) => path.replace(/^\/proxy\/gemini/, ''),
-  },
-  '/proxy/deepseek': {
-    target: 'https://api.deepseek.com',
-    changeOrigin: true,
-    rewrite: (path) => path.replace(/^\/proxy\/deepseek/, ''),
   },
 }
 

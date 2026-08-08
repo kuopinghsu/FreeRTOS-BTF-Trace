@@ -216,7 +216,7 @@
             Find
           </button>
           <button
-            v-if="appSettings.showAi !== false && appSettings.aiEnabled !== false"
+            v-if="aiTabVisible"
             class="panel-tab"
             :class="{ active: rightPanelTab === 'ai' }"
             role="tab"
@@ -364,31 +364,10 @@
             </div>
           </div>
 
-          <div v-else-if="rightPanelTab === 'ai'" class="panel-page panel-page-ai">
-            <div class="panel-section flex-fill">
-              <AiAssistantPanel
-                ref="aiPanelRef"
-                :ai-enabled="appSettings.aiEnabled !== false"
-                :ai-provider="appSettings.aiProvider"
-                :ollama-url="appSettings.ollamaUrl"
-                :ollama-model="appSettings.ollamaModel"
-                :ollama-api-key="appSettings.ollamaApiKey"
-                :openai-preset="appSettings.openaiPreset"
-                :openai-base-url="appSettings.openaiBaseUrl"
-                :openai-model="appSettings.openaiModel"
-                :openai-api-key="appSettings.openaiApiKey"
-                :response-language="appSettings.aiResponseLanguage"
-                :get-context="buildAiContext"
-                :get-loaded-tabs="listAiLoadedTabs"
-                :build-compare-context="buildAiCompareContext"
-                @open-settings="openSettingsDialog('ai')"
-                @update:response-language="onAiResponseLanguage"
-                @jump="onAiJump"
-              />
-            </div>
-          </div>
-
-          <div v-else class="panel-page panel-page-stats">
+          <div
+            v-else-if="rightPanelTab !== 'ai' || !aiTabVisible"
+            class="panel-page panel-page-stats"
+          >
             <div class="panel-section flex-fill">
               <StatisticsPanel
                 :trace="trace"
@@ -414,6 +393,31 @@
                 @open-pair-heatmap="onOpenPairHeatmap"
                 @open-pair-chord="onOpenPairChord"
                 @open-settings="openSettingsDialog"
+              />
+            </div>
+          </div>
+
+          <!-- Outside the v-if chain and only hidden, never destroyed, so the
+               conversation survives tab switches and a reply that arrives while
+               another tab is open still lands in the log. -->
+          <div
+            v-if="aiTabVisible"
+            v-show="rightPanelTab === 'ai'"
+            class="panel-page panel-page-ai"
+          >
+            <div class="panel-section flex-fill">
+              <AiAssistantPanel
+                ref="aiPanelRef"
+                :ai-enabled="appSettings.aiEnabled !== false"
+                :ai-preset="appSettings.aiPreset"
+                :ai-presets="appSettings.aiPresets"
+                :response-language="appSettings.aiResponseLanguage"
+                :get-context="buildAiContext"
+                :get-loaded-tabs="listAiLoadedTabs"
+                :build-compare-context="buildAiCompareContext"
+                @open-settings="openSettingsDialog('ai')"
+                @update:response-language="onAiResponseLanguage"
+                @jump="onAiJump"
               />
             </div>
           </div>
@@ -947,6 +951,9 @@ const analysisOpen = ref(false)
 let _heatmapRestoreSnapshot = null
 const statsPaused = ref(false)
 const rightPanelTab = ref('stats')
+const aiTabVisible = computed(
+  () => appSettings.showAi !== false && appSettings.aiEnabled !== false,
+)
 const jumpDialogOpen = ref(false)
 const dragOver = ref(false)
 const statsSectionHeights = ref({})
@@ -1932,6 +1939,16 @@ watch(
   () => tabs.value.filter(t => t?.trace).map(t => t.id).join('|'),
   () => { aiPanelRef.value?.refreshLoadedTabs?.() },
 )
+
+// The panel stays mounted while hidden, so catch it up on re-entry: a log
+// scrolled while display:none keeps its old offset.
+watch(rightPanelTab, (tab) => {
+  if (tab !== 'ai') return
+  nextTick(() => {
+    aiPanelRef.value?.refreshLoadedTabs?.()
+    aiPanelRef.value?.scrollLog?.()
+  })
+})
 
 function onAiJump(t) {
   if (t == null || !Number.isFinite(Number(t))) return

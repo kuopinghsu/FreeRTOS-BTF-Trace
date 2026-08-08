@@ -56,12 +56,12 @@ function inlineToHtml(text) {
       const label = escapeHtml(lm[1])
       const href = String(lm[2] || '').trim()
       const low = href.toLowerCase()
-      if (
-        low.startsWith('http://')
-        || low.startsWith('https://')
-        || low.startsWith('btfjump:')
-        || low.startsWith('mailto:')
-      ) {
+      if (low.startsWith('http://') || low.startsWith('https://')) {
+        // Same-tab navigation would discard every loaded trace.
+        buf.push(stash(
+          `<a href="${escapeAttr(href)}" target="_blank" rel="noopener noreferrer">${label}</a>`,
+        ))
+      } else if (low.startsWith('btfjump:') || low.startsWith('mailto:')) {
         buf.push(stash(`<a href="${escapeAttr(href)}">${label}</a>`))
       } else {
         buf.push(escapeHtml(lm[0]))
@@ -173,6 +173,75 @@ export function markdownToSafeHtml(text) {
   }
   flushPara()
   return out.join('')
+}
+
+function conversationStamp(date = new Date()) {
+  const p = n => String(n).padStart(2, '0')
+  return `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())} `
+    + `${p(date.getHours())}:${p(date.getMinutes())}:${p(date.getSeconds())}`
+}
+
+/** File-name stamp such as 20260808-084102. */
+export function aiFileStamp(date = new Date()) {
+  const p = n => String(n).padStart(2, '0')
+  return `${date.getFullYear()}${p(date.getMonth() + 1)}${p(date.getDate())}`
+    + `-${p(date.getHours())}${p(date.getMinutes())}${p(date.getSeconds())}`
+}
+
+/**
+ * Markdown transcript of the conversation (assistant replies kept as-is).
+ * Keep in sync with ai_assistant.py::format_ai_conversation_markdown.
+ */
+export function formatAiConversationMarkdown(entries, date = new Date()) {
+  const out = ['# BTF Viewer — AI Conversation', '', `_Saved ${conversationStamp(date)}_`, '']
+  for (const { role, content } of entries || []) {
+    out.push(role === 'user' ? '## You' : '## Assistant', '', String(content || '').trim(), '')
+  }
+  return `${out.join('\n').replace(/\s+$/, '')}\n`
+}
+
+/** Plain-text transcript of the conversation. */
+export function formatAiConversationText(entries, date = new Date()) {
+  const out = ['BTF Viewer — AI Conversation', `Saved ${conversationStamp(date)}`, '']
+  for (const { role, content } of entries || []) {
+    out.push(role === 'user' ? 'You:' : 'Assistant:', String(content || '').trim(), '')
+  }
+  return `${out.join('\n').replace(/\s+$/, '')}\n`
+}
+
+/** Standalone HTML transcript (Markdown rendered, same styling as the panel). */
+export function formatAiConversationHtml(entries, date = new Date()) {
+  const body = (entries || []).map(({ role, content }) => (
+    `<section class="msg ${role === 'user' ? 'user' : 'assistant'}">`
+    + `<h3>${role === 'user' ? 'You' : 'Assistant'}</h3>`
+    + `<div class="body">${formatAiMessageHtml(role, content)}</div>`
+    + '</section>'
+  )).join('\n')
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>BTF Viewer — AI Conversation</title>
+<style>
+body{background:#12161d;color:#dbe2ea;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;
+  font-size:13px;line-height:1.5;margin:0;padding:20px;}
+h1{font-size:18px;margin:0 0 4px;}
+.saved{color:#8b98a8;font-size:12px;margin:0 0 16px;}
+.msg{border-top:1px solid #2b3442;padding:10px 0;}
+.msg h3{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:#8b98a8;margin:0 0 6px;}
+pre{background:#1a2230;border:1px solid #3a4658;border-radius:4px;padding:8px;overflow:auto;}
+code{font-family:Menlo,Consolas,Monaco,'Courier New',monospace;font-size:12px;}
+blockquote{margin:6px 0;padding:4px 10px;border-left:3px solid #5b9bd5;color:#a8b4c4;}
+a{color:#5b9bd5;}
+</style>
+</head>
+<body>
+<h1>BTF Viewer — AI Conversation</h1>
+<p class="saved">Saved ${conversationStamp(date)}</p>
+${body}
+</body>
+</html>
+`
 }
 
 /** Format a chat message; assistant = Markdown preview, user = plain. */

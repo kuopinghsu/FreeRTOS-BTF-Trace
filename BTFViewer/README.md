@@ -190,15 +190,48 @@ With **two or more** tabs open, **Trace Compare…** diffs summary, top tasks, u
 
 The **AI** tab answers questions using **Analysis Findings** (or Trace Compare tables for that template)—not the raw BTF stream.
 
-1. **Settings → AI** — choose Ollama or an OpenAI-compatible provider; set model and API key; **Test connection**.
-2. Use a template or ask freely; click `jump:TIME` links to seek the timeline.
-3. Set reply language in Settings or **Language…** on the AI bar.
+Any OpenAI-compatible endpoint works, including Ollama's own (`http://localhost:11434/v1`).
+
+1. **Settings → AI** — pick a preset (**Ollama**, **OpenAI**, **Google Gemini**, or **Custom**), adjust base URL / model / API key, then **Test connection**. Each preset keeps its own settings, so switching back and forth never loses a key.
+2. **Import…** loads an endpoint from a JSON file — see [`examples/ai`](examples/ai/README.md) for [`gemini.json`](examples/ai/gemini.json), [`openai.json`](examples/ai/openai.json), [`deepseek.json`](examples/ai/deepseek.json), [`grok.json`](examples/ai/grok.json), and the field reference. Imported values fill the form; review and confirm to save.
+3. Use a template or ask freely; click `jump:TIME` links to seek the timeline.
+4. Set reply language in Settings or **Language…** on the AI bar.
+5. Right-click the reply area to copy the conversation or **Save As…** it (Markdown, plain text, or HTML).
 
 | If this happens | Try |
 |-----------------|-----|
-| Web: Failed to fetch / CORS | Prefer `npm run dev` / `make preview`; for `file://`, set `OLLAMA_ORIGINS` |
-| 401 / 403 | Check API key (Desktop: also `OPENAI_API_KEY` / `GEMINI_API_KEY` / `OLLAMA_API_KEY`) |
-| Model not found | Pull or select a model that exists for your provider |
+| Web: Failed to fetch / CORS | The server is usually fine — the page just is not allowed to call it. Prefer `npm run dev` / `make preview` (both proxy Ollama), or see [Opening the web app from `file://`](#opening-the-web-app-from-file) |
+| 401 / 403 | Check API key (also read from `OPENAI_API_KEY` / `GEMINI_API_KEY` / `OLLAMA_API_KEY`; local Ollama needs none) |
+| Model not found | Test connection lists the models the endpoint serves — pick one of those, or `ollama pull` it |
+
+### Opening the web app from `file://`
+
+A page opened straight from disk sends `Origin: null`, which Ollama rejects with
+`403` — the browser then reports only `Failed to fetch`. Serving the app over
+http avoids this entirely (`npm run dev` / `make preview` proxy Ollama for you),
+and the Desktop app is not affected at all.
+
+To keep using `file://`, allow every origin on the Ollama side:
+
+```bash
+# Server started from a terminal
+OLLAMA_ORIGINS="*" ollama serve
+
+# macOS menu-bar app (Ollama.app) — a shell variable does not reach it
+launchctl setenv OLLAMA_ORIGINS "*"   # then quit Ollama and reopen it
+```
+
+Verify the change took effect; expect `200` and an `Access-Control-Allow-Origin`
+header:
+
+```bash
+curl -s -D - -o /dev/null -H "Origin: null" http://localhost:11434/v1/models \
+  | grep -iE "^HTTP|access-control-allow-origin"
+```
+
+If a `file://` page is still refused, list the null origin explicitly with
+`OLLAMA_ORIGINS="*,null"`. Note that `*` lets **any** page you visit reach your
+local models; undo it with `launchctl unsetenv OLLAMA_ORIGINS` when done.
 
 Ask-order tips: [WORKFLOWS.md §7](WORKFLOWS.md#7-ai-assistant-flow).
 
@@ -282,17 +315,25 @@ These sections open the Statistics panel in the **default** order (Summary and S
 
 **Scheduling summary** — per core, **context switches** count slice boundaries and **core gap** is idle time between consecutive slices on that core:
 
-> **Formula:** g<sub>core</sub> = t<sub>start,k+1</sub> - t<sub>end,k</sub>
+```math
+g_{\mathrm{core}} = t_{\mathrm{start},k+1} - t_{\mathrm{end},k}
+```
 
 Large **max core gap** on a core that should be busy suggests starvation, tickless idle, or a single long-running task blocking others.
 
 **Core utilisation** — per core, share of non-IDLE, non-TICK active time in scope:
 
-> **Formula:** U<sub>core</sub> = (T<sub>active,core</sub> / T<sub>scope</sub>) × 100
+```math
+U_{\mathrm{core}} = \frac{T_{\mathrm{active,core}}}{T_{\mathrm{scope}}} \times 100
+```
 
 When two or more cores are present, two gauges are shown side by side at the top of the section — **Load Balance Score** and **Std Deviation (σ)**:
 
-> **Formula:** Score = 100% × (1 − G), where G is the Gini coefficient of {U<sub>core</sub>}
+```math
+\mathrm{Score} = 100\,\% \times (1 - G)
+```
+
+where *G* is the Gini coefficient of {*U*<sub>core</sub>}.
 
 σ is the population standard deviation of `{U_core}`. The Score needle uses a 0–100 % scale (100 = perfect balance, 0 = single-core overload); the σ needle uses a 0–60 % scale with the warn threshold at mid-scale. Zones match toolbar **Analysis**:
 
@@ -312,7 +353,12 @@ Uses STI **TICK** timestamps to estimate scheduler tick regularity and detect wh
 
 **Formula** — for consecutive TICK events at times *t*<sub>n</sub>:
 
-> **Formula:** Δ<sub>n</sub> = t<sub>n</sub> − t<sub>n−1</sub>, μ = mean(Δ<sub>n</sub>), σ = stdev(Δ<sub>n</sub>), CV = σ / μ
+```math
+\Delta_n = t_n - t_{n-1}, \quad
+\mu = \mathrm{mean}(\Delta_n), \quad
+\sigma = \mathrm{stdev}(\Delta_n), \quad
+\mathrm{CV} = \frac{\sigma}{\mu}
+```
 
 **Missed ticks (est.)** counts large gaps where Δ<sub>n</sub> ≫ μ (roughly ⌊Δ<sub>n</sub> / μ⌋ − 1).
 
@@ -361,7 +407,9 @@ Temporal parallelism: how much of the scoped window is spent with exactly *N* co
 
 **Formula** — let isActive(c,t) be 1 when core *c* runs a non-IDLE/non-TICK task at time *t*:
 
-> **Formula:** N<sub>active</sub>(t) = Σ<sub>c</sub> isActive(c,t)
+```math
+N_{\mathrm{active}}(t) = \sum_{c} \mathrm{isActive}(c,t)
+```
 
 The table aggregates dwell time at each level *N*.
 
@@ -386,7 +434,9 @@ python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
 
 Per-core cost of consecutive context switches from `core_segs` gaps — time from the previous slice's preempt/end to the next slice's resume/start on the same core:
 
-> **Formula:** O<sub>switch</sub> = t<sub>resume,B</sub> - t<sub>preempt,A</sub>
+```math
+O_{\mathrm{switch}} = t_{\mathrm{resume},B} - t_{\mathrm{preempt},A}
+```
 
 | Column | Meaning |
 |--------|---------|
@@ -419,7 +469,7 @@ In the default panel sequence, the next sections are **Core Migrations**, **Core
 
 These three task metrics are measured from consecutive on-CPU slices of the same task. The figure below shows how they relate on the timeline (UI label **Block Time** = Statistics **Blocking Time**):
 
-![Execution Time, Block Time, and Inter-Arrival Time on consecutive task slices](../images/statistics.png)
+![Execution Time, Block Time, and Inter-Arrival Time on consecutive task slices](../images/slice-timing-metrics.png)
 
 | Metric | Spans |
 |--------|--------|
@@ -435,11 +485,15 @@ Measures how long each **on-CPU slice** lasts for a task — from switch-in unti
 
 **Formula** — for task *i*, each on-CPU slice *k* in scope:
 
-> **Formula:** d<sub>k</sub> = t<sub>end,k</sub> - t<sub>start,k</sub>
+```math
+d_k = t_{\mathrm{end},k} - t_{\mathrm{start},k}
+```
 
 Table statistics are computed over all slice durations *d*<sub>k</sub> in scope. **Jitter** is the observed range, `Max − Min`; **σ** is the population standard deviation (the observed slices are treated as the complete population in scope). **CPU%** is the task's share of total active CPU time in scope:
 
-> **Formula:** CPU<sub>i</sub> = (T<sub>exec,i</sub> / Σ<sub>j</sub> T<sub>exec,j</sub>) × 100
+```math
+\mathrm{CPU}_i = \frac{T_{\mathrm{exec},i}}{\sum_j T_{\mathrm{exec},j}} \times 100
+```
 
 **What it tells you:** Short, uniform slices suggest periodic or tick-driven scheduling. A long **Max** or heavy **p95** tail marks worst-case execution time (WCET) slices — often critical sections, lock holds, or interrupt-disabled regions. Compare **Min** (BCET) and **Max** (WCET) to judge jitter; a wide spread on a real-time task may violate deadline assumptions even when **Avg** looks acceptable.
 
@@ -473,7 +527,9 @@ Measures the **off-CPU gap** between the end of one slice and the start of the n
 
 **Formula** — for consecutive activations *k* and *k+1* of task *i*:
 
-> **Formula:** g<sub>k</sub> = t<sub>start,k+1</sub> - t<sub>end,k</sub>
+```math
+g_k = t_{\mathrm{start},k+1} - t_{\mathrm{end},k}
+```
 
 Only positive gaps are counted. Min / Avg / Max / p95 are taken over all gaps *g*<sub>k</sub> in scope.
 
@@ -503,7 +559,9 @@ High blocking gaps clustered at certain times often correlate with lock contenti
 
 Ready→run delay for a task: t<sub>ready</sub> from STI `resume Name[id]` (`vTaskResume`) or task **create** time, and t<sub>resume</sub> from the next switch-in (segment start):
 
-> **Formula:** L<sub>dispatch,k</sub> = t<sub>resume,k</sub> - t<sub>ready,k</sub>
+```math
+L_{\mathrm{dispatch},k} = t_{\mathrm{resume},k} - t_{\mathrm{ready},k}
+```
 
 Sync-object wakes (`give`/`send`) are **not** attributed yet — BTF notes carry the object pointer, not the woken task id.
 
@@ -532,7 +590,9 @@ Measures the gap between **successive activation start times** of the same task 
 
 **Formula** — for consecutive activations *k* and *k+1*:
 
-> **Formula:** Δt<sub>k</sub> = t<sub>start,k+1</sub> - t<sub>start,k</sub>
+```math
+\Delta t_k = t_{\mathrm{start},k+1} - t_{\mathrm{start},k}
+```
 
 Min / Avg / Max / p95 are taken over all inter-arrival samples Δ*t*<sub>k</sub> in scope.
 
@@ -564,7 +624,10 @@ For each **victim** task's off-CPU gap, the analyser finds which **preemptor** t
 
 **Formula** — for victim *v* and preemptor *p* on the same core during gap *g*:
 
-> **Formula:** overlap(v,p,g) = Σ<sub>p ∈ g</sub> [min(t<sub>end</sub>, g<sub>end</sub>) - max(t<sub>start</sub>, g<sub>start</sub>)]
+```math
+\mathrm{overlap}(v,p,g) = \sum_{p \in g}
+\left[ \min(t_{\mathrm{end}}, g_{\mathrm{end}}) - \max(t_{\mathrm{start}}, g_{\mathrm{start}}) \right]
+```
 
 **Count** is the number of such overlap events; **Total** / **Avg** / **Max** summarise overlap durations for each victim←preemptor pair.
 
@@ -601,7 +664,9 @@ Shown when the trace has **`create pri:N`** on task-create `T` rows **and** at l
 
 **Formula** — a **boost episode** is a contiguous interval where the task's effective priority is above its **Base** (from `create pri:N`):
 
-> **Formula:** T<sub>boosted</sub> = Σ<sub>episodes</sub> (t<sub>end</sub> - t<sub>start</sub>)
+```math
+T_{\mathrm{boosted}} = \sum_{\mathrm{episodes}} (t_{\mathrm{end}} - t_{\mathrm{start}})
+```
 
 where *t*<sub>start</sub> is the inherit / set-up STI and *t*<sub>end</sub> is the disinherit / set-back STI for each episode.
 
@@ -715,7 +780,9 @@ The viewer pairs **`take`/`give`** (and **`create`/`delete`**) **per pointer** �
 
 **Formula** — for each paired hold span *h* of duration τ<sub>h</sub>:
 
-> **Formula:** τ̄<sub>hold</sub> = (1 / N<sub>holds</sub>) × Σ<sub>h</sub> τ<sub>h</sub>
+```math
+\bar{\tau}_{\mathrm{hold}} = \frac{1}{N_{\mathrm{holds}}} \sum_h \tau_h
+```
 
 **What it tells you:** **Avg hold** shows typical lock or semaphore residency time — very long holds inflate blocking for waiters. **Issues** > 0 (orphan give, cross-task give, unmatched take, delete while held) mean the trace does not form clean take/give pairs and hold statistics may be incomplete. **Deadlock risk** at trace end flags multiple mutexes still held by different tasks — verify whether that is expected teardown or a real stall.
 
@@ -768,7 +835,9 @@ Pairs **`interval_start` / `interval_stop`** STI events into measurable code reg
 
 **Formula** — for each paired instance *j* with start *t*<sub>s</sub> and stop *t*<sub>e</sub>:
 
-> **Formula:** τ<sub>j</sub> = t<sub>e</sub> - t<sub>s</sub>
+```math
+\tau_j = t_e - t_s
+```
 
 **Count** is the number of paired spans in scope; Min / Avg / Max / p95 are over all interval durations τ<sub>j</sub>.
 
@@ -970,7 +1039,9 @@ The distribution popup has two in-dialog tabs — **Value** (above) and **Interv
 
 **Formula** — for consecutive samples (sorted by time) *k* and *k−1* on one channel:
 
-> **Formula:** δ<sub>k</sub> = t<sub>k</sub> - t<sub>k-1</sub>
+```math
+\delta_k = t_k - t_{k-1}
+```
 
 **Scatter:** x = the later sample's time, y = δ<sub>k</sub> (rendered as a duration, using the same adaptive time units as other metric charts). **Histogram:** distribution of δ<sub>k</sub> with the usual min/avg/max/p95 reference lines and [CDF overlay](#cdf-overlay). Clicking a scatter point jumps to and annotates the later sample's time.
 
@@ -1040,7 +1111,9 @@ python builds/btf_viewer.py migrations ../tracedata/example-8cores.btf.gz \
 
 **Migration rate** — normalizes raw migration count against task active time and (when TICK STIs exist) scheduler ticks, so a task that migrates often relative to how much it runs stands out:
 
-> **Formula:** R<sub>m</sub> = N<sub>migrations,i</sub> / T<sub>exec,i</sub>
+```math
+R_m = \frac{N_{\mathrm{migrations},i}}{T_{\mathrm{exec},i}}
+```
 
 The **Rate** column shows *R*<sub>m</sub> as migrations per second of on-CPU time (e.g. `1.23/s`). When the trace includes TICK events, it also shows migrations per **on-CPU** scheduler tick for that task (e.g. `2.785/tick`) — TICK STIs that fall inside one of the task's slices in scope, not trace-wide tick count.
 
@@ -1048,7 +1121,10 @@ The **Rate** column shows *R*<sub>m</sub> as migrations per second of on-CPU tim
 
 **Average core dwell time** — mean duration of each on-CPU stay before the task blocks, yields, or migrates:
 
-> **Formula:** T̄<sub>d</sub> = (1 / N<sub>slices</sub>) × Σ<sub>k</sub> d<sub>k</sub> = T<sub>exec,i</sub> / N<sub>slices,i</sub>
+```math
+\bar{T}_d = \frac{1}{N_{\mathrm{slices}}} \sum_k d_k
+= \frac{T_{\mathrm{exec},i}}{N_{\mathrm{slices},i}}
+```
 
 Each slice *d*<sub>k</sub> is one switch-in episode (equivalent to averaging per-core dwell, *T*<sub>on</sub> / *N*<sub>slices</sub>, on each core the task visited).
 
@@ -1493,7 +1569,7 @@ Open **Settings** from the toolbar or `Ctrl+,`.
 | **Display** | Show/hide Legend, Statistics, Marks, Find, AI, STI, grid; hover highlight |
 | **Layout** | Label width, row height, zoom 1:1 density, max cursors, time decimals, CPU/STI sizes |
 | **Analysis** | CPU budget % and per-task deadline thresholds |
-| **AI** | Enable, provider, preset, URL, model, API key, reply language |
+| **AI** | Enable, preset (Ollama / OpenAI / Gemini / Custom), base URL, model, API key, reply language |
 
 | | Desktop | Web |
 |--|---------|-----|

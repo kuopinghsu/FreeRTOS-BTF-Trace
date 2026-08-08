@@ -2,14 +2,11 @@
 import { syncTimelineLayoutFromSettings } from './timelineLayout.js'
 import { normalizeStatsPins, normalizeStatsSectionOrder } from './statsPins.js'
 import {
-  DEFAULT_AI_PROVIDER,
+  AI_PRESETS,
+  DEFAULT_AI_PRESET,
   DEFAULT_AI_RESPONSE_LANGUAGE,
-  DEFAULT_OLLAMA_MODEL,
-  DEFAULT_OLLAMA_URL,
-  DEFAULT_OPENAI_BASE_URL,
-  DEFAULT_OPENAI_MODEL,
-  DEFAULT_OPENAI_PRESET,
-  normalizeAiProvider,
+  migrateAiSettings,
+  normalizeAiPreset,
 } from './ollamaClient.js'
 
 const SETTINGS_KEY = 'btf-viewer-settings-v1'
@@ -49,15 +46,31 @@ export const DEFAULT_SETTINGS = {
   statsSectionOrder: [],
   showAi: true,
   aiEnabled: true,
-  aiProvider: DEFAULT_AI_PROVIDER,
-  ollamaUrl: DEFAULT_OLLAMA_URL,
-  ollamaModel: DEFAULT_OLLAMA_MODEL,
-  ollamaApiKey: '',
-  openaiPreset: DEFAULT_OPENAI_PRESET,
-  openaiBaseUrl: DEFAULT_OPENAI_BASE_URL,
-  openaiModel: DEFAULT_OPENAI_MODEL,
-  openaiApiKey: '',
+  aiPreset: DEFAULT_AI_PRESET,
+  // Per-preset base URL / model / API key; empty means "preset default".
+  aiPresets: Object.fromEntries(
+    AI_PRESETS.map((p) => [p.id, { baseUrl: '', model: '', apiKey: '' }]),
+  ),
   aiResponseLanguage: DEFAULT_AI_RESPONSE_LANGUAGE,
+}
+
+/** Per-preset AI fields, migrating any pre-preset settings on the way. */
+function normalizeAiPresetSettings(s) {
+  const migrated = migrateAiSettings(s) || {}
+  const stored = { ...(s.aiPresets || {}) }
+  for (const [pid, vals] of Object.entries(migrated.aiPresets || {})) {
+    stored[pid] = { ...(stored[pid] || {}), ...vals }
+  }
+  const out = {}
+  for (const preset of AI_PRESETS) {
+    const v = stored[preset.id] || {}
+    out[preset.id] = {
+      baseUrl: String(v.baseUrl || '').trim().replace(/\/+$/, ''),
+      model: String(v.model || '').trim(),
+      apiKey: String(v.apiKey || '').trim(),
+    }
+  }
+  return { presets: out, preset: migrated.aiPreset || '' }
 }
 
 function clampInt(v, lo, hi, fallback) {
@@ -75,6 +88,8 @@ function clampFloat(v, lo, hi, fallback) {
 /** @returns {typeof DEFAULT_SETTINGS} */
 export function normalizeSettings(raw) {
   const s = { ...DEFAULT_SETTINGS, ...(raw && typeof raw === 'object' ? raw : {}) }
+  // Migration reads the raw object: merged defaults would mask "never set".
+  const ai = normalizeAiPresetSettings(raw && typeof raw === 'object' ? raw : {})
   return {
     darkMode: !!s.darkMode,
     colorblindSafe: !!s.colorblindSafe,
@@ -107,19 +122,8 @@ export function normalizeSettings(raw) {
     statsSectionOrder: normalizeStatsSectionOrder(s.statsSectionOrder),
     showAi: s.showAi !== false,
     aiEnabled: s.aiEnabled !== false,
-    aiProvider: normalizeAiProvider(s.aiProvider),
-    ollamaUrl: String(s.ollamaUrl || DEFAULT_SETTINGS.ollamaUrl).trim().replace(/\/+$/, '')
-      || DEFAULT_SETTINGS.ollamaUrl,
-    ollamaModel: String(s.ollamaModel || DEFAULT_SETTINGS.ollamaModel).trim()
-      || DEFAULT_SETTINGS.ollamaModel,
-    ollamaApiKey: String(s.ollamaApiKey || '').trim(),
-    openaiPreset: String(s.openaiPreset || DEFAULT_SETTINGS.openaiPreset).trim()
-      || DEFAULT_SETTINGS.openaiPreset,
-    openaiBaseUrl: String(s.openaiBaseUrl || DEFAULT_SETTINGS.openaiBaseUrl).trim().replace(/\/+$/, '')
-      || DEFAULT_SETTINGS.openaiBaseUrl,
-    openaiModel: String(s.openaiModel || DEFAULT_SETTINGS.openaiModel).trim()
-      || DEFAULT_SETTINGS.openaiModel,
-    openaiApiKey: String(s.openaiApiKey || '').trim(),
+    aiPreset: normalizeAiPreset(ai.preset || s.aiPreset || DEFAULT_AI_PRESET),
+    aiPresets: ai.presets,
     aiResponseLanguage: String(s.aiResponseLanguage || DEFAULT_SETTINGS.aiResponseLanguage).trim()
       || DEFAULT_SETTINGS.aiResponseLanguage,
   }

@@ -319,7 +319,10 @@
             class="settings-page"
           >
             <h3 class="settings-section">AI connection</h3>
-            <label class="settings-check">
+            <label
+              class="settings-check"
+              title="When off, hides the AI tab. When on, the AI panel can send Analysis Findings to the configured endpoint."
+            >
               <input
                 v-model="draft.aiEnabled"
                 type="checkbox"
@@ -330,13 +333,14 @@
               When off, the AI tab is hidden.
             </p>
             <label class="settings-row col">
-              <span class="settings-label">Provider</span>
+              <span class="settings-label">Preset</span>
               <select
-                v-model="draft.aiProvider"
+                v-model="aiPreset"
                 class="settings-input wide"
+                title="Ollama runs locally; OpenAI and Gemini are cloud APIs; Custom is any other OpenAI-compatible endpoint. Each preset keeps its own base URL, model, and API key."
               >
                 <option
-                  v-for="p in providerChoices"
+                  v-for="p in aiPresets"
                   :key="p.id"
                   :value="p.id"
                 >
@@ -344,92 +348,46 @@
                 </option>
               </select>
             </label>
-
-            <template v-if="isOpenaiProvider">
-              <label class="settings-row col">
-                <span class="settings-label">Preset</span>
-                <select
-                  v-model="draft.openaiPreset"
-                  class="settings-input wide"
-                  @change="onOpenaiPresetChange"
-                >
-                  <option
-                    v-for="p in openaiPresets"
-                    :key="p.id"
-                    :value="p.id"
-                  >
-                    {{ p.label }}
-                  </option>
-                </select>
-              </label>
-              <label class="settings-row col">
-                <span class="settings-label">Base URL</span>
-                <input
-                  v-model="draft.openaiBaseUrl"
-                  class="settings-input wide"
-                  type="url"
-                  placeholder="https://api.openai.com/v1"
-                >
-              </label>
-              <label class="settings-row col">
-                <span class="settings-label">Model</span>
-                <input
-                  v-model="draft.openaiModel"
-                  class="settings-input wide"
-                  type="text"
-                  placeholder="gpt-4o-mini"
-                >
-              </label>
-              <label class="settings-row col">
-                <span class="settings-label">API key</span>
-                <input
-                  v-model="draft.openaiApiKey"
-                  class="settings-input wide"
-                  type="password"
-                  autocomplete="off"
-                  title="OpenAI / xAI / Gemini / DeepSeek key, or set VITE_OPENAI_API_KEY / VITE_GEMINI_API_KEY"
-                  placeholder="Required — or VITE_OPENAI_API_KEY / VITE_GEMINI_API_KEY"
-                >
-              </label>
-            </template>
-
-            <template v-else>
-              <label class="settings-row col">
-                <span class="settings-label">Ollama URL</span>
-                <input
-                  v-model="draft.ollamaUrl"
-                  class="settings-input wide"
-                  type="url"
-                  placeholder="http://localhost:11434"
-                >
-              </label>
-              <label class="settings-row col">
-                <span class="settings-label">Model</span>
-                <input
-                  v-model="draft.ollamaModel"
-                  class="settings-input wide"
-                  type="text"
-                  placeholder="phi4-mini:3.8b or minimax-m3:cloud"
-                >
-              </label>
-              <label class="settings-row col">
-                <span class="settings-label">API key</span>
-                <input
-                  v-model="draft.ollamaApiKey"
-                  class="settings-input wide"
-                  type="password"
-                  autocomplete="off"
-                  title="Optional for https://ollama.com — or set VITE_OLLAMA_API_KEY"
-                  placeholder="Optional — or VITE_OLLAMA_API_KEY"
-                >
-              </label>
-            </template>
+            <label class="settings-row col">
+              <span class="settings-label">Base URL</span>
+              <input
+                v-model="aiBaseUrl"
+                class="settings-input wide"
+                type="url"
+                title="OpenAI-compatible API root, e.g. http://localhost:11434/v1 for Ollama."
+                :placeholder="activePresetInfo.baseUrl || 'http://localhost:11434/v1'"
+              >
+            </label>
+            <label class="settings-row col">
+              <span class="settings-label">Model</span>
+              <input
+                v-model="aiModel"
+                class="settings-input wide"
+                type="text"
+                title="Model id served by that endpoint (e.g. `ollama list` name, gpt-4o-mini, or gemini-flash-lite-latest)."
+                :placeholder="activePresetInfo.model || 'phi4-mini:3.8b'"
+              >
+            </label>
+            <label class="settings-row col">
+              <span class="settings-label">API key</span>
+              <input
+                v-model="aiApiKey"
+                class="settings-input wide"
+                type="password"
+                autocomplete="off"
+                title="API key for this preset (or VITE_OPENAI_API_KEY / VITE_GEMINI_API_KEY / VITE_OLLAMA_API_KEY at build time). Local Ollama needs none. Stored per preset in browser storage."
+                :placeholder="isLocalPreset
+                  ? 'Optional — local Ollama needs none'
+                  : 'Required — provider API key'"
+              >
+            </label>
 
             <label class="settings-row col">
               <span class="settings-label">Reply language</span>
               <select
                 v-model="draft.aiResponseLanguage"
                 class="settings-input wide"
+                title="Language for AI Assistant replies (also available via Language… in the AI panel)."
               >
                 <option
                   v-for="lang in aiLanguageOptions"
@@ -441,44 +399,67 @@
               </select>
             </label>
             <div class="settings-ai-test">
-              <button
-                type="button"
-                class="settings-btn secondary"
-                :disabled="aiTesting"
-                title="Verify the provider/model with a tiny chat probe. Status updates below."
-                @click="onTestAi"
-              >
-                {{ aiTesting ? 'Testing…' : 'Test connection' }}
-              </button>
+              <div class="settings-ai-actions">
+                <button
+                  type="button"
+                  class="settings-btn secondary"
+                  :disabled="aiTesting"
+                  title="List models and run a tiny chat probe against this endpoint. Status updates appear below — first model load can take a minute."
+                  @click="onTestAi"
+                >
+                  {{ aiTesting ? 'Testing…' : 'Test connection' }}
+                </button>
+                <button
+                  type="button"
+                  class="settings-btn secondary"
+                  title="Load preset, base URL, model, and API key from a JSON file (see examples/ai/gemini.json, openai.json, deepseek.json, grok.json)."
+                  @click="aiImportInput?.click()"
+                >
+                  Import…
+                </button>
+                <input
+                  ref="aiImportInput"
+                  type="file"
+                  accept="application/json,.json"
+                  class="settings-file-input"
+                  @change="onImportAiSettings"
+                >
+              </div>
               <p
                 class="settings-test-status"
                 :class="aiTestClass"
                 role="status"
                 aria-live="polite"
               >
-                {{ aiTestStatus || 'Click Test connection to verify the provider and model.' }}
+                {{ aiTestStatus || 'Click Test connection to verify the endpoint and model.' }}
               </p>
             </div>
             <p
-              v-if="isOpenaiProvider"
+              v-if="isLocalPreset"
               class="settings-help"
             >
-              OpenAI-compatible: ChatGPT, Grok, Gemini, DeepSeek, or Custom base URL.
-              Prefer a known <strong>Preset</strong> under <code>npm run dev</code> /
-              <code>preview</code> (Vite proxies avoid CORS).
-              Custom / <code>file://</code>: use Desktop, or expect CORS failures.
-              Context is Analysis Findings — not the raw BTF.
+              Ollama serves an OpenAI-compatible API at
+              <code>http://localhost:11434/v1</code>. Pull a model first:
+              <code>ollama pull phi4-mini:3.8b</code>. Prefer
+              <code>npm run dev</code> / <code>preview</code> (proxies local Ollama);
+              for <code>file://</code> use <code>OLLAMA_ORIGINS="*" ollama serve</code>
+              (macOS app: <code>launchctl setenv OLLAMA_ORIGINS "*"</code>, then restart it).
             </p>
             <p
               v-else
               class="settings-help"
             >
-              Local: <code>ollama pull phi4-mini:3.8b</code>.
-              Cloud via local Ollama: <code>ollama signin</code> then model
-              <code>minimax-m3:cloud</code>.
-              Or URL <code>https://ollama.com</code>, model <code>minimax-m3</code>, and an API key.
-              Prefer <code>npm run dev</code> / <code>preview</code> (proxies local Ollama).
-              For <code>file://</code>: <code>OLLAMA_ORIGINS="*" ollama serve</code>.
+              Any OpenAI-compatible endpoint works: set Base URL, model, and an API
+              key.
+              <a
+                v-if="activeKeyUrl"
+                :href="activeKeyUrl"
+                target="_blank"
+                rel="noreferrer"
+              >Get a {{ activePresetInfo.label }} key.</a>
+              OpenAI and Gemini are proxied under <code>npm run dev</code> /
+              <code>preview</code>; other hosts need CORS or the Desktop app.
+              Context is Analysis Findings — not the raw BTF.
             </p>
           </div>
         </div>
@@ -522,17 +503,15 @@ import {
   shouldReplaceDeadlinesText,
 } from '../utils/settingsStore.js'
 import {
-  AI_OPENAI_PRESETS,
-  AI_PROVIDER_CHOICES,
-  AI_PROVIDER_OPENAI,
+  AI_PRESETS,
+  AI_PRESET_KEY_URLS,
+  AI_PRESET_OLLAMA,
   AI_RESPONSE_LANGUAGES,
-  DEFAULT_OLLAMA_MODEL,
-  DEFAULT_OLLAMA_URL,
-  DEFAULT_OPENAI_BASE_URL,
-  DEFAULT_OPENAI_MODEL,
-  applyOpenaiPreset,
+  aiPresetInfo,
   aiTestConnection,
-  normalizeAiProvider,
+  normalizeAiPreset,
+  parseAiSettingsJson,
+  resolveAiSettings,
 } from '../utils/ollamaClient.js'
 
 const props = defineProps({
@@ -554,11 +533,28 @@ const _tabIds = new Set(tabs.map(t => t.id))
 const activeTab = ref(_tabIds.has(props.initialTab) ? props.initialTab : 'appearance')
 const draft = reactive(normalizeSettings(props.modelValue))
 const deadlinesText = ref(formatDeadlinesText(draft.taskDeadlines))
-const providerChoices = AI_PROVIDER_CHOICES
-const openaiPresets = AI_OPENAI_PRESETS
-const isOpenaiProvider = computed(
-  () => normalizeAiProvider(draft.aiProvider) === AI_PROVIDER_OPENAI,
-)
+const aiPresets = AI_PRESETS
+// Each preset keeps its own base URL / model / API key in draft.aiPresets;
+// the inputs edit whichever preset is selected.
+const aiPreset = computed({
+  get: () => normalizeAiPreset(draft.aiPreset),
+  set: (v) => { draft.aiPreset = normalizeAiPreset(v) },
+})
+const activePresetInfo = computed(() => aiPresetInfo(aiPreset.value))
+const isLocalPreset = computed(() => aiPreset.value === AI_PRESET_OLLAMA)
+const activeKeyUrl = computed(() => AI_PRESET_KEY_URLS[aiPreset.value] || '')
+function presetField(field) {
+  return computed({
+    get: () => String(draft.aiPresets?.[aiPreset.value]?.[field] ?? ''),
+    set: (v) => {
+      const cur = draft.aiPresets?.[aiPreset.value] || {}
+      draft.aiPresets = { ...draft.aiPresets, [aiPreset.value]: { ...cur, [field]: v } }
+    },
+  })
+}
+const aiBaseUrl = presetField('baseUrl')
+const aiModel = presetField('model')
+const aiApiKey = presetField('apiKey')
 const aiLanguageOptions = computed(() => {
   const cur = String(draft.aiResponseLanguage || '').trim()
   if (cur && !AI_RESPONSE_LANGUAGES.includes(cur)) {
@@ -569,7 +565,43 @@ const aiLanguageOptions = computed(() => {
 const aiTesting = ref(false)
 const aiTestStatus = ref('')
 const aiTestOk = ref(null)
+const aiImportInput = ref(null)
 let aiAbort = null
+
+/** Apply an imported settings patch to the draft; returns a summary. */
+function applyAiSettingsPatch(patch) {
+  const presets = { ...draft.aiPresets }
+  for (const [pid, fields] of Object.entries(patch.presets || {})) {
+    presets[pid] = { ...(presets[pid] || {}), ...fields }
+  }
+  // Fixed preset order, so a multi-preset file always reads the same way.
+  const touched = AI_PRESETS
+    .filter((p) => patch.presets?.[p.id])
+    .map((p) => p.label)
+  draft.aiPresets = presets
+  if (patch.responseLanguage) draft.aiResponseLanguage = patch.responseLanguage
+  const preset = normalizeAiPreset(patch.preset || draft.aiPreset)
+  draft.aiPreset = preset
+  return `Imported ${touched.join(', ') || 'settings'}. `
+    + `Selected ${aiPresetInfo(preset).label} — review, then OK to save.`
+}
+
+async function onImportAiSettings(event) {
+  const input = event.target
+  const file = input?.files?.[0]
+  if (!file) return
+  try {
+    const patch = parseAiSettingsJson(await file.text())
+    aiTestStatus.value = applyAiSettingsPatch(patch)
+    aiTestOk.value = true
+  } catch (err) {
+    aiTestStatus.value = `Cannot import ${file.name}: ${err?.message || err}`
+    aiTestOk.value = false
+  } finally {
+    // Allow re-importing the same file after an edit.
+    input.value = ''
+  }
+}
 
 const aiTestClass = computed(() => {
   if (aiTestOk.value === true) return 'ok'
@@ -626,34 +658,20 @@ function onReset() {
   aiTestOk.value = null
 }
 
-function onOpenaiPresetChange() {
-  const applied = applyOpenaiPreset(draft.openaiPreset)
-  if (applied.openaiBaseUrl) draft.openaiBaseUrl = applied.openaiBaseUrl
-  if (applied.openaiModel) draft.openaiModel = applied.openaiModel
-}
-
 async function onTestAi() {
   if (aiTesting.value) return
   aiTesting.value = true
   aiTestOk.value = null
-  const provider = normalizeAiProvider(draft.aiProvider)
-  const isOpenai = provider === AI_PROVIDER_OPENAI
-  const url = isOpenai
-    ? (draft.openaiBaseUrl || DEFAULT_OPENAI_BASE_URL)
-    : (draft.ollamaUrl || DEFAULT_OLLAMA_URL)
-  const model = isOpenai
-    ? (draft.openaiModel || DEFAULT_OPENAI_MODEL)
-    : (draft.ollamaModel || DEFAULT_OLLAMA_MODEL)
-  aiTestStatus.value = `Starting test for ${url} / ${model}…`
+  const active = resolveAiSettings(draft)
+  aiTestStatus.value = `Starting test for ${active.baseUrl} / ${active.model}…`
   if (aiAbort) aiAbort.abort()
   aiAbort = new AbortController()
   try {
     const msg = await aiTestConnection({
-      provider,
-      baseUrl: url,
-      model,
-      apiKey: isOpenai ? draft.openaiApiKey : draft.ollamaApiKey,
-      preset: draft.openaiPreset,
+      baseUrl: active.baseUrl,
+      model: active.model,
+      apiKey: active.apiKey,
+      preset: active.preset,
       signal: aiAbort.signal,
       onProgress: (s) => {
         aiTestOk.value = null
@@ -804,6 +822,14 @@ function onSave() {
   align-items: flex-start;
   gap: 6px;
   margin-top: 4px;
+}
+.settings-ai-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.settings-file-input {
+  display: none;
 }
 .settings-test-status {
   margin: 0;

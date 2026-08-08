@@ -12,13 +12,12 @@ from .stats import *  # noqa: F403,F401
 from .stats import _RcSettings, _parse_task_deadlines_text, _AnalysisFindingsDialog, _format_analysis_findings_text
 from .ai_assistant import (
     create_ai_assistant_panel,
-    DEFAULT_AI_PROVIDER,
+    AI_PRESET_FIELDS,
+    AI_PRESETS,
+    DEFAULT_AI_PRESET,
     DEFAULT_AI_RESPONSE_LANGUAGE,
-    DEFAULT_OLLAMA_URL,
-    DEFAULT_OLLAMA_MODEL,
-    DEFAULT_OPENAI_BASE_URL,
-    DEFAULT_OPENAI_MODEL,
-    DEFAULT_OPENAI_PRESET,
+    migrate_ai_settings,
+    normalize_ai_preset,
 )
 from .mvvm import MainViewModel, MvvmSettingsMixin, TraceTabViewModel
 from .mvvm.tab_viewport import apply_viewport, viewport_from_json, viewport_to_json
@@ -2208,6 +2207,22 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         ]
         if visible and self._panel_tabs.currentIndex() not in visible:
             self._panel_tabs.setCurrentIndex(visible[0])
+        self._sync_panel_menu_checks()
+
+    def _sync_panel_menu_checks(self) -> None:
+        """Keep View menu check marks honest about the panel flags.
+
+        setChecked() only emits toggled(), not triggered(), so this never
+        re-enters the toggle slots.
+        """
+        for attr, flag in (
+            ("_act_show_marks", self._show_marks),
+            ("_act_show_find", self._show_find),
+            ("_act_show_ai", getattr(self, "_show_ai", True)),
+        ):
+            act = getattr(self, attr, None)
+            if act is not None and act.isChecked() != flag:
+                act.setChecked(flag)
 
     def _ai_feature_enabled(self) -> bool:
         """Settings → AI → Enable AI Assistant."""
@@ -2692,6 +2707,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._show_marks = s.get_bool("view", "show_marks", True)
         self._show_find = s.get_bool("view", "show_find", True)
         self._show_ai = s.get_bool("view", "show_ai", True)
+        self._sync_panel_menu_checks()
 
     def _ensure_right_docks_layout(self) -> None:
         """Legend above tabbed panel on the right (re-attach after float/close)."""
@@ -4167,10 +4183,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         vm.addSeparator()
         self._act_show_marks = vm.addAction("Show &Marks Panel", self._toggle_show_marks_panel)
         self._act_show_marks.setCheckable(True)
-        self._act_show_marks.setChecked(True)
+        self._act_show_marks.setChecked(self._show_marks)
         self._act_show_find = vm.addAction("Show &Find Panel", self._toggle_show_find_panel)
         self._act_show_find.setCheckable(True)
-        self._act_show_find.setChecked(True)
+        self._act_show_find.setChecked(self._show_find)
         self._act_show_ai = vm.addAction("Show &AI Assistant", self._toggle_show_ai_panel)
         self._act_show_ai.setCheckable(True)
         self._act_show_ai.setChecked(getattr(self, "_show_ai", True))
@@ -4776,22 +4792,43 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._act_show_ai.setVisible(enabled_feat)
             self._act_show_ai.setEnabled(enabled_feat)
 
+    # Keys the pre-preset schema used that no longer exist. ``openai_*`` is not
+    # listed: those names now belong to the OpenAI preset, and
+    # ``migrate_ai_settings`` decides what they meant.
+    _AI_LEGACY_KEYS = ("provider", "openai_preset", "ollama_url")
+
+    @classmethod
+    def _ai_setting_keys(cls) -> list:
+        keys = ["enabled", "preset", "response_language"]
+        keys += [
+            f"{pid}_{field}"
+            for pid, _label, _base, _model in AI_PRESETS
+            for field in AI_PRESET_FIELDS
+        ]
+        return keys
+
     def _ai_read_settings(self) -> dict:
+        """AI section of btf_viewer.rc, migrating pre-preset keys on first read."""
         s = self._settings
-        return {
-            "enabled": s.get("ai", "enabled", "true"),
-            "provider": s.get("ai", "provider", DEFAULT_AI_PROVIDER),
-            "ollama_url": s.get("ai", "ollama_url", DEFAULT_OLLAMA_URL),
-            "ollama_model": s.get("ai", "ollama_model", DEFAULT_OLLAMA_MODEL),
-            "ollama_api_key": s.get("ai", "ollama_api_key", ""),
-            "openai_preset": s.get("ai", "openai_preset", DEFAULT_OPENAI_PRESET),
-            "openai_base_url": s.get("ai", "openai_base_url", DEFAULT_OPENAI_BASE_URL),
-            "openai_model": s.get("ai", "openai_model", DEFAULT_OPENAI_MODEL),
-            "openai_api_key": s.get("ai", "openai_api_key", ""),
-            "response_language": s.get(
-                "ai", "response_language", DEFAULT_AI_RESPONSE_LANGUAGE
-            ),
-        }
+        keys = self._ai_setting_keys()
+        cfg = {k: s.get("ai", k, "") for k in keys}
+        cfg["enabled"] = cfg["enabled"] or "true"
+        cfg["response_language"] = (
+            cfg["response_language"] or DEFAULT_AI_RESPONSE_LANGUAGE)
+
+        legacy = {k: s.get("ai", k, "") for k in self._AI_LEGACY_KEYS}
+        patch = migrate_ai_settings({**cfg, **legacy})
+        if not (cfg["preset"] or patch.get("preset")):
+            patch["preset"] = DEFAULT_AI_PRESET
+        if patch:
+            cfg.update(patch)
+            s.set_many("ai", patch)
+        if any(v for v in legacy.values()):
+            # Migration is one-shot: drop the pre-preset keys from the file.
+            s.align_section_keys("ai", set(keys))
+            s.flush()
+        cfg["preset"] = normalize_ai_preset(cfg["preset"])
+        return cfg
 
     def _ai_save_settings_patch(self, patch: dict) -> None:
         """Persist a subset of AI settings (e.g. Language… dialog)."""
@@ -6361,6 +6398,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "task_deadlines_text":      self._settings.get("analysis", "task_deadlines", ""),
             "time_decimals":            self._time_decimals_val,
         }
+        _ai_cfg = self._ai_read_settings()
         dlg = _SettingsDialog(
             self,
             font_size=self._font_size_val,
@@ -6390,19 +6428,15 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             task_deadlines_text=_snap["task_deadlines_text"],
             time_decimals=self._time_decimals_val,
             ai_enabled=self._settings.get_bool("ai", "enabled", True),
-            ai_provider=self._settings.get("ai", "provider", DEFAULT_AI_PROVIDER),
-            ollama_url=self._settings.get("ai", "ollama_url", DEFAULT_OLLAMA_URL),
-            ollama_model=self._settings.get("ai", "ollama_model", DEFAULT_OLLAMA_MODEL),
-            ollama_api_key=self._settings.get("ai", "ollama_api_key", ""),
-            openai_preset=self._settings.get("ai", "openai_preset", DEFAULT_OPENAI_PRESET),
-            openai_base_url=self._settings.get(
-                "ai", "openai_base_url", DEFAULT_OPENAI_BASE_URL
-            ),
-            openai_model=self._settings.get("ai", "openai_model", DEFAULT_OPENAI_MODEL),
-            openai_api_key=self._settings.get("ai", "openai_api_key", ""),
-            response_language=self._settings.get(
-                "ai", "response_language", DEFAULT_AI_RESPONSE_LANGUAGE
-            ),
+            ai_preset=_ai_cfg["preset"],
+            ai_preset_settings={
+                pid: {
+                    field: _ai_cfg.get(f"{pid}_{field}", "")
+                    for field in AI_PRESET_FIELDS
+                }
+                for pid, _label, _base, _model in AI_PRESETS
+            },
+            response_language=_ai_cfg["response_language"],
             initial_page=page if isinstance(page, str) else "Appearance",
         )
         dlg.live_preview.connect(lambda: self._apply_settings_preview({
@@ -6454,29 +6488,14 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                         _new_budget, _parse_task_deadlines_text(_new_dl_text))
             _ai_upd = {
                 "enabled": str(dlg.ai_enabled).lower(),
-                "provider": dlg.ai_provider or DEFAULT_AI_PROVIDER,
-                "ollama_url": dlg.ollama_url or DEFAULT_OLLAMA_URL,
-                "ollama_model": dlg.ollama_model or DEFAULT_OLLAMA_MODEL,
-                "ollama_api_key": dlg.ollama_api_key or "",
-                "openai_preset": dlg.openai_preset or DEFAULT_OPENAI_PRESET,
-                "openai_base_url": dlg.openai_base_url or DEFAULT_OPENAI_BASE_URL,
-                "openai_model": dlg.openai_model or DEFAULT_OPENAI_MODEL,
-                "openai_api_key": dlg.openai_api_key or "",
+                "preset": dlg.ai_preset or DEFAULT_AI_PRESET,
                 "response_language": dlg.response_language or DEFAULT_AI_RESPONSE_LANGUAGE,
             }
-            _ai_changed = (
-                self._settings.get("ai", "enabled", "true").lower() != _ai_upd["enabled"]
-                or self._settings.get("ai", "provider", DEFAULT_AI_PROVIDER) != _ai_upd["provider"]
-                or self._settings.get("ai", "ollama_url", DEFAULT_OLLAMA_URL) != _ai_upd["ollama_url"]
-                or self._settings.get("ai", "ollama_model", DEFAULT_OLLAMA_MODEL) != _ai_upd["ollama_model"]
-                or self._settings.get("ai", "ollama_api_key", "") != _ai_upd["ollama_api_key"]
-                or self._settings.get("ai", "openai_preset", DEFAULT_OPENAI_PRESET) != _ai_upd["openai_preset"]
-                or self._settings.get("ai", "openai_base_url", DEFAULT_OPENAI_BASE_URL) != _ai_upd["openai_base_url"]
-                or self._settings.get("ai", "openai_model", DEFAULT_OPENAI_MODEL) != _ai_upd["openai_model"]
-                or self._settings.get("ai", "openai_api_key", "") != _ai_upd["openai_api_key"]
-                or self._settings.get(
-                    "ai", "response_language", DEFAULT_AI_RESPONSE_LANGUAGE
-                ) != _ai_upd["response_language"]
+            for _pid, _vals in dlg.ai_preset_settings.items():
+                for _field in AI_PRESET_FIELDS:
+                    _ai_upd[f"{_pid}_{_field}"] = _vals.get(_field, "")
+            _ai_changed = any(
+                str(_ai_cfg.get(_key, "")) != _val for _key, _val in _ai_upd.items()
             )
             if _ai_changed:
                 self._settings.set_many("ai", _ai_upd)

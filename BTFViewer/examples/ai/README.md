@@ -8,6 +8,8 @@ Copy one of these files, fill in your key, and import it.
 |------|----------|
 | [`gemini.json`](gemini.json) | Google Gemini via its OpenAI-compatible API |
 | [`openai.json`](openai.json) | OpenAI (`api.openai.com`) |
+| [`deepseek.json`](deepseek.json) | DeepSeek (`api.deepseek.com`) — imports as **Custom** |
+| [`grok.json`](grok.json) | xAI Grok (`api.x.ai`) — imports as **Custom** |
 
 ## Fields
 

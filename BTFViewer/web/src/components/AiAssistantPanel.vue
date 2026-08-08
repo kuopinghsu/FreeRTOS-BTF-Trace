@@ -41,7 +41,7 @@
       <button
         type="button"
         class="ai-link-btn"
-        title="Configure Ollama"
+        title="Configure the AI preset, endpoint, and model"
         @click="emit('openSettings')"
       >
         Settings…
@@ -129,6 +129,12 @@
             {{ t.name }}
           </option>
         </select>
+        <p
+          v-if="comparePickSame"
+          class="ai-pick-error"
+        >
+          Choose two different traces.
+        </p>
         <div class="ai-lang-actions">
           <button
             type="button"
@@ -140,6 +146,7 @@
           <button
             type="button"
             class="ai-btn primary"
+            :disabled="!comparePickReady"
             @click="confirmComparePick"
           >
             Compare
@@ -151,7 +158,7 @@
     <p class="ai-hint">
       Uses Analysis Findings for the current Statistics scope
       (Trace Compare template uses compare CSV).
-      Configure provider in Settings → AI.
+      Configure the endpoint in Settings → AI.
       Prefer <code>npm run dev</code> / <code>preview</code> (proxies);
       for <code>file://</code> set <code>OLLAMA_ORIGINS</code>.
     </p>
@@ -177,6 +184,7 @@
     <div
       ref="logRef"
       class="ai-log"
+      @contextmenu.prevent="onLogContextMenu"
     >
       <div
         v-if="!messages.length"
@@ -202,6 +210,55 @@
       </div>
     </div>
 
+    <div
+      v-if="logMenu.visible"
+      class="ai-ctx-menu"
+      :style="{ left: `${logMenu.x}px`, top: `${logMenu.y}px` }"
+      @mousedown.stop
+    >
+      <button
+        type="button"
+        class="ai-ctx-item"
+        :disabled="!logMenu.hasSelection"
+        @click="copySelection"
+      >
+        Copy
+      </button>
+      <button
+        type="button"
+        class="ai-ctx-item"
+        :disabled="!messages.length"
+        @click="copyConversation"
+      >
+        Copy conversation
+      </button>
+      <div class="ai-ctx-sep" />
+      <button
+        type="button"
+        class="ai-ctx-item"
+        :disabled="!messages.length"
+        @click="saveConversationAs('md')"
+      >
+        Save As Markdown…
+      </button>
+      <button
+        type="button"
+        class="ai-ctx-item"
+        :disabled="!messages.length"
+        @click="saveConversationAs('txt')"
+      >
+        Save As Text…
+      </button>
+      <button
+        type="button"
+        class="ai-ctx-item"
+        :disabled="!messages.length"
+        @click="saveConversationAs('html')"
+      >
+        Save As HTML…
+      </button>
+    </div>
+
     <textarea
       v-model="draft"
       class="ai-input"
@@ -222,36 +279,32 @@
 </template>
 
 <script setup>
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import {
   AI_COMPARE_TEMPLATE_ID,
-  AI_PROVIDER_OPENAI,
   AI_RESPONSE_LANGUAGES,
   AI_TEMPLATE_QUESTIONS,
-  DEFAULT_AI_PROVIDER,
+  DEFAULT_AI_PRESET,
   DEFAULT_AI_RESPONSE_LANGUAGE,
-  DEFAULT_OLLAMA_MODEL,
-  DEFAULT_OLLAMA_URL,
-  DEFAULT_OPENAI_BASE_URL,
-  DEFAULT_OPENAI_MODEL,
-  DEFAULT_OPENAI_PRESET,
   aiChat,
+  aiPresetInfo,
   extractJumpTimes,
   normalizeAiContext,
-  normalizeAiProvider,
+  resolveAiSettings,
 } from '../utils/ollamaClient.js'
-import { formatAiMessageHtml } from '../utils/aiMarkdown.js'
+import {
+  aiFileStamp,
+  formatAiConversationHtml,
+  formatAiConversationMarkdown,
+  formatAiConversationText,
+  formatAiMessageHtml,
+} from '../utils/aiMarkdown.js'
 
 const props = defineProps({
   aiEnabled: { type: Boolean, default: true },
-  aiProvider: { type: String, default: DEFAULT_AI_PROVIDER },
-  ollamaUrl: { type: String, default: DEFAULT_OLLAMA_URL },
-  ollamaModel: { type: String, default: DEFAULT_OLLAMA_MODEL },
-  ollamaApiKey: { type: String, default: '' },
-  openaiPreset: { type: String, default: DEFAULT_OPENAI_PRESET },
-  openaiBaseUrl: { type: String, default: DEFAULT_OPENAI_BASE_URL },
-  openaiModel: { type: String, default: DEFAULT_OPENAI_MODEL },
-  openaiApiKey: { type: String, default: '' },
+  aiPreset: { type: String, default: DEFAULT_AI_PRESET },
+  /** { [presetId]: { baseUrl, model, apiKey } } */
+  aiPresets: { type: Object, default: () => ({}) },
   responseLanguage: { type: String, default: DEFAULT_AI_RESPONSE_LANGUAGE },
   /** () => Promise|{ findingsText, span, cores, scope } */
   getContext: { type: Function, required: true },
@@ -264,7 +317,12 @@ const props = defineProps({
 const emit = defineEmits(['openSettings', 'jump', 'update:responseLanguage'])
 
 const templates = AI_TEMPLATE_QUESTIONS
-const languages = AI_RESPONSE_LANGUAGES
+// A language imported from JSON need not be one of the built-in choices.
+const languages = computed(() => {
+  const cur = String(props.responseLanguage || '').trim()
+  if (!cur || AI_RESPONSE_LANGUAGES.includes(cur)) return AI_RESPONSE_LANGUAGES
+  return [...AI_RESPONSE_LANGUAGES, cur]
+})
 const draft = ref('')
 const messages = ref([])
 const busy = ref(false)
@@ -274,6 +332,7 @@ const logRef = ref(null)
 const langOpen = ref(false)
 const langDraft = ref(props.responseLanguage || DEFAULT_AI_RESPONSE_LANGUAGE)
 const loadedTabs = ref([])
+const logMenu = reactive({ visible: false, x: 0, y: 0, hasSelection: false })
 const comparePickOpen = ref(false)
 const comparePickA = ref(null)
 const comparePickB = ref(null)
@@ -304,6 +363,16 @@ function refreshLoadedTabs() {
 refreshLoadedTabs()
 
 const compareEnabled = computed(() => loadedTabs.value.length >= 2)
+
+const comparePickSame = computed(
+  () => comparePickA.value != null && comparePickA.value === comparePickB.value,
+)
+
+const comparePickReady = computed(
+  () => comparePickA.value != null
+    && comparePickB.value != null
+    && !comparePickSame.value,
+)
 
 function templateTitle(t) {
   if (t.id === AI_COMPARE_TEMPLATE_ID && !compareEnabled.value) {
@@ -342,6 +411,64 @@ function onMsgClick(ev) {
     if (m) v = Number(m[1])
   }
   if (Number.isFinite(v)) emit('jump', v)
+}
+
+function onLogContextMenu(ev) {
+  logMenu.hasSelection = !!String(window.getSelection?.() || '').trim()
+  logMenu.x = ev.clientX
+  logMenu.y = ev.clientY
+  logMenu.visible = true
+}
+
+function closeLogMenu() {
+  logMenu.visible = false
+}
+
+function copySelection() {
+  const text = String(window.getSelection?.() || '')
+  closeLogMenu()
+  if (text) writeClipboard(text)
+}
+
+function copyConversation() {
+  closeLogMenu()
+  if (!messages.value.length) return
+  writeClipboard(formatAiConversationMarkdown(messages.value))
+}
+
+async function writeClipboard(text) {
+  try {
+    await navigator.clipboard.writeText(text)
+    status.value = 'Copied to clipboard.'
+  } catch {
+    status.value = 'Clipboard is not available in this browser.'
+  }
+}
+
+function saveConversationAs(format) {
+  closeLogMenu()
+  if (!messages.value.length) return
+  const entries = messages.value
+  let data
+  let mime
+  if (format === 'txt') {
+    data = formatAiConversationText(entries)
+    mime = 'text/plain;charset=utf-8'
+  } else if (format === 'html') {
+    data = formatAiConversationHtml(entries)
+    mime = 'text/html;charset=utf-8'
+  } else {
+    data = formatAiConversationMarkdown(entries)
+    mime = 'text/markdown;charset=utf-8'
+  }
+  const name = `ai-conversation-${aiFileStamp()}.${format}`
+  const url = URL.createObjectURL(new Blob([data], { type: mime }))
+  const a = document.createElement('a')
+  a.href = url
+  a.download = name
+  a.click()
+  URL.revokeObjectURL(url)
+  status.value = `Saved conversation to ${name}`
 }
 
 async function scrollLog() {
@@ -403,10 +530,7 @@ async function runCompareTemplate(prompt) {
 async function confirmComparePick() {
   const idA = comparePickA.value
   const idB = comparePickB.value
-  if (idA == null || idB == null || idA === idB) {
-    status.value = 'Choose two different traces.'
-    return
-  }
+  if (idA == null || idB == null || idA === idB) return
   comparePickOpen.value = false
   const prompt = pendingComparePrompt.value
   pendingComparePrompt.value = ''
@@ -443,10 +567,8 @@ async function send(overrideQuery = null, overrideCtx = null) {
   else draft.value = ''
   busy.value = true
   error.value = ''
-  const provider = normalizeAiProvider(props.aiProvider)
-  status.value = provider === AI_PROVIDER_OPENAI
-    ? 'Waiting for OpenAI-compatible API…'
-    : 'Waiting for Ollama…'
+  const active = resolveAiSettings({ aiPreset: props.aiPreset, aiPresets: props.aiPresets })
+  status.value = `Waiting for ${aiPresetInfo(active.preset).label} (${active.model})…`
   await scrollLog()
 
   abortCtrl = new AbortController()
@@ -456,19 +578,17 @@ async function send(overrideQuery = null, overrideCtx = null) {
       : await Promise.resolve(props.getContext())
     const ctx = normalizeAiContext(raw)
     if (overrideCtx == null) refreshLoadedTabs()
-    const isOpenai = provider === AI_PROVIDER_OPENAI
     const reply = await aiChat({
       query,
-      provider,
       findingsText: ctx.findingsText || '',
       span: ctx.span || '',
       cores: ctx.cores ?? '',
       scope: ctx.scope || '',
       metrics: ctx.metrics || null,
-      baseUrl: isOpenai ? props.openaiBaseUrl : props.ollamaUrl,
-      model: isOpenai ? props.openaiModel : props.ollamaModel,
-      apiKey: isOpenai ? props.openaiApiKey : props.ollamaApiKey,
-      preset: props.openaiPreset,
+      baseUrl: active.baseUrl,
+      model: active.model,
+      apiKey: active.apiKey,
+      preset: active.preset,
       responseLanguage: props.responseLanguage,
       signal: abortCtrl.signal,
     })
@@ -502,7 +622,21 @@ watch(() => props.aiEnabled, (on) => {
   if (!on) status.value = ''
 })
 
-defineExpose({ refreshLoadedTabs, ask, clear })
+function onDocKeyDown(ev) {
+  if (ev.key === 'Escape') closeLogMenu()
+}
+
+onMounted(() => {
+  document.addEventListener('mousedown', closeLogMenu)
+  document.addEventListener('keydown', onDocKeyDown)
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('mousedown', closeLogMenu)
+  document.removeEventListener('keydown', onDocKeyDown)
+})
+
+defineExpose({ refreshLoadedTabs, ask, clear, saveConversationAs, scrollLog })
 </script>
 
 <style scoped>
@@ -563,6 +697,11 @@ defineExpose({ refreshLoadedTabs, ask, clear })
   margin: 0 0 4px;
   color: var(--muted, #999);
 }
+.ai-pick-error {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: #c0392b;
+}
 .ai-lang-select {
   width: 100%;
   box-sizing: border-box;
@@ -607,13 +746,21 @@ defineExpose({ refreshLoadedTabs, ask, clear })
   font-weight: 600;
   font-size: 12px;
 }
+/* Two columns: the labels are short, and a single column pushed the
+   conversation log off the bottom of a narrow panel. */
 .ai-templates {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 4px;
   max-height: 140px;
   overflow-y: auto;
   flex-shrink: 0;
+}
+.ai-tpl-btn {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .ai-tpl-btn, .ai-btn {
   font-size: 12px;
@@ -656,6 +803,36 @@ defineExpose({ refreshLoadedTabs, ask, clear })
   background: var(--panel-inset, #1a2230);
   font-size: 12px;
   line-height: 1.4;
+}
+.ai-ctx-menu {
+  position: fixed;
+  z-index: 10100;
+  min-width: 168px;
+  padding: 4px;
+  background: var(--panel, #1a2230);
+  border: 1px solid var(--border, #3a4658);
+  border-radius: 7px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.6);
+  display: flex;
+  flex-direction: column;
+}
+.ai-ctx-item {
+  appearance: none;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 10px;
+  text-align: left;
+}
+.ai-ctx-item:hover:not(:disabled) { background: rgba(91, 155, 213, 0.22); }
+.ai-ctx-item:disabled { color: var(--muted, #8a96a8); cursor: default; }
+.ai-ctx-sep {
+  border-top: 1px solid var(--border, #3a4658);
+  margin: 4px 2px;
 }
 .ai-empty { color: var(--muted, #8a96a8); }
 .ai-msg { margin-bottom: 10px; }
