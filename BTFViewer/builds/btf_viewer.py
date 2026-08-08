@@ -31584,6 +31584,13 @@ class _CpuLoadGraph(QWidget):
     # ------------------------------------------------------------------
 
     def set_trace(self, trace) -> None:
+        # Same object: tab switch / chrome re-sync. Keep the lock-highlight
+        # filter and skip bin rebuild (bins are derived from this trace).
+        if trace is self._trace:
+            self._bars_pm_key = None
+            self.updateGeometry()
+            self.update()
+            return
         self._trace           = trace
         self._selected_task   = None
         self._collapsed_cores = set()
@@ -33474,6 +33481,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         mode = self._view_mode if hasattr(self, "_view_mode") else "task"
         graph.set_view_mode(mode)
         graph.set_row_h(self._cpu_load_row_h_val)
+        # Timeline lock survives tab switch; set_trace() used to wipe the CPU
+        # filter. Re-apply so Load shows the highlighted task, not all tasks.
+        locked = getattr(tab.view._scene, "_locked_task", None)
+        graph.set_task(locked, locked is not None)
 
     def _capture_legend_filters_to_scene(self, scene) -> None:
         """Copy shared legend UI into *scene* without rebuild (tab switch / persist)."""
@@ -36097,6 +36108,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if tab is not self._active_tab:
             tab.cpu_load_graph.set_trace(tab.trace)
             tab.cpu_load_graph.set_font_size(self._font_size_val)
+            self._sync_cpu_load_graph(tab)
             tab._stats_built = False
             return
         self.statusBar().showMessage("Building statistics…", 0)
