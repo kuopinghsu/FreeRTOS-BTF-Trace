@@ -1961,13 +1961,41 @@ class TimelineView(QGraphicsView):
             self._zoom_anchor_pos = self.viewport().rect().center()
         self._zoom_timer.start()
 
+    def _cancel_pending_zoom(self) -> None:
+        """Drop coalesced wheel/toolbar zoom so it cannot undo Fit / 1:1."""
+        self._zoom_timer.stop()
+        self._zoom_accum = 1.0
+        self._zoom_anchor_pos = None
+        self._pinch_accum = 1.0
+
+    def _prepare_full_trace_window(self) -> None:
+        """Leave virtual sliding-window mode and load the full trace span."""
+        self._window_shift_timer.stop()
+        self._pending_shift_ns_lo = None
+        self._pending_shift_ns_hi = None
+        self._virt_time_scroll_px = 0.0
+        self._zoom_reanchor_pending = False
+        self._preserve_virt_scroll = False
+        self._set_virtual_scroll_enabled(False)
+        sc = self._scene
+        sc._ns_range_hint = None
+        sc._virt_jump_origin_ns = None
+        trace = sc._trace
+        if trace is not None:
+            sc._scene_origin_ns = trace.time_min
+            sc._ns_range_hint = (trace.time_min, trace.time_max)
+
     def zoom_fit(self) -> None:
+        self._cancel_pending_zoom()
         self._fit_mode = True
+        self._prepare_full_trace_window()
         self._scene.fit_to_width(self._fit_viewport_size())
         # Ensure the view transform is identity: all zoom is handled at the
         # scene level (timescale_per_px) so there must be no view-level scale active.
         # fitInView() would set a persistent QTransform that is not needed here.
         self.resetTransform()
+        bar = self._native_time_axis_bar()
+        bar.setValue(bar.minimum())
         self.zoom_changed.emit(self._scene.timescale_per_px)
         self._show_nav()
 
@@ -1975,6 +2003,7 @@ class TimelineView(QGraphicsView):
         """Set zoom to exactly _TIMESCALE_PER_PX_DEFAULT ns/px, scrolling to trace start when in fit mode."""
         if self._scene._trace is None:
             return
+        self._cancel_pending_zoom()
         was_fit_mode = self._fit_mode
         self._fit_mode = False
         if self._scene._timescale_per_px == self._scene._timescale_per_px_default:
@@ -3082,7 +3111,8 @@ class TimelineView(QGraphicsView):
         anchor = self._zoom_anchor_pos
         self._zoom_accum       = 1.0
         self._zoom_anchor_pos  = None
-        if factor != 1.0:
+        # Fit/1:1 cancel the timer; ignore a stale timeout that already queued.
+        if factor != 1.0 and not self._fit_mode:
             self._do_zoom(factor, anchor)
 
     def eventFilter(self, obj, e) -> bool:
@@ -3849,6 +3879,8 @@ class TimelineView(QGraphicsView):
         new_fit = time_span / avail
 
         if self._fit_mode:
+            if self._virtual_time_scroll_active:
+                self._prepare_full_trace_window()
             old_tsp = self._scene._timescale_per_px
             self._scene._timescale_per_px_fit = new_fit
             self._scene._timescale_per_px     = new_fit

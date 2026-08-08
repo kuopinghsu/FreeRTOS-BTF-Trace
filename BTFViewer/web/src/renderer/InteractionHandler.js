@@ -103,13 +103,20 @@ export class InteractionHandler {
     canvas.addEventListener('contextmenu', this._boundContextMenu)
   }
 
+  cancelPendingViewport() {
+    /** Drop coalesced wheel/pinch viewport updates so Fit cannot be undone. */
+    if (this._vpFlushRaf != null) {
+      if (typeof cancelAnimationFrame === 'function') {
+        cancelAnimationFrame(this._vpFlushRaf)
+      }
+      this._vpFlushRaf = null
+    }
+    this._vpQueue = null
+  }
+
   destroy() {
     const c = this._canvas
-    if (this._vpFlushRaf) {
-      cancelAnimationFrame(this._vpFlushRaf)
-      this._vpFlushRaf = null
-      this._vpQueue = null
-    }
+    this.cancelPendingViewport()
     if (this._hoverRaf) {
       cancelAnimationFrame(this._hoverRaf)
       this._hoverRaf = null

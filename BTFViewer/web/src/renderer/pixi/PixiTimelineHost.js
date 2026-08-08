@@ -1,7 +1,7 @@
 /**
  * Pixi WebGL host for the timeline segment layer (batched rectangle fills).
  */
-import { Application, Container, Graphics } from 'pixi.js'
+import { Application, Container } from 'pixi.js'
 import { PixiSegmentBatcher } from './PixiSegmentBatcher.js'
 
 export class PixiTimelineHost {
@@ -12,8 +12,8 @@ export class PixiTimelineHost {
     this.stage = null
     /** @type {PixiSegmentBatcher | null} */
     this.batcher = null
-    /** @type {import('pixi.js').Graphics | null} */
-    this._bg = null
+    /** @type {PixiSegmentBatcher | null} */
+    this.stripeBatcher = null
     this._bgColor = 0x1e1e1e
     this._w = 0
     this._h = 0
@@ -27,13 +27,18 @@ export class PixiTimelineHost {
     try {
       const app = new Application()
       await app.init({
-        backgroundAlpha: 0,
+        // Opaque backbuffer: a transparent GL canvas premultiplies stripes
+        // through segment fills and washes task colors out.
+        background: this._bgColor,
+        backgroundAlpha: 1,
         antialias: false,
         autoDensity: true,
+        autoStart: false,
         resolution: Math.min(window.devicePixelRatio || 1, 2),
         preference: 'webgl',
         preserveDrawingBuffer: true,
       })
+      app.ticker.stop()
       const canvas = app.canvas
       canvas.className = 'pixi-timeline-canvas'
       canvas.style.position = 'absolute'
@@ -45,9 +50,15 @@ export class PixiTimelineHost {
 
       this.app = app
       this.stage = app.stage
-      this._bg = new Graphics()
-      this.stage.addChild(this._bg)
-      this.batcher = new PixiSegmentBatcher(this.stage)
+      const stripeRoot = new Container()
+      const segRoot = new Container()
+      stripeRoot.zIndex = 0
+      segRoot.zIndex = 1
+      this.stage.sortableChildren = true
+      this.stage.addChild(stripeRoot)
+      this.stage.addChild(segRoot)
+      this.stripeBatcher = new PixiSegmentBatcher(stripeRoot)
+      this.batcher = new PixiSegmentBatcher(segRoot)
       this.ready = true
       return true
     } catch (err) {
@@ -61,13 +72,10 @@ export class PixiTimelineHost {
   setBackground(color) {
     if (this._bgColor === color) return
     this._bgColor = color
-    this._redrawBackground()
-  }
-
-  _redrawBackground() {
-    if (!this._bg || this._w <= 0 || this._h <= 0) return
-    this._bg.clear()
-    this._bg.rect(0, 0, this._w, this._h).fill(this._bgColor)
+    if (this.app?.renderer?.background) {
+      this.app.renderer.background.color = color
+      this.app.renderer.background.alpha = 1
+    }
   }
 
   /** @param {number} w CSS pixels */
@@ -77,14 +85,15 @@ export class PixiTimelineHost {
     this._w = w
     this._h = h
     this.app.renderer.resize(w, h)
-    this._redrawBackground()
   }
 
   beginFrame() {
+    this.stripeBatcher?.clear()
     this.batcher?.clear()
   }
 
   endFrame() {
+    this.stripeBatcher?.flush()
     this.batcher?.flush()
     if (this.app?.renderer && this.stage) {
       this.app.renderer.render(this.stage)
@@ -92,8 +101,8 @@ export class PixiTimelineHost {
   }
 
   destroy() {
+    this.stripeBatcher = null
     this.batcher = null
-    this._bg = null
     this.stage = null
     if (this.app) {
       this.app.canvas?.remove()

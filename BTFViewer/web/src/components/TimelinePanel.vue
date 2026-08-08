@@ -532,8 +532,8 @@ function isFitToWindowZoom() {
 }
 
 /**
- * Coarse LOD / reduced paint budget.
- * Large traces: coarse while panning/zooming/scrolling and at overview zoom when idle.
+ * Coarse LOD / reduced segment budget.
+ * Large traces: coarse while panning/zooming and at idle fit-to-window.
  */
 function paintCoarse() {
   if (_captureForceFull) return false
@@ -543,9 +543,12 @@ function paintCoarse() {
   return false
 }
 
-/** Coarse LOD — see paintCoarse(). */
+/** Skip grid/TICK/hover while interacting or load-settling — not at idle fit. */
 function paintFast() {
-  return paintCoarse()
+  if (_captureForceFull) return false
+  if (_loadSettling) return true
+  if (isLargeTrace() && _interacting) return true
+  return false
 }
 
 function paintDpr() {
@@ -713,10 +716,12 @@ function paint() {
     lockedTaskKey:    props.options.lockedTaskKey ?? null,
     showHoverHighlight: !!props.options.showHoverHighlight,
     fastPaint:        paintFast(),
+    coarseLod:        paintCoarse(),
     rowLayout:        cachedRowLayout.value,
     columnLayout:     cachedColumnLayout.value,
     packedRows:       _packedRows,
     gpuBatch:         webgl ? pixiTimelineHost.batcher : null,
+    gpuStripes:       webgl ? pixiTimelineHost.stripeBatcher : null,
     skipColumnHeaders: orientation.value === 'v',
     labelHeaderH: orientation.value === 'v' ? vertCanvasHeaderH : vertLabelHeaderH.value,
   }
@@ -1243,6 +1248,7 @@ function clampScrollToContent() {
 
 function fitToTrace() {
   if (!props.trace) return
+  _handler?.cancelPendingViewport?.()
   const lo = props.trace.timeMin >= 0 ? Math.max(0, props.trace.timeMin) : props.trace.timeMin
   const hi = props.trace.timeMax
   viewport.timeStart = lo

@@ -56,6 +56,7 @@
 import { computed, ref } from 'vue'
 import { colBandWidth, visibleColumnIndexRange, RULER_W } from '../renderer/TimelineRenderer.js'
 import { taskMergeKey } from '../utils/colors.js'
+import { stripeClassForBand } from '../utils/timelineStripes.js'
 
 const LABEL_TOP = 16
 const LABEL_BOTTOM = 8
@@ -119,6 +120,7 @@ function colClass(col) {
     'col-core': col.type === 'core',
     'col-sti': col.type === 'sti',
     'col-interval': col.type === 'interval',
+    [stripeClassForBand(col, col.colIdx)]: true,
   }
 }
 
@@ -189,6 +191,12 @@ defineExpose({ rowEl })
   border-left: 1px solid var(--border);
   overflow: hidden;
 }
+.col-header.stripe-even { background: var(--row-even); }
+.col-header.stripe-odd { background: var(--row-odd); }
+.col-header.stripe-sti { background: var(--row-sti); }
+.col-header.stripe-core { background: var(--row-core); }
+.col-header.stripe-core-sub-even { background: var(--row-core-sub-even); }
+.col-header.stripe-core-sub-odd { background: var(--row-core-sub-odd); }
 
 .col-header:hover {
   background: var(--tb-btn-hover);

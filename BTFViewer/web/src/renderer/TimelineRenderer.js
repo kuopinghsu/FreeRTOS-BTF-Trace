@@ -14,7 +14,6 @@
 
 import { taskColor, taskDisplayName, taskMergeKey, parseTaskName, coreTint, coreColor, stiNoteColor, lighterColor, complementaryColor } from '../utils/colors.js'
 import { bisectLeft, bisectRight } from '../utils/bisect.js'
-import { lodReduce } from '../utils/lod.js'
 import { visibleSegs } from '../parser/btfParser.js'
 import {
   accelVisibleRowRange,
@@ -47,6 +46,7 @@ import {
   stiChannelMatchesTextFilter,
   normalizeTaskFilterText,
 } from '../utils/taskFilter.js'
+import { stripeColorForBand } from '../utils/timelineStripes.js'
 
 export {
   taskPassesRowFilter,
@@ -66,6 +66,8 @@ export const RULER_W        = 120  // left ruler column width (px) – vertical 
 export const HEADER_H       = 160  // top label row height (px) – vertical mode
 export const COL_W          =  26  // column width per task/core – vertical mode
 export const MIN_SEG_W      =   1  // minimum segment paint width (px)
+/** WebGL drops 1 CSS-pixel quads after snap; keep hairlines visible. */
+const MIN_GPU_SEG_W = 2
 
 /** Runtime vertical header band inside canvas (0 when DOM ColumnHeaderRow is used). */
 let _vertHeaderBand = HEADER_H
@@ -102,6 +104,10 @@ export function isStiTagChannel(name) {
 // merged via lodReduce; below it, individual segments are drawn with outlines.
 // visibleSegs() already selects the right LOD bin tier automatically.
 const PAINT_LOD_COARSE = 200    // ns/px: use coarse (merged) paint above this zoom level
+/** Desktop `_LOD_MERGE_PX`: join coarse spans closer than this many pixels. */
+const PAINT_LOD_MERGE_PX = 6
+/** Return every visible index up to this count; pixel-reduce only huge rows. */
+const PAINT_INDEX_CAP = 8192
 /** Max segment rectangles drawn per row/column per frame. */
 const PAINT_SEG_BUDGET   = 5000
 /** Reduced cap while panning/zooming at overview zoom (fit-to-window). */
@@ -132,14 +138,29 @@ export function orthRowBuffer(nTasks = 0, fastPaint = false) {
   return 2
 }
 
-function createPaintBudget(visibleSlots = 1, fastPaint = false, gpu = false) {
-  const cap = fastPaint ? PAINT_BUDGET_MAX_SLOTS_FAST : PAINT_BUDGET_MAX_SLOTS
+function createPaintBudget(visibleSlots = 1, lodFast = false, gpu = false, skipDecor = false) {
+  const cap = lodFast ? PAINT_BUDGET_MAX_SLOTS_FAST : PAINT_BUDGET_MAX_SLOTS
   const slots = Math.min(Math.max(1, visibleSlots), cap)
   const total = gpu
-    ? (fastPaint ? GPU_PAINT_SEG_BUDGET_FAST : GPU_PAINT_SEG_BUDGET)
-    : (fastPaint ? PAINT_SEG_BUDGET_FAST : PAINT_SEG_BUDGET)
-  const minSlot = fastPaint ? PAINT_SEG_MIN_SLOT_FAST : PAINT_SEG_MIN_SLOT
-  return { n: 0, max: Math.max(minSlot, Math.floor(total / slots)), fast: fastPaint }
+    ? (lodFast ? GPU_PAINT_SEG_BUDGET_FAST : GPU_PAINT_SEG_BUDGET)
+    : (lodFast ? PAINT_SEG_BUDGET_FAST : PAINT_SEG_BUDGET)
+  const minSlot = lodFast ? PAINT_SEG_MIN_SLOT_FAST : PAINT_SEG_MIN_SLOT
+  return {
+    n: 0,
+    max: Math.max(minSlot, Math.floor(total / slots)),
+    fast: lodFast,
+    skipDecor: !!skipDecor,
+  }
+}
+
+function minSegExtent(gpu) {
+  return gpu ? MIN_GPU_SEG_W : MIN_SEG_W
+}
+
+function snapSegExtent(startPx, endPx, gpu) {
+  const origin = Math.round(startPx)
+  const span = Math.max(minSegExtent(gpu), Math.ceil(endPx) - origin)
+  return [origin, span]
 }
 
 /** Solid segment fill — Canvas 2D or batched WebGL rects. */
@@ -161,6 +182,16 @@ function gpuFillRect(gpuBatch, ctx, x, y, w, h, color, alpha = 1) {
 
 function budgetLite(b) {
   return b.n >= b.max * PAINT_BUDGET_LITE
+}
+
+function paintHorizRowBand(ctx, row, canvasRowY, canvasW, darkMode, gpuStripes) {
+  const color = stripeColorForBand(row, darkMode)
+  const h = rowBandHeight(row)
+  if (gpuStripes) gpuStripes.addRect(0, canvasRowY, canvasW, h, color)
+  else {
+    ctx.fillStyle = color
+    ctx.fillRect(0, canvasRowY, canvasW, h)
+  }
 }
 
 function budgetFull(b) {
@@ -204,26 +235,56 @@ function lodReduceViewport(segs, nsPerPx, timeStart) {
   return mergeColumnSpans(segs, timeStart, nsPerPx)
 }
 
+/**
+ * Join coarse spans whose gap is within mergePx (desktop `_make_coarse_data`).
+ * Keeps short CS-style bursts visible at fit / moderate zoom instead of 1px dust.
+ */
+function mergeProximitySpans(spans, nsPerPx, mergePx = PAINT_LOD_MERGE_PX, bucketKey = null) {
+  if (!spans?.length || !(nsPerPx > 0) || mergePx <= 0) return spans
+  const gapNs = mergePx * nsPerPx
+  const result = []
+  let cur = null
+  let prevKey = null
+  for (const s of spans) {
+    if (!s) continue
+    const key = bucketKey ? bucketKey(s) : ''
+    if (!cur || key !== prevKey || s.start > cur.end + gapNs) {
+      if (cur) result.push(cur)
+      cur = { ...s }
+      prevKey = key
+    } else {
+      if (s.start < cur.start) cur.start = s.start
+      if (s.end > cur.end) cur.end = s.end
+    }
+  }
+  if (cur) result.push(cur)
+  return result
+}
+
+function coarseDrawList(segs, timeStart, nsPerPx, indices = null, bucketKey = null) {
+  const cols = mergeColumnSpans(segs, timeStart, nsPerPx, indices, bucketKey)
+  return mergeProximitySpans(cols, nsPerPx, PAINT_LOD_MERGE_PX, bucketKey)
+}
+
 /** Merge segments further when a row has more than its per-frame paint allowance. */
 function segmentsForBudget(segs, nsPerPx, timeStart, timeEnd, budgetMax, forceCoarse) {
-  let reduced = forceCoarse ? lodReduceViewport(segs, nsPerPx, timeStart) : segs
+  let reduced = forceCoarse
+    ? coarseDrawList(segs, timeStart, nsPerPx)
+    : segs
   if (reduced.length > budgetMax) {
     const span = Math.max(timeEnd - timeStart, 1)
     const coarseTpp = Math.max(nsPerPx, span / budgetMax)
     reduced = lodReduceViewport(reduced, coarseTpp, timeStart)
+    if (forceCoarse) reduced = mergeProximitySpans(reduced, nsPerPx)
   }
   return reduced
 }
 
-/** Pick segment LOD tier for paint; use ultra when zoomed out past coarse threshold. */
+/** Pick segment LOD tier from the live zoom (raw / 4096 / 1024), matching desktop `_visible_segs`. */
 function segsForPaint(lodData, timeStart, timeEnd, nsPerPx, lodTpp, ultraTpp) {
-  let tpp = nsPerPx
-  if (nsPerPx > PAINT_LOD_COARSE && nsPerPx < lodTpp) {
-    tpp = lodTpp
-  } else if (nsPerPx >= lodTpp) {
-    tpp = ultraTpp
-  }
-  return visibleSegs(lodData, timeStart, timeEnd, tpp, lodTpp, ultraTpp)
+  const raw = visibleSegs(lodData, timeStart, timeEnd, 0, Infinity, Infinity)
+  if (raw.length && raw.length <= PAINT_INDEX_CAP) return raw
+  return visibleSegs(lodData, timeStart, timeEnd, nsPerPx, lodTpp, ultraTpp)
 }
 
 const TICK_COLOR = '#E8C84A'
@@ -259,12 +320,13 @@ export function buildRowLayout(trace, viewMode, expanded, yStart, showSti = true
   const stiFilterQ = normalizeTaskFilterText(taskFilterText)
 
   if (viewMode === 'task') {
+    let stripeIdx = 0
     for (const mk of trace.tasks) {
       if (!taskPassesRowFilter(trace, mk, migratedOnlyFilter, taskFilterKeys, taskFilterText)) continue
       const repr = trace.taskRepr.get(mk)
       const label = taskDisplayName(repr || mk) + taskPriorityLabelSuffix(trace, mk)
       const color = taskColor(mk, repr)
-      rows.push({ type: 'task', key: mk, label, color, y })
+      rows.push({ type: 'task', key: mk, label, color, y, stripeIdx: stripeIdx++ })
       y += L().rowH + L().rowGap
     }
   } else {
@@ -272,14 +334,18 @@ export function buildRowLayout(trace, viewMode, expanded, yStart, showSti = true
     const cores = filteredCoreViewTasks(trace, migratedOnlyFilter, taskFilterKeys, taskFilterText)
     for (const { coreName, tasks } of cores) {
       const cc = coreColor(coreName)
-      rows.push({ type: 'core', key: coreName, label: coreName, color: cc, y })
+      rows.push({ type: 'core', key: coreName, label: coreName, color: cc, y, stripeIdx: 0 })
       y += L().rowH + L().rowGap
       if (expanded.has(coreName)) {
+        let subIdx = 0
         for (const rawTask of tasks) {
           const mk = taskMergeKey(rawTask)
           const label = taskDisplayName(rawTask) + taskPriorityLabelSuffix(trace, mk)
           const color = taskColor(mk, rawTask)
-          rows.push({ type: 'core-task', key: `${coreName}__${rawTask}`, coreKey: coreName, taskKey: rawTask, label, color, y })
+          rows.push({
+            type: 'core-task', key: `${coreName}__${rawTask}`, coreKey: coreName, taskKey: rawTask,
+            label, color, y, stripeIdx: subIdx++,
+          })
           y += L().rowH + L().rowGap
         }
       }
@@ -294,7 +360,7 @@ export function buildRowLayout(trace, viewMode, expanded, yStart, showSti = true
       const isTag = isStiTagChannel(ch)
       const isExpanded = isTag && stiExpanded.has(ch)
       const rowH = isExpanded ? L().stiWaveformH : L().stiRowH
-      rows.push({ type: 'sti', key: ch, label: ch, color: '#888', y, isTag, isExpanded })
+      rows.push({ type: 'sti', key: ch, label: ch, color: '#888', y, isTag, isExpanded, stripeIdx: 0 })
       y += rowH + L().rowGap
     }
     for (const id of (trace.intervalIds || [])) {
@@ -304,6 +370,7 @@ export function buildRowLayout(trace, viewMode, expanded, yStart, showSti = true
         label: `Interval ${id}`,
         color: intervalColor(id),
         y,
+        stripeIdx: 0,
       })
       y += L().rowH + L().rowGap
     }
@@ -478,12 +545,14 @@ export function render(ctx, trace, viewport, options = {}) {
     migratedOnlyFilter = false,
     lockedTaskKey = null,
     fastPaint   = false,
+    coarseLod   = false,
     showHoverHighlight = false,
   } = options
   const highlightSegment = options.highlightSegment ?? null
   const taskFilterText = options.taskFilterText || ''
   const skipCoreSummarySegs = coreViewTaskFilterActive(migratedOnlyFilter, options.taskFilterKeys, taskFilterText)
   const gpuBatch = options.gpuBatch ?? null
+  const gpuStripes = options.gpuStripes ?? null
   const useGpu = !!gpuBatch
 
   const timeSpan = timeEnd - timeStart
@@ -493,6 +562,7 @@ export function render(ctx, trace, viewport, options = {}) {
   const nsPerPx      = timeSpan / canvasW   // timescale per pixel
   const bodyH        = canvasH - RULER_H
   const paintFast    = !!fastPaint
+  const lodFast      = paintFast || !!coarseLod
 
   // DPR-aware clear — body background is on the WebGL layer when gpuBatch is set.
   ctx.clearRect(0, 0, canvasW, canvasH)
@@ -512,7 +582,7 @@ export function render(ctx, trace, viewport, options = {}) {
     ?? buildRowLayout(trace, viewMode, expanded, 0, showSti, stiExpanded, migratedOnlyFilter, options.taskFilterKeys || null, taskFilterText).rows
   const yOff = RULER_H - scrollY
   const nTasks = trace.tasks?.length ?? rows.length
-  const rowBuffer = orthRowBuffer(nTasks, paintFast)
+  const rowBuffer = orthRowBuffer(nTasks, lodFast)
   const { i0, i1 } = visibleRowIndexRange(rows, scrollY, bodyH, rowBuffer, options.packedRows)
   const visibleRowCount = Math.max(1, i1 - i0)
 
@@ -541,12 +611,16 @@ export function render(ctx, trace, viewport, options = {}) {
   ctx.clip()
 
   // ---- Task / Core rows (visible range only) ----
-  const budgetSpec = createPaintBudget(visibleRowCount, paintFast, useGpu)
+  const budgetSpec = createPaintBudget(visibleRowCount, lodFast, useGpu, paintFast)
   for (let ri = i0; ri < i1; ri++) {
     const row = rows[ri]
     const rowY = row.y + yOff
     const rowH = rowBandHeight(row)
-    const rowBudget = { n: 0, max: budgetSpec.max, fast: budgetSpec.fast }
+    const rowBudget = {
+      n: 0, max: budgetSpec.max, fast: budgetSpec.fast, skipDecor: budgetSpec.skipDecor,
+    }
+
+    paintHorizRowBand(ctx, row, rowY, canvasW, darkMode, gpuStripes)
 
     if (row.type === 'task') {
       drawTaskRow(ctx, trace, row, rowY, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, canvasW, darkMode, highlightSegment, rowBudget, showHoverHighlight, gpuBatch, lockedTaskKey)
@@ -722,19 +796,24 @@ function coreLodData(trace, coreName) {
 
 function queryPaintIndices(trace, wasmKind, wasmKey, ld, timeStart, timeEnd, nsPerPx, lodTpp, ultraTpp, budgetMax, forceCoarse, fastPaint = false) {
   const effectiveForce = forceCoarse || fastPaint
-  const tierNsPerPx = (fastPaint || (effectiveForce && nsPerPx >= lodTpp))
-    ? Math.max(nsPerPx, ultraTpp)
-    : nsPerPx
   const handles = wasmKind ? getWasmHandles(trace, wasmKind, wasmKey) : null
-  const q = accelVisibleSegIndices(handles, ld, timeStart, timeEnd, tierNsPerPx, lodTpp, ultraTpp)
+  const indexCap = Math.max(budgetMax, PAINT_INDEX_CAP)
+  // Prefer the raw viewport slice whenever it fits the paint cap. Global LOD
+  // bins are sized for the full trace, so moderate zoom + pan otherwise keeps
+  // first-in-bin holes that 6px merge no longer covers.
+  const rawQ = accelVisibleSegIndices(handles, ld, timeStart, timeEnd, 0, Infinity, Infinity)
+  const rawCount = (rawQ.segs?.length && rawQ.from <= rawQ.to) ? (rawQ.to - rawQ.from + 1) : 0
+  const q = (rawCount > 0 && rawCount <= indexCap)
+    ? rawQ
+    : accelVisibleSegIndices(handles, ld, timeStart, timeEnd, nsPerPx, lodTpp, ultraTpp)
   if (!q.segs?.length || q.from > q.to) return { segs: q.segs || [], indices: null }
   const visibleCount = q.to - q.from + 1
-  if (!effectiveForce && visibleCount <= budgetMax) {
+  if (visibleCount <= indexCap) {
     const indices = new Array(visibleCount)
     for (let i = q.from, j = 0; i <= q.to; i++, j++) indices[j] = i
     return { segs: q.segs, indices }
   }
-  return { segs: q.segs, indices: accelLodReduceIndices(q, timeStart, timeEnd, nsPerPx, budgetMax, true) }
+  return { segs: q.segs, indices: accelLodReduceIndices(q, timeStart, timeEnd, nsPerPx, budgetMax, effectiveForce) }
 }
 
 /**
@@ -756,7 +835,9 @@ function paintSegments(ctx, segs, timeStart, timeEnd, pxPerNs, nsPerPx, rowY, ro
   const viewW = (timeEnd - timeStart) * pxPerNs
 
   const drawList = segIndices
-    ? mergeColumnSpans(segs, timeStart, nsPerPx, segIndices)
+    ? (forceCoarse
+      ? coarseDrawList(segs, timeStart, nsPerPx, segIndices)
+      : mergeColumnSpans(segs, timeStart, nsPerPx, segIndices))
     : reduced
 
   const labelRects = []
@@ -771,8 +852,7 @@ function paintSegments(ctx, segs, timeStart, timeEnd, pxPerNs, nsPerPx, rowY, ro
       if (x2raw < -2 || x1raw > viewW + 2) return true
       const x1 = Math.max(0, x1raw)
       const x2 = Math.min(viewW, x2raw)
-      const rw = Math.ceil(Math.max(MIN_SEG_W, x2 - x1))
-      const rx = Math.round(x1)
+      const [rx, rw] = snapSegExtent(x1, x2, gpuBatch)
       if (gpuBatch) gpuBatch.addRect(rx, rowY, rw, rowH, baseColor, fillAlpha)
       else path.rect(rx, rowY, rw, rowH)
       count++
@@ -804,11 +884,10 @@ function paintSegments(ctx, segs, timeStart, timeEnd, pxPerNs, nsPerPx, rowY, ro
     if (x2raw < -2 || x1raw > viewW + 2) return true
     const x1 = Math.max(0, x1raw)
     const x2 = Math.min(viewW, x2raw)
-    const w = Math.max(MIN_SEG_W, x2 - x1)
+    const [drawX, drawW] = snapSegExtent(x1, x2, gpuBatch)
+    const w = drawW
 
     const isSegLocked = hlSeg && seg.start === hlSeg.start && seg.end === hlSeg.end && seg.task === hlSeg.task
-    const drawX  = Math.round(x1)
-    const drawW  = Math.ceil(w)
     const drawY  = rowY
     const drawH  = rowH
     gpuFillRect(gpuBatch, ctx, drawX, drawY, drawW, drawH, baseColor, fillAlpha)
@@ -1032,11 +1111,6 @@ function drawTaskRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, n
   if (dim) ctx.globalAlpha = 45 / 255
   const fillAlpha = dim ? 45 / 255 : 1
 
-  if (!fast) {
-    ctx.fillStyle = darkMode ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.02)'
-    ctx.fillRect(0, canvasRowY, canvasW, L().rowH)
-  }
-
   paintSegments(ctx, segs, timeStart, timeEnd, pxPerNs, nsPerPx,
     rowY, rowH, row.color, trace, /* coreTint */ true, highlightKey, mk, darkMode, row.label, hlSeg, budget,
     indices, gpuBatch, fillAlpha)
@@ -1048,10 +1122,6 @@ function drawTaskRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, n
 
 function drawCoreRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, nsPerPx, canvasW, darkMode, budget, skipSummarySegs = false, gpuBatch = null) {
   const fast = budget.fast
-  if (!fast) {
-    ctx.fillStyle = darkMode ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.03)'
-    ctx.fillRect(0, canvasRowY, canvasW, L().rowH)
-  }
   if (skipSummarySegs) return
 
   const ld = coreLodData(trace, row.key)
@@ -1070,7 +1140,7 @@ function drawCoreRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, n
   const midY = rowY + rowH / 2
 
   const drawList = indices
-    ? mergeColumnSpans(segs, timeStart, nsPerPx, indices, s => s.task)
+    ? coarseDrawList(segs, timeStart, nsPerPx, indices, s => s.task)
     : segmentsForBudget(segs, nsPerPx, timeStart, timeEnd, budget.max, true)
 
   for (const seg of drawList) {
@@ -1083,15 +1153,14 @@ function drawCoreRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, n
     if (x2raw < -2 || x1raw > canvasW + 2) continue
     const x1 = Math.max(0, x1raw)
     const x2 = Math.min(canvasW, x2raw)
-    const w  = Math.max(MIN_SEG_W, x2 - x1)
+    const [drawX, drawW] = snapSegExtent(x1, x2, gpuBatch)
+    const w = drawW
 
     let color = colorCache.get(seg.task)
     if (color === undefined) {
       color = taskColor(taskMergeKey(seg.task), seg.task)
       colorCache.set(seg.task, color)
     }
-    const drawX = Math.round(x1)
-    const drawW = Math.ceil(w)
     gpuFillRect(gpuBatch, ctx, drawX, rowY, drawW, rowH, color)
     budget.n++
 
@@ -1128,11 +1197,6 @@ function drawCoreTaskRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerN
     trace.lodTimescalePerPx, trace.lodUltraTimescalePerPx, budget.max, forceCoarse, fast,
   )
 
-  if (!fast) {
-    ctx.fillStyle = darkMode ? 'rgba(255,255,255,0.01)' : 'rgba(0,0,0,0.01)'
-    ctx.fillRect(0, canvasRowY, canvasW, L().rowH)
-  }
-
   const dimLocked = lockedTaskKey && mk !== lockedTaskKey
   const dimHover = showHoverHighlight && highlightKey && mk !== highlightKey && !hlSeg && !lockedTaskKey
   const dim = dimLocked || dimHover
@@ -1157,8 +1221,6 @@ function drawCoreTaskRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerN
 function drawIntervalRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxPerNs, canvasW, darkMode, highlightInterval = null) {
   const rowY = canvasRowY
   const rowH = L().rowH
-  ctx.fillStyle = darkMode ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.02)'
-  ctx.fillRect(0, canvasRowY, canvasW, rowH)
   const { instances, preCulled } = intervalInstancesForDraw(trace, row.key)
   const visible = visibleIntervalInstances(instances, timeStart, timeEnd, preCulled)
   const base = row.color || intervalColor(row.key)
@@ -1237,9 +1299,6 @@ function drawIntervalColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, canvas
   const colW = col.colWidth ?? COL_W
   const headerH = vertHeaderBand()
   const bodyH = canvasH - headerH
-
-  ctx.fillStyle = darkMode ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.02)'
-  ctx.fillRect(colX, headerH, colW, bodyH)
 
   const { instances, preCulled } = intervalInstancesForDraw(trace, col.key)
   const visible = visibleIntervalInstances(instances, timeStart, timeEnd, preCulled)
@@ -1366,10 +1425,6 @@ function drawStiWaveformRow(ctx, trace, row, canvasRowY, timeStart, timeEnd, pxP
 
   const evs = trace.stiEventsByTarget.get(row.key) || []
   const starts = trace.stiStartsByTarget.get(row.key) || []
-
-  // Row background
-  ctx.fillStyle = darkMode ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.03)'
-  ctx.fillRect(0, rowY, canvasW, rowH)
 
   // Axis lines at scale 0 and scale 100
   const PAD = 4
@@ -2011,13 +2066,16 @@ export function buildColumnLayout(trace, viewMode, expanded, scrollX = 0, showSt
   const stiFilterQ = normalizeTaskFilterText(taskFilterText)
 
   if (viewMode === 'task') {
+    let stripeIdx = 0
     for (const mk of trace.tasks) {
       if (!taskPassesRowFilter(trace, mk, migratedOnlyFilter, taskFilterKeys, taskFilterText)) continue
       const repr = trace.taskRepr.get(mk)
       const label = taskDisplayName(repr || mk) + taskPriorityLabelSuffix(trace, mk)
       const color = taskColor(mk, repr)
       const x = RULER_W + xAcc - scrollX
-      cols.push({ type: 'task', key: mk, label, color, x, colIdx: rawIdx, colWidth: COL_W })
+      cols.push({
+        type: 'task', key: mk, label, color, x, colIdx: rawIdx, colWidth: COL_W, stripeIdx: stripeIdx++,
+      })
       rawIdx++
       xAcc += COL_W
     }
@@ -2027,10 +2085,13 @@ export function buildColumnLayout(trace, viewMode, expanded, scrollX = 0, showSt
     for (const { coreName, tasks } of cores) {
       const cc = coreColor(coreName)
       const x = RULER_W + xAcc - scrollX
-      cols.push({ type: 'core', key: coreName, label: coreName, color: cc, x, colIdx: rawIdx, colWidth: COL_W })
+      cols.push({
+        type: 'core', key: coreName, label: coreName, color: cc, x, colIdx: rawIdx, colWidth: COL_W, stripeIdx: 0,
+      })
       rawIdx++
       xAcc += COL_W
       if (expanded.has(coreName)) {
+        let subIdx = 0
         for (const rawTask of tasks) {
           const mk = taskMergeKey(rawTask)
           const lbl = taskDisplayName(rawTask) + taskPriorityLabelSuffix(trace, mk)
@@ -2039,6 +2100,7 @@ export function buildColumnLayout(trace, viewMode, expanded, scrollX = 0, showSt
           cols.push({
             type: 'core-task', key: `${coreName}__${rawTask}`,
             coreKey: coreName, taskKey: rawTask, label: lbl, color: col, x: cx, colIdx: rawIdx, colWidth: COL_W,
+            stripeIdx: subIdx++,
           })
           rawIdx++
           xAcc += COL_W
@@ -2056,7 +2118,10 @@ export function buildColumnLayout(trace, viewMode, expanded, scrollX = 0, showSt
       const isExpanded   = isExpandable && stiExpanded.has(ch)
       const cw           = isExpanded ? L().stiWaveformH : COL_W
       const x = RULER_W + xAcc - scrollX
-      cols.push({ type: 'sti', key: ch, label: ch, color: '#888', x, colIdx: rawIdx, colWidth: cw, isExpanded, isExpandable })
+      cols.push({
+        type: 'sti', key: ch, label: ch, color: '#888', x, colIdx: rawIdx, colWidth: cw,
+        isExpanded, isExpandable, stripeIdx: 0,
+      })
       rawIdx++
       xAcc += cw
     }
@@ -2070,6 +2135,7 @@ export function buildColumnLayout(trace, viewMode, expanded, scrollX = 0, showSt
         x,
         colIdx: rawIdx,
         colWidth: COL_W,
+        stripeIdx: 0,
       })
       rawIdx++
       xAcc += COL_W
@@ -2242,7 +2308,9 @@ function paintSegmentsVertical(ctx, segs, timeStart, timeEnd, pxPerNs, nsPerPx, 
   const drawTint     = !fast && !forceCoarse && !budgetLite(budget)
   const reduced = segIndices ? null : segmentsForBudget(segs, nsPerPx, timeStart, timeEnd, budget.max, forceCoarse)
   const drawList = segIndices
-    ? mergeColumnSpans(segs, timeStart, nsPerPx, segIndices)
+    ? (forceCoarse
+      ? coarseDrawList(segs, timeStart, nsPerPx, segIndices)
+      : mergeColumnSpans(segs, timeStart, nsPerPx, segIndices))
     : reduced
 
   const segX = colX + 1
@@ -2261,7 +2329,8 @@ function paintSegmentsVertical(ctx, segs, timeStart, timeEnd, pxPerNs, nsPerPx, 
         if (y2raw < -2 || y1raw > bodyH + 2) continue
         const y1 = Math.max(0, y1raw)
         const y2 = Math.min(bodyH, y2raw)
-        gpuBatch.addRect(segX, headerH + Math.round(y1), segW, Math.ceil(Math.max(1, y2 - y1)), baseColor, fillAlpha)
+        const [ry, rh] = snapSegExtent(y1, y2, true)
+        gpuBatch.addRect(segX, headerH + ry, segW, rh, baseColor, fillAlpha)
         count++
       }
     } else {
@@ -2293,11 +2362,12 @@ function paintSegmentsVertical(ctx, segs, timeStart, timeEnd, pxPerNs, nsPerPx, 
     if (y2raw < -2 || y1raw > bodyH + 2) return true
     const y1 = Math.max(0, y1raw)
     const y2 = Math.min(bodyH, y2raw)
-    const h  = Math.max(1, y2 - y1)
+    const [ry, rh] = snapSegExtent(y1, y2, gpuBatch)
+    const h = rh
 
     const isSegLocked = hlSeg && seg.start === hlSeg.start && seg.end === hlSeg.end && seg.task === hlSeg.task
-    const drawY2 = headerH + Math.round(y1)
-    const drawH2 = Math.ceil(h)
+    const drawY2 = headerH + ry
+    const drawH2 = rh
     const drawX2 = segX
     const drawW2 = segW
     gpuFillRect(gpuBatch, ctx, drawX2, drawY2, drawW2, drawH2, baseColor, fillAlpha)
@@ -2354,18 +2424,15 @@ function paintSegmentsVertical(ctx, segs, timeStart, timeEnd, pxPerNs, nsPerPx, 
   }
 }
 
-/** Column band behind segments — opaque stripes on Canvas2D; subtle tint when WebGL draws segments. */
-function paintVertColumnBand(ctx, col, headerH, canvasH, darkMode, gpuBatch, fast) {
-  if (fast) return
+/** Column band behind segments — opaque stripes (WebGL under segments, else Canvas2D). */
+function paintVertColumnBand(ctx, col, headerH, canvasH, darkMode, gpuStripes) {
   const cw = col.colWidth ?? COL_W
-  if (gpuBatch) {
-    ctx.fillStyle = darkMode ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.02)'
-  } else {
-    ctx.fillStyle = col.colIdx % 2 === 0
-      ? (darkMode ? '#252526' : '#FAFAFA')
-      : (darkMode ? '#2D2D2D' : '#F5F5F5')
+  const color = stripeColorForBand(col, darkMode, col.colIdx ?? 0)
+  if (gpuStripes) gpuStripes.addRect(col.x, headerH, cw, canvasH - headerH, color)
+  else {
+    ctx.fillStyle = color
+    ctx.fillRect(col.x, headerH, cw, canvasH - headerH)
   }
-  ctx.fillRect(col.x, headerH, cw, canvasH - headerH)
 }
 
 // ---- Column drawing functions ----------------------------------------------
@@ -2380,8 +2447,6 @@ function drawTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, h
     trace, 'task', mk, ld, timeStart, timeEnd, nsPerPx,
     trace.lodTimescalePerPx, trace.lodUltraTimescalePerPx, budget.max, forceCoarse, fast,
   )
-
-  paintVertColumnBand(ctx, col, headerH, canvasH, darkMode, gpuBatch, fast)
 
   const dim = lockedTaskKey && mk !== lockedTaskKey
   if (dim) ctx.save()
@@ -2402,7 +2467,6 @@ function drawTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, h
 
 function drawCoreColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, canvasH, darkMode, budget, skipSummarySegs = false, gpuBatch = null) {
   const headerH = vertHeaderBand()
-  paintVertColumnBand(ctx, col, headerH, canvasH, darkMode, gpuBatch, budget.fast)
   if (skipSummarySegs) return
 
   const ld = coreLodData(trace, col.key)
@@ -2428,15 +2492,16 @@ function drawCoreColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, c
     if (y2raw < -2 || y1raw > bodyH + 2) continue
     const y1 = Math.max(0, y1raw)
     const y2 = Math.min(bodyH, y2raw)
-    const h  = Math.max(1, y2 - y1)
+    const [ry, rh] = snapSegExtent(y1, y2, gpuBatch)
+    const h = rh
 
     let color = colorCache.get(seg.task)
     if (color === undefined) {
       color = taskColor(taskMergeKey(seg.task), seg.task)
       colorCache.set(seg.task, color)
     }
-    const drawY2 = headerH + Math.round(y1)
-    const drawH2 = Math.ceil(h)
+    const drawY2 = headerH + ry
+    const drawH2 = rh
     gpuFillRect(gpuBatch, ctx, segX, drawY2, segW, drawH2, color)
     budget.n++
 
@@ -2471,8 +2536,6 @@ function drawCoreTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerP
     trace.lodTimescalePerPx, trace.lodUltraTimescalePerPx, budget.max, forceCoarse, fast,
   )
 
-  paintVertColumnBand(ctx, col, headerH, canvasH, darkMode, gpuBatch, fast)
-
   const mk = taskMergeKey(col.taskKey)
   const dim = lockedTaskKey && mk !== lockedTaskKey
   if (dim) ctx.save()
@@ -2494,8 +2557,6 @@ function drawCoreTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerP
 function drawStiColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, canvasH, darkMode) {
   const headerH = vertHeaderBand()
   const cw = col.colWidth ?? COL_W
-  ctx.fillStyle = darkMode ? '#1A1A2E' : '#F0F0FF'
-  ctx.fillRect(col.x, headerH, cw, canvasH - headerH)
 
   if (col.isExpanded) {
     drawStiColumnWaveform(ctx, trace, col, cw, timeStart, timeEnd, pxPerNs, canvasH, darkMode)
@@ -2871,11 +2932,13 @@ export function renderVertical(ctx, trace, viewport, options = {}) {
     migratedOnlyFilter = false,
     lockedTaskKey = null,
     fastPaint   = false,
+    coarseLod   = false,
   } = options
   const highlightSegment = options.highlightSegment ?? null
   const taskFilterText = options.taskFilterText || ''
   const skipCoreSummarySegs = coreViewTaskFilterActive(migratedOnlyFilter, options.taskFilterKeys, taskFilterText)
   const gpuBatch = options.gpuBatch ?? null
+  const gpuStripes = options.gpuStripes ?? null
   const useGpu = !!gpuBatch
   const headerH = options.labelHeaderH ?? HEADER_H
   const prevBand = vertHeaderBand()
@@ -2891,6 +2954,7 @@ export function renderVertical(ctx, trace, viewport, options = {}) {
   const pxPerNs = bodyH / timeSpan
   const nsPerPx = timeSpan / bodyH
   const paintFast = !!fastPaint
+  const lodFast = paintFast || !!coarseLod
 
   try {
   // Clear — body background is on the WebGL layer when gpuBatch is set.
@@ -2946,11 +3010,14 @@ export function renderVertical(ctx, trace, viewport, options = {}) {
   }
   visibleColCount = Math.max(1, visibleColCount)
 
-  const colBudgetSpec = createPaintBudget(visibleColCount, paintFast, useGpu)
+  const colBudgetSpec = createPaintBudget(visibleColCount, lodFast, useGpu, paintFast)
   for (const col of cols) {
     const cw = col.colWidth ?? COL_W
     if (col.x + cw < RULER_W || col.x >= canvasW) continue
-    const colBudget = { n: 0, max: colBudgetSpec.max, fast: colBudgetSpec.fast }
+    const colBudget = {
+      n: 0, max: colBudgetSpec.max, fast: colBudgetSpec.fast, skipDecor: colBudgetSpec.skipDecor,
+    }
+    paintVertColumnBand(ctx, col, headerH, canvasH, darkMode, gpuStripes)
     if (col.type === 'task') {
       drawTaskColumn(ctx, trace, col, timeStart, timeEnd, pxPerNs, nsPerPx, highlightKey, canvasH, darkMode, highlightSegment, colBudget, gpuBatch, lockedTaskKey)
     } else if (col.type === 'core') {

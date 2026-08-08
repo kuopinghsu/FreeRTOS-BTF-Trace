@@ -6,6 +6,7 @@
 import { RULER_H, RULER_W, rowBandHeight, colBandWidth } from './TimelineRenderer.js'
 import { getTimelineLayout } from '../utils/timelineLayout.js'
 import { intervalColor } from '../utils/intervalAnalysis.js'
+import { stripeColorForBand } from '../utils/timelineStripes.js'
 
 const LABEL_TOP = 16
 const LABEL_BOTTOM = 8
@@ -63,7 +64,7 @@ function labelColorForRow(row, colors) {
 }
 
 function drawLabelRow(ctx, row, screenY, rowH, width, colors, expanded, stiExpanded, darkMode) {
-  ctx.fillStyle = colors.panelBg
+  ctx.fillStyle = stripeColorForBand(row, darkMode)
   ctx.fillRect(0, screenY, width, rowH)
 
   const midY = screenY + rowH / 2

@@ -34,11 +34,16 @@ export function createMockCanvas(textWidth = 80) {
     },
     stroke() {},
     fillRect(x, y, w, h) {
-      log.fillRects.push({ x, y, w, h })
+      log.fillRects.push({ x, y, w, h, fillStyle: this.fillStyle })
     },
+    fill() {},
     fillText(text, x, y) {
       log.fillTexts.push({ text, x, y })
     },
+    clearRect() {},
+    rect() {},
+    clip() {},
+    globalAlpha: 1,
   }
 
   return { ctx, log }

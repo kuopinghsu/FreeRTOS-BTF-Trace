@@ -859,6 +859,16 @@
           >
             Grid
           </button>
+          <span
+            class="status-zoom"
+            :title="zoomStatus.title"
+          >
+            <span class="status-zoom-scale">{{ zoomStatus.scale }}</span>
+            <span
+              v-if="zoomStatus.visible"
+              class="status-zoom-visible"
+            >{{ zoomStatus.visible }}</span>
+          </span>
         </div>
       </template>
       <span
@@ -891,6 +901,7 @@ import AiAssistantPanel from './components/AiAssistantPanel.vue'
 import JumpToTimeDialog from './components/JumpToTimeDialog.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
 import { formatTime }   from './renderer/TimelineRenderer.js'
+import { zoomStatusFromViewport } from './utils/timeFormat.js'
 import { taskDisplayName, taskMergeKey, setColorblindMode } from './utils/colors.js'
 import {
   DARK_MODE,
@@ -1469,6 +1480,12 @@ const cursorRangeStats = computed(() =>
 
 const statusRangeLine = computed(() =>
   formatStatusRangeLine(cursorRangeStats.value))
+
+const zoomStatus = computed(() => zoomStatusFromViewport(
+  timelineViewport.value,
+  trace.value?.timeScale || 'ns',
+  timelineOptions.orientation || 'h',
+))
 
 // ---- File loading (via Web Worker; fallback to main-thread for file:// origins) --
 let _parseWorker = null
@@ -3169,6 +3186,12 @@ watch(
   --tick-dist-bg:    color-mix(in srgb, #FFB74D 16%, transparent);
   --sb-thumb:       rgba(160, 160, 160, 0.40);
   --sb-thumb-hover: rgba(160, 160, 160, 0.65);
+  --row-even:       #252526;
+  --row-odd:        #2D2D2D;
+  --row-sti:        #1A1A2E;
+  --row-core:       #2A2A3E;
+  --row-core-sub-even: #1E1E2C;
+  --row-core-sub-odd:  #232330;
 }
 
 .app:not(.dark) {
@@ -3188,6 +3211,12 @@ watch(
   --tick-dist-bg:    color-mix(in srgb, #E65100 10%, #FFFFFF);
   --sb-thumb:       rgba(80, 80, 80, 0.38);
   --sb-thumb-hover: rgba(80, 80, 80, 0.62);
+  --row-even:       #FFFFFF;
+  --row-odd:        #F2F2F2;
+  --row-sti:        #EEF3F8;
+  --row-core:       #E7ECF3;
+  --row-core-sub-even: #F7F9FC;
+  --row-core-sub-odd:  #EEF2F7;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -3862,6 +3891,26 @@ body.col-resizing * {
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
+}
+
+.status-zoom {
+  display: flex;
+  align-items: baseline;
+  flex-shrink: 0;
+  white-space: nowrap;
+  user-select: text;
+}
+
+.status-zoom-scale {
+  min-width: 80px;
+  padding: 0 2px 0 8px;
+  color: var(--fg);
+  text-align: right;
+}
+
+.status-zoom-visible {
+  padding: 0 8px 0 0;
+  color: var(--fg-dim);
 }
 
 .status-toggle {

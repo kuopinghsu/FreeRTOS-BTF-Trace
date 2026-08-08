@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { formatMigrationGapTime, formatTime, formatTimeFixed } from '../src/utils/timeFormat.js'
+import {
+  formatMigrationGapTime,
+  formatTime,
+  formatTimeFixed,
+  formatTimescalePerPx,
+  zoomStatusFromViewport,
+} from '../src/utils/timeFormat.js'
 
 describe('formatTime', () => {
   it('scales nanoseconds to milliseconds', () => {
@@ -31,6 +37,36 @@ describe('formatTimeFixed', () => {
     assert.equal(formatTimeFixed(2, 'us'), '2.000 µs')
     assert.equal(formatTimeFixed(42, 'ns'), '42.000 ns')
     assert.equal(formatTimeFixed(1000, 'ns'), '1.000 µs')
+  })
+})
+
+describe('formatTimescalePerPx', () => {
+  it('matches desktop xx.x unit/px auto-scale', () => {
+    assert.equal(formatTimescalePerPx(2.0, 'ns'), '2.0 ns/px')
+    assert.equal(formatTimescalePerPx(2017, 'us'), '2.0 ms/px')
+    assert.equal(formatTimescalePerPx(0.5, 'us'), '500.0 ns/px')
+  })
+})
+
+describe('zoomStatusFromViewport', () => {
+  it('shows scale and visible span from the timeline window', () => {
+    const z = zoomStatusFromViewport(
+      { timeStart: 0, timeEnd: 2_017_000, canvasW: 1000, canvasH: 400 },
+      'us',
+      'h',
+    )
+    assert.equal(z.scale, '2.0 ms/px')
+    assert.match(z.visible, /visible/)
+    assert.match(z.title, /2\.0 ms\/px/)
+  })
+
+  it('is a dash before the canvas is sized', () => {
+    const z = zoomStatusFromViewport(
+      { timeStart: 0, timeEnd: 1, canvasW: 1, canvasH: 1 },
+      'ns',
+    )
+    assert.equal(z.scale, '—')
+    assert.equal(z.visible, '')
   })
 })
 

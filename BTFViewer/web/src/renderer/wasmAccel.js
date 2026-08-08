@@ -39,7 +39,7 @@ function jsVisibleSegRange(starts, nsLo, nsHi) {
   const lo = bisectLeft(starts, nsLo)
   const hi = bisectRight(starts, nsHi)
   const from = Math.max(0, lo - 1)
-  return { from, to: hi }
+  return { from, to: hi - 1 }
 }
 
 /**
@@ -82,16 +82,11 @@ function jsLodReduceIndices(starts, ends, from, to, timeStart, timeEnd, nsPerPx,
     return out
   }
 
-  // Very large rows: one coarse pass across the full viewport (fast).
-  if (count > maxOut * 8) {
-    const cols = collect(Math.max(nsPerPx, span / maxOut))
-    return cols.length <= maxOut ? cols : subsample(cols)
-  }
-
-  // Moderate rows: fine pixel columns + even subsample (preserves coverage).
+  // Prefer wider time bins over even subsample so short bursts are not dropped.
   const fine = collect(nsPerPx)
   if (fine.length <= maxOut) return fine
-  return subsample(fine)
+  const cols = collect(Math.max(nsPerPx, span / maxOut))
+  return cols.length <= maxOut ? cols : subsample(cols)
 }
 
 function ensureMem(bytes) {
@@ -206,15 +201,23 @@ export function wasmParseReady() {
   return !!_wasm
 }
 
+function parseScratchBase() {
+  // Timeline LOD uploads grow from `_uploadBase`. Parse scratch must sit past
+  // `_uploadEnd` so gather/lod-summary cannot clobber already-uploaded starts.
+  return align8(Math.max(PARSE_UPLOAD_BASE, _uploadEnd + 8))
+}
+
 function ensureParseMem(totalBytes) {
   if (!_mem) return 0
-  const need = PARSE_UPLOAD_BASE + totalBytes
-  if (need <= _mem.buffer.byteLength) return PARSE_UPLOAD_BASE
-  const pages = Math.ceil(need / 65536)
-  _mem.grow(pages - Math.floor(_mem.buffer.byteLength / 65536))
-  _i32 = new Int32Array(_mem.buffer)
-  _f64 = new Float64Array(_mem.buffer)
-  return PARSE_UPLOAD_BASE
+  const base = parseScratchBase()
+  const need = base + totalBytes
+  if (need > _mem.buffer.byteLength) {
+    const pages = Math.ceil(need / 65536)
+    _mem.grow(pages - Math.floor(_mem.buffer.byteLength / 65536))
+    _i32 = new Int32Array(_mem.buffer)
+    _f64 = new Float64Array(_mem.buffer)
+  }
+  return base
 }
 
 /**
@@ -246,13 +249,12 @@ export function wasmGatherStarts(allStarts, indices) {
   if (!_wasm?.gather_starts || !indices?.length) return null
   const len = indices.length
   const nAll = allStarts.length
-  const bytesIdx = len * 4
-  const bytesOut = len * 8
-  const startsPtr = align8(PARSE_UPLOAD_BASE)
-  const idxPtr = align8(startsPtr + nAll * 8)
-  const outPtr = align8(idxPtr + bytesIdx)
-  const totalBytes = outPtr - PARSE_UPLOAD_BASE + bytesOut
-  ensureParseMem(totalBytes)
+  const relIdx = align8(nAll * 8)
+  const relOut = align8(relIdx + len * 4)
+  const base = ensureParseMem(relOut + len * 8)
+  const startsPtr = base
+  const idxPtr = base + relIdx
+  const outPtr = base + relOut
   new Float64Array(_mem.buffer, startsPtr, nAll).set(allStarts)
   new Uint32Array(_mem.buffer, idxPtr, len).set(indices)
   _wasm.gather_starts(startsPtr, idxPtr, len, outPtr)
@@ -347,7 +349,7 @@ export function accelVisibleSegIndices(wasmHandles, lodData, timeStart, timeEnd,
   if (_wasm && tier?.starts?.len && tier.starts.len === segs.length) {
     _wasm.visible_seg_range(tier.starts.ptr, tier.starts.len, timeStart, timeEnd, _scratch)
     let from = _i32[_scratch >> 2]
-    let to = _i32[(_scratch >> 2) + 1]
+    let to = _i32[(_scratch >> 2) + 1] - 1
     if (from >= segs.length) from = segs.length - 1
     if (to >= segs.length) to = segs.length - 1
     return { segs, from, to, tier }
@@ -373,6 +375,11 @@ export function accelLodReduceIndices(segQuery, timeStart, timeEnd, nsPerPx, max
   const starts = segs._startsF64 || startsArray(segs)
   const ends = segs._endsF64 || endsArray(segs)
   return jsLodReduceIndices(starts, ends, from, to, timeStart, timeEnd, nsPerPx, maxOut)
+}
+
+export function wasmPeekF64(ptr, count) {
+  if (!_mem || !ptr || count <= 0) return []
+  return Array.from(new Float64Array(_mem.buffer, ptr, count))
 }
 
 export function getWasmHandles(trace, kind, key) {

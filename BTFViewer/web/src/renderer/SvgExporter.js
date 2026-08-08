@@ -25,6 +25,7 @@ import {
   intervalStripeColors,
 } from '../utils/intervalAnalysis.js'
 import { cursorSortedPlaced } from '../utils/cursorAnalysis.js'
+import { stripeColorForBand } from '../utils/timelineStripes.js'
 
 function L() {
   return getTimelineLayout()
@@ -200,9 +201,6 @@ export function renderToSvg(trace, viewport, options = {}) {
   const rulerBg   = darkMode ? '#2D2D2D' : '#F0F0F0'
   const textColor = darkMode ? '#D4D4D4' : '#333333'
   const rulerText = darkMode ? '#AAAAAA' : '#555555'
-  const evenBg    = darkMode ? '#252526' : '#F5F5F5'
-  const oddBg     = darkMode ? '#2D2D2D' : '#EBEBEB'
-  const stiBg     = darkMode ? '#1A1A2E' : '#EEF0FA'
   const sepColor  = darkMode ? '#333333' : '#DDDDDD'
   const gridColor = darkMode ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)'
 
@@ -248,7 +246,7 @@ export function renderToSvg(trace, viewport, options = {}) {
     const row  = rows[i]
     const rowH = rowBandHeightSvg(row)
     if (row.y + rowH < 0 || row.y >= canvasH) continue
-    const bg = (row.type === 'sti' || row.type === 'interval') ? stiBg : (i % 2 === 0 ? evenBg : oddBg)
+    const bg = stripeColorForBand(row, darkMode, i)
     // Row background covers only the timeline area (label column drawn separately)
     els.push(`<rect x="${OX}" y="${row.y.toFixed(1)}" width="${canvasW}" height="${rowH}" fill="${bg}"/>`)
     // Separator line spans full row width

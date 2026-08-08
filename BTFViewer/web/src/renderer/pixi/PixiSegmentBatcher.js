@@ -7,6 +7,16 @@ function batchKey(color, alpha) {
   return `${color}\0${alpha}`
 }
 
+/** Prefer 0xRRGGBB so Pixi fills stay opaque (CSS hex can pick up canvas alpha). */
+function pixiFillColor(color) {
+  if (typeof color === 'number' && Number.isFinite(color)) return color >>> 0
+  if (typeof color === 'string' && color[0] === '#') {
+    const hex = color.slice(1)
+    if (hex.length === 6 || hex.length === 8) return parseInt(hex.slice(0, 6), 16)
+  }
+  return color
+}
+
 export class PixiSegmentBatcher {
   /** @param {Container} root */
   constructor(root) {
@@ -37,7 +47,7 @@ export class PixiSegmentBatcher {
     let batch = this._batches.get(key)
     if (!batch) {
       const g = new Graphics()
-      g.roundPixels = true
+      g.roundPixels = false
       this._root.addChild(g)
       batch = { g, rects: [], color, alpha }
       this._batches.set(key, batch)
@@ -56,7 +66,8 @@ export class PixiSegmentBatcher {
       for (let i = 0; i < rects.length; i += 4) {
         g.rect(rects[i], rects[i + 1], rects[i + 2], rects[i + 3])
       }
-      g.fill({ color, alpha: alpha ?? 1 })
+      const a = alpha ?? 1
+      g.fill({ color: pixiFillColor(color), alpha: a })
       g.visible = true
     }
   }

@@ -24,6 +24,7 @@
           <div
             v-if="row.type === 'core'"
             class="label-row label-core"
+            :class="stripeClassForBand(row)"
             :style="labelRowStyle(row)"
             @click="toggleExpand(row.key)"
           >
@@ -40,7 +41,7 @@
           v-else-if="row.type === 'core-task'"
           class="label-row label-core-task"
           :style="labelRowStyle(row)"
-          :class="{ highlighted: highlightKey === taskRowKey(row) }"
+          :class="[stripeClassForBand(row), { highlighted: highlightKey === taskRowKey(row) }]"
           @mouseenter="emit('highlightChange', taskRowKey(row))"
           @mouseleave="emit('highlightChange', null)"
           @click="emit('highlightClick', taskRowKey(row))"
@@ -57,7 +58,7 @@
           v-else-if="row.type === 'task'"
           class="label-row label-task"
           :style="labelRowStyle(row)"
-          :class="{ highlighted: highlightKey === row.key }"
+          :class="[stripeClassForBand(row), { highlighted: highlightKey === row.key }]"
           @mouseenter="emit('highlightChange', row.key)"
           @mouseleave="emit('highlightChange', null)"
           @click="emit('highlightClick', row.key)"
@@ -73,6 +74,7 @@
         <div
           v-else-if="row.type === 'sti' && !row.isTag"
           class="label-row label-sti"
+          :class="stripeClassForBand(row)"
           :style="labelRowStyle(row)"
         >
           <span class="sti-dot">◆</span>
@@ -83,6 +85,7 @@
         <div
           v-else-if="row.type === 'sti' && row.isTag"
           class="label-row label-sti label-sti-tag"
+          :class="stripeClassForBand(row)"
           :style="labelRowStyle(row)"
           @click="emit('stiExpandToggle', row.key)"
         >
@@ -95,6 +98,7 @@
         <div
           v-else-if="row.type === 'interval'"
           class="label-row label-interval"
+          :class="stripeClassForBand(row)"
           :style="labelRowStyle(row)"
         >
           <span
@@ -114,6 +118,7 @@ import { computed, ref } from 'vue'
 import { rowBandHeight, visibleRowIndexRange, orthRowBuffer, RULER_H } from '../renderer/TimelineRenderer.js'
 import { getTimelineLayout } from '../utils/timelineLayout.js'
 import { taskMergeKey } from '../utils/colors.js'
+import { stripeClassForBand } from '../utils/timelineStripes.js'
 
 function layout() {
   return getTimelineLayout()
@@ -215,6 +220,12 @@ function taskRowKey(row) {
   box-sizing: border-box;
   overflow: hidden;
 }
+.label-row.stripe-even { background: var(--row-even); }
+.label-row.stripe-odd { background: var(--row-odd); }
+.label-row.stripe-sti { background: var(--row-sti); }
+.label-row.stripe-core { background: var(--row-core); }
+.label-row.stripe-core-sub-even { background: var(--row-core-sub-even); }
+.label-row.stripe-core-sub-odd { background: var(--row-core-sub-odd); }
 .label-row:hover {
   background: var(--tb-btn-hover);
 }

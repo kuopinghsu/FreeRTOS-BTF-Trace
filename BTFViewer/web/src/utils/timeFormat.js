@@ -5,6 +5,14 @@
 /** Nanoseconds per one unit of the given trace timeScale. */
 export const NS_PER_UNIT = Object.freeze({ ns: 1, us: 1e3, ms: 1e6, s: 1e9 })
 
+/** Desktop `_TIME_TIERS`: (threshold_ns, divisor, unit label). */
+const TIME_TIERS = [
+  [1e9, 1e9, 's'],
+  [1e6, 1e6, 'ms'],
+  [1e3, 1e3, 'µs'],
+  [0, 1, 'ns'],
+]
+
 /** Convert a value in trace-native units to nanoseconds. */
 export function traceUnitsToNs(value, scale = 'ns') {
   const per = NS_PER_UNIT[scale] ?? 1
@@ -67,4 +75,39 @@ export function formatMigrationGapTime(t, scale) {
   const v = Number(t)
   if (!Number.isFinite(v)) return '-'
   return formatTime(Math.trunc(v), scale)
+}
+
+/**
+ * Desktop `_format_timescale_per_px`: auto-scaled `xx.x unit/px`.
+ * @param {number} timescalePerPx  Trace-native time units per screen pixel.
+ * @param {string} [timeScale='ns']
+ */
+export function formatTimescalePerPx(timescalePerPx, timeScale = 'ns') {
+  const ns = traceUnitsToNs(timescalePerPx, timeScale)
+  if (!Number.isFinite(ns) || ns < 0) return '—'
+  for (const [threshold, divisor, label] of TIME_TIERS) {
+    if (ns >= threshold) return `${(ns / divisor).toFixed(1)} ${label}/px`
+  }
+  return `${ns.toFixed(1)} ns/px`
+}
+
+/**
+ * Status-bar zoom read-out (desktop `_zoom_scale_label` + `_zoom_visible_label`).
+ * @param {{ timeStart?: number, timeEnd?: number, canvasW?: number, canvasH?: number }|null} vp
+ * @param {string} [timeScale='ns']
+ * @param {string} [orientation='h']
+ */
+export function zoomStatusFromViewport(vp, timeScale = 'ns', orientation = 'h') {
+  const span = Number(vp?.timeEnd) - Number(vp?.timeStart)
+  const axisPx = orientation === 'v' ? Number(vp?.canvasH) : Number(vp?.canvasW)
+  if (!Number.isFinite(span) || span <= 0 || !Number.isFinite(axisPx) || axisPx <= 1) {
+    return { scale: '—', visible: '', title: 'Current zoom level (time per pixel)' }
+  }
+  const scale = formatTimescalePerPx(span / axisPx, timeScale)
+  const vis = formatTime(span, timeScale, 1)
+  return {
+    scale,
+    visible: `·  ${vis} visible`,
+    title: `Zoom: ${scale}\nVisible: ${vis}`,
+  }
 }
