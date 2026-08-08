@@ -16,6 +16,7 @@ from btf_viewer_pkg._bootstrap import install  # noqa: E402
 install()
 
 from PySide6.QtCore import QPoint, Qt  # noqa: E402
+from PySide6.QtGui import QCursor  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication, QWidget  # noqa: E402
 
@@ -81,3 +82,11 @@ class StatsSectionGripCursorTest(unittest.TestCase):
             "release after drag must restore the normal cursor",
         )
         self.assertFalse(grip._dragging)
+
+    def test_hide_restores_when_platform_remaps_sizever(self) -> None:
+        """Cocoa often reports SizeVer as SplitV; hide must still pop the override."""
+        QApplication.setOverrideCursor(QCursor(Qt.CursorShape.SplitVCursor))
+        _HoverCursor._shape = Qt.CursorShape.SizeVerCursor
+        _HoverCursor.hide(Qt.CursorShape.SizeVerCursor)
+        self.assertIsNone(QApplication.overrideCursor())
+        self.assertIsNone(_HoverCursor._shape)

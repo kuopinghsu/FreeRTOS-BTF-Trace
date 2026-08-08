@@ -2469,6 +2469,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._rebuild_annotation_list()
             self._previous_tab_index = -1
             self._update_status_for_active_tab()
+            self._clear_panels_for_empty_session()
         else:
             new_idx = min(index, len(self._tabs) - 1)
             # Guard the setCurrentIndex so the auto-selection that Qt already
@@ -3959,6 +3960,23 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         idx = self._tab_widget.currentIndex()
         if idx >= 0:
             self._close_trace_tab(idx)
+
+    def _clear_panels_for_empty_session(self) -> None:
+        """Drop last-trace chrome after Close All / last tab close."""
+        if hasattr(self, "_stats_panel"):
+            self._stats_panel.clear_trace()
+        if hasattr(self, "_legend"):
+            self._legend.rebuild(None, show_sti=self._show_sti)
+        if hasattr(self, "_find_input"):
+            self._find_input.blockSignals(True)
+            self._find_input.clear()
+            self._find_input.blockSignals(False)
+        if hasattr(self, "_find_status"):
+            self._find_status.setText("0 matches")
+        self._close_heatmap_dialog()
+        self._close_chord_dialog()
+        if hasattr(self, "_tb_analysis_btn"):
+            self._tb_analysis_btn.setEnabled(False)
 
     def _on_close_all_tabs_action(self) -> None:
         for _ in range(len(self._tabs)):

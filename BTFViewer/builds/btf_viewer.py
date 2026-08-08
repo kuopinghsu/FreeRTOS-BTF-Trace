@@ -11549,6 +11549,12 @@ class _HoverCursor:
     """Application-level hover cursor for resize split lines."""
 
     _shape: Optional[Qt.CursorShape] = None
+    _RESIZE_SHAPES = frozenset((
+        Qt.CursorShape.SizeVerCursor,
+        Qt.CursorShape.SizeHorCursor,
+        Qt.CursorShape.SplitVCursor,
+        Qt.CursorShape.SplitHCursor,
+    ))
 
     @staticmethod
     def _modal_cursor_active() -> bool:
@@ -11572,17 +11578,25 @@ class _HoverCursor:
 
     @classmethod
     def hide(cls, shape: Optional[Qt.CursorShape] = None) -> None:
-        if shape is not None and cls._shape != shape:
+        owned = cls._shape
+        if shape is not None and owned is not None and owned != shape:
             return
-        if cls._shape is None:
-            return
+        cls._shape = None
         if QApplication.instance() is None:
-            cls._shape = None
             return
         oc = QApplication.overrideCursor()
-        if oc is not None and oc.shape() == cls._shape:
+        if oc is None:
+            return
+        live = oc.shape()
+        if live in (
+            Qt.CursorShape.WaitCursor, Qt.CursorShape.BusyCursor,
+            Qt.CursorShape.ForbiddenCursor,
+        ):
+            return
+        # macOS/Cocoa often remaps SizeVer ↔ SplitV / SizeNS. After a failed
+        # exact-shape compare we used to drop `_shape` and leave the override.
+        if owned is not None or live in cls._RESIZE_SHAPES:
             QApplication.restoreOverrideCursor()
-        cls._shape = None
 
 class _SplitterHandleCursorFilter(QObject):
     """Drive _HoverCursor from QSplitter handle enter/leave."""
@@ -17956,7 +17970,7 @@ class _LegendWidget(QWidget):
         ql = q.lower()
         return (ql in mk.lower()) or (ql in disp.lower())
 
-    def rebuild(self, trace: BtfTrace, *, show_sti: bool = True) -> None:
+    def rebuild(self, trace: Optional[BtfTrace], *, show_sti: bool = True) -> None:
         self._trace_ref      = trace
         self._show_sti_flag  = show_sti
         self._task_items.clear()
@@ -17970,6 +17984,8 @@ class _LegendWidget(QWidget):
         self._task_list.setUpdatesEnabled(False)
         try:
             self._task_list.clear()
+            if trace is None:
+                return
             app = QApplication.instance()
             fm = self._task_list.fontMetrics()
             row_h = max(16, fm.height() + 4)
@@ -19601,19 +19617,27 @@ class _StatsSectionGrip(QWidget):
         self.setToolTip("Drag to resize table height")
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setMouseTracking(True)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
 
     def set_dark(self, is_dark: bool) -> None:
         self._is_dark = is_dark
         self.update()
 
+    def _event_global_y(self, event) -> int:
+        gp = event.globalPosition() if hasattr(event, "globalPosition") else None
+        if gp is not None:
+            return int(gp.y())
+        return int(event.globalY())
+
     def _drag_start(self, global_y: int) -> None:
-        """Begin a resize drag — installs an app-level event filter so that
-        mouse events are captured even after the cursor leaves the 8 px grip
-        strip (grabMouse() is silently ignored on Wayland)."""
+        """Begin a resize drag. grabMouse() works on macOS; the app filter is a
+        Wayland backup. Do not swallow filtered events or Cocoa can drop the
+        matching mouse-release."""
         self._dragging = True
         self._start_y = global_y
         self._start_h = self._get_height()
         _HoverCursor.show(Qt.CursorShape.SizeVerCursor)
+        self.grabMouse()
         app = QApplication.instance()
         if app:
             app.installEventFilter(self)
@@ -19625,36 +19649,47 @@ class _StatsSectionGrip(QWidget):
             max(self._min_h, min(self._MAX_H, self._start_h + delta)))
 
     def _drag_end(self) -> None:
+        if not self._dragging:
+            _HoverCursor.hide(Qt.CursorShape.SizeVerCursor)
+            return
         self._dragging = False
+        if QWidget.mouseGrabber() is self:
+            self.releaseMouse()
         app = QApplication.instance()
         if app:
             app.removeEventFilter(self)
-        if not self.underMouse():
-            _HoverCursor.hide(Qt.CursorShape.SizeVerCursor)
+        _HoverCursor.hide(Qt.CursorShape.SizeVerCursor)
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
-        """App-level mouse capture during drag — Wayland-safe replacement for grabMouse()."""
+        """Follow the pointer during drag without consuming the event."""
         if not self._dragging:
             return False
         et = event.type()
         if et == QEvent.Type.MouseMove:
-            self._drag_move(int(event.globalPosition().y()))
-            return True
+            if not (QApplication.mouseButtons() & Qt.MouseButton.LeftButton):
+                self._drag_end()
+                return False
+            self._drag_move(self._event_global_y(event))
+            return False
         if et == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
             self._drag_end()
-            return True
+            return False
         return False
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.LeftButton:
-            self._drag_start(int(event.globalPosition().y()))
+            self._drag_start(self._event_global_y(event))
             event.accept()
             return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802
         if self._dragging:
-            self._drag_move(int(event.globalPosition().y()))
+            if not (event.buttons() & Qt.MouseButton.LeftButton):
+                self._drag_end()
+                event.accept()
+                return
+            self._drag_move(self._event_global_y(event))
             event.accept()
             return
         super().mouseMoveEvent(event)
@@ -19667,7 +19702,6 @@ class _StatsSectionGrip(QWidget):
         super().mouseReleaseEvent(event)
 
     def enterEvent(self, event) -> None:  # noqa: N802
-        _HoverCursor.show(Qt.CursorShape.SizeVerCursor)
         self.update()
         super().enterEvent(event)
 
@@ -19676,6 +19710,13 @@ class _StatsSectionGrip(QWidget):
             _HoverCursor.hide(Qt.CursorShape.SizeVerCursor)
         self.update()
         super().leaveEvent(event)
+
+    def hideEvent(self, event) -> None:  # noqa: N802
+        if self._dragging:
+            self._drag_end()
+        else:
+            _HoverCursor.hide(Qt.CursorShape.SizeVerCursor)
+        super().hideEvent(event)
 
     def paintEvent(self, event) -> None:  # noqa: N802
         super().paintEvent(event)
@@ -23282,6 +23323,9 @@ class _StatsPanel(QWidget):
         return lo, hi, len(t_sorted)
 
     def _update_scope_header(self) -> None:
+        if self._trace is None:
+            self._scope_label.setText("")
+            return
         rng = self._stats_range()
         if rng is None:
             self._scope_label.setText(
@@ -25860,7 +25904,27 @@ class _StatsPanel(QWidget):
         if isinstance(wnd, QMainWindow):
             wnd.statusBar().showMessage(f"Exported statistics: {path}", 4000)
 
-    def rebuild(self, trace: "BtfTrace") -> None:
+    def clear_trace(self) -> None:
+        """Empty Statistics when no trace tab is open (welcome / close-all)."""
+        self.clear_plot_session()
+        self._trace = None
+        self._cursor_times = []
+        self._btn_export_csv.setEnabled(False)
+        self._btn_export_html.setEnabled(False)
+        self._btn_compare_mig.setEnabled(False)
+        self._scope_cb.setEnabled(False)
+        self._clear()
+        self._update_scope_header()
+        self._ilay.addWidget(self._lbl(
+            "Open a trace file to view statistics.",
+            color="#888888",
+            ui_fs=self._ui_fs(),
+        ))
+
+    def rebuild(self, trace: Optional["BtfTrace"]) -> None:
+        if trace is None:
+            self.clear_trace()
+            return
         self._trace = trace
         defer_heavy = trace_needs_deferred_stats_load(trace)
         self._btn_export_csv.setEnabled(True)
@@ -33955,6 +34019,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._rebuild_annotation_list()
             self._previous_tab_index = -1
             self._update_status_for_active_tab()
+            self._clear_panels_for_empty_session()
         else:
             new_idx = min(index, len(self._tabs) - 1)
             # Guard the setCurrentIndex so the auto-selection that Qt already
@@ -35445,6 +35510,23 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         idx = self._tab_widget.currentIndex()
         if idx >= 0:
             self._close_trace_tab(idx)
+
+    def _clear_panels_for_empty_session(self) -> None:
+        """Drop last-trace chrome after Close All / last tab close."""
+        if hasattr(self, "_stats_panel"):
+            self._stats_panel.clear_trace()
+        if hasattr(self, "_legend"):
+            self._legend.rebuild(None, show_sti=self._show_sti)
+        if hasattr(self, "_find_input"):
+            self._find_input.blockSignals(True)
+            self._find_input.clear()
+            self._find_input.blockSignals(False)
+        if hasattr(self, "_find_status"):
+            self._find_status.setText("0 matches")
+        self._close_heatmap_dialog()
+        self._close_chord_dialog()
+        if hasattr(self, "_tb_analysis_btn"):
+            self._tb_analysis_btn.setEnabled(False)
 
     def _on_close_all_tabs_action(self) -> None:
         for _ in range(len(self._tabs)):

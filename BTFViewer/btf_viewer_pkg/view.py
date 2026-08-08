@@ -224,6 +224,12 @@ class _HoverCursor:
     """Application-level hover cursor for resize split lines."""
 
     _shape: Optional[Qt.CursorShape] = None
+    _RESIZE_SHAPES = frozenset((
+        Qt.CursorShape.SizeVerCursor,
+        Qt.CursorShape.SizeHorCursor,
+        Qt.CursorShape.SplitVCursor,
+        Qt.CursorShape.SplitHCursor,
+    ))
 
     @staticmethod
     def _modal_cursor_active() -> bool:
@@ -247,17 +253,25 @@ class _HoverCursor:
 
     @classmethod
     def hide(cls, shape: Optional[Qt.CursorShape] = None) -> None:
-        if shape is not None and cls._shape != shape:
+        owned = cls._shape
+        if shape is not None and owned is not None and owned != shape:
             return
-        if cls._shape is None:
-            return
+        cls._shape = None
         if QApplication.instance() is None:
-            cls._shape = None
             return
         oc = QApplication.overrideCursor()
-        if oc is not None and oc.shape() == cls._shape:
+        if oc is None:
+            return
+        live = oc.shape()
+        if live in (
+            Qt.CursorShape.WaitCursor, Qt.CursorShape.BusyCursor,
+            Qt.CursorShape.ForbiddenCursor,
+        ):
+            return
+        # macOS/Cocoa often remaps SizeVer ↔ SplitV / SizeNS. After a failed
+        # exact-shape compare we used to drop `_shape` and leave the override.
+        if owned is not None or live in cls._RESIZE_SHAPES:
             QApplication.restoreOverrideCursor()
-        cls._shape = None
 
 class _SplitterHandleCursorFilter(QObject):
     """Drive _HoverCursor from QSplitter handle enter/leave."""
