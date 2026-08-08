@@ -157,14 +157,27 @@ export function markdownToSafeHtml(text) {
       const ordered = /^\d+\.\s+/.test(stripped)
       const tag = ordered ? 'ol' : 'ul'
       const items = []
+      let startNum = 0
       while (i < lines.length) {
         const s = lines[i].trim()
-        const m = ordered ? /^\d+\.\s+(.*)$/.exec(s) : /^[-*+]\s+(.*)$/.exec(s)
-        if (!m) break
-        items.push(`<li>${inlineToHtml(m[1])}</li>`)
+        if (ordered) {
+          // Models often interrupt 1./2./3. with paragraphs and nested bullets;
+          // each run becomes its own <ol>, so honour the source number.
+          const m = /^(\d+)\.\s+(.*)$/.exec(s)
+          if (!m) break
+          const n = Number(m[1])
+          if (!startNum) startNum = n
+          const val = n === startNum + items.length ? '' : ` value="${n}"`
+          items.push(`<li${val}>${inlineToHtml(m[2])}</li>`)
+        } else {
+          const m = /^[-*+]\s+(.*)$/.exec(s)
+          if (!m) break
+          items.push(`<li>${inlineToHtml(m[1])}</li>`)
+        }
         i += 1
       }
-      out.push(`<${tag}>${items.join('')}</${tag}>`)
+      const startAttr = ordered && startNum > 1 ? ` start="${startNum}"` : ''
+      out.push(`<${tag}${startAttr}>${items.join('')}</${tag}>`)
       continue
     }
 

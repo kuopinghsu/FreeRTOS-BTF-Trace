@@ -314,6 +314,29 @@ class AiAssistantHelpersTests(unittest.TestCase):
         self.assertIn("&lt;script&gt;", unsafe)
         self.assertNotIn("<script>", unsafe)
 
+        # Interrupted 1./2./3. runs must keep source numbers (not restart at 1).
+        numbered = markdown_to_safe_html(
+            "1. **First issue**\n\n"
+            "Details about thrashing.\n\n"
+            "- **Open:** Migration Heatmap\n\n"
+            "2. **Second issue**\n\n"
+            "Priority inversion risk.\n\n"
+            "3. **Third issue**\n"
+        )
+        self.assertIn("<ol><li><strong>First issue</strong></li></ol>", numbered)
+        self.assertIn(
+            '<ol start="2"><li><strong>Second issue</strong></li></ol>',
+            numbered,
+        )
+        self.assertIn(
+            '<ol start="3"><li><strong>Third issue</strong></li></ol>',
+            numbered,
+        )
+        self.assertIn(
+            "<ul><li><strong>Open:</strong> Migration Heatmap</li></ul>",
+            numbered,
+        )
+
     def test_normalize_ai_context_accepts_camel_case(self) -> None:
         ctx = normalize_ai_context({
             "findingsText": "hello",

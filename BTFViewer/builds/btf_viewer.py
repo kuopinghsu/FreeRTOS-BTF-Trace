@@ -16020,17 +16020,37 @@ def markdown_to_safe_html(text: str) -> str:
             ordered = bool(re.match(r"^\d+\.\s+", stripped))
             tag = "ol" if ordered else "ul"
             items: List[str] = []
+            start_num = 0
             while i < n:
                 s = lines[i].strip()
                 if ordered:
-                    m = re.match(r"^\d+\.\s+(.*)$", s)
+                    # Models often interrupt 1./2./3. with paragraphs and nested
+                    # bullets; each run becomes its own <ol>, so honour the
+                    # source number via start=/value=.
+                    m = re.match(r"^(\d+)\.\s+(.*)$", s)
+                    if not m:
+                        break
+                    num = int(m.group(1))
+                    if not start_num:
+                        start_num = num
+                    val = (
+                        ""
+                        if num == start_num + len(items)
+                        else f' value="{num}"'
+                    )
+                    items.append(
+                        f"<li{val}>{_md_inline_to_html_escaped(m.group(2))}</li>"
+                    )
                 else:
                     m = re.match(r"^[-*+]\s+(.*)$", s)
-                if not m:
-                    break
-                items.append(f"<li>{_md_inline_to_html_escaped(m.group(1))}</li>")
+                    if not m:
+                        break
+                    items.append(
+                        f"<li>{_md_inline_to_html_escaped(m.group(1))}</li>"
+                    )
                 i += 1
-            out.append(f"<{tag}>{''.join(items)}</{tag}>")
+            start_attr = f' start="{start_num}"' if ordered and start_num > 1 else ""
+            out.append(f"<{tag}{start_attr}>{''.join(items)}</{tag}>")
             continue
 
         para.append(stripped)

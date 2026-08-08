@@ -27,6 +27,22 @@ describe('aiMarkdown', () => {
     assert.equal(html.includes('<tag>'), false)
   })
 
+  it('preserves source numbers when ordered lists are interrupted', () => {
+    // Same shape as models often emit: 1. title, prose, bullet, then 2./3.
+    const html = markdownToSafeHtml(
+      '1. **First issue**\n\n'
+      + 'Details about thrashing.\n\n'
+      + '- **Open:** Migration Heatmap\n\n'
+      + '2. **Second issue**\n\n'
+      + 'Priority inversion risk.\n\n'
+      + '3. **Third issue**\n',
+    )
+    assert.match(html, /<ol><li><strong>First issue<\/strong><\/li><\/ol>/)
+    assert.match(html, /<ol start="2"><li><strong>Second issue<\/strong><\/li><\/ol>/)
+    assert.match(html, /<ol start="3"><li><strong>Third issue<\/strong><\/li><\/ol>/)
+    assert.match(html, /<ul><li><strong>Open:<\/strong> Migration Heatmap<\/li><\/ul>/)
+  })
+
   it('opens external links in a new tab, keeps jump links in place', () => {
     const html = markdownToSafeHtml('See [docs](https://example.com/a) and [t](btfjump:42).')
     assert.match(html, /<a href="https:\/\/example\.com\/a" target="_blank" rel="noopener noreferrer">/)
