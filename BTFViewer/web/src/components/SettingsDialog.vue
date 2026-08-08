@@ -77,7 +77,7 @@
                 max="24"
                 step="1"
               >
-              <span class="settings-unit">pt</span>
+              <span class="settings-unit">px</span>
             </label>
             <label class="settings-row">
               <span class="settings-label">UI / menus</span>
@@ -119,6 +119,13 @@
                 type="checkbox"
               >
               Marks panel
+            </label>
+            <label class="settings-check indent">
+              <input
+                v-model="draft.showFind"
+                type="checkbox"
+              >
+              Find panel
             </label>
             <label class="settings-check indent">
               <input

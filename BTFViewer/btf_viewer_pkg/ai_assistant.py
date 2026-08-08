@@ -569,6 +569,17 @@ def extract_jump_times(text: str) -> List[float]:
     return out
 
 
+def ai_jump_annotation_note(value: float) -> str:
+    """Annotation label for a clicked ``jump:TIME`` link (web parity)."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return "AI jump"
+    if v.is_integer():
+        return f"AI jump:{int(v)}"
+    return f"AI jump:{value}"
+
+
 def _md_inline_to_html_escaped(text: str) -> str:
     """Escape text and apply inline markdown (code, bold, italic, links, jump:N)."""
     placeholders: List[str] = []
@@ -765,13 +776,56 @@ def _ai_message_body_html(role: str, text: str) -> str:
     return linked.replace("\n", "<br>")
 
 
+# QTextBrowser CSS is limited; keep selectors simple (no descendant chains).
+_AI_LOG_STYLE = (
+    "h1,h2,h3,h4{margin:8px 0 4px;font-size:13px;}"
+    "h1{font-size:15px;}h2{font-size:14px;}"
+    "p{margin:4px 0;}"
+    "ul,ol{margin:4px 0 4px 18px;padding:0;}"
+    "li{margin:2px 0;}"
+    "pre{background:#1a2230;border:1px solid #3a4658;border-radius:4px;"
+    "padding:8px;margin:6px 0;white-space:pre-wrap;}"
+    "code{font-family:Menlo,Consolas,Monaco,'Courier New',monospace;font-size:11px;}"
+    "p code,li code{background:rgba(127,127,127,0.18);padding:1px 4px;border-radius:3px;}"
+    "blockquote{margin:6px 0;padding:4px 10px;border-left:3px solid #5b9bd5;"
+    "color:#a8b4c4;}"
+    "hr{border:none;border-top:1px solid #3a4658;margin:8px 0;}"
+    "a{color:#5b9bd5;}"
+    ".ai-role{font-size:11px;font-weight:600;letter-spacing:0.06em;"
+    "text-transform:uppercase;}"
+    ".ai-role-user{color:#6ea8e0;}"
+    ".ai-role-assistant{color:#6fbf9a;}"
+)
+
+
 def _format_ai_log_html(role: str, text: str) -> str:
-    """HTML for the conversation log; assistant replies render as Markdown."""
-    prefix = "You" if role == "user" else "Assistant"
+    """One conversation turn as a self-contained table (Qt will not merge these)."""
+    is_user = role == "user"
+    label = "You" if is_user else "Assistant"
+    role_cls = "ai-role-user" if is_user else "ai-role-assistant"
+    # bgcolor is more reliable in QTextBrowser than CSS background on divs.
+    bg = "#1e3348" if is_user else "#1a2620"
+    bar = "#5b9bd5" if is_user else "#3d9a72"
     body = _ai_message_body_html(role, text)
-    if role == "assistant":
-        return f"<div class='ai-msg'><p><b>{prefix}:</b></p>{body}</div>"
-    return f"<p><b>{prefix}:</b><br>{body}</p>"
+    return (
+        f'<table class="ai-turn" width="100%" cellspacing="0" cellpadding="0">'
+        f'<tr><td class="ai-role {role_cls}" style="padding:10px 0 3px 0;">{label}</td></tr>'
+        f'<tr><td class="ai-bubble" bgcolor="{bg}" '
+        f'style="border-left:3px solid {bar};padding:8px 10px;">{body}</td></tr>'
+        f"</table>"
+    )
+
+
+def _ai_log_document_html(entries: Sequence[Tuple[str, str]]) -> str:
+    """Full conversation document for QTextBrowser.setHtml (avoids append merge)."""
+    if not entries:
+        return ""
+    parts: List[str] = []
+    for i, (role, text) in enumerate(entries):
+        if i:
+            parts.append('<hr class="ai-turn-sep">')
+        parts.append(_format_ai_log_html(role, text))
+    return f"<html><body>{''.join(parts)}</body></html>"
 
 
 def _ai_file_stamp() -> str:
@@ -806,8 +860,13 @@ body{background:#12161d;color:#dbe2ea;font-family:system-ui,-apple-system,'Segoe
   font-size:13px;line-height:1.5;margin:0;padding:20px;}
 h1{font-size:18px;margin:0 0 4px;}
 .saved{color:#8b98a8;font-size:12px;margin:0 0 16px;}
-.msg{border-top:1px solid #2b3442;padding:10px 0;}
-.msg h3{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:#8b98a8;margin:0 0 6px;}
+.msg{padding:12px 0;border-top:1px solid #2b3442;}
+.msg:first-of-type{border-top:none;padding-top:0;}
+.msg h3{font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin:0 0 6px;color:#8b98a8;}
+.msg.user h3{color:#6ea8e0;}
+.msg.assistant h3{color:#6fbf9a;}
+.msg .body{padding:8px 10px;border-left:3px solid #5b9bd5;background:#1e3348;border-radius:0 6px 6px 0;}
+.msg.assistant .body{border-left-color:#3d9a72;background:#1a2620;}
 pre{background:#1a2230;border:1px solid #3a4658;border-radius:4px;padding:8px;overflow:auto;}
 code{font-family:Menlo,Consolas,Monaco,'Courier New',monospace;font-size:12px;}
 blockquote{margin:6px 0;padding:4px 10px;border-left:3px solid #5b9bd5;color:#a8b4c4;}
@@ -996,6 +1055,12 @@ def ai_chat(
     url_base = normalize_ai_base_url(base_url)
     url = url_base + "/chat/completions"
     chat_model = (model or DEFAULT_AI_MODEL).strip() or DEFAULT_AI_MODEL
+    if not resolve_ai_api_key(api_key) and not is_local_ai_host(url_base):
+        raise RuntimeError(
+            "API key required for remote endpoints "
+            "(Settings → AI → API key, or OPENAI_API_KEY / GEMINI_API_KEY). "
+            "Paste the raw key only — no Bearer prefix."
+        )
     if cancel_event is not None and cancel_event.is_set():
         raise OllamaCancelled("Stopped")
     messages = _build_chat_messages(
@@ -1298,6 +1363,9 @@ def create_ai_assistant_panel(
             buttons = QDialogButtonBox(
                 QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
             )
+            ok_btn = buttons.button(QDialogButtonBox.StandardButton.Ok)
+            if ok_btn is not None:
+                ok_btn.setText("Compare")
             buttons.accepted.connect(self.accept)
             buttons.rejected.connect(self.reject)
             lay.addWidget(buttons)
@@ -1491,21 +1559,7 @@ def create_ai_assistant_panel(
             self._log.setOpenLinks(False)
             self._log.setPlaceholderText("Conversation appears here…")
             self._log.setMinimumHeight(100)
-            self._log.document().setDefaultStyleSheet(
-                "h1,h2,h3,h4{margin:8px 0 4px;font-size:13px;}"
-                "h1{font-size:15px;}h2{font-size:14px;}"
-                "p{margin:4px 0;}"
-                "ul,ol{margin:4px 0 4px 18px;padding:0;}"
-                "li{margin:2px 0;}"
-                "pre{background:#1a2230;border:1px solid #3a4658;border-radius:4px;"
-                "padding:8px;margin:6px 0;white-space:pre-wrap;}"
-                "code{font-family:Menlo,Consolas,Monaco,'Courier New',monospace;font-size:11px;}"
-                "p code,li code{background:rgba(127,127,127,0.18);padding:1px 4px;border-radius:3px;}"
-                "blockquote{margin:6px 0;padding:4px 10px;border-left:3px solid #5b9bd5;"
-                "color:#a8b4c4;}"
-                "hr{border:none;border-top:1px solid #3a4658;margin:8px 0;}"
-                "a{color:#5b9bd5;}"
-            )
+            self._log.document().setDefaultStyleSheet(_AI_LOG_STYLE)
             self._log.anchorClicked.connect(self._on_jump_link)
             self._log.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
             self._log.customContextMenuRequested.connect(self._show_log_menu)
@@ -1555,7 +1609,11 @@ def create_ai_assistant_panel(
             self._status.setText(f"Reply language: {lang}")
 
         def _on_jump_link(self, url: QUrl) -> None:
-            if not on_jump or url.scheme() != "btfjump":
+            scheme = (url.scheme() or "").lower()
+            if scheme in ("http", "https", "mailto"):
+                QDesktopServices.openUrl(url)
+                return
+            if not on_jump or scheme != "btfjump":
                 return
             raw = url.path() or url.toString().split(":", 1)[-1]
             try:
@@ -1564,11 +1622,19 @@ def create_ai_assistant_panel(
                 return
             on_jump(value)
 
-        def _append(self, role: str, text: str) -> None:
-            self._entries.append((role, text))
-            self._log.append(_format_ai_log_html(role, text))
+        def _refresh_log(self) -> None:
+            """Rebuild the log from entries. QTextBrowser.append() merges HTML blocks."""
+            if not self._entries:
+                self._log.clear()
+                return
+            self._log.document().setDefaultStyleSheet(_AI_LOG_STYLE)
+            self._log.setHtml(_ai_log_document_html(self._entries))
             bar = self._log.verticalScrollBar()
             bar.setValue(bar.maximum())
+
+        def _append(self, role: str, text: str) -> None:
+            self._entries.append((role, text))
+            self._refresh_log()
 
         def clear_conversation(self) -> None:
             """Clear the conversation log (also stops an in-flight query)."""
@@ -1584,9 +1650,17 @@ def create_ai_assistant_panel(
             copy_all = menu.addAction("Copy conversation")
             copy_all.setEnabled(bool(self._entries))
             copy_all.triggered.connect(self.copy_conversation)
-            save = menu.addAction("Save As…")
-            save.setEnabled(bool(self._entries))
-            save.triggered.connect(self.save_conversation_as)
+            menu.addSeparator()
+            has_log = bool(self._entries)
+            save_md = menu.addAction("Save As Markdown…")
+            save_md.setEnabled(has_log)
+            save_md.triggered.connect(lambda: self.save_conversation_as("md"))
+            save_txt = menu.addAction("Save As Text…")
+            save_txt.setEnabled(has_log)
+            save_txt.triggered.connect(lambda: self.save_conversation_as("txt"))
+            save_html = menu.addAction("Save As HTML…")
+            save_html.setEnabled(has_log)
+            save_html.triggered.connect(lambda: self.save_conversation_as("html"))
             menu.exec(self._log.mapToGlobal(pos))
 
         def copy_conversation(self) -> None:
@@ -1600,15 +1674,26 @@ def create_ai_assistant_panel(
             clip.setText(format_ai_conversation_markdown(self._entries))
             self._status.setText("Copied to clipboard.")
 
-        def save_conversation_as(self) -> None:
+        def save_conversation_as(self, preferred: str = "") -> None:
             """Write the conversation to Markdown, plain text or HTML."""
             if not self._entries:
                 return
+            kind = (preferred or "").lower()
+            stamp = _ai_file_stamp()
+            if kind == "txt":
+                start = f"ai-conversation-{stamp}.txt"
+                filters = "Text files (*.txt);;Markdown (*.md);;HTML (*.html);;All files (*)"
+            elif kind in ("html", "htm"):
+                start = f"ai-conversation-{stamp}.html"
+                filters = "HTML (*.html);;Markdown (*.md);;Text files (*.txt);;All files (*)"
+            else:
+                start = f"ai-conversation-{stamp}.md"
+                filters = "Markdown (*.md);;Text files (*.txt);;HTML (*.html);;All files (*)"
             path, selected = QFileDialog.getSaveFileName(
                 self,
                 "Save AI Conversation",
-                f"ai-conversation-{_ai_file_stamp()}.md",
-                "Markdown (*.md);;Text files (*.txt);;HTML (*.html);;All files (*)",
+                start,
+                filters,
             )
             if not path:
                 return
@@ -1771,7 +1856,7 @@ def create_ai_assistant_panel(
                 token = _JUMP_RE.search(text or "")
                 label = token.group(1) if token else f"{jumps[0]:g}"
                 self._status.setText(
-                    f"Done. Click jump:{label} links to open the timeline."
+                    f"Done. Click jump:{label} to annotate the timeline and jump there."
                 )
             else:
                 self._status.setText("Done.")

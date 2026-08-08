@@ -10,11 +10,13 @@ if str(BTF_ROOT) not in sys.path:
     sys.path.insert(0, str(BTF_ROOT))
 
 from btf_viewer_pkg.config import (  # noqa: E402
+    STATS_TABLE_DISPLAY_ROW_CAP,
     _cursor_colors,
     _is_tag_sti_channel,
     _sanitize_tab_filters,
     _scaled_font_pixel_size,
     _sti_channel_sort_key,
+    cap_stats_table_rows,
     default_section_collapsed,
     default_section_table_heights,
 )
@@ -98,6 +100,22 @@ class ConfigDefaultsTests(unittest.TestCase):
         light = _cursor_colors(False)
         self.assertEqual(len(dark), len(light))
         self.assertNotEqual(dark[0], light[0])
+
+class StatsTableCapTests(unittest.TestCase):
+    def test_cap_stats_table_rows_short(self) -> None:
+        rows, note = cap_stats_table_rows([1, 2, 3], cap=10)
+        self.assertEqual(rows, [1, 2, 3])
+        self.assertIsNone(note)
+
+    def test_cap_stats_table_rows_oversize(self) -> None:
+        src = list(range(STATS_TABLE_DISPLAY_ROW_CAP + 5))
+        rows, note = cap_stats_table_rows(src)
+        self.assertEqual(len(rows), STATS_TABLE_DISPLAY_ROW_CAP)
+        self.assertIsNotNone(note)
+        assert note is not None
+        self.assertIn("Export", note)
+        self.assertIn("Showing first", note)
+
 
 class FontScalingTests(unittest.TestCase):
     def test_scaled_pixel_size_clamps(self) -> None:

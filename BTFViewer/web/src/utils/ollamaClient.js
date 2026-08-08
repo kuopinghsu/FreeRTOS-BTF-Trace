@@ -953,3 +953,11 @@ export function extractJumpTimes(text) {
   }
   return out
 }
+
+/** Annotation label for a clicked jump:TIME link (desktop parity). */
+export function aiJumpAnnotationNote(value) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return 'AI jump'
+  if (Number.isInteger(n) || n === Math.trunc(n)) return `AI jump:${Math.trunc(n)}`
+  return `AI jump:${n}`
+}

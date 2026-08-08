@@ -8,6 +8,7 @@ import {
   AI_PRESET_OPENAI,
   DEFAULT_AI_BASE_URL,
   DEFAULT_AI_PRESET,
+  aiJumpAnnotationNote,
   aiReachabilityTip,
   aiSameOriginProxyBase,
   applyAiPreset,
@@ -193,6 +194,12 @@ describe('AI endpoint helpers', () => {
       assert.ok(patch.presets[preset].baseUrl)
       assert.ok(patch.presets[preset].model)
     }
+  })
+
+  it('aiJumpAnnotationNote keeps integer jump tokens clean', () => {
+    assert.equal(aiJumpAnnotationNote(1386000), 'AI jump:1386000')
+    assert.equal(aiJumpAnnotationNote(1386000.0), 'AI jump:1386000')
+    assert.equal(aiJumpAnnotationNote(99.5), 'AI jump:99.5')
   })
 
   it('matchModelName tolerates missing :tag', () => {

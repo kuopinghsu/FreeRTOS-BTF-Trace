@@ -289,13 +289,14 @@ DEFAULT_WINDOW_WIDTH     = 1916
 DEFAULT_WINDOW_HEIGHT    = 1088
 DEFAULT_WINDOW_X         = 254
 DEFAULT_WINDOW_Y         = 47
-DEFAULT_DOCK_LAYOUT_VERSION = "10"
+DEFAULT_DOCK_LAYOUT_VERSION = "11"
 
-# Right-panel tab indices (Statistics / Marks / Find / AI — web parity).
+# Right-panel tab indices (Statistics / Marks / Find / Legend / AI — web parity).
 _PANEL_TAB_STATS = 0
 _PANEL_TAB_MARKS = 1
 _PANEL_TAB_FIND  = 2
-_PANEL_TAB_AI    = 3
+_PANEL_TAB_LEGEND = 3
+_PANEL_TAB_AI    = 4
 # Keep empty so first run uses code-driven dock sizing/tab defaults instead
 # of a host-dependent serialized Qt dock_state blob.
 DEFAULT_DOCK_STATE_B64 = ""

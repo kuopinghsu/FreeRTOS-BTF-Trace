@@ -198,15 +198,17 @@
             Statistics
           </button>
           <button
+            v-if="appSettings.showMarks"
             class="panel-tab"
             :class="{ active: rightPanelTab === 'marks' }"
             role="tab"
             :aria-selected="rightPanelTab === 'marks'"
             @click="rightPanelTab = 'marks'"
           >
-            Cursor / Bookmark
+            Marks
           </button>
           <button
+            v-if="appSettings.showFind"
             class="panel-tab"
             :class="{ active: rightPanelTab === 'find' }"
             role="tab"
@@ -214,6 +216,16 @@
             @click="rightPanelTab = 'find'"
           >
             Find
+          </button>
+          <button
+            v-if="appSettings.showLegend"
+            class="panel-tab"
+            :class="{ active: rightPanelTab === 'legend' }"
+            role="tab"
+            :aria-selected="rightPanelTab === 'legend'"
+            @click="rightPanelTab = 'legend'"
+          >
+            Legend
           </button>
           <button
             v-if="aiTabVisible"
@@ -296,10 +308,7 @@
               </div>
             </div>
 
-            <div
-              v-if="appSettings.showMarks"
-              class="panel-section"
-            >
+            <div class="panel-section">
               <div class="panel-header">
                 Marks
               </div>
@@ -321,29 +330,6 @@
                 @select-mark="timelineOptions.selectedMarkId = $event"
               />
             </div>
-
-            <div
-              v-if="appSettings.showLegend"
-              class="panel-section flex-fill"
-            >
-              <div class="panel-header">
-                Legend
-                <span class="task-count">({{ trace.tasks.length }})</span>
-              </div>
-              <LegendPanel
-                :trace="trace"
-                :highlight-key="timelineOptions.highlightKey"
-                :task-filter-keys="timelineOptions.taskFilterKeys"
-                :task-filter-text="timelineOptions.taskFilterText"
-                :migrated-only-filter="timelineOptions.migratedOnlyFilter"
-                :heatmap-filter-label="timelineOptions.heatmapFilterLabel"
-                @highlight-change="(k) => { timelineOptions.highlightKey = k ?? pinnedHighlightKey; scheduleRender() }"
-                @highlight-click="onHighlightClick"
-                @migrated-filter-change="onMigratedFilterChange"
-                @filter-change="onTaskFilterChange"
-                @clear-task-filter="clearHeatmapTaskFilter"
-              />
-            </div>
           </div>
 
           <div v-else-if="rightPanelTab === 'find'" class="panel-page panel-page-find">
@@ -360,6 +346,31 @@
                 @recompute="recomputeFind"
                 @next="() => stepFind(true)"
                 @prev="() => stepFind(false)"
+              />
+            </div>
+          </div>
+
+          <div
+            v-else-if="rightPanelTab === 'legend' && appSettings.showLegend"
+            class="panel-page panel-page-legend"
+          >
+            <div class="panel-section flex-fill">
+              <div class="panel-header">
+                Legend
+                <span class="task-count">({{ trace.tasks.length }})</span>
+              </div>
+              <LegendPanel
+                :trace="trace"
+                :highlight-key="timelineOptions.highlightKey"
+                :task-filter-keys="timelineOptions.taskFilterKeys"
+                :task-filter-text="timelineOptions.taskFilterText"
+                :migrated-only-filter="timelineOptions.migratedOnlyFilter"
+                :heatmap-filter-label="timelineOptions.heatmapFilterLabel"
+                @highlight-change="(k) => { timelineOptions.highlightKey = k ?? pinnedHighlightKey; scheduleRender() }"
+                @highlight-click="onHighlightClick"
+                @migrated-filter-change="onMigratedFilterChange"
+                @filter-change="onTaskFilterChange"
+                @clear-task-filter="clearHeatmapTaskFilter"
               />
             </div>
           </div>
@@ -917,6 +928,7 @@ import {
 import { downloadPerfetto } from './utils/perfettoExport.js'
 import { normalizeStatsPins, normalizeStatsSectionOrder } from './utils/statsPins.js'
 import { computeFindHits, stepFindHitIndex } from './utils/findAnalysis.js'
+import { aiJumpAnnotationNote } from './utils/ollamaClient.js'
 import { traceQualitySummary } from './utils/traceQuality.js'
 import { isBtfOpenName, loadBtfEntriesFromFile } from './utils/btfLoad.js'
 import exampleBtfB64   from 'virtual:example-btf'
@@ -967,6 +979,33 @@ const rightPanelTab = ref('stats')
 const aiTabVisible = computed(
   () => appSettings.showAi !== false && appSettings.aiEnabled !== false,
 )
+
+function firstVisibleRightPanelTab(s = appSettings) {
+  if (s.showStats) return 'stats'
+  if (s.showMarks) return 'marks'
+  if (s.showFind) return 'find'
+  if (s.showLegend) return 'legend'
+  if (s.showAi !== false && s.aiEnabled !== false) return 'ai'
+  return 'stats'
+}
+
+function ensureRightPanelTabVisible(s = appSettings) {
+  const tab = rightPanelTab.value
+  const ok = (tab === 'stats' && s.showStats)
+    || (tab === 'marks' && s.showMarks)
+    || (tab === 'find' && s.showFind)
+    || (tab === 'legend' && s.showLegend)
+    || (tab === 'ai' && s.showAi !== false && s.aiEnabled !== false)
+  if (!ok) rightPanelTab.value = firstVisibleRightPanelTab(s)
+}
+
+function ensureMarksPanelVisible() {
+  if (!appSettings.showMarks) {
+    appSettings.showMarks = true
+    saveSettings(appSettings)
+  }
+  rightPanelTab.value = 'marks'
+}
 const jumpDialogOpen = ref(false)
 const dragOver = ref(false)
 const statsSectionHeights = ref({})
@@ -1072,12 +1111,7 @@ function syncTimelineOptionsFromSettings(s = appSettings) {
   timelineOptions.orientation = s.orientation === 'v' ? 'v' : 'h'
   timelineOptions.stiLogScale = !!s.stiLogScale
   timelineOptions.layoutRev += 1
-  if (!s.showStats && rightPanelTab.value === 'stats') {
-    rightPanelTab.value = 'marks'
-  }
-  if ((s.showAi === false || s.aiEnabled === false) && rightPanelTab.value === 'ai') {
-    rightPanelTab.value = s.showStats ? 'stats' : 'marks'
-  }
+  ensureRightPanelTabVisible(s)
 }
 
 /** Persist toolbar/hotkey view prefs that live in appSettings. */
@@ -1788,12 +1822,12 @@ function onStatsPlotPointActivate({ ns, note, segment, interval, priorityRange, 
   }
   if (ns != null) {
     const annId = addAnnotationAtNs(ns, note)
-    rightPanelTab.value = 'marks'
+    ensureMarksPanelVisible()
     nextTick(() => {
       if (annId != null) marksPanelRef.value?.focusAnnotation(annId)
     })
   } else {
-    rightPanelTab.value = 'marks'
+    ensureMarksPanelVisible()
   }
   syncTimelineViewport()
   scheduleSessionSave()
@@ -1887,6 +1921,10 @@ function stepFind(forward) {
 }
 
 function focusFindPanel() {
+  if (!appSettings.showFind) {
+    appSettings.showFind = true
+    saveSettings(appSettings)
+  }
   rightPanelTab.value = 'find'
   nextTick(() => findPanelRef.value?.focusInput())
 }
@@ -1963,8 +2001,12 @@ watch(rightPanelTab, (tab) => {
 
 function onAiJump(t) {
   if (t == null || !Number.isFinite(Number(t))) return
-  timelinePanelRef.value?.jumpToNs(Number(t))
+  const ns = Number(t)
+  timelinePanelRef.value?.jumpToNs(ns)
   syncTimelineViewport()
+  if (!trace.value) return
+  addAnnotationAtNs(ns, aiJumpAnnotationNote(ns))
+  scheduleSessionSave()
 }
 
 function onAiResponseLanguage(lang) {
@@ -2889,7 +2931,7 @@ onMounted(async () => {
     sectionHeights: statsSectionHeights,
     setCpuLoadUserSized: () => { _cpuLoadUserSized = true },
   })
-  rightPanelTab.value = appSettings.showStats ? 'stats' : 'marks'
+  rightPanelTab.value = firstVisibleRightPanelTab(appSettings)
   window.addEventListener('keydown', onGlobalKeydown)
   await restoreSessionTabs(saved)
   // Auto-load the demo trace only when explicitly requested via ?demo in the URL.

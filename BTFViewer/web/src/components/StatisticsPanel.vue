@@ -1612,6 +1612,12 @@
             @mousedown.prevent="onTableResizeStart('sync', $event)"
           />
           <div
+            v-if="syncIssueDisplay.note"
+            class="range-hint"
+          >
+            {{ syncIssueDisplay.note }}
+          </div>
+          <div
             v-if="syncIssueList.length"
             class="stats-table-wrap sync-issues-wrap"
             :style="{ maxHeight: tableHeight('sync_issues') + 'px' }"
@@ -2785,7 +2791,7 @@ import { intervalInstanceDetailRows } from '../utils/intervalAnalysis.js'
 import { migrationRows, buildCorePairRows, buildCoreTimeBreakdown, migrationDwellPlotPoints, migrationRatePlotPoints, migrationGapPlotPoints, pairGapPlotPoints, pairRatePlotPoints, pairPlotKey, pairMigrations, pairBouncePrefer, buildLockBounceNsSet } from '../utils/migrationAnalysis.js'
 import { dispatchLatencyRows, switchOverheadRows, concurrentCoreActiveRows, dispatchLatencyPlotPoints, switchOverheadPlotPoints, concurrencyLevelPlotPoints } from '../utils/schedulerSmpMetrics.js'
 import { renderWorkflowAnalysisHtml, collectTraceAnalysisFindings } from '../utils/workflowAnalysis.js'
-import { traceNeedsDeferredStatsLoad } from '../utils/statsLoad.js'
+import { capStatsTableRows, traceNeedsDeferredStatsLoad } from '../utils/statsLoad.js'
 import {
   STATS_CORES_DEFAULT_VISIBLE_ROWS,
   STATS_LB_GAUGE_H,
@@ -3552,8 +3558,10 @@ const syncIssueList = computed(() => {
   return syncObjectIssueRows(tr, r?.lo ?? null, r?.hi ?? null)
 })
 
+const syncIssueDisplay = computed(() => capStatsTableRows(syncIssueList.value))
+
 const sortedSyncIssueList = computed(() =>
-  sortStatsRows(syncIssueList.value, tableSort.value.sync_issues, SYNC_ISSUE_SORT_ACCESSORS))
+  sortStatsRows(syncIssueDisplay.value.rows, tableSort.value.sync_issues, SYNC_ISSUE_SORT_ACCESSORS))
 
 const sortedSyncStats = computed(() =>
   sortStatsRows(syncStats.value, tableSort.value.sync, SYNC_OBJECT_SORT_ACCESSORS))
@@ -5089,7 +5097,7 @@ function exportCsv() {
 
   lines.push('')
   lines.push(`Mutex / Semaphore${suffix}`)
-  lines.push('Object,Kind,Holds,Issues,AvgHold,Status')
+  lines.push('Object,Kind,Holds,Issues,Bounces,Avg hold,Status')
   const syncReportRows = syncObjectStatsRows(tr, lo, hi)
   if (syncReportRows.length) {
     for (const row of syncReportRows) {
@@ -5098,18 +5106,33 @@ function exportCsv() {
         _csvCell(row.kind),
         _csvCell(row.holdCount),
         _csvCell(row.issueCount),
+        _csvCell(row.bounceCount ?? 0),
         _csvCell(row.avgHold),
         _csvCell(row.statusLabel),
       ].join(','))
     }
+    const bounced = syncReportRows.filter(r => (r.bounceCount || 0) > 0)
+    if (bounced.length) {
+      lines.push('')
+      lines.push(`Core Affinity Violations (lock bounce)${suffix}`)
+      lines.push('Object,Bounces,Description')
+      for (const row of bounced) {
+        const n = row.bounceCount
+        lines.push([
+          _csvCell(row.label),
+          _csvCell(n),
+          _csvCell(`${n} hold(s) crossed core boundaries`),
+        ].join(','))
+      }
+    }
   } else if (tr?.hasSyncObjectInstrumentation) {
-    lines.push('No mutex/sem activity in scope,,,,,')
+    lines.push('No mutex/sem activity in scope,,,,,,')
   }
 
   const queueReportRows = syncObjectStatsRows(tr, lo, hi, { kindFilter: 'queue' })
   lines.push('')
   lines.push(`Queue${suffix}`)
-  lines.push('Object,Kind,Holds,Issues,AvgHold,Status')
+  lines.push('Object,Kind,Holds,Issues,Bounces,Avg hold,Status')
   if (queueReportRows.length) {
     for (const row of queueReportRows) {
       lines.push([
@@ -5117,12 +5140,13 @@ function exportCsv() {
         _csvCell(row.kind),
         _csvCell(row.holdCount),
         _csvCell(row.issueCount),
+        _csvCell(row.bounceCount ?? 0),
         _csvCell(row.avgHold),
         _csvCell(row.statusLabel),
       ].join(','))
     }
   } else if (tr?.hasSyncObjectInstrumentation) {
-    lines.push('No queue activity in scope,,,,,')
+    lines.push('No queue activity in scope,,,,,,')
   }
 
   const intervalReportRows = intervalStatsRows(tr, lo, hi)
@@ -5382,9 +5406,11 @@ function _renderSyncObjectReportHtml(tr, lo, hi, suffix) {
   const holds = syncObjectHoldDetailRows(tr, lo, hi, 150)
   const summaryBody = syncHtmlRows.length
     ? syncHtmlRows.map(row =>
-        `<tr><td>${_htmlCell(row.label)}</td><td>${_htmlCell(row.kind)}</td><td>${row.holdCount}</td><td>${row.issueCount}</td><td>${_htmlCell(row.avgHold)}</td><td class="${syncStatusClass(row.status)}">${_htmlCell(row.statusLabel)}</td></tr>`,
+        `<tr><td>${_htmlCell(row.label)}</td><td>${_htmlCell(row.kind)}</td><td>${row.holdCount}</td><td>${row.issueCount}</td>`
+        + `<td class="${row.bounceCount > 0 ? 'sev-warning' : ''}">${row.bounceCount ?? 0}</td>`
+        + `<td>${_htmlCell(row.avgHold)}</td><td class="${syncStatusClass(row.status)}">${_htmlCell(row.statusLabel)}</td></tr>`,
       ).join('')
-    : '<tr><td colspan="6" class="empty">No mutex/sem activity in scope</td></tr>'
+    : '<tr><td colspan="7" class="empty">No mutex/sem activity in scope</td></tr>'
   const issueBody = issues.length
     ? issues.map(iss =>
         `<tr><td>${_htmlCell(formatTime(iss.timeNs, tr.timeScale))}</td><td>${_htmlCell(iss.objKey || '—')}</td><td class="${_issueSeverityClass(iss.severity)}">${_htmlCell(iss.kind)}</td><td>${_htmlCell(iss.detail)}</td><td>${_htmlCell(iss.taskLabel || '—')}</td><td>${_htmlCell(iss.core || '')}</td></tr>`,
@@ -5399,7 +5425,7 @@ function _renderSyncObjectReportHtml(tr, lo, hi, suffix) {
     ? '<p class="detail-note">Showing longest 150 hold episodes in scope.</p>'
     : ''
   return `<section class="report-card"><h2>Mutex / Semaphore${_htmlCell(suffix)}</h2>
-    <table><thead><tr><th>Object</th><th>Kind</th><th>Holds</th><th>Issues</th><th>Avg hold</th><th>Status</th></tr></thead>
+    <table><thead><tr><th>Object</th><th>Kind</th><th>Holds</th><th>Issues</th><th>Bounces</th><th>Avg hold</th><th>Status</th></tr></thead>
     <tbody>${summaryBody}</tbody></table>
     <h3 class="sub">Pairing issues</h3>
     <table><thead><tr><th>Time</th><th>Object</th><th>Issue</th><th>Detail</th><th>Task</th><th>Core</th></tr></thead>
@@ -5862,12 +5888,13 @@ function exportHtml() {
       const qBody = qRows.map(r =>
         `<tr><td>${_htmlCell(r.label)}</td><td>${_htmlCell(r.kind)}</td>` +
         `<td>${r.holdCount}</td><td>${r.issueCount}</td>` +
+        `<td class="${r.bounceCount > 0 ? 'sev-warning' : ''}">${r.bounceCount ?? 0}</td>` +
         `<td>${_htmlCell(r.avgHold)}</td>` +
         `<td class="${r.status !== 'ok' ? (r.status === 'error' ? 'sev-error' : 'sev-warning') : ''}">${_htmlCell(r.statusLabel)}</td></tr>`
       ).join('')
       return `<section class="report-card"><h2>Queue${_htmlCell(suffix)}</h2>` +
         '<table><thead><tr><th>Object</th><th>Kind</th><th>Holds</th>' +
-        '<th>Issues</th><th>Avg hold</th><th>Status</th></tr></thead>' +
+        '<th>Issues</th><th>Bounces</th><th>Avg hold</th><th>Status</th></tr></thead>' +
         `<tbody>${qBody}</tbody></table></section>`
     })() : ''}
     ${_renderIntervalReportHtml(tr, lo, hi, suffix)}

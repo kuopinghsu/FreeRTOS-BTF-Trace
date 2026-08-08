@@ -4,6 +4,7 @@ import {
   STATS_LOAD_DEFER_CORES,
   STATS_LOAD_DEFER_SYNC_ISSUES,
   STATS_LOAD_DEFER_TASKS,
+  STATS_TABLE_DISPLAY_ROW_CAP,
 } from '../config.js'
 
 export {
@@ -11,7 +12,20 @@ export {
   STATS_LOAD_DEFER_CORES,
   STATS_LOAD_DEFER_SYNC_ISSUES,
   STATS_LOAD_DEFER_TASKS,
+  STATS_TABLE_DISPLAY_ROW_CAP,
 } from '../config.js'
+
+/** Cap on-screen stats tables; Export still uses the full list (desktop parity). */
+export function capStatsTableRows(rows, cap = STATS_TABLE_DISPLAY_ROW_CAP) {
+  const list = Array.isArray(rows) ? rows : []
+  const n = list.length
+  if (n <= cap) return { rows: list, note: null, total: n }
+  return {
+    rows: list.slice(0, cap),
+    note: `Showing first ${cap.toLocaleString()} of ${n.toLocaleString()} rows — use Export for the full list.`,
+    total: n,
+  }
+}
 
 export function traceNeedsDeferredStatsLoad(trace) {
   if (!trace) return false

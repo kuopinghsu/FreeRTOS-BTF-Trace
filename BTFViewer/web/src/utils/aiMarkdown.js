@@ -240,8 +240,13 @@ body{background:#12161d;color:#dbe2ea;font-family:system-ui,-apple-system,'Segoe
   font-size:13px;line-height:1.5;margin:0;padding:20px;}
 h1{font-size:18px;margin:0 0 4px;}
 .saved{color:#8b98a8;font-size:12px;margin:0 0 16px;}
-.msg{border-top:1px solid #2b3442;padding:10px 0;}
-.msg h3{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:#8b98a8;margin:0 0 6px;}
+.msg{padding:12px 0;border-top:1px solid #2b3442;}
+.msg:first-of-type{border-top:none;padding-top:0;}
+.msg h3{font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin:0 0 6px;color:#8b98a8;}
+.msg.user h3{color:#6ea8e0;}
+.msg.assistant h3{color:#6fbf9a;}
+.msg .body{padding:8px 10px;border-left:3px solid #5b9bd5;background:#1e3348;border-radius:0 6px 6px 0;}
+.msg.assistant .body{border-left-color:#3d9a72;background:#1a2620;}
 pre{background:#1a2230;border:1px solid #3a4658;border-radius:4px;padding:8px;overflow:auto;}
 code{font-family:Menlo,Consolas,Monaco,'Courier New',monospace;font-size:12px;}
 blockquote{margin:6px 0;padding:4px 10px;border-left:3px solid #5b9bd5;color:#a8b4c4;}

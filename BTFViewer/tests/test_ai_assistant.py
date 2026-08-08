@@ -24,10 +24,12 @@ from btf_viewer_pkg.ai_assistant import (  # noqa: E402
     AI_TEMPLATE_QUESTIONS,
     DEFAULT_AI_BASE_URL,
     DEFAULT_AI_PRESET,
+    _ai_log_document_html,
     _format_ai_log_html,
     apply_ai_preset,
     build_ai_system_prompt,
     build_ai_user_message,
+    ai_jump_annotation_note,
     extract_jump_times,
     format_ai_conversation_html,
     format_ai_conversation_markdown,
@@ -224,6 +226,21 @@ class AiAssistantHelpersTests(unittest.TestCase):
             self.assertTrue(patch[f"{preset}_base_url"], name)
             self.assertTrue(patch[f"{preset}_model"], name)
 
+    def test_ai_chat_requires_key_for_remote(self) -> None:
+        from unittest.mock import patch
+
+        from btf_viewer_pkg.ai_assistant import ai_chat
+
+        env = {
+            "OPENAI_API_KEY": "",
+            "GEMINI_API_KEY": "",
+            "OLLAMA_API_KEY": "",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            with self.assertRaises(RuntimeError) as ctx:
+                ai_chat("hi", base_url="https://api.openai.com/v1", api_key="")
+        self.assertIn("API key required", str(ctx.exception))
+
     def test_normalize_api_key(self) -> None:
         from btf_viewer_pkg.ai_assistant import ai_request_headers, normalize_api_key
         self.assertEqual(normalize_api_key("  Bearer AIzaSyAbc  "), "AIzaSyAbc")
@@ -284,15 +301,41 @@ class AiAssistantHelpersTests(unittest.TestCase):
         self.assertEqual(extract_jump_times("see jump:1805120 and jump:99.5"), [1805120.0, 99.5])
         self.assertEqual(extract_jump_times("no jumps here"), [])
 
+    def test_ai_jump_annotation_note(self) -> None:
+        self.assertEqual(ai_jump_annotation_note(1386000), "AI jump:1386000")
+        self.assertEqual(ai_jump_annotation_note(1386000.0), "AI jump:1386000")
+        self.assertEqual(ai_jump_annotation_note(99.5), "AI jump:99.5")
+
     def test_format_ai_log_html_links(self) -> None:
         html_out = _format_ai_log_html("assistant", "Open jump:1805120 next")
         self.assertIn('href="btfjump:1805120"', html_out)
         self.assertIn(">jump:1805120</a>", html_out)
-        self.assertIn("<b>Assistant:</b>", html_out)
+        self.assertIn("Assistant", html_out)
+        self.assertIn('class="ai-turn"', html_out)
         # User text is escaped (no raw tags).
         esc = _format_ai_log_html("user", "<script>x</script>")
         self.assertIn("&lt;script&gt;", esc)
         self.assertNotIn("<script>", esc)
+        self.assertIn("You", esc)
+
+    def test_format_ai_log_html_separates_turns(self) -> None:
+        """Each turn is its own table so a new prompt cannot glue onto the last reply."""
+        user = _format_ai_log_html("user", "What is wrong?")
+        asst = _format_ai_log_html("assistant", "Nothing much.")
+        self.assertIn("ai-bubble", user)
+        self.assertIn("ai-bubble", asst)
+        self.assertIn("You", user)
+        self.assertNotIn("Assistant", user)
+        self.assertIn("Assistant", asst)
+        doc = _ai_log_document_html([
+            ("user", "Prompt one"),
+            ("assistant", "Reply one"),
+            ("user", "Prompt two"),
+        ])
+        self.assertEqual(doc.count('class="ai-turn"'), 3)
+        self.assertEqual(doc.count('class="ai-turn-sep"'), 2)
+        self.assertIn("Prompt two", doc)
+        self.assertLess(doc.index("Reply one"), doc.index("Prompt two"))
 
     def test_markdown_to_safe_html(self) -> None:
         html_out = markdown_to_safe_html(

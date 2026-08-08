@@ -7,6 +7,8 @@ import { describe, it } from 'node:test'
 // thrown away every time the user visits another right-panel tab.
 const app = readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8')
   .replace(/\s+/g, ' ')
+const aiPanel = readFileSync(new URL('../src/components/AiAssistantPanel.vue', import.meta.url), 'utf8')
+  .replace(/\s+/g, ' ')
 
 describe('AI panel survives right-panel tab switches', () => {
   it('hides the AI page instead of destroying it', () => {
@@ -23,5 +25,40 @@ describe('AI panel survives right-panel tab switches', () => {
 
   it('keeps the panel mounted only while the AI tab exists', () => {
     assert.match(app, /v-if="aiTabVisible" v-show="rightPanelTab === 'ai'"/)
+  })
+})
+
+describe('AI conversation turn layout', () => {
+  it('styles prompt and reply as separate bubbles', () => {
+    assert.match(aiPanel, /class="ai-msg"/)
+    assert.match(aiPanel, /:class="m\.role"/)
+    assert.match(aiPanel, /\.ai-msg\.user \.ai-msg-body/)
+    assert.match(aiPanel, /\.ai-msg\.assistant \.ai-msg-body/)
+    assert.match(aiPanel, /#1e3348/)
+    assert.match(aiPanel, /#1a2620/)
+    assert.match(aiPanel, /#6ea8e0/)
+    assert.match(aiPanel, /#6fbf9a/)
+    assert.match(aiPanel, /\.ai-msg \+ \.ai-msg/)
+  })
+})
+
+describe('right-panel tab visibility (desktop parity)', () => {
+  it('gates Marks and Find tabs on settings flags and labels Marks Marks', () => {
+    assert.match(app, /v-if="appSettings.showMarks"/)
+    assert.match(app, /v-if="appSettings.showFind"/)
+    assert.match(app, /> Marks </)
+    assert.doesNotMatch(app, /Cursor \/ Bookmark/)
+  })
+
+  it('keeps Legend independent of the Marks tab', () => {
+    assert.match(app, /v-if="appSettings.showLegend"/)
+    assert.match(app, /rightPanelTab === 'legend'/)
+    assert.match(app, /tab === 'legend' && s\.showLegend/)
+    const legendTab = app.indexOf("rightPanelTab === 'legend'")
+    const legendPanel = app.indexOf('<LegendPanel')
+    const marksTab = app.indexOf("rightPanelTab === 'marks'")
+    assert.ok(legendTab >= 0 && legendPanel >= 0)
+    assert.ok(legendPanel > legendTab, 'LegendPanel must live on the Legend page')
+    assert.ok(marksTab >= 0 && marksTab < legendTab)
   })
 })

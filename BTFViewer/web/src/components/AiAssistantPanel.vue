@@ -597,7 +597,7 @@ async function send(overrideQuery = null, overrideCtx = null) {
     if (jumps.length) {
       const m = /jump:([0-9]+(?:\.[0-9]+)?)/.exec(reply || '')
       const label = m ? m[1] : String(jumps[0])
-      status.value = `Done. Click jump:${label} links to open the timeline.`
+      status.value = `Done. Click jump:${label} to annotate the timeline and jump there.`
     } else {
       status.value = 'Done.'
     }
@@ -835,15 +835,36 @@ defineExpose({ refreshLoadedTabs, ask, clear, saveConversationAs, scrollLog })
   margin: 4px 2px;
 }
 .ai-empty { color: var(--muted, #8a96a8); }
-.ai-msg { margin-bottom: 10px; }
-.ai-msg-role {
-  font-weight: 600;
-  font-size: 11px;
-  color: var(--muted, #8a96a8);
-  margin-bottom: 2px;
+.ai-msg { margin: 0 0 12px; }
+.ai-msg + .ai-msg {
+  padding-top: 12px;
+  border-top: 1px solid #2b3442;
 }
-.ai-msg.user .ai-msg-body { color: var(--text, #e8eef7); }
-.ai-msg.assistant .ai-msg-body { color: var(--text, #d5e4f7); }
+.ai-msg-role {
+  font-weight: 700;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+.ai-msg.user .ai-msg-role { color: #6ea8e0; }
+.ai-msg.assistant .ai-msg-role { color: #6fbf9a; }
+.ai-msg-body {
+  border-radius: 0 8px 8px 0;
+  padding: 8px 10px;
+  border: 1px solid #3a4658;
+  border-left-width: 3px;
+}
+.ai-msg.user .ai-msg-body {
+  color: #e8eef7;
+  background: #1e3348;
+  border-left-color: #5b9bd5;
+}
+.ai-msg.assistant .ai-msg-body {
+  color: #d5e4f7;
+  background: #1a2620;
+  border-left-color: #3d9a72;
+}
 .ai-msg-body.markdown :deep(h1),
 .ai-msg-body.markdown :deep(h2),
 .ai-msg-body.markdown :deep(h3),

@@ -29,6 +29,7 @@ export const SHOW_STI = true
 export const SHOW_LEGEND = true
 export const SHOW_STATS = true
 export const SHOW_MARKS = true
+export const SHOW_FIND = true
 export const SHOW_CPU_LOAD = true
 export const SHOW_AI = true
 export const DARK_MODE = true
@@ -73,6 +74,7 @@ export const STATS_TABLE_MAX_H = 480
 export const STATS_LOAD_DEFER_TASKS = 256
 export const STATS_LOAD_DEFER_CORES = 32
 export const STATS_LOAD_DEFER_SYNC_ISSUES = 400
+export const STATS_TABLE_DISPLAY_ROW_CAP = 2000  // max rows shown per stats table
 export const STATS_HEAVY_SECTIONS = [
   'migrations', 'exec', 'block', 'inter', 'health',
   'preemption', 'priority', 'sync', 'intervals', 'tags',

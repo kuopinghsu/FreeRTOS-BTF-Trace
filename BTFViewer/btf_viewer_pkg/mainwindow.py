@@ -16,6 +16,7 @@ from .ai_assistant import (
     AI_PRESETS,
     DEFAULT_AI_PRESET,
     DEFAULT_AI_RESPONSE_LANGUAGE,
+    ai_jump_annotation_note,
     migrate_ai_settings,
     normalize_ai_preset,
 )
@@ -1507,7 +1508,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         """Apply persisted dock sizes; visibility is applied after resizeDocks()."""
         if self._startup_dock_layout_done or self._shutting_down:
             return
-        if not hasattr(self, "_legend_dock"):
+        if not hasattr(self, "_panel_dock"):
             return
         self._dock_layout_settling = True
         try:
@@ -1522,9 +1523,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._apply_dock_visibility_respecting_rc()
             if self._show_stats:
                 self._focus_statistics_panel()
-            # panel raise_() can hide the legend split sibling — restore last.
-            if self._show_legend:
-                self._legend_dock.raise_()
         finally:
             self._dock_layout_settling = False
             self._restoring_settings = False
@@ -1538,13 +1536,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     def _verify_startup_dock_visibility(self) -> None:
         """Last-chance pass if Qt layout settled with docks still hidden."""
-        if self._shutting_down or not hasattr(self, "_legend_dock"):
+        if self._shutting_down or not hasattr(self, "_panel_dock"):
             return
         self._reload_panel_visibility_prefs_from_rc()
         panel_on = self._right_panel_wanted()
-        legend_bad = self._show_legend and not self._legend_dock.isVisible()
         panel_bad = panel_on and not self._panel_dock.isVisible()
-        if not legend_bad and not panel_bad:
+        if not panel_bad:
             return
         self._dock_layout_settling = True
         try:
@@ -2200,9 +2197,13 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._panel_tabs.setTabVisible(_PANEL_TAB_STATS, self._show_stats)
         self._panel_tabs.setTabVisible(_PANEL_TAB_MARKS, self._show_marks)
         self._panel_tabs.setTabVisible(_PANEL_TAB_FIND, self._show_find)
+        self._panel_tabs.setTabVisible(_PANEL_TAB_LEGEND, self._show_legend)
         self._panel_tabs.setTabVisible(_PANEL_TAB_AI, self._ai_panel_wanted())
         visible = [
-            i for i in (_PANEL_TAB_STATS, _PANEL_TAB_MARKS, _PANEL_TAB_FIND, _PANEL_TAB_AI)
+            i for i in (
+                _PANEL_TAB_STATS, _PANEL_TAB_MARKS, _PANEL_TAB_FIND,
+                _PANEL_TAB_LEGEND, _PANEL_TAB_AI,
+            )
             if self._panel_tabs.isTabVisible(i)
         ]
         if visible and self._panel_tabs.currentIndex() not in visible:
@@ -2216,6 +2217,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         re-enters the toggle slots.
         """
         for attr, flag in (
+            ("_act_show_legend", getattr(self, "_show_legend", True)),
             ("_act_show_marks", self._show_marks),
             ("_act_show_find", self._show_find),
             ("_act_show_ai", getattr(self, "_show_ai", True)),
@@ -2240,8 +2242,18 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._show_stats
             or self._show_marks
             or self._show_find
+            or self._show_legend
             or self._ai_panel_wanted()
         )
+
+    def _toggle_show_legend_panel(self) -> None:
+        self._show_legend = not self._show_legend
+        if hasattr(self, "_act_show_legend"):
+            self._act_show_legend.setChecked(self._show_legend)
+        self._sync_panel_tab_visibility()
+        if self._show_legend:
+            self._focus_panel_tab(_PANEL_TAB_LEGEND)
+
     def _toggle_show_marks_panel(self) -> None:
         self._show_marks = not self._show_marks
         self._act_show_marks.setChecked(self._show_marks)
@@ -2490,7 +2502,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
     # ------------------------------------------------------------------
 
     def _any_visible_right_dock(self) -> bool:
-        for dock in (self._legend_dock, self._panel_dock):
+        for dock in self._right_docks():
             if dock.isVisible() and not dock.isFloating():
                 if self.dockWidgetArea(dock) == Qt.DockWidgetArea.RightDockWidgetArea:
                     return True
@@ -2498,7 +2510,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     def _current_right_dock_width(self) -> int:
         widths: list[int] = []
-        for dock in (self._legend_dock, self._panel_dock):
+        for dock in self._right_docks():
             if dock.isVisible() and not dock.isFloating():
                 if self.dockWidgetArea(dock) == Qt.DockWidgetArea.RightDockWidgetArea:
                     widths.append(int(dock.width()))
@@ -2507,7 +2519,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         return 330
 
     def _right_docks(self) -> Tuple[QDockWidget, ...]:
-        return (self._legend_dock, self._panel_dock)
+        dock = getattr(self, "_panel_dock", None)
+        return (dock,) if dock is not None else ()
 
     def _visible_right_docks(self) -> List[QDockWidget]:
         docks: List[QDockWidget] = []
@@ -2536,8 +2549,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             _StatsPanel._fix_stats_table_column_widths(cursor_table)
 
     def _resize_right_dock_column(self, w: int) -> None:
-        docks = [self._legend_dock, self._panel_dock]
-        sizes = [w, w]
+        docks = list(self._right_docks())
+        if not docks:
+            return
+        sizes = [w] * len(docks)
         if self.isMaximized() or self.isFullScreen():
             self.resizeDocks(docks, sizes, Qt.Orientation.Horizontal)
             return
@@ -2608,19 +2623,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         the dock layout engine has completed its first pass - resizeDocks() is
         a no-op when called before the window is shown.
 
-                Default structure:
-                    - Top: Legend
-                    - Bottom: tabbed pages (Statistics / Marks / Find)
-
-                We first set side-panel width, then split with a taller
-                bottom tabbed page.
+                Default structure: one right dock with tabbed pages
+                (Statistics / Marks / Find / Legend / AI).
         """
         self._resize_right_dock_column(520)
-        self.resizeDocks(
-            [self._legend_dock, self._panel_dock],
-            [2, 5],
-            Qt.Orientation.Vertical,
-        )
         self._focus_statistics_panel()
         self._relax_right_dock_content_widths()
         _wire_splitter_handle_cursors(self)
@@ -2631,25 +2637,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             parts = [int(p.strip()) for p in packed.split(",")]
             if len(parts) != 5:
                 return
-            right_w, legend_h, marks_h, stats_h, label_w = parts
+            right_w, _legend_h, _marks_h, _stats_h, label_w = parts
         except (ValueError, TypeError):
             return
 
         if right_w > 0:
             self._resize_right_dock_column(right_w)
-        bottom_h = max(int(marks_h), int(stats_h))
-        if self._show_legend and legend_h > 0 and bottom_h > 0:
-            self.resizeDocks(
-                [self._legend_dock, self._panel_dock],
-                [legend_h, bottom_h],
-                Qt.Orientation.Vertical,
-            )
-        elif self._show_legend and (legend_h <= 0 or bottom_h <= 0):
-            self.resizeDocks(
-                [self._legend_dock, self._panel_dock],
-                [2, 5],
-                Qt.Orientation.Vertical,
-            )
         if label_w >= 60:
             self._label_width_val = label_w
             self._view._scene.set_label_width(label_w)
@@ -2662,11 +2655,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     def _collect_dock_metrics(self) -> str:
         """Return compact CSV metrics snapshot for dock sizes."""
-        right_w = int(max(self._legend_dock.width(), self._panel_dock.width()))
-        legend_h = int(self._legend_dock.height())
+        right_w = int(self._panel_dock.width())
         panel_h = int(self._panel_dock.height())
         label_w = int(self._view._scene._label_width)
-        return f"{right_w},{legend_h},{panel_h},{panel_h},{label_w}"
+        return f"{right_w},0,{panel_h},{panel_h},{label_w}"
 
     def _restore_dock_metrics(self, packed: str) -> None:
         """Apply dock-size metrics persisted via _collect_dock_metrics()."""
@@ -2710,31 +2702,21 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._sync_panel_menu_checks()
 
     def _ensure_right_docks_layout(self) -> None:
-        """Legend above tabbed panel on the right (re-attach after float/close)."""
-        if not hasattr(self, "_legend_dock") or not hasattr(self, "_panel_dock"):
+        """Keep the tabbed right panel attached after float/close."""
+        if not hasattr(self, "_panel_dock"):
             return
-        legend = self._legend_dock
         panel = self._panel_dock
-        need_split = False
-        if self.dockWidgetArea(legend) == Qt.DockWidgetArea.NoDockWidgetArea:
-            self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, legend)
-            need_split = True
         if self.dockWidgetArea(panel) == Qt.DockWidgetArea.NoDockWidgetArea:
             self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, panel)
-            need_split = True
-        if need_split:
-            self.splitDockWidget(legend, panel, Qt.Orientation.Vertical)
 
     def _block_dock_widget_signals(self, block: bool) -> None:
-        for dock in (getattr(self, "_legend_dock", None),
-                     getattr(self, "_panel_dock", None)):
-            if dock is not None:
-                dock.blockSignals(block)
+        dock = getattr(self, "_panel_dock", None)
+        if dock is not None:
+            dock.blockSignals(block)
 
     def _set_dock_visible(self, dock: QDockWidget, visible: bool) -> None:
         """Show/hide a dock; re-attach and sync toggleViewAction."""
-        if visible and dock in (getattr(self, "_legend_dock", None),
-                                getattr(self, "_panel_dock", None)):
+        if visible and dock is getattr(self, "_panel_dock", None):
             self._ensure_right_docks_layout()
         action = dock.toggleViewAction()
         if action is not None:
@@ -2756,86 +2738,41 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             dock.setVisible(False)
 
     def _apply_dock_visibility_from_prefs(self) -> None:
-        """Show/hide legend and right panel from view prefs."""
-        if not hasattr(self, "_legend_dock"):
+        """Show/hide the right panel from view prefs; legend is a tab inside it."""
+        if not hasattr(self, "_panel_dock"):
             return
         self._applying_dock_prefs = True
         self._block_dock_widget_signals(True)
         try:
-            if self._show_legend:
-                self._set_dock_visible(self._legend_dock, True)
-            else:
-                self._set_dock_visible(self._legend_dock, False)
             self._sync_panel_tab_visibility()
             panel_on = self._right_panel_wanted()
             if panel_on:
                 self._set_dock_visible(self._panel_dock, True)
+                self._panel_dock.raise_()
             else:
                 self._set_dock_visible(self._panel_dock, False)
-            # Raise legend last — panel raise_() can hide the legend split sibling.
-            if self._show_legend:
-                self._legend_dock.raise_()
-            elif panel_on:
-                self._panel_dock.raise_()
         finally:
             self._block_dock_widget_signals(False)
             self._applying_dock_prefs = False
 
     def _apply_dock_visibility_respecting_rc(self) -> None:
-        """Apply dock visibility; re-read RC once if legend/panel failed to show."""
+        """Apply dock visibility; re-read RC once if the panel failed to show."""
         self._apply_dock_visibility_from_prefs()
-        if not hasattr(self, "_legend_dock"):
+        if not hasattr(self, "_panel_dock"):
             return
         panel_on = self._right_panel_wanted()
-        legend_bad = self._show_legend and not self._legend_dock.isVisible()
         panel_bad = panel_on and not self._panel_dock.isVisible()
-        if legend_bad or panel_bad:
+        if panel_bad:
             self._reload_panel_visibility_prefs_from_rc()
             self._apply_dock_visibility_from_prefs()
 
     def _sync_panel_visibility_prefs_for_persist(self) -> bool:
-        """Read legend visibility for rc persist without emitting settings_changed."""
-        if hasattr(self, "_legend_dock") and not self._shutting_down:
-            show_legend = self._legend_dock.isVisible()
-            self._vm.settings._model.show_legend = show_legend
-            return show_legend
+        """Legend visibility is the show_legend tab flag (not a separate dock)."""
         return self._show_legend
 
     def _finalize_dock_layout_from_rc(self) -> None:
         """Apply Layout checkboxes after restoreState / resizeDocks (deferred)."""
         self._complete_startup_dock_layout()
-
-    def _restore_legend_if_preferred(self) -> None:
-        """Re-show the legend when prefs say it should be on but Qt hid it."""
-        if (self._shutting_down or self._applying_dock_prefs
-                or self._restoring_settings or self._dock_layout_settling
-                or not hasattr(self, "_legend_dock")):
-            return
-        if self._vm.settings._model.show_legend and not self._legend_dock.isVisible():
-            self._apply_dock_visibility_from_prefs()
-
-    def _on_legend_dock_visibility_changed(self, visible: bool) -> None:
-        """Keep show_legend in sync — but never poison .rc from Qt quirks.
-
-        The Legend dock is not Closable (no title-bar X). Intentional hide goes
-        through Settings → Layout. Qt may still emit visibilityChanged(False)
-        when the Statistics panel is raised; writing that to btf_viewer.rc made
-        the legend disappear on the next launch.
-        """
-        if (self._shutting_down
-                or self._applying_dock_prefs
-                or self._restoring_settings
-                or self._dock_layout_settling
-                or not self._startup_dock_layout_done):
-            return
-        if not visible:
-            if self._vm.settings._model.show_legend:
-                QTimer.singleShot(0, self._restore_legend_if_preferred)
-            return
-        # Update the model directly — the show_legend setter emits settings_changed
-        # which would call _apply_dock_visibility_from_prefs() and fight the user.
-        self._vm.settings._model.show_legend = True
-        self._settings.set("view", "show_legend", "true", flush=False)
 
     def _apply_settings_to_all_tabs_impl(self) -> None:
         self._view.set_font_size(self._font_size_val)
@@ -3034,10 +2971,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 }, flush=False)
 
             show_legend = self._show_legend
-            if hasattr(self, "_legend_dock"):
-                if not self._shutting_down:
-                    self._apply_dock_visibility_respecting_rc()
-                    show_legend = self._sync_panel_visibility_prefs_for_persist()
 
             # View settings
             s.set_many("view", {
@@ -3611,8 +3544,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._sync_panel_tabs_theme(is_dark)
             if hasattr(self, '_legend'):
                 self._legend.update_theme(is_dark, defer_rebuild=defer_rebuilds)
-            if hasattr(self, '_legend_dock') and self._legend_dock.widget() is not None:
-                _legend_host = self._legend_dock.widget()
+            if getattr(self, '_legend_host', None) is not None:
+                _legend_host = self._legend_host
                 _host_pal = _legend_host.palette()
                 _host_pal.setColor(QPalette.Window, QColor(c['win_bg']))
                 _host_pal.setColor(QPalette.Base, QColor(c['win_bg']))
@@ -3796,8 +3729,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         _central_lay.addWidget(self._central_stack, 1)
         self.setCentralWidget(self._central_host)
 
-        # --- Legend dock (right panel) ---
-        self._build_legend_dock()
+        # --- Legend panel (hosted in the right-panel Legend tab) ---
+        self._build_legend_panel()
 
         # --- Statistics panel (widget only; hosted in right-panel tabs) ---
         self._build_stats_panel()
@@ -3970,7 +3903,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             build_compare_context=self._ai_build_compare_context,
         )
 
-        # --- Right panel: Statistics / Marks / Find / AI tabs (web parity) ---
+        # --- Right panel: Statistics / Marks / Find / Legend / AI (web parity) ---
         self._panel_tabs = QTabWidget()
         if sys.platform == "darwin":
             self._panel_tabs.setTabBar(_LeftAlignedTabBar(self._panel_tabs))
@@ -3978,6 +3911,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._panel_tabs.addTab(self._stats_panel, "Statistics")
         self._panel_tabs.addTab(marks_host, "Marks")
         self._panel_tabs.addTab(find_host, "Find")
+        self._panel_tabs.addTab(self._legend_host, "Legend")
         self._panel_tabs.addTab(self._ai_panel, "AI")
 
         panel_dock = QDockWidget("", self)
@@ -3995,15 +3929,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._marks_dock = panel_dock
         self._find_dock = panel_dock
 
-        self.splitDockWidget(self._legend_dock, self._panel_dock, Qt.Orientation.Vertical)
         self._sync_panel_tab_visibility()
         self._focus_statistics_panel()
         # Default dock sizes are applied in _restore_settings via QTimer.singleShot
         # AFTER the window is shown, where resizeDocks() is actually effective.
 
         # Keep runtime state in sync if the user closes a dock via its X button
-        self._legend_dock.visibilityChanged.connect(
-            self._on_legend_dock_visibility_changed)
         self._panel_dock.visibilityChanged.connect(self._on_panel_dock_visibility_changed)
 
         self._wire_resize_cursors()
@@ -4038,20 +3969,13 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             w.installEventFilter(filt)
             w._dock_width_resize_filter = filt  # prevent GC
 
-        for dock in (self._legend_dock, self._panel_dock):
+        for dock in self._right_docks():
             dock.setMouseTracking(True)
             dock.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
             ok = _dock_active(dock)
             width_filt = _DockWidthResizeFilter(dock, self, "left", margin, ok)
             dock.installEventFilter(width_filt)
             dock._dock_width_resize_filter = width_filt
-            vert_edges: list = []
-            if dock is self._legend_dock:
-                vert_edges.append(("bottom", vert, ok))
-            if vert_edges:
-                vert_filt = _EdgeResizeCursorFilter(dock, vert_edges, margin)
-                dock.installEventFilter(vert_filt)
-                dock._edge_resize_filter = vert_filt
 
         resize_guard = _RightDockResizeGuard(self, self._panel_dock)
         self._panel_dock.installEventFilter(resize_guard)
@@ -4059,24 +3983,18 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
         QTimer.singleShot(0, lambda: _wire_splitter_handle_cursors(self))
 
-    def _build_legend_dock(self) -> None:
-        """Create the legend dock and host container."""
+    def _build_legend_panel(self) -> None:
+        """Create the legend widget hosted in the right-panel Legend tab."""
         self._legend = _LegendWidget()
         self._legend.setMinimumWidth(0)
         legend_host = QWidget()
-        legend_host.setObjectName("legend_dock_host")
+        legend_host.setObjectName("legend_tab_host")
         legend_host.setAutoFillBackground(True)
         legend_v = QVBoxLayout(legend_host)
-        legend_v.setContentsMargins(0, 0, 0, 0)
+        legend_v.setContentsMargins(6, 6, 6, 6)
         legend_v.setSpacing(0)
         legend_v.addWidget(self._legend)
-        dock = QDockWidget("Legend", self)
-        dock.setObjectName("dock_legend")
-        dock.setWidget(legend_host)
-        dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable)
-        self._apply_right_dock_min_width(dock)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
-        self._legend_dock = dock
+        self._legend_host = legend_host
 
     def _build_stats_panel(self) -> None:
         """Create the statistics panel widget (hosted in the right-panel tab bar)."""
@@ -4181,6 +4099,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         vm.addSeparator()
         vm.addAction("⚙ &Settings…", self._open_settings, "Ctrl+,")
         vm.addSeparator()
+        self._act_show_legend = vm.addAction("Show Le&gend Panel", self._toggle_show_legend_panel)
+        self._act_show_legend.setCheckable(True)
+        self._act_show_legend.setChecked(self._show_legend)
         self._act_show_marks = vm.addAction("Show &Marks Panel", self._toggle_show_marks_panel)
         self._act_show_marks.setCheckable(True)
         self._act_show_marks.setChecked(self._show_marks)
@@ -4906,10 +4827,16 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             panel.refresh_template_availability()
 
     def _ai_jump_time_unit(self, value: float) -> None:
-        """Jump timeline; *value* is in the trace #timeScale unit (same as segment times)."""
+        """Jump to *value* (trace time unit) and drop an annotation there."""
         if self._trace is None:
             return
-        self._jump_to_ns(int(float(value)))
+        ns = int(float(value))
+        note = ai_jump_annotation_note(value)
+        self._jump_to_ns(ns)
+        for ann in self._annotations:
+            if int(ann.ns) == ns and ann.note == note:
+                return
+        self._add_annotation_with_note(ns, note, show_marks_panel=False)
 
     def _open_analysis_findings(self) -> None:
         """Show Analysis Findings dialog for the active tab / cursor scope."""
@@ -5642,10 +5569,16 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     def _add_annotation_with_note(
         self, ns: int, note: str, *, focus_annotation_tab: bool = False,
+        show_marks_panel: bool = True,
     ) -> None:
         """Add an annotation at *ns* with the given note text."""
         if self._trace is None:
             return
+        tmin = int(self._trace.time_min)
+        tmax = int(self._trace.time_max)
+        if tmax < tmin:
+            tmax = tmin
+        ns = max(tmin, min(tmax, int(ns)))
         self._push_undo_snapshot()
         ann_id = self._mark_next_id
         self._annotations.append(TraceAnnotation(id=ann_id, ns=ns, note=note or ""))
@@ -5655,7 +5588,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._save_current_trace_state()
         if focus_annotation_tab:
             self._focus_marks_annotation_panel(ann_id)
-        else:
+        elif show_marks_panel:
             self._focus_panel_tab(_PANEL_TAB_MARKS)
 
     def _clear_all_bookmarks(self) -> None:
@@ -6241,7 +6174,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._set_show_grid(vals["show_grid"], persist=False)
         if vals["show_legend"] != self._show_legend:
             self._show_legend = vals["show_legend"]
-            self._apply_dock_visibility_from_prefs()
+            if hasattr(self, "_act_show_legend"):
+                self._act_show_legend.setChecked(self._show_legend)
+            self._sync_panel_tab_visibility()
+            if self._show_legend:
+                self._focus_panel_tab(_PANEL_TAB_LEGEND)
         if vals["show_stats"] != self._show_stats:
             self._show_stats = vals["show_stats"]
             self._sync_panel_tab_visibility()

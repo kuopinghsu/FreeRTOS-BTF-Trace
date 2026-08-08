@@ -51,7 +51,7 @@ class PanelTabVisibilityTest(unittest.TestCase):
                 f"show_find={find}\n"
                 "show_ai=true\n"
                 "[window]\n"
-                "dock_layout_version=10\n"
+                "dock_layout_version=11\n"
                 "maximized=false\n"
                 "width=1200\n"
                 "height=800\n"
@@ -68,11 +68,11 @@ class PanelTabVisibilityTest(unittest.TestCase):
         _wait_ms(app, 400)
         return app, win
 
-    def test_all_four_tabs_visible_by_default(self) -> None:
+    def test_all_five_tabs_visible_by_default(self) -> None:
         self._write_rc("true", "true")
         app, win = self._start()
         try:
-            for idx, name in enumerate(("Statistics", "Marks", "Find", "AI")):
+            for idx, name in enumerate(("Statistics", "Marks", "Find", "Legend", "AI")):
                 self.assertTrue(
                     win._panel_tabs.isTabVisible(idx),
                     f"{name} tab hidden with show_* all true",
@@ -88,6 +88,8 @@ class PanelTabVisibilityTest(unittest.TestCase):
             self.assertTrue(win._panel_tabs.isTabVisible(self.btf._PANEL_TAB_STATS))
             self.assertFalse(win._panel_tabs.isTabVisible(self.btf._PANEL_TAB_MARKS))
             self.assertFalse(win._panel_tabs.isTabVisible(self.btf._PANEL_TAB_FIND))
+            self.assertTrue(win._panel_tabs.isTabVisible(self.btf._PANEL_TAB_LEGEND))
+            self.assertTrue(win._panel_tabs.isTabVisible(self.btf._PANEL_TAB_AI))
             # The View menu used to claim both panels were on regardless.
             self.assertFalse(
                 win._act_show_marks.isChecked(),

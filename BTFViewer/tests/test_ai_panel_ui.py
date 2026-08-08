@@ -16,7 +16,9 @@ from btf_viewer_pkg._bootstrap import install  # noqa: E402
 
 install()
 
-from PySide6.QtCore import QPoint  # noqa: E402
+from unittest.mock import patch  # noqa: E402
+
+from PySide6.QtCore import QPoint, QUrl  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from btf_viewer_pkg.ai_assistant import create_ai_assistant_panel  # noqa: E402
@@ -50,6 +52,26 @@ class AiPanelUiTests(unittest.TestCase):
         panel._input.setPlainText("   ")
         self.assertFalse(panel._send_btn.isEnabled())
 
+    def test_log_keeps_prompt_and_reply_apart(self) -> None:
+        """Template / follow-up prompts must not continue the previous assistant block."""
+        panel = self._panel()
+        panel._append("user", "What is wrong?")
+        panel._append("assistant", "Nothing much.")
+        panel._append("user", "Second prompt")
+        text = panel._log.toPlainText()
+        self.assertIn("What is wrong?", text)
+        self.assertIn("Nothing much.", text)
+        self.assertIn("Second prompt", text)
+        self.assertRegex(text, r"You\s+What is wrong\?")
+        self.assertRegex(text, r"Assistant\s+Nothing much\.")
+        self.assertRegex(text, r"You\s+Second prompt")
+        html = panel._log.toHtml().lower()
+        # Qt may drop custom classes; bgcolor on each bubble still survives.
+        self.assertGreaterEqual(html.count("#1e3348"), 2)
+        self.assertGreaterEqual(html.count("#1a2620"), 1)
+        # Second prompt must appear after the first reply in the rendered log.
+        self.assertLess(text.index("Nothing much."), text.index("Second prompt"))
+
     def test_log_menu_offers_copy_and_save(self) -> None:
         panel = self._panel()
         menu = panel._log.createStandardContextMenu(QPoint(0, 0))
@@ -67,6 +89,20 @@ class AiPanelUiTests(unittest.TestCase):
         self.assertIn("## You", clip)
         self.assertIn("see jump:12.", clip)
         self.assertEqual(panel._status.text(), "Copied to clipboard.")
+
+    def test_http_links_open_in_system_browser(self) -> None:
+        panel = self._panel()
+        opened = []
+        with patch(
+            "btf_viewer_pkg.ai_assistant.QDesktopServices.openUrl",
+            side_effect=lambda u: opened.append(u.toString()),
+        ):
+            panel._on_jump_link(QUrl("https://example.com/a"))
+            panel._on_jump_link(QUrl("mailto:dev@example.com"))
+        self.assertEqual(
+            opened,
+            ["https://example.com/a", "mailto:dev@example.com"],
+        )
 
 
 if __name__ == "__main__":
