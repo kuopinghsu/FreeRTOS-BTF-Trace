@@ -241,7 +241,7 @@ Shared by the Desktop **Statistics** tab and the Web **Statistics** panel.
 
 The **Statistics** tab in the right-side panel (Desktop dock + Web tab) shows per-core CPU utilisation, top tasks, scheduling summary, trace health, and collapsible metric tables. Toggle visibility from **Settings → Display → Statistics panel**. For a quick triage of the same scope, use toolbar **Analysis** (see [Analysis Findings](#analysis-findings)) — findings are **not** listed as a panel section.
 
-At the top, **Limit to cursor range (C1–Cn)** restricts all statistics (and Analysis Findings) to the time window from the first placed cursor through the last (requires 2+ cursors). Section titles show **(cursor range)** when scoped. Clearing all cursors returns to full-trace statistics immediately.
+At the top, **Limit to C1–Cn** restricts all statistics (and Analysis Findings) to the time window from the first placed cursor through the last (requires 2+ cursors). Section titles show **(cursor range)** when scoped. Clearing all cursors returns to full-trace statistics immediately.
 
 **Panel header controls** (next to the cursor-range checkbox):
 
@@ -301,7 +301,7 @@ The Statistics panel (Desktop **Statistics** tab + Web **Statistics** tab) organ
 2. Optionally click toolbar **Analysis** for a severity-tagged triage of the current scope.
 3. Expand the sections you care about (or use the **+** / **−** icons at the top to expand/collapse all). Pin frequently used sections so they stay open.
 4. Optionally drag **⠿** grips to reorder sections for your workflow; use the reset-order icon when you want the built-in sequence back.
-5. Optionally place **2+ cursors** and enable **Limit to cursor range (C1–Cn)** to restrict every metric (and Analysis Findings) to a time window.
+5. Optionally place **2+ cursors** and enable **Limit to C1–Cn** to restrict every metric (and Analysis Findings) to a time window.
 6. Click a **table row** to open a distribution chart (where supported), click **Min** / **Max** to jump and add an annotation at an extreme slice on the timeline, click a **Mutex / Semaphore** issue row to zoom, jump, and annotate at that STI event, or in **Deadlines / CPU budget** click a slice row to annotate / a CPU-budget row to highlight the task (or use the **Settings → Display** link to edit thresholds).
 7. Use **Trace Compare…** when two traces are open to diff summary and migration stats.
 

@@ -916,6 +916,7 @@ import {
   cpuLoadPreferredPaneHeight, cpuLoadPaneDefaultH, cpuLoadPaneMaxH,
   CPU_LOAD_PANE_MIN_H,
 } from './utils/cpuLoadHelpers.js'
+import { selectedTaskFromHighlight } from './utils/highlightLock.js'
 import { useTraceTabs } from './composables/useTraceTabs.js'
 import { loadSession, saveSession, buildSessionSnapshot, isRestorableViewport, applySavedLayout, applyTabState, mergeLegacyTabFilters } from './utils/sessionStore.js'
 import { putTrace, getTrace, pruneTraces } from './utils/traceCache.js'
@@ -1159,7 +1160,7 @@ function onToolbarOptionsUpdate(v) {
   persistTimelineViewPrefs()
 }
 
-/** Show Statistics tab when opening or re-selecting a trace (mirrors desktop force=True). */
+/** Show Statistics when opening a new trace (desktop focuses Stats on load only). */
 function focusStatisticsPanel(force = false) {
   if (!appSettings.showStats) return
   if (force) rightPanelTab.value = 'stats'
@@ -1206,10 +1207,10 @@ function onSettingsSave(next) {
 }
 const cpuLoadHoverTime = ref(null)
 
-const cpuLoadSelectedTask = computed(() => {
-  if (highlightSegment.value?.task) return taskMergeKey(highlightSegment.value.task)
-  return pinnedHighlightKey.value
-})
+const cpuLoadSelectedTask = computed(() => selectedTaskFromHighlight({
+  pinnedHighlightKey: pinnedHighlightKey.value,
+  highlightSegment: highlightSegment.value,
+}))
 
 function saveFiltersToActiveTab(tab = activeTab.value) {
   if (!tab) return
@@ -1376,13 +1377,13 @@ watch(activeTabId, (newId, oldId) => {
     if (leaving) saveFiltersToActiveTab(leaving)
   }
   const tab = activeTab.value
-  timelineOptions.highlightKey = tab?.pinnedHighlightKey ?? null
+  const lockKey = selectedTaskFromHighlight(tab)
+  timelineOptions.highlightKey = lockKey
   timelineOptions.highlightSegment = tab?.highlightSegment ?? null
   timelineOptions.highlightInterval = null
-  timelineOptions.lockedTaskKey = tab?.pinnedHighlightKey ?? null
+  timelineOptions.lockedTaskKey = lockKey
   syncFiltersFromTab(tab)
   _navCache = tab ? getNavCache(tab) : null
-  focusStatisticsPanel(true)
   nextTick(() => {
     applyTimelineViewport()
     timelineOptions.layoutRev += 1
@@ -1499,8 +1500,9 @@ function onFileError(message) {
 }
 
 function finishTraceLoadTab(tab) {
-  timelineOptions.highlightKey = tab.pinnedHighlightKey ?? null
-  timelineOptions.lockedTaskKey = null
+  const lockKey = selectedTaskFromHighlight(tab)
+  timelineOptions.highlightKey = lockKey
+  timelineOptions.lockedTaskKey = lockKey
   timelineOptions.showCpuLoad = true
   timelineOptions.highlightSegment = tab.highlightSegment ?? null
   loading.value    = false

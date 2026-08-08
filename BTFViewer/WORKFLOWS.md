@@ -374,7 +374,7 @@ Most findings only make sense inside one phase of a trace. Place two cursors aro
 | `Ctrl+R` | Zoom the view to the cursor range |
 | Cursor-scope checkbox | Recompute Statistics and Analysis for C1–Cn |
 
-The cursor-scope checkbox is labelled **Limit to C1–Cn** in the desktop viewer and **Limit to cursor range (C1–Cn)** in the web viewer; it sits at the top of the Statistics panel in both.
+The cursor-scope checkbox is labelled **Limit to C1–Cn** (desktop and web); it sits at the top of the Statistics panel.
 
 ![Cursors C1–C3 with Δ badges](../images/example.png)
 

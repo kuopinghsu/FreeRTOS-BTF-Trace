@@ -4,6 +4,7 @@
 
 import { isRestorableViewport, sanitizeTabFilters, snapshotTabFilters, sanitizeOpenPlot, sanitizeSectionCollapsed } from './sessionStore.js'
 import { MAX_CURSORS } from './settingsStore.js'
+import { selectedTaskFromHighlight } from './highlightLock.js'
 
 export const SESSION_PORTABLE_VERSION = 2
 export const SESSION_MAX_BYTES = 2 * 1024 * 1024
@@ -189,13 +190,9 @@ export function applyPortableSession(tab, data, timelineOptions, trace = null) {
   const opts = sanitizeTimelineOptions(data.timelineOptions)
   if (timelineOptions && opts) {
     Object.assign(timelineOptions, opts)
-    if (tab.pinnedHighlightKey != null) {
-      timelineOptions.highlightKey = tab.pinnedHighlightKey
-      timelineOptions.lockedTaskKey = tab.pinnedHighlightKey
-    } else {
-      timelineOptions.highlightKey = null
-      timelineOptions.lockedTaskKey = null
-    }
+    const lockKey = selectedTaskFromHighlight(tab)
+    timelineOptions.highlightKey = lockKey
+    timelineOptions.lockedTaskKey = lockKey
   }
 
   const filters = sanitizeTabFilters(data.tabFilters)

@@ -5,14 +5,14 @@
       <div class="stats-scope-top">
         <label
           class="stats-scope-check"
-          :title="'When two or more cursors are placed, restrict all statistics to the time window from C1 through the last cursor.'"
+          title="Limit statistics to the time window from C1 through the last cursor"
         >
           <input
             v-model="scopeToCursorsModel"
             type="checkbox"
             :disabled="placedCursorCount < 2"
           >
-          Limit to cursor range (C1–Cn)
+          Limit to C1–Cn
         </label>
         <div class="stats-scope-actions">
           <button

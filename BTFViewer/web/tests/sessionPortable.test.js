@@ -93,5 +93,35 @@ describe('portable session', () => {
     assert.deepEqual(tab.taskFilterKeys, ['T1'])
     assert.equal(tab.pinnedHighlightKey, 'T1')
     assert.equal(timelineOptions.highlightKey, 'T1')
+    assert.equal(timelineOptions.lockedTaskKey, 'T1')
+  })
+
+  it('restores lockedTaskKey from a segment-click highlight', () => {
+    const tab = {
+      cursors: [],
+      marks: [],
+      markNextId: 1,
+      timelineViewport: {},
+      findQuery: '',
+      findMode: 'contains',
+      pinnedHighlightKey: null,
+      highlightSegment: { task: 'CS[18]', start: 10, end: 20, core: 'Core_0' },
+      taskFilterText: '',
+      migratedOnlyFilter: false,
+      taskFilterKeys: null,
+      heatmapFilterLabel: null,
+    }
+    const timelineOptions = {
+      highlightKey: null,
+      lockedTaskKey: null,
+    }
+    applyPortableSession(tab, {
+      version: SESSION_PORTABLE_VERSION,
+      timelineOptions: { viewMode: 'task', darkMode: true },
+      pinnedHighlightKey: null,
+    }, timelineOptions)
+    assert.ok(timelineOptions.lockedTaskKey)
+    assert.equal(timelineOptions.lockedTaskKey, timelineOptions.highlightKey)
+    assert.match(String(timelineOptions.lockedTaskKey), /CS/)
   })
 })
