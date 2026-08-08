@@ -1,16 +1,26 @@
 /** CPU load graph helpers (parity with desktop _CpuLoadGraph). */
 
+import {
+  CPU_LOAD_COLLAPSED_H,
+  CPU_LOAD_MAX_VISIBLE_ROWS,
+  CPU_LOAD_PANE_CHROME_H,
+  CPU_LOAD_PANE_MAX_H,
+  CPU_LOAD_PANE_MIN_H,
+  CPU_LOAD_ROW_GAP,
+  CPU_LOAD_ROW_H,
+} from '../config.js'
 import { getTimelineLayout } from './timelineLayout.js'
 import { coreViewTaskFilterActive, filteredCoreViewTasks } from './taskFilter.js'
 
-export const CPU_LOAD_ROW_H = 30
-export const CPU_LOAD_COLLAPSED_H = 20
-export const CPU_LOAD_ROW_GAP = 2
-export const CPU_LOAD_MAX_VISIBLE_ROWS = 8
-export const CPU_LOAD_PANE_CHROME_H = 30
-export const CPU_LOAD_PANE_MIN_H = 60
-/** Legacy cap when row height is default (30px); use cpuLoadPaneMaxH() for current settings. */
-export const CPU_LOAD_PANE_MAX_H = 480
+export {
+  CPU_LOAD_COLLAPSED_H,
+  CPU_LOAD_MAX_VISIBLE_ROWS,
+  CPU_LOAD_PANE_CHROME_H,
+  CPU_LOAD_PANE_MAX_H,
+  CPU_LOAD_PANE_MIN_H,
+  CPU_LOAD_ROW_GAP,
+  CPU_LOAD_ROW_H,
+}
 
 export function cpuLoadRowsViewportHeight(
   visibleRows = CPU_LOAD_MAX_VISIBLE_ROWS,

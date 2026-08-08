@@ -1,14 +1,17 @@
-/** Large-trace statistics load tuning (parity with desktop config.py). */
+/** Large-trace statistics load tuning. Defaults live in ``src/config.js``. */
 
-export const STATS_LOAD_DEFER_TASKS = 256
-export const STATS_LOAD_DEFER_CORES = 32
-export const STATS_LOAD_DEFER_SYNC_ISSUES = 400
+import {
+  STATS_LOAD_DEFER_CORES,
+  STATS_LOAD_DEFER_SYNC_ISSUES,
+  STATS_LOAD_DEFER_TASKS,
+} from '../config.js'
 
-export const STATS_HEAVY_SECTIONS = [
-  'migrations', 'exec', 'block', 'inter', 'health',
-  'preemption', 'priority', 'sync', 'intervals', 'tags',
-  'dispatch', 'switch_overhead', 'concurrency',
-]
+export {
+  STATS_HEAVY_SECTIONS,
+  STATS_LOAD_DEFER_CORES,
+  STATS_LOAD_DEFER_SYNC_ISSUES,
+  STATS_LOAD_DEFER_TASKS,
+} from '../config.js'
 
 export function traceNeedsDeferredStatsLoad(trace) {
   if (!trace) return false

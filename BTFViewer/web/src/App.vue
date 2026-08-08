@@ -881,6 +881,19 @@ import JumpToTimeDialog from './components/JumpToTimeDialog.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
 import { formatTime }   from './renderer/TimelineRenderer.js'
 import { taskDisplayName, taskMergeKey, setColorblindMode } from './utils/colors.js'
+import {
+  DARK_MODE,
+  HOVER_HIGHLIGHT,
+  ORIENTATION,
+  RIGHT_PANEL_MAX_W,
+  RIGHT_PANEL_MIN_W,
+  RIGHT_PANEL_WIDTH,
+  SHOW_CPU_LOAD,
+  SHOW_GRID,
+  SHOW_STI,
+  STI_LOG_SCALE,
+  VIEW_MODE,
+} from './config.js'
 import { loadSettings, saveSettings, applySettingsToRuntime, resizeTabCursors, normalizeSettings,
 } from './utils/settingsStore.js'
 import { setTimelineLayout } from './utils/timelineLayout.js'
@@ -979,9 +992,7 @@ const snapshotEditorOpen = ref(false)
 const snapshotImageUrl   = ref(null)
 const snapshotDownloadFilename = ref('annotated-snapshot.png')
 
-const rightPanelWidth = ref(330)
-const RIGHT_PANEL_MIN_W = 180
-const RIGHT_PANEL_MAX_W = 520
+const rightPanelWidth = ref(RIGHT_PANEL_WIDTH)
 let _rightPanelResize = null
 
 const appSettings = reactive(applySettingsToRuntime(loadSettings()))
@@ -1024,13 +1035,13 @@ function showToast(msg, type = 'info') {
 }
 
 const timelineOptions = reactive({
-  viewMode:        'task',
-  darkMode:        true,
-  showGrid:        true,
-  showSti:         true,
-  showCpuLoad:     true,
-  stiLogScale:     false,
-  orientation:     'h',
+  viewMode:        VIEW_MODE,
+  darkMode:        DARK_MODE,
+  showGrid:        SHOW_GRID,
+  showSti:         SHOW_STI,
+  showCpuLoad:     SHOW_CPU_LOAD,
+  stiLogScale:     STI_LOG_SCALE,
+  orientation:     ORIENTATION,
   highlightKey:    null,
   marks:           [],
   highlightSegment: null,
@@ -1041,7 +1052,7 @@ const timelineOptions = reactive({
   taskFilterText:     '',
   heatmapFilterLabel: null,
   lockedTaskKey:   null,
-  showHoverHighlight: false,
+  showHoverHighlight: HOVER_HIGHLIGHT,
   layoutRev:       0,
 })
 
@@ -3164,7 +3175,7 @@ body {
   background: var(--bg);
   color: var(--fg);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  font-size: var(--ui-font-size, 8px);
+  font-size: var(--ui-font-size);
   overflow: hidden;
 }
 

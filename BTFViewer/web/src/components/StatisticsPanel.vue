@@ -2786,6 +2786,19 @@ import { migrationRows, buildCorePairRows, buildCoreTimeBreakdown, migrationDwel
 import { dispatchLatencyRows, switchOverheadRows, concurrentCoreActiveRows, dispatchLatencyPlotPoints, switchOverheadPlotPoints, concurrencyLevelPlotPoints } from '../utils/schedulerSmpMetrics.js'
 import { renderWorkflowAnalysisHtml, collectTraceAnalysisFindings } from '../utils/workflowAnalysis.js'
 import { traceNeedsDeferredStatsLoad } from '../utils/statsLoad.js'
+import {
+  STATS_CORES_DEFAULT_VISIBLE_ROWS,
+  STATS_LB_GAUGE_H,
+  STATS_MAX_VISIBLE_ROWS,
+  STATS_TABLE_HEADER_H,
+  STATS_TABLE_HSCROLL_H,
+  STATS_TABLE_MAX_H,
+  STATS_TABLE_MIN_H,
+  STATS_TABLE_ROW_H,
+  STATS_TABLE_WRAP_BORDER,
+  STATS_UTIL_ROW_GAP,
+  STATS_UTIL_ROW_H,
+} from '../config.js'
 import { tickHealthReport } from '../utils/tickHealth.js'
 import { requestStatsCompute } from '../utils/statsWorkerClient.js'
 import { computeStatsTables, segIndicesMapFromTrace } from '../parser/statsCompute.js'
@@ -3098,23 +3111,8 @@ function scheduleStatsRefresh() {
   _statsRefreshTimer = setTimeout(() => { refreshStatsTables() }, 120)
 }
 
-const TABLE_MIN_H = 80
-const TABLE_MAX_H = 480
-const STATS_MAX_VISIBLE_ROWS = 8
-// Core Utilisation scroll includes Load Balance gauges; default viewport shows
-// gauges + two core bars (more cores scroll). Matches desktop
-// STATS_CORES_DEFAULT_VISIBLE_ROWS / STATS_LB_GAUGE_H.
-const STATS_CORES_DEFAULT_VISIBLE_ROWS = 2
-// Approximate .lb-cluster block height (SVG ~100 + chrome); keep in sync with
-// desktop STATS_LB_GAUGE_H for default viewport sizing.
-const STATS_LB_GAUGE_H = 200
-const STATS_UTIL_ROW_H = 16
-const STATS_UTIL_ROW_GAP = 3
-// Match .stats-table cell metrics: padding 3+3, border 1, line-height 14.
-const STATS_TABLE_ROW_H = 21
-const STATS_TABLE_HEADER_H = 22
-const STATS_TABLE_HSCROLL_H = 14
-const STATS_TABLE_WRAP_BORDER = 2
+const TABLE_MIN_H = STATS_TABLE_MIN_H
+const TABLE_MAX_H = STATS_TABLE_MAX_H
 
 function statsTableViewportHeight(visibleRows = STATS_MAX_VISIBLE_ROWS, reserveHScroll = false) {
   let h = STATS_TABLE_HEADER_H + visibleRows * STATS_TABLE_ROW_H + STATS_TABLE_WRAP_BORDER

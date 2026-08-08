@@ -1,16 +1,28 @@
-/** Mutable timeline layout (synced from Settings). */
+/** Mutable timeline layout (synced from Settings). Defaults live in ``src/config.js``. */
+import {
+  CPU_LOAD_ROW_H,
+  FONT_SIZE,
+  LABEL_WIDTH,
+  ROW_GAP,
+  ROW_HEIGHT,
+  RULER_HEIGHT,
+  STI_LINE_STYLE,
+  STI_ROW_H,
+  STI_WAVEFORM_H,
+  TIMESCALE_PER_PX_DEFAULT,
+} from '../config.js'
 
 export const DEFAULT_TIMELINE_LAYOUT = {
-  labelW: 160,
-  rulerH: 40,
-  rowH: 22,
-  rowGap: 4,
-  stiRowH: 18,
-  stiWaveformH: 80,
-  labelFontSize: 8,
-  stiLineStyle: 'linear',
-  timescalePerPxDefault: 2,
-  cpuLoadRowH: 30,
+  labelW: LABEL_WIDTH,
+  rulerH: RULER_HEIGHT,
+  rowH: ROW_HEIGHT,
+  rowGap: ROW_GAP,
+  stiRowH: STI_ROW_H,
+  stiWaveformH: STI_WAVEFORM_H,
+  labelFontSize: FONT_SIZE,
+  stiLineStyle: STI_LINE_STYLE,
+  timescalePerPxDefault: TIMESCALE_PER_PX_DEFAULT,
+  cpuLoadRowH: CPU_LOAD_ROW_H,
 }
 
 let _layout = { ...DEFAULT_TIMELINE_LAYOUT }
