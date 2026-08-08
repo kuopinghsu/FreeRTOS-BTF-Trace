@@ -1,0 +1,7 @@
+{
+  "preset": "gemini",
+  "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+  "model": "gemini-flash-lite-latest",
+  "api_key": "",
+  "response_language": "English"
+}

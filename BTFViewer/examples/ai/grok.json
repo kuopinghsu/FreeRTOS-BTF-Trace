@@ -1,0 +1,7 @@
+{
+  "preset": "grok",
+  "base_url": "https://api.x.ai/v1",
+  "model": "grok-4.3",
+  "api_key": "",
+  "response_language": "English"
+}
