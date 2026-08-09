@@ -90,7 +90,7 @@ describe('portable session', () => {
     assert.equal(tab.marks[0].ns, 42)
     assert.equal(tab.findMode, 'regex')
     assert.equal(tab.taskFilterText, 'idle')
-    assert.deepEqual(tab.taskFilterKeys, ['T1'])
+    assert.equal(tab.taskFilterKeys, null)
     assert.equal(tab.pinnedHighlightKey, 'T1')
     assert.equal(timelineOptions.highlightKey, 'T1')
     assert.equal(timelineOptions.lockedTaskKey, 'T1')

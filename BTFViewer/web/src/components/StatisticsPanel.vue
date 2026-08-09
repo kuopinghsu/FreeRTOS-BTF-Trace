@@ -2790,6 +2790,7 @@ import { computeDeadlineViolations, deadlineSliceAnnotationNote } from '../utils
 import { intervalInstanceDetailRows } from '../utils/intervalAnalysis.js'
 import { migrationRows, buildCorePairRows, buildCoreTimeBreakdown, migrationDwellPlotPoints, migrationRatePlotPoints, migrationGapPlotPoints, pairGapPlotPoints, pairRatePlotPoints, pairPlotKey, pairMigrations, pairBouncePrefer, buildLockBounceNsSet } from '../utils/migrationAnalysis.js'
 import { dispatchLatencyRows, switchOverheadRows, concurrentCoreActiveRows, dispatchLatencyPlotPoints, switchOverheadPlotPoints, concurrencyLevelPlotPoints } from '../utils/schedulerSmpMetrics.js'
+import { coreUtilPctRows } from '../utils/traceCompare.js'
 import { renderWorkflowAnalysisHtml, collectTraceAnalysisFindings } from '../utils/workflowAnalysis.js'
 import { capStatsTableRows, traceNeedsDeferredStatsLoad } from '../utils/statsLoad.js'
 import {
@@ -5352,28 +5353,21 @@ function _renderHtmlTableReport(title, rows, includeCpu = false) {
 }
 
 function _coreUtilRows(tr, range) {
-  if (!tr || !tr.coreNames || tr.coreNames.length === 0) return []
-  const total = range ? (range.hi - range.lo) : (tr.timeMax - tr.timeMin)
-  if (total <= 0) return []
-  return tr.coreNames.map(core => {
-    const segs = traceMapGet(tr.coreSegs, core) || []
-    let active = 0
-    for (const s of segs) {
-      const { name } = parseTaskName(s.task)
-      if (name === 'TICK' || isIdleTaskName(name)) continue
-      active += range ? segOverlapNs(s, range.lo, range.hi) : (s.end - s.start)
-    }
-    return {
-      core,
-      pct: (100.0 * active / total).toFixed(1),
-    }
-  })
+  const rows = coreUtilPctRows(tr, range?.lo ?? null, range?.hi ?? null)
+  return rows.map(r => ({ core: r.core, pct: Number(r.pct).toFixed(1) }))
 }
 
 function _taskCpuRows(tr, range) {
-  if (!tr || !tr.segByMergeKey) return []
+  if (!tr) return []
   const total = range ? (range.hi - range.lo) : (tr.timeMax - tr.timeMin)
   if (total <= 0) return []
+  if (!range && tr.taskCpuNs?.length) {
+    return tr.taskCpuNs.slice(0, 10).map(([mk, t]) => ({
+      name: taskDisplayName(taskReprGet(tr, mk) || mk),
+      pct: (100.0 * t / total).toFixed(1),
+    }))
+  }
+  if (!tr.segByMergeKey) return []
   const accum = new Map()
   for (const [mk, segs] of traceMapEntries(tr.segByMergeKey)) {
     const repr = taskReprGet(tr, mk) || mk

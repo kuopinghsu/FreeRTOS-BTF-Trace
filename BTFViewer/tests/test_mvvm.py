@@ -7,7 +7,7 @@ from btf_viewer_pkg.mvvm.app_settings import AppSettingsViewModel
 from btf_viewer_pkg.mvvm.find_logic import recompute_find_hits
 from btf_viewer_pkg.mvvm.models import PlotSessionState
 from btf_viewer_pkg.mvvm.trace_tab_vm import TraceTabViewModel
-from btf_viewer_pkg.parser import TraceAnnotation, BtfTrace
+from btf_viewer_pkg.parser import IntervalInstance, TraceAnnotation, BtfTrace
 
 class _MockRc:
     """Minimal stand-in for _RcSettings (no disk I/O)."""
@@ -99,6 +99,18 @@ class FindLogicTests(unittest.TestCase):
         hits, status = recompute_find_hits(trace, "core_1", "Migrations", [])
         self.assertEqual(hits, [900])
         self.assertIn("migration", status)
+
+    def test_intervals_mode_matches_instance_id(self) -> None:
+        trace = BtfTrace.__new__(BtfTrace)
+        trace.seg_map_by_merge_key = {}
+        trace.task_repr = {}
+        trace.sti_events = []
+        trace.interval_instances = [
+            IntervalInstance(id="7", start_ns=100, stop_ns=250, task_id="3"),
+        ]
+        hits, status = recompute_find_hits(trace, "7", "Intervals", [])
+        self.assertEqual(hits, [100, 250])
+        self.assertIn("2 matches", status)
 
 class PlotSessionTests(unittest.TestCase):
     def test_interval_id_round_trip(self) -> None:

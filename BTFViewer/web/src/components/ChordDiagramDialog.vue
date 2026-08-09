@@ -61,7 +61,8 @@
         {{ hoverTitle }}
       </p>
       <p class="chord-hint">
-        Hover a core arc to highlight its migrations · chord width = migration count · color fades from source to destination core
+        Outer ring = egress (departures) · inner ring = ingress (arrivals) ·
+        hover a ring to isolate that direction · ribbons taper source→dest
       </p>
       <div
         v-if="hasData"
@@ -91,14 +92,20 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { formatTime } from '../renderer/TimelineRenderer.js'
 import { coreColor } from '../utils/colors.js'
 import {
+  buildChordLayout,
+  buildTaperedRibbonPath,
+  chordHitRing,
+  chordPointAt,
+  chordRingGeometry,
   coreShortName,
   migrationHeatmapMatrix,
-  buildChordLayout,
   traceHasCoreBounceHolds,
+  CHORD_ARC_INNER,
+  CHORD_ARC_OUTER,
+  CHORD_GRAD_SOURCE_STOP,
 } from '../utils/migrationAnalysis.js'
 import { getPlacedCursors, getStatsRange } from '../utils/statsRange.js'
 
-const ARC_THICKNESS = 14
 const OUTER_PAD = 48
 
 const props = defineProps({
@@ -114,6 +121,7 @@ const bounceOnly = ref(false)
 const viewportRef = ref(null)
 const canvasRef = ref(null)
 const hoverCoreIndex = ref(null)
+const hoverSide = ref(null) // 'egress' | 'ingress' | null
 const pinnedHover = ref(false)
 const focusLabel = ref('')
 let _drawRaf = 0
@@ -159,6 +167,7 @@ function applyFocusPair(focus) {
   if (fi < 0) return
   pinnedHover.value = true
   hoverCoreIndex.value = fi
+  hoverSide.value = null
 }
 
 watch(() => props.focusPair, (focus) => {
@@ -213,7 +222,7 @@ const hoverTitle = computed(() => {
     if (o) parts.push(`${coreShortName(core)}→${coreShortName(cores[j])}: ${o}`)
     if (inn) parts.push(`${coreShortName(cores[j])}→${coreShortName(core)}: ${inn}`)
   }
-  const summary = `${coreShortName(core)} · ${out} out / ${into} in`
+  const summary = `${coreShortName(core)} · ${out} out / ${into} in · net ${into - out >= 0 ? '+' : ''}${into - out}`
   return parts.length ? `${summary} · ${parts.join(' · ')}` : summary
 })
 
@@ -233,7 +242,7 @@ function geometry(viewW, viewH) {
 }
 
 function pointAt(cx, cy, angle, r) {
-  return { x: cx + r * Math.cos(angle), y: cy + r * Math.sin(angle) }
+  return chordPointAt(cx, cy, angle, r)
 }
 
 function paintChord(ctx, viewW, viewH, labelColor) {
@@ -242,63 +251,60 @@ function paintChord(ctx, viewW, viewH, labelColor) {
   if (!cores.length) return
   const layout = chordLayout.value
   const { cx, cy, radius: R } = geometry(viewW, viewH)
-  const inner = R - ARC_THICKNESS / 2 - 2
+  const { rEgress, rIngress, rRibbon } = chordRingGeometry(R)
   const maxCount = maxChordCount.value || 1
   const hovered = hoverCoreIndex.value
+  const side = hoverSide.value
 
-  ctx.lineCap = 'round'
   for (let i = 0; i < cores.length; i++) {
     for (let j = 0; j < cores.length; j++) {
       if (i === j) continue
       const count = grid[i]?.[j] || 0
       if (!count) continue
       const bidir = (grid[j]?.[i] || 0) > 0
-      const p1 = pointAt(cx, cy, layout.tickAngle(i, j), inner)
-      const p2 = pointAt(cx, cy, layout.tickAngle(j, i), inner)
-      const mx = (p1.x + p2.x) / 2
-      const my = (p1.y + p2.y) / 2
-      let vx = mx - cx
-      let vy = my - cy
-      const vlen = Math.hypot(vx, vy) || 1
-      vx /= vlen
-      vy /= vlen
-      const perpX = -vy
-      const perpY = vx
+      const a0 = layout.egressTickAngle?.(i, j) ?? layout.tickAngle(i, j)
+      const a1 = layout.ingressTickAngle?.(j, i) ?? layout.tickAngle(j, i)
+      const { srcHalf, dstHalf } = layout.ribbonHalfWidths?.(i, j, maxCount)
+        ?? { srcHalf: Math.max(1, Math.min(6, 1 + 5 * (count / maxCount))), dstHalf: 1 }
       const sign = i < j ? 1 : -1
       const bidirOffset = bidir ? 6 * sign : 0
-      const pull = 0.18
-      const ctrlX = cx + vx * inner * pull + perpX * bidirOffset
-      const ctrlY = cy + vy * inner * pull + perpY * bidirOffset
-
-      const isDim = hovered != null && hovered !== i && hovered !== j
-      const width = Math.max(1, Math.min(12, 1 + 10 * (count / maxCount)))
-      const grad = ctx.createLinearGradient(p1.x, p1.y, p2.x, p2.y)
+      const ribbon = buildTaperedRibbonPath(cx, cy, rRibbon, a0, a1, srcHalf, dstHalf, bidirOffset)
+      let isDim = false
+      if (side === 'egress') isDim = hovered != null && i !== hovered
+      else if (side === 'ingress') isDim = hovered != null && j !== hovered
+      else isDim = hovered != null && hovered !== i && hovered !== j
+      const grad = ctx.createLinearGradient(ribbon.p1.x, ribbon.p1.y, ribbon.p2.x, ribbon.p2.y)
       grad.addColorStop(0, coreColor(cores[i]))
+      grad.addColorStop(CHORD_GRAD_SOURCE_STOP, coreColor(cores[i]))
       grad.addColorStop(1, coreColor(cores[j]))
-
       ctx.beginPath()
-      ctx.moveTo(p1.x, p1.y)
-      ctx.quadraticCurveTo(ctrlX, ctrlY, p2.x, p2.y)
-      ctx.strokeStyle = grad
-      ctx.globalAlpha = isDim ? 0.08 : 0.75
-      ctx.lineWidth = width
-      ctx.stroke()
+      const path = new Path2D(ribbon.d)
+      ctx.globalAlpha = isDim ? 0.05 : 0.75
+      ctx.fillStyle = grad
+      ctx.fill(path)
     }
   }
   ctx.globalAlpha = 1
 
   for (const arc of layout.arcs) {
     const isHover = hovered === arc.index
+    const dimArc = hovered != null && !isHover
     ctx.beginPath()
-    ctx.arc(cx, cy, R, arc.startAngle, arc.endAngle)
-    ctx.lineWidth = ARC_THICKNESS
+    ctx.arc(cx, cy, rEgress, arc.startAngle, arc.endAngle)
+    ctx.lineWidth = CHORD_ARC_OUTER
     ctx.strokeStyle = coreColor(arc.core)
-    ctx.globalAlpha = hovered == null || isHover ? 1 : 0.35
+    ctx.globalAlpha = dimArc ? 0.25 : (side === 'ingress' && isHover ? 0.35 : 1)
+    ctx.stroke()
+    ctx.beginPath()
+    ctx.arc(cx, cy, rIngress, arc.startAngle, arc.endAngle)
+    ctx.lineWidth = CHORD_ARC_INNER
+    ctx.strokeStyle = coreColor(arc.core)
+    ctx.globalAlpha = dimArc ? 0.25 : (side === 'egress' && isHover ? 0.35 : 0.85)
     ctx.stroke()
     ctx.globalAlpha = 1
 
     const mid = (arc.startAngle + arc.endAngle) / 2
-    const lp = pointAt(cx, cy, mid, R + ARC_THICKNESS / 2 + 14)
+    const lp = pointAt(cx, cy, mid, rEgress + CHORD_ARC_OUTER / 2 + 14)
     ctx.fillStyle = labelColor
     ctx.font = isHover ? 'bold 12px monospace' : '11px monospace'
     ctx.textBaseline = 'middle'
@@ -339,8 +345,12 @@ function onCanvasMove(ev) {
   const dx = mx - cx
   const dy = my - cy
   const dist = Math.hypot(dx, dy)
-  if (dist < R - ARC_THICKNESS / 2 - 4 || dist > R + ARC_THICKNESS / 2 + 4) {
-    if (!pinnedHover.value) hoverCoreIndex.value = null
+  const side = chordHitRing(dist, R)
+  if (!side) {
+    if (!pinnedHover.value) {
+      hoverCoreIndex.value = null
+      hoverSide.value = null
+    }
     return
   }
   const angle = Math.atan2(dy, dx)
@@ -355,11 +365,15 @@ function onCanvasMove(ev) {
     }
   }
   hoverCoreIndex.value = found
+  hoverSide.value = found != null ? side : null
   if (found != null) pinnedHover.value = false
 }
 
 function onCanvasLeave() {
-  if (!pinnedHover.value) hoverCoreIndex.value = null
+  if (!pinnedHover.value) {
+    hoverCoreIndex.value = null
+    hoverSide.value = null
+  }
 }
 
 function _exportStamp() {
@@ -409,7 +423,7 @@ function exportChordSvg() {
   const { cores, grid } = matrix.value
   const layout = chordLayout.value
   const { cx, cy, radius: R } = geometry(viewW, viewH)
-  const inner = R - ARC_THICKNESS / 2 - 2
+  const { rEgress, rIngress, rRibbon } = chordRingGeometry(R)
   const maxCount = maxChordCount.value || 1
   const bg = getComputedStyle(viewport).getPropertyValue('--bg').trim() || '#1e1e1e'
   const labelColor = getComputedStyle(viewport).getPropertyValue('--fg-dim').trim() || '#888888'
@@ -422,50 +436,44 @@ function exportChordSvg() {
       const count = grid[i]?.[j] || 0
       if (!count) continue
       const bidir = (grid[j]?.[i] || 0) > 0
-      const p1 = pointAt(cx, cy, layout.tickAngle(i, j), inner)
-      const p2 = pointAt(cx, cy, layout.tickAngle(j, i), inner)
-      const mx = (p1.x + p2.x) / 2
-      const my = (p1.y + p2.y) / 2
-      let vx = mx - cx
-      let vy = my - cy
-      const vlen = Math.hypot(vx, vy) || 1
-      vx /= vlen
-      vy /= vlen
-      const perpX = -vy
-      const perpY = vx
+      const a0 = layout.egressTickAngle?.(i, j) ?? layout.tickAngle(i, j)
+      const a1 = layout.ingressTickAngle?.(j, i) ?? layout.tickAngle(j, i)
+      const { srcHalf, dstHalf } = layout.ribbonHalfWidths?.(i, j, maxCount)
+        ?? { srcHalf: 3, dstHalf: 1.2 }
       const sign = i < j ? 1 : -1
       const bidirOffset = bidir ? 6 * sign : 0
-      const pull = 0.18
-      const ctrlX = cx + vx * inner * pull + perpX * bidirOffset
-      const ctrlY = cy + vy * inner * pull + perpY * bidirOffset
-      const width = Math.max(1, Math.min(12, 1 + 10 * (count / maxCount)))
+      const ribbon = buildTaperedRibbonPath(cx, cy, rRibbon, a0, a1, srcHalf, dstHalf, bidirOffset)
       const gid = `chord-grad-${i}-${j}`
       defs.push(
-        `<linearGradient id="${gid}" gradientUnits="userSpaceOnUse" x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}">`
+        `<linearGradient id="${gid}" gradientUnits="userSpaceOnUse" x1="${ribbon.p1.x}" y1="${ribbon.p1.y}" x2="${ribbon.p2.x}" y2="${ribbon.p2.y}">`
         + `<stop offset="0" stop-color="${_xmlEsc(coreColor(cores[i]))}"/>`
+        + `<stop offset="${CHORD_GRAD_SOURCE_STOP}" stop-color="${_xmlEsc(coreColor(cores[i]))}"/>`
         + `<stop offset="1" stop-color="${_xmlEsc(coreColor(cores[j]))}"/>`
         + '</linearGradient>',
       )
       chordPaths.push(
-        `<path d="M ${p1.x} ${p1.y} Q ${ctrlX} ${ctrlY} ${p2.x} ${p2.y}" `
-        + `stroke="url(#${gid})" stroke-width="${width}" stroke-opacity="0.75" `
-        + 'fill="none" stroke-linecap="round"/>',
+        `<path d="${ribbon.d}" fill="url(#${gid})" fill-opacity="0.75"/>`,
       )
     }
   }
 
   const arcParts = []
   for (const arc of layout.arcs) {
-    const p1 = pointAt(cx, cy, arc.startAngle, R)
-    const p2 = pointAt(cx, cy, arc.endAngle, R)
     const largeArc = (arc.endAngle - arc.startAngle) > Math.PI ? 1 : 0
-    arcParts.push(
-      `<path d="M ${p1.x} ${p1.y} A ${R} ${R} 0 ${largeArc} 1 ${p2.x} ${p2.y}" `
-      + `stroke="${_xmlEsc(coreColor(arc.core))}" stroke-width="${ARC_THICKNESS}" `
-      + 'stroke-opacity="1" fill="none" stroke-linecap="round"/>',
-    )
+    for (const [rr, sw, opac] of [
+      [rEgress, CHORD_ARC_OUTER, 1],
+      [rIngress, CHORD_ARC_INNER, 0.85],
+    ]) {
+      const p1 = pointAt(cx, cy, arc.startAngle, rr)
+      const p2 = pointAt(cx, cy, arc.endAngle, rr)
+      arcParts.push(
+        `<path d="M ${p1.x} ${p1.y} A ${rr} ${rr} 0 ${largeArc} 1 ${p2.x} ${p2.y}" `
+        + `stroke="${_xmlEsc(coreColor(arc.core))}" stroke-width="${sw}" `
+        + `stroke-opacity="${opac}" fill="none" stroke-linecap="round"/>`,
+      )
+    }
     const mid = (arc.startAngle + arc.endAngle) / 2
-    const lp = pointAt(cx, cy, mid, R + ARC_THICKNESS / 2 + 14)
+    const lp = pointAt(cx, cy, mid, rEgress + CHORD_ARC_OUTER / 2 + 14)
     const cosMid = Math.cos(mid)
     const anchor = cosMid > 0.15 ? 'start' : cosMid < -0.15 ? 'end' : 'middle'
     arcParts.push(
@@ -486,7 +494,7 @@ function exportChordSvg() {
   _downloadText(`migration-chord-${_exportStamp()}.svg`, parts.join('\n'), 'image/svg+xml;charset=utf-8')
 }
 
-watch([matrix, hoverCoreIndex], () => {
+watch([matrix, hoverCoreIndex, hoverSide], () => {
   nextTick(() => scheduleDraw())
 })
 

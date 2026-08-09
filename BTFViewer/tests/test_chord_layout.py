@@ -15,7 +15,16 @@ from btf_viewer_pkg._bootstrap import install  # noqa: E402
 
 install()
 
-from btf_viewer_pkg.parser import _build_chord_layout  # noqa: E402
+from btf_viewer_pkg.parser import (  # noqa: E402
+    _CHORD_ARC_INNER,
+    _CHORD_ARC_OUTER,
+    _build_chord_layout,
+    _chord_hit_ring,
+    _chord_ring_geometry,
+    _corridor_groups_by_source,
+    _filter_corridors_by_task_query,
+    _trace_has_core_bounce_holds,
+)
 
 
 class TestBuildChordLayout(unittest.TestCase):
@@ -91,6 +100,100 @@ class TestBuildChordLayout(unittest.TestCase):
         arc0 = layout.arcs[0]
         expected_mid = (arc0.start_angle + arc0.end_angle) / 2
         self.assertTrue(math.isclose(layout.tick_angle(0, 1), expected_mid))
+
+
+    def test_egress_ingress_ticks_and_taper(self) -> None:
+        cores = ["Core_0", "Core_1"]
+        grid = [
+            [0, 10],
+            [2, 0],
+        ]
+        layout = _build_chord_layout(cores, grid)
+        self.assertEqual(layout.arcs[0].out_total, 10)
+        self.assertEqual(layout.arcs[0].in_total, 2)
+        src, dst = layout.ribbon_half_widths(0, 1, 10)
+        self.assertGreater(src, dst)
+
+    def test_default_corridor_top_pct(self) -> None:
+        from btf_viewer_pkg.parser import _default_corridor_top_pct
+        self.assertEqual(_default_corridor_top_pct(4), 100)
+        self.assertEqual(_default_corridor_top_pct(16), 25)
+
+    def test_filter_corridors_by_direction(self) -> None:
+        from btf_viewer_pkg.parser import _filter_corridors_by_direction
+        rows = [
+            {"from_core": "Core_0", "to_core": "Core_1", "count": 10},
+            {"from_core": "Core_0", "to_core": "Core_2", "count": 4},
+            {"from_core": "Core_1", "to_core": "Core_0", "count": 3},
+        ]
+        sel = {"from_core": "Core_0", "to_core": "Core_1"}
+        self.assertEqual(len(_filter_corridors_by_direction(rows, "all", sel)), 3)
+        egress = _filter_corridors_by_direction(rows, "egress", sel)
+        self.assertEqual([c["to_core"] for c in egress], ["Core_1", "Core_2"])
+        ingress = _filter_corridors_by_direction(rows, "ingress", sel)
+        self.assertEqual(
+            [(c["from_core"], c["to_core"]) for c in ingress],
+            [("Core_0", "Core_1")],
+        )
+        self.assertEqual(_filter_corridors_by_direction(rows, "egress", None), rows)
+
+    def test_filter_corridors_by_task_query(self) -> None:
+        rows = [
+            {
+                "from_core": "Core_0", "to_core": "Core_1", "label": "c0→c1",
+                "count": 10,
+                "tasks": [{"label": "CS[22]", "mk": "cs:22"}],
+            },
+            {
+                "from_core": "Core_2", "to_core": "Core_3", "label": "c2→c3",
+                "count": 4,
+                "tasks": [{"label": "Idle", "mk": "idle:0"}],
+            },
+        ]
+        hit = _filter_corridors_by_task_query(rows, "cs[22]")
+        self.assertEqual([c["label"] for c in hit], ["c0→c1"])
+        by_mk = _filter_corridors_by_task_query(rows, "idle:0")
+        self.assertEqual([c["label"] for c in by_mk], ["c2→c3"])
+        self.assertEqual(_filter_corridors_by_task_query(rows, ""), rows)
+
+    def test_corridor_groups_by_source(self) -> None:
+        rows = [
+            {"from_core": "Core_0", "to_core": "Core_1", "count": 10},
+            {"from_core": "Core_0", "to_core": "Core_2", "count": 4},
+            {"from_core": "Core_1", "to_core": "Core_0", "count": 3},
+        ]
+        groups = _corridor_groups_by_source(rows)
+        self.assertEqual([g["source"] for g in groups], ["Core_0", "Core_1"])
+        self.assertEqual(groups[0]["count"], 14)
+        self.assertEqual(len(groups[0]["corridors"]), 2)
+
+    def test_split_rings_outer_egress_inner_ingress(self) -> None:
+        r_e, r_i, r_rib = _chord_ring_geometry(100)
+        self.assertEqual(r_e, 100)
+        self.assertLess(r_i, r_e)
+        self.assertLess(r_rib, r_i)
+        self.assertEqual(r_e - r_i, _CHORD_ARC_OUTER + 2)
+        self.assertEqual(_chord_hit_ring(100, 100), "egress")
+        self.assertEqual(_chord_hit_ring(r_i, 100), "ingress")
+        self.assertIsNone(_chord_hit_ring(0, 100))
+        self.assertLess(_CHORD_ARC_INNER, _CHORD_ARC_OUTER)
+
+    def test_trace_has_core_bounce_holds(self) -> None:
+        class _T:
+            has_sync_object_instrumentation = False
+            sync_objects = {}
+
+        t = _T()
+        self.assertFalse(_trace_has_core_bounce_holds(t))
+        t.has_sync_object_instrumentation = True
+        t.sync_objects = {
+            "m1": {"holds": [{"take_core": "Core_0", "give_core": "Core_0"}]},
+        }
+        self.assertFalse(_trace_has_core_bounce_holds(t))
+        t.sync_objects = {
+            "m1": {"holds": [{"take_core": "Core_0", "give_core": "Core_1"}]},
+        }
+        self.assertTrue(_trace_has_core_bounce_holds(t))
 
 
 if __name__ == "__main__":

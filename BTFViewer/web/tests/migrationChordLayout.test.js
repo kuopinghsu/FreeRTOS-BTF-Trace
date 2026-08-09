@@ -1,7 +1,16 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { buildChordLayout, traceHasCoreBounceHolds } from '../src/utils/migrationAnalysis.js'
+import {
+  buildChordLayout,
+  buildTaperedRibbonPath,
+  chordHitRing,
+  chordRingGeometry,
+  distToQuadraticBezier,
+  CHORD_ARC_INNER,
+  CHORD_ARC_OUTER,
+  traceHasCoreBounceHolds,
+} from '../src/utils/migrationAnalysis.js'
 
 describe('buildChordLayout', () => {
   it('gives every core an arc spanning a positive, non-overlapping angle range', () => {
@@ -70,6 +79,42 @@ describe('buildChordLayout', () => {
   it('returns an empty layout for zero cores', () => {
     const { arcs } = buildChordLayout([], [])
     assert.deepEqual(arcs, [])
+  })
+})
+
+describe('chordRingGeometry', () => {
+  it('places egress outside ingress, ribbons inside the inner ring', () => {
+    const R = 100
+    const { rEgress, rIngress, rRibbon } = chordRingGeometry(R)
+    assert.equal(rEgress, R)
+    assert.ok(rIngress < rEgress)
+    assert.ok(rRibbon < rIngress)
+    assert.equal(rEgress - rIngress, CHORD_ARC_OUTER + 2)
+    assert.equal(chordHitRing(R, R), 'egress')
+    assert.equal(chordHitRing(rIngress, R), 'ingress')
+    assert.equal(chordHitRing(0, R), null)
+    assert.ok(CHORD_ARC_INNER < CHORD_ARC_OUTER)
+  })
+})
+
+describe('distToQuadraticBezier', () => {
+  it('is near zero on the curve and larger off the ribbon centerline', () => {
+    const ribbon = buildTaperedRibbonPath(0, 0, 100, 0, Math.PI / 2, 4, 2, 0)
+    const midT = distToQuadraticBezier(
+      ribbon.ctrl.x * 0.5 + ribbon.p1.x * 0.25 + ribbon.p2.x * 0.25,
+      ribbon.ctrl.y * 0.5 + ribbon.p1.y * 0.25 + ribbon.p2.y * 0.25,
+      ribbon.p1, ribbon.ctrl, ribbon.p2,
+    )
+    // Sample t=0.5 on the quadratic is closer than a far-away hub miss.
+    const onCurve = distToQuadraticBezier(
+      0.25 * ribbon.p1.x + 0.5 * ribbon.ctrl.x + 0.25 * ribbon.p2.x,
+      0.25 * ribbon.p1.y + 0.5 * ribbon.ctrl.y + 0.25 * ribbon.p2.y,
+      ribbon.p1, ribbon.ctrl, ribbon.p2,
+    )
+    const far = distToQuadraticBezier(0, 0, ribbon.p1, ribbon.ctrl, ribbon.p2)
+    assert.ok(onCurve < 1e-6)
+    assert.ok(far > onCurve)
+    assert.ok(midT >= 0)
   })
 })
 

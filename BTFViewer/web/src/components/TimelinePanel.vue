@@ -1227,8 +1227,8 @@ function onGlobalClick() {
   }
 }
 
-function emitViewportChange() {
-  emit('viewportChange', { ...viewport })
+function emitViewportChange(extra = {}) {
+  emit('viewportChange', { ...viewport, ...extra })
 }
 
 /** Keep scroll within content after row/column layout shrinks (e.g. collapse all). */
@@ -1315,7 +1315,7 @@ function jumpToNs(ns) {
   scheduleRender()
 }
 
-function zoomToTimeRange(lo, hi, paddingFrac = 0.05) {
+function zoomToTimeRange(lo, hi, paddingFrac = 0.05, opts = {}) {
   if (!props.trace || hi <= lo) return
   const tLo = props.trace.timeMin >= 0 ? Math.max(0, props.trace.timeMin) : props.trace.timeMin
   const tHi = props.trace.timeMax
@@ -1332,7 +1332,7 @@ function zoomToTimeRange(lo, hi, paddingFrac = 0.05) {
   viewport.timeStart = timeStart
   viewport.timeEnd = timeEnd
   viewport.scrollY = 0
-  emitViewportChange()
+  emitViewportChange({ programmatic: !!opts.programmatic })
   scheduleRender()
 }
 

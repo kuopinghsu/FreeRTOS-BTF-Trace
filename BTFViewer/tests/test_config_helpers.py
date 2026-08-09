@@ -54,7 +54,7 @@ class TabFilterSanitizeTests(unittest.TestCase):
         self.assertIsNone(out["taskFilterKeys"])
         self.assertEqual(out["taskFilterText"], "idle")
 
-    def test_preserves_heatmap_label(self) -> None:
+    def test_drops_heatmap_spotlight(self) -> None:
         out = _sanitize_tab_filters({
             "taskFilterKeys": ["T1", "T2"],
             "heatmapFilterLabel": "Core_0",
@@ -62,8 +62,8 @@ class TabFilterSanitizeTests(unittest.TestCase):
         })
         self.assertIsNotNone(out)
         assert out is not None
-        self.assertEqual(out["taskFilterKeys"], ["T1", "T2"])
-        self.assertEqual(out["heatmapFilterLabel"], "Core_0")
+        self.assertIsNone(out["taskFilterKeys"])
+        self.assertIsNone(out["heatmapFilterLabel"])
         self.assertTrue(out["migratedOnlyFilter"])
 
 class ConfigDefaultsTests(unittest.TestCase):

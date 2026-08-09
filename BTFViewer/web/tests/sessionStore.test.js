@@ -8,7 +8,7 @@ import {
 } from '../src/utils/sessionStore.js'
 
 describe('sessionStore filters', () => {
-  it('snapshotTabFilters copies active filter state', () => {
+  it('snapshotTabFilters keeps legend filters and drops heatmap spotlight', () => {
     const snap = snapshotTabFilters({
       taskFilterText: 'spi',
       migratedOnlyFilter: true,
@@ -18,17 +18,19 @@ describe('sessionStore filters', () => {
     assert.deepEqual(snap, {
       taskFilterText: 'spi',
       migratedOnlyFilter: true,
-      taskFilterKeys: ['A', 'B'],
-      heatmapFilterLabel: 'Core_0',
+      taskFilterKeys: null,
+      heatmapFilterLabel: null,
     })
   })
 
-  it('sanitizeTabFilters drops empty key lists', () => {
+  it('sanitizeTabFilters drops heatmap spotlight keys', () => {
     const out = sanitizeTabFilters({
-      taskFilterKeys: ['', null],
+      taskFilterKeys: ['T1', 'T2'],
+      heatmapFilterLabel: 'Core_0',
       taskFilterText: 'x',
     })
     assert.equal(out.taskFilterKeys, null)
+    assert.equal(out.heatmapFilterLabel, null)
     assert.equal(out.taskFilterText, 'x')
   })
 

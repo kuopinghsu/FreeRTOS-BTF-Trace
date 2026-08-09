@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import sys
 import unittest
+import warnings
 from pathlib import Path
 
 BTF_ROOT = Path(__file__).resolve().parents[1]
@@ -73,6 +74,23 @@ class TestViewFrozen(_QtTestBase):
 
         scene_top = view.mapToScene(QPoint(0, 0)).y()
         self.assertAlmostEqual(lbl_item.y(), scene_top + orig_y, places=1)
+
+    def test_virtual_scroll_toggle_no_disconnect_warning(self) -> None:
+        view, _scene, _trace = self._make_timeline()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            view._set_virtual_scroll_enabled(True)
+            self._app.processEvents()
+            view._set_virtual_scroll_enabled(False)
+            self._app.processEvents()
+            view._set_virtual_scroll_enabled(True)
+            view._set_virtual_scroll_enabled(False)
+        msgs = [
+            str(w.message) for w in caught
+            if issubclass(w.category, RuntimeWarning)
+            and "Failed to disconnect" in str(w.message)
+        ]
+        self.assertEqual(msgs, [])
 
 if __name__ == "__main__":
     unittest.main()

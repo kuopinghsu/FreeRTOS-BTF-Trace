@@ -302,8 +302,10 @@
         <button
           v-if="traceInfo"
           class="tb-btn"
+          :class="{ disabled: !rangeEnabled }"
+          :disabled="!rangeEnabled"
           title="Zoom view to fit between cursor C1 and last cursor (Ctrl+R)"
-          @click="emit('zoomRange')"
+          @click="rangeEnabled && emit('zoomRange')"
         >
           <svg
             viewBox="0 0 16 16"
@@ -335,7 +337,7 @@
       </div>
     </Teleport>
 
-    <!-- g4: View — Task · Core · Expand All · Load · Heatmap · Chord · Analysis · All -->
+    <!-- g4: View — Task · Core · Expand All · Load · Heatmap · All · Analysis -->
     <Teleport
       :to="overflowPanelEl ?? 'body'"
       :disabled="!overflow.g4"
@@ -422,7 +424,7 @@
           class="tb-btn"
           :class="{ disabled: !heatmapEnabled }"
           :disabled="!heatmapEnabled"
-          title="Migration heatmap — core-pair counts over time (multi-core traces only)"
+          title="Migration & Corridor Inspector — topology + timeline (multi-core traces only)"
           @click="heatmapEnabled && emit('showHeatmap')"
         >
           <svg
@@ -437,40 +439,41 @@
         </button>
 
         <button
-          class="tb-btn"
-          :class="{ disabled: !heatmapEnabled }"
-          :disabled="!heatmapEnabled"
-          title="Migration chord diagram — directional core-to-core migration volume (multi-core traces only)"
-          @click="heatmapEnabled && emit('showChord')"
+          v-if="taskFilterActive"
+          class="tb-btn active tb-btn-labeled"
+          title="Clear heatmap task filter and show all tasks"
+          @click="emit('clearTaskFilter')"
         >
           <svg
             viewBox="0 0 16 16"
             width="16"
             height="16"
-            fill="currentColor"
             aria-hidden="true"
           >
-            <circle
-              cx="8"
-              cy="8"
-              r="6.5"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.4"
-            />
             <path
-              d="M2.3 5.6 C 6 8, 10 8, 13.7 5.6"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.4"
+              fill="currentColor"
+              d="M1 1h4v4H1V1zm5 0h4v4H6V1zm5 0h4v4h-4V1zM1 6h4v4H1V6zm5 0h4v4H6V6zm5 0h4v4h-4V6zM1 11h4v4H1v-4zm5 0h4v4H6v-4zm5 0h4v4h-4v-4z"
             />
-            <path
-              d="M2.3 10.4 C 6 8, 10 8, 13.7 10.4"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.4"
+            <line
+              x1="2"
+              y1="14"
+              x2="14"
+              y2="2"
+              class="tb-heatmap-slash-outline"
+              stroke-width="3.4"
+              stroke-linecap="round"
+            />
+            <line
+              x1="2"
+              y1="14"
+              x2="14"
+              y2="2"
+              class="tb-heatmap-slash"
+              stroke-width="2"
+              stroke-linecap="round"
             />
           </svg>
+          <span class="tb-label">All</span>
         </button>
 
         <button
@@ -490,24 +493,6 @@
             <path d="M2 1.5A.5.5 0 0 1 2.5 1h9A1.5 1.5 0 0 1 13 2.5v11a1.5 1.5 0 0 1-1.5 1.5h-9A.5.5 0 0 1 2 14.5v-13zM3 2v12h8.5a.5.5 0 0 0 .5-.5v-11a.5.5 0 0 0-.5-.5H3zm1.5 2h6v1h-6V4zm0 2.5h6v1h-6v-1zm0 2.5h4v1h-4V9z" />
           </svg>
           <span class="tb-label">Analysis</span>
-        </button>
-
-        <button
-          v-if="taskFilterActive"
-          class="tb-btn active tb-btn-labeled"
-          title="Clear heatmap task filter and show all tasks"
-          @click="emit('clearTaskFilter')"
-        >
-          <svg
-            viewBox="0 0 16 16"
-            width="16"
-            height="16"
-            fill="currentColor"
-            aria-hidden="true"
-          >
-            <path d="M1 2.5A1.5 1.5 0 0 1 2.5 1h11A1.5 1.5 0 0 1 15 2.5v11a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 13.5v-11zM4 5.5h8v1H4v-1zm0 3h8v1H4v-1zm0 3h5v1H4v-1z" />
-          </svg>
-          <span class="tb-label">All</span>
         </button>
         <div class="tb-sep" />
       </div>
@@ -662,6 +647,7 @@ const props = defineProps({
   heatmapEnabled: { type: Boolean, default: false },
   analysisEnabled: { type: Boolean, default: false },
   taskFilterActive: { type: Boolean, default: false },
+  rangeEnabled: { type: Boolean, default: false },
   loading:     { type: Boolean, default: false },
   loadingPct:  { type: Number,  default: 0 },
   loadingMsg:  { type: String,  default: '' },
@@ -672,7 +658,7 @@ const emit = defineEmits([
   'update:modelValue', 'trace-reading', 'trace-loaded', 'traces-loaded', 'loadDemo', 'zoom', 'fit',
   'zoom1to1', 'zoomRange', 'showFind',
   'expandAll', 'collapseAll', 'addMark', 'copyScreenshot', 'exportSvg', 'exportPerfetto',
-  'showHelp', 'showAbout', 'showSettings', 'showHeatmap', 'showChord', 'showAnalysis',
+  'showHelp', 'showAbout', 'showSettings', 'showHeatmap', 'showAnalysis',
   'clearTaskFilter', 'file-error',
 ])
 
@@ -843,6 +829,12 @@ watch(
   font-size: 12px;
   font-weight: 600;
   line-height: 1;
+}
+.tb-heatmap-slash-outline {
+  stroke: var(--tb-bg, var(--bg));
+}
+.tb-heatmap-slash {
+  stroke: #E24B4A;
 }
 
 /* Hybrid: drop short labels when the bar is tight (desktop keeps icon+text for Task/Core/Load/Analysis) */
