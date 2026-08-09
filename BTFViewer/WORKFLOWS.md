@@ -52,15 +52,7 @@ Migration analysis has its own walkthrough in [§3.5](#35-concurrency--migration
 
 Work down this hierarchy one rung at a time and stop as soon as the evidence explains the symptom. Each rung narrows the search: system health tells you whether the timebase is trustworthy, core balance tells you whether the load is spread, and only then is it worth attributing cost to individual tasks.
 
-```text
-① System health     Trace Health (TICK), span, instrumentation flags
-② Core balance      Core Utilisation + Load Balance Score
-                    → Core Time Breakdown / Concurrent Core Active / Switch Overhead
-③ Task CPU / WCET   Top Tasks → Execution Time Per Slice (Max)
-④ Latency           Blocking Time → Dispatch Latency → Preemption Chain
-⑤ Concurrency       Core Migrations → Mutex/Semaphore → Priority Inheritance
-⑥ Compliance        Deadlines / Affinity / Task Lifecycle / Tags / Intervals
-```
+![Workflows Flowchart](../images/workflows.svg)
 
 The Statistics panel is ordered to match this ladder. After the Summary it runs utilisation, trace health, core time breakdown, concurrency, switch overhead, top tasks, migrations, and so on down to tags. CSV and HTML exports use the same order, so an exported report reads in ladder order too.
 
@@ -259,6 +251,19 @@ Collecting the six rungs into one prioritised list gives the output an engineeri
 | OK | Load Balance 95 %; Affinity + SR 4/4 | Keep as CI checks (`report` HTML) |
 
 Define success before you change anything, then capture a second trace and read the deltas in Trace Compare ([§5.2](#52-compare-two-builds)). A fix has worked when the CS migration rate and Ping count fall, queue bounces fall, the High task's maximum blocking time is stable or better, and the Load Balance Score stays at 85 % or above with σ at or below 30 %.
+
+### Summary
+
+| Ladder Rung / Step | Main Metrics & Findings | Measured Values / Observations | Key Takeaway & Action |
+| --- | --- | --- | --- |
+| **3.0 Trace Snapshot** | Overview of trace metadata, size, and system health baseline. | 8 cores, 154 tasks, 2.358 s span, 31 133 context switches, 18 992 migrations, TICK WARNING (tickless). | Establishes total trace scope and identifies tickless idle mode early. |
+| **3.1 System Health** | Trace Health (TICK) | Mode: **TICKLESS** (CV 35.9 %); Avg period: 944 µs; Max gap: 2.481 ms; Missed ticks: ~8. | High CV is normal during tickless idle; scope to a busy phase before investigating missed ticks. |
+| **3.2 Core Balance** | Core Utilisation, Load Balance Score, Core Time Breakdown, Concurrent Active Cores, Switch Overhead | Active utilization: 68.7 % – 77.3 %; **Load Balance Score: 95 %** (Gini G = 0.049, σ = 6.0 %). | System load is well balanced across cores, but migration thrashing can still coexist with good balance. |
+| **3.3 Task CPU / WCET** | Top Tasks by CPU %, Execution Time Per Slice | `CS[28]` dominated at 15.9 % CPU (Max slice: 3.623 ms); `CS[11]`/`CS[24]` ~15 % each. | Longest slices (3–4 ms) exceed 1 ms tick. Pin equal-priority tasks or enforce CPU budget thresholds. |
+| **3.4 Latency** | Blocking Time, Dispatch / Scheduling Latency, Preemption Chain | `High[268]` Max block: **52.865 ms** (during inversion demo); `CS[*]` block: ~5–6 ms. | Differentiates off-CPU blocking time from ready-to-run dispatch delay. |
+| **3.5 Concurrency** | Core Migrations, Mutex / Semaphore / Queue, Priority Inheritance | **18 992 total migrations** (`CS[18]` at 1692/s); Queue `0x80021990` **858 core bounces**; `Low[266]` boosted 103.3 ms. | High thrash from equal-priority workers; extreme lock bouncing on shared queue needs task co-location. |
+| **3.6 Compliance** | Core Affinity, Task Lifecycle, Tag Analysis | Affinity: **No violations**; Lifecycle: Suspend/Resume 4/4 counts; Tag: `tag0_event` 2357 samples. | System complied with core masks and state lifecycles correctly. |
+| **3.7 Performance Verdict** | Prioritised Engineering Action Plan | **P0:** Thrash (~1.6k/s) & Queue bounces (858); **P1:** Inversion & WCET ~3.6 ms; **P2:** TICKLESS CV. | Focus on affinity-pinning, producer/consumer co-location, and slice budgeting. |
 
 ---
 
