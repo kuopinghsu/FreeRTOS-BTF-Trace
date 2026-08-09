@@ -239,29 +239,19 @@ In the demo (`Demo/examples/freertos_test/main.c`), `id` **0** brackets an entir
 
 **In BTFViewer:** paired spans appear as **Interval N** rows at the bottom of the timeline (horizontal task view). When the BTF note includes `tid:{task_id}`, start/stop events pair by **interval id + task id**; legacy traces without `tid` pair by the note string alone. Open **Statistics → Interval Analysis** for duration summaries and charts. See the [BTFViewer user guide](BTFViewer/README.md#analysis) and [WORKFLOWS.md](BTFViewer/WORKFLOWS.md).
 
-### Use case: SMP core migration heatmap
+### Use case: SMP migration inspector
 
-On multi-core traces, BTFViewer detects when the same task runs on different cores and exposes **Core Migrations** in the Statistics panel plus a clickable **Migration heatmap** (toolbar **Heatmap**). The heatmap shows *when* cross-core traffic happens — complementary to the per-task migration table (ping-pong count, STI correlation, gap-after vs other gaps).
+On multi-core traces, BTFViewer detects when the same task runs on different cores and exposes **Core Migrations** in the Statistics panel plus the **Migration & Corridor Inspector** (toolbar **Heatmap** / **Chord**). The inspector shows *where* traffic flows (mini-chord), *when* it bursts (time-bin grid), and *which tasks* drive it (expandable corridor tree) — complementary to the per-task migration table (ping-pong count, STI correlation, gap-after vs other gaps).
 
-Open the 4-core sample trace and explore the heatmap:
+Open the 8-core sample and the inspector:
 
 ```bash
-python BTFViewer/builds/btf_viewer.py tracedata/example-4cores.btf.gz
+python BTFViewer/builds/btf_viewer.py tracedata/example-8cores.btf.gz
 ```
 
-**Level 1 — core-pair overview** (directed pairs × 12 time bins):
+![Migration & Corridor Inspector](images/migration.svg)
 
-![Migration heatmap Level 1: core-pair rows and time bins](images/heatmap-pairs.svg)
-
-Each row is a directed core pair (`c0→c1`, `c0→c2`, …). Darker cells mean more migrations in that time bin. Click a non-empty cell to drill into the tasks that contributed.
-
-**Level 2 — task grid** (after clicking a hot cell):
-
-![Migration heatmap Level 2: per-task sub-bins after drilling](images/heatmap-tasks.svg)
-
-Rows are tasks that migrated on the selected pair within the chosen bin; columns are **12 sub-bins** inside that bin. Click a task cell to zoom the timeline, place cursors, switch to **Task View**, and filter to that task.
-
-Traces with **more than 16 cores** use a three-level drill-down (core×core matrix → outgoing pairs → tasks). **Export PNG / SVG** from the heatmap dialog captures the full current level. See [Migration heatmap](BTFViewer/README.md#migration-heatmap) and [WORKFLOWS.md](BTFViewer/WORKFLOWS.md).
+Toolbar **Heatmap** / **Chord** opens tree + time grid + mini-chord. See [Migration & Corridor Inspector](BTFViewer/README.md#migration--corridor-inspector) and [WORKFLOWS.md](BTFViewer/WORKFLOWS.md).
 
 ---
 

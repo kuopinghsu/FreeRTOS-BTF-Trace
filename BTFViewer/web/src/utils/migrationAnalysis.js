@@ -5,7 +5,7 @@
 import { bisectLeft, bisectRight } from './bisect.js'
 import { parseTaskName, taskLabelForMergeKey, taskReprGet, isIdleTaskName, taskMergeKey, taskDisplayName } from './colors.js'
 import { computeFindHits } from './findAnalysis.js'
-import { blockingTimeSamples } from './statsAnalysis.js'
+import { blockingTimeSamples, schedulingStats } from './statsAnalysis.js'
 import { segFullyInRange, segOverlapsRange } from './statsRange.js'
 import { formatMigrationGapTime, formatTime } from './timeFormat.js'
 
@@ -118,7 +118,23 @@ export function taskCoresUsed(trace, mergeKey) {
 }
 
 export function isMigratedTask(trace, mergeKey) {
+  const mks = trace?.migratedMks
+  if (mks?.size) return mks.has(mergeKey)
+  if (trace?.migrationsByMk?.size) return trace.migrationsByMk.has(mergeKey)
   return taskCoresUsed(trace, mergeKey).size >= 2
+}
+
+/** Migrations with ns in [lo, hi] (inclusive). Uses migrationTimes bisect. */
+export function migrationsInRange(trace, lo = null, hi = null) {
+  const migs = trace?.migrations || []
+  if (!migs.length || (lo == null && hi == null)) return migs
+  const times = trace.migrationTimes
+  if (!times || times.length !== migs.length) {
+    return migs.filter(m => (lo == null || m.ns >= lo) && (hi == null || m.ns <= hi))
+  }
+  const i0 = lo == null ? 0 : bisectLeft(times, lo)
+  const i1 = hi == null ? migs.length : bisectRight(times, hi)
+  return migs.slice(i0, i1)
 }
 
 /** @returns {{ migrations: object[], migrationsByMk: Map<string, object[]> }} */
@@ -146,7 +162,64 @@ export function buildMigrationIndex(segByMergeKey) {
     }
   }
   migrations.sort((a, b) => a.ns - b.ns)
-  return { migrations, migrationsByMk }
+  return {
+    migrations,
+    migrationsByMk,
+    migrationTimes: migrations.map(m => m.ns),
+  }
+}
+
+/** Full-trace snapshots for Statistics / heatmap (call once at parse/finalize). */
+export function prepareFullTraceStats(trace) {
+  if (!trace) return trace
+  const migs = trace.migrations || []
+  if (!trace.migrationTimes || trace.migrationTimes.length !== migs.length) {
+    trace.migrationTimes = migs.map(m => m.ns)
+  }
+  if (!trace.migratedMks) {
+    trace.migratedMks = trace.migrationsByMk instanceof Map
+      ? new Set(trace.migrationsByMk.keys())
+      : new Set()
+  }
+  if (!trace.coreUtilPct) {
+    const total = Math.max((trace.timeMax ?? 0) - (trace.timeMin ?? 0), 1)
+    const pct = {}
+    for (const core of trace.coreNames || []) {
+      const segs = trace.coreSegs?.get?.(core) || []
+      let active = 0
+      for (const s of segs) {
+        const { name } = parseTaskName(s.task)
+        if (name === 'TICK' || isIdleTaskName(name)) continue
+        active += s.end - s.start
+      }
+      pct[core] = 100.0 * active / total
+    }
+    trace.coreUtilPct = pct
+  }
+  if (!trace.taskCpuNs) {
+    const out = []
+    const entries = trace.segByMergeKey?.entries?.() || []
+    for (const [mk, segs] of entries) {
+      const repr = taskReprGet(trace, mk) || mk
+      const { name } = parseTaskName(repr)
+      if (isIdleTaskName(name) || name === 'TICK') continue
+      let t = 0
+      for (const s of segs) t += s.end - s.start
+      if (t > 0) out.push([mk, t])
+    }
+    out.sort((a, b) => b[1] - a[1])
+    trace.taskCpuNs = out
+  }
+  if (trace.schedCtxSwitches == null || !Array.isArray(trace.schedCoreGaps)) {
+    const sched = schedulingStats(trace)
+    trace.schedCtxSwitches = sched.contextSwitches
+    trace.schedCoreGaps = sched.coreGaps
+    trace.schedGapMax = sched.gapMax
+  }
+  if (!Array.isArray(trace.migrationRowsFull)) {
+    trace.migrationRowsFull = migrationRows(trace)
+  }
+  return trace
 }
 
 export function countPingPong(migs, window = MIGRATION_PING_PONG_WINDOW) {
@@ -179,6 +252,9 @@ export function migrationStiNearCount(trace, migs, window = MIGRATION_STI_WINDOW
 }
 
 export function migrationRows(trace, lo, hi) {
+  if (lo == null && hi == null && Array.isArray(trace?.migrationRowsFull)) {
+    return trace.migrationRowsFull
+  }
   const rows = []
   const tickTimes = trace.tickStiTimes || []
   for (const mk of trace.tasks || []) {
@@ -311,10 +387,8 @@ export function parsePairPlotKey(key) {
 /** Directed From→To migrations in scope, time-sorted. */
 export function pairMigrations(trace, fromCore, toCore, lo = null, hi = null) {
   const out = []
-  for (const m of trace.migrations ?? []) {
+  for (const m of migrationsInRange(trace, lo, hi)) {
     if (m.fromCore !== fromCore || m.toCore !== toCore) continue
-    if (lo != null && m.ns < lo) continue
-    if (hi != null && m.ns > hi) continue
     out.push(m)
   }
   out.sort((a, b) => a.ns - b.ns)
@@ -377,6 +451,48 @@ export function coreShortName(core) {
   return core
 }
 
+/** Round a label stride up to 1/2/5×10^k (c0, c5, c10…). */
+export function chordLabelNiceStep(raw) {
+  const n = Math.max(1, Math.floor(Number(raw) || 1))
+  if (n <= 1) return 1
+  const mag = 10 ** Math.floor(Math.log10(n))
+  for (const mult of [1, 2, 5, 10]) {
+    const nice = mult * mag
+    if (nice >= n) return nice
+  }
+  return n
+}
+
+/**
+ * Stride between chord circle / matrix tick labels.
+ * Small core counts keep every name; larger diagrams skip (0, 5, 10…).
+ * Optional minPx/spanPx raise the stride when glyphs would collide.
+ */
+export function chordLabelStep(nCores, minPx = 0, spanPx = 0) {
+  const n = Math.floor(Number(nCores) || 0)
+  let step = 1
+  if (n <= 16) step = 1
+  else if (n <= 32) step = 2
+  else if (n <= 64) step = 5
+  else if (n <= 128) step = 8
+  else step = 10
+  if (minPx > 0 && spanPx > 0 && n > 0) {
+    const per = spanPx / n
+    if (per < minPx) {
+      const need = Math.ceil(minPx / Math.max(per, 1e-9))
+      step = Math.max(step, chordLabelNiceStep(need))
+    }
+  }
+  return Math.max(1, step)
+}
+
+/** True when core index should draw a name (stride tick or hover/focus). */
+export function chordLabelVisible(index, step, extra) {
+  if (extra && extra.has(index)) return true
+  if (step <= 1) return true
+  return index % step === 0
+}
+
 export function traceIsMultiCore(trace) {
   return (trace?.coreNames?.length ?? 0) >= 2
 }
@@ -430,9 +546,7 @@ export function migrationHeatmapMatrix(trace, lo = null, hi = null, bounceOnly =
   const coreIndex = new Map(cores.map((c, i) => [c, i]))
   const grid = Array.from({ length: n }, () => Array(n).fill(0))
   const bounceNs = bounceOnly ? buildLockBounceNsSet(trace) : null
-  for (const m of trace.migrations || []) {
-    if (lo != null && m.ns < lo) continue
-    if (hi != null && m.ns > hi) continue
+  for (const m of migrationsInRange(trace, lo, hi)) {
     if (bounceNs && !bounceNs.has(m.ns)) continue
     const fi = coreIndex.get(m.fromCore)
     const ti = coreIndex.get(m.toCore)
@@ -464,10 +578,8 @@ export function migrationCoreOutgoingHeatmap(trace, fromCore, lo = null, hi = nu
   const grid = pairs.map(() => Array(timeBins).fill(0))
   const pairIndex = new Map(pairs.map((p, i) => [`${p.to}`, i]))
   const bounceNs = bounceOnly ? buildLockBounceNsSet(trace) : null
-  for (const m of trace.migrations || []) {
+  for (const m of migrationsInRange(trace, lo, hi)) {
     if (m.fromCore !== fromCore) continue
-    if (lo != null && m.ns < lo) continue
-    if (hi != null && m.ns > hi) continue
     if (bounceNs && !bounceNs.has(m.ns)) continue
     const pi = pairIndex.get(m.toCore)
     if (pi == null) continue
@@ -487,10 +599,8 @@ export function migrationPairTimeBins(trace, fromCore, toCore, lo = null, hi = n
   const span = Math.max(tHi - tMin, 1)
   const binW = span / timeBins
   const bins = Array(timeBins).fill(0)
-  for (const m of trace.migrations || []) {
+  for (const m of migrationsInRange(trace, lo, hi)) {
     if (m.fromCore !== fromCore || m.toCore !== toCore) continue
-    if (lo != null && m.ns < lo) continue
-    if (hi != null && m.ns > hi) continue
     const bi = heatmapBinIndexForNs(tMin, binW, timeBins, tHi, m.ns)
     bins[bi]++
   }
@@ -529,9 +639,7 @@ export function migrationHeatmapGrid(trace, lo = null, hi = null, timeBins = 32,
   const binW = span / timeBins
   const grid = pairs.map(() => Array(timeBins).fill(0))
   const bounceNs = bounceOnly ? buildLockBounceNsSet(trace) : null
-  for (const m of trace.migrations || []) {
-    if (lo != null && m.ns < lo) continue
-    if (hi != null && m.ns > hi) continue
+  for (const m of migrationsInRange(trace, lo, hi)) {
     if (bounceNs && !bounceNs.has(m.ns)) continue
     const pi = pairIndex.get(`${m.fromCore}\0${m.toCore}`)
     if (pi == null) continue
@@ -570,7 +678,7 @@ export function heatmapBinIndexForNs(tMin, binW, timeBins, tMax, ns) {
 export function mergeKeysForHeatmapCell(trace, fromCore, toCore, binLo, binHi,
                                         binIndex, timeBins) {
   const keys = new Set()
-  for (const m of trace.migrations || []) {
+  for (const m of migrationsInRange(trace, binLo, binHi)) {
     if (m.fromCore !== fromCore || m.toCore !== toCore) continue
     if (!migrationNsInBin(m.ns, binLo, binHi, binIndex, timeBins)) continue
     keys.add(m.mergeKey)
@@ -590,7 +698,7 @@ export function migrationTaskHeatmapGrid(trace, fromCore, toCore, binLo, binHi,
   const span = Math.max(tHi - tMin, 1)
   const binW = span / timeBins
   const taskBins = new Map()
-  for (const m of trace.migrations || []) {
+  for (const m of migrationsInRange(trace, binLo, binHi)) {
     if (m.fromCore !== fromCore || m.toCore !== toCore) continue
     if (!migrationNsInBin(m.ns, binLo, binHi, parentBinIndex, parentTimeBins)) continue
     const mk = m.mergeKey
@@ -606,10 +714,8 @@ export function migrationTaskHeatmapGrid(trace, fromCore, toCore, binLo, binHi,
   // Count reverse-direction migrations per task for ingress/egress annotation.
   const revTotals = new Map()
   if (fromCore && toCore) {
-    for (const m of trace.migrations || []) {
+    for (const m of migrationsInRange(trace, scopeLo, scopeHi)) {
       if (m.fromCore !== toCore || m.toCore !== fromCore) continue
-      if (scopeLo != null && m.ns < scopeLo) continue
-      if (scopeHi != null && m.ns > scopeHi) continue
       revTotals.set(m.mergeKey, (revTotals.get(m.mergeKey) || 0) + 1)
     }
   }
@@ -629,9 +735,7 @@ export function migrationTaskHeatmapGrid(trace, fromCore, toCore, binLo, binHi,
 export function buildCorePairRows(trace, lo = null, hi = null) {
   const bounceNs = buildLockBounceNsSet(trace)
   const pairs = new Map()
-  for (const m of trace.migrations ?? []) {
-    if (lo != null && m.ns < lo) continue
-    if (hi != null && m.ns > hi) continue
+  for (const m of migrationsInRange(trace, lo, hi)) {
     const key = `${m.fromCore}\x00${m.toCore}`
     const d = pairs.get(key) ?? { fromCore: m.fromCore, toCore: m.toCore, count: 0, bounces: 0, gapSum: 0 }
     d.count++
@@ -662,6 +766,60 @@ export function traceHasCoreBounceHolds(trace) {
 const CHORD_GAP_RAD = 0.03
 const CHORD_MIN_ARC_RAD = 0.05
 
+/** Dest ribbon width as a fraction of source width (directional taper). */
+export const CHORD_TAPER_DEST_RATIO = 0.4
+/** Gradient holds source color until this stop, then fades to dest. */
+export const CHORD_GRAD_SOURCE_STOP = 0.7
+/** Max stroke/fill half-width for tapered ribbons (CSS px). */
+export const CHORD_RIBBON_MAX_HALF = 7
+/** Outer ring stroke (egress / departures). */
+export const CHORD_ARC_OUTER = 12
+/** Inner ring stroke (ingress / arrivals). */
+export const CHORD_ARC_INNER = 8
+
+/** Radii for split core rings + ribbon attach point. */
+export function chordRingGeometry(radius) {
+  const rEgress = Number(radius)
+  const rIngress = rEgress - CHORD_ARC_OUTER - 2
+  const rRibbon = rIngress - CHORD_ARC_INNER / 2 - 2
+  return { rEgress, rIngress, rRibbon }
+}
+
+/** Which split ring a distance-from-centre hits. */
+export function chordHitRing(dist, radius) {
+  const { rEgress, rIngress } = chordRingGeometry(radius)
+  if (Math.abs(dist - rEgress) <= CHORD_ARC_OUTER / 2 + 3) return 'egress'
+  if (Math.abs(dist - rIngress) <= CHORD_ARC_INNER / 2 + 3) return 'ingress'
+  return null
+}
+
+/**
+ * Default Top-N corridor threshold from core count (TODO2 §5).
+ * @returns {number} percent 10|25|50|100
+ */
+export function defaultCorridorTopPct(coreCount) {
+  const n = coreCount || 0
+  if (n > 16) return 25
+  if (n > 8) return 25
+  return 100
+}
+
+/** Keep corridors whose volume is in the top `topPct` percent by count. */
+export function filterCorridorsByTopPct(corridors, topPct = 100) {
+  const list = Array.isArray(corridors) ? [...corridors] : []
+  if (!list.length || topPct >= 100) return list
+  const pct = Math.max(1, Math.min(100, topPct))
+  const sorted = [...list].sort((a, b) => (b.count || 0) - (a.count || 0))
+  const keep = Math.max(1, Math.ceil(sorted.length * (pct / 100)))
+  const threshold = sorted[keep - 1]?.count ?? 0
+  return list.filter(c => (c.count || 0) >= threshold)
+}
+
+/** Net migration balance: positive = net gain (sink), negative = net loss (spillway). */
+export function netMigrationBalance(incoming, outgoing) {
+  return (incoming || 0) - (outgoing || 0)
+}
+
 /**
  * Pure circular layout for a chord diagram from a core×core matrix
  * (as returned by migrationHeatmapMatrix): each core gets an arc sized
@@ -669,18 +827,30 @@ const CHORD_MIN_ARC_RAD = 0.05
  * sliver so zero-flow cores still appear as nodes), and each connected
  * core-pair gets a tick position within its two arcs used as chord endpoints.
  *
+ * Also exposes egress/ingress tick angles (for split rings) and tapered
+ * ribbon half-widths at each end of a directed corridor.
+ *
  * Returns {
- *   arcs: [{ core, index, startAngle, endAngle, total }],
- *   tickAngle(i, j): angle on core i's arc for its connection to core j,
+ *   arcs: [{ core, index, startAngle, endAngle, total, outTotal, inTotal }],
+ *   tickAngle(i, j),
+ *   egressTickAngle(i, j),
+ *   ingressTickAngle(i, j),
+ *   ribbonHalfWidths(i, j, maxCount),
  * }
  */
 export function buildChordLayout(cores, grid) {
   const n = cores.length
   const totals = Array(n).fill(0)
+  const outTotals = Array(n).fill(0)
+  const inTotals = Array(n).fill(0)
   for (let i = 0; i < n; i++) {
     for (let j = 0; j < n; j++) {
       if (i === j) continue
-      totals[i] += (grid[i]?.[j] || 0) + (grid[j]?.[i] || 0)
+      const o = grid[i]?.[j] || 0
+      const inn = grid[j]?.[i] || 0
+      outTotals[i] += o
+      inTotals[i] += inn
+      totals[i] += o + inn
     }
   }
   const grandTotal = totals.reduce((a, b) => a + b, 0)
@@ -698,36 +868,602 @@ export function buildChordLayout(cores, grid) {
   for (let i = 0; i < n; i++) {
     const startAngle = angle
     const endAngle = startAngle + arcSizes[i]
-    arcs.push({ core: cores[i], index: i, startAngle, endAngle, total: totals[i] })
+    arcs.push({
+      core: cores[i],
+      index: i,
+      startAngle,
+      endAngle,
+      total: totals[i],
+      outTotal: outTotals[i],
+      inTotal: inTotals[i],
+    })
     angle = endAngle + gap
   }
 
-  // Sub-divide each core's arc among the other cores it connects to,
-  // proportional to the combined (in+out) magnitude of that specific pair.
+  // Combined (legacy) ticks + separate egress/ingress ticks within each arc.
   const tickAngles = arcs.map(() => new Map())
+  const egressTicks = arcs.map(() => new Map())
+  const ingressTicks = arcs.map(() => new Map())
   for (let i = 0; i < n; i++) {
     const arc = arcs[i]
-    const links = []
+    const span = arc.endAngle - arc.startAngle
+    const combined = []
+    const egress = []
+    const ingress = []
     for (let j = 0; j < n; j++) {
       if (j === i) continue
-      const mag = (grid[i]?.[j] || 0) + (grid[j]?.[i] || 0)
-      if (mag > 0) links.push({ j, mag })
+      const out = grid[i]?.[j] || 0
+      const inn = grid[j]?.[i] || 0
+      if (out + inn > 0) combined.push({ j, mag: out + inn })
+      if (out > 0) egress.push({ j, mag: out })
+      if (inn > 0) ingress.push({ j, mag: inn })
     }
-    const linkTotal = links.reduce((s, l) => s + l.mag, 0)
-    const span = arc.endAngle - arc.startAngle
-    let cursor = arc.startAngle
-    for (const l of links) {
-      const slice = linkTotal > 0 ? span * (l.mag / linkTotal) : span / links.length
-      tickAngles[i].set(l.j, cursor + slice / 2)
-      cursor += slice
+    const place = (links, map) => {
+      const linkTotal = links.reduce((s, l) => s + l.mag, 0)
+      let cursor = arc.startAngle
+      for (const l of links) {
+        const slice = linkTotal > 0 ? span * (l.mag / linkTotal) : (links.length ? span / links.length : 0)
+        map.set(l.j, cursor + slice / 2)
+        cursor += slice
+      }
     }
+    place(combined, tickAngles[i])
+    place(egress, egressTicks[i])
+    place(ingress, ingressTicks[i])
   }
+
+  const arcMid = (i) => (arcs[i] ? (arcs[i].startAngle + arcs[i].endAngle) / 2 : 0)
 
   return {
     arcs,
     tickAngle(i, j) {
-      return tickAngles[i]?.get(j) ?? (arcs[i] ? (arcs[i].startAngle + arcs[i].endAngle) / 2 : 0)
+      return tickAngles[i]?.get(j) ?? arcMid(i)
     },
+    egressTickAngle(i, j) {
+      return egressTicks[i]?.get(j) ?? tickAngles[i]?.get(j) ?? arcMid(i)
+    },
+    ingressTickAngle(i, j) {
+      return ingressTicks[i]?.get(j) ?? tickAngles[i]?.get(j) ?? arcMid(i)
+    },
+    /**
+     * Half-widths (px) at source and dest ends for directed corridor i→j.
+     * Source scales with count; dest tapers for directional encoding.
+     */
+    ribbonHalfWidths(i, j, maxCount = 1) {
+      const count = grid[i]?.[j] || 0
+      if (!count) return { srcHalf: 0, dstHalf: 0 }
+      const m = maxCount || 1
+      const srcHalf = Math.max(0.75, Math.min(CHORD_RIBBON_MAX_HALF, CHORD_RIBBON_MAX_HALF * (count / m)))
+      const dstHalf = Math.max(0.5, srcHalf * CHORD_TAPER_DEST_RATIO)
+      return { srcHalf, dstHalf }
+    },
+  }
+}
+
+/**
+ * Point on a circle.
+ * @returns {{ x: number, y: number }}
+ */
+export function chordPointAt(cx, cy, angle, r) {
+  return { x: cx + r * Math.cos(angle), y: cy + r * Math.sin(angle) }
+}
+
+/** Distance from (mx, my) to a quadratic Bézier (p1 → ctrl → p2). */
+export function distToQuadraticBezier(mx, my, p1, ctrl, p2, steps = 16) {
+  let best = Infinity
+  for (let k = 0; k <= steps; k++) {
+    const t = k / steps
+    const u = 1 - t
+    const x = u * u * p1.x + 2 * u * t * ctrl.x + t * t * p2.x
+    const y = u * u * p1.y + 2 * u * t * ctrl.y + t * t * p2.y
+    const d = Math.hypot(mx - x, my - y)
+    if (d < best) best = d
+  }
+  return best
+}
+
+/**
+ * Build a tapered ribbon path (quadratic centerline + perpendicular offsets)
+ * for canvas `Path2D` / SVG path `d` between two tick angles.
+ */
+export function buildTaperedRibbonPath(cx, cy, rInner, a0, a1, srcHalf, dstHalf, bidirOffset = 0) {
+  const p1 = chordPointAt(cx, cy, a0, rInner)
+  const p2 = chordPointAt(cx, cy, a1, rInner)
+  const mx = (p1.x + p2.x) / 2
+  const my = (p1.y + p2.y) / 2
+  let vx = mx - cx
+  let vy = my - cy
+  const vlen = Math.hypot(vx, vy) || 1
+  vx /= vlen
+  vy /= vlen
+  const perpX = -vy
+  const perpY = vx
+  const pull = 0.18
+  const ctrlX = cx + vx * rInner * pull + perpX * bidirOffset
+  const ctrlY = cy + vy * rInner * pull + perpY * bidirOffset
+
+  // Tangents at ends ≈ direction toward control, for width normals.
+  const t0x = ctrlX - p1.x
+  const t0y = ctrlY - p1.y
+  const t0len = Math.hypot(t0x, t0y) || 1
+  const n0x = -t0y / t0len
+  const n0y = t0x / t0len
+  const t1x = p2.x - ctrlX
+  const t1y = p2.y - ctrlY
+  const t1len = Math.hypot(t1x, t1y) || 1
+  const n1x = -t1y / t1len
+  const n1y = t1x / t1len
+
+  const sL = { x: p1.x + n0x * srcHalf, y: p1.y + n0y * srcHalf }
+  const sR = { x: p1.x - n0x * srcHalf, y: p1.y - n0y * srcHalf }
+  const dL = { x: p2.x + n1x * dstHalf, y: p2.y + n1y * dstHalf }
+  const dR = { x: p2.x - n1x * dstHalf, y: p2.y - n1y * dstHalf }
+  const cL = { x: ctrlX + ((n0x + n1x) / 2) * ((srcHalf + dstHalf) / 2), y: ctrlY + ((n0y + n1y) / 2) * ((srcHalf + dstHalf) / 2) }
+  const cR = { x: ctrlX - ((n0x + n1x) / 2) * ((srcHalf + dstHalf) / 2), y: ctrlY - ((n0y + n1y) / 2) * ((srcHalf + dstHalf) / 2) }
+
+  const d = `M ${sL.x} ${sL.y} Q ${cL.x} ${cL.y} ${dL.x} ${dL.y} L ${dR.x} ${dR.y} Q ${cR.x} ${cR.y} ${sR.x} ${sR.y} Z`
+  return {
+    d,
+    p1,
+    p2,
+    ctrl: { x: ctrlX, y: ctrlY },
+    points: { sL, sR, dL, dR, cL, cR },
+  }
+}
+
+/**
+ * Unified corridor inspector model (TODO2 Phase 1).
+ * @param {object} trace
+ * @param {number|null} lo
+ * @param {number|null} hi
+ * @param {{ bounceOnly?: boolean, topPct?: number, timeBins?: number }} [opts]
+ */
+export function buildCorridorInspectorModel(trace, lo = null, hi = null, opts = {}) {
+  const bounceOnly = !!opts.bounceOnly
+  const timeBins = opts.timeBins ?? 32
+  if (!trace) {
+    return emptyCorridorModel(timeBins)
+  }
+  const cores = trace.coreNames || []
+  const topPct = opts.topPct ?? defaultCorridorTopPct(cores.length)
+  const bounceNs = buildLockBounceNsSet(trace)
+  const tMin = lo ?? trace.timeMin
+  const tHi = hi ?? trace.timeMax
+  const span = Math.max(tHi - tMin, 1)
+  const binW = span / timeBins
+  const scopeSec = span / (NS_PER_SCALE[trace.timeScale] || 1e9)
+
+  /** @type {Map<string, object>} */
+  const byKey = new Map()
+  const nCores = cores.length
+  const coreIndex = new Map(cores.map((c, i) => [c, i]))
+  const fullGrid = Array.from({ length: nCores }, () => Array(nCores).fill(0))
+  for (const m of migrationsInRange(trace, lo, hi)) {
+    if (bounceOnly && !bounceNs.has(m.ns)) continue
+    if (m.fromCore === m.toCore) continue
+    const fi = coreIndex.get(m.fromCore)
+    const ti = coreIndex.get(m.toCore)
+    if (fi != null && ti != null) fullGrid[fi][ti]++
+    const key = `${m.fromCore}\0${m.toCore}`
+    let row = byKey.get(key)
+    if (!row) {
+      row = {
+        fromCore: m.fromCore,
+        toCore: m.toCore,
+        label: `${coreShortName(m.fromCore)}→${coreShortName(m.toCore)}`,
+        count: 0,
+        bounces: 0,
+        gapSum: 0,
+        bins: Array(timeBins).fill(0),
+        bounceBins: Array(timeBins).fill(0),
+        tasks: new Map(),
+      }
+      byKey.set(key, row)
+    }
+    row.count++
+    const isBounce = bounceNs.has(m.ns)
+    if (isBounce) row.bounces++
+    row.gapSum += (m.gapNs ?? 0)
+    const bi = heatmapBinIndexForNs(tMin, binW, timeBins, tHi, m.ns)
+    row.bins[bi]++
+    if (isBounce) row.bounceBins[bi]++
+    const mk = m.mergeKey
+    if (mk) {
+      let t = row.tasks.get(mk)
+      if (!t) {
+        t = {
+          mk, count: 0, bounces: 0,
+          bins: Array(timeBins).fill(0),
+          bounceBins: Array(timeBins).fill(0),
+        }
+        row.tasks.set(mk, t)
+      }
+      t.count++
+      if (isBounce) {
+        t.bounces++
+        t.bounceBins[bi]++
+      }
+      t.bins[bi]++
+    }
+  }
+
+  const allCorridors = [...byKey.values()].map((row) => {
+    const rev = byKey.get(`${row.toCore}\0${row.fromCore}`)
+    const revCount = rev?.count || 0
+    const net = netMigrationBalance(revCount, row.count)
+    const tasks = [...row.tasks.values()]
+      .sort((a, b) => b.count - a.count || a.mk.localeCompare(b.mk))
+      .map((t) => {
+        const label = taskLabelForMergeKey(trace, t.mk)
+        const { ids } = corridorTaskIdsAndName({ mk: t.mk, label })
+        return {
+          mk: t.mk,
+          label,
+          taskId: ids[0] != null ? Number(ids[0]) : null,
+          count: t.count,
+          bounces: t.bounces,
+          bouncePct: t.count > 0 ? 100 * t.bounces / t.count : 0,
+          sharePct: row.count > 0 ? 100 * t.count / row.count : 0,
+          bins: t.bins,
+          bounceBins: t.bounceBins,
+        }
+      })
+    let peakBin = 0
+    let peakVal = -1
+    for (let b = 0; b < timeBins; b++) {
+      if (row.bins[b] > peakVal) {
+        peakVal = row.bins[b]
+        peakBin = b
+      }
+    }
+    return {
+      fromCore: row.fromCore,
+      toCore: row.toCore,
+      label: row.label,
+      count: row.count,
+      bounces: row.bounces,
+      bouncePct: row.count > 0 ? 100 * row.bounces / row.count : 0,
+      avgGapNs: row.count > 0 ? Math.floor(row.gapSum / row.count) : 0,
+      ratePerS: scopeSec > 0 ? row.count / scopeSec : 0,
+      net,
+      revCount,
+      bins: row.bins,
+      bounceBins: row.bounceBins,
+      tasks,
+      primaryTask: tasks[0] || null,
+      peakBin,
+      peakCount: Math.max(0, peakVal),
+    }
+  }).sort((a, b) => b.count - a.count || a.label.localeCompare(b.label))
+
+  const matrixCores = cores
+
+  const taskAggByCore = new Map()
+  for (const c of allCorridors) {
+    for (const core of [c.fromCore, c.toCore]) {
+      let agg = taskAggByCore.get(core)
+      if (!agg) {
+        agg = new Map()
+        taskAggByCore.set(core, agg)
+      }
+      for (const t of c.tasks) agg.set(t.mk, (agg.get(t.mk) || 0) + t.count)
+    }
+  }
+  const coreStats = matrixCores.map((core, i) => {
+    let out = 0
+    let inn = 0
+    for (let j = 0; j < matrixCores.length; j++) {
+      if (i === j) continue
+      out += fullGrid[i]?.[j] || 0
+      inn += fullGrid[j]?.[i] || 0
+    }
+    const top3 = [...(taskAggByCore.get(core) || new Map()).entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([mk, count]) => ({ mk, label: taskLabelForMergeKey(trace, mk), count }))
+    return {
+      core,
+      out,
+      in: inn,
+      net: netMigrationBalance(inn, out),
+      topTasks: top3,
+    }
+  })
+
+  let hotspot = null
+  for (const c of allCorridors) {
+    const score = c.count + c.bounces * 2
+    const offender = c.primaryTask
+    if (!hotspot || score > hotspot.score) {
+      hotspot = {
+        score,
+        fromCore: c.fromCore,
+        toCore: c.toCore,
+        label: c.label,
+        count: c.count,
+        bounces: c.bounces,
+        bouncePct: c.bouncePct,
+        peakBin: c.peakBin,
+        task: offender,
+        summary: offender
+          ? `Hotspot: ${offender.label} on ${c.label} (${c.count} mig, ${c.bouncePct.toFixed(0)}% bounce)`
+          : `Hotspot: ${c.label} (${c.count} migrations)`,
+      }
+    }
+  }
+
+  const base = {
+    cores: matrixCores,
+    allCorridors,
+    groupBySource: cores.length > 16,
+    timeBins,
+    tMin,
+    tMax: tHi,
+    binW,
+    matrix: { cores: matrixCores, grid: fullGrid },
+    coreStats,
+    hotspot,
+  }
+  return applyCorridorTopFilter(base, topPct)
+}
+
+function reindexCorridorView(model, corridors) {
+  const cores = model.cores || []
+  const groupBySource = !!(model.groupBySource || cores.length > 16)
+  const groups = []
+  if (groupBySource) {
+    const gmap = new Map()
+    for (const c of corridors) {
+      if (!gmap.has(c.fromCore)) {
+        gmap.set(c.fromCore, {
+          source: c.fromCore,
+          label: `${coreShortName(c.fromCore)} → Destinations`,
+          count: 0,
+          corridors: [],
+        })
+      }
+      const g = gmap.get(c.fromCore)
+      g.count += c.count
+      g.corridors.push(c)
+    }
+    groups.push(...[...gmap.values()].sort((a, b) => b.count - a.count))
+  }
+  const pairCount = new Map(corridors.map(c => [`${c.fromCore}\0${c.toCore}`, c.count]))
+  const filteredGrid = cores.map((fc, i) => cores.map((tc, j) => {
+    if (i === j) return 0
+    return pairCount.get(`${fc}\0${tc}`) || 0
+  }))
+  let maxBin = 0
+  for (const c of corridors) {
+    for (const v of c.bins || []) if (v > maxBin) maxBin = v
+  }
+  return {
+    ...model,
+    corridors,
+    groups,
+    groupBySource,
+    maxBin,
+    filteredMatrix: { cores, grid: filteredGrid },
+    hasData: corridors.some(c => c.count > 0),
+  }
+}
+
+/**
+ * Re-apply Top-N corridor filter without rescanning migrations.
+ * @param {object} model
+ * @param {number} topPct
+ */
+export function applyCorridorTopFilter(model, topPct = 100) {
+  if (!model) return emptyCorridorModel()
+  const corridors = filterCorridorsByTopPct(model.allCorridors || [], topPct)
+  return { ...reindexCorridorView(model, corridors), topPct }
+}
+
+/**
+ * Narrow corridors to the selected pair's source (egress) or dest (ingress).
+ * @param {object} model
+ * @param {'all'|'egress'|'ingress'} mode
+ * @param {{ fromCore?: string, toCore?: string }|null} selected
+ */
+export function applyCorridorDirectionFilter(model, mode = 'all', selected = null) {
+  if (!model || mode === 'all' || !selected) return model
+  const src = model.corridors || []
+  let corridors = src
+  if (mode === 'egress' && selected.fromCore) {
+    corridors = src.filter(c => c.fromCore === selected.fromCore)
+  } else if (mode === 'ingress' && selected.toCore) {
+    corridors = src.filter(c => c.toCore === selected.toCore)
+  } else {
+    return model
+  }
+  if (corridors === src || corridors.length === src.length) {
+    const same = corridors.length === src.length
+      && corridors.every((c, i) => c === src[i])
+    if (same) return model
+  }
+  return reindexCorridorView(model, corridors)
+}
+
+function canonNumericId(token) {
+  const t = String(token || '').trim().toLowerCase()
+  if (!t) return null
+  if (t.startsWith('0x')) {
+    const n = Number.parseInt(t, 16)
+    return Number.isFinite(n) ? String(n) : null
+  }
+  if (/^\d+$/.test(t)) return String(Number.parseInt(t, 10))
+  return null
+}
+
+function corridorTaskIdsAndName(task) {
+  const ids = []
+  let name = ''
+  const addId = (token) => {
+    const cid = canonNumericId(token)
+    if (cid != null && !ids.includes(cid)) ids.push(cid)
+  }
+  const consider = (raw) => {
+    if (raw == null || raw === '') return
+    const s = String(raw)
+    const norm = s.replace(/\uFFFD/g, '\0')
+    if (norm.charCodeAt(0) === 0) {
+      const sep = norm.indexOf('\0', 1)
+      if (sep > 0) {
+        addId(norm.slice(1, sep))
+        if (!name) name = norm.slice(sep + 1)
+      }
+    }
+    const parsed = parseTaskName(s)
+    if (parsed.taskId != null && Number.isFinite(parsed.taskId)) {
+      addId(String(parsed.taskId))
+      if (!name) name = parsed.name
+    }
+    const collapsed = norm.replace(/\0/g, '')
+    const m = /^(\d+)(\D.*)$/.exec(collapsed)
+    if (m) {
+      addId(m[1])
+      if (!name) name = m[2]
+    }
+  }
+  if (task?.taskId != null) addId(String(task.taskId))
+  consider(task?.mk)
+  consider(task?.label)
+  if (!name) name = String(task?.label || '')
+  return { ids, name }
+}
+
+function corridorTaskQueryHit(task, q) {
+  const { ids, name } = corridorTaskIdsAndName(task)
+  const qId = canonNumericId(q)
+  if (qId != null && /^\d+$/.test(q)) return ids.includes(qId)
+  const label = String(task?.label || '').toLowerCase()
+  if (label.includes(q)) return true
+  if (String(name).toLowerCase().includes(q)) return true
+  const mk = String(task?.mk || '')
+  if (mk.charCodeAt(0) === 0) return false
+  return mk.toLowerCase().includes(q)
+}
+
+function corridorRestrictedToTasks(c, tasks) {
+  const n = (c.bins || []).length
+  const bins = Array(n).fill(0)
+  let bounceBins = Array(n).fill(0)
+  let count = 0
+  let bounces = 0
+  let hasTaskBounce = false
+  for (const t of tasks) {
+    count += t.count || 0
+    bounces += t.bounces || 0
+    const tb = t.bins || []
+    const bb = t.bounceBins || []
+    if (bb.length) hasTaskBounce = true
+    for (let i = 0; i < n; i++) {
+      bins[i] += tb[i] || 0
+      bounceBins[i] += bb[i] || 0
+    }
+  }
+  if (!hasTaskBounce) {
+    if (!bounces) bounceBins = Array(n).fill(0)
+    else if (count && bounces === count) bounceBins = bins.slice()
+    else {
+      const old = c.bounceBins || []
+      bounceBins = bins.map((v, i) => Math.min(old[i] || 0, v))
+    }
+  }
+  const newTasks = tasks.map(t => ({
+    ...t,
+    sharePct: count ? 100 * (t.count || 0) / count : 0,
+  }))
+  let peakBin = 0
+  let peakVal = 0
+  for (let b = 0; b < n; b++) {
+    if (bins[b] > peakVal) {
+      peakVal = bins[b]
+      peakBin = b
+    }
+  }
+  const oldCount = c.count || 0
+  return {
+    ...c,
+    count,
+    bounces,
+    bouncePct: count ? 100 * bounces / count : 0,
+    ratePerS: oldCount ? (c.ratePerS || 0) * count / oldCount : 0,
+    bins,
+    bounceBins,
+    tasks: newTasks,
+    primaryTask: newTasks[0] || null,
+    peakBin,
+    peakCount: peakVal,
+  }
+}
+
+function recomputeCorridorNets(corridors) {
+  const byPair = new Map(corridors.map(c => [`${c.fromCore}\0${c.toCore}`, c]))
+  return corridors.map((c) => {
+    const rev = byPair.get(`${c.toCore}\0${c.fromCore}`)
+    const revCount = rev ? (rev.count || 0) : 0
+    const net = netMigrationBalance(revCount, c.count || 0)
+    if (revCount === c.revCount && net === c.net) return c
+    return { ...c, revCount, net }
+  })
+}
+
+/**
+ * Keep corridors that have a matching task; drop sibling tasks from hits.
+ * Decimal queries are exact ids (`28` ≠ `CS[128]`).
+ * @param {object[]} corridors
+ * @param {string} query
+ */
+export function filterCorridorsByTaskQuery(corridors, query) {
+  const q = String(query || '').trim().toLowerCase()
+  if (!q) return corridors || []
+  const out = []
+  for (const c of corridors || []) {
+    const tasks = c.tasks || []
+    const matched = tasks.filter(t => corridorTaskQueryHit(t, q))
+    if (!matched.length) continue
+    out.push(matched.length === tasks.length ? c : corridorRestrictedToTasks(c, matched))
+  }
+  return recomputeCorridorNets(out)
+}
+
+/**
+ * In-inspector custom task filter (TODO2 §3.1).
+ * Searches allCorridors so Top-N cannot hide a matching task.
+ * @param {object} model
+ * @param {string} query
+ */
+export function applyCorridorTaskFilter(model, query) {
+  if (!model) return model
+  const q = String(query || '').trim()
+  if (!q) return model
+  const src = model.allCorridors || model.corridors || []
+  const corridors = filterCorridorsByTaskQuery(src, q)
+  if (corridors.length === src.length && corridors.every((c, i) => c === src[i])) {
+    return model
+  }
+  return reindexCorridorView(model, corridors)
+}
+
+function emptyCorridorModel(timeBins = 32) {
+  return {
+    cores: [],
+    corridors: [],
+    allCorridors: [],
+    groups: [],
+    groupBySource: false,
+    topPct: 100,
+    timeBins,
+    tMin: 0,
+    tMax: 0,
+    binW: 0,
+    maxBin: 0,
+    matrix: { cores: [], grid: [] },
+    filteredMatrix: { cores: [], grid: [] },
+    coreStats: [],
+    hotspot: null,
+    hasData: false,
   }
 }
 

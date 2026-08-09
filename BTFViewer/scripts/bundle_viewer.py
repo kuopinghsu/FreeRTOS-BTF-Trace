@@ -121,7 +121,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import (
     QBrush, QColor, QCursor, QDrag, QFont, QFontDatabase, QFontMetrics, QFontMetricsF, QIcon, QImage, QKeySequence, QLinearGradient, QPainter,
-    QPainterPath, QPalette, QPen, QPixmap, QPolygonF, QShortcut, QTransform, QWheelEvent,
+    QPainterPath, QPainterPathStroker, QPalette, QPen, QPixmap, QPolygonF, QShortcut, QTransform, QWheelEvent,
 )
 from PySide6.QtSvg import QSvgGenerator, QSvgRenderer
 from PySide6.QtWidgets import (
@@ -134,8 +134,9 @@ from PySide6.QtWidgets import (
     QListWidget, QListWidgetItem,
     QPushButton, QScrollArea, QScrollBar, QDoubleSpinBox, QSpinBox, QStackedWidget,
     QStyle, QStyleFactory, QStyleOptionGraphicsItem, QAbstractItemView,
-    QProxyStyle, QStyledItemDelegate, QTabBar, QTabWidget, QTableWidget, QTableWidgetItem, QToolButton,
+    QProxyStyle, QStyledItemDelegate, QTabBar, QTabWidget, QTableWidget, QTableWidgetItem, QToolButton, QToolTip,
     QPlainTextEdit, QTextBrowser,
+    QTreeWidget, QTreeWidgetItem,
     QVBoxLayout, QWidget, QSizePolicy, QSplitter, QLayout,
 )
 """

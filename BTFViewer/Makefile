@@ -14,14 +14,9 @@ OUT := $(BUILDS)/btf_viewer.py
 STATS_TRACE ?= ../tracedata/example-8cores.btf.gz
 STATS_IMG_DIR := ../images/stats
 
-# Source trace + output dir for `make update-images` (Migration Heatmap
-# illustrations in README.md).
-HEATMAP_TRACE ?= ../tracedata/example-4cores.btf.gz
-HEATMAP_IMG_DIR := ../images
-
-# Source trace for `make update-images` (Migration Chord Diagram
-# illustration in README.md); more cores makes for a more illustrative diagram.
-CHORD_TRACE ?= ../tracedata/example-8cores.btf.gz
+# Source trace + output for `make update-images` (Migration & Corridor Inspector).
+MIGRATION_TRACE ?= ../tracedata/example-8cores.btf.gz
+MIGRATION_IMG := ../images/migration.svg
 
 .DEFAULT_GOAL := all
 
@@ -37,7 +32,7 @@ help:
 	@echo "  make web          Web viewer only → builds/btf_viewer.html"
 	@echo "  make bundle       Desktop bundle only → builds/btf_viewer.py"
 	@echo "  make check-bundle Regenerate bundle; fail if it drifts from sources (CI)"
-	@echo "  make doc          Convert README.md + WORKFLOWS.md → builds/*.pdf"
+	@echo "  make doc          Convert README.md + WORKFLOWS.md → builds/*.pdf (Eisvogel + XeLaTeX)"
 	@echo "  make update-images  Regenerate ../images/stats/*.svg via the desktop CLI"
 	@echo "  make test         Desktop unit tests (QT_QPA_PLATFORM=offscreen)"
 	@echo "  make test-web     Web unit tests (node --test)"
@@ -45,7 +40,7 @@ help:
 	@echo "  make ci           test-all + check-bundle (local CI parity)"
 	@echo "  make help         Show this help"
 	@echo ""
-	@echo "Variables: PYTHON=$(PYTHON)  TRACE=$(TRACE)  PANDOC=$(PANDOC)  STATS_TRACE=$(STATS_TRACE)  HEATMAP_TRACE=$(HEATMAP_TRACE)  CHORD_TRACE=$(CHORD_TRACE)"
+	@echo "Variables: PYTHON=$(PYTHON)  TRACE=$(TRACE)  PANDOC=$(PANDOC)  STATS_TRACE=$(STATS_TRACE)  MIGRATION_TRACE=$(MIGRATION_TRACE)"
 
 
 all: web bundle
@@ -73,15 +68,24 @@ ci: test-all check-bundle
 
 doc: $(DOCS)/README.pdf $(DOCS)/WORKFLOWS.pdf
 
+# Use the vendored Eisvogel template (scripts/eisvogel.latex). Do not pass
+# `--template=eisvogel`: pandoc prefers ~/.local/share/pandoc/templates/eisvogel.latex,
+# and a 0-byte file there yields an empty .tex and xelatex "no legal \end found".
 PANDOC_PDF_FLAGS := --pdf-engine=xelatex \
-    --template=eisvogel \
+    --template=scripts/eisvogel.latex \
 	--lua-filter scripts/math-codeblock.lua \
+	--resource-path=..:. \
 	-V mainfont="DejaVu Sans" \
-	-V monofont="DejaVu Sans Mono"
+	-V monofont="DejaVu Sans Mono" \
+	-V colorlinks=true
 
-$(DOCS)/%.pdf: %.md
+$(DOCS)/README.pdf: README.md
 	mkdir -p $(DOCS)
-	$(PANDOC) $(PANDOC_PDF_FLAGS) $< -o $@
+	$(PANDOC) $(PANDOC_PDF_FLAGS) -M title="BTF Trace Viewer" $< -o $@
+
+$(DOCS)/WORKFLOWS.pdf: WORKFLOWS.md
+	mkdir -p $(DOCS)
+	$(PANDOC) $(PANDOC_PDF_FLAGS) -M title="BTF Viewer — Analysis Workflows" $< -o $@
 
 # Fail if builds/btf_viewer.py drifts from package sources (CI / pre-commit).
 check-bundle: bundle
@@ -136,12 +140,8 @@ update-images: bundle
 		--task "CS[22]" --cpu-load --height 900 \
 		--lo 1464000 --hi 1764000
 	@echo "Updated $(STATS_IMG_DIR) from $(STATS_TRACE)"
-	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(HEATMAP_TRACE) \
-		-o $(HEATMAP_IMG_DIR)/heatmap-pairs.svg --view heatmap
-	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(HEATMAP_TRACE) \
-		-o $(HEATMAP_IMG_DIR)/heatmap-tasks.svg --view heatmap --drill-row 0 --drill-bin 0
-	@echo "Updated $(HEATMAP_IMG_DIR)/heatmap-{pairs,tasks}.svg from $(HEATMAP_TRACE)"
-	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(CHORD_TRACE) \
-		-o $(HEATMAP_IMG_DIR)/migration-chord.svg --view chord
-	@echo "Updated $(HEATMAP_IMG_DIR)/migration-chord.svg from $(CHORD_TRACE)"
+	QT_QPA_PLATFORM=offscreen $(PYTHON) $(OUT) snapshot $(MIGRATION_TRACE) \
+		-o $(MIGRATION_IMG) --view chord \
+		--width 1000 --height 720 --drill-row 0
+	@echo "Updated $(MIGRATION_IMG)"
 

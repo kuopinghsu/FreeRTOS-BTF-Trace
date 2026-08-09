@@ -98,6 +98,8 @@ import {
   chordPointAt,
   chordRingGeometry,
   coreShortName,
+  chordLabelStep,
+  chordLabelVisible,
   migrationHeatmapMatrix,
   traceHasCoreBounceHolds,
   CHORD_ARC_INNER,
@@ -286,6 +288,10 @@ function paintChord(ctx, viewW, viewH, labelColor) {
   }
   ctx.globalAlpha = 1
 
+  const extra = new Set()
+  if (hovered != null) extra.add(hovered)
+  const labelStep = chordLabelStep(cores.length, 16, 2 * Math.PI * Math.max(R, 1))
+
   for (const arc of layout.arcs) {
     const isHover = hovered === arc.index
     const dimArc = hovered != null && !isHover
@@ -303,6 +309,7 @@ function paintChord(ctx, viewW, viewH, labelColor) {
     ctx.stroke()
     ctx.globalAlpha = 1
 
+    if (!chordLabelVisible(arc.index, labelStep, extra)) continue
     const mid = (arc.startAngle + arc.endAngle) / 2
     const lp = pointAt(cx, cy, mid, rEgress + CHORD_ARC_OUTER / 2 + 14)
     ctx.fillStyle = labelColor
@@ -458,6 +465,7 @@ function exportChordSvg() {
   }
 
   const arcParts = []
+  const svgStep = chordLabelStep(cores.length, 16, 2 * Math.PI * Math.max(R, 1))
   for (const arc of layout.arcs) {
     const largeArc = (arc.endAngle - arc.startAngle) > Math.PI ? 1 : 0
     for (const [rr, sw, opac] of [
@@ -472,6 +480,7 @@ function exportChordSvg() {
         + `stroke-opacity="${opac}" fill="none" stroke-linecap="round"/>`,
       )
     }
+    if (!chordLabelVisible(arc.index, svgStep)) continue
     const mid = (arc.startAngle + arc.endAngle) / 2
     const lp = pointAt(cx, cy, mid, rEgress + CHORD_ARC_OUTER / 2 + 14)
     const cosMid = Math.cos(mid)

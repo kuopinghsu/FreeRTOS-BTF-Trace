@@ -185,6 +185,68 @@ describe('buildCorridorInspectorModel', () => {
       { label: 'c2→c3', fromCore: 'Core_2', toCore: 'Core_3', tasks: [{ label: 'Idle', mk: 'idle:0' }] },
     ]
     assert.deepEqual(filterCorridorsByTaskQuery(rows, 'cs[22]').map(c => c.label), ['c0→c1'])
+    const padded = [
+      { label: 'c0→c1', fromCore: 'Core_0', toCore: 'Core_1', tasks: [{ label: 'CS[11]', mk: '\x0011\x00CS' }] },
+      { label: 'c2→c3', fromCore: 'Core_2', toCore: 'Core_3', tasks: [{ label: 'Idle', mk: 'idle:0' }] },
+    ]
+    assert.deepEqual(filterCorridorsByTaskQuery(padded, '11').map(c => c.label), ['c0→c1'])
+    assert.deepEqual(filterCorridorsByTaskQuery(padded, '0011').map(c => c.label), ['c0→c1'])
+    const mixed = [
+      {
+        label: 'c0→c1', fromCore: 'Core_0', toCore: 'Core_1',
+        count: 5, revCount: 0, net: 0, bins: [2, 3], bounceBins: [0, 0],
+        tasks: [
+          { label: 'CS[28]', mk: '\x0028\x00CS', count: 2, bounces: 0, bins: [2, 0], bounceBins: [0, 0] },
+          { label: 'CS[128]', mk: '\x00128\x00CS', count: 3, bounces: 0, bins: [0, 3], bounceBins: [0, 0] },
+        ],
+      },
+      {
+        label: 'c2→c3', fromCore: 'Core_2', toCore: 'Core_3',
+        count: 1, revCount: 0, net: 0, bins: [1, 0], bounceBins: [0, 0],
+        tasks: [
+          { label: 'CS[128]', mk: '\x00128\x00CS', count: 1, bounces: 0, bins: [1, 0], bounceBins: [0, 0] },
+        ],
+      },
+    ]
+    const only28 = filterCorridorsByTaskQuery(mixed, '28')
+    assert.deepEqual(only28.map(c => c.label), ['c0→c1'])
+    assert.deepEqual(only28[0].tasks.map(t => t.label), ['CS[28]'])
+    assert.equal(only28[0].count, 2)
+    assert.deepEqual(only28[0].bins, [2, 0])
+    assert.equal(filterCorridorsByTaskQuery(mixed, '128')[0].count, 3)
+    assert.deepEqual(filterCorridorsByTaskQuery(mixed, '2'), [])
+    const btfRaw = [
+      {
+        label: 'c0→c1', fromCore: 'Core_0', toCore: 'Core_1',
+        count: 1, bins: [1], bounceBins: [0],
+        tasks: [{ label: '[0/0028]CS', mk: '[0/0028]CS', count: 1, bins: [1], bounceBins: [0] }],
+      },
+    ]
+    assert.equal(filterCorridorsByTaskQuery(btfRaw, '28').length, 1)
+    const stripped = [
+      {
+        label: 'c0→c1', fromCore: 'Core_0', toCore: 'Core_1',
+        count: 1, bins: [1], bounceBins: [0],
+        tasks: [{ label: '28CS', mk: '28CS', count: 1, bins: [1], bounceBins: [0] }],
+      },
+    ]
+    assert.equal(filterCorridorsByTaskQuery(stripped, '28').length, 1)
+    const fffd = [
+      {
+        label: 'c0→c1', fromCore: 'Core_0', toCore: 'Core_1',
+        count: 1, bins: [1], bounceBins: [0],
+        tasks: [{ label: '\uFFFD28\uFFFDCS', mk: '\uFFFD28\uFFFDCS', count: 1, bins: [1], bounceBins: [0] }],
+      },
+    ]
+    assert.equal(filterCorridorsByTaskQuery(fffd, '28').length, 1)
+    const rare = buildCorridorInspectorModel(makeTrace([
+      ...Array.from({ length: 40 }, (_, i) => (
+        { ns: i, fromCore: 'Core_0', toCore: 'Core_1', mergeKey: 'hot', gapNs: 0 }
+      )),
+      { ns: 100, fromCore: 'Core_1', toCore: 'Core_2', mergeKey: '\x0011\x00CS', gapNs: 0 },
+    ]), null, null, { topPct: 25, timeBins: 4 })
+    const byId = applyCorridorTaskFilter(rare, '11')
+    assert.ok(byId.corridors.some(c => c.fromCore === 'Core_1' && c.toCore === 'Core_2'))
   })
 
   it('groups tree by source when there are more than 16 cores', () => {

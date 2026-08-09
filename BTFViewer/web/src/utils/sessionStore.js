@@ -20,14 +20,14 @@ export function saveSession(session) {
   }
 }
 
-/** Per-tab legend/heatmap filter fields. */
+/** Per-tab legend filter fields. Heatmap spotlight is never persisted. */
 export function snapshotTabFilters(tab) {
   if (!tab) return null
   return {
     taskFilterText: tab.taskFilterText || '',
     migratedOnlyFilter: !!tab.migratedOnlyFilter,
-    taskFilterKeys: tab.taskFilterKeys?.length ? [...tab.taskFilterKeys] : null,
-    heatmapFilterLabel: tab.heatmapFilterLabel ?? null,
+    taskFilterKeys: null,
+    heatmapFilterLabel: null,
   }
 }
 
@@ -50,14 +50,12 @@ export function applyTabFilters(tab, filters) {
 
 export function sanitizeTabFilters(src) {
   if (!src || typeof src !== 'object') return null
-  const keys = Array.isArray(src.taskFilterKeys)
-    ? src.taskFilterKeys.filter(k => k != null && String(k).length).map(String)
-    : null
   return {
     taskFilterText: typeof src.taskFilterText === 'string' ? src.taskFilterText : '',
     migratedOnlyFilter: !!src.migratedOnlyFilter,
-    taskFilterKeys: keys?.length ? keys : null,
-    heatmapFilterLabel: src.heatmapFilterLabel != null ? String(src.heatmapFilterLabel) : null,
+    // Heatmap drill-down is ephemeral — opening a trace always shows all tasks.
+    taskFilterKeys: null,
+    heatmapFilterLabel: null,
   }
 }
 

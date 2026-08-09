@@ -744,6 +744,7 @@ class TimelineView(QGraphicsView):
     """Pan + zoom QGraphicsView wrapping a TimelineScene."""
 
     zoom_changed         = Signal(float)
+    viewport_changed     = Signal()
     label_width_changed  = Signal(int)
     label_width_resizing = Signal(int)  # live drag; CPU load repaints without persisting
     cursors_changed      = Signal(list)
@@ -776,6 +777,7 @@ class TimelineView(QGraphicsView):
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.AnchorViewCenter)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self._programmatic_viewport = 0
 
         # -- Mouse interaction state -------------------------------------
         # Tracks the press position to distinguish click vs drag; button to
@@ -907,7 +909,7 @@ class TimelineView(QGraphicsView):
         self._virt_scroll_scale: float = 1.0
         self._syncing_time_scrollbar: bool = False
         self._virtual_time_scroll_active: bool = False
-        self._native_time_bar_interaction_connected: bool = False
+        self._native_time_bar_interaction_conn = None
         self._virt_scroll_rebuild: bool = False
         self._syncing_virt_bar: bool = False
         self._virt_bar_dragging: bool = False
@@ -1159,23 +1161,21 @@ class TimelineView(QGraphicsView):
             self._position_virt_trace_bar()
             self._sync_native_scene_scrollbar()
             native.installEventFilter(self)
-            if not self._native_time_bar_interaction_connected:
-                native.valueChanged.connect(
-                    self._on_native_time_bar_interaction,
-                    Qt.ConnectionType.UniqueConnection)
-                self._native_time_bar_interaction_connected = True
+            if self._native_time_bar_interaction_conn is None:
+                self._native_time_bar_interaction_conn = native.valueChanged.connect(
+                    self._on_native_time_bar_interaction)
             if not self._zoom_reanchor_pending:
                 self._capture_virt_time_scroll_px()
             self._update_virt_trace_bar_range()
             self._push_virt_trace_bar()
         else:
-            if self._native_time_bar_interaction_connected:
+            conn = self._native_time_bar_interaction_conn
+            if conn is not None:
                 try:
-                    native.valueChanged.disconnect(
-                        self._on_native_time_bar_interaction)
+                    QObject.disconnect(conn)
                 except (RuntimeError, TypeError):
                     pass
-                self._native_time_bar_interaction_connected = False
+                self._native_time_bar_interaction_conn = None
             native.removeEventFilter(self)
             overlay.hide()
             if self._time_scroll_external and self._scene._horizontal:
@@ -1403,8 +1403,18 @@ class TimelineView(QGraphicsView):
         if not self._nav_popup._dragging:
             self._nav_hide_timer.start()
 
+    def begin_programmatic_viewport(self) -> None:
+        """Ignore inspector follow while Jump/Spotlight zooms the timeline."""
+        self._programmatic_viewport = getattr(self, "_programmatic_viewport", 0) + 1
+
+    def end_programmatic_viewport(self) -> None:
+        n = getattr(self, "_programmatic_viewport", 0) - 1
+        self._programmatic_viewport = n if n > 0 else 0
+
     def _after_time_axis_pan(self, *, immediate: bool = False) -> None:
         """Refresh navigator/minimap after any time-axis pan (wheel, bar, overlay)."""
+        if not getattr(self, "_programmatic_viewport", 0):
+            self.viewport_changed.emit()
         self._pan_timer.start()
         if immediate or self._virt_bar_dragging:
             self._refresh_nav_pan_window(force_show=True)

@@ -34,7 +34,7 @@
     <div class="legend-list">
       <div
         v-for="mk in visibleTasks"
-        :key="mk"
+        :key="String(mk).replace(/\0|\uFFFD/g, '|')"
         class="legend-item"
         :class="{ highlighted: highlightKey === mk }"
         @mouseenter="emit('highlightChange', mk)"

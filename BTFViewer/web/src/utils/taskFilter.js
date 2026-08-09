@@ -9,11 +9,27 @@ export function normalizeTaskFilterText(text) {
 
 export function mergeKeyMatchesTextFilter(trace, mk, q) {
   if (!q) return true
-  const raw = trace?.taskRepr?.get(mk) || mk
+  const raw = (typeof trace?.taskRepr?.get === 'function' ? trace.taskRepr.get(mk) : null) || mk
   const disp = taskDisplayName(raw)
-  return mk.toLowerCase().includes(q)
+  if (/^\d+$/.test(q)) {
+    const qId = String(Number.parseInt(q, 10))
+    const hitId = (rawName) => {
+      const parsed = parseTaskName(String(rawName || ''))
+      return parsed.taskId != null && Number.isFinite(parsed.taskId)
+        && String(parsed.taskId) === qId
+    }
+    if (hitId(raw) || hitId(disp)) return true
+    const s = String(mk || '').replace(/\uFFFD/g, '\0')
+    if (s.charCodeAt(0) === 0) {
+      const sep = s.indexOf('\0', 1)
+      if (sep > 0 && String(Number.parseInt(s.slice(1, sep), 10)) === qId) return true
+    }
+    const m = /^(\d+)(\D.*)$/.exec(s.replace(/\0/g, ''))
+    return !!(m && String(Number.parseInt(m[1], 10)) === qId)
+  }
+  return String(mk).toLowerCase().includes(q)
     || String(raw).toLowerCase().includes(q)
-    || disp.toLowerCase().includes(q)
+    || String(disp).toLowerCase().includes(q)
 }
 
 export function rawTaskNameMatchesTextFilter(trace, rawName, q) {

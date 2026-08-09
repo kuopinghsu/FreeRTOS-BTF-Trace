@@ -114,7 +114,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import (
     QBrush, QColor, QCursor, QDrag, QFont, QFontDatabase, QFontMetrics, QFontMetricsF, QIcon, QImage, QKeySequence, QLinearGradient, QPainter,
-    QPainterPath, QPalette, QPen, QPixmap, QPolygonF, QShortcut, QTransform, QWheelEvent,
+    QPainterPath, QPainterPathStroker, QPalette, QPen, QPixmap, QPolygonF, QShortcut, QTransform, QWheelEvent,
 )
 from PySide6.QtSvg import QSvgGenerator, QSvgRenderer
 from PySide6.QtWidgets import (
@@ -127,8 +127,9 @@ from PySide6.QtWidgets import (
     QListWidget, QListWidgetItem,
     QPushButton, QScrollArea, QScrollBar, QDoubleSpinBox, QSpinBox, QStackedWidget,
     QStyle, QStyleFactory, QStyleOptionGraphicsItem, QAbstractItemView,
-    QProxyStyle, QStyledItemDelegate, QTabBar, QTabWidget, QTableWidget, QTableWidgetItem, QToolButton,
+    QProxyStyle, QStyledItemDelegate, QTabBar, QTabWidget, QTableWidget, QTableWidgetItem, QToolButton, QToolTip,
     QPlainTextEdit, QTextBrowser,
+    QTreeWidget, QTreeWidgetItem,
     QVBoxLayout, QWidget, QSizePolicy, QSplitter, QLayout,
 )
 
@@ -582,29 +583,27 @@ _PORTABLE_FIND_MODES = (
 )
 
 def _snapshot_tab_filters(scene) -> dict:
-    """Per-tab legend/heatmap filter state (portable session + tab_view rc)."""
-    mks = scene._heatmap_filter_mks
+    """Per-tab legend filter state (portable session + tab_view rc).
+
+    Heatmap spotlight is ephemeral — never persist taskFilterKeys / label.
+    """
     return {
         "taskFilterText": scene._task_filter_q or "",
         "migratedOnlyFilter": bool(scene._migrated_only_filter),
-        "taskFilterKeys": sorted(mks) if mks else None,
-        "heatmapFilterLabel": scene._heatmap_filter_label,
+        "taskFilterKeys": None,
+        "heatmapFilterLabel": None,
     }
 
 def _sanitize_tab_filters(src) -> Optional[dict]:
     if not isinstance(src, dict):
         return None
-    keys = src.get("taskFilterKeys")
-    if keys is not None:
-        keys = [str(k) for k in keys if k is not None and str(k)]
-        if not keys:
-            keys = None
     return {
         "taskFilterText": str(src.get("taskFilterText") or ""),
         "migratedOnlyFilter": bool(src.get("migratedOnlyFilter")),
-        "taskFilterKeys": keys,
-        "heatmapFilterLabel": (str(src["heatmapFilterLabel"])
-                               if src.get("heatmapFilterLabel") is not None else None),
+        # Heatmap drill-down is session-ephemeral: opening a trace always
+        # shows all tasks (ignore legacy rc / portable JSON keys).
+        "taskFilterKeys": None,
+        "heatmapFilterLabel": None,
     }
 _META_KEY_RE = re.compile(r"^[\w.-]+$")
 _MAX_FIND_REGEX_LEN = 200
@@ -822,6 +821,20 @@ _IC_CPU_LOAD = ("M1 11a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1H2a1 1 0 0 1
 _IC_HEATMAP = ("M1 1h4v4H1V1zm5 0h4v4H6V1zm5 0h4v4h-4V1z"
                "M1 6h4v4H1V6zm5 0h4v4H6V6zm5 0h4v4h-4V6z"
                "M1 11h4v4H1v-4zm5 0h4v4H6v-4zm5 0h4v4h-4v-4z")
+_HEATMAP_CLEAR_SLASH = "#E24B4A"
+
+
+def _heatmap_clear_icon(fg: str = "#9E9E9E", *, is_dark: bool = True) -> "QIcon":
+    """Heatmap grid with a red prohibition slash — clear spotlight/filter."""
+    outline = "#1E1E1E" if is_dark else "#FFFFFF"
+    inner = (
+        f'<path fill="{fg}" fill-rule="evenodd" d="{_IC_HEATMAP}"/>'
+        f'<line x1="2" y1="14" x2="14" y2="2" stroke="{outline}" '
+        f'stroke-width="3.4" stroke-linecap="round"/>'
+        f'<line x1="2" y1="14" x2="14" y2="2" stroke="{_HEATMAP_CLEAR_SLASH}" '
+        f'stroke-width="2" stroke-linecap="round"/>'
+    )
+    return _svg_icon_markup(inner)
 _IC_CHORD = ("M8 1 A7 7 0 1 0 8 15 A7 7 0 1 0 8 1 Z"
              "M8 3.5 A4.5 4.5 0 1 0 8 12.5 A4.5 4.5 0 1 0 8 3.5 Z"
              "M4 6 L5 5 L12 10 L11 11 Z"
@@ -2077,11 +2090,7 @@ def _core_pair_rows(
     """Per (from_core, to_core) pair migration summary.
     Returns: [(from_core, to_core, count, bounce_count, avg_gap_ns), ...]"""
     pairs: Dict[tuple, dict] = {}
-    for m in trace.migrations:
-        if lo is not None and m.ns < lo:
-            continue
-        if hi is not None and m.ns > hi:
-            continue
+    for m in _migrations_in_range(trace, lo, hi):
         key = (m.from_core, m.to_core)
         if key not in pairs:
             pairs[key] = {"count": 0, "bounces": 0, "gap_sum": 0}
@@ -3248,6 +3257,14 @@ class BtfTrace:
     # Core migrations: consecutive slices of the same merge-key on different cores.
     migrations: List[MigrationEvent]                                        = field(default_factory=list)
     migrations_by_mk: Dict[str, List[MigrationEvent]]                       = field(default_factory=dict)
+    # Parallel to migrations (same order) for O(log n) time-window slices.
+    migration_times: List[int]                                              = field(default_factory=list)
+    migrated_mks: frozenset                                                 = field(default_factory=frozenset)
+    # Full-trace stats snapshots filled at parse (Statistics / heatmap open path).
+    task_cpu_ns: Optional[Dict[str, int]]                                   = None
+    sched_ctx_switches: Optional[int]                                       = None
+    sched_core_gaps: Optional[List[int]]                                    = None
+    migration_rows_full: Optional[List[dict]]                               = None
     interval_instances: List["IntervalInstance"]                            = field(default_factory=list)
     interval_ids: List[str]                                                 = field(default_factory=list)
     interval_instances_by_id: Dict[str, List["IntervalInstance"]]            = field(default_factory=dict)
@@ -3504,10 +3521,14 @@ def _scheduling_stats(trace: "BtfTrace",
                       lo: Optional[int] = None, hi: Optional[int] = None
                       ) -> Tuple[int, List[int]]:
     """Context-switch count and inter-slice core gaps (ns) within optional scope."""
+    if (lo is None and hi is None
+            and trace.sched_ctx_switches is not None
+            and trace.sched_core_gaps is not None):
+        return trace.sched_ctx_switches, trace.sched_core_gaps
     ctx_switches = 0
     gaps: List[int] = []
     for core in trace.core_names:
-        segs = trace.core_segs.get(core, [])
+        segs = _core_segs_in_range(trace, core, lo, hi)
         for i in range(1, len(segs)):
             prev, curr = segs[i - 1], segs[i]
             if lo is not None and hi is not None:
@@ -3775,7 +3796,63 @@ def _task_cores_used(trace: "BtfTrace", merge_key: str) -> set:
     return {s.core for s in trace.seg_map_by_merge_key.get(merge_key, ())}
 
 def _is_migrated_task(trace: "BtfTrace", merge_key: str) -> bool:
+    mks = trace.migrated_mks or trace.migrations_by_mk
+    if mks:
+        return merge_key in mks
     return len(_task_cores_used(trace, merge_key)) >= 2
+
+def _migrations_in_range(
+    trace: "BtfTrace",
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> Sequence["MigrationEvent"]:
+    """Migrations with ns in [lo, hi] (inclusive). Uses migration_times bisect."""
+    migs = trace.migrations
+    if not migs:
+        return migs
+    if lo is None and hi is None:
+        return migs
+    times = trace.migration_times
+    if not times or len(times) != len(migs):
+        return [
+            m for m in migs
+            if (lo is None or m.ns >= lo) and (hi is None or m.ns <= hi)
+        ]
+    i0 = 0 if lo is None else bisect_left(times, lo)
+    i1 = len(migs) if hi is None else bisect_right(times, hi)
+    return migs[i0:i1]
+
+def _core_segs_in_range(
+    trace: "BtfTrace",
+    core: str,
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> Sequence["TaskSegment"]:
+    segs = trace.core_segs.get(core, [])
+    if not segs or lo is None or hi is None:
+        return segs
+    starts = trace.core_seg_starts.get(core)
+    if not starts or len(starts) != len(segs):
+        starts = [s.start for s in segs]
+    i0 = max(0, bisect_left(starts, lo) - 1)
+    i1 = bisect_right(starts, hi)
+    return segs[i0:i1]
+
+def _task_segs_in_range(
+    trace: "BtfTrace",
+    mk: str,
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> Sequence["TaskSegment"]:
+    segs = trace.seg_map_by_merge_key.get(mk, [])
+    if not segs or lo is None or hi is None:
+        return segs
+    starts = trace.seg_start_by_merge_key.get(mk)
+    if not starts or len(starts) != len(segs):
+        starts = [s.start for s in segs]
+    i0 = max(0, bisect_left(starts, lo) - 1)
+    i1 = bisect_right(starts, hi)
+    return segs[i0:i1]
 
 def _build_migration_index(
     segs_by_mk: Dict[str, list],
@@ -3951,13 +4028,17 @@ def _migration_rows(trace: "BtfTrace",
                     lo: Optional[int] = None, hi: Optional[int] = None
                     ) -> List[tuple]:
     """Rows for the Core Migrations stats table."""
+    if lo is None and hi is None and trace.migration_rows_full is not None:
+        return list(trace.migration_rows_full)
     scale = trace.time_scale
     tick_times = trace.tick_sti_times
     rows: List[tuple] = []
     for mk in trace.tasks:
         if not _is_migrated_task(trace, mk):
             continue
-        segs = trace.seg_map_by_merge_key.get(mk, [])
+        segs = (_task_segs_in_range(trace, mk, lo, hi)
+                if lo is not None and hi is not None
+                else trace.seg_map_by_merge_key.get(mk, []))
         migs = list(trace.migrations_by_mk.get(mk, ()))
         if lo is not None and hi is not None:
             migs = [m for m in migs if lo <= m.ns <= hi]
@@ -4079,15 +4160,10 @@ def _pair_migrations(
     lo: Optional[int] = None, hi: Optional[int] = None,
 ) -> List["MigrationEvent"]:
     """Directed From→To migrations in scope, time-sorted."""
-    out: List[MigrationEvent] = []
-    for m in trace.migrations:
-        if m.from_core != from_core or m.to_core != to_core:
-            continue
-        if lo is not None and m.ns < lo:
-            continue
-        if hi is not None and m.ns > hi:
-            continue
-        out.append(m)
+    out: List[MigrationEvent] = [
+        m for m in _migrations_in_range(trace, lo, hi)
+        if m.from_core == from_core and m.to_core == to_core
+    ]
     out.sort(key=lambda m: m.ns)
     return out
 
@@ -4354,12 +4430,8 @@ def _migration_heatmap_data(trace: "BtfTrace",
     span = max(t_hi - t_min, 1)
     bin_w = span / time_bins
     grid = [[0] * time_bins for _ in pairs]
-    for m in trace.migrations:
+    for m in _migrations_in_range(trace, lo, hi):
         if bounce_only and m.ns not in trace.lock_bounce_migration_ns:
-            continue
-        if lo is not None and m.ns < lo:
-            continue
-        if hi is not None and m.ns > hi:
             continue
         pi = pair_idx.get((m.from_core, m.to_core))
         if pi is None:
@@ -4382,12 +4454,8 @@ def _migration_heatmap_matrix(trace: "BtfTrace",
     n = len(cores)
     core_idx = {c: i for i, c in enumerate(cores)}
     grid = [[0] * n for _ in range(n)]
-    for m in trace.migrations:
+    for m in _migrations_in_range(trace, lo, hi):
         if bounce_only and m.ns not in trace.lock_bounce_migration_ns:
-            continue
-        if lo is not None and m.ns < lo:
-            continue
-        if hi is not None and m.ns > hi:
             continue
         fi = core_idx.get(m.from_core)
         ti = core_idx.get(m.to_core)
@@ -4399,6 +4467,30 @@ def _migration_heatmap_matrix(trace: "BtfTrace",
 # Gap between adjacent core arcs and floor arc size in the chord diagram, in radians.
 _CHORD_GAP_RAD = 0.03
 _CHORD_MIN_ARC_RAD = 0.05
+_CHORD_TAPER_DEST_RATIO = 0.4
+_CHORD_GRAD_SOURCE_STOP = 0.7
+_CHORD_RIBBON_MAX_HALF = 7.0
+# Split core rings (TODO2): outer = egress/departures, inner = ingress/arrivals.
+_CHORD_ARC_OUTER = 12.0
+_CHORD_ARC_INNER = 8.0
+
+
+def _chord_ring_geometry(radius: float) -> Tuple[float, float, float]:
+    """Return ``(r_egress, r_ingress, r_ribbon)`` for a chord diagram of radius *radius*."""
+    r_egress = float(radius)
+    r_ingress = r_egress - _CHORD_ARC_OUTER - 2.0
+    r_ribbon = r_ingress - _CHORD_ARC_INNER / 2.0 - 2.0
+    return r_egress, r_ingress, r_ribbon
+
+
+def _chord_hit_ring(dist: float, radius: float) -> Optional[str]:
+    """Which split ring *dist* from the centre hits: ``'egress'``, ``'ingress'``, or None."""
+    r_egress, r_ingress, _ = _chord_ring_geometry(radius)
+    if abs(dist - r_egress) <= _CHORD_ARC_OUTER / 2.0 + 3.0:
+        return "egress"
+    if abs(dist - r_ingress) <= _CHORD_ARC_INNER / 2.0 + 3.0:
+        return "ingress"
+    return None
 
 @dataclass
 class ChordArc:
@@ -4408,6 +4500,8 @@ class ChordArc:
     start_angle: float
     end_angle: float
     total: float
+    out_total: float = 0.0
+    in_total: float = 0.0
 
 @dataclass
 class ChordLayout:
@@ -4415,6 +4509,9 @@ class ChordLayout:
     arcs: List[ChordArc]
     # tick_angles[i][j] = angle (radians) on core i's arc pointing toward core j.
     tick_angles: List[Dict[int, float]]
+    egress_ticks: List[Dict[int, float]] = field(default_factory=list)
+    ingress_ticks: List[Dict[int, float]] = field(default_factory=list)
+    grid: Optional[List[List[float]]] = None
 
     def tick_angle(self, i: int, j: int) -> float:
         if 0 <= i < len(self.tick_angles) and j in self.tick_angles[i]:
@@ -4424,6 +4521,320 @@ class ChordLayout:
             return (arc.start_angle + arc.end_angle) / 2
         return 0.0
 
+    def egress_tick_angle(self, i: int, j: int) -> float:
+        if 0 <= i < len(self.egress_ticks) and j in self.egress_ticks[i]:
+            return self.egress_ticks[i][j]
+        return self.tick_angle(i, j)
+
+    def ingress_tick_angle(self, i: int, j: int) -> float:
+        if 0 <= i < len(self.ingress_ticks) and j in self.ingress_ticks[i]:
+            return self.ingress_ticks[i][j]
+        return self.tick_angle(i, j)
+
+    def ribbon_half_widths(self, i: int, j: int,
+                           max_count: float = 1.0) -> Tuple[float, float]:
+        g = self.grid or []
+        count = g[i][j] if i < len(g) and j < len(g[i]) else 0
+        if not count:
+            return 0.0, 0.0
+        m = max_count or 1.0
+        src = max(0.75, min(_CHORD_RIBBON_MAX_HALF,
+                            _CHORD_RIBBON_MAX_HALF * (count / m)))
+        dst = max(0.5, src * _CHORD_TAPER_DEST_RATIO)
+        return src, dst
+
+def _trace_has_core_bounce_holds(trace: "BtfTrace") -> bool:
+    """True if any sync-object hold crossed cores (cache-line lock bounce)."""
+    if not getattr(trace, "has_sync_object_instrumentation", False):
+        return False
+    for obj in (getattr(trace, "sync_objects", None) or {}).values():
+        for hold in obj.get("holds") or []:
+            take_c = hold.get("take_core")
+            give_c = hold.get("give_core")
+            if take_c and give_c and take_c != give_c:
+                return True
+    return False
+
+
+def _default_corridor_top_pct(core_count: int) -> int:
+    if (core_count or 0) > 8:
+        return 25
+    return 100
+
+def _filter_corridors_by_top_pct(corridors: list, top_pct: int = 100) -> list:
+    if not corridors or top_pct >= 100:
+        return list(corridors or [])
+    pct = max(1, min(100, int(top_pct)))
+    sorted_rows = sorted(corridors, key=lambda c: c.get("count", 0), reverse=True)
+    keep = max(1, math.ceil(len(sorted_rows) * (pct / 100.0)))
+    threshold = sorted_rows[keep - 1].get("count", 0)
+    return [c for c in corridors if c.get("count", 0) >= threshold]
+
+
+def _filter_corridors_by_direction(corridors: list, mode: str,
+                                   selected: Optional[dict] = None) -> list:
+    """Keep corridors sharing the selected pair's source (egress) or dest (ingress)."""
+    if not corridors or mode in (None, "", "all") or not selected:
+        return list(corridors or [])
+    if mode == "egress":
+        want = selected.get("from_core")
+        return [c for c in corridors if c.get("from_core") == want]
+    if mode == "ingress":
+        want = selected.get("to_core")
+        return [c for c in corridors if c.get("to_core") == want]
+    return list(corridors or [])
+
+
+def _canon_numeric_id(token: str) -> Optional[str]:
+    """Decimal digit string for a task-id token (`0011`/`0xB` → `11`)."""
+    t = (token or "").strip().lower()
+    if not t:
+        return None
+    try:
+        if t.startswith("0x"):
+            return str(int(t, 16))
+        if t.isdigit():
+            return str(int(t, 10))
+    except ValueError:
+        return None
+    return None
+
+
+def _corridor_task_ids_and_name(task: dict) -> Tuple[list, str]:
+    """Task ids (canonical decimal) and bare name from a corridor task row."""
+    ids: list = []
+    name = ""
+
+    def add_id(token) -> None:
+        cid = _canon_numeric_id(str(token) if token is not None else "")
+        if cid is not None and cid not in ids:
+            ids.append(cid)
+
+    def consider(raw) -> None:
+        nonlocal name
+        if raw is None or raw == "":
+            return
+        s = str(raw)
+        norm = s.replace("\ufffd", "\x00")
+        if norm[:1] == "\x00":
+            sep = norm.find("\x00", 1)
+            if sep > 0:
+                add_id(norm[1:sep])
+                if not name:
+                    name = norm[sep + 1:]
+        _core, task_id, nm = _parse_task_name(s)
+        if task_id is not None:
+            add_id(task_id)
+            if not name:
+                name = nm
+        collapsed = norm.replace("\x00", "")
+        m = re.match(r"^(\d+)(\D.*)$", collapsed)
+        if m:
+            add_id(m.group(1))
+            if not name:
+                name = m.group(2)
+
+    if task.get("task_id") is not None:
+        add_id(task.get("task_id"))
+    consider(task.get("mk"))
+    consider(task.get("label"))
+    if not name:
+        name = str(task.get("label") or "")
+    return ids, name
+
+
+def _corridor_task_query_hit(task: dict, q: str) -> bool:
+    """True when *q* matches this task.
+
+    A pure decimal query (`28`, `0028`) is an exact task id — it must not
+    hit `CS[128]` / `[0/0128]CS` via substring. Name queries stay substring.
+    """
+    ids, name = _corridor_task_ids_and_name(task)
+    q_id = _canon_numeric_id(q)
+    if q_id is not None and q.isdigit():
+        return q_id in ids
+    ql = q.lower()
+    label = (task.get("label") or "").lower()
+    if ql in label:
+        return True
+    if ql in name.lower():
+        return True
+    mk = str(task.get("mk") or "")
+    if mk.startswith("\x00"):
+        return False
+    return ql in mk.lower()
+
+
+def _corridor_restricted_to_tasks(c: dict, tasks: list) -> dict:
+    """Copy *c* so heatmap/tree counts include only *tasks* (no model mutation)."""
+    n = len(c.get("bins") or [])
+    bins = [0] * n
+    bounce_bins = [0] * n
+    count = 0
+    bounces = 0
+    has_task_bounce = False
+    for t in tasks:
+        count += int(t.get("count") or 0)
+        bounces += int(t.get("bounces") or 0)
+        tb = t.get("bins") or []
+        bb = t.get("bounce_bins") or []
+        if bb:
+            has_task_bounce = True
+        for i in range(n):
+            bins[i] += tb[i] if i < len(tb) else 0
+            bounce_bins[i] += bb[i] if i < len(bb) else 0
+    if not has_task_bounce:
+        if not bounces:
+            bounce_bins = [0] * n
+        elif count and bounces == count:
+            bounce_bins = list(bins)
+        else:
+            old = c.get("bounce_bins") or []
+            bounce_bins = [
+                min(old[i] if i < len(old) else 0, bins[i]) for i in range(n)]
+    new_tasks = []
+    for t in tasks:
+        nt = dict(t)
+        nt["share_pct"] = (100.0 * int(t.get("count") or 0) / count) if count else 0.0
+        new_tasks.append(nt)
+    peak_bin = max(range(n), key=lambda b: bins[b]) if n else 0
+    old_count = int(c.get("count") or 0)
+    out = dict(c)
+    out.update({
+        "count": count,
+        "bounces": bounces,
+        "bounce_pct": (100.0 * bounces / count) if count else 0.0,
+        "rate_per_s": ((c.get("rate_per_s") or 0.0) * count / old_count)
+        if old_count else 0.0,
+        "bins": bins,
+        "bounce_bins": bounce_bins,
+        "tasks": new_tasks,
+        "primary_task": new_tasks[0] if new_tasks else None,
+        "peak_bin": peak_bin,
+        "peak_count": bins[peak_bin] if n else 0,
+    })
+    return out
+
+
+def _recompute_corridor_nets(corridors: list) -> list:
+    """Refresh net/rev from the (possibly narrowed) corridor set."""
+    by_pair = {}
+    for c in corridors:
+        by_pair[(c.get("from_core"), c.get("to_core"))] = c
+    out = []
+    for c in corridors:
+        rev = by_pair.get((c.get("to_core"), c.get("from_core")))
+        rev_count = int(rev["count"]) if rev else 0
+        net = _net_migration_balance(rev_count, int(c.get("count") or 0))
+        if rev_count == c.get("rev_count") and net == c.get("net"):
+            out.append(c)
+            continue
+        nc = dict(c)
+        nc["rev_count"] = rev_count
+        nc["net"] = net
+        out.append(nc)
+    return out
+
+
+def _filter_corridors_by_task_query(corridors: list, query: str) -> list:
+    """Keep corridors that have a matching task; drop sibling tasks from hits."""
+    q = (query or "").strip().lower()
+    if not q:
+        return list(corridors or [])
+    out = []
+    for c in corridors or []:
+        tasks = c.get("tasks") or []
+        matched = [t for t in tasks if _corridor_task_query_hit(t, q)]
+        if not matched:
+            continue
+        if len(matched) == len(tasks):
+            out.append(c)
+        else:
+            out.append(_corridor_restricted_to_tasks(c, matched))
+    return _recompute_corridor_nets(out)
+
+
+def _corridor_groups_by_source(corridors: list) -> list:
+    """Group directed corridors under their source core (large-core tree)."""
+    gmap: Dict[str, dict] = {}
+    for c in corridors or []:
+        src = c.get("from_core")
+        if not src:
+            continue
+        g = gmap.get(src)
+        if g is None:
+            g = {
+                "source": src,
+                "label": f"{_core_short_name(src)} → Destinations",
+                "count": 0,
+                "corridors": [],
+            }
+            gmap[src] = g
+        g["count"] += int(c.get("count") or 0)
+        g["corridors"].append(c)
+    return sorted(gmap.values(), key=lambda g: -g["count"])
+
+
+def _net_migration_balance(incoming: int, outgoing: int) -> int:
+    return int(incoming or 0) - int(outgoing or 0)
+
+
+def _chord_label_nice_step(raw: int) -> int:
+    """Round a label stride up to 1/2/5×10^k so ticks stay readable (0, 5, 10…)."""
+    n = max(1, int(raw))
+    if n <= 1:
+        return 1
+    mag = 10 ** int(math.floor(math.log10(n)))
+    for mult in (1, 2, 5, 10):
+        nice = mult * mag
+        if nice >= n:
+            return int(nice)
+    return n
+
+
+def _chord_label_step(
+    n_cores: int,
+    *,
+    min_px: float = 0.0,
+    span_px: float = 0.0,
+) -> int:
+    """How many cores to skip between chord/matrix tick labels.
+
+    Small core counts keep every name. Larger rings/matrices use a stride
+    such as 5 → c0, c5, c10. *min_px*/*span_px* raise the stride when
+    glyphs would still collide (circle circumference or matrix cell pitch).
+    """
+    n = int(n_cores or 0)
+    if n <= 16:
+        step = 1
+    elif n <= 32:
+        step = 2
+    elif n <= 64:
+        step = 5
+    elif n <= 128:
+        step = 8
+    else:
+        step = 10
+    if min_px > 0 and span_px > 0 and n > 0:
+        per = span_px / n
+        if per < min_px:
+            need = int(math.ceil(min_px / max(per, 1e-9)))
+            step = max(step, _chord_label_nice_step(need))
+    return max(1, step)
+
+
+def _chord_label_visible(
+    index: int,
+    step: int,
+    extra: Optional[set] = None,
+) -> bool:
+    """True when core *index* should draw a name (stride tick or hover/focus)."""
+    if extra and int(index) in extra:
+        return True
+    if step <= 1:
+        return True
+    return int(index) % step == 0
+
 def _build_chord_layout(cores: List[str], grid: List[List[float]]) -> ChordLayout:
     """Pure circular layout for the migration chord diagram — parity with the
     web app's buildChordLayout() in migrationAnalysis.js. Each core gets an arc
@@ -4431,15 +4842,19 @@ def _build_chord_layout(cores: List[str], grid: List[List[float]]) -> ChordLayou
     sliver so zero-flow cores still appear as nodes), separated by a fixed gap.
     Each connected core-pair also gets a tick position within its two arcs,
     used as chord endpoints so parallel migrations fan out rather than
-    overlapping."""
+    overlapping. Also exposes egress/ingress ticks and tapered ribbon widths."""
     n = len(cores)
     totals = [0.0] * n
+    out_totals = [0.0] * n
+    in_totals = [0.0] * n
     for i in range(n):
         for j in range(n):
             if i == j:
                 continue
             gij = grid[i][j] if i < len(grid) and j < len(grid[i]) else 0
             gji = grid[j][i] if j < len(grid) and i < len(grid[j]) else 0
+            out_totals[i] += gij
+            in_totals[i] += gji
             totals[i] += gij + gji
     grand_total = sum(totals)
     gap = min(_CHORD_GAP_RAD, (math.pi * 1.5) / n) if n > 0 else 0.0
@@ -4458,30 +4873,266 @@ def _build_chord_layout(cores: List[str], grid: List[List[float]]) -> ChordLayou
     for i in range(n):
         start_angle = angle
         end_angle = start_angle + arc_sizes[i]
-        arcs.append(ChordArc(cores[i], i, start_angle, end_angle, totals[i]))
+        arcs.append(ChordArc(
+            cores[i], i, start_angle, end_angle, totals[i],
+            out_totals[i], in_totals[i]))
         angle = end_angle + gap
 
     tick_angles: List[Dict[int, float]] = [dict() for _ in range(n)]
+    egress_ticks: List[Dict[int, float]] = [dict() for _ in range(n)]
+    ingress_ticks: List[Dict[int, float]] = [dict() for _ in range(n)]
+
+    def _place(links, dest_map, arc):
+        link_total = sum(m for _, m in links)
+        span = arc.end_angle - arc.start_angle
+        cursor = arc.start_angle
+        for j, mag in links:
+            sl = (span * (mag / link_total) if link_total > 0
+                  else (span / len(links) if links else 0.0))
+            dest_map[j] = cursor + sl / 2
+            cursor += sl
+
     for i in range(n):
         arc = arcs[i]
-        links = []
+        combined, egress, ingress = [], [], []
         for j in range(n):
             if j == i:
                 continue
             gij = grid[i][j] if i < len(grid) and j < len(grid[i]) else 0
             gji = grid[j][i] if j < len(grid) and i < len(grid[j]) else 0
-            mag = gij + gji
-            if mag > 0:
-                links.append((j, mag))
-        link_total = sum(m for _, m in links)
-        span = arc.end_angle - arc.start_angle
-        cursor = arc.start_angle
-        for j, mag in links:
-            sl = span * (mag / link_total) if link_total > 0 else span / len(links)
-            tick_angles[i][j] = cursor + sl / 2
-            cursor += sl
+            if gij + gji > 0:
+                combined.append((j, gij + gji))
+            if gij > 0:
+                egress.append((j, gij))
+            if gji > 0:
+                ingress.append((j, gji))
+        _place(combined, tick_angles[i], arc)
+        _place(egress, egress_ticks[i], arc)
+        _place(ingress, ingress_ticks[i], arc)
 
-    return ChordLayout(arcs=arcs, tick_angles=tick_angles)
+    return ChordLayout(
+        arcs=arcs, tick_angles=tick_angles,
+        egress_ticks=egress_ticks, ingress_ticks=ingress_ticks, grid=grid)
+
+def _build_corridor_inspector_model(
+        trace: "BtfTrace",
+        lo: Optional[int] = None,
+        hi: Optional[int] = None,
+        *,
+        bounce_only: bool = False,
+        top_pct: Optional[int] = None,
+        time_bins: int = 32) -> dict:
+    """Unified corridor inspector model — parity with web buildCorridorInspectorModel."""
+    cores = list(trace.core_names)
+    if top_pct is None:
+        top_pct = _default_corridor_top_pct(len(cores))
+    bounce_ns = trace.lock_bounce_migration_ns
+    t_min = lo if lo is not None else trace.time_min
+    t_hi = hi if hi is not None else trace.time_max
+    span = max(t_hi - t_min, 1)
+    bin_w = span / time_bins
+    ns_per = {"ns": 1e9, "us": 1e6, "ms": 1e3, "s": 1.0}.get(trace.time_scale, 1e9)
+    scope_sec = span / ns_per
+
+    by_key: Dict[Tuple[str, str], dict] = {}
+    n_cores_m = len(cores)
+    core_idx = {c: i for i, c in enumerate(cores)}
+    full_grid = [[0] * n_cores_m for _ in range(n_cores_m)]
+    for m in _migrations_in_range(trace, lo, hi):
+        if bounce_only and m.ns not in bounce_ns:
+            continue
+        if m.from_core == m.to_core:
+            continue
+        fi = core_idx.get(m.from_core)
+        ti = core_idx.get(m.to_core)
+        if fi is not None and ti is not None:
+            full_grid[fi][ti] += 1
+        key = (m.from_core, m.to_core)
+        row = by_key.get(key)
+        if row is None:
+            row = {
+                "from_core": m.from_core,
+                "to_core": m.to_core,
+                "label": f"{_core_short_name(m.from_core)}→{_core_short_name(m.to_core)}",
+                "count": 0,
+                "bounces": 0,
+                "gap_sum": 0,
+                "bins": [0] * time_bins,
+                "bounce_bins": [0] * time_bins,
+                "tasks": {},
+            }
+            by_key[key] = row
+        row["count"] += 1
+        is_bounce = m.ns in bounce_ns
+        if is_bounce:
+            row["bounces"] += 1
+        row["gap_sum"] += m.gap_ns
+        bi = _heatmap_bin_index_for_ns(t_min, bin_w, time_bins, t_hi, m.ns)
+        row["bins"][bi] += 1
+        if is_bounce:
+            row["bounce_bins"][bi] += 1
+        mk = m.merge_key
+        if mk:
+            t = row["tasks"].get(mk)
+            if t is None:
+                t = {
+                    "mk": mk, "count": 0, "bounces": 0,
+                    "bins": [0] * time_bins,
+                    "bounce_bins": [0] * time_bins,
+                }
+                row["tasks"][mk] = t
+            t["count"] += 1
+            if is_bounce:
+                t["bounces"] += 1
+                t["bounce_bins"][bi] += 1
+            t["bins"][bi] += 1
+
+    all_corridors = []
+    for row in by_key.values():
+        rev = by_key.get((row["to_core"], row["from_core"]))
+        rev_count = rev["count"] if rev else 0
+        tasks = sorted(row["tasks"].values(),
+                       key=lambda t: (-t["count"], t["mk"]))
+        task_rows = []
+        for t in tasks:
+            raw = trace.task_repr.get(t["mk"], t["mk"])
+            label = _task_display_name(raw)
+            id_list, _nm = _corridor_task_ids_and_name(
+                {"mk": t["mk"], "label": label})
+            task_rows.append({
+                "mk": t["mk"],
+                "label": label,
+                "task_id": int(id_list[0]) if id_list else None,
+                "count": t["count"],
+                "bounces": t["bounces"],
+                "bounce_pct": (100.0 * t["bounces"] / t["count"]) if t["count"] else 0.0,
+                "share_pct": (100.0 * t["count"] / row["count"]) if row["count"] else 0.0,
+                "bins": t["bins"],
+                "bounce_bins": t["bounce_bins"],
+            })
+        peak_bin = max(range(time_bins), key=lambda b: row["bins"][b]) if time_bins else 0
+        peak_val = row["bins"][peak_bin] if time_bins else 0
+        all_corridors.append({
+            "from_core": row["from_core"],
+            "to_core": row["to_core"],
+            "label": row["label"],
+            "count": row["count"],
+            "bounces": row["bounces"],
+            "bounce_pct": (100.0 * row["bounces"] / row["count"]) if row["count"] else 0.0,
+            "avg_gap_ns": (row["gap_sum"] // row["count"]) if row["count"] else 0,
+            "rate_per_s": (row["count"] / scope_sec) if scope_sec > 0 else 0.0,
+            "net": _net_migration_balance(rev_count, row["count"]),
+            "rev_count": rev_count,
+            "bins": row["bins"],
+            "bounce_bins": row["bounce_bins"],
+            "tasks": task_rows,
+            "primary_task": task_rows[0] if task_rows else None,
+            "peak_bin": peak_bin,
+            "peak_count": peak_val,
+        })
+    all_corridors.sort(key=lambda c: (-c["count"], c["label"]))
+    corridors = _filter_corridors_by_top_pct(all_corridors, top_pct)
+
+    group_by_source = len(cores) > 16
+    groups = _corridor_groups_by_source(corridors) if group_by_source else []
+
+    matrix_cores = cores
+    filtered_grid = []
+    corridor_set = {(c["from_core"], c["to_core"]) for c in corridors}
+    for i, fc in enumerate(matrix_cores):
+        row = []
+        for j, tc in enumerate(matrix_cores):
+            if i == j:
+                row.append(0)
+            elif (fc, tc) in corridor_set:
+                row.append(full_grid[i][j])
+            else:
+                row.append(0)
+        filtered_grid.append(row)
+
+    task_agg: Dict[str, Dict[str, int]] = {}
+    for c in all_corridors:
+        for core in (c["from_core"], c["to_core"]):
+            agg = task_agg.setdefault(core, {})
+            for t in c.get("tasks") or []:
+                mk = t.get("mk")
+                if not mk:
+                    continue
+                agg[mk] = agg.get(mk, 0) + int(t.get("count") or 0)
+    core_stats = []
+    n_mat = len(matrix_cores)
+    for i, core in enumerate(matrix_cores):
+        out_v = inn_v = 0
+        for j in range(n_mat):
+            if i == j:
+                continue
+            if i < len(full_grid) and j < len(full_grid[i]):
+                out_v += full_grid[i][j]
+            if j < len(full_grid) and i < len(full_grid[j]):
+                inn_v += full_grid[j][i]
+        top3 = sorted(task_agg.get(core, {}).items(), key=lambda kv: -kv[1])[:3]
+        core_stats.append({
+            "core": core,
+            "out": out_v,
+            "in": inn_v,
+            "net": _net_migration_balance(inn_v, out_v),
+            "top_tasks": [
+                {
+                    "mk": mk,
+                    "label": _task_display_name(trace.task_repr.get(mk, mk)),
+                    "count": n,
+                }
+                for mk, n in top3
+            ],
+        })
+
+    hotspot = None
+    for c in all_corridors:
+        score = c["count"] + c["bounces"] * 2
+        if hotspot is None or score > hotspot["score"]:
+            offender = c["primary_task"]
+            hotspot = {
+                "score": score,
+                "from_core": c["from_core"],
+                "to_core": c["to_core"],
+                "label": c["label"],
+                "count": c["count"],
+                "bounces": c["bounces"],
+                "bounce_pct": c["bounce_pct"],
+                "peak_bin": c["peak_bin"],
+                "task": offender,
+                "summary": (
+                    f"Hotspot: {offender['label']} on {c['label']} "
+                    f"({c['count']} mig, {c['bounce_pct']:.0f}% bounce)"
+                    if offender else
+                    f"Hotspot: {c['label']} ({c['count']} migrations)"
+                ),
+            }
+
+    max_bin = 0
+    for c in corridors:
+        for v in c["bins"]:
+            if v > max_bin:
+                max_bin = v
+
+    return {
+        "cores": matrix_cores,
+        "corridors": corridors,
+        "all_corridors": all_corridors,
+        "groups": groups,
+        "group_by_source": group_by_source,
+        "top_pct": top_pct,
+        "time_bins": time_bins,
+        "t_min": t_min,
+        "t_max": t_hi,
+        "bin_w": bin_w,
+        "max_bin": max_bin,
+        "matrix": {"cores": matrix_cores, "grid": full_grid},
+        "filtered_matrix": {"cores": matrix_cores, "grid": filtered_grid},
+        "core_stats": core_stats,
+        "hotspot": hotspot,
+        "has_data": any(c["count"] > 0 for c in corridors),
+    }
 
 def _migration_core_outgoing_heatmap(trace: "BtfTrace", from_core: str,
                                      lo: Optional[int] = None, hi: Optional[int] = None,
@@ -4669,6 +5320,8 @@ def _core_util_pct_rows(
     hi: Optional[int] = None,
 ) -> List[Tuple[str, float]]:
     """Per-core util % excluding IDLE/TICK (same logic as StatsPanel._core_util_rows)."""
+    if lo is None and hi is None and trace.core_util_pct:
+        return [(c, float(trace.core_util_pct.get(c, 0.0))) for c in trace.core_names]
     if lo is not None and hi is not None:
         total_ns = hi - lo
     else:
@@ -4677,7 +5330,7 @@ def _core_util_pct_rows(
         return []
     rows: List[Tuple[str, float]] = []
     for core in trace.core_names:
-        segs = trace.core_segs.get(core, [])
+        segs = _core_segs_in_range(trace, core, lo, hi)
         if lo is not None and hi is not None:
             active_ns = sum(
                 _seg_overlap_ns(s, lo, hi) for s in segs
@@ -4790,7 +5443,7 @@ def _trace_summary_snapshot(trace: "BtfTrace",
     gap_avg = int(round(sum(gaps) / len(gaps))) if gaps else 0
     gap_max = max(gaps) if gaps else 0
     if lo is not None and hi is not None:
-        migrations = sum(1 for m in trace.migrations if lo <= m.ns <= hi)
+        migrations = len(_migrations_in_range(trace, lo, hi))
         mig_tasks = len(_migration_rows(trace, lo, hi))
         segments = sum(
             1 for s in trace.segments if s.end > lo and s.start < hi)
@@ -5537,6 +6190,40 @@ def _find_extreme_inter_arrival_segment(segs: list,
 class _ParseCancelledError(Exception):
     """Internal control-flow exception used to abort _parse_btf cleanly."""
 
+
+def _drawable_time_range(
+    segments: List[TaskSegment],
+    sti_events: List[StiEvent],
+    tick_sti_times: List[int],
+) -> Optional[Tuple[int, int]]:
+    """Span covering painted activity (run segments, STI, tick marks).
+
+    Boot-time ``task_create`` / ``set_frequency`` events are excluded so
+    fit-to-window does not leave a blank left margin.
+    """
+    lo: Optional[int] = None
+    hi: Optional[int] = None
+    for seg in segments:
+        if lo is None or seg.start < lo:
+            lo = seg.start
+        if hi is None or seg.end > hi:
+            hi = seg.end
+    for ev in sti_events:
+        t = ev.time
+        if lo is None or t < lo:
+            lo = t
+        if hi is None or t > hi:
+            hi = t
+    for t in tick_sti_times:
+        if lo is None or t < lo:
+            lo = t
+        if hi is None or t > hi:
+            hi = t
+    if lo is None or hi is None or hi <= lo:
+        return None
+    return lo, hi
+
+
 def _parse_btf(filepath: str,
               progress_callback=None,
               cancel_check=None) -> BtfTrace:
@@ -5614,8 +6301,9 @@ def _parse_btf(filepath: str,
             ev_type = parts[3]
             if ev_type and (ev_type[0] == " " or ev_type[-1] == " "):
                 ev_type = ev_type.strip()
-            # Update time bounds only for non-C (non-set_frequency) events so
-            # that the trace start is anchored to the first scheduling event.
+            # Update time bounds only for non-C (non-set_frequency) events.
+            # After segment reconstruction these are tightened to drawable
+            # activity so a task_create storm does not pad the left margin.
             if ev_type != "C":
                 if first_event:
                     time_min = time_max = t
@@ -5820,6 +6508,10 @@ def _parse_btf(filepath: str,
     for _lst in segs_by_mk.values():
         _lst.sort(key=_seg_start_key)
     _migrations, _migrations_by_mk = _build_migration_index(segs_by_mk)
+    if progress_callback:
+        progress_callback(61, "Indexing migrations…")
+    _migration_times = [m.ns for m in _migrations]
+    _migrated_mks = frozenset(_migrations_by_mk.keys())
     def _core_sort_key(c: str):
         if c.startswith("Core_"):
             tail = c[5:]
@@ -5875,6 +6567,9 @@ def _parse_btf(filepath: str,
     # span) so that scene rebuilds never iterate more than _LOD_SUMMARY_BINS
     # segments per row at fit-to-view zoom.
     # ------------------------------------------------------------------
+    _drawn = _drawable_time_range(segments, sti_events, tick_sti_times)
+    if _drawn is not None:
+        time_min, time_max = _drawn
     _time_span = max(time_max - time_min, 1)
     _lod_timescale_per_px = _time_span / _LOD_SUMMARY_BINS  # ns per summary bin
     _lod_ultra_timescale_per_px = _time_span / _LOD_SUMMARY_BINS_ULTRA
@@ -5992,7 +6687,17 @@ def _parse_btf(filepath: str,
         for _iid, _insts in _interval_by_id.items()
     }
 
-    return BtfTrace(
+    _task_cpu_ns: Dict[str, int] = {}
+    for mk, segs in segs_by_mk.items():
+        raw = _mk_repr.get(mk, mk)
+        tname = _parse_task_name(raw)[2]
+        if _is_idle_task_name(tname) or tname == "TICK":
+            continue
+        t_ns = sum(s.end - s.start for s in segs)
+        if t_ns > 0:
+            _task_cpu_ns[mk] = t_ns
+
+    trace = BtfTrace(
         time_scale=time_scale,
         tasks=tasks,
         segments=segments,
@@ -6051,7 +6756,17 @@ def _parse_btf(filepath: str,
         has_sync_object_instrumentation=_has_sync,
         lock_bounce_migration_ns=_build_lock_bounce_migration_set(
             dict(_migrations_by_mk), _sync_objects),
+        migration_times=_migration_times,
+        migrated_mks=_migrated_mks,
+        task_cpu_ns=_task_cpu_ns,
     )
+    if progress_callback:
+        progress_callback(99, "Preparing statistics…")
+    _ctx, _gaps = _scheduling_stats(trace)
+    trace.sched_ctx_switches = _ctx
+    trace.sched_core_gaps = _gaps
+    trace.migration_rows_full = _migration_rows(trace)
+    return trace
 
 # ===========================================================================
 # Timeline Widget
@@ -12069,6 +12784,7 @@ class TimelineView(QGraphicsView):
     """Pan + zoom QGraphicsView wrapping a TimelineScene."""
 
     zoom_changed         = Signal(float)
+    viewport_changed     = Signal()
     label_width_changed  = Signal(int)
     label_width_resizing = Signal(int)  # live drag; CPU load repaints without persisting
     cursors_changed      = Signal(list)
@@ -12101,6 +12817,7 @@ class TimelineView(QGraphicsView):
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.AnchorViewCenter)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self._programmatic_viewport = 0
 
         # -- Mouse interaction state -------------------------------------
         # Tracks the press position to distinguish click vs drag; button to
@@ -12232,7 +12949,7 @@ class TimelineView(QGraphicsView):
         self._virt_scroll_scale: float = 1.0
         self._syncing_time_scrollbar: bool = False
         self._virtual_time_scroll_active: bool = False
-        self._native_time_bar_interaction_connected: bool = False
+        self._native_time_bar_interaction_conn = None
         self._virt_scroll_rebuild: bool = False
         self._syncing_virt_bar: bool = False
         self._virt_bar_dragging: bool = False
@@ -12484,23 +13201,21 @@ class TimelineView(QGraphicsView):
             self._position_virt_trace_bar()
             self._sync_native_scene_scrollbar()
             native.installEventFilter(self)
-            if not self._native_time_bar_interaction_connected:
-                native.valueChanged.connect(
-                    self._on_native_time_bar_interaction,
-                    Qt.ConnectionType.UniqueConnection)
-                self._native_time_bar_interaction_connected = True
+            if self._native_time_bar_interaction_conn is None:
+                self._native_time_bar_interaction_conn = native.valueChanged.connect(
+                    self._on_native_time_bar_interaction)
             if not self._zoom_reanchor_pending:
                 self._capture_virt_time_scroll_px()
             self._update_virt_trace_bar_range()
             self._push_virt_trace_bar()
         else:
-            if self._native_time_bar_interaction_connected:
+            conn = self._native_time_bar_interaction_conn
+            if conn is not None:
                 try:
-                    native.valueChanged.disconnect(
-                        self._on_native_time_bar_interaction)
+                    QObject.disconnect(conn)
                 except (RuntimeError, TypeError):
                     pass
-                self._native_time_bar_interaction_connected = False
+                self._native_time_bar_interaction_conn = None
             native.removeEventFilter(self)
             overlay.hide()
             if self._time_scroll_external and self._scene._horizontal:
@@ -12728,8 +13443,18 @@ class TimelineView(QGraphicsView):
         if not self._nav_popup._dragging:
             self._nav_hide_timer.start()
 
+    def begin_programmatic_viewport(self) -> None:
+        """Ignore inspector follow while Jump/Spotlight zooms the timeline."""
+        self._programmatic_viewport = getattr(self, "_programmatic_viewport", 0) + 1
+
+    def end_programmatic_viewport(self) -> None:
+        n = getattr(self, "_programmatic_viewport", 0) - 1
+        self._programmatic_viewport = n if n > 0 else 0
+
     def _after_time_axis_pan(self, *, immediate: bool = False) -> None:
         """Refresh navigator/minimap after any time-axis pan (wheel, bar, overlay)."""
+        if not getattr(self, "_programmatic_viewport", 0):
+            self.viewport_changed.emit()
         self._pan_timer.start()
         if immediate or self._virt_bar_dragging:
             self._refresh_nav_pan_window(force_show=True)
@@ -20392,6 +21117,7 @@ class _MigrationHeatmapDialog(QDialog):
             "Toggle between showing all migrations and only lock-bounce migrations\n"
             "(migrations that occurred while a mutex was held across different cores).")
         self._bounce_filter_btn.clicked.connect(self._on_bounce_filter_toggled)
+        self._bounce_filter_btn.setVisible(_trace_has_core_bounce_holds(trace))
         nav.addWidget(self._bounce_filter_btn)
         lay.addLayout(nav)
 
@@ -20956,31 +21682,66 @@ class _MigrationHeatmapDialog(QDialog):
                              sub_lo, sub_hi, {mk})
 
 class _ChordDiagramWidget(QWidget):
-    """Paint core-to-core migration volume as a circular chord diagram —
-    parity with the web app's ChordDiagramDialog.vue canvas rendering.
-    Chords are quadratic bezier curves between per-core-pair tick positions
-    (see _build_chord_layout in parser.py); arcs are thick circular bands,
-    one per core, sized proportionally to their in+out migration volume."""
+    """Paint core-to-core migration volume as a circular chord diagram.
+
+    *compact=True* matches web MiniChordPanel (inspector sidebar).
+    *compact=False* matches web ChordDiagramDialog (standalone popup).
+    """
 
     hover_changed = Signal(object)  # emits int core index, or None
+    hover_info = Signal(object)  # None | {type, ...} for inspector footer
+    core_clicked = Signal(object)  # {clear: True} or {core_index, side}
+    pair_clicked = Signal(int)  # second core index (shift-click)
+    corridor_clicked = Signal(str, str)  # from_core, to_core
+    corridor_dbl = Signal(str, str)
 
-    _ARC_THICKNESS = 14
-    _OUTER_PAD = 48
-
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, compact: bool = False):
         super().__init__(parent)
+        self._compact = bool(compact)
+        # MiniChordPanel OUTER_PAD=36; standalone ChordDiagramDialog = 48.
+        self._outer_pad = 36.0 if self._compact else 48.0
+        self._min_radius = 16.0 if self._compact else 20.0
+        self._bidir_sep = 5.0 if self._compact else 6.0
+        self._ribbon_alpha = 0.72 if self._compact else 0.75
+        self._label_gap = 12.0 if self._compact else 14.0
+        self._matrix_pad = 36.0 if self._compact else 40.0
         self._cores: List[str] = []
         self._grid: list = [[]]
         self._layout: Optional[ChordLayout] = None
         self._max_count = 0
         self._hover_index: Optional[int] = None
+        self._hover_side: Optional[str] = None  # 'egress' | 'ingress'
+        self._hover_corridor: Optional[Tuple[int, int]] = None
+        self._last_hover_info = None
         self._pinned_hover = False
+        self._focus_pair: Optional[Tuple[int, int]] = None
+        self._focus_cores: List[int] = []
+        self._direction_mode = "all"
+        self._view_mode = "circle"
         self.setMouseTracking(True)
-        self.setMinimumSize(200, 200)
+        if self._compact:
+            self.setMinimumSize(160, 160)
+        else:
+            self.setMinimumSize(200, 200)
+        self._circle_btn = QPushButton("Circle", self)
+        self._matrix_btn = QPushButton("Matrix", self)
+        fs = 10 if self._compact else 11
+        for _b in (self._circle_btn, self._matrix_btn):
+            _b.setCheckable(True)
+            _b.setVisible(False)
+            _b.setFixedHeight(20 if self._compact else 22)
+            _b.setStyleSheet(
+                f"QPushButton {{ font-size:{fs}px; padding:2px 6px; }}")
+        self._circle_btn.clicked.connect(lambda: self.set_view_mode("circle"))
+        self._matrix_btn.clicked.connect(lambda: self.set_view_mode("matrix"))
 
     def set_data(self, cores: List[str], grid: list) -> None:
-        self._cores = list(cores)
-        self._grid = grid if grid else [[]]
+        cores_l = list(cores or [])
+        grid_l = [list(row) for row in (grid or [])] or [[]]
+        if cores_l == self._cores and grid_l == self._grid:
+            return
+        self._cores = cores_l
+        self._grid = grid_l
         self._layout = _build_chord_layout(self._cores, self._grid)
         m = 0
         for i in range(len(self._cores)):
@@ -20992,11 +21753,75 @@ class _ChordDiagramWidget(QWidget):
                 if v > m:
                     m = v
         self._max_count = m
-        if self._hover_index is not None:
+        if self._hover_index is not None or self._hover_corridor is not None:
             self._hover_index = None
+            self._hover_side = None
+            self._hover_corridor = None
             self.hover_changed.emit(None)
+            self._emit_hover_info(None)
         self._pinned_hover = False
+        prev_n = getattr(self, "_last_core_n", 0)
+        n = len(self._cores)
+        if n > 16 and prev_n <= 16:
+            self._view_mode = "matrix"
+        elif n <= 16:
+            self._view_mode = "circle"
+        self._last_core_n = n
+        self._sync_view_toggle()
         self.update()
+
+    def set_direction_mode(self, mode: str) -> None:
+        m = mode if mode in ("all", "egress", "ingress") else "all"
+        if m == self._direction_mode:
+            return
+        self._direction_mode = m
+        self.update()
+
+    def set_focus_cores(self, indices: Optional[list] = None) -> None:
+        out: List[int] = []
+        n = len(self._cores)
+        for i in indices or []:
+            try:
+                ii = int(i)
+            except (TypeError, ValueError):
+                continue
+            if 0 <= ii < n:
+                out.append(ii)
+        if out == self._focus_cores:
+            return
+        self._focus_cores = out
+        self.update()
+
+    def set_view_mode(self, mode: str) -> None:
+        m = "matrix" if mode == "matrix" else "circle"
+        self._view_mode = m
+        self._sync_view_toggle()
+        self.update()
+
+    def _sync_view_toggle(self) -> None:
+        show = len(self._cores) > 16
+        self._circle_btn.setVisible(show)
+        self._matrix_btn.setVisible(show)
+        self._circle_btn.setChecked(self._view_mode == "circle")
+        self._matrix_btn.setChecked(self._view_mode == "matrix")
+        self._layout_view_toggle()
+
+    def _layout_view_toggle(self) -> None:
+        if not self._circle_btn.isVisible():
+            return
+        self._circle_btn.adjustSize()
+        self._matrix_btn.adjustSize()
+        # Web MiniChordPanel: top-right, 4px inset.
+        gap, inset = 4, 4
+        mw = self._matrix_btn.width()
+        cw = self._circle_btn.width()
+        self._matrix_btn.move(max(inset, self.width() - inset - mw), inset)
+        self._circle_btn.move(
+            max(inset, self._matrix_btn.x() - gap - cw), inset)
+
+    def resizeEvent(self, event) -> None:
+        self._layout_view_toggle()
+        return super().resizeEvent(event)
 
     def set_hover_index(self, index: Optional[int], *, pinned: bool = False) -> None:
         """Programmatically highlight a core arc (and its chords)."""
@@ -21005,6 +21830,7 @@ class _ChordDiagramWidget(QWidget):
         self._pinned_hover = bool(pinned) and index is not None
         if index != self._hover_index:
             self._hover_index = index
+            self._hover_side = None if index is None else self._hover_side
             self.hover_changed.emit(index)
             self.update()
         elif pinned:
@@ -21013,9 +21839,13 @@ class _ChordDiagramWidget(QWidget):
     def clear_hover(self) -> None:
         if self._pinned_hover:
             return
-        if self._hover_index is not None:
+        if (self._hover_index is not None or self._hover_side is not None
+                or self._hover_corridor is not None):
             self._hover_index = None
+            self._hover_side = None
+            self._hover_corridor = None
             self.hover_changed.emit(None)
+            self._emit_hover_info(None)
             self.update()
 
     def leaveEvent(self, event) -> None:
@@ -21031,7 +21861,7 @@ class _ChordDiagramWidget(QWidget):
         w = w if w is not None else self.width()
         h = h if h is not None else self.height()
         cx, cy = w / 2.0, h / 2.0
-        radius = max(20.0, min(w, h) / 2.0 - self._OUTER_PAD)
+        radius = max(self._min_radius, min(w, h) / 2.0 - self._outer_pad)
         return cx, cy, radius
 
     def mouseMoveEvent(self, event) -> None:
@@ -21039,20 +21869,64 @@ class _ChordDiagramWidget(QWidget):
         self._update_hover(pos.x(), pos.y())
         return super().mouseMoveEvent(event)
 
-    def _update_hover(self, mx: float, my: float) -> None:
+    def mousePressEvent(self, event) -> None:
+        pos = event.position() if hasattr(event, "position") else event.pos()
+        mx, my = pos.x(), pos.y()
+        corr = self._hit_corridor(mx, my)
+        if corr is not None:
+            i, j = corr
+            self.corridor_clicked.emit(self._cores[i], self._cores[j])
+            return super().mousePressEvent(event)
+        hit = self._hit_arc(mx, my)
+        if hit is None:
+            self.core_clicked.emit({"clear": True})
+            return super().mousePressEvent(event)
+        mods = event.modifiers()
+        shift = bool(mods & Qt.KeyboardModifier.ShiftModifier)
+        if shift:
+            self.pair_clicked.emit(int(hit[0]))
+        else:
+            self.core_clicked.emit({"core_index": int(hit[0]), "side": hit[1]})
+        return super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        pos = event.position() if hasattr(event, "position") else event.pos()
+        corr = self._hit_corridor(pos.x(), pos.y())
+        if corr is not None:
+            i, j = corr
+            self.corridor_dbl.emit(self._cores[i], self._cores[j])
+        return super().mouseDoubleClickEvent(event)
+
+    def _hit_matrix_cell(self, mx: float, my: float) -> Optional[Tuple[int, int]]:
+        n = len(self._cores)
+        if not n:
+            return None
+        w, h = self.width(), self.height()
+        pad_l = pad_t = self._matrix_pad
+        cell = max(4.0, min((w - pad_l - 8) / n, (h - pad_t - 8) / n))
+        j = int((mx - pad_l) / cell)
+        i = int((my - pad_t) / cell)
+        if i < 0 or j < 0 or i >= n or j >= n or i == j:
+            return None
+        row = self._grid[i] if i < len(self._grid) else []
+        v = row[j] if j < len(row) else 0
+        if not v:
+            return None
+        return i, j
+
+    def _hit_arc(self, mx: float, my: float) -> Optional[Tuple[int, str]]:
+        if self._view_mode == "matrix":
+            return None
         layout = self._layout
         if layout is None or not layout.arcs:
-            self.clear_hover()
-            return
+            return None
         cx, cy, R = self._geometry()
         dx, dy = mx - cx, my - cy
         dist = math.hypot(dx, dy)
-        half_t = self._ARC_THICKNESS / 2 + 4
-        if dist < R - half_t or dist > R + half_t:
-            self.clear_hover()
-            return
+        side = _chord_hit_ring(dist, R)
+        if side is None:
+            return None
         angle = math.atan2(dy, dx)
-        found = None
         for arc in layout.arcs:
             a = angle
             while a < arc.start_angle:
@@ -21060,26 +21934,159 @@ class _ChordDiagramWidget(QWidget):
             while a > arc.start_angle + 2 * math.pi:
                 a -= 2 * math.pi
             if a <= arc.end_angle:
-                found = arc.index
-                break
-        if found != self._hover_index:
+                return arc.index, side
+        return None
+
+    @staticmethod
+    def _dist_point_to_quad(mx: float, my: float, p1: QPointF, ctrl: QPointF,
+                            p2: QPointF, steps: int = 16) -> float:
+        best = 1e18
+        for k in range(steps + 1):
+            t = k / float(steps)
+            u = 1.0 - t
+            x = u * u * p1.x() + 2 * u * t * ctrl.x() + t * t * p2.x()
+            y = u * u * p1.y() + 2 * u * t * ctrl.y() + t * t * p2.y()
+            d = math.hypot(mx - x, my - y)
+            if d < best:
+                best = d
+        return best
+
+    def _emit_hover_info(self, info) -> None:
+        if info == self._last_hover_info:
+            return
+        self._last_hover_info = info
+        self.hover_info.emit(info)
+
+    def _hit_corridor(self, mx: float, my: float) -> Optional[Tuple[int, int]]:
+        if self._view_mode == "matrix":
+            return self._hit_matrix_cell(mx, my)
+        layout = self._layout
+        if layout is None or not self._cores:
+            return None
+        cx, cy, R = self._geometry()
+        _r_e, _r_i, r_ribbon = _chord_ring_geometry(R)
+        best = None
+        best_d = 1e18
+        n = len(self._cores)
+        max_c = float(self._max_count or 1)
+        pt = QPointF(mx, my)
+        stroker = QPainterPathStroker()
+        grid = self._grid
+        for i in range(n):
+            row = grid[i] if i < len(grid) else []
+            for j in range(n):
+                if i == j:
+                    continue
+                count = row[j] if j < len(row) else 0
+                if not count:
+                    continue
+                a0 = layout.egress_tick_angle(i, j)
+                a1 = layout.ingress_tick_angle(j, i)
+                src_half, dst_half = layout.ribbon_half_widths(i, j, max_c)
+                bidir = (grid[j][i] if j < len(grid) and i < len(grid[j]) else 0) > 0
+                sign = 1 if i < j else -1
+                off = self._bidir_sep * sign if bidir else 0.0
+                path = self._tapered_ribbon_path(
+                    cx, cy, r_ribbon, a0, a1, src_half, dst_half, off)
+                p1 = self._point_at(cx, cy, a0, r_ribbon)
+                p2 = self._point_at(cx, cy, a1, r_ribbon)
+                mx_ = (p1.x() + p2.x()) / 2
+                my_ = (p1.y() + p2.y()) / 2
+                vx, vy = mx_ - cx, my_ - cy
+                vlen = math.hypot(vx, vy) or 1.0
+                perp_x, perp_y = -vy / vlen, vx / vlen
+                pull = 0.18
+                ctrl = QPointF(
+                    cx + (vx / vlen) * r_ribbon * pull + perp_x * off,
+                    cy + (vy / vlen) * r_ribbon * pull + perp_y * off)
+                score = self._dist_point_to_quad(mx, my, p1, ctrl, p2)
+                stroker.setWidth(max(10.0, float(src_half + dst_half) + 4.0))
+                fat = stroker.createStroke(path)
+                thresh = max(float(src_half), float(dst_half), 4.0) + 8.0
+                if not (path.contains(pt) or fat.contains(pt) or score <= thresh):
+                    continue
+                if score < best_d:
+                    best_d = score
+                    best = (i, j)
+        return best
+
+    def _update_hover(self, mx: float, my: float) -> None:
+        if self._view_mode == "matrix":
+            cell = self._hit_matrix_cell(mx, my)
+            if cell is None:
+                self.clear_hover()
+                return
+            i, j = cell
+            info = {
+                "type": "corridor",
+                "from": self._cores[i],
+                "to": self._cores[j],
+                "count": (self._grid[i][j] if i < len(self._grid)
+                          and j < len(self._grid[i]) else 0),
+            }
+            changed = self._hover_corridor != cell
+            self._hover_corridor = cell
+            self._hover_index = i
+            self._hover_side = "egress"
+            self._emit_hover_info(info)
+            if changed:
+                self.hover_changed.emit(i)
+                self.update()
+            return
+        corr = self._hit_corridor(mx, my)
+        if corr is not None:
+            i, j = corr
+            info = {
+                "type": "corridor",
+                "from": self._cores[i],
+                "to": self._cores[j],
+                "count": (self._grid[i][j] if i < len(self._grid)
+                          and j < len(self._grid[i]) else 0),
+            }
+            changed = (self._hover_corridor != corr
+                       or self._hover_index != i)
+            self._hover_corridor = corr
+            self._hover_index = i
+            self._hover_side = "egress"
+            self._emit_hover_info(info)
+            if changed:
+                self.hover_changed.emit(i)
+                self.update()
+            return
+        hit = self._hit_arc(mx, my)
+        if hit is None:
+            self.clear_hover()
+            return
+        found, side = hit
+        self._hover_corridor = None
+        self._emit_hover_info({"type": "core", "index": found, "side": side})
+        if found != self._hover_index or side != self._hover_side:
             self._hover_index = found
+            self._hover_side = side
             self.hover_changed.emit(found)
             self.update()
 
-    def _arc_path(self, cx: float, cy: float, r: float,
-                 a0: float, a1: float) -> QPainterPath:
+    def _mono_font(self, px: int, bold: bool = False) -> QFont:
+        fam = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont).family()
+        font = QFont(fam)
+        font.setPixelSize(int(px))
+        font.setBold(bool(bold))
+        return font
+
+    def _stroke_arc(self, p: QPainter, cx: float, cy: float, r: float,
+                    a0: float, a1: float, pen: QPen) -> None:
+        """True circular arc; angles match canvas (0=east, +clockwise, y-down)."""
         span = a1 - a0
-        steps = max(2, int(abs(span) / (math.pi / 90)) + 1)
-        path = QPainterPath()
-        for k in range(steps + 1):
-            a = a0 + span * k / steps
-            pt = self._point_at(cx, cy, a, r)
-            if k == 0:
-                path.moveTo(pt)
-            else:
-                path.lineTo(pt)
-        return path
+        if abs(span) < 1e-9 or r <= 0:
+            return
+        p.setPen(pen)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        # Qt: 0=3 o'clock, +CCW; negate so increasing math angle is clockwise.
+        start_16 = int(round(-math.degrees(a0) * 16))
+        span_16 = int(round(-math.degrees(span) * 16))
+        if span_16 == 0:
+            return
+        p.drawArc(QRectF(cx - r, cy - r, 2 * r, 2 * r), start_16, span_16)
 
     def paintEvent(self, event) -> None:
         p = QPainter(self)
@@ -21089,15 +22096,85 @@ class _ChordDiagramWidget(QWidget):
         finally:
             p.end()
 
+    def _paint_matrix(self, p: QPainter, w: int, h: int) -> None:
+        cores = self._cores
+        n = len(cores)
+        if not n:
+            return
+        pad_l = pad_t = self._matrix_pad
+        cell = max(4.0, min((w - pad_l - 8) / n, (h - pad_t - 8) / n))
+        max_c = float(self._max_count or 1)
+        label_color = self.palette().color(QPalette.ColorRole.WindowText)
+        label_color.setAlpha(160)
+        p.setFont(self._mono_font(9))
+        p.setPen(label_color)
+        extra = set(self._focus_cores or [])
+        if self._hover_index is not None:
+            extra.add(int(self._hover_index))
+        fp = self._focus_pair
+        if fp:
+            extra.add(int(fp[0]))
+            extra.add(int(fp[1]))
+        hc = getattr(self, "_hover_corridor", None)
+        if hc:
+            extra.add(int(hc[0]))
+            extra.add(int(hc[1]))
+        step = _chord_label_step(n, min_px=14.0, span_px=n * cell)
+        for i, core in enumerate(cores):
+            if not _chord_label_visible(i, step, extra):
+                continue
+            name = _core_short_name(core)
+            p.drawText(
+                QRectF(0, pad_t + i * cell, pad_l - 4, cell),
+                int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
+                name)
+            p.save()
+            p.translate(pad_l + i * cell + cell / 2.0, pad_t - 4)
+            p.rotate(-45)
+            p.drawText(QPointF(0, 0), name)
+            p.restore()
+        grid = self._grid
+        focus_pair = self._focus_pair
+        dmode = self._direction_mode
+        focus_cores = self._focus_cores
+        for i in range(n):
+            row = grid[i] if i < len(grid) else []
+            for j in range(n):
+                v = 0 if i == j else (row[j] if j < len(row) else 0)
+                if dmode == "egress" and focus_cores and i != focus_cores[0]:
+                    v = 0
+                if dmode == "ingress" and focus_cores and j != focus_cores[0]:
+                    v = 0
+                x = pad_l + j * cell
+                y = pad_t + i * cell
+                is_dim = self._is_dim_pair(i, j)
+                r = QRectF(x, y, max(1.0, cell - 1), max(1.0, cell - 1))
+                if not v:
+                    p.setOpacity(0.15)
+                    p.fillRect(r, QColor("#444444"))
+                else:
+                    p.setOpacity(
+                        (0.08 if is_dim else 0.9)
+                        * min(1.0, 0.25 + 0.75 * (v / max_c)))
+                    p.fillRect(r, QColor(_core_color(cores[i])))
+        p.setOpacity(1.0)
+
     def _paint(self, p: QPainter, w: int, h: int) -> None:
         cores = self._cores
         layout = self._layout
-        if not cores or layout is None or not layout.arcs:
+        if not cores:
+            return
+        if self._view_mode == "matrix":
+            self._paint_matrix(p, w, h)
+            return
+        if layout is None or not layout.arcs:
             return
         cx, cy, R = self._geometry(w, h)
-        inner = R - self._ARC_THICKNESS / 2 - 2
+        r_egress, r_ingress, r_ribbon = _chord_ring_geometry(R)
         max_count = self._max_count or 1
         hovered = self._hover_index
+        hover_side = self._hover_side
+        focus_pair = getattr(self, "_focus_pair", None)
         grid = self._grid
 
         for i in range(len(cores)):
@@ -21108,54 +22185,96 @@ class _ChordDiagramWidget(QWidget):
                 count = row[j] if j < len(row) else 0
                 if not count:
                     continue
+                focus_cores = self._focus_cores
+                dmode = self._direction_mode
+                if dmode == "egress" and focus_cores and i != focus_cores[0]:
+                    continue
+                if dmode == "ingress" and focus_cores and j != focus_cores[0]:
+                    continue
                 bidir = (grid[j][i] if j < len(grid) and i < len(grid[j]) else 0) > 0
-                p1 = self._point_at(cx, cy, layout.tick_angle(i, j), inner)
-                p2 = self._point_at(cx, cy, layout.tick_angle(j, i), inner)
-                mx, my = (p1.x() + p2.x()) / 2, (p1.y() + p2.y()) / 2
-                vx, vy = mx - cx, my - cy
-                vlen = math.hypot(vx, vy) or 1.0
-                vx, vy = vx / vlen, vy / vlen
-                perp_x, perp_y = -vy, vx
+                a0 = layout.egress_tick_angle(i, j)
+                a1 = layout.ingress_tick_angle(j, i)
+                src_half, dst_half = layout.ribbon_half_widths(i, j, max_count)
                 sign = 1 if i < j else -1
-                bidir_offset = 6 * sign if bidir else 0
-                pull = 0.18
-                ctrl_x = cx + vx * inner * pull + perp_x * bidir_offset
-                ctrl_y = cy + vy * inner * pull + perp_y * bidir_offset
+                bidir_offset = self._bidir_sep * sign if bidir else 0.0
+                path = self._tapered_ribbon_path(
+                    cx, cy, r_ribbon, a0, a1, src_half, dst_half, bidir_offset)
+                p1 = self._point_at(cx, cy, a0, r_ribbon)
+                p2 = self._point_at(cx, cy, a1, r_ribbon)
 
-                is_dim = hovered is not None and hovered != i and hovered != j
-                width = max(1.0, min(12.0, 1 + 10 * (count / max_count)))
-                p.setOpacity(0.08 if is_dim else 0.75)
+                is_dim = self._is_dim_pair(i, j)
+                hot = self._hover_corridor == (i, j)
+                p.setOpacity(
+                    0.05 if is_dim else (0.95 if hot else self._ribbon_alpha))
 
                 grad = QLinearGradient(p1, p2)
                 grad.setColorAt(0.0, QColor(_core_color(cores[i])))
+                grad.setColorAt(_CHORD_GRAD_SOURCE_STOP, QColor(_core_color(cores[i])))
                 grad.setColorAt(1.0, QColor(_core_color(cores[j])))
-                pen = QPen(QBrush(grad), width)
-                pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-
-                path = QPainterPath()
-                path.moveTo(p1)
-                path.quadTo(QPointF(ctrl_x, ctrl_y), p2)
-                p.strokePath(path, pen)
+                p.setBrush(QBrush(grad))
+                p.setPen(Qt.PenStyle.NoPen)
+                p.drawPath(path)
         p.setOpacity(1.0)
 
-        label_color = QColor("#888888")
-        normal_font = QFont(self.font())
-        normal_font.setPointSize(max(7, normal_font.pointSize() - 1))
-        bold_font = QFont(normal_font)
-        bold_font.setBold(True)
+        label_color = self.palette().color(QPalette.ColorRole.WindowText)
+        label_color.setAlpha(160)
+        if self._compact:
+            normal_font, bold_font = self._mono_font(10), self._mono_font(11, True)
+        else:
+            normal_font, bold_font = self._mono_font(11), self._mono_font(12, True)
+
+        extra_lbl = set(self._focus_cores or [])
+        if hovered is not None:
+            extra_lbl.add(int(hovered))
+        if focus_pair:
+            extra_lbl.add(int(focus_pair[0]))
+            extra_lbl.add(int(focus_pair[1]))
+        hc = getattr(self, "_hover_corridor", None)
+        if hc:
+            extra_lbl.add(int(hc[0]))
+            extra_lbl.add(int(hc[1]))
+        circ = 2.0 * math.pi * max(R, 1.0)
+        label_step = _chord_label_step(len(cores), min_px=16.0, span_px=circ)
 
         for arc in layout.arcs:
             is_hover = hovered == arc.index
-            pen = QPen(QColor(_core_color(arc.core)))
-            pen.setWidthF(self._ARC_THICKNESS)
-            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-            p.setOpacity(1.0 if hovered is None or is_hover else 0.35)
-            p.strokePath(
-                self._arc_path(cx, cy, R, arc.start_angle, arc.end_angle), pen)
+            focused = is_hover or self._arc_focused(arc.index)
+            dim_arc = (
+                (hovered is not None or focus_pair is not None
+                 or bool(self._focus_cores))
+                and not focused)
+            # Outer = egress / departures
+            pen_out = QPen(QColor(_core_color(arc.core)))
+            pen_out.setWidthF(_CHORD_ARC_OUTER)
+            pen_out.setCapStyle(Qt.PenCapStyle.FlatCap)
+            if dim_arc:
+                p.setOpacity(0.25)
+            elif hover_side == "ingress" and is_hover:
+                p.setOpacity(0.35)
+            else:
+                p.setOpacity(1.0)
+            self._stroke_arc(
+                p, cx, cy, r_egress, arc.start_angle, arc.end_angle, pen_out)
+            # Inner = ingress / arrivals
+            pen_in = QPen(QColor(_core_color(arc.core)))
+            pen_in.setWidthF(_CHORD_ARC_INNER)
+            pen_in.setCapStyle(Qt.PenCapStyle.FlatCap)
+            if dim_arc:
+                p.setOpacity(0.25)
+            elif hover_side == "egress" and is_hover:
+                p.setOpacity(0.35)
+            else:
+                p.setOpacity(0.85)
+            self._stroke_arc(
+                p, cx, cy, r_ingress, arc.start_angle, arc.end_angle, pen_in)
 
+            if not _chord_label_visible(arc.index, label_step, extra_lbl):
+                continue
             mid = (arc.start_angle + arc.end_angle) / 2
-            lp = self._point_at(cx, cy, mid, R + self._ARC_THICKNESS / 2 + 14)
-            p.setFont(bold_font if is_hover else normal_font)
+            lp = self._point_at(
+                cx, cy, mid, r_egress + _CHORD_ARC_OUTER / 2 + self._label_gap)
+            use_bold = focused if self._compact else is_hover
+            p.setFont(bold_font if use_bold else normal_font)
             p.setOpacity(1.0)
             p.setPen(label_color)
             fm = QFontMetricsF(p.font())
@@ -21171,6 +22290,73 @@ class _ChordDiagramWidget(QWidget):
             ty = lp.y() + (fm.ascent() - fm.descent()) / 2
             p.drawText(QPointF(tx, ty), text)
         p.setOpacity(1.0)
+
+    def _tapered_ribbon_path(self, cx, cy, r_inner, a0, a1,
+                            src_half, dst_half, bidir_offset) -> QPainterPath:
+        p1 = self._point_at(cx, cy, a0, r_inner)
+        p2 = self._point_at(cx, cy, a1, r_inner)
+        mx = (p1.x() + p2.x()) / 2
+        my = (p1.y() + p2.y()) / 2
+        vx, vy = mx - cx, my - cy
+        vlen = math.hypot(vx, vy) or 1.0
+        vx, vy = vx / vlen, vy / vlen
+        perp_x, perp_y = -vy, vx
+        pull = 0.18
+        ctrl = QPointF(cx + vx * r_inner * pull + perp_x * bidir_offset,
+                       cy + vy * r_inner * pull + perp_y * bidir_offset)
+        t0x, t0y = ctrl.x() - p1.x(), ctrl.y() - p1.y()
+        t0len = math.hypot(t0x, t0y) or 1.0
+        n0x, n0y = -t0y / t0len, t0x / t0len
+        t1x, t1y = p2.x() - ctrl.x(), p2.y() - ctrl.y()
+        t1len = math.hypot(t1x, t1y) or 1.0
+        n1x, n1y = -t1y / t1len, t1x / t1len
+        mid_n_x = (n0x + n1x) / 2
+        mid_n_y = (n0y + n1y) / 2
+        mid_half = (src_half + dst_half) / 2
+        sL = QPointF(p1.x() + n0x * src_half, p1.y() + n0y * src_half)
+        sR = QPointF(p1.x() - n0x * src_half, p1.y() - n0y * src_half)
+        dL = QPointF(p2.x() + n1x * dst_half, p2.y() + n1y * dst_half)
+        dR = QPointF(p2.x() - n1x * dst_half, p2.y() - n1y * dst_half)
+        cL = QPointF(ctrl.x() + mid_n_x * mid_half, ctrl.y() + mid_n_y * mid_half)
+        cR = QPointF(ctrl.x() - mid_n_x * mid_half, ctrl.y() - mid_n_y * mid_half)
+        path = QPainterPath()
+        path.moveTo(sL)
+        path.quadTo(cL, dL)
+        path.lineTo(dR)
+        path.quadTo(cR, sR)
+        path.closeSubpath()
+        return path
+
+    def set_focus_pair(self, from_core: Optional[str], to_core: Optional[str]) -> None:
+        if from_core and to_core and from_core in self._cores and to_core in self._cores:
+            self._focus_pair = (self._cores.index(from_core), self._cores.index(to_core))
+        else:
+            self._focus_pair = None
+        self.update()
+
+    def _arc_focused(self, index: int) -> bool:
+        if self._focus_pair is not None and index in self._focus_pair:
+            return True
+        return index in (self._focus_cores or [])
+
+    def _is_dim_pair(self, i: int, j: int) -> bool:
+        focus_pair = self._focus_pair
+        if focus_pair is not None:
+            fi, tj = focus_pair
+            return not (i == fi and j == tj)
+        fc = self._focus_cores or []
+        if len(fc) == 1:
+            return i != fc[0] and j != fc[0]
+        if len(fc) == 2:
+            a, b = fc[0], fc[1]
+            return not ((i == a and j == b) or (i == b and j == a))
+        hovered = self._hover_index
+        hover_side = self._hover_side
+        if hover_side == "egress":
+            return hovered is not None and i != hovered
+        if hover_side == "ingress":
+            return hovered is not None and j != hovered
+        return hovered is not None and hovered != i and hovered != j
 
     def grab_full_pixmap(self) -> QPixmap:
         """Snapshot the current diagram as-rendered (fixed-size, unlike the
@@ -21194,7 +22380,7 @@ class _ChordDiagramWidget(QWidget):
         if not cores or layout is None or not layout.arcs:
             return
         cx, cy, R = self._geometry(w, h)
-        inner = R - self._ARC_THICKNESS / 2 - 2
+        r_egress, r_ingress, r_ribbon = _chord_ring_geometry(R)
         max_count = self._max_count or 1
         grid = self._grid
         bg = self.palette().color(QPalette.Window).name()
@@ -21210,18 +22396,18 @@ class _ChordDiagramWidget(QWidget):
                 if not count:
                     continue
                 bidir = (grid[j][i] if j < len(grid) and i < len(grid[j]) else 0) > 0
-                p1 = self._point_at(cx, cy, layout.tick_angle(i, j), inner)
-                p2 = self._point_at(cx, cy, layout.tick_angle(j, i), inner)
+                p1 = self._point_at(cx, cy, layout.egress_tick_angle(i, j), r_ribbon)
+                p2 = self._point_at(cx, cy, layout.ingress_tick_angle(j, i), r_ribbon)
                 mx, my = (p1.x() + p2.x()) / 2, (p1.y() + p2.y()) / 2
                 vx, vy = mx - cx, my - cy
                 vlen = math.hypot(vx, vy) or 1.0
                 vx, vy = vx / vlen, vy / vlen
                 perp_x, perp_y = -vy, vx
                 sign = 1 if i < j else -1
-                bidir_offset = 6 * sign if bidir else 0
+                bidir_offset = self._bidir_sep * sign if bidir else 0.0
                 pull = 0.18
-                ctrl_x = cx + vx * inner * pull + perp_x * bidir_offset
-                ctrl_y = cy + vy * inner * pull + perp_y * bidir_offset
+                ctrl_x = cx + vx * r_ribbon * pull + perp_x * bidir_offset
+                ctrl_y = cy + vy * r_ribbon * pull + perp_y * bidir_offset
                 width = max(1.0, min(12.0, 1 + 10 * (count / max_count)))
                 gid = f"chord-grad-{i}-{j}"
                 defs.append(
@@ -21233,26 +22419,35 @@ class _ChordDiagramWidget(QWidget):
                 chord_paths.append(
                     f'<path d="M {p1.x():.2f} {p1.y():.2f} Q {ctrl_x:.2f} {ctrl_y:.2f} '
                     f'{p2.x():.2f} {p2.y():.2f}" stroke="url(#{gid})" '
-                    f'stroke-width="{width:.2f}" stroke-opacity="0.75" fill="none" '
-                    'stroke-linecap="round"/>')
+                    f'stroke-width="{width:.2f}" stroke-opacity="{self._ribbon_alpha:.2f}" '
+                    'fill="none" stroke-linecap="butt"/>')
 
         arc_parts = []
+        svg_step = _chord_label_step(
+            len(cores), min_px=16.0, span_px=2.0 * math.pi * max(R, 1.0))
         for arc in layout.arcs:
-            p1 = self._point_at(cx, cy, arc.start_angle, R)
-            p2 = self._point_at(cx, cy, arc.end_angle, R)
             large_arc = 1 if (arc.end_angle - arc.start_angle) > math.pi else 0
-            arc_parts.append(
-                f'<path d="M {p1.x():.2f} {p1.y():.2f} A {R:.2f} {R:.2f} 0 '
-                f'{large_arc} 1 {p2.x():.2f} {p2.y():.2f}" '
-                f'stroke="{esc(_core_color(arc.core))}" stroke-width="{self._ARC_THICKNESS}" '
-                'stroke-opacity="1" fill="none" stroke-linecap="round"/>')
+            for rr, sw, opac in (
+                    (r_egress, _CHORD_ARC_OUTER, 1.0),
+                    (r_ingress, _CHORD_ARC_INNER, 0.85)):
+                p1 = self._point_at(cx, cy, arc.start_angle, rr)
+                p2 = self._point_at(cx, cy, arc.end_angle, rr)
+                arc_parts.append(
+                    f'<path d="M {p1.x():.2f} {p1.y():.2f} A {rr:.2f} {rr:.2f} 0 '
+                    f'{large_arc} 1 {p2.x():.2f} {p2.y():.2f}" '
+                    f'stroke="{esc(_core_color(arc.core))}" stroke-width="{sw}" '
+                    f'stroke-opacity="{opac}" fill="none" stroke-linecap="butt"/>')
+            if not _chord_label_visible(arc.index, svg_step):
+                continue
             mid = (arc.start_angle + arc.end_angle) / 2
-            lp = self._point_at(cx, cy, mid, R + self._ARC_THICKNESS / 2 + 14)
+            lp = self._point_at(
+                cx, cy, mid, r_egress + _CHORD_ARC_OUTER / 2 + self._label_gap)
             cos_mid = math.cos(mid)
             anchor = "start" if cos_mid > 0.15 else "end" if cos_mid < -0.15 else "middle"
+            fsz = 10 if self._compact else 11
             arc_parts.append(
                 f'<text x="{lp.x():.2f}" y="{lp.y():.2f}" fill="#888888" '
-                f'font-family="monospace" font-size="11" text-anchor="{anchor}" '
+                f'font-family="monospace" font-size="{fsz}" text-anchor="{anchor}" '
                 f'dominant-baseline="middle">{esc(_core_short_name(arc.core))}</text>')
 
         parts = [
@@ -21268,6 +22463,1298 @@ class _ChordDiagramWidget(QWidget):
         ]
         with open(path, "w", encoding="utf-8") as f:
             f.write("\n".join(parts))
+
+class _CorridorTimelineCanvas(QWidget):
+    """Viewport-sized heatmap canvas (web .ci-grid-canvas); scroll via host bar."""
+
+    corridor_clicked = Signal(object, int)  # corridor dict, bin index
+    corridor_dbl = Signal(object, int)
+
+    _ROW_H = 22
+    _LABEL_W = 78
+    _HEAD_H = 40
+    _FOOT_H = 16
+
+    def __init__(self, host: "QScrollArea", parent=None):
+        super().__init__(parent)
+        self._host = host
+        self._corridors: list = []
+        self._time_bins = 32
+        self._max_bin = 1
+        self._t_min = 0
+        self._t_max = 1
+        self._bin_w = 1.0
+        self._time_scale = "ns"
+        self._selected = None
+        self._highlight_bin = -1
+        self._hover_ri = -1
+        self._hover_bi = -1
+        self.setMouseTracking(True)
+        self.setAutoFillBackground(True)
+        self._tip = QLabel(self)
+        self._tip.setObjectName("corridorGridTip")
+        self._tip.setWordWrap(True)
+        self._tip.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._tip.setStyleSheet(
+            "QLabel#corridorGridTip {"
+            "background: palette(window); color: palette(window-text);"
+            "border: 1px solid palette(mid); border-radius: 4px;"
+            "padding: 6px 8px; font-family: monospace; font-size: 11px;"
+            "}"
+        )
+        self._tip.hide()
+
+    def _content_h(self) -> int:
+        n = len(self._corridors)
+        return self._HEAD_H + n * self._ROW_H + self._FOOT_H
+
+    def _scroll_y(self) -> int:
+        return int(self._host.verticalScrollBar().value())
+
+    def set_model(self, corridors, time_bins, max_bin, t_min, t_max, bin_w, time_scale):
+        self._corridors = list(corridors or [])
+        self._time_bins = time_bins
+        self._max_bin = max(1, max_bin)
+        self._t_min, self._t_max, self._bin_w = t_min, t_max, bin_w
+        self._time_scale = time_scale
+        self.update()
+
+    def set_selection(self, corridor, highlight_bin=-1):
+        self._selected = corridor
+        self._highlight_bin = highlight_bin
+        self.update()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        try:
+            self._paint_corridor_grid(p)
+        finally:
+            p.end()
+
+    def _paint_corridor_grid(self, p):
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setClipRect(self.rect())
+        w = self.width()
+        row_h, head_h, label_w, foot_h = (
+            self._ROW_H, self._HEAD_H, self._LABEL_W, self._FOOT_H)
+        corridors = self._corridors
+        bins = max(self._time_bins, 1)
+        plot_w = max(1.0, w - label_w)
+        cell_w = plot_w / bins
+        sy = self._scroll_y()
+        vp_h = max(1, self.height())
+        bg = self.palette().color(QPalette.ColorRole.Window)
+        fg = QColor("#888888")
+        p.fillRect(self.rect(), bg)
+        plot_top = head_h
+        plot_bot = max(plot_top, vp_h - foot_h)
+        p.save()
+        p.setClipRect(QRectF(0, plot_top, w, plot_bot - plot_top))
+        first = max(0, (sy - head_h) // row_h)
+        last = min(len(corridors) - 1, (sy + vp_h - head_h) // row_h + 1)
+        for ri in range(first, last + 1):
+            c = corridors[ri]
+            y = head_h + ri * row_h - sy
+            if y + row_h < plot_top or y > plot_bot:
+                continue
+            sel = self._selected
+            selected = bool(
+                sel
+                and sel.get("from_core") == c["from_core"]
+                and sel.get("to_core") == c["to_core"])
+            if selected:
+                p.fillRect(0, y, w, row_h, QColor(100, 160, 255, 30))
+            p.setPen(fg)
+            font = QFont("monospace", 8)
+            font.setBold(selected)
+            p.setFont(font)
+            p.drawText(QRectF(2, y, label_w - 6, row_h),
+                       int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight),
+                       c.get("label", ""))
+            for b in range(bins):
+                v = c["bins"][b] if b < len(c["bins"]) else 0
+                bv = c["bounce_bins"][b] if b < len(c["bounce_bins"]) else 0
+                x = label_w + b * cell_w
+                if v > 0:
+                    intensity = min(1.0, v / self._max_bin)
+                    p.fillRect(QRectF(x + 0.5, y + 2, cell_w - 1, row_h - 4),
+                               QColor(70, 130, 220, int(40 + 190 * intensity)))
+                else:
+                    p.fillRect(QRectF(x + 0.5, y + 2, cell_w - 1, row_h - 4),
+                               QColor(127, 127, 127, 16))
+                if bv > 0 and v > 0 and bv / v >= 0.15:
+                    p.setPen(QPen(QColor(232, 120, 32, 160), 1))
+                    for s in range(int(-row_h), int(cell_w + row_h), 4):
+                        p.drawLine(QPointF(x + s, y + row_h),
+                                   QPointF(x + s + row_h, y))
+                if selected and self._highlight_bin == b:
+                    p.setPen(QPen(QColor(255, 220, 80, 220), 1))
+                    p.drawRect(QRectF(x + 0.5, y + 1, cell_w - 1, row_h - 2))
+                elif self._hover_ri == ri and self._hover_bi == b:
+                    p.setPen(QPen(QColor(180, 200, 255, 180), 1))
+                    p.drawRect(QRectF(x + 0.5, y + 1, cell_w - 1, row_h - 2))
+        p.restore()
+        # Sticky time axis (parity with web .ci-grid-canvas).
+        p.fillRect(QRectF(0, 0, w, head_h), bg)
+        p.setPen(fg)
+        p.setFont(QFont("monospace", 8))
+        p.drawText(4, 12,
+                   "Y: corridor (src→dst)   X: time   color: mig count   hatch: lock bounce")
+        p.drawText(4, 26, "src→dst")
+        tick_n = min(bins, 6)
+        fm = QFontMetrics(p.font())
+        for t in range(tick_n + 1):
+            frac = t / tick_n
+            ns = int(self._t_min + frac * (self._t_max - self._t_min))
+            x = label_w + frac * plot_w
+            label = _format_time(ns, self._time_scale)
+            ty = 26
+            if frac < 0.05:
+                p.drawText(int(x), ty, label)
+            elif frac > 0.95:
+                p.drawText(int(x) - fm.horizontalAdvance(label), ty, label)
+            else:
+                p.drawText(int(x) - fm.horizontalAdvance(label) // 2, ty, label)
+        foot_y = vp_h - foot_h
+        p.fillRect(QRectF(0, foot_y, w, foot_h), bg)
+        p.setPen(fg)
+        p.drawText(QRectF(label_w, foot_y, plot_w, foot_h),
+                   int(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter),
+                   "Time →")
+
+    def _hit(self, pos):
+        x, y = pos.x(), pos.y()
+        if y < self._HEAD_H or y > self.height() - self._FOOT_H:
+            return None
+        ri = int((y + self._scroll_y() - self._HEAD_H) / self._ROW_H)
+        plot_w = max(1.0, self.width() - self._LABEL_W)
+        cell_w = plot_w / max(self._time_bins, 1)
+        bi = int((x - self._LABEL_W) / cell_w)
+        if ri < 0 or ri >= len(self._corridors) or bi < 0 or bi >= self._time_bins:
+            return None
+        return self._corridors[ri], ri, bi
+
+    def _bin_tip(self, c, bi) -> str:
+        bin_lo, bin_hi = _heatmap_bin_range(
+            self._t_min, self._bin_w, self._time_bins, self._t_max, bi)
+        n = c["bins"][bi] if bi < len(c["bins"]) else 0
+        bv = c["bounce_bins"][bi] if bi < len(c["bounce_bins"]) else 0
+        lines = [
+            c.get("label", ""),
+            f"{_format_time(bin_lo, self._time_scale)} – "
+            f"{_format_time(bin_hi, self._time_scale)}",
+            f"{n} migration{'s' if n != 1 else ''}",
+        ]
+        if bv:
+            lines.append(f"{bv} lock bounce{'s' if bv != 1 else ''}")
+        tasks = c.get("tasks") or []
+        if n and tasks:
+            lines.append(f"top task: {tasks[0].get('label', '')}")
+        lines.append("click to select bin · double-click to spotlight")
+        return "\n".join(lines)
+
+    def _hide_tip(self) -> None:
+        self._tip.hide()
+
+    def _show_tip_at(self, local_pos, text: str) -> None:
+        self._tip.setText(text)
+        self._tip.adjustSize()
+        pad = 12
+        x = int(local_pos.x()) + pad
+        y = int(local_pos.y()) + pad
+        tw, th = self._tip.sizeHint().width(), self._tip.sizeHint().height()
+        x = max(4, min(x, max(4, self.width() - tw - 4)))
+        y = max(4, min(y, max(4, self.height() - th - 4)))
+        self._tip.move(x, y)
+        self._tip.resize(tw, th)
+        self._tip.show()
+        self._tip.raise_()
+
+    def mouseMoveEvent(self, event):
+        pos = event.position() if hasattr(event, "position") else event.pos()
+        hit = self._hit(pos)
+        if hit is None:
+            if self._hover_ri != -1:
+                self._hover_ri = self._hover_bi = -1
+                self.update()
+            self._hide_tip()
+            return super().mouseMoveEvent(event)
+        c, ri, bi = hit
+        if ri != self._hover_ri or bi != self._hover_bi:
+            self._hover_ri, self._hover_bi = ri, bi
+            self.update()
+        self._show_tip_at(pos, self._bin_tip(c, bi))
+        return super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event):
+        self._hover_ri = self._hover_bi = -1
+        self._hide_tip()
+        self.update()
+        return super().leaveEvent(event)
+
+    def mousePressEvent(self, event):
+        hit = self._hit(event.position() if hasattr(event, "position") else event.pos())
+        if hit:
+            self.corridor_clicked.emit(hit[0], hit[2])
+        return super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        hit = self._hit(event.position() if hasattr(event, "position") else event.pos())
+        if hit and hit[0]["bins"][hit[2]] > 0:
+            self.corridor_dbl.emit(hit[0], hit[2])
+        return super().mouseDoubleClickEvent(event)
+
+    def wheelEvent(self, event) -> None:  # noqa: N802
+        bar = self._host.verticalScrollBar()
+        bar.setValue(bar.value() - int(event.angleDelta().y()))
+        event.accept()
+
+
+class _CorridorTimelineGrid(QScrollArea):
+    """Scrollable corridor heatmap (web .ci-grid-body overflow:auto)."""
+
+    corridor_clicked = Signal(object, int)
+    corridor_dbl = Signal(object, int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWidgetResizable(False)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.horizontalScrollBar().hide()
+        self.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self.setMinimumHeight(120)
+        self.setMinimumWidth(280)
+        self._spacer = QWidget()
+        self._spacer.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setWidget(self._spacer)
+        self._canvas = _CorridorTimelineCanvas(self, self.viewport())
+        self._canvas.corridor_clicked.connect(self.corridor_clicked.emit)
+        self._canvas.corridor_dbl.connect(self.corridor_dbl.emit)
+        self.verticalScrollBar().valueChanged.connect(
+            lambda _v: self._canvas.update())
+        self.viewport().setMouseTracking(True)
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        return QSize(480, 240)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return QSize(200, 80)
+
+    def _sync_overlay(self) -> None:
+        # Spacer is 1px wide (web .ci-grid-spacer) so only vertical scroll
+        # appears; canvas then uses the viewport *after* the bar is shown.
+        content_h = max(1, self._canvas._content_h())
+        self._spacer.setFixedSize(1, content_h)
+        vp = self.viewport()
+        vw, vh = max(1, vp.width()), max(1, vp.height())
+        self._canvas.setGeometry(0, 0, vw, vh)
+        self._canvas.raise_()
+        self._canvas.update()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._sync_overlay()
+
+    def set_model(self, corridors, time_bins, max_bin, t_min, t_max, bin_w,
+                  time_scale) -> None:
+        self._canvas.set_model(
+            corridors, time_bins, max_bin, t_min, t_max, bin_w, time_scale)
+        self._sync_overlay()
+
+    def set_selection(self, corridor, highlight_bin=-1) -> None:
+        self._canvas.set_selection(corridor, highlight_bin)
+        self._ensure_corridor_visible(corridor)
+
+    def _ensure_corridor_visible(self, corridor) -> None:
+        if not corridor:
+            return
+        head = self._canvas._HEAD_H
+        row_h = self._canvas._ROW_H
+        foot = self._canvas._FOOT_H
+        idx = None
+        for ri, c in enumerate(self._canvas._corridors):
+            if (c.get("from_core") == corridor.get("from_core")
+                    and c.get("to_core") == corridor.get("to_core")):
+                idx = ri
+                break
+        if idx is None:
+            return
+        y = head + idx * row_h
+        vp = max(1, self.viewport().height())
+        bar = self.verticalScrollBar()
+        top = bar.value()
+        vis_top = top + head
+        vis_bot = top + vp - foot
+        if y < vis_top:
+            bar.setValue(max(0, y - head))
+        elif y + row_h > vis_bot:
+            bar.setValue(max(0, y + row_h - (vp - foot)))
+
+
+# Web .ci-field select / .ci-task-filter: 12px + padding 2px 6px.
+_CI_FIELD_H = 22
+# Web .ci-sidebar-body height 220px + chrome.
+_CI_SIDEBAR_H = 248
+
+
+def _dim_css_color(widget: QWidget) -> str:
+    """Muted text color blended from the current palette (theme-aware)."""
+    fg = widget.palette().color(QPalette.ColorRole.WindowText)
+    bg = widget.palette().color(QPalette.ColorRole.Window)
+    r = int(bg.red() * 0.55 + fg.red() * 0.45)
+    g = int(bg.green() * 0.55 + fg.green() * 0.45)
+    b = int(bg.blue() * 0.55 + fg.blue() * 0.45)
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+class _CorridorInspectorDialog(QDialog):
+    """Unified Migration & Corridor Inspector (TODO2) — tree + timeline + mini-chord."""
+
+    def __init__(self, trace: "BtfTrace", parent=None,
+                 on_spotlight: Optional[Callable] = None,
+                 on_clear: Optional[Callable] = None,
+                 on_jump: Optional[Callable] = None,
+                 initial_mode: str = "heatmap"):
+        super().__init__(parent)
+        self.setWindowTitle("Migration & Corridor Inspector")
+        self.setMinimumSize(720, 520)
+        self.resize(980, 680)
+        self.setModal(False)
+        self._trace = trace
+        self._on_spotlight = on_spotlight
+        self._on_clear = on_clear
+        self._on_jump = on_jump
+        self._bounce_only = False
+        self._top_pct = _default_corridor_top_pct(len(trace.core_names))
+        self._scope_lo = self._scope_hi = None
+        self._scope_suffix = ""
+        self._owner_tab_path: Optional[str] = None
+        self._model: dict = {}
+        self._selected = None
+        self._selected_task = None
+        self._display_corridors: list = []
+        self._display_groups: list = []
+        self._direction_mode = "all"
+        self._task_query = ""
+        self._locked_cores: list = []
+        self._expanded_groups: set = set()
+        self._expanded_corridors: set = set()
+        self._sidebar_dock = "bottom"
+        self._initial_mode = initial_mode
+        self._scope_follow = True
+        self._HINT_DEFAULT = (
+            "Click a time cell to select that bin · double-click for Spotlight · "
+            "outer ring = egress · inner ring = ingress")
+
+        lay = QVBoxLayout(self)
+
+        # One control height for combos + task filter (app QSS makes QComboBox
+        # 1.6em and QLineEdit auto — they look mismatched in this toolbar).
+        # Keep this row fixed so an empty-state / long subtitle cannot push it down.
+        bar = QWidget()
+        bar.setObjectName("ciToolbar")
+        bar.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        bar.setStyleSheet(
+            "#ciToolbar QComboBox, #ciToolbar QLineEdit, #ciToolbar QPushButton {"
+            f"  height: {_CI_FIELD_H}px; min-height: {_CI_FIELD_H}px;"
+            f"  max-height: {_CI_FIELD_H}px;"
+            "  padding: 0px 6px; border-radius: 4px; font-size: 12px;"
+            "}"
+            "#ciToolbar QComboBox { padding-right: 20px; }"
+            "#ciToolbar QComboBox::drop-down {"
+            "  subcontrol-origin: padding; subcontrol-position: center right;"
+            "  width: 16px; border: none;"
+            "}"
+            "#ciToolbar QComboBox QAbstractItemView {"
+            "  outline: none; padding: 2px; font-size: 12px;"
+            "}"
+            "#ciToolbar QComboBox QAbstractItemView::item {"
+            f"  min-height: {_CI_FIELD_H}px; padding: 2px 6px;"
+            "}"
+        )
+        toolbar = QHBoxLayout(bar)
+        toolbar.setContentsMargins(0, 0, 0, 0)
+        toolbar.setSpacing(8)
+        toolbar.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        top_lbl = QLabel("Top corridors")
+        toolbar.addWidget(top_lbl)
+        self._top_combo = QComboBox()
+        for pct, label in ((10, "Top 10%"), (25, "Top 25%"), (50, "Top 50%"), (100, "All")):
+            self._top_combo.addItem(label, pct)
+        idx = self._top_combo.findData(self._top_pct)
+        if idx >= 0:
+            self._top_combo.setCurrentIndex(idx)
+        self._top_combo.currentIndexChanged.connect(self._on_top_changed)
+        toolbar.addWidget(self._top_combo)
+        self._bounce_btn = QPushButton("All Migrations")
+        self._bounce_btn.setCheckable(True)
+        self._bounce_btn.clicked.connect(self._on_bounce_toggled)
+        self._bounce_btn.setVisible(_trace_has_core_bounce_holds(trace))
+        toolbar.addWidget(self._bounce_btn)
+        dir_lbl = QLabel("Direction")
+        toolbar.addWidget(dir_lbl)
+        self._dir_combo = QComboBox()
+        self._dir_combo.addItem("All", "all")
+        self._dir_combo.addItem("Egress Only", "egress")
+        self._dir_combo.addItem("Ingress Only", "ingress")
+        self._dir_combo.currentIndexChanged.connect(self._on_dir_changed)
+        toolbar.addWidget(self._dir_combo)
+        task_lbl = QLabel("Task filter")
+        toolbar.addWidget(task_lbl)
+        self._task_edit = QLineEdit()
+        self._task_edit.setPlaceholderText("name or exact id")
+        self._task_edit.setClearButtonEnabled(True)
+        self._task_edit.setFixedWidth(140)
+        self._task_edit.textChanged.connect(self._on_task_filter_changed)
+        toolbar.addWidget(self._task_edit)
+        toolbar.addStretch(1)
+        for _w in (self._top_combo, self._dir_combo, self._task_edit, self._bounce_btn):
+            self._style_inspector_field(_w)
+        lay.addWidget(bar)
+        self._sub = QLabel()
+        self._sub.setObjectName("ciSub")
+        self._sub.setWordWrap(False)
+        self._sub.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self._sub.setStyleSheet(f"color:{_dim_css_color(self)}; font-size:11px;")
+        lay.addWidget(self._sub)
+
+        self._triage = QLabel()
+        self._triage.setStyleSheet(
+            "background:rgba(232,160,32,0.10);border:1px solid rgba(232,160,32,0.35);"
+            "border-radius:4px;padding:6px;")
+        self._triage_btn = QPushButton("Jump To")
+        self._triage_btn.clicked.connect(self._jump_hotspot)
+        triage_row = QHBoxLayout()
+        triage_row.addWidget(self._triage, 1)
+        triage_row.addWidget(self._triage_btn)
+        self._triage_wrap = QWidget()
+        self._triage_wrap.setLayout(triage_row)
+        self._triage_wrap.setVisible(False)
+        lay.addWidget(self._triage_wrap)
+
+        split = QSplitter(Qt.Orientation.Horizontal)
+        self._split = split
+        self._tree = QTreeWidget()
+        self._tree.setObjectName("corridorInspectorTree")
+        self._tree.setHeaderLabels(["Corridor / Task", "Vol", "Bounce", "Net"])
+        self._tree.setIndentation(12)
+        self._tree.setUniformRowHeights(True)
+        self._tree.setAllColumnsShowFocus(True)
+        self._tree.setMouseTracking(True)
+        self._tree.viewport().setMouseTracking(True)
+        self._tree.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self._tree.setStyleSheet(
+            "#corridorInspectorTree { show-decoration-selected: 1; outline: none; }"
+            "#corridorInspectorTree::item { border: none; padding: 2px 0; }"
+            "#corridorInspectorTree::item:hover {"
+            "  background: rgba(127, 127, 127, 0.18);"
+            "}"
+            "#corridorInspectorTree::item:selected {"
+            "  background: rgba(100, 160, 255, 0.28);"
+            "  color: palette(text);"
+            "}"
+            "#corridorInspectorTree::item:selected:hover {"
+            "  background: rgba(100, 160, 255, 0.36);"
+            "}"
+        )
+        self._tree.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        hdr = self._tree.header()
+        hdr.setStretchLastSection(False)
+        hdr.setMinimumSectionSize(40)
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        self._tree.setColumnWidth(0, 168)
+        self._tree.setColumnWidth(1, 52)
+        self._tree.setColumnWidth(2, 60)
+        self._tree.setColumnWidth(3, 56)
+        self._tree.setMinimumWidth(280)
+        self._tree.itemClicked.connect(self._on_tree_click)
+        self._tree.itemDoubleClicked.connect(self._on_tree_dbl)
+        self._tree.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+        self._tree.setMinimumHeight(80)
+        split.addWidget(self._tree)
+        self._grid = _CorridorTimelineGrid()
+        self._grid.setMinimumWidth(280)
+        self._grid.corridor_clicked.connect(self._on_grid_clicked)
+        self._grid.corridor_dbl.connect(self._spotlight_corridor_bin)
+        split.addWidget(self._grid)
+        split.setStretchFactor(0, 0)
+        split.setStretchFactor(1, 1)
+        split.setSizes([340, 640])
+
+        self._chord = _ChordDiagramWidget(compact=True)
+        self._chord.setMinimumHeight(180)
+        self._chord.setMinimumWidth(200)
+        self._chord.core_clicked.connect(self._on_chord_core)
+        self._chord.pair_clicked.connect(self._on_chord_pair)
+        self._chord.corridor_clicked.connect(self._on_chord_corridor)
+        self._chord.corridor_dbl.connect(self._on_chord_corridor_dbl)
+        self._chord.hover_info.connect(self._on_chord_hover_info)
+
+        self._card_title = QLabel()
+        self._card_title.setStyleSheet("font-weight:600;")
+        self._card_title.setWordWrap(True)
+        self._card = QLabel("Click a corridor or chord ribbon to inspect.")
+        self._card.setWordWrap(True)
+        self._card.setStyleSheet(f"color:{_dim_css_color(self)};")
+        self._inspect_btn = QPushButton("Inspect in Timeline")
+        self._inspect_btn.setVisible(False)
+        self._inspect_btn.clicked.connect(self._on_inspect_in_timeline)
+        card_lay = QVBoxLayout()
+        card_lay.setContentsMargins(10, 4, 4, 4)
+        card_lay.addWidget(self._card_title)
+        card_lay.addWidget(self._card, 1)
+        card_lay.addWidget(self._inspect_btn, 0, Qt.AlignmentFlag.AlignLeft)
+        self._card_panel = QWidget()
+        self._card_panel.setLayout(card_lay)
+        self._card_panel.setMinimumWidth(180)
+
+        self._side_body = QSplitter(Qt.Orientation.Horizontal)
+        self._side_body.addWidget(self._chord)
+        self._side_body.addWidget(self._card_panel)
+        # Web .ci-sidebar-body: 1fr : 0.7fr, height 220px.
+        self._side_body.setStretchFactor(0, 10)
+        self._side_body.setStretchFactor(1, 7)
+        self._side_body.setSizes([320, 224])
+        self._side_body.setChildrenCollapsible(False)
+
+        self._side_toggle = QPushButton(
+            "Hide topology" if initial_mode == "chord" else "Show topology")
+        self._side_toggle.setFlat(True)
+        self._side_toggle.clicked.connect(self._toggle_side)
+        self._dock_combo = QComboBox()
+        self._dock_combo.addItem("Bottom", "bottom")
+        self._dock_combo.addItem("Right", "right")
+        self._dock_combo.currentIndexChanged.connect(self._on_dock_changed)
+        self._style_inspector_field(self._dock_combo)
+        self._dock_combo.setStyleSheet(
+            f"QComboBox {{ min-height: {_CI_FIELD_H}px; max-height: {_CI_FIELD_H}px;"
+            "  padding: 2px 20px 2px 6px; border-radius: 4px; font-size: 12px; }"
+            "QComboBox::drop-down {"
+            "  subcontrol-origin: padding; subcontrol-position: center right;"
+            "  width: 16px; border: none; }"
+            "QComboBox QAbstractItemView { outline: none; padding: 2px; font-size: 12px; }"
+            "QComboBox QAbstractItemView::item {"
+            f"  min-height: {_CI_FIELD_H}px; padding: 2px 6px; }}")
+        chrome = QHBoxLayout()
+        chrome.setContentsMargins(4, 2, 4, 2)
+        chrome.addWidget(self._side_toggle)
+        chrome.addStretch(1)
+        self._dock_lbl = QLabel("Dock")
+        chrome.addWidget(self._dock_lbl)
+        chrome.addWidget(self._dock_combo)
+
+        side_lay = QVBoxLayout()
+        side_lay.setContentsMargins(6, 4, 6, 6)
+        side_lay.setSpacing(4)
+        side_lay.addLayout(chrome)
+        side_lay.addWidget(self._side_body, 1)
+        self._side_wrap = QWidget()
+        self._side_wrap.setObjectName("corridorInspectorSidebar")
+        self._side_wrap.setStyleSheet(
+            "#corridorInspectorSidebar {"
+            "  border: 1px solid rgba(127,127,127,0.35);"
+            "  border-radius: 4px;"
+            "}"
+        )
+        self._side_wrap.setLayout(side_lay)
+
+        self._empty = QLabel("No migrations in scope.")
+        self._empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty.setStyleSheet(f"color:{_dim_css_color(self)};")
+        self._empty.hide()
+        self._work = QWidget()
+        work_stack = QGridLayout(self._work)
+        work_stack.setContentsMargins(0, 0, 0, 0)
+        work_stack.setSpacing(0)
+        work_stack.addWidget(split, 0, 0)
+        work_stack.addWidget(self._empty, 0, 0)
+        self._empty.raise_()
+
+        self._outer = QSplitter(Qt.Orientation.Vertical)
+        self._outer.addWidget(self._work)
+        self._outer.addWidget(self._side_wrap)
+        self._outer.setStretchFactor(0, 1)
+        self._outer.setStretchFactor(1, 0)
+        self._outer.setSizes([440, _CI_SIDEBAR_H])
+        lay.addWidget(self._outer, 1)
+
+        self._hint = QLabel(self._HINT_DEFAULT)
+        self._hint.setStyleSheet(f"color:{_dim_css_color(self)};")
+        lay.addWidget(self._hint)
+
+        self._show_topology(initial_mode == "chord", apply_layout=False)
+        self._apply_sidebar_layout()
+
+        self._filter_bar = QWidget()
+        fb = QHBoxLayout(self._filter_bar)
+        fb.setContentsMargins(0, 0, 0, 0)
+        self._filter_lbl = QLabel()
+        fb.addWidget(self._filter_lbl, 1)
+        clear_btn = QPushButton("Show all tasks")
+        clear_btn.clicked.connect(self._clear_filter)
+        fb.addWidget(clear_btn)
+        self._filter_bar.setVisible(False)
+        lay.addWidget(self._filter_bar)
+
+        btns = QDialogButtonBox(QDialogButtonBox.Close)
+        btns.rejected.connect(self.reject)
+        lay.addWidget(btns)
+
+        self.refresh_scope()
+        QTimer.singleShot(0, self._fit_tree_pane)
+
+    @staticmethod
+    def _style_inspector_field(widget) -> None:
+        """Match combo / line-edit / button height and styled popup lists."""
+        widget.setFixedHeight(_CI_FIELD_H)
+        widget.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+        if isinstance(widget, QComboBox):
+            widget.setView(QListView(widget))
+            widget.setSizeAdjustPolicy(
+                QComboBox.SizeAdjustPolicy.AdjustToContents)
+            hint_w = max(widget.minimumSizeHint().width(), 108)
+            widget.setMinimumWidth(hint_w)
+            view = widget.view()
+            if view is not None:
+                view.setMinimumWidth(hint_w)
+                view.setUniformItemSizes(True)
+
+    def _toggle_side(self) -> None:
+        self._show_topology(not self._side_body.isVisible())
+
+    def _show_topology(self, vis: bool, apply_layout: bool = True) -> None:
+        self._side_wrap.setVisible(True)
+        self._side_body.setVisible(bool(vis))
+        self._dock_lbl.setVisible(bool(vis))
+        self._dock_combo.setVisible(bool(vis))
+        self._side_toggle.setText("Hide topology" if vis else "Show topology")
+        if apply_layout:
+            self._apply_sidebar_layout()
+
+    def _on_dock_changed(self, _idx: int = 0) -> None:
+        self._sidebar_dock = str(self._dock_combo.currentData() or "bottom")
+        self._apply_sidebar_layout()
+
+    def _apply_sidebar_layout(self) -> None:
+        expanded = self._side_body.isVisible()
+        dock = self._sidebar_dock
+        self._side_wrap.setMaximumWidth(16777215)
+        self._side_wrap.setMaximumHeight(16777215)
+        if dock == "right":
+            self._outer.setOrientation(Qt.Orientation.Horizontal)
+            self._side_body.setOrientation(Qt.Orientation.Vertical)
+            self._card_panel.setStyleSheet(
+                "border-top: 1px solid rgba(127,127,127,0.35);")
+            if expanded:
+                self._side_wrap.setMinimumWidth(240)
+                self._side_wrap.setMinimumHeight(0)
+                self._outer.setSizes([680, 340])
+                self._side_body.setSizes([220, 160])
+            else:
+                self._side_wrap.setMinimumWidth(120)
+                self._side_wrap.setMaximumWidth(168)
+                self._side_wrap.setMinimumHeight(0)
+                self._outer.setSizes([800, 140])
+        else:
+            self._outer.setOrientation(Qt.Orientation.Vertical)
+            self._side_body.setOrientation(Qt.Orientation.Horizontal)
+            self._card_panel.setStyleSheet(
+                "border-left: 1px solid rgba(127,127,127,0.35);")
+            self._side_wrap.setMinimumWidth(0)
+            if expanded:
+                # Lock height so the heatmap splitter cannot overlap topology.
+                self._side_wrap.setMinimumHeight(_CI_SIDEBAR_H)
+                self._side_wrap.setMaximumHeight(_CI_SIDEBAR_H)
+                main_h = max(120, self._outer.height() - _CI_SIDEBAR_H)
+                self._outer.setSizes([main_h, _CI_SIDEBAR_H])
+                self._side_body.setSizes([320, 224])
+            else:
+                self._side_wrap.setMinimumHeight(0)
+                self._outer.setSizes([640, 36])
+        self._side_body.setStretchFactor(0, 10)
+        self._side_body.setStretchFactor(1, 7)
+        self._outer.setStretchFactor(0, 1)
+        self._outer.setStretchFactor(1, 0)
+
+    def _on_top_changed(self, _idx: int = 0) -> None:
+        self._top_pct = int(self._top_combo.currentData())
+        self._rebuild()
+
+    def _on_bounce_toggled(self, checked: bool) -> None:
+        self._bounce_only = checked
+        self._bounce_btn.setText(
+            "Lock Bounces Only" if checked else "All Migrations")
+        self._rebuild()
+
+    def _on_dir_changed(self, _idx: int = 0) -> None:
+        self._direction_mode = str(self._dir_combo.currentData() or "all")
+        self._refresh_filtered_view()
+
+    def _on_task_filter_changed(self, text: str) -> None:
+        self._task_query = text or ""
+        self._refresh_filtered_view()
+
+    def _rebuild(self) -> None:
+        self._model = _build_corridor_inspector_model(
+            self._trace, self._scope_lo, self._scope_hi,
+            bounce_only=self._bounce_only, top_pct=self._top_pct)
+        hotspot = self._model.get("hotspot")
+        if hotspot:
+            self._triage.setText(hotspot["summary"])
+            self._triage_wrap.setVisible(True)
+        else:
+            self._triage_wrap.setVisible(False)
+        self._refresh_filtered_view()
+
+    def _refresh_filtered_view(self) -> None:
+        q = (self._task_query or "").strip()
+        # Search all in-scope corridors when filtering by name/id so Top-N
+        # cannot hide a matching task (web parity).
+        src = (self._model.get("all_corridors") or self._model.get("corridors")
+               or []) if q else (self._model.get("corridors") or [])
+        vis = _filter_corridors_by_task_query(src, q)
+        vis = _filter_corridors_by_direction(
+            vis, self._direction_mode, self._selected)
+        self._display_corridors = vis
+        group_by = bool(self._model.get("group_by_source"))
+        self._display_groups = (
+            _corridor_groups_by_source(vis) if group_by else [])
+        has = any(c.get("count", 0) > 0 for c in vis)
+        if not has:
+            self._empty.setText(
+                "No corridors match this task filter." if q
+                else "No migrations in scope.")
+        self._empty.setVisible(not has)
+        n = len(self._model.get("cores") or [])
+        n_corr = len(vis)
+        qnote = f" · filter “{self._task_query.strip()}”" if self._task_query.strip() else ""
+        self._sub.setText(
+            f"{n} cores · {n_corr} corridors · Top {self._top_pct}%"
+            f"{qnote}{self._scope_suffix}")
+        cores = self._model.get("cores") or []
+        pair_count = {(c["from_core"], c["to_core"]): c["count"] for c in vis}
+        filtered_grid = []
+        for i, fc in enumerate(cores):
+            row = []
+            for j, tc in enumerate(cores):
+                if i == j:
+                    row.append(0)
+                else:
+                    row.append(pair_count.get((fc, tc), 0))
+            filtered_grid.append(row)
+        max_bin = 0
+        for c in vis:
+            for v in c.get("bins") or []:
+                if v > max_bin:
+                    max_bin = v
+        self._populate_tree()
+        self._chord.set_data(cores, filtered_grid)
+        self._chord.set_direction_mode(self._direction_mode)
+        focus: list = []
+        sel = self._selected
+        if sel and self._direction_mode == "egress" and sel.get("from_core") in cores:
+            focus = [cores.index(sel["from_core"])]
+        elif sel and self._direction_mode == "ingress" and sel.get("to_core") in cores:
+            focus = [cores.index(sel["to_core"])]
+        elif self._locked_cores:
+            focus = [i for i in self._locked_cores if 0 <= i < len(cores)]
+        self._chord.set_focus_cores(focus)
+        if sel:
+            self._chord.set_focus_pair(sel.get("from_core"), sel.get("to_core"))
+        else:
+            self._chord.set_focus_pair(None, None)
+        self._grid.set_model(
+            vis,
+            self._model.get("time_bins", 32),
+            max_bin or 1,
+            self._model.get("t_min", 0),
+            self._model.get("t_max", 1),
+            self._model.get("bin_w", 1),
+            self._trace.time_scale,
+        )
+        if sel:
+            self._restore_tree_selection()
+
+    def _fit_tree_pane(self) -> None:
+        """Keep Corridor/Task readable without stealing the heatmap."""
+        tree = self._tree
+        if tree.topLevelItemCount():
+            tree.resizeColumnToContents(0)
+            name_w = min(200, max(140, tree.columnWidth(0)))
+        else:
+            name_w = 168
+        tree.setColumnWidth(0, name_w)
+        tree.setColumnWidth(1, 52)
+        tree.setColumnWidth(2, 60)
+        tree.setColumnWidth(3, 56)
+        sb = tree.verticalScrollBar()
+        sb_w = sb.sizeHint().width() if sb and sb.isVisible() else 16
+        need = name_w + 52 + 60 + 56 + sb_w + tree.frameWidth() * 2 + 12
+        need = max(300, min(need, 380))
+        total = self._split.width()
+        if total < 200:
+            total = max(self.width() - 40, 900)
+        self._split.setSizes([need, max(280, total - need)])
+        self._grid._sync_overlay()
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        self._apply_sidebar_layout()
+        self._fit_tree_pane()
+
+    def _make_corridor_item(self, c: dict) -> QTreeWidgetItem:
+        num_align = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        net = c["net"]
+        net_s = f"+{net} ▲" if net > 0 else (f"{net} ▼" if net < 0 else "0")
+        item = QTreeWidgetItem([
+            c["label"], str(c["count"]),
+            f"{c['bounce_pct']:.0f}%", net_s,
+        ])
+        item.setData(0, Qt.ItemDataRole.UserRole, c)
+        for col in (1, 2, 3):
+            item.setTextAlignment(col, num_align)
+        for t in c.get("tasks") or []:
+            child = QTreeWidgetItem([
+                f"└── {t['label']}", str(t["count"]),
+                f"{t['bounce_pct']:.0f}%", f"{t['share_pct']:.0f}%",
+            ])
+            child.setData(0, Qt.ItemDataRole.UserRole, {"corridor": c, "task": t})
+            for col in (1, 2, 3):
+                child.setTextAlignment(col, num_align)
+            item.addChild(child)
+        return item
+
+    def _remember_expanded_groups(self) -> None:
+        expanded_groups = set()
+        expanded_corridors = set()
+
+        def walk(item) -> None:
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if item.isExpanded():
+                if isinstance(data, dict) and "group" in data:
+                    expanded_groups.add(data["group"])
+                if isinstance(data, dict) and "from_core" in data:
+                    expanded_corridors.add(
+                        (data.get("from_core"), data.get("to_core")))
+            for i in range(item.childCount()):
+                walk(item.child(i))
+
+        for i in range(self._tree.topLevelItemCount()):
+            walk(self._tree.topLevelItem(i))
+        if expanded_groups or self._display_groups:
+            self._expanded_groups = expanded_groups
+        if expanded_corridors or self._expanded_corridors:
+            self._expanded_corridors = expanded_corridors
+
+    def _corridor_key(self, c: dict) -> tuple:
+        return (c.get("from_core"), c.get("to_core"))
+
+    def _populate_tree(self) -> None:
+        self._remember_expanded_groups()
+        self._tree.clear()
+        num_align = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        groups = self._display_groups
+        if groups:
+            for g in groups:
+                gitem = QTreeWidgetItem([
+                    g["label"], str(g["count"]), "—", "—",
+                ])
+                gitem.setData(0, Qt.ItemDataRole.UserRole, {"group": g["source"]})
+                for col in (1, 2, 3):
+                    gitem.setTextAlignment(col, num_align)
+                for c in g.get("corridors") or []:
+                    child = self._make_corridor_item(c)
+                    gitem.addChild(child)
+                    if self._corridor_key(c) in self._expanded_corridors:
+                        child.setExpanded(True)
+                self._tree.addTopLevelItem(gitem)
+                if g["source"] in self._expanded_groups:
+                    gitem.setExpanded(True)
+        else:
+            for c in self._display_corridors:
+                item = self._make_corridor_item(c)
+                self._tree.addTopLevelItem(item)
+                if self._corridor_key(c) in self._expanded_corridors:
+                    item.setExpanded(True)
+        self._fit_tree_pane()
+
+    def _restore_tree_selection(self) -> None:
+        c = self._selected
+        if not c:
+            return
+        if self._selected_task:
+            self._reveal_task_in_tree(c, self._selected_task)
+        else:
+            self._reveal_corridor_in_tree(c)
+
+    def _reveal_corridor_in_tree(self, c: dict) -> None:
+        found = self._find_corridor_item(c)
+        if found is None:
+            return
+        parent = found.parent()
+        if parent:
+            parent.setExpanded(True)
+            pdata = parent.data(0, Qt.ItemDataRole.UserRole)
+            if isinstance(pdata, dict) and pdata.get("group"):
+                self._expanded_groups.add(pdata["group"])
+        self._tree.setCurrentItem(found)
+        self._tree.scrollToItem(found)
+
+    def _reveal_task_in_tree(self, c: dict, task: dict) -> None:
+        corr_item = self._find_corridor_item(c)
+        if corr_item is None:
+            return
+        parent = corr_item.parent()
+        if parent:
+            parent.setExpanded(True)
+        corr_item.setExpanded(True)
+        self._expanded_corridors.add(self._corridor_key(c))
+        want_mk = task.get("mk")
+        for i in range(corr_item.childCount()):
+            child = corr_item.child(i)
+            data = child.data(0, Qt.ItemDataRole.UserRole)
+            t = data.get("task") if isinstance(data, dict) else None
+            if isinstance(t, dict) and t.get("mk") == want_mk:
+                self._tree.setCurrentItem(child)
+                self._tree.scrollToItem(child)
+                return
+        self._tree.setCurrentItem(corr_item)
+        self._tree.scrollToItem(corr_item)
+
+    def _find_corridor_item(self, c: dict):
+        want_from, want_to = c.get("from_core"), c.get("to_core")
+
+        def walk(item):
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if (isinstance(data, dict) and data.get("from_core") == want_from
+                    and data.get("to_core") == want_to):
+                return item
+            for i in range(item.childCount()):
+                found = walk(item.child(i))
+                if found:
+                    return found
+            return None
+
+        for i in range(self._tree.topLevelItemCount()):
+            found = walk(self._tree.topLevelItem(i))
+            if found:
+                return found
+        return None
+
+    def _on_grid_clicked(self, c: dict, bi: int) -> None:
+        self._select_corridor(c, bi)
+
+    def _set_card(self, title: str = "", lines: Optional[list] = None,
+                  *, can_spotlight: bool = False) -> None:
+        title = title or ""
+        self._card_title.setText(title)
+        self._card_title.setVisible(bool(title))
+        if lines:
+            self._card.setText("\n".join(str(x) for x in lines if x is not None))
+        else:
+            self._card.setText("Click a corridor or chord ribbon to inspect.")
+        self._inspect_btn.setVisible(bool(can_spotlight))
+
+    def _on_inspect_in_timeline(self) -> None:
+        c = self._selected
+        if not c:
+            return
+        bi = getattr(self._grid, "_highlight_bin", -1)
+        if not (isinstance(bi, int) and bi >= 0):
+            bi = c.get("peak_bin", -1)
+        self._spotlight_corridor(c, bi if isinstance(bi, int) and bi >= 0 else None)
+
+    def _show_core_card(self, core_index: int) -> None:
+        stats = self._model.get("core_stats") or []
+        if not (0 <= core_index < len(stats)):
+            self._set_card()
+            return
+        st = stats[core_index]
+        net = st.get("net", 0)
+        net_s = f"+{net} net gain" if net > 0 else (
+            f"{net} net loss" if net < 0 else "balanced")
+        lines = [
+            f"Outgoing {st.get('out', 0)} / Incoming {st.get('in', 0)}",
+            f"Net: {net_s}",
+        ]
+        for t in (st.get("top_tasks") or [])[:3]:
+            lines.append(f"{t.get('label')}: {t.get('count')}")
+        self._set_card(_core_short_name(st.get("core") or ""), lines)
+
+    def _select_corridor(self, c: dict, bin_index: Optional[int] = None,
+                         *, reveal_tree: bool = True,
+                         task: Optional[dict] = None) -> None:
+        self._selected = c
+        self._selected_task = task
+        self._locked_cores = []
+        if self._direction_mode != "all":
+            self._refresh_filtered_view()
+        bi = bin_index if bin_index is not None else c.get("peak_bin", -1)
+        self._grid.set_selection(c, bi if bi is not None else -1)
+        self._chord.set_focus_pair(c.get("from_core"), c.get("to_core"))
+        self._chord.set_focus_cores([])
+        offender = c.get("primary_task")
+        lines = [
+            f"Directed Vol: {c['count']:,} migrations ({c['rate_per_s']:.1f}/s)",
+            f"Lock Bounces: {c['bounces']} ({c['bounce_pct']:.0f}% cache-line bounces)",
+        ]
+        if task:
+            lines.append(
+                f"Selected task: {task.get('label')} "
+                f"({task.get('count', 0)} mig, "
+                f"{task.get('share_pct', 0):.0f}% share)")
+        elif offender:
+            lines.append(
+                f"Primary Offender: {offender['label']} "
+                f"({offender['share_pct']:.0f}% share)")
+        else:
+            lines.append("No task attribution")
+        if isinstance(bi, int) and bi >= 0:
+            t_min = self._model.get("t_min", 0)
+            t_max = self._model.get("t_max", 1)
+            bin_w = self._model.get("bin_w", 1)
+            time_bins = self._model.get("time_bins", 32)
+            bin_lo, bin_hi = _heatmap_bin_range(
+                t_min, bin_w, time_bins, t_max, bi)
+            n = c["bins"][bi] if bi < len(c["bins"]) else 0
+            bv = (c["bounce_bins"][bi]
+                  if bi < len(c.get("bounce_bins") or []) else 0)
+            extra = f"{n} mig"
+            if bv:
+                extra += f", {bv} bounce"
+            lines.append(
+                f"Selected bin {bi + 1}/{time_bins}: "
+                f"{_format_time(bin_lo, self._trace.time_scale)}–"
+                f"{_format_time(bin_hi, self._trace.time_scale)} · {extra}")
+        self._set_card(f"Corridor: {c['label']}", lines, can_spotlight=True)
+        if reveal_tree:
+            self._restore_tree_selection()
+
+    def _on_chord_core(self, payload) -> None:
+        if not isinstance(payload, dict) or payload.get("clear"):
+            self._locked_cores = []
+            self._selected = None
+            self._selected_task = None
+            self._chord.set_focus_cores([])
+            self._chord.set_focus_pair(None, None)
+            self._grid.set_selection(None, -1)
+            self._set_card()
+            if self._direction_mode != "all":
+                self._refresh_filtered_view()
+            return
+        idx = int(payload.get("core_index", -1))
+        cores = self._model.get("cores") or []
+        if not (0 <= idx < len(cores)):
+            return
+        self._locked_cores = [idx]
+        self._selected = None
+        self._selected_task = None
+        self._chord.set_focus_pair(None, None)
+        self._chord.set_focus_cores(self._locked_cores)
+        self._grid.set_selection(None, -1)
+        self._show_core_card(idx)
+        if self._direction_mode != "all":
+            self._refresh_filtered_view()
+
+    def _on_chord_pair(self, core_index: int) -> None:
+        cores = self._model.get("cores") or []
+        if not (0 <= int(core_index) < len(cores)):
+            return
+        cur = list(self._locked_cores)
+        if len(cur) == 1 and cur[0] != int(core_index):
+            self._locked_cores = [cur[0], int(core_index)]
+            a, b = cores[cur[0]], cores[int(core_index)]
+            found = None
+            for c in (self._model.get("all_corridors") or []):
+                if c.get("from_core") == a and c.get("to_core") == b:
+                    found = c
+                    break
+            if found is None:
+                for c in (self._model.get("all_corridors") or []):
+                    if c.get("from_core") == b and c.get("to_core") == a:
+                        found = c
+                        break
+            self._show_topology(True)
+            if found:
+                self._select_corridor(found)
+                return
+            self._selected = None
+            self._selected_task = None
+            self._chord.set_focus_pair(None, None)
+            self._chord.set_focus_cores(self._locked_cores)
+            self._set_card(
+                f"Pair isolate: {_core_short_name(a)} ↔ {_core_short_name(b)}",
+                ["No directed corridor in scope."],
+            )
+            return
+        self._on_chord_core({"core_index": int(core_index)})
+
+    def _on_chord_corridor(self, from_core: str, to_core: str) -> None:
+        found = None
+        for c in (self._display_corridors or []) + (self._model.get("all_corridors") or []):
+            if c.get("from_core") == from_core and c.get("to_core") == to_core:
+                found = c
+                break
+        if found:
+            if self._display_groups:
+                self._expanded_groups.add(found["from_core"])
+            self._show_topology(True)
+            self._select_corridor(found)
+
+    def _on_chord_corridor_dbl(self, from_core: str, to_core: str) -> None:
+        for c in self._model.get("all_corridors") or []:
+            if c.get("from_core") == from_core and c.get("to_core") == to_core:
+                self._spotlight_corridor(c)
+                return
+
+    def _on_tree_click(self, item, _col) -> None:
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+        if isinstance(data, dict) and "group" in data:
+            return
+        if isinstance(data, dict) and "from_core" in data:
+            self._expanded_corridors.add(self._corridor_key(data))
+            self._select_corridor(data, reveal_tree=False)
+        elif isinstance(data, dict) and "corridor" in data:
+            self._expanded_corridors.add(
+                self._corridor_key(data["corridor"]))
+            self._select_corridor(
+                data["corridor"], reveal_tree=False, task=data.get("task"))
+
+    def _on_tree_dbl(self, item, _col) -> None:
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+        if isinstance(data, dict) and "task" in data:
+            self._spotlight_task(data["corridor"], data["task"])
+        elif isinstance(data, dict) and "from_core" in data:
+            self._spotlight_corridor(data)
+
+    def _jump_hotspot(self) -> None:
+        h = self._model.get("hotspot")
+        if not h:
+            return
+        found = None
+        for c in self._model.get("all_corridors") or []:
+            if c["from_core"] == h["from_core"] and c["to_core"] == h["to_core"]:
+                found = c
+                break
+        if not found:
+            return
+        if self._display_groups:
+            self._expanded_groups.add(found["from_core"])
+        self._select_corridor(found, found.get("peak_bin"))
+        if not self._on_jump:
+            return
+        t_min = self._model.get("t_min", 0)
+        t_max = self._model.get("t_max", 1)
+        bin_w = self._model.get("bin_w", 1)
+        time_bins = self._model.get("time_bins", 32)
+        bi = found.get("peak_bin", 0) or 0
+        bin_lo, bin_hi = _heatmap_bin_range(t_min, bin_w, time_bins, t_max, bi)
+        primary = (found.get("primary_task") or {}).get("mk")
+        self._freeze_scope()
+        self._on_jump(bin_lo, bin_hi, primary)
+
+    def _spotlight_corridor_bin(self, c: dict, bi: int) -> None:
+        self._spotlight_corridor(c, bi)
+
+    def _spotlight_corridor(self, c: dict, bin_index: Optional[int] = None) -> None:
+        if not self._on_spotlight:
+            return
+        self._freeze_scope()
+        t_min = self._model["t_min"]
+        t_max = self._model["t_max"]
+        bin_w = self._model["bin_w"]
+        time_bins = self._model["time_bins"]
+        if bin_index is None:
+            bin_index = c.get("peak_bin", 0)
+        bin_lo, bin_hi = _heatmap_bin_range(t_min, bin_w, time_bins, t_max, bin_index)
+        mks = {t["mk"] for t in c.get("tasks") or []}
+        primary = (c.get("primary_task") or {}).get("mk")
+        self._on_spotlight(c["from_core"], c["to_core"], c["label"],
+                           bin_lo, bin_hi, mks, primary)
+
+    def _spotlight_task(self, c: dict, t: dict) -> None:
+        if not self._on_spotlight:
+            return
+        self._freeze_scope()
+        self._on_spotlight(
+            c["from_core"], c["to_core"], f"{c['label']} · {t['label']}",
+            self._model["t_min"], self._model["t_max"], {t["mk"]}, t["mk"])
+
+    def focus_pair(self, from_core: str, to_core: str,
+                   bounce_only: bool = False) -> bool:
+        if bool(self._bounce_only) != bool(bounce_only):
+            self._bounce_btn.setChecked(bool(bounce_only))
+            self._on_bounce_toggled(bool(bounce_only))
+        else:
+            self._rebuild()
+        for c in self._model.get("all_corridors") or []:
+            if c["from_core"] == from_core and c["to_core"] == to_core:
+                self._show_topology(True)
+                self._select_corridor(c)
+                return True
+        return False
+
+    def set_filter_banner(self, label: Optional[str], count: int) -> None:
+        if label and count:
+            self._filter_lbl.setText(f"Showing {count} task(s): {label}")
+            self._filter_bar.setVisible(True)
+        else:
+            self._filter_bar.setVisible(False)
+
+    def _clear_filter(self) -> None:
+        if self._on_clear:
+            self._on_clear()
+
+    def follow_scope(self) -> None:
+        """Resume mirroring the main timeline viewport after Jump/Spotlight."""
+        self._scope_follow = True
+
+    def _freeze_scope(self) -> None:
+        self._scope_follow = False
+
+    def _on_chord_hover_info(self, info) -> None:
+        if isinstance(info, dict) and info.get("type") == "corridor":
+            self._hint.setText(
+                f"{_core_short_name(info.get('from'))}→"
+                f"{_core_short_name(info.get('to'))}: {info.get('count', 0)}")
+            return
+        self._hint.setText(self._HINT_DEFAULT)
+
+    def refresh_scope(self) -> None:
+        if not getattr(self, "_scope_follow", True) and self._model:
+            return
+        lo = hi = None
+        suffix = ""
+        wnd = self.parent()
+        if isinstance(wnd, QMainWindow):
+            tab = getattr(wnd, "_active_tab", None)
+            view = getattr(tab, "view", None) if tab is not None else None
+            if view is not None and hasattr(view, "_visible_time_ns_range"):
+                try:
+                    vlo, vhi = view._visible_time_ns_range()
+                except Exception:
+                    vlo = vhi = None
+                if vlo is not None and vhi is not None and vhi > vlo:
+                    lo, hi = int(vlo), int(vhi)
+                    suffix = (
+                        f"  (viewport: "
+                        f"{_format_time(lo, self._trace.time_scale)} … "
+                        f"{_format_time(hi, self._trace.time_scale)})")
+        if lo == self._scope_lo and hi == self._scope_hi and self._model:
+            self._scope_suffix = suffix
+            return
+        self._scope_lo, self._scope_hi = lo, hi
+        self._scope_suffix = suffix
+        self._rebuild()
+
 
 class _ChordDiagramDialog(QDialog):
     """Popup: core-to-core migration volume as a directional chord diagram."""
@@ -21298,6 +23785,7 @@ class _ChordDiagramDialog(QDialog):
             "Toggle between showing all migrations and only lock-bounce migrations\n"
             "(migrations that occurred while a mutex was held across different cores).")
         self._bounce_filter_btn.clicked.connect(self._on_bounce_filter_toggled)
+        self._bounce_filter_btn.setVisible(_trace_has_core_bounce_holds(trace))
         nav.addWidget(self._bounce_filter_btn)
         lay.addLayout(nav)
 
@@ -21324,7 +23812,7 @@ class _ChordDiagramDialog(QDialog):
         self._hint_label = QLabel(
             "Hover a core arc to highlight its migrations · chord width = "
             "migration count · color fades from source to destination core")
-        self._hint_label.setStyleSheet("color:#888888;")
+        self._hint_label.setStyleSheet(f"color:{_dim_css_color(self)};")
         self._hint_label.setWordWrap(True)
         lay.addWidget(self._hint_label)
 
@@ -24071,29 +26559,7 @@ class _StatsPanel(QWidget):
 
     def _core_util_rows(self, trace: "BtfTrace",
                         lo: Optional[int] = None, hi: Optional[int] = None) -> List[Tuple[str, float]]:
-        if lo is not None and hi is not None:
-            total_ns = hi - lo
-        else:
-            total_ns = trace.time_max - trace.time_min
-        if total_ns <= 0:
-            return []
-        rows: List[Tuple[str, float]] = []
-        for core in trace.core_names:
-            segs = trace.core_segs.get(core, [])
-            if lo is not None and hi is not None:
-                active_ns = sum(
-                    _seg_overlap_ns(s, lo, hi) for s in segs
-                    if (_tn := _parse_task_name(s.task)[2]) != "TICK"
-                    and not _is_idle_task_name(_tn)
-                )
-            else:
-                active_ns = sum(
-                    s.end - s.start for s in segs
-                    if (_tn := _parse_task_name(s.task)[2]) != "TICK"
-                    and not _is_idle_task_name(_tn)
-                )
-            rows.append((core, 100.0 * active_ns / total_ns))
-        return rows
+        return _core_util_pct_rows(trace, lo, hi)
 
     def _task_cpu_rows(self, trace: "BtfTrace", limit: int = 10,
                        lo: Optional[int] = None, hi: Optional[int] = None) -> List[Tuple[str, str, float]]:
@@ -24104,15 +26570,21 @@ class _StatsPanel(QWidget):
         if total_ns <= 0:
             return []
         task_times: Dict[str, int] = {}
-        for mk, segs in trace.seg_map_by_merge_key.items():
-            raw = trace.task_repr.get(mk, mk)
-            _, _, tname = _parse_task_name(raw)
-            if _is_idle_task_name(tname) or tname == "TICK":
-                continue
-            if lo is not None and hi is not None:
-                task_times[mk] = sum(_seg_overlap_ns(s, lo, hi) for s in segs)
-            else:
-                task_times[mk] = sum(s.end - s.start for s in segs)
+        if lo is None and hi is None and trace.task_cpu_ns:
+            task_times = dict(trace.task_cpu_ns)
+        else:
+            for mk, segs in trace.seg_map_by_merge_key.items():
+                raw = trace.task_repr.get(mk, mk)
+                _, _, tname = _parse_task_name(raw)
+                if _is_idle_task_name(tname) or tname == "TICK":
+                    continue
+                if lo is not None and hi is not None:
+                    task_times[mk] = sum(
+                        _seg_overlap_ns(s, lo, hi)
+                        for s in _task_segs_in_range(trace, mk, lo, hi)
+                    )
+                else:
+                    task_times[mk] = sum(s.end - s.start for s in segs)
 
         rows: List[Tuple[str, str, float]] = []
         for mk, t_ns in sorted(task_times.items(), key=lambda kv: kv[1], reverse=True)[:limit]:
@@ -30549,7 +33021,7 @@ def _find_sti_hits(trace: BtfTrace, query: str, regex_obj: Optional[re.Pattern])
 def _find_interval_hits(trace: BtfTrace, query: str, regex_obj: Optional[re.Pattern]) -> List[int]:
     hits: List[int] = []
     for inst in getattr(trace, "interval_instances", ()):
-        hay = f"{inst.interval_id} {inst.task_id or ''} {inst.start_ns} {inst.stop_ns}"
+        hay = f"{inst.id} {inst.task_id or ''} {inst.start_ns} {inst.stop_ns}"
         if _haystack_matches(query, "contains", hay, regex_obj):
             hits.extend([inst.start_ns, inst.stop_ns])
     for ev in getattr(trace, "sti_events", ()):
@@ -33004,9 +35476,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._progress_dialog: Optional[QProgressDialog] = None
 
         self._find_marker_items: List[QGraphicsItem] = []
-        self._heatmap_dlg: Optional[_MigrationHeatmapDialog] = None
+        self._heatmap_dlg: Optional[_CorridorInspectorDialog] = None
         self._heatmap_view_snapshot: Optional[dict] = None
-        self._chord_dlg: Optional[_ChordDiagramDialog] = None
+        self._chord_dlg: Optional[_CorridorInspectorDialog] = None
         self._defer_stats_refresh: bool = False
         self._shutting_down: bool = False
         self._persisting_settings: bool = False
@@ -33303,6 +35775,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     def _wire_timeline_view(self, view: TimelineView) -> None:
         view.zoom_changed.connect(lambda tpp, v=view: self._on_zoom_changed(tpp, v))
+        view.viewport_changed.connect(
+            lambda v=view: self._on_timeline_viewport_changed(v))
         view.label_width_changed.connect(
             lambda w, v=view: self._on_label_width_changed(w, v))
         view.cursors_changed.connect(lambda times, v=view: self._on_cursors_changed(times, v))
@@ -35155,6 +37629,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             if getattr(self, '_tb_icon_actions', None):
                 for _act, _ic_path in self._tb_icon_actions:
                     _act.setIcon(_svg_icon(_ic_path, _ic_color))
+            if hasattr(self, '_tb_show_all_tasks_btn'):
+                _all_fg = c.get('tb_checked_fg', _ic_color)
+                self._tb_show_all_tasks_btn.setIcon(
+                    _heatmap_clear_icon(_all_fg, is_dark=is_dark))
             if hasattr(self, '_tb_theme_btn'):
                 _theme_ic = _IC_THEME_LIGHT if is_dark else _IC_THEME_DARK
                 self._tb_theme_btn.setIcon(_svg_icon(_theme_ic, _ic_color))
@@ -35854,13 +38332,22 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             _clw.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self._tb_heatmap_btn = _ia(
             "Heatmap", self._open_migration_heatmap, _IC_HEATMAP,
-            "Migration heatmap — core-pair counts over time (multi-core traces only)")
-        self._tb_heatmap_btn.setEnabled(False)
-        self._tb_chord_btn = _ia(
-            "Chord", self._open_chord_diagram, _IC_CHORD,
-            "Migration chord diagram — directional core-to-core migration volume "
+            "Migration & Corridor Inspector — topology + timeline "
             "(multi-core traces only)")
-        self._tb_chord_btn.setEnabled(False)
+        self._tb_heatmap_btn.setEnabled(False)
+        self._tb_show_all_tasks_btn = tb.addAction(
+            "All tasks", self._clear_heatmap_task_filter)
+        self._tb_show_all_tasks_btn.setCheckable(True)
+        self._tb_show_all_tasks_btn.setChecked(True)
+        self._tb_show_all_tasks_btn.setIcon(
+            _heatmap_clear_icon(is_dark=getattr(self, "_is_dark", True)))
+        self._tb_show_all_tasks_btn.setToolTip(
+            "Clear heatmap task filter and show all tasks")
+        self._tb_show_all_tasks_btn.setVisible(False)
+        _saw = tb.widgetForAction(self._tb_show_all_tasks_btn)
+        if _saw:
+            _saw.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+            _saw.setAutoExclusive(False)
         self._tb_analysis_btn = _ia(
             "Analysis", self._open_analysis_findings, _IC_ANALYSIS,
             "Analysis Findings — heuristic load balance, WCET, blocking, "
@@ -35869,10 +38356,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         _aw = tb.widgetForAction(self._tb_analysis_btn)
         if _aw:
             _aw.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self._tb_show_all_tasks_btn = _ia(
-            "All tasks", self._clear_heatmap_task_filter, _IC_TASK,
-            "Clear heatmap task filter and show all tasks")
-        self._tb_show_all_tasks_btn.setVisible(False)
         tb.addSeparator()
 
         # --- STI waveform scale toggle ---
@@ -36270,31 +38753,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             return
         dlg.refresh_scope()
 
-    def _open_chord_diagram(self) -> None:
-        trace = self._trace
-        if trace is None or not _trace_is_multi_core(trace):
-            return
-        if self._chord_dlg is not None:
-            self._chord_dlg.raise_()
-            self._chord_dlg.activateWindow()
-            return
-        dlg = _ChordDiagramDialog(trace, parent=self)
-        dlg._owner_tab_path = (
-            self._active_tab.path if self._active_tab else None)
-        dlg.finished.connect(self._on_chord_dlg_closed)
-        self._chord_dlg = dlg
-        dlg.show()
-
-    def _on_chord_dlg_closed(self, _result: int = 0) -> None:
-        self._chord_dlg = None
-
-    def _sync_chord_toolbar(self) -> None:
-        if not hasattr(self, "_tb_chord_btn"):
-            return
-        trace = self._trace
-        self._tb_chord_btn.setEnabled(
-            trace is not None and _trace_is_multi_core(trace))
-
     def _toggle_show_ai_panel(self) -> None:
         self._show_ai = not getattr(self, "_show_ai", True)
         if hasattr(self, "_act_show_ai"):
@@ -36570,28 +39028,38 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self.statusBar().showMessage("Showing all tasks", 3000)
         self._heatmap_view_snapshot = None
 
-    def _finish_heatmap_clear_ui(self, dlg: _MigrationHeatmapDialog) -> None:
+    def _finish_heatmap_clear_ui(self, dlg: _CorridorInspectorDialog) -> None:
         dlg.refresh_scope()
         dlg.set_filter_banner(None, 0)
 
-    def _open_migration_heatmap(self) -> None:
+    def _open_corridor_inspector(self, initial_mode: str = "heatmap") -> None:
         trace = self._trace
         if trace is None or not _trace_is_multi_core(trace):
             return
-        if self._heatmap_dlg is not None:
-            self._heatmap_dlg.raise_()
-            self._heatmap_dlg.activateWindow()
+        # Single shared inspector instance (heatmap + chord entry points).
+        dlg = self._heatmap_dlg or self._chord_dlg
+        if dlg is not None:
+            if initial_mode == "chord" and hasattr(dlg, "_show_topology"):
+                dlg._show_topology(True)
+            dlg.raise_()
+            dlg.activateWindow()
+            self._heatmap_dlg = dlg
+            self._chord_dlg = dlg
             return
         tab = self._active_tab
         if tab is not None:
             self._capture_heatmap_view_snapshot(tab)
-        dlg = _MigrationHeatmapDialog(
-            trace, parent=self, on_drill=self._on_heatmap_drill,
-            on_clear=self._clear_heatmap_task_filter)
+        dlg = _CorridorInspectorDialog(
+            trace, parent=self,
+            on_spotlight=self._on_corridor_spotlight,
+            on_clear=self._clear_heatmap_task_filter,
+            on_jump=self._on_corridor_jump,
+            initial_mode=initial_mode)
         dlg._owner_tab_path = (
             self._active_tab.path if self._active_tab else None)
-        dlg.finished.connect(self._on_heatmap_dlg_closed)
+        dlg.finished.connect(self._on_inspector_dlg_closed)
         self._heatmap_dlg = dlg
+        self._chord_dlg = dlg
         tab = self._active_tab
         sc = tab.view._scene if tab else None
         mks = sc._heatmap_filter_mks if sc else None
@@ -36599,6 +39067,63 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             sc._heatmap_filter_label if sc else None,
             len(mks) if mks else 0)
         dlg.show()
+
+    def _open_migration_heatmap(self) -> None:
+        self._open_corridor_inspector("heatmap")
+
+    def _open_chord_diagram(self) -> None:
+        self._open_corridor_inspector("chord")
+
+    def _on_inspector_dlg_closed(self, _result: int = 0) -> None:
+        self._heatmap_dlg = None
+        self._chord_dlg = None
+
+    def _on_heatmap_dlg_closed(self, _result: int = 0) -> None:
+        self._on_inspector_dlg_closed(_result)
+
+    def _on_chord_dlg_closed(self, _result: int = 0) -> None:
+        self._on_inspector_dlg_closed(_result)
+
+    def _on_corridor_spotlight(self, from_core: str, to_core: str, label: str,
+                               bin_lo: int, bin_hi: int, merge_keys: set,
+                               lock_task_key: Optional[str] = None) -> None:
+        self._on_heatmap_drill(from_core, to_core, label, bin_lo, bin_hi,
+                               merge_keys, lock_task_key=lock_task_key,
+                               enable_cpu_load=True)
+
+    def _on_corridor_jump(self, bin_lo: int, bin_hi: int,
+                          lock_task_key: Optional[str] = None) -> None:
+        """Triage Jump To: place C1–C2 and scroll the main timeline to the peak bin."""
+        tab = self._active_tab
+        if tab is None or self._trace is None:
+            return
+        view = tab.view
+        view.begin_programmatic_viewport()
+        try:
+            view._fit_mode = False
+            view.clear_cursors()
+            view._scene.add_cursor(int(bin_lo))
+            view._scene.add_cursor(int(bin_hi))
+            view.cursors_changed.emit(view._scene.cursor_times())
+            vp_px = max(view.viewport().width() - view._scene._label_width, 100)
+            view._scene.zoom_to_range(int(bin_lo), int(bin_hi), vp_px)
+            view.scroll_to_ns((int(bin_lo) + int(bin_hi)) // 2)
+            view.zoom_changed.emit(view._scene.timescale_per_px)
+        finally:
+            view.end_programmatic_viewport()
+        if hasattr(self, "_tb_cpu_load_btn") and not self._tb_cpu_load_btn.isChecked():
+            self._tb_cpu_load_btn.setChecked(True)
+            self._toggle_cpu_load_graph()
+        if lock_task_key:
+            self._on_legend_task_clicked(lock_task_key)
+        if hasattr(self, "_stats_panel"):
+            self._stats_panel.set_cursor_times(
+                view._scene.cursor_times(), refresh_stats=False)
+        self.statusBar().showMessage(
+            f"Jumped to hotspot "
+            f"{_format_time(bin_lo, self._trace.time_scale)}–"
+            f"{_format_time(bin_hi, self._trace.time_scale)}",
+            5000)
 
     def _on_open_pair_heatmap(self, from_core: str, to_core: str,
                               bounce_only: bool = False) -> None:
@@ -36628,9 +39153,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             dlg.raise_()
             dlg.activateWindow()
 
-    def _on_heatmap_dlg_closed(self, _result: int = 0) -> None:
-        self._heatmap_dlg = None
-
     def _heatmap_filter_active(self) -> bool:
         tab = self._active_tab
         if tab is None:
@@ -36638,17 +39160,22 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         return tab.view._scene._heatmap_filter_mks is not None
 
     def _sync_show_all_tasks_btn(self) -> None:
-        if hasattr(self, "_tb_show_all_tasks_btn"):
-            self._tb_show_all_tasks_btn.setVisible(self._heatmap_filter_active())
+        if not hasattr(self, "_tb_show_all_tasks_btn"):
+            return
+        active = self._heatmap_filter_active()
+        self._tb_show_all_tasks_btn.setVisible(active)
+        self._tb_show_all_tasks_btn.setChecked(active)
 
     def _on_heatmap_drill(self, from_core: str, to_core: str, label: str,
-                          bin_lo: int, bin_hi: int, merge_keys: set) -> None:
+                          bin_lo: int, bin_hi: int, merge_keys: set,
+                          lock_task_key: Optional[str] = None,
+                          enable_cpu_load: bool = False) -> None:
         if not merge_keys:
             return
         tab = self._active_tab
         if tab is None:
             return
-        dlg = self._heatmap_dlg
+        dlg = self._heatmap_dlg or self._chord_dlg
         owner = getattr(dlg, "_owner_tab_path", None) if dlg else None
         if owner is not None and tab.path != owner:
             return
@@ -36657,28 +39184,35 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         tab.view._scene.set_heatmap_task_filter(set(merge_keys), label=label)
         self._legend.set_heatmap_filter(label, merge_keys)
         self._sync_show_all_tasks_btn()
-        if self._heatmap_dlg is not None:
-            self._heatmap_dlg.set_filter_banner(label, len(merge_keys))
+        if dlg is not None:
+            dlg.set_filter_banner(label, len(merge_keys))
+        if enable_cpu_load and not self._tb_cpu_load_btn.isChecked():
+            self._tb_cpu_load_btn.setChecked(True)
+            self._toggle_cpu_load_graph()
         view = tab.view
-        view._fit_mode = False
-        view.clear_cursors()
-        view._scene.add_cursor(bin_lo)
-        view._scene.add_cursor(bin_hi)
-        view.cursors_changed.emit(view._scene.cursor_times())
-        vp_px = max(view.viewport().width() - view._scene._label_width, 100)
-        view._scene.zoom_to_range(bin_lo, bin_hi, vp_px)
-        view.scroll_to_ns((bin_lo + bin_hi) // 2)
-        view.zoom_changed.emit(view._scene.timescale_per_px)
-        if len(merge_keys) == 1:
-            mk = next(iter(merge_keys))
-            self._on_legend_task_clicked(mk)
+        view.begin_programmatic_viewport()
+        try:
+            view._fit_mode = False
+            view.clear_cursors()
+            view._scene.add_cursor(bin_lo)
+            view._scene.add_cursor(bin_hi)
+            view.cursors_changed.emit(view._scene.cursor_times())
+            vp_px = max(view.viewport().width() - view._scene._label_width, 100)
+            view._scene.zoom_to_range(bin_lo, bin_hi, vp_px)
+            view.scroll_to_ns((bin_lo + bin_hi) // 2)
+            view.zoom_changed.emit(view._scene.timescale_per_px)
+        finally:
+            view.end_programmatic_viewport()
+        lock_mk = lock_task_key or (next(iter(merge_keys)) if len(merge_keys) == 1 else None)
+        if lock_mk:
+            self._on_legend_task_clicked(lock_mk)
         else:
             view._scene.set_highlighted_task(None)
         self._stats_panel.set_cursor_times(
             view._scene.cursor_times(), refresh_stats=False)
         n = len(merge_keys)
         self.statusBar().showMessage(
-            f"Heatmap {label}: showing {n} task(s) with migrations in "
+            f"Spotlight {label}: showing {n} task(s) · "
             f"{_format_time(bin_lo, self._trace.time_scale)}–"
             f"{_format_time(bin_hi, self._trace.time_scale)}. "
             f"Toolbar All tasks or Legend Clear to show all.",
@@ -36720,7 +39254,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
     def _sync_toolbar_to_active_tab(self) -> None:
         """Refresh toolbar toggles that reflect per-tab view state."""
         self._sync_heatmap_toolbar()
-        self._sync_chord_toolbar()
         if hasattr(self, "_tb_analysis_btn"):
             self._tb_analysis_btn.setEnabled(self._trace is not None)
         if hasattr(self, "_tb_cpu_load_btn"):
@@ -37585,6 +40118,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._load_trace_state(path)
         self._recompute_find_hits()
         self._load_tab_view_state(tab)
+        self._close_heatmap_dialog()
+        self._close_chord_dialog()
+        self._heatmap_view_snapshot = None
+        tab.view._scene.set_heatmap_task_filter(None)
 
         progress_dialog.update_progress(100, "Building legend…")
         _process_ui_events_safely()
@@ -38140,6 +40677,26 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             if not matched:
                 self._zoom_preset_combo.setCurrentIndex(-1)  # no preset matches
         self._refresh_find_marker()
+        self._on_timeline_viewport_changed(self._view)
+
+    def _on_timeline_viewport_changed(self, view: TimelineView = None) -> None:
+        if view is not None and view is not self._view:
+            return
+        active = view if view is not None else self._view
+        if active is not None and getattr(active, "_programmatic_viewport", 0):
+            return
+        if self._heatmap_dlg is None:
+            return
+        dlg = self._heatmap_dlg
+        if hasattr(dlg, "follow_scope"):
+            dlg.follow_scope()
+        timer = getattr(self, "_inspector_vp_timer", None)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(self._sync_heatmap_dialog_to_tab)
+            self._inspector_vp_timer = timer
+        timer.start(120)
 
     def _on_cursor_delete(self, ns: int) -> None:
         """Remove the cursor whose timestamp matches *ns* (from a badge drag-out)."""
@@ -39406,7 +41963,7 @@ Headless analysis commands (desktop only — no GUI, no Qt window):
   report       Full statistics export (Statistics panel → Export CSV/HTML).
   compare      Two-trace diff (Trace Compare dialog → Export).
   migrations   Core Migrations table only (CSV).
-  snapshot     Export a PNG/SVG image (timeline, migration heatmap, or a
+  snapshot     Export a PNG/SVG image (timeline, migration inspector, or a
                statistics metric plot) without opening the GUI.
   perfetto     Export Chrome Trace JSON for https://ui.perfetto.dev
                (same as File → Export Perfetto…).
@@ -39547,15 +42104,14 @@ Views (--view):
              (no filter).  --cpu-load appends the synchronised CPU Load strip;
              with a locked --task it shows that task's usage on each core.
              Without --lo/--hi the timeline fits the full trace (Fit to Window).
-  heatmap    Migration Heatmap (core-pair x time-bin grid). --task is not
-             supported (the heatmap is inherently cross-task); --lo/--hi
-             scope the grid to a time range. --drill-row/--drill-bin drill
-             into the per-task grid for one core-pair row and time bin
-             (matrix-mode heatmaps, >16 cores, are not drillable headlessly).
-  chord      Migration Chord Diagram (directional core-to-core migration
-             volume as a circular chord diagram). --task/--drill-row/
-             --drill-bin are not supported; --lo/--hi scope the diagram to
-             a time range. Requires a multi-core trace (2+ cores).
+  heatmap    Migration & Corridor Inspector (tree + time-bin grid; topology
+             sidebar collapsed). --task is not supported; --lo/--hi scope
+             the inspector. --drill-row selects that corridor (0 = top) and
+             expands its tasks; --drill-bin highlights that time bin
+             (default: peak bin). Requires 2+ cores.
+  chord      Same inspector with the topology sidebar expanded (mini-chord).
+             --drill-row/--drill-bin select a corridor as for heatmap;
+             --lo/--hi scope the diagram. Requires 2+ cores.
   plot       A statistics metric scatter+histogram popup, selected with
              --metric:
                tick       tick-interval distribution (trace-wide, no --task)
@@ -39576,9 +42132,8 @@ Views (--view):
                switch_overhead  per-core kernel switch gaps      (--core)
                concurrency  interval dwell at N active cores     (--active-cores)
 
-Sizing (--width/--height): only used for --view timeline / --view plot; the
-heatmap and chord diagram image sizes are derived from their data (grid /
-default dialog size respectively).
+Sizing (--width/--height): timeline / plot / inspector dialog size
+(heatmap + chord default 1000×680).
 
 examples:
   %(prog)s trace.btf -o timeline.png --view timeline
@@ -39586,9 +42141,9 @@ examples:
   %(prog)s trace.btf -o migrate.svg --view timeline --view-mode task --task "CS[22]" --lo 1805000 --hi 1865000
   %(prog)s trace.btf -o cpu-load.svg --view timeline --view-mode task --task "CS[22]" --cpu-load
   %(prog)s trace.btf -o heatmap.png --view heatmap
-  %(prog)s trace.btf -o heatmap-tasks.svg --view heatmap --drill-row 0 --drill-bin 3
+  %(prog)s trace.btf -o inspector.svg --view heatmap --drill-row 0
   %(prog)s trace.btf -o chord.png --view chord
-  %(prog)s trace.btf -o chord.svg --view chord
+  %(prog)s trace.btf -o chord.svg --view chord --drill-row 0
   %(prog)s trace.btf -o tick.svg --view plot --metric tick
   %(prog)s trace.btf -o exec.png --view plot --metric exec --task "Producer[1]"
   %(prog)s trace.btf -o preempt.png --view plot --metric preempt --task "Producer[1]" --preemptor "Consumer[2]"
@@ -39764,7 +42319,7 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
         help="export a PNG/SVG image (timeline, migration heatmap, or a metric plot)",
         description=(
             "Export a PNG/SVG image without opening the GUI: the main timeline view, "
-            "the Migration Heatmap, or a statistics metric scatter+histogram plot."
+            "the Migration & Corridor Inspector, or a statistics metric plot."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=_CLI_EPILOG_SNAPSHOT,
@@ -39855,24 +42410,31 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
     snapshot.add_argument(
         "--drill-row", type=int, default=None, metavar="N", dest="drill_row",
         help=(
-            "core-pair row index (0-based, top row = 0) to drill into the "
-            "per-task grid; requires --drill-bin (--view heatmap only, not chord)"
+            "corridor row index (0-based, top = 0) to select and expand; "
+            "optional --drill-bin highlights that time bin (default: peak). "
+            "--view heatmap/chord"
         ),
     )
     snapshot.add_argument(
         "--drill-bin", type=int, default=None, metavar="N", dest="drill_bin",
         help=(
-            "time-bin column index (0-based, leftmost = 0) to drill into the "
-            "per-task grid; requires --drill-row (--view heatmap only)"
+            "time-bin column index (0-based, leftmost = 0) to highlight; "
+            "requires --drill-row (--view heatmap/chord)"
         ),
     )
     snapshot.add_argument(
         "--width", type=int, default=None, metavar="PX",
-        help="image width in pixels (--view timeline default 1600, --view plot default 820)",
+        help=(
+            "image width in pixels (timeline default 1600, plot 820, "
+            "heatmap/chord inspector 1000)"
+        ),
     )
     snapshot.add_argument(
         "--height", type=int, default=None, metavar="PX",
-        help="image height in pixels (--view timeline default 900, --view plot default 620)",
+        help=(
+            "image height in pixels (timeline default 900, plot 620, "
+            "heatmap/chord inspector 680)"
+        ),
     )
     snapshot.add_argument(
         "--theme", choices=("dark", "light"), default="dark",
@@ -40321,36 +42883,6 @@ def _cli_scroll_view_to_task(view: "TimelineView", task_mk: str) -> None:
         cur = view.mapToScene(vp.center())
         view.centerOn(orth, cur.y())
 
-def _cli_apply_heatmap_scope(dlg: "_MigrationHeatmapDialog",
-                             lo: Optional[int], hi: Optional[int]) -> None:
-    """Rebuild the level-0 grid for an explicit [lo, hi] scope.
-
-    Standalone equivalent of _MigrationHeatmapDialog.refresh_scope(), which
-    normally derives lo/hi from cursor times on a QMainWindow parent (there
-    is none in headless CLI use).
-    """
-    if lo is None or hi is None:
-        return
-    trace = dlg._trace
-    dlg._scope_lo, dlg._scope_hi = lo, hi
-    dlg._scope_suffix = (
-        f"  ({_format_time(lo, trace.time_scale)} \u2026 {_format_time(hi, trace.time_scale)})")
-    if dlg._apply_scope_cache(lo, hi):
-        dlg._go_level0()
-        return
-    pairs, grid, time_bins = _migration_heatmap_data(trace, lo, hi, bounce_only=dlg._bounce_only)
-    dlg._pairs = pairs
-    dlg._grid0 = grid
-    if dlg._uses_matrix:
-        dlg._matrix_cores, dlg._matrix_grid = _migration_heatmap_matrix(
-            trace, lo, hi, bounce_only=dlg._bounce_only)
-    span = max(hi - lo, 1)
-    dlg._cache_scope_grid(lo, hi, pairs, grid, time_bins, lo, hi, span)
-    dlg._ov_t_min, dlg._ov_t_max = lo, hi
-    dlg._ov_bin_w = span / time_bins
-    dlg._ov_time_bins = time_bins
-    dlg._go_level0()
-
 def _cli_snapshot_timeline(trace: "BtfTrace",
                           args: argparse.Namespace
                           ) -> Tuple[Optional["TimelineView"], Optional[str],
@@ -40460,60 +42992,64 @@ def _cli_apply_theme_chrome(app: "QApplication", is_dark: bool) -> None:
     """)
 
 
-def _cli_snapshot_heatmap(trace: "BtfTrace",
-                         args: argparse.Namespace) -> Tuple[Optional["_MigrationHeatmapDialog"], Optional[str]]:
+def _cli_snapshot_inspector(
+    trace: "BtfTrace", args: argparse.Namespace, *, initial_mode: str,
+) -> Tuple[Optional["_CorridorInspectorDialog"], Optional[str]]:
+    """Headless Migration & Corridor Inspector (heatmap + chord entry points)."""
     if args.metric is not None:
-        print("warning: --metric is ignored for --view heatmap", file=sys.stderr)
+        print("warning: --metric is ignored for --view heatmap/chord", file=sys.stderr)
     if args.task:
-        return None, "error: --task is not supported for --view heatmap (cross-task view)"
-    if (args.drill_row is None) != (args.drill_bin is None):
-        return None, "error: --drill-row requires --drill-bin (and vice versa)"
-    dlg = _MigrationHeatmapDialog(trace, parent=None)
-    if args.lo is not None and args.hi is not None:
-        _cli_apply_heatmap_scope(dlg, args.lo, args.hi)
-    if args.drill_row is not None:
-        if dlg._uses_matrix:
-            return None, (
-                "error: --drill-row/--drill-bin is not supported for matrix-mode "
-                "heatmaps (>16 cores); drill interactively in the GUI instead")
-        row, bi = args.drill_row, args.drill_bin
-        if row < 0 or row >= len(dlg._pairs):
-            return None, f"error: --drill-row {row} out of range (0..{len(dlg._pairs) - 1})"
-        if bi < 0 or bi >= dlg._time_bins:
-            return None, f"error: --drill-bin {bi} out of range (0..{dlg._time_bins - 1})"
-        if not dlg._grid0 or dlg._grid0[row][bi] <= 0:
-            return None, f"error: no migrations at --drill-row {row} --drill-bin {bi}"
-        fc, tc, label = dlg._pairs[row]
-        bin_lo, bin_hi = _heatmap_bin_range(
-            dlg._t_min, dlg._bin_w, dlg._time_bins, dlg._t_max, bi)
-        dlg._go_level1(fc, tc, label, bin_lo, bin_hi, bi)
-    dlg.show()
-    _process_ui_events_safely()
-    return dlg, None
-
-def _cli_snapshot_chord(trace: "BtfTrace",
-                        args: argparse.Namespace) -> Tuple[Optional["_ChordDiagramDialog"], Optional[str]]:
-    if args.metric is not None:
-        print("warning: --metric is ignored for --view chord", file=sys.stderr)
-    if args.task:
-        return None, "error: --task is not supported for --view chord (cross-task view)"
-    if args.drill_row is not None or args.drill_bin is not None:
-        return None, "error: --drill-row/--drill-bin are not supported for --view chord"
+        return None, "error: --task is not supported for --view heatmap/chord"
     if not _trace_is_multi_core(trace):
-        return None, "error: --view chord requires a multi-core trace (2+ cores)"
-    dlg = _ChordDiagramDialog(trace, parent=None)
+        return None, "error: --view heatmap/chord requires a multi-core trace (2+ cores)"
+    if args.drill_bin is not None and args.drill_row is None:
+        return None, "error: --drill-bin requires --drill-row"
+    dlg = _CorridorInspectorDialog(trace, parent=None, initial_mode=initial_mode)
+    dlg.resize(int(args.width or 1000), int(args.height or 680))
     if args.lo is not None and args.hi is not None:
-        dlg._scope_lo, dlg._scope_hi = args.lo, args.hi
+        dlg._scope_lo, dlg._scope_hi = int(args.lo), int(args.hi)
         dlg._scope_suffix = (
             f"  ({_format_time(args.lo, trace.time_scale)} \u2026 "
             f"{_format_time(args.hi, trace.time_scale)})")
-        dlg._reload_data()
         dlg._rebuild()
-    if not dlg._has_data():
-        return None, "error: no migrations in scope for --view chord"
+    if not (dlg._model or {}).get("has_data"):
+        return None, "error: no migrations in scope for --view heatmap/chord"
+    if args.drill_row is not None:
+        vis = dlg._display_corridors or []
+        row = int(args.drill_row)
+        if row < 0 or row >= len(vis):
+            return None, (
+                f"error: --drill-row {row} out of range "
+                f"(0..{max(len(vis) - 1, 0)})")
+        c = vis[row]
+        bins = int(dlg._model.get("time_bins") or 32)
+        bi = args.drill_bin
+        if bi is None:
+            bi = c.get("peak_bin", 0)
+        elif int(bi) < 0 or int(bi) >= bins:
+            return None, f"error: --drill-bin {bi} out of range (0..{bins - 1})"
+        dlg._expanded_corridors.add(dlg._corridor_key(c))
+        dlg._populate_tree()
+        dlg._select_corridor(c, int(bi) if bi is not None else None)
     dlg.show()
     _process_ui_events_safely()
+    dlg._apply_sidebar_layout()
+    dlg._fit_tree_pane()
+    dlg._grid._sync_overlay()
+    _process_ui_events_safely()
+    dlg._grid._sync_overlay()
+    _process_ui_events_safely()
     return dlg, None
+
+def _cli_snapshot_heatmap(trace: "BtfTrace",
+                         args: argparse.Namespace
+                         ) -> Tuple[Optional["_CorridorInspectorDialog"], Optional[str]]:
+    return _cli_snapshot_inspector(trace, args, initial_mode="heatmap")
+
+def _cli_snapshot_chord(trace: "BtfTrace",
+                        args: argparse.Namespace
+                        ) -> Tuple[Optional["_CorridorInspectorDialog"], Optional[str]]:
+    return _cli_snapshot_inspector(trace, args, initial_mode="chord")
 
 def _cli_snapshot_plot(trace: "BtfTrace",
                        args: argparse.Namespace) -> Tuple[Optional["_MetricsPlotDialog"], Optional[str]]:
@@ -40678,14 +43214,14 @@ def _cli_snapshot_run(args: argparse.Namespace) -> int:
         if getattr(args, "cpu_load", False):
             print("warning: --cpu-load is ignored for --view heatmap", file=sys.stderr)
         widget, err = _cli_snapshot_heatmap(trace, args)
-        title = "Migration Heatmap"
+        title = "Migration & Corridor Inspector"
     elif args.view == "chord":
         if getattr(args, "view_mode", "task") != "task":
             print("warning: --view-mode is ignored for --view chord", file=sys.stderr)
         if getattr(args, "cpu_load", False):
             print("warning: --cpu-load is ignored for --view chord", file=sys.stderr)
         widget, err = _cli_snapshot_chord(trace, args)
-        title = "Migration Chord Diagram"
+        title = "Migration & Corridor Inspector"
     else:
         if getattr(args, "view_mode", "task") != "task":
             print("warning: --view-mode is ignored for --view plot", file=sys.stderr)
@@ -40703,16 +43239,10 @@ def _cli_snapshot_run(args: argparse.Namespace) -> int:
                 _cli_save_timeline_svg(widget, out_path, cpu_graph)
             else:
                 _cli_save_timeline_png(widget, out_path, cpu_graph)
-        elif args.view == "heatmap":
+        elif args.view in ("heatmap", "chord"):
             if fmt == "svg":
-                widget._canvas.render_full_svg(out_path, title)
-            elif not widget._canvas.render_full_pixmap().save(out_path):
-                print(f"error: could not save PNG: {out_path}", file=sys.stderr)
-                return 1
-        elif args.view == "chord":
-            if fmt == "svg":
-                widget._canvas.render_full_svg(out_path, title)
-            elif not _cli_save_widget_png(widget._canvas, out_path):
+                _cli_save_widget_svg(widget, out_path, title)
+            elif not _cli_save_widget_png(widget, out_path):
                 print(f"error: could not save PNG: {out_path}", file=sys.stderr)
                 return 1
         else:
@@ -40773,14 +43303,24 @@ _CLI_COMMANDS = {
     "perfetto": _cli_perfetto_main,
 }
 
-def _cli_gui_trace_paths(argv: List[str]) -> List[str]:
-    """Normalize existing .btf paths from GUI argv (preserves order, dedupes)."""
+def _cli_gui_trace_paths(argv: List[str],
+                         base_dir: Optional[str] = None) -> List[str]:
+    """Normalize existing .btf paths from GUI argv (preserves order, dedupes).
+
+    Relative paths are resolved against *base_dir* (launch cwd).  Qt on Windows
+    may change the process cwd when QApplication starts, so callers must pass
+    the pre-Qt working directory.
+    """
+    root = os.path.abspath(base_dir or os.getcwd())
     seen: set = set()
     out: List[str] = []
     for arg in argv:
         if arg.startswith("-"):
             continue
-        path = os.path.abspath(os.path.expanduser(arg))
+        path = os.path.expanduser(arg)
+        if not os.path.isabs(path):
+            path = os.path.join(root, path)
+        path = os.path.abspath(path)
         if not os.path.isfile(path):
             print(f"warning: trace file not found, skipping: {arg}", file=sys.stderr)
             continue
@@ -40792,6 +43332,7 @@ def _cli_gui_trace_paths(argv: List[str]) -> List[str]:
 
 def main() -> None:
     argv = sys.argv[1:]
+    launch_cwd = os.getcwd()
     parser, _subs = _make_arg_parser()
 
     if argv in (["-h"], ["--help"]):
@@ -40806,6 +43347,9 @@ def main() -> None:
         print(f"\nerror: unrecognized arguments: {' '.join(argv)}", file=sys.stderr)
         raise SystemExit(2)
 
+    # Resolve before QApplication — Windows Qt may chdir to the script folder.
+    cli_paths = _cli_gui_trace_paths(argv, base_dir=launch_cwd)
+
     _platform_preflight()
     app = _bootstrap_qt_app(sys.argv)
     _install_macos_stderr_filter()
@@ -40817,8 +43361,6 @@ def main() -> None:
     win = MainWindow()
     win.show()
     _process_ui_events_safely()  # ensure the window is painted before any file open
-
-    cli_paths = _cli_gui_trace_paths(argv)
     if cli_paths:
         win._session_restore_active_idx = 0
         win._session_restore_queue = cli_paths[1:]

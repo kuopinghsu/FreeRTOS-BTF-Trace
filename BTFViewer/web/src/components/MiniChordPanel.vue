@@ -45,6 +45,8 @@ import {
   chordRingGeometry,
   distToQuadraticBezier,
   coreShortName,
+  chordLabelStep,
+  chordLabelVisible,
   CHORD_ARC_INNER,
   CHORD_ARC_OUTER,
   CHORD_GRAD_SOURCE_STOP,
@@ -172,6 +174,20 @@ function paintCircle(ctx, w, h, labelColor) {
   }
   ctx.globalAlpha = 1
 
+  const extra = new Set(props.focusCores || [])
+  if (hoverCore.value != null) extra.add(hoverCore.value)
+  if (props.focusCorridor?.fromCore) {
+    const fi = cores.indexOf(props.focusCorridor.fromCore)
+    const ti = cores.indexOf(props.focusCorridor.toCore)
+    if (fi >= 0) extra.add(fi)
+    if (ti >= 0) extra.add(ti)
+  }
+  if (hoverCorridor.value) {
+    extra.add(hoverCorridor.value.i)
+    extra.add(hoverCorridor.value.j)
+  }
+  const labelStep = chordLabelStep(cores.length, 16, 2 * Math.PI * Math.max(R, 1))
+
   for (const arc of lay.arcs) {
     const focused = props.focusCores?.includes(arc.index)
       || hoverCore.value === arc.index
@@ -198,6 +214,7 @@ function paintCircle(ctx, w, h, labelColor) {
     ctx.stroke()
     ctx.globalAlpha = 1
 
+    if (!chordLabelVisible(arc.index, labelStep, extra)) continue
     const mid = (arc.startAngle + arc.endAngle) / 2
     const lp = chordPointAt(cx, cy, mid, rEgress + CHORD_ARC_OUTER / 2 + 12)
     ctx.fillStyle = labelColor
@@ -219,7 +236,21 @@ function paintMatrix(ctx, w, h, labelColor) {
   const maxC = maxCount.value
   ctx.font = '9px monospace'
   ctx.fillStyle = labelColor
+  const extra = new Set(props.focusCores || [])
+  if (hoverCore.value != null) extra.add(hoverCore.value)
+  if (props.focusCorridor?.fromCore) {
+    const fi = cores.indexOf(props.focusCorridor.fromCore)
+    const ti = cores.indexOf(props.focusCorridor.toCore)
+    if (fi >= 0) extra.add(fi)
+    if (ti >= 0) extra.add(ti)
+  }
+  if (hoverCorridor.value) {
+    extra.add(hoverCorridor.value.i)
+    extra.add(hoverCorridor.value.j)
+  }
+  const step = chordLabelStep(n, 14, n * cell)
   for (let i = 0; i < n; i++) {
+    if (!chordLabelVisible(i, step, extra)) continue
     ctx.textAlign = 'right'
     ctx.fillText(coreShortName(cores[i]), padL - 4, padT + i * cell + cell * 0.7)
     ctx.save()

@@ -162,7 +162,7 @@ Toolbar **Analysis** summarises likely issues for the current scope (load imbala
 
 1. Note the severity and the Statistics section it names.
 2. Open that section, sort by Max / Rate / Bounce as relevant.
-3. Click **Min** / **Max**, a chart point, or a heatmap cell to jump the timeline.
+3. Click **Min** / **Max**, a chart point, or an inspector cell to jump the timeline.
 4. Place cursors around the phase of interest and enable **Limit to cursor range**.
 5. Optionally ask the **AI** tab to walk the same findings ([WORKFLOWS.md §7](WORKFLOWS.md#7-ai-assistant-flow)).
 
@@ -239,6 +239,76 @@ Ask-order tips: [WORKFLOWS.md §7](WORKFLOWS.md#7-ai-assistant-flow).
 
 Shared by the Desktop **Statistics** tab and the Web **Statistics** panel.
 
+### In this section
+
+Click a name to jump to the write-up. Sequence follows the Statistics panel default order (customize via drag-reorder), with how-to and chart topics next to the metrics they support. Some sections appear only when the trace has matching STI events.
+
+**Using the panel**
+
+| Section | Description |
+|---------|-------------|
+| [How to use the panel](#statistics-metric-tables) | Expand, pin, reorder, cursor scope, and export |
+
+**Cores and system load**
+
+| Section | Description |
+|---------|-------------|
+| [Summary](#summary-scheduling-and-core-utilisation) | Span, task/segment/STI counts (scoped when the checkbox is on) |
+| [Scheduling summary](#summary-scheduling-and-core-utilisation) | Context-switch count and average/max core gap between consecutive slices on each core |
+| [Core utilisation](#summary-scheduling-and-core-utilisation) | Percentage of active (non-IDLE, non-TICK) CPU time per core; side-by-side **Load Balance Score** and **σ** gauges at the top (Gini; red / amber / green zones) (collapsible) |
+| [Trace Health (TICK)](#trace-health-tick) | Tick period regularity, **tick / tickless mode detection** (coefficient of variation of tick intervals), large gaps, missed-tick estimate, and **Tick Distribution…** chart button (bar-chart icon beside the mode badge when ≥ 2 ticks in scope) (collapsible) |
+| [Core Time Breakdown](#core-time-breakdown) | Per-core time budget split into **Active** (non-IDLE, non-TICK tasks), **Idle** (IDLE task), **Tick** (TICK handler), and **Gap** (unaccounted span between segments — scheduler latency / ISR overhead) expressed as percentages (collapsible) |
+| [Concurrent Core Active Distribution](#concurrent-core-active-distribution) | Fraction of the scoped window spent with *N* cores concurrently running non-IDLE/non-TICK work (0…N); complements Load Balance Score with a temporal parallelism view. Click a row for the interval-duration distribution (collapsible) |
+| [Kernel Switch Overhead](#kernel-switch-overhead) | Per-core context-switch cost *t*<sub>resume,B</sub> − *t*<sub>preempt,A</sub> from consecutive `core_segs` gaps: switches, min/avg/max, total overhead, % of core span. Click a row for the switch-gap distribution (collapsible) |
+| [Top tasks by CPU](#top-tasks-by-cpu) | Ranked list of worker tasks by total CPU time consumed (collapsible) |
+
+**Migrations and affinity**
+
+| Section | Description |
+|---------|-------------|
+| [Core Migrations](#core-migration-analysis) | Per-task migration count, **migration rate** (normalized per second of active time and per scheduler tick), **average core dwell time**, core count, primary core (% time), ping-pong count, STI events near migrations, and average off-CPU gap after migration vs other gaps; click a row for a distribution chart with **Dwell** / **Rate** / **Gap** tabs (collapsible) |
+| [Core-Pair Migration Summary](#core-pair-migration-summary) | Per directed core-pair (e.g. `Core_0 → Core_1`): total migration count, lock-bounce count and percentage, and average off-CPU gap after migration; **click a row** for Gap / Rate distribution charts (bounce samples in orange) with **Open Heatmap** / **Open Chord** deep-links (collapsible; shown only on multi-core traces with migrations) |
+| [Highlight a migrating task](#highlight-a-migrating-task-on-the-timeline) | Lock-highlight the task in Task View and read per-core CPU Load |
+| [Inspect a core's corridors](#inspect-migrations-involving-a-specific-core) | From Core Migrations / pair rows into heatmap, chord, and Core Time Breakdown |
+| [Migration & Corridor Inspector](#migration--corridor-inspector) | Heatmap, chord, corridor filter |
+| [Core Affinity](#core-affinity) | Per-task affinity mask history from `affinity_set` STI (`vTaskCoreAffinitySet`) vs. observed execution cores; **Violations** lists cores used while outside the mask then in effect (slices before the first set are unrestricted; mask changes are shown as `0x1 → 0x8`) (collapsible; shown only when those STI events are present) |
+
+**Task lifecycle and deadlines**
+
+| Section | Description |
+|---------|-------------|
+| [Task Lifecycle](#task-lifecycle) | Per-task summary of `create`, `delete`, `suspend`, and `resume` events recorded on the `task` STI channel: created/deleted timestamps, suspend/resume counts, alive span (create→delete), total lifecycle event count, and **Runs** — the number of times the task was actually dispatched onto a core (context-switch-in / segment count). Runs is a scheduler-level metric and is normally much larger than Susp/Res, which only counts explicit `vTaskSuspend()`/`vTaskResume()` API calls — a task can run (and be preempted/resumed by the scheduler) many times without ever being suspended. In `example-8cores.btf.gz`, test 9 creates **SR0–SR3** (pinned across cores) with overlapping suspend-while-blocked and suspend-while-running rounds — use this section to confirm Susp/Res counts match the STI pairs (collapsible; shown only when the trace contains task lifecycle STI events) |
+| [Deadlines / CPU budget](#deadlines--cpu-budget) | Configurable per-task execution deadline (**nanoseconds**, converted to the trace `#timeScale` before compare) and global CPU budget threshold (%); shows **Slice over deadline** (top 20 by duration; click a row to jump + annotate) and **CPU budget exceeded** (click a row to highlight the task); click column headers to sort; click **Settings → Display** in the section to open Analysis thresholds (`Ctrl+,`) — always visible, with a configure prompt when no thresholds are set (collapsible) |
+
+**Slice timing**
+
+| Section | Description |
+|---------|-------------|
+| [Execution, blocking, and inter-arrival](#execution-blocking-and-inter-arrival) | How the three slice-timing metrics relate on the timeline |
+| [Execution Time Per Slice](#execution-time-per-slice) | Per-task min/avg/max/jitter/σ/p95, run count, and CPU%; click a row for a scatter + histogram popup; click **Min** / **Max** to jump and annotate the BCET / WCET slice |
+| [Blocking Time](#blocking-time) | Off-CPU gap between consecutive activations of the same task (not end-to-end response time); min/avg/max/jitter/σ/p95; click a row for a distribution chart; click **Min** / **Max** to jump and annotate the shortest / longest off-CPU gap (collapsible) |
+| [Dispatch / Scheduling Latency](#dispatch--scheduling-latency) | Ready→run delay using STI `resume Name[id]` (`vTaskResume`) or create→first-run as t<sub>ready</sub>, and the next switch-in as t<sub>resume</sub>; sync-object wakes are not attributed (BTF notes lack the woken task id). Click a row for the distribution plot; click **Min** / **Max** to jump to the extreme dispatch (collapsible) |
+| [Inter-Arrival Time](#inter-arrival-time) | The same variability statistics for gaps between task activation starts; click a row for a distribution chart; click **Min** / **Max** to jump and annotate the shortest / longest inter-arrival gap (collapsible) |
+
+**Preemption, sync, and instrumentation**
+
+| Section | Description |
+|---------|-------------|
+| [Preemption Chain Analysis](#preemption-chain-analysis) | For each victim/preemptor pair: count, total/average/max preemption overlap; click a row for a distribution chart; click a scatter point to jump and add an annotation at the preemptor segment (collapsible) |
+| [Priority Inheritance](#priority-inheritance) | Per-task base/peak priority, boost episodes, boosted time, and pattern (mutex inherit / L/M/H / boost only); click a row for a duration plot; click a scatter point to zoom, highlight, and annotate the episode (collapsible; shown only when the trace contains priority-inheritance STI events) |
+| [Mutex / Semaphore pairing](#mutex--semaphore-pairing) | Per-object hold count, issue count, **core bounce count**, average hold, and status; **Pairing issues** sub-table lists orphan gives, cross-task gives, unmatched takes, teardown warnings, and **`CORE_MIGRATION_WHILE_HELD`** warnings (lock that crossed core boundaries while held); click an issue row to zoom, jump, and annotate (collapsible; shown only when the trace contains sync-object STI events) |
+| [Queue](#queue) | Per-queue `send`/`recv` pairing by object pointer: hold count, issue count, average hold, and status (collapsible; shown only when the trace contains `queue` STI events) |
+| [Interval Analysis](#interval-analysis) | Per interval id: count, min/avg/max/p95 duration of paired start→stop spans; pairing uses `tid` in the note when present; click a row for a duration plot; click a scatter point to jump and add an annotation at the interval start (collapsible) |
+| [Tag Analysis](#tag-analysis) | Per `tag0_event`…`tag7_event` STI channel: sample count, min/avg/max/p95 of the tag value; click a row to open a scatter + histogram plot (collapsible; shown only when the trace contains tag STI samples) |
+
+**Compare and charts**
+
+| Section | Description |
+|---------|-------------|
+| [Trace Compare…](#trace-compare-1) | Side-by-side A vs B diffs |
+| [Metrics Distribution Charts](#metrics-distribution-charts) | Scatter, histogram, export |
+| [CDF overlay](#cdf-overlay) | Cumulative distribution on histograms |
+
 The **Statistics** tab in the right-side panel (Desktop dock + Web tab) shows per-core CPU utilisation, top tasks, scheduling summary, trace health, and collapsible metric tables. Toggle visibility from **Settings → Display → Statistics panel**. For a quick triage of the same scope, use toolbar **Analysis** (see [Analysis Findings](#analysis-findings)) — findings are **not** listed as a panel section.
 
 At the top, **Limit to C1–Cn** restricts all statistics (and Analysis Findings) to the time window from the first placed cursor through the last (requires 2+ cursors). Section titles show **(cursor range)** when scoped. Clearing all cursors returns to full-trace statistics immediately.
@@ -260,32 +330,6 @@ At the top, **Limit to C1–Cn** restricts all statistics (and Analysis Findings
 | Pin (thumbtack) | Keep the section expanded; survives **Collapse all** and heavy-trace deferral |
 
 Pins, section order, and table heights persist across launches. Drag the splitter between the timeline and CPU load to resize that pane.
-
-Default section sequence (customize via drag-reorder):
-
-- **Summary** — span, task/segment/STI counts (scoped when the checkbox is on)
-- **Scheduling summary** — context-switch count and average/max core gap between consecutive slices on each core
-- **Core utilisation** — percentage of active (non-IDLE, non-TICK) CPU time per core; side-by-side **Load Balance Score** and **σ** gauges at the top (Gini; red / amber / green zones) (collapsible)
-- **Trace health (TICK)** — tick period regularity, **tick / tickless mode detection** (coefficient of variation of tick intervals), large gaps, missed-tick estimate, and **Tick Distribution…** chart button (bar-chart icon beside the mode badge when ≥ 2 ticks in scope) (collapsible)
-- **Core Time Breakdown** — per-core time budget split into **Active** (non-IDLE, non-TICK tasks), **Idle** (IDLE task), **Tick** (TICK handler), and **Gap** (unaccounted span between segments — scheduler latency / ISR overhead) expressed as percentages (collapsible)
-- **Concurrent Core Active Distribution** — fraction of the scoped window spent with *N* cores concurrently running non-IDLE/non-TICK work (0…N); complements Load Balance Score with a temporal parallelism view. Click a row for the interval-duration distribution (collapsible)
-- **Kernel Switch Overhead** — per-core context-switch cost *t*<sub>resume,B</sub> − *t*<sub>preempt,A</sub> from consecutive `core_segs` gaps: switches, min/avg/max, total overhead, % of core span. Click a row for the switch-gap distribution (collapsible)
-- **Top tasks by CPU** — ranked list of worker tasks by total CPU time consumed (collapsible)
-- **Core Migrations** — per-task migration count, **migration rate** (normalized per second of active time and per scheduler tick), **average core dwell time**, core count, primary core (% time), ping-pong count, STI events near migrations, and average off-CPU gap after migration vs other gaps; click a row for a distribution chart with **Dwell** / **Rate** / **Gap** tabs (collapsible)
-- **Core-Pair Migration Summary** — per directed core-pair (e.g. `Core_0 → Core_1`): total migration count, lock-bounce count and percentage, and average off-CPU gap after migration; **click a row** for Gap / Rate distribution charts (bounce samples in orange) with **Open Heatmap** / **Open Chord** deep-links (collapsible; shown only on multi-core traces with migrations)
-- **Core Affinity** — per-task affinity mask history from `affinity_set` STI (`vTaskCoreAffinitySet`) vs. observed execution cores; **Violations** lists cores used while outside the mask then in effect (slices before the first set are unrestricted; mask changes are shown as `0x1 → 0x8`) (collapsible; shown only when those STI events are present)
-- **Task Lifecycle** — per-task summary of `create`, `delete`, `suspend`, and `resume` events recorded on the `task` STI channel: created/deleted timestamps, suspend/resume counts, alive span (create→delete), total lifecycle event count, and **Runs** — the number of times the task was actually dispatched onto a core (context-switch-in / segment count). Runs is a scheduler-level metric and is normally much larger than Susp/Res, which only counts explicit `vTaskSuspend()`/`vTaskResume()` API calls — a task can run (and be preempted/resumed by the scheduler) many times without ever being suspended. In `example-8cores.btf.gz`, test 9 creates **SR0–SR3** (pinned across cores) with overlapping suspend-while-blocked and suspend-while-running rounds — use this section to confirm Susp/Res counts match the STI pairs (collapsible; shown only when the trace contains task lifecycle STI events)
-- **Deadlines / CPU budget** — configurable per-task execution deadline (**nanoseconds**, converted to the trace `#timeScale` before compare) and global CPU budget threshold (%); shows **Slice over deadline** (top 20 by duration; click a row to jump + annotate) and **CPU budget exceeded** (click a row to highlight the task); click column headers to sort; click **Settings → Display** in the section to open Analysis thresholds (`Ctrl+,`) — always visible, with a configure prompt when no thresholds are set (collapsible)
-- **Execution Time Per Slice** — per-task min/avg/max/jitter/σ/p95, run count, and CPU%; click a row for a scatter + histogram popup; click **Min** / **Max** to jump and annotate the BCET / WCET slice
-- **Blocking Time** — off-CPU gap between consecutive activations of the same task (not end-to-end response time); min/avg/max/jitter/σ/p95; click a row for a distribution chart; click **Min** / **Max** to jump and annotate the shortest / longest off-CPU gap (collapsible)
-- **Dispatch / Scheduling Latency** — ready→run delay using STI `resume Name[id]` (`vTaskResume`) or create→first-run as t<sub>ready</sub>, and the next switch-in as t<sub>resume</sub>; sync-object wakes are not attributed (BTF notes lack the woken task id). Click a row for the distribution plot; click **Min** / **Max** to jump to the extreme dispatch (collapsible)
-- **Inter-Arrival Time** — the same variability statistics for gaps between task activation starts; click a row for a distribution chart; click **Min** / **Max** to jump and annotate the shortest / longest inter-arrival gap (collapsible)
-- **Preemption Chain Analysis** — for each victim/preemptor pair: count, total/average/max preemption overlap; click a row for a distribution chart; click a scatter point to jump and add an annotation at the preemptor segment (collapsible)
-- **Priority Inheritance** — per-task base/peak priority, boost episodes, boosted time, and pattern (mutex inherit / L/M/H / boost only); click a row for a duration plot; click a scatter point to zoom, highlight, and annotate the episode (collapsible; shown only when the trace contains priority-inheritance STI events)
-- **Mutex / Semaphore pairing** — per-object hold count, issue count, **core bounce count**, average hold, and status; **Pairing issues** sub-table lists orphan gives, cross-task gives, unmatched takes, teardown warnings, and **`CORE_MIGRATION_WHILE_HELD`** warnings (lock that crossed core boundaries while held); click an issue row to zoom, jump, and annotate (collapsible; shown only when the trace contains sync-object STI events)
-- **Queue** — per-queue `send`/`recv` pairing by object pointer: hold count, issue count, average hold, and status (collapsible; shown only when the trace contains `queue` STI events)
-- **Interval Analysis** — per interval id: count, min/avg/max/p95 duration of paired start→stop spans; pairing uses `tid` in the note when present; click a row for a duration plot; click a scatter point to jump and add an annotation at the interval start (collapsible)
-- **Tag Analysis** — per `tag0_event`…`tag7_event` STI channel: sample count, min/avg/max/p95 of the tag value; click a row to open a scatter + histogram plot (collapsible; shown only when the trace contains tag STI samples)
 
 **Export CSV** / **Export HTML** respect the current cursor scope. **Export CSV** includes summary tables for every statistics section (including **Deadlines / CPU budget** when thresholds are configured), a **Core Affinity Violations** sub-table listing every mutex that crossed core boundaries, plus **Load Balance Score**, σ, and Gini coefficient under Core Utilisation. **Export HTML** adds the same summaries plus an **Analysis Findings** card near the top (same heuristics as toolbar **Analysis** — load imbalance, WCET/CPU hotspots, blocking, L/M/H priority inversion, core thrashing / hot pairs, deadline breaches, tick health, sync/mutex bounces), embeds the **Load Balance Score** gauge as a self-contained SVG `<img>` (data URI) under Core Utilisation, and detail sub-tables for **Priority Inheritance** (boost episodes), **Mutex / Semaphore** (pairing issues with bounce warnings, and hold episodes with take/give core columns), and **Interval Analysis** (individual instances). **Trace Compare…** diffs Summary (incl. load balance + tick health), Top Tasks, Core Util, Migrations, Execution, Blocking, Inter-Arrival, Preemption, and Sync between two open tabs; enable **Limit to each tab's cursor range** to scope each side to its own C1–Cn window. Open metrics charts update live when cursors move or scope is toggled; each trace tab remembers its own open chart when you switch tabs.
 
@@ -309,7 +353,7 @@ Example plots below use **`tracedata/example-8cores.btf.gz`**. Worked diagnosis 
 
 #### Summary, scheduling, and core utilisation
 
-These sections open the Statistics panel in the **default** order (Summary and Scheduling summary are always first; **Core utilisation** is the first pinnable section). Later subsections below follow the same catalogue order as the app (`cores` → `health` → `core_breakdown` → `concurrency` → `switch_overhead` → `tasks` → … → `tags`). Drag-reorder may place them elsewhere.
+These sections open the Statistics panel in the **default** order (Summary and Scheduling summary are always first; **Core utilisation** is the first pinnable section). Write-ups below follow that catalogue: system load → migrations / affinity / lifecycle / deadlines → slice timing → preemption / sync / tags. Drag-reorder may place panel sections elsewhere.
 
 **Summary** — scope-wide counts: trace span, tasks, segments, STI events. Span is *t*<sub>max</sub> − *t*<sub>min</sub> in the active scope (full trace or cursor range).
 
@@ -345,7 +389,7 @@ where *G* is the Gini coefficient of {*U*<sub>core</sub>}.
 
 Toolbar **Analysis** also warns when Score &lt; 70 % *or* σ &gt; 30 %, and only describes cores as “reasonably balanced” when Score ≥ 85 % and σ ≤ 30 %. **Export HTML** includes the gauges; **Export CSV** includes the score, σ, and G values.
 
-**What it tells you:** Imbalanced utilisation across cores may indicate poor affinity, lock pinning, or workload placement issues — cross-check with **Core Migrations**, the migration heatmap, and toolbar **Analysis**.
+**What it tells you:** Imbalanced utilisation across cores may indicate poor affinity, lock pinning, or workload placement issues — cross-check with **Core Migrations**, the Migration & Corridor Inspector, and toolbar **Analysis**.
 
 #### Trace Health (TICK)
 
@@ -461,9 +505,25 @@ python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
 
 Ranks worker tasks (excl. IDLE/TICK) by total on-CPU time in scope — the same *T*<sub>exec,i</sub> denominator used for **CPU%** in Execution Time Per Slice. Click a row to highlight the task on the timeline.
 
-#### Core Migrations → Deadlines (panel order)
+Migration tables, highlight / inspect steps, the corridor inspector, and **Trace Compare…** are under [Core migration analysis](#core-migration-analysis).
 
-In the default panel sequence, the next sections are **Core Migrations**, **Core-Pair Migration Summary**, **Core Affinity**, **Task Lifecycle**, and **Deadlines / CPU budget**. Migration tables, heatmap, chord diagram, and **Trace Compare…** are documented together under [Core migration analysis](#core-migration-analysis). Affinity, lifecycle, and deadline meanings are in the panel overview above and the subsections below.
+#### Core Affinity
+
+Per-task affinity mask history from `affinity_set` STI (`vTaskCoreAffinitySet`) vs. observed execution cores. **Violations** lists cores used while outside the mask then in effect (slices before the first set are unrestricted; mask changes are shown as `0x1 → 0x8`).
+
+Shown only when those STI events are present.
+
+#### Task Lifecycle
+
+Per-task summary of `create`, `delete`, `suspend`, and `resume` events recorded on the `task` STI channel: created/deleted timestamps, suspend/resume counts, alive span (create→delete), total lifecycle event count, and **Runs** — the number of times the task was actually dispatched onto a core (context-switch-in / segment count). Runs is a scheduler-level metric and is normally much larger than Susp/Res, which only counts explicit `vTaskSuspend()`/`vTaskResume()` API calls — a task can run (and be preempted/resumed by the scheduler) many times without ever being suspended.
+
+In `example-8cores.btf.gz`, test 9 creates **SR0–SR3** (pinned across cores) with overlapping suspend-while-blocked and suspend-while-running rounds — use this section to confirm Susp/Res counts match the STI pairs.
+
+Shown only when the trace contains task lifecycle STI events.
+
+#### Deadlines / CPU budget
+
+Configurable per-task execution deadline (**nanoseconds**, converted to the trace `#timeScale` before compare) and global CPU budget threshold (%). Shows **Slice over deadline** (top 20 by duration; click a row to jump + annotate) and **CPU budget exceeded** (click a row to highlight the task). Click column headers to sort. Click **Settings → Display** in the section to open Analysis thresholds (`Ctrl+,`). Always visible, with a configure prompt when no thresholds are set.
 
 ### Execution, blocking, and inter-arrival
 
@@ -1055,9 +1115,9 @@ Shown only when the trace contains `tag0_event` … `tag7_event` (or `tag_event`
 
 ### Core migration analysis
 
-A **migration** is recorded when consecutive slices of the same task (merge-key) run on different cores. Migrations are detected at parse time from the segment timeline — there are no separate markers drawn on the timeline; use the **Core Migrations** table, **Migration heatmap**, **Migration chord diagram**, **Trace Compare…**, or Find **Migrations** mode to inspect them.
+A **migration** is recorded when consecutive slices of the same task (merge-key) run on different cores. Migrations are detected at parse time from the segment timeline — there are no separate markers drawn on the timeline; use the **Core Migrations** table, the **Migration & Corridor Inspector** (toolbar **Heatmap** / **Chord**), **Trace Compare…**, or Find **Migrations** mode to inspect them.
 
-In the Statistics panel default order, **Core Migrations** and **Core-Pair Migration Summary** sit after **Top tasks by CPU** (before affinity / lifecycle / deadlines). This section is the deep dive for those tables plus the heatmap and chord tools.
+Affinity, lifecycle, and deadline meanings are earlier in this chapter. This section is the deep dive for the migration tables, highlight / inspect steps, the corridor inspector, and **Trace Compare…**.
 
 #### Highlight a migrating task on the timeline
 
@@ -1066,7 +1126,7 @@ To *see* a hot migrating task in context (not only read rates in a table):
 1. Stay in **Task View** (toolbar **Task**).
 2. Click the task label (e.g. `CS[22]`) to **lock-highlight** it — other tasks stay on the timeline but gray out; do **not** use the legend filter.
 3. Enable **Load** to see that task’s CPU usage **per core** under the timeline (see [CPU Load](#cpu-load)).
-4. Optionally place cursors around the burst and enable **Limit to cursor range** so **Statistics → Core Migrations** and the heatmap recompute for that window only.
+4. Optionally place cursors around the burst and enable **Limit to cursor range** so **Statistics → Core Migrations** recomputes for that window. The inspector grid follows the **visible timeline viewport** independently.
 
 ![CS[22] highlighted in Task View with per-core CPU Load](../images/stats/tasks-cpu-load-cs22.svg)
 
@@ -1094,9 +1154,9 @@ python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
 After highlighting a hot task:
 
 1. **Statistics → Core Migrations** — note **Primary** core, **Rate**, **Dwell**, **Ping** for that task.  Click the row → **Dwell** / **Rate** / **Gap** charts.
-2. **Core-Pair Migration Summary** — sort or scan pairs where that core is **From** or **To** (e.g. `Core_5→Core_7`) to see which neighbour absorbs the traffic and whether **Bounce %** is elevated. Click the row for Gap / Rate charts; use **Open Heatmap** / **Open Chord** from the dialog footer when you need time-bin density or topology.
-3. Toolbar **Heatmap** — find the dark cells on rows that include the core of interest; click to drill to the per-task grid, then click the task cell to zoom/filter the timeline to that pair/window.
-4. Toolbar **Chord** — hover the core’s arc to highlight only its ingress/egress chords.
+2. **Core-Pair Migration Summary** — sort or scan pairs where that core is **From** or **To** (e.g. `Core_5→Core_7`) to see which neighbour absorbs the traffic and whether **Bounce %** is elevated. Click the row for Gap / Rate charts; use **Open Heatmap** / **Open Chord** from the dialog footer to open the unified inspector focused on that pair.
+3. Toolbar **Heatmap** — corridor tree + time-bin grid: click a hot cell or expand a corridor to see contributing tasks, then **Inspect in Timeline** / double-click for Spotlight.
+4. Toolbar **Chord** — same inspector with the topology sidebar expanded; hover outer (egress) / inner (ingress) rings or a ribbon to isolate flows.
 5. **Core Time Breakdown** — click a core row to jump Core View focused on that core.
 6. Headless CSV for a scoped window:
 
@@ -1180,8 +1240,8 @@ Click a row to open a **distribution chart** with two tabs:
 
 Dialog footer:
 
-- **Open Heatmap** — jump to the Migration Heatmap focused on that pair (prefers **Bounce Only** when Bounce % is elevated).
-- **Open Chord** — open the chord diagram with the source core highlighted.
+- **Open Heatmap** — open the Migration & Corridor Inspector focused on that pair (prefers **Lock Bounces Only** when Bounce % is elevated).
+- **Open Chord** — same inspector with topology expanded and the pair highlighted.
 
 **`Core_5 → Core_7`** in `example-8cores.btf.gz` (hottest corridor by Count):
 
@@ -1189,107 +1249,32 @@ Dialog footer:
 
 ![Time between pair migrations for Core_5→Core_7](../images/stats/stats-pair-rate-c5-c7.svg)
 
-#### Migration heatmap
+#### Migration & Corridor Inspector
 
-Visualise **when** migrations happen between core pairs — complementary to the per-task **Core Migrations** table. Traces with **more than 16 cores** use a **three-level** drill-down (core×core matrix → outgoing pairs × time bins → tasks). Smaller multi-core traces use a **two-level** flow (core-pair rows × time bins → tasks).
-
-**Bounce-only filter** — the **Show: All Migrations / Show: Bounce Only** toggle button in the heatmap dialog restricts the visualisation to migrations that occurred while a mutex was held across two different cores (lock-bounce migrations, tracked via `lock_bounce_migration_ns`). Use this to identify which core pairs and time windows are dominated by cache-line bouncing rather than normal scheduling migrations.
-
-**Example (`example-4cores.btf.gz`)** — screenshots exported with **Export SVG** from the heatmap dialog (full current drill level, no hover highlight):
-
-**Level 1 — core-pair overview** (4 cores · 12 time bins across the trace):
-
-![Migration heatmap Level 1: core-pair rows and time bins for example-8cores.btf.gz](../images/heatmap-pairs.svg)
-
-Each row is a directed core pair (`c0→c1`, `c0→c2`, …). Cell colour intensity is the migration count in that bin (darker blue = more events). Horizontal bands show **when** traffic occurred — e.g. repeated activity on `c0→c2` and `c1→c0` during the context-switch stress phases. Click a non-empty cell to drill into tasks for that pair and time window.
-
-**Level 2 — task grid** (after clicking a cell on the pair overview):
-
-![Migration heatmap Level 2: per-task sub-bins after drilling from example-8cores.btf.gz](../images/heatmap-tasks.svg)
-
-Rows are tasks that migrated on the selected core pair within the chosen bin; columns are **12 sub-bins** spanning that bin's time window. Brighter cells mark sub-intervals where that task crossed cores most often. Each row label is prefixed with a directional indicator: **▲** = task primarily migrates in this direction (egress-dominant), **▼** = more migrations on the reverse path (ingress-dominant), **⇄** = roughly symmetric. Click a task cell to zoom the timeline, place **C1** / **C2** at the sub-bin edges, switch to **Task View**, and filter to that task only.
-
-**Typical workflow (≤ 16 cores)**
-
-1. Open **Heatmap** from the toolbar (`tracedata/example-8cores.btf.gz` or `example-16cores.btf.gz` are good demos).
-2. **Level 1** — click a hot cell on a core-pair row to open the task grid for that bin.
-3. **Level 2** — click a task cell to zoom the timeline, place **C1** / **C2**, switch to **Task View**, and show only that task.
-4. **Show all tasks** — when done, clear the task filter and restore the timeline viewport, cursors, and highlights from before the heatmap was opened; the heatmap returns to the core-pair overview.
-
-**Typical workflow (> 16 cores)**
-
-1. **Level 1 — core×core matrix** — rows = source cores, columns = destination cores. Hover a row to highlight it; **click a row** to drill into outgoing migrations from that core.
-2. **Level 2 — outgoing pairs** — one row per destination (`c3→c1`, `c3→c2`, …), columns = 32 time bins. Hover highlights the row; click a cell to open the task grid for that pair and bin.
-3. **Level 3 — tasks** — same as Level 2 above for smaller traces.
-4. **← Back** steps up one level; **Show all tasks** resets the timeline filter and returns to Level 1 (matrix or pair overview).
+Toolbar **Heatmap** and **Chord** open the same inspector (Desktop + Web): corridor/task tree, time-bin grid, and mini-chord topology.
 
 | | |
 |--|--|
-| **Open** | Toolbar **Heatmap** (Desktop + Web). Enabled only when the trace has **2 or more cores** (single-core traces disable the button). Desktop: non-modal dialog (timeline stays interactive). Web: semi-transparent overlay. |
-| **Level 1 (≤ 16 cores)** | One row per directed core pair (`c0→c1`, `c1→c0`, …). Core names are shortened in the labels (e.g. `Core_0` → `c0`). |
-| **Level 1 (> 16 cores)** | **Core×core matrix** — row = source core, column = destination core. Hover highlights the row; **click a row** (not a single cell) to open outgoing pairs. |
-| **Level 2 (> 16 cores)** | Outgoing pairs from the selected source core (`c3→c1`, `c3→c2`, …) × 32 time bins. Row hover highlight; click a cell for tasks. |
-| **Level 1 columns** | **32 equal time bins** across the scoped window. Cell colour intensity is the migration count in that bin (darker = more migrations). Hover for time range, count, and task names. |
-| **Level 2 rows** | Task display names that migrated on the selected core pair in the selected bin. |
-| **Level 2 columns** | **32 sub-bins** within the Level 1 cell's time window. |
-| **← Back** | Step up one level (tasks → outgoing pairs → matrix, or tasks → pair overview on smaller traces). |
-| **Click cell** | ≤ 16 cores: Level 1 → tasks. > 16 cores: Level 2 → tasks. Details below. |
-| **Click row** | > 16 cores only: matrix Level 1 → outgoing pairs for that source core. |
-| **All tasks** (toolbar) | Shown next to **Heatmap** while a heatmap task filter is active. Same reset as **Show all tasks** below. |
-| **Show all tasks** | Clears the task filter and **restores the timeline state captured when the heatmap was opened** (viewport, cursors, highlights, view mode). The heatmap returns to **Level 1**; heatmap time scope follows the restored cursors (full trace if fewer than two cursors were saved). Available from: toolbar **All tasks**, heatmap dialog **Show all tasks**, Legend **Clear** (Web: Marks page; Desktop: legend dock), or enabling **Migrated tasks only**. Loading a new trace or switching tabs also clears the filter (Desktop closes the heatmap dialog on tab switch). |
-| **Export PNG / SVG** | Footer buttons export the **full current drill level** (all rows/columns, no hover highlight). Filenames: `heatmap-{level}-{timestamp}.png` or `.svg` (e.g. `pairs`, `matrix`, `outgoing`, `tasks`). Desktop: file save dialog + status bar confirmation. Web: direct download. |
-| **Scope** | **Full trace** by default. With **2 or more cursors** placed, Level 1 uses the time window from **C1** through the last cursor (subtitle shows the range). Independent of the Statistics panel **Limit to cursor range** toggle. **Show all tasks** restores pre-heatmap cursors, so heatmap scope matches that saved window. |
-| **Empty state** | *No migrations in scope.* (Level 1) or *No task migrations in this cell.* (Level 2) when no events fall in the current window. |
+| **Open** | Toolbar **Heatmap** or **Chord** (2+ cores). Desktop: non-modal. Web: overlay keeps the timeline interactive. Tab switch closes the inspector. |
+| **Scope** | Visible timeline viewport. Independent of Statistics **Limit to cursor range**. Empty tree/grid shows *No migrations in scope*; topology stays available. |
+| **Filter** | **Top corridors**, **Direction**, **Task filter**. **Lock Bounces Only** when the trace has cross-core mutex holds. |
+| **Select** | Click a tree row, grid cell, or chord ribbon. Double-click or **Inspect in Timeline** spotlights that bin (or task) with C1–C2. Toolbar **All** / **Show all tasks** clears the filter. |
+| **> 16 cores** | Tree groups by source; topology offers Circle ↔ Matrix. Dock topology **Bottom** or **Right**. |
 
-##### What happens when you click a cell
+**Example** (`example-8cores.btf.gz`):
 
-Only cells with at least one migration (count > 0) are clickable.
+![Migration & Corridor Inspector](../images/migration.svg)
 
-**≤ 16 cores — core-pair overview** (rows = `c0→c1`, … · columns = 32 time bins)
+Hover a ribbon for `cN→cM: count` in the footer. Per-task ping-pong / STI / gap-after aggregates are in Statistics **Core Migrations**.
 
-1. **Click a cell** — Opens the task grid for that core pair and time bin.
+```bash
+make -C BTFViewer update-images
+```
 
-**> 16 cores — core×core matrix** (rows/columns = cores)
-
-1. **Hover a row** — Highlights the source core row.
-2. **Click a row** — Opens outgoing pair rows (`cN→c1`, `cN→c2`, …) × 32 time bins.
-
-**Outgoing pairs / ≤ 16 cores Level 1** (rows = core pairs · columns = 32 time bins)
-
-3. **Click a cell** — Opens the task grid for that pair and time bin.
-
-**Task detail** (rows = task names · columns = 32 sub-bins)
-
-4. **Click a cell** — The timeline zooms to that sub-bin, **C1** and **C2** are placed at the sub-bin edges, the view switches to **Task View**, and only that **task** row is shown.
-5. **Another task cell** — Each click **replaces** the previous filter (last task wins).
-
-**Reset — Show all tasks**
-
-6. Clears the task filter, restores the viewport/cursors/highlights saved when the heatmap was opened, returns the heatmap to **Level 1** (matrix or pair overview), and shows every task row again.
-
-Use the heatmap to spot bursts of cross-core traffic, drill into the contributing tasks, then jump to Task View for slice-level inspection. For aggregate per-task migration statistics (ping-pong, STI correlation, gap-after), use **Core Migrations** in the Statistics panel.
-
-#### Migration chord diagram
-
-Visualise **how much** migration traffic flows between each pair of cores, as directional chords around a circle — one arc per core. Complementary to the **Migration heatmap** (which shows *when* migrations happen): the chord diagram gives a single, at-a-glance summary of *volume and direction* across the whole scoped window, with no drill-down levels.
-
-- **Chords** — a curved band between two core arcs for each directed pair with at least one migration; chord width is proportional to migration count and its colour fades from the source core's colour to the destination core's colour. Pairs that migrate in both directions are drawn as two offset chords.
-- **Hover a core arc** — highlights that core's arcs and fades all other chords/arcs; the fixed-height line below the diagram shows a breakdown (`out` / `in` totals, then each non-zero directed pair count for that core).
-- **Bounce-only filter** — the same **Show: All Migrations / Show: Bounce Only** toggle as the heatmap, restricting chords to lock-bounce migrations (held across a core boundary).
-- **Scope** — same as the heatmap: full trace by default, or **C1** through the last cursor when 2 or more cursors are placed.
-
-| | |
-|--|--|
-| **Open** | Toolbar **Chord** button (Desktop + Web). Enabled only when the trace has **2 or more cores**. Desktop: non-modal dialog (timeline stays interactive; closes if you switch to a different trace tab). Web: semi-transparent overlay (closes on tab switch). |
-| **Export PNG** | Footer button exports the diagram exactly as rendered (no hover highlight). Filename: `migration-chord-{timestamp}.png`. Desktop: file save dialog. Web: direct download. |
-| **Export SVG** | Footer button next to Export PNG; same content, vector format. Filename: `migration-chord-{timestamp}.svg`. Desktop: file save dialog. Web: direct download. |
-| **Empty state** | *No migrations in scope.* when no migrations fall in the current window. |
-
-**Example (`example-8cores.btf.gz`)** — screenshot exported with **Export SVG** from the chord dialog (full trace scope, no hover highlight):
-
-![Migration chord diagram: directional core-to-core migration volume for example-8cores.btf.gz](../images/migration-chord.svg)
-
-Each arc around the circle is one core (`c0`…`c7`); a chord between two arcs is a directed migration flow, coloured as a gradient from its source core to its destination core, with width proportional to migration count. Thicker chords between adjacent-looking core pairs (e.g. `c0`↔`c2`, `c1`↔`c6`) stand out immediately as the busiest migration paths, without needing to drill through a heatmap grid first.
+```bash
+python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
+  -o /tmp/migration.svg --view chord --width 1000 --height 720 --drill-row 0
+```
 
 #### Trace Compare…
 
@@ -1544,7 +1529,7 @@ Same engine as the GUI, suitable for CI. Use `QT_QPA_PLATFORM=offscreen` when no
 | `report` | Full statistics CSV/HTML |
 | `compare` | Two-trace diff (two paths or one multi-BTF zip) |
 | `migrations` | Migrations table as CSV |
-| `snapshot` | PNG/SVG of timeline, heatmap, or a metric plot |
+| `snapshot` | PNG/SVG of timeline, migration inspector, or a metric plot |
 | `perfetto` | Chrome Trace JSON |
 
 ```bash

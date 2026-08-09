@@ -20,6 +20,8 @@ from btf_viewer_pkg.parser import (  # noqa: E402
     _CHORD_ARC_OUTER,
     _build_chord_layout,
     _chord_hit_ring,
+    _chord_label_step,
+    _chord_label_visible,
     _chord_ring_geometry,
     _corridor_groups_by_source,
     _filter_corridors_by_task_query,
@@ -155,6 +157,66 @@ class TestBuildChordLayout(unittest.TestCase):
         by_mk = _filter_corridors_by_task_query(rows, "idle:0")
         self.assertEqual([c["label"] for c in by_mk], ["c2→c3"])
         self.assertEqual(_filter_corridors_by_task_query(rows, ""), rows)
+        padded = [
+            {
+                "from_core": "Core_0", "to_core": "Core_1", "label": "c0→c1",
+                "count": 3,
+                "tasks": [{"label": "CS[11]", "mk": "\x0011\x00CS"}],
+            },
+            {
+                "from_core": "Core_2", "to_core": "Core_3", "label": "c2→c3",
+                "count": 1,
+                "tasks": [{"label": "Idle", "mk": "idle:0"}],
+            },
+        ]
+        by_id = _filter_corridors_by_task_query(padded, "11")
+        self.assertEqual([c["label"] for c in by_id], ["c0→c1"])
+        by_pad = _filter_corridors_by_task_query(padded, "0011")
+        self.assertEqual([c["label"] for c in by_pad], ["c0→c1"])
+        mixed = [
+            {
+                "from_core": "Core_0", "to_core": "Core_1", "label": "c0→c1",
+                "count": 5, "rev_count": 0, "net": 0,
+                "bins": [2, 3], "bounce_bins": [0, 0],
+                "tasks": [
+                    {"label": "CS[28]", "mk": "\x0028\x00CS", "count": 2,
+                     "bounces": 0, "bins": [2, 0], "bounce_bins": [0, 0]},
+                    {"label": "CS[128]", "mk": "\x00128\x00CS", "count": 3,
+                     "bounces": 0, "bins": [0, 3], "bounce_bins": [0, 0]},
+                ],
+            },
+            {
+                "from_core": "Core_2", "to_core": "Core_3", "label": "c2→c3",
+                "count": 1, "rev_count": 0, "net": 0,
+                "bins": [1, 0], "bounce_bins": [0, 0],
+                "tasks": [
+                    {"label": "CS[128]", "mk": "\x00128\x00CS", "count": 1,
+                     "bounces": 0, "bins": [1, 0], "bounce_bins": [0, 0]},
+                ],
+            },
+        ]
+        only28 = _filter_corridors_by_task_query(mixed, "28")
+        self.assertEqual([c["label"] for c in only28], ["c0→c1"])
+        self.assertEqual([t["label"] for t in only28[0]["tasks"]], ["CS[28]"])
+        self.assertEqual(only28[0]["count"], 2)
+        self.assertEqual(only28[0]["bins"], [2, 0])
+        self.assertEqual(_filter_corridors_by_task_query(mixed, "128")[0]["count"], 3)
+        # Core names must not masquerade as a task id.
+        self.assertEqual(_filter_corridors_by_task_query(mixed, "2"), [])
+        btf_raw = [{
+            "from_core": "Core_0", "to_core": "Core_1", "label": "c0→c1",
+            "count": 1, "bins": [1], "bounce_bins": [0],
+            "tasks": [{"label": "[0/0028]CS", "mk": "[0/0028]CS", "count": 1,
+                       "bins": [1], "bounce_bins": [0]}],
+        }]
+        self.assertEqual(len(_filter_corridors_by_task_query(btf_raw, "28")), 1)
+        stripped = [{
+            "from_core": "Core_0", "to_core": "Core_1", "label": "c0→c1",
+            "count": 1, "bins": [1], "bounce_bins": [0],
+            "tasks": [{"label": "28CS", "mk": "28CS", "count": 1,
+                       "bins": [1], "bounce_bins": [0]}],
+        }]
+        self.assertEqual(len(_filter_corridors_by_task_query(stripped, "28")), 1)
 
     def test_corridor_groups_by_source(self) -> None:
         rows = [
@@ -166,6 +228,20 @@ class TestBuildChordLayout(unittest.TestCase):
         self.assertEqual([g["source"] for g in groups], ["Core_0", "Core_1"])
         self.assertEqual(groups[0]["count"], 14)
         self.assertEqual(len(groups[0]["corridors"]), 2)
+
+    def test_chord_label_step_skips_dense_cores(self) -> None:
+        self.assertEqual(_chord_label_step(8), 1)
+        self.assertEqual(_chord_label_step(16), 1)
+        self.assertEqual(_chord_label_step(32), 2)
+        self.assertEqual(_chord_label_step(64), 5)
+        self.assertEqual(_chord_label_step(128), 8)
+        self.assertTrue(_chord_label_visible(0, 5))
+        self.assertTrue(_chord_label_visible(5, 5))
+        self.assertTrue(_chord_label_visible(10, 5))
+        self.assertFalse(_chord_label_visible(3, 5))
+        self.assertTrue(_chord_label_visible(3, 5, {3}))
+        tight = _chord_label_step(40, min_px=20.0, span_px=80.0)
+        self.assertGreaterEqual(tight, 5)
 
     def test_split_rings_outer_egress_inner_ingress(self) -> None:
         r_e, r_i, r_rib = _chord_ring_geometry(100)

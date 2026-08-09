@@ -1422,9 +1422,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._progress_dialog: Optional[QProgressDialog] = None
 
         self._find_marker_items: List[QGraphicsItem] = []
-        self._heatmap_dlg: Optional[_MigrationHeatmapDialog] = None
+        self._heatmap_dlg: Optional[_CorridorInspectorDialog] = None
         self._heatmap_view_snapshot: Optional[dict] = None
-        self._chord_dlg: Optional[_ChordDiagramDialog] = None
+        self._chord_dlg: Optional[_CorridorInspectorDialog] = None
         self._defer_stats_refresh: bool = False
         self._shutting_down: bool = False
         self._persisting_settings: bool = False
@@ -1721,6 +1721,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     def _wire_timeline_view(self, view: TimelineView) -> None:
         view.zoom_changed.connect(lambda tpp, v=view: self._on_zoom_changed(tpp, v))
+        view.viewport_changed.connect(
+            lambda v=view: self._on_timeline_viewport_changed(v))
         view.label_width_changed.connect(
             lambda w, v=view: self._on_label_width_changed(w, v))
         view.cursors_changed.connect(lambda times, v=view: self._on_cursors_changed(times, v))
@@ -3573,6 +3575,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             if getattr(self, '_tb_icon_actions', None):
                 for _act, _ic_path in self._tb_icon_actions:
                     _act.setIcon(_svg_icon(_ic_path, _ic_color))
+            if hasattr(self, '_tb_show_all_tasks_btn'):
+                _all_fg = c.get('tb_checked_fg', _ic_color)
+                self._tb_show_all_tasks_btn.setIcon(
+                    _heatmap_clear_icon(_all_fg, is_dark=is_dark))
             if hasattr(self, '_tb_theme_btn'):
                 _theme_ic = _IC_THEME_LIGHT if is_dark else _IC_THEME_DARK
                 self._tb_theme_btn.setIcon(_svg_icon(_theme_ic, _ic_color))
@@ -4272,13 +4278,22 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             _clw.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self._tb_heatmap_btn = _ia(
             "Heatmap", self._open_migration_heatmap, _IC_HEATMAP,
-            "Migration heatmap — core-pair counts over time (multi-core traces only)")
-        self._tb_heatmap_btn.setEnabled(False)
-        self._tb_chord_btn = _ia(
-            "Chord", self._open_chord_diagram, _IC_CHORD,
-            "Migration chord diagram — directional core-to-core migration volume "
+            "Migration & Corridor Inspector — topology + timeline "
             "(multi-core traces only)")
-        self._tb_chord_btn.setEnabled(False)
+        self._tb_heatmap_btn.setEnabled(False)
+        self._tb_show_all_tasks_btn = tb.addAction(
+            "All tasks", self._clear_heatmap_task_filter)
+        self._tb_show_all_tasks_btn.setCheckable(True)
+        self._tb_show_all_tasks_btn.setChecked(True)
+        self._tb_show_all_tasks_btn.setIcon(
+            _heatmap_clear_icon(is_dark=getattr(self, "_is_dark", True)))
+        self._tb_show_all_tasks_btn.setToolTip(
+            "Clear heatmap task filter and show all tasks")
+        self._tb_show_all_tasks_btn.setVisible(False)
+        _saw = tb.widgetForAction(self._tb_show_all_tasks_btn)
+        if _saw:
+            _saw.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+            _saw.setAutoExclusive(False)
         self._tb_analysis_btn = _ia(
             "Analysis", self._open_analysis_findings, _IC_ANALYSIS,
             "Analysis Findings — heuristic load balance, WCET, blocking, "
@@ -4287,10 +4302,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         _aw = tb.widgetForAction(self._tb_analysis_btn)
         if _aw:
             _aw.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self._tb_show_all_tasks_btn = _ia(
-            "All tasks", self._clear_heatmap_task_filter, _IC_TASK,
-            "Clear heatmap task filter and show all tasks")
-        self._tb_show_all_tasks_btn.setVisible(False)
         tb.addSeparator()
 
         # --- STI waveform scale toggle ---
@@ -4688,31 +4699,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             return
         dlg.refresh_scope()
 
-    def _open_chord_diagram(self) -> None:
-        trace = self._trace
-        if trace is None or not _trace_is_multi_core(trace):
-            return
-        if self._chord_dlg is not None:
-            self._chord_dlg.raise_()
-            self._chord_dlg.activateWindow()
-            return
-        dlg = _ChordDiagramDialog(trace, parent=self)
-        dlg._owner_tab_path = (
-            self._active_tab.path if self._active_tab else None)
-        dlg.finished.connect(self._on_chord_dlg_closed)
-        self._chord_dlg = dlg
-        dlg.show()
-
-    def _on_chord_dlg_closed(self, _result: int = 0) -> None:
-        self._chord_dlg = None
-
-    def _sync_chord_toolbar(self) -> None:
-        if not hasattr(self, "_tb_chord_btn"):
-            return
-        trace = self._trace
-        self._tb_chord_btn.setEnabled(
-            trace is not None and _trace_is_multi_core(trace))
-
     def _toggle_show_ai_panel(self) -> None:
         self._show_ai = not getattr(self, "_show_ai", True)
         if hasattr(self, "_act_show_ai"):
@@ -4988,28 +4974,38 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self.statusBar().showMessage("Showing all tasks", 3000)
         self._heatmap_view_snapshot = None
 
-    def _finish_heatmap_clear_ui(self, dlg: _MigrationHeatmapDialog) -> None:
+    def _finish_heatmap_clear_ui(self, dlg: _CorridorInspectorDialog) -> None:
         dlg.refresh_scope()
         dlg.set_filter_banner(None, 0)
 
-    def _open_migration_heatmap(self) -> None:
+    def _open_corridor_inspector(self, initial_mode: str = "heatmap") -> None:
         trace = self._trace
         if trace is None or not _trace_is_multi_core(trace):
             return
-        if self._heatmap_dlg is not None:
-            self._heatmap_dlg.raise_()
-            self._heatmap_dlg.activateWindow()
+        # Single shared inspector instance (heatmap + chord entry points).
+        dlg = self._heatmap_dlg or self._chord_dlg
+        if dlg is not None:
+            if initial_mode == "chord" and hasattr(dlg, "_show_topology"):
+                dlg._show_topology(True)
+            dlg.raise_()
+            dlg.activateWindow()
+            self._heatmap_dlg = dlg
+            self._chord_dlg = dlg
             return
         tab = self._active_tab
         if tab is not None:
             self._capture_heatmap_view_snapshot(tab)
-        dlg = _MigrationHeatmapDialog(
-            trace, parent=self, on_drill=self._on_heatmap_drill,
-            on_clear=self._clear_heatmap_task_filter)
+        dlg = _CorridorInspectorDialog(
+            trace, parent=self,
+            on_spotlight=self._on_corridor_spotlight,
+            on_clear=self._clear_heatmap_task_filter,
+            on_jump=self._on_corridor_jump,
+            initial_mode=initial_mode)
         dlg._owner_tab_path = (
             self._active_tab.path if self._active_tab else None)
-        dlg.finished.connect(self._on_heatmap_dlg_closed)
+        dlg.finished.connect(self._on_inspector_dlg_closed)
         self._heatmap_dlg = dlg
+        self._chord_dlg = dlg
         tab = self._active_tab
         sc = tab.view._scene if tab else None
         mks = sc._heatmap_filter_mks if sc else None
@@ -5017,6 +5013,63 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             sc._heatmap_filter_label if sc else None,
             len(mks) if mks else 0)
         dlg.show()
+
+    def _open_migration_heatmap(self) -> None:
+        self._open_corridor_inspector("heatmap")
+
+    def _open_chord_diagram(self) -> None:
+        self._open_corridor_inspector("chord")
+
+    def _on_inspector_dlg_closed(self, _result: int = 0) -> None:
+        self._heatmap_dlg = None
+        self._chord_dlg = None
+
+    def _on_heatmap_dlg_closed(self, _result: int = 0) -> None:
+        self._on_inspector_dlg_closed(_result)
+
+    def _on_chord_dlg_closed(self, _result: int = 0) -> None:
+        self._on_inspector_dlg_closed(_result)
+
+    def _on_corridor_spotlight(self, from_core: str, to_core: str, label: str,
+                               bin_lo: int, bin_hi: int, merge_keys: set,
+                               lock_task_key: Optional[str] = None) -> None:
+        self._on_heatmap_drill(from_core, to_core, label, bin_lo, bin_hi,
+                               merge_keys, lock_task_key=lock_task_key,
+                               enable_cpu_load=True)
+
+    def _on_corridor_jump(self, bin_lo: int, bin_hi: int,
+                          lock_task_key: Optional[str] = None) -> None:
+        """Triage Jump To: place C1–C2 and scroll the main timeline to the peak bin."""
+        tab = self._active_tab
+        if tab is None or self._trace is None:
+            return
+        view = tab.view
+        view.begin_programmatic_viewport()
+        try:
+            view._fit_mode = False
+            view.clear_cursors()
+            view._scene.add_cursor(int(bin_lo))
+            view._scene.add_cursor(int(bin_hi))
+            view.cursors_changed.emit(view._scene.cursor_times())
+            vp_px = max(view.viewport().width() - view._scene._label_width, 100)
+            view._scene.zoom_to_range(int(bin_lo), int(bin_hi), vp_px)
+            view.scroll_to_ns((int(bin_lo) + int(bin_hi)) // 2)
+            view.zoom_changed.emit(view._scene.timescale_per_px)
+        finally:
+            view.end_programmatic_viewport()
+        if hasattr(self, "_tb_cpu_load_btn") and not self._tb_cpu_load_btn.isChecked():
+            self._tb_cpu_load_btn.setChecked(True)
+            self._toggle_cpu_load_graph()
+        if lock_task_key:
+            self._on_legend_task_clicked(lock_task_key)
+        if hasattr(self, "_stats_panel"):
+            self._stats_panel.set_cursor_times(
+                view._scene.cursor_times(), refresh_stats=False)
+        self.statusBar().showMessage(
+            f"Jumped to hotspot "
+            f"{_format_time(bin_lo, self._trace.time_scale)}–"
+            f"{_format_time(bin_hi, self._trace.time_scale)}",
+            5000)
 
     def _on_open_pair_heatmap(self, from_core: str, to_core: str,
                               bounce_only: bool = False) -> None:
@@ -5046,9 +5099,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             dlg.raise_()
             dlg.activateWindow()
 
-    def _on_heatmap_dlg_closed(self, _result: int = 0) -> None:
-        self._heatmap_dlg = None
-
     def _heatmap_filter_active(self) -> bool:
         tab = self._active_tab
         if tab is None:
@@ -5056,17 +5106,22 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         return tab.view._scene._heatmap_filter_mks is not None
 
     def _sync_show_all_tasks_btn(self) -> None:
-        if hasattr(self, "_tb_show_all_tasks_btn"):
-            self._tb_show_all_tasks_btn.setVisible(self._heatmap_filter_active())
+        if not hasattr(self, "_tb_show_all_tasks_btn"):
+            return
+        active = self._heatmap_filter_active()
+        self._tb_show_all_tasks_btn.setVisible(active)
+        self._tb_show_all_tasks_btn.setChecked(active)
 
     def _on_heatmap_drill(self, from_core: str, to_core: str, label: str,
-                          bin_lo: int, bin_hi: int, merge_keys: set) -> None:
+                          bin_lo: int, bin_hi: int, merge_keys: set,
+                          lock_task_key: Optional[str] = None,
+                          enable_cpu_load: bool = False) -> None:
         if not merge_keys:
             return
         tab = self._active_tab
         if tab is None:
             return
-        dlg = self._heatmap_dlg
+        dlg = self._heatmap_dlg or self._chord_dlg
         owner = getattr(dlg, "_owner_tab_path", None) if dlg else None
         if owner is not None and tab.path != owner:
             return
@@ -5075,28 +5130,35 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         tab.view._scene.set_heatmap_task_filter(set(merge_keys), label=label)
         self._legend.set_heatmap_filter(label, merge_keys)
         self._sync_show_all_tasks_btn()
-        if self._heatmap_dlg is not None:
-            self._heatmap_dlg.set_filter_banner(label, len(merge_keys))
+        if dlg is not None:
+            dlg.set_filter_banner(label, len(merge_keys))
+        if enable_cpu_load and not self._tb_cpu_load_btn.isChecked():
+            self._tb_cpu_load_btn.setChecked(True)
+            self._toggle_cpu_load_graph()
         view = tab.view
-        view._fit_mode = False
-        view.clear_cursors()
-        view._scene.add_cursor(bin_lo)
-        view._scene.add_cursor(bin_hi)
-        view.cursors_changed.emit(view._scene.cursor_times())
-        vp_px = max(view.viewport().width() - view._scene._label_width, 100)
-        view._scene.zoom_to_range(bin_lo, bin_hi, vp_px)
-        view.scroll_to_ns((bin_lo + bin_hi) // 2)
-        view.zoom_changed.emit(view._scene.timescale_per_px)
-        if len(merge_keys) == 1:
-            mk = next(iter(merge_keys))
-            self._on_legend_task_clicked(mk)
+        view.begin_programmatic_viewport()
+        try:
+            view._fit_mode = False
+            view.clear_cursors()
+            view._scene.add_cursor(bin_lo)
+            view._scene.add_cursor(bin_hi)
+            view.cursors_changed.emit(view._scene.cursor_times())
+            vp_px = max(view.viewport().width() - view._scene._label_width, 100)
+            view._scene.zoom_to_range(bin_lo, bin_hi, vp_px)
+            view.scroll_to_ns((bin_lo + bin_hi) // 2)
+            view.zoom_changed.emit(view._scene.timescale_per_px)
+        finally:
+            view.end_programmatic_viewport()
+        lock_mk = lock_task_key or (next(iter(merge_keys)) if len(merge_keys) == 1 else None)
+        if lock_mk:
+            self._on_legend_task_clicked(lock_mk)
         else:
             view._scene.set_highlighted_task(None)
         self._stats_panel.set_cursor_times(
             view._scene.cursor_times(), refresh_stats=False)
         n = len(merge_keys)
         self.statusBar().showMessage(
-            f"Heatmap {label}: showing {n} task(s) with migrations in "
+            f"Spotlight {label}: showing {n} task(s) · "
             f"{_format_time(bin_lo, self._trace.time_scale)}–"
             f"{_format_time(bin_hi, self._trace.time_scale)}. "
             f"Toolbar All tasks or Legend Clear to show all.",
@@ -5138,7 +5200,6 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
     def _sync_toolbar_to_active_tab(self) -> None:
         """Refresh toolbar toggles that reflect per-tab view state."""
         self._sync_heatmap_toolbar()
-        self._sync_chord_toolbar()
         if hasattr(self, "_tb_analysis_btn"):
             self._tb_analysis_btn.setEnabled(self._trace is not None)
         if hasattr(self, "_tb_cpu_load_btn"):
@@ -6003,6 +6064,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._load_trace_state(path)
         self._recompute_find_hits()
         self._load_tab_view_state(tab)
+        self._close_heatmap_dialog()
+        self._close_chord_dialog()
+        self._heatmap_view_snapshot = None
+        tab.view._scene.set_heatmap_task_filter(None)
 
         progress_dialog.update_progress(100, "Building legend…")
         _process_ui_events_safely()
@@ -6558,6 +6623,26 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             if not matched:
                 self._zoom_preset_combo.setCurrentIndex(-1)  # no preset matches
         self._refresh_find_marker()
+        self._on_timeline_viewport_changed(self._view)
+
+    def _on_timeline_viewport_changed(self, view: TimelineView = None) -> None:
+        if view is not None and view is not self._view:
+            return
+        active = view if view is not None else self._view
+        if active is not None and getattr(active, "_programmatic_viewport", 0):
+            return
+        if self._heatmap_dlg is None:
+            return
+        dlg = self._heatmap_dlg
+        if hasattr(dlg, "follow_scope"):
+            dlg.follow_scope()
+        timer = getattr(self, "_inspector_vp_timer", None)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(self._sync_heatmap_dialog_to_tab)
+            self._inspector_vp_timer = timer
+        timer.start(120)
 
     def _on_cursor_delete(self, ns: int) -> None:
         """Remove the cursor whose timestamp matches *ns* (from a badge drag-out)."""

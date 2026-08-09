@@ -54,7 +54,7 @@ Open **Analysis** → follow findings down the ladder → stop when evidence exp
 |------|--------|
 | 1 | Open **Statistics** + toolbar **Analysis** |
 | 2 | Open only the sections named by findings |
-| 3 | Click **Max** / row / chart point to jump the timeline |
+| 3 | Click **Max** / row / chart point / heatmap cell to jump the timeline |
 | 4 | Place cursors + **Limit to cursor range** for mixed-phase traces |
 
 ```text
@@ -62,11 +62,11 @@ Open **Analysis** → follow findings down the ladder → stop when evidence exp
 ② Balance     Core Utilisation → Breakdown / Concurrent / Switch
 ③ WCET        Top Tasks → Execution Time (Max)
 ④ Latency     Blocking → Dispatch → Preemption
-⑤ Concurrency Migrations → Mutex → Priority Inheritance
+⑤ Concurrency Migrations → Heatmap/Chord → Mutex → Priority Inheritance
 ⑥ Compliance  Affinity · Lifecycle · Deadlines · Tags
 ```
 
-Default panel order (and CSV/HTML export) follows this catalogue.
+Default panel order (and CSV/HTML export) follows this catalogue. Toolbar **Heatmap** / **Chord** is viewport-scoped (zoom first) — not a Statistics section.
 
 > Demo file `example-8cores.btf.gz` concatenates stress tests — scope a phase before treating a warning as a product defect.
 
@@ -181,13 +181,13 @@ Then check (same default order):
 <!-- _class: section-header -->
 
 # ⑤ Concurrency
-## Thrashing, lock-bounce, priority inheritance
+## Thrashing, heatmap / chord, lock-bounce, priority inheritance
 
 ---
 
 # Migrations & Lock Bounce
 
-**Where:** **Core Migrations** → **Core-Pair** → Heatmap / Chord → **Mutex → Bounces**
+**Where:** **Core Migrations** → **Core-Pair** → toolbar **Heatmap** / **Chord** → **Mutex → Bounces**
 
 | Signal | Red flag |
 |--------|----------|
@@ -195,13 +195,31 @@ Then check (same default order):
 | High Migr, low Ping | Spreads without oscillation |
 | Core-Pair **Bounce %** high on a busy pair | Migration while mutex/queue held |
 
-**Quick path:** Task view → lock-highlight thrashing task + **Load** → sort Migrations by Ping/Rate → Core-Pair Bounce % → **Bounce Only** on Heatmap.
+**Quick path:** Task view → lock-highlight + **Load** → sort Migrations by Ping/Rate → Core-Pair Bounce % → Heatmap **Lock Bounces Only**.
 
 | Fix direction |
 |---------------|
 | Affinity-pin latency / lock-sharing tasks |
 | Fewer equal-priority runnables |
 | Co-locate producers/consumers on hot queues |
+
+---
+
+# Migration Heatmap / Chord
+
+**Where:** toolbar **Heatmap** or **Chord** (same inspector, 2+ cores). Zoom the timeline first.
+
+| Check | Meaning |
+|-------|---------|
+| Scope | Grid follows **viewport**, not cursor-scoped Statistics |
+| Hot cells / ribbons | When & where hops burst (`cN→cM`) |
+| **Lock Bounces Only** | Mutex/queue hops only |
+| **Task filter** | Name substring or exact numeric id |
+| Cell / ribbon → **Inspect** | Spotlight with C1–C2 |
+
+![w:900](../images/migration.svg)
+
+*Core-Pair chart → **Open Heatmap** / **Open Chord** focuses that corridor.*
 
 ---
 
@@ -256,8 +274,8 @@ Example: `CS[28]=2000000` (**ns**) = 2 ms on a `us` trace.
 | Slice too long | Execution Max / p95 | Preemption · Mutex |
 | Waits too long | Blocking | Preemption · Mutex |
 | Ready→run delay | Dispatch Latency | Blocking · Preemption |
-| Thrashing | Migrations (Rate, Ping) | Task+Load · Heatmap |
-| Lock-bounce | Core-Pair Bounce % | Bounce Only · Mutex Bounces |
+| Thrashing | Migrations (Rate, Ping) | Task+Load · Heatmap / Chord |
+| Lock-bounce | Core-Pair Bounce % | Heatmap **Lock Bounces Only** · Mutex Bounces |
 | Priority inversion | Priority Inheritance | Mutex · Blocking |
 | Before / after | Trace Compare | Same cursor phases |
 
@@ -271,8 +289,8 @@ Example: `CS[28]=2000000` (**ns**) = 2 ms on a `us` trace.
 ☐ Load Balance Score ≥ 85 % and σ ≤ 30 %  (or Affinity explained)
 ☐ Top Tasks + Execution Max within budget
 ☐ Blocking / Dispatch Max acceptable for critical tasks
-☐ No thrashing (Rate/Ping/Dwell) on latency paths
-☐ No hot lock-bounce pairs; Mutex Status clean
+☐ No thrashing (Rate/Ping/Dwell) on latency paths — confirm on Heatmap
+☐ No hot lock-bounce pairs (**Lock Bounces Only**); Mutex Status clean
 ☐ Affinity / Lifecycle / Deadlines as required
 ☐ Export HTML or Trace Compare for the record
 ```

@@ -44,7 +44,7 @@ Spend the first minute confirming that the capture is sound and that you are loo
 | 3 | Open the **Statistics** panel and the toolbar **Analysis** dialog | Gives summary metrics plus a severity-tagged triage |
 | 4 | Read **Trace Health (TICK)** | Timer health decides how far you can trust every derived timing |
 
-Migration analysis has its own walkthrough in [§3.5](#35-concurrency--migrations-locks-priority-inheritance) and its own playbook in [§4.5](#45-core-migrations).
+Migration analysis has its own walkthrough in [§3.5](#35-concurrency--migrations-locks-priority-inheritance) (including the [heatmap / chord inspector](#migration-heatmap--chord)) and its own playbook in [§4.5](#45-core-migrations).
 
 ---
 
@@ -54,14 +54,14 @@ Work down this hierarchy one rung at a time and stop as soon as the evidence exp
 
 ![Workflows Flowchart](../images/workflows.svg)
 
-The Statistics panel is ordered to match this ladder. After the Summary it runs utilisation, trace health, core time breakdown, concurrency, switch overhead, top tasks, migrations, and so on down to tags. CSV and HTML exports use the same order, so an exported report reads in ladder order too.
+The Statistics panel is ordered to match this ladder. After the Summary it runs utilisation, trace health, core time breakdown, concurrency, switch overhead, top tasks, migrations, and so on down to tags. CSV and HTML exports use the same order, so an exported report reads in ladder order too. Toolbar **Heatmap** / **Chord** open the Migration & Corridor Inspector — a viewport-scoped companion to the **Core Migrations** tables, not a Statistics section.
 
 **Working through it in the interface**
 
 1. Open the toolbar **Analysis** dialog and read every finding, not just the first.
 2. Open the Statistics section that the finding names.
-3. Click a **Max** value, a scatter point, or a heatmap cell to jump the timeline to that moment.
-4. Place cursors (`C`) around the phase you care about and enable the cursor-scope checkbox so the numbers describe only that window.
+3. Click a **Max** value, a scatter point, or a heatmap cell to jump the timeline to that moment. For migration findings, open toolbar **Heatmap** or **Chord** after the table.
+4. Place cursors (`C`) around the phase you care about and enable the cursor-scope checkbox so the numbers describe only that window. Zoom the timeline first if you will use the inspector — its grid follows the **visible viewport**, not cursor-scoped Statistics.
 5. Optionally open the **AI** tab and have a model narrate the same findings ([§7](#7-ai-assistant-flow)).
 
 **A caution about the demo traces.** `example-8cores.btf.gz` is a concatenation of deliberate stress tests, so it triggers warnings by design. Scope to a single phase before treating any warning as a product defect.
@@ -201,6 +201,21 @@ Read the migration columns together rather than individually:
 
 *`CS[22]` locked in Task View; CPU Load shows that task’s share per core.*
 
+##### Migration heatmap / chord
+
+Tables name *which* task and *which* pair. Toolbar **Heatmap** and **Chord** open the same Migration & Corridor Inspector and show *when* those hops cluster on a time-bin grid (plus a mini-chord of directed corridors).
+
+1. Zoom the timeline to the phase you care about first — the inspector follows the **visible viewport**, independent of Statistics **Limit to C1–Cn**.
+2. Open toolbar **Heatmap** (grid-first) or **Chord** (topology expanded). On 2+ cores only; switching trace tabs closes it.
+3. Read the corridor tree and time-bin grid. Hot cells are bursts. Expand a corridor for contributing tasks; hover a chord ribbon for `cN→cM: count`.
+4. Optional filters: **Top corridors**, **Direction**, **Task filter** (name substring or exact numeric id), and **Lock Bounces Only** when chasing mutex/queue hops.
+5. Click a hot cell, tree row, or ribbon, then **Inspect in Timeline** / double-click to spotlight that bin with C1–C2. Toolbar **All** / **Show all tasks** clears the filter.
+6. From a **Core-Pair** chart dialog, **Open Heatmap** / **Open Chord** focuses that pair (prefers **Lock Bounces Only** when Bounce % is elevated).
+
+![Migration & Corridor Inspector](../images/migration.svg)
+
+*`example-8cores.btf.gz`: corridor heatmap with chord topology (hottest pair drilled).*
+
 #### Mutex / semaphore / queue
 
 | Object | Holds | Bounces | Status |
@@ -261,7 +276,7 @@ Define success before you change anything, then capture a second trace and read 
 | **3.2 Core Balance** | Core Utilisation, Load Balance Score, Core Time Breakdown, Concurrent Active Cores, Switch Overhead | Active utilization: 68.7 % – 77.3 %; **Load Balance Score: 95 %** (Gini G = 0.049, σ = 6.0 %). | System load is well balanced across cores, but migration thrashing can still coexist with good balance. |
 | **3.3 Task CPU / WCET** | Top Tasks by CPU %, Execution Time Per Slice | `CS[28]` dominated at 15.9 % CPU (Max slice: 3.623 ms); `CS[11]`/`CS[24]` ~15 % each. | Longest slices (3–4 ms) exceed 1 ms tick. Pin equal-priority tasks or enforce CPU budget thresholds. |
 | **3.4 Latency** | Blocking Time, Dispatch / Scheduling Latency, Preemption Chain | `High[268]` Max block: **52.865 ms** (during inversion demo); `CS[*]` block: ~5–6 ms. | Differentiates off-CPU blocking time from ready-to-run dispatch delay. |
-| **3.5 Concurrency** | Core Migrations, Mutex / Semaphore / Queue, Priority Inheritance | **18 992 total migrations** (`CS[18]` at 1692/s); Queue `0x80021990` **858 core bounces**; `Low[266]` boosted 103.3 ms. | High thrash from equal-priority workers; extreme lock bouncing on shared queue needs task co-location. |
+| **3.5 Concurrency** | Core Migrations, Heatmap / Chord inspector, Mutex / Semaphore / Queue, Priority Inheritance | **18 992 total migrations** (`CS[18]` at 1692/s); hottest pairs mostly **0 %** lock-bounce (test-1 thrash); Queue `0x80021990` **858 core bounces**; `Low[266]` boosted 103.3 ms. | High thrash from equal-priority workers — confirm bursts on the heatmap; extreme lock bouncing on the shared queue needs task co-location (**Lock Bounces Only**). |
 | **3.6 Compliance** | Core Affinity, Task Lifecycle, Tag Analysis | Affinity: **No violations**; Lifecycle: Suspend/Resume 4/4 counts; Tag: `tag0_event` 2357 samples. | System complied with core masks and state lifecycles correctly. |
 | **3.7 Performance Verdict** | Prioritised Engineering Action Plan | **P0:** Thrash (~1.6k/s) & Queue bounces (858); **P1:** Inversion & WCET ~3.6 ms; **P2:** TICKLESS CV. | Focus on affinity-pinning, producer/consumer co-location, and slice budgeting. |
 
@@ -319,11 +334,13 @@ Confirms whether inheritance is working and whether the inversion is a design pr
 
 Distinguishes scheduler thrash from lock-driven bouncing, because the fixes differ.
 
-1. Open **Core Migrations** and sort by **Rate**, **Dwell**, or **Ping**. A high rate with short dwell and a high ping count means thrashing.
-2. Open **Core-Pair Migration Summary**. **Bounces** and **Bounce %** count hops taken while a lock was held.
+1. Open **Core Migrations** and sort by **Rate**, **Dwell**, or **Ping**. A high rate with short dwell and a high ping count means thrashing. Click the row for **Dwell** / **Rate** / **Gap** charts.
+2. Open **Core-Pair Migration Summary**. **Bounces** and **Bounce %** count hops taken while a lock was held. Click a row for Gap / Rate charts (orange = bounce).
 3. Switch to **Task** view, lock-highlight the task, and enable **Load** to see its per-core CPU load (`snapshot … --view-mode task --task … --cpu-load`).
-4. Use the toolbar **Heatmap** or **Chord** views with **Bounce Only** to isolate lock-bounce traffic.
-5. Confirm the object in **Mutex / Semaphore → Bounces**.
+4. Open toolbar **Heatmap** or **Chord** (same inspector). Zoom the timeline first — the grid follows the viewport, not cursor-scoped Statistics. Click a hot cell or expand a corridor; **Inspect in Timeline** spotlights that bin. Use **Lock Bounces Only** to isolate lock-bounce traffic; **Task filter** accepts a name substring or an exact numeric task id. From a pair-chart dialog, **Open Heatmap** / **Open Chord** focuses that corridor (`snapshot … --view heatmap` or `--view chord --drill-row 0`).
+5. Confirm the object in **Mutex / Semaphore → Bounces**. Find **Migrations** (`F3`) jumps migration boundaries on the timeline.
+
+Column definitions and inspector controls: [README → Core migration analysis](README.md#core-migration-analysis).
 
 ### 4.6 Tick health
 
@@ -391,6 +408,7 @@ Scoping is not a simple crop, because each metric has to decide what to do with 
 | Execution slices | Counted only when fully inside the range |
 | Blocking | Counted when both surrounding slices are inside |
 | Migrations | Counted when the event overlaps the range |
+| Heatmap / Chord inspector | **Not** cursor-scoped — follows the visible timeline viewport |
 
 ### 5.2 Compare two builds
 
@@ -486,13 +504,19 @@ python builds/btf_viewer.py migrations ../tracedata/example-8cores.btf.gz -o mig
 python builds/btf_viewer.py perfetto ../tracedata/example-8cores.btf.gz -o trace.json
 ```
 
-`snapshot` renders any single view to PNG or SVG. `--view timeline` captures the timeline itself; `--view plot` captures one metric chart, chosen with `--metric` and narrowed with `--task`, `--core`, or `--active-cores`:
+`snapshot` renders any single view to PNG or SVG. `--view timeline` captures the timeline itself; `--view heatmap` / `--view chord` capture the Migration & Corridor Inspector (`--drill-row` expands a corridor); `--view plot` captures one metric chart, chosen with `--metric` and narrowed with `--task`, `--core`, or `--active-cores`:
 
 ```bash
 # Timeline window, core view, one task highlighted
 python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
     -o migrate.svg --view timeline --view-mode core --task "CS[22]" \
     --lo 1805000 --hi 1865000
+
+# Migration & Corridor Inspector (heatmap grid, or chord topology)
+python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
+    -o heatmap.svg --view heatmap --width 1000 --height 720 --drill-row 0
+python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
+    -o chord.svg --view chord --width 1000 --height 720 --drill-row 0
 
 # Metric charts: dispatch latency, switch overhead, concurrency dwell
 python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
@@ -549,7 +573,7 @@ Ask in the same order as the [top-down ladder](#2-top-down-analysis-ladder), and
 | 3 | **Core balance** | Core Utilisation → Concurrent Active / Switch Overhead |
 | 4 | **WCET / hot CPU** | Top Tasks → Execution Max; click Max to jump |
 | 5 | **Highest latency** | Blocking → Dispatch → Preemption Chain |
-| 6 | **Migration thrash** | Migrations Rate/Ping; Core-Pair Bounce % |
+| 6 | **Migration thrash** | Migrations Rate/Ping; Core-Pair Bounce %; Heatmap / Chord |
 | 7 | **Priority inversion** | Priority Inheritance L/M/H |
 | 8 | **Deadline / budget** | After thresholds are set in Settings → Display → Analysis thresholds |
 
@@ -620,8 +644,8 @@ When you already know the symptom, start from this table instead of the ladder.
 | Task waits too long | Blocking Time | Preemption Chain, Mutex |
 | Ready→run delay (resume / create) | Dispatch / Scheduling Latency | Blocking, Preemption; needs STI resume Name[id] |
 | Priority inversion | Priority Inheritance | Mutex pairing, Blocking |
-| Core thrashing | Core Migrations (**Rate**, **Ping**, Dwell) | Task lock-highlight + Load; Core-Pair / Heatmap |
-| Lock-bounce migrations | Core-Pair (**Bounces**, **Bounce %**) | Heatmap **Bounce Only**; Mutex **Bounces** |
+| Core thrashing | Core Migrations (**Rate**, **Ping**, Dwell) | Task lock-highlight + Load; Heatmap / Chord; Core-Pair |
+| Lock-bounce migrations | Core-Pair (**Bounces**, **Bounce %**) | Heatmap **Lock Bounces Only**; Mutex **Bounces** |
 | Lock / queue issues | Mutex/Semaphore / Queue | Blocking, Migrations |
 | Suspend/resume | Task Lifecycle (Susp/Res) | Timeline STI |
 | Affinity wrong | Core Affinity | Lock-bounce table |

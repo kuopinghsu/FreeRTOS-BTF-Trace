@@ -7,7 +7,7 @@
         
         <!-- Outbox Container (Solid Non-Transparent Background) -->
         <mxCell id="outbox" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#cbd5e1;strokeWidth=2;opacity=100;arcSize=3" vertex="1" parent="1">
-          <mxGeometry x="140" y="10" width="460" height="550" as="geometry" />
+          <mxGeometry x="140" y="10" width="460" height="570" as="geometry" />
         </mxCell>
 
         <!-- Title -->
@@ -56,8 +56,8 @@
         </mxCell>
 
         <!-- Step 5: Concurrency -->
-        <mxCell id="step5" value="&lt;b style=&quot;color:#842029;&quot;&gt;⑤ Concurrency&lt;/b&gt;&lt;br&gt;&lt;span style=&quot;color:#1e293b;&quot;&gt;Core Migrations → Mutex/Semaphore → Priority Inheritance&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffebee;strokeColor=#c62828;strokeWidth=2;fontSize=12;align=center;opacity=100;" vertex="1" parent="1">
-          <mxGeometry x="170" y="400" width="400" height="50" as="geometry" />
+        <mxCell id="step5" value="&lt;b style=&quot;color:#842029;&quot;&gt;⑤ Concurrency&lt;/b&gt;&lt;br&gt;&lt;span style=&quot;color:#1e293b;&quot;&gt;Core Migrations → Mutex/Semaphore → Priority Inheritance&lt;br&gt;&lt;i&gt;→ Heatmap / Chord inspector (corridors, lock-bounce)&lt;/i&gt;&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffebee;strokeColor=#c62828;strokeWidth=2;fontSize=12;align=center;opacity=100;" vertex="1" parent="1">
+          <mxGeometry x="170" y="400" width="400" height="60" as="geometry" />
         </mxCell>
 
         <!-- Connector 5-6 -->
@@ -67,7 +67,7 @@
 
         <!-- Step 6: Compliance -->
         <mxCell id="step6" value="&lt;b style=&quot;color:#4a148c;&quot;&gt;⑥ Compliance&lt;/b&gt;&lt;br&gt;&lt;span style=&quot;color:#1e293b;&quot;&gt;Deadlines / Affinity / Task Lifecycle / Tags / Intervals&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f3e5f5;strokeColor=#6a1b9a;strokeWidth=2;fontSize=12;align=center;opacity=100;" vertex="1" parent="1">
-          <mxGeometry x="170" y="480" width="400" height="50" as="geometry" />
+          <mxGeometry x="170" y="490" width="400" height="50" as="geometry" />
         </mxCell>
 
       </root>

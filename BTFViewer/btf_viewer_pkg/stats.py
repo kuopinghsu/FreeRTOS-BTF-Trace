@@ -28,6 +28,24 @@ from .parser import (  # private symbols are not pulled in by import *
     _plot_point_mark_ns,
     _switch_overhead_plot_points,
     _switch_overhead_rows,
+    _build_corridor_inspector_model,
+    _default_corridor_top_pct,
+    _trace_has_core_bounce_holds,
+    _filter_corridors_by_direction,
+    _filter_corridors_by_task_query,
+    _corridor_groups_by_source,
+    _core_short_name,
+    _build_chord_layout,
+    _CHORD_ARC_INNER,
+    _CHORD_ARC_OUTER,
+    _CHORD_GRAD_SOURCE_STOP,
+    _chord_hit_ring,
+    _chord_ring_geometry,
+    _heatmap_bin_range,
+    _core_util_pct_rows,
+    _task_segs_in_range,
+    _chord_label_step,
+    _chord_label_visible,
 )
 from .timeline_util import *  # noqa: F403,F401
 from .timeline_util import _format_time  # noqa: F401 — star-import skips leading _
@@ -3140,6 +3158,7 @@ class _MigrationHeatmapDialog(QDialog):
             "Toggle between showing all migrations and only lock-bounce migrations\n"
             "(migrations that occurred while a mutex was held across different cores).")
         self._bounce_filter_btn.clicked.connect(self._on_bounce_filter_toggled)
+        self._bounce_filter_btn.setVisible(_trace_has_core_bounce_holds(trace))
         nav.addWidget(self._bounce_filter_btn)
         lay.addLayout(nav)
 
@@ -3704,31 +3723,66 @@ class _MigrationHeatmapDialog(QDialog):
                              sub_lo, sub_hi, {mk})
 
 class _ChordDiagramWidget(QWidget):
-    """Paint core-to-core migration volume as a circular chord diagram —
-    parity with the web app's ChordDiagramDialog.vue canvas rendering.
-    Chords are quadratic bezier curves between per-core-pair tick positions
-    (see _build_chord_layout in parser.py); arcs are thick circular bands,
-    one per core, sized proportionally to their in+out migration volume."""
+    """Paint core-to-core migration volume as a circular chord diagram.
+
+    *compact=True* matches web MiniChordPanel (inspector sidebar).
+    *compact=False* matches web ChordDiagramDialog (standalone popup).
+    """
 
     hover_changed = Signal(object)  # emits int core index, or None
+    hover_info = Signal(object)  # None | {type, ...} for inspector footer
+    core_clicked = Signal(object)  # {clear: True} or {core_index, side}
+    pair_clicked = Signal(int)  # second core index (shift-click)
+    corridor_clicked = Signal(str, str)  # from_core, to_core
+    corridor_dbl = Signal(str, str)
 
-    _ARC_THICKNESS = 14
-    _OUTER_PAD = 48
-
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, compact: bool = False):
         super().__init__(parent)
+        self._compact = bool(compact)
+        # MiniChordPanel OUTER_PAD=36; standalone ChordDiagramDialog = 48.
+        self._outer_pad = 36.0 if self._compact else 48.0
+        self._min_radius = 16.0 if self._compact else 20.0
+        self._bidir_sep = 5.0 if self._compact else 6.0
+        self._ribbon_alpha = 0.72 if self._compact else 0.75
+        self._label_gap = 12.0 if self._compact else 14.0
+        self._matrix_pad = 36.0 if self._compact else 40.0
         self._cores: List[str] = []
         self._grid: list = [[]]
         self._layout: Optional[ChordLayout] = None
         self._max_count = 0
         self._hover_index: Optional[int] = None
+        self._hover_side: Optional[str] = None  # 'egress' | 'ingress'
+        self._hover_corridor: Optional[Tuple[int, int]] = None
+        self._last_hover_info = None
         self._pinned_hover = False
+        self._focus_pair: Optional[Tuple[int, int]] = None
+        self._focus_cores: List[int] = []
+        self._direction_mode = "all"
+        self._view_mode = "circle"
         self.setMouseTracking(True)
-        self.setMinimumSize(200, 200)
+        if self._compact:
+            self.setMinimumSize(160, 160)
+        else:
+            self.setMinimumSize(200, 200)
+        self._circle_btn = QPushButton("Circle", self)
+        self._matrix_btn = QPushButton("Matrix", self)
+        fs = 10 if self._compact else 11
+        for _b in (self._circle_btn, self._matrix_btn):
+            _b.setCheckable(True)
+            _b.setVisible(False)
+            _b.setFixedHeight(20 if self._compact else 22)
+            _b.setStyleSheet(
+                f"QPushButton {{ font-size:{fs}px; padding:2px 6px; }}")
+        self._circle_btn.clicked.connect(lambda: self.set_view_mode("circle"))
+        self._matrix_btn.clicked.connect(lambda: self.set_view_mode("matrix"))
 
     def set_data(self, cores: List[str], grid: list) -> None:
-        self._cores = list(cores)
-        self._grid = grid if grid else [[]]
+        cores_l = list(cores or [])
+        grid_l = [list(row) for row in (grid or [])] or [[]]
+        if cores_l == self._cores and grid_l == self._grid:
+            return
+        self._cores = cores_l
+        self._grid = grid_l
         self._layout = _build_chord_layout(self._cores, self._grid)
         m = 0
         for i in range(len(self._cores)):
@@ -3740,11 +3794,75 @@ class _ChordDiagramWidget(QWidget):
                 if v > m:
                     m = v
         self._max_count = m
-        if self._hover_index is not None:
+        if self._hover_index is not None or self._hover_corridor is not None:
             self._hover_index = None
+            self._hover_side = None
+            self._hover_corridor = None
             self.hover_changed.emit(None)
+            self._emit_hover_info(None)
         self._pinned_hover = False
+        prev_n = getattr(self, "_last_core_n", 0)
+        n = len(self._cores)
+        if n > 16 and prev_n <= 16:
+            self._view_mode = "matrix"
+        elif n <= 16:
+            self._view_mode = "circle"
+        self._last_core_n = n
+        self._sync_view_toggle()
         self.update()
+
+    def set_direction_mode(self, mode: str) -> None:
+        m = mode if mode in ("all", "egress", "ingress") else "all"
+        if m == self._direction_mode:
+            return
+        self._direction_mode = m
+        self.update()
+
+    def set_focus_cores(self, indices: Optional[list] = None) -> None:
+        out: List[int] = []
+        n = len(self._cores)
+        for i in indices or []:
+            try:
+                ii = int(i)
+            except (TypeError, ValueError):
+                continue
+            if 0 <= ii < n:
+                out.append(ii)
+        if out == self._focus_cores:
+            return
+        self._focus_cores = out
+        self.update()
+
+    def set_view_mode(self, mode: str) -> None:
+        m = "matrix" if mode == "matrix" else "circle"
+        self._view_mode = m
+        self._sync_view_toggle()
+        self.update()
+
+    def _sync_view_toggle(self) -> None:
+        show = len(self._cores) > 16
+        self._circle_btn.setVisible(show)
+        self._matrix_btn.setVisible(show)
+        self._circle_btn.setChecked(self._view_mode == "circle")
+        self._matrix_btn.setChecked(self._view_mode == "matrix")
+        self._layout_view_toggle()
+
+    def _layout_view_toggle(self) -> None:
+        if not self._circle_btn.isVisible():
+            return
+        self._circle_btn.adjustSize()
+        self._matrix_btn.adjustSize()
+        # Web MiniChordPanel: top-right, 4px inset.
+        gap, inset = 4, 4
+        mw = self._matrix_btn.width()
+        cw = self._circle_btn.width()
+        self._matrix_btn.move(max(inset, self.width() - inset - mw), inset)
+        self._circle_btn.move(
+            max(inset, self._matrix_btn.x() - gap - cw), inset)
+
+    def resizeEvent(self, event) -> None:
+        self._layout_view_toggle()
+        return super().resizeEvent(event)
 
     def set_hover_index(self, index: Optional[int], *, pinned: bool = False) -> None:
         """Programmatically highlight a core arc (and its chords)."""
@@ -3753,6 +3871,7 @@ class _ChordDiagramWidget(QWidget):
         self._pinned_hover = bool(pinned) and index is not None
         if index != self._hover_index:
             self._hover_index = index
+            self._hover_side = None if index is None else self._hover_side
             self.hover_changed.emit(index)
             self.update()
         elif pinned:
@@ -3761,9 +3880,13 @@ class _ChordDiagramWidget(QWidget):
     def clear_hover(self) -> None:
         if self._pinned_hover:
             return
-        if self._hover_index is not None:
+        if (self._hover_index is not None or self._hover_side is not None
+                or self._hover_corridor is not None):
             self._hover_index = None
+            self._hover_side = None
+            self._hover_corridor = None
             self.hover_changed.emit(None)
+            self._emit_hover_info(None)
             self.update()
 
     def leaveEvent(self, event) -> None:
@@ -3779,7 +3902,7 @@ class _ChordDiagramWidget(QWidget):
         w = w if w is not None else self.width()
         h = h if h is not None else self.height()
         cx, cy = w / 2.0, h / 2.0
-        radius = max(20.0, min(w, h) / 2.0 - self._OUTER_PAD)
+        radius = max(self._min_radius, min(w, h) / 2.0 - self._outer_pad)
         return cx, cy, radius
 
     def mouseMoveEvent(self, event) -> None:
@@ -3787,20 +3910,64 @@ class _ChordDiagramWidget(QWidget):
         self._update_hover(pos.x(), pos.y())
         return super().mouseMoveEvent(event)
 
-    def _update_hover(self, mx: float, my: float) -> None:
+    def mousePressEvent(self, event) -> None:
+        pos = event.position() if hasattr(event, "position") else event.pos()
+        mx, my = pos.x(), pos.y()
+        corr = self._hit_corridor(mx, my)
+        if corr is not None:
+            i, j = corr
+            self.corridor_clicked.emit(self._cores[i], self._cores[j])
+            return super().mousePressEvent(event)
+        hit = self._hit_arc(mx, my)
+        if hit is None:
+            self.core_clicked.emit({"clear": True})
+            return super().mousePressEvent(event)
+        mods = event.modifiers()
+        shift = bool(mods & Qt.KeyboardModifier.ShiftModifier)
+        if shift:
+            self.pair_clicked.emit(int(hit[0]))
+        else:
+            self.core_clicked.emit({"core_index": int(hit[0]), "side": hit[1]})
+        return super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        pos = event.position() if hasattr(event, "position") else event.pos()
+        corr = self._hit_corridor(pos.x(), pos.y())
+        if corr is not None:
+            i, j = corr
+            self.corridor_dbl.emit(self._cores[i], self._cores[j])
+        return super().mouseDoubleClickEvent(event)
+
+    def _hit_matrix_cell(self, mx: float, my: float) -> Optional[Tuple[int, int]]:
+        n = len(self._cores)
+        if not n:
+            return None
+        w, h = self.width(), self.height()
+        pad_l = pad_t = self._matrix_pad
+        cell = max(4.0, min((w - pad_l - 8) / n, (h - pad_t - 8) / n))
+        j = int((mx - pad_l) / cell)
+        i = int((my - pad_t) / cell)
+        if i < 0 or j < 0 or i >= n or j >= n or i == j:
+            return None
+        row = self._grid[i] if i < len(self._grid) else []
+        v = row[j] if j < len(row) else 0
+        if not v:
+            return None
+        return i, j
+
+    def _hit_arc(self, mx: float, my: float) -> Optional[Tuple[int, str]]:
+        if self._view_mode == "matrix":
+            return None
         layout = self._layout
         if layout is None or not layout.arcs:
-            self.clear_hover()
-            return
+            return None
         cx, cy, R = self._geometry()
         dx, dy = mx - cx, my - cy
         dist = math.hypot(dx, dy)
-        half_t = self._ARC_THICKNESS / 2 + 4
-        if dist < R - half_t or dist > R + half_t:
-            self.clear_hover()
-            return
+        side = _chord_hit_ring(dist, R)
+        if side is None:
+            return None
         angle = math.atan2(dy, dx)
-        found = None
         for arc in layout.arcs:
             a = angle
             while a < arc.start_angle:
@@ -3808,26 +3975,159 @@ class _ChordDiagramWidget(QWidget):
             while a > arc.start_angle + 2 * math.pi:
                 a -= 2 * math.pi
             if a <= arc.end_angle:
-                found = arc.index
-                break
-        if found != self._hover_index:
+                return arc.index, side
+        return None
+
+    @staticmethod
+    def _dist_point_to_quad(mx: float, my: float, p1: QPointF, ctrl: QPointF,
+                            p2: QPointF, steps: int = 16) -> float:
+        best = 1e18
+        for k in range(steps + 1):
+            t = k / float(steps)
+            u = 1.0 - t
+            x = u * u * p1.x() + 2 * u * t * ctrl.x() + t * t * p2.x()
+            y = u * u * p1.y() + 2 * u * t * ctrl.y() + t * t * p2.y()
+            d = math.hypot(mx - x, my - y)
+            if d < best:
+                best = d
+        return best
+
+    def _emit_hover_info(self, info) -> None:
+        if info == self._last_hover_info:
+            return
+        self._last_hover_info = info
+        self.hover_info.emit(info)
+
+    def _hit_corridor(self, mx: float, my: float) -> Optional[Tuple[int, int]]:
+        if self._view_mode == "matrix":
+            return self._hit_matrix_cell(mx, my)
+        layout = self._layout
+        if layout is None or not self._cores:
+            return None
+        cx, cy, R = self._geometry()
+        _r_e, _r_i, r_ribbon = _chord_ring_geometry(R)
+        best = None
+        best_d = 1e18
+        n = len(self._cores)
+        max_c = float(self._max_count or 1)
+        pt = QPointF(mx, my)
+        stroker = QPainterPathStroker()
+        grid = self._grid
+        for i in range(n):
+            row = grid[i] if i < len(grid) else []
+            for j in range(n):
+                if i == j:
+                    continue
+                count = row[j] if j < len(row) else 0
+                if not count:
+                    continue
+                a0 = layout.egress_tick_angle(i, j)
+                a1 = layout.ingress_tick_angle(j, i)
+                src_half, dst_half = layout.ribbon_half_widths(i, j, max_c)
+                bidir = (grid[j][i] if j < len(grid) and i < len(grid[j]) else 0) > 0
+                sign = 1 if i < j else -1
+                off = self._bidir_sep * sign if bidir else 0.0
+                path = self._tapered_ribbon_path(
+                    cx, cy, r_ribbon, a0, a1, src_half, dst_half, off)
+                p1 = self._point_at(cx, cy, a0, r_ribbon)
+                p2 = self._point_at(cx, cy, a1, r_ribbon)
+                mx_ = (p1.x() + p2.x()) / 2
+                my_ = (p1.y() + p2.y()) / 2
+                vx, vy = mx_ - cx, my_ - cy
+                vlen = math.hypot(vx, vy) or 1.0
+                perp_x, perp_y = -vy / vlen, vx / vlen
+                pull = 0.18
+                ctrl = QPointF(
+                    cx + (vx / vlen) * r_ribbon * pull + perp_x * off,
+                    cy + (vy / vlen) * r_ribbon * pull + perp_y * off)
+                score = self._dist_point_to_quad(mx, my, p1, ctrl, p2)
+                stroker.setWidth(max(10.0, float(src_half + dst_half) + 4.0))
+                fat = stroker.createStroke(path)
+                thresh = max(float(src_half), float(dst_half), 4.0) + 8.0
+                if not (path.contains(pt) or fat.contains(pt) or score <= thresh):
+                    continue
+                if score < best_d:
+                    best_d = score
+                    best = (i, j)
+        return best
+
+    def _update_hover(self, mx: float, my: float) -> None:
+        if self._view_mode == "matrix":
+            cell = self._hit_matrix_cell(mx, my)
+            if cell is None:
+                self.clear_hover()
+                return
+            i, j = cell
+            info = {
+                "type": "corridor",
+                "from": self._cores[i],
+                "to": self._cores[j],
+                "count": (self._grid[i][j] if i < len(self._grid)
+                          and j < len(self._grid[i]) else 0),
+            }
+            changed = self._hover_corridor != cell
+            self._hover_corridor = cell
+            self._hover_index = i
+            self._hover_side = "egress"
+            self._emit_hover_info(info)
+            if changed:
+                self.hover_changed.emit(i)
+                self.update()
+            return
+        corr = self._hit_corridor(mx, my)
+        if corr is not None:
+            i, j = corr
+            info = {
+                "type": "corridor",
+                "from": self._cores[i],
+                "to": self._cores[j],
+                "count": (self._grid[i][j] if i < len(self._grid)
+                          and j < len(self._grid[i]) else 0),
+            }
+            changed = (self._hover_corridor != corr
+                       or self._hover_index != i)
+            self._hover_corridor = corr
+            self._hover_index = i
+            self._hover_side = "egress"
+            self._emit_hover_info(info)
+            if changed:
+                self.hover_changed.emit(i)
+                self.update()
+            return
+        hit = self._hit_arc(mx, my)
+        if hit is None:
+            self.clear_hover()
+            return
+        found, side = hit
+        self._hover_corridor = None
+        self._emit_hover_info({"type": "core", "index": found, "side": side})
+        if found != self._hover_index or side != self._hover_side:
             self._hover_index = found
+            self._hover_side = side
             self.hover_changed.emit(found)
             self.update()
 
-    def _arc_path(self, cx: float, cy: float, r: float,
-                 a0: float, a1: float) -> QPainterPath:
+    def _mono_font(self, px: int, bold: bool = False) -> QFont:
+        fam = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont).family()
+        font = QFont(fam)
+        font.setPixelSize(int(px))
+        font.setBold(bool(bold))
+        return font
+
+    def _stroke_arc(self, p: QPainter, cx: float, cy: float, r: float,
+                    a0: float, a1: float, pen: QPen) -> None:
+        """True circular arc; angles match canvas (0=east, +clockwise, y-down)."""
         span = a1 - a0
-        steps = max(2, int(abs(span) / (math.pi / 90)) + 1)
-        path = QPainterPath()
-        for k in range(steps + 1):
-            a = a0 + span * k / steps
-            pt = self._point_at(cx, cy, a, r)
-            if k == 0:
-                path.moveTo(pt)
-            else:
-                path.lineTo(pt)
-        return path
+        if abs(span) < 1e-9 or r <= 0:
+            return
+        p.setPen(pen)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        # Qt: 0=3 o'clock, +CCW; negate so increasing math angle is clockwise.
+        start_16 = int(round(-math.degrees(a0) * 16))
+        span_16 = int(round(-math.degrees(span) * 16))
+        if span_16 == 0:
+            return
+        p.drawArc(QRectF(cx - r, cy - r, 2 * r, 2 * r), start_16, span_16)
 
     def paintEvent(self, event) -> None:
         p = QPainter(self)
@@ -3837,15 +4137,85 @@ class _ChordDiagramWidget(QWidget):
         finally:
             p.end()
 
+    def _paint_matrix(self, p: QPainter, w: int, h: int) -> None:
+        cores = self._cores
+        n = len(cores)
+        if not n:
+            return
+        pad_l = pad_t = self._matrix_pad
+        cell = max(4.0, min((w - pad_l - 8) / n, (h - pad_t - 8) / n))
+        max_c = float(self._max_count or 1)
+        label_color = self.palette().color(QPalette.ColorRole.WindowText)
+        label_color.setAlpha(160)
+        p.setFont(self._mono_font(9))
+        p.setPen(label_color)
+        extra = set(self._focus_cores or [])
+        if self._hover_index is not None:
+            extra.add(int(self._hover_index))
+        fp = self._focus_pair
+        if fp:
+            extra.add(int(fp[0]))
+            extra.add(int(fp[1]))
+        hc = getattr(self, "_hover_corridor", None)
+        if hc:
+            extra.add(int(hc[0]))
+            extra.add(int(hc[1]))
+        step = _chord_label_step(n, min_px=14.0, span_px=n * cell)
+        for i, core in enumerate(cores):
+            if not _chord_label_visible(i, step, extra):
+                continue
+            name = _core_short_name(core)
+            p.drawText(
+                QRectF(0, pad_t + i * cell, pad_l - 4, cell),
+                int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
+                name)
+            p.save()
+            p.translate(pad_l + i * cell + cell / 2.0, pad_t - 4)
+            p.rotate(-45)
+            p.drawText(QPointF(0, 0), name)
+            p.restore()
+        grid = self._grid
+        focus_pair = self._focus_pair
+        dmode = self._direction_mode
+        focus_cores = self._focus_cores
+        for i in range(n):
+            row = grid[i] if i < len(grid) else []
+            for j in range(n):
+                v = 0 if i == j else (row[j] if j < len(row) else 0)
+                if dmode == "egress" and focus_cores and i != focus_cores[0]:
+                    v = 0
+                if dmode == "ingress" and focus_cores and j != focus_cores[0]:
+                    v = 0
+                x = pad_l + j * cell
+                y = pad_t + i * cell
+                is_dim = self._is_dim_pair(i, j)
+                r = QRectF(x, y, max(1.0, cell - 1), max(1.0, cell - 1))
+                if not v:
+                    p.setOpacity(0.15)
+                    p.fillRect(r, QColor("#444444"))
+                else:
+                    p.setOpacity(
+                        (0.08 if is_dim else 0.9)
+                        * min(1.0, 0.25 + 0.75 * (v / max_c)))
+                    p.fillRect(r, QColor(_core_color(cores[i])))
+        p.setOpacity(1.0)
+
     def _paint(self, p: QPainter, w: int, h: int) -> None:
         cores = self._cores
         layout = self._layout
-        if not cores or layout is None or not layout.arcs:
+        if not cores:
+            return
+        if self._view_mode == "matrix":
+            self._paint_matrix(p, w, h)
+            return
+        if layout is None or not layout.arcs:
             return
         cx, cy, R = self._geometry(w, h)
-        inner = R - self._ARC_THICKNESS / 2 - 2
+        r_egress, r_ingress, r_ribbon = _chord_ring_geometry(R)
         max_count = self._max_count or 1
         hovered = self._hover_index
+        hover_side = self._hover_side
+        focus_pair = getattr(self, "_focus_pair", None)
         grid = self._grid
 
         for i in range(len(cores)):
@@ -3856,54 +4226,96 @@ class _ChordDiagramWidget(QWidget):
                 count = row[j] if j < len(row) else 0
                 if not count:
                     continue
+                focus_cores = self._focus_cores
+                dmode = self._direction_mode
+                if dmode == "egress" and focus_cores and i != focus_cores[0]:
+                    continue
+                if dmode == "ingress" and focus_cores and j != focus_cores[0]:
+                    continue
                 bidir = (grid[j][i] if j < len(grid) and i < len(grid[j]) else 0) > 0
-                p1 = self._point_at(cx, cy, layout.tick_angle(i, j), inner)
-                p2 = self._point_at(cx, cy, layout.tick_angle(j, i), inner)
-                mx, my = (p1.x() + p2.x()) / 2, (p1.y() + p2.y()) / 2
-                vx, vy = mx - cx, my - cy
-                vlen = math.hypot(vx, vy) or 1.0
-                vx, vy = vx / vlen, vy / vlen
-                perp_x, perp_y = -vy, vx
+                a0 = layout.egress_tick_angle(i, j)
+                a1 = layout.ingress_tick_angle(j, i)
+                src_half, dst_half = layout.ribbon_half_widths(i, j, max_count)
                 sign = 1 if i < j else -1
-                bidir_offset = 6 * sign if bidir else 0
-                pull = 0.18
-                ctrl_x = cx + vx * inner * pull + perp_x * bidir_offset
-                ctrl_y = cy + vy * inner * pull + perp_y * bidir_offset
+                bidir_offset = self._bidir_sep * sign if bidir else 0.0
+                path = self._tapered_ribbon_path(
+                    cx, cy, r_ribbon, a0, a1, src_half, dst_half, bidir_offset)
+                p1 = self._point_at(cx, cy, a0, r_ribbon)
+                p2 = self._point_at(cx, cy, a1, r_ribbon)
 
-                is_dim = hovered is not None and hovered != i and hovered != j
-                width = max(1.0, min(12.0, 1 + 10 * (count / max_count)))
-                p.setOpacity(0.08 if is_dim else 0.75)
+                is_dim = self._is_dim_pair(i, j)
+                hot = self._hover_corridor == (i, j)
+                p.setOpacity(
+                    0.05 if is_dim else (0.95 if hot else self._ribbon_alpha))
 
                 grad = QLinearGradient(p1, p2)
                 grad.setColorAt(0.0, QColor(_core_color(cores[i])))
+                grad.setColorAt(_CHORD_GRAD_SOURCE_STOP, QColor(_core_color(cores[i])))
                 grad.setColorAt(1.0, QColor(_core_color(cores[j])))
-                pen = QPen(QBrush(grad), width)
-                pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-
-                path = QPainterPath()
-                path.moveTo(p1)
-                path.quadTo(QPointF(ctrl_x, ctrl_y), p2)
-                p.strokePath(path, pen)
+                p.setBrush(QBrush(grad))
+                p.setPen(Qt.PenStyle.NoPen)
+                p.drawPath(path)
         p.setOpacity(1.0)
 
-        label_color = QColor("#888888")
-        normal_font = QFont(self.font())
-        normal_font.setPointSize(max(7, normal_font.pointSize() - 1))
-        bold_font = QFont(normal_font)
-        bold_font.setBold(True)
+        label_color = self.palette().color(QPalette.ColorRole.WindowText)
+        label_color.setAlpha(160)
+        if self._compact:
+            normal_font, bold_font = self._mono_font(10), self._mono_font(11, True)
+        else:
+            normal_font, bold_font = self._mono_font(11), self._mono_font(12, True)
+
+        extra_lbl = set(self._focus_cores or [])
+        if hovered is not None:
+            extra_lbl.add(int(hovered))
+        if focus_pair:
+            extra_lbl.add(int(focus_pair[0]))
+            extra_lbl.add(int(focus_pair[1]))
+        hc = getattr(self, "_hover_corridor", None)
+        if hc:
+            extra_lbl.add(int(hc[0]))
+            extra_lbl.add(int(hc[1]))
+        circ = 2.0 * math.pi * max(R, 1.0)
+        label_step = _chord_label_step(len(cores), min_px=16.0, span_px=circ)
 
         for arc in layout.arcs:
             is_hover = hovered == arc.index
-            pen = QPen(QColor(_core_color(arc.core)))
-            pen.setWidthF(self._ARC_THICKNESS)
-            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-            p.setOpacity(1.0 if hovered is None or is_hover else 0.35)
-            p.strokePath(
-                self._arc_path(cx, cy, R, arc.start_angle, arc.end_angle), pen)
+            focused = is_hover or self._arc_focused(arc.index)
+            dim_arc = (
+                (hovered is not None or focus_pair is not None
+                 or bool(self._focus_cores))
+                and not focused)
+            # Outer = egress / departures
+            pen_out = QPen(QColor(_core_color(arc.core)))
+            pen_out.setWidthF(_CHORD_ARC_OUTER)
+            pen_out.setCapStyle(Qt.PenCapStyle.FlatCap)
+            if dim_arc:
+                p.setOpacity(0.25)
+            elif hover_side == "ingress" and is_hover:
+                p.setOpacity(0.35)
+            else:
+                p.setOpacity(1.0)
+            self._stroke_arc(
+                p, cx, cy, r_egress, arc.start_angle, arc.end_angle, pen_out)
+            # Inner = ingress / arrivals
+            pen_in = QPen(QColor(_core_color(arc.core)))
+            pen_in.setWidthF(_CHORD_ARC_INNER)
+            pen_in.setCapStyle(Qt.PenCapStyle.FlatCap)
+            if dim_arc:
+                p.setOpacity(0.25)
+            elif hover_side == "egress" and is_hover:
+                p.setOpacity(0.35)
+            else:
+                p.setOpacity(0.85)
+            self._stroke_arc(
+                p, cx, cy, r_ingress, arc.start_angle, arc.end_angle, pen_in)
 
+            if not _chord_label_visible(arc.index, label_step, extra_lbl):
+                continue
             mid = (arc.start_angle + arc.end_angle) / 2
-            lp = self._point_at(cx, cy, mid, R + self._ARC_THICKNESS / 2 + 14)
-            p.setFont(bold_font if is_hover else normal_font)
+            lp = self._point_at(
+                cx, cy, mid, r_egress + _CHORD_ARC_OUTER / 2 + self._label_gap)
+            use_bold = focused if self._compact else is_hover
+            p.setFont(bold_font if use_bold else normal_font)
             p.setOpacity(1.0)
             p.setPen(label_color)
             fm = QFontMetricsF(p.font())
@@ -3919,6 +4331,73 @@ class _ChordDiagramWidget(QWidget):
             ty = lp.y() + (fm.ascent() - fm.descent()) / 2
             p.drawText(QPointF(tx, ty), text)
         p.setOpacity(1.0)
+
+    def _tapered_ribbon_path(self, cx, cy, r_inner, a0, a1,
+                            src_half, dst_half, bidir_offset) -> QPainterPath:
+        p1 = self._point_at(cx, cy, a0, r_inner)
+        p2 = self._point_at(cx, cy, a1, r_inner)
+        mx = (p1.x() + p2.x()) / 2
+        my = (p1.y() + p2.y()) / 2
+        vx, vy = mx - cx, my - cy
+        vlen = math.hypot(vx, vy) or 1.0
+        vx, vy = vx / vlen, vy / vlen
+        perp_x, perp_y = -vy, vx
+        pull = 0.18
+        ctrl = QPointF(cx + vx * r_inner * pull + perp_x * bidir_offset,
+                       cy + vy * r_inner * pull + perp_y * bidir_offset)
+        t0x, t0y = ctrl.x() - p1.x(), ctrl.y() - p1.y()
+        t0len = math.hypot(t0x, t0y) or 1.0
+        n0x, n0y = -t0y / t0len, t0x / t0len
+        t1x, t1y = p2.x() - ctrl.x(), p2.y() - ctrl.y()
+        t1len = math.hypot(t1x, t1y) or 1.0
+        n1x, n1y = -t1y / t1len, t1x / t1len
+        mid_n_x = (n0x + n1x) / 2
+        mid_n_y = (n0y + n1y) / 2
+        mid_half = (src_half + dst_half) / 2
+        sL = QPointF(p1.x() + n0x * src_half, p1.y() + n0y * src_half)
+        sR = QPointF(p1.x() - n0x * src_half, p1.y() - n0y * src_half)
+        dL = QPointF(p2.x() + n1x * dst_half, p2.y() + n1y * dst_half)
+        dR = QPointF(p2.x() - n1x * dst_half, p2.y() - n1y * dst_half)
+        cL = QPointF(ctrl.x() + mid_n_x * mid_half, ctrl.y() + mid_n_y * mid_half)
+        cR = QPointF(ctrl.x() - mid_n_x * mid_half, ctrl.y() - mid_n_y * mid_half)
+        path = QPainterPath()
+        path.moveTo(sL)
+        path.quadTo(cL, dL)
+        path.lineTo(dR)
+        path.quadTo(cR, sR)
+        path.closeSubpath()
+        return path
+
+    def set_focus_pair(self, from_core: Optional[str], to_core: Optional[str]) -> None:
+        if from_core and to_core and from_core in self._cores and to_core in self._cores:
+            self._focus_pair = (self._cores.index(from_core), self._cores.index(to_core))
+        else:
+            self._focus_pair = None
+        self.update()
+
+    def _arc_focused(self, index: int) -> bool:
+        if self._focus_pair is not None and index in self._focus_pair:
+            return True
+        return index in (self._focus_cores or [])
+
+    def _is_dim_pair(self, i: int, j: int) -> bool:
+        focus_pair = self._focus_pair
+        if focus_pair is not None:
+            fi, tj = focus_pair
+            return not (i == fi and j == tj)
+        fc = self._focus_cores or []
+        if len(fc) == 1:
+            return i != fc[0] and j != fc[0]
+        if len(fc) == 2:
+            a, b = fc[0], fc[1]
+            return not ((i == a and j == b) or (i == b and j == a))
+        hovered = self._hover_index
+        hover_side = self._hover_side
+        if hover_side == "egress":
+            return hovered is not None and i != hovered
+        if hover_side == "ingress":
+            return hovered is not None and j != hovered
+        return hovered is not None and hovered != i and hovered != j
 
     def grab_full_pixmap(self) -> QPixmap:
         """Snapshot the current diagram as-rendered (fixed-size, unlike the
@@ -3942,7 +4421,7 @@ class _ChordDiagramWidget(QWidget):
         if not cores or layout is None or not layout.arcs:
             return
         cx, cy, R = self._geometry(w, h)
-        inner = R - self._ARC_THICKNESS / 2 - 2
+        r_egress, r_ingress, r_ribbon = _chord_ring_geometry(R)
         max_count = self._max_count or 1
         grid = self._grid
         bg = self.palette().color(QPalette.Window).name()
@@ -3958,18 +4437,18 @@ class _ChordDiagramWidget(QWidget):
                 if not count:
                     continue
                 bidir = (grid[j][i] if j < len(grid) and i < len(grid[j]) else 0) > 0
-                p1 = self._point_at(cx, cy, layout.tick_angle(i, j), inner)
-                p2 = self._point_at(cx, cy, layout.tick_angle(j, i), inner)
+                p1 = self._point_at(cx, cy, layout.egress_tick_angle(i, j), r_ribbon)
+                p2 = self._point_at(cx, cy, layout.ingress_tick_angle(j, i), r_ribbon)
                 mx, my = (p1.x() + p2.x()) / 2, (p1.y() + p2.y()) / 2
                 vx, vy = mx - cx, my - cy
                 vlen = math.hypot(vx, vy) or 1.0
                 vx, vy = vx / vlen, vy / vlen
                 perp_x, perp_y = -vy, vx
                 sign = 1 if i < j else -1
-                bidir_offset = 6 * sign if bidir else 0
+                bidir_offset = self._bidir_sep * sign if bidir else 0.0
                 pull = 0.18
-                ctrl_x = cx + vx * inner * pull + perp_x * bidir_offset
-                ctrl_y = cy + vy * inner * pull + perp_y * bidir_offset
+                ctrl_x = cx + vx * r_ribbon * pull + perp_x * bidir_offset
+                ctrl_y = cy + vy * r_ribbon * pull + perp_y * bidir_offset
                 width = max(1.0, min(12.0, 1 + 10 * (count / max_count)))
                 gid = f"chord-grad-{i}-{j}"
                 defs.append(
@@ -3981,26 +4460,35 @@ class _ChordDiagramWidget(QWidget):
                 chord_paths.append(
                     f'<path d="M {p1.x():.2f} {p1.y():.2f} Q {ctrl_x:.2f} {ctrl_y:.2f} '
                     f'{p2.x():.2f} {p2.y():.2f}" stroke="url(#{gid})" '
-                    f'stroke-width="{width:.2f}" stroke-opacity="0.75" fill="none" '
-                    'stroke-linecap="round"/>')
+                    f'stroke-width="{width:.2f}" stroke-opacity="{self._ribbon_alpha:.2f}" '
+                    'fill="none" stroke-linecap="butt"/>')
 
         arc_parts = []
+        svg_step = _chord_label_step(
+            len(cores), min_px=16.0, span_px=2.0 * math.pi * max(R, 1.0))
         for arc in layout.arcs:
-            p1 = self._point_at(cx, cy, arc.start_angle, R)
-            p2 = self._point_at(cx, cy, arc.end_angle, R)
             large_arc = 1 if (arc.end_angle - arc.start_angle) > math.pi else 0
-            arc_parts.append(
-                f'<path d="M {p1.x():.2f} {p1.y():.2f} A {R:.2f} {R:.2f} 0 '
-                f'{large_arc} 1 {p2.x():.2f} {p2.y():.2f}" '
-                f'stroke="{esc(_core_color(arc.core))}" stroke-width="{self._ARC_THICKNESS}" '
-                'stroke-opacity="1" fill="none" stroke-linecap="round"/>')
+            for rr, sw, opac in (
+                    (r_egress, _CHORD_ARC_OUTER, 1.0),
+                    (r_ingress, _CHORD_ARC_INNER, 0.85)):
+                p1 = self._point_at(cx, cy, arc.start_angle, rr)
+                p2 = self._point_at(cx, cy, arc.end_angle, rr)
+                arc_parts.append(
+                    f'<path d="M {p1.x():.2f} {p1.y():.2f} A {rr:.2f} {rr:.2f} 0 '
+                    f'{large_arc} 1 {p2.x():.2f} {p2.y():.2f}" '
+                    f'stroke="{esc(_core_color(arc.core))}" stroke-width="{sw}" '
+                    f'stroke-opacity="{opac}" fill="none" stroke-linecap="butt"/>')
+            if not _chord_label_visible(arc.index, svg_step):
+                continue
             mid = (arc.start_angle + arc.end_angle) / 2
-            lp = self._point_at(cx, cy, mid, R + self._ARC_THICKNESS / 2 + 14)
+            lp = self._point_at(
+                cx, cy, mid, r_egress + _CHORD_ARC_OUTER / 2 + self._label_gap)
             cos_mid = math.cos(mid)
             anchor = "start" if cos_mid > 0.15 else "end" if cos_mid < -0.15 else "middle"
+            fsz = 10 if self._compact else 11
             arc_parts.append(
                 f'<text x="{lp.x():.2f}" y="{lp.y():.2f}" fill="#888888" '
-                f'font-family="monospace" font-size="11" text-anchor="{anchor}" '
+                f'font-family="monospace" font-size="{fsz}" text-anchor="{anchor}" '
                 f'dominant-baseline="middle">{esc(_core_short_name(arc.core))}</text>')
 
         parts = [
@@ -4016,6 +4504,1298 @@ class _ChordDiagramWidget(QWidget):
         ]
         with open(path, "w", encoding="utf-8") as f:
             f.write("\n".join(parts))
+
+class _CorridorTimelineCanvas(QWidget):
+    """Viewport-sized heatmap canvas (web .ci-grid-canvas); scroll via host bar."""
+
+    corridor_clicked = Signal(object, int)  # corridor dict, bin index
+    corridor_dbl = Signal(object, int)
+
+    _ROW_H = 22
+    _LABEL_W = 78
+    _HEAD_H = 40
+    _FOOT_H = 16
+
+    def __init__(self, host: "QScrollArea", parent=None):
+        super().__init__(parent)
+        self._host = host
+        self._corridors: list = []
+        self._time_bins = 32
+        self._max_bin = 1
+        self._t_min = 0
+        self._t_max = 1
+        self._bin_w = 1.0
+        self._time_scale = "ns"
+        self._selected = None
+        self._highlight_bin = -1
+        self._hover_ri = -1
+        self._hover_bi = -1
+        self.setMouseTracking(True)
+        self.setAutoFillBackground(True)
+        self._tip = QLabel(self)
+        self._tip.setObjectName("corridorGridTip")
+        self._tip.setWordWrap(True)
+        self._tip.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._tip.setStyleSheet(
+            "QLabel#corridorGridTip {"
+            "background: palette(window); color: palette(window-text);"
+            "border: 1px solid palette(mid); border-radius: 4px;"
+            "padding: 6px 8px; font-family: monospace; font-size: 11px;"
+            "}"
+        )
+        self._tip.hide()
+
+    def _content_h(self) -> int:
+        n = len(self._corridors)
+        return self._HEAD_H + n * self._ROW_H + self._FOOT_H
+
+    def _scroll_y(self) -> int:
+        return int(self._host.verticalScrollBar().value())
+
+    def set_model(self, corridors, time_bins, max_bin, t_min, t_max, bin_w, time_scale):
+        self._corridors = list(corridors or [])
+        self._time_bins = time_bins
+        self._max_bin = max(1, max_bin)
+        self._t_min, self._t_max, self._bin_w = t_min, t_max, bin_w
+        self._time_scale = time_scale
+        self.update()
+
+    def set_selection(self, corridor, highlight_bin=-1):
+        self._selected = corridor
+        self._highlight_bin = highlight_bin
+        self.update()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        try:
+            self._paint_corridor_grid(p)
+        finally:
+            p.end()
+
+    def _paint_corridor_grid(self, p):
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setClipRect(self.rect())
+        w = self.width()
+        row_h, head_h, label_w, foot_h = (
+            self._ROW_H, self._HEAD_H, self._LABEL_W, self._FOOT_H)
+        corridors = self._corridors
+        bins = max(self._time_bins, 1)
+        plot_w = max(1.0, w - label_w)
+        cell_w = plot_w / bins
+        sy = self._scroll_y()
+        vp_h = max(1, self.height())
+        bg = self.palette().color(QPalette.ColorRole.Window)
+        fg = QColor("#888888")
+        p.fillRect(self.rect(), bg)
+        plot_top = head_h
+        plot_bot = max(plot_top, vp_h - foot_h)
+        p.save()
+        p.setClipRect(QRectF(0, plot_top, w, plot_bot - plot_top))
+        first = max(0, (sy - head_h) // row_h)
+        last = min(len(corridors) - 1, (sy + vp_h - head_h) // row_h + 1)
+        for ri in range(first, last + 1):
+            c = corridors[ri]
+            y = head_h + ri * row_h - sy
+            if y + row_h < plot_top or y > plot_bot:
+                continue
+            sel = self._selected
+            selected = bool(
+                sel
+                and sel.get("from_core") == c["from_core"]
+                and sel.get("to_core") == c["to_core"])
+            if selected:
+                p.fillRect(0, y, w, row_h, QColor(100, 160, 255, 30))
+            p.setPen(fg)
+            font = QFont("monospace", 8)
+            font.setBold(selected)
+            p.setFont(font)
+            p.drawText(QRectF(2, y, label_w - 6, row_h),
+                       int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight),
+                       c.get("label", ""))
+            for b in range(bins):
+                v = c["bins"][b] if b < len(c["bins"]) else 0
+                bv = c["bounce_bins"][b] if b < len(c["bounce_bins"]) else 0
+                x = label_w + b * cell_w
+                if v > 0:
+                    intensity = min(1.0, v / self._max_bin)
+                    p.fillRect(QRectF(x + 0.5, y + 2, cell_w - 1, row_h - 4),
+                               QColor(70, 130, 220, int(40 + 190 * intensity)))
+                else:
+                    p.fillRect(QRectF(x + 0.5, y + 2, cell_w - 1, row_h - 4),
+                               QColor(127, 127, 127, 16))
+                if bv > 0 and v > 0 and bv / v >= 0.15:
+                    p.setPen(QPen(QColor(232, 120, 32, 160), 1))
+                    for s in range(int(-row_h), int(cell_w + row_h), 4):
+                        p.drawLine(QPointF(x + s, y + row_h),
+                                   QPointF(x + s + row_h, y))
+                if selected and self._highlight_bin == b:
+                    p.setPen(QPen(QColor(255, 220, 80, 220), 1))
+                    p.drawRect(QRectF(x + 0.5, y + 1, cell_w - 1, row_h - 2))
+                elif self._hover_ri == ri and self._hover_bi == b:
+                    p.setPen(QPen(QColor(180, 200, 255, 180), 1))
+                    p.drawRect(QRectF(x + 0.5, y + 1, cell_w - 1, row_h - 2))
+        p.restore()
+        # Sticky time axis (parity with web .ci-grid-canvas).
+        p.fillRect(QRectF(0, 0, w, head_h), bg)
+        p.setPen(fg)
+        p.setFont(QFont("monospace", 8))
+        p.drawText(4, 12,
+                   "Y: corridor (src→dst)   X: time   color: mig count   hatch: lock bounce")
+        p.drawText(4, 26, "src→dst")
+        tick_n = min(bins, 6)
+        fm = QFontMetrics(p.font())
+        for t in range(tick_n + 1):
+            frac = t / tick_n
+            ns = int(self._t_min + frac * (self._t_max - self._t_min))
+            x = label_w + frac * plot_w
+            label = _format_time(ns, self._time_scale)
+            ty = 26
+            if frac < 0.05:
+                p.drawText(int(x), ty, label)
+            elif frac > 0.95:
+                p.drawText(int(x) - fm.horizontalAdvance(label), ty, label)
+            else:
+                p.drawText(int(x) - fm.horizontalAdvance(label) // 2, ty, label)
+        foot_y = vp_h - foot_h
+        p.fillRect(QRectF(0, foot_y, w, foot_h), bg)
+        p.setPen(fg)
+        p.drawText(QRectF(label_w, foot_y, plot_w, foot_h),
+                   int(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter),
+                   "Time →")
+
+    def _hit(self, pos):
+        x, y = pos.x(), pos.y()
+        if y < self._HEAD_H or y > self.height() - self._FOOT_H:
+            return None
+        ri = int((y + self._scroll_y() - self._HEAD_H) / self._ROW_H)
+        plot_w = max(1.0, self.width() - self._LABEL_W)
+        cell_w = plot_w / max(self._time_bins, 1)
+        bi = int((x - self._LABEL_W) / cell_w)
+        if ri < 0 or ri >= len(self._corridors) or bi < 0 or bi >= self._time_bins:
+            return None
+        return self._corridors[ri], ri, bi
+
+    def _bin_tip(self, c, bi) -> str:
+        bin_lo, bin_hi = _heatmap_bin_range(
+            self._t_min, self._bin_w, self._time_bins, self._t_max, bi)
+        n = c["bins"][bi] if bi < len(c["bins"]) else 0
+        bv = c["bounce_bins"][bi] if bi < len(c["bounce_bins"]) else 0
+        lines = [
+            c.get("label", ""),
+            f"{_format_time(bin_lo, self._time_scale)} – "
+            f"{_format_time(bin_hi, self._time_scale)}",
+            f"{n} migration{'s' if n != 1 else ''}",
+        ]
+        if bv:
+            lines.append(f"{bv} lock bounce{'s' if bv != 1 else ''}")
+        tasks = c.get("tasks") or []
+        if n and tasks:
+            lines.append(f"top task: {tasks[0].get('label', '')}")
+        lines.append("click to select bin · double-click to spotlight")
+        return "\n".join(lines)
+
+    def _hide_tip(self) -> None:
+        self._tip.hide()
+
+    def _show_tip_at(self, local_pos, text: str) -> None:
+        self._tip.setText(text)
+        self._tip.adjustSize()
+        pad = 12
+        x = int(local_pos.x()) + pad
+        y = int(local_pos.y()) + pad
+        tw, th = self._tip.sizeHint().width(), self._tip.sizeHint().height()
+        x = max(4, min(x, max(4, self.width() - tw - 4)))
+        y = max(4, min(y, max(4, self.height() - th - 4)))
+        self._tip.move(x, y)
+        self._tip.resize(tw, th)
+        self._tip.show()
+        self._tip.raise_()
+
+    def mouseMoveEvent(self, event):
+        pos = event.position() if hasattr(event, "position") else event.pos()
+        hit = self._hit(pos)
+        if hit is None:
+            if self._hover_ri != -1:
+                self._hover_ri = self._hover_bi = -1
+                self.update()
+            self._hide_tip()
+            return super().mouseMoveEvent(event)
+        c, ri, bi = hit
+        if ri != self._hover_ri or bi != self._hover_bi:
+            self._hover_ri, self._hover_bi = ri, bi
+            self.update()
+        self._show_tip_at(pos, self._bin_tip(c, bi))
+        return super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event):
+        self._hover_ri = self._hover_bi = -1
+        self._hide_tip()
+        self.update()
+        return super().leaveEvent(event)
+
+    def mousePressEvent(self, event):
+        hit = self._hit(event.position() if hasattr(event, "position") else event.pos())
+        if hit:
+            self.corridor_clicked.emit(hit[0], hit[2])
+        return super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        hit = self._hit(event.position() if hasattr(event, "position") else event.pos())
+        if hit and hit[0]["bins"][hit[2]] > 0:
+            self.corridor_dbl.emit(hit[0], hit[2])
+        return super().mouseDoubleClickEvent(event)
+
+    def wheelEvent(self, event) -> None:  # noqa: N802
+        bar = self._host.verticalScrollBar()
+        bar.setValue(bar.value() - int(event.angleDelta().y()))
+        event.accept()
+
+
+class _CorridorTimelineGrid(QScrollArea):
+    """Scrollable corridor heatmap (web .ci-grid-body overflow:auto)."""
+
+    corridor_clicked = Signal(object, int)
+    corridor_dbl = Signal(object, int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWidgetResizable(False)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.horizontalScrollBar().hide()
+        self.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self.setMinimumHeight(120)
+        self.setMinimumWidth(280)
+        self._spacer = QWidget()
+        self._spacer.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setWidget(self._spacer)
+        self._canvas = _CorridorTimelineCanvas(self, self.viewport())
+        self._canvas.corridor_clicked.connect(self.corridor_clicked.emit)
+        self._canvas.corridor_dbl.connect(self.corridor_dbl.emit)
+        self.verticalScrollBar().valueChanged.connect(
+            lambda _v: self._canvas.update())
+        self.viewport().setMouseTracking(True)
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        return QSize(480, 240)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return QSize(200, 80)
+
+    def _sync_overlay(self) -> None:
+        # Spacer is 1px wide (web .ci-grid-spacer) so only vertical scroll
+        # appears; canvas then uses the viewport *after* the bar is shown.
+        content_h = max(1, self._canvas._content_h())
+        self._spacer.setFixedSize(1, content_h)
+        vp = self.viewport()
+        vw, vh = max(1, vp.width()), max(1, vp.height())
+        self._canvas.setGeometry(0, 0, vw, vh)
+        self._canvas.raise_()
+        self._canvas.update()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._sync_overlay()
+
+    def set_model(self, corridors, time_bins, max_bin, t_min, t_max, bin_w,
+                  time_scale) -> None:
+        self._canvas.set_model(
+            corridors, time_bins, max_bin, t_min, t_max, bin_w, time_scale)
+        self._sync_overlay()
+
+    def set_selection(self, corridor, highlight_bin=-1) -> None:
+        self._canvas.set_selection(corridor, highlight_bin)
+        self._ensure_corridor_visible(corridor)
+
+    def _ensure_corridor_visible(self, corridor) -> None:
+        if not corridor:
+            return
+        head = self._canvas._HEAD_H
+        row_h = self._canvas._ROW_H
+        foot = self._canvas._FOOT_H
+        idx = None
+        for ri, c in enumerate(self._canvas._corridors):
+            if (c.get("from_core") == corridor.get("from_core")
+                    and c.get("to_core") == corridor.get("to_core")):
+                idx = ri
+                break
+        if idx is None:
+            return
+        y = head + idx * row_h
+        vp = max(1, self.viewport().height())
+        bar = self.verticalScrollBar()
+        top = bar.value()
+        vis_top = top + head
+        vis_bot = top + vp - foot
+        if y < vis_top:
+            bar.setValue(max(0, y - head))
+        elif y + row_h > vis_bot:
+            bar.setValue(max(0, y + row_h - (vp - foot)))
+
+
+# Web .ci-field select / .ci-task-filter: 12px + padding 2px 6px.
+_CI_FIELD_H = 22
+# Web .ci-sidebar-body height 220px + chrome.
+_CI_SIDEBAR_H = 248
+
+
+def _dim_css_color(widget: QWidget) -> str:
+    """Muted text color blended from the current palette (theme-aware)."""
+    fg = widget.palette().color(QPalette.ColorRole.WindowText)
+    bg = widget.palette().color(QPalette.ColorRole.Window)
+    r = int(bg.red() * 0.55 + fg.red() * 0.45)
+    g = int(bg.green() * 0.55 + fg.green() * 0.45)
+    b = int(bg.blue() * 0.55 + fg.blue() * 0.45)
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+class _CorridorInspectorDialog(QDialog):
+    """Unified Migration & Corridor Inspector (TODO2) — tree + timeline + mini-chord."""
+
+    def __init__(self, trace: "BtfTrace", parent=None,
+                 on_spotlight: Optional[Callable] = None,
+                 on_clear: Optional[Callable] = None,
+                 on_jump: Optional[Callable] = None,
+                 initial_mode: str = "heatmap"):
+        super().__init__(parent)
+        self.setWindowTitle("Migration & Corridor Inspector")
+        self.setMinimumSize(720, 520)
+        self.resize(980, 680)
+        self.setModal(False)
+        self._trace = trace
+        self._on_spotlight = on_spotlight
+        self._on_clear = on_clear
+        self._on_jump = on_jump
+        self._bounce_only = False
+        self._top_pct = _default_corridor_top_pct(len(trace.core_names))
+        self._scope_lo = self._scope_hi = None
+        self._scope_suffix = ""
+        self._owner_tab_path: Optional[str] = None
+        self._model: dict = {}
+        self._selected = None
+        self._selected_task = None
+        self._display_corridors: list = []
+        self._display_groups: list = []
+        self._direction_mode = "all"
+        self._task_query = ""
+        self._locked_cores: list = []
+        self._expanded_groups: set = set()
+        self._expanded_corridors: set = set()
+        self._sidebar_dock = "bottom"
+        self._initial_mode = initial_mode
+        self._scope_follow = True
+        self._HINT_DEFAULT = (
+            "Click a time cell to select that bin · double-click for Spotlight · "
+            "outer ring = egress · inner ring = ingress")
+
+        lay = QVBoxLayout(self)
+
+        # One control height for combos + task filter (app QSS makes QComboBox
+        # 1.6em and QLineEdit auto — they look mismatched in this toolbar).
+        # Keep this row fixed so an empty-state / long subtitle cannot push it down.
+        bar = QWidget()
+        bar.setObjectName("ciToolbar")
+        bar.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        bar.setStyleSheet(
+            "#ciToolbar QComboBox, #ciToolbar QLineEdit, #ciToolbar QPushButton {"
+            f"  height: {_CI_FIELD_H}px; min-height: {_CI_FIELD_H}px;"
+            f"  max-height: {_CI_FIELD_H}px;"
+            "  padding: 0px 6px; border-radius: 4px; font-size: 12px;"
+            "}"
+            "#ciToolbar QComboBox { padding-right: 20px; }"
+            "#ciToolbar QComboBox::drop-down {"
+            "  subcontrol-origin: padding; subcontrol-position: center right;"
+            "  width: 16px; border: none;"
+            "}"
+            "#ciToolbar QComboBox QAbstractItemView {"
+            "  outline: none; padding: 2px; font-size: 12px;"
+            "}"
+            "#ciToolbar QComboBox QAbstractItemView::item {"
+            f"  min-height: {_CI_FIELD_H}px; padding: 2px 6px;"
+            "}"
+        )
+        toolbar = QHBoxLayout(bar)
+        toolbar.setContentsMargins(0, 0, 0, 0)
+        toolbar.setSpacing(8)
+        toolbar.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        top_lbl = QLabel("Top corridors")
+        toolbar.addWidget(top_lbl)
+        self._top_combo = QComboBox()
+        for pct, label in ((10, "Top 10%"), (25, "Top 25%"), (50, "Top 50%"), (100, "All")):
+            self._top_combo.addItem(label, pct)
+        idx = self._top_combo.findData(self._top_pct)
+        if idx >= 0:
+            self._top_combo.setCurrentIndex(idx)
+        self._top_combo.currentIndexChanged.connect(self._on_top_changed)
+        toolbar.addWidget(self._top_combo)
+        self._bounce_btn = QPushButton("All Migrations")
+        self._bounce_btn.setCheckable(True)
+        self._bounce_btn.clicked.connect(self._on_bounce_toggled)
+        self._bounce_btn.setVisible(_trace_has_core_bounce_holds(trace))
+        toolbar.addWidget(self._bounce_btn)
+        dir_lbl = QLabel("Direction")
+        toolbar.addWidget(dir_lbl)
+        self._dir_combo = QComboBox()
+        self._dir_combo.addItem("All", "all")
+        self._dir_combo.addItem("Egress Only", "egress")
+        self._dir_combo.addItem("Ingress Only", "ingress")
+        self._dir_combo.currentIndexChanged.connect(self._on_dir_changed)
+        toolbar.addWidget(self._dir_combo)
+        task_lbl = QLabel("Task filter")
+        toolbar.addWidget(task_lbl)
+        self._task_edit = QLineEdit()
+        self._task_edit.setPlaceholderText("name or exact id")
+        self._task_edit.setClearButtonEnabled(True)
+        self._task_edit.setFixedWidth(140)
+        self._task_edit.textChanged.connect(self._on_task_filter_changed)
+        toolbar.addWidget(self._task_edit)
+        toolbar.addStretch(1)
+        for _w in (self._top_combo, self._dir_combo, self._task_edit, self._bounce_btn):
+            self._style_inspector_field(_w)
+        lay.addWidget(bar)
+        self._sub = QLabel()
+        self._sub.setObjectName("ciSub")
+        self._sub.setWordWrap(False)
+        self._sub.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self._sub.setStyleSheet(f"color:{_dim_css_color(self)}; font-size:11px;")
+        lay.addWidget(self._sub)
+
+        self._triage = QLabel()
+        self._triage.setStyleSheet(
+            "background:rgba(232,160,32,0.10);border:1px solid rgba(232,160,32,0.35);"
+            "border-radius:4px;padding:6px;")
+        self._triage_btn = QPushButton("Jump To")
+        self._triage_btn.clicked.connect(self._jump_hotspot)
+        triage_row = QHBoxLayout()
+        triage_row.addWidget(self._triage, 1)
+        triage_row.addWidget(self._triage_btn)
+        self._triage_wrap = QWidget()
+        self._triage_wrap.setLayout(triage_row)
+        self._triage_wrap.setVisible(False)
+        lay.addWidget(self._triage_wrap)
+
+        split = QSplitter(Qt.Orientation.Horizontal)
+        self._split = split
+        self._tree = QTreeWidget()
+        self._tree.setObjectName("corridorInspectorTree")
+        self._tree.setHeaderLabels(["Corridor / Task", "Vol", "Bounce", "Net"])
+        self._tree.setIndentation(12)
+        self._tree.setUniformRowHeights(True)
+        self._tree.setAllColumnsShowFocus(True)
+        self._tree.setMouseTracking(True)
+        self._tree.viewport().setMouseTracking(True)
+        self._tree.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self._tree.setStyleSheet(
+            "#corridorInspectorTree { show-decoration-selected: 1; outline: none; }"
+            "#corridorInspectorTree::item { border: none; padding: 2px 0; }"
+            "#corridorInspectorTree::item:hover {"
+            "  background: rgba(127, 127, 127, 0.18);"
+            "}"
+            "#corridorInspectorTree::item:selected {"
+            "  background: rgba(100, 160, 255, 0.28);"
+            "  color: palette(text);"
+            "}"
+            "#corridorInspectorTree::item:selected:hover {"
+            "  background: rgba(100, 160, 255, 0.36);"
+            "}"
+        )
+        self._tree.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        hdr = self._tree.header()
+        hdr.setStretchLastSection(False)
+        hdr.setMinimumSectionSize(40)
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        self._tree.setColumnWidth(0, 168)
+        self._tree.setColumnWidth(1, 52)
+        self._tree.setColumnWidth(2, 60)
+        self._tree.setColumnWidth(3, 56)
+        self._tree.setMinimumWidth(280)
+        self._tree.itemClicked.connect(self._on_tree_click)
+        self._tree.itemDoubleClicked.connect(self._on_tree_dbl)
+        self._tree.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+        self._tree.setMinimumHeight(80)
+        split.addWidget(self._tree)
+        self._grid = _CorridorTimelineGrid()
+        self._grid.setMinimumWidth(280)
+        self._grid.corridor_clicked.connect(self._on_grid_clicked)
+        self._grid.corridor_dbl.connect(self._spotlight_corridor_bin)
+        split.addWidget(self._grid)
+        split.setStretchFactor(0, 0)
+        split.setStretchFactor(1, 1)
+        split.setSizes([340, 640])
+
+        self._chord = _ChordDiagramWidget(compact=True)
+        self._chord.setMinimumHeight(180)
+        self._chord.setMinimumWidth(200)
+        self._chord.core_clicked.connect(self._on_chord_core)
+        self._chord.pair_clicked.connect(self._on_chord_pair)
+        self._chord.corridor_clicked.connect(self._on_chord_corridor)
+        self._chord.corridor_dbl.connect(self._on_chord_corridor_dbl)
+        self._chord.hover_info.connect(self._on_chord_hover_info)
+
+        self._card_title = QLabel()
+        self._card_title.setStyleSheet("font-weight:600;")
+        self._card_title.setWordWrap(True)
+        self._card = QLabel("Click a corridor or chord ribbon to inspect.")
+        self._card.setWordWrap(True)
+        self._card.setStyleSheet(f"color:{_dim_css_color(self)};")
+        self._inspect_btn = QPushButton("Inspect in Timeline")
+        self._inspect_btn.setVisible(False)
+        self._inspect_btn.clicked.connect(self._on_inspect_in_timeline)
+        card_lay = QVBoxLayout()
+        card_lay.setContentsMargins(10, 4, 4, 4)
+        card_lay.addWidget(self._card_title)
+        card_lay.addWidget(self._card, 1)
+        card_lay.addWidget(self._inspect_btn, 0, Qt.AlignmentFlag.AlignLeft)
+        self._card_panel = QWidget()
+        self._card_panel.setLayout(card_lay)
+        self._card_panel.setMinimumWidth(180)
+
+        self._side_body = QSplitter(Qt.Orientation.Horizontal)
+        self._side_body.addWidget(self._chord)
+        self._side_body.addWidget(self._card_panel)
+        # Web .ci-sidebar-body: 1fr : 0.7fr, height 220px.
+        self._side_body.setStretchFactor(0, 10)
+        self._side_body.setStretchFactor(1, 7)
+        self._side_body.setSizes([320, 224])
+        self._side_body.setChildrenCollapsible(False)
+
+        self._side_toggle = QPushButton(
+            "Hide topology" if initial_mode == "chord" else "Show topology")
+        self._side_toggle.setFlat(True)
+        self._side_toggle.clicked.connect(self._toggle_side)
+        self._dock_combo = QComboBox()
+        self._dock_combo.addItem("Bottom", "bottom")
+        self._dock_combo.addItem("Right", "right")
+        self._dock_combo.currentIndexChanged.connect(self._on_dock_changed)
+        self._style_inspector_field(self._dock_combo)
+        self._dock_combo.setStyleSheet(
+            f"QComboBox {{ min-height: {_CI_FIELD_H}px; max-height: {_CI_FIELD_H}px;"
+            "  padding: 2px 20px 2px 6px; border-radius: 4px; font-size: 12px; }"
+            "QComboBox::drop-down {"
+            "  subcontrol-origin: padding; subcontrol-position: center right;"
+            "  width: 16px; border: none; }"
+            "QComboBox QAbstractItemView { outline: none; padding: 2px; font-size: 12px; }"
+            "QComboBox QAbstractItemView::item {"
+            f"  min-height: {_CI_FIELD_H}px; padding: 2px 6px; }}")
+        chrome = QHBoxLayout()
+        chrome.setContentsMargins(4, 2, 4, 2)
+        chrome.addWidget(self._side_toggle)
+        chrome.addStretch(1)
+        self._dock_lbl = QLabel("Dock")
+        chrome.addWidget(self._dock_lbl)
+        chrome.addWidget(self._dock_combo)
+
+        side_lay = QVBoxLayout()
+        side_lay.setContentsMargins(6, 4, 6, 6)
+        side_lay.setSpacing(4)
+        side_lay.addLayout(chrome)
+        side_lay.addWidget(self._side_body, 1)
+        self._side_wrap = QWidget()
+        self._side_wrap.setObjectName("corridorInspectorSidebar")
+        self._side_wrap.setStyleSheet(
+            "#corridorInspectorSidebar {"
+            "  border: 1px solid rgba(127,127,127,0.35);"
+            "  border-radius: 4px;"
+            "}"
+        )
+        self._side_wrap.setLayout(side_lay)
+
+        self._empty = QLabel("No migrations in scope.")
+        self._empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty.setStyleSheet(f"color:{_dim_css_color(self)};")
+        self._empty.hide()
+        self._work = QWidget()
+        work_stack = QGridLayout(self._work)
+        work_stack.setContentsMargins(0, 0, 0, 0)
+        work_stack.setSpacing(0)
+        work_stack.addWidget(split, 0, 0)
+        work_stack.addWidget(self._empty, 0, 0)
+        self._empty.raise_()
+
+        self._outer = QSplitter(Qt.Orientation.Vertical)
+        self._outer.addWidget(self._work)
+        self._outer.addWidget(self._side_wrap)
+        self._outer.setStretchFactor(0, 1)
+        self._outer.setStretchFactor(1, 0)
+        self._outer.setSizes([440, _CI_SIDEBAR_H])
+        lay.addWidget(self._outer, 1)
+
+        self._hint = QLabel(self._HINT_DEFAULT)
+        self._hint.setStyleSheet(f"color:{_dim_css_color(self)};")
+        lay.addWidget(self._hint)
+
+        self._show_topology(initial_mode == "chord", apply_layout=False)
+        self._apply_sidebar_layout()
+
+        self._filter_bar = QWidget()
+        fb = QHBoxLayout(self._filter_bar)
+        fb.setContentsMargins(0, 0, 0, 0)
+        self._filter_lbl = QLabel()
+        fb.addWidget(self._filter_lbl, 1)
+        clear_btn = QPushButton("Show all tasks")
+        clear_btn.clicked.connect(self._clear_filter)
+        fb.addWidget(clear_btn)
+        self._filter_bar.setVisible(False)
+        lay.addWidget(self._filter_bar)
+
+        btns = QDialogButtonBox(QDialogButtonBox.Close)
+        btns.rejected.connect(self.reject)
+        lay.addWidget(btns)
+
+        self.refresh_scope()
+        QTimer.singleShot(0, self._fit_tree_pane)
+
+    @staticmethod
+    def _style_inspector_field(widget) -> None:
+        """Match combo / line-edit / button height and styled popup lists."""
+        widget.setFixedHeight(_CI_FIELD_H)
+        widget.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+        if isinstance(widget, QComboBox):
+            widget.setView(QListView(widget))
+            widget.setSizeAdjustPolicy(
+                QComboBox.SizeAdjustPolicy.AdjustToContents)
+            hint_w = max(widget.minimumSizeHint().width(), 108)
+            widget.setMinimumWidth(hint_w)
+            view = widget.view()
+            if view is not None:
+                view.setMinimumWidth(hint_w)
+                view.setUniformItemSizes(True)
+
+    def _toggle_side(self) -> None:
+        self._show_topology(not self._side_body.isVisible())
+
+    def _show_topology(self, vis: bool, apply_layout: bool = True) -> None:
+        self._side_wrap.setVisible(True)
+        self._side_body.setVisible(bool(vis))
+        self._dock_lbl.setVisible(bool(vis))
+        self._dock_combo.setVisible(bool(vis))
+        self._side_toggle.setText("Hide topology" if vis else "Show topology")
+        if apply_layout:
+            self._apply_sidebar_layout()
+
+    def _on_dock_changed(self, _idx: int = 0) -> None:
+        self._sidebar_dock = str(self._dock_combo.currentData() or "bottom")
+        self._apply_sidebar_layout()
+
+    def _apply_sidebar_layout(self) -> None:
+        expanded = self._side_body.isVisible()
+        dock = self._sidebar_dock
+        self._side_wrap.setMaximumWidth(16777215)
+        self._side_wrap.setMaximumHeight(16777215)
+        if dock == "right":
+            self._outer.setOrientation(Qt.Orientation.Horizontal)
+            self._side_body.setOrientation(Qt.Orientation.Vertical)
+            self._card_panel.setStyleSheet(
+                "border-top: 1px solid rgba(127,127,127,0.35);")
+            if expanded:
+                self._side_wrap.setMinimumWidth(240)
+                self._side_wrap.setMinimumHeight(0)
+                self._outer.setSizes([680, 340])
+                self._side_body.setSizes([220, 160])
+            else:
+                self._side_wrap.setMinimumWidth(120)
+                self._side_wrap.setMaximumWidth(168)
+                self._side_wrap.setMinimumHeight(0)
+                self._outer.setSizes([800, 140])
+        else:
+            self._outer.setOrientation(Qt.Orientation.Vertical)
+            self._side_body.setOrientation(Qt.Orientation.Horizontal)
+            self._card_panel.setStyleSheet(
+                "border-left: 1px solid rgba(127,127,127,0.35);")
+            self._side_wrap.setMinimumWidth(0)
+            if expanded:
+                # Lock height so the heatmap splitter cannot overlap topology.
+                self._side_wrap.setMinimumHeight(_CI_SIDEBAR_H)
+                self._side_wrap.setMaximumHeight(_CI_SIDEBAR_H)
+                main_h = max(120, self._outer.height() - _CI_SIDEBAR_H)
+                self._outer.setSizes([main_h, _CI_SIDEBAR_H])
+                self._side_body.setSizes([320, 224])
+            else:
+                self._side_wrap.setMinimumHeight(0)
+                self._outer.setSizes([640, 36])
+        self._side_body.setStretchFactor(0, 10)
+        self._side_body.setStretchFactor(1, 7)
+        self._outer.setStretchFactor(0, 1)
+        self._outer.setStretchFactor(1, 0)
+
+    def _on_top_changed(self, _idx: int = 0) -> None:
+        self._top_pct = int(self._top_combo.currentData())
+        self._rebuild()
+
+    def _on_bounce_toggled(self, checked: bool) -> None:
+        self._bounce_only = checked
+        self._bounce_btn.setText(
+            "Lock Bounces Only" if checked else "All Migrations")
+        self._rebuild()
+
+    def _on_dir_changed(self, _idx: int = 0) -> None:
+        self._direction_mode = str(self._dir_combo.currentData() or "all")
+        self._refresh_filtered_view()
+
+    def _on_task_filter_changed(self, text: str) -> None:
+        self._task_query = text or ""
+        self._refresh_filtered_view()
+
+    def _rebuild(self) -> None:
+        self._model = _build_corridor_inspector_model(
+            self._trace, self._scope_lo, self._scope_hi,
+            bounce_only=self._bounce_only, top_pct=self._top_pct)
+        hotspot = self._model.get("hotspot")
+        if hotspot:
+            self._triage.setText(hotspot["summary"])
+            self._triage_wrap.setVisible(True)
+        else:
+            self._triage_wrap.setVisible(False)
+        self._refresh_filtered_view()
+
+    def _refresh_filtered_view(self) -> None:
+        q = (self._task_query or "").strip()
+        # Search all in-scope corridors when filtering by name/id so Top-N
+        # cannot hide a matching task (web parity).
+        src = (self._model.get("all_corridors") or self._model.get("corridors")
+               or []) if q else (self._model.get("corridors") or [])
+        vis = _filter_corridors_by_task_query(src, q)
+        vis = _filter_corridors_by_direction(
+            vis, self._direction_mode, self._selected)
+        self._display_corridors = vis
+        group_by = bool(self._model.get("group_by_source"))
+        self._display_groups = (
+            _corridor_groups_by_source(vis) if group_by else [])
+        has = any(c.get("count", 0) > 0 for c in vis)
+        if not has:
+            self._empty.setText(
+                "No corridors match this task filter." if q
+                else "No migrations in scope.")
+        self._empty.setVisible(not has)
+        n = len(self._model.get("cores") or [])
+        n_corr = len(vis)
+        qnote = f" · filter “{self._task_query.strip()}”" if self._task_query.strip() else ""
+        self._sub.setText(
+            f"{n} cores · {n_corr} corridors · Top {self._top_pct}%"
+            f"{qnote}{self._scope_suffix}")
+        cores = self._model.get("cores") or []
+        pair_count = {(c["from_core"], c["to_core"]): c["count"] for c in vis}
+        filtered_grid = []
+        for i, fc in enumerate(cores):
+            row = []
+            for j, tc in enumerate(cores):
+                if i == j:
+                    row.append(0)
+                else:
+                    row.append(pair_count.get((fc, tc), 0))
+            filtered_grid.append(row)
+        max_bin = 0
+        for c in vis:
+            for v in c.get("bins") or []:
+                if v > max_bin:
+                    max_bin = v
+        self._populate_tree()
+        self._chord.set_data(cores, filtered_grid)
+        self._chord.set_direction_mode(self._direction_mode)
+        focus: list = []
+        sel = self._selected
+        if sel and self._direction_mode == "egress" and sel.get("from_core") in cores:
+            focus = [cores.index(sel["from_core"])]
+        elif sel and self._direction_mode == "ingress" and sel.get("to_core") in cores:
+            focus = [cores.index(sel["to_core"])]
+        elif self._locked_cores:
+            focus = [i for i in self._locked_cores if 0 <= i < len(cores)]
+        self._chord.set_focus_cores(focus)
+        if sel:
+            self._chord.set_focus_pair(sel.get("from_core"), sel.get("to_core"))
+        else:
+            self._chord.set_focus_pair(None, None)
+        self._grid.set_model(
+            vis,
+            self._model.get("time_bins", 32),
+            max_bin or 1,
+            self._model.get("t_min", 0),
+            self._model.get("t_max", 1),
+            self._model.get("bin_w", 1),
+            self._trace.time_scale,
+        )
+        if sel:
+            self._restore_tree_selection()
+
+    def _fit_tree_pane(self) -> None:
+        """Keep Corridor/Task readable without stealing the heatmap."""
+        tree = self._tree
+        if tree.topLevelItemCount():
+            tree.resizeColumnToContents(0)
+            name_w = min(200, max(140, tree.columnWidth(0)))
+        else:
+            name_w = 168
+        tree.setColumnWidth(0, name_w)
+        tree.setColumnWidth(1, 52)
+        tree.setColumnWidth(2, 60)
+        tree.setColumnWidth(3, 56)
+        sb = tree.verticalScrollBar()
+        sb_w = sb.sizeHint().width() if sb and sb.isVisible() else 16
+        need = name_w + 52 + 60 + 56 + sb_w + tree.frameWidth() * 2 + 12
+        need = max(300, min(need, 380))
+        total = self._split.width()
+        if total < 200:
+            total = max(self.width() - 40, 900)
+        self._split.setSizes([need, max(280, total - need)])
+        self._grid._sync_overlay()
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        self._apply_sidebar_layout()
+        self._fit_tree_pane()
+
+    def _make_corridor_item(self, c: dict) -> QTreeWidgetItem:
+        num_align = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        net = c["net"]
+        net_s = f"+{net} ▲" if net > 0 else (f"{net} ▼" if net < 0 else "0")
+        item = QTreeWidgetItem([
+            c["label"], str(c["count"]),
+            f"{c['bounce_pct']:.0f}%", net_s,
+        ])
+        item.setData(0, Qt.ItemDataRole.UserRole, c)
+        for col in (1, 2, 3):
+            item.setTextAlignment(col, num_align)
+        for t in c.get("tasks") or []:
+            child = QTreeWidgetItem([
+                f"└── {t['label']}", str(t["count"]),
+                f"{t['bounce_pct']:.0f}%", f"{t['share_pct']:.0f}%",
+            ])
+            child.setData(0, Qt.ItemDataRole.UserRole, {"corridor": c, "task": t})
+            for col in (1, 2, 3):
+                child.setTextAlignment(col, num_align)
+            item.addChild(child)
+        return item
+
+    def _remember_expanded_groups(self) -> None:
+        expanded_groups = set()
+        expanded_corridors = set()
+
+        def walk(item) -> None:
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if item.isExpanded():
+                if isinstance(data, dict) and "group" in data:
+                    expanded_groups.add(data["group"])
+                if isinstance(data, dict) and "from_core" in data:
+                    expanded_corridors.add(
+                        (data.get("from_core"), data.get("to_core")))
+            for i in range(item.childCount()):
+                walk(item.child(i))
+
+        for i in range(self._tree.topLevelItemCount()):
+            walk(self._tree.topLevelItem(i))
+        if expanded_groups or self._display_groups:
+            self._expanded_groups = expanded_groups
+        if expanded_corridors or self._expanded_corridors:
+            self._expanded_corridors = expanded_corridors
+
+    def _corridor_key(self, c: dict) -> tuple:
+        return (c.get("from_core"), c.get("to_core"))
+
+    def _populate_tree(self) -> None:
+        self._remember_expanded_groups()
+        self._tree.clear()
+        num_align = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        groups = self._display_groups
+        if groups:
+            for g in groups:
+                gitem = QTreeWidgetItem([
+                    g["label"], str(g["count"]), "—", "—",
+                ])
+                gitem.setData(0, Qt.ItemDataRole.UserRole, {"group": g["source"]})
+                for col in (1, 2, 3):
+                    gitem.setTextAlignment(col, num_align)
+                for c in g.get("corridors") or []:
+                    child = self._make_corridor_item(c)
+                    gitem.addChild(child)
+                    if self._corridor_key(c) in self._expanded_corridors:
+                        child.setExpanded(True)
+                self._tree.addTopLevelItem(gitem)
+                if g["source"] in self._expanded_groups:
+                    gitem.setExpanded(True)
+        else:
+            for c in self._display_corridors:
+                item = self._make_corridor_item(c)
+                self._tree.addTopLevelItem(item)
+                if self._corridor_key(c) in self._expanded_corridors:
+                    item.setExpanded(True)
+        self._fit_tree_pane()
+
+    def _restore_tree_selection(self) -> None:
+        c = self._selected
+        if not c:
+            return
+        if self._selected_task:
+            self._reveal_task_in_tree(c, self._selected_task)
+        else:
+            self._reveal_corridor_in_tree(c)
+
+    def _reveal_corridor_in_tree(self, c: dict) -> None:
+        found = self._find_corridor_item(c)
+        if found is None:
+            return
+        parent = found.parent()
+        if parent:
+            parent.setExpanded(True)
+            pdata = parent.data(0, Qt.ItemDataRole.UserRole)
+            if isinstance(pdata, dict) and pdata.get("group"):
+                self._expanded_groups.add(pdata["group"])
+        self._tree.setCurrentItem(found)
+        self._tree.scrollToItem(found)
+
+    def _reveal_task_in_tree(self, c: dict, task: dict) -> None:
+        corr_item = self._find_corridor_item(c)
+        if corr_item is None:
+            return
+        parent = corr_item.parent()
+        if parent:
+            parent.setExpanded(True)
+        corr_item.setExpanded(True)
+        self._expanded_corridors.add(self._corridor_key(c))
+        want_mk = task.get("mk")
+        for i in range(corr_item.childCount()):
+            child = corr_item.child(i)
+            data = child.data(0, Qt.ItemDataRole.UserRole)
+            t = data.get("task") if isinstance(data, dict) else None
+            if isinstance(t, dict) and t.get("mk") == want_mk:
+                self._tree.setCurrentItem(child)
+                self._tree.scrollToItem(child)
+                return
+        self._tree.setCurrentItem(corr_item)
+        self._tree.scrollToItem(corr_item)
+
+    def _find_corridor_item(self, c: dict):
+        want_from, want_to = c.get("from_core"), c.get("to_core")
+
+        def walk(item):
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if (isinstance(data, dict) and data.get("from_core") == want_from
+                    and data.get("to_core") == want_to):
+                return item
+            for i in range(item.childCount()):
+                found = walk(item.child(i))
+                if found:
+                    return found
+            return None
+
+        for i in range(self._tree.topLevelItemCount()):
+            found = walk(self._tree.topLevelItem(i))
+            if found:
+                return found
+        return None
+
+    def _on_grid_clicked(self, c: dict, bi: int) -> None:
+        self._select_corridor(c, bi)
+
+    def _set_card(self, title: str = "", lines: Optional[list] = None,
+                  *, can_spotlight: bool = False) -> None:
+        title = title or ""
+        self._card_title.setText(title)
+        self._card_title.setVisible(bool(title))
+        if lines:
+            self._card.setText("\n".join(str(x) for x in lines if x is not None))
+        else:
+            self._card.setText("Click a corridor or chord ribbon to inspect.")
+        self._inspect_btn.setVisible(bool(can_spotlight))
+
+    def _on_inspect_in_timeline(self) -> None:
+        c = self._selected
+        if not c:
+            return
+        bi = getattr(self._grid, "_highlight_bin", -1)
+        if not (isinstance(bi, int) and bi >= 0):
+            bi = c.get("peak_bin", -1)
+        self._spotlight_corridor(c, bi if isinstance(bi, int) and bi >= 0 else None)
+
+    def _show_core_card(self, core_index: int) -> None:
+        stats = self._model.get("core_stats") or []
+        if not (0 <= core_index < len(stats)):
+            self._set_card()
+            return
+        st = stats[core_index]
+        net = st.get("net", 0)
+        net_s = f"+{net} net gain" if net > 0 else (
+            f"{net} net loss" if net < 0 else "balanced")
+        lines = [
+            f"Outgoing {st.get('out', 0)} / Incoming {st.get('in', 0)}",
+            f"Net: {net_s}",
+        ]
+        for t in (st.get("top_tasks") or [])[:3]:
+            lines.append(f"{t.get('label')}: {t.get('count')}")
+        self._set_card(_core_short_name(st.get("core") or ""), lines)
+
+    def _select_corridor(self, c: dict, bin_index: Optional[int] = None,
+                         *, reveal_tree: bool = True,
+                         task: Optional[dict] = None) -> None:
+        self._selected = c
+        self._selected_task = task
+        self._locked_cores = []
+        if self._direction_mode != "all":
+            self._refresh_filtered_view()
+        bi = bin_index if bin_index is not None else c.get("peak_bin", -1)
+        self._grid.set_selection(c, bi if bi is not None else -1)
+        self._chord.set_focus_pair(c.get("from_core"), c.get("to_core"))
+        self._chord.set_focus_cores([])
+        offender = c.get("primary_task")
+        lines = [
+            f"Directed Vol: {c['count']:,} migrations ({c['rate_per_s']:.1f}/s)",
+            f"Lock Bounces: {c['bounces']} ({c['bounce_pct']:.0f}% cache-line bounces)",
+        ]
+        if task:
+            lines.append(
+                f"Selected task: {task.get('label')} "
+                f"({task.get('count', 0)} mig, "
+                f"{task.get('share_pct', 0):.0f}% share)")
+        elif offender:
+            lines.append(
+                f"Primary Offender: {offender['label']} "
+                f"({offender['share_pct']:.0f}% share)")
+        else:
+            lines.append("No task attribution")
+        if isinstance(bi, int) and bi >= 0:
+            t_min = self._model.get("t_min", 0)
+            t_max = self._model.get("t_max", 1)
+            bin_w = self._model.get("bin_w", 1)
+            time_bins = self._model.get("time_bins", 32)
+            bin_lo, bin_hi = _heatmap_bin_range(
+                t_min, bin_w, time_bins, t_max, bi)
+            n = c["bins"][bi] if bi < len(c["bins"]) else 0
+            bv = (c["bounce_bins"][bi]
+                  if bi < len(c.get("bounce_bins") or []) else 0)
+            extra = f"{n} mig"
+            if bv:
+                extra += f", {bv} bounce"
+            lines.append(
+                f"Selected bin {bi + 1}/{time_bins}: "
+                f"{_format_time(bin_lo, self._trace.time_scale)}–"
+                f"{_format_time(bin_hi, self._trace.time_scale)} · {extra}")
+        self._set_card(f"Corridor: {c['label']}", lines, can_spotlight=True)
+        if reveal_tree:
+            self._restore_tree_selection()
+
+    def _on_chord_core(self, payload) -> None:
+        if not isinstance(payload, dict) or payload.get("clear"):
+            self._locked_cores = []
+            self._selected = None
+            self._selected_task = None
+            self._chord.set_focus_cores([])
+            self._chord.set_focus_pair(None, None)
+            self._grid.set_selection(None, -1)
+            self._set_card()
+            if self._direction_mode != "all":
+                self._refresh_filtered_view()
+            return
+        idx = int(payload.get("core_index", -1))
+        cores = self._model.get("cores") or []
+        if not (0 <= idx < len(cores)):
+            return
+        self._locked_cores = [idx]
+        self._selected = None
+        self._selected_task = None
+        self._chord.set_focus_pair(None, None)
+        self._chord.set_focus_cores(self._locked_cores)
+        self._grid.set_selection(None, -1)
+        self._show_core_card(idx)
+        if self._direction_mode != "all":
+            self._refresh_filtered_view()
+
+    def _on_chord_pair(self, core_index: int) -> None:
+        cores = self._model.get("cores") or []
+        if not (0 <= int(core_index) < len(cores)):
+            return
+        cur = list(self._locked_cores)
+        if len(cur) == 1 and cur[0] != int(core_index):
+            self._locked_cores = [cur[0], int(core_index)]
+            a, b = cores[cur[0]], cores[int(core_index)]
+            found = None
+            for c in (self._model.get("all_corridors") or []):
+                if c.get("from_core") == a and c.get("to_core") == b:
+                    found = c
+                    break
+            if found is None:
+                for c in (self._model.get("all_corridors") or []):
+                    if c.get("from_core") == b and c.get("to_core") == a:
+                        found = c
+                        break
+            self._show_topology(True)
+            if found:
+                self._select_corridor(found)
+                return
+            self._selected = None
+            self._selected_task = None
+            self._chord.set_focus_pair(None, None)
+            self._chord.set_focus_cores(self._locked_cores)
+            self._set_card(
+                f"Pair isolate: {_core_short_name(a)} ↔ {_core_short_name(b)}",
+                ["No directed corridor in scope."],
+            )
+            return
+        self._on_chord_core({"core_index": int(core_index)})
+
+    def _on_chord_corridor(self, from_core: str, to_core: str) -> None:
+        found = None
+        for c in (self._display_corridors or []) + (self._model.get("all_corridors") or []):
+            if c.get("from_core") == from_core and c.get("to_core") == to_core:
+                found = c
+                break
+        if found:
+            if self._display_groups:
+                self._expanded_groups.add(found["from_core"])
+            self._show_topology(True)
+            self._select_corridor(found)
+
+    def _on_chord_corridor_dbl(self, from_core: str, to_core: str) -> None:
+        for c in self._model.get("all_corridors") or []:
+            if c.get("from_core") == from_core and c.get("to_core") == to_core:
+                self._spotlight_corridor(c)
+                return
+
+    def _on_tree_click(self, item, _col) -> None:
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+        if isinstance(data, dict) and "group" in data:
+            return
+        if isinstance(data, dict) and "from_core" in data:
+            self._expanded_corridors.add(self._corridor_key(data))
+            self._select_corridor(data, reveal_tree=False)
+        elif isinstance(data, dict) and "corridor" in data:
+            self._expanded_corridors.add(
+                self._corridor_key(data["corridor"]))
+            self._select_corridor(
+                data["corridor"], reveal_tree=False, task=data.get("task"))
+
+    def _on_tree_dbl(self, item, _col) -> None:
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+        if isinstance(data, dict) and "task" in data:
+            self._spotlight_task(data["corridor"], data["task"])
+        elif isinstance(data, dict) and "from_core" in data:
+            self._spotlight_corridor(data)
+
+    def _jump_hotspot(self) -> None:
+        h = self._model.get("hotspot")
+        if not h:
+            return
+        found = None
+        for c in self._model.get("all_corridors") or []:
+            if c["from_core"] == h["from_core"] and c["to_core"] == h["to_core"]:
+                found = c
+                break
+        if not found:
+            return
+        if self._display_groups:
+            self._expanded_groups.add(found["from_core"])
+        self._select_corridor(found, found.get("peak_bin"))
+        if not self._on_jump:
+            return
+        t_min = self._model.get("t_min", 0)
+        t_max = self._model.get("t_max", 1)
+        bin_w = self._model.get("bin_w", 1)
+        time_bins = self._model.get("time_bins", 32)
+        bi = found.get("peak_bin", 0) or 0
+        bin_lo, bin_hi = _heatmap_bin_range(t_min, bin_w, time_bins, t_max, bi)
+        primary = (found.get("primary_task") or {}).get("mk")
+        self._freeze_scope()
+        self._on_jump(bin_lo, bin_hi, primary)
+
+    def _spotlight_corridor_bin(self, c: dict, bi: int) -> None:
+        self._spotlight_corridor(c, bi)
+
+    def _spotlight_corridor(self, c: dict, bin_index: Optional[int] = None) -> None:
+        if not self._on_spotlight:
+            return
+        self._freeze_scope()
+        t_min = self._model["t_min"]
+        t_max = self._model["t_max"]
+        bin_w = self._model["bin_w"]
+        time_bins = self._model["time_bins"]
+        if bin_index is None:
+            bin_index = c.get("peak_bin", 0)
+        bin_lo, bin_hi = _heatmap_bin_range(t_min, bin_w, time_bins, t_max, bin_index)
+        mks = {t["mk"] for t in c.get("tasks") or []}
+        primary = (c.get("primary_task") or {}).get("mk")
+        self._on_spotlight(c["from_core"], c["to_core"], c["label"],
+                           bin_lo, bin_hi, mks, primary)
+
+    def _spotlight_task(self, c: dict, t: dict) -> None:
+        if not self._on_spotlight:
+            return
+        self._freeze_scope()
+        self._on_spotlight(
+            c["from_core"], c["to_core"], f"{c['label']} · {t['label']}",
+            self._model["t_min"], self._model["t_max"], {t["mk"]}, t["mk"])
+
+    def focus_pair(self, from_core: str, to_core: str,
+                   bounce_only: bool = False) -> bool:
+        if bool(self._bounce_only) != bool(bounce_only):
+            self._bounce_btn.setChecked(bool(bounce_only))
+            self._on_bounce_toggled(bool(bounce_only))
+        else:
+            self._rebuild()
+        for c in self._model.get("all_corridors") or []:
+            if c["from_core"] == from_core and c["to_core"] == to_core:
+                self._show_topology(True)
+                self._select_corridor(c)
+                return True
+        return False
+
+    def set_filter_banner(self, label: Optional[str], count: int) -> None:
+        if label and count:
+            self._filter_lbl.setText(f"Showing {count} task(s): {label}")
+            self._filter_bar.setVisible(True)
+        else:
+            self._filter_bar.setVisible(False)
+
+    def _clear_filter(self) -> None:
+        if self._on_clear:
+            self._on_clear()
+
+    def follow_scope(self) -> None:
+        """Resume mirroring the main timeline viewport after Jump/Spotlight."""
+        self._scope_follow = True
+
+    def _freeze_scope(self) -> None:
+        self._scope_follow = False
+
+    def _on_chord_hover_info(self, info) -> None:
+        if isinstance(info, dict) and info.get("type") == "corridor":
+            self._hint.setText(
+                f"{_core_short_name(info.get('from'))}→"
+                f"{_core_short_name(info.get('to'))}: {info.get('count', 0)}")
+            return
+        self._hint.setText(self._HINT_DEFAULT)
+
+    def refresh_scope(self) -> None:
+        if not getattr(self, "_scope_follow", True) and self._model:
+            return
+        lo = hi = None
+        suffix = ""
+        wnd = self.parent()
+        if isinstance(wnd, QMainWindow):
+            tab = getattr(wnd, "_active_tab", None)
+            view = getattr(tab, "view", None) if tab is not None else None
+            if view is not None and hasattr(view, "_visible_time_ns_range"):
+                try:
+                    vlo, vhi = view._visible_time_ns_range()
+                except Exception:
+                    vlo = vhi = None
+                if vlo is not None and vhi is not None and vhi > vlo:
+                    lo, hi = int(vlo), int(vhi)
+                    suffix = (
+                        f"  (viewport: "
+                        f"{_format_time(lo, self._trace.time_scale)} … "
+                        f"{_format_time(hi, self._trace.time_scale)})")
+        if lo == self._scope_lo and hi == self._scope_hi and self._model:
+            self._scope_suffix = suffix
+            return
+        self._scope_lo, self._scope_hi = lo, hi
+        self._scope_suffix = suffix
+        self._rebuild()
+
 
 class _ChordDiagramDialog(QDialog):
     """Popup: core-to-core migration volume as a directional chord diagram."""
@@ -4046,6 +5826,7 @@ class _ChordDiagramDialog(QDialog):
             "Toggle between showing all migrations and only lock-bounce migrations\n"
             "(migrations that occurred while a mutex was held across different cores).")
         self._bounce_filter_btn.clicked.connect(self._on_bounce_filter_toggled)
+        self._bounce_filter_btn.setVisible(_trace_has_core_bounce_holds(trace))
         nav.addWidget(self._bounce_filter_btn)
         lay.addLayout(nav)
 
@@ -4072,7 +5853,7 @@ class _ChordDiagramDialog(QDialog):
         self._hint_label = QLabel(
             "Hover a core arc to highlight its migrations · chord width = "
             "migration count · color fades from source to destination core")
-        self._hint_label.setStyleSheet("color:#888888;")
+        self._hint_label.setStyleSheet(f"color:{_dim_css_color(self)};")
         self._hint_label.setWordWrap(True)
         lay.addWidget(self._hint_label)
 
@@ -6819,29 +8600,7 @@ class _StatsPanel(QWidget):
 
     def _core_util_rows(self, trace: "BtfTrace",
                         lo: Optional[int] = None, hi: Optional[int] = None) -> List[Tuple[str, float]]:
-        if lo is not None and hi is not None:
-            total_ns = hi - lo
-        else:
-            total_ns = trace.time_max - trace.time_min
-        if total_ns <= 0:
-            return []
-        rows: List[Tuple[str, float]] = []
-        for core in trace.core_names:
-            segs = trace.core_segs.get(core, [])
-            if lo is not None and hi is not None:
-                active_ns = sum(
-                    _seg_overlap_ns(s, lo, hi) for s in segs
-                    if (_tn := _parse_task_name(s.task)[2]) != "TICK"
-                    and not _is_idle_task_name(_tn)
-                )
-            else:
-                active_ns = sum(
-                    s.end - s.start for s in segs
-                    if (_tn := _parse_task_name(s.task)[2]) != "TICK"
-                    and not _is_idle_task_name(_tn)
-                )
-            rows.append((core, 100.0 * active_ns / total_ns))
-        return rows
+        return _core_util_pct_rows(trace, lo, hi)
 
     def _task_cpu_rows(self, trace: "BtfTrace", limit: int = 10,
                        lo: Optional[int] = None, hi: Optional[int] = None) -> List[Tuple[str, str, float]]:
@@ -6852,15 +8611,21 @@ class _StatsPanel(QWidget):
         if total_ns <= 0:
             return []
         task_times: Dict[str, int] = {}
-        for mk, segs in trace.seg_map_by_merge_key.items():
-            raw = trace.task_repr.get(mk, mk)
-            _, _, tname = _parse_task_name(raw)
-            if _is_idle_task_name(tname) or tname == "TICK":
-                continue
-            if lo is not None and hi is not None:
-                task_times[mk] = sum(_seg_overlap_ns(s, lo, hi) for s in segs)
-            else:
-                task_times[mk] = sum(s.end - s.start for s in segs)
+        if lo is None and hi is None and trace.task_cpu_ns:
+            task_times = dict(trace.task_cpu_ns)
+        else:
+            for mk, segs in trace.seg_map_by_merge_key.items():
+                raw = trace.task_repr.get(mk, mk)
+                _, _, tname = _parse_task_name(raw)
+                if _is_idle_task_name(tname) or tname == "TICK":
+                    continue
+                if lo is not None and hi is not None:
+                    task_times[mk] = sum(
+                        _seg_overlap_ns(s, lo, hi)
+                        for s in _task_segs_in_range(trace, mk, lo, hi)
+                    )
+                else:
+                    task_times[mk] = sum(s.end - s.start for s in segs)
 
         rows: List[Tuple[str, str, float]] = []
         for mk, t_ns in sorted(task_times.items(), key=lambda kv: kv[1], reverse=True)[:limit]:

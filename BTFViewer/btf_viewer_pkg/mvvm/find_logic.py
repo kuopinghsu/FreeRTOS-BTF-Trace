@@ -112,7 +112,7 @@ def _find_sti_hits(trace: BtfTrace, query: str, regex_obj: Optional[re.Pattern])
 def _find_interval_hits(trace: BtfTrace, query: str, regex_obj: Optional[re.Pattern]) -> List[int]:
     hits: List[int] = []
     for inst in getattr(trace, "interval_instances", ()):
-        hay = f"{inst.interval_id} {inst.task_id or ''} {inst.start_ns} {inst.stop_ns}"
+        hay = f"{inst.id} {inst.task_id or ''} {inst.start_ns} {inst.stop_ns}"
         if _haystack_matches(query, "contains", hay, regex_obj):
             hits.extend([inst.start_ns, inst.stop_ns])
     for ev in getattr(trace, "sti_events", ()):

@@ -16,7 +16,7 @@ import { bisectLeft, bisectRight } from '../utils/bisect.js'
 import { applyBtfVersionWarning } from '../utils/btfMeta.js'
 import { makeLodSummary, segmentStartsF64, LOD_SUMMARY_BINS, LOD_SUMMARY_BINS_ULTRA } from '../utils/lod.js'
 import { parseTaskName, taskMergeKey, taskSortKey, resetStiColors } from '../utils/colors.js'
-import { buildMigrationIndex } from '../utils/migrationAnalysis.js'
+import { buildMigrationIndex, prepareFullTraceStats } from '../utils/migrationAnalysis.js'
 import { analyzeTickHealth } from '../utils/tickHealth.js'
 import {
   buildIntervalData,
@@ -83,6 +83,40 @@ function compareCores(a, b) {
 }
 
 // ---- Main parser ----------------------------------------------------------
+
+/**
+ * Time span covering painted timeline activity (run segments, STI, tick marks).
+ * Boot-time task_create / set_frequency events are excluded so Fit-to-Window
+ * does not leave a blank left margin (e.g. 128-core create storms ~20 ms).
+ *
+ * @returns {{ lo: number, hi: number } | null}
+ */
+export function drawableTimeRange(segments, stiEvents = [], tickStiTimes = []) {
+  let lo = Infinity
+  let hi = -Infinity
+  if (segments) {
+    for (const s of segments) {
+      if (s.start < lo) lo = s.start
+      if (s.end > hi) hi = s.end
+    }
+  }
+  if (stiEvents) {
+    for (const e of stiEvents) {
+      const t = e.time
+      if (t < lo) lo = t
+      if (t > hi) hi = t
+    }
+  }
+  if (tickStiTimes) {
+    for (let i = 0; i < tickStiTimes.length; i++) {
+      const t = tickStiTimes[i]
+      if (t < lo) lo = t
+      if (t > hi) hi = t
+    }
+  }
+  if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo) return null
+  return { lo, hi }
+}
 
 /**
  * Parse a BTF file text string and return a BtfTrace object.
@@ -362,7 +396,10 @@ export async function parseBtf(text, progressCallback) {
   for (const [mk, segs] of segsByMkBuild) {
     segsByMk.set(mk, segs.sort((a, b) => a.start - b.start))
   }
-  const { migrations, migrationsByMk } = buildMigrationIndex(segsByMk)
+  progress(56, 'Indexing migrations…')
+  await yieldToHost()
+  const { migrations, migrationsByMk, migrationTimes } = buildMigrationIndex(segsByMk)
+  const migratedMks = new Set(migrationsByMk.keys())
 
   // STI channels
   const stiChannels = [...new Set(stiEvents.map(e => e.target))]
@@ -460,6 +497,12 @@ export async function parseBtf(text, progressCallback) {
   // -----------------------------------------------------------------------
   progress(70, 'Building task LOD summaries…')
   await yieldToHost()
+
+  const drawn = drawableTimeRange(segments, stiEvents, tickStiTimes)
+  if (drawn) {
+    timeMin = drawn.lo
+    timeMax = drawn.hi
+  }
 
   const timeSpan = Math.max(timeMax - timeMin, 1)
   const lodTimescalePerPx      = timeSpan / LOD_SUMMARY_BINS
@@ -577,7 +620,10 @@ export async function parseBtf(text, progressCallback) {
 
   applyBtfVersionWarning(meta)
 
-  return {
+  progress(99, 'Preparing statistics…')
+  await yieldToHost()
+
+  const trace = {
     // ---- Metadata ----
     timeScale,
     meta,
@@ -659,7 +705,11 @@ export async function parseBtf(text, progressCallback) {
     // ---- Core migrations ----
     migrations,
     migrationsByMk,
+    migrationTimes,
+    migratedMks,
   }
+  prepareFullTraceStats(trace)
+  return trace
 }
 
 /**

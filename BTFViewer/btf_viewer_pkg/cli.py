@@ -188,7 +188,7 @@ Headless analysis commands (desktop only — no GUI, no Qt window):
   report       Full statistics export (Statistics panel → Export CSV/HTML).
   compare      Two-trace diff (Trace Compare dialog → Export).
   migrations   Core Migrations table only (CSV).
-  snapshot     Export a PNG/SVG image (timeline, migration heatmap, or a
+  snapshot     Export a PNG/SVG image (timeline, migration inspector, or a
                statistics metric plot) without opening the GUI.
   perfetto     Export Chrome Trace JSON for https://ui.perfetto.dev
                (same as File → Export Perfetto…).
@@ -329,15 +329,14 @@ Views (--view):
              (no filter).  --cpu-load appends the synchronised CPU Load strip;
              with a locked --task it shows that task's usage on each core.
              Without --lo/--hi the timeline fits the full trace (Fit to Window).
-  heatmap    Migration Heatmap (core-pair x time-bin grid). --task is not
-             supported (the heatmap is inherently cross-task); --lo/--hi
-             scope the grid to a time range. --drill-row/--drill-bin drill
-             into the per-task grid for one core-pair row and time bin
-             (matrix-mode heatmaps, >16 cores, are not drillable headlessly).
-  chord      Migration Chord Diagram (directional core-to-core migration
-             volume as a circular chord diagram). --task/--drill-row/
-             --drill-bin are not supported; --lo/--hi scope the diagram to
-             a time range. Requires a multi-core trace (2+ cores).
+  heatmap    Migration & Corridor Inspector (tree + time-bin grid; topology
+             sidebar collapsed). --task is not supported; --lo/--hi scope
+             the inspector. --drill-row selects that corridor (0 = top) and
+             expands its tasks; --drill-bin highlights that time bin
+             (default: peak bin). Requires 2+ cores.
+  chord      Same inspector with the topology sidebar expanded (mini-chord).
+             --drill-row/--drill-bin select a corridor as for heatmap;
+             --lo/--hi scope the diagram. Requires 2+ cores.
   plot       A statistics metric scatter+histogram popup, selected with
              --metric:
                tick       tick-interval distribution (trace-wide, no --task)
@@ -358,9 +357,8 @@ Views (--view):
                switch_overhead  per-core kernel switch gaps      (--core)
                concurrency  interval dwell at N active cores     (--active-cores)
 
-Sizing (--width/--height): only used for --view timeline / --view plot; the
-heatmap and chord diagram image sizes are derived from their data (grid /
-default dialog size respectively).
+Sizing (--width/--height): timeline / plot / inspector dialog size
+(heatmap + chord default 1000×680).
 
 examples:
   %(prog)s trace.btf -o timeline.png --view timeline
@@ -368,9 +366,9 @@ examples:
   %(prog)s trace.btf -o migrate.svg --view timeline --view-mode task --task "CS[22]" --lo 1805000 --hi 1865000
   %(prog)s trace.btf -o cpu-load.svg --view timeline --view-mode task --task "CS[22]" --cpu-load
   %(prog)s trace.btf -o heatmap.png --view heatmap
-  %(prog)s trace.btf -o heatmap-tasks.svg --view heatmap --drill-row 0 --drill-bin 3
+  %(prog)s trace.btf -o inspector.svg --view heatmap --drill-row 0
   %(prog)s trace.btf -o chord.png --view chord
-  %(prog)s trace.btf -o chord.svg --view chord
+  %(prog)s trace.btf -o chord.svg --view chord --drill-row 0
   %(prog)s trace.btf -o tick.svg --view plot --metric tick
   %(prog)s trace.btf -o exec.png --view plot --metric exec --task "Producer[1]"
   %(prog)s trace.btf -o preempt.png --view plot --metric preempt --task "Producer[1]" --preemptor "Consumer[2]"
@@ -546,7 +544,7 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
         help="export a PNG/SVG image (timeline, migration heatmap, or a metric plot)",
         description=(
             "Export a PNG/SVG image without opening the GUI: the main timeline view, "
-            "the Migration Heatmap, or a statistics metric scatter+histogram plot."
+            "the Migration & Corridor Inspector, or a statistics metric plot."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=_CLI_EPILOG_SNAPSHOT,
@@ -637,24 +635,31 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
     snapshot.add_argument(
         "--drill-row", type=int, default=None, metavar="N", dest="drill_row",
         help=(
-            "core-pair row index (0-based, top row = 0) to drill into the "
-            "per-task grid; requires --drill-bin (--view heatmap only, not chord)"
+            "corridor row index (0-based, top = 0) to select and expand; "
+            "optional --drill-bin highlights that time bin (default: peak). "
+            "--view heatmap/chord"
         ),
     )
     snapshot.add_argument(
         "--drill-bin", type=int, default=None, metavar="N", dest="drill_bin",
         help=(
-            "time-bin column index (0-based, leftmost = 0) to drill into the "
-            "per-task grid; requires --drill-row (--view heatmap only)"
+            "time-bin column index (0-based, leftmost = 0) to highlight; "
+            "requires --drill-row (--view heatmap/chord)"
         ),
     )
     snapshot.add_argument(
         "--width", type=int, default=None, metavar="PX",
-        help="image width in pixels (--view timeline default 1600, --view plot default 820)",
+        help=(
+            "image width in pixels (timeline default 1600, plot 820, "
+            "heatmap/chord inspector 1000)"
+        ),
     )
     snapshot.add_argument(
         "--height", type=int, default=None, metavar="PX",
-        help="image height in pixels (--view timeline default 900, --view plot default 620)",
+        help=(
+            "image height in pixels (timeline default 900, plot 620, "
+            "heatmap/chord inspector 680)"
+        ),
     )
     snapshot.add_argument(
         "--theme", choices=("dark", "light"), default="dark",
@@ -1103,36 +1108,6 @@ def _cli_scroll_view_to_task(view: "TimelineView", task_mk: str) -> None:
         cur = view.mapToScene(vp.center())
         view.centerOn(orth, cur.y())
 
-def _cli_apply_heatmap_scope(dlg: "_MigrationHeatmapDialog",
-                             lo: Optional[int], hi: Optional[int]) -> None:
-    """Rebuild the level-0 grid for an explicit [lo, hi] scope.
-
-    Standalone equivalent of _MigrationHeatmapDialog.refresh_scope(), which
-    normally derives lo/hi from cursor times on a QMainWindow parent (there
-    is none in headless CLI use).
-    """
-    if lo is None or hi is None:
-        return
-    trace = dlg._trace
-    dlg._scope_lo, dlg._scope_hi = lo, hi
-    dlg._scope_suffix = (
-        f"  ({_format_time(lo, trace.time_scale)} \u2026 {_format_time(hi, trace.time_scale)})")
-    if dlg._apply_scope_cache(lo, hi):
-        dlg._go_level0()
-        return
-    pairs, grid, time_bins = _migration_heatmap_data(trace, lo, hi, bounce_only=dlg._bounce_only)
-    dlg._pairs = pairs
-    dlg._grid0 = grid
-    if dlg._uses_matrix:
-        dlg._matrix_cores, dlg._matrix_grid = _migration_heatmap_matrix(
-            trace, lo, hi, bounce_only=dlg._bounce_only)
-    span = max(hi - lo, 1)
-    dlg._cache_scope_grid(lo, hi, pairs, grid, time_bins, lo, hi, span)
-    dlg._ov_t_min, dlg._ov_t_max = lo, hi
-    dlg._ov_bin_w = span / time_bins
-    dlg._ov_time_bins = time_bins
-    dlg._go_level0()
-
 def _cli_snapshot_timeline(trace: "BtfTrace",
                           args: argparse.Namespace
                           ) -> Tuple[Optional["TimelineView"], Optional[str],
@@ -1242,60 +1217,64 @@ def _cli_apply_theme_chrome(app: "QApplication", is_dark: bool) -> None:
     """)
 
 
-def _cli_snapshot_heatmap(trace: "BtfTrace",
-                         args: argparse.Namespace) -> Tuple[Optional["_MigrationHeatmapDialog"], Optional[str]]:
+def _cli_snapshot_inspector(
+    trace: "BtfTrace", args: argparse.Namespace, *, initial_mode: str,
+) -> Tuple[Optional["_CorridorInspectorDialog"], Optional[str]]:
+    """Headless Migration & Corridor Inspector (heatmap + chord entry points)."""
     if args.metric is not None:
-        print("warning: --metric is ignored for --view heatmap", file=sys.stderr)
+        print("warning: --metric is ignored for --view heatmap/chord", file=sys.stderr)
     if args.task:
-        return None, "error: --task is not supported for --view heatmap (cross-task view)"
-    if (args.drill_row is None) != (args.drill_bin is None):
-        return None, "error: --drill-row requires --drill-bin (and vice versa)"
-    dlg = _MigrationHeatmapDialog(trace, parent=None)
-    if args.lo is not None and args.hi is not None:
-        _cli_apply_heatmap_scope(dlg, args.lo, args.hi)
-    if args.drill_row is not None:
-        if dlg._uses_matrix:
-            return None, (
-                "error: --drill-row/--drill-bin is not supported for matrix-mode "
-                "heatmaps (>16 cores); drill interactively in the GUI instead")
-        row, bi = args.drill_row, args.drill_bin
-        if row < 0 or row >= len(dlg._pairs):
-            return None, f"error: --drill-row {row} out of range (0..{len(dlg._pairs) - 1})"
-        if bi < 0 or bi >= dlg._time_bins:
-            return None, f"error: --drill-bin {bi} out of range (0..{dlg._time_bins - 1})"
-        if not dlg._grid0 or dlg._grid0[row][bi] <= 0:
-            return None, f"error: no migrations at --drill-row {row} --drill-bin {bi}"
-        fc, tc, label = dlg._pairs[row]
-        bin_lo, bin_hi = _heatmap_bin_range(
-            dlg._t_min, dlg._bin_w, dlg._time_bins, dlg._t_max, bi)
-        dlg._go_level1(fc, tc, label, bin_lo, bin_hi, bi)
-    dlg.show()
-    _process_ui_events_safely()
-    return dlg, None
-
-def _cli_snapshot_chord(trace: "BtfTrace",
-                        args: argparse.Namespace) -> Tuple[Optional["_ChordDiagramDialog"], Optional[str]]:
-    if args.metric is not None:
-        print("warning: --metric is ignored for --view chord", file=sys.stderr)
-    if args.task:
-        return None, "error: --task is not supported for --view chord (cross-task view)"
-    if args.drill_row is not None or args.drill_bin is not None:
-        return None, "error: --drill-row/--drill-bin are not supported for --view chord"
+        return None, "error: --task is not supported for --view heatmap/chord"
     if not _trace_is_multi_core(trace):
-        return None, "error: --view chord requires a multi-core trace (2+ cores)"
-    dlg = _ChordDiagramDialog(trace, parent=None)
+        return None, "error: --view heatmap/chord requires a multi-core trace (2+ cores)"
+    if args.drill_bin is not None and args.drill_row is None:
+        return None, "error: --drill-bin requires --drill-row"
+    dlg = _CorridorInspectorDialog(trace, parent=None, initial_mode=initial_mode)
+    dlg.resize(int(args.width or 1000), int(args.height or 680))
     if args.lo is not None and args.hi is not None:
-        dlg._scope_lo, dlg._scope_hi = args.lo, args.hi
+        dlg._scope_lo, dlg._scope_hi = int(args.lo), int(args.hi)
         dlg._scope_suffix = (
             f"  ({_format_time(args.lo, trace.time_scale)} \u2026 "
             f"{_format_time(args.hi, trace.time_scale)})")
-        dlg._reload_data()
         dlg._rebuild()
-    if not dlg._has_data():
-        return None, "error: no migrations in scope for --view chord"
+    if not (dlg._model or {}).get("has_data"):
+        return None, "error: no migrations in scope for --view heatmap/chord"
+    if args.drill_row is not None:
+        vis = dlg._display_corridors or []
+        row = int(args.drill_row)
+        if row < 0 or row >= len(vis):
+            return None, (
+                f"error: --drill-row {row} out of range "
+                f"(0..{max(len(vis) - 1, 0)})")
+        c = vis[row]
+        bins = int(dlg._model.get("time_bins") or 32)
+        bi = args.drill_bin
+        if bi is None:
+            bi = c.get("peak_bin", 0)
+        elif int(bi) < 0 or int(bi) >= bins:
+            return None, f"error: --drill-bin {bi} out of range (0..{bins - 1})"
+        dlg._expanded_corridors.add(dlg._corridor_key(c))
+        dlg._populate_tree()
+        dlg._select_corridor(c, int(bi) if bi is not None else None)
     dlg.show()
     _process_ui_events_safely()
+    dlg._apply_sidebar_layout()
+    dlg._fit_tree_pane()
+    dlg._grid._sync_overlay()
+    _process_ui_events_safely()
+    dlg._grid._sync_overlay()
+    _process_ui_events_safely()
     return dlg, None
+
+def _cli_snapshot_heatmap(trace: "BtfTrace",
+                         args: argparse.Namespace
+                         ) -> Tuple[Optional["_CorridorInspectorDialog"], Optional[str]]:
+    return _cli_snapshot_inspector(trace, args, initial_mode="heatmap")
+
+def _cli_snapshot_chord(trace: "BtfTrace",
+                        args: argparse.Namespace
+                        ) -> Tuple[Optional["_CorridorInspectorDialog"], Optional[str]]:
+    return _cli_snapshot_inspector(trace, args, initial_mode="chord")
 
 def _cli_snapshot_plot(trace: "BtfTrace",
                        args: argparse.Namespace) -> Tuple[Optional["_MetricsPlotDialog"], Optional[str]]:
@@ -1460,14 +1439,14 @@ def _cli_snapshot_run(args: argparse.Namespace) -> int:
         if getattr(args, "cpu_load", False):
             print("warning: --cpu-load is ignored for --view heatmap", file=sys.stderr)
         widget, err = _cli_snapshot_heatmap(trace, args)
-        title = "Migration Heatmap"
+        title = "Migration & Corridor Inspector"
     elif args.view == "chord":
         if getattr(args, "view_mode", "task") != "task":
             print("warning: --view-mode is ignored for --view chord", file=sys.stderr)
         if getattr(args, "cpu_load", False):
             print("warning: --cpu-load is ignored for --view chord", file=sys.stderr)
         widget, err = _cli_snapshot_chord(trace, args)
-        title = "Migration Chord Diagram"
+        title = "Migration & Corridor Inspector"
     else:
         if getattr(args, "view_mode", "task") != "task":
             print("warning: --view-mode is ignored for --view plot", file=sys.stderr)
@@ -1485,16 +1464,10 @@ def _cli_snapshot_run(args: argparse.Namespace) -> int:
                 _cli_save_timeline_svg(widget, out_path, cpu_graph)
             else:
                 _cli_save_timeline_png(widget, out_path, cpu_graph)
-        elif args.view == "heatmap":
+        elif args.view in ("heatmap", "chord"):
             if fmt == "svg":
-                widget._canvas.render_full_svg(out_path, title)
-            elif not widget._canvas.render_full_pixmap().save(out_path):
-                print(f"error: could not save PNG: {out_path}", file=sys.stderr)
-                return 1
-        elif args.view == "chord":
-            if fmt == "svg":
-                widget._canvas.render_full_svg(out_path, title)
-            elif not _cli_save_widget_png(widget._canvas, out_path):
+                _cli_save_widget_svg(widget, out_path, title)
+            elif not _cli_save_widget_png(widget, out_path):
                 print(f"error: could not save PNG: {out_path}", file=sys.stderr)
                 return 1
         else:
@@ -1555,14 +1528,24 @@ _CLI_COMMANDS = {
     "perfetto": _cli_perfetto_main,
 }
 
-def _cli_gui_trace_paths(argv: List[str]) -> List[str]:
-    """Normalize existing .btf paths from GUI argv (preserves order, dedupes)."""
+def _cli_gui_trace_paths(argv: List[str],
+                         base_dir: Optional[str] = None) -> List[str]:
+    """Normalize existing .btf paths from GUI argv (preserves order, dedupes).
+
+    Relative paths are resolved against *base_dir* (launch cwd).  Qt on Windows
+    may change the process cwd when QApplication starts, so callers must pass
+    the pre-Qt working directory.
+    """
+    root = os.path.abspath(base_dir or os.getcwd())
     seen: set = set()
     out: List[str] = []
     for arg in argv:
         if arg.startswith("-"):
             continue
-        path = os.path.abspath(os.path.expanduser(arg))
+        path = os.path.expanduser(arg)
+        if not os.path.isabs(path):
+            path = os.path.join(root, path)
+        path = os.path.abspath(path)
         if not os.path.isfile(path):
             print(f"warning: trace file not found, skipping: {arg}", file=sys.stderr)
             continue
@@ -1574,6 +1557,7 @@ def _cli_gui_trace_paths(argv: List[str]) -> List[str]:
 
 def main() -> None:
     argv = sys.argv[1:]
+    launch_cwd = os.getcwd()
     parser, _subs = _make_arg_parser()
 
     if argv in (["-h"], ["--help"]):
@@ -1588,6 +1572,9 @@ def main() -> None:
         print(f"\nerror: unrecognized arguments: {' '.join(argv)}", file=sys.stderr)
         raise SystemExit(2)
 
+    # Resolve before QApplication — Windows Qt may chdir to the script folder.
+    cli_paths = _cli_gui_trace_paths(argv, base_dir=launch_cwd)
+
     _platform_preflight()
     app = _bootstrap_qt_app(sys.argv)
     _install_macos_stderr_filter()
@@ -1599,8 +1586,6 @@ def main() -> None:
     win = MainWindow()
     win.show()
     _process_ui_events_safely()  # ensure the window is painted before any file open
-
-    cli_paths = _cli_gui_trace_paths(argv)
     if cli_paths:
         win._session_restore_active_idx = 0
         win._session_restore_queue = cli_paths[1:]

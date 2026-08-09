@@ -66,11 +66,11 @@
             v-model.trim="taskQuery"
             type="search"
             class="ci-task-filter"
-            placeholder="name or id"
+            placeholder="name or exact id"
           >
         </label>
-        <span class="ci-sub">{{ subtitle }}</span>
       </div>
+      <div class="ci-sub">{{ subtitle }}</div>
 
       <div
         v-if="model.hotspot"
@@ -94,7 +94,7 @@
           v-if="!model.hasData"
           class="ci-empty ci-empty-main"
         >
-          No migrations in scope.
+          {{ taskQuery ? 'No corridors match this task filter.' : 'No migrations in scope.' }}
         </div>
         <div
           v-else
@@ -479,7 +479,9 @@ const scopeSuffix = computed(() => {
 const traceHasBounces = computed(() => traceHasCoreBounceHolds(props.trace))
 
 const baseModel = computed(() => {
-  const { lo, hi } = scopeLoHi.value
+  const q = String(taskQuery.value || '').trim()
+  // A task-id search must not be limited to the current zoom window.
+  const { lo, hi } = q ? { lo: null, hi: null } : scopeLoHi.value
   return buildCorridorInspectorModel(props.trace, lo, hi, {
     bounceOnly: bounceOnly.value,
     topPct: 100,
@@ -487,14 +489,30 @@ const baseModel = computed(() => {
   })
 })
 
-const model = computed(() => applyCorridorDirectionFilter(
-  applyCorridorTaskFilter(
-    applyCorridorTopFilter(baseModel.value, topPct.value),
-    taskQuery.value,
-  ),
-  directionMode.value,
-  selectedCorridor.value,
-))
+const model = computed(() => {
+  const q = String(taskQuery.value || '').trim()
+  // Name/id search uses every in-scope corridor; Top-N applies only when idle.
+  const scoped = q
+    ? applyCorridorTaskFilter(baseModel.value, q)
+    : applyCorridorTopFilter(baseModel.value, topPct.value)
+  return applyCorridorDirectionFilter(
+    scoped,
+    directionMode.value,
+    selectedCorridor.value,
+  )
+})
+
+watch(
+  () => [taskQuery.value, model.value.corridors],
+  () => {
+    const q = String(taskQuery.value || '').trim()
+    if (!q) return
+    for (const c of model.value.corridors || []) {
+      expandedCorridors.add(c.label)
+      if (model.value.groupBySource) expandedGroups.add(c.fromCore)
+    }
+  },
+)
 
 const gridContentH = computed(() => {
   const n = model.value.corridors?.length || 0
@@ -1005,7 +1023,7 @@ onBeforeUnmount(() => {
 }
 .ci-toolbar {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 10px;
   margin-top: 8px;
@@ -1044,7 +1062,11 @@ onBeforeUnmount(() => {
 .ci-sub {
   font-size: 11px;
   color: var(--fg-dim);
-  margin-left: auto;
+  margin-top: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
 }
 .ci-triage {
   display: flex;

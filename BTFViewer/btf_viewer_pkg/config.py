@@ -389,29 +389,27 @@ _PORTABLE_FIND_MODES = (
 )
 
 def _snapshot_tab_filters(scene) -> dict:
-    """Per-tab legend/heatmap filter state (portable session + tab_view rc)."""
-    mks = scene._heatmap_filter_mks
+    """Per-tab legend filter state (portable session + tab_view rc).
+
+    Heatmap spotlight is ephemeral — never persist taskFilterKeys / label.
+    """
     return {
         "taskFilterText": scene._task_filter_q or "",
         "migratedOnlyFilter": bool(scene._migrated_only_filter),
-        "taskFilterKeys": sorted(mks) if mks else None,
-        "heatmapFilterLabel": scene._heatmap_filter_label,
+        "taskFilterKeys": None,
+        "heatmapFilterLabel": None,
     }
 
 def _sanitize_tab_filters(src) -> Optional[dict]:
     if not isinstance(src, dict):
         return None
-    keys = src.get("taskFilterKeys")
-    if keys is not None:
-        keys = [str(k) for k in keys if k is not None and str(k)]
-        if not keys:
-            keys = None
     return {
         "taskFilterText": str(src.get("taskFilterText") or ""),
         "migratedOnlyFilter": bool(src.get("migratedOnlyFilter")),
-        "taskFilterKeys": keys,
-        "heatmapFilterLabel": (str(src["heatmapFilterLabel"])
-                               if src.get("heatmapFilterLabel") is not None else None),
+        # Heatmap drill-down is session-ephemeral: opening a trace always
+        # shows all tasks (ignore legacy rc / portable JSON keys).
+        "taskFilterKeys": None,
+        "heatmapFilterLabel": None,
     }
 _META_KEY_RE = re.compile(r"^[\w.-]+$")
 _MAX_FIND_REGEX_LEN = 200
@@ -629,6 +627,20 @@ _IC_CPU_LOAD = ("M1 11a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1H2a1 1 0 0 1
 _IC_HEATMAP = ("M1 1h4v4H1V1zm5 0h4v4H6V1zm5 0h4v4h-4V1z"
                "M1 6h4v4H1V6zm5 0h4v4H6V6zm5 0h4v4h-4V6z"
                "M1 11h4v4H1v-4zm5 0h4v4H6v-4zm5 0h4v4h-4v-4z")
+_HEATMAP_CLEAR_SLASH = "#E24B4A"
+
+
+def _heatmap_clear_icon(fg: str = "#9E9E9E", *, is_dark: bool = True) -> "QIcon":
+    """Heatmap grid with a red prohibition slash — clear spotlight/filter."""
+    outline = "#1E1E1E" if is_dark else "#FFFFFF"
+    inner = (
+        f'<path fill="{fg}" fill-rule="evenodd" d="{_IC_HEATMAP}"/>'
+        f'<line x1="2" y1="14" x2="14" y2="2" stroke="{outline}" '
+        f'stroke-width="3.4" stroke-linecap="round"/>'
+        f'<line x1="2" y1="14" x2="14" y2="2" stroke="{_HEATMAP_CLEAR_SLASH}" '
+        f'stroke-width="2" stroke-linecap="round"/>'
+    )
+    return _svg_icon_markup(inner)
 _IC_CHORD = ("M8 1 A7 7 0 1 0 8 15 A7 7 0 1 0 8 1 Z"
              "M8 3.5 A4.5 4.5 0 1 0 8 12.5 A4.5 4.5 0 1 0 8 3.5 Z"
              "M4 6 L5 5 L12 10 L11 11 Z"

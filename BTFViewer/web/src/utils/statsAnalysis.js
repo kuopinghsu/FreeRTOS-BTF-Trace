@@ -3,7 +3,7 @@
  */
 
 import { segFullyInRange } from './statsRange.js'
-import { bisectRight } from './bisect.js'
+import { bisectLeft, bisectRight } from './bisect.js'
 import { parseTaskName, taskMergeKey, taskDisplayName, isIdleTaskName, taskReprGet } from './colors.js'
 import { formatTime } from './timeFormat.js'
 
@@ -84,14 +84,38 @@ export function minNs(values) {
   return m
 }
 
+/** Core segments overlapping [lo, hi] via start-time bisect. */
+export function coreSegsInRange(trace, core, lo, hi) {
+  const segs = trace?.coreSegs?.get?.(core) || []
+  if (!segs.length || lo == null || hi == null) return segs
+  const starts = trace.coreSegStarts?.get?.(core)
+  if (!starts?.length) return segs
+  const i0 = Math.max(0, bisectLeft(starts, lo) - 1)
+  const i1 = bisectRight(starts, hi)
+  return typeof segs.slice === 'function' ? segs.slice(i0, i1) : (() => {
+    const out = []
+    for (let i = i0; i < i1; i++) out.push(segs[i])
+    return out
+  })()
+}
+
 /** Context-switch count and inter-slice core gaps within optional scope. */
 export function schedulingStats(trace, lo, hi) {
+  if (lo == null && hi == null
+      && trace?.schedCtxSwitches != null
+      && Array.isArray(trace.schedCoreGaps)) {
+    return {
+      contextSwitches: trace.schedCtxSwitches,
+      coreGaps: trace.schedCoreGaps,
+      gapMax: trace.schedGapMax ?? maxNs(trace.schedCoreGaps),
+    }
+  }
   let contextSwitches = 0
   const gaps = []
   let gapMax = 0
   const cores = trace.coreNames || []
   for (const core of cores) {
-    const segs = trace.coreSegs?.get(core) || []
+    const segs = coreSegsInRange(trace, core, lo, hi)
     for (let i = 1; i < segs.length; i++) {
       const prev = segs[i - 1]
       const curr = segs[i]

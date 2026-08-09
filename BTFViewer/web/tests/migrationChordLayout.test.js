@@ -9,6 +9,8 @@ import {
   distToQuadraticBezier,
   CHORD_ARC_INNER,
   CHORD_ARC_OUTER,
+  chordLabelStep,
+  chordLabelVisible,
   traceHasCoreBounceHolds,
 } from '../src/utils/migrationAnalysis.js'
 
@@ -141,5 +143,21 @@ describe('traceHasCoreBounceHolds', () => {
       ]),
     }
     assert.equal(traceHasCoreBounceHolds(trace), true)
+  })
+})
+
+describe('chordLabelStep', () => {
+  it('shows every label for small core counts and strides for dense rings', () => {
+    assert.equal(chordLabelStep(8), 1)
+    assert.equal(chordLabelStep(16), 1)
+    assert.equal(chordLabelStep(32), 2)
+    assert.equal(chordLabelStep(64), 5)
+    assert.equal(chordLabelStep(128), 8)
+    assert.equal(chordLabelVisible(0, 5), true)
+    assert.equal(chordLabelVisible(5, 5), true)
+    assert.equal(chordLabelVisible(10, 5), true)
+    assert.equal(chordLabelVisible(3, 5), false)
+    assert.equal(chordLabelVisible(3, 5, new Set([3])), true)
+    assert.ok(chordLabelStep(40, 20, 80) >= 5)
   })
 })

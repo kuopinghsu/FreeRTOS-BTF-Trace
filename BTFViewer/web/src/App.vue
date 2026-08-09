@@ -14,6 +14,7 @@
       :heatmap-enabled="heatmapEnabled"
       :analysis-enabled="!!trace"
       :task-filter-active="!!timelineOptions.taskFilterKeys?.length"
+      :range-enabled="rangeEnabled"
       :loading="loading"
       :loading-pct="loadingPct"
       :loading-msg="loadingMsg"
@@ -36,7 +37,6 @@
       @export-svg="onExportSvg"
       @export-perfetto="onExportPerfetto"
       @show-heatmap="onOpenHeatmap"
-      @show-chord="chordOpen = true"
       @show-analysis="analysisOpen = true"
       @clear-task-filter="clearHeatmapTaskFilter"
       @show-help="openHelpDialog"
@@ -767,25 +767,20 @@
       @jump-end="onJumpToTraceEnd"
     />
 
-    <MigrationHeatmapDialog
-      v-if="heatmapOpen && trace"
+    <CorridorInspectorDialog
+      v-if="inspectorOpen && trace"
       :trace="trace"
-      :cursors="cursors"
+      :viewport="timelineViewport"
+      :viewport-programmatic="inspectorVpProgrammatic"
       :task-filter-active="!!timelineOptions.taskFilterKeys?.length"
       :task-filter-label="timelineOptions.heatmapFilterLabel"
       :task-filter-count="timelineOptions.taskFilterKeys?.length ?? 0"
-      :focus-pair="heatmapFocusPair"
-      @close="onHeatmapClose"
-      @drill-down="onHeatmapDrillDown"
+      :focus-pair="inspectorFocusPair"
+      :initial-mode="inspectorMode"
+      @close="onInspectorClose"
+      @spotlight="onCorridorSpotlight"
+      @jump="onCorridorJump"
       @clear-filter="clearHeatmapTaskFilter"
-    />
-
-    <ChordDiagramDialog
-      v-if="chordOpen && trace"
-      :trace="trace"
-      :cursors="cursors"
-      :focus-pair="chordFocusPair"
-      @close="onChordClose"
     />
 
     <AnalysisFindingsDialog
@@ -893,8 +888,7 @@ import LegendPanel      from './components/LegendPanel.vue'
 import StatisticsPanel  from './components/StatisticsPanel.vue'
 import MarksPanel       from './components/MarksPanel.vue'
 import SnapshotEditor   from './components/SnapshotEditor.vue'
-import MigrationHeatmapDialog from './components/MigrationHeatmapDialog.vue'
-import ChordDiagramDialog from './components/ChordDiagramDialog.vue'
+import CorridorInspectorDialog from './components/CorridorInspectorDialog.vue'
 import AnalysisFindingsDialog from './components/AnalysisFindingsDialog.vue'
 import FindPanel from './components/FindPanel.vue'
 import AiAssistantPanel from './components/AiAssistantPanel.vue'
@@ -921,7 +915,7 @@ import { loadSettings, saveSettings, applySettingsToRuntime, resizeTabCursors, n
 import { setTimelineLayout } from './utils/timelineLayout.js'
 import { traceIsMultiCore } from './utils/migrationAnalysis.js'
 import { collectTraceAnalysisFindings, formatAnalysisFindingsText } from './utils/workflowAnalysis.js'
-import { getStatsRange, scopeSuffix } from './utils/statsRange.js'
+import { getPlacedCursors, getStatsRange, scopeSuffix } from './utils/statsRange.js'
 import { buildAllCompareTables, buildCompareCsv } from './utils/traceCompare.js'
 import {
   cpuLoadPreferredPaneHeight, cpuLoadPaneDefaultH, cpuLoadPaneMaxH,
@@ -979,12 +973,12 @@ const loadingFileName = ref('')
 const helpOpen   = ref(false)
 const aboutOpen  = ref(false)
 const settingsOpen = ref(false)
-const heatmapOpen = ref(false)
-const chordOpen = ref(false)
-const heatmapFocusPair = ref(null)
-const chordFocusPair = ref(null)
+const inspectorOpen = ref(false)
+const inspectorMode = ref('heatmap') // 'heatmap' | 'chord'
+const inspectorFocusPair = ref(null)
+const inspectorVpProgrammatic = ref(false)
 const analysisOpen = ref(false)
-/** Viewport/cursors saved when migration heatmap opens; restored by Show all tasks. */
+/** Viewport/cursors saved when migration inspector opens; restored by Show all tasks. */
 let _heatmapRestoreSnapshot = null
 const statsPaused = ref(false)
 const rightPanelTab = ref('stats')
@@ -1379,10 +1373,8 @@ watch(marks, (m) => {
 
 watch(activeTabId, (newId, oldId) => {
   if (oldId != null) {
-    heatmapOpen.value = false
-    chordOpen.value = false
-    heatmapFocusPair.value = null
-    chordFocusPair.value = null
+    inspectorOpen.value = false
+    inspectorFocusPair.value = null
     analysisOpen.value = false
     const leaving = tabs.value.find(t => t.id === oldId)
     if (leaving) saveFiltersToActiveTab(leaving)
@@ -1455,6 +1447,7 @@ const traceInfo = computed(() => {
 })
 
 const heatmapEnabled = computed(() => traceIsMultiCore(trace.value))
+const rangeEnabled = computed(() => getPlacedCursors(cursors.value).length >= 2)
 
 const analysisFindings = computed(() => {
   const tr = trace.value
@@ -1548,7 +1541,12 @@ async function attachParsedTrace(name, packedOrTrace, { savedState = null, fromS
     tab._undoStack = null
     const restored = savedState ?? _savedTabStateByTraceName[name]
     if (restored) applyTabState(tab, restored)
+    tab.taskFilterKeys = null
+    tab.heatmapFilterLabel = null
     syncFiltersFromTab(tab)
+    inspectorOpen.value = false
+    inspectorFocusPair.value = null
+    _heatmapRestoreSnapshot = null
     timelineOptions.highlightInterval = null
 
     tab.trace = markRaw(trace)
@@ -1751,6 +1749,10 @@ function onZoom1to1() {
 }
 
 function onZoomRange() {
+  if (!rangeEnabled.value) {
+    showToast('Place at least 2 cursors to zoom to range', 'info')
+    return
+  }
   const ok = timelinePanelRef.value?.zoomToCursorRange?.()
   if (!ok) showToast('Place at least 2 cursors to zoom to range', 'info')
   else syncTimelineViewport()
@@ -2271,7 +2273,10 @@ function onCpuLoadToggleExpandAll() {
 }
 
 function onTimelineViewportChange(vp) {
-  if (activeTab.value) Object.assign(activeTab.value.timelineViewport, vp)
+  if (!vp) return
+  const { programmatic, ...rest } = vp
+  inspectorVpProgrammatic.value = !!programmatic
+  if (activeTab.value) Object.assign(activeTab.value.timelineViewport, rest)
 }
 
 let _cpuVpApplyRaf = null
@@ -2403,7 +2408,7 @@ function onTaskFilterChange(text) {
   }, 150)
 }
 
-function onOpenHeatmap() {
+function _captureInspectorRestoreSnapshot() {
   syncTimelineViewport()
   if (activeTab.value) {
     _heatmapRestoreSnapshot = {
@@ -2417,27 +2422,30 @@ function onOpenHeatmap() {
       viewMode: timelineOptions.viewMode,
     }
   }
-  heatmapOpen.value = true
+}
+
+function onOpenHeatmap() {
+  _captureInspectorRestoreSnapshot()
+  inspectorMode.value = 'heatmap'
+  inspectorFocusPair.value = null
+  inspectorOpen.value = true
 }
 
 function onOpenPairHeatmap(focus) {
-  heatmapFocusPair.value = focus || null
-  heatmapOpen.value = true
+  inspectorMode.value = 'heatmap'
+  inspectorFocusPair.value = focus || null
+  inspectorOpen.value = true
 }
 
 function onOpenPairChord(focus) {
-  chordFocusPair.value = focus || null
-  chordOpen.value = true
+  inspectorMode.value = 'chord'
+  inspectorFocusPair.value = focus || null
+  inspectorOpen.value = true
 }
 
-function onHeatmapClose() {
-  heatmapOpen.value = false
-  heatmapFocusPair.value = null
-}
-
-function onChordClose() {
-  chordOpen.value = false
-  chordFocusPair.value = null
+function onInspectorClose() {
+  inspectorOpen.value = false
+  inspectorFocusPair.value = null
 }
 
 function clearHeatmapTaskFilter() {
@@ -2484,11 +2492,29 @@ function clearHeatmapTaskFilter() {
   if (hadFilter || restored) showToast('Showing all tasks', 'info')
 }
 
-function onHeatmapDrillDown(payload) {
+function onCorridorJump(payload) {
+  const c = Array(appSettings.maxCursors).fill(null)
+  c[0] = payload.binLo
+  c[1] = payload.binHi
+  cursors.value = c
+  if (payload.enableCpuLoad !== false) timelineOptions.showCpuLoad = true
+  nextTick(() => {
+    timelinePanelRef.value?.zoomToTimeRange(payload.binLo, payload.binHi, 0.05, { programmatic: true })
+    if (payload.lockTaskKey) onHighlightClick(payload.lockTaskKey)
+    autofitCpuLoadPaneHeight()
+  })
+  showToast(
+    `Jumped to hotspot ${payload.pairLabel || ''}`.trim(),
+    'info',
+  )
+}
+
+function onCorridorSpotlight(payload) {
   timelineOptions.viewMode = 'task'
   timelineOptions.migratedOnlyFilter = false
   timelineOptions.taskFilterKeys = payload.mergeKeys
   timelineOptions.heatmapFilterLabel = payload.pairLabel
+  if (payload.enableCpuLoad) timelineOptions.showCpuLoad = true
   saveFiltersToActiveTab()
 
   const c = Array(appSettings.maxCursors).fill(null)
@@ -2499,22 +2525,26 @@ function onHeatmapDrillDown(payload) {
   highlightSegment.value = null
   timelineOptions.highlightSegment = null
 
+  const lockKey = payload.lockTaskKey
+    || (payload.mergeKeys?.length === 1 ? payload.mergeKeys[0] : null)
+
   nextTick(() => {
     timelinePanelRef.value?.expandCoresForMergeKeys(payload.mergeKeys)
-    timelinePanelRef.value?.zoomToTimeRange(payload.binLo, payload.binHi)
-    if (payload.mergeKeys.length === 1) {
-      onHighlightClick(payload.mergeKeys[0])
+    timelinePanelRef.value?.zoomToTimeRange(payload.binLo, payload.binHi, 0.05, { programmatic: true })
+    if (lockKey) {
+      onHighlightClick(lockKey)
     } else {
       pinnedHighlightKey.value = null
       timelineOptions.highlightKey = null
       timelineOptions.lockedTaskKey = null
       scheduleRender()
     }
+    autofitCpuLoadPaneHeight()
   })
 
-  const n = payload.mergeKeys.length
+  const n = payload.mergeKeys?.length || 0
   showToast(
-    `Zoomed to ${payload.pairLabel} · ${n} task${n === 1 ? '' : 's'} with migrations in this bin. Toolbar or Legend → Clear to show all.`,
+    `Spotlight: ${payload.pairLabel} · ${n} task${n === 1 ? '' : 's'}. Toolbar or Legend → Clear to show all.`,
     'info',
   )
 }
@@ -2640,11 +2670,8 @@ function onGlobalKeydown(e) {
     if (jumpDialogOpen.value) {
       jumpDialogOpen.value = false
       e.preventDefault()
-    } else if (heatmapOpen.value) {
-      onHeatmapClose()
-      e.preventDefault()
-    } else if (chordOpen.value) {
-      onChordClose()
+    } else if (inspectorOpen.value) {
+      onInspectorClose()
       e.preventDefault()
     } else if (analysisOpen.value) {
       analysisOpen.value = false
@@ -2665,7 +2692,7 @@ function onGlobalKeydown(e) {
     return
   }
 
-  if (helpOpen.value || aboutOpen.value || heatmapOpen.value || chordOpen.value || analysisOpen.value || settingsOpen.value
+  if (helpOpen.value || aboutOpen.value || analysisOpen.value || settingsOpen.value
       || jumpDialogOpen.value || snapshotEditorOpen.value) return
 
   if (mod && e.key === ',') {

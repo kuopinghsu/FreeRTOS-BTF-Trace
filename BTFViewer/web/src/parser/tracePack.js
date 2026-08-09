@@ -4,6 +4,7 @@
 import { SegStore, createSegList, finalizeTraceStorage } from './segStore.js'
 import { buildCpuLoadBins } from './cpuLoadBins.js'
 import { computeTaskCpuNs, segIndicesMapFromTrace } from './statsCompute.js'
+import { prepareFullTraceStats } from '../utils/migrationAnalysis.js'
 import { cullNestedIntervalInstances } from '../utils/intervalAnalysis.js'
 import { buildTagData } from '../utils/tagAnalysis.js'
 
@@ -65,6 +66,8 @@ export function packTrace(trace, progress) {
   trace.taskCpuNs = computeTaskCpuNs(
     trace.segStore, trace.tasks, trace.taskRepr, segIndicesByMk,
   )
+  if (typeof progress === 'function') progress(96, 'Preparing statistics…')
+  prepareFullTraceStats(trace)
 
   const store = trace.segStore
   const allIdx = store.allIndices()
@@ -144,6 +147,13 @@ export function packTrace(trace, progress) {
       tickHealth: trace.tickHealth,
       cpuLoadBins: trace.cpuLoadBins,
       taskCpuNs: trace.taskCpuNs,
+      migrationTimes: trace.migrationTimes,
+      migratedMks: [...(trace.migratedMks || [])],
+      coreUtilPct: trace.coreUtilPct,
+      schedCtxSwitches: trace.schedCtxSwitches,
+      schedCoreGaps: trace.schedCoreGaps,
+      schedGapMax: trace.schedGapMax,
+      migrationRowsFull: trace.migrationRowsFull,
     },
   }
 }
@@ -249,6 +259,13 @@ export function unpackTrace(packed) {
     tickHealth: p.tickHealth,
     cpuLoadBins: p.cpuLoadBins,
     taskCpuNs: p.taskCpuNs,
+    migrationTimes: p.migrationTimes || (p.migrations || []).map(m => m.ns),
+    migratedMks: new Set(p.migratedMks || []),
+    coreUtilPct: p.coreUtilPct || null,
+    schedCtxSwitches: p.schedCtxSwitches ?? null,
+    schedCoreGaps: p.schedCoreGaps || null,
+    schedGapMax: p.schedGapMax ?? 0,
+    migrationRowsFull: p.migrationRowsFull || null,
   }
   enrichStartsMaps(store, trace)
   return trace
@@ -276,5 +293,6 @@ export function finalizeAndEnrich(trace) {
   trace.taskCpuNs = computeTaskCpuNs(
     trace.segStore, trace.tasks, trace.taskRepr, segIndicesByMk,
   )
+  prepareFullTraceStats(trace)
   return trace
 }

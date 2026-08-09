@@ -5,10 +5,10 @@
 
 import { formatTime, isStiTagChannel } from '../renderer/TimelineRenderer.js'
 import { parseTaskName, taskDisplayName, taskLabelForMergeKey, taskReprGet, isIdleTaskName } from './colors.js'
-import { schedulingStats, blockingTimeSamples, preemptionChainRows } from './statsAnalysis.js'
+import { schedulingStats, blockingTimeSamples, preemptionChainRows, coreSegsInRange } from './statsAnalysis.js'
 import { isMigratedTask, migrationRows } from './migrationAnalysis.js'
 import { syncObjectStatsRows } from './syncObjectAnalysis.js'
-import { getPlacedCursors, segFullyInRange, segOverlapNs, traceMapGet } from './statsRange.js'
+import { getPlacedCursors, segFullyInRange, segOverlapNs } from './statsRange.js'
 import { tickHealthReport } from './tickHealth.js'
 import loadBalanceMetrics from './loadBalanceGauge.js'
 
@@ -22,12 +22,18 @@ export function cursorRangeForCursors(cursors) {
 /** Per-core active util % excluding IDLE/TICK (same as StatisticsPanel._coreUtilRows). */
 export function coreUtilPctRows(trace, lo = null, hi = null) {
   if (!trace?.coreNames?.length) return []
+  if (lo == null && hi == null && trace.coreUtilPct) {
+    return trace.coreNames.map(core => ({
+      core,
+      pct: Number(trace.coreUtilPct[core] ?? 0),
+    }))
+  }
   const total = (lo != null && hi != null)
     ? (hi - lo)
     : (trace.timeMax - trace.timeMin)
   if (total <= 0) return []
   return trace.coreNames.map((core) => {
-    const segs = traceMapGet(trace.coreSegs, core) || []
+    const segs = coreSegsInRange(trace, core, lo, hi)
     let active = 0
     for (const s of segs) {
       const { name } = parseTaskName(s.task)

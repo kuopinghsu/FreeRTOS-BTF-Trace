@@ -1039,11 +1039,7 @@ def _core_pair_rows(
     """Per (from_core, to_core) pair migration summary.
     Returns: [(from_core, to_core, count, bounce_count, avg_gap_ns), ...]"""
     pairs: Dict[tuple, dict] = {}
-    for m in trace.migrations:
-        if lo is not None and m.ns < lo:
-            continue
-        if hi is not None and m.ns > hi:
-            continue
+    for m in _migrations_in_range(trace, lo, hi):
         key = (m.from_core, m.to_core)
         if key not in pairs:
             pairs[key] = {"count": 0, "bounces": 0, "gap_sum": 0}
@@ -2210,6 +2206,14 @@ class BtfTrace:
     # Core migrations: consecutive slices of the same merge-key on different cores.
     migrations: List[MigrationEvent]                                        = field(default_factory=list)
     migrations_by_mk: Dict[str, List[MigrationEvent]]                       = field(default_factory=dict)
+    # Parallel to migrations (same order) for O(log n) time-window slices.
+    migration_times: List[int]                                              = field(default_factory=list)
+    migrated_mks: frozenset                                                 = field(default_factory=frozenset)
+    # Full-trace stats snapshots filled at parse (Statistics / heatmap open path).
+    task_cpu_ns: Optional[Dict[str, int]]                                   = None
+    sched_ctx_switches: Optional[int]                                       = None
+    sched_core_gaps: Optional[List[int]]                                    = None
+    migration_rows_full: Optional[List[dict]]                               = None
     interval_instances: List["IntervalInstance"]                            = field(default_factory=list)
     interval_ids: List[str]                                                 = field(default_factory=list)
     interval_instances_by_id: Dict[str, List["IntervalInstance"]]            = field(default_factory=dict)
@@ -2466,10 +2470,14 @@ def _scheduling_stats(trace: "BtfTrace",
                       lo: Optional[int] = None, hi: Optional[int] = None
                       ) -> Tuple[int, List[int]]:
     """Context-switch count and inter-slice core gaps (ns) within optional scope."""
+    if (lo is None and hi is None
+            and trace.sched_ctx_switches is not None
+            and trace.sched_core_gaps is not None):
+        return trace.sched_ctx_switches, trace.sched_core_gaps
     ctx_switches = 0
     gaps: List[int] = []
     for core in trace.core_names:
-        segs = trace.core_segs.get(core, [])
+        segs = _core_segs_in_range(trace, core, lo, hi)
         for i in range(1, len(segs)):
             prev, curr = segs[i - 1], segs[i]
             if lo is not None and hi is not None:
@@ -2737,7 +2745,63 @@ def _task_cores_used(trace: "BtfTrace", merge_key: str) -> set:
     return {s.core for s in trace.seg_map_by_merge_key.get(merge_key, ())}
 
 def _is_migrated_task(trace: "BtfTrace", merge_key: str) -> bool:
+    mks = trace.migrated_mks or trace.migrations_by_mk
+    if mks:
+        return merge_key in mks
     return len(_task_cores_used(trace, merge_key)) >= 2
+
+def _migrations_in_range(
+    trace: "BtfTrace",
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> Sequence["MigrationEvent"]:
+    """Migrations with ns in [lo, hi] (inclusive). Uses migration_times bisect."""
+    migs = trace.migrations
+    if not migs:
+        return migs
+    if lo is None and hi is None:
+        return migs
+    times = trace.migration_times
+    if not times or len(times) != len(migs):
+        return [
+            m for m in migs
+            if (lo is None or m.ns >= lo) and (hi is None or m.ns <= hi)
+        ]
+    i0 = 0 if lo is None else bisect_left(times, lo)
+    i1 = len(migs) if hi is None else bisect_right(times, hi)
+    return migs[i0:i1]
+
+def _core_segs_in_range(
+    trace: "BtfTrace",
+    core: str,
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> Sequence["TaskSegment"]:
+    segs = trace.core_segs.get(core, [])
+    if not segs or lo is None or hi is None:
+        return segs
+    starts = trace.core_seg_starts.get(core)
+    if not starts or len(starts) != len(segs):
+        starts = [s.start for s in segs]
+    i0 = max(0, bisect_left(starts, lo) - 1)
+    i1 = bisect_right(starts, hi)
+    return segs[i0:i1]
+
+def _task_segs_in_range(
+    trace: "BtfTrace",
+    mk: str,
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> Sequence["TaskSegment"]:
+    segs = trace.seg_map_by_merge_key.get(mk, [])
+    if not segs or lo is None or hi is None:
+        return segs
+    starts = trace.seg_start_by_merge_key.get(mk)
+    if not starts or len(starts) != len(segs):
+        starts = [s.start for s in segs]
+    i0 = max(0, bisect_left(starts, lo) - 1)
+    i1 = bisect_right(starts, hi)
+    return segs[i0:i1]
 
 def _build_migration_index(
     segs_by_mk: Dict[str, list],
@@ -2913,13 +2977,17 @@ def _migration_rows(trace: "BtfTrace",
                     lo: Optional[int] = None, hi: Optional[int] = None
                     ) -> List[tuple]:
     """Rows for the Core Migrations stats table."""
+    if lo is None and hi is None and trace.migration_rows_full is not None:
+        return list(trace.migration_rows_full)
     scale = trace.time_scale
     tick_times = trace.tick_sti_times
     rows: List[tuple] = []
     for mk in trace.tasks:
         if not _is_migrated_task(trace, mk):
             continue
-        segs = trace.seg_map_by_merge_key.get(mk, [])
+        segs = (_task_segs_in_range(trace, mk, lo, hi)
+                if lo is not None and hi is not None
+                else trace.seg_map_by_merge_key.get(mk, []))
         migs = list(trace.migrations_by_mk.get(mk, ()))
         if lo is not None and hi is not None:
             migs = [m for m in migs if lo <= m.ns <= hi]
@@ -3041,15 +3109,10 @@ def _pair_migrations(
     lo: Optional[int] = None, hi: Optional[int] = None,
 ) -> List["MigrationEvent"]:
     """Directed From→To migrations in scope, time-sorted."""
-    out: List[MigrationEvent] = []
-    for m in trace.migrations:
-        if m.from_core != from_core or m.to_core != to_core:
-            continue
-        if lo is not None and m.ns < lo:
-            continue
-        if hi is not None and m.ns > hi:
-            continue
-        out.append(m)
+    out: List[MigrationEvent] = [
+        m for m in _migrations_in_range(trace, lo, hi)
+        if m.from_core == from_core and m.to_core == to_core
+    ]
     out.sort(key=lambda m: m.ns)
     return out
 
@@ -3316,12 +3379,8 @@ def _migration_heatmap_data(trace: "BtfTrace",
     span = max(t_hi - t_min, 1)
     bin_w = span / time_bins
     grid = [[0] * time_bins for _ in pairs]
-    for m in trace.migrations:
+    for m in _migrations_in_range(trace, lo, hi):
         if bounce_only and m.ns not in trace.lock_bounce_migration_ns:
-            continue
-        if lo is not None and m.ns < lo:
-            continue
-        if hi is not None and m.ns > hi:
             continue
         pi = pair_idx.get((m.from_core, m.to_core))
         if pi is None:
@@ -3344,12 +3403,8 @@ def _migration_heatmap_matrix(trace: "BtfTrace",
     n = len(cores)
     core_idx = {c: i for i, c in enumerate(cores)}
     grid = [[0] * n for _ in range(n)]
-    for m in trace.migrations:
+    for m in _migrations_in_range(trace, lo, hi):
         if bounce_only and m.ns not in trace.lock_bounce_migration_ns:
-            continue
-        if lo is not None and m.ns < lo:
-            continue
-        if hi is not None and m.ns > hi:
             continue
         fi = core_idx.get(m.from_core)
         ti = core_idx.get(m.to_core)
@@ -3361,6 +3416,30 @@ def _migration_heatmap_matrix(trace: "BtfTrace",
 # Gap between adjacent core arcs and floor arc size in the chord diagram, in radians.
 _CHORD_GAP_RAD = 0.03
 _CHORD_MIN_ARC_RAD = 0.05
+_CHORD_TAPER_DEST_RATIO = 0.4
+_CHORD_GRAD_SOURCE_STOP = 0.7
+_CHORD_RIBBON_MAX_HALF = 7.0
+# Split core rings (TODO2): outer = egress/departures, inner = ingress/arrivals.
+_CHORD_ARC_OUTER = 12.0
+_CHORD_ARC_INNER = 8.0
+
+
+def _chord_ring_geometry(radius: float) -> Tuple[float, float, float]:
+    """Return ``(r_egress, r_ingress, r_ribbon)`` for a chord diagram of radius *radius*."""
+    r_egress = float(radius)
+    r_ingress = r_egress - _CHORD_ARC_OUTER - 2.0
+    r_ribbon = r_ingress - _CHORD_ARC_INNER / 2.0 - 2.0
+    return r_egress, r_ingress, r_ribbon
+
+
+def _chord_hit_ring(dist: float, radius: float) -> Optional[str]:
+    """Which split ring *dist* from the centre hits: ``'egress'``, ``'ingress'``, or None."""
+    r_egress, r_ingress, _ = _chord_ring_geometry(radius)
+    if abs(dist - r_egress) <= _CHORD_ARC_OUTER / 2.0 + 3.0:
+        return "egress"
+    if abs(dist - r_ingress) <= _CHORD_ARC_INNER / 2.0 + 3.0:
+        return "ingress"
+    return None
 
 @dataclass
 class ChordArc:
@@ -3370,6 +3449,8 @@ class ChordArc:
     start_angle: float
     end_angle: float
     total: float
+    out_total: float = 0.0
+    in_total: float = 0.0
 
 @dataclass
 class ChordLayout:
@@ -3377,6 +3458,9 @@ class ChordLayout:
     arcs: List[ChordArc]
     # tick_angles[i][j] = angle (radians) on core i's arc pointing toward core j.
     tick_angles: List[Dict[int, float]]
+    egress_ticks: List[Dict[int, float]] = field(default_factory=list)
+    ingress_ticks: List[Dict[int, float]] = field(default_factory=list)
+    grid: Optional[List[List[float]]] = None
 
     def tick_angle(self, i: int, j: int) -> float:
         if 0 <= i < len(self.tick_angles) and j in self.tick_angles[i]:
@@ -3386,6 +3470,320 @@ class ChordLayout:
             return (arc.start_angle + arc.end_angle) / 2
         return 0.0
 
+    def egress_tick_angle(self, i: int, j: int) -> float:
+        if 0 <= i < len(self.egress_ticks) and j in self.egress_ticks[i]:
+            return self.egress_ticks[i][j]
+        return self.tick_angle(i, j)
+
+    def ingress_tick_angle(self, i: int, j: int) -> float:
+        if 0 <= i < len(self.ingress_ticks) and j in self.ingress_ticks[i]:
+            return self.ingress_ticks[i][j]
+        return self.tick_angle(i, j)
+
+    def ribbon_half_widths(self, i: int, j: int,
+                           max_count: float = 1.0) -> Tuple[float, float]:
+        g = self.grid or []
+        count = g[i][j] if i < len(g) and j < len(g[i]) else 0
+        if not count:
+            return 0.0, 0.0
+        m = max_count or 1.0
+        src = max(0.75, min(_CHORD_RIBBON_MAX_HALF,
+                            _CHORD_RIBBON_MAX_HALF * (count / m)))
+        dst = max(0.5, src * _CHORD_TAPER_DEST_RATIO)
+        return src, dst
+
+def _trace_has_core_bounce_holds(trace: "BtfTrace") -> bool:
+    """True if any sync-object hold crossed cores (cache-line lock bounce)."""
+    if not getattr(trace, "has_sync_object_instrumentation", False):
+        return False
+    for obj in (getattr(trace, "sync_objects", None) or {}).values():
+        for hold in obj.get("holds") or []:
+            take_c = hold.get("take_core")
+            give_c = hold.get("give_core")
+            if take_c and give_c and take_c != give_c:
+                return True
+    return False
+
+
+def _default_corridor_top_pct(core_count: int) -> int:
+    if (core_count or 0) > 8:
+        return 25
+    return 100
+
+def _filter_corridors_by_top_pct(corridors: list, top_pct: int = 100) -> list:
+    if not corridors or top_pct >= 100:
+        return list(corridors or [])
+    pct = max(1, min(100, int(top_pct)))
+    sorted_rows = sorted(corridors, key=lambda c: c.get("count", 0), reverse=True)
+    keep = max(1, math.ceil(len(sorted_rows) * (pct / 100.0)))
+    threshold = sorted_rows[keep - 1].get("count", 0)
+    return [c for c in corridors if c.get("count", 0) >= threshold]
+
+
+def _filter_corridors_by_direction(corridors: list, mode: str,
+                                   selected: Optional[dict] = None) -> list:
+    """Keep corridors sharing the selected pair's source (egress) or dest (ingress)."""
+    if not corridors or mode in (None, "", "all") or not selected:
+        return list(corridors or [])
+    if mode == "egress":
+        want = selected.get("from_core")
+        return [c for c in corridors if c.get("from_core") == want]
+    if mode == "ingress":
+        want = selected.get("to_core")
+        return [c for c in corridors if c.get("to_core") == want]
+    return list(corridors or [])
+
+
+def _canon_numeric_id(token: str) -> Optional[str]:
+    """Decimal digit string for a task-id token (`0011`/`0xB` → `11`)."""
+    t = (token or "").strip().lower()
+    if not t:
+        return None
+    try:
+        if t.startswith("0x"):
+            return str(int(t, 16))
+        if t.isdigit():
+            return str(int(t, 10))
+    except ValueError:
+        return None
+    return None
+
+
+def _corridor_task_ids_and_name(task: dict) -> Tuple[list, str]:
+    """Task ids (canonical decimal) and bare name from a corridor task row."""
+    ids: list = []
+    name = ""
+
+    def add_id(token) -> None:
+        cid = _canon_numeric_id(str(token) if token is not None else "")
+        if cid is not None and cid not in ids:
+            ids.append(cid)
+
+    def consider(raw) -> None:
+        nonlocal name
+        if raw is None or raw == "":
+            return
+        s = str(raw)
+        norm = s.replace("\ufffd", "\x00")
+        if norm[:1] == "\x00":
+            sep = norm.find("\x00", 1)
+            if sep > 0:
+                add_id(norm[1:sep])
+                if not name:
+                    name = norm[sep + 1:]
+        _core, task_id, nm = _parse_task_name(s)
+        if task_id is not None:
+            add_id(task_id)
+            if not name:
+                name = nm
+        collapsed = norm.replace("\x00", "")
+        m = re.match(r"^(\d+)(\D.*)$", collapsed)
+        if m:
+            add_id(m.group(1))
+            if not name:
+                name = m.group(2)
+
+    if task.get("task_id") is not None:
+        add_id(task.get("task_id"))
+    consider(task.get("mk"))
+    consider(task.get("label"))
+    if not name:
+        name = str(task.get("label") or "")
+    return ids, name
+
+
+def _corridor_task_query_hit(task: dict, q: str) -> bool:
+    """True when *q* matches this task.
+
+    A pure decimal query (`28`, `0028`) is an exact task id — it must not
+    hit `CS[128]` / `[0/0128]CS` via substring. Name queries stay substring.
+    """
+    ids, name = _corridor_task_ids_and_name(task)
+    q_id = _canon_numeric_id(q)
+    if q_id is not None and q.isdigit():
+        return q_id in ids
+    ql = q.lower()
+    label = (task.get("label") or "").lower()
+    if ql in label:
+        return True
+    if ql in name.lower():
+        return True
+    mk = str(task.get("mk") or "")
+    if mk.startswith("\x00"):
+        return False
+    return ql in mk.lower()
+
+
+def _corridor_restricted_to_tasks(c: dict, tasks: list) -> dict:
+    """Copy *c* so heatmap/tree counts include only *tasks* (no model mutation)."""
+    n = len(c.get("bins") or [])
+    bins = [0] * n
+    bounce_bins = [0] * n
+    count = 0
+    bounces = 0
+    has_task_bounce = False
+    for t in tasks:
+        count += int(t.get("count") or 0)
+        bounces += int(t.get("bounces") or 0)
+        tb = t.get("bins") or []
+        bb = t.get("bounce_bins") or []
+        if bb:
+            has_task_bounce = True
+        for i in range(n):
+            bins[i] += tb[i] if i < len(tb) else 0
+            bounce_bins[i] += bb[i] if i < len(bb) else 0
+    if not has_task_bounce:
+        if not bounces:
+            bounce_bins = [0] * n
+        elif count and bounces == count:
+            bounce_bins = list(bins)
+        else:
+            old = c.get("bounce_bins") or []
+            bounce_bins = [
+                min(old[i] if i < len(old) else 0, bins[i]) for i in range(n)]
+    new_tasks = []
+    for t in tasks:
+        nt = dict(t)
+        nt["share_pct"] = (100.0 * int(t.get("count") or 0) / count) if count else 0.0
+        new_tasks.append(nt)
+    peak_bin = max(range(n), key=lambda b: bins[b]) if n else 0
+    old_count = int(c.get("count") or 0)
+    out = dict(c)
+    out.update({
+        "count": count,
+        "bounces": bounces,
+        "bounce_pct": (100.0 * bounces / count) if count else 0.0,
+        "rate_per_s": ((c.get("rate_per_s") or 0.0) * count / old_count)
+        if old_count else 0.0,
+        "bins": bins,
+        "bounce_bins": bounce_bins,
+        "tasks": new_tasks,
+        "primary_task": new_tasks[0] if new_tasks else None,
+        "peak_bin": peak_bin,
+        "peak_count": bins[peak_bin] if n else 0,
+    })
+    return out
+
+
+def _recompute_corridor_nets(corridors: list) -> list:
+    """Refresh net/rev from the (possibly narrowed) corridor set."""
+    by_pair = {}
+    for c in corridors:
+        by_pair[(c.get("from_core"), c.get("to_core"))] = c
+    out = []
+    for c in corridors:
+        rev = by_pair.get((c.get("to_core"), c.get("from_core")))
+        rev_count = int(rev["count"]) if rev else 0
+        net = _net_migration_balance(rev_count, int(c.get("count") or 0))
+        if rev_count == c.get("rev_count") and net == c.get("net"):
+            out.append(c)
+            continue
+        nc = dict(c)
+        nc["rev_count"] = rev_count
+        nc["net"] = net
+        out.append(nc)
+    return out
+
+
+def _filter_corridors_by_task_query(corridors: list, query: str) -> list:
+    """Keep corridors that have a matching task; drop sibling tasks from hits."""
+    q = (query or "").strip().lower()
+    if not q:
+        return list(corridors or [])
+    out = []
+    for c in corridors or []:
+        tasks = c.get("tasks") or []
+        matched = [t for t in tasks if _corridor_task_query_hit(t, q)]
+        if not matched:
+            continue
+        if len(matched) == len(tasks):
+            out.append(c)
+        else:
+            out.append(_corridor_restricted_to_tasks(c, matched))
+    return _recompute_corridor_nets(out)
+
+
+def _corridor_groups_by_source(corridors: list) -> list:
+    """Group directed corridors under their source core (large-core tree)."""
+    gmap: Dict[str, dict] = {}
+    for c in corridors or []:
+        src = c.get("from_core")
+        if not src:
+            continue
+        g = gmap.get(src)
+        if g is None:
+            g = {
+                "source": src,
+                "label": f"{_core_short_name(src)} → Destinations",
+                "count": 0,
+                "corridors": [],
+            }
+            gmap[src] = g
+        g["count"] += int(c.get("count") or 0)
+        g["corridors"].append(c)
+    return sorted(gmap.values(), key=lambda g: -g["count"])
+
+
+def _net_migration_balance(incoming: int, outgoing: int) -> int:
+    return int(incoming or 0) - int(outgoing or 0)
+
+
+def _chord_label_nice_step(raw: int) -> int:
+    """Round a label stride up to 1/2/5×10^k so ticks stay readable (0, 5, 10…)."""
+    n = max(1, int(raw))
+    if n <= 1:
+        return 1
+    mag = 10 ** int(math.floor(math.log10(n)))
+    for mult in (1, 2, 5, 10):
+        nice = mult * mag
+        if nice >= n:
+            return int(nice)
+    return n
+
+
+def _chord_label_step(
+    n_cores: int,
+    *,
+    min_px: float = 0.0,
+    span_px: float = 0.0,
+) -> int:
+    """How many cores to skip between chord/matrix tick labels.
+
+    Small core counts keep every name. Larger rings/matrices use a stride
+    such as 5 → c0, c5, c10. *min_px*/*span_px* raise the stride when
+    glyphs would still collide (circle circumference or matrix cell pitch).
+    """
+    n = int(n_cores or 0)
+    if n <= 16:
+        step = 1
+    elif n <= 32:
+        step = 2
+    elif n <= 64:
+        step = 5
+    elif n <= 128:
+        step = 8
+    else:
+        step = 10
+    if min_px > 0 and span_px > 0 and n > 0:
+        per = span_px / n
+        if per < min_px:
+            need = int(math.ceil(min_px / max(per, 1e-9)))
+            step = max(step, _chord_label_nice_step(need))
+    return max(1, step)
+
+
+def _chord_label_visible(
+    index: int,
+    step: int,
+    extra: Optional[set] = None,
+) -> bool:
+    """True when core *index* should draw a name (stride tick or hover/focus)."""
+    if extra and int(index) in extra:
+        return True
+    if step <= 1:
+        return True
+    return int(index) % step == 0
+
 def _build_chord_layout(cores: List[str], grid: List[List[float]]) -> ChordLayout:
     """Pure circular layout for the migration chord diagram — parity with the
     web app's buildChordLayout() in migrationAnalysis.js. Each core gets an arc
@@ -3393,15 +3791,19 @@ def _build_chord_layout(cores: List[str], grid: List[List[float]]) -> ChordLayou
     sliver so zero-flow cores still appear as nodes), separated by a fixed gap.
     Each connected core-pair also gets a tick position within its two arcs,
     used as chord endpoints so parallel migrations fan out rather than
-    overlapping."""
+    overlapping. Also exposes egress/ingress ticks and tapered ribbon widths."""
     n = len(cores)
     totals = [0.0] * n
+    out_totals = [0.0] * n
+    in_totals = [0.0] * n
     for i in range(n):
         for j in range(n):
             if i == j:
                 continue
             gij = grid[i][j] if i < len(grid) and j < len(grid[i]) else 0
             gji = grid[j][i] if j < len(grid) and i < len(grid[j]) else 0
+            out_totals[i] += gij
+            in_totals[i] += gji
             totals[i] += gij + gji
     grand_total = sum(totals)
     gap = min(_CHORD_GAP_RAD, (math.pi * 1.5) / n) if n > 0 else 0.0
@@ -3420,30 +3822,266 @@ def _build_chord_layout(cores: List[str], grid: List[List[float]]) -> ChordLayou
     for i in range(n):
         start_angle = angle
         end_angle = start_angle + arc_sizes[i]
-        arcs.append(ChordArc(cores[i], i, start_angle, end_angle, totals[i]))
+        arcs.append(ChordArc(
+            cores[i], i, start_angle, end_angle, totals[i],
+            out_totals[i], in_totals[i]))
         angle = end_angle + gap
 
     tick_angles: List[Dict[int, float]] = [dict() for _ in range(n)]
+    egress_ticks: List[Dict[int, float]] = [dict() for _ in range(n)]
+    ingress_ticks: List[Dict[int, float]] = [dict() for _ in range(n)]
+
+    def _place(links, dest_map, arc):
+        link_total = sum(m for _, m in links)
+        span = arc.end_angle - arc.start_angle
+        cursor = arc.start_angle
+        for j, mag in links:
+            sl = (span * (mag / link_total) if link_total > 0
+                  else (span / len(links) if links else 0.0))
+            dest_map[j] = cursor + sl / 2
+            cursor += sl
+
     for i in range(n):
         arc = arcs[i]
-        links = []
+        combined, egress, ingress = [], [], []
         for j in range(n):
             if j == i:
                 continue
             gij = grid[i][j] if i < len(grid) and j < len(grid[i]) else 0
             gji = grid[j][i] if j < len(grid) and i < len(grid[j]) else 0
-            mag = gij + gji
-            if mag > 0:
-                links.append((j, mag))
-        link_total = sum(m for _, m in links)
-        span = arc.end_angle - arc.start_angle
-        cursor = arc.start_angle
-        for j, mag in links:
-            sl = span * (mag / link_total) if link_total > 0 else span / len(links)
-            tick_angles[i][j] = cursor + sl / 2
-            cursor += sl
+            if gij + gji > 0:
+                combined.append((j, gij + gji))
+            if gij > 0:
+                egress.append((j, gij))
+            if gji > 0:
+                ingress.append((j, gji))
+        _place(combined, tick_angles[i], arc)
+        _place(egress, egress_ticks[i], arc)
+        _place(ingress, ingress_ticks[i], arc)
 
-    return ChordLayout(arcs=arcs, tick_angles=tick_angles)
+    return ChordLayout(
+        arcs=arcs, tick_angles=tick_angles,
+        egress_ticks=egress_ticks, ingress_ticks=ingress_ticks, grid=grid)
+
+def _build_corridor_inspector_model(
+        trace: "BtfTrace",
+        lo: Optional[int] = None,
+        hi: Optional[int] = None,
+        *,
+        bounce_only: bool = False,
+        top_pct: Optional[int] = None,
+        time_bins: int = 32) -> dict:
+    """Unified corridor inspector model — parity with web buildCorridorInspectorModel."""
+    cores = list(trace.core_names)
+    if top_pct is None:
+        top_pct = _default_corridor_top_pct(len(cores))
+    bounce_ns = trace.lock_bounce_migration_ns
+    t_min = lo if lo is not None else trace.time_min
+    t_hi = hi if hi is not None else trace.time_max
+    span = max(t_hi - t_min, 1)
+    bin_w = span / time_bins
+    ns_per = {"ns": 1e9, "us": 1e6, "ms": 1e3, "s": 1.0}.get(trace.time_scale, 1e9)
+    scope_sec = span / ns_per
+
+    by_key: Dict[Tuple[str, str], dict] = {}
+    n_cores_m = len(cores)
+    core_idx = {c: i for i, c in enumerate(cores)}
+    full_grid = [[0] * n_cores_m for _ in range(n_cores_m)]
+    for m in _migrations_in_range(trace, lo, hi):
+        if bounce_only and m.ns not in bounce_ns:
+            continue
+        if m.from_core == m.to_core:
+            continue
+        fi = core_idx.get(m.from_core)
+        ti = core_idx.get(m.to_core)
+        if fi is not None and ti is not None:
+            full_grid[fi][ti] += 1
+        key = (m.from_core, m.to_core)
+        row = by_key.get(key)
+        if row is None:
+            row = {
+                "from_core": m.from_core,
+                "to_core": m.to_core,
+                "label": f"{_core_short_name(m.from_core)}→{_core_short_name(m.to_core)}",
+                "count": 0,
+                "bounces": 0,
+                "gap_sum": 0,
+                "bins": [0] * time_bins,
+                "bounce_bins": [0] * time_bins,
+                "tasks": {},
+            }
+            by_key[key] = row
+        row["count"] += 1
+        is_bounce = m.ns in bounce_ns
+        if is_bounce:
+            row["bounces"] += 1
+        row["gap_sum"] += m.gap_ns
+        bi = _heatmap_bin_index_for_ns(t_min, bin_w, time_bins, t_hi, m.ns)
+        row["bins"][bi] += 1
+        if is_bounce:
+            row["bounce_bins"][bi] += 1
+        mk = m.merge_key
+        if mk:
+            t = row["tasks"].get(mk)
+            if t is None:
+                t = {
+                    "mk": mk, "count": 0, "bounces": 0,
+                    "bins": [0] * time_bins,
+                    "bounce_bins": [0] * time_bins,
+                }
+                row["tasks"][mk] = t
+            t["count"] += 1
+            if is_bounce:
+                t["bounces"] += 1
+                t["bounce_bins"][bi] += 1
+            t["bins"][bi] += 1
+
+    all_corridors = []
+    for row in by_key.values():
+        rev = by_key.get((row["to_core"], row["from_core"]))
+        rev_count = rev["count"] if rev else 0
+        tasks = sorted(row["tasks"].values(),
+                       key=lambda t: (-t["count"], t["mk"]))
+        task_rows = []
+        for t in tasks:
+            raw = trace.task_repr.get(t["mk"], t["mk"])
+            label = _task_display_name(raw)
+            id_list, _nm = _corridor_task_ids_and_name(
+                {"mk": t["mk"], "label": label})
+            task_rows.append({
+                "mk": t["mk"],
+                "label": label,
+                "task_id": int(id_list[0]) if id_list else None,
+                "count": t["count"],
+                "bounces": t["bounces"],
+                "bounce_pct": (100.0 * t["bounces"] / t["count"]) if t["count"] else 0.0,
+                "share_pct": (100.0 * t["count"] / row["count"]) if row["count"] else 0.0,
+                "bins": t["bins"],
+                "bounce_bins": t["bounce_bins"],
+            })
+        peak_bin = max(range(time_bins), key=lambda b: row["bins"][b]) if time_bins else 0
+        peak_val = row["bins"][peak_bin] if time_bins else 0
+        all_corridors.append({
+            "from_core": row["from_core"],
+            "to_core": row["to_core"],
+            "label": row["label"],
+            "count": row["count"],
+            "bounces": row["bounces"],
+            "bounce_pct": (100.0 * row["bounces"] / row["count"]) if row["count"] else 0.0,
+            "avg_gap_ns": (row["gap_sum"] // row["count"]) if row["count"] else 0,
+            "rate_per_s": (row["count"] / scope_sec) if scope_sec > 0 else 0.0,
+            "net": _net_migration_balance(rev_count, row["count"]),
+            "rev_count": rev_count,
+            "bins": row["bins"],
+            "bounce_bins": row["bounce_bins"],
+            "tasks": task_rows,
+            "primary_task": task_rows[0] if task_rows else None,
+            "peak_bin": peak_bin,
+            "peak_count": peak_val,
+        })
+    all_corridors.sort(key=lambda c: (-c["count"], c["label"]))
+    corridors = _filter_corridors_by_top_pct(all_corridors, top_pct)
+
+    group_by_source = len(cores) > 16
+    groups = _corridor_groups_by_source(corridors) if group_by_source else []
+
+    matrix_cores = cores
+    filtered_grid = []
+    corridor_set = {(c["from_core"], c["to_core"]) for c in corridors}
+    for i, fc in enumerate(matrix_cores):
+        row = []
+        for j, tc in enumerate(matrix_cores):
+            if i == j:
+                row.append(0)
+            elif (fc, tc) in corridor_set:
+                row.append(full_grid[i][j])
+            else:
+                row.append(0)
+        filtered_grid.append(row)
+
+    task_agg: Dict[str, Dict[str, int]] = {}
+    for c in all_corridors:
+        for core in (c["from_core"], c["to_core"]):
+            agg = task_agg.setdefault(core, {})
+            for t in c.get("tasks") or []:
+                mk = t.get("mk")
+                if not mk:
+                    continue
+                agg[mk] = agg.get(mk, 0) + int(t.get("count") or 0)
+    core_stats = []
+    n_mat = len(matrix_cores)
+    for i, core in enumerate(matrix_cores):
+        out_v = inn_v = 0
+        for j in range(n_mat):
+            if i == j:
+                continue
+            if i < len(full_grid) and j < len(full_grid[i]):
+                out_v += full_grid[i][j]
+            if j < len(full_grid) and i < len(full_grid[j]):
+                inn_v += full_grid[j][i]
+        top3 = sorted(task_agg.get(core, {}).items(), key=lambda kv: -kv[1])[:3]
+        core_stats.append({
+            "core": core,
+            "out": out_v,
+            "in": inn_v,
+            "net": _net_migration_balance(inn_v, out_v),
+            "top_tasks": [
+                {
+                    "mk": mk,
+                    "label": _task_display_name(trace.task_repr.get(mk, mk)),
+                    "count": n,
+                }
+                for mk, n in top3
+            ],
+        })
+
+    hotspot = None
+    for c in all_corridors:
+        score = c["count"] + c["bounces"] * 2
+        if hotspot is None or score > hotspot["score"]:
+            offender = c["primary_task"]
+            hotspot = {
+                "score": score,
+                "from_core": c["from_core"],
+                "to_core": c["to_core"],
+                "label": c["label"],
+                "count": c["count"],
+                "bounces": c["bounces"],
+                "bounce_pct": c["bounce_pct"],
+                "peak_bin": c["peak_bin"],
+                "task": offender,
+                "summary": (
+                    f"Hotspot: {offender['label']} on {c['label']} "
+                    f"({c['count']} mig, {c['bounce_pct']:.0f}% bounce)"
+                    if offender else
+                    f"Hotspot: {c['label']} ({c['count']} migrations)"
+                ),
+            }
+
+    max_bin = 0
+    for c in corridors:
+        for v in c["bins"]:
+            if v > max_bin:
+                max_bin = v
+
+    return {
+        "cores": matrix_cores,
+        "corridors": corridors,
+        "all_corridors": all_corridors,
+        "groups": groups,
+        "group_by_source": group_by_source,
+        "top_pct": top_pct,
+        "time_bins": time_bins,
+        "t_min": t_min,
+        "t_max": t_hi,
+        "bin_w": bin_w,
+        "max_bin": max_bin,
+        "matrix": {"cores": matrix_cores, "grid": full_grid},
+        "filtered_matrix": {"cores": matrix_cores, "grid": filtered_grid},
+        "core_stats": core_stats,
+        "hotspot": hotspot,
+        "has_data": any(c["count"] > 0 for c in corridors),
+    }
 
 def _migration_core_outgoing_heatmap(trace: "BtfTrace", from_core: str,
                                      lo: Optional[int] = None, hi: Optional[int] = None,
@@ -3631,6 +4269,8 @@ def _core_util_pct_rows(
     hi: Optional[int] = None,
 ) -> List[Tuple[str, float]]:
     """Per-core util % excluding IDLE/TICK (same logic as StatsPanel._core_util_rows)."""
+    if lo is None and hi is None and trace.core_util_pct:
+        return [(c, float(trace.core_util_pct.get(c, 0.0))) for c in trace.core_names]
     if lo is not None and hi is not None:
         total_ns = hi - lo
     else:
@@ -3639,7 +4279,7 @@ def _core_util_pct_rows(
         return []
     rows: List[Tuple[str, float]] = []
     for core in trace.core_names:
-        segs = trace.core_segs.get(core, [])
+        segs = _core_segs_in_range(trace, core, lo, hi)
         if lo is not None and hi is not None:
             active_ns = sum(
                 _seg_overlap_ns(s, lo, hi) for s in segs
@@ -3752,7 +4392,7 @@ def _trace_summary_snapshot(trace: "BtfTrace",
     gap_avg = int(round(sum(gaps) / len(gaps))) if gaps else 0
     gap_max = max(gaps) if gaps else 0
     if lo is not None and hi is not None:
-        migrations = sum(1 for m in trace.migrations if lo <= m.ns <= hi)
+        migrations = len(_migrations_in_range(trace, lo, hi))
         mig_tasks = len(_migration_rows(trace, lo, hi))
         segments = sum(
             1 for s in trace.segments if s.end > lo and s.start < hi)
@@ -4499,6 +5139,40 @@ def _find_extreme_inter_arrival_segment(segs: list,
 class _ParseCancelledError(Exception):
     """Internal control-flow exception used to abort _parse_btf cleanly."""
 
+
+def _drawable_time_range(
+    segments: List[TaskSegment],
+    sti_events: List[StiEvent],
+    tick_sti_times: List[int],
+) -> Optional[Tuple[int, int]]:
+    """Span covering painted activity (run segments, STI, tick marks).
+
+    Boot-time ``task_create`` / ``set_frequency`` events are excluded so
+    fit-to-window does not leave a blank left margin.
+    """
+    lo: Optional[int] = None
+    hi: Optional[int] = None
+    for seg in segments:
+        if lo is None or seg.start < lo:
+            lo = seg.start
+        if hi is None or seg.end > hi:
+            hi = seg.end
+    for ev in sti_events:
+        t = ev.time
+        if lo is None or t < lo:
+            lo = t
+        if hi is None or t > hi:
+            hi = t
+    for t in tick_sti_times:
+        if lo is None or t < lo:
+            lo = t
+        if hi is None or t > hi:
+            hi = t
+    if lo is None or hi is None or hi <= lo:
+        return None
+    return lo, hi
+
+
 def _parse_btf(filepath: str,
               progress_callback=None,
               cancel_check=None) -> BtfTrace:
@@ -4576,8 +5250,9 @@ def _parse_btf(filepath: str,
             ev_type = parts[3]
             if ev_type and (ev_type[0] == " " or ev_type[-1] == " "):
                 ev_type = ev_type.strip()
-            # Update time bounds only for non-C (non-set_frequency) events so
-            # that the trace start is anchored to the first scheduling event.
+            # Update time bounds only for non-C (non-set_frequency) events.
+            # After segment reconstruction these are tightened to drawable
+            # activity so a task_create storm does not pad the left margin.
             if ev_type != "C":
                 if first_event:
                     time_min = time_max = t
@@ -4782,6 +5457,10 @@ def _parse_btf(filepath: str,
     for _lst in segs_by_mk.values():
         _lst.sort(key=_seg_start_key)
     _migrations, _migrations_by_mk = _build_migration_index(segs_by_mk)
+    if progress_callback:
+        progress_callback(61, "Indexing migrations…")
+    _migration_times = [m.ns for m in _migrations]
+    _migrated_mks = frozenset(_migrations_by_mk.keys())
     def _core_sort_key(c: str):
         if c.startswith("Core_"):
             tail = c[5:]
@@ -4837,6 +5516,9 @@ def _parse_btf(filepath: str,
     # span) so that scene rebuilds never iterate more than _LOD_SUMMARY_BINS
     # segments per row at fit-to-view zoom.
     # ------------------------------------------------------------------
+    _drawn = _drawable_time_range(segments, sti_events, tick_sti_times)
+    if _drawn is not None:
+        time_min, time_max = _drawn
     _time_span = max(time_max - time_min, 1)
     _lod_timescale_per_px = _time_span / _LOD_SUMMARY_BINS  # ns per summary bin
     _lod_ultra_timescale_per_px = _time_span / _LOD_SUMMARY_BINS_ULTRA
@@ -4954,7 +5636,17 @@ def _parse_btf(filepath: str,
         for _iid, _insts in _interval_by_id.items()
     }
 
-    return BtfTrace(
+    _task_cpu_ns: Dict[str, int] = {}
+    for mk, segs in segs_by_mk.items():
+        raw = _mk_repr.get(mk, mk)
+        tname = _parse_task_name(raw)[2]
+        if _is_idle_task_name(tname) or tname == "TICK":
+            continue
+        t_ns = sum(s.end - s.start for s in segs)
+        if t_ns > 0:
+            _task_cpu_ns[mk] = t_ns
+
+    trace = BtfTrace(
         time_scale=time_scale,
         tasks=tasks,
         segments=segments,
@@ -5013,5 +5705,15 @@ def _parse_btf(filepath: str,
         has_sync_object_instrumentation=_has_sync,
         lock_bounce_migration_ns=_build_lock_bounce_migration_set(
             dict(_migrations_by_mk), _sync_objects),
+        migration_times=_migration_times,
+        migrated_mks=_migrated_mks,
+        task_cpu_ns=_task_cpu_ns,
     )
+    if progress_callback:
+        progress_callback(99, "Preparing statistics…")
+    _ctx, _gaps = _scheduling_stats(trace)
+    trace.sched_ctx_switches = _ctx
+    trace.sched_core_gaps = _gaps
+    trace.migration_rows_full = _migration_rows(trace)
+    return trace
 
