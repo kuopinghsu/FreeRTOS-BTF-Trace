@@ -1,4 +1,4 @@
-<h1 id="btf-trace-viewer" style="color:rgb(9,105,218);margin-bottom:0.4em">BTF Trace Viewer</h1>
+# ![](../images/readme/h1.svg) BTF Trace Viewer
 
 **Version 1.4.0** — Desktop (Python) and Web
 
@@ -8,9 +8,12 @@ Interactive viewer for FreeRTOS context-switch traces in **Best Trace Format** (
 
 [Try the live demo](https://apps.kuoping.com/btf_viewer.html?demo)
 
+Heading level: ![](../images/readme/h2.svg) section · ![](../images/readme/h3.svg) subsection · ![](../images/readme/h4.svg) topic · ![](../images/readme/h5.svg) detail
+
+
 ---
 
-<h2 id="features" style="color:rgb(9,105,218);border-bottom:2px solid rgba(9,105,218,0.35);padding-bottom:0.35em">Features</h2>
+## ![](../images/readme/h2.svg) Features
 
 - **Timeline visualisation** — task and core views, horizontal or vertical layout, smooth zoom and pan
 - **Multi-trace sessions** — open several traces in tabs; compare builds side by side
@@ -25,7 +28,7 @@ Metric definitions and formulas are in [Statistics & metrics](#statistics--metri
 
 ---
 
-<h2 id="contents" style="color:rgb(9,105,218);border-bottom:2px solid rgba(9,105,218,0.35);padding-bottom:0.35em">Contents</h2>
+## ![](../images/readme/h2.svg) Contents
 
 | Section | |
 |---------|--|
@@ -40,9 +43,9 @@ Metric definitions and formulas are in [Statistics & metrics](#statistics--metri
 
 ---
 
-<h2 id="quick-start" style="color:rgb(9,105,218);border-bottom:2px solid rgba(9,105,218,0.35);padding-bottom:0.35em">Quick start</h2>
+## ![](../images/readme/h2.svg) Quick start
 
-<h3 id="desktop" style="color:rgb(26,127,55)">Desktop</h3>
+### ![](../images/readme/h3.svg) Desktop
 
 **Requirements:** Python 3.8+ and [PySide6](https://pypi.org/project/PySide6/) ≥ 6.4.
 
@@ -54,7 +57,7 @@ python builds/btf_viewer.py [trace.btf]
 
 With no file argument, the previous session is restored. You can also use **File → Open**, drag-and-drop, or **File → Open Recent**.
 
-<h3 id="web" style="color:rgb(26,127,55)">Web</h3>
+### ![](../images/readme/h3.svg) Web
 
 Open the standalone build in any modern browser (no server required for typical use):
 
@@ -68,7 +71,7 @@ Or use the [hosted demo](https://apps.kuoping.com/btf_viewer.html). To rebuild f
 cd BTFViewer && make web    # → builds/btf_viewer.html
 ```
 
-<h3 id="supported-files" style="color:rgb(26,127,55)">Supported files</h3>
+### ![](../images/readme/h3.svg) Supported files
 
 | Format | Notes |
 |--------|--------|
@@ -80,11 +83,11 @@ Sample traces are under `tracedata/` (for example `example-2cores.btf.gz`).
 
 ---
 
-<h2 id="using-the-viewer" style="color:rgb(9,105,218);border-bottom:2px solid rgba(9,105,218,0.35);padding-bottom:0.35em">Using the viewer</h2>
+## ![](../images/readme/h2.svg) Using the viewer
 
 Desktop and Web share the same concepts. Where behaviour differs, it is noted below.
 
-<h3 id="view-modes-and-orientation" style="color:rgb(26,127,55)">View modes and orientation</h3>
+### ![](../images/readme/h3.svg) View modes and orientation
 
 | Control | Purpose |
 |---------|---------|
@@ -94,7 +97,7 @@ Desktop and Web share the same concepts. Where behaviour differs, it is noted be
 
 Switch from the toolbar or **View** menu. The last orientation is remembered.
 
-<h3 id="zoom-and-pan" style="color:rgb(26,127,55)">Zoom and pan</h3>
+### ![](../images/readme/h3.svg) Zoom and pan
 
 - **Wheel** — pan (add **Ctrl** to zoom; **Shift** swaps axes)
 - **Pinch** (macOS) — zoom
@@ -103,20 +106,20 @@ Switch from the toolbar or **View** menu. The last orientation is remembered.
 - **1:1** — reset to the configured zoom density
 - **Zoom to cursor range** (`Ctrl+R`) — fit between the first and last cursor
 
-<h3 id="labels-legend-and-highlight" style="color:rgb(26,127,55)">Labels, legend, and highlight</h3>
+### ![](../images/readme/h3.svg) Labels, legend, and highlight
 
 - Drag the label-column edge to resize; double-click the edge to auto-fit.
 - The **Legend** lists tasks with colours and filters (including migrated tasks).
 - Click or hover a task label or legend row to highlight that task on the timeline.
 - Hover a segment for duration, core, and neighbouring activity.
 
-<h3 id="cpu-load" style="color:rgb(26,127,55)">CPU Load</h3>
+### ![](../images/readme/h3.svg) CPU Load
 
 Toggle **Load** on the toolbar for a utilisation chart under the timeline. Drag the divider to resize. With two or more cursors, the chart can show a cursor-range average.
 
 With a task **lock-highlighted**, Task View shows that task’s utilisation **per core** in the load strip — useful when investigating migrations (see [Highlight a migrating task](#highlight-a-migrating-task-on-the-timeline)).
 
-<h3 id="cursors" style="color:rgb(26,127,55)">Cursors</h3>
+### ![](../images/readme/h3.svg) Cursors
 
 Place up to **4–8** cursors (default 4; set in Settings).
 
@@ -130,7 +133,7 @@ Place up to **4–8** cursors (default 4; set in Settings).
 
 With **two or more** cursors, the status bar shows a short range summary, and Statistics can limit metrics to **C1–Cn** (**Limit to cursor range**).
 
-<h3 id="marks-and-find" style="color:rgb(26,127,55)">Marks and find</h3>
+### ![](../images/readme/h3.svg) Marks and find
 
 | Tool | Purpose |
 |------|---------|
@@ -140,21 +143,21 @@ With **two or more** cursors, the status bar shows a short range summary, and St
 
 Right-click the timeline for cursor, bookmark, and annotation actions. Marks and cursors are restored with the session.
 
-<h3 id="multi-tab-traces" style="color:rgb(26,127,55)">Multi-tab traces</h3>
+### ![](../images/readme/h3.svg) Multi-tab traces
 
 Open several files (or a multi-BTF zip) as tabs. Each tab keeps its own zoom, cursors, marks, and filters. Cycle with `Ctrl+Tab` / `Ctrl+Shift+Tab`; close with `Ctrl+W`.
 
-<h3 id="tag-and-sti-markers" style="color:rgb(26,127,55)">Tag and STI markers</h3>
+### ![](../images/readme/h3.svg) Tag and STI markers
 
 Software-trace items appear as markers (and optional tag channels). Toggle STI rows with `I` or Settings. Expand tag channels for waveforms where available.
 
 ---
 
-<h2 id="analysis" style="color:rgb(9,105,218);border-bottom:2px solid rgba(9,105,218,0.35);padding-bottom:0.35em">Analysis</h2>
+## ![](../images/readme/h2.svg) Analysis
 
 Start with toolbar **Analysis** for a severity-tagged triage of the current Statistics scope, then open the named Statistics sections. For a top-down inspection order and worked examples, see **[WORKFLOWS.md](WORKFLOWS.md)**.
 
-<h3 id="analysis-findings" style="color:rgb(26,127,55)">Analysis Findings</h3>
+### ![](../images/readme/h3.svg) Analysis Findings
 
 Toolbar **Analysis** summarises likely issues for the current scope (load imbalance, WCET/CPU hotspots, blocking, priority inversion, core thrashing, deadline breaches, tick health, sync/mutex bounces, and similar). Use **Save as text…** for a copy; the same card appears in **Export HTML**.
 
@@ -166,7 +169,7 @@ Toolbar **Analysis** summarises likely issues for the current scope (load imbala
 4. Place cursors around the phase of interest and enable **Limit to cursor range**.
 5. Optionally ask the **AI** tab to walk the same findings ([WORKFLOWS.md §7](WORKFLOWS.md#7-ai-assistant-flow)).
 
-<h3 id="how-to-find-problems-quick-map" style="color:rgb(26,127,55)">How to find problems (quick map)</h3>
+### ![](../images/readme/h3.svg) How to find problems (quick map)
 
 | Symptom | Start here | Then check |
 |---------|------------|------------|
@@ -182,11 +185,11 @@ Toolbar **Analysis** summarises likely issues for the current scope (load imbala
 | Lock / queue issues | Mutex / Semaphore / Queue | Blocking, Migrations |
 | Before/after change | Trace Compare | Same cursor phases on both tabs |
 
-<h3 id="trace-compare" style="color:rgb(26,127,55)">Trace Compare</h3>
+### ![](../images/readme/h3.svg) Trace Compare
 
 With **two or more** tabs open, **Trace Compare…** diffs summary, top tasks, utilisation, migrations, execution, blocking, inter-arrival, preemption, and sync. Optionally limit each side to its own cursor range. Export CSV/HTML from the dialog. See also [Core migration analysis](#core-migration-analysis) below.
 
-<h3 id="ai-assistant" style="color:rgb(26,127,55)">AI Assistant</h3>
+### ![](../images/readme/h3.svg) AI Assistant
 
 The **AI** tab answers questions using **Analysis Findings** (or Trace Compare tables for that template)—not the raw BTF stream.
 
@@ -204,7 +207,7 @@ Any OpenAI-compatible endpoint works, including Ollama's own (`http://localhost:
 | 401 / 403 | Check API key (also read from `OPENAI_API_KEY` / `GEMINI_API_KEY` / `OLLAMA_API_KEY`; local Ollama needs none) |
 | Model not found | Test connection lists the models the endpoint serves — pick one of those, or `ollama pull` it |
 
-<h3 id="opening-the-web-app-from-file" style="color:rgb(26,127,55)">Opening the web app from <code>file://</code></h3>
+### ![](../images/readme/h3.svg) Opening the web app from `file://`
 
 A page opened straight from disk sends `Origin: null`, which Ollama rejects with
 `403` — the browser then reports only `Failed to fetch`. Serving the app over
@@ -235,11 +238,11 @@ local models; undo it with `launchctl unsetenv OLLAMA_ORIGINS` when done.
 
 Ask-order tips: [WORKFLOWS.md §7](WORKFLOWS.md#7-ai-assistant-flow).
 
-<h2 id="statistics--metrics" style="color:rgb(9,105,218);border-bottom:2px solid rgba(9,105,218,0.35);padding-bottom:0.35em">Statistics &amp; metrics</h2>
+## ![](../images/readme/h2.svg) Statistics & metrics
 
 Shared by the Desktop **Statistics** tab and the Web **Statistics** panel.
 
-<h3 id="in-this-section" style="color:rgb(26,127,55)">In this section</h3>
+### ![](../images/readme/h3.svg) In this section
 
 Click a name to jump to the write-up. Sequence follows the Statistics panel default order (customize via drag-reorder), with how-to and chart topics next to the metrics they support. Some sections appear only when the trace has matching STI events.
 
@@ -335,7 +338,7 @@ Pins, section order, and table heights persist across launches. Drag the splitte
 
 Full column definitions, chart axis meanings, and example plots: [Statistics metric tables](#statistics-metric-tables).
 
-<h3 id="statistics-metric-tables" style="color:rgb(26,127,55)">Statistics metric tables</h3>
+### ![](../images/readme/h3.svg) Statistics metric tables
 
 The Statistics panel (Desktop **Statistics** tab + Web **Statistics** tab) organises metrics into collapsible sections. Tables are **sortable** — click a column header to sort ascending/descending. **Export CSV** and **Export HTML** at the panel footer honour the current cursor scope and include every section's summary table. **Export HTML** starts with an **Analysis Findings** card (same content as toolbar **Analysis** — load balance, WCET, blocking, thrashing, deadlines, tick health, and sync) and embeds the **Load Balance Score** gauge as an SVG image under Core Utilisation; use the toolbar dialog for interactive triage and **Save as text…**. HTML also adds detail sub-tables under Priority Inheritance, Mutex / Semaphore, and Interval Analysis (longest instances / hold episodes first, capped at 150–200 rows per sub-table).
 
@@ -351,7 +354,7 @@ The Statistics panel (Desktop **Statistics** tab + Web **Statistics** tab) organ
 
 Example plots below use **`tracedata/example-8cores.btf.gz`**. Worked diagnosis steps for that sample: [WORKFLOWS.md §3](WORKFLOWS.md#3-worked-example--example-8cores).
 
-<h4 id="summary-scheduling-and-core-utilisation" style="color:rgb(130,80,223)">Summary, scheduling, and core utilisation</h4>
+#### ![](../images/readme/h4.svg) Summary, scheduling, and core utilisation
 
 These sections open the Statistics panel in the **default** order (Summary and Scheduling summary are always first; **Core utilisation** is the first pinnable section). Write-ups below follow that catalogue: system load → migrations / affinity / lifecycle / deadlines → slice timing → preemption / sync / tags. Drag-reorder may place panel sections elsewhere.
 
@@ -391,7 +394,7 @@ Toolbar **Analysis** also warns when Score &lt; 70 % *or* σ &gt; 30 %, and only
 
 **What it tells you:** Imbalanced utilisation across cores may indicate poor affinity, lock pinning, or workload placement issues — cross-check with **Core Migrations**, the Migration & Corridor Inspector, and toolbar **Analysis**.
 
-<h4 id="trace-health-tick" style="color:rgb(130,80,223)">Trace Health (TICK)</h4>
+#### ![](../images/readme/h4.svg) Trace Health (TICK)
 
 Uses STI **TICK** timestamps to estimate scheduler tick regularity and detect whether the trace was recorded with the standard periodic tick or FreeRTOS **tickless idle** (`configUSE_TICKLESS_IDLE`).
 
@@ -432,7 +435,7 @@ The histogram's multiple peaks (1×, 2×, 3× the nominal period) confirm tickle
 
 Large gaps may indicate CPU overload, long critical sections, tickless idle, or tracing gaps — not necessarily a FreeRTOS configuration error.
 
-<h4 id="core-time-breakdown" style="color:rgb(130,80,223)">Core Time Breakdown</h4>
+#### ![](../images/readme/h4.svg) Core Time Breakdown
 
 Per-core time budget for the scoped window, split into four mutually exclusive buckets (percentages of the core span):
 
@@ -445,7 +448,7 @@ Per-core time budget for the scoped window, split into four mutually exclusive b
 
 **What it tells you:** High **Gap %** on a busy core often correlates with elevated **Kernel Switch Overhead** or long ISR/critical sections. High **Idle %** with low **Active %** on some cores and overload on others points to affinity or placement imbalance — cross-check **Core utilisation** and **Core Migrations**. Click a core row (Desktop) to focus that core in **Core View**.
 
-<h4 id="concurrent-core-active-distribution" style="color:rgb(130,80,223)">Concurrent Core Active Distribution</h4>
+#### ![](../images/readme/h4.svg) Concurrent Core Active Distribution
 
 Temporal parallelism: how much of the scoped window is spent with exactly *N* cores concurrently running non-IDLE/non-TICK work (*N* = 0…number of cores).
 
@@ -474,7 +477,7 @@ python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
 
 ![Concurrent core active interval-duration distribution for N=4 in example-8cores.btf.gz](../images/stats/stats-concurrency-4.svg)
 
-<h4 id="kernel-switch-overhead" style="color:rgb(130,80,223)">Kernel Switch Overhead</h4>
+#### ![](../images/readme/h4.svg) Kernel Switch Overhead
 
 Per-core cost of consecutive context switches from `core_segs` gaps — time from the previous slice's preempt/end to the next slice's resume/start on the same core:
 
@@ -501,19 +504,19 @@ python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
 
 ![Kernel switch overhead distribution for Core_0 in example-8cores.btf.gz](../images/stats/stats-switch-core0.svg)
 
-<h4 id="top-tasks-by-cpu" style="color:rgb(130,80,223)">Top tasks by CPU</h4>
+#### ![](../images/readme/h4.svg) Top tasks by CPU
 
 Ranks worker tasks (excl. IDLE/TICK) by total on-CPU time in scope — the same *T*<sub>exec,i</sub> denominator used for **CPU%** in Execution Time Per Slice. Click a row to highlight the task on the timeline.
 
 Migration tables, highlight / inspect steps, the corridor inspector, and **Trace Compare…** are under [Core migration analysis](#core-migration-analysis).
 
-<h4 id="core-affinity" style="color:rgb(130,80,223)">Core Affinity</h4>
+#### ![](../images/readme/h4.svg) Core Affinity
 
 Per-task affinity mask history from `affinity_set` STI (`vTaskCoreAffinitySet`) vs. observed execution cores. **Violations** lists cores used while outside the mask then in effect (slices before the first set are unrestricted; mask changes are shown as `0x1 → 0x8`).
 
 Shown only when those STI events are present.
 
-<h4 id="task-lifecycle" style="color:rgb(130,80,223)">Task Lifecycle</h4>
+#### ![](../images/readme/h4.svg) Task Lifecycle
 
 Per-task summary of `create`, `delete`, `suspend`, and `resume` events recorded on the `task` STI channel: created/deleted timestamps, suspend/resume counts, alive span (create→delete), total lifecycle event count, and **Runs** — the number of times the task was actually dispatched onto a core (context-switch-in / segment count). Runs is a scheduler-level metric and is normally much larger than Susp/Res, which only counts explicit `vTaskSuspend()`/`vTaskResume()` API calls — a task can run (and be preempted/resumed by the scheduler) many times without ever being suspended.
 
@@ -521,11 +524,11 @@ In `example-8cores.btf.gz`, test 9 creates **SR0–SR3** (pinned across cores) w
 
 Shown only when the trace contains task lifecycle STI events.
 
-<h4 id="deadlines--cpu-budget" style="color:rgb(130,80,223)">Deadlines / CPU budget</h4>
+#### ![](../images/readme/h4.svg) Deadlines / CPU budget
 
 Configurable per-task execution deadline (**nanoseconds**, converted to the trace `#timeScale` before compare) and global CPU budget threshold (%). Shows **Slice over deadline** (top 20 by duration; click a row to jump + annotate) and **CPU budget exceeded** (click a row to highlight the task). Click column headers to sort. Click **Settings → Display** in the section to open Analysis thresholds (`Ctrl+,`). Always visible, with a configure prompt when no thresholds are set.
 
-<h3 id="execution-blocking-and-inter-arrival" style="color:rgb(26,127,55)">Execution, blocking, and inter-arrival</h3>
+### ![](../images/readme/h3.svg) Execution, blocking, and inter-arrival
 
 These three task metrics are measured from consecutive on-CPU slices of the same task. The figure below shows how they relate on the timeline (UI label **Block Time** = Statistics **Blocking Time**):
 
@@ -539,7 +542,7 @@ These three task metrics are measured from consecutive on-CPU slices of the same
 
 Inter-arrival ≈ execution + blocking for the same pair of activations (when the gap is positive).
 
-<h4 id="execution-time-per-slice" style="color:rgb(130,80,223)">Execution Time Per Slice</h4>
+#### ![](../images/readme/h4.svg) Execution Time Per Slice
 
 Measures how long each **on-CPU slice** lasts for a task — from switch-in until the task blocks, yields, or is preempted.
 
@@ -579,7 +582,7 @@ In `example-8cores.btf.gz`, task **CS[11]** has 730 slices with a long tail of l
 
 The scatter shows periodic bursts of short slices; the histogram uses a **log-scaled duration axis** so short and long slices are both visible. The **CDF** rises steeply on the left (most slices are short) then levels toward 100% as longer runs are included; **p50** and **p95** vertical markers align with the 50% and 95% ticks on the right axis.
 
-<h4 id="blocking-time" style="color:rgb(130,80,223)">Blocking Time</h4>
+#### ![](../images/readme/h4.svg) Blocking Time
 
 Measures the **off-CPU gap** between the end of one slice and the start of the next for the same task — time spent waiting to run again (preempted, blocked on a resource, or delayed by the scheduler).
 
@@ -615,7 +618,7 @@ Only positive gaps are counted. Min / Avg / Max / p95 are taken over all gaps *g
 
 High blocking gaps clustered at certain times often correlate with lock contention or a higher-priority task dominating the core.
 
-<h4 id="dispatch--scheduling-latency" style="color:rgb(130,80,223)">Dispatch / Scheduling Latency</h4>
+#### ![](../images/readme/h4.svg) Dispatch / Scheduling Latency
 
 Ready→run delay for a task: t<sub>ready</sub> from STI `resume Name[id]` (`vTaskResume`) or task **create** time, and t<sub>resume</sub> from the next switch-in (segment start):
 
@@ -644,7 +647,7 @@ python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
 
 ![Dispatch latency distribution for SR0[271] in example-8cores.btf.gz](../images/stats/stats-dispatch-sr0.svg)
 
-<h4 id="inter-arrival-time" style="color:rgb(130,80,223)">Inter-Arrival Time</h4>
+#### ![](../images/readme/h4.svg) Inter-Arrival Time
 
 Measures the gap between **successive activation start times** of the same task (time between slice starts, not off-CPU gap).
 
@@ -678,7 +681,7 @@ Min / Avg / Max / p95 are taken over all inter-arrival samples Δ*t*<sub>k</sub>
 
 Compare with Blocking Time: inter-arrival includes time the task was **running**, so values are typically larger than off-CPU gaps alone. The histogram auto-selects **log duration** for CS[11] because activation gaps span microseconds to milliseconds.
 
-<h4 id="preemption-chain-analysis" style="color:rgb(130,80,223)">Preemption Chain Analysis</h4>
+#### ![](../images/readme/h4.svg) Preemption Chain Analysis
 
 For each **victim** task's off-CPU gap, the analyser finds which **preemptor** tasks ran on the **same core** as the victim during that gap and aggregates overlap duration.
 
@@ -712,7 +715,7 @@ For each **victim** task's off-CPU gap, the analyser finds which **preemptor** t
 
 High **Count** with moderate **Avg** overlap suggests frequent short preemptions; a few points with large **y** values are long stretches where CS[25] ran while CS[24] waited. Use this table to answer *who preempted whom* and whether a victim's blocking is dominated by one preemptor or many.
 
-<h4 id="priority-inheritance" style="color:rgb(130,80,223)">Priority Inheritance</h4>
+#### ![](../images/readme/h4.svg) Priority Inheritance
 
 Shown when the trace has **`create pri:N`** on task-create `T` rows **and** at least one priority STI on the `task` channel:
 
@@ -752,7 +755,7 @@ where *t*<sub>start</sub> is the inherit / set-up STI and *t*<sub>end</sub> is t
 
 Per-episode detail (distribution chart tooltips, **Export HTML → Boost episodes**) can be more specific, e.g. `Mutex inherit L/M/H (CS[11], CS[12] +126)` — listing up to two medium-task names plus a count of any others.
 
-<h5 id="lmh-pattern-priority-inversion-geometry" style="color:rgb(191,57,137)">L/M/H pattern (priority inversion geometry)</h5>
+##### ![](../images/readme/h5.svg) L/M/H pattern (priority inversion geometry)
 
 **L/M/H** names the textbook **priority-inversion** layout on three priority levels. In the demo firmware (`Demo/examples/freertos_test/main.c` test 8) the tasks are named **Low**, **Med**, and **High**, pinned to **Core_0** on SMP, and the scenario is repeated **`T8_ROUNDS` (3) times** so the timeline shows multiple red boost stripes and the Priority Inheritance chart has several inherit points:
 
@@ -818,7 +821,7 @@ Export a timeline SVG from the viewer (**File → Save SVG** or toolbar) after z
 
 **Note:** `traceTASK_PRIORITY_INHERIT` / `traceTASK_PRIORITY_DISINHERIT` are invoked by the FreeRTOS kernel inside `xTaskPriorityInherit()` / `xTaskPriorityDisinherit()` when `configUSE_MUTEXES` is enabled.
 
-<h4 id="mutex--semaphore-pairing" style="color:rgb(130,80,223)">Mutex / Semaphore pairing</h4>
+#### ![](../images/readme/h4.svg) Mutex / Semaphore pairing
 
 When queue trace hooks are enabled (`configINCLUDE_QUEUE_EVENTS`), mutex and semaphore STI lines include the **FreeRTOS object pointer** in the note:
 
@@ -875,7 +878,7 @@ Below the summary table, a **Pairing issues** sub-table lists every problem in s
 
 `example-4cores.btf.gz` (tests 1–3) exercises `0x80018700` (mutex) and `0x80018650` (counting sem) with clean hold pairing. The full trace shows `CORE_MIGRATION_WHILE_HELD` warnings on `0x80018700` (3 bounces) and `0x80018650` (1 bounce) — the Statistics **Mutex / Semaphore** summary table will show **Warning** for these mutexes and non-zero values in the **Bounces** column. Coordination sems pair in **signal** direction.
 
-<h4 id="queue" style="color:rgb(130,80,223)">Queue</h4>
+#### ![](../images/readme/h4.svg) Queue
 
 When `queue` STI events are present (`configINCLUDE_QUEUE_EVENTS`), the **Queue** section pairs `send`/`recv` (and `create`/`delete`) **per object pointer**, the same way Mutex / Semaphore pairing works for `take`/`give`.
 
@@ -889,7 +892,7 @@ When `queue` STI events are present (`configINCLUDE_QUEUE_EVENTS`), the **Queue*
 
 Shown only when the trace contains `queue` STI events. For mutex/semaphore bounce and issue detail, see **Mutex / Semaphore pairing** above.
 
-<h4 id="interval-analysis" style="color:rgb(130,80,223)">Interval Analysis</h4>
+#### ![](../images/readme/h4.svg) Interval Analysis
 
 Pairs **`interval_start` / `interval_stop`** STI events into measurable code regions. Each interval **id** gets an **Interval N** row on the timeline (horizontal task view) with colored span bars; the statistics table aggregates duration across all paired spans for that id.
 
@@ -935,7 +938,7 @@ Recorded by `traceINTERVAL_START(id)` / `traceINTERVAL_STOP(id)` in firmware —
 
 Most spans cluster at short durations (tight yield loops); occasional high **y** points mark iterations that waited longer on the shared mutex or area semaphore. Compare ids **4–6** (shorter per-iteration work) vs **1–3** (heavier stress tests) in the same table.
 
-<h5 id="pairing-algorithm" style="color:rgb(191,57,137)">Pairing algorithm</h5>
+##### ![](../images/readme/h5.svg) Pairing algorithm
 
 At parse time, the viewer collects all `interval_start` / `interval_stop` STI events, sorts them by time (start before stop at the same timestamp), and pairs them with a **per-key stack** (LIFO).
 
@@ -983,7 +986,7 @@ Task 8: STOP   note=1 tid:8   → pairs with task 8 start only
 
 Result: **two** instances — one for the inner region, one for the outer region — each with the correct duration. **Min / Avg / Max / p95** in the statistics table are computed over **all** paired instances whose time range overlaps the active scope (full trace or cursor range). Timeline display uses a separate rule (see below).
 
-<h5 id="limitations" style="color:rgb(191,57,137)">Limitations</h5>
+##### ![](../images/readme/h5.svg) Limitations
 
 **1. Concurrent overlap with the same id (cross-pairing)** — *legacy traces without `tid`*
 
@@ -1070,11 +1073,11 @@ To get reliable per-task interval statistics:
 - Do **not** rely on **core** to disambiguate pairs on SMP: tasks can **migrate** between `START` and `STOP` (see limitation 2 above).
 - Orphan stops (stop without start) are dropped; orphan starts at end of trace are not counted in the table.
 
-<h5 id="timeline-rendering" style="color:rgb(191,57,137)">Timeline rendering</h5>
+##### ![](../images/readme/h5.svg) Timeline rendering
 
 Interval bars are drawn as **solid** spans in the interval’s colour. **Start** and **stop** events are marked with vertical tick lines (solid at start, dashed at stop) on the interval row.
 
-<h4 id="tag-analysis" style="color:rgb(130,80,223)">Tag Analysis</h4>
+#### ![](../images/readme/h4.svg) Tag Analysis
 
 Aggregates numeric samples from the 8 general-purpose STI **tag** channels (`tag0_event` … `tag7_event`, plus the unindexed `tag_event`) — free-form values emitted by firmware via `btf_traceTAG(id, value)` for any application-defined metric that doesn't fit an existing STI channel (queue depth, ADC reading, free heap, sensor reading, etc.). One row appears per channel that has at least one sample.
 
@@ -1093,7 +1096,7 @@ Aggregates numeric samples from the 8 general-purpose STI **tag** channels (`tag
 - **Scatter:** x = sample time, y = tag value.
 - **Histogram:** distribution of tag values.
 
-<h5 id="interval-tab-time-between-samples" style="color:rgb(191,57,137)">Interval tab (time between samples)</h5>
+##### ![](../images/readme/h5.svg) Interval tab (time between samples)
 
 The distribution popup has two in-dialog tabs — **Value** (above) and **Interval** — mirroring the **Core Migrations** Dwell/Rate/Gap tabs. Click **Interval** to switch the same scatter + histogram widgets to show the **elapsed time between consecutive samples** on that channel, regardless of which task or core emitted them.
 
@@ -1113,13 +1116,13 @@ This is the **recommended way to measure elapsed time across two different tasks
 
 Shown only when the trace contains `tag0_event` … `tag7_event` (or `tag_event`) STI samples.
 
-<h3 id="core-migration-analysis" style="color:rgb(26,127,55)">Core migration analysis</h3>
+### ![](../images/readme/h3.svg) Core migration analysis
 
 A **migration** is recorded when consecutive slices of the same task (merge-key) run on different cores. Migrations are detected at parse time from the segment timeline — there are no separate markers drawn on the timeline; use the **Core Migrations** table, the **Migration & Corridor Inspector** (toolbar **Heatmap** / **Chord**), **Trace Compare…**, or Find **Migrations** mode to inspect them.
 
 Affinity, lifecycle, and deadline meanings are earlier in this chapter. This section is the deep dive for the migration tables, highlight / inspect steps, the corridor inspector, and **Trace Compare…**.
 
-<h4 id="highlight-a-migrating-task-on-the-timeline" style="color:rgb(130,80,223)">Highlight a migrating task on the timeline</h4>
+#### ![](../images/readme/h4.svg) Highlight a migrating task on the timeline
 
 To *see* a hot migrating task in context (not only read rates in a table):
 
@@ -1149,7 +1152,7 @@ python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
     --lo 1805000 --hi 1865000
 ```
 
-<h4 id="inspect-migrations-involving-a-specific-core" style="color:rgb(130,80,223)">Inspect migrations involving a specific core</h4>
+#### ![](../images/readme/h4.svg) Inspect migrations involving a specific core
 
 After highlighting a hot task:
 
@@ -1221,7 +1224,7 @@ Each tab's scatter + histogram uses the same **adaptive scaling** as other metri
 
 Drag the resize handle below the table to show more or fewer rows.
 
-<h4 id="core-pair-migration-summary" style="color:rgb(130,80,223)">Core-Pair Migration Summary</h4>
+#### ![](../images/readme/h4.svg) Core-Pair Migration Summary
 
 Directed corridors (`From → To`) aggregated across all tasks. Complements per-task **Core Migrations** (which task thrashing?) with pair-level volume and lock-bounce share.
 
@@ -1249,7 +1252,7 @@ Dialog footer:
 
 ![Time between pair migrations for Core_5→Core_7](../images/stats/stats-pair-rate-c5-c7.svg)
 
-<h4 id="migration--corridor-inspector" style="color:rgb(130,80,223)">Migration &amp; Corridor Inspector</h4>
+#### ![](../images/readme/h4.svg) Migration & Corridor Inspector
 
 Toolbar **Heatmap** and **Chord** open the same inspector (Desktop + Web): corridor/task tree, time-bin grid, and mini-chord topology.
 
@@ -1276,7 +1279,7 @@ python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
   -o /tmp/migration.svg --view chord --width 1000 --height 720 --drill-row 0
 ```
 
-<h4 id="trace-compare-1" style="color:rgb(130,80,223)">Trace Compare…</h4>
+#### ![](../images/readme/h4.svg) Trace Compare…
 
 Compare two traces you already have open side-by-side:
 
@@ -1327,7 +1330,7 @@ Each row shows Trace A, Trace B, and **Δ** (signed difference).
 
 Use this to compare builds, configurations, or runs of the same workload without merging traces manually.
 
-<h5 id="use-case-tickful-vs-tickless-performance-and-context-switches" style="color:rgb(191,57,137)">Use case: tickful vs tickless (performance and context switches)</h5>
+##### ![](../images/readme/h5.svg) Use case: tickful vs tickless (performance and context switches)
 
 Capture the **same workload** twice — once with a fixed tick (`configUSE_TICKLESS_IDLE = 0`) and once with FreeRTOS **tickless idle** (`= 1`) — then use **Trace Compare…** to quantify scheduler cost and application latency.
 
@@ -1416,9 +1419,7 @@ Prefer **tickless** when idle power matters and scoped busy-window metrics stay 
 
 ---
 
----
-
-<h3 id="metrics-distribution-charts" style="color:rgb(26,127,55)">Metrics Distribution Charts</h3>
+### ![](../images/readme/h3.svg) Metrics Distribution Charts
 
 In the **Statistics** panel, click any row in **Concurrent Core Active**, **Kernel Switch Overhead**, **Execution Time**, **Blocking Time**, **Dispatch / Scheduling Latency**, **Inter-Arrival**, **Core Migrations**, **Preemption Chain**, **Priority Inheritance**, **Interval Analysis**, or **Tag Analysis** to open a floating chart popup. In **Trace Health (TICK)**, use the **Tick Distribution…** button (bar-chart icon beside the mode badge when ≥ 2 ticks are in scope). **Core Migrations** popups additionally show in-dialog tabs (**Dwell** / **Rate** / **Gap**) and **Tag Analysis** popups show tabs (**Value** / **Interval**) to switch metrics without closing the chart.
 
@@ -1437,7 +1438,7 @@ The popup can be dragged, resized, and closed independently of the main window.
 If the chart is open, it **updates live** when you move cursors or toggle cursor-range scope.
 Each open trace tab remembers its own chart when you switch tabs.
 
-<h4 id="cdf-overlay" style="color:rgb(130,80,223)">CDF overlay</h4>
+#### ![](../images/readme/h4.svg) CDF overlay
 
 Every metrics histogram includes a **cumulative distribution function (CDF)** drawn as a **blue line** over the bars. It answers a different question than the histogram alone:
 
@@ -1508,7 +1509,7 @@ Example plots from `tracedata/example-4cores.btf.gz` (4-core SMP trace, 67 tasks
 
 ---
 
-<h2 id="export" style="color:rgb(9,105,218);border-bottom:2px solid rgba(9,105,218,0.35);padding-bottom:0.35em">Export</h2>
+## ![](../images/readme/h2.svg) Export
 
 | Action | Desktop | Web |
 |--------|---------|-----|
@@ -1519,7 +1520,7 @@ Example plots from `tracedata/example-4cores.btf.gz` (4-core SMP trace, 67 tasks
 | Statistics CSV/HTML | Statistics panel | Statistics panel |
 | Compare CSV/HTML | Trace Compare dialog | Trace Compare dialog |
 
-<h3 id="headless-cli-desktop-only" style="color:rgb(26,127,55)">Headless CLI (Desktop only)</h3>
+### ![](../images/readme/h3.svg) Headless CLI (Desktop only)
 
 Same engine as the GUI, suitable for CI. Use `QT_QPA_PLATFORM=offscreen` when no display is available.
 
@@ -1544,7 +1545,7 @@ Run `python builds/btf_viewer.py <command> -h` for full options.
 
 ---
 
-<h2 id="settings" style="color:rgb(9,105,218);border-bottom:2px solid rgba(9,105,218,0.35);padding-bottom:0.35em">Settings</h2>
+## ![](../images/readme/h2.svg) Settings
 
 Open **Settings** from the toolbar or `Ctrl+,`.
 
@@ -1565,11 +1566,11 @@ Sessions also restore open tabs, viewport, cursors, and marks (Desktop: settings
 
 ---
 
-<h2 id="keyboard--mouse" style="color:rgb(9,105,218);border-bottom:2px solid rgba(9,105,218,0.35);padding-bottom:0.35em">Keyboard &amp; mouse</h2>
+## ![](../images/readme/h2.svg) Keyboard & mouse
 
 Shortcuts marked **(W)** are Web-only. Others work on Desktop and Web. On Web, press `?` for an on-screen cheat sheet.
 
-<h3 id="file--tabs" style="color:rgb(26,127,55)">File &amp; tabs</h3>
+### ![](../images/readme/h3.svg) File & tabs
 
 | Key | Action |
 |-----|--------|
@@ -1578,7 +1579,7 @@ Shortcuts marked **(W)** are Web-only. Others work on Desktop and Web. On Web, p
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous tab |
 | `Ctrl+Q` | Quit (Desktop) |
 
-<h3 id="view--zoom" style="color:rgb(26,127,55)">View &amp; zoom</h3>
+### ![](../images/readme/h3.svg) View & zoom
 
 | Key | Action |
 |-----|--------|
@@ -1590,7 +1591,7 @@ Shortcuts marked **(W)** are Web-only. Others work on Desktop and Web. On Web, p
 | `Ctrl+G` | Jump to time |
 | `Ctrl+Home` / `Ctrl+End` | Trace start / end |
 
-<h3 id="edit--marks" style="color:rgb(26,127,55)">Edit &amp; marks</h3>
+### ![](../images/readme/h3.svg) Edit & marks
 
 | Key | Action |
 |-----|--------|
@@ -1600,7 +1601,7 @@ Shortcuts marked **(W)** are Web-only. Others work on Desktop and Web. On Web, p
 | `Ctrl+Shift+B` / `A` | Annotation |
 | `Ctrl+F` / `F3` / `Shift+F3` | Find / next / previous |
 
-<h3 id="export-1" style="color:rgb(26,127,55)">Export</h3>
+### ![](../images/readme/h3.svg) Export
 
 | Key | Action |
 |-----|--------|
@@ -1609,7 +1610,7 @@ Shortcuts marked **(W)** are Web-only. Others work on Desktop and Web. On Web, p
 | `Ctrl+Shift+S` | Save SVG |
 | `Ctrl+Shift+E` | Export Perfetto |
 
-<h3 id="mouse" style="color:rgb(26,127,55)">Mouse</h3>
+### ![](../images/readme/h3.svg) Mouse
 
 | Action | Effect |
 |--------|--------|
@@ -1622,14 +1623,14 @@ Shortcuts marked **(W)** are Web-only. Others work on Desktop and Web. On Web, p
 
 ---
 
-<h2 id="further-reading" style="color:rgb(9,105,218);border-bottom:2px solid rgba(9,105,218,0.35);padding-bottom:0.35em">Further reading</h2>
+## ![](../images/readme/h2.svg) Further reading
 
 | Document | Audience |
 |----------|----------|
 | **[WORKFLOWS.md](WORKFLOWS.md)** | Analysis playbooks and AI ask order |
 | **[btf-viewer-slides.md](btf-viewer-slides.md)** | Presentation overview |
 
-<h3 id="developer-notes" style="color:rgb(26,127,55)">Developer notes</h3>
+### ![](../images/readme/h3.svg) Developer notes
 
 Day-to-day users can ignore this section.
 
@@ -1645,7 +1646,7 @@ Edit sources under `btf_viewer_pkg/` and `web/`; commit regenerated files under 
 
 ---
 
-<h2 id="contributors" style="color:rgb(9,105,218);border-bottom:2px solid rgba(9,105,218,0.35);padding-bottom:0.35em">Contributors</h2>
+## ![](../images/readme/h2.svg) Contributors
 
 Thanks to everyone who has contributed to this project.
 
