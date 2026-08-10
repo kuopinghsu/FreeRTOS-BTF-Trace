@@ -2,6 +2,14 @@
   <div class="ai-panel">
     <div class="ai-header">
       <span class="ai-title">AI Assistant</span>
+      <button
+        type="button"
+        class="ai-auth-chip"
+        :title="'Open Settings → AI to sign in or change the API key'"
+        @click="emit('openSettings')"
+      >
+        {{ authChipLabel }}
+      </button>
     </div>
     <div class="ai-header-actions">
       <button
@@ -155,6 +163,38 @@
       </div>
     </div>
 
+    <div
+      v-if="mermaidZoom"
+      class="ai-mermaid-overlay"
+      role="dialog"
+      aria-label="Diagram"
+      @click.self="closeMermaidZoom"
+    >
+      <div class="ai-mermaid-zoom-dialog">
+        <div class="ai-mermaid-zoom-head">
+          <span>Diagram — scroll to pan, pinch to zoom</span>
+          <button
+            type="button"
+            class="ai-link-btn"
+            @click="closeMermaidZoom"
+          >
+            Close
+          </button>
+        </div>
+        <div
+          class="ai-mermaid-zoom-body"
+          v-html="mermaidZoom.html"
+          @click="onMsgClick"
+        />
+        <p
+          v-if="mermaidZoom.links"
+          class="ai-mermaid-zoom-links"
+          v-html="mermaidZoom.links"
+          @click="onMsgClick"
+        />
+      </div>
+    </div>
+
     <p class="ai-hint">
       Uses Analysis Findings for the current Statistics scope
       (Trace Compare template uses compare CSV).
@@ -207,7 +247,77 @@
           v-html="formatMessage(m.role, m.content)"
           @click="onMsgClick"
         />
+        <div
+          v-if="m.tools && m.tools.length"
+          class="ai-tool-card"
+        >
+          <p
+            v-for="t in m.tools"
+            :key="t.id"
+          >
+            ⚡ {{ toolLabel(t) }}
+            <span class="ai-tool-st">({{ t.status || 'pending' }})</span>
+          </p>
+          <div
+            v-if="batchPending(m)"
+            class="ai-tool-actions"
+          >
+            <button
+              type="button"
+              class="ai-btn primary"
+              @click="applyBatch(m.batchId)"
+            >
+              Apply
+            </button>
+            <button
+              type="button"
+              class="ai-link-btn"
+              @click="skipBatch(m.batchId)"
+            >
+              Skip
+            </button>
+          </div>
+          <button
+            v-else-if="batchApplied(m)"
+            type="button"
+            class="ai-link-btn"
+            @click="undoBatch(m.batchId)"
+          >
+            Undo
+          </button>
+        </div>
       </div>
+    </div>
+
+    <div
+      v-if="toolBarVisible"
+      class="ai-tool-bar"
+    >
+      <button
+        v-if="pendingBatchId"
+        type="button"
+        class="ai-btn primary"
+        title="Run the pending viewer tools from the last reply"
+        @click="applyBatch(pendingBatchId)"
+      >
+        Apply GUI actions
+      </button>
+      <button
+        v-if="pendingBatchId"
+        type="button"
+        class="ai-link-btn"
+        @click="skipBatch(pendingBatchId)"
+      >
+        Skip
+      </button>
+      <button
+        v-if="appliedBatchId && !pendingBatchId"
+        type="button"
+        class="ai-link-btn"
+        @click="undoBatch(appliedBatchId)"
+      >
+        Undo last actions
+      </button>
     </div>
 
     <div
@@ -275,6 +385,26 @@
     >
       {{ statusText }}
     </div>
+    <div
+      v-if="showAuthCta"
+      class="ai-auth-cta"
+    >
+      <button
+        v-if="showSignInCta"
+        type="button"
+        class="ai-link-btn"
+        @click="onSignInCta"
+      >
+        {{ signInLabel }}
+      </button>
+      <button
+        type="button"
+        class="ai-link-btn"
+        @click="emit('openSettings')"
+      >
+        Settings…
+      </button>
+    </div>
   </div>
 </template>
 
@@ -286,12 +416,28 @@ import {
   AI_TEMPLATE_QUESTIONS,
   DEFAULT_AI_PRESET,
   DEFAULT_AI_RESPONSE_LANGUAGE,
-  aiChat,
+  aiAuthStatus,
+  aiChatCompletion,
   aiPresetInfo,
+  aiPresetSignInLabel,
+  aiPresetSignInUrl,
+  buildAiSystemPrompt,
+  buildAiUserMessage,
   extractJumpTimes,
   normalizeAiContext,
   resolveAiSettings,
 } from '../utils/ollamaClient.js'
+import {
+  MAX_TOOL_ROUNDS,
+  aiViewerTools,
+  canonicalAssistantToolMessage,
+  parseAiAutoApply,
+  parseBtfHighlightHref,
+  parseBtfJumpHref,
+  summariseToolCall,
+  toolResultMessage,
+  validateToolCall,
+} from '../utils/aiTools.js'
 import {
   aiFileStamp,
   formatAiConversationHtml,
@@ -306,15 +452,19 @@ const props = defineProps({
   /** { [presetId]: { baseUrl, model, apiKey } } */
   aiPresets: { type: Object, default: () => ({}) },
   responseLanguage: { type: String, default: DEFAULT_AI_RESPONSE_LANGUAGE },
+  aiAutoApply: { type: Boolean, default: false },
   /** () => Promise|{ findingsText, span, cores, scope } */
   getContext: { type: Function, required: true },
   /** () => [{ id, name }, ...] loaded BTF tabs */
   getLoadedTabs: { type: Function, default: null },
   /** (idA, idB) => Promise|{ findingsText, span, cores, scope } */
   buildCompareContext: { type: Function, default: null },
+  /** (tools) => result[] */
+  executeTools: { type: Function, default: null },
+  undoTools: { type: Function, default: null },
 })
 
-const emit = defineEmits(['openSettings', 'jump', 'update:responseLanguage'])
+const emit = defineEmits(['openSettings', 'jump', 'highlight', 'update:responseLanguage'])
 
 const templates = AI_TEMPLATE_QUESTIONS
 // A language imported from JSON need not be one of the built-in choices.
@@ -337,7 +487,23 @@ const comparePickOpen = ref(false)
 const comparePickA = ref(null)
 const comparePickB = ref(null)
 const pendingComparePrompt = ref('')
+const mermaidZoom = ref(null)
 let abortCtrl = null
+let chatMessages = []
+let toolRound = 0
+let batchSeq = 0
+
+function toolLabel(t) {
+  return summariseToolCall(t.name, t.arguments || {})
+}
+
+function batchPending(m) {
+  return m.batchId && (m.tools || []).some(t => (t.status || 'pending') === 'pending')
+}
+
+function batchApplied(m) {
+  return m.batchId && (m.tools || []).some(t => t.status === 'applied')
+}
 
 watch(() => props.responseLanguage, (v) => {
   langDraft.value = v || DEFAULT_AI_RESPONSE_LANGUAGE
@@ -374,6 +540,24 @@ const comparePickReady = computed(
     && !comparePickSame.value,
 )
 
+const pendingBatchId = computed(() => {
+  for (let i = messages.value.length - 1; i >= 0; i -= 1) {
+    const m = messages.value[i]
+    if (m?.tools?.some(t => (t.status || 'pending') === 'pending')) return m.batchId || ''
+  }
+  return ''
+})
+
+const appliedBatchId = computed(() => {
+  for (let i = messages.value.length - 1; i >= 0; i -= 1) {
+    const m = messages.value[i]
+    if (m?.tools?.some(t => t.status === 'applied')) return m.batchId || ''
+  }
+  return ''
+})
+
+const toolBarVisible = computed(() => !!(pendingBatchId.value || appliedBatchId.value))
+
 function templateTitle(t) {
   if (t.id === AI_COMPARE_TEMPLATE_ID && !compareEnabled.value) {
     return 'Open at least two BTF tabs to use Trace Compare.'
@@ -396,21 +580,87 @@ const statusText = computed(() => {
   return status.value
 })
 
+const activeAi = computed(() => resolveAiSettings({
+  aiPreset: props.aiPreset,
+  aiPresets: props.aiPresets,
+}))
+const authState = computed(() => aiAuthStatus({
+  authMode: activeAi.value.authMode,
+  apiKey: activeAi.value.apiKey,
+  baseUrl: activeAi.value.baseUrl,
+  presetId: activeAi.value.preset,
+}))
+const authChipLabel = computed(() => (
+  `${aiPresetInfo(activeAi.value.preset).label} · ${authState.value.label}`
+))
+const signInLabel = computed(() => aiPresetSignInLabel(activeAi.value.preset))
+const signInUrl = computed(() => (
+  aiPresetSignInUrl(activeAi.value.preset, activeAi.value.baseUrl)
+))
+const authForced = ref(false)
+const showAuthCta = computed(() => authState.value.needsAuth || authForced.value)
+const showSignInCta = computed(() => (
+  authState.value.mode === 'browser' || Boolean(signInUrl.value)
+))
+
+function noteAuthError(msg) {
+  const low = String(msg || '').toLowerCase()
+  if (low.includes('http 401') || low.includes('http 403') || low.includes('api key required')) {
+    authForced.value = true
+  }
+}
+
+function onSignInCta() {
+  const url = signInUrl.value
+  if (url) {
+    window.open(url, '_blank', 'noopener,noreferrer')
+    status.value = `Opened ${url}. Paste the key or token in Settings → AI.`
+    error.value = ''
+  } else {
+    status.value = 'This preset has no sign-in page. Paste a token in Settings → AI.'
+  }
+  emit('openSettings')
+}
+
 function formatMessage(role, text) {
   return formatAiMessageHtml(role, text)
 }
 
+function closeMermaidZoom() {
+  mermaidZoom.value = null
+}
+
+function openMermaidZoom(fromEl) {
+  const root = fromEl?.closest?.('.ai-mermaid') || fromEl
+  const svgWrap = root.querySelector?.('.ai-mermaid-svg')
+  const img = root.querySelector?.('.ai-mermaid-img')
+  const links = root.querySelector?.('.ai-mermaid-links')
+  let html = ''
+  if (svgWrap) html = svgWrap.outerHTML
+  else if (img) html = `<img src="${img.getAttribute('src') || ''}" alt="mermaid diagram">`
+  if (!html) return
+  mermaidZoom.value = { html, links: links ? links.innerHTML : '' }
+}
+
 function onMsgClick(ev) {
-  const a = ev.target?.closest?.('a[data-jump], a[href^="btfjump:"]')
-  if (!a) return
-  ev.preventDefault()
-  let v = Number(a.getAttribute('data-jump'))
-  if (!Number.isFinite(v)) {
+  const a = ev.target?.closest?.('a[data-jump], a[href^="btfjump:"], a[data-highlight], a[href^="btfhighlight:"]')
+  if (a && !a.classList.contains('ai-mermaid-zoom')) {
+    ev.preventDefault()
     const href = a.getAttribute('href') || ''
-    const m = /^btfjump:(.+)$/.exec(href)
-    if (m) v = Number(m[1])
+    const hl = parseBtfHighlightHref(href, a.getAttribute('data-highlight'))
+    if (hl) {
+      emit('highlight', hl)
+      return
+    }
+    const v = parseBtfJumpHref(href, a.getAttribute('data-jump'))
+    if (Number.isFinite(v)) emit('jump', v)
+    return
   }
-  if (Number.isFinite(v)) emit('jump', v)
+  if (ev.target?.closest?.('.ai-mermaid-zoom-dialog')) return
+  const zoomHit = ev.target?.closest?.('.ai-mermaid-zoom, .ai-mermaid-svg, .ai-mermaid-img')
+  if (!zoomHit) return
+  ev.preventDefault()
+  openMermaidZoom(zoomHit)
 }
 
 function onLogContextMenu(ev) {
@@ -480,8 +730,11 @@ async function scrollLog() {
 function clear() {
   if (busy.value) stop()
   messages.value = []
+  chatMessages = []
+  toolRound = 0
   error.value = ''
   status.value = ''
+  mermaidZoom.value = null
 }
 
 function stop() {
@@ -559,14 +812,154 @@ async function ask(prompt) {
   await send()
 }
 
+async function runCompletion(active) {
+  return aiChatCompletion({
+    messages: chatMessages,
+    tools: aiViewerTools(),
+    baseUrl: active.baseUrl,
+    model: active.model,
+    apiKey: active.apiKey,
+    preset: active.preset,
+    responseLanguage: props.responseLanguage,
+    signal: abortCtrl?.signal,
+  })
+}
+
+function ingestTurn(turn) {
+  const text = String(turn.content || '').trim()
+  const calls = Array.isArray(turn.tool_calls) ? turn.tool_calls : []
+  if (calls.length) chatMessages.push(canonicalAssistantToolMessage(text, calls))
+  else if (text) chatMessages.push({ role: 'assistant', content: text })
+
+  const toolsNorm = calls.map((c, i) => {
+    const name = String(c.name || '')
+    const args = c.arguments && typeof c.arguments === 'object' ? c.arguments : {}
+    const checked = validateToolCall(name, args)
+    return {
+      id: String(c.id || `call_${i}`),
+      name,
+      arguments: checked.args || args,
+      error: checked.error || '',
+      status: 'pending',
+    }
+  })
+  if (toolsNorm.length) {
+    batchSeq += 1
+    const batchId = `b${batchSeq}`
+    messages.value.push({
+      role: 'assistant',
+      content: text,
+      tools: toolsNorm,
+      batchId,
+    })
+    return { batchId, text }
+  }
+  if (text) messages.value.push({ role: 'assistant', content: text })
+  const jumps = extractJumpTimes(text)
+  if (jumps.length) {
+    const m = /jump:([0-9]+(?:\.[0-9]+)?)/.exec(text || '')
+    const label = m ? m[1] : String(jumps[0])
+    status.value = `Done. Click jump:${label} to annotate the timeline and jump there.`
+  } else {
+    status.value = 'Done.'
+  }
+  return null
+}
+
+function findBatch(batchId) {
+  return messages.value.find(m => m.batchId === batchId)
+}
+
+function commitBatch(batchId, skipped) {
+  const msg = findBatch(batchId)
+  if (!msg?.tools?.length) return []
+  let results = []
+  if (skipped) {
+    msg.tools.forEach((t) => { t.status = 'skipped' })
+    results = msg.tools.map(() => ({ ok: false, message: 'User declined to apply this GUI action.' }))
+    status.value = 'Skipped GUI actions.'
+  } else {
+    try {
+      results = typeof props.executeTools === 'function' ? (props.executeTools(msg.tools) || []) : []
+    } catch (err) {
+      results = msg.tools.map(() => ({ ok: false, message: err?.message || String(err) }))
+    }
+    msg.tools.forEach((t, i) => {
+      const res = results[i] || {}
+      t.status = res.ok === false ? 'failed' : 'applied'
+    })
+  }
+  msg.tools.forEach((t, i) => {
+    chatMessages.push(toolResultMessage({
+      toolCallId: t.id,
+      name: t.name,
+      content: results[i] || { ok: false, message: '' },
+    }))
+  })
+  return results
+}
+
+async function continueAfterTools() {
+  if (toolRound >= MAX_TOOL_ROUNDS) {
+    status.value = 'Done (tool round limit).'
+    return
+  }
+  toolRound += 1
+  const active = resolveAiSettings({ aiPreset: props.aiPreset, aiPresets: props.aiPresets })
+  busy.value = true
+  status.value = `Waiting for ${aiPresetInfo(active.preset).label} (${active.model})…`
+  abortCtrl = new AbortController()
+  try {
+    const turn = await runCompletion(active)
+    authForced.value = false
+    const pending = ingestTurn(turn)
+    if (pending && parseAiAutoApply(props.aiAutoApply)) {
+      commitBatch(pending.batchId, false)
+      await continueAfterTools()
+    } else if (pending) {
+      status.value = 'Review GUI actions, then Apply or Skip.'
+    }
+  } catch (err) {
+    if (err?.name === 'AbortError') {
+      status.value = 'Stopped.'
+      error.value = ''
+    } else {
+      const errMsg = err?.message || String(err)
+      messages.value.push({ role: 'assistant', content: `(Error) ${errMsg}` })
+      error.value = errMsg.split('\n')[0].slice(0, 200)
+      noteAuthError(errMsg)
+    }
+  } finally {
+    busy.value = false
+    abortCtrl = null
+    await scrollLog()
+  }
+}
+
+async function applyBatch(batchId) {
+  commitBatch(batchId, false)
+  await continueAfterTools()
+}
+
+async function skipBatch(batchId) {
+  commitBatch(batchId, true)
+}
+
+async function undoBatch(_batchId) {
+  if (typeof props.undoTools === 'function') props.undoTools()
+  const msg = findBatch(_batchId)
+  if (msg?.tools) msg.tools.forEach((t) => { t.status = 'undone' })
+  status.value = 'Reverted last AI GUI actions.'
+}
+
 async function send(overrideQuery = null, overrideCtx = null) {
   const query = (overrideQuery != null ? String(overrideQuery) : draft.value).trim()
   if (!query || busy.value || !props.aiEnabled) return
   messages.value.push({ role: 'user', content: query })
-  if (overrideQuery == null) draft.value = ''
-  else draft.value = ''
+  draft.value = ''
   busy.value = true
   error.value = ''
+  toolRound = 0
   const active = resolveAiSettings({ aiPreset: props.aiPreset, aiPresets: props.aiPresets })
   status.value = `Waiting for ${aiPresetInfo(active.preset).label} (${active.model})…`
   await scrollLog()
@@ -578,28 +971,27 @@ async function send(overrideQuery = null, overrideCtx = null) {
       : await Promise.resolve(props.getContext())
     const ctx = normalizeAiContext(raw)
     if (overrideCtx == null) refreshLoadedTabs()
-    const reply = await aiChat({
-      query,
-      findingsText: ctx.findingsText || '',
-      span: ctx.span || '',
-      cores: ctx.cores ?? '',
-      scope: ctx.scope || '',
-      metrics: ctx.metrics || null,
-      baseUrl: active.baseUrl,
-      model: active.model,
-      apiKey: active.apiKey,
-      preset: active.preset,
-      responseLanguage: props.responseLanguage,
-      signal: abortCtrl.signal,
-    })
-    messages.value.push({ role: 'assistant', content: reply })
-    const jumps = extractJumpTimes(reply)
-    if (jumps.length) {
-      const m = /jump:([0-9]+(?:\.[0-9]+)?)/.exec(reply || '')
-      const label = m ? m[1] : String(jumps[0])
-      status.value = `Done. Click jump:${label} to annotate the timeline and jump there.`
-    } else {
-      status.value = 'Done.'
+    chatMessages = [
+      { role: 'system', content: buildAiSystemPrompt(props.responseLanguage) },
+      {
+        role: 'user',
+        content: buildAiUserMessage(query, {
+          findingsText: ctx.findingsText || '',
+          metrics: ctx.metrics || null,
+          span: ctx.span || '',
+          cores: ctx.cores ?? '',
+          scope: ctx.scope || '',
+        }),
+      },
+    ]
+    const turn = await runCompletion(active)
+    authForced.value = false
+    const pending = ingestTurn(turn)
+    if (pending && parseAiAutoApply(props.aiAutoApply)) {
+      commitBatch(pending.batchId, false)
+      await continueAfterTools()
+    } else if (pending) {
+      status.value = 'Review GUI actions, then Apply or Skip.'
     }
   } catch (err) {
     if (err?.name === 'AbortError') {
@@ -609,6 +1001,7 @@ async function send(overrideQuery = null, overrideCtx = null) {
       const msg = err?.message || String(err)
       messages.value.push({ role: 'assistant', content: `(Error) ${msg}` })
       error.value = msg.split('\n')[0].slice(0, 200)
+      noteAuthError(msg)
     }
   } finally {
     busy.value = false
@@ -623,7 +1016,13 @@ watch(() => props.aiEnabled, (on) => {
 })
 
 function onDocKeyDown(ev) {
-  if (ev.key === 'Escape') closeLogMenu()
+  if (ev.key !== 'Escape') return
+  if (mermaidZoom.value) {
+    closeMermaidZoom()
+    ev.preventDefault()
+    return
+  }
+  closeLogMenu()
 }
 
 onMounted(() => {
@@ -656,6 +1055,26 @@ defineExpose({ refreshLoadedTabs, ask, clear, saveConversationAs, scrollLog })
   flex-shrink: 0;
 }
 .ai-title { font-weight: 600; font-size: 13px; }
+.ai-auth-chip {
+  margin-left: 4px;
+  background: transparent;
+  color: var(--muted, #8b98a8);
+  border: 1px solid var(--border, #3a4658);
+  border-radius: 10px;
+  padding: 1px 8px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.ai-auth-chip:hover {
+  color: var(--fg, #dbe2ea);
+  border-color: var(--accent, #5b9bd5);
+}
+.ai-auth-cta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
 .ai-header-actions {
   display: flex;
   align-items: center;
@@ -919,6 +1338,91 @@ defineExpose({ refreshLoadedTabs, ask, clear, saveConversationAs, scrollLog })
   color: var(--accent, #5b9bd5);
   text-decoration: underline;
   cursor: pointer;
+}
+.ai-tool-card {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-left: 3px solid #c9a227;
+  background: #2a2418;
+  color: #e6d48a;
+  border-radius: 0 6px 6px 0;
+  font-size: 12px;
+}
+.ai-tool-card p { margin: 2px 0; }
+.ai-tool-st { color: #8b98a8; }
+.ai-tool-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+}
+.ai-tool-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.ai-msg-body :deep(.ai-mermaid) {
+  margin: 8px 0;
+  overflow-x: auto;
+}
+.ai-msg-body :deep(.ai-mermaid-zoom) {
+  cursor: zoom-in;
+  display: inline-block;
+  text-decoration: none;
+}
+.ai-msg-body :deep(.ai-mermaid-svg svg),
+.ai-msg-body :deep(.ai-mermaid-img) {
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+}
+.ai-msg-body :deep(.ai-mermaid-links) {
+  margin: 4px 0 0;
+  font-size: 11px;
+}
+.ai-mermaid-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.65);
+}
+.ai-mermaid-zoom-dialog {
+  max-width: min(1100px, 96vw);
+  max-height: 92vh;
+  overflow: auto;
+  background: #12161d;
+  border: 1px solid #3a4658;
+  border-radius: 8px;
+  padding: 12px 14px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+}
+.ai-mermaid-zoom-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  color: #8b98a8;
+  font-size: 12px;
+}
+.ai-mermaid-zoom-body :deep(svg),
+.ai-mermaid-zoom-body :deep(img) {
+  display: block;
+  max-width: none;
+  width: min(1000px, 90vw);
+  height: auto;
+  border-radius: 4px;
+}
+.ai-mermaid-zoom-links {
+  margin: 10px 0 0;
+  font-size: 12px;
+}
+.ai-mermaid-zoom-links :deep(a) {
+  color: #5b9bd5;
 }
 .ai-input {
   width: 100%;

@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { markdownToSafeHtml } from '../src/utils/aiMarkdown.js'
-import { mermaidBlockHtml, mermaidLinkTargets, mermaidToSvg } from '../src/utils/aiMermaid.js'
-import { AI_MERMAID_SEQUENCE_EXAMPLE } from '../src/utils/aiTools.js'
+import { hitTestMermaid, mermaidBlockHtml, mermaidHitRegions, mermaidLinkTargets, mermaidToSvg } from '../src/utils/aiMermaid.js'
+import { AI_MERMAID_MIGRATION_EXAMPLE, AI_MERMAID_SEQUENCE_EXAMPLE } from '../src/utils/aiTools.js'
 
 describe('aiMermaid', () => {
   it('renders sequence and flowchart SVG', () => {
@@ -14,6 +14,13 @@ describe('aiMermaid', () => {
     const flow = mermaidToSvg('graph LR\n  C0[Core_0] -->|12| C1[Core_1]\n')
     assert.match(flow, /Core_0/)
     assert.match(flow, /12/)
+    const both = mermaidToSvg(
+      'graph LR\n  C0[Core_0] -->|12| C1[Core_1]\n  C1 -->|3| C0\n',
+    )
+    const y12 = Number(both.match(/<text x="[-\d.]+" y="([-\d.]+)"[^>]*>12<\/text>/)[1])
+    const y3 = Number(both.match(/<text x="[-\d.]+" y="([-\d.]+)"[^>]*>3<\/text>/)[1])
+    assert.ok(Math.abs(y12 - y3) > 8)
+    assert.ok(y12 > y3)
     const labels = mermaidLinkTargets('graph LR\n  C0[Core_0] -->|12| C1[Core_1]\n')
       .filter(t => t.kind === 'highlight')
       .map(t => t.value)
@@ -37,6 +44,34 @@ describe('aiMermaid', () => {
     const html = mermaidBlockHtml(src, { inlineSvg: false })
     assert.match(html, /data:image\/svg\+xml;base64,/)
     assert.match(html, /ai-mermaid-img/)
+  })
+
+  it('hit-tests sequence participant boxes', () => {
+    const src = 'sequenceDiagram\n  participant L as Low[266] (Core 0)\n  L->>H: take\n'
+    const hits = mermaidHitRegions(src)
+    assert.equal(hits[0].value, 'Low[266] (Core 0)')
+    const cx = hits[0].x + hits[0].w / 2
+    const cy = hits[0].y + hits[0].h / 2
+    assert.deepEqual(hitTestMermaid(src, cx, cy), { kind: 'highlight', value: 'Low[266] (Core 0)' })
+    assert.equal(hitTestMermaid(src, 2, 2), null)
+  })
+
+  it('avoids SVG markers and keeps boxes inside the viewBox', () => {
+    const seqSrc = AI_MERMAID_SEQUENCE_EXAMPLE.replace(/```mermaid/, '').replace(/```/, '').trim()
+    const flowSrc = AI_MERMAID_MIGRATION_EXAMPLE.replace(/```mermaid/, '').replace(/```/, '').trim()
+    for (const src of [seqSrc, flowSrc]) {
+      const svg = mermaidToSvg(src)
+      assert.doesNotMatch(svg, /<marker/i)
+      assert.doesNotMatch(svg, /marker-end/)
+      assert.doesNotMatch(svg, /system-ui/)
+      const xs = [...svg.matchAll(/<rect[^>]*\bx="(-?[\d.]+)"/g)].map(m => Number(m[1]))
+      assert.ok(xs.length)
+      assert.ok(xs.every(x => x >= 0), JSON.stringify(xs))
+      for (const hit of mermaidHitRegions(src)) {
+        assert.ok(hit.x >= 0)
+        assert.ok(hit.y >= 0)
+      }
+    }
   })
 
   it('wraps the figure in a zoom control', () => {

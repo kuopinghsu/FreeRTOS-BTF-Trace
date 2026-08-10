@@ -423,12 +423,16 @@
                 :ai-preset="appSettings.aiPreset"
                 :ai-presets="appSettings.aiPresets"
                 :response-language="appSettings.aiResponseLanguage"
+                :ai-auto-apply="!!appSettings.aiAutoApply"
                 :get-context="buildAiContext"
                 :get-loaded-tabs="listAiLoadedTabs"
                 :build-compare-context="buildAiCompareContext"
+                :execute-tools="onAiExecuteTools"
+                :undo-tools="onAiUndoTools"
                 @open-settings="openSettingsDialog('ai')"
                 @update:response-language="onAiResponseLanguage"
                 @jump="onAiJump"
+                @highlight="onAiHighlight"
               />
             </div>
           </div>
@@ -901,6 +905,16 @@ import SettingsDialog from './components/SettingsDialog.vue'
 import { formatTime }   from './renderer/TimelineRenderer.js'
 import { zoomStatusFromViewport } from './utils/timeFormat.js'
 import { taskDisplayName, taskMergeKey, setColorblindMode } from './utils/colors.js'
+import {
+  AI_TOOL_HIGHLIGHT_TASK,
+  AI_TOOL_OPEN_CORRIDOR,
+  AI_TOOL_SET_CURSORS,
+  AI_TOOL_SET_VIEW_MODE,
+  AI_TOOL_ZOOM_TO_RANGE,
+  resolveCoreKey,
+  resolveTaskKey,
+  validateToolCall,
+} from './utils/aiTools.js'
 import {
   DARK_MODE,
   HOVER_HIGHLIGHT,
@@ -2057,6 +2071,145 @@ function onAiJump(t) {
   if (!trace.value) return
   addAnnotationAtNs(ns, aiJumpAnnotationNote(ns))
   scheduleSessionSave()
+}
+
+let _aiGuiUndo = null
+
+function captureAiGuiSnapshot() {
+  return {
+    cursors: [...(cursors.value || [])],
+    viewMode: timelineOptions.viewMode,
+    orientation: timelineOptions.orientation,
+    highlight: pinnedHighlightKey.value,
+    viewport: timelinePanelRef.value?.getViewport?.() || null,
+    inspectorOpen: inspectorOpen.value,
+  }
+}
+
+function restoreAiGuiSnapshot(snap) {
+  if (!snap) return
+  cursors.value = Array.isArray(snap.cursors) ? [...snap.cursors] : cursors.value
+  if (snap.viewMode) timelineOptions.viewMode = snap.viewMode
+  if (snap.orientation) timelineOptions.orientation = snap.orientation
+  pinnedHighlightKey.value = snap.highlight || null
+  timelineOptions.highlightKey = snap.highlight || null
+  timelineOptions.lockedTaskKey = snap.highlight || null
+  if (snap.viewport) timelinePanelRef.value?.applyViewport?.(snap.viewport)
+  if (!snap.inspectorOpen) inspectorOpen.value = false
+  persistTimelineViewPrefs()
+  syncTimelineViewport()
+  scheduleRender()
+}
+
+function onAiHighlight(name) {
+  const key = String(name || '').trim()
+  if (!key) {
+    pinnedHighlightKey.value = null
+    timelineOptions.highlightKey = null
+    timelineOptions.lockedTaskKey = null
+    scheduleRender()
+    return
+  }
+  const candidates = [
+    ...(trace.value?.tasks || []),
+    ...(trace.value?.tasks || []).map(t => taskMergeKey(t)),
+  ]
+  const resolved = resolveTaskKey(key, candidates)
+  if (resolved) {
+    const mk = taskMergeKey(resolved)
+    pinnedHighlightKey.value = mk
+    timelineOptions.highlightKey = mk
+    timelineOptions.lockedTaskKey = mk
+    timelinePanelRef.value?.scrollToTask(mk)
+    scheduleRender()
+    return
+  }
+  const core = resolveCoreKey(key, trace.value?.coreNames || [])
+  if (!core) return
+  timelineOptions.viewMode = 'core'
+  persistTimelineViewPrefs()
+  pinnedHighlightKey.value = null
+  timelineOptions.highlightKey = null
+  timelineOptions.lockedTaskKey = null
+  nextTick(() => {
+    timelinePanelRef.value?.expandCore?.(core)
+    timelinePanelRef.value?.scrollToTask(core)
+    scheduleRender()
+  })
+}
+
+function onAiExecuteTools(calls) {
+  _aiGuiUndo = captureAiGuiSnapshot()
+  pushUndoSnapshot()
+  const results = []
+  for (const call of calls || []) {
+    const name = String(call.name || '')
+    const args = call.arguments && typeof call.arguments === 'object' ? call.arguments : {}
+    if (call.error) {
+      results.push({ ok: false, message: call.error })
+      continue
+    }
+    const checked = validateToolCall(name, args)
+    if (checked.error) {
+      results.push({ ok: false, message: checked.error })
+      continue
+    }
+    try {
+      results.push({ ok: true, message: dispatchAiTool(name, checked.args || {}) })
+    } catch (err) {
+      results.push({ ok: false, message: err?.message || String(err) })
+    }
+  }
+  return results
+}
+
+function dispatchAiTool(name, args) {
+  if (!trace.value) throw new Error('No trace loaded')
+  if (name === AI_TOOL_SET_CURSORS) {
+    const max = appSettings.maxCursors || 4
+    const times = (args.timestamps || []).slice(0, max)
+    const next = Array(max).fill(null)
+    times.forEach((t, i) => { next[i] = Number(t) })
+    cursors.value = next
+    return `Placed ${times.length} cursor(s)`
+  }
+  if (name === AI_TOOL_ZOOM_TO_RANGE) {
+    timelinePanelRef.value?.zoomToTimeRange(
+      args.start_time, args.end_time, 0.05, { programmatic: true, animate: true },
+    )
+    syncTimelineViewport()
+    return 'Zoomed to range'
+  }
+  if (name === AI_TOOL_HIGHLIGHT_TASK) {
+    onAiHighlight(args.task_name_or_id || '')
+    return args.task_name_or_id ? `Highlighted ${args.task_name_or_id}` : 'Cleared highlight'
+  }
+  if (name === AI_TOOL_SET_VIEW_MODE) {
+    timelineOptions.viewMode = args.mode
+    if (args.orientation === 'horizontal') timelineOptions.orientation = 'h'
+    if (args.orientation === 'vertical') timelineOptions.orientation = 'v'
+    persistTimelineViewPrefs()
+    scheduleRender()
+    return `View mode ${args.mode}`
+  }
+  if (name === AI_TOOL_OPEN_CORRIDOR) {
+    const cores = trace.value?.coreNames || []
+    const src = resolveCoreKey(args.core_from || '', cores) || (args.core_from || '')
+    const dst = resolveCoreKey(args.core_to || '', cores) || (args.core_to || '')
+    if (src && dst) onOpenPairHeatmap({ fromCore: src, toCore: dst })
+    else onOpenHeatmap()
+    return 'Opened corridor inspector'
+  }
+  throw new Error(`unknown tool ${name}`)
+}
+
+function onAiUndoTools() {
+  if (_aiGuiUndo) {
+    restoreAiGuiSnapshot(_aiGuiUndo)
+    _aiGuiUndo = null
+  } else {
+    onUndo()
+  }
 }
 
 function onAiResponseLanguage(lang) {

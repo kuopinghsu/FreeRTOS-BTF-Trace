@@ -4,7 +4,7 @@
  */
 
 import { mermaidBlockHtml } from './aiMermaid.js'
-import { summariseToolCall } from './aiTools.js'
+import { btfJumpHref, summariseToolCall } from './aiTools.js'
 
 const JUMP_RE = /jump:([0-9]+(?:\.[0-9]+)?)/g
 const INLINE_CODE_RE = /`([^`\n]+)`/g
@@ -64,7 +64,11 @@ function inlineToHtml(text) {
         buf.push(stash(
           `<a href="${escapeAttr(href)}" target="_blank" rel="noopener noreferrer">${label}</a>`,
         ))
-      } else if (low.startsWith('btfjump:') || low.startsWith('mailto:')) {
+      } else if (
+        low.startsWith('btfjump:')
+        || low.startsWith('btfhighlight:')
+        || low.startsWith('mailto:')
+      ) {
         buf.push(stash(`<a href="${escapeAttr(href)}">${label}</a>`))
       } else {
         buf.push(escapeHtml(lm[0]))
@@ -76,7 +80,7 @@ function inlineToHtml(text) {
     chunk = chunk.replace(BOLD_RE, '<strong>$2</strong>')
     chunk = chunk.replace(ITALIC_RE, (_, a, b) => `<em>${a != null ? a : b}</em>`)
     chunk = chunk.replace(JUMP_RE, (_, n) => stash(
-      `<a href="btfjump:${n}" class="ai-jump" data-jump="${n}">jump:${n}</a>`,
+      `<a href="${btfJumpHref(n)}" class="ai-jump" data-jump="${n}">jump:${n}</a>`,
     ))
     out.push(chunk)
   }
@@ -311,7 +315,7 @@ export function formatAiMessageHtml(role, text, { inlineSvg = true, zoomable = t
   return escapeHtml(body)
     .replace(
       /jump:([0-9]+(?:\.[0-9]+)?)/g,
-      '<a href="btfjump:$1" class="ai-jump" data-jump="$1">jump:$1</a>',
+      (_, n) => `<a href="${btfJumpHref(n)}" class="ai-jump" data-jump="${n}">jump:${n}</a>`,
     )
     .replace(/\n/g, '<br>')
 }

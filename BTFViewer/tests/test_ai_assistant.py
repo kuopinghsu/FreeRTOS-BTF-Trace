@@ -19,6 +19,9 @@ from btf_viewer_pkg._bootstrap import install  # noqa: E402
 install()
 
 from btf_viewer_pkg.ai_assistant import (  # noqa: E402
+    AI_AUTH_API_KEY,
+    AI_AUTH_BROWSER,
+    AI_AUTH_NONE,
     AI_PRESET_CUSTOM,
     AI_PRESET_GEMINI,
     AI_PRESET_OLLAMA,
@@ -61,6 +64,8 @@ class AiAssistantHelpersTests(unittest.TestCase):
         self.assertEqual(AI_TEMPLATE_QUESTIONS[1][1], "Trace Compare")
         self.assertIn("triage", ids)
         self.assertIn("migrations", ids)
+        self.assertEqual(AI_TEMPLATE_QUESTIONS[2][1], "Triage findings")
+        self.assertNotIn("tooldemo", ids)
 
     def test_templates_match_web_ollama_client(self) -> None:
         """Keep AI_TEMPLATE_QUESTIONS in sync with web/src/utils/ollamaClient.js."""
@@ -128,9 +133,11 @@ class AiAssistantHelpersTests(unittest.TestCase):
         self.assertEqual(active["preset"], AI_PRESET_GEMINI)
         self.assertEqual(active["api_key"], "k")
         self.assertEqual(active["model"], "gemini-flash-lite-latest")
+        self.assertEqual(active["auth_mode"], AI_AUTH_API_KEY)
         other = resolve_ai_settings(cfg, AI_PRESET_OLLAMA)
         self.assertEqual(other["model"], "llama3.2:3b")
         self.assertEqual(other["api_key"], "")
+        self.assertEqual(other["auth_mode"], AI_AUTH_NONE)
 
     def test_migrate_legacy_ai_settings(self) -> None:
         patch = migrate_ai_settings({
@@ -282,6 +289,45 @@ class AiAssistantHelpersTests(unittest.TestCase):
         self.assertEqual(headers["Authorization"], "Bearer AIzaSyAbc")
         self.assertNotIn("x-goog-api-key", headers)
 
+    def test_normalize_ai_auth_mode_and_status(self) -> None:
+        from btf_viewer_pkg.ai_assistant import (
+            ai_auth_status,
+            ai_preset_signin_label,
+            ai_preset_signin_url,
+            default_ai_auth_mode,
+            normalize_ai_auth_mode,
+        )
+        self.assertEqual(default_ai_auth_mode(AI_PRESET_OLLAMA), AI_AUTH_NONE)
+        self.assertEqual(default_ai_auth_mode(AI_PRESET_GEMINI), AI_AUTH_API_KEY)
+        self.assertEqual(normalize_ai_auth_mode("sign-in"), AI_AUTH_BROWSER)
+        self.assertEqual(normalize_ai_auth_mode("oauth"), AI_AUTH_BROWSER)
+        self.assertEqual(
+            normalize_ai_auth_mode("", preset_id=AI_PRESET_OLLAMA), AI_AUTH_NONE)
+        st = ai_auth_status(
+            auth_mode=AI_AUTH_API_KEY, api_key="", preset_id=AI_PRESET_GEMINI,
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai")
+        self.assertTrue(st["needs_auth"])
+        self.assertEqual(st["label"], "Needs API key")
+        signed = ai_auth_status(
+            auth_mode=AI_AUTH_BROWSER, api_key="tok", preset_id=AI_PRESET_GEMINI)
+        self.assertTrue(signed["signed_in"])
+        self.assertIn("aistudio.google.com", ai_preset_signin_url(AI_PRESET_GEMINI))
+        self.assertIn("Google", ai_preset_signin_label(AI_PRESET_GEMINI))
+
+    def test_parse_ai_settings_json_auth_mode(self) -> None:
+        patch = parse_ai_settings_json({
+            "preset": "gemini",
+            "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+            "authMode": "sign_in",
+        })
+        self.assertEqual(patch["gemini_auth_mode"], AI_AUTH_BROWSER)
+
+    def test_http_401_tip_mentions_sign_in(self) -> None:
+        from btf_viewer_pkg.ai_assistant import _ai_http_error_tip
+        tip = _ai_http_error_tip(401, "unauthorized")
+        self.assertIn("Sign in", tip)
+        self.assertIn("API key", tip)
+
     def test_openai_http_429_tip(self) -> None:
         from btf_viewer_pkg.ai_assistant import _ai_http_error_tip
         tip = _ai_http_error_tip(
@@ -334,7 +380,7 @@ class AiAssistantHelpersTests(unittest.TestCase):
 
     def test_format_ai_log_html_links(self) -> None:
         html_out = _format_ai_log_html("assistant", "Open jump:1805120 next")
-        self.assertIn('href="btfjump:1805120"', html_out)
+        self.assertIn('href="btfjump:time/1805120"', html_out)
         self.assertIn(">jump:1805120</a>", html_out)
         self.assertIn("Assistant", html_out)
         self.assertIn('class="ai-turn"', html_out)
@@ -447,6 +493,73 @@ class AiAssistantHelpersTests(unittest.TestCase):
         self.assertIn("HTTP 400", str(ctx.exception))
         self.assertNotIn("does not support tools", str(ctx.exception).lower())
 
+    def test_chat_completion_fills_gemini_tool_result_names(self) -> None:
+        captured = []
+
+        class _FakeResp:
+            def __init__(self, body: bytes) -> None:
+                self._body = body
+
+            def read(self, n: int = -1) -> bytes:
+                if not self._body:
+                    return b""
+                if n is None or n < 0:
+                    out, self._body = self._body, b""
+                    return out
+                out, self._body = self._body[:n], self._body[n:]
+                return out
+
+            def close(self) -> None:
+                return None
+
+        def _urlopen(req, timeout=None):  # noqa: ANN001, ARG001
+            captured.append(json.loads(req.data.decode("utf-8")))
+            return _FakeResp(
+                b'{"choices":[{"message":{"role":"assistant","content":"ok"}}]}'
+            )
+
+        messages = [
+            {"role": "user", "content": "fix inversion"},
+            {
+                "role": "assistant",
+                "content": "Applying.",
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "type": "function",
+                        "function": {
+                            "name": "set_cursors",
+                            "arguments": '{"timestamps":[1,2]}',
+                        },
+                    },
+                    {
+                        "id": "c2",
+                        "type": "function",
+                        "function": {
+                            "name": "highlight_task",
+                            "arguments": '{"task_name_or_id":"PS[228]"}',
+                        },
+                    },
+                ],
+            },
+            {"role": "tool", "tool_call_id": "c1", "content": '{"ok":true}'},
+            {"role": "tool", "tool_call_id": "c2", "content": '{"ok":true}'},
+        ]
+        with patch("btf_viewer_pkg.ai_assistant.urllib.request.urlopen", _urlopen):
+            ai_chat_completion(
+                query="",
+                messages=messages,
+                tools=ai_viewer_tools(),
+                base_url="http://127.0.0.1:11434/v1",
+                model="gemini-2.5-flash",
+            )
+        sent = captured[0]["messages"]
+        tools = [m for m in sent if m.get("role") == "tool"]
+        self.assertEqual(
+            [m.get("name") for m in tools],
+            ["set_cursors", "highlight_task"],
+        )
+
     def test_chat_completion_default_timeout(self) -> None:
         self.assertEqual(AI_CHAT_TIMEOUT_S, 120.0)
         captured = []
@@ -476,7 +589,7 @@ class AiAssistantHelpersTests(unittest.TestCase):
         self.assertIn("<h2>", html_out)
         self.assertIn("<strong>bold</strong>", html_out)
         self.assertIn("<code>code</code>", html_out)
-        self.assertIn('href="btfjump:42"', html_out)
+        self.assertIn('href="btfjump:time/42"', html_out)
         self.assertIn("<ul>", html_out)
         self.assertIn("&lt;tag&gt;", html_out)
         self.assertNotIn("<tag>", html_out)
@@ -550,7 +663,7 @@ class AiAssistantHelpersTests(unittest.TestCase):
         # Assistant Markdown is rendered; user text is escaped.
         self.assertIn("<h2>Answer</h2>", doc)
         self.assertIn("&lt;CS[22]&gt;", doc)
-        self.assertIn('href="btfjump:1805000"', doc)
+        self.assertIn('href="btfjump:time/1805000"', doc)
         # No duplicated role prefix from the log formatter.
         self.assertNotIn("<b>Assistant:</b>", doc)
 

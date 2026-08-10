@@ -473,7 +473,7 @@
               stroke-linecap="round"
             />
           </svg>
-          <span class="tb-label">All</span>
+          <span class="tb-label">All tasks</span>
         </button>
 
         <button

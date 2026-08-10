@@ -6,6 +6,7 @@ from .config import *  # noqa: F403,F401
 from .config import (  # private symbols are not pulled in by import *
     _IC_PIN,
     _IC_PIN_FILLED,
+    _IC_REFRESH,
     _IC_SECTIONS_COLLAPSE,
     _IC_SECTIONS_EXPAND,
     _IC_SECTIONS_RESET_ORDER,
@@ -51,12 +52,16 @@ from .parser import (  # private symbols are not pulled in by import *
 )
 from .timeline_util import *  # noqa: F403,F401
 from .timeline_util import (  # noqa: F401 — star-import skips leading _
-    _format_time, _get_fixed_font_family, _monospace_font,
+    _format_time, _get_fixed_font_family, _get_sans_font_family, _monospace_font,
 )
 from .graphics_items import *  # noqa: F403,F401
 from .scene import *  # noqa: F403,F401
 from .view import *  # noqa: F403,F401
 from .ai_assistant import (  # noqa: F401
+    AI_AUTH_API_KEY,
+    AI_AUTH_BROWSER,
+    AI_AUTH_MODE_LABELS,
+    AI_AUTH_NONE,
     AI_PRESET_FIELDS,
     AI_PRESET_KEY_URLS,
     AI_PRESET_OLLAMA,
@@ -66,10 +71,17 @@ from .ai_assistant import (  # noqa: F401
     DEFAULT_AI_MODEL,
     DEFAULT_AI_PRESET,
     DEFAULT_AI_RESPONSE_LANGUAGE,
+    ai_auth_status,
+    ai_list_models,
     ai_preset_info,
+    ai_preset_signin_label,
+    ai_preset_signin_url,
     ai_test_connection,
+    default_ai_auth_mode,
+    normalize_ai_auth_mode,
     normalize_ai_preset,
     parse_ai_settings_json,
+    resolve_ai_api_key,
     resolve_ai_settings,
 )
 
@@ -110,6 +122,31 @@ class _AiTestWorker(QObject):
                 on_progress=lambda s: self.progress.emit(s),
             )
             self.finished.emit(msg)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
+class _AiListModelsWorker(QObject):
+    """Background ``GET /models`` for Settings → AI refresh."""
+
+    finished = Signal(list)
+    failed = Signal(str)
+
+    def __init__(self, parent: QObject, *, base_url: str, api_key: str = "") -> None:
+        super().__init__(parent)
+        self._base_url = base_url
+        self._api_key = api_key
+
+    def start(self) -> None:
+        threading.Thread(target=self._run, name="ai-list-models", daemon=True).start()
+
+    def _run(self) -> None:
+        try:
+            names = ai_list_models(
+                base_url=self._base_url,
+                api_key=resolve_ai_api_key(self._api_key),
+            )
+            self.finished.emit([str(n) for n in names if n])
         except Exception as exc:
             self.failed.emit(str(exc))
 
@@ -4491,7 +4528,8 @@ class _ChordDiagramWidget(QWidget):
             fsz = 10 if self._compact else 11
             arc_parts.append(
                 f'<text x="{lp.x():.2f}" y="{lp.y():.2f}" fill="#888888" '
-                f'font-family="monospace" font-size="{fsz}" text-anchor="{anchor}" '
+                f'font-family="{_get_fixed_font_family()}" font-size="{fsz}" '
+                f'text-anchor="{anchor}" '
                 f'dominant-baseline="middle">{esc(_core_short_name(arc.core))}</text>')
 
         parts = [
@@ -6127,6 +6165,7 @@ def _lb_gauge_svg_body(
     tip_x = cx + math.cos(rad) * needle_len
     tip_y = cy - math.sin(rad) * needle_len
     value_y = cy - round(r * 0.28)
+    sans = _get_sans_font_family()
     return (
         "<defs>"
         f'<linearGradient id="{uid}" x1="0%" y1="0%" x2="100%" y2="0%">'
@@ -6135,7 +6174,7 @@ def _lb_gauge_svg_body(
         f'<stop offset="100%" stop-color="{end_color}"/>'
         "</linearGradient></defs>"
         f'<text x="{cx}" y="18" text-anchor="middle" fill="#1A2030" '
-        f'font-family="system-ui,sans-serif" font-size="10" font-weight="600">{title}</text>'
+        f'font-family="{sans}" font-size="10" font-weight="600">{title}</text>'
         f'<path d="{bg}" fill="none" stroke="#D8DCE4" stroke-width="{stroke_w:.0f}" '
         f'stroke-linecap="round"/>'
         f'<path d="{fill}" fill="none" stroke="url(#{uid})" stroke-width="{stroke_w:.0f}" '
@@ -6144,10 +6183,10 @@ def _lb_gauge_svg_body(
         f'stroke="#1A2030" stroke-width="2" stroke-linecap="round"/>'
         f'<circle cx="{cx}" cy="{cy}" r="3.5" fill="#FFFFFF" stroke="#1A2030" stroke-width="1.75"/>'
         f'<text x="{cx}" y="{value_y:.0f}" text-anchor="middle" fill="{accent}" '
-        f'font-family="system-ui,sans-serif" font-size="12" font-weight="700">'
+        f'font-family="{sans}" font-size="12" font-weight="700">'
         f"{value_label}</text>"
         f'<text x="{cx}" y="{cy + 16:.0f}" text-anchor="middle" fill="#6A7388" '
-        f'font-family="system-ui,sans-serif" font-size="9">{legend}</text>'
+        f'font-family="{sans}" font-size="9">{legend}</text>'
     )
 
 
@@ -6173,6 +6212,8 @@ def _load_balance_gauge_svg(metrics: dict, *, width: int = 300, dark: bool = Fal
     h = int(round(width * view_h / view_w))
     times = "\u00d7"
     minus = "\u2212"
+    sans = _get_sans_font_family()
+    mono = _get_fixed_font_family()
     if zone == "red":
         card_stroke = "#E57373"
     elif zone == "amber":
@@ -6205,15 +6246,15 @@ def _load_balance_gauge_svg(metrics: dict, *, width: int = 300, dark: bool = Fal
     if zone == "red":
         chip = (
             '<rect x="210" y="8" width="80" height="18" rx="5" fill="#FDECEA" stroke="#E57373"/>'
-            '<text x="250" y="21" text-anchor="middle" fill="#C62828" '
-            'font-family="system-ui,sans-serif" font-size="10" font-weight="700">'
+            f'<text x="250" y="21" text-anchor="middle" fill="#C62828" '
+            f'font-family="{sans}" font-size="10" font-weight="700">'
             "Unbalanced</text>"
         )
     elif zone == "amber":
         chip = (
             '<rect x="228" y="8" width="62" height="18" rx="5" fill="#FFF6E5" stroke="#E0A020"/>'
-            '<text x="259" y="21" text-anchor="middle" fill="#C47F00" '
-            'font-family="system-ui,sans-serif" font-size="10" font-weight="700">'
+            f'<text x="259" y="21" text-anchor="middle" fill="#C47F00" '
+            f'font-family="{sans}" font-size="10" font-weight="700">'
             "σ &gt; 30%</text>"
         )
     return (
@@ -6223,7 +6264,7 @@ def _load_balance_gauge_svg(metrics: dict, *, width: int = 300, dark: bool = Fal
         f'<rect width="100%" height="100%" rx="8" fill="#F7F8FA" stroke="{card_stroke}"/>'
         f"{left}{right}"
         f'<text x="{view_w / 2}" y="{view_h - 8}" text-anchor="middle" fill="#6A7388" '
-        f'font-family="Menlo,Consolas,Monaco,monospace" font-size="9">'
+        f'font-family="{mono}" font-size="9">'
         f"G={gini:.3f} · Score=100{times}(1{minus}Gini)</text>"
         f"{chip}</svg>"
     )
@@ -11975,6 +12016,7 @@ class _RcSettings:
                 "enabled": "true",
                 "preset": "",
                 "response_language": DEFAULT_AI_RESPONSE_LANGUAGE,
+                "auto_apply": "false",
             },
             **{
                 f"{_pid}_{_field}": ""
@@ -12464,6 +12506,7 @@ class _SettingsDialog(QDialog):
                  ai_preset: str = DEFAULT_AI_PRESET,
                  ai_preset_settings: Optional[Dict[str, Dict[str, str]]] = None,
                  response_language: str = DEFAULT_AI_RESPONSE_LANGUAGE,
+                 ai_auto_apply: bool = False,
                  initial_page: str = "Appearance"):
         super().__init__(parent, Qt.WindowType.Dialog)
         self.setWindowTitle("Settings")
@@ -12578,14 +12621,19 @@ class _SettingsDialog(QDialog):
         self._font_spin.setRange(6, 24)
         self._font_spin.setSuffix(" pt")
         self._font_spin.setValue(font_size)
-        self._font_spin.setToolTip("Font size for task / core labels drawn on the timeline")
+        self._font_spin.setToolTip(
+            "Font size for task / core labels drawn on the timeline "
+            "(Qt points, HiDPI-scaled). The web viewer uses CSS pixels; "
+            "defaults look similar, numbers are not interchangeable.")
         f1.addRow("Timeline labels:", _inp(self._font_spin))
 
         self._ui_font_spin = QSpinBox()
         self._ui_font_spin.setRange(8, 18)
         self._ui_font_spin.setSuffix(" pt")
         self._ui_font_spin.setValue(ui_font_size)
-        self._ui_font_spin.setToolTip("Font size for menus, toolbar and status bar")
+        self._ui_font_spin.setToolTip(
+            "Font size for menus, toolbar and status bar (Qt points). "
+            "The web viewer uses CSS pixels.")
         f1.addRow("UI / menus:", _inp(self._ui_font_spin))
 
         self._content_stack.addWidget(p1)
@@ -12784,16 +12832,29 @@ class _SettingsDialog(QDialog):
             "When off, hides the AI tab. When on, the AI panel can send "
             "Analysis Findings to the configured endpoint.")
         f4.addRow("", self._ai_enabled_cb)
+        self._ai_auto_apply_cb = QCheckBox("Auto-apply GUI actions")
+        self._ai_auto_apply_cb.setChecked(bool(ai_auto_apply))
+        self._ai_auto_apply_cb.setToolTip(
+            "When on, tool calls from the model update the timeline immediately. "
+            "When off, the chat shows Apply / Skip on each action card and "
+            "Apply GUI actions under the log.")
+        f4.addRow("", self._ai_auto_apply_cb)
 
         # Field values per preset; switching presets stashes the current inputs
         # so credentials survive a round trip.
         self._ai_preset_values: Dict[str, Dict[str, str]] = {}
         for _pid, _label, _base, _model in AI_PRESETS:
             stored = dict((ai_preset_settings or {}).get(_pid) or {})
+            base = str(stored.get("base_url", "") or _base)
             self._ai_preset_values[_pid] = {
-                "base_url": str(stored.get("base_url", "") or _base),
+                "base_url": base,
                 "model": str(stored.get("model", "") or _model),
                 "api_key": str(stored.get("api_key", "") or ""),
+                "auth_mode": normalize_ai_auth_mode(
+                    stored.get("auth_mode", ""),
+                    preset_id=_pid,
+                    base_url=base,
+                ),
             }
 
         self._ai_preset_combo = QComboBox()
@@ -12819,21 +12880,81 @@ class _SettingsDialog(QDialog):
         self._ai_url_edit.setMinimumWidth(280)
         f4.addRow("Base URL:", self._ai_url_edit)
 
-        self._ai_model_edit = QLineEdit()
-        self._ai_model_edit.setPlaceholderText(DEFAULT_AI_MODEL)
-        self._ai_model_edit.setToolTip(
+        self._ai_model_lists: Dict[str, List[str]] = {
+            _pid: [] for _pid, _lab, _u, _m in AI_PRESETS
+        }
+        self._ai_model_combo = QComboBox()
+        self._ai_model_combo.setEditable(True)
+        self._ai_model_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self._ai_model_combo.setToolTip(
             "Model id served by that endpoint (e.g. `ollama list` name, "
-            "gpt-4o-mini, or gemini-flash-lite-latest).")
-        self._ai_model_edit.setMinimumWidth(240)
-        f4.addRow("Model:", self._ai_model_edit)
+            "gpt-4o-mini, or gemini-flash-lite-latest). Refresh to list "
+            "models from GET /models.")
+        _wide_combo(self._ai_model_combo, [DEFAULT_AI_MODEL], min_w=240)
+        _ic = "#AAAAAA" if is_dark else "#555555"
+        self._ai_model_refresh = QToolButton()
+        self._ai_model_refresh.setAutoRaise(True)
+        self._ai_model_refresh.setIcon(_svg_icon(_IC_REFRESH, _ic, 14))
+        self._ai_model_refresh.setIconSize(QSize(14, 14))
+        self._ai_model_refresh.setFixedSize(26, 26)
+        self._ai_model_refresh.setToolTip("Refresh model list from this endpoint")
+        self._ai_model_refresh.clicked.connect(self._refresh_ai_models)
+        _model_row = QWidget()
+        _model_h = QHBoxLayout(_model_row)
+        _model_h.setContentsMargins(0, 0, 0, 0)
+        _model_h.setSpacing(6)
+        _model_h.addWidget(self._ai_model_combo, 1)
+        _model_h.addWidget(self._ai_model_refresh, 0)
+        f4.addRow("Model:", _model_row)
 
+        self._ai_auth_combo = QComboBox()
+        for _mode, _mlabel in AI_AUTH_MODE_LABELS:
+            self._ai_auth_combo.addItem(_mlabel, _mode)
+        self._ai_auth_combo.setToolTip(
+            "How this preset authenticates. None for a local server; API key "
+            "to paste a provider key; Sign in opens the vendor page so you can "
+            "log in and paste the key or token.")
+        _wide_combo(
+            self._ai_auth_combo,
+            [lab for _m, lab in AI_AUTH_MODE_LABELS],
+            min_w=200,
+        )
+        f4.addRow("Authentication:", self._ai_auth_combo)
+
+        self._ai_cred_wrap = QWidget()
+        _cred = QVBoxLayout(self._ai_cred_wrap)
+        _cred.setContentsMargins(0, 0, 0, 0)
+        _cred.setSpacing(6)
+        self._ai_auth_status = QLabel("")
+        self._ai_auth_status.setWordWrap(True)
+        self._ai_auth_status.setStyleSheet("color:#888;")
+        _cred.addWidget(self._ai_auth_status)
         self._ai_api_key_edit = QLineEdit()
         self._ai_api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self._ai_api_key_edit.setToolTip(
-            "API key for this preset (or OPENAI_API_KEY / GEMINI_API_KEY / "
-            "OLLAMA_API_KEY in the environment). Local Ollama needs none. "
-            "Stored per preset in btf_viewer.rc.")
-        f4.addRow("API key:", self._ai_api_key_edit)
+            "API key or access token for this preset (or OPENAI_API_KEY / "
+            "GEMINI_API_KEY / OLLAMA_API_KEY in the environment). Local Ollama "
+            "needs none. Stored per preset in btf_viewer.rc.")
+        _cred.addWidget(self._ai_api_key_edit)
+        _auth_btns = QWidget()
+        _auth_h = QHBoxLayout(_auth_btns)
+        _auth_h.setContentsMargins(0, 0, 0, 0)
+        _auth_h.setSpacing(8)
+        self._ai_signin_btn = QPushButton("Sign in…")
+        self._ai_signin_btn.setToolTip(
+            "Open the provider sign-in or API-key page in your browser, then "
+            "paste the key or token above.")
+        self._ai_signin_btn.clicked.connect(self._ai_open_signin)
+        self._ai_logout_btn = QPushButton("Log out")
+        self._ai_logout_btn.setToolTip("Clear the saved key or token for this preset.")
+        self._ai_logout_btn.clicked.connect(self._ai_logout)
+        _auth_h.addWidget(self._ai_signin_btn)
+        _auth_h.addWidget(self._ai_logout_btn)
+        _auth_h.addStretch()
+        _cred.addWidget(_auth_btns)
+        self._ai_cred_label = QLabel("API key:")
+        f4.addRow(self._ai_cred_label, self._ai_cred_wrap)
+        self._ai_auth_combo.currentIndexChanged.connect(self._on_ai_auth_mode_changed)
 
         self._response_lang_combo = QComboBox()
         self._response_lang_combo.addItems(list(AI_RESPONSE_LANGUAGES))
@@ -12891,6 +13012,7 @@ class _SettingsDialog(QDialog):
         self._ai_preset_combo.currentIndexChanged.connect(self._on_ai_preset_changed)
 
         self._ollama_test_worker = None
+        self._ai_list_worker = None
 
         self._content_stack.addWidget(p4)
 
@@ -12985,36 +13107,142 @@ class _SettingsDialog(QDialog):
         """Remember the typed values for the preset currently shown."""
         self._ai_preset_values[self._ai_active_preset] = {
             "base_url": self._ai_url_edit.text().strip(),
-            "model": self._ai_model_edit.text().strip(),
+            "model": self._ai_model_text(),
             "api_key": self._ai_api_key_edit.text().strip(),
+            "auth_mode": normalize_ai_auth_mode(
+                self._ai_auth_combo.currentData(),
+                preset_id=self._ai_active_preset,
+                base_url=self._ai_url_edit.text().strip(),
+            ),
         }
+
+    def _ai_model_text(self) -> str:
+        return self._ai_model_combo.currentText().strip()
+
+    def _set_ai_model_text(self, text: str) -> None:
+        names = list(self._ai_model_lists.get(self._ai_active_preset) or [])
+        self._fill_ai_model_combo(names, text)
+
+    def _fill_ai_model_combo(self, names: Sequence[str], current: str) -> None:
+        combo = self._ai_model_combo
+        current = str(current or "").strip()
+        seen: List[str] = []
+        for n in names:
+            s = str(n or "").strip()
+            if s and s not in seen:
+                seen.append(s)
+        if current and current not in seen:
+            seen.insert(0, current)
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItems(seen)
+        if current:
+            idx = combo.findText(current)
+            if idx >= 0:
+                combo.setCurrentIndex(idx)
+            combo.setEditText(current)
+        else:
+            combo.setCurrentIndex(-1)
+            combo.setEditText("")
+        combo.blockSignals(False)
+        le = combo.lineEdit()
+        if le is not None:
+            _pid, _lab, _b, def_model = ai_preset_info(self._ai_active_preset)
+            le.setPlaceholderText(def_model or DEFAULT_AI_MODEL)
 
     def _load_ai_preset_fields(self, preset: str) -> None:
         _pid, label, def_base, def_model = ai_preset_info(preset)
         vals = self._ai_preset_values.get(_pid, {})
-        self._ai_url_edit.setText(vals.get("base_url", "") or def_base)
-        self._ai_model_edit.setText(vals.get("model", "") or def_model)
+        base = vals.get("base_url", "") or def_base
+        self._ai_url_edit.setText(base)
+        self._set_ai_model_text(vals.get("model", "") or def_model)
         self._ai_api_key_edit.setText(vals.get("api_key", ""))
         self._ai_url_edit.setPlaceholderText(def_base or DEFAULT_AI_BASE_URL)
-        self._ai_model_edit.setPlaceholderText(def_model or DEFAULT_AI_MODEL)
-        local = _pid == AI_PRESET_OLLAMA
-        self._ai_api_key_edit.setPlaceholderText(
-            "Optional — local Ollama needs none" if local
-            else "Required — provider API key")
-        if local:
+        mode = normalize_ai_auth_mode(
+            vals.get("auth_mode", ""), preset_id=_pid, base_url=base)
+        idx = self._ai_auth_combo.findData(mode)
+        self._ai_auth_combo.blockSignals(True)
+        self._ai_auth_combo.setCurrentIndex(max(0, idx))
+        self._ai_auth_combo.blockSignals(False)
+        self._update_ai_auth_ui()
+
+    def _on_ai_auth_mode_changed(self, *_args) -> None:
+        self._update_ai_auth_ui()
+
+    def _update_ai_auth_ui(self) -> None:
+        _pid, label, def_base, _def_model = ai_preset_info(self._ai_active_preset)
+        base = self._ai_url_edit.text().strip() or def_base
+        mode = normalize_ai_auth_mode(
+            self._ai_auth_combo.currentData(), preset_id=_pid, base_url=base)
+        key = self._ai_api_key_edit.text().strip()
+        status = ai_auth_status(
+            auth_mode=mode, api_key=key, base_url=base, preset_id=_pid)
+        show_cred = mode != AI_AUTH_NONE
+        self._ai_cred_wrap.setVisible(show_cred)
+        self._ai_cred_label.setVisible(show_cred)
+        self._ai_cred_label.setText(
+            "Token:" if mode == AI_AUTH_BROWSER else "API key:")
+        self._ai_signin_btn.setVisible(mode == AI_AUTH_BROWSER)
+        self._ai_signin_btn.setText(ai_preset_signin_label(_pid))
+        self._ai_logout_btn.setVisible(mode == AI_AUTH_BROWSER and bool(key))
+        if mode == AI_AUTH_NONE:
+            self._ai_auth_status.setText("Local endpoint — no key needed.")
+            self._ai_api_key_edit.setPlaceholderText(
+                "Optional — local Ollama needs none")
+        elif mode == AI_AUTH_BROWSER:
+            self._ai_auth_status.setText(
+                "Signed in — token saved." if status["signed_in"]
+                else "Not signed in. Open the provider page, then paste the "
+                "key or token below.")
+            self._ai_api_key_edit.setPlaceholderText(
+                "Paste key or token after signing in")
+        else:
+            self._ai_auth_status.setText(
+                "Key saved for this preset." if key
+                else "Paste a provider API key, or set OPENAI_API_KEY / "
+                "GEMINI_API_KEY in the environment.")
+            self._ai_api_key_edit.setPlaceholderText(
+                "Required — provider API key")
+        if _pid == AI_PRESET_OLLAMA and mode == AI_AUTH_NONE:
             self._ai_hint.setText(
                 f"Install Ollama and pull a model (`ollama pull {DEFAULT_AI_MODEL}`); "
                 "the viewer talks to its OpenAI-compatible endpoint. Context is "
                 "Analysis Findings for the current Statistics scope — not the raw BTF."
             )
         else:
-            key_url = AI_PRESET_KEY_URLS.get(_pid, "")
+            key_url = AI_PRESET_KEY_URLS.get(_pid, "") or ai_preset_signin_url(
+                _pid, base)
             where = f" ({label} keys come from {key_url})" if key_url else ""
-            self._ai_hint.setText(
-                f"{label} is an OpenAI-compatible endpoint: set Base URL, model, and "
-                f"an API key{where}. Context is Analysis Findings for the current "
-                "Statistics scope — not the raw BTF."
-            )
+            if mode == AI_AUTH_BROWSER:
+                self._ai_hint.setText(
+                    f"Sign in opens the {label} page in your browser. Paste the "
+                    f"issued key or token here, then Test connection.{where} "
+                    "Context is Analysis Findings — not the raw BTF."
+                )
+            else:
+                self._ai_hint.setText(
+                    f"{label} is an OpenAI-compatible endpoint: set Base URL, model, "
+                    f"and an API key{where}. Context is Analysis Findings for the "
+                    "current Statistics scope — not the raw BTF."
+                )
+
+    def _ai_open_signin(self) -> None:
+        _pid, _label, def_base, _m = ai_preset_info(self._ai_active_preset)
+        url = ai_preset_signin_url(
+            _pid, self._ai_url_edit.text().strip() or def_base)
+        if not url:
+            self._set_ai_status(
+                "This preset has no sign-in page. Paste a token or set Base URL.",
+                "error")
+            return
+        QDesktopServices.openUrl(QUrl(url))
+        self._set_ai_status(
+            f"Opened {url}. After you sign in, paste the key or token and Test.")
+
+    def _ai_logout(self) -> None:
+        self._ai_api_key_edit.clear()
+        self._update_ai_auth_ui()
+        self._set_ai_status("Cleared the saved token for this preset.")
 
     def _on_ai_preset_changed(self, *_args) -> None:
         self._stash_ai_preset_fields()
@@ -13085,16 +13313,60 @@ class _SettingsDialog(QDialog):
         _pid, _label, def_base, def_model = ai_preset_info(self._ai_active_preset)
         return (
             self._ai_url_edit.text().strip() or def_base,
-            self._ai_model_edit.text().strip() or def_model,
+            self._ai_model_text() or def_model,
             self._ai_api_key_edit.text().strip(),
         )
 
+    def _refresh_ai_models(self) -> None:
+        """Fetch ``GET /models`` into the Model combo."""
+        if self._ai_list_worker is not None or self._ollama_test_worker is not None:
+            return
+        url, _model, api_key = self._ai_test_target()
+        self._ai_model_refresh.setEnabled(False)
+        self._set_ai_status(f"Listing models at {url}…")
+        worker = _AiListModelsWorker(self, base_url=url, api_key=api_key)
+        worker.finished.connect(
+            self._on_ai_models_ok, Qt.ConnectionType.QueuedConnection)
+        worker.failed.connect(
+            self._on_ai_models_err, Qt.ConnectionType.QueuedConnection)
+        self._ai_list_worker = worker
+        worker.start()
+
+    def _on_ai_models_ok(self, names: object) -> None:
+        listed = [str(n) for n in (names or []) if n]
+        listed.sort(key=str.lower)
+        self._ai_model_lists[self._ai_active_preset] = listed
+        current = self._ai_model_text()
+        self._fill_ai_model_combo(listed, current)
+        if listed:
+            self._set_ai_status(f"{len(listed)} model(s) from the endpoint.", "ok")
+        else:
+            self._set_ai_status("Endpoint listed no models.", "error")
+        self._cleanup_ai_list_worker()
+
+    def _on_ai_models_err(self, msg: str) -> None:
+        self._set_ai_status(msg or "Cannot list models.", "error")
+        self._cleanup_ai_list_worker()
+
+    def _cleanup_ai_list_worker(self) -> None:
+        self._ai_model_refresh.setEnabled(True)
+        worker = self._ai_list_worker
+        self._ai_list_worker = None
+        if worker is not None:
+            try:
+                worker.finished.disconnect(self._on_ai_models_ok)
+                worker.failed.disconnect(self._on_ai_models_err)
+            except (TypeError, RuntimeError):
+                pass
+            worker.deleteLater()
+
     def _test_ollama_connection(self) -> None:
         """Test the configured endpoint with the typed Settings fields."""
-        if self._ollama_test_worker is not None:
+        if self._ollama_test_worker is not None or self._ai_list_worker is not None:
             return
         url, model, api_key = self._ai_test_target()
         self._ollama_test_btn.setEnabled(False)
+        self._ai_model_refresh.setEnabled(False)
         self._ollama_test_btn.setText("Testing…")
         self._set_ai_status(f"Starting test for {url} / {model}…")
 
@@ -13127,6 +13399,7 @@ class _SettingsDialog(QDialog):
 
     def _cleanup_ollama_test(self) -> None:
         self._ollama_test_btn.setEnabled(True)
+        self._ai_model_refresh.setEnabled(True)
         self._ollama_test_btn.setText("Test connection")
         worker = self._ollama_test_worker
         self._ollama_test_worker = None
@@ -13167,10 +13440,13 @@ class _SettingsDialog(QDialog):
         self._task_deadlines_edit.setPlainText("")
         self._time_decimals_spin.setValue(_DEFAULT_TIME_DECIMALS)
         self._ai_enabled_cb.setChecked(True)
+        self._ai_auto_apply_cb.setChecked(False)
         for _pid, _label, _base, _model in AI_PRESETS:
             self._ai_preset_values[_pid] = {
                 "base_url": _base, "model": _model, "api_key": "",
+                "auth_mode": default_ai_auth_mode(_pid, _base),
             }
+            self._ai_model_lists[_pid] = []
         self._ai_active_preset = DEFAULT_AI_PRESET
         self._ai_preset_combo.setCurrentIndex(
             max(0, self._ai_preset_combo.findData(DEFAULT_AI_PRESET)))
@@ -13231,6 +13507,8 @@ class _SettingsDialog(QDialog):
     def task_deadlines_text(self) -> str: return self._task_deadlines_edit.toPlainText()
     @property
     def ai_enabled(self) -> bool:         return self._ai_enabled_cb.isChecked()
+    @property
+    def ai_auto_apply(self) -> bool:      return self._ai_auto_apply_cb.isChecked()
     @property
     def ai_preset(self) -> str:
         return normalize_ai_preset(self._ai_preset_combo.currentData())

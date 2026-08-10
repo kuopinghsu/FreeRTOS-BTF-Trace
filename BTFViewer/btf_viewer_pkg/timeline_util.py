@@ -521,6 +521,7 @@ def _make_rotated_label(scene, text: str, font: "QFont", color: "QColor",
 # generic ``monospace`` alias). Lazily initialised so import does not require
 # a live QApplication.
 _FIXED_FONT_FAMILY: Optional[str] = None
+_SANS_FONT_FAMILY: Optional[str] = None
 
 def _get_fixed_font_family() -> str:
     """Return an installed fixed-pitch font family, initialising lazily.
@@ -550,6 +551,41 @@ def _get_fixed_font_family() -> str:
                     break
             _FIXED_FONT_FAMILY = fam or "Courier New"
     return _FIXED_FONT_FAMILY
+
+
+def _get_sans_font_family() -> str:
+    """Return an installed proportional sans family (never CSS ``sans-serif``).
+
+    Qt SVG looks up ``sans-serif`` as the face ``Sans-serif`` and emits
+    ``qt.qpa.fonts`` missing-family warnings. Prefer a real installed face.
+    """
+    global _SANS_FONT_FAMILY
+    if _SANS_FONT_FAMILY is not None:
+        return _SANS_FONT_FAMILY
+    if QApplication.instance() is None:
+        return "Arial"
+    available = set(QFontDatabase.families())
+    for cand in (
+        "Helvetica Neue", "Helvetica", "Arial", "Segoe UI",
+        "Lucida Grande", "Verdana", "Tahoma",
+        "DejaVu Sans", "Liberation Sans", "Noto Sans", "Ubuntu",
+        "FreeSans", "Cantarell",
+    ):
+        if cand in available:
+            _SANS_FONT_FAMILY = cand
+            break
+    else:
+        fam = ""
+        for name in QFontDatabase.families():
+            low = (name or "").lower()
+            if _is_generic_font_family(name):
+                continue
+            if any(tok in low for tok in ("mono", "courier", "console", "fixed")):
+                continue
+            fam = name
+            break
+        _SANS_FONT_FAMILY = fam or "Arial"
+    return _SANS_FONT_FAMILY
 
 def _lod_reduce(segs: list, time_min: int, px_per_ns: float,
                 offset: float) -> list:

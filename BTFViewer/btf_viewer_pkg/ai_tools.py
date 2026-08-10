@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import re
+import urllib.parse
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 AI_TOOL_SET_CURSORS = "set_cursors"
@@ -22,6 +23,51 @@ AI_VIEWER_TOOL_NAMES: Tuple[str, ...] = (
     AI_TOOL_SET_VIEW_MODE,
     AI_TOOL_OPEN_CORRIDOR,
 )
+
+# QTextBrowser truncates ``scheme:digits`` (treats it as host:port). Use a path.
+_BTF_JUMP_HREF_RE = re.compile(
+    r"btfjump:(?://)?(?:time/)?([0-9]+(?:\.[0-9]+)?)",
+    re.IGNORECASE,
+)
+_BTF_HIGHLIGHT_HREF_RE = re.compile(
+    r"btfhighlight:(?://)?(?:task/)?(.+)$",
+    re.IGNORECASE,
+)
+
+
+def btf_jump_href(value: Any) -> str:
+    """Chat href for ``jump:TIME`` that survives QTextBrowser ``setHtml``."""
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return "btfjump:time/0"
+    token = str(int(n)) if n.is_integer() else str(n)
+    return f"btfjump:time/{token}"
+
+
+def parse_btf_jump_href(href: Any) -> Optional[float]:
+    """Parse ``btfjump:time/N`` or legacy ``btfjump:N``."""
+    m = _BTF_JUMP_HREF_RE.search(str(href or ""))
+    if not m:
+        return None
+    try:
+        return float(m.group(1))
+    except (TypeError, ValueError):
+        return None
+
+
+def btf_highlight_href(name: str) -> str:
+    """Chat href for a highlight target (slash form + percent-encoding)."""
+    token = urllib.parse.quote(str(name or "").strip(), safe="")
+    return f"btfhighlight:task/{token}"
+
+
+def parse_btf_highlight_href(href: Any) -> str:
+    """Parse ``btfhighlight:task/…`` or legacy ``btfhighlight:Name``."""
+    m = _BTF_HIGHLIGHT_HREF_RE.search(str(href or "").strip())
+    if not m:
+        return ""
+    return urllib.parse.unquote(m.group(1).strip().lstrip("/"))
 
 # Appended to the base system prompt. Keep in sync with web aiTools.js.
 AI_TOOL_SYSTEM_ADDENDUM = (
@@ -487,6 +533,120 @@ def format_tool_result_content(result: Dict[str, Any]) -> str:
     return json.dumps(result, default=str)
 
 
+def canonical_assistant_tool_message(
+    content: Any,
+    tool_calls: Sequence[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """OpenAI-shaped assistant turn with ``tool_calls`` (Gemini-safe)."""
+    calls_out: List[Dict[str, Any]] = []
+    for i, call in enumerate(tool_calls or []):
+        if not isinstance(call, dict):
+            continue
+        name = str(call.get("name") or "").strip()
+        if not name:
+            continue
+        cid = str(call.get("id") or f"call_{i}").strip() or f"call_{i}"
+        args = call.get("arguments")
+        if isinstance(args, str):
+            arg_s = args
+        else:
+            arg_s = json.dumps(
+                args if isinstance(args, dict) else {}, default=str)
+        calls_out.append({
+            "id": cid,
+            "type": "function",
+            "function": {"name": name, "arguments": arg_s},
+        })
+    text = message_content_text(content) if content is not None else ""
+    msg: Dict[str, Any] = {"role": "assistant", "content": text or None}
+    if calls_out:
+        msg["tool_calls"] = calls_out
+    return msg
+
+
+def tool_result_message(
+    *,
+    tool_call_id: str,
+    name: str,
+    content: Any,
+) -> Dict[str, Any]:
+    """``role=tool`` follow-up. Gemini requires a non-empty function name."""
+    cid = str(tool_call_id or "").strip() or "call_0"
+    fname = str(name or "").strip()
+    if isinstance(content, str):
+        body = content
+    elif isinstance(content, dict):
+        body = format_tool_result_content(content)
+    else:
+        body = format_tool_result_content(
+            {"ok": False, "message": str(content or "")})
+    out: Dict[str, Any] = {
+        "role": "tool",
+        "tool_call_id": cid,
+        "content": body,
+    }
+    if fname:
+        out["name"] = fname
+    return out
+
+
+def normalize_tool_chat_messages(
+    messages: Sequence[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Fill ``name`` on tool follow-ups (Gemini OpenAI-compat).
+
+    Gemini maps ``role=tool`` to ``function_response`` and rejects an empty
+    name. Match by ``tool_call_id``, then by order after the last assistant
+    tool_calls.
+    """
+    out: List[Dict[str, Any]] = []
+    unused: List[Tuple[str, str]] = []
+    for msg in messages or []:
+        if not isinstance(msg, dict):
+            continue
+        role = str(msg.get("role") or "")
+        if role == "assistant":
+            extracted = extract_tool_calls(msg)
+            if extracted:
+                canon = canonical_assistant_tool_message(
+                    msg.get("content"), extracted)
+                out.append(canon)
+                unused = [
+                    (str(c.get("id") or ""), str(c.get("name") or "").strip())
+                    for c in extract_tool_calls(canon)
+                    if str(c.get("id") or "") and str(c.get("name") or "").strip()
+                ]
+            else:
+                out.append(dict(msg))
+                unused = []
+            continue
+        if role == "tool":
+            copied = dict(msg)
+            cid = str(copied.get("tool_call_id") or copied.get("id") or "").strip()
+            name = str(copied.get("name") or "").strip()
+            if not name and cid:
+                for i, (uid, uname) in enumerate(unused):
+                    if uid == cid:
+                        name = uname
+                        unused.pop(i)
+                        break
+            if not name and unused:
+                uid, uname = unused.pop(0)
+                name = uname
+                if not cid:
+                    cid = uid
+            elif name and cid:
+                unused = [(i, n) for i, n in unused if i != cid]
+            if cid:
+                copied["tool_call_id"] = cid
+            if name:
+                copied["name"] = name
+            out.append(copied)
+            continue
+        out.append(dict(msg))
+    return out
+
+
 def parse_ai_auto_apply(value: Any) -> bool:
     """Settings → AI auto-apply flag (default False = require confirm)."""
     if value is True:
@@ -501,6 +661,20 @@ def max_tool_rounds() -> int:
 
 
 _TASK_ID_RE = re.compile(r"\[(\d+)\]\s*$")
+_TASK_EMBEDDED_RE = re.compile(r"([A-Za-z_][\w]*\[\d+\])")
+_CORE_SUFFIX_RE = re.compile(r"\s*\((?:core\s*)?\d+\)\s*$", re.IGNORECASE)
+_CORE_NUM_RE = re.compile(r"^(?:core[\s_-]*)?(\d+)$", re.IGNORECASE)
+_CORE_SHORT_RE = re.compile(r"^c(\d+)$", re.IGNORECASE)
+
+
+def normalize_task_lookup_query(task_name_or_id: str) -> str:
+    """Strip mermaid decorations such as ``Low[266] (Core 0)`` → ``Low[266]``."""
+    text = (task_name_or_id or "").strip()
+    if not text:
+        return ""
+    stripped = _CORE_SUFFIX_RE.sub("", text).strip() or text
+    m = _TASK_EMBEDDED_RE.search(stripped)
+    return m.group(1) if m else stripped
 
 
 def task_lookup_keys(task_name_or_id: str) -> List[str]:
@@ -549,43 +723,99 @@ def resolve_task_key(
     candidates: Sequence[str],
 ) -> Optional[str]:
     """Pick the best matching task/merge key from *candidates*."""
-    want = (task_name_or_id or "").strip()
-    if not want:
+    raw = (task_name_or_id or "").strip()
+    if not raw:
         return None
     names = [str(c) for c in candidates if c]
     if not names:
         return None
-    exact = {n: n for n in names}
-    if want in exact:
-        return exact[want]
-    lower = {n.lower(): n for n in names}
-    if want.lower() in lower:
-        return lower[want.lower()]
+    queries = [raw]
+    norm = normalize_task_lookup_query(raw)
+    if norm and norm not in queries:
+        queries.append(norm)
 
+    exact = {n: n for n in names}
+    lower = {n.lower(): n for n in names}
     by_alias: Dict[str, List[str]] = {}
     for name in names:
         for alias in _task_match_aliases(name):
             bucket = by_alias.setdefault(alias.lower(), [])
             if name not in bucket:
                 bucket.append(name)
-    hits = by_alias.get(want.lower()) or []
-    if len(hits) == 1:
-        return hits[0]
-    if hits and want.isdigit():
-        return hits[0]
 
-    want_l = want.lower()
-    prefix: List[str] = []
-    contains: List[str] = []
-    for alias, origs in by_alias.items():
-        if alias.startswith(want_l):
-            prefix.extend(origs)
-        if want_l in alias:
-            contains.extend(origs)
-    prefix_u = list(dict.fromkeys(prefix))
-    if len(prefix_u) == 1:
-        return prefix_u[0]
-    contains_u = list(dict.fromkeys(contains))
-    if len(contains_u) == 1:
-        return contains_u[0]
+    for want in queries:
+        if want in exact:
+            return exact[want]
+        if want.lower() in lower:
+            return lower[want.lower()]
+        hits = by_alias.get(want.lower()) or []
+        if len(hits) == 1:
+            return hits[0]
+        if hits and want.isdigit():
+            return hits[0]
+        want_l = want.lower()
+        prefix: List[str] = []
+        contains: List[str] = []
+        for alias, origs in by_alias.items():
+            if alias.startswith(want_l):
+                prefix.extend(origs)
+            if want_l in alias:
+                contains.extend(origs)
+        prefix_u = list(dict.fromkeys(prefix))
+        if len(prefix_u) == 1:
+            return prefix_u[0]
+        contains_u = list(dict.fromkeys(contains))
+        if len(contains_u) == 1:
+            return contains_u[0]
+    return None
+
+
+def _core_match_aliases(raw: str) -> List[str]:
+    """Core_0 / Core 0 / 0 / c0 spellings that should match *raw*."""
+    text = (raw or "").strip()
+    if not text:
+        return []
+    aliases = [text]
+    compact = re.sub(r"[\s_-]+", "_", text)
+    if compact not in aliases:
+        aliases.append(compact)
+    spaced = text.replace("_", " ")
+    if spaced not in aliases:
+        aliases.append(spaced)
+    m = _CORE_NUM_RE.match(text) or _CORE_SHORT_RE.match(text)
+    if m:
+        n = str(int(m.group(1)))
+        aliases.extend((n, f"Core_{n}", f"core_{n}", f"Core {n}", f"c{n}", f"C{n}"))
+    return [a for a in dict.fromkeys(aliases) if a]
+
+
+def resolve_core_key(
+    core_name_or_id: str,
+    candidates: Sequence[str],
+) -> Optional[str]:
+    """Pick the best matching core name from *candidates* (e.g. Core_0)."""
+    want = (core_name_or_id or "").strip()
+    if not want:
+        return None
+    names = [str(c) for c in candidates if c]
+    if not names:
+        return None
+    if want in names:
+        return want
+    lower = {n.lower(): n for n in names}
+    if want.lower() in lower:
+        return lower[want.lower()]
+    by_alias: Dict[str, List[str]] = {}
+    for name in names:
+        for alias in _core_match_aliases(name):
+            bucket = by_alias.setdefault(alias.lower(), [])
+            if name not in bucket:
+                bucket.append(name)
+    hits: List[str] = []
+    for alias in _core_match_aliases(want):
+        for orig in by_alias.get(alias.lower(), []):
+            if orig not in hits:
+                hits.append(orig)
+    if hits:
+        return hits[0]
     return None

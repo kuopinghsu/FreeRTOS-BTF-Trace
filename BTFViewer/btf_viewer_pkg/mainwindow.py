@@ -20,6 +20,17 @@ from .ai_assistant import (
     migrate_ai_settings,
     normalize_ai_preset,
 )
+from .ai_tools import (
+    AI_TOOL_HIGHLIGHT_TASK,
+    AI_TOOL_OPEN_CORRIDOR,
+    AI_TOOL_SET_CURSORS,
+    AI_TOOL_SET_VIEW_MODE,
+    AI_TOOL_ZOOM_TO_RANGE,
+    resolve_core_key,
+    resolve_task_key,
+    tool_result_payload,
+    validate_tool_call,
+)
 from .mvvm import MainViewModel, MvvmSettingsMixin, TraceTabViewModel
 from .mvvm.tab_viewport import apply_viewport, viewport_from_json, viewport_to_json
 from .trace_quality import trace_quality_summary
@@ -3917,6 +3928,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             on_open_settings=lambda: self._open_settings("AI"),
             on_save_settings=self._ai_save_settings_patch,
             on_jump=self._ai_jump_time_unit,
+            on_highlight=self._ai_highlight_task,
+            on_execute_tools=self._ai_execute_tools,
+            on_undo_tools=self._ai_undo_tools,
             get_loaded_tabs=self._ai_list_loaded_tabs,
             build_compare_context=self._ai_build_compare_context,
         )
@@ -4736,7 +4750,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     @classmethod
     def _ai_setting_keys(cls) -> list:
-        keys = ["enabled", "preset", "response_language"]
+        keys = ["enabled", "preset", "response_language", "auto_apply"]
         keys += [
             f"{pid}_{field}"
             for pid, _label, _base, _model in AI_PRESETS
@@ -4752,6 +4766,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         cfg["enabled"] = cfg["enabled"] or "true"
         cfg["response_language"] = (
             cfg["response_language"] or DEFAULT_AI_RESPONSE_LANGUAGE)
+        cfg["auto_apply"] = cfg["auto_apply"] or "false"
 
         legacy = {k: s.get("ai", k, "") for k in self._AI_LEGACY_KEYS}
         patch = migrate_ai_settings({**cfg, **legacy})
@@ -4842,10 +4857,21 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         elif hasattr(panel, "refresh_template_availability"):
             panel.refresh_template_availability()
 
+    def _ai_stop_zoom_anim(self) -> None:
+        anim = getattr(self, "_ai_zoom_anim", None)
+        if anim is None:
+            return
+        try:
+            anim.stop()
+        except RuntimeError:
+            pass
+        self._ai_zoom_anim = None
+
     def _ai_jump_time_unit(self, value: float) -> None:
         """Jump to *value* (trace time unit) and drop an annotation there."""
         if self._trace is None:
             return
+        self._ai_stop_zoom_anim()
         ns = int(float(value))
         note = ai_jump_annotation_note(value)
         self._jump_to_ns(ns)
@@ -4853,6 +4879,233 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             if int(ann.ns) == ns and ann.note == note:
                 return
         self._add_annotation_with_note(ns, note, show_marks_panel=False)
+
+    def _ai_task_candidates(self) -> list:
+        tr = self._trace
+        if tr is None:
+            return []
+        names = [str(t) for t in (getattr(tr, "tasks", None) or [])]
+        seg_map = getattr(tr, "seg_map_by_merge_key", None) or {}
+        names.extend(str(k) for k in seg_map.keys())
+        return names
+
+    def _ai_highlight_task(self, name: str) -> None:
+        """Lock-highlight *name* (empty clears). Used by tools and diagram clicks.
+
+        Task labels lock-highlight a row. Core aliases (``Core_0``, ``C0``, ``0``)
+        switch to Core View, expand that core, and scroll to it.
+        """
+        if self._trace is None or not hasattr(self, "_view"):
+            return
+        scene = self._view._scene
+        key = (name or "").strip()
+        if not key:
+            scene.set_highlighted_task(None)
+            return
+        resolved = resolve_task_key(key, self._ai_task_candidates())
+        if resolved:
+            mk = _task_merge_key(resolved)
+            scene.set_highlighted_task(mk, locked=True)
+            self._scroll_view_to_task(mk)
+            return
+        cores = list(getattr(self._trace, "core_names", None) or [])
+        core = resolve_core_key(key, cores)
+        if not core:
+            return
+        if getattr(self, "_view_mode", "task") != "core":
+            self._set_view_mode("core")
+        scene = self._view._scene
+        scene.set_highlighted_task(None)
+        scene.set_core_expanded(core, True)
+        cpu = getattr(self, "_cpu_load_graph", None)
+        if cpu is not None and hasattr(cpu, "set_core_expanded"):
+            cpu.set_core_expanded(core, True)
+        self._scroll_view_to_task(core)
+
+    def _ai_capture_gui_snapshot(self) -> dict:
+        view = getattr(self, "_view", None)
+        scene = view._scene if view is not None else None
+        dlg = self._heatmap_dlg or self._chord_dlg
+        return {
+            "cursors": list(scene.cursor_times()) if scene is not None else [],
+            "view_mode": getattr(self, "_view_mode", "task"),
+            "horizontal": bool(getattr(scene, "_horizontal", True)) if scene else True,
+            "highlight": getattr(scene, "_locked_task", None) if scene else None,
+            "tpp": float(scene._timescale_per_px) if scene is not None else None,
+            "fit_mode": bool(getattr(view, "_fit_mode", False)) if view is not None else False,
+            "hscroll": view.horizontalScrollBar().value() if view is not None else 0,
+            "vscroll": view.verticalScrollBar().value() if view is not None else 0,
+            "inspector": bool(dlg is not None and dlg.isVisible()),
+        }
+
+    def _ai_restore_gui_snapshot(self, snap: dict) -> None:
+        view = getattr(self, "_view", None)
+        if view is None or not snap:
+            return
+        scene = view._scene
+        view.begin_programmatic_viewport()
+        try:
+            scene.clear_cursors()
+            for ns in snap.get("cursors") or []:
+                scene.add_cursor(int(ns))
+            view.cursors_changed.emit(scene.cursor_times())
+        finally:
+            view.end_programmatic_viewport()
+        mode = snap.get("view_mode")
+        if mode in ("task", "core"):
+            self._set_view_mode(mode)
+        horiz = snap.get("horizontal")
+        if horiz is not None:
+            self._set_orientation(bool(horiz))
+        hl = snap.get("highlight")
+        scene.set_highlighted_task(hl, locked=bool(hl))
+        if snap.get("fit_mode"):
+            view.zoom_fit()
+        else:
+            tpp = snap.get("tpp")
+            if tpp:
+                scene._timescale_per_px = float(tpp)
+                scene.rebuild()
+                view._fit_mode = False
+            view.horizontalScrollBar().setValue(int(snap.get("hscroll") or 0))
+            view.verticalScrollBar().setValue(int(snap.get("vscroll") or 0))
+        if not snap.get("inspector"):
+            dlg = self._heatmap_dlg or self._chord_dlg
+            if dlg is not None:
+                dlg.close()
+        if hasattr(self, "_stats_panel"):
+            self._stats_panel.set_cursor_times(scene.cursor_times(), refresh_stats=True)
+
+    def _ai_zoom_to_range(self, ns_lo: float, ns_hi: float) -> None:
+        view = getattr(self, "_view", None)
+        if view is None or self._trace is None:
+            return
+        scene = view._scene
+        lo, hi = int(min(ns_lo, ns_hi)), int(max(ns_lo, ns_hi))
+        if lo == hi:
+            return
+        span = max(hi - lo, 1)
+        pad = max(1, int(span * 0.05))
+        tmin = int(self._trace.time_min)
+        tmax = int(self._trace.time_max)
+        lo = max(tmin, lo - pad)
+        hi = min(tmax, hi + pad)
+        if lo >= hi:
+            return
+        view._fit_mode = False
+        vp = view.viewport().rect()
+        vp_px = max(vp.width() if scene._horizontal else vp.height(), 100)
+        mid = (lo + hi) // 2
+        start_tpp = float(scene._timescale_per_px)
+        span = max(hi - lo, 1)
+        avail = max(vp_px - scene._label_width, 100)
+        end_tpp = max(span / avail, float(scene._timescale_per_px_default))
+
+        def _finish() -> None:
+            scene.zoom_to_range(lo, hi, vp_px)
+            view.scroll_to_ns(mid)
+
+        if abs(end_tpp - start_tpp) < 1e-6:
+            _finish()
+            return
+        anim = QVariantAnimation(self)
+        anim.setDuration(280)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+
+        def _tick(value) -> None:
+            t = max(0.0, min(1.0, float(value)))
+            te = 1.0 - (1.0 - t) * (1.0 - t)
+            scene._timescale_per_px = start_tpp + (end_tpp - start_tpp) * te
+            scene.rebuild()
+            view.scroll_to_ns(mid)
+
+        anim.valueChanged.connect(_tick)
+        anim.finished.connect(_finish)
+        self._ai_zoom_anim = anim
+        anim.start()
+
+    def _ai_execute_tools(self, calls: list) -> list:
+        """Apply validated viewer tools; snapshot first so Undo can revert."""
+        self._ai_tool_undo = self._ai_capture_gui_snapshot()
+        self._push_undo_snapshot()
+        results = []
+        for call in calls or []:
+            if not isinstance(call, dict):
+                continue
+            name = str(call.get("name") or "")
+            args = call.get("arguments") if isinstance(call.get("arguments"), dict) else {}
+            err = str(call.get("error") or "")
+            if err:
+                results.append(tool_result_payload(False, err))
+                continue
+            norm, verr = validate_tool_call(name, args)
+            if verr:
+                results.append(tool_result_payload(False, verr))
+                continue
+            try:
+                msg = self._ai_dispatch_one(name, norm or {})
+                results.append(tool_result_payload(True, msg))
+            except Exception as exc:
+                results.append(tool_result_payload(False, str(exc)))
+        return results
+
+    def _ai_dispatch_one(self, name: str, args: dict) -> str:
+        if self._trace is None:
+            raise RuntimeError("No trace loaded")
+        if name == AI_TOOL_SET_CURSORS:
+            times = [int(t) for t in args.get("timestamps") or []]
+            max_c = max(1, int(getattr(self, "_max_cursors_val", 4) or 4))
+            times = times[:max_c]
+            view = self._view
+            view.begin_programmatic_viewport()
+            try:
+                view._scene.clear_cursors()
+                for ns in times:
+                    view._scene.add_cursor(ns)
+                view.cursors_changed.emit(view._scene.cursor_times())
+            finally:
+                view.end_programmatic_viewport()
+            if hasattr(self, "_stats_panel"):
+                self._stats_panel.set_cursor_times(
+                    view._scene.cursor_times(), refresh_stats=True)
+            return f"Placed {len(times)} cursor(s)"
+        if name == AI_TOOL_ZOOM_TO_RANGE:
+            self._ai_zoom_to_range(args["start_time"], args["end_time"])
+            return "Zoomed to range"
+        if name == AI_TOOL_HIGHLIGHT_TASK:
+            key = str(args.get("task_name_or_id") or "")
+            self._ai_highlight_task(key)
+            return "Cleared highlight" if not key else f"Highlighted {key}"
+        if name == AI_TOOL_SET_VIEW_MODE:
+            self._set_view_mode(args["mode"])
+            ori = args.get("orientation")
+            if ori == "horizontal":
+                self._set_orientation(True)
+            elif ori == "vertical":
+                self._set_orientation(False)
+            return f"View mode {args['mode']}"
+        if name == AI_TOOL_OPEN_CORRIDOR:
+            cores = list(getattr(self._trace, "core_names", None) or [])
+            src_raw = str(args.get("core_from") or "")
+            dst_raw = str(args.get("core_to") or "")
+            src = resolve_core_key(src_raw, cores) or src_raw
+            dst = resolve_core_key(dst_raw, cores) or dst_raw
+            if src and dst:
+                self._on_open_pair_heatmap(src, dst)
+            else:
+                self._open_corridor_inspector("heatmap")
+            return "Opened corridor inspector"
+        raise RuntimeError(f"unknown tool {name}")
+
+    def _ai_undo_tools(self) -> None:
+        self._ai_stop_zoom_anim()
+        snap = getattr(self, "_ai_tool_undo", None)
+        if snap:
+            self._ai_restore_gui_snapshot(snap)
+            self._ai_tool_undo = None
+        else:
+            self._cmd_undo()
 
     def _open_analysis_findings(self) -> None:
         """Show Analysis Findings dialog for the active tab / cursor scope."""
@@ -6495,6 +6748,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 for pid, _label, _base, _model in AI_PRESETS
             },
             response_language=_ai_cfg["response_language"],
+            ai_auto_apply=str(_ai_cfg.get("auto_apply", "false")).lower()
+            in ("1", "true", "yes", "on"),
             initial_page=page if isinstance(page, str) else "Appearance",
         )
         dlg.live_preview.connect(lambda: self._apply_settings_preview({
@@ -6548,6 +6803,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 "enabled": str(dlg.ai_enabled).lower(),
                 "preset": dlg.ai_preset or DEFAULT_AI_PRESET,
                 "response_language": dlg.response_language or DEFAULT_AI_RESPONSE_LANGUAGE,
+                "auto_apply": str(dlg.ai_auto_apply).lower(),
             }
             for _pid, _vals in dlg.ai_preset_settings.items():
                 for _field in AI_PRESET_FIELDS:

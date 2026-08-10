@@ -543,24 +543,26 @@ The flow from trace to verified answer:
 ④ Analysis → Query with AI…  (or AI tab → template / free-form Ask)
 ⑤ Context = Analysis Findings (+ span, cores, scope), or Trace Compare CSV for that template
 ⑥ Endpoint: OpenAI-compatible /chat/completions (Ollama, OpenAI, Gemini, or Custom)
-⑦ Reply (jump:TIME links → timeline)
-⑧ Open the Statistics section the reply names; verify on the timeline
+⑦ Reply (jump:TIME links → timeline; optional mermaid diagrams; optional GUI tool cards)
+⑧ Apply / Skip tool cards or **Apply GUI actions** under the log, or enable **Settings → AI → Auto-apply GUI actions**; open the Statistics section the reply names; verify on the timeline
 ```
 
 ### 7.1 One-time setup
 
-Configuration is per preset, and the desktop and web viewers work the same way apart from the browser's CORS rules:
+Configuration is per preset, and the desktop and web viewers work the same way apart from the browser's CORS rules, font units (desktop **pt** vs web **px**), and mermaid transport (desktop chat is a hit-tested image; web is inline SVG). Click a node to highlight, empty figure to zoom; both have a link row; exported HTML keeps clickable SVG:
 
 | Step | Desktop | Web |
 |------|---------|-----|
 | Choose preset | **Settings → AI → Preset**: Ollama, OpenAI, Google Gemini, or Custom | Same |
 | Ollama | `ollama serve`, `ollama pull phi4-mini:3.8b`; base URL `http://localhost:11434/v1` | Same; for `file://` use Vite, or allow CORS (`OLLAMA_ORIGINS="*" ollama serve`; macOS app: `launchctl setenv OLLAMA_ORIGINS "*"` + restart) |
-| OpenAI / Gemini / Custom | Base URL + model + API key | Same; OpenAI and Gemini are proxied under `npm run dev` / `preview` |
-| Verify | **Test connection** (lists models, then runs a chat probe) | Same |
+| OpenAI / Gemini / Custom | Base URL + model + Authentication (API key or Sign in) | Same; OpenAI and Gemini are proxied under `npm run dev` / `preview` |
+| Authentication | **None (local)** / **API key** / **Sign in** (opens vendor page; paste the key). Panel chip: Local / Key saved / Needs API key / Needs sign-in / Signed in. 401 keeps Sign in / Settings CTAs until a successful turn | Same (`VITE_*` env keys) |
+| Verify | Refresh the **Model** list, then **Test connection** (chat probe) | Same |
+| GUI tools | **Auto-apply GUI actions** off (default) → Apply / Skip / Undo in chat, plus **Apply GUI actions** under the log. **Ctrl/Cmd+Z** also undoes cursors/marks after Apply. Chat timeout 120s. Small models without native tools may emit ` ```btftool ` fences instead. | Same |
 | Share a setup | **Import…** a JSON file (`examples/ai/gemini.json`, `openai.json`, `deepseek.json`, `grok.json`) | Same |
 | Show panel | **View → Show AI Assistant** / Display settings | Display → AI Assistant panel |
 
-Each preset keeps its own base URL, model, and API key — in `btf_viewer.rc` on the desktop and in browser storage on the web — so you can switch between a local and a cloud endpoint without retyping either configuration. Keys may also come from the environment as `OPENAI_API_KEY`, `GEMINI_API_KEY`, or `OLLAMA_API_KEY` (`VITE_*` prefixed on the web). A local Ollama endpoint needs no key at all.
+Each preset keeps its own base URL, model, API key, and auth method — in `btf_viewer.rc` on the desktop and in browser storage on the web — so you can switch between a local and a cloud endpoint without retyping either configuration. **Sign in** opens the vendor key/login page in the browser; paste the issued key or token back into Settings (device-code OAuth is not wired yet). Keys may also come from the environment as `OPENAI_API_KEY`, `GEMINI_API_KEY`, or `OLLAMA_API_KEY` (`VITE_*` prefixed on the web). A local Ollama endpoint needs no key at all.
 
 ### 7.2 Recommended ask order
 

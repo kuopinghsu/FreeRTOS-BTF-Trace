@@ -22,6 +22,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from btf_viewer_pkg.timeline_util import (  # noqa: E402
     _get_fixed_font_family,
+    _get_sans_font_family,
     _is_generic_font_family,
     _monospace_font,
 )
@@ -35,6 +36,12 @@ class FixedFontFamilyTests(unittest.TestCase):
 
     def test_fixed_family_is_installed_not_generic(self) -> None:
         fam = _get_fixed_font_family()
+        self.assertTrue(fam)
+        self.assertFalse(_is_generic_font_family(fam))
+        self.assertIn(fam, set(QFontDatabase.families()))
+
+    def test_sans_family_is_installed_not_generic(self) -> None:
+        fam = _get_sans_font_family()
         self.assertTrue(fam)
         self.assertFalse(_is_generic_font_family(fam))
         self.assertIn(fam, set(QFontDatabase.families()))
@@ -69,6 +76,23 @@ class FixedFontFamilyTests(unittest.TestCase):
         self.assertNotIn("missing font family", result.stderr)
         self.assertNotIn("qt.qpa.fonts", result.stderr)
         self.assertFalse(_is_generic_font_family(result.stdout.strip().splitlines()[-1]))
+
+    def test_mermaid_and_gauge_svg_skip_css_generic_fonts(self) -> None:
+        from btf_viewer_pkg.ai_mermaid import mermaid_to_svg  # noqa: WPS433
+        from btf_viewer_pkg.ai_tools import AI_MERMAID_SEQUENCE_EXAMPLE  # noqa: WPS433
+        from btf_viewer_pkg.stats import _load_balance_gauge_svg  # noqa: WPS433
+
+        src = AI_MERMAID_SEQUENCE_EXAMPLE.replace("```mermaid", "").replace("```", "").strip()
+        svg = mermaid_to_svg(src)
+        self.assertNotIn("sans-serif", svg.lower())
+        self.assertIn(f'font-family="{_get_sans_font_family()}"', svg)
+        gauge = _load_balance_gauge_svg({
+            "score": 82, "gini": 0.18, "stddev": 12, "zone": "ok",
+        })
+        self.assertNotIn("sans-serif", gauge.lower())
+        self.assertNotRegex(gauge, r'font-family="monospace"')
+        self.assertIn(f'font-family="{_get_sans_font_family()}"', gauge)
+        self.assertIn(f'font-family="{_get_fixed_font_family()}"', gauge)
 
 
 if __name__ == "__main__":

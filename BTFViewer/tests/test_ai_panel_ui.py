@@ -24,9 +24,11 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from btf_viewer_pkg.ai_assistant import (  # noqa: E402
     _MermaidZoomDialog,
+    _qtextline_cursor_x,
     create_ai_assistant_panel,
 )
 from btf_viewer_pkg.ai_mermaid import mermaid_zoom_token  # noqa: E402
+from btf_viewer_pkg.ai_tools import AI_VIEWER_TOOL_NAMES  # noqa: E402
 
 
 def _app() -> QApplication:
@@ -51,11 +53,29 @@ class AiPanelUiTests(unittest.TestCase):
     def test_ask_needs_a_question(self) -> None:
         """Ask stays disabled until the box has text (web parity)."""
         panel = self._panel()
+        self.assertTrue(hasattr(panel, "_auth_chip"))
+        self.assertIn("·", panel._auth_chip.text())
         self.assertFalse(panel._send_btn.isEnabled())
         panel._input.setPlainText("why is CS[22] late?")
         self.assertTrue(panel._send_btn.isEnabled())
         panel._input.setPlainText("   ")
         self.assertFalse(panel._send_btn.isEnabled())
+
+    def test_auth_forced_keeps_cta_after_401(self) -> None:
+        """401 CTAs stay until a successful turn (web authForced parity)."""
+        panel = self._panel()
+        self.assertFalse(panel._auth_forced)
+        self.assertTrue(panel._auth_cta.isHidden())
+        panel._on_err(
+            "OpenAI-compatible HTTP 401 at https://api.openai.com/v1/"
+            "chat/completions: unauthorized")
+        self.assertTrue(panel._auth_forced)
+        self.assertFalse(panel._auth_cta.isHidden())
+        self.assertFalse(panel._auth_cta_signin.isHidden())
+        panel._on_ok(json.dumps({"content": "ok", "tool_calls": []}))
+        self.assertFalse(panel._auth_forced)
+        self.assertTrue(panel._auth_cta.isHidden())
+        self.assertIn("ok", panel._log.toPlainText())
 
     def test_log_keeps_prompt_and_reply_apart(self) -> None:
         """Template / follow-up prompts must not continue the previous assistant block."""
@@ -118,6 +138,45 @@ class AiPanelUiTests(unittest.TestCase):
         self.assertIn("Analysis Findings", prompt)
         self.assertIn("severity", prompt)
 
+    def test_jump_links_work_after_undo_refresh(self) -> None:
+        jumps = []
+        highlights = []
+
+        def _exec(calls):
+            return [{"ok": True, "message": "ok"} for _ in calls]
+
+        panel = create_ai_assistant_panel(
+            None,
+            get_context=lambda: {"findings_text": "findings"},
+            get_settings=lambda: {"enabled": "true", "auto_apply": "false"},
+            on_execute_tools=_exec,
+            on_jump=jumps.append,
+            on_highlight=highlights.append,
+        )
+        panel._on_ok(json.dumps({
+            "content": (
+                "See jump:1100000 and jump:3200000. "
+                "[Low](btfhighlight:task/Low%5B266%5D) [C0](btfhighlight:task/C0)"
+            ),
+            "tool_calls": [
+                {"id": "c1", "name": "set_cursors",
+                 "arguments": {"timestamps": [10, 20]}},
+            ],
+        }))
+        with patch.object(panel, "_continue_with_messages"):
+            panel._apply_tool_batch("b1", skipped=False)
+            panel._on_tool_action("undo", "b1")
+        html = panel._log.toHtml()
+        self.assertIn("btfjump:time/1100000", html)
+        self.assertIn("btfjump:time/3200000", html)
+        panel._on_jump_link(QUrl("btfjump:time/1100000"))
+        panel._on_jump_link(QUrl("btfjump:time/3200000"))
+        self.assertEqual(jumps, [1100000.0, 3200000.0])
+        panel._on_jump_link(QUrl("btfhighlight:task/Low%5B266%5D"))
+        self.assertEqual(highlights[-1], "Low[266]")
+        panel._on_jump_link(QUrl("btfhighlight:task/C0"))
+        self.assertEqual(highlights[-1], "C0")
+
     def test_query_migration_thrash_uses_template(self) -> None:
         panel = self._panel()
         with patch.object(panel, "send_current") as send:
@@ -178,6 +237,81 @@ class AiPanelUiTests(unittest.TestCase):
         with patch.object(panel2, "_continue_with_messages"):
             panel2._on_jump_link(QUrl("btfaction:apply:b1"))
         self.assertEqual(executed[-1][0]["name"], "highlight_task")
+
+    def test_apply_runs_each_viewer_tool(self) -> None:
+        executed = []
+
+        def _exec(calls):
+            executed.append(list(calls))
+            return [{"ok": True, "message": "ok"} for _ in calls]
+
+        panel = create_ai_assistant_panel(
+            None,
+            get_context=lambda: {"findings_text": "findings"},
+            get_settings=lambda: {"enabled": "true", "auto_apply": "false"},
+            on_execute_tools=_exec,
+        )
+        panel._on_ok(json.dumps({
+            "content": "Applying all tools.",
+            "tool_calls": [
+                {"id": "c1", "name": "set_cursors",
+                 "arguments": {"timestamps": [10, 20]}},
+                {"id": "c2", "name": "zoom_to_range",
+                 "arguments": {"start_time": 20, "end_time": 10}},
+                {"id": "c3", "name": "highlight_task",
+                 "arguments": {"task_name_or_id": "PS[228]"}},
+                {"id": "c4", "name": "set_view_mode",
+                 "arguments": {"mode": "core", "orientation": "v"}},
+                {"id": "c5", "name": "open_corridor_inspector",
+                 "arguments": {"core_from": "0", "core_to": "1"}},
+            ],
+        }))
+        with patch.object(panel, "_continue_with_messages"):
+            panel._on_jump_link(QUrl("btfaction:apply/b1"))
+        self.assertEqual(len(executed), 1)
+        names = [c["name"] for c in executed[0]]
+        self.assertEqual(names, list(AI_VIEWER_TOOL_NAMES))
+        by_name = {c["name"]: c["arguments"] for c in executed[0]}
+        self.assertEqual(by_name["set_cursors"]["timestamps"], [10.0, 20.0])
+        self.assertEqual(by_name["zoom_to_range"]["start_time"], 10.0)
+        self.assertEqual(by_name["highlight_task"]["task_name_or_id"], "PS[228]")
+        self.assertEqual(by_name["set_view_mode"]["orientation"], "vertical")
+        self.assertEqual(by_name["open_corridor_inspector"]["core_from"], "0")
+        asst = [m for m in panel._chat_messages if m.get("role") == "assistant"][-1]
+        self.assertEqual(
+            [c["function"]["name"] for c in asst.get("tool_calls") or []],
+            list(AI_VIEWER_TOOL_NAMES),
+        )
+        tool_msgs = [m for m in panel._chat_messages if m.get("role") == "tool"]
+        self.assertEqual(
+            [m.get("name") for m in tool_msgs],
+            list(AI_VIEWER_TOOL_NAMES),
+        )
+        self.assertTrue(all(m.get("tool_call_id") for m in tool_msgs))
+
+    def test_qtextline_cursor_x_accepts_pyside_tuple(self) -> None:
+        class _Line:
+            def cursorToX(self, pos):  # noqa: N802
+                return (12.5, pos)
+
+        self.assertEqual(_qtextline_cursor_x(_Line(), 3), 12.5)
+
+        class _Scalar:
+            def cursorToX(self, pos):  # noqa: N802
+                return 8.0
+
+        self.assertEqual(_qtextline_cursor_x(_Scalar(), 1), 8.0)
+
+    def test_mermaid_in_chat_click_does_not_crash(self) -> None:
+        panel = self._panel()
+        panel._append(
+            "assistant",
+            "```mermaid\ngraph LR\n  C0[Core_0] --> C1[Core_1]\n```",
+        )
+        QApplication.processEvents()
+        for pt in (QPoint(10, 10), QPoint(80, 80), QPoint(200, 140)):
+            panel._mermaid_img_local_pos(pt)
+            panel._try_mermaid_node_click(pt)
 
     def test_mermaid_zoom_opens_from_chat_link(self) -> None:
         panel = self._panel()

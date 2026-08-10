@@ -32,6 +32,8 @@ BUNDLE_MODULES: list[str] = [
     "scene",
     "graphics_items",
     "view",
+    "ai_tools",
+    "ai_mermaid",
     "ai_assistant",
     "stats",
     "mvvm/base",
@@ -101,6 +103,7 @@ import subprocess
 import tempfile
 import traceback
 import urllib.error
+import urllib.parse
 import urllib.request
 import zlib
 import gzip
@@ -117,7 +120,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from PySide6.QtCore import (
     QBuffer, QByteArray, QEasingCurve, QEvent, QEventLoop, QIODevice, QLineF, QMimeData,
     QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt, QThread, QTimer, QUrl,
-    QPropertyAnimation, Signal,
+    QPropertyAnimation, QVariantAnimation, Signal,
 )
 from PySide6.QtGui import (
     QBrush, QColor, QCursor, QDrag, QFont, QFontDatabase, QFontMetrics, QFontMetricsF, QIcon, QImage, QKeySequence, QLinearGradient, QPainter,

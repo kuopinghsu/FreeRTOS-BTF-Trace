@@ -47,10 +47,140 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("self._push_undo_snapshot()", mw)
         self.assertIn("self._cmd_undo()", mw)
 
+    def test_highlight_normalizes_to_merge_key(self) -> None:
+        mw = (BTF_ROOT / "btf_viewer_pkg/mainwindow.py").read_text(encoding="utf-8")
+        app = (BTF_ROOT / "web/src/App.vue").read_text(encoding="utf-8")
+        self.assertIn("_task_merge_key(resolved)", mw)
+        self.assertIn("taskMergeKey(resolved)", app)
+        self.assertIn("if resolved:", mw)
+        self.assertIn("if (resolved) {", app)
+        self.assertIn("resolve_core_key(key, cores)", mw)
+        self.assertIn("resolveCoreKey(key, trace.value?.coreNames", app)
+        assist = (BTF_ROOT / "btf_viewer_pkg/ai_assistant.py").read_text(encoding="utf-8")
+        self.assertIn("_try_mermaid_node_click", assist)
+        self.assertIn("hit_test_mermaid", assist)
+
+    def test_corridor_resolves_core_aliases(self) -> None:
+        mw = (BTF_ROOT / "btf_viewer_pkg/mainwindow.py").read_text(encoding="utf-8")
+        app = (BTF_ROOT / "web/src/App.vue").read_text(encoding="utf-8")
+        js = (BTF_ROOT / "web/src/utils/aiTools.js").read_text(encoding="utf-8")
+        self.assertIn("resolve_core_key(src_raw, cores)", mw)
+        self.assertIn("resolveCoreKey(args.core_from", app)
+        self.assertIn("export function resolveCoreKey", js)
+
     def test_tool_names_listed_in_web(self) -> None:
         js = (BTF_ROOT / "web/src/utils/aiTools.js").read_text(encoding="utf-8")
         for name in AI_VIEWER_TOOL_NAMES:
             self.assertRegex(js, re.compile(rf"['\"]{re.escape(name)}['\"]"))
+
+    def test_ai_auth_mode_helpers_match(self) -> None:
+        from btf_viewer_pkg.ai_assistant import (
+            AI_AUTH_API_KEY,
+            AI_AUTH_BROWSER,
+            AI_AUTH_MODE_LABELS,
+            AI_AUTH_NONE,
+            AI_PRESET_CUSTOM,
+            AI_PRESET_FIELDS,
+            AI_PRESET_GEMINI,
+            AI_PRESET_KEY_URLS,
+            AI_PRESET_OLLAMA,
+            AI_PRESET_OPENAI,
+            AI_PRESET_SIGNIN_LABELS,
+            LOCAL_AI_HOSTS,
+            ai_auth_status,
+            ai_preset_signin_label,
+            ai_preset_signin_url,
+            default_ai_auth_mode,
+            normalize_ai_auth_mode,
+        )
+
+        js = (BTF_ROOT / "web/src/utils/ollamaClient.js").read_text(encoding="utf-8")
+        vue = (BTF_ROOT / "web/src/components/SettingsDialog.vue").read_text(
+            encoding="utf-8")
+        stats = (BTF_ROOT / "btf_viewer_pkg/stats.py").read_text(encoding="utf-8")
+        panel = (BTF_ROOT / "web/src/components/AiAssistantPanel.vue").read_text(
+            encoding="utf-8")
+        assist = (BTF_ROOT / "btf_viewer_pkg/ai_assistant.py").read_text(
+            encoding="utf-8")
+        readme = (BTF_ROOT / "README.md").read_text(encoding="utf-8")
+        workflows = (BTF_ROOT / "WORKFLOWS.md").read_text(encoding="utf-8")
+
+        self.assertEqual(AI_AUTH_NONE, "none")
+        self.assertEqual(AI_AUTH_API_KEY, "api_key")
+        self.assertEqual(AI_AUTH_BROWSER, "browser")
+        self.assertEqual(tuple(AI_PRESET_FIELDS), (
+            "base_url", "model", "api_key", "auth_mode"))
+        self.assertIn("authMode", js)
+        self.assertIn("AI_PRESET_FIELDS = ['baseUrl', 'model', 'apiKey', 'authMode']", js)
+
+        for _mode, label in AI_AUTH_MODE_LABELS:
+            self.assertIn(f"'{label}'", js)
+        for host in LOCAL_AI_HOSTS:
+            self.assertIn(f"'{host}'", js)
+        for url in AI_PRESET_KEY_URLS.values():
+            self.assertIn(url, js)
+            self.assertIn(url, assist)
+        for label in AI_PRESET_SIGNIN_LABELS.values():
+            self.assertIn(label, js)
+            self.assertIn(label, assist)
+
+        for status_label in (
+            "Local", "Signed in", "Key saved", "Needs sign-in", "Needs API key",
+        ):
+            self.assertIn(f"'{status_label}'", js)
+            self.assertIn(f'"{status_label}"', assist)
+
+        self.assertEqual(default_ai_auth_mode(AI_PRESET_OLLAMA), AI_AUTH_NONE)
+        self.assertEqual(default_ai_auth_mode(AI_PRESET_GEMINI), AI_AUTH_API_KEY)
+        self.assertEqual(normalize_ai_auth_mode("sign-in"), AI_AUTH_BROWSER)
+        self.assertEqual(normalize_ai_auth_mode("oauth"), AI_AUTH_BROWSER)
+        self.assertIn("aistudio.google.com", ai_preset_signin_url(AI_PRESET_GEMINI))
+        self.assertEqual(
+            ai_preset_signin_label(AI_PRESET_OPENAI), "Sign in with OpenAI…")
+        self.assertEqual(
+            ai_preset_signin_label(AI_PRESET_CUSTOM), "Open provider sign-in…")
+        need = ai_auth_status(
+            auth_mode=AI_AUTH_API_KEY, api_key="", preset_id=AI_PRESET_GEMINI)
+        self.assertTrue(need["needs_auth"])
+        self.assertEqual(need["label"], "Needs API key")
+
+        self.assertIn("def normalize_ai_auth_mode", assist)
+        self.assertIn("export function normalizeAiAuthMode", js)
+        self.assertIn("AI_AUTH_BROWSER", assist)
+        self.assertIn("AI_AUTH_BROWSER", js)
+        self.assertIn("Authentication:", stats)
+        self.assertIn("Authentication", vue)
+        self.assertIn("_ai_signin_btn", stats)
+        self.assertIn("onAiSignIn", vue)
+        self.assertIn("_auth_chip", assist)
+        self.assertIn("ai-auth-chip", panel)
+        self.assertIn("self._auth_forced", assist)
+        self.assertIn("authForced", panel)
+        self.assertIn("showSignInCta", panel)
+        self.assertIn(
+            "Opened {url}. Paste the key or token in Settings → AI.", assist)
+        self.assertIn(
+            "Opened ${url}. Paste the key or token in Settings → AI.", panel)
+        self.assertIn("Authentication |", readme)
+        self.assertIn("401 keeps Sign in / Settings CTAs", workflows)
+
+    def test_gemini_tool_result_name_helpers_match(self) -> None:
+        py = (BTF_ROOT / "btf_viewer_pkg/ai_tools.py").read_text(encoding="utf-8")
+        js = (BTF_ROOT / "web/src/utils/aiTools.js").read_text(encoding="utf-8")
+        assist = (BTF_ROOT / "btf_viewer_pkg/ai_assistant.py").read_text(
+            encoding="utf-8")
+        vue = (BTF_ROOT / "web/src/components/AiAssistantPanel.vue").read_text(
+            encoding="utf-8")
+        client = (BTF_ROOT / "web/src/utils/ollamaClient.js").read_text(
+            encoding="utf-8")
+        self.assertIn("def normalize_tool_chat_messages", py)
+        self.assertIn("export function normalizeToolChatMessages", js)
+        self.assertIn("normalize_tool_chat_messages(messages)", assist)
+        self.assertIn("normalizeToolChatMessages(", client)
+        self.assertIn("canonical_assistant_tool_message(text, calls)", assist)
+        self.assertIn("canonicalAssistantToolMessage(text, calls)", vue)
+        self.assertIn("tool_result_message(", assist)
+        self.assertIn("toolResultMessage(", vue)
 
 
 if __name__ == "__main__":

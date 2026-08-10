@@ -9,7 +9,10 @@ describe('AI settings storage', () => {
     assert.equal(s.aiPreset, 'ollama')
     assert.equal(s.aiAutoApply, false)
     assert.deepEqual(Object.keys(s.aiPresets).sort(), ['custom', 'gemini', 'ollama', 'openai'])
-    assert.deepEqual(s.aiPresets.gemini, { baseUrl: '', model: '', apiKey: '' })
+    assert.deepEqual(s.aiPresets.gemini, {
+      baseUrl: '', model: '', apiKey: '', authMode: 'api_key',
+    })
+    assert.equal(s.aiPresets.ollama.authMode, 'none')
   })
 
   it('keeps each preset independent', () => {
@@ -75,5 +78,26 @@ describe('AI settings storage', () => {
     const overlays = src.indexOf('Timeline overlays')
     const analysis = src.indexOf('Analysis thresholds')
     assert.ok(overlays >= 0 && analysis > overlays)
+  })
+
+  it('AI model field has a refresh control', () => {
+    const src = readFileSync(new URL('../src/components/SettingsDialog.vue', import.meta.url), 'utf8')
+    assert.match(src, /onRefreshModels/)
+    assert.match(src, /ai-model-options/)
+    assert.match(src, /aiListModels/)
+    assert.match(src, /Refresh model list/)
+  })
+
+  it('AI settings expose authentication method and sign-in', () => {
+    const src = readFileSync(new URL('../src/components/SettingsDialog.vue', import.meta.url), 'utf8')
+    assert.match(src, /Authentication/)
+    assert.match(src, /onAiSignIn/)
+    assert.match(src, /aiAuthMode/)
+    const panel = readFileSync(new URL('../src/components/AiAssistantPanel.vue', import.meta.url), 'utf8')
+    assert.match(panel, /ai-auth-chip/)
+    assert.match(panel, /authChipLabel/)
+    assert.match(panel, /authForced/)
+    assert.match(panel, /showSignInCta/)
+    assert.match(panel, /Opened \$\{url\}\. Paste the key or token in Settings/)
   })
 })

@@ -64,6 +64,7 @@ describe('loadBalanceGauge', () => {
     assert.match(svg, /Load Balance Score/)
     assert.match(svg, /Std Deviation/)
     assert.match(svg, /12\.0%/)
+    assert.doesNotMatch(svg, /system-ui/)
   })
 
   it('alerts Unbalanced in red zone SVG', () => {

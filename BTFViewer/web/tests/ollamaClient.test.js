@@ -13,10 +13,14 @@ import {
   aiReachabilityTip,
   aiSameOriginProxyBase,
   applyAiPreset,
+  aiAuthStatus,
+  aiPresetSignInUrl,
   buildAiSystemPrompt,
+  defaultAiAuthMode,
   isLocalAiHost,
   matchModelName,
   migrateAiSettings,
+  normalizeAiAuthMode,
   normalizeAiBaseUrl,
   normalizeAiPreset,
   parseAiSettingsJson,
@@ -32,6 +36,32 @@ describe('AI endpoint helpers', () => {
       'https://api.openai.com/v1',
     )
     assert.equal(normalizeAiBaseUrl(''), DEFAULT_AI_BASE_URL)
+  })
+
+  it('normalizes auth modes and reports chip status', () => {
+    assert.equal(defaultAiAuthMode(AI_PRESET_OLLAMA), 'none')
+    assert.equal(defaultAiAuthMode(AI_PRESET_GEMINI), 'api_key')
+    assert.equal(normalizeAiAuthMode('sign-in'), 'browser')
+    assert.equal(normalizeAiAuthMode('', { presetId: AI_PRESET_OLLAMA }), 'none')
+    const need = aiAuthStatus({
+      authMode: 'api_key',
+      apiKey: '',
+      presetId: AI_PRESET_GEMINI,
+      baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    })
+    assert.equal(need.needsAuth, true)
+    assert.equal(need.label, 'Needs API key')
+    const signed = aiAuthStatus({
+      authMode: 'browser', apiKey: 'tok', presetId: AI_PRESET_GEMINI,
+    })
+    assert.equal(signed.signedIn, true)
+    assert.match(aiPresetSignInUrl(AI_PRESET_GEMINI), /aistudio\.google\.com/)
+    const patch = parseAiSettingsJson({
+      preset: 'gemini',
+      base_url: 'https://generativelanguage.googleapis.com/v1beta/openai',
+      authMode: 'sign_in',
+    })
+    assert.equal(patch.presets.gemini.authMode, 'browser')
   })
 
   it('detects local hosts (no API key required)', () => {
@@ -350,6 +380,59 @@ describe('AI endpoint helpers', () => {
         /HTTP 400/,
       )
       assert.equal(n, 1)
+    } finally {
+      globalThis.fetch = orig
+    }
+  })
+
+  it('aiChatCompletion fills Gemini function_response.name on tool follow-ups', async () => {
+    const { aiChatCompletion } = await import('../src/utils/ollamaClient.js')
+    const orig = globalThis.fetch
+    let sent
+    globalThis.fetch = async (_url, opts) => {
+      sent = JSON.parse(opts.body)
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => 'application/json' },
+        json: async () => ({
+          choices: [{ message: { role: 'assistant', content: 'ok' } }],
+        }),
+        text: async () => '',
+      }
+    }
+    try {
+      await aiChatCompletion({
+        query: '',
+        messages: [
+          { role: 'user', content: 'fix inversion' },
+          {
+            role: 'assistant',
+            content: 'Applying.',
+            tool_calls: [
+              {
+                id: 'c1',
+                type: 'function',
+                function: { name: 'set_cursors', arguments: '{"timestamps":[1,2]}' },
+              },
+              {
+                id: 'c2',
+                type: 'function',
+                function: {
+                  name: 'highlight_task',
+                  arguments: '{"task_name_or_id":"PS[228]"}',
+                },
+              },
+            ],
+          },
+          { role: 'tool', tool_call_id: 'c1', content: '{"ok":true}' },
+          { role: 'tool', tool_call_id: 'c2', content: '{"ok":true}' },
+        ],
+        baseUrl: 'http://127.0.0.1:11434/v1',
+        model: 'gemini-2.5-flash',
+      })
+      const names = sent.messages.filter(m => m.role === 'tool').map(m => m.name)
+      assert.deepEqual(names, ['set_cursors', 'highlight_task'])
     } finally {
       globalThis.fetch = orig
     }

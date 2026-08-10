@@ -191,13 +191,13 @@ function _gaugeSvgBody({
       <stop offset="100%" stop-color="${colors.fillEnd}"/>
     </linearGradient>
   </defs>
-  <text x="${cx}" y="18" text-anchor="middle" fill="${fg}" font-family="system-ui,sans-serif" font-size="10" font-weight="600">${title}</text>
+  <text x="${cx}" y="18" text-anchor="middle" fill="${fg}" font-family="sans-serif" font-size="10" font-weight="600">${title}</text>
   <path d="${bg}" fill="none" stroke="${track}" stroke-width="${strokeW}" stroke-linecap="round"/>
   <path d="${fill}" fill="none" stroke="url(#${uid})" stroke-width="${strokeW}" stroke-linecap="round"/>
   <line x1="${cx}" y1="${cy}" x2="${tip.x.toFixed(2)}" y2="${tip.y.toFixed(2)}" stroke="${fg}" stroke-width="2" stroke-linecap="round"/>
   <circle cx="${cx}" cy="${cy}" r="3.5" fill="#FFFFFF" stroke="${fg}" stroke-width="1.75"/>
-  <text x="${cx}" y="${valueY}" text-anchor="middle" fill="${colors.accent}" font-family="system-ui,sans-serif" font-size="12" font-weight="700">${valueLabel}</text>
-  <text x="${cx}" y="${cy + 16}" text-anchor="middle" fill="${muted}" font-family="system-ui,sans-serif" font-size="9">${legend}</text>`
+  <text x="${cx}" y="${valueY}" text-anchor="middle" fill="${colors.accent}" font-family="sans-serif" font-size="12" font-weight="700">${valueLabel}</text>
+  <text x="${cx}" y="${cy + 16}" text-anchor="middle" fill="${muted}" font-family="sans-serif" font-size="9">${legend}</text>`
 }
 
 /**
@@ -246,17 +246,17 @@ export function loadBalanceGaugeSvg(metrics, opts = {}) {
   let chip = ''
   if (overall === 'red') {
     chip = `<rect x="210" y="6" width="80" height="16" rx="8" fill="${LB_ZONE_COLORS.red.chipBg}" stroke="${LB_ZONE_COLORS.red.chipBd}"/>
-  <text x="250" y="17" text-anchor="middle" fill="${LB_ZONE_COLORS.red.chipFg}" font-family="system-ui,sans-serif" font-size="9" font-weight="700">Unbalanced</text>`
+  <text x="250" y="17" text-anchor="middle" fill="${LB_ZONE_COLORS.red.chipFg}" font-family="sans-serif" font-size="9" font-weight="700">Unbalanced</text>`
   } else if (overall === 'amber') {
     chip = `<rect x="228" y="6" width="62" height="16" rx="8" fill="${LB_ZONE_COLORS.amber.chipBg}" stroke="${LB_ZONE_COLORS.amber.chipBd}"/>
-  <text x="259" y="17" text-anchor="middle" fill="${LB_ZONE_COLORS.amber.chipFg}" font-family="system-ui,sans-serif" font-size="9" font-weight="700">σ &gt; 30%</text>`
+  <text x="259" y="17" text-anchor="middle" fill="${LB_ZONE_COLORS.amber.chipFg}" font-family="sans-serif" font-size="9" font-weight="700">σ &gt; 30%</text>`
   }
 
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${d.viewW} ${d.viewH}" width="${width}" height="${h}" role="img" aria-label="Load Balance Score ${score.toFixed(0)} percent, sigma ${stddev.toFixed(1)} percent">
   <rect width="100%" height="100%" rx="8" fill="#F7F8FA" stroke="${border}"/>
   ${left}
   ${right}
-  <text x="${d.viewW / 2}" y="${d.viewH - 8}" text-anchor="middle" fill="#6A7388" font-family="ui-monospace,monospace" font-size="9">G=${gini.toFixed(3)} · Score = 100 × (1 − Gini)</text>
+  <text x="${d.viewW / 2}" y="${d.viewH - 8}" text-anchor="middle" fill="#6A7388" font-family="monospace" font-size="9">G=${gini.toFixed(3)} · Score = 100 × (1 − Gini)</text>
   ${chip}
 </svg>`
 }

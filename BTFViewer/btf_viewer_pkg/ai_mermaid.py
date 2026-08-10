@@ -7,8 +7,20 @@ from __future__ import annotations
 
 import base64
 import html
+import math
 import re
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+from .ai_tools import btf_highlight_href, btf_jump_href
+
+
+def _svg_sans_family() -> str:
+    """Qt SVG needs a real face; CSS ``sans-serif`` warns as ``Sans-serif``."""
+    try:
+        from .timeline_util import _get_sans_font_family
+        return _get_sans_font_family()
+    except Exception:
+        return "Arial"
 
 _PARTICIPANT_RE = re.compile(
     r"^participant\s+(\S+)(?:\s+as\s+(.+))?$", re.IGNORECASE
@@ -28,6 +40,24 @@ _EDGE_RE = re.compile(
     r"([A-Za-z0-9_]+)\s*(?:\[([^\]]+)\]|\(([^\)]+)\))?\s*$"
 )
 _JUMP_RE = re.compile(r"jump:([0-9]+(?:\.[0-9]+)?)")
+
+
+def _note_box_w(note: str) -> float:
+    return float(min(200, 16 + 6 * min(len(note or ""), 36)))
+
+
+def _svg_arrowhead(x1: float, y1: float, x2: float, y2: float, color: str, size: float = 8.0) -> str:
+    """Triangle at (x2,y2); Qt paints ``<marker>`` as a stray blob at the origin."""
+    dx, dy = x2 - x1, y2 - y1
+    length = math.hypot(dx, dy) or 1.0
+    ux, uy = dx / length, dy / length
+    tip_x, tip_y = x2, y2
+    bx, by = tip_x - ux * size, tip_y - uy * size
+    px, py = -uy * size * 0.45, ux * size * 0.45
+    return (
+        f'<polygon points="{tip_x:.1f},{tip_y:.1f} {bx + px:.1f},{by + py:.1f} '
+        f'{bx - px:.1f},{by - py:.1f}" fill="{color}"/>'
+    )
 
 
 def extract_mermaid_fences(text: str) -> List[str]:
@@ -90,6 +120,46 @@ def mermaid_link_targets(source: str) -> List[Tuple[str, str]]:
     return found
 
 
+def mermaid_hit_regions(source: str) -> List[Dict[str, Any]]:
+    """Clickable node boxes in SVG user units: ``x,y,w,h,kind,value``."""
+    text = (source or "").strip()
+    if not text:
+        return []
+    first = ""
+    for line in text.splitlines():
+        s = line.strip()
+        if s and not s.startswith("%%"):
+            first = s.lower()
+            break
+    if first.startswith("sequencediagram"):
+        return _sequence_hits(text)
+    if first.startswith("graph ") or first.startswith("flowchart "):
+        return _flowchart_hits(text)
+    return []
+
+
+def hit_test_mermaid(
+    source: str,
+    local_x: float,
+    local_y: float,
+    *,
+    scale: float = 1.0,
+) -> Optional[Tuple[str, str]]:
+    """Return ``(kind, value)`` if ``(local_x, local_y)`` hits a node."""
+    sx = float(scale) if scale else 1.0
+    if sx <= 0:
+        sx = 1.0
+    px, py = float(local_x), float(local_y)
+    for hit in mermaid_hit_regions(source):
+        x = float(hit["x"]) * sx
+        y = float(hit["y"]) * sx
+        w = float(hit["w"]) * sx
+        h = float(hit["h"]) * sx
+        if x <= px <= x + w and y <= py <= y + h:
+            return str(hit["kind"]), str(hit["value"])
+    return None
+
+
 def mermaid_to_svg(source: str, *, interactive: bool = True) -> str:
     """Return an SVG string, or empty if the dialect is unsupported."""
     text = (source or "").strip()
@@ -133,8 +203,13 @@ def mermaid_block_html(source: str, *, as_img: bool = True, zoomable: bool = Tru
         return f'<pre><code class="language-mermaid">{esc}</code></pre>'
     if as_img:
         b64 = base64.b64encode(svg.encode("utf-8")).decode("ascii")
+        wm = re.search(r'\bwidth="(\d+(?:\.\d+)?)"', svg)
+        hm = re.search(r'\bheight="(\d+(?:\.\d+)?)"', svg)
+        size_attr = ""
+        if wm and hm:
+            size_attr = f' width="{wm.group(1)}" height="{hm.group(1)}"'
         fig = (
-            f'<img class="ai-mermaid-img" alt="mermaid diagram" '
+            f'<img class="ai-mermaid-img" alt="mermaid diagram"{size_attr} '
             f'src="data:image/svg+xml;base64,{b64}">'
         )
     else:
@@ -155,11 +230,13 @@ def _link_row_html(source: str) -> str:
         esc = html.escape(value)
         if kind == "jump":
             parts.append(
-                f'<a href="btfjump:{esc}" class="ai-jump">jump:{esc}</a>'
+                f'<a href="{html.escape(btf_jump_href(value), quote=True)}" '
+                f'class="ai-jump">jump:{esc}</a>'
             )
         else:
             parts.append(
-                f'<a href="btfhighlight:{esc}" class="ai-hl">{esc}</a>'
+                f'<a href="{html.escape(btf_highlight_href(value), quote=True)}" '
+                f'class="ai-hl">{esc}</a>'
             )
     if not parts:
         return ""
@@ -170,8 +247,8 @@ def _esc(text: str) -> str:
     return html.escape(text or "", quote=True)
 
 
-def _sequence_svg(source: str, *, interactive: bool) -> str:
-    participants: List[Tuple[str, str]] = []  # id, label
+def _parse_sequence(source: str) -> Tuple[List[Tuple[str, str]], Dict[str, int], List[Tuple[str, Any]]]:
+    participants: List[Tuple[str, str]] = []
     index: Dict[str, int] = {}
     rows: List[Tuple[str, Any]] = []
 
@@ -207,27 +284,63 @@ def _sequence_svg(source: str, *, interactive: bool) -> str:
             who = nm.group(1).split(",")[0].strip()
             _ensure(who)
             rows.append(("note", who, nm.group(2).strip()))
-            continue
+    return participants, index, rows
 
+
+def _sequence_geom(source: str) -> Optional[Dict[str, Any]]:
+    participants, index, rows = _parse_sequence(source)
     if not participants:
-        return ""
-
-    col_w = 150
-    left = 36
-    top = 28
-    row_h = 40
-    width = left * 2 + max(len(participants) - 1, 0) * col_w + 40
+        return None
+    box_w = 120.0
+    col_w = 150.0
+    top = 32.0
+    row_h = 40.0
+    half = box_w / 2.0
+    for row in rows:
+        if row[0] == "note":
+            half = max(half, _note_box_w(row[2]) / 2.0)
+    pad = half + 16.0
+    width = pad * 2 + max(len(participants) - 1, 0) * col_w
     height = top + 36 + max(len(rows), 1) * row_h + 24
-    xs = [left + i * col_w for i in range(len(participants))]
+    xs = [pad + i * col_w for i in range(len(participants))]
+    return {
+        "participants": participants, "index": index, "rows": rows,
+        "box_w": box_w, "top": top, "row_h": row_h,
+        "width": width, "height": height, "xs": xs,
+    }
+
+
+def _sequence_hits(source: str) -> List[Dict[str, Any]]:
+    geom = _sequence_geom(source)
+    if not geom:
+        return []
+    top, box_w = geom["top"], geom["box_w"]
+    hits: List[Dict[str, Any]] = []
+    for i, (_pid, label) in enumerate(geom["participants"]):
+        x = geom["xs"][i]
+        hits.append({
+            "x": x - box_w / 2, "y": top - 14, "w": float(box_w), "h": 28.0,
+            "kind": "highlight", "value": label,
+        })
+    return hits
+
+
+def _sequence_svg(source: str, *, interactive: bool) -> str:
+    geom = _sequence_geom(source)
+    if not geom:
+        return ""
+    participants, index, rows = geom["participants"], geom["index"], geom["rows"]
+    box_w, top, row_h = geom["box_w"], geom["top"], geom["row_h"]
+    width, height, xs = geom["width"], geom["height"], geom["xs"]
+    fam = _esc(_svg_sans_family())
 
     parts = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
-        f'viewBox="0 0 {width} {height}" class="ai-mermaid-seq">',
-        '<rect width="100%" height="100%" fill="#12161d"/>',
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width:.0f}" height="{height:.0f}" '
+        f'viewBox="0 0 {width:.0f} {height:.0f}" class="ai-mermaid-seq">',
+        f'<rect x="0" y="0" width="{width:.0f}" height="{height:.0f}" fill="#12161d"/>',
     ]
-    for i, (pid, label) in enumerate(participants):
+    for i, (_pid, label) in enumerate(participants):
         x = xs[i]
-        box_w = 120
         bx = x - box_w / 2
         href = f' href="btfhighlight:{_esc(label)}"' if interactive else ""
         parts.append(
@@ -239,7 +352,7 @@ def _sequence_svg(source: str, *, interactive: bool) -> str:
             f'<rect x="{bx}" y="{top - 14}" width="{box_w}" height="28" rx="4" '
             f'fill="#1e3348" stroke="#5b9bd5"/>'
             f'<text x="{x}" y="{top + 5}" text-anchor="middle" fill="#dbe2ea" '
-            f'font-size="11" font-family="system-ui,sans-serif">{_esc(label[:28])}</text>'
+            f'font-size="11" font-family="{fam}">{_esc(label[:28])}</text>'
             f"</a>"
         )
 
@@ -250,39 +363,36 @@ def _sequence_svg(source: str, *, interactive: bool) -> str:
             x1 = xs[index[_src]]
             x2 = xs[index[_dst]]
             dashed = " stroke-dasharray=\"5 3\"" if arrow.startswith("--") else ""
+            tip = 8 if x2 >= x1 else -8
             parts.append(
-                f'<line x1="{x1}" y1="{y}" x2="{x2}" y2="{y}" '
-                f'stroke="#6fbf9a" stroke-width="1.4"{dashed} '
-                f'marker-end="url(#aiArr)"/>'
+                f'<line x1="{x1}" y1="{y}" x2="{x2 - tip}" y2="{y}" '
+                f'stroke="#6fbf9a" stroke-width="1.4"{dashed}/>'
             )
+            parts.append(_svg_arrowhead(x1, y, x2, y, "#6fbf9a"))
             mx = (x1 + x2) / 2
             parts.append(
                 f'<text x="{mx}" y="{y - 6}" text-anchor="middle" fill="#a8b4c4" '
-                f'font-size="10" font-family="system-ui,sans-serif">{_esc(msg[:48])}</text>'
+                f'font-size="10" font-family="{fam}">{_esc(msg[:48])}</text>'
             )
         else:
             who, note = row[1], row[2]
             x = xs[index[who]]
-            nw = min(200, 16 + 6 * min(len(note), 36))
+            nw = _note_box_w(note)
             parts.append(
                 f'<rect x="{x - nw / 2}" y="{y - 16}" width="{nw}" height="28" '
                 f'rx="3" fill="#2a2418" stroke="#c9a227"/>'
                 f'<text x="{x}" y="{y + 3}" text-anchor="middle" fill="#e6d48a" '
-                f'font-size="10" font-family="system-ui,sans-serif">{_esc(note[:40])}</text>'
+                f'font-size="10" font-family="{fam}">{_esc(note[:40])}</text>'
             )
         y += row_h
 
-    marker = (
-        '<defs><marker id="aiArr" markerWidth="8" markerHeight="8" '
-        'refX="7" refY="3" orient="auto">'
-        '<path d="M0,0 L8,3 L0,6 Z" fill="#6fbf9a"/></marker></defs>'
-    )
-    parts.insert(1, marker)
     parts.append("</svg>")
     return "".join(parts)
 
 
-def _flowchart_svg(source: str, *, interactive: bool) -> str:
+def _parse_flowchart(
+    source: str,
+) -> Tuple[Dict[str, str], List[str], List[Tuple[str, str, str]]]:
     nodes: Dict[str, str] = {}
     edges: List[Tuple[str, str, str]] = []
     order: List[str] = []
@@ -312,53 +422,122 @@ def _flowchart_svg(source: str, *, interactive: bool) -> str:
         nm = _NODE_RE.match(line)
         if nm:
             _add_node(nm.group(1), nm.group(2) or nm.group(3) or nm.group(4))
+    return nodes, order, edges
 
+
+def _node_box_w(label: str) -> float:
+    return float(max(72, min(130, 12 + 7 * len((label or "")[:18]))))
+
+
+def _flowchart_geom(source: str) -> Optional[Dict[str, Any]]:
+    nodes, order, edges = _parse_flowchart(source)
     if not nodes:
-        return ""
-
-    col_w, row_h = 150, 70
+        return None
+    col_w, row_h = 160.0, 78.0
     cols = min(4, max(1, len(order)))
-    left, top = 30, 28
-    width = left * 2 + (cols - 1) * col_w + 100
-    rows_n = (len(order) + cols - 1) // cols
-    height = top + rows_n * row_h + 40
+    max_half = 40.0
+    for nid in order:
+        max_half = max(max_half, _node_box_w(nodes[nid]) / 2.0)
+    pad = max_half + 18.0
+    top = 36.0
     pos: Dict[str, Tuple[float, float]] = {}
     for i, nid in enumerate(order):
         c, r = i % cols, i // cols
-        pos[nid] = (left + 50 + c * col_w, top + 20 + r * row_h)
+        pos[nid] = (pad + c * col_w, top + r * row_h)
+    right = max(x + _node_box_w(nodes[nid]) / 2 for nid, (x, _y) in pos.items())
+    bottom = max(y + 20 for _x, y in pos.values())
+    width = right + pad
+    height = bottom + 24
+    return {
+        "nodes": nodes, "order": order, "edges": edges, "pos": pos,
+        "width": width, "height": height,
+    }
 
-    parts = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
-        f'viewBox="0 0 {width} {height}" class="ai-mermaid-flow">',
-        '<rect width="100%" height="100%" fill="#12161d"/>',
-        '<defs><marker id="aiFArr" markerWidth="8" markerHeight="8" '
-        'refX="7" refY="3" orient="auto">'
-        '<path d="M0,0 L8,3 L0,6 Z" fill="#5b9bd5"/></marker></defs>',
-    ]
+
+def _flowchart_edge_paths(geom: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Offset reverse edges so Core_0→Core_1 and Core_1→Core_0 counts do not stack."""
+    nodes, edges, pos = geom["nodes"], geom["edges"], geom["pos"]
+    pairs = {(src, dst) for src, dst, _lab in edges}
+    paths: List[Dict[str, float]] = []
     for src, dst, label in edges:
         x1, y1 = pos[src]
         x2, y2 = pos[dst]
+        dx, dy = x2 - x1, y2 - y1
+        length = math.hypot(dx, dy) or 1.0
+        ux, uy = dx / length, dy / length
+        nx, ny = -uy, ux
+        sep = 12.0 if (dst, src) in pairs else 0.0
+        ox, oy = nx * sep, ny * sep
+        src_r = _node_box_w(nodes[src]) / 2.0 + 2.0
+        dst_r = _node_box_w(nodes[dst]) / 2.0 + 2.0
+        sx = x1 + ux * src_r + ox
+        sy = y1 + uy * src_r + oy
+        ex = x2 - ux * dst_r + ox
+        ey = y2 - uy * dst_r + oy
+        extra = 10.0 if sep else 8.0
+        paths.append({
+            "sx": sx, "sy": sy, "ex": ex, "ey": ey,
+            "lx": (sx + ex) / 2.0 + nx * extra,
+            "ly": (sy + ey) / 2.0 + ny * extra,
+            "label": label,
+        })
+    return paths
+
+
+def _flowchart_hits(source: str) -> List[Dict[str, Any]]:
+    geom = _flowchart_geom(source)
+    if not geom:
+        return []
+    hits: List[Dict[str, Any]] = []
+    for nid in geom["order"]:
+        x, y = geom["pos"][nid]
+        label = geom["nodes"][nid]
+        bw = _node_box_w(label)
+        hits.append({
+            "x": x - bw / 2, "y": y - 16, "w": float(bw), "h": 32.0,
+            "kind": "highlight", "value": label,
+        })
+    return hits
+
+
+def _flowchart_svg(source: str, *, interactive: bool) -> str:
+    geom = _flowchart_geom(source)
+    if not geom:
+        return ""
+    nodes, order, pos = geom["nodes"], geom["order"], geom["pos"]
+    width, height = geom["width"], geom["height"]
+    fam = _esc(_svg_sans_family())
+
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width:.0f}" height="{height:.0f}" '
+        f'viewBox="0 0 {width:.0f} {height:.0f}" class="ai-mermaid-flow">',
+        f'<rect x="0" y="0" width="{width:.0f}" height="{height:.0f}" fill="#12161d"/>',
+    ]
+    for edge in _flowchart_edge_paths(geom):
+        sx, sy, ex, ey = edge["sx"], edge["sy"], edge["ex"], edge["ey"]
         parts.append(
-            f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" '
-            f'stroke="#5b9bd5" stroke-width="1.3" marker-end="url(#aiFArr)"/>'
+            f'<line x1="{sx:.1f}" y1="{sy:.1f}" x2="{ex:.1f}" y2="{ey:.1f}" '
+            f'stroke="#5b9bd5" stroke-width="1.3"/>'
         )
+        parts.append(_svg_arrowhead(sx, sy, ex, ey, "#5b9bd5"))
+        label = str(edge.get("label") or "")
         if label:
             parts.append(
-                f'<text x="{(x1 + x2) / 2}" y="{(y1 + y2) / 2 - 6}" text-anchor="middle" '
-                f'fill="#8b98a8" font-size="10" font-family="system-ui,sans-serif">'
+                f'<text x="{edge["lx"]:.1f}" y="{edge["ly"]:.1f}" text-anchor="middle" '
+                f'fill="#c5d0dc" font-size="10" font-family="{fam}">'
                 f"{_esc(label[:16])}</text>"
             )
     for nid in order:
         x, y = pos[nid]
         label = nodes[nid]
         href = f' href="btfhighlight:{_esc(label)}"' if interactive else ""
-        bw = max(72, min(130, 12 + 7 * len(label[:18])))
+        bw = _node_box_w(label)
         parts.append(
             f'<a{href}>'
             f'<rect x="{x - bw / 2}" y="{y - 16}" width="{bw}" height="32" rx="6" '
             f'fill="#1e3348" stroke="#5b9bd5"/>'
             f'<text x="{x}" y="{y + 5}" text-anchor="middle" fill="#dbe2ea" '
-            f'font-size="11" font-family="system-ui,sans-serif">{_esc(label[:18])}</text>'
+            f'font-size="11" font-family="{fam}">{_esc(label[:18])}</text>'
             f"</a>"
         )
     parts.append("</svg>")

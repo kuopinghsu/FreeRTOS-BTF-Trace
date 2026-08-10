@@ -36,6 +36,7 @@ import {
   DEFAULT_AI_PRESET,
   DEFAULT_AI_RESPONSE_LANGUAGE,
   migrateAiSettings,
+  normalizeAiAuthMode,
   normalizeAiPreset,
 } from './ollamaClient.js'
 
@@ -78,7 +79,7 @@ export const DEFAULT_SETTINGS = {
   aiPreset: DEFAULT_AI_PRESET,
   // Per-preset base URL / model / API key; empty means "preset default".
   aiPresets: Object.fromEntries(
-    AI_PRESETS.map((p) => [p.id, { baseUrl: '', model: '', apiKey: '' }]),
+    AI_PRESETS.map((p) => [p.id, { baseUrl: '', model: '', apiKey: '', authMode: '' }]),
   ),
   aiResponseLanguage: DEFAULT_AI_RESPONSE_LANGUAGE,
   aiAutoApply: false,
@@ -94,10 +95,15 @@ function normalizeAiPresetSettings(s) {
   const out = {}
   for (const preset of AI_PRESETS) {
     const v = stored[preset.id] || {}
+    const baseUrl = String(v.baseUrl || '').trim().replace(/\/+$/, '')
     out[preset.id] = {
-      baseUrl: String(v.baseUrl || '').trim().replace(/\/+$/, ''),
+      baseUrl,
       model: String(v.model || '').trim(),
       apiKey: String(v.apiKey || '').trim(),
+      authMode: normalizeAiAuthMode(v.authMode, {
+        presetId: preset.id,
+        baseUrl: baseUrl || preset.baseUrl,
+      }),
     }
   }
   return { presets: out, preset: migrated.aiPreset || '' }

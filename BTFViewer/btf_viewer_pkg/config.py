@@ -602,6 +602,8 @@ _IC_SECTIONS_COLLAPSE = "M2 7h12v2H2z"
 _IC_SECTIONS_RESET_ORDER = (
     "M8 1.25A6.75 6.75 0 1 0 14.75 8h-1.5A5.25 5.25 0 1 1 8 2.75V5.5L12 3 8 .5v.75z"
 )
+# Same circular arrow: refresh AI model list from GET /models.
+_IC_REFRESH = _IC_SECTIONS_RESET_ORDER
 # Thumbtack: outline (unpinned) and filled (pinned).
 _IC_PIN = (
     "M8 1.25A2.75 2.75 0 0 1 10.75 4c0 .95-.48 1.78-1.2 2.27V13.5L8 11.8 6.45 13.5"

@@ -77,7 +77,10 @@
                 max="24"
                 step="1"
               >
-              <span class="settings-unit">px</span>
+              <span
+                class="settings-unit"
+                title="CSS pixels. Desktop Settings use points; defaults look similar."
+              >px</span>
             </label>
             <label class="settings-row">
               <span class="settings-label">UI / menus</span>
@@ -89,7 +92,10 @@
                 max="18"
                 step="1"
               >
-              <span class="settings-unit">px</span>
+              <span
+                class="settings-unit"
+                title="CSS pixels. Desktop Settings use points; defaults look similar."
+              >px</span>
             </label>
           </div>
 
@@ -142,29 +148,6 @@
               CPU load graph
             </label>
 
-            <h3 class="settings-section">Analysis thresholds</h3>
-            <label class="settings-row">
-              <span class="settings-label">CPU budget</span>
-              <input
-                v-model.number="draft.cpuBudgetPct"
-                class="settings-input"
-                type="number"
-                min="0"
-                max="100"
-                step="0.1"
-              >
-              <span class="settings-unit">% (0 = off)</span>
-            </label>
-            <label class="settings-row col">
-              <span class="settings-label">Task deadlines (ns)</span>
-              <textarea
-                v-model="deadlinesText"
-                class="settings-textarea"
-                rows="4"
-                placeholder="TaskName=1000000&#10;Runner1=500000"
-              />
-            </label>
-
             <h3 class="settings-section">Timeline overlays</h3>
             <label class="settings-check indent">
               <input
@@ -186,6 +169,29 @@
                 type="checkbox"
               >
               Highlight segments on label hover
+            </label>
+
+            <h3 class="settings-section">Analysis thresholds</h3>
+            <label class="settings-row">
+              <span class="settings-label">CPU budget</span>
+              <input
+                v-model.number="draft.cpuBudgetPct"
+                class="settings-input"
+                type="number"
+                min="0"
+                max="100"
+                step="0.1"
+              >
+              <span class="settings-unit">% (0 = off)</span>
+            </label>
+            <label class="settings-row col">
+              <span class="settings-label">Task deadlines (ns)</span>
+              <textarea
+                v-model="deadlinesText"
+                class="settings-textarea"
+                rows="4"
+                placeholder="TaskName=1000000&#10;Runner1=500000"
+              />
             </label>
           </div>
 
@@ -339,6 +345,16 @@
             <p class="settings-help">
               When off, the AI tab is hidden.
             </p>
+            <label
+              class="settings-check"
+              title="When on, tool calls from the model update the timeline immediately. When off, the chat shows Apply / Skip on each action card and Apply GUI actions under the log."
+            >
+              <input
+                v-model="draft.aiAutoApply"
+                type="checkbox"
+              >
+              Auto-apply GUI actions
+            </label>
             <label class="settings-row col">
               <span class="settings-label">Preset</span>
               <select
@@ -367,27 +383,104 @@
             </label>
             <label class="settings-row col">
               <span class="settings-label">Model</span>
-              <input
-                v-model="aiModel"
-                class="settings-input wide"
-                type="text"
-                title="Model id served by that endpoint (e.g. `ollama list` name, gpt-4o-mini, or gemini-flash-lite-latest)."
-                :placeholder="activePresetInfo.model || 'phi4-mini:3.8b'"
-              >
+              <div class="settings-model-wrap">
+                <input
+                  v-model="aiModel"
+                  class="settings-input wide"
+                  type="text"
+                  list="ai-model-options"
+                  title="Model id served by that endpoint (e.g. `ollama list` name, gpt-4o-mini, or gemini-flash-lite-latest). Refresh to list models from GET /models."
+                  :placeholder="activePresetInfo.model || 'phi4-mini:3.8b'"
+                >
+                <datalist id="ai-model-options">
+                  <option
+                    v-for="m in aiModelOptions"
+                    :key="m"
+                    :value="m"
+                  />
+                </datalist>
+                <button
+                  type="button"
+                  class="settings-icon-btn"
+                  :disabled="aiTesting || aiListing"
+                  title="Refresh model list from this endpoint"
+                  aria-label="Refresh model list"
+                  @click="onRefreshModels"
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    viewBox="0 0 16 16"
+                    width="14"
+                    height="14"
+                    aria-hidden="true"
+                  >
+                    <path
+                      fill="currentColor"
+                      d="M8 1.25A6.75 6.75 0 1 0 14.75 8h-1.5A5.25 5.25 0 1 1 8 2.75V5.5L12 3 8 .5v.75z"
+                    />
+                  </svg>
+                </button>
+              </div>
             </label>
             <label class="settings-row col">
-              <span class="settings-label">API key</span>
+              <span class="settings-label">Authentication</span>
+              <select
+                v-model="aiAuthMode"
+                class="settings-input wide"
+                title="How this preset authenticates. None for a local server; API key to paste a provider key; Sign in opens the vendor page so you can log in and paste the key or token."
+              >
+                <option
+                  v-for="[id, label] in aiAuthModes"
+                  :key="id"
+                  :value="id"
+                >
+                  {{ label }}
+                </option>
+              </select>
+            </label>
+            <div
+              v-if="aiAuthMode !== 'none'"
+              class="settings-ai-auth"
+            >
+              <span class="settings-label">{{ aiAuthMode === 'browser' ? 'Token' : 'API key' }}</span>
+              <p class="settings-auth-status">
+                {{ authStatusText }}
+              </p>
               <input
                 v-model="aiApiKey"
                 class="settings-input wide"
                 type="password"
                 autocomplete="off"
-                title="API key for this preset (or VITE_OPENAI_API_KEY / VITE_GEMINI_API_KEY / VITE_OLLAMA_API_KEY at build time). Local Ollama needs none. Stored per preset in browser storage."
-                :placeholder="isLocalPreset
-                  ? 'Optional — local Ollama needs none'
-                  : 'Required — provider API key'"
+                title="API key or access token for this preset (or VITE_OPENAI_API_KEY / VITE_GEMINI_API_KEY / VITE_OLLAMA_API_KEY at build time). Local Ollama needs none. Stored per preset in browser storage."
+                :placeholder="aiAuthMode === 'browser'
+                  ? 'Paste key or token after signing in'
+                  : (isLocalPreset
+                    ? 'Optional — local Ollama needs none'
+                    : 'Required — provider API key')"
               >
-            </label>
+              <div
+                v-if="aiAuthMode === 'browser'"
+                class="settings-ai-actions"
+              >
+                <button
+                  type="button"
+                  class="settings-btn secondary"
+                  :title="'Open the provider sign-in or API-key page, then paste the key or token.'"
+                  @click="onAiSignIn"
+                >
+                  {{ signInLabel }}
+                </button>
+                <button
+                  v-if="aiApiKey"
+                  type="button"
+                  class="settings-btn secondary"
+                  title="Clear the saved key or token for this preset."
+                  @click="onAiLogout"
+                >
+                  Log out
+                </button>
+              </div>
+            </div>
 
             <label class="settings-row col">
               <span class="settings-label">Reply language</span>
@@ -442,7 +535,7 @@
               </p>
             </div>
             <p
-              v-if="isLocalPreset"
+              v-if="isLocalPreset && aiAuthMode === 'none'"
               class="settings-help"
             >
               Ollama serves an OpenAI-compatible API at
@@ -456,8 +549,8 @@
               v-else
               class="settings-help"
             >
-              Any OpenAI-compatible endpoint works: set Base URL, model, and an API
-              key.
+              Any OpenAI-compatible endpoint works: set Base URL, model, and
+              Authentication (API key or Sign in).
               <a
                 v-if="activeKeyUrl"
                 :href="activeKeyUrl"
@@ -510,12 +603,18 @@ import {
   shouldReplaceDeadlinesText,
 } from '../utils/settingsStore.js'
 import {
+  AI_AUTH_MODE_LABELS,
   AI_PRESETS,
   AI_PRESET_KEY_URLS,
   AI_PRESET_OLLAMA,
   AI_RESPONSE_LANGUAGES,
+  aiAuthStatus,
+  aiListModels,
   aiPresetInfo,
+  aiPresetSignInLabel,
+  aiPresetSignInUrl,
   aiTestConnection,
+  normalizeAiAuthMode,
   normalizeAiPreset,
   parseAiSettingsJson,
   resolveAiSettings,
@@ -562,6 +661,62 @@ function presetField(field) {
 const aiBaseUrl = presetField('baseUrl')
 const aiModel = presetField('model')
 const aiApiKey = presetField('apiKey')
+const aiAuthModes = AI_AUTH_MODE_LABELS
+const aiAuthMode = computed({
+  get: () => normalizeAiAuthMode(draft.aiPresets?.[aiPreset.value]?.authMode, {
+    presetId: aiPreset.value,
+    baseUrl: aiBaseUrl.value || activePresetInfo.value.baseUrl,
+  }),
+  set: (v) => {
+    const cur = draft.aiPresets?.[aiPreset.value] || {}
+    draft.aiPresets = {
+      ...draft.aiPresets,
+      [aiPreset.value]: {
+        ...cur,
+        authMode: normalizeAiAuthMode(v, { presetId: aiPreset.value }),
+      },
+    }
+  },
+})
+const signInLabel = computed(() => aiPresetSignInLabel(aiPreset.value))
+const authStatusText = computed(() => {
+  const st = aiAuthStatus({
+    authMode: aiAuthMode.value,
+    apiKey: aiApiKey.value,
+    baseUrl: aiBaseUrl.value || activePresetInfo.value.baseUrl,
+    presetId: aiPreset.value,
+  })
+  if (aiAuthMode.value === 'none') return 'Local endpoint — no key needed.'
+  if (aiAuthMode.value === 'browser') {
+    return st.signedIn
+      ? 'Signed in — token saved.'
+      : 'Not signed in. Open the provider page, then paste the key or token below.'
+  }
+  return aiApiKey.value
+    ? 'Key saved for this preset.'
+    : 'Paste a provider API key, or set VITE_OPENAI_API_KEY / VITE_GEMINI_API_KEY at build time.'
+})
+
+function onAiSignIn() {
+  const url = aiPresetSignInUrl(
+    aiPreset.value,
+    aiBaseUrl.value || activePresetInfo.value.baseUrl,
+  )
+  if (!url) {
+    aiTestStatus.value = 'This preset has no sign-in page. Paste a token or set Base URL.'
+    aiTestOk.value = false
+    return
+  }
+  window.open(url, '_blank', 'noopener,noreferrer')
+  aiTestStatus.value = `Opened ${url}. After you sign in, paste the key or token and Test.`
+  aiTestOk.value = null
+}
+
+function onAiLogout() {
+  aiApiKey.value = ''
+  aiTestStatus.value = 'Cleared the saved token for this preset.'
+  aiTestOk.value = null
+}
 const aiLanguageOptions = computed(() => {
   const cur = String(draft.aiResponseLanguage || '').trim()
   if (cur && !AI_RESPONSE_LANGUAGES.includes(cur)) {
@@ -570,9 +725,19 @@ const aiLanguageOptions = computed(() => {
   return AI_RESPONSE_LANGUAGES
 })
 const aiTesting = ref(false)
+const aiListing = ref(false)
 const aiTestStatus = ref('')
 const aiTestOk = ref(null)
 const aiImportInput = ref(null)
+const aiModelLists = reactive(
+  Object.fromEntries(AI_PRESETS.map(p => [p.id, []])),
+)
+const aiModelOptions = computed(() => {
+  const listed = aiModelLists[aiPreset.value] || []
+  const cur = String(aiModel.value || '').trim()
+  if (cur && !listed.includes(cur)) return [cur, ...listed]
+  return listed
+})
 let aiAbort = null
 
 /** Apply an imported settings patch to the draft; returns a summary. */
@@ -663,10 +828,47 @@ function onReset() {
   deadlinesText.value = ''
   aiTestStatus.value = ''
   aiTestOk.value = null
+  for (const pid of Object.keys(aiModelLists)) aiModelLists[pid] = []
+}
+
+async function onRefreshModels() {
+  if (aiTesting.value || aiListing.value) return
+  aiListing.value = true
+  aiTestOk.value = null
+  const active = resolveAiSettings(draft)
+  aiTestStatus.value = `Listing models at ${active.baseUrl}…`
+  if (aiAbort) aiAbort.abort()
+  aiAbort = new AbortController()
+  try {
+    const names = (await aiListModels(active.baseUrl, {
+      apiKey: active.apiKey,
+      preset: active.preset,
+      signal: aiAbort.signal,
+    })).filter(Boolean).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
+    aiModelLists[aiPreset.value] = names
+    if (names.length) {
+      aiTestOk.value = true
+      aiTestStatus.value = `${names.length} model(s) from the endpoint.`
+    } else {
+      aiTestOk.value = false
+      aiTestStatus.value = 'Endpoint listed no models.'
+    }
+  } catch (err) {
+    if (err?.name === 'AbortError') {
+      aiTestStatus.value = 'Cancelled'
+      aiTestOk.value = null
+    } else {
+      aiTestOk.value = false
+      aiTestStatus.value = err?.message || String(err)
+    }
+  } finally {
+    aiListing.value = false
+    aiAbort = null
+  }
 }
 
 async function onTestAi() {
-  if (aiTesting.value) return
+  if (aiTesting.value || aiListing.value) return
   aiTesting.value = true
   aiTestOk.value = null
   const active = resolveAiSettings(draft)
@@ -811,6 +1013,17 @@ function onSave() {
 .settings-section:first-child {
   margin-top: 0;
 }
+.settings-ai-auth {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.settings-auth-status {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--fg-dim);
+}
 .settings-help {
   margin: 4px 0 0;
   font-size: 11px;
@@ -887,6 +1100,40 @@ function onSave() {
   width: 100%;
   max-width: 220px;
   grid-column: 2 / 4;
+}
+.settings-model-wrap {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  width: 100%;
+  max-width: 280px;
+  grid-column: 2 / 4;
+}
+.settings-model-wrap .settings-input.wide {
+  max-width: none;
+  grid-column: auto;
+  flex: 1;
+  min-width: 0;
+}
+.settings-icon-btn {
+  flex: 0 0 32px;
+  width: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--tb-bg);
+  color: var(--fg);
+  cursor: pointer;
+}
+.settings-icon-btn:hover:not(:disabled) {
+  background: var(--tb-btn-hover);
+}
+.settings-icon-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 .settings-unit {
   color: var(--fg-dim);

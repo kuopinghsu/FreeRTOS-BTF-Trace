@@ -1329,9 +1329,25 @@ function zoomToTimeRange(lo, hi, paddingFrac = 0.05, opts = {}) {
     timeStart = Math.max(tLo, c - minSpan / 2)
     timeEnd = Math.min(tHi, c + minSpan / 2)
   }
+  if (opts.animate) {
+    const fromStart = viewport.timeStart
+    const fromEnd = viewport.timeEnd
+    const t0 = performance.now()
+    const dur = 280
+    const tick = (now) => {
+      const t = Math.min(1, (now - t0) / dur)
+      const te = 1 - (1 - t) ** 2
+      viewport.timeStart = fromStart + (timeStart - fromStart) * te
+      viewport.timeEnd = fromEnd + (timeEnd - fromEnd) * te
+      emitViewportChange({ programmatic: !!opts.programmatic })
+      scheduleRender()
+      if (t < 1) requestAnimationFrame(tick)
+    }
+    requestAnimationFrame(tick)
+    return
+  }
   viewport.timeStart = timeStart
   viewport.timeEnd = timeEnd
-  viewport.scrollY = 0
   emitViewportChange({ programmatic: !!opts.programmatic })
   scheduleRender()
 }
@@ -1529,6 +1545,8 @@ function findRowForTask(rows, mergeKey) {
   let targetRow = rows.find(r => r.type === 'task' && r.key === mergeKey)
   if (targetRow) return targetRow
   if (props.options.viewMode !== 'core') return null
+  targetRow = rows.find(r => r.type === 'core' && r.key === mergeKey)
+  if (targetRow) return targetRow
   targetRow = rows.find(r => r.type === 'core-task' && taskMergeKey(r.taskKey) === mergeKey)
   if (targetRow) return targetRow
   // Collapsed core view: task has no sub-row — use the parent core summary row.
@@ -1545,6 +1563,8 @@ function findColForTask(cols, mergeKey) {
   let targetCol = cols.find(c => c.type === 'task' && c.key === mergeKey)
   if (targetCol) return targetCol
   if (props.options.viewMode !== 'core') return null
+  targetCol = cols.find(c => c.type === 'core' && c.key === mergeKey)
+  if (targetCol) return targetCol
   targetCol = cols.find(c => c.type === 'core-task' && taskMergeKey(c.taskKey) === mergeKey)
   if (targetCol) return targetCol
   for (const coreName of props.trace.coreNames || []) {
@@ -1744,7 +1764,7 @@ defineExpose({
   zoomCenter, expandAll, collapseAll, expandCoresForMergeKeys, jumpToNs, zoomToTimeRange, zoomToCursorRange, zoom1to1,
   jumpToTraceStart, jumpToTraceEnd, jumpSegmentBoundary, scrollTimeAxis, scrollRowAxis,
   placeCursorAtCenter, placeCursorAtTime, removeNearestCursorAt, clearAllCursorsViaHandler,
-  getViewport, getViewportCenter, getCoreAtViewportCenter, scrollToTask, scrollToIntervalRow, scrollToStiChannel, scrollToSegmentIfNeeded,
+  getViewport, getViewportCenter, getCoreAtViewportCenter, scrollToTask, expandCore, scrollToIntervalRow, scrollToStiChannel, scrollToSegmentIfNeeded,
   captureScreenshotBlob, captureAsSvg, getHoverTime, getLastActiveCursorTime,
 })
 
@@ -1761,6 +1781,14 @@ function onExpandToggle(coreName) {
 function onStiExpandToggle(channelName) {
   if (stiExpanded.has(channelName)) stiExpanded.delete(channelName)
   else stiExpanded.add(channelName)
+  scheduleRender()
+}
+
+function expandCore(coreName) {
+  if (!props.trace || !coreName) return
+  expanded.add(coreName)
+  clampScrollToContent()
+  _ovBgCanvas = null
   scheduleRender()
 }
 

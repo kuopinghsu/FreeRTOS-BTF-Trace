@@ -94,6 +94,7 @@ import subprocess
 import tempfile
 import traceback
 import urllib.error
+import urllib.parse
 import urllib.request
 import zlib
 import gzip
@@ -110,7 +111,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from PySide6.QtCore import (
     QBuffer, QByteArray, QEasingCurve, QEvent, QEventLoop, QIODevice, QLineF, QMimeData,
     QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt, QThread, QTimer, QUrl,
-    QPropertyAnimation, Signal,
+    QPropertyAnimation, QVariantAnimation, Signal,
 )
 from PySide6.QtGui import (
     QBrush, QColor, QCursor, QDrag, QFont, QFontDatabase, QFontMetrics, QFontMetricsF, QIcon, QImage, QKeySequence, QLinearGradient, QPainter,
@@ -796,6 +797,8 @@ _IC_SECTIONS_COLLAPSE = "M2 7h12v2H2z"
 _IC_SECTIONS_RESET_ORDER = (
     "M8 1.25A6.75 6.75 0 1 0 14.75 8h-1.5A5.25 5.25 0 1 1 8 2.75V5.5L12 3 8 .5v.75z"
 )
+# Same circular arrow: refresh AI model list from GET /models.
+_IC_REFRESH = _IC_SECTIONS_RESET_ORDER
 # Thumbtack: outline (unpinned) and filled (pinned).
 _IC_PIN = (
     "M8 1.25A2.75 2.75 0 0 1 10.75 4c0 .95-.48 1.78-1.2 2.27V13.5L8 11.8 6.45 13.5"
@@ -7288,6 +7291,7 @@ def _make_rotated_label(scene, text: str, font: "QFont", color: "QColor",
 # generic ``monospace`` alias). Lazily initialised so import does not require
 # a live QApplication.
 _FIXED_FONT_FAMILY: Optional[str] = None
+_SANS_FONT_FAMILY: Optional[str] = None
 
 def _get_fixed_font_family() -> str:
     """Return an installed fixed-pitch font family, initialising lazily.
@@ -7317,6 +7321,41 @@ def _get_fixed_font_family() -> str:
                     break
             _FIXED_FONT_FAMILY = fam or "Courier New"
     return _FIXED_FONT_FAMILY
+
+
+def _get_sans_font_family() -> str:
+    """Return an installed proportional sans family (never CSS ``sans-serif``).
+
+    Qt SVG looks up ``sans-serif`` as the face ``Sans-serif`` and emits
+    ``qt.qpa.fonts`` missing-family warnings. Prefer a real installed face.
+    """
+    global _SANS_FONT_FAMILY
+    if _SANS_FONT_FAMILY is not None:
+        return _SANS_FONT_FAMILY
+    if QApplication.instance() is None:
+        return "Arial"
+    available = set(QFontDatabase.families())
+    for cand in (
+        "Helvetica Neue", "Helvetica", "Arial", "Segoe UI",
+        "Lucida Grande", "Verdana", "Tahoma",
+        "DejaVu Sans", "Liberation Sans", "Noto Sans", "Ubuntu",
+        "FreeSans", "Cantarell",
+    ):
+        if cand in available:
+            _SANS_FONT_FAMILY = cand
+            break
+    else:
+        fam = ""
+        for name in QFontDatabase.families():
+            low = (name or "").lower()
+            if _is_generic_font_family(name):
+                continue
+            if any(tok in low for tok in ("mono", "courier", "console", "fixed")):
+                continue
+            fam = name
+            break
+        _SANS_FONT_FAMILY = fam or "Arial"
+    return _SANS_FONT_FAMILY
 
 def _lod_reduce(segs: list, time_min: int, px_per_ns: float,
                 offset: float) -> list:
@@ -8236,6 +8275,8 @@ class TimelineScene(QGraphicsScene):
                 expanded = self._core_is_expanded(core)
                 tasks = core_tasks.get(core, [])
                 core_row = row_idx
+                if task_key == core:
+                    return RULER_HEIGHT + core_row * row_stride + self._row_height / 2
                 row_idx += 1  # core summary row
                 if expanded:
                     for raw in tasks:
@@ -8254,6 +8295,8 @@ class TimelineScene(QGraphicsScene):
                 expanded = self._core_is_expanded(core)
                 tasks = core_tasks.get(core, [])
                 core_col = col_idx
+                if task_key == core:
+                    return RULER_WIDTH + core_col * col_w + col_w / 2
                 col_idx += 1  # core summary column
                 if expanded:
                     for raw in tasks:
@@ -16129,11 +16172,1449 @@ class TimelineView(QGraphicsView):
 # Custom progress dialog (more reliable than QProgressDialog on macOS)
 # ---------------------------------------------------------------------------
 # ===========================================================================
+# ai_tools
+# ===========================================================================
+
+AI_TOOL_SET_CURSORS = "set_cursors"
+AI_TOOL_ZOOM_TO_RANGE = "zoom_to_range"
+AI_TOOL_HIGHLIGHT_TASK = "highlight_task"
+AI_TOOL_SET_VIEW_MODE = "set_view_mode"
+AI_TOOL_OPEN_CORRIDOR = "open_corridor_inspector"
+
+AI_VIEWER_TOOL_NAMES: Tuple[str, ...] = (
+    AI_TOOL_SET_CURSORS,
+    AI_TOOL_ZOOM_TO_RANGE,
+    AI_TOOL_HIGHLIGHT_TASK,
+    AI_TOOL_SET_VIEW_MODE,
+    AI_TOOL_OPEN_CORRIDOR,
+)
+
+# QTextBrowser truncates ``scheme:digits`` (treats it as host:port). Use a path.
+_BTF_JUMP_HREF_RE = re.compile(
+    r"btfjump:(?://)?(?:time/)?([0-9]+(?:\.[0-9]+)?)",
+    re.IGNORECASE,
+)
+_BTF_HIGHLIGHT_HREF_RE = re.compile(
+    r"btfhighlight:(?://)?(?:task/)?(.+)$",
+    re.IGNORECASE,
+)
+
+
+def btf_jump_href(value: Any) -> str:
+    """Chat href for ``jump:TIME`` that survives QTextBrowser ``setHtml``."""
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return "btfjump:time/0"
+    token = str(int(n)) if n.is_integer() else str(n)
+    return f"btfjump:time/{token}"
+
+
+def parse_btf_jump_href(href: Any) -> Optional[float]:
+    """Parse ``btfjump:time/N`` or legacy ``btfjump:N``."""
+    m = _BTF_JUMP_HREF_RE.search(str(href or ""))
+    if not m:
+        return None
+    try:
+        return float(m.group(1))
+    except (TypeError, ValueError):
+        return None
+
+
+def btf_highlight_href(name: str) -> str:
+    """Chat href for a highlight target (slash form + percent-encoding)."""
+    token = urllib.parse.quote(str(name or "").strip(), safe="")
+    return f"btfhighlight:task/{token}"
+
+
+def parse_btf_highlight_href(href: Any) -> str:
+    """Parse ``btfhighlight:task/…`` or legacy ``btfhighlight:Name``."""
+    m = _BTF_HIGHLIGHT_HREF_RE.search(str(href or "").strip())
+    if not m:
+        return ""
+    return urllib.parse.unquote(m.group(1).strip().lstrip("/"))
+
+# Appended to the base system prompt. Keep in sync with web aiTools.js.
+AI_TOOL_SYSTEM_ADDENDUM = (
+    "When the user asks to show, focus, inspect, zoom, highlight, or jump to a "
+    "time range, task, or core pair, you MUST invoke the matching viewer tool "
+    "(native function call) in addition to your markdown answer. Valid tools: "
+    "set_cursors, zoom_to_range, highlight_task, set_view_mode, "
+    "open_corridor_inspector. Tool timestamps use the same numeric trace time "
+    "unit as jump:TIME. After tools run, summarise what you changed. "
+    "If you cannot emit a native function call, emit one fenced btftool JSON "
+    "object per action, for example:\n"
+    "```btftool\n"
+    '{"name": "set_cursors", "arguments": {"timestamps": [1805120, 1810000]}}\n'
+    "```\n"
+    "When a mutex take/give, block, resume, or priority-boost sequence is the point, "
+    "include a fenced mermaid sequenceDiagram. When summarising core-to-core "
+    "migrations, include a fenced mermaid graph LR flowchart with cores as nodes "
+    "and migration counts on edges."
+)
+
+AI_MERMAID_SEQUENCE_EXAMPLE = """```mermaid
+sequenceDiagram
+  autonumber
+  participant L as Low[266] (Core 0)
+  participant M as Med[267] (Core 0)
+  participant H as High[268] (Core 0)
+  L->>Mutex(0x80018700): take
+  M->>Core 0: runs work
+  H->>Mutex(0x80018700): take (Blocked)
+  Note over L: Kernel boosts Low -> Pri 4
+  L->>Mutex(0x80018700): give
+  H->>Mutex(0x80018700): acquires lock
+```"""
+
+AI_MERMAID_MIGRATION_EXAMPLE = """```mermaid
+graph LR
+  C0[Core_0] -->|12| C1[Core_1]
+  C1 -->|3| C0
+```"""
+
+_MAX_CURSORS_TOOL = 8
+_MAX_TOOL_ROUNDS = 4
+
+
+def ai_viewer_tools() -> List[Dict[str, Any]]:
+    """OpenAI-compatible ``tools`` array."""
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_SET_CURSORS,
+                "description": (
+                    "Clear existing cursors and place new ones at the given "
+                    "trace timestamps. Enables Limit to C1–Cn statistics when "
+                    "two or more cursors are placed."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "timestamps": {
+                            "type": "array",
+                            "items": {"type": "number"},
+                            "description": (
+                                "Trace time-unit timestamps (same unit as jump:TIME), "
+                                "earliest to latest. 1–8 values."
+                            ),
+                        },
+                    },
+                    "required": ["timestamps"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_ZOOM_TO_RANGE,
+                "description": "Zoom and pan the timeline so start_time..end_time fills the view.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "start_time": {
+                            "type": "number",
+                            "description": "Range start in trace time units.",
+                        },
+                        "end_time": {
+                            "type": "number",
+                            "description": "Range end in trace time units.",
+                        },
+                    },
+                    "required": ["start_time", "end_time"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_HIGHLIGHT_TASK,
+                "description": (
+                    "Lock-highlight a task on the timeline (Task View). "
+                    "Pass empty string to clear the highlight."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "task_name_or_id": {
+                            "type": "string",
+                            "description": (
+                                "Task display name (e.g. Low[266]), merge key, "
+                                "or numeric task id."
+                            ),
+                        },
+                    },
+                    "required": ["task_name_or_id"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_SET_VIEW_MODE,
+                "description": "Switch Task View vs Core View and optional timeline orientation.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "mode": {
+                            "type": "string",
+                            "enum": ["task", "core"],
+                            "description": "task = one row per task; core = one row per core.",
+                        },
+                        "orientation": {
+                            "type": "string",
+                            "enum": ["horizontal", "vertical"],
+                            "description": "Optional layout orientation.",
+                        },
+                    },
+                    "required": ["mode"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_OPEN_CORRIDOR,
+                "description": (
+                    "Open the Migration & Corridor Inspector. Optionally focus a "
+                    "directed core pair (e.g. Core_0 → Core_1)."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "core_from": {
+                            "type": "string",
+                            "description": "Source core name (e.g. Core_0).",
+                        },
+                        "core_to": {
+                            "type": "string",
+                            "description": "Destination core name (e.g. Core_1).",
+                        },
+                    },
+                },
+            },
+        },
+    ]
+
+
+def parse_tool_arguments(raw: Any) -> Dict[str, Any]:
+    """Parse a tool ``arguments`` field (JSON string or already a dict)."""
+    if raw is None:
+        return {}
+    if isinstance(raw, dict):
+        return dict(raw)
+    text = str(raw).strip()
+    if not text:
+        return {}
+    try:
+        data = json.loads(text)
+    except (TypeError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def message_content_text(content: Any) -> str:
+    """Flatten OpenAI / Gemini ``content`` (string or parts list) to text."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts: List[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                if item.get("type") in ("text", "output_text", None) or "text" in item:
+                    parts.append(str(item.get("text") or item.get("content") or ""))
+        return "\n".join(p for p in parts if p).strip()
+    return str(content).strip()
+
+
+def extract_tool_calls(message: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Normalise OpenAI / Ollama / Gemini / legacy function_call invocations."""
+    if not isinstance(message, dict):
+        return []
+    out: List[Dict[str, Any]] = []
+    calls = message.get("tool_calls")
+    if isinstance(calls, str):
+        try:
+            calls = json.loads(calls)
+        except (TypeError, ValueError):
+            calls = []
+    if isinstance(calls, list):
+        for i, call in enumerate(calls):
+            if not isinstance(call, dict):
+                continue
+            fn = call.get("function") if isinstance(call.get("function"), dict) else {}
+            name = str(
+                fn.get("name") or call.get("name") or call.get("tool") or ""
+            ).strip()
+            if not name:
+                continue
+            args = parse_tool_arguments(
+                fn.get("arguments",
+                       call.get("arguments", call.get("args", call.get("input"))))
+            )
+            cid = str(call.get("id") or f"call_{i}")
+            out.append({"id": cid, "name": name, "arguments": args})
+    legacy = message.get("function_call")
+    if isinstance(legacy, dict) and legacy.get("name"):
+        out.append({
+            "id": str(legacy.get("id") or "call_0"),
+            "name": str(legacy["name"]).strip(),
+            "arguments": parse_tool_arguments(legacy.get("arguments")),
+        })
+    # Anthropic-style / Gemini parts mixed into content.
+    content = message.get("content")
+    if isinstance(content, list):
+        for i, part in enumerate(content):
+            if not isinstance(part, dict):
+                continue
+            ptype = str(part.get("type") or "")
+            if ptype in ("tool_use", "function_call", "tool_call"):
+                name = str(part.get("name") or "").strip()
+                if not name:
+                    continue
+                args = parse_tool_arguments(
+                    part.get("input", part.get("arguments", part.get("args"))))
+                out.append({
+                    "id": str(part.get("id") or f"part_{i}"),
+                    "name": name,
+                    "arguments": args,
+                })
+    return out
+
+
+_BTFTOOL_FENCE_RE = re.compile(
+    r"```(?:btftool|tool_call|tool-call)\s*\n(.*?)```",
+    re.DOTALL | re.IGNORECASE,
+)
+_XML_TOOL_RE = re.compile(
+    r"<tool_call>\s*(.*?)\s*</tool_call>",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _tool_call_from_obj(obj: Any, idx: int) -> Optional[Dict[str, Any]]:
+    if not isinstance(obj, dict):
+        return None
+    name = str(obj.get("name") or obj.get("tool") or "").strip()
+    fn = obj.get("function") if isinstance(obj.get("function"), dict) else {}
+    if fn:
+        name = name or str(fn.get("name") or "").strip()
+        args = parse_tool_arguments(fn.get("arguments", obj.get("arguments")))
+    else:
+        args = obj.get("arguments") or obj.get("parameters") or obj.get("args")
+        if not isinstance(args, dict):
+            args = parse_tool_arguments(args)
+        if not args:
+            args = {
+                k: v for k, v in obj.items()
+                if k not in ("name", "tool", "function", "id", "type")
+            }
+    if name not in AI_VIEWER_TOOL_NAMES:
+        return None
+    ok, err = validate_tool_call(name, args)
+    if err:
+        return None
+    return {"id": f"text_{idx}", "name": name, "arguments": ok or args}
+
+
+def parse_tool_calls_from_text(text: str) -> List[Dict[str, Any]]:
+    """Parse ```btftool fences and <tool_call> blobs (models without native tools)."""
+    out: List[Dict[str, Any]] = []
+    seen = set()
+
+    def _add(obj: Any) -> None:
+        call = _tool_call_from_obj(obj, len(out))
+        if not call:
+            return
+        key = (call["name"], json.dumps(call["arguments"], sort_keys=True, default=str))
+        if key in seen:
+            return
+        seen.add(key)
+        out.append(call)
+
+    src = text or ""
+    for m in _BTFTOOL_FENCE_RE.finditer(src):
+        body = (m.group(1) or "").strip()
+        try:
+            data = json.loads(body)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(data, list):
+            for item in data:
+                _add(item)
+        else:
+            _add(data)
+    for m in _XML_TOOL_RE.finditer(src):
+        body = (m.group(1) or "").strip()
+        try:
+            _add(json.loads(body))
+            continue
+        except (TypeError, ValueError):
+            pass
+        lines = body.split("\n", 1)
+        if len(lines) == 2:
+            try:
+                _add({"name": lines[0].strip(), "arguments": json.loads(lines[1])})
+            except (TypeError, ValueError):
+                pass
+    return out
+
+
+def merge_tool_calls(
+    structured: Sequence[Dict[str, Any]],
+    from_text: Sequence[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Prefer native tool_calls; append unique text-parsed calls."""
+    out: List[Dict[str, Any]] = []
+    seen = set()
+    for call in list(structured or []) + list(from_text or []):
+        if not isinstance(call, dict) or not call.get("name"):
+            continue
+        key = (
+            str(call.get("name")),
+            json.dumps(call.get("arguments") or {}, sort_keys=True, default=str),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(dict(call))
+    return out
+
+
+def strip_parsed_tool_markup(text: str) -> str:
+    """Remove btftool fences / XML after they were turned into GUI cards."""
+    out = _BTFTOOL_FENCE_RE.sub("", text or "")
+    out = _XML_TOOL_RE.sub("", out)
+    return re.sub(r"\n{3,}", "\n\n", out).strip()
+
+
+def _as_float_list(value: Any) -> List[float]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    out: List[float] = []
+    for item in value:
+        try:
+            out.append(float(item))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def validate_tool_call(name: str, args: Optional[Dict[str, Any]]) -> Tuple[Optional[Dict[str, Any]], str]:
+    """Return ``(normalised_args, error)``. error is empty on success."""
+    a = dict(args or {})
+    if name == AI_TOOL_SET_CURSORS:
+        times = _as_float_list(a.get("timestamps"))
+        if not times:
+            return None, "timestamps must be a non-empty number array"
+        times = times[:_MAX_CURSORS_TOOL]
+        return {"timestamps": times}, ""
+    if name == AI_TOOL_ZOOM_TO_RANGE:
+        try:
+            lo = float(a.get("start_time"))
+            hi = float(a.get("end_time"))
+        except (TypeError, ValueError):
+            return None, "start_time and end_time must be numbers"
+        if hi == lo:
+            return None, "start_time and end_time must differ"
+        if hi < lo:
+            lo, hi = hi, lo
+        return {"start_time": lo, "end_time": hi}, ""
+    if name == AI_TOOL_HIGHLIGHT_TASK:
+        key = str(a.get("task_name_or_id") or "").strip()
+        return {"task_name_or_id": key}, ""
+    if name == AI_TOOL_SET_VIEW_MODE:
+        mode = str(a.get("mode") or "").strip().lower()
+        if mode not in ("task", "core"):
+            return None, 'mode must be "task" or "core"'
+        ori_raw = a.get("orientation")
+        ori = None
+        if ori_raw not in (None, ""):
+            ori = str(ori_raw).strip().lower()
+            if ori in ("h", "horiz"):
+                ori = "horizontal"
+            if ori in ("v", "vert"):
+                ori = "vertical"
+            if ori not in ("horizontal", "vertical"):
+                return None, 'orientation must be "horizontal" or "vertical"'
+        out: Dict[str, Any] = {"mode": mode}
+        if ori:
+            out["orientation"] = ori
+        return out, ""
+    if name == AI_TOOL_OPEN_CORRIDOR:
+        src = str(a.get("core_from") or "").strip()
+        dst = str(a.get("core_to") or "").strip()
+        return {"core_from": src, "core_to": dst}, ""
+    return None, f"unknown tool {name!r}"
+
+
+def summarise_tool_call(name: str, args: Optional[Dict[str, Any]]) -> str:
+    """One-line label for a tool card (e.g. Set cursors at 3099000, 3133000)."""
+    a = dict(args or {})
+    if name == AI_TOOL_SET_CURSORS:
+        times = _as_float_list(a.get("timestamps"))
+        if not times:
+            return "Set cursors"
+        shown = ", ".join(f"{t:g}" for t in times[:_MAX_CURSORS_TOOL])
+        return f"Set cursors at [{shown}]"
+    if name == AI_TOOL_ZOOM_TO_RANGE:
+        try:
+            lo, hi = float(a["start_time"]), float(a["end_time"])
+            return f"Zoom to range {lo:g}–{hi:g}"
+        except (KeyError, TypeError, ValueError):
+            return "Zoom to range"
+    if name == AI_TOOL_HIGHLIGHT_TASK:
+        key = str(a.get("task_name_or_id") or "").strip()
+        return "Clear task highlight" if not key else f"Highlight task {key}"
+    if name == AI_TOOL_SET_VIEW_MODE:
+        mode = str(a.get("mode") or "?").strip()
+        ori = str(a.get("orientation") or "").strip()
+        label = f"Set view mode {mode}"
+        if ori:
+            label += f", {ori}"
+        return label
+    if name == AI_TOOL_OPEN_CORRIDOR:
+        src = str(a.get("core_from") or "").strip()
+        dst = str(a.get("core_to") or "").strip()
+        if src and dst:
+            return f"Open corridor inspector {src} → {dst}"
+        return "Open corridor inspector"
+    return name.replace("_", " ")
+
+
+def tool_result_payload(ok: bool, message: str, **extra: Any) -> Dict[str, Any]:
+    data = {"ok": bool(ok), "message": str(message)}
+    data.update(extra)
+    return data
+
+
+def format_tool_result_content(result: Dict[str, Any]) -> str:
+    """JSON string sent back to the model as ``role: tool`` content."""
+    return json.dumps(result, default=str)
+
+
+def canonical_assistant_tool_message(
+    content: Any,
+    tool_calls: Sequence[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """OpenAI-shaped assistant turn with ``tool_calls`` (Gemini-safe)."""
+    calls_out: List[Dict[str, Any]] = []
+    for i, call in enumerate(tool_calls or []):
+        if not isinstance(call, dict):
+            continue
+        name = str(call.get("name") or "").strip()
+        if not name:
+            continue
+        cid = str(call.get("id") or f"call_{i}").strip() or f"call_{i}"
+        args = call.get("arguments")
+        if isinstance(args, str):
+            arg_s = args
+        else:
+            arg_s = json.dumps(
+                args if isinstance(args, dict) else {}, default=str)
+        calls_out.append({
+            "id": cid,
+            "type": "function",
+            "function": {"name": name, "arguments": arg_s},
+        })
+    text = message_content_text(content) if content is not None else ""
+    msg: Dict[str, Any] = {"role": "assistant", "content": text or None}
+    if calls_out:
+        msg["tool_calls"] = calls_out
+    return msg
+
+
+def tool_result_message(
+    *,
+    tool_call_id: str,
+    name: str,
+    content: Any,
+) -> Dict[str, Any]:
+    """``role=tool`` follow-up. Gemini requires a non-empty function name."""
+    cid = str(tool_call_id or "").strip() or "call_0"
+    fname = str(name or "").strip()
+    if isinstance(content, str):
+        body = content
+    elif isinstance(content, dict):
+        body = format_tool_result_content(content)
+    else:
+        body = format_tool_result_content(
+            {"ok": False, "message": str(content or "")})
+    out: Dict[str, Any] = {
+        "role": "tool",
+        "tool_call_id": cid,
+        "content": body,
+    }
+    if fname:
+        out["name"] = fname
+    return out
+
+
+def normalize_tool_chat_messages(
+    messages: Sequence[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Fill ``name`` on tool follow-ups (Gemini OpenAI-compat).
+
+    Gemini maps ``role=tool`` to ``function_response`` and rejects an empty
+    name. Match by ``tool_call_id``, then by order after the last assistant
+    tool_calls.
+    """
+    out: List[Dict[str, Any]] = []
+    unused: List[Tuple[str, str]] = []
+    for msg in messages or []:
+        if not isinstance(msg, dict):
+            continue
+        role = str(msg.get("role") or "")
+        if role == "assistant":
+            extracted = extract_tool_calls(msg)
+            if extracted:
+                canon = canonical_assistant_tool_message(
+                    msg.get("content"), extracted)
+                out.append(canon)
+                unused = [
+                    (str(c.get("id") or ""), str(c.get("name") or "").strip())
+                    for c in extract_tool_calls(canon)
+                    if str(c.get("id") or "") and str(c.get("name") or "").strip()
+                ]
+            else:
+                out.append(dict(msg))
+                unused = []
+            continue
+        if role == "tool":
+            copied = dict(msg)
+            cid = str(copied.get("tool_call_id") or copied.get("id") or "").strip()
+            name = str(copied.get("name") or "").strip()
+            if not name and cid:
+                for i, (uid, uname) in enumerate(unused):
+                    if uid == cid:
+                        name = uname
+                        unused.pop(i)
+                        break
+            if not name and unused:
+                uid, uname = unused.pop(0)
+                name = uname
+                if not cid:
+                    cid = uid
+            elif name and cid:
+                unused = [(i, n) for i, n in unused if i != cid]
+            if cid:
+                copied["tool_call_id"] = cid
+            if name:
+                copied["name"] = name
+            out.append(copied)
+            continue
+        out.append(dict(msg))
+    return out
+
+
+def parse_ai_auto_apply(value: Any) -> bool:
+    """Settings → AI auto-apply flag (default False = require confirm)."""
+    if value is True:
+        return True
+    if value is False or value is None:
+        return False
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
+def max_tool_rounds() -> int:
+    return _MAX_TOOL_ROUNDS
+
+
+_TASK_ID_RE = re.compile(r"\[(\d+)\]\s*$")
+_TASK_EMBEDDED_RE = re.compile(r"([A-Za-z_][\w]*\[\d+\])")
+_CORE_SUFFIX_RE = re.compile(r"\s*\((?:core\s*)?\d+\)\s*$", re.IGNORECASE)
+_CORE_NUM_RE = re.compile(r"^(?:core[\s_-]*)?(\d+)$", re.IGNORECASE)
+_CORE_SHORT_RE = re.compile(r"^c(\d+)$", re.IGNORECASE)
+
+
+def normalize_task_lookup_query(task_name_or_id: str) -> str:
+    """Strip mermaid decorations such as ``Low[266] (Core 0)`` → ``Low[266]``."""
+    text = (task_name_or_id or "").strip()
+    if not text:
+        return ""
+    stripped = _CORE_SUFFIX_RE.sub("", text).strip() or text
+    m = _TASK_EMBEDDED_RE.search(stripped)
+    return m.group(1) if m else stripped
+
+
+def task_lookup_keys(task_name_or_id: str) -> List[str]:
+    """Candidate keys for resolving a highlight target (name, id, merge key)."""
+    raw = (task_name_or_id or "").strip()
+    if not raw:
+        return []
+    keys: List[str] = []
+    for alias in _task_match_aliases(raw):
+        if alias not in keys:
+            keys.append(alias)
+        low = alias.lower()
+        if low not in keys:
+            keys.append(low)
+    return keys
+
+
+def _task_match_aliases(raw: str) -> List[str]:
+    """Display name / id / merge-key spellings that should match *raw*."""
+    text = (raw or "").strip()
+    if not text:
+        return []
+    aliases = [text]
+    if text.startswith("\x00"):
+        sep = text.find("\x00", 1)
+        if sep > 0:
+            tid, name = text[1:sep], text[sep + 1:]
+            if name and name != "TICK":
+                aliases.extend((f"{name}[{tid}]", name, tid))
+            elif name:
+                aliases.append(name)
+        return [a for a in aliases if a]
+    m = _TASK_ID_RE.search(text)
+    if m:
+        aliases.append(m.group(1))
+        prefix = text[: m.start()].strip()
+        if prefix:
+            aliases.append(prefix)
+    if text.isdigit():
+        aliases.append(f"[{text}]")
+    return [a for a in aliases if a]
+
+
+def resolve_task_key(
+    task_name_or_id: str,
+    candidates: Sequence[str],
+) -> Optional[str]:
+    """Pick the best matching task/merge key from *candidates*."""
+    raw = (task_name_or_id or "").strip()
+    if not raw:
+        return None
+    names = [str(c) for c in candidates if c]
+    if not names:
+        return None
+    queries = [raw]
+    norm = normalize_task_lookup_query(raw)
+    if norm and norm not in queries:
+        queries.append(norm)
+
+    exact = {n: n for n in names}
+    lower = {n.lower(): n for n in names}
+    by_alias: Dict[str, List[str]] = {}
+    for name in names:
+        for alias in _task_match_aliases(name):
+            bucket = by_alias.setdefault(alias.lower(), [])
+            if name not in bucket:
+                bucket.append(name)
+
+    for want in queries:
+        if want in exact:
+            return exact[want]
+        if want.lower() in lower:
+            return lower[want.lower()]
+        hits = by_alias.get(want.lower()) or []
+        if len(hits) == 1:
+            return hits[0]
+        if hits and want.isdigit():
+            return hits[0]
+        want_l = want.lower()
+        prefix: List[str] = []
+        contains: List[str] = []
+        for alias, origs in by_alias.items():
+            if alias.startswith(want_l):
+                prefix.extend(origs)
+            if want_l in alias:
+                contains.extend(origs)
+        prefix_u = list(dict.fromkeys(prefix))
+        if len(prefix_u) == 1:
+            return prefix_u[0]
+        contains_u = list(dict.fromkeys(contains))
+        if len(contains_u) == 1:
+            return contains_u[0]
+    return None
+
+
+def _core_match_aliases(raw: str) -> List[str]:
+    """Core_0 / Core 0 / 0 / c0 spellings that should match *raw*."""
+    text = (raw or "").strip()
+    if not text:
+        return []
+    aliases = [text]
+    compact = re.sub(r"[\s_-]+", "_", text)
+    if compact not in aliases:
+        aliases.append(compact)
+    spaced = text.replace("_", " ")
+    if spaced not in aliases:
+        aliases.append(spaced)
+    m = _CORE_NUM_RE.match(text) or _CORE_SHORT_RE.match(text)
+    if m:
+        n = str(int(m.group(1)))
+        aliases.extend((n, f"Core_{n}", f"core_{n}", f"Core {n}", f"c{n}", f"C{n}"))
+    return [a for a in dict.fromkeys(aliases) if a]
+
+
+def resolve_core_key(
+    core_name_or_id: str,
+    candidates: Sequence[str],
+) -> Optional[str]:
+    """Pick the best matching core name from *candidates* (e.g. Core_0)."""
+    want = (core_name_or_id or "").strip()
+    if not want:
+        return None
+    names = [str(c) for c in candidates if c]
+    if not names:
+        return None
+    if want in names:
+        return want
+    lower = {n.lower(): n for n in names}
+    if want.lower() in lower:
+        return lower[want.lower()]
+    by_alias: Dict[str, List[str]] = {}
+    for name in names:
+        for alias in _core_match_aliases(name):
+            bucket = by_alias.setdefault(alias.lower(), [])
+            if name not in bucket:
+                bucket.append(name)
+    hits: List[str] = []
+    for alias in _core_match_aliases(want):
+        for orig in by_alias.get(alias.lower(), []):
+            if orig not in hits:
+                hits.append(orig)
+    if hits:
+        return hits[0]
+    return None
+# ===========================================================================
+# ai_mermaid
+# ===========================================================================
+
+def _svg_sans_family() -> str:
+    """Qt SVG needs a real face; CSS ``sans-serif`` warns as ``Sans-serif``."""
+    try:
+        from .timeline_util import _get_sans_font_family
+        return _get_sans_font_family()
+    except Exception:
+        return "Arial"
+
+_PARTICIPANT_RE = re.compile(
+    r"^participant\s+(\S+)(?:\s+as\s+(.+))?$", re.IGNORECASE
+)
+_ARROW_RE = re.compile(
+    r"^(\S+)\s*(-->>|->>|->|--x|-x|-->)\s*(\S+)\s*:\s*(.*)$"
+)
+_NOTE_RE = re.compile(
+    r"^Note\s+(?:over|left of|right of)\s+([^:]+):\s*(.*)$", re.IGNORECASE
+)
+_NODE_RE = re.compile(
+    r"^([A-Za-z0-9_]+)\s*(?:\[([^\]]+)\]|\(([^\)]+)\)|\{([^}]+)\})?\s*$"
+)
+_EDGE_RE = re.compile(
+    r"^([A-Za-z0-9_]+)\s*(?:\[([^\]]+)\]|\(([^\)]+)\))?"
+    r"\s*-->(?:\|([^|]+)\|)?\s*"
+    r"([A-Za-z0-9_]+)\s*(?:\[([^\]]+)\]|\(([^\)]+)\))?\s*$"
+)
+_JUMP_RE = re.compile(r"jump:([0-9]+(?:\.[0-9]+)?)")
+
+
+def _note_box_w(note: str) -> float:
+    return float(min(200, 16 + 6 * min(len(note or ""), 36)))
+
+
+def _svg_arrowhead(x1: float, y1: float, x2: float, y2: float, color: str, size: float = 8.0) -> str:
+    """Triangle at (x2,y2); Qt paints ``<marker>`` as a stray blob at the origin."""
+    dx, dy = x2 - x1, y2 - y1
+    length = math.hypot(dx, dy) or 1.0
+    ux, uy = dx / length, dy / length
+    tip_x, tip_y = x2, y2
+    bx, by = tip_x - ux * size, tip_y - uy * size
+    px, py = -uy * size * 0.45, ux * size * 0.45
+    return (
+        f'<polygon points="{tip_x:.1f},{tip_y:.1f} {bx + px:.1f},{by + py:.1f} '
+        f'{bx - px:.1f},{by - py:.1f}" fill="{color}"/>'
+    )
+
+
+def extract_mermaid_fences(text: str) -> List[str]:
+    """Return mermaid code bodies from fenced blocks."""
+    out: List[str] = []
+    lines = (text or "").replace("\r\n", "\n").split("\n")
+    i = 0
+    while i < len(lines):
+        stripped = lines[i].strip()
+        if stripped.startswith("```"):
+            lang = stripped[3:].strip().lower()
+            i += 1
+            body: List[str] = []
+            while i < len(lines) and not lines[i].strip().startswith("```"):
+                body.append(lines[i])
+                i += 1
+            if i < len(lines):
+                i += 1
+            if lang == "mermaid":
+                out.append("\n".join(body).strip())
+            continue
+        i += 1
+    return out
+
+
+def mermaid_link_targets(source: str) -> List[Tuple[str, str]]:
+    """``(kind, value)`` pairs: jump times and highlight labels from a diagram."""
+    found: List[Tuple[str, str]] = []
+    seen = set()
+
+    def _add_hl(label: str) -> None:
+        label = (label or "").strip()
+        if not label or ("highlight", label) in seen:
+            return
+        seen.add(("highlight", label))
+        found.append(("highlight", label))
+
+    for m in _JUMP_RE.finditer(source or ""):
+        key = ("jump", m.group(1))
+        if key not in seen:
+            seen.add(key)
+            found.append(key)
+    for line in (source or "").splitlines():
+        s = line.strip().rstrip(";")
+        low = s.lower()
+        if not s or low.startswith(("graph ", "flowchart ", "sequencediagram", "%%")):
+            continue
+        pm = _PARTICIPANT_RE.match(s)
+        if pm:
+            _add_hl(pm.group(2) or pm.group(1) or "")
+            continue
+        em = _EDGE_RE.match(s)
+        if em:
+            _add_hl(em.group(2) or em.group(3) or em.group(1) or "")
+            _add_hl(em.group(6) or em.group(7) or em.group(5) or "")
+            continue
+        nm = _NODE_RE.match(s)
+        if nm:
+            _add_hl(nm.group(2) or nm.group(3) or nm.group(4) or nm.group(1) or "")
+    return found
+
+
+def mermaid_hit_regions(source: str) -> List[Dict[str, Any]]:
+    """Clickable node boxes in SVG user units: ``x,y,w,h,kind,value``."""
+    text = (source or "").strip()
+    if not text:
+        return []
+    first = ""
+    for line in text.splitlines():
+        s = line.strip()
+        if s and not s.startswith("%%"):
+            first = s.lower()
+            break
+    if first.startswith("sequencediagram"):
+        return _sequence_hits(text)
+    if first.startswith("graph ") or first.startswith("flowchart "):
+        return _flowchart_hits(text)
+    return []
+
+
+def hit_test_mermaid(
+    source: str,
+    local_x: float,
+    local_y: float,
+    *,
+    scale: float = 1.0,
+) -> Optional[Tuple[str, str]]:
+    """Return ``(kind, value)`` if ``(local_x, local_y)`` hits a node."""
+    sx = float(scale) if scale else 1.0
+    if sx <= 0:
+        sx = 1.0
+    px, py = float(local_x), float(local_y)
+    for hit in mermaid_hit_regions(source):
+        x = float(hit["x"]) * sx
+        y = float(hit["y"]) * sx
+        w = float(hit["w"]) * sx
+        h = float(hit["h"]) * sx
+        if x <= px <= x + w and y <= py <= y + h:
+            return str(hit["kind"]), str(hit["value"])
+    return None
+
+
+def mermaid_to_svg(source: str, *, interactive: bool = True) -> str:
+    """Return an SVG string, or empty if the dialect is unsupported."""
+    text = (source or "").strip()
+    if not text:
+        return ""
+    first = ""
+    for line in text.splitlines():
+        s = line.strip()
+        if s and not s.startswith("%%"):
+            first = s.lower()
+            break
+    if first.startswith("sequencediagram"):
+        return _sequence_svg(text, interactive=interactive)
+    if first.startswith("graph ") or first.startswith("flowchart "):
+        return _flowchart_svg(text, interactive=interactive)
+    return ""
+
+
+def mermaid_zoom_token(source: str) -> str:
+    """URL-safe token for ``btfmermaid:zoom/…`` (no extra colons)."""
+    return base64.urlsafe_b64encode((source or "").encode("utf-8")).decode("ascii").rstrip("=")
+
+
+def decode_mermaid_zoom_token(token: str) -> str:
+    """Inverse of ``mermaid_zoom_token``; empty on bad input."""
+    raw = str(token or "").strip()
+    if not raw:
+        return ""
+    pad = "=" * ((4 - len(raw) % 4) % 4)
+    try:
+        return base64.urlsafe_b64decode(raw + pad).decode("utf-8")
+    except (ValueError, TypeError):
+        return ""
+
+
+def mermaid_block_html(source: str, *, as_img: bool = True, zoomable: bool = True) -> str:
+    """Wrap a mermaid source in HTML (img for QTextBrowser, inline SVG for export)."""
+    svg = mermaid_to_svg(source, interactive=not as_img)
+    if not svg:
+        esc = html.escape(source)
+        return f'<pre><code class="language-mermaid">{esc}</code></pre>'
+    if as_img:
+        b64 = base64.b64encode(svg.encode("utf-8")).decode("ascii")
+        wm = re.search(r'\bwidth="(\d+(?:\.\d+)?)"', svg)
+        hm = re.search(r'\bheight="(\d+(?:\.\d+)?)"', svg)
+        size_attr = ""
+        if wm and hm:
+            size_attr = f' width="{wm.group(1)}" height="{hm.group(1)}"'
+        fig = (
+            f'<img class="ai-mermaid-img" alt="mermaid diagram"{size_attr} '
+            f'src="data:image/svg+xml;base64,{b64}">'
+        )
+    else:
+        fig = f'<div class="ai-mermaid-svg">{svg}</div>'
+    if zoomable:
+        token = html.escape(mermaid_zoom_token(source), quote=True)
+        fig = (
+            f'<a href="btfmermaid:zoom/{token}" class="ai-mermaid-zoom" '
+            f'title="Open larger view">{fig}</a>'
+        )
+    links = _link_row_html(source)
+    return f'<div class="ai-mermaid">{fig}{links}</div>'
+
+
+def _link_row_html(source: str) -> str:
+    parts: List[str] = []
+    for kind, value in mermaid_link_targets(source):
+        esc = html.escape(value)
+        if kind == "jump":
+            parts.append(
+                f'<a href="{html.escape(btf_jump_href(value), quote=True)}" '
+                f'class="ai-jump">jump:{esc}</a>'
+            )
+        else:
+            parts.append(
+                f'<a href="{html.escape(btf_highlight_href(value), quote=True)}" '
+                f'class="ai-hl">{esc}</a>'
+            )
+    if not parts:
+        return ""
+    return '<p class="ai-mermaid-links">' + " · ".join(parts) + "</p>"
+
+
+def _esc(text: str) -> str:
+    return html.escape(text or "", quote=True)
+
+
+def _parse_sequence(source: str) -> Tuple[List[Tuple[str, str]], Dict[str, int], List[Tuple[str, Any]]]:
+    participants: List[Tuple[str, str]] = []
+    index: Dict[str, int] = {}
+    rows: List[Tuple[str, Any]] = []
+
+    def _ensure(pid: str, label: Optional[str] = None) -> None:
+        key = pid.strip()
+        if not key:
+            return
+        if key not in index:
+            index[key] = len(participants)
+            participants.append((key, (label or key).strip() or key))
+        elif label:
+            i = index[key]
+            participants[i] = (key, label.strip() or participants[i][1])
+
+    for raw in source.splitlines():
+        line = raw.strip()
+        if not line or line.lower() == "sequencediagram" or line.lower() == "autonumber":
+            continue
+        if line.lower().startswith("title "):
+            continue
+        pm = _PARTICIPANT_RE.match(line)
+        if pm:
+            _ensure(pm.group(1), pm.group(2))
+            continue
+        am = _ARROW_RE.match(line)
+        if am:
+            _ensure(am.group(1))
+            _ensure(am.group(3))
+            rows.append(("arrow", am.group(1), am.group(3), am.group(2), am.group(4).strip()))
+            continue
+        nm = _NOTE_RE.match(line)
+        if nm:
+            who = nm.group(1).split(",")[0].strip()
+            _ensure(who)
+            rows.append(("note", who, nm.group(2).strip()))
+    return participants, index, rows
+
+
+def _sequence_geom(source: str) -> Optional[Dict[str, Any]]:
+    participants, index, rows = _parse_sequence(source)
+    if not participants:
+        return None
+    box_w = 120.0
+    col_w = 150.0
+    top = 32.0
+    row_h = 40.0
+    half = box_w / 2.0
+    for row in rows:
+        if row[0] == "note":
+            half = max(half, _note_box_w(row[2]) / 2.0)
+    pad = half + 16.0
+    width = pad * 2 + max(len(participants) - 1, 0) * col_w
+    height = top + 36 + max(len(rows), 1) * row_h + 24
+    xs = [pad + i * col_w for i in range(len(participants))]
+    return {
+        "participants": participants, "index": index, "rows": rows,
+        "box_w": box_w, "top": top, "row_h": row_h,
+        "width": width, "height": height, "xs": xs,
+    }
+
+
+def _sequence_hits(source: str) -> List[Dict[str, Any]]:
+    geom = _sequence_geom(source)
+    if not geom:
+        return []
+    top, box_w = geom["top"], geom["box_w"]
+    hits: List[Dict[str, Any]] = []
+    for i, (_pid, label) in enumerate(geom["participants"]):
+        x = geom["xs"][i]
+        hits.append({
+            "x": x - box_w / 2, "y": top - 14, "w": float(box_w), "h": 28.0,
+            "kind": "highlight", "value": label,
+        })
+    return hits
+
+
+def _sequence_svg(source: str, *, interactive: bool) -> str:
+    geom = _sequence_geom(source)
+    if not geom:
+        return ""
+    participants, index, rows = geom["participants"], geom["index"], geom["rows"]
+    box_w, top, row_h = geom["box_w"], geom["top"], geom["row_h"]
+    width, height, xs = geom["width"], geom["height"], geom["xs"]
+    fam = _esc(_svg_sans_family())
+
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width:.0f}" height="{height:.0f}" '
+        f'viewBox="0 0 {width:.0f} {height:.0f}" class="ai-mermaid-seq">',
+        f'<rect x="0" y="0" width="{width:.0f}" height="{height:.0f}" fill="#12161d"/>',
+    ]
+    for i, (_pid, label) in enumerate(participants):
+        x = xs[i]
+        bx = x - box_w / 2
+        href = f' href="btfhighlight:{_esc(label)}"' if interactive else ""
+        parts.append(
+            f'<line x1="{x}" y1="{top + 22}" x2="{x}" y2="{height - 12}" '
+            f'stroke="#3a4658" stroke-dasharray="4 3"/>'
+        )
+        parts.append(
+            f'<a{href}>'
+            f'<rect x="{bx}" y="{top - 14}" width="{box_w}" height="28" rx="4" '
+            f'fill="#1e3348" stroke="#5b9bd5"/>'
+            f'<text x="{x}" y="{top + 5}" text-anchor="middle" fill="#dbe2ea" '
+            f'font-size="11" font-family="{fam}">{_esc(label[:28])}</text>'
+            f"</a>"
+        )
+
+    y = top + 44
+    for row in rows:
+        if row[0] == "arrow":
+            _src, _dst, arrow, msg = row[1], row[2], row[3], row[4]
+            x1 = xs[index[_src]]
+            x2 = xs[index[_dst]]
+            dashed = " stroke-dasharray=\"5 3\"" if arrow.startswith("--") else ""
+            tip = 8 if x2 >= x1 else -8
+            parts.append(
+                f'<line x1="{x1}" y1="{y}" x2="{x2 - tip}" y2="{y}" '
+                f'stroke="#6fbf9a" stroke-width="1.4"{dashed}/>'
+            )
+            parts.append(_svg_arrowhead(x1, y, x2, y, "#6fbf9a"))
+            mx = (x1 + x2) / 2
+            parts.append(
+                f'<text x="{mx}" y="{y - 6}" text-anchor="middle" fill="#a8b4c4" '
+                f'font-size="10" font-family="{fam}">{_esc(msg[:48])}</text>'
+            )
+        else:
+            who, note = row[1], row[2]
+            x = xs[index[who]]
+            nw = _note_box_w(note)
+            parts.append(
+                f'<rect x="{x - nw / 2}" y="{y - 16}" width="{nw}" height="28" '
+                f'rx="3" fill="#2a2418" stroke="#c9a227"/>'
+                f'<text x="{x}" y="{y + 3}" text-anchor="middle" fill="#e6d48a" '
+                f'font-size="10" font-family="{fam}">{_esc(note[:40])}</text>'
+            )
+        y += row_h
+
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def _parse_flowchart(
+    source: str,
+) -> Tuple[Dict[str, str], List[str], List[Tuple[str, str, str]]]:
+    nodes: Dict[str, str] = {}
+    edges: List[Tuple[str, str, str]] = []
+    order: List[str] = []
+
+    def _add_node(nid: str, label: Optional[str]) -> None:
+        key = nid.strip()
+        if not key:
+            return
+        if key not in nodes:
+            nodes[key] = (label or key).strip() or key
+            order.append(key)
+        elif label:
+            nodes[key] = label.strip()
+
+    for raw in source.splitlines():
+        line = raw.strip().rstrip(";")
+        if not line or line.lower().startswith("graph ") or line.lower().startswith("flowchart "):
+            continue
+        if line.startswith("%%"):
+            continue
+        em = _EDGE_RE.match(line)
+        if em:
+            _add_node(em.group(1), em.group(2) or em.group(3))
+            _add_node(em.group(5), em.group(6) or em.group(7))
+            edges.append((em.group(1), em.group(5), (em.group(4) or "").strip()))
+            continue
+        nm = _NODE_RE.match(line)
+        if nm:
+            _add_node(nm.group(1), nm.group(2) or nm.group(3) or nm.group(4))
+    return nodes, order, edges
+
+
+def _node_box_w(label: str) -> float:
+    return float(max(72, min(130, 12 + 7 * len((label or "")[:18]))))
+
+
+def _flowchart_geom(source: str) -> Optional[Dict[str, Any]]:
+    nodes, order, edges = _parse_flowchart(source)
+    if not nodes:
+        return None
+    col_w, row_h = 160.0, 78.0
+    cols = min(4, max(1, len(order)))
+    max_half = 40.0
+    for nid in order:
+        max_half = max(max_half, _node_box_w(nodes[nid]) / 2.0)
+    pad = max_half + 18.0
+    top = 36.0
+    pos: Dict[str, Tuple[float, float]] = {}
+    for i, nid in enumerate(order):
+        c, r = i % cols, i // cols
+        pos[nid] = (pad + c * col_w, top + r * row_h)
+    right = max(x + _node_box_w(nodes[nid]) / 2 for nid, (x, _y) in pos.items())
+    bottom = max(y + 20 for _x, y in pos.values())
+    width = right + pad
+    height = bottom + 24
+    return {
+        "nodes": nodes, "order": order, "edges": edges, "pos": pos,
+        "width": width, "height": height,
+    }
+
+
+def _flowchart_edge_paths(geom: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Offset reverse edges so Core_0→Core_1 and Core_1→Core_0 counts do not stack."""
+    nodes, edges, pos = geom["nodes"], geom["edges"], geom["pos"]
+    pairs = {(src, dst) for src, dst, _lab in edges}
+    paths: List[Dict[str, float]] = []
+    for src, dst, label in edges:
+        x1, y1 = pos[src]
+        x2, y2 = pos[dst]
+        dx, dy = x2 - x1, y2 - y1
+        length = math.hypot(dx, dy) or 1.0
+        ux, uy = dx / length, dy / length
+        nx, ny = -uy, ux
+        sep = 12.0 if (dst, src) in pairs else 0.0
+        ox, oy = nx * sep, ny * sep
+        src_r = _node_box_w(nodes[src]) / 2.0 + 2.0
+        dst_r = _node_box_w(nodes[dst]) / 2.0 + 2.0
+        sx = x1 + ux * src_r + ox
+        sy = y1 + uy * src_r + oy
+        ex = x2 - ux * dst_r + ox
+        ey = y2 - uy * dst_r + oy
+        extra = 10.0 if sep else 8.0
+        paths.append({
+            "sx": sx, "sy": sy, "ex": ex, "ey": ey,
+            "lx": (sx + ex) / 2.0 + nx * extra,
+            "ly": (sy + ey) / 2.0 + ny * extra,
+            "label": label,
+        })
+    return paths
+
+
+def _flowchart_hits(source: str) -> List[Dict[str, Any]]:
+    geom = _flowchart_geom(source)
+    if not geom:
+        return []
+    hits: List[Dict[str, Any]] = []
+    for nid in geom["order"]:
+        x, y = geom["pos"][nid]
+        label = geom["nodes"][nid]
+        bw = _node_box_w(label)
+        hits.append({
+            "x": x - bw / 2, "y": y - 16, "w": float(bw), "h": 32.0,
+            "kind": "highlight", "value": label,
+        })
+    return hits
+
+
+def _flowchart_svg(source: str, *, interactive: bool) -> str:
+    geom = _flowchart_geom(source)
+    if not geom:
+        return ""
+    nodes, order, pos = geom["nodes"], geom["order"], geom["pos"]
+    width, height = geom["width"], geom["height"]
+    fam = _esc(_svg_sans_family())
+
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width:.0f}" height="{height:.0f}" '
+        f'viewBox="0 0 {width:.0f} {height:.0f}" class="ai-mermaid-flow">',
+        f'<rect x="0" y="0" width="{width:.0f}" height="{height:.0f}" fill="#12161d"/>',
+    ]
+    for edge in _flowchart_edge_paths(geom):
+        sx, sy, ex, ey = edge["sx"], edge["sy"], edge["ex"], edge["ey"]
+        parts.append(
+            f'<line x1="{sx:.1f}" y1="{sy:.1f}" x2="{ex:.1f}" y2="{ey:.1f}" '
+            f'stroke="#5b9bd5" stroke-width="1.3"/>'
+        )
+        parts.append(_svg_arrowhead(sx, sy, ex, ey, "#5b9bd5"))
+        label = str(edge.get("label") or "")
+        if label:
+            parts.append(
+                f'<text x="{edge["lx"]:.1f}" y="{edge["ly"]:.1f}" text-anchor="middle" '
+                f'fill="#c5d0dc" font-size="10" font-family="{fam}">'
+                f"{_esc(label[:16])}</text>"
+            )
+    for nid in order:
+        x, y = pos[nid]
+        label = nodes[nid]
+        href = f' href="btfhighlight:{_esc(label)}"' if interactive else ""
+        bw = _node_box_w(label)
+        parts.append(
+            f'<a{href}>'
+            f'<rect x="{x - bw / 2}" y="{y - 16}" width="{bw}" height="32" rx="6" '
+            f'fill="#1e3348" stroke="#5b9bd5"/>'
+            f'<text x="{x}" y="{y + 5}" text-anchor="middle" fill="#dbe2ea" '
+            f'font-size="11" font-family="{fam}">{_esc(label[:18])}</text>'
+            f"</a>"
+        )
+    parts.append("</svg>")
+    return "".join(parts)
+# ===========================================================================
 # AI Assistant (Ollama)
 # ===========================================================================
 
 class OllamaCancelled(Exception):
     """User stopped an in-flight AI request."""
+
+
+class _MermaidZoomDialog(QDialog):
+    """Larger view of an AI mermaid diagram (scroll to zoom)."""
+
+    def __init__(
+        self,
+        source: str,
+        parent=None,
+        *,
+        on_link: Optional[Callable[[QUrl], None]] = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Diagram")
+        self.setModal(True)
+        self._source = source or ""
+        self._svg = mermaid_to_svg(self._source, interactive=False)
+        self._scale = 2.0
+        lay = QVBoxLayout(self)
+        hint = QLabel(
+            "Scroll to zoom. Click a task/core in the figure or a name below."
+        )
+        hint.setStyleSheet("color:#8b98a8;font-size:11px;")
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(False)
+        self._scroll.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._img = QLabel()
+        self._img.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._img.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._on_link = on_link
+        self._scroll.setWidget(self._img)
+        self._scroll.viewport().installEventFilter(self)
+        self._img.installEventFilter(self)
+        lay.addWidget(self._scroll, 1)
+        links_html = _link_row_html(self._source)
+        if links_html:
+            links = QTextBrowser()
+            links.setOpenExternalLinks(False)
+            links.setOpenLinks(False)
+            links.setMaximumHeight(80)
+            links.setHtml(
+                f"<html><body style=\"background:#12161d;color:#dbe2ea;\">"
+                f"{links_html}</body></html>"
+            )
+            if on_link:
+                links.anchorClicked.connect(on_link)
+            lay.addWidget(links)
+        close = QPushButton("Close")
+        close.clicked.connect(self.accept)
+        lay.addWidget(close, 0, Qt.AlignmentFlag.AlignRight)
+        self._render()
+        pm = self._img.pixmap()
+        pw = pm.width() if pm and not pm.isNull() else 480
+        ph = pm.height() if pm and not pm.isNull() else 280
+        self.resize(min(960, max(480, pw + 48)), min(720, max(360, ph + 160)))
+
+    def eventFilter(self, obj, event):  # noqa: N802
+        if obj is self._scroll.viewport() and event.type() == QEvent.Type.Wheel:
+            delta = event.angleDelta().y()
+            if delta:
+                factor = 1.15 if delta > 0 else 1.0 / 1.15
+                self._scale = max(0.5, min(6.0, self._scale * factor))
+                self._render()
+                return True
+        if obj is self._img and event.type() == QEvent.Type.MouseButtonPress:
+            if event.button() == Qt.MouseButton.LeftButton and self._on_link:
+                pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+                hit = hit_test_mermaid(
+                    self._source, pos.x(), pos.y(), scale=self._scale)
+                if hit:
+                    _kind, value = hit
+                    self._on_link(QUrl(f"btfhighlight:{urllib.parse.quote(value, safe='')}"))
+                    return True
+        return QDialog.eventFilter(self, obj, event)
+
+    def _render(self) -> None:
+        if not self._svg:
+            self._img.setText("Could not render diagram.")
+            return
+        renderer = QSvgRenderer(QByteArray(self._svg.encode("utf-8")))
+        size = renderer.defaultSize()
+        w = max(1, int(max(size.width(), 1) * self._scale))
+        h = max(1, int(max(size.height(), 1) * self._scale))
+        pm = QPixmap(w, h)
+        pm.fill(QColor("#12161d"))
+        painter = QPainter(pm)
+        renderer.render(painter)
+        painter.end()
+        self._img.setPixmap(pm)
+        self._img.resize(pm.size())
+
 
 
 # Alias used by newer call sites; same exception.
@@ -16145,7 +17626,8 @@ AI_SYSTEM_PROMPT = (
     "(preemption, priority inversion, lock contention, core thrashing, switch "
     "overhead, tick health). Prefer concrete task names, cores, and durations. "
     "When mentioning a time, write it as jump:TIME where TIME is the numeric "
-    "value in the trace time unit (e.g. jump:1805120). Keep answers concise."
+    "value in the trace time unit (e.g. jump:1805120). Keep answers concise. "
+    + AI_TOOL_SYSTEM_ADDENDUM
 )
 
 # Preferred reply language (Settings → AI / Language… dialog). Keep in sync with web.
@@ -16269,9 +17751,23 @@ AI_PRESETS: Tuple[Tuple[str, str, str, str], ...] = (
 DEFAULT_AI_PRESET = AI_PRESET_OLLAMA
 DEFAULT_AI_BASE_URL = "http://localhost:11434/v1"
 DEFAULT_AI_MODEL = "phi4-mini:3.8b"
+# Keep in sync with web/src/utils/ollamaClient.js (ms equivalents).
+AI_CHAT_TIMEOUT_S = 120.0
+AI_LIST_MODELS_TIMEOUT_S = 12.0
+AI_TEST_TIMEOUT_S = 60.0
 
 # Per-preset settings stored in btf_viewer.rc / browser storage.
-AI_PRESET_FIELDS: Tuple[str, ...] = ("base_url", "model", "api_key")
+AI_PRESET_FIELDS: Tuple[str, ...] = ("base_url", "model", "api_key", "auth_mode")
+
+AI_AUTH_NONE = "none"
+AI_AUTH_API_KEY = "api_key"
+AI_AUTH_BROWSER = "browser"
+AI_AUTH_MODES: Tuple[str, ...] = (AI_AUTH_NONE, AI_AUTH_API_KEY, AI_AUTH_BROWSER)
+AI_AUTH_MODE_LABELS: Tuple[Tuple[str, str], ...] = (
+    (AI_AUTH_NONE, "None (local)"),
+    (AI_AUTH_API_KEY, "API key"),
+    (AI_AUTH_BROWSER, "Sign in"),
+)
 
 # Hosts that serve a local model and therefore need no API key.
 # Keep in sync with LOCAL_AI_HOSTS in web/src/utils/ollamaClient.js.
@@ -16287,6 +17783,14 @@ LOCAL_AI_HOSTS: Tuple[str, ...] = (
 AI_PRESET_KEY_URLS: Dict[str, str] = {
     AI_PRESET_OPENAI: "https://platform.openai.com/api-keys",
     AI_PRESET_GEMINI: "https://aistudio.google.com/apikey",
+    AI_PRESET_OLLAMA: "https://ollama.com/settings/keys",
+}
+
+AI_PRESET_SIGNIN_LABELS: Dict[str, str] = {
+    AI_PRESET_OPENAI: "Sign in with OpenAI…",
+    AI_PRESET_GEMINI: "Sign in with Google…",
+    AI_PRESET_OLLAMA: "Open Ollama sign-in…",
+    AI_PRESET_CUSTOM: "Open provider sign-in…",
 }
 
 
@@ -16338,11 +17842,17 @@ def resolve_ai_settings(
     preset = normalize_ai_preset(
         preset_id if preset_id is not None else c.get("preset"))
     _id, _label, def_base, def_model = ai_preset_info(preset)
+    base_url = str(c.get(f"{preset}_base_url", "") or def_base)
     return {
         "preset": preset,
-        "base_url": str(c.get(f"{preset}_base_url", "") or def_base),
+        "base_url": base_url,
         "model": str(c.get(f"{preset}_model", "") or def_model),
         "api_key": str(c.get(f"{preset}_api_key", "") or ""),
+        "auth_mode": normalize_ai_auth_mode(
+            c.get(f"{preset}_auth_mode", ""),
+            preset_id=preset,
+            base_url=base_url,
+        ),
     }
 
 
@@ -16510,6 +18020,11 @@ def parse_ai_settings_json(data: Any) -> Dict[str, str]:
             "api_key": normalize_api_key(
                 _ai_json_str(fields, "api_key", "apiKey", "key")),
         }
+        auth_raw = _ai_json_str(
+            fields, "auth_mode", "authMode", "authentication")
+        if auth_raw:
+            entry["auth_mode"] = normalize_ai_auth_mode(
+                auth_raw, preset_id=target, base_url=base_url)
         entry = {k: v for k, v in entry.items() if v}
         if entry:
             per_preset.setdefault(target, {}).update(entry)
@@ -16651,6 +18166,107 @@ def is_local_ai_host(url: str) -> bool:
     return host.lower() in LOCAL_AI_HOSTS
 
 
+def default_ai_auth_mode(preset_id: str = "", base_url: str = "") -> str:
+    """Auth method to offer when the user has not chosen one yet."""
+    pid = normalize_ai_preset(preset_id) if preset_id else ""
+    if pid == AI_PRESET_OLLAMA:
+        return AI_AUTH_NONE
+    if base_url and is_local_ai_host(base_url):
+        return AI_AUTH_NONE
+    return AI_AUTH_API_KEY
+
+
+def normalize_ai_auth_mode(
+    value: Any,
+    *,
+    preset_id: str = "",
+    base_url: str = "",
+) -> str:
+    """Map stored / imported auth method names onto ``none`` / ``api_key`` / ``browser``."""
+    want = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "none": AI_AUTH_NONE,
+        "local": AI_AUTH_NONE,
+        "no": AI_AUTH_NONE,
+        "off": AI_AUTH_NONE,
+        "api_key": AI_AUTH_API_KEY,
+        "apikey": AI_AUTH_API_KEY,
+        "api": AI_AUTH_API_KEY,
+        "key": AI_AUTH_API_KEY,
+        "token": AI_AUTH_API_KEY,
+        "browser": AI_AUTH_BROWSER,
+        "sign_in": AI_AUTH_BROWSER,
+        "signin": AI_AUTH_BROWSER,
+        "login": AI_AUTH_BROWSER,
+        "oauth": AI_AUTH_BROWSER,
+    }
+    if want in aliases:
+        return aliases[want]
+    return default_ai_auth_mode(preset_id, base_url)
+
+
+def ai_preset_signin_url(preset_id: str, base_url: str = "") -> str:
+    """Browser page to open for Sign in / Get key (Phase 1: vendor key portal)."""
+    pid = normalize_ai_preset(preset_id)
+    url = AI_PRESET_KEY_URLS.get(pid, "")
+    if url:
+        return url
+    raw = str(base_url or "").strip()
+    if raw.lower().startswith(("http://", "https://")):
+        try:
+            parts = urllib.parse.urlsplit(raw)
+            if parts.scheme and parts.netloc:
+                return f"{parts.scheme}://{parts.netloc}"
+        except ValueError:
+            pass
+    return ""
+
+
+def ai_preset_signin_label(preset_id: str) -> str:
+    pid = normalize_ai_preset(preset_id)
+    return AI_PRESET_SIGNIN_LABELS.get(pid, "Sign in…")
+
+
+def ai_auth_status(
+    *,
+    auth_mode: str = "",
+    api_key: str = "",
+    base_url: str = "",
+    preset_id: str = "",
+) -> Dict[str, Any]:
+    """Chip / CTA state for the active preset."""
+    mode = normalize_ai_auth_mode(
+        auth_mode, preset_id=preset_id, base_url=base_url)
+    has_key = bool(resolve_ai_api_key(api_key))
+    if mode == AI_AUTH_NONE:
+        return {
+            "mode": mode,
+            "label": "Local",
+            "needs_auth": False,
+            "signed_in": False,
+        }
+    if has_key:
+        if mode == AI_AUTH_BROWSER:
+            return {
+                "mode": mode,
+                "label": "Signed in",
+                "needs_auth": False,
+                "signed_in": True,
+            }
+        return {
+            "mode": mode,
+            "label": "Key saved",
+            "needs_auth": False,
+            "signed_in": False,
+        }
+    return {
+        "mode": mode,
+        "label": "Needs sign-in" if mode == AI_AUTH_BROWSER else "Needs API key",
+        "needs_auth": True,
+        "signed_in": False,
+    }
+
+
 def normalize_ai_context(ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Accept snake_case or camelCase context keys (Desktop / Web parity)."""
     c = dict(ctx or {})
@@ -16728,7 +18344,8 @@ def _md_inline_to_html_escaped(text: str) -> str:
             if (
                 low.startswith("http://")
                 or low.startswith("https://")
-                or low.startswith("btfjump:")
+                or                 low.startswith("btfjump:")
+                or low.startswith("btfhighlight:")
                 or low.startswith("mailto:")
             ):
                 buf.append(
@@ -16748,7 +18365,7 @@ def _md_inline_to_html_escaped(text: str) -> str:
         chunk = _MD_ITALIC_RE.sub(_ital, chunk)
         chunk = _JUMP_RE.sub(
             lambda m: _stash(
-                f'<a href="btfjump:{m.group(1)}" class="ai-jump">'
+                f'<a href="{btf_jump_href(m.group(1))}" class="ai-jump">'
                 f"jump:{m.group(1)}</a>"
             ),
             chunk,
@@ -16761,8 +18378,13 @@ def _md_inline_to_html_escaped(text: str) -> str:
     return result
 
 
-def markdown_to_safe_html(text: str) -> str:
-    """Convert a subset of Markdown to safe HTML (AI reply preview)."""
+def markdown_to_safe_html(text: str, *, as_img: bool = True) -> str:
+    """Convert a subset of Markdown to safe HTML (AI reply preview).
+
+    ``as_img=True`` (QTextBrowser chat) embeds mermaid as a PNG-compatible
+    data-URI ``<img>``. ``as_img=False`` (HTML export / browser) keeps an
+    inline SVG so diagram nodes stay clickable.
+    """
     raw = (text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
     if not raw:
         return ""
@@ -16793,6 +18415,10 @@ def markdown_to_safe_html(text: str) -> str:
                 i += 1
             if i < n:
                 i += 1
+            if lang.lower() == "mermaid":
+                out.append(mermaid_block_html(
+                    "\n".join(code_lines), as_img=as_img, zoomable=as_img))
+                continue
             code_html = html.escape("\n".join(code_lines))
             cls = f' class="language-{html.escape(lang)}"' if lang else ""
             out.append(f"<pre><code{cls}>{code_html}</code></pre>")
@@ -16875,15 +18501,15 @@ def markdown_to_safe_html(text: str) -> str:
     return "".join(out)
 
 
-def _ai_message_body_html(role: str, text: str) -> str:
+def _ai_message_body_html(role: str, text: str, *, as_img: bool = True) -> str:
     """Message body without the role prefix; assistant replies render as Markdown."""
     body_text = (text or "").strip()
     if role == "assistant":
-        return markdown_to_safe_html(body_text) or "<p></p>"
+        return markdown_to_safe_html(body_text, as_img=as_img) or "<p></p>"
     esc = html.escape(body_text)
     linked = _JUMP_RE.sub(
         lambda m: (
-            f'<a href="btfjump:{m.group(1)}" class="ai-jump">'
+            f'<a href="{btf_jump_href(m.group(1))}" class="ai-jump">'
             f"jump:{m.group(1)}</a>"
         ),
         esc,
@@ -16910,10 +18536,70 @@ _AI_LOG_STYLE = (
     "text-transform:uppercase;}"
     ".ai-role-user{color:#6ea8e0;}"
     ".ai-role-assistant{color:#6fbf9a;}"
+    ".ai-tool-card{color:#e6d48a;}"
+    "img.ai-mermaid-img{max-width:100%;height:auto;border-radius:4px;}"
+    "a.ai-mermaid-zoom{cursor:zoom-in;text-decoration:none;}"
 )
 
 
-def _format_ai_log_html(role: str, text: str) -> str:
+def ai_entry_role(entry: Any) -> str:
+    if isinstance(entry, dict):
+        return str(entry.get("role") or "assistant")
+    return str(entry[0])
+
+
+def ai_entry_text(entry: Any) -> str:
+    if isinstance(entry, dict):
+        return str(entry.get("text") or entry.get("content") or "")
+    if isinstance(entry, (list, tuple)) and len(entry) > 1:
+        return str(entry[1] or "")
+    return ""
+
+
+def ai_entry_tools(entry: Any) -> List[Dict[str, Any]]:
+    if isinstance(entry, dict):
+        tools = entry.get("tools") or []
+        return list(tools) if isinstance(tools, list) else []
+    return []
+
+
+def _tool_cards_html(tools: Sequence[Dict[str, Any]], batch_id: str) -> str:
+    if not tools:
+        return ""
+    rows: List[str] = []
+    status = "pending"
+    for t in tools:
+        if isinstance(t, dict) and t.get("status"):
+            status = str(t.get("status") or status)
+            break
+    for t in tools:
+        if not isinstance(t, dict):
+            continue
+        name = str(t.get("name") or "")
+        args = t.get("arguments") if isinstance(t.get("arguments"), dict) else {}
+        label = html.escape(summarise_tool_call(name, args))
+        st = html.escape(str(t.get("status") or status))
+        rows.append(f"<p>⚡ {label} <span style=\"color:#8b98a8\">({st})</span></p>")
+    actions = ""
+    if status == "pending" and batch_id:
+        actions = (
+            f'<p><a href="btfaction:apply/{html.escape(batch_id)}">Apply</a>'
+            f' · <a href="btfaction:skip/{html.escape(batch_id)}">Skip</a></p>'
+        )
+    elif status == "applied" and batch_id:
+        actions = (
+            f'<p><a href="btfaction:undo/{html.escape(batch_id)}">Undo</a></p>'
+        )
+    return (
+        '<table width="100%" cellspacing="0" cellpadding="0">'
+        '<tr><td bgcolor="#2a2418" class="ai-tool-card" '
+        'style="border-left:3px solid #c9a227;padding:8px 10px;">'
+        f"{''.join(rows)}{actions}</td></tr></table>"
+    )
+
+
+def _format_ai_log_html(role: str, text: str, tools: Optional[Sequence[Dict[str, Any]]] = None,
+                        batch_id: str = "") -> str:
     """One conversation turn as a self-contained table (Qt will not merge these)."""
     is_user = role == "user"
     label = "You" if is_user else "Assistant"
@@ -16921,25 +18607,33 @@ def _format_ai_log_html(role: str, text: str) -> str:
     # bgcolor is more reliable in QTextBrowser than CSS background on divs.
     bg = "#1e3348" if is_user else "#1a2620"
     bar = "#5b9bd5" if is_user else "#3d9a72"
-    body = _ai_message_body_html(role, text)
+    body = _ai_message_body_html(role, text) if (text or "").strip() else ""
+    cards = _tool_cards_html(tools or [], batch_id)
+    if not body and not cards:
+        body = "<p></p>"
     return (
         f'<table class="ai-turn" width="100%" cellspacing="0" cellpadding="0">'
         f'<tr><td class="ai-role {role_cls}" style="padding:10px 0 3px 0;">{label}</td></tr>'
         f'<tr><td class="ai-bubble" bgcolor="{bg}" '
-        f'style="border-left:3px solid {bar};padding:8px 10px;">{body}</td></tr>'
+        f'style="border-left:3px solid {bar};padding:8px 10px;">{body}{cards}</td></tr>'
         f"</table>"
     )
 
 
-def _ai_log_document_html(entries: Sequence[Tuple[str, str]]) -> str:
+def _ai_log_document_html(entries: Sequence[Any]) -> str:
     """Full conversation document for QTextBrowser.setHtml (avoids append merge)."""
     if not entries:
         return ""
     parts: List[str] = []
-    for i, (role, text) in enumerate(entries):
+    for i, entry in enumerate(entries):
         if i:
             parts.append('<hr class="ai-turn-sep">')
-        parts.append(_format_ai_log_html(role, text))
+        parts.append(_format_ai_log_html(
+            ai_entry_role(entry),
+            ai_entry_text(entry),
+            ai_entry_tools(entry),
+            str((entry.get("batch_id") if isinstance(entry, dict) else "") or ""),
+        ))
     return f"<html><body>{''.join(parts)}</body></html>"
 
 
@@ -16947,25 +18641,50 @@ def _ai_file_stamp() -> str:
     return datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 
 
-def format_ai_conversation_markdown(entries: Sequence[Tuple[str, str]]) -> str:
+def _tool_transcript_lines(entry: Any) -> List[str]:
+    lines: List[str] = []
+    for t in ai_entry_tools(entry):
+        if not isinstance(t, dict):
+            continue
+        name = str(t.get("name") or "")
+        args = t.get("arguments") if isinstance(t.get("arguments"), dict) else {}
+        st = str(t.get("status") or "pending")
+        lines.append(f"- ⚡ {summarise_tool_call(name, args)} ({st})")
+    return lines
+
+
+def format_ai_conversation_markdown(entries: Sequence[Any]) -> str:
     """Markdown transcript of the conversation (assistant replies kept as-is)."""
     stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     out = ["# BTF Viewer — AI Conversation", "", f"_Saved {stamp}_", ""]
-    for role, text in entries:
+    for entry in entries:
+        role = ai_entry_role(entry)
         out.append("## You" if role == "user" else "## Assistant")
         out.append("")
-        out.append((text or "").strip())
-        out.append("")
+        text = (ai_entry_text(entry) or "").strip()
+        if text:
+            out.append(text)
+            out.append("")
+        tools = _tool_transcript_lines(entry)
+        if tools:
+            out.extend(tools)
+            out.append("")
     return "\n".join(out).rstrip() + "\n"
 
 
-def format_ai_conversation_text(entries: Sequence[Tuple[str, str]]) -> str:
+def format_ai_conversation_text(entries: Sequence[Any]) -> str:
     """Plain-text transcript of the conversation."""
     stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     out = ["BTF Viewer — AI Conversation", f"Saved {stamp}", ""]
-    for role, text in entries:
+    for entry in entries:
+        role = ai_entry_role(entry)
         out.append("You:" if role == "user" else "Assistant:")
-        out.append((text or "").strip())
+        text = (ai_entry_text(entry) or "").strip()
+        if text:
+            out.append(text)
+        tools = _tool_transcript_lines(entry)
+        if tools:
+            out.extend(tools)
         out.append("")
     return "\n".join(out).rstrip() + "\n"
 
@@ -16989,7 +18708,7 @@ a{color:#5b9bd5;}
 """.strip()
 
 
-def format_ai_conversation_html(entries: Sequence[Tuple[str, str]]) -> str:
+def format_ai_conversation_html(entries: Sequence[Any]) -> str:
     """Standalone HTML transcript (Markdown rendered, same styling as the panel).
 
     Keep in sync with aiMarkdown.js::formatAiConversationHtml; Qt's own
@@ -16997,12 +18716,16 @@ def format_ai_conversation_html(entries: Sequence[Tuple[str, str]]) -> str:
     """
     stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     parts = []
-    for role, text in entries:
+    for entry in entries:
+        role = ai_entry_role(entry)
+        text = ai_entry_text(entry)
         head = "You" if role == "user" else "Assistant"
         cls = "user" if role == "user" else "assistant"
+        body = _ai_message_body_html(role, text, as_img=False) if (text or "").strip() else ""
+        cards = _tool_cards_html(ai_entry_tools(entry), "")
         parts.append(
             f'<section class="msg {cls}"><h3>{head}</h3>'
-            f'<div class="body">{_ai_message_body_html(role, text)}</div>'
+            f'<div class="body">{body}{cards}</div>'
             "</section>"
         )
     return (
@@ -17108,7 +18831,10 @@ def _ai_http_error_tip(code: int, detail: str = "", *, base_url: str = "") -> st
     low = (detail or "").lower()
     host = (base_url or "").lower()
     if code in (401, 403):
-        return " Check API key (Settings → AI, or OPENAI_API_KEY / GEMINI_API_KEY)."
+        return (
+            " Check authentication (Settings → AI → Sign in or API key, "
+            "or OPENAI_API_KEY / GEMINI_API_KEY)."
+        )
     if code == 400 and (
         "valid api key" in low or "api key" in low and "invalid" in low
         or "multiple authentication" in low
@@ -17149,6 +18875,165 @@ def _ai_http_error_tip(code: int, detail: str = "", *, base_url: str = "") -> st
     return ""
 
 
+def ai_chat_completion(
+    query: str = "",
+    *,
+    findings_text: str = "",
+    metrics: Optional[Dict[str, Any]] = None,
+    span: str = "",
+    cores: Any = "",
+    scope: str = "",
+    base_url: str = DEFAULT_AI_BASE_URL,
+    model: str = DEFAULT_AI_MODEL,
+    api_key: str = "",
+    response_language: str = DEFAULT_AI_RESPONSE_LANGUAGE,
+    timeout_s: float = AI_CHAT_TIMEOUT_S,
+    history: Optional[Sequence[Dict[str, str]]] = None,
+    messages: Optional[List[Dict[str, Any]]] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    cancel_event: Optional[threading.Event] = None,
+    on_response: Optional[Callable[[Any], None]] = None,
+) -> Dict[str, Any]:
+    """One OpenAI-compatible ``/chat/completions`` round (non-streaming).
+
+    Returns ``{"content", "tool_calls", "message"}``.
+    """
+    url_base = normalize_ai_base_url(base_url)
+    url = url_base + "/chat/completions"
+    chat_model = (model or DEFAULT_AI_MODEL).strip() or DEFAULT_AI_MODEL
+    if not resolve_ai_api_key(api_key) and not is_local_ai_host(url_base):
+        raise RuntimeError(
+            "API key required for remote endpoints "
+            "(Settings → AI → API key, or OPENAI_API_KEY / GEMINI_API_KEY). "
+            "Paste the raw key only — no Bearer prefix."
+        )
+    if cancel_event is not None and cancel_event.is_set():
+        raise OllamaCancelled("Stopped")
+    if messages is None:
+        messages = _build_chat_messages(
+            query,
+            findings_text=findings_text,
+            metrics=metrics,
+            span=span,
+            cores=cores,
+            scope=scope,
+            response_language=response_language,
+            history=history,
+        )
+    messages = normalize_tool_chat_messages(messages)
+    payload_obj: Dict[str, Any] = {
+        "model": chat_model,
+        "messages": messages,
+        "stream": False,
+    }
+    use_tools = list(tools) if tools else []
+    if use_tools:
+        # Do not send tool_choice: Ollama/some proxies 400 on it and our old
+        # retry then dropped *all* tools ("unknown" matched the error text).
+        payload_obj["tools"] = use_tools
+
+    def _post(body_obj: Dict[str, Any]) -> Dict[str, Any]:
+        payload = json.dumps(body_obj).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=payload,
+            headers=ai_request_headers(api_key, base_url=url_base),
+            method="POST",
+        )
+        try:
+            resp = urllib.request.urlopen(req, timeout=timeout_s)
+        except urllib.error.HTTPError as exc:
+            detail = ""
+            try:
+                detail = exc.read().decode("utf-8", errors="replace")[:400]
+            except Exception:
+                pass
+            tip = _ai_http_error_tip(exc.code, detail, base_url=url_base)
+            err = RuntimeError(
+                f"OpenAI-compatible HTTP {exc.code} at {url}: "
+                f"{detail or exc.reason}.{tip}"
+            )
+            err.http_code = exc.code  # type: ignore[attr-defined]
+            err.http_detail = detail  # type: ignore[attr-defined]
+            raise err from exc
+        except urllib.error.URLError as exc:
+            if cancel_event is not None and cancel_event.is_set():
+                raise OllamaCancelled("Stopped") from exc
+            raise RuntimeError(
+                f"Cannot reach OpenAI-compatible API at {url}.\n{exc.reason}"
+            ) from exc
+        except TimeoutError as exc:
+            raise RuntimeError(
+                f"OpenAI-compatible request timed out after {timeout_s:.0f}s ({url})"
+            ) from exc
+
+        if on_response is not None:
+            try:
+                on_response(resp)
+            except Exception:
+                pass
+        try:
+            if cancel_event is not None and cancel_event.is_set():
+                raise OllamaCancelled("Stopped")
+            raw = _read_http_body(resp, cancel_event=cancel_event).decode("utf-8")
+            return json.loads(raw)
+        finally:
+            try:
+                resp.close()
+            except Exception:
+                pass
+            if on_response is not None:
+                try:
+                    on_response(None)
+                except Exception:
+                    pass
+
+    try:
+        body = _post(payload_obj)
+    except RuntimeError as exc:
+        detail = str(getattr(exc, "http_detail", "") or exc).lower()
+        code = int(getattr(exc, "http_code", 0) or 0)
+        unsupported = any(
+            s in detail for s in (
+                "does not support tools",
+                "does not support function",
+                "tool calling is not supported",
+                "unsupported tool",
+                "unknown field: tools",
+                'unknown field "tools"',
+                "unknown field 'tools'",
+            )
+        )
+        if use_tools and code in (400, 404, 422) and unsupported:
+            payload_obj.pop("tools", None)
+            payload_obj.pop("tool_choice", None)
+            body = _post(payload_obj)
+        else:
+            raise
+
+    choices = body.get("choices") if isinstance(body, dict) else None
+    msg: Dict[str, Any] = {}
+    choice0: Dict[str, Any] = {}
+    if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+        choice0 = choices[0]
+        raw_msg = choice0.get("message")
+        if isinstance(raw_msg, dict):
+            msg = raw_msg
+        elif not msg and isinstance(body.get("message"), dict):
+            msg = body["message"]
+    content = message_content_text(msg.get("content"))
+    calls = extract_tool_calls(msg)
+    if not calls and choice0.get("tool_calls"):
+        calls = extract_tool_calls({"tool_calls": choice0.get("tool_calls")})
+    text_calls = parse_tool_calls_from_text(content)
+    calls = merge_tool_calls(calls, text_calls)
+    if text_calls:
+        content = strip_parsed_tool_markup(content)
+    if not content and not calls:
+        raise RuntimeError(f"Unexpected OpenAI-compatible response: {body!r}"[:500])
+    return {"content": content, "tool_calls": calls, "message": msg}
+
+
 def ai_chat(
     query: str,
     *,
@@ -17161,101 +19046,43 @@ def ai_chat(
     model: str = DEFAULT_AI_MODEL,
     api_key: str = "",
     response_language: str = DEFAULT_AI_RESPONSE_LANGUAGE,
-    timeout_s: float = 120.0,
+    timeout_s: float = AI_CHAT_TIMEOUT_S,
     history: Optional[Sequence[Dict[str, str]]] = None,
     cancel_event: Optional[threading.Event] = None,
     on_response: Optional[Callable[[Any], None]] = None,
 ) -> str:
     """Call OpenAI-compatible ``/chat/completions`` (non-streaming)."""
-    url_base = normalize_ai_base_url(base_url)
-    url = url_base + "/chat/completions"
-    chat_model = (model or DEFAULT_AI_MODEL).strip() or DEFAULT_AI_MODEL
-    if not resolve_ai_api_key(api_key) and not is_local_ai_host(url_base):
-        raise RuntimeError(
-            "API key required for remote endpoints "
-            "(Settings → AI → API key, or OPENAI_API_KEY / GEMINI_API_KEY). "
-            "Paste the raw key only — no Bearer prefix."
-        )
-    if cancel_event is not None and cancel_event.is_set():
-        raise OllamaCancelled("Stopped")
-    messages = _build_chat_messages(
+    turn = ai_chat_completion(
         query,
         findings_text=findings_text,
         metrics=metrics,
         span=span,
         cores=cores,
         scope=scope,
+        base_url=base_url,
+        model=model,
+        api_key=api_key,
         response_language=response_language,
+        timeout_s=timeout_s,
         history=history,
+        cancel_event=cancel_event,
+        on_response=on_response,
     )
-    payload = json.dumps({
-        "model": chat_model,
-        "messages": messages,
-        "stream": False,
-    }).encode("utf-8")
-
-    req = urllib.request.Request(
-        url,
-        data=payload,
-        headers=ai_request_headers(api_key, base_url=url_base),
-        method="POST",
-    )
-    try:
-        resp = urllib.request.urlopen(req, timeout=timeout_s)
-    except urllib.error.HTTPError as exc:
-        detail = ""
-        try:
-            detail = exc.read().decode("utf-8", errors="replace")[:400]
-        except Exception:
-            pass
-        tip = _ai_http_error_tip(exc.code, detail, base_url=url_base)
-        raise RuntimeError(
-            f"OpenAI-compatible HTTP {exc.code} at {url}: "
-            f"{detail or exc.reason}.{tip}"
-        ) from exc
-    except urllib.error.URLError as exc:
-        if cancel_event is not None and cancel_event.is_set():
-            raise OllamaCancelled("Stopped") from exc
-        raise RuntimeError(
-            f"Cannot reach OpenAI-compatible API at {url}.\n{exc.reason}"
-        ) from exc
-    except TimeoutError as exc:
-        raise RuntimeError(
-            f"OpenAI-compatible request timed out after {timeout_s:.0f}s ({url})"
-        ) from exc
-
-    if on_response is not None:
-        try:
-            on_response(resp)
-        except Exception:
-            pass
-    try:
-        if cancel_event is not None and cancel_event.is_set():
-            raise OllamaCancelled("Stopped")
-        raw = _read_http_body(resp, cancel_event=cancel_event).decode("utf-8")
-        body = json.loads(raw)
-    finally:
-        try:
-            resp.close()
-        except Exception:
-            pass
-        if on_response is not None:
-            try:
-                on_response(None)
-            except Exception:
-                pass
-
-    choices = body.get("choices") if isinstance(body, dict) else None
-    if isinstance(choices, list) and choices:
-        msg = choices[0].get("message") if isinstance(choices[0], dict) else None
-        if isinstance(msg, dict) and msg.get("content"):
-            return str(msg["content"]).strip()
-    raise RuntimeError(f"Unexpected OpenAI-compatible response: {body!r}"[:500])
+    text = str(turn.get("content") or "").strip()
+    if text:
+        return text
+    calls = turn.get("tool_calls") or []
+    if calls:
+        return "\n".join(
+            summarise_tool_call(c.get("name", ""), c.get("arguments") or {})
+            for c in calls if isinstance(c, dict)
+        )
+    raise RuntimeError("Unexpected OpenAI-compatible response: empty content")
 
 
 def ai_list_models(
     base_url: str = DEFAULT_AI_BASE_URL,
-    timeout_s: float = 8.0,
+    timeout_s: float = AI_LIST_MODELS_TIMEOUT_S,
     api_key: str = "",
 ) -> List[str]:
     """Return model ids from ``GET /models`` on an OpenAI-compatible API."""
@@ -17312,7 +19139,7 @@ def ai_test_connection(
     model: str = DEFAULT_AI_MODEL,
     *,
     api_key: str = "",
-    timeout_s: float = 60.0,
+    timeout_s: float = AI_TEST_TIMEOUT_S,
     on_progress: Optional[Callable[[str], None]] = None,
 ) -> str:
     """List models, then run a tiny chat probe against the configured endpoint."""
@@ -17337,7 +19164,8 @@ def ai_test_connection(
     served: List[str] = []
     listing_note = ""
     try:
-        served = ai_list_models(url_base, timeout_s=min(12.0, timeout_s), api_key=key)
+        served = ai_list_models(
+            url_base, timeout_s=min(AI_LIST_MODELS_TIMEOUT_S, timeout_s), api_key=key)
     except RuntimeError as exc:
         if is_local_ai_host(url_base):
             # Only name the canonical root when the user pointed elsewhere.
@@ -17398,6 +19226,14 @@ def ai_test_connection(
     return f"Connected to {url_base}. Model {model_name} ready{listing_note}.{note}"
 
 
+def _qtextline_cursor_x(line, pos: int) -> float:
+    """Horizontal caret x. PySide ``cursorToX`` often returns ``(x, cursorPos)``."""
+    raw = line.cursorToX(int(pos))
+    if isinstance(raw, (tuple, list)):
+        return float(raw[0]) if raw else 0.0
+    return float(raw or 0.0)
+
+
 def create_ai_assistant_panel(
     parent=None,
     *,
@@ -17406,6 +19242,9 @@ def create_ai_assistant_panel(
     on_open_settings: Optional[Callable[[], None]] = None,
     on_save_settings: Optional[Callable[[Dict[str, str]], None]] = None,
     on_jump: Optional[Callable[[float], None]] = None,
+    on_highlight: Optional[Callable[[str], None]] = None,
+    on_execute_tools: Optional[Callable[[List[Dict[str, Any]]], List[Dict[str, Any]]]] = None,
+    on_undo_tools: Optional[Callable[[], None]] = None,
     get_loaded_tabs: Optional[Callable[[], List[Dict[str, Any]]]] = None,
     build_compare_context: Optional[
         Callable[[int, int], Dict[str, Any]]
@@ -17528,7 +19367,7 @@ def create_ai_assistant_panel(
 
         def _run(self) -> None:
             try:
-                text = ai_chat(
+                turn = ai_chat_completion(
                     **self._kwargs,
                     cancel_event=self._cancel,
                     on_response=self._set_resp,
@@ -17536,7 +19375,7 @@ def create_ai_assistant_panel(
                 if self._cancel.is_set():
                     self.cancelled.emit()
                 else:
-                    self.finished.emit(text)
+                    self.finished.emit(json.dumps(turn, default=str))
             except OllamaCancelled:
                 self.cancelled.emit()
             except Exception as exc:
@@ -17551,15 +19390,38 @@ def create_ai_assistant_panel(
             self.setMinimumWidth(0)
             self._busy = False
             self._worker: Optional[_OllamaWorker] = None
-            self._entries: List[Tuple[str, str]] = []
+            self._entries: List[Any] = []
+            self._chat_messages: List[Dict[str, Any]] = []
+            self._tool_round = 0
+            self._pending_batches: Dict[str, Dict[str, Any]] = {}
+            self._batch_seq = 0
 
             root = QVBoxLayout(self)
             root.setContentsMargins(6, 6, 6, 6)
             root.setSpacing(6)
 
+            title_row = QHBoxLayout()
+            title_row.setContentsMargins(0, 0, 0, 0)
+            title_row.setSpacing(8)
             title = QLabel("AI Assistant")
             title.setStyleSheet("font-weight:600;")
-            root.addWidget(title)
+            title_row.addWidget(title)
+            self._auth_chip = QPushButton("")
+            self._auth_chip.setObjectName("ai_auth_chip")
+            self._auth_chip.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._auth_chip.setToolTip("Open Settings → AI to sign in or change the API key")
+            self._auth_chip.setStyleSheet(
+                "QPushButton#ai_auth_chip {"
+                "  background: transparent; color: #8b98a8;"
+                "  border: 1px solid #3a4658; border-radius: 10px;"
+                "  padding: 1px 8px; font-size: 11px;"
+                "}"
+                "QPushButton#ai_auth_chip:hover { color: #dbe2ea; border-color: #5b9bd5; }"
+            )
+            self._auth_chip.clicked.connect(self._on_auth_chip)
+            title_row.addWidget(self._auth_chip)
+            title_row.addStretch(1)
+            root.addLayout(title_row)
 
             # Match web: title, then actions above the scroll area.
             # objectName "aiActions" is excluded from dock width-relax (Ignored
@@ -17678,7 +19540,26 @@ def create_ai_assistant_panel(
             self._log.anchorClicked.connect(self._on_jump_link)
             self._log.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
             self._log.customContextMenuRequested.connect(self._show_log_menu)
+            self._log.viewport().installEventFilter(self)
             mid_lay.addWidget(self._log, 1)
+
+            self._tool_bar = QWidget()
+            tool_row = QHBoxLayout(self._tool_bar)
+            tool_row.setContentsMargins(0, 0, 0, 0)
+            tool_row.setSpacing(6)
+            self._apply_tools_btn = QPushButton("Apply GUI actions")
+            self._apply_tools_btn.setToolTip("Run the pending viewer tools from the last reply")
+            self._apply_tools_btn.clicked.connect(self._apply_pending_tools)
+            self._skip_tools_btn = QPushButton("Skip")
+            self._skip_tools_btn.clicked.connect(self._skip_pending_tools)
+            self._undo_tools_btn = QPushButton("Undo last actions")
+            self._undo_tools_btn.clicked.connect(self._undo_last_tools)
+            tool_row.addWidget(self._apply_tools_btn)
+            tool_row.addWidget(self._skip_tools_btn)
+            tool_row.addWidget(self._undo_tools_btn)
+            tool_row.addStretch(1)
+            self._tool_bar.hide()
+            mid_lay.addWidget(self._tool_bar)
 
             mid_scroll.setWidget(mid)
             root.addWidget(mid_scroll, 1)
@@ -17695,10 +19576,28 @@ def create_ai_assistant_panel(
             self._status.setWordWrap(True)
             root.addWidget(self._status)
 
+            self._auth_cta = QWidget()
+            cta_row = QHBoxLayout(self._auth_cta)
+            cta_row.setContentsMargins(0, 0, 0, 0)
+            cta_row.setSpacing(6)
+            self._auth_cta_signin = QPushButton("Sign in…")
+            self._auth_cta_signin.setToolTip("Open the provider sign-in page")
+            self._auth_cta_signin.clicked.connect(self._open_signin_page)
+            self._auth_cta_settings = QPushButton("Settings…")
+            self._auth_cta_settings.clicked.connect(self._open_settings)
+            cta_row.addWidget(self._auth_cta_signin)
+            cta_row.addWidget(self._auth_cta_settings)
+            cta_row.addStretch(1)
+            self._auth_cta.hide()
+            self._auth_forced = False
+            root.addWidget(self._auth_cta)
+            self._refresh_auth_chip()
+
             self._refresh_send_btn()
 
         def eventFilter(self, obj, event):  # noqa: N802
-            if obj is self._input and event.type() == QEvent.Type.KeyPress:
+            inp = getattr(self, "_input", None)
+            if inp is not None and obj is inp and event.type() == QEvent.Type.KeyPress:
                 key = event.key()
                 mods = event.modifiers()
                 if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and (
@@ -17706,7 +19605,119 @@ def create_ai_assistant_panel(
                 ):
                     self.send_current()
                     return True
+            log = getattr(self, "_log", None)
+            if (
+                log is not None
+                and obj is log.viewport()
+                and event.type() == QEvent.Type.MouseButtonPress
+                and event.button() == Qt.MouseButton.LeftButton
+            ):
+                pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+                if self._try_mermaid_node_click(pos):
+                    return True
             return QWidget.eventFilter(self, obj, event)
+
+        def _try_mermaid_node_click(self, view_pos) -> bool:
+            href = self._log.anchorAt(view_pos) or ""
+            m = re.search(
+                r"btfmermaid:(?://)?zoom[/:]([^?\s#]+)",
+                href,
+                re.IGNORECASE,
+            )
+            if not m:
+                return False
+            src = decode_mermaid_zoom_token(urllib.parse.unquote(m.group(1)))
+            if not src:
+                return False
+            local = self._mermaid_img_local_pos(view_pos)
+            if local is None:
+                return False
+            hit = hit_test_mermaid(src, local[0], local[1])
+            if not hit:
+                return False
+            _kind, value = hit
+            self._on_jump_link(QUrl(f"btfhighlight:{urllib.parse.quote(value, safe='')}"))
+            return True
+
+        def _mermaid_img_local_pos(self, view_pos) -> Optional[Tuple[float, float]]:
+            log = self._log
+            cur = log.cursorForPosition(view_pos)
+            block = cur.block()
+            br = log.document().documentLayout().blockBoundingRect(block)
+            it = block.begin()
+            img_rect = None
+            while not it.atEnd():
+                frag = it.fragment()
+                fmt = frag.charFormat()
+                if fmt.isImageFormat():
+                    rel = frag.position() - block.position()
+                    tl = block.layout()
+                    imgf = fmt.toImageFormat()
+                    w = float(imgf.width() or 0)
+                    h = float(imgf.height() or 0)
+                    if w > 0 and h > 0 and tl is not None:
+                        for li in range(tl.lineCount()):
+                            line = tl.lineAt(li)
+                            if line.textStart() <= rel < line.textStart() + max(line.textLength(), 1):
+                                x1 = _qtextline_cursor_x(line, rel)
+                                img_rect = QRectF(
+                                    br.x() + line.x() + x1,
+                                    br.y() + line.y(),
+                                    w,
+                                    h,
+                                )
+                                break
+                    if img_rect is not None:
+                        break
+                it += 1
+            if img_rect is None:
+                return None
+            doc_x = view_pos.x() + log.horizontalScrollBar().value()
+            doc_y = view_pos.y() + log.verticalScrollBar().value()
+            if not img_rect.contains(doc_x, doc_y):
+                if img_rect.contains(float(view_pos.x()), float(view_pos.y())):
+                    return (
+                        float(view_pos.x()) - img_rect.x(),
+                        float(view_pos.y()) - img_rect.y(),
+                    )
+                return None
+            return doc_x - img_rect.x(), doc_y - img_rect.y()
+
+        def _active_ai_settings(self) -> Dict[str, str]:
+            return resolve_ai_settings(self._settings_dict())
+
+        def _refresh_auth_chip(self) -> None:
+            active = self._active_ai_settings()
+            _id, label, _b, _m = ai_preset_info(active["preset"])
+            st = ai_auth_status(
+                auth_mode=active.get("auth_mode", ""),
+                api_key=active.get("api_key", ""),
+                base_url=active.get("base_url", ""),
+                preset_id=active["preset"],
+            )
+            self._auth_chip.setText(f"{label} · {st['label']}")
+            needs = bool(st["needs_auth"]) or bool(getattr(self, "_auth_forced", False))
+            self._auth_cta.setVisible(needs)
+            url = ai_preset_signin_url(active["preset"], active.get("base_url", ""))
+            self._auth_cta_signin.setVisible(
+                st["mode"] == AI_AUTH_BROWSER or bool(url)
+            )
+            self._auth_cta_signin.setText(ai_preset_signin_label(active["preset"]))
+
+        def _on_auth_chip(self) -> None:
+            self._open_settings()
+
+        def _open_signin_page(self) -> None:
+            active = self._active_ai_settings()
+            url = ai_preset_signin_url(active["preset"], active.get("base_url", ""))
+            if url:
+                QDesktopServices.openUrl(QUrl(url))
+                self._status.setText(
+                    f"Opened {url}. Paste the key or token in Settings → AI.")
+            else:
+                self._status.setText(
+                    "This preset has no sign-in page. Paste a token in Settings → AI.")
+            self._open_settings()
 
         def _open_settings(self) -> None:
             if on_open_settings:
@@ -17728,27 +19739,103 @@ def create_ai_assistant_panel(
             if scheme in ("http", "https", "mailto"):
                 QDesktopServices.openUrl(url)
                 return
+            if scheme == "btfmermaid":
+                raw = url.toString()
+                m = re.search(
+                    r"btfmermaid:(?://)?zoom[/:]([^?\s#]+)",
+                    raw,
+                    re.IGNORECASE,
+                )
+                token = urllib.parse.unquote(m.group(1)) if m else ""
+                src = decode_mermaid_zoom_token(token)
+                if src:
+                    self._open_mermaid_zoom(src)
+                return
+            if scheme == "btfaction":
+                raw = url.toString()
+                m = re.search(
+                    r"btfaction:(?://)?(apply|skip|undo)[/:]([^?\s#]+)",
+                    raw,
+                    re.IGNORECASE,
+                )
+                if m:
+                    self._on_tool_action(m.group(1).lower(), urllib.parse.unquote(m.group(2)))
+                return
+            if scheme == "btfhighlight":
+                name = parse_btf_highlight_href(url.toString())
+                if on_highlight and name:
+                    on_highlight(name)
+                return
             if not on_jump or scheme != "btfjump":
                 return
-            raw = url.path() or url.toString().split(":", 1)[-1]
-            try:
-                value = float(raw)
-            except ValueError:
+            value = parse_btf_jump_href(url.toString())
+            if value is None:
                 return
             on_jump(value)
+
+        def _open_mermaid_zoom(self, source: str) -> None:
+            dlg = _MermaidZoomDialog(source, self, on_link=self._on_jump_link)
+            dlg.exec()
+
+        def _pending_batch_id(self) -> str:
+            for bid, batch in reversed(list(self._pending_batches.items())):
+                tools = batch.get("tools") or []
+                if any(str(t.get("status") or "pending") == "pending" for t in tools if isinstance(t, dict)):
+                    return str(bid)
+            return ""
+
+        def _applied_batch_id(self) -> str:
+            for bid, batch in reversed(list(self._pending_batches.items())):
+                tools = batch.get("tools") or []
+                if any(str(t.get("status") or "") == "applied" for t in tools if isinstance(t, dict)):
+                    return str(bid)
+            return ""
+
+        def _refresh_tool_bar(self) -> None:
+            bar = getattr(self, "_tool_bar", None)
+            if bar is None:
+                return
+            pending = self._pending_batch_id()
+            applied = self._applied_batch_id()
+            self._apply_tools_btn.setVisible(bool(pending))
+            self._skip_tools_btn.setVisible(bool(pending))
+            self._undo_tools_btn.setVisible(bool(applied) and not pending)
+            bar.setVisible(bool(pending or applied))
+
+        def _apply_pending_tools(self) -> None:
+            bid = self._pending_batch_id()
+            if bid:
+                self._on_tool_action("apply", bid)
+
+        def _skip_pending_tools(self) -> None:
+            bid = self._pending_batch_id()
+            if bid:
+                self._on_tool_action("skip", bid)
+
+        def _undo_last_tools(self) -> None:
+            bid = self._applied_batch_id()
+            if bid:
+                self._on_tool_action("undo", bid)
 
         def _refresh_log(self) -> None:
             """Rebuild the log from entries. QTextBrowser.append() merges HTML blocks."""
             if not self._entries:
                 self._log.clear()
+                self._refresh_tool_bar()
                 return
             self._log.document().setDefaultStyleSheet(_AI_LOG_STYLE)
             self._log.setHtml(_ai_log_document_html(self._entries))
             bar = self._log.verticalScrollBar()
             bar.setValue(bar.maximum())
+            self._refresh_tool_bar()
 
-        def _append(self, role: str, text: str) -> None:
-            self._entries.append((role, text))
+        def _append(self, role: str, text: str, **extra: Any) -> None:
+            if extra:
+                entry: Any = {"role": role, "text": text}
+                entry.update(extra)
+                self._entries.append(entry)
+            else:
+                self._entries.append((role, text))
             self._refresh_log()
 
         def clear_conversation(self) -> None:
@@ -17756,8 +19843,12 @@ def create_ai_assistant_panel(
             if self._busy:
                 self.stop_query()
             self._entries.clear()
+            self._chat_messages = []
+            self._pending_batches.clear()
+            self._tool_round = 0
             self._log.clear()
             self._status.setText("")
+            self._refresh_tool_bar()
 
         def _show_log_menu(self, pos) -> None:
             menu = self._log.createStandardContextMenu(pos)
@@ -17871,6 +19962,7 @@ def create_ai_assistant_panel(
         def refresh_enabled_state(self) -> None:
             """Re-apply enable/disable after Settings → AI changes."""
             self._set_busy(self._busy)
+            self._refresh_auth_chip()
 
         def _loaded_tabs(self) -> List[Dict[str, Any]]:
             if not get_loaded_tabs:
@@ -17980,11 +20072,60 @@ def create_ai_assistant_panel(
                 "response_language": DEFAULT_AI_RESPONSE_LANGUAGE,
             }
 
-        def _on_ok(self, text: str) -> None:
-            self._append("assistant", text)
+        def _on_ok(self, payload: str) -> None:
+            self._auth_forced = False
+            self._refresh_auth_chip()
+            try:
+                turn = json.loads(payload) if isinstance(payload, str) else {}
+            except (TypeError, ValueError):
+                turn = {"content": str(payload or ""), "tool_calls": []}
+            if not isinstance(turn, dict):
+                turn = {"content": str(payload or ""), "tool_calls": []}
+            text = str(turn.get("content") or "").strip()
+            calls = turn.get("tool_calls") if isinstance(turn.get("tool_calls"), list) else []
+            if calls:
+                self._chat_messages.append(
+                    canonical_assistant_tool_message(text, calls)
+                )
+            elif text:
+                self._chat_messages.append({"role": "assistant", "content": text})
+
+            tools_norm: List[Dict[str, Any]] = []
+            for c in calls:
+                if not isinstance(c, dict):
+                    continue
+                name = str(c.get("name") or "")
+                args = c.get("arguments") if isinstance(c.get("arguments"), dict) else {}
+                ok_args, err = validate_tool_call(name, args)
+                tools_norm.append({
+                    "id": str(c.get("id") or f"call_{len(tools_norm)}"),
+                    "name": name,
+                    "arguments": ok_args or args,
+                    "error": err,
+                    "status": "pending",
+                })
+
+            auto = parse_ai_auto_apply(self._settings_dict().get("auto_apply"))
+            if tools_norm:
+                self._batch_seq += 1
+                batch_id = f"b{self._batch_seq}"
+                self._pending_batches[batch_id] = {
+                    "tools": tools_norm,
+                    "entry_index": len(self._entries),
+                }
+                self._append("assistant", text, tools=tools_norm, batch_id=batch_id)
+                if auto:
+                    self._cleanup_worker()
+                    self._apply_tool_batch(batch_id, skipped=False)
+                    return
+                self._status.setText("Review GUI actions, then Apply or Skip.")
+                self._cleanup_worker()
+                return
+
+            if text:
+                self._append("assistant", text)
             jumps = extract_jump_times(text)
             if jumps:
-                # Prefer the original token spelling from the reply text.
                 token = _JUMP_RE.search(text or "")
                 label = token.group(1) if token else f"{jumps[0]:g}"
                 self._status.setText(
@@ -17994,9 +20135,103 @@ def create_ai_assistant_panel(
                 self._status.setText("Done.")
             self._cleanup_worker()
 
+        def _on_tool_action(self, action: str, batch_id: str) -> None:
+            action = (action or "").lower()
+            if action == "apply":
+                self._apply_tool_batch(batch_id, skipped=False)
+            elif action == "skip":
+                self._apply_tool_batch(batch_id, skipped=True)
+            elif action == "undo":
+                if on_undo_tools:
+                    on_undo_tools()
+                batch = self._pending_batches.get(batch_id)
+                if batch:
+                    for t in batch.get("tools") or []:
+                        t["status"] = "undone"
+                    idx = int(batch.get("entry_index", -1))
+                    if 0 <= idx < len(self._entries) and isinstance(self._entries[idx], dict):
+                        self._entries[idx]["tools"] = batch["tools"]
+                    self._refresh_log()
+                self._status.setText("Reverted last AI GUI actions.")
+
+        def _apply_tool_batch(self, batch_id: str, *, skipped: bool) -> None:
+            batch = self._pending_batches.get(batch_id)
+            if not batch:
+                return
+            tools = list(batch.get("tools") or [])
+            results: List[Dict[str, Any]] = []
+            if skipped:
+                for t in tools:
+                    t["status"] = "skipped"
+                    results.append(tool_result_payload(False, "User declined to apply this GUI action."))
+            elif on_execute_tools:
+                try:
+                    results = list(on_execute_tools(tools) or [])
+                except Exception as exc:
+                    results = [tool_result_payload(False, str(exc)) for _ in tools]
+                for i, t in enumerate(tools):
+                    res = results[i] if i < len(results) and isinstance(results[i], dict) else {}
+                    t["status"] = "applied" if res.get("ok", True) else "failed"
+                    t["result"] = res.get("message", "")
+            else:
+                for t in tools:
+                    t["status"] = "skipped"
+                    results.append(tool_result_payload(False, "No GUI dispatcher."))
+            idx = int(batch.get("entry_index", -1))
+            if 0 <= idx < len(self._entries) and isinstance(self._entries[idx], dict):
+                self._entries[idx]["tools"] = tools
+            self._refresh_log()
+
+            for t, res in zip(tools, results or [tool_result_payload(False, "")] * len(tools)):
+                self._chat_messages.append(tool_result_message(
+                    tool_call_id=str(t.get("id") or ""),
+                    name=str(t.get("name") or ""),
+                    content=format_tool_result_content(
+                        res if isinstance(res, dict) else tool_result_payload(False, str(res))
+                    ),
+                ))
+            if skipped:
+                self._status.setText("Skipped GUI actions.")
+                self._cleanup_worker()
+                return
+            if self._tool_round >= max_tool_rounds():
+                self._status.setText("Done (tool round limit).")
+                self._cleanup_worker()
+                return
+            self._tool_round += 1
+            self._continue_with_messages()
+
+        def _continue_with_messages(self) -> None:
+            cfg = self._settings_dict()
+            active = resolve_ai_settings(cfg)
+            kwargs = {
+                "query": "",
+                "messages": list(self._chat_messages),
+                "tools": ai_viewer_tools(),
+                "base_url": active["base_url"],
+                "model": active["model"],
+                "api_key": active["api_key"],
+                "response_language": cfg.get(
+                    "response_language", DEFAULT_AI_RESPONSE_LANGUAGE
+                ),
+            }
+            self._set_busy(True)
+            label = ai_preset_info(active["preset"])[1]
+            self._status.setText(f"Waiting for {label} ({active['model']})…")
+            worker = _OllamaWorker(self, kwargs)
+            worker.finished.connect(self._on_ok, Qt.ConnectionType.QueuedConnection)
+            worker.failed.connect(self._on_err, Qt.ConnectionType.QueuedConnection)
+            worker.cancelled.connect(self._on_cancelled, Qt.ConnectionType.QueuedConnection)
+            self._worker = worker
+            worker.start()
+
         def _on_err(self, msg: str) -> None:
             self._append("assistant", f"(Error) {msg}")
             self._status.setText(msg.split("\n", 1)[0][:200])
+            low = (msg or "").lower()
+            if "http 401" in low or "http 403" in low or "api key required" in low:
+                self._auth_forced = True
+            self._refresh_auth_chip()
             self._cleanup_worker()
 
         def _on_cancelled(self) -> None:
@@ -18033,6 +20268,18 @@ def create_ai_assistant_panel(
 
             ctx = normalize_ai_context(ctx)
             self._append("user", query)
+            self._tool_round = 0
+            self._chat_messages = _build_chat_messages(
+                query,
+                findings_text=ctx.get("findings_text", ""),
+                metrics=ctx.get("metrics"),
+                span=ctx.get("span", ""),
+                cores=ctx.get("cores", ""),
+                scope=ctx.get("scope", ""),
+                response_language=cfg.get(
+                    "response_language", DEFAULT_AI_RESPONSE_LANGUAGE
+                ),
+            )
             self._set_busy(True)
             active = resolve_ai_settings(cfg)
             label = ai_preset_info(active["preset"])[1]
@@ -18040,11 +20287,8 @@ def create_ai_assistant_panel(
 
             kwargs = {
                 "query": query,
-                "findings_text": ctx.get("findings_text", ""),
-                "metrics": ctx.get("metrics"),
-                "span": ctx.get("span", ""),
-                "cores": ctx.get("cores", ""),
-                "scope": ctx.get("scope", ""),
+                "messages": list(self._chat_messages),
+                "tools": ai_viewer_tools(),
                 "base_url": active["base_url"],
                 "model": active["model"],
                 "api_key": active["api_key"],
@@ -18114,6 +20358,31 @@ class _AiTestWorker(QObject):
                 on_progress=lambda s: self.progress.emit(s),
             )
             self.finished.emit(msg)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
+class _AiListModelsWorker(QObject):
+    """Background ``GET /models`` for Settings → AI refresh."""
+
+    finished = Signal(list)
+    failed = Signal(str)
+
+    def __init__(self, parent: QObject, *, base_url: str, api_key: str = "") -> None:
+        super().__init__(parent)
+        self._base_url = base_url
+        self._api_key = api_key
+
+    def start(self) -> None:
+        threading.Thread(target=self._run, name="ai-list-models", daemon=True).start()
+
+    def _run(self) -> None:
+        try:
+            names = ai_list_models(
+                base_url=self._base_url,
+                api_key=resolve_ai_api_key(self._api_key),
+            )
+            self.finished.emit([str(n) for n in names if n])
         except Exception as exc:
             self.failed.emit(str(exc))
 
@@ -22495,7 +24764,8 @@ class _ChordDiagramWidget(QWidget):
             fsz = 10 if self._compact else 11
             arc_parts.append(
                 f'<text x="{lp.x():.2f}" y="{lp.y():.2f}" fill="#888888" '
-                f'font-family="monospace" font-size="{fsz}" text-anchor="{anchor}" '
+                f'font-family="{_get_fixed_font_family()}" font-size="{fsz}" '
+                f'text-anchor="{anchor}" '
                 f'dominant-baseline="middle">{esc(_core_short_name(arc.core))}</text>')
 
         parts = [
@@ -24131,6 +26401,7 @@ def _lb_gauge_svg_body(
     tip_x = cx + math.cos(rad) * needle_len
     tip_y = cy - math.sin(rad) * needle_len
     value_y = cy - round(r * 0.28)
+    sans = _get_sans_font_family()
     return (
         "<defs>"
         f'<linearGradient id="{uid}" x1="0%" y1="0%" x2="100%" y2="0%">'
@@ -24139,7 +26410,7 @@ def _lb_gauge_svg_body(
         f'<stop offset="100%" stop-color="{end_color}"/>'
         "</linearGradient></defs>"
         f'<text x="{cx}" y="18" text-anchor="middle" fill="#1A2030" '
-        f'font-family="system-ui,sans-serif" font-size="10" font-weight="600">{title}</text>'
+        f'font-family="{sans}" font-size="10" font-weight="600">{title}</text>'
         f'<path d="{bg}" fill="none" stroke="#D8DCE4" stroke-width="{stroke_w:.0f}" '
         f'stroke-linecap="round"/>'
         f'<path d="{fill}" fill="none" stroke="url(#{uid})" stroke-width="{stroke_w:.0f}" '
@@ -24148,10 +26419,10 @@ def _lb_gauge_svg_body(
         f'stroke="#1A2030" stroke-width="2" stroke-linecap="round"/>'
         f'<circle cx="{cx}" cy="{cy}" r="3.5" fill="#FFFFFF" stroke="#1A2030" stroke-width="1.75"/>'
         f'<text x="{cx}" y="{value_y:.0f}" text-anchor="middle" fill="{accent}" '
-        f'font-family="system-ui,sans-serif" font-size="12" font-weight="700">'
+        f'font-family="{sans}" font-size="12" font-weight="700">'
         f"{value_label}</text>"
         f'<text x="{cx}" y="{cy + 16:.0f}" text-anchor="middle" fill="#6A7388" '
-        f'font-family="system-ui,sans-serif" font-size="9">{legend}</text>'
+        f'font-family="{sans}" font-size="9">{legend}</text>'
     )
 
 
@@ -24177,6 +26448,8 @@ def _load_balance_gauge_svg(metrics: dict, *, width: int = 300, dark: bool = Fal
     h = int(round(width * view_h / view_w))
     times = "\u00d7"
     minus = "\u2212"
+    sans = _get_sans_font_family()
+    mono = _get_fixed_font_family()
     if zone == "red":
         card_stroke = "#E57373"
     elif zone == "amber":
@@ -24209,15 +26482,15 @@ def _load_balance_gauge_svg(metrics: dict, *, width: int = 300, dark: bool = Fal
     if zone == "red":
         chip = (
             '<rect x="210" y="8" width="80" height="18" rx="5" fill="#FDECEA" stroke="#E57373"/>'
-            '<text x="250" y="21" text-anchor="middle" fill="#C62828" '
-            'font-family="system-ui,sans-serif" font-size="10" font-weight="700">'
+            f'<text x="250" y="21" text-anchor="middle" fill="#C62828" '
+            f'font-family="{sans}" font-size="10" font-weight="700">'
             "Unbalanced</text>"
         )
     elif zone == "amber":
         chip = (
             '<rect x="228" y="8" width="62" height="18" rx="5" fill="#FFF6E5" stroke="#E0A020"/>'
-            '<text x="259" y="21" text-anchor="middle" fill="#C47F00" '
-            'font-family="system-ui,sans-serif" font-size="10" font-weight="700">'
+            f'<text x="259" y="21" text-anchor="middle" fill="#C47F00" '
+            f'font-family="{sans}" font-size="10" font-weight="700">'
             "σ &gt; 30%</text>"
         )
     return (
@@ -24227,7 +26500,7 @@ def _load_balance_gauge_svg(metrics: dict, *, width: int = 300, dark: bool = Fal
         f'<rect width="100%" height="100%" rx="8" fill="#F7F8FA" stroke="{card_stroke}"/>'
         f"{left}{right}"
         f'<text x="{view_w / 2}" y="{view_h - 8}" text-anchor="middle" fill="#6A7388" '
-        f'font-family="Menlo,Consolas,Monaco,monospace" font-size="9">'
+        f'font-family="{mono}" font-size="9">'
         f"G={gini:.3f} · Score=100{times}(1{minus}Gini)</text>"
         f"{chip}</svg>"
     )
@@ -29979,6 +32252,7 @@ class _RcSettings:
                 "enabled": "true",
                 "preset": "",
                 "response_language": DEFAULT_AI_RESPONSE_LANGUAGE,
+                "auto_apply": "false",
             },
             **{
                 f"{_pid}_{_field}": ""
@@ -30468,6 +32742,7 @@ class _SettingsDialog(QDialog):
                  ai_preset: str = DEFAULT_AI_PRESET,
                  ai_preset_settings: Optional[Dict[str, Dict[str, str]]] = None,
                  response_language: str = DEFAULT_AI_RESPONSE_LANGUAGE,
+                 ai_auto_apply: bool = False,
                  initial_page: str = "Appearance"):
         super().__init__(parent, Qt.WindowType.Dialog)
         self.setWindowTitle("Settings")
@@ -30582,14 +32857,19 @@ class _SettingsDialog(QDialog):
         self._font_spin.setRange(6, 24)
         self._font_spin.setSuffix(" pt")
         self._font_spin.setValue(font_size)
-        self._font_spin.setToolTip("Font size for task / core labels drawn on the timeline")
+        self._font_spin.setToolTip(
+            "Font size for task / core labels drawn on the timeline "
+            "(Qt points, HiDPI-scaled). The web viewer uses CSS pixels; "
+            "defaults look similar, numbers are not interchangeable.")
         f1.addRow("Timeline labels:", _inp(self._font_spin))
 
         self._ui_font_spin = QSpinBox()
         self._ui_font_spin.setRange(8, 18)
         self._ui_font_spin.setSuffix(" pt")
         self._ui_font_spin.setValue(ui_font_size)
-        self._ui_font_spin.setToolTip("Font size for menus, toolbar and status bar")
+        self._ui_font_spin.setToolTip(
+            "Font size for menus, toolbar and status bar (Qt points). "
+            "The web viewer uses CSS pixels.")
         f1.addRow("UI / menus:", _inp(self._ui_font_spin))
 
         self._content_stack.addWidget(p1)
@@ -30788,16 +33068,29 @@ class _SettingsDialog(QDialog):
             "When off, hides the AI tab. When on, the AI panel can send "
             "Analysis Findings to the configured endpoint.")
         f4.addRow("", self._ai_enabled_cb)
+        self._ai_auto_apply_cb = QCheckBox("Auto-apply GUI actions")
+        self._ai_auto_apply_cb.setChecked(bool(ai_auto_apply))
+        self._ai_auto_apply_cb.setToolTip(
+            "When on, tool calls from the model update the timeline immediately. "
+            "When off, the chat shows Apply / Skip on each action card and "
+            "Apply GUI actions under the log.")
+        f4.addRow("", self._ai_auto_apply_cb)
 
         # Field values per preset; switching presets stashes the current inputs
         # so credentials survive a round trip.
         self._ai_preset_values: Dict[str, Dict[str, str]] = {}
         for _pid, _label, _base, _model in AI_PRESETS:
             stored = dict((ai_preset_settings or {}).get(_pid) or {})
+            base = str(stored.get("base_url", "") or _base)
             self._ai_preset_values[_pid] = {
-                "base_url": str(stored.get("base_url", "") or _base),
+                "base_url": base,
                 "model": str(stored.get("model", "") or _model),
                 "api_key": str(stored.get("api_key", "") or ""),
+                "auth_mode": normalize_ai_auth_mode(
+                    stored.get("auth_mode", ""),
+                    preset_id=_pid,
+                    base_url=base,
+                ),
             }
 
         self._ai_preset_combo = QComboBox()
@@ -30823,21 +33116,81 @@ class _SettingsDialog(QDialog):
         self._ai_url_edit.setMinimumWidth(280)
         f4.addRow("Base URL:", self._ai_url_edit)
 
-        self._ai_model_edit = QLineEdit()
-        self._ai_model_edit.setPlaceholderText(DEFAULT_AI_MODEL)
-        self._ai_model_edit.setToolTip(
+        self._ai_model_lists: Dict[str, List[str]] = {
+            _pid: [] for _pid, _lab, _u, _m in AI_PRESETS
+        }
+        self._ai_model_combo = QComboBox()
+        self._ai_model_combo.setEditable(True)
+        self._ai_model_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self._ai_model_combo.setToolTip(
             "Model id served by that endpoint (e.g. `ollama list` name, "
-            "gpt-4o-mini, or gemini-flash-lite-latest).")
-        self._ai_model_edit.setMinimumWidth(240)
-        f4.addRow("Model:", self._ai_model_edit)
+            "gpt-4o-mini, or gemini-flash-lite-latest). Refresh to list "
+            "models from GET /models.")
+        _wide_combo(self._ai_model_combo, [DEFAULT_AI_MODEL], min_w=240)
+        _ic = "#AAAAAA" if is_dark else "#555555"
+        self._ai_model_refresh = QToolButton()
+        self._ai_model_refresh.setAutoRaise(True)
+        self._ai_model_refresh.setIcon(_svg_icon(_IC_REFRESH, _ic, 14))
+        self._ai_model_refresh.setIconSize(QSize(14, 14))
+        self._ai_model_refresh.setFixedSize(26, 26)
+        self._ai_model_refresh.setToolTip("Refresh model list from this endpoint")
+        self._ai_model_refresh.clicked.connect(self._refresh_ai_models)
+        _model_row = QWidget()
+        _model_h = QHBoxLayout(_model_row)
+        _model_h.setContentsMargins(0, 0, 0, 0)
+        _model_h.setSpacing(6)
+        _model_h.addWidget(self._ai_model_combo, 1)
+        _model_h.addWidget(self._ai_model_refresh, 0)
+        f4.addRow("Model:", _model_row)
 
+        self._ai_auth_combo = QComboBox()
+        for _mode, _mlabel in AI_AUTH_MODE_LABELS:
+            self._ai_auth_combo.addItem(_mlabel, _mode)
+        self._ai_auth_combo.setToolTip(
+            "How this preset authenticates. None for a local server; API key "
+            "to paste a provider key; Sign in opens the vendor page so you can "
+            "log in and paste the key or token.")
+        _wide_combo(
+            self._ai_auth_combo,
+            [lab for _m, lab in AI_AUTH_MODE_LABELS],
+            min_w=200,
+        )
+        f4.addRow("Authentication:", self._ai_auth_combo)
+
+        self._ai_cred_wrap = QWidget()
+        _cred = QVBoxLayout(self._ai_cred_wrap)
+        _cred.setContentsMargins(0, 0, 0, 0)
+        _cred.setSpacing(6)
+        self._ai_auth_status = QLabel("")
+        self._ai_auth_status.setWordWrap(True)
+        self._ai_auth_status.setStyleSheet("color:#888;")
+        _cred.addWidget(self._ai_auth_status)
         self._ai_api_key_edit = QLineEdit()
         self._ai_api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self._ai_api_key_edit.setToolTip(
-            "API key for this preset (or OPENAI_API_KEY / GEMINI_API_KEY / "
-            "OLLAMA_API_KEY in the environment). Local Ollama needs none. "
-            "Stored per preset in btf_viewer.rc.")
-        f4.addRow("API key:", self._ai_api_key_edit)
+            "API key or access token for this preset (or OPENAI_API_KEY / "
+            "GEMINI_API_KEY / OLLAMA_API_KEY in the environment). Local Ollama "
+            "needs none. Stored per preset in btf_viewer.rc.")
+        _cred.addWidget(self._ai_api_key_edit)
+        _auth_btns = QWidget()
+        _auth_h = QHBoxLayout(_auth_btns)
+        _auth_h.setContentsMargins(0, 0, 0, 0)
+        _auth_h.setSpacing(8)
+        self._ai_signin_btn = QPushButton("Sign in…")
+        self._ai_signin_btn.setToolTip(
+            "Open the provider sign-in or API-key page in your browser, then "
+            "paste the key or token above.")
+        self._ai_signin_btn.clicked.connect(self._ai_open_signin)
+        self._ai_logout_btn = QPushButton("Log out")
+        self._ai_logout_btn.setToolTip("Clear the saved key or token for this preset.")
+        self._ai_logout_btn.clicked.connect(self._ai_logout)
+        _auth_h.addWidget(self._ai_signin_btn)
+        _auth_h.addWidget(self._ai_logout_btn)
+        _auth_h.addStretch()
+        _cred.addWidget(_auth_btns)
+        self._ai_cred_label = QLabel("API key:")
+        f4.addRow(self._ai_cred_label, self._ai_cred_wrap)
+        self._ai_auth_combo.currentIndexChanged.connect(self._on_ai_auth_mode_changed)
 
         self._response_lang_combo = QComboBox()
         self._response_lang_combo.addItems(list(AI_RESPONSE_LANGUAGES))
@@ -30895,6 +33248,7 @@ class _SettingsDialog(QDialog):
         self._ai_preset_combo.currentIndexChanged.connect(self._on_ai_preset_changed)
 
         self._ollama_test_worker = None
+        self._ai_list_worker = None
 
         self._content_stack.addWidget(p4)
 
@@ -30989,36 +33343,142 @@ class _SettingsDialog(QDialog):
         """Remember the typed values for the preset currently shown."""
         self._ai_preset_values[self._ai_active_preset] = {
             "base_url": self._ai_url_edit.text().strip(),
-            "model": self._ai_model_edit.text().strip(),
+            "model": self._ai_model_text(),
             "api_key": self._ai_api_key_edit.text().strip(),
+            "auth_mode": normalize_ai_auth_mode(
+                self._ai_auth_combo.currentData(),
+                preset_id=self._ai_active_preset,
+                base_url=self._ai_url_edit.text().strip(),
+            ),
         }
+
+    def _ai_model_text(self) -> str:
+        return self._ai_model_combo.currentText().strip()
+
+    def _set_ai_model_text(self, text: str) -> None:
+        names = list(self._ai_model_lists.get(self._ai_active_preset) or [])
+        self._fill_ai_model_combo(names, text)
+
+    def _fill_ai_model_combo(self, names: Sequence[str], current: str) -> None:
+        combo = self._ai_model_combo
+        current = str(current or "").strip()
+        seen: List[str] = []
+        for n in names:
+            s = str(n or "").strip()
+            if s and s not in seen:
+                seen.append(s)
+        if current and current not in seen:
+            seen.insert(0, current)
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItems(seen)
+        if current:
+            idx = combo.findText(current)
+            if idx >= 0:
+                combo.setCurrentIndex(idx)
+            combo.setEditText(current)
+        else:
+            combo.setCurrentIndex(-1)
+            combo.setEditText("")
+        combo.blockSignals(False)
+        le = combo.lineEdit()
+        if le is not None:
+            _pid, _lab, _b, def_model = ai_preset_info(self._ai_active_preset)
+            le.setPlaceholderText(def_model or DEFAULT_AI_MODEL)
 
     def _load_ai_preset_fields(self, preset: str) -> None:
         _pid, label, def_base, def_model = ai_preset_info(preset)
         vals = self._ai_preset_values.get(_pid, {})
-        self._ai_url_edit.setText(vals.get("base_url", "") or def_base)
-        self._ai_model_edit.setText(vals.get("model", "") or def_model)
+        base = vals.get("base_url", "") or def_base
+        self._ai_url_edit.setText(base)
+        self._set_ai_model_text(vals.get("model", "") or def_model)
         self._ai_api_key_edit.setText(vals.get("api_key", ""))
         self._ai_url_edit.setPlaceholderText(def_base or DEFAULT_AI_BASE_URL)
-        self._ai_model_edit.setPlaceholderText(def_model or DEFAULT_AI_MODEL)
-        local = _pid == AI_PRESET_OLLAMA
-        self._ai_api_key_edit.setPlaceholderText(
-            "Optional — local Ollama needs none" if local
-            else "Required — provider API key")
-        if local:
+        mode = normalize_ai_auth_mode(
+            vals.get("auth_mode", ""), preset_id=_pid, base_url=base)
+        idx = self._ai_auth_combo.findData(mode)
+        self._ai_auth_combo.blockSignals(True)
+        self._ai_auth_combo.setCurrentIndex(max(0, idx))
+        self._ai_auth_combo.blockSignals(False)
+        self._update_ai_auth_ui()
+
+    def _on_ai_auth_mode_changed(self, *_args) -> None:
+        self._update_ai_auth_ui()
+
+    def _update_ai_auth_ui(self) -> None:
+        _pid, label, def_base, _def_model = ai_preset_info(self._ai_active_preset)
+        base = self._ai_url_edit.text().strip() or def_base
+        mode = normalize_ai_auth_mode(
+            self._ai_auth_combo.currentData(), preset_id=_pid, base_url=base)
+        key = self._ai_api_key_edit.text().strip()
+        status = ai_auth_status(
+            auth_mode=mode, api_key=key, base_url=base, preset_id=_pid)
+        show_cred = mode != AI_AUTH_NONE
+        self._ai_cred_wrap.setVisible(show_cred)
+        self._ai_cred_label.setVisible(show_cred)
+        self._ai_cred_label.setText(
+            "Token:" if mode == AI_AUTH_BROWSER else "API key:")
+        self._ai_signin_btn.setVisible(mode == AI_AUTH_BROWSER)
+        self._ai_signin_btn.setText(ai_preset_signin_label(_pid))
+        self._ai_logout_btn.setVisible(mode == AI_AUTH_BROWSER and bool(key))
+        if mode == AI_AUTH_NONE:
+            self._ai_auth_status.setText("Local endpoint — no key needed.")
+            self._ai_api_key_edit.setPlaceholderText(
+                "Optional — local Ollama needs none")
+        elif mode == AI_AUTH_BROWSER:
+            self._ai_auth_status.setText(
+                "Signed in — token saved." if status["signed_in"]
+                else "Not signed in. Open the provider page, then paste the "
+                "key or token below.")
+            self._ai_api_key_edit.setPlaceholderText(
+                "Paste key or token after signing in")
+        else:
+            self._ai_auth_status.setText(
+                "Key saved for this preset." if key
+                else "Paste a provider API key, or set OPENAI_API_KEY / "
+                "GEMINI_API_KEY in the environment.")
+            self._ai_api_key_edit.setPlaceholderText(
+                "Required — provider API key")
+        if _pid == AI_PRESET_OLLAMA and mode == AI_AUTH_NONE:
             self._ai_hint.setText(
                 f"Install Ollama and pull a model (`ollama pull {DEFAULT_AI_MODEL}`); "
                 "the viewer talks to its OpenAI-compatible endpoint. Context is "
                 "Analysis Findings for the current Statistics scope — not the raw BTF."
             )
         else:
-            key_url = AI_PRESET_KEY_URLS.get(_pid, "")
+            key_url = AI_PRESET_KEY_URLS.get(_pid, "") or ai_preset_signin_url(
+                _pid, base)
             where = f" ({label} keys come from {key_url})" if key_url else ""
-            self._ai_hint.setText(
-                f"{label} is an OpenAI-compatible endpoint: set Base URL, model, and "
-                f"an API key{where}. Context is Analysis Findings for the current "
-                "Statistics scope — not the raw BTF."
-            )
+            if mode == AI_AUTH_BROWSER:
+                self._ai_hint.setText(
+                    f"Sign in opens the {label} page in your browser. Paste the "
+                    f"issued key or token here, then Test connection.{where} "
+                    "Context is Analysis Findings — not the raw BTF."
+                )
+            else:
+                self._ai_hint.setText(
+                    f"{label} is an OpenAI-compatible endpoint: set Base URL, model, "
+                    f"and an API key{where}. Context is Analysis Findings for the "
+                    "current Statistics scope — not the raw BTF."
+                )
+
+    def _ai_open_signin(self) -> None:
+        _pid, _label, def_base, _m = ai_preset_info(self._ai_active_preset)
+        url = ai_preset_signin_url(
+            _pid, self._ai_url_edit.text().strip() or def_base)
+        if not url:
+            self._set_ai_status(
+                "This preset has no sign-in page. Paste a token or set Base URL.",
+                "error")
+            return
+        QDesktopServices.openUrl(QUrl(url))
+        self._set_ai_status(
+            f"Opened {url}. After you sign in, paste the key or token and Test.")
+
+    def _ai_logout(self) -> None:
+        self._ai_api_key_edit.clear()
+        self._update_ai_auth_ui()
+        self._set_ai_status("Cleared the saved token for this preset.")
 
     def _on_ai_preset_changed(self, *_args) -> None:
         self._stash_ai_preset_fields()
@@ -31089,16 +33549,60 @@ class _SettingsDialog(QDialog):
         _pid, _label, def_base, def_model = ai_preset_info(self._ai_active_preset)
         return (
             self._ai_url_edit.text().strip() or def_base,
-            self._ai_model_edit.text().strip() or def_model,
+            self._ai_model_text() or def_model,
             self._ai_api_key_edit.text().strip(),
         )
 
+    def _refresh_ai_models(self) -> None:
+        """Fetch ``GET /models`` into the Model combo."""
+        if self._ai_list_worker is not None or self._ollama_test_worker is not None:
+            return
+        url, _model, api_key = self._ai_test_target()
+        self._ai_model_refresh.setEnabled(False)
+        self._set_ai_status(f"Listing models at {url}…")
+        worker = _AiListModelsWorker(self, base_url=url, api_key=api_key)
+        worker.finished.connect(
+            self._on_ai_models_ok, Qt.ConnectionType.QueuedConnection)
+        worker.failed.connect(
+            self._on_ai_models_err, Qt.ConnectionType.QueuedConnection)
+        self._ai_list_worker = worker
+        worker.start()
+
+    def _on_ai_models_ok(self, names: object) -> None:
+        listed = [str(n) for n in (names or []) if n]
+        listed.sort(key=str.lower)
+        self._ai_model_lists[self._ai_active_preset] = listed
+        current = self._ai_model_text()
+        self._fill_ai_model_combo(listed, current)
+        if listed:
+            self._set_ai_status(f"{len(listed)} model(s) from the endpoint.", "ok")
+        else:
+            self._set_ai_status("Endpoint listed no models.", "error")
+        self._cleanup_ai_list_worker()
+
+    def _on_ai_models_err(self, msg: str) -> None:
+        self._set_ai_status(msg or "Cannot list models.", "error")
+        self._cleanup_ai_list_worker()
+
+    def _cleanup_ai_list_worker(self) -> None:
+        self._ai_model_refresh.setEnabled(True)
+        worker = self._ai_list_worker
+        self._ai_list_worker = None
+        if worker is not None:
+            try:
+                worker.finished.disconnect(self._on_ai_models_ok)
+                worker.failed.disconnect(self._on_ai_models_err)
+            except (TypeError, RuntimeError):
+                pass
+            worker.deleteLater()
+
     def _test_ollama_connection(self) -> None:
         """Test the configured endpoint with the typed Settings fields."""
-        if self._ollama_test_worker is not None:
+        if self._ollama_test_worker is not None or self._ai_list_worker is not None:
             return
         url, model, api_key = self._ai_test_target()
         self._ollama_test_btn.setEnabled(False)
+        self._ai_model_refresh.setEnabled(False)
         self._ollama_test_btn.setText("Testing…")
         self._set_ai_status(f"Starting test for {url} / {model}…")
 
@@ -31131,6 +33635,7 @@ class _SettingsDialog(QDialog):
 
     def _cleanup_ollama_test(self) -> None:
         self._ollama_test_btn.setEnabled(True)
+        self._ai_model_refresh.setEnabled(True)
         self._ollama_test_btn.setText("Test connection")
         worker = self._ollama_test_worker
         self._ollama_test_worker = None
@@ -31171,10 +33676,13 @@ class _SettingsDialog(QDialog):
         self._task_deadlines_edit.setPlainText("")
         self._time_decimals_spin.setValue(_DEFAULT_TIME_DECIMALS)
         self._ai_enabled_cb.setChecked(True)
+        self._ai_auto_apply_cb.setChecked(False)
         for _pid, _label, _base, _model in AI_PRESETS:
             self._ai_preset_values[_pid] = {
                 "base_url": _base, "model": _model, "api_key": "",
+                "auth_mode": default_ai_auth_mode(_pid, _base),
             }
+            self._ai_model_lists[_pid] = []
         self._ai_active_preset = DEFAULT_AI_PRESET
         self._ai_preset_combo.setCurrentIndex(
             max(0, self._ai_preset_combo.findData(DEFAULT_AI_PRESET)))
@@ -31235,6 +33743,8 @@ class _SettingsDialog(QDialog):
     def task_deadlines_text(self) -> str: return self._task_deadlines_edit.toPlainText()
     @property
     def ai_enabled(self) -> bool:         return self._ai_enabled_cb.isChecked()
+    @property
+    def ai_auto_apply(self) -> bool:      return self._ai_auto_apply_cb.isChecked()
     @property
     def ai_preset(self) -> str:
         return normalize_ai_preset(self._ai_preset_combo.currentData())
@@ -38054,6 +40564,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             on_open_settings=lambda: self._open_settings("AI"),
             on_save_settings=self._ai_save_settings_patch,
             on_jump=self._ai_jump_time_unit,
+            on_highlight=self._ai_highlight_task,
+            on_execute_tools=self._ai_execute_tools,
+            on_undo_tools=self._ai_undo_tools,
             get_loaded_tabs=self._ai_list_loaded_tabs,
             build_compare_context=self._ai_build_compare_context,
         )
@@ -38361,7 +40874,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._act_zoom_1to1 = _ia("1:1", lambda: self._view.zoom_1to1(), _IC_1TO1, "Zoom to 1:1 scale")
         _ia("Fit",      lambda: self._view.zoom_fit(),  _IC_FIT,  "Fit entire trace to window  (Ctrl+0)")
         self._tb_zoom_range_btn = _ia("Range", self._zoom_to_cursor_range, _IC_EXPAND,
-                                      "Zoom view to fit between cursor C1 and C2  (Ctrl+R)")
+                                      "Zoom view to fit between cursor C1 and last cursor  (Ctrl+R)")
         self._tb_zoom_range_btn.setEnabled(False)
 
         _ia("Find", self._focus_find, _IC_FIND,
@@ -38873,7 +41386,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     @classmethod
     def _ai_setting_keys(cls) -> list:
-        keys = ["enabled", "preset", "response_language"]
+        keys = ["enabled", "preset", "response_language", "auto_apply"]
         keys += [
             f"{pid}_{field}"
             for pid, _label, _base, _model in AI_PRESETS
@@ -38889,6 +41402,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         cfg["enabled"] = cfg["enabled"] or "true"
         cfg["response_language"] = (
             cfg["response_language"] or DEFAULT_AI_RESPONSE_LANGUAGE)
+        cfg["auto_apply"] = cfg["auto_apply"] or "false"
 
         legacy = {k: s.get("ai", k, "") for k in self._AI_LEGACY_KEYS}
         patch = migrate_ai_settings({**cfg, **legacy})
@@ -38979,10 +41493,21 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         elif hasattr(panel, "refresh_template_availability"):
             panel.refresh_template_availability()
 
+    def _ai_stop_zoom_anim(self) -> None:
+        anim = getattr(self, "_ai_zoom_anim", None)
+        if anim is None:
+            return
+        try:
+            anim.stop()
+        except RuntimeError:
+            pass
+        self._ai_zoom_anim = None
+
     def _ai_jump_time_unit(self, value: float) -> None:
         """Jump to *value* (trace time unit) and drop an annotation there."""
         if self._trace is None:
             return
+        self._ai_stop_zoom_anim()
         ns = int(float(value))
         note = ai_jump_annotation_note(value)
         self._jump_to_ns(ns)
@@ -38990,6 +41515,233 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             if int(ann.ns) == ns and ann.note == note:
                 return
         self._add_annotation_with_note(ns, note, show_marks_panel=False)
+
+    def _ai_task_candidates(self) -> list:
+        tr = self._trace
+        if tr is None:
+            return []
+        names = [str(t) for t in (getattr(tr, "tasks", None) or [])]
+        seg_map = getattr(tr, "seg_map_by_merge_key", None) or {}
+        names.extend(str(k) for k in seg_map.keys())
+        return names
+
+    def _ai_highlight_task(self, name: str) -> None:
+        """Lock-highlight *name* (empty clears). Used by tools and diagram clicks.
+
+        Task labels lock-highlight a row. Core aliases (``Core_0``, ``C0``, ``0``)
+        switch to Core View, expand that core, and scroll to it.
+        """
+        if self._trace is None or not hasattr(self, "_view"):
+            return
+        scene = self._view._scene
+        key = (name or "").strip()
+        if not key:
+            scene.set_highlighted_task(None)
+            return
+        resolved = resolve_task_key(key, self._ai_task_candidates())
+        if resolved:
+            mk = _task_merge_key(resolved)
+            scene.set_highlighted_task(mk, locked=True)
+            self._scroll_view_to_task(mk)
+            return
+        cores = list(getattr(self._trace, "core_names", None) or [])
+        core = resolve_core_key(key, cores)
+        if not core:
+            return
+        if getattr(self, "_view_mode", "task") != "core":
+            self._set_view_mode("core")
+        scene = self._view._scene
+        scene.set_highlighted_task(None)
+        scene.set_core_expanded(core, True)
+        cpu = getattr(self, "_cpu_load_graph", None)
+        if cpu is not None and hasattr(cpu, "set_core_expanded"):
+            cpu.set_core_expanded(core, True)
+        self._scroll_view_to_task(core)
+
+    def _ai_capture_gui_snapshot(self) -> dict:
+        view = getattr(self, "_view", None)
+        scene = view._scene if view is not None else None
+        dlg = self._heatmap_dlg or self._chord_dlg
+        return {
+            "cursors": list(scene.cursor_times()) if scene is not None else [],
+            "view_mode": getattr(self, "_view_mode", "task"),
+            "horizontal": bool(getattr(scene, "_horizontal", True)) if scene else True,
+            "highlight": getattr(scene, "_locked_task", None) if scene else None,
+            "tpp": float(scene._timescale_per_px) if scene is not None else None,
+            "fit_mode": bool(getattr(view, "_fit_mode", False)) if view is not None else False,
+            "hscroll": view.horizontalScrollBar().value() if view is not None else 0,
+            "vscroll": view.verticalScrollBar().value() if view is not None else 0,
+            "inspector": bool(dlg is not None and dlg.isVisible()),
+        }
+
+    def _ai_restore_gui_snapshot(self, snap: dict) -> None:
+        view = getattr(self, "_view", None)
+        if view is None or not snap:
+            return
+        scene = view._scene
+        view.begin_programmatic_viewport()
+        try:
+            scene.clear_cursors()
+            for ns in snap.get("cursors") or []:
+                scene.add_cursor(int(ns))
+            view.cursors_changed.emit(scene.cursor_times())
+        finally:
+            view.end_programmatic_viewport()
+        mode = snap.get("view_mode")
+        if mode in ("task", "core"):
+            self._set_view_mode(mode)
+        horiz = snap.get("horizontal")
+        if horiz is not None:
+            self._set_orientation(bool(horiz))
+        hl = snap.get("highlight")
+        scene.set_highlighted_task(hl, locked=bool(hl))
+        if snap.get("fit_mode"):
+            view.zoom_fit()
+        else:
+            tpp = snap.get("tpp")
+            if tpp:
+                scene._timescale_per_px = float(tpp)
+                scene.rebuild()
+                view._fit_mode = False
+            view.horizontalScrollBar().setValue(int(snap.get("hscroll") or 0))
+            view.verticalScrollBar().setValue(int(snap.get("vscroll") or 0))
+        if not snap.get("inspector"):
+            dlg = self._heatmap_dlg or self._chord_dlg
+            if dlg is not None:
+                dlg.close()
+        if hasattr(self, "_stats_panel"):
+            self._stats_panel.set_cursor_times(scene.cursor_times(), refresh_stats=True)
+
+    def _ai_zoom_to_range(self, ns_lo: float, ns_hi: float) -> None:
+        view = getattr(self, "_view", None)
+        if view is None or self._trace is None:
+            return
+        scene = view._scene
+        lo, hi = int(min(ns_lo, ns_hi)), int(max(ns_lo, ns_hi))
+        if lo == hi:
+            return
+        span = max(hi - lo, 1)
+        pad = max(1, int(span * 0.05))
+        tmin = int(self._trace.time_min)
+        tmax = int(self._trace.time_max)
+        lo = max(tmin, lo - pad)
+        hi = min(tmax, hi + pad)
+        if lo >= hi:
+            return
+        view._fit_mode = False
+        vp = view.viewport().rect()
+        vp_px = max(vp.width() if scene._horizontal else vp.height(), 100)
+        mid = (lo + hi) // 2
+        start_tpp = float(scene._timescale_per_px)
+        span = max(hi - lo, 1)
+        avail = max(vp_px - scene._label_width, 100)
+        end_tpp = max(span / avail, float(scene._timescale_per_px_default))
+
+        def _finish() -> None:
+            scene.zoom_to_range(lo, hi, vp_px)
+            view.scroll_to_ns(mid)
+
+        if abs(end_tpp - start_tpp) < 1e-6:
+            _finish()
+            return
+        anim = QVariantAnimation(self)
+        anim.setDuration(280)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+
+        def _tick(value) -> None:
+            t = max(0.0, min(1.0, float(value)))
+            te = 1.0 - (1.0 - t) * (1.0 - t)
+            scene._timescale_per_px = start_tpp + (end_tpp - start_tpp) * te
+            scene.rebuild()
+            view.scroll_to_ns(mid)
+
+        anim.valueChanged.connect(_tick)
+        anim.finished.connect(_finish)
+        self._ai_zoom_anim = anim
+        anim.start()
+
+    def _ai_execute_tools(self, calls: list) -> list:
+        """Apply validated viewer tools; snapshot first so Undo can revert."""
+        self._ai_tool_undo = self._ai_capture_gui_snapshot()
+        self._push_undo_snapshot()
+        results = []
+        for call in calls or []:
+            if not isinstance(call, dict):
+                continue
+            name = str(call.get("name") or "")
+            args = call.get("arguments") if isinstance(call.get("arguments"), dict) else {}
+            err = str(call.get("error") or "")
+            if err:
+                results.append(tool_result_payload(False, err))
+                continue
+            norm, verr = validate_tool_call(name, args)
+            if verr:
+                results.append(tool_result_payload(False, verr))
+                continue
+            try:
+                msg = self._ai_dispatch_one(name, norm or {})
+                results.append(tool_result_payload(True, msg))
+            except Exception as exc:
+                results.append(tool_result_payload(False, str(exc)))
+        return results
+
+    def _ai_dispatch_one(self, name: str, args: dict) -> str:
+        if self._trace is None:
+            raise RuntimeError("No trace loaded")
+        if name == AI_TOOL_SET_CURSORS:
+            times = [int(t) for t in args.get("timestamps") or []]
+            max_c = max(1, int(getattr(self, "_max_cursors_val", 4) or 4))
+            times = times[:max_c]
+            view = self._view
+            view.begin_programmatic_viewport()
+            try:
+                view._scene.clear_cursors()
+                for ns in times:
+                    view._scene.add_cursor(ns)
+                view.cursors_changed.emit(view._scene.cursor_times())
+            finally:
+                view.end_programmatic_viewport()
+            if hasattr(self, "_stats_panel"):
+                self._stats_panel.set_cursor_times(
+                    view._scene.cursor_times(), refresh_stats=True)
+            return f"Placed {len(times)} cursor(s)"
+        if name == AI_TOOL_ZOOM_TO_RANGE:
+            self._ai_zoom_to_range(args["start_time"], args["end_time"])
+            return "Zoomed to range"
+        if name == AI_TOOL_HIGHLIGHT_TASK:
+            key = str(args.get("task_name_or_id") or "")
+            self._ai_highlight_task(key)
+            return "Cleared highlight" if not key else f"Highlighted {key}"
+        if name == AI_TOOL_SET_VIEW_MODE:
+            self._set_view_mode(args["mode"])
+            ori = args.get("orientation")
+            if ori == "horizontal":
+                self._set_orientation(True)
+            elif ori == "vertical":
+                self._set_orientation(False)
+            return f"View mode {args['mode']}"
+        if name == AI_TOOL_OPEN_CORRIDOR:
+            cores = list(getattr(self._trace, "core_names", None) or [])
+            src_raw = str(args.get("core_from") or "")
+            dst_raw = str(args.get("core_to") or "")
+            src = resolve_core_key(src_raw, cores) or src_raw
+            dst = resolve_core_key(dst_raw, cores) or dst_raw
+            if src and dst:
+                self._on_open_pair_heatmap(src, dst)
+            else:
+                self._open_corridor_inspector("heatmap")
+            return "Opened corridor inspector"
+        raise RuntimeError(f"unknown tool {name}")
+
+    def _ai_undo_tools(self) -> None:
+        self._ai_stop_zoom_anim()
+        snap = getattr(self, "_ai_tool_undo", None)
+        if snap:
+            self._ai_restore_gui_snapshot(snap)
+            self._ai_tool_undo = None
+        else:
+            self._cmd_undo()
 
     def _open_analysis_findings(self) -> None:
         """Show Analysis Findings dialog for the active tab / cursor scope."""
@@ -39168,7 +41920,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         dlg.show()
 
     def _query_corridor_with_ai(self, ai_enabled: bool = True) -> None:
-        """Toolbar Heatmap/Chord → Query with AI (Migration thrash template)."""
+        """Inspector Query with AI… → Migration thrash template."""
         if not ai_enabled:
             self._open_settings("AI")
             return
@@ -40632,6 +43384,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 for pid, _label, _base, _model in AI_PRESETS
             },
             response_language=_ai_cfg["response_language"],
+            ai_auto_apply=str(_ai_cfg.get("auto_apply", "false")).lower()
+            in ("1", "true", "yes", "on"),
             initial_page=page if isinstance(page, str) else "Appearance",
         )
         dlg.live_preview.connect(lambda: self._apply_settings_preview({
@@ -40685,6 +43439,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 "enabled": str(dlg.ai_enabled).lower(),
                 "preset": dlg.ai_preset or DEFAULT_AI_PRESET,
                 "response_language": dlg.response_language or DEFAULT_AI_RESPONSE_LANGUAGE,
+                "auto_apply": str(dlg.ai_auto_apply).lower(),
             }
             for _pid, _vals in dlg.ai_preset_settings.items():
                 for _field in AI_PRESET_FIELDS:
@@ -41089,7 +43844,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._view.centerOn(orth, cur.y())
 
     def _zoom_to_cursor_range(self) -> None:
-        """Fit the view tightly between the first two cursor positions."""
+        """Fit the view tightly between the earliest and latest cursor."""
         if self._trace is None:
             return
         times = sorted(self._view._scene.cursor_times())
@@ -41581,7 +44336,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 ("Ctrl++",               "Zoom in"),
                 ("Ctrl+-",               "Zoom out"),
                 ("Ctrl+0 / F",           "Fit entire trace to window"),
-                ("Ctrl+R",               "Zoom to cursor range"),
+                ("Ctrl+R",               "Zoom to earliest–latest cursor"),
                 ("Ctrl+,",               "Open Settings"),
                 ("G",                    "Toggle grid lines on/off"),
                 ("I",                    "Toggle STI event rows on/off"),

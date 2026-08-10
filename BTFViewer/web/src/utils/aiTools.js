@@ -17,6 +17,40 @@ export const AI_VIEWER_TOOL_NAMES = [
   AI_TOOL_OPEN_CORRIDOR,
 ]
 
+/** QTextBrowser truncates scheme:digits; use a path. */
+const BTF_JUMP_HREF_RE = /btfjump:(?:\/\/)?(?:time\/)?([0-9]+(?:\.[0-9]+)?)/i
+const BTF_HIGHLIGHT_HREF_RE = /btfhighlight:(?:\/\/)?(?:task\/)?(.+)$/i
+
+export function btfJumpHref(value) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return 'btfjump:time/0'
+  const token = Number.isInteger(n) || n === Math.trunc(n) ? String(Math.trunc(n)) : String(n)
+  return `btfjump:time/${token}`
+}
+
+export function parseBtfJumpHref(href, dataJump) {
+  if (dataJump != null && dataJump !== '' && Number.isFinite(Number(dataJump))) {
+    return Number(dataJump)
+  }
+  const m = BTF_JUMP_HREF_RE.exec(String(href || ''))
+  return m ? Number(m[1]) : NaN
+}
+
+export function btfHighlightHref(name) {
+  return `btfhighlight:task/${encodeURIComponent(String(name || '').trim())}`
+}
+
+export function parseBtfHighlightHref(href, dataHighlight) {
+  if (dataHighlight) return decodeURIComponent(String(dataHighlight))
+  const m = BTF_HIGHLIGHT_HREF_RE.exec(String(href || '').trim())
+  if (!m) return ''
+  try {
+    return decodeURIComponent(m[1].replace(/^\/+/, ''))
+  } catch {
+    return m[1]
+  }
+}
+
 export const AI_TOOL_SYSTEM_ADDENDUM =
   'When the user asks to show, focus, inspect, zoom, highlight, or jump to a '
   + 'time range, task, or core pair, you MUST invoke the matching viewer tool '
@@ -338,6 +372,94 @@ export function stripParsedToolMarkup(text) {
     .trim()
 }
 
+export function formatToolResultContent(result) {
+  return JSON.stringify(result)
+}
+
+export function canonicalAssistantToolMessage(content, toolCalls) {
+  const callsOut = []
+  ;(toolCalls || []).forEach((call, i) => {
+    if (!call || typeof call !== 'object') return
+    const name = String(call.name || '').trim()
+    if (!name) return
+    const id = String(call.id || `call_${i}`).trim() || `call_${i}`
+    const args = call.arguments
+    const argS = typeof args === 'string'
+      ? args
+      : JSON.stringify(args && typeof args === 'object' ? args : {})
+    callsOut.push({
+      id,
+      type: 'function',
+      function: { name, arguments: argS },
+    })
+  })
+  const text = messageContentText(content)
+  const msg = { role: 'assistant', content: text || null }
+  if (callsOut.length) msg.tool_calls = callsOut
+  return msg
+}
+
+export function toolResultMessage({ toolCallId, name, content } = {}) {
+  const cid = String(toolCallId || '').trim() || 'call_0'
+  const fname = String(name || '').trim()
+  let body
+  if (typeof content === 'string') body = content
+  else if (content && typeof content === 'object') body = formatToolResultContent(content)
+  else body = formatToolResultContent({ ok: false, message: String(content ?? '') })
+  const out = { role: 'tool', tool_call_id: cid, content: body }
+  if (fname) out.name = fname
+  return out
+}
+
+/** Gemini OpenAI-compat requires function_response.name on role=tool. */
+export function normalizeToolChatMessages(messages) {
+  const out = []
+  let unused = []
+  for (const msg of messages || []) {
+    if (!msg || typeof msg !== 'object') continue
+    const role = String(msg.role || '')
+    if (role === 'assistant') {
+      const extracted = extractToolCalls(msg)
+      if (extracted.length) {
+        const canon = canonicalAssistantToolMessage(msg.content, extracted)
+        out.push(canon)
+        unused = extractToolCalls(canon)
+          .map(c => ({ id: String(c.id || ''), name: String(c.name || '').trim() }))
+          .filter(c => c.id && c.name)
+      } else {
+        out.push({ ...msg })
+        unused = []
+      }
+      continue
+    }
+    if (role === 'tool') {
+      const copied = { ...msg }
+      let cid = String(copied.tool_call_id || copied.id || '').trim()
+      let name = String(copied.name || '').trim()
+      if (!name && cid) {
+        const idx = unused.findIndex(u => u.id === cid)
+        if (idx >= 0) {
+          name = unused[idx].name
+          unused.splice(idx, 1)
+        }
+      }
+      if (!name && unused.length) {
+        const next = unused.shift()
+        name = next.name
+        if (!cid) cid = next.id
+      } else if (name && cid) {
+        unused = unused.filter(u => u.id !== cid)
+      }
+      if (cid) copied.tool_call_id = cid
+      if (name) copied.name = name
+      out.push(copied)
+      continue
+    }
+    out.push({ ...msg })
+  }
+  return out
+}
+
 function asFloatList(value) {
   if (!Array.isArray(value)) return []
   const out = []
@@ -472,15 +594,69 @@ function taskMatchAliases(raw) {
   return aliases.filter(Boolean)
 }
 
-export function resolveTaskKey(taskNameOrId, candidates) {
-  const want = String(taskNameOrId || '').trim()
+const CORE_NUM_RE = /^(?:core[\s_-]*)?(\d+)$/i
+const CORE_SHORT_RE = /^c(\d+)$/i
+
+function coreMatchAliases(raw) {
+  const text = String(raw || '').trim()
+  if (!text) return []
+  const aliases = [text]
+  const compact = text.replace(/[\s_-]+/g, '_')
+  if (!aliases.includes(compact)) aliases.push(compact)
+  const spaced = text.replace(/_/g, ' ')
+  if (!aliases.includes(spaced)) aliases.push(spaced)
+  const m = CORE_NUM_RE.exec(text) || CORE_SHORT_RE.exec(text)
+  if (m) {
+    const n = String(Number(m[1]))
+    aliases.push(n, `Core_${n}`, `core_${n}`, `Core ${n}`, `c${n}`, `C${n}`)
+  }
+  return [...new Set(aliases.filter(Boolean))]
+}
+
+export function resolveCoreKey(coreNameOrId, candidates) {
+  const want = String(coreNameOrId || '').trim()
   if (!want) return null
   const names = (candidates || []).map(c => String(c || '')).filter(Boolean)
   if (!names.length) return null
   if (names.includes(want)) return want
   const lower = new Map(names.map(n => [n.toLowerCase(), n]))
   if (lower.has(want.toLowerCase())) return lower.get(want.toLowerCase())
+  const byAlias = new Map()
+  for (const name of names) {
+    for (const alias of coreMatchAliases(name)) {
+      const key = alias.toLowerCase()
+      const list = byAlias.get(key) || []
+      if (!list.includes(name)) list.push(name)
+      byAlias.set(key, list)
+    }
+  }
+  const hits = []
+  for (const alias of coreMatchAliases(want)) {
+    for (const orig of byAlias.get(alias.toLowerCase()) || []) {
+      if (!hits.includes(orig)) hits.push(orig)
+    }
+  }
+  return hits.length ? hits[0] : null
+}
 
+export function normalizeTaskLookupQuery(taskNameOrId) {
+  let text = String(taskNameOrId || '').trim()
+  if (!text) return ''
+  text = text.replace(/\s*\((?:core\s*)?\d+\)\s*$/i, '').trim() || text
+  const m = /([A-Za-z_][\w]*\[\d+\])/.exec(text)
+  return m ? m[1] : text
+}
+
+export function resolveTaskKey(taskNameOrId, candidates) {
+  const raw = String(taskNameOrId || '').trim()
+  if (!raw) return null
+  const names = (candidates || []).map(c => String(c || '')).filter(Boolean)
+  if (!names.length) return null
+  const queries = [raw]
+  const norm = normalizeTaskLookupQuery(raw)
+  if (norm && !queries.includes(norm)) queries.push(norm)
+
+  const lower = new Map(names.map(n => [n.toLowerCase(), n]))
   const byAlias = new Map()
   for (const name of names) {
     for (const alias of taskMatchAliases(name)) {
@@ -490,21 +666,24 @@ export function resolveTaskKey(taskNameOrId, candidates) {
       byAlias.set(key, list)
     }
   }
-  const hits = byAlias.get(want.toLowerCase()) || []
-  if (hits.length === 1) return hits[0]
-  if (hits.length && /^\d+$/.test(want)) return hits[0]
-
-  const wantL = want.toLowerCase()
-  const prefix = []
-  const contains = []
-  for (const [alias, origs] of byAlias) {
-    if (alias.startsWith(wantL)) prefix.push(...origs)
-    if (alias.includes(wantL)) contains.push(...origs)
-  }
   const uniq = arr => [...new Set(arr)]
-  const prefixU = uniq(prefix)
-  if (prefixU.length === 1) return prefixU[0]
-  const containsU = uniq(contains)
-  if (containsU.length === 1) return containsU[0]
+  for (const want of queries) {
+    if (names.includes(want)) return want
+    if (lower.has(want.toLowerCase())) return lower.get(want.toLowerCase())
+    const hits = byAlias.get(want.toLowerCase()) || []
+    if (hits.length === 1) return hits[0]
+    if (hits.length && /^\d+$/.test(want)) return hits[0]
+    const wantL = want.toLowerCase()
+    const prefix = []
+    const contains = []
+    for (const [alias, origs] of byAlias) {
+      if (alias.startsWith(wantL)) prefix.push(...origs)
+      if (alias.includes(wantL)) contains.push(...origs)
+    }
+    const prefixU = uniq(prefix)
+    if (prefixU.length === 1) return prefixU[0]
+    const containsU = uniq(contains)
+    if (containsU.length === 1) return containsU[0]
+  }
   return null
 }

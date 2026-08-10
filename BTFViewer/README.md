@@ -212,21 +212,63 @@ With **two or more** tabs open, **Trace Compare…** diffs summary, top tasks, u
 <a id="ai-assistant" name="ai-assistant">&#x200B;</a>
 ### AI Assistant ![](../images/readme/h3.svg)
 
-The **AI** tab answers questions using **Analysis Findings** (or Trace Compare tables for that template)—not the raw BTF stream.
+The **AI** tab answers questions using **Analysis Findings** (or Trace Compare tables for that template)—not the raw BTF stream. Template ask-order: [WORKFLOWS.md §7](WORKFLOWS.md#7-ai-assistant-flow).
 
-Any OpenAI-compatible endpoint works, including Ollama's own (`http://localhost:11434/v1`).
+Any OpenAI-compatible endpoint works, including Ollama (`http://localhost:11434/v1`). Chat requests time out after 120s (**Stop** still cancels sooner).
 
-1. **Settings → AI** — pick a preset (**Ollama**, **OpenAI**, **Google Gemini**, or **Custom**), adjust base URL / model / API key, then **Test connection**. Each preset keeps its own settings, so switching back and forth never loses a key.
+1. **Settings → AI** — pick a preset (**Ollama**, **OpenAI**, **Google Gemini**, or **Custom**), adjust base URL / model, then **Authentication**: **None (local)** for Ollama, **API key** to paste a provider key, or **Sign in** to open the vendor page and paste the issued key or token. **Test connection** after saving. Use the refresh icon next to **Model** to list ids from the endpoint. Each preset keeps its own settings, so switching back and forth never loses a key. The AI panel chip shows `Local` / `Key saved` / `Needs API key` / `Needs sign-in` / `Signed in`.
 2. **Import…** loads an endpoint from a JSON file — see [`examples/ai`](examples/ai/README.md) for [`gemini.json`](examples/ai/gemini.json), [`openai.json`](examples/ai/openai.json), [`deepseek.json`](examples/ai/deepseek.json), [`grok.json`](examples/ai/grok.json), and the field reference. Imported values fill the form; review and confirm to save.
-3. Use a template, **Analysis → Query with AI…**, or ask freely; click `jump:TIME` links to seek the timeline.
+3. Use a template, **Analysis → Query with AI…**, or ask freely. Click `jump:TIME` links to seek the timeline.
 4. Set reply language in Settings or **Language…** on the AI bar.
 5. Right-click the reply area to copy the conversation or **Save As…** it (Markdown, plain text, or HTML).
+
+<a id="ai-gui-tools" name="ai-gui-tools">&#x200B;</a>
+##### GUI tools ![](../images/readme/h5.svg)
+
+The model may call viewer tools. With **Auto-apply GUI actions** off (default in **Settings → AI**), each batch shows **Apply** / **Skip** and **Undo**, plus **Apply GUI actions** under the log.
+
+| Tool | Effect |
+|------|--------|
+| `set_cursors` | Place cursors (enables **Limit to C1–Cn** when two or more) |
+| `zoom_to_range` | Focus the timeline between two times |
+| `highlight_task` | Lock-highlight a task row (display name, numeric id, or merge key). Unknown names are ignored so the timeline is not dimmed. |
+| `set_view_mode` | Switch Task or Core view; horizontal or vertical |
+| `open_corridor_inspector` | Open Migration Inspector. Core aliases `Core_0`, `0`, `c0`, and `Core 0` resolve the same way. |
+
+Models without native tool calling can emit a fenced ` ```btftool ` JSON block (same cards). Prefer a tool-capable model (for example `qwen2.5` / `llama3.1`) if native calls stay silent.
+
+After **Apply**, **Undo last actions** restores zoom / view / highlight / inspector; **Ctrl/Cmd+Z** also reverts cursors and marks.
+
+<a id="ai-diagrams" name="ai-diagrams">&#x200B;</a>
+##### Diagrams ![](../images/readme/h5.svg)
+
+Replies may include ` ```mermaid ` **sequence** diagrams (mutex take/give, block/resume, priority boost / L/M/H) and `graph LR` / **flowchart** core-migration graphs (counts on edges).
+
+- Click a **task** node to lock-highlight that timeline row (`Low[266] (Core 0)` resolves to `Low[266]`).
+- Click a **core** node (`Core_0`, `C0`, `C1`) to switch to Core View and scroll to that core.
+- Mutex hex and other unresolved labels do nothing (the timeline stays undimmed).
+- Click empty figure area to open a larger zoom window (scroll / pinch; **Esc** or **Close**).
+- The link row under the figure has the same targets.
+- **Save As…** HTML keeps inline SVG with clickable nodes (chat zoom wrappers are omitted).
+
+<a id="ai-desktop-vs-web" name="ai-desktop-vs-web">&#x200B;</a>
+##### Desktop vs web ![](../images/readme/h5.svg)
+
+| Area | Desktop | Web |
+|------|---------|-----|
+| Native tools + ` ```btftool ` | Same schema and cards | Same |
+| `highlight_task` / corridor cores | Same resolve rules | Same |
+| In-chat mermaid figure | Data-URI image + node hit-test | Inline SVG node clicks |
+| Zoom window + link row | Yes | Yes |
+| Authentication | Settings → AI → None / API key / Sign in; panel chip + 401 CTAs until a successful turn | Same (`VITE_*` env keys) |
+| Fonts | **pt** | **px** |
+| Endpoint from `file://` | N/A | CORS — prefer Vite proxy, or [Opening the web app from `file://`](#opening-the-web-app-from-file) |
 
 | If this happens | Try |
 |-----------------|-----|
 | Web: Failed to fetch / CORS | The server is usually fine — the page just is not allowed to call it. Prefer `npm run dev` / `make preview` (both proxy Ollama), or see [Opening the web app from `file://`](#opening-the-web-app-from-file) |
-| 401 / 403 | Check API key (also read from `OPENAI_API_KEY` / `GEMINI_API_KEY` / `OLLAMA_API_KEY`; local Ollama needs none) |
-| Model not found | Test connection lists the models the endpoint serves — pick one of those, or `ollama pull` it |
+| 401 / 403 | Check authentication (Settings → AI → Sign in or API key; also `OPENAI_API_KEY` / `GEMINI_API_KEY` / `OLLAMA_API_KEY`; local Ollama needs none) |
+| Model not found | Refresh the Model list (or Test connection) and pick a served id, or `ollama pull` it |
 
 <a id="opening-the-web-app-from-file" name="opening-the-web-app-from-file">&#x200B;</a>
 ### Opening the web app from `file://` ![](../images/readme/h3.svg)
@@ -1614,10 +1656,10 @@ Open **Settings** from the toolbar or `Ctrl+,`.
 
 | Area | What you configure |
 |------|--------------------|
-| **Appearance** | Dark/light theme, fonts, colorblind-safe palette |
-| **Display** | Show/hide Legend, Statistics, Marks, Find, AI, CPU Load, STI, grid; hover highlight; **Analysis thresholds** (CPU budget % and per-task deadline ns) |
+| **Appearance** | Dark/light theme, fonts, colorblind-safe palette. Desktop font sizes are **pt** (HiDPI-scaled); web sizes are **CSS px**. Defaults look similar; the numbers are not interchangeable. |
+| **Display** | Show/hide Legend, Statistics, Marks, Find, AI, CPU Load; **Timeline overlays** (STI, grid, hover highlight); **Analysis thresholds** (CPU budget % and per-task deadline ns) |
 | **Layout** | Label width, row height, zoom 1:1 density, max cursors, time decimals, CPU/STI sizes |
-| **AI** | Enable, preset (Ollama / OpenAI / Gemini / Custom), base URL, model, API key, reply language |
+| **AI** | Enable, **Auto-apply GUI actions**, preset (Ollama / OpenAI / Gemini / Custom), base URL, model, authentication (none / API key / Sign in), reply language |
 
 | | Desktop | Web |
 |--|---------|-----|
@@ -1720,7 +1762,7 @@ Day-to-day users can ignore this section.
 | Tests | `make -C BTFViewer test` |
 | Dev run (Desktop) | `python -m btf_viewer_pkg [trace.btf]` from `BTFViewer/` |
 
-Edit sources under `btf_viewer_pkg/` and `web/`; commit regenerated files under `builds/` with your changes. Synthetic traces: `scripts/gen_trace.py --help`. BTF field reference: [`TRACE_FORMAT.md`](../TRACE_FORMAT.md).
+Edit sources under `btf_viewer_pkg/` and `web/`; commit regenerated files under `builds/` with your changes. Keep AI tool schemas and mermaid layout in sync (`ai_tools.py` / `ai_mermaid.py` ↔ `web/src/utils/aiTools.js` / `aiMermaid.js`). Synthetic traces: `scripts/gen_trace.py --help`. BTF field reference: [`TRACE_FORMAT.md`](../TRACE_FORMAT.md).
 
 ---
 

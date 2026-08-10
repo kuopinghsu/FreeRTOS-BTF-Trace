@@ -726,6 +726,8 @@ class TimelineScene(QGraphicsScene):
                 expanded = self._core_is_expanded(core)
                 tasks = core_tasks.get(core, [])
                 core_row = row_idx
+                if task_key == core:
+                    return RULER_HEIGHT + core_row * row_stride + self._row_height / 2
                 row_idx += 1  # core summary row
                 if expanded:
                     for raw in tasks:
@@ -744,6 +746,8 @@ class TimelineScene(QGraphicsScene):
                 expanded = self._core_is_expanded(core)
                 tasks = core_tasks.get(core, [])
                 core_col = col_idx
+                if task_key == core:
+                    return RULER_WIDTH + core_col * col_w + col_w / 2
                 col_idx += 1  # core summary column
                 if expanded:
                     for raw in tasks:

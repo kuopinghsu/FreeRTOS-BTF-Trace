@@ -3,11 +3,14 @@
  * Keep layout rules in sync with btf_viewer_pkg/ai_mermaid.py.
  */
 
+import { btfHighlightHref, btfJumpHref } from './aiTools.js'
+
 const PARTICIPANT_RE = /^participant\s+(\S+)(?:\s+as\s+(.+))?$/i
 const ARROW_RE = /^(\S+)\s*(-->>|->>|->|--x|-x|-->)\s*(\S+)\s*:\s*(.*)$/
 const NOTE_RE = /^Note\s+(?:over|left of|right of)\s+([^:]+):\s*(.*)$/i
 const NODE_RE = /^([A-Za-z0-9_]+)\s*(?:\[([^\]]+)\]|\(([^\)]+)\)|\{([^}]+)\})?\s*$/
 const EDGE_RE = /^([A-Za-z0-9_]+)\s*(?:\[([^\]]+)\]|\(([^\)]+)\))?\s*-->(?:\|([^|]+)\|)?\s*([A-Za-z0-9_]+)\s*(?:\[([^\]]+)\]|\(([^\)]+)\))?\s*$/
+
 const JUMP_RE = /jump:([0-9]+(?:\.[0-9]+)?)/g
 
 function esc(text) {
@@ -16,6 +19,28 @@ function esc(text) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
+}
+
+function noteBoxW(note) {
+  return Math.min(200, 16 + 6 * Math.min(String(note || '').length, 36))
+}
+
+function nodeBoxW(label) {
+  return Math.max(72, Math.min(130, 12 + 7 * Math.min(String(label || '').length, 18)))
+}
+
+/** Triangle at (x2,y2). Qt paints SVG <marker> as a stray blob at the origin. */
+function svgArrowhead(x1, y1, x2, y2, color, size = 8) {
+  const dx = x2 - x1
+  const dy = y2 - y1
+  const length = Math.hypot(dx, dy) || 1
+  const ux = dx / length
+  const uy = dy / length
+  const bx = x2 - ux * size
+  const by = y2 - uy * size
+  const px = -uy * size * 0.45
+  const py = ux * size * 0.45
+  return `<polygon points="${x2.toFixed(1)},${y2.toFixed(1)} ${(bx + px).toFixed(1)},${(by + py).toFixed(1)} ${(bx - px).toFixed(1)},${(by - py).toFixed(1)}" fill="${color}"/>`
 }
 
 export function extractMermaidFences(text) {
@@ -83,6 +108,38 @@ export function mermaidLinkTargets(source) {
   return found
 }
 
+export function mermaidHitRegions(source) {
+  const text = String(source || '').trim()
+  if (!text) return []
+  let first = ''
+  for (const line of text.split('\n')) {
+    const s = line.trim()
+    if (s && !s.startsWith('%%')) {
+      first = s.toLowerCase()
+      break
+    }
+  }
+  if (first.startsWith('sequencediagram')) return sequenceHits(text)
+  if (first.startsWith('graph ') || first.startsWith('flowchart ')) return flowchartHits(text)
+  return []
+}
+
+export function hitTestMermaid(source, localX, localY, scale = 1) {
+  const sx = Number(scale) > 0 ? Number(scale) : 1
+  const px = Number(localX)
+  const py = Number(localY)
+  for (const hit of mermaidHitRegions(source)) {
+    const x = hit.x * sx
+    const y = hit.y * sx
+    const w = hit.w * sx
+    const h = hit.h * sx
+    if (px >= x && px <= x + w && py >= y && py <= y + h) {
+      return { kind: hit.kind, value: hit.value }
+    }
+  }
+  return null
+}
+
 export function mermaidToSvg(source, { interactive = true } = {}) {
   const text = String(source || '').trim()
   if (!text) return ''
@@ -129,16 +186,16 @@ function linkRowHtml(source) {
   for (const { kind, value } of mermaidLinkTargets(source)) {
     const e = esc(value)
     if (kind === 'jump') {
-      parts.push(`<a href="btfjump:${e}" class="ai-jump" data-jump="${e}">jump:${e}</a>`)
+      parts.push(`<a href="${btfJumpHref(value)}" class="ai-jump" data-jump="${e}">jump:${e}</a>`)
     } else {
-      parts.push(`<a href="btfhighlight:${e}" class="ai-hl" data-highlight="${e}">${e}</a>`)
+      parts.push(`<a href="${btfHighlightHref(value)}" class="ai-hl" data-highlight="${e}">${e}</a>`)
     }
   }
   if (!parts.length) return ''
   return `<p class="ai-mermaid-links">${parts.join(' · ')}</p>`
 }
 
-function sequenceSvg(source, interactive) {
+function parseSequence(source) {
   const participants = []
   const index = new Map()
   const rows = []
@@ -177,29 +234,54 @@ function sequenceSvg(source, interactive) {
       rows.push({ kind: 'note', who, note: nm[2].trim() })
     }
   }
-  if (!participants.length) return ''
+  return { participants, index, rows }
+}
 
+function sequenceGeom(source) {
+  const parsed = parseSequence(source)
+  const { participants, index, rows } = parsed
+  if (!participants.length) return null
+  const boxW = 120
   const colW = 150
-  const left = 36
-  const top = 28
+  const top = 32
   const rowH = 40
-  const width = left * 2 + Math.max(participants.length - 1, 0) * colW + 40
+  let half = boxW / 2
+  for (const row of rows) {
+    if (row.kind === 'note') half = Math.max(half, noteBoxW(row.note) / 2)
+  }
+  const pad = half + 16
+  const width = pad * 2 + Math.max(participants.length - 1, 0) * colW
   const height = top + 36 + Math.max(rows.length, 1) * rowH + 24
-  const xs = participants.map((_, i) => left + i * colW)
+  const xs = participants.map((_, i) => pad + i * colW)
+  return { participants, index, rows, boxW, top, rowH, width, height, xs }
+}
+
+function sequenceHits(source) {
+  const geom = sequenceGeom(source)
+  if (!geom) return []
+  const { participants, boxW, top, xs } = geom
+  return participants.map((p, i) => ({
+    x: xs[i] - boxW / 2, y: top - 14, w: boxW, h: 28,
+    kind: 'highlight', value: p.label,
+  }))
+}
+
+function sequenceSvg(source, interactive) {
+  const geom = sequenceGeom(source)
+  if (!geom) return ''
+  const { participants, index, rows, boxW, top, rowH, width, height, xs } = geom
   const parts = [
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" class="ai-mermaid-seq">`,
-    '<rect width="100%" height="100%" fill="#12161d"/>',
-    '<defs><marker id="aiArr" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#6fbf9a"/></marker></defs>',
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.round(width)}" height="${Math.round(height)}" viewBox="0 0 ${Math.round(width)} ${Math.round(height)}" class="ai-mermaid-seq">`,
+    `<rect x="0" y="0" width="${Math.round(width)}" height="${Math.round(height)}" fill="#12161d"/>`,
   ]
   participants.forEach((p, i) => {
     const x = xs[i]
-    const boxW = 120
     const bx = x - boxW / 2
     const href = interactive ? ` href="btfhighlight:${esc(p.label)}" data-highlight="${esc(p.label)}"` : ''
     parts.push(`<line x1="${x}" y1="${top + 22}" x2="${x}" y2="${height - 12}" stroke="#3a4658" stroke-dasharray="4 3"/>`)
     parts.push(
       `<a${href}><rect x="${bx}" y="${top - 14}" width="${boxW}" height="28" rx="4" fill="#1e3348" stroke="#5b9bd5"/>`
-      + `<text x="${x}" y="${top + 5}" text-anchor="middle" fill="#dbe2ea" font-size="11" font-family="system-ui,sans-serif">${esc(p.label.slice(0, 28))}</text></a>`,
+      + `<text x="${x}" y="${top + 5}" text-anchor="middle" fill="#dbe2ea" font-size="11" font-family="sans-serif">${esc(p.label.slice(0, 28))}</text></a>`,
     )
   })
   let y = top + 44
@@ -208,13 +290,15 @@ function sequenceSvg(source, interactive) {
       const x1 = xs[index.get(row.src)]
       const x2 = xs[index.get(row.dst)]
       const dashed = row.arrow.startsWith('--') ? ' stroke-dasharray="5 3"' : ''
-      parts.push(`<line x1="${x1}" y1="${y}" x2="${x2}" y2="${y}" stroke="#6fbf9a" stroke-width="1.4"${dashed} marker-end="url(#aiArr)"/>`)
-      parts.push(`<text x="${(x1 + x2) / 2}" y="${y - 6}" text-anchor="middle" fill="#a8b4c4" font-size="10" font-family="system-ui,sans-serif">${esc(row.msg.slice(0, 48))}</text>`)
+      const tip = x2 >= x1 ? 8 : -8
+      parts.push(`<line x1="${x1}" y1="${y}" x2="${x2 - tip}" y2="${y}" stroke="#6fbf9a" stroke-width="1.4"${dashed}/>`)
+      parts.push(svgArrowhead(x1, y, x2, y, '#6fbf9a'))
+      parts.push(`<text x="${(x1 + x2) / 2}" y="${y - 6}" text-anchor="middle" fill="#a8b4c4" font-size="10" font-family="sans-serif">${esc(row.msg.slice(0, 48))}</text>`)
     } else {
       const x = xs[index.get(row.who)]
-      const nw = Math.min(200, 16 + 6 * Math.min(row.note.length, 36))
+      const nw = noteBoxW(row.note)
       parts.push(`<rect x="${x - nw / 2}" y="${y - 16}" width="${nw}" height="28" rx="3" fill="#2a2418" stroke="#c9a227"/>`)
-      parts.push(`<text x="${x}" y="${y + 3}" text-anchor="middle" fill="#e6d48a" font-size="10" font-family="system-ui,sans-serif">${esc(row.note.slice(0, 40))}</text>`)
+      parts.push(`<text x="${x}" y="${y + 3}" text-anchor="middle" fill="#e6d48a" font-size="10" font-family="sans-serif">${esc(row.note.slice(0, 40))}</text>`)
     }
     y += rowH
   }
@@ -222,7 +306,7 @@ function sequenceSvg(source, interactive) {
   return parts.join('')
 }
 
-function flowchartSvg(source, interactive) {
+function parseFlowchart(source) {
   const nodes = new Map()
   const order = []
   const edges = []
@@ -252,43 +336,108 @@ function flowchartSvg(source, interactive) {
     const nm = NODE_RE.exec(line)
     if (nm) addNode(nm[1], nm[2] || nm[3] || nm[4])
   }
-  if (!nodes.size) return ''
+  return { nodes, order, edges }
+}
 
-  const colW = 150
-  const rowH = 70
+function flowchartGeom(source) {
+  const { nodes, order, edges } = parseFlowchart(source)
+  if (!nodes.size) return null
+  const colW = 160
+  const rowH = 78
   const cols = Math.min(4, Math.max(1, order.length))
-  const left = 30
-  const top = 28
-  const width = left * 2 + (cols - 1) * colW + 100
-  const rowsN = Math.ceil(order.length / cols)
-  const height = top + rowsN * rowH + 40
+  let maxHalf = 40
+  for (const nid of order) maxHalf = Math.max(maxHalf, nodeBoxW(nodes.get(nid)) / 2)
+  const pad = maxHalf + 18
+  const top = 36
   const pos = new Map()
   order.forEach((nid, i) => {
     const c = i % cols
     const r = Math.floor(i / cols)
-    pos.set(nid, { x: left + 50 + c * colW, y: top + 20 + r * rowH })
+    pos.set(nid, { x: pad + c * colW, y: top + r * rowH })
   })
-  const parts = [
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" class="ai-mermaid-flow">`,
-    '<rect width="100%" height="100%" fill="#12161d"/>',
-    '<defs><marker id="aiFArr" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#5b9bd5"/></marker></defs>',
-  ]
-  for (const e of edges) {
+  let right = 0
+  let bottom = 0
+  for (const nid of order) {
+    const { x, y } = pos.get(nid)
+    right = Math.max(right, x + nodeBoxW(nodes.get(nid)) / 2)
+    bottom = Math.max(bottom, y + 20)
+  }
+  return {
+    nodes, order, edges, pos,
+    width: right + pad,
+    height: bottom + 24,
+  }
+}
+
+function flowchartEdgePaths(geom) {
+  const { nodes, edges, pos } = geom
+  const pairs = new Set(edges.map(e => `${e.src}\0${e.dst}`))
+  return edges.map((e) => {
     const a = pos.get(e.src)
     const b = pos.get(e.dst)
-    parts.push(`<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="#5b9bd5" stroke-width="1.3" marker-end="url(#aiFArr)"/>`)
-    if (e.label) {
-      parts.push(`<text x="${(a.x + b.x) / 2}" y="${(a.y + b.y) / 2 - 6}" text-anchor="middle" fill="#8b98a8" font-size="10" font-family="system-ui,sans-serif">${esc(e.label.slice(0, 16))}</text>`)
+    const dx = b.x - a.x
+    const dy = b.y - a.y
+    const length = Math.hypot(dx, dy) || 1
+    const ux = dx / length
+    const uy = dy / length
+    const nx = -uy
+    const ny = ux
+    const sep = pairs.has(`${e.dst}\0${e.src}`) ? 12 : 0
+    const ox = nx * sep
+    const oy = ny * sep
+    const srcR = nodeBoxW(nodes.get(e.src)) / 2 + 2
+    const dstR = nodeBoxW(nodes.get(e.dst)) / 2 + 2
+    const sx = a.x + ux * srcR + ox
+    const sy = a.y + uy * srcR + oy
+    const ex = b.x - ux * dstR + ox
+    const ey = b.y - uy * dstR + oy
+    const extra = sep ? 10 : 8
+    return {
+      sx, sy, ex, ey,
+      lx: (sx + ex) / 2 + nx * extra,
+      ly: (sy + ey) / 2 + ny * extra,
+      label: e.label,
+    }
+  })
+}
+
+function flowchartHits(source) {
+  const geom = flowchartGeom(source)
+  if (!geom) return []
+  return geom.order.map((nid) => {
+    const { x, y } = geom.pos.get(nid)
+    const label = geom.nodes.get(nid)
+    const bw = nodeBoxW(label)
+    return {
+      x: x - bw / 2, y: y - 16, w: bw, h: 32,
+      kind: 'highlight', value: label,
+    }
+  })
+}
+
+function flowchartSvg(source, interactive) {
+  const geom = flowchartGeom(source)
+  if (!geom) return ''
+  const { nodes, order, pos, width, height } = geom
+  const parts = [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.round(width)}" height="${Math.round(height)}" viewBox="0 0 ${Math.round(width)} ${Math.round(height)}" class="ai-mermaid-flow">`,
+    `<rect x="0" y="0" width="${Math.round(width)}" height="${Math.round(height)}" fill="#12161d"/>`,
+  ]
+  for (const edge of flowchartEdgePaths(geom)) {
+    parts.push(`<line x1="${edge.sx.toFixed(1)}" y1="${edge.sy.toFixed(1)}" x2="${edge.ex.toFixed(1)}" y2="${edge.ey.toFixed(1)}" stroke="#5b9bd5" stroke-width="1.3"/>`)
+    parts.push(svgArrowhead(edge.sx, edge.sy, edge.ex, edge.ey, '#5b9bd5'))
+    if (edge.label) {
+      parts.push(`<text x="${edge.lx.toFixed(1)}" y="${edge.ly.toFixed(1)}" text-anchor="middle" fill="#c5d0dc" font-size="10" font-family="sans-serif">${esc(String(edge.label).slice(0, 16))}</text>`)
     }
   }
   for (const nid of order) {
     const { x, y } = pos.get(nid)
     const label = nodes.get(nid)
     const href = interactive ? ` href="btfhighlight:${esc(label)}" data-highlight="${esc(label)}"` : ''
-    const bw = Math.max(72, Math.min(130, 12 + 7 * Math.min(label.length, 18)))
+    const bw = nodeBoxW(label)
     parts.push(
       `<a${href}><rect x="${x - bw / 2}" y="${y - 16}" width="${bw}" height="32" rx="6" fill="#1e3348" stroke="#5b9bd5"/>`
-      + `<text x="${x}" y="${y + 5}" text-anchor="middle" fill="#dbe2ea" font-size="11" font-family="system-ui,sans-serif">${esc(label.slice(0, 18))}</text></a>`,
+      + `<text x="${x}" y="${y + 5}" text-anchor="middle" fill="#dbe2ea" font-size="11" font-family="sans-serif">${esc(label.slice(0, 18))}</text></a>`,
     )
   }
   parts.push('</svg>')

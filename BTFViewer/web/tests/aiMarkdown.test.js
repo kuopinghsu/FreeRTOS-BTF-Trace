@@ -21,7 +21,7 @@ describe('aiMarkdown', () => {
     assert.match(html, /<h2>/)
     assert.match(html, /<strong>bold<\/strong>/)
     assert.match(html, /<code>code<\/code>/)
-    assert.match(html, /href="btfjump:42"/)
+    assert.match(html, /href="btfjump:time\/42"/)
     assert.match(html, /<ul>/)
     assert.match(html, /&lt;tag&gt;/)
     assert.equal(html.includes('<tag>'), false)
@@ -92,7 +92,7 @@ describe('ai conversation export', () => {
     const html = formatAiConversationHtml(entries, when)
     assert.match(html, /^<!DOCTYPE html>/)
     assert.match(html, /<h2>Answer<\/h2>/)
-    assert.match(html, /href="btfjump:1805000"/)
+    assert.match(html, /href="btfjump:time\/1805000"/)
   })
 
   it('html export keeps mermaid SVG without the chat zoom wrapper', () => {

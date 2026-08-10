@@ -10,6 +10,7 @@ import {
   extractToolCalls,
   mergeToolCalls,
   messageContentText,
+  normalizeToolChatMessages,
   parseToolCallsFromText,
   stripParsedToolMarkup,
   summariseToolCall,
@@ -169,7 +170,17 @@ export const DEFAULT_AI_BASE_URL = 'http://localhost:11434/v1'
 export const DEFAULT_AI_MODEL = 'phi4-mini:3.8b'
 
 /** Per-preset settings stored in browser storage (parity with btf_viewer.rc). */
-export const AI_PRESET_FIELDS = ['baseUrl', 'model', 'apiKey']
+export const AI_PRESET_FIELDS = ['baseUrl', 'model', 'apiKey', 'authMode']
+
+export const AI_AUTH_NONE = 'none'
+export const AI_AUTH_API_KEY = 'api_key'
+export const AI_AUTH_BROWSER = 'browser'
+export const AI_AUTH_MODES = [AI_AUTH_NONE, AI_AUTH_API_KEY, AI_AUTH_BROWSER]
+export const AI_AUTH_MODE_LABELS = [
+  [AI_AUTH_NONE, 'None (local)'],
+  [AI_AUTH_API_KEY, 'API key'],
+  [AI_AUTH_BROWSER, 'Sign in'],
+]
 
 /** Vite same-origin proxy prefix per preset (avoids browser CORS). */
 export const AI_PRESET_PROXY_PATHS = {
@@ -194,6 +205,14 @@ export const LOCAL_AI_HOSTS = [
 export const AI_PRESET_KEY_URLS = {
   [AI_PRESET_OPENAI]: 'https://platform.openai.com/api-keys',
   [AI_PRESET_GEMINI]: 'https://aistudio.google.com/apikey',
+  [AI_PRESET_OLLAMA]: 'https://ollama.com/settings/keys',
+}
+
+export const AI_PRESET_SIGNIN_LABELS = {
+  [AI_PRESET_OPENAI]: 'Sign in with OpenAI…',
+  [AI_PRESET_GEMINI]: 'Sign in with Google…',
+  [AI_PRESET_OLLAMA]: 'Open Ollama sign-in…',
+  [AI_PRESET_CUSTOM]: 'Open provider sign-in…',
 }
 
 /** Map a stored/legacy preset id onto one of the known presets. */
@@ -228,11 +247,13 @@ export function resolveAiSettings(cfg = {}, presetId = null) {
   const preset = normalizeAiPreset(presetId == null ? c.aiPreset : presetId)
   const info = aiPresetInfo(preset)
   const stored = (c.aiPresets || {})[preset] || {}
+  const baseUrl = String(stored.baseUrl || '') || info.baseUrl
   return {
     preset,
-    baseUrl: String(stored.baseUrl || '') || info.baseUrl,
+    baseUrl,
     model: String(stored.model || '') || info.model,
     apiKey: String(stored.apiKey || ''),
+    authMode: normalizeAiAuthMode(stored.authMode, { presetId: preset, baseUrl }),
   }
 }
 
@@ -372,6 +393,10 @@ export function parseAiSettingsJson(data) {
     if (model) entry.model = model
     const apiKey = normalizeApiKey(jsonStr(fields, 'api_key', 'apiKey', 'key'))
     if (apiKey) entry.apiKey = apiKey
+    const authMode = jsonStr(fields, 'auth_mode', 'authMode', 'authentication')
+    if (authMode) {
+      entry.authMode = normalizeAiAuthMode(authMode, { presetId: target, baseUrl })
+    }
     if (Object.keys(entry).length) {
       presets[target] = { ...(presets[target] || {}), ...entry }
     }
@@ -532,6 +557,76 @@ export function isLocalAiHost(url) {
   }
 }
 
+export function defaultAiAuthMode(presetId = '', baseUrl = '') {
+  const pid = presetId ? normalizeAiPreset(presetId) : ''
+  if (pid === AI_PRESET_OLLAMA) return AI_AUTH_NONE
+  if (baseUrl && isLocalAiHost(baseUrl)) return AI_AUTH_NONE
+  return AI_AUTH_API_KEY
+}
+
+export function normalizeAiAuthMode(value, { presetId = '', baseUrl = '' } = {}) {
+  const want = String(value || '').trim().toLowerCase().replace(/-/g, '_').replace(/\s+/g, '_')
+  const aliases = {
+    none: AI_AUTH_NONE,
+    local: AI_AUTH_NONE,
+    no: AI_AUTH_NONE,
+    off: AI_AUTH_NONE,
+    api_key: AI_AUTH_API_KEY,
+    apikey: AI_AUTH_API_KEY,
+    api: AI_AUTH_API_KEY,
+    key: AI_AUTH_API_KEY,
+    token: AI_AUTH_API_KEY,
+    browser: AI_AUTH_BROWSER,
+    sign_in: AI_AUTH_BROWSER,
+    signin: AI_AUTH_BROWSER,
+    login: AI_AUTH_BROWSER,
+    oauth: AI_AUTH_BROWSER,
+  }
+  if (Object.prototype.hasOwnProperty.call(aliases, want)) return aliases[want]
+  return defaultAiAuthMode(presetId, baseUrl)
+}
+
+export function aiPresetSignInUrl(presetId, baseUrl = '') {
+  const pid = normalizeAiPreset(presetId)
+  if (AI_PRESET_KEY_URLS[pid]) return AI_PRESET_KEY_URLS[pid]
+  const raw = String(baseUrl || '').trim()
+  if (/^https?:\/\//i.test(raw)) {
+    try {
+      return new URL(raw).origin
+    } catch {
+      return raw
+    }
+  }
+  return ''
+}
+
+export function aiPresetSignInLabel(presetId) {
+  const pid = normalizeAiPreset(presetId)
+  return AI_PRESET_SIGNIN_LABELS[pid] || 'Sign in…'
+}
+
+export function aiAuthStatus({
+  authMode = '', apiKey = '', baseUrl = '', presetId = '',
+} = {}) {
+  const mode = normalizeAiAuthMode(authMode, { presetId, baseUrl })
+  const hasKey = Boolean(resolveAiApiKey(apiKey))
+  if (mode === AI_AUTH_NONE) {
+    return { mode, label: 'Local', needsAuth: false, signedIn: false }
+  }
+  if (hasKey) {
+    if (mode === AI_AUTH_BROWSER) {
+      return { mode, label: 'Signed in', needsAuth: false, signedIn: true }
+    }
+    return { mode, label: 'Key saved', needsAuth: false, signedIn: false }
+  }
+  return {
+    mode,
+    label: mode === AI_AUTH_BROWSER ? 'Needs sign-in' : 'Needs API key',
+    needsAuth: true,
+    signedIn: false,
+  }
+}
+
 /**
  * Same-origin proxy base for the Ollama / OpenAI / Gemini presets under Vite
  * (`npm run dev` / `preview`). Returns null for Custom, file://, remote hosts.
@@ -581,7 +676,10 @@ function aiHttpErrorTip(status, detail = '', baseUrl = '') {
   const low = String(detail || '').toLowerCase()
   const host = String(baseUrl || '').toLowerCase()
   if (status === 401 || status === 403) {
-    return ' Check API key (Settings → AI, or OPENAI_API_KEY / GEMINI_API_KEY / VITE_*).'
+    return (
+      ' Check authentication (Settings → AI → Sign in or API key, '
+      + 'or OPENAI_API_KEY / GEMINI_API_KEY / VITE_*).'
+    )
   }
   if (
     status === 400
@@ -736,7 +834,7 @@ export async function aiChatCompletion({
       + 'Paste the raw key only — no Bearer prefix.',
     )
   }
-  const chatMessages = messages || [
+  const chatMessages = normalizeToolChatMessages(messages || [
     { role: 'system', content: buildAiSystemPrompt(responseLanguage) },
     {
       role: 'user',
@@ -748,7 +846,7 @@ export async function aiChatCompletion({
         scope,
       }),
     },
-  ]
+  ])
   const payload = {
     model: chatModel,
     stream: false,

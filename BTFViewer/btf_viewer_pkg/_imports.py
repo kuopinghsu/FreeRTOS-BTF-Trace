@@ -40,7 +40,7 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 from PySide6.QtCore import (
     QBuffer, QByteArray, QEasingCurve, QEvent, QEventLoop, QIODevice, QLineF, QMimeData,
     QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt, QThread, QTimer, QUrl,
-    QPropertyAnimation, Signal,
+    QPropertyAnimation, QVariantAnimation, Signal,
 )
 from PySide6.QtGui import (
     QBrush, QColor, QCursor, QDesktopServices, QDrag, QFont, QFontDatabase, QFontMetrics, QFontMetricsF, QIcon, QImage, QKeySequence, QLinearGradient, QPainter,
