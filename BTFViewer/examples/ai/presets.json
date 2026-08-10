@@ -1,0 +1,27 @@
+{
+  "preset": "ollama",
+  "response_language": "English",
+  // auth_mode: none = local (no key); api_key = paste a provider key; browser = Sign in… then paste the token
+  "presets": {
+    "ollama": {
+      "base_url": "http://localhost:11434/v1",
+      "model": "phi4-mini:3.8b",
+      "auth_mode": "none"
+    },
+    "openai": {
+      "base_url": "https://api.openai.com/v1",
+      "model": "gpt-4o-mini",
+      "auth_mode": "api_key"
+    },
+    "gemini": {
+      "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "model": "gemini-flash-lite-latest",
+      "auth_mode": "api_key"
+    },
+    "custom": {
+      "base_url": "https://api.deepseek.com/v1",
+      "model": "deepseek-v4-flash",
+      "auth_mode": "api_key"
+    }
+  }
+}

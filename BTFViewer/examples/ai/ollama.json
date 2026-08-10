@@ -1,0 +1,9 @@
+{
+  "preset": "ollama",
+  "base_url": "http://localhost:11434/v1",
+  "model": "phi4-mini:3.8b",
+  "api_key": "",
+  // auth_mode: none = local (no key); api_key = paste a provider key; browser = Sign in… then paste the token
+  "auth_mode": "none",
+  "response_language": "English"
+}
