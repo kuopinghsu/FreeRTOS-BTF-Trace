@@ -557,12 +557,13 @@ Configuration is per preset, and the desktop and web viewers work the same way a
 | Ollama | `ollama serve`, `ollama pull phi4-mini:3.8b`; base URL `http://localhost:11434/v1` | Same; for `file://` use Vite, or allow CORS (`OLLAMA_ORIGINS="*" ollama serve`; macOS app: `launchctl setenv OLLAMA_ORIGINS "*"` + restart) |
 | OpenAI / Gemini / Custom | Base URL + model + Authentication (API key or Sign in) | Same; OpenAI and Gemini are proxied under `npm run dev` / `preview` |
 | Authentication | **None (local)** / **API key** / **Sign in** (opens vendor page; paste the key). Panel chip: Local / Key saved / Needs API key / Needs sign-in / Signed in. 401 keeps Sign in / Settings CTAs until a successful turn | Same (`VITE_*` env keys) |
+| Self-signed TLS | **Allow self-signed TLS** per preset (desktop urllib skips certificate checks) | Same setting is stored; browsers still verify — trust the cert, use `http://`, or use Desktop |
 | Verify | Refresh the **Model** list, open the Model dropdown to pick a served id, then **Test connection** (chat probe). Gemini tool follow-ups need a thought signature — retry a 400 that mentions `thought_signature` | Same |
 | GUI tools | **Auto-apply GUI actions** off (default) → Apply / Skip / Undo in chat, plus **Apply GUI actions** under the log. `query_raw_metric` runs immediately (read-only). `add_annotation` / `export_report` follow Apply. **Ctrl/Cmd+Z** also undoes cursors/marks after Apply. Chat timeout 120s. Small models without native tools may emit ` ```btftool ` fences instead. | Same |
 | Share a setup | **Import…** a JSON file (`examples/ai/ollama.json`, `gemini.json`, `openai.json`, `deepseek.json`, `grok.json`, `presets.json`) | Same |
 | Show panel | **View → Show AI Assistant** / Display settings | Display → AI Assistant panel |
 
-Each preset keeps its own base URL, model, API key, and auth method — in `btf_viewer.rc` on the desktop and in browser storage on the web — so you can switch between a local and a cloud endpoint without retyping either configuration. **Sign in** opens the vendor key/login page in the browser; paste the issued key or token back into Settings (device-code OAuth is not wired yet). Keys may also come from the environment as `OPENAI_API_KEY`, `GEMINI_API_KEY`, or `OLLAMA_API_KEY` (`VITE_*` prefixed on the web). A local Ollama endpoint needs no key at all.
+Each preset keeps its own base URL, model, API key, auth method, and TLS-verify flag — in `btf_viewer.rc` on the desktop and in browser storage on the web — so you can switch between a local and a cloud endpoint without retyping either configuration. **Sign in** opens the vendor key/login page in the browser; paste the issued key or token back into Settings (device-code OAuth is not wired yet). Keys may also come from the environment as `OPENAI_API_KEY`, `GEMINI_API_KEY`, or `OLLAMA_API_KEY` (`VITE_*` prefixed on the web). A local Ollama endpoint needs no key at all.
 
 ### 7.2 Recommended ask order
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import ssl
 import threading
 import urllib.error
 import urllib.parse
@@ -287,7 +288,9 @@ AI_LIST_MODELS_TIMEOUT_S = 12.0
 AI_TEST_TIMEOUT_S = 60.0
 
 # Per-preset settings stored in btf_viewer.rc / browser storage.
-AI_PRESET_FIELDS: Tuple[str, ...] = ("base_url", "model", "api_key", "auth_mode")
+AI_PRESET_FIELDS: Tuple[str, ...] = (
+    "base_url", "model", "api_key", "auth_mode", "tls_verify",
+)
 
 AI_AUTH_NONE = "none"
 AI_AUTH_API_KEY = "api_key"
@@ -383,6 +386,7 @@ def resolve_ai_settings(
             preset_id=preset,
             base_url=base_url,
         ),
+        "tls_verify": format_ai_tls_verify(c.get(f"{preset}_tls_verify", "")),
     }
 
 
@@ -473,6 +477,21 @@ AI_IMPORT_PRESET_ALIASES: Dict[str, str] = {
     "google": AI_PRESET_GEMINI,
     "google_gemini": AI_PRESET_GEMINI,
 }
+
+
+def _ai_json_tls_verify(fields: Dict[str, Any]) -> Optional[str]:
+    """Return ``true``/``false`` when the import file mentions TLS verify."""
+    for name in ("tls_verify", "tlsVerify", "verify_tls", "verifyTls"):
+        if name in fields:
+            return format_ai_tls_verify(fields.get(name), default=True)
+    for name in (
+        "insecure_tls", "insecureTls", "tls_insecure", "allow_insecure_tls",
+        "allowInsecureTls",
+    ):
+        if name in fields:
+            insecure = parse_ai_tls_verify(fields.get(name), default=False)
+            return "false" if insecure else "true"
+    return None
 
 
 def _ai_json_str(obj: Dict[str, Any], *names: str) -> str:
@@ -569,7 +588,10 @@ def parse_ai_settings_json(data: Any) -> Dict[str, str]:
         if auth_raw:
             entry["auth_mode"] = normalize_ai_auth_mode(
                 auth_raw, preset_id=target, base_url=base_url)
-        entry = {k: v for k, v in entry.items() if v}
+        tls_s = _ai_json_tls_verify(fields)
+        if tls_s is not None:
+            entry["tls_verify"] = tls_s
+        entry = {k: v for k, v in entry.items() if v or k == "tls_verify"}
         if entry:
             per_preset.setdefault(target, {}).update(entry)
 
@@ -747,6 +769,58 @@ def normalize_ai_auth_mode(
     if want in aliases:
         return aliases[want]
     return default_ai_auth_mode(preset_id, base_url)
+
+
+def parse_ai_tls_verify(value: Any, *, default: bool = True) -> bool:
+    """Whether to verify the HTTPS certificate (default on)."""
+    if value is None or value == "":
+        return bool(default)
+    if isinstance(value, bool):
+        return value
+    s = str(value).strip().lower()
+    if s in ("0", "false", "no", "off", "disable", "disabled", "insecure"):
+        return False
+    if s in ("1", "true", "yes", "on", "enable", "enabled", "secure"):
+        return True
+    return bool(default)
+
+
+def format_ai_tls_verify(value: Any, *, default: bool = True) -> str:
+    return "true" if parse_ai_tls_verify(value, default=default) else "false"
+
+
+def ai_ssl_context(tls_verify: bool = True):
+    """``None`` uses urllib defaults; otherwise an unverified context."""
+    if parse_ai_tls_verify(tls_verify, default=True):
+        return None
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
+
+def ai_urlopen(req, timeout_s: float, *, tls_verify: bool = True):
+    """``urlopen`` with optional self-signed TLS for private AI gateways."""
+    kwargs: Dict[str, Any] = {"timeout": timeout_s}
+    ctx = ai_ssl_context(tls_verify)
+    if ctx is not None:
+        kwargs["context"] = ctx
+    return urllib.request.urlopen(req, **kwargs)
+
+
+def _ai_ssl_error_tip(exc: BaseException, *, tls_verify: bool = True) -> str:
+    msg = str(exc).lower()
+    if "certificate" not in msg and "ssl" not in msg:
+        return ""
+    if parse_ai_tls_verify(tls_verify, default=True):
+        return (
+            " The endpoint presents a self-signed or private CA certificate. "
+            "In Settings → AI enable Allow self-signed TLS for this preset "
+            "(desktop only — browsers cannot skip certificate checks; trust "
+            "the cert in the OS/browser, use http:// on a private LAN, or "
+            "use the Desktop app)."
+        )
+    return ""
 
 
 def ai_preset_signin_url(preset_id: str, base_url: str = "") -> str:
@@ -1436,6 +1510,7 @@ def ai_chat_completion(
     messages: Optional[List[Dict[str, Any]]] = None,
     tools: Optional[List[Dict[str, Any]]] = None,
     preset: str = "",
+    tls_verify: bool = True,
     cancel_event: Optional[threading.Event] = None,
     on_response: Optional[Callable[[Any], None]] = None,
 ) -> Dict[str, Any]:
@@ -1489,7 +1564,7 @@ def ai_chat_completion(
             method="POST",
         )
         try:
-            resp = urllib.request.urlopen(req, timeout=timeout_s)
+            resp = ai_urlopen(req, timeout_s, tls_verify=tls_verify)
         except urllib.error.HTTPError as exc:
             detail = ""
             try:
@@ -1507,8 +1582,9 @@ def ai_chat_completion(
         except urllib.error.URLError as exc:
             if cancel_event is not None and cancel_event.is_set():
                 raise OllamaCancelled("Stopped") from exc
+            tip = _ai_ssl_error_tip(exc, tls_verify=tls_verify)
             raise RuntimeError(
-                f"Cannot reach OpenAI-compatible API at {url}.\n{exc.reason}"
+                f"Cannot reach OpenAI-compatible API at {url}.\n{exc.reason}{tip}"
             ) from exc
         except TimeoutError as exc:
             raise RuntimeError(
@@ -1632,6 +1708,8 @@ def ai_list_models(
     base_url: str = DEFAULT_AI_BASE_URL,
     timeout_s: float = AI_LIST_MODELS_TIMEOUT_S,
     api_key: str = "",
+    *,
+    tls_verify: bool = True,
 ) -> List[str]:
     """Return model ids from ``GET /models`` on an OpenAI-compatible API."""
     url_base = normalize_ai_base_url(base_url)
@@ -1640,10 +1718,11 @@ def ai_list_models(
         url, method="GET", headers=ai_request_headers(api_key, base_url=url_base),
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+        with ai_urlopen(req, timeout_s, tls_verify=tls_verify) as resp:
             body = json.loads(resp.read().decode("utf-8"))
     except Exception as exc:
-        raise RuntimeError(f"Cannot list models at {url}: {exc}") from exc
+        tip = _ai_ssl_error_tip(exc, tls_verify=tls_verify)
+        raise RuntimeError(f"Cannot list models at {url}: {exc}{tip}") from exc
     models: List[str] = []
     rows = body.get("data") if isinstance(body, dict) else None
     for m in rows or []:
@@ -1687,6 +1766,7 @@ def ai_test_connection(
     model: str = DEFAULT_AI_MODEL,
     *,
     api_key: str = "",
+    tls_verify: bool = True,
     timeout_s: float = AI_TEST_TIMEOUT_S,
     on_progress: Optional[Callable[[str], None]] = None,
 ) -> str:
@@ -1713,7 +1793,8 @@ def ai_test_connection(
     listing_note = ""
     try:
         served = ai_list_models(
-            url_base, timeout_s=min(AI_LIST_MODELS_TIMEOUT_S, timeout_s), api_key=key)
+            url_base, timeout_s=min(AI_LIST_MODELS_TIMEOUT_S, timeout_s),
+            api_key=key, tls_verify=tls_verify)
     except RuntimeError as exc:
         if is_local_ai_host(url_base):
             # Only name the canonical root when the user pointed elsewhere.
@@ -1749,7 +1830,7 @@ def ai_test_connection(
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+        with ai_urlopen(req, timeout_s, tls_verify=tls_verify) as resp:
             body = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         detail = ""
@@ -1762,7 +1843,10 @@ def ai_test_connection(
             f"HTTP {exc.code} at {chat_url}: {detail or exc.reason}.{tip}"
         ) from exc
     except Exception as exc:
-        raise RuntimeError(f"Chat probe failed at {chat_url}: {exc}") from exc
+        tip = _ai_ssl_error_tip(exc, tls_verify=tls_verify)
+        raise RuntimeError(
+            f"Chat probe failed at {chat_url}: {exc}{tip}"
+        ) from exc
 
     reply = ""
     choices = body.get("choices") if isinstance(body, dict) else None
@@ -2853,6 +2937,7 @@ def create_ai_assistant_panel(
                 "model": active["model"],
                 "api_key": active["api_key"],
                 "preset": active["preset"],
+                "tls_verify": parse_ai_tls_verify(active.get("tls_verify")),
                 "response_language": cfg.get(
                     "response_language", DEFAULT_AI_RESPONSE_LANGUAGE
                 ),
@@ -2935,6 +3020,7 @@ def create_ai_assistant_panel(
                 "model": active["model"],
                 "api_key": active["api_key"],
                 "preset": active["preset"],
+                "tls_verify": parse_ai_tls_verify(active.get("tls_verify")),
                 "response_language": cfg.get(
                     "response_language", DEFAULT_AI_RESPONSE_LANGUAGE
                 ),

@@ -356,6 +356,64 @@ class AiAssistantHelpersTests(unittest.TestCase):
         patch = parse_ai_settings_json(src)
         self.assertEqual(patch["gemini_auth_mode"], AI_AUTH_API_KEY)
 
+    def test_parse_ai_tls_verify(self) -> None:
+        import ssl
+        from unittest.mock import patch
+
+        from btf_viewer_pkg.ai_assistant import (
+            _ai_ssl_error_tip,
+            ai_ssl_context,
+            ai_urlopen,
+            format_ai_tls_verify,
+            parse_ai_settings_json,
+            parse_ai_tls_verify,
+            resolve_ai_settings,
+        )
+
+        self.assertTrue(parse_ai_tls_verify(""))
+        self.assertFalse(parse_ai_tls_verify("false"))
+        self.assertFalse(parse_ai_tls_verify(False))
+        self.assertEqual(format_ai_tls_verify(False), "false")
+        self.assertEqual(resolve_ai_settings({})["tls_verify"], "true")
+        self.assertEqual(
+            resolve_ai_settings({"custom_tls_verify": "false"}, "custom")["tls_verify"],
+            "false",
+        )
+        patch_json = parse_ai_settings_json({
+            "preset": "custom",
+            "base_url": "https://gateway.internal/v1",
+            "tls_verify": False,
+        })
+        self.assertEqual(patch_json["custom_tls_verify"], "false")
+        insecure = parse_ai_settings_json({
+            "preset": "custom",
+            "base_url": "https://gateway.internal/v1",
+            "insecure_tls": True,
+        })
+        self.assertEqual(insecure["custom_tls_verify"], "false")
+        self.assertIsNone(ai_ssl_context(True))
+        ctx = ai_ssl_context(False)
+        self.assertEqual(ctx.verify_mode, ssl.CERT_NONE)
+        self.assertFalse(ctx.check_hostname)
+        captured: dict = {}
+
+        def _urlopen(req, timeout=None, context=None):  # noqa: ANN001
+            captured["timeout"] = timeout
+            captured["context"] = context
+            return object()
+
+        with patch("btf_viewer_pkg.ai_assistant.urllib.request.urlopen", _urlopen):
+            ai_urlopen("req", 5.0, tls_verify=False)
+            self.assertEqual(captured["timeout"], 5.0)
+            self.assertEqual(captured["context"].verify_mode, ssl.CERT_NONE)
+            ai_urlopen("req", 3.0, tls_verify=True)
+            self.assertIsNone(captured["context"])
+        tip = _ai_ssl_error_tip(
+            OSError("CERTIFICATE_VERIFY_FAILED self-signed certificate"),
+            tls_verify=True,
+        )
+        self.assertIn("Allow self-signed TLS", tip)
+
     def test_http_401_tip_mentions_sign_in(self) -> None:
         from btf_viewer_pkg.ai_assistant import _ai_http_error_tip
         tip = _ai_http_error_tip(401, "unauthorized")
@@ -472,7 +530,7 @@ class AiAssistantHelpersTests(unittest.TestCase):
             def close(self) -> None:
                 return None
 
-        def _urlopen(req, timeout=None):  # noqa: ANN001
+        def _urlopen(req, timeout=None, **_kw):  # noqa: ANN001
             captured.append(json.loads(req.data.decode("utf-8")))
             payload = {
                 "choices": [{
@@ -507,7 +565,7 @@ class AiAssistantHelpersTests(unittest.TestCase):
         import io
         import urllib.error
 
-        def _urlopen(req, timeout=None):  # noqa: ANN001
+        def _urlopen(req, timeout=None, **_kw):  # noqa: ANN001
             raise urllib.error.HTTPError(
                 "http://127.0.0.1:11434/v1/chat/completions",
                 400,
@@ -546,7 +604,7 @@ class AiAssistantHelpersTests(unittest.TestCase):
             def close(self) -> None:
                 return None
 
-        def _urlopen(req, timeout=None):  # noqa: ANN001, ARG001
+        def _urlopen(req, timeout=None, **_kw):  # noqa: ANN001, ARG001
             captured.append(json.loads(req.data.decode("utf-8")))
             return _FakeResp(
                 b'{"choices":[{"message":{"role":"assistant","content":"ok"}}]}'
@@ -615,7 +673,7 @@ class AiAssistantHelpersTests(unittest.TestCase):
             def close(self) -> None:
                 return None
 
-        def _urlopen(req, timeout=None):  # noqa: ANN001, ARG001
+        def _urlopen(req, timeout=None, **_kw):  # noqa: ANN001, ARG001
             captured.append(json.loads(req.data.decode("utf-8")))
             return _FakeResp(
                 b'{"choices":[{"message":{"role":"assistant","content":"ok"}}]}'
@@ -710,7 +768,7 @@ class AiAssistantHelpersTests(unittest.TestCase):
         self.assertEqual(AI_CHAT_TIMEOUT_S, 120.0)
         captured = []
 
-        def _urlopen(req, timeout=None):  # noqa: ANN001
+        def _urlopen(req, timeout=None, **_kw):  # noqa: ANN001
             captured.append(timeout)
             raise TimeoutError("slow")
 

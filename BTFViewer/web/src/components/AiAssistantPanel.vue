@@ -896,6 +896,7 @@ async function runCompletion(active) {
     model: active.model,
     apiKey: active.apiKey,
     preset: active.preset,
+    tlsVerify: active.tlsVerify,
     responseLanguage: props.responseLanguage,
     signal: abortCtrl?.signal,
   })

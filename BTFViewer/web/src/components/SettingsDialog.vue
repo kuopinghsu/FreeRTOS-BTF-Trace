@@ -537,6 +537,24 @@
                 </button>
               </div>
             </div>
+            <label
+              class="settings-check"
+              title="Skip HTTPS certificate checks for this preset (self-signed or private CA). Use only on networks you trust. Browsers cannot skip this check — trust the cert in the OS, use http:// on a private LAN, or use the Desktop app."
+            >
+              <input
+                v-model="aiAllowInsecureTls"
+                type="checkbox"
+              >
+              Allow self-signed TLS
+            </label>
+            <p
+              v-if="aiAllowInsecureTls"
+              class="settings-help"
+            >
+              Desktop skips certificate checks for this preset. This browser
+              still verifies TLS — trust the cert in the OS/browser, use
+              http:// on a private LAN, or use the Desktop app.
+            </p>
 
             <label class="settings-row col">
               <span class="settings-label">Reply language</span>
@@ -673,6 +691,7 @@ import {
   normalizeAiAuthMode,
   normalizeAiPreset,
   parseAiSettingsJson,
+  parseAiTlsVerify,
   resolveAiSettings,
 } from '../utils/ollamaClient.js'
 
@@ -731,6 +750,16 @@ const aiAuthMode = computed({
         ...cur,
         authMode: normalizeAiAuthMode(v, { presetId: aiPreset.value }),
       },
+    }
+  },
+})
+const aiAllowInsecureTls = computed({
+  get: () => !parseAiTlsVerify(draft.aiPresets?.[aiPreset.value]?.tlsVerify, true),
+  set: (v) => {
+    const cur = draft.aiPresets?.[aiPreset.value] || {}
+    draft.aiPresets = {
+      ...draft.aiPresets,
+      [aiPreset.value]: { ...cur, tlsVerify: !v },
     }
   },
 })
@@ -985,6 +1014,7 @@ async function onRefreshModels() {
     const names = (await aiListModels(active.baseUrl, {
       apiKey: active.apiKey,
       preset: active.preset,
+      tlsVerify: active.tlsVerify,
       signal: aiAbort.signal,
     })).filter(Boolean).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
     aiModelLists[aiPreset.value] = names
@@ -1024,6 +1054,7 @@ async function onTestAi() {
       model: active.model,
       apiKey: active.apiKey,
       preset: active.preset,
+      tlsVerify: active.tlsVerify,
       signal: aiAbort.signal,
       onProgress: (s) => {
         aiTestOk.value = null

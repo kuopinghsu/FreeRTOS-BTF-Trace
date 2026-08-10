@@ -216,7 +216,7 @@ The **AI** tab answers questions using **Analysis Findings** (or Trace Compare t
 
 Any OpenAI-compatible endpoint works, including Ollama (`http://localhost:11434/v1`). Chat requests time out after 120s (**Stop** still cancels sooner).
 
-1. **Settings → AI** — pick a preset (**Ollama**, **OpenAI**, **Google Gemini**, or **Custom**), adjust base URL / model, then **Authentication**: **None (local)** for Ollama, **API key** to paste a provider key, or **Sign in** to open the vendor page and paste the issued key or token. **Test connection** after saving. Use the refresh icon next to **Model** to list ids from the endpoint. Each preset keeps its own settings, so switching back and forth never loses a key. The AI panel chip shows `Local` / `Key saved` / `Needs API key` / `Needs sign-in` / `Signed in`.
+1. **Settings → AI** — pick a preset (**Ollama**, **OpenAI**, **Google Gemini**, or **Custom**), adjust base URL / model, then **Authentication**: **None (local)** for Ollama, **API key** to paste a provider key, or **Sign in** to open the vendor page and paste the issued key or token. For a private HTTPS gateway with a self-signed certificate, enable **Allow self-signed TLS** (Desktop only — browsers cannot skip certificate checks). **Test connection** after saving. Use the refresh icon next to **Model** to list ids from the endpoint. Each preset keeps its own settings, so switching back and forth never loses a key. The AI panel chip shows `Local` / `Key saved` / `Needs API key` / `Needs sign-in` / `Signed in`.
 2. **Import…** loads an endpoint from a JSON file — see [`examples/ai`](examples/ai/README.md) for [`ollama.json`](examples/ai/ollama.json), [`gemini.json`](examples/ai/gemini.json), [`openai.json`](examples/ai/openai.json), [`deepseek.json`](examples/ai/deepseek.json), [`grok.json`](examples/ai/grok.json), [`presets.json`](examples/ai/presets.json), and the field reference. Imported values fill the form; review and confirm to save.
 3. Use a template, **Analysis → Query with AI…**, or ask freely. Click `jump:TIME` links to seek the timeline.
 4. Set reply language in Settings or **Language…** on the AI bar.
@@ -265,6 +265,7 @@ Replies may include ` ```mermaid ` **sequence** diagrams (mutex take/give, block
 | In-chat mermaid figure | Data-URI image + node hit-test | Inline SVG node clicks |
 | Zoom window + link row | Yes | Yes |
 | Authentication | Settings → AI → None / API key / Sign in; panel chip + 401 CTAs until a successful turn | Same (`VITE_*` env keys) |
+| Self-signed TLS | **Allow self-signed TLS** per preset skips HTTPS certificate checks | Persist the same flag + tip; browsers still verify — trust the cert, use `http://`, or use Desktop |
 | Model picker | Editable combo; refresh fills and opens the dropdown | Same |
 | Fonts | **pt** | **px** |
 | Endpoint from `file://` | N/A | CORS — prefer Vite proxy, or [Opening the web app from `file://`](#opening-the-web-app-from-file) |
@@ -273,6 +274,7 @@ Replies may include ` ```mermaid ` **sequence** diagrams (mutex take/give, block
 |-----------------|-----|
 | Web: Failed to fetch / CORS | The server is usually fine — the page just is not allowed to call it. Prefer `npm run dev` / `make preview` (both proxy Ollama), or see [Opening the web app from `file://`](#opening-the-web-app-from-file) |
 | 401 / 403 | Check authentication (Settings → AI → Sign in or API key; also `OPENAI_API_KEY` / `GEMINI_API_KEY` / `OLLAMA_API_KEY`; local Ollama needs none) |
+| `CERTIFICATE_VERIFY_FAILED` / self-signed TLS | Desktop: Settings → AI → **Allow self-signed TLS** for that preset. Web: trust the cert in the OS/browser, use `http://` on a private LAN, or use the Desktop app |
 | Model not found | Refresh the Model list (or Test connection) and pick a served id from the dropdown, or `ollama pull` it |
 | Gemini HTTP 400 `thought_signature` | Retry the question — the viewer echoes Gemini thought signatures on tool follow-ups |
 

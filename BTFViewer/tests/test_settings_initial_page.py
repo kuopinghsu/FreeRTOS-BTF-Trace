@@ -85,6 +85,7 @@ class SettingsInitialPageTests(unittest.TestCase):
         self.assertEqual(dlg._ai_preset_combo.currentText(), "Ollama")
         self.assertEqual(dlg._ai_auth_combo.currentData(), "none")
         self.assertTrue(dlg._ai_cred_wrap.isHidden())
+        self.assertFalse(dlg._ai_insecure_tls_cb.isChecked())
 
     def test_ai_preset_switch_keeps_each_preset_fields(self) -> None:
         dlg = self._dlg("AI")
@@ -125,9 +126,10 @@ class SettingsInitialPageTests(unittest.TestCase):
         dlg._ai_preset_combo.setCurrentIndex(dlg._ai_preset_combo.findData("gemini"))
         dlg._ai_url_edit.clear()
         dlg._set_ai_model_text("")
-        url, model, _key = dlg._ai_test_target()
+        url, model, _key, tls_verify = dlg._ai_test_target()
         self.assertIn("generativelanguage", url)
         self.assertIn("gemini", model)
+        self.assertTrue(tls_verify)
 
     def test_import_ai_settings_patch(self) -> None:
         dlg = self._dlg("AI")
@@ -139,6 +141,7 @@ class SettingsInitialPageTests(unittest.TestCase):
             "gemini_model": "gemini-3.6-flash",
             "gemini_api_key": "imported",
             "gemini_auth_mode": "browser",
+            "gemini_tls_verify": "false",
             "response_language": "Klingon (tlhIngan Hol)",
         })
         self.assertIn("Google Gemini", summary)
@@ -146,6 +149,7 @@ class SettingsInitialPageTests(unittest.TestCase):
         self.assertEqual(dlg._ai_model_text(), "gemini-3.6-flash")
         self.assertEqual(dlg._ai_api_key_edit.text(), "imported")
         self.assertEqual(dlg._ai_auth_combo.currentData(), "browser")
+        self.assertTrue(dlg._ai_insecure_tls_cb.isChecked())
         self.assertEqual(dlg.response_language, "Klingon (tlhIngan Hol)")
         # Presets the file did not name keep their settings.
         self.assertEqual(

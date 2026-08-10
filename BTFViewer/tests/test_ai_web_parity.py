@@ -226,9 +226,12 @@ class AiWebParityTests(unittest.TestCase):
         self.assertEqual(AI_AUTH_API_KEY, "api_key")
         self.assertEqual(AI_AUTH_BROWSER, "browser")
         self.assertEqual(tuple(AI_PRESET_FIELDS), (
-            "base_url", "model", "api_key", "auth_mode"))
+            "base_url", "model", "api_key", "auth_mode", "tls_verify"))
         self.assertIn("authMode", js)
-        self.assertIn("AI_PRESET_FIELDS = ['baseUrl', 'model', 'apiKey', 'authMode']", js)
+        self.assertIn(
+            "AI_PRESET_FIELDS = ['baseUrl', 'model', 'apiKey', 'authMode', 'tlsVerify']",
+            js,
+        )
 
         for _mode, label in AI_AUTH_MODE_LABELS:
             self.assertIn(f"'{label}'", js)
@@ -299,7 +302,16 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn(
             "Opened ${url}. Paste the key or token in Settings → AI.", panel)
         self.assertIn("Authentication |", readme)
+        self.assertIn("Self-signed TLS |", readme)
         self.assertIn("Model picker |", readme)
+        self.assertIn("Allow self-signed TLS", stats)
+        self.assertIn("Allow self-signed TLS", vue)
+        self.assertIn("Allow self-signed TLS", readme)
+        self.assertIn("Allow self-signed TLS", workflows)
+        self.assertIn("def parse_ai_tls_verify", assist)
+        self.assertIn("export function parseAiTlsVerify", js)
+        self.assertIn("ai_urlopen", assist)
+        self.assertIn("aiTlsTip", js)
         for name in (
             "ollama.json", "gemini.json", "openai.json",
             "deepseek.json", "grok.json", "presets.json",

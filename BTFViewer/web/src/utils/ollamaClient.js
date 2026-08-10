@@ -172,7 +172,7 @@ export const DEFAULT_AI_BASE_URL = 'http://localhost:11434/v1'
 export const DEFAULT_AI_MODEL = 'phi4-mini:3.8b'
 
 /** Per-preset settings stored in browser storage (parity with btf_viewer.rc). */
-export const AI_PRESET_FIELDS = ['baseUrl', 'model', 'apiKey', 'authMode']
+export const AI_PRESET_FIELDS = ['baseUrl', 'model', 'apiKey', 'authMode', 'tlsVerify']
 
 export const AI_AUTH_NONE = 'none'
 export const AI_AUTH_API_KEY = 'api_key'
@@ -256,6 +256,7 @@ export function resolveAiSettings(cfg = {}, presetId = null) {
     model: String(stored.model || '') || info.model,
     apiKey: String(stored.apiKey || ''),
     authMode: normalizeAiAuthMode(stored.authMode, { presetId: preset, baseUrl }),
+    tlsVerify: parseAiTlsVerify(stored.tlsVerify, true),
   }
 }
 
@@ -407,6 +408,8 @@ export function parseAiSettingsJson(data) {
     if (authMode) {
       entry.authMode = normalizeAiAuthMode(authMode, { presetId: target, baseUrl })
     }
+    const tls = jsonTlsVerify(fields)
+    if (tls !== undefined) entry.tlsVerify = tls
     if (Object.keys(entry).length) {
       presets[target] = { ...(presets[target] || {}), ...entry }
     }
@@ -572,6 +575,37 @@ export function defaultAiAuthMode(presetId = '', baseUrl = '') {
   if (pid === AI_PRESET_OLLAMA) return AI_AUTH_NONE
   if (baseUrl && isLocalAiHost(baseUrl)) return AI_AUTH_NONE
   return AI_AUTH_API_KEY
+}
+
+export function parseAiTlsVerify(value, defaultValue = true) {
+  if (value == null || value === '') return !!defaultValue
+  if (typeof value === 'boolean') return value
+  const s = String(value).trim().toLowerCase()
+  if (['0', 'false', 'no', 'off', 'disable', 'disabled', 'insecure'].includes(s)) {
+    return false
+  }
+  if (['1', 'true', 'yes', 'on', 'enable', 'enabled', 'secure'].includes(s)) {
+    return true
+  }
+  return !!defaultValue
+}
+
+function jsonTlsVerify(fields) {
+  if (!fields || typeof fields !== 'object') return undefined
+  for (const name of ['tls_verify', 'tlsVerify', 'verify_tls', 'verifyTls']) {
+    if (Object.prototype.hasOwnProperty.call(fields, name)) {
+      return parseAiTlsVerify(fields[name], true)
+    }
+  }
+  for (const name of [
+    'insecure_tls', 'insecureTls', 'tls_insecure', 'allow_insecure_tls',
+    'allowInsecureTls',
+  ]) {
+    if (Object.prototype.hasOwnProperty.call(fields, name)) {
+      return !parseAiTlsVerify(fields[name], false)
+    }
+  }
+  return undefined
 }
 
 export function normalizeAiAuthMode(value, { presetId = '', baseUrl = '' } = {}) {
@@ -765,7 +799,25 @@ export function aiReachabilityTip(urlBase) {
   return ' Prefer `npm run dev` / `preview` (CORS).'
 }
 
-function aiFetchReachError(urlBase, lastErr) {
+/** Tip when HTTPS to a private / self-signed AI gateway fails in the browser. */
+export function aiTlsTip(urlBase, tlsVerify = true) {
+  const u = String(urlBase || '')
+  if (!/^https:/i.test(u)) return ''
+  if (parseAiTlsVerify(tlsVerify, true)) {
+    return (
+      ' If this host uses a self-signed certificate, the browser cannot skip '
+      + 'the check — trust the cert in the OS/browser, use http:// on a private '
+      + 'LAN, or enable Allow self-signed TLS in the Desktop app.'
+    )
+  }
+  return (
+    ' Allow self-signed TLS is on, but browsers still verify certificates. '
+    + 'Trust the cert in the OS/browser, use http:// on a private LAN, or '
+    + 'use the Desktop app.'
+  )
+}
+
+function aiFetchReachError(urlBase, lastErr, tlsVerify = true) {
   const msg = String(lastErr?.message || lastErr || 'Failed to fetch')
   if (/ISO-8859-1|non ISO-8859-1|code point/i.test(msg)) {
     return new Error(
@@ -775,7 +827,8 @@ function aiFetchReachError(urlBase, lastErr) {
     )
   }
   return new Error(
-    `Cannot reach the AI endpoint at ${urlBase}.${aiReachabilityTip(urlBase)} (${msg})`,
+    `Cannot reach the AI endpoint at ${urlBase}.${aiReachabilityTip(urlBase)}`
+    + `${aiTlsTip(urlBase, tlsVerify)} (${msg})`,
   )
 }
 
@@ -783,7 +836,7 @@ function aiFetchReachError(urlBase, lastErr) {
  * POST to `/chat/completions`, preferring the Vite same-origin proxy.
  * @returns {Promise<{ resp: Response, fetchBase: string }>}
  */
-async function aiFetchChat(preset, urlBase, { headers, body, signal }) {
+async function aiFetchChat(preset, urlBase, { headers, body, signal, tlsVerify = true }) {
   const proxyBase = aiSameOriginProxyBase(preset, urlBase)
   const bases = proxyBase ? [proxyBase, urlBase] : [urlBase]
   let lastErr = null
@@ -810,7 +863,7 @@ async function aiFetchChat(preset, urlBase, { headers, body, signal }) {
       lastErr = err
     }
   }
-  throw aiFetchReachError(urlBase, lastErr)
+  throw aiFetchReachError(urlBase, lastErr, tlsVerify)
 }
 
 /**
@@ -829,6 +882,7 @@ export async function aiChatCompletion({
   apiKey = '',
   responseLanguage = DEFAULT_AI_RESPONSE_LANGUAGE,
   preset = DEFAULT_AI_PRESET,
+  tlsVerify = true,
   messages = null,
   tools = null,
   signal,
@@ -888,6 +942,7 @@ export async function aiChatCompletion({
       headers: aiRequestHeaders(key, urlBase),
       body: JSON.stringify(bodyObj),
       signal: chatCtrl.signal,
+      tlsVerify,
     })
     if (!resp.ok) {
       const detail = (await resp.text().catch(() => '')).slice(0, 400)
@@ -971,6 +1026,7 @@ export async function aiChat(opts = {}) {
 /** Model ids from `GET /models` on an OpenAI-compatible API. */
 export async function aiListModels(baseUrl = DEFAULT_AI_BASE_URL, {
   signal, timeoutMs = AI_LIST_MODELS_TIMEOUT_MS, apiKey = '', preset = DEFAULT_AI_PRESET,
+  tlsVerify = true,
 } = {}) {
   const urlBase = normalizeAiBaseUrl(baseUrl)
   const proxyBase = aiSameOriginProxyBase(preset, urlBase)
@@ -1011,7 +1067,8 @@ export async function aiListModels(baseUrl = DEFAULT_AI_BASE_URL, {
   const via = proxyBase ? ` (also tried ${proxyBase}/models)` : ''
   throw new Error(
     `Cannot list models at ${urlBase}/models${via}: ${msg}.`
-    + aiReachabilityTip(urlBase),
+    + aiReachabilityTip(urlBase)
+    + aiTlsTip(urlBase, tlsVerify),
     { cause: lastErr },
   )
 }
@@ -1054,6 +1111,7 @@ export async function aiTestConnection({
   model = DEFAULT_AI_MODEL,
   apiKey = '',
   preset = DEFAULT_AI_PRESET,
+  tlsVerify = true,
   signal,
   timeoutMs = AI_TEST_TIMEOUT_MS,
   onProgress,
@@ -1086,6 +1144,7 @@ export async function aiTestConnection({
       timeoutMs: Math.min(AI_LIST_MODELS_TIMEOUT_MS, timeoutMs),
       apiKey: key,
       preset,
+      tlsVerify,
     })
   } catch (err) {
     if (local) {
@@ -1120,6 +1179,7 @@ export async function aiTestConnection({
     ;({ resp, fetchBase } = await aiFetchChat(preset, urlBase, {
       headers: aiRequestHeaders(key, urlBase),
       signal: chatCtrl.signal,
+      tlsVerify,
       body: JSON.stringify({
         model: modelName,
         stream: false,

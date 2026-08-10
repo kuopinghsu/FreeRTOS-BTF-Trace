@@ -24,6 +24,7 @@ After import: review **Authentication**, paste a key or use **Sign in…** (open
 | `model` | Model id served by that endpoint. Refresh the **Model** list (dropdown) or **Test connection** to see what the endpoint serves. For Gemini prefer the rolling aliases (`gemini-flash-lite-latest`, `gemini-flash-latest`) — pinned versions differ per account and are retired over time. For Grok / DeepSeek, pick a served id after refresh. |
 | `api_key` | Optional. Leave empty (`""`) to use `OPENAI_API_KEY` / `GEMINI_API_KEY` / `OLLAMA_API_KEY` from the environment (`VITE_*` on the web), which keeps keys out of shared files. |
 | `auth_mode` | Optional. `none` (local), `api_key`, or `browser` (`sign_in` / `oauth` also accepted). Controls Settings → **Authentication**. Use `none` for local Ollama, `api_key` to paste a provider key, `browser` when the user should **Sign in…** first. Example files include a `//` line comment above this field. |
+| `tls_verify` | Optional. `true` (default) verifies the HTTPS certificate. Set `false` (or `insecure_tls: true`) for a self-signed / private-CA gateway. Desktop then skips certificate checks; browsers still verify — trust the cert, use `http://`, or use the Desktop app. |
 | `response_language` | Optional reply language for the assistant. |
 
 Key names may also be camelCase (`baseUrl`, `apiKey`, `authMode`, `responseLanguage`), so a file written for either app works in both. Whole-line `//` comments are ignored on import (so `https://` inside strings is safe).

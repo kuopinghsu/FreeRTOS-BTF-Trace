@@ -38,6 +38,7 @@ import {
   migrateAiSettings,
   normalizeAiAuthMode,
   normalizeAiPreset,
+  parseAiTlsVerify,
 } from './ollamaClient.js'
 
 const SETTINGS_KEY = 'btf-viewer-settings-v1'
@@ -79,7 +80,7 @@ export const DEFAULT_SETTINGS = {
   aiPreset: DEFAULT_AI_PRESET,
   // Per-preset base URL / model / API key; empty means "preset default".
   aiPresets: Object.fromEntries(
-    AI_PRESETS.map((p) => [p.id, { baseUrl: '', model: '', apiKey: '', authMode: '' }]),
+    AI_PRESETS.map((p) => [p.id, { baseUrl: '', model: '', apiKey: '', authMode: '', tlsVerify: true }]),
   ),
   aiResponseLanguage: DEFAULT_AI_RESPONSE_LANGUAGE,
   aiAutoApply: false,
@@ -104,6 +105,7 @@ function normalizeAiPresetSettings(s) {
         presetId: preset.id,
         baseUrl: baseUrl || preset.baseUrl,
       }),
+      tlsVerify: parseAiTlsVerify(v.tlsVerify, true),
     }
   }
   return { presets: out, preset: migrated.aiPreset || '' }

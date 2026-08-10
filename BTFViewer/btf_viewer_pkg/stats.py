@@ -79,9 +79,11 @@ from .ai_assistant import (  # noqa: F401
     ai_preset_signin_url,
     ai_test_connection,
     default_ai_auth_mode,
+    format_ai_tls_verify,
     normalize_ai_auth_mode,
     normalize_ai_preset,
     parse_ai_settings_json,
+    parse_ai_tls_verify,
     resolve_ai_api_key,
     resolve_ai_settings,
 )
@@ -105,11 +107,13 @@ class _AiTestWorker(QObject):
         base_url: str,
         model_name: str,
         api_key: str = "",
+        tls_verify: bool = True,
     ) -> None:
         super().__init__(parent)
         self._base_url = base_url
         self._model = model_name
         self._api_key = api_key
+        self._tls_verify = tls_verify
 
     def start(self) -> None:
         threading.Thread(target=self._run, name="ai-test", daemon=True).start()
@@ -120,6 +124,7 @@ class _AiTestWorker(QObject):
                 base_url=self._base_url,
                 model=self._model,
                 api_key=self._api_key,
+                tls_verify=self._tls_verify,
                 on_progress=lambda s: self.progress.emit(s),
             )
             self.finished.emit(msg)
@@ -133,10 +138,18 @@ class _AiListModelsWorker(QObject):
     finished = Signal(list)
     failed = Signal(str)
 
-    def __init__(self, parent: QObject, *, base_url: str, api_key: str = "") -> None:
+    def __init__(
+        self,
+        parent: QObject,
+        *,
+        base_url: str,
+        api_key: str = "",
+        tls_verify: bool = True,
+    ) -> None:
         super().__init__(parent)
         self._base_url = base_url
         self._api_key = api_key
+        self._tls_verify = tls_verify
 
     def start(self) -> None:
         threading.Thread(target=self._run, name="ai-list-models", daemon=True).start()
@@ -146,6 +159,7 @@ class _AiListModelsWorker(QObject):
             names = ai_list_models(
                 base_url=self._base_url,
                 api_key=resolve_ai_api_key(self._api_key),
+                tls_verify=self._tls_verify,
             )
             self.finished.emit([str(n) for n in names if n])
         except Exception as exc:
@@ -12854,6 +12868,7 @@ class _SettingsDialog(QDialog):
                     preset_id=_pid,
                     base_url=base,
                 ),
+                "tls_verify": format_ai_tls_verify(stored.get("tls_verify", "")),
             }
 
         self._ai_preset_combo = QComboBox()
@@ -12954,6 +12969,14 @@ class _SettingsDialog(QDialog):
         self._ai_cred_label = QLabel("API key:")
         f4.addRow(self._ai_cred_label, self._ai_cred_wrap)
         self._ai_auth_combo.currentIndexChanged.connect(self._on_ai_auth_mode_changed)
+
+        self._ai_insecure_tls_cb = QCheckBox("Allow self-signed TLS")
+        self._ai_insecure_tls_cb.setToolTip(
+            "Skip HTTPS certificate checks for this preset (self-signed or "
+            "private CA). Use only on networks you trust. Browsers cannot "
+            "skip this check — trust the cert in the OS, use http:// on a "
+            "private LAN, or use this Desktop app.")
+        f4.addRow("", self._ai_insecure_tls_cb)
 
         self._response_lang_combo = QComboBox()
         self._response_lang_combo.addItems(list(AI_RESPONSE_LANGUAGES))
@@ -13114,6 +13137,8 @@ class _SettingsDialog(QDialog):
                 preset_id=self._ai_active_preset,
                 base_url=self._ai_url_edit.text().strip(),
             ),
+            "tls_verify": format_ai_tls_verify(
+                not self._ai_insecure_tls_cb.isChecked()),
         }
 
     def _ai_model_text(self) -> str:
@@ -13164,6 +13189,8 @@ class _SettingsDialog(QDialog):
         self._ai_auth_combo.blockSignals(True)
         self._ai_auth_combo.setCurrentIndex(max(0, idx))
         self._ai_auth_combo.blockSignals(False)
+        self._ai_insecure_tls_cb.setChecked(
+            not parse_ai_tls_verify(vals.get("tls_verify", ""), default=True))
         self._update_ai_auth_ui()
 
     def _on_ai_auth_mode_changed(self, *_args) -> None:
@@ -13308,23 +13335,25 @@ class _SettingsDialog(QDialog):
             return
         self._set_ai_status(self.apply_ai_settings_patch(patch), "ok")
 
-    def _ai_test_target(self) -> Tuple[str, str, str]:
+    def _ai_test_target(self) -> Tuple[str, str, str, bool]:
         """Typed fields, falling back to the active preset's defaults."""
         _pid, _label, def_base, def_model = ai_preset_info(self._ai_active_preset)
         return (
             self._ai_url_edit.text().strip() or def_base,
             self._ai_model_text() or def_model,
             self._ai_api_key_edit.text().strip(),
+            not self._ai_insecure_tls_cb.isChecked(),
         )
 
     def _refresh_ai_models(self) -> None:
         """Fetch ``GET /models`` into the Model combo."""
         if self._ai_list_worker is not None or self._ollama_test_worker is not None:
             return
-        url, _model, api_key = self._ai_test_target()
+        url, _model, api_key, tls_verify = self._ai_test_target()
         self._ai_model_refresh.setEnabled(False)
         self._set_ai_status(f"Listing models at {url}…")
-        worker = _AiListModelsWorker(self, base_url=url, api_key=api_key)
+        worker = _AiListModelsWorker(
+            self, base_url=url, api_key=api_key, tls_verify=tls_verify)
         worker.finished.connect(
             self._on_ai_models_ok, Qt.ConnectionType.QueuedConnection)
         worker.failed.connect(
@@ -13368,7 +13397,7 @@ class _SettingsDialog(QDialog):
         """Test the configured endpoint with the typed Settings fields."""
         if self._ollama_test_worker is not None or self._ai_list_worker is not None:
             return
-        url, model, api_key = self._ai_test_target()
+        url, model, api_key, tls_verify = self._ai_test_target()
         self._ollama_test_btn.setEnabled(False)
         self._ai_model_refresh.setEnabled(False)
         self._ollama_test_btn.setText("Testing…")
@@ -13379,6 +13408,7 @@ class _SettingsDialog(QDialog):
             base_url=url,
             model_name=model,
             api_key=api_key,
+            tls_verify=tls_verify,
         )
         # QueuedConnection: signals are emitted from a plain Python thread.
         worker.progress.connect(
@@ -13449,6 +13479,7 @@ class _SettingsDialog(QDialog):
             self._ai_preset_values[_pid] = {
                 "base_url": _base, "model": _model, "api_key": "",
                 "auth_mode": default_ai_auth_mode(_pid, _base),
+                "tls_verify": "true",
             }
             self._ai_model_lists[_pid] = []
         self._ai_active_preset = DEFAULT_AI_PRESET

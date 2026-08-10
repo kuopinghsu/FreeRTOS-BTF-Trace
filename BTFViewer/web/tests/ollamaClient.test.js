@@ -24,8 +24,10 @@ import {
   normalizeAiBaseUrl,
   normalizeAiPreset,
   parseAiSettingsJson,
+  parseAiTlsVerify,
   stripAiSettingsJsonc,
   resolveAiSettings,
+  aiTlsTip,
 } from '../src/utils/ollamaClient.js'
 
 describe('AI endpoint helpers', () => {
@@ -73,6 +75,34 @@ describe('AI endpoint helpers', () => {
       authMode: 'sign_in',
     })
     assert.equal(patch.presets.gemini.authMode, 'browser')
+  })
+
+  it('parses tls_verify / insecure_tls for self-signed gateways', () => {
+    assert.equal(parseAiTlsVerify(''), true)
+    assert.equal(parseAiTlsVerify('false'), false)
+    assert.equal(parseAiTlsVerify(false), false)
+    const patch = parseAiSettingsJson({
+      preset: 'custom',
+      base_url: 'https://gateway.internal/v1',
+      tls_verify: false,
+    })
+    assert.equal(patch.presets.custom.tlsVerify, false)
+    const insecure = parseAiSettingsJson({
+      preset: 'custom',
+      base_url: 'https://gateway.internal/v1',
+      insecure_tls: true,
+    })
+    assert.equal(insecure.presets.custom.tlsVerify, false)
+    const active = resolveAiSettings({
+      aiPreset: 'custom',
+      aiPresets: {
+        custom: { baseUrl: 'https://gateway.internal/v1', tlsVerify: false },
+      },
+    })
+    assert.equal(active.tlsVerify, false)
+    assert.match(aiTlsTip(active.baseUrl, true), /self-signed/)
+    assert.match(aiTlsTip(active.baseUrl, false), /Desktop/)
+    assert.equal(aiTlsTip('http://localhost:11434/v1', true), '')
   })
 
   it('detects local hosts (no API key required)', () => {
