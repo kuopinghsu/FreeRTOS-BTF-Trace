@@ -20,6 +20,8 @@ from .config import (  # private symbols are not pulled in by import *
 )
 from .parser import *  # noqa: F403,F401
 from .parser import (  # private symbols are not pulled in by import *
+    _gini_coefficient,
+    _core_util_stddev,
     _concurrency_level_plot_points,
     _concurrent_core_active_rows,
     _dispatch_latency_by_mk,
@@ -48,7 +50,9 @@ from .parser import (  # private symbols are not pulled in by import *
     _chord_label_visible,
 )
 from .timeline_util import *  # noqa: F403,F401
-from .timeline_util import _format_time  # noqa: F401 — star-import skips leading _
+from .timeline_util import (  # noqa: F401 — star-import skips leading _
+    _format_time, _get_fixed_font_family, _monospace_font,
+)
 from .graphics_items import *  # noqa: F403,F401
 from .scene import *  # noqa: F403,F401
 from .view import *  # noqa: F403,F401
@@ -4108,8 +4112,7 @@ class _ChordDiagramWidget(QWidget):
             self.update()
 
     def _mono_font(self, px: int, bold: bool = False) -> QFont:
-        fam = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont).family()
-        font = QFont(fam)
+        font = QFont(_get_fixed_font_family())
         font.setPixelSize(int(px))
         font.setBold(bool(bold))
         return font
@@ -4540,7 +4543,7 @@ class _CorridorTimelineCanvas(QWidget):
             "QLabel#corridorGridTip {"
             "background: palette(window); color: palette(window-text);"
             "border: 1px solid palette(mid); border-radius: 4px;"
-            "padding: 6px 8px; font-family: monospace; font-size: 11px;"
+            f"padding: 6px 8px; font-family: \"{_get_fixed_font_family()}\"; font-size: 11px;"
             "}"
         )
         self._tip.hide()
@@ -4606,8 +4609,7 @@ class _CorridorTimelineCanvas(QWidget):
             if selected:
                 p.fillRect(0, y, w, row_h, QColor(100, 160, 255, 30))
             p.setPen(fg)
-            font = QFont("monospace", 8)
-            font.setBold(selected)
+            font = _monospace_font(8, QFont.Bold if selected else QFont.Normal)
             p.setFont(font)
             p.drawText(QRectF(2, y, label_w - 6, row_h),
                        int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight),
@@ -4638,7 +4640,7 @@ class _CorridorTimelineCanvas(QWidget):
         # Sticky time axis (parity with web .ci-grid-canvas).
         p.fillRect(QRectF(0, 0, w, head_h), bg)
         p.setPen(fg)
-        p.setFont(QFont("monospace", 8))
+        p.setFont(_monospace_font(8))
         p.drawText(4, 12,
                    "Y: corridor (src→dst)   X: time   color: mig count   hatch: lock bounce")
         p.drawText(4, 26, "src→dst")
@@ -4858,7 +4860,9 @@ class _CorridorInspectorDialog(QDialog):
                  on_spotlight: Optional[Callable] = None,
                  on_clear: Optional[Callable] = None,
                  on_jump: Optional[Callable] = None,
-                 initial_mode: str = "heatmap"):
+                 initial_mode: str = "heatmap",
+                 ai_enabled: bool = True,
+                 on_query_ai: Optional[Callable] = None):
         super().__init__(parent)
         self.setWindowTitle("Migration & Corridor Inspector")
         self.setMinimumSize(720, 520)
@@ -4868,6 +4872,8 @@ class _CorridorInspectorDialog(QDialog):
         self._on_spotlight = on_spotlight
         self._on_clear = on_clear
         self._on_jump = on_jump
+        self._ai_enabled = ai_enabled
+        self._on_query_ai = on_query_ai
         self._bounce_only = False
         self._top_pct = _default_corridor_top_pct(len(trace.core_names))
         self._scope_lo = self._scope_hi = None
@@ -5146,11 +5152,28 @@ class _CorridorInspectorDialog(QDialog):
         lay.addWidget(self._filter_bar)
 
         btns = QDialogButtonBox(QDialogButtonBox.Close)
+        self._ai_btn = btns.addButton(
+            "Query with AI…", QDialogButtonBox.ButtonRole.ActionRole)
+        self._ai_btn.clicked.connect(self._query_with_ai)
+        self.set_ai_enabled(ai_enabled)
         btns.rejected.connect(self.reject)
         lay.addWidget(btns)
 
         self.refresh_scope()
         QTimer.singleShot(0, self._fit_tree_pane)
+
+    def set_ai_enabled(self, enabled: bool) -> None:
+        self._ai_enabled = bool(enabled)
+        if getattr(self, "_ai_btn", None) is None:
+            return
+        self._ai_btn.setToolTip(
+            "Open the AI Assistant and walk through migration / corridor findings"
+            if self._ai_enabled else
+            "Enable AI Assistant in Settings → AI")
+
+    def _query_with_ai(self) -> None:
+        if self._on_query_ai is not None:
+            self._on_query_ai(self._ai_enabled)
 
     @staticmethod
     def _style_inspector_field(widget) -> None:
@@ -6452,7 +6475,7 @@ class _LoadBalanceGaugeWidget(QWidget):
             )
             y += 16
 
-        meta_font = QFont("Menlo" if sys.platform == "darwin" else "monospace")
+        meta_font = QFont(_get_fixed_font_family())
         meta_font.setPointSizeF(8.0)
         p.setFont(meta_font)
         p.setPen(muted)
@@ -6773,10 +6796,13 @@ def _render_workflow_analysis_html(
 class _AnalysisFindingsDialog(QDialog):
     """Toolbar Analysis dialog — lists heuristic findings for the current scope."""
 
-    def __init__(self, findings: List[dict], scope_title: str = "", parent=None):
+    def __init__(self, findings: List[dict], scope_title: str = "", parent=None,
+                 ai_enabled: bool = True):
         super().__init__(parent)
         self._findings = findings or []
         self._scope_title = scope_title or ""
+        self.wants_ai_query = False
+        self._ai_needs_settings = False
         self.setWindowTitle(f"Analysis Findings{self._scope_title}")
         self.setModal(True)
         self.setMinimumSize(520, 360)
@@ -6808,6 +6834,13 @@ class _AnalysisFindingsDialog(QDialog):
             list_w.addItem(QListWidgetItem("No findings for the current scope"))
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        ai_btn = buttons.addButton(
+            "Query with AI…", QDialogButtonBox.ButtonRole.ActionRole)
+        ai_btn.setToolTip(
+            "Open the AI Assistant and walk through these Analysis Findings"
+            if ai_enabled else
+            "Enable AI Assistant in Settings → AI")
+        ai_btn.clicked.connect(lambda: self._query_with_ai(ai_enabled))
         save_btn = buttons.addButton(
             "Save as Text…", QDialogButtonBox.ButtonRole.ActionRole)
         save_btn.clicked.connect(self._save_as_text)
@@ -6818,6 +6851,11 @@ class _AnalysisFindingsDialog(QDialog):
         lay.addWidget(note)
         lay.addWidget(list_w, 1)
         lay.addWidget(buttons)
+
+    def _query_with_ai(self, ai_enabled: bool) -> None:
+        self.wants_ai_query = True
+        self._ai_needs_settings = not ai_enabled
+        self.accept()
 
     def _save_as_text(self) -> None:
         path, _ = QFileDialog.getSaveFileName(

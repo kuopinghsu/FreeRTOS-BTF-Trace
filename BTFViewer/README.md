@@ -52,7 +52,7 @@ Metric definitions and formulas are in [Statistics & metrics](#statistics--metri
 <a id="desktop" name="desktop">&#x200B;</a>
 ### Desktop ![](../images/readme/h3.svg)
 
-**Requirements:** Python 3.8+ and [PySide6](https://pypi.org/project/PySide6/) ≥ 6.4.
+**Requirements:** Python 3.8+ ([PySide6](https://pypi.org/project/PySide6/) ≥ 6.4). Python 3.9+ is recommended.
 
 ```bash
 cd BTFViewer
@@ -60,7 +60,7 @@ pip install -r requirements.txt
 python builds/btf_viewer.py [trace.btf]
 ```
 
-With no file argument, the previous session is restored. You can also use **File → Open**, drag-and-drop, or **File → Open Recent**.
+With no file argument, the previous session is restored. You can also use **File → Open**, drag-and-drop, or **File → Open Recent** (Desktop).
 
 <a id="web" name="web">&#x200B;</a>
 ### Web ![](../images/readme/h3.svg)
@@ -71,7 +71,7 @@ Open the standalone build in any modern browser (no server required for typical 
 open BTFViewer/builds/btf_viewer.html   # or double-click the file
 ```
 
-Or use the [hosted demo](https://apps.kuoping.com/btf_viewer.html). To rebuild from source:
+Or use the [hosted demo](https://apps.kuoping.com/btf_viewer.html). Toolbar **Demo** loads a bundled sample without a file picker. To rebuild from source:
 
 ```bash
 cd BTFViewer && make web    # → builds/btf_viewer.html
@@ -104,7 +104,7 @@ Desktop and Web share the same concepts. Where behaviour differs, it is noted be
 | **Core View** | One expandable row per core; expand a core or use Expand / Collapse All |
 | **Horizontal / Vertical** | Time left→right or top→bottom |
 
-Switch from the toolbar or **View** menu. The last orientation is remembered.
+Switch from the toolbar (both apps) or the **View** menu (Desktop). The last orientation is remembered. On Web, `1` / `2` switch Task / Core View and `H` / `V` switch orientation.
 
 <a id="zoom-and-pan" name="zoom-and-pan">&#x200B;</a>
 ### Zoom and pan ![](../images/readme/h3.svg)
@@ -114,7 +114,7 @@ Switch from the toolbar or **View** menu. The last orientation is remembered.
 - **Middle-drag** — select a time range to zoom
 - **Fit** (`Ctrl+0` / `F`) — show the full trace
 - **1:1** — reset to the configured zoom density
-- **Zoom to cursor range** (`Ctrl+R`) — fit between the first and last cursor
+- **Zoom to cursor range** (`Ctrl+R`) — fit between the earliest and latest placed cursor (2+ cursors)
 
 <a id="labels-legend-and-highlight" name="labels-legend-and-highlight">&#x200B;</a>
 ### Labels, legend, and highlight ![](../images/readme/h3.svg)
@@ -144,7 +144,7 @@ Place up to **4–8** cursors (default 4; set in Settings).
 | Clear all | `Shift+C` or **Shift+right-click** |
 | Snap to boundary | **Shift+click** |
 
-With **two or more** cursors, the status bar shows a short range summary, and Statistics can limit metrics to **C1–Cn** (**Limit to cursor range**).
+With **two or more** cursors, the status bar shows a short range summary, and Statistics can limit metrics to that window (**Limit to C1–Cn**).
 
 <a id="marks-and-find" name="marks-and-find">&#x200B;</a>
 ### Marks and find ![](../images/readme/h3.svg)
@@ -177,15 +177,15 @@ Start with toolbar **Analysis** for a severity-tagged triage of the current Stat
 <a id="analysis-findings" name="analysis-findings">&#x200B;</a>
 ### Analysis Findings ![](../images/readme/h3.svg)
 
-Toolbar **Analysis** summarises likely issues for the current scope (load imbalance, WCET/CPU hotspots, blocking, priority inversion, core thrashing, deadline breaches, tick health, sync/mutex bounces, and similar). Use **Save as text…** for a copy; the same card appears in **Export HTML**.
+Toolbar **Analysis** summarises likely issues for the current scope (load imbalance, WCET/CPU hotspots, blocking, priority inversion, core thrashing, deadline breaches, tick health, sync/mutex bounces, and similar). Use **Query with AI…** to walk the same findings in the **AI** tab, or **Save as Text…** for a copy; the same card appears in **Export HTML**.
 
 **How to act on a finding**
 
 1. Note the severity and the Statistics section it names.
 2. Open that section, sort by Max / Rate / Bounce as relevant.
 3. Click **Min** / **Max**, a chart point, or an inspector cell to jump the timeline.
-4. Place cursors around the phase of interest and enable **Limit to cursor range**.
-5. Optionally ask the **AI** tab to walk the same findings ([WORKFLOWS.md §7](WORKFLOWS.md#7-ai-assistant-flow)).
+4. Place cursors around the phase of interest and enable **Limit to C1–Cn**.
+5. Optionally click **Query with AI…** (or open the **AI** tab) to walk the same findings ([WORKFLOWS.md §7](WORKFLOWS.md#7-ai-assistant-flow)).
 
 <a id="how-to-find-problems-quick-map" name="how-to-find-problems-quick-map">&#x200B;</a>
 ### How to find problems (quick map) ![](../images/readme/h3.svg)
@@ -218,7 +218,7 @@ Any OpenAI-compatible endpoint works, including Ollama's own (`http://localhost:
 
 1. **Settings → AI** — pick a preset (**Ollama**, **OpenAI**, **Google Gemini**, or **Custom**), adjust base URL / model / API key, then **Test connection**. Each preset keeps its own settings, so switching back and forth never loses a key.
 2. **Import…** loads an endpoint from a JSON file — see [`examples/ai`](examples/ai/README.md) for [`gemini.json`](examples/ai/gemini.json), [`openai.json`](examples/ai/openai.json), [`deepseek.json`](examples/ai/deepseek.json), [`grok.json`](examples/ai/grok.json), and the field reference. Imported values fill the form; review and confirm to save.
-3. Use a template or ask freely; click `jump:TIME` links to seek the timeline.
+3. Use a template, **Analysis → Query with AI…**, or ask freely; click `jump:TIME` links to seek the timeline.
 4. Set reply language in Settings or **Language…** on the AI bar.
 5. Right-click the reply area to copy the conversation or **Save As…** it (Markdown, plain text, or HTML).
 
@@ -365,7 +365,7 @@ Full column definitions, chart axis meanings, and example plots: [Statistics met
 <a id="statistics-metric-tables" name="statistics-metric-tables">&#x200B;</a>
 ### Statistics metric tables ![](../images/readme/h3.svg)
 
-The Statistics panel (Desktop **Statistics** tab + Web **Statistics** tab) organises metrics into collapsible sections. Tables are **sortable** — click a column header to sort ascending/descending. **Export CSV** and **Export HTML** at the panel footer honour the current cursor scope and include every section's summary table. **Export HTML** starts with an **Analysis Findings** card (same content as toolbar **Analysis** — load balance, WCET, blocking, thrashing, deadlines, tick health, and sync) and embeds the **Load Balance Score** gauge as an SVG image under Core Utilisation; use the toolbar dialog for interactive triage and **Save as text…**. HTML also adds detail sub-tables under Priority Inheritance, Mutex / Semaphore, and Interval Analysis (longest instances / hold episodes first, capped at 150–200 rows per sub-table).
+The Statistics panel (Desktop **Statistics** tab + Web **Statistics** tab) organises metrics into collapsible sections. Tables are **sortable** — click a column header to sort ascending/descending. **Export CSV** and **Export HTML** at the panel footer honour the current cursor scope and include every section's summary table. **Export HTML** starts with an **Analysis Findings** card (same content as toolbar **Analysis** — load balance, WCET, blocking, thrashing, deadlines, tick health, and sync) and embeds the **Load Balance Score** gauge as an SVG image under Core Utilisation; use the toolbar dialog for interactive triage and **Save as Text…**. HTML also adds detail sub-tables under Priority Inheritance, Mutex / Semaphore, and Interval Analysis (longest instances / hold episodes first, capped at 150–200 rows per sub-table).
 
 **How to use the panel**
 
@@ -1169,7 +1169,7 @@ Shown only when the trace contains `tag0_event` … `tag7_event` (or `tag_event`
 <a id="core-migration-analysis" name="core-migration-analysis">&#x200B;</a>
 ### Core migration analysis ![](../images/readme/h3.svg)
 
-A **migration** is recorded when consecutive slices of the same task (merge-key) run on different cores. Migrations are detected at parse time from the segment timeline — there are no separate markers drawn on the timeline; use the **Core Migrations** table, the **Migration & Corridor Inspector** (toolbar **Heatmap** / **Chord**), **Trace Compare…**, or Find **Migrations** mode to inspect them.
+A **migration** is recorded when consecutive slices of the same task (merge-key) run on different cores. Migrations are detected at parse time from the segment timeline — there are no separate markers drawn on the timeline; use the **Core Migrations** table, the **Migration & Corridor Inspector** (toolbar **Heatmap**), **Trace Compare…**, or Find **Migrations** mode to inspect them.
 
 Affinity, lifecycle, and deadline meanings are earlier in this chapter. This section is the deep dive for the migration tables, highlight / inspect steps, the corridor inspector, and **Trace Compare…**.
 
@@ -1181,7 +1181,7 @@ To *see* a hot migrating task in context (not only read rates in a table):
 1. Stay in **Task View** (toolbar **Task**).
 2. Click the task label (e.g. `CS[22]`) to **lock-highlight** it — other tasks stay on the timeline but gray out; do **not** use the legend filter.
 3. Enable **Load** to see that task’s CPU usage **per core** under the timeline (see [CPU Load](#cpu-load)).
-4. Optionally place cursors around the burst and enable **Limit to cursor range** so **Statistics → Core Migrations** recomputes for that window. The inspector grid follows the **visible timeline viewport** independently.
+4. Optionally place cursors around the burst and enable **Limit to C1–Cn** so **Statistics → Core Migrations** recomputes for that window. The inspector grid follows the **visible timeline viewport** independently.
 
 ![CS[22] highlighted in Task View with per-core CPU Load](../images/stats/tasks-cpu-load-cs22.svg)
 
@@ -1212,7 +1212,7 @@ After highlighting a hot task:
 1. **Statistics → Core Migrations** — note **Primary** core, **Rate**, **Dwell**, **Ping** for that task.  Click the row → **Dwell** / **Rate** / **Gap** charts.
 2. **Core-Pair Migration Summary** — sort or scan pairs where that core is **From** or **To** (e.g. `Core_5→Core_7`) to see which neighbour absorbs the traffic and whether **Bounce %** is elevated. Click the row for Gap / Rate charts; use **Open Heatmap** / **Open Chord** from the dialog footer to open the unified inspector focused on that pair.
 3. Toolbar **Heatmap** — corridor tree + time-bin grid: click a hot cell or expand a corridor to see contributing tasks, then **Inspect in Timeline** / double-click for Spotlight.
-4. Toolbar **Chord** — same inspector with the topology sidebar expanded; hover outer (egress) / inner (ingress) rings or a ribbon to isolate flows.
+4. **Show topology** in the inspector (or pair-chart **Open Chord**) — same window with the topology sidebar expanded; hover outer (egress) / inner (ingress) rings or a ribbon to isolate flows.
 5. **Core Time Breakdown** — click a core row to jump Core View focused on that core.
 6. Headless CSV for a scoped window:
 
@@ -1249,7 +1249,7 @@ Each slice *d*<sub>k</sub> is one switch-in episode (equivalent to averaging per
 | Column | Meaning |
 |--------|---------|
 | **Task** | Display name (`Name[id]`) |
-| **Migr** | Migration count in the current scope (full trace, or cursor range when **Limit to cursor range** is on) |
+| **Migr** | Migration count in the current scope (full trace, or cursor range when **Limit to C1–Cn** is on) |
 | **Rate** | Migration rate — `/s` of task active time; `/tick` = migrations per on-CPU TICK for this task in scope |
 | **Dwell** | Average on-CPU slice duration (core dwell time) in scope |
 | **Cores** | Distinct cores with on-CPU time or migrations in the current scope |
@@ -1309,14 +1309,15 @@ Dialog footer:
 <a id="migration--corridor-inspector" name="migration--corridor-inspector">&#x200B;</a>
 #### Migration & Corridor Inspector ![](../images/readme/h4.svg)
 
-Toolbar **Heatmap** and **Chord** open the same inspector (Desktop + Web): corridor/task tree, time-bin grid, and mini-chord topology.
+Toolbar **Heatmap** opens the inspector (Desktop + Web): corridor/task tree, time-bin grid, and mini-chord topology. **Open Chord** (core-pair charts) and **Show topology** inside the inspector expand the same window’s topology sidebar.
 
 | | |
 |--|--|
-| **Open** | Toolbar **Heatmap** or **Chord** (2+ cores). Desktop: non-modal. Web: overlay keeps the timeline interactive. Tab switch closes the inspector. |
-| **Scope** | Visible timeline viewport. Independent of Statistics **Limit to cursor range**. Empty tree/grid shows *No migrations in scope*; topology stays available. |
+| **Open** | Toolbar **Heatmap** (2+ cores). Pair-chart **Open Chord** / inspector **Show topology** for the chord-first layout. Desktop: non-modal. Web: overlay keeps the timeline interactive. Tab switch closes the inspector. |
+| **Scope** | Visible timeline viewport. Independent of Statistics **Limit to C1–Cn**. Empty tree/grid shows *No migrations in scope*; topology stays available. |
 | **Filter** | **Top corridors**, **Direction**, **Task filter**. **Lock Bounces Only** when the trace has cross-core mutex holds. |
 | **Select** | Click a tree row, grid cell, or chord ribbon. Double-click or **Inspect in Timeline** spotlights that bin (or task) with C1–C2. Toolbar **All** / **Show all tasks** clears the filter. |
+| **Query with AI…** | Runs the **Migration thrash** template in the **AI** tab (same findings context as Statistics). If AI is disabled, opens **Settings → AI**. |
 | **> 16 cores** | Tree groups by source; topology offers Circle ↔ Matrix. Dock topology **Bottom** or **Right**. |
 
 **Example** (`example-8cores.btf.gz`):
@@ -1558,7 +1559,7 @@ The caption above the histogram (e.g. `log-scaled duration axis · full range 17
 - **Deadline / budget checks** — estimate what % of activations meet a time limit without reading individual scatter points.
 - **Compare spread** — two tasks with similar **p50** can have very different CDF shapes (tight cluster vs long tail).
 - **Skewed data** — after switching away from a crowded linear histogram, use the CDF with **p50** / **p95** lines to see how much of the population sits below each marker.
-- **Cursor-scoped analysis** — with **Limit to cursor range** enabled, the CDF recalculates for only the slices inside C1–Cn, same as the table and scatter plot.
+- **Cursor-scoped analysis** — with **Limit to C1–Cn** enabled, the CDF recalculates for only the slices inside that window, same as the table and scatter plot.
 
 The CDF is included in **Export PNG / SVG** from the plot dialog. It is not interactive (no click-to-jump); use the **scatter plot** above the histogram to jump to individual events.
 
@@ -1614,9 +1615,8 @@ Open **Settings** from the toolbar or `Ctrl+,`.
 | Area | What you configure |
 |------|--------------------|
 | **Appearance** | Dark/light theme, fonts, colorblind-safe palette |
-| **Display** | Show/hide Legend, Statistics, Marks, Find, AI, STI, grid; hover highlight |
+| **Display** | Show/hide Legend, Statistics, Marks, Find, AI, CPU Load, STI, grid; hover highlight; **Analysis thresholds** (CPU budget % and per-task deadline ns) |
 | **Layout** | Label width, row height, zoom 1:1 density, max cursors, time decimals, CPU/STI sizes |
-| **Analysis** | CPU budget % and per-task deadline thresholds |
 | **AI** | Enable, preset (Ollama / OpenAI / Gemini / Custom), base URL, model, API key, reply language |
 
 | | Desktop | Web |
@@ -1642,6 +1642,7 @@ Shortcuts marked **(W)** are Web-only. Others work on Desktop and Web. On Web, p
 | `Ctrl+W` | Close tab |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous tab |
 | `Ctrl+Q` | Quit (Desktop) |
+| `?` **(W)** | On-screen shortcut cheat sheet |
 
 <a id="view--zoom" name="view--zoom">&#x200B;</a>
 ### View & zoom ![](../images/readme/h3.svg)
@@ -1649,10 +1650,13 @@ Shortcuts marked **(W)** are Web-only. Others work on Desktop and Web. On Web, p
 | Key | Action |
 |-----|--------|
 | `Ctrl++` / `Ctrl+-` | Zoom in / out |
+| `+` / `-` **(W)** | Zoom in / out (no modifier) |
 | `Ctrl+0` / `F` | Fit to window |
-| `Ctrl+R` | Zoom to cursor range |
+| `Ctrl+R` | Zoom to cursor range (earliest–latest cursor) |
 | `Ctrl+,` | Settings |
 | `G` / `I` / `D` | Grid / STI / theme |
+| `1` / `2` **(W)** | Task View / Core View |
+| `H` / `V` **(W)** | Horizontal / vertical layout |
 | `Ctrl+G` | Jump to time |
 | `Ctrl+Home` / `Ctrl+End` | Trace start / end |
 
@@ -1663,8 +1667,12 @@ Shortcuts marked **(W)** are Web-only. Others work on Desktop and Web. On Web, p
 |-----|--------|
 | `Ctrl+Z` / `Ctrl+Y` | Undo / redo |
 | `C` / `Shift+C` | Place / clear cursors |
-| `Ctrl+B` / `Shift+B` | Bookmark / clear bookmarks |
-| `Ctrl+Shift+B` / `A` | Annotation |
+| `B` / `M` / `Ctrl+B` | Bookmark |
+| `Shift+B` | Clear all bookmarks |
+| `A` / `Ctrl+Shift+B` | Annotation |
+| `Shift+A` | Clear all annotations |
+| `Tab` / `Shift+Tab` | Next / previous segment |
+| `←` `→` `↑` `↓` | Pan (Shift+arrow: prev/next boundary) |
 | `Ctrl+F` / `F3` / `Shift+F3` | Find / next / previous |
 
 <a id="export-1" name="export-1">&#x200B;</a>

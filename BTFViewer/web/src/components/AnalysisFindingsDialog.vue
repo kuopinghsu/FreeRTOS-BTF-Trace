@@ -48,19 +48,31 @@
       <div class="analysis-footer">
         <button
           type="button"
-          class="analysis-btn"
-          title="Download findings as a plain-text file"
-          @click="saveAsText"
+          class="analysis-btn primary"
+          :title="aiEnabled
+            ? 'Open the AI Assistant and walk through these Analysis Findings'
+            : 'Enable AI Assistant in Settings → AI'"
+          @click="emit('query-ai')"
         >
-          Save as text…
+          Query with AI…
         </button>
-        <button
-          type="button"
-          class="analysis-btn"
-          @click="emit('close')"
-        >
-          Close
-        </button>
+        <div class="analysis-footer-right">
+          <button
+            type="button"
+            class="analysis-btn"
+            title="Download findings as a plain-text file"
+            @click="saveAsText"
+          >
+            Save as Text…
+          </button>
+          <button
+            type="button"
+            class="analysis-btn"
+            @click="emit('close')"
+          >
+            Close
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -72,9 +84,10 @@ import { formatAnalysisFindingsText } from '../utils/workflowAnalysis.js'
 const props = defineProps({
   findings: { type: Array, default: () => [] },
   scopeLabel: { type: String, default: '' },
+  aiEnabled: { type: Boolean, default: true },
 })
 
-const emit = defineEmits(['close'])
+const emit = defineEmits(['close', 'query-ai'])
 
 function _stamp() {
   const d = new Date()
@@ -178,10 +191,16 @@ function saveAsText() {
 
 .analysis-footer {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
+  align-items: center;
   gap: 8px;
   padding: 10px 14px;
   border-top: 1px solid var(--border);
+}
+
+.analysis-footer-right {
+  display: flex;
+  gap: 8px;
 }
 
 .analysis-btn {
@@ -196,5 +215,16 @@ function saveAsText() {
 
 .analysis-btn:hover {
   background: var(--tb-btn-hover);
+}
+
+.analysis-btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #000;
+  font-weight: 600;
+}
+
+.analysis-btn.primary:hover {
+  filter: brightness(1.08);
 }
 </style>

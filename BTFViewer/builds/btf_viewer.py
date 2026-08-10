@@ -7229,17 +7229,27 @@ def _stack_pixmaps_vertically(top: QPixmap, bottom: QPixmap) -> QPixmap:
 
 _monospace_font_cache: dict = {}
 
-def _monospace_font(size: int, weight: int = QFont.Normal) -> QFont:
-    """Return a cached monospace QFont using the system fixed font.
+_GENERIC_FONT_FAMILIES = frozenset({
+    "monospace", "monospaced", "fixed", "fixedsys",
+    "sans serif", "sans-serif", "serif", "cursive", "fantasy",
+    "system-ui", "ui-monospace", "ui-sans-serif", "ui-serif",
+})
 
-    Cached so the expensive QFontDatabase.systemFont() Qt bridge call is made
-    only once per (size, weight) pair regardless of how many rebuilds happen.
-    Uses the same macOS pixel scaling as application UI fonts.
+def _is_generic_font_family(name: str) -> bool:
+    """True for CSS/Qt aliases that are not installed font faces."""
+    return (name or "").strip().lower() in _GENERIC_FONT_FAMILIES
+
+def _monospace_font(size: int, weight: int = QFont.Normal) -> QFont:
+    """Return a cached monospace QFont using a real installed fixed face.
+
+    Cached so family lookup runs once per (size, weight) pair. Uses the same
+    macOS pixel scaling as application UI fonts. Avoids Qt's generic
+    ``monospace`` / ``Monospace`` alias (qt.qpa.fonts warning on macOS).
     """
     key = (size, weight, sys.platform, _ui_font_pixel_baseline())
     f = _monospace_font_cache.get(key)
     if f is None:
-        f = QFontDatabase.systemFont(QFontDatabase.FixedFont)
+        f = QFont(_get_fixed_font_family())
         px = _scaled_font_pixel_size(size, reference_pt=FONT_SIZE)
         if px is not None:
             f.setPixelSize(px)
@@ -7274,16 +7284,38 @@ def _make_rotated_label(scene, text: str, font: "QFont", color: "QColor",
     scene.addItem(item)
     return item
 
-# Resolved family name of the system fixed-pitch font, used in Qt stylesheets.
-# Lazily initialised on first use so that import does not require a live
-# QApplication (avoids crash when the module is imported in test harnesses).
+# Resolved family name of a real installed fixed-pitch font (never the CSS
+# generic ``monospace`` alias). Lazily initialised so import does not require
+# a live QApplication.
 _FIXED_FONT_FAMILY: Optional[str] = None
 
 def _get_fixed_font_family() -> str:
-    """Return the system fixed-pitch font family name, initialising lazily."""
+    """Return an installed fixed-pitch font family, initialising lazily.
+
+    Qt 6 on macOS reports ``QFontDatabase.FixedFont`` as ``monospace``, which
+    is not an installed face and triggers ``qt.qpa.fonts`` alias warnings.
+    Prefer Menlo / Consolas / DejaVu / Courier New when present.
+    """
     global _FIXED_FONT_FAMILY
     if _FIXED_FONT_FAMILY is None:
-        _FIXED_FONT_FAMILY = QFontDatabase.systemFont(QFontDatabase.FixedFont).family()
+        available = set(QFontDatabase.families())
+        for cand in (
+            "Menlo", "Monaco", "SF Mono",
+            "Consolas", "Cascadia Mono", "Lucida Console",
+            "DejaVu Sans Mono", "Liberation Mono", "Noto Sans Mono", "Ubuntu Mono",
+            "Courier New", "Andale Mono", "PT Mono",
+        ):
+            if cand in available:
+                _FIXED_FONT_FAMILY = cand
+                break
+        else:
+            fam = ""
+            for name in QFontDatabase.families():
+                if (QFontDatabase.isFixedPitch(name)
+                        and not _is_generic_font_family(name)):
+                    fam = name
+                    break
+            _FIXED_FONT_FAMILY = fam or "Courier New"
     return _FIXED_FONT_FAMILY
 
 def _lod_reduce(segs: list, time_min: int, px_per_ns: float,
@@ -17881,6 +17913,23 @@ def create_ai_assistant_panel(
             super().showEvent(event)
             self.refresh_enabled_state()
 
+        def query_template(self, template_id: str) -> None:
+            """Run a built-in AI template by id (toolbar Analysis / inspector)."""
+            prompt = next(
+                (p for tid, _lab, p in AI_TEMPLATE_QUESTIONS if tid == template_id),
+                "",
+            )
+            if prompt:
+                self._use_template(template_id, prompt)
+
+        def query_analysis_findings(self) -> None:
+            """Run the Analysis Findings template (toolbar Analysis → Query with AI)."""
+            self.query_template("findings")
+
+        def query_migration_thrash(self) -> None:
+            """Run the Migration thrash template (inspector → Query with AI)."""
+            self.query_template("migrations")
+
         def _use_template(self, template_id: str, prompt: str) -> None:
             if self._busy:
                 return
@@ -22067,8 +22116,7 @@ class _ChordDiagramWidget(QWidget):
             self.update()
 
     def _mono_font(self, px: int, bold: bool = False) -> QFont:
-        fam = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont).family()
-        font = QFont(fam)
+        font = QFont(_get_fixed_font_family())
         font.setPixelSize(int(px))
         font.setBold(bool(bold))
         return font
@@ -22499,7 +22547,7 @@ class _CorridorTimelineCanvas(QWidget):
             "QLabel#corridorGridTip {"
             "background: palette(window); color: palette(window-text);"
             "border: 1px solid palette(mid); border-radius: 4px;"
-            "padding: 6px 8px; font-family: monospace; font-size: 11px;"
+            f"padding: 6px 8px; font-family: \"{_get_fixed_font_family()}\"; font-size: 11px;"
             "}"
         )
         self._tip.hide()
@@ -22565,8 +22613,7 @@ class _CorridorTimelineCanvas(QWidget):
             if selected:
                 p.fillRect(0, y, w, row_h, QColor(100, 160, 255, 30))
             p.setPen(fg)
-            font = QFont("monospace", 8)
-            font.setBold(selected)
+            font = _monospace_font(8, QFont.Bold if selected else QFont.Normal)
             p.setFont(font)
             p.drawText(QRectF(2, y, label_w - 6, row_h),
                        int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight),
@@ -22597,7 +22644,7 @@ class _CorridorTimelineCanvas(QWidget):
         # Sticky time axis (parity with web .ci-grid-canvas).
         p.fillRect(QRectF(0, 0, w, head_h), bg)
         p.setPen(fg)
-        p.setFont(QFont("monospace", 8))
+        p.setFont(_monospace_font(8))
         p.drawText(4, 12,
                    "Y: corridor (src→dst)   X: time   color: mig count   hatch: lock bounce")
         p.drawText(4, 26, "src→dst")
@@ -22817,7 +22864,9 @@ class _CorridorInspectorDialog(QDialog):
                  on_spotlight: Optional[Callable] = None,
                  on_clear: Optional[Callable] = None,
                  on_jump: Optional[Callable] = None,
-                 initial_mode: str = "heatmap"):
+                 initial_mode: str = "heatmap",
+                 ai_enabled: bool = True,
+                 on_query_ai: Optional[Callable] = None):
         super().__init__(parent)
         self.setWindowTitle("Migration & Corridor Inspector")
         self.setMinimumSize(720, 520)
@@ -22827,6 +22876,8 @@ class _CorridorInspectorDialog(QDialog):
         self._on_spotlight = on_spotlight
         self._on_clear = on_clear
         self._on_jump = on_jump
+        self._ai_enabled = ai_enabled
+        self._on_query_ai = on_query_ai
         self._bounce_only = False
         self._top_pct = _default_corridor_top_pct(len(trace.core_names))
         self._scope_lo = self._scope_hi = None
@@ -23105,11 +23156,28 @@ class _CorridorInspectorDialog(QDialog):
         lay.addWidget(self._filter_bar)
 
         btns = QDialogButtonBox(QDialogButtonBox.Close)
+        self._ai_btn = btns.addButton(
+            "Query with AI…", QDialogButtonBox.ButtonRole.ActionRole)
+        self._ai_btn.clicked.connect(self._query_with_ai)
+        self.set_ai_enabled(ai_enabled)
         btns.rejected.connect(self.reject)
         lay.addWidget(btns)
 
         self.refresh_scope()
         QTimer.singleShot(0, self._fit_tree_pane)
+
+    def set_ai_enabled(self, enabled: bool) -> None:
+        self._ai_enabled = bool(enabled)
+        if getattr(self, "_ai_btn", None) is None:
+            return
+        self._ai_btn.setToolTip(
+            "Open the AI Assistant and walk through migration / corridor findings"
+            if self._ai_enabled else
+            "Enable AI Assistant in Settings → AI")
+
+    def _query_with_ai(self) -> None:
+        if self._on_query_ai is not None:
+            self._on_query_ai(self._ai_enabled)
 
     @staticmethod
     def _style_inspector_field(widget) -> None:
@@ -24411,7 +24479,7 @@ class _LoadBalanceGaugeWidget(QWidget):
             )
             y += 16
 
-        meta_font = QFont("Menlo" if sys.platform == "darwin" else "monospace")
+        meta_font = QFont(_get_fixed_font_family())
         meta_font.setPointSizeF(8.0)
         p.setFont(meta_font)
         p.setPen(muted)
@@ -24732,10 +24800,13 @@ def _render_workflow_analysis_html(
 class _AnalysisFindingsDialog(QDialog):
     """Toolbar Analysis dialog — lists heuristic findings for the current scope."""
 
-    def __init__(self, findings: List[dict], scope_title: str = "", parent=None):
+    def __init__(self, findings: List[dict], scope_title: str = "", parent=None,
+                 ai_enabled: bool = True):
         super().__init__(parent)
         self._findings = findings or []
         self._scope_title = scope_title or ""
+        self.wants_ai_query = False
+        self._ai_needs_settings = False
         self.setWindowTitle(f"Analysis Findings{self._scope_title}")
         self.setModal(True)
         self.setMinimumSize(520, 360)
@@ -24767,6 +24838,13 @@ class _AnalysisFindingsDialog(QDialog):
             list_w.addItem(QListWidgetItem("No findings for the current scope"))
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        ai_btn = buttons.addButton(
+            "Query with AI…", QDialogButtonBox.ButtonRole.ActionRole)
+        ai_btn.setToolTip(
+            "Open the AI Assistant and walk through these Analysis Findings"
+            if ai_enabled else
+            "Enable AI Assistant in Settings → AI")
+        ai_btn.clicked.connect(lambda: self._query_with_ai(ai_enabled))
         save_btn = buttons.addButton(
             "Save as Text…", QDialogButtonBox.ButtonRole.ActionRole)
         save_btn.clicked.connect(self._save_as_text)
@@ -24777,6 +24855,11 @@ class _AnalysisFindingsDialog(QDialog):
         lay.addWidget(note)
         lay.addWidget(list_w, 1)
         lay.addWidget(buttons)
+
+    def _query_with_ai(self, ai_enabled: bool) -> None:
+        self.wants_ai_query = True
+        self._ai_needs_settings = not ai_enabled
+        self.accept()
 
     def _save_as_text(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
@@ -38913,8 +38996,20 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if self._trace is None or self._stats_panel is None:
             return
         findings, scope_title = self._stats_panel.build_analysis_findings()
-        dlg = _AnalysisFindingsDialog(findings, scope_title, parent=self)
+        dlg = _AnalysisFindingsDialog(
+            findings, scope_title, parent=self,
+            ai_enabled=self._ai_feature_enabled(),
+        )
         dlg.exec()
+        if not getattr(dlg, "wants_ai_query", False):
+            return
+        if getattr(dlg, "_ai_needs_settings", False):
+            self._open_settings("AI")
+            return
+        self._focus_ai_panel()
+        panel = getattr(self, "_ai_panel", None)
+        if panel is not None and hasattr(panel, "query_analysis_findings"):
+            QTimer.singleShot(0, panel.query_analysis_findings)
 
     def _capture_heatmap_view_snapshot(self, tab: _TraceTab) -> None:
         """Remember timeline zoom/pan/cursors before heatmap drill-down."""
@@ -39039,6 +39134,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         # Single shared inspector instance (heatmap + chord entry points).
         dlg = self._heatmap_dlg or self._chord_dlg
         if dlg is not None:
+            if hasattr(dlg, "set_ai_enabled"):
+                dlg.set_ai_enabled(self._ai_feature_enabled())
             if initial_mode == "chord" and hasattr(dlg, "_show_topology"):
                 dlg._show_topology(True)
             dlg.raise_()
@@ -39054,7 +39151,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             on_spotlight=self._on_corridor_spotlight,
             on_clear=self._clear_heatmap_task_filter,
             on_jump=self._on_corridor_jump,
-            initial_mode=initial_mode)
+            initial_mode=initial_mode,
+            ai_enabled=self._ai_feature_enabled(),
+            on_query_ai=self._query_corridor_with_ai)
         dlg._owner_tab_path = (
             self._active_tab.path if self._active_tab else None)
         dlg.finished.connect(self._on_inspector_dlg_closed)
@@ -39067,6 +39166,16 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             sc._heatmap_filter_label if sc else None,
             len(mks) if mks else 0)
         dlg.show()
+
+    def _query_corridor_with_ai(self, ai_enabled: bool = True) -> None:
+        """Toolbar Heatmap/Chord → Query with AI (Migration thrash template)."""
+        if not ai_enabled:
+            self._open_settings("AI")
+            return
+        self._focus_ai_panel()
+        panel = getattr(self, "_ai_panel", None)
+        if panel is not None and hasattr(panel, "query_migration_thrash"):
+            QTimer.singleShot(0, panel.query_migration_thrash)
 
     def _open_migration_heatmap(self) -> None:
         self._open_corridor_inspector("heatmap")

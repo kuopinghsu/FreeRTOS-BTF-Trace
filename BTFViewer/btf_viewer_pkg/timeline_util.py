@@ -462,17 +462,27 @@ def _stack_pixmaps_vertically(top: QPixmap, bottom: QPixmap) -> QPixmap:
 
 _monospace_font_cache: dict = {}
 
-def _monospace_font(size: int, weight: int = QFont.Normal) -> QFont:
-    """Return a cached monospace QFont using the system fixed font.
+_GENERIC_FONT_FAMILIES = frozenset({
+    "monospace", "monospaced", "fixed", "fixedsys",
+    "sans serif", "sans-serif", "serif", "cursive", "fantasy",
+    "system-ui", "ui-monospace", "ui-sans-serif", "ui-serif",
+})
 
-    Cached so the expensive QFontDatabase.systemFont() Qt bridge call is made
-    only once per (size, weight) pair regardless of how many rebuilds happen.
-    Uses the same macOS pixel scaling as application UI fonts.
+def _is_generic_font_family(name: str) -> bool:
+    """True for CSS/Qt aliases that are not installed font faces."""
+    return (name or "").strip().lower() in _GENERIC_FONT_FAMILIES
+
+def _monospace_font(size: int, weight: int = QFont.Normal) -> QFont:
+    """Return a cached monospace QFont using a real installed fixed face.
+
+    Cached so family lookup runs once per (size, weight) pair. Uses the same
+    macOS pixel scaling as application UI fonts. Avoids Qt's generic
+    ``monospace`` / ``Monospace`` alias (qt.qpa.fonts warning on macOS).
     """
     key = (size, weight, sys.platform, _ui_font_pixel_baseline())
     f = _monospace_font_cache.get(key)
     if f is None:
-        f = QFontDatabase.systemFont(QFontDatabase.FixedFont)
+        f = QFont(_get_fixed_font_family())
         px = _scaled_font_pixel_size(size, reference_pt=FONT_SIZE)
         if px is not None:
             f.setPixelSize(px)
@@ -507,16 +517,38 @@ def _make_rotated_label(scene, text: str, font: "QFont", color: "QColor",
     scene.addItem(item)
     return item
 
-# Resolved family name of the system fixed-pitch font, used in Qt stylesheets.
-# Lazily initialised on first use so that import does not require a live
-# QApplication (avoids crash when the module is imported in test harnesses).
+# Resolved family name of a real installed fixed-pitch font (never the CSS
+# generic ``monospace`` alias). Lazily initialised so import does not require
+# a live QApplication.
 _FIXED_FONT_FAMILY: Optional[str] = None
 
 def _get_fixed_font_family() -> str:
-    """Return the system fixed-pitch font family name, initialising lazily."""
+    """Return an installed fixed-pitch font family, initialising lazily.
+
+    Qt 6 on macOS reports ``QFontDatabase.FixedFont`` as ``monospace``, which
+    is not an installed face and triggers ``qt.qpa.fonts`` alias warnings.
+    Prefer Menlo / Consolas / DejaVu / Courier New when present.
+    """
     global _FIXED_FONT_FAMILY
     if _FIXED_FONT_FAMILY is None:
-        _FIXED_FONT_FAMILY = QFontDatabase.systemFont(QFontDatabase.FixedFont).family()
+        available = set(QFontDatabase.families())
+        for cand in (
+            "Menlo", "Monaco", "SF Mono",
+            "Consolas", "Cascadia Mono", "Lucida Console",
+            "DejaVu Sans Mono", "Liberation Mono", "Noto Sans Mono", "Ubuntu Mono",
+            "Courier New", "Andale Mono", "PT Mono",
+        ):
+            if cand in available:
+                _FIXED_FONT_FAMILY = cand
+                break
+        else:
+            fam = ""
+            for name in QFontDatabase.families():
+                if (QFontDatabase.isFixedPitch(name)
+                        and not _is_generic_font_family(name)):
+                    fam = name
+                    break
+            _FIXED_FONT_FAMILY = fam or "Courier New"
     return _FIXED_FONT_FAMILY
 
 def _lod_reduce(segs: list, time_min: int, px_per_ns: float,

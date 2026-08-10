@@ -62,7 +62,7 @@ The Statistics panel is ordered to match this ladder. After the Summary it runs 
 2. Open the Statistics section that the finding names.
 3. Click a **Max** value, a scatter point, or a heatmap cell to jump the timeline to that moment. For migration findings, open toolbar **Heatmap** or **Chord** after the table.
 4. Place cursors (`C`) around the phase you care about and enable the cursor-scope checkbox so the numbers describe only that window. Zoom the timeline first if you will use the inspector — its grid follows the **visible viewport**, not cursor-scoped Statistics.
-5. Optionally open the **AI** tab and have a model narrate the same findings ([§7](#7-ai-assistant-flow)).
+5. Optionally click **Query with AI…** in the Analysis dialog (or open the **AI** tab) and have a model narrate the same findings ([§7](#7-ai-assistant-flow)).
 
 **A caution about the demo traces.** `example-8cores.btf.gz` is a concatenation of deliberate stress tests, so it triggers warnings by design. Scope to a single phase before treating any warning as a product defect.
 
@@ -211,6 +211,7 @@ Tables name *which* task and *which* pair. Toolbar **Heatmap** and **Chord** ope
 4. Optional filters: **Top corridors**, **Direction**, **Task filter** (name substring or exact numeric id), and **Lock Bounces Only** when chasing mutex/queue hops.
 5. Click a hot cell, tree row, or ribbon, then **Inspect in Timeline** / double-click to spotlight that bin with C1–C2. Toolbar **All** / **Show all tasks** clears the filter.
 6. From a **Core-Pair** chart dialog, **Open Heatmap** / **Open Chord** focuses that pair (prefers **Lock Bounces Only** when Bounce % is elevated).
+7. Optionally click **Query with AI…** to run the **Migration thrash** template on the current Analysis Findings ([§7](#7-ai-assistant-flow)).
 
 ![Migration & Corridor Inspector](../images/migration.svg)
 
@@ -337,7 +338,7 @@ Distinguishes scheduler thrash from lock-driven bouncing, because the fixes diff
 1. Open **Core Migrations** and sort by **Rate**, **Dwell**, or **Ping**. A high rate with short dwell and a high ping count means thrashing. Click the row for **Dwell** / **Rate** / **Gap** charts.
 2. Open **Core-Pair Migration Summary**. **Bounces** and **Bounce %** count hops taken while a lock was held. Click a row for Gap / Rate charts (orange = bounce).
 3. Switch to **Task** view, lock-highlight the task, and enable **Load** to see its per-core CPU load (`snapshot … --view-mode task --task … --cpu-load`).
-4. Open toolbar **Heatmap** or **Chord** (same inspector). Zoom the timeline first — the grid follows the viewport, not cursor-scoped Statistics. Click a hot cell or expand a corridor; **Inspect in Timeline** spotlights that bin. Use **Lock Bounces Only** to isolate lock-bounce traffic; **Task filter** accepts a name substring or an exact numeric task id. From a pair-chart dialog, **Open Heatmap** / **Open Chord** focuses that corridor (`snapshot … --view heatmap` or `--view chord --drill-row 0`).
+4. Open toolbar **Heatmap** (same inspector; use **Show topology** or pair-chart **Open Chord** for the chord-first layout). Zoom the timeline first — the grid follows the viewport, not cursor-scoped Statistics. Click a hot cell or expand a corridor; **Inspect in Timeline** spotlights that bin. Use **Lock Bounces Only** to isolate lock-bounce traffic; **Task filter** accepts a name substring or an exact numeric task id. From a pair-chart dialog, **Open Heatmap** / **Open Chord** focuses that corridor (`snapshot … --view heatmap` or `--view chord --drill-row 0`).
 5. Confirm the object in **Mutex / Semaphore → Bounces**. Find **Migrations** (`F3`) jumps migration boundaries on the timeline.
 
 Column definitions and inspector controls: [README → Core migration analysis](README.md#core-migration-analysis).
@@ -539,7 +540,7 @@ The flow from trace to verified answer:
 ① Load trace + open Statistics
 ② (Optional) Place cursors → limit Statistics to the cursor range
 ③ Toolbar Analysis / Statistics findings for that scope
-④ AI tab → template or free-form Ask
+④ Analysis → Query with AI…  (or AI tab → template / free-form Ask)
 ⑤ Context = Analysis Findings (+ span, cores, scope), or Trace Compare CSV for that template
 ⑥ Endpoint: OpenAI-compatible /chat/completions (Ollama, OpenAI, Gemini, or Custom)
 ⑦ Reply (jump:TIME links → timeline)

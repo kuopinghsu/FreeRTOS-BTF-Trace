@@ -4224,7 +4224,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._act_zoom_1to1 = _ia("1:1", lambda: self._view.zoom_1to1(), _IC_1TO1, "Zoom to 1:1 scale")
         _ia("Fit",      lambda: self._view.zoom_fit(),  _IC_FIT,  "Fit entire trace to window  (Ctrl+0)")
         self._tb_zoom_range_btn = _ia("Range", self._zoom_to_cursor_range, _IC_EXPAND,
-                                      "Zoom view to fit between cursor C1 and C2  (Ctrl+R)")
+                                      "Zoom view to fit between cursor C1 and last cursor  (Ctrl+R)")
         self._tb_zoom_range_btn.setEnabled(False)
 
         _ia("Find", self._focus_find, _IC_FIND,
@@ -4859,8 +4859,20 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if self._trace is None or self._stats_panel is None:
             return
         findings, scope_title = self._stats_panel.build_analysis_findings()
-        dlg = _AnalysisFindingsDialog(findings, scope_title, parent=self)
+        dlg = _AnalysisFindingsDialog(
+            findings, scope_title, parent=self,
+            ai_enabled=self._ai_feature_enabled(),
+        )
         dlg.exec()
+        if not getattr(dlg, "wants_ai_query", False):
+            return
+        if getattr(dlg, "_ai_needs_settings", False):
+            self._open_settings("AI")
+            return
+        self._focus_ai_panel()
+        panel = getattr(self, "_ai_panel", None)
+        if panel is not None and hasattr(panel, "query_analysis_findings"):
+            QTimer.singleShot(0, panel.query_analysis_findings)
 
     def _capture_heatmap_view_snapshot(self, tab: _TraceTab) -> None:
         """Remember timeline zoom/pan/cursors before heatmap drill-down."""
@@ -4985,6 +4997,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         # Single shared inspector instance (heatmap + chord entry points).
         dlg = self._heatmap_dlg or self._chord_dlg
         if dlg is not None:
+            if hasattr(dlg, "set_ai_enabled"):
+                dlg.set_ai_enabled(self._ai_feature_enabled())
             if initial_mode == "chord" and hasattr(dlg, "_show_topology"):
                 dlg._show_topology(True)
             dlg.raise_()
@@ -5000,7 +5014,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             on_spotlight=self._on_corridor_spotlight,
             on_clear=self._clear_heatmap_task_filter,
             on_jump=self._on_corridor_jump,
-            initial_mode=initial_mode)
+            initial_mode=initial_mode,
+            ai_enabled=self._ai_feature_enabled(),
+            on_query_ai=self._query_corridor_with_ai)
         dlg._owner_tab_path = (
             self._active_tab.path if self._active_tab else None)
         dlg.finished.connect(self._on_inspector_dlg_closed)
@@ -5013,6 +5029,16 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             sc._heatmap_filter_label if sc else None,
             len(mks) if mks else 0)
         dlg.show()
+
+    def _query_corridor_with_ai(self, ai_enabled: bool = True) -> None:
+        """Inspector Query with AI… → Migration thrash template."""
+        if not ai_enabled:
+            self._open_settings("AI")
+            return
+        self._focus_ai_panel()
+        panel = getattr(self, "_ai_panel", None)
+        if panel is not None and hasattr(panel, "query_migration_thrash"):
+            QTimer.singleShot(0, panel.query_migration_thrash)
 
     def _open_migration_heatmap(self) -> None:
         self._open_corridor_inspector("heatmap")
@@ -6926,7 +6952,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             self._view.centerOn(orth, cur.y())
 
     def _zoom_to_cursor_range(self) -> None:
-        """Fit the view tightly between the first two cursor positions."""
+        """Fit the view tightly between the earliest and latest cursor."""
         if self._trace is None:
             return
         times = sorted(self._view._scene.cursor_times())
@@ -7418,7 +7444,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 ("Ctrl++",               "Zoom in"),
                 ("Ctrl+-",               "Zoom out"),
                 ("Ctrl+0 / F",           "Fit entire trace to window"),
-                ("Ctrl+R",               "Zoom to cursor range"),
+                ("Ctrl+R",               "Zoom to earliest–latest cursor"),
                 ("Ctrl+,",               "Open Settings"),
                 ("G",                    "Toggle grid lines on/off"),
                 ("I",                    "Toggle STI event rows on/off"),

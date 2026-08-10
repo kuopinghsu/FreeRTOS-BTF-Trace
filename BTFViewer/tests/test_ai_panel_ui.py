@@ -104,6 +104,24 @@ class AiPanelUiTests(unittest.TestCase):
             ["https://example.com/a", "mailto:dev@example.com"],
         )
 
+    def test_query_analysis_findings_uses_template(self) -> None:
+        panel = self._panel()
+        with patch.object(panel, "send_current") as send:
+            panel.query_analysis_findings()
+        send.assert_called_once()
+        prompt = panel._input.toPlainText()
+        self.assertIn("Analysis Findings", prompt)
+        self.assertIn("severity", prompt)
+
+    def test_query_migration_thrash_uses_template(self) -> None:
+        panel = self._panel()
+        with patch.object(panel, "send_current") as send:
+            panel.query_migration_thrash()
+        send.assert_called_once()
+        prompt = panel._input.toPlainText()
+        self.assertIn("core thrashing", prompt)
+        self.assertIn("lock-bounce", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()

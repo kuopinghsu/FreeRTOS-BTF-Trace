@@ -1798,6 +1798,23 @@ def create_ai_assistant_panel(
             super().showEvent(event)
             self.refresh_enabled_state()
 
+        def query_template(self, template_id: str) -> None:
+            """Run a built-in AI template by id (toolbar Analysis / inspector)."""
+            prompt = next(
+                (p for tid, _lab, p in AI_TEMPLATE_QUESTIONS if tid == template_id),
+                "",
+            )
+            if prompt:
+                self._use_template(template_id, prompt)
+
+        def query_analysis_findings(self) -> None:
+            """Run the Analysis Findings template (toolbar Analysis → Query with AI)."""
+            self.query_template("findings")
+
+        def query_migration_thrash(self) -> None:
+            """Run the Migration thrash template (inspector → Query with AI)."""
+            self.query_template("migrations")
+
         def _use_template(self, template_id: str, prompt: str) -> None:
             if self._busy:
                 return

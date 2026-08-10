@@ -57,6 +57,27 @@ class AiAssistantHelpersTests(unittest.TestCase):
         self.assertIn("triage", ids)
         self.assertIn("migrations", ids)
 
+    def test_templates_match_web_ollama_client(self) -> None:
+        """Keep AI_TEMPLATE_QUESTIONS in sync with web/src/utils/ollamaClient.js."""
+        import re
+
+        js = (BTF_ROOT / "web/src/utils/ollamaClient.js").read_text(encoding="utf-8")
+        start = js.index("export const AI_TEMPLATE_QUESTIONS = [")
+        chunk = js[start:]
+        web = []
+        for m in re.finditer(
+            r"id:\s*(?:'([^']+)'|AI_COMPARE_TEMPLATE_ID)\s*,\s*label:\s*'([^']+)'\s*,\s*"
+            r"prompt:\s*((?:'[^']*'\s*\+\s*)*'[^']*')",
+            chunk,
+        ):
+            tid = m.group(1) or "compare"
+            label, expr = m.group(2), m.group(3)
+            prompt = "".join(re.findall(r"'([^']*)'", expr))
+            web.append((tid, label, prompt))
+            if tid == "deadlines":
+                break
+        self.assertEqual(list(AI_TEMPLATE_QUESTIONS), web)
+
     def test_normalize_ai_base_url(self) -> None:
         self.assertEqual(
             normalize_ai_base_url("http://localhost:11434"),

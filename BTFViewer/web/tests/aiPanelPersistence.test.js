@@ -9,6 +9,8 @@ const app = readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8')
   .replace(/\s+/g, ' ')
 const aiPanel = readFileSync(new URL('../src/components/AiAssistantPanel.vue', import.meta.url), 'utf8')
   .replace(/\s+/g, ' ')
+const corridorDlg = readFileSync(new URL('../src/components/CorridorInspectorDialog.vue', import.meta.url), 'utf8')
+  .replace(/\s+/g, ' ')
 
 describe('AI panel survives right-panel tab switches', () => {
   it('hides the AI page instead of destroying it', () => {
@@ -39,6 +41,15 @@ describe('AI conversation turn layout', () => {
     assert.match(aiPanel, /#6ea8e0/)
     assert.match(aiPanel, /#6fbf9a/)
     assert.match(aiPanel, /\.ai-msg \+ \.ai-msg/)
+  })
+})
+
+describe('Migration inspector Query with AI', () => {
+  it('footer emits query-ai and App wires the migrations template', () => {
+    assert.match(corridorDlg, /Query with AI/)
+    assert.match(corridorDlg, /emit\('query-ai'\)/)
+    assert.match(app, /@query-ai="queryCorridorWithAi"/)
+    assert.match(app, /focusAiAndAsk\('migrations'\)/)
   })
 })
 

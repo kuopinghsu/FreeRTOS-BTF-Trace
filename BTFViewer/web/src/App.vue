@@ -777,17 +777,21 @@
       :task-filter-count="timelineOptions.taskFilterKeys?.length ?? 0"
       :focus-pair="inspectorFocusPair"
       :initial-mode="inspectorMode"
+      :ai-enabled="appSettings.aiEnabled !== false"
       @close="onInspectorClose"
       @spotlight="onCorridorSpotlight"
       @jump="onCorridorJump"
       @clear-filter="clearHeatmapTaskFilter"
+      @query-ai="queryCorridorWithAi"
     />
 
     <AnalysisFindingsDialog
       v-if="analysisOpen && trace"
       :findings="analysisFindings"
       :scope-label="analysisScopeLabel"
+      :ai-enabled="appSettings.aiEnabled !== false"
       @close="analysisOpen = false"
+      @query-ai="queryAnalysisWithAi"
     />
 
     <!-- Snapshot editor -->
@@ -934,7 +938,7 @@ import {
 import { downloadPerfetto } from './utils/perfettoExport.js'
 import { normalizeStatsPins, normalizeStatsSectionOrder } from './utils/statsPins.js'
 import { computeFindHits, stepFindHitIndex } from './utils/findAnalysis.js'
-import { aiJumpAnnotationNote } from './utils/ollamaClient.js'
+import { AI_TEMPLATE_QUESTIONS, aiJumpAnnotationNote } from './utils/ollamaClient.js'
 import { traceQualitySummary } from './utils/traceQuality.js'
 import { isBtfOpenName, loadBtfEntriesFromFile } from './utils/btfLoad.js'
 import exampleBtfB64   from 'virtual:example-btf'
@@ -1948,6 +1952,31 @@ function focusFindPanel() {
   }
   rightPanelTab.value = 'find'
   nextTick(() => findPanelRef.value?.focusInput())
+}
+
+async function focusAiAndAsk(templateId) {
+  if (appSettings.aiEnabled === false) {
+    openSettingsDialog('ai')
+    return
+  }
+  if (appSettings.showAi === false) {
+    appSettings.showAi = true
+    saveSettings(appSettings)
+  }
+  rightPanelTab.value = 'ai'
+  const prompt = AI_TEMPLATE_QUESTIONS.find(t => t.id === templateId)?.prompt
+  await nextTick()
+  if (!aiPanelRef.value) await nextTick()
+  if (prompt) await aiPanelRef.value?.ask?.(prompt)
+}
+
+async function queryAnalysisWithAi() {
+  analysisOpen.value = false
+  await focusAiAndAsk('findings')
+}
+
+async function queryCorridorWithAi() {
+  await focusAiAndAsk('migrations')
 }
 
 function buildAiContext() {

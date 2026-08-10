@@ -298,6 +298,19 @@
           Show all tasks
         </button>
       </div>
+
+      <div class="ci-footer">
+        <button
+          type="button"
+          class="ci-ai-btn"
+          :title="aiEnabled
+            ? 'Open the AI Assistant and walk through migration / corridor findings'
+            : 'Enable AI Assistant in Settings → AI'"
+          @click="emit('query-ai')"
+        >
+          Query with AI…
+        </button>
+      </div>
     </div>
   </div>
 </template>
@@ -384,9 +397,10 @@ const props = defineProps({
   focusPair: { type: Object, default: null },
   /** 'heatmap' focuses tree/grid; 'chord' expands topology sidebar */
   initialMode: { type: String, default: 'heatmap' },
+  aiEnabled: { type: Boolean, default: true },
 })
 
-const emit = defineEmits(['close', 'spotlight', 'clearFilter', 'jump'])
+const emit = defineEmits(['close', 'spotlight', 'clearFilter', 'jump', 'query-ai'])
 
 const GRID_ROW_H = 22
 const GRID_LABEL_W = 78
@@ -1348,6 +1362,29 @@ onBeforeUnmount(() => {
   padding: 3px 8px;
   cursor: pointer;
   font-size: 12px;
+}
+.ci-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.ci-ai-btn {
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #000;
+  font-weight: 600;
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ci-ai-btn:hover {
+  filter: brightness(1.08);
 }
 .ci-group-row {
   font-weight: 600;

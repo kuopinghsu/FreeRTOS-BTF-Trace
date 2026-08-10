@@ -35,7 +35,8 @@ class CliGuiTracePathsTest(unittest.TestCase):
                     )
                 finally:
                     os.chdir(old)
-        self.assertEqual(paths, [str(trace.resolve())])
+        # abspath (not Path.resolve): on macOS /var is a symlink to /private/var.
+        self.assertEqual(paths, [os.path.abspath(str(trace))])
 
     def test_missing_file_warns_and_skips(self) -> None:
         err = io.StringIO()

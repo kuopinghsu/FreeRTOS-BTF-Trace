@@ -6,6 +6,7 @@ import {
   AI_PRESET_GEMINI,
   AI_PRESET_OLLAMA,
   AI_PRESET_OPENAI,
+  AI_TEMPLATE_QUESTIONS,
   DEFAULT_AI_BASE_URL,
   DEFAULT_AI_PRESET,
   aiJumpAnnotationNote,
@@ -239,6 +240,18 @@ describe('AI endpoint helpers', () => {
     )
     assert.equal(h.Authorization, 'Bearer AIzaSyAbc')
     assert.equal(h['x-goog-api-key'], undefined)
+  })
+
+  it('Analysis Findings template is available for Query with AI', () => {
+    const findings = AI_TEMPLATE_QUESTIONS.find(t => t.id === 'findings')
+    assert.ok(findings)
+    assert.match(findings.prompt, /Analysis Findings/)
+  })
+
+  it('Migration thrash template is available for inspector Query with AI', () => {
+    const migrations = AI_TEMPLATE_QUESTIONS.find(t => t.id === 'migrations')
+    assert.ok(migrations)
+    assert.match(migrations.prompt, /thrashing|lock-bounce/i)
   })
 
   it('normalizeAiContext accepts snake_case and camelCase', async () => {

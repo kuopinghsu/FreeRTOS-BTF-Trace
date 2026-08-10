@@ -130,6 +130,41 @@ class WorkflowAnalysisFindingsTest(unittest.TestCase):
         )
         self.assertTrue(any(f["title"].startswith("No analysis heuristics") for f in findings))
 
+    def test_analysis_dialog_query_with_ai_button(self):
+        from PySide6.QtWidgets import QApplication, QPushButton
+        from btf_viewer_pkg.stats import _AnalysisFindingsDialog
+
+        if QApplication.instance() is None:
+            QApplication([])
+        findings = [{"severity": "warning", "title": "Load imbalance", "text": "σ high"}]
+        dlg = _AnalysisFindingsDialog(findings, " (scoped)", ai_enabled=True)
+        labels = [b.text().replace("&", "") for b in dlg.findChildren(QPushButton)]
+        self.assertIn("Query with AI…", labels)
+        self.assertIn("Save as Text…", labels)
+        self.assertFalse(dlg.wants_ai_query)
+        ai_btn = next(
+            b for b in dlg.findChildren(QPushButton)
+            if "Query with AI" in b.text().replace("&", "")
+        )
+        ai_btn.click()
+        self.assertTrue(dlg.wants_ai_query)
+        self.assertFalse(dlg._ai_needs_settings)
+
+    def test_analysis_dialog_query_ai_opens_settings_when_disabled(self):
+        from PySide6.QtWidgets import QApplication, QPushButton
+        from btf_viewer_pkg.stats import _AnalysisFindingsDialog
+
+        if QApplication.instance() is None:
+            QApplication([])
+        dlg = _AnalysisFindingsDialog([], "", ai_enabled=False)
+        ai_btn = next(
+            b for b in dlg.findChildren(QPushButton)
+            if "Query with AI" in b.text().replace("&", "")
+        )
+        ai_btn.click()
+        self.assertTrue(dlg.wants_ai_query)
+        self.assertTrue(dlg._ai_needs_settings)
+
 
 if __name__ == "__main__":
     unittest.main()
