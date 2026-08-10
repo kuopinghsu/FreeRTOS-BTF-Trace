@@ -493,15 +493,65 @@ _CORE_PALETTE = [
 # SVG icon helpers
 # ---------------------------------------------------------------------------
 
+# Qt SVG logs ``qt.svg.draw: The requested buffer size is too big, ignoring``
+# when an offscreen filter/opacity buffer exceeds ~16383 px on an edge.
+_SVG_RASTER_MAX_EDGE = 4096
+
+
+def rasterize_svg_pixmap(
+    svg,
+    *,
+    dest_w: Optional[int] = None,
+    dest_h: Optional[int] = None,
+    scale: float = 1.0,
+    max_edge: int = _SVG_RASTER_MAX_EDGE,
+    fill: Optional["QColor"] = None,
+) -> Tuple["QPixmap", float]:
+    """Render *svg* into a pixmap with an explicit pixel size.
+
+    Returns ``(pixmap, user_scale)`` where *user_scale* maps SVG user units to
+    pixmap pixels (for hit-testing). Caps the long edge so Qt never allocates
+    a huge SVG raster buffer.
+    """
+    data = svg.encode("utf-8") if isinstance(svg, str) else bytes(svg or b"")
+    renderer = QSvgRenderer(QByteArray(data))
+    empty = QPixmap()
+    if not renderer.isValid():
+        return empty, 1.0
+    nat = renderer.defaultSize()
+    nw = max(1, int(nat.width()) if nat.width() > 0 else 1)
+    nh = max(1, int(nat.height()) if nat.height() > 0 else 1)
+    sx = float(scale) if scale else 1.0
+    if sx <= 0:
+        sx = 1.0
+    out_w = max(1, int(dest_w) if dest_w else int(round(nw * sx)))
+    out_h = max(1, int(dest_h) if dest_h else int(round(nh * sx)))
+    cap = max(16, int(max_edge))
+    longest = max(out_w, out_h)
+    if longest > cap:
+        shrink = cap / float(longest)
+        out_w = max(1, int(round(out_w * shrink)))
+        out_h = max(1, int(round(out_h * shrink)))
+    user_scale = out_w / float(nw)
+    pm = QPixmap(out_w, out_h)
+    if fill is None:
+        pm.fill(Qt.GlobalColor.transparent)
+    else:
+        pm.fill(fill)
+    painter = QPainter(pm)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    renderer.render(painter, QRectF(0, 0, float(out_w), float(out_h)))
+    painter.end()
+    return pm, user_scale
+
+
 def _svg_icon(path_data: str, color: str = "#9E9E9E", size: int = 16) -> "QIcon":
     """Build a QIcon from an SVG path string (16x16 viewBox by default)."""
     svg = (
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" '
         f'viewBox="0 0 16 16"><path fill="{color}" fill-rule="evenodd" d="{path_data}"/></svg>'
     )
-    ba = QByteArray(svg.encode())
-    pm = QPixmap()
-    pm.loadFromData(ba, "SVG")
+    pm, _ = rasterize_svg_pixmap(svg, dest_w=size, dest_h=size)
     return QIcon(pm)
 
 def _svg_icon_checked(path_data: str, off: str = "#b0b0cc", on: str = "#e3f2fd",
@@ -524,9 +574,7 @@ def _svg_icon_markup(inner: str, size: int = 16) -> "QIcon":
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" '
         f'viewBox="0 0 16 16">{inner}</svg>'
     )
-    ba = QByteArray(svg.encode())
-    pm = QPixmap()
-    pm.loadFromData(ba, "SVG")
+    pm, _ = rasterize_svg_pixmap(svg, dest_w=size, dest_h=size)
     return QIcon(pm)
 
 def _stats_chevron_icon(collapsed: bool, is_dark: bool = True) -> QIcon:
@@ -739,13 +787,7 @@ def _icon_from_native_file(path: str) -> Optional[QIcon]:
     return icon if not icon.isNull() else None
 
 def _pixmap_from_app_svg(size: int) -> QPixmap:
-    svg = (
-        _APP_ICON_SVG
-        .replace('width="72"', f'width="{size}"')
-        .replace('height="72"', f'height="{size}"')
-    )
-    pm = QPixmap()
-    pm.loadFromData(QByteArray(svg.encode()), "SVG")
+    pm, _ = rasterize_svg_pixmap(_APP_ICON_SVG, dest_w=size, dest_h=size)
     return pm
 
 def _pixmap_from_embedded_app_icon(size: int) -> QPixmap:
@@ -800,13 +842,8 @@ def _build_app_icon(icon_path: Optional[str] = None) -> QIcon:
             with open(path, encoding="utf-8") as fh:
                 svg_data = fh.read()
             for sz in _APP_ICON_SIZES:
-                sized = (
-                    svg_data
-                    .replace('width="72"', f'width="{sz}"')
-                    .replace('height="72"', f'height="{sz}"')
-                )
-                pm = QPixmap()
-                if pm.loadFromData(QByteArray(sized.encode()), "SVG") and not pm.isNull():
+                pm, _ = rasterize_svg_pixmap(svg_data, dest_w=sz, dest_h=sz)
+                if not pm.isNull():
                     _icon_add_pixmap(icon, pm)
             if not icon.isNull():
                 return icon

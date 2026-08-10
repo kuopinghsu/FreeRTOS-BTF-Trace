@@ -688,15 +688,65 @@ _CORE_PALETTE = [
 # SVG icon helpers
 # ---------------------------------------------------------------------------
 
+# Qt SVG logs ``qt.svg.draw: The requested buffer size is too big, ignoring``
+# when an offscreen filter/opacity buffer exceeds ~16383 px on an edge.
+_SVG_RASTER_MAX_EDGE = 4096
+
+
+def rasterize_svg_pixmap(
+    svg,
+    *,
+    dest_w: Optional[int] = None,
+    dest_h: Optional[int] = None,
+    scale: float = 1.0,
+    max_edge: int = _SVG_RASTER_MAX_EDGE,
+    fill: Optional["QColor"] = None,
+) -> Tuple["QPixmap", float]:
+    """Render *svg* into a pixmap with an explicit pixel size.
+
+    Returns ``(pixmap, user_scale)`` where *user_scale* maps SVG user units to
+    pixmap pixels (for hit-testing). Caps the long edge so Qt never allocates
+    a huge SVG raster buffer.
+    """
+    data = svg.encode("utf-8") if isinstance(svg, str) else bytes(svg or b"")
+    renderer = QSvgRenderer(QByteArray(data))
+    empty = QPixmap()
+    if not renderer.isValid():
+        return empty, 1.0
+    nat = renderer.defaultSize()
+    nw = max(1, int(nat.width()) if nat.width() > 0 else 1)
+    nh = max(1, int(nat.height()) if nat.height() > 0 else 1)
+    sx = float(scale) if scale else 1.0
+    if sx <= 0:
+        sx = 1.0
+    out_w = max(1, int(dest_w) if dest_w else int(round(nw * sx)))
+    out_h = max(1, int(dest_h) if dest_h else int(round(nh * sx)))
+    cap = max(16, int(max_edge))
+    longest = max(out_w, out_h)
+    if longest > cap:
+        shrink = cap / float(longest)
+        out_w = max(1, int(round(out_w * shrink)))
+        out_h = max(1, int(round(out_h * shrink)))
+    user_scale = out_w / float(nw)
+    pm = QPixmap(out_w, out_h)
+    if fill is None:
+        pm.fill(Qt.GlobalColor.transparent)
+    else:
+        pm.fill(fill)
+    painter = QPainter(pm)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    renderer.render(painter, QRectF(0, 0, float(out_w), float(out_h)))
+    painter.end()
+    return pm, user_scale
+
+
 def _svg_icon(path_data: str, color: str = "#9E9E9E", size: int = 16) -> "QIcon":
     """Build a QIcon from an SVG path string (16x16 viewBox by default)."""
     svg = (
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" '
         f'viewBox="0 0 16 16"><path fill="{color}" fill-rule="evenodd" d="{path_data}"/></svg>'
     )
-    ba = QByteArray(svg.encode())
-    pm = QPixmap()
-    pm.loadFromData(ba, "SVG")
+    pm, _ = rasterize_svg_pixmap(svg, dest_w=size, dest_h=size)
     return QIcon(pm)
 
 def _svg_icon_checked(path_data: str, off: str = "#b0b0cc", on: str = "#e3f2fd",
@@ -719,9 +769,7 @@ def _svg_icon_markup(inner: str, size: int = 16) -> "QIcon":
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" '
         f'viewBox="0 0 16 16">{inner}</svg>'
     )
-    ba = QByteArray(svg.encode())
-    pm = QPixmap()
-    pm.loadFromData(ba, "SVG")
+    pm, _ = rasterize_svg_pixmap(svg, dest_w=size, dest_h=size)
     return QIcon(pm)
 
 def _stats_chevron_icon(collapsed: bool, is_dark: bool = True) -> QIcon:
@@ -934,13 +982,7 @@ def _icon_from_native_file(path: str) -> Optional[QIcon]:
     return icon if not icon.isNull() else None
 
 def _pixmap_from_app_svg(size: int) -> QPixmap:
-    svg = (
-        _APP_ICON_SVG
-        .replace('width="72"', f'width="{size}"')
-        .replace('height="72"', f'height="{size}"')
-    )
-    pm = QPixmap()
-    pm.loadFromData(QByteArray(svg.encode()), "SVG")
+    pm, _ = rasterize_svg_pixmap(_APP_ICON_SVG, dest_w=size, dest_h=size)
     return pm
 
 def _pixmap_from_embedded_app_icon(size: int) -> QPixmap:
@@ -995,13 +1037,8 @@ def _build_app_icon(icon_path: Optional[str] = None) -> QIcon:
             with open(path, encoding="utf-8") as fh:
                 svg_data = fh.read()
             for sz in _APP_ICON_SIZES:
-                sized = (
-                    svg_data
-                    .replace('width="72"', f'width="{sz}"')
-                    .replace('height="72"', f'height="{sz}"')
-                )
-                pm = QPixmap()
-                if pm.loadFromData(QByteArray(sized.encode()), "SVG") and not pm.isNull():
+                pm, _ = rasterize_svg_pixmap(svg_data, dest_w=sz, dest_h=sz)
+                if not pm.isNull():
                     _icon_add_pixmap(icon, pm)
             if not icon.isNull():
                 return icon
@@ -17911,6 +17948,25 @@ def hit_test_mermaid(
     return None
 
 
+def _svg_to_png_bytes(svg: str) -> Optional[Tuple[bytes, int, int]]:
+    """Rasterize SVG for QTextBrowser (avoids Qt's oversized SVG buffer warning)."""
+    try:
+        from ._imports import QBuffer, QByteArray, QColor, QIODevice
+        from .config import rasterize_svg_pixmap
+    except Exception:
+        return None
+    pm, _ = rasterize_svg_pixmap(svg, fill=QColor("#12161d"))
+    if pm.isNull():
+        return None
+    ba = QByteArray()
+    buf = QBuffer(ba)
+    if not buf.open(QIODevice.OpenModeFlag.WriteOnly):
+        return None
+    if not pm.save(buf, "PNG"):
+        return None
+    return bytes(ba.data()), int(pm.width()), int(pm.height())
+
+
 def mermaid_to_svg(source: str, *, interactive: bool = True) -> str:
     """Return an SVG string, or empty if the dialect is unsupported."""
     text = (source or "").strip()
@@ -17953,16 +18009,26 @@ def mermaid_block_html(source: str, *, as_img: bool = True, zoomable: bool = Tru
         esc = html.escape(source)
         return f'<pre><code class="language-mermaid">{esc}</code></pre>'
     if as_img:
-        b64 = base64.b64encode(svg.encode("utf-8")).decode("ascii")
-        wm = re.search(r'\bwidth="(\d+(?:\.\d+)?)"', svg)
-        hm = re.search(r'\bheight="(\d+(?:\.\d+)?)"', svg)
-        size_attr = ""
-        if wm and hm:
-            size_attr = f' width="{wm.group(1)}" height="{hm.group(1)}"'
-        fig = (
-            f'<img class="ai-mermaid-img" alt="mermaid diagram"{size_attr} '
-            f'src="data:image/svg+xml;base64,{b64}">'
-        )
+        png = _svg_to_png_bytes(svg)
+        if png:
+            raw, iw, ih = png
+            b64 = base64.b64encode(raw).decode("ascii")
+            fig = (
+                f'<img class="ai-mermaid-img" alt="mermaid diagram" '
+                f'width="{iw}" height="{ih}" '
+                f'src="data:image/png;base64,{b64}">'
+            )
+        else:
+            b64 = base64.b64encode(svg.encode("utf-8")).decode("ascii")
+            wm = re.search(r'\bwidth="(\d+(?:\.\d+)?)"', svg)
+            hm = re.search(r'\bheight="(\d+(?:\.\d+)?)"', svg)
+            size_attr = ""
+            if wm and hm:
+                size_attr = f' width="{wm.group(1)}" height="{hm.group(1)}"'
+            fig = (
+                f'<img class="ai-mermaid-img" alt="mermaid diagram"{size_attr} '
+                f'src="data:image/svg+xml;base64,{b64}">'
+            )
     else:
         fig = f'<div class="ai-mermaid-svg">{svg}</div>'
     if zoomable:
@@ -18317,6 +18383,7 @@ class _MermaidZoomDialog(QDialog):
         self._source = source or ""
         self._svg = mermaid_to_svg(self._source, interactive=False)
         self._scale = 2.0
+        self._hit_scale = 2.0
         lay = QVBoxLayout(self)
         hint = QLabel(
             "Scroll to zoom. Click a task/core in the figure or a name below."
@@ -18369,7 +18436,7 @@ class _MermaidZoomDialog(QDialog):
             if event.button() == Qt.MouseButton.LeftButton and self._on_link:
                 pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
                 hit = hit_test_mermaid(
-                    self._source, pos.x(), pos.y(), scale=self._scale)
+                    self._source, pos.x(), pos.y(), scale=self._hit_scale)
                 if hit:
                     _kind, value = hit
                     self._on_link(QUrl(f"btfhighlight:{urllib.parse.quote(value, safe='')}"))
@@ -18380,15 +18447,12 @@ class _MermaidZoomDialog(QDialog):
         if not self._svg:
             self._img.setText("Could not render diagram.")
             return
-        renderer = QSvgRenderer(QByteArray(self._svg.encode("utf-8")))
-        size = renderer.defaultSize()
-        w = max(1, int(max(size.width(), 1) * self._scale))
-        h = max(1, int(max(size.height(), 1) * self._scale))
-        pm = QPixmap(w, h)
-        pm.fill(QColor("#12161d"))
-        painter = QPainter(pm)
-        renderer.render(painter)
-        painter.end()
+        pm, hit_scale = rasterize_svg_pixmap(
+            self._svg, scale=self._scale, fill=QColor("#12161d"))
+        if pm.isNull():
+            self._img.setText("Could not render diagram.")
+            return
+        self._hit_scale = hit_scale
         self._img.setPixmap(pm)
         self._img.resize(pm.size())
 
@@ -27387,7 +27451,7 @@ def _load_balance_gauge_svg(metrics: dict, *, width: int = 300, dark: bool = Fal
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {view_w} {view_h}" '
         f'width="{width}" height="{h}" role="img" '
         f'aria-label="Load Balance Score {score:.0f} percent, sigma {stddev:.1f} percent">'
-        f'<rect width="100%" height="100%" rx="8" fill="#F7F8FA" stroke="{card_stroke}"/>'
+        f'<rect width="{view_w}" height="{view_h}" rx="8" fill="#F7F8FA" stroke="{card_stroke}"/>'
         f"{left}{right}"
         f'<text x="{view_w / 2}" y="{view_h - 8}" text-anchor="middle" fill="#6A7388" '
         f'font-family="{mono}" font-size="9">'
@@ -33323,9 +33387,7 @@ class _AboutDialog(QDialog):
 
         icon_lbl = QLabel()
         icon_lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        _pm = QPixmap()
-        _pm.loadFromData(QByteArray(_APP_ICON_SVG.encode()), "SVG")
-        icon_lbl.setPixmap(_pm)
+        icon_lbl.setPixmap(_pixmap_from_embedded_app_icon(72))
         hv.addWidget(icon_lbl)
 
         name_lbl = QLabel("RTOS BTF Viewer")
@@ -42697,7 +42759,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 if int(ann.ns) == ns and ann.note == note:
                     return f"Annotation already at {ns}"
             self._add_annotation_with_note(
-                ns, note, focus_annotation_tab=True, push_undo=False)
+                ns, note, show_marks_panel=False, push_undo=False)
             return f"Annotated {ns}"
         if name == AI_TOOL_QUERY_RAW_METRIC:
             lo = hi = None
@@ -43431,9 +43493,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._cpu_load_graph.set_core_expanded(core, True)
 
     def _on_stats_plot_point_clicked(self, payload, mark_ns: int, note: str) -> None:
-        """Metrics plot point: jump/highlight and add an annotation with *note*."""
+        """Metrics plot / table click: jump/highlight and add an annotation with *note*."""
         if self._trace is None:
             return
+        stay_tab = self._panel_tabs.currentIndex() if hasattr(self, "_panel_tabs") else None
         if isinstance(payload, TaskSegment):
             self._scroll_to_segment(payload)
         elif isinstance(payload, IntervalInstance):
@@ -43447,15 +43510,17 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         else:
             self._view.scroll_to_ns(mark_ns)
         self._ensure_stats_plot_annotation(mark_ns, note)
+        # Annotation list rebuild can steal focus onto the Marks tab (Qt).
+        if stay_tab is not None and self._panel_tabs.currentIndex() != stay_tab:
+            self._panel_tabs.setCurrentIndex(stay_tab)
 
     def _ensure_stats_plot_annotation(self, mark_ns: int, note: str) -> None:
         """Add a stats-plot annotation unless one already exists at the same point."""
         note = note or ""
         for ann in self._annotations:
             if ann.ns == mark_ns and ann.note == note:
-                self._focus_marks_annotation_panel(ann.id)
                 return
-        self._add_annotation_with_note(mark_ns, note, focus_annotation_tab=True)
+        self._add_annotation_with_note(mark_ns, note, show_marks_panel=False)
 
     def _add_bookmark_at_center(self) -> None:
         if self._trace is None:
@@ -43561,7 +43626,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     def _add_annotation_with_note(
         self, ns: int, note: str, *, focus_annotation_tab: bool = False,
-        show_marks_panel: bool = True, push_undo: bool = True,
+        show_marks_panel: bool = False, push_undo: bool = True,
     ) -> None:
         """Add an annotation at *ns* with the given note text."""
         if self._trace is None:
@@ -43645,22 +43710,27 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 break
 
     def _rebuild_annotation_list(self) -> None:
+        stay_tab = self._panel_tabs.currentIndex() if hasattr(self, "_panel_tabs") else None
         self._annotation_list.blockSignals(True)
         self._annotation_list.clear()
         if self._trace is None:
             self._annotation_list.blockSignals(False)
-            return
-        unit = self._current_time_unit()
-        for a in sorted(self._annotations, key=lambda x: x.ns):
-            txt = f"{_format_time(a.ns, unit, decimals=self._time_decimals_val)}  {a.note}"
-            item = QListWidgetItem(txt)
-            item.setData(Qt.ItemDataRole.UserRole, int(a.id))
-            item.setData(Qt.ItemDataRole.UserRole + 1, int(a.ns))
-            item.setToolTip(f"@ {_format_time(a.ns, unit, decimals=self._time_decimals_val)}\n{a.note}")
-            self._annotation_list.addItem(item)
-        self._annotation_list.blockSignals(False)
-        self._view._scene.set_marks(self._bookmarks, self._annotations)
-        self._view._has_annotations = bool(self._annotations)
+        else:
+            unit = self._current_time_unit()
+            for a in sorted(self._annotations, key=lambda x: x.ns):
+                txt = f"{_format_time(a.ns, unit, decimals=self._time_decimals_val)}  {a.note}"
+                item = QListWidgetItem(txt)
+                item.setData(Qt.ItemDataRole.UserRole, int(a.id))
+                item.setData(Qt.ItemDataRole.UserRole + 1, int(a.ns))
+                item.setToolTip(f"@ {_format_time(a.ns, unit, decimals=self._time_decimals_val)}\n{a.note}")
+                self._annotation_list.addItem(item)
+            self._annotation_list.blockSignals(False)
+            self._view._scene.set_marks(self._bookmarks, self._annotations)
+            self._view._has_annotations = bool(self._annotations)
+        # Updating a focused QListWidget on a hidden tab can make QTabWidget
+        # switch to Marks; keep the user on Statistics / Find / AI / …
+        if stay_tab is not None and self._panel_tabs.currentIndex() != stay_tab:
+            self._panel_tabs.setCurrentIndex(stay_tab)
 
     def _focus_marks_annotation_panel(self, annotation_id: Optional[int] = None) -> None:
         """Show Marks tab, switch to Anno. sub-tab, optionally select a row."""

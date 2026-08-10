@@ -1028,13 +1028,6 @@ function ensureRightPanelTabVisible(s = appSettings) {
   if (!ok) rightPanelTab.value = firstVisibleRightPanelTab(s)
 }
 
-function ensureMarksPanelVisible() {
-  if (!appSettings.showMarks) {
-    appSettings.showMarks = true
-    saveSettings(appSettings)
-  }
-  rightPanelTab.value = 'marks'
-}
 const jumpDialogOpen = ref(false)
 const dragOver = ref(false)
 const statsSectionHeights = ref({})
@@ -1800,6 +1793,7 @@ function onJumpToTime(ns) {
 }
 
 function onStatsPlotPointActivate({ ns, note, segment, interval, priorityRange, syncIssue, tagSample, tagChannel }) {
+  const stayOnTab = rightPanelTab.value
   if (syncIssue) {
     pinnedHighlightKey.value = null
     timelineOptions.lockedTaskKey = null
@@ -1865,13 +1859,10 @@ function onStatsPlotPointActivate({ ns, note, segment, interval, priorityRange, 
     timelinePanelRef.value?.jumpToNs(ns)
   }
   if (ns != null) {
-    const annId = addAnnotationAtNs(ns, note)
-    ensureMarksPanelVisible()
-    nextTick(() => {
-      if (annId != null) marksPanelRef.value?.focusAnnotation(annId)
-    })
-  } else {
-    ensureMarksPanelVisible()
+    addAnnotationAtNs(ns, note)
+  }
+  if (rightPanelTab.value !== stayOnTab) {
+    rightPanelTab.value = stayOnTab
   }
   syncTimelineViewport()
   scheduleSessionSave()
@@ -2248,7 +2239,6 @@ function dispatchAiTool(name, args) {
       m => m.type === 'annotation' && Number(m.ns) === ns && (m.label || '') === note)
     if (existing) return `Annotation already at ${ns}`
     addMarkAtNs(ns, 'annotation', note, { undo: false })
-    ensureMarksPanelVisible()
     scheduleSessionSave()
     return `Annotated ${ns}`
   }

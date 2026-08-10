@@ -17,6 +17,8 @@ from btf_viewer_pkg._bootstrap import install  # noqa: E402
 
 install()
 
+from PySide6.QtWidgets import QApplication  # noqa: E402
+
 from btf_viewer_pkg.ai_assistant import (  # noqa: E402
     format_ai_conversation_html,
     markdown_to_safe_html,
@@ -37,6 +39,11 @@ from btf_viewer_pkg.ai_tools import (  # noqa: E402
 
 
 class AiMermaidTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        if QApplication.instance() is None:
+            QApplication([])
+
     def test_sequence_svg(self) -> None:
         src = (
             "sequenceDiagram\n"
@@ -79,7 +86,7 @@ class AiMermaidTests(unittest.TestCase):
     def test_markdown_renders_mermaid(self) -> None:
         html = markdown_to_safe_html(AI_MERMAID_SEQUENCE_EXAMPLE)
         self.assertIn("ai-mermaid", html)
-        self.assertIn("data:image/svg+xml", html)
+        self.assertIn("data:image/png", html)
         self.assertIn("btfhighlight:", html)
         self.assertIn("btfmermaid:zoom/", html)
         self.assertIn("ai-mermaid-zoom", html)
@@ -94,7 +101,7 @@ class AiMermaidTests(unittest.TestCase):
 
     def test_html_export_keeps_clickable_svg(self) -> None:
         chat = markdown_to_safe_html(AI_MERMAID_SEQUENCE_EXAMPLE, as_img=True)
-        self.assertIn("data:image/svg+xml", chat)
+        self.assertIn("data:image/png", chat)
         exported = markdown_to_safe_html(AI_MERMAID_SEQUENCE_EXAMPLE, as_img=False)
         self.assertIn("<svg", exported)
         self.assertNotIn("data:image/svg+xml", exported)
@@ -144,6 +151,19 @@ class AiMermaidTests(unittest.TestCase):
     def test_block_fallback(self) -> None:
         html = mermaid_block_html("not a diagram", as_img=True)
         self.assertIn("language-mermaid", html)
+
+    def test_rasterize_svg_caps_long_edge(self) -> None:
+        from btf_viewer_pkg.config import _SVG_RASTER_MAX_EDGE, rasterize_svg_pixmap
+
+        svg = (
+            '<svg xmlns="http://www.w3.org/2000/svg" width="20000" height="80" '
+            'viewBox="0 0 20000 80">'
+            '<rect width="20000" height="80" fill="#224466"/></svg>'
+        )
+        pm, user_scale = rasterize_svg_pixmap(svg, scale=2.0)
+        self.assertFalse(pm.isNull())
+        self.assertLessEqual(max(pm.width(), pm.height()), _SVG_RASTER_MAX_EDGE)
+        self.assertLess(user_scale, 2.0)
 
 
 if __name__ == "__main__":

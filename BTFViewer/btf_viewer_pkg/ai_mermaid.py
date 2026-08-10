@@ -160,6 +160,25 @@ def hit_test_mermaid(
     return None
 
 
+def _svg_to_png_bytes(svg: str) -> Optional[Tuple[bytes, int, int]]:
+    """Rasterize SVG for QTextBrowser (avoids Qt's oversized SVG buffer warning)."""
+    try:
+        from ._imports import QBuffer, QByteArray, QColor, QIODevice
+        from .config import rasterize_svg_pixmap
+    except Exception:
+        return None
+    pm, _ = rasterize_svg_pixmap(svg, fill=QColor("#12161d"))
+    if pm.isNull():
+        return None
+    ba = QByteArray()
+    buf = QBuffer(ba)
+    if not buf.open(QIODevice.OpenModeFlag.WriteOnly):
+        return None
+    if not pm.save(buf, "PNG"):
+        return None
+    return bytes(ba.data()), int(pm.width()), int(pm.height())
+
+
 def mermaid_to_svg(source: str, *, interactive: bool = True) -> str:
     """Return an SVG string, or empty if the dialect is unsupported."""
     text = (source or "").strip()
@@ -202,16 +221,26 @@ def mermaid_block_html(source: str, *, as_img: bool = True, zoomable: bool = Tru
         esc = html.escape(source)
         return f'<pre><code class="language-mermaid">{esc}</code></pre>'
     if as_img:
-        b64 = base64.b64encode(svg.encode("utf-8")).decode("ascii")
-        wm = re.search(r'\bwidth="(\d+(?:\.\d+)?)"', svg)
-        hm = re.search(r'\bheight="(\d+(?:\.\d+)?)"', svg)
-        size_attr = ""
-        if wm and hm:
-            size_attr = f' width="{wm.group(1)}" height="{hm.group(1)}"'
-        fig = (
-            f'<img class="ai-mermaid-img" alt="mermaid diagram"{size_attr} '
-            f'src="data:image/svg+xml;base64,{b64}">'
-        )
+        png = _svg_to_png_bytes(svg)
+        if png:
+            raw, iw, ih = png
+            b64 = base64.b64encode(raw).decode("ascii")
+            fig = (
+                f'<img class="ai-mermaid-img" alt="mermaid diagram" '
+                f'width="{iw}" height="{ih}" '
+                f'src="data:image/png;base64,{b64}">'
+            )
+        else:
+            b64 = base64.b64encode(svg.encode("utf-8")).decode("ascii")
+            wm = re.search(r'\bwidth="(\d+(?:\.\d+)?)"', svg)
+            hm = re.search(r'\bheight="(\d+(?:\.\d+)?)"', svg)
+            size_attr = ""
+            if wm and hm:
+                size_attr = f' width="{wm.group(1)}" height="{hm.group(1)}"'
+            fig = (
+                f'<img class="ai-mermaid-img" alt="mermaid diagram"{size_attr} '
+                f'src="data:image/svg+xml;base64,{b64}">'
+            )
     else:
         fig = f'<div class="ai-mermaid-svg">{svg}</div>'
     if zoomable:

@@ -5170,7 +5170,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 if int(ann.ns) == ns and ann.note == note:
                     return f"Annotation already at {ns}"
             self._add_annotation_with_note(
-                ns, note, focus_annotation_tab=True, push_undo=False)
+                ns, note, show_marks_panel=False, push_undo=False)
             return f"Annotated {ns}"
         if name == AI_TOOL_QUERY_RAW_METRIC:
             lo = hi = None
@@ -5904,9 +5904,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._cpu_load_graph.set_core_expanded(core, True)
 
     def _on_stats_plot_point_clicked(self, payload, mark_ns: int, note: str) -> None:
-        """Metrics plot point: jump/highlight and add an annotation with *note*."""
+        """Metrics plot / table click: jump/highlight and add an annotation with *note*."""
         if self._trace is None:
             return
+        stay_tab = self._panel_tabs.currentIndex() if hasattr(self, "_panel_tabs") else None
         if isinstance(payload, TaskSegment):
             self._scroll_to_segment(payload)
         elif isinstance(payload, IntervalInstance):
@@ -5920,15 +5921,17 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         else:
             self._view.scroll_to_ns(mark_ns)
         self._ensure_stats_plot_annotation(mark_ns, note)
+        # Annotation list rebuild can steal focus onto the Marks tab (Qt).
+        if stay_tab is not None and self._panel_tabs.currentIndex() != stay_tab:
+            self._panel_tabs.setCurrentIndex(stay_tab)
 
     def _ensure_stats_plot_annotation(self, mark_ns: int, note: str) -> None:
         """Add a stats-plot annotation unless one already exists at the same point."""
         note = note or ""
         for ann in self._annotations:
             if ann.ns == mark_ns and ann.note == note:
-                self._focus_marks_annotation_panel(ann.id)
                 return
-        self._add_annotation_with_note(mark_ns, note, focus_annotation_tab=True)
+        self._add_annotation_with_note(mark_ns, note, show_marks_panel=False)
 
     def _add_bookmark_at_center(self) -> None:
         if self._trace is None:
@@ -6034,7 +6037,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     def _add_annotation_with_note(
         self, ns: int, note: str, *, focus_annotation_tab: bool = False,
-        show_marks_panel: bool = True, push_undo: bool = True,
+        show_marks_panel: bool = False, push_undo: bool = True,
     ) -> None:
         """Add an annotation at *ns* with the given note text."""
         if self._trace is None:
@@ -6118,22 +6121,27 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 break
 
     def _rebuild_annotation_list(self) -> None:
+        stay_tab = self._panel_tabs.currentIndex() if hasattr(self, "_panel_tabs") else None
         self._annotation_list.blockSignals(True)
         self._annotation_list.clear()
         if self._trace is None:
             self._annotation_list.blockSignals(False)
-            return
-        unit = self._current_time_unit()
-        for a in sorted(self._annotations, key=lambda x: x.ns):
-            txt = f"{_format_time(a.ns, unit, decimals=self._time_decimals_val)}  {a.note}"
-            item = QListWidgetItem(txt)
-            item.setData(Qt.ItemDataRole.UserRole, int(a.id))
-            item.setData(Qt.ItemDataRole.UserRole + 1, int(a.ns))
-            item.setToolTip(f"@ {_format_time(a.ns, unit, decimals=self._time_decimals_val)}\n{a.note}")
-            self._annotation_list.addItem(item)
-        self._annotation_list.blockSignals(False)
-        self._view._scene.set_marks(self._bookmarks, self._annotations)
-        self._view._has_annotations = bool(self._annotations)
+        else:
+            unit = self._current_time_unit()
+            for a in sorted(self._annotations, key=lambda x: x.ns):
+                txt = f"{_format_time(a.ns, unit, decimals=self._time_decimals_val)}  {a.note}"
+                item = QListWidgetItem(txt)
+                item.setData(Qt.ItemDataRole.UserRole, int(a.id))
+                item.setData(Qt.ItemDataRole.UserRole + 1, int(a.ns))
+                item.setToolTip(f"@ {_format_time(a.ns, unit, decimals=self._time_decimals_val)}\n{a.note}")
+                self._annotation_list.addItem(item)
+            self._annotation_list.blockSignals(False)
+            self._view._scene.set_marks(self._bookmarks, self._annotations)
+            self._view._has_annotations = bool(self._annotations)
+        # Updating a focused QListWidget on a hidden tab can make QTabWidget
+        # switch to Marks; keep the user on Statistics / Find / AI / …
+        if stay_tab is not None and self._panel_tabs.currentIndex() != stay_tab:
+            self._panel_tabs.setCurrentIndex(stay_tab)
 
     def _focus_marks_annotation_panel(self, annotation_id: Optional[int] = None) -> None:
         """Show Marks tab, switch to Anno. sub-tab, optionally select a row."""

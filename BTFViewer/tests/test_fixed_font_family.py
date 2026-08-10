@@ -93,6 +93,8 @@ class FixedFontFamilyTests(unittest.TestCase):
         self.assertNotRegex(gauge, r'font-family="monospace"')
         self.assertIn(f'font-family="{_get_sans_font_family()}"', gauge)
         self.assertIn(f'font-family="{_get_fixed_font_family()}"', gauge)
+        self.assertNotIn('width="100%"', gauge)
+        self.assertNotIn('height="100%"', gauge)
 
 
 if __name__ == "__main__":

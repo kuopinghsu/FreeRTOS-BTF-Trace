@@ -10,6 +10,7 @@ from .config import (  # private symbols are not pulled in by import *
     _IC_SECTIONS_COLLAPSE,
     _IC_SECTIONS_EXPAND,
     _IC_SECTIONS_RESET_ORDER,
+    _pixmap_from_embedded_app_icon,
     _stats_chevron_icon,
     _svg_icon,
     _svg_pixmap,
@@ -6261,7 +6262,7 @@ def _load_balance_gauge_svg(metrics: dict, *, width: int = 300, dark: bool = Fal
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {view_w} {view_h}" '
         f'width="{width}" height="{h}" role="img" '
         f'aria-label="Load Balance Score {score:.0f} percent, sigma {stddev:.1f} percent">'
-        f'<rect width="100%" height="100%" rx="8" fill="#F7F8FA" stroke="{card_stroke}"/>'
+        f'<rect width="{view_w}" height="{view_h}" rx="8" fill="#F7F8FA" stroke="{card_stroke}"/>'
         f"{left}{right}"
         f'<text x="{view_w / 2}" y="{view_h - 8}" text-anchor="middle" fill="#6A7388" '
         f'font-family="{mono}" font-size="9">'
@@ -12197,9 +12198,7 @@ class _AboutDialog(QDialog):
 
         icon_lbl = QLabel()
         icon_lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        _pm = QPixmap()
-        _pm.loadFromData(QByteArray(_APP_ICON_SVG.encode()), "SVG")
-        icon_lbl.setPixmap(_pm)
+        icon_lbl.setPixmap(_pixmap_from_embedded_app_icon(72))
         hv.addWidget(icon_lbl)
 
         name_lbl = QLabel("RTOS BTF Viewer")

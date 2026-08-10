@@ -234,7 +234,7 @@ The model may call viewer tools. With **Auto-apply GUI actions** off (default in
 | `highlight_task` | Lock-highlight a task row (display name, numeric id, or merge key). Unknown names are ignored so the timeline is not dimmed. |
 | `set_view_mode` | Switch Task or Core view; horizontal or vertical |
 | `open_corridor_inspector` | Open Migration Inspector. Core aliases `Core_0`, `0`, `c0`, and `Core 0` resolve the same way. |
-| `add_annotation` | Pin an orange timeline note at a timestamp and jump there (Marks panel). |
+| `add_annotation` | Pin an orange timeline note at a timestamp |
 | `query_raw_metric` | Read-only: return the per-task series for the current Statistics scope (`priority_inheritance`, `execution`, `migrations`, `blocking`, `sync`, `findings`). Query-only batches apply immediately (no Apply card). |
 | `export_report` | Download HTML or CSV bundling Analysis Findings, mermaid diagrams from the chat, annotations, and GUI state (cursors / highlight / view). |
 

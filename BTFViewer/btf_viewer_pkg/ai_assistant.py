@@ -15,6 +15,7 @@ import urllib.request
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from ._imports import *  # noqa: F403,F401
+from .config import rasterize_svg_pixmap
 from .ai_mermaid import (
     _link_row_html,
     decode_mermaid_zoom_token,
@@ -71,6 +72,7 @@ class _MermaidZoomDialog(QDialog):
         self._source = source or ""
         self._svg = mermaid_to_svg(self._source, interactive=False)
         self._scale = 2.0
+        self._hit_scale = 2.0
         lay = QVBoxLayout(self)
         hint = QLabel(
             "Scroll to zoom. Click a task/core in the figure or a name below."
@@ -123,7 +125,7 @@ class _MermaidZoomDialog(QDialog):
             if event.button() == Qt.MouseButton.LeftButton and self._on_link:
                 pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
                 hit = hit_test_mermaid(
-                    self._source, pos.x(), pos.y(), scale=self._scale)
+                    self._source, pos.x(), pos.y(), scale=self._hit_scale)
                 if hit:
                     _kind, value = hit
                     self._on_link(QUrl(f"btfhighlight:{urllib.parse.quote(value, safe='')}"))
@@ -134,15 +136,12 @@ class _MermaidZoomDialog(QDialog):
         if not self._svg:
             self._img.setText("Could not render diagram.")
             return
-        renderer = QSvgRenderer(QByteArray(self._svg.encode("utf-8")))
-        size = renderer.defaultSize()
-        w = max(1, int(max(size.width(), 1) * self._scale))
-        h = max(1, int(max(size.height(), 1) * self._scale))
-        pm = QPixmap(w, h)
-        pm.fill(QColor("#12161d"))
-        painter = QPainter(pm)
-        renderer.render(painter)
-        painter.end()
+        pm, hit_scale = rasterize_svg_pixmap(
+            self._svg, scale=self._scale, fill=QColor("#12161d"))
+        if pm.isNull():
+            self._img.setText("Could not render diagram.")
+            return
+        self._hit_scale = hit_scale
         self._img.setPixmap(pm)
         self._img.resize(pm.size())
 

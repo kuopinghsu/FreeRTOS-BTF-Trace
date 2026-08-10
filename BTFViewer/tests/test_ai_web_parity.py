@@ -116,9 +116,9 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("queryRawMetric(", app)
         self.assertIn("tool_mutates_gui", mw)
         self.assertIn("toolMutatesGui", app)
-        self.assertIn("ensureMarksPanelVisible()", app)
-        self.assertIn("focus_annotation_tab=True", mw)
-        self.assertIn("_focus_marks_annotation_panel", mw)
+        self.assertNotIn("ensureMarksPanelVisible()", app)
+        self.assertIn("show_marks_panel=False", mw)
+        self.assertNotIn("focus_annotation_tab=True", mw)
         self.assertIn('return f"Annotated {ns}"', mw)
         self.assertIn("return `Annotated ${ns}`", app)
         self.assertIn("def _export_ai_report", assist)
@@ -132,6 +132,20 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn(AI_TOOL_ADD_ANNOTATION, AI_VIEWER_TOOL_NAMES)
         self.assertIn(AI_TOOL_QUERY_RAW_METRIC, AI_VIEWER_TOOL_NAMES)
         self.assertIn(AI_TOOL_EXPORT_REPORT, AI_VIEWER_TOOL_NAMES)
+
+    def test_stats_table_annotation_does_not_switch_to_marks(self) -> None:
+        mw = (BTF_ROOT / "btf_viewer_pkg/mainwindow.py").read_text(encoding="utf-8")
+        app = (BTF_ROOT / "web/src/App.vue").read_text(encoding="utf-8")
+        self.assertIn("def _on_stats_plot_point_clicked", mw)
+        self.assertIn("stay_tab = self._panel_tabs.currentIndex()", mw)
+        self.assertIn("function onStatsPlotPointActivate", app)
+        self.assertIn("const stayOnTab = rightPanelTab.value", app)
+        self.assertIn("rightPanelTab.value = stayOnTab", app)
+        self.assertNotIn("ensureMarksPanelVisible()", app)
+        self.assertIn(
+            "self._add_annotation_with_note(mark_ns, note, show_marks_panel=False)",
+            mw,
+        )
 
     def test_gemini_thought_signature_helpers_match(self) -> None:
         js = (BTF_ROOT / "web/src/utils/aiTools.js").read_text(encoding="utf-8")
