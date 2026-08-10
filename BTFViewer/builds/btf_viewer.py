@@ -6981,24 +6981,40 @@ class _InfoPopup(QLabel):
         self.setTextFormat(Qt.TextFormat.RichText)
         self.setMargin(7)
         self._ss_applied_dark: Optional[bool] = None   # None = never applied
+        self._ss_applied_font: Optional[int] = None
+        self._ui_font_size: int = UI_FONT_SIZE
+
+    def set_ui_font_size(self, ui_font_size: int) -> None:
+        """Match Settings → Appearance → UI font (menus / status / tooltips)."""
+        size = max(6, min(int(ui_font_size), 24))
+        if size == self._ui_font_size:
+            return
+        self._ui_font_size = size
+        self._ss_applied_dark = None  # force stylesheet rebuild on next show
+        self._ss_applied_font = None
 
     def _apply_stylesheet(self, is_dark: bool) -> None:
-        if self._ss_applied_dark == is_dark:
+        if (self._ss_applied_dark == is_dark
+                and self._ss_applied_font == self._ui_font_size):
             return
         self._ss_applied_dark = is_dark
+        self._ss_applied_font = self._ui_font_size
         fam = _get_fixed_font_family()
+        fs = _ui_font_stylesheet_size(self._ui_font_size)
         if is_dark:
             self.setStyleSheet(
                 f"QLabel {{ background:#252526; color:#E0E0E0; "
                 f"border:1px solid #666; border-radius:4px; "
-                f"font-size:7pt; font-family:'{fam}'; }}"
+                f"font-size:{fs}; font-family:'{fam}'; }}"
             )
         else:
             self.setStyleSheet(
                 f"QLabel {{ background:#FFFFCC; color:#1E1E1E; "
                 f"border:1px solid #AAAAAA; border-radius:4px; "
-                f"font-size:7pt; font-family:'{fam}'; }}"
+                f"font-size:{fs}; font-family:'{fam}'; }}"
             )
+        # Native tooltip chrome can ignore QSS font-size (macOS); set QFont too.
+        self.setFont(_application_ui_font(self._ui_font_size))
 
     def _ensure_transient_parent(self) -> None:
         """Wayland: popup windows must declare a transient parent on their
@@ -7042,6 +7058,17 @@ def _get_popup() -> _InfoPopup:
     if _info_popup is None:
         _info_popup = _InfoPopup()
     return _info_popup
+
+
+def _apply_info_popup_ui_font(ui_font_size: int) -> None:
+    """Keep the timeline hover tip in sync with Settings → UI font."""
+    global _info_popup
+    if _info_popup is not None:
+        _info_popup.set_ui_font_size(ui_font_size)
+    else:
+        # Seed the singleton so the first hover already uses the saved size.
+        popup = _get_popup()
+        popup.set_ui_font_size(ui_font_size)
 
 _GRID_STEPS = [
     1, 2, 5, 10, 20, 50, 100, 200, 500,
@@ -16809,11 +16836,11 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                     "properties": {
                         "tab_a": {
                             "type": "string",
-                            "description": "First tab name or index (default 0).",
+                            "description": "First tab name or 0-based tab index (default 0).",
                         },
                         "tab_b": {
                             "type": "string",
-                            "description": "Second tab name or index (default 1).",
+                            "description": "Second tab name or 0-based tab index (default 1).",
                         },
                     },
                 },
@@ -41623,6 +41650,10 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             _ui_fs = _ui_font_stylesheet_size(_ui_font_size)
             base_font = _application_ui_font(_ui_font_size)
             app.setFont(base_font)
+            # macOS native QToolTip often ignores QSS font-size; setFont is required
+            # for status-bar / toolbar tips to track Settings → UI font.
+            QToolTip.setFont(base_font)
+            _apply_info_popup_ui_font(_ui_font_size)
 
             # macOS native combo widgets ignore inherited/stylesheet font-size;
             # force it directly on the toolbar combo if it exists already.

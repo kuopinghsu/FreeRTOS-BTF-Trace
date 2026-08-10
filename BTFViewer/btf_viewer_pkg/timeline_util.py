@@ -29,24 +29,40 @@ class _InfoPopup(QLabel):
         self.setTextFormat(Qt.TextFormat.RichText)
         self.setMargin(7)
         self._ss_applied_dark: Optional[bool] = None   # None = never applied
+        self._ss_applied_font: Optional[int] = None
+        self._ui_font_size: int = UI_FONT_SIZE
+
+    def set_ui_font_size(self, ui_font_size: int) -> None:
+        """Match Settings → Appearance → UI font (menus / status / tooltips)."""
+        size = max(6, min(int(ui_font_size), 24))
+        if size == self._ui_font_size:
+            return
+        self._ui_font_size = size
+        self._ss_applied_dark = None  # force stylesheet rebuild on next show
+        self._ss_applied_font = None
 
     def _apply_stylesheet(self, is_dark: bool) -> None:
-        if self._ss_applied_dark == is_dark:
+        if (self._ss_applied_dark == is_dark
+                and self._ss_applied_font == self._ui_font_size):
             return
         self._ss_applied_dark = is_dark
+        self._ss_applied_font = self._ui_font_size
         fam = _get_fixed_font_family()
+        fs = _ui_font_stylesheet_size(self._ui_font_size)
         if is_dark:
             self.setStyleSheet(
                 f"QLabel {{ background:#252526; color:#E0E0E0; "
                 f"border:1px solid #666; border-radius:4px; "
-                f"font-size:7pt; font-family:'{fam}'; }}"
+                f"font-size:{fs}; font-family:'{fam}'; }}"
             )
         else:
             self.setStyleSheet(
                 f"QLabel {{ background:#FFFFCC; color:#1E1E1E; "
                 f"border:1px solid #AAAAAA; border-radius:4px; "
-                f"font-size:7pt; font-family:'{fam}'; }}"
+                f"font-size:{fs}; font-family:'{fam}'; }}"
             )
+        # Native tooltip chrome can ignore QSS font-size (macOS); set QFont too.
+        self.setFont(_monospace_font(self._ui_font_size))
 
     def _ensure_transient_parent(self) -> None:
         """Wayland: popup windows must declare a transient parent on their
@@ -90,6 +106,17 @@ def _get_popup() -> _InfoPopup:
     if _info_popup is None:
         _info_popup = _InfoPopup()
     return _info_popup
+
+
+def _apply_info_popup_ui_font(ui_font_size: int) -> None:
+    """Keep the timeline hover tip in sync with Settings → UI font."""
+    global _info_popup
+    if _info_popup is not None:
+        _info_popup.set_ui_font_size(ui_font_size)
+    else:
+        # Seed the singleton so the first hover already uses the saved size.
+        popup = _get_popup()
+        popup.set_ui_font_size(ui_font_size)
 
 _GRID_STEPS = [
     1, 2, 5, 10, 20, 50, 100, 200, 500,
