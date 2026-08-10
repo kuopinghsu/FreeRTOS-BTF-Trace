@@ -3,5 +3,7 @@
   "base_url": "https://api.openai.com/v1",
   "model": "gpt-4o-mini",
   "api_key": "",
+  // auth_mode: none = local (no key); api_key = paste a provider key; browser = Sign in… then paste the token
+  "auth_mode": "api_key",
   "response_language": "English"
 }

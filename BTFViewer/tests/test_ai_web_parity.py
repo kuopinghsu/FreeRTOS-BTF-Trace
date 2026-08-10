@@ -249,6 +249,10 @@ class AiWebParityTests(unittest.TestCase):
 
         self.assertIn("def normalize_ai_auth_mode", assist)
         self.assertIn("export function normalizeAiAuthMode", js)
+        self.assertIn("def strip_ai_settings_jsonc", assist)
+        self.assertIn("export function stripAiSettingsJsonc", js)
+        self.assertIn("strip_ai_settings_jsonc(data)", assist)
+        self.assertIn("stripAiSettingsJsonc(parsed)", js)
         self.assertIn("AI_AUTH_BROWSER", assist)
         self.assertIn("AI_AUTH_BROWSER", js)
         self.assertIn("Authentication:", stats)
@@ -282,6 +286,14 @@ class AiWebParityTests(unittest.TestCase):
             "Opened ${url}. Paste the key or token in Settings → AI.", panel)
         self.assertIn("Authentication |", readme)
         self.assertIn("Model picker |", readme)
+        for name in (
+            "ollama.json", "gemini.json", "openai.json",
+            "deepseek.json", "grok.json", "presets.json",
+        ):
+            self.assertIn(name, readme)
+            self.assertIn(name, workflows)
+            self.assertIn(name, stats)
+            self.assertIn(name, vue)
         self.assertIn("401 keeps Sign in / Settings CTAs", workflows)
         self.assertIn("open the Model dropdown", workflows)
         self.assertIn(

@@ -24,6 +24,7 @@ import {
   normalizeAiBaseUrl,
   normalizeAiPreset,
   parseAiSettingsJson,
+  stripAiSettingsJsonc,
   resolveAiSettings,
 } from '../src/utils/ollamaClient.js'
 
@@ -166,6 +167,21 @@ describe('AI endpoint helpers', () => {
     assert.equal(legacyXai.aiPresets.custom.baseUrl, 'https://api.x.ai/v1')
   })
 
+  it('parseAiSettingsJson strips whole-line // comments', () => {
+    const src = `{
+  // auth_mode: none = local (no key); api_key = paste a provider key
+  "preset": "gemini",
+  "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+  "auth_mode": "api_key"
+}`
+    assert.match(src, /\/\/ auth_mode:/)
+    const stripped = stripAiSettingsJsonc(src)
+    assert.doesNotMatch(stripped, /\/\/ auth_mode:/)
+    assert.match(stripped, /https:\/\//)
+    const patch = parseAiSettingsJson(src)
+    assert.equal(patch.presets.gemini.authMode, 'api_key')
+  })
+
   it('parseAiSettingsJson reads a flat endpoint file', () => {
     const patch = parseAiSettingsJson(JSON.stringify({
       preset: 'gemini',
@@ -223,18 +239,29 @@ describe('AI endpoint helpers', () => {
   })
 
   it('ships importable example files', () => {
-    for (const [name, preset] of [
-      ['gemini', AI_PRESET_GEMINI],
-      ['openai', AI_PRESET_OPENAI],
-      ['deepseek', AI_PRESET_CUSTOM],
-      ['grok', AI_PRESET_CUSTOM],
+    for (const [name, preset, auth] of [
+      ['gemini', AI_PRESET_GEMINI, 'api_key'],
+      ['openai', AI_PRESET_OPENAI, 'api_key'],
+      ['ollama', AI_PRESET_OLLAMA, 'none'],
+      ['deepseek', AI_PRESET_CUSTOM, 'api_key'],
+      ['grok', AI_PRESET_CUSTOM, 'api_key'],
     ]) {
       const text = readFileSync(new URL(`../../examples/ai/${name}.json`, import.meta.url), 'utf8')
       const patch = parseAiSettingsJson(text)
       assert.equal(patch.preset, preset)
       assert.ok(patch.presets[preset].baseUrl)
       assert.ok(patch.presets[preset].model)
+      assert.equal(patch.presets[preset].authMode, auth)
+      assert.match(text, /\/\/ auth_mode:/)
     }
+    const multiText = readFileSync(new URL('../../examples/ai/presets.json', import.meta.url), 'utf8')
+    assert.match(multiText, /\/\/ auth_mode:/)
+    const multi = parseAiSettingsJson(multiText)
+    assert.equal(multi.preset, AI_PRESET_OLLAMA)
+    assert.equal(multi.presets.ollama.authMode, 'none')
+    assert.equal(multi.presets.gemini.authMode, 'api_key')
+    assert.ok(multi.presets.openai.model)
+    assert.ok(multi.presets.custom.baseUrl)
   })
 
   it('aiJumpAnnotationNote keeps integer jump tokens clean', () => {

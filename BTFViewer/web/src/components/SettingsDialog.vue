@@ -568,7 +568,7 @@
                 <button
                   type="button"
                   class="settings-btn secondary"
-                  title="Load preset, base URL, model, and API key from a JSON file (see examples/ai/gemini.json, openai.json, deepseek.json, grok.json)."
+                  title="Load preset, base URL, model, API key, and auth mode from a JSON file (see examples/ai/ollama.json, gemini.json, openai.json, deepseek.json, grok.json, presets.json)."
                   @click="aiImportInput?.click()"
                 >
                   Import…

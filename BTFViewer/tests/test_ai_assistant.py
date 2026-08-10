@@ -49,6 +49,7 @@ from btf_viewer_pkg.ai_assistant import (  # noqa: E402
     normalize_ai_context,
     normalize_ai_preset,
     parse_ai_settings_json,
+    strip_ai_settings_jsonc,
     resolve_ai_settings,
 )
 from btf_viewer_pkg.ai_tools import (  # noqa: E402
@@ -249,18 +250,32 @@ class AiAssistantHelpersTests(unittest.TestCase):
     def test_example_ai_settings_files_import(self) -> None:
         here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         expected = {
-            "gemini.json": AI_PRESET_GEMINI,
-            "openai.json": AI_PRESET_OPENAI,
-            "deepseek.json": AI_PRESET_CUSTOM,
-            "grok.json": AI_PRESET_CUSTOM,
+            "gemini.json": (AI_PRESET_GEMINI, "api_key"),
+            "openai.json": (AI_PRESET_OPENAI, "api_key"),
+            "ollama.json": (AI_PRESET_OLLAMA, "none"),
+            "deepseek.json": (AI_PRESET_CUSTOM, "api_key"),
+            "grok.json": (AI_PRESET_CUSTOM, "api_key"),
         }
-        for name, preset in expected.items():
+        for name, (preset, auth) in expected.items():
             path = os.path.join(here, "examples", "ai", name)
             with open(path, encoding="utf-8") as fh:
-                patch = parse_ai_settings_json(fh.read())
+                text = fh.read()
+            patch = parse_ai_settings_json(text)
             self.assertEqual(patch["preset"], preset, name)
             self.assertTrue(patch[f"{preset}_base_url"], name)
             self.assertTrue(patch[f"{preset}_model"], name)
+            self.assertEqual(patch[f"{preset}_auth_mode"], auth, name)
+            self.assertIn("// auth_mode:", text, name)
+        multi_path = os.path.join(here, "examples", "ai", "presets.json")
+        with open(multi_path, encoding="utf-8") as fh:
+            multi_text = fh.read()
+        self.assertIn("// auth_mode:", multi_text)
+        multi = parse_ai_settings_json(multi_text)
+        self.assertEqual(multi["preset"], AI_PRESET_OLLAMA)
+        self.assertEqual(multi["ollama_auth_mode"], "none")
+        self.assertEqual(multi["gemini_auth_mode"], "api_key")
+        self.assertTrue(multi["openai_model"])
+        self.assertTrue(multi["custom_base_url"])
 
     def test_ai_chat_requires_key_for_remote(self) -> None:
         from unittest.mock import patch
@@ -324,6 +339,22 @@ class AiAssistantHelpersTests(unittest.TestCase):
             "authMode": "sign_in",
         })
         self.assertEqual(patch["gemini_auth_mode"], AI_AUTH_BROWSER)
+
+    def test_parse_ai_settings_json_strips_line_comments(self) -> None:
+        src = (
+            '{\n'
+            '  // auth_mode: none = local (no key); api_key = paste a provider key\n'
+            '  "preset": "gemini",\n'
+            '  "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",\n'
+            '  "auth_mode": "api_key"\n'
+            '}\n'
+        )
+        self.assertIn("// auth_mode:", src)
+        stripped = strip_ai_settings_jsonc(src)
+        self.assertNotIn("// auth_mode:", stripped)
+        self.assertIn("https://", stripped)
+        patch = parse_ai_settings_json(src)
+        self.assertEqual(patch["gemini_auth_mode"], AI_AUTH_API_KEY)
 
     def test_http_401_tip_mentions_sign_in(self) -> None:
         from btf_viewer_pkg.ai_assistant import _ai_http_error_tip

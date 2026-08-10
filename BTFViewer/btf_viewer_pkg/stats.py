@@ -12986,7 +12986,8 @@ class _SettingsDialog(QDialog):
         self._ai_import_btn = QPushButton("Import…")
         self._ai_import_btn.setToolTip(
             "Load preset, base URL, model, and API key from a JSON file "
-            "(see examples/ai/gemini.json, openai.json, deepseek.json, grok.json).")
+            "(see examples/ai/ollama.json, gemini.json, openai.json, "
+            "deepseek.json, grok.json, presets.json).")
         self._ai_import_btn.clicked.connect(self._import_ai_settings)
         _test_h.addWidget(self._ai_import_btn)
         _test_h.addStretch()

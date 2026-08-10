@@ -18756,23 +18756,37 @@ def _ai_import_preset_from_url(base_url: str) -> str:
     return AI_PRESET_CUSTOM
 
 
+def strip_ai_settings_jsonc(text: str) -> str:
+    """Drop whole-line ``//`` comments so example files can document ``auth_mode``.
+
+    Only full-line comments are removed, so ``https://`` inside strings is safe.
+    """
+    lines = []
+    for line in str(text or "").splitlines():
+        if line.lstrip().startswith("//"):
+            continue
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def parse_ai_settings_json(data: Any) -> Dict[str, str]:
     """Settings patch from an AI settings JSON file (see ``examples/ai``).
 
     Accepts a flat file describing one endpoint::
 
-        {"preset": "gemini", "base_url": "…", "model": "…", "api_key": ""}
+        {"preset": "gemini", "base_url": "…", "model": "…", "api_key": "",
+         "auth_mode": "api_key"}
 
     or a ``presets`` object carrying several at once. snake_case and camelCase
     key names both work, so files exported from either app import into both.
-    Raises ``ValueError`` with a user-facing message when the file cannot be
-    applied.
+    Whole-line ``//`` comments are ignored. Raises ``ValueError`` with a
+    user-facing message when the file cannot be applied.
     """
     if isinstance(data, (bytes, bytearray)):
         data = data.decode("utf-8", errors="replace")
     if isinstance(data, str):
         try:
-            data = json.loads(data)
+            data = json.loads(strip_ai_settings_jsonc(data))
         except ValueError as exc:
             raise ValueError(f"Not valid JSON: {exc}") from exc
     if not isinstance(data, dict):
@@ -34098,7 +34112,8 @@ class _SettingsDialog(QDialog):
         self._ai_import_btn = QPushButton("Import…")
         self._ai_import_btn.setToolTip(
             "Load preset, base URL, model, and API key from a JSON file "
-            "(see examples/ai/gemini.json, openai.json, deepseek.json, grok.json).")
+            "(see examples/ai/ollama.json, gemini.json, openai.json, "
+            "deepseek.json, grok.json, presets.json).")
         self._ai_import_btn.clicked.connect(self._import_ai_settings)
         _test_h.addWidget(self._ai_import_btn)
         _test_h.addStretch()

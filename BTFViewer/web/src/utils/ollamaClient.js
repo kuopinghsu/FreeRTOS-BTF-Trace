@@ -352,14 +352,22 @@ function importPresetFromUrl(baseUrl) {
   return AI_PRESET_CUSTOM
 }
 
+/** Drop whole-line `//` comments (URLs in strings stay intact). */
+export function stripAiSettingsJsonc(text) {
+  return String(text || '')
+    .split(/\r?\n/)
+    .filter((line) => !line.trimStart().startsWith('//'))
+    .join('\n')
+}
+
 /**
  * Settings patch from an AI settings JSON file (see `examples/ai`).
  *
  * Accepts a flat file describing one endpoint
- * (`{ preset, base_url, model, api_key }`) or a `presets` object carrying
+ * (`{ preset, base_url, model, api_key, auth_mode }`) or a `presets` object carrying
  * several. snake_case and camelCase key names both work, so files exported
- * from either app import into both. Throws `Error` with a user-facing message
- * when the file cannot be applied.
+ * from either app import into both. Whole-line `//` comments are ignored.
+ * Throws `Error` with a user-facing message when the file cannot be applied.
  *
  * @param {string|object} data
  * @returns {{ preset?: string, presets: object, responseLanguage?: string }}
@@ -368,7 +376,7 @@ export function parseAiSettingsJson(data) {
   let parsed = data
   if (typeof parsed === 'string') {
     try {
-      parsed = JSON.parse(parsed)
+      parsed = JSON.parse(stripAiSettingsJsonc(parsed))
     } catch (err) {
       throw new Error(`Not valid JSON: ${err?.message || err}`, { cause: err })
     }
