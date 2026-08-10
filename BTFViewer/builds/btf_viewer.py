@@ -7014,7 +7014,7 @@ class _InfoPopup(QLabel):
                 f"font-size:{fs}; font-family:'{fam}'; }}"
             )
         # Native tooltip chrome can ignore QSS font-size (macOS); set QFont too.
-        self.setFont(_application_ui_font(self._ui_font_size))
+        self.setFont(_monospace_font(self._ui_font_size))
 
     def _ensure_transient_parent(self) -> None:
         """Wayland: popup windows must declare a transient parent on their
