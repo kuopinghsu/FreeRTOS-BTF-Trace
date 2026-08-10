@@ -203,6 +203,16 @@ class SettingsInitialPageTests(unittest.TestCase):
             names = {n.strip() for n in m.group(1).split(",") if n.strip()}
             self.assertIn("QDesktopServices", names, label)
 
+    def test_bundle_includes_html_parser(self) -> None:
+        """Markdown HTML-table sanitizer needs HTMLParser in the monolith."""
+        needle = "from html.parser import HTMLParser"
+        for rel in (
+            "btf_viewer_pkg/_imports.py",
+            "scripts/bundle_viewer.py",
+        ):
+            text = (BTF_ROOT / rel).read_text(encoding="utf-8")
+            self.assertIn(needle, text, rel)
+
     def test_default_appearance(self) -> None:
         dlg = self._dlg("Appearance")
         self.addCleanup(dlg.deleteLater)

@@ -396,6 +396,7 @@ Most findings only make sense inside one phase of a trace. Place two cursors aro
 | `C` | Place a cursor at the pointer (falls back to the viewport centre) |
 | `Ctrl+R` | Zoom the view to the cursor range |
 | Cursor-scope checkbox | Recompute Statistics and Analysis for C1–Cn |
+| **File → Save selection as BTF…** / web toolbar crop | Export only the raw events between the earliest and latest cursor |
 
 The cursor-scope checkbox is labelled **Limit to C1–Cn** (desktop and web); it sits at the top of the Statistics panel.
 
@@ -417,9 +418,9 @@ Comparing a before and an after trace is the only way to prove a fix worked rath
 
 1. Open both traces in tabs, then choose **Trace Compare…** in the Statistics footer.
 2. Work through the comparison pages: Summary (load balance and tick), Top Tasks, Core Utilisation, Migrations, Execution, Blocking, Preemption, and Sync.
-3. Each **Δ** column is A − B. Export the whole comparison as CSV or HTML from the dialog.
+3. Each **Δ** column is A − B. Export the whole comparison as CSV or HTML from the dialog, or click **Query with AI…** to run the Trace Compare template on the current A / B pair.
 
-The same comparison runs headlessly, which is what makes it usable in CI:
+The AI `trigger_compare` tool returns the same CSV and opens this dialog. The same comparison runs headlessly, which is what makes it usable in CI:
 
 ```bash
 python builds/btf_viewer.py compare before.btf.gz after.btf.gz \
@@ -532,7 +533,7 @@ python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
 
 ## 7. AI Assistant Flow
 
-The right-panel **AI** tab turns the findings into a narrative triage. It is worth using once Analysis Findings exist, not before — the first turn only receives the **structured findings for the current Statistics scope**, plus the span and core count. The model can then call `query_raw_metric` for a scoped per-task series (priority-inheritance episodes, execution slices, and so on); it still never gets the raw BTF stream. An empty or mis-scoped Statistics panel produces a confident answer about nothing. Setup details and troubleshooting live in [README.md → AI Assistant](README.md#ai-assistant).
+The right-panel **AI** tab turns the findings into a narrative triage. It is worth using once Analysis Findings exist, not before — the first turn only receives the **structured findings for the current Statistics scope**, plus the span and core count (not the raw BTF stream), so prompts stay compact. The model can then call `query_raw_metric` for a scoped per-task series (priority-inheritance episodes, execution slices, and so on), `search_timeline` for STI / tag / task timestamps, or `trigger_compare` when two traces are open. An empty or mis-scoped Statistics panel produces a confident answer about nothing. Setup details and troubleshooting live in [README.md → AI Assistant](README.md#ai-assistant). Ask in this order: triage overall findings → drill into the named metric (latency, WCET, inversion) → request mitigations after the timeline agrees (§7.2).
 
 The flow from trace to verified answer:
 
@@ -543,23 +544,23 @@ The flow from trace to verified answer:
 ④ Analysis → Query with AI…  (or AI tab → template / free-form Ask)
 ⑤ Context = Analysis Findings (+ span, cores, scope), or Trace Compare CSV for that template
 ⑥ Endpoint: OpenAI-compatible /chat/completions (Ollama, OpenAI, Gemini, or Custom)
-⑦ Reply (jump:TIME links → timeline; optional mermaid diagrams; optional GUI tool cards)
+⑦ Reply (jump:TIME links → timeline; Markdown tables render as HTML tables; optional mermaid diagrams; optional GUI tool cards)
 ⑧ Apply / Skip tool cards or **Apply GUI actions** under the log, or enable **Settings → AI → Auto-apply GUI actions**; open the Statistics section the reply names; verify on the timeline
 ```
 
 ### 7.1 One-time setup
 
-Configuration is per preset, and the desktop and web viewers work the same way apart from the browser's CORS rules, font units (desktop **pt** vs web **px**), and mermaid transport (desktop chat is a hit-tested image; web is inline SVG). Click a node to highlight, empty figure to zoom; both have a link row; exported HTML keeps clickable SVG:
+Configuration is per preset, and the desktop and web viewers work the same way apart from the browser's CORS rules, font units (desktop **pt** vs web **px**), and mermaid transport (desktop chat is a hit-tested image; web is inline SVG). Click a node to highlight, empty figure to zoom (scroll to zoom in the overlay); both have a link row; exported HTML keeps clickable SVG:
 
 | Step | Desktop | Web |
 |------|---------|-----|
 | Choose preset | **Settings → AI → Preset**: Ollama, OpenAI, Google Gemini, or Custom | Same |
-| Ollama | `ollama serve`, `ollama pull phi4-mini:3.8b`; base URL `http://localhost:11434/v1` | Same; for `file://` use Vite, or allow CORS (`OLLAMA_ORIGINS="*" ollama serve`; macOS app: `launchctl setenv OLLAMA_ORIGINS "*"` + restart) |
+| Ollama | `ollama serve`; `ollama pull qwen2.5:7b` (or `llama3.1:8b`) for native tools; `phi4-mini:3.8b` is the light default. Base URL `http://localhost:11434/v1`; ≥8k context | Same; for `file://` use Vite, or allow CORS (`OLLAMA_ORIGINS="*" ollama serve`; macOS app: `launchctl setenv OLLAMA_ORIGINS "*"` + restart) |
 | OpenAI / Gemini / Custom | Base URL + model + Authentication (API key or Sign in) | Same; OpenAI and Gemini are proxied under `npm run dev` / `preview` |
 | Authentication | **None (local)** / **API key** / **Sign in** (opens vendor page; paste the key). Panel chip: Local / Key saved / Needs API key / Needs sign-in / Signed in. 401 keeps Sign in / Settings CTAs until a successful turn | Same (`VITE_*` env keys) |
 | Self-signed TLS | **Allow self-signed TLS** per preset (desktop urllib skips certificate checks) | Same setting is stored; browsers still verify — trust the cert, use `http://`, or use Desktop |
 | Verify | Refresh the **Model** list, open the Model dropdown to pick a served id, then **Test connection** (chat probe, 120s). `GET /models` succeeding does not mean chat is ready — first load can be slow. Gemini tool follow-ups need a thought signature — retry a 400 that mentions `thought_signature` | Same |
-| GUI tools | **Auto-apply GUI actions** off (default) → Apply / Skip / Undo in chat, plus **Apply GUI actions** under the log. `query_raw_metric` runs immediately (read-only). `add_annotation` / `export_report` follow Apply. **Ctrl/Cmd+Z** also undoes cursors/marks after Apply. Chat timeout 120s. Small models without native tools may emit ` ```btftool ` fences instead. | Same |
+| GUI tools | **Auto-apply GUI actions** off (default) → Apply / Skip / Undo in chat, plus **Apply GUI actions** under the log. `query_raw_metric` / `search_timeline` / `trigger_compare` run immediately (read-only). `add_annotation` / `export_report` / `clear_marks` / `reset_view` follow Apply. **Ctrl/Cmd+Z** also undoes cursors/marks after Apply. Chat timeout 120s. Small models without native tools may emit ` ```btftool ` fences instead. | Same |
 | Share a setup | **Import…** a JSON file (`examples/ai/ollama.json`, `gemini.json`, `openai.json`, `deepseek.json`, `grok.json`, `presets.json`) | Same |
 | Show panel | **View → Show AI Assistant** / Display settings | Display → AI Assistant panel |
 
@@ -614,7 +615,7 @@ Different models fail differently, which makes disagreement between them useful.
 
 | Role | Source | Use when |
 |------|--------|----------|
-| **Default in-app** | Local Ollama (`phi4-mini:3.8b` or larger) | Fast, private triage; iterate templates + `jump:TIME` |
+| **Default in-app** | Local Ollama (`phi4-mini:3.8b` for light triage; `qwen2.5:7b` / `llama3.1:8b` for native tools) | Fast, private triage; iterate templates + `jump:TIME` |
 | **Stronger in-app** | OpenAI or Gemini preset, or a Custom endpoint (Grok, DeepSeek, a company gateway) | Better reasoning while keeping Ask + jump links |
 | **Second opinion** | Switch preset and Ask the same template again | Where replies diverge — verify on the timeline |
 | **External paste** | Any other chat (Claude, etc.) | Export HTML / copy findings when the vendor is not OpenAI-compatible |

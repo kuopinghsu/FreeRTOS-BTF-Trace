@@ -136,6 +136,39 @@ def _normalize_open_path(path: str) -> str:
     return norm
 
 
+def _open_path_exists(filepath: str) -> bool:
+    """True if *filepath* (or its zip archive / named member) is still on disk."""
+    path, member = _split_zip_member_path(filepath or "")
+    if not path:
+        return False
+    path = os.path.abspath(os.path.expanduser(path))
+    if not os.path.isfile(path):
+        return False
+    if not member:
+        return True
+    try:
+        with zipfile.ZipFile(path, "r") as zf:
+            return member in zf.namelist()
+    except zipfile.BadZipFile:
+        return False
+
+
+def _filter_existing_open_paths(paths) -> List[str]:
+    """Dedupe and keep only loadable BTF / ``zip::member`` paths (session restore)."""
+    seen: set = set()
+    unique: List[str] = []
+    for raw in paths or []:
+        text = str(raw).strip()
+        if not text:
+            continue
+        norm = _normalize_open_path(text)
+        if norm in seen or not _open_path_exists(norm):
+            continue
+        seen.add(norm)
+        unique.append(norm)
+    return unique
+
+
 def _trace_display_name(path: str) -> str:
     """Tab / status label for a load path (zip member → bare ``.btf`` name)."""
     _zip_path, member = _split_zip_member_path(path)

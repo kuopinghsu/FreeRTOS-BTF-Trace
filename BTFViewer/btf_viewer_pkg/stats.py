@@ -4,6 +4,7 @@ from __future__ import annotations
 from ._imports import *  # noqa: F403,F401
 from .config import *  # noqa: F403,F401
 from .config import (  # private symbols are not pulled in by import *
+    _IC_EXPORT_CSV,
     _IC_PIN,
     _IC_PIN_FILLED,
     _IC_REFRESH,
@@ -13,6 +14,7 @@ from .config import (  # private symbols are not pulled in by import *
     _pixmap_from_embedded_app_icon,
     _stats_chevron_icon,
     _svg_icon,
+    _svg_icon_markup,
     _svg_pixmap,
     default_stats_section_order,
     is_default_stats_section_order,
@@ -2587,8 +2589,18 @@ class _StatsSectionGrip(QWidget):
 class _TraceCompareDialog(QDialog):
     """Compare summary and Statistics-aligned metrics between two tabs."""
 
-    def __init__(self, win: "MainWindow", parent=None) -> None:
-        super().__init__(parent or win)
+    def __init__(
+        self,
+        win: "MainWindow",
+        parent=None,
+        idx_a: Optional[int] = None,
+        idx_b: Optional[int] = None,
+        ai_enabled: bool = True,
+        on_query_ai: Optional[Callable] = None,
+    ) -> None:
+        parent_w = parent if parent is not None else (
+            win if isinstance(win, QWidget) else None)
+        super().__init__(parent_w)
         self.setWindowTitle("Trace Compare")
         self.setModal(True)
         self.resize(980, 560)
@@ -2680,6 +2692,12 @@ class _TraceCompareDialog(QDialog):
         lay.addLayout(exp_row)
 
         btns = QDialogButtonBox(QDialogButtonBox.Close)
+        self._ai_enabled = bool(ai_enabled)
+        self._on_query_ai = on_query_ai
+        self._ai_btn = btns.addButton(
+            "Query with AI…", QDialogButtonBox.ButtonRole.ActionRole)
+        self._ai_btn.clicked.connect(self._query_with_ai)
+        self.set_ai_enabled(self._ai_enabled)
         btns.rejected.connect(self.reject)
         btns.accepted.connect(self.accept)
         lay.addWidget(btns)
@@ -2689,11 +2707,35 @@ class _TraceCompareDialog(QDialog):
             self._combo_a.addItem(label, i)
             self._combo_b.addItem(label, i)
         if win._tabs:
-            self._combo_b.setCurrentIndex(min(1, len(win._tabs) - 1))
+            ia = 0 if idx_a is None else max(0, min(int(idx_a), len(win._tabs) - 1))
+            ib = min(1, len(win._tabs) - 1) if idx_b is None else max(
+                0, min(int(idx_b), len(win._tabs) - 1))
+            self._combo_a.setCurrentIndex(ia)
+            self._combo_b.setCurrentIndex(ib)
         self._combo_a.currentIndexChanged.connect(self._refresh)
         self._combo_b.currentIndexChanged.connect(self._refresh)
         self._scope_cb.toggled.connect(self._refresh)
         self._refresh()
+
+    def set_ai_enabled(self, enabled: bool) -> None:
+        self._ai_enabled = bool(enabled)
+        if getattr(self, "_ai_btn", None) is None:
+            return
+        self._ai_btn.setToolTip(
+            "Open the AI Assistant and walk through these Trace Compare tables"
+            if self._ai_enabled else
+            "Enable AI Assistant in Settings → AI")
+
+    def _selected_tab_indices(self) -> Tuple[Optional[int], Optional[int]]:
+        return self._combo_a.currentData(), self._combo_b.currentData()
+
+    def _query_with_ai(self) -> None:
+        idx_a, idx_b = self._selected_tab_indices()
+        enabled = self._ai_enabled
+        cb = self._on_query_ai
+        self.done(int(QDialog.DialogCode.Accepted))
+        if cb is not None:
+            cb(enabled, idx_a, idx_b)
 
     def _range_for_trace(self, combo: QComboBox) -> Tuple[Optional[int], Optional[int]]:
         if not self._scope_cb.isChecked():

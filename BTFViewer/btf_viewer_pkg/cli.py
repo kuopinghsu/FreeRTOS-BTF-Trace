@@ -11,6 +11,7 @@ from .view import *  # noqa: F403,F401
 from .stats import *  # noqa: F403,F401
 from .mainwindow import *  # noqa: F403,F401
 from .perfetto_export import export_perfetto
+from .btf_slice import filter_btf_file_to_range, reconstruct_btf_slice, write_btf_text
 from .platform import *  # noqa: F403,F401
 
 def _cli_validate_range_pair(lo: Optional[int], hi: Optional[int], label: str) -> Optional[str]:
@@ -192,6 +193,8 @@ Headless analysis commands (desktop only — no GUI, no Qt window):
                statistics metric plot) without opening the GUI.
   perfetto     Export Chrome Trace JSON for https://ui.perfetto.dev
                (same as File → Export Perfetto…).
+  slice        Export a timestamp range as a smaller .btf
+               (same as File → Save selection as BTF…).
 
 Time range (--lo / --hi):
   Values are raw trace timestamps in the file's time units (see # timeScale
@@ -221,6 +224,7 @@ CLI examples:
   %(prog)s snapshot tracedata/example-4cores.btf -o /tmp/timeline.png --view timeline
   %(prog)s snapshot tracedata/example-4cores.btf -o /tmp/task.png --view plot --metric exec --task "Producer[1]"
   %(prog)s perfetto tracedata/example-4cores.btf -o /tmp/example.json
+  %(prog)s slice tracedata/example-4cores.btf -o /tmp/window.btf --lo 100000 --hi 500000
 
 Run "%(prog)s <command> -h" for command-specific help.
 """
@@ -309,6 +313,21 @@ examples:
   %(prog)s trace.btf -o trace.json
   %(prog)s tracedata/example-4cores.btf -o /tmp/example.json
   %(prog)s trace.btf -o scoped.json --lo 100000 --hi 500000
+"""
+
+_CLI_EPILOG_SLICE = """\
+Keep # meta lines, C (set_frequency) rows, and events whose timestamp is
+inside [--lo, --hi] (inclusive, native trace units). Matches File → Save
+selection as BTF… (earliest–latest cursor).
+
+When the source file cannot be re-read, a reconstructed slice is written
+from in-memory segments (resume/preempt + STI). Mid-segment events that
+never appeared as BTF lines in-range are omitted.
+
+examples:
+  %(prog)s trace.btf -o window.btf --lo 100000 --hi 500000
+  %(prog)s tracedata/example-4cores.btf.gz -o /tmp/slice.btf --lo 200000 --hi 400000
+  %(prog)s window.btf.gz -o window.btf.gz --lo 0 --hi 1000000
 """
 
 _CLI_LO_HELP = (
@@ -688,6 +707,33 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
     perfetto.add_argument("--lo", type=int, default=None, metavar="T", help=_CLI_LO_HELP)
     perfetto.add_argument("--hi", type=int, default=None, metavar="T", help=_CLI_HI_HELP)
 
+    slice_p = sub.add_parser(
+        "slice",
+        help="export a timestamp range as a smaller .btf (File → Save selection as BTF…)",
+        description=(
+            "Export only the BTF events whose timestamps fall inside --lo / --hi.\n\n"
+            "Matches File → Save selection as BTF… (cursor range C1–Cn)."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=_CLI_EPILOG_SLICE,
+    )
+    slice_p.add_argument(
+        "trace", metavar="trace.btf",
+        help="path to the .btf trace file to slice",
+    )
+    slice_p.add_argument(
+        "-o", "--output", required=True, metavar="PATH",
+        help="output .btf or .btf.gz path",
+    )
+    slice_p.add_argument(
+        "--lo", type=int, required=True, metavar="T",
+        help="range start (trace time units, inclusive)",
+    )
+    slice_p.add_argument(
+        "--hi", type=int, required=True, metavar="T",
+        help="range end (trace time units, inclusive; must be greater than --lo)",
+    )
+
     return parser, {
         "report": report,
         "compare": compare,
@@ -695,6 +741,7 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
         "migrations": migrations,
         "snapshot": snapshot,
         "perfetto": perfetto,
+        "slice": slice_p,
     }
 
 def _cli_export_output_paths(output: str, fmt: Optional[str]) -> Tuple[str, str, str]:
@@ -1519,6 +1566,36 @@ def _cli_perfetto_main(argv: List[str]) -> int:
     args = _make_arg_parser()[1]["perfetto"].parse_args(argv)
     return _cli_perfetto_run(args)
 
+def _cli_slice_run(args: argparse.Namespace) -> int:
+    path = os.path.abspath(args.trace)
+    load_path = _normalize_open_path(path)
+    zip_path, _member = _split_zip_member_path(load_path)
+    if not os.path.isfile(zip_path):
+        print(f"error: trace file not found: {zip_path}", file=sys.stderr)
+        return 1
+    if args.hi <= args.lo:
+        print("error: --hi must be greater than --lo", file=sys.stderr)
+        return 1
+    out = os.path.abspath(args.output)
+    try:
+        text, _kept = filter_btf_file_to_range(load_path, int(args.lo), int(args.hi))
+        if not str(text).strip():
+            trace, err_load = _cli_load_trace(path)
+            if err_load:
+                print(err_load, file=sys.stderr)
+                return 1
+            text, _kept = reconstruct_btf_slice(trace, int(args.lo), int(args.hi))
+        write_btf_text(text, out)
+    except (OSError, TypeError, ValueError, AttributeError, RuntimeError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(out)
+    return 0
+
+def _cli_slice_main(argv: List[str]) -> int:
+    args = _make_arg_parser()[1]["slice"].parse_args(argv)
+    return _cli_slice_run(args)
+
 _CLI_COMMANDS = {
     "report": _cli_report_main,
     "compare": _cli_compare_main,
@@ -1526,6 +1603,7 @@ _CLI_COMMANDS = {
     "migrations": _cli_migrations_main,
     "snapshot": _cli_snapshot_main,
     "perfetto": _cli_perfetto_main,
+    "slice": _cli_slice_main,
 }
 
 def _cli_gui_trace_paths(argv: List[str],

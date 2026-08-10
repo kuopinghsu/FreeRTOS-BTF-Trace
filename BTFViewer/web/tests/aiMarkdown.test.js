@@ -56,6 +56,33 @@ describe('aiMarkdown', () => {
     assert.equal(html.includes('<script>'), false)
   })
 
+  it('renders GFM pipe tables as HTML tables', () => {
+    const html = markdownToSafeHtml(
+      '| Task | CPU% |\n'
+      + '| --- | ---: |\n'
+      + '| Idle | 40 |\n'
+      + '| CS[1] | jump:1000 |\n',
+    )
+    assert.match(html, /class="ai-md-table"/)
+    assert.match(html, /<thead>/)
+    assert.match(html, /Idle/)
+    assert.match(html, /href="btfjump:time\/1000"/)
+    assert.match(html, /align="right"/)
+    assert.equal(html.includes('| Task |'), false)
+  })
+
+  it('sanitizes HTML tables copied into the reply', () => {
+    const html = markdownToSafeHtml(
+      '<table><tr><th onclick="x()">A</th></tr>'
+      + '<tr><td><script>alert(1)</script>ok</td></tr></table>',
+    )
+    assert.match(html, /class="ai-md-table"/)
+    assert.match(html, />ok</)
+    assert.equal(html.includes('<script>'), false)
+    assert.equal(html.includes('onclick'), false)
+    assert.equal(html.includes('alert(1)'), false)
+  })
+
   it('formats assistant as markdown and user as plain', () => {
     const asst = formatAiMessageHtml('assistant', '**ok**')
     assert.match(asst, /<strong>ok<\/strong>/)

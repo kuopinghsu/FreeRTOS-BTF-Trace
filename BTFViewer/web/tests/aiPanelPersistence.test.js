@@ -11,6 +11,8 @@ const aiPanel = readFileSync(new URL('../src/components/AiAssistantPanel.vue', i
   .replace(/\s+/g, ' ')
 const corridorDlg = readFileSync(new URL('../src/components/CorridorInspectorDialog.vue', import.meta.url), 'utf8')
   .replace(/\s+/g, ' ')
+const compareDlg = readFileSync(new URL('../src/components/TraceCompareDialog.vue', import.meta.url), 'utf8')
+  .replace(/\s+/g, ' ')
 
 describe('AI panel survives right-panel tab switches', () => {
   it('hides the AI page instead of destroying it', () => {
@@ -40,6 +42,8 @@ describe('AI conversation turn layout', () => {
     assert.match(aiPanel, /ai-mermaid-overlay/)
     assert.match(aiPanel, /openMermaidZoom/)
     assert.match(aiPanel, /closeMermaidZoom/)
+    assert.match(aiPanel, /onMermaidZoomWheel/)
+    assert.match(aiPanel, /Scroll to zoom/)
   })
 
   it('styles prompt and reply as separate bubbles', () => {
@@ -61,6 +65,16 @@ describe('Migration inspector Query with AI', () => {
     assert.match(corridorDlg, /emit\('query-ai'\)/)
     assert.match(app, /@query-ai="queryCorridorWithAi"/)
     assert.match(app, /focusAiAndAsk\('migrations'\)/)
+  })
+})
+
+describe('Trace Compare Query with AI', () => {
+  it('footer emits query-ai and App runs the compare template', () => {
+    assert.match(compareDlg, /Query with AI/)
+    assert.match(compareDlg, /emit\('query-ai'/)
+    assert.match(app, /@query-ai="queryCompareWithAi"/)
+    assert.match(app, /askCompare\?\.\(idA, idB\)/)
+    assert.match(aiPanel, /async function askCompare/)
   })
 })
 

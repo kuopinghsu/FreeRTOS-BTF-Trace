@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import gzip
+import os
 import sys
 import tempfile
 import unittest
@@ -18,9 +19,11 @@ install()
 
 from btf_viewer_pkg.parser import (  # noqa: E402
     _expand_open_paths,
+    _filter_existing_open_paths,
     _list_zip_btf_members,
     _normalize_open_path,
     _open_btf_text,
+    _open_path_exists,
     _pick_zip_btf_member,
     _sniff_compression,
     _split_zip_member_path,
@@ -127,6 +130,23 @@ class CompressionHelpersTests(unittest.TestCase):
         self.assertEqual(m, "dir/t.btf")
         norm = _normalize_open_path("/tmp/p.zip::dir/t.btf")
         self.assertTrue(norm.endswith("::dir/t.btf"))
+
+    def test_session_restore_keeps_multi_zip_members(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "pack.zip"
+            with zipfile.ZipFile(path, "w") as zf:
+                zf.writestr("a.btf", _MINI_BTF)
+                zf.writestr("nested/b.btf", _MINI_BTF_B)
+            a, b = _expand_open_paths(str(path))
+            self.assertTrue(_open_path_exists(a))
+            self.assertTrue(_open_path_exists(b))
+            # Bare os.path.isfile must not be used: zip::member is virtual.
+            self.assertFalse(os.path.isfile(a))
+            restored = _filter_existing_open_paths([a, b, a, str(path / "missing.btf")])
+            self.assertEqual(restored, [a, b])
+            missing_member = f"{path}::gone.btf"
+            self.assertFalse(_open_path_exists(missing_member))
+            self.assertEqual(_filter_existing_open_paths([missing_member]), [])
 
     def test_plain_btf(self):
         with tempfile.TemporaryDirectory() as td:

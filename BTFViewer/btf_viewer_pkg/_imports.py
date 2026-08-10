@@ -16,6 +16,7 @@ import datetime
 import functools
 import hashlib
 import html
+from html.parser import HTMLParser
 import ssl
 import itertools
 import json

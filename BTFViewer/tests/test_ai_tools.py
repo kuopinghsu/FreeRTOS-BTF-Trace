@@ -18,13 +18,17 @@ from btf_viewer_pkg.ai_tools import (  # noqa: E402
     parse_btf_jump_href,
     AI_RAW_METRIC_PRIORITY,
     AI_TOOL_ADD_ANNOTATION,
+    AI_TOOL_CLEAR_MARKS,
     AI_TOOL_EXPORT_REPORT,
     AI_TOOL_HIGHLIGHT_TASK,
     AI_TOOL_OPEN_CORRIDOR,
     AI_TOOL_QUERY_RAW_METRIC,
+    AI_TOOL_RESET_VIEW,
+    AI_TOOL_SEARCH_TIMELINE,
     AI_TOOL_SET_CURSORS,
     AI_TOOL_SET_VIEW_MODE,
     AI_TOOL_SYSTEM_ADDENDUM,
+    AI_TOOL_TRIGGER_COMPARE,
     AI_TOOL_ZOOM_TO_RANGE,
     AI_VIEWER_TOOL_NAMES,
     ai_viewer_tools,
@@ -40,9 +44,11 @@ from btf_viewer_pkg.ai_tools import (  # noqa: E402
     normalize_tool_chat_messages,
     parse_ai_auto_apply,
     parse_tool_calls_from_text,
+    is_query_tool,
     query_raw_metric,
     resolve_core_key,
     resolve_task_key,
+    search_timeline_hits,
     strip_parsed_tool_markup,
     summarise_tool_call,
     tool_batch_auto_runs,
@@ -157,6 +163,71 @@ class AiToolsTests(unittest.TestCase):
         ]))
         self.assertEqual(normalize_raw_metric("L/M/H inversion"), "")
         self.assertEqual(normalize_raw_metric("priority-inheritance"), AI_RAW_METRIC_PRIORITY)
+
+    def test_validate_clear_search_reset_compare(self) -> None:
+        args, err = validate_tool_call(AI_TOOL_CLEAR_MARKS, {})
+        self.assertEqual(err, "")
+        self.assertEqual(args["what"], "all")
+        args, err = validate_tool_call(AI_TOOL_CLEAR_MARKS, {"what": "marks"})
+        self.assertEqual(args["what"], "all")
+        _, err = validate_tool_call(AI_TOOL_CLEAR_MARKS, {"what": "nope"})
+        self.assertIn("what", err)
+        args, err = validate_tool_call(AI_TOOL_RESET_VIEW, {})
+        self.assertEqual(err, "")
+        self.assertEqual(args, {})
+        args, err = validate_tool_call(
+            AI_TOOL_SEARCH_TIMELINE, {"query": "TICK", "mode": "tags"})
+        self.assertEqual(err, "")
+        self.assertEqual(args["mode"], "tags")
+        _, err = validate_tool_call(AI_TOOL_SEARCH_TIMELINE, {"query": ""})
+        self.assertIn("query", err)
+        args, err = validate_tool_call(
+            AI_TOOL_TRIGGER_COMPARE, {"tab_a": "0", "tab_b": "tickless"})
+        self.assertEqual(err, "")
+        self.assertEqual(args["tab_b"], "tickless")
+        self.assertTrue(is_query_tool(AI_TOOL_SEARCH_TIMELINE))
+        self.assertTrue(is_query_tool(AI_TOOL_TRIGGER_COMPARE))
+        self.assertFalse(is_query_tool(AI_TOOL_CLEAR_MARKS))
+        self.assertTrue(tool_mutates_gui(AI_TOOL_CLEAR_MARKS))
+        self.assertTrue(tool_mutates_gui(AI_TOOL_RESET_VIEW))
+        self.assertTrue(tool_batch_auto_runs([{"name": AI_TOOL_SEARCH_TIMELINE}]))
+        self.assertTrue(tool_batch_auto_runs([{"name": AI_TOOL_TRIGGER_COMPARE}]))
+        self.assertFalse(tool_batch_auto_runs([
+            {"name": AI_TOOL_SEARCH_TIMELINE},
+            {"name": AI_TOOL_CLEAR_MARKS},
+        ]))
+        self.assertIn("all", summarise_tool_call(AI_TOOL_CLEAR_MARKS, {"what": "all"}))
+        self.assertEqual(summarise_tool_call(AI_TOOL_RESET_VIEW, {}), "Reset view")
+        self.assertIn("TICK", summarise_tool_call(
+            AI_TOOL_SEARCH_TIMELINE, {"query": "TICK", "mode": "sti"}))
+
+    def test_search_timeline_hits_annotations(self) -> None:
+        from types import SimpleNamespace
+
+        from btf_viewer_pkg.parser import BtfTrace  # noqa: WPS433
+
+        trace = BtfTrace(
+            time_scale="us",
+            tasks=[],
+            segments=[],
+            sti_events=[],
+            sti_channels=[],
+            sti_events_by_target={},
+            time_min=0,
+            time_max=1000,
+        )
+        out = search_timeline_hits(
+            trace, "watch", "contains",
+            annotations=[SimpleNamespace(ns=500, note="watchdog timeout")],
+        )
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["data"]["times"], [500])
+        self.assertEqual(out["data"]["count"], 1)
+        bad_q = search_timeline_hits(trace, "", "contains")
+        self.assertFalse(bad_q["ok"])
+        bad_re = search_timeline_hits(trace, "[", "regex")
+        self.assertFalse(bad_re["ok"])
+        self.assertIn("Regex", bad_re["message"])
 
     def test_resolve_core_key(self) -> None:
         cores = ["Core_0", "Core_1", "Core_10"]

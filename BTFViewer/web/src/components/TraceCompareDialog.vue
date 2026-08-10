@@ -392,6 +392,17 @@
       <div class="compare-dialog-footer">
         <button
           type="button"
+          class="compare-ai-btn"
+          :title="aiEnabled
+            ? 'Open the AI Assistant and walk through these Trace Compare tables'
+            : 'Enable AI Assistant in Settings → AI'"
+          @click="onQueryAi"
+        >
+          Query with AI…
+        </button>
+        <div class="compare-footer-right">
+        <button
+          type="button"
           class="compare-export-btn"
           title="Export compare tables as CSV"
           @click="onExportCsv"
@@ -439,6 +450,7 @@
           </svg>
           Export HTML
         </button>
+        </div>
       </div>
     </div>
   </div>
@@ -462,9 +474,18 @@ import {
 
 const props = defineProps({
   tabs: { type: Array, required: true },
+  initialA: { type: [Number, String], default: null },
+  initialB: { type: [Number, String], default: null },
+  aiEnabled: { type: Boolean, default: true },
 })
 
-const emit = defineEmits(['close'])
+const emit = defineEmits(['close', 'query-ai'])
+
+function pickTabId(preferred, fallbackIndex) {
+  const list = props.tabs || []
+  if (preferred != null && list.some(t => t.id === preferred)) return preferred
+  return list[Math.min(fallbackIndex, Math.max(0, list.length - 1))]?.id ?? null
+}
 
 const pageTabs = [
   { id: 'summary', label: 'Summary' },
@@ -480,8 +501,8 @@ const pageTabs = [
 
 const activePage = ref('summary')
 const scopeToCursors = ref(true)
-const tabAId = ref(props.tabs[0]?.id ?? null)
-const tabBId = ref(props.tabs[Math.min(1, props.tabs.length - 1)]?.id ?? null)
+const tabAId = ref(pickTabId(props.initialA, 0))
+const tabBId = ref(pickTabId(props.initialB, 1))
 
 watch(
   () => props.tabs,
@@ -548,6 +569,10 @@ function onExportHtml() {
     scopeToCursors.value,
     exportTables(),
   )
+}
+
+function onQueryAi() {
+  emit('query-ai', { idA: tabAId.value, idB: tabBId.value })
 }
 </script>
 
@@ -723,10 +748,33 @@ function onExportHtml() {
 
 .compare-dialog-footer {
   display: flex;
+  justify-content: space-between;
+  align-items: center;
   gap: 8px;
   padding: 10px 14px;
   border-top: 1px solid var(--border);
   flex-shrink: 0;
+}
+
+.compare-footer-right {
+  display: flex;
+  gap: 8px;
+}
+
+.compare-ai-btn {
+  appearance: none;
+  border: 1px solid var(--accent, #4a90d9);
+  border-radius: 4px;
+  background: var(--accent, #4a90d9);
+  color: #000;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+
+.compare-ai-btn:hover {
+  filter: brightness(1.08);
 }
 
 .compare-export-btn {

@@ -20,6 +20,10 @@ AI_TOOL_OPEN_CORRIDOR = "open_corridor_inspector"
 AI_TOOL_ADD_ANNOTATION = "add_annotation"
 AI_TOOL_QUERY_RAW_METRIC = "query_raw_metric"
 AI_TOOL_EXPORT_REPORT = "export_report"
+AI_TOOL_CLEAR_MARKS = "clear_marks"
+AI_TOOL_RESET_VIEW = "reset_view"
+AI_TOOL_SEARCH_TIMELINE = "search_timeline"
+AI_TOOL_TRIGGER_COMPARE = "trigger_compare"
 
 AI_VIEWER_TOOL_NAMES: Tuple[str, ...] = (
     AI_TOOL_SET_CURSORS,
@@ -30,6 +34,18 @@ AI_VIEWER_TOOL_NAMES: Tuple[str, ...] = (
     AI_TOOL_ADD_ANNOTATION,
     AI_TOOL_QUERY_RAW_METRIC,
     AI_TOOL_EXPORT_REPORT,
+    AI_TOOL_CLEAR_MARKS,
+    AI_TOOL_RESET_VIEW,
+    AI_TOOL_SEARCH_TIMELINE,
+    AI_TOOL_TRIGGER_COMPARE,
+)
+
+AI_FIND_MODES: Tuple[str, ...] = (
+    "contains", "exact", "regex", "sti", "tags", "intervals",
+    "lifecycle", "pointers", "migrations",
+)
+AI_CLEAR_MARKS_TARGETS: Tuple[str, ...] = (
+    "annotations", "cursors", "bookmarks", "all", "everything",
 )
 
 AI_RAW_METRIC_PRIORITY = "priority_inheritance"
@@ -74,6 +90,7 @@ _RAW_METRIC_ALIASES = {
     "analysis": AI_RAW_METRIC_FINDINGS,
 }
 _MAX_RAW_METRIC_ROWS = 40
+_MAX_SEARCH_HITS = 40
 _MAX_ANNOTATION_NOTE = 240
 
 # QTextBrowser truncates ``scheme:digits`` (treats it as host:port). Use a path.
@@ -128,11 +145,16 @@ AI_TOOL_SYSTEM_ADDENDUM = (
     "matching viewer tool (native function call) in addition to your markdown "
     "answer. Valid tools: set_cursors, zoom_to_range, highlight_task, "
     "set_view_mode, open_corridor_inspector, add_annotation, query_raw_metric, "
-    "export_report. Use query_raw_metric when you need the exact per-task "
+    "export_report, clear_marks, reset_view, search_timeline, trigger_compare. "
+    "Use query_raw_metric when you need the exact per-task "
     "series (priority-inheritance episodes, execution slices, migrations, "
     "blocking gaps, sync STI, or findings lines) instead of the summarised "
-    "findings card. Use add_annotation to pin a note on a spike. Use "
-    "export_report to save findings, diagrams, and GUI state as HTML or CSV. "
+    "findings card. Use search_timeline to locate STI, tags, task names, or "
+    "pointers and get timestamps. Use clear_marks / reset_view to tidy the "
+    "timeline before highlighting a new issue. Use trigger_compare when two "
+    "tabs are open to pull Trace Compare diffs. Use add_annotation to pin a "
+    "note on a spike. Use export_report to save findings, diagrams, and GUI "
+    "state as HTML or CSV. "
     "Tool timestamps use the same numeric trace time "
     "unit as jump:TIME. After tools run, summarise what you changed. "
     "If you cannot emit a native function call, emit one fenced btftool JSON "
@@ -360,6 +382,93 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                             "type": "string",
                             "enum": ["html", "csv"],
                             "description": "html (default) or csv.",
+                        },
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_CLEAR_MARKS,
+                "description": (
+                    "Clear timeline clutter before focusing a new issue. "
+                    "all = annotations + cursors (default). everything also "
+                    "clears bookmarks."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "what": {
+                            "type": "string",
+                            "enum": list(AI_CLEAR_MARKS_TARGETS),
+                            "description": (
+                                "annotations, cursors, bookmarks, all "
+                                "(annotations+cursors), or everything."
+                            ),
+                        },
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_RESET_VIEW,
+                "description": (
+                    "Fit the timeline to the full trace span and clear the "
+                    "task highlight. Does not remove cursors or annotations."
+                ),
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_SEARCH_TIMELINE,
+                "description": (
+                    "Search the trace like Find (Ctrl+F). Returns matching "
+                    "timestamps for task names, STI/tag notes, intervals, "
+                    "lifecycle events, sync pointers, or migrations."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Text, tag value, pointer, or task name.",
+                        },
+                        "mode": {
+                            "type": "string",
+                            "enum": list(AI_FIND_MODES),
+                            "description": (
+                                "contains (default), exact, regex, sti, tags, "
+                                "intervals, lifecycle, pointers, migrations."
+                            ),
+                        },
+                    },
+                    "required": ["query"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_TRIGGER_COMPARE,
+                "description": (
+                    "Compare two loaded trace tabs (Trace Compare). Returns "
+                    "diff tables as CSV. Optional tab names or 0-based indices."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "tab_a": {
+                            "type": "string",
+                            "description": "First tab name or 0-based tab index (default 0).",
+                        },
+                        "tab_b": {
+                            "type": "string",
+                            "description": "Second tab name or 0-based tab index (default 1).",
                         },
                     },
                 },
@@ -719,7 +828,11 @@ def normalize_raw_metric(name: Any) -> str:
 
 
 def is_query_tool(name: str) -> bool:
-    return str(name or "") == AI_TOOL_QUERY_RAW_METRIC
+    return str(name or "") in (
+        AI_TOOL_QUERY_RAW_METRIC,
+        AI_TOOL_SEARCH_TIMELINE,
+        AI_TOOL_TRIGGER_COMPARE,
+    )
 
 
 def is_export_tool(name: str) -> bool:
@@ -735,6 +848,8 @@ def tool_mutates_gui(name: str) -> bool:
         AI_TOOL_SET_VIEW_MODE,
         AI_TOOL_OPEN_CORRIDOR,
         AI_TOOL_ADD_ANNOTATION,
+        AI_TOOL_CLEAR_MARKS,
+        AI_TOOL_RESET_VIEW,
     )
 
 
@@ -819,6 +934,38 @@ def validate_tool_call(name: str, args: Optional[Dict[str, Any]]) -> Tuple[Optio
         else:
             return None, 'format must be "html" or "csv"'
         return {"format": fmt}, ""
+    if name == AI_TOOL_CLEAR_MARKS:
+        what = str(a.get("what") or "all").strip().lower()
+        aliases = {
+            "annotation": "annotations",
+            "cursor": "cursors",
+            "bookmark": "bookmarks",
+            "marks": "all",
+            "both": "all",
+        }
+        what = aliases.get(what, what)
+        if what not in AI_CLEAR_MARKS_TARGETS:
+            return None, (
+                "what must be one of: " + ", ".join(AI_CLEAR_MARKS_TARGETS)
+            )
+        return {"what": what}, ""
+    if name == AI_TOOL_RESET_VIEW:
+        return {}, ""
+    if name == AI_TOOL_SEARCH_TIMELINE:
+        query = str(a.get("query") or "").strip()
+        if not query:
+            return None, "query must be a non-empty string"
+        mode = str(a.get("mode") or "contains").strip().lower()
+        if mode == "tag":
+            mode = "tags"
+        if mode not in AI_FIND_MODES:
+            return None, "mode must be one of: " + ", ".join(AI_FIND_MODES)
+        return {"query": query, "mode": mode}, ""
+    if name == AI_TOOL_TRIGGER_COMPARE:
+        return {
+            "tab_a": str(a.get("tab_a") if a.get("tab_a") is not None else "").strip(),
+            "tab_b": str(a.get("tab_b") if a.get("tab_b") is not None else "").strip(),
+        }, ""
     return None, f"unknown tool {name!r}"
 
 
@@ -867,6 +1014,20 @@ def summarise_tool_call(name: str, args: Optional[Dict[str, Any]]) -> str:
     if name == AI_TOOL_EXPORT_REPORT:
         fmt = str(a.get("format") or "html").strip().lower() or "html"
         return f"Export {fmt} report"
+    if name == AI_TOOL_CLEAR_MARKS:
+        what = str(a.get("what") or "all").strip() or "all"
+        return f"Clear marks ({what})"
+    if name == AI_TOOL_RESET_VIEW:
+        return "Reset view"
+    if name == AI_TOOL_SEARCH_TIMELINE:
+        q = str(a.get("query") or "").strip()
+        mode = str(a.get("mode") or "contains").strip() or "contains"
+        shown = q if len(q) <= 40 else q[:37] + "…"
+        return f"Search timeline [{mode}] {shown!r}"
+    if name == AI_TOOL_TRIGGER_COMPARE:
+        a_tab = str(a.get("tab_a") or "0").strip() or "0"
+        b_tab = str(a.get("tab_b") or "1").strip() or "1"
+        return f"Compare tabs {a_tab} vs {b_tab}"
     return name.replace("_", " ")
 
 
@@ -1316,6 +1477,41 @@ def _overlaps_range(start: Any, stop: Any, lo: Optional[float], hi: Optional[flo
     except (TypeError, ValueError):
         return False
     return b > lo and a < hi
+
+
+def search_timeline_hits(
+    trace: Any,
+    query: str,
+    mode: str = "contains",
+    annotations: Optional[Sequence[Any]] = None,
+) -> Dict[str, Any]:
+    """Find-panel search for the AI ``search_timeline`` tool."""
+    from .mvvm.find_logic import recompute_find_hits
+
+    q = str(query or "").strip()
+    if not q:
+        return tool_result_payload(False, "query must be a non-empty string")
+    if trace is None:
+        return tool_result_payload(False, "No trace loaded")
+    find_mode = "sti" if str(mode or "").lower() in ("tags", "tag", "sti") else str(mode or "contains")
+    anns: List[Any] = []
+    for a in annotations or []:
+        anns.append(a)
+    hits, status = recompute_find_hits(trace, q, find_mode, anns)
+    status_s = str(status or "")
+    if status_s in ("Regex error", "Regex too long"):
+        return tool_result_payload(False, status_s)
+    shown = list(hits[:_MAX_SEARCH_HITS])
+    return tool_result_payload(
+        True,
+        f"{len(hits)} match(es) for {q!r} ({find_mode})",
+        data={
+            "times": shown,
+            "count": len(hits),
+            "mode": find_mode,
+            "truncated": len(hits) > _MAX_SEARCH_HITS,
+        },
+    )
 
 
 def _task_candidates_from_trace(trace: Any) -> List[str]:

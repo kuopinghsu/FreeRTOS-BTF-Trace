@@ -88,7 +88,17 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("query_raw_metric", workflows)
         self.assertIn("add_annotation", workflows)
         self.assertIn("export_report", workflows)
+        self.assertIn("search_timeline", workflows)
+        self.assertIn("trigger_compare", workflows)
+        self.assertIn("clear_marks", workflows)
+        self.assertIn("reset_view", workflows)
         self.assertIn("`add_annotation` / `query_raw_metric` / `export_report`", readme)
+        self.assertIn("`clear_marks` / `reset_view` / `search_timeline` / `trigger_compare`", readme)
+        self.assertIn("Save selection as BTF", readme)
+        self.assertIn("Save selection as BTF", workflows)
+        self.assertIn("MAX_SEARCH_HITS = 40", js)
+        self.assertIn("_MAX_SEARCH_HITS = 40", (
+            BTF_ROOT / "btf_viewer_pkg/ai_tools.py").read_text(encoding="utf-8"))
         self.assertIn("MAX_RAW_METRIC_ROWS = 40", js)
         self.assertIn("_MAX_RAW_METRIC_ROWS = 40", (
             BTF_ROOT / "btf_viewer_pkg/ai_tools.py").read_text(encoding="utf-8"))
@@ -114,6 +124,30 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("AI_TOOL_QUERY_RAW_METRIC", app)
         self.assertIn("query_raw_metric(", mw)
         self.assertIn("queryRawMetric(", app)
+        self.assertIn("AI_TOOL_CLEAR_MARKS", mw)
+        self.assertIn("AI_TOOL_CLEAR_MARKS", app)
+        self.assertIn("AI_TOOL_RESET_VIEW", mw)
+        self.assertIn("AI_TOOL_RESET_VIEW", app)
+        self.assertIn("AI_TOOL_SEARCH_TIMELINE", mw)
+        self.assertIn("AI_TOOL_SEARCH_TIMELINE", app)
+        self.assertIn("AI_TOOL_TRIGGER_COMPARE", mw)
+        self.assertIn("AI_TOOL_TRIGGER_COMPARE", app)
+        self.assertIn("search_timeline_hits(", mw)
+        self.assertIn("searchTimelineHits(", app)
+        self.assertIn("def _ai_clear_marks", mw)
+        self.assertIn("def _on_export_btf_slice", mw)
+        self.assertIn("function onExportBtfSlice", app)
+        self.assertIn("filter_btf_file_to_range", mw)
+        self.assertIn("reconstruct_btf_slice", mw)
+        self.assertIn("filterBtfTextToRange", app)
+        self.assertIn("reconstructBtfSlice", app)
+        self.assertIn("sourceText", app)
+        self.assertTrue((BTF_ROOT / "btf_viewer_pkg/btf_slice.py").is_file())
+        self.assertTrue((BTF_ROOT / "web/src/utils/btfSlice.js").is_file())
+        self.assertIn('"slice"', (
+            BTF_ROOT / "btf_viewer_pkg/cli.py").read_text(encoding="utf-8"))
+        self.assertIn('"slice"', (
+            BTF_ROOT / "btf_viewer_pkg/platform.py").read_text(encoding="utf-8"))
         self.assertIn("tool_mutates_gui", mw)
         self.assertIn("toolMutatesGui", app)
         self.assertNotIn("ensureMarksPanelVisible()", app)
@@ -132,6 +166,19 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn(AI_TOOL_ADD_ANNOTATION, AI_VIEWER_TOOL_NAMES)
         self.assertIn(AI_TOOL_QUERY_RAW_METRIC, AI_VIEWER_TOOL_NAMES)
         self.assertIn(AI_TOOL_EXPORT_REPORT, AI_VIEWER_TOOL_NAMES)
+        self.assertIn("clear_marks", AI_VIEWER_TOOL_NAMES)
+        self.assertIn("search_timeline", AI_VIEWER_TOOL_NAMES)
+        self.assertIn("trigger_compare", AI_VIEWER_TOOL_NAMES)
+        tools_js = (BTF_ROOT / "web/src/utils/aiTools.js").read_text(encoding="utf-8")
+        self.assertIn("0-based tab index", (
+            BTF_ROOT / "btf_viewer_pkg/ai_tools.py").read_text(encoding="utf-8"))
+        self.assertIn("0-based tab index", tools_js)
+        self.assertIn("0-based tab-bar / loaded-list index first", app)
+        self.assertIn("Tab ids start at 1", app)
+        self.assertIn("archive.zip::", (
+            BTF_ROOT / "web/src/utils/btfLoad.js").read_text(encoding="utf-8"))
+        self.assertIn("onMermaidZoomWheel", panel)
+        self.assertIn("_scale = max(0.5, min(6.0", assist)
 
     def test_stats_table_annotation_does_not_switch_to_marks(self) -> None:
         mw = (BTF_ROOT / "btf_viewer_pkg/mainwindow.py").read_text(encoding="utf-8")
@@ -146,6 +193,9 @@ class AiWebParityTests(unittest.TestCase):
             "self._add_annotation_with_note(mark_ns, note, show_marks_panel=False)",
             mw,
         )
+        readme = (BTF_ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertNotIn("switch to the **Marks** tab", readme)
+        self.assertIn("without switching right-panel tabs", readme)
 
     def test_gemini_thought_signature_helpers_match(self) -> None:
         js = (BTF_ROOT / "web/src/utils/aiTools.js").read_text(encoding="utf-8")
@@ -326,6 +376,15 @@ class AiWebParityTests(unittest.TestCase):
             self.assertIn(name, vue)
         self.assertIn("401 keeps Sign in / Settings CTAs", workflows)
         self.assertIn("open the Model dropdown", workflows)
+        self.assertIn("token-efficient", readme)
+        self.assertIn("Parameters / targets", readme)
+        self.assertIn("qwen2.5:7b", readme)
+        self.assertIn("qwen2.5:7b", workflows)
+        self.assertIn("8k", readme)
+        self.assertIn("examples/ai/presets.json", readme)
+        self.assertIn("#### GUI tools", readme)
+        self.assertIn("triage overall findings", readme)
+        self.assertIn("triage overall findings", workflows)
         self.assertIn(
             "Open the Model dropdown to pick one.", stats)
         self.assertIn(
@@ -348,6 +407,21 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("canonicalAssistantToolMessage(text, calls)", vue)
         self.assertIn("tool_result_message(", assist)
         self.assertIn("toolResultMessage(", vue)
+
+    def test_markdown_tables_match_web(self) -> None:
+        assist = (BTF_ROOT / "btf_viewer_pkg/ai_assistant.py").read_text(
+            encoding="utf-8")
+        js = (BTF_ROOT / "web/src/utils/aiMarkdown.js").read_text(encoding="utf-8")
+        vue = (BTF_ROOT / "web/src/components/AiAssistantPanel.vue").read_text(
+            encoding="utf-8")
+        readme = (BTF_ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertIn('class="ai-md-table"', assist)
+        self.assertIn('class="ai-md-table"', js)
+        self.assertIn("table.ai-md-table", vue)
+        self.assertIn("_sanitize_html_table_block", assist)
+        self.assertIn("sanitizeHtmlTableBlock", js)
+        self.assertIn("Pipe **Markdown tables**", readme)
+        self.assertIn("In-chat Markdown / HTML tables", readme)
 
 
 if __name__ == "__main__":

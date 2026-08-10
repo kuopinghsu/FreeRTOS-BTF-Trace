@@ -6,7 +6,7 @@ Copy one of these files, fill in your key if needed, and import it.
 
 | File | Endpoint | Lands on |
 |------|----------|----------|
-| [`ollama.json`](ollama.json) | Local Ollama (`localhost:11434/v1`) | **Ollama** |
+| [`ollama.json`](ollama.json) | Local Ollama (`localhost:11434/v1`). Default id `phi4-mini:3.8b`; for native tool calling prefer `qwen2.5:7b` / `llama3.1:8b` (≥8k context) | **Ollama** |
 | [`gemini.json`](gemini.json) | Google Gemini OpenAI-compatible API | **Google Gemini** |
 | [`openai.json`](openai.json) | OpenAI (`api.openai.com`) | **OpenAI** |
 | [`deepseek.json`](deepseek.json) | DeepSeek (`api.deepseek.com`) | **Custom** |

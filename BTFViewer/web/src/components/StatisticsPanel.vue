@@ -2242,18 +2242,12 @@
         class="action-btn"
         :disabled="!canCompareTabs"
         title="Compare summary, top tasks, and core migrations between two open trace tabs"
-        @click="compareOpen = true"
+        @click="emit('openCompare')"
       >
         Trace Compare…
       </button>
     </div>
   </div>
-
-  <TraceCompareDialog
-    v-if="compareOpen && canCompareTabs"
-    :tabs="loadedTabs"
-    @close="compareOpen = false"
-  />
 
   <div
     v-if="openPlotRef"
@@ -2835,7 +2829,6 @@ import {
   DEADLINE_SLICE_SORT_ACCESSORS,
   DEADLINE_CPU_SORT_ACCESSORS,
 } from '../utils/statsTableSort.js'
-import TraceCompareDialog from './TraceCompareDialog.vue'
 import LoadBalanceGauge from './LoadBalanceGauge.vue'
 import StatsSectionHeader from './StatsSectionHeader.vue'
 import StatsSectionBlock from './StatsSectionBlock.vue'
@@ -2862,7 +2855,7 @@ const emit = defineEmits([
   'highlightTask', 'plotPointActivate', 'segmentJump', 'update:openPlot', 'update:sectionHeights',
   'update:scopeToCursors', 'update:sectionCollapsedState', 'update:sectionPins',
   'update:sectionOrder',
-  'openPairHeatmap', 'openPairChord', 'openSettings',
+  'openPairHeatmap', 'openPairChord', 'openSettings', 'openCompare',
 ])
 
 const coresCollapsed = ref(false)
@@ -3181,7 +3174,6 @@ const scatterSvgEl = ref(null)
 const selectedPlotPoint = ref(-1)
 const plotHoverPointIndex = ref(-1)
 const histogramScaleMode = ref('auto')
-const compareOpen = ref(false)
 
 const tableSort = ref({
   migrations: defaultStatsTableSort(),

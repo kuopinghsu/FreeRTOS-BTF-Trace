@@ -84,6 +84,7 @@ import datetime
 import functools
 import hashlib
 import html
+from html.parser import HTMLParser
 import ssl
 import itertools
 import json
@@ -1226,6 +1227,39 @@ def _normalize_open_path(path: str) -> str:
     if member:
         return f"{norm}{_ZIP_MEMBER_SEP}{member}"
     return norm
+
+
+def _open_path_exists(filepath: str) -> bool:
+    """True if *filepath* (or its zip archive / named member) is still on disk."""
+    path, member = _split_zip_member_path(filepath or "")
+    if not path:
+        return False
+    path = os.path.abspath(os.path.expanduser(path))
+    if not os.path.isfile(path):
+        return False
+    if not member:
+        return True
+    try:
+        with zipfile.ZipFile(path, "r") as zf:
+            return member in zf.namelist()
+    except zipfile.BadZipFile:
+        return False
+
+
+def _filter_existing_open_paths(paths) -> List[str]:
+    """Dedupe and keep only loadable BTF / ``zip::member`` paths (session restore)."""
+    seen: set = set()
+    unique: List[str] = []
+    for raw in paths or []:
+        text = str(raw).strip()
+        if not text:
+            continue
+        norm = _normalize_open_path(text)
+        if norm in seen or not _open_path_exists(norm):
+            continue
+        seen.add(norm)
+        unique.append(norm)
+    return unique
 
 
 def _trace_display_name(path: str) -> str:
@@ -6809,6 +6843,116 @@ def _parse_btf(filepath: str,
     trace.migration_rows_full = _migration_rows(trace)
     return trace
 
+# ===========================================================================
+# btf_slice
+# ===========================================================================
+
+def filter_btf_text_to_range(text: str, lo: int, hi: int) -> Tuple[str, int]:
+    """Keep ``#`` meta, ``C`` (set_frequency) lines, and events in ``[lo, hi]``."""
+    if hi < lo:
+        lo, hi = hi, lo
+    lines, n = _filter_btf_lines(str(text or "").splitlines(), lo, hi)
+    return "\n".join(lines) + ("\n" if lines else ""), n
+
+
+def filter_btf_file_to_range(filepath: str, lo: int, hi: int) -> Tuple[str, int]:
+    """Re-read *filepath* and keep events whose timestamp is in ``[lo, hi]``."""
+    if hi < lo:
+        lo, hi = hi, lo
+    with _open_btf_text(filepath) as fh:
+        lines, n = _filter_btf_lines(fh, lo, hi)
+    return "\n".join(lines) + ("\n" if lines else ""), n
+
+
+def write_btf_text(text: str, dest_path: str) -> None:
+    """Write UTF-8 BTF; ``.gz`` destinations are gzip-compressed."""
+    dest = os.path.abspath(dest_path)
+    data = str(text or "").encode("utf-8")
+    parent = os.path.dirname(dest)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    low = dest.lower()
+    if low.endswith(".gz"):
+        with gzip.open(dest, "wb") as fh:
+            fh.write(data)
+        return
+    with open(dest, "wb") as fh:
+        fh.write(data)
+
+
+def reconstruct_btf_slice(trace: BtfTrace, lo: int, hi: int) -> Tuple[str, int]:
+    """Build a best-effort BTF when the original source text is unavailable."""
+    if hi < lo:
+        lo, hi = hi, lo
+    lines: List[str] = []
+    for key, val in dict(getattr(trace, "meta", None) or {}).items():
+        lines.append(f"#{key} {val}")
+    scale = getattr(trace, "time_scale", "") or ""
+    if scale and "timeScale" not in (getattr(trace, "meta", None) or {}):
+        lines.append(f"#timeScale {scale}")
+    lines.append(f"#sliced {lo}-{hi}")
+    events: List[Tuple[int, str]] = []
+    repr_map = getattr(trace, "task_repr", None) or {}
+    for seg in getattr(trace, "segments", None) or []:
+        start = int(seg.start)
+        end = int(seg.end)
+        if end < lo or start > hi:
+            continue
+        a = max(start, lo)
+        b = min(end, hi)
+        if a >= b:
+            continue
+        core = str(seg.core or "Core_0")
+        raw = repr_map.get(seg.task, seg.task)
+        name = _task_display_name(raw) if raw else str(seg.task)
+        name = str(name or seg.task).replace(",", " ")
+        events.append((a, f"{a},{core},0,T,{name},0,resume,"))
+        events.append((b, f"{b},{core},0,T,{name},0,preempt,"))
+    for ev in getattr(trace, "sti_events", None) or []:
+        t = int(ev.time)
+        if t < lo or t > hi:
+            continue
+        note = str(ev.note or "").replace("\n", " ")
+        events.append((
+            t,
+            f"{t},{ev.core or 'Core_0'},0,STI,{ev.target},0,{ev.event},{note}",
+        ))
+    for t in getattr(trace, "tick_sti_times", None) or []:
+        ts = int(t)
+        if lo <= ts <= hi:
+            events.append((ts, f"{ts},Core_0,0,STI,TICK,0,trigger,"))
+    events.sort(key=lambda row: (row[0], row[1]))
+    for _t, line in events:
+        lines.append(line)
+    return "\n".join(lines) + ("\n" if lines else ""), len(events)
+
+
+def _filter_btf_lines(src: Iterable[str], lo: int, hi: int) -> Tuple[List[str], int]:
+    out: List[str] = [f"#sliced {lo}-{hi}"]
+    kept = 0
+    for raw in src:
+        line = str(raw).rstrip("\r\n")
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped[0] == "#":
+            out.append(stripped)
+            continue
+        parts = stripped.split(",", 8)
+        if len(parts) < 4:
+            continue
+        ev_type = parts[3].strip()
+        if ev_type == "C":
+            out.append(stripped)
+            continue
+        try:
+            t = int(parts[0].strip())
+        except ValueError:
+            continue
+        if lo <= t <= hi:
+            out.append(stripped)
+            kept += 1
+    return out, kept
 # ===========================================================================
 # Timeline Widget
 # ===========================================================================
@@ -16221,6 +16365,10 @@ AI_TOOL_OPEN_CORRIDOR = "open_corridor_inspector"
 AI_TOOL_ADD_ANNOTATION = "add_annotation"
 AI_TOOL_QUERY_RAW_METRIC = "query_raw_metric"
 AI_TOOL_EXPORT_REPORT = "export_report"
+AI_TOOL_CLEAR_MARKS = "clear_marks"
+AI_TOOL_RESET_VIEW = "reset_view"
+AI_TOOL_SEARCH_TIMELINE = "search_timeline"
+AI_TOOL_TRIGGER_COMPARE = "trigger_compare"
 
 AI_VIEWER_TOOL_NAMES: Tuple[str, ...] = (
     AI_TOOL_SET_CURSORS,
@@ -16231,6 +16379,18 @@ AI_VIEWER_TOOL_NAMES: Tuple[str, ...] = (
     AI_TOOL_ADD_ANNOTATION,
     AI_TOOL_QUERY_RAW_METRIC,
     AI_TOOL_EXPORT_REPORT,
+    AI_TOOL_CLEAR_MARKS,
+    AI_TOOL_RESET_VIEW,
+    AI_TOOL_SEARCH_TIMELINE,
+    AI_TOOL_TRIGGER_COMPARE,
+)
+
+AI_FIND_MODES: Tuple[str, ...] = (
+    "contains", "exact", "regex", "sti", "tags", "intervals",
+    "lifecycle", "pointers", "migrations",
+)
+AI_CLEAR_MARKS_TARGETS: Tuple[str, ...] = (
+    "annotations", "cursors", "bookmarks", "all", "everything",
 )
 
 AI_RAW_METRIC_PRIORITY = "priority_inheritance"
@@ -16275,6 +16435,7 @@ _RAW_METRIC_ALIASES = {
     "analysis": AI_RAW_METRIC_FINDINGS,
 }
 _MAX_RAW_METRIC_ROWS = 40
+_MAX_SEARCH_HITS = 40
 _MAX_ANNOTATION_NOTE = 240
 
 # QTextBrowser truncates ``scheme:digits`` (treats it as host:port). Use a path.
@@ -16329,11 +16490,16 @@ AI_TOOL_SYSTEM_ADDENDUM = (
     "matching viewer tool (native function call) in addition to your markdown "
     "answer. Valid tools: set_cursors, zoom_to_range, highlight_task, "
     "set_view_mode, open_corridor_inspector, add_annotation, query_raw_metric, "
-    "export_report. Use query_raw_metric when you need the exact per-task "
+    "export_report, clear_marks, reset_view, search_timeline, trigger_compare. "
+    "Use query_raw_metric when you need the exact per-task "
     "series (priority-inheritance episodes, execution slices, migrations, "
     "blocking gaps, sync STI, or findings lines) instead of the summarised "
-    "findings card. Use add_annotation to pin a note on a spike. Use "
-    "export_report to save findings, diagrams, and GUI state as HTML or CSV. "
+    "findings card. Use search_timeline to locate STI, tags, task names, or "
+    "pointers and get timestamps. Use clear_marks / reset_view to tidy the "
+    "timeline before highlighting a new issue. Use trigger_compare when two "
+    "tabs are open to pull Trace Compare diffs. Use add_annotation to pin a "
+    "note on a spike. Use export_report to save findings, diagrams, and GUI "
+    "state as HTML or CSV. "
     "Tool timestamps use the same numeric trace time "
     "unit as jump:TIME. After tools run, summarise what you changed. "
     "If you cannot emit a native function call, emit one fenced btftool JSON "
@@ -16561,6 +16727,93 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                             "type": "string",
                             "enum": ["html", "csv"],
                             "description": "html (default) or csv.",
+                        },
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_CLEAR_MARKS,
+                "description": (
+                    "Clear timeline clutter before focusing a new issue. "
+                    "all = annotations + cursors (default). everything also "
+                    "clears bookmarks."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "what": {
+                            "type": "string",
+                            "enum": list(AI_CLEAR_MARKS_TARGETS),
+                            "description": (
+                                "annotations, cursors, bookmarks, all "
+                                "(annotations+cursors), or everything."
+                            ),
+                        },
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_RESET_VIEW,
+                "description": (
+                    "Fit the timeline to the full trace span and clear the "
+                    "task highlight. Does not remove cursors or annotations."
+                ),
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_SEARCH_TIMELINE,
+                "description": (
+                    "Search the trace like Find (Ctrl+F). Returns matching "
+                    "timestamps for task names, STI/tag notes, intervals, "
+                    "lifecycle events, sync pointers, or migrations."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Text, tag value, pointer, or task name.",
+                        },
+                        "mode": {
+                            "type": "string",
+                            "enum": list(AI_FIND_MODES),
+                            "description": (
+                                "contains (default), exact, regex, sti, tags, "
+                                "intervals, lifecycle, pointers, migrations."
+                            ),
+                        },
+                    },
+                    "required": ["query"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_TRIGGER_COMPARE,
+                "description": (
+                    "Compare two loaded trace tabs (Trace Compare). Returns "
+                    "diff tables as CSV. Optional tab names or 0-based indices."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "tab_a": {
+                            "type": "string",
+                            "description": "First tab name or index (default 0).",
+                        },
+                        "tab_b": {
+                            "type": "string",
+                            "description": "Second tab name or index (default 1).",
                         },
                     },
                 },
@@ -16920,7 +17173,11 @@ def normalize_raw_metric(name: Any) -> str:
 
 
 def is_query_tool(name: str) -> bool:
-    return str(name or "") == AI_TOOL_QUERY_RAW_METRIC
+    return str(name or "") in (
+        AI_TOOL_QUERY_RAW_METRIC,
+        AI_TOOL_SEARCH_TIMELINE,
+        AI_TOOL_TRIGGER_COMPARE,
+    )
 
 
 def is_export_tool(name: str) -> bool:
@@ -16936,6 +17193,8 @@ def tool_mutates_gui(name: str) -> bool:
         AI_TOOL_SET_VIEW_MODE,
         AI_TOOL_OPEN_CORRIDOR,
         AI_TOOL_ADD_ANNOTATION,
+        AI_TOOL_CLEAR_MARKS,
+        AI_TOOL_RESET_VIEW,
     )
 
 
@@ -17020,6 +17279,38 @@ def validate_tool_call(name: str, args: Optional[Dict[str, Any]]) -> Tuple[Optio
         else:
             return None, 'format must be "html" or "csv"'
         return {"format": fmt}, ""
+    if name == AI_TOOL_CLEAR_MARKS:
+        what = str(a.get("what") or "all").strip().lower()
+        aliases = {
+            "annotation": "annotations",
+            "cursor": "cursors",
+            "bookmark": "bookmarks",
+            "marks": "all",
+            "both": "all",
+        }
+        what = aliases.get(what, what)
+        if what not in AI_CLEAR_MARKS_TARGETS:
+            return None, (
+                "what must be one of: " + ", ".join(AI_CLEAR_MARKS_TARGETS)
+            )
+        return {"what": what}, ""
+    if name == AI_TOOL_RESET_VIEW:
+        return {}, ""
+    if name == AI_TOOL_SEARCH_TIMELINE:
+        query = str(a.get("query") or "").strip()
+        if not query:
+            return None, "query must be a non-empty string"
+        mode = str(a.get("mode") or "contains").strip().lower()
+        if mode == "tag":
+            mode = "tags"
+        if mode not in AI_FIND_MODES:
+            return None, "mode must be one of: " + ", ".join(AI_FIND_MODES)
+        return {"query": query, "mode": mode}, ""
+    if name == AI_TOOL_TRIGGER_COMPARE:
+        return {
+            "tab_a": str(a.get("tab_a") if a.get("tab_a") is not None else "").strip(),
+            "tab_b": str(a.get("tab_b") if a.get("tab_b") is not None else "").strip(),
+        }, ""
     return None, f"unknown tool {name!r}"
 
 
@@ -17068,6 +17359,20 @@ def summarise_tool_call(name: str, args: Optional[Dict[str, Any]]) -> str:
     if name == AI_TOOL_EXPORT_REPORT:
         fmt = str(a.get("format") or "html").strip().lower() or "html"
         return f"Export {fmt} report"
+    if name == AI_TOOL_CLEAR_MARKS:
+        what = str(a.get("what") or "all").strip() or "all"
+        return f"Clear marks ({what})"
+    if name == AI_TOOL_RESET_VIEW:
+        return "Reset view"
+    if name == AI_TOOL_SEARCH_TIMELINE:
+        q = str(a.get("query") or "").strip()
+        mode = str(a.get("mode") or "contains").strip() or "contains"
+        shown = q if len(q) <= 40 else q[:37] + "…"
+        return f"Search timeline [{mode}] {shown!r}"
+    if name == AI_TOOL_TRIGGER_COMPARE:
+        a_tab = str(a.get("tab_a") or "0").strip() or "0"
+        b_tab = str(a.get("tab_b") or "1").strip() or "1"
+        return f"Compare tabs {a_tab} vs {b_tab}"
     return name.replace("_", " ")
 
 
@@ -17517,6 +17822,41 @@ def _overlaps_range(start: Any, stop: Any, lo: Optional[float], hi: Optional[flo
     except (TypeError, ValueError):
         return False
     return b > lo and a < hi
+
+
+def search_timeline_hits(
+    trace: Any,
+    query: str,
+    mode: str = "contains",
+    annotations: Optional[Sequence[Any]] = None,
+) -> Dict[str, Any]:
+    """Find-panel search for the AI ``search_timeline`` tool."""
+    from .mvvm.find_logic import recompute_find_hits
+
+    q = str(query or "").strip()
+    if not q:
+        return tool_result_payload(False, "query must be a non-empty string")
+    if trace is None:
+        return tool_result_payload(False, "No trace loaded")
+    find_mode = "sti" if str(mode or "").lower() in ("tags", "tag", "sti") else str(mode or "contains")
+    anns: List[Any] = []
+    for a in annotations or []:
+        anns.append(a)
+    hits, status = recompute_find_hits(trace, q, find_mode, anns)
+    status_s = str(status or "")
+    if status_s in ("Regex error", "Regex too long"):
+        return tool_result_payload(False, status_s)
+    shown = list(hits[:_MAX_SEARCH_HITS])
+    return tool_result_payload(
+        True,
+        f"{len(hits)} match(es) for {q!r} ({find_mode})",
+        data={
+            "times": shown,
+            "count": len(hits),
+            "mode": find_mode,
+            "truncated": len(hits) > _MAX_SEARCH_HITS,
+        },
+    )
 
 
 def _task_candidates_from_trace(trace: Any) -> List[str]:
@@ -19331,6 +19671,184 @@ def _md_inline_to_html_escaped(text: str) -> str:
     return result
 
 
+_MD_TABLE_ALIGN_RE = re.compile(r"^:?-{1,}:?$")
+_HTML_TABLE_START_RE = re.compile(r"^<table\b", re.IGNORECASE)
+_HTML_TABLE_END_RE = re.compile(r"</table\s*>", re.IGNORECASE)
+_AI_MD_TH_STYLE = (
+    "border:1px solid #3a4658;padding:4px 8px;"
+    "background:#243044;color:#e8eef6;font-weight:600;"
+)
+_AI_MD_TD_STYLE = (
+    "border:1px solid #3a4658;padding:4px 8px;"
+    "background:#1a2230;color:#dbe2ea;"
+)
+_AI_MD_TABLE_OPEN = (
+    '<table class="ai-md-table" width="100%" cellspacing="0" cellpadding="4">'
+)
+
+
+def _split_md_table_row(line: str) -> List[str]:
+    s = (line or "").strip()
+    if s.startswith("|"):
+        s = s[1:]
+    if s.endswith("|") and not s.endswith("\\|"):
+        s = s[:-1]
+    return [p.strip().replace("\\|", "|") for p in re.split(r"(?<!\\)\|", s)]
+
+
+def _is_md_table_separator(line: str) -> bool:
+    if "|" not in (line or ""):
+        return False
+    cells = _split_md_table_row(line)
+    if not cells:
+        return False
+    for cell in cells:
+        compact = re.sub(r"\s+", "", cell)
+        if not compact or not _MD_TABLE_ALIGN_RE.fullmatch(compact):
+            return False
+    return True
+
+
+def _md_table_aligns(sep_line: str, ncols: int) -> List[str]:
+    cells = _split_md_table_row(sep_line)
+    out: List[str] = []
+    for i in range(ncols):
+        compact = re.sub(r"\s+", "", cells[i]) if i < len(cells) else ""
+        left = compact.startswith(":")
+        right = compact.endswith(":")
+        if left and right:
+            out.append("center")
+        elif right:
+            out.append("right")
+        else:
+            out.append("left")
+    return out
+
+
+def _md_table_cell_html(tag: str, text: str, align: str) -> str:
+    style = _AI_MD_TH_STYLE if tag == "th" else _AI_MD_TD_STYLE
+    al = align if align in ("left", "right", "center") else "left"
+    return (
+        f'<{tag} align="{al}" style="{style}">'
+        f"{_md_inline_to_html_escaped(text)}</{tag}>"
+    )
+
+
+def _md_table_html(header: List[str], aligns: List[str],
+                   rows: List[List[str]]) -> str:
+    ncols = max(1, len(header))
+
+    def _pad(cells: List[str]) -> List[str]:
+        padded = list(cells[:ncols])
+        while len(padded) < ncols:
+            padded.append("")
+        return padded
+
+    header = _pad(header)
+    thead = "<tr>" + "".join(
+        _md_table_cell_html("th", header[i], aligns[i] if i < len(aligns) else "left")
+        for i in range(ncols)
+    ) + "</tr>"
+    body: List[str] = []
+    for row in rows:
+        cells = _pad(row)
+        body.append(
+            "<tr>" + "".join(
+                _md_table_cell_html(
+                    "td", cells[i], aligns[i] if i < len(aligns) else "left")
+                for i in range(ncols)
+            ) + "</tr>"
+        )
+    return (
+        f"{_AI_MD_TABLE_OPEN}<thead>{thead}</thead>"
+        f"<tbody>{''.join(body)}</tbody></table>"
+    )
+
+
+class _SafeAiTableHtmlParser(HTMLParser):
+    """Keep table markup only; drop scripts and event-handler attributes."""
+
+    _KEEP = frozenset({
+        "table", "thead", "tbody", "tfoot", "tr", "th", "td", "caption", "br",
+    })
+    _SKIP_INNER = frozenset({
+        "script", "style", "iframe", "object", "embed", "link", "meta", "svg",
+    })
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: List[str] = []
+        self._skip = 0
+        self.saw_table = False
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        tag = (tag or "").lower()
+        if tag in self._SKIP_INNER:
+            self._skip += 1
+            return
+        if self._skip or tag not in self._KEEP:
+            return
+        if tag == "table":
+            self.saw_table = True
+            self.parts.append(_AI_MD_TABLE_OPEN)
+            return
+        if tag == "br":
+            self.parts.append("<br>")
+            return
+        extra: List[str] = []
+        align = ""
+        for key, val in attrs or ():
+            key = (key or "").lower()
+            val = val or ""
+            if key == "align" and val.lower() in ("left", "right", "center"):
+                align = val.lower()
+            elif key in ("colspan", "rowspan") and str(val).isdigit():
+                n = int(val)
+                if 1 <= n <= 32:
+                    extra.append(f'{key}="{n}"')
+        if tag in ("th", "td"):
+            if align:
+                extra.append(f'align="{align}"')
+            style = _AI_MD_TH_STYLE if tag == "th" else _AI_MD_TD_STYLE
+            extra.append(f'style="{style}"')
+        attr = (" " + " ".join(extra)) if extra else ""
+        self.parts.append(f"<{tag}{attr}>")
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = (tag or "").lower()
+        if tag in self._SKIP_INNER:
+            self._skip = max(0, self._skip - 1)
+            return
+        if self._skip or tag not in self._KEEP or tag == "br":
+            return
+        self.parts.append(f"</{tag}>")
+
+    def handle_startendtag(self, tag: str, attrs) -> None:
+        if (tag or "").lower() == "br" and not self._skip:
+            self.parts.append("<br>")
+            return
+        self.handle_starttag(tag, attrs)
+        self.handle_endtag(tag)
+
+    def handle_data(self, data: str) -> None:
+        if self._skip or not data:
+            return
+        self.parts.append(_md_inline_to_html_escaped(data))
+
+
+def _sanitize_html_table_block(block: str) -> str:
+    parser = _SafeAiTableHtmlParser()
+    try:
+        parser.feed(block or "")
+        parser.close()
+    except Exception:
+        return ""
+    html_out = "".join(parser.parts).strip()
+    if not parser.saw_table or "<table" not in html_out.lower():
+        return ""
+    return html_out
+
+
 def markdown_to_safe_html(text: str, *, as_img: bool = True) -> str:
     """Convert a subset of Markdown to safe HTML (AI reply preview).
 
@@ -19447,6 +19965,48 @@ def markdown_to_safe_html(text: str, *, as_img: bool = True) -> str:
             out.append(f"<{tag}{start_attr}>{''.join(items)}</{tag}>")
             continue
 
+        if _HTML_TABLE_START_RE.match(stripped):
+            _flush_para(para)
+            buf = [stripped]
+            found_end = bool(_HTML_TABLE_END_RE.search(stripped))
+            i += 1
+            while i < n and not found_end:
+                buf.append(lines[i])
+                if _HTML_TABLE_END_RE.search(lines[i]):
+                    found_end = True
+                i += 1
+            block = "\n".join(buf)
+            safe = _sanitize_html_table_block(block)
+            if safe:
+                out.append(safe)
+            else:
+                out.append(f"<p>{_md_inline_to_html_escaped(block)}</p>")
+            continue
+
+        if (
+            "|" in stripped
+            and i + 1 < n
+            and _is_md_table_separator(lines[i + 1].strip())
+        ):
+            _flush_para(para)
+            header_cells = _split_md_table_row(stripped)
+            aligns = _md_table_aligns(lines[i + 1].strip(), max(1, len(header_cells)))
+            i += 2
+            body_rows: List[List[str]] = []
+            while i < n:
+                s = lines[i].strip()
+                if not s or "|" not in s or s.startswith("```"):
+                    break
+                if re.match(r"^#{1,4}\s+", s) or _HTML_TABLE_START_RE.match(s):
+                    break
+                if _is_md_table_separator(s):
+                    i += 1
+                    continue
+                body_rows.append(_split_md_table_row(s))
+                i += 1
+            out.append(_md_table_html(header_cells, aligns, body_rows))
+            continue
+
         para.append(stripped)
         i += 1
 
@@ -19485,6 +20045,7 @@ _AI_LOG_STYLE = (
     "color:#a8b4c4;}"
     "hr{border:none;border-top:1px solid #3a4658;margin:8px 0;}"
     "a{color:#5b9bd5;}"
+    "table.ai-md-table{margin:8px 0;}"
     ".ai-role{font-size:11px;font-weight:600;letter-spacing:0.06em;"
     "text-transform:uppercase;}"
     ".ai-role-user{color:#6ea8e0;}"
@@ -21068,6 +21629,16 @@ def create_ai_assistant_panel(
             """Run the Migration thrash template (inspector → Query with AI)."""
             self.query_template("migrations")
 
+        def query_trace_compare(self, idx_a: int, idx_b: int) -> None:
+            """Run the Trace Compare template for two already-chosen tabs."""
+            prompt = next(
+                (p for tid, _lab, p in AI_TEMPLATE_QUESTIONS
+                 if tid == AI_COMPARE_TEMPLATE_ID),
+                "",
+            )
+            if prompt:
+                self._run_compare_template(prompt, idx_a=idx_a, idx_b=idx_b)
+
         def _use_template(self, template_id: str, prompt: str) -> None:
             if self._busy:
                 return
@@ -21077,13 +21648,23 @@ def create_ai_assistant_panel(
             self._input.setPlainText(prompt)
             self.send_current()
 
-        def _run_compare_template(self, prompt: str) -> None:
+        def _run_compare_template(
+            self,
+            prompt: str,
+            idx_a: Optional[int] = None,
+            idx_b: Optional[int] = None,
+        ) -> None:
             tabs = self._loaded_tabs()
             if len(tabs) < 2:
                 self._status.setText("Open at least two BTF tabs to compare.")
                 self.refresh_template_availability()
                 return
-            if len(tabs) == 2:
+            if idx_a is not None and idx_b is not None:
+                idx_a, idx_b = int(idx_a), int(idx_b)
+                if idx_a == idx_b:
+                    self._status.setText("Choose two different traces.")
+                    return
+            elif len(tabs) == 2:
                 idx_a = int(tabs[0]["index"])
                 idx_b = int(tabs[1]["index"])
             else:
@@ -23889,8 +24470,18 @@ class _StatsSectionGrip(QWidget):
 class _TraceCompareDialog(QDialog):
     """Compare summary and Statistics-aligned metrics between two tabs."""
 
-    def __init__(self, win: "MainWindow", parent=None) -> None:
-        super().__init__(parent or win)
+    def __init__(
+        self,
+        win: "MainWindow",
+        parent=None,
+        idx_a: Optional[int] = None,
+        idx_b: Optional[int] = None,
+        ai_enabled: bool = True,
+        on_query_ai: Optional[Callable] = None,
+    ) -> None:
+        parent_w = parent if parent is not None else (
+            win if isinstance(win, QWidget) else None)
+        super().__init__(parent_w)
         self.setWindowTitle("Trace Compare")
         self.setModal(True)
         self.resize(980, 560)
@@ -23982,6 +24573,12 @@ class _TraceCompareDialog(QDialog):
         lay.addLayout(exp_row)
 
         btns = QDialogButtonBox(QDialogButtonBox.Close)
+        self._ai_enabled = bool(ai_enabled)
+        self._on_query_ai = on_query_ai
+        self._ai_btn = btns.addButton(
+            "Query with AI…", QDialogButtonBox.ButtonRole.ActionRole)
+        self._ai_btn.clicked.connect(self._query_with_ai)
+        self.set_ai_enabled(self._ai_enabled)
         btns.rejected.connect(self.reject)
         btns.accepted.connect(self.accept)
         lay.addWidget(btns)
@@ -23991,11 +24588,35 @@ class _TraceCompareDialog(QDialog):
             self._combo_a.addItem(label, i)
             self._combo_b.addItem(label, i)
         if win._tabs:
-            self._combo_b.setCurrentIndex(min(1, len(win._tabs) - 1))
+            ia = 0 if idx_a is None else max(0, min(int(idx_a), len(win._tabs) - 1))
+            ib = min(1, len(win._tabs) - 1) if idx_b is None else max(
+                0, min(int(idx_b), len(win._tabs) - 1))
+            self._combo_a.setCurrentIndex(ia)
+            self._combo_b.setCurrentIndex(ib)
         self._combo_a.currentIndexChanged.connect(self._refresh)
         self._combo_b.currentIndexChanged.connect(self._refresh)
         self._scope_cb.toggled.connect(self._refresh)
         self._refresh()
+
+    def set_ai_enabled(self, enabled: bool) -> None:
+        self._ai_enabled = bool(enabled)
+        if getattr(self, "_ai_btn", None) is None:
+            return
+        self._ai_btn.setToolTip(
+            "Open the AI Assistant and walk through these Trace Compare tables"
+            if self._ai_enabled else
+            "Enable AI Assistant in Settings → AI")
+
+    def _selected_tab_indices(self) -> Tuple[Optional[int], Optional[int]]:
+        return self._combo_a.currentData(), self._combo_b.currentData()
+
+    def _query_with_ai(self) -> None:
+        idx_a, idx_b = self._selected_tab_indices()
+        enabled = self._ai_enabled
+        cb = self._on_query_ai
+        self.done(int(QDialog.DialogCode.Accepted))
+        if cb is not None:
+            cb(enabled, idx_a, idx_b)
 
     def _range_for_trace(self, combo: QComboBox) -> Tuple[Optional[int], Optional[int]]:
         if not self._scope_cb.isChecked():
@@ -39853,7 +40474,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             last_file = paths[-1]
         else:
             last_file = ""
-        last_dir = os.path.dirname(last_file) if last_file else self._settings.get(
+        archive = _split_zip_member_path(last_file)[0] if last_file else ""
+        last_dir = os.path.dirname(archive) if archive else self._settings.get(
             "files", "last_dir", os.path.expanduser("~"))
         self._settings.set_many("files", {
             "open_tabs_json": json.dumps(paths, ensure_ascii=True),
@@ -39876,19 +40498,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             paths = []
         if not paths:
             last = self._settings.get("files", "last_file", "")
-            if last and not os.path.isabs(last):
+            if last and not os.path.isabs(_split_zip_member_path(last)[0]):
                 base_dir = os.path.dirname(os.path.abspath(__file__))
-                last = os.path.abspath(os.path.join(base_dir, last))
+                last = _normalize_open_path(os.path.join(base_dir, last))
             if last:
                 paths = [last]
-        seen: set = set()
-        unique: List[str] = []
-        for p in paths:
-            norm = os.path.abspath(os.path.expanduser(p))
-            if norm in seen or not os.path.isfile(norm):
-                continue
-            seen.add(norm)
-            unique.append(norm)
+        unique = _filter_existing_open_paths(paths)
         if not unique:
             return
         saved_active = self._settings.get_int("files", "active_tab_index", 0)
@@ -40128,7 +40743,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         has_trace = self._trace is not None
         for act in (
             self._act_save_img, self._act_save_svg, self._act_copy_img,
-            self._act_export_perfetto,
+            self._act_export_perfetto, self._act_export_slice,
         ):
             act.setEnabled(has_trace)
         if hasattr(self, "_act_close_tab"):
@@ -41842,6 +42457,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._act_export_perfetto = fm.addAction(
             "Export &Perfetto…", self._on_export_perfetto, "Ctrl+Shift+E")
         self._act_export_perfetto.setEnabled(False)
+        self._act_export_slice = fm.addAction(
+            "Save se&lection as BTF…", self._on_export_btf_slice)
+        self._act_export_slice.setToolTip(
+            "Export raw BTF events between the earliest and latest cursor (C1–Cn).")
+        self._act_export_slice.setEnabled(False)
         self._act_close_tab = fm.addAction("Close &Tab", self._on_close_tab_action, QKeySequence.Close)
         self._act_close_tab.setEnabled(False)
         self._act_close_all_tabs = fm.addAction("Close &All Tabs", self._on_close_all_tabs_action)
@@ -42924,7 +43544,146 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 hi=hi,
                 findings_text=findings,
             )
+        if name == AI_TOOL_CLEAR_MARKS:
+            return self._ai_clear_marks(str(args.get("what") or "all"))
+        if name == AI_TOOL_RESET_VIEW:
+            self._view.zoom_fit()
+            self._ai_highlight_task("")
+            return "Reset view to full trace"
+        if name == AI_TOOL_SEARCH_TIMELINE:
+            return search_timeline_hits(
+                self._trace,
+                str(args.get("query") or ""),
+                str(args.get("mode") or "contains"),
+                annotations=list(self._annotations or []),
+            )
+        if name == AI_TOOL_TRIGGER_COMPARE:
+            return self._ai_trigger_compare(
+                str(args.get("tab_a") or ""),
+                str(args.get("tab_b") or ""),
+            )
         raise RuntimeError(f"unknown tool {name}")
+
+    def _ai_clear_marks(self, what: str) -> str:
+        what = (what or "all").strip().lower()
+        cleared: List[str] = []
+        if what in ("cursors", "all", "everything"):
+            self._view._scene.clear_cursors()
+            self._view.cursors_changed.emit(self._view._scene.cursor_times())
+            if hasattr(self, "_stats_panel"):
+                self._stats_panel.set_cursor_times(
+                    self._view._scene.cursor_times(), refresh_stats=True)
+            cleared.append("cursors")
+        if what in ("annotations", "all", "everything"):
+            self._annotations.clear()
+            self._rebuild_annotation_list()
+            cleared.append("annotations")
+        if what in ("bookmarks", "everything"):
+            self._bookmarks.clear()
+            self._rebuild_bookmark_list()
+            cleared.append("bookmarks")
+        self._save_current_trace_state()
+        return "Cleared " + (", ".join(cleared) if cleared else what)
+
+    def _ai_resolve_tab_ref(self, ref: str, default: int) -> int:
+        loaded = self._ai_list_loaded_tabs()
+        if len(loaded) < 2:
+            raise RuntimeError("Open at least two trace tabs to compare")
+        token = str(ref or "").strip()
+        if not token:
+            if 0 <= default < len(self._tabs) and getattr(self._tabs[default], "trace", None):
+                return default
+            return loaded[min(default, len(loaded) - 1)]["index"]
+        try:
+            idx = int(token)
+            if 0 <= idx < len(self._tabs) and getattr(self._tabs[idx], "trace", None):
+                return idx
+        except ValueError:
+            pass
+        want = token.lower()
+        for tab in loaded:
+            name = str(tab.get("name") or "").lower()
+            if want == name or want in name:
+                return int(tab["index"])
+        raise RuntimeError(f"No loaded tab matching {token!r}")
+
+    def _ai_show_trace_compare(self, idx_a: int, idx_b: int) -> None:
+        old = getattr(self, "_ai_compare_dlg", None)
+        if old is not None:
+            try:
+                old.close()
+            except Exception:
+                pass
+        dlg = _TraceCompareDialog(
+            self, parent=self, idx_a=idx_a, idx_b=idx_b,
+            ai_enabled=self._ai_feature_enabled(),
+            on_query_ai=self._query_compare_with_ai,
+        )
+        dlg.setModal(False)
+        self._ai_compare_dlg = dlg
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+
+    def _ai_trigger_compare(self, tab_a: str, tab_b: str) -> dict:
+        idx_a = self._ai_resolve_tab_ref(tab_a, 0)
+        idx_b = self._ai_resolve_tab_ref(tab_b, 1)
+        if idx_a == idx_b:
+            raise RuntimeError("tab_a and tab_b must name different traces")
+        ctx = self._ai_build_compare_context(idx_a, idx_b)
+        try:
+            self._ai_show_trace_compare(idx_a, idx_b)
+        except Exception:
+            pass
+        return tool_result_payload(
+            True,
+            str(ctx.get("scope") or "Trace Compare"),
+            data={"csv": str(ctx.get("findings_text") or "")},
+        )
+
+    def _on_export_btf_slice(self) -> None:
+        if self._trace is None:
+            return
+        times = sorted(int(t) for t in self._view._scene.cursor_times())
+        if len(times) < 2:
+            QMessageBox.information(
+                self, "Save selection as BTF",
+                "Place at least two cursors (C1–Cn) to export that time range.")
+            return
+        lo, hi = times[0], times[-1]
+        if lo >= hi:
+            QMessageBox.information(
+                self, "Save selection as BTF",
+                "Earliest and latest cursors must differ.")
+            return
+        default_name = "selection.btf"
+        src = str(getattr(self._active_tab, "path", "") or self._current_file or "")
+        if src:
+            base = os.path.basename(src.split("#", 1)[0])
+            stem = base.split(".btf", 1)[0] or "selection"
+            default_name = f"{stem}_{lo}-{hi}.btf"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save selection as BTF", default_name,
+            "BTF files (*.btf *.btf.gz);;All files (*)",
+        )
+        if not path:
+            return
+        try:
+            text, kept = "", 0
+            if src:
+                try:
+                    text, kept = filter_btf_file_to_range(src, lo, hi)
+                except Exception:
+                    text, kept = "", 0
+            if not str(text).strip():
+                text, kept = reconstruct_btf_slice(self._trace, lo, hi)
+            write_btf_text(text, path)
+        except Exception as exc:
+            QMessageBox.critical(
+                self, "Export Error", f"Could not save BTF slice:\n{exc}")
+            return
+        self.statusBar().showMessage(
+            f"Saved {kept} event(s) {lo}–{hi} → {os.path.basename(path)}", 4000)
 
     def _ai_undo_tools(self) -> None:
         self._ai_stop_zoom_anim()
@@ -43120,6 +43879,27 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         panel = getattr(self, "_ai_panel", None)
         if panel is not None and hasattr(panel, "query_migration_thrash"):
             QTimer.singleShot(0, panel.query_migration_thrash)
+
+    def _query_compare_with_ai(
+        self,
+        ai_enabled: bool = True,
+        idx_a: Optional[int] = None,
+        idx_b: Optional[int] = None,
+    ) -> None:
+        """Trace Compare → Query with AI… uses the dialog's Trace A / B."""
+        if not ai_enabled:
+            self._open_settings("AI")
+            return
+        if idx_a is None or idx_b is None or int(idx_a) == int(idx_b):
+            QMessageBox.information(
+                self, "Trace Compare",
+                "Choose two different traces to compare.")
+            return
+        self._focus_ai_panel()
+        panel = getattr(self, "_ai_panel", None)
+        if panel is not None and hasattr(panel, "query_trace_compare"):
+            a, b = int(idx_a), int(idx_b)
+            QTimer.singleShot(0, lambda: panel.query_trace_compare(a, b))
 
     def _open_migration_heatmap(self) -> None:
         self._open_corridor_inspector("heatmap")
@@ -45007,7 +45787,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 self, "Trace Compare",
                 "Open at least two trace tabs to compare traces.")
             return
-        _exec_centred(_TraceCompareDialog(self, parent=self), self)
+        _exec_centred(_TraceCompareDialog(
+            self, parent=self,
+            ai_enabled=self._ai_feature_enabled(),
+            on_query_ai=self._query_compare_with_ai,
+        ), self)
 
     def _scroll_view_to_task(self, task: str) -> None:
         """Scroll the orthogonal axis to bring *task*'s row/column fully into view.
@@ -45811,7 +46595,7 @@ _HEADLESS_QPA_PLATFORMS = ("offscreen", "minimal", "vnc")
 # Subcommands that render without a window server. Kept in sync with
 # cli._CLI_COMMANDS by tests.
 _HEADLESS_CLI_COMMANDS = frozenset({
-    "report", "compare", "info", "migrations", "snapshot", "perfetto",
+    "report", "compare", "info", "migrations", "snapshot", "perfetto", "slice",
 })
 
 def _headless_cli_invocation(argv: list[str] | None = None) -> bool:
@@ -46032,6 +46816,8 @@ Headless analysis commands (desktop only — no GUI, no Qt window):
                statistics metric plot) without opening the GUI.
   perfetto     Export Chrome Trace JSON for https://ui.perfetto.dev
                (same as File → Export Perfetto…).
+  slice        Export a timestamp range as a smaller .btf
+               (same as File → Save selection as BTF…).
 
 Time range (--lo / --hi):
   Values are raw trace timestamps in the file's time units (see # timeScale
@@ -46061,6 +46847,7 @@ CLI examples:
   %(prog)s snapshot tracedata/example-4cores.btf -o /tmp/timeline.png --view timeline
   %(prog)s snapshot tracedata/example-4cores.btf -o /tmp/task.png --view plot --metric exec --task "Producer[1]"
   %(prog)s perfetto tracedata/example-4cores.btf -o /tmp/example.json
+  %(prog)s slice tracedata/example-4cores.btf -o /tmp/window.btf --lo 100000 --hi 500000
 
 Run "%(prog)s <command> -h" for command-specific help.
 """
@@ -46149,6 +46936,21 @@ examples:
   %(prog)s trace.btf -o trace.json
   %(prog)s tracedata/example-4cores.btf -o /tmp/example.json
   %(prog)s trace.btf -o scoped.json --lo 100000 --hi 500000
+"""
+
+_CLI_EPILOG_SLICE = """\
+Keep # meta lines, C (set_frequency) rows, and events whose timestamp is
+inside [--lo, --hi] (inclusive, native trace units). Matches File → Save
+selection as BTF… (earliest–latest cursor).
+
+When the source file cannot be re-read, a reconstructed slice is written
+from in-memory segments (resume/preempt + STI). Mid-segment events that
+never appeared as BTF lines in-range are omitted.
+
+examples:
+  %(prog)s trace.btf -o window.btf --lo 100000 --hi 500000
+  %(prog)s tracedata/example-4cores.btf.gz -o /tmp/slice.btf --lo 200000 --hi 400000
+  %(prog)s window.btf.gz -o window.btf.gz --lo 0 --hi 1000000
 """
 
 _CLI_LO_HELP = (
@@ -46528,6 +47330,33 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
     perfetto.add_argument("--lo", type=int, default=None, metavar="T", help=_CLI_LO_HELP)
     perfetto.add_argument("--hi", type=int, default=None, metavar="T", help=_CLI_HI_HELP)
 
+    slice_p = sub.add_parser(
+        "slice",
+        help="export a timestamp range as a smaller .btf (File → Save selection as BTF…)",
+        description=(
+            "Export only the BTF events whose timestamps fall inside --lo / --hi.\n\n"
+            "Matches File → Save selection as BTF… (cursor range C1–Cn)."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=_CLI_EPILOG_SLICE,
+    )
+    slice_p.add_argument(
+        "trace", metavar="trace.btf",
+        help="path to the .btf trace file to slice",
+    )
+    slice_p.add_argument(
+        "-o", "--output", required=True, metavar="PATH",
+        help="output .btf or .btf.gz path",
+    )
+    slice_p.add_argument(
+        "--lo", type=int, required=True, metavar="T",
+        help="range start (trace time units, inclusive)",
+    )
+    slice_p.add_argument(
+        "--hi", type=int, required=True, metavar="T",
+        help="range end (trace time units, inclusive; must be greater than --lo)",
+    )
+
     return parser, {
         "report": report,
         "compare": compare,
@@ -46535,6 +47364,7 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
         "migrations": migrations,
         "snapshot": snapshot,
         "perfetto": perfetto,
+        "slice": slice_p,
     }
 
 def _cli_export_output_paths(output: str, fmt: Optional[str]) -> Tuple[str, str, str]:
@@ -47359,6 +48189,36 @@ def _cli_perfetto_main(argv: List[str]) -> int:
     args = _make_arg_parser()[1]["perfetto"].parse_args(argv)
     return _cli_perfetto_run(args)
 
+def _cli_slice_run(args: argparse.Namespace) -> int:
+    path = os.path.abspath(args.trace)
+    load_path = _normalize_open_path(path)
+    zip_path, _member = _split_zip_member_path(load_path)
+    if not os.path.isfile(zip_path):
+        print(f"error: trace file not found: {zip_path}", file=sys.stderr)
+        return 1
+    if args.hi <= args.lo:
+        print("error: --hi must be greater than --lo", file=sys.stderr)
+        return 1
+    out = os.path.abspath(args.output)
+    try:
+        text, _kept = filter_btf_file_to_range(load_path, int(args.lo), int(args.hi))
+        if not str(text).strip():
+            trace, err_load = _cli_load_trace(path)
+            if err_load:
+                print(err_load, file=sys.stderr)
+                return 1
+            text, _kept = reconstruct_btf_slice(trace, int(args.lo), int(args.hi))
+        write_btf_text(text, out)
+    except (OSError, TypeError, ValueError, AttributeError, RuntimeError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(out)
+    return 0
+
+def _cli_slice_main(argv: List[str]) -> int:
+    args = _make_arg_parser()[1]["slice"].parse_args(argv)
+    return _cli_slice_run(args)
+
 _CLI_COMMANDS = {
     "report": _cli_report_main,
     "compare": _cli_compare_main,
@@ -47366,6 +48226,7 @@ _CLI_COMMANDS = {
     "migrations": _cli_migrations_main,
     "snapshot": _cli_snapshot_main,
     "perfetto": _cli_perfetto_main,
+    "slice": _cli_slice_main,
 }
 
 def _cli_gui_trace_paths(argv: List[str],

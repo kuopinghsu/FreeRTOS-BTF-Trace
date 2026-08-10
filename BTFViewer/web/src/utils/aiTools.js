@@ -3,6 +3,7 @@
  * Keep in sync with btf_viewer_pkg/ai_tools.py.
  */
 import { taskMergeKey } from './colors.js'
+import { computeFindHits } from './findAnalysis.js'
 
 export const AI_TOOL_SET_CURSORS = 'set_cursors'
 export const AI_TOOL_ZOOM_TO_RANGE = 'zoom_to_range'
@@ -12,6 +13,10 @@ export const AI_TOOL_OPEN_CORRIDOR = 'open_corridor_inspector'
 export const AI_TOOL_ADD_ANNOTATION = 'add_annotation'
 export const AI_TOOL_QUERY_RAW_METRIC = 'query_raw_metric'
 export const AI_TOOL_EXPORT_REPORT = 'export_report'
+export const AI_TOOL_CLEAR_MARKS = 'clear_marks'
+export const AI_TOOL_RESET_VIEW = 'reset_view'
+export const AI_TOOL_SEARCH_TIMELINE = 'search_timeline'
+export const AI_TOOL_TRIGGER_COMPARE = 'trigger_compare'
 
 export const AI_VIEWER_TOOL_NAMES = [
   AI_TOOL_SET_CURSORS,
@@ -22,6 +27,18 @@ export const AI_VIEWER_TOOL_NAMES = [
   AI_TOOL_ADD_ANNOTATION,
   AI_TOOL_QUERY_RAW_METRIC,
   AI_TOOL_EXPORT_REPORT,
+  AI_TOOL_CLEAR_MARKS,
+  AI_TOOL_RESET_VIEW,
+  AI_TOOL_SEARCH_TIMELINE,
+  AI_TOOL_TRIGGER_COMPARE,
+]
+
+export const AI_FIND_MODES = [
+  'contains', 'exact', 'regex', 'sti', 'tags', 'intervals',
+  'lifecycle', 'pointers', 'migrations',
+]
+export const AI_CLEAR_MARKS_TARGETS = [
+  'annotations', 'cursors', 'bookmarks', 'all', 'everything',
 ]
 
 export const AI_RAW_METRIC_PRIORITY = 'priority_inheritance'
@@ -66,6 +83,7 @@ const RAW_METRIC_ALIASES = {
   analysis: AI_RAW_METRIC_FINDINGS,
 }
 const MAX_RAW_METRIC_ROWS = 40
+export const MAX_SEARCH_HITS = 40
 const MAX_ANNOTATION_NOTE = 240
 
 /** QTextBrowser truncates scheme:digits; use a path. */
@@ -108,11 +126,16 @@ export const AI_TOOL_SYSTEM_ADDENDUM =
   + 'matching viewer tool (native function call) in addition to your markdown '
   + 'answer. Valid tools: set_cursors, zoom_to_range, highlight_task, '
   + 'set_view_mode, open_corridor_inspector, add_annotation, query_raw_metric, '
-  + 'export_report. Use query_raw_metric when you need the exact per-task '
+  + 'export_report, clear_marks, reset_view, search_timeline, trigger_compare. '
+  + 'Use query_raw_metric when you need the exact per-task '
   + 'series (priority-inheritance episodes, execution slices, migrations, '
   + 'blocking gaps, sync STI, or findings lines) instead of the summarised '
-  + 'findings card. Use add_annotation to pin a note on a spike. Use '
-  + 'export_report to save findings, diagrams, and GUI state as HTML or CSV. '
+  + 'findings card. Use search_timeline to locate STI, tags, task names, or '
+  + 'pointers and get timestamps. Use clear_marks / reset_view to tidy the '
+  + 'timeline before highlighting a new issue. Use trigger_compare when two '
+  + 'tabs are open to pull Trace Compare diffs. Use add_annotation to pin a '
+  + 'note on a spike. Use export_report to save findings, diagrams, and GUI '
+  + 'state as HTML or CSV. '
   + 'Tool timestamps use the same numeric trace time '
   + 'unit as jump:TIME. After tools run, summarise what you changed. '
   + 'If you cannot emit a native function call, emit one fenced btftool JSON '
@@ -326,6 +349,87 @@ export function aiViewerTools() {
               type: 'string',
               enum: ['html', 'csv'],
               description: 'html (default) or csv.',
+            },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_CLEAR_MARKS,
+        description:
+          'Clear timeline clutter before focusing a new issue. '
+          + 'all = annotations + cursors (default). everything also '
+          + 'clears bookmarks.',
+        parameters: {
+          type: 'object',
+          properties: {
+            what: {
+              type: 'string',
+              enum: [...AI_CLEAR_MARKS_TARGETS],
+              description:
+                'annotations, cursors, bookmarks, all '
+                + '(annotations+cursors), or everything.',
+            },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_RESET_VIEW,
+        description:
+          'Fit the timeline to the full trace span and clear the '
+          + 'task highlight. Does not remove cursors or annotations.',
+        parameters: { type: 'object', properties: {} },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_SEARCH_TIMELINE,
+        description:
+          'Search the trace like Find (Ctrl+F). Returns matching '
+          + 'timestamps for task names, STI/tag notes, intervals, '
+          + 'lifecycle events, sync pointers, or migrations.',
+        parameters: {
+          type: 'object',
+          properties: {
+            query: {
+              type: 'string',
+              description: 'Text, tag value, pointer, or task name.',
+            },
+            mode: {
+              type: 'string',
+              enum: [...AI_FIND_MODES],
+              description:
+                'contains (default), exact, regex, sti, tags, '
+                + 'intervals, lifecycle, pointers, migrations.',
+            },
+          },
+          required: ['query'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_TRIGGER_COMPARE,
+        description:
+          'Compare two loaded trace tabs (Trace Compare). Returns '
+          + 'diff tables as CSV. Optional tab names or 0-based indices.',
+        parameters: {
+          type: 'object',
+          properties: {
+            tab_a: {
+              type: 'string',
+              description: 'First tab name or 0-based tab index (default 0).',
+            },
+            tab_b: {
+              type: 'string',
+              description: 'Second tab name or 0-based tab index (default 1).',
             },
           },
         },
@@ -780,6 +884,41 @@ export function validateToolCall(name, args) {
     else return { args: null, error: 'format must be "html" or "csv"' }
     return { args: { format: fmt }, error: '' }
   }
+  if (name === AI_TOOL_CLEAR_MARKS) {
+    let what = String(a.what || 'all').trim().toLowerCase()
+    const aliases = {
+      annotation: 'annotations', cursor: 'cursors', bookmark: 'bookmarks',
+      marks: 'all', both: 'all',
+    }
+    what = aliases[what] || what
+    if (!AI_CLEAR_MARKS_TARGETS.includes(what)) {
+      return {
+        args: null,
+        error: `what must be one of: ${AI_CLEAR_MARKS_TARGETS.join(', ')}`,
+      }
+    }
+    return { args: { what }, error: '' }
+  }
+  if (name === AI_TOOL_RESET_VIEW) return { args: {}, error: '' }
+  if (name === AI_TOOL_SEARCH_TIMELINE) {
+    const query = String(a.query || '').trim()
+    if (!query) return { args: null, error: 'query must be a non-empty string' }
+    let mode = String(a.mode || 'contains').trim().toLowerCase()
+    if (mode === 'tag') mode = 'tags'
+    if (!AI_FIND_MODES.includes(mode)) {
+      return { args: null, error: `mode must be one of: ${AI_FIND_MODES.join(', ')}` }
+    }
+    return { args: { query, mode }, error: '' }
+  }
+  if (name === AI_TOOL_TRIGGER_COMPARE) {
+    return {
+      args: {
+        tab_a: String(a.tab_a ?? '').trim(),
+        tab_b: String(a.tab_b ?? '').trim(),
+      },
+      error: '',
+    }
+  }
   return { args: null, error: `unknown tool ${JSON.stringify(name)}` }
 }
 
@@ -834,6 +973,21 @@ export function summariseToolCall(name, args) {
   if (name === AI_TOOL_EXPORT_REPORT) {
     const fmt = String(a.format || 'html').trim().toLowerCase() || 'html'
     return `Export ${fmt} report`
+  }
+  if (name === AI_TOOL_CLEAR_MARKS) {
+    return `Clear marks (${String(a.what || 'all').trim() || 'all'})`
+  }
+  if (name === AI_TOOL_RESET_VIEW) return 'Reset view'
+  if (name === AI_TOOL_SEARCH_TIMELINE) {
+    const q = String(a.query || '').trim()
+    const mode = String(a.mode || 'contains').trim() || 'contains'
+    const shown = q.length <= 40 ? q : `${q.slice(0, 37)}…`
+    return `Search timeline [${mode}] ${JSON.stringify(shown)}`
+  }
+  if (name === AI_TOOL_TRIGGER_COMPARE) {
+    const aTab = String(a.tab_a || '0').trim() || '0'
+    const bTab = String(a.tab_b || '1').trim() || '1'
+    return `Compare tabs ${aTab} vs ${bTab}`
   }
   return String(name || '').replace(/_/g, ' ')
 }
@@ -968,7 +1122,11 @@ export function normalizeRawMetric(name) {
 }
 
 export function isQueryTool(name) {
-  return String(name || '') === AI_TOOL_QUERY_RAW_METRIC
+  return [
+    AI_TOOL_QUERY_RAW_METRIC,
+    AI_TOOL_SEARCH_TIMELINE,
+    AI_TOOL_TRIGGER_COMPARE,
+  ].includes(String(name || ''))
 }
 
 export function isExportTool(name) {
@@ -983,6 +1141,8 @@ export function toolMutatesGui(name) {
     AI_TOOL_SET_VIEW_MODE,
     AI_TOOL_OPEN_CORRIDOR,
     AI_TOOL_ADD_ANNOTATION,
+    AI_TOOL_CLEAR_MARKS,
+    AI_TOOL_RESET_VIEW,
   ].includes(String(name || ''))
 }
 
@@ -1150,6 +1310,27 @@ function lookupAliases(task) {
     if (low && !out.includes(low)) out.push(low)
   }
   return out
+}
+
+export function searchTimelineHits(trace, query, mode = 'contains', annotations = []) {
+  const q = String(query || '').trim()
+  if (!q) return { ok: false, message: 'query must be a non-empty string' }
+  if (!trace) return { ok: false, message: 'No trace loaded' }
+  let findMode = String(mode || 'contains').toLowerCase()
+  if (findMode === 'tags' || findMode === 'tag' || findMode === 'sti') findMode = 'sti'
+  const { hits, error } = computeFindHits(trace, q, findMode, annotations || [])
+  if (error) return { ok: false, message: error }
+  const times = [...(hits || [])]
+  return {
+    ok: true,
+    message: `${times.length} match(es) for ${JSON.stringify(q)} (${findMode})`,
+    data: {
+      times: times.slice(0, MAX_SEARCH_HITS),
+      count: times.length,
+      mode: findMode,
+      truncated: times.length > MAX_SEARCH_HITS,
+    },
+  }
 }
 
 export function queryRawMetric(trace, task, metric, {

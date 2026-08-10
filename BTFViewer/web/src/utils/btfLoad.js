@@ -66,17 +66,22 @@ function zipMemberBaseName(member) {
 
 /**
  * Unique tab labels for zip members (bare basename, or full path on collision).
+ * Multi-member archives prefix ``archive.zip::`` so two zips with the same
+ * ``foo.btf`` stay distinct (desktop ``zip::member`` parity).
  * @param {string[]} members
+ * @param {string} [archiveName]
  * @returns {string[]}
  */
-export function zipMemberDisplayNames(members) {
+export function zipMemberDisplayNames(members, archiveName = '') {
+  const archive = zipMemberBaseName(archiveName)
   const bases = members.map(zipMemberBaseName)
   const counts = new Map()
   for (const b of bases) counts.set(b, (counts.get(b) || 0) + 1)
   return members.map((m, i) => {
     const base = bases[i]
-    if ((counts.get(base) || 0) > 1) return String(m).replace(/\\/g, '/')
-    return base
+    const inner = (counts.get(base) || 0) > 1 ? String(m).replace(/\\/g, '/') : base
+    if (archive && members.length > 1) return `${archive}::${inner}`
+    return inner
   })
 }
 
@@ -159,7 +164,7 @@ export function decompressBtfEntries(bytes, name = '') {
     const files = unzipSync(bytes)
     const members = listZipBtfMembers(Object.keys(files))
     if (!members.length) throw new Error(zipNoBtfMessage(Object.keys(files)))
-    const labels = zipMemberDisplayNames(members)
+    const labels = zipMemberDisplayNames(members, name)
     return members.map((member, i) => ({
       name: labels[i],
       text: utf8Decode(files[member]),

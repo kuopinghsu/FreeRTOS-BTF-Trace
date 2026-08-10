@@ -172,7 +172,7 @@
     >
       <div class="ai-mermaid-zoom-dialog">
         <div class="ai-mermaid-zoom-head">
-          <span>Diagram — scroll to pan, pinch to zoom</span>
+          <span>Scroll to zoom. Click a task/core in the figure or a name below.</span>
           <button
             type="button"
             class="ai-link-btn"
@@ -183,8 +183,10 @@
         </div>
         <div
           class="ai-mermaid-zoom-body"
+          :style="{ '--mm-scale': mermaidZoom.scale }"
           v-html="mermaidZoom.html"
           @click="onMsgClick"
+          @wheel.prevent="onMermaidZoomWheel"
         />
         <p
           v-if="mermaidZoom.links"
@@ -645,7 +647,15 @@ function openMermaidZoom(fromEl) {
   if (svgWrap) html = svgWrap.outerHTML
   else if (img) html = `<img src="${img.getAttribute('src') || ''}" alt="mermaid diagram">`
   if (!html) return
-  mermaidZoom.value = { html, links: links ? links.innerHTML : '' }
+  mermaidZoom.value = { html, links: links ? links.innerHTML : '', scale: 1 }
+}
+
+function onMermaidZoomWheel(ev) {
+  const cur = mermaidZoom.value
+  if (!cur) return
+  const factor = (ev.deltaY || 0) < 0 ? 1.15 : 1 / 1.15
+  const scale = Math.max(0.5, Math.min(6, (Number(cur.scale) || 1) * factor))
+  mermaidZoom.value = { ...cur, scale }
 }
 
 function onMsgClick(ev) {
@@ -888,6 +898,26 @@ async function ask(prompt) {
   await send()
 }
 
+async function askCompare(idA, idB) {
+  const prompt = templates.find(t => t.id === AI_COMPARE_TEMPLATE_ID)?.prompt
+  if (!prompt) return
+  if (idA == null || idB == null || idA === idB) {
+    status.value = 'Choose two different traces.'
+    return
+  }
+  try {
+    const ctx = normalizeAiContext(await buildCompareCtx(idA, idB))
+    if (!(ctx.findingsText || '').trim()) {
+      status.value = 'Could not build Trace Compare tables.'
+      return
+    }
+    await send(prompt, ctx)
+  } catch (err) {
+    status.value = err?.message || String(err)
+    error.value = status.value
+  }
+}
+
 async function runCompletion(active) {
   return aiChatCompletion({
     messages: chatMessages,
@@ -1123,7 +1153,7 @@ onBeforeUnmount(() => {
   document.removeEventListener('keydown', onDocKeyDown)
 })
 
-defineExpose({ refreshLoadedTabs, ask, clear, saveConversationAs, scrollLog })
+defineExpose({ refreshLoadedTabs, ask, askCompare, clear, saveConversationAs, scrollLog })
 </script>
 
 <style scoped>
@@ -1421,6 +1451,28 @@ defineExpose({ refreshLoadedTabs, ask, clear, saveConversationAs, scrollLog })
   border-top: 1px solid var(--border, #3a4658);
   margin: 8px 0;
 }
+.ai-msg-body.markdown :deep(table.ai-md-table) {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8px 0;
+  font-size: 12px;
+  overflow-x: auto;
+}
+.ai-msg-body.markdown :deep(table.ai-md-table th),
+.ai-msg-body.markdown :deep(table.ai-md-table td) {
+  border: 1px solid var(--border, #3a4658);
+  padding: 4px 8px;
+  vertical-align: top;
+}
+.ai-msg-body.markdown :deep(table.ai-md-table th) {
+  background: #243044;
+  color: #e8eef6;
+  font-weight: 600;
+}
+.ai-msg-body.markdown :deep(table.ai-md-table td) {
+  background: #1a2230;
+  color: #dbe2ea;
+}
 .ai-msg-body :deep(.ai-jump),
 .ai-msg-body.markdown :deep(a) {
   color: var(--accent, #5b9bd5);
@@ -1503,6 +1555,8 @@ defineExpose({ refreshLoadedTabs, ask, clear, saveConversationAs, scrollLog })
   max-width: none;
   width: min(1000px, 90vw);
   height: auto;
+  transform: scale(var(--mm-scale, 1));
+  transform-origin: top left;
   border-radius: 4px;
 }
 .ai-mermaid-zoom-links {

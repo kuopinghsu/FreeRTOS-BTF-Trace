@@ -165,6 +165,33 @@ class WorkflowAnalysisFindingsTest(unittest.TestCase):
         self.assertTrue(dlg.wants_ai_query)
         self.assertTrue(dlg._ai_needs_settings)
 
+    def test_compare_dialog_query_with_ai_button(self):
+        from types import SimpleNamespace
+
+        from PySide6.QtWidgets import QApplication, QPushButton
+        from btf_viewer_pkg.stats import _TraceCompareDialog
+
+        if QApplication.instance() is None:
+            QApplication([])
+        called = []
+        win = SimpleNamespace(_tabs=[
+            SimpleNamespace(path="/tmp/a.btf", trace=None),
+            SimpleNamespace(path="/tmp/b.btf", trace=None),
+        ])
+        dlg = _TraceCompareDialog(
+            win, ai_enabled=True,
+            on_query_ai=lambda enabled, a, b: called.append((enabled, a, b)),
+        )
+        labels = [b.text().replace("&", "") for b in dlg.findChildren(QPushButton)]
+        self.assertIn("Query with AI…", labels)
+        ai_btn = next(
+            b for b in dlg.findChildren(QPushButton)
+            if "Query with AI" in b.text().replace("&", "")
+        )
+        self.assertIn("Trace Compare", ai_btn.toolTip())
+        ai_btn.click()
+        self.assertEqual(called, [(True, 0, 1)])
+
 
 if __name__ == "__main__":
     unittest.main()

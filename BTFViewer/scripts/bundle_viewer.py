@@ -28,6 +28,7 @@ GENERATED_BANNER = (
 BUNDLE_MODULES: list[str] = [
     "config",
     "parser",
+    "btf_slice",
     "timeline_util",
     "scene",
     "graphics_items",
@@ -93,6 +94,7 @@ import datetime
 import functools
 import hashlib
 import html
+from html.parser import HTMLParser
 import ssl
 import itertools
 import json

@@ -186,6 +186,24 @@
             <path d="M2.5 2A1.5 1.5 0 0 0 1 3.5v9A1.5 1.5 0 0 0 2.5 14h11a1.5 1.5 0 0 0 1.5-1.5v-9A1.5 1.5 0 0 0 13.5 2h-11zm0 1h11a.5.5 0 0 1 .5.5V5H2V3.5a.5.5 0 0 1 .5-.5zM2 6h12v6.5a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5V6zm2 1.5v1h2v-1H4zm3 0v1h2v-1H7zm3 0v1h2v-1h-2zM4 10v1h5v-1H4z" />
           </svg>
         </button>
+        <button
+          v-if="traceInfo"
+          class="tb-btn"
+          :class="{ disabled: !rangeEnabled }"
+          :disabled="!rangeEnabled"
+          title="Save cursor range as BTF (C1–Cn)"
+          @click="rangeEnabled && emit('exportSlice')"
+        >
+          <svg
+            viewBox="0 0 16 16"
+            width="16"
+            height="16"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <path d="M3.5 1A1.5 1.5 0 0 0 2 2.5v3h1v-3a.5.5 0 0 1 .5-.5h3v-1h-3zm6 0v1h3a.5.5 0 0 1 .5.5v3h1v-3A1.5 1.5 0 0 0 12.5 1h-3zM2 10.5v3A1.5 1.5 0 0 0 3.5 15h3v-1h-3a.5.5 0 0 1-.5-.5v-3H2zm11 0v3a.5.5 0 0 1-.5.5h-3v1h3a1.5 1.5 0 0 0 1.5-1.5v-3h-1zM5 5h6v6H5V5z" />
+          </svg>
+        </button>
         <div class="tb-sep" />
       </div>
     </Teleport>
@@ -658,6 +676,7 @@ const emit = defineEmits([
   'update:modelValue', 'trace-reading', 'trace-loaded', 'traces-loaded', 'loadDemo', 'zoom', 'fit',
   'zoom1to1', 'zoomRange', 'showFind',
   'expandAll', 'collapseAll', 'addMark', 'copyScreenshot', 'exportSvg', 'exportPerfetto',
+  'exportSlice',
   'showHelp', 'showAbout', 'showSettings', 'showHeatmap', 'showAnalysis',
   'clearTaskFilter', 'file-error',
 ])

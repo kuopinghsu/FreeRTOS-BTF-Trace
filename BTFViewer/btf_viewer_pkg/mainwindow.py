@@ -22,18 +22,28 @@ from .ai_assistant import (
 )
 from .ai_tools import (
     AI_TOOL_ADD_ANNOTATION,
+    AI_TOOL_CLEAR_MARKS,
     AI_TOOL_HIGHLIGHT_TASK,
     AI_TOOL_OPEN_CORRIDOR,
     AI_TOOL_QUERY_RAW_METRIC,
+    AI_TOOL_RESET_VIEW,
+    AI_TOOL_SEARCH_TIMELINE,
     AI_TOOL_SET_CURSORS,
     AI_TOOL_SET_VIEW_MODE,
+    AI_TOOL_TRIGGER_COMPARE,
     AI_TOOL_ZOOM_TO_RANGE,
     query_raw_metric,
     resolve_core_key,
     resolve_task_key,
+    search_timeline_hits,
     tool_mutates_gui,
     tool_result_payload,
     validate_tool_call,
+)
+from .btf_slice import (
+    filter_btf_file_to_range,
+    reconstruct_btf_slice,
+    write_btf_text,
 )
 from .mvvm import MainViewModel, MvvmSettingsMixin, TraceTabViewModel
 from .mvvm.tab_viewport import apply_viewport, viewport_from_json, viewport_to_json
@@ -2120,7 +2130,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             last_file = paths[-1]
         else:
             last_file = ""
-        last_dir = os.path.dirname(last_file) if last_file else self._settings.get(
+        archive = _split_zip_member_path(last_file)[0] if last_file else ""
+        last_dir = os.path.dirname(archive) if archive else self._settings.get(
             "files", "last_dir", os.path.expanduser("~"))
         self._settings.set_many("files", {
             "open_tabs_json": json.dumps(paths, ensure_ascii=True),
@@ -2143,19 +2154,12 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             paths = []
         if not paths:
             last = self._settings.get("files", "last_file", "")
-            if last and not os.path.isabs(last):
+            if last and not os.path.isabs(_split_zip_member_path(last)[0]):
                 base_dir = os.path.dirname(os.path.abspath(__file__))
-                last = os.path.abspath(os.path.join(base_dir, last))
+                last = _normalize_open_path(os.path.join(base_dir, last))
             if last:
                 paths = [last]
-        seen: set = set()
-        unique: List[str] = []
-        for p in paths:
-            norm = os.path.abspath(os.path.expanduser(p))
-            if norm in seen or not os.path.isfile(norm):
-                continue
-            seen.add(norm)
-            unique.append(norm)
+        unique = _filter_existing_open_paths(paths)
         if not unique:
             return
         saved_active = self._settings.get_int("files", "active_tab_index", 0)
@@ -2395,7 +2399,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         has_trace = self._trace is not None
         for act in (
             self._act_save_img, self._act_save_svg, self._act_copy_img,
-            self._act_export_perfetto,
+            self._act_export_perfetto, self._act_export_slice,
         ):
             act.setEnabled(has_trace)
         if hasattr(self, "_act_close_tab"):
@@ -4109,6 +4113,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         self._act_export_perfetto = fm.addAction(
             "Export &Perfetto…", self._on_export_perfetto, "Ctrl+Shift+E")
         self._act_export_perfetto.setEnabled(False)
+        self._act_export_slice = fm.addAction(
+            "Save se&lection as BTF…", self._on_export_btf_slice)
+        self._act_export_slice.setToolTip(
+            "Export raw BTF events between the earliest and latest cursor (C1–Cn).")
+        self._act_export_slice.setEnabled(False)
         self._act_close_tab = fm.addAction("Close &Tab", self._on_close_tab_action, QKeySequence.Close)
         self._act_close_tab.setEnabled(False)
         self._act_close_all_tabs = fm.addAction("Close &All Tabs", self._on_close_all_tabs_action)
@@ -5191,7 +5200,146 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 hi=hi,
                 findings_text=findings,
             )
+        if name == AI_TOOL_CLEAR_MARKS:
+            return self._ai_clear_marks(str(args.get("what") or "all"))
+        if name == AI_TOOL_RESET_VIEW:
+            self._view.zoom_fit()
+            self._ai_highlight_task("")
+            return "Reset view to full trace"
+        if name == AI_TOOL_SEARCH_TIMELINE:
+            return search_timeline_hits(
+                self._trace,
+                str(args.get("query") or ""),
+                str(args.get("mode") or "contains"),
+                annotations=list(self._annotations or []),
+            )
+        if name == AI_TOOL_TRIGGER_COMPARE:
+            return self._ai_trigger_compare(
+                str(args.get("tab_a") or ""),
+                str(args.get("tab_b") or ""),
+            )
         raise RuntimeError(f"unknown tool {name}")
+
+    def _ai_clear_marks(self, what: str) -> str:
+        what = (what or "all").strip().lower()
+        cleared: List[str] = []
+        if what in ("cursors", "all", "everything"):
+            self._view._scene.clear_cursors()
+            self._view.cursors_changed.emit(self._view._scene.cursor_times())
+            if hasattr(self, "_stats_panel"):
+                self._stats_panel.set_cursor_times(
+                    self._view._scene.cursor_times(), refresh_stats=True)
+            cleared.append("cursors")
+        if what in ("annotations", "all", "everything"):
+            self._annotations.clear()
+            self._rebuild_annotation_list()
+            cleared.append("annotations")
+        if what in ("bookmarks", "everything"):
+            self._bookmarks.clear()
+            self._rebuild_bookmark_list()
+            cleared.append("bookmarks")
+        self._save_current_trace_state()
+        return "Cleared " + (", ".join(cleared) if cleared else what)
+
+    def _ai_resolve_tab_ref(self, ref: str, default: int) -> int:
+        loaded = self._ai_list_loaded_tabs()
+        if len(loaded) < 2:
+            raise RuntimeError("Open at least two trace tabs to compare")
+        token = str(ref or "").strip()
+        if not token:
+            if 0 <= default < len(self._tabs) and getattr(self._tabs[default], "trace", None):
+                return default
+            return loaded[min(default, len(loaded) - 1)]["index"]
+        try:
+            idx = int(token)
+            if 0 <= idx < len(self._tabs) and getattr(self._tabs[idx], "trace", None):
+                return idx
+        except ValueError:
+            pass
+        want = token.lower()
+        for tab in loaded:
+            name = str(tab.get("name") or "").lower()
+            if want == name or want in name:
+                return int(tab["index"])
+        raise RuntimeError(f"No loaded tab matching {token!r}")
+
+    def _ai_show_trace_compare(self, idx_a: int, idx_b: int) -> None:
+        old = getattr(self, "_ai_compare_dlg", None)
+        if old is not None:
+            try:
+                old.close()
+            except Exception:
+                pass
+        dlg = _TraceCompareDialog(
+            self, parent=self, idx_a=idx_a, idx_b=idx_b,
+            ai_enabled=self._ai_feature_enabled(),
+            on_query_ai=self._query_compare_with_ai,
+        )
+        dlg.setModal(False)
+        self._ai_compare_dlg = dlg
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+
+    def _ai_trigger_compare(self, tab_a: str, tab_b: str) -> dict:
+        idx_a = self._ai_resolve_tab_ref(tab_a, 0)
+        idx_b = self._ai_resolve_tab_ref(tab_b, 1)
+        if idx_a == idx_b:
+            raise RuntimeError("tab_a and tab_b must name different traces")
+        ctx = self._ai_build_compare_context(idx_a, idx_b)
+        try:
+            self._ai_show_trace_compare(idx_a, idx_b)
+        except Exception:
+            pass
+        return tool_result_payload(
+            True,
+            str(ctx.get("scope") or "Trace Compare"),
+            data={"csv": str(ctx.get("findings_text") or "")},
+        )
+
+    def _on_export_btf_slice(self) -> None:
+        if self._trace is None:
+            return
+        times = sorted(int(t) for t in self._view._scene.cursor_times())
+        if len(times) < 2:
+            QMessageBox.information(
+                self, "Save selection as BTF",
+                "Place at least two cursors (C1–Cn) to export that time range.")
+            return
+        lo, hi = times[0], times[-1]
+        if lo >= hi:
+            QMessageBox.information(
+                self, "Save selection as BTF",
+                "Earliest and latest cursors must differ.")
+            return
+        default_name = "selection.btf"
+        src = str(getattr(self._active_tab, "path", "") or self._current_file or "")
+        if src:
+            base = os.path.basename(src.split("#", 1)[0])
+            stem = base.split(".btf", 1)[0] or "selection"
+            default_name = f"{stem}_{lo}-{hi}.btf"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save selection as BTF", default_name,
+            "BTF files (*.btf *.btf.gz);;All files (*)",
+        )
+        if not path:
+            return
+        try:
+            text, kept = "", 0
+            if src:
+                try:
+                    text, kept = filter_btf_file_to_range(src, lo, hi)
+                except Exception:
+                    text, kept = "", 0
+            if not str(text).strip():
+                text, kept = reconstruct_btf_slice(self._trace, lo, hi)
+            write_btf_text(text, path)
+        except Exception as exc:
+            QMessageBox.critical(
+                self, "Export Error", f"Could not save BTF slice:\n{exc}")
+            return
+        self.statusBar().showMessage(
+            f"Saved {kept} event(s) {lo}–{hi} → {os.path.basename(path)}", 4000)
 
     def _ai_undo_tools(self) -> None:
         self._ai_stop_zoom_anim()
@@ -5387,6 +5535,27 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         panel = getattr(self, "_ai_panel", None)
         if panel is not None and hasattr(panel, "query_migration_thrash"):
             QTimer.singleShot(0, panel.query_migration_thrash)
+
+    def _query_compare_with_ai(
+        self,
+        ai_enabled: bool = True,
+        idx_a: Optional[int] = None,
+        idx_b: Optional[int] = None,
+    ) -> None:
+        """Trace Compare → Query with AI… uses the dialog's Trace A / B."""
+        if not ai_enabled:
+            self._open_settings("AI")
+            return
+        if idx_a is None or idx_b is None or int(idx_a) == int(idx_b):
+            QMessageBox.information(
+                self, "Trace Compare",
+                "Choose two different traces to compare.")
+            return
+        self._focus_ai_panel()
+        panel = getattr(self, "_ai_panel", None)
+        if panel is not None and hasattr(panel, "query_trace_compare"):
+            a, b = int(idx_a), int(idx_b)
+            QTimer.singleShot(0, lambda: panel.query_trace_compare(a, b))
 
     def _open_migration_heatmap(self) -> None:
         self._open_corridor_inspector("heatmap")
@@ -7274,7 +7443,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 self, "Trace Compare",
                 "Open at least two trace tabs to compare traces.")
             return
-        _exec_centred(_TraceCompareDialog(self, parent=self), self)
+        _exec_centred(_TraceCompareDialog(
+            self, parent=self,
+            ai_enabled=self._ai_feature_enabled(),
+            on_query_ai=self._query_compare_with_ai,
+        ), self)
 
     def _scroll_view_to_task(self, task: str) -> None:
         """Scroll the orthogonal axis to bring *task*'s row/column fully into view.

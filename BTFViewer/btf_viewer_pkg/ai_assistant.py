@@ -1020,6 +1020,184 @@ def _md_inline_to_html_escaped(text: str) -> str:
     return result
 
 
+_MD_TABLE_ALIGN_RE = re.compile(r"^:?-{1,}:?$")
+_HTML_TABLE_START_RE = re.compile(r"^<table\b", re.IGNORECASE)
+_HTML_TABLE_END_RE = re.compile(r"</table\s*>", re.IGNORECASE)
+_AI_MD_TH_STYLE = (
+    "border:1px solid #3a4658;padding:4px 8px;"
+    "background:#243044;color:#e8eef6;font-weight:600;"
+)
+_AI_MD_TD_STYLE = (
+    "border:1px solid #3a4658;padding:4px 8px;"
+    "background:#1a2230;color:#dbe2ea;"
+)
+_AI_MD_TABLE_OPEN = (
+    '<table class="ai-md-table" width="100%" cellspacing="0" cellpadding="4">'
+)
+
+
+def _split_md_table_row(line: str) -> List[str]:
+    s = (line or "").strip()
+    if s.startswith("|"):
+        s = s[1:]
+    if s.endswith("|") and not s.endswith("\\|"):
+        s = s[:-1]
+    return [p.strip().replace("\\|", "|") for p in re.split(r"(?<!\\)\|", s)]
+
+
+def _is_md_table_separator(line: str) -> bool:
+    if "|" not in (line or ""):
+        return False
+    cells = _split_md_table_row(line)
+    if not cells:
+        return False
+    for cell in cells:
+        compact = re.sub(r"\s+", "", cell)
+        if not compact or not _MD_TABLE_ALIGN_RE.fullmatch(compact):
+            return False
+    return True
+
+
+def _md_table_aligns(sep_line: str, ncols: int) -> List[str]:
+    cells = _split_md_table_row(sep_line)
+    out: List[str] = []
+    for i in range(ncols):
+        compact = re.sub(r"\s+", "", cells[i]) if i < len(cells) else ""
+        left = compact.startswith(":")
+        right = compact.endswith(":")
+        if left and right:
+            out.append("center")
+        elif right:
+            out.append("right")
+        else:
+            out.append("left")
+    return out
+
+
+def _md_table_cell_html(tag: str, text: str, align: str) -> str:
+    style = _AI_MD_TH_STYLE if tag == "th" else _AI_MD_TD_STYLE
+    al = align if align in ("left", "right", "center") else "left"
+    return (
+        f'<{tag} align="{al}" style="{style}">'
+        f"{_md_inline_to_html_escaped(text)}</{tag}>"
+    )
+
+
+def _md_table_html(header: List[str], aligns: List[str],
+                   rows: List[List[str]]) -> str:
+    ncols = max(1, len(header))
+
+    def _pad(cells: List[str]) -> List[str]:
+        padded = list(cells[:ncols])
+        while len(padded) < ncols:
+            padded.append("")
+        return padded
+
+    header = _pad(header)
+    thead = "<tr>" + "".join(
+        _md_table_cell_html("th", header[i], aligns[i] if i < len(aligns) else "left")
+        for i in range(ncols)
+    ) + "</tr>"
+    body: List[str] = []
+    for row in rows:
+        cells = _pad(row)
+        body.append(
+            "<tr>" + "".join(
+                _md_table_cell_html(
+                    "td", cells[i], aligns[i] if i < len(aligns) else "left")
+                for i in range(ncols)
+            ) + "</tr>"
+        )
+    return (
+        f"{_AI_MD_TABLE_OPEN}<thead>{thead}</thead>"
+        f"<tbody>{''.join(body)}</tbody></table>"
+    )
+
+
+class _SafeAiTableHtmlParser(HTMLParser):
+    """Keep table markup only; drop scripts and event-handler attributes."""
+
+    _KEEP = frozenset({
+        "table", "thead", "tbody", "tfoot", "tr", "th", "td", "caption", "br",
+    })
+    _SKIP_INNER = frozenset({
+        "script", "style", "iframe", "object", "embed", "link", "meta", "svg",
+    })
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: List[str] = []
+        self._skip = 0
+        self.saw_table = False
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        tag = (tag or "").lower()
+        if tag in self._SKIP_INNER:
+            self._skip += 1
+            return
+        if self._skip or tag not in self._KEEP:
+            return
+        if tag == "table":
+            self.saw_table = True
+            self.parts.append(_AI_MD_TABLE_OPEN)
+            return
+        if tag == "br":
+            self.parts.append("<br>")
+            return
+        extra: List[str] = []
+        align = ""
+        for key, val in attrs or ():
+            key = (key or "").lower()
+            val = val or ""
+            if key == "align" and val.lower() in ("left", "right", "center"):
+                align = val.lower()
+            elif key in ("colspan", "rowspan") and str(val).isdigit():
+                n = int(val)
+                if 1 <= n <= 32:
+                    extra.append(f'{key}="{n}"')
+        if tag in ("th", "td"):
+            if align:
+                extra.append(f'align="{align}"')
+            style = _AI_MD_TH_STYLE if tag == "th" else _AI_MD_TD_STYLE
+            extra.append(f'style="{style}"')
+        attr = (" " + " ".join(extra)) if extra else ""
+        self.parts.append(f"<{tag}{attr}>")
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = (tag or "").lower()
+        if tag in self._SKIP_INNER:
+            self._skip = max(0, self._skip - 1)
+            return
+        if self._skip or tag not in self._KEEP or tag == "br":
+            return
+        self.parts.append(f"</{tag}>")
+
+    def handle_startendtag(self, tag: str, attrs) -> None:
+        if (tag or "").lower() == "br" and not self._skip:
+            self.parts.append("<br>")
+            return
+        self.handle_starttag(tag, attrs)
+        self.handle_endtag(tag)
+
+    def handle_data(self, data: str) -> None:
+        if self._skip or not data:
+            return
+        self.parts.append(_md_inline_to_html_escaped(data))
+
+
+def _sanitize_html_table_block(block: str) -> str:
+    parser = _SafeAiTableHtmlParser()
+    try:
+        parser.feed(block or "")
+        parser.close()
+    except Exception:
+        return ""
+    html_out = "".join(parser.parts).strip()
+    if not parser.saw_table or "<table" not in html_out.lower():
+        return ""
+    return html_out
+
+
 def markdown_to_safe_html(text: str, *, as_img: bool = True) -> str:
     """Convert a subset of Markdown to safe HTML (AI reply preview).
 
@@ -1136,6 +1314,48 @@ def markdown_to_safe_html(text: str, *, as_img: bool = True) -> str:
             out.append(f"<{tag}{start_attr}>{''.join(items)}</{tag}>")
             continue
 
+        if _HTML_TABLE_START_RE.match(stripped):
+            _flush_para(para)
+            buf = [stripped]
+            found_end = bool(_HTML_TABLE_END_RE.search(stripped))
+            i += 1
+            while i < n and not found_end:
+                buf.append(lines[i])
+                if _HTML_TABLE_END_RE.search(lines[i]):
+                    found_end = True
+                i += 1
+            block = "\n".join(buf)
+            safe = _sanitize_html_table_block(block)
+            if safe:
+                out.append(safe)
+            else:
+                out.append(f"<p>{_md_inline_to_html_escaped(block)}</p>")
+            continue
+
+        if (
+            "|" in stripped
+            and i + 1 < n
+            and _is_md_table_separator(lines[i + 1].strip())
+        ):
+            _flush_para(para)
+            header_cells = _split_md_table_row(stripped)
+            aligns = _md_table_aligns(lines[i + 1].strip(), max(1, len(header_cells)))
+            i += 2
+            body_rows: List[List[str]] = []
+            while i < n:
+                s = lines[i].strip()
+                if not s or "|" not in s or s.startswith("```"):
+                    break
+                if re.match(r"^#{1,4}\s+", s) or _HTML_TABLE_START_RE.match(s):
+                    break
+                if _is_md_table_separator(s):
+                    i += 1
+                    continue
+                body_rows.append(_split_md_table_row(s))
+                i += 1
+            out.append(_md_table_html(header_cells, aligns, body_rows))
+            continue
+
         para.append(stripped)
         i += 1
 
@@ -1174,6 +1394,7 @@ _AI_LOG_STYLE = (
     "color:#a8b4c4;}"
     "hr{border:none;border-top:1px solid #3a4658;margin:8px 0;}"
     "a{color:#5b9bd5;}"
+    "table.ai-md-table{margin:8px 0;}"
     ".ai-role{font-size:11px;font-weight:600;letter-spacing:0.06em;"
     "text-transform:uppercase;}"
     ".ai-role-user{color:#6ea8e0;}"
@@ -2757,6 +2978,16 @@ def create_ai_assistant_panel(
             """Run the Migration thrash template (inspector → Query with AI)."""
             self.query_template("migrations")
 
+        def query_trace_compare(self, idx_a: int, idx_b: int) -> None:
+            """Run the Trace Compare template for two already-chosen tabs."""
+            prompt = next(
+                (p for tid, _lab, p in AI_TEMPLATE_QUESTIONS
+                 if tid == AI_COMPARE_TEMPLATE_ID),
+                "",
+            )
+            if prompt:
+                self._run_compare_template(prompt, idx_a=idx_a, idx_b=idx_b)
+
         def _use_template(self, template_id: str, prompt: str) -> None:
             if self._busy:
                 return
@@ -2766,13 +2997,23 @@ def create_ai_assistant_panel(
             self._input.setPlainText(prompt)
             self.send_current()
 
-        def _run_compare_template(self, prompt: str) -> None:
+        def _run_compare_template(
+            self,
+            prompt: str,
+            idx_a: Optional[int] = None,
+            idx_b: Optional[int] = None,
+        ) -> None:
             tabs = self._loaded_tabs()
             if len(tabs) < 2:
                 self._status.setText("Open at least two BTF tabs to compare.")
                 self.refresh_template_availability()
                 return
-            if len(tabs) == 2:
+            if idx_a is not None and idx_b is not None:
+                idx_a, idx_b = int(idx_a), int(idx_b)
+                if idx_a == idx_b:
+                    self._status.setText("Choose two different traces.")
+                    return
+            elif len(tabs) == 2:
                 idx_a = int(tabs[0]["index"])
                 idx_b = int(tabs[1]["index"])
             else:

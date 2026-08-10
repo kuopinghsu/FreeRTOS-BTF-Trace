@@ -98,7 +98,7 @@ describe('decompressBtfBytes', () => {
     )
     const entries = decompressBtfEntries(zipped, 'pack.zip')
     assert.equal(entries.length, 2)
-    assert.deepEqual(entries.map(e => e.name), ['a.btf', 'b.btf'])
+    assert.deepEqual(entries.map(e => e.name), ['pack.zip::a.btf', 'pack.zip::b.btf'])
     assert.match(entries[0].text, /\[0\/1\]A/)
     assert.match(entries[1].text, /\[0\/2\]B/)
   })
@@ -107,6 +107,10 @@ describe('decompressBtfBytes', () => {
     assert.deepEqual(
       zipMemberDisplayNames(['x/a.btf', 'y/a.btf']),
       ['x/a.btf', 'y/a.btf'],
+    )
+    assert.deepEqual(
+      zipMemberDisplayNames(['x/a.btf', 'y/a.btf'], 'pack.zip'),
+      ['pack.zip::x/a.btf', 'pack.zip::y/a.btf'],
     )
   })
 })

@@ -24,6 +24,7 @@ import {
   queryRawMetric,
   resolveCoreKey,
   resolveTaskKey,
+  searchTimelineHits,
   stripParsedToolMarkup,
   summariseToolCall,
   toolBatchAutoRuns,
@@ -102,6 +103,52 @@ describe('aiTools', () => {
       { name: 'query_raw_metric' }, { name: 'add_annotation' },
     ]), false)
     assert.equal(normalizeRawMetric('priority-inheritance'), AI_RAW_METRIC_PRIORITY)
+  })
+
+  it('validates clear_marks, reset_view, search_timeline, trigger_compare', () => {
+    const clr = validateToolCall('clear_marks', {})
+    assert.equal(clr.error, '')
+    assert.equal(clr.args.what, 'all')
+    assert.equal(validateToolCall('clear_marks', { what: 'marks' }).args.what, 'all')
+    assert.ok(validateToolCall('clear_marks', { what: 'nope' }).error)
+    assert.equal(validateToolCall('reset_view', {}).error, '')
+    const s = validateToolCall('search_timeline', { query: 'TICK', mode: 'tags' })
+    assert.equal(s.error, '')
+    assert.equal(s.args.mode, 'tags')
+    assert.ok(validateToolCall('search_timeline', { query: '' }).error)
+    const cmp = validateToolCall('trigger_compare', { tab_a: '0', tab_b: 'tickless' })
+    assert.equal(cmp.args.tab_b, 'tickless')
+    assert.equal(toolMutatesGui('clear_marks'), true)
+    assert.equal(toolMutatesGui('reset_view'), true)
+    assert.equal(toolMutatesGui('search_timeline'), false)
+    assert.equal(toolBatchAutoRuns([{ name: 'search_timeline' }]), true)
+    assert.equal(toolBatchAutoRuns([{ name: 'trigger_compare' }]), true)
+    assert.equal(toolBatchAutoRuns([
+      { name: 'search_timeline' }, { name: 'clear_marks' },
+    ]), false)
+    assert.match(summariseToolCall('clear_marks', { what: 'all' }), /all/)
+    assert.equal(summariseToolCall('reset_view', {}), 'Reset view')
+  })
+
+  it('searchTimelineHits wraps Find', () => {
+    const out = searchTimelineHits(
+      { segByMergeKey: new Map(), taskRepr: new Map(), migrations: [] },
+      'watch',
+      'contains',
+      [{ ns: 500, label: 'watchdog timeout' }],
+    )
+    assert.equal(out.ok, true)
+    assert.deepEqual(out.data.times, [500])
+    assert.equal(out.data.count, 1)
+    assert.equal(searchTimelineHits(null, '', 'contains').ok, false)
+    assert.equal(searchTimelineHits(null, 'x', 'contains').message, 'No trace loaded')
+    const badRe = searchTimelineHits(
+      { segByMergeKey: new Map(), taskRepr: new Map(), migrations: [] },
+      '[',
+      'regex',
+    )
+    assert.equal(badRe.ok, false)
+    assert.match(badRe.message, /Regex/)
   })
 
   it('queryRawMetric returns priority episodes', () => {

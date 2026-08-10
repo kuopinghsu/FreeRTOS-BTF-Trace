@@ -30,8 +30,12 @@ from btf_viewer_pkg.ai_assistant import (  # noqa: E402
 from btf_viewer_pkg.ai_mermaid import mermaid_zoom_token  # noqa: E402
 from btf_viewer_pkg.ai_tools import (  # noqa: E402
     AI_TOOL_ADD_ANNOTATION,
+    AI_TOOL_CLEAR_MARKS,
     AI_TOOL_EXPORT_REPORT,
     AI_TOOL_QUERY_RAW_METRIC,
+    AI_TOOL_RESET_VIEW,
+    AI_TOOL_SEARCH_TIMELINE,
+    AI_TOOL_TRIGGER_COMPARE,
     AI_VIEWER_TOOL_NAMES,
 )
 
@@ -287,6 +291,14 @@ class AiPanelUiTests(unittest.TestCase):
                  "arguments": {"task": "Low[266]", "metric": "pi"}},
                 {"id": "c8", "name": AI_TOOL_EXPORT_REPORT,
                  "arguments": {"format": "html"}},
+                {"id": "c9", "name": AI_TOOL_CLEAR_MARKS,
+                 "arguments": {"what": "all"}},
+                {"id": "c10", "name": AI_TOOL_RESET_VIEW,
+                 "arguments": {}},
+                {"id": "c11", "name": AI_TOOL_SEARCH_TIMELINE,
+                 "arguments": {"query": "TICK", "mode": "sti"}},
+                {"id": "c12", "name": AI_TOOL_TRIGGER_COMPARE,
+                 "arguments": {"tab_a": "0", "tab_b": "1"}},
             ],
         }))
         with patch.object(panel, "_continue_with_messages"):
@@ -307,6 +319,9 @@ class AiPanelUiTests(unittest.TestCase):
         self.assertEqual(by_name["open_corridor_inspector"]["core_from"], "0")
         self.assertEqual(by_name[AI_TOOL_ADD_ANNOTATION]["note"], "spike")
         self.assertEqual(by_name[AI_TOOL_QUERY_RAW_METRIC]["metric"], "priority_inheritance")
+        self.assertEqual(by_name[AI_TOOL_CLEAR_MARKS]["what"], "all")
+        self.assertEqual(by_name[AI_TOOL_SEARCH_TIMELINE]["query"], "TICK")
+        self.assertEqual(by_name[AI_TOOL_TRIGGER_COMPARE]["tab_b"], "1")
         asst = [m for m in panel._chat_messages if m.get("role") == "assistant"][-1]
         self.assertEqual(
             [c["function"]["name"] for c in asst.get("tool_calls") or []],

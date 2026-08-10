@@ -92,6 +92,127 @@ function inlineToHtml(text) {
   return result
 }
 
+const MD_TABLE_ALIGN_RE = /^:?-{1,}:?$/
+const HTML_TABLE_START_RE = /^<table\b/i
+const HTML_TABLE_END_RE = /<\/table\s*>/i
+const AI_MD_TH_STYLE = 'border:1px solid #3a4658;padding:4px 8px;background:#243044;color:#e8eef6;font-weight:600;'
+const AI_MD_TD_STYLE = 'border:1px solid #3a4658;padding:4px 8px;background:#1a2230;color:#dbe2ea;'
+const AI_MD_TABLE_OPEN = '<table class="ai-md-table" width="100%" cellspacing="0" cellpadding="4">'
+
+function splitMdTableRow(line) {
+  let s = String(line || '').trim()
+  if (s.startsWith('|')) s = s.slice(1)
+  if (s.endsWith('|') && !s.endsWith('\\|')) s = s.slice(0, -1)
+  return s.split(/(?<!\\)\|/).map(p => p.trim().replace(/\\\|/g, '|'))
+}
+
+function isMdTableSeparator(line) {
+  if (!String(line || '').includes('|')) return false
+  const cells = splitMdTableRow(line)
+  if (!cells.length) return false
+  return cells.every((cell) => {
+    const compact = cell.replace(/\s+/g, '')
+    return compact && MD_TABLE_ALIGN_RE.test(compact)
+  })
+}
+
+function mdTableAligns(sepLine, ncols) {
+  const cells = splitMdTableRow(sepLine)
+  const out = []
+  for (let i = 0; i < ncols; i += 1) {
+    const compact = (i < cells.length ? cells[i] : '').replace(/\s+/g, '')
+    const left = compact.startsWith(':')
+    const right = compact.endsWith(':')
+    if (left && right) out.push('center')
+    else if (right) out.push('right')
+    else out.push('left')
+  }
+  return out
+}
+
+function mdTableCellHtml(tag, text, align) {
+  const style = tag === 'th' ? AI_MD_TH_STYLE : AI_MD_TD_STYLE
+  const al = (align === 'left' || align === 'right' || align === 'center') ? align : 'left'
+  return `<${tag} align="${al}" style="${style}">${inlineToHtml(text)}</${tag}>`
+}
+
+function mdTableHtml(header, aligns, rows) {
+  const ncols = Math.max(1, header.length)
+  const pad = (cells) => {
+    const next = cells.slice(0, ncols)
+    while (next.length < ncols) next.push('')
+    return next
+  }
+  const heads = pad(header)
+  const thead = `<tr>${heads.map((c, i) => mdTableCellHtml('th', c, aligns[i] || 'left')).join('')}</tr>`
+  const tbody = rows.map((row) => {
+    const cells = pad(row)
+    return `<tr>${cells.map((c, i) => mdTableCellHtml('td', c, aligns[i] || 'left')).join('')}</tr>`
+  }).join('')
+  return `${AI_MD_TABLE_OPEN}<thead>${thead}</thead><tbody>${tbody}</tbody></table>`
+}
+
+const TABLE_KEEP = new Set(['table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td', 'caption', 'br'])
+const TABLE_SKIP = new Set(['script', 'style', 'iframe', 'object', 'embed', 'link', 'meta', 'svg'])
+
+function sanitizeHtmlTableBlock(block) {
+  let skip = 0
+  let sawTable = false
+  const parts = []
+  const src = String(block || '')
+  const tok = /<\/?([a-zA-Z][a-zA-Z0-9]*)\b([^>]*)>|([^<]+)|./g
+  let m
+  while ((m = tok.exec(src))) {
+    if (m[3] != null || (m[1] == null && m[0])) {
+      if (!skip) parts.push(inlineToHtml(m[3] != null ? m[3] : m[0]))
+      continue
+    }
+    const tag = String(m[1] || '').toLowerCase()
+    const close = m[0].startsWith('</')
+    const selfClose = /\/\s*>$/.test(m[0])
+    if (TABLE_SKIP.has(tag)) {
+      if (!close) skip += 1
+      else skip = Math.max(0, skip - 1)
+      continue
+    }
+    if (skip || !TABLE_KEEP.has(tag)) continue
+    if (tag === 'br') {
+      parts.push('<br>')
+      continue
+    }
+    if (close) {
+      parts.push(`</${tag}>`)
+      continue
+    }
+    if (tag === 'table') {
+      sawTable = true
+      parts.push(AI_MD_TABLE_OPEN)
+      continue
+    }
+    const attrs = m[2] || ''
+    const extra = []
+    const alignM = /\balign\s*=\s*["']?(left|right|center)/i.exec(attrs)
+    const colspanM = /\bcolspan\s*=\s*["']?(\d+)/i.exec(attrs)
+    const rowspanM = /\browspan\s*=\s*["']?(\d+)/i.exec(attrs)
+    if (colspanM && Number(colspanM[1]) >= 1 && Number(colspanM[1]) <= 32) {
+      extra.push(`colspan="${Number(colspanM[1])}"`)
+    }
+    if (rowspanM && Number(rowspanM[1]) >= 1 && Number(rowspanM[1]) <= 32) {
+      extra.push(`rowspan="${Number(rowspanM[1])}"`)
+    }
+    if (tag === 'th' || tag === 'td') {
+      if (alignM) extra.push(`align="${alignM[1].toLowerCase()}"`)
+      extra.push(`style="${tag === 'th' ? AI_MD_TH_STYLE : AI_MD_TD_STYLE}"`)
+    }
+    const attr = extra.length ? ` ${extra.join(' ')}` : ''
+    parts.push(`<${tag}${attr}>`)
+    if (selfClose && tag !== 'table') parts.push(`</${tag}>`)
+  }
+  const html = parts.join('').trim()
+  if (!sawTable || !/<table/i.test(html)) return ''
+  return html
+}
+
 /** @param {string} text @param {{ inlineSvg?: boolean, zoomable?: boolean }} [opts] */
 export function markdownToSafeHtml(text, { inlineSvg = true, zoomable = true } = {}) {
   const raw = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim()
@@ -189,6 +310,47 @@ export function markdownToSafeHtml(text, { inlineSvg = true, zoomable = true } =
       }
       const startAttr = ordered && startNum > 1 ? ` start="${startNum}"` : ''
       out.push(`<${tag}${startAttr}>${items.join('')}</${tag}>`)
+      continue
+    }
+
+    if (HTML_TABLE_START_RE.test(stripped)) {
+      flushPara()
+      const buf = [stripped]
+      let foundEnd = HTML_TABLE_END_RE.test(stripped)
+      i += 1
+      while (i < lines.length && !foundEnd) {
+        buf.push(lines[i])
+        if (HTML_TABLE_END_RE.test(lines[i])) foundEnd = true
+        i += 1
+      }
+      const block = buf.join('\n')
+      const safe = sanitizeHtmlTableBlock(block)
+      out.push(safe || `<p>${inlineToHtml(block)}</p>`)
+      continue
+    }
+
+    if (
+      stripped.includes('|')
+      && i + 1 < lines.length
+      && isMdTableSeparator(lines[i + 1].trim())
+    ) {
+      flushPara()
+      const headerCells = splitMdTableRow(stripped)
+      const aligns = mdTableAligns(lines[i + 1].trim(), Math.max(1, headerCells.length))
+      i += 2
+      const bodyRows = []
+      while (i < lines.length) {
+        const s = lines[i].trim()
+        if (!s || !s.includes('|') || s.startsWith('```')) break
+        if (/^#{1,4}\s+/.test(s) || HTML_TABLE_START_RE.test(s)) break
+        if (isMdTableSeparator(s)) {
+          i += 1
+          continue
+        }
+        bodyRows.push(splitMdTableRow(s))
+        i += 1
+      }
+      out.push(mdTableHtml(headerCells, aligns, bodyRows))
       continue
     }
 
@@ -295,6 +457,10 @@ pre{background:#1a2230;border:1px solid #3a4658;border-radius:4px;padding:8px;ov
 code{font-family:Menlo,Consolas,Monaco,'Courier New',monospace;font-size:12px;}
 blockquote{margin:6px 0;padding:4px 10px;border-left:3px solid #5b9bd5;color:#a8b4c4;}
 a{color:#5b9bd5;}
+table.ai-md-table{border-collapse:collapse;margin:8px 0;font-size:12px;width:100%;}
+table.ai-md-table th,table.ai-md-table td{border:1px solid #3a4658;padding:4px 8px;}
+table.ai-md-table th{background:#243044;color:#e8eef6;}
+table.ai-md-table td{background:#1a2230;color:#dbe2ea;}
 </style>
 </head>
 <body>

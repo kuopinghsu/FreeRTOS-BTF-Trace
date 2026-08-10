@@ -36,6 +36,7 @@
       @copy-screenshot="onCopyScreenshot"
       @export-svg="onExportSvg"
       @export-perfetto="onExportPerfetto"
+      @export-slice="onExportBtfSlice"
       @show-heatmap="onOpenHeatmap"
       @show-analysis="analysisOpen = true"
       @clear-task-filter="clearHeatmapTaskFilter"
@@ -404,6 +405,7 @@
                 @open-pair-heatmap="onOpenPairHeatmap"
                 @open-pair-chord="onOpenPairChord"
                 @open-settings="openSettingsDialog"
+                @open-compare="onOpenTraceCompare"
               />
             </div>
           </div>
@@ -799,6 +801,16 @@
       @query-ai="queryAnalysisWithAi"
     />
 
+    <TraceCompareDialog
+      v-if="compareOpen && compareTabs.length >= 2"
+      :tabs="compareTabs"
+      :initial-a="compareInitialA"
+      :initial-b="compareInitialB"
+      :ai-enabled="appSettings.aiEnabled !== false"
+      @close="compareOpen = false"
+      @query-ai="queryCompareWithAi"
+    />
+
     <!-- Snapshot editor -->
     <SnapshotEditor
       v-if="snapshotEditorOpen"
@@ -899,6 +911,7 @@ import MarksPanel       from './components/MarksPanel.vue'
 import SnapshotEditor   from './components/SnapshotEditor.vue'
 import CorridorInspectorDialog from './components/CorridorInspectorDialog.vue'
 import AnalysisFindingsDialog from './components/AnalysisFindingsDialog.vue'
+import TraceCompareDialog from './components/TraceCompareDialog.vue'
 import FindPanel from './components/FindPanel.vue'
 import AiAssistantPanel from './components/AiAssistantPanel.vue'
 import JumpToTimeDialog from './components/JumpToTimeDialog.vue'
@@ -908,18 +921,24 @@ import { zoomStatusFromViewport } from './utils/timeFormat.js'
 import { taskDisplayName, taskMergeKey, setColorblindMode } from './utils/colors.js'
 import {
   AI_TOOL_ADD_ANNOTATION,
+  AI_TOOL_CLEAR_MARKS,
   AI_TOOL_HIGHLIGHT_TASK,
   AI_TOOL_OPEN_CORRIDOR,
   AI_TOOL_QUERY_RAW_METRIC,
+  AI_TOOL_RESET_VIEW,
+  AI_TOOL_SEARCH_TIMELINE,
   AI_TOOL_SET_CURSORS,
   AI_TOOL_SET_VIEW_MODE,
+  AI_TOOL_TRIGGER_COMPARE,
   AI_TOOL_ZOOM_TO_RANGE,
   queryRawMetric,
   resolveCoreKey,
   resolveTaskKey,
+  searchTimelineHits,
   toolMutatesGui,
   validateToolCall,
 } from './utils/aiTools.js'
+import { filterBtfTextToRange, reconstructBtfSlice } from './utils/btfSlice.js'
 import {
   DARK_MODE,
   HOVER_HIGHLIGHT,
@@ -1001,6 +1020,10 @@ const inspectorMode = ref('heatmap') // 'heatmap' | 'chord'
 const inspectorFocusPair = ref(null)
 const inspectorVpProgrammatic = ref(false)
 const analysisOpen = ref(false)
+const compareOpen = ref(false)
+const compareInitialA = ref(null)
+const compareInitialB = ref(null)
+const compareTabs = computed(() => tabs.value.filter(t => t?.trace))
 /** Viewport/cursors saved when migration inspector opens; restored by Show all tasks. */
 let _heatmapRestoreSnapshot = null
 const statsPaused = ref(false)
@@ -1546,7 +1569,9 @@ async function flushLoadingProgress(pct, msg) {
   await new Promise(resolve => requestAnimationFrame(resolve))
 }
 
-async function attachParsedTrace(name, packedOrTrace, { savedState = null, fromSession = false } = {}) {
+async function attachParsedTrace(name, packedOrTrace, {
+  savedState = null, fromSession = false, sourceText = null,
+} = {}) {
   paintLoadingProgress(100, 'Opening trace…')
   try {
     const { unpackTrace } = await import('./parser/tracePack.js')
@@ -1566,6 +1591,9 @@ async function attachParsedTrace(name, packedOrTrace, { savedState = null, fromS
     timelineOptions.highlightInterval = null
 
     tab.trace = markRaw(trace)
+    if (typeof sourceText === 'string' && sourceText) {
+      tab.sourceText = sourceText
+    }
     if (trace.meta?._versionWarning) {
       showToast(trace.meta._versionWarning, 'info')
     }
@@ -1603,7 +1631,7 @@ async function parseTraceOnMainThread(text, name) {
   const result = finalizeAndEnrich(await parseBtf(text, (pct, msg) => {
     paintLoadingProgress(pct, msg)
   }))
-  await attachParsedTrace(name, result)
+  await attachParsedTrace(name, result, { sourceText: text })
 }
 
 async function onTracesLoaded({ entries, sourceName }) {
@@ -1705,7 +1733,7 @@ async function loadOneTrace({ text, name }) {
       } else if (data.type === 'done') {
         _parseWorker = null
         worker.terminate()
-        attachParsedTrace(name, data.packed).then(() => resolve()).catch((err) => {
+        attachParsedTrace(name, data.packed, { sourceText: text }).then(() => resolve()).catch((err) => {
           console.error('Failed to open trace:', err)
           showToast('Failed to open trace: ' + (err?.message || String(err)), 'error')
           loading.value = false
@@ -1989,6 +2017,28 @@ async function queryCorridorWithAi() {
   await focusAiAndAsk('migrations')
 }
 
+async function queryCompareWithAi(payload) {
+  const idA = payload?.idA
+  const idB = payload?.idB
+  compareOpen.value = false
+  if (appSettings.aiEnabled === false) {
+    openSettingsDialog('ai')
+    return
+  }
+  if (idA == null || idB == null || idA === idB) {
+    showToast('Choose two different traces to compare.', 'info')
+    return
+  }
+  if (appSettings.showAi === false) {
+    appSettings.showAi = true
+    saveSettings(appSettings)
+  }
+  rightPanelTab.value = 'ai'
+  await nextTick()
+  if (!aiPanelRef.value) await nextTick()
+  await aiPanelRef.value?.askCompare?.(idA, idB)
+}
+
 function buildAiContext() {
   const tr = trace.value
   if (!tr) {
@@ -2251,7 +2301,89 @@ function dispatchAiTool(name, args) {
       findingsText: buildAiContext().findingsText || '',
     })
   }
+  if (name === AI_TOOL_CLEAR_MARKS) {
+    const what = String(args.what || 'all')
+    const cleared = []
+    if (['cursors', 'all', 'everything'].includes(what)) {
+      clearCursors()
+      cleared.push('cursors')
+    }
+    if (['annotations', 'all', 'everything'].includes(what)) {
+      marks.value = (marks.value || []).filter(m => m.type !== 'annotation')
+      cleared.push('annotations')
+    }
+    if (['bookmarks', 'everything'].includes(what)) {
+      marks.value = (marks.value || []).filter(m => m.type === 'annotation')
+      cleared.push('bookmarks')
+    }
+    scheduleSessionSave()
+    scheduleRender()
+    return `Cleared ${cleared.join(', ') || what}`
+  }
+  if (name === AI_TOOL_RESET_VIEW) {
+    timelinePanelRef.value?.fitToTrace()
+    syncTimelineViewport()
+    onAiHighlight('')
+    return 'Reset view to full trace'
+  }
+  if (name === AI_TOOL_SEARCH_TIMELINE) {
+    return searchTimelineHits(
+      trace.value,
+      args.query || '',
+      args.mode || 'contains',
+      (marks.value || []).filter(m => m.type === 'annotation'),
+    )
+  }
+  if (name === AI_TOOL_TRIGGER_COMPARE) {
+    return triggerAiCompare(args.tab_a || '', args.tab_b || '')
+  }
   throw new Error(`unknown tool ${name}`)
+}
+
+function resolveAiTabRef(ref, defaultIdx) {
+  const loaded = tabs.value.filter(t => t?.trace)
+  if (loaded.length < 2) throw new Error('Open at least two trace tabs to compare')
+  const token = String(ref || '').trim()
+  if (!token) {
+    return loaded[Math.min(defaultIdx, loaded.length - 1)]
+  }
+  if (/^\d+$/.test(token)) {
+    const n = Number(token)
+    // 0-based tab-bar / loaded-list index first (desktop parity). Tab ids start at 1.
+    if (n >= 0 && n < loaded.length) return loaded[n]
+    if (n >= 0 && n < tabs.value.length && tabs.value[n]?.trace) return tabs.value[n]
+    const byId = loaded.find(t => Number(t.id) === n)
+    if (byId) return byId
+  }
+  const want = token.toLowerCase()
+  const exact = loaded.find(t => String(t.name || '').toLowerCase() === want)
+  if (exact) return exact
+  const part = loaded.find(t => String(t.name || '').toLowerCase().includes(want))
+  if (part) return part
+  throw new Error(`No loaded tab matching ${JSON.stringify(token)}`)
+}
+
+function triggerAiCompare(tabARef, tabBRef) {
+  const tabA = resolveAiTabRef(tabARef, 0)
+  const tabB = resolveAiTabRef(tabBRef, 1)
+  if (tabA.id === tabB.id) throw new Error('tab_a and tab_b must name different traces')
+  const ctx = buildAiCompareContext(tabA.id, tabB.id)
+  openTraceCompare(tabA.id, tabB.id)
+  return {
+    ok: true,
+    message: ctx.scope || 'Trace Compare',
+    data: { csv: ctx.findingsText || '' },
+  }
+}
+
+function openTraceCompare(idA, idB) {
+  compareInitialA.value = idA ?? null
+  compareInitialB.value = idB ?? null
+  compareOpen.value = true
+}
+
+function onOpenTraceCompare() {
+  openTraceCompare(null, null)
 }
 
 function onAiUndoTools() {
@@ -2367,6 +2499,48 @@ async function onExportSvg() {
   a.download = timelineOptions.showCpuLoad ? 'timeline-with-load.svg' : 'timeline-export.svg'
   a.click()
   URL.revokeObjectURL(url)
+}
+
+function onExportBtfSlice() {
+  if (!trace.value) {
+    showToast('Open a trace before exporting a BTF slice.', 'error')
+    return
+  }
+  const placed = getPlacedCursors(cursors.value).map(Number).filter(Number.isFinite)
+  if (placed.length < 2) {
+    showToast('Place at least two cursors (C1–Cn) to export that time range.', 'info')
+    return
+  }
+  const lo = Math.min(...placed)
+  const hi = Math.max(...placed)
+  if (!(hi > lo)) {
+    showToast('Earliest and latest cursors must differ.', 'info')
+    return
+  }
+  let text = ''
+  let kept = 0
+  const src = activeTab.value?.sourceText
+  if (src) {
+    try {
+      const out = filterBtfTextToRange(src, lo, hi)
+      text = out.text
+      kept = out.kept
+    } catch { /* reconstruct */ }
+  }
+  if (!String(text).trim()) {
+    const out = reconstructBtfSlice(trace.value, lo, hi)
+    text = out.text
+    kept = out.kept
+  }
+  const base = (activeTab.value?.name || 'selection').replace(/\.btf(\.gz)?$/i, '')
+  const blob = new Blob([text], { type: 'text/plain' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${base}_${lo}-${hi}.btf`
+  a.click()
+  URL.revokeObjectURL(url)
+  showToast(`Saved ${kept} event(s) ${lo}–${hi}`, 'info')
 }
 
 function onExportPerfetto() {

@@ -21,7 +21,7 @@ Heading level: ![](../images/readme/h2.svg) section · ![](../images/readme/h3.s
 - **Multi-trace sessions** — open several traces in tabs; compare builds side by side
 - **Measurement tools** — cursors, bookmarks, annotations, find & jump
 - **Statistics & analysis** — utilisation, latency, migrations, sync/mutex metrics, and severity-tagged Analysis Findings
-- **AI Assistant** — ask diagnostic questions over Analysis Findings (local or cloud models)
+- **AI Assistant** — ask diagnostic questions over Analysis Findings (import `examples/ai` presets; local or cloud)
 - **Export** — annotated snapshots (PNG/SVG), CSV/HTML reports, Perfetto traces
 - **Desktop CLI** — headless reports and images for scripts and CI
 - **Desktop and Web** — the same analysis workflow in a desktop app or the browser
@@ -77,6 +77,8 @@ Or use the [hosted demo](https://apps.kuoping.com/btf_viewer.html). Toolbar **De
 cd BTFViewer && make web    # → builds/btf_viewer.html
 ```
 
+**AI:** After a trace is open, import [`examples/ai/presets.json`](examples/ai/presets.json) in **Settings → AI** for ready-made Ollama / OpenAI / Gemini / Custom endpoints. See [AI Assistant](#ai-assistant).
+
 <a id="supported-files" name="supported-files">&#x200B;</a>
 ### Supported files ![](../images/readme/h3.svg)
 
@@ -84,7 +86,7 @@ cd BTFViewer && make web    # → builds/btf_viewer.html
 |--------|--------|
 | `.btf` | Best Trace Format |
 | `.btf.gz` / `.gz`, `.btf.bz2` / `.bz2` | Compressed single traces |
-| `.btf.zip` / `.zip` | One or more `.btf` members — each opens in its own tab |
+| `.btf.zip` / `.zip` | One or more `.btf` members — each opens in its own tab. Desktop keeps `archive.zip::member.btf` paths (re-read on launch). Web titles multi-member zips `archive.zip::member` so two archives cannot collide. |
 
 Sample traces are under `tracedata/` (for example `example-2cores.btf.gz`).
 
@@ -144,7 +146,7 @@ Place up to **4–8** cursors (default 4; set in Settings).
 | Clear all | `Shift+C` or **Shift+right-click** |
 | Snap to boundary | **Shift+click** |
 
-With **two or more** cursors, the status bar shows a short range summary, and Statistics can limit metrics to that window (**Limit to C1–Cn**).
+With **two or more** cursors, the status bar shows a short range summary, and Statistics can limit metrics to that window (**Limit to C1–Cn**). **File → Save selection as BTF…** (web: toolbar crop) exports only the events between the earliest and latest cursor. Desktop always re-reads the source file (or zip member). Web uses the in-memory original text when still loaded; after a refresh it may **reconstruct** a subset (resume/preempt + STI) if that text was not kept.
 
 <a id="marks-and-find" name="marks-and-find">&#x200B;</a>
 ### Marks and find ![](../images/readme/h3.svg)
@@ -160,7 +162,7 @@ Right-click the timeline for cursor, bookmark, and annotation actions. Marks and
 <a id="multi-tab-traces" name="multi-tab-traces">&#x200B;</a>
 ### Multi-tab traces ![](../images/readme/h3.svg)
 
-Open several files (or a multi-BTF zip) as tabs. Each tab keeps its own zoom, cursors, marks, and filters. Cycle with `Ctrl+Tab` / `Ctrl+Shift+Tab`; close with `Ctrl+W`.
+Open several files (or a multi-BTF zip) as tabs. Each tab keeps its own zoom, cursors, marks, and filters. Cycle with `Ctrl+Tab` / `Ctrl+Shift+Tab`; close with `Ctrl+W`. Desktop restores tabs from disk (including zip members). Web restores up to **8** packed traces from IndexedDB by tab name (private mode / quota may skip tabs; clearing site data drops them).
 
 <a id="tag-and-sti-markers" name="tag-and-sti-markers">&#x200B;</a>
 ### Tag and STI markers ![](../images/readme/h3.svg)
@@ -207,77 +209,92 @@ Toolbar **Analysis** summarises likely issues for the current scope (load imbala
 <a id="trace-compare" name="trace-compare">&#x200B;</a>
 ### Trace Compare ![](../images/readme/h3.svg)
 
-With **two or more** tabs open, **Trace Compare…** diffs summary, top tasks, utilisation, migrations, execution, blocking, inter-arrival, preemption, and sync. Optionally limit each side to its own cursor range. Export CSV/HTML from the dialog. See also [Core migration analysis](#core-migration-analysis) below.
+With **two or more** tabs open, **Trace Compare…** diffs summary, top tasks, utilisation, migrations, execution, blocking, inter-arrival, preemption, and sync. Optionally limit each side to its own cursor range. Export CSV/HTML from the dialog, or **Query with AI…** to walk the same tables in the **AI** tab (Trace Compare template). See also [Core migration analysis](#core-migration-analysis) below.
 
 <a id="ai-assistant" name="ai-assistant">&#x200B;</a>
 ### AI Assistant ![](../images/readme/h3.svg)
 
-The **AI** tab answers questions using **Analysis Findings** (or Trace Compare tables for that template)—not the raw BTF stream. Template ask-order: [WORKFLOWS.md §7](WORKFLOWS.md#7-ai-assistant-flow).
+The **AI** tab answers diagnostic questions using structured **Analysis Findings** and summary metrics—not the raw `.btf` event stream. That keeps the prompt compact (token-efficient) and analysis fast. The Trace Compare template sends those tables instead of Findings.
 
-Any OpenAI-compatible endpoint works, including Ollama (`http://localhost:11434/v1`). Chat requests time out after 120s (**Stop** still cancels sooner).
+When a question needs granular per-task time-series, the model can call `query_raw_metric` to pull a scoped series on demand (still never the raw BTF file). `search_timeline` locates STI / tag / task timestamps like Find. `trigger_compare` returns Trace Compare CSV when two tabs are open. Query-only batches (`query_raw_metric`, `search_timeline`, `trigger_compare`) run immediately; mixed GUI batches wait for **Apply** unless **Auto-apply GUI actions** is on.
+
+Recommended ask order ([WORKFLOWS.md §7](WORKFLOWS.md#7-ai-assistant-flow)): triage overall findings → drill into the named metric (latency, WCET, inversion, migrations) → ask for mitigations after the timeline agrees. Prefer the built-in templates; they already name the metrics and units.
+
+Any OpenAI-compatible endpoint works, including Ollama (`http://localhost:11434/v1`). Chat requests time out after 120s (**Stop** still cancels sooner). Give the endpoint at least an **8k** context window so a full Findings card plus a tool round still fits.
+
+**Local models:** the shipped Ollama default is `phi4-mini:3.8b` (light triage). For reliable native function calling prefer `qwen2.5:7b` / `qwen2.5:14b` or `llama3.1:8b` (or larger). 3B-class models often skip tools and emit ` ```btftool ` fences instead.
 
 1. **Settings → AI** — pick a preset (**Ollama**, **OpenAI**, **Google Gemini**, or **Custom**), adjust base URL / model, then **Authentication**: **None (local)** for Ollama, **API key** to paste a provider key, or **Sign in** to open the vendor page and paste the issued key or token. For a private HTTPS gateway with a self-signed certificate, enable **Allow self-signed TLS** (Desktop only — browsers cannot skip certificate checks). **Test connection** after saving. Use the refresh icon next to **Model** to list ids from the endpoint. Each preset keeps its own settings, so switching back and forth never loses a key. The AI panel chip shows `Local` / `Key saved` / `Needs API key` / `Needs sign-in` / `Signed in`.
 2. **Import…** loads an endpoint from a JSON file — see [`examples/ai`](examples/ai/README.md) for [`ollama.json`](examples/ai/ollama.json), [`gemini.json`](examples/ai/gemini.json), [`openai.json`](examples/ai/openai.json), [`deepseek.json`](examples/ai/deepseek.json), [`grok.json`](examples/ai/grok.json), [`presets.json`](examples/ai/presets.json), and the field reference. Imported values fill the form; review and confirm to save.
 3. Use a template, **Analysis → Query with AI…**, or ask freely. Click `jump:TIME` links to seek the timeline.
 4. Set reply language in Settings or **Language…** on the AI bar.
-5. Right-click the reply area to copy the conversation or **Save As…** it (Markdown, plain text, or HTML).
+5. Right-click the reply area to copy the conversation or **Save As…** it (Markdown, plain text, or HTML). Use **Clear** on the AI bar between unrelated questions so earlier turns do not crowd the context window.
 
 <a id="ai-gui-tools" name="ai-gui-tools">&#x200B;</a>
-##### GUI tools ![](../images/readme/h5.svg)
+#### GUI tools ![](../images/readme/h4.svg)
 
-The model may call viewer tools. With **Auto-apply GUI actions** off (default in **Settings → AI**), each batch shows **Apply** / **Skip** and **Undo**, plus **Apply GUI actions** under the log.
+The model may call several tools in one turn; they apply as a single batch. With **Auto-apply GUI actions** off (default in **Settings → AI**), each mutating batch shows **Apply** / **Skip** and **Undo**, plus **Apply GUI actions** under the log. Read-only `query_raw_metric` / `search_timeline` / `trigger_compare` batches run immediately (no Apply card).
 
-| Tool | Effect |
-|------|--------|
-| `set_cursors` | Place cursors (enables **Limit to C1–Cn** when two or more) |
-| `zoom_to_range` | Focus the timeline between two times |
-| `highlight_task` | Lock-highlight a task row (display name, numeric id, or merge key). Unknown names are ignored so the timeline is not dimmed. |
-| `set_view_mode` | Switch Task or Core view; horizontal or vertical |
-| `open_corridor_inspector` | Open Migration Inspector. Core aliases `Core_0`, `0`, `c0`, and `Core 0` resolve the same way. |
-| `add_annotation` | Pin an orange timeline note at a timestamp |
-| `query_raw_metric` | Read-only: return the per-task series for the current Statistics scope (`priority_inheritance`, `execution`, `migrations`, `blocking`, `sync`, `findings`). Query-only batches apply immediately (no Apply card). |
-| `export_report` | Download HTML or CSV bundling Analysis Findings, mermaid diagrams from the chat, annotations, and GUI state (cursors / highlight / view). |
+| Tool | Parameters / targets | Effect |
+|------|----------------------|--------|
+| `set_cursors` | `timestamps` (1–8 trace times) | Place cursors (enables **Limit to C1–Cn** when two or more) |
+| `zoom_to_range` | `start_time`, `end_time` | Focus the timeline between two times |
+| `highlight_task` | `task_name_or_id` (display name, numeric id, or merge key) | Lock-highlight a task row. Unknown names are ignored so the timeline is not dimmed. Empty string clears. |
+| `set_view_mode` | `mode` (`task` / `core`); optional `orientation` | Switch Task or Core view; horizontal or vertical |
+| `open_corridor_inspector` | optional `core_from` / `core_to` (`Core_0`, `0`, `c0`, `Core 0`) | Open Migration Inspector; aliases resolve the same way |
+| `add_annotation` | `time`, `note` (≤240 chars) | Pin an orange timeline note at a timestamp (stays on the current right-panel tab) |
+| `query_raw_metric` | `task`, `metric` (`priority_inheritance`, `execution`, `migrations`, `blocking`, `sync`, `findings`) | Read-only: return the per-task series for the current Statistics scope (up to 40 rows) |
+| `export_report` | optional `format` (`html` / `csv`) | Download HTML or CSV bundling Analysis Findings, mermaid diagrams from the chat, annotations, and GUI state (cursors / highlight / view). |
+| `clear_marks` | optional `what` (`annotations` / `cursors` / `bookmarks` / `all` / `everything`) | Clear AI clutter. `all` (default) drops annotations + cursors; `everything` also clears bookmarks |
+| `reset_view` | (none) | Fit the timeline to the full span and clear the task highlight (marks stay) |
+| `search_timeline` | `query`; optional `mode` (`contains` / `exact` / `regex` / `sti` / `tags` / `intervals` / `lifecycle` / `pointers` / `migrations`) | Find-panel search; returns matching timestamps (up to 40) |
+| `trigger_compare` | optional `tab_a` / `tab_b` (0-based tab index or filename) | Read-only Trace Compare CSV + open the compare dialog (needs two loaded tabs) |
 
-Models without native tool calling can emit a fenced ` ```btftool ` JSON block (same cards). Prefer a tool-capable model (for example `qwen2.5` / `llama3.1`) if native calls stay silent.
+Models without native tool calling can emit a fenced ` ```btftool ` JSON block (same cards). Prefer a tool-capable model (see local-model note above, or `gpt-4o` / Gemini) if native calls stay silent.
 
 After **Apply**, **Undo last actions** restores zoom / view / highlight / inspector / marks; **Ctrl/Cmd+Z** also reverts cursors and marks.
 
 <a id="ai-diagrams" name="ai-diagrams">&#x200B;</a>
-##### Diagrams ![](../images/readme/h5.svg)
+#### Diagrams ![](../images/readme/h4.svg)
 
-Replies may include ` ```mermaid ` **sequence** diagrams (mutex take/give, block/resume, priority boost / L/M/H) and `graph LR` / **flowchart** core-migration graphs (counts on edges).
+Replies may include ` ```mermaid ` **sequence** diagrams (mutex take/give, block/resume, priority boost / L/M/H) and `graph LR` / **flowchart** core-migration graphs (counts on edges). Pipe **Markdown tables** (and a sanitized HTML `<table>` copied from Findings) render as HTML tables in the reply pane.
 
 - Click a **task** node to lock-highlight that timeline row (`Low[266] (Core 0)` resolves to `Low[266]`).
 - Click a **core** node (`Core_0`, `C0`, `C1`) to switch to Core View and scroll to that core.
 - Mutex hex and other unresolved labels do nothing (the timeline stays undimmed).
-- Click empty figure area to open a larger zoom window (scroll / pinch; **Esc** or **Close**).
+- Click empty figure area to open a larger zoom window (scroll to zoom 0.5–6×; **Esc** or **Close**). Trackpad pinch is treated as scroll.
 - The link row under the figure has the same targets.
 - **Save As…** HTML keeps inline SVG with clickable nodes (chat zoom wrappers are omitted).
 
 <a id="ai-desktop-vs-web" name="ai-desktop-vs-web">&#x200B;</a>
-##### Desktop vs web ![](../images/readme/h5.svg)
+#### Desktop vs web ![](../images/readme/h4.svg)
 
 | Area | Desktop | Web |
 |------|---------|-----|
 | Native tools + ` ```btftool ` | Same schema and cards | Same |
 | `add_annotation` / `query_raw_metric` / `export_report` | Marks + scoped series + save dialog | Same (browser download) |
+| `clear_marks` / `reset_view` / `search_timeline` / `trigger_compare` | Same | Same (compare overlay; search uses Find) |
 | `highlight_task` / corridor cores | Same resolve rules | Same |
 | In-chat mermaid figure | Data-URI image + node hit-test | Inline SVG node clicks |
-| Zoom window + link row | Yes | Yes |
+| In-chat Markdown / HTML tables | Same rendered table | Same |
+| Zoom window + link row | Scroll to zoom + link row | Same |
 | Authentication | Settings → AI → None / API key / Sign in; panel chip + 401 CTAs until a successful turn | Same (`VITE_*` env keys) |
 | Self-signed TLS | **Allow self-signed TLS** per preset skips HTTPS certificate checks | Persist the same flag + tip; browsers still verify — trust the cert, use `http://`, or use Desktop |
 | Model picker | Editable combo; refresh fills and opens the dropdown | Same |
 | Fonts | **pt** | **px** |
 | Endpoint from `file://` | N/A | CORS — prefer Vite proxy, or [Opening the web app from `file://`](#opening-the-web-app-from-file) |
 
-| If this happens | Try |
-|-----------------|-----|
-| Web: Failed to fetch / CORS | The server is usually fine — the page just is not allowed to call it. Prefer `npm run dev` / `make preview` (both proxy Ollama), or see [Opening the web app from `file://`](#opening-the-web-app-from-file) |
-| 401 / 403 | Check authentication (Settings → AI → Sign in or API key; also `OPENAI_API_KEY` / `GEMINI_API_KEY` / `OLLAMA_API_KEY`; local Ollama needs none) |
-| `CERTIFICATE_VERIFY_FAILED` / self-signed TLS | Desktop: Settings → AI → **Allow self-signed TLS** for that preset. Web: trust the cert in the OS/browser, use `http://` on a private LAN, or use the Desktop app |
-| Chat probe timed out / `The read operation timed out` | `GET /models` only lists ids. **Test connection** then POSTs `/chat/completions` (non-streaming, 120s). Warm the model and retry. Debug with the curl probe below; if curl hangs too, the gateway's chat upstream is stuck. Try `"stream": true` if non-stream never returns. |
-| Model not found | Refresh the Model list (or Test connection) and pick a served id from the dropdown, or `ollama pull` it |
-| Gemini HTTP 400 `thought_signature` | Retry the question — the viewer echoes Gemini thought signatures on tool follow-ups |
+| Symptom | Cause | Try |
+|---------|-------|-----|
+| Web: Failed to fetch / CORS | Browser blocked a cross-origin call (`file://` sends `Origin: null`) | Prefer `npm run dev` / `make preview` (both proxy Ollama), or see [Opening the web app from `file://`](#opening-the-web-app-from-file) |
+| 401 / 403 | Missing or rejected key / origin | Settings → AI → Sign in or API key (`OPENAI_API_KEY` / `GEMINI_API_KEY` / `OLLAMA_API_KEY`; local Ollama needs none) |
+| `CERTIFICATE_VERIFY_FAILED` / self-signed TLS | Private CA or self-signed HTTPS gateway | Desktop: Settings → AI → **Allow self-signed TLS**. Web: trust the cert in the OS/browser, use `http://` on a private LAN, or use the Desktop app |
+| Chat probe timed out / `The read operation timed out` | `GET /models` lists ids only; inference is slow or hung | **Test connection** POSTs `/chat/completions` (non-streaming, 120s). Warm the model (`ollama run MODEL`) and retry. Debug with the curl probe below; if curl hangs too, the gateway's chat upstream is stuck. Try `"stream": true` if non-stream never returns. Lower context length on a VRAM-tight local host. |
+| Model not found | Typed id is not served | Refresh the Model list (or Test connection) and pick a served id from the dropdown, or `ollama pull` it |
+| Gemini HTTP 400 `thought_signature` | Gemini 3 requires a thought blob on tool follow-ups | Retry the question — the viewer echoes Gemini thought signatures |
+| Raw ` ```btftool ` JSON instead of native tool calls | Model lacks (or skips) function calling | Same cards either way — **Apply** or enable **Auto-apply GUI actions**. Switch to `qwen2.5:7b` / `llama3.1:8b` / `gpt-4o` / Gemini for native calls |
+| Ask times out (over 120s) or stays on Waiting… | Cold start, CPU offload, or VRAM spill | **Stop**, warm with `ollama run MODEL`, retry. Use **Clear** between long threads. Smaller model or shorter Statistics scope if the Findings card is huge |
+| Later turns ignore earlier facts | Chat history exceeded the context window | **Clear** on the AI bar, or **Analysis → Query with AI…** for a fresh scoped prompt |
 
 Same body the viewer sends for **Test connection** (replace `BASE`, `MODEL`, and `KEY`):
 
@@ -1406,6 +1423,7 @@ Compare two traces you already have open side-by-side:
 3. Choose **Trace A** and **Trace B** from the dropdowns.
 4. Optionally check **Limit to each tab's cursor range** to compare metrics within C1–Cn on each trace (requires 2+ cursors per tab).
 5. Switch between **Summary**, **Top Tasks**, **Core Util**, **Core Migrations**, **Execution**, **Blocking**, **Inter-Arrival**, **Preemption**, and **Sync** tabs.
+6. Optionally click **Query with AI…** to send the current Trace A / B tables to the **AI** tab (opens **Settings → AI** if the assistant is disabled).
 
 By default, compare views use the **full trace**. With the cursor-range checkbox enabled, each side uses that tab's own cursor window independently.
 
@@ -1624,7 +1642,7 @@ The caption above the histogram (e.g. `log-scaled duration axis · full range 17
 
 The CDF is included in **Export PNG / SVG** from the plot dialog. It is not interactive (no click-to-jump); use the **scatter plot** above the histogram to jump to individual events.
 
-**Jump links:** in Execution Time, Blocking Time, **Dispatch / Scheduling Latency**, and Inter-Arrival tables, click **Min** or **Max** (dotted underline) to jump to the slice at the shortest or longest value and add an **annotation** with a descriptive note. Click any **distribution-chart** point to jump to that event, add an annotation, and switch to the **Marks** tab with the new annotation selected (segment start for task metrics; tick timestamp for **Tick Distribution**; switch/concurrency timestamp for those plots; zoom + highlight for **Priority Inheritance** episodes; interval start for **Interval Analysis**). In Preemption Chain, the annotation is placed at the **preemptor segment** start. In **Mutex / Semaphore**, click any **Pairing issues** row to zoom to the running task segment on that core, jump to the issue time, and add an annotation.
+**Jump links:** in Execution Time, Blocking Time, **Dispatch / Scheduling Latency**, and Inter-Arrival tables, click **Min** or **Max** (dotted underline) to jump to the slice at the shortest or longest value and add an **annotation** with a descriptive note. Click any **distribution-chart** point to jump to that event and add an annotation without switching right-panel tabs (segment start for task metrics; tick timestamp for **Tick Distribution**; switch/concurrency timestamp for those plots; zoom + highlight for **Priority Inheritance** episodes; interval start for **Interval Analysis**). In Preemption Chain, the annotation is placed at the **preemptor segment** start. In **Mutex / Semaphore**, click any **Pairing issues** row to zoom to the running task segment on that core, jump to the issue time, and add an annotation.
 
 Example plots from `tracedata/example-4cores.btf.gz` (4-core SMP trace, 67 tasks) are in [Statistics metric tables](#statistics-metric-tables).
 
@@ -1639,6 +1657,7 @@ Example plots from `tracedata/example-4cores.btf.gz` (4-core SMP trace, 67 tasks
 | Copy viewport | Clipboard | Clipboard |
 | SVG | Save SVG | Save SVG |
 | Perfetto JSON | **File → Export Perfetto…** | Toolbar **Perfetto** |
+| Cursor-range `.btf` | **File → Save selection as BTF…** (C1–Cn; `.btf` / `.btf.gz`; re-reads source) | Toolbar crop (2+ cursors; `.btf` download; reconstructs after refresh if source text is gone) |
 | Statistics CSV/HTML | Statistics panel | Statistics panel |
 | Compare CSV/HTML | Trace Compare dialog | Trace Compare dialog |
 
@@ -1655,6 +1674,7 @@ Same engine as the GUI, suitable for CI. Use `QT_QPA_PLATFORM=offscreen` when no
 | `migrations` | Migrations table as CSV |
 | `snapshot` | PNG/SVG of timeline, migration inspector, or a metric plot |
 | `perfetto` | Chrome Trace JSON |
+| `slice` | Timestamp window as a smaller `.btf` |
 
 ```bash
 python builds/btf_viewer.py info trace.btf
@@ -1662,6 +1682,7 @@ python builds/btf_viewer.py report trace.btf -o report.html --format html
 python builds/btf_viewer.py compare before.btf after.btf -o diff.html
 python builds/btf_viewer.py snapshot trace.btf -o view.png --view timeline
 python builds/btf_viewer.py perfetto trace.btf -o trace.json
+python builds/btf_viewer.py slice trace.btf -o window.btf --lo 100000 --hi 500000
 ```
 
 Run `python builds/btf_viewer.py <command> -h` for full options.
@@ -1685,7 +1706,7 @@ Open **Settings** from the toolbar or `Ctrl+,`.
 | Storage | `btf_viewer.rc` next to the viewer | Browser `localStorage` |
 | Apply | Immediate | **Save** in the dialog (live preview while open; **Cancel** reverts) |
 
-Sessions also restore open tabs, viewport, cursors, and marks (Desktop: settings file; Web: local storage plus cached traces). Use **Reset to defaults** in Settings to clear custom preferences.
+Sessions also restore open tabs, viewport, cursors, and marks. Desktop re-opens filesystem paths (including `archive.zip::member.btf`). Web restores tab names plus IndexedDB packed traces (max 8). Use **Reset to defaults** in Settings to clear custom preferences.
 
 ---
 

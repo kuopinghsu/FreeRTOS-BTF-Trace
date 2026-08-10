@@ -839,6 +839,30 @@ class AiAssistantHelpersTests(unittest.TestCase):
             numbered,
         )
 
+        table = markdown_to_safe_html(
+            "| Task | CPU% |\n"
+            "| --- | ---: |\n"
+            "| Idle | 40 |\n"
+            "| CS[1] | jump:1000 |\n"
+        )
+        self.assertIn('class="ai-md-table"', table)
+        self.assertIn("<thead>", table)
+        self.assertIn("<th ", table)
+        self.assertIn("Idle", table)
+        self.assertIn('href="btfjump:time/1000"', table)
+        self.assertIn('align="right"', table)
+        self.assertNotIn("| Task |", table)
+
+        html_table = markdown_to_safe_html(
+            '<table><tr><th onclick="x()">A</th></tr>'
+            '<tr><td><script>alert(1)</script>ok</td></tr></table>'
+        )
+        self.assertIn('class="ai-md-table"', html_table)
+        self.assertIn(">ok<", html_table)
+        self.assertNotIn("<script>", html_table)
+        self.assertNotIn("onclick", html_table)
+        self.assertNotIn("alert(1)", html_table)
+
     def test_normalize_ai_context_accepts_camel_case(self) -> None:
         ctx = normalize_ai_context({
             "findingsText": "hello",
