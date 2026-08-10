@@ -18596,7 +18596,7 @@ DEFAULT_AI_MODEL = "phi4-mini:3.8b"
 # Keep in sync with web/src/utils/ollamaClient.js (ms equivalents).
 AI_CHAT_TIMEOUT_S = 120.0
 AI_LIST_MODELS_TIMEOUT_S = 12.0
-AI_TEST_TIMEOUT_S = 60.0
+AI_TEST_TIMEOUT_S = 120.0
 
 # Per-preset settings stored in btf_viewer.rc / browser storage.
 AI_PRESET_FIELDS: Tuple[str, ...] = (
@@ -19132,6 +19132,30 @@ def _ai_ssl_error_tip(exc: BaseException, *, tls_verify: bool = True) -> str:
             "use the Desktop app)."
         )
     return ""
+
+
+def _ai_is_timeout_error(exc: BaseException) -> bool:
+    if isinstance(exc, TimeoutError):
+        return True
+    reason = getattr(exc, "reason", None)
+    if isinstance(reason, TimeoutError):
+        return True
+    blob = f"{exc} {reason or ''}".lower()
+    return "timed out" in blob or "timeout" in blob
+
+
+def _ai_timeout_error_tip(exc: BaseException, *, timeout_s: float) -> str:
+    if not _ai_is_timeout_error(exc):
+        return ""
+    secs = max(1, int(round(float(timeout_s) or 0)))
+    return (
+        f" Waited {secs}s for a non-streaming POST /chat/completions "
+        "(GET /models only lists ids and does not run the model). "
+        "First load of a large model is often slower — wait until it is warm "
+        "and retry, or Ask in the AI tab. Confirm with curl to the same URL "
+        "and body; if curl also hangs, the gateway's chat upstream is stuck. "
+        "Try curl with \"stream\": true if non-stream never returns."
+    )
 
 
 def ai_preset_signin_url(preset_id: str, base_url: str = "") -> str:
@@ -19894,12 +19918,14 @@ def ai_chat_completion(
             if cancel_event is not None and cancel_event.is_set():
                 raise OllamaCancelled("Stopped") from exc
             tip = _ai_ssl_error_tip(exc, tls_verify=tls_verify)
+            tip += _ai_timeout_error_tip(exc, timeout_s=timeout_s)
             raise RuntimeError(
                 f"Cannot reach OpenAI-compatible API at {url}.\n{exc.reason}{tip}"
             ) from exc
         except TimeoutError as exc:
+            tip = _ai_timeout_error_tip(exc, timeout_s=timeout_s)
             raise RuntimeError(
-                f"OpenAI-compatible request timed out after {timeout_s:.0f}s ({url})"
+                f"OpenAI-compatible request timed out after {timeout_s:.0f}s ({url}).{tip}"
             ) from exc
 
         if on_response is not None:
@@ -20127,7 +20153,9 @@ def ai_test_connection(
         )
 
     chat_url = url_base + "/chat/completions"
-    _progress(f"2/2 Chat probe with {model_name}…")
+    _progress(
+        f"2/2 Chat probe with {model_name} (first load can take a while)…"
+    )
     payload = json.dumps({
         "model": model_name,
         "stream": False,
@@ -20155,6 +20183,7 @@ def ai_test_connection(
         ) from exc
     except Exception as exc:
         tip = _ai_ssl_error_tip(exc, tls_verify=tls_verify)
+        tip += _ai_timeout_error_tip(exc, timeout_s=timeout_s)
         raise RuntimeError(
             f"Chat probe failed at {chat_url}: {exc}{tip}"
         ) from exc
@@ -34275,7 +34304,7 @@ class _SettingsDialog(QDialog):
         self._ollama_test_btn = QPushButton("Test connection")
         self._ollama_test_btn.setToolTip(
             "List models and run a tiny chat probe against this endpoint. "
-            "Status updates appear below — first model load can take a minute.")
+            "Status updates appear below — first model load can take a couple of minutes.")
         self._ollama_test_btn.clicked.connect(self._test_ollama_connection)
         _test_h.addWidget(self._ollama_test_btn)
         self._ai_import_btn = QPushButton("Import…")

@@ -45,7 +45,7 @@ export const AI_RESPONSE_LANGUAGES = [
 /** Keep in sync with btf_viewer_pkg/ai_assistant.py (seconds). */
 export const AI_CHAT_TIMEOUT_MS = 120000
 export const AI_LIST_MODELS_TIMEOUT_MS = 12000
-export const AI_TEST_TIMEOUT_MS = 60000
+export const AI_TEST_TIMEOUT_MS = 120000
 
 export function buildAiSystemPrompt(responseLanguage = DEFAULT_AI_RESPONSE_LANGUAGE) {
   const lang = String(responseLanguage || DEFAULT_AI_RESPONSE_LANGUAGE).trim()
@@ -1191,7 +1191,11 @@ export async function aiTestConnection({
     if (err?.name === 'AbortError') {
       throw new Error(
         `Chat probe timed out after ${Math.round(timeoutMs / 1000)}s `
-        + '(model may still be loading).',
+        + '(GET /models only lists ids and does not run the model). '
+        + 'First load of a large model is often slower — wait until it is warm '
+        + 'and retry, or Ask in the AI tab. Confirm with curl to the same URL '
+        + 'and body; if curl also hangs, the gateway\'s chat upstream is stuck. '
+        + 'Try curl with "stream": true if non-stream never returns.',
         { cause: err },
       )
     }

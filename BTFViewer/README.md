@@ -275,8 +275,19 @@ Replies may include ` ```mermaid ` **sequence** diagrams (mutex take/give, block
 | Web: Failed to fetch / CORS | The server is usually fine — the page just is not allowed to call it. Prefer `npm run dev` / `make preview` (both proxy Ollama), or see [Opening the web app from `file://`](#opening-the-web-app-from-file) |
 | 401 / 403 | Check authentication (Settings → AI → Sign in or API key; also `OPENAI_API_KEY` / `GEMINI_API_KEY` / `OLLAMA_API_KEY`; local Ollama needs none) |
 | `CERTIFICATE_VERIFY_FAILED` / self-signed TLS | Desktop: Settings → AI → **Allow self-signed TLS** for that preset. Web: trust the cert in the OS/browser, use `http://` on a private LAN, or use the Desktop app |
+| Chat probe timed out / `The read operation timed out` | `GET /models` only lists ids. **Test connection** then POSTs `/chat/completions` (non-streaming, 120s). Warm the model and retry. Debug with the curl probe below; if curl hangs too, the gateway's chat upstream is stuck. Try `"stream": true` if non-stream never returns. |
 | Model not found | Refresh the Model list (or Test connection) and pick a served id from the dropdown, or `ollama pull` it |
 | Gemini HTTP 400 `thought_signature` | Retry the question — the viewer echoes Gemini thought signatures on tool follow-ups |
+
+Same body the viewer sends for **Test connection** (replace `BASE`, `MODEL`, and `KEY`):
+
+```bash
+curl -vk --max-time 180 \
+  -H "Authorization: Bearer KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"MODEL","stream":false,"messages":[{"role":"user","content":"Reply with exactly: OK"}],"max_tokens":8}' \
+  BASE/chat/completions
+```
 
 <a id="opening-the-web-app-from-file" name="opening-the-web-app-from-file">&#x200B;</a>
 ### Opening the web app from `file://` ![](../images/readme/h3.svg)

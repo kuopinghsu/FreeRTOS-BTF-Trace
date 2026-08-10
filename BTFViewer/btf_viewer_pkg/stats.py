@@ -13002,7 +13002,7 @@ class _SettingsDialog(QDialog):
         self._ollama_test_btn = QPushButton("Test connection")
         self._ollama_test_btn.setToolTip(
             "List models and run a tiny chat probe against this endpoint. "
-            "Status updates appear below — first model load can take a minute.")
+            "Status updates appear below — first model load can take a couple of minutes.")
         self._ollama_test_btn.clicked.connect(self._test_ollama_connection)
         _test_h.addWidget(self._ollama_test_btn)
         self._ai_import_btn = QPushButton("Import…")

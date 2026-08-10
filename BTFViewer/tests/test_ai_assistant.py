@@ -414,6 +414,20 @@ class AiAssistantHelpersTests(unittest.TestCase):
         )
         self.assertIn("Allow self-signed TLS", tip)
 
+    def test_timeout_tip_explains_models_vs_chat(self) -> None:
+        from btf_viewer_pkg.ai_assistant import (
+            _ai_is_timeout_error,
+            _ai_timeout_error_tip,
+        )
+
+        err = TimeoutError("The read operation timed out")
+        self.assertTrue(_ai_is_timeout_error(err))
+        tip = _ai_timeout_error_tip(err, timeout_s=120)
+        self.assertIn("120s", tip)
+        self.assertIn("GET /models", tip)
+        self.assertIn("curl", tip)
+        self.assertIn("stream", tip)
+
     def test_http_401_tip_mentions_sign_in(self) -> None:
         from btf_viewer_pkg.ai_assistant import _ai_http_error_tip
         tip = _ai_http_error_tip(401, "unauthorized")

@@ -578,7 +578,7 @@
                   type="button"
                   class="settings-btn secondary"
                   :disabled="aiTesting"
-                  title="List models and run a tiny chat probe against this endpoint. Status updates appear below — first model load can take a minute."
+                  title="List models and run a tiny chat probe against this endpoint. Status updates appear below — first model load can take a couple of minutes."
                   @click="onTestAi"
                 >
                   {{ aiTesting ? 'Testing…' : 'Test connection' }}

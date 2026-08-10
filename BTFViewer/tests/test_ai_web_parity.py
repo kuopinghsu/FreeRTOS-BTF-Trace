@@ -39,7 +39,7 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn(f"AI_TEST_TIMEOUT_MS = {int(AI_TEST_TIMEOUT_S * 1000)}", js)
         self.assertEqual(AI_CHAT_TIMEOUT_S, 120.0)
         self.assertEqual(AI_LIST_MODELS_TIMEOUT_S, 12.0)
-        self.assertEqual(AI_TEST_TIMEOUT_S, 60.0)
+        self.assertEqual(AI_TEST_TIMEOUT_S, 120.0)
 
     def test_tool_rounds_match_web(self) -> None:
         js = (BTF_ROOT / "web/src/utils/aiTools.js").read_text(encoding="utf-8")
@@ -312,6 +312,10 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("export function parseAiTlsVerify", js)
         self.assertIn("ai_urlopen", assist)
         self.assertIn("aiTlsTip", js)
+        self.assertIn("def _ai_timeout_error_tip", assist)
+        self.assertIn("GET /models only lists ids", assist)
+        self.assertIn("GET /models only lists ids", js)
+        self.assertIn("BASE/chat/completions", readme)
         for name in (
             "ollama.json", "gemini.json", "openai.json",
             "deepseek.json", "grok.json", "presets.json",
