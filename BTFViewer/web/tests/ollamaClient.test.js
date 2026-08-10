@@ -254,6 +254,107 @@ describe('AI endpoint helpers', () => {
     assert.match(migrations.prompt, /thrashing|lock-bounce/i)
   })
 
+  it('aiChatCompletion sends tools without tool_choice and parses btftool', async () => {
+    const { aiChatCompletion } = await import('../src/utils/ollamaClient.js')
+    const { aiViewerTools } = await import('../src/utils/aiTools.js')
+    const orig = globalThis.fetch
+    let sent
+    globalThis.fetch = async (_url, opts) => {
+      sent = JSON.parse(opts.body)
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => 'application/json' },
+        json: async () => ({
+          choices: [{
+            message: {
+              role: 'assistant',
+              content: [
+                'Placing cursors.',
+                '```btftool',
+                '{"name":"set_cursors","arguments":{"timestamps":[10,20]}}',
+                '```',
+              ].join('\n'),
+            },
+          }],
+        }),
+        text: async () => '',
+      }
+    }
+    try {
+      const turn = await aiChatCompletion({
+        query: 'place cursors',
+        tools: aiViewerTools(),
+        baseUrl: 'http://127.0.0.1:11434/v1',
+        model: 'phi4-mini:3.8b',
+      })
+      assert.ok(Array.isArray(sent.tools) && sent.tools.length)
+      assert.equal(sent.tool_choice, undefined)
+      assert.equal(turn.tool_calls[0].name, 'set_cursors')
+      assert.deepEqual(turn.tool_calls[0].arguments.timestamps, [10, 20])
+      assert.doesNotMatch(turn.content, /btftool/)
+    } finally {
+      globalThis.fetch = orig
+    }
+  })
+
+  it('aiChatCompletion times out like desktop (120s default)', async () => {
+    const { aiChatCompletion, AI_CHAT_TIMEOUT_MS } = await import('../src/utils/ollamaClient.js')
+    assert.equal(AI_CHAT_TIMEOUT_MS, 120000)
+    const orig = globalThis.fetch
+    globalThis.fetch = (_url, opts) => new Promise((_resolve, reject) => {
+      opts.signal.addEventListener('abort', () => {
+        const err = new Error('aborted')
+        err.name = 'AbortError'
+        reject(err)
+      })
+    })
+    try {
+      await assert.rejects(
+        () => aiChatCompletion({
+          query: 'hi',
+          baseUrl: 'http://127.0.0.1:11434/v1',
+          timeoutMs: 20,
+        }),
+        /timed out after/,
+      )
+    } finally {
+      globalThis.fetch = orig
+    }
+  })
+
+  it('aiChatCompletion does not drop tools on a generic 400', async () => {
+    const { aiChatCompletion } = await import('../src/utils/ollamaClient.js')
+    const { aiViewerTools } = await import('../src/utils/aiTools.js')
+    const orig = globalThis.fetch
+    let n = 0
+    globalThis.fetch = async () => {
+      n += 1
+      return {
+        ok: false,
+        status: 400,
+        statusText: 'Bad Request',
+        headers: { get: () => 'application/json' },
+        text: async () => '{"error":"unknown model foo"}',
+        json: async () => ({}),
+      }
+    }
+    try {
+      await assert.rejects(
+        () => aiChatCompletion({
+          query: 'hi',
+          tools: aiViewerTools(),
+          baseUrl: 'http://127.0.0.1:11434/v1',
+          model: 'missing',
+        }),
+        /HTTP 400/,
+      )
+      assert.equal(n, 1)
+    } finally {
+      globalThis.fetch = orig
+    }
+  })
+
   it('normalizeAiContext accepts snake_case and camelCase', async () => {
     const { normalizeAiContext } = await import('../src/utils/ollamaClient.js')
     assert.equal(normalizeAiContext({ findings_text: 'a' }).findingsText, 'a')

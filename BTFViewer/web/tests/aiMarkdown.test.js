@@ -95,6 +95,34 @@ describe('ai conversation export', () => {
     assert.match(html, /href="btfjump:1805000"/)
   })
 
+  it('html export keeps mermaid SVG without the chat zoom wrapper', () => {
+    const html = formatAiConversationHtml([{
+      role: 'assistant',
+      content: '```mermaid\ngraph LR\n  C0[Core_0] --> C1[Core_1]\n```',
+    }], when)
+    assert.match(html, /<svg/)
+    assert.doesNotMatch(html, /#mermaid-zoom/)
+    assert.doesNotMatch(html, /ai-mermaid-zoom/)
+  })
+
+  it('exports tool cards with summarised labels', () => {
+    const withTools = [{
+      role: 'assistant',
+      content: 'Placing cursors.',
+      tools: [{
+        name: 'set_cursors',
+        arguments: { timestamps: [10, 20] },
+        status: 'pending',
+      }],
+    }]
+    const md = formatAiConversationMarkdown(withTools, when)
+    assert.match(md, /set_cursors|cursors/)
+    assert.doesNotMatch(md, /^- ⚡ set_cursors \(pending\)$/m)
+    const html = formatAiConversationHtml(withTools, when)
+    assert.match(html, /ai-tool-card/)
+    assert.match(html, /pending/)
+  })
+
   it('builds a sortable file stamp', () => {
     assert.equal(aiFileStamp(when), '20260808-084102')
   })

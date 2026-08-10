@@ -69,6 +69,7 @@ class SettingsInitialPageTests(unittest.TestCase):
         self.assertEqual(dlg._sidebar.currentRow(), 3)
         self.assertEqual(dlg._content_stack.currentIndex(), 3)
         self.assertTrue(dlg.ai_enabled)
+        self.assertFalse(dlg.ai_auto_apply)
         self.assertEqual(dlg.ai_preset, "ollama")
         self.assertIn("11434", dlg._ai_url_edit.text())
         self.assertTrue(hasattr(dlg, "_ollama_test_btn"))

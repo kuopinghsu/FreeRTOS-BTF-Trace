@@ -1,10 +1,12 @@
 """AI assistant helpers (no Ollama network required)."""
 from __future__ import annotations
 
+import json
 import os
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 BTF_ROOT = Path(__file__).resolve().parents[1]
 if str(BTF_ROOT) not in sys.path:
@@ -21,11 +23,13 @@ from btf_viewer_pkg.ai_assistant import (  # noqa: E402
     AI_PRESET_GEMINI,
     AI_PRESET_OLLAMA,
     AI_PRESET_OPENAI,
+    AI_CHAT_TIMEOUT_S,
     AI_TEMPLATE_QUESTIONS,
     DEFAULT_AI_BASE_URL,
     DEFAULT_AI_PRESET,
     _ai_log_document_html,
     _format_ai_log_html,
+    ai_chat_completion,
     apply_ai_preset,
     build_ai_system_prompt,
     build_ai_user_message,
@@ -44,6 +48,7 @@ from btf_viewer_pkg.ai_assistant import (  # noqa: E402
     parse_ai_settings_json,
     resolve_ai_settings,
 )
+from btf_viewer_pkg.ai_tools import ai_viewer_tools  # noqa: E402
 
 
 class AiAssistantHelpersTests(unittest.TestCase):
@@ -357,6 +362,108 @@ class AiAssistantHelpersTests(unittest.TestCase):
         self.assertEqual(doc.count('class="ai-turn-sep"'), 2)
         self.assertIn("Prompt two", doc)
         self.assertLess(doc.index("Reply one"), doc.index("Prompt two"))
+
+    def test_tool_card_apply_href_avoids_extra_colon(self) -> None:
+        html_out = _format_ai_log_html(
+            "assistant",
+            "Placing cursors.",
+            [{"name": "set_cursors", "arguments": {"timestamps": [1, 2]}, "status": "pending"}],
+            "b1",
+        )
+        self.assertIn('href="btfaction:apply/b1"', html_out)
+        self.assertNotIn("btfaction:apply:b1", html_out)
+
+    def test_chat_completion_sends_tools_and_parses_btftool(self) -> None:
+        captured: list = []
+
+        class _FakeResp:
+            def __init__(self, body: bytes) -> None:
+                self._body = body
+
+            def read(self, n: int = -1) -> bytes:
+                if not self._body:
+                    return b""
+                if n is None or n < 0:
+                    out, self._body = self._body, b""
+                    return out
+                out, self._body = self._body[:n], self._body[n:]
+                return out
+
+            def close(self) -> None:
+                return None
+
+        def _urlopen(req, timeout=None):  # noqa: ANN001
+            captured.append(json.loads(req.data.decode("utf-8")))
+            payload = {
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": (
+                            "Placing cursors.\n"
+                            "```btftool\n"
+                            '{"name": "set_cursors", "arguments": {"timestamps": [10, 20]}}\n'
+                            "```\n"
+                        ),
+                    },
+                }],
+            }
+            return _FakeResp(json.dumps(payload).encode("utf-8"))
+
+        with patch("btf_viewer_pkg.ai_assistant.urllib.request.urlopen", _urlopen):
+            turn = ai_chat_completion(
+                query="put cursors at 10 and 20",
+                tools=ai_viewer_tools(),
+                base_url="http://127.0.0.1:11434/v1",
+                model="phi4-mini:3.8b",
+            )
+        self.assertEqual(len(captured), 1)
+        self.assertIn("tools", captured[0])
+        self.assertNotIn("tool_choice", captured[0])
+        self.assertEqual(turn["tool_calls"][0]["name"], "set_cursors")
+        self.assertEqual(turn["tool_calls"][0]["arguments"]["timestamps"], [10.0, 20.0])
+        self.assertNotIn("btftool", turn["content"])
+
+    def test_chat_completion_keeps_tools_on_generic_400(self) -> None:
+        import io
+        import urllib.error
+
+        def _urlopen(req, timeout=None):  # noqa: ANN001
+            raise urllib.error.HTTPError(
+                "http://127.0.0.1:11434/v1/chat/completions",
+                400,
+                "Bad Request",
+                hdrs=None,
+                fp=io.BytesIO(b'{"error":"unknown model foo"}'),
+            )
+
+        with patch("btf_viewer_pkg.ai_assistant.urllib.request.urlopen", _urlopen):
+            with self.assertRaises(RuntimeError) as ctx:
+                ai_chat_completion(
+                    query="hi",
+                    tools=ai_viewer_tools(),
+                    base_url="http://127.0.0.1:11434/v1",
+                    model="missing",
+                )
+        self.assertIn("HTTP 400", str(ctx.exception))
+        self.assertNotIn("does not support tools", str(ctx.exception).lower())
+
+    def test_chat_completion_default_timeout(self) -> None:
+        self.assertEqual(AI_CHAT_TIMEOUT_S, 120.0)
+        captured = []
+
+        def _urlopen(req, timeout=None):  # noqa: ANN001
+            captured.append(timeout)
+            raise TimeoutError("slow")
+
+        with patch("btf_viewer_pkg.ai_assistant.urllib.request.urlopen", _urlopen):
+            with self.assertRaises(RuntimeError) as ctx:
+                ai_chat_completion(
+                    query="hi",
+                    base_url="http://127.0.0.1:11434/v1",
+                    model="phi4-mini:3.8b",
+                )
+        self.assertEqual(captured, [AI_CHAT_TIMEOUT_S])
+        self.assertIn("timed out", str(ctx.exception).lower())
 
     def test_markdown_to_safe_html(self) -> None:
         html_out = markdown_to_safe_html(

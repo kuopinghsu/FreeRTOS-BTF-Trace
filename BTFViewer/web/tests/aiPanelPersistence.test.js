@@ -31,6 +31,17 @@ describe('AI panel survives right-panel tab switches', () => {
 })
 
 describe('AI conversation turn layout', () => {
+  it('offers Apply GUI actions under the log (desktop parity)', () => {
+    assert.match(aiPanel, /Apply GUI actions/)
+    assert.match(aiPanel, /Undo last actions/)
+  })
+
+  it('opens a mermaid zoom overlay from the figure', () => {
+    assert.match(aiPanel, /ai-mermaid-overlay/)
+    assert.match(aiPanel, /openMermaidZoom/)
+    assert.match(aiPanel, /closeMermaidZoom/)
+  })
+
   it('styles prompt and reply as separate bubbles', () => {
     assert.match(aiPanel, /class="ai-msg"/)
     assert.match(aiPanel, /:class="m\.role"/)

@@ -1,6 +1,7 @@
 """AI panel widget behaviour that must match web/src/components/AiAssistantPanel.vue."""
 from __future__ import annotations
 
+import json
 import os
 import sys
 import unittest
@@ -21,7 +22,11 @@ from unittest.mock import patch  # noqa: E402
 from PySide6.QtCore import QPoint, QUrl  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from btf_viewer_pkg.ai_assistant import create_ai_assistant_panel  # noqa: E402
+from btf_viewer_pkg.ai_assistant import (  # noqa: E402
+    _MermaidZoomDialog,
+    create_ai_assistant_panel,
+)
+from btf_viewer_pkg.ai_mermaid import mermaid_zoom_token  # noqa: E402
 
 
 def _app() -> QApplication:
@@ -121,6 +126,73 @@ class AiPanelUiTests(unittest.TestCase):
         prompt = panel._input.toPlainText()
         self.assertIn("core thrashing", prompt)
         self.assertIn("lock-bounce", prompt)
+
+    def test_apply_gui_actions_button_runs_pending_tools(self) -> None:
+        executed = []
+
+        def _exec(calls):
+            executed.append(list(calls))
+            return [{"ok": True, "message": "ok"} for _ in calls]
+
+        panel = create_ai_assistant_panel(
+            None,
+            get_context=lambda: {"findings_text": "findings"},
+            get_settings=lambda: {"enabled": "true", "auto_apply": "false"},
+            on_execute_tools=_exec,
+        )
+        self.assertTrue(panel._tool_bar.isHidden())
+        panel._on_ok(json.dumps({
+            "content": "Placing cursors.",
+            "tool_calls": [{
+                "id": "c1",
+                "name": "set_cursors",
+                "arguments": {"timestamps": [10.0, 20.0]},
+            }],
+            "message": {"role": "assistant", "content": "Placing cursors."},
+        }))
+        self.assertFalse(panel._tool_bar.isHidden())
+        self.assertFalse(panel._apply_tools_btn.isHidden())
+        self.assertFalse(panel._skip_tools_btn.isHidden())
+        with patch.object(panel, "_continue_with_messages"):
+            panel._on_jump_link(QUrl("btfaction:apply/b1"))
+        self.assertEqual(len(executed), 1)
+        self.assertEqual(executed[0][0]["name"], "set_cursors")
+        self.assertFalse(panel._undo_tools_btn.isHidden())
+        self.assertTrue(panel._apply_tools_btn.isHidden())
+
+        panel2 = create_ai_assistant_panel(
+            None,
+            get_context=lambda: {"findings_text": "findings"},
+            get_settings=lambda: {"enabled": "true", "auto_apply": "false"},
+            on_execute_tools=_exec,
+        )
+        panel2._on_ok(json.dumps({
+            "content": "Again.",
+            "tool_calls": [{
+                "id": "c2",
+                "name": "highlight_task",
+                "arguments": {"task_name_or_id": "Low[266]"},
+            }],
+        }))
+        # Legacy colon hrefs must still Apply (QTextBrowser used to truncate them).
+        with patch.object(panel2, "_continue_with_messages"):
+            panel2._on_jump_link(QUrl("btfaction:apply:b1"))
+        self.assertEqual(executed[-1][0]["name"], "highlight_task")
+
+    def test_mermaid_zoom_opens_from_chat_link(self) -> None:
+        panel = self._panel()
+        src = "graph LR\n  C0[Core_0] --> C1[Core_1]\n"
+        token = mermaid_zoom_token(src)
+        opened = []
+
+        def fake_exec(dlg) -> int:
+            opened.append(dlg._source)
+            return 0
+
+        with patch.object(_MermaidZoomDialog, "exec", fake_exec):
+            panel._on_jump_link(QUrl(f"btfmermaid:zoom/{token}"))
+            panel._on_jump_link(QUrl("btfmermaid:zoom/!!!"))
+        self.assertEqual(opened, [src])
 
 
 if __name__ == "__main__":

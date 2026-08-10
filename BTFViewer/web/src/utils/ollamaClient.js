@@ -4,6 +4,17 @@
  * (documented in README.md § AI Assistant).
  */
 
+import {
+  AI_TOOL_SYSTEM_ADDENDUM,
+  aiViewerTools,
+  extractToolCalls,
+  mergeToolCalls,
+  messageContentText,
+  parseToolCallsFromText,
+  stripParsedToolMarkup,
+  summariseToolCall,
+} from './aiTools.js'
+
 export const AI_SYSTEM_PROMPT =
   'You are an expert Real-Time Operating System (RTOS) and SMP trace analysis ' +
   'assistant for FreeRTOS BTF traces. Analyse the provided structured metrics ' +
@@ -11,7 +22,8 @@ export const AI_SYSTEM_PROMPT =
   '(preemption, priority inversion, lock contention, core thrashing, switch ' +
   'overhead, tick health). Prefer concrete task names, cores, and durations. ' +
   'When mentioning a time, write it as jump:TIME where TIME is the numeric ' +
-  'value in the trace time unit (e.g. jump:1805120). Keep answers concise.'
+  'value in the trace time unit (e.g. jump:1805120). Keep answers concise. '
+  + AI_TOOL_SYSTEM_ADDENDUM
 
 /** Preferred reply languages — keep in sync with btf_viewer_pkg/ai_assistant.py */
 export const DEFAULT_AI_RESPONSE_LANGUAGE = 'English'
@@ -26,6 +38,11 @@ export const AI_RESPONSE_LANGUAGES = [
   'Spanish',
   'Klingon (tlhIngan Hol)',
 ]
+
+/** Keep in sync with btf_viewer_pkg/ai_assistant.py (seconds). */
+export const AI_CHAT_TIMEOUT_MS = 120000
+export const AI_LIST_MODELS_TIMEOUT_MS = 12000
+export const AI_TEST_TIMEOUT_MS = 60000
 
 export function buildAiSystemPrompt(responseLanguage = DEFAULT_AI_RESPONSE_LANGUAGE) {
   const lang = String(responseLanguage || DEFAULT_AI_RESPONSE_LANGUAGE).trim()
@@ -689,12 +706,11 @@ async function aiFetchChat(preset, urlBase, { headers, body, signal }) {
 }
 
 /**
- * Non-streaming chat against any OpenAI-compatible endpoint (Ollama included).
- * @param {object} opts
- * @returns {Promise<string>}
+ * One non-streaming `/chat/completions` round (optional tools).
+ * @returns {Promise<{ content: string, tool_calls: object[], message: object }>}
  */
-export async function aiChat({
-  query,
+export async function aiChatCompletion({
+  query = '',
   findingsText = '',
   metrics = null,
   span = '',
@@ -705,7 +721,10 @@ export async function aiChat({
   apiKey = '',
   responseLanguage = DEFAULT_AI_RESPONSE_LANGUAGE,
   preset = DEFAULT_AI_PRESET,
+  messages = null,
+  tools = null,
   signal,
+  timeoutMs = AI_CHAT_TIMEOUT_MS,
 } = {}) {
   const urlBase = normalizeAiBaseUrl(baseUrl)
   const chatModel = String(model || DEFAULT_AI_MODEL).trim() || DEFAULT_AI_MODEL
@@ -717,46 +736,130 @@ export async function aiChat({
       + 'Paste the raw key only — no Bearer prefix.',
     )
   }
-  const body = JSON.stringify({
+  const chatMessages = messages || [
+    { role: 'system', content: buildAiSystemPrompt(responseLanguage) },
+    {
+      role: 'user',
+      content: buildAiUserMessage(query, {
+        findingsText,
+        metrics,
+        span,
+        cores,
+        scope,
+      }),
+    },
+  ]
+  const payload = {
     model: chatModel,
     stream: false,
-    messages: [
-      { role: 'system', content: buildAiSystemPrompt(responseLanguage) },
-      {
-        role: 'user',
-        content: buildAiUserMessage(query, {
-          findingsText,
-          metrics,
-          span,
-          cores,
-          scope,
-        }),
-      },
-    ],
-  })
-
-  const { resp, fetchBase } = await aiFetchChat(preset, urlBase, {
-    headers: aiRequestHeaders(key, urlBase),
-    body,
-    signal,
-  })
-  if (!resp.ok) {
-    const detail = (await resp.text().catch(() => '')).slice(0, 400)
-    const tip = aiHttpErrorTip(resp.status, detail, urlBase)
-    throw new Error(
-      `HTTP ${resp.status} at ${fetchBase}/chat/completions: `
-      + `${detail || resp.statusText}.${tip}`,
-    )
+    messages: chatMessages,
   }
-  const data = await resp.json()
-  const content = data?.choices?.[0]?.message?.content
-  if (!content) throw new Error('Unexpected chat response')
-  return String(content).trim()
+  const useTools = Array.isArray(tools) && tools.length ? tools : null
+  if (useTools) {
+    // Omit tool_choice — Ollama/some proxies 400 on it and used to drop tools.
+    payload.tools = useTools
+  }
+
+  const chatCtrl = new AbortController()
+  let timedOut = false
+  const onAbort = () => chatCtrl.abort()
+  if (signal) {
+    if (signal.aborted) chatCtrl.abort()
+    else signal.addEventListener('abort', onAbort, { once: true })
+  }
+  const timer = setTimeout(() => {
+    timedOut = true
+    chatCtrl.abort()
+  }, timeoutMs)
+
+  async function post(bodyObj) {
+    const { resp, fetchBase } = await aiFetchChat(preset, urlBase, {
+      headers: aiRequestHeaders(key, urlBase),
+      body: JSON.stringify(bodyObj),
+      signal: chatCtrl.signal,
+    })
+    if (!resp.ok) {
+      const detail = (await resp.text().catch(() => '')).slice(0, 400)
+      const tip = aiHttpErrorTip(resp.status, detail, urlBase)
+      const err = new Error(
+        `HTTP ${resp.status} at ${fetchBase}/chat/completions: `
+        + `${detail || resp.statusText}.${tip}`,
+      )
+      err.httpStatus = resp.status
+      err.httpDetail = detail
+      throw err
+    }
+    return resp.json()
+  }
+
+  let data
+  try {
+    try {
+      data = await post(payload)
+    } catch (err) {
+      if (err?.name === 'AbortError') {
+        if (signal?.aborted && !timedOut) throw err
+        throw new Error(
+          `OpenAI-compatible request timed out after ${Math.round(timeoutMs / 1000)}s (${urlBase})`,
+          { cause: err },
+        )
+      }
+      const detail = String(err?.httpDetail || err?.message || '').toLowerCase()
+      const code = Number(err?.httpStatus || 0)
+      const unsupported = [
+        'does not support tools',
+        'does not support function',
+        'tool calling is not supported',
+        'unsupported tool',
+        'unknown field: tools',
+        'unknown field "tools"',
+        "unknown field 'tools'",
+      ].some(s => detail.includes(s))
+      if (useTools && [400, 404, 422].includes(code) && unsupported) {
+        delete payload.tools
+        delete payload.tool_choice
+        data = await post(payload)
+      } else {
+        throw err
+      }
+    }
+  } finally {
+    clearTimeout(timer)
+    if (signal) signal.removeEventListener('abort', onAbort)
+  }
+  const choice0 = data?.choices?.[0] || {}
+  const msg = choice0.message || data?.message || {}
+  let content = messageContentText(msg.content)
+  let calls = extractToolCalls(msg)
+  if (!calls.length && choice0.tool_calls) {
+    calls = extractToolCalls({ tool_calls: choice0.tool_calls })
+  }
+  const textCalls = parseToolCallsFromText(content)
+  calls = mergeToolCalls(calls, textCalls)
+  if (textCalls.length) content = stripParsedToolMarkup(content)
+  if (!content && !calls.length) throw new Error('Unexpected chat response')
+  return { content, tool_calls: calls, message: msg }
+}
+
+/**
+ * Non-streaming chat against any OpenAI-compatible endpoint (Ollama included).
+ * @param {object} opts
+ * @returns {Promise<string>}
+ */
+export async function aiChat(opts = {}) {
+  const turn = await aiChatCompletion(opts)
+  if (turn.content) return turn.content
+  if (turn.tool_calls?.length) {
+    return turn.tool_calls
+      .map(c => summariseToolCall(c.name, c.arguments || {}))
+      .join('\n')
+  }
+  throw new Error('Unexpected chat response')
 }
 
 /** Model ids from `GET /models` on an OpenAI-compatible API. */
 export async function aiListModels(baseUrl = DEFAULT_AI_BASE_URL, {
-  signal, timeoutMs = 12000, apiKey = '', preset = DEFAULT_AI_PRESET,
+  signal, timeoutMs = AI_LIST_MODELS_TIMEOUT_MS, apiKey = '', preset = DEFAULT_AI_PRESET,
 } = {}) {
   const urlBase = normalizeAiBaseUrl(baseUrl)
   const proxyBase = aiSameOriginProxyBase(preset, urlBase)
@@ -844,7 +947,7 @@ export async function aiTestConnection({
   apiKey = '',
   preset = DEFAULT_AI_PRESET,
   signal,
-  timeoutMs = 60000,
+  timeoutMs = AI_TEST_TIMEOUT_MS,
   onProgress,
 } = {}) {
   const progress = (msg) => {
@@ -872,7 +975,7 @@ export async function aiTestConnection({
   try {
     served = await aiListModels(urlBase, {
       signal,
-      timeoutMs: Math.min(12000, timeoutMs),
+      timeoutMs: Math.min(AI_LIST_MODELS_TIMEOUT_MS, timeoutMs),
       apiKey: key,
       preset,
     })

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { describe, it } from 'node:test'
 import { normalizeSettings } from '../src/utils/settingsStore.js'
 
@@ -6,6 +7,7 @@ describe('AI settings storage', () => {
   it('defaults to the Ollama preset with empty per-preset fields', () => {
     const s = normalizeSettings(null)
     assert.equal(s.aiPreset, 'ollama')
+    assert.equal(s.aiAutoApply, false)
     assert.deepEqual(Object.keys(s.aiPresets).sort(), ['custom', 'gemini', 'ollama', 'openai'])
     assert.deepEqual(s.aiPresets.gemini, { baseUrl: '', model: '', apiKey: '' })
   })
@@ -66,5 +68,12 @@ describe('AI settings storage', () => {
     assert.equal(s.aiPreset, 'custom')
     assert.equal(s.aiPresets.custom.baseUrl, 'https://api.deepseek.com/v1')
     assert.equal(s.aiPresets.custom.apiKey, 'ds-key')
+  })
+
+  it('Display tab lists Timeline overlays before Analysis thresholds', () => {
+    const src = readFileSync(new URL('../src/components/SettingsDialog.vue', import.meta.url), 'utf8')
+    const overlays = src.indexOf('Timeline overlays')
+    const analysis = src.indexOf('Analysis thresholds')
+    assert.ok(overlays >= 0 && analysis > overlays)
   })
 })

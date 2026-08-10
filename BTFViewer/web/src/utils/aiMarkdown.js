@@ -3,6 +3,9 @@
  * Keep in sync with btf_viewer_pkg/ai_assistant.py::markdown_to_safe_html.
  */
 
+import { mermaidBlockHtml } from './aiMermaid.js'
+import { summariseToolCall } from './aiTools.js'
+
 const JUMP_RE = /jump:([0-9]+(?:\.[0-9]+)?)/g
 const INLINE_CODE_RE = /`([^`\n]+)`/g
 const BOLD_RE = /(\*\*|__)(.+?)\1/g
@@ -85,8 +88,8 @@ function inlineToHtml(text) {
   return result
 }
 
-/** @param {string} text */
-export function markdownToSafeHtml(text) {
+/** @param {string} text @param {{ inlineSvg?: boolean, zoomable?: boolean }} [opts] */
+export function markdownToSafeHtml(text, { inlineSvg = true, zoomable = true } = {}) {
   const raw = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim()
   if (!raw) return ''
   const lines = raw.split('\n')
@@ -114,6 +117,10 @@ export function markdownToSafeHtml(text) {
         i += 1
       }
       if (i < lines.length) i += 1
+      if (String(lang).toLowerCase() === 'mermaid') {
+        out.push(mermaidBlockHtml(codeLines.join('\n'), { inlineSvg, zoomable }))
+        continue
+      }
       const cls = lang ? ` class="language-${escapeAttr(lang)}"` : ''
       out.push(`<pre><code${cls}>${escapeHtml(codeLines.join('\n'))}</code></pre>`)
       continue
@@ -207,8 +214,19 @@ export function aiFileStamp(date = new Date()) {
  */
 export function formatAiConversationMarkdown(entries, date = new Date()) {
   const out = ['# BTF Viewer — AI Conversation', '', `_Saved ${conversationStamp(date)}_`, '']
-  for (const { role, content } of entries || []) {
-    out.push(role === 'user' ? '## You' : '## Assistant', '', String(content || '').trim(), '')
+  for (const entry of entries || []) {
+    const role = entry.role
+    out.push(role === 'user' ? '## You' : '## Assistant', '')
+    const text = String(entry.content || entry.text || '').trim()
+    if (text) {
+      out.push(text, '')
+    }
+    for (const t of entry.tools || []) {
+      const st = t.status || 'pending'
+      const label = summariseToolCall(t.name || '', t.arguments || {})
+      out.push(`- ⚡ ${label} (${st})`)
+    }
+    if (entry.tools?.length) out.push('')
   }
   return `${out.join('\n').replace(/\s+$/, '')}\n`
 }
@@ -216,20 +234,42 @@ export function formatAiConversationMarkdown(entries, date = new Date()) {
 /** Plain-text transcript of the conversation. */
 export function formatAiConversationText(entries, date = new Date()) {
   const out = ['BTF Viewer — AI Conversation', `Saved ${conversationStamp(date)}`, '']
-  for (const { role, content } of entries || []) {
-    out.push(role === 'user' ? 'You:' : 'Assistant:', String(content || '').trim(), '')
+  for (const entry of entries || []) {
+    out.push(entry.role === 'user' ? 'You:' : 'Assistant:')
+    const text = String(entry.content || entry.text || '').trim()
+    if (text) out.push(text)
+    for (const t of entry.tools || []) {
+      const label = summariseToolCall(t.name || '', t.arguments || {})
+      out.push(`- ⚡ ${label} (${t.status || 'pending'})`)
+    }
+    out.push('')
   }
   return `${out.join('\n').replace(/\s+$/, '')}\n`
 }
 
+function toolCardsHtml(tools) {
+  if (!tools?.length) return ''
+  const rows = tools.map((t) => {
+    const label = escapeHtml(summariseToolCall(t.name || '', t.arguments || {}))
+    const st = escapeHtml(t.status || 'pending')
+    return `<p>⚡ ${label} <span style="color:#8b98a8">(${st})</span></p>`
+  }).join('')
+  return `<div class="ai-tool-card" style="margin-top:8px;padding:8px 10px;`
+    + `border-left:3px solid #c9a227;background:#2a2418;color:#e6d48a;">${rows}</div>`
+}
+
 /** Standalone HTML transcript (Markdown rendered, same styling as the panel). */
 export function formatAiConversationHtml(entries, date = new Date()) {
-  const body = (entries || []).map(({ role, content }) => (
-    `<section class="msg ${role === 'user' ? 'user' : 'assistant'}">`
-    + `<h3>${role === 'user' ? 'You' : 'Assistant'}</h3>`
-    + `<div class="body">${formatAiMessageHtml(role, content)}</div>`
-    + '</section>'
-  )).join('\n')
+  const body = (entries || []).map((entry) => {
+    const role = entry.role
+    const content = entry.content || entry.text || ''
+    return (
+      `<section class="msg ${role === 'user' ? 'user' : 'assistant'}">`
+      + `<h3>${role === 'user' ? 'You' : 'Assistant'}</h3>`
+      + `<div class="body">${formatAiMessageHtml(role, content, { zoomable: false })}${toolCardsHtml(entry.tools)}</div>`
+      + '</section>'
+    )
+  }).join('\n')
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -263,10 +303,10 @@ ${body}
 }
 
 /** Format a chat message; assistant = Markdown preview, user = plain. */
-export function formatAiMessageHtml(role, text) {
+export function formatAiMessageHtml(role, text, { inlineSvg = true, zoomable = true } = {}) {
   const body = String(text || '').trim()
   if (role === 'assistant') {
-    return markdownToSafeHtml(body) || '<p></p>'
+    return markdownToSafeHtml(body, { inlineSvg, zoomable }) || '<p></p>'
   }
   return escapeHtml(body)
     .replace(

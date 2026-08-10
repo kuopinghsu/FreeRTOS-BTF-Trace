@@ -81,6 +81,7 @@ export const DEFAULT_SETTINGS = {
     AI_PRESETS.map((p) => [p.id, { baseUrl: '', model: '', apiKey: '' }]),
   ),
   aiResponseLanguage: DEFAULT_AI_RESPONSE_LANGUAGE,
+  aiAutoApply: false,
 }
 
 /** Per-preset AI fields, migrating any pre-preset settings on the way. */
@@ -156,6 +157,7 @@ export function normalizeSettings(raw) {
     aiPresets: ai.presets,
     aiResponseLanguage: String(s.aiResponseLanguage || DEFAULT_SETTINGS.aiResponseLanguage).trim()
       || DEFAULT_SETTINGS.aiResponseLanguage,
+    aiAutoApply: !!s.aiAutoApply,
   }
 }
 

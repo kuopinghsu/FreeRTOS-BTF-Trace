@@ -44,6 +44,7 @@ class AiRcSettingsTests(unittest.TestCase):
         self.assertEqual(cfg["preset"], "ollama")
         self.assertEqual(cfg["ollama_base_url"], "")
         self.assertEqual(cfg["gemini_api_key"], "")
+        self.assertEqual(str(cfg.get("auto_apply") or "false").lower(), "false")
 
     def test_migrates_legacy_openai_provider(self) -> None:
         host = self._host(
