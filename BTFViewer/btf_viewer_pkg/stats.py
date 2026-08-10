@@ -13339,7 +13339,11 @@ class _SettingsDialog(QDialog):
         current = self._ai_model_text()
         self._fill_ai_model_combo(listed, current)
         if listed:
-            self._set_ai_status(f"{len(listed)} model(s) from the endpoint.", "ok")
+            self._set_ai_status(
+                f"{len(listed)} model(s) from the endpoint. "
+                "Open the Model dropdown to pick one.",
+                "ok")
+            QTimer.singleShot(0, self._ai_model_combo.showPopup)
         else:
             self._set_ai_status("Endpoint listed no models.", "error")
         self._cleanup_ai_list_worker()

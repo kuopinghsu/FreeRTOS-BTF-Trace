@@ -430,11 +430,15 @@ import {
 import {
   MAX_TOOL_ROUNDS,
   aiViewerTools,
+  buildAiReportCsv,
+  buildAiReportHtml,
   canonicalAssistantToolMessage,
+  isExportTool,
   parseAiAutoApply,
   parseBtfHighlightHref,
   parseBtfJumpHref,
   summariseToolCall,
+  toolBatchAutoRuns,
   toolResultMessage,
   validateToolCall,
 } from '../utils/aiTools.js'
@@ -462,6 +466,8 @@ const props = defineProps({
   /** (tools) => result[] */
   executeTools: { type: Function, default: null },
   undoTools: { type: Function, default: null },
+  /** () => { file, span, cores, scope, findings, cursors, highlight, view_mode, orientation, annotations } */
+  getGuiState: { type: Function, default: null },
 })
 
 const emit = defineEmits(['openSettings', 'jump', 'highlight', 'update:responseLanguage'])
@@ -721,6 +727,76 @@ function saveConversationAs(format) {
   status.value = `Saved conversation to ${name}`
 }
 
+function exportAiReport(args = {}) {
+  let fmt = String(args.format || 'html').trim().toLowerCase()
+  if (fmt !== 'csv') fmt = 'html'
+  let gui = {}
+  if (typeof props.getGuiState === 'function') {
+    try { gui = { ...(props.getGuiState() || {}) } } catch (err) {
+      return { ok: false, message: `GUI state error: ${err?.message || err}` }
+    }
+  }
+  let findings = String(gui.findings || '')
+  delete gui.findings
+  if (!findings && typeof props.getContext === 'function') {
+    try {
+      const ctx = props.getContext()
+      if (ctx && typeof ctx.then !== 'function') {
+        findings = String(ctx.findingsText || ctx.findings_text || '')
+      }
+    } catch { /* ignore */ }
+  }
+  const meta = {
+    file: gui.file || '',
+    span: gui.span || '',
+    cores: gui.cores || '',
+    scope: gui.scope || '',
+  }
+  delete gui.file
+  delete gui.span
+  delete gui.cores
+  delete gui.scope
+  const annotations = Array.isArray(gui.annotations) ? gui.annotations : []
+  const stamp = aiFileStamp()
+  let data
+  let name
+  let mime
+  if (fmt === 'csv') {
+    data = buildAiReportCsv({
+      meta,
+      gui,
+      findings,
+      annotations,
+      conversation: formatAiConversationText(messages.value),
+    })
+    name = `ai-report-${stamp}.csv`
+    mime = 'text/csv;charset=utf-8'
+  } else {
+    let inner = formatAiConversationHtml(messages.value)
+    const low = inner.toLowerCase()
+    const a = low.indexOf('<body>')
+    const b = low.lastIndexOf('</body>')
+    if (a >= 0 && b > a) inner = inner.slice(a + 6, b)
+    data = buildAiReportHtml({
+      meta,
+      gui,
+      findings,
+      annotations,
+      conversationHtml: inner,
+    })
+    name = `ai-report-${stamp}.html`
+    mime = 'text/html;charset=utf-8'
+  }
+  const url = URL.createObjectURL(new Blob([data], { type: mime }))
+  const link = document.createElement('a')
+  link.href = url
+  link.download = name
+  link.click()
+  URL.revokeObjectURL(url)
+  status.value = `Saved report to ${name}`
+  return { ok: true, message: `Saved ${fmt} report to ${name}`, path: name }
+}
+
 async function scrollLog() {
   await nextTick()
   const el = logRef.value
@@ -852,7 +928,8 @@ function ingestTurn(turn) {
       tools: toolsNorm,
       batchId,
     })
-    return { batchId, text }
+    const auto = parseAiAutoApply(props.aiAutoApply) || toolBatchAutoRuns(toolsNorm)
+    return { batchId, text, auto }
   }
   if (text) messages.value.push({ role: 'assistant', content: text })
   const jumps = extractJumpTimes(text)
@@ -880,7 +957,17 @@ function commitBatch(batchId, skipped) {
     status.value = 'Skipped GUI actions.'
   } else {
     try {
-      results = typeof props.executeTools === 'function' ? (props.executeTools(msg.tools) || []) : []
+      const hostTools = msg.tools.filter(t => !isExportTool(t.name))
+      const hostResults = hostTools.length && typeof props.executeTools === 'function'
+        ? (props.executeTools(hostTools) || [])
+        : []
+      let hi = 0
+      results = msg.tools.map((t) => {
+        if (isExportTool(t.name)) return exportAiReport(t.arguments || {})
+        const res = hostResults[hi] || { ok: false, message: 'missing tool result' }
+        hi += 1
+        return res
+      })
     } catch (err) {
       results = msg.tools.map(() => ({ ok: false, message: err?.message || String(err) }))
     }
@@ -913,7 +1000,7 @@ async function continueAfterTools() {
     const turn = await runCompletion(active)
     authForced.value = false
     const pending = ingestTurn(turn)
-    if (pending && parseAiAutoApply(props.aiAutoApply)) {
+    if (pending && pending.auto) {
       commitBatch(pending.batchId, false)
       await continueAfterTools()
     } else if (pending) {
@@ -987,7 +1074,7 @@ async function send(overrideQuery = null, overrideCtx = null) {
     const turn = await runCompletion(active)
     authForced.value = false
     const pending = ingestTurn(turn)
-    if (pending && parseAiAutoApply(props.aiAutoApply)) {
+    if (pending && pending.auto) {
       commitBatch(pending.batchId, false)
       await continueAfterTools()
     } else if (pending) {

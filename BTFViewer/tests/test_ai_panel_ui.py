@@ -28,7 +28,12 @@ from btf_viewer_pkg.ai_assistant import (  # noqa: E402
     create_ai_assistant_panel,
 )
 from btf_viewer_pkg.ai_mermaid import mermaid_zoom_token  # noqa: E402
-from btf_viewer_pkg.ai_tools import AI_VIEWER_TOOL_NAMES  # noqa: E402
+from btf_viewer_pkg.ai_tools import (  # noqa: E402
+    AI_TOOL_ADD_ANNOTATION,
+    AI_TOOL_EXPORT_REPORT,
+    AI_TOOL_QUERY_RAW_METRIC,
+    AI_VIEWER_TOOL_NAMES,
+)
 
 
 def _app() -> QApplication:
@@ -114,6 +119,18 @@ class AiPanelUiTests(unittest.TestCase):
         self.assertIn("## You", clip)
         self.assertIn("see jump:12.", clip)
         self.assertEqual(panel._status.text(), "Copied to clipboard.")
+
+    def test_signin_cta_opens_browser(self) -> None:
+        panel = self._panel()
+        opened = []
+        with patch(
+            "btf_viewer_pkg.ai_assistant.QDesktopServices.openUrl",
+            side_effect=lambda u: opened.append(u.toString()),
+        ):
+            panel._open_signin_page()
+        self.assertEqual(len(opened), 1)
+        self.assertTrue(opened[0].startswith("http"))
+        self.assertIn("Paste the key or token in Settings", panel._status.text())
 
     def test_http_links_open_in_system_browser(self) -> None:
         panel = self._panel()
@@ -264,19 +281,32 @@ class AiPanelUiTests(unittest.TestCase):
                  "arguments": {"mode": "core", "orientation": "v"}},
                 {"id": "c5", "name": "open_corridor_inspector",
                  "arguments": {"core_from": "0", "core_to": "1"}},
+                {"id": "c6", "name": AI_TOOL_ADD_ANNOTATION,
+                 "arguments": {"time": 99, "note": "spike"}},
+                {"id": "c7", "name": AI_TOOL_QUERY_RAW_METRIC,
+                 "arguments": {"task": "Low[266]", "metric": "pi"}},
+                {"id": "c8", "name": AI_TOOL_EXPORT_REPORT,
+                 "arguments": {"format": "html"}},
             ],
         }))
         with patch.object(panel, "_continue_with_messages"):
-            panel._on_jump_link(QUrl("btfaction:apply/b1"))
+            with patch.object(
+                panel, "_export_ai_report",
+                return_value={"ok": True, "message": "Saved html report"},
+            ):
+                panel._on_jump_link(QUrl("btfaction:apply/b1"))
         self.assertEqual(len(executed), 1)
         names = [c["name"] for c in executed[0]]
-        self.assertEqual(names, list(AI_VIEWER_TOOL_NAMES))
+        host_names = [n for n in AI_VIEWER_TOOL_NAMES if n != AI_TOOL_EXPORT_REPORT]
+        self.assertEqual(names, host_names)
         by_name = {c["name"]: c["arguments"] for c in executed[0]}
         self.assertEqual(by_name["set_cursors"]["timestamps"], [10.0, 20.0])
         self.assertEqual(by_name["zoom_to_range"]["start_time"], 10.0)
         self.assertEqual(by_name["highlight_task"]["task_name_or_id"], "PS[228]")
         self.assertEqual(by_name["set_view_mode"]["orientation"], "vertical")
         self.assertEqual(by_name["open_corridor_inspector"]["core_from"], "0")
+        self.assertEqual(by_name[AI_TOOL_ADD_ANNOTATION]["note"], "spike")
+        self.assertEqual(by_name[AI_TOOL_QUERY_RAW_METRIC]["metric"], "priority_inheritance")
         asst = [m for m in panel._chat_messages if m.get("role") == "assistant"][-1]
         self.assertEqual(
             [c["function"]["name"] for c in asst.get("tool_calls") or []],
@@ -288,6 +318,31 @@ class AiPanelUiTests(unittest.TestCase):
             list(AI_VIEWER_TOOL_NAMES),
         )
         self.assertTrue(all(m.get("tool_call_id") for m in tool_msgs))
+
+    def test_query_raw_metric_auto_applies(self) -> None:
+        executed = []
+
+        def _exec(calls):
+            executed.append(list(calls))
+            return [{"ok": True, "message": "1 episode", "data": {"count": 1}}]
+
+        panel = create_ai_assistant_panel(
+            None,
+            get_context=lambda: {"findings_text": "findings"},
+            get_settings=lambda: {"enabled": "true", "auto_apply": "false"},
+            on_execute_tools=_exec,
+        )
+        with patch.object(panel, "_continue_with_messages"):
+            panel._on_ok(json.dumps({
+                "content": "Looking up PI.",
+                "tool_calls": [{
+                    "id": "q1",
+                    "name": AI_TOOL_QUERY_RAW_METRIC,
+                    "arguments": {"task": "Low[266]", "metric": "pi"},
+                }],
+            }))
+        self.assertEqual(len(executed), 1)
+        self.assertEqual(executed[0][0]["name"], AI_TOOL_QUERY_RAW_METRIC)
 
     def test_qtextline_cursor_x_accepts_pyside_tuple(self) -> None:
         class _Line:

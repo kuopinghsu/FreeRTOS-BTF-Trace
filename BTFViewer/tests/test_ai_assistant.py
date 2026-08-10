@@ -51,7 +51,10 @@ from btf_viewer_pkg.ai_assistant import (  # noqa: E402
     parse_ai_settings_json,
     resolve_ai_settings,
 )
-from btf_viewer_pkg.ai_tools import ai_viewer_tools  # noqa: E402
+from btf_viewer_pkg.ai_tools import (  # noqa: E402
+    GEMINI_SKIP_THOUGHT_SIGNATURE,
+    ai_viewer_tools,
+)
 
 
 class AiAssistantHelpersTests(unittest.TestCase):
@@ -558,6 +561,118 @@ class AiAssistantHelpersTests(unittest.TestCase):
         self.assertEqual(
             [m.get("name") for m in tools],
             ["set_cursors", "highlight_task"],
+        )
+        asst = next(m for m in sent if m.get("role") == "assistant")
+        self.assertNotIn("extra_content", (asst.get("tool_calls") or [{}])[0])
+
+    def test_chat_completion_echoes_gemini_thought_signatures(self) -> None:
+        captured = []
+
+        class _FakeResp:
+            def __init__(self, body: bytes) -> None:
+                self._body = body
+
+            def read(self, n: int = -1) -> bytes:
+                if not self._body:
+                    return b""
+                if n is None or n < 0:
+                    out, self._body = self._body, b""
+                    return out
+                out, self._body = self._body[:n], self._body[n:]
+                return out
+
+            def close(self) -> None:
+                return None
+
+        def _urlopen(req, timeout=None):  # noqa: ANN001, ARG001
+            captured.append(json.loads(req.data.decode("utf-8")))
+            return _FakeResp(
+                b'{"choices":[{"message":{"role":"assistant","content":"ok"}}]}'
+            )
+
+        sig = "CvcQAdHtimRealSignature=="
+        messages = [
+            {"role": "user", "content": "Highest latency"},
+            {
+                "role": "assistant",
+                "content": "Applying.",
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "type": "function",
+                        "function": {
+                            "name": "zoom_to_range",
+                            "arguments": '{"start_time":1,"end_time":2}',
+                        },
+                        "extra_content": {
+                            "google": {"thought_signature": sig},
+                        },
+                    },
+                    {
+                        "id": "c2",
+                        "type": "function",
+                        "function": {
+                            "name": "highlight_task",
+                            "arguments": '{"task_name_or_id":"PS[228]"}',
+                        },
+                    },
+                ],
+            },
+            {"role": "tool", "tool_call_id": "c1", "name": "zoom_to_range",
+             "content": '{"ok":true}'},
+            {"role": "tool", "tool_call_id": "c2", "name": "highlight_task",
+             "content": '{"ok":true}'},
+        ]
+        with patch("btf_viewer_pkg.ai_assistant.urllib.request.urlopen", _urlopen):
+            ai_chat_completion(
+                query="",
+                messages=messages,
+                tools=ai_viewer_tools(),
+                base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+                model="gemini-flash-lite-latest",
+                preset="gemini",
+                api_key="test-key",
+            )
+        asst = next(
+            m for m in captured[0]["messages"] if m.get("role") == "assistant")
+        calls = asst["tool_calls"]
+        self.assertEqual(
+            calls[0]["extra_content"]["google"]["thought_signature"], sig)
+        self.assertNotIn("extra_content", calls[1])
+
+        captured.clear()
+        nameless = [
+            {"role": "user", "content": "Highest latency"},
+            {
+                "role": "assistant",
+                "content": "Applying.",
+                "tool_calls": [{
+                    "id": "c1",
+                    "type": "function",
+                    "function": {
+                        "name": "highlight_task",
+                        "arguments": '{"task_name_or_id":"PS[228]"}',
+                    },
+                }],
+            },
+            {"role": "tool", "tool_call_id": "c1", "name": "highlight_task",
+             "content": '{"ok":true}'},
+        ]
+        with patch("btf_viewer_pkg.ai_assistant.urllib.request.urlopen", _urlopen):
+            ai_chat_completion(
+                query="",
+                messages=nameless,
+                tools=ai_viewer_tools(),
+                base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+                model="gemini-flash-lite-latest",
+                preset="gemini",
+                api_key="test-key",
+            )
+        asst = next(
+            m for m in captured[0]["messages"] if m.get("role") == "assistant")
+        self.assertEqual(
+            asst["tool_calls"][0]["extra_content"]["google"]["thought_signature"],
+            GEMINI_SKIP_THOUGHT_SIGNATURE,
         )
 
     def test_chat_completion_default_timeout(self) -> None:

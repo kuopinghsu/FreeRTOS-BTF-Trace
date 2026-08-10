@@ -2,12 +2,16 @@
  * Viewer tool-calling schema for the AI Assistant.
  * Keep in sync with btf_viewer_pkg/ai_tools.py.
  */
+import { taskMergeKey } from './colors.js'
 
 export const AI_TOOL_SET_CURSORS = 'set_cursors'
 export const AI_TOOL_ZOOM_TO_RANGE = 'zoom_to_range'
 export const AI_TOOL_HIGHLIGHT_TASK = 'highlight_task'
 export const AI_TOOL_SET_VIEW_MODE = 'set_view_mode'
 export const AI_TOOL_OPEN_CORRIDOR = 'open_corridor_inspector'
+export const AI_TOOL_ADD_ANNOTATION = 'add_annotation'
+export const AI_TOOL_QUERY_RAW_METRIC = 'query_raw_metric'
+export const AI_TOOL_EXPORT_REPORT = 'export_report'
 
 export const AI_VIEWER_TOOL_NAMES = [
   AI_TOOL_SET_CURSORS,
@@ -15,7 +19,54 @@ export const AI_VIEWER_TOOL_NAMES = [
   AI_TOOL_HIGHLIGHT_TASK,
   AI_TOOL_SET_VIEW_MODE,
   AI_TOOL_OPEN_CORRIDOR,
+  AI_TOOL_ADD_ANNOTATION,
+  AI_TOOL_QUERY_RAW_METRIC,
+  AI_TOOL_EXPORT_REPORT,
 ]
+
+export const AI_RAW_METRIC_PRIORITY = 'priority_inheritance'
+export const AI_RAW_METRIC_EXECUTION = 'execution'
+export const AI_RAW_METRIC_MIGRATIONS = 'migrations'
+export const AI_RAW_METRIC_BLOCKING = 'blocking'
+export const AI_RAW_METRIC_SYNC = 'sync'
+export const AI_RAW_METRIC_FINDINGS = 'findings'
+export const AI_RAW_METRIC_NAMES = [
+  AI_RAW_METRIC_PRIORITY,
+  AI_RAW_METRIC_EXECUTION,
+  AI_RAW_METRIC_MIGRATIONS,
+  AI_RAW_METRIC_BLOCKING,
+  AI_RAW_METRIC_SYNC,
+  AI_RAW_METRIC_FINDINGS,
+]
+const RAW_METRIC_ALIASES = {
+  priority_inheritance: AI_RAW_METRIC_PRIORITY,
+  priority: AI_RAW_METRIC_PRIORITY,
+  pi: AI_RAW_METRIC_PRIORITY,
+  inversion: AI_RAW_METRIC_PRIORITY,
+  inherit: AI_RAW_METRIC_PRIORITY,
+  execution: AI_RAW_METRIC_EXECUTION,
+  wcet: AI_RAW_METRIC_EXECUTION,
+  cpu: AI_RAW_METRIC_EXECUTION,
+  slices: AI_RAW_METRIC_EXECUTION,
+  run: AI_RAW_METRIC_EXECUTION,
+  migrations: AI_RAW_METRIC_MIGRATIONS,
+  migration: AI_RAW_METRIC_MIGRATIONS,
+  migr: AI_RAW_METRIC_MIGRATIONS,
+  thrash: AI_RAW_METRIC_MIGRATIONS,
+  blocking: AI_RAW_METRIC_BLOCKING,
+  block: AI_RAW_METRIC_BLOCKING,
+  wait: AI_RAW_METRIC_BLOCKING,
+  latency: AI_RAW_METRIC_BLOCKING,
+  sync: AI_RAW_METRIC_SYNC,
+  mutex: AI_RAW_METRIC_SYNC,
+  semaphore: AI_RAW_METRIC_SYNC,
+  lock: AI_RAW_METRIC_SYNC,
+  findings: AI_RAW_METRIC_FINDINGS,
+  finding: AI_RAW_METRIC_FINDINGS,
+  analysis: AI_RAW_METRIC_FINDINGS,
+}
+const MAX_RAW_METRIC_ROWS = 40
+const MAX_ANNOTATION_NOTE = 240
 
 /** QTextBrowser truncates scheme:digits; use a path. */
 const BTF_JUMP_HREF_RE = /btfjump:(?:\/\/)?(?:time\/)?([0-9]+(?:\.[0-9]+)?)/i
@@ -52,11 +103,17 @@ export function parseBtfHighlightHref(href, dataHighlight) {
 }
 
 export const AI_TOOL_SYSTEM_ADDENDUM =
-  'When the user asks to show, focus, inspect, zoom, highlight, or jump to a '
-  + 'time range, task, or core pair, you MUST invoke the matching viewer tool '
-  + '(native function call) in addition to your markdown answer. Valid tools: '
-  + 'set_cursors, zoom_to_range, highlight_task, set_view_mode, '
-  + 'open_corridor_inspector. Tool timestamps use the same numeric trace time '
+  'When the user asks to show, focus, inspect, zoom, highlight, annotate, '
+  + 'export, or jump to a time range, task, or core pair, you MUST invoke the '
+  + 'matching viewer tool (native function call) in addition to your markdown '
+  + 'answer. Valid tools: set_cursors, zoom_to_range, highlight_task, '
+  + 'set_view_mode, open_corridor_inspector, add_annotation, query_raw_metric, '
+  + 'export_report. Use query_raw_metric when you need the exact per-task '
+  + 'series (priority-inheritance episodes, execution slices, migrations, '
+  + 'blocking gaps, sync STI, or findings lines) instead of the summarised '
+  + 'findings card. Use add_annotation to pin a note on a spike. Use '
+  + 'export_report to save findings, diagrams, and GUI state as HTML or CSV. '
+  + 'Tool timestamps use the same numeric trace time '
   + 'unit as jump:TIME. After tools run, summarise what you changed. '
   + 'If you cannot emit a native function call, emit one fenced btftool JSON '
   + 'object per action, for example:\n'
@@ -202,6 +259,78 @@ export function aiViewerTools() {
         },
       },
     },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_ADD_ANNOTATION,
+        description:
+          'Place an orange timeline annotation at a timestamp '
+          + '(same unit as jump:TIME) and jump there. Use this to mark '
+          + 'anomalous spikes, inversion windows, or other points of interest.',
+        parameters: {
+          type: 'object',
+          properties: {
+            time: {
+              type: 'number',
+              description: 'Trace time-unit timestamp.',
+            },
+            note: {
+              type: 'string',
+              description: 'Short annotation label shown on the Marks panel.',
+            },
+          },
+          required: ['time', 'note'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_QUERY_RAW_METRIC,
+        description:
+          'Read the underlying per-task metric series for the current '
+          + 'Statistics scope (cursor range when Limit to C1–Cn is on). '
+          + 'Returns JSON samples — not a GUI change. Metrics: '
+          + 'priority_inheritance, execution, migrations, blocking, '
+          + 'sync, findings.',
+        parameters: {
+          type: 'object',
+          properties: {
+            task: {
+              type: 'string',
+              description:
+                'Task display name (e.g. Low[266]), merge key, or numeric task id.',
+            },
+            metric: {
+              type: 'string',
+              enum: [...AI_RAW_METRIC_NAMES],
+              description: 'Which series to return.',
+            },
+          },
+          required: ['task', 'metric'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_EXPORT_REPORT,
+        description:
+          'Download a report bundling Analysis Findings, the AI '
+          + 'conversation (including mermaid diagrams), annotations, '
+          + 'and the current GUI state (cursors, highlight, view).',
+        parameters: {
+          type: 'object',
+          properties: {
+            format: {
+              type: 'string',
+              enum: ['html', 'csv'],
+              description: 'html (default) or csv.',
+            },
+          },
+        },
+      },
+    },
   ]
 }
 
@@ -231,6 +360,93 @@ export function messageContentText(content) {
   return String(content).trim()
 }
 
+export const GEMINI_SKIP_THOUGHT_SIGNATURE = 'skip_thought_signature_validator'
+
+export function thoughtSignatureFromObj(obj) {
+  if (!obj || typeof obj !== 'object') return ''
+  for (const key of ['thought_signature', 'thoughtSignature']) {
+    const val = obj[key]
+    if (typeof val === 'string' && val.trim()) return val.trim()
+  }
+  const extra = obj.extra_content
+  if (extra && typeof extra === 'object') {
+    const google = extra.google && typeof extra.google === 'object' ? extra.google : {}
+    for (const src of [google, extra]) {
+      for (const key of ['thought_signature', 'thoughtSignature']) {
+        const val = src[key]
+        if (typeof val === 'string' && val.trim()) return val.trim()
+      }
+    }
+  }
+  const fn = obj.function
+  if (fn && typeof fn === 'object') {
+    for (const key of ['thought_signature', 'thoughtSignature']) {
+      const val = fn[key]
+      if (typeof val === 'string' && val.trim()) return val.trim()
+    }
+  }
+  return ''
+}
+
+export function geminiThoughtExtraContent(signature) {
+  return { google: { thought_signature: String(signature) } }
+}
+
+export function attachThoughtSignature(call, signature) {
+  const sig = String(signature || '').trim()
+  if (!sig || !call || typeof call !== 'object') return call
+  const extra = call.extra_content && typeof call.extra_content === 'object'
+    ? { ...call.extra_content }
+    : {}
+  const google = extra.google && typeof extra.google === 'object'
+    ? { ...extra.google }
+    : {}
+  google.thought_signature = sig
+  extra.google = google
+  call.extra_content = extra
+  return call
+}
+
+export function needsGeminiThoughtSignatures({ baseUrl = '', model = '', preset = '' } = {}) {
+  void model
+  const blob = `${baseUrl} ${preset}`.toLowerCase()
+  return blob.includes('generativelanguage') || blob.includes('gemini')
+}
+
+export function ensureGeminiThoughtSignatures(messages) {
+  const out = []
+  for (const msg of messages || []) {
+    if (!msg || typeof msg !== 'object') continue
+    if (String(msg.role || '') !== 'assistant') {
+      out.push(msg)
+      continue
+    }
+    const calls = msg.tool_calls
+    if (!Array.isArray(calls) || !calls.length) {
+      out.push(msg)
+      continue
+    }
+    const copied = { ...msg }
+    copied.tool_calls = calls.map((call, i) => {
+      if (!call || typeof call !== 'object') return call
+      const c = { ...call }
+      if (c.function && typeof c.function === 'object') c.function = { ...c.function }
+      let sig = thoughtSignatureFromObj(c)
+      if (i === 0 && !sig) sig = GEMINI_SKIP_THOUGHT_SIGNATURE
+      if (sig) attachThoughtSignature(c, sig)
+      return c
+    })
+    out.push(copied)
+  }
+  return out
+}
+
+function extractedToolCall({ id, name, arguments: args, signature = '' }) {
+  const item = { id, name, arguments: args }
+  if (signature) item.thought_signature = signature
+  return item
+}
+
 export function extractToolCalls(message) {
   if (!message || typeof message !== 'object') return []
   const out = []
@@ -244,20 +460,22 @@ export function extractToolCalls(message) {
       const fn = call.function && typeof call.function === 'object' ? call.function : {}
       const name = String(fn.name || call.name || call.tool || '').trim()
       if (!name) return
-      out.push({
+      out.push(extractedToolCall({
         id: String(call.id || `call_${i}`),
         name,
         arguments: parseToolArguments(fn.arguments ?? call.arguments ?? call.args ?? call.input),
-      })
+        signature: thoughtSignatureFromObj(call),
+      }))
     })
   }
   const legacy = message.function_call
   if (legacy && typeof legacy === 'object' && legacy.name) {
-    out.push({
+    out.push(extractedToolCall({
       id: String(legacy.id || 'call_0'),
       name: String(legacy.name).trim(),
       arguments: parseToolArguments(legacy.arguments),
-    })
+      signature: thoughtSignatureFromObj(legacy),
+    }))
   }
   if (Array.isArray(message.content)) {
     message.content.forEach((part, i) => {
@@ -266,12 +484,23 @@ export function extractToolCalls(message) {
       if (!['tool_use', 'function_call', 'tool_call'].includes(ptype)) return
       const name = String(part.name || '').trim()
       if (!name) return
-      out.push({
+      out.push(extractedToolCall({
         id: String(part.id || `part_${i}`),
         name,
         arguments: parseToolArguments(part.input ?? part.arguments ?? part.args),
-      })
+        signature: thoughtSignatureFromObj(part),
+      }))
     })
+  }
+  if (out.length && !String(out[0].thought_signature || '').trim()) {
+    let fallback = thoughtSignatureFromObj(message)
+    if (!fallback && Array.isArray(message.content)) {
+      for (const part of message.content) {
+        fallback = thoughtSignatureFromObj(part)
+        if (fallback) break
+      }
+    }
+    if (fallback) out[0].thought_signature = fallback
   }
   return out
 }
@@ -387,11 +616,14 @@ export function canonicalAssistantToolMessage(content, toolCalls) {
     const argS = typeof args === 'string'
       ? args
       : JSON.stringify(args && typeof args === 'object' ? args : {})
-    callsOut.push({
+    const entry = {
       id,
       type: 'function',
       function: { name, arguments: argS },
-    })
+    }
+    const sig = String(call.thought_signature || '').trim() || thoughtSignatureFromObj(call)
+    if (sig) attachThoughtSignature(entry, sig)
+    callsOut.push(entry)
   })
   const text = messageContentText(content)
   const msg = { role: 'assistant', content: text || null }
@@ -521,6 +753,33 @@ export function validateToolCall(name, args) {
       error: '',
     }
   }
+  if (name === AI_TOOL_ADD_ANNOTATION) {
+    const t = Number(a.time)
+    if (!Number.isFinite(t)) return { args: null, error: 'time must be a number' }
+    let note = String(a.note || '').trim()
+    if (!note) return { args: null, error: 'note must be a non-empty string' }
+    if (note.length > MAX_ANNOTATION_NOTE) note = note.slice(0, MAX_ANNOTATION_NOTE).trimEnd()
+    return { args: { time: t, note }, error: '' }
+  }
+  if (name === AI_TOOL_QUERY_RAW_METRIC) {
+    const task = String(a.task || '').trim()
+    if (!task) return { args: null, error: 'task must be a non-empty string' }
+    const metric = normalizeRawMetric(a.metric)
+    if (!metric) {
+      return {
+        args: null,
+        error: `metric must be one of: ${AI_RAW_METRIC_NAMES.join(', ')}`,
+      }
+    }
+    return { args: { task, metric }, error: '' }
+  }
+  if (name === AI_TOOL_EXPORT_REPORT) {
+    let fmt = String(a.format || 'html').trim().toLowerCase()
+    if (fmt === 'htm' || fmt === 'html') fmt = 'html'
+    else if (fmt === 'csv') fmt = 'csv'
+    else return { args: null, error: 'format must be "html" or "csv"' }
+    return { args: { format: fmt }, error: '' }
+  }
   return { args: null, error: `unknown tool ${JSON.stringify(name)}` }
 }
 
@@ -560,6 +819,21 @@ export function summariseToolCall(name, args) {
     const dst = String(a.core_to || '').trim()
     if (src && dst) return `Open corridor inspector ${src} → ${dst}`
     return 'Open corridor inspector'
+  }
+  if (name === AI_TOOL_ADD_ANNOTATION) {
+    const note = String(a.note || '').trim() || 'annotation'
+    const t = Number(a.time)
+    if (Number.isFinite(t)) return `Add annotation at ${fmtTraceNum(t)}: ${note}`
+    return `Add annotation: ${note}`
+  }
+  if (name === AI_TOOL_QUERY_RAW_METRIC) {
+    const task = String(a.task || '').trim() || '?'
+    const metric = normalizeRawMetric(a.metric) || String(a.metric || '?')
+    return `Query ${metric} for ${task}`
+  }
+  if (name === AI_TOOL_EXPORT_REPORT) {
+    const fmt = String(a.format || 'html').trim().toLowerCase() || 'html'
+    return `Export ${fmt} report`
   }
   return String(name || '').replace(/_/g, ' ')
 }
@@ -686,4 +960,350 @@ export function resolveTaskKey(taskNameOrId, candidates) {
     if (containsU.length === 1) return containsU[0]
   }
   return null
+}
+
+export function normalizeRawMetric(name) {
+  const want = String(name || '').trim().toLowerCase().replace(/[-\s]/g, '_')
+  return RAW_METRIC_ALIASES[want] || ''
+}
+
+export function isQueryTool(name) {
+  return String(name || '') === AI_TOOL_QUERY_RAW_METRIC
+}
+
+export function isExportTool(name) {
+  return String(name || '') === AI_TOOL_EXPORT_REPORT
+}
+
+export function toolMutatesGui(name) {
+  return [
+    AI_TOOL_SET_CURSORS,
+    AI_TOOL_ZOOM_TO_RANGE,
+    AI_TOOL_HIGHLIGHT_TASK,
+    AI_TOOL_SET_VIEW_MODE,
+    AI_TOOL_OPEN_CORRIDOR,
+    AI_TOOL_ADD_ANNOTATION,
+  ].includes(String(name || ''))
+}
+
+export function toolBatchAutoRuns(tools) {
+  const names = (tools || []).map(t => String(t?.name || ''))
+  return names.length > 0 && names.every(isQueryTool)
+}
+
+function csvEscape(value) {
+  const s = value == null ? '' : String(value)
+  if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`
+  return s
+}
+
+export function buildAiReportCsv({
+  meta = {}, gui = {}, findings = '', annotations = [], conversation = '',
+} = {}) {
+  const rows = [['section', 'key', 'value']]
+  for (const [k, v] of Object.entries(meta || {})) rows.push(['meta', k, v])
+  const guiD = { ...(gui || {}) }
+  const cursors = guiD.cursors
+  delete guiD.cursors
+  delete guiD.annotations
+  if (cursors != null) {
+    rows.push(['gui', 'cursors', Array.isArray(cursors) ? cursors.join(';') : String(cursors)])
+  }
+  for (const [k, v] of Object.entries(guiD)) rows.push(['gui', k, v])
+  let anns = Array.isArray(annotations) ? annotations : []
+  if (!anns.length && Array.isArray(gui?.annotations)) anns = gui.annotations
+  for (const ann of anns) {
+    if (!ann || typeof ann !== 'object') continue
+    rows.push(['annotation', ann.time ?? '', ann.note ?? ''])
+  }
+  String(findings || '').split('\n').forEach((line, i) => {
+    if (line.trim()) rows.push(['finding', String(i + 1), line])
+  })
+  String(conversation || '').split('\n').forEach((line, i) => {
+    rows.push(['conversation', String(i + 1), line])
+  })
+  return `${rows.map(r => r.map(csvEscape).join(',')).join('\n')}\n`
+}
+
+function htmlEscape(text) {
+  return String(text ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+export function buildAiReportHtml({
+  meta = {}, gui = {}, findings = '', annotations = [], conversationHtml = '',
+} = {}) {
+  const metaRows = Object.entries(meta || {}).map(
+    ([k, v]) => `<tr><th>${htmlEscape(k)}</th><td>${htmlEscape(v)}</td></tr>`,
+  ).join('')
+  const guiD = { ...(gui || {}) }
+  let anns = Array.isArray(annotations) ? annotations : []
+  if (!anns.length && Array.isArray(guiD.annotations)) anns = guiD.annotations
+  delete guiD.annotations
+  const guiRows = Object.entries(guiD).map(([k, v]) => {
+    let val = v
+    if (k === 'cursors' && Array.isArray(v)) val = v.join(', ')
+    return `<tr><th>${htmlEscape(k)}</th><td>${htmlEscape(val)}</td></tr>`
+  }).join('')
+  const annRows = anns.filter(a => a && typeof a === 'object').map(
+    a => `<tr><td>${htmlEscape(a.time ?? '')}</td><td>${htmlEscape(a.note ?? '')}</td></tr>`,
+  ).join('') || '<tr><td colspan="2">None</td></tr>'
+  const findingsBody = String(findings || '').trim()
+    ? `<pre>${htmlEscape(findings)}</pre>`
+    : '<p>No findings for the current scope.</p>'
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>BTF Viewer — AI Report</title>
+<style>
+body{background:#12161d;color:#dbe2ea;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font-size:13px;line-height:1.5;margin:0;padding:20px;}
+h1{font-size:18px;margin:0 0 4px;} h2{font-size:15px;margin:20px 0 8px;}
+.saved{color:#8b98a8;font-size:12px;margin:0 0 16px;}
+table{border-collapse:collapse;width:100%;margin:0 0 12px;}
+th,td{text-align:left;padding:4px 8px;border-bottom:1px solid #2b3442;vertical-align:top;}
+th{color:#8b98a8;font-weight:600;width:22%;}
+pre{background:#1a2230;border:1px solid #3a4658;border-radius:4px;padding:8px;overflow:auto;white-space:pre-wrap;}
+a{color:#5b9bd5;}
+</style>
+</head>
+<body>
+<h1>BTF Viewer — AI Report</h1>
+<table>${metaRows}</table>
+<h2>GUI state</h2>
+<table>${guiRows}</table>
+<h2>Annotations</h2>
+<table><tr><th>Time</th><th>Note</th></tr>${annRows}</table>
+<h2>Analysis Findings</h2>
+${findingsBody}
+<h2>Conversation</h2>
+${conversationHtml || ''}
+</body>
+</html>
+`
+}
+
+function inTimeRange(t, lo, hi) {
+  if (lo == null || hi == null) return true
+  const v = Number(t)
+  return Number.isFinite(v) && v >= lo && v <= hi
+}
+
+function overlapsRange(start, stop, lo, hi) {
+  if (lo == null || hi == null) return true
+  const a = Number(start)
+  const b = Number(stop)
+  return Number.isFinite(a) && Number.isFinite(b) && b > lo && a < hi
+}
+
+function mapGet(mapLike, key) {
+  if (!mapLike) return undefined
+  if (typeof mapLike.get === 'function') return mapLike.get(key)
+  return mapLike[key]
+}
+
+function mapKeys(mapLike) {
+  if (!mapLike) return []
+  if (typeof mapLike.keys === 'function') return [...mapLike.keys()]
+  return Object.keys(mapLike)
+}
+
+function taskCandidatesFromTrace(trace) {
+  const names = [...(trace?.tasks || [])].map(String)
+  for (const k of mapKeys(trace?.segByMergeKey)) names.push(String(k))
+  const repr = trace?.taskRepr
+  if (repr && typeof repr.forEach === 'function') {
+    repr.forEach((v, k) => {
+      if (v) names.push(String(v))
+      names.push(String(k))
+    })
+  } else if (repr && typeof repr === 'object') {
+    for (const [k, v] of Object.entries(repr)) {
+      if (v) names.push(String(v))
+      names.push(String(k))
+    }
+  }
+  return names
+}
+
+function segsForMk(trace, mk) {
+  return [...(mapGet(trace?.segByMergeKey, mk) || [])]
+}
+
+function mediumLabels(ep) {
+  const list = ep?.mediumTasks || ep?.medium_tasks || []
+  return list.map((item) => {
+    if (typeof item === 'string') return item
+    if (item && typeof item === 'object') return String(item.label || item.mk || '')
+    return ''
+  }).filter(Boolean)
+}
+
+function lookupAliases(task) {
+  const out = []
+  for (const alias of taskMatchAliases(String(task || ''))) {
+    if (alias && !out.includes(alias)) out.push(alias)
+    const low = alias.toLowerCase()
+    if (low && !out.includes(low)) out.push(low)
+  }
+  return out
+}
+
+export function queryRawMetric(trace, task, metric, {
+  lo = null, hi = null, findingsText = '',
+} = {}) {
+  if (!trace) return { ok: false, message: 'No trace loaded' }
+  const metricId = normalizeRawMetric(metric)
+  if (!metricId) {
+    return {
+      ok: false,
+      message: `metric must be one of: ${AI_RAW_METRIC_NAMES.join(', ')}`,
+    }
+  }
+  const resolved = resolveTaskKey(String(task || '').trim(), taskCandidatesFromTrace(trace))
+  if (!resolved) return { ok: false, message: `Unknown task ${JSON.stringify(task)}` }
+  const mk = taskMergeKey(resolved)
+  let label = ''
+  const repr = trace.taskRepr
+  if (repr && typeof repr.get === 'function') label = String(repr.get(mk) || repr.get(resolved) || '')
+  else if (repr && typeof repr === 'object') label = String(repr[mk] || repr[resolved] || '')
+  if (!label) label = String(resolved)
+  const scope = lo != null && hi != null ? { lo, hi } : null
+  const data = { task: label, task_key: mk, metric: metricId, scope }
+
+  if (metricId === AI_RAW_METRIC_FINDINGS) {
+    const aliases = [...lookupAliases(task), ...lookupAliases(label), label, String(resolved)].filter(Boolean)
+    const hits = String(findingsText || '').split('\n').filter((line) => {
+      const low = line.toLowerCase()
+      return aliases.some(a => low.includes(String(a).toLowerCase()))
+    })
+    data.rows = hits.slice(0, MAX_RAW_METRIC_ROWS)
+    data.count = hits.length
+    data.truncated = hits.length > MAX_RAW_METRIC_ROWS
+    return { ok: true, message: `${hits.length} finding line(s) mentioning ${label}`, data }
+  }
+
+  if (metricId === AI_RAW_METRIC_PRIORITY) {
+    let eps = [...(mapGet(trace.priorityEpisodesByMk, mk) || [])]
+    if (!eps.length) {
+      for (const ep of trace.priorityEpisodes || []) {
+        if ((ep.mk || '') === mk) eps.push(ep)
+      }
+    }
+    const rows = []
+    for (const ep of eps) {
+      const start = ep.startNs ?? ep.start_ns
+      const stop = ep.stopNs ?? ep.stop_ns
+      if (!overlapsRange(start, stop, lo, hi)) continue
+      rows.push({
+        start,
+        stop,
+        duration: start != null && stop != null ? Number(stop) - Number(start) : null,
+        base_pri: ep.basePri ?? ep.base_pri,
+        peak_pri: ep.peakPri ?? ep.peak_pri,
+        inherited: Boolean(ep.inherited),
+        inversion_suspect: Boolean(ep.inversionSuspect ?? ep.inversion_suspect),
+        medium_tasks: mediumLabels(ep),
+        pattern: ep.pattern || '',
+      })
+    }
+    data.episodes = rows.slice(0, MAX_RAW_METRIC_ROWS)
+    data.count = rows.length
+    data.truncated = rows.length > MAX_RAW_METRIC_ROWS
+    return { ok: true, message: `${rows.length} priority inheritance episode(s) for ${label}`, data }
+  }
+
+  if (metricId === AI_RAW_METRIC_EXECUTION) {
+    const segs = segsForMk(trace, mk)
+    const samples = []
+    let total = 0
+    let maxDur = 0
+    let maxAt = null
+    for (const seg of segs) {
+      const start = seg.start
+      const end = seg.end
+      if (!overlapsRange(start, end, lo, hi)) continue
+      let dur = Number(end) - Number(start)
+      if (lo != null && hi != null) {
+        dur = Math.max(0, Math.min(Number(end), Number(hi)) - Math.max(Number(start), Number(lo)))
+      }
+      total += dur
+      if (dur >= maxDur) {
+        maxDur = dur
+        maxAt = start
+      }
+      samples.push({ start, stop: end, duration: dur, core: seg.core || '' })
+    }
+    data.count = samples.length
+    data.total = total
+    data.max = maxDur
+    data.max_at = maxAt
+    data.mean = samples.length ? total / samples.length : 0
+    data.slices = samples.slice(0, MAX_RAW_METRIC_ROWS)
+    data.truncated = samples.length > MAX_RAW_METRIC_ROWS
+    return { ok: true, message: `${samples.length} execution slice(s) for ${label}`, data }
+  }
+
+  if (metricId === AI_RAW_METRIC_MIGRATIONS) {
+    let migs = [...(mapGet(trace.migrationsByMk, mk) || [])]
+    if (!migs.length) {
+      for (const m of trace.migrations || []) {
+        if ((m.mergeKey || m.merge_key) === mk) migs.push(m)
+      }
+    }
+    const rows = []
+    for (const m of migs) {
+      const ns = m.ns
+      if (!inTimeRange(ns, lo, hi)) continue
+      rows.push({
+        time: ns,
+        from: m.fromCore || m.from_core || '',
+        to: m.toCore || m.to_core || '',
+      })
+    }
+    data.events = rows.slice(0, MAX_RAW_METRIC_ROWS)
+    data.count = rows.length
+    data.truncated = rows.length > MAX_RAW_METRIC_ROWS
+    return { ok: true, message: `${rows.length} migration(s) for ${label}`, data }
+  }
+
+  if (metricId === AI_RAW_METRIC_BLOCKING) {
+    const segs = [...segsForMk(trace, mk)].sort((a, b) => a.start - b.start)
+    const gaps = []
+    for (let i = 1; i < segs.length; i++) {
+      const prev = segs[i - 1]
+      const nxt = segs[i]
+      const gap = Number(nxt.start) - Number(prev.end)
+      if (gap <= 0 || !inTimeRange(nxt.start, lo, hi)) continue
+      gaps.push({ time: nxt.start, gap })
+    }
+    data.count = gaps.length
+    data.max = gaps.reduce((m, g) => Math.max(m, g.gap), 0)
+    data.total = gaps.reduce((s, g) => s + g.gap, 0)
+    data.gaps = gaps.slice(0, MAX_RAW_METRIC_ROWS)
+    data.truncated = gaps.length > MAX_RAW_METRIC_ROWS
+    return { ok: true, message: `${gaps.length} blocking gap(s) for ${label}`, data }
+  }
+
+  const aliases = [...lookupAliases(task), ...lookupAliases(label)].map(a => String(a).toLowerCase())
+  const rows = []
+  for (const ev of trace.stiEvents || []) {
+    if (!inTimeRange(ev.time, lo, hi)) continue
+    const blob = `${ev.note || ''} ${ev.target || ''} ${ev.event || ''}`.toLowerCase()
+    if (!aliases.some(a => blob.includes(a))) continue
+    rows.push({
+      time: ev.time,
+      core: ev.core || '',
+      target: ev.target || '',
+      event: ev.event || '',
+      note: ev.note || '',
+    })
+  }
+  data.events = rows.slice(0, MAX_RAW_METRIC_ROWS)
+  data.count = rows.length
+  data.truncated = rows.length > MAX_RAW_METRIC_ROWS
+  return { ok: true, message: `${rows.length} sync STI event(s) for ${label}`, data }
 }

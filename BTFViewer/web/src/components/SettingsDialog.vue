@@ -384,21 +384,77 @@
             <label class="settings-row col">
               <span class="settings-label">Model</span>
               <div class="settings-model-wrap">
-                <input
-                  v-model="aiModel"
-                  class="settings-input wide"
-                  type="text"
-                  list="ai-model-options"
-                  title="Model id served by that endpoint (e.g. `ollama list` name, gpt-4o-mini, or gemini-flash-lite-latest). Refresh to list models from GET /models."
-                  :placeholder="activePresetInfo.model || 'phi4-mini:3.8b'"
+                <div
+                  ref="aiModelComboEl"
+                  class="settings-combobox"
+                  :class="{ open: aiModelMenuOpen }"
                 >
-                <datalist id="ai-model-options">
-                  <option
-                    v-for="m in aiModelOptions"
-                    :key="m"
-                    :value="m"
-                  />
-                </datalist>
+                  <input
+                    v-model="aiModel"
+                    class="settings-combo-input"
+                    type="text"
+                    role="combobox"
+                    autocomplete="off"
+                    :aria-expanded="aiModelMenuOpen ? 'true' : 'false'"
+                    aria-controls="ai-model-listbox"
+                    aria-autocomplete="list"
+                    title="Model id served by that endpoint (e.g. `ollama list` name, gpt-4o-mini, or gemini-flash-lite-latest). Refresh to list models from GET /models, then open the dropdown to pick one."
+                    :placeholder="activePresetInfo.model || 'phi4-mini:3.8b'"
+                    @keydown="onAiModelKeydown"
+                  >
+                  <button
+                    type="button"
+                    class="settings-combo-toggle"
+                    tabindex="-1"
+                    :title="aiModelOptions.length
+                      ? `Show ${aiModelOptions.length} model(s)`
+                      : 'Refresh to list models from this endpoint'"
+                    aria-label="Show model list"
+                    @click="toggleAiModelMenu"
+                  >
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      viewBox="0 0 16 16"
+                      width="12"
+                      height="12"
+                      aria-hidden="true"
+                    >
+                      <path
+                        fill="currentColor"
+                        d="M4.2 6.2 8 10l3.8-3.8L13 7.4 8 12.4 3 7.4z"
+                      />
+                    </svg>
+                  </button>
+                </div>
+                <Teleport to="body">
+                  <ul
+                    v-if="aiModelMenuOpen"
+                    id="ai-model-listbox"
+                    ref="aiModelListEl"
+                    class="settings-combo-list"
+                    role="listbox"
+                    :style="aiModelListStyle"
+                  >
+                    <li
+                      v-for="m in aiModelOptions"
+                      :key="m"
+                      role="option"
+                      :aria-selected="m === String(aiModel || '').trim() ? 'true' : 'false'"
+                      :class="{ selected: m === String(aiModel || '').trim() }"
+                      :title="m"
+                      @mousedown.prevent="selectAiModel(m)"
+                    >
+                      {{ m }}
+                    </li>
+                    <li
+                      v-if="!aiModelOptions.length"
+                      class="settings-combo-empty"
+                      role="presentation"
+                    >
+                      Refresh to list models
+                    </li>
+                  </ul>
+                </Teleport>
                 <button
                   type="button"
                   class="settings-icon-btn"
@@ -594,7 +650,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import {
   DEFAULT_SETTINGS,
   formatDeadlinesText,
@@ -738,7 +794,87 @@ const aiModelOptions = computed(() => {
   if (cur && !listed.includes(cur)) return [cur, ...listed]
   return listed
 })
+const aiModelComboEl = ref(null)
+const aiModelListEl = ref(null)
+const aiModelMenuOpen = ref(false)
+const aiModelListStyle = ref({})
+let aiModelMenuCloser = null
 let aiAbort = null
+
+function placeAiModelMenu() {
+  const el = aiModelComboEl.value
+  if (!el) return
+  const r = el.getBoundingClientRect()
+  const maxH = 220
+  const gap = 2
+  const spaceBelow = window.innerHeight - r.bottom - 8
+  const spaceAbove = r.top - 8
+  const openUp = spaceBelow < 120 && spaceAbove > spaceBelow
+  const height = Math.min(maxH, Math.max(openUp ? spaceAbove : spaceBelow, 80))
+  aiModelListStyle.value = openUp
+    ? {
+        position: 'fixed',
+        left: `${Math.round(r.left)}px`,
+        width: `${Math.round(r.width)}px`,
+        bottom: `${Math.round(window.innerHeight - r.top + gap)}px`,
+        maxHeight: `${Math.round(height)}px`,
+        zIndex: 2600,
+      }
+    : {
+        position: 'fixed',
+        left: `${Math.round(r.left)}px`,
+        width: `${Math.round(r.width)}px`,
+        top: `${Math.round(r.bottom + gap)}px`,
+        maxHeight: `${Math.round(height)}px`,
+        zIndex: 2600,
+      }
+}
+
+function bindAiModelMenuChrome(open) {
+  if (aiModelMenuCloser) {
+    document.removeEventListener('mousedown', aiModelMenuCloser)
+    document.removeEventListener('scroll', placeAiModelMenu, true)
+    window.removeEventListener('resize', placeAiModelMenu)
+    aiModelMenuCloser = null
+  }
+  if (!open) return
+  nextTick(() => {
+    placeAiModelMenu()
+    const sel = aiModelListEl.value?.querySelector('[aria-selected="true"]')
+    sel?.scrollIntoView({ block: 'nearest' })
+  })
+  aiModelMenuCloser = (e) => {
+    const t = e.target
+    if (aiModelComboEl.value?.contains(t)) return
+    if (aiModelListEl.value?.contains(t)) return
+    aiModelMenuOpen.value = false
+  }
+  document.addEventListener('mousedown', aiModelMenuCloser)
+  document.addEventListener('scroll', placeAiModelMenu, true)
+  window.addEventListener('resize', placeAiModelMenu)
+}
+
+watch(aiModelMenuOpen, bindAiModelMenuChrome)
+watch(aiPreset, () => { aiModelMenuOpen.value = false })
+
+function toggleAiModelMenu() {
+  aiModelMenuOpen.value = !aiModelMenuOpen.value
+}
+
+function selectAiModel(name) {
+  aiModel.value = String(name || '')
+  aiModelMenuOpen.value = false
+}
+
+function onAiModelKeydown(ev) {
+  if (ev.key === 'ArrowDown' || ev.key === 'F4') {
+    ev.preventDefault()
+    aiModelMenuOpen.value = true
+  } else if (ev.key === 'Escape' && aiModelMenuOpen.value) {
+    ev.preventDefault()
+    aiModelMenuOpen.value = false
+  }
+}
 
 /** Apply an imported settings patch to the draft; returns a summary. */
 function applyAiSettingsPatch(patch) {
@@ -797,6 +933,11 @@ onMounted(() => {
   nextTick(() => { suppressPreview.value = false })
 })
 
+onUnmounted(() => {
+  aiModelMenuOpen.value = false
+  bindAiModelMenuChrome(false)
+})
+
 watch(draft, () => {
   if (suppressPreview.value) return
   clearTimeout(previewTimer)
@@ -829,6 +970,7 @@ function onReset() {
   aiTestStatus.value = ''
   aiTestOk.value = null
   for (const pid of Object.keys(aiModelLists)) aiModelLists[pid] = []
+  aiModelMenuOpen.value = false
 }
 
 async function onRefreshModels() {
@@ -848,7 +990,8 @@ async function onRefreshModels() {
     aiModelLists[aiPreset.value] = names
     if (names.length) {
       aiTestOk.value = true
-      aiTestStatus.value = `${names.length} model(s) from the endpoint.`
+      aiTestStatus.value = `${names.length} model(s) from the endpoint. Open the Model dropdown to pick one.`
+      aiModelMenuOpen.value = true
     } else {
       aiTestOk.value = false
       aiTestStatus.value = 'Endpoint listed no models.'
@@ -1109,11 +1252,72 @@ function onSave() {
   max-width: 280px;
   grid-column: 2 / 4;
 }
-.settings-model-wrap .settings-input.wide {
-  max-width: none;
-  grid-column: auto;
+.settings-combobox {
+  position: relative;
+  display: flex;
+  align-items: stretch;
   flex: 1;
   min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--tb-bg);
+}
+.settings-combobox.open {
+  border-color: var(--accent, #0e639c);
+}
+.settings-combo-input {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+  padding: 4px 4px 4px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font-size: var(--ui-font-size);
+  outline: none;
+}
+.settings-combo-toggle {
+  flex: 0 0 22px;
+  width: 22px;
+  padding: 0;
+  border: 0;
+  border-left: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.settings-combo-toggle:hover {
+  background: var(--tb-btn-hover);
+}
+.settings-combo-list {
+  margin: 0;
+  padding: 4px 0;
+  list-style: none;
+  overflow: auto;
+  background: var(--tb-bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+  font-size: var(--ui-font-size);
+}
+.settings-combo-list li {
+  padding: 4px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.settings-combo-list li:hover,
+.settings-combo-list li.selected {
+  background: color-mix(in srgb, var(--accent, #0e639c) 22%, transparent);
+}
+.settings-combo-empty {
+  cursor: default;
+  color: var(--fg-dim);
 }
 .settings-icon-btn {
   flex: 0 0 32px;

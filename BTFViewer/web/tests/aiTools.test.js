@@ -1,31 +1,44 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
+  AI_RAW_METRIC_PRIORITY,
   AI_TOOL_SYSTEM_ADDENDUM,
   AI_VIEWER_TOOL_NAMES,
+  GEMINI_SKIP_THOUGHT_SIGNATURE,
   aiViewerTools,
   btfHighlightHref,
   btfJumpHref,
+  buildAiReportCsv,
+  buildAiReportHtml,
   parseBtfHighlightHref,
   parseBtfJumpHref,
   extractToolCalls,
+  ensureGeminiThoughtSignatures,
   mergeToolCalls,
+  needsGeminiThoughtSignatures,
   canonicalAssistantToolMessage,
+  normalizeRawMetric,
   normalizeToolChatMessages,
   parseAiAutoApply,
   parseToolCallsFromText,
+  queryRawMetric,
   resolveCoreKey,
   resolveTaskKey,
   stripParsedToolMarkup,
   summariseToolCall,
+  toolBatchAutoRuns,
+  toolMutatesGui,
   toolResultMessage,
   validateToolCall,
 } from '../src/utils/aiTools.js'
 
 describe('aiTools', () => {
-  it('exports the five viewer tools', () => {
+  it('exports the viewer tools', () => {
     const names = aiViewerTools().map(t => t.function.name)
     assert.deepEqual(names, [...AI_VIEWER_TOOL_NAMES])
+    assert.ok(names.includes('add_annotation'))
+    assert.ok(names.includes('query_raw_metric'))
+    assert.ok(names.includes('export_report'))
   })
 
   it('validates set_cursors and zoom_to_range', () => {
@@ -67,6 +80,78 @@ describe('aiTools', () => {
     assert.match(summariseToolCall('set_view_mode', { mode: 'core', orientation: 'vertical' }), /core/)
     assert.match(summariseToolCall('open_corridor_inspector', { core_from: 'Core_0', core_to: 'Core_1' }), /Core_0/)
     assert.equal(summariseToolCall('open_corridor_inspector', {}), 'Open corridor inspector')
+  })
+
+  it('validates annotation, query_raw_metric, and export_report', () => {
+    const ann = validateToolCall('add_annotation', { time: 1805120, note: '  spike  ' })
+    assert.equal(ann.error, '')
+    assert.equal(ann.args.note, 'spike')
+    assert.ok(validateToolCall('add_annotation', { time: 1, note: '' }).error)
+    const q = validateToolCall('query_raw_metric', { task: 'Low[266]', metric: 'pi' })
+    assert.equal(q.error, '')
+    assert.equal(q.args.metric, AI_RAW_METRIC_PRIORITY)
+    assert.ok(validateToolCall('query_raw_metric', { task: 'Low[266]', metric: 'nope' }).error)
+    const exp = validateToolCall('export_report', {})
+    assert.equal(exp.args.format, 'html')
+    assert.equal(validateToolCall('export_report', { format: 'CSV' }).args.format, 'csv')
+    assert.match(summariseToolCall('add_annotation', { time: 1805120, note: 'spike' }), /1805120/)
+    assert.equal(toolMutatesGui('add_annotation'), true)
+    assert.equal(toolMutatesGui('query_raw_metric'), false)
+    assert.equal(toolBatchAutoRuns([{ name: 'query_raw_metric' }]), true)
+    assert.equal(toolBatchAutoRuns([
+      { name: 'query_raw_metric' }, { name: 'add_annotation' },
+    ]), false)
+    assert.equal(normalizeRawMetric('priority-inheritance'), AI_RAW_METRIC_PRIORITY)
+  })
+
+  it('queryRawMetric returns priority episodes', () => {
+    const mk = '\x00266\x00Low'
+    const ep = {
+      mk, taskLabel: 'Low[266]', basePri: 1, peakPri: 4,
+      startNs: 3100000, stopNs: 3134000, inherited: true,
+      inversionSuspect: true, mediumTasks: [{ label: 'Med[267]' }],
+      pattern: 'Mutex inherit L/M/H (Med[267])',
+    }
+    const trace = {
+      tasks: ['Low[266]', 'Med[267]'],
+      taskRepr: new Map([[mk, 'Low[266]']]),
+      segByMergeKey: new Map([[mk, [{ task: 'Low[266]', start: 3090000, end: 3095000, core: 'Core_0' }]]]),
+      priorityEpisodes: [ep],
+      priorityEpisodesByMk: new Map([[mk, [ep]]]),
+      migrationsByMk: new Map(),
+      stiEvents: [],
+    }
+    const out = queryRawMetric(trace, 'Low[266]', 'priority_inheritance')
+    assert.equal(out.ok, true)
+    assert.equal(out.data.count, 1)
+    assert.equal(out.data.episodes[0].peak_pri, 4)
+    assert.ok(out.data.episodes[0].medium_tasks.includes('Med[267]'))
+    const execOut = queryRawMetric(trace, 'Low[266]', 'execution')
+    assert.equal(execOut.data.count, 1)
+    const miss = queryRawMetric(trace, 'NoSuch', 'execution')
+    assert.equal(miss.ok, false)
+  })
+
+  it('builds AI report CSV and HTML', () => {
+    const csv = buildAiReportCsv({
+      meta: { file: 'demo.btf' },
+      gui: { cursors: [10, 20], view_mode: 'task' },
+      findings: '1. [WARNING] Thrash',
+      annotations: [{ time: 15, note: 'spike' }],
+      conversation: 'You:\nhello\n',
+    })
+    assert.match(csv, /demo\.btf/)
+    assert.match(csv, /spike/)
+    const html = buildAiReportHtml({
+      meta: { file: 'demo.btf' },
+      gui: { highlight: 'Low[266]' },
+      findings: 'ok',
+      annotations: [{ time: 1, note: 'n' }],
+      conversationHtml: '<p>hi</p>',
+    })
+    assert.match(html, /AI Report/)
+    assert.match(html, /Low\[266\]/)
+    assert.match(html, /<p>hi<\/p>/)
   })
 
   it('resolves core aliases like CLI Core_0 / 0 / c0', () => {
@@ -184,5 +269,62 @@ describe('aiTools', () => {
       ['set_cursors', 'highlight_task'],
     )
     assert.ok(byOrder.filter(m => m.role === 'tool').every(m => m.tool_call_id))
+  })
+
+  it('preserves Gemini thought signatures and skips only the first missing call', () => {
+    const sig = 'CvcQAdHtimRealSignature=='
+    const extracted = extractToolCalls({
+      role: 'assistant',
+      tool_calls: [
+        {
+          id: 'c1',
+          type: 'function',
+          function: { name: 'set_cursors', arguments: '{"timestamps":[1,2]}' },
+          extra_content: { google: { thought_signature: sig } },
+        },
+        {
+          id: 'c2',
+          type: 'function',
+          function: {
+            name: 'highlight_task',
+            arguments: '{"task_name_or_id":"PS[228]"}',
+          },
+        },
+      ],
+    })
+    assert.equal(extracted[0].thought_signature, sig)
+    assert.equal(extracted[1].thought_signature, undefined)
+    const canon = canonicalAssistantToolMessage(null, extracted)
+    assert.equal(
+      canon.tool_calls[0].extra_content.google.thought_signature,
+      sig,
+    )
+    assert.equal(canon.tool_calls[1].extra_content, undefined)
+    const again = normalizeToolChatMessages([canon])
+    assert.equal(
+      again[0].tool_calls[0].extra_content.google.thought_signature,
+      sig,
+    )
+    const filled = ensureGeminiThoughtSignatures([
+      canonicalAssistantToolMessage('Applying.', [
+        { id: 'c1', name: 'highlight_task', arguments: { task_name_or_id: 'PS[228]' } },
+        { id: 'c2', name: 'set_cursors', arguments: { timestamps: [1, 2] } },
+      ]),
+    ])
+    assert.equal(
+      filled[0].tool_calls[0].extra_content.google.thought_signature,
+      GEMINI_SKIP_THOUGHT_SIGNATURE,
+    )
+    assert.equal(filled[0].tool_calls[1].extra_content, undefined)
+    assert.equal(needsGeminiThoughtSignatures({
+      baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+      preset: 'custom',
+    }), true)
+    assert.equal(needsGeminiThoughtSignatures({ preset: 'gemini' }), true)
+    assert.equal(needsGeminiThoughtSignatures({
+      baseUrl: 'http://127.0.0.1:11434/v1',
+      model: 'gemini-2.5-flash',
+      preset: 'ollama',
+    }), false)
   })
 })

@@ -234,10 +234,13 @@ The model may call viewer tools. With **Auto-apply GUI actions** off (default in
 | `highlight_task` | Lock-highlight a task row (display name, numeric id, or merge key). Unknown names are ignored so the timeline is not dimmed. |
 | `set_view_mode` | Switch Task or Core view; horizontal or vertical |
 | `open_corridor_inspector` | Open Migration Inspector. Core aliases `Core_0`, `0`, `c0`, and `Core 0` resolve the same way. |
+| `add_annotation` | Pin an orange timeline note at a timestamp and jump there (Marks panel). |
+| `query_raw_metric` | Read-only: return the per-task series for the current Statistics scope (`priority_inheritance`, `execution`, `migrations`, `blocking`, `sync`, `findings`). Query-only batches apply immediately (no Apply card). |
+| `export_report` | Download HTML or CSV bundling Analysis Findings, mermaid diagrams from the chat, annotations, and GUI state (cursors / highlight / view). |
 
 Models without native tool calling can emit a fenced ` ```btftool ` JSON block (same cards). Prefer a tool-capable model (for example `qwen2.5` / `llama3.1`) if native calls stay silent.
 
-After **Apply**, **Undo last actions** restores zoom / view / highlight / inspector; **Ctrl/Cmd+Z** also reverts cursors and marks.
+After **Apply**, **Undo last actions** restores zoom / view / highlight / inspector / marks; **Ctrl/Cmd+Z** also reverts cursors and marks.
 
 <a id="ai-diagrams" name="ai-diagrams">&#x200B;</a>
 ##### Diagrams ![](../images/readme/h5.svg)
@@ -257,10 +260,12 @@ Replies may include ` ```mermaid ` **sequence** diagrams (mutex take/give, block
 | Area | Desktop | Web |
 |------|---------|-----|
 | Native tools + ` ```btftool ` | Same schema and cards | Same |
+| `add_annotation` / `query_raw_metric` / `export_report` | Marks + scoped series + save dialog | Same (browser download) |
 | `highlight_task` / corridor cores | Same resolve rules | Same |
 | In-chat mermaid figure | Data-URI image + node hit-test | Inline SVG node clicks |
 | Zoom window + link row | Yes | Yes |
 | Authentication | Settings → AI → None / API key / Sign in; panel chip + 401 CTAs until a successful turn | Same (`VITE_*` env keys) |
+| Model picker | Editable combo; refresh fills and opens the dropdown | Same |
 | Fonts | **pt** | **px** |
 | Endpoint from `file://` | N/A | CORS — prefer Vite proxy, or [Opening the web app from `file://`](#opening-the-web-app-from-file) |
 
@@ -268,7 +273,8 @@ Replies may include ` ```mermaid ` **sequence** diagrams (mutex take/give, block
 |-----------------|-----|
 | Web: Failed to fetch / CORS | The server is usually fine — the page just is not allowed to call it. Prefer `npm run dev` / `make preview` (both proxy Ollama), or see [Opening the web app from `file://`](#opening-the-web-app-from-file) |
 | 401 / 403 | Check authentication (Settings → AI → Sign in or API key; also `OPENAI_API_KEY` / `GEMINI_API_KEY` / `OLLAMA_API_KEY`; local Ollama needs none) |
-| Model not found | Refresh the Model list (or Test connection) and pick a served id, or `ollama pull` it |
+| Model not found | Refresh the Model list (or Test connection) and pick a served id from the dropdown, or `ollama pull` it |
+| Gemini HTTP 400 `thought_signature` | Retry the question — the viewer echoes Gemini thought signatures on tool follow-ups |
 
 <a id="opening-the-web-app-from-file" name="opening-the-web-app-from-file">&#x200B;</a>
 ### Opening the web app from `file://` ![](../images/readme/h3.svg)

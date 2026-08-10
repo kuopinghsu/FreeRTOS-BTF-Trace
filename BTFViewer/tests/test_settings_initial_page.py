@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 BTF_ROOT = Path(__file__).resolve().parents[1]
 if str(BTF_ROOT) not in sys.path:
@@ -161,6 +163,41 @@ class SettingsInitialPageTests(unittest.TestCase):
         self.assertLess(items.index("alpha-model"), items.index("zeta-model"))
         if current and current not in ("alpha-model", "zeta-model"):
             self.assertIn(current, items)
+        self.assertIn("Open the Model dropdown to pick one.", dlg._ollama_test_status.text())
+
+    def test_ai_signin_opens_browser(self) -> None:
+        dlg = self._dlg("AI")
+        self.addCleanup(dlg.deleteLater)
+        dlg._ai_preset_combo.setCurrentIndex(dlg._ai_preset_combo.findData("gemini"))
+        dlg._ai_auth_combo.setCurrentIndex(dlg._ai_auth_combo.findData("browser"))
+        opened = []
+        with patch(
+            "btf_viewer_pkg.stats.QDesktopServices.openUrl",
+            side_effect=lambda u: opened.append(u.toString()),
+        ):
+            dlg._ai_open_signin()
+        self.assertEqual(len(opened), 1)
+        self.assertIn("aistudio.google.com", opened[0])
+        self.assertIn("Opened ", dlg._ollama_test_status.text())
+
+    def test_bundle_qtgui_includes_desktop_services(self) -> None:
+        """The single-file app must import QDesktopServices (Sign in)."""
+        imports = (BTF_ROOT / "btf_viewer_pkg/_imports.py").read_text(
+            encoding="utf-8")
+        script = (BTF_ROOT / "scripts/bundle_viewer.py").read_text(
+            encoding="utf-8")
+        bundle = (BTF_ROOT / "builds/btf_viewer.py").read_text(encoding="utf-8")
+        pat = re.compile(
+            r"from PySide6\.QtGui import \(\s*(.*?)\s*\)", re.S)
+        for src, label in (
+            (imports, "_imports.py"),
+            (script, "bundle_viewer.py"),
+            (bundle, "builds/btf_viewer.py"),
+        ):
+            m = pat.search(src)
+            self.assertIsNotNone(m, label)
+            names = {n.strip() for n in m.group(1).split(",") if n.strip()}
+            self.assertIn("QDesktopServices", names, label)
 
     def test_default_appearance(self) -> None:
         dlg = self._dlg("Appearance")

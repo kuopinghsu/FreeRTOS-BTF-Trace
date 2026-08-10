@@ -28,6 +28,16 @@ import {
 } from '../src/utils/ollamaClient.js'
 
 describe('AI endpoint helpers', () => {
+  it('aiListModels always arms a timeout even with an external signal', () => {
+    const src = readFileSync(
+      new URL('../src/utils/ollamaClient.js', import.meta.url),
+      'utf8',
+    )
+    const fn = src.slice(src.indexOf('export async function aiListModels'))
+    assert.match(fn, /AbortSignal\.timeout\(timeoutMs\)/)
+    assert.match(fn, /AbortSignal\.any\(\[signal, timeoutSignal\]\)/)
+  })
+
   it('normalizeAiBaseUrl targets the OpenAI-compatible root', () => {
     assert.equal(normalizeAiBaseUrl('http://localhost:11434'), 'http://localhost:11434/v1')
     assert.equal(normalizeAiBaseUrl('http://localhost:11434/api'), 'http://localhost:11434/v1')
@@ -433,6 +443,102 @@ describe('AI endpoint helpers', () => {
       })
       const names = sent.messages.filter(m => m.role === 'tool').map(m => m.name)
       assert.deepEqual(names, ['set_cursors', 'highlight_task'])
+      const asst = sent.messages.find(m => m.role === 'assistant')
+      assert.equal(asst.tool_calls[0].extra_content, undefined)
+    } finally {
+      globalThis.fetch = orig
+    }
+  })
+
+  it('aiChatCompletion echoes Gemini thought signatures on follow-ups', async () => {
+    const { aiChatCompletion } = await import('../src/utils/ollamaClient.js')
+    const { GEMINI_SKIP_THOUGHT_SIGNATURE } = await import('../src/utils/aiTools.js')
+    const orig = globalThis.fetch
+    let sent
+    globalThis.fetch = async (_url, opts) => {
+      sent = JSON.parse(opts.body)
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => 'application/json' },
+        json: async () => ({
+          choices: [{ message: { role: 'assistant', content: 'ok' } }],
+        }),
+        text: async () => '',
+      }
+    }
+    const sig = 'CvcQAdHtimRealSignature=='
+    try {
+      await aiChatCompletion({
+        query: '',
+        messages: [
+          { role: 'user', content: 'Highest latency' },
+          {
+            role: 'assistant',
+            content: 'Applying.',
+            tool_calls: [
+              {
+                id: 'c1',
+                type: 'function',
+                function: {
+                  name: 'zoom_to_range',
+                  arguments: '{"start_time":1,"end_time":2}',
+                },
+                extra_content: { google: { thought_signature: sig } },
+              },
+              {
+                id: 'c2',
+                type: 'function',
+                function: {
+                  name: 'highlight_task',
+                  arguments: '{"task_name_or_id":"PS[228]"}',
+                },
+              },
+            ],
+          },
+          { role: 'tool', tool_call_id: 'c1', name: 'zoom_to_range', content: '{"ok":true}' },
+          { role: 'tool', tool_call_id: 'c2', name: 'highlight_task', content: '{"ok":true}' },
+        ],
+        baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+        model: 'gemini-flash-lite-latest',
+        preset: 'gemini',
+        apiKey: 'test-key',
+      })
+      const asst = sent.messages.find(m => m.role === 'assistant')
+      assert.equal(
+        asst.tool_calls[0].extra_content.google.thought_signature,
+        sig,
+      )
+      assert.equal(asst.tool_calls[1].extra_content, undefined)
+
+      await aiChatCompletion({
+        query: '',
+        messages: [
+          { role: 'user', content: 'Highest latency' },
+          {
+            role: 'assistant',
+            content: 'Applying.',
+            tool_calls: [{
+              id: 'c1',
+              type: 'function',
+              function: {
+                name: 'highlight_task',
+                arguments: '{"task_name_or_id":"PS[228]"}',
+              },
+            }],
+          },
+          { role: 'tool', tool_call_id: 'c1', name: 'highlight_task', content: '{"ok":true}' },
+        ],
+        baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+        model: 'gemini-flash-lite-latest',
+        preset: 'gemini',
+        apiKey: 'test-key',
+      })
+      const skipped = sent.messages.find(m => m.role === 'assistant')
+      assert.equal(
+        skipped.tool_calls[0].extra_content.google.thought_signature,
+        GEMINI_SKIP_THOUGHT_SIGNATURE,
+      )
     } finally {
       globalThis.fetch = orig
     }

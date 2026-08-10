@@ -26,12 +26,17 @@ from .ai_tools import (
     AI_TOOL_SYSTEM_ADDENDUM,
     ai_viewer_tools,
     btf_jump_href,
+    build_ai_report_csv,
+    build_ai_report_html,
     canonical_assistant_tool_message,
+    ensure_gemini_thought_signatures,
     extract_tool_calls,
     format_tool_result_content,
+    is_export_tool,
     max_tool_rounds,
     merge_tool_calls,
     message_content_text,
+    needs_gemini_thought_signatures,
     normalize_tool_chat_messages,
     parse_ai_auto_apply,
     parse_btf_highlight_href,
@@ -39,6 +44,7 @@ from .ai_tools import (
     parse_tool_calls_from_text,
     strip_parsed_tool_markup,
     summarise_tool_call,
+    tool_batch_auto_runs,
     tool_result_message,
     tool_result_payload,
     validate_tool_call,
@@ -1416,6 +1422,7 @@ def ai_chat_completion(
     history: Optional[Sequence[Dict[str, str]]] = None,
     messages: Optional[List[Dict[str, Any]]] = None,
     tools: Optional[List[Dict[str, Any]]] = None,
+    preset: str = "",
     cancel_event: Optional[threading.Event] = None,
     on_response: Optional[Callable[[Any], None]] = None,
 ) -> Dict[str, Any]:
@@ -1446,6 +1453,9 @@ def ai_chat_completion(
             history=history,
         )
     messages = normalize_tool_chat_messages(messages)
+    if needs_gemini_thought_signatures(
+            base_url=url_base, model=chat_model, preset=preset):
+        messages = ensure_gemini_thought_signatures(messages)
     payload_obj: Dict[str, Any] = {
         "model": chat_model,
         "messages": messages,
@@ -1770,6 +1780,7 @@ def create_ai_assistant_panel(
     on_highlight: Optional[Callable[[str], None]] = None,
     on_execute_tools: Optional[Callable[[List[Dict[str, Any]]], List[Dict[str, Any]]]] = None,
     on_undo_tools: Optional[Callable[[], None]] = None,
+    on_gui_state: Optional[Callable[[], Dict[str, Any]]] = None,
     get_loaded_tabs: Optional[Callable[[], List[Dict[str, Any]]]] = None,
     build_compare_context: Optional[
         Callable[[int, int], Dict[str, Any]]
@@ -2449,6 +2460,79 @@ def create_ai_assistant_panel(
                 return
             self._status.setText(f"Saved conversation to {os.path.basename(path)}")
 
+        def _export_ai_report(self, args: Dict[str, Any]) -> Dict[str, Any]:
+            """Write findings + GUI state + conversation (export_report tool)."""
+            fmt = str((args or {}).get("format") or "html").strip().lower()
+            if fmt not in ("html", "csv"):
+                fmt = "html"
+            gui: Dict[str, Any] = {}
+            if on_gui_state:
+                try:
+                    gui = dict(on_gui_state() or {})
+                except Exception as exc:
+                    return tool_result_payload(False, f"GUI state error: {exc}")
+            findings = str(gui.pop("findings", "") or "")
+            if not findings and get_context:
+                try:
+                    findings = str((get_context() or {}).get("findings_text") or "")
+                except Exception:
+                    findings = ""
+            meta = {
+                "file": gui.pop("file", "") or "",
+                "span": gui.pop("span", "") or "",
+                "cores": gui.pop("cores", "") or "",
+                "scope": gui.pop("scope", "") or "",
+            }
+            annotations = (
+                gui.get("annotations") if isinstance(gui.get("annotations"), list) else []
+            )
+            stamp = _ai_file_stamp()
+            if fmt == "csv":
+                start = f"ai-report-{stamp}.csv"
+                filters = "CSV (*.csv);;All files (*)"
+                data = build_ai_report_csv(
+                    meta=meta,
+                    gui=gui,
+                    findings=findings,
+                    annotations=annotations,
+                    conversation=format_ai_conversation_text(self._entries),
+                )
+            else:
+                start = f"ai-report-{stamp}.html"
+                filters = "HTML (*.html);;All files (*)"
+                conv_html = format_ai_conversation_html(self._entries)
+                inner = conv_html
+                if "<body>" in inner.lower():
+                    low = inner.lower()
+                    a = low.find("<body>")
+                    b = low.rfind("</body>")
+                    if a >= 0 and b > a:
+                        inner = inner[a + 6:b]
+                data = build_ai_report_html(
+                    meta=meta,
+                    gui=gui,
+                    findings=findings,
+                    annotations=annotations,
+                    conversation_html=inner,
+                )
+            path, _selected = QFileDialog.getSaveFileName(
+                self, "Export AI Report", start, filters)
+            if not path:
+                return tool_result_payload(False, "Export cancelled")
+            lower = path.lower()
+            if fmt == "csv" and not lower.endswith(".csv"):
+                path += ".csv"
+            elif fmt == "html" and not lower.endswith((".html", ".htm")):
+                path += ".html"
+            try:
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(data)
+            except OSError as exc:
+                return tool_result_payload(False, f"Could not write file: {exc}")
+            base = os.path.basename(path)
+            self._status.setText(f"Saved report to {base}")
+            return tool_result_payload(True, f"Saved {fmt} report to {base}", path=path)
+
         def stop_query(self) -> None:
             """Abort the current AI request if one is running."""
             if not self._busy:
@@ -2630,7 +2714,10 @@ def create_ai_assistant_panel(
                     "status": "pending",
                 })
 
-            auto = parse_ai_auto_apply(self._settings_dict().get("auto_apply"))
+            auto = (
+                parse_ai_auto_apply(self._settings_dict().get("auto_apply"))
+                or tool_batch_auto_runs(tools_norm)
+            )
             if tools_norm:
                 self._batch_seq += 1
                 batch_id = f"b{self._batch_seq}"
@@ -2689,11 +2776,27 @@ def create_ai_assistant_panel(
                 for t in tools:
                     t["status"] = "skipped"
                     results.append(tool_result_payload(False, "User declined to apply this GUI action."))
-            elif on_execute_tools:
-                try:
-                    results = list(on_execute_tools(tools) or [])
-                except Exception as exc:
-                    results = [tool_result_payload(False, str(exc)) for _ in tools]
+            elif on_execute_tools or any(is_export_tool(str(t.get("name") or "")) for t in tools):
+                host_tools = [t for t in tools if not is_export_tool(str(t.get("name") or ""))]
+                host_results: List[Dict[str, Any]] = []
+                if host_tools and on_execute_tools:
+                    try:
+                        host_results = list(on_execute_tools(host_tools) or [])
+                    except Exception as exc:
+                        host_results = [tool_result_payload(False, str(exc)) for _ in host_tools]
+                hi = 0
+                for t in tools:
+                    if is_export_tool(str(t.get("name") or "")):
+                        results.append(self._export_ai_report(
+                            t.get("arguments") if isinstance(t.get("arguments"), dict) else {}))
+                    else:
+                        res = (
+                            host_results[hi]
+                            if hi < len(host_results) and isinstance(host_results[hi], dict)
+                            else tool_result_payload(False, "missing tool result")
+                        )
+                        hi += 1
+                        results.append(res)
                 for i, t in enumerate(tools):
                     res = results[i] if i < len(results) and isinstance(results[i], dict) else {}
                     t["status"] = "applied" if res.get("ok", True) else "failed"
@@ -2736,6 +2839,7 @@ def create_ai_assistant_panel(
                 "base_url": active["base_url"],
                 "model": active["model"],
                 "api_key": active["api_key"],
+                "preset": active["preset"],
                 "response_language": cfg.get(
                     "response_language", DEFAULT_AI_RESPONSE_LANGUAGE
                 ),
@@ -2817,6 +2921,7 @@ def create_ai_assistant_panel(
                 "base_url": active["base_url"],
                 "model": active["model"],
                 "api_key": active["api_key"],
+                "preset": active["preset"],
                 "response_language": cfg.get(
                     "response_language", DEFAULT_AI_RESPONSE_LANGUAGE
                 ),

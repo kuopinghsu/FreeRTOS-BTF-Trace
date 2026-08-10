@@ -16,24 +16,37 @@ from btf_viewer_pkg.ai_tools import (  # noqa: E402
     btf_jump_href,
     parse_btf_highlight_href,
     parse_btf_jump_href,
+    AI_RAW_METRIC_PRIORITY,
+    AI_TOOL_ADD_ANNOTATION,
+    AI_TOOL_EXPORT_REPORT,
     AI_TOOL_HIGHLIGHT_TASK,
     AI_TOOL_OPEN_CORRIDOR,
+    AI_TOOL_QUERY_RAW_METRIC,
     AI_TOOL_SET_CURSORS,
     AI_TOOL_SET_VIEW_MODE,
     AI_TOOL_SYSTEM_ADDENDUM,
     AI_TOOL_ZOOM_TO_RANGE,
     AI_VIEWER_TOOL_NAMES,
     ai_viewer_tools,
+    build_ai_report_csv,
+    build_ai_report_html,
+    GEMINI_SKIP_THOUGHT_SIGNATURE,
     canonical_assistant_tool_message,
+    ensure_gemini_thought_signatures,
     extract_tool_calls,
     merge_tool_calls,
+    needs_gemini_thought_signatures,
+    normalize_raw_metric,
     normalize_tool_chat_messages,
     parse_ai_auto_apply,
     parse_tool_calls_from_text,
+    query_raw_metric,
     resolve_core_key,
     resolve_task_key,
     strip_parsed_tool_markup,
     summarise_tool_call,
+    tool_batch_auto_runs,
+    tool_mutates_gui,
     tool_result_message,
     validate_tool_call,
 )
@@ -106,6 +119,44 @@ class AiToolsTests(unittest.TestCase):
             summarise_tool_call(AI_TOOL_OPEN_CORRIDOR, {}),
             "Open corridor inspector",
         )
+
+    def test_validate_annotation_query_and_export(self) -> None:
+        args, err = validate_tool_call(
+            AI_TOOL_ADD_ANNOTATION, {"time": 1805120, "note": "  spike  "})
+        self.assertEqual(err, "")
+        self.assertEqual(args["time"], 1805120.0)
+        self.assertEqual(args["note"], "spike")
+        _, err = validate_tool_call(AI_TOOL_ADD_ANNOTATION, {"time": 1, "note": ""})
+        self.assertIn("note", err)
+        args, err = validate_tool_call(
+            AI_TOOL_QUERY_RAW_METRIC, {"task": "Low[266]", "metric": "pi"})
+        self.assertEqual(err, "")
+        self.assertEqual(args["metric"], AI_RAW_METRIC_PRIORITY)
+        _, err = validate_tool_call(
+            AI_TOOL_QUERY_RAW_METRIC, {"task": "Low[266]", "metric": "nope"})
+        self.assertIn("metric", err)
+        args, err = validate_tool_call(AI_TOOL_EXPORT_REPORT, {})
+        self.assertEqual(err, "")
+        self.assertEqual(args["format"], "html")
+        args, err = validate_tool_call(AI_TOOL_EXPORT_REPORT, {"format": "CSV"})
+        self.assertEqual(args["format"], "csv")
+        self.assertIn("1805120", summarise_tool_call(
+            AI_TOOL_ADD_ANNOTATION, {"time": 1805120, "note": "spike"}))
+        self.assertIn("priority_inheritance", summarise_tool_call(
+            AI_TOOL_QUERY_RAW_METRIC, {"task": "Low[266]", "metric": "pi"}))
+        self.assertIn("csv", summarise_tool_call(
+            AI_TOOL_EXPORT_REPORT, {"format": "csv"}))
+        self.assertTrue(tool_mutates_gui(AI_TOOL_ADD_ANNOTATION))
+        self.assertFalse(tool_mutates_gui(AI_TOOL_QUERY_RAW_METRIC))
+        self.assertTrue(tool_batch_auto_runs([
+            {"name": AI_TOOL_QUERY_RAW_METRIC},
+        ]))
+        self.assertFalse(tool_batch_auto_runs([
+            {"name": AI_TOOL_QUERY_RAW_METRIC},
+            {"name": AI_TOOL_ADD_ANNOTATION},
+        ]))
+        self.assertEqual(normalize_raw_metric("L/M/H inversion"), "")
+        self.assertEqual(normalize_raw_metric("priority-inheritance"), AI_RAW_METRIC_PRIORITY)
 
     def test_resolve_core_key(self) -> None:
         cores = ["Core_0", "Core_1", "Core_10"]
@@ -243,6 +294,146 @@ class AiToolsTests(unittest.TestCase):
             ["set_cursors", "highlight_task"],
         )
         self.assertTrue(all(m.get("tool_call_id") for m in by_order if m["role"] == "tool"))
+
+    def test_gemini_thought_signatures_roundtrip_and_skip(self) -> None:
+        sig = "CvcQAdHtimRealSignature=="
+        msg = {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {
+                        "name": "set_cursors",
+                        "arguments": '{"timestamps":[1,2]}',
+                    },
+                    "extra_content": {
+                        "google": {"thought_signature": sig},
+                    },
+                },
+                {
+                    "id": "c2",
+                    "type": "function",
+                    "function": {
+                        "name": "highlight_task",
+                        "arguments": '{"task_name_or_id":"PS[228]"}',
+                    },
+                },
+            ],
+        }
+        extracted = extract_tool_calls(msg)
+        self.assertEqual(extracted[0]["thought_signature"], sig)
+        self.assertNotIn("thought_signature", extracted[1])
+        canon = canonical_assistant_tool_message(None, extracted)
+        self.assertEqual(
+            canon["tool_calls"][0]["extra_content"]["google"]["thought_signature"],
+            sig,
+        )
+        self.assertNotIn("extra_content", canon["tool_calls"][1])
+        again = normalize_tool_chat_messages([canon])
+        self.assertEqual(
+            again[0]["tool_calls"][0]["extra_content"]["google"]["thought_signature"],
+            sig,
+        )
+        missing = canonical_assistant_tool_message("Applying.", [
+            {"id": "c1", "name": "highlight_task",
+             "arguments": {"task_name_or_id": "PS[228]"}},
+            {"id": "c2", "name": "set_cursors",
+             "arguments": {"timestamps": [1, 2]}},
+        ])
+        filled = ensure_gemini_thought_signatures([missing])
+        self.assertEqual(
+            filled[0]["tool_calls"][0]["extra_content"]["google"]["thought_signature"],
+            GEMINI_SKIP_THOUGHT_SIGNATURE,
+        )
+        self.assertNotIn("extra_content", filled[0]["tool_calls"][1])
+        self.assertTrue(needs_gemini_thought_signatures(
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+            preset="custom",
+        ))
+        self.assertTrue(needs_gemini_thought_signatures(preset="gemini"))
+        self.assertFalse(needs_gemini_thought_signatures(
+            base_url="http://127.0.0.1:11434/v1",
+            model="gemini-2.5-flash",
+            preset="ollama",
+        ))
+
+    def test_query_raw_metric_priority_episodes(self) -> None:
+        from btf_viewer_pkg.parser import (  # noqa: WPS433
+            BtfTrace,
+            PriorityEpisode,
+            TaskSegment,
+            _task_merge_key,
+        )
+
+        mk = _task_merge_key("Low[266]")
+        if mk == "Low[266]":
+            mk = "\x00266\x00Low"
+        ep = PriorityEpisode(
+            mk=mk,
+            task_label="Low[266]",
+            base_pri=1,
+            peak_pri=4,
+            start_ns=3100000,
+            stop_ns=3134000,
+            inherited=True,
+            inversion_suspect=True,
+            medium_tasks=["Med[267]"],
+            pattern="Mutex inherit L/M/H (Med[267])",
+        )
+        trace = BtfTrace(
+            time_scale="us",
+            tasks=["Low[266]", "Med[267]"],
+            segments=[],
+            sti_events=[],
+            sti_channels=[],
+            sti_events_by_target={},
+            time_min=0,
+            time_max=4000000,
+            task_repr={mk: "Low[266]"},
+            seg_map_by_merge_key={
+                mk: [TaskSegment(task="Low[266]", start=3090000, end=3095000, core="Core_0")],
+            },
+            priority_episodes=[ep],
+            priority_episodes_by_mk={mk: [ep]},
+            has_priority_instrumentation=True,
+        )
+        out = query_raw_metric(trace, "Low[266]", "priority_inheritance")
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["data"]["count"], 1)
+        self.assertEqual(out["data"]["episodes"][0]["peak_pri"], 4)
+        self.assertIn("Med[267]", out["data"]["episodes"][0]["medium_tasks"])
+        scoped = query_raw_metric(
+            trace, "266", "pi", lo=0, hi=1000)
+        self.assertTrue(scoped["ok"])
+        self.assertEqual(scoped["data"]["count"], 0)
+        exec_out = query_raw_metric(trace, "Low[266]", "execution")
+        self.assertEqual(exec_out["data"]["count"], 1)
+        miss = query_raw_metric(trace, "NoSuch", "execution")
+        self.assertFalse(miss["ok"])
+
+    def test_build_ai_report_csv_and_html(self) -> None:
+        csv_text = build_ai_report_csv(
+            meta={"file": "demo.btf"},
+            gui={"cursors": [10, 20], "view_mode": "task"},
+            findings="1. [WARNING] Thrash",
+            annotations=[{"time": 15, "note": "spike"}],
+            conversation="You:\nhello\n",
+        )
+        self.assertIn("demo.btf", csv_text)
+        self.assertIn("spike", csv_text)
+        self.assertIn("Thrash", csv_text)
+        html = build_ai_report_html(
+            meta={"file": "demo.btf"},
+            gui={"highlight": "Low[266]"},
+            findings="ok",
+            annotations=[{"time": 1, "note": "n"}],
+            conversation_html="<p>hi</p>",
+        )
+        self.assertIn("AI Report", html)
+        self.assertIn("Low[266]", html)
+        self.assertIn("<p>hi</p>", html)
 
     def test_tools_match_web(self) -> None:
         js = (BTF_ROOT / "web/src/utils/aiTools.js").read_text(encoding="utf-8")

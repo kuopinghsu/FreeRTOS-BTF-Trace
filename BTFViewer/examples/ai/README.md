@@ -17,7 +17,7 @@ Copy one of these files, fill in your key, and import it.
 |-------|---------|
 | `preset` | `ollama`, `openai`, `gemini`, or `custom`. Other vendor names such as `deepseek` import as `custom`. Omit it and the preset is inferred from `base_url`. |
 | `base_url` | OpenAI-compatible API root. A bare host gains `/v1`, and Ollama's native `/api` root is corrected automatically. |
-| `model` | Model id served by that endpoint. **Test connection** lists what the endpoint serves. For Gemini prefer the rolling aliases (`gemini-flash-lite-latest`, `gemini-flash-latest`) — pinned versions differ per account and are retired over time. |
+| `model` | Model id served by that endpoint. Refresh the **Model** list (dropdown) or **Test connection** to see what the endpoint serves. For Gemini prefer the rolling aliases (`gemini-flash-lite-latest`, `gemini-flash-latest`) — pinned versions differ per account and are retired over time. |
 | `api_key` | Optional. Leave empty to use `OPENAI_API_KEY` / `GEMINI_API_KEY` / `OLLAMA_API_KEY` from the environment (`VITE_*` on the web), which keeps keys out of shared files. |
 | `auth_mode` | Optional. `none` (local), `api_key`, or `browser` (`sign_in` / `oauth` also accepted). Controls Settings → Authentication. |
 | `response_language` | Optional reply language for the assistant. |

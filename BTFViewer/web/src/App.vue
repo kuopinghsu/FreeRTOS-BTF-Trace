@@ -429,6 +429,7 @@
                 :build-compare-context="buildAiCompareContext"
                 :execute-tools="onAiExecuteTools"
                 :undo-tools="onAiUndoTools"
+                :get-gui-state="aiGuiStateForReport"
                 @open-settings="openSettingsDialog('ai')"
                 @update:response-language="onAiResponseLanguage"
                 @jump="onAiJump"
@@ -906,13 +907,17 @@ import { formatTime }   from './renderer/TimelineRenderer.js'
 import { zoomStatusFromViewport } from './utils/timeFormat.js'
 import { taskDisplayName, taskMergeKey, setColorblindMode } from './utils/colors.js'
 import {
+  AI_TOOL_ADD_ANNOTATION,
   AI_TOOL_HIGHLIGHT_TASK,
   AI_TOOL_OPEN_CORRIDOR,
+  AI_TOOL_QUERY_RAW_METRIC,
   AI_TOOL_SET_CURSORS,
   AI_TOOL_SET_VIEW_MODE,
   AI_TOOL_ZOOM_TO_RANGE,
+  queryRawMetric,
   resolveCoreKey,
   resolveTaskKey,
+  toolMutatesGui,
   validateToolCall,
 } from './utils/aiTools.js'
 import {
@@ -2083,6 +2088,8 @@ function captureAiGuiSnapshot() {
     highlight: pinnedHighlightKey.value,
     viewport: timelinePanelRef.value?.getViewport?.() || null,
     inspectorOpen: inspectorOpen.value,
+    marks: (marks.value || []).map(m => ({ ...m })),
+    markNextId: activeTab.value?.markNextId,
   }
 }
 
@@ -2096,9 +2103,34 @@ function restoreAiGuiSnapshot(snap) {
   timelineOptions.lockedTaskKey = snap.highlight || null
   if (snap.viewport) timelinePanelRef.value?.applyViewport?.(snap.viewport)
   if (!snap.inspectorOpen) inspectorOpen.value = false
+  if (Array.isArray(snap.marks)) {
+    marks.value = snap.marks.map(m => ({ ...m }))
+    if (activeTab.value && snap.markNextId != null) {
+      activeTab.value.markNextId = snap.markNextId
+    }
+  }
   persistTimelineViewPrefs()
   syncTimelineViewport()
   scheduleRender()
+}
+
+function aiGuiStateForReport() {
+  const ctx = buildAiContext()
+  const placed = (cursors.value || []).filter(c => c != null)
+  return {
+    file: activeTab.value?.name || '',
+    span: ctx.span || '',
+    cores: ctx.cores || '',
+    scope: ctx.scope || '',
+    findings: ctx.findingsText || '',
+    cursors: placed,
+    highlight: pinnedHighlightKey.value || '',
+    view_mode: timelineOptions.viewMode || 'task',
+    orientation: timelineOptions.orientation === 'v' ? 'vertical' : 'horizontal',
+    annotations: (marks.value || [])
+      .filter(m => m.type === 'annotation')
+      .map(m => ({ time: m.ns, note: m.label || '' })),
+  }
 }
 
 function onAiHighlight(name) {
@@ -2139,8 +2171,13 @@ function onAiHighlight(name) {
 }
 
 function onAiExecuteTools(calls) {
-  _aiGuiUndo = captureAiGuiSnapshot()
-  pushUndoSnapshot()
+  const mutating = (calls || []).some(c => toolMutatesGui(String(c?.name || '')))
+  if (mutating) {
+    _aiGuiUndo = captureAiGuiSnapshot()
+    pushUndoSnapshot()
+  } else {
+    _aiGuiUndo = null
+  }
   const results = []
   for (const call of calls || []) {
     const name = String(call.name || '')
@@ -2155,7 +2192,9 @@ function onAiExecuteTools(calls) {
       continue
     }
     try {
-      results.push({ ok: true, message: dispatchAiTool(name, checked.args || {}) })
+      const out = dispatchAiTool(name, checked.args || {})
+      if (out && typeof out === 'object' && 'ok' in out) results.push(out)
+      else results.push({ ok: true, message: String(out) })
     } catch (err) {
       results.push({ ok: false, message: err?.message || String(err) })
     }
@@ -2199,6 +2238,28 @@ function dispatchAiTool(name, args) {
     if (src && dst) onOpenPairHeatmap({ fromCore: src, toCore: dst })
     else onOpenHeatmap()
     return 'Opened corridor inspector'
+  }
+  if (name === AI_TOOL_ADD_ANNOTATION) {
+    const ns = Math.trunc(Number(args.time))
+    const note = String(args.note || '')
+    timelinePanelRef.value?.jumpToNs(ns)
+    syncTimelineViewport()
+    const existing = (marks.value || []).find(
+      m => m.type === 'annotation' && Number(m.ns) === ns && (m.label || '') === note)
+    if (existing) return `Annotation already at ${ns}`
+    addMarkAtNs(ns, 'annotation', note, { undo: false })
+    ensureMarksPanelVisible()
+    scheduleSessionSave()
+    return `Annotated ${ns}`
+  }
+  if (name === AI_TOOL_QUERY_RAW_METRIC) {
+    const scopeOn = activeTab.value?.scopeToCursors !== false
+    const range = getStatsRange(cursors.value, scopeOn)
+    return queryRawMetric(trace.value, args.task || '', args.metric || '', {
+      lo: range?.lo ?? null,
+      hi: range?.hi ?? null,
+      findingsText: buildAiContext().findingsText || '',
+    })
   }
   throw new Error(`unknown tool ${name}`)
 }
@@ -3213,9 +3274,9 @@ function onAddAnnotation(ns) {
   addMarkAtNs(ns, 'annotation')
 }
 
-function addMarkAtNs(ns, type = 'bookmark', label = '') {
+function addMarkAtNs(ns, type = 'bookmark', label = '', { undo = true } = {}) {
   if (!trace.value || !activeTab.value) return
-  pushUndoSnapshot()
+  if (undo) pushUndoSnapshot()
   const clamped = Math.max(trace.value.timeMin, Math.min(trace.value.timeMax, ns))
   marks.value.push({
     id: activeTab.value.markNextId++,

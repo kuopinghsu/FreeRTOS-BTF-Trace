@@ -532,7 +532,7 @@ python builds/btf_viewer.py snapshot ../tracedata/example-8cores.btf.gz \
 
 ## 7. AI Assistant Flow
 
-The right-panel **AI** tab turns the findings into a narrative triage. It is worth using once Analysis Findings exist, not before — the assistant only ever receives the **structured findings for the current Statistics scope**, plus the span and core count. It never sees the raw BTF stream, so an empty or mis-scoped Statistics panel produces a confident answer about nothing. Setup details and troubleshooting live in [README.md → AI Assistant](README.md#ai-assistant).
+The right-panel **AI** tab turns the findings into a narrative triage. It is worth using once Analysis Findings exist, not before — the first turn only receives the **structured findings for the current Statistics scope**, plus the span and core count. The model can then call `query_raw_metric` for a scoped per-task series (priority-inheritance episodes, execution slices, and so on); it still never gets the raw BTF stream. An empty or mis-scoped Statistics panel produces a confident answer about nothing. Setup details and troubleshooting live in [README.md → AI Assistant](README.md#ai-assistant).
 
 The flow from trace to verified answer:
 
@@ -557,8 +557,8 @@ Configuration is per preset, and the desktop and web viewers work the same way a
 | Ollama | `ollama serve`, `ollama pull phi4-mini:3.8b`; base URL `http://localhost:11434/v1` | Same; for `file://` use Vite, or allow CORS (`OLLAMA_ORIGINS="*" ollama serve`; macOS app: `launchctl setenv OLLAMA_ORIGINS "*"` + restart) |
 | OpenAI / Gemini / Custom | Base URL + model + Authentication (API key or Sign in) | Same; OpenAI and Gemini are proxied under `npm run dev` / `preview` |
 | Authentication | **None (local)** / **API key** / **Sign in** (opens vendor page; paste the key). Panel chip: Local / Key saved / Needs API key / Needs sign-in / Signed in. 401 keeps Sign in / Settings CTAs until a successful turn | Same (`VITE_*` env keys) |
-| Verify | Refresh the **Model** list, then **Test connection** (chat probe) | Same |
-| GUI tools | **Auto-apply GUI actions** off (default) → Apply / Skip / Undo in chat, plus **Apply GUI actions** under the log. **Ctrl/Cmd+Z** also undoes cursors/marks after Apply. Chat timeout 120s. Small models without native tools may emit ` ```btftool ` fences instead. | Same |
+| Verify | Refresh the **Model** list, open the Model dropdown to pick a served id, then **Test connection** (chat probe). Gemini tool follow-ups need a thought signature — retry a 400 that mentions `thought_signature` | Same |
+| GUI tools | **Auto-apply GUI actions** off (default) → Apply / Skip / Undo in chat, plus **Apply GUI actions** under the log. `query_raw_metric` runs immediately (read-only). `add_annotation` / `export_report` follow Apply. **Ctrl/Cmd+Z** also undoes cursors/marks after Apply. Chat timeout 120s. Small models without native tools may emit ` ```btftool ` fences instead. | Same |
 | Share a setup | **Import…** a JSON file (`examples/ai/gemini.json`, `openai.json`, `deepseek.json`, `grok.json`) | Same |
 | Show panel | **View → Show AI Assistant** / Display settings | Display → AI Assistant panel |
 
@@ -626,7 +626,7 @@ Different models fail differently, which makes disagreement between them useful.
 3. Verify the points the models agree on first; treat the points where they diverge as open questions rather than as answers.
 4. Never accept a `jump:TIME` or a WCET claim until you have clicked it inside BTF Viewer.
 
-**Privacy.** Prefer local Ollama for confidential traces. Use a cloud endpoint only if the findings text is cleared to leave the machine: the viewer never sends the raw BTF stream, but findings still name tasks, priorities, and timings.
+**Privacy.** Prefer local Ollama for confidential traces. Use a cloud endpoint only if the findings text (and any `query_raw_metric` samples the model requests) are cleared to leave the machine: the viewer never sends the raw BTF stream, but findings and metric rows still name tasks, priorities, and timings.
 
 ---
 

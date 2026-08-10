@@ -83,9 +83,12 @@ describe('AI settings storage', () => {
   it('AI model field has a refresh control', () => {
     const src = readFileSync(new URL('../src/components/SettingsDialog.vue', import.meta.url), 'utf8')
     assert.match(src, /onRefreshModels/)
-    assert.match(src, /ai-model-options/)
+    assert.match(src, /role="combobox"/)
+    assert.match(src, /ai-model-listbox/)
+    assert.match(src, /Show model list/)
     assert.match(src, /aiListModels/)
     assert.match(src, /Refresh model list/)
+    assert.doesNotMatch(src, /<datalist/)
   })
 
   it('AI settings expose authentication method and sign-in', () => {

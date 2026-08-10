@@ -7,9 +7,11 @@
 import {
   AI_TOOL_SYSTEM_ADDENDUM,
   aiViewerTools,
+  ensureGeminiThoughtSignatures,
   extractToolCalls,
   mergeToolCalls,
   messageContentText,
+  needsGeminiThoughtSignatures,
   normalizeToolChatMessages,
   parseToolCallsFromText,
   stripParsedToolMarkup,
@@ -834,7 +836,7 @@ export async function aiChatCompletion({
       + 'Paste the raw key only — no Bearer prefix.',
     )
   }
-  const chatMessages = normalizeToolChatMessages(messages || [
+  let chatMessages = normalizeToolChatMessages(messages || [
     { role: 'system', content: buildAiSystemPrompt(responseLanguage) },
     {
       role: 'user',
@@ -847,6 +849,9 @@ export async function aiChatCompletion({
       }),
     },
   ])
+  if (needsGeminiThoughtSignatures({ baseUrl: urlBase, model: chatModel, preset })) {
+    chatMessages = ensureGeminiThoughtSignatures(chatMessages)
+  }
   const payload = {
     model: chatModel,
     stream: false,
@@ -962,48 +967,45 @@ export async function aiListModels(baseUrl = DEFAULT_AI_BASE_URL, {
   const urlBase = normalizeAiBaseUrl(baseUrl)
   const proxyBase = aiSameOriginProxyBase(preset, urlBase)
   const bases = proxyBase ? [proxyBase, urlBase] : [urlBase]
-  const ctrl = signal ? null : new AbortController()
-  const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null
+  const timeoutSignal = AbortSignal.timeout(timeoutMs)
+  const combined = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal
   let lastErr = null
-  try {
-    for (const base of bases) {
-      try {
-        const resp = await fetch(`${base}/models`, {
-          method: 'GET',
-          headers: aiRequestHeaders(apiKey, urlBase),
-          signal: signal || ctrl.signal,
-        })
-        if (
-          proxyBase
-          && base === proxyBase
-          && resp.status === 404
-          && (resp.headers.get('content-type') || '').includes('text/html')
-        ) {
-          continue
-        }
-        if (!resp.ok) {
-          const detail = (await resp.text().catch(() => '')).slice(0, 300)
-          throw new Error(`HTTP ${resp.status}: ${detail || resp.statusText}`)
-        }
-        const data = await resp.json()
-        return (data?.data || []).map((m) => String(m?.id || '')).filter(Boolean)
-      } catch (err) {
-        if (err?.name === 'AbortError') {
-          throw new Error(`Cannot list models at ${urlBase}/models: timed out`, { cause: err })
-        }
-        lastErr = err
+  for (const base of bases) {
+    try {
+      const resp = await fetch(`${base}/models`, {
+        method: 'GET',
+        headers: aiRequestHeaders(apiKey, urlBase),
+        signal: combined,
+      })
+      if (
+        proxyBase
+        && base === proxyBase
+        && resp.status === 404
+        && (resp.headers.get('content-type') || '').includes('text/html')
+      ) {
+        continue
       }
+      if (!resp.ok) {
+        const detail = (await resp.text().catch(() => '')).slice(0, 300)
+        throw new Error(`HTTP ${resp.status}: ${detail || resp.statusText}`)
+      }
+      const data = await resp.json()
+      return (data?.data || []).map((m) => String(m?.id || '')).filter(Boolean)
+    } catch (err) {
+      if (err?.name === 'AbortError' || err?.name === 'TimeoutError') {
+        if (signal?.aborted && !timeoutSignal.aborted) throw err
+        throw new Error(`Cannot list models at ${urlBase}/models: timed out`, { cause: err })
+      }
+      lastErr = err
     }
-    const msg = lastErr?.message || 'Failed to fetch'
-    const via = proxyBase ? ` (also tried ${proxyBase}/models)` : ''
-    throw new Error(
-      `Cannot list models at ${urlBase}/models${via}: ${msg}.`
-      + aiReachabilityTip(urlBase),
-      { cause: lastErr },
-    )
-  } finally {
-    if (timer) clearTimeout(timer)
   }
+  const msg = lastErr?.message || 'Failed to fetch'
+  const via = proxyBase ? ` (also tried ${proxyBase}/models)` : ''
+  throw new Error(
+    `Cannot list models at ${urlBase}/models${via}: ${msg}.`
+    + aiReachabilityTip(urlBase),
+    { cause: lastErr },
+  )
 }
 
 /** Model id without Gemini's `models/` namespace prefix. */

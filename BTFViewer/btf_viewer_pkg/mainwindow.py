@@ -21,13 +21,17 @@ from .ai_assistant import (
     normalize_ai_preset,
 )
 from .ai_tools import (
+    AI_TOOL_ADD_ANNOTATION,
     AI_TOOL_HIGHLIGHT_TASK,
     AI_TOOL_OPEN_CORRIDOR,
+    AI_TOOL_QUERY_RAW_METRIC,
     AI_TOOL_SET_CURSORS,
     AI_TOOL_SET_VIEW_MODE,
     AI_TOOL_ZOOM_TO_RANGE,
+    query_raw_metric,
     resolve_core_key,
     resolve_task_key,
+    tool_mutates_gui,
     tool_result_payload,
     validate_tool_call,
 )
@@ -3931,6 +3935,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             on_highlight=self._ai_highlight_task,
             on_execute_tools=self._ai_execute_tools,
             on_undo_tools=self._ai_undo_tools,
+            on_gui_state=self._ai_gui_state_for_report,
             get_loaded_tabs=self._ai_list_loaded_tabs,
             build_compare_context=self._ai_build_compare_context,
         )
@@ -4936,6 +4941,39 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "hscroll": view.horizontalScrollBar().value() if view is not None else 0,
             "vscroll": view.verticalScrollBar().value() if view is not None else 0,
             "inspector": bool(dlg is not None and dlg.isVisible()),
+            "annotations": [
+                (a.id, a.ns, a.note) for a in self._annotations
+            ],
+            "bookmarks": [
+                (b.id, b.ns, b.label) for b in self._bookmarks
+            ],
+            "mark_next_id": int(getattr(self, "_mark_next_id", 1) or 1),
+        }
+
+    def _ai_gui_state_for_report(self) -> dict:
+        """Public GUI fields for export_report (no scroll offsets)."""
+        snap = self._ai_capture_gui_snapshot()
+        ctx = {}
+        if callable(getattr(self, "_ai_build_context", None)):
+            try:
+                ctx = dict(self._ai_build_context() or {})
+            except Exception:
+                ctx = {}
+        return {
+            "file": str(getattr(self, "_current_file", "") or ""),
+            "span": ctx.get("span", ""),
+            "cores": ctx.get("cores", ""),
+            "scope": ctx.get("scope", ""),
+            "findings": ctx.get("findings_text", ""),
+            "cursors": snap.get("cursors") or [],
+            "highlight": snap.get("highlight") or "",
+            "view_mode": snap.get("view_mode") or "task",
+            "orientation": (
+                "horizontal" if snap.get("horizontal", True) else "vertical"
+            ),
+            "annotations": [
+                {"time": a.ns, "note": a.note} for a in self._annotations
+            ],
         }
 
     def _ai_restore_gui_snapshot(self, snap: dict) -> None:
@@ -4973,6 +5011,24 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             dlg = self._heatmap_dlg or self._chord_dlg
             if dlg is not None:
                 dlg.close()
+        if "annotations" in snap or "bookmarks" in snap:
+            if "annotations" in snap:
+                self._annotations = [
+                    TraceAnnotation(id=int(i), ns=int(ns), note=str(note or ""))
+                    for i, ns, note in snap.get("annotations") or []
+                ]
+                self._rebuild_annotation_list()
+            if "bookmarks" in snap:
+                self._bookmarks = [
+                    TraceBookmark(id=int(i), ns=int(ns), label=str(label or ""))
+                    for i, ns, label in snap.get("bookmarks") or []
+                ]
+                self._rebuild_bookmark_list()
+            if snap.get("mark_next_id") is not None:
+                self._mark_next_id = int(snap["mark_next_id"])
+            self._save_current_trace_state()
+            if scene is not None:
+                scene.set_marks(self._bookmarks, self._annotations)
         if hasattr(self, "_stats_panel"):
             self._stats_panel.set_cursor_times(scene.cursor_times(), refresh_stats=True)
 
@@ -5027,8 +5083,15 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     def _ai_execute_tools(self, calls: list) -> list:
         """Apply validated viewer tools; snapshot first so Undo can revert."""
-        self._ai_tool_undo = self._ai_capture_gui_snapshot()
-        self._push_undo_snapshot()
+        mutating = any(
+            tool_mutates_gui(str(c.get("name") or ""))
+            for c in (calls or []) if isinstance(c, dict)
+        )
+        if mutating:
+            self._ai_tool_undo = self._ai_capture_gui_snapshot()
+            self._push_undo_snapshot()
+        else:
+            self._ai_tool_undo = None
         results = []
         for call in calls or []:
             if not isinstance(call, dict):
@@ -5044,8 +5107,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 results.append(tool_result_payload(False, verr))
                 continue
             try:
-                msg = self._ai_dispatch_one(name, norm or {})
-                results.append(tool_result_payload(True, msg))
+                out = self._ai_dispatch_one(name, norm or {})
+                if isinstance(out, dict) and "ok" in out:
+                    results.append(out)
+                else:
+                    results.append(tool_result_payload(True, str(out)))
             except Exception as exc:
                 results.append(tool_result_payload(False, str(exc)))
         return results
@@ -5096,6 +5162,35 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             else:
                 self._open_corridor_inspector("heatmap")
             return "Opened corridor inspector"
+        if name == AI_TOOL_ADD_ANNOTATION:
+            ns = int(float(args["time"]))
+            note = str(args.get("note") or "")
+            self._jump_to_ns(ns)
+            for ann in self._annotations:
+                if int(ann.ns) == ns and ann.note == note:
+                    return f"Annotation already at {ns}"
+            self._add_annotation_with_note(
+                ns, note, focus_annotation_tab=True, push_undo=False)
+            return f"Annotated {ns}"
+        if name == AI_TOOL_QUERY_RAW_METRIC:
+            lo = hi = None
+            panel = getattr(self, "_stats_panel", None)
+            rng = panel._stats_range() if panel is not None and hasattr(panel, "_stats_range") else None
+            if rng:
+                lo, hi, _n = rng
+            findings = ""
+            try:
+                findings = str((self._ai_build_context() or {}).get("findings_text") or "")
+            except Exception:
+                findings = ""
+            return query_raw_metric(
+                self._trace,
+                str(args.get("task") or ""),
+                str(args.get("metric") or ""),
+                lo=lo,
+                hi=hi,
+                findings_text=findings,
+            )
         raise RuntimeError(f"unknown tool {name}")
 
     def _ai_undo_tools(self) -> None:
@@ -5939,7 +6034,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     def _add_annotation_with_note(
         self, ns: int, note: str, *, focus_annotation_tab: bool = False,
-        show_marks_panel: bool = True,
+        show_marks_panel: bool = True, push_undo: bool = True,
     ) -> None:
         """Add an annotation at *ns* with the given note text."""
         if self._trace is None:
@@ -5949,7 +6044,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if tmax < tmin:
             tmax = tmin
         ns = max(tmin, min(tmax, int(ns)))
-        self._push_undo_snapshot()
+        if push_undo:
+            self._push_undo_snapshot()
         ann_id = self._mark_next_id
         self._annotations.append(TraceAnnotation(id=ann_id, ns=ns, note=note or ""))
         self._mark_next_id += 1

@@ -114,7 +114,7 @@ from PySide6.QtCore import (
     QPropertyAnimation, QVariantAnimation, Signal,
 )
 from PySide6.QtGui import (
-    QBrush, QColor, QCursor, QDrag, QFont, QFontDatabase, QFontMetrics, QFontMetricsF, QIcon, QImage, QKeySequence, QLinearGradient, QPainter,
+    QBrush, QColor, QCursor, QDesktopServices, QDrag, QFont, QFontDatabase, QFontMetrics, QFontMetricsF, QIcon, QImage, QKeySequence, QLinearGradient, QPainter,
     QPainterPath, QPainterPathStroker, QPalette, QPen, QPixmap, QPolygonF, QShortcut, QTransform, QWheelEvent,
 )
 from PySide6.QtSvg import QSvgGenerator, QSvgRenderer
@@ -16180,6 +16180,9 @@ AI_TOOL_ZOOM_TO_RANGE = "zoom_to_range"
 AI_TOOL_HIGHLIGHT_TASK = "highlight_task"
 AI_TOOL_SET_VIEW_MODE = "set_view_mode"
 AI_TOOL_OPEN_CORRIDOR = "open_corridor_inspector"
+AI_TOOL_ADD_ANNOTATION = "add_annotation"
+AI_TOOL_QUERY_RAW_METRIC = "query_raw_metric"
+AI_TOOL_EXPORT_REPORT = "export_report"
 
 AI_VIEWER_TOOL_NAMES: Tuple[str, ...] = (
     AI_TOOL_SET_CURSORS,
@@ -16187,7 +16190,54 @@ AI_VIEWER_TOOL_NAMES: Tuple[str, ...] = (
     AI_TOOL_HIGHLIGHT_TASK,
     AI_TOOL_SET_VIEW_MODE,
     AI_TOOL_OPEN_CORRIDOR,
+    AI_TOOL_ADD_ANNOTATION,
+    AI_TOOL_QUERY_RAW_METRIC,
+    AI_TOOL_EXPORT_REPORT,
 )
+
+AI_RAW_METRIC_PRIORITY = "priority_inheritance"
+AI_RAW_METRIC_EXECUTION = "execution"
+AI_RAW_METRIC_MIGRATIONS = "migrations"
+AI_RAW_METRIC_BLOCKING = "blocking"
+AI_RAW_METRIC_SYNC = "sync"
+AI_RAW_METRIC_FINDINGS = "findings"
+AI_RAW_METRIC_NAMES: Tuple[str, ...] = (
+    AI_RAW_METRIC_PRIORITY,
+    AI_RAW_METRIC_EXECUTION,
+    AI_RAW_METRIC_MIGRATIONS,
+    AI_RAW_METRIC_BLOCKING,
+    AI_RAW_METRIC_SYNC,
+    AI_RAW_METRIC_FINDINGS,
+)
+_RAW_METRIC_ALIASES = {
+    "priority_inheritance": AI_RAW_METRIC_PRIORITY,
+    "priority": AI_RAW_METRIC_PRIORITY,
+    "pi": AI_RAW_METRIC_PRIORITY,
+    "inversion": AI_RAW_METRIC_PRIORITY,
+    "inherit": AI_RAW_METRIC_PRIORITY,
+    "execution": AI_RAW_METRIC_EXECUTION,
+    "wcet": AI_RAW_METRIC_EXECUTION,
+    "cpu": AI_RAW_METRIC_EXECUTION,
+    "slices": AI_RAW_METRIC_EXECUTION,
+    "run": AI_RAW_METRIC_EXECUTION,
+    "migrations": AI_RAW_METRIC_MIGRATIONS,
+    "migration": AI_RAW_METRIC_MIGRATIONS,
+    "migr": AI_RAW_METRIC_MIGRATIONS,
+    "thrash": AI_RAW_METRIC_MIGRATIONS,
+    "blocking": AI_RAW_METRIC_BLOCKING,
+    "block": AI_RAW_METRIC_BLOCKING,
+    "wait": AI_RAW_METRIC_BLOCKING,
+    "latency": AI_RAW_METRIC_BLOCKING,
+    "sync": AI_RAW_METRIC_SYNC,
+    "mutex": AI_RAW_METRIC_SYNC,
+    "semaphore": AI_RAW_METRIC_SYNC,
+    "lock": AI_RAW_METRIC_SYNC,
+    "findings": AI_RAW_METRIC_FINDINGS,
+    "finding": AI_RAW_METRIC_FINDINGS,
+    "analysis": AI_RAW_METRIC_FINDINGS,
+}
+_MAX_RAW_METRIC_ROWS = 40
+_MAX_ANNOTATION_NOTE = 240
 
 # QTextBrowser truncates ``scheme:digits`` (treats it as host:port). Use a path.
 _BTF_JUMP_HREF_RE = re.compile(
@@ -16236,11 +16286,17 @@ def parse_btf_highlight_href(href: Any) -> str:
 
 # Appended to the base system prompt. Keep in sync with web aiTools.js.
 AI_TOOL_SYSTEM_ADDENDUM = (
-    "When the user asks to show, focus, inspect, zoom, highlight, or jump to a "
-    "time range, task, or core pair, you MUST invoke the matching viewer tool "
-    "(native function call) in addition to your markdown answer. Valid tools: "
-    "set_cursors, zoom_to_range, highlight_task, set_view_mode, "
-    "open_corridor_inspector. Tool timestamps use the same numeric trace time "
+    "When the user asks to show, focus, inspect, zoom, highlight, annotate, "
+    "export, or jump to a time range, task, or core pair, you MUST invoke the "
+    "matching viewer tool (native function call) in addition to your markdown "
+    "answer. Valid tools: set_cursors, zoom_to_range, highlight_task, "
+    "set_view_mode, open_corridor_inspector, add_annotation, query_raw_metric, "
+    "export_report. Use query_raw_metric when you need the exact per-task "
+    "series (priority-inheritance episodes, execution slices, migrations, "
+    "blocking gaps, sync STI, or findings lines) instead of the summarised "
+    "findings card. Use add_annotation to pin a note on a spike. Use "
+    "export_report to save findings, diagrams, and GUI state as HTML or CSV. "
+    "Tool timestamps use the same numeric trace time "
     "unit as jump:TIME. After tools run, summarise what you changed. "
     "If you cannot emit a native function call, emit one fenced btftool JSON "
     "object per action, for example:\n"
@@ -16395,6 +16451,83 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                 },
             },
         },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_ADD_ANNOTATION,
+                "description": (
+                    "Place an orange timeline annotation at a timestamp "
+                    "(same unit as jump:TIME) and jump there. Use this to mark "
+                    "anomalous spikes, inversion windows, or other points of interest."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "time": {
+                            "type": "number",
+                            "description": "Trace time-unit timestamp.",
+                        },
+                        "note": {
+                            "type": "string",
+                            "description": "Short annotation label shown on the Marks panel.",
+                        },
+                    },
+                    "required": ["time", "note"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_QUERY_RAW_METRIC,
+                "description": (
+                    "Read the underlying per-task metric series for the current "
+                    "Statistics scope (cursor range when Limit to C1–Cn is on). "
+                    "Returns JSON samples — not a GUI change. Metrics: "
+                    "priority_inheritance, execution, migrations, blocking, "
+                    "sync, findings."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "task": {
+                            "type": "string",
+                            "description": (
+                                "Task display name (e.g. Low[266]), merge key, "
+                                "or numeric task id."
+                            ),
+                        },
+                        "metric": {
+                            "type": "string",
+                            "enum": list(AI_RAW_METRIC_NAMES),
+                            "description": "Which series to return.",
+                        },
+                    },
+                    "required": ["task", "metric"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_EXPORT_REPORT,
+                "description": (
+                    "Download a report bundling Analysis Findings, the AI "
+                    "conversation (including mermaid diagrams), annotations, "
+                    "and the current GUI state (cursors, highlight, view)."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "format": {
+                            "type": "string",
+                            "enum": ["html", "csv"],
+                            "description": "html (default) or csv.",
+                        },
+                    },
+                },
+            },
+        },
     ]
 
 
@@ -16432,6 +16565,117 @@ def message_content_text(content: Any) -> str:
     return str(content).strip()
 
 
+# Gemini 3 OpenAI-compat requires thought_signature on the first functionCall
+# of each step. Echo the real blob; use this dummy only when the call was not
+# produced by Gemini (https://ai.google.dev/gemini-api/docs/thought-signatures).
+GEMINI_SKIP_THOUGHT_SIGNATURE = "skip_thought_signature_validator"
+
+
+def thought_signature_from_obj(obj: Any) -> str:
+    """Read a Gemini thought signature from a tool_call / message / part."""
+    if not isinstance(obj, dict):
+        return ""
+    for key in ("thought_signature", "thoughtSignature"):
+        val = obj.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    extra = obj.get("extra_content")
+    if isinstance(extra, dict):
+        google = extra.get("google") if isinstance(extra.get("google"), dict) else {}
+        for src in (google, extra):
+            for key in ("thought_signature", "thoughtSignature"):
+                val = src.get(key)
+                if isinstance(val, str) and val.strip():
+                    return val.strip()
+    fn = obj.get("function")
+    if isinstance(fn, dict):
+        for key in ("thought_signature", "thoughtSignature"):
+            val = fn.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+    return ""
+
+
+def gemini_thought_extra_content(signature: str) -> Dict[str, Any]:
+    return {"google": {"thought_signature": str(signature)}}
+
+
+def attach_thought_signature(call: Dict[str, Any], signature: str) -> Dict[str, Any]:
+    """Set ``extra_content.google.thought_signature`` on an OpenAI-shaped call."""
+    sig = str(signature or "").strip()
+    if not sig:
+        return call
+    extra = call.get("extra_content")
+    extra = dict(extra) if isinstance(extra, dict) else {}
+    google = extra.get("google")
+    google = dict(google) if isinstance(google, dict) else {}
+    google["thought_signature"] = sig
+    extra["google"] = google
+    call["extra_content"] = extra
+    return call
+
+
+def needs_gemini_thought_signatures(
+    *,
+    base_url: str = "",
+    model: str = "",
+    preset: str = "",
+) -> bool:
+    """True for Gemini OpenAI-compat hosts / the Gemini preset."""
+    del model  # model id alone is not enough (Ollama can serve gemini-* names)
+    blob = f"{base_url} {preset}".lower()
+    return "generativelanguage" in blob or "gemini" in blob
+
+
+def ensure_gemini_thought_signatures(
+    messages: Sequence[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """First function call in each assistant step must carry a thought_signature."""
+    out: List[Dict[str, Any]] = []
+    for msg in messages or []:
+        if not isinstance(msg, dict):
+            continue
+        if str(msg.get("role") or "") != "assistant":
+            out.append(msg)
+            continue
+        calls = msg.get("tool_calls")
+        if not isinstance(calls, list) or not calls:
+            out.append(msg)
+            continue
+        copied = dict(msg)
+        new_calls: List[Any] = []
+        for i, call in enumerate(calls):
+            if not isinstance(call, dict):
+                new_calls.append(call)
+                continue
+            c = dict(call)
+            fn = c.get("function")
+            if isinstance(fn, dict):
+                c["function"] = dict(fn)
+            sig = thought_signature_from_obj(c)
+            if i == 0 and not sig:
+                sig = GEMINI_SKIP_THOUGHT_SIGNATURE
+            if sig:
+                attach_thought_signature(c, sig)
+            new_calls.append(c)
+        copied["tool_calls"] = new_calls
+        out.append(copied)
+    return out
+
+
+def _extracted_tool_call(
+    *,
+    cid: str,
+    name: str,
+    arguments: Dict[str, Any],
+    signature: str = "",
+) -> Dict[str, Any]:
+    item: Dict[str, Any] = {"id": cid, "name": name, "arguments": arguments}
+    if signature:
+        item["thought_signature"] = signature
+    return item
+
+
 def extract_tool_calls(message: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Normalise OpenAI / Ollama / Gemini / legacy function_call invocations."""
     if not isinstance(message, dict):
@@ -16458,14 +16702,20 @@ def extract_tool_calls(message: Optional[Dict[str, Any]]) -> List[Dict[str, Any]
                        call.get("arguments", call.get("args", call.get("input"))))
             )
             cid = str(call.get("id") or f"call_{i}")
-            out.append({"id": cid, "name": name, "arguments": args})
+            out.append(_extracted_tool_call(
+                cid=cid,
+                name=name,
+                arguments=args,
+                signature=thought_signature_from_obj(call),
+            ))
     legacy = message.get("function_call")
     if isinstance(legacy, dict) and legacy.get("name"):
-        out.append({
-            "id": str(legacy.get("id") or "call_0"),
-            "name": str(legacy["name"]).strip(),
-            "arguments": parse_tool_arguments(legacy.get("arguments")),
-        })
+        out.append(_extracted_tool_call(
+            cid=str(legacy.get("id") or "call_0"),
+            name=str(legacy["name"]).strip(),
+            arguments=parse_tool_arguments(legacy.get("arguments")),
+            signature=thought_signature_from_obj(legacy),
+        ))
     # Anthropic-style / Gemini parts mixed into content.
     content = message.get("content")
     if isinstance(content, list):
@@ -16479,11 +16729,21 @@ def extract_tool_calls(message: Optional[Dict[str, Any]]) -> List[Dict[str, Any]
                     continue
                 args = parse_tool_arguments(
                     part.get("input", part.get("arguments", part.get("args"))))
-                out.append({
-                    "id": str(part.get("id") or f"part_{i}"),
-                    "name": name,
-                    "arguments": args,
-                })
+                out.append(_extracted_tool_call(
+                    cid=str(part.get("id") or f"part_{i}"),
+                    name=name,
+                    arguments=args,
+                    signature=thought_signature_from_obj(part),
+                ))
+    if out and not str(out[0].get("thought_signature") or "").strip():
+        fallback = thought_signature_from_obj(message)
+        if not fallback and isinstance(content, list):
+            for part in content:
+                fallback = thought_signature_from_obj(part)
+                if fallback:
+                    break
+        if fallback:
+            out[0]["thought_signature"] = fallback
     return out
 
 
@@ -16605,6 +16865,48 @@ def _as_float_list(value: Any) -> List[float]:
     return out
 
 
+def _fmt_trace_num(value: Any) -> str:
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if n.is_integer():
+        return str(int(n))
+    return f"{n:g}"
+
+
+def normalize_raw_metric(name: Any) -> str:
+    """Map a metric alias onto one of ``AI_RAW_METRIC_NAMES`` (empty if unknown)."""
+    want = str(name or "").strip().lower().replace("-", "_").replace(" ", "_")
+    return _RAW_METRIC_ALIASES.get(want, "")
+
+
+def is_query_tool(name: str) -> bool:
+    return str(name or "") == AI_TOOL_QUERY_RAW_METRIC
+
+
+def is_export_tool(name: str) -> bool:
+    return str(name or "") == AI_TOOL_EXPORT_REPORT
+
+
+def tool_mutates_gui(name: str) -> bool:
+    """True when applying the tool changes timeline / inspector state."""
+    return str(name or "") in (
+        AI_TOOL_SET_CURSORS,
+        AI_TOOL_ZOOM_TO_RANGE,
+        AI_TOOL_HIGHLIGHT_TASK,
+        AI_TOOL_SET_VIEW_MODE,
+        AI_TOOL_OPEN_CORRIDOR,
+        AI_TOOL_ADD_ANNOTATION,
+    )
+
+
+def tool_batch_auto_runs(tools: Optional[Sequence[Any]]) -> bool:
+    """Query-only batches run immediately (no Apply card)."""
+    names = [str((t or {}).get("name") or "") for t in (tools or [])]
+    return bool(names) and all(is_query_tool(n) for n in names)
+
+
 def validate_tool_call(name: str, args: Optional[Dict[str, Any]]) -> Tuple[Optional[Dict[str, Any]], str]:
     """Return ``(normalised_args, error)``. error is empty on success."""
     a = dict(args or {})
@@ -16650,6 +16952,36 @@ def validate_tool_call(name: str, args: Optional[Dict[str, Any]]) -> Tuple[Optio
         src = str(a.get("core_from") or "").strip()
         dst = str(a.get("core_to") or "").strip()
         return {"core_from": src, "core_to": dst}, ""
+    if name == AI_TOOL_ADD_ANNOTATION:
+        try:
+            t = float(a.get("time"))
+        except (TypeError, ValueError):
+            return None, "time must be a number"
+        note = str(a.get("note") or "").strip()
+        if not note:
+            return None, "note must be a non-empty string"
+        if len(note) > _MAX_ANNOTATION_NOTE:
+            note = note[:_MAX_ANNOTATION_NOTE].rstrip()
+        return {"time": t, "note": note}, ""
+    if name == AI_TOOL_QUERY_RAW_METRIC:
+        task = str(a.get("task") or "").strip()
+        if not task:
+            return None, "task must be a non-empty string"
+        metric = normalize_raw_metric(a.get("metric"))
+        if not metric:
+            return None, (
+                "metric must be one of: " + ", ".join(AI_RAW_METRIC_NAMES)
+            )
+        return {"task": task, "metric": metric}, ""
+    if name == AI_TOOL_EXPORT_REPORT:
+        fmt = str(a.get("format") or "html").strip().lower()
+        if fmt in ("htm", "html"):
+            fmt = "html"
+        elif fmt == "csv":
+            fmt = "csv"
+        else:
+            return None, 'format must be "html" or "csv"'
+        return {"format": fmt}, ""
     return None, f"unknown tool {name!r}"
 
 
@@ -16660,12 +16992,12 @@ def summarise_tool_call(name: str, args: Optional[Dict[str, Any]]) -> str:
         times = _as_float_list(a.get("timestamps"))
         if not times:
             return "Set cursors"
-        shown = ", ".join(f"{t:g}" for t in times[:_MAX_CURSORS_TOOL])
+        shown = ", ".join(_fmt_trace_num(t) for t in times[:_MAX_CURSORS_TOOL])
         return f"Set cursors at [{shown}]"
     if name == AI_TOOL_ZOOM_TO_RANGE:
         try:
             lo, hi = float(a["start_time"]), float(a["end_time"])
-            return f"Zoom to range {lo:g}–{hi:g}"
+            return f"Zoom to range {_fmt_trace_num(lo)}–{_fmt_trace_num(hi)}"
         except (KeyError, TypeError, ValueError):
             return "Zoom to range"
     if name == AI_TOOL_HIGHLIGHT_TASK:
@@ -16684,6 +17016,20 @@ def summarise_tool_call(name: str, args: Optional[Dict[str, Any]]) -> str:
         if src and dst:
             return f"Open corridor inspector {src} → {dst}"
         return "Open corridor inspector"
+    if name == AI_TOOL_ADD_ANNOTATION:
+        note = str(a.get("note") or "").strip() or "annotation"
+        try:
+            t = float(a.get("time"))
+            return f"Add annotation at {_fmt_trace_num(t)}: {note}"
+        except (TypeError, ValueError):
+            return f"Add annotation: {note}"
+    if name == AI_TOOL_QUERY_RAW_METRIC:
+        task = str(a.get("task") or "").strip() or "?"
+        metric = normalize_raw_metric(a.get("metric")) or str(a.get("metric") or "?")
+        return f"Query {metric} for {task}"
+    if name == AI_TOOL_EXPORT_REPORT:
+        fmt = str(a.get("format") or "html").strip().lower() or "html"
+        return f"Export {fmt} report"
     return name.replace("_", " ")
 
 
@@ -16717,11 +17063,17 @@ def canonical_assistant_tool_message(
         else:
             arg_s = json.dumps(
                 args if isinstance(args, dict) else {}, default=str)
-        calls_out.append({
+        entry: Dict[str, Any] = {
             "id": cid,
             "type": "function",
             "function": {"name": name, "arguments": arg_s},
-        })
+        }
+        sig = str(call.get("thought_signature") or "").strip() or (
+            thought_signature_from_obj(call)
+        )
+        if sig:
+            attach_thought_signature(entry, sig)
+        calls_out.append(entry)
     text = message_content_text(content) if content is not None else ""
     msg: Dict[str, Any] = {"role": "assistant", "content": text or None}
     if calls_out:
@@ -16984,6 +17336,431 @@ def resolve_core_key(
     if hits:
         return hits[0]
     return None
+
+
+def _csv_escape_rows(rows: Sequence[Sequence[Any]]) -> str:
+    buf = io.StringIO()
+    writer = csv.writer(buf, lineterminator="\n")
+    for row in rows:
+        writer.writerow(["" if c is None else str(c) for c in row])
+    return buf.getvalue()
+
+
+def build_ai_report_csv(
+    *,
+    meta: Optional[Dict[str, Any]] = None,
+    gui: Optional[Dict[str, Any]] = None,
+    findings: str = "",
+    annotations: Optional[Sequence[Dict[str, Any]]] = None,
+    conversation: str = "",
+) -> str:
+    """Tabular AI report (findings + GUI state + conversation)."""
+    rows: List[List[str]] = [["section", "key", "value"]]
+    for key, val in dict(meta or {}).items():
+        rows.append(["meta", str(key), str(val)])
+    gui_d = dict(gui or {})
+    cursors = gui_d.pop("cursors", None)
+    if cursors is not None:
+        if isinstance(cursors, (list, tuple)):
+            rows.append(["gui", "cursors", ";".join(f"{c:g}" if isinstance(c, (int, float)) else str(c) for c in cursors)])
+        else:
+            rows.append(["gui", "cursors", str(cursors)])
+    for key, val in gui_d.items():
+        if key == "annotations":
+            continue
+        rows.append(["gui", str(key), str(val)])
+    ann_list = list(annotations or [])
+    if not ann_list and isinstance(gui, dict):
+        extra = gui.get("annotations")
+        if isinstance(extra, (list, tuple)):
+            ann_list = list(extra)
+    for ann in ann_list:
+        if not isinstance(ann, dict):
+            continue
+        rows.append(["annotation", str(ann.get("time", "")), str(ann.get("note", ""))])
+    for i, line in enumerate((findings or "").splitlines()):
+        if line.strip():
+            rows.append(["finding", str(i + 1), line])
+    for i, line in enumerate((conversation or "").splitlines()):
+        rows.append(["conversation", str(i + 1), line])
+    return _csv_escape_rows(rows)
+
+
+def _html_escape(text: Any) -> str:
+    return (
+        str(text or "")
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
+def build_ai_report_html(
+    *,
+    meta: Optional[Dict[str, Any]] = None,
+    gui: Optional[Dict[str, Any]] = None,
+    findings: str = "",
+    annotations: Optional[Sequence[Dict[str, Any]]] = None,
+    conversation_html: str = "",
+) -> str:
+    """Standalone HTML report wrapping findings, GUI state, and the chat."""
+    meta_rows = "".join(
+        f"<tr><th>{_html_escape(k)}</th><td>{_html_escape(v)}</td></tr>"
+        for k, v in dict(meta or {}).items()
+    )
+    gui_d = dict(gui or {})
+    gui_rows = []
+    for key, val in gui_d.items():
+        if key == "annotations":
+            continue
+        if key == "cursors" and isinstance(val, (list, tuple)):
+            val = ", ".join(f"{c:g}" if isinstance(c, (int, float)) else str(c) for c in val)
+        gui_rows.append(f"<tr><th>{_html_escape(key)}</th><td>{_html_escape(val)}</td></tr>")
+    anns = list(annotations or [])
+    if not anns and isinstance(gui_d.get("annotations"), list):
+        anns = list(gui_d["annotations"])
+    ann_rows = "".join(
+        f"<tr><td>{_html_escape(a.get('time', ''))}</td>"
+        f"<td>{_html_escape(a.get('note', ''))}</td></tr>"
+        for a in anns if isinstance(a, dict)
+    ) or "<tr><td colspan=\"2\">None</td></tr>"
+    findings_body = (
+        f"<pre>{_html_escape(findings)}</pre>" if (findings or "").strip()
+        else "<p>No findings for the current scope.</p>"
+    )
+    conv = conversation_html or ""
+    return (
+        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n"
+        "<meta charset=\"utf-8\">\n"
+        "<title>BTF Viewer — AI Report</title>\n"
+        "<style>\n"
+        "body{background:#12161d;color:#dbe2ea;font-family:system-ui,-apple-system,"
+        "'Segoe UI',sans-serif;font-size:13px;line-height:1.5;margin:0;padding:20px;}\n"
+        "h1{font-size:18px;margin:0 0 4px;} h2{font-size:15px;margin:20px 0 8px;}\n"
+        ".saved{color:#8b98a8;font-size:12px;margin:0 0 16px;}\n"
+        "table{border-collapse:collapse;width:100%;margin:0 0 12px;}\n"
+        "th,td{text-align:left;padding:4px 8px;border-bottom:1px solid #2b3442;"
+        "vertical-align:top;}\n"
+        "th{color:#8b98a8;font-weight:600;width:22%;}\n"
+        "pre{background:#1a2230;border:1px solid #3a4658;border-radius:4px;"
+        "padding:8px;overflow:auto;white-space:pre-wrap;}\n"
+        "a{color:#5b9bd5;}\n"
+        "</style>\n</head>\n<body>\n"
+        "<h1>BTF Viewer — AI Report</h1>\n"
+        f"<table>{meta_rows}</table>\n"
+        "<h2>GUI state</h2>\n"
+        f"<table>{''.join(gui_rows)}</table>\n"
+        "<h2>Annotations</h2>\n"
+        f"<table><tr><th>Time</th><th>Note</th></tr>{ann_rows}</table>\n"
+        "<h2>Analysis Findings</h2>\n"
+        f"{findings_body}\n"
+        "<h2>Conversation</h2>\n"
+        f"{conv}\n"
+        "</body>\n</html>\n"
+    )
+
+
+def _in_time_range(t: Any, lo: Optional[float], hi: Optional[float]) -> bool:
+    if lo is None or hi is None:
+        return True
+    try:
+        v = float(t)
+    except (TypeError, ValueError):
+        return False
+    return lo <= v <= hi
+
+
+def _overlaps_range(start: Any, stop: Any, lo: Optional[float], hi: Optional[float]) -> bool:
+    if lo is None or hi is None:
+        return True
+    try:
+        a, b = float(start), float(stop)
+    except (TypeError, ValueError):
+        return False
+    return b > lo and a < hi
+
+
+def _task_candidates_from_trace(trace: Any) -> List[str]:
+    names: List[str] = []
+    for t in list(getattr(trace, "tasks", None) or []):
+        names.append(str(t))
+    smap = getattr(trace, "seg_map_by_merge_key", None)
+    if isinstance(smap, dict):
+        names.extend(str(k) for k in smap.keys())
+    web_map = getattr(trace, "segByMergeKey", None)
+    if web_map is not None and hasattr(web_map, "keys"):
+        try:
+            names.extend(str(k) for k in web_map.keys())
+        except Exception:
+            pass
+    repr_map = getattr(trace, "task_repr", None) or getattr(trace, "taskRepr", None)
+    if isinstance(repr_map, dict):
+        names.extend(str(v) for v in repr_map.values() if v)
+        names.extend(str(k) for k in repr_map.keys())
+    return names
+
+
+def _segs_for_mk(trace: Any, mk: str) -> List[Any]:
+    smap = getattr(trace, "seg_map_by_merge_key", None)
+    if isinstance(smap, dict) and mk in smap:
+        return list(smap.get(mk) or [])
+    web_map = getattr(trace, "segByMergeKey", None)
+    if web_map is None:
+        return []
+    getter = getattr(web_map, "get", None)
+    if callable(getter):
+        return list(getter(mk) or [])
+    try:
+        return list(web_map[mk])  # type: ignore[index]
+    except Exception:
+        return []
+
+
+def _medium_labels(ep: Any) -> List[str]:
+    out: List[str] = []
+    for item in getattr(ep, "medium_tasks", None) or getattr(ep, "mediumTasks", None) or []:
+        if isinstance(item, str):
+            if item:
+                out.append(item)
+        elif isinstance(item, dict):
+            label = str(item.get("label") or item.get("mk") or "")
+            if label:
+                out.append(label)
+        else:
+            label = str(getattr(item, "label", "") or "")
+            if label:
+                out.append(label)
+    return out
+
+
+def query_raw_metric(
+    trace: Any,
+    task: str,
+    metric: str,
+    *,
+    lo: Optional[float] = None,
+    hi: Optional[float] = None,
+    findings_text: str = "",
+) -> Dict[str, Any]:
+    """Return a tool-result payload with per-task samples for *metric*."""
+    if trace is None:
+        return tool_result_payload(False, "No trace loaded")
+    metric_id = normalize_raw_metric(metric)
+    if not metric_id:
+        return tool_result_payload(
+            False, "metric must be one of: " + ", ".join(AI_RAW_METRIC_NAMES))
+    resolved = resolve_task_key(str(task or "").strip(), _task_candidates_from_trace(trace))
+    if not resolved:
+        return tool_result_payload(False, f"Unknown task {task!r}")
+    try:
+        from .parser import _task_merge_key
+        mk = _task_merge_key(resolved)
+    except Exception:
+        mk = resolved
+    repr_map = getattr(trace, "task_repr", None) or getattr(trace, "taskRepr", None) or {}
+    label = ""
+    if isinstance(repr_map, dict):
+        label = str(repr_map.get(mk) or repr_map.get(resolved) or "")
+    if not label:
+        label = str(resolved)
+    scope = {"lo": lo, "hi": hi} if lo is not None and hi is not None else None
+    data: Dict[str, Any] = {
+        "task": label,
+        "task_key": mk,
+        "metric": metric_id,
+        "scope": scope,
+    }
+    if metric_id == AI_RAW_METRIC_FINDINGS:
+        aliases = [a for a in task_lookup_keys(task) + task_lookup_keys(label) + [label, str(resolved)] if a]
+        hits = []
+        for line in (findings_text or "").splitlines():
+            low = line.lower()
+            if any(a.lower() in low for a in aliases):
+                hits.append(line)
+        truncated = len(hits) > _MAX_RAW_METRIC_ROWS
+        data["rows"] = hits[:_MAX_RAW_METRIC_ROWS]
+        data["count"] = len(hits)
+        data["truncated"] = truncated
+        msg = f"{len(hits)} finding line(s) mentioning {label}"
+        return tool_result_payload(True, msg, data=data)
+
+    if metric_id == AI_RAW_METRIC_PRIORITY:
+        by_mk = getattr(trace, "priority_episodes_by_mk", None) or getattr(
+            trace, "priorityEpisodesByMk", None)
+        eps: List[Any] = []
+        if isinstance(by_mk, dict):
+            eps = list(by_mk.get(mk) or [])
+        elif by_mk is not None and hasattr(by_mk, "get"):
+            eps = list(by_mk.get(mk) or [])
+        if not eps:
+            all_eps = getattr(trace, "priority_episodes", None) or getattr(
+                trace, "priorityEpisodes", None) or []
+            for ep in all_eps:
+                ep_mk = getattr(ep, "mk", None) or (ep.get("mk") if isinstance(ep, dict) else "")
+                if ep_mk == mk:
+                    eps.append(ep)
+        rows = []
+        for ep in eps:
+            start = getattr(ep, "start_ns", None)
+            stop = getattr(ep, "stop_ns", None)
+            if start is None and isinstance(ep, dict):
+                start, stop = ep.get("startNs"), ep.get("stopNs")
+            if not _overlaps_range(start, stop, lo, hi):
+                continue
+            inherited = bool(getattr(ep, "inherited", None) if not isinstance(ep, dict)
+                             else ep.get("inherited"))
+            suspect = bool(getattr(ep, "inversion_suspect", None) if not isinstance(ep, dict)
+                           else ep.get("inversionSuspect"))
+            pattern = getattr(ep, "pattern", None) if not isinstance(ep, dict) else ep.get("pattern")
+            base = getattr(ep, "base_pri", None) if not isinstance(ep, dict) else ep.get("basePri")
+            peak = getattr(ep, "peak_pri", None) if not isinstance(ep, dict) else ep.get("peakPri")
+            rows.append({
+                "start": start,
+                "stop": stop,
+                "duration": (None if start is None or stop is None else int(stop) - int(start)),
+                "base_pri": base,
+                "peak_pri": peak,
+                "inherited": inherited,
+                "inversion_suspect": suspect,
+                "medium_tasks": _medium_labels(ep),
+                "pattern": pattern or "",
+            })
+        truncated = len(rows) > _MAX_RAW_METRIC_ROWS
+        data["episodes"] = rows[:_MAX_RAW_METRIC_ROWS]
+        data["count"] = len(rows)
+        data["truncated"] = truncated
+        msg = f"{len(rows)} priority inheritance episode(s) for {label}"
+        return tool_result_payload(True, msg, data=data)
+
+    if metric_id == AI_RAW_METRIC_EXECUTION:
+        segs = _segs_for_mk(trace, mk)
+        samples = []
+        total = 0
+        max_dur = 0
+        max_at = None
+        for seg in segs:
+            start = getattr(seg, "start", None) if not isinstance(seg, dict) else seg.get("start")
+            end = getattr(seg, "end", None) if not isinstance(seg, dict) else seg.get("end")
+            core = getattr(seg, "core", None) if not isinstance(seg, dict) else seg.get("core")
+            if not _overlaps_range(start, end, lo, hi):
+                continue
+            dur = int(end) - int(start) if start is not None and end is not None else 0
+            if lo is not None and hi is not None and start is not None and end is not None:
+                clip_lo = max(int(start), int(lo))
+                clip_hi = min(int(end), int(hi))
+                dur = max(0, clip_hi - clip_lo)
+            total += dur
+            if dur >= max_dur:
+                max_dur = dur
+                max_at = start
+            samples.append({
+                "start": start, "stop": end, "duration": dur, "core": core or "",
+            })
+        truncated = len(samples) > _MAX_RAW_METRIC_ROWS
+        data.update({
+            "count": len(samples),
+            "total": total,
+            "max": max_dur,
+            "max_at": max_at,
+            "mean": (total / len(samples)) if samples else 0,
+            "slices": samples[:_MAX_RAW_METRIC_ROWS],
+            "truncated": truncated,
+        })
+        msg = f"{len(samples)} execution slice(s) for {label}"
+        return tool_result_payload(True, msg, data=data)
+
+    if metric_id == AI_RAW_METRIC_MIGRATIONS:
+        by_mk = getattr(trace, "migrations_by_mk", None) or getattr(
+            trace, "migrationsByMk", None)
+        migs: List[Any] = []
+        if isinstance(by_mk, dict):
+            migs = list(by_mk.get(mk) or [])
+        elif by_mk is not None and hasattr(by_mk, "get"):
+            migs = list(by_mk.get(mk) or [])
+        if not migs:
+            for m in getattr(trace, "migrations", None) or []:
+                m_mk = getattr(m, "merge_key", None) or getattr(m, "mergeKey", None)
+                if isinstance(m, dict):
+                    m_mk = m.get("merge_key") or m.get("mergeKey")
+                if m_mk == mk:
+                    migs.append(m)
+        rows = []
+        for m in migs:
+            ns = getattr(m, "ns", None) if not isinstance(m, dict) else m.get("ns")
+            if not _in_time_range(ns, lo, hi):
+                continue
+            src = getattr(m, "from_core", None) if not isinstance(m, dict) else (
+                m.get("from_core") or m.get("fromCore"))
+            dst = getattr(m, "to_core", None) if not isinstance(m, dict) else (
+                m.get("to_core") or m.get("toCore"))
+            rows.append({"time": ns, "from": src or "", "to": dst or ""})
+        truncated = len(rows) > _MAX_RAW_METRIC_ROWS
+        data["events"] = rows[:_MAX_RAW_METRIC_ROWS]
+        data["count"] = len(rows)
+        data["truncated"] = truncated
+        msg = f"{len(rows)} migration(s) for {label}"
+        return tool_result_payload(True, msg, data=data)
+
+    if metric_id == AI_RAW_METRIC_BLOCKING:
+        segs = sorted(
+            _segs_for_mk(trace, mk),
+            key=lambda s: getattr(s, "start", None) if not isinstance(s, dict) else s.get("start"),
+        )
+        gaps = []
+        for prev, nxt in zip(segs, segs[1:]):
+            prev_end = getattr(prev, "end", None) if not isinstance(prev, dict) else prev.get("end")
+            nxt_start = getattr(nxt, "start", None) if not isinstance(nxt, dict) else nxt.get("start")
+            if prev_end is None or nxt_start is None:
+                continue
+            gap = int(nxt_start) - int(prev_end)
+            if gap <= 0:
+                continue
+            if not _in_time_range(nxt_start, lo, hi):
+                continue
+            gaps.append({"time": nxt_start, "gap": gap})
+        truncated = len(gaps) > _MAX_RAW_METRIC_ROWS
+        max_gap = max((g["gap"] for g in gaps), default=0)
+        total_gap = sum(g["gap"] for g in gaps)
+        data.update({
+            "count": len(gaps),
+            "max": max_gap,
+            "total": total_gap,
+            "gaps": gaps[:_MAX_RAW_METRIC_ROWS],
+            "truncated": truncated,
+        })
+        msg = f"{len(gaps)} blocking gap(s) for {label}"
+        return tool_result_payload(True, msg, data=data)
+
+    # sync STI events whose note mentions the task
+    sti = getattr(trace, "sti_events", None) or getattr(trace, "stiEvents", None) or []
+    aliases = [a.lower() for a in task_lookup_keys(task) + task_lookup_keys(label) if a]
+    rows = []
+    for ev in sti:
+        t = getattr(ev, "time", None) if not isinstance(ev, dict) else ev.get("time")
+        if not _in_time_range(t, lo, hi):
+            continue
+        note = str(getattr(ev, "note", None) if not isinstance(ev, dict) else ev.get("note") or "")
+        target = str(getattr(ev, "target", None) if not isinstance(ev, dict) else ev.get("target") or "")
+        event = str(getattr(ev, "event", None) if not isinstance(ev, dict) else ev.get("event") or "")
+        blob = f"{note} {target} {event}".lower()
+        if not any(a in blob for a in aliases):
+            continue
+        core = getattr(ev, "core", None) if not isinstance(ev, dict) else ev.get("core")
+        rows.append({
+            "time": t,
+            "core": core or "",
+            "target": target,
+            "event": event,
+            "note": note,
+        })
+    truncated = len(rows) > _MAX_RAW_METRIC_ROWS
+    data["events"] = rows[:_MAX_RAW_METRIC_ROWS]
+    data["count"] = len(rows)
+    data["truncated"] = truncated
+    msg = f"{len(rows)} sync STI event(s) for {label}"
+    return tool_result_payload(True, msg, data=data)
+
 # ===========================================================================
 # ai_mermaid
 # ===========================================================================
@@ -18891,6 +19668,7 @@ def ai_chat_completion(
     history: Optional[Sequence[Dict[str, str]]] = None,
     messages: Optional[List[Dict[str, Any]]] = None,
     tools: Optional[List[Dict[str, Any]]] = None,
+    preset: str = "",
     cancel_event: Optional[threading.Event] = None,
     on_response: Optional[Callable[[Any], None]] = None,
 ) -> Dict[str, Any]:
@@ -18921,6 +19699,9 @@ def ai_chat_completion(
             history=history,
         )
     messages = normalize_tool_chat_messages(messages)
+    if needs_gemini_thought_signatures(
+            base_url=url_base, model=chat_model, preset=preset):
+        messages = ensure_gemini_thought_signatures(messages)
     payload_obj: Dict[str, Any] = {
         "model": chat_model,
         "messages": messages,
@@ -19245,6 +20026,7 @@ def create_ai_assistant_panel(
     on_highlight: Optional[Callable[[str], None]] = None,
     on_execute_tools: Optional[Callable[[List[Dict[str, Any]]], List[Dict[str, Any]]]] = None,
     on_undo_tools: Optional[Callable[[], None]] = None,
+    on_gui_state: Optional[Callable[[], Dict[str, Any]]] = None,
     get_loaded_tabs: Optional[Callable[[], List[Dict[str, Any]]]] = None,
     build_compare_context: Optional[
         Callable[[int, int], Dict[str, Any]]
@@ -19924,6 +20706,79 @@ def create_ai_assistant_panel(
                 return
             self._status.setText(f"Saved conversation to {os.path.basename(path)}")
 
+        def _export_ai_report(self, args: Dict[str, Any]) -> Dict[str, Any]:
+            """Write findings + GUI state + conversation (export_report tool)."""
+            fmt = str((args or {}).get("format") or "html").strip().lower()
+            if fmt not in ("html", "csv"):
+                fmt = "html"
+            gui: Dict[str, Any] = {}
+            if on_gui_state:
+                try:
+                    gui = dict(on_gui_state() or {})
+                except Exception as exc:
+                    return tool_result_payload(False, f"GUI state error: {exc}")
+            findings = str(gui.pop("findings", "") or "")
+            if not findings and get_context:
+                try:
+                    findings = str((get_context() or {}).get("findings_text") or "")
+                except Exception:
+                    findings = ""
+            meta = {
+                "file": gui.pop("file", "") or "",
+                "span": gui.pop("span", "") or "",
+                "cores": gui.pop("cores", "") or "",
+                "scope": gui.pop("scope", "") or "",
+            }
+            annotations = (
+                gui.get("annotations") if isinstance(gui.get("annotations"), list) else []
+            )
+            stamp = _ai_file_stamp()
+            if fmt == "csv":
+                start = f"ai-report-{stamp}.csv"
+                filters = "CSV (*.csv);;All files (*)"
+                data = build_ai_report_csv(
+                    meta=meta,
+                    gui=gui,
+                    findings=findings,
+                    annotations=annotations,
+                    conversation=format_ai_conversation_text(self._entries),
+                )
+            else:
+                start = f"ai-report-{stamp}.html"
+                filters = "HTML (*.html);;All files (*)"
+                conv_html = format_ai_conversation_html(self._entries)
+                inner = conv_html
+                if "<body>" in inner.lower():
+                    low = inner.lower()
+                    a = low.find("<body>")
+                    b = low.rfind("</body>")
+                    if a >= 0 and b > a:
+                        inner = inner[a + 6:b]
+                data = build_ai_report_html(
+                    meta=meta,
+                    gui=gui,
+                    findings=findings,
+                    annotations=annotations,
+                    conversation_html=inner,
+                )
+            path, _selected = QFileDialog.getSaveFileName(
+                self, "Export AI Report", start, filters)
+            if not path:
+                return tool_result_payload(False, "Export cancelled")
+            lower = path.lower()
+            if fmt == "csv" and not lower.endswith(".csv"):
+                path += ".csv"
+            elif fmt == "html" and not lower.endswith((".html", ".htm")):
+                path += ".html"
+            try:
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(data)
+            except OSError as exc:
+                return tool_result_payload(False, f"Could not write file: {exc}")
+            base = os.path.basename(path)
+            self._status.setText(f"Saved report to {base}")
+            return tool_result_payload(True, f"Saved {fmt} report to {base}", path=path)
+
         def stop_query(self) -> None:
             """Abort the current AI request if one is running."""
             if not self._busy:
@@ -20105,7 +20960,10 @@ def create_ai_assistant_panel(
                     "status": "pending",
                 })
 
-            auto = parse_ai_auto_apply(self._settings_dict().get("auto_apply"))
+            auto = (
+                parse_ai_auto_apply(self._settings_dict().get("auto_apply"))
+                or tool_batch_auto_runs(tools_norm)
+            )
             if tools_norm:
                 self._batch_seq += 1
                 batch_id = f"b{self._batch_seq}"
@@ -20164,11 +21022,27 @@ def create_ai_assistant_panel(
                 for t in tools:
                     t["status"] = "skipped"
                     results.append(tool_result_payload(False, "User declined to apply this GUI action."))
-            elif on_execute_tools:
-                try:
-                    results = list(on_execute_tools(tools) or [])
-                except Exception as exc:
-                    results = [tool_result_payload(False, str(exc)) for _ in tools]
+            elif on_execute_tools or any(is_export_tool(str(t.get("name") or "")) for t in tools):
+                host_tools = [t for t in tools if not is_export_tool(str(t.get("name") or ""))]
+                host_results: List[Dict[str, Any]] = []
+                if host_tools and on_execute_tools:
+                    try:
+                        host_results = list(on_execute_tools(host_tools) or [])
+                    except Exception as exc:
+                        host_results = [tool_result_payload(False, str(exc)) for _ in host_tools]
+                hi = 0
+                for t in tools:
+                    if is_export_tool(str(t.get("name") or "")):
+                        results.append(self._export_ai_report(
+                            t.get("arguments") if isinstance(t.get("arguments"), dict) else {}))
+                    else:
+                        res = (
+                            host_results[hi]
+                            if hi < len(host_results) and isinstance(host_results[hi], dict)
+                            else tool_result_payload(False, "missing tool result")
+                        )
+                        hi += 1
+                        results.append(res)
                 for i, t in enumerate(tools):
                     res = results[i] if i < len(results) and isinstance(results[i], dict) else {}
                     t["status"] = "applied" if res.get("ok", True) else "failed"
@@ -20211,6 +21085,7 @@ def create_ai_assistant_panel(
                 "base_url": active["base_url"],
                 "model": active["model"],
                 "api_key": active["api_key"],
+                "preset": active["preset"],
                 "response_language": cfg.get(
                     "response_language", DEFAULT_AI_RESPONSE_LANGUAGE
                 ),
@@ -20292,6 +21167,7 @@ def create_ai_assistant_panel(
                 "base_url": active["base_url"],
                 "model": active["model"],
                 "api_key": active["api_key"],
+                "preset": active["preset"],
                 "response_language": cfg.get(
                     "response_language", DEFAULT_AI_RESPONSE_LANGUAGE
                 ),
@@ -33575,7 +34451,11 @@ class _SettingsDialog(QDialog):
         current = self._ai_model_text()
         self._fill_ai_model_combo(listed, current)
         if listed:
-            self._set_ai_status(f"{len(listed)} model(s) from the endpoint.", "ok")
+            self._set_ai_status(
+                f"{len(listed)} model(s) from the endpoint. "
+                "Open the Model dropdown to pick one.",
+                "ok")
+            QTimer.singleShot(0, self._ai_model_combo.showPopup)
         else:
             self._set_ai_status("Endpoint listed no models.", "error")
         self._cleanup_ai_list_worker()
@@ -40567,6 +41447,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             on_highlight=self._ai_highlight_task,
             on_execute_tools=self._ai_execute_tools,
             on_undo_tools=self._ai_undo_tools,
+            on_gui_state=self._ai_gui_state_for_report,
             get_loaded_tabs=self._ai_list_loaded_tabs,
             build_compare_context=self._ai_build_compare_context,
         )
@@ -41572,6 +42453,39 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             "hscroll": view.horizontalScrollBar().value() if view is not None else 0,
             "vscroll": view.verticalScrollBar().value() if view is not None else 0,
             "inspector": bool(dlg is not None and dlg.isVisible()),
+            "annotations": [
+                (a.id, a.ns, a.note) for a in self._annotations
+            ],
+            "bookmarks": [
+                (b.id, b.ns, b.label) for b in self._bookmarks
+            ],
+            "mark_next_id": int(getattr(self, "_mark_next_id", 1) or 1),
+        }
+
+    def _ai_gui_state_for_report(self) -> dict:
+        """Public GUI fields for export_report (no scroll offsets)."""
+        snap = self._ai_capture_gui_snapshot()
+        ctx = {}
+        if callable(getattr(self, "_ai_build_context", None)):
+            try:
+                ctx = dict(self._ai_build_context() or {})
+            except Exception:
+                ctx = {}
+        return {
+            "file": str(getattr(self, "_current_file", "") or ""),
+            "span": ctx.get("span", ""),
+            "cores": ctx.get("cores", ""),
+            "scope": ctx.get("scope", ""),
+            "findings": ctx.get("findings_text", ""),
+            "cursors": snap.get("cursors") or [],
+            "highlight": snap.get("highlight") or "",
+            "view_mode": snap.get("view_mode") or "task",
+            "orientation": (
+                "horizontal" if snap.get("horizontal", True) else "vertical"
+            ),
+            "annotations": [
+                {"time": a.ns, "note": a.note} for a in self._annotations
+            ],
         }
 
     def _ai_restore_gui_snapshot(self, snap: dict) -> None:
@@ -41609,6 +42523,24 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             dlg = self._heatmap_dlg or self._chord_dlg
             if dlg is not None:
                 dlg.close()
+        if "annotations" in snap or "bookmarks" in snap:
+            if "annotations" in snap:
+                self._annotations = [
+                    TraceAnnotation(id=int(i), ns=int(ns), note=str(note or ""))
+                    for i, ns, note in snap.get("annotations") or []
+                ]
+                self._rebuild_annotation_list()
+            if "bookmarks" in snap:
+                self._bookmarks = [
+                    TraceBookmark(id=int(i), ns=int(ns), label=str(label or ""))
+                    for i, ns, label in snap.get("bookmarks") or []
+                ]
+                self._rebuild_bookmark_list()
+            if snap.get("mark_next_id") is not None:
+                self._mark_next_id = int(snap["mark_next_id"])
+            self._save_current_trace_state()
+            if scene is not None:
+                scene.set_marks(self._bookmarks, self._annotations)
         if hasattr(self, "_stats_panel"):
             self._stats_panel.set_cursor_times(scene.cursor_times(), refresh_stats=True)
 
@@ -41663,8 +42595,15 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     def _ai_execute_tools(self, calls: list) -> list:
         """Apply validated viewer tools; snapshot first so Undo can revert."""
-        self._ai_tool_undo = self._ai_capture_gui_snapshot()
-        self._push_undo_snapshot()
+        mutating = any(
+            tool_mutates_gui(str(c.get("name") or ""))
+            for c in (calls or []) if isinstance(c, dict)
+        )
+        if mutating:
+            self._ai_tool_undo = self._ai_capture_gui_snapshot()
+            self._push_undo_snapshot()
+        else:
+            self._ai_tool_undo = None
         results = []
         for call in calls or []:
             if not isinstance(call, dict):
@@ -41680,8 +42619,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 results.append(tool_result_payload(False, verr))
                 continue
             try:
-                msg = self._ai_dispatch_one(name, norm or {})
-                results.append(tool_result_payload(True, msg))
+                out = self._ai_dispatch_one(name, norm or {})
+                if isinstance(out, dict) and "ok" in out:
+                    results.append(out)
+                else:
+                    results.append(tool_result_payload(True, str(out)))
             except Exception as exc:
                 results.append(tool_result_payload(False, str(exc)))
         return results
@@ -41732,6 +42674,35 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             else:
                 self._open_corridor_inspector("heatmap")
             return "Opened corridor inspector"
+        if name == AI_TOOL_ADD_ANNOTATION:
+            ns = int(float(args["time"]))
+            note = str(args.get("note") or "")
+            self._jump_to_ns(ns)
+            for ann in self._annotations:
+                if int(ann.ns) == ns and ann.note == note:
+                    return f"Annotation already at {ns}"
+            self._add_annotation_with_note(
+                ns, note, focus_annotation_tab=True, push_undo=False)
+            return f"Annotated {ns}"
+        if name == AI_TOOL_QUERY_RAW_METRIC:
+            lo = hi = None
+            panel = getattr(self, "_stats_panel", None)
+            rng = panel._stats_range() if panel is not None and hasattr(panel, "_stats_range") else None
+            if rng:
+                lo, hi, _n = rng
+            findings = ""
+            try:
+                findings = str((self._ai_build_context() or {}).get("findings_text") or "")
+            except Exception:
+                findings = ""
+            return query_raw_metric(
+                self._trace,
+                str(args.get("task") or ""),
+                str(args.get("metric") or ""),
+                lo=lo,
+                hi=hi,
+                findings_text=findings,
+            )
         raise RuntimeError(f"unknown tool {name}")
 
     def _ai_undo_tools(self) -> None:
@@ -42575,7 +43546,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     def _add_annotation_with_note(
         self, ns: int, note: str, *, focus_annotation_tab: bool = False,
-        show_marks_panel: bool = True,
+        show_marks_panel: bool = True, push_undo: bool = True,
     ) -> None:
         """Add an annotation at *ns* with the given note text."""
         if self._trace is None:
@@ -42585,7 +43556,8 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
         if tmax < tmin:
             tmax = tmin
         ns = max(tmin, min(tmax, int(ns)))
-        self._push_undo_snapshot()
+        if push_undo:
+            self._push_undo_snapshot()
         ann_id = self._mark_next_id
         self._annotations.append(TraceAnnotation(id=ann_id, ns=ns, note=note or ""))
         self._mark_next_id += 1
