@@ -1796,6 +1796,86 @@ export function drawRangeSelectVertical(ctx, t0, t1, timeStart, pxPerNs, canvasW
   ctx.restore()
 }
 
+/** Double-arrow ruler + Δtime label for the Ctrl+drag measure tool — horizontal mode. */
+export function drawMeasureRuler(ctx, t0, t1, anchorPx, trace, timeStart, pxPerNs, canvasW, canvasH, darkMode, decimals = 3) {
+  const lo = Math.min(t0, t1)
+  const hi = Math.max(t0, t1)
+  const x1 = Math.round((lo - timeStart) * pxPerNs)
+  const x2 = Math.round((hi - timeStart) * pxPerNs)
+  const y  = anchorPx
+  const color = '#FFB300'   // amber - distinct from cursor/hover/mark colours
+  const arrow = 6
+  const half  = 3
+  ctx.save()
+  ctx.strokeStyle = color
+  ctx.fillStyle   = color
+  ctx.lineWidth   = 1.6
+  ctx.beginPath()
+  ctx.moveTo(x1, y + 0.5)
+  ctx.lineTo(x2, y + 0.5)
+  ctx.stroke()
+  for (const [tipX, sign] of [[x1, 1], [x2, -1]]) {
+    ctx.beginPath()
+    ctx.moveTo(tipX, y)
+    ctx.lineTo(tipX + sign * arrow, y - half)
+    ctx.lineTo(tipX + sign * arrow, y + half)
+    ctx.closePath()
+    ctx.fill()
+  }
+  const label = `\u0394 ${formatTime(Math.abs(t1 - t0), trace.timeScale, decimals)}`
+  ctx.font = 'bold 11px monospace'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  const tw = ctx.measureText(label).width
+  const th = 14
+  const midX = (x1 + x2) / 2
+  const lblY = y - th - 8
+  ctx.fillRect(midX - tw / 2 - 4, lblY, tw + 8, th)
+  ctx.fillStyle = '#000000'
+  ctx.fillText(label, midX, lblY + th / 2 + 1)
+  ctx.restore()
+}
+
+/** Double-arrow ruler + Δtime label for the Ctrl+drag measure tool — vertical mode. */
+export function drawMeasureRulerVertical(ctx, t0, t1, anchorPx, trace, timeStart, pxPerNs, canvasW, canvasH, headerH, darkMode, decimals = 3) {
+  const lo = Math.min(t0, t1)
+  const hi = Math.max(t0, t1)
+  const y1 = headerH + Math.round((lo - timeStart) * pxPerNs)
+  const y2 = headerH + Math.round((hi - timeStart) * pxPerNs)
+  const x  = anchorPx
+  const color = '#FFB300'
+  const arrow = 6
+  const half  = 3
+  ctx.save()
+  ctx.strokeStyle = color
+  ctx.fillStyle   = color
+  ctx.lineWidth   = 1.6
+  ctx.beginPath()
+  ctx.moveTo(x + 0.5, y1)
+  ctx.lineTo(x + 0.5, y2)
+  ctx.stroke()
+  for (const [tipY, sign] of [[y1, 1], [y2, -1]]) {
+    ctx.beginPath()
+    ctx.moveTo(x, tipY)
+    ctx.lineTo(x - half, tipY + sign * arrow)
+    ctx.lineTo(x + half, tipY + sign * arrow)
+    ctx.closePath()
+    ctx.fill()
+  }
+  const label = `\u0394 ${formatTime(Math.abs(t1 - t0), trace.timeScale, decimals)}`
+  ctx.font = 'bold 11px monospace'
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'middle'
+  const tw = ctx.measureText(label).width
+  const th = 14
+  const midY = (y1 + y2) / 2
+  const lblX = x + 8
+  ctx.fillRect(lblX, midY - th / 2, tw + 8, th)
+  ctx.fillStyle = '#000000'
+  ctx.fillText(label, lblX + 4, midY + 1)
+  ctx.restore()
+}
+
 // ---- Hit-test: find STI event near canvas X,Y --------------------------------
 
 /**

@@ -619,6 +619,9 @@
                 Middle-drag
               </div><div>Draw a time region and zoom in on release</div>
               <div class="k">
+                Ctrl+left-drag
+              </div><div>Measure time between two points (double-arrow ruler + Δtime)</div>
+              <div class="k">
                 Left-drag ruler
               </div><div>Pan timeline</div>
               <div class="k">

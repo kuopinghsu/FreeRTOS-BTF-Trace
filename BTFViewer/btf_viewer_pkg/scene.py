@@ -149,6 +149,10 @@ class TimelineScene(QGraphicsScene):
         self._hover_items: list = []
         self._hover_frozen_top_set: set = set()
         self._hover_frozen_left_set: set = set()
+        # -- Ctrl+drag measure ruler --------------------------------------
+        # Transient double-arrow line + Δtime label shown while measuring;
+        # cleared as soon as the drag (or Ctrl key) ends.
+        self._measure_items: list = []
         self._is_dark_ui: bool = True
         self.set_theme(True, rebuild=False)
 
@@ -1221,6 +1225,105 @@ class TimelineScene(QGraphicsScene):
         self.hover_changed.emit()
 
     # ------------------------------------------------------------------
+    # Ctrl+drag measure ruler
+    # ------------------------------------------------------------------
+
+    def _draw_measure_ruler(self, ns_a: int, ns_b: int, anchor_coord: float) -> None:
+        """Draw a transient double-arrow ruler + Δtime label from ns_a to ns_b.
+
+        anchor_coord is the scene Y (horizontal mode) or X (vertical mode) at
+        which the ruler is drawn - fixed at the row/column where the Ctrl+drag
+        started, so the line stays straight (horizontal or vertical) even if
+        the mouse wanders off-axis during the drag.
+        """
+        _safe_scene_remove_items(self, self._measure_items)
+        self._measure_items.clear()
+        if self._trace is None:
+            return
+
+        coord_a = self.ns_to_scene_coord(ns_a)
+        coord_b = self.ns_to_scene_coord(ns_b)
+        lo, hi  = (coord_a, coord_b) if coord_a <= coord_b else (coord_b, coord_a)
+        d_str = f"Δ {_format_time(abs(ns_b - ns_a), self._trace.time_scale, decimals=self._time_decimals)}"
+
+        color = QColor("#FFB300")   # amber - distinct from cursor/hover/mark colours
+        pen   = QPen(color, 1.6, Qt.PenStyle.SolidLine)
+        font  = _monospace_font(self._font_size, QFont.Bold)
+        fm    = QFontMetrics(font)
+        arrow = 6
+        half  = 3
+        tw    = fm.horizontalAdvance(d_str)
+        th    = fm.height()
+
+        if self._horizontal:
+            y = anchor_coord
+            line = QGraphicsLineItem(lo, y, hi, y)
+            line.setPen(pen)
+            line.setZValue(60)
+            self.addItem(line)
+            self._measure_items.append(line)
+
+            for tip_x, sign in ((lo, 1), (hi, -1)):
+                pts = [QPointF(tip_x, y),
+                       QPointF(tip_x + sign * arrow, y - half),
+                       QPointF(tip_x + sign * arrow, y + half)]
+                tri = QGraphicsPolygonItem(QPolygonF(pts))
+                tri.setBrush(QBrush(color))
+                tri.setPen(QPen(Qt.PenStyle.NoPen))
+                tri.setZValue(61)
+                self.addItem(tri)
+                self._measure_items.append(tri)
+
+            mid_x = (lo + hi) / 2
+            lbl_y = y - th - 8
+            bg = self.addRect(QRectF(0, 0, tw + 8, th + 4),
+                               QPen(Qt.PenStyle.NoPen), QBrush(color))
+            bg.setZValue(61)
+            bg.setPos(mid_x - tw / 2 - 4, lbl_y)
+            lbl = self.addSimpleText(d_str, font)
+            lbl.setBrush(QBrush(QColor("#000000")))
+            lbl.setZValue(62)
+            lbl.setPos(mid_x - tw / 2, lbl_y + 2)
+            self._measure_items.extend([bg, lbl])
+        else:
+            x = anchor_coord
+            line = QGraphicsLineItem(x, lo, x, hi)
+            line.setPen(pen)
+            line.setZValue(60)
+            self.addItem(line)
+            self._measure_items.append(line)
+
+            for tip_y, sign in ((lo, 1), (hi, -1)):
+                pts = [QPointF(x, tip_y),
+                       QPointF(x - half, tip_y + sign * arrow),
+                       QPointF(x + half, tip_y + sign * arrow)]
+                tri = QGraphicsPolygonItem(QPolygonF(pts))
+                tri.setBrush(QBrush(color))
+                tri.setPen(QPen(Qt.PenStyle.NoPen))
+                tri.setZValue(61)
+                self.addItem(tri)
+                self._measure_items.append(tri)
+
+            mid_y = (lo + hi) / 2
+            lbl_x = x + 8
+            bg = self.addRect(QRectF(0, 0, tw + 8, th + 4),
+                               QPen(Qt.PenStyle.NoPen), QBrush(color))
+            bg.setZValue(61)
+            bg.setPos(lbl_x, mid_y - th / 2 - 2)
+            lbl = self.addSimpleText(d_str, font)
+            lbl.setBrush(QBrush(QColor("#000000")))
+            lbl.setZValue(62)
+            lbl.setPos(lbl_x + 4, mid_y - th / 2)
+            self._measure_items.extend([bg, lbl])
+
+    def clear_measure_ruler(self) -> None:
+        """Remove the transient measure-ruler overlay from the scene."""
+        if not self._measure_items:
+            return
+        _safe_scene_remove_items(self, self._measure_items)
+        self._measure_items.clear()
+
+    # ------------------------------------------------------------------
     # Draw cursor overlay
     # ------------------------------------------------------------------
 
@@ -1613,6 +1716,7 @@ class TimelineScene(QGraphicsScene):
         self._hover_overlay_items = []   # clear() removed them from the scene
         self._hover_items = []             # clear() removed them from the scene
         self._hover_line_ns = None
+        self._measure_items = []           # clear() removed them from the scene
         self._find_hit_items = []
         if self._trace is None:
             return

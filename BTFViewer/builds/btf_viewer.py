@@ -7907,6 +7907,10 @@ class TimelineScene(QGraphicsScene):
         self._hover_items: list = []
         self._hover_frozen_top_set: set = set()
         self._hover_frozen_left_set: set = set()
+        # -- Ctrl+drag measure ruler --------------------------------------
+        # Transient double-arrow line + Δtime label shown while measuring;
+        # cleared as soon as the drag (or Ctrl key) ends.
+        self._measure_items: list = []
         self._is_dark_ui: bool = True
         self.set_theme(True, rebuild=False)
 
@@ -8979,6 +8983,105 @@ class TimelineScene(QGraphicsScene):
         self.hover_changed.emit()
 
     # ------------------------------------------------------------------
+    # Ctrl+drag measure ruler
+    # ------------------------------------------------------------------
+
+    def _draw_measure_ruler(self, ns_a: int, ns_b: int, anchor_coord: float) -> None:
+        """Draw a transient double-arrow ruler + Δtime label from ns_a to ns_b.
+
+        anchor_coord is the scene Y (horizontal mode) or X (vertical mode) at
+        which the ruler is drawn - fixed at the row/column where the Ctrl+drag
+        started, so the line stays straight (horizontal or vertical) even if
+        the mouse wanders off-axis during the drag.
+        """
+        _safe_scene_remove_items(self, self._measure_items)
+        self._measure_items.clear()
+        if self._trace is None:
+            return
+
+        coord_a = self.ns_to_scene_coord(ns_a)
+        coord_b = self.ns_to_scene_coord(ns_b)
+        lo, hi  = (coord_a, coord_b) if coord_a <= coord_b else (coord_b, coord_a)
+        d_str = f"Δ {_format_time(abs(ns_b - ns_a), self._trace.time_scale, decimals=self._time_decimals)}"
+
+        color = QColor("#FFB300")   # amber - distinct from cursor/hover/mark colours
+        pen   = QPen(color, 1.6, Qt.PenStyle.SolidLine)
+        font  = _monospace_font(self._font_size, QFont.Bold)
+        fm    = QFontMetrics(font)
+        arrow = 6
+        half  = 3
+        tw    = fm.horizontalAdvance(d_str)
+        th    = fm.height()
+
+        if self._horizontal:
+            y = anchor_coord
+            line = QGraphicsLineItem(lo, y, hi, y)
+            line.setPen(pen)
+            line.setZValue(60)
+            self.addItem(line)
+            self._measure_items.append(line)
+
+            for tip_x, sign in ((lo, 1), (hi, -1)):
+                pts = [QPointF(tip_x, y),
+                       QPointF(tip_x + sign * arrow, y - half),
+                       QPointF(tip_x + sign * arrow, y + half)]
+                tri = QGraphicsPolygonItem(QPolygonF(pts))
+                tri.setBrush(QBrush(color))
+                tri.setPen(QPen(Qt.PenStyle.NoPen))
+                tri.setZValue(61)
+                self.addItem(tri)
+                self._measure_items.append(tri)
+
+            mid_x = (lo + hi) / 2
+            lbl_y = y - th - 8
+            bg = self.addRect(QRectF(0, 0, tw + 8, th + 4),
+                               QPen(Qt.PenStyle.NoPen), QBrush(color))
+            bg.setZValue(61)
+            bg.setPos(mid_x - tw / 2 - 4, lbl_y)
+            lbl = self.addSimpleText(d_str, font)
+            lbl.setBrush(QBrush(QColor("#000000")))
+            lbl.setZValue(62)
+            lbl.setPos(mid_x - tw / 2, lbl_y + 2)
+            self._measure_items.extend([bg, lbl])
+        else:
+            x = anchor_coord
+            line = QGraphicsLineItem(x, lo, x, hi)
+            line.setPen(pen)
+            line.setZValue(60)
+            self.addItem(line)
+            self._measure_items.append(line)
+
+            for tip_y, sign in ((lo, 1), (hi, -1)):
+                pts = [QPointF(x, tip_y),
+                       QPointF(x - half, tip_y + sign * arrow),
+                       QPointF(x + half, tip_y + sign * arrow)]
+                tri = QGraphicsPolygonItem(QPolygonF(pts))
+                tri.setBrush(QBrush(color))
+                tri.setPen(QPen(Qt.PenStyle.NoPen))
+                tri.setZValue(61)
+                self.addItem(tri)
+                self._measure_items.append(tri)
+
+            mid_y = (lo + hi) / 2
+            lbl_x = x + 8
+            bg = self.addRect(QRectF(0, 0, tw + 8, th + 4),
+                               QPen(Qt.PenStyle.NoPen), QBrush(color))
+            bg.setZValue(61)
+            bg.setPos(lbl_x, mid_y - th / 2 - 2)
+            lbl = self.addSimpleText(d_str, font)
+            lbl.setBrush(QBrush(QColor("#000000")))
+            lbl.setZValue(62)
+            lbl.setPos(lbl_x + 4, mid_y - th / 2)
+            self._measure_items.extend([bg, lbl])
+
+    def clear_measure_ruler(self) -> None:
+        """Remove the transient measure-ruler overlay from the scene."""
+        if not self._measure_items:
+            return
+        _safe_scene_remove_items(self, self._measure_items)
+        self._measure_items.clear()
+
+    # ------------------------------------------------------------------
     # Draw cursor overlay
     # ------------------------------------------------------------------
 
@@ -9371,6 +9474,7 @@ class TimelineScene(QGraphicsScene):
         self._hover_overlay_items = []   # clear() removed them from the scene
         self._hover_items = []             # clear() removed them from the scene
         self._hover_line_ns = None
+        self._measure_items = []           # clear() removed them from the scene
         self._find_hit_items = []
         if self._trace is None:
             return
@@ -13125,6 +13229,10 @@ class TimelineView(QGraphicsView):
         self._mid_press_ns: Optional[int]   = None   # ns at middle-press
         self._mid_band_item = None                   # gray overlay QGraphicsRectItem
 
+        # Ctrl+drag measure ruler (double-arrow line + Δtime, hidden on release)
+        self._measure_press_ns: Optional[int] = None
+        self._measure_anchor_coord: float = 0.0   # perpendicular scene coord (row/col)
+
         # Double-click rollback: cursor is placed immediately on left-click;
         # if a doubleClickEvent follows, _dbl_click_undo_ns holds the time so
         # we can remove that cursor before zooming (zero latency on single-click).
@@ -14722,6 +14830,20 @@ class TimelineView(QGraphicsView):
 
         super().keyPressEvent(event)
 
+    def keyReleaseEvent(self, event) -> None:
+        # Releasing Ctrl mid-drag hides the measure-ruler even if the mouse
+        # button is still held down.
+        if (not event.isAutoRepeat()
+                and event.key() == Qt.Key.Key_Control
+                and self._measure_press_ns is not None):
+            self._measure_press_ns = None
+            self._scene.clear_measure_ruler()
+            self.setDragMode(QGraphicsView.ScrollHandDrag)
+            self._set_view_hover_cursor(None)
+            event.accept()
+            return
+        super().keyReleaseEvent(event)
+
     def _hit_segment_at(self, scene_pt):
         """Return the TraceSegment under *scene_pt*, or None."""
         for item in self._scene.items(scene_pt):
@@ -14923,6 +15045,24 @@ class TimelineView(QGraphicsView):
                 return
 
         if event.button() == Qt.MouseButton.LeftButton:
+            # --- Ctrl+drag: measure-ruler tool (takes priority over the
+            #     resize/cursor/mark drags below so it works anywhere) ---
+            if (event.modifiers() & Qt.KeyboardModifier.ControlModifier
+                    and self._scene._trace is not None):
+                lw = self._scene._label_width
+                in_label = (event.position().x() < lw if self._scene._horizontal
+                            else event.position().y() < lw)
+                if not in_label:
+                    scene_pt = self.mapToScene(event.position().toPoint())
+                    coord = scene_pt.x() if self._scene._horizontal else scene_pt.y()
+                    self._measure_press_ns = self._scene.scene_to_ns(coord)
+                    self._measure_anchor_coord = (scene_pt.y() if self._scene._horizontal
+                                                   else scene_pt.x())
+                    self.setDragMode(QGraphicsView.NoDrag)
+                    _HoverCursor.show(Qt.CursorShape.CrossCursor)
+                    event.accept()
+                    return
+
             # --- Check if we're starting a label-column/row resize drag ---
             if self._scene._horizontal:
                 lw = self._scene._label_width
@@ -14996,12 +15136,26 @@ class TimelineView(QGraphicsView):
 
     def mouseMoveEvent(self, event) -> None:
         # Dispatch in order of drag states (mutually exclusive):
+        #   0. Ctrl+drag measure ruler  (_measure_press_ns is not None)
         #   1. Label-column resize drag  (_label_resize_dragging)
         #   2. Hover cursor near label border  (show resize cursor hint)
         #   3. Middle-button range selection  (_mid_press_ns)
         #   4. Cursor drag  (_dragging_cursor_idx >= 0)
         #   5. Default pan  (super().mouseMoveEvent)
         #      + fallback: clear stale hover if mouse leaves label column
+
+        # Ctrl+drag measure ruler: redraw the double-arrow line + Δtime label
+        if self._measure_press_ns is not None:
+            scene_pt = self.mapToScene(event.position().toPoint())
+            coord    = scene_pt.x() if self._scene._horizontal else scene_pt.y()
+            cur_ns   = self._scene.scene_to_ns(coord)
+            self._scene._draw_measure_ruler(self._measure_press_ns, cur_ns,
+                                             self._measure_anchor_coord)
+            # Keep the ghost hover line tracking the mouse during the drag too.
+            self._scene._hover_ns = cur_ns
+            self._scene._draw_hover_line()
+            event.accept()
+            return
 
         # Label-column/row resize drag
         if self._label_resize_dragging:
@@ -15154,16 +15308,30 @@ class TimelineView(QGraphicsView):
     def leaveEvent(self, event) -> None:
         if self._scene._trace is not None:
             self._scene.clear_hover_line()
+        if self._measure_press_ns is not None:
+            self._measure_press_ns = None
+            self._scene.clear_measure_ruler()
+            self.setDragMode(QGraphicsView.ScrollHandDrag)
         self._set_view_hover_cursor(None)
         super().leaveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
         # Dispatch in order (first match returns early):
+        #   0. Ctrl+drag measure-ruler release -> hide the ruler overlay
         #   1. Middle-button release  -> zoom to dragged range
         #   2. Label-column resize end
         #   3. Cursor drag end
         #   4. Left-click (delta <= threshold) inside timeline  -> place cursor
         #   5. Right-click inside timeline -> remove cursor / clear all
+
+        # Ctrl+drag measure-ruler release: hide the ruler overlay
+        if self._measure_press_ns is not None:
+            self._measure_press_ns = None
+            self._scene.clear_measure_ruler()
+            self.setDragMode(QGraphicsView.ScrollHandDrag)
+            self._set_view_hover_cursor(None)
+            event.accept()
+            return
 
         # Middle-button release: zoom to selected range
         if event.button() == Qt.MouseButton.MiddleButton and self._mid_press_ns is not None:
@@ -45863,6 +46031,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     def _set_view_mode(self, mode: str) -> None:
         if mode == self._view_mode:
+            # Task/Core toolbar buttons are independent checkables (not a
+            # QActionGroup), so Qt auto-toggles the clicked action's checked
+            # state before this handler runs. Re-sync to keep the active
+            # mode's button highlighted instead of letting it un-check.
+            self._sync_view_mode_toolbar()
             return
         # Update the model without settings_changed — that handler rebuilds the
         # legend via _set_show_sti even though task/core mode does not change it.
@@ -49594,6 +49767,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 ("Two-finger pinch  (macOS)",     "Zoom in/out"),
                 ("Left-drag  (on background)",    "Pan timeline"),
                 ("Middle-click-drag",             "Draw time-range selection band → zoom"),
+                ("Ctrl+Left-drag",                "Measure time between two points (double-arrow ruler + Δtime)"),
                 ("Left-click  (timeline)",        "Place cursor at click position"),
                 ("Shift+Left-click",              "Snap cursor to nearest segment boundary"),
                 ("Right-click  (timeline)",       "Remove nearest cursor / context menu"),

@@ -70,6 +70,11 @@ export class InteractionHandler {
     this._midRangePressT   = null  // timestamp at press
     this._midRangeDragging = false
 
+    // Ctrl+drag: transient measure-ruler tool
+    this._measureDragging = false
+    this._measurePressT   = null   // timestamp at press
+    this._measureAnchorPx = null   // fixed canvas Y (horiz) / X (vert) for the ruler line
+
     // Min zoom: entire trace visible
     this._minTimeSpan = 1
 
@@ -84,6 +89,7 @@ export class InteractionHandler {
     this._boundMouseLeave  = this._onMouseLeave.bind(this)
     this._boundDblClick    = this._onDblClick.bind(this)
     this._boundContextMenu = this._onContextMenu.bind(this)
+    this._boundKeyUp       = this._onKeyUp.bind(this)
 
     // Coalesce wheel-driven viewport updates to one emit per animation frame.
     this._vpQueue    = null
@@ -101,6 +107,10 @@ export class InteractionHandler {
     canvas.addEventListener('mouseleave',  this._boundMouseLeave)
     canvas.addEventListener('dblclick',    this._boundDblClick)
     canvas.addEventListener('contextmenu', this._boundContextMenu)
+    // Ctrl release must cancel the measure-ruler even if it happens off-canvas.
+    if (typeof document !== 'undefined') {
+      document.addEventListener('keyup', this._boundKeyUp)
+    }
   }
 
   cancelPendingViewport() {
@@ -128,6 +138,9 @@ export class InteractionHandler {
     c.removeEventListener('mouseleave',  this._boundMouseLeave)
     c.removeEventListener('dblclick',    this._boundDblClick)
     c.removeEventListener('contextmenu', this._boundContextMenu)
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('keyup', this._boundKeyUp)
+    }
   }
 
   // ---- Public API --------------------------------------------------------
@@ -472,6 +485,22 @@ export class InteractionHandler {
       // after an initial ruler press enters pan mode. Treat the 2nd primary
       // press on the ruler as fit-to-window directly for robust behavior.
       const isRulerClick = vert ? (cx < RULER_W || cy < this._vertHeaderH()) : (cy < RULER_H)
+
+      // Ctrl+drag: measure-ruler tool — takes priority over the ruler
+      // dblclick / cursor / mark drags below so it works anywhere in the body.
+      if (e.ctrlKey && !isRulerClick) {
+        const tMeasure = this._canvasToTime(cx, cy)
+        if (tMeasure !== null) {
+          this._measureDragging = true
+          this._measurePressT   = tMeasure
+          this._measureAnchorPx = vert ? cx : cy
+          this._canvas.style.cursor = 'crosshair'
+          this._opts.onMeasureChange?.({ t0: tMeasure, t1: tMeasure, anchorPx: this._measureAnchorPx })
+          e.preventDefault()
+          return
+        }
+      }
+
       if (isRulerClick && e.detail >= 2) {
         this._dragging = false
         this._draggingCursorIdx = -1
@@ -584,6 +613,17 @@ export class InteractionHandler {
     const cy   = e.clientY - rect.top
     const vert = this._isVertical()
 
+    // Ctrl+drag measure ruler: redraw the double-arrow line + Δtime label,
+    // and keep the ghost hover line tracking the mouse during the drag too.
+    if (this._measureDragging) {
+      const t = this._canvasToTime(cx, cy)
+      if (t !== null) {
+        this._opts.onMeasureChange?.({ t0: this._measurePressT, t1: t, anchorPx: this._measureAnchorPx })
+        this._opts.onHoverTimeChange?.(t)
+      }
+      return
+    }
+
     // Track hover time (skip during pan / middle range select)
     if (!this._dragging && this._midRangePressT === null) {
       const t = this._canvasToTime(cx, cy)
@@ -690,6 +730,14 @@ export class InteractionHandler {
   }
 
   _onMouseUp(e) {
+    if (this._measureDragging) {
+      this._measureDragging = false
+      this._measurePressT   = null
+      this._measureAnchorPx = null
+      this._canvas.style.cursor = 'crosshair'
+      this._opts.onMeasureEnd?.()
+      return
+    }
     if (e.button === 1 && this._midRangePressT !== null) {
       const rect = this._canvas.getBoundingClientRect()
       const cx   = e.clientX - rect.left
@@ -712,7 +760,24 @@ export class InteractionHandler {
     this._canvas.style.cursor = 'crosshair'
   }
 
+  /** Releasing Ctrl mid-drag hides the measure-ruler even if the mouse button is still held. */
+  _onKeyUp(e) {
+    if (e.key === 'Control' && this._measureDragging) {
+      this._measureDragging = false
+      this._measurePressT   = null
+      this._measureAnchorPx = null
+      this._canvas.style.cursor = 'crosshair'
+      this._opts.onMeasureEnd?.()
+    }
+  }
+
   _onMouseLeave() {
+    if (this._measureDragging) {
+      this._measureDragging = false
+      this._measurePressT   = null
+      this._measureAnchorPx = null
+      this._opts.onMeasureEnd?.()
+    }
     if (this._midRangePressT !== null) {
       this._midRangePressPos = null
       this._midRangePressT   = null

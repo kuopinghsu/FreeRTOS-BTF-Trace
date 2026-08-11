@@ -4615,6 +4615,11 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
 
     def _set_view_mode(self, mode: str) -> None:
         if mode == self._view_mode:
+            # Task/Core toolbar buttons are independent checkables (not a
+            # QActionGroup), so Qt auto-toggles the clicked action's checked
+            # state before this handler runs. Re-sync to keep the active
+            # mode's button highlighted instead of letting it un-check.
+            self._sync_view_mode_toolbar()
             return
         # Update the model without settings_changed — that handler rebuilds the
         # legend via _set_show_sti even though task/core mode does not change it.
@@ -8346,6 +8351,7 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 ("Two-finger pinch  (macOS)",     "Zoom in/out"),
                 ("Left-drag  (on background)",    "Pan timeline"),
                 ("Middle-click-drag",             "Draw time-range selection band → zoom"),
+                ("Ctrl+Left-drag",                "Measure time between two points (double-arrow ruler + Δtime)"),
                 ("Left-click  (timeline)",        "Place cursor at click position"),
                 ("Shift+Left-click",              "Snap cursor to nearest segment boundary"),
                 ("Right-click  (timeline)",       "Remove nearest cursor / context menu"),

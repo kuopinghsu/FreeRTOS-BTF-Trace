@@ -71,10 +71,17 @@ doc: $(DOCS)/README.pdf $(DOCS)/AI.pdf $(DOCS)/WORKFLOWS.pdf
 # Use the vendored Eisvogel template (scripts/eisvogel.latex). Do not pass
 # `--template=eisvogel`: pandoc prefers ~/.local/share/pandoc/templates/eisvogel.latex,
 # and a 0-byte file there yields an empty .tex and xelatex "no legal \end found".
+#
+# `-f markdown-blank_before_header`: README.md/AI.md put a `<a id=... name=...>`
+# anchor directly above every heading (no blank line, for stable GitHub anchors).
+# Pandoc's default +blank_before_header extension then refuses to parse those
+# `#`/`##` lines as headings at all — they show up as literal "# Heading" body
+# text in the PDF. Disabling the extension restores normal heading rendering.
 PANDOC_PDF_FLAGS := --pdf-engine=xelatex \
     --template=scripts/eisvogel.latex \
 	--lua-filter scripts/math-codeblock.lua \
 	--resource-path=..:. \
+	-f markdown-blank_before_header \
 	-V mainfont="DejaVu Sans" \
 	-V monofont="DejaVu Sans Mono" \
 	-V colorlinks=true

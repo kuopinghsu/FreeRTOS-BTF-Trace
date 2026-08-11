@@ -1692,6 +1692,7 @@ Shortcuts marked **(W)** are Web-only. Others work on Desktop and Web. On Web, p
 | Wheel / Ctrl+wheel | Pan / zoom |
 | Left-drag background | Pan |
 | Middle-drag | Zoom to selection |
+| Ctrl+left-drag | Measure time between two points (double-arrow ruler + Δtime; release Ctrl or button to hide) |
 | Click timeline | Place cursor |
 | Drag cursor or mark | Move |
 | Right-click | Context menu |

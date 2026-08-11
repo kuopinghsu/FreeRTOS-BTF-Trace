@@ -248,7 +248,7 @@ import LabelColumn from './LabelColumn.vue'
 import ColumnHeaderRow from './ColumnHeaderRow.vue'
 import StiTooltip  from './StiTooltip.vue'
 import SegmentTooltip from './SegmentTooltip.vue'
-import { render as renderTimeline, renderVertical, buildRowLayout, buildColumnLayout, drawHoverLine, drawHoverLineVertical, drawRangeSelect, drawRangeSelectVertical, drawCursors, drawCursorsVertical, drawMarksHorizontal, drawMarksVertical, drawFindHits, drawFindHitsVertical, RULER_H, isStiTagChannel, RULER_W, COL_W, HEADER_H, formatTime, rowBandHeight, visibleRowIndexRange, taskPassesRowFilter, filteredCoreViewTasks, coreViewTaskFilterActive } from '../renderer/TimelineRenderer.js'
+import { render as renderTimeline, renderVertical, buildRowLayout, buildColumnLayout, drawHoverLine, drawHoverLineVertical, drawRangeSelect, drawRangeSelectVertical, drawMeasureRuler, drawMeasureRulerVertical, drawCursors, drawCursorsVertical, drawMarksHorizontal, drawMarksVertical, drawFindHits, drawFindHitsVertical, RULER_H, isStiTagChannel, RULER_W, COL_W, HEADER_H, formatTime, rowBandHeight, visibleRowIndexRange, taskPassesRowFilter, filteredCoreViewTasks, coreViewTaskFilterActive } from '../renderer/TimelineRenderer.js'
 import { getTimelineLayout, setTimelineLayout } from '../utils/timelineLayout.js'
 
 function layout() {
@@ -450,6 +450,7 @@ const segmentTooltipLines = computed(() => {
 })
 const hoverTime   = ref(null)
 const rangeSelect = ref(null)  // { t0, t1 } while middle-dragging a zoom region
+const measureRuler = ref(null) // { t0, t1, anchorPx } while Ctrl-dragging the measure tool
 
 // Right-click context menu
 const contextMenu = reactive({ visible: false, x: 0, y: 0, ns: 0, shiftKey: false, segment: null })
@@ -770,6 +771,8 @@ function paintHoverOverlay() {
     drawFindHitsVertical(ctx, props.findHits, props.findMarkerNs, props.trace, timeStart, pxPerNs, canvasW, canvasH, hh, darkMode)
     if (rangeSelect.value)
       drawRangeSelectVertical(ctx, rangeSelect.value.t0, rangeSelect.value.t1, timeStart, pxPerNs, canvasW, canvasH, hh, darkMode)
+    if (measureRuler.value)
+      drawMeasureRulerVertical(ctx, measureRuler.value.t0, measureRuler.value.t1, measureRuler.value.anchorPx, props.trace, timeStart, pxPerNs, canvasW, canvasH, hh, darkMode, props.timeDecimals)
     if (hoverTime.value !== null)
       drawHoverLineVertical(ctx, hoverTime.value, props.trace, timeStart, pxPerNs, canvasW, canvasH, hh, darkMode, props.timeDecimals)
   } else {
@@ -779,6 +782,8 @@ function paintHoverOverlay() {
     drawFindHits(ctx, props.findHits, props.findMarkerNs, props.trace, timeStart, pxPerNs, canvasW, canvasH, darkMode)
     if (rangeSelect.value)
       drawRangeSelect(ctx, rangeSelect.value.t0, rangeSelect.value.t1, timeStart, pxPerNs, canvasW, canvasH, darkMode)
+    if (measureRuler.value)
+      drawMeasureRuler(ctx, measureRuler.value.t0, measureRuler.value.t1, measureRuler.value.anchorPx, props.trace, timeStart, pxPerNs, canvasW, canvasH, darkMode, props.timeDecimals)
     if (hoverTime.value !== null)
       drawHoverLine(ctx, hoverTime.value, props.trace, timeStart, pxPerNs, canvasW, canvasH, darkMode, props.timeDecimals)
   }
@@ -932,6 +937,15 @@ function setupHandler() {
     },
     onRangeSelectEnd() {
       rangeSelect.value = null
+      paintHoverOverlay()
+    },
+    onMeasureChange({ t0, t1, anchorPx }) {
+      measureRuler.value = { t0, t1, anchorPx }
+      markInteracting(true)
+      paintHoverOverlay()
+    },
+    onMeasureEnd() {
+      measureRuler.value = null
       paintHoverOverlay()
     },
   })

@@ -801,6 +801,10 @@ class TimelineView(QGraphicsView):
         self._mid_press_ns: Optional[int]   = None   # ns at middle-press
         self._mid_band_item = None                   # gray overlay QGraphicsRectItem
 
+        # Ctrl+drag measure ruler (double-arrow line + Δtime, hidden on release)
+        self._measure_press_ns: Optional[int] = None
+        self._measure_anchor_coord: float = 0.0   # perpendicular scene coord (row/col)
+
         # Double-click rollback: cursor is placed immediately on left-click;
         # if a doubleClickEvent follows, _dbl_click_undo_ns holds the time so
         # we can remove that cursor before zooming (zero latency on single-click).
@@ -2398,6 +2402,20 @@ class TimelineView(QGraphicsView):
 
         super().keyPressEvent(event)
 
+    def keyReleaseEvent(self, event) -> None:
+        # Releasing Ctrl mid-drag hides the measure-ruler even if the mouse
+        # button is still held down.
+        if (not event.isAutoRepeat()
+                and event.key() == Qt.Key.Key_Control
+                and self._measure_press_ns is not None):
+            self._measure_press_ns = None
+            self._scene.clear_measure_ruler()
+            self.setDragMode(QGraphicsView.ScrollHandDrag)
+            self._set_view_hover_cursor(None)
+            event.accept()
+            return
+        super().keyReleaseEvent(event)
+
     def _hit_segment_at(self, scene_pt):
         """Return the TraceSegment under *scene_pt*, or None."""
         for item in self._scene.items(scene_pt):
@@ -2599,6 +2617,24 @@ class TimelineView(QGraphicsView):
                 return
 
         if event.button() == Qt.MouseButton.LeftButton:
+            # --- Ctrl+drag: measure-ruler tool (takes priority over the
+            #     resize/cursor/mark drags below so it works anywhere) ---
+            if (event.modifiers() & Qt.KeyboardModifier.ControlModifier
+                    and self._scene._trace is not None):
+                lw = self._scene._label_width
+                in_label = (event.position().x() < lw if self._scene._horizontal
+                            else event.position().y() < lw)
+                if not in_label:
+                    scene_pt = self.mapToScene(event.position().toPoint())
+                    coord = scene_pt.x() if self._scene._horizontal else scene_pt.y()
+                    self._measure_press_ns = self._scene.scene_to_ns(coord)
+                    self._measure_anchor_coord = (scene_pt.y() if self._scene._horizontal
+                                                   else scene_pt.x())
+                    self.setDragMode(QGraphicsView.NoDrag)
+                    _HoverCursor.show(Qt.CursorShape.CrossCursor)
+                    event.accept()
+                    return
+
             # --- Check if we're starting a label-column/row resize drag ---
             if self._scene._horizontal:
                 lw = self._scene._label_width
@@ -2672,12 +2708,26 @@ class TimelineView(QGraphicsView):
 
     def mouseMoveEvent(self, event) -> None:
         # Dispatch in order of drag states (mutually exclusive):
+        #   0. Ctrl+drag measure ruler  (_measure_press_ns is not None)
         #   1. Label-column resize drag  (_label_resize_dragging)
         #   2. Hover cursor near label border  (show resize cursor hint)
         #   3. Middle-button range selection  (_mid_press_ns)
         #   4. Cursor drag  (_dragging_cursor_idx >= 0)
         #   5. Default pan  (super().mouseMoveEvent)
         #      + fallback: clear stale hover if mouse leaves label column
+
+        # Ctrl+drag measure ruler: redraw the double-arrow line + Δtime label
+        if self._measure_press_ns is not None:
+            scene_pt = self.mapToScene(event.position().toPoint())
+            coord    = scene_pt.x() if self._scene._horizontal else scene_pt.y()
+            cur_ns   = self._scene.scene_to_ns(coord)
+            self._scene._draw_measure_ruler(self._measure_press_ns, cur_ns,
+                                             self._measure_anchor_coord)
+            # Keep the ghost hover line tracking the mouse during the drag too.
+            self._scene._hover_ns = cur_ns
+            self._scene._draw_hover_line()
+            event.accept()
+            return
 
         # Label-column/row resize drag
         if self._label_resize_dragging:
@@ -2830,16 +2880,30 @@ class TimelineView(QGraphicsView):
     def leaveEvent(self, event) -> None:
         if self._scene._trace is not None:
             self._scene.clear_hover_line()
+        if self._measure_press_ns is not None:
+            self._measure_press_ns = None
+            self._scene.clear_measure_ruler()
+            self.setDragMode(QGraphicsView.ScrollHandDrag)
         self._set_view_hover_cursor(None)
         super().leaveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
         # Dispatch in order (first match returns early):
+        #   0. Ctrl+drag measure-ruler release -> hide the ruler overlay
         #   1. Middle-button release  -> zoom to dragged range
         #   2. Label-column resize end
         #   3. Cursor drag end
         #   4. Left-click (delta <= threshold) inside timeline  -> place cursor
         #   5. Right-click inside timeline -> remove cursor / clear all
+
+        # Ctrl+drag measure-ruler release: hide the ruler overlay
+        if self._measure_press_ns is not None:
+            self._measure_press_ns = None
+            self._scene.clear_measure_ruler()
+            self.setDragMode(QGraphicsView.ScrollHandDrag)
+            self._set_view_hover_cursor(None)
+            event.accept()
+            return
 
         # Middle-button release: zoom to selected range
         if event.button() == Qt.MouseButton.MiddleButton and self._mid_press_ns is not None:
