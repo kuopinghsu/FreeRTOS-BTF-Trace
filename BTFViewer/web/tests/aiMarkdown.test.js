@@ -104,14 +104,16 @@ describe('ai conversation export', () => {
     assert.match(md, /^# BTF Viewer — AI Conversation/)
     assert.match(md, /_Saved 2026-08-08 08:41:02_/)
     assert.match(md, /## You\n\nWhy is CS\[22\] late\?/)
-    assert.match(md, /## Assistant\n\n## Answer/)
+    assert.match(md, /## Answer\n\nIt migrates at jump:1805000\./)
+    assert.doesNotMatch(md, /## Assistant/)
     assert.equal(md.endsWith('\n'), true)
   })
 
   it('writes plain text without markup', () => {
     const txt = formatAiConversationText(entries, when)
     assert.match(txt, /You:\nWhy is CS\[22\] late\?/)
-    assert.match(txt, /Assistant:\n## Answer/)
+    assert.match(txt, /## Answer\n\nIt migrates at jump:1805000\./)
+    assert.doesNotMatch(txt, /Assistant:/)
     assert.equal(txt.includes('<'), false)
   })
 
@@ -120,6 +122,9 @@ describe('ai conversation export', () => {
     assert.match(html, /^<!DOCTYPE html>/)
     assert.match(html, /<h2>Answer<\/h2>/)
     assert.match(html, /href="btfjump:time\/1805000"/)
+    assert.match(html, /<section class="msg user"><h3>You<\/h3>/)
+    assert.match(html, /<section class="msg assistant">/)
+    assert.doesNotMatch(html, /<h3>Assistant<\/h3>/)
   })
 
   it('html export keeps mermaid SVG without the chat zoom wrapper', () => {

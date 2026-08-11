@@ -329,312 +329,359 @@
           <!-- AI -->
           <div
             v-show="activeTab === 'ai'"
-            class="settings-page"
+            class="settings-page settings-page--ai"
           >
             <h3 class="settings-section">AI connection</h3>
-            <label
-              class="settings-check"
-              title="When off, hides the AI tab. When on, the AI panel can send Analysis Findings to the configured endpoint."
-            >
-              <input
-                v-model="draft.aiEnabled"
-                type="checkbox"
-              >
-              Enable AI Assistant
-            </label>
-            <p class="settings-help">
-              When off, the AI tab is hidden.
-            </p>
-            <label
-              class="settings-check"
-              title="When on, tool calls from the model update the timeline immediately. When off, the chat shows Apply / Skip on each action card and Apply GUI actions under the log."
-            >
-              <input
-                v-model="draft.aiAutoApply"
-                type="checkbox"
-              >
-              Auto-apply GUI actions
-            </label>
-            <label class="settings-row col">
-              <span class="settings-label">Preset</span>
-              <select
-                v-model="aiPreset"
-                class="settings-input wide"
-                title="Ollama runs locally; OpenAI and Gemini are cloud APIs; Custom is any other OpenAI-compatible endpoint. Each preset keeps its own base URL, model, and API key."
-              >
-                <option
-                  v-for="p in aiPresets"
-                  :key="p.id"
-                  :value="p.id"
-                >
-                  {{ p.label }}
-                </option>
-              </select>
-            </label>
-            <label class="settings-row col">
-              <span class="settings-label">Base URL</span>
-              <input
-                v-model="aiBaseUrl"
-                class="settings-input wide"
-                type="url"
-                title="OpenAI-compatible API root, e.g. http://localhost:11434/v1 for Ollama."
-                :placeholder="activePresetInfo.baseUrl || 'http://localhost:11434/v1'"
-              >
-            </label>
-            <label class="settings-row col">
-              <span class="settings-label">Model</span>
-              <div class="settings-model-wrap">
-                <div
-                  ref="aiModelComboEl"
-                  class="settings-combobox"
-                  :class="{ open: aiModelMenuOpen }"
+            <div class="settings-form">
+              <div class="settings-form-row settings-form-row--check">
+                <span
+                  class="settings-form-label"
+                  aria-hidden="true"
+                ></span>
+                <label
+                  class="settings-check"
+                  title="When off, hides the AI tab. When on, the AI panel can send Analysis Findings to the configured endpoint."
                 >
                   <input
-                    v-model="aiModel"
-                    class="settings-combo-input"
-                    type="text"
-                    role="combobox"
-                    autocomplete="off"
-                    :aria-expanded="aiModelMenuOpen ? 'true' : 'false'"
-                    aria-controls="ai-model-listbox"
-                    aria-autocomplete="list"
-                    title="Model id served by that endpoint (e.g. `ollama list` name, gpt-4o-mini, or gemini-flash-lite-latest). Refresh to list models from GET /models, then open the dropdown to pick one."
-                    :placeholder="activePresetInfo.model || 'phi4-mini:3.8b'"
-                    @keydown="onAiModelKeydown"
+                    v-model="draft.aiEnabled"
+                    type="checkbox"
                   >
+                  Enable AI Assistant
+                </label>
+              </div>
+              <div class="settings-form-row settings-form-row--check">
+                <span
+                  class="settings-form-label"
+                  aria-hidden="true"
+                ></span>
+                <p class="settings-help settings-help--tight">
+                  When off, the AI tab is hidden.
+                </p>
+              </div>
+              <div class="settings-form-row settings-form-row--check">
+                <span
+                  class="settings-form-label"
+                  aria-hidden="true"
+                ></span>
+                <label
+                  class="settings-check"
+                  title="When on, tool calls from the model update the timeline immediately. When off, the chat shows Apply / Skip on each action card and Apply GUI actions under the log."
+                >
+                  <input
+                    v-model="draft.aiAutoApply"
+                    type="checkbox"
+                  >
+                  Auto-apply GUI actions
+                </label>
+              </div>
+
+              <div class="settings-form-row">
+                <span class="settings-form-label">Preset:</span>
+                <select
+                  v-model="aiPreset"
+                  class="settings-input settings-input--grow"
+                  title="Ollama runs locally; OpenAI and Gemini are cloud APIs; Custom is any other OpenAI-compatible endpoint. Each preset keeps its own base URL, model, and API key."
+                >
+                  <option
+                    v-for="p in aiPresets"
+                    :key="p.id"
+                    :value="p.id"
+                  >
+                    {{ p.label }}
+                  </option>
+                </select>
+              </div>
+
+              <div class="settings-form-row">
+                <span class="settings-form-label">Base URL:</span>
+                <input
+                  v-model="aiBaseUrl"
+                  class="settings-input settings-input--grow"
+                  type="url"
+                  title="OpenAI-compatible API root, e.g. http://localhost:11434/v1 for Ollama."
+                  :placeholder="activePresetInfo.baseUrl || 'http://localhost:11434/v1'"
+                >
+              </div>
+
+              <div class="settings-form-row">
+                <span class="settings-form-label">Model:</span>
+                <div class="settings-model-wrap settings-model-wrap--grow">
+                  <div
+                    ref="aiModelComboEl"
+                    class="settings-combobox"
+                    :class="{ open: aiModelMenuOpen }"
+                  >
+                    <input
+                      v-model="aiModel"
+                      class="settings-combo-input"
+                      type="text"
+                      role="combobox"
+                      autocomplete="off"
+                      :aria-expanded="aiModelMenuOpen ? 'true' : 'false'"
+                      aria-controls="ai-model-listbox"
+                      aria-autocomplete="list"
+                      title="Model id served by that endpoint (e.g. `ollama list` name, gpt-4o-mini, or gemini-flash-lite-latest). Refresh to list models from GET /models, then open the dropdown to pick one."
+                      :placeholder="activePresetInfo.model || 'phi4-mini:3.8b'"
+                      @keydown="onAiModelKeydown"
+                    >
+                    <button
+                      type="button"
+                      class="settings-combo-toggle"
+                      tabindex="-1"
+                      :title="aiModelOptions.length
+                        ? `Show ${aiModelOptions.length} model(s)`
+                        : 'Refresh to list models from this endpoint'"
+                      aria-label="Show model list"
+                      @click="toggleAiModelMenu"
+                    >
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        viewBox="0 0 16 16"
+                        width="12"
+                        height="12"
+                        aria-hidden="true"
+                      >
+                        <path
+                          fill="currentColor"
+                          d="M4.2 6.2 8 10l3.8-3.8L13 7.4 8 12.4 3 7.4z"
+                        />
+                      </svg>
+                    </button>
+                  </div>
+                  <Teleport to="body">
+                    <ul
+                      v-if="aiModelMenuOpen"
+                      id="ai-model-listbox"
+                      ref="aiModelListEl"
+                      class="settings-combo-list"
+                      role="listbox"
+                      :style="aiModelListStyle"
+                    >
+                      <li
+                        v-for="m in aiModelOptions"
+                        :key="m"
+                        role="option"
+                        :aria-selected="m === String(aiModel || '').trim() ? 'true' : 'false'"
+                        :class="{ selected: m === String(aiModel || '').trim() }"
+                        :title="m"
+                        @mousedown.prevent="selectAiModel(m)"
+                      >
+                        {{ m }}
+                      </li>
+                      <li
+                        v-if="!aiModelOptions.length"
+                        class="settings-combo-empty"
+                        role="presentation"
+                      >
+                        Refresh to list models
+                      </li>
+                    </ul>
+                  </Teleport>
                   <button
                     type="button"
-                    class="settings-combo-toggle"
-                    tabindex="-1"
-                    :title="aiModelOptions.length
-                      ? `Show ${aiModelOptions.length} model(s)`
-                      : 'Refresh to list models from this endpoint'"
-                    aria-label="Show model list"
-                    @click="toggleAiModelMenu"
+                    class="settings-icon-btn"
+                    :disabled="aiTesting || aiListing"
+                    title="Refresh model list from this endpoint"
+                    aria-label="Refresh model list"
+                    @click="onRefreshModels"
                   >
                     <svg
                       xmlns="http://www.w3.org/2000/svg"
                       viewBox="0 0 16 16"
-                      width="12"
-                      height="12"
+                      width="14"
+                      height="14"
                       aria-hidden="true"
                     >
                       <path
                         fill="currentColor"
-                        d="M4.2 6.2 8 10l3.8-3.8L13 7.4 8 12.4 3 7.4z"
+                        d="M8 1.25A6.75 6.75 0 1 0 14.75 8h-1.5A5.25 5.25 0 1 1 8 2.75V5.5L12 3 8 .5v.75z"
                       />
                     </svg>
                   </button>
                 </div>
-                <Teleport to="body">
-                  <ul
-                    v-if="aiModelMenuOpen"
-                    id="ai-model-listbox"
-                    ref="aiModelListEl"
-                    class="settings-combo-list"
-                    role="listbox"
-                    :style="aiModelListStyle"
-                  >
-                    <li
-                      v-for="m in aiModelOptions"
-                      :key="m"
-                      role="option"
-                      :aria-selected="m === String(aiModel || '').trim() ? 'true' : 'false'"
-                      :class="{ selected: m === String(aiModel || '').trim() }"
-                      :title="m"
-                      @mousedown.prevent="selectAiModel(m)"
-                    >
-                      {{ m }}
-                    </li>
-                    <li
-                      v-if="!aiModelOptions.length"
-                      class="settings-combo-empty"
-                      role="presentation"
-                    >
-                      Refresh to list models
-                    </li>
-                  </ul>
-                </Teleport>
-                <button
-                  type="button"
-                  class="settings-icon-btn"
-                  :disabled="aiTesting || aiListing"
-                  title="Refresh model list from this endpoint"
-                  aria-label="Refresh model list"
-                  @click="onRefreshModels"
-                >
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    viewBox="0 0 16 16"
-                    width="14"
-                    height="14"
-                    aria-hidden="true"
-                  >
-                    <path
-                      fill="currentColor"
-                      d="M8 1.25A6.75 6.75 0 1 0 14.75 8h-1.5A5.25 5.25 0 1 1 8 2.75V5.5L12 3 8 .5v.75z"
-                    />
-                  </svg>
-                </button>
               </div>
-            </label>
-            <label class="settings-row col">
-              <span class="settings-label">Authentication</span>
-              <select
-                v-model="aiAuthMode"
-                class="settings-input wide"
-                title="How this preset authenticates. None for a local server; API key to paste a provider key; Sign in opens the vendor page so you can log in and paste the key or token."
-              >
-                <option
-                  v-for="[id, label] in aiAuthModes"
-                  :key="id"
-                  :value="id"
-                >
-                  {{ label }}
-                </option>
-              </select>
-            </label>
-            <div
-              v-if="aiAuthMode !== 'none'"
-              class="settings-ai-auth"
-            >
-              <span class="settings-label">{{ aiAuthMode === 'browser' ? 'Token' : 'API key' }}</span>
-              <p class="settings-auth-status">
-                {{ authStatusText }}
-              </p>
-              <input
-                v-model="aiApiKey"
-                class="settings-input wide"
-                type="password"
-                autocomplete="off"
-                title="API key or access token for this preset (or VITE_OPENAI_API_KEY / VITE_GEMINI_API_KEY / VITE_OLLAMA_API_KEY at build time). Local Ollama needs none. Stored per preset in browser storage."
-                :placeholder="aiAuthMode === 'browser'
-                  ? 'Paste key or token after signing in'
-                  : (isLocalPreset
-                    ? 'Optional — local Ollama needs none'
-                    : 'Required — provider API key')"
-              >
-              <div
-                v-if="aiAuthMode === 'browser'"
-                class="settings-ai-actions"
-              >
-                <button
-                  type="button"
-                  class="settings-btn secondary"
-                  :title="'Open the provider sign-in or API-key page, then paste the key or token.'"
-                  @click="onAiSignIn"
-                >
-                  {{ signInLabel }}
-                </button>
-                <button
-                  v-if="aiApiKey"
-                  type="button"
-                  class="settings-btn secondary"
-                  title="Clear the saved key or token for this preset."
-                  @click="onAiLogout"
-                >
-                  Log out
-                </button>
-              </div>
-            </div>
-            <label
-              class="settings-check"
-              title="Skip HTTPS certificate checks for this preset (self-signed or private CA). Use only on networks you trust. Browsers cannot skip this check — trust the cert in the OS, use http:// on a private LAN, or use the Desktop app."
-            >
-              <input
-                v-model="aiAllowInsecureTls"
-                type="checkbox"
-              >
-              Allow self-signed TLS
-            </label>
-            <p
-              v-if="aiAllowInsecureTls"
-              class="settings-help"
-            >
-              Desktop skips certificate checks for this preset. This browser
-              still verifies TLS — trust the cert in the OS/browser, use
-              http:// on a private LAN, or use the Desktop app.
-            </p>
 
-            <label class="settings-row col">
-              <span class="settings-label">Reply language</span>
-              <select
-                v-model="draft.aiResponseLanguage"
-                class="settings-input wide"
-                title="Language for AI Assistant replies (also available via Language… in the AI panel)."
-              >
-                <option
-                  v-for="lang in aiLanguageOptions"
-                  :key="lang"
-                  :value="lang"
+              <div class="settings-form-row">
+                <span class="settings-form-label">Authentication:</span>
+                <select
+                  v-model="aiAuthMode"
+                  class="settings-input settings-input--grow"
+                  title="How this preset authenticates. None for a local server; API key to paste a provider key; Sign in opens the vendor page so you can log in and paste the key or token."
                 >
-                  {{ lang }}
-                </option>
-              </select>
-            </label>
-            <div class="settings-ai-test">
-              <div class="settings-ai-actions">
-                <button
-                  type="button"
-                  class="settings-btn secondary"
-                  :disabled="aiTesting"
-                  title="List models and run a tiny chat probe against this endpoint. Status updates appear below — first model load can take a couple of minutes."
-                  @click="onTestAi"
-                >
-                  {{ aiTesting ? 'Testing…' : 'Test connection' }}
-                </button>
-                <button
-                  type="button"
-                  class="settings-btn secondary"
-                  title="Load preset, base URL, model, API key, and auth mode from a JSON file (see examples/ai/ollama.json, gemini.json, openai.json, deepseek.json, grok.json, presets.json)."
-                  @click="aiImportInput?.click()"
-                >
-                  Import…
-                </button>
-                <input
-                  ref="aiImportInput"
-                  type="file"
-                  accept="application/json,.json"
-                  class="settings-file-input"
-                  @change="onImportAiSettings"
-                >
+                  <option
+                    v-for="[id, label] in aiAuthModes"
+                    :key="id"
+                    :value="id"
+                  >
+                    {{ label }}
+                  </option>
+                </select>
               </div>
-              <p
-                class="settings-test-status"
-                :class="aiTestClass"
-                role="status"
-                aria-live="polite"
+
+              <div
+                v-if="aiAuthMode !== 'none'"
+                class="settings-form-row settings-form-row--top"
               >
-                {{ aiTestStatus || 'Click Test connection to verify the endpoint and model.' }}
-              </p>
+                <span class="settings-form-label">{{ aiAuthMode === 'browser' ? 'Token:' : 'API key:' }}</span>
+                <div class="settings-ai-auth">
+                  <p class="settings-auth-status">
+                    {{ authStatusText }}
+                  </p>
+                  <input
+                    v-model="aiApiKey"
+                    class="settings-input settings-input--grow"
+                    type="password"
+                    autocomplete="off"
+                    title="API key or access token for this preset (or VITE_OPENAI_API_KEY / VITE_GEMINI_API_KEY / VITE_OLLAMA_API_KEY at build time). Local Ollama needs none. Stored per preset in browser storage."
+                    :placeholder="aiAuthMode === 'browser'
+                      ? 'Paste key or token after signing in'
+                      : (isLocalPreset
+                        ? 'Optional — local Ollama needs none'
+                        : 'Required — provider API key')"
+                  >
+                  <div
+                    v-if="aiAuthMode === 'browser'"
+                    class="settings-ai-actions"
+                  >
+                    <button
+                      type="button"
+                      class="settings-btn secondary"
+                      :title="'Open the provider sign-in or API-key page, then paste the key or token.'"
+                      @click="onAiSignIn"
+                    >
+                      {{ signInLabel }}
+                    </button>
+                    <button
+                      v-if="aiApiKey"
+                      type="button"
+                      class="settings-btn secondary"
+                      title="Clear the saved key or token for this preset."
+                      @click="onAiLogout"
+                    >
+                      Log out
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="settings-form-row settings-form-row--check">
+                <span
+                  class="settings-form-label"
+                  aria-hidden="true"
+                ></span>
+                <div class="settings-form-field">
+                  <label
+                    class="settings-check"
+                    title="Skip HTTPS certificate checks for this preset (self-signed or private CA). Use only on networks you trust. Browsers cannot skip this check — trust the cert in the OS, use http:// on a private LAN, or use the Desktop app."
+                  >
+                    <input
+                      v-model="aiAllowInsecureTls"
+                      type="checkbox"
+                    >
+                    Allow self-signed TLS
+                  </label>
+                  <p
+                    v-if="aiAllowInsecureTls"
+                    class="settings-help"
+                  >
+                    Desktop skips certificate checks for this preset. This browser
+                    still verifies TLS — trust the cert in the OS/browser, use
+                    http:// on a private LAN, or use the Desktop app.
+                  </p>
+                </div>
+              </div>
+
+              <div class="settings-form-row">
+                <span class="settings-form-label">Reply language:</span>
+                <select
+                  v-model="draft.aiResponseLanguage"
+                  class="settings-input settings-input--grow"
+                  title="Language for AI Assistant replies (also available via Language… in the AI panel)."
+                >
+                  <option
+                    v-for="lang in aiLanguageOptions"
+                    :key="lang"
+                    :value="lang"
+                  >
+                    {{ lang }}
+                  </option>
+                </select>
+              </div>
+
+              <div class="settings-form-row settings-form-row--check">
+                <span
+                  class="settings-form-label"
+                  aria-hidden="true"
+                ></span>
+                <div class="settings-ai-actions">
+                  <button
+                    type="button"
+                    class="settings-btn secondary"
+                    :disabled="aiTesting"
+                    title="List models and run a tiny chat probe against this endpoint. Status updates appear below — first model load can take a couple of minutes."
+                    @click="onTestAi"
+                  >
+                    {{ aiTesting ? 'Testing…' : 'Test connection' }}
+                  </button>
+                  <button
+                    type="button"
+                    class="settings-btn secondary"
+                    title="Load preset, base URL, model, API key, and auth mode from a JSON file (see examples/ai/ollama.json, gemini.json, openai.json, deepseek.json, grok.json, presets.json)."
+                    @click="aiImportInput?.click()"
+                  >
+                    Import…
+                  </button>
+                  <input
+                    ref="aiImportInput"
+                    type="file"
+                    accept="application/json,.json"
+                    class="settings-file-input"
+                    @change="onImportAiSettings"
+                  >
+                </div>
+              </div>
+
+              <div class="settings-form-row settings-form-row--span">
+                <p
+                  class="settings-test-status"
+                  :class="aiTestClass"
+                  role="status"
+                  aria-live="polite"
+                >
+                  {{ aiTestStatus || 'Click Test connection to verify the endpoint and model.' }}
+                </p>
+              </div>
+
+              <div class="settings-form-row settings-form-row--span">
+                <p
+                  v-if="isLocalPreset && aiAuthMode === 'none'"
+                  class="settings-help"
+                >
+                  Ollama serves an OpenAI-compatible API at
+                  <code>http://localhost:11434/v1</code>. Pull a model first:
+                  <code>ollama pull phi4-mini:3.8b</code>. Prefer
+                  <code>npm run dev</code> / <code>preview</code> (proxies local Ollama);
+                  for <code>file://</code> use <code>OLLAMA_ORIGINS="*" ollama serve</code>
+                  (macOS app: <code>launchctl setenv OLLAMA_ORIGINS "*"</code>, then restart it).
+                </p>
+                <p
+                  v-else
+                  class="settings-help"
+                >
+                  Any OpenAI-compatible endpoint works: set Base URL, model, and
+                  Authentication (API key or Sign in).
+                  <a
+                    v-if="activeKeyUrl"
+                    :href="activeKeyUrl"
+                    target="_blank"
+                    rel="noreferrer"
+                  >Get a {{ activePresetInfo.label }} key.</a>
+                  OpenAI and Gemini are proxied under <code>npm run dev</code> /
+                  <code>preview</code>; other hosts need CORS or the Desktop app.
+                  Context is Analysis Findings — not the raw BTF.
+                </p>
+              </div>
             </div>
-            <p
-              v-if="isLocalPreset && aiAuthMode === 'none'"
-              class="settings-help"
-            >
-              Ollama serves an OpenAI-compatible API at
-              <code>http://localhost:11434/v1</code>. Pull a model first:
-              <code>ollama pull phi4-mini:3.8b</code>. Prefer
-              <code>npm run dev</code> / <code>preview</code> (proxies local Ollama);
-              for <code>file://</code> use <code>OLLAMA_ORIGINS="*" ollama serve</code>
-              (macOS app: <code>launchctl setenv OLLAMA_ORIGINS "*"</code>, then restart it).
-            </p>
-            <p
-              v-else
-              class="settings-help"
-            >
-              Any OpenAI-compatible endpoint works: set Base URL, model, and
-              Authentication (API key or Sign in).
-              <a
-                v-if="activeKeyUrl"
-                :href="activeKeyUrl"
-                target="_blank"
-                rel="noreferrer"
-              >Get a {{ activePresetInfo.label }} key.</a>
-              OpenAI and Gemini are proxied under <code>npm run dev</code> /
-              <code>preview</code>; other hosts need CORS or the Desktop app.
-              Context is Analysis Findings — not the raw BTF.
-            </p>
           </div>
         </div>
       </div>
@@ -834,12 +881,12 @@ function placeAiModelMenu() {
   const el = aiModelComboEl.value
   if (!el) return
   const r = el.getBoundingClientRect()
-  const maxH = 220
+  const maxH = 280
   const gap = 2
   const spaceBelow = window.innerHeight - r.bottom - 8
   const spaceAbove = r.top - 8
-  const openUp = spaceBelow < 120 && spaceAbove > spaceBelow
-  const height = Math.min(maxH, Math.max(openUp ? spaceAbove : spaceBelow, 80))
+  const openUp = spaceBelow < 140 && spaceAbove > spaceBelow
+  const height = Math.min(maxH, Math.max(openUp ? spaceAbove : spaceBelow, 100))
   aiModelListStyle.value = openUp
     ? {
         position: 'fixed',
@@ -1100,12 +1147,14 @@ function onSave() {
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 10px;
-  min-width: min(580px, 92vw);
-  max-width: 640px;
-  max-height: min(85vh, 520px);
+  /* Fixed size for every settings group — tab switches must not resize.
+     Wide enough for AI controls at 2× the desktop 240px field width. */
+  width: min(780px, 94vw);
+  height: min(520px, 85vh);
   display: flex;
   flex-direction: column;
   box-shadow: 0 12px 36px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
 }
 .settings-header {
   display: flex;
@@ -1176,6 +1225,73 @@ function onSave() {
   flex-direction: column;
   gap: 8px;
 }
+.settings-page--ai {
+  gap: 8px;
+  max-width: 100%;
+  /* Double the desktop wide-combo (240px); all AI fields share this width. */
+  --ai-control-width: 480px;
+}
+.settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+.settings-form-row {
+  display: grid;
+  grid-template-columns: 110px var(--ai-control-width, 480px);
+  column-gap: 12px;
+  align-items: center;
+  width: 100%;
+  justify-content: start;
+}
+.settings-form-row--top {
+  align-items: start;
+}
+.settings-form-row--check {
+  align-items: center;
+  grid-template-columns: 110px var(--ai-control-width, 480px);
+}
+.settings-form-row--span {
+  grid-template-columns: 1fr;
+}
+.settings-form-label {
+  text-align: right;
+  color: var(--fg);
+  font-size: var(--ui-font-size);
+  line-height: 1.3;
+  padding-top: 1px;
+}
+.settings-form-row--top .settings-form-label {
+  padding-top: 6px;
+}
+.settings-form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  width: 100%;
+}
+.settings-help--tight {
+  margin: 0;
+}
+.settings-model-wrap--grow {
+  grid-column: auto;
+  box-sizing: border-box;
+}
+.settings-page--ai .settings-combobox {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.settings-page--ai .settings-combo-input {
+  overflow-x: auto;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+.settings-page--ai select.settings-input--grow {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .settings-section {
   margin: 10px 0 4px;
   font-size: 11px;
@@ -1190,19 +1306,27 @@ function onSave() {
 .settings-ai-auth {
   display: flex;
   flex-direction: column;
+  align-items: stretch;
   gap: 6px;
+  width: var(--ai-control-width, 480px);
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 .settings-auth-status {
   margin: 0;
   font-size: 11px;
   line-height: 1.4;
   color: var(--fg-dim);
+  word-break: break-word;
 }
 .settings-help {
   margin: 4px 0 0;
   font-size: 11px;
-  line-height: 1.4;
+  line-height: 1.45;
   color: var(--fg-dim);
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 .settings-help code {
   font-size: 10px;
@@ -1213,25 +1337,30 @@ function onSave() {
 .settings-ai-test {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  align-items: stretch;
   gap: 6px;
   margin-top: 4px;
+  width: 100%;
 }
 .settings-ai-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  align-items: center;
 }
 .settings-file-input {
   display: none;
 }
 .settings-test-status {
   margin: 0;
-  min-height: 2.8em;
+  min-height: 40px;
   font-size: 11px;
-  line-height: 1.4;
+  line-height: 1.45;
   color: var(--fg-dim);
   word-break: break-word;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  padding: 4px 0;
 }
 .settings-test-status.ok { color: #1e8449; }
 .settings-test-status.error { color: #c0392b; }
@@ -1243,8 +1372,25 @@ function onSave() {
   font-size: var(--ui-font-size);
 }
 .settings-row.col {
+  display: flex;
   flex-direction: column;
   align-items: stretch;
+  gap: 4px;
+  width: 100%;
+}
+.settings-row.col .settings-label {
+  flex: 0 0 auto;
+  line-height: 1.3;
+  color: var(--fg-dim);
+  font-size: 12px;
+}
+.settings-row.col .settings-input.wide,
+.settings-row.col .settings-model-wrap,
+.settings-row.col .settings-textarea {
+  width: 100%;
+  max-width: none;
+  grid-column: auto;
+  box-sizing: border-box;
 }
 .settings-textarea {
   width: 100%;
@@ -1282,6 +1428,25 @@ function onSave() {
   width: 100%;
   max-width: 280px;
   grid-column: 2 / 4;
+}
+.settings-row.col .settings-model-wrap {
+  max-width: none;
+}
+/* AI: Preset / Base URL / Auth / Model / Language — one shared width (2× desktop 240). */
+.settings-page--ai .settings-input.settings-input--grow,
+.settings-page--ai .settings-model-wrap.settings-model-wrap--grow,
+.settings-page--ai .settings-ai-auth {
+  width: var(--ai-control-width, 480px);
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.settings-page--ai .settings-model-wrap.settings-model-wrap--grow {
+  grid-column: auto;
+}
+.settings-page--ai .settings-ai-auth .settings-input.settings-input--grow {
+  width: 100%;
+  max-width: none;
 }
 .settings-combobox {
   position: relative;
@@ -1336,11 +1501,12 @@ function onSave() {
   font-size: var(--ui-font-size);
 }
 .settings-combo-list li {
-  padding: 4px 10px;
+  padding: 5px 10px;
   cursor: pointer;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.35;
 }
 .settings-combo-list li:hover,
 .settings-combo-list li.selected {

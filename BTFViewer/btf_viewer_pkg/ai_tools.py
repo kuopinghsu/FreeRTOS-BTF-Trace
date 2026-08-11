@@ -12,6 +12,24 @@ import re
 import urllib.parse
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from .ai_investigation import (
+    analyze_multi_traces,
+    build_correlation_timeline,
+    build_investigation_replay,
+    build_investigate_context,
+    build_optimization_advice,
+    check_task_budgets,
+    compare_performance_metrics,
+    detect_anomalies,
+    estimate_what_if,
+    explain_regression,
+    generate_structured_report,
+    max_tool_rounds_for_template,
+    resolve_finding,
+    run_optimization_experiments,
+    simulate_what_if,
+    snapshot_from_summary,
+)
 AI_TOOL_SET_CURSORS = "set_cursors"
 AI_TOOL_ZOOM_TO_RANGE = "zoom_to_range"
 AI_TOOL_HIGHLIGHT_TASK = "highlight_task"
@@ -24,6 +42,19 @@ AI_TOOL_CLEAR_MARKS = "clear_marks"
 AI_TOOL_RESET_VIEW = "reset_view"
 AI_TOOL_SEARCH_TIMELINE = "search_timeline"
 AI_TOOL_TRIGGER_COMPARE = "trigger_compare"
+AI_TOOL_INVESTIGATE = "investigate"
+AI_TOOL_DETECT_ANOMALIES = "detect_anomalies"
+AI_TOOL_CORRELATE_EVENTS = "correlate_events"
+AI_TOOL_COMPARE_PERFORMANCE = "compare_performance"
+AI_TOOL_GENERATE_REPORT = "generate_report"
+AI_TOOL_CHECK_BUDGET = "check_budget"
+AI_TOOL_OPTIMIZE = "optimize"
+AI_TOOL_REGRESSION_EXPLAIN = "regression_explain"
+AI_TOOL_BOOKMARK_FINDING = "bookmark_finding"
+AI_TOOL_INVESTIGATION_REPLAY = "investigation_replay"
+AI_TOOL_WHAT_IF = "what_if"
+AI_TOOL_OPTIMIZE_EXPERIMENT = "optimize_experiment"
+AI_TOOL_ANALYZE_TRACES = "analyze_traces"
 
 AI_VIEWER_TOOL_NAMES: Tuple[str, ...] = (
     AI_TOOL_SET_CURSORS,
@@ -38,6 +69,23 @@ AI_VIEWER_TOOL_NAMES: Tuple[str, ...] = (
     AI_TOOL_RESET_VIEW,
     AI_TOOL_SEARCH_TIMELINE,
     AI_TOOL_TRIGGER_COMPARE,
+    AI_TOOL_INVESTIGATE,
+    AI_TOOL_DETECT_ANOMALIES,
+    AI_TOOL_CORRELATE_EVENTS,
+    AI_TOOL_COMPARE_PERFORMANCE,
+    AI_TOOL_GENERATE_REPORT,
+    AI_TOOL_CHECK_BUDGET,
+    AI_TOOL_OPTIMIZE,
+    AI_TOOL_REGRESSION_EXPLAIN,
+    AI_TOOL_BOOKMARK_FINDING,
+    AI_TOOL_INVESTIGATION_REPLAY,
+    AI_TOOL_WHAT_IF,
+    AI_TOOL_OPTIMIZE_EXPERIMENT,
+    AI_TOOL_ANALYZE_TRACES,
+)
+
+AI_BOOKMARK_KINDS: Tuple[str, ...] = (
+    "root_cause", "evidence", "correlated", "reference",
 )
 
 AI_FIND_MODES: Tuple[str, ...] = (
@@ -141,11 +189,27 @@ def parse_btf_highlight_href(href: Any) -> str:
 # Appended to the base system prompt. Keep in sync with web aiTools.js.
 AI_TOOL_SYSTEM_ADDENDUM = (
     "When the user asks to show, focus, inspect, zoom, highlight, annotate, "
-    "export, or jump to a time range, task, or core pair, you MUST invoke the "
+    "export, investigate, explain, or jump to a time range, task, or core pair, "
+    "you MUST invoke the "
     "matching viewer tool (native function call) in addition to your markdown "
     "answer. Valid tools: set_cursors, zoom_to_range, highlight_task, "
     "set_view_mode, open_corridor_inspector, add_annotation, query_raw_metric, "
-    "export_report, clear_marks, reset_view, search_timeline, trigger_compare. "
+    "export_report, clear_marks, reset_view, search_timeline, trigger_compare, "
+    "investigate, detect_anomalies, correlate_events, compare_performance, "
+    "generate_report, check_budget, optimize, regression_explain, "
+    "bookmark_finding, investigation_replay, what_if, optimize_experiment, analyze_traces. "
+    "For root-cause or Investigate templates: call detect_anomalies and "
+    "investigate(finding_id) first for a root-cause chain, then "
+    "correlate_events / query_raw_metric / search_timeline, then set_cursors "
+    "+ zoom_to_range + highlight_task on the worst episode before concluding. "
+    "Use compare_performance for structured A vs B deltas (two tabs); "
+    "regression_explain after compare to narrate the primary change. "
+    "Use generate_report for a typed engineering markdown report, then "
+    "export_report to save HTML/CSV. "
+    "Use check_budget for WCET/response/deadline budgets; optimize for "
+    "evidence-backed mitigations; what_if for heuristic slice-replay simulation; optimize_experiment to rank automatic candidates; "
+    "analyze_traces to rank all open tabs; bookmark_finding to pin semantic "
+    "marks; investigation_replay to summarise a completed investigation. "
     "Use query_raw_metric when you need the exact per-task "
     "series (priority-inheritance episodes, execution slices, migrations, "
     "blocking gaps, sync STI, or findings lines) instead of the summarised "
@@ -155,6 +219,8 @@ AI_TOOL_SYSTEM_ADDENDUM = (
     "tabs are open to pull Trace Compare diffs. Use add_annotation to pin a "
     "note on a spike. Use export_report to save findings, diagrams, and GUI "
     "state as HTML or CSV. "
+    "For what-if / optimize_experiment, label results as heuristic (not FreeRTOS kernel). For optimize advice questions, label estimates as "
+    "'Simulation / estimate — not measured behavior' and cite evidence. "
     "Tool timestamps use the same numeric trace time "
     "unit as jump:TIME. After tools run, summarise what you changed. "
     "If you cannot emit a native function call, emit one fenced btftool JSON "
@@ -472,6 +538,332 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                         },
                     },
                 },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_INVESTIGATE,
+                "description": (
+                    "Build a structured investigation context for one Analysis "
+                    "Finding (hypotheses, evidence chain, suggested next tools). "
+                    "Call this first during Investigate / Root cause workflows. "
+                    "finding_id may be the finding id, 1-based index, or title "
+                    "substring; omit to focus the top warning/error."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "finding_id": {
+                            "type": "string",
+                            "description": (
+                                "Finding id (e.g. thrashing), 1-based index, "
+                                "or title substring. Empty = top actionable finding."
+                            ),
+                        },
+                        "depth": {
+                            "type": "integer",
+                            "description": "Investigation depth 1–5 (default 2).",
+                        },
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_DETECT_ANOMALIES,
+                "description": (
+                    "Rank Analysis Findings as Critical / Warning / Info anomalies "
+                    "(WCET spikes, thrashing, blocking, inversion, deadlines, …)."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "limit": {
+                            "type": "integer",
+                            "description": "Max anomalies to return (1–40, default 10).",
+                        },
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_CORRELATE_EVENTS,
+                "description": (
+                    "Cross-task/cross-metric timeline correlation for a task: "
+                    "merge blocking, execution, migrations, sync, priority "
+                    "inheritance, and Find hits into one ordered event list."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "task": {
+                            "type": "string",
+                            "description": "Task display name, id, or merge key.",
+                        },
+                        "around_time": {
+                            "type": "number",
+                            "description": "Optional center time (trace units).",
+                        },
+                        "window": {
+                            "type": "number",
+                            "description": "Half-width around around_time (trace units).",
+                        },
+                    },
+                    "required": ["task"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_COMPARE_PERFORMANCE,
+                "description": (
+                    "Structured performance deltas between two open tabs "
+                    "(regression rules + confidence). Prefer this over raw CSV "
+                    "when explaining A vs B; trigger_compare still opens the dialog."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "tab_a": {
+                            "type": "string",
+                            "description": "Candidate tab (index or name).",
+                        },
+                        "tab_b": {
+                            "type": "string",
+                            "description": "Baseline tab (index or name).",
+                        },
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_GENERATE_REPORT,
+                "description": (
+                    "Build a typed engineering markdown report from Analysis "
+                    "Findings (executive / performance / root_cause / regression / "
+                    "optimization / bug / ci). Does not save a file — call "
+                    "export_report afterward to download HTML/CSV."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "report_type": {
+                            "type": "string",
+                            "description": (
+                                "executive|performance|root_cause|regression|"
+                                "optimization|bug|ci"
+                            ),
+                        },
+                        "finding_id": {
+                            "type": "string",
+                            "description": "Optional focus finding id / index / title.",
+                        },
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_CHECK_BUDGET,
+                "description": (
+                    "Compare per-task WCET / response / deadline metrics against "
+                    "optional budgets. Omit tasks to let the host build rows from "
+                    "Analysis Findings task names."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "budgets": {
+                            "type": "object",
+                            "description": (
+                                "Map of task → {wcet_us, response_us, deadline_us}."
+                            ),
+                        },
+                        "tasks": {
+                            "type": "array",
+                            "description": (
+                                "Optional metric rows: {task, wcet_us?, response_us?, "
+                                "deadline_us?, exec_max_us?, blocking_max_us?}."
+                            ),
+                        },
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_OPTIMIZE,
+                "description": (
+                    "Evidence-backed optimization / mitigation ideas from Analysis "
+                    "Findings (labelled as estimates, not measured behavior)."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "limit": {
+                            "type": "integer",
+                            "description": "Max recommendations (1–20, default 5).",
+                        },
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_REGRESSION_EXPLAIN,
+                "description": (
+                    "Explain the primary A vs B regression after comparing two "
+                    "open tabs (runs compare_performance then narrates)."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "tab_a": {
+                            "type": "string",
+                            "description": "Candidate tab (index or name).",
+                        },
+                        "tab_b": {
+                            "type": "string",
+                            "description": "Baseline tab (index or name).",
+                        },
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_BOOKMARK_FINDING,
+                "description": (
+                    "Pin a semantic investigation annotation at a timestamp "
+                    "(root_cause / evidence / correlated / reference). GUI mutate."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "time": {
+                            "type": "number",
+                            "description": "Trace time-unit timestamp.",
+                        },
+                        "kind": {
+                            "type": "string",
+                            "enum": list(AI_BOOKMARK_KINDS),
+                            "description": (
+                                "root_cause | evidence | correlated | reference"
+                            ),
+                        },
+                        "note": {
+                            "type": "string",
+                            "description": "Optional short note appended to the label.",
+                        },
+                    },
+                    "required": ["time", "kind"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_INVESTIGATION_REPLAY,
+                "description": (
+                    "Build a structured investigation-replay card (steps, tools "
+                    "run, conclusion, evidence times) for UI / export."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "finding_id": {
+                            "type": "string",
+                            "description": "Finding id / index / title substring.",
+                        },
+                        "conclusion": {
+                            "type": "string",
+                            "description": "Short investigation conclusion text.",
+                        },
+                        "tools_run": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Tool names already executed.",
+                        },
+                        "evidence_times": {
+                            "type": "array",
+                            "items": {"type": "number"},
+                            "description": "Evidence timestamps for cursor replay.",
+                        },
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_WHAT_IF,
+                "description": (
+                    "Heuristic what-if simulation from measured execution slices, "
+                    "migrations, blocking gaps, and core util (not FreeRTOS kernel)."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "change": {
+                            "type": "string",
+                            "description": (
+                                "Proposed change, e.g. pin CS[28] to Core_0, "
+                                "raise priority, reduce mutex contention 50%."
+                            ),
+                        },
+                        "task": {
+                            "type": "string",
+                            "description": "Optional focus task (inferred from change when omitted).",
+                        },
+                    },
+                    "required": ["change"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_OPTIMIZE_EXPERIMENT,
+                "description": (
+                    "Run a small set of automatic optimization experiments "
+                    "(pin/priority/contention/migration) via the heuristic "
+                    "simulator and rank by estimated cost improvement."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "task": {
+                            "type": "string",
+                            "description": "Focus task (defaults from top finding).",
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Max experiments (1–12, default 5).",
+                        },
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_ANALYZE_TRACES,
+                "description": (
+                    "Rank all loaded trace tabs by scheduling behavior "
+                    "(load balance, migrations, missed ticks)."
+                ),
+                "parameters": {"type": "object", "properties": {}},
             },
         },
     ]
@@ -832,6 +1224,18 @@ def is_query_tool(name: str) -> bool:
         AI_TOOL_QUERY_RAW_METRIC,
         AI_TOOL_SEARCH_TIMELINE,
         AI_TOOL_TRIGGER_COMPARE,
+        AI_TOOL_INVESTIGATE,
+        AI_TOOL_DETECT_ANOMALIES,
+        AI_TOOL_CORRELATE_EVENTS,
+        AI_TOOL_COMPARE_PERFORMANCE,
+        AI_TOOL_GENERATE_REPORT,
+        AI_TOOL_CHECK_BUDGET,
+        AI_TOOL_OPTIMIZE,
+        AI_TOOL_REGRESSION_EXPLAIN,
+        AI_TOOL_INVESTIGATION_REPLAY,
+        AI_TOOL_WHAT_IF,
+        AI_TOOL_OPTIMIZE_EXPERIMENT,
+        AI_TOOL_ANALYZE_TRACES,
     )
 
 
@@ -848,6 +1252,7 @@ def tool_mutates_gui(name: str) -> bool:
         AI_TOOL_SET_VIEW_MODE,
         AI_TOOL_OPEN_CORRIDOR,
         AI_TOOL_ADD_ANNOTATION,
+        AI_TOOL_BOOKMARK_FINDING,
         AI_TOOL_CLEAR_MARKS,
         AI_TOOL_RESET_VIEW,
     )
@@ -966,6 +1371,129 @@ def validate_tool_call(name: str, args: Optional[Dict[str, Any]]) -> Tuple[Optio
             "tab_a": str(a.get("tab_a") if a.get("tab_a") is not None else "").strip(),
             "tab_b": str(a.get("tab_b") if a.get("tab_b") is not None else "").strip(),
         }, ""
+    if name == AI_TOOL_INVESTIGATE:
+        depth_raw = a.get("depth", 2)
+        try:
+            depth = int(depth_raw)
+        except (TypeError, ValueError):
+            return None, "depth must be an integer 1–5"
+        depth = max(1, min(5, depth))
+        return {
+            "finding_id": str(a.get("finding_id") or "").strip(),
+            "depth": depth,
+        }, ""
+    if name == AI_TOOL_DETECT_ANOMALIES:
+        lim_raw = a.get("limit", 10)
+        try:
+            limit = int(lim_raw)
+        except (TypeError, ValueError):
+            return None, "limit must be an integer 1–40"
+        return {"limit": max(1, min(40, limit))}, ""
+    if name == AI_TOOL_CORRELATE_EVENTS:
+        task = str(a.get("task") or "").strip()
+        if not task:
+            return None, "task must be a non-empty string"
+        out: Dict[str, Any] = {"task": task, "around_time": None, "window": 0.0}
+        if a.get("around_time") is not None and str(a.get("around_time")).strip() != "":
+            try:
+                out["around_time"] = float(a.get("around_time"))
+            except (TypeError, ValueError):
+                return None, "around_time must be a number"
+        if a.get("window") is not None and str(a.get("window")).strip() != "":
+            try:
+                out["window"] = max(0.0, float(a.get("window")))
+            except (TypeError, ValueError):
+                return None, "window must be a number"
+        return out, ""
+    if name == AI_TOOL_COMPARE_PERFORMANCE:
+        return {
+            "tab_a": str(a.get("tab_a") if a.get("tab_a") is not None else "").strip(),
+            "tab_b": str(a.get("tab_b") if a.get("tab_b") is not None else "").strip(),
+        }, ""
+    if name == AI_TOOL_GENERATE_REPORT:
+        return {
+            "report_type": str(a.get("report_type") or "performance").strip().lower()
+            or "performance",
+            "finding_id": str(a.get("finding_id") or "").strip(),
+        }, ""
+    if name == AI_TOOL_CHECK_BUDGET:
+        budgets = a.get("budgets")
+        if budgets is not None and not isinstance(budgets, dict):
+            return None, "budgets must be an object"
+        tasks = a.get("tasks")
+        if tasks is not None and not isinstance(tasks, (list, tuple)):
+            return None, "tasks must be an array"
+        out: Dict[str, Any] = {}
+        if isinstance(budgets, dict):
+            out["budgets"] = budgets
+        if isinstance(tasks, (list, tuple)):
+            out["tasks"] = [t for t in tasks if isinstance(t, dict)]
+        return out, ""
+    if name == AI_TOOL_OPTIMIZE:
+        lim_raw = a.get("limit", 5)
+        try:
+            limit = int(lim_raw)
+        except (TypeError, ValueError):
+            return None, "limit must be an integer 1–20"
+        return {"limit": max(1, min(20, limit))}, ""
+    if name == AI_TOOL_REGRESSION_EXPLAIN:
+        return {
+            "tab_a": str(a.get("tab_a") if a.get("tab_a") is not None else "").strip(),
+            "tab_b": str(a.get("tab_b") if a.get("tab_b") is not None else "").strip(),
+        }, ""
+    if name == AI_TOOL_BOOKMARK_FINDING:
+        try:
+            t = float(a.get("time"))
+        except (TypeError, ValueError):
+            return None, "time must be a number"
+        kind = str(a.get("kind") or "").strip().lower().replace("-", "_").replace(" ", "_")
+        if kind in ("root", "cause", "rca"):
+            kind = "root_cause"
+        if kind in ("corr", "related"):
+            kind = "correlated"
+        if kind in ("ok", "normal", "ref"):
+            kind = "reference"
+        if kind not in AI_BOOKMARK_KINDS:
+            return None, (
+                "kind must be one of: " + ", ".join(AI_BOOKMARK_KINDS)
+            )
+        note = str(a.get("note") or "").strip()
+        if len(note) > _MAX_ANNOTATION_NOTE:
+            note = note[:_MAX_ANNOTATION_NOTE].rstrip()
+        return {"time": t, "kind": kind, "note": note}, ""
+    if name == AI_TOOL_INVESTIGATION_REPLAY:
+        tools_run = a.get("tools_run") or []
+        if not isinstance(tools_run, (list, tuple)):
+            return None, "tools_run must be an array of strings"
+        evidence = a.get("evidence_times") or []
+        if not isinstance(evidence, (list, tuple)):
+            return None, "evidence_times must be an array of numbers"
+        return {
+            "finding_id": str(a.get("finding_id") or "").strip(),
+            "conclusion": str(a.get("conclusion") or "").strip(),
+            "tools_run": [str(t) for t in tools_run if t],
+            "evidence_times": _as_float_list(list(evidence)),
+        }, ""
+    if name == AI_TOOL_WHAT_IF:
+        change = str(a.get("change") or "").strip()
+        if not change:
+            return None, "change must be a non-empty string"
+        return {
+            "change": change,
+            "task": str(a.get("task") or "").strip(),
+        }, ""
+    if name == AI_TOOL_OPTIMIZE_EXPERIMENT:
+        lim_raw = a.get("limit", 5)
+        try:
+            limit = int(lim_raw)
+        except (TypeError, ValueError):
+            return None, "limit must be an integer 1–12"
+        return {
+            "task": str(a.get("task") or "").strip(),
+            "limit": max(1, min(12, limit)),
+        }, ""
+    if name == AI_TOOL_ANALYZE_TRACES:
+        return {}, ""
     return None, f"unknown tool {name!r}"
 
 
@@ -1028,6 +1556,45 @@ def summarise_tool_call(name: str, args: Optional[Dict[str, Any]]) -> str:
         a_tab = str(a.get("tab_a") or "0").strip() or "0"
         b_tab = str(a.get("tab_b") or "1").strip() or "1"
         return f"Compare tabs {a_tab} vs {b_tab}"
+    if name == AI_TOOL_INVESTIGATE:
+        fid = str(a.get("finding_id") or "").strip() or "top finding"
+        depth = a.get("depth", 2)
+        return f"Investigate {fid} (depth {depth})"
+    if name == AI_TOOL_DETECT_ANOMALIES:
+        return f"Detect anomalies (limit {a.get('limit', 10)})"
+    if name == AI_TOOL_CORRELATE_EVENTS:
+        return f"Correlate events for {str(a.get('task') or '?').strip() or '?'}"
+    if name == AI_TOOL_COMPARE_PERFORMANCE:
+        return "Compare performance (A vs B)"
+    if name == AI_TOOL_GENERATE_REPORT:
+        return f"Generate {str(a.get('report_type') or 'performance')} report"
+    if name == AI_TOOL_CHECK_BUDGET:
+        n = len(a.get("tasks") or []) if isinstance(a.get("tasks"), (list, tuple)) else 0
+        return f"Check budget ({n} task row(s))" if n else "Check budget"
+    if name == AI_TOOL_OPTIMIZE:
+        return f"Optimize (limit {a.get('limit', 5)})"
+    if name == AI_TOOL_REGRESSION_EXPLAIN:
+        return "Explain regression (A vs B)"
+    if name == AI_TOOL_BOOKMARK_FINDING:
+        kind = str(a.get("kind") or "evidence").strip() or "evidence"
+        try:
+            t = float(a.get("time"))
+            return f"Bookmark {kind} at {_fmt_trace_num(t)}"
+        except (TypeError, ValueError):
+            return f"Bookmark {kind}"
+    if name == AI_TOOL_INVESTIGATION_REPLAY:
+        fid = str(a.get("finding_id") or "").strip() or "top finding"
+        return f"Investigation replay ({fid})"
+    if name == AI_TOOL_WHAT_IF:
+        change = str(a.get("change") or "").strip()
+        shown = change if len(change) <= 40 else change[:37] + "…"
+        return f"What-if: {shown}" if shown else "What-if"
+    if name == AI_TOOL_OPTIMIZE_EXPERIMENT:
+        task = str(a.get("task") or "").strip()
+        lim = a.get("limit", 5)
+        return f"Optimize experiment ({task or 'auto'}, limit {lim})"
+    if name == AI_TOOL_ANALYZE_TRACES:
+        return "Analyze loaded traces"
     return name.replace("_", " ")
 
 
@@ -1171,8 +1738,8 @@ def parse_ai_auto_apply(value: Any) -> bool:
     return str(value).strip().lower() in ("1", "true", "yes", "on")
 
 
-def max_tool_rounds() -> int:
-    return _MAX_TOOL_ROUNDS
+def max_tool_rounds(template_id: str = "") -> int:
+    return max_tool_rounds_for_template(template_id, _MAX_TOOL_ROUNDS)
 
 
 _TASK_ID_RE = re.compile(r"\[(\d+)\]\s*$")
@@ -1794,3 +2361,361 @@ def query_raw_metric(
     msg = f"{len(rows)} sync STI event(s) for {label}"
     return tool_result_payload(True, msg, data=data)
 
+
+
+def investigate_finding(
+    findings: Sequence[dict],
+    finding_id: str = "",
+    *,
+    depth: int = 2,
+) -> Dict[str, Any]:
+    """Return a tool-result payload with an investigation graph."""
+    ctx = build_investigate_context(findings, finding_id, depth=depth)
+    ok = bool(ctx.get("ok"))
+    msg = str(ctx.get("message") or ("ok" if ok else "failed"))
+    data = {k: v for k, v in ctx.items() if k not in ("ok", "message")}
+    return tool_result_payload(ok, msg, data=data)
+
+
+def _events_from_metric_payload(payload: Dict[str, Any], metric: str, task: str) -> List[dict]:
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, dict):
+        return []
+    out: List[dict] = []
+    if metric == AI_RAW_METRIC_PRIORITY:
+        for ep in data.get("episodes") or []:
+            t = ep.get("start")
+            if t is None:
+                continue
+            detail = f"PI base={ep.get('base_pri')} peak={ep.get('peak_pri')}"
+            if ep.get("inversion_suspect"):
+                detail += " inversion_suspect"
+            out.append({"time": t, "kind": "priority", "detail": detail, "task": task})
+    elif metric == AI_RAW_METRIC_EXECUTION:
+        for sl in data.get("slices") or []:
+            t = sl.get("start")
+            if t is None:
+                continue
+            out.append({
+                "time": t, "kind": "execution",
+                "detail": f"dur={sl.get('duration')} core={sl.get('core')}",
+                "task": task, "core": sl.get("core") or "",
+            })
+    elif metric == AI_RAW_METRIC_MIGRATIONS:
+        for row in data.get("events") or data.get("migrations") or []:
+            t = row.get("time")
+            if t is None:
+                continue
+            out.append({
+                "time": t, "kind": "migration",
+                "detail": f"{row.get('from')}→{row.get('to')}",
+                "task": task,
+            })
+    elif metric == AI_RAW_METRIC_BLOCKING:
+        for row in data.get("gaps") or []:
+            t = row.get("start") or row.get("time")
+            if t is None:
+                continue
+            out.append({
+                "time": t, "kind": "blocking",
+                "detail": str(row.get("duration") or "block"),
+                "task": task,
+            })
+    elif metric == AI_RAW_METRIC_SYNC:
+        for row in data.get("events") or []:
+            t = row.get("time")
+            if t is None:
+                continue
+            out.append({
+                "time": t, "kind": "sync",
+                "detail": f"{row.get('event')} {row.get('target')} {row.get('note')}".strip(),
+                "task": task, "core": row.get("core") or "",
+            })
+    return out
+
+
+def correlate_task_events(
+    trace: Any,
+    task: str,
+    *,
+    around_time: Optional[float] = None,
+    window: float = 0.0,
+    lo: Optional[float] = None,
+    hi: Optional[float] = None,
+    findings_text: str = "",
+    annotations: Optional[Sequence[Any]] = None,
+) -> Dict[str, Any]:
+    """Host helper: query metrics + search, then build a correlation timeline."""
+    if trace is None:
+        return tool_result_payload(False, "No trace loaded")
+    task = str(task or "").strip()
+    if not task:
+        return tool_result_payload(False, "task is required")
+    events: List[dict] = []
+    for metric in (
+        AI_RAW_METRIC_BLOCKING,
+        AI_RAW_METRIC_EXECUTION,
+        AI_RAW_METRIC_MIGRATIONS,
+        AI_RAW_METRIC_SYNC,
+        AI_RAW_METRIC_PRIORITY,
+    ):
+        payload = query_raw_metric(
+            trace, task, metric, lo=lo, hi=hi, findings_text=findings_text,
+        )
+        if payload.get("ok"):
+            events.extend(_events_from_metric_payload(payload, metric, task))
+    search = search_timeline_hits(trace, task, "contains", annotations=annotations)
+    if search.get("ok"):
+        data = search.get("data") or {}
+        for t in data.get("times") or []:
+            try:
+                events.append({"time": float(t), "kind": "search", "detail": task, "task": task})
+            except (TypeError, ValueError):
+                continue
+    ctx = build_correlation_timeline(
+        events, task=task, around_time=around_time, window=float(window or 0),
+    )
+    ok = bool(ctx.get("ok"))
+    msg = str(ctx.get("message") or ("ok" if ok else "failed"))
+    data = {k: v for k, v in ctx.items() if k not in ("ok", "message")}
+    return tool_result_payload(ok, msg, data=data)
+
+
+def detect_anomalies_finding(
+    findings: Sequence[dict],
+    *,
+    limit: int = 10,
+) -> Dict[str, Any]:
+    ctx = detect_anomalies(findings, limit=limit)
+    ok = bool(ctx.get("ok"))
+    msg = str(ctx.get("message") or ("ok" if ok else "failed"))
+    data = {k: v for k, v in ctx.items() if k not in ("ok", "message")}
+    return tool_result_payload(ok, msg, data=data)
+
+
+def generate_report_finding(
+    findings: Sequence[dict],
+    *,
+    report_type: str = "performance",
+    finding_id: str = "",
+    compare: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    ctx = generate_structured_report(
+        findings, report_type=report_type, focus_id=finding_id, compare=compare,
+    )
+    ok = bool(ctx.get("ok"))
+    msg = str(ctx.get("message") or ("ok" if ok else "failed"))
+    data = {k: v for k, v in ctx.items() if k not in ("ok", "message")}
+    return tool_result_payload(ok, msg, data=data)
+
+
+def compare_performance_tabs(
+    candidate_summary: Dict[str, Any],
+    baseline_summary: Dict[str, Any],
+    *,
+    label_a: str = "A",
+    label_b: str = "B",
+) -> Dict[str, Any]:
+    snap_a = snapshot_from_summary(candidate_summary or {}, name=label_a)
+    snap_b = snapshot_from_summary(baseline_summary or {}, name=label_b)
+    ctx = compare_performance_metrics(snap_a, snap_b, label_a=label_a, label_b=label_b)
+    ok = bool(ctx.get("ok"))
+    msg = str(ctx.get("message") or ("ok" if ok else "failed"))
+    data = {k: v for k, v in ctx.items() if k not in ("ok", "message")}
+    return tool_result_payload(ok, msg, data=data)
+
+
+def budget_task_rows_from_findings(findings: Sequence[dict]) -> List[dict]:
+    """Build empty metric rows from finding task names (for check_budget)."""
+    rows: List[dict] = []
+    seen = set()
+    for a in (detect_anomalies(findings or [], limit=40).get("anomalies") or []):
+        task = str(a.get("task") or "").strip()
+        if not task or task in seen:
+            continue
+        seen.add(task)
+        rows.append({"task": task})
+    return rows
+
+
+def check_budget_finding(
+    tasks: Optional[Sequence[dict]] = None,
+    budgets: Optional[Dict[str, Any]] = None,
+    *,
+    findings: Optional[Sequence[dict]] = None,
+) -> Dict[str, Any]:
+    rows = list(tasks or [])
+    if not rows:
+        rows = budget_task_rows_from_findings(findings or [])
+    ctx = check_task_budgets(rows, budgets)
+    ok = bool(ctx.get("ok"))
+    msg = str(ctx.get("message") or ("ok" if ok else "failed"))
+    data = {k: v for k, v in ctx.items() if k not in ("ok", "message")}
+    return tool_result_payload(ok, msg, data=data)
+
+
+def optimize_finding(
+    findings: Sequence[dict],
+    *,
+    limit: int = 5,
+) -> Dict[str, Any]:
+    ctx = build_optimization_advice(findings, limit=limit)
+    ok = bool(ctx.get("ok"))
+    msg = str(ctx.get("message") or ("ok" if ok else "failed"))
+    data = {k: v for k, v in ctx.items() if k not in ("ok", "message")}
+    return tool_result_payload(ok, msg, data=data)
+
+
+def regression_explain_from_compare(
+    compare: Dict[str, Any],
+    findings: Optional[Sequence[dict]] = None,
+) -> Dict[str, Any]:
+    ctx = explain_regression(compare, findings=findings)
+    ok = bool(ctx.get("ok"))
+    msg = str(ctx.get("message") or ("ok" if ok else "failed"))
+    data = {k: v for k, v in ctx.items() if k not in ("ok", "message")}
+    return tool_result_payload(ok, msg, data=data)
+
+
+def investigation_replay_finding(
+    findings: Sequence[dict],
+    finding_id: str = "",
+    *,
+    conclusion: str = "",
+    tools_run: Optional[Sequence[str]] = None,
+    evidence_times: Optional[Sequence[float]] = None,
+    plan: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    finding = resolve_finding(findings, finding_id) if findings or finding_id else None
+    ctx = build_investigation_replay(
+        finding=finding,
+        plan=plan,
+        tools_run=tools_run,
+        conclusion=conclusion,
+        evidence_times=evidence_times,
+    )
+    ok = bool(ctx.get("ok"))
+    msg = str(ctx.get("message") or ("ok" if ok else "failed"))
+    data = {k: v for k, v in ctx.items() if k not in ("ok", "message")}
+    return tool_result_payload(ok, msg, data=data)
+
+
+def gather_simulation_inputs(
+    trace: Any,
+    task: str,
+    *,
+    lo: Optional[float] = None,
+    hi: Optional[float] = None,
+    findings_text: str = "",
+) -> Dict[str, Any]:
+    """Collect slices / migrations / blocking / core util for the simulator."""
+    slices: List[dict] = []
+    migrations: List[dict] = []
+    gaps: List[dict] = []
+    label = str(task or "").strip()
+    if label and trace is not None:
+        for metric, key in (
+            (AI_RAW_METRIC_EXECUTION, "slices"),
+            (AI_RAW_METRIC_MIGRATIONS, "events"),
+            (AI_RAW_METRIC_BLOCKING, "gaps"),
+        ):
+            res = query_raw_metric(
+                trace, label, metric, lo=lo, hi=hi, findings_text=findings_text,
+            )
+            if not res.get("ok"):
+                continue
+            d = res.get("data") if isinstance(res.get("data"), dict) else {}
+            if key == "slices":
+                slices = list(d.get("slices") or [])
+                label = str(d.get("task") or label)
+            elif key == "events":
+                migrations = list(d.get("events") or [])
+            else:
+                gaps = list(d.get("gaps") or [])
+    core_utils: List[Any] = []
+    if trace is not None:
+        try:
+            from .parser import _core_util_pct_rows
+            lo_i = int(lo) if lo is not None else None
+            hi_i = int(hi) if hi is not None else None
+            core_utils = list(_core_util_pct_rows(trace, lo_i, hi_i))
+        except Exception:
+            core_utils = []
+    return {
+        "task": label,
+        "slices": slices,
+        "migrations": migrations,
+        "blocking_gaps": gaps,
+        "core_utils": core_utils,
+    }
+
+
+def what_if_estimate(
+    change: str,
+    *,
+    task: str = "",
+    findings: Optional[Sequence[dict]] = None,
+    baseline_metrics: Optional[Dict[str, Any]] = None,
+    slices: Optional[Sequence[dict]] = None,
+    migrations: Optional[Sequence[dict]] = None,
+    blocking_gaps: Optional[Sequence[dict]] = None,
+    core_utils: Optional[Sequence[Any]] = None,
+) -> Dict[str, Any]:
+    """Heuristic what-if (slice replay when metrics provided; else keyword)."""
+    has_metrics = bool(slices or migrations or blocking_gaps or core_utils)
+    if has_metrics:
+        ctx = simulate_what_if(
+            change=change,
+            task=task,
+            slices=slices,
+            migrations=migrations,
+            blocking_gaps=blocking_gaps,
+            core_utils=core_utils,
+            findings=findings,
+        )
+    else:
+        ctx = estimate_what_if(
+            change=change,
+            task=task,
+            findings=findings,
+            baseline_metrics=baseline_metrics,
+        )
+    ok = bool(ctx.get("ok"))
+    msg = str(ctx.get("message") or ("ok" if ok else "failed"))
+    data = {k: v for k, v in ctx.items() if k not in ("ok", "message")}
+    return tool_result_payload(ok, msg, data=data)
+
+
+def optimize_experiment_finding(
+    *,
+    task: str = "",
+    findings: Optional[Sequence[dict]] = None,
+    slices: Optional[Sequence[dict]] = None,
+    migrations: Optional[Sequence[dict]] = None,
+    blocking_gaps: Optional[Sequence[dict]] = None,
+    core_utils: Optional[Sequence[Any]] = None,
+    limit: int = 5,
+) -> Dict[str, Any]:
+    ctx = run_optimization_experiments(
+        task=task,
+        slices=slices,
+        migrations=migrations,
+        blocking_gaps=blocking_gaps,
+        core_utils=core_utils,
+        findings=findings,
+        limit=limit,
+    )
+    ok = bool(ctx.get("ok"))
+    msg = str(ctx.get("message") or ("ok" if ok else "failed"))
+    data = {k: v for k, v in ctx.items() if k not in ("ok", "message")}
+    return tool_result_payload(ok, msg, data=data)
+
+
+def analyze_traces_snapshots(
+    snapshots: Sequence[Dict[str, Any]],
+) -> Dict[str, Any]:
+    ctx = analyze_multi_traces(snapshots)
+    ok = bool(ctx.get("ok"))
+    msg = str(ctx.get("message") or ("ok" if ok else "failed"))
+    data = {k: v for k, v in ctx.items() if k not in ("ok", "message")}
+    return tool_result_payload(ok, msg, data=data)

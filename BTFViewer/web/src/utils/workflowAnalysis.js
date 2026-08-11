@@ -13,6 +13,11 @@ import { syncObjectStatsRows } from './syncObjectAnalysis.js'
 import { tickHealthReport } from './tickHealth.js'
 import { computeDeadlineViolations } from './deadlineAnalysis.js'
 import loadBalanceMetrics from './loadBalanceGauge.js'
+import {
+  appendMigrationBurstAnomaly,
+  appendWcetAnomalyFinding,
+  enrichFindingsWithIds,
+} from './aiInvestigation.js'
 
 const FINDING_CAP = 5
 const LOAD_SIGMA_WARN = 30.0
@@ -23,6 +28,19 @@ const THRASH_RATE_PER_S = 1.0
 const THRASH_MIG_MIN = 10
 const PAIR_BOUNCE_PCT = 25.0
 const PAIR_COUNT_MIN = 5
+const WCET_MAX_AVG_RATIO = 5.0
+const MIG_BURST_RATE = 10.0
+
+function finding(severity, title, text, extra = {}) {
+  return {
+    severity,
+    title,
+    text,
+    id: extra.id || '',
+    task: extra.task || '',
+    evidence: extra.evidence || [],
+  }
+}
 
 /**
  * @returns {{severity: string, title: string, text: string}[]}
@@ -50,23 +68,26 @@ export function buildWorkflowAnalysisFindings({
     const sigma = lb.stddev
     const metrics = `Load Balance Score ${score.toFixed(0)}% (σ=${sigma.toFixed(1)}%, G=${gini.toFixed(3)})`
     if (score < LOAD_SCORE_WARN || sigma > LOAD_SIGMA_WARN) {
-      findings.push({
-        severity: 'warning',
-        title: 'Load imbalance across cores',
-        text: `${metrics}. Uneven core placement — check Core Affinity and Core Migrations.`,
-      })
+      findings.push(finding(
+        'warning',
+        'Load imbalance across cores',
+        `${metrics}. Uneven core placement — check Core Affinity and Core Migrations.`,
+        { id: 'load_imbalance' },
+      ))
     } else if (score >= LOAD_SCORE_OK) {
-      findings.push({
-        severity: 'info',
-        title: 'Core utilisation balance',
-        text: `${metrics} — cores look reasonably balanced.`,
-      })
+      findings.push(finding(
+        'info',
+        'Core utilisation balance',
+        `${metrics} — cores look reasonably balanced.`,
+        { id: 'load_balance_ok' },
+      ))
     } else {
-      findings.push({
-        severity: 'info',
-        title: 'Core utilisation balance',
-        text: `${metrics} — moderate spread; review Core Utilisation if the workload is expected to be even.`,
-      })
+      findings.push(finding(
+        'info',
+        'Core utilisation balance',
+        `${metrics} — moderate spread; review Core Utilisation if the workload is expected to be even.`,
+        { id: 'load_balance_moderate' },
+      ))
     }
   }
 
@@ -75,11 +96,12 @@ export function buildWorkflowAnalysisFindings({
       .sort((a, b) => (b.cpuPct ?? 0) - (a.cpuPct ?? 0))
       .slice(0, FINDING_CAP)
     const names = top.map(r => `${r.name} (${(r.cpuPct ?? 0).toFixed(1)}%, Max ${r.max})`).join(', ')
-    findings.push({
-      severity: 'info',
-      title: 'Top tasks by CPU (WCET candidates)',
-      text: `Highest CPU% tasks: ${names}. Open Execution Time and click Max to jump to the worst-case slice.`,
-    })
+    findings.push(finding(
+      'info',
+      'Top tasks by CPU (WCET candidates)',
+      `Highest CPU% tasks: ${names}. Open Execution Time and click Max to jump to the worst-case slice.`,
+      { id: 'top_cpu' },
+    ))
   }
 
   if (blockRows.length) {
@@ -87,24 +109,27 @@ export function buildWorkflowAnalysisFindings({
       .sort((a, b) => (b.runs ?? 0) - (a.runs ?? 0) || String(a.name).localeCompare(String(b.name)))
       .slice(0, FINDING_CAP)
     const names = topB.map(r => `${r.name} (n=${r.runs}, Max ${r.max})`).join(', ')
-    findings.push({
-      severity: topB[0]?.runs >= 20 ? 'warning' : 'info',
-      title: 'Blocking / scheduling-delay candidates',
-      text: `Tasks with the most off-CPU gaps: ${names}. Cross-check Preemption Chain and Mutex/Semaphore.`,
-    })
+    findings.push(finding(
+      topB[0]?.runs >= 20 ? 'warning' : 'info',
+      'Blocking / scheduling-delay candidates',
+      `Tasks with the most off-CPU gaps: ${names}. Cross-check Preemption Chain and Mutex/Semaphore.`,
+      { id: 'blocking' },
+    ))
   }
 
   const invRows = (priorityRows || []).filter(r => String(r.pattern || '').includes('L/M/H'))
   if (invRows.length) {
     const names = invRows.slice(0, FINDING_CAP).map(r => r.label || r.name).join(', ')
-    findings.push({
-      severity: 'warning',
-      title: 'Priority inversion (L/M/H) suspected',
-      text: `Tasks with L/M/H pattern: ${names}. Inspect Priority Inheritance boost episodes and the holding mutex.`,
-    })
+    findings.push(finding(
+      'warning',
+      'Priority inversion (L/M/H) suspected',
+      `Tasks with L/M/H pattern: ${names}. Inspect Priority Inheritance boost episodes and the holding mutex.`,
+      { id: 'priority_inversion' },
+    ))
   }
 
   const thrash = []
+  const burstRows = []
   for (const r of migRows || []) {
     const nMig = r.migrations ?? 0
     const ping = r.pingPong ?? 0
@@ -122,13 +147,15 @@ export function buildWorkflowAnalysisFindings({
         `${r.name} (Migr=${nMig}, Rate=${r.migrRate}, Dwell=${r.avgDwell}, Ping=${ping})`,
       )
     }
+    if (Number.isFinite(ratePerS)) burstRows.push([r.name, ratePerS, nMig])
   }
   if (thrash.length) {
-    findings.push({
-      severity: 'warning',
-      title: 'Excessive bouncing / core thrashing',
-      text: `High migration rate, short dwell, and/or ping-pong detected: ${thrash.slice(0, FINDING_CAP).join('; ')}. See Core-Pair Migration Summary and the Migration Heatmap.`,
-    })
+    findings.push(finding(
+      'warning',
+      'Excessive bouncing / core thrashing',
+      `High migration rate, short dwell, and/or ping-pong detected: ${thrash.slice(0, FINDING_CAP).join('; ')}. See Core-Pair Migration Summary and the Migration Heatmap.`,
+      { id: 'thrashing' },
+    ))
   }
 
   const hotPairs = []
@@ -146,11 +173,12 @@ export function buildWorkflowAnalysisFindings({
     }
   }
   if (hotPairs.length) {
-    findings.push({
-      severity: 'warning',
-      title: 'Hot core-pair migration traffic',
-      text: `Directed pairs with heavy traffic and/or lock-bounce share: ${hotPairs.slice(0, FINDING_CAP).join('; ')}.`,
-    })
+    findings.push(finding(
+      'warning',
+      'Hot core-pair migration traffic',
+      `Directed pairs with heavy traffic and/or lock-bounce share: ${hotPairs.slice(0, FINDING_CAP).join('; ')}.`,
+      { id: 'hot_pairs' },
+    ))
   }
 
   if (deadlineViols) {
@@ -160,11 +188,12 @@ export function buildWorkflowAnalysisFindings({
       const parts = []
       if (sv.length) parts.push(`${sv.length} slice deadline violation(s)`)
       if (cv.length) parts.push(`${cv.length} CPU budget violation(s)`)
-      findings.push({
-        severity: 'error',
-        title: 'Deadline / CPU budget breaches',
-        text: `${parts.join(', ')} in scope. See Deadlines / CPU budget tables below.`,
-      })
+      findings.push(finding(
+        'error',
+        'Deadline / CPU budget breaches',
+        `${parts.join(', ')} in scope. See Deadlines / CPU budget tables below.`,
+        { id: 'deadlines' },
+      ))
     }
   }
 
@@ -172,17 +201,19 @@ export function buildWorkflowAnalysisFindings({
     const health = String(tick.health || '').toLowerCase()
     const missed = tick.missedTicksEstimate ?? tick.missed_estimate ?? 0
     if (health && health !== 'good') {
-      findings.push({
-        severity: health === 'bad' ? 'error' : 'warning',
-        title: `Trace Health (TICK) = ${health.toUpperCase()}`,
-        text: `Mode=${tick.isTickless ? 'TICKLESS' : 'TICK'}, CV=${((tick.tickCv || 0) * 100).toFixed(2)}%, missed≈${missed}. Investigate large TICK gaps and long slices.`,
-      })
+      findings.push(finding(
+        health === 'bad' ? 'error' : 'warning',
+        `Trace Health (TICK) = ${health.toUpperCase()}`,
+        `Mode=${tick.isTickless ? 'TICKLESS' : 'TICK'}, CV=${((tick.tickCv || 0) * 100).toFixed(2)}%, missed≈${missed}. Investigate large TICK gaps and long slices.`,
+        { id: 'tick_health' },
+      ))
     } else if (missed > 0) {
-      findings.push({
-        severity: 'warning',
-        title: 'Estimated missed ticks',
-        text: `About ${missed} missed tick(s) estimated from large gaps. See Trace Health (TICK) large-gap table.`,
-      })
+      findings.push(finding(
+        'warning',
+        'Estimated missed ticks',
+        `About ${missed} missed tick(s) estimated from large gaps. See Trace Health (TICK) large-gap table.`,
+        { id: 'missed_ticks' },
+      ))
     }
   }
 
@@ -193,29 +224,43 @@ export function buildWorkflowAnalysisFindings({
     return kind.includes('BOUNCE') || kind.includes('MIGRATION_WHILE_HELD') || detail.includes('bounc')
   }).length
   if (bounceObjs || bounceIssues) {
-    findings.push({
-      severity: 'warning',
-      title: 'Mutex / semaphore core-boundary bounces',
-      text: `${bounceObjs} sync object(s) with Core bounce > 0${bounceIssues ? `; ${bounceIssues} CORE_MIGRATION_WHILE_HELD-style issue(s)` : ''}. Cross-check Core-Pair Migration Summary Bounce %.`,
-    })
+    findings.push(finding(
+      'warning',
+      'Mutex / semaphore core-boundary bounces',
+      `${bounceObjs} sync object(s) with Core bounce > 0${bounceIssues ? `; ${bounceIssues} CORE_MIGRATION_WHILE_HELD-style issue(s)` : ''}. Cross-check Core-Pair Migration Summary Bounce %.`,
+      { id: 'sync_bounce' },
+    ))
   } else if ((syncIssues || []).length > 0) {
-    findings.push({
-      severity: 'warning',
-      title: 'Sync pairing issues',
-      text: `${syncIssues.length} mutex/semaphore pairing issue(s) in scope (orphan give, unmatched take, etc.).`,
-    })
+    findings.push(finding(
+      'warning',
+      'Sync pairing issues',
+      `${syncIssues.length} mutex/semaphore pairing issue(s) in scope (orphan give, unmatched take, etc.).`,
+      { id: 'sync_issues' },
+    ))
   }
+
+  appendMigrationBurstAnomaly(findings, burstRows, { rateThreshold: MIG_BURST_RATE })
+
+  // WCET anomalies when callers pass avgNs/maxNs/runs on exec rows
+  const spikeRows = []
+  for (const r of execRows || []) {
+    if (r.avgNs != null && r.maxNs != null && r.runs != null) {
+      spikeRows.push([r.name, r.avgNs, r.maxNs, r.runs])
+    }
+  }
+  appendWcetAnomalyFinding(findings, spikeRows, { ratioThreshold: WCET_MAX_AVG_RATIO })
 
   const actionable = findings.filter(f => f.severity === 'warning' || f.severity === 'error')
   if (!actionable.length && !findings.some(f => f.title.startsWith('Top tasks'))) {
-    findings.push({
-      severity: 'info',
-      title: 'No analysis heuristics flagged',
-      text: 'No load-imbalance, thrashing, deadline, tick, or sync warnings in the current scope. Review the tables below for detail.',
-    })
+    findings.push(finding(
+      'info',
+      'No analysis heuristics flagged',
+      'No load-imbalance, thrashing, deadline, tick, or sync warnings in the current scope. Review the tables below for detail.',
+      { id: 'none' },
+    ))
   }
 
-  return findings
+  return enrichFindingsWithIds(findings)
 }
 
 function escHtml(v) {
@@ -238,8 +283,17 @@ export function formatAnalysisFindingsText(findings, scopeSuffix = '') {
   } else {
     findings.forEach((f, i) => {
       const sev = String(f.severity || 'info').toUpperCase()
-      lines.push(`${i + 1}. [${sev}] ${f.title || 'Finding'}`)
+      const fid = String(f.id || '').trim()
+      const idBit = fid ? ` id=${fid}` : ''
+      lines.push(`${i + 1}. [${sev}]${idBit} ${f.title || 'Finding'}`)
       lines.push(`   ${f.text || ''}`)
+      for (const ev of (f.evidence || [])) {
+        if (ev && typeof ev === 'object' && ev.time != null) {
+          lines.push(`   evidence: ${ev.label || 'event'} jump:${ev.time}`)
+        } else if (ev) {
+          lines.push(`   evidence: ${ev}`)
+        }
+      }
       lines.push('')
     })
   }
@@ -333,11 +387,15 @@ export function collectTraceAnalysisFindings(trace, lo = null, hi = null, analys
     const execSum = _summarizeDurs(execSamples, scale)
     if (execSum) {
       const taskTotal = execSamples.reduce((a, b) => a + b, 0)
+      const avgNs = execSamples.reduce((a, b) => a + b, 0) / execSamples.length
+      const maxNs = Math.max(...execSamples)
       execRows.push({
         name: disp,
         runs: execSum.runs,
         cpuPct: total > 0 ? 100 * taskTotal / total : 0,
         max: execSum.max,
+        avgNs,
+        maxNs,
       })
     }
 

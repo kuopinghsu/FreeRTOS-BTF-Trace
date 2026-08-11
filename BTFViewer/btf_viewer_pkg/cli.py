@@ -13,6 +13,14 @@ from .mainwindow import *  # noqa: F403,F401
 from .perfetto_export import export_perfetto
 from .btf_slice import filter_btf_file_to_range, reconstruct_btf_slice, write_btf_text
 from .platform import *  # noqa: F403,F401
+from .ai_investigation import (
+    evaluate_regression,
+    format_regression_report,
+    load_baseline_json,
+    save_baseline_json,
+    snapshot_from_summary,
+)
+from .ai_assistant import ai_chat_completion, resolve_ai_settings
 
 def _cli_validate_range_pair(lo: Optional[int], hi: Optional[int], label: str) -> Optional[str]:
     if (lo is None) ^ (hi is None):
@@ -188,6 +196,8 @@ Headless analysis commands (desktop only — no GUI, no Qt window):
   info         Quick trace summary on stdout (--json for scripts).
   report       Full statistics export (Statistics panel → Export CSV/HTML).
   compare      Two-trace diff (Trace Compare dialog → Export).
+  analyze      CI regression gate vs a baseline .btf or metrics JSON
+               (--fail-on-regression; optional --ai narrative).
   migrations   Core Migrations table only (CSV).
   snapshot     Export a PNG/SVG image (timeline, migration inspector, or a
                statistics metric plot) without opening the GUI.
@@ -219,6 +229,8 @@ CLI examples:
   %(prog)s report tracedata/example-4cores.btf -o /tmp/stats.html
   %(prog)s report tracedata/example-4cores.btf -o /tmp/stats --format both
   %(prog)s compare run1.btf run2.btf -o /tmp/compare.html --name-a baseline --name-b tuned
+  %(prog)s analyze candidate.btf --baseline baseline.btf --fail-on-regression
+  %(prog)s analyze candidate.btf --save-baseline /tmp/base.json
   %(prog)s compare tracedata/tickless-8cores.zip -o /tmp/tick-policy.html
   %(prog)s migrations tracedata/example-4cores.btf -o /tmp/migrations.csv
   %(prog)s snapshot tracedata/example-4cores.btf -o /tmp/timeline.png --view timeline
@@ -516,6 +528,55 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
         help="range end for trace B only",
     )
 
+    analyze = sub.add_parser(
+        "analyze",
+        help="CI regression gate vs a baseline .btf or metrics JSON",
+        description=(
+            "Compare a candidate trace against a baseline .btf (or a previously "
+            "saved metrics JSON). Prints a pass/fail report. Use "
+            "--fail-on-regression to exit non-zero for CI. Optional --ai asks "
+            "the configured OpenAI-compatible endpoint for a short narrative "
+            "(requires API settings / env keys)."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "examples:\n"
+            "  %(prog)s analyze run.btf --baseline base.btf --fail-on-regression\n"
+            "  %(prog)s analyze run.btf --save-baseline /tmp/base.json\n"
+            "  %(prog)s analyze run.btf --baseline /tmp/base.json --fail-on-regression\n"
+        ),
+    )
+    analyze.add_argument(
+        "trace", metavar="trace.btf",
+        help="candidate .btf to analyse",
+    )
+    analyze.add_argument(
+        "--baseline", metavar="PATH",
+        help="baseline .btf or metrics JSON from a prior --save-baseline",
+    )
+    analyze.add_argument(
+        "--save-baseline", metavar="PATH",
+        help="write candidate metrics JSON for later --baseline use",
+    )
+    analyze.add_argument(
+        "--fail-on-regression", action="store_true",
+        help="exit 1 when migrations / load-balance / missed-ticks regress",
+    )
+    analyze.add_argument(
+        "--ai", action="store_true",
+        help="optional LLM narrative (uses Settings → AI / env API keys)",
+    )
+    analyze.add_argument("--lo", type=int, default=None, metavar="T", help=_CLI_LO_HELP)
+    analyze.add_argument("--hi", type=int, default=None, metavar="T", help=_CLI_HI_HELP)
+    analyze.add_argument(
+        "--lo-b", type=int, default=None, metavar="T",
+        help="baseline range start when --baseline is a .btf",
+    )
+    analyze.add_argument(
+        "--hi-b", type=int, default=None, metavar="T",
+        help="baseline range end when --baseline is a .btf",
+    )
+
     info = sub.add_parser(
         "info",
         help="print trace summary on stdout",
@@ -737,6 +798,7 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
     return parser, {
         "report": report,
         "compare": compare,
+        "analyze": analyze,
         "info": info,
         "migrations": migrations,
         "snapshot": snapshot,
@@ -871,6 +933,116 @@ def _cli_compare_run(args: argparse.Namespace) -> int:
 def _cli_compare_main(argv: List[str]) -> int:
     args = _make_arg_parser()[1]["compare"].parse_args(argv)
     return _cli_compare_run(args)
+
+
+def _cli_analyze_run(args: argparse.Namespace) -> int:
+    err = _cli_validate_range_pair(args.lo, args.hi, "range")
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    err_b = _cli_validate_range_pair(args.lo_b, args.hi_b, "baseline range")
+    if err_b:
+        print(err_b, file=sys.stderr)
+        return 1
+
+    path = os.path.abspath(args.trace)
+    trace, err_load = _cli_load_trace(path)
+    if err_load:
+        print(err_load, file=sys.stderr)
+        return 1
+    assert trace is not None
+    cand_snap = snapshot_from_summary(
+        _trace_summary_snapshot(trace, args.lo, args.hi),
+        name=_trace_display_name(path),
+    )
+
+    if args.save_baseline:
+        try:
+            save_baseline_json(args.save_baseline, cand_snap)
+            print(args.save_baseline)
+        except OSError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        if not args.baseline and not args.fail_on_regression and not args.ai:
+            return 0
+
+    if not args.baseline:
+        print(
+            "error: --baseline PATH is required unless only --save-baseline",
+            file=sys.stderr,
+        )
+        return 1
+
+    base_path = os.path.abspath(args.baseline)
+    if base_path.lower().endswith(".json"):
+        try:
+            base_snap = load_baseline_json(base_path)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+    else:
+        base_trace, err_base = _cli_load_trace(base_path)
+        if err_base:
+            print(err_base, file=sys.stderr)
+            return 1
+        assert base_trace is not None
+        base_snap = snapshot_from_summary(
+            _trace_summary_snapshot(base_trace, args.lo_b, args.hi_b),
+            name=_trace_display_name(base_path),
+        )
+
+    result = evaluate_regression(cand_snap, base_snap)
+    title = f"{cand_snap.get('name') or 'A'} vs {base_snap.get('name') or 'B'}"
+    print(format_regression_report(result, title=title), end="")
+
+    if args.ai:
+        try:
+            from btf_viewer_pkg.ai_investigation import (
+                compare_performance_metrics,
+                explain_regression,
+            )
+            cmp = compare_performance_metrics(
+                cand_snap, base_snap,
+                label_a=str(cand_snap.get("name") or "A"),
+                label_b=str(base_snap.get("name") or "B"),
+            )
+            explained = explain_regression(cmp)
+            print(explained.get("markdown") or "", end="")
+        except Exception:
+            pass
+        try:
+            rc = _RcSettings()
+            cfg: Dict[str, str] = {}
+            if hasattr(rc, "_cfg") and rc._cfg.has_section("ai"):
+                cfg.update({k: v for k, v in rc._cfg.items("ai")})
+            active = resolve_ai_settings(cfg)
+            narrative = ai_chat_completion(
+                "Summarise this CI regression gate for an engineer. "
+                "Classify each check as Regression / Improvement / Neutral "
+                "with confidence. Keep it under 12 lines.\n\n"
+                + format_regression_report(result, title=title),
+                findings_text="",
+                base_url=active.get("base_url", ""),
+                model=active.get("model", ""),
+                api_key=active.get("api_key", ""),
+                preset=active.get("preset", ""),
+            )
+            content = ""
+            if isinstance(narrative, dict):
+                content = str(narrative.get("content") or "")
+            if content.strip():
+                print("\n--- AI narrative ---\n" + content.strip() + "\n")
+        except Exception as exc:
+            print(f"(AI narrative skipped: {exc})", file=sys.stderr)
+
+    if args.fail_on_regression and result.get("failed"):
+        return 1
+    return 0
+
+
+def _cli_analyze_main(argv: List[str]) -> int:
+    args = _make_arg_parser()[1]["analyze"].parse_args(argv)
+    return _cli_analyze_run(args)
 
 def _cli_info_run(args: argparse.Namespace) -> int:
     path = os.path.abspath(args.trace)
@@ -1599,6 +1771,7 @@ def _cli_slice_main(argv: List[str]) -> int:
 _CLI_COMMANDS = {
     "report": _cli_report_main,
     "compare": _cli_compare_main,
+    "analyze": _cli_analyze_main,
     "info": _cli_info_main,
     "migrations": _cli_migrations_main,
     "snapshot": _cli_snapshot_main,

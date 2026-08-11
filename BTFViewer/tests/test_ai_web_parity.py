@@ -16,16 +16,21 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from btf_viewer_pkg.ai_assistant import (  # noqa: E402
     AI_CHAT_TIMEOUT_S,
     AI_LIST_MODELS_TIMEOUT_S,
+    AI_SYSTEM_PROMPT,
     AI_TEST_TIMEOUT_S,
 )
 from btf_viewer_pkg.ai_tools import (  # noqa: E402
     AI_RAW_METRIC_NAMES,
     AI_TOOL_ADD_ANNOTATION,
     AI_TOOL_EXPORT_REPORT,
+    AI_TOOL_OPTIMIZE_EXPERIMENT,
     AI_TOOL_QUERY_RAW_METRIC,
     AI_TOOL_SYSTEM_ADDENDUM,
+    AI_TOOL_WHAT_IF,
     AI_VIEWER_TOOL_NAMES,
     GEMINI_SKIP_THOUGHT_SIGNATURE,
+    ai_viewer_tools,
+    is_query_tool,
     max_tool_rounds,
 )
 
@@ -45,6 +50,100 @@ class AiWebParityTests(unittest.TestCase):
         js = (BTF_ROOT / "web/src/utils/aiTools.js").read_text(encoding="utf-8")
         self.assertRegex(js, rf"MAX_TOOL_ROUNDS\s*=\s*{max_tool_rounds()}")
         self.assertEqual(max_tool_rounds(), 4)
+
+    def test_viewer_tool_names_and_query_set_match_web(self) -> None:
+        """Desktop AI_VIEWER_TOOL_NAMES / is_query_tool stay aligned with web."""
+        js = (BTF_ROOT / "web/src/utils/aiTools.js").read_text(encoding="utf-8")
+        const_map = dict(re.findall(
+            r"export const (AI_TOOL_\w+) = '([^']+)'", js))
+        block = re.search(
+            r"export const AI_VIEWER_TOOL_NAMES = \[([\s\S]*?)\]\n", js)
+        self.assertIsNotNone(block)
+        js_names = tuple(
+            const_map[c] for c in re.findall(r"AI_TOOL_\w+", block.group(1))
+            if c in const_map
+        )
+        self.assertEqual(js_names, AI_VIEWER_TOOL_NAMES)
+        schema_names = tuple(
+            t["function"]["name"] for t in ai_viewer_tools()
+        )
+        self.assertEqual(schema_names, AI_VIEWER_TOOL_NAMES)
+        self.assertIn(AI_TOOL_WHAT_IF, AI_VIEWER_TOOL_NAMES)
+        self.assertIn(AI_TOOL_OPTIMIZE_EXPERIMENT, AI_VIEWER_TOOL_NAMES)
+        self.assertTrue(is_query_tool(AI_TOOL_WHAT_IF))
+        self.assertTrue(is_query_tool(AI_TOOL_OPTIMIZE_EXPERIMENT))
+        self.assertIn("optimize_experiment", AI_TOOL_SYSTEM_ADDENDUM)
+        self.assertIn("slice-replay", AI_TOOL_SYSTEM_ADDENDUM)
+        self.assertIn("optimize_experiment", js)
+        self.assertIn("slice-replay", js)
+        # isQueryTool list on web includes the same query tools
+        qm = re.search(r"export function isQueryTool\(name\) \{([\s\S]*?)\n\}", js)
+        self.assertIsNotNone(qm)
+        js_query = [
+            const_map[c] for c in re.findall(r"AI_TOOL_\w+", qm.group(1))
+            if c in const_map
+        ]
+        py_query = [n for n in AI_VIEWER_TOOL_NAMES if is_query_tool(n)]
+        self.assertEqual(sorted(js_query), sorted(py_query))
+
+    def test_investigation_helpers_and_findings_ui_match_web(self) -> None:
+        inv_js = (BTF_ROOT / "web/src/utils/aiInvestigation.js").read_text(
+            encoding="utf-8")
+        inv_py = (BTF_ROOT / "btf_viewer_pkg/ai_investigation.py").read_text(
+            encoding="utf-8")
+        self.assertIn("INVESTIGATION_PLAN_STEPS", inv_js)
+        self.assertIn("INVESTIGATION_PLAN_STEPS", inv_py)
+        self.assertIn("'what_if'", inv_js)
+        self.assertIn('"what_if"', inv_py)
+        self.assertIn("optimize_experiment", inv_js)
+        self.assertIn("optimize_experiment", inv_py)
+        self.assertIn("simulateWhatIf", inv_js)
+        self.assertIn("def simulate_what_if", inv_py)
+        self.assertIn("runOptimizationExperiments", inv_js)
+        self.assertIn("def run_optimization_experiments", inv_py)
+        self.assertIn("buildInvestigateContext", inv_js)
+        self.assertIn("def build_investigate_context", inv_py)
+        self.assertIn("evaluateRegression", inv_js)
+        self.assertIn("def evaluate_regression", inv_py)
+        dlg = (BTF_ROOT / "web/src/components/AnalysisFindingsDialog.vue").read_text(
+            encoding="utf-8")
+        stats = (BTF_ROOT / "btf_viewer_pkg/stats.py").read_text(encoding="utf-8")
+        self.assertIn("Investigate…", dlg)
+        self.assertIn("Root cause…", dlg)
+        self.assertIn("Investigate…", stats)
+        self.assertIn("Root cause…", stats)
+        self.assertIn("emit('query-ai', 'investigate')", dlg)
+        self.assertIn('_query_with_ai(ai_enabled, "investigate")', stats)
+        self.assertIn("wants_ai_template", stats)
+        readme = (BTF_ROOT / "README.md").read_text(encoding="utf-8")
+        ai_md = (BTF_ROOT / "AI.md").read_text(encoding="utf-8")
+        self.assertIn("`analyze`", ai_md)
+        self.assertIn("--fail-on-regression", ai_md)
+        self.assertIn("**Triage findings**", readme)
+        self.assertIn("Max≫Avg", readme)
+        self.assertIn("Same panel on **Desktop** and **Web**", readme)
+        self.assertIn("`what_if` / `optimize_experiment`", readme)
+        self.assertIn("Heuristic slice-replay", readme)
+        self.assertIn("Ranked `optimize_experiment`", readme)
+        self.assertIn("not FreeRTOS kernel", readme)
+        self.assertIn("`optimize_experiment`", ai_md)
+        self.assertIn("slice-replay", ai_md)
+        self.assertIn("Workflows and use cases", ai_md)
+        self.assertIn("id=\"workflows-and-use-cases\"", ai_md)
+        self.assertIn("id=\"what-if-and-optimize-workflow\"", ai_md)
+        self.assertIn("id=\"use-cases\"", ai_md)
+        self.assertIn("Simulator limits", ai_md)
+        self.assertIn(
+            "`clear_marks` / `reset_view` / `search_timeline` / "
+            "`trigger_compare` / `investigate` / `detect_anomalies` / "
+            "`correlate_events` / `compare_performance` / `generate_report` / "
+            "`check_budget` / `optimize` / `regression_explain` / "
+            "`investigation_replay` / `what_if` / `optimize_experiment` / "
+            "`analyze_traces` / `bookmark_finding`",
+            ai_md,
+        )
+        self.assertNotIn("Max≪Avg", readme)
+        self.assertNotIn("Max≪Avg", ai_md)
 
     def test_web_execute_tools_pushes_undo(self) -> None:
         app = (BTF_ROOT / "web/src/App.vue").read_text(encoding="utf-8")
@@ -76,11 +175,12 @@ class AiWebParityTests(unittest.TestCase):
 
     def test_tool_names_listed_in_web(self) -> None:
         js = (BTF_ROOT / "web/src/utils/aiTools.js").read_text(encoding="utf-8")
+        ai_md = (BTF_ROOT / "AI.md").read_text(encoding="utf-8")
         readme = (BTF_ROOT / "README.md").read_text(encoding="utf-8")
         workflows = (BTF_ROOT / "WORKFLOWS.md").read_text(encoding="utf-8")
         for name in AI_VIEWER_TOOL_NAMES:
             self.assertRegex(js, re.compile(rf"['\"]{re.escape(name)}['\"]"))
-            self.assertIn(f"`{name}`", readme)
+            self.assertIn(f"`{name}`", ai_md)
         for metric in AI_RAW_METRIC_NAMES:
             self.assertIn(f"'{metric}'", js)
             self.assertIn(f'"{metric}"', (
@@ -92,8 +192,16 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("trigger_compare", workflows)
         self.assertIn("clear_marks", workflows)
         self.assertIn("reset_view", workflows)
-        self.assertIn("`add_annotation` / `query_raw_metric` / `export_report`", readme)
-        self.assertIn("`clear_marks` / `reset_view` / `search_timeline` / `trigger_compare`", readme)
+        self.assertIn("`add_annotation` / `query_raw_metric` / `export_report`", ai_md)
+        self.assertIn(
+            "`clear_marks` / `reset_view` / `search_timeline` / "
+            "`trigger_compare` / `investigate` / `detect_anomalies` / "
+            "`correlate_events` / `compare_performance` / `generate_report` / "
+            "`check_budget` / `optimize` / `regression_explain` / "
+            "`investigation_replay` / `what_if` / `optimize_experiment` / "
+            "`analyze_traces` / `bookmark_finding`",
+            ai_md,
+        )
         self.assertIn("Save selection as BTF", readme)
         self.assertIn("Save selection as BTF", workflows)
         self.assertIn("MAX_SEARCH_HITS = 40", js)
@@ -110,6 +218,11 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("export_report", AI_TOOL_SYSTEM_ADDENDUM)
         self.assertIn("Valid tools: set_cursors, zoom_to_range, highlight_task,", js)
         self.assertIn("Valid tools: set_cursors, zoom_to_range, highlight_task,", AI_TOOL_SYSTEM_ADDENDUM)
+        self.assertIn("investigate, explain", AI_TOOL_SYSTEM_ADDENDUM)
+        self.assertIn("investigate, explain", js)
+        ollama = (BTF_ROOT / "web/src/utils/ollamaClient.js").read_text(encoding="utf-8")
+        self.assertIn("High, Medium, or Low", AI_SYSTEM_PROMPT)
+        self.assertIn("High, Medium, or Low", ollama)
 
     def test_new_tool_dispatch_sites_match(self) -> None:
         mw = (BTF_ROOT / "btf_viewer_pkg/mainwindow.py").read_text(encoding="utf-8")
@@ -132,6 +245,60 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("AI_TOOL_SEARCH_TIMELINE", app)
         self.assertIn("AI_TOOL_TRIGGER_COMPARE", mw)
         self.assertIn("AI_TOOL_TRIGGER_COMPARE", app)
+        self.assertIn("AI_TOOL_INVESTIGATE", mw)
+        self.assertIn("AI_TOOL_INVESTIGATE", app)
+        self.assertIn("AI_TOOL_DETECT_ANOMALIES", mw)
+        self.assertIn("AI_TOOL_DETECT_ANOMALIES", app)
+        self.assertIn("AI_TOOL_CORRELATE_EVENTS", mw)
+        self.assertIn("AI_TOOL_CORRELATE_EVENTS", app)
+        self.assertIn("AI_TOOL_COMPARE_PERFORMANCE", mw)
+        self.assertIn("AI_TOOL_COMPARE_PERFORMANCE", app)
+        self.assertIn("AI_TOOL_GENERATE_REPORT", mw)
+        self.assertIn("AI_TOOL_GENERATE_REPORT", app)
+        self.assertIn("AI_TOOL_CHECK_BUDGET", mw)
+        self.assertIn("AI_TOOL_CHECK_BUDGET", app)
+        self.assertIn("AI_TOOL_OPTIMIZE", mw)
+        self.assertIn("AI_TOOL_OPTIMIZE", app)
+        self.assertIn("AI_TOOL_REGRESSION_EXPLAIN", mw)
+        self.assertIn("AI_TOOL_REGRESSION_EXPLAIN", app)
+        self.assertIn("AI_TOOL_BOOKMARK_FINDING", mw)
+        self.assertIn("AI_TOOL_BOOKMARK_FINDING", app)
+        self.assertIn("AI_TOOL_INVESTIGATION_REPLAY", mw)
+        self.assertIn("AI_TOOL_INVESTIGATION_REPLAY", app)
+        self.assertIn("AI_TOOL_WHAT_IF", mw)
+        self.assertIn("AI_TOOL_WHAT_IF", app)
+        self.assertIn("AI_TOOL_OPTIMIZE_EXPERIMENT", mw)
+        self.assertIn("AI_TOOL_OPTIMIZE_EXPERIMENT", app)
+        self.assertIn("AI_TOOL_ANALYZE_TRACES", mw)
+        self.assertIn("AI_TOOL_ANALYZE_TRACES", app)
+        self.assertIn("investigate_finding(", mw)
+        self.assertIn("investigateFinding(", app)
+        self.assertIn("detect_anomalies_finding(", mw)
+        self.assertIn("detectAnomaliesFinding(", app)
+        self.assertIn("correlate_task_events(", mw)
+        self.assertIn("correlateTaskEvents(", app)
+        self.assertIn("compare_performance_tabs(", mw)
+        self.assertIn("comparePerformanceTabs(", app)
+        self.assertIn("generate_report_finding(", mw)
+        self.assertIn("generateReportFinding(", app)
+        self.assertIn("check_budget_finding(", mw)
+        self.assertIn("checkBudgetFinding(", app)
+        self.assertIn("optimize_finding(", mw)
+        self.assertIn("optimizeFinding(", app)
+        self.assertIn("regression_explain_from_compare(", mw)
+        self.assertIn("explainRegressionFromCompare(", app)
+        self.assertIn("investigation_replay_finding(", mw)
+        self.assertIn("investigationReplayFinding(", app)
+        self.assertIn("what_if_estimate(", mw)
+        self.assertIn("whatIfEstimate(", app)
+        self.assertIn("optimize_experiment_finding(", mw)
+        self.assertIn("optimizeExperimentFinding(", app)
+        self.assertIn("gather_simulation_inputs(", mw)
+        self.assertIn("gatherSimulationInputs(", app)
+        self.assertIn("analyze_traces_snapshots(", mw)
+        self.assertIn("analyzeTracesSnapshots(", app)
+        self.assertIn("format_bookmark_label(", mw)
+        self.assertIn("formatBookmarkLabel(", app)
         self.assertIn("search_timeline_hits(", mw)
         self.assertIn("searchTimelineHits(", app)
         self.assertIn("def _ai_clear_marks", mw)
@@ -169,10 +336,13 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("clear_marks", AI_VIEWER_TOOL_NAMES)
         self.assertIn("search_timeline", AI_VIEWER_TOOL_NAMES)
         self.assertIn("trigger_compare", AI_VIEWER_TOOL_NAMES)
+        self.assertIn("investigate", AI_VIEWER_TOOL_NAMES)
         tools_js = (BTF_ROOT / "web/src/utils/aiTools.js").read_text(encoding="utf-8")
         self.assertIn("0-based tab index", (
             BTF_ROOT / "btf_viewer_pkg/ai_tools.py").read_text(encoding="utf-8"))
         self.assertIn("0-based tab index", tools_js)
+        self.assertIn("AI_TOOL_INVESTIGATE", tools_js)
+        self.assertIn("investigate", AI_TOOL_SYSTEM_ADDENDUM)
         # Desktop: tab-bar index first; web must match that order.
         self.assertIn(
             "0-based tab-bar index first",
@@ -238,7 +408,8 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("ensure_gemini_thought_signatures(messages)", assist)
         self.assertIn("ensureGeminiThoughtSignatures(chatMessages)", client)
         readme = (BTF_ROOT / "README.md").read_text(encoding="utf-8")
-        self.assertIn("thought_signature", readme)
+        ai_md = (BTF_ROOT / "AI.md").read_text(encoding="utf-8")
+        self.assertIn("thought_signature", ai_md)
         workflows = (BTF_ROOT / "WORKFLOWS.md").read_text(encoding="utf-8")
         self.assertIn("thought_signature", workflows)
         self.assertIn('"preset": active["preset"]', assist)
@@ -295,6 +466,7 @@ class AiWebParityTests(unittest.TestCase):
         assist = (BTF_ROOT / "btf_viewer_pkg/ai_assistant.py").read_text(
             encoding="utf-8")
         readme = (BTF_ROOT / "README.md").read_text(encoding="utf-8")
+        ai_md = (BTF_ROOT / "AI.md").read_text(encoding="utf-8")
         workflows = (BTF_ROOT / "WORKFLOWS.md").read_text(encoding="utf-8")
 
         self.assertEqual(AI_AUTH_NONE, "none")
@@ -376,12 +548,13 @@ class AiWebParityTests(unittest.TestCase):
             "Opened {url}. Paste the key or token in Settings → AI.", assist)
         self.assertIn(
             "Opened ${url}. Paste the key or token in Settings → AI.", panel)
-        self.assertIn("Authentication |", readme)
-        self.assertIn("Self-signed TLS |", readme)
-        self.assertIn("Model picker |", readme)
+        self.assertIn("Authentication |", ai_md)
+        self.assertIn("Self-signed TLS |", ai_md)
+        self.assertIn("Model picker |", ai_md)
         self.assertIn("Allow self-signed TLS", stats)
         self.assertIn("Allow self-signed TLS", vue)
         self.assertIn("Allow self-signed TLS", readme)
+        self.assertIn("Allow self-signed TLS", ai_md)
         self.assertIn("Allow self-signed TLS", workflows)
         self.assertIn("def parse_ai_tls_verify", assist)
         self.assertIn("export function parseAiTlsVerify", js)
@@ -390,25 +563,25 @@ class AiWebParityTests(unittest.TestCase):
         self.assertIn("def _ai_timeout_error_tip", assist)
         self.assertIn("GET /models only lists ids", assist)
         self.assertIn("GET /models only lists ids", js)
-        self.assertIn("BASE/chat/completions", readme)
+        self.assertIn("BASE/chat/completions", ai_md)
         for name in (
             "ollama.json", "gemini.json", "openai.json",
             "deepseek.json", "grok.json", "presets.json",
         ):
-            self.assertIn(name, readme)
+            self.assertIn(name, ai_md)
             self.assertIn(name, workflows)
             self.assertIn(name, stats)
             self.assertIn(name, vue)
         self.assertIn("401 keeps Sign in / Settings CTAs", workflows)
         self.assertIn("open the Model dropdown", workflows)
-        self.assertIn("token-efficient", readme)
-        self.assertIn("Parameters / targets", readme)
-        self.assertIn("qwen2.5:7b", readme)
+        self.assertIn("token-efficient", ai_md)
+        self.assertIn("Parameters / targets", ai_md)
+        self.assertIn("qwen2.5:7b", ai_md)
         self.assertIn("qwen2.5:7b", workflows)
-        self.assertIn("8k", readme)
+        self.assertIn("8k", ai_md)
         self.assertIn("examples/ai/presets.json", readme)
-        self.assertIn("#### GUI tools", readme)
-        self.assertIn("triage overall findings", readme)
+        self.assertIn("## GUI tools", ai_md)
+        self.assertIn("triage overall findings", ai_md)
         self.assertIn("triage overall findings", workflows)
         self.assertIn(
             "Open the Model dropdown to pick one.", stats)
@@ -440,13 +613,14 @@ class AiWebParityTests(unittest.TestCase):
         vue = (BTF_ROOT / "web/src/components/AiAssistantPanel.vue").read_text(
             encoding="utf-8")
         readme = (BTF_ROOT / "README.md").read_text(encoding="utf-8")
+        ai_md = (BTF_ROOT / "AI.md").read_text(encoding="utf-8")
         self.assertIn('class="ai-md-table"', assist)
         self.assertIn('class="ai-md-table"', js)
         self.assertIn("table.ai-md-table", vue)
         self.assertIn("_sanitize_html_table_block", assist)
         self.assertIn("sanitizeHtmlTableBlock", js)
-        self.assertIn("Pipe **Markdown tables**", readme)
-        self.assertIn("In-chat Markdown / HTML tables", readme)
+        self.assertIn("Pipe **Markdown tables**", ai_md)
+        self.assertIn("In-chat Markdown / HTML tables", ai_md)
 
 
 if __name__ == "__main__":

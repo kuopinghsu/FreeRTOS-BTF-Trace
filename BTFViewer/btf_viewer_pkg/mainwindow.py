@@ -22,24 +22,51 @@ from .ai_assistant import (
 )
 from .ai_tools import (
     AI_TOOL_ADD_ANNOTATION,
+    AI_TOOL_ANALYZE_TRACES,
+    AI_TOOL_BOOKMARK_FINDING,
+    AI_TOOL_CHECK_BUDGET,
     AI_TOOL_CLEAR_MARKS,
+    AI_TOOL_COMPARE_PERFORMANCE,
+    AI_TOOL_CORRELATE_EVENTS,
+    AI_TOOL_DETECT_ANOMALIES,
+    AI_TOOL_GENERATE_REPORT,
     AI_TOOL_HIGHLIGHT_TASK,
+    AI_TOOL_INVESTIGATE,
+    AI_TOOL_INVESTIGATION_REPLAY,
     AI_TOOL_OPEN_CORRIDOR,
+    AI_TOOL_OPTIMIZE,
+    AI_TOOL_OPTIMIZE_EXPERIMENT,
     AI_TOOL_QUERY_RAW_METRIC,
+    AI_TOOL_REGRESSION_EXPLAIN,
     AI_TOOL_RESET_VIEW,
     AI_TOOL_SEARCH_TIMELINE,
     AI_TOOL_SET_CURSORS,
     AI_TOOL_SET_VIEW_MODE,
     AI_TOOL_TRIGGER_COMPARE,
+    AI_TOOL_WHAT_IF,
     AI_TOOL_ZOOM_TO_RANGE,
+    analyze_traces_snapshots,
+    check_budget_finding,
+    compare_performance_tabs,
+    correlate_task_events,
+    detect_anomalies_finding,
+    generate_report_finding,
+    investigate_finding,
+    investigation_replay_finding,
+    gather_simulation_inputs,
+    optimize_experiment_finding,
+    optimize_finding,
     query_raw_metric,
+    regression_explain_from_compare,
     resolve_core_key,
     resolve_task_key,
     search_timeline_hits,
     tool_mutates_gui,
     tool_result_payload,
     validate_tool_call,
+    what_if_estimate,
 )
+from .ai_investigation import format_bookmark_label, snapshot_from_summary
 from .btf_slice import (
     filter_btf_file_to_range,
     reconstruct_btf_slice,
@@ -5252,7 +5279,246 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 str(args.get("tab_a") or ""),
                 str(args.get("tab_b") or ""),
             )
+        if name == AI_TOOL_INVESTIGATE:
+            findings: list = []
+            try:
+                panel = getattr(self, "_stats_panel", None)
+                if panel is not None and hasattr(panel, "build_analysis_findings"):
+                    findings, _scope = panel.build_analysis_findings()
+            except Exception:
+                findings = []
+            return investigate_finding(
+                findings,
+                str(args.get("finding_id") or ""),
+                depth=int(args.get("depth") or 2),
+            )
+        if name == AI_TOOL_DETECT_ANOMALIES:
+            findings = []
+            try:
+                panel = getattr(self, "_stats_panel", None)
+                if panel is not None and hasattr(panel, "build_analysis_findings"):
+                    findings, _scope = panel.build_analysis_findings()
+            except Exception:
+                findings = []
+            return detect_anomalies_finding(
+                findings, limit=int(args.get("limit") or 10),
+            )
+        if name == AI_TOOL_CORRELATE_EVENTS:
+            return correlate_task_events(
+                self._trace,
+                str(args.get("task") or ""),
+                around_time=args.get("around_time"),
+                window=float(args.get("window") or 0),
+                annotations=list(self._annotations or []),
+            )
+        if name == AI_TOOL_COMPARE_PERFORMANCE:
+            return self._ai_compare_performance(
+                str(args.get("tab_a") or ""),
+                str(args.get("tab_b") or ""),
+            )
+        if name == AI_TOOL_GENERATE_REPORT:
+            findings = []
+            try:
+                panel = getattr(self, "_stats_panel", None)
+                if panel is not None and hasattr(panel, "build_analysis_findings"):
+                    findings, _scope = panel.build_analysis_findings()
+            except Exception:
+                findings = []
+            return generate_report_finding(
+                findings,
+                report_type=str(args.get("report_type") or "performance"),
+                finding_id=str(args.get("finding_id") or ""),
+            )
+        if name == AI_TOOL_CHECK_BUDGET:
+            findings = []
+            try:
+                panel = getattr(self, "_stats_panel", None)
+                if panel is not None and hasattr(panel, "build_analysis_findings"):
+                    findings, _scope = panel.build_analysis_findings()
+            except Exception:
+                findings = []
+            return check_budget_finding(
+                args.get("tasks"),
+                args.get("budgets"),
+                findings=findings,
+            )
+        if name == AI_TOOL_OPTIMIZE:
+            findings = []
+            try:
+                panel = getattr(self, "_stats_panel", None)
+                if panel is not None and hasattr(panel, "build_analysis_findings"):
+                    findings, _scope = panel.build_analysis_findings()
+            except Exception:
+                findings = []
+            return optimize_finding(
+                findings, limit=int(args.get("limit") or 5),
+            )
+        if name == AI_TOOL_REGRESSION_EXPLAIN:
+            return self._ai_regression_explain(
+                str(args.get("tab_a") or ""),
+                str(args.get("tab_b") or ""),
+            )
+        if name == AI_TOOL_BOOKMARK_FINDING:
+            ns = int(float(args["time"]))
+            note = format_bookmark_label(
+                str(args.get("kind") or "evidence"),
+                str(args.get("note") or ""),
+            )
+            self._jump_to_ns(ns)
+            for ann in self._annotations:
+                if int(ann.ns) == ns and ann.note == note:
+                    return f"Annotation already at {ns}"
+            self._add_annotation_with_note(
+                ns, note, show_marks_panel=False, push_undo=False)
+            return f"Bookmarked {ns}: {note}"
+        if name == AI_TOOL_INVESTIGATION_REPLAY:
+            findings = []
+            try:
+                panel = getattr(self, "_stats_panel", None)
+                if panel is not None and hasattr(panel, "build_analysis_findings"):
+                    findings, _scope = panel.build_analysis_findings()
+            except Exception:
+                findings = []
+            return investigation_replay_finding(
+                findings,
+                str(args.get("finding_id") or ""),
+                conclusion=str(args.get("conclusion") or ""),
+                tools_run=list(args.get("tools_run") or []),
+                evidence_times=list(args.get("evidence_times") or []),
+            )
+        if name == AI_TOOL_WHAT_IF:
+            findings = []
+            try:
+                panel = getattr(self, "_stats_panel", None)
+                if panel is not None and hasattr(panel, "build_analysis_findings"):
+                    findings, _scope = panel.build_analysis_findings()
+            except Exception:
+                findings = []
+            task = str(args.get("task") or "").strip()
+            change = str(args.get("change") or "")
+            if not task:
+                from .ai_investigation import _guess_task_name, parse_what_if_change
+                task = str(parse_what_if_change(change).get("task") or "").strip()
+                if not task:
+                    task = _guess_task_name(change) or ""
+            lo = hi = None
+            panel = getattr(self, "_stats_panel", None)
+            rng = panel._stats_range() if panel is not None and hasattr(panel, "_stats_range") else None
+            if rng:
+                lo, hi, _n = rng
+            findings_text = ""
+            try:
+                findings_text = str((self._ai_build_context() or {}).get("findings_text") or "")
+            except Exception:
+                findings_text = ""
+            sim_in = gather_simulation_inputs(
+                self._trace, task, lo=lo, hi=hi, findings_text=findings_text,
+            )
+            return what_if_estimate(
+                change,
+                task=sim_in.get("task") or task,
+                findings=findings,
+                slices=sim_in.get("slices"),
+                migrations=sim_in.get("migrations"),
+                blocking_gaps=sim_in.get("blocking_gaps"),
+                core_utils=sim_in.get("core_utils"),
+            )
+        if name == AI_TOOL_OPTIMIZE_EXPERIMENT:
+            findings = []
+            try:
+                panel = getattr(self, "_stats_panel", None)
+                if panel is not None and hasattr(panel, "build_analysis_findings"):
+                    findings, _scope = panel.build_analysis_findings()
+            except Exception:
+                findings = []
+            task = str(args.get("task") or "").strip()
+            if not task:
+                from .ai_investigation import detect_anomalies, _guess_task_name
+                for a in (detect_anomalies(findings, limit=3).get("anomalies") or []):
+                    task = str(a.get("task") or _guess_task_name(str(a.get("text") or "")) or "").strip()
+                    if task:
+                        break
+            lo = hi = None
+            panel = getattr(self, "_stats_panel", None)
+            rng = panel._stats_range() if panel is not None and hasattr(panel, "_stats_range") else None
+            if rng:
+                lo, hi, _n = rng
+            findings_text = ""
+            try:
+                findings_text = str((self._ai_build_context() or {}).get("findings_text") or "")
+            except Exception:
+                findings_text = ""
+            sim_in = gather_simulation_inputs(
+                self._trace, task, lo=lo, hi=hi, findings_text=findings_text,
+            )
+            return optimize_experiment_finding(
+                task=sim_in.get("task") or task,
+                findings=findings,
+                slices=sim_in.get("slices"),
+                migrations=sim_in.get("migrations"),
+                blocking_gaps=sim_in.get("blocking_gaps"),
+                core_utils=sim_in.get("core_utils"),
+                limit=int(args.get("limit") or 5),
+            )
+        if name == AI_TOOL_ANALYZE_TRACES:
+            return self._ai_analyze_traces()
         raise RuntimeError(f"unknown tool {name}")
+
+    def _ai_compare_performance(self, tab_a: str, tab_b: str) -> dict:
+        idx_a = self._ai_resolve_tab_ref(tab_a, 0)
+        idx_b = self._ai_resolve_tab_ref(tab_b, 1)
+        if idx_a == idx_b:
+            raise RuntimeError("tab_a and tab_b must name different traces")
+        tab_a_obj, tab_b_obj = self._tabs[idx_a], self._tabs[idx_b]
+        tr_a, tr_b = tab_a_obj.trace, tab_b_obj.trace
+        if tr_a is None or tr_b is None:
+            raise RuntimeError("Both tabs must have a loaded trace")
+        lo_a, hi_a = _cursor_range_for_tab(self, idx_a)
+        lo_b, hi_b = _cursor_range_for_tab(self, idx_b)
+        name_a = _trace_display_name(tab_a_obj.path) if tab_a_obj.path else f"Tab {idx_a + 1}"
+        name_b = _trace_display_name(tab_b_obj.path) if tab_b_obj.path else f"Tab {idx_b + 1}"
+        snap_a = _trace_summary_snapshot(tr_a, lo_a, hi_a)
+        snap_b = _trace_summary_snapshot(tr_b, lo_b, hi_b)
+        return compare_performance_tabs(
+            snap_a, snap_b, label_a=name_a, label_b=name_b,
+        )
+
+    def _ai_regression_explain(self, tab_a: str, tab_b: str) -> dict:
+        cmp_payload = self._ai_compare_performance(tab_a, tab_b)
+        compare = dict(cmp_payload.get("data") or {})
+        if "message" not in compare:
+            compare["message"] = cmp_payload.get("message")
+        if "failed" not in compare and "failed" in cmp_payload:
+            compare["failed"] = cmp_payload.get("failed")
+        findings = []
+        try:
+            panel = getattr(self, "_stats_panel", None)
+            if panel is not None and hasattr(panel, "build_analysis_findings"):
+                findings, _scope = panel.build_analysis_findings()
+        except Exception:
+            findings = []
+        return regression_explain_from_compare(compare, findings=findings)
+
+    def _ai_analyze_traces(self) -> dict:
+        loaded = self._ai_list_loaded_tabs()
+        if not loaded:
+            raise RuntimeError("No loaded traces")
+        snaps = []
+        for tab_info in loaded:
+            idx = int(tab_info["index"])
+            tab = self._tabs[idx]
+            tr = getattr(tab, "trace", None)
+            if tr is None:
+                continue
+            lo, hi = _cursor_range_for_tab(self, idx)
+            name = str(tab_info.get("name") or f"Tab {idx + 1}")
+            snaps.append(snapshot_from_summary(
+                _trace_summary_snapshot(tr, lo, hi) or {},
+                name=name,
+            ))
+        if not snaps:
+            raise RuntimeError("No loaded traces")
+        return analyze_traces_snapshots(snaps)
 
     def _ai_clear_marks(self, what: str) -> str:
         what = (what or "all").strip().lower()
@@ -5401,8 +5667,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             return
         self._focus_ai_panel()
         panel = getattr(self, "_ai_panel", None)
-        if panel is not None and hasattr(panel, "query_analysis_findings"):
-            QTimer.singleShot(0, panel.query_analysis_findings)
+        tid = getattr(dlg, "wants_ai_template", "findings") or "findings"
+        if panel is not None and hasattr(panel, "query_template"):
+            QTimer.singleShot(0, lambda: panel.query_template(tid))
 
     def _capture_heatmap_view_snapshot(self, tab: _TraceTab) -> None:
         """Remember timeline zoom/pan/cursors before heatmap drill-down."""

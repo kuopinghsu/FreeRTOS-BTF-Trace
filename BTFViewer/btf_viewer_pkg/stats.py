@@ -60,6 +60,11 @@ from .timeline_util import (  # noqa: F401 — star-import skips leading _
 from .graphics_items import *  # noqa: F403,F401
 from .scene import *  # noqa: F403,F401
 from .view import *  # noqa: F403,F401
+from .ai_investigation import (
+    append_migration_burst_anomaly,
+    append_wcet_anomaly_finding,
+    enrich_findings_with_ids,
+)
 from .ai_assistant import (  # noqa: F401
     AI_AUTH_API_KEY,
     AI_AUTH_BROWSER,
@@ -6599,6 +6604,27 @@ _WF_THRASH_MIG_MIN = 10
 _WF_PAIR_BOUNCE_PCT = 25.0
 _WF_PAIR_COUNT_MIN = 5
 _WF_WCET_MAX_AVG_RATIO = 5.0
+_WF_MIG_BURST_RATE = 10.0
+
+
+def _finding(
+    severity: str,
+    title: str,
+    text: str,
+    *,
+    fid: str = "",
+    task: str = "",
+    evidence: Optional[list] = None,
+) -> dict:
+    out = {
+        "severity": severity,
+        "title": title,
+        "text": text,
+        "id": fid or "",
+        "task": task or "",
+        "evidence": list(evidence or []),
+    }
+    return out
 
 
 def _build_workflow_analysis_findings(
@@ -6617,8 +6643,8 @@ def _build_workflow_analysis_findings(
 ) -> List[dict]:
     """Return interpretive findings for the Statistics HTML report.
 
-    Each finding is ``{severity, title, text}`` where *severity* is
-    ``info`` / ``warning`` / ``error``.
+    Each finding is ``{severity, title, text, id?, task?, evidence?}`` where
+    *severity* is ``info`` / ``warning`` / ``error``.
     """
     findings: List[dict] = []
 
@@ -6630,55 +6656,52 @@ def _build_workflow_analysis_findings(
         score = max(0.0, 100.0 * (1.0 - gini))
         metrics = f"Load Balance Score {score:.0f}% (σ={sigma:.1f}%, G={gini:.3f})"
         if score < _WF_LOAD_SCORE_WARN or sigma > _WF_LOAD_SIGMA_WARN:
-            findings.append({
-                "severity": "warning",
-                "title": "Load imbalance across cores",
-                "text": (
-                    f"{metrics}. Uneven core placement — "
-                    "check Core Affinity and Core Migrations."
-                ),
-            })
+            findings.append(_finding(
+                "warning",
+                "Load imbalance across cores",
+                f"{metrics}. Uneven core placement — "
+                "check Core Affinity and Core Migrations.",
+                fid="load_imbalance",
+            ))
         elif score >= _WF_LOAD_SCORE_OK:
-            findings.append({
-                "severity": "info",
-                "title": "Core utilisation balance",
-                "text": f"{metrics} — cores look reasonably balanced.",
-            })
+            findings.append(_finding(
+                "info",
+                "Core utilisation balance",
+                f"{metrics} — cores look reasonably balanced.",
+                fid="load_balance_ok",
+            ))
         else:
-            findings.append({
-                "severity": "info",
-                "title": "Core utilisation balance",
-                "text": (
-                    f"{metrics} — moderate spread; review Core Utilisation "
-                    "if the workload is expected to be even."
-                ),
-            })
+            findings.append(_finding(
+                "info",
+                "Core utilisation balance",
+                f"{metrics} — moderate spread; review Core Utilisation "
+                "if the workload is expected to be even.",
+                fid="load_balance_moderate",
+            ))
 
     # WCET / high CPU tasks
     if exec_rows:
         top = exec_rows[:_WF_FINDING_CAP]
         names = ", ".join(f"{r[1]} ({r[3]:.1f}%, Max {r[7]})" for r in top)
-        findings.append({
-            "severity": "info",
-            "title": "Top tasks by CPU (WCET candidates)",
-            "text": (
-                f"Highest CPU% tasks: {names}. "
-                "Open Execution Time and click Max to jump to the worst-case slice."
-            ),
-        })
+        findings.append(_finding(
+            "info",
+            "Top tasks by CPU (WCET candidates)",
+            f"Highest CPU% tasks: {names}. "
+            "Open Execution Time and click Max to jump to the worst-case slice.",
+            fid="top_cpu",
+        ))
 
     # Blocking
     if block_rows:
         top_b = sorted(block_rows, key=lambda r: (-r[2], r[1].lower()))[:_WF_FINDING_CAP]
         names = ", ".join(f"{r[1]} (n={r[2]}, Max {r[6]})" for r in top_b)
-        findings.append({
-            "severity": "warning" if top_b and top_b[0][2] >= 20 else "info",
-            "title": "Blocking / scheduling-delay candidates",
-            "text": (
-                f"Tasks with the most off-CPU gaps: {names}. "
-                "Cross-check Preemption Chain and Mutex/Semaphore."
-            ),
-        })
+        findings.append(_finding(
+            "warning" if top_b and top_b[0][2] >= 20 else "info",
+            "Blocking / scheduling-delay candidates",
+            f"Tasks with the most off-CPU gaps: {names}. "
+            "Cross-check Preemption Chain and Mutex/Semaphore.",
+            fid="blocking",
+        ))
 
     # Priority inversion — row: (mk, label, base, peak, n, total_str, pattern, total_ns)
     inv_rows = [
@@ -6687,17 +6710,17 @@ def _build_workflow_analysis_findings(
     ]
     if inv_rows:
         names = ", ".join(str(r[1]) for r in inv_rows[:_WF_FINDING_CAP])
-        findings.append({
-            "severity": "warning",
-            "title": "Priority inversion (L/M/H) suspected",
-            "text": (
-                f"Tasks with L/M/H pattern: {names}. "
-                "Inspect Priority Inheritance boost episodes and the holding mutex."
-            ),
-        })
+        findings.append(_finding(
+            "warning",
+            "Priority inversion (L/M/H) suspected",
+            f"Tasks with L/M/H pattern: {names}. "
+            "Inspect Priority Inheritance boost episodes and the holding mutex.",
+            fid="priority_inversion",
+        ))
 
     # Core thrashing / excessive bouncing
     thrash: List[str] = []
+    burst_rows: List[Tuple[str, float, int]] = []
     for r in (mig_rows or []):
         (_mk, name, n_mig, _nc, _cs, _pri, primary_pct,
          ping, _sti, _ga, _go, _rate_lbl, rate_per_s, _dwell_lbl, dwell_tu) = r
@@ -6712,16 +6735,17 @@ def _build_workflow_analysis_findings(
             thrash.append(
                 f"{name} (Migr={n_mig}, Rate={_rate_lbl}, Dwell={_dwell_lbl}, Ping={ping})"
             )
+        if isinstance(rate_per_s, (int, float)):
+            burst_rows.append((str(name), float(rate_per_s), int(n_mig)))
     if thrash:
-        findings.append({
-            "severity": "warning",
-            "title": "Excessive bouncing / core thrashing",
-            "text": (
-                "High migration rate, short dwell, and/or ping-pong detected: "
-                + "; ".join(thrash[:_WF_FINDING_CAP])
-                + ". See Core-Pair Migration Summary and the Migration Heatmap."
-            ),
-        })
+        findings.append(_finding(
+            "warning",
+            "Excessive bouncing / core thrashing",
+            "High migration rate, short dwell, and/or ping-pong detected: "
+            + "; ".join(thrash[:_WF_FINDING_CAP])
+            + ". See Core-Pair Migration Summary and the Migration Heatmap.",
+            fid="thrashing",
+        ))
 
     hot_pairs: List[str] = []
     for fc, tc, cnt, bnc, avg_gap in (pair_rows or []):
@@ -6734,15 +6758,14 @@ def _build_workflow_analysis_findings(
         elif cnt >= max(_WF_PAIR_COUNT_MIN * 2, 20) and not thrash:
             hot_pairs.append(f"{fc}→{tc} (Count={cnt})")
     if hot_pairs:
-        findings.append({
-            "severity": "warning",
-            "title": "Hot core-pair migration traffic",
-            "text": (
-                "Directed pairs with heavy traffic and/or lock-bounce share: "
-                + "; ".join(hot_pairs[:_WF_FINDING_CAP])
-                + "."
-            ),
-        })
+        findings.append(_finding(
+            "warning",
+            "Hot core-pair migration traffic",
+            "Directed pairs with heavy traffic and/or lock-bounce share: "
+            + "; ".join(hot_pairs[:_WF_FINDING_CAP])
+            + ".",
+            fid="hot_pairs",
+        ))
 
     # Deadlines / CPU budget
     if deadline_viols:
@@ -6754,38 +6777,35 @@ def _build_workflow_analysis_findings(
                 parts.append(f"{len(sv)} slice deadline violation(s)")
             if cv:
                 parts.append(f"{len(cv)} CPU budget violation(s)")
-            findings.append({
-                "severity": "error",
-                "title": "Deadline / CPU budget breaches",
-                "text": (
-                    ", ".join(parts) + " in scope. "
-                    "See Deadlines / CPU budget tables below."
-                ),
-            })
+            findings.append(_finding(
+                "error",
+                "Deadline / CPU budget breaches",
+                ", ".join(parts) + " in scope. "
+                "See Deadlines / CPU budget tables below.",
+                fid="deadlines",
+            ))
 
     # Tick health
     if tick and tick.get("tick_count"):
         health = str(tick.get("health", "")).lower()
         missed = int(tick.get("missed_estimate") or 0)
         if health and health != "good":
-            findings.append({
-                "severity": "warning" if health != "bad" else "error",
-                "title": f"Trace Health (TICK) = {health.upper()}",
-                "text": (
-                    f"Mode={'TICKLESS' if tick.get('is_tickless') else 'TICK'}, "
-                    f"CV={float(tick.get('tick_cv') or 0) * 100:.2f}%, "
-                    f"missed≈{missed}. Investigate large TICK gaps and long slices."
-                ),
-            })
+            findings.append(_finding(
+                "warning" if health != "bad" else "error",
+                f"Trace Health (TICK) = {health.upper()}",
+                f"Mode={'TICKLESS' if tick.get('is_tickless') else 'TICK'}, "
+                f"CV={float(tick.get('tick_cv') or 0) * 100:.2f}%, "
+                f"missed≈{missed}. Investigate large TICK gaps and long slices.",
+                fid="tick_health",
+            ))
         elif missed > 0:
-            findings.append({
-                "severity": "warning",
-                "title": "Estimated missed ticks",
-                "text": (
-                    f"About {missed} missed tick(s) estimated from large gaps. "
-                    "See Trace Health (TICK) large-gap table."
-                ),
-            })
+            findings.append(_finding(
+                "warning",
+                "Estimated missed ticks",
+                f"About {missed} missed tick(s) estimated from large gaps. "
+                "See Trace Health (TICK) large-gap table.",
+                fid="missed_ticks",
+            ))
 
     # Sync / mutex bounces
     bounce_objs = 0
@@ -6800,38 +6820,39 @@ def _build_workflow_analysis_findings(
         or "bounc" in str(i.get("detail", "")).lower()
     )
     if bounce_objs or bounce_issues:
-        findings.append({
-            "severity": "warning",
-            "title": "Mutex / semaphore core-boundary bounces",
-            "text": (
-                f"{bounce_objs} sync object(s) with Core bounce > 0"
-                + (f"; {bounce_issues} CORE_MIGRATION_WHILE_HELD-style issue(s)"
-                   if bounce_issues else "")
-                + ". Cross-check Core-Pair Migration Summary Bounce %."
-            ),
-        })
+        findings.append(_finding(
+            "warning",
+            "Mutex / semaphore core-boundary bounces",
+            f"{bounce_objs} sync object(s) with Core bounce > 0"
+            + (f"; {bounce_issues} CORE_MIGRATION_WHILE_HELD-style issue(s)"
+               if bounce_issues else "")
+            + ". Cross-check Core-Pair Migration Summary Bounce %.",
+            fid="sync_bounce",
+        ))
     elif issue_n > 0:
-        findings.append({
-            "severity": "warning",
-            "title": "Sync pairing issues",
-            "text": (
-                f"{issue_n} mutex/semaphore pairing issue(s) in scope "
-                "(orphan give, unmatched take, etc.)."
-            ),
-        })
+        findings.append(_finding(
+            "warning",
+            "Sync pairing issues",
+            f"{issue_n} mutex/semaphore pairing issue(s) in scope "
+            "(orphan give, unmatched take, etc.).",
+            fid="sync_issues",
+        ))
+
+    # Anomalies (beyond fixed thrash/load thresholds)
+    append_migration_burst_anomaly(
+        findings, burst_rows, rate_threshold=_WF_MIG_BURST_RATE)
 
     actionable = [f for f in findings if f["severity"] in ("warning", "error")]
     if not actionable and not any(f["title"].startswith("Top tasks") for f in findings):
-        findings.append({
-            "severity": "info",
-            "title": "No analysis heuristics flagged",
-            "text": (
-                "No load-imbalance, thrashing, deadline, tick, or sync warnings "
-                "in the current scope. Review the tables below for detail."
-            ),
-        })
+        findings.append(_finding(
+            "info",
+            "No analysis heuristics flagged",
+            "No load-imbalance, thrashing, deadline, tick, or sync warnings "
+            "in the current scope. Review the tables below for detail.",
+            fid="none",
+        ))
 
-    return findings
+    return enrich_findings_with_ids(findings)
 
 
 def _format_analysis_findings_text(
@@ -6851,8 +6872,17 @@ def _format_analysis_findings_text(
             sev = str(f.get("severity", "info")).upper()
             title = str(f.get("title", "Finding"))
             text = str(f.get("text", ""))
-            lines.append(f"{i}. [{sev}] {title}")
+            fid = str(f.get("id") or "").strip()
+            id_bit = f" id={fid}" if fid else ""
+            lines.append(f"{i}. [{sev}]{id_bit} {title}")
             lines.append(f"   {text}")
+            for ev in (f.get("evidence") or []):
+                if isinstance(ev, dict) and ev.get("time") is not None:
+                    lines.append(
+                        f"   evidence: {ev.get('label') or 'event'} jump:{ev.get('time')}"
+                    )
+                elif ev:
+                    lines.append(f"   evidence: {ev}")
             lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
@@ -6932,13 +6962,31 @@ class _AnalysisFindingsDialog(QDialog):
             list_w.addItem(QListWidgetItem("No findings for the current scope"))
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        self.wants_ai_template = "findings"
+        inv_btn = buttons.addButton(
+            "Investigate…", QDialogButtonBox.ButtonRole.ActionRole)
+        inv_btn.setToolTip(
+            "Open the AI Assistant and investigate the top findings with tools"
+            if ai_enabled else
+            "Enable AI Assistant in Settings → AI")
+        inv_btn.clicked.connect(
+            lambda: self._query_with_ai(ai_enabled, "investigate"))
+        rca_btn = buttons.addButton(
+            "Root cause…", QDialogButtonBox.ButtonRole.ActionRole)
+        rca_btn.setToolTip(
+            "Open the AI Assistant for evidence-driven root-cause analysis"
+            if ai_enabled else
+            "Enable AI Assistant in Settings → AI")
+        rca_btn.clicked.connect(
+            lambda: self._query_with_ai(ai_enabled, "root_cause"))
         ai_btn = buttons.addButton(
             "Query with AI…", QDialogButtonBox.ButtonRole.ActionRole)
         ai_btn.setToolTip(
             "Open the AI Assistant and walk through these Analysis Findings"
             if ai_enabled else
             "Enable AI Assistant in Settings → AI")
-        ai_btn.clicked.connect(lambda: self._query_with_ai(ai_enabled))
+        ai_btn.clicked.connect(
+            lambda: self._query_with_ai(ai_enabled, "findings"))
         save_btn = buttons.addButton(
             "Save as Text…", QDialogButtonBox.ButtonRole.ActionRole)
         save_btn.clicked.connect(self._save_as_text)
@@ -6950,8 +6998,9 @@ class _AnalysisFindingsDialog(QDialog):
         lay.addWidget(list_w, 1)
         lay.addWidget(buttons)
 
-    def _query_with_ai(self, ai_enabled: bool) -> None:
+    def _query_with_ai(self, ai_enabled: bool, template_id: str = "findings") -> None:
         self.wants_ai_query = True
+        self.wants_ai_template = template_id or "findings"
         self._ai_needs_settings = not ai_enabled
         self.accept()
 
@@ -9457,6 +9506,33 @@ class _StatsPanel(QWidget):
         self._wrap_table_with_resizer(lay, table, "preemption")
         return host
 
+    def _append_exec_anomaly_findings(
+        self,
+        findings: List[dict],
+        trace: "BtfTrace",
+        lo: Optional[int],
+        hi: Optional[int],
+    ) -> List[dict]:
+        """Append WCET Max/Avg spike anomalies using numeric slice samples."""
+        spike_rows = []
+        for mk, segs in (getattr(trace, "seg_map_by_merge_key", None) or {}).items():
+            if not segs:
+                continue
+            raw = trace.task_repr.get(mk, mk)
+            _, _, tname = _parse_task_name(raw)
+            if _is_idle_task_name(tname) or tname == "TICK":
+                continue
+            samples = self._exec_slice_samples(segs, lo, hi)
+            if len(samples) < 5:
+                continue
+            avg_ns = sum(samples) / len(samples)
+            spike_rows.append((
+                _task_display_name(raw), avg_ns, float(max(samples)), len(samples),
+            ))
+        append_wcet_anomaly_finding(
+            findings, spike_rows, ratio_threshold=_WF_WCET_MAX_AVG_RATIO)
+        return enrich_findings_with_ids(findings)
+
     def build_analysis_findings(self) -> Tuple[List[dict], str]:
         """Return (findings, scope_title) for the toolbar Analysis dialog."""
         trace = self._trace
@@ -9498,6 +9574,7 @@ class _StatsPanel(QWidget):
             deadline_viols=dl_viols,
             time_scale=trace.time_scale,
         )
+        findings = self._append_exec_anomaly_findings(findings, trace, lo, hi)
         return findings, scope_title
 
     def write_statistics_html_report(self, path: str) -> None:
@@ -9938,6 +10015,8 @@ class _StatsPanel(QWidget):
             deadline_viols=_dl_viols if (self._cpu_budget_pct > 0 or self._task_deadlines_ns) else None,
             time_scale=trace.time_scale,
         )
+        analysis_findings = self._append_exec_anomaly_findings(
+            analysis_findings, trace, lo, hi)
         analysis_html = _render_workflow_analysis_html(analysis_findings, scope_title)
 
         report = f"""<!doctype html>

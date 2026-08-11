@@ -4,6 +4,26 @@
  */
 import { taskMergeKey } from './colors.js'
 import { computeFindHits } from './findAnalysis.js'
+import {
+  analyzeMultiTraces,
+  buildCorrelationTimeline,
+  buildInvestigationReplay,
+  buildInvestigateContext,
+  buildOptimizationAdvice,
+  checkTaskBudgets,
+  comparePerformanceMetrics,
+  detectAnomalies,
+  estimateWhatIf,
+  explainRegression,
+  formatBookmarkLabel,
+  generateStructuredReport,
+  maxToolRoundsForTemplate,
+  resolveFinding,
+  runOptimizationExperiments,
+  simulateWhatIf,
+  snapshotFromSummary,
+} from './aiInvestigation.js'
+import { coreUtilPctRows } from './traceCompare.js'
 
 export const AI_TOOL_SET_CURSORS = 'set_cursors'
 export const AI_TOOL_ZOOM_TO_RANGE = 'zoom_to_range'
@@ -17,6 +37,19 @@ export const AI_TOOL_CLEAR_MARKS = 'clear_marks'
 export const AI_TOOL_RESET_VIEW = 'reset_view'
 export const AI_TOOL_SEARCH_TIMELINE = 'search_timeline'
 export const AI_TOOL_TRIGGER_COMPARE = 'trigger_compare'
+export const AI_TOOL_INVESTIGATE = 'investigate'
+export const AI_TOOL_DETECT_ANOMALIES = 'detect_anomalies'
+export const AI_TOOL_CORRELATE_EVENTS = 'correlate_events'
+export const AI_TOOL_COMPARE_PERFORMANCE = 'compare_performance'
+export const AI_TOOL_GENERATE_REPORT = 'generate_report'
+export const AI_TOOL_CHECK_BUDGET = 'check_budget'
+export const AI_TOOL_OPTIMIZE = 'optimize'
+export const AI_TOOL_REGRESSION_EXPLAIN = 'regression_explain'
+export const AI_TOOL_BOOKMARK_FINDING = 'bookmark_finding'
+export const AI_TOOL_INVESTIGATION_REPLAY = 'investigation_replay'
+export const AI_TOOL_WHAT_IF = 'what_if'
+export const AI_TOOL_OPTIMIZE_EXPERIMENT = 'optimize_experiment'
+export const AI_TOOL_ANALYZE_TRACES = 'analyze_traces'
 
 export const AI_VIEWER_TOOL_NAMES = [
   AI_TOOL_SET_CURSORS,
@@ -31,6 +64,23 @@ export const AI_VIEWER_TOOL_NAMES = [
   AI_TOOL_RESET_VIEW,
   AI_TOOL_SEARCH_TIMELINE,
   AI_TOOL_TRIGGER_COMPARE,
+  AI_TOOL_INVESTIGATE,
+  AI_TOOL_DETECT_ANOMALIES,
+  AI_TOOL_CORRELATE_EVENTS,
+  AI_TOOL_COMPARE_PERFORMANCE,
+  AI_TOOL_GENERATE_REPORT,
+  AI_TOOL_CHECK_BUDGET,
+  AI_TOOL_OPTIMIZE,
+  AI_TOOL_REGRESSION_EXPLAIN,
+  AI_TOOL_BOOKMARK_FINDING,
+  AI_TOOL_INVESTIGATION_REPLAY,
+  AI_TOOL_WHAT_IF,
+  AI_TOOL_OPTIMIZE_EXPERIMENT,
+  AI_TOOL_ANALYZE_TRACES,
+]
+
+export const AI_BOOKMARK_KINDS = [
+  'root_cause', 'evidence', 'correlated', 'reference',
 ]
 
 export const AI_FIND_MODES = [
@@ -122,11 +172,27 @@ export function parseBtfHighlightHref(href, dataHighlight) {
 
 export const AI_TOOL_SYSTEM_ADDENDUM =
   'When the user asks to show, focus, inspect, zoom, highlight, annotate, '
-  + 'export, or jump to a time range, task, or core pair, you MUST invoke the '
+  + 'export, investigate, explain, or jump to a time range, task, or core pair, '
+  + 'you MUST invoke the '
   + 'matching viewer tool (native function call) in addition to your markdown '
   + 'answer. Valid tools: set_cursors, zoom_to_range, highlight_task, '
   + 'set_view_mode, open_corridor_inspector, add_annotation, query_raw_metric, '
-  + 'export_report, clear_marks, reset_view, search_timeline, trigger_compare. '
+  + 'export_report, clear_marks, reset_view, search_timeline, trigger_compare, '
+  + 'investigate, detect_anomalies, correlate_events, compare_performance, '
+  + 'generate_report, check_budget, optimize, regression_explain, '
+  + 'bookmark_finding, investigation_replay, what_if, optimize_experiment, analyze_traces. '
+  + 'For root-cause or Investigate templates: call detect_anomalies and '
+  + 'investigate(finding_id) first for a root-cause chain, then '
+  + 'correlate_events / query_raw_metric / search_timeline, then set_cursors '
+  + '+ zoom_to_range + highlight_task on the worst episode before concluding. '
+  + 'Use compare_performance for structured A vs B deltas (two tabs); '
+  + 'regression_explain after compare to narrate the primary change. '
+  + 'Use generate_report for a typed engineering markdown report, then '
+  + 'export_report to save HTML/CSV. '
+  + 'Use check_budget for WCET/response/deadline budgets; optimize for '
+  + 'evidence-backed mitigations; what_if for heuristic slice-replay simulation; optimize_experiment to rank automatic candidates; '
+  + 'analyze_traces to rank all open tabs; bookmark_finding to pin semantic '
+  + 'marks; investigation_replay to summarise a completed investigation. '
   + 'Use query_raw_metric when you need the exact per-task '
   + 'series (priority-inheritance episodes, execution slices, migrations, '
   + 'blocking gaps, sync STI, or findings lines) instead of the summarised '
@@ -136,6 +202,8 @@ export const AI_TOOL_SYSTEM_ADDENDUM =
   + 'tabs are open to pull Trace Compare diffs. Use add_annotation to pin a '
   + 'note on a spike. Use export_report to save findings, diagrams, and GUI '
   + 'state as HTML or CSV. '
+  + 'For what-if / optimize_experiment, label results as heuristic (not FreeRTOS kernel). For optimize advice questions, label estimates as '
+  + '\'Simulation / estimate — not measured behavior\' and cite evidence. '
   + 'Tool timestamps use the same numeric trace time '
   + 'unit as jump:TIME. After tools run, summarise what you changed. '
   + 'If you cannot emit a native function call, emit one fenced btftool JSON '
@@ -433,6 +501,311 @@ export function aiViewerTools() {
             },
           },
         },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_INVESTIGATE,
+        description:
+          'Build a structured investigation context for one Analysis '
+          + 'Finding (hypotheses, evidence chain, suggested next tools). '
+          + 'Call this first during Investigate / Root cause workflows. '
+          + 'finding_id may be the finding id, 1-based index, or title '
+          + 'substring; omit to focus the top warning/error.',
+        parameters: {
+          type: 'object',
+          properties: {
+            finding_id: {
+              type: 'string',
+              description:
+                'Finding id (e.g. thrashing), 1-based index, '
+                + 'or title substring. Empty = top actionable finding.',
+            },
+            depth: {
+              type: 'integer',
+              description: 'Investigation depth 1–5 (default 2).',
+            },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_DETECT_ANOMALIES,
+        description:
+          'Rank Analysis Findings as Critical / Warning / Info anomalies '
+          + '(WCET spikes, thrashing, blocking, inversion, deadlines, …).',
+        parameters: {
+          type: 'object',
+          properties: {
+            limit: {
+              type: 'integer',
+              description: 'Max anomalies to return (1–40, default 10).',
+            },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_CORRELATE_EVENTS,
+        description:
+          'Cross-task/cross-metric timeline correlation for a task: '
+          + 'merge blocking, execution, migrations, sync, priority '
+          + 'inheritance, and Find hits into one ordered event list.',
+        parameters: {
+          type: 'object',
+          properties: {
+            task: {
+              type: 'string',
+              description: 'Task display name, id, or merge key.',
+            },
+            around_time: {
+              type: 'number',
+              description: 'Optional center time (trace units).',
+            },
+            window: {
+              type: 'number',
+              description: 'Half-width around around_time (trace units).',
+            },
+          },
+          required: ['task'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_COMPARE_PERFORMANCE,
+        description:
+          'Structured performance deltas between two open tabs '
+          + '(regression rules + confidence). Prefer this over raw CSV '
+          + 'when explaining A vs B; trigger_compare still opens the dialog.',
+        parameters: {
+          type: 'object',
+          properties: {
+            tab_a: {
+              type: 'string',
+              description: 'Candidate tab (index or name).',
+            },
+            tab_b: {
+              type: 'string',
+              description: 'Baseline tab (index or name).',
+            },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_GENERATE_REPORT,
+        description:
+          'Build a typed engineering markdown report from Analysis '
+          + 'Findings (executive / performance / root_cause / regression / '
+          + 'optimization / bug / ci). Does not save a file — call '
+          + 'export_report afterward to download HTML/CSV.',
+        parameters: {
+          type: 'object',
+          properties: {
+            report_type: {
+              type: 'string',
+              description:
+                'executive|performance|root_cause|regression|'
+                + 'optimization|bug|ci',
+            },
+            finding_id: {
+              type: 'string',
+              description: 'Optional focus finding id / index / title.',
+            },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_CHECK_BUDGET,
+        description:
+          'Compare per-task WCET / response / deadline metrics against '
+          + 'optional budgets. Omit tasks to let the host build rows from '
+          + 'Analysis Findings task names.',
+        parameters: {
+          type: 'object',
+          properties: {
+            budgets: {
+              type: 'object',
+              description: 'Map of task → {wcet_us, response_us, deadline_us}.',
+            },
+            tasks: {
+              type: 'array',
+              description:
+                'Optional metric rows: {task, wcet_us?, response_us?, '
+                + 'deadline_us?, exec_max_us?, blocking_max_us?}.',
+            },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_OPTIMIZE,
+        description:
+          'Evidence-backed optimization / mitigation ideas from Analysis '
+          + 'Findings (labelled as estimates, not measured behavior).',
+        parameters: {
+          type: 'object',
+          properties: {
+            limit: {
+              type: 'integer',
+              description: 'Max recommendations (1–20, default 5).',
+            },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_REGRESSION_EXPLAIN,
+        description:
+          'Explain the primary A vs B regression after comparing two '
+          + 'open tabs (runs compare_performance then narrates).',
+        parameters: {
+          type: 'object',
+          properties: {
+            tab_a: {
+              type: 'string',
+              description: 'Candidate tab (index or name).',
+            },
+            tab_b: {
+              type: 'string',
+              description: 'Baseline tab (index or name).',
+            },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_BOOKMARK_FINDING,
+        description:
+          'Pin a semantic investigation annotation at a timestamp '
+          + '(root_cause / evidence / correlated / reference). GUI mutate.',
+        parameters: {
+          type: 'object',
+          properties: {
+            time: {
+              type: 'number',
+              description: 'Trace time-unit timestamp.',
+            },
+            kind: {
+              type: 'string',
+              enum: [...AI_BOOKMARK_KINDS],
+              description: 'root_cause | evidence | correlated | reference',
+            },
+            note: {
+              type: 'string',
+              description: 'Optional short note appended to the label.',
+            },
+          },
+          required: ['time', 'kind'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_INVESTIGATION_REPLAY,
+        description:
+          'Build a structured investigation-replay card (steps, tools '
+          + 'run, conclusion, evidence times) for UI / export.',
+        parameters: {
+          type: 'object',
+          properties: {
+            finding_id: {
+              type: 'string',
+              description: 'Finding id / index / title substring.',
+            },
+            conclusion: {
+              type: 'string',
+              description: 'Short investigation conclusion text.',
+            },
+            tools_run: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Tool names already executed.',
+            },
+            evidence_times: {
+              type: 'array',
+              items: { type: 'number' },
+              description: 'Evidence timestamps for cursor replay.',
+            },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_WHAT_IF,
+        description:
+          'Heuristic what-if simulation from measured execution slices, '
+          + 'migrations, blocking gaps, and core util (not FreeRTOS kernel).',
+        parameters: {
+          type: 'object',
+          properties: {
+            change: {
+              type: 'string',
+              description:
+                'Proposed change, e.g. pin CS[28] to Core_0, '
+                + 'raise priority, reduce mutex contention 50%.',
+            },
+            task: {
+              type: 'string',
+              description: 'Optional focus task (inferred from change when omitted).',
+            },
+          },
+          required: ['change'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_OPTIMIZE_EXPERIMENT,
+        description:
+          'Run a small set of automatic optimization experiments '
+          + '(pin/priority/contention/migration) via the heuristic '
+          + 'simulator and rank by estimated cost improvement.',
+        parameters: {
+          type: 'object',
+          properties: {
+            task: {
+              type: 'string',
+              description: 'Focus task (defaults from top finding).',
+            },
+            limit: {
+              type: 'integer',
+              description: 'Max experiments (1–12, default 5).',
+            },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: AI_TOOL_ANALYZE_TRACES,
+        description:
+          'Rank all loaded trace tabs by scheduling behavior '
+          + '(load balance, migrations, missed ticks).',
+        parameters: { type: 'object', properties: {} },
       },
     },
   ]
@@ -919,6 +1292,149 @@ export function validateToolCall(name, args) {
       error: '',
     }
   }
+  if (name === AI_TOOL_INVESTIGATE) {
+    let depth = Number(a.depth ?? 2)
+    if (!Number.isFinite(depth)) {
+      return { args: null, error: 'depth must be an integer 1–5' }
+    }
+    depth = Math.max(1, Math.min(5, Math.trunc(depth)))
+    return {
+      args: {
+        finding_id: String(a.finding_id || '').trim(),
+        depth,
+      },
+      error: '',
+    }
+  }
+  if (name === AI_TOOL_DETECT_ANOMALIES) {
+    let limit = Number(a.limit ?? 10)
+    if (!Number.isFinite(limit)) {
+      return { args: null, error: 'limit must be an integer 1–40' }
+    }
+    return { args: { limit: Math.max(1, Math.min(40, Math.trunc(limit))) }, error: '' }
+  }
+  if (name === AI_TOOL_CORRELATE_EVENTS) {
+    const task = String(a.task || '').trim()
+    if (!task) return { args: null, error: 'task must be a non-empty string' }
+    const out = { task, around_time: null, window: 0 }
+    if (a.around_time != null && String(a.around_time).trim() !== '') {
+      const t = Number(a.around_time)
+      if (!Number.isFinite(t)) return { args: null, error: 'around_time must be a number' }
+      out.around_time = t
+    }
+    if (a.window != null && String(a.window).trim() !== '') {
+      const w = Number(a.window)
+      if (!Number.isFinite(w)) return { args: null, error: 'window must be a number' }
+      out.window = Math.max(0, w)
+    }
+    return { args: out, error: '' }
+  }
+  if (name === AI_TOOL_COMPARE_PERFORMANCE) {
+    return {
+      args: {
+        tab_a: String(a.tab_a ?? '').trim(),
+        tab_b: String(a.tab_b ?? '').trim(),
+      },
+      error: '',
+    }
+  }
+  if (name === AI_TOOL_GENERATE_REPORT) {
+    return {
+      args: {
+        report_type: String(a.report_type || 'performance').trim().toLowerCase() || 'performance',
+        finding_id: String(a.finding_id || '').trim(),
+      },
+      error: '',
+    }
+  }
+  if (name === AI_TOOL_CHECK_BUDGET) {
+    if (a.budgets != null && (typeof a.budgets !== 'object' || Array.isArray(a.budgets))) {
+      return { args: null, error: 'budgets must be an object' }
+    }
+    if (a.tasks != null && !Array.isArray(a.tasks)) {
+      return { args: null, error: 'tasks must be an array' }
+    }
+    const out = {}
+    if (a.budgets && typeof a.budgets === 'object') out.budgets = a.budgets
+    if (Array.isArray(a.tasks)) {
+      out.tasks = a.tasks.filter(t => t && typeof t === 'object' && !Array.isArray(t))
+    }
+    return { args: out, error: '' }
+  }
+  if (name === AI_TOOL_OPTIMIZE) {
+    let limit = Number(a.limit ?? 5)
+    if (!Number.isFinite(limit)) {
+      return { args: null, error: 'limit must be an integer 1–20' }
+    }
+    return { args: { limit: Math.max(1, Math.min(20, Math.trunc(limit))) }, error: '' }
+  }
+  if (name === AI_TOOL_REGRESSION_EXPLAIN) {
+    return {
+      args: {
+        tab_a: String(a.tab_a ?? '').trim(),
+        tab_b: String(a.tab_b ?? '').trim(),
+      },
+      error: '',
+    }
+  }
+  if (name === AI_TOOL_BOOKMARK_FINDING) {
+    const t = Number(a.time)
+    if (!Number.isFinite(t)) return { args: null, error: 'time must be a number' }
+    let kind = String(a.kind || '').trim().toLowerCase().replace(/-/g, '_').replace(/ /g, '_')
+    if (['root', 'cause', 'rca'].includes(kind)) kind = 'root_cause'
+    if (['corr', 'related'].includes(kind)) kind = 'correlated'
+    if (['ok', 'normal', 'ref'].includes(kind)) kind = 'reference'
+    if (!AI_BOOKMARK_KINDS.includes(kind)) {
+      return { args: null, error: `kind must be one of: ${AI_BOOKMARK_KINDS.join(', ')}` }
+    }
+    let note = String(a.note || '').trim()
+    if (note.length > MAX_ANNOTATION_NOTE) note = note.slice(0, MAX_ANNOTATION_NOTE).trimEnd()
+    return { args: { time: t, kind, note }, error: '' }
+  }
+  if (name === AI_TOOL_INVESTIGATION_REPLAY) {
+    const toolsRun = a.tools_run || []
+    if (!Array.isArray(toolsRun)) {
+      return { args: null, error: 'tools_run must be an array of strings' }
+    }
+    const evidence = a.evidence_times || []
+    if (!Array.isArray(evidence)) {
+      return { args: null, error: 'evidence_times must be an array of numbers' }
+    }
+    return {
+      args: {
+        finding_id: String(a.finding_id || '').trim(),
+        conclusion: String(a.conclusion || '').trim(),
+        tools_run: toolsRun.map(t => String(t)).filter(Boolean),
+        evidence_times: asFloatList(evidence),
+      },
+      error: '',
+    }
+  }
+  if (name === AI_TOOL_WHAT_IF) {
+    const change = String(a.change || '').trim()
+    if (!change) return { args: null, error: 'change must be a non-empty string' }
+    return {
+      args: {
+        change,
+        task: String(a.task || '').trim(),
+      },
+      error: '',
+    }
+  }
+  if (name === AI_TOOL_OPTIMIZE_EXPERIMENT) {
+    let limit = Number(a.limit ?? 5)
+    if (!Number.isFinite(limit)) {
+      return { args: null, error: 'limit must be an integer 1–12' }
+    }
+    return {
+      args: {
+        task: String(a.task || '').trim(),
+        limit: Math.max(1, Math.min(12, Math.trunc(limit))),
+      },
+      error: '',
+    }
+  }
+  if (name === AI_TOOL_ANALYZE_TRACES) return { args: {}, error: '' }
   return { args: null, error: `unknown tool ${JSON.stringify(name)}` }
 }
 
@@ -989,6 +1505,52 @@ export function summariseToolCall(name, args) {
     const bTab = String(a.tab_b || '1').trim() || '1'
     return `Compare tabs ${aTab} vs ${bTab}`
   }
+  if (name === AI_TOOL_INVESTIGATE) {
+    const fid = String(a.finding_id || '').trim() || 'top finding'
+    return `Investigate ${fid} (depth ${a.depth ?? 2})`
+  }
+  if (name === AI_TOOL_DETECT_ANOMALIES) {
+    return `Detect anomalies (limit ${a.limit ?? 10})`
+  }
+  if (name === AI_TOOL_CORRELATE_EVENTS) {
+    return `Correlate events for ${String(a.task || '?').trim() || '?'}`
+  }
+  if (name === AI_TOOL_COMPARE_PERFORMANCE) {
+    return 'Compare performance (A vs B)'
+  }
+  if (name === AI_TOOL_GENERATE_REPORT) {
+    return `Generate ${String(a.report_type || 'performance')} report`
+  }
+  if (name === AI_TOOL_CHECK_BUDGET) {
+    const n = Array.isArray(a.tasks) ? a.tasks.length : 0
+    return n ? `Check budget (${n} task row(s))` : 'Check budget'
+  }
+  if (name === AI_TOOL_OPTIMIZE) {
+    return `Optimize (limit ${a.limit ?? 5})`
+  }
+  if (name === AI_TOOL_REGRESSION_EXPLAIN) {
+    return 'Explain regression (A vs B)'
+  }
+  if (name === AI_TOOL_BOOKMARK_FINDING) {
+    const kind = String(a.kind || 'evidence').trim() || 'evidence'
+    const t = Number(a.time)
+    if (Number.isFinite(t)) return `Bookmark ${kind} at ${fmtTraceNum(t)}`
+    return `Bookmark ${kind}`
+  }
+  if (name === AI_TOOL_INVESTIGATION_REPLAY) {
+    const fid = String(a.finding_id || '').trim() || 'top finding'
+    return `Investigation replay (${fid})`
+  }
+  if (name === AI_TOOL_WHAT_IF) {
+    const change = String(a.change || '').trim()
+    const shown = change.length <= 40 ? change : `${change.slice(0, 37)}…`
+    return shown ? `What-if: ${shown}` : 'What-if'
+  }
+  if (name === AI_TOOL_OPTIMIZE_EXPERIMENT) {
+    const task = String(a.task || '').trim()
+    return `Optimize experiment (${task || 'auto'}, limit ${a.limit ?? 5})`
+  }
+  if (name === AI_TOOL_ANALYZE_TRACES) return 'Analyze loaded traces'
   return String(name || '').replace(/_/g, ' ')
 }
 
@@ -1126,6 +1688,18 @@ export function isQueryTool(name) {
     AI_TOOL_QUERY_RAW_METRIC,
     AI_TOOL_SEARCH_TIMELINE,
     AI_TOOL_TRIGGER_COMPARE,
+    AI_TOOL_INVESTIGATE,
+    AI_TOOL_DETECT_ANOMALIES,
+    AI_TOOL_CORRELATE_EVENTS,
+    AI_TOOL_COMPARE_PERFORMANCE,
+    AI_TOOL_GENERATE_REPORT,
+    AI_TOOL_CHECK_BUDGET,
+    AI_TOOL_OPTIMIZE,
+    AI_TOOL_REGRESSION_EXPLAIN,
+    AI_TOOL_INVESTIGATION_REPLAY,
+    AI_TOOL_WHAT_IF,
+    AI_TOOL_OPTIMIZE_EXPERIMENT,
+    AI_TOOL_ANALYZE_TRACES,
   ].includes(String(name || ''))
 }
 
@@ -1141,6 +1715,7 @@ export function toolMutatesGui(name) {
     AI_TOOL_SET_VIEW_MODE,
     AI_TOOL_OPEN_CORRIDOR,
     AI_TOOL_ADD_ANNOTATION,
+    AI_TOOL_BOOKMARK_FINDING,
     AI_TOOL_CLEAR_MARKS,
     AI_TOOL_RESET_VIEW,
   ].includes(String(name || ''))
@@ -1487,4 +2062,308 @@ export function queryRawMetric(trace, task, metric, {
   data.count = rows.length
   data.truncated = rows.length > MAX_RAW_METRIC_ROWS
   return { ok: true, message: `${rows.length} sync STI event(s) for ${label}`, data }
+}
+
+export function maxToolRounds(templateId = '') {
+  return maxToolRoundsForTemplate(templateId, 4)
+}
+
+export function investigateFinding(findings, findingId = '', { depth = 2 } = {}) {
+  const ctx = buildInvestigateContext(findings, findingId, { depth })
+  const ok = !!ctx.ok
+  const message = String(ctx.message || (ok ? 'ok' : 'failed'))
+  const data = { ...ctx }
+  delete data.ok
+  delete data.message
+  return { ok, message, data }
+}
+
+function eventsFromMetricPayload(payload, metric, task) {
+  const data = payload && typeof payload === 'object' ? payload.data : null
+  if (!data || typeof data !== 'object') return []
+  const out = []
+  if (metric === AI_RAW_METRIC_PRIORITY) {
+    for (const ep of data.episodes || []) {
+      const t = ep.start
+      if (t == null) continue
+      let detail = `PI base=${ep.base_pri} peak=${ep.peak_pri}`
+      if (ep.inversion_suspect) detail += ' inversion_suspect'
+      out.push({ time: t, kind: 'priority', detail, task })
+    }
+  } else if (metric === AI_RAW_METRIC_EXECUTION) {
+    for (const sl of data.slices || []) {
+      const t = sl.start
+      if (t == null) continue
+      out.push({
+        time: t,
+        kind: 'execution',
+        detail: `dur=${sl.duration} core=${sl.core}`,
+        task,
+        core: sl.core || '',
+      })
+    }
+  } else if (metric === AI_RAW_METRIC_MIGRATIONS) {
+    for (const row of data.events || data.migrations || []) {
+      const t = row.time
+      if (t == null) continue
+      out.push({
+        time: t,
+        kind: 'migration',
+        detail: `${row.from}→${row.to}`,
+        task,
+      })
+    }
+  } else if (metric === AI_RAW_METRIC_BLOCKING) {
+    for (const row of data.gaps || []) {
+      const t = row.start ?? row.time
+      if (t == null) continue
+      out.push({
+        time: t,
+        kind: 'blocking',
+        detail: String(row.duration ?? row.gap ?? 'block'),
+        task,
+      })
+    }
+  } else if (metric === AI_RAW_METRIC_SYNC) {
+    for (const row of data.events || []) {
+      const t = row.time
+      if (t == null) continue
+      out.push({
+        time: t,
+        kind: 'sync',
+        detail: `${row.event || ''} ${row.target || ''} ${row.note || ''}`.trim(),
+        task,
+        core: row.core || '',
+      })
+    }
+  }
+  return out
+}
+
+export function correlateTaskEvents(trace, task, {
+  aroundTime = null,
+  window = 0,
+  lo = null,
+  hi = null,
+  findingsText = '',
+  annotations = [],
+} = {}) {
+  if (!trace) return { ok: false, message: 'No trace loaded' }
+  const taskName = String(task || '').trim()
+  if (!taskName) return { ok: false, message: 'task is required' }
+  const events = []
+  for (const metric of [
+    AI_RAW_METRIC_BLOCKING,
+    AI_RAW_METRIC_EXECUTION,
+    AI_RAW_METRIC_MIGRATIONS,
+    AI_RAW_METRIC_SYNC,
+    AI_RAW_METRIC_PRIORITY,
+  ]) {
+    const payload = queryRawMetric(trace, taskName, metric, {
+      lo, hi, findingsText,
+    })
+    if (payload.ok) events.push(...eventsFromMetricPayload(payload, metric, taskName))
+  }
+  const search = searchTimelineHits(trace, taskName, 'contains', annotations)
+  if (search.ok) {
+    for (const t of search.data?.times || []) {
+      const n = Number(t)
+      if (!Number.isFinite(n)) continue
+      events.push({ time: n, kind: 'search', detail: taskName, task: taskName })
+    }
+  }
+  const ctx = buildCorrelationTimeline(events, {
+    task: taskName,
+    aroundTime,
+    window: Number(window) || 0,
+  })
+  const ok = !!ctx.ok
+  const message = String(ctx.message || (ok ? 'ok' : 'failed'))
+  const data = { ...ctx }
+  delete data.ok
+  delete data.message
+  return { ok, message, data }
+}
+
+export function detectAnomaliesFinding(findings, { limit = 10 } = {}) {
+  const ctx = detectAnomalies(findings, { limit })
+  const ok = !!ctx.ok
+  const message = String(ctx.message || (ok ? 'ok' : 'failed'))
+  const data = { ...ctx }
+  delete data.ok
+  delete data.message
+  return { ok, message, data }
+}
+
+export function generateReportFinding(findings, {
+  reportType = 'performance', findingId = '', compare = null,
+} = {}) {
+  const ctx = generateStructuredReport(findings, {
+    reportType, focusId: findingId, compare,
+  })
+  const ok = !!ctx.ok
+  const message = String(ctx.message || (ok ? 'ok' : 'failed'))
+  const data = { ...ctx }
+  delete data.ok
+  delete data.message
+  return { ok, message, data }
+}
+
+export function comparePerformanceTabs(candidateSummary, baselineSummary, {
+  labelA = 'A', labelB = 'B',
+} = {}) {
+  const snapA = snapshotFromSummary(candidateSummary || {}, { name: labelA })
+  const snapB = snapshotFromSummary(baselineSummary || {}, { name: labelB })
+  const ctx = comparePerformanceMetrics(snapA, snapB, { labelA, labelB })
+  const ok = !!ctx.ok
+  const message = String(ctx.message || (ok ? 'ok' : 'failed'))
+  const data = { ...ctx }
+  delete data.ok
+  delete data.message
+  return { ok, message, data }
+}
+
+export function budgetTaskRowsFromFindings(findings) {
+  const rows = []
+  const seen = new Set()
+  for (const a of (detectAnomalies(findings || [], { limit: 40 }).anomalies || [])) {
+    const task = String(a.task || '').trim()
+    if (!task || seen.has(task)) continue
+    seen.add(task)
+    rows.push({ task })
+  }
+  return rows
+}
+
+export function checkBudgetFinding(tasks = null, budgets = null, { findings = null } = {}) {
+  let rows = Array.isArray(tasks) ? [...tasks] : []
+  if (!rows.length) rows = budgetTaskRowsFromFindings(findings || [])
+  const ctx = checkTaskBudgets(rows, budgets)
+  const ok = !!ctx.ok
+  const message = String(ctx.message || (ok ? 'ok' : 'failed'))
+  const data = { ...ctx }
+  delete data.ok
+  delete data.message
+  return { ok, message, data }
+}
+
+export function optimizeFinding(findings, { limit = 5 } = {}) {
+  const ctx = buildOptimizationAdvice(findings, { limit })
+  const ok = !!ctx.ok
+  const message = String(ctx.message || (ok ? 'ok' : 'failed'))
+  const data = { ...ctx }
+  delete data.ok
+  delete data.message
+  return { ok, message, data }
+}
+
+export function explainRegressionFromCompare(compare, findings = null) {
+  const ctx = explainRegression(compare, findings)
+  const ok = !!ctx.ok
+  const message = String(ctx.message || (ok ? 'ok' : 'failed'))
+  const data = { ...ctx }
+  delete data.ok
+  delete data.message
+  return { ok, message, data }
+}
+
+export { formatBookmarkLabel }
+
+export function investigationReplayFinding(findings, findingId = '', {
+  conclusion = '', toolsRun = null, evidenceTimes = null, plan = null,
+} = {}) {
+  const finding = (findings?.length || findingId)
+    ? resolveFinding(findings || [], findingId)
+    : null
+  const ctx = buildInvestigationReplay({
+    finding,
+    plan,
+    toolsRun,
+    conclusion,
+    evidenceTimes,
+  })
+  const ok = !!ctx.ok
+  const message = String(ctx.message || (ok ? 'ok' : 'failed'))
+  const data = { ...ctx }
+  delete data.ok
+  delete data.message
+  return { ok, message, data }
+}
+
+export function gatherSimulationInputs(trace, task, {
+  lo = null, hi = null, findingsText = '',
+} = {}) {
+  let slices = []
+  let migrations = []
+  let blockingGaps = []
+  let label = String(task || '').trim()
+  if (label && trace) {
+    const exec = queryRawMetric(trace, label, 'execution', { lo, hi, findingsText })
+    if (exec.ok && exec.data) {
+      slices = [...(exec.data.slices || [])]
+      label = String(exec.data.task || label)
+    }
+    const mig = queryRawMetric(trace, label, 'migrations', { lo, hi, findingsText })
+    if (mig.ok && mig.data) migrations = [...(mig.data.events || [])]
+    const blk = queryRawMetric(trace, label, 'blocking', { lo, hi, findingsText })
+    if (blk.ok && blk.data) blockingGaps = [...(blk.data.gaps || [])]
+  }
+  let coreUtils = []
+  if (trace) {
+    try {
+      coreUtils = coreUtilPctRows(trace, lo, hi).map(r => [r.core, r.pct])
+    } catch (_) {
+      coreUtils = []
+    }
+  }
+  return { task: label, slices, migrations, blockingGaps, coreUtils }
+}
+
+export function whatIfEstimate(change, {
+  task = '', findings = null, baselineMetrics = null,
+  slices = null, migrations = null, blockingGaps = null, coreUtils = null,
+} = {}) {
+  const hasMetrics = !!(
+    (slices && slices.length)
+    || (migrations && migrations.length)
+    || (blockingGaps && blockingGaps.length)
+    || (coreUtils && coreUtils.length)
+  )
+  const ctx = hasMetrics
+    ? simulateWhatIf({
+      change, task, slices, migrations, blockingGaps, coreUtils, findings,
+    })
+    : estimateWhatIf({ change, task, findings, baselineMetrics })
+  const ok = !!ctx.ok
+  const message = String(ctx.message || (ok ? 'ok' : 'failed'))
+  const data = { ...ctx }
+  delete data.ok
+  delete data.message
+  return { ok, message, data }
+}
+
+export function optimizeExperimentFinding({
+  task = '', findings = null,
+  slices = null, migrations = null, blockingGaps = null, coreUtils = null,
+  limit = 5,
+} = {}) {
+  const ctx = runOptimizationExperiments({
+    task, slices, migrations, blockingGaps, coreUtils, findings, limit,
+  })
+  const ok = !!ctx.ok
+  const message = String(ctx.message || (ok ? 'ok' : 'failed'))
+  const data = { ...ctx }
+  delete data.ok
+  delete data.message
+  return { ok, message, data }
+}
+
+export function analyzeTracesSnapshots(snapshots) {
+  const ctx = analyzeMultiTraces(snapshots)
+  const ok = !!ctx.ok
+  const message = String(ctx.message || (ok ? 'ok' : 'failed'))
+  const data = { ...ctx }
+  delete data.ok
+  delete data.message
+  return { ok, message, data }
 }

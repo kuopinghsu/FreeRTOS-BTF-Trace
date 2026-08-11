@@ -44,3 +44,6 @@ one to select — see [`presets.json`](presets.json):
 
 Importing fills the Settings fields but does not save on its own — review the
 values, run **Test connection**, then confirm the dialog.
+
+Panel usage: [BTFViewer README → AI Assistant](../README.md#ai-assistant).
+Setup, tools, and troubleshooting: [AI.md](../AI.md).

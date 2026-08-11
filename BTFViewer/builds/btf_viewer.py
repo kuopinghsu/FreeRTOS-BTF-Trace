@@ -16381,6 +16381,1725 @@ class TimelineView(QGraphicsView):
 # Custom progress dialog (more reliable than QProgressDialog on macOS)
 # ---------------------------------------------------------------------------
 # ===========================================================================
+# ai_investigation
+# ===========================================================================
+
+# Default checklist shown while Investigate / Root cause / agent templates run.
+INVESTIGATION_PLAN_STEPS: Tuple[Tuple[str, str], ...] = (
+    ("findings", "Read Analysis Findings"),
+    ("hypotheses", "Rank hypotheses"),
+    ("metrics", "Query metrics / timeline"),
+    ("narrow", "Narrow cursors / zoom"),
+    ("related", "Inspect related tasks / sync"),
+    ("validate", "Validate root cause"),
+    ("recommend", "Recommend mitigation"),
+)
+
+# Tools that mark plan steps complete (name → step ids).
+_TOOL_STEP_MAP: Dict[str, Tuple[str, ...]] = {
+    "investigate": ("findings", "hypotheses"),
+    "detect_anomalies": ("findings",),
+    "query_raw_metric": ("metrics",),
+    "search_timeline": ("metrics",),
+    "correlate_events": ("metrics", "related"),
+    "compare_performance": ("metrics", "validate"),
+    "trigger_compare": ("metrics", "related"),
+    "set_cursors": ("narrow",),
+    "zoom_to_range": ("narrow",),
+    "highlight_task": ("related",),
+    "open_corridor_inspector": ("related",),
+    "add_annotation": ("validate",),
+    "bookmark_finding": ("validate",),
+    "check_budget": ("metrics", "validate"),
+    "optimize": ("recommend",),
+    "regression_explain": ("validate", "recommend"),
+    "what_if": ("recommend",),
+    "optimize_experiment": ("recommend",),
+    "analyze_traces": ("metrics", "validate"),
+    "investigation_replay": ("validate",),
+    "generate_report": ("recommend",),
+    "export_report": ("recommend",),
+}
+
+_AGENT_TEMPLATE_IDS = frozenset({
+    "investigate", "root_cause", "what_if", "optimize", "diagnostic_report",
+})
+
+_FINDING_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,47}$")
+
+# CI gate defaults (A = candidate, B = baseline). Positive Δ on A−B means worse
+# for migrations / missed ticks; negative load-balance score means worse.
+DEFAULT_REGRESSION_RULES: Tuple[Dict[str, Any], ...] = (
+    {
+        "id": "migrations",
+        "label": "Migrations (total)",
+        "metric": "migrations",
+        "worse_when": "increase_pct",
+        "threshold": 20.0,
+    },
+    {
+        "id": "load_balance",
+        "label": "Load Balance Score",
+        "metric": "load_balance_score",
+        "worse_when": "decrease_abs",
+        "threshold": 10.0,
+    },
+    {
+        "id": "missed_ticks",
+        "label": "Missed ticks (est.)",
+        "metric": "missed_ticks",
+        "worse_when": "increase_abs",
+        "threshold": 1.0,
+    },
+    {
+        "id": "migrated_tasks",
+        "label": "Migrated tasks",
+        "metric": "migrated_tasks",
+        "worse_when": "increase_pct",
+        "threshold": 25.0,
+    },
+)
+
+
+def is_agent_template(template_id: str) -> bool:
+    return str(template_id or "").strip() in _AGENT_TEMPLATE_IDS
+
+
+def max_tool_rounds_for_template(template_id: str = "", default: int = 4) -> int:
+    """Allow deeper tool loops for Investigate-style templates."""
+    return 8 if is_agent_template(template_id) else int(default)
+
+
+def default_investigation_plan(goal: str = "") -> Dict[str, Any]:
+    """Return a fresh Investigation Plan structure for the UI."""
+    return {
+        "goal": (goal or "Investigate the main performance problem").strip(),
+        "steps": [
+            {"id": sid, "label": label, "status": "pending"}  # pending|active|done
+            for sid, label in INVESTIGATION_PLAN_STEPS
+        ],
+    }
+
+
+def mark_plan_steps_from_tools(
+    plan: Optional[Dict[str, Any]],
+    tool_names: Sequence[str],
+) -> Dict[str, Any]:
+    """Advance plan statuses from tool names that already ran."""
+    out = plan if isinstance(plan, dict) else default_investigation_plan()
+    steps = list(out.get("steps") or [])
+    by_id = {str(s.get("id")): s for s in steps if isinstance(s, dict)}
+    done_ids = set()
+    for name in tool_names:
+        for sid in _TOOL_STEP_MAP.get(str(name or ""), ()):
+            done_ids.add(sid)
+            step = by_id.get(sid)
+            if step is not None:
+                step["status"] = "done"
+    # Activate the first pending step.
+    activated = False
+    for step in steps:
+        if step.get("status") == "done":
+            continue
+        if not activated:
+            step["status"] = "active"
+            activated = True
+        else:
+            step["status"] = "pending"
+    if not activated and steps:
+        # All done — keep last as done.
+        pass
+    out["steps"] = steps
+    return out
+
+
+def complete_investigation_plan(
+    plan: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Mark every plan step done (final assistant answer / investigation finished).
+
+    Investigate prompts ask for mitigation in the reply text; that does not
+    always call ``export_report``, so Recommend mitigation would otherwise stay
+    unchecked.
+    """
+    out = plan if isinstance(plan, dict) else default_investigation_plan()
+    steps = []
+    for step in out.get("steps") or []:
+        if not isinstance(step, dict):
+            continue
+        item = dict(step)
+        item["status"] = "done"
+        steps.append(item)
+    out = dict(out)
+    out["steps"] = steps
+    return out
+
+
+def slug_finding_id(title: str, used: Optional[set] = None) -> str:
+    """Stable-ish id from a finding title."""
+    base = re.sub(r"[^a-z0-9]+", "_", str(title or "finding").lower()).strip("_")
+    if not base:
+        base = "finding"
+    base = base[:40]
+    if not _FINDING_ID_RE.match(base):
+        base = "finding"
+    used = used if used is not None else set()
+    cand = base
+    n = 2
+    while cand in used:
+        cand = f"{base}_{n}"
+        n += 1
+    used.add(cand)
+    return cand
+
+
+def enrich_findings_with_ids(findings: Sequence[dict]) -> List[dict]:
+    """Copy findings and ensure each has a unique ``id`` field."""
+    used: set = set()
+    out: List[dict] = []
+    for f in findings or []:
+        item = dict(f or {})
+        fid = str(item.get("id") or "").strip()
+        if not fid or not _FINDING_ID_RE.match(fid) or fid in used:
+            fid = slug_finding_id(str(item.get("title") or "finding"), used)
+        else:
+            used.add(fid)
+        item["id"] = fid
+        if "evidence" not in item:
+            item["evidence"] = list(item.get("evidence") or [])
+        out.append(item)
+    return out
+
+
+def format_findings_evidence_chain(findings: Sequence[dict]) -> str:
+    """Markdown evidence-chain block for AI context / UI."""
+    lines = ["### Evidence chain", ""]
+    if not findings:
+        lines.append("_No findings in scope._")
+        return "\n".join(lines)
+    for f in findings:
+        sev = str(f.get("severity", "info")).upper()
+        fid = str(f.get("id") or "")
+        title = str(f.get("title") or "Finding")
+        text = str(f.get("text") or "")
+        lines.append(f"- **[{sev}] {title}** (`id={fid}`)")
+        lines.append(f"  - {text}")
+        evidence = f.get("evidence") or []
+        for ev in evidence:
+            if isinstance(ev, dict):
+                label = str(ev.get("label") or ev.get("text") or "evidence")
+                t = ev.get("time")
+                if t is not None:
+                    lines.append(f"  - {label}: jump:{t}")
+                else:
+                    lines.append(f"  - {label}")
+            else:
+                lines.append(f"  - {ev}")
+    return "\n".join(lines)
+
+
+def resolve_finding(
+    findings: Sequence[dict],
+    finding_id: str = "",
+) -> Optional[dict]:
+    """Resolve by id, 1-based index, or title substring."""
+    items = enrich_findings_with_ids(findings)
+    want = str(finding_id or "").strip()
+    if not want:
+        # Prefer first warning/error, else first finding.
+        for f in items:
+            if f.get("severity") in ("warning", "error"):
+                return f
+        return items[0] if items else None
+    low = want.lower()
+    for f in items:
+        if str(f.get("id") or "").lower() == low:
+            return f
+    if want.isdigit():
+        idx = int(want) - 1
+        if 0 <= idx < len(items):
+            return items[idx]
+    for f in items:
+        if low in str(f.get("title") or "").lower():
+            return f
+    return None
+
+
+def build_investigate_context(
+    findings: Sequence[dict],
+    finding_id: str = "",
+    *,
+    depth: int = 2,
+) -> Dict[str, Any]:
+    """Structured investigation graph for the ``investigate`` tool."""
+    depth = max(1, min(5, int(depth or 2)))
+    items = enrich_findings_with_ids(findings)
+    focus = resolve_finding(items, finding_id)
+    if focus is None:
+        return {
+            "ok": False,
+            "message": "No Analysis Findings in scope",
+            "findings": [],
+            "focus": None,
+            "hypotheses": [],
+            "suggested_tools": [],
+            "plan": default_investigation_plan(),
+            "evidence_chain": format_findings_evidence_chain([]),
+        }
+
+    title = str(focus.get("title") or "")
+    text = str(focus.get("text") or "")
+    sev = str(focus.get("severity") or "info")
+    hypotheses = _hypotheses_for_finding(title, text)
+    suggested = _suggested_tools_for_finding(title, text, depth)
+    related = [
+        {"id": f.get("id"), "severity": f.get("severity"), "title": f.get("title")}
+        for f in items
+        if f.get("id") != focus.get("id")
+    ][:8]
+    plan = default_investigation_plan(goal=f"Investigate: {title}")
+    plan = mark_plan_steps_from_tools(plan, ["investigate"])
+    chain = build_root_cause_chain(focus)
+    anomalies = detect_anomalies(items, limit=max(3, depth + 2))
+    graph = {
+        "finding": {
+            "id": focus.get("id"),
+            "severity": sev,
+            "title": title,
+            "text": text,
+            "evidence": list(focus.get("evidence") or []),
+            "task": focus.get("task") or _guess_task_name(text),
+        },
+        "related_findings": related,
+        "hypotheses": hypotheses[: max(1, depth + 1)],
+        "suggested_tools": suggested,
+        "depth": depth,
+        "evidence_chain": format_findings_evidence_chain([focus]),
+        "root_cause_chain": chain,
+        "ranked_anomalies": (anomalies.get("anomalies") or [])[: max(3, depth)],
+        "plan": plan,
+    }
+    return {
+        "ok": True,
+        "message": (
+            f"Investigation context for {focus.get('id')} "
+            f"({len(hypotheses)} hypotheses, {len(suggested)} suggested tools)"
+        ),
+        **graph,
+    }
+
+
+def _hypotheses_for_finding(title: str, text: str) -> List[Dict[str, str]]:
+    blob = f"{title} {text}".lower()
+    hyps: List[Dict[str, str]] = []
+    def add(h: str, why: str) -> None:
+        hyps.append({"hypothesis": h, "why": why})
+
+    if "thrash" in blob or "migration" in blob or "bounc" in blob:
+        add("Core thrashing / lock bounce", "High migration or bounce metrics")
+        add("Missing affinity pin", "Equal-priority fan-out across cores")
+    if "block" in blob or "latency" in blob or "dispatch" in blob:
+        add("Off-CPU blocking / mutex wait", "Blocking gaps dominate latency")
+        add("Preemption chain interference", "Higher-priority work stretches wait")
+    if "inversion" in blob or "l/m/h" in blob or "inherit" in blob:
+        add("Priority inversion on shared mutex", "L/M/H geometry in findings")
+    if "wcet" in blob or "cpu" in blob or "execution" in blob or "spike" in blob:
+        add("Long execution slices / WCET spike", "Max vs typical execution diverge")
+        add("Interrupt or critical-section stretch", "Unexplained Max growth")
+    if "load" in blob or "imbalance" in blob or "balance" in blob:
+        add("Uneven core placement", "Load Balance Score / σ warning")
+    if "tick" in blob or "missed" in blob:
+        add("Tick health / tickless idle gaps", "TICK CV or missed ticks")
+    if "deadline" in blob or "budget" in blob:
+        add("Deadline or CPU-budget breach", "Configured thresholds exceeded")
+    if not hyps:
+        add("Primary finding needs metric drill-down", "No specialised heuristic match")
+    return hyps
+
+
+def _suggested_tools_for_finding(
+    title: str, text: str, depth: int,
+) -> List[Dict[str, Any]]:
+    blob = f"{title} {text}".lower()
+    tools: List[Dict[str, Any]] = []
+    task = _guess_task_name(text)
+
+    def add(name: str, arguments: Dict[str, Any], reason: str) -> None:
+        tools.append({"name": name, "arguments": arguments, "reason": reason})
+
+    if task:
+        if "block" in blob or "inversion" in blob or "latency" in blob:
+            add("query_raw_metric", {"task": task, "metric": "blocking"},
+                "Inspect blocking gaps")
+            add("query_raw_metric", {"task": task, "metric": "priority_inheritance"},
+                "Check inherit episodes")
+        if "wcet" in blob or "cpu" in blob or "execution" in blob or "spike" in blob:
+            add("query_raw_metric", {"task": task, "metric": "execution"},
+                "Inspect execution slices")
+        if "migrat" in blob or "thrash" in blob or "bounc" in blob:
+            add("query_raw_metric", {"task": task, "metric": "migrations"},
+                "Inspect migrations")
+            add("open_corridor_inspector", {}, "Open migration inspector")
+        add("highlight_task", {"task_name_or_id": task}, "Highlight victim task")
+        add("search_timeline", {"query": task, "mode": "contains"},
+            "Locate task on timeline")
+    else:
+        add("query_raw_metric", {"task": "*", "metric": "findings"},
+            "Re-read findings lines")
+        add("search_timeline", {"query": "mutex", "mode": "sti"},
+            "Search sync activity")
+    if depth >= 2:
+        add("detect_anomalies", {"limit": 8}, "Rank Critical/Warning anomalies")
+    if task and depth >= 2:
+        add("correlate_events", {"task": task}, "Cross-task event correlation")
+    if depth >= 3:
+        add("trigger_compare", {}, "Compare two open tabs if available")
+        add("compare_performance", {}, "Structured A vs B performance deltas")
+    if depth >= 4:
+        add("generate_report", {"report_type": "root_cause"}, "Structured RCA report")
+        add("export_report", {"format": "html"}, "Save diagnostic report")
+    return tools[: max(3, depth * 2)]
+
+
+_TASK_TOKEN_RE = re.compile(
+    r"\b([A-Za-z_][\w]*(?:\[[0-9]+\])?)\b"
+)
+
+
+def _guess_task_name(text: str) -> str:
+    """Best-effort task token from finding text (e.g. CS[28], High[268])."""
+    # Prefer Name[id] forms.
+    bracketed = re.findall(r"\b[A-Za-z_][\w]*\[[0-9]+\]", text or "")
+    for tok in bracketed:
+        low = tok.lower()
+        if low.startswith("core") or low in ("tick",):
+            continue
+        return tok
+    for m in _TASK_TOKEN_RE.finditer(text or ""):
+        tok = m.group(1)
+        low = tok.lower()
+        if low in ("max", "min", "rate", "dwell", "ping", "load", "balance",
+                     "score", "tick", "mode", "core", "mutex", "queue"):
+            continue
+        if "[" in tok:
+            return tok
+    return bracketed[0] if bracketed else ""
+
+
+def snapshot_from_summary(summary: Dict[str, Any], *, name: str = "") -> Dict[str, Any]:
+    """Baseline JSON payload from ``_trace_summary_snapshot``."""
+    return {
+        "version": 1,
+        "name": name or "",
+        "metrics": {
+            "span_ns": summary.get("span_ns"),
+            "tasks": summary.get("tasks"),
+            "segments": summary.get("segments"),
+            "migrations": summary.get("migrations"),
+            "migrated_tasks": summary.get("migrated_tasks"),
+            "load_balance_score": summary.get("load_balance_score"),
+            "load_balance_sigma": summary.get("load_balance_sigma"),
+            "missed_ticks": summary.get("missed_ticks"),
+            "tick_health": summary.get("tick_health"),
+            "context_switches": summary.get("context_switches"),
+        },
+    }
+
+
+def load_baseline_json(path: str) -> Dict[str, Any]:
+    with open(path, "r", encoding="utf-8") as fh:
+        data = json.load(fh)
+    if not isinstance(data, dict) or "metrics" not in data:
+        raise ValueError("baseline JSON must contain a metrics object")
+    return data
+
+
+def save_baseline_json(path: str, snapshot: Dict[str, Any]) -> None:
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(snapshot, fh, indent=2, sort_keys=True)
+        fh.write("\n")
+
+
+def evaluate_regression(
+    candidate: Dict[str, Any],
+    baseline: Dict[str, Any],
+    *,
+    rules: Optional[Sequence[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """Compare candidate vs baseline metrics; return gate result.
+
+    ``candidate`` / ``baseline`` may be summary snapshots or baseline JSON
+    (with ``metrics``).
+    """
+    cand = candidate.get("metrics") if "metrics" in candidate else candidate
+    base = baseline.get("metrics") if "metrics" in baseline else baseline
+    cand = dict(cand or {})
+    base = dict(base or {})
+    checks: List[Dict[str, Any]] = []
+    failed = False
+    for rule in (rules or DEFAULT_REGRESSION_RULES):
+        mid = str(rule.get("metric") or "")
+        a = cand.get(mid)
+        b = base.get(mid)
+        status = "skip"
+        detail = "missing metric"
+        delta: Optional[float] = None
+        if a is None or b is None:
+            status = "skip"
+        else:
+            try:
+                av = float(a)
+                bv = float(b)
+            except (TypeError, ValueError):
+                status = "skip"
+                detail = "non-numeric"
+            else:
+                thr = float(rule.get("threshold") or 0)
+                mode = str(rule.get("worse_when") or "")
+                if mode == "increase_pct":
+                    if bv == 0:
+                        delta = 100.0 if av > 0 else 0.0
+                    else:
+                        delta = 100.0 * (av - bv) / abs(bv)
+                    if delta >= thr:
+                        status = "fail"
+                        failed = True
+                        detail = f"+{delta:.1f}% (threshold {thr:g}%)"
+                    else:
+                        status = "pass"
+                        detail = f"{delta:+.1f}% (threshold {thr:g}%)"
+                elif mode == "decrease_abs":
+                    delta = bv - av  # positive when candidate is worse (lower score)
+                    if delta >= thr:
+                        status = "fail"
+                        failed = True
+                        detail = f"dropped {delta:.1f} (threshold {thr:g})"
+                    else:
+                        status = "pass"
+                        detail = f"Δ score {av - bv:+.1f} (threshold −{thr:g})"
+                elif mode == "increase_abs":
+                    delta = av - bv
+                    if delta >= thr:
+                        status = "fail"
+                        failed = True
+                        detail = f"+{delta:.1f} (threshold {thr:g})"
+                    else:
+                        status = "pass"
+                        detail = f"{delta:+.1f} (threshold {thr:g})"
+                else:
+                    status = "skip"
+                    detail = f"unknown rule {mode}"
+        checks.append({
+            "id": rule.get("id"),
+            "label": rule.get("label") or mid,
+            "status": status,
+            "detail": detail,
+            "candidate": a,
+            "baseline": b,
+            "delta": delta,
+        })
+    return {
+        "ok": not failed,
+        "failed": failed,
+        "checks": checks,
+        "summary": (
+            "REGRESSION DETECTED" if failed else "No regression vs baseline"
+        ),
+    }
+
+
+def format_regression_report(result: Dict[str, Any], *, title: str = "") -> str:
+    lines = [
+        "BTF AI / CI Analysis" + (f" — {title}" if title else ""),
+        "",
+        ("❌ " if result.get("failed") else "✅ ") + str(result.get("summary") or ""),
+        "",
+    ]
+    for c in result.get("checks") or []:
+        mark = {"pass": "✓", "fail": "✗", "skip": "·"}.get(c.get("status"), "?")
+        lines.append(
+            f"{mark} {c.get('label')}: {c.get('detail')} "
+            f"(A={c.get('candidate')}, B={c.get('baseline')})"
+        )
+    lines.append("")
+    lines.append(
+        "CI status: " + ("FAILED" if result.get("failed") else "PASSED")
+    )
+    return "\n".join(lines) + "\n"
+
+
+def append_wcet_anomaly_finding(
+    findings: List[dict],
+    spike_rows: Sequence[Tuple[str, float, float, int]],
+    *,
+    ratio_threshold: float = 5.0,
+) -> List[dict]:
+    """Append WCET Max/Avg spike anomalies.
+
+    *spike_rows*: ``(name, avg_ns, max_ns, runs)``.
+    """
+    spikes = []
+    for name, avg_ns, max_ns, runs in spike_rows:
+        if runs < 5 or avg_ns <= 0:
+            continue
+        ratio = float(max_ns) / float(avg_ns)
+        if ratio >= ratio_threshold:
+            spikes.append(f"{name} (Max/Avg={ratio:.1f}×, n={runs})")
+    if spikes:
+        findings.append({
+            "id": "wcet_anomaly",
+            "severity": "warning",
+            "title": "Anomaly: WCET spike vs typical execution",
+            "text": (
+                "Execution Max is much larger than Avg — multimodal or bursty "
+                "slices: " + "; ".join(spikes[:5])
+                + ". Open Execution Time and jump to Max."
+            ),
+            "evidence": [],
+        })
+    return findings
+
+
+def append_migration_burst_anomaly(
+    findings: List[dict],
+    burst_rows: Sequence[Tuple[str, float, int]],
+    *,
+    rate_threshold: float = 10.0,
+) -> List[dict]:
+    """Append extreme migration-rate anomalies (rate ≥ *rate_threshold*/s)."""
+    bursts = []
+    for name, rate, n_mig in burst_rows:
+        if rate >= rate_threshold and n_mig >= 10:
+            bursts.append(f"{name} ({rate:.1f}/s, Migr={n_mig})")
+    if bursts:
+        findings.append({
+            "id": "migration_burst_anomaly",
+            "severity": "warning",
+            "title": "Anomaly: migration burst",
+            "text": (
+                "Migration rate far above thrash heuristic: "
+                + "; ".join(bursts[:5])
+                + ". Check Migration Heatmap for a short thrash window."
+            ),
+            "evidence": [],
+        })
+    return findings
+
+
+_ANOMALY_ID_BOOST = frozenset({
+    "wcet_anomaly", "migration_burst_anomaly", "thrashing", "blocking",
+    "priority_inversion", "deadlines", "missed_ticks", "tick_health",
+    "sync_bounce", "hot_pairs",
+})
+_SEV_RANK = {"error": 0, "warning": 1, "info": 2}
+
+
+def detect_anomalies(
+    findings: Sequence[dict],
+    *,
+    limit: int = 10,
+) -> Dict[str, Any]:
+    """Rank Analysis Findings as Critical / Warning / Info anomalies."""
+    limit = max(1, min(40, int(limit or 10)))
+    items = enrich_findings_with_ids(findings)
+    ranked: List[Tuple[Any, ...]] = []
+    for i, f in enumerate(items):
+        sev = str(f.get("severity") or "info").lower()
+        fid = str(f.get("id") or "")
+        boost = 0 if fid in _ANOMALY_ID_BOOST else 1
+        ranked.append((_SEV_RANK.get(sev, 3), boost, i, f))
+    ranked.sort(key=lambda row: row[:3])
+    anomalies: List[dict] = []
+    counts = {"critical": 0, "warning": 0, "info": 0}
+    for rank_i, (_s, _b, _i, f) in enumerate(ranked[:limit], start=1):
+        sev = str(f.get("severity") or "info").lower()
+        band = "critical" if sev == "error" else ("warning" if sev == "warning" else "info")
+        counts[band] = counts.get(band, 0) + 1
+        anomalies.append({
+            "rank": rank_i,
+            "band": band,
+            "severity": sev,
+            "id": f.get("id"),
+            "title": f.get("title"),
+            "text": f.get("text"),
+            "task": f.get("task") or _guess_task_name(str(f.get("text") or "")),
+            "evidence": list(f.get("evidence") or []),
+        })
+    return {
+        "ok": True,
+        "message": (
+            f"{len(anomalies)} ranked anomal{'y' if len(anomalies) == 1 else 'ies'} "
+            f"(critical={counts['critical']}, warning={counts['warning']}, "
+            f"info={counts['info']})"
+        ),
+        "anomalies": anomalies,
+        "counts": counts,
+        "total_findings": len(items),
+    }
+
+
+def build_root_cause_chain(finding: Optional[dict]) -> List[Dict[str, Any]]:
+    """Heuristic Finding → cause steps for the Root Cause Chain UI/tool data."""
+    if not finding:
+        return []
+    title = str(finding.get("title") or "")
+    text = str(finding.get("text") or "")
+    blob = f"{title} {text}".lower()
+    task = str(finding.get("task") or "") or _guess_task_name(text)
+    steps: List[Dict[str, Any]] = []
+
+    def add(label: str, detail: str = "", *, kind: str = "step") -> None:
+        steps.append({"kind": kind, "label": label, "detail": detail, "task": task})
+
+    add(f"Finding: {title or finding.get('id') or 'unknown'}", text[:240], kind="finding")
+    if task:
+        add(f"Focus task {task}", "Extracted from finding text", kind="task")
+    if "block" in blob or "latency" in blob or "dispatch" in blob:
+        add("Off-CPU / blocking gap", "Inspect Blocking Time + STI wait")
+        add("Synchronization hold", "Check mutex/semaphore owner")
+    if "inversion" in blob or "l/m/h" in blob or "inherit" in blob:
+        add("Priority relationship", "L/M/H or inherit episode")
+        add("Likely priority inversion", "High confidence if PI episodes align", kind="cause")
+    if "migrat" in blob or "thrash" in blob or "bounc" in blob:
+        add("Core migration / thrash", "Corridor + migration rate")
+        add("Likely affinity / lock bounce", kind="cause")
+    if "wcet" in blob or "spike" in blob or "execution" in blob or "cpu" in blob:
+        add("Execution / WCET spike", "Jump to Max slice")
+        add("Likely long critical section or preemption stretch", kind="cause")
+    if "deadline" in blob or "budget" in blob:
+        add("Deadline / budget breach", kind="cause")
+    if "tick" in blob or "missed" in blob:
+        add("Tick health / missed ticks", kind="cause")
+    if not any(s.get("kind") == "cause" for s in steps):
+        add("Needs metric drill-down", "Call correlate_events / query_raw_metric", kind="cause")
+    add("Verify on timeline", "set_cursors + zoom_to_range + highlight_task", kind="ui")
+    return steps
+
+
+def build_correlation_timeline(
+    events: Sequence[dict],
+    *,
+    task: str = "",
+    around_time: Optional[float] = None,
+    window: float = 0.0,
+    limit: int = 40,
+) -> Dict[str, Any]:
+    """Merge cross-metric events into a time-ordered correlation list."""
+    limit = max(1, min(80, int(limit or 40)))
+    rows: List[dict] = []
+    for ev in events or []:
+        if not isinstance(ev, dict):
+            continue
+        try:
+            t = float(ev.get("time"))
+        except (TypeError, ValueError):
+            continue
+        rows.append({
+            "time": t,
+            "kind": str(ev.get("kind") or ev.get("metric") or "event"),
+            "detail": str(ev.get("detail") or ev.get("note") or ev.get("event") or ""),
+            "task": str(ev.get("task") or task or ""),
+            "core": ev.get("core") or "",
+        })
+    rows.sort(key=lambda r: r["time"])
+    if around_time is not None and window and window > 0:
+        lo = float(around_time) - float(window)
+        hi = float(around_time) + float(window)
+        rows = [r for r in rows if lo <= r["time"] <= hi]
+    truncated = len(rows) > limit
+    rows = rows[:limit]
+    kinds = {r["kind"] for r in rows}
+    score = 0.0
+    if rows:
+        score = min(0.99, 0.35 + 0.12 * max(0, len(kinds) - 1) + 0.01 * min(40, len(rows)))
+    suggested: List[Dict[str, Any]] = []
+    if rows:
+        t0, t1 = rows[0]["time"], rows[-1]["time"]
+        suggested.append({
+            "name": "set_cursors",
+            "arguments": {"timestamps": [t0, t1] if t1 != t0 else [t0]},
+            "reason": "Bracket correlated window",
+        })
+        if t1 > t0:
+            pad = max(1.0, (t1 - t0) * 0.05)
+            suggested.append({
+                "name": "zoom_to_range",
+                "arguments": {"start_time": t0 - pad, "end_time": t1 + pad},
+                "reason": "Focus correlated range",
+            })
+        if task:
+            suggested.append({
+                "name": "highlight_task",
+                "arguments": {"task_name_or_id": task},
+                "reason": "Highlight focus task",
+            })
+    return {
+        "ok": True,
+        "message": (
+            f"{len(rows)} correlated event(s) for {task or 'scope'}"
+            + (" (truncated)" if truncated else "")
+        ),
+        "task": task,
+        "around_time": around_time,
+        "window": window,
+        "events": rows,
+        "correlation": round(score, 2),
+        "kinds": sorted(kinds),
+        "truncated": truncated,
+        "suggested_tools": suggested,
+    }
+
+
+def compare_performance_metrics(
+    candidate: Dict[str, Any],
+    baseline: Dict[str, Any],
+    *,
+    label_a: str = "A",
+    label_b: str = "B",
+) -> Dict[str, Any]:
+    """Structured A vs B performance deltas using regression rules."""
+    snap_a = candidate if "metrics" in (candidate or {}) else {
+        "metrics": dict(candidate or {}),
+    }
+    snap_b = baseline if "metrics" in (baseline or {}) else {
+        "metrics": dict(baseline or {}),
+    }
+    result = evaluate_regression(snap_a, snap_b)
+    primary = next((c for c in result.get("checks") or [] if c.get("status") == "fail"), None)
+    if primary is None:
+        primary = next((c for c in result.get("checks") or [] if c.get("status") == "pass"), None)
+    confidence = "High" if primary and primary.get("status") == "fail" else (
+        "Medium" if primary else "Low"
+    )
+    return {
+        "ok": True,
+        "message": str(result.get("summary") or "compared"),
+        "label_a": label_a,
+        "label_b": label_b,
+        "failed": bool(result.get("failed")),
+        "checks": result.get("checks") or [],
+        "primary_regression": primary,
+        "confidence": confidence,
+        "evidence_quality": (
+            "Directly observed" if primary else "Insufficient evidence"
+        ),
+        "suggested_tools": [
+            {"name": "investigate", "arguments": {}, "reason": "Drill into top finding"},
+            {"name": "correlate_events", "arguments": {}, "reason": "Timeline correlation"},
+        ],
+        "report": format_regression_report(
+            result, title=f"{label_a} vs {label_b}",
+        ),
+    }
+
+
+_REPORT_TYPES = frozenset({
+    "executive", "performance", "root_cause", "regression",
+    "optimization", "bug", "ci",
+})
+
+
+def generate_structured_report(
+    findings: Sequence[dict],
+    *,
+    report_type: str = "performance",
+    focus_id: str = "",
+    compare: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Build markdown sections for generate_report (does not write a file)."""
+    rtype = str(report_type or "performance").strip().lower().replace("-", "_")
+    if rtype not in _REPORT_TYPES:
+        rtype = "performance"
+    items = enrich_findings_with_ids(findings)
+    focus = resolve_finding(items, focus_id) if items else None
+    anomalies = detect_anomalies(items, limit=8)
+    chain = build_root_cause_chain(focus) if focus else []
+    title_map = {
+        "executive": "Executive summary",
+        "performance": "Performance analysis",
+        "root_cause": "Root-cause analysis",
+        "regression": "Regression report",
+        "optimization": "Optimization report",
+        "bug": "Bug report",
+        "ci": "CI report",
+    }
+    heading = title_map.get(rtype, "Performance analysis")
+    lines = [f"# {heading}", ""]
+    if focus:
+        lines.extend([
+            "## Summary",
+            f"**{focus.get('title')}** ({focus.get('severity')})",
+            "",
+            str(focus.get("text") or ""),
+            "",
+        ])
+    else:
+        lines.extend(["## Summary", "No single focus finding; ranked anomalies below.", ""])
+    lines.append("## Key findings")
+    for a in (anomalies.get("anomalies") or [])[:6]:
+        lines.append(
+            f"{a.get('rank')}. [{a.get('band')}] {a.get('title')} — {a.get('id')}"
+        )
+    lines.append("")
+    if chain:
+        lines.append("## Root cause chain")
+        for step in chain:
+            lines.append(f"- **{step.get('label')}**: {step.get('detail') or ''}".rstrip())
+        lines.append("")
+    if compare:
+        lines.append("## Comparison")
+        lines.append(str(compare.get("report") or compare.get("message") or "").rstrip())
+        lines.append("")
+        primary = compare.get("primary_regression")
+        if primary:
+            lines.append(
+                f"Primary: {primary.get('label')} — {primary.get('detail')} "
+                f"(confidence {compare.get('confidence')})"
+            )
+            lines.append("")
+    lines.extend([
+        "## Recommended actions",
+        "1. Place cursors / zoom on the worst episode (`set_cursors`, `zoom_to_range`).",
+        "2. Highlight the focus task and verify on the timeline.",
+        "3. Re-run Trace Compare or `compare_performance` after a fix.",
+        "",
+        "## Confidence",
+        "Medium — structured from Analysis Findings; confirm with tool evidence.",
+        "",
+    ])
+    md = "\n".join(lines)
+    return {
+        "ok": True,
+        "message": f"{heading} ({len(items)} findings)",
+        "report_type": rtype,
+        "title": heading,
+        "markdown": md,
+        "sections": {
+            "summary": (focus or {}).get("text") or "",
+            "findings": anomalies.get("anomalies") or [],
+            "root_cause_chain": chain,
+            "compare": compare,
+        },
+        "suggested_tools": [
+            {"name": "export_report", "arguments": {"format": "html"},
+             "reason": "Save HTML with diagrams and GUI state"},
+        ],
+    }
+
+
+# --- Phase 2 / 3 helpers -------------------------------------------------
+
+_BOOKMARK_KINDS = {
+    "root_cause": ("🔴", "Root cause"),
+    "evidence": ("🟠", "Important evidence"),
+    "correlated": ("🟡", "Correlated event"),
+    "reference": ("🟢", "Normal reference"),
+}
+
+
+def check_task_budgets(
+    metrics_by_task: Sequence[dict],
+    budgets: Optional[Dict[str, Dict[str, float]]] = None,
+) -> Dict[str, Any]:
+    """Compare per-task measured metrics against optional budgets.
+
+    *metrics_by_task* items: ``{task, wcet_us?, response_us?, deadline_us?,
+    exec_max_us?, blocking_max_us?}``.
+    *budgets*: ``{task: {wcet_us, response_us, deadline_us}}``.
+    """
+    budgets = dict(budgets or {})
+    rows: List[dict] = []
+    violations = 0
+    for item in metrics_by_task or []:
+        if not isinstance(item, dict):
+            continue
+        task = str(item.get("task") or "").strip()
+        if not task:
+            continue
+        bud = budgets.get(task) or budgets.get(task.split("[", 1)[0]) or {}
+        checks = []
+        for key, label in (
+            ("wcet_us", "WCET"),
+            ("response_us", "Response"),
+            ("deadline_us", "Deadline"),
+            ("exec_max_us", "Exec Max"),
+            ("blocking_max_us", "Blocking Max"),
+        ):
+            measured = item.get(key)
+            limit = bud.get(key) if key in bud else bud.get(key.replace("_max", ""))
+            if measured is None:
+                continue
+            try:
+                mval = float(measured)
+            except (TypeError, ValueError):
+                continue
+            status = "info"
+            detail = f"{mval:g} µs"
+            if limit is not None:
+                try:
+                    lim = float(limit)
+                except (TypeError, ValueError):
+                    lim = None
+                if lim is not None and lim > 0:
+                    pct = 100.0 * (mval - lim) / lim
+                    if mval > lim:
+                        status = "fail"
+                        violations += 1
+                        detail = f"{mval:g} / {lim:g} µs (+{pct:.1f}%)"
+                    else:
+                        status = "pass"
+                        detail = f"{mval:g} / {lim:g} µs"
+            checks.append({"metric": key, "label": label, "status": status, "detail": detail})
+        if checks:
+            rows.append({"task": task, "checks": checks})
+    return {
+        "ok": True,
+        "message": (
+            f"{len(rows)} task budget row(s), {violations} violation(s)"
+            if rows else "No budget metrics to check"
+        ),
+        "tasks": rows,
+        "violations": violations,
+        "budgets_applied": bool(budgets),
+    }
+
+
+def build_optimization_advice(
+    findings: Sequence[dict],
+    *,
+    limit: int = 5,
+) -> Dict[str, Any]:
+    """Evidence-backed mitigation ideas from Analysis Findings."""
+    limit = max(1, min(20, int(limit or 5)))
+    items = enrich_findings_with_ids(findings)
+    ranked = detect_anomalies(items, limit=limit)
+    ideas: List[dict] = []
+    for a in ranked.get("anomalies") or []:
+        blob = f"{a.get('title')} {a.get('text')}".lower()
+        task = a.get("task") or ""
+        if "migrat" in blob or "thrash" in blob or "bounc" in blob:
+            ideas.append({
+                "title": f"Pin / affinity for {task or 'hot migrator'}",
+                "expected_impact": "High",
+                "risk": "Low",
+                "why": a.get("text") or a.get("title"),
+                "evidence_finding": a.get("id"),
+            })
+        elif "inversion" in blob or "mutex" in blob or "block" in blob:
+            ideas.append({
+                "title": "Reduce shared-lock contention / shorten critical section",
+                "expected_impact": "High",
+                "risk": "Medium",
+                "why": a.get("text") or a.get("title"),
+                "evidence_finding": a.get("id"),
+            })
+        elif "wcet" in blob or "spike" in blob or "cpu" in blob:
+            ideas.append({
+                "title": f"Profile and trim long slices on {task or 'hot task'}",
+                "expected_impact": "Medium",
+                "risk": "Medium",
+                "why": a.get("text") or a.get("title"),
+                "evidence_finding": a.get("id"),
+            })
+        elif "load" in blob or "balance" in blob:
+            ideas.append({
+                "title": "Rebalance task placement across cores",
+                "expected_impact": "Medium",
+                "risk": "Low",
+                "why": a.get("text") or a.get("title"),
+                "evidence_finding": a.get("id"),
+            })
+        else:
+            ideas.append({
+                "title": f"Investigate {a.get('title')}",
+                "expected_impact": "Medium",
+                "risk": "Low",
+                "why": a.get("text") or "",
+                "evidence_finding": a.get("id"),
+            })
+        if len(ideas) >= limit:
+            break
+    return {
+        "ok": True,
+        "message": f"{len(ideas)} optimization idea(s)",
+        "recommendations": ideas,
+        "disclaimer": "Simulation / estimate — not measured behavior",
+    }
+
+
+def explain_regression(
+    compare: Dict[str, Any],
+    findings: Optional[Sequence[dict]] = None,
+) -> Dict[str, Any]:
+    """Narrative explanation of a compare_performance / evaluate_regression result."""
+    compare = dict(compare or {})
+    primary = compare.get("primary_regression") or {}
+    failed = bool(compare.get("failed"))
+    label_a = compare.get("label_a") or "A"
+    label_b = compare.get("label_b") or "B"
+    lines = [
+        f"# Regression explanation — {label_a} vs {label_b}",
+        "",
+        str(compare.get("message") or ("REGRESSION DETECTED" if failed else "No regression")),
+        "",
+    ]
+    if primary:
+        lines.extend([
+            "## Primary change",
+            f"**{primary.get('label')}**: {primary.get('detail')}",
+            f"Candidate={primary.get('candidate')}, Baseline={primary.get('baseline')}",
+            "",
+        ])
+    lines.append("## Supporting checks")
+    for c in compare.get("checks") or []:
+        mark = {"pass": "✓", "fail": "✗", "skip": "·"}.get(c.get("status"), "?")
+        lines.append(f"- {mark} {c.get('label')}: {c.get('detail')}")
+    lines.append("")
+    anomalies = detect_anomalies(findings or [], limit=5) if findings else {"anomalies": []}
+    if anomalies.get("anomalies"):
+        lines.append("## Related findings on candidate")
+        for a in anomalies["anomalies"][:5]:
+            lines.append(f"- [{a.get('band')}] {a.get('title')} (`{a.get('id')}`)")
+        lines.append("")
+    conf = compare.get("confidence") or ("High" if failed else "Medium")
+    lines.extend([
+        f"## Confidence",
+        f"{conf} — {compare.get('evidence_quality') or 'Directly observed metric deltas'}",
+        "",
+    ])
+    return {
+        "ok": True,
+        "message": "Regression explained" if failed else "No regression to explain",
+        "failed": failed,
+        "markdown": "\n".join(lines),
+        "primary_regression": primary,
+        "confidence": conf,
+        "suggested_tools": [
+            {"name": "correlate_events", "arguments": {}, "reason": "Timeline for worst metric"},
+            {"name": "investigate", "arguments": {}, "reason": "Root-cause chain"},
+        ],
+    }
+
+
+def format_bookmark_label(kind: str, note: str = "") -> str:
+    """Semantic bookmark / annotation label (emoji + role + note)."""
+    key = str(kind or "evidence").strip().lower().replace("-", "_").replace(" ", "_")
+    if key in ("root", "cause", "rca"):
+        key = "root_cause"
+    if key in ("corr", "related"):
+        key = "correlated"
+    if key in ("ok", "normal", "ref"):
+        key = "reference"
+    emoji, role = _BOOKMARK_KINDS.get(key, _BOOKMARK_KINDS["evidence"])
+    note = str(note or "").strip()
+    if note:
+        return f"{emoji} {role}: {note}"[:240]
+    return f"{emoji} {role}"
+
+
+def build_investigation_replay(
+    *,
+    finding: Optional[dict] = None,
+    plan: Optional[Dict[str, Any]] = None,
+    tools_run: Optional[Sequence[str]] = None,
+    conclusion: str = "",
+    evidence_times: Optional[Sequence[float]] = None,
+) -> Dict[str, Any]:
+    """Structured investigation replay card for UI / export."""
+    tools_run = [str(t) for t in (tools_run or []) if t]
+    plan = plan or default_investigation_plan(
+        goal=f"Investigate: {(finding or {}).get('title') or 'finding'}"
+    )
+    if tools_run:
+        plan = mark_plan_steps_from_tools(plan, tools_run)
+    steps = []
+    for s in plan.get("steps") or []:
+        steps.append({
+            "id": s.get("id"),
+            "label": s.get("label"),
+            "status": s.get("status"),
+        })
+    times = []
+    for t in evidence_times or []:
+        try:
+            times.append(float(t))
+        except (TypeError, ValueError):
+            pass
+    suggested: List[Dict[str, Any]] = []
+    if times:
+        suggested.append({
+            "name": "set_cursors",
+            "arguments": {"timestamps": times[:8]},
+            "reason": "Replay evidence cursors",
+        })
+    suggested.append({
+        "name": "generate_report",
+        "arguments": {"report_type": "root_cause"},
+        "reason": "Save structured RCA",
+    })
+    return {
+        "ok": True,
+        "message": "Investigation replay",
+        "finding": {
+            "id": (finding or {}).get("id"),
+            "title": (finding or {}).get("title"),
+            "severity": (finding or {}).get("severity"),
+        } if finding else None,
+        "steps": steps,
+        "tools_run": tools_run,
+        "conclusion": str(conclusion or "").strip(),
+        "evidence_times": times[:20],
+        "suggested_tools": suggested,
+    }
+
+
+def estimate_what_if(
+    *,
+    change: str,
+    task: str = "",
+    findings: Optional[Sequence[dict]] = None,
+    baseline_metrics: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Labelled what-if estimate (not a deterministic scheduler simulation)."""
+    change = str(change or "").strip()
+    task = str(task or "").strip()
+    blob = f"{change} {task}".lower()
+    findings = list(findings or [])
+    focus = resolve_finding(enrich_findings_with_ids(findings), "") if findings else None
+    effect = "≈"
+    reason = "Insufficient correlated evidence for a directional estimate"
+    confidence = "Low"
+    if "pin" in blob or "affin" in blob or "core" in blob:
+        effect = "↓ migrations / cache miss risk"
+        reason = "Affinity reduces cross-core bounce when thrashing dominates"
+        confidence = "Medium"
+    elif "priorit" in blob:
+        effect = "↓ blocking wait for higher-priority waiter (risk: starve lower)"
+        reason = "Priority changes alter preemption and inherit geometry"
+        confidence = "Medium"
+    elif "mutex" in blob or "lock" in blob or "contention" in blob:
+        effect = "↓ blocking Max / response"
+        reason = "Shorter hold times cut waiters' off-CPU gaps"
+        confidence = "Medium"
+    elif "migrat" in blob:
+        effect = "↓ migration rate; ≈ WCET if CPU-bound"
+        reason = "Migration cost is overhead, not always payload"
+        confidence = "Medium"
+    return {
+        "ok": True,
+        "message": "What-if estimate (not measured)",
+        "disclaimer": "Simulation / estimate — not measured behavior",
+        "change": change,
+        "task": task,
+        "estimated_effect": effect,
+        "reason": reason,
+        "confidence": confidence,
+        "evidence_quality": "Possible explanation",
+        "related_finding": (focus or {}).get("id") if focus else None,
+        "baseline_metrics": baseline_metrics or {},
+        "suggested_tools": [
+            {"name": "optimize", "arguments": {}, "reason": "Evidence-backed mitigations"},
+            {"name": "correlate_events", "arguments": {"task": task} if task else {},
+             "reason": "Verify correlated window"},
+        ],
+    }
+
+
+def analyze_multi_traces(
+    snapshots: Sequence[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Rank multiple trace snapshots (best scheduling behavior first)."""
+    rows = []
+    for snap in snapshots or []:
+        if not isinstance(snap, dict):
+            continue
+        name = str(snap.get("name") or snap.get("label") or f"trace{len(rows)}")
+        metrics = snap.get("metrics") if isinstance(snap.get("metrics"), dict) else snap
+        mig = metrics.get("migrations")
+        score = metrics.get("load_balance_score")
+        missed = metrics.get("missed_ticks")
+        # Higher score is better; lower migrations/missed is better.
+        rank_key = (
+            -(float(score) if score is not None else 0.0),
+            float(mig) if mig is not None else 0.0,
+            float(missed) if missed is not None else 0.0,
+        )
+        rows.append({
+            "name": name,
+            "metrics": {
+                "migrations": mig,
+                "load_balance_score": score,
+                "missed_ticks": missed,
+                "migrated_tasks": metrics.get("migrated_tasks"),
+                "context_switches": metrics.get("context_switches"),
+            },
+            "_key": rank_key,
+        })
+    rows.sort(key=lambda r: r["_key"])
+    for i, r in enumerate(rows, start=1):
+        r["rank"] = i
+        del r["_key"]
+    best = rows[0]["name"] if rows else None
+    return {
+        "ok": True,
+        "message": (
+            f"Ranked {len(rows)} trace(s); best≈{best}" if rows else "No traces"
+        ),
+        "ranking": rows,
+        "best": best,
+        "suggested_tools": [
+            {"name": "compare_performance", "arguments": {},
+             "reason": "Pairwise A vs B deltas"},
+            {"name": "regression_explain", "arguments": {},
+             "reason": "Explain primary regression"},
+        ],
+    }
+
+
+# --- Heuristic what-if simulator / optimization experiments ---------------
+
+_CORE_TOKEN_RE = re.compile(
+    r"(?:core[_\s-]*)?(\d+)\b|(?:c)(\d+)\b",
+    re.IGNORECASE,
+)
+
+
+def _gini_local(values: Sequence[float]) -> float:
+    vals = [float(v) for v in values if v is not None]
+    n = len(vals)
+    if n < 2:
+        return 0.0
+    total = sum(vals)
+    if total <= 0:
+        return 0.0
+    sorted_v = sorted(vals)
+    cumsum = 0.0
+    gini_num = 0.0
+    for v in sorted_v:
+        cumsum += v
+        gini_num += cumsum
+    gini = (n + 1.0) / n - (2.0 * gini_num) / (n * total)
+    return max(0.0, min(1.0, gini))
+
+
+def _load_balance_score_from_pcts(pcts: Sequence[float]) -> float:
+    return max(0.0, 100.0 * (1.0 - _gini_local(pcts)))
+
+
+def parse_what_if_change(change: str, task: str = "") -> Dict[str, Any]:
+    """Parse a natural-language change into a structured action."""
+    text = str(change or "").strip()
+    blob = text.lower()
+    task = str(task or "").strip()
+    action = {"kind": "unknown", "task": task, "raw": text}
+    # pin / affinity to core
+    if any(k in blob for k in ("pin", "affin", "bind", "stick")):
+        action["kind"] = "pin"
+        m = _CORE_TOKEN_RE.search(blob)
+        if m:
+            action["core"] = int(m.group(1) or m.group(2))
+        else:
+            action["core"] = None  # choose later from slices
+    elif "priorit" in blob:
+        action["kind"] = "priority"
+        action["direction"] = "up" if any(
+            w in blob for w in ("raise", "increase", "higher", "boost", "up")
+        ) else ("down" if any(
+            w in blob for w in ("lower", "decrease", "reduce", "down")
+        ) else "up")
+    elif any(k in blob for k in ("mutex", "lock", "contention", "critical")):
+        action["kind"] = "reduce_contention"
+        # default 50% reduction of blocking attributed to contention
+        action["factor"] = 0.5
+        m = re.search(r"(\d+(?:\.\d+)?)\s*%", blob)
+        if m:
+            action["factor"] = max(0.05, min(0.95, float(m.group(1)) / 100.0))
+    elif "migrat" in blob:
+        action["kind"] = "reduce_migration"
+        action["factor"] = 0.5
+    return action
+
+
+def _dominant_core_from_slices(slices: Sequence[dict]) -> Optional[int]:
+    by_core: Dict[str, float] = {}
+    for sl in slices or []:
+        core = str(sl.get("core") or "").strip()
+        if not core:
+            continue
+        try:
+            dur = float(sl.get("duration") or 0)
+        except (TypeError, ValueError):
+            dur = 0.0
+        by_core[core] = by_core.get(core, 0.0) + max(0.0, dur)
+    if not by_core:
+        return None
+    best = max(by_core.items(), key=lambda kv: kv[1])[0]
+    m = re.search(r"(\d+)", best)
+    return int(m.group(1)) if m else None
+
+
+def _quietest_core(core_utils: Sequence[Any]) -> Optional[int]:
+    best_core = None
+    best_pct = None
+    for row in core_utils or []:
+        if isinstance(row, (list, tuple)) and len(row) >= 2:
+            name, pct = row[0], row[1]
+        elif isinstance(row, dict):
+            name, pct = row.get("core") or row.get("name"), row.get("pct") or row.get("util")
+        else:
+            continue
+        try:
+            p = float(pct)
+        except (TypeError, ValueError):
+            continue
+        m = re.search(r"(\d+)", str(name))
+        if not m:
+            continue
+        c = int(m.group(1))
+        if best_pct is None or p < best_pct:
+            best_pct = p
+            best_core = c
+    return best_core
+
+
+def _core_util_map(core_utils: Sequence[Any]) -> Dict[int, float]:
+    out: Dict[int, float] = {}
+    for row in core_utils or []:
+        if isinstance(row, (list, tuple)) and len(row) >= 2:
+            name, pct = row[0], row[1]
+        elif isinstance(row, dict):
+            name, pct = row.get("core") or row.get("name"), row.get("pct") or row.get("util")
+        else:
+            continue
+        m = re.search(r"(\d+)", str(name))
+        if not m:
+            continue
+        try:
+            out[int(m.group(1))] = float(pct)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def simulate_what_if(
+    *,
+    change: str,
+    task: str = "",
+    slices: Optional[Sequence[dict]] = None,
+    migrations: Optional[Sequence[dict]] = None,
+    blocking_gaps: Optional[Sequence[dict]] = None,
+    core_utils: Optional[Sequence[Any]] = None,
+    findings: Optional[Sequence[dict]] = None,
+) -> Dict[str, Any]:
+    """Heuristic replay of a change against measured slices (not FreeRTOS kernel).
+
+    Uses measured execution durations and migration counts; reallocates task CPU
+    when pinning and scales blocking for contention/priority experiments.
+    """
+    slices = list(slices or [])
+    migrations = list(migrations or [])
+    gaps = list(blocking_gaps or [])
+    action = parse_what_if_change(change, task)
+    task = action.get("task") or task
+
+    base_mig = len(migrations)
+    base_block = 0.0
+    for g in gaps:
+        try:
+            base_block += float(g.get("gap") if g.get("gap") is not None else g.get("duration") or 0)
+        except (TypeError, ValueError):
+            pass
+    util_map = _core_util_map(core_utils or [])
+    base_pcts = list(util_map.values()) or [0.0]
+    base_lb = _load_balance_score_from_pcts(base_pcts)
+
+    # Task CPU ns from slices
+    task_ns = 0.0
+    for sl in slices:
+        try:
+            task_ns += float(sl.get("duration") or 0)
+        except (TypeError, ValueError):
+            pass
+
+    sim_mig = base_mig
+    sim_block = base_block
+    sim_util = dict(util_map)
+    notes = []
+    confidence = "Low"
+    kind = action.get("kind")
+
+    if kind == "pin":
+        core = action.get("core")
+        if core is None:
+            core = _dominant_core_from_slices(slices)
+        if core is None:
+            core = _quietest_core(core_utils or [])
+        action["core"] = core
+        if core is not None:
+            # Eliminate migrations for this task (pinned)
+            sim_mig = 0
+            # Move all task CPU onto pin core for util estimate
+            # Remove task share from other cores (approximate by current slice cores)
+            by_core_ns: Dict[int, float] = {}
+            for sl in slices:
+                m = re.search(r"(\d+)", str(sl.get("core") or ""))
+                if not m:
+                    continue
+                c = int(m.group(1))
+                try:
+                    by_core_ns[c] = by_core_ns.get(c, 0.0) + float(sl.get("duration") or 0)
+                except (TypeError, ValueError):
+                    pass
+            # Relative util shift: convert ns share to % points proportional to task_ns
+            if task_ns > 0 and sim_util:
+                # Estimate task's util % as mean slice contribution; use fraction of total util
+                total_util = sum(sim_util.values()) or 1.0
+                task_util_est = min(total_util, max(1.0, total_util * 0.05))
+                if by_core_ns:
+                    # redistribute measured proportions
+                    for c, ns in by_core_ns.items():
+                        share = task_util_est * (ns / task_ns)
+                        if c in sim_util:
+                            sim_util[c] = max(0.0, sim_util[c] - share)
+                    sim_util[core] = sim_util.get(core, 0.0) + task_util_est
+                else:
+                    # unknown distribution: add to pin core only
+                    sim_util[core] = sim_util.get(core, 0.0) + task_util_est
+            notes.append(f"Pinned {task or 'task'} → Core_{core}; migrations set to 0")
+            confidence = "Medium" if slices or migrations else "Low"
+        else:
+            notes.append("Could not resolve target core; falling back to qualitative estimate")
+            return estimate_what_if(change=change, task=task, findings=findings)
+
+    elif kind == "reduce_contention":
+        factor = float(action.get("factor") or 0.5)
+        sim_block = base_block * (1.0 - factor)
+        notes.append(f"Scaled blocking by ×{1.0 - factor:.2f} (contention −{factor * 100:.0f}%)")
+        confidence = "Medium" if gaps else "Low"
+
+    elif kind == "priority":
+        # Soft: assume raising priority cuts blocking ~25%; lowering increases ~15%
+        if action.get("direction") == "up":
+            sim_block = base_block * 0.75
+            notes.append("Raised priority: estimated −25% blocking wait (risk: starve lower)")
+        else:
+            sim_block = base_block * 1.15
+            notes.append("Lowered priority: estimated +15% blocking wait")
+        confidence = "Low"
+
+    elif kind == "reduce_migration":
+        factor = float(action.get("factor") or 0.5)
+        sim_mig = int(round(base_mig * (1.0 - factor)))
+        notes.append(f"Migration count scaled by ×{1.0 - factor:.2f}")
+        confidence = "Medium" if migrations else "Low"
+
+    else:
+        # Fall back to keyword estimate but mark as non-simulated
+        fallback = estimate_what_if(change=change, task=task, findings=findings)
+        fallback["simulator"] = "none"
+        fallback["disclaimer"] = (
+            "Heuristic estimate only — no slice replay "
+            "(phrase change as pin/affinity/priority/mutex to run simulator)"
+        )
+        return fallback
+
+    sim_lb = _load_balance_score_from_pcts(list(sim_util.values()) or base_pcts)
+    deltas = {
+        "migrations": sim_mig - base_mig,
+        "blocking_ns": sim_block - base_block,
+        "load_balance_score": sim_lb - base_lb,
+    }
+    cost_base = (
+        1.0 * base_mig
+        + 0.000001 * base_block
+        + 0.5 * max(0.0, 100.0 - base_lb)
+    )
+    cost_sim = (
+        1.0 * sim_mig
+        + 0.000001 * sim_block
+        + 0.5 * max(0.0, 100.0 - sim_lb)
+    )
+    return {
+        "ok": True,
+        "message": "What-if heuristic simulation",
+        "disclaimer": "Heuristic simulator — not FreeRTOS kernel / not measured",
+        "simulator": "slice_replay_v1",
+        "change": change,
+        "task": task,
+        "action": action,
+        "baseline": {
+            "migrations": base_mig,
+            "blocking_ns": base_block,
+            "load_balance_score": round(base_lb, 2),
+            "slices": len(slices),
+        },
+        "simulated": {
+            "migrations": sim_mig,
+            "blocking_ns": sim_block,
+            "load_balance_score": round(sim_lb, 2),
+        },
+        "deltas": {
+            "migrations": deltas["migrations"],
+            "blocking_ns": deltas["blocking_ns"],
+            "load_balance_score": round(deltas["load_balance_score"], 2),
+            "cost": round(cost_sim - cost_base, 3),
+        },
+        "cost": {"baseline": round(cost_base, 3), "simulated": round(cost_sim, 3)},
+        "notes": notes,
+        "confidence": confidence,
+        "evidence_quality": "Strong correlation" if confidence == "Medium" else "Possible explanation",
+        "estimated_effect": (
+            f"Δmig={deltas['migrations']:+d}, "
+            f"Δblock_ns={deltas['blocking_ns']:+.0f}, "
+            f"ΔLB={deltas['load_balance_score']:+.1f}"
+        ),
+        "suggested_tools": [
+            {"name": "optimize_experiment", "arguments": {"task": task} if task else {},
+             "reason": "Try ranked automatic experiments"},
+            {"name": "correlate_events", "arguments": {"task": task} if task else {},
+             "reason": "Verify on timeline"},
+        ],
+    }
+
+
+def propose_optimization_experiments(
+    *,
+    task: str = "",
+    slices: Optional[Sequence[dict]] = None,
+    findings: Optional[Sequence[dict]] = None,
+    core_utils: Optional[Sequence[Any]] = None,
+    limit: int = 5,
+) -> List[Dict[str, Any]]:
+    """Candidate changes for automatic optimization experiments."""
+    limit = max(1, min(12, int(limit or 5)))
+    task = str(task or "").strip()
+    if not task and findings:
+        ranked = detect_anomalies(findings, limit=3)
+        for a in ranked.get("anomalies") or []:
+            t = a.get("task") or _guess_task_name(str(a.get("text") or ""))
+            if t:
+                task = t
+                break
+    candidates: List[Dict[str, Any]] = []
+    dom = _dominant_core_from_slices(slices or [])
+    quiet = _quietest_core(core_utils or [])
+    if task and dom is not None:
+        candidates.append({
+            "change": f"pin {task} to Core_{dom}",
+            "task": task,
+            "rationale": "Pin to dominant execution core",
+        })
+    if task and quiet is not None and quiet != dom:
+        candidates.append({
+            "change": f"pin {task} to Core_{quiet}",
+            "task": task,
+            "rationale": "Pin to quietest core for load balance",
+        })
+    if task:
+        candidates.append({
+            "change": f"reduce mutex contention 50% for {task}",
+            "task": task,
+            "rationale": "Shorten critical sections / lock hold time",
+        })
+        candidates.append({
+            "change": f"raise priority of {task}",
+            "task": task,
+            "rationale": "Reduce blocking wait (risk: starvation)",
+        })
+        candidates.append({
+            "change": f"reduce migrations 50% for {task}",
+            "task": task,
+            "rationale": "Affinity / migration throttle",
+        })
+    # From findings text
+    for a in (detect_anomalies(findings or [], limit=3).get("anomalies") or []):
+        t = a.get("task") or task
+        blob = f"{a.get('title')} {a.get('text')}".lower()
+        if t and ("thrash" in blob or "migrat" in blob) and dom is not None:
+            cand = {
+                "change": f"pin {t} to Core_{dom}",
+                "task": t,
+                "rationale": f"From finding {a.get('id')}",
+            }
+            if cand not in candidates:
+                candidates.append(cand)
+    # dedupe by change string
+    seen = set()
+    out = []
+    for c in candidates:
+        key = c["change"]
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(c)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def run_optimization_experiments(
+    *,
+    task: str = "",
+    slices: Optional[Sequence[dict]] = None,
+    migrations: Optional[Sequence[dict]] = None,
+    blocking_gaps: Optional[Sequence[dict]] = None,
+    core_utils: Optional[Sequence[Any]] = None,
+    findings: Optional[Sequence[dict]] = None,
+    limit: int = 5,
+) -> Dict[str, Any]:
+    """Run a small set of what-if simulations and rank by cost improvement."""
+    cands = propose_optimization_experiments(
+        task=task, slices=slices, findings=findings, core_utils=core_utils, limit=limit,
+    )
+    results = []
+    for c in cands:
+        sim = simulate_what_if(
+            change=c["change"],
+            task=c.get("task") or task,
+            slices=slices,
+            migrations=migrations,
+            blocking_gaps=blocking_gaps,
+            core_utils=core_utils,
+            findings=findings,
+        )
+        if sim.get("simulator") == "none":
+            continue
+        delta_cost = (sim.get("deltas") or {}).get("cost")
+        results.append({
+            "change": c["change"],
+            "task": c.get("task") or task,
+            "rationale": c.get("rationale"),
+            "deltas": sim.get("deltas"),
+            "baseline": sim.get("baseline"),
+            "simulated": sim.get("simulated"),
+            "cost_delta": delta_cost,
+            "confidence": sim.get("confidence"),
+            "notes": sim.get("notes"),
+        })
+    results.sort(key=lambda r: (r.get("cost_delta") is None, r.get("cost_delta") or 0.0))
+    for i, r in enumerate(results, start=1):
+        r["rank"] = i
+    best = results[0] if results else None
+    return {
+        "ok": True,
+        "message": (
+            f"{len(results)} experiment(s); best={best['change']}" if best
+            else "No runnable experiments (need task slices / metrics)"
+        ),
+        "disclaimer": "Heuristic simulator — not FreeRTOS kernel / not measured",
+        "experiments": results,
+        "best": best,
+        "suggested_tools": ([
+            {"name": "what_if", "arguments": {
+                "change": best.get("change") or "",
+                "task": best.get("task") or task,
+            }, "reason": "Re-run best experiment detail"},
+        ] if best else []) + [
+            {"name": "bookmark_finding", "arguments": {},
+             "reason": "Mark evidence on timeline"},
+        ],
+    }
+# ===========================================================================
 # ai_tools
 # ===========================================================================
 
@@ -16396,6 +18115,19 @@ AI_TOOL_CLEAR_MARKS = "clear_marks"
 AI_TOOL_RESET_VIEW = "reset_view"
 AI_TOOL_SEARCH_TIMELINE = "search_timeline"
 AI_TOOL_TRIGGER_COMPARE = "trigger_compare"
+AI_TOOL_INVESTIGATE = "investigate"
+AI_TOOL_DETECT_ANOMALIES = "detect_anomalies"
+AI_TOOL_CORRELATE_EVENTS = "correlate_events"
+AI_TOOL_COMPARE_PERFORMANCE = "compare_performance"
+AI_TOOL_GENERATE_REPORT = "generate_report"
+AI_TOOL_CHECK_BUDGET = "check_budget"
+AI_TOOL_OPTIMIZE = "optimize"
+AI_TOOL_REGRESSION_EXPLAIN = "regression_explain"
+AI_TOOL_BOOKMARK_FINDING = "bookmark_finding"
+AI_TOOL_INVESTIGATION_REPLAY = "investigation_replay"
+AI_TOOL_WHAT_IF = "what_if"
+AI_TOOL_OPTIMIZE_EXPERIMENT = "optimize_experiment"
+AI_TOOL_ANALYZE_TRACES = "analyze_traces"
 
 AI_VIEWER_TOOL_NAMES: Tuple[str, ...] = (
     AI_TOOL_SET_CURSORS,
@@ -16410,6 +18142,23 @@ AI_VIEWER_TOOL_NAMES: Tuple[str, ...] = (
     AI_TOOL_RESET_VIEW,
     AI_TOOL_SEARCH_TIMELINE,
     AI_TOOL_TRIGGER_COMPARE,
+    AI_TOOL_INVESTIGATE,
+    AI_TOOL_DETECT_ANOMALIES,
+    AI_TOOL_CORRELATE_EVENTS,
+    AI_TOOL_COMPARE_PERFORMANCE,
+    AI_TOOL_GENERATE_REPORT,
+    AI_TOOL_CHECK_BUDGET,
+    AI_TOOL_OPTIMIZE,
+    AI_TOOL_REGRESSION_EXPLAIN,
+    AI_TOOL_BOOKMARK_FINDING,
+    AI_TOOL_INVESTIGATION_REPLAY,
+    AI_TOOL_WHAT_IF,
+    AI_TOOL_OPTIMIZE_EXPERIMENT,
+    AI_TOOL_ANALYZE_TRACES,
+)
+
+AI_BOOKMARK_KINDS: Tuple[str, ...] = (
+    "root_cause", "evidence", "correlated", "reference",
 )
 
 AI_FIND_MODES: Tuple[str, ...] = (
@@ -16513,11 +18262,27 @@ def parse_btf_highlight_href(href: Any) -> str:
 # Appended to the base system prompt. Keep in sync with web aiTools.js.
 AI_TOOL_SYSTEM_ADDENDUM = (
     "When the user asks to show, focus, inspect, zoom, highlight, annotate, "
-    "export, or jump to a time range, task, or core pair, you MUST invoke the "
+    "export, investigate, explain, or jump to a time range, task, or core pair, "
+    "you MUST invoke the "
     "matching viewer tool (native function call) in addition to your markdown "
     "answer. Valid tools: set_cursors, zoom_to_range, highlight_task, "
     "set_view_mode, open_corridor_inspector, add_annotation, query_raw_metric, "
-    "export_report, clear_marks, reset_view, search_timeline, trigger_compare. "
+    "export_report, clear_marks, reset_view, search_timeline, trigger_compare, "
+    "investigate, detect_anomalies, correlate_events, compare_performance, "
+    "generate_report, check_budget, optimize, regression_explain, "
+    "bookmark_finding, investigation_replay, what_if, optimize_experiment, analyze_traces. "
+    "For root-cause or Investigate templates: call detect_anomalies and "
+    "investigate(finding_id) first for a root-cause chain, then "
+    "correlate_events / query_raw_metric / search_timeline, then set_cursors "
+    "+ zoom_to_range + highlight_task on the worst episode before concluding. "
+    "Use compare_performance for structured A vs B deltas (two tabs); "
+    "regression_explain after compare to narrate the primary change. "
+    "Use generate_report for a typed engineering markdown report, then "
+    "export_report to save HTML/CSV. "
+    "Use check_budget for WCET/response/deadline budgets; optimize for "
+    "evidence-backed mitigations; what_if for heuristic slice-replay simulation; optimize_experiment to rank automatic candidates; "
+    "analyze_traces to rank all open tabs; bookmark_finding to pin semantic "
+    "marks; investigation_replay to summarise a completed investigation. "
     "Use query_raw_metric when you need the exact per-task "
     "series (priority-inheritance episodes, execution slices, migrations, "
     "blocking gaps, sync STI, or findings lines) instead of the summarised "
@@ -16527,6 +18292,8 @@ AI_TOOL_SYSTEM_ADDENDUM = (
     "tabs are open to pull Trace Compare diffs. Use add_annotation to pin a "
     "note on a spike. Use export_report to save findings, diagrams, and GUI "
     "state as HTML or CSV. "
+    "For what-if / optimize_experiment, label results as heuristic (not FreeRTOS kernel). For optimize advice questions, label estimates as "
+    "'Simulation / estimate — not measured behavior' and cite evidence. "
     "Tool timestamps use the same numeric trace time "
     "unit as jump:TIME. After tools run, summarise what you changed. "
     "If you cannot emit a native function call, emit one fenced btftool JSON "
@@ -16844,6 +18611,332 @@ def ai_viewer_tools() -> List[Dict[str, Any]]:
                         },
                     },
                 },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_INVESTIGATE,
+                "description": (
+                    "Build a structured investigation context for one Analysis "
+                    "Finding (hypotheses, evidence chain, suggested next tools). "
+                    "Call this first during Investigate / Root cause workflows. "
+                    "finding_id may be the finding id, 1-based index, or title "
+                    "substring; omit to focus the top warning/error."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "finding_id": {
+                            "type": "string",
+                            "description": (
+                                "Finding id (e.g. thrashing), 1-based index, "
+                                "or title substring. Empty = top actionable finding."
+                            ),
+                        },
+                        "depth": {
+                            "type": "integer",
+                            "description": "Investigation depth 1–5 (default 2).",
+                        },
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_DETECT_ANOMALIES,
+                "description": (
+                    "Rank Analysis Findings as Critical / Warning / Info anomalies "
+                    "(WCET spikes, thrashing, blocking, inversion, deadlines, …)."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "limit": {
+                            "type": "integer",
+                            "description": "Max anomalies to return (1–40, default 10).",
+                        },
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_CORRELATE_EVENTS,
+                "description": (
+                    "Cross-task/cross-metric timeline correlation for a task: "
+                    "merge blocking, execution, migrations, sync, priority "
+                    "inheritance, and Find hits into one ordered event list."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "task": {
+                            "type": "string",
+                            "description": "Task display name, id, or merge key.",
+                        },
+                        "around_time": {
+                            "type": "number",
+                            "description": "Optional center time (trace units).",
+                        },
+                        "window": {
+                            "type": "number",
+                            "description": "Half-width around around_time (trace units).",
+                        },
+                    },
+                    "required": ["task"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_COMPARE_PERFORMANCE,
+                "description": (
+                    "Structured performance deltas between two open tabs "
+                    "(regression rules + confidence). Prefer this over raw CSV "
+                    "when explaining A vs B; trigger_compare still opens the dialog."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "tab_a": {
+                            "type": "string",
+                            "description": "Candidate tab (index or name).",
+                        },
+                        "tab_b": {
+                            "type": "string",
+                            "description": "Baseline tab (index or name).",
+                        },
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_GENERATE_REPORT,
+                "description": (
+                    "Build a typed engineering markdown report from Analysis "
+                    "Findings (executive / performance / root_cause / regression / "
+                    "optimization / bug / ci). Does not save a file — call "
+                    "export_report afterward to download HTML/CSV."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "report_type": {
+                            "type": "string",
+                            "description": (
+                                "executive|performance|root_cause|regression|"
+                                "optimization|bug|ci"
+                            ),
+                        },
+                        "finding_id": {
+                            "type": "string",
+                            "description": "Optional focus finding id / index / title.",
+                        },
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_CHECK_BUDGET,
+                "description": (
+                    "Compare per-task WCET / response / deadline metrics against "
+                    "optional budgets. Omit tasks to let the host build rows from "
+                    "Analysis Findings task names."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "budgets": {
+                            "type": "object",
+                            "description": (
+                                "Map of task → {wcet_us, response_us, deadline_us}."
+                            ),
+                        },
+                        "tasks": {
+                            "type": "array",
+                            "description": (
+                                "Optional metric rows: {task, wcet_us?, response_us?, "
+                                "deadline_us?, exec_max_us?, blocking_max_us?}."
+                            ),
+                        },
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_OPTIMIZE,
+                "description": (
+                    "Evidence-backed optimization / mitigation ideas from Analysis "
+                    "Findings (labelled as estimates, not measured behavior)."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "limit": {
+                            "type": "integer",
+                            "description": "Max recommendations (1–20, default 5).",
+                        },
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_REGRESSION_EXPLAIN,
+                "description": (
+                    "Explain the primary A vs B regression after comparing two "
+                    "open tabs (runs compare_performance then narrates)."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "tab_a": {
+                            "type": "string",
+                            "description": "Candidate tab (index or name).",
+                        },
+                        "tab_b": {
+                            "type": "string",
+                            "description": "Baseline tab (index or name).",
+                        },
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_BOOKMARK_FINDING,
+                "description": (
+                    "Pin a semantic investigation annotation at a timestamp "
+                    "(root_cause / evidence / correlated / reference). GUI mutate."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "time": {
+                            "type": "number",
+                            "description": "Trace time-unit timestamp.",
+                        },
+                        "kind": {
+                            "type": "string",
+                            "enum": list(AI_BOOKMARK_KINDS),
+                            "description": (
+                                "root_cause | evidence | correlated | reference"
+                            ),
+                        },
+                        "note": {
+                            "type": "string",
+                            "description": "Optional short note appended to the label.",
+                        },
+                    },
+                    "required": ["time", "kind"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_INVESTIGATION_REPLAY,
+                "description": (
+                    "Build a structured investigation-replay card (steps, tools "
+                    "run, conclusion, evidence times) for UI / export."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "finding_id": {
+                            "type": "string",
+                            "description": "Finding id / index / title substring.",
+                        },
+                        "conclusion": {
+                            "type": "string",
+                            "description": "Short investigation conclusion text.",
+                        },
+                        "tools_run": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Tool names already executed.",
+                        },
+                        "evidence_times": {
+                            "type": "array",
+                            "items": {"type": "number"},
+                            "description": "Evidence timestamps for cursor replay.",
+                        },
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_WHAT_IF,
+                "description": (
+                    "Heuristic what-if simulation from measured execution slices, "
+                    "migrations, blocking gaps, and core util (not FreeRTOS kernel)."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "change": {
+                            "type": "string",
+                            "description": (
+                                "Proposed change, e.g. pin CS[28] to Core_0, "
+                                "raise priority, reduce mutex contention 50%."
+                            ),
+                        },
+                        "task": {
+                            "type": "string",
+                            "description": "Optional focus task (inferred from change when omitted).",
+                        },
+                    },
+                    "required": ["change"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_OPTIMIZE_EXPERIMENT,
+                "description": (
+                    "Run a small set of automatic optimization experiments "
+                    "(pin/priority/contention/migration) via the heuristic "
+                    "simulator and rank by estimated cost improvement."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "task": {
+                            "type": "string",
+                            "description": "Focus task (defaults from top finding).",
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Max experiments (1–12, default 5).",
+                        },
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": AI_TOOL_ANALYZE_TRACES,
+                "description": (
+                    "Rank all loaded trace tabs by scheduling behavior "
+                    "(load balance, migrations, missed ticks)."
+                ),
+                "parameters": {"type": "object", "properties": {}},
             },
         },
     ]
@@ -17204,6 +19297,18 @@ def is_query_tool(name: str) -> bool:
         AI_TOOL_QUERY_RAW_METRIC,
         AI_TOOL_SEARCH_TIMELINE,
         AI_TOOL_TRIGGER_COMPARE,
+        AI_TOOL_INVESTIGATE,
+        AI_TOOL_DETECT_ANOMALIES,
+        AI_TOOL_CORRELATE_EVENTS,
+        AI_TOOL_COMPARE_PERFORMANCE,
+        AI_TOOL_GENERATE_REPORT,
+        AI_TOOL_CHECK_BUDGET,
+        AI_TOOL_OPTIMIZE,
+        AI_TOOL_REGRESSION_EXPLAIN,
+        AI_TOOL_INVESTIGATION_REPLAY,
+        AI_TOOL_WHAT_IF,
+        AI_TOOL_OPTIMIZE_EXPERIMENT,
+        AI_TOOL_ANALYZE_TRACES,
     )
 
 
@@ -17220,6 +19325,7 @@ def tool_mutates_gui(name: str) -> bool:
         AI_TOOL_SET_VIEW_MODE,
         AI_TOOL_OPEN_CORRIDOR,
         AI_TOOL_ADD_ANNOTATION,
+        AI_TOOL_BOOKMARK_FINDING,
         AI_TOOL_CLEAR_MARKS,
         AI_TOOL_RESET_VIEW,
     )
@@ -17338,6 +19444,129 @@ def validate_tool_call(name: str, args: Optional[Dict[str, Any]]) -> Tuple[Optio
             "tab_a": str(a.get("tab_a") if a.get("tab_a") is not None else "").strip(),
             "tab_b": str(a.get("tab_b") if a.get("tab_b") is not None else "").strip(),
         }, ""
+    if name == AI_TOOL_INVESTIGATE:
+        depth_raw = a.get("depth", 2)
+        try:
+            depth = int(depth_raw)
+        except (TypeError, ValueError):
+            return None, "depth must be an integer 1–5"
+        depth = max(1, min(5, depth))
+        return {
+            "finding_id": str(a.get("finding_id") or "").strip(),
+            "depth": depth,
+        }, ""
+    if name == AI_TOOL_DETECT_ANOMALIES:
+        lim_raw = a.get("limit", 10)
+        try:
+            limit = int(lim_raw)
+        except (TypeError, ValueError):
+            return None, "limit must be an integer 1–40"
+        return {"limit": max(1, min(40, limit))}, ""
+    if name == AI_TOOL_CORRELATE_EVENTS:
+        task = str(a.get("task") or "").strip()
+        if not task:
+            return None, "task must be a non-empty string"
+        out: Dict[str, Any] = {"task": task, "around_time": None, "window": 0.0}
+        if a.get("around_time") is not None and str(a.get("around_time")).strip() != "":
+            try:
+                out["around_time"] = float(a.get("around_time"))
+            except (TypeError, ValueError):
+                return None, "around_time must be a number"
+        if a.get("window") is not None and str(a.get("window")).strip() != "":
+            try:
+                out["window"] = max(0.0, float(a.get("window")))
+            except (TypeError, ValueError):
+                return None, "window must be a number"
+        return out, ""
+    if name == AI_TOOL_COMPARE_PERFORMANCE:
+        return {
+            "tab_a": str(a.get("tab_a") if a.get("tab_a") is not None else "").strip(),
+            "tab_b": str(a.get("tab_b") if a.get("tab_b") is not None else "").strip(),
+        }, ""
+    if name == AI_TOOL_GENERATE_REPORT:
+        return {
+            "report_type": str(a.get("report_type") or "performance").strip().lower()
+            or "performance",
+            "finding_id": str(a.get("finding_id") or "").strip(),
+        }, ""
+    if name == AI_TOOL_CHECK_BUDGET:
+        budgets = a.get("budgets")
+        if budgets is not None and not isinstance(budgets, dict):
+            return None, "budgets must be an object"
+        tasks = a.get("tasks")
+        if tasks is not None and not isinstance(tasks, (list, tuple)):
+            return None, "tasks must be an array"
+        out: Dict[str, Any] = {}
+        if isinstance(budgets, dict):
+            out["budgets"] = budgets
+        if isinstance(tasks, (list, tuple)):
+            out["tasks"] = [t for t in tasks if isinstance(t, dict)]
+        return out, ""
+    if name == AI_TOOL_OPTIMIZE:
+        lim_raw = a.get("limit", 5)
+        try:
+            limit = int(lim_raw)
+        except (TypeError, ValueError):
+            return None, "limit must be an integer 1–20"
+        return {"limit": max(1, min(20, limit))}, ""
+    if name == AI_TOOL_REGRESSION_EXPLAIN:
+        return {
+            "tab_a": str(a.get("tab_a") if a.get("tab_a") is not None else "").strip(),
+            "tab_b": str(a.get("tab_b") if a.get("tab_b") is not None else "").strip(),
+        }, ""
+    if name == AI_TOOL_BOOKMARK_FINDING:
+        try:
+            t = float(a.get("time"))
+        except (TypeError, ValueError):
+            return None, "time must be a number"
+        kind = str(a.get("kind") or "").strip().lower().replace("-", "_").replace(" ", "_")
+        if kind in ("root", "cause", "rca"):
+            kind = "root_cause"
+        if kind in ("corr", "related"):
+            kind = "correlated"
+        if kind in ("ok", "normal", "ref"):
+            kind = "reference"
+        if kind not in AI_BOOKMARK_KINDS:
+            return None, (
+                "kind must be one of: " + ", ".join(AI_BOOKMARK_KINDS)
+            )
+        note = str(a.get("note") or "").strip()
+        if len(note) > _MAX_ANNOTATION_NOTE:
+            note = note[:_MAX_ANNOTATION_NOTE].rstrip()
+        return {"time": t, "kind": kind, "note": note}, ""
+    if name == AI_TOOL_INVESTIGATION_REPLAY:
+        tools_run = a.get("tools_run") or []
+        if not isinstance(tools_run, (list, tuple)):
+            return None, "tools_run must be an array of strings"
+        evidence = a.get("evidence_times") or []
+        if not isinstance(evidence, (list, tuple)):
+            return None, "evidence_times must be an array of numbers"
+        return {
+            "finding_id": str(a.get("finding_id") or "").strip(),
+            "conclusion": str(a.get("conclusion") or "").strip(),
+            "tools_run": [str(t) for t in tools_run if t],
+            "evidence_times": _as_float_list(list(evidence)),
+        }, ""
+    if name == AI_TOOL_WHAT_IF:
+        change = str(a.get("change") or "").strip()
+        if not change:
+            return None, "change must be a non-empty string"
+        return {
+            "change": change,
+            "task": str(a.get("task") or "").strip(),
+        }, ""
+    if name == AI_TOOL_OPTIMIZE_EXPERIMENT:
+        lim_raw = a.get("limit", 5)
+        try:
+            limit = int(lim_raw)
+        except (TypeError, ValueError):
+            return None, "limit must be an integer 1–12"
+        return {
+            "task": str(a.get("task") or "").strip(),
+            "limit": max(1, min(12, limit)),
+        }, ""
+    if name == AI_TOOL_ANALYZE_TRACES:
+        return {}, ""
     return None, f"unknown tool {name!r}"
 
 
@@ -17400,6 +19629,45 @@ def summarise_tool_call(name: str, args: Optional[Dict[str, Any]]) -> str:
         a_tab = str(a.get("tab_a") or "0").strip() or "0"
         b_tab = str(a.get("tab_b") or "1").strip() or "1"
         return f"Compare tabs {a_tab} vs {b_tab}"
+    if name == AI_TOOL_INVESTIGATE:
+        fid = str(a.get("finding_id") or "").strip() or "top finding"
+        depth = a.get("depth", 2)
+        return f"Investigate {fid} (depth {depth})"
+    if name == AI_TOOL_DETECT_ANOMALIES:
+        return f"Detect anomalies (limit {a.get('limit', 10)})"
+    if name == AI_TOOL_CORRELATE_EVENTS:
+        return f"Correlate events for {str(a.get('task') or '?').strip() or '?'}"
+    if name == AI_TOOL_COMPARE_PERFORMANCE:
+        return "Compare performance (A vs B)"
+    if name == AI_TOOL_GENERATE_REPORT:
+        return f"Generate {str(a.get('report_type') or 'performance')} report"
+    if name == AI_TOOL_CHECK_BUDGET:
+        n = len(a.get("tasks") or []) if isinstance(a.get("tasks"), (list, tuple)) else 0
+        return f"Check budget ({n} task row(s))" if n else "Check budget"
+    if name == AI_TOOL_OPTIMIZE:
+        return f"Optimize (limit {a.get('limit', 5)})"
+    if name == AI_TOOL_REGRESSION_EXPLAIN:
+        return "Explain regression (A vs B)"
+    if name == AI_TOOL_BOOKMARK_FINDING:
+        kind = str(a.get("kind") or "evidence").strip() or "evidence"
+        try:
+            t = float(a.get("time"))
+            return f"Bookmark {kind} at {_fmt_trace_num(t)}"
+        except (TypeError, ValueError):
+            return f"Bookmark {kind}"
+    if name == AI_TOOL_INVESTIGATION_REPLAY:
+        fid = str(a.get("finding_id") or "").strip() or "top finding"
+        return f"Investigation replay ({fid})"
+    if name == AI_TOOL_WHAT_IF:
+        change = str(a.get("change") or "").strip()
+        shown = change if len(change) <= 40 else change[:37] + "…"
+        return f"What-if: {shown}" if shown else "What-if"
+    if name == AI_TOOL_OPTIMIZE_EXPERIMENT:
+        task = str(a.get("task") or "").strip()
+        lim = a.get("limit", 5)
+        return f"Optimize experiment ({task or 'auto'}, limit {lim})"
+    if name == AI_TOOL_ANALYZE_TRACES:
+        return "Analyze loaded traces"
     return name.replace("_", " ")
 
 
@@ -17543,8 +19811,8 @@ def parse_ai_auto_apply(value: Any) -> bool:
     return str(value).strip().lower() in ("1", "true", "yes", "on")
 
 
-def max_tool_rounds() -> int:
-    return _MAX_TOOL_ROUNDS
+def max_tool_rounds(template_id: str = "") -> int:
+    return max_tool_rounds_for_template(template_id, _MAX_TOOL_ROUNDS)
 
 
 _TASK_ID_RE = re.compile(r"\[(\d+)\]\s*$")
@@ -18166,6 +20434,364 @@ def query_raw_metric(
     msg = f"{len(rows)} sync STI event(s) for {label}"
     return tool_result_payload(True, msg, data=data)
 
+
+
+def investigate_finding(
+    findings: Sequence[dict],
+    finding_id: str = "",
+    *,
+    depth: int = 2,
+) -> Dict[str, Any]:
+    """Return a tool-result payload with an investigation graph."""
+    ctx = build_investigate_context(findings, finding_id, depth=depth)
+    ok = bool(ctx.get("ok"))
+    msg = str(ctx.get("message") or ("ok" if ok else "failed"))
+    data = {k: v for k, v in ctx.items() if k not in ("ok", "message")}
+    return tool_result_payload(ok, msg, data=data)
+
+
+def _events_from_metric_payload(payload: Dict[str, Any], metric: str, task: str) -> List[dict]:
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, dict):
+        return []
+    out: List[dict] = []
+    if metric == AI_RAW_METRIC_PRIORITY:
+        for ep in data.get("episodes") or []:
+            t = ep.get("start")
+            if t is None:
+                continue
+            detail = f"PI base={ep.get('base_pri')} peak={ep.get('peak_pri')}"
+            if ep.get("inversion_suspect"):
+                detail += " inversion_suspect"
+            out.append({"time": t, "kind": "priority", "detail": detail, "task": task})
+    elif metric == AI_RAW_METRIC_EXECUTION:
+        for sl in data.get("slices") or []:
+            t = sl.get("start")
+            if t is None:
+                continue
+            out.append({
+                "time": t, "kind": "execution",
+                "detail": f"dur={sl.get('duration')} core={sl.get('core')}",
+                "task": task, "core": sl.get("core") or "",
+            })
+    elif metric == AI_RAW_METRIC_MIGRATIONS:
+        for row in data.get("events") or data.get("migrations") or []:
+            t = row.get("time")
+            if t is None:
+                continue
+            out.append({
+                "time": t, "kind": "migration",
+                "detail": f"{row.get('from')}→{row.get('to')}",
+                "task": task,
+            })
+    elif metric == AI_RAW_METRIC_BLOCKING:
+        for row in data.get("gaps") or []:
+            t = row.get("start") or row.get("time")
+            if t is None:
+                continue
+            out.append({
+                "time": t, "kind": "blocking",
+                "detail": str(row.get("duration") or "block"),
+                "task": task,
+            })
+    elif metric == AI_RAW_METRIC_SYNC:
+        for row in data.get("events") or []:
+            t = row.get("time")
+            if t is None:
+                continue
+            out.append({
+                "time": t, "kind": "sync",
+                "detail": f"{row.get('event')} {row.get('target')} {row.get('note')}".strip(),
+                "task": task, "core": row.get("core") or "",
+            })
+    return out
+
+
+def correlate_task_events(
+    trace: Any,
+    task: str,
+    *,
+    around_time: Optional[float] = None,
+    window: float = 0.0,
+    lo: Optional[float] = None,
+    hi: Optional[float] = None,
+    findings_text: str = "",
+    annotations: Optional[Sequence[Any]] = None,
+) -> Dict[str, Any]:
+    """Host helper: query metrics + search, then build a correlation timeline."""
+    if trace is None:
+        return tool_result_payload(False, "No trace loaded")
+    task = str(task or "").strip()
+    if not task:
+        return tool_result_payload(False, "task is required")
+    events: List[dict] = []
+    for metric in (
+        AI_RAW_METRIC_BLOCKING,
+        AI_RAW_METRIC_EXECUTION,
+        AI_RAW_METRIC_MIGRATIONS,
+        AI_RAW_METRIC_SYNC,
+        AI_RAW_METRIC_PRIORITY,
+    ):
+        payload = query_raw_metric(
+            trace, task, metric, lo=lo, hi=hi, findings_text=findings_text,
+        )
+        if payload.get("ok"):
+            events.extend(_events_from_metric_payload(payload, metric, task))
+    search = search_timeline_hits(trace, task, "contains", annotations=annotations)
+    if search.get("ok"):
+        data = search.get("data") or {}
+        for t in data.get("times") or []:
+            try:
+                events.append({"time": float(t), "kind": "search", "detail": task, "task": task})
+            except (TypeError, ValueError):
+                continue
+    ctx = build_correlation_timeline(
+        events, task=task, around_time=around_time, window=float(window or 0),
+    )
+    ok = bool(ctx.get("ok"))
+    msg = str(ctx.get("message") or ("ok" if ok else "failed"))
+    data = {k: v for k, v in ctx.items() if k not in ("ok", "message")}
+    return tool_result_payload(ok, msg, data=data)
+
+
+def detect_anomalies_finding(
+    findings: Sequence[dict],
+    *,
+    limit: int = 10,
+) -> Dict[str, Any]:
+    ctx = detect_anomalies(findings, limit=limit)
+    ok = bool(ctx.get("ok"))
+    msg = str(ctx.get("message") or ("ok" if ok else "failed"))
+    data = {k: v for k, v in ctx.items() if k not in ("ok", "message")}
+    return tool_result_payload(ok, msg, data=data)
+
+
+def generate_report_finding(
+    findings: Sequence[dict],
+    *,
+    report_type: str = "performance",
+    finding_id: str = "",
+    compare: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    ctx = generate_structured_report(
+        findings, report_type=report_type, focus_id=finding_id, compare=compare,
+    )
+    ok = bool(ctx.get("ok"))
+    msg = str(ctx.get("message") or ("ok" if ok else "failed"))
+    data = {k: v for k, v in ctx.items() if k not in ("ok", "message")}
+    return tool_result_payload(ok, msg, data=data)
+
+
+def compare_performance_tabs(
+    candidate_summary: Dict[str, Any],
+    baseline_summary: Dict[str, Any],
+    *,
+    label_a: str = "A",
+    label_b: str = "B",
+) -> Dict[str, Any]:
+    snap_a = snapshot_from_summary(candidate_summary or {}, name=label_a)
+    snap_b = snapshot_from_summary(baseline_summary or {}, name=label_b)
+    ctx = compare_performance_metrics(snap_a, snap_b, label_a=label_a, label_b=label_b)
+    ok = bool(ctx.get("ok"))
+    msg = str(ctx.get("message") or ("ok" if ok else "failed"))
+    data = {k: v for k, v in ctx.items() if k not in ("ok", "message")}
+    return tool_result_payload(ok, msg, data=data)
+
+
+def budget_task_rows_from_findings(findings: Sequence[dict]) -> List[dict]:
+    """Build empty metric rows from finding task names (for check_budget)."""
+    rows: List[dict] = []
+    seen = set()
+    for a in (detect_anomalies(findings or [], limit=40).get("anomalies") or []):
+        task = str(a.get("task") or "").strip()
+        if not task or task in seen:
+            continue
+        seen.add(task)
+        rows.append({"task": task})
+    return rows
+
+
+def check_budget_finding(
+    tasks: Optional[Sequence[dict]] = None,
+    budgets: Optional[Dict[str, Any]] = None,
+    *,
+    findings: Optional[Sequence[dict]] = None,
+) -> Dict[str, Any]:
+    rows = list(tasks or [])
+    if not rows:
+        rows = budget_task_rows_from_findings(findings or [])
+    ctx = check_task_budgets(rows, budgets)
+    ok = bool(ctx.get("ok"))
+    msg = str(ctx.get("message") or ("ok" if ok else "failed"))
+    data = {k: v for k, v in ctx.items() if k not in ("ok", "message")}
+    return tool_result_payload(ok, msg, data=data)
+
+
+def optimize_finding(
+    findings: Sequence[dict],
+    *,
+    limit: int = 5,
+) -> Dict[str, Any]:
+    ctx = build_optimization_advice(findings, limit=limit)
+    ok = bool(ctx.get("ok"))
+    msg = str(ctx.get("message") or ("ok" if ok else "failed"))
+    data = {k: v for k, v in ctx.items() if k not in ("ok", "message")}
+    return tool_result_payload(ok, msg, data=data)
+
+
+def regression_explain_from_compare(
+    compare: Dict[str, Any],
+    findings: Optional[Sequence[dict]] = None,
+) -> Dict[str, Any]:
+    ctx = explain_regression(compare, findings=findings)
+    ok = bool(ctx.get("ok"))
+    msg = str(ctx.get("message") or ("ok" if ok else "failed"))
+    data = {k: v for k, v in ctx.items() if k not in ("ok", "message")}
+    return tool_result_payload(ok, msg, data=data)
+
+
+def investigation_replay_finding(
+    findings: Sequence[dict],
+    finding_id: str = "",
+    *,
+    conclusion: str = "",
+    tools_run: Optional[Sequence[str]] = None,
+    evidence_times: Optional[Sequence[float]] = None,
+    plan: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    finding = resolve_finding(findings, finding_id) if findings or finding_id else None
+    ctx = build_investigation_replay(
+        finding=finding,
+        plan=plan,
+        tools_run=tools_run,
+        conclusion=conclusion,
+        evidence_times=evidence_times,
+    )
+    ok = bool(ctx.get("ok"))
+    msg = str(ctx.get("message") or ("ok" if ok else "failed"))
+    data = {k: v for k, v in ctx.items() if k not in ("ok", "message")}
+    return tool_result_payload(ok, msg, data=data)
+
+
+def gather_simulation_inputs(
+    trace: Any,
+    task: str,
+    *,
+    lo: Optional[float] = None,
+    hi: Optional[float] = None,
+    findings_text: str = "",
+) -> Dict[str, Any]:
+    """Collect slices / migrations / blocking / core util for the simulator."""
+    slices: List[dict] = []
+    migrations: List[dict] = []
+    gaps: List[dict] = []
+    label = str(task or "").strip()
+    if label and trace is not None:
+        for metric, key in (
+            (AI_RAW_METRIC_EXECUTION, "slices"),
+            (AI_RAW_METRIC_MIGRATIONS, "events"),
+            (AI_RAW_METRIC_BLOCKING, "gaps"),
+        ):
+            res = query_raw_metric(
+                trace, label, metric, lo=lo, hi=hi, findings_text=findings_text,
+            )
+            if not res.get("ok"):
+                continue
+            d = res.get("data") if isinstance(res.get("data"), dict) else {}
+            if key == "slices":
+                slices = list(d.get("slices") or [])
+                label = str(d.get("task") or label)
+            elif key == "events":
+                migrations = list(d.get("events") or [])
+            else:
+                gaps = list(d.get("gaps") or [])
+    core_utils: List[Any] = []
+    if trace is not None:
+        try:
+            from .parser import _core_util_pct_rows
+            lo_i = int(lo) if lo is not None else None
+            hi_i = int(hi) if hi is not None else None
+            core_utils = list(_core_util_pct_rows(trace, lo_i, hi_i))
+        except Exception:
+            core_utils = []
+    return {
+        "task": label,
+        "slices": slices,
+        "migrations": migrations,
+        "blocking_gaps": gaps,
+        "core_utils": core_utils,
+    }
+
+
+def what_if_estimate(
+    change: str,
+    *,
+    task: str = "",
+    findings: Optional[Sequence[dict]] = None,
+    baseline_metrics: Optional[Dict[str, Any]] = None,
+    slices: Optional[Sequence[dict]] = None,
+    migrations: Optional[Sequence[dict]] = None,
+    blocking_gaps: Optional[Sequence[dict]] = None,
+    core_utils: Optional[Sequence[Any]] = None,
+) -> Dict[str, Any]:
+    """Heuristic what-if (slice replay when metrics provided; else keyword)."""
+    has_metrics = bool(slices or migrations or blocking_gaps or core_utils)
+    if has_metrics:
+        ctx = simulate_what_if(
+            change=change,
+            task=task,
+            slices=slices,
+            migrations=migrations,
+            blocking_gaps=blocking_gaps,
+            core_utils=core_utils,
+            findings=findings,
+        )
+    else:
+        ctx = estimate_what_if(
+            change=change,
+            task=task,
+            findings=findings,
+            baseline_metrics=baseline_metrics,
+        )
+    ok = bool(ctx.get("ok"))
+    msg = str(ctx.get("message") or ("ok" if ok else "failed"))
+    data = {k: v for k, v in ctx.items() if k not in ("ok", "message")}
+    return tool_result_payload(ok, msg, data=data)
+
+
+def optimize_experiment_finding(
+    *,
+    task: str = "",
+    findings: Optional[Sequence[dict]] = None,
+    slices: Optional[Sequence[dict]] = None,
+    migrations: Optional[Sequence[dict]] = None,
+    blocking_gaps: Optional[Sequence[dict]] = None,
+    core_utils: Optional[Sequence[Any]] = None,
+    limit: int = 5,
+) -> Dict[str, Any]:
+    ctx = run_optimization_experiments(
+        task=task,
+        slices=slices,
+        migrations=migrations,
+        blocking_gaps=blocking_gaps,
+        core_utils=core_utils,
+        findings=findings,
+        limit=limit,
+    )
+    ok = bool(ctx.get("ok"))
+    msg = str(ctx.get("message") or ("ok" if ok else "failed"))
+    data = {k: v for k, v in ctx.items() if k not in ("ok", "message")}
+    return tool_result_payload(ok, msg, data=data)
+
+
+def analyze_traces_snapshots(
+    snapshots: Sequence[Dict[str, Any]],
+) -> Dict[str, Any]:
+    ctx = analyze_multi_traces(snapshots)
+    ok = bool(ctx.get("ok"))
+    msg = str(ctx.get("message") or ("ok" if ok else "failed"))
+    data = {k: v for k, v in ctx.items() if k not in ("ok", "message")}
+    return tool_result_payload(ok, msg, data=data)
 # ===========================================================================
 # ai_mermaid
 # ===========================================================================
@@ -18835,7 +21461,13 @@ AI_SYSTEM_PROMPT = (
     "(preemption, priority inversion, lock contention, core thrashing, switch "
     "overhead, tick health). Prefer concrete task names, cores, and durations. "
     "When mentioning a time, write it as jump:TIME where TIME is the numeric "
-    "value in the trace time unit (e.g. jump:1805120). Keep answers concise. "
+    "value in the trace time unit (e.g. jump:1805120). "
+    "For every important conclusion, cite evidence (metric names, counts, "
+    "jump:TIME ranges) and state confidence as High, Medium, or Low — and "
+    "whether the evidence is Directly observed, Strong correlation, Possible "
+    "explanation, or Insufficient evidence. Do not invent numbers that are "
+    "not in the findings, tool results, or Trace Compare tables. "
+    "Keep answers concise. "
     + AI_TOOL_SYSTEM_ADDENDUM
 )
 
@@ -18876,18 +21508,81 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "findings, say so and suggest a default top-down inspection order.",
     ),
     (
+        "investigate",
+        "Investigate",
+        "Investigate the main performance problem in this scope. First call "
+        "investigate() to get hypotheses and an evidence chain, then use "
+        "query_raw_metric and search_timeline as needed. Place cursors and "
+        "zoom_to_range on the strongest evidence, highlight the key task, "
+        "and finish with: (1) goal, (2) numbered investigation steps you "
+        "took, (3) root cause with confidence, (4) clickable jump:TIME "
+        "evidence, (5) next mitigation to try.",
+    ),
+    (
+        "root_cause",
+        "Root cause",
+        "Perform root-cause analysis for the top finding. Call "
+        "investigate(finding_id) first, then follow the chain "
+        "deadline/WCET → execution → preemption → blocking → mutex → "
+        "priority inheritance → migration only as far as the evidence "
+        "supports. Call query_raw_metric / search_timeline when numbers are "
+        "missing. Set cursors around the worst episode, highlight the "
+        "victim task, and answer with Root cause, Evidence (bullet list with "
+        "jump:TIME), Confidence, and Suggested fix.",
+    ),
+    (
         AI_COMPARE_TEMPLATE_ID,
         "Trace Compare",
         "Compare Trace A vs Trace B using the Trace Compare tables in the "
-        "context. Highlight the largest deltas (CPU, migrations, latency, "
-        "tick health, sync). Say which side is worse for each concern and "
-        "which Statistics section or Trace Compare page to open next.",
+        "context. Classify each major delta as Regression, Improvement, or "
+        "Neutral (CPU, migrations, latency, tick health, sync). State which "
+        "side is worse for each concern, the likely cause with confidence, "
+        "and which Statistics section or Trace Compare page to open next. "
+        "Use jump:TIME when a concrete timestamp is available.",
     ),
     (
         "triage",
         "Triage findings",
         "Summarise the Analysis Findings and list the top three issues to "
         "investigate first, with the Statistics section to open for each.",
+    ),
+    (
+        "task_profile",
+        "Task profile",
+        "Build an AI task behaviour profile for the hottest or most "
+        "problematic task in the findings (CPU %, typical / p95 / WCET "
+        "execution, dispatch, blocking, migrations, sync / priority "
+        "inheritance). Use query_raw_metric if needed. End with a short "
+        "assessment checklist (normal / warning) and one Ask-next question.",
+    ),
+    (
+        "diagnostic_report",
+        "Diagnostic report",
+        "Write a structured engineering diagnostic report for this scope: "
+        "Executive summary, Key findings, CPU / scheduling, WCET / "
+        "deadlines, Blocking / sync, Migrations, Root cause, "
+        "Recommendations (only when evidence supports them), and Evidence "
+        "timeline with jump:TIME links. Use export_report when the user "
+        "asks to save the report.",
+    ),
+    (
+        "what_if",
+        "What-if",
+        "Call what_if with a concrete change (pin TASK to Core_N, raise "
+        "priority, reduce mutex contention). The tool runs a heuristic "
+        "slice-replay simulator (not FreeRTOS kernel). Summarise baseline vs "
+        "simulated migrations/blocking/load-balance and the labelled "
+        "disclaimer. Cite evidence; do not invent numbers beyond the tool.",
+    ),
+    (
+        "optimize",
+        "Optimize",
+        "Call optimize_experiment for the hottest task (pin / priority / "
+        "contention / migration candidates), then summarise the ranked "
+        "experiments and best cost delta. Optionally call optimize for "
+        "qualitative mitigations. Label results as heuristic estimates — not "
+        "measured FreeRTOS behavior. Call investigate() if the top finding "
+        "is unclear.",
     ),
     (
         "latency",
@@ -20200,13 +22895,15 @@ def format_ai_conversation_markdown(entries: Sequence[Any]) -> str:
     out = ["# BTF Viewer — AI Conversation", "", f"_Saved {stamp}_", ""]
     for entry in entries:
         role = ai_entry_role(entry)
-        out.append("## You" if role == "user" else "## Assistant")
-        out.append("")
         text = (ai_entry_text(entry) or "").strip()
+        tools = _tool_transcript_lines(entry)
+        # User keeps a "You" heading; assistant replies omit the role label.
+        if role == "user":
+            out.append("## You")
+            out.append("")
         if text:
             out.append(text)
             out.append("")
-        tools = _tool_transcript_lines(entry)
         if tools:
             out.extend(tools)
             out.append("")
@@ -20219,11 +22916,13 @@ def format_ai_conversation_text(entries: Sequence[Any]) -> str:
     out = ["BTF Viewer — AI Conversation", f"Saved {stamp}", ""]
     for entry in entries:
         role = ai_entry_role(entry)
-        out.append("You:" if role == "user" else "Assistant:")
         text = (ai_entry_text(entry) or "").strip()
+        tools = _tool_transcript_lines(entry)
+        # User keeps a "You:" prefix; assistant replies omit the role label.
+        if role == "user":
+            out.append("You:")
         if text:
             out.append(text)
-        tools = _tool_transcript_lines(entry)
         if tools:
             out.extend(tools)
         out.append("")
@@ -20239,7 +22938,6 @@ h1{font-size:18px;margin:0 0 4px;}
 .msg:first-of-type{border-top:none;padding-top:0;}
 .msg h3{font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin:0 0 6px;color:#8b98a8;}
 .msg.user h3{color:#6ea8e0;}
-.msg.assistant h3{color:#6fbf9a;}
 .msg .body{padding:8px 10px;border-left:3px solid #5b9bd5;background:#1e3348;border-radius:0 6px 6px 0;}
 .msg.assistant .body{border-left-color:#3d9a72;background:#1a2620;}
 pre{background:#1a2230;border:1px solid #3a4658;border-radius:4px;padding:8px;overflow:auto;}
@@ -20260,12 +22958,13 @@ def format_ai_conversation_html(entries: Sequence[Any]) -> str:
     for entry in entries:
         role = ai_entry_role(entry)
         text = ai_entry_text(entry)
-        head = "You" if role == "user" else "Assistant"
         cls = "user" if role == "user" else "assistant"
         body = _ai_message_body_html(role, text, as_img=False) if (text or "").strip() else ""
         cards = _tool_cards_html(ai_entry_tools(entry), "")
+        # User keeps a "You" heading; assistant replies omit the role label.
+        head = "<h3>You</h3>" if role == "user" else ""
         parts.append(
-            f'<section class="msg {cls}"><h3>{head}</h3>'
+            f'<section class="msg {cls}">{head}'
             f'<div class="body">{body}{cards}</div>'
             "</section>"
         )
@@ -21089,6 +23788,21 @@ def create_ai_assistant_panel(
                     self._compare_btn = btn
             mid_lay.addLayout(tpl_grid)
 
+            self._investigation_plan: Optional[Dict[str, Any]] = None
+            self._active_template_id = ""
+            self._plan_label = QLabel("Investigation plan")
+            self._plan_label.setStyleSheet("font-weight:600;margin-top:2px;")
+            self._plan_label.hide()
+            mid_lay.addWidget(self._plan_label)
+            self._plan_view = QLabel("")
+            self._plan_view.setWordWrap(True)
+            self._plan_view.setStyleSheet(
+                "color:#c5d0dc;font-size:11px;background:#1a222d;"
+                "border:1px solid #2c3645;border-radius:6px;padding:6px;"
+            )
+            self._plan_view.hide()
+            mid_lay.addWidget(self._plan_view)
+
             self.refresh_template_availability()
 
             self._log = QTextBrowser()
@@ -21669,11 +24383,55 @@ def create_ai_assistant_panel(
         def _use_template(self, template_id: str, prompt: str) -> None:
             if self._busy:
                 return
+            self._active_template_id = str(template_id or "")
+            if is_agent_template(template_id):
+                self._set_investigation_plan(default_investigation_plan(
+                    next((p for tid, _l, p in AI_TEMPLATE_QUESTIONS if tid == template_id), "")[:80]
+                    or "Investigate the main performance problem"
+                ))
+            else:
+                self._clear_investigation_plan()
             if template_id == AI_COMPARE_TEMPLATE_ID:
                 self._run_compare_template(prompt)
                 return
             self._input.setPlainText(prompt)
             self.send_current()
+
+        def _set_investigation_plan(self, plan: Optional[Dict[str, Any]]) -> None:
+            self._investigation_plan = plan
+            if not plan:
+                self._clear_investigation_plan()
+                return
+            lines = [f"<b>Goal:</b> {html.escape(str(plan.get('goal') or ''))}"]
+            for step in plan.get("steps") or []:
+                st = str(step.get("status") or "pending")
+                mark = {"done": "✓", "active": "●", "pending": "○"}.get(st, "○")
+                lines.append(
+                    f"{mark} {html.escape(str(step.get('label') or step.get('id') or ''))}"
+                )
+            self._plan_view.setText("<br/>".join(lines))
+            self._plan_label.show()
+            self._plan_view.show()
+
+        def _clear_investigation_plan(self) -> None:
+            self._investigation_plan = None
+            self._plan_label.hide()
+            self._plan_view.hide()
+            self._plan_view.clear()
+
+        def _advance_investigation_plan(self, tool_names: Sequence[str]) -> None:
+            if not self._investigation_plan:
+                return
+            self._set_investigation_plan(
+                mark_plan_steps_from_tools(self._investigation_plan, tool_names)
+            )
+
+        def _finish_investigation_plan(self) -> None:
+            if not self._investigation_plan:
+                return
+            self._set_investigation_plan(
+                complete_investigation_plan(self._investigation_plan)
+            )
 
         def _run_compare_template(
             self,
@@ -21758,6 +24516,10 @@ def create_ai_assistant_panel(
                     "error": err,
                     "status": "pending",
                 })
+            if tools_norm:
+                self._advance_investigation_plan(
+                    [str(t.get("name") or "") for t in tools_norm]
+                )
 
             auto = (
                 parse_ai_auto_apply(self._settings_dict().get("auto_apply"))
@@ -21781,6 +24543,7 @@ def create_ai_assistant_panel(
 
             if text:
                 self._append("assistant", text)
+            self._finish_investigation_plan()
             jumps = extract_jump_times(text)
             if jumps:
                 token = _JUMP_RE.search(text or "")
@@ -21867,7 +24630,7 @@ def create_ai_assistant_panel(
                 self._status.setText("Skipped GUI actions.")
                 self._cleanup_worker()
                 return
-            if self._tool_round >= max_tool_rounds():
+            if self._tool_round >= max_tool_rounds(self._active_template_id):
                 self._status.setText("Done (tool round limit).")
                 self._cleanup_worker()
                 return
@@ -28507,6 +31270,27 @@ _WF_THRASH_MIG_MIN = 10
 _WF_PAIR_BOUNCE_PCT = 25.0
 _WF_PAIR_COUNT_MIN = 5
 _WF_WCET_MAX_AVG_RATIO = 5.0
+_WF_MIG_BURST_RATE = 10.0
+
+
+def _finding(
+    severity: str,
+    title: str,
+    text: str,
+    *,
+    fid: str = "",
+    task: str = "",
+    evidence: Optional[list] = None,
+) -> dict:
+    out = {
+        "severity": severity,
+        "title": title,
+        "text": text,
+        "id": fid or "",
+        "task": task or "",
+        "evidence": list(evidence or []),
+    }
+    return out
 
 
 def _build_workflow_analysis_findings(
@@ -28525,8 +31309,8 @@ def _build_workflow_analysis_findings(
 ) -> List[dict]:
     """Return interpretive findings for the Statistics HTML report.
 
-    Each finding is ``{severity, title, text}`` where *severity* is
-    ``info`` / ``warning`` / ``error``.
+    Each finding is ``{severity, title, text, id?, task?, evidence?}`` where
+    *severity* is ``info`` / ``warning`` / ``error``.
     """
     findings: List[dict] = []
 
@@ -28538,55 +31322,52 @@ def _build_workflow_analysis_findings(
         score = max(0.0, 100.0 * (1.0 - gini))
         metrics = f"Load Balance Score {score:.0f}% (σ={sigma:.1f}%, G={gini:.3f})"
         if score < _WF_LOAD_SCORE_WARN or sigma > _WF_LOAD_SIGMA_WARN:
-            findings.append({
-                "severity": "warning",
-                "title": "Load imbalance across cores",
-                "text": (
-                    f"{metrics}. Uneven core placement — "
-                    "check Core Affinity and Core Migrations."
-                ),
-            })
+            findings.append(_finding(
+                "warning",
+                "Load imbalance across cores",
+                f"{metrics}. Uneven core placement — "
+                "check Core Affinity and Core Migrations.",
+                fid="load_imbalance",
+            ))
         elif score >= _WF_LOAD_SCORE_OK:
-            findings.append({
-                "severity": "info",
-                "title": "Core utilisation balance",
-                "text": f"{metrics} — cores look reasonably balanced.",
-            })
+            findings.append(_finding(
+                "info",
+                "Core utilisation balance",
+                f"{metrics} — cores look reasonably balanced.",
+                fid="load_balance_ok",
+            ))
         else:
-            findings.append({
-                "severity": "info",
-                "title": "Core utilisation balance",
-                "text": (
-                    f"{metrics} — moderate spread; review Core Utilisation "
-                    "if the workload is expected to be even."
-                ),
-            })
+            findings.append(_finding(
+                "info",
+                "Core utilisation balance",
+                f"{metrics} — moderate spread; review Core Utilisation "
+                "if the workload is expected to be even.",
+                fid="load_balance_moderate",
+            ))
 
     # WCET / high CPU tasks
     if exec_rows:
         top = exec_rows[:_WF_FINDING_CAP]
         names = ", ".join(f"{r[1]} ({r[3]:.1f}%, Max {r[7]})" for r in top)
-        findings.append({
-            "severity": "info",
-            "title": "Top tasks by CPU (WCET candidates)",
-            "text": (
-                f"Highest CPU% tasks: {names}. "
-                "Open Execution Time and click Max to jump to the worst-case slice."
-            ),
-        })
+        findings.append(_finding(
+            "info",
+            "Top tasks by CPU (WCET candidates)",
+            f"Highest CPU% tasks: {names}. "
+            "Open Execution Time and click Max to jump to the worst-case slice.",
+            fid="top_cpu",
+        ))
 
     # Blocking
     if block_rows:
         top_b = sorted(block_rows, key=lambda r: (-r[2], r[1].lower()))[:_WF_FINDING_CAP]
         names = ", ".join(f"{r[1]} (n={r[2]}, Max {r[6]})" for r in top_b)
-        findings.append({
-            "severity": "warning" if top_b and top_b[0][2] >= 20 else "info",
-            "title": "Blocking / scheduling-delay candidates",
-            "text": (
-                f"Tasks with the most off-CPU gaps: {names}. "
-                "Cross-check Preemption Chain and Mutex/Semaphore."
-            ),
-        })
+        findings.append(_finding(
+            "warning" if top_b and top_b[0][2] >= 20 else "info",
+            "Blocking / scheduling-delay candidates",
+            f"Tasks with the most off-CPU gaps: {names}. "
+            "Cross-check Preemption Chain and Mutex/Semaphore.",
+            fid="blocking",
+        ))
 
     # Priority inversion — row: (mk, label, base, peak, n, total_str, pattern, total_ns)
     inv_rows = [
@@ -28595,17 +31376,17 @@ def _build_workflow_analysis_findings(
     ]
     if inv_rows:
         names = ", ".join(str(r[1]) for r in inv_rows[:_WF_FINDING_CAP])
-        findings.append({
-            "severity": "warning",
-            "title": "Priority inversion (L/M/H) suspected",
-            "text": (
-                f"Tasks with L/M/H pattern: {names}. "
-                "Inspect Priority Inheritance boost episodes and the holding mutex."
-            ),
-        })
+        findings.append(_finding(
+            "warning",
+            "Priority inversion (L/M/H) suspected",
+            f"Tasks with L/M/H pattern: {names}. "
+            "Inspect Priority Inheritance boost episodes and the holding mutex.",
+            fid="priority_inversion",
+        ))
 
     # Core thrashing / excessive bouncing
     thrash: List[str] = []
+    burst_rows: List[Tuple[str, float, int]] = []
     for r in (mig_rows or []):
         (_mk, name, n_mig, _nc, _cs, _pri, primary_pct,
          ping, _sti, _ga, _go, _rate_lbl, rate_per_s, _dwell_lbl, dwell_tu) = r
@@ -28620,16 +31401,17 @@ def _build_workflow_analysis_findings(
             thrash.append(
                 f"{name} (Migr={n_mig}, Rate={_rate_lbl}, Dwell={_dwell_lbl}, Ping={ping})"
             )
+        if isinstance(rate_per_s, (int, float)):
+            burst_rows.append((str(name), float(rate_per_s), int(n_mig)))
     if thrash:
-        findings.append({
-            "severity": "warning",
-            "title": "Excessive bouncing / core thrashing",
-            "text": (
-                "High migration rate, short dwell, and/or ping-pong detected: "
-                + "; ".join(thrash[:_WF_FINDING_CAP])
-                + ". See Core-Pair Migration Summary and the Migration Heatmap."
-            ),
-        })
+        findings.append(_finding(
+            "warning",
+            "Excessive bouncing / core thrashing",
+            "High migration rate, short dwell, and/or ping-pong detected: "
+            + "; ".join(thrash[:_WF_FINDING_CAP])
+            + ". See Core-Pair Migration Summary and the Migration Heatmap.",
+            fid="thrashing",
+        ))
 
     hot_pairs: List[str] = []
     for fc, tc, cnt, bnc, avg_gap in (pair_rows or []):
@@ -28642,15 +31424,14 @@ def _build_workflow_analysis_findings(
         elif cnt >= max(_WF_PAIR_COUNT_MIN * 2, 20) and not thrash:
             hot_pairs.append(f"{fc}→{tc} (Count={cnt})")
     if hot_pairs:
-        findings.append({
-            "severity": "warning",
-            "title": "Hot core-pair migration traffic",
-            "text": (
-                "Directed pairs with heavy traffic and/or lock-bounce share: "
-                + "; ".join(hot_pairs[:_WF_FINDING_CAP])
-                + "."
-            ),
-        })
+        findings.append(_finding(
+            "warning",
+            "Hot core-pair migration traffic",
+            "Directed pairs with heavy traffic and/or lock-bounce share: "
+            + "; ".join(hot_pairs[:_WF_FINDING_CAP])
+            + ".",
+            fid="hot_pairs",
+        ))
 
     # Deadlines / CPU budget
     if deadline_viols:
@@ -28662,38 +31443,35 @@ def _build_workflow_analysis_findings(
                 parts.append(f"{len(sv)} slice deadline violation(s)")
             if cv:
                 parts.append(f"{len(cv)} CPU budget violation(s)")
-            findings.append({
-                "severity": "error",
-                "title": "Deadline / CPU budget breaches",
-                "text": (
-                    ", ".join(parts) + " in scope. "
-                    "See Deadlines / CPU budget tables below."
-                ),
-            })
+            findings.append(_finding(
+                "error",
+                "Deadline / CPU budget breaches",
+                ", ".join(parts) + " in scope. "
+                "See Deadlines / CPU budget tables below.",
+                fid="deadlines",
+            ))
 
     # Tick health
     if tick and tick.get("tick_count"):
         health = str(tick.get("health", "")).lower()
         missed = int(tick.get("missed_estimate") or 0)
         if health and health != "good":
-            findings.append({
-                "severity": "warning" if health != "bad" else "error",
-                "title": f"Trace Health (TICK) = {health.upper()}",
-                "text": (
-                    f"Mode={'TICKLESS' if tick.get('is_tickless') else 'TICK'}, "
-                    f"CV={float(tick.get('tick_cv') or 0) * 100:.2f}%, "
-                    f"missed≈{missed}. Investigate large TICK gaps and long slices."
-                ),
-            })
+            findings.append(_finding(
+                "warning" if health != "bad" else "error",
+                f"Trace Health (TICK) = {health.upper()}",
+                f"Mode={'TICKLESS' if tick.get('is_tickless') else 'TICK'}, "
+                f"CV={float(tick.get('tick_cv') or 0) * 100:.2f}%, "
+                f"missed≈{missed}. Investigate large TICK gaps and long slices.",
+                fid="tick_health",
+            ))
         elif missed > 0:
-            findings.append({
-                "severity": "warning",
-                "title": "Estimated missed ticks",
-                "text": (
-                    f"About {missed} missed tick(s) estimated from large gaps. "
-                    "See Trace Health (TICK) large-gap table."
-                ),
-            })
+            findings.append(_finding(
+                "warning",
+                "Estimated missed ticks",
+                f"About {missed} missed tick(s) estimated from large gaps. "
+                "See Trace Health (TICK) large-gap table.",
+                fid="missed_ticks",
+            ))
 
     # Sync / mutex bounces
     bounce_objs = 0
@@ -28708,38 +31486,39 @@ def _build_workflow_analysis_findings(
         or "bounc" in str(i.get("detail", "")).lower()
     )
     if bounce_objs or bounce_issues:
-        findings.append({
-            "severity": "warning",
-            "title": "Mutex / semaphore core-boundary bounces",
-            "text": (
-                f"{bounce_objs} sync object(s) with Core bounce > 0"
-                + (f"; {bounce_issues} CORE_MIGRATION_WHILE_HELD-style issue(s)"
-                   if bounce_issues else "")
-                + ". Cross-check Core-Pair Migration Summary Bounce %."
-            ),
-        })
+        findings.append(_finding(
+            "warning",
+            "Mutex / semaphore core-boundary bounces",
+            f"{bounce_objs} sync object(s) with Core bounce > 0"
+            + (f"; {bounce_issues} CORE_MIGRATION_WHILE_HELD-style issue(s)"
+               if bounce_issues else "")
+            + ". Cross-check Core-Pair Migration Summary Bounce %.",
+            fid="sync_bounce",
+        ))
     elif issue_n > 0:
-        findings.append({
-            "severity": "warning",
-            "title": "Sync pairing issues",
-            "text": (
-                f"{issue_n} mutex/semaphore pairing issue(s) in scope "
-                "(orphan give, unmatched take, etc.)."
-            ),
-        })
+        findings.append(_finding(
+            "warning",
+            "Sync pairing issues",
+            f"{issue_n} mutex/semaphore pairing issue(s) in scope "
+            "(orphan give, unmatched take, etc.).",
+            fid="sync_issues",
+        ))
+
+    # Anomalies (beyond fixed thrash/load thresholds)
+    append_migration_burst_anomaly(
+        findings, burst_rows, rate_threshold=_WF_MIG_BURST_RATE)
 
     actionable = [f for f in findings if f["severity"] in ("warning", "error")]
     if not actionable and not any(f["title"].startswith("Top tasks") for f in findings):
-        findings.append({
-            "severity": "info",
-            "title": "No analysis heuristics flagged",
-            "text": (
-                "No load-imbalance, thrashing, deadline, tick, or sync warnings "
-                "in the current scope. Review the tables below for detail."
-            ),
-        })
+        findings.append(_finding(
+            "info",
+            "No analysis heuristics flagged",
+            "No load-imbalance, thrashing, deadline, tick, or sync warnings "
+            "in the current scope. Review the tables below for detail.",
+            fid="none",
+        ))
 
-    return findings
+    return enrich_findings_with_ids(findings)
 
 
 def _format_analysis_findings_text(
@@ -28759,8 +31538,17 @@ def _format_analysis_findings_text(
             sev = str(f.get("severity", "info")).upper()
             title = str(f.get("title", "Finding"))
             text = str(f.get("text", ""))
-            lines.append(f"{i}. [{sev}] {title}")
+            fid = str(f.get("id") or "").strip()
+            id_bit = f" id={fid}" if fid else ""
+            lines.append(f"{i}. [{sev}]{id_bit} {title}")
             lines.append(f"   {text}")
+            for ev in (f.get("evidence") or []):
+                if isinstance(ev, dict) and ev.get("time") is not None:
+                    lines.append(
+                        f"   evidence: {ev.get('label') or 'event'} jump:{ev.get('time')}"
+                    )
+                elif ev:
+                    lines.append(f"   evidence: {ev}")
             lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
@@ -28840,13 +31628,31 @@ class _AnalysisFindingsDialog(QDialog):
             list_w.addItem(QListWidgetItem("No findings for the current scope"))
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        self.wants_ai_template = "findings"
+        inv_btn = buttons.addButton(
+            "Investigate…", QDialogButtonBox.ButtonRole.ActionRole)
+        inv_btn.setToolTip(
+            "Open the AI Assistant and investigate the top findings with tools"
+            if ai_enabled else
+            "Enable AI Assistant in Settings → AI")
+        inv_btn.clicked.connect(
+            lambda: self._query_with_ai(ai_enabled, "investigate"))
+        rca_btn = buttons.addButton(
+            "Root cause…", QDialogButtonBox.ButtonRole.ActionRole)
+        rca_btn.setToolTip(
+            "Open the AI Assistant for evidence-driven root-cause analysis"
+            if ai_enabled else
+            "Enable AI Assistant in Settings → AI")
+        rca_btn.clicked.connect(
+            lambda: self._query_with_ai(ai_enabled, "root_cause"))
         ai_btn = buttons.addButton(
             "Query with AI…", QDialogButtonBox.ButtonRole.ActionRole)
         ai_btn.setToolTip(
             "Open the AI Assistant and walk through these Analysis Findings"
             if ai_enabled else
             "Enable AI Assistant in Settings → AI")
-        ai_btn.clicked.connect(lambda: self._query_with_ai(ai_enabled))
+        ai_btn.clicked.connect(
+            lambda: self._query_with_ai(ai_enabled, "findings"))
         save_btn = buttons.addButton(
             "Save as Text…", QDialogButtonBox.ButtonRole.ActionRole)
         save_btn.clicked.connect(self._save_as_text)
@@ -28858,8 +31664,9 @@ class _AnalysisFindingsDialog(QDialog):
         lay.addWidget(list_w, 1)
         lay.addWidget(buttons)
 
-    def _query_with_ai(self, ai_enabled: bool) -> None:
+    def _query_with_ai(self, ai_enabled: bool, template_id: str = "findings") -> None:
         self.wants_ai_query = True
+        self.wants_ai_template = template_id or "findings"
         self._ai_needs_settings = not ai_enabled
         self.accept()
 
@@ -31365,6 +34172,33 @@ class _StatsPanel(QWidget):
         self._wrap_table_with_resizer(lay, table, "preemption")
         return host
 
+    def _append_exec_anomaly_findings(
+        self,
+        findings: List[dict],
+        trace: "BtfTrace",
+        lo: Optional[int],
+        hi: Optional[int],
+    ) -> List[dict]:
+        """Append WCET Max/Avg spike anomalies using numeric slice samples."""
+        spike_rows = []
+        for mk, segs in (getattr(trace, "seg_map_by_merge_key", None) or {}).items():
+            if not segs:
+                continue
+            raw = trace.task_repr.get(mk, mk)
+            _, _, tname = _parse_task_name(raw)
+            if _is_idle_task_name(tname) or tname == "TICK":
+                continue
+            samples = self._exec_slice_samples(segs, lo, hi)
+            if len(samples) < 5:
+                continue
+            avg_ns = sum(samples) / len(samples)
+            spike_rows.append((
+                _task_display_name(raw), avg_ns, float(max(samples)), len(samples),
+            ))
+        append_wcet_anomaly_finding(
+            findings, spike_rows, ratio_threshold=_WF_WCET_MAX_AVG_RATIO)
+        return enrich_findings_with_ids(findings)
+
     def build_analysis_findings(self) -> Tuple[List[dict], str]:
         """Return (findings, scope_title) for the toolbar Analysis dialog."""
         trace = self._trace
@@ -31406,6 +34240,7 @@ class _StatsPanel(QWidget):
             deadline_viols=dl_viols,
             time_scale=trace.time_scale,
         )
+        findings = self._append_exec_anomaly_findings(findings, trace, lo, hi)
         return findings, scope_title
 
     def write_statistics_html_report(self, path: str) -> None:
@@ -31846,6 +34681,8 @@ class _StatsPanel(QWidget):
             deadline_viols=_dl_viols if (self._cpu_budget_pct > 0 or self._task_deadlines_ns) else None,
             time_scale=trace.time_scale,
         )
+        analysis_findings = self._append_exec_anomaly_findings(
+            analysis_findings, trace, lo, hi)
         analysis_html = _render_workflow_analysis_html(analysis_findings, scope_title)
 
         report = f"""<!doctype html>
@@ -43690,7 +46527,246 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
                 str(args.get("tab_a") or ""),
                 str(args.get("tab_b") or ""),
             )
+        if name == AI_TOOL_INVESTIGATE:
+            findings: list = []
+            try:
+                panel = getattr(self, "_stats_panel", None)
+                if panel is not None and hasattr(panel, "build_analysis_findings"):
+                    findings, _scope = panel.build_analysis_findings()
+            except Exception:
+                findings = []
+            return investigate_finding(
+                findings,
+                str(args.get("finding_id") or ""),
+                depth=int(args.get("depth") or 2),
+            )
+        if name == AI_TOOL_DETECT_ANOMALIES:
+            findings = []
+            try:
+                panel = getattr(self, "_stats_panel", None)
+                if panel is not None and hasattr(panel, "build_analysis_findings"):
+                    findings, _scope = panel.build_analysis_findings()
+            except Exception:
+                findings = []
+            return detect_anomalies_finding(
+                findings, limit=int(args.get("limit") or 10),
+            )
+        if name == AI_TOOL_CORRELATE_EVENTS:
+            return correlate_task_events(
+                self._trace,
+                str(args.get("task") or ""),
+                around_time=args.get("around_time"),
+                window=float(args.get("window") or 0),
+                annotations=list(self._annotations or []),
+            )
+        if name == AI_TOOL_COMPARE_PERFORMANCE:
+            return self._ai_compare_performance(
+                str(args.get("tab_a") or ""),
+                str(args.get("tab_b") or ""),
+            )
+        if name == AI_TOOL_GENERATE_REPORT:
+            findings = []
+            try:
+                panel = getattr(self, "_stats_panel", None)
+                if panel is not None and hasattr(panel, "build_analysis_findings"):
+                    findings, _scope = panel.build_analysis_findings()
+            except Exception:
+                findings = []
+            return generate_report_finding(
+                findings,
+                report_type=str(args.get("report_type") or "performance"),
+                finding_id=str(args.get("finding_id") or ""),
+            )
+        if name == AI_TOOL_CHECK_BUDGET:
+            findings = []
+            try:
+                panel = getattr(self, "_stats_panel", None)
+                if panel is not None and hasattr(panel, "build_analysis_findings"):
+                    findings, _scope = panel.build_analysis_findings()
+            except Exception:
+                findings = []
+            return check_budget_finding(
+                args.get("tasks"),
+                args.get("budgets"),
+                findings=findings,
+            )
+        if name == AI_TOOL_OPTIMIZE:
+            findings = []
+            try:
+                panel = getattr(self, "_stats_panel", None)
+                if panel is not None and hasattr(panel, "build_analysis_findings"):
+                    findings, _scope = panel.build_analysis_findings()
+            except Exception:
+                findings = []
+            return optimize_finding(
+                findings, limit=int(args.get("limit") or 5),
+            )
+        if name == AI_TOOL_REGRESSION_EXPLAIN:
+            return self._ai_regression_explain(
+                str(args.get("tab_a") or ""),
+                str(args.get("tab_b") or ""),
+            )
+        if name == AI_TOOL_BOOKMARK_FINDING:
+            ns = int(float(args["time"]))
+            note = format_bookmark_label(
+                str(args.get("kind") or "evidence"),
+                str(args.get("note") or ""),
+            )
+            self._jump_to_ns(ns)
+            for ann in self._annotations:
+                if int(ann.ns) == ns and ann.note == note:
+                    return f"Annotation already at {ns}"
+            self._add_annotation_with_note(
+                ns, note, show_marks_panel=False, push_undo=False)
+            return f"Bookmarked {ns}: {note}"
+        if name == AI_TOOL_INVESTIGATION_REPLAY:
+            findings = []
+            try:
+                panel = getattr(self, "_stats_panel", None)
+                if panel is not None and hasattr(panel, "build_analysis_findings"):
+                    findings, _scope = panel.build_analysis_findings()
+            except Exception:
+                findings = []
+            return investigation_replay_finding(
+                findings,
+                str(args.get("finding_id") or ""),
+                conclusion=str(args.get("conclusion") or ""),
+                tools_run=list(args.get("tools_run") or []),
+                evidence_times=list(args.get("evidence_times") or []),
+            )
+        if name == AI_TOOL_WHAT_IF:
+            findings = []
+            try:
+                panel = getattr(self, "_stats_panel", None)
+                if panel is not None and hasattr(panel, "build_analysis_findings"):
+                    findings, _scope = panel.build_analysis_findings()
+            except Exception:
+                findings = []
+            task = str(args.get("task") or "").strip()
+            change = str(args.get("change") or "")
+            if not task:
+                from .ai_investigation import _guess_task_name, parse_what_if_change
+                task = str(parse_what_if_change(change).get("task") or "").strip()
+                if not task:
+                    task = _guess_task_name(change) or ""
+            lo = hi = None
+            panel = getattr(self, "_stats_panel", None)
+            rng = panel._stats_range() if panel is not None and hasattr(panel, "_stats_range") else None
+            if rng:
+                lo, hi, _n = rng
+            findings_text = ""
+            try:
+                findings_text = str((self._ai_build_context() or {}).get("findings_text") or "")
+            except Exception:
+                findings_text = ""
+            sim_in = gather_simulation_inputs(
+                self._trace, task, lo=lo, hi=hi, findings_text=findings_text,
+            )
+            return what_if_estimate(
+                change,
+                task=sim_in.get("task") or task,
+                findings=findings,
+                slices=sim_in.get("slices"),
+                migrations=sim_in.get("migrations"),
+                blocking_gaps=sim_in.get("blocking_gaps"),
+                core_utils=sim_in.get("core_utils"),
+            )
+        if name == AI_TOOL_OPTIMIZE_EXPERIMENT:
+            findings = []
+            try:
+                panel = getattr(self, "_stats_panel", None)
+                if panel is not None and hasattr(panel, "build_analysis_findings"):
+                    findings, _scope = panel.build_analysis_findings()
+            except Exception:
+                findings = []
+            task = str(args.get("task") or "").strip()
+            if not task:
+                from .ai_investigation import detect_anomalies, _guess_task_name
+                for a in (detect_anomalies(findings, limit=3).get("anomalies") or []):
+                    task = str(a.get("task") or _guess_task_name(str(a.get("text") or "")) or "").strip()
+                    if task:
+                        break
+            lo = hi = None
+            panel = getattr(self, "_stats_panel", None)
+            rng = panel._stats_range() if panel is not None and hasattr(panel, "_stats_range") else None
+            if rng:
+                lo, hi, _n = rng
+            findings_text = ""
+            try:
+                findings_text = str((self._ai_build_context() or {}).get("findings_text") or "")
+            except Exception:
+                findings_text = ""
+            sim_in = gather_simulation_inputs(
+                self._trace, task, lo=lo, hi=hi, findings_text=findings_text,
+            )
+            return optimize_experiment_finding(
+                task=sim_in.get("task") or task,
+                findings=findings,
+                slices=sim_in.get("slices"),
+                migrations=sim_in.get("migrations"),
+                blocking_gaps=sim_in.get("blocking_gaps"),
+                core_utils=sim_in.get("core_utils"),
+                limit=int(args.get("limit") or 5),
+            )
+        if name == AI_TOOL_ANALYZE_TRACES:
+            return self._ai_analyze_traces()
         raise RuntimeError(f"unknown tool {name}")
+
+    def _ai_compare_performance(self, tab_a: str, tab_b: str) -> dict:
+        idx_a = self._ai_resolve_tab_ref(tab_a, 0)
+        idx_b = self._ai_resolve_tab_ref(tab_b, 1)
+        if idx_a == idx_b:
+            raise RuntimeError("tab_a and tab_b must name different traces")
+        tab_a_obj, tab_b_obj = self._tabs[idx_a], self._tabs[idx_b]
+        tr_a, tr_b = tab_a_obj.trace, tab_b_obj.trace
+        if tr_a is None or tr_b is None:
+            raise RuntimeError("Both tabs must have a loaded trace")
+        lo_a, hi_a = _cursor_range_for_tab(self, idx_a)
+        lo_b, hi_b = _cursor_range_for_tab(self, idx_b)
+        name_a = _trace_display_name(tab_a_obj.path) if tab_a_obj.path else f"Tab {idx_a + 1}"
+        name_b = _trace_display_name(tab_b_obj.path) if tab_b_obj.path else f"Tab {idx_b + 1}"
+        snap_a = _trace_summary_snapshot(tr_a, lo_a, hi_a)
+        snap_b = _trace_summary_snapshot(tr_b, lo_b, hi_b)
+        return compare_performance_tabs(
+            snap_a, snap_b, label_a=name_a, label_b=name_b,
+        )
+
+    def _ai_regression_explain(self, tab_a: str, tab_b: str) -> dict:
+        cmp_payload = self._ai_compare_performance(tab_a, tab_b)
+        compare = dict(cmp_payload.get("data") or {})
+        if "message" not in compare:
+            compare["message"] = cmp_payload.get("message")
+        if "failed" not in compare and "failed" in cmp_payload:
+            compare["failed"] = cmp_payload.get("failed")
+        findings = []
+        try:
+            panel = getattr(self, "_stats_panel", None)
+            if panel is not None and hasattr(panel, "build_analysis_findings"):
+                findings, _scope = panel.build_analysis_findings()
+        except Exception:
+            findings = []
+        return regression_explain_from_compare(compare, findings=findings)
+
+    def _ai_analyze_traces(self) -> dict:
+        loaded = self._ai_list_loaded_tabs()
+        if not loaded:
+            raise RuntimeError("No loaded traces")
+        snaps = []
+        for tab_info in loaded:
+            idx = int(tab_info["index"])
+            tab = self._tabs[idx]
+            tr = getattr(tab, "trace", None)
+            if tr is None:
+                continue
+            lo, hi = _cursor_range_for_tab(self, idx)
+            name = str(tab_info.get("name") or f"Tab {idx + 1}")
+            snaps.append(snapshot_from_summary(
+                _trace_summary_snapshot(tr, lo, hi) or {},
+                name=name,
+            ))
+        if not snaps:
+            raise RuntimeError("No loaded traces")
+        return analyze_traces_snapshots(snaps)
 
     def _ai_clear_marks(self, what: str) -> str:
         what = (what or "all").strip().lower()
@@ -43839,8 +46915,9 @@ class MainWindow(MvvmSettingsMixin, QMainWindow):
             return
         self._focus_ai_panel()
         panel = getattr(self, "_ai_panel", None)
-        if panel is not None and hasattr(panel, "query_analysis_findings"):
-            QTimer.singleShot(0, panel.query_analysis_findings)
+        tid = getattr(dlg, "wants_ai_template", "findings") or "findings"
+        if panel is not None and hasattr(panel, "query_template"):
+            QTimer.singleShot(0, lambda: panel.query_template(tid))
 
     def _capture_heatmap_view_snapshot(self, tab: _TraceTab) -> None:
         """Remember timeline zoom/pan/cursors before heatmap drill-down."""
@@ -46742,7 +49819,8 @@ _HEADLESS_QPA_PLATFORMS = ("offscreen", "minimal", "vnc")
 # Subcommands that render without a window server. Kept in sync with
 # cli._CLI_COMMANDS by tests.
 _HEADLESS_CLI_COMMANDS = frozenset({
-    "report", "compare", "info", "migrations", "snapshot", "perfetto", "slice",
+    "report", "compare", "analyze", "info", "migrations", "snapshot",
+    "perfetto", "slice",
 })
 
 def _headless_cli_invocation(argv: list[str] | None = None) -> bool:
@@ -46958,6 +50036,8 @@ Headless analysis commands (desktop only — no GUI, no Qt window):
   info         Quick trace summary on stdout (--json for scripts).
   report       Full statistics export (Statistics panel → Export CSV/HTML).
   compare      Two-trace diff (Trace Compare dialog → Export).
+  analyze      CI regression gate vs a baseline .btf or metrics JSON
+               (--fail-on-regression; optional --ai narrative).
   migrations   Core Migrations table only (CSV).
   snapshot     Export a PNG/SVG image (timeline, migration inspector, or a
                statistics metric plot) without opening the GUI.
@@ -46989,6 +50069,8 @@ CLI examples:
   %(prog)s report tracedata/example-4cores.btf -o /tmp/stats.html
   %(prog)s report tracedata/example-4cores.btf -o /tmp/stats --format both
   %(prog)s compare run1.btf run2.btf -o /tmp/compare.html --name-a baseline --name-b tuned
+  %(prog)s analyze candidate.btf --baseline baseline.btf --fail-on-regression
+  %(prog)s analyze candidate.btf --save-baseline /tmp/base.json
   %(prog)s compare tracedata/tickless-8cores.zip -o /tmp/tick-policy.html
   %(prog)s migrations tracedata/example-4cores.btf -o /tmp/migrations.csv
   %(prog)s snapshot tracedata/example-4cores.btf -o /tmp/timeline.png --view timeline
@@ -47286,6 +50368,55 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
         help="range end for trace B only",
     )
 
+    analyze = sub.add_parser(
+        "analyze",
+        help="CI regression gate vs a baseline .btf or metrics JSON",
+        description=(
+            "Compare a candidate trace against a baseline .btf (or a previously "
+            "saved metrics JSON). Prints a pass/fail report. Use "
+            "--fail-on-regression to exit non-zero for CI. Optional --ai asks "
+            "the configured OpenAI-compatible endpoint for a short narrative "
+            "(requires API settings / env keys)."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "examples:\n"
+            "  %(prog)s analyze run.btf --baseline base.btf --fail-on-regression\n"
+            "  %(prog)s analyze run.btf --save-baseline /tmp/base.json\n"
+            "  %(prog)s analyze run.btf --baseline /tmp/base.json --fail-on-regression\n"
+        ),
+    )
+    analyze.add_argument(
+        "trace", metavar="trace.btf",
+        help="candidate .btf to analyse",
+    )
+    analyze.add_argument(
+        "--baseline", metavar="PATH",
+        help="baseline .btf or metrics JSON from a prior --save-baseline",
+    )
+    analyze.add_argument(
+        "--save-baseline", metavar="PATH",
+        help="write candidate metrics JSON for later --baseline use",
+    )
+    analyze.add_argument(
+        "--fail-on-regression", action="store_true",
+        help="exit 1 when migrations / load-balance / missed-ticks regress",
+    )
+    analyze.add_argument(
+        "--ai", action="store_true",
+        help="optional LLM narrative (uses Settings → AI / env API keys)",
+    )
+    analyze.add_argument("--lo", type=int, default=None, metavar="T", help=_CLI_LO_HELP)
+    analyze.add_argument("--hi", type=int, default=None, metavar="T", help=_CLI_HI_HELP)
+    analyze.add_argument(
+        "--lo-b", type=int, default=None, metavar="T",
+        help="baseline range start when --baseline is a .btf",
+    )
+    analyze.add_argument(
+        "--hi-b", type=int, default=None, metavar="T",
+        help="baseline range end when --baseline is a .btf",
+    )
+
     info = sub.add_parser(
         "info",
         help="print trace summary on stdout",
@@ -47507,6 +50638,7 @@ def _make_arg_parser() -> Tuple[argparse.ArgumentParser, Dict[str, argparse.Argu
     return parser, {
         "report": report,
         "compare": compare,
+        "analyze": analyze,
         "info": info,
         "migrations": migrations,
         "snapshot": snapshot,
@@ -47641,6 +50773,116 @@ def _cli_compare_run(args: argparse.Namespace) -> int:
 def _cli_compare_main(argv: List[str]) -> int:
     args = _make_arg_parser()[1]["compare"].parse_args(argv)
     return _cli_compare_run(args)
+
+
+def _cli_analyze_run(args: argparse.Namespace) -> int:
+    err = _cli_validate_range_pair(args.lo, args.hi, "range")
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    err_b = _cli_validate_range_pair(args.lo_b, args.hi_b, "baseline range")
+    if err_b:
+        print(err_b, file=sys.stderr)
+        return 1
+
+    path = os.path.abspath(args.trace)
+    trace, err_load = _cli_load_trace(path)
+    if err_load:
+        print(err_load, file=sys.stderr)
+        return 1
+    assert trace is not None
+    cand_snap = snapshot_from_summary(
+        _trace_summary_snapshot(trace, args.lo, args.hi),
+        name=_trace_display_name(path),
+    )
+
+    if args.save_baseline:
+        try:
+            save_baseline_json(args.save_baseline, cand_snap)
+            print(args.save_baseline)
+        except OSError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        if not args.baseline and not args.fail_on_regression and not args.ai:
+            return 0
+
+    if not args.baseline:
+        print(
+            "error: --baseline PATH is required unless only --save-baseline",
+            file=sys.stderr,
+        )
+        return 1
+
+    base_path = os.path.abspath(args.baseline)
+    if base_path.lower().endswith(".json"):
+        try:
+            base_snap = load_baseline_json(base_path)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+    else:
+        base_trace, err_base = _cli_load_trace(base_path)
+        if err_base:
+            print(err_base, file=sys.stderr)
+            return 1
+        assert base_trace is not None
+        base_snap = snapshot_from_summary(
+            _trace_summary_snapshot(base_trace, args.lo_b, args.hi_b),
+            name=_trace_display_name(base_path),
+        )
+
+    result = evaluate_regression(cand_snap, base_snap)
+    title = f"{cand_snap.get('name') or 'A'} vs {base_snap.get('name') or 'B'}"
+    print(format_regression_report(result, title=title), end="")
+
+    if args.ai:
+        try:
+            from btf_viewer_pkg.ai_investigation import (
+                compare_performance_metrics,
+                explain_regression,
+            )
+            cmp = compare_performance_metrics(
+                cand_snap, base_snap,
+                label_a=str(cand_snap.get("name") or "A"),
+                label_b=str(base_snap.get("name") or "B"),
+            )
+            explained = explain_regression(cmp)
+            print(explained.get("markdown") or "", end="")
+        except Exception:
+            pass
+        try:
+            rc = _RcSettings()
+            cfg: Dict[str, str] = {}
+            if hasattr(rc, "_cfg") and rc._cfg.has_section("ai"):
+                cfg.update({k: v for k, v in rc._cfg.items("ai")})
+            active = resolve_ai_settings(cfg)
+            narrative = ai_chat_completion(
+                "Summarise this CI regression gate for an engineer. "
+                "Classify each check as Regression / Improvement / Neutral "
+                "with confidence. Keep it under 12 lines.\n\n"
+                + format_regression_report(result, title=title),
+                findings_text="",
+                base_url=active.get("base_url", ""),
+                model=active.get("model", ""),
+                api_key=active.get("api_key", ""),
+                preset=active.get("preset", ""),
+            )
+            content = ""
+            if isinstance(narrative, dict):
+                content = str(narrative.get("content") or "")
+            if content.strip():
+                print("\n--- AI narrative ---\n" + content.strip() + "\n")
+        except Exception as exc:
+            print(f"(AI narrative skipped: {exc})", file=sys.stderr)
+
+    if args.fail_on_regression and result.get("failed"):
+        return 1
+    return 0
+
+
+def _cli_analyze_main(argv: List[str]) -> int:
+    args = _make_arg_parser()[1]["analyze"].parse_args(argv)
+    return _cli_analyze_run(args)
 
 def _cli_info_run(args: argparse.Namespace) -> int:
     path = os.path.abspath(args.trace)
@@ -48369,6 +51611,7 @@ def _cli_slice_main(argv: List[str]) -> int:
 _CLI_COMMANDS = {
     "report": _cli_report_main,
     "compare": _cli_compare_main,
+    "analyze": _cli_analyze_main,
     "info": _cli_info_main,
     "migrations": _cli_migrations_main,
     "snapshot": _cli_snapshot_main,

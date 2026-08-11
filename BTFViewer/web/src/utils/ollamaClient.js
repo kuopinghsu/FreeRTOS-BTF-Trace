@@ -1,7 +1,7 @@
 /**
  * Ollama client + diagnostic prompt templates for the web AI Assistant.
  * Keep template prompts in sync with btf_viewer_pkg/ai_assistant.py
- * (documented in README.md § AI Assistant).
+ * (documented in AI.md; UI usage in README.md § AI Assistant).
  */
 
 import {
@@ -25,7 +25,13 @@ export const AI_SYSTEM_PROMPT =
   '(preemption, priority inversion, lock contention, core thrashing, switch ' +
   'overhead, tick health). Prefer concrete task names, cores, and durations. ' +
   'When mentioning a time, write it as jump:TIME where TIME is the numeric ' +
-  'value in the trace time unit (e.g. jump:1805120). Keep answers concise. '
+  'value in the trace time unit (e.g. jump:1805120). ' +
+  'For every important conclusion, cite evidence (metric names, counts, ' +
+  'jump:TIME ranges) and state confidence as High, Medium, or Low — and ' +
+  'whether the evidence is Directly observed, Strong correlation, Possible ' +
+  'explanation, or Insufficient evidence. Do not invent numbers that are ' +
+  'not in the findings, tool results, or Trace Compare tables. ' +
+  'Keep answers concise. '
   + AI_TOOL_SYSTEM_ADDENDUM
 
 /** Preferred reply languages — keep in sync with btf_viewer_pkg/ai_assistant.py */
@@ -67,13 +73,40 @@ export const AI_TEMPLATE_QUESTIONS = [
       'findings, say so and suggest a default top-down inspection order.',
   },
   {
+    id: 'investigate',
+    label: 'Investigate',
+    prompt:
+      'Investigate the main performance problem in this scope. First call ' +
+      'investigate() to get hypotheses and an evidence chain, then use ' +
+      'query_raw_metric and search_timeline as needed. Place cursors and ' +
+      'zoom_to_range on the strongest evidence, highlight the key task, ' +
+      'and finish with: (1) goal, (2) numbered investigation steps you ' +
+      'took, (3) root cause with confidence, (4) clickable jump:TIME ' +
+      'evidence, (5) next mitigation to try.',
+  },
+  {
+    id: 'root_cause',
+    label: 'Root cause',
+    prompt:
+      'Perform root-cause analysis for the top finding. Call ' +
+      'investigate(finding_id) first, then follow the chain ' +
+      'deadline/WCET → execution → preemption → blocking → mutex → ' +
+      'priority inheritance → migration only as far as the evidence ' +
+      'supports. Call query_raw_metric / search_timeline when numbers are ' +
+      'missing. Set cursors around the worst episode, highlight the ' +
+      'victim task, and answer with Root cause, Evidence (bullet list with ' +
+      'jump:TIME), Confidence, and Suggested fix.',
+  },
+  {
     id: AI_COMPARE_TEMPLATE_ID,
     label: 'Trace Compare',
     prompt:
       'Compare Trace A vs Trace B using the Trace Compare tables in the ' +
-      'context. Highlight the largest deltas (CPU, migrations, latency, ' +
-      'tick health, sync). Say which side is worse for each concern and ' +
-      'which Statistics section or Trace Compare page to open next.',
+      'context. Classify each major delta as Regression, Improvement, or ' +
+      'Neutral (CPU, migrations, latency, tick health, sync). State which ' +
+      'side is worse for each concern, the likely cause with confidence, ' +
+      'and which Statistics section or Trace Compare page to open next. ' +
+      'Use jump:TIME when a concrete timestamp is available.',
   },
   {
     id: 'triage',
@@ -81,6 +114,48 @@ export const AI_TEMPLATE_QUESTIONS = [
     prompt:
       'Summarise the Analysis Findings and list the top three issues to ' +
       'investigate first, with the Statistics section to open for each.',
+  },
+  {
+    id: 'task_profile',
+    label: 'Task profile',
+    prompt:
+      'Build an AI task behaviour profile for the hottest or most ' +
+      'problematic task in the findings (CPU %, typical / p95 / WCET ' +
+      'execution, dispatch, blocking, migrations, sync / priority ' +
+      'inheritance). Use query_raw_metric if needed. End with a short ' +
+      'assessment checklist (normal / warning) and one Ask-next question.',
+  },
+  {
+    id: 'diagnostic_report',
+    label: 'Diagnostic report',
+    prompt:
+      'Write a structured engineering diagnostic report for this scope: ' +
+      'Executive summary, Key findings, CPU / scheduling, WCET / ' +
+      'deadlines, Blocking / sync, Migrations, Root cause, ' +
+      'Recommendations (only when evidence supports them), and Evidence ' +
+      'timeline with jump:TIME links. Use export_report when the user ' +
+      'asks to save the report.',
+  },
+  {
+    id: 'what_if',
+    label: 'What-if',
+    prompt:
+      'Call what_if with a concrete change (pin TASK to Core_N, raise ' +
+      'priority, reduce mutex contention). The tool runs a heuristic ' +
+      'slice-replay simulator (not FreeRTOS kernel). Summarise baseline vs ' +
+      'simulated migrations/blocking/load-balance and the labelled ' +
+      'disclaimer. Cite evidence; do not invent numbers beyond the tool.',
+  },
+  {
+    id: 'optimize',
+    label: 'Optimize',
+    prompt:
+      'Call optimize_experiment for the hottest task (pin / priority / ' +
+      'contention / migration candidates), then summarise the ranked ' +
+      'experiments and best cost delta. Optionally call optimize for ' +
+      'qualitative mitigations. Label results as heuristic estimates — not ' +
+      'measured FreeRTOS behavior. Call investigate() if the top finding ' +
+      'is unclear.',
   },
   {
     id: 'latency',

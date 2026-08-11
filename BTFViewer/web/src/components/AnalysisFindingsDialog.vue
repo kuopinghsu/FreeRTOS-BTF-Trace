@@ -46,16 +46,38 @@
         </div>
       </div>
       <div class="analysis-footer">
-        <button
-          type="button"
-          class="analysis-btn primary"
-          :title="aiEnabled
-            ? 'Open the AI Assistant and walk through these Analysis Findings'
-            : 'Enable AI Assistant in Settings → AI'"
-          @click="emit('query-ai')"
-        >
-          Query with AI…
-        </button>
+        <div class="analysis-footer-left">
+          <button
+            type="button"
+            class="analysis-btn primary"
+            :title="aiEnabled
+              ? 'Open the AI Assistant and investigate the top findings with tools'
+              : 'Enable AI Assistant in Settings → AI'"
+            @click="emit('query-ai', 'investigate')"
+          >
+            Investigate…
+          </button>
+          <button
+            type="button"
+            class="analysis-btn"
+            :title="aiEnabled
+              ? 'Open the AI Assistant for evidence-driven root-cause analysis'
+              : 'Enable AI Assistant in Settings → AI'"
+            @click="emit('query-ai', 'root_cause')"
+          >
+            Root cause…
+          </button>
+          <button
+            type="button"
+            class="analysis-btn"
+            :title="aiEnabled
+              ? 'Open the AI Assistant and walk through these Analysis Findings'
+              : 'Enable AI Assistant in Settings → AI'"
+            @click="emit('query-ai', 'findings')"
+          >
+            Query with AI…
+          </button>
+        </div>
         <div class="analysis-footer-right">
           <button
             type="button"
@@ -196,6 +218,12 @@ function saveAsText() {
   gap: 8px;
   padding: 10px 14px;
   border-top: 1px solid var(--border);
+}
+
+.analysis-footer-left {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .analysis-footer-right {

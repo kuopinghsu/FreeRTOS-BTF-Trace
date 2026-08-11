@@ -32,7 +32,7 @@ BTFViewer/        Desktop (PySide6) and web (Vue) viewer
 tracedata/        Sample `.btf.gz` / `.vcd` traces
 ```
 
-Viewer user guide: [`BTFViewer/README.md`](BTFViewer/README.md) · diagnosis playbooks: [`BTFViewer/WORKFLOWS.md`](BTFViewer/WORKFLOWS.md) · porting: [`PORTING.md`](PORTING.md) · binary format: [`TRACE_FORMAT.md`](TRACE_FORMAT.md).
+Viewer user guide: [`BTFViewer/README.md`](BTFViewer/README.md) · diagnosis playbooks: [`BTFViewer/WORKFLOWS.md`](BTFViewer/WORKFLOWS.md) · AI Assistant details: [`BTFViewer/AI.md`](BTFViewer/AI.md) · porting: [`PORTING.md`](PORTING.md) · binary format: [`TRACE_FORMAT.md`](TRACE_FORMAT.md).
 
 ## Quick start
 

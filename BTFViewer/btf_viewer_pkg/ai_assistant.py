@@ -51,6 +51,12 @@ from .ai_tools import (
     tool_result_payload,
     validate_tool_call,
 )
+from .ai_investigation import (
+    complete_investigation_plan,
+    default_investigation_plan,
+    is_agent_template,
+    mark_plan_steps_from_tools,
+)
 
 
 class OllamaCancelled(Exception):
@@ -157,7 +163,13 @@ AI_SYSTEM_PROMPT = (
     "(preemption, priority inversion, lock contention, core thrashing, switch "
     "overhead, tick health). Prefer concrete task names, cores, and durations. "
     "When mentioning a time, write it as jump:TIME where TIME is the numeric "
-    "value in the trace time unit (e.g. jump:1805120). Keep answers concise. "
+    "value in the trace time unit (e.g. jump:1805120). "
+    "For every important conclusion, cite evidence (metric names, counts, "
+    "jump:TIME ranges) and state confidence as High, Medium, or Low — and "
+    "whether the evidence is Directly observed, Strong correlation, Possible "
+    "explanation, or Insufficient evidence. Do not invent numbers that are "
+    "not in the findings, tool results, or Trace Compare tables. "
+    "Keep answers concise. "
     + AI_TOOL_SYSTEM_ADDENDUM
 )
 
@@ -198,18 +210,81 @@ AI_TEMPLATE_QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
         "findings, say so and suggest a default top-down inspection order.",
     ),
     (
+        "investigate",
+        "Investigate",
+        "Investigate the main performance problem in this scope. First call "
+        "investigate() to get hypotheses and an evidence chain, then use "
+        "query_raw_metric and search_timeline as needed. Place cursors and "
+        "zoom_to_range on the strongest evidence, highlight the key task, "
+        "and finish with: (1) goal, (2) numbered investigation steps you "
+        "took, (3) root cause with confidence, (4) clickable jump:TIME "
+        "evidence, (5) next mitigation to try.",
+    ),
+    (
+        "root_cause",
+        "Root cause",
+        "Perform root-cause analysis for the top finding. Call "
+        "investigate(finding_id) first, then follow the chain "
+        "deadline/WCET → execution → preemption → blocking → mutex → "
+        "priority inheritance → migration only as far as the evidence "
+        "supports. Call query_raw_metric / search_timeline when numbers are "
+        "missing. Set cursors around the worst episode, highlight the "
+        "victim task, and answer with Root cause, Evidence (bullet list with "
+        "jump:TIME), Confidence, and Suggested fix.",
+    ),
+    (
         AI_COMPARE_TEMPLATE_ID,
         "Trace Compare",
         "Compare Trace A vs Trace B using the Trace Compare tables in the "
-        "context. Highlight the largest deltas (CPU, migrations, latency, "
-        "tick health, sync). Say which side is worse for each concern and "
-        "which Statistics section or Trace Compare page to open next.",
+        "context. Classify each major delta as Regression, Improvement, or "
+        "Neutral (CPU, migrations, latency, tick health, sync). State which "
+        "side is worse for each concern, the likely cause with confidence, "
+        "and which Statistics section or Trace Compare page to open next. "
+        "Use jump:TIME when a concrete timestamp is available.",
     ),
     (
         "triage",
         "Triage findings",
         "Summarise the Analysis Findings and list the top three issues to "
         "investigate first, with the Statistics section to open for each.",
+    ),
+    (
+        "task_profile",
+        "Task profile",
+        "Build an AI task behaviour profile for the hottest or most "
+        "problematic task in the findings (CPU %, typical / p95 / WCET "
+        "execution, dispatch, blocking, migrations, sync / priority "
+        "inheritance). Use query_raw_metric if needed. End with a short "
+        "assessment checklist (normal / warning) and one Ask-next question.",
+    ),
+    (
+        "diagnostic_report",
+        "Diagnostic report",
+        "Write a structured engineering diagnostic report for this scope: "
+        "Executive summary, Key findings, CPU / scheduling, WCET / "
+        "deadlines, Blocking / sync, Migrations, Root cause, "
+        "Recommendations (only when evidence supports them), and Evidence "
+        "timeline with jump:TIME links. Use export_report when the user "
+        "asks to save the report.",
+    ),
+    (
+        "what_if",
+        "What-if",
+        "Call what_if with a concrete change (pin TASK to Core_N, raise "
+        "priority, reduce mutex contention). The tool runs a heuristic "
+        "slice-replay simulator (not FreeRTOS kernel). Summarise baseline vs "
+        "simulated migrations/blocking/load-balance and the labelled "
+        "disclaimer. Cite evidence; do not invent numbers beyond the tool.",
+    ),
+    (
+        "optimize",
+        "Optimize",
+        "Call optimize_experiment for the hottest task (pin / priority / "
+        "contention / migration candidates), then summarise the ranked "
+        "experiments and best cost delta. Optionally call optimize for "
+        "qualitative mitigations. Label results as heuristic estimates — not "
+        "measured FreeRTOS behavior. Call investigate() if the top finding "
+        "is unclear.",
     ),
     (
         "latency",
@@ -1522,13 +1597,15 @@ def format_ai_conversation_markdown(entries: Sequence[Any]) -> str:
     out = ["# BTF Viewer — AI Conversation", "", f"_Saved {stamp}_", ""]
     for entry in entries:
         role = ai_entry_role(entry)
-        out.append("## You" if role == "user" else "## Assistant")
-        out.append("")
         text = (ai_entry_text(entry) or "").strip()
+        tools = _tool_transcript_lines(entry)
+        # User keeps a "You" heading; assistant replies omit the role label.
+        if role == "user":
+            out.append("## You")
+            out.append("")
         if text:
             out.append(text)
             out.append("")
-        tools = _tool_transcript_lines(entry)
         if tools:
             out.extend(tools)
             out.append("")
@@ -1541,11 +1618,13 @@ def format_ai_conversation_text(entries: Sequence[Any]) -> str:
     out = ["BTF Viewer — AI Conversation", f"Saved {stamp}", ""]
     for entry in entries:
         role = ai_entry_role(entry)
-        out.append("You:" if role == "user" else "Assistant:")
         text = (ai_entry_text(entry) or "").strip()
+        tools = _tool_transcript_lines(entry)
+        # User keeps a "You:" prefix; assistant replies omit the role label.
+        if role == "user":
+            out.append("You:")
         if text:
             out.append(text)
-        tools = _tool_transcript_lines(entry)
         if tools:
             out.extend(tools)
         out.append("")
@@ -1561,7 +1640,6 @@ h1{font-size:18px;margin:0 0 4px;}
 .msg:first-of-type{border-top:none;padding-top:0;}
 .msg h3{font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin:0 0 6px;color:#8b98a8;}
 .msg.user h3{color:#6ea8e0;}
-.msg.assistant h3{color:#6fbf9a;}
 .msg .body{padding:8px 10px;border-left:3px solid #5b9bd5;background:#1e3348;border-radius:0 6px 6px 0;}
 .msg.assistant .body{border-left-color:#3d9a72;background:#1a2620;}
 pre{background:#1a2230;border:1px solid #3a4658;border-radius:4px;padding:8px;overflow:auto;}
@@ -1582,12 +1660,13 @@ def format_ai_conversation_html(entries: Sequence[Any]) -> str:
     for entry in entries:
         role = ai_entry_role(entry)
         text = ai_entry_text(entry)
-        head = "You" if role == "user" else "Assistant"
         cls = "user" if role == "user" else "assistant"
         body = _ai_message_body_html(role, text, as_img=False) if (text or "").strip() else ""
         cards = _tool_cards_html(ai_entry_tools(entry), "")
+        # User keeps a "You" heading; assistant replies omit the role label.
+        head = "<h3>You</h3>" if role == "user" else ""
         parts.append(
-            f'<section class="msg {cls}"><h3>{head}</h3>'
+            f'<section class="msg {cls}">{head}'
             f'<div class="body">{body}{cards}</div>'
             "</section>"
         )
@@ -2411,6 +2490,21 @@ def create_ai_assistant_panel(
                     self._compare_btn = btn
             mid_lay.addLayout(tpl_grid)
 
+            self._investigation_plan: Optional[Dict[str, Any]] = None
+            self._active_template_id = ""
+            self._plan_label = QLabel("Investigation plan")
+            self._plan_label.setStyleSheet("font-weight:600;margin-top:2px;")
+            self._plan_label.hide()
+            mid_lay.addWidget(self._plan_label)
+            self._plan_view = QLabel("")
+            self._plan_view.setWordWrap(True)
+            self._plan_view.setStyleSheet(
+                "color:#c5d0dc;font-size:11px;background:#1a222d;"
+                "border:1px solid #2c3645;border-radius:6px;padding:6px;"
+            )
+            self._plan_view.hide()
+            mid_lay.addWidget(self._plan_view)
+
             self.refresh_template_availability()
 
             self._log = QTextBrowser()
@@ -2991,11 +3085,55 @@ def create_ai_assistant_panel(
         def _use_template(self, template_id: str, prompt: str) -> None:
             if self._busy:
                 return
+            self._active_template_id = str(template_id or "")
+            if is_agent_template(template_id):
+                self._set_investigation_plan(default_investigation_plan(
+                    next((p for tid, _l, p in AI_TEMPLATE_QUESTIONS if tid == template_id), "")[:80]
+                    or "Investigate the main performance problem"
+                ))
+            else:
+                self._clear_investigation_plan()
             if template_id == AI_COMPARE_TEMPLATE_ID:
                 self._run_compare_template(prompt)
                 return
             self._input.setPlainText(prompt)
             self.send_current()
+
+        def _set_investigation_plan(self, plan: Optional[Dict[str, Any]]) -> None:
+            self._investigation_plan = plan
+            if not plan:
+                self._clear_investigation_plan()
+                return
+            lines = [f"<b>Goal:</b> {html.escape(str(plan.get('goal') or ''))}"]
+            for step in plan.get("steps") or []:
+                st = str(step.get("status") or "pending")
+                mark = {"done": "✓", "active": "●", "pending": "○"}.get(st, "○")
+                lines.append(
+                    f"{mark} {html.escape(str(step.get('label') or step.get('id') or ''))}"
+                )
+            self._plan_view.setText("<br/>".join(lines))
+            self._plan_label.show()
+            self._plan_view.show()
+
+        def _clear_investigation_plan(self) -> None:
+            self._investigation_plan = None
+            self._plan_label.hide()
+            self._plan_view.hide()
+            self._plan_view.clear()
+
+        def _advance_investigation_plan(self, tool_names: Sequence[str]) -> None:
+            if not self._investigation_plan:
+                return
+            self._set_investigation_plan(
+                mark_plan_steps_from_tools(self._investigation_plan, tool_names)
+            )
+
+        def _finish_investigation_plan(self) -> None:
+            if not self._investigation_plan:
+                return
+            self._set_investigation_plan(
+                complete_investigation_plan(self._investigation_plan)
+            )
 
         def _run_compare_template(
             self,
@@ -3080,6 +3218,10 @@ def create_ai_assistant_panel(
                     "error": err,
                     "status": "pending",
                 })
+            if tools_norm:
+                self._advance_investigation_plan(
+                    [str(t.get("name") or "") for t in tools_norm]
+                )
 
             auto = (
                 parse_ai_auto_apply(self._settings_dict().get("auto_apply"))
@@ -3103,6 +3245,7 @@ def create_ai_assistant_panel(
 
             if text:
                 self._append("assistant", text)
+            self._finish_investigation_plan()
             jumps = extract_jump_times(text)
             if jumps:
                 token = _JUMP_RE.search(text or "")
@@ -3189,7 +3332,7 @@ def create_ai_assistant_panel(
                 self._status.setText("Skipped GUI actions.")
                 self._cleanup_worker()
                 return
-            if self._tool_round >= max_tool_rounds():
+            if self._tool_round >= max_tool_rounds(self._active_template_id):
                 self._status.setText("Done (tool round limit).")
                 self._cleanup_worker()
                 return

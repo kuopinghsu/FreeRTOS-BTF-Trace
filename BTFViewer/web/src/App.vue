@@ -921,23 +921,51 @@ import { zoomStatusFromViewport } from './utils/timeFormat.js'
 import { taskDisplayName, taskMergeKey, setColorblindMode } from './utils/colors.js'
 import {
   AI_TOOL_ADD_ANNOTATION,
+  AI_TOOL_ANALYZE_TRACES,
+  AI_TOOL_BOOKMARK_FINDING,
+  AI_TOOL_CHECK_BUDGET,
   AI_TOOL_CLEAR_MARKS,
+  AI_TOOL_COMPARE_PERFORMANCE,
+  AI_TOOL_CORRELATE_EVENTS,
+  AI_TOOL_DETECT_ANOMALIES,
+  AI_TOOL_GENERATE_REPORT,
   AI_TOOL_HIGHLIGHT_TASK,
+  AI_TOOL_INVESTIGATE,
+  AI_TOOL_INVESTIGATION_REPLAY,
   AI_TOOL_OPEN_CORRIDOR,
+  AI_TOOL_OPTIMIZE,
+  AI_TOOL_OPTIMIZE_EXPERIMENT,
   AI_TOOL_QUERY_RAW_METRIC,
+  AI_TOOL_REGRESSION_EXPLAIN,
   AI_TOOL_RESET_VIEW,
   AI_TOOL_SEARCH_TIMELINE,
   AI_TOOL_SET_CURSORS,
   AI_TOOL_SET_VIEW_MODE,
   AI_TOOL_TRIGGER_COMPARE,
+  AI_TOOL_WHAT_IF,
   AI_TOOL_ZOOM_TO_RANGE,
+  analyzeTracesSnapshots,
+  checkBudgetFinding,
+  comparePerformanceTabs,
+  correlateTaskEvents,
+  detectAnomaliesFinding,
+  explainRegressionFromCompare,
+  formatBookmarkLabel,
+  generateReportFinding,
+  investigateFinding,
+  investigationReplayFinding,
+  gatherSimulationInputs,
+  optimizeExperimentFinding,
+  optimizeFinding,
   queryRawMetric,
   resolveCoreKey,
   resolveTaskKey,
   searchTimelineHits,
   toolMutatesGui,
   validateToolCall,
+  whatIfEstimate,
 } from './utils/aiTools.js'
+import { detectAnomalies, parseWhatIfChange, snapshotFromSummary } from './utils/aiInvestigation.js'
 import { filterBtfTextToRange, reconstructBtfSlice } from './utils/btfSlice.js'
 import {
   DARK_MODE,
@@ -958,7 +986,7 @@ import { setTimelineLayout } from './utils/timelineLayout.js'
 import { traceIsMultiCore } from './utils/migrationAnalysis.js'
 import { collectTraceAnalysisFindings, formatAnalysisFindingsText } from './utils/workflowAnalysis.js'
 import { getPlacedCursors, getStatsRange, scopeSuffix } from './utils/statsRange.js'
-import { buildAllCompareTables, buildCompareCsv } from './utils/traceCompare.js'
+import { buildAllCompareTables, buildCompareCsv, cursorRangeForCursors, traceSummarySnapshot } from './utils/traceCompare.js'
 import {
   cpuLoadPreferredPaneHeight, cpuLoadPaneDefaultH, cpuLoadPaneMaxH,
   CPU_LOAD_PANE_MIN_H,
@@ -2009,9 +2037,9 @@ async function focusAiAndAsk(templateId) {
   if (prompt) await aiPanelRef.value?.ask?.(prompt)
 }
 
-async function queryAnalysisWithAi() {
+async function queryAnalysisWithAi(templateId = 'findings') {
   analysisOpen.value = false
-  await focusAiAndAsk('findings')
+  await focusAiAndAsk(templateId || 'findings')
 }
 
 async function queryCorridorWithAi() {
@@ -2338,6 +2366,116 @@ function dispatchAiTool(name, args) {
   if (name === AI_TOOL_TRIGGER_COMPARE) {
     return triggerAiCompare(args.tab_a || '', args.tab_b || '')
   }
+  if (name === AI_TOOL_INVESTIGATE) {
+    return investigateFinding(analysisFindings.value || [], args.finding_id || '', {
+      depth: args.depth ?? 2,
+    })
+  }
+  if (name === AI_TOOL_DETECT_ANOMALIES) {
+    return detectAnomaliesFinding(analysisFindings.value || [], {
+      limit: args.limit ?? 10,
+    })
+  }
+  if (name === AI_TOOL_CORRELATE_EVENTS) {
+    return correlateTaskEvents(trace.value, args.task || '', {
+      aroundTime: args.around_time,
+      window: args.window || 0,
+      annotations: (marks.value || []).filter(m => m.type === 'annotation'),
+    })
+  }
+  if (name === AI_TOOL_COMPARE_PERFORMANCE) {
+    return compareAiPerformance(args.tab_a || '', args.tab_b || '')
+  }
+  if (name === AI_TOOL_GENERATE_REPORT) {
+    return generateReportFinding(analysisFindings.value || [], {
+      reportType: args.report_type || 'performance',
+      findingId: args.finding_id || '',
+    })
+  }
+  if (name === AI_TOOL_CHECK_BUDGET) {
+    return checkBudgetFinding(args.tasks || null, args.budgets || null, {
+      findings: analysisFindings.value || [],
+    })
+  }
+  if (name === AI_TOOL_OPTIMIZE) {
+    return optimizeFinding(analysisFindings.value || [], {
+      limit: args.limit ?? 5,
+    })
+  }
+  if (name === AI_TOOL_REGRESSION_EXPLAIN) {
+    return explainAiRegression(args.tab_a || '', args.tab_b || '')
+  }
+  if (name === AI_TOOL_BOOKMARK_FINDING) {
+    const ns = Math.trunc(Number(args.time))
+    const note = formatBookmarkLabel(args.kind || 'evidence', args.note || '')
+    timelinePanelRef.value?.jumpToNs(ns)
+    syncTimelineViewport()
+    const existing = (marks.value || []).find(
+      m => m.type === 'annotation' && Number(m.ns) === ns && (m.label || '') === note)
+    if (existing) return `Annotation already at ${ns}`
+    addMarkAtNs(ns, 'annotation', note, { undo: false })
+    scheduleSessionSave()
+    return `Bookmarked ${ns}: ${note}`
+  }
+  if (name === AI_TOOL_INVESTIGATION_REPLAY) {
+    return investigationReplayFinding(analysisFindings.value || [], args.finding_id || '', {
+      conclusion: args.conclusion || '',
+      toolsRun: args.tools_run || [],
+      evidenceTimes: args.evidence_times || [],
+    })
+  }
+  if (name === AI_TOOL_WHAT_IF) {
+    let task = String(args.task || '').trim()
+    const change = String(args.change || '')
+    if (!task) {
+      const parsed = parseWhatIfChange(change)
+      task = String(parsed.task || '').trim()
+    }
+    const scopeOn = activeTab.value?.scopeToCursors !== false
+    const range = getStatsRange(cursors.value, scopeOn)
+    const simIn = gatherSimulationInputs(trace.value, task, {
+      lo: range?.lo ?? null,
+      hi: range?.hi ?? null,
+      findingsText: buildAiContext().findingsText || '',
+    })
+    return whatIfEstimate(change, {
+      task: simIn.task || task,
+      findings: analysisFindings.value || [],
+      slices: simIn.slices,
+      migrations: simIn.migrations,
+      blockingGaps: simIn.blockingGaps,
+      coreUtils: simIn.coreUtils,
+    })
+  }
+  if (name === AI_TOOL_OPTIMIZE_EXPERIMENT) {
+    let task = String(args.task || '').trim()
+    if (!task) {
+      const ranked = detectAnomalies(analysisFindings.value || [], { limit: 3 })
+      for (const a of ranked.anomalies || []) {
+        task = String(a.task || '').trim()
+        if (task) break
+      }
+    }
+    const scopeOn = activeTab.value?.scopeToCursors !== false
+    const range = getStatsRange(cursors.value, scopeOn)
+    const simIn = gatherSimulationInputs(trace.value, task, {
+      lo: range?.lo ?? null,
+      hi: range?.hi ?? null,
+      findingsText: buildAiContext().findingsText || '',
+    })
+    return optimizeExperimentFinding({
+      task: simIn.task || task,
+      findings: analysisFindings.value || [],
+      slices: simIn.slices,
+      migrations: simIn.migrations,
+      blockingGaps: simIn.blockingGaps,
+      coreUtils: simIn.coreUtils,
+      limit: args.limit ?? 5,
+    })
+  }
+  if (name === AI_TOOL_ANALYZE_TRACES) {
+    return analyzeAiTraces()
+  }
   throw new Error(`unknown tool ${name}`)
 }
 
@@ -2376,6 +2514,42 @@ function triggerAiCompare(tabARef, tabBRef) {
     message: ctx.scope || 'Trace Compare',
     data: { csv: ctx.findingsText || '' },
   }
+}
+
+function compareAiPerformance(tabARef, tabBRef) {
+  const tabA = resolveAiTabRef(tabARef, 0)
+  const tabB = resolveAiTabRef(tabBRef, 1)
+  if (tabA.id === tabB.id) throw new Error('tab_a and tab_b must name different traces')
+  if (!tabA.trace || !tabB.trace) throw new Error('Both tabs must have a loaded trace')
+  const ra = cursorRangeForCursors(tabA.cursors)
+  const rb = cursorRangeForCursors(tabB.cursors)
+  const nameA = tabA.name || `Tab ${tabA.id}`
+  const nameB = tabB.name || `Tab ${tabB.id}`
+  const snapA = traceSummarySnapshot(tabA.trace, ra.lo, ra.hi) || {}
+  const snapB = traceSummarySnapshot(tabB.trace, rb.lo, rb.hi) || {}
+  return comparePerformanceTabs(snapA, snapB, { labelA: nameA, labelB: nameB })
+}
+
+function explainAiRegression(tabARef, tabBRef) {
+  const cmpPayload = compareAiPerformance(tabARef, tabBRef)
+  const compare = { ...(cmpPayload.data || {}) }
+  if (compare.message == null) compare.message = cmpPayload.message
+  if (compare.failed == null && 'failed' in cmpPayload) compare.failed = cmpPayload.failed
+  return explainRegressionFromCompare(compare, analysisFindings.value || [])
+}
+
+function analyzeAiTraces() {
+  const loaded = (tabs.value || []).filter(t => t?.trace)
+  if (!loaded.length) throw new Error('No loaded traces')
+  const snaps = loaded.map((tab) => {
+    const range = cursorRangeForCursors(tab.cursors)
+    const name = tab.name || `Tab ${tab.id}`
+    return snapshotFromSummary(
+      traceSummarySnapshot(tab.trace, range.lo, range.hi) || {},
+      { name },
+    )
+  })
+  return analyzeTracesSnapshots(snaps)
 }
 
 function openTraceCompare(idA, idB) {

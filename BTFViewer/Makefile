@@ -66,7 +66,7 @@ test-all: test test-web
 
 ci: test-all check-bundle
 
-doc: $(DOCS)/README.pdf $(DOCS)/WORKFLOWS.pdf
+doc: $(DOCS)/README.pdf $(DOCS)/AI.pdf $(DOCS)/WORKFLOWS.pdf
 
 # Use the vendored Eisvogel template (scripts/eisvogel.latex). Do not pass
 # `--template=eisvogel`: pandoc prefers ~/.local/share/pandoc/templates/eisvogel.latex,
@@ -82,6 +82,10 @@ PANDOC_PDF_FLAGS := --pdf-engine=xelatex \
 $(DOCS)/README.pdf: README.md
 	mkdir -p $(DOCS)
 	$(PANDOC) $(PANDOC_PDF_FLAGS) -M title="BTF Trace Viewer" $< -o $@
+
+$(DOCS)/AI.pdf: AI.md
+	mkdir -p $(DOCS)
+	$(PANDOC) $(PANDOC_PDF_FLAGS) -M title="BTF AI Assistant" $< -o $@
 
 $(DOCS)/WORKFLOWS.pdf: WORKFLOWS.md
 	mkdir -p $(DOCS)

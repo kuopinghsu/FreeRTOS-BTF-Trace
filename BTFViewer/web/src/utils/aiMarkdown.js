@@ -382,8 +382,11 @@ export function formatAiConversationMarkdown(entries, date = new Date()) {
   const out = ['# BTF Viewer — AI Conversation', '', `_Saved ${conversationStamp(date)}_`, '']
   for (const entry of entries || []) {
     const role = entry.role
-    out.push(role === 'user' ? '## You' : '## Assistant', '')
     const text = String(entry.content || entry.text || '').trim()
+    // User keeps a "You" heading; assistant replies omit the role label.
+    if (role === 'user') {
+      out.push('## You', '')
+    }
     if (text) {
       out.push(text, '')
     }
@@ -401,8 +404,11 @@ export function formatAiConversationMarkdown(entries, date = new Date()) {
 export function formatAiConversationText(entries, date = new Date()) {
   const out = ['BTF Viewer — AI Conversation', `Saved ${conversationStamp(date)}`, '']
   for (const entry of entries || []) {
-    out.push(entry.role === 'user' ? 'You:' : 'Assistant:')
     const text = String(entry.content || entry.text || '').trim()
+    // User keeps a "You:" prefix; assistant replies omit the role label.
+    if (entry.role === 'user') {
+      out.push('You:')
+    }
     if (text) out.push(text)
     for (const t of entry.tools || []) {
       const label = summariseToolCall(t.name || '', t.arguments || {})
@@ -429,9 +435,11 @@ export function formatAiConversationHtml(entries, date = new Date()) {
   const body = (entries || []).map((entry) => {
     const role = entry.role
     const content = entry.content || entry.text || ''
+    // User keeps a "You" heading; assistant replies omit the role label.
+    const head = role === 'user' ? '<h3>You</h3>' : ''
     return (
       `<section class="msg ${role === 'user' ? 'user' : 'assistant'}">`
-      + `<h3>${role === 'user' ? 'You' : 'Assistant'}</h3>`
+      + head
       + `<div class="body">${formatAiMessageHtml(role, content, { zoomable: false })}${toolCardsHtml(entry.tools)}</div>`
       + '</section>'
     )
@@ -450,7 +458,6 @@ h1{font-size:18px;margin:0 0 4px;}
 .msg:first-of-type{border-top:none;padding-top:0;}
 .msg h3{font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin:0 0 6px;color:#8b98a8;}
 .msg.user h3{color:#6ea8e0;}
-.msg.assistant h3{color:#6fbf9a;}
 .msg .body{padding:8px 10px;border-left:3px solid #5b9bd5;background:#1e3348;border-radius:0 6px 6px 0;}
 .msg.assistant .body{border-left-color:#3d9a72;background:#1a2620;}
 pre{background:#1a2230;border:1px solid #3a4658;border-radius:4px;padding:8px;overflow:auto;}

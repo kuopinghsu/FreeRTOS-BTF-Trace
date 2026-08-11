@@ -42,7 +42,7 @@ Metric definitions and formulas are in [Statistics & metrics](#statistics--metri
 | [Export](#export) | Snapshots, reports, Perfetto, CLI |
 | [Settings](#settings) | Preferences and defaults |
 | [Keyboard & mouse](#keyboard--mouse) | Shortcuts reference |
-| [Further reading](#further-reading) | Workflows and developer notes |
+| [Further reading](#further-reading) | Workflows, AI details, developer notes |
 
 ---
 
@@ -77,7 +77,7 @@ Or use the [hosted demo](https://apps.kuoping.com/btf_viewer.html). Toolbar **De
 cd BTFViewer && make web    # → builds/btf_viewer.html
 ```
 
-**AI:** After a trace is open, import [`examples/ai/presets.json`](examples/ai/presets.json) in **Settings → AI** for ready-made Ollama / OpenAI / Gemini / Custom endpoints. See [AI Assistant](#ai-assistant).
+**AI:** After a trace is open, import [`examples/ai/presets.json`](examples/ai/presets.json) in **Settings → AI** for ready-made Ollama / OpenAI / Gemini / Custom endpoints. See [AI Assistant](#ai-assistant) (UI) and **[AI.md](AI.md)** (setup, tools, troubleshooting).
 
 <a id="supported-files" name="supported-files">&#x200B;</a>
 ### Supported files ![](../images/readme/h3.svg)
@@ -192,7 +192,7 @@ Start with toolbar **Analysis** for a severity-tagged triage of the current Stat
 <a id="analysis-findings" name="analysis-findings">&#x200B;</a>
 ### Analysis Findings ![](../images/readme/h3.svg)
 
-Toolbar **Analysis** summarises likely issues for the current scope (load imbalance, WCET/CPU hotspots, blocking, priority inversion, core thrashing, deadline breaches, tick health, sync/mutex bounces, and similar). Use **Query with AI…** to walk the same findings in the **AI** tab, or **Save as Text…** for a copy; the same card appears in **Export HTML**.
+Toolbar **Analysis** summarises likely issues for the current scope (load imbalance, WCET/CPU hotspots, blocking, priority inversion, core thrashing, deadline breaches, tick health, sync/mutex bounces, and similar). From the dialog: **Investigate…** runs an evidence-driven drill-down (tools + cursors), **Root cause…** follows the deadline→blocking→mutex chain for the top finding, **Query with AI…** walks the findings card, or **Save as Text…** for a copy. The same card appears in **Export HTML**.
 
 **How to act on a finding**
 
@@ -200,7 +200,7 @@ Toolbar **Analysis** summarises likely issues for the current scope (load imbala
 2. Open that section, sort by Max / Rate / Bounce as relevant.
 3. Click **Min** / **Max**, a chart point, or an inspector cell to jump the timeline.
 4. Place cursors around the phase of interest and enable **Limit to C1–Cn**.
-5. Optionally click **Query with AI…** (or open the **AI** tab) to walk the same findings ([WORKFLOWS.md §7](WORKFLOWS.md#7-ai-assistant-flow)).
+5. Optionally click **Investigate…** / **Root cause…** / **Query with AI…** (or open the **AI** tab) ([WORKFLOWS.md §7](WORKFLOWS.md#7-ai-assistant-flow)).
 
 <a id="how-to-find-problems-quick-map" name="how-to-find-problems-quick-map">&#x200B;</a>
 ### How to find problems (quick map) ![](../images/readme/h3.svg)
@@ -227,129 +227,30 @@ With **two or more** tabs open, **Trace Compare…** diffs summary, top tasks, u
 <a id="ai-assistant" name="ai-assistant">&#x200B;</a>
 ### AI Assistant ![](../images/readme/h3.svg)
 
-The **AI** tab answers diagnostic questions using structured **Analysis Findings** and summary metrics—not the raw `.btf` event stream. That keeps the prompt compact (token-efficient) and analysis fast. The Trace Compare template sends those tables instead of Findings.
+The right-panel **AI** tab asks diagnostic questions over **Analysis Findings** (or Trace Compare tables). Same panel on **Desktop** and **Web** (schema, tools, and templates stay in sync). Show it with **View → Show AI Assistant** (or Display settings). Endpoints, tools, workflows / use cases, Desktop vs Web differences, CORS, and CLI details live in **[AI.md](AI.md)** ([Workflows](AI.md#workflows-and-use-cases)). Ask order: [WORKFLOWS.md §7](WORKFLOWS.md#7-ai-assistant-flow).
 
-When a question needs granular per-task time-series, the model can call `query_raw_metric` to pull a scoped series on demand (still never the raw BTF file). `search_timeline` locates STI / tag / task timestamps like Find. `trigger_compare` returns Trace Compare CSV when two tabs are open. Query-only batches (`query_raw_metric`, `search_timeline`, `trigger_compare`) run immediately; mixed GUI batches wait for **Apply** unless **Auto-apply GUI actions** is on.
+1. **Settings → AI** — enable the assistant, pick a preset (**Ollama**, **OpenAI**, **Google Gemini**, or **Custom**), set base URL / model, choose **Authentication** (**None (local)** / **API key** / **Sign in**), optionally **Allow self-signed TLS** (Desktop), then **Test connection**. Refresh next to **Model** lists served ids. The panel chip shows `Local` / `Key saved` / `Needs API key` / `Needs sign-in` / `Signed in`.
+2. **Import…** loads JSON from [`examples/ai`](examples/ai/README.md) (review the form, then save).
+3. Run a **template**, use **Analysis → Investigate… / Root cause… / Query with AI…**, or type a free-form question. Click `jump:TIME` in the reply to seek the timeline.
+4. Agent templates (**Investigate**, **Root cause**, **What-if**, **Optimize**, **Diagnostic report**) show an **Investigation plan** checklist (steps advance as tools run; the final reply completes the list).
+5. When the model proposes GUI actions, **Apply** / **Skip** / **Undo** (or enable **Auto-apply GUI actions**). Read-only queries (including `what_if` / `optimize_experiment`) apply immediately.
+6. Set reply language in Settings or **Language…** on the AI bar. Right-click the log to copy or **Save As…** (Markdown / text / HTML). **Clear** between unrelated questions.
 
-Recommended ask order ([WORKFLOWS.md §7](WORKFLOWS.md#7-ai-assistant-flow)): triage overall findings → drill into the named metric (latency, WCET, inversion, migrations) → ask for mitigations after the timeline agrees. Prefer the built-in templates; they already name the metrics and units.
+**Templates** (AI bar, and Analysis / Compare / Corridor shortcuts):
 
-Any OpenAI-compatible endpoint works, including Ollama (`http://localhost:11434/v1`). Chat requests time out after 120s (**Stop** still cancels sooner). Give the endpoint at least an **8k** context window so a full Findings card plus a tool round still fits.
+| Template | Use when |
+|----------|----------|
+| **Investigate** | Rank hypotheses, call tools, place cursors / zoom / highlight, then conclude with confidence |
+| **Root cause** | Walk deadline/WCET → preemption → blocking → mutex → inheritance → migration for the top finding |
+| **Task profile** | Behaviour summary for the hottest / most problematic task |
+| **Diagnostic report** | Structured engineering write-up; pair with `export_report` to save |
+| **What-if** | Heuristic slice-replay for a concrete change (pin / priority / contention); labelled — not FreeRTOS kernel |
+| **Optimize** | Ranked `optimize_experiment` candidates plus qualitative mitigations (estimate disclaimer) |
+| **Trace Compare** | Classify A vs B deltas as Regression / Improvement / Neutral with confidence |
+| **Triage findings** | Top three issues to open next in Statistics |
+| **Analysis Findings** / ladder | Walk findings, or ask latency / WCET / migrations / balance / tick / priority / deadlines |
 
-**Local models:** the shipped Ollama default is `phi4-mini:3.8b` (light triage). For reliable native function calling prefer `qwen2.5:7b` / `qwen2.5:14b` or `llama3.1:8b` (or larger). 3B-class models often skip tools and emit ` ```btftool ` fences instead.
-
-1. **Settings → AI** — pick a preset (**Ollama**, **OpenAI**, **Google Gemini**, or **Custom**), adjust base URL / model, then **Authentication**: **None (local)** for Ollama, **API key** to paste a provider key, or **Sign in** to open the vendor page and paste the issued key or token. For a private HTTPS gateway with a self-signed certificate, enable **Allow self-signed TLS** (Desktop only — browsers cannot skip certificate checks). **Test connection** after saving. Use the refresh icon next to **Model** to list ids from the endpoint. Each preset keeps its own settings, so switching back and forth never loses a key. The AI panel chip shows `Local` / `Key saved` / `Needs API key` / `Needs sign-in` / `Signed in`.
-2. **Import…** loads an endpoint from a JSON file — see [`examples/ai`](examples/ai/README.md) for [`ollama.json`](examples/ai/ollama.json), [`gemini.json`](examples/ai/gemini.json), [`openai.json`](examples/ai/openai.json), [`deepseek.json`](examples/ai/deepseek.json), [`grok.json`](examples/ai/grok.json), [`presets.json`](examples/ai/presets.json), and the field reference. Imported values fill the form; review and confirm to save.
-3. Use a template, **Analysis → Query with AI…**, or ask freely. Click `jump:TIME` links to seek the timeline.
-4. Set reply language in Settings or **Language…** on the AI bar.
-5. Right-click the reply area to copy the conversation or **Save As…** it (Markdown, plain text, or HTML). Use **Clear** on the AI bar between unrelated questions so earlier turns do not crowd the context window.
-
-<a id="ai-gui-tools" name="ai-gui-tools">&#x200B;</a>
-#### GUI tools ![](../images/readme/h4.svg)
-
-The model may call several tools in one turn; they apply as a single batch. With **Auto-apply GUI actions** off (default in **Settings → AI**), each mutating batch shows **Apply** / **Skip** and **Undo**, plus **Apply GUI actions** under the log. Read-only `query_raw_metric` / `search_timeline` / `trigger_compare` batches run immediately (no Apply card).
-
-| Tool | Parameters / targets | Effect |
-|------|----------------------|--------|
-| `set_cursors` | `timestamps` (1–8 trace times) | Place cursors (enables **Limit to C1–Cn** when two or more) |
-| `zoom_to_range` | `start_time`, `end_time` | Focus the timeline between two times |
-| `highlight_task` | `task_name_or_id` (display name, numeric id, or merge key) | Lock-highlight a task row. Unknown names are ignored so the timeline is not dimmed. Empty string clears. |
-| `set_view_mode` | `mode` (`task` / `core`); optional `orientation` | Switch Task or Core view; horizontal or vertical |
-| `open_corridor_inspector` | optional `core_from` / `core_to` (`Core_0`, `0`, `c0`, `Core 0`) | Open Migration Inspector; aliases resolve the same way |
-| `add_annotation` | `time`, `note` (≤240 chars) | Pin an orange timeline note at a timestamp (stays on the current right-panel tab) |
-| `query_raw_metric` | `task`, `metric` (`priority_inheritance`, `execution`, `migrations`, `blocking`, `sync`, `findings`) | Read-only: return the per-task series for the current Statistics scope (up to 40 rows) |
-| `export_report` | optional `format` (`html` / `csv`) | Download HTML or CSV bundling Analysis Findings, mermaid diagrams from the chat, annotations, and GUI state (cursors / highlight / view). |
-| `clear_marks` | optional `what` (`annotations` / `cursors` / `bookmarks` / `all` / `everything`) | Clear AI clutter. `all` (default) drops annotations + cursors; `everything` also clears bookmarks |
-| `reset_view` | (none) | Fit the timeline to the full span and clear the task highlight (marks stay) |
-| `search_timeline` | `query`; optional `mode` (`contains` / `exact` / `regex` / `sti` / `tags` / `intervals` / `lifecycle` / `pointers` / `migrations`) | Find-panel search; returns matching timestamps (up to 40) |
-| `trigger_compare` | optional `tab_a` / `tab_b` (0-based tab index or filename) | Read-only Trace Compare CSV + open the compare dialog (needs two loaded tabs) |
-
-Models without native tool calling can emit a fenced ` ```btftool ` JSON block (same cards). Prefer a tool-capable model (see local-model note above, or `gpt-4o` / Gemini) if native calls stay silent.
-
-After **Apply**, **Undo last actions** restores zoom / view / highlight / inspector / marks; **Ctrl/Cmd+Z** also reverts cursors and marks.
-
-<a id="ai-diagrams" name="ai-diagrams">&#x200B;</a>
-#### Diagrams ![](../images/readme/h4.svg)
-
-Replies may include ` ```mermaid ` **sequence** diagrams (mutex take/give, block/resume, priority boost / L/M/H) and `graph LR` / **flowchart** core-migration graphs (counts on edges). Pipe **Markdown tables** (and a sanitized HTML `<table>` copied from Findings) render as HTML tables in the reply pane.
-
-- Click a **task** node to lock-highlight that timeline row (`Low[266] (Core 0)` resolves to `Low[266]`).
-- Click a **core** node (`Core_0`, `C0`, `C1`) to switch to Core View and scroll to that core.
-- Mutex hex and other unresolved labels do nothing (the timeline stays undimmed).
-- Click empty figure area to open a larger zoom window (scroll to zoom 0.5–6×; **Esc** or **Close**). Trackpad pinch is treated as scroll.
-- The link row under the figure has the same targets.
-- **Save As…** HTML keeps inline SVG with clickable nodes (chat zoom wrappers are omitted).
-
-<a id="ai-desktop-vs-web" name="ai-desktop-vs-web">&#x200B;</a>
-#### Desktop vs web ![](../images/readme/h4.svg)
-
-| Area | Desktop | Web |
-|------|---------|-----|
-| Native tools + ` ```btftool ` | Same schema and cards | Same |
-| `add_annotation` / `query_raw_metric` / `export_report` | Marks + scoped series + save dialog | Same (browser download) |
-| `clear_marks` / `reset_view` / `search_timeline` / `trigger_compare` | Same | Same (compare overlay; search uses Find) |
-| `highlight_task` / corridor cores | Same resolve rules | Same |
-| In-chat mermaid figure | Data-URI image + node hit-test | Inline SVG node clicks |
-| In-chat Markdown / HTML tables | Same rendered table | Same |
-| Zoom window + link row | Scroll to zoom + link row | Same |
-| Authentication | Settings → AI → None / API key / Sign in; panel chip + 401 CTAs until a successful turn | Same (`VITE_*` env keys) |
-| Self-signed TLS | **Allow self-signed TLS** per preset skips HTTPS certificate checks | Persist the same flag + tip; browsers still verify — trust the cert, use `http://`, or use Desktop |
-| Model picker | Editable combo; refresh fills and opens the dropdown | Same |
-| Fonts | **pt** | **px** |
-| Endpoint from `file://` | N/A | CORS — prefer Vite proxy, or [Opening the web app from `file://`](#opening-the-web-app-from-file) |
-
-| Symptom | Cause | Try |
-|---------|-------|-----|
-| Web: Failed to fetch / CORS | Browser blocked a cross-origin call (`file://` sends `Origin: null`) | Prefer `npm run dev` / `make preview` (both proxy Ollama), or see [Opening the web app from `file://`](#opening-the-web-app-from-file) |
-| 401 / 403 | Missing or rejected key / origin | Settings → AI → Sign in or API key (`OPENAI_API_KEY` / `GEMINI_API_KEY` / `OLLAMA_API_KEY`; local Ollama needs none) |
-| `CERTIFICATE_VERIFY_FAILED` / self-signed TLS | Private CA or self-signed HTTPS gateway | Desktop: Settings → AI → **Allow self-signed TLS**. Web: trust the cert in the OS/browser, use `http://` on a private LAN, or use the Desktop app |
-| Chat probe timed out / `The read operation timed out` | `GET /models` lists ids only; inference is slow or hung | **Test connection** POSTs `/chat/completions` (non-streaming, 120s). Warm the model (`ollama run MODEL`) and retry. Debug with the curl probe below; if curl hangs too, the gateway's chat upstream is stuck. Try `"stream": true` if non-stream never returns. Lower context length on a VRAM-tight local host. |
-| Model not found | Typed id is not served | Refresh the Model list (or Test connection) and pick a served id from the dropdown, or `ollama pull` it |
-| Gemini HTTP 400 `thought_signature` | Gemini 3 requires a thought blob on tool follow-ups | Retry the question — the viewer echoes Gemini thought signatures |
-| Raw ` ```btftool ` JSON instead of native tool calls | Model lacks (or skips) function calling | Same cards either way — **Apply** or enable **Auto-apply GUI actions**. Switch to `qwen2.5:7b` / `llama3.1:8b` / `gpt-4o` / Gemini for native calls |
-| Ask times out (over 120s) or stays on Waiting… | Cold start, CPU offload, or VRAM spill | **Stop**, warm with `ollama run MODEL`, retry. Use **Clear** between long threads. Smaller model or shorter Statistics scope if the Findings card is huge |
-| Later turns ignore earlier facts | Chat history exceeded the context window | **Clear** on the AI bar, or **Analysis → Query with AI…** for a fresh scoped prompt |
-
-Same body the viewer sends for **Test connection** (replace `BASE`, `MODEL`, and `KEY`):
-
-```bash
-curl -vk --max-time 180 \
-  -H "Authorization: Bearer KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"model":"MODEL","stream":false,"messages":[{"role":"user","content":"Reply with exactly: OK"}],"max_tokens":8}' \
-  BASE/chat/completions
-```
-
-<a id="opening-the-web-app-from-file" name="opening-the-web-app-from-file">&#x200B;</a>
-### Opening the web app from `file://` ![](../images/readme/h3.svg)
-
-A page opened straight from disk sends `Origin: null`, which Ollama rejects with
-`403` — the browser then reports only `Failed to fetch`. Serving the app over
-http avoids this entirely (`npm run dev` / `make preview` proxy Ollama for you),
-and the Desktop app is not affected at all.
-
-To keep using `file://`, allow every origin on the Ollama side:
-
-```bash
-# Server started from a terminal
-OLLAMA_ORIGINS="*" ollama serve
-
-# macOS menu-bar app (Ollama.app) — a shell variable does not reach it
-launchctl setenv OLLAMA_ORIGINS "*"   # then quit Ollama and reopen it
-```
-
-Verify the change took effect; expect `200` and an `Access-Control-Allow-Origin`
-header:
-
-```bash
-curl -s -D - -o /dev/null -H "Origin: null" http://localhost:11434/v1/models \
-  | grep -iE "^HTTP|access-control-allow-origin"
-```
-
-If a `file://` page is still refused, list the null origin explicitly with
-`OLLAMA_ORIGINS="*,null"`. Note that `*` lets **any** page you visit reach your
-local models; undo it with `launchctl unsetenv OLLAMA_ORIGINS` when done.
-
-Ask-order tips: [WORKFLOWS.md §7](WORKFLOWS.md#7-ai-assistant-flow).
+Findings may include anomaly rows (WCET Max≫Avg spikes, extreme migration bursts). For headless CI regression checks, see [AI.md → CLI](AI.md#cli-regression-gate).
 
 <a id="statistics--metrics" name="statistics--metrics">&#x200B;</a>
 ## Statistics & metrics ![](../images/readme/h2.svg)
@@ -1684,6 +1585,7 @@ Same engine as the GUI, suitable for CI. Use `QT_QPA_PLATFORM=offscreen` when no
 | `info` | Trace summary (`--json` optional) |
 | `report` | Full statistics CSV/HTML |
 | `compare` | Two-trace diff (two paths or one multi-BTF zip) |
+| `analyze` | CI regression gate vs baseline `.btf` or metrics JSON (`--fail-on-regression`; optional `--ai`; `--save-baseline`) — details in [AI.md](AI.md#cli-regression-gate) |
 | `migrations` | Migrations table as CSV |
 | `snapshot` | PNG/SVG of timeline, migration inspector, or a metric plot |
 | `perfetto` | Chrome Trace JSON |
@@ -1693,6 +1595,8 @@ Same engine as the GUI, suitable for CI. Use `QT_QPA_PLATFORM=offscreen` when no
 python builds/btf_viewer.py info trace.btf
 python builds/btf_viewer.py report trace.btf -o report.html --format html
 python builds/btf_viewer.py compare before.btf after.btf -o diff.html
+python builds/btf_viewer.py analyze candidate.btf --baseline baseline.btf --fail-on-regression
+python builds/btf_viewer.py analyze candidate.btf --save-baseline /tmp/base.json
 python builds/btf_viewer.py snapshot trace.btf -o view.png --view timeline
 python builds/btf_viewer.py perfetto trace.btf -o trace.json
 python builds/btf_viewer.py slice trace.btf -o window.btf --lo 100000 --hi 500000
@@ -1800,6 +1704,7 @@ Shortcuts marked **(W)** are Web-only. Others work on Desktop and Web. On Web, p
 | Document | Audience |
 |----------|----------|
 | **[WORKFLOWS.md](WORKFLOWS.md)** | Analysis playbooks and AI ask order |
+| **[AI.md](AI.md)** | AI setup, tools, diagrams, troubleshooting, CLI |
 | **[btf-viewer-slides.md](btf-viewer-slides.md)** | Presentation overview |
 
 <a id="developer-notes" name="developer-notes">&#x200B;</a>

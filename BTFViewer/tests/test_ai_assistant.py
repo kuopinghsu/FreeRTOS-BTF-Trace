@@ -64,11 +64,19 @@ class AiAssistantHelpersTests(unittest.TestCase):
         ids = [t[0] for t in AI_TEMPLATE_QUESTIONS]
         self.assertEqual(ids[0], "findings")
         self.assertEqual(AI_TEMPLATE_QUESTIONS[0][1], "Analysis Findings")
-        self.assertEqual(ids[1], "compare")
-        self.assertEqual(AI_TEMPLATE_QUESTIONS[1][1], "Trace Compare")
+        self.assertEqual(ids[1], "investigate")
+        self.assertEqual(AI_TEMPLATE_QUESTIONS[1][1], "Investigate")
+        self.assertEqual(ids[2], "root_cause")
+        self.assertEqual(AI_TEMPLATE_QUESTIONS[2][1], "Root cause")
+        self.assertEqual(ids[3], "compare")
+        self.assertEqual(AI_TEMPLATE_QUESTIONS[3][1], "Trace Compare")
         self.assertIn("triage", ids)
+        self.assertIn("task_profile", ids)
+        self.assertIn("diagnostic_report", ids)
+        self.assertIn("what_if", ids)
+        self.assertIn("optimize", ids)
         self.assertIn("migrations", ids)
-        self.assertEqual(AI_TEMPLATE_QUESTIONS[2][1], "Triage findings")
+        self.assertEqual(AI_TEMPLATE_QUESTIONS[4][1], "Triage findings")
         self.assertNotIn("tooldemo", ids)
 
     def test_templates_match_web_ollama_client(self) -> None:
@@ -884,11 +892,13 @@ class AiAssistantHelpersTests(unittest.TestCase):
         md = format_ai_conversation_markdown(entries)
         self.assertTrue(md.startswith("# BTF Viewer — AI Conversation"))
         self.assertIn("## You\n\nWhy is CS[22] late?", md)
-        self.assertIn("## Assistant\n\n## Answer", md)
+        self.assertIn("## Answer\n\nIt migrates at jump:1805000.", md)
+        self.assertNotIn("## Assistant", md)
         self.assertTrue(md.endswith("\n"))
         txt = format_ai_conversation_text(entries)
         self.assertIn("You:\nWhy is CS[22] late?", txt)
-        self.assertIn("Assistant:\n## Answer", txt)
+        self.assertIn("## Answer\n\nIt migrates at jump:1805000.", txt)
+        self.assertNotIn("Assistant:", txt)
         self.assertNotIn("<", txt)
 
     def test_conversation_export_html(self) -> None:
@@ -901,7 +911,8 @@ class AiAssistantHelpersTests(unittest.TestCase):
         self.assertTrue(doc.startswith("<!DOCTYPE html>"))
         self.assertIn("<title>BTF Viewer — AI Conversation</title>", doc)
         self.assertIn('<section class="msg user"><h3>You</h3>', doc)
-        self.assertIn('<section class="msg assistant"><h3>Assistant</h3>', doc)
+        self.assertIn('<section class="msg assistant">', doc)
+        self.assertNotIn("<h3>Assistant</h3>", doc)
         # Assistant Markdown is rendered; user text is escaped.
         self.assertIn("<h2>Answer</h2>", doc)
         self.assertIn("&lt;CS[22]&gt;", doc)

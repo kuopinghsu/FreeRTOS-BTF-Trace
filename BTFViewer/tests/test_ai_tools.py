@@ -187,6 +187,8 @@ class AiToolsTests(unittest.TestCase):
         self.assertEqual(args["tab_b"], "tickless")
         self.assertTrue(is_query_tool(AI_TOOL_SEARCH_TIMELINE))
         self.assertTrue(is_query_tool(AI_TOOL_TRIGGER_COMPARE))
+        self.assertTrue(is_query_tool("what_if"))
+        self.assertTrue(is_query_tool("optimize_experiment"))
         self.assertFalse(is_query_tool(AI_TOOL_CLEAR_MARKS))
         self.assertTrue(tool_mutates_gui(AI_TOOL_CLEAR_MARKS))
         self.assertTrue(tool_mutates_gui(AI_TOOL_RESET_VIEW))

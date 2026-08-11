@@ -33,6 +33,7 @@ BUNDLE_MODULES: list[str] = [
     "scene",
     "graphics_items",
     "view",
+    "ai_investigation",
     "ai_tools",
     "ai_mermaid",
     "ai_assistant",

@@ -224,6 +224,28 @@
     </div>
 
     <div
+      v-if="investigationPlan"
+      class="ai-plan"
+    >
+      <div class="ai-section-label">
+        Investigation plan
+      </div>
+      <div class="ai-plan-goal">
+        <strong>Goal:</strong> {{ investigationPlan.goal }}
+      </div>
+      <ul class="ai-plan-steps">
+        <li
+          v-for="s in investigationPlan.steps"
+          :key="s.id"
+          :class="`plan-${s.status}`"
+        >
+          <span class="plan-mark">{{ planMark(s.status) }}</span>
+          {{ s.label }}
+        </li>
+      </ul>
+    </div>
+
+    <div
       ref="logRef"
       class="ai-log"
       @contextmenu.prevent="onLogContextMenu"
@@ -430,12 +452,12 @@ import {
   resolveAiSettings,
 } from '../utils/ollamaClient.js'
 import {
-  MAX_TOOL_ROUNDS,
   aiViewerTools,
   buildAiReportCsv,
   buildAiReportHtml,
   canonicalAssistantToolMessage,
   isExportTool,
+  maxToolRounds,
   parseAiAutoApply,
   parseBtfHighlightHref,
   parseBtfJumpHref,
@@ -444,6 +466,12 @@ import {
   toolResultMessage,
   validateToolCall,
 } from '../utils/aiTools.js'
+import {
+  completeInvestigationPlan,
+  defaultInvestigationPlan,
+  isAgentTemplate,
+  markPlanStepsFromTools,
+} from '../utils/aiInvestigation.js'
 import {
   aiFileStamp,
   formatAiConversationHtml,
@@ -500,6 +528,26 @@ let abortCtrl = null
 let chatMessages = []
 let toolRound = 0
 let batchSeq = 0
+let activeTemplateId = ''
+const investigationPlan = ref(null)
+
+function planMark(status) {
+  return ({ done: '✓', active: '●', pending: '○' })[status] || '○'
+}
+
+function setInvestigationPlan(plan) {
+  investigationPlan.value = plan
+}
+
+function advanceInvestigationPlan(toolNames) {
+  if (!investigationPlan.value) return
+  investigationPlan.value = markPlanStepsFromTools(investigationPlan.value, toolNames)
+}
+
+function finishInvestigationPlan() {
+  if (!investigationPlan.value) return
+  investigationPlan.value = completeInvestigationPlan(investigationPlan.value)
+}
 
 function toolLabel(t) {
   return summariseToolCall(t.name, t.arguments || {})
@@ -831,6 +879,12 @@ function stop() {
 }
 
 async function onTemplate(t) {
+  activeTemplateId = t.id || ''
+  if (isAgentTemplate(t.id)) {
+    setInvestigationPlan(defaultInvestigationPlan(String(t.prompt || '').slice(0, 80)))
+  } else {
+    setInvestigationPlan(null)
+  }
   if (t.id === AI_COMPARE_TEMPLATE_ID) {
     await runCompareTemplate(t.prompt)
     return
@@ -951,6 +1005,7 @@ function ingestTurn(turn) {
     }
   })
   if (toolsNorm.length) {
+    advanceInvestigationPlan(toolsNorm.map(t => t.name))
     batchSeq += 1
     const batchId = `b${batchSeq}`
     messages.value.push({
@@ -963,6 +1018,7 @@ function ingestTurn(turn) {
     return { batchId, text, auto }
   }
   if (text) messages.value.push({ role: 'assistant', content: text })
+  finishInvestigationPlan()
   const jumps = extractJumpTimes(text)
   if (jumps.length) {
     const m = /jump:([0-9]+(?:\.[0-9]+)?)/.exec(text || '')
@@ -1018,7 +1074,7 @@ function commitBatch(batchId, skipped) {
 }
 
 async function continueAfterTools() {
-  if (toolRound >= MAX_TOOL_ROUNDS) {
+  if (toolRound >= maxToolRounds(activeTemplateId || '')) {
     status.value = 'Done (tool round limit).'
     return
   }
@@ -1283,22 +1339,58 @@ defineExpose({ refreshLoadedTabs, ask, askCompare, clear, saveConversationAs, sc
   font-weight: 600;
   font-size: 12px;
 }
-/* Two columns: the labels are short, and a single column pushed the
-   conversation log off the bottom of a narrow panel. */
+/* Two columns: keep the log usable, but leave enough height that every
+   template label stays readable (scroll if the panel is very short). */
 .ai-templates {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 4px;
-  max-height: 140px;
+  max-height: min(42vh, 320px);
   overflow-y: auto;
+  overflow-x: hidden;
   flex-shrink: 0;
+  padding-bottom: 4px;
+  box-sizing: border-box;
 }
 .ai-tpl-btn {
   min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  min-height: 28px;
+  padding: 5px 8px;
+  line-height: 1.3;
+  white-space: normal;
+  overflow: visible;
+  text-align: left;
+  box-sizing: border-box;
 }
+.ai-plan {
+  font-size: 11px;
+  color: var(--fg, #dbe2ea);
+  background: rgba(26, 34, 45, 0.85);
+  border: 1px solid var(--border, #2c3645);
+  border-radius: 6px;
+  padding: 6px 8px;
+  flex-shrink: 0;
+  max-height: 160px;
+  overflow-y: auto;
+}
+.ai-plan-goal {
+  margin-bottom: 4px;
+  line-height: 1.35;
+}
+.ai-plan-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ai-plan-steps li {
+  display: flex;
+  gap: 6px;
+  line-height: 1.4;
+  color: var(--muted, #8a96a8);
+}
+.ai-plan-steps li.plan-done { color: #7dcea0; }
+.ai-plan-steps li.plan-active { color: var(--accent, #5b9bd5); font-weight: 600; }
+.plan-mark { width: 1em; flex: 0 0 auto; }
 .ai-tpl-btn, .ai-btn {
   font-size: 12px;
   padding: 5px 8px;
